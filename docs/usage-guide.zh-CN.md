@@ -15,7 +15,7 @@
 - [快速开始](guide/zh-CN/getting-started.md) — 十分钟路径：搭建、加入或分享；TeamAI 是什么；安装
 - [管理员初始化](guide/zh-CN/admin-setup.md) — 初始化团队仓库：作用域、单仓模式、组织仓叠加
 - [Git Provider](guide/zh-CN/providers.md) — GitHub、GitLab、GitCode、CNB、工蜂与通用 Git：检测与认证
-- [成员使用](guide/zh-CN/member-guide.md) — 加入团队、日常使用、提交 Co-Author 署名
+- [成员使用](guide/zh-CN/member-guide.md) — 加入团队、日常使用、提交 Co-Author 署名、让分发的文件不进入 git
 - [共享团队资源](guide/zh-CN/sharing.md) — 发布 skills、rules、docs、env、agents、hooks 与 MCP server
 - [团队知识](guide/zh-CN/knowledge.md) — 知识沉淀与检索、知识库健康报告
 - [团队文化](guide/zh-CN/team-culture.md) — 注入到每个 Agent 的公司与团队文化

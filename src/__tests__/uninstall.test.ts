@@ -58,6 +58,7 @@ import { fileHash } from '../utils/fs.js';
 import { TeamaiConfigSchema, getDataHome, managedMcpManifestKey, managedMcpManifestPath } from '../types.js';
 import { ModelProfileSchema, resolveProfile } from '../models/profile.js';
 import { renderRuleForTool } from '../resources/rule-format.js';
+import { entryHash } from '../resources/mcp-format.js';
 import { switchModelProfile } from '../models/switch.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
 
@@ -1284,7 +1285,7 @@ describe('uninstall', () => {
 
   // Regression: MCP cleanup used to run after ~/.teamai/ was deleted, so the
   // ownership manifest was already gone and removeAll became a no-op.
-  it('卸载时移除 teamai 管理的 MCP server，并保留用户自建的', async () => {
+  it('removes unchanged managed MCP servers and keeps member servers', async () => {
     const { homeDir, repoPath, teamaiHome } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);
     vi.stubEnv('SHELL', '/bin/zsh');
@@ -1296,7 +1297,7 @@ describe('uninstall', () => {
       },
     });
     await fse.writeJson(path.join(teamaiHome, 'managed-mcp.json'), {
-      claude: [{ name: 'team-mcp', hash: 'abc' }],
+      claude: [{ name: 'team-mcp', hash: entryHash({ type: 'http', url: 'https://team.example/mcp' }) }],
     });
 
     const teamConfig = makeTeamConfig({
@@ -1663,7 +1664,7 @@ describe('uninstall', () => {
       const file = path.join(projectRoot, '.mcp.json');
       await fse.writeJson(file, { mcpServers: { jira, docs: { type: 'http', url: 'https://docs.example/mcp' } } });
       await fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), {
-        [managedMcpManifestKey('claude', true)]: [{ name: 'docs', hash: 'h' }],
+        [managedMcpManifestKey('claude', true)]: [{ name: 'docs', hash: entryHash({ type: 'http', url: 'https://docs.example/mcp' }) }],
       });
       const { trackResolvedMcpFiles, recordUnverifiedMcpServers } = await import('../mcp-resolved-files.js');
       await trackResolvedMcpFiles(localConfig, [{ tool: 'claude', file }]);
@@ -1720,7 +1721,7 @@ describe('uninstall', () => {
       await fse.writeJson(path.join(projectRoot, '.mcp.json'), { mcpServers: { jira, mine } });
       withCodeBuddy(localConfig);
       await fse.outputJson(managedMcpManifestPath(getDataHome(localConfig), projectRoot), {
-        [managedMcpManifestKey('claude', true)]: [{ name: 'jira', hash: 'h' }],
+        [managedMcpManifestKey('claude', true)]: [{ name: 'jira', hash: entryHash(jira) }],
         [managedMcpManifestKey('codebuddy', true)]: [],
       });
 
@@ -3140,6 +3141,29 @@ describe('uninstall', () => {
     expect(await fse.pathExists(legacyShare)).toBe(false);
   });
 
+  it('names a packaged file the repository started tracking after the plan once, as tracked, not as a file TeamAI did not put there', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const stubDir = path.join(homeDir, '.claude', 'skills', 'teamai');
+    const stub = path.join(stubDir, 'SKILL.md');
+    // A HOME under version control, which tracks nothing of teamai's when the plan is built.
+    execFileSync('git', ['init', '-q'], { cwd: homeDir });
+    // The member stages the stub while uninstall runs: hooks go before skills.
+    mockReconcileHooks.mockImplementation(async () => {
+      execFileSync('git', ['add', '-f', path.relative(homeDir, stub)], { cwd: homeDir });
+      return { changes: [] };
+    });
+
+    mockAutoDetectInit.mockResolvedValue({ localConfig: makeLocalConfig(homeDir, repoPath), teamConfig: makeTeamConfig() });
+    await uninstall({ force: true });
+
+    const warnings = (log.warn as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
+    const about = warnings.filter((w) => w.includes(stubDir));
+    expect(about).toEqual([expect.stringContaining(`Kept ${stub}: this repository tracks it`)]);
+    expect(await fse.pathExists(stub)).toBe(true);
+  });
+
   it('names the file and the error when a packaged file cannot be deleted, instead of calling the directory kept', async () => {
     if (process.getuid?.() === 0) return; // root ignores directory permissions
     const { homeDir, repoPath } = await setupFixture(tmpDir);
@@ -3159,10 +3183,14 @@ describe('uninstall', () => {
 
     const warnings = (log.warn as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
     const about = warnings.filter((w) => w.includes(stubDir));
-    expect(about).toHaveLength(1);
-    expect(about[0]).toContain('Could not delete packaged files under');
+    // The error, then the records kept so the retry can find what is left.
+    expect(about).toEqual([
+      expect.stringContaining('Could not delete packaged files under'),
+      expect.stringContaining('Kept '),
+      expect.stringContaining('Uninstall incomplete'),
+    ]);
     expect(about[0]).toContain(path.join(stubDir, 'SKILL.md'));
-    expect(about[0]).not.toContain('did not put there');
+    expect(about.join('\n')).not.toContain('did not put there');
     expect(await fse.pathExists(path.join(stubDir, 'SKILL.md'))).toBe(true);
   });
 

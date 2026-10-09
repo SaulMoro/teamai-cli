@@ -383,9 +383,9 @@ Where each tool's servers land:
 
 | Tool | User scope | Project scope |
 |---|---|---|
-| claude | `~/.claude.json` | `<project>/.mcp.json` |
+| claude | `~/.claude.json` | `<project>/.mcp.json`; with [`sharing.gitExclude`](./member-guide.md#keeping-delivered-files-out-of-git) on, `~/.claude.json` under `projects[<main checkout>]` (below) |
 | cursor | `~/.cursor/mcp.json` | `<project>/.cursor/mcp.json` |
-| codebuddy | the first that exists of `~/.codebuddy/.mcp.json`, `~/.codebuddy/mcp.json`, `~/.codebuddy.json` (below) | `<project>/.mcp.json` |
+| codebuddy | the first that exists of `~/.codebuddy/.mcp.json`, `~/.codebuddy/mcp.json`, `~/.codebuddy.json` (below) | `<project>/.mcp.json`; with [`sharing.gitExclude`](./member-guide.md#keeping-delivered-files-out-of-git) on, `~/.codebuddy.json` under `projects[<worktree root>]` (below) |
 | workbuddy | `~/.workbuddy/mcp.json` | `<project>/.workbuddy/mcp.json` |
 | copilot | `$COPILOT_HOME/mcp-config.json` | `<project>/.github/mcp.json` |
 | codex | `~/.codex/config.toml` | `<project>/.codex/config.toml` |
@@ -437,6 +437,40 @@ precedence. For an existing team that pins run
 servers in either file; TeamAI does not migrate or delete the old file.
 Claude Code also reads the root `.mcp.json`, so this file is shared by both tools.
 
+With `sharing.gitExclude` on, Claude's project servers go to Claude Code's local scope instead of `.mcp.json`:
+`~/.claude.json` (inside `CLAUDE_CONFIG_DIR` when you set one) under `projects[<key>].mcpServers`, where `<key>`
+is the path Claude Code files the checkout under, the main checkout's real path, so every worktree shares one set
+(in a `--separate-git-dir` repository a linked worktree's key is the git directory; in a linked worktree of a
+submodule, its directory under `.git/modules`). Resolved tokens then stay out of the working tree, Claude Code
+loads the servers without asking for approval, and the team's own `.mcp.json` is left as it is. teamai touches
+only its own entries there, and `teamai uninstall` removes exactly those, under every key it recorded, also one
+whose worktree is gone. The next pull takes teamai's servers out of `.mcp.json`, keeps your own, keeps a teamai
+server you changed and names it, and deletes the file if nothing else is left in it and git does not track it.
+Turning the option off moves the servers back on the next pull and takes them out of every recorded key.
+While tclaude is installed and enabled in the project, Claude keeps `.mcp.json`, which tclaude reads. In a
+single-repo team Claude keeps `.mcp.json` too: each worktree reads its own branch's `.teamai/mcp/mcp.yaml`, while
+Claude Code files every worktree under one key, so the next pull moves teamai's servers back from that key into
+each checkout's `.mcp.json`, which the git exclude block lists while it holds only teamai's servers.
+
+CodeBuddy's project servers move the same way, to CodeBuddy's local scope: `.codebuddy.json` in
+`CODEBUDDY_CONFIG_DIR`, or in your home directory, under `projects[<key>].mcpServers`. CodeBuddy keys it by the
+directory it runs in, so `<key>` is the real path of each worktree's root and every worktree gets its own set: a
+pull writes it, and so does the pull git runs when it creates a worktree. As before, CodeBuddy started in a
+subdirectory sees no project servers. The next pull drops teamai's servers from the key of a worktree that is gone
+and leaves yours there. teamai touches only its own entries, every other key of the file stays as it is, and
+`teamai uninstall` removes exactly teamai's servers, under every key it recorded. The move out of `.mcp.json` and
+back works as for Claude above, so with the option on no pull writes `.mcp.json`.
+
+On an HTTP-backed team the local agent follows the same option, read for each workspace: its `install_mcp` puts
+Claude's and CodeBuddy's servers in those local scopes, under the same keys, and writes no `.mcp.json`;
+`uninstall_mcp` and `teamai uninstall` remove exactly the servers it recorded there. A server an earlier install left
+in `.mcp.json` moves at the local agent's next sync; a copy you changed stays there, named, as yours, and so does an
+entry another tool's record still claims there. With the option off nothing moves, and while teamai cannot read it
+the local agent installs nothing for Claude or CodeBuddy in that workspace and says why. `teamai doctor` names a
+server the local agent recorded that is still in `.mcp.json`. `teamai source remove-http` leaves these servers where
+they are but keeps their records, so a later `teamai uninstall` removes them, also one that finds no configuration
+(see [Uninstall](./faq.md#uninstall)).
+
 TeamAI removes a bare Copilot entry beside `mcpServers` only when its ownership record proves a completed bare write and the entry still matches that write. Older records without placement evidence leave the bare entry alone, even if it matches the team definition. A bare ownership record does not authorize changes to a same-named member entry under `mcpServers`; update skips that collision and removal cleans only the owned bare copy. An unmarked record can claim a keyed entry only when its hash matches that entry and does not also match the bare entry. Completed keyed writes record `bare: false`; a failed placement-record write leaves ownership unproven. 
 
 New HTTP local-agent installs check Git protection without changing it, persist provisional ownership, then add the exclusion and file record before writing a credential. A failed initial ownership write changes neither Git exclusions nor the MCP config.
@@ -457,7 +491,7 @@ teamai **resolves every `${VAR}` to its value and writes it verbatim** into each
 
 A symlink is excluded at the file the write actually lands in. teamai does not edit the committed `.gitignore`. A file git already tracks is left unchanged; `teamai mcp list` and `teamai doctor` name it. Run `git rm --cached <file>` and rotate the token if it was ever committed. The same applies to a file an older install wrote. Further cases are in [Team secrets](../designs/team-secrets.md).
 
-Claude Code may show project `.mcp.json` servers as pending approval until you accept them once in an interactive session.
+Claude Code may show project `.mcp.json` servers as pending approval until you accept them once in an interactive session. Servers in its local scope (`sharing.gitExclude` on, above) need no approval, and neither do CodeBuddy's.
 
 ```bash
 teamai mcp list              # servers, the file each comes from, secret status, and where they are installed

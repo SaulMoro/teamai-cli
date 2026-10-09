@@ -224,7 +224,7 @@ Copilot 会给每个子进程设置它，包括从它的 shell 里启动的 Clau
 
 > 当前会话已加载了它的 hooks。linked worktree 只有在存在 `.codex/` 目录时才读取主 checkout 的 `.codex/hooks.json`。post-checkout 准备步骤会为所选的 Codex 工具创建该目录，并在第一个会话之前完成 pull。跳过 checkout hooks 的宿主必须在启动 Codex 前完成准备。如果仅由 SessionStart 创建该目录，团队 hooks 从下一个 Codex 会话起加载；内置 hooks 位于 `~/.codex/hooks.json`，从第一个会话起就运行。若要自行信任，在 `config.yaml` 中设置 `codexTrustEnabled: false`。PATH 中没有 `codex` 或 app-server 失败时，`init` 和 `hooks inject` 会提示你在 `/hooks` 或 Settings → Hooks 中信任。交互式 pull 仅在 app-server 失败时警告，缺少 `codex` 时保持静默；
 
-> silent pull 将结果记录在 debug 日志中。`teamai doctor` 会向 Codex 查询哪些 teamai hooks 不会运行并逐一列出。
+> silent pull 将结果记录在 debug 日志中。`teamai doctor` 会向 Codex 查询哪些 teamai hooks 不会运行并逐一列出。在 `~/.codex/hooks.json` 中运行项目团队 hooks 的条目（见[让分发的文件不进入 git](./member-guide.md#让分发的文件不进入-git)）也以同样方式信任。
 
 ### 团队 Hooks 声明
 
@@ -438,7 +438,7 @@ GitHub Copilot CLI 已支持其官方自定义指令、Rules、Skills、自定�
 
 - **作用域。** 用户资源位于 `$COPILOT_HOME`（默认 `~/.copilot`）下，项目资源位于 `<project>/.github` 下。TeamAI 在检测以及所有用户级读写中都会遵循 `COPILOT_HOME`。
 - **Skills。** `teamai pull` 将用户级 Skills 写入 `$COPILOT_HOME/skills/`，将项目级 Skills 写入 `.github/skills/`；任一作用域中的修改都可像其他 TeamAI Skills 一样被 `teamai push` 检测。
-- **自定义指令。** TeamAI 将团队文化和共享指令注入用户级 `$COPILOT_HOME/copilot-instructions.md` 或项目级 `.github/copilot-instructions.md`。TeamAI 标记包围的区块会被幂等替换，标记之外的文字归用户所有。`teamai uninstall` 只移除 TeamAI 管理的区块。
+- **自定义指令。** TeamAI 将团队文化和共享指令注入用户级 `$COPILOT_HOME/copilot-instructions.md` 或项目级 `.github/copilot-instructions.md`。TeamAI 标记包围的区块会被幂等替换，标记之外的文字归用户所有。`teamai uninstall` 只移除 TeamAI 管理的区块。开启 `sharing.gitExclude` 时，项目级区块改为写入 `.github/instructions/teamai-context.instructions.md`，`.github/copilot-instructions.md` 保持为团队的文件（见[这些块写到哪里](./team-culture.md#这些块写到哪里)）。
 - **Rules。** 团队 Rules 会转换为 `$COPILOT_HOME/instructions/` 或 `.github/instructions/` 下的原生 `*.instructions.md` 文件。TeamAI 从团队 Rule 的 `paths` 派生 Copilot 必需的 `applyTo` frontmatter；没有 `paths` 时使用 `**`。Push 时只有 Markdown 正文回流，团队拥有的 `paths` 元数据保持不变。未知的 Copilot instructions 文件属于用户，不会被上传或删除。Copilot CLI 1.0.89 及更高版本也会读取项目的 `.claude/rules`，因此启用 Claude 时，每条项目 rule 会送达 Copilot 两次；teamai 仍会写入两份副本，对每个也读取其他工具文件的工具都是如此。
 - **自定义 Agents。** 团队 Agents 会转换为 `$COPILOT_HOME/agents/` 或 `.github/agents/` 下的官方 `<name>.agent.md` 配置。TeamAI 将兼容的工具名映射为 Copilot 主别名，通过 `tool_extras.copilot` 保留 Copilot 专属 frontmatter，并且只删除与团队 Agent 或内置 recall 配置匹配的文件；用户自建配置保持不变。详见 [GitHub 自定义 Agent 配置](https://docs.github.com/zh/copilot/reference/custom-agents-configuration)。
 - **Team Context recall。** 内置 `teamai-recall.agent.md` 只获得 `execute`、`read` 和 `search`。它调用现有的 `teamai recall` 流程，让 Copilot 检索 learnings、codebase 证据和 teamwiki 结果，而不会复制或创建第二套知识库。
@@ -473,6 +473,7 @@ GitHub Copilot CLI 已支持其官方自定义指令、Rules、Skills、自定�
 
   在任何目录下都读取 `~/.config/opencode/teamai-context.md` 和 `~/.config/opencode/rules/**/*.md`，再从会话目录向上找到最近一个包含 `teamai-context.md` 或 `rules/` 的 `.opencode/`，添加其中的 `teamai-context.md` 和全部 `.opencode/rules/**/*.md`，按路径排序。插件在每次请求时读取这些文件，不调用 `teamai`。V1 通过 `instructions` 的交付保持不变。由于由插件承载，`teamai hooks remove` 也会让 V2 会话失去团队规则和指令。`teamai doctor` 运行 `opencode --version`（缺失或无法解析时视为 V1）；在 V2 上，`Team rules are active in opencode` 和 `opencode adds the team instructions to its prompt` 检查插件是否按当前 teamai 写入的内容安装，而不是检查 `instructions`。
 - **MCP** server 位于共享 `opencode.json` 的 `mcp` 键下（详见上文 MCP 章节）。
+- **开启 git exclude 选项时的 OpenCode V2。** 当 `sharing.gitExclude` 开启（见[让分发的文件不进入 git](./member-guide.md#让分发的文件不进入-git)）、`opencode --version` 报告 V2（每条命令只询问一次；缺失或无法读取按 V1 处理），且 pull 已按当前 teamai 的写法安装好 teamai 插件时，teamai 不会向项目的 opencode.json 文件写入任何内容。pull 把团队 MCP server 写入 `.opencode/teamai-mcp.json`：这个文件只属于 teamai，列在 git exclude 块中；若它将含有解析出的值，只有在 git exclude 块已包含它之后才会写入。插件在 OpenCode 打开项目时读取它（沿用同样的向上查找最近 `.opencode/` 的逻辑，现在只含该文件的 `.opencode/` 也会命中），并只为该项目加入这些 server。随后 pull 从根目录的 `opencode.json` 移除 teamai 的 MCP server，从 `.opencode/opencode.json` 移除 teamai 的 `instructions` 条目（包括升级前写入的），并删除因此变空的文件。只有在 git 未跟踪该文件时才会这样做，并保留其中你自己的 server、条目和键：团队提交的文件会保持原样，`teamai doctor` 会在 `No OpenCode V1 entries are left in shared config files` 下指出它。V2 会忽略这些 `instructions`，并再次加载这些 server；等项目中没有人再使用 V1 时，请自行删除 teamai 的条目。pull 会先重写旧版 teamai 留下的插件再做判断，因此迁移在同一次 pull 中完成。没有最新插件时（无法写入、工具因没有 shell 被跳过，或在 `teamai hooks remove` 之后、下一次 pull 重新安装之前），pull 会保留 V1 条目，因为那时 V2 只能从它们获得内容，`teamai doctor` 会在插件缺失的检查旁说明这一点。回到 V1 或关闭该选项后，下一次 pull 会重新写入 V1 条目并删除 `.opencode/teamai-mcp.json`。当前 teamai 的插件与之前的版本不同，因此在下一次 `teamai pull` 或 `teamai hooks inject` 之前，`teamai doctor` 在 V2 上会报告插件过期；插件在 OpenCode 打开项目时读取 server：pull 改变它们后请重启 OpenCode。
 
 ### Pi Coding Agent
 
@@ -887,8 +888,14 @@ HTTP 源通过 hook dispatch 上报状态并拉取 skill 指令。其他 HTTP �
 候选集只会写入当前上报任务的 agent。CodeBuddy 使用用户级 `~/.codebuddy/models.json`（`{ "models": [...] }`）；
 WorkBuddy 使用 `~/.workbuddy/models.json`；当前 `{ "models": [...] }` 和旧版顶层数组两种结构都支持，
 已有文件保持原结构。CodeBuddy 或 WorkBuddy 的 workspace 级任务写入
-`<workspace>/.codebuddy/models.json`，与产品内嵌模型加载器一致；该含凭证文件会被加入
-`<workspace>/.codebuddy/.gitignore`。仅当目标路径已存在于 reporter 的 workspace bindings 中时，
+`<workspace>/.codebuddy/models.json`，与产品内嵌模型加载器一致。该文件含 API key，因此无论 git exclude
+设置如何都会被排除在 git 之外：写入前，teamai 先把它列入仓库 `.git/info/exclude` 的 `credentials` 块，
+只有 git 确认忽略该文件后才写入 key（不在任何 git 仓库中的 workspace 直接写入 key，不写 exclude 行）。若 git 已跟踪该文件、
+某个 `.gitignore` 规则重新包含了它、exclude 文件无法写入，或 git 无法确认，则不写入 key，任务失败并给出原因和修复方法（已跟踪的文件需
+`git rm --cached`）。不含任何模型的任务会移除 teamai 的条目；由 teamai 创建的文件中不再剩下其他内容时删除该文件，然后删除对应的行。
+不是 teamai 创建的文件、git 已跟踪的文件或符号链接会保留，对应的行也保留。
+`teamai source remove-http` 移除 HTTP 源时会对每个 workspace 做同样的处理。teamai 不再创建
+`<workspace>/.codebuddy/.gitignore`，旧版本创建的该文件若只含它写入的两行，会被删除。仅当目标路径已存在于 reporter 的 workspace bindings 中时，
 才接受 workspace 级下发。若同一模型 ID 已由用户配置，则保留用户条目。
 
 

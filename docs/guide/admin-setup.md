@@ -244,7 +244,9 @@ explicit `--project` skips the picker.
 - **Root skills arrive through a tag.** While the team uses roles or projects,
   the root `skills/` is the tag catalog: `teamai tags subscribe <tag>` delivers
   a root skill. When a pull removes skills that are no longer delivered, for
-  example after picking a role or project, it names them in one line.
+  example after picking a role or project, it names them in one line. A copy
+  your repository tracks stays, named with the `git rm -r <path>` that removes
+  it from the repository.
 - **Activate everything at once.** `--project all` is a reserved value: it
   expands to every id the manifest declares and persists that snapshot, so a
   monorepo's onboarding docs carry one line instead of a list that drifts

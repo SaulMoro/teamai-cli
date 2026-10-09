@@ -88,6 +88,14 @@ export const SharingConfigSchema = z.object({
     enabled: z.boolean().default(false),
   }).optional(),
   // Optional (not .default) so existing TeamaiConfig literals stay valid; use
+  // isGitExcludeEnabled() for the resolved view.
+  gitExclude: z.object({
+    /** Keep what teamai delivers into a project out of git, through teamai's
+     *  `delivered` block in the clone's `.git/info/exclude` (#915). `init`
+     *  writes true into a new team's teamai.yaml; absent means off. */
+    enabled: z.boolean().default(false),
+  }).optional(),
+  // Optional (not .default) so existing TeamaiConfig literals stay valid; use
   // isContributeHintEnabled() for the resolved view.
   contributeHint: z.object({
     /** Team default: whether the Stop hook nudges members towards the
@@ -185,6 +193,43 @@ export function getRecallSharing(config: { sharing?: { recall?: { enabled?: bool
   enabled: boolean;
 } {
   return { enabled: config.sharing?.recall?.enabled ?? false };
+}
+
+/**
+ * Resolve whether pull keeps what it delivers into a project out of git
+ * (#915): the member's `gitExcludeEnabled` in the partition config > the
+ * team's `sharing.gitExclude.enabled` > default (false). A checkout still on
+ * the un-migrated layout reads its own config from `<projectRoot>/.teamai/`,
+ * and its worktrees each have one: that member value is not read, so no single
+ * checkout decides for the exclude file they share.
+ */
+export function isGitExcludeEnabled(
+  localConfig: { gitExcludeEnabled?: boolean; scope?: string; projectRoot?: string; dataHome?: string },
+  teamConfig: { sharing?: { gitExclude?: { enabled?: boolean } } },
+): boolean {
+  const member = isUnmigratedDataHome(localConfig) ? undefined : localConfig.gitExcludeEnabled;
+  return member ?? teamConfig.sharing?.gitExclude?.enabled ?? false;
+}
+
+/**
+ * isGitExcludeEnabled with the team config as `loadTeamConfig` returns it.
+ * `undefined` when nothing can decide: git mode, no member override, and the
+ * team's teamai.yaml could not be read or validated. That is not "off": a
+ * caller leaves what the setting governs as it is. HTTP mode has no team
+ * setting, so the member's override or the default decides there.
+ */
+export function resolveGitExclude(
+  localConfig: Parameters<typeof isGitExcludeEnabled>[0] & { repo: { kind?: string } },
+  teamConfig: Parameters<typeof isGitExcludeEnabled>[1] | null,
+): boolean | undefined {
+  if (teamConfig || localConfig.repo.kind === 'http') return isGitExcludeEnabled(localConfig, teamConfig ?? {});
+  return isUnmigratedDataHome(localConfig) ? undefined : localConfig.gitExcludeEnabled;
+}
+
+/** Whether a project config was read from the checkout's own `.teamai/` rather than its partition. */
+export function isUnmigratedDataHome(localConfig: { scope?: string; projectRoot?: string; dataHome?: string }): boolean {
+  const { scope, projectRoot, dataHome } = localConfig;
+  return scope === 'project' && !!projectRoot && !!dataHome && path.resolve(dataHome) === path.resolve(projectRoot, '.teamai');
 }
 
 /** Resolve whether recall is enabled: user override > team config > default (false). */
@@ -633,6 +678,9 @@ export const LocalConfigSchema = z.object({
   excludedSkills: z.array(z.string()).optional(),
   /** User-level override for recall feature. When set, takes precedence over team config. */
   recallEnabled: z.boolean().optional(),
+  /** Per-machine override of the team's `sharing.gitExclude.enabled` (#915),
+   *  hand-edited in the partition config. Undefined defers to the team. */
+  gitExcludeEnabled: z.boolean().optional(),
   /** User-level override for the share-learnings hint. When set, takes precedence over team config. */
   contributeHintEnabled: z.boolean().optional(),
   /** Per-machine override for the co-author trailer in AI-tool commits. When set,
@@ -798,6 +846,12 @@ export const StateSchema = z.object({
    * another checkout drops the record once that root is no longer a checkout
    * of the repository under the same key; a record without one, from an older
    * CLI, is kept (#993).
+   * `gitExcludePaths` is what each writer of the pull delivered into the
+   * checkout, by writer id (`WriterId` in git-exclude-delivered.ts), as
+   * absolute landed paths: what teamai's `delivered` git exclude block lists
+   * (#915). It is kept whatever `sharing.gitExclude` says. A record without
+   * it, saved by an older CLI, misses the fast path, so the next pull is a
+   * full sync that writes it. A writer id this CLI does not know is kept.
    */
   lastPullByWorkspace: z.record(z.string(), z.object({
     rev: z.string(),
@@ -806,7 +860,15 @@ export const StateSchema = z.object({
     pushBaseRevs: z.array(z.string()).optional(),
     delivered: z.record(z.string(), z.string()).optional(),
     agentModels: z.record(z.string(), z.record(z.string(), RecordedAgentModelSchema)).optional(),
+    gitExcludePaths: z.record(z.string(), z.array(z.string())).optional(),
   })).optional(),
+  /**
+   * The exclude files holding each git exclude owner's block that this
+   * partition writes (`delivered`), by owner name (#915). Read by the next
+   * sync, by flag off and by uninstall, to visit every file that may still
+   * hold one.
+   */
+  gitExcludeFiles: z.record(z.string(), z.array(z.string())).optional(),
   /** Git commit hash synchronized through the safe user-resource inheritance channel. */
   lastInheritedPullRev: z.string().nullable().optional(),
   /** Tool targets that completed the last inherited user-resource pull. */

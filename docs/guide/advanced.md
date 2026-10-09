@@ -224,7 +224,7 @@ Run `teamai pull` or `teamai hooks inject` again so an already installed team ho
 
 > A project you marked untrusted in Codex stays so, and teamai says so. Trust written by a session-start pull applies from the next Codex session: the running one already loaded its hooks. A linked worktree reads the main checkout's `.codex/hooks.json` only once it has a `.codex/` directory. The post-checkout preparation creates that directory and runs pull before the first session for selected Codex tools. Hosts that skip checkout hooks must finish that preparation before starting Codex. If only SessionStart creates the directory, the team hooks load from the next Codex session; built-in hooks live in `~/.codex/hooks.json` and run from the first. To trust them yourself, set `codexTrustEnabled: false` in `config.yaml`. 
 
-> `init` and `hooks inject` print a reminder to trust them in `/hooks` or Settings → Hooks when `codex` is absent or its app-server fails. An interactive pull warns on app-server failure and stays quiet when `codex` is absent; silent pulls record the result in the debug log. `teamai doctor` asks Codex which teamai hooks it will not run and names them.
+> `init` and `hooks inject` print a reminder to trust them in `/hooks` or Settings → Hooks when `codex` is absent or its app-server fails. An interactive pull warns on app-server failure and stays quiet when `codex` is absent; silent pulls record the result in the debug log. `teamai doctor` asks Codex which teamai hooks it will not run and names them. The entries that run a project's team hooks from `~/.codex/hooks.json` (see [Keeping Delivered Files Out of Git](./member-guide.md#keeping-delivered-files-out-of-git)) are trusted the same way.
 
 ### Team Hooks Declaration
 
@@ -440,7 +440,7 @@ GitHub Copilot CLI is supported for its official custom-instructions, Rules, Ski
 
 - **Scopes.** User resources live below `$COPILOT_HOME` (default `~/.copilot`); project resources live below `<project>/.github`. TeamAI honors `COPILOT_HOME` for detection and every user-scope read or write.
 - **Skills.** `teamai pull` writes user skills to `$COPILOT_HOME/skills/` and project skills to `.github/skills/`. Edits in either scope are detected by `teamai push` like other TeamAI skills.
-- **Custom instructions.** TeamAI injects team culture and shared instructions into `$COPILOT_HOME/copilot-instructions.md` for user scope or `.github/copilot-instructions.md` for project scope. Marker-delimited TeamAI blocks are replaced idempotently, while text outside the markers remains user-owned. `teamai uninstall` removes only the managed blocks.
+- **Custom instructions.** TeamAI injects team culture and shared instructions into `$COPILOT_HOME/copilot-instructions.md` for user scope or `.github/copilot-instructions.md` for project scope. Marker-delimited TeamAI blocks are replaced idempotently, while text outside the markers remains user-owned. `teamai uninstall` removes only the managed blocks. With `sharing.gitExclude` on, the project blocks go to `.github/instructions/teamai-context.instructions.md` instead, and `.github/copilot-instructions.md` stays the team's (see [Where the blocks go](./team-culture.md#where-the-blocks-go)).
 - **Rules.** Team rules become native `*.instructions.md` files under `$COPILOT_HOME/instructions/` or `.github/instructions/`. TeamAI derives Copilot's required `applyTo` frontmatter from the team rule's `paths`; a rule without `paths` uses `**`. On push, only the Markdown body flows back, preserving the team-owned `paths` metadata. Unknown Copilot instruction files remain user-owned and are not uploaded or deleted. Copilot CLI 1.0.89 and later also reads a project's `.claude/rules`, so with Claude enabled each project rule reaches Copilot twice; teamai still writes both copies, as it does for every tool that also reads another tool's files.
 - **Custom agents.** Team agents become official `<name>.agent.md` profiles under `$COPILOT_HOME/agents/` or `.github/agents/`. TeamAI maps compatible tool names onto Copilot's primary aliases, preserves Copilot-only frontmatter through `tool_extras.copilot`, and removes only profiles that match team agents or the built-in recall profile. User-authored profiles remain untouched. See [GitHub's custom-agent configuration](https://docs.github.com/en/copilot/reference/custom-agents-configuration).
 - **Team Context recall.** The built-in `teamai-recall.agent.md` profile receives only `execute`, `read`, and `search`. It invokes the existing `teamai recall` pipeline, so Copilot can retrieve learnings, codebase evidence, and teamwiki results without copying or creating a second knowledge store.
@@ -477,6 +477,7 @@ Team hooks still come from the team's `hooks/hooks.yaml`: edit that source in th
 
   Because the plugin carries them, `teamai hooks remove` also takes the team rules and instructions away from V2 sessions. `teamai doctor` runs `opencode --version` (missing or unreadable counts as V1); on V2 `Team rules are active in opencode` and `opencode adds the team instructions to its prompt` check that the plugin is installed as this teamai writes it, instead of checking `instructions`.
 - **MCP** servers live under the `mcp` key of the shared `opencode.json` (see the MCP section above).
+- **OpenCode V2 with the git exclude option on.** While `sharing.gitExclude` is on (see [Keeping Delivered Files Out of Git](./member-guide.md#keeping-delivered-files-out-of-git)), `opencode --version` reports V2 (asked once per command; missing or unreadable counts as V1), and the pull has installed teamai's plugin as this teamai writes it, nothing of teamai's goes into the project's opencode.json files. The pull writes the team MCP servers to `.opencode/teamai-mcp.json`, a file of teamai's alone, listed in the git exclude block, and written only once the git exclude block holds it when it would carry a resolved value. The plugin reads it when OpenCode opens the project (the same walk up to the nearest `.opencode/`, which now also stops at one holding only that file) and adds those servers to that project only. The pull then takes teamai's MCP servers out of the root `opencode.json` and its `instructions` entries out of `.opencode/opencode.json`, servers and entries written before an upgrade included, and deletes a file left with nothing in it. It does so only where git does not track the file, and keeps your own servers, entries and keys there: a file the team commits is left as it is, and `teamai doctor` names it under `No OpenCode V1 entries are left in shared config files`. V2 ignores those `instructions` and loads those servers a second time; remove teamai's entries yourself once nobody on the project uses V1. The pull rewrites a plugin from an older teamai before it decides, so the move happens in that same pull. Without a current plugin (it could not be written, a tool was skipped for having no shell, or after `teamai hooks remove` until the next pull reinstalls it) the pull keeps the V1 entries, since they are then all V2 gets, and `teamai doctor` says so next to the missing plugin. Back on V1, or with the option off, the next pull writes the V1 entries again and removes `.opencode/teamai-mcp.json`. This teamai's plugin differs from earlier ones, so `teamai doctor` reports the plugin out of date on V2 until the next `teamai pull` or `teamai hooks inject`, and the plugin reads the servers when OpenCode opens a project: restart OpenCode after a pull changes them.
 
 ### Pi Coding Agent
 
@@ -940,8 +941,19 @@ user-level `~/.codebuddy/models.json` (`{ "models": [...] }`). WorkBuddy uses
 `~/.workbuddy/models.json`; both the current `{ "models": [...] }` shape and the legacy
 top-level array are accepted, and an existing file keeps its shape. A workspace-scoped
 CodeBuddy or WorkBuddy task uses `<workspace>/.codebuddy/models.json`, matching the
-embedded model loader; that credential-bearing file is added to
-`<workspace>/.codebuddy/.gitignore`. Workspace delivery is accepted only for a path
+embedded model loader. That file holds the API key, so it is always kept out of git,
+whatever the git exclude setting: before writing it, teamai lists it in the `credentials`
+block of the repository's `.git/info/exclude` and writes the key only once git confirms
+it ignores the file (a workspace outside any git repository gets the key with no line). If
+git tracks the file, a rule in a `.gitignore` re-includes it, the exclude file cannot be
+written, or git cannot confirm, the key is not written and the task fails with the reason
+and the fix (for a tracked file, `git rm --cached` it). A task with no models removes
+teamai's entries; when nothing else is left in a file teamai created, the file is deleted,
+then its line. A file teamai did not create, one git tracks, or a link stays, and so does
+its line. The same happens for every workspace when `teamai source remove-http` removes the
+HTTP source. teamai no longer creates
+`<workspace>/.codebuddy/.gitignore`, and deletes the one an earlier version created while it
+holds only its two lines. Workspace delivery is accepted only for a path
 already present in the reporter's workspace bindings. User-owned entries with the same
 model ID are preserved. 
 
