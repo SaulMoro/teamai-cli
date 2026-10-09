@@ -2795,6 +2795,48 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     expect(fs.existsSync(manifest)).toBe(false);
   });
 
+  it('keeps the cache .gitignore and its record while git cannot say whether it is tracked, and the retry removes it', async () => {
+    await flag(true);
+    const app = await repo('app');
+    await run([rule(1, 'http-rule', app)], app);
+    const gitignore = path.join(app, '.teamai', '.gitignore');
+    expect(fs.existsSync(gitignore)).toBe(true);
+    const head = fs.readFileSync(path.join(app, '.git', 'HEAD'), 'utf8');
+    fs.writeFileSync(path.join(app, '.git', 'HEAD'), 'not a ref\n');
+    const { removeLocalAgentHttp } = await import('../local-agent.js');
+    process.exitCode = undefined;
+    try {
+      await removeLocalAgentHttp();
+    } finally {
+      fs.writeFileSync(path.join(app, '.git', 'HEAD'), head);
+    }
+
+    expect(process.exitCode).toBe(1);
+    expect(fs.existsSync(gitignore)).toBe(true);
+
+    process.exitCode = undefined;
+    await removeLocalAgentHttp();
+
+    expect(process.exitCode).toBeUndefined();
+    expect(fs.existsSync(path.join(app, '.teamai'))).toBe(false);
+    expect(blockOf(app)).toBeNull();
+  });
+
+  it('keeps a git exclude record it cannot read, with the blocks it may name', async () => {
+    await flag(true);
+    const app = await repo('app');
+    await run([rule(1, 'http-rule', app)], app);
+    const record = path.join(tmpDir, '.teamai', 'local-agent', 'git-exclude.json');
+    fs.writeFileSync(record, '{ not json\n');
+    const { removeLocalAgentHttp } = await import('../local-agent.js');
+    process.exitCode = undefined;
+
+    await removeLocalAgentHttp();
+
+    expect(process.exitCode).toBe(1);
+    expect(fs.readFileSync(record, 'utf8')).toBe('{ not json\n');
+  });
+
   it('follows a flag change at a run that brings no command, and leaves the block alone while nothing it is built from changed', async () => {
     await flag(true);
     const app = await repo('app');

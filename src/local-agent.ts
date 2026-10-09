@@ -2351,6 +2351,19 @@ async function removeSkillCopy(dest: string, name: string, files: { teamais: str
   }
 }
 
+/**
+ * Fail an uninstall, before it removes anything, while git cannot say whether
+ * the repository tracks a copy on disk: the removal would keep the copy but
+ * drop what proves it teamai's. The entry, its cache and records stay for the retry.
+ */
+async function failOnUnjudgedCopies(dests: readonly string[]): Promise<void> {
+  for (const dest of dests) {
+    if (!await pathExists(dest) || await gitUntracked(dest, 'entry')) continue;
+    const tracks = await gitTracks(dest, 'entry');
+    if (tracks.kind === 'unknown') throw new Error(`kept ${dest}: git could not say whether this repository tracks it (${tracks.error})`);
+  }
+}
+
 async function uninstallResource(input: {
   config: LocalAgentConfig;
   kind: CommandResourceKind;
@@ -2396,9 +2409,12 @@ async function uninstallResource(input: {
     }
     // The cache goes last: a copy that cannot go fails the entry while the
     // cache still proves which of its files are teamai's, for the retry.
+    await failOnUnjudgedCopies(copies.map(({ dest }) => dest));
     for (const { dest, files } of copies) await removeSkillCopy(dest, dirName, files);
     await remove(sourcePath);
   } else if (input.kind === 'rule') {
+    const item: ResourceItem = { name: input.slug, type: 'rules', sourcePath: path.join(repoPath, 'rules', `${input.slug}.md`), relativePath: `rules/${input.slug}.md` };
+    await failOnUnjudgedCopies((await new RulesHandler().deliveryTargets(teamConfig, localConfig, item)).map(({ dest }) => dest));
     await new RulesHandler().removeItem(input.slug, teamConfig, localConfig);
   } else {
     const dest = path.join(repoPath, 'claudemd', `${input.slug}.md`);
@@ -4871,8 +4887,14 @@ async function removeWorkspaceCache(workspacePath: string): Promise<boolean> {
   try {
     await remove(cache);
     const gitignore = await workspaceCacheGitignore(workspacePath, repoPath);
-    // One the member committed is theirs now.
-    if (gitignore && (await gitTracks(gitignore, 'entry')).kind === 'untracked') await remove(gitignore);
+    // One the member committed is theirs now; one git cannot judge stays, with the record for the retry.
+    if (gitignore && (await gitTracks(gitignore, 'entry')).kind !== 'tracked') {
+      if (!await gitUntracked(gitignore, 'entry')) {
+        log.warn(`Kept ${gitignore}: git could not say whether this repository tracks it.`);
+        return false;
+      }
+      await remove(gitignore);
+    }
     for (let dir = path.dirname(cache); dir.startsWith(teamaiDir); dir = path.dirname(dir)) {
       if ((await fse.readdir(dir)).length > 0) break;
       await fse.rmdir(dir);
@@ -4917,9 +4939,9 @@ async function finishAgentHookTeardown(
   if (left.models.length > 0) keep.add(path.basename(getModelManifestPath()));
   if (left.caches.length > 0 || entries.length > 0) keep.add(path.basename(getManifestPath()));
   const gitExcludeRecord = path.join(home, 'git-exclude.json');
-  if (Object.keys(await readJson<Record<string, unknown>>(gitExcludeRecord).catch(() => null) ?? {}).length > 0) {
-    keep.add(path.basename(gitExcludeRecord));
-  }
+  // A record that cannot be read may name blocks still in place: it stays.
+  const recorded = await readFileIfExists(gitExcludeRecord).then((raw) => raw === null ? {} : JSON.parse(raw) as unknown).catch(() => null);
+  if (!recorded || typeof recorded !== 'object' || Object.keys(recorded).length > 0) keep.add(path.basename(gitExcludeRecord));
   await writeJsonAtomic(getConfigPath(), left.removing ? { disabled: true, removing: left.removing } : { disabled: true });
   for (const entry of await fse.readdir(home)) {
     if (!keep.has(entry)) await remove(path.join(home, entry));
