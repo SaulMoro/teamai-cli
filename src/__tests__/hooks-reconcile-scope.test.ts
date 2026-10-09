@@ -637,6 +637,61 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
     }
   });
 
+  it('shares one copy of the main hooks between two worktree installs when the main checkout has none', async () => {
+    await writeYaml(STOP_LINT);
+    const { main, worktree } = await mainWithWorktree();
+    const second = `${worktree}-2`;
+    await fse.ensureDir(second);
+    vi.mocked(listWorktrees).mockResolvedValue([main, worktree, second]);
+    const stops = async () => [
+      (await fse.readJson(path.join(main, '.claude', 'settings.local.json'))).hooks.Stop.length,
+      (await fse.readJson(path.join(main, '.codex', 'hooks.json'))).hooks.Stop.length,
+    ];
+    // Detection attaches each worktree's own data home.
+    const at = (root: string): LocalConfig => ({ ...localConfig(), projectRoot: root, dataHome: path.join(root, '.teamai') });
+    try {
+      for (const root of [worktree, second]) await fse.outputFile(path.join(root, '.teamai', 'config.yaml'), '');
+      await reconcileTeamHooksForConfig(teamConfig, at(worktree));
+      await reconcileTeamHooksForConfig(teamConfig, at(second));
+      expect(await stops()).toEqual([1, 1]);
+
+      await reconcileTeamHooksForConfig(teamConfig, at(worktree), { removeAll: true });
+      expect(await stops()).toEqual([1, 1]);
+      // Second worktree removal clears hooks without needing .teamai removed
+      await reconcileTeamHooksForConfig(teamConfig, at(second), { removeAll: true });
+      expect(await stops()).toEqual([0, 0]);
+    } finally {
+      await fse.remove(worktree);
+      await fse.remove(second);
+    }
+  });
+
+  it('keeps shared main hooks when main checkout removes while a linked worktree remains installed', async () => {
+    await writeYaml(STOP_LINT);
+    const { main, worktree } = await mainWithWorktree();
+    const stops = async () => [
+      (await fse.readJson(path.join(main, '.claude', '.settings.local.json').replace('.settings.local.json', 'settings.local.json'))).hooks.Stop.length,
+      (await fse.readJson(path.join(main, '.codex', 'hooks.json'))).hooks.Stop.length,
+    ];
+    const at = (root: string): LocalConfig => ({ ...localConfig(), projectRoot: root, dataHome: path.join(root, '.teamai') });
+    try {
+      for (const root of [main, worktree]) await fse.outputFile(path.join(root, '.teamai', 'config.yaml'), 'scope: project');
+      await reconcileTeamHooksForConfig(teamConfig, at(main));
+      await reconcileTeamHooksForConfig(teamConfig, at(worktree));
+      expect(await stops()).toEqual([1, 1]);
+
+      // Removing from main checkout keeps hooks for the worktree
+      await reconcileTeamHooksForConfig(teamConfig, at(main), { removeAll: true });
+      expect(await stops()).toEqual([1, 1]);
+
+      // Removing from worktree clears them once no checkouts remain
+      await reconcileTeamHooksForConfig(teamConfig, at(worktree), { removeAll: true });
+      expect(await stops()).toEqual([0, 0]);
+    } finally {
+      await fse.remove(worktree);
+    }
+  });
+
   it('removes the gated entries an older CLI left for this project, and keeps another project\'s', async () => {
     await writeYaml(STOP_LINT);
     const { main, worktree } = await mainWithWorktree();
@@ -698,7 +753,7 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
       ]);
       expect((await fse.readJson(file)).hooks.PreToolUse).toEqual([oldEntry]);
       expect(await fse.readJson(legacyManifest)).toEqual({ cursor: cursorRecords });
-      const ownership = await fse.readJson(path.join(root, '.teamai', 'managed-main-checkout-hooks.json'));
+      const ownership = await fse.readJson(path.join(main, '.teamai', 'managed-main-checkout-hooks.json'));
       expect((ownership.codex ?? []).map((record: { command: string }) => record.command))
         .toEqual(removeAll ? [] : ['npm run lint']);
       if (!removeAll) {
@@ -827,6 +882,50 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
 
     expect((await codexProject()).hooks.Stop).toEqual([]);
     expect((await claudeLocal()).hooks.Stop).toEqual([]);
+  });
+
+  it.each(['claude', 'codex'])('removeAll releases one duplicated %s main hook per ownership record', async (tool) => {
+    await writeYaml(STOP_LINT);
+    await reconcileTeamHooksForConfig(teamConfig, localConfig());
+    const file = path.join(project, tool === 'claude' ? '.claude/settings.local.json' : '.codex/hooks.json');
+    const json = await fse.readJson(file);
+    const [entry] = json.hooks.Stop;
+    json.hooks.Stop.push(entry);
+    await fse.writeJson(file, json);
+    expect((await mainManifest())[tool]).toHaveLength(1);
+
+    await reconcileTeamHooksForConfig(teamConfig, localConfig(), { removeAll: true });
+
+    expect((await fse.readJson(file)).hooks.Stop).toEqual([entry]);
+  });
+
+  it.each(['claude', 'codex'])('removeAll from main in v0.22 duplicated state releases main entry and preserves worktree entry for %s', async (tool) => {
+    const worktreeDir = await fse.mkdtemp(path.join(os.tmpdir(), 'wt-duplicated-'));
+    vi.mocked(listWorktrees).mockResolvedValue([project, worktreeDir]);
+
+    try {
+      await writeYaml(STOP_LINT);
+      await reconcileTeamHooksForConfig(teamConfig, localConfig());
+      const file = path.join(project, tool === 'claude' ? '.claude/settings.local.json' : '.codex/hooks.json');
+      const json = await fse.readJson(file);
+      const [entry] = json.hooks.Stop;
+      json.hooks.Stop.push(entry);
+      await fse.writeJson(file, json);
+
+      // Simulate worktree having its own manifest from older install
+      const wtManifestPath = path.join(worktreeDir, '.teamai', 'managed-main-checkout-hooks.json');
+      await fse.outputJson(wtManifestPath, {
+        [tool]: [{ id: 'lint', event: 'Stop', command: entry.hooks ? entry.hooks[0].command : entry.command }],
+      });
+      await fse.outputFile(path.join(worktreeDir, '.teamai', 'config.yaml'), 'scope: project');
+
+      await reconcileTeamHooksForConfig(teamConfig, localConfig(), { removeAll: true });
+
+      // One duplicated entry was released, one remains for the worktree
+      expect((await fse.readJson(file)).hooks.Stop).toEqual([entry]);
+    } finally {
+      await fse.remove(worktreeDir);
+    }
   });
 });
 
