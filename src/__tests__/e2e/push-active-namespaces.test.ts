@@ -121,6 +121,45 @@ describe('push an edit of a skill pull kept after a project switch (#1020)', () 
     expect(pushedFiles()).toContain('skills/svc-a/a-skill/SKILL.md');
   });
 
+  it('sends the edit to its namespace, not to a shared-root skill of the same name', () => {
+    commitOnTeam('skills/a-skill/SKILL.md', `${skillMd('a-skill')}\nThe shared catalog version.\n`);
+    expect(run(['pull']).code).toBe(0);
+    fs.appendFileSync(path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md'), '\nEdited while on svc-a.\n');
+    expect(run(['projects', 'set', 'svc-b']).code).toBe(0);
+    expect(run(['pull']).code).toBe(0);
+
+    const pushed = run(['push', '--all']);
+
+    expect(pushed.output).toContain('to:   skills/svc-a/a-skill');
+    expect(pushedFiles()).toContain('skills/svc-a/a-skill/SKILL.md');
+    expect(pushedFiles()).not.toContain('skills/a-skill/SKILL.md');
+  });
+
+  it('pushes nothing for an unedited copy whose team skill changed since teamai delivered it', () => {
+    commitOnTeam('skills/svc-a/a-skill/SKILL.md', `${skillMd('a-skill')}\nA teammate's update.\n`);
+    expect(run(['projects', 'set', 'svc-b']).code).toBe(0);
+    expect(run(['pull']).code).toBe(0);
+
+    const pushed = run(['push', '--all']);
+
+    expect(pushed.output).toContain('No new or modified resources to push');
+    expect(pushedFiles()).toEqual([]);
+  });
+
+  it('sends an edit to its namespace when both it and a shared-root skill changed since delivery', () => {
+    commitOnTeam('skills/a-skill/SKILL.md', `${skillMd('a-skill')}\nThe shared catalog version.\n`);
+    expect(run(['pull']).code).toBe(0);
+    fs.appendFileSync(path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md'), '\nEdited while on svc-a.\n');
+    expect(run(['projects', 'set', 'svc-b']).code).toBe(0);
+    expect(run(['pull']).code).toBe(0);
+    commitOnTeam('skills/svc-a/a-skill/SKILL.md', `${skillMd('a-skill')}\nA teammate's update.\n`);
+
+    const pushed = run(['push', '--all']);
+
+    expect(pushed.output).toContain('to:   skills/svc-a/a-skill');
+    expect(pushedFiles()).not.toContain('skills/a-skill/SKILL.md');
+  });
+
   it('says once that pull kept the edited skill', () => {
     fs.appendFileSync(path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md'), '\nEdited while on svc-a.\n');
     expect(run(['projects', 'set', 'svc-b']).code).toBe(0);

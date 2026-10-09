@@ -484,9 +484,13 @@ source order is active namespace, then this machine's placement record, then the
 shared root; in role/project mode a same-stem root file no longer withdraws the
 placement record (legacy mode still does). The skills push scan uses role ∪
 project namespaces. A skill outside them stays out unless the delivery record
-shows teamai wrote that copy, as when pull keeps an edited skill after a switch:
-it then goes back to the one namespace that holds its name, and a name two
-inactive namespaces hold is skipped with a warning (#1020). A new skill, rule or
+shows teamai wrote that copy, as when pull keeps an edited skill after a switch.
+A copy still exactly as recorded is not an edit and stays out. An edited one goes
+back to the team skill whose history holds the SKILL.md version pull recorded,
+inactive namespace or shared root, even after the team changed it; when that
+version matches no single copy, a lone inactive namespace still takes it, the
+shared-root skill keeps it as before, and otherwise it is skipped with a warning
+naming the namespaces (#1020). A new skill, rule or
 agent pushed without `--role` or `--project` is placed among the role ∪ active
 project namespaces on its own axis, as pull delivers them; only when they give
 none does the pre-project fallback apply (#1021). `push` picks up a change to any `env/<ns>/env.yaml` or `env/<ns>/secrets.yaml`.

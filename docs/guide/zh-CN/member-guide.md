@@ -284,7 +284,7 @@ Choose namespace [1-3] (default: 1 = common):
 - 两者都给不出时，skill 自动扫描团队仓库目录结构；新的 rule / agent 保留在共享根目录
 - 若某个激活的项目未在 `manifest/projects.yaml` 中声明，未带参数放置新资源的 push 会报错停止（exit 2），而不会退回共享根目录：请执行 `teamai projects set <id>`，或用 `--project <id>` 或 `--role <ns>` 指定
 - 单一命名空间时自动选中；也可用 `--role <id>` 显式指定
-- 修改已有资源时自动保持原 namespace。这也包括 namespace 已不在本目录激活的 skill，例如切换项目或角色后 `pull` 因你改过而保留的副本：只要该副本是 teamai 下发的，`push` 就会列出它并推回原 namespace，即使带了 `--role` 或 `--project` 也是如此。若两个未激活的 namespace 都有同名 skill，push 会跳过它并在警告中列出这两个 namespace；请先激活它来自的角色或项目，再 push
+- 修改已有资源时自动保持原 namespace。这也包括 namespace 已不在本目录激活的 skill，例如切换项目或角色后 `pull` 因你改过而保留的副本：只要该副本是 teamai 下发的，`push` 就会列出它并推回它来自的 namespace，即使带了 `--role` 或 `--project`、即使共享根目录有同名 skill 也是如此。teamai 记录的版本决定它来自哪个团队 skill，即使队友之后改过该 skill。与 teamai 下发时完全一致的副本不算修改，push 不会列出。若记录的版本同时对应多个未激活的 namespace，push 会跳过它并在警告中列出这些 namespace；请先激活它来自的角色或项目，再 push
 - 每个资源的落点都会打印出来，例如 `[rules] my-rule → rules/pm/my-rule.md`
 - 若 roles manifest 存在却无法给出答案，命令会报错停止，而不会退回共享根目录。未包含当前配置的角色时：请修复 `manifest/roles.yaml`、执行 `teamai roles set <role>`，或用 `--role <ns>` 显式指定。无法读取、无法解析或为空时，push 在扫描阶段即停止（exit 2），早于 `--role` 生效，因为扫描需要 manifest 才能判断哪些 namespace 属于你：请先修复 `manifest/roles.yaml`。团队仓库根本没有 `manifest/roles.yaml` 时，保持原有行为
 - `teamai push --dry-run` 会做同样的落点解析，并在同样的无法解析情况下报错，不会把真实命令会拒绝的推送报为可行
