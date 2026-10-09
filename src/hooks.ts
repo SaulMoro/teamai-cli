@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { realpathSync } from 'node:fs';
 import { rm, stat } from 'node:fs/promises';
-import { readJson, writeJson, readFileSafe, writeFile, expandHome, ensureDir, pathExists } from './utils/fs.js';
+import { readJson, readJsonObject, writeJson, readFileSafe, writeFile, expandHome, ensureDir, pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import {
   COPILOT_TOOL_ID,
@@ -12,6 +12,7 @@ import {
   TEAMAI_CUSTOM_HOOK_PREFIX,
   TEAMAI_AGENT_HOOK_PREFIX,
   getManagedHooksPath,
+  legacyManagedHooksPath,
   getCopilotHome,
   resolveHookScope,
   resolveLegacyProjectHookScope,
@@ -32,7 +33,9 @@ import {
 } from './types.js';
 import { builtinHookDefs, applyBuiltinOverride, getRawDispatchCommand, skipToolsWithoutShell } from './builtin-hooks.js';
 import type { BuiltinHookOverride } from './builtin-hooks.js';
-import { resolveTeamHooks } from './resources/hooks.js';
+import { parseTeamHooks, resolveTeamHooks, teamHookToDef } from './resources/hooks.js';
+import { entryLayout } from './namespaced-entries.js';
+import { historicalContents } from './utils/team-history.js';
 import { getUserHome } from './utils/home.js';
 import { CLAUDE_HOOK_OTHER_HOST_SKIP } from './claude-hook-host.js';
 import { listWorktrees, resolveAnchors } from './utils/git.js';
@@ -313,9 +316,182 @@ export interface ReconcileHooksOptions {
   /**
    * Write the team hooks alone: the built-ins are not desired here, and any
    * built-in entry found in the file is removed. Team entries are owned only
-   * when the manifest records them; a matching command alone is not ownership.
+   * when the manifest records them, or when they equal a render of a team hook
+   * from `teamHookHistory`; a matching command alone is not ownership.
    */
   teamOnly?: boolean;
+  /** The team's hooks at every revision, to recognize entries the manifest does not record (#993). */
+  teamHookHistory?: TeamHookHistory;
+}
+
+/** Every team hook any revision of the team repo's hook files declares, read once. */
+export type TeamHookHistory = () => Promise<HookDef[]>;
+
+/** `TeamHookHistory` of `localConfig`'s team repo: empty when git cannot read it, or for an HTTP-backed team. */
+export function teamHookHistory(localConfig: LocalConfig): TeamHookHistory {
+  let defs: Promise<HookDef[]> | undefined;
+  return () => defs ??= (async () => {
+    if (localConfig.repo.kind === 'http') return [];
+    const layout = entryLayout('hooks');
+    const versions = await historicalContents(localConfig.repo.localPath, layout.dir) ?? [];
+    const unique = new Map<string, HookDef>();
+    for (const version of versions) {
+      if (path.posix.basename(version.path) !== layout.file) continue;
+      for (const hook of parseTeamHooks(version.content.toString('utf8')) ?? []) {
+        const def = teamHookToDef(hook);
+        unique.set(JSON.stringify(def), def);
+      }
+    }
+    return [...unique.values()];
+  })();
+}
+
+/**
+ * The lines a pull prints for the entries of this checkout's main-checkout
+ * hook files it keeps as the member's (#993), for `doctor`. Read-only.
+ */
+export async function keptTeamHookEntries(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string[]> {
+  const mainCheckout = await resolveMainCheckoutHooks(localConfig, teamConfig.toolPaths);
+  if (!mainCheckout) return [];
+  const manifest = await readManifest(mainCheckout.manifestPath);
+  const legacy = await readManifest(legacyManagedHooksPath(mainCheckout.root));
+  const history = teamHookHistory(localConfig);
+  const kept: string[] = [];
+  for (const [tool, file] of Object.entries(mainCheckout.files)) {
+    if (!await pathExists(file)) continue;
+    const recorded = [...manifest[tool] ?? [], ...tool === CODEX_TOOL_ID ? legacy[tool] ?? [] : []];
+    kept.push(...(await judgeUnrecordedTeamEntries(file, tool, [], recorded, { teamOnly: true, teamHookHistory: history })).kept);
+  }
+  return kept;
+}
+
+/**
+ * Whether a hook file holds an entry no record claims that equals the render of
+ * exactly one team hook (#993): teamai's, for uninstall to find a file whose
+ * records are lost. Read-only.
+ */
+export async function hasUnrecordedTeamHooks(
+  settingsPath: string,
+  tool: string,
+  opts: Pick<ReconcileHooksOptions, 'teamHookHistory' | 'teamHookProjectRoot' | 'teamOnly'>,
+): Promise<boolean> {
+  return (await judgeUnrecordedTeamEntries(settingsPath, tool, [], [], opts)).adopted.length > 0;
+}
+
+/** An entry of a hook file, in any tool's format. */
+type HookFileEntry = HookMatcher | CodexHookMatcher | CursorHookEntry | CopilotHookEntry | ZcodeHookMatcher;
+
+/** What `judgeUnrecordedTeamEntries` found in a hook file. */
+interface UnrecordedTeamEntries {
+  /** Records for the entries that equal exactly one team hook's render: teamai's, handled as recorded ones. */
+  adopted: ManagedHookRecord[];
+  /** A line naming each entry kept as the member's. */
+  kept: string[];
+}
+
+/**
+ * The entries of a hook file that no record in `recorded` owns, judged against
+ * teamai's render of every team hook for `tool` in the file's own format, as
+ * its reconciler writes it: today's (`scopedDefs`) and at every revision in the
+ * team repo's history (#993). One equal to the render of exactly one hook is
+ * adopted. In a team-only file (the main checkout's) a Claude entry carrying a
+ * team hook's marker that equals none is the member's, and named; so is an
+ * entry, in any file, equal to the renders of more than one hook. Other entries
+ * are the member's own hooks, left alone as always; entries teamai's built-in
+ * markers already claim are not judged. Read-only.
+ */
+async function judgeUnrecordedTeamEntries(
+  settingsPath: string,
+  tool: string,
+  scopedDefs: HookDef[],
+  recorded: ManagedHookRecord[],
+  opts: ReconcileHooksOptions,
+): Promise<UnrecordedTeamEntries> {
+  const result: UnrecordedTeamEntries = { adopted: [], kept: [] };
+  const format = detectFormat(tool);
+  // A Claude file outside a project is swept by marker: every marked entry is teamai's already.
+  if (!opts.teamHookHistory || (format === 'claude' && !opts.teamOnly && !opts.teamHookProjectRoot)) return result;
+  const file = expandHome(settingsPath);
+  const json = await readJson<{ hooks?: Record<string, unknown> }>(file);
+  const hooks = (format === 'zcode' ? (json as ZcodeHooksJson | null)?.hooks?.events : json?.hooks) as
+    Record<string, HookFileEntry[]> | undefined;
+  if (!hooks || typeof hooks !== 'object') return result;
+
+  const vbsPath = path.join(path.dirname(file), 'teamai-hook-dispatch.vbs');
+  // The event key and entry each reconciler writes for a hook.
+  const render = (def: HookDef): { event?: string; entry: unknown } => {
+    switch (format) {
+      case 'cursor': return { event: CLAUDE_TO_CURSOR_EVENTS[def.event], entry: toCursorEntry(def) };
+      case 'copilot': return { event: CLAUDE_TO_COPILOT_EVENTS[def.event], entry: toCopilotEntry(def) };
+      case 'zcode': return { event: def.event, entry: toZcodeEntry(def, vbsPath) };
+      case 'codex': return { event: def.event, entry: toCodexEntry(def) };
+      default: return { event: def.event, entry: toClaudeEntry(def) };
+    }
+  };
+  let renders: Array<{ def: HookDef; event?: string; entry: unknown }> | undefined;
+  const loadRenders = async () => renders ??= [
+    ...teamDefsForTool(scopedDefs, tool),
+    ...teamDefsForTool(scopedTeamDefs(await opts.teamHookHistory!(), opts.teamHookProjectRoot, tool), tool),
+  ].map((def) => ({ def, ...render(def) }));
+  const marked = (command: string) => TEAMAI_COMMAND_MARKERS.some((m) => command.includes(m));
+  // The commands each reconciler owns an entry by; none for an entry its built-in handling claims.
+  const commandsOf = (event: string, entry: HookFileEntry): string[] => {
+    if (!entry || typeof entry !== 'object') return [];
+    switch (format) {
+      case 'cursor': {
+        const { command } = entry as CursorHookEntry;
+        return typeof command === 'string' && !isTeamaiHookCommand(command) ? [command] : [];
+      }
+      case 'copilot': {
+        const commands = copilotEntryCommands(entry as CopilotHookEntry);
+        return commands.some(marked) ? [] : commands;
+      }
+      case 'zcode': {
+        const command = zcodeEntryCommand(entry as ZcodeHookMatcher);
+        return command && !marked(command) ? [command] : [];
+      }
+      default: {
+        const matcher = entry as HookMatcher | CodexHookMatcher;
+        const command = matcher.hooks?.length === 1 && matcher.hooks[0].type === 'command' ? matcher.hooks[0].command : undefined;
+        return typeof command === 'string' && !isExactBuiltinEntry(event, tool, matcher) ? [command] : [];
+      }
+    }
+  };
+
+  for (const [event, entries] of Object.entries(hooks)) {
+    if (!Array.isArray(entries)) continue;
+    for (const [index, entry] of entries.entries()) {
+      const commands = commandsOf(event, entry);
+      if (commands.length === 0) continue;
+      const command = commands[0];
+      const marker = format === 'claude' ? teamHookIdOf((entry as HookMatcher).description) : null;
+      // Only a marked entry can equal a Claude render, whose description carries the marker.
+      if (format === 'claude' && marker === null) continue;
+      const owned = recorded.some((record) => format === 'claude'
+        ? record.event === event && (record.matcher ?? '*') === ((entry as HookMatcher).matcher ?? '*') && record.command === command && record.id === marker
+        : format === 'codex' && tool === CODEX_TOOL_ID
+          ? ownsCodexEntry(record, event, index, entries as CodexHookMatcher[])
+          : commands.includes(record.command));
+      if (owned) continue;
+      const matches = (await loadRenders()).filter((r) => r.event === event && isDeepStrictEqual(r.entry, entry));
+      const ids = [...new Set(matches.map((r) => r.def.key))];
+      if (ids.length === 1) {
+        const { def } = matches[0];
+        result.adopted.push({
+          id: ids[0], event: def.event, command: def.command,
+          ...(def.matcher && def.matcher !== '*' ? { matcher: def.matcher } : {}),
+          ...(format === 'codex' && tool === CODEX_TOOL_ID ? { codexEntryIndex: index, codexEntry: entry as CodexHookMatcher } : {}),
+        });
+      } else if (ids.length > 1) {
+        result.kept.push(`Kept the ${event} hook entry in ${settingsPath}: it matches more than one team hook (${ids.join(', ')}), `
+          + 'so teamai cannot tell which one it is. Delete it if it is a copy teamai wrote.');
+      } else if (marker !== null && opts.teamOnly) {
+        result.kept.push(`Kept the ${event} hook entry ${marker} in ${settingsPath}: it is not teamai's (no delivery record, `
+          + `and it matches no team version of hook ${marker}). Delete it if you no longer need it.`);
+      }
+    }
+  }
+  return result;
 }
 
 /** One injected team hook recorded in the manifest. */
@@ -343,6 +519,43 @@ export type BuiltinsOnly = 'with-overrides' | 'defaults-where-none';
 async function readManifest(manifestPath: string): Promise<ManagedHooksManifest> {
   const data = await readJson<ManagedHooksManifest>(expandHome(manifestPath));
   return data && typeof data === 'object' ? data : {};
+}
+
+/**
+ * Move what a release before #993 recorded in `<root>/.teamai/managed-hooks.json`
+ * into this checkout's manifest in the data home: the Copilot records in a
+ * project scope, every record in self mode. The other records stay there for
+ * the pre-#370 Codex import and the legacy hook sweep. The file is deleted
+ * once empty, unless git tracks it: doctor names a tracked one. Idempotent;
+ * an unreadable file is left alone.
+ */
+export async function migrateLegacyManagedHooks(localConfig: LocalConfig): Promise<void> {
+  if (localConfig.scope !== 'project' || !localConfig.projectRoot) return;
+  const legacyPath = legacyManagedHooksPath(localConfig.projectRoot);
+  const legacy = await readJson<ManagedHooksManifest>(legacyPath);
+  if (!legacy || typeof legacy !== 'object' || Array.isArray(legacy)) return;
+  const moving = Object.keys(legacy).filter((tool) => isSelfMode(localConfig) || tool === COPILOT_TOOL_ID);
+  if (moving.length > 0) {
+    const manifestPath = getManagedHooksPath(localConfig);
+    const manifest = await readManifest(manifestPath);
+    for (const tool of moving) {
+      const records = manifest[tool] ?? [];
+      for (const record of legacy[tool] ?? []) {
+        if (!records.some((r) => isDeepStrictEqual(r, record))) records.push(record);
+      }
+      if (records.length > 0) manifest[tool] = records;
+      delete legacy[tool];
+    }
+    await writeJson(manifestPath, manifest);
+  }
+  if (Object.keys(legacy).length === 0) {
+    const { gitTracks } = await import('./mcp-git-exclude.js');
+    if ((await gitTracks(legacyPath)).kind === 'untracked') {
+      await rm(legacyPath, { force: true });
+      return;
+    }
+  }
+  if (moving.length > 0) await writeJson(legacyPath, legacy);
 }
 
 /** Team hooks to record in the manifest for a tool (empty when removing). */
@@ -855,7 +1068,7 @@ async function reconcileClaudeFormat(
   };
   const expanded = expandHome(settingsPath);
   await ensureDir(path.dirname(expanded));
-  const settings: ClaudeSettingsJson = (await readJson<ClaudeSettingsJson>(expanded)) ?? {};
+  const settings: ClaudeSettingsJson = await readHookFile<ClaudeSettingsJson>(expanded, {});
   if (!settings.hooks) settings.hooks = {};
 
   let changed = false;
@@ -902,7 +1115,7 @@ async function reconcileCursorFormat(
 ): Promise<void> {
   const expanded = expandHome(hooksPath);
   await ensureDir(path.dirname(expanded));
-  const hooksJson: CursorHooksJson = (await readJson<CursorHooksJson>(expanded)) ?? { version: 1, hooks: {} };
+  const hooksJson: CursorHooksJson = await readHookFile<CursorHooksJson>(expanded, { version: 1, hooks: {} });
   if (!hooksJson.version) hooksJson.version = 1;
   if (!hooksJson.hooks) hooksJson.hooks = {};
 
@@ -978,10 +1191,10 @@ async function reconcileCopilotFormat(
     return;
   }
   await ensureDir(path.dirname(expanded));
-  const hooksJson: CopilotHooksJson = (await readJson<CopilotHooksJson>(expanded)) ?? {
+  const hooksJson: CopilotHooksJson = await readHookFile<CopilotHooksJson>(expanded, {
     version: COPILOT_HOOK_SCHEMA_VERSION,
     hooks: {},
-  };
+  });
   let changed = hooksJson.version !== COPILOT_HOOK_SCHEMA_VERSION;
   hooksJson.version = COPILOT_HOOK_SCHEMA_VERSION;
   if (!hooksJson.hooks) hooksJson.hooks = {};
@@ -1038,7 +1251,7 @@ async function reconcileCodexFormat(
 ): Promise<ManagedHookRecord[]> {
   const expanded = expandHome(hooksPath);
   await ensureDir(path.dirname(expanded));
-  const hooksJson: CodexHooksJson = (await readJson<CodexHooksJson>(expanded)) ?? {};
+  const hooksJson: CodexHooksJson = await readHookFile<CodexHooksJson>(expanded, {});
   if (!hooksJson.hooks) hooksJson.hooks = {};
 
   const isManaged = (event: string, index: number, entries: CodexHookMatcher[]): boolean => {
@@ -1148,7 +1361,7 @@ async function reconcileZcodeFormat(
       await writeFile(vbsPath, vbsScript);
     }
   }
-  const cfg: ZcodeHooksJson = (await readJson<ZcodeHooksJson>(expanded)) ?? {};
+  const cfg: ZcodeHooksJson = await readHookFile<ZcodeHooksJson>(expanded, {});
   if (!cfg.hooks) cfg.hooks = {};
   let changed = false;
   // ZCode validates the hooks block against a strict schema and REJECTS THE
@@ -1285,7 +1498,7 @@ export async function applyAgentHook(
   // manifest, the authoritative record for codex teardown). Backends must use
   // a unique command per codex agent-hook slug so replace/remove stay precise.
   if (format === 'codex') {
-    const hooksJson: CodexHooksJson = (await readJson<CodexHooksJson>(expanded)) ?? {};
+    const hooksJson: CodexHooksJson = await readHookFile<CodexHooksJson>(expanded, {});
     if (!hooksJson.hooks) hooksJson.hooks = {};
     const existing = hooksJson.hooks[def.event] ?? [];
     const untouched = existing.filter((e) => (e.hooks?.[0]?.command ?? '') !== def.command);
@@ -1298,7 +1511,7 @@ export async function applyAgentHook(
       log.debug(`agent hook [${def.slug}] already up-to-date in ${settingsPath}`);
     }
   } else {
-    const settings: ClaudeSettingsJson = (await readJson<ClaudeSettingsJson>(expanded)) ?? {};
+    const settings: ClaudeSettingsJson = await readHookFile<ClaudeSettingsJson>(expanded, {});
     if (!settings.hooks) settings.hooks = {};
     const existing = settings.hooks[def.event] ?? [];
     const untouched = existing.filter((e) => !isAgentClaudeEntry(e, def.slug));
@@ -1332,7 +1545,7 @@ export async function removeAgentHook(
   // for codex teardown.
   if (format === 'codex') {
     if (!opts.command) return;
-    const hooksJson: CodexHooksJson = (await readJson<CodexHooksJson>(expanded)) ?? {};
+    const hooksJson: CodexHooksJson = await readHookFile<CodexHooksJson>(expanded, {});
     if (!hooksJson.hooks) return;
     let changed = false;
     for (const event of Object.keys(hooksJson.hooks)) {
@@ -1352,7 +1565,7 @@ export async function removeAgentHook(
       log.success(`Removed agent hook [${opts.slug}] from ${settingsPath}`);
     }
   } else {
-    const settings: ClaudeSettingsJson = (await readJson<ClaudeSettingsJson>(expanded)) ?? {};
+    const settings: ClaudeSettingsJson = await readHookFile<ClaudeSettingsJson>(expanded, {});
     if (!settings.hooks) return;
     let changed = false;
     for (const event of Object.keys(settings.hooks)) {
@@ -1377,6 +1590,20 @@ export async function removeAgentHook(
 // ─── Public reconcile API ───────────────────────────────────
 
 /**
+ * A hook settings file teamai writes back, or `fallback` when there is none. One that does not
+ * parse, or is not a JSON object, is the member's to repair (#993): writing it would replace all
+ * of it, so the hook pass for it stops here, the file left byte-identical and nothing recorded,
+ * and the first pull after the repair writes it.
+ */
+async function readHookFile<T>(file: string, fallback: T): Promise<T> {
+  const read = await readJsonObject(file);
+  if (read.kind === 'invalid') {
+    throw new Error(`${file} does not parse (${read.error}), so teamai left it as it is. Fix it, then run the command again.`);
+  }
+  return read.kind === 'ok' ? read.value as T : fallback;
+}
+
+/**
  * Reconcile a single tool settings/hooks file to the desired teamai hook set
  * (built-in A + supplied team B defs). Idempotent; only writes on change.
  */
@@ -1397,10 +1624,17 @@ export async function reconcileHooks(
     await writeJson(expandHome(opts.manifestPath), manifest);
   }
   const allPriorRecords = manifest?.[tool] ?? [];
-  const priorRecords = opts.teamHookProjectRoot
+  const scopedDefs = scopedTeamDefs(teamDefs, opts.teamHookProjectRoot, tool);
+  const recorded = opts.teamHookProjectRoot
     ? allPriorRecords.filter((r) => isGatedForProject(r.command, opts.teamHookProjectRoot!))
     : allPriorRecords;
-const scopedDefs = scopedTeamDefs(teamDefs, opts.teamHookProjectRoot, tool);
+  // An entry a lost record leaves is teamai's when it equals a team render, and is adopted (#993):
+  // replaced by today's render, or removed when nothing is desired.
+  const unrecorded = manifest && opts.teamHookHistory
+    ? await judgeUnrecordedTeamEntries(settingsPath, tool, scopedDefs, recorded, opts)
+    : null;
+  for (const message of unrecorded?.kept ?? []) log.warn(message);
+  const priorRecords = [...recorded, ...unrecorded?.adopted ?? []];
   const desiredTeamCommands = new Set(scopedDefs.filter((d) => !d.tools || d.tools.includes(tool)).map((d) => d.command));
   const priorTeamCommands = new Set(priorRecords.map((r) => r.command));
 
@@ -1854,7 +2088,7 @@ export async function reconcileHooksToAllTools(
   baseDir: string,
   teamDefs: HookDef[],
   manifestPath: string,
-  opts: { removeAll?: boolean; builtinOverride?: BuiltinHookOverride; filterAgents?: string[]; settingsOnly?: boolean; installedBaseDir?: string; teamHookProjectRoot?: string; scope?: Scope; builtinsOnly?: BuiltinsOnly; mainCheckout?: MainCheckoutHooks | null } = {},
+  opts: { removeAll?: boolean; builtinOverride?: BuiltinHookOverride; filterAgents?: string[]; settingsOnly?: boolean; installedBaseDir?: string; teamHookProjectRoot?: string; scope?: Scope; builtinsOnly?: BuiltinsOnly; mainCheckout?: MainCheckoutHooks | null; teamHookHistory?: TeamHookHistory } = {},
 ): Promise<Set<string>> {
   // Without the manifest, reconcileHooks manages the built-in entries only.
   const teamManifestPath = opts.builtinsOnly ? undefined : manifestPath;
@@ -2022,6 +2256,7 @@ export async function reconcileHooksToAllTools(
               manifestPath: teamManifestPath,
               builtinOverride: opts.builtinOverride,
               teamHookProjectRoot: root,
+              teamHookHistory: opts.teamHookHistory,
             });
           }
         } else {
@@ -2030,6 +2265,7 @@ export async function reconcileHooksToAllTools(
             removeAll: opts.removeAll,
             builtinOverride: opts.builtinOverride,
             teamHookProjectRoot: opts.teamHookProjectRoot,
+            teamHookHistory: opts.teamHookHistory,
           });
         }
       }
@@ -2037,8 +2273,9 @@ export async function reconcileHooksToAllTools(
       if (mainFile && opts.mainCheckout && !opts.builtinsOnly) {
         await reconcileMainCheckoutTeamHooks(mainFile, tool, defs, {
           manifestPath: opts.mainCheckout.manifestPath,
-          legacyManifestPath: getManagedHooksPath('project', opts.mainCheckout.root),
+          legacyManifestPath: legacyManagedHooksPath(opts.mainCheckout.root),
           removeAll: opts.removeAll,
+          teamHookHistory: opts.teamHookHistory,
         });
         reconciledMainTools.add(tool);
       }
@@ -2059,7 +2296,7 @@ async function reconcileMainCheckoutTeamHooks(
   file: string,
   tool: string,
   teamDefs: HookDef[],
-  opts: { manifestPath: string; legacyManifestPath: string; removeAll?: boolean },
+  opts: { manifestPath: string; legacyManifestPath: string; removeAll?: boolean; teamHookHistory?: TeamHookHistory },
 ): Promise<void> {
   const wanted = opts.removeAll ? [] : teamDefsForTool(teamDefs, tool);
   if (wanted.length === 0 && !await pathExists(file)) return;
@@ -2370,6 +2607,9 @@ export async function reconcileTeamHooksForConfig(
     }
     return resolved.ok ? { ok: true, defs: teamDefs } : { ok: false, builtins: builtinsOnly ?? 'with-overrides' };
   }
+  // Before any reconcile reads this checkout's manifest (#993).
+  await migrateLegacyManagedHooks(localConfig);
+  const history = teamHookHistory(localConfig);
   const reconciledMainTools = await reconcileHooksToAllTools(hookToolPaths, baseDir, teamDefs, manifestPath, {
     removeAll: opts.removeAll,
     builtinOverride: builtin,
@@ -2381,6 +2621,7 @@ export async function reconcileTeamHooksForConfig(
     scope: localConfig.scope,
     builtinsOnly,
     mainCheckout: await resolveMainCheckoutHooks(localConfig, teamConfig.toolPaths),
+    teamHookHistory: history,
   });
 
   const copilotExcluded = disabled?.includes(COPILOT_TOOL_ID) ?? false;
@@ -2394,7 +2635,7 @@ export async function reconcileTeamHooksForConfig(
   if (copilotEnabled && copilotPaths?.hooks) {
     const copilotBase = resolveToolBaseDir(COPILOT_TOOL_ID, localConfig);
     const copilotHooksPath = path.join(copilotBase, copilotPaths.hooks);
-    const copilotManifestPath = getManagedHooksPath(localConfig.scope, localConfig.projectRoot);
+    const copilotManifestPath = getManagedHooksPath(localConfig);
     const copilotInstalled = await builtinsInstalled(
       builtinsOnly, copilotHooksPath, COPILOT_TOOL_ID, copilotManifestPath, builtin);
     if (!copilotInstalled && (copilotSelected || await pathExists(getCopilotHome()))) {
@@ -2406,11 +2647,14 @@ export async function reconcileTeamHooksForConfig(
           manifestPath: builtinsOnly ? undefined : copilotManifestPath,
           removeAll: opts.removeAll,
           builtinOverride: builtin,
+          teamHookHistory: history,
         },
       );
     }
   }
   if (!builtinsOnly) await sweepLegacyProjectHooks(teamConfig.toolPaths, localConfig, reconciledMainTools);
+  // The pre-#370 import and the sweep above may have emptied the old index.
+  await migrateLegacyManagedHooks(localConfig);
   // Last, so a repository whose hooks cannot be written still gets the agent
   // hooks above; the error then reaches the caller.
   if (!opts.removeAll) await installProjectGitHook(localConfig);

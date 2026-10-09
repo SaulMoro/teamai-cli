@@ -94,36 +94,19 @@ npm run test:e2e -- <test-file>
 
 ## Reproducing CI's remote e2e locally
 
-⚠️ **Do not run this against your real `~/.teamai/`.** It would pollute your working repos.
+The e2e setup file `src/__tests__/helpers/isolate-e2e-env.ts` gives each test file a temporary sandbox HOME (with its own git identity in `.gitconfig`), puts a `teamai` that runs this build's `dist/` first on PATH, and deletes the whole sandbox when the file ends. So there is no need to `export HOME` yourself, and the run never touches your real `~/.teamai/` or `~/.gitconfig`. The remote cases (`src/__tests__/e2e/e2e.test.ts`) clone the fixture repo into the sandbox HOME with the token and write `~/.teamai/config.yaml` in `beforeAll` (`prepareRemoteTeamHome`); nothing needs preparing by hand.
 
 ```bash
-# 1. Isolate a temporary HOME
-export HOME=$(mktemp -d)
-
-# 2. Point at the fixture repo and token (fill in owner/repo)
+# 1. Point at the fixture repo and token (fill in owner/repo; without them the remote cases skip)
 export TEAMAI_TEST_PROVIDER=github
 export TEAMAI_TEST_REPO_URL=<owner>/<repo>
 export TEAMAI_TEST_TOKEN=ghp_xxxxx
 export GITHUB_TOKEN=$TEAMAI_TEST_TOKEN
 
-# 3. Prepare ~/.teamai/config.yaml and clone the fixture repo
-mkdir -p $HOME/.teamai
-git clone "https://x-access-token:${TEAMAI_TEST_TOKEN}@github.com/${TEAMAI_TEST_REPO_URL}.git" \
-  $HOME/.teamai/team-repo
-cat > $HOME/.teamai/config.yaml <<EOF
-repo:
-  localPath: $HOME/.teamai/team-repo
-  remote: $TEAMAI_TEST_REPO_URL
-username: ci
-updatePolicy: auto
-EOF
-
-# 4. Run
+# 2. Run
 npm run build
 npx vitest run --config vitest.e2e.config.ts --reporter=verbose
 ```
-
-Afterwards `rm -rf $HOME` cleans up (`$HOME` is the temporary directory here, not your real home).
 
 ---
 
@@ -143,4 +126,4 @@ Startup took longer than 10 seconds. Raise `testTimeout` in `vitest.e2e.config.t
 
 ### The fixture repo is left dirty (for example a stray `__ci_e2e_tag__`)
 
-Normally the tests clean up after themselves with add/remove round trips. If a run crashed halfway and left residue: clone the fixture repo locally, `git revert` or reset by hand, and push. On a CI failure the `Cleanup fixture repo state on failure` step also runs `git reset --hard HEAD`.
+Normally the tests clean up after themselves with add/remove round trips. If a run crashed halfway and left residue: clone the fixture repo locally, `git revert` or reset by hand, and push. The tests' local clone lives in the sandbox HOME and is deleted with it, so it needs no cleanup.

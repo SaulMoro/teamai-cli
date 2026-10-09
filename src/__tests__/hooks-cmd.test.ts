@@ -14,6 +14,7 @@ vi.mock('../hooks.js', async () => {
     const actual = await vi.importActual<typeof import('../hooks.js')>('../hooks.js');
     return {
         getHookStatus: vi.fn(),
+        migrateLegacyManagedHooks: vi.fn(),
         reconcileHooks: vi.fn(),
         reconcileHooksToAllTools: vi.fn(),
         reconcileTeamHooksForConfig: vi.fn(),

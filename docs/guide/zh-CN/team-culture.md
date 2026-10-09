@@ -117,7 +117,7 @@ CodeBuddy 和 WorkBuddy 的规则文件带有 `alwaysApply: true`，CodeBuddy �
 
 在项目中，teamai 安装 Hermes 插件 `$HERMES_HOME/plugins/teamai-instructions/`，并把它加入 `$HERMES_HOME/config.yaml` 的 `plugins.enabled`（列在 `plugins.disabled` 中的名称保持关闭）。同名但并非 teamai 写入的插件保持不变，卸载时也一样，`teamai pull` 和 `teamai doctor` 会指出这一点。根据 Hermes 的文档，它在每个新会话开始时根据会话目录生成该段落，并在压缩和恢复后保留。一个段落最多 4,000 个字符，所有插件段落合计最多 8,000 个字符。当该成员在此项目的指令更长时，Hermes 会跳过它们，`teamai pull` 会给出提示：teamai 不会截断它们，也不会写入 `AGENTS.md`。在项目之外段落为空，Hermes 可能记录它跳过了一个空段落。
 
-OpenCode 只加载配置中 `instructions` 列出的文件。仅当目标已包含所需的块或更新成功时，teamai 才添加该条目；标记不完整或写入失败时，不会激活旧块。编辑失败会保留已有的 instructions 条目，recall 标记不完整导致切换失败时也一样。TeamAI 在添加配置条目之前保存所有权；状态写入失败时不会激活条目，配置写入失败时可以重试。你已列出的条目仍属于你。teamai 只添加这一项，并保留你的其他条目和键；根目录的 `opencode.json` 以及 OpenCode 自己的 `AGENTS.md` 文件保持不变。当 `~/.config/opencode/AGENTS.md` 不存在时，OpenCode 会改为读取 `~/.claude/CLAUDE.md`；若 Claude Code 的用户块已在那里，OpenCode 已经获得它们，因此 teamai 不会为 OpenCode 再写一份用户副本，并在 pull 输出中说明。被排除的 Claude Code 留在那里的块同样算数，因为 OpenCode 照样读取它们；此时 pull 会警告没有任何工具再更新它们。teamai 无法按 JSON 解析的配置文件（例如带注释的文件）保持不变并给出警告，请手动添加该条目。
+OpenCode 只加载配置中 `instructions` 列出的文件。仅当目标已包含所需的块或更新成功时，teamai 才添加该条目；标记不完整或写入失败时，不会激活旧块。编辑失败会保留已有的 instructions 条目，recall 标记不完整导致切换失败时也一样。TeamAI 在添加配置条目之前保存所有权；状态写入失败时不会激活条目，配置写入失败时可以重试。你已列出的条目仍属于你。teamai 只添加这一项，并保留你的其他条目和键；根目录的 `opencode.json` 以及 OpenCode 自己的 `AGENTS.md` 文件保持不变。当 `~/.config/opencode/AGENTS.md` 不存在时，OpenCode 会改为读取 `~/.claude/CLAUDE.md`；若 Claude Code 的用户块已在那里，OpenCode V1 已经获得它们，因此 teamai 不会在 `instructions` 中再列一份用户副本，并在 pull 输出中说明。它仍会为 OpenCode V2 写入 `~/.config/opencode/teamai-context.md`，因为 V2 既不读取 `CLAUDE.md` 也不读取 `instructions`（见下文 OpenCode 一节）。被排除的 Claude Code 留在那里的块同样算数，因为 OpenCode 照样读取它们；此时 pull 会警告没有任何工具再更新它们。teamai 无法按 JSON 解析的配置文件（例如带注释的文件）保持不变并给出警告，请手动添加该条目。
 
 Oh My Pi 把 `RULES.md` 作为始终应用的规则读取，与其唯一的用户上下文文件并存。在项目范围内，teamai 的 OMP 扩展在会话开始时向 `teamai` 获取这些块，并加入每轮的系统提示，无论会话从项目根目录还是子目录启动。没有该扩展时（例如移除了 hooks），Oh My Pi 的项目会话不会获得团队块。HTTP local agent 为项目下发的 prompt 也以同样方式，通过扩展或插件到达 Pi、Oh My Pi 和 Hermes，并通过 session-start 和 subagent-start hook 到达 Codex 系列。Pi 和 Oh My Pi 会等待前台 session-start 派发（包括 HTTP prompt 同步）完成，再为首个 prompt 缓存项目指令。Codex 也会在该同步完成后读取 HTTP prompt 缓存，再返回 SessionStart 上下文。
 
@@ -139,7 +139,7 @@ pull 会列出所修改的每个文件：
 - Codex 系列：项目 `AGENTS.md`（当团队的 `toolPaths` 或早期构建把 Codex 指向那里时）
 - 目标文件已改变的任一工具：团队 `toolPaths` 为它设置的 `claudemd` 路径，除非现在另一个工具的块写在那里
 
-`teamai doctor` 会检查每个已安装工具能否加载这些块：每个文件是否包含当前的块，OpenCode 配置是否列出其文件，Pi 或 Oh My Pi 扩展和 Hermes 插件是否已安装并启用，Hermes 段落是否在限制内，以及早期版本写过的文件中是否仍残留块。
+`teamai doctor` 会检查每个已安装工具能否加载这些块：每个文件是否包含当前的块，OpenCode 配置是否列出其文件（在 OpenCode V2 上改为检查 teamai 插件是否已安装），Pi 或 Oh My Pi 扩展和 Hermes 插件是否已安装并启用，Hermes 段落是否在限制内，以及早期版本写过的文件中是否仍残留块。
 
 若请求更新的块存在不完整或重复的标记，整个文件保持不变，包括其他托管块。修复提示中的标记后，再运行 `teamai pull`。
 

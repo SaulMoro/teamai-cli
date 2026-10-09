@@ -81,11 +81,16 @@ and give it your team repo URL."*
   removed, it deletes the copy only if its hash matches the recorded delivery.
   Without that record, it keeps the copy and names it in a warning. Save any
   changes you need, then delete the copy manually.
+- A skill directory, rule or agent at a team resource's name goes only when it
+  is teamai's (on the delivery record, or a team version by the history). The
+  user's own file or skill of that name stays, and uninstall names it in a
+  warning.
 - If an OpenCode config entry cannot be removed, repair its config or permissions
   and retry the same uninstall command. Uninstall reports failure and keeps
   its ownership record and shared data directory, even for the last tool.
 - Project uninstall keeps the global Pi and Oh My Pi extensions, Hermes
-  plugin and config, and the Codex family's user-level hooks, which the user
+  plugin and config, OpenCode's user plugin, and the Codex family's
+  user-level hooks, which the user
   scope, the HTTP agent or another project may use, and names them. If none
   does, run `teamai hooks remove` in the project first: it removes them.
   Targeted project Codex uninstall keeps project config and records its
@@ -109,7 +114,8 @@ and give it your team repo URL."*
   (the `# [teamai:mcp-exclude:start]` block) for MCP configs it proves hold no
   resolved `${VAR}` value. A line names the path a write lands in: for a config
   under a symlinked directory, the link's target (`/config/mcp.json` for
-  `.cursor/` linking to `config/`). For one it cannot prove clean (including one written
+  `.cursor/` linking to `config/`); for a config that is itself a symlink, its
+  target, in that target's repository. For one it cannot prove clean (including one written
   under a `toolPaths` mapping since changed, at the built-in location of a tool
   the team dropped or moved that no other tool maps, or in a nested repository's
   linked worktree, that still holds servers, and one written for a tool since moved

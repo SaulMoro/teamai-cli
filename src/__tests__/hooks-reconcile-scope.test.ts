@@ -681,7 +681,8 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
     const legacyManifest = path.join(main, '.teamai', 'managed-hooks.json');
     const oldCommand = gated(main, 'npm run lint');
     const oldEntry = { hooks: [{ type: 'command', command: oldCommand, timeout: 30 }] };
-    const member = { hooks: [{ type: 'command', command: 'npm run lint' }] };
+    // Shares the team's command but is not its render: an exact render is teamai's (#993).
+    const member = { hooks: [{ type: 'command', command: 'npm run lint', timeout: 5 }] };
     const cursorRecords = [{ id: 'other', event: 'Stop', command: 'echo cursor' }];
     await fse.outputJson(file, { hooks: { Stop: [member, oldEntry], PreToolUse: [oldEntry] } });
     await fse.outputJson(legacyManifest, {
