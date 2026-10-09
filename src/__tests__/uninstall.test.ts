@@ -3183,10 +3183,14 @@ describe('uninstall', () => {
 
     const warnings = (log.warn as ReturnType<typeof vi.fn>).mock.calls.map((c) => String(c[0]));
     const about = warnings.filter((w) => w.includes(stubDir));
-    expect(about).toHaveLength(1);
-    expect(about[0]).toContain('Could not delete packaged files under');
+    // The error, then the records kept so the retry can find what is left.
+    expect(about).toEqual([
+      expect.stringContaining('Could not delete packaged files under'),
+      expect.stringContaining('Kept '),
+      expect.stringContaining('Uninstall incomplete'),
+    ]);
     expect(about[0]).toContain(path.join(stubDir, 'SKILL.md'));
-    expect(about[0]).not.toContain('did not put there');
+    expect(about.join('\n')).not.toContain('did not put there');
     expect(await fse.pathExists(path.join(stubDir, 'SKILL.md'))).toBe(true);
   });
 

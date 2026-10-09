@@ -502,15 +502,20 @@ describe('OpenCode V2 plugin: team MCP servers', () => {
     await host.cleanup?.();
   });
 
-  it('falls back to the nearest rules directory when no .opencode above holds a teamai file', async () => {
-    const project = path.join(tmp, 'proj');
-    await fse.outputFile(path.join(project, '.opencode', 'rules', 'team.md'), 'TEAM-RULE\n');
-    await fse.ensureDir(path.join(project, 'src'));
+  it('with no teamai file above, reads every rules directory up, so a nested package\'s own rules do not hide the team\'s', async () => {
+    const root = path.join(tmp, 'mono');
+    await fse.outputFile(path.join(root, '.opencode', 'rules', 'team.md'), 'TEAM-RULE\n');
+    const pkg = path.join(root, 'packages', 'web');
+    await fse.outputFile(path.join(pkg, '.opencode', 'rules', 'mine.md'), 'MEMBER-RULE\n');
+    await fse.ensureDir(path.join(pkg, 'src'));
 
-    const host = await loadV2Plugin(buildPluginSource(path.join(tmp, 'user')), {}, path.join(project, 'src'));
+    const host = await loadV2Plugin(buildPluginSource(path.join(tmp, 'user')), {}, path.join(pkg, 'src'));
     const event = { sessionID: 'ses', system: [] as Array<{ type: string; text: string }> };
     await host.callbacks['session.context'](event);
-    expect(event.system.map((part) => part.text).join('\n')).toContain('TEAM-RULE');
+    const texts = event.system.map((part) => part.text);
+    expect(texts.findIndex((text) => text.includes('TEAM-RULE'))).toBeGreaterThanOrEqual(0);
+    expect(texts.findIndex((text) => text.includes('MEMBER-RULE'))).toBeGreaterThan(texts.findIndex((text) => text.includes('TEAM-RULE')));
+    expect(host.mcpServers()).toEqual({});
     await host.cleanup?.();
   });
 

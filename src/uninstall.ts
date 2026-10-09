@@ -1800,8 +1800,10 @@ async function teardownPlugins(): Promise<void> {
 async function executeRemoval(
   plan: RemovalPlan,
   heldMcp: ReadonlySet<string>,
-): Promise<{ pendingOpencode: RemovalPlan['opencodeInstructions']; hooksLeft: Array<{ what: string; tool: string }>; blocksLeft: string[] }> {
+): Promise<{ pendingOpencode: RemovalPlan['opencodeInstructions']; hooksLeft: Array<{ what: string; tool: string }>; blocksLeft: string[]; filesLeft: string[] }> {
   const pendingOpencode: RemovalPlan['opencodeInstructions'] = [];
+  /** Delivered files a delete failed for: their lines and records stay for the retry. */
+  const filesLeft: string[] = [];
   if (plan.gitHook) {
     const { removeGitHook } = await import('./git-hook.js');
     try {
@@ -2008,6 +2010,7 @@ async function executeRemoval(
         removedSkillDirs++;
       }
     } catch (e) {
+      filesLeft.push(skillDir);
       log.warn(`Failed to remove skill ${skillDir}: ${(e as Error).message}`);
     }
   }
@@ -2023,6 +2026,7 @@ async function executeRemoval(
     log.warn(`Kept ${skillDir}: it is reached through a symlink, so TeamAI left it and whatever the link points at alone.`);
   }
   for (const { skillDir, first } of failedSkillDirs) {
+    filesLeft.push(skillDir);
     log.warn(`Could not delete packaged files under ${skillDir}. First: ${first.file} — ${first.error}. Fix the permissions and run \`teamai uninstall\` again, or delete the directory yourself.`);
   }
 
@@ -2031,6 +2035,7 @@ async function executeRemoval(
     try {
       await remove(ruleFile);
     } catch (e) {
+      filesLeft.push(ruleFile);
       log.warn(`Failed to remove rule ${ruleFile}: ${(e as Error).message}`);
     }
   }
@@ -2055,6 +2060,7 @@ async function executeRemoval(
     try {
       await remove(agentFile);
     } catch (e) {
+      filesLeft.push(agentFile);
       log.warn(`Failed to remove agent ${agentFile}: ${(e as Error).message}`);
     }
   }
@@ -2095,6 +2101,7 @@ async function executeRemoval(
       log.success(docsKept ? `Removed teamai's docs from ${plan.docsDir}` : `Removed docs: ${plan.docsDir}`);
     } catch (e) {
       docsKept = true;
+      filesLeft.push(plan.docsDir);
       log.warn(`Failed to remove docs: ${(e as Error).message}`);
     }
   }
@@ -2113,13 +2120,14 @@ async function executeRemoval(
   // the partition state that records which exclude files hold them.
   // An incomplete one keeps the data home, so the record of these files, for the retry; so does a block that stays.
   const blocksLeft = plan.includeShared
-    ? await removePlannedGitExcludeBlocks(plan, heldMcp, hooksLeft.length > 0 || pendingOpencode.length > 0)
+    ? await removePlannedGitExcludeBlocks(plan, heldMcp, hooksLeft.length > 0 || pendingOpencode.length > 0 || filesLeft.length > 0)
     : [];
 
   // (g) Remove ~/.teamai/ directory (last — earlier steps read from it)
-  if (plan.teamaiHomeExists && (hooksLeft.length > 0 || blocksLeft.length > 0)) {
+  if (plan.teamaiHomeExists && (hooksLeft.length > 0 || blocksLeft.length > 0 || filesLeft.length > 0)) {
     const held = [
       ...hooksLeft.length > 0 ? [`teamai's hooks in ${hooksLeft.map((h) => h.what).join(', ')}`] : [],
+      ...filesLeft.length > 0 ? [`teamai's files ${filesLeft.join(', ')}`] : [],
       ...blocksLeft.length > 0 ? [`teamai's git exclude blocks in ${blocksLeft.join(', ')}`] : [],
     ];
     log.warn(`Kept ${plan.teamaiHome}: it holds the record of ${held.join(' and ')}, which could not be removed. `
@@ -2180,7 +2188,7 @@ async function executeRemoval(
       log.debug(`Hermes uninstall cleanup skipped: ${(e as Error).message}`);
     }
   }
-  return { pendingOpencode, hooksLeft, blocksLeft };
+  return { pendingOpencode, hooksLeft, blocksLeft, filesLeft };
 }
 
 /** Remove everything under `root` but `keep` and the directories on the way to it. */
@@ -2400,8 +2408,8 @@ async function removeConfirmed(
     }
   }
 
-  const { pendingOpencode, hooksLeft, blocksLeft } = await executeRemoval(plan, heldMcp);
-  const incomplete = pendingOpencode.length > 0 || hooksLeft.length > 0 || blocksLeft.length > 0;
+  const { pendingOpencode, hooksLeft, blocksLeft, filesLeft } = await executeRemoval(plan, heldMcp);
+  const incomplete = pendingOpencode.length > 0 || hooksLeft.length > 0 || blocksLeft.length > 0 || filesLeft.length > 0;
   // Codex team hooks that ran from the dispatcher in ~/.codex/hooks.json (#915).
   if (!agentKey || agentKey === 'codex') await stopCodexDispatch(teamConfig, localConfig);
 
@@ -2438,7 +2446,7 @@ async function removeConfirmed(
   }
 
   if (incomplete) {
-    const files = [...pendingOpencode.map((ref) => ref.config), ...hooksLeft.map((hook) => hook.what), ...blocksLeft];
+    const files = [...pendingOpencode.map((ref) => ref.config), ...hooksLeft.map((hook) => hook.what), ...blocksLeft, ...filesLeft];
     log.warn(`Uninstall incomplete: kept ${plan.teamaiHome} and the ownership records so removal can be retried. Repair permissions or JSON in ${files.join(', ')}, then run the same uninstall command again.`);
     process.exitCode = 1;
   } else {

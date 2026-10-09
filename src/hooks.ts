@@ -1010,6 +1010,8 @@ interface CodexTeamHookPlacement {
   gitExclude: boolean | undefined;
   /** Self mode: the committed file holds the built-ins, so it is never teamai's alone. */
   self: boolean;
+  /** `~/.codex/hooks.json`, which holds the dispatcher entries; null when Codex has none here. */
+  homeFile: string | null;
 }
 
 /**
@@ -1027,8 +1029,11 @@ async function holdsForeignCodexHooks(
   const stats = await lstat(file).catch(() => null);
   if (!stats) return false;
   if (!stats.isFile()) return true;
-  const { gitTracks } = await import('./git-exclude.js');
-  if ((await gitTracks(file, 'entry')).kind === 'tracked') return true;
+  const { gitTracks, gitTracking } = await import('./git-exclude.js');
+  const tracks = await gitTracks(file, 'entry');
+  if (tracks.kind === 'tracked') return true;
+  // Git failing to say inside a repository may hide a tracked file.
+  if (tracks.kind === 'unknown' && (await gitTracking(file)).kind !== 'outside-repo') return true;
   const raw = await readFileSafe(file);
   if (raw === null || raw.trim() === '') return false;
   let json: unknown;
@@ -1077,10 +1082,23 @@ async function placeCodexTeamHooks(
     ...(def.matcher && def.matcher !== '*' ? { matcher: def.matcher } : {}),
     ...(def.timeout !== undefined ? { timeout: def.timeout } : {}),
   }));
-  if (await setCodexDispatcherHooks(placement.project, dispatch && hooks.length > 0 ? hooks : null)) return dispatch;
-  log.warn(`Could not update ${path.join('~', '.teamai', 'codex-team-hooks.json')}: another teamai process held it. `
-    + 'The Codex team hooks stay where they are; the next pull places them.');
-  return current;
+  if (!await setCodexDispatcherHooks(placement.project, dispatch && hooks.length > 0 ? hooks : null)) {
+    log.warn(`Could not update ${path.join('~', '.teamai', 'codex-team-hooks.json')}: another teamai process held it. `
+      + 'The Codex team hooks stay where they are; the next pull places them.');
+    return current;
+  }
+  if (!dispatch || hooks.length === 0) return dispatch;
+  // The project file gives up the team hooks only once the dispatcher entries that run them are in place.
+  try {
+    if (!placement.homeFile) throw new Error('Codex has no user hook file here');
+    await reconcileCodexDispatchers(placement.homeFile);
+    return true;
+  } catch (e) {
+    await setCodexDispatcherHooks(placement.project, null);
+    log.warn(`Could not add the Codex team-hook dispatchers to ${placement.homeFile ?? '~/.codex/hooks.json'}: ${(e as Error).message}. `
+      + `The team hooks stay in ${file}; fix the cause above, then run \`teamai pull\`.`);
+    return false;
+  }
 }
 
 /**
@@ -3168,6 +3186,7 @@ export async function reconcileTeamHooksForConfig(
   await migrateLegacyManagedHooks(localConfig);
   const history = teamHookHistory(localConfig);
   const codexProject = await codexTeamHookProject(localConfig);
+  const codexHome = codexHomeHooksFile(teamConfig, localConfig);
   const reconciledMainTools = await reconcileHooksToAllTools(hookToolPaths, baseDir, teamDefs, manifestPath, {
     removeAll: opts.removeAll,
     builtinOverride: builtin,
@@ -3184,11 +3203,10 @@ export async function reconcileTeamHooksForConfig(
       ? { selfLocalTeamHooks: { relocate: isGitExcludeEnabled(localConfig, teamConfig) } }
       : {}),
     ...(codexProject
-      ? { codexTeamHooks: { project: codexProject, gitExclude: resolveGitExclude(localConfig, teamConfig), self: isSelfMode(localConfig) } }
+      ? { codexTeamHooks: { project: codexProject, gitExclude: resolveGitExclude(localConfig, teamConfig), self: isSelfMode(localConfig), homeFile: codexHome } }
       : {}),
   });
   // The dispatcher entries follow every project's choice, this one's included.
-  const codexHome = codexHomeHooksFile(teamConfig, localConfig);
   if (codexProject && codexHome && !builtinsOnly && (!filterAgents || filterAgents.includes(CODEX_TOOL_ID))) {
     try {
       await reconcileCodexDispatchers(codexHome);

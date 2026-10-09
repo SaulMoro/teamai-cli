@@ -280,6 +280,34 @@ describe('a teamai-only .codex/hooks.json', () => {
     expect(dispatcherEvents(m.homeHooks())).toEqual([]);
   });
 
+  it.skipIf(process.getuid?.() === 0)('keeps the team hooks in the project file while the dispatcher cannot be installed, and switches once it can', () => {
+    const m = machine('no-dispatcher', { hooks: [{ id: 'team-stop', event: 'Stop', command: 'echo team-stop' }] });
+    const file = path.join(m.dir, '.codex', 'hooks.json');
+    const homeFile = path.join(m.home, '.codex', 'hooks.json');
+    const mine = { hooks: [{ type: 'command', command: 'echo my-own' }] };
+    const data = readJson(file);
+    data.hooks.Stop.push(mine);
+    writeJson(file, data);
+    if (!fs.existsSync(homeFile)) writeJson(homeFile, {});
+    const homeBefore = read(homeFile);
+    fs.chmodSync(homeFile, 0o444);
+    fs.chmodSync(path.dirname(homeFile), 0o555);
+    try {
+      m.ok(['pull']);
+    } finally {
+      fs.chmodSync(path.dirname(homeFile), 0o755);
+      fs.chmodSync(homeFile, 0o644);
+    }
+
+    expect(read(homeFile)).toBe(homeBefore);
+    expect(read(file)).toContain('echo team-stop');
+    expect(readJson(file).hooks.Stop).toContainEqual(mine);
+
+    m.ok(['pull']);
+    expect(readJson(file)).toEqual({ hooks: { Stop: [mine] } });
+    expect(m.dispatch('Stop', {}).stdout).toContain('team-stop');
+  });
+
   it('a team-owned file holding an unrecorded teamai copy of a team hook: the hook then runs only from the dispatcher', () => {
     const m = machine('unrecorded', { gitExclude: false, hooks: [{ id: 'team-stop', event: 'Stop', command: 'echo team-stop' }] });
     const file = path.join(m.dir, '.codex', 'hooks.json');

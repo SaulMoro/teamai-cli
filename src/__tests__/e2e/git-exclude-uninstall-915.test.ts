@@ -269,6 +269,35 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     expect(read(exclude)).not.toContain('# [teamai:');
   }, 120_000);
 
+  it.skipIf(isRoot)('keeps the line and the records of a rule an incomplete uninstall could not delete, and removes them on the retry', () => {
+    const m = member('rule-left');
+    const app = m.project(path.join(caseDir('rule-left'), 'app'));
+    const exclude = excludeFileOf(m, app);
+    const rules = path.join(app, '.claude', 'rules');
+    expect(blockLines(exclude)).toContain('/.claude/rules/team-rule.md');
+    fs.chmodSync(rules, 0o555);
+    let first: ReturnType<Member['run']>;
+    try {
+      first = m.run(process.execPath, [CLI, 'uninstall', '--force'], app);
+    } finally {
+      fs.chmodSync(rules, 0o755);
+    }
+
+    expect(first.code, first.output).toBe(1);
+    expect(first.output).toContain('Uninstall incomplete');
+    expect(fs.existsSync(path.join(rules, 'team-rule.md'))).toBe(true);
+    // The rule is still there, hidden as before; the skill is gone and so is its line.
+    expect(blockLines(exclude), first.output).toContain('/.claude/rules/team-rule.md');
+    expect(blockLines(exclude)).not.toContain('/.claude/skills/fe-skill/SKILL.md');
+    expect(status(m, app)).toEqual([]);
+    expect(partitionDirs(m)).not.toEqual([]);
+
+    const second = m.teamai(['uninstall', '--force'], app);
+    expect(second).toContain('teamai uninstalled');
+    expect(fs.existsSync(path.join(rules, 'team-rule.md'))).toBe(false);
+    expect(read(exclude)).not.toContain('# [teamai:');
+  }, 120_000);
+
   it('keeps the block another project holds in a tool home under version control', () => {
     const m = member('tool-home');
     fs.mkdirSync(path.join(m.home, '.hermes'), { recursive: true });

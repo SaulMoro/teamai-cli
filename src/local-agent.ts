@@ -3031,8 +3031,8 @@ const TEAMAI_MODEL_GITIGNORE = ['# Local model credentials', 'models.json'];
 
 /**
  * Delete the `.codebuddy/.gitignore` an older teamai created for `models.json`,
- * while it holds only those two lines and git does not track it. One the member
- * or the team edited, or committed, stays.
+ * while it holds only those two lines and git says it does not track it. One the
+ * member or the team edited, or committed, stays, and so does one git cannot judge.
  */
 async function removeTeamaiModelGitignore(workspacePath: string): Promise<void> {
   const file = path.join(workspacePath, '.codebuddy', '.gitignore');
@@ -3040,7 +3040,7 @@ async function removeTeamaiModelGitignore(workspacePath: string): Promise<void> 
   if (content === null) return;
   const lines = content.split(/\r?\n/).map((line) => line.trimEnd()).filter(Boolean);
   if (lines.length !== TEAMAI_MODEL_GITIGNORE.length || lines.some((line, i) => line !== TEAMAI_MODEL_GITIGNORE[i])) return;
-  if ((await gitTracks(file)).kind === 'tracked') return;
+  if ((await gitTracks(file)).kind !== 'untracked') return;
   await remove(file);
 }
 

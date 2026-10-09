@@ -218,26 +218,27 @@ const TeamaiHooks = async ({ directory, worktree }) => {
 const USER_CONFIG_DIR = ${JSON.stringify(userConfigDir)};
 
 /**
- * The nearest \`.opencode\` from \`directory\` up that teamai delivers to, if any:
- * one holding a teamai file, else, for a team with only rules, the nearest
- * with a \`rules\` directory. A member's own \`.opencode/rules\` in a nested
- * package does not hide the teamai project above it.
+ * The \`.opencode\` directories from \`directory\` up that teamai delivers to:
+ * the nearest holding a teamai file. A team with only rules leaves no such
+ * file, so then each one with a \`rules\` directory, outermost first, as
+ * OpenCode V1 globs teamai's rules entry in each directory up: a member's own
+ * \`.opencode/rules\` in a nested package does not hide the team's above it.
  */
-const teamaiProject = async (directory) => {
+const teamaiProjects = async (directory) => {
   const fs = await import('node:fs/promises');
   const path = await import('node:path');
   const exists = (file) => fs.stat(file).then(() => true, () => false);
-  let rulesOnly;
+  const withRules = [];
   for (let dir = directory; dir;) {
     const project = path.join(dir, '.opencode');
     for (const marker of ['teamai-context.md', ${JSON.stringify(OPENCODE_MCP_FILE)}]) {
-      if (await exists(path.join(project, marker))) return project;
+      if (await exists(path.join(project, marker))) return [project];
     }
-    if (rulesOnly === undefined && await exists(path.join(project, 'rules'))) rulesOnly = project;
+    if (await exists(path.join(project, 'rules'))) withRules.unshift(project);
     const parent = path.dirname(dir);
     dir = parent === dir ? undefined : parent;
   }
-  return rulesOnly;
+  return withRules;
 };
 
 /** @param {string} directory */
@@ -266,8 +267,9 @@ const teamaiContext = async (directory) => {
     return texts;
   };
   const texts = [...await read(path.join(USER_CONFIG_DIR, 'teamai-context.md')), ...await rules(path.join(USER_CONFIG_DIR, 'rules'))];
-  const project = await teamaiProject(directory);
-  if (project) texts.push(...await read(path.join(project, 'teamai-context.md')), ...await rules(path.join(project, 'rules')));
+  for (const project of await teamaiProjects(directory)) {
+    texts.push(...await read(path.join(project, 'teamai-context.md')), ...await rules(path.join(project, 'rules')));
+  }
   return texts;
 };
 
@@ -279,7 +281,7 @@ const teamaiContext = async (directory) => {
 const teamaiMcp = async (directory) => {
   const fs = await import('node:fs/promises');
   const path = await import('node:path');
-  const project = await teamaiProject(directory);
+  const [project] = await teamaiProjects(directory);
   if (!project) return {};
   let servers;
   try {
