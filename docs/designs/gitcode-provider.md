@@ -62,9 +62,9 @@ All verified with a real `GITCODE_TOKEN`:
 
 `teamai push` pushes its branch through `pushRepoBranch` → a bare `git push` with no auth injection, relying on the credentials persisted at clone time.
 The GitLab clone uses a one-off `-c http.extraHeader` (not persisted); copying that made push fail with **Access denied** (reproduced live).
-GitHub and TGit embed the token in the remote URL instead (persisted in `.git/config`).
+GitHub and TGit used to embed the token in the remote URL (persisted in `.git/config`); GitHub now completes the clone with a one-off `-c http.extraHeader` and persists a URL-scoped `credential.helper` into the cloned repo, so the token no longer enters the URL ([#978](https://github.com/Tencent/teamai-cli/issues/978)).
 
-**Fix**: `gitcodeRepoClone` (the team-repo clone) embeds `https://oauth2:<token>@gitcode.com/...`, so `git push` (branch + PR flow) authenticates. The token lands only in the private clone under `~/.teamai/team-repo`, as with GitHub and TGit. (The shallow-clone path in `clone.ts` is not a push target and keeps using extraHeader.)
+**Fix**: `gitcodeRepoClone` (the team-repo clone) embeds `https://oauth2:<token>@gitcode.com/...`, so `git push` (branch + PR flow) authenticates. The token lands only in the private clone under `~/.teamai/team-repo`, as with TGit. (The shallow-clone path in `clone.ts` is not a push target and keeps using extraHeader.)
 
 ## 6. End-to-end verification (real CLI, real GitCode repo)
 

@@ -57,7 +57,10 @@ afterEach(() => {
 
 describe('provider clone: git child launches hide the console window', () => {
   const cases: Array<[string, () => void, number]> = [
-    ['ghRepoClone', () => ghRepoClone('owner/repo', 'D:/tmp/e2e-gh'), 1],
+    // gh now persists a credential helper right after cloning (a token is set
+    // above), which takes two `git config` launches — reset the inherited helper
+    // list for github.com, then add ours — so it launches git three times.
+    ['ghRepoClone', () => ghRepoClone('owner/repo', 'D:/tmp/e2e-gh'), 3],
     ['gitlabRepoClone', () => gitlabRepoClone('owner/repo', 'D:/tmp/e2e-gl'), 1],
     ['gitcodeRepoClone', () => gitcodeRepoClone('owner/repo', 'D:/tmp/e2e-gc'), 1],
     ['cnbRepoClone', () => cnbRepoClone('owner/repo', 'D:/tmp/e2e-cnb'), 2],

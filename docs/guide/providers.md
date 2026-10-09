@@ -22,7 +22,7 @@ TeamAI CLI talks to Git hosting platforms through a provider layer. Six provider
 `teamai init <input>` (or the equivalent `teamai init --repo <input>`) picks the provider from the shape of the input:
 
 ```
-yourorg/yourrepo                        → github (default)
+your-org/your-repo                        → github (default)
 https://github.com/org/repo(.git)       → github
 git@github.com:org/repo.git             → github
 https://git.woa.com/team/repo(.git)     → tgit
@@ -91,7 +91,7 @@ sudo apt install gh
 Run `gh auth login` after installing, or let `teamai init` start the interactive login:
 
 ```bash
-teamai init yourorg/yourrepo
+teamai init your-org/your-repo
 # when not logged in, runs gh auth login --web (interactive terminals only)
 ```
 
@@ -103,7 +103,7 @@ Where the `gh` CLI cannot be installed (CI, containers, locked-down Linux), auth
 
 ```bash
 export GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxx
-teamai init yourorg/yourrepo
+teamai init your-org/your-repo
 ```
 
 The token needs the `repo` scope. `GH_TOKEN` is recognized as an alias.
@@ -112,7 +112,9 @@ The token needs the `repo` scope. `GH_TOKEN` is recognized as an alias.
 
 | Operation | Implementation |
 |-----------|----------------|
-| clone | `git clone https://x-access-token:$TOKEN@github.com/...` |
+| clone | `git clone https://github.com/<org>/<repo>.git` (no credentials in the URL). Authentication happens in two stages: the clone call injects `Authorization: Basic x-access-token:<TOKEN>` via `-c http.extraHeader`; once the clone finishes, a `credential.https://github.com.helper` is persisted into the repo's **local** config for the following `push` / `pull`. The token never enters the URL, so it does not linger in the clone's `.git/config` ([#978](https://github.com/Tencent/teamai-cli/issues/978)) |
+
+> **Why the helper is cleared before it is written**: `credential.helper` is a multi-valued key and git invokes every helper in order (system → global → local) — **the first one to hand over credentials wins**. A plain `--local --add` in the cloned repo only appends to the end of that inherited list, so a user-level helper such as Git Credential Manager still answers first and `git push` authenticates as **its** account rather than the token used for this clone, failing with a 401 when that identity lacks write access. Persisting is therefore a two-step operation: `git config --local --replace-all credential.https://github.com.helper ''` to clear the inherited entries, then `--add` the helper that resolves `GITHUB_TOKEN` / `GH_TOKEN`. Both steps are scoped to `https://github.com`, so helpers for other hosts are unaffected.
 | create repo | `POST /user/repos` or `POST /orgs/:org/repos` |
 | create PR | `gh pr create` or `POST /repos/:o/:r/pulls` |
 | request reviewers | `gh pr create -r` or `POST .../requested_reviewers` |
@@ -160,7 +162,7 @@ Two options, mirroring how the GitHub provider treats `GITHUB_TOKEN`.
 
 ```bash
 cnb login --host cnb.cool   # OAuth2 device flow; afterwards `cnb git-credential` supplies git credentials
-teamai init https://cnb.cool/yourorg/yourrepo
+teamai init https://cnb.cool/your-org/your-repo
 ```
 
 > **Why `--host`**: without an explicit host, the `cnb` CLI infers the platform address from the first git remote of the current directory. Running `cnb login` inside a repo whose remote points at a non-CNB platform (an internal git server, say) sends the request to that host and gets a `401`. An explicit `--host cnb.cool` avoids that; a self-hosted instance uses its own domain. When `teamai init` starts the login itself, it already passes `--host` from `TEAMAI_CNB_HOST` (default `cnb.cool`). That automatic login happens only in an interactive terminal; an unattended run fails at once and asks for `CNB_TOKEN` (option 2, [#711](https://github.com/Tencent/teamai-cli/issues/711)).
@@ -169,7 +171,7 @@ teamai init https://cnb.cool/yourorg/yourrepo
 
 ```bash
 export CNB_TOKEN=xxxxxxxx
-teamai init https://cnb.cool/yourorg/yourrepo
+teamai init https://cnb.cool/your-org/your-repo
 ```
 
 With `CNB_TOKEN` set, `cnb login` is not needed. The username is read from `cnb users get-user-info` and can be overridden with `CNB_USERNAME`.
@@ -314,7 +316,7 @@ GitCode namespaces are single-level (a user or an organization); repo addresses 
 
 > Only the public cloud `gitcode.com` is supported; self-hosted GitCode Enterprise is not.
 
-**Key dialect difference**: GitCode's git-over-HTTPS endpoints **reject `Authorization: Bearer`** and accept only Basic `oauth2:<token>` (verified against the live service), while the REST API uses Bearer. The team-repo clone therefore embeds the token in the remote URL (`oauth2:<token>@`) so that `git push` (the branch + PR flow) authenticates, as with GitHub and TGit.
+**Key dialect difference**: GitCode's git-over-HTTPS endpoints **reject `Authorization: Bearer`** and accept only Basic `oauth2:<token>` (verified against the live service), while the REST API uses Bearer. The team-repo clone therefore embeds the token in the remote URL (`oauth2:<token>@`) so that `git push` (the branch + PR flow) authenticates, as with TGit. (GitHub used to do the same; it now completes the clone with a one-off `-c http.extraHeader` and persists a URL-scoped `credential.helper` instead, so the token never enters `.git/config` — see the section above.)
 
 ### Default email domain
 
@@ -327,7 +329,7 @@ Besides URL auto-detection, the team repo's `teamai.yaml` can name the provider 
 ```yaml
 team: my-team
 description: TeamAI shared resources
-repo: https://github.com/yourorg/yourrepo.git
+repo: https://github.com/your-org/your-repo.git
 provider: github
 reviewers:
   - alice

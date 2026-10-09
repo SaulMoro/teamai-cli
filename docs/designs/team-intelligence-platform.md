@@ -58,7 +58,7 @@ Session in progress → the AI uses tools, converses
         mark pushable    keep locally only
             │
             ▼
-    ~/.teamai/sessions/<year-month>.md (append)
+    ~/.teamai/session-logs/<year-month>.md (append)
 ```
 
 **Value evaluation rules (v1):**
@@ -66,7 +66,9 @@ Session in progress → the AI uses tools, converses
 - Valuable: a new pattern or creative solution was found
 - Not valuable: pure chat, simple file operations, routine edits
 
-**Storage:** `~/.teamai/sessions/<year-month>.md`, aggregated by month.
+**Storage:** `~/.teamai/session-logs/<year-month>.md`, aggregated by month.
+
+The monthly file's read, full-session-ID deduplication and atomic replacement are serialized with a cross-process lock. A busy lock is retried for up to five seconds; a read failure preserves the existing log. Team summaries use the same transaction.
 
 #### 2. Skill Usage Tracker (Local)
 **What:** A PostToolUse hook detects Claude Code Skill tool calls and appends to the scope's `<dataHome>/usage.jsonl` (the configured project the session directory belongs to, otherwise user scope's `~/.teamai/user-usage.jsonl`; a directory without teamai configured records nothing, #748; a deleted directory keeps the scope the session last recorded, #810).
@@ -106,7 +108,9 @@ reports worktree → git add → git commit → git push (teamai-reports)
 
 The 5-second limit wraps the whole report operation; after a timeout, pull carries on with its other work while the background operation still completes the push and local acknowledgement, then releases the related sync locks. A failed retry re-pushes the existing commit even when it rebuilds files identical to the previous commit, so no empty commit is needed.
 
-Once every target is processed, pull truncates each active scope's usage file to the latest 5,000 entries (including HTTP and `usageReport: false` scopes, which never report, #788). Truncation must come after cleanup: cleanup deletes lines from the start of the file by the count the report read, and a truncation in between would shift that deletion onto unreported events. Hook appends, cleanup and truncation share one lock next to the usage file (`<usage file>.lock`); rewrites go through a temporary file and rename, preserving the original permissions. A hook that cannot take the lock within about 250 ms writes `*.pending-<id>.jsonl` (O_EXCL), merged by the next lock holder; a rewrite that cannot take the lock within about 5 seconds leaves the file alone. Pending files are no more permissive than the usage file (0600 when none exists yet). The workspace's `.teamai/.gitignore` ignores `usage.jsonl.*` and `usage.pending-*.jsonl`; existing files in single-repo mode are completed by `migrateSelfModeGitignoreContent`, and existing project-scope files by `ignoreUsageSideFiles` before a pending file is written or a rewrite happens.
+Once every target is processed, pull truncates each active scope's usage file to the latest 5,000 entries (including HTTP and `usageReport: false` scopes, which never report, #788). Truncation must come after cleanup: cleanup deletes lines from the start of the file by the count the report read, and a truncation in between would shift that deletion onto unreported events. Hook appends, cleanup and truncation share one lock next to the usage file (`<usage file>.lock`); rewrites go through a temporary file and rename, preserving the original permissions. 
+
+A hook that cannot take the lock within about 250 ms writes `*.pending-<id>.jsonl` (O_EXCL), merged by the next lock holder; a rewrite that cannot take the lock within about 5 seconds leaves the file alone. Pending files are no more permissive than the usage file (0600 when none exists yet). The workspace's `.teamai/.gitignore` ignores `usage.jsonl.*` and `usage.pending-*.jsonl`; existing files in single-repo mode are completed by `migrateSelfModeGitignoreContent`, and existing project-scope files by `ignoreUsageSideFiles` before a pending file is written or a rewrite happens.
 
 This fix provides neither persistent batches nor remote de-duplication: a process killed between push and acknowledgement, or a retry after a partial multi-repo success, can still double-count. Waiting past the timeout neither cancels Git nor forces the process to exit.
 

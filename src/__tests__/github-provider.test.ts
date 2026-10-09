@@ -39,6 +39,8 @@ import {
   ghPrCreate,
   ghCreateRepo,
   ghRepoClone,
+  ghCredentialHelperFor,
+  redactCredential,
   ghIsAuthenticated,
   getGitHubToken,
   ensureGhAuthenticated,
@@ -216,6 +218,186 @@ describe('ghRepoClone', () => {
       stderr: 'fatal: unable to connect to x-access-token:ghp_secret@github.com',
     });
     expect(() => ghRepoClone('org/repo', '/tmp/clone')).toThrow(/x-access-token:\*\*\*@/);
+  });
+
+  it('redacts the trace2 argv dump of the injected header from a failed clone', () => {
+    // `GIT_TRACE2*` makes git print its own argv at start-up, which includes
+    // the whole `-c http.extraHeader=Authorization: Basic <base64>` argument.
+    // A failed clone then carries that reversible blob into the thrown error.
+    const token = 'ghp_probe_abcdefghijklmnopqrstuvwxyz';
+    const encoded = Buffer.from(`x-access-token:${token}`).toString('base64');
+    process.env.GITHUB_TOKEN = token;
+    mockedSpawnSync.mockReturnValue({
+      status: 128,
+      stdout: '',
+      stderr:
+        `start git -c 'http.extraHeader=Authorization: Basic ${encoded}' clone x\n` +
+        'fatal: destination path already exists and is not an empty directory.',
+    });
+
+    let message = '';
+    try {
+      ghRepoClone('org/repo', '/tmp/clone');
+    } catch (e) {
+      message = (e as Error).message;
+    }
+
+    expect(message).toContain('git clone failed');
+    expect(message).not.toContain(encoded);
+    expect(message).not.toContain(token);
+  });
+
+  it('injects the token via http.extraHeader, keeps the URL clean, and persists an env credential helper', () => {
+    mockedResolveCliPath.mockReturnValue('/usr/bin/gh');
+    process.env.GITHUB_TOKEN = 'ghp_secret';
+    mockedSpawnSync
+      .mockReturnValueOnce({ status: 0, stdout: '', stderr: '' }) // clone
+      .mockReturnValueOnce({ status: 0, stdout: '', stderr: '' }) // config --replace-all
+      .mockReturnValueOnce({ status: 0, stdout: '', stderr: '' }); // config --add
+
+    ghRepoClone('org/repo', '/tmp/clone');
+
+    // The clone carries the token in an http.extraHeader (-c) arg, so the URL
+    // stays clean and nothing is written to remote.origin.url.
+    const cloneArgs = mockedSpawnSync.mock.calls[0][1] as string[];
+    const expectedHeader = `http.extraHeader=Authorization: Basic ${Buffer.from('x-access-token:ghp_secret').toString('base64')}`;
+    expect(cloneArgs).toContain('-c');
+    expect(cloneArgs).toContain(expectedHeader);
+    expect(cloneArgs).toContain('clone');
+    expect(cloneArgs).toContain('https://github.com/org/repo.git');
+    expect(cloneArgs.join(' ')).not.toContain('ghp_secret');
+    // -c must precede `clone`: `git -c K=V clone` is a temporary git-level
+    // option, whereas `git clone -c K=V` is --config and persists K=V into the
+    // new repo's .git/config — i.e. the token leak this change removes.
+    expect(cloneArgs.indexOf('-c')).toBeLessThan(cloneArgs.indexOf('clone'));
+
+    // credential.helper is multi-valued: git calls helpers from system, global
+    // and local config in order, so the local config has to RESET the inherited
+    // list before adding ours. A plain write would only append, letting the
+    // user's global helper (Git Credential Manager) answer first — and the push
+    // that follows would authenticate as the wrong account.
+    const resetCall = mockedSpawnSync.mock.calls[1];
+    expect(resetCall[0]).toEqual('git');
+    expect(resetCall[1]).toEqual([
+      'config',
+      '--local',
+      '--replace-all',
+      'credential.https://github.com.helper',
+      '',
+    ]);
+    expect(resetCall[2]?.cwd).toBe('/tmp/clone');
+
+    // Then ours, resolving the SAME token ghGetOAuthToken() used for the clone
+    // (GITHUB_TOKEN before GH_TOKEN). `gh auth git-credential` reads GH_TOKEN
+    // first — the reverse order — so it is only used when no env token is set.
+    const addCall = mockedSpawnSync.mock.calls[2];
+    expect(addCall[0]).toEqual('git');
+    expect(addCall[1]).toEqual([
+      'config',
+      '--local',
+      '--add',
+      'credential.https://github.com.helper',
+      '!f() { echo username=x-access-token; echo "password=${GITHUB_TOKEN:-$GH_TOKEN}"; }; f',
+    ]);
+    expect(addCall[2]?.cwd).toBe('/tmp/clone');
+  });
+
+  it('uses the env helper whenever an env token is set, even with gh installed', () => {
+    // Regression guard: choosing `gh auth git-credential` whenever gh exists made
+    // the clone and the push right after it resolve the token in opposite orders
+    // (GITHUB_TOKEN vs GH_TOKEN first), i.e. potentially two different accounts.
+    mockedResolveCliPath.mockReturnValue('/usr/bin/gh');
+    process.env.GH_TOKEN = 'ghp_alias_only';
+    mockedSpawnSync.mockReturnValue({ status: 0, stdout: '', stderr: '' });
+
+    ghRepoClone('org/repo', '/tmp/clone');
+
+    const addCall = mockedSpawnSync.mock.calls[2];
+    expect(addCall[1]?.[4]).toBe(
+      '!f() { echo username=x-access-token; echo "password=${GITHUB_TOKEN:-$GH_TOKEN}"; }; f',
+    );
+  });
+
+  it('falls back to `gh auth git-credential` when the token comes from gh login', () => {
+    // ghExec goes through cross-spawn, which is not mocked here, so the gh
+    // branch itself is covered by the built-CLI harness (fake gh on PATH)
+    // rather than a unit test. This pins the decision rule.
+    expect(ghCredentialHelperFor('/usr/local/bin/gh', false)).toBe(
+      '!"/usr/local/bin/gh" auth git-credential',
+    );
+    expect(ghCredentialHelperFor('/usr/local/bin/gh', true)).toBe(
+      '!f() { echo username=x-access-token; echo "password=${GITHUB_TOKEN:-$GH_TOKEN}"; }; f',
+    );
+  });
+
+  it('persists the ABSOLUTE gh path, never a bare `gh`', () => {
+    // resolveCliPath falls back to `bash -lc` / `zsh -lc` — a LOGIN shell that
+    // sources profiles — while git runs `!`-helpers through a non-login
+    // `sh -c`. A gh only reachable from a login shell (nvm, ~/.local/bin …)
+    // would resolve at detection time and then fail the push with
+    // "gh: command not found" if the bare name were persisted.
+    expect(ghCredentialHelperFor('/opt/homebrew/bin/gh', false)).toBe(
+      '!"/opt/homebrew/bin/gh" auth git-credential',
+    );
+    // Windows paths usually contain a space, hence the quoting.
+    expect(ghCredentialHelperFor('C:\\Program Files\\GitHub CLI\\gh.exe', false)).toBe(
+      '!"C:\\Program Files\\GitHub CLI\\gh.exe" auth git-credential',
+    );
+    // No gh resolvable → there is nothing to call back, so the env helper is
+    // the only shape left that can still authenticate.
+    expect(ghCredentialHelperFor(null, false)).toBe(
+      '!f() { echo username=x-access-token; echo "password=${GITHUB_TOKEN:-$GH_TOKEN}"; }; f',
+    );
+  });
+
+  it('writes no credential helper when there is no token', () => {
+    mockedResolveCliPath.mockReturnValue(null);
+    mockedSpawnSync.mockReturnValue({ status: 0, stdout: '', stderr: '' });
+
+    ghRepoClone('org/repo', '/tmp/clone');
+
+    expect(mockedSpawnSync).toHaveBeenCalledTimes(1);
+    expect(mockedSpawnSync.mock.calls.some((c) => c[1]?.[0] === 'config')).toBe(false);
+  });
+});
+
+// ─── redactCredential ───────────────────────────────────
+
+describe('redactCredential', () => {
+  const token = 'ghp_abcdefghijklmnopqrstuvwxyz0123456789';
+  const encoded = Buffer.from(`x-access-token:${token}`).toString('base64');
+
+  it('redacts the base64 header echoed by the GIT_TRACE2 argv dump', () => {
+    const traced = `start git -c 'http.extraHeader=Authorization: Basic ${encoded}' clone https://github.com/x/y.git`;
+    const out = redactCredential(traced, token);
+    expect(out).not.toContain(encoded);
+    expect(out).not.toContain(token);
+    expect(out).toContain('-c');
+  });
+
+  it('redacts the JSON argv form GIT_TRACE2_EVENT emits', () => {
+    const evt = `{"event":"start","argv":["git","-c","http.extraHeader=Authorization: Basic ${encoded}","clone"]}`;
+    expect(redactCredential(evt, token)).not.toContain(encoded);
+  });
+
+  it('still redacts a token embedded in a URL', () => {
+    const url = `fatal: unable to access 'https://x-access-token:${token}@github.com/org/repo.git/'`;
+    const out = redactCredential(url, token);
+    expect(out).not.toContain(token);
+    expect(out).toContain('x-access-token:***@');
+  });
+
+  it('blanks the bare token if git ever prints it on its own', () => {
+    expect(redactCredential(`fatal: something ${token} something`, token)).not.toContain(token);
+  });
+
+  it('leaves output without a credential untouched', () => {
+    const clean = "Cloning into 'repo'...\nfatal: destination path already exists";
+    expect(redactCredential(clean, token)).toBe(clean);
+  });
+
+  it('still applies the URL pattern when there is no token to match by value', () => {
+    expect(redactCredential('x-access-token:abc@host', null)).toBe('x-access-token:***@host');
   });
 });
 
