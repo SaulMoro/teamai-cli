@@ -1,8 +1,8 @@
 import path from 'node:path';
-import { readdir, rm } from 'node:fs/promises';
+import { readFile, readdir, rm } from 'node:fs/promises';
 import type { Dirent } from 'node:fs';
 import matter from 'gray-matter';
-import { readFileSafe, readJson, writeJsonAtomic, listFiles, listFilesRecursive, listDirs, pathExists } from './fs.js';
+import { expandHome, readFileSafe, readJson, writeJsonAtomic, listFiles, listFilesRecursive, listDirs, pathExists } from './fs.js';
 import { tokenize, wordSegments, MAX_TOKENIZE_CHARS } from './tokenizer.js';
 import { log } from './logger.js';
 import { teamRuleBody, teamRuleData } from '../resources/team-rule.js';
@@ -407,16 +407,32 @@ async function aggregateVotes(votesDir: string): Promise<VoteAggregation> {
   return { scores, confidenceMap };
 }
 
+/** A file a build was given and could not read. */
+export interface UnreadableFile {
+  readonly path: string;
+  /** The error code, such as `EACCES`, or the message when there is none. */
+  readonly reason: string;
+}
+
+/** What every collector of one build shares: the vote counts, and what it read. */
+interface BuildReads {
+  readonly voteCounts: Map<string, number>;
+  /** Files handed to a read. */
+  given: number;
+  readonly unreadable: UnreadableFile[];
+}
+
 /**
  * Read a markdown file, truncate oversized content, and convert it to a
  * SearchIndexEntry of the given category. Used by all four collectors.
- * Returns null when the file is empty/unreadable.
+ * Returns null when the file is empty or unreadable; an unreadable one is
+ * recorded in `reads`.
  */
 async function entryFromMdFile(
   absPath: string,
   filenameForId: string,
   type: KnowledgeType,
-  voteCounts: Map<string, number>,
+  reads: BuildReads,
 ): Promise<SearchIndexEntry | null> {
   // 若当前文件是全量 codebase.md，且同目录存在 codebase-index.md，则跳过以避免重复命中。
   const basename = path.basename(absPath);
@@ -429,7 +445,14 @@ async function entryFromMdFile(
     }
   }
 
-  let content = await readFileSafe(absPath);
+  reads.given++;
+  let content: string;
+  try {
+    content = await readFile(expandHome(absPath), 'utf-8');
+  } catch (e) {
+    reads.unreadable.push({ path: absPath, reason: e instanceof Error ? (e as NodeJS.ErrnoException).code ?? e.message : String(e) });
+    return null;
+  }
   if (!content) return null;
 
   if (Buffer.byteLength(content, 'utf-8') > MAX_DOC_BYTES) {
@@ -479,7 +502,7 @@ async function entryFromMdFile(
     date: meta.date ?? '',
     tags,
     tokens: [...new Set(tokens)],
-    votes: voteCounts.get(docId) ?? 0,
+    votes: reads.voteCounts.get(docId) ?? 0,
     type,
     domain,
     path: absPath,
@@ -490,14 +513,14 @@ async function entryFromMdFile(
 async function collectFlatMdEntries(
   dir: string,
   type: KnowledgeType,
-  voteCounts: Map<string, number>,
+  reads: BuildReads,
 ): Promise<SearchIndexEntry[]> {
   if (!await pathExists(dir)) return [];
   const files = await listFiles(dir);
   const out: SearchIndexEntry[] = [];
   for (const filename of files) {
     if (!filename.endsWith('.md')) continue;
-    const e = await entryFromMdFile(path.join(dir, filename), filename, type, voteCounts);
+    const e = await entryFromMdFile(path.join(dir, filename), filename, type, reads);
     if (e) out.push(e);
   }
   return out;
@@ -516,7 +539,7 @@ async function collectFlatMdEntries(
 async function collectLearningsEntries(
   dirs: readonly string[],
   namespaces: string[] | undefined,
-  voteCounts: Map<string, number>,
+  reads: BuildReads,
 ): Promise<SearchIndexEntry[]> {
   // Roots are ordered by precedence. The relative path doubles as the entry id
   // that votes are counted by, so the same path in two roots must yield ONE
@@ -526,7 +549,7 @@ async function collectLearningsEntries(
   const out: SearchIndexEntry[] = [];
   const claimed = new Set<string>();
   for (const dir of dirs) {
-    for (const entry of await collectLearningsEntriesFromDir(dir, namespaces, voteCounts)) {
+    for (const entry of await collectLearningsEntriesFromDir(dir, namespaces, reads)) {
       if (claimed.has(entry.filename)) continue;
       claimed.add(entry.filename);
       out.push(entry);
@@ -538,11 +561,11 @@ async function collectLearningsEntries(
 async function collectLearningsEntriesFromDir(
   dir: string,
   namespaces: string[] | undefined,
-  voteCounts: Map<string, number>,
+  reads: BuildReads,
 ): Promise<SearchIndexEntry[]> {
   if (!await pathExists(dir)) return [];
   // Root-level .md = always shared.
-  const out: SearchIndexEntry[] = await collectFlatMdEntries(dir, 'learnings', voteCounts);
+  const out: SearchIndexEntry[] = await collectFlatMdEntries(dir, 'learnings', reads);
 
   for (const ns of namespaces ?? []) {
     // Defense-in-depth: a namespace is a path segment (learnings/<ns>/). Skip
@@ -558,7 +581,7 @@ async function collectLearningsEntriesFromDir(
       if (!rel.endsWith('.md')) continue;
       // Prefix the id with the namespace so it stays unique against the root and
       // other namespaces (e.g. `hai-inference/deploy-note.md`).
-      const e = await entryFromMdFile(path.join(nsDir, rel), path.join(ns, rel), 'learnings', voteCounts);
+      const e = await entryFromMdFile(path.join(nsDir, rel), path.join(ns, rel), 'learnings', reads);
       if (e) out.push(e);
     }
   }
@@ -572,7 +595,7 @@ async function collectLearningsEntriesFromDir(
 async function collectRecursiveMdEntries(
   dir: string,
   type: KnowledgeType,
-  voteCounts: Map<string, number>,
+  reads: BuildReads,
 ): Promise<SearchIndexEntry[]> {
   if (!await pathExists(dir)) return [];
   const files = await listFilesRecursive(dir);
@@ -581,7 +604,7 @@ async function collectRecursiveMdEntries(
     if (!rel.endsWith('.md')) continue;
     // Use the relative path as the filename so the entry id is unique
     // across subdirectories, e.g. `common/coding-style.md`.
-    const e = await entryFromMdFile(path.join(dir, rel), rel, type, voteCounts);
+    const e = await entryFromMdFile(path.join(dir, rel), rel, type, reads);
     if (e) out.push(e);
   }
   return out;
@@ -592,12 +615,12 @@ async function collectListedMdEntries(
   dir: string,
   files: readonly string[],
   type: KnowledgeType,
-  voteCounts: Map<string, number>,
+  reads: BuildReads,
 ): Promise<SearchIndexEntry[]> {
   const out: SearchIndexEntry[] = [];
   for (const rel of files) {
     if (!rel.endsWith('.md')) continue;
-    const e = await entryFromMdFile(path.join(dir, rel), rel, type, voteCounts);
+    const e = await entryFromMdFile(path.join(dir, rel), rel, type, reads);
     if (e) out.push(e);
   }
   return out;
@@ -612,7 +635,7 @@ async function collectListedMdEntries(
  */
 async function collectSkillEntries(
   dir: string,
-  voteCounts: Map<string, number>,
+  reads: BuildReads,
 ): Promise<SearchIndexEntry[]> {
   if (!await pathExists(dir)) return [];
   const out: SearchIndexEntry[] = [];
@@ -624,7 +647,7 @@ async function collectSkillEntries(
       const subPath = path.join(current, sub);
       const skillMd = path.join(subPath, 'SKILL.md');
       if (await pathExists(skillMd)) {
-        const e = await entryFromMdFile(skillMd, `${sub}.md`, 'skills', voteCounts);
+        const e = await entryFromMdFile(skillMd, `${sub}.md`, 'skills', reads);
         if (e) out.push(e);
       } else {
         // Treat as a namespace directory and recurse one level.
@@ -653,16 +676,16 @@ export type IndexedSkills =
 /**
  * Entries for an explicit list of skill directories, each `<dir>/SKILL.md`,
  * named after the directory (doc_id = skill name) as `collectSkillEntries` does.
+ * Pull delivers only directories with a `SKILL.md`, so a missing one is unreadable.
  */
 async function collectSkillDirEntries(
   dirs: readonly string[],
-  voteCounts: Map<string, number>,
+  reads: BuildReads,
 ): Promise<SearchIndexEntry[]> {
   const out: SearchIndexEntry[] = [];
   for (const dir of dirs) {
     const skillMd = path.join(dir, 'SKILL.md');
-    if (!await pathExists(skillMd)) continue;
-    const e = await entryFromMdFile(skillMd, `${path.basename(dir)}.md`, 'skills', voteCounts);
+    const e = await entryFromMdFile(skillMd, `${path.basename(dir)}.md`, 'skills', reads);
     if (e) out.push(e);
   }
   return out;
@@ -710,12 +733,6 @@ export interface BuildIndexOptions {
   codebaseDir?: string;
   votesDir?: string;
   indexPath?: string;
-  /**
-   * The caller left sources out on purpose (a team manifest it cannot read):
-   * write the index even when it is far smaller than the one on disk, which
-   * would otherwise stay and serve what was left out (#823).
-   */
-  partial?: boolean;
 }
 
 /**
@@ -738,13 +755,12 @@ export async function buildIndex(
   const opts: BuildIndexOptions = typeof optionsOrLearningsDir === 'string'
     ? { learningsDir: optionsOrLearningsDir, votesDir, indexPath }
     : optionsOrLearningsDir;
-  const index = await indexInMemory(opts);
+  const build = await indexInMemory(opts);
   const elapsed = Date.now() - start;
 
-  // Guard: don't overwrite a healthy index with a significantly smaller one
   const targetPath = opts.indexPath ?? getSearchIndexPath();
-  const existingIndex = await loadIndex(targetPath);
-  if (guardIndexShrink(index, existingIndex, opts.partial) !== index) return elapsed;
+  const index = keepIndexWhenUnreadable(build, await loadIndex(targetPath));
+  if (index !== build.index) return elapsed;
 
   // A torn in-place write parses as null on the next loadIndex, which silently
   // wipes recall until the next rebuild — same shape as the votes file (#854).
@@ -757,54 +773,73 @@ export async function buildIndex(
   return elapsed;
 }
 
-/** Keep the existing index when a rebuild unexpectedly loses most of its corpus. */
-export function guardIndexShrink(index: SearchIndex, existing: SearchIndex | null, partial = false): SearchIndex {
-  if (!partial && existing && existing.entries.length > 5 && index.entries.length < existing.entries.length * 0.2) {
-    log.warn(`Index rebuild skipped: new index (${index.entries.length}) is <20% of existing (${existing.entries.length}), likely partial failure`);
+/** An index built in memory, with the files it was given and could not read. */
+export interface IndexBuild {
+  readonly index: SearchIndex;
+  readonly given: number;
+  readonly unreadable: readonly UnreadableFile[];
+}
+
+/**
+ * The index a rebuild leaves in place. It follows what the member receives,
+ * however much smaller (#1006); only a build that could read none of the files
+ * it was given keeps the existing index. One that missed some is written
+ * without them, and both name the files.
+ */
+export function keepIndexWhenUnreadable(build: IndexBuild, existing: SearchIndex | null): SearchIndex {
+  const { given, unreadable } = build;
+  if (unreadable.length === 0) return build.index;
+  const shown = unreadable.slice(0, 3).map((file) => `${file.path}: ${file.reason}`).join(', ');
+  const files = unreadable.length > 3 ? `${shown}, and ${unreadable.length - 3} more` : shown;
+  if (unreadable.length === given && existing) {
+    log.warn(`Search index not rebuilt: none of the ${given} files it indexes could be read (${files}). `
+      + 'Recall keeps the previous index until they can be read; fix them and run `teamai pull`.');
     return existing;
   }
-  return index;
+  log.warn(`Search index left out ${unreadable.length} file(s) it could not read (${files}). `
+    + 'Fix them and run `teamai pull` to index them.');
+  return build.index;
 }
 
 /**
  * The index {@link buildIndex} would write, built in memory and not saved: for
  * a dry run, which must search what a real run would without writing it.
  */
-export async function indexInMemory(opts: BuildIndexOptions): Promise<SearchIndex> {
+export async function indexInMemory(opts: BuildIndexOptions): Promise<IndexBuild> {
   const start = Date.now();
 
   // Aggregate votes once and reuse across all collectors.
   const voteAgg = opts.votesDir
     ? await aggregateVotes(opts.votesDir)
     : { scores: new Map<string, number>(), confidenceMap: new Map<string, number>() };
-  const voteCounts = voteAgg.scores;
+  const reads: BuildReads = { voteCounts: voteAgg.scores, given: 0, unreadable: [] };
 
   const entries: SearchIndexEntry[] = [];
 
   const learningsDirs = opts.learningsDirs ?? (opts.learningsDir ? [opts.learningsDir] : []);
   if (learningsDirs.length > 0) {
-    entries.push(...await collectLearningsEntries(learningsDirs, opts.learningsNamespaces, voteCounts));
+    entries.push(...await collectLearningsEntries(learningsDirs, opts.learningsNamespaces, reads));
   }
   if (opts.docsDir && opts.docFiles) {
-    entries.push(...await collectListedMdEntries(opts.docsDir, opts.docFiles, 'docs', voteCounts));
+    entries.push(...await collectListedMdEntries(opts.docsDir, opts.docFiles, 'docs', reads));
   } else if (opts.docsDir) {
-    entries.push(...await collectRecursiveMdEntries(opts.docsDir, 'docs', voteCounts));
+    entries.push(...await collectRecursiveMdEntries(opts.docsDir, 'docs', reads));
   }
   if (opts.rulesDir && opts.ruleFiles) {
-    entries.push(...await collectListedMdEntries(opts.rulesDir, opts.ruleFiles, 'rules', voteCounts));
+    entries.push(...await collectListedMdEntries(opts.rulesDir, opts.ruleFiles, 'rules', reads));
   } else if (opts.rulesDir) {
-    entries.push(...await collectRecursiveMdEntries(opts.rulesDir, 'rules', voteCounts));
+    entries.push(...await collectRecursiveMdEntries(opts.rulesDir, 'rules', reads));
   }
   if (opts.skills?.kind === 'dirs') {
-    entries.push(...await collectSkillDirEntries(opts.skills.dirs, voteCounts));
+    entries.push(...await collectSkillDirEntries(opts.skills.dirs, reads));
   } else if (opts.skills?.kind === 'keep-indexed') {
     const previous = await loadIndex(opts.indexPath ?? getSearchIndexPath());
     entries.push(...(previous?.entries ?? []).filter((entry) => entry.type === 'skills'));
   } else if (opts.skillsDir) {
-    entries.push(...await collectSkillEntries(opts.skillsDir, voteCounts));
+    entries.push(...await collectSkillEntries(opts.skillsDir, reads));
   }
   if (opts.codebaseDir) {
-    entries.push(...await collectRecursiveMdEntries(opts.codebaseDir, 'docs', voteCounts));
+    entries.push(...await collectRecursiveMdEntries(opts.codebaseDir, 'docs', reads));
   }
 
   // Annotate entries with confidence/hotness for hot/cold scoring.
@@ -830,7 +865,7 @@ export async function indexInMemory(opts: BuildIndexOptions): Promise<SearchInde
     }
   }
 
-  return {
+  const index: SearchIndex = {
     version: SEARCH_INDEX_VERSION,
     builtAt: new Date().toISOString(),
     elapsedMs: Date.now() - start,
@@ -838,6 +873,7 @@ export async function indexInMemory(opts: BuildIndexOptions): Promise<SearchInde
     df,
     dfByDomain,
   };
+  return { index, given: reads.given, unreadable: reads.unreadable };
 }
 
 /**

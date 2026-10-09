@@ -351,16 +351,18 @@ describe('recall rebuilding an older-format index with a team manifest it cannot
     expect(index.entries.map((e: { filename: string }) => e.filename).sort())
       .toEqual(Array.from({ length: 10 }, (_, i) => `note-${i}.md`).sort());
     expect(warnings()).toContainEqual(expect.stringContaining('Recall indexed learnings only'));
-    expect(warnings()).not.toContainEqual(expect.stringContaining('Index rebuild skipped'));
+    expect(warnings()).not.toContainEqual(expect.stringContaining('Search index not rebuilt'));
   });
-  it('keeps the shrink guard when the manifest reads and the rebuild is not partial', async () => {
+  it('replaces the older index when the manifest reads, however much smaller the rebuild is (#1006)', async () => {
     fs.rmSync(path.join(repo(), 'manifest', 'roles.yaml'));
 
     await recall('retry budget', {});
 
     const index = JSON.parse(fs.readFileSync(indexPath(), 'utf8'));
-    expect(index.entries).toHaveLength(100);
-    expect(warnings()).toContainEqual(expect.stringContaining('Index rebuild skipped'));
+    const filenames: string[] = index.entries.map((e: { filename: string }) => e.filename);
+    expect(filenames.filter((name) => name.startsWith('stale-'))).toEqual([]);
+    expect(filenames).toEqual(expect.arrayContaining(Array.from({ length: 10 }, (_, i) => `note-${i}.md`)));
+    expect(warnings()).not.toContainEqual(expect.stringContaining('Search index'));
   });
 
   // The atomic index write (#854) stages a temp sibling and renames it into

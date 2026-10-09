@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { requireInit, detectProjectConfig, describeUnreadableConfig, loadLocalConfigForScope } from './config.js';
-import { loadIndex, buildIndex, indexInMemory, guardIndexShrink, search, isLegacyIndex } from './utils/search-index.js';
+import { loadIndex, buildIndex, indexInMemory, keepIndexWhenUnreadable, search, isLegacyIndex } from './utils/search-index.js';
 import type { BuildIndexOptions, SearchResult } from './utils/search-index.js';
 import { ensureDir, pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
@@ -463,7 +463,7 @@ async function loadOrBuildScopeIndex(
       log.warn(`Skills stay out of recall: ${delivered.skills.reason}. Fix the collision and run \`teamai pull\`.`);
     }
 
-    // Smaller by design: an older index kept by the shrink guard would serve what the warning left out.
+    // Smaller by design: the index on disk would serve what the warning left out.
     const partial = delivered === nothingDelivered;
     try {
       // Without another repository's learnings checkout, if one sits where
@@ -480,10 +480,9 @@ async function loadOrBuildScopeIndex(
         codebaseDir: undefined, // codebase now served by teamwiki/ graph engine
         votesDir: votesExist ? votesDir : undefined,
         indexPath,
-        partial,
       };
       if (dryRun) {
-        index = guardIndexShrink(await indexInMemory(buildOptions), index, partial);
+        index = keepIndexWhenUnreadable(await indexInMemory(buildOptions), index);
       } else {
         await buildIndex(buildOptions);
         index = await loadIndex(indexPath);
