@@ -490,7 +490,8 @@ back to the team skill whose history holds the SKILL.md version pull recorded,
 inactive namespace or shared root, even after the team changed it; when that
 version matches no single copy, a lone inactive namespace still takes it, the
 shared-root skill keeps it as before, and otherwise it is skipped with a warning
-naming the namespaces (#1020). A new skill, rule or
+naming the namespaces (#1020). `push --skill` resolves its skill the same way, and
+asks for `--role` rather than taking the first directory that holds the name. A new skill, rule or
 agent pushed without `--role` or `--project` is placed among the role ∪ active
 project namespaces on its own axis, as pull delivers them; only when they give
 none does the pre-project fallback apply (#1021). `push` picks up a change to any `env/<ns>/env.yaml` or `env/<ns>/secrets.yaml`.

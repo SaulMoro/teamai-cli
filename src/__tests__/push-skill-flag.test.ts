@@ -90,7 +90,8 @@ vi.mock('../utils/logger.js', () => ({
   })),
 }));
 
-vi.mock('../resources/skills.js', () => ({
+vi.mock('../resources/skills.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../resources/skills.js')>(),
   scanTeamRepoNamespaces: vi.fn().mockResolvedValue([]),
 }));
 
@@ -344,6 +345,7 @@ describe('push --skill flag', () => {
       if (pathStr.includes('hai_dev/flat-skill')) return false;
       // But exists at flat level
       if (pathStr === '/tmp/team-repo/skills/flat-skill') return true;
+      if (pathStr === '/tmp/team-repo/skills/flat-skill/SKILL.md') return true;
       return false;
     });
     mockListDirs.mockResolvedValue(['hai_dev']);

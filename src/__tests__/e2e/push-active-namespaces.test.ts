@@ -217,6 +217,33 @@ describe('push an edit of a skill pull kept after a project switch (#1020)', () 
   });
 });
 
+describe('push --skill sends a skill to the team skill it came from', () => {
+  it('leaves another namespace\'s skill of the same name untouched', () => {
+    commitOnTeam('skills/archive/a-skill/SKILL.md', `${skillMd('a-skill')}\nThe archived version.\n`);
+    expect(run(['pull']).code).toBe(0);
+
+    const pushed = run(['push', '--all', '--skill', path.join(project, '.claude', 'skills', 'a-skill')]);
+
+    expect(pushedFiles(), pushed.output).not.toContain('skills/archive/a-skill/SKILL.md');
+  });
+
+  it('asks for --role instead of guessing when several namespaces hold a name it never delivered', () => {
+    commitOnTeam('skills/archive/x-skill/SKILL.md', skillMd('x-skill'));
+    commitOnTeam('skills/svc-b/x-skill/SKILL.md', skillMd('x-skill'));
+    writeFile(path.join(project, '.claude', 'skills', 'x-skill', 'SKILL.md'), `${skillMd('x-skill')}\nMy own.\n`);
+
+    const guessed = run(['push', '--all', '--skill', path.join(project, '.claude', 'skills', 'x-skill')]);
+
+    expect(guessed.code).toBe(2);
+    expect(guessed.output).toContain('skills/archive/x-skill, skills/svc-b/x-skill all hold that name');
+    expect(pushedFiles()).toEqual([]);
+
+    const named = run(['push', '--all', '--skill', path.join(project, '.claude', 'skills', 'x-skill'), '--role', 'platform']);
+
+    expect(pushedFiles(), named.output).toEqual(expect.arrayContaining(['skills/platform/x-skill/SKILL.md']));
+  });
+});
+
 describe('push places a new resource by the active projects (#1021)', () => {
   it('puts a new rule in the active project\'s knowledge namespace', () => {
     writeFile(path.join(project, '.claude', 'rules', 'new-rule.md'), '# new rule\n');

@@ -383,6 +383,24 @@ async function resolvePushSkillNamespaces(localConfig: LocalConfig): Promise<str
 }
 
 /**
+ * The team skill a local copy came from, among the same-named team skills
+ * `copies` (absolute directories in the team repo at `repoPath`): the one whose
+ * history holds the SKILL.md version pull recorded at `dest`, or the only one.
+ * Undefined when the record matches none or several of them (#1020).
+ */
+export async function recordedOrigin<TCopy extends { dir: string }>(
+  copies: readonly TCopy[], record: { delivered: DeliveredHashes; dest: string; repoPath: string },
+): Promise<TCopy | undefined> {
+  const matched: TCopy[] = [];
+  for (const copy of copies) {
+    const teamDir = path.relative(record.repoPath, copy.dir).split(path.sep).join('/');
+    if (await isRecordedFromTeamSkill(record.delivered, record.dest, record.repoPath, teamDir)) matched.push(copy);
+  }
+  if (matched.length === 1) return matched[0];
+  return copies.length === 1 ? copies[0] : undefined;
+}
+
+/**
  * Recursively scan a directory tree to find all subdirectories containing SKILL.md.
  * Returns a map of skill names to their full paths, supporting arbitrary nesting depth.
  * For example, if scanning ~/.claude/skills/, will find both:
@@ -673,13 +691,9 @@ export class SkillsHandler extends ResourceHandler {
             // Exactly what teamai delivered: not an edit, whatever the team changed since.
             if (await isUneditedSkillCopy(delivered, localDirPath)) continue;
             const rootSkill = teamSkill;
-            const copies = rootSkill ? [rootSkill, ...blockedCopies] : blockedCopies;
-            const matched: typeof copies = [];
-            for (const copy of copies) {
-              const teamDir = path.relative(localConfig.repo.localPath, copy.dir).split(path.sep).join('/');
-              if (await isRecordedFromTeamSkill(delivered, localDirPath, localConfig.repo.localPath, teamDir)) matched.push(copy);
-            }
-            const origin = matched.length === 1 ? matched[0] : copies.length === 1 ? copies[0] : undefined;
+            const origin = await recordedOrigin(rootSkill ? [rootSkill, ...blockedCopies] : blockedCopies, {
+              delivered, dest: localDirPath, repoPath: localConfig.repo.localPath,
+            });
             if (origin?.namespace) {
               teamSkill = origin;
               fromInactiveNamespace = true;

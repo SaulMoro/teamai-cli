@@ -1451,29 +1451,35 @@ async function pushCore(
       if (await pathExists(skillPath) && await pathExists(path.join(skillPath, 'SKILL.md'))) {
         const skillName = path.basename(skillPath);
 
-        // Try to detect existing namespace from team repo
-        let namespace: string | undefined;
-        let status: 'new' | 'modified' = 'new';
+        // The team skills of that name, at the shared root and in any namespace.
+        // Several of them: the one this copy was delivered from, by its record
+        // (#1020), never the first in directory order.
         const teamSkillsDir = path.join(localConfig.repo.localPath, 'skills');
-        if (await pathExists(teamSkillsDir)) {
-          const { listDirs } = await import('./utils/fs.js');
-          const topDirs = await listDirs(teamSkillsDir);
-          for (const dir of topDirs) {
-            const candidatePath = path.join(teamSkillsDir, dir, skillName);
-            if (await pathExists(candidatePath)) {
-              // Check if this is a namespace dir (not a direct skill)
-              const isNamespace = !await pathExists(path.join(teamSkillsDir, dir, 'SKILL.md'));
-              if (isNamespace) {
-                namespace = dir;
-              }
-              status = 'modified';
-              break;
-            }
+        const copies: { dir: string; namespace?: string }[] = [];
+        if (await pathExists(path.join(teamSkillsDir, skillName, 'SKILL.md'))) copies.push({ dir: path.join(teamSkillsDir, skillName) });
+        const { listDirs } = await import('./utils/fs.js');
+        for (const dir of await listDirs(teamSkillsDir)) {
+          if (await pathExists(path.join(teamSkillsDir, dir, 'SKILL.md'))) continue;
+          if (await pathExists(path.join(teamSkillsDir, dir, skillName))) copies.push({ dir: path.join(teamSkillsDir, dir, skillName), namespace: dir });
+        }
+        const status: 'new' | 'modified' = copies.length > 0 ? 'modified' : 'new';
+        let namespace: string | undefined;
+        if (copies.length > 0) {
+          const { deliveredHashes } = await import('./pull.js');
+          const { recordedOrigin } = await import('./resources/skills.js');
+          const origin = await recordedOrigin(copies, {
+            delivered: await deliveredHashes(localConfig) ?? {}, dest: skillPath, repoPath: localConfig.repo.localPath,
+          });
+          if (!origin && !options.role && !options.project) {
+            log.error(
+              `[skills] Cannot tell which team skill ${skillPath} is: ${copies.map((copy) => path.relative(localConfig.repo.localPath, copy.dir).split(path.sep).join('/')).join(', ')} `
+              + 'all hold that name, and teamai has no record of delivering this copy from one of them. '
+              + 'Pass --role <ns> to name the namespace it goes to.',
+            );
+            process.exitCode = 2;
+            return;
           }
-          // Also check flat layout
-          if (!namespace && await pathExists(path.join(teamSkillsDir, skillName))) {
-            status = 'modified';
-          }
+          namespace = origin?.namespace;
         }
 
         const relPath = namespace
