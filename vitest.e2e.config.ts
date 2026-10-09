@@ -22,7 +22,8 @@ export default defineConfig({
     // while another file's CLI subprocess is using it.
     fileParallelism: true,
     minWorkers: 1,
-    maxWorkers: process.env.CI ? 2 : 4,
+    // GitHub's runner has 4 vCPUs: 4 workers halve the job against 2.
+    maxWorkers: 4,
     // Retry once: flaky tests recover, real bugs stay failed.
     retry: 1,
   },
