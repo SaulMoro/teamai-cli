@@ -2744,6 +2744,7 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     const [id] = fs.readdirSync(workspaces);
     const cachedSkills = path.join(workspaces, id, 'local-agent', 'resources', 'skills');
     fs.chmodSync(cachedSkills, 0o555);
+    process.exitCode = undefined;
     try {
       const { removeLocalAgentHttp } = await import('../local-agent.js');
       await removeLocalAgentHttp();
@@ -2755,6 +2756,18 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     expect(fs.existsSync(path.join(app, '.claude', 'rules', 'http-rule.md'))).toBe(false);
     // The copy left on disk stays out of git until it is gone.
     expect(blockOf(app)).toEqual(['/.claude/skills/http-skill/SKILL.md', '/.teamai/.gitignore']);
+    // And its record stays, so the retry removes it.
+    expect(process.exitCode).toBe(1);
+    expect(fs.existsSync(path.join(tmpDir, '.teamai', 'local-agent', 'manifest.json'))).toBe(true);
+
+    process.exitCode = undefined;
+    const { removeLocalAgentHttp } = await import('../local-agent.js');
+    await removeLocalAgentHttp();
+
+    expect(process.exitCode).toBeUndefined();
+    expect(fs.existsSync(path.join(app, '.claude', 'skills', 'http-skill'))).toBe(false);
+    expect(blockOf(app)).toBeNull();
+    expect(fs.existsSync(path.join(tmpDir, '.teamai', 'local-agent', 'manifest.json'))).toBe(false);
   });
 
   it.skipIf(process.getuid?.() === 0)('keeps the record of a workspace cache removal could not delete, and deletes it on the retry', async () => {

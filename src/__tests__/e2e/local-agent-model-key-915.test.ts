@@ -106,6 +106,7 @@ async function machine(name: string, options: { flag?: boolean } = {}) {
 
   return {
     project,
+    home,
     git,
     cli,
     file: (rel: string) => path.join(project, rel),
@@ -292,6 +293,28 @@ describe.skipIf(process.platform === 'win32')('a model API key the HTTP local ag
     expect(m.status()).toEqual([]);
 
     fs.writeFileSync(m.file(MODELS), delivered);
+    const second = await m.cli(['source', 'remove-http'], m.project);
+
+    expect(second.code, second.output).toBe(0);
+    expect(fs.existsSync(m.file(MODELS))).toBe(false);
+    expect(m.credentialLines()).toBeNull();
+  }, 120_000);
+
+  it('removing the HTTP source while its model record does not parse changes no models file, keeps the record, and the retry removes the key', async () => {
+    const m = await machine('remove-http-record');
+    await m.sessionStart([applyModels(m.project)]);
+    const record = path.join(m.home, '.teamai', 'local-agent', 'model-manifest.json');
+    const intact = fs.readFileSync(record, 'utf8');
+    fs.writeFileSync(record, `${intact.trimEnd()},\n`);
+
+    const first = await m.cli(['source', 'remove-http'], m.project);
+
+    expect(first.code, first.output).toBe(1);
+    expect(first.output).toContain(`Could not read teamai's model record ${record}`);
+    expect(fs.readFileSync(m.file(MODELS), 'utf8')).toContain(MODEL_KEY);
+    expect(m.credentialLines()).toEqual(['/.codebuddy/models.json']);
+
+    fs.writeFileSync(record, intact);
     const second = await m.cli(['source', 'remove-http'], m.project);
 
     expect(second.code, second.output).toBe(0);

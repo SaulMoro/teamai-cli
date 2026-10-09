@@ -530,6 +530,37 @@ describe('local-agent: apply_model_config', () => {
     expect(await fse.pathExists(modelManifest)).toBe(false);
   });
 
+  it('keeps a model record remove-http cannot read, and takes the models out once it can', async () => {
+    const workspace = path.join(home, 'project');
+    await fse.ensureDir(workspace);
+    const configPath = path.join(home, '.teamai/local-agent/config.json');
+    const config = await fse.readJson(configPath);
+    config.workspaceBindings[workspace] = { projectId: 5, projectName: 'Project 5', boundAt: '2026-09-09T00:00:00.000Z', ideType: 'workbuddy' };
+    await fse.writeJson(configPath, config);
+    stubSync({ id: 47, type: 'apply_model_config', scope: 'workspace', workspace_path: workspace, cmd: JSON.stringify(deliveredModel) });
+    const { reportAndSyncLocalAgent, removeLocalAgentHttp } = await import('../local-agent.js');
+    await reportAndSyncLocalAgent({ cwd: workspace, tool: 'workbuddy', status: 'running' });
+    const models = path.join(workspace, '.codebuddy/models.json');
+    const modelManifest = path.join(home, '.teamai/local-agent/model-manifest.json');
+    const record = await fse.readFile(modelManifest, 'utf8');
+    await fse.writeFile(modelManifest, `${record.trimEnd()},\n`);
+
+    process.exitCode = undefined;
+    await removeLocalAgentHttp();
+
+    expect(process.exitCode).toBe(1);
+    expect(await fse.readFile(models, 'utf8')).toContain('proxy-token');
+    expect(await fse.readFile(modelManifest, 'utf8')).toBe(`${record.trimEnd()},\n`);
+
+    await fse.writeFile(modelManifest, record);
+    process.exitCode = undefined;
+    await removeLocalAgentHttp();
+
+    expect(process.exitCode).toBeUndefined();
+    expect(await fse.pathExists(models)).toBe(false);
+    expect(await fse.pathExists(modelManifest)).toBe(false);
+  });
+
   it('rejects a workspace-scoped model for an unbound path', async () => {
     const workspace = path.join(home, 'unbound');
     await fse.ensureDir(workspace);
