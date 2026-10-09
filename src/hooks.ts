@@ -990,24 +990,27 @@ function codexHomeHooksFile(teamConfig: TeamaiConfig, localConfig: LocalConfig):
  * Stop running this project's Codex team hooks from the dispatcher, and drop
  * the dispatcher entries no other project needs (#915). For `uninstall`, whose
  * hook removal does not go through the reconcile that does this on pull.
+ * Returns the file it could not update, which keeps them running, or null.
  */
-export async function stopCodexTeamHookDispatch(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+export async function stopCodexTeamHookDispatch(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string | null> {
   const project = await codexTeamHookProject(localConfig);
   const homeFile = codexHomeHooksFile(teamConfig, localConfig);
   const hooks = project ? await dispatchedCodexHooks(project) : undefined;
-  if (!project || !hooks) return;
+  if (!project || !hooks) return null;
+  const index = path.join('~', '.teamai', 'codex-team-hooks.json');
   if (!await setCodexDispatcherHooks(project, null)) {
-    log.warn(`Could not update ${path.join('~', '.teamai', 'codex-team-hooks.json')}: another teamai process held it. `
-      + `Run \`teamai uninstall\` again to stop the Codex team hooks of ${project}.`);
-    return;
+    log.warn(`Could not update ${index}: another teamai process held it, so the Codex team hooks of ${project} still run.`);
+    return index;
   }
-  if (!homeFile) return;
+  if (!homeFile) return null;
   try {
     await reconcileCodexDispatchers(homeFile);
+    return null;
   } catch (e) {
     // The entry comes back, so the retry still finds the dispatcher entries to remove.
     await setCodexDispatcherHooks(project, hooks);
-    throw e;
+    log.warn(`Could not remove the Codex team-hook dispatchers from ${homeFile}: ${(e as Error).message}. The Codex team hooks of ${project} still run.`);
+    return homeFile;
   }
 }
 

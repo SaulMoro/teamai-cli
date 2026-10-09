@@ -1800,6 +1800,8 @@ async function teardownPlugins(): Promise<void> {
 async function executeRemoval(
   plan: RemovalPlan,
   heldMcp: ReadonlySet<string>,
+  /** Hooks that stay running whatever this removal does: their records stay too. */
+  hooksAlreadyLeft: Array<{ what: string; tool: string }> = [],
 ): Promise<{ pendingOpencode: RemovalPlan['opencodeInstructions']; hooksLeft: Array<{ what: string; tool: string }>; blocksLeft: string[]; filesLeft: string[] }> {
   const pendingOpencode: RemovalPlan['opencodeInstructions'] = [];
   /** Delivered files a delete failed for: their lines and records stay for the retry. */
@@ -1823,7 +1825,7 @@ async function executeRemoval(
   // below; in particular, project uninstall never owns Pi's global extension.
   // An entry no record claims goes when it equals exactly one hook in the team's history (#993).
   // A file whose hooks could not be removed keeps the records that own them, in the data home (#993).
-  const hooksLeft: Array<{ what: string; tool: string }> = [];
+  const hooksLeft: Array<{ what: string; tool: string }> = [...hooksAlreadyLeft];
   for (const { path: settingsPath, tool, manifestPath, teamOnly, legacyManifestPath, teamHookProjectRoot, mainCheckout } of plan.hookFiles) {
     try {
       await reconcileHooks(settingsPath, tool, [], { removeAll: true, manifestPath, teamHookHistory: plan.teamHookHistory,
@@ -2310,7 +2312,13 @@ async function removeConfirmed(
     // Exclusion is a config write even when there are no local files to delete.
     await dropToolGitExcludePaths(localConfig, teamConfig, agentKey!);
     await excludeUninstalledAgent(localConfig, agentKey!);
-    if (agentKey === 'codex') await stopCodexDispatch(teamConfig, localConfig);
+    const dispatchLeft = agentKey === 'codex' ? await stopCodexDispatch(teamConfig, localConfig) : null;
+    if (dispatchLeft) {
+      log.warn(`Uninstall incomplete: excluded ${agentKey} from this project, but the Codex team-hook dispatchers in ${dispatchLeft} still run its team hooks. `
+        + 'Repair permissions in that file, then run the same uninstall command again.');
+      process.exitCode = 1;
+      return;
+    }
     log.success(`Excluded ${agentKey} from this project; its global delivery channel is kept for other teamai installs on this machine. If none uses it, run \`teamai hooks remove\` to remove it.`);
     return;
   }
@@ -2413,10 +2421,12 @@ async function removeConfirmed(
     }
   }
 
-  const { pendingOpencode, hooksLeft, blocksLeft, filesLeft } = await executeRemoval(plan, heldMcp);
+  // Codex team hooks that ran from the dispatcher in ~/.codex/hooks.json (#915),
+  // before the data home goes: a dispatcher left running keeps the records for the retry.
+  const dispatchLeft = !agentKey || agentKey === 'codex' ? await stopCodexDispatch(teamConfig, localConfig) : null;
+  const { pendingOpencode, hooksLeft, blocksLeft, filesLeft } = await executeRemoval(plan, heldMcp,
+    dispatchLeft ? [{ what: `the Codex team-hook dispatchers in ${dispatchLeft}`, tool: 'codex' }] : []);
   const incomplete = pendingOpencode.length > 0 || hooksLeft.length > 0 || blocksLeft.length > 0 || filesLeft.length > 0;
-  // Codex team hooks that ran from the dispatcher in ~/.codex/hooks.json (#915).
-  if (!agentKey || agentKey === 'codex') await stopCodexDispatch(teamConfig, localConfig);
 
   // The tool's files are gone: its lines go from every checkout's list (#915).
   if (!plan.includeShared && agentKey) await dropToolGitExcludePaths(localConfig, teamConfig, agentKey, { keepExisting: incomplete });
@@ -2459,12 +2469,17 @@ async function removeConfirmed(
   }
 }
 
-/** Stop the project's Codex team hooks that run from the dispatcher in ~/.codex/hooks.json (#915). */
-async function stopCodexDispatch(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+/**
+ * Stop the project's Codex team hooks that run from the dispatcher in
+ * ~/.codex/hooks.json (#915). The file that keeps them running, or null.
+ */
+async function stopCodexDispatch(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string | null> {
   try {
-    await stopCodexTeamHookDispatch(teamConfig, localConfig);
+    return await stopCodexTeamHookDispatch(teamConfig, localConfig);
   } catch (e) {
-    log.warn(`Failed to remove the Codex team-hook dispatchers: ${(e as Error).message}. Fix the cause above, then run \`teamai uninstall\` again.`);
+    const index = path.join('~', '.teamai', 'codex-team-hooks.json');
+    log.warn(`Failed to remove the Codex team-hook dispatchers: ${(e as Error).message}.`);
+    return index;
   }
 }
 
