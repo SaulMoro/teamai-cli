@@ -2734,29 +2734,26 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     expect(blockOf(other)).toEqual(['/.claude/rules/other-rule.md', '/.teamai/.gitignore']);
   });
 
-  it.skipIf(process.getuid?.() === 0)('removing the local agent drops its block after the per-entry loop, but the line of a copy a failed entry left', async () => {
+  it.skipIf(process.getuid?.() === 0)('removing the local agent drops its block after the per-entry loop, but the line of a copy it could not delete, and the retry removes the copy', async () => {
     await flag(true);
     const app = await repo('app');
     await run([skill(1, 'http-skill', app), rule(2, 'http-rule', app)], app);
     expect(blockOf(app)).toEqual(['/.claude/rules/http-rule.md', '/.claude/skills/http-skill/SKILL.md', '/.teamai/.gitignore']);
-    // The skill's cache cannot be deleted, so its uninstall fails.
-    const workspaces = path.join(app, '.teamai', 'workspaces');
-    const [id] = fs.readdirSync(workspaces);
-    const cachedSkills = path.join(workspaces, id, 'local-agent', 'resources', 'skills');
-    fs.chmodSync(cachedSkills, 0o555);
+    // The skill's copy cannot be deleted, so its uninstall fails, and its cache stays to prove the copy teamai's.
+    const copy = path.join(app, '.claude', 'skills', 'http-skill');
+    fs.chmodSync(copy, 0o555);
     process.exitCode = undefined;
     try {
       const { removeLocalAgentHttp } = await import('../local-agent.js');
       await removeLocalAgentHttp();
     } finally {
-      fs.chmodSync(cachedSkills, 0o755);
+      fs.chmodSync(copy, 0o755);
     }
 
-    expect(fs.existsSync(path.join(app, '.claude', 'skills', 'http-skill'))).toBe(true);
+    expect(fs.existsSync(path.join(copy, 'SKILL.md'))).toBe(true);
     expect(fs.existsSync(path.join(app, '.claude', 'rules', 'http-rule.md'))).toBe(false);
-    // The copy left on disk stays out of git until it is gone.
+    // The copy left on disk stays out of git until it is gone, and its record stays for the retry.
     expect(blockOf(app)).toEqual(['/.claude/skills/http-skill/SKILL.md', '/.teamai/.gitignore']);
-    // And its record stays, so the retry removes it.
     expect(process.exitCode).toBe(1);
     expect(fs.existsSync(path.join(tmpDir, '.teamai', 'local-agent', 'manifest.json'))).toBe(true);
 
@@ -2765,7 +2762,7 @@ describe('local-agent: project installs stay out of git, and a member\'s file st
     await removeLocalAgentHttp();
 
     expect(process.exitCode).toBeUndefined();
-    expect(fs.existsSync(path.join(app, '.claude', 'skills', 'http-skill'))).toBe(false);
+    expect(fs.existsSync(copy)).toBe(false);
     expect(blockOf(app)).toBeNull();
     expect(fs.existsSync(path.join(tmpDir, '.teamai', 'local-agent', 'manifest.json'))).toBe(false);
   });

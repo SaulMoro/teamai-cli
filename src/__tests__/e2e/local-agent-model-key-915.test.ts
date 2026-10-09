@@ -322,6 +322,32 @@ describe.skipIf(process.platform === 'win32')('a model API key the HTTP local ag
     expect(m.credentialLines()).toBeNull();
   }, 120_000);
 
+  it.skipIf(process.getuid?.() === 0)('removing the HTTP source while the exclude file is read-only reports the kept line, and the retry removes it', async () => {
+    const m = await machine('remove-http-exclude');
+    await m.sessionStart([applyModels(m.project)]);
+    const info = path.join(m.project, '.git', 'info');
+    const exclude = path.join(info, 'exclude');
+    fs.chmodSync(exclude, 0o444);
+    fs.chmodSync(info, 0o555);
+    let first: Run;
+    try {
+      first = await m.cli(['source', 'remove-http'], m.project);
+    } finally {
+      fs.chmodSync(info, 0o755);
+      fs.chmodSync(exclude, 0o644);
+    }
+
+    expect(first.code, first.output).toBe(1);
+    expect(first.output).toContain('removal is incomplete');
+    expect(fs.existsSync(m.file(MODELS))).toBe(false);
+    expect(m.credentialLines()).toEqual(['/.codebuddy/models.json']);
+
+    const second = await m.cli(['source', 'remove-http'], m.project);
+
+    expect(second.code, second.output).toBe(0);
+    expect(m.credentialLines()).toBeNull();
+  }, 120_000);
+
   it('uninstall keeps the line, and warns, while the file still holds a key; drops it once the file holds none', async () => {
     const kept = await machine('uninstall-key');
     const gone = await machine('uninstall-keyless');

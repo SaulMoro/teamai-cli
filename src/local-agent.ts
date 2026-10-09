@@ -2394,9 +2394,10 @@ async function uninstallResource(input: {
         if (files) copies.push({ dest, files });
       }
     }
-    // A cache that cannot go fails the entry before any copy goes, so a retry finds both.
-    await remove(sourcePath);
+    // The cache goes last: a copy that cannot go fails the entry while the
+    // cache still proves which of its files are teamai's, for the retry.
     for (const { dest, files } of copies) await removeSkillCopy(dest, dirName, files);
+    await remove(sourcePath);
   } else if (input.kind === 'rule') {
     await new RulesHandler().removeItem(input.slug, teamConfig, localConfig);
   } else {
@@ -2621,7 +2622,8 @@ async function keepLocalAgentGitExclude(config: LocalAgentConfig, force: boolean
  * exclude file, among `roots` and those git lists for its repository, or when
  * none of them does; the record then keeps that exclude file.
  */
-async function removeLocalAgentGitExclude(roots: string[]): Promise<void> {
+async function removeLocalAgentGitExclude(roots: string[]): Promise<string[]> {
+  const left: string[] = [];
   try {
     const checkouts = new Set(roots);
     for (const file of await localAgentGitExcludeOwner().record?.files() ?? []) {
@@ -2642,13 +2644,16 @@ async function removeLocalAgentGitExclude(roots: string[]): Promise<void> {
         : null;
       const lines = removed.flatMap((block) => block.lines);
       if (why !== null) {
+        left.push(excludeFile);
         log.warn(`Kept the local agent's git exclude block in ${excludeFile}: ${why}. Delete it yourself, from \`# [teamai:local-agent:start]\` `
           + `to \`# [teamai:local-agent:end]\`${lines.length > 0 ? ` (${lines.join(', ')})` : ''}.`);
       }
     }
   } catch (e) {
+    left.push(path.join(getLocalAgentHome(), 'git-exclude.json'));
     log.warn(`Could not remove the local agent's git exclude blocks: ${(e as Error).message}`);
   }
+  return left;
 }
 
 /** The claudemd fragments in an HTTP resource cache, compiled into one block. */
@@ -3122,12 +3127,17 @@ export async function modelFilesBehind(
 
 /**
  * Remove the `credentials` lines whose models file is gone from every checkout
- * that reads their exclude file. Run once a models file was deleted.
+ * that reads their exclude file. Run once a models file was deleted. The
+ * exclude files it could not update.
  */
-async function releaseModelKeyLines(): Promise<void> {
+async function releaseModelKeyLines(): Promise<string[]> {
+  const left: string[] = [];
   try {
+    // The checkouts reading each recorded exclude file, for a retry that no longer has the workspaces' records.
+    const roots: string[] = [];
+    for (const file of await credentialsGitExcludeOwner().record?.files() ?? []) roots.push(...await listWorktrees(path.dirname(path.dirname(file))));
     const results = await removeGitExclude(credentialsGitExcludeOwner(), {
-      keep: async ({ line, excludeFile }) => (await modelFilesBehind(line, excludeFile))?.length !== 0,
+      keep: async ({ line, excludeFile }) => (await modelFilesBehind(line, excludeFile, { roots }))?.length !== 0,
     });
     for (const { excludeFile, write, removed } of results) {
       const why = write.kind === 'locked' ? 'another teamai command held it past the wait'
@@ -3136,13 +3146,16 @@ async function releaseModelKeyLines(): Promise<void> {
         : null;
       const lines = removed.flatMap((block) => block.lines);
       if (why !== null && lines.length > 0) {
+        left.push(excludeFile);
         log.warn(`Kept ${lines.join(', ')} in ${excludeFile}: ${why}. Delete it yourself, with the block's \`# [teamai:credentials:start]\` `
           + 'and `# [teamai:credentials:end]` lines once it holds no other line.');
       }
     }
   } catch (e) {
+    left.push(path.join(getLocalAgentHome(), 'git-exclude.json'));
     log.warn(`Could not remove the git exclude lines of deleted model files: ${(e as Error).message}`);
   }
+  return left;
 }
 
 /**
@@ -4790,8 +4803,9 @@ async function removeLocalAgentHttpLocked(retry: string): Promise<'none' | 'remo
         cachesLeft.push(workspacePath);
       }
     }
-    await removeLocalAgentGitExclude(await localAgentCheckouts());
-    return finishAgentHookTeardown(retry, { models: await removeWorkspaceModels(), caches: cachesLeft });
+    const blocks = await removeLocalAgentGitExclude(await localAgentCheckouts());
+    const models = await removeWorkspaceModels();
+    return finishAgentHookTeardown(retry, { models, caches: cachesLeft, blocks: [...blocks, ...await releaseModelKeyLines()] });
   }
   // Read before the marker and the teardown below delete what names them (#915).
   const checkouts = await localAgentCheckouts();
@@ -4828,9 +4842,12 @@ async function removeLocalAgentHttpLocked(retry: string): Promise<'none' | 'remo
     kinds.flatMap((kind) => Object.keys(left?.[manifestKind(kind)] ?? {}).map((slug) => `${kind} ${slug} (${key})`)));
 
   // Before the state home goes: it records which exclude files hold the block (#915).
-  await removeLocalAgentGitExclude(checkouts);
+  const blocks = await removeLocalAgentGitExclude(checkouts);
+  const models = await removeWorkspaceModels();
   return finishAgentHookTeardown(retry, {
-    models: await removeWorkspaceModels(), caches: cachesLeft, entries: entriesLeft, removing: entriesLeft.length > 0 ? config : undefined,
+    models, caches: cachesLeft, entries: entriesLeft, removing: entriesLeft.length > 0 ? config : undefined,
+    // The lines of models files the teardown deleted, with any an earlier run could not write.
+    blocks: [...blocks, ...await releaseModelKeyLines()],
   });
 }
 
@@ -4875,7 +4892,10 @@ async function disabledSourceLeftovers(): Promise<boolean> {
   if (Object.keys(await loadAgentHookManifest()).length > 0) return true;
   // A teardown keeps these only for what it could not remove.
   if (await pathExists(getModelManifestPath()) || await pathExists(getManifestPath())) return true;
-  return (await localAgentGitExcludeOwner().record?.files().catch(() => []) ?? []).length > 0;
+  for (const owner of [localAgentGitExcludeOwner(), credentialsGitExcludeOwner()]) {
+    if ((await owner.record?.files().catch(() => []) ?? []).length > 0) return true;
+  }
+  return false;
 }
 
 /**
@@ -4886,9 +4906,10 @@ async function disabledSourceLeftovers(): Promise<boolean> {
  */
 async function finishAgentHookTeardown(
   retry: string,
-  left: { models: string[]; caches: string[]; entries?: string[]; removing?: LocalAgentConfig } = { models: [], caches: [] },
+  left: { models: string[]; caches: string[]; entries?: string[]; removing?: LocalAgentConfig; blocks?: string[] } = { models: [], caches: [] },
 ): Promise<'removed' | 'incomplete'> {
   const entries = left.entries ?? [];
+  const blocks = [...new Set(left.blocks ?? [])];
   const hooksLeft = await removeAllAgentHooks();
   const home = getLocalAgentHome();
   const keep = new Set([path.basename(getConfigPath())]);
@@ -4908,6 +4929,7 @@ async function finishAgentHookTeardown(
     ...left.models.length > 0 ? [`teamai's models in ${left.models.join(', ')}`] : [],
     ...left.caches.length > 0 ? [`the local agent's cache in ${left.caches.map((dir) => path.join(dir, '.teamai')).join(', ')}`] : [],
     ...entries.length > 0 ? [`the installs ${entries.join(', ')}`] : [],
+    ...blocks.length > 0 ? [`teamai's git exclude blocks in ${blocks.join(', ')}`] : [],
   ];
   if (held.length > 0) {
     log.warn(`HTTP source disabled, but removal is incomplete: kept the record of ${held.join('; ')} `
