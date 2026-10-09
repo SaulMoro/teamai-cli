@@ -1955,8 +1955,11 @@ async function executeRemoval(
       // even an empty one, stays.
       const { changed, warnings } = await clearInstructionFile(claudeMdPath, blocks.map(([start]) => start), owned);
       for (const warning of warnings) log.warn(warning);
+      // A warning is a block left in place.
+      if (warnings.length > 0) filesLeft.push(claudeMdPath);
       if (changed) log.success(`Cleaned ${claudeMdPath}`);
     } catch (e) {
+      filesLeft.push(claudeMdPath);
       log.warn(`Failed to clean ${claudeMdPath}: ${(e as Error).message}`);
     }
   }
@@ -2111,8 +2114,10 @@ async function executeRemoval(
     const { removeDocsSearchWhitelist } = await import('./resources/docs.js');
     for (const file of plan.docsSearchWhitelists) {
       const { removed, failure } = await removeDocsSearchWhitelist(path.dirname(path.dirname(file)));
-      if (failure) log.warn(failure);
-      else if (removed) log.success(`Removed teamai's docs search whitelist from ${file}`);
+      if (failure) {
+        filesLeft.push(file);
+        log.warn(failure);
+      } else if (removed) log.success(`Removed teamai's docs search whitelist from ${file}`);
     }
   }
 
@@ -2459,7 +2464,7 @@ async function stopCodexDispatch(teamConfig: TeamaiConfig, localConfig: LocalCon
   try {
     await stopCodexTeamHookDispatch(teamConfig, localConfig);
   } catch (e) {
-    log.warn(`Failed to remove the Codex team-hook dispatchers: ${(e as Error).message}`);
+    log.warn(`Failed to remove the Codex team-hook dispatchers: ${(e as Error).message}. Fix the cause above, then run \`teamai uninstall\` again.`);
   }
 }
 

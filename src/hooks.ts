@@ -45,7 +45,7 @@ import { CLAUDE_HOOK_OTHER_HOST_SKIP } from './claude-hook-host.js';
 import { listWorktrees, resolveAnchors } from './utils/git.js';
 import { findOnPath } from './utils/lookpath.js';
 import type { CodexHookTrustReport, CodexTrust } from './codex-trust.js';
-import { isCodexTeamHookDispatcher, reconcileCodexDispatchers, runsFromCodexDispatcher, setCodexDispatcherHooks } from './codex-team-hooks.js';
+import { dispatchedCodexHooks, isCodexTeamHookDispatcher, reconcileCodexDispatchers, runsFromCodexDispatcher, setCodexDispatcherHooks } from './codex-team-hooks.js';
 import type { CodexTeamHook } from './codex-team-hooks.js';
 
 export { CLAUDE_HOOK_OTHER_HOST_SKIP };
@@ -994,13 +994,21 @@ function codexHomeHooksFile(teamConfig: TeamaiConfig, localConfig: LocalConfig):
 export async function stopCodexTeamHookDispatch(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
   const project = await codexTeamHookProject(localConfig);
   const homeFile = codexHomeHooksFile(teamConfig, localConfig);
-  if (!project || !await runsFromCodexDispatcher(project)) return;
+  const hooks = project ? await dispatchedCodexHooks(project) : undefined;
+  if (!project || !hooks) return;
   if (!await setCodexDispatcherHooks(project, null)) {
     log.warn(`Could not update ${path.join('~', '.teamai', 'codex-team-hooks.json')}: another teamai process held it. `
       + `Run \`teamai uninstall\` again to stop the Codex team hooks of ${project}.`);
     return;
   }
-  if (homeFile) await reconcileCodexDispatchers(homeFile);
+  if (!homeFile) return;
+  try {
+    await reconcileCodexDispatchers(homeFile);
+  } catch (e) {
+    // The entry comes back, so the retry still finds the dispatcher entries to remove.
+    await setCodexDispatcherHooks(project, hooks);
+    throw e;
+  }
 }
 
 /** Where a project scope's Codex team hooks go (#915); see placeCodexTeamHooks. */
@@ -1029,11 +1037,9 @@ async function holdsForeignCodexHooks(
   const stats = await lstat(file).catch(() => null);
   if (!stats) return false;
   if (!stats.isFile()) return true;
-  const { gitTracks, gitTracking } = await import('./git-exclude.js');
-  const tracks = await gitTracks(file, 'entry');
-  if (tracks.kind === 'tracked') return true;
-  // Git failing to say inside a repository may hide a tracked file.
-  if (tracks.kind === 'unknown' && (await gitTracking(file)).kind !== 'outside-repo') return true;
+  const { gitUntracked } = await import('./git-exclude.js');
+  // A file git cannot judge inside a repository may be tracked.
+  if (!await gitUntracked(file, 'entry')) return true;
   const raw = await readFileSafe(file);
   if (raw === null || raw.trim() === '') return false;
   let json: unknown;

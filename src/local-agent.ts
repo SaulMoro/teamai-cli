@@ -107,7 +107,7 @@ import {
 import { getUserHome } from './utils/home.js';
 import { completeWorktreeList, gitCommonDir, isLiveCheckout, listWorktrees, resolveAnchors } from './utils/git.js';
 import {
-  ensure as ensureGitExclude, gitExcludeFile, gitTracks, remove as removeGitExclude, report as reportGitExclude, stateHomeRecord,
+  ensure as ensureGitExclude, gitExcludeFile, gitTracks, gitUntracked, remove as removeGitExclude, report as reportGitExclude, stateHomeRecord,
   sync as syncGitExclude, type GitExcludeOwner,
 } from './git-exclude.js';
 import {
@@ -3247,7 +3247,7 @@ async function reconcileBuddyModels(
   const document = doc ?? preserved;
   const present = await fs.promises.lstat(targetFile).catch(() => null);
   if (workspacePath && Object.keys(nextManaged).length === 0 && holdsNoModels(document)) {
-    if (!present || (scopeManifest.createdModelsFile && !present.isSymbolicLink() && (await gitTracks(targetFile)).kind !== 'tracked')) {
+    if (!present || (scopeManifest.createdModelsFile && !present.isSymbolicLink() && await gitUntracked(targetFile))) {
       // Nothing left in a file teamai created, or no file: it goes, then its git exclude line.
       await remove(targetFile);
       delete scopeManifest.createdModelsFile;

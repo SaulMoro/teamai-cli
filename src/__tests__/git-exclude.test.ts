@@ -10,6 +10,7 @@ import {
   type GitExcludeOwner,
   encodeOwnerSegment,
   ensure,
+  gitUntracked,
   remove,
   report,
   stateHomeRecord,
@@ -917,6 +918,28 @@ describe('git exclude blocks (#915)', () => {
 
       expect(result.files).toMatchObject([{ excludeFile, missing: [inRepo('a.md')] }]);
       expect(await fse.pathExists(inRepo('.git', 'info'))).toBe(false);
+    });
+  });
+
+  describe('gitUntracked', () => {
+    it('is true only for a file git says it does not track, or one in no repository', async () => {
+      await fse.outputFile(inRepo('tracked.md'), 'x\n');
+      await fse.outputFile(inRepo('loose.md'), 'x\n');
+      commit(repo, 'tracked.md');
+      const outside = path.join(tmp, 'plain', 'file.md');
+      await fse.outputFile(outside, 'x\n');
+
+      expect(await gitUntracked(inRepo('tracked.md'))).toBe(false);
+      expect(await gitUntracked(inRepo('loose.md'))).toBe(true);
+      expect(await gitUntracked(outside)).toBe(true);
+    });
+
+    it('is false in a repository git cannot read, so nothing there is deleted on a guess', async () => {
+      await fse.outputFile(inRepo('tracked.md'), 'x\n');
+      commit(repo, 'tracked.md');
+      await fse.writeFile(inRepo('.git', 'HEAD'), 'not a ref\n');
+
+      expect(await gitUntracked(inRepo('tracked.md'))).toBe(false);
     });
   });
 });

@@ -394,6 +394,34 @@ describe('uninstall --agent codex', () => {
     m.ok(['pull']);
     expect(dispatcherEvents(m.homeHooks())).toEqual([]);
   });
+
+  it.skipIf(process.getuid?.() === 0)('keeps the project in the dispatcher index while ~/.codex/hooks.json cannot be written, so the retry removes its entries', () => {
+    const m = machine('uninstall-retry', {
+      committed: { '.codex/hooks.json': TEAM_OWN_HOOKS },
+      hooks: [{ id: 'team-stop', event: 'Stop', command: 'echo team-stop' }],
+    });
+    expect(dispatcherEvents(m.homeHooks())).toEqual(['Stop']);
+    fs.rmSync(path.join(m.dir, '.codex', 'skills'), { recursive: true });
+    const homeFile = path.join(m.home, '.codex', 'hooks.json');
+    const index = path.join(m.home, '.teamai', 'codex-team-hooks.json');
+    fs.chmodSync(homeFile, 0o444);
+    fs.chmodSync(path.dirname(homeFile), 0o555);
+    let first: ReturnType<typeof spawnSync>;
+    try {
+      first = spawnSync(process.execPath, [CLI, 'uninstall', '--agent', 'codex', '--force'], { cwd: m.dir, encoding: 'utf8', env: m.env });
+    } finally {
+      fs.chmodSync(path.dirname(homeFile), 0o755);
+      fs.chmodSync(homeFile, 0o644);
+    }
+
+    expect(`${first.stdout}${first.stderr}`).toContain('Failed to remove the Codex team-hook dispatchers');
+    expect(dispatcherEvents(m.homeHooks())).toEqual(['Stop']);
+    expect(Object.keys(readJson(index).projects)).toEqual([m.dir]);
+
+    m.ok(['uninstall', '--agent', 'codex', '--force']);
+    expect(dispatcherEvents(m.homeHooks())).toEqual([]);
+    expect(fs.existsSync(index)).toBe(false);
+  });
 });
 
 /** Every file named `name` under `dir`, recursively. */

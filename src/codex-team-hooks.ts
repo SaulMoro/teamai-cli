@@ -66,7 +66,12 @@ async function readIndex(): Promise<CodexTeamHookIndex> {
 
 /** Whether `project`'s team hooks run from the dispatcher now. */
 export async function runsFromCodexDispatcher(project: string): Promise<boolean> {
-  return (await readIndex()).projects[project] !== undefined;
+  return (await dispatchedCodexHooks(project)) !== undefined;
+}
+
+/** The team hooks the dispatcher runs for `project`, if it runs them. */
+export async function dispatchedCodexHooks(project: string): Promise<CodexTeamHook[] | undefined> {
+  return (await readIndex()).projects[project]?.hooks;
 }
 
 /**

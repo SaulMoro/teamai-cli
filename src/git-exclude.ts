@@ -295,6 +295,17 @@ export async function gitTracks(
   return { kind: 'unknown', error: result.stderr.trim() || `git exited with ${result.code}` };
 }
 
+/**
+ * Whether no commit can take `file`, so teamai may delete it: git says it does
+ * not track it, or no repository holds it. A repository git cannot answer for
+ * is neither.
+ */
+export async function gitUntracked(file: string, at: 'landed' | 'entry' = 'landed'): Promise<boolean> {
+  const tracks = await gitTracks(file, at);
+  if (tracks.kind !== 'unknown') return tracks.kind === 'untracked';
+  return (await gitTracking(file)).kind === 'outside-repo';
+}
+
 /** A rule of the member's that re-includes a path, as `git check-ignore -v` names it. */
 export interface ReincludingRule {
   source: string;

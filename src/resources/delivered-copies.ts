@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import fse from 'fs-extra';
-import { gitTracks } from '../git-exclude.js';
+import { gitTracks, gitUntracked } from '../git-exclude.js';
 import type { DeliveryRecorder } from '../git-exclude-delivered.js';
 import type { AgentModelRecords, CopyOrigin, DeliveryTarget, ResourceItem } from '../types.js';
 import { fileHash, listFilesRecursive } from '../utils/fs.js';
@@ -547,15 +547,20 @@ export async function judgeRemoval(
  * because the repository it sits in tracks it (#915): deleting it would be a
  * change in the member's repository. Asked right before the deletion, after
  * whatever proved the copy teamai's, so no proof deletes it. Named once per
- * run. A path git cannot answer for (no repository) is not kept. `movedTo` is
+ * run. A path in no repository is not kept; one in a repository git cannot
+ * answer for is, as it may be tracked. `movedTo` is
  * where a layout migration writes the resource now: the tool may then load
  * both copies, and the message says so.
  */
 export async function keepsTrackedCopy(dest: string, movedTo?: string): Promise<boolean> {
-  if ((await gitTracks(dest, 'entry')).kind !== 'tracked') return false;
-  warnOnce(`Kept ${dest}: this repository tracks it, so teamai does not delete it. `
-    + `Run \`git rm -r ${dest}\` and commit if the repository no longer needs it.`
-    + (movedTo === undefined ? '' : ` The resource now lives at ${movedTo}, and the tool may load both until the repository removes this copy.`));
+  if (await gitUntracked(dest, 'entry')) return false;
+  const tracks = await gitTracks(dest, 'entry');
+  const moved = movedTo === undefined ? '' : ` The resource now lives at ${movedTo}, and the tool may load both until the repository removes this copy.`;
+  warnOnce(tracks.kind === 'unknown'
+    ? `Kept ${dest}: git could not say whether this repository tracks it (${tracks.error}), so teamai does not delete it. `
+      + `Fix that repository, then run the command again.${moved}`
+    : `Kept ${dest}: this repository tracks it, so teamai does not delete it. `
+      + `Run \`git rm -r ${dest}\` and commit if the repository no longer needs it.${moved}`);
   return true;
 }
 

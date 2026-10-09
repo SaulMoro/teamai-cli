@@ -7,7 +7,7 @@ import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import {
   opencodeClaudeFallback, opencodeContextReference, readOpencodeInstructionList, reconcileOpencodeInstructions,
 } from './resources/opencode-config.js';
-import { gitTracking, gitTracks } from './git-exclude.js';
+import { gitUntracked } from './git-exclude.js';
 import { TEAMAI_CONTEXT_RULE_NAME } from './builtin-rules.js';
 import { getHermesHome } from './hermes-home.js';
 import { getHermesSoulPath } from './hermes-config.js';
@@ -826,9 +826,7 @@ function createdByTeamai(content: string): boolean {
  * whose state git cannot report stays too.
  */
 async function mayDelete(file: string): Promise<boolean> {
-  const tracked = await gitTracks(file);
-  if (tracked.kind !== 'unknown') return tracked.kind === 'untracked';
-  return (await gitTracking(file)).kind === 'outside-repo';
+  return gitUntracked(file);
 }
 
 async function planFile(

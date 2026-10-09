@@ -298,6 +298,32 @@ describe.skipIf(process.platform === 'win32')('uninstall and teamai\'s git exclu
     expect(read(exclude)).not.toContain('# [teamai:');
   }, 120_000);
 
+  it('keeps the line and the records of an instruction file whose block uninstall could not remove, and removes them on the retry', () => {
+    const m = member('context-left', { ...TEAM, 'culture.md': '# Culture\n\nShip small changes.\n' });
+    const app = m.project(path.join(caseDir('context-left'), 'app'));
+    const exclude = excludeFileOf(m, app);
+    const context = path.join(app, '.claude', 'rules', 'teamai-context.md');
+    expect(blockLines(exclude)).toContain('/.claude/rules/teamai-context.md');
+    const intact = read(context);
+    const end = intact.split('\n').find((line) => /^<!-- \[teamai:[a-z-]+:end\] -->$/.test(line));
+    expect(end).toBeDefined();
+    write(context, intact.replace(`${end}\n`, ''));
+
+    const first = m.run(process.execPath, [CLI, 'uninstall', '--force'], app);
+
+    expect(first.code, first.output).toBe(1);
+    expect(first.output).toContain('Uninstall incomplete');
+    expect(blockLines(exclude), first.output).toContain('/.claude/rules/teamai-context.md');
+    expect(status(m, app)).toEqual([]);
+    expect(partitionDirs(m)).not.toEqual([]);
+
+    write(context, intact);
+    const second = m.teamai(['uninstall', '--force'], app);
+    expect(second).toContain('teamai uninstalled');
+    expect(fs.existsSync(context)).toBe(false);
+    expect(read(exclude)).not.toContain('# [teamai:');
+  }, 120_000);
+
   it('keeps the block another project holds in a tool home under version control', () => {
     const m = member('tool-home');
     fs.mkdirSync(path.join(m.home, '.hermes'), { recursive: true });
