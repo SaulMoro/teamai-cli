@@ -529,6 +529,17 @@ every checkout, so that is where they live now:
 │                                              Codex records event, matcher-group position and complete rendered entry; unique definitions recover moved entries
 │                                              legacy ownership matches event/matcher/command uniquely, ignoring unrecorded timeout/context options
 │                                              pre-#370 Codex ownership is imported from <main>/.teamai/managed-hooks.json before reconcile/removal
+│                                              an un-migrated linked worktree injects through the main checkout's copy (<main>/.teamai when the main checkout
+│                                              has no install), importing then retiring the records v0.22.0 kept in each linked checkout's data home; checkouts registered in the
+│                                              manifest share ownership so removal keeps the shared entries until the last checkout removes them (#373)
+│                                              registration is per tool; targeted uninstall releases only that tool and keeps the remaining tools' records
+│                                              discovery respects enabledAgents/disabledAgents; excluded tools do not retain another checkout's shared hook
+│                                              a shared partition config registers its linked worktrees even without checkout-local configs or prior hook injection
+│                                              removing a legacy Codex copy shifts surviving checkout records only after matching their full entry at the old position
+│                                              uninstall of a shared partition removes the selected tool's hooks and registrations for that whole installation before deleting its authority
+│                                              the synthetic main-checkout manifest and empty .teamai directory go only after the last hook record is removed
+│                                              uninstall also retires selected tool records for missing hook files after their last checkout releases ownership
+│                                              removal releases one Claude entry per record, so an identical copy another checkout records stays
 ├── teamai.lock                                packageLockDir: installed package versions (#993; an older <root>/.teamai/teamai.lock is moved here, or copied while git tracks it,
 │                                              and a <root>/.teamai/.gitignore holding only `teamai.lock` is removed outside self mode)
 └── workspaces/<managedMcpWorkspaceId(root)>/
@@ -537,7 +548,7 @@ every checkout, so that is where they live now:
     │                                          .github/hooks/; every tool in self mode). Until #993 it sat in <root>/.teamai/: the first pull
     │                                          moves its Copilot records (all of them in self mode), and deletes it once empty and untracked;
     │                                          doctor names a tracked one. Other records stay there for the pre-#370 import and legacy sweep
-    ├── managed-main-checkout-hooks.json       bare repositories only: this workspace owns its Claude / Codex team-hook files and trust target
+    ├── managed-main-checkout-hooks.json       bare repositories only: this workspace owns its Claude / Codex team-hook files and trust target, without sibling registrations
     ├── managed-mcp.json                       managedMcpManifestPath, one per checkout; Copilot placement is true for bare, false for keyed, absent when unproven
     ├── managed-mcp-files.json                 resolvedMcpFilesPath: project MCP configs teamai may have written a resolved ${VAR} to, and whether
     │                                          the paths earlier teamai.yaml revisions mapped were read; one of those git tracks is marked tracked (#882);
