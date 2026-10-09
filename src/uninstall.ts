@@ -148,6 +148,10 @@ interface RemovalPlan {
   mcpServers: string[];
   /** Shell profile paths carrying a teamai env block (usually one, but see #682/#693). */
   shellProfiles: string[];
+  /** The project scope to take out of the env loader's registry (#1018); null for the user scope. */
+  envScope: LocalConfig | null;
+  /** Whether no other scope needs the env loader, so its profile block, script and registry go too. */
+  shouldRemoveEnvLoader: boolean;
   /** Docs directory (null if doesn't exist). */
   docsDir: string | null;
   /** The team clone, whose history proves a doc in `docsDir` teamai's (#993). */
@@ -1048,6 +1052,8 @@ async function buildRemovalPlan(
     agentFiles: [],
     mcpServers: [],
     shellProfiles: [],
+    envScope: null,
+    shouldRemoveEnvLoader: false,
     docsDir: null,
     teamRepoPath: localConfig.repo.localPath,
     gitExcludes: new Map(),
@@ -1189,9 +1195,14 @@ async function buildRemovalPlan(
       configuredProfilePath,
       ...SHELL_PROFILE_CANDIDATE_NAMES.map((name) => path.join(home, name)),
     ]));
+    // One loader block serves every scope (#1018): it goes with the last one.
+    const { envLoaderPath, isLastEnvScope } = await import('./resources/env-loader.js');
+    plan.envScope = localConfig.scope === 'project' ? localConfig : null;
+    plan.shouldRemoveEnvLoader = await isLastEnvScope(localConfig);
     for (const candidate of candidateProfilePaths) {
       const profileContent = await readFileSafe(candidate);
-      if (profileContent && findEnvBlockFor(profileContent, envShPath)) {
+      if (profileContent && (findEnvBlockFor(profileContent, envShPath)
+        || (plan.shouldRemoveEnvLoader && findEnvBlockFor(profileContent, envLoaderPath())))) {
         plan.shellProfiles.push(candidate);
       }
     }
@@ -2080,22 +2091,29 @@ async function executeRemoval(
   // buildRemovalPlan, not just the one detectShellProfile() resolves to today.
   // Only this scope's own block: another scope's may share the file (#876).
   const envShPath = path.join(plan.teamaiHome, 'env.sh');
+  const { envLoaderPath, removeEnvLoader, unregisterEnvScope } = await import('./resources/env-loader.js');
+  const owned = plan.shouldRemoveEnvLoader ? [envShPath, envLoaderPath()] : [envShPath];
   for (const profilePath of plan.shellProfiles) {
     try {
-      const content = await readFileSafe(profilePath);
-      if (content) {
-        const block = findEnvBlockFor(content, envShPath);
-        if (block && block.end !== null) {
-          const before = content.substring(0, block.start).replace(/\n+$/, '\n');
-          const after = content.substring(block.end).replace(/^\n+/, '\n');
-          await writeFile(profilePath, before + after);
-          log.success(`Cleaned shell profile: ${profilePath}`);
+      let content = await readFileSafe(profilePath);
+      let cleaned = false;
+      for (const sourced of owned) {
+        const block = content === null ? null : findEnvBlockFor(content, sourced);
+        if (content !== null && block && block.end !== null) {
+          content = content.substring(0, block.start).replace(/\n+$/, '\n') + content.substring(block.end).replace(/^\n+/, '\n');
+          cleaned = true;
         }
+      }
+      if (cleaned && content !== null) {
+        await writeFile(profilePath, content);
+        log.success(`Cleaned shell profile: ${profilePath}`);
       }
     } catch (e) {
       log.warn(`Failed to clean shell profile ${profilePath}: ${(e as Error).message}`);
     }
   }
+  if (plan.envScope) await unregisterEnvScope(plan.envScope);
+  if (plan.shouldRemoveEnvLoader) await removeEnvLoader();
 
   // (f) Remove teamai's docs from the docs directory: the mirror keeps no record, so a
   // doc goes only as a version from the team history; anything else is the member's (#993).

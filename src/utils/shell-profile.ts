@@ -4,7 +4,7 @@ import { getUserHome } from './home.js';
 import { TEAMAI_ENV_START, TEAMAI_ENV_END } from '../types.js';
 
 /** Every profile file `detectShellProfile()` could ever have resolved to, across platforms and CLI versions. */
-export const SHELL_PROFILE_CANDIDATE_NAMES = ['.zshrc', '.bashrc', '.bash_profile', '.bash_login', '.profile'];
+export const SHELL_PROFILE_CANDIDATE_NAMES = ['.zshenv', '.zshrc', '.bashrc', '.bash_profile', '.bash_login', '.profile'];
 
 /**
  * Detect the shell profile file `teamai`'s env block should be injected into.
@@ -43,8 +43,14 @@ export async function detectShellProfile(
   const home = getUserHome();
   const shell = process.env.SHELL ?? '';
 
+  // `.zshenv`, not `.zshrc`: zsh reads it for every invocation, so the
+  // `zsh -c` a tool runs a command with gets the env too (#1018). zsh reads
+  // it from the ZDOTDIR it starts with: ~/.zshenv, unless the environment
+  // sets ZDOTDIR. A ~/.zshenv that exists is read first, and is usually what
+  // sets the ZDOTDIR this process sees, so it wins.
   if (shell.includes('zsh')) {
-    return path.join(home, '.zshrc');
+    const homeZshenv = path.join(home, '.zshenv');
+    return process.env.ZDOTDIR && !await pathExists(homeZshenv) ? path.join(process.env.ZDOTDIR, '.zshenv') : homeZshenv;
   }
 
   if (platform === 'win32') {

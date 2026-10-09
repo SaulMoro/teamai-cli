@@ -2,26 +2,29 @@ import path from 'node:path';
 import { z } from 'zod';
 import YAML from 'yaml';
 import { ResourceHandler } from './base.js';
-import type { ResourceItem, TeamaiConfig, LocalConfig, Scope } from '../types.js';
-import { TEAMAI_ENV_START, TEAMAI_ENV_END, getDataHome, getEnvBackupPath, getTeamaiHome, getUserConfigPath, isSelfMode } from '../types.js';
-import { loadLocalConfigForScope } from '../config.js';
+import type { ResourceItem, TeamaiConfig, LocalConfig } from '../types.js';
+import { TEAMAI_ENV_START, TEAMAI_ENV_END, getDataHome, getEnvBackupPath, getTeamaiHome, isSelfMode } from '../types.js';
 import { pathExists, readFileSafe, writeFile, ensureDir, fileContentEqual } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { envShMarker, isEnvShMarker, recordEnvShExports } from '../env-sh-exports.js';
 import { ENV_KEY_RE } from './env-key.js';
 import { SECRETS_LAYOUT } from './secrets.js';
+import { envLoaderPath, registerEnvScope, writeEnvLoader } from './env-loader.js';
 import {
   listEntryFiles, readEntryFileText, reportEntryResolution, resolveEntriesFor,
   unknownEntryKeys, writtenList, type EntryFile, type EntryReader,
 } from '../namespaced-entries.js';
 import {
+  SHELL_PROFILE_CANDIDATE_NAMES,
   resolveActiveShellProfile,
   shellQuoteValue,
   isWindowsFormPath,
   findEnvBlocks,
   envBlockReferencesDataHome,
+  sameFile,
   type EnvBlock,
 } from '../utils/shell-profile.js';
+import { getUserHome } from '../utils/home.js';
 
 // ─── Schema for env.yaml ────────────────────────────────
 
@@ -209,16 +212,20 @@ function envPushItem(relativePath: string, sourcePath: string): ResourceItem {
 const SOURCES_ENV_SH = /(?:^|[\s;&|])(?:source|\.)\s[^\n;&|]*env\.sh/m;
 
 /**
- * The env.sh a user-scope pull writes, or null when no user scope is
- * configured. How a project pull recognises the user scope's profile block,
- * which it must keep (#876).
+ * `content` without the per-scope blocks versions before #1018 wrote: a block
+ * that sources an env.sh, or the inline-export format from before env.sh.
+ * The loader's own block, an unclosed one, and anything else stay.
  */
-async function userScopeEnvShPath(): Promise<string | null> {
-  const userConfig = await loadLocalConfigForScope('user');
-  if (userConfig) return path.join(getDataHome(userConfig), 'env.sh');
-  // A config that exists but does not parse is still a configured user scope:
-  // keep the block at its default env.sh rather than taking it over.
-  return await pathExists(getUserConfigPath()) ? path.join(getTeamaiHome('user'), 'env.sh') : null;
+function withoutOldBlocks(content: string, loaderPath: string): { content: string; dropped: EnvBlock[] } {
+  const dropped = findEnvBlocks(content).filter((block): block is EnvBlock & { end: number } => block.end !== null
+    && !envBlockReferencesDataHome(block.text, loaderPath)
+    && (SOURCES_ENV_SH.test(block.text)
+      || block.text.split('\n').slice(1).every((line) => line === '' || line.startsWith('#') || line.startsWith('export '))));
+  let kept = content;
+  for (const block of [...dropped].reverse()) {
+    kept = kept.substring(0, block.start).replace(/\n+$/, '\n') + kept.substring(block.end).replace(/^\n+/, '\n');
+  }
+  return { content: kept === '\n' ? '' : kept, dropped };
 }
 
 // ─── Handler ─────────────────────────────────────────────
@@ -335,6 +342,10 @@ export class EnvHandler extends ResourceHandler {
     // and writing a file there would throw EISDIR.
     const teamaiHome = getDataHome(localConfig);
     const envShPath = path.join(teamaiHome, 'env.sh');
+    // Before the early return: a project without env still governs its
+    // directories, so the user scope's env must not load there (#1018).
+    const inject = teamConfig.sharing.env.injectShellProfile !== false;
+    await registerEnvScope(localConfig, inject);
     if (variables.length === 0 && !await pathExists(envShPath)) return false;
 
     // The machine-local KEY=VALUE backup (for loadEnvFile).
@@ -352,16 +363,15 @@ export class EnvHandler extends ResourceHandler {
     const marker = envShMarker(teamaiHome, parseEnvFile(envSh), recorded);
     await writeFile(envShPath, marker ? `${envSh}export ${marker[0]}='${marker[1]}'\n` : envSh);
 
-    // Inject source line into shell profile if enabled
-    const inject = teamConfig.sharing.env.injectShellProfile !== false;
-
     if (inject) {
+      await writeEnvLoader();
+      const loaderPath = envLoaderPath();
       const profilePath = teamConfig.sharing.env.shellProfilePath
         ? teamConfig.sharing.env.shellProfilePath
-        : await this.detectShellProfile(envShPath);
+        : await this.detectShellProfile(loaderPath);
 
-      const shellBlock = this.generateShellBlock(teamaiHome);
-      await this.injectShellProfile(profilePath, shellBlock, envShPath, localConfig.scope);
+      const shellBlock = this.generateShellBlock(loaderPath);
+      await this.injectShellProfile(profilePath, shellBlock, loaderPath);
     }
     return true;
   }
@@ -416,19 +426,20 @@ export class EnvHandler extends ResourceHandler {
   }
 
   /**
-   * Generate the shell block with a source line (instead of inline exports).
+   * Generate the shell block: one line that sources the env loader (#1018),
+   * the same block for every scope.
    *
    * The block is read back by a POSIX shell (bash/zsh/sh) even on Windows,
-   * where `teamaiHome` is a native path such as `C:\Users\me\.teamai`. The
-   * block used to interpolate that path as-is, so on Windows `[ -f ... ]`
+   * where `loaderPath` is a native path such as `C:\Users\me\.teamai\env-loader.sh`.
+   * The block used to interpolate such a path as-is, so on Windows `[ -f ... ]`
    * tested a backslash path the shell treats as an escape sequence, and
    * `source` never ran — while nothing reported a failure (#661).
    *
-   * A Windows-form home is rewritten to forward slashes, which Git Bash, WSL
+   * A Windows-form path is rewritten to forward slashes, which Git Bash, WSL
    * and MSYS all accept, so one block loads on every shell the CLI supports.
    * The rewrite keys off the path's own shape, never `path.sep`, so the output
    * is byte-identical across platforms and the Windows form stays assertable
-   * from the Linux/macOS CI runners. A POSIX home is passed through untouched:
+   * from the Linux/macOS CI runners. A POSIX path is passed through untouched:
    * its backslashes are filename characters, not separators.
    *
    * The path is quoted unconditionally (`shellQuoteValue`). It sits inside a
@@ -436,13 +447,12 @@ export class EnvHandler extends ResourceHandler {
    * directory would break that test and split the `source` builtin. Quoting
    * only "when needed" would put the quoted form out of reach of the runner.
    */
-  generateShellBlock(teamaiHome: string): string {
-    const shellHome = isWindowsFormPath(teamaiHome) ? teamaiHome.replace(/\\/g, '/') : teamaiHome;
-    const envShPath = shellQuoteValue(`${shellHome}/env.sh`);
+  generateShellBlock(loaderPath: string): string {
+    const quoted = shellQuoteValue(isWindowsFormPath(loaderPath) ? loaderPath.replace(/\\/g, '/') : loaderPath);
     const lines = [
       TEAMAI_ENV_START,
       '# DO NOT EDIT: This section is auto-managed by teamai',
-      `[ -f ${envShPath} ] && source ${envShPath}`,
+      `[ -f ${quoted} ] && . ${quoted}`,
       TEAMAI_ENV_END,
     ];
     return lines.join('\n');
@@ -480,61 +490,62 @@ export class EnvHandler extends ResourceHandler {
    * wrote `.zshrc`, and report a correct install as broken. Delegates to the
    * shared `utils/shell-profile.js` so `teamai uninstall` resolves the same
    * file too (#682), and follows the chain of files the order-based pick
-   * actually `source`s to reuse a candidate that already carries this
-   * scope's block, rather than injecting a duplicate every time a new file
-   * enters that chain (#693 review rounds 7-9).
+   * actually `source`s to reuse a candidate that already carries the block
+   * sourcing `sourcedPath`, rather than injecting a duplicate every time a new
+   * file enters that chain (#693 review rounds 7-9).
    */
-  detectShellProfile(envShPath: string, platform: NodeJS.Platform = process.platform): Promise<string> {
-    return resolveActiveShellProfile(envShPath, platform);
+  detectShellProfile(sourcedPath: string, platform: NodeJS.Platform = process.platform): Promise<string> {
+    return resolveActiveShellProfile(sourcedPath, platform);
   }
 
   /**
-   * Inject this scope's shell block into the profile file (idempotent).
-   *
-   * The profile keeps the user scope's block plus at most one project block,
-   * the user's first so a project value wins on a key both define (#876). A
-   * scope replaces its own block. Otherwise a project takes over another
-   * project's block, never the user scope's, which keeps the project block
-   * last-wins; a user scope goes in right before the project block. Any other
-   * blocks (a hand-edited profile) are left alone.
+   * Put the loader block into the profile file (idempotent), and take out
+   * every per-scope block an older version wrote (#1018), from this file and
+   * from every other profile file a version could have written to: one left
+   * in `.zshrc` would load its scope's env in every interactive shell, on top
+   * of what the loader picked for the directory. An unclosed block has no end
+   * to cut up to, so it is left as it is.
    */
-  private async injectShellProfile(profilePath: string, block: string, envShPath: string, scope: Scope): Promise<void> {
-    const original = await readFileSafe(profilePath) ?? '';
-    let content = original;
-
-    // An unclosed block has no end to replace up to, so it is left as it is.
-    const blocks = findEnvBlocks(content).filter((b): b is EnvBlock & { end: number } => b.end !== null);
-    let target = blocks.find((b) => envBlockReferencesDataHome(b.text, envShPath));
-    if (!target) {
-      // Only now does a project pull need the user config, so a steady-state
-      // pull never reads it.
-      const userEnvShPath = scope === 'user' ? envShPath : await userScopeEnvShPath();
-      // A block that sources no env.sh is the inline-export format from before
-      // env.sh and project scopes existed: the user scope's too.
-      const isUserBlock = (b: EnvBlock): boolean => !SOURCES_ENV_SH.test(b.text)
-        || (userEnvShPath !== null && envBlockReferencesDataHome(b.text, userEnvShPath));
-      target = blocks.find((b) => (scope === 'user' ? isUserBlock(b) : !isUserBlock(b)));
+  private async injectShellProfile(profilePath: string, block: string, loaderPath: string): Promise<void> {
+    const removed: EnvBlock[] = [];
+    const home = getUserHome();
+    const others = SHELL_PROFILE_CANDIDATE_NAMES.map((name) => path.join(home, name))
+      .filter((candidate) => !sameFile(candidate, profilePath));
+    for (const candidate of others) {
+      const original = await readFileSafe(candidate);
+      if (!original) continue;
+      const { content, dropped } = withoutOldBlocks(original, loaderPath);
+      removed.push(...dropped);
+      // Skip the write when nothing changed: this runs on every pull,
+      // including the one a SessionStart hook runs each session.
+      if (content !== original) await writeFile(candidate, content);
     }
 
-    if (target) {
-      // Replace existing block
-      content = content.substring(0, target.start) + block + content.substring(target.end);
-    } else if (scope === 'user' && blocks.length > 0) {
-      // Every block left is a project's: go in before it
-      content = content.substring(0, blocks[0].start) + block + '\n\n' + content.substring(blocks[0].start);
+    const original = await readFileSafe(profilePath) ?? '';
+    const stripped = withoutOldBlocks(original, loaderPath);
+    removed.push(...stripped.dropped);
+    let content = stripped.content;
+    const own = findEnvBlocks(content).find((b) => b.end !== null && envBlockReferencesDataHome(b.text, loaderPath));
+    if (own?.end != null) {
+      content = content.substring(0, own.start) + block + content.substring(own.end);
     } else {
-      // Append block
-      if (content.length > 0 && !content.endsWith('\n')) {
-        content += '\n';
-      }
+      if (content.length > 0 && !content.endsWith('\n')) content += '\n';
       content += '\n' + block + '\n';
     }
+    if (content !== original) await writeFile(profilePath, content);
 
-    // Skip the write when nothing changed: this runs on every pull, including
-    // the revision fast path a SessionStart hook takes each session, and the
-    // member's shell profile should not churn for it.
-    if (content === original) return;
-    await writeFile(profilePath, content);
+    // A shell in a project loaded the user scope's block too; now only a
+    // project that inherits the user scope does.
+    const userEnvSh = path.join(getTeamaiHome('user'), 'env.sh');
+    const hadUserBlock = removed.some((b) => envBlockReferencesDataHome(b.text, userEnvSh));
+    const hadProjectBlock = removed.some((b) => SOURCES_ENV_SH.test(b.text) && !envBlockReferencesDataHome(b.text, userEnvSh));
+    if (hadUserBlock && hadProjectBlock) {
+      const notice = 'User-scope env no longer loads inside project directories: each directory now gets its own scope\'s env. '
+        + 'To keep user env variables in a project, set `inheritUserScope: true` there (`teamai init <repo> --inherit-user-scope`).';
+      log.info(notice);
+      // The session-start pull is silent: debug.log keeps it.
+      log.persist(notice);
+    }
   }
 
   async removeItem(_name: string, _teamConfig: TeamaiConfig, _localConfig: LocalConfig): Promise<string[]> {
