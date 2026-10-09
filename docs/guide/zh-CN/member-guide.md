@@ -280,10 +280,11 @@ Choose namespace [1-3] (default: 1 = common):
 ```
 
 - 每种资源类型按各自维度解析：skill 用 `skills`，rule 用 `knowledge`，agent 用 `agents`。一次推送涉及多种类型时，每个维度各询问一次
-- 有 `primaryRole` 时，从 manifest 展开可用 namespace 列表
-- 无 `primaryRole` 时，skill 自动扫描团队仓库目录结构；新的 rule / agent 保留在共享根目录
+- 可用 namespace 列表由你的角色和当前激活的项目在该维度上给出，与 `pull` 下发的一致：`primaryRole` 和 `additionalRoles` 取自 `manifest/roles.yaml`，激活的项目取自 `manifest/projects.yaml`。在项目目录中新建的 rule 会进入该项目的 `knowledge` namespace，而不会发给整个团队
+- 两者都给不出时，skill 自动扫描团队仓库目录结构；新的 rule / agent 保留在共享根目录
+- 若某个激活的项目未在 `manifest/projects.yaml` 中声明，push 会报错停止（exit 2），而不会退回共享根目录：请执行 `teamai projects set <id>`，或用 `--project <id>` 或 `--role <ns>` 指定
 - 单一命名空间时自动选中；也可用 `--role <id>` 显式指定
-- 修改已有资源时自动保持原 namespace
+- 修改已有资源时自动保持原 namespace。这也包括 namespace 已不在本目录激活的 skill，例如切换项目或角色后 `pull` 因你改过而保留的副本：只要该副本是 teamai 下发的，`push` 就会列出它并推回原 namespace。若两个未激活的 namespace 都有同名 skill，push 会跳过它并在警告中列出这两个 namespace；请先激活它来自的角色或项目，再 push
 - 每个资源的落点都会打印出来，例如 `[rules] my-rule → rules/pm/my-rule.md`
 - 若 roles manifest 存在却无法给出答案，命令会报错停止，而不会退回共享根目录。未包含当前配置的角色时：请修复 `manifest/roles.yaml`、执行 `teamai roles set <role>`，或用 `--role <ns>` 显式指定。无法读取、无法解析或为空时，push 在扫描阶段即停止（exit 2），早于 `--role` 生效，因为扫描需要 manifest 才能判断哪些 namespace 属于你：请先修复 `manifest/roles.yaml`。团队仓库根本没有 `manifest/roles.yaml` 时，保持原有行为
 - `teamai push --dry-run` 会做同样的落点解析，并在同样的无法解析情况下报错，不会把真实命令会拒绝的推送报为可行
@@ -299,7 +300,7 @@ Choose namespace [1-3] (default: 1 = common):
 - 新资源绝不会覆盖已存在的资源：若解析出的 namespace 下已有同名文件，命令会报错并指出该文件：请先 pull 并修改已有副本、重命名自己的资源，或用 `--role <ns>` 换一个 namespace
 - 本目录未激活的 namespace 下的 agent 可通过落点记录继续编辑，`pull` 也会基于同一记录下发它，使本地副本与团队文件保持同步；它会像活跃 namespace 中的 agent 一样替换共享根目录的同名 agent。若已激活的 namespace 中已有同名 agent，则以它为准
 - 待评审 PR 中的资源默认沿用该 PR 的落点；但若本次 push 明确指定的 namespace 与记录的落点不同（共享根目录也算一种落点），则以命令行为准，原 PR 保持不动，并提示该冲突
-- push 开始时若无法刷新团队仓库，`--project` 会报错停止，而不会按可能已过期的 `manifest/projects.yaml` 落点；未使用 `--role` 放置的任何新资源同样如此，因为其落点来自该克隆（`manifest/roles.yaml`、它的缺失，或仓库中已有的 namespace）。请先修复 pull 再重试，或用 `--role <ns>` 显式指定 namespace。若本机的落点记录无法更新并保存，`push` 也会停止且不推送任何内容
+- push 开始时若无法刷新团队仓库，`--project` 会报错停止，而不会按可能已过期的 `manifest/projects.yaml` 落点；未使用 `--role` 放置的任何新资源同样如此，因为其落点来自该克隆（`manifest/roles.yaml`、`manifest/projects.yaml`、它们的缺失，或仓库中已有的 namespace）。请先修复 pull 再重试，或用 `--role <ns>` 显式指定 namespace。若本机的落点记录无法更新并保存，`push` 也会停止且不推送任何内容
 - 落点记录只在推送的文件进入默认分支后才写入，因此未合并即关闭的 PR 不会留下记录，无论其分支是否还在。团队删除该文件时，记录会被清除。未配置角色或项目时，共享根目录出现同名文件也会清除记录（此时你的根目录副本改为跟随该文件，`pull` 会提示）；配置了角色或项目时，放置的资源会在本机替换该共享根目录资源，记录保留。`push`、`pull` 和 `remove` 都会在读取记录前先做这一步。`teamai remove` 本身不清除记录：
 
   删除要等其 PR 合并才进入默认分支，在此之前重试 `remove` 仍会把简名解析到带 namespace 的团队文件。若该文件进入默认分支时的内容与你推送的不同（例如评审者在 squash 合并前修改了 PR），则不会写入记录，push 会提示一次；此时运行 `teamai pull`，并把该文件当作现在的团队文件来编辑

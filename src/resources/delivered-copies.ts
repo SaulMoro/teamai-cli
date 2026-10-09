@@ -115,7 +115,7 @@ export function contentHash(content: string | Buffer): string {
 }
 
 /** The recorded paths of the copy at `dest`: the file, or every file under the skill directory. */
-function recordedUnder(hashes: DeliveredHashes, dest: string): string[] {
+export function recordedUnder(hashes: DeliveredHashes, dest: string): string[] {
   return Object.keys(hashes).filter((file) => file === dest || file.startsWith(dest + path.sep));
 }
 

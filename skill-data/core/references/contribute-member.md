@@ -96,8 +96,8 @@ The doc lands in the team's `learnings/` and appears for teammates on their next
    `--role <ns>` / `--project <id>` place every new resource, not only skills: a
    new rule and a new agent land in that namespace too (a project resolves each
    from its own axis — `knowledge` for rules, `agents` for agents). Without one,
-   a new resource whose namespace cannot be resolved stays at the shared root and
-   reaches the whole team. An edit of a skill, rule or agent you received from a
+   the role and the active projects decide, and a new resource whose namespace
+   cannot be resolved stays at the shared root and reaches the whole team. An edit of a skill, rule or agent you received from a
    namespace goes back to that namespace, even when it replaces a shared item of
    the same name; the shared one is left as it is. Use `--branch <name>` when a new push must target a
    specific branch; an existing open PR keeps its recorded branch. TeamAI refuses

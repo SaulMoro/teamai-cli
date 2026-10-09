@@ -25,7 +25,7 @@ import { getDataHome, SELF_KNOWLEDGE_SCAN_KEY, SYNC_LOCK_FILENAME } from './type
 import { acquireLock, releaseLock } from './update.js';
 import { assertSafeResourceName } from './utils/path-safety.js';
 import { loadRolesManifest, resolveRoleResourceNamespaces, RolesManifestNotFoundError } from './roles.js';
-import type { ProjectsManifest } from './projects.js';
+import { loadProjectsManifest, resolveProjectResourceNamespaces, type ProjectsManifest } from './projects.js';
 import { isSafeNamespaceSegment, NAMESPACE_RULE, fallbackNamespaceError } from './manifest-schema.js';
 import {
   isAtSharedRoot, isPlaceableType, NAMESPACE_AXIS, PLACEABLE_TYPES, placedResourcePath,
@@ -68,9 +68,10 @@ type CandidateResolution =
 
 /**
  * The namespaces this user could push a new `type` into, on that type's own
- * axis: the deduplicated list from the roles manifest, or — for skills, which
- * are the only type with a detector — the namespace directories the team repo
- * already has.
+ * axis: the deduplicated union of what the roles manifest gives the role and
+ * the projects manifest gives the active projects (#1021), or — when neither
+ * gives any, for skills, which are the only type with a detector — the
+ * namespace directories the team repo already has.
  *
  * A manifest that EXISTS but cannot answer — unparseable, or missing the role
  * this directory is configured with — is a failure, not an empty list. Falling
@@ -94,6 +95,8 @@ async function namespaceCandidates(
         + 'to name the namespace for this push.',
     };
   }
+  const fromProjects = await activeProjectNamespaces(type, localConfig);
+  if (!fromProjects.ok) return fromProjects;
   if (localConfig.primaryRole) {
     try {
       const manifest = await loadRolesManifest(localConfig.repo.localPath);
@@ -116,7 +119,7 @@ async function namespaceCandidates(
             + 'Fix manifest/roles.yaml, or pass --role <ns> to name the namespace for this push.',
         };
       }
-      return { ok: true, candidates };
+      return { ok: true, candidates: [...new Set([...candidates, ...fromProjects.candidates])] };
     } catch (e) {
       if (!(e instanceof RolesManifestNotFoundError)) {
         return {
@@ -126,6 +129,8 @@ async function namespaceCandidates(
             + 'to name the namespace for this push.',
         };
       }
+      // Pull does not deliver the role id's namespace beside active projects.
+      if (fromProjects.candidates.length > 0) return fromProjects;
       // Legacy fallback: with no manifest at all a role id doubles as its
       // skills namespace. That convention only ever existed for skills. No
       // manifest validated the id as a namespace, so it is checked here.
@@ -135,9 +140,10 @@ async function namespaceCandidates(
     }
   }
 
-  // No role configured. Skills can still be placed by detecting the team repo's
-  // existing namespace directories; rules and agents have no such detector, so
-  // a new one stays at the shared root.
+  if (fromProjects.candidates.length > 0) return fromProjects;
+  // No role or project gives one. Skills can still be placed by detecting the
+  // team repo's existing namespace directories; rules and agents have no such
+  // detector, so a new one stays at the shared root.
   if (type !== 'skills') return { ok: true, candidates: [] };
   try {
     return { ok: true, candidates: await scanTeamRepoNamespaces(localConfig.repo.localPath) };
@@ -148,6 +154,41 @@ async function namespaceCandidates(
         + 'Pass --role <ns> to name the namespace for this push.',
     };
   }
+}
+
+/**
+ * The namespaces the active projects declare on `type`'s axis: where this
+ * directory's own resources live, so where a new one belongs unless a flag
+ * says otherwise (#1021). None with no active project or no projects manifest.
+ * An active project the manifest does not declare is a failure, as for
+ * `--project`: falling back would send a new rule or agent to the whole team.
+ */
+async function activeProjectNamespaces(type: PlaceableType, localConfig: LocalConfig): Promise<CandidateResolution> {
+  const activeProjects = localConfig.projects ?? [];
+  if (activeProjects.length === 0) return { ok: true, candidates: [] };
+  const axis = NAMESPACE_AXIS[type];
+  let candidates: string[];
+  try {
+    const manifest = await loadProjectsManifest(localConfig.repo.localPath);
+    if (!manifest) return { ok: true, candidates: [] };
+    candidates = resolveProjectResourceNamespaces({ manifest, activeProjects })[axis];
+  } catch (e) {
+    return {
+      ok: false,
+      message: `Cannot resolve where new ${type} should go: ${(e as Error).message}. `
+        + 'Fix manifest/projects.yaml or run `teamai projects set <id>`, or pass --project <id> or --role <ns> '
+        + 'to name the namespace for this push.',
+    };
+  }
+  const unsafe = candidates.find((namespace) => !isSafeNamespaceSegment(namespace));
+  if (unsafe !== undefined) {
+    return {
+      ok: false,
+      message: `The projects manifest declares an unusable ${axis} namespace "${unsafe}": ${NAMESPACE_RULE}. `
+        + 'Fix manifest/projects.yaml, or pass --role <ns> to name the namespace for this push.',
+    };
+  }
+  return { ok: true, candidates };
 }
 
 /**

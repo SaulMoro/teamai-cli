@@ -19,7 +19,7 @@ import { assertWithinRoot, resolveReal } from '../utils/path-safety.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 import {
   blockingEntries, deliveredSkillFiles, describeKeptDir, describeMembersDirLeft, describeMembersFile, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, keepsTrackedCopy,
-  membersLinkAt, ownsSkillDir, recordDelivered, teamaiSkillFiles, type DeliveredHashes, type DeliveryLedger,
+  membersLinkAt, ownsSkillDir, recordDelivered, recordedUnder, teamaiSkillFiles, type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
 
 /** File name used to track who has contributed (pushed) a skill. */
@@ -538,7 +538,8 @@ export class SkillsHandler extends ResourceHandler {
   async scanLocalForPush(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<ResourceItem[]> {
     const scopedNamespaces = await resolvePushSkillNamespaces(localConfig);
     const teamSkills = new Map<string, { dir: string; namespace?: string }>();
-    const blockedSkills = new Set<string>(); // Skills in non-allowed namespaces (role-based)
+    // Skills in non-allowed namespaces (role-based), with the namespaces that hold each name
+    const blockedSkills = new Map<string, string[]>();
 
     if (scopedNamespaces.length > 0) {
       // Role-based mode: load allowed namespaces and track blocked ones.
@@ -580,7 +581,7 @@ export class SkillsHandler extends ResourceHandler {
         const names = await listDirs(dirPath);
         for (const name of names) {
           if (!teamSkills.has(name)) {
-            blockedSkills.add(name);
+            blockedSkills.set(name, [...blockedSkills.get(name) ?? [], dir]);
           }
         }
       }
@@ -625,6 +626,8 @@ export class SkillsHandler extends ResourceHandler {
 
     // Collect the best candidate for each skill name across all tool directories
     const candidates = new Map<string, { sourcePath: string; mtime: number; status: ResourceItemStatus; namespace?: string }>();
+    // What pull last wrote here, read only when a blocked skill needs it.
+    let delivered: DeliveredHashes | undefined;
 
     // Scan each tool's skills directory
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
@@ -638,7 +641,6 @@ export class SkillsHandler extends ResourceHandler {
       for (const [dir, localDirPath] of localSkills) {
         if (tombstones.has(dir)) continue;
         if (pushIgnoredSkills.has(dir)) continue;
-        if (blockedSkills.has(dir)) continue; // Skip skills in non-allowed namespaces
         if (isCliOwnedSkillName(dir)) continue; // Skip CLI built-in skills, current and legacy
         if (sourceSkillNames.has(dir)) continue; // Quarantine legacy/unpinned names
         // Compare the file actually scanned, not a future deployment target:
@@ -651,9 +653,28 @@ export class SkillsHandler extends ResourceHandler {
           continue;
         }
 
-        if (teamSkills.has(dir)) {
+        // A skill in a namespace this scope doesn't select stays out, unless
+        // teamai delivered this copy: then it is an edit of that skill, which
+        // pull kept when the namespace went inactive, and it goes back there (#1020).
+        let team = teamSkills.get(dir);
+        const blockedIn = blockedSkills.get(dir);
+        if (blockedIn) {
+          delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
+          if (recordedUnder(delivered, localDirPath).length === 0) continue;
+          if (blockedIn.length > 1) {
+            warnOnce(
+              `[skills] Skipped ${dir}: teamai delivered this copy, but ${blockedIn.map((ns) => `skills/${ns}/${dir}`).join(' and ')} `
+              + 'each hold a skill of that name, and none of those namespaces is active here, so push cannot tell which one your copy came from. '
+              + 'Make the role or project it came from active (`teamai roles set` or `teamai projects set`), then push again.',
+            );
+            continue;
+          }
+          team = { dir: path.join(localConfig.repo.localPath, 'skills', blockedIn[0], dir), namespace: blockedIn[0] };
+        }
+
+        if (team) {
           // Skill exists in team repo — check if content differs
-          const teamDirPath = teamSkills.get(dir)!.dir;
+          const teamDirPath = team.dir;
           const equal = await dirTeamSubsetEqual(localDirPath, teamDirPath, [CONTRIBUTORS_FILE]);
           if (equal) continue; // This tool dir's copy is identical, skip
           // Single-repo mode: like `.teamai/rules` (see the rules scan), the
@@ -674,7 +695,7 @@ export class SkillsHandler extends ResourceHandler {
           const mtime = await getDirLatestMtime(localDirPath);
           const existing = candidates.get(dir);
           if (!existing || mtime > existing.mtime) {
-            candidates.set(dir, { sourcePath: localDirPath, mtime, status: 'modified', namespace: teamSkills.get(dir)!.namespace });
+            candidates.set(dir, { sourcePath: localDirPath, mtime, status: 'modified', namespace: team.namespace });
           }
         } else {
           // Skill does not exist in team repo — candidate for "new"
