@@ -410,7 +410,8 @@ async function loadOrBuildScopeIndex(
   // index only covered learnings, the new one covers four categories. Same
   // condition triggers rebuild when the file is missing entirely.
   const needsRebuild = !index || isLegacyIndex(index);
-  if (needsRebuild && (effectiveLearningsDir || await pathExists(path.join(localConfig.repo.localPath, 'docs')) || await pathExists(path.join(localConfig.repo.localPath, 'rules')) || await pathExists(path.join(localConfig.repo.localPath, 'skills')))) {
+  // A legacy index is rebuilt even when no source can be seen, or it would serve what it holds whole (#1006).
+  if (needsRebuild && (index || effectiveLearningsDir || await pathExists(path.join(localConfig.repo.localPath, 'docs')) || await pathExists(path.join(localConfig.repo.localPath, 'rules')) || await pathExists(path.join(localConfig.repo.localPath, 'skills')))) {
     // Votes live on the teamai-reports orphan branch for non-HTTP repos;
     // getReportsDir points at the worktree (sibling of the clone in git-kind).
     // If it isn't materialized yet, votesExist is false and vote-weighted

@@ -105,9 +105,10 @@ export function learningsRoots(localConfig: LocalConfig): LearningsRoots {
  * git/self mode switch, #808). Everything else this project owns, the queue
  * included, stays indexed. Probes the checkout, so only for index builds.
  *
- * With `unreadable`, a checkout whose owner cannot be told is left out too,
- * recorded there as a root the build was given and could not read (#1006),
- * instead of the error being thrown.
+ * With `unreadable`, a checkout whose owner cannot be told stays in its place
+ * and is recorded there as a root the build was given and could not read
+ * (#1006), instead of the error being thrown: the build reads nothing under it
+ * and puts back what the previous index held there, in that root's slot.
  */
 export async function indexableLearningsRoots(
   localConfig: LocalConfig, unreadable?: UnreadableFile[],
@@ -120,6 +121,7 @@ export async function indexableLearningsRoots(
     if (!(e instanceof ForeignCheckoutError)) {
       if (!unreadable) throw e;
       unreadable.push({ path: roots.write, reason: e instanceof Error ? e.message : String(e) });
+      return roots.read;
     }
     return roots.read.filter((root) => root !== roots.write);
   }

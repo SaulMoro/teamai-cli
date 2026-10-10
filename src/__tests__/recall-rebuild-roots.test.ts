@@ -364,6 +364,15 @@ describe('recall rebuilding an older-format index with a team manifest it cannot
     expect(warnings()).not.toContainEqual(expect.stringContaining('Search index'));
   });
 
+  it('replaces the older index when no source directory is left (#1006)', async () => {
+    fs.rmSync(path.join(repo(), 'learnings'), { recursive: true });
+    fs.rmSync(path.join(repo(), 'rules'), { recursive: true });
+
+    await recall('retry budget', {});
+
+    expect(JSON.parse(fs.readFileSync(indexPath(), 'utf8')).entries).toEqual([]);
+  });
+
   // Root reads a file whatever its mode.
   it.skipIf(process.getuid?.() === 0).each([false, true])(
     'searches nothing, not the older index, when none of the learnings left can be read (dry run: %s)',

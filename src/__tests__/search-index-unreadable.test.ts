@@ -15,7 +15,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { log } from '../utils/logger.js';
-import { buildIndex, loadIndex } from '../utils/search-index.js';
+import { buildIndex, loadIndex, type BuildIndexOptions } from '../utils/search-index.js';
 
 /**
  * The index follows what the member receives, however much smaller that is.
@@ -247,5 +247,156 @@ describe('buildIndex when a root cannot be listed (#1006)', () => {
     expect(warnings()).toEqual([
       `Search index could not read the votes in ${votesDir} (EACCES); it ranks without them until the next rebuild.`,
     ]);
+  });
+});
+
+/**
+ * A previous entry is put back only where a fresh read would put it: its path
+ * is still selected (root-level learnings and active namespaces, delivered
+ * docs, rules and skills), and it takes the precedence slot of its source,
+ * not whichever copy was collected first (#1006).
+ */
+describe('buildIndex puts a previous entry back only where a fresh read would (#1006)', () => {
+  let tmpDir: string;
+  let indexPath: string;
+  let locked: string[];
+  const doc = (title: string): string => `---\ntitle: ${title}\n---\nbody`;
+  const skill = (name: string): string => `---\nname: ${name}\ndescription: ${name}\n---\nbody`;
+  const chmodApplies = process.platform !== 'win32' && process.getuid?.() !== 0;
+  const w = (rel: string): string => path.join(tmpDir, rel);
+  const lock = async (rel: string): Promise<void> => {
+    await fse.chmod(w(rel), 0o000);
+    locked.push(w(rel));
+  };
+
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-index-kept-'));
+    indexPath = path.join(tmpDir, 'search-index.json');
+    locked = [];
+    vi.mocked(log.warn).mockClear();
+  });
+
+  afterEach(async () => {
+    for (const p of locked.reverse()) await fse.chmod(p, 0o755);
+    await fse.remove(tmpDir);
+  });
+
+  interface Row {
+    readonly name: string;
+    readonly chmod?: boolean;
+    readonly symlink?: boolean;
+    readonly files: Record<string, string>;
+    readonly first: () => BuildIndexOptions;
+    readonly change: () => Promise<void>;
+    readonly second: () => BuildIndexOptions;
+    /** `type:filename@path relative to the test directory`. */
+    readonly expected: readonly string[];
+  }
+  const rows: readonly Row[] = [
+    {
+      name: 'selection: learnings root unlistable, namespace A no longer active',
+      chmod: true,
+      files: { 'pub/root.md': doc('root'), 'pub/A/secret.md': doc('secret'), 'pub/B/b.md': doc('b') },
+      first: () => ({ learningsDirs: [w('pub')], learningsNamespaces: ['A', 'B'], indexPath }),
+      change: () => lock('pub'),
+      second: () => ({ learningsDirs: [w('pub')], learningsNamespaces: ['B'], indexPath }),
+      expected: ['learnings:root.md@pub/root.md', 'learnings:B/b.md@pub/B/b.md'],
+    },
+    {
+      name: 'selection: learnings root given unreadable, namespace A no longer active',
+      files: { 'pub/root.md': doc('root'), 'pub/A/secret.md': doc('secret'), 'pub/B/b.md': doc('b') },
+      first: () => ({ learningsDirs: [w('pub')], learningsNamespaces: ['A', 'B'], indexPath }),
+      change: () => fse.outputFile(w('pub/new.md'), doc('new')),
+      second: () => ({
+        learningsDirs: [w('pub')], learningsNamespaces: ['B'], indexPath,
+        unreadable: [{ path: w('pub'), reason: 'owner unknown' }],
+      }),
+      expected: ['learnings:root.md@pub/root.md', 'learnings:B/b.md@pub/B/b.md'],
+    },
+    {
+      name: 'selection: listed docs unreadable, b.md no longer delivered',
+      files: { 'docs/a.md': doc('a'), 'docs/b.md': doc('b') },
+      first: () => ({ docsDir: w('docs'), docFiles: ['a.md', 'b.md'], indexPath }),
+      change: async () => { await fse.remove(w('docs/a.md')); await fse.remove(w('docs/b.md')); },
+      second: () => ({ docsDir: w('docs'), docFiles: ['a.md'], indexPath }),
+      expected: ['docs:a.md@docs/a.md'],
+    },
+    {
+      name: 'selection: docs given unreadable, nothing under them read',
+      files: { 'docs/a.md': doc('a') },
+      first: () => ({ docsDir: w('docs'), docFiles: ['a.md'], indexPath }),
+      change: () => fse.outputFile(w('docs/new.md'), doc('new')),
+      second: () => ({ docsDir: w('docs'), indexPath, unreadable: [{ path: w('docs'), reason: 'manifest' }] }),
+      expected: ['docs:a.md@docs/a.md'],
+    },
+    {
+      name: 'selection: listed rules unreadable, b.md no longer delivered',
+      files: { 'rules/a.md': doc('a'), 'rules/b.md': doc('b') },
+      first: () => ({ rulesDir: w('rules'), ruleFiles: ['a.md', 'b.md'], indexPath }),
+      change: async () => { await fse.remove(w('rules/a.md')); await fse.remove(w('rules/b.md')); },
+      second: () => ({ rulesDir: w('rules'), ruleFiles: ['a.md'], indexPath }),
+      expected: ['rules:a.md@rules/a.md'],
+    },
+    {
+      name: 'selection: delivered skills unreadable, y no longer delivered',
+      files: { 'skills/x/SKILL.md': skill('x'), 'skills/y/SKILL.md': skill('y') },
+      first: () => ({ skills: { kind: 'dirs', dirs: [w('skills/x'), w('skills/y')] }, indexPath }),
+      change: async () => { await fse.remove(w('skills/x/SKILL.md')); await fse.remove(w('skills/y/SKILL.md')); },
+      second: () => ({ skills: { kind: 'dirs', dirs: [w('skills/x')] }, indexPath }),
+      expected: ['skills:x.md@skills/x/SKILL.md'],
+    },
+    {
+      name: 'selection: walked SKILL.md a dangling symlink',
+      symlink: true,
+      files: { 'skills/ns/x/SKILL.md': skill('x') },
+      first: () => ({ skillsDir: w('skills'), indexPath }),
+      change: async () => {
+        await fse.remove(w('skills/ns/x/SKILL.md'));
+        await fse.symlink(w('skills/ns/x/missing.md'), w('skills/ns/x/SKILL.md'));
+      },
+      second: () => ({ skillsDir: w('skills'), indexPath }),
+      expected: ['skills:x.md@skills/ns/x/SKILL.md'],
+    },
+    {
+      name: 'precedence: queued learning unreadable over a readable published copy',
+      chmod: true,
+      files: { 'queue/note.md': doc('queued'), 'pub/note.md': doc('published') },
+      first: () => ({ learningsDirs: [w('queue'), w('pub')], indexPath }),
+      change: () => lock('queue/note.md'),
+      second: () => ({ learningsDirs: [w('queue'), w('pub')], indexPath }),
+      expected: ['learnings:note.md@queue/note.md'],
+    },
+    {
+      name: 'precedence: queue unlistable over a readable published copy',
+      chmod: true,
+      files: { 'queue/note.md': doc('queued'), 'pub/note.md': doc('published') },
+      first: () => ({ learningsDirs: [w('queue'), w('pub')], indexPath }),
+      change: () => lock('queue'),
+      second: () => ({ learningsDirs: [w('queue'), w('pub')], indexPath }),
+      expected: ['learnings:note.md@queue/note.md'],
+    },
+    {
+      name: 'precedence: first of two same-named skills unreadable',
+      files: { 'skills/a/foo/SKILL.md': skill('foo'), 'skills/b/foo/SKILL.md': skill('foo') },
+      first: () => ({ skills: { kind: 'dirs', dirs: [w('skills/a/foo'), w('skills/b/foo')] }, indexPath }),
+      change: () => fse.remove(w('skills/a/foo/SKILL.md')),
+      second: () => ({ skills: { kind: 'dirs', dirs: [w('skills/a/foo'), w('skills/b/foo')] }, indexPath }),
+      expected: ['skills:foo.md@skills/a/foo/SKILL.md', 'skills:foo.md@skills/b/foo/SKILL.md'],
+    },
+  ];
+
+  it.each(rows.map((row) => [row.name, row] as const))('%s', async (_name, row) => {
+    if (row.chmod && !chmodApplies) return;
+    if (row.symlink && process.platform === 'win32') return;
+    for (const [rel, content] of Object.entries(row.files)) await fse.outputFile(w(rel), content);
+    await buildIndex(row.first());
+    await row.change();
+
+    await buildIndex(row.second());
+
+    const posix = (p: string): string => p.replaceAll(path.sep, '/');
+    const entries = (await loadIndex(indexPath))?.entries
+      .map((entry) => `${entry.type}:${posix(entry.filename)}@${posix(path.relative(tmpDir, entry.path ?? ''))}`).sort();
+    expect(entries).toEqual([...row.expected].sort());
   });
 });

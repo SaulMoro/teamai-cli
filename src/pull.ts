@@ -1381,7 +1381,7 @@ async function pullForScope(
       // Count what recall would find, not what every root holds: the same
       // relative path in two roots is one learning, and the index says so too.
       const counted = new Set<string>();
-      for (const dir of publishedRoots) {
+      for (const dir of publishedRoots.filter((root) => !unresolved.some((given) => given.path === root))) {
         // Only for the message: a root that cannot be listed is named by the rebuild.
         for (const name of await countLearnings(dir).catch(() => [])) counted.add(name);
       }
@@ -1431,16 +1431,17 @@ async function pullForScope(
           .catch((e: unknown) => log.warn(`[${scopeLabel}] Could not remove the search indexes of this project's other checkouts: ${unresolvedReason(e)}. `
             + 'Recall there may return what you no longer receive until you fix the cause and run `teamai pull` in each.'));
         // The docs and rules pull delivers here, not the whole trees (#707).
-        // A set that cannot be resolved counts as given and unreadable, whole.
+        // A set that cannot be resolved counts as given and unreadable, whole:
+        // the build reads nothing under it and keeps what it indexed there.
         const docFiles = await resolveDesiredDocs(localConfig.repo.localPath, roleContext?.inactiveDocsNamespaces ?? [])
-          .then(({ files }) => files, (e: unknown) => {
+          .then(({ files }): readonly string[] | undefined => files, (e: unknown) => {
             unresolved.push({ path: docsRepoDir, reason: unresolvedReason(e) });
-            return [];
+            return undefined;
           });
         const ruleFiles = await indexedRuleFiles(freshConfig, localConfig, roleContext)
           .catch((e: unknown) => {
             unresolved.push({ path: rulesRepoDir, reason: unresolvedReason(e) });
-            return [];
+            return undefined;
           });
         const elapsed = await buildIndex({
           // The queue comes first: a contribution that could not be published
