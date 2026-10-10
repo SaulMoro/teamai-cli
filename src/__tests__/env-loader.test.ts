@@ -20,6 +20,13 @@ vi.mock('../utils/logger.js', () => ({
  */
 const hasShell = (shell: string): boolean => spawnSync(shell, ['-c', 'true']).status === 0;
 
+const hasBashAtLeast = (major: number, minor: number, bash = 'bash'): boolean => {
+  const version = spawnSync(bash, ['-c', 'printf "%s %s" "${BASH_VERSINFO[0]}" "${BASH_VERSINFO[1]}"'], { encoding: 'utf-8' });
+  if (version.status !== 0) return false;
+  const [actualMajor, actualMinor] = version.stdout.trim().split(' ').map(Number);
+  return actualMajor > major || (actualMajor === major && actualMinor >= minor);
+};
+
 describe('team env by directory (#1018)', () => {
   let tmpDir: string;
   let homeDir: string;
@@ -573,7 +580,7 @@ describe('team env by directory (#1018)', () => {
       expect(terminal.stdout.trim().split('\n')).toEqual(['from-a', 'from-b']);
     });
 
-    it('switches env at the prompt after cd and keeps the member\'s PROMPT_COMMAND', async () => {
+    it.skipIf(!hasBashAtLeast(0, 0, '/bin/bash'))('switches env at the prompt after cd and keeps the member\'s scalar PROMPT_COMMAND', async () => {
       const a = await project('a');
       await handler.writeResolvedEnv([{ key: 'SHARED', value: 'project' }], teamConfig, a);
       const elsewhere = path.join(tmpDir, 'elsewhere');
@@ -582,7 +589,7 @@ describe('team env by directory (#1018)', () => {
       const env: NodeJS.ProcessEnv = {
         HOME: homeDir, PATH: process.env.PATH, SHELL: '/bin/bash', SHARED: 'mine', PROMPT_COMMAND: 'echo kept',
       };
-      const terminal = spawnSync('bash', ['-i'], {
+      const terminal = spawnSync('/bin/bash', ['-i'], {
         cwd: elsewhere, env, encoding: 'utf-8',
         input: `cd '${a.projectRoot}'\nprintenv SHARED\ncd '${elsewhere}'\nprintenv SHARED\nexit\n`,
       });
@@ -672,7 +679,7 @@ describe('team env by directory (#1018)', () => {
       expect(output.trim()).toBe('unset');
     });
 
-    it('preserves PROMPT_COMMAND arrays and removes only the loader hook when the env is unapplied', async () => {
+    it.skipIf(!hasBashAtLeast(5, 1))('preserves PROMPT_COMMAND arrays and removes only the loader hook when the env is unapplied', async () => {
       const a = await project('a');
       const b = await project('b');
       await fse.writeFile(path.join(homeDir, '.bashrc'), [
