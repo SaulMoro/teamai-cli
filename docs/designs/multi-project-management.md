@@ -501,8 +501,11 @@ holds the name. An open PR is reused for a resource only when it records the
 same destination directory this push sends the resource to; otherwise this
 push opens its own PR and leaves that one untouched. A new skill, rule or
 agent pushed without `--role` or `--project` is placed among the role ∪ active
-project namespaces on its own axis, as pull delivers them; only when they give
-none does the pre-project fallback apply. Active projects the projects
+project namespaces on its own axis, as pull delivers them. When a role is
+configured but the role and active projects give no namespace, the resource
+stays at the shared root; with no configured role and no active-project
+namespace, the pre-project fallback applies (the skills namespace scan for
+skills, shared root for rules and agents). Active projects the projects
 manifest cannot resolve (an undeclared id, or no `manifest/projects.yaml`) stop
 a push without `--role` or `--project` before it scans anything, so neither the
 skills scan nor `push --skill` treats every namespace as the member's (#1021).

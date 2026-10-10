@@ -16,10 +16,38 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { SkillsHandler } from '../resources/skills.js';
-import { scanTeamRepoNamespaces, ensureSkillFrontmatter } from '../resources/skills.js';
+import { scanTeamRepoNamespaces, ensureSkillFrontmatter, createSkillPushItem } from '../resources/skills.js';
 import { log } from '../utils/logger.js';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
+
+describe('skill push item construction', () => {
+  it.each([
+    ['scanned kept skill', 'modified', 'svc-a', true],
+    ['explicit --skill fallback', 'modified', 'svc-a', true],
+    ['legacy duplicate resolution', 'modified', 'svc-a', true],
+    ['new resource awaiting placement', 'new', undefined, false],
+  ] as const)('%s keeps its origin and relocation fields together', (_path, status, namespace, inactive) => {
+    const item = createSkillPushItem({
+      name: 'a-skill',
+      sourcePath: '/project/skills/a-skill',
+      status,
+      namespace,
+      ...(inactive ? { fromInactiveNamespace: true as const } : {}),
+    });
+
+    expect(item).toMatchObject({
+      name: 'a-skill',
+      type: 'skills',
+      sourcePath: '/project/skills/a-skill',
+      relativePath: namespace ? `skills/${namespace}/a-skill` : 'skills/a-skill',
+      status,
+      namespace,
+      ...(inactive ? { fromInactiveNamespace: true } : {}),
+    });
+    expect(item.fromInactiveNamespace).toBe(inactive ? true : undefined);
+  });
+});
 
 describe('SkillsHandler.scanLocalForPush', () => {
   let tmpDir: string;

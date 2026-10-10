@@ -15,7 +15,7 @@ import { syncTeamUpdatesToLocal } from './utils/pre-push-sync.js';
 import { getProvider } from './providers/index.js';
 import { log, spinner } from './utils/logger.js';
 import { getHandler } from './resources/index.js';
-import { scanTeamRepoNamespaces } from './resources/skills.js';
+import { createSkillPushItem, scanTeamRepoNamespaces } from './resources/skills.js';
 import { AgentsHandler } from './resources/agents.js';
 import { deliversEveryNamespace } from './resource-namespaces.js';
 import type {
@@ -1494,6 +1494,7 @@ async function pushCore(
         }
         const status: 'new' | 'modified' = copies.length > 0 ? 'modified' : 'new';
         let namespace: string | undefined;
+        let fromInactiveNamespace = false;
         if (copies.length > 0) {
           const { deliveredHashes } = await import('./pull.js');
           const { recordedOrigin, resolvePushSkillNamespaces } = await import('./resources/skills.js');
@@ -1501,6 +1502,7 @@ async function pushCore(
           // Pull records the copy under its real path.
           const record = { delivered: await deliveredHashes(localConfig) ?? {}, dest: resolveReal(skillPath), repoPath: localConfig.repo.localPath };
           let origin = await recordedOrigin(copies, record);
+          const hasRecordedOrigin = origin !== undefined;
           if (!origin && recordedUnder(record.delivered, record.dest).length === 0) {
             // A copy teamai never delivered here is tied by its name alone, so
             // only to the one skill of that name this directory is given: the
@@ -1519,20 +1521,16 @@ async function pushCore(
             return;
           }
           namespace = origin?.namespace;
+          fromInactiveNamespace = hasRecordedOrigin;
         }
 
-        const relPath = namespace
-          ? `skills/${namespace}/${skillName}`
-          : `skills/${skillName}`;
-
-        matchedItem = {
+        matchedItem = createSkillPushItem({
           name: skillName,
-          type: 'skills',
           sourcePath: skillPath,
-          relativePath: relPath,
           status,
           namespace,
-        };
+          ...fromInactiveNamespace ? { fromInactiveNamespace: true } : {},
+        });
         log.debug(`Force-pushing skill from explicit path: ${skillPath}`);
       } else {
         const skillNames = allItems

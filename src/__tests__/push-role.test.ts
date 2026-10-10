@@ -148,7 +148,8 @@ vi.mock('../utils/logger.js', () => ({
   })),
 }));
 
-vi.mock('../resources/skills.js', () => ({
+vi.mock('../resources/skills.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../resources/skills.js')>(),
   scanTeamRepoNamespaces: vi.fn().mockResolvedValue([]),
 }));
 

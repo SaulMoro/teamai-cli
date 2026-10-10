@@ -315,6 +315,22 @@ describe('push --skill sends a skill to the team skill it came from', () => {
     expect(pushedFiles()).not.toContain('skills/archive/a-skill/SKILL.md');
   });
 
+  it('keeps an inactive delivered skill at its origin with --role', () => {
+    commitOnTeam('skills/svc-a/a-skill/SKILL.md', `${skillMd('a-skill')}\nThe svc-a version.\n`);
+    expect(run(['pull']).code).toBe(0);
+    fs.appendFileSync(path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md'), '\nEdited after svc-a became inactive.\n');
+    expect(run(['projects', 'set', 'svc-b']).code).toBe(0);
+    expect(run(['pull']).output).toContain('Kept skill "a-skill"');
+    writeFile(path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md'), `${skillMd('a-skill')}\nThe svc-a version.\n`);
+    writeFile(path.join(project, '.claude', 'skills', 'a-skill', 'CONTRIBUTORS'), 'testuser\n');
+
+    const pushed = run(['push', '--all', '--skill', path.join(project, '.claude', 'skills', 'a-skill'), '--role', 'platform']);
+
+    expect(pushed.output).toContain('to:   skills/svc-a/a-skill');
+    expect(pushedFiles()).toContain('skills/svc-a/a-skill/CONTRIBUTORS');
+    expect(pushedFiles()).not.toContain('skills/platform/a-skill/SKILL.md');
+  });
+
   it('asks for --role instead of guessing when several namespaces hold a name it never delivered', () => {
     commitOnTeam('skills/archive/x-skill/SKILL.md', skillMd('x-skill'));
     commitOnTeam('skills/svc-b/x-skill/SKILL.md', skillMd('x-skill'));

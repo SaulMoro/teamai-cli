@@ -404,6 +404,28 @@ export async function recordedOrigin<TCopy extends { dir: string }>(
   return matched.length === 1 ? matched[0] : undefined;
 }
 
+/** Build a skill push item with the origin fields shared by every push path. */
+export function createSkillPushItem(input: {
+  name: string;
+  sourcePath: string;
+  status: ResourceItemStatus;
+  namespace?: string;
+  fromInactiveNamespace?: true;
+}): ResourceItem {
+  const relativePath = input.namespace
+    ? `skills/${input.namespace}/${input.name}`
+    : `skills/${input.name}`;
+  return {
+    name: input.name,
+    type: 'skills',
+    sourcePath: input.sourcePath,
+    relativePath,
+    status: input.status,
+    namespace: input.namespace,
+    ...input.fromInactiveNamespace ? { fromInactiveNamespace: true } : {},
+  };
+}
+
 /**
  * Say why push leaves out a copy teamai delivered: its record ties it to none,
  * or to more than one, of the same-named team skills `copies`, so writing it
@@ -701,8 +723,8 @@ export class SkillsHandler extends ResourceHandler {
         }
 
         // A skill in a namespace this scope doesn't select stays out, unless
-        // teamai delivered this copy: then it is an edit of that skill, which
-        // pull kept when the namespace went inactive, and it goes back there (#1020).
+        // teamai delivered this copy: then it is an edit of that skill and its
+        // recorded origin cannot be moved by --role/--project (#1020).
         // A copy teamai delivered goes only to the team skill its record matches
         // a version of, shared-root, active or not; a same-named skill that
         // replaced the deleted one is not its origin.
@@ -732,6 +754,7 @@ export class SkillsHandler extends ResourceHandler {
           }
           teamSkill = origin;
           isOriginChecked = true;
+          fromInactiveNamespace = true;
         }
         if (blockedCopies.length > 0) {
           delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
@@ -746,10 +769,8 @@ export class SkillsHandler extends ResourceHandler {
               warnUnprovenOrigin(dir, copies, localConfig.repo.localPath);
               continue;
             }
-            if (origin !== teamSkill) {
-              teamSkill = origin;
-              fromInactiveNamespace = true;
-            }
+            if (origin !== teamSkill) teamSkill = origin;
+            fromInactiveNamespace = true;
             isOriginChecked = true;
           }
         }
@@ -761,10 +782,13 @@ export class SkillsHandler extends ResourceHandler {
           if (equal) continue; // This tool dir's copy is identical, skip
           if (!isOriginChecked) {
             delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
-            if (recordedUnder(delivered, localDirPath).length > 0
-              && !await recordedOrigin([teamSkill], { delivered, dest: localDirPath, repoPath: localConfig.repo.localPath })) {
-              warnUnprovenOrigin(dir, [teamSkill], localConfig.repo.localPath);
-              continue;
+            if (recordedUnder(delivered, localDirPath).length > 0) {
+              const origin = await recordedOrigin([teamSkill], { delivered, dest: localDirPath, repoPath: localConfig.repo.localPath });
+              if (!origin) {
+                warnUnprovenOrigin(dir, [teamSkill], localConfig.repo.localPath);
+                continue;
+              }
+              fromInactiveNamespace = true;
             }
           }
           // Single-repo mode: like `.teamai/rules` (see the rules scan), the
@@ -810,17 +834,13 @@ export class SkillsHandler extends ResourceHandler {
     // Convert candidates map to items array
     const items: ResourceItem[] = [];
     for (const [name, candidate] of candidates) {
-      const ns = candidate.namespace ?? (candidate.status === 'new' ? undefined : undefined);
-      const relPath = ns ? `skills/${ns}/${name}` : `skills/${name}`;
-      items.push({
+      items.push(createSkillPushItem({
         name,
-        type: 'skills',
         sourcePath: candidate.sourcePath,
-        relativePath: relPath,
         status: candidate.status,
-        namespace: ns,
+        namespace: candidate.namespace,
         ...candidate.fromInactiveNamespace ? { fromInactiveNamespace: true } : {},
-      });
+      }));
     }
 
     return items;

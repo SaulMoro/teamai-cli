@@ -281,7 +281,7 @@ Choose namespace [1-3] (default: 1 = common):
 
 - 每种资源类型按各自维度解析：skill 用 `skills`，rule 用 `knowledge`，agent 用 `agents`。一次推送涉及多种类型时，每个维度各询问一次
 - 可用 namespace 列表由你的角色和当前激活的项目在该维度上给出，与 `pull` 下发的一致：`primaryRole` 和 `additionalRoles` 取自 `manifest/roles.yaml`，激活的项目取自 `manifest/projects.yaml`。在项目目录中新建的 rule 会进入该项目的 `knowledge` namespace，而不会发给整个团队
-- 两者都给不出时，skill 自动扫描团队仓库目录结构；新的 rule / agent 保留在共享根目录
+- 已配置角色及激活项目都没有提供 skill namespace 时，新 skill 保留在共享根目录。未配置角色且激活项目也没有提供 namespace 时，skill 才会使用扫描团队仓库现有 namespace 的回退方式；新的 rule / agent 保留在共享根目录
 - 若某个激活的项目未在 `manifest/projects.yaml` 中声明，任何未带 `--role` 或 `--project` 的 push 都会报错停止（exit 2），而不会退回共享根目录，也不会把你的 skill 匹配到另一个项目的同名 skill：请执行 `teamai projects set <id>`，或用 `--project <id>` 或 `--role <ns>` 指定。有激活项目但 `manifest/projects.yaml` 缺失时同样如此：请恢复该文件，或用 `--role <ns>` 指定
 - 单一命名空间时自动选中；也可用 `--role <id>` 显式指定
 - 修改已有资源时自动保持原 namespace。这也包括 namespace 已不在本目录激活的 skill，例如切换项目或角色后 `pull` 因你改过而保留的副本：只要该副本是 teamai 下发的，`push` 就会列出它并推回它来自的 namespace，即使带了 `--role` 或 `--project`、即使共享根目录或激活的 namespace 中有同名 skill 也是如此。teamai 记录的版本决定它来自哪个团队 skill，即使队友之后改过该 skill。与 teamai 下发时完全一致的副本不算修改，push 不会列出。若记录的版本无法唯一对应某个同名团队 skill（例如它来自的 skill 已被删除，而共享根目录或另一个 namespace——无论是否激活——现在有同名 skill），push 会跳过它并在警告中列出它们，而不会覆盖；请先激活它来自的角色或项目，或使用 `--skill <path> --role <ns>`。`push --skill <path>` 以同样方式确定对应的团队 skill；若 teamai 没有从持有该名称的 namespace 下发该副本的记录，它会报错停止（exit 2）并要求使用 `--role <ns>`，而不会自行挑选一个。teamai 从未下发过的副本只会对应共享根目录或激活 namespace 中唯一的同名 skill
