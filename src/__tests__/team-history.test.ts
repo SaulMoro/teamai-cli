@@ -58,6 +58,10 @@ describe('team history proof', () => {
     expect(await historicalVersions(repo, 'never/there.md')).toEqual([]);
   });
 
+  it('stops current-lifetime proof at the latest deletion', async () => {
+    expect(await historicalVersions(repo, 'rules/a.md', { currentLifetime: true })).toEqual([]);
+  });
+
   it('computes the blob id git gives a content', async () => {
     fs.writeFileSync(path.join(repo, 'probe.txt'), 'probe\n');
     expect(await blobIdOf(repo, 'probe\n')).toBe(git('hash-object', 'probe.txt'));

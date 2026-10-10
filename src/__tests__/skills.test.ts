@@ -45,7 +45,7 @@ describe('skill push item construction', () => {
       namespace,
       ...(inactive ? { fromInactiveNamespace: true } : {}),
     });
-    expect(item.fromInactiveNamespace).toBe(inactive ? true : undefined);
+    expect(item!.fromInactiveNamespace).toBe(inactive ? true : undefined);
   });
 });
 

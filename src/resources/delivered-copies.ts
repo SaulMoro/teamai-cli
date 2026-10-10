@@ -174,7 +174,7 @@ export async function isRecordedFromTeamSkill(
   const recorded = previous[path.join(dest, SKILL_MD)];
   if (recorded === undefined) return false;
   const { withSkillFrontmatter } = await import('./skills.js');
-  for (const version of await historicalVersions(repoPath, `${teamDir}/${SKILL_MD}`) ?? []) {
+  for (const version of await historicalVersions(repoPath, `${teamDir}/${SKILL_MD}`, { currentLifetime: true }) ?? []) {
     const bytes = await readBlob(repoPath, version.blob);
     if (bytes === null) continue;
     const text = bytes.toString('utf-8');

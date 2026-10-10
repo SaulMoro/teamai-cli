@@ -411,7 +411,15 @@ export function createSkillPushItem(input: {
   status: ResourceItemStatus;
   namespace?: string;
   fromInactiveNamespace?: true;
-}): ResourceItem {
+  deliveryRecorded?: true;
+  originProven?: true;
+  originCandidates?: readonly { dir: string }[];
+  repoPath?: string;
+}): ResourceItem | undefined {
+  if (input.deliveryRecorded && (!input.originProven || input.status === 'new')) {
+    warnUnprovenOrigin(input.name, input.originCandidates ?? [], input.repoPath ?? process.cwd());
+    return undefined;
+  }
   const relativePath = input.namespace
     ? `skills/${input.namespace}/${input.name}`
     : `skills/${input.name}`;
@@ -435,10 +443,8 @@ function warnUnprovenOrigin(name: string, copies: readonly { dir: string }[], re
   const holders = copies.map((copy) => path.relative(repoPath, copy.dir).split(path.sep).join('/')).join(' and ');
   warnOnce(
     `[skills] Skipped ${name}: teamai delivered this copy, but its record matches `
-    + `${copies.length === 1 ? `no version of ${holders}` : `no single one of ${holders}`}, `
-    + 'so push cannot tell which team skill your copy came from. '
-    + 'If it came from a role or project that is not active here, make it active (`teamai roles set` or `teamai projects set`); '
-    + 'otherwise push it with `teamai push --skill <path> --role <ns>` to name its namespace.',
+    + `${copies.length === 0 ? 'no current team skill' : copies.length === 1 ? `no version of ${holders}` : `no single one of ${holders}`}, `
+    + 'so push cannot prove where it came from. To send the edit as a new skill, copy it under a new name and push that.',
   );
 }
 
@@ -694,6 +700,7 @@ export class SkillsHandler extends ResourceHandler {
     // Collect the best candidate for each skill name across all tool directories
     const candidates = new Map<string, {
       sourcePath: string; mtime: number; status: ResourceItemStatus; namespace?: string; fromInactiveNamespace?: true;
+      deliveryRecorded?: true; originProven?: true; originCandidates?: readonly { dir: string }[];
     }>();
     // What pull last wrote here, read only when a blocked skill needs it.
     let delivered: DeliveredHashes | undefined;
@@ -730,6 +737,8 @@ export class SkillsHandler extends ResourceHandler {
         // replaced the deleted one is not its origin.
         let teamSkill = teamSkills.get(dir);
         let fromInactiveNamespace = false;
+        delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
+        const deliveryRecorded = recordedUnder(delivered, localDirPath).length > 0;
         const blockedCopies = blockedSkills.get(dir) ?? [];
         let isOriginChecked = false;
         const legacyCopies = legacyTeamSkills.get(dir) ?? [];
@@ -812,10 +821,16 @@ export class SkillsHandler extends ResourceHandler {
             candidates.set(dir, {
               sourcePath: localDirPath, mtime, status: 'modified', namespace: teamSkill.namespace,
               ...fromInactiveNamespace ? { fromInactiveNamespace: true } : {},
+              ...deliveryRecorded ? { deliveryRecorded: true } : {},
+              ...fromInactiveNamespace ? { originProven: true, originCandidates: [teamSkill] } : {},
             });
           }
         } else {
           // Skill does not exist in team repo — candidate for "new"
+          if (deliveryRecorded) {
+            warnUnprovenOrigin(dir, [], localConfig.repo.localPath);
+            continue;
+          }
           const existing = candidates.get(dir);
           if (!existing) {
             const mtime = await getDirLatestMtime(localDirPath);
@@ -834,13 +849,18 @@ export class SkillsHandler extends ResourceHandler {
     // Convert candidates map to items array
     const items: ResourceItem[] = [];
     for (const [name, candidate] of candidates) {
-      items.push(createSkillPushItem({
+      const item = createSkillPushItem({
         name,
         sourcePath: candidate.sourcePath,
         status: candidate.status,
         namespace: candidate.namespace,
         ...candidate.fromInactiveNamespace ? { fromInactiveNamespace: true } : {},
-      }));
+        ...candidate.deliveryRecorded ? { deliveryRecorded: true } : {},
+        ...candidate.originProven ? { originProven: true } : {},
+        originCandidates: candidate.originCandidates,
+        repoPath: localConfig.repo.localPath,
+      });
+      if (item) items.push(item);
     }
 
     return items;

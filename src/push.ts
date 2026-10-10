@@ -1495,14 +1495,15 @@ async function pushCore(
         const status: 'new' | 'modified' = copies.length > 0 ? 'modified' : 'new';
         let namespace: string | undefined;
         let fromInactiveNamespace = false;
+        const { deliveredHashes } = await import('./pull.js');
+        const { recordedOrigin, resolvePushSkillNamespaces } = await import('./resources/skills.js');
+        const { recordedUnder } = await import('./resources/delivered-copies.js');
+        // Pull records the copy under its real path.
+        const record = { delivered: await deliveredHashes(localConfig) ?? {}, dest: resolveReal(skillPath), repoPath: localConfig.repo.localPath };
+        const deliveryRecorded = recordedUnder(record.delivered, record.dest).length > 0;
+        let origin = copies.length > 0 ? await recordedOrigin(copies, record) : undefined;
+        const hasRecordedOrigin = origin !== undefined;
         if (copies.length > 0) {
-          const { deliveredHashes } = await import('./pull.js');
-          const { recordedOrigin, resolvePushSkillNamespaces } = await import('./resources/skills.js');
-          const { recordedUnder } = await import('./resources/delivered-copies.js');
-          // Pull records the copy under its real path.
-          const record = { delivered: await deliveredHashes(localConfig) ?? {}, dest: resolveReal(skillPath), repoPath: localConfig.repo.localPath };
-          let origin = await recordedOrigin(copies, record);
-          const hasRecordedOrigin = origin !== undefined;
           if (!origin && recordedUnder(record.delivered, record.dest).length === 0) {
             // A copy teamai never delivered here is tied by its name alone, so
             // only to the one skill of that name this directory is given: the
@@ -1511,7 +1512,7 @@ async function pushCore(
             const given = copies.filter((copy) => !copy.namespace || !scoped || scoped.includes(copy.namespace));
             if (given.length === 1) origin = given[0];
           }
-          if (!origin && !options.role && !options.project) {
+          if (!origin && !deliveryRecorded && !options.role && !options.project) {
             log.error(
               `[skills] Cannot tell which team skill ${skillPath} is: teamai has no record of delivering this copy from `
               + `${copies.map((copy) => path.relative(localConfig.repo.localPath, copy.dir).split(path.sep).join('/')).join(' or ')}. `
@@ -1524,13 +1525,19 @@ async function pushCore(
           fromInactiveNamespace = hasRecordedOrigin;
         }
 
-        matchedItem = createSkillPushItem({
+        const constructed = createSkillPushItem({
           name: skillName,
           sourcePath: skillPath,
           status,
           namespace,
           ...fromInactiveNamespace ? { fromInactiveNamespace: true } : {},
+          ...deliveryRecorded ? { deliveryRecorded: true } : {},
+          ...hasRecordedOrigin ? { originProven: true } : {},
+          originCandidates: copies,
+          repoPath: localConfig.repo.localPath,
         });
+        if (!constructed) return;
+        matchedItem = constructed;
         log.debug(`Force-pushing skill from explicit path: ${skillPath}`);
       } else {
         const skillNames = allItems

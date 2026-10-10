@@ -302,6 +302,23 @@ describe('push an edit of a skill pull kept after a project switch (#1020)', () 
     expect(pushed.output).toContain('No new or modified resources to push');
     expect(pushedFiles()).toEqual([]);
   });
+
+  it.each([
+    { label: '--role', flags: (_skillPath: string) => ['--role', 'platform'] },
+    { label: '--project', flags: (_skillPath: string) => ['--project', 'platform'] },
+    { label: '--skill with --role', flags: (skillPath: string) => ['--skill', skillPath, '--role', 'platform'] },
+    { label: '--skill with --project', flags: (skillPath: string) => ['--skill', skillPath, '--project', 'platform'] },
+  ])('does not route an ambiguous delivered origin with $label', ({ flags }) => {
+    const skillPath = path.join(project, '.claude', 'skills', 'a-skill');
+    fs.appendFileSync(path.join(skillPath, 'SKILL.md'), '\nEdited after delivery.\n');
+    commitOnTeam('skills/svc-b/a-skill/SKILL.md', skillMd('a-skill'));
+
+    const pushed = run(['push', '--all', ...flags(skillPath)]);
+
+    expect(pushed.output).toContain('Skipped a-skill');
+    expect(pushed.output).toContain('copy it under a new name and push that');
+    expect(pushedFiles()).toEqual([]);
+  });
 });
 
 describe('push --skill sends a skill to the team skill it came from', () => {
@@ -349,6 +366,17 @@ describe('push --skill sends a skill to the team skill it came from', () => {
 });
 
 describe('push --skill refuses a copy its record does not tie to a team skill', () => {
+  const selectors = [
+    { label: 'without flags', flags: (_skillPath: string) => [] as string[] },
+    { label: 'with --role', flags: (_skillPath: string) => ['--role', 'platform'] },
+    { label: 'with --project', flags: (_skillPath: string) => ['--project', 'platform'] },
+    { label: 'with --skill', flags: (skillPath: string) => ['--skill', skillPath] },
+    { label: 'with --skill and --role', flags: (skillPath: string) => ['--skill', skillPath, '--role', 'platform'] },
+    { label: 'with --skill and --project', flags: (skillPath: string) => ['--skill', skillPath, '--project', 'platform'] },
+  ];
+  const unprovenOrigins = (['deleted', 'recreated', 'ambiguous'] as const).flatMap((state) =>
+    selectors.map((selector) => ({ state, ...selector })));
+
   it('asks for --role for a copy it never delivered whose name only an inactive namespace holds', () => {
     writeFile(path.join(project, '.claude', 'skills', 'b-skill', 'SKILL.md'), `${skillMd('b-skill')}\nMy own.\n`);
 
@@ -359,15 +387,19 @@ describe('push --skill refuses a copy its record does not tie to a team skill', 
     expect(pushedFiles()).toEqual([]);
   });
 
-  it('asks for --role when the only team skill of the name is not the one it delivered', () => {
-    fs.appendFileSync(path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md'), '\nEdited while on svc-a.\n');
-    commitOnTeam('skills/svc-a/a-skill', null);
-    commitOnTeam('skills/platform/a-skill/SKILL.md', `${skillMd('a-skill')}\nAn unrelated skill.\n`);
+  it.each(unprovenOrigins)('does not route a $state delivered origin $label', ({ state, flags }) => {
+    const skillPath = path.join(project, '.claude', 'skills', 'a-skill');
+    fs.appendFileSync(path.join(skillPath, 'SKILL.md'), '\nEdited after delivery.\n');
+    if (state === 'deleted' || state === 'recreated') commitOnTeam('skills/svc-a/a-skill', null);
+    if (state === 'recreated') {
+      commitOnTeam('skills/svc-a/a-skill/SKILL.md', `${skillMd('a-skill')}\nUnrelated recreated skill.\n`);
+    }
+    if (state === 'ambiguous') commitOnTeam('skills/svc-b/a-skill/SKILL.md', skillMd('a-skill'));
 
-    const pushed = run(['push', '--all', '--skill', path.join(project, '.claude', 'skills', 'a-skill')]);
+    const pushed = run(['push', '--all', ...flags(skillPath)]);
 
-    expect(pushed.code).toBe(2);
-    expect(pushed.output).toContain('Pass --role <ns>');
+    expect(pushed.output).toContain('Skipped a-skill');
+    expect(pushed.output).toContain('copy it under a new name and push that');
     expect(pushedFiles()).toEqual([]);
   });
 });
