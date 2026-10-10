@@ -612,6 +612,10 @@ export class SkillsHandler extends ResourceHandler {
   async scanLocalForPush(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<ResourceItem[]> {
     const scopedNamespaces = await resolvePushSkillNamespaces(localConfig);
     const teamSkills = new Map<string, { dir: string; namespace?: string }>();
+    const allTeamSkills = new Map<string, { dir: string; namespace?: string }[]>();
+    const addTeamSkill = (name: string, copy: { dir: string; namespace?: string }): void => {
+      allTeamSkills.set(name, [...allTeamSkills.get(name) ?? [], copy]);
+    };
     // In legacy mode, pull can deliver one of several same-named skills. Keep
     // every source so its delivery record can identify the right destination.
     const legacyTeamSkills = new Map<string, { dir: string; namespace?: string }[]>();
@@ -630,7 +634,9 @@ export class SkillsHandler extends ResourceHandler {
         const hasSkillMd = await pathExists(path.join(dirPath, 'SKILL.md'));
         if (hasSkillMd) {
           // Root-level flat skill — shared across all roles
-          teamSkills.set(dir, { dir: dirPath });
+          const copy = { dir: dirPath };
+          addTeamSkill(dir, copy);
+          teamSkills.set(dir, copy);
         }
       }
 
@@ -643,8 +649,10 @@ export class SkillsHandler extends ResourceHandler {
         const names = await listDirs(teamSkillsNsDir);
         for (const name of names) {
           const dir = path.join(teamSkillsNsDir, name);
-          if (!teamSkills.get(name)?.namespace && await pathExists(path.join(dir, SKILL_MD))) {
-            teamSkills.set(name, { dir, namespace });
+          if (await pathExists(path.join(dir, SKILL_MD))) {
+            const copy = { dir, namespace };
+            addTeamSkill(name, copy);
+            if (!teamSkills.get(name)?.namespace) teamSkills.set(name, copy);
           }
         }
       }
@@ -658,7 +666,11 @@ export class SkillsHandler extends ResourceHandler {
         const names = await listDirs(dirPath);
         for (const name of names) {
           // A shared-root or active skill of the name does not decide alone: the copy may have come from here (#1020).
-          blockedSkills.set(name, [...blockedSkills.get(name) ?? [], { dir: path.join(dirPath, name), namespace: dir }]);
+          const skillDir = path.join(dirPath, name);
+          if (!await pathExists(path.join(skillDir, SKILL_MD))) continue;
+          const copy = { dir: skillDir, namespace: dir };
+          addTeamSkill(name, copy);
+          blockedSkills.set(name, [...blockedSkills.get(name) ?? [], copy]);
         }
       }
     } else {
@@ -672,6 +684,7 @@ export class SkillsHandler extends ResourceHandler {
         if (hasSkillMd) {
           // Flat skill
           const candidate = { dir: dirPath };
+          addTeamSkill(dir, candidate);
           legacyTeamSkills.set(dir, [...legacyTeamSkills.get(dir) ?? [], candidate]);
           teamSkills.set(dir, candidate);
         } else {
@@ -679,6 +692,8 @@ export class SkillsHandler extends ResourceHandler {
           const subDirs = await listDirs(dirPath);
           for (const subDir of subDirs) {
             const candidate = { dir: path.join(dirPath, subDir), namespace: dir };
+            if (!await pathExists(path.join(candidate.dir, SKILL_MD))) continue;
+            addTeamSkill(subDir, candidate);
             legacyTeamSkills.set(subDir, [...legacyTeamSkills.get(subDir) ?? [], candidate]);
             if (!teamSkills.has(subDir)) {
               teamSkills.set(subDir, candidate);
@@ -704,9 +719,10 @@ export class SkillsHandler extends ResourceHandler {
       return [];
     }
 
-    // Collect the best candidate for each skill name across all tool directories
+    // Delivered copies are keyed by their proven team destination. New skills
+    // keep the existing name-based placement and deduplication behavior.
     const candidates = new Map<string, {
-      sourcePath: string; mtime: number; status: ResourceItemStatus; namespace?: string; fromInactiveNamespace?: true;
+      name: string; sourcePath: string; mtime: number; status: ResourceItemStatus; namespace?: string; fromInactiveNamespace?: true;
       deliveryRecorded?: true; originProven?: true; originCandidates?: readonly { dir: string }[];
     }>();
     // What pull last wrote here, read only when a blocked skill needs it.
@@ -746,10 +762,22 @@ export class SkillsHandler extends ResourceHandler {
         let fromInactiveNamespace = false;
         delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
         const deliveryRecorded = recordedUnder(delivered, localDirPath).length > 0;
-        const blockedCopies = blockedSkills.get(dir) ?? [];
         let isOriginChecked = false;
+        if (deliveryRecorded) {
+          if (await isUneditedSkillCopy(delivered, localDirPath)) continue;
+          const copies = allTeamSkills.get(dir) ?? [];
+          const origin = await recordedOrigin(copies, { delivered, dest: localDirPath, repoPath: localConfig.repo.localPath });
+          if (!origin) {
+            warnUnprovenOrigin(dir, copies, localConfig.repo.localPath);
+            continue;
+          }
+          teamSkill = origin;
+          isOriginChecked = true;
+          fromInactiveNamespace = true;
+        }
+        const blockedCopies = blockedSkills.get(dir) ?? [];
         const legacyCopies = legacyTeamSkills.get(dir) ?? [];
-        if (legacyCopies.length > 1) {
+        if (!deliveryRecorded && legacyCopies.length > 1) {
           delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
           if (recordedUnder(delivered, localDirPath).length === 0) {
             const holders = legacyCopies.map((copy) => path.relative(localConfig.repo.localPath, copy.dir)
@@ -772,7 +800,7 @@ export class SkillsHandler extends ResourceHandler {
           isOriginChecked = true;
           fromInactiveNamespace = true;
         }
-        if (blockedCopies.length > 0) {
+        if (!deliveryRecorded && blockedCopies.length > 0) {
           delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
           if (recordedUnder(delivered, localDirPath).length === 0) {
             if (!teamSkill) continue;
@@ -823,14 +851,22 @@ export class SkillsHandler extends ResourceHandler {
 
           // Content differs — candidate for "modified"
           const mtime = await getDirLatestMtime(localDirPath);
-          const existing = candidates.get(dir);
+          const candidateKey = deliveryRecorded ? `destination:${teamSkill.dir}` : `name:${dir}`;
+          const existing = candidates.get(candidateKey);
           if (!existing || mtime > existing.mtime) {
-            candidates.set(dir, {
-              sourcePath: localDirPath, mtime, status: 'modified', namespace: teamSkill.namespace,
+            if (existing && !await dirContentEqual(existing.sourcePath, localDirPath, [CONTRIBUTORS_FILE])) {
+              warnOnce(`[skills] Skipped ${dir} at ${existing.sourcePath}: another edited copy for `
+                + `${path.relative(localConfig.repo.localPath, teamSkill.dir).split(path.sep).join('/')} has newer content.`);
+            }
+            candidates.set(candidateKey, {
+              name: dir, sourcePath: localDirPath, mtime, status: 'modified', namespace: teamSkill.namespace,
               ...fromInactiveNamespace ? { fromInactiveNamespace: true } : {},
               ...deliveryRecorded ? { deliveryRecorded: true } : {},
               ...fromInactiveNamespace ? { originProven: true, originCandidates: [teamSkill] } : {},
             });
+          } else if (deliveryRecorded && !await dirContentEqual(existing.sourcePath, localDirPath, [CONTRIBUTORS_FILE])) {
+            warnOnce(`[skills] Skipped ${dir} at ${localDirPath}: another edited copy for `
+              + `${path.relative(localConfig.repo.localPath, teamSkill.dir).split(path.sep).join('/')} has newer content.`);
           }
         } else {
           // Skill does not exist in team repo — candidate for "new"
@@ -838,15 +874,15 @@ export class SkillsHandler extends ResourceHandler {
             warnUnprovenOrigin(dir, [], localConfig.repo.localPath);
             continue;
           }
-          const existing = candidates.get(dir);
+          const existing = candidates.get(`name:${dir}`);
           if (!existing) {
             const mtime = await getDirLatestMtime(localDirPath);
-            candidates.set(dir, { sourcePath: localDirPath, mtime, status: 'new' });
+            candidates.set(`name:${dir}`, { name: dir, sourcePath: localDirPath, mtime, status: 'new' });
           } else if (existing.status === 'new') {
             // Multiple tool dirs have the same new skill — pick latest mtime
             const mtime = await getDirLatestMtime(localDirPath);
             if (mtime > existing.mtime) {
-              candidates.set(dir, { sourcePath: localDirPath, mtime, status: 'new' });
+              candidates.set(`name:${dir}`, { name: dir, sourcePath: localDirPath, mtime, status: 'new' });
             }
           }
         }
@@ -855,9 +891,9 @@ export class SkillsHandler extends ResourceHandler {
 
     // Convert candidates map to items array
     const items: ResourceItem[] = [];
-    for (const [name, candidate] of candidates) {
+    for (const candidate of candidates.values()) {
       const item = createSkillPushItem({
-        name,
+        name: candidate.name,
         sourcePath: candidate.sourcePath,
         status: candidate.status,
         namespace: candidate.namespace,

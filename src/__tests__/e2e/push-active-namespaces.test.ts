@@ -5,6 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -41,6 +42,21 @@ function skillMd(name: string): string {
 function setConfig(patch: Record<string, unknown>): void {
   const file = path.join(project, '.teamai', 'config.yaml');
   writeFile(file, YAML.stringify({ ...YAML.parse(fs.readFileSync(file, 'utf8')), ...patch }));
+}
+
+function recordDeliveredCopies(entries: Record<string, string>): void {
+  const file = path.join(project, '.teamai', 'state.json');
+  const state = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+    lastPullByWorkspace: Record<string, { delivered?: Record<string, string> }>;
+  };
+  const record = Object.values(state.lastPullByWorkspace)[0];
+  if (!record) throw new Error('project delivery record is missing');
+  record.delivered = { ...record.delivered, ...entries };
+  writeFile(file, `${JSON.stringify(state, null, 2)}\n`);
+}
+
+function contentHash(content: string): string {
+  return crypto.createHash('sha256').update(content).digest('hex');
 }
 
 /** Commit a file (null: its removal) straight onto the remote's default branch, as a teammate would. */
@@ -124,6 +140,36 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 describe('push an edit of a skill pull kept after a project switch (#1020)', () => {
+  it('pushes two tool edits to their distinct delivered destinations', () => {
+    const svcB = `${skillMd('a-skill')}\nThe svc-b version.\n`;
+    commitOnTeam('skills/svc-b/a-skill/SKILL.md', svcB);
+    commitOnTeam('teamai.yaml', [
+      'team: push-active-ns',
+      `repo: ${origin}`,
+      'provider: git',
+      'usageReport: false',
+      'toolPaths:',
+      '  claude:',
+      '    skills: .claude/skills',
+      '  codex:',
+      '    skills: .codex/skills',
+      '',
+    ].join('\n'));
+    git(['pull', '-q', 'origin', 'main'], path.join(project, '.teamai', 'team-repo'));
+    const codexSkill = path.join(project, '.codex', 'skills', 'a-skill');
+    writeFile(path.join(codexSkill, 'SKILL.md'), `${svcB}\nCodex edit.\n`);
+    fs.appendFileSync(path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md'), '\nClaude edit.\n');
+    recordDeliveredCopies({ [path.join(codexSkill, 'SKILL.md')]: contentHash(svcB) });
+    setConfig({ enabledAgents: ['claude', 'codex'] });
+    expect(run(['projects', 'set', 'svc-b']).code).toBe(0);
+
+    const pushed = run(['push', '--all']);
+
+    expect(pushedFiles(), pushed.output).toEqual(expect.arrayContaining([
+      'skills/svc-a/a-skill/SKILL.md', 'skills/svc-b/a-skill/SKILL.md',
+    ]));
+  });
+
   it('resolves a legacy delivered duplicate against every namespace, not only the first', () => {
     commitOnTeam('skills/z-archive/a-skill/SKILL.md', `${skillMd('a-skill')}\nDelivered from z-archive.\n`);
     commitOnTeam('manifest/projects.yaml', null);
