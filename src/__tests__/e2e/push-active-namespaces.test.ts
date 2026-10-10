@@ -54,6 +54,20 @@ function commitOnTeam(relPath: string, content: string | null): void {
   git(['push', '-q', 'origin', 'main'], teammate);
 }
 
+/** Merge one teammate change to the default branch, preserving its merge diff. */
+function mergeOnTeam(relPath: string, content: string | null): void {
+  const teammate = fs.mkdtempSync(path.join(sandbox, 'teammate-merge-'));
+  git(['clone', '-q', origin, teammate]);
+  git(['switch', '-q', '-c', 'teammate-change'], teammate);
+  if (content === null) git(['rm', '-rq', relPath], teammate);
+  else writeFile(path.join(teammate, relPath), content);
+  git(['add', '.'], teammate);
+  git(['commit', '-qm', `teammate: ${relPath}`], teammate);
+  git(['switch', '-q', 'main'], teammate);
+  git(['merge', '-q', '--no-ff', '-m', `merge teammate: ${relPath}`, 'teammate-change'], teammate);
+  git(['push', '-q', 'origin', 'main'], teammate);
+}
+
 /** Every file on the push branches the remote received, newest branch last. */
 function pushedFiles(): string[] {
   const branches = git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/teamai/push/'], origin)
@@ -385,6 +399,23 @@ describe('push --skill refuses a copy its record does not tie to a team skill', 
     expect(pushed.code, pushed.output).toBe(2);
     expect(pushed.output).toContain('no record of delivering this copy from skills/svc-b/b-skill');
     expect(pushedFiles()).toEqual([]);
+  });
+
+  it('does not overwrite a skill recreated after a merge deletion', () => {
+    const skillPath = path.join(project, '.claude', 'skills', 'a-skill');
+    fs.appendFileSync(path.join(skillPath, 'SKILL.md'), '\nMember edit after delivery.\n');
+    mergeOnTeam('skills/svc-a/a-skill', null);
+    expect(run(['pull']).code).toBe(0);
+    mergeOnTeam('skills/svc-a/a-skill/SKILL.md', `${skillMd('a-skill')}\nUnrelated recreated skill.\n`);
+    expect(run(['pull']).code).toBe(0);
+
+    const pushed = run(['push', '--all']);
+
+    expect(pushed.output).toContain('Skipped a-skill');
+    expect(pushed.output).toContain('its record matches no version of skills/svc-a/a-skill');
+    expect(pushed.output).toContain('copy it under a new name and push that');
+    expect(pushedFiles()).toEqual([]);
+    expect(git(['show', 'main:skills/svc-a/a-skill/SKILL.md'], origin)).toContain('Unrelated recreated skill.');
   });
 
   it.each(unprovenOrigins)('does not route a $state delivered origin $label', ({ state, flags }) => {
