@@ -335,7 +335,57 @@ __teamai_env_files() {
 }
 
 # Put back what the member had before the loaded files set it.
+__teamai_env_unhook() {
+  if [ -n "\${BASH_VERSION-}" ]; then
+    case $(declare -p PROMPT_COMMAND 2>/dev/null) in
+      'declare -a'*)
+        __teamai_prompts=()
+        for __teamai_prompt in "\${PROMPT_COMMAND[@]}"; do
+          [ "$__teamai_prompt" = __teamai_env_apply ] || __teamai_prompts+=("$__teamai_prompt")
+        done
+        PROMPT_COMMAND=("\${__teamai_prompts[@]}")
+        ;;
+      *)
+        __teamai_prompt_rest=\${PROMPT_COMMAND-} __teamai_prompt_clean= __teamai_prompt_sep=
+        while :; do
+          case $__teamai_prompt_rest in
+            *';'*) __teamai_prompt=\${__teamai_prompt_rest%%;*}; __teamai_prompt_rest=\${__teamai_prompt_rest#*;} ;;
+            *) __teamai_prompt=$__teamai_prompt_rest; __teamai_prompt_rest= ;;
+          esac
+          if [ "$__teamai_prompt" != __teamai_env_apply ]; then
+            __teamai_prompt_clean="$__teamai_prompt_clean$__teamai_prompt_sep$__teamai_prompt"
+            __teamai_prompt_sep=';'
+          fi
+          [ -n "$__teamai_prompt_rest" ] || break
+        done
+        if [ -n "$__teamai_prompt_clean" ]; then PROMPT_COMMAND=$__teamai_prompt_clean; else unset PROMPT_COMMAND; fi
+        ;;
+    esac
+  elif [ -n "\${ZSH_VERSION-}" ]; then
+    eval 'typeset -ga chpwd_functions; __teamai_prompts=(); for __teamai_prompt in "\${chpwd_functions[@]}"; do [[ "$__teamai_prompt" == __teamai_env_apply ]] || __teamai_prompts+=("$__teamai_prompt"); done; chpwd_functions=("\${__teamai_prompts[@]}")'
+  fi
+}
+
+__teamai_env_hook() {
+  case $- in *i*)
+    if [ -n "\${ZSH_VERSION-}" ]; then
+      eval 'typeset -ga chpwd_functions; case " \${chpwd_functions[*]} " in *" __teamai_env_apply "*) ;; *) chpwd_functions+=(__teamai_env_apply) ;; esac'
+    elif [ -n "\${BASH_VERSION-}" ]; then
+      case $(declare -p PROMPT_COMMAND 2>/dev/null) in
+        'declare -a'*)
+          case " \${PROMPT_COMMAND[*]} " in *" __teamai_env_apply "*) ;; *) PROMPT_COMMAND+=(__teamai_env_apply) ;; esac
+          ;;
+        *) case ";\${PROMPT_COMMAND-};" in
+          *";__teamai_env_apply;"*) ;;
+          *) PROMPT_COMMAND="\${PROMPT_COMMAND:+$PROMPT_COMMAND;}__teamai_env_apply" ;;
+        esac ;;
+      esac
+    fi
+  esac
+}
+
 __teamai_env_unapply() {
+  __teamai_env_unhook
   for __teamai_k in \${__TEAMAI_ENV_KEYS-}; do
     eval "__teamai_set=\\\${__TEAMAI_ENV_SET_$__teamai_k-}"
     if [ "$__teamai_set" = 1 ]; then
@@ -382,9 +432,15 @@ __teamai_env_bash_env() {
 
 __teamai_env_apply() {
   [ -n "\${ZSH_VERSION-}" ] && emulate -L sh
+  # Resolution runs in the member's environment so PATH and GIT_* from the
+  # previous directory cannot redirect git or prevent it from being found.
+  __teamai_env_unapply
+  # An already-open shell may still hold this function after uninstall removes
+  # the loader file. Unapply its values and hook, then leave it clean.
+  [ -f "$__teamai_env_loader" ] || { unset __TEAMAI_ENV_DIR __TEAMAI_ENV_STAMP __TEAMAI_ENV_FILES; return 0; }
   # Again on each cd: a startup file the member's runs after this one may set its own.
   __teamai_env_bash_env
-  __teamai_d=$(__teamai_env_pwd) || { __teamai_env_unapply; unset __TEAMAI_ENV_DIR __TEAMAI_ENV_FILES; return 0; }
+  __teamai_d=$(__teamai_env_pwd) || { unset __TEAMAI_ENV_DIR __TEAMAI_ENV_FILES; return 0; }
   # Changes with the registry and with every env.sh a pull rewrites.
   __teamai_stamp=
   if [ -f "$__teamai_env_scopes" ]; then { IFS= read -r __teamai_stamp < "$__teamai_env_scopes"; } 2>/dev/null || :; fi
@@ -394,12 +450,12 @@ __teamai_env_apply() {
     __teamai_files=$(__teamai_env_files "$__teamai_d")
   fi
   export __TEAMAI_ENV_DIR="$__teamai_d" __TEAMAI_ENV_STAMP="$__teamai_stamp"
-  __teamai_env_unapply
   export __TEAMAI_ENV_FILES="$__teamai_files"
   __teamai_env_load
   # Team files may set names that control loader routing. Keep the original
   # member BASH_ENV for chaining, and reassert the loader's exported state.
   export BASH_ENV="$__teamai_env_loader" __TEAMAI_ENV_DIR="$__teamai_d" __TEAMAI_ENV_STAMP="$__teamai_stamp" __TEAMAI_ENV_FILES="$__teamai_files"
+  __teamai_env_hook
   return 0
 }
 
@@ -409,17 +465,6 @@ if [ -n "\${BASH_VERSION-}" ] && [ "\${BASH_ENV-}" = "$__teamai_env_loader" ] &&
   case $- in *i*) ;; *) __teamai_env_chain=1 ;; esac
 fi
 __teamai_env_apply
-# An interactive shell follows cd. A script does not: its cd's would each run git.
-case $- in
-  *i*) if [ -n "\${ZSH_VERSION-}" ]; then
-      eval 'typeset -ga chpwd_functions; case " \${chpwd_functions[*]} " in *" __teamai_env_apply "*) ;; *) chpwd_functions+=(__teamai_env_apply) ;; esac'
-    elif [ -n "\${BASH_VERSION-}" ]; then
-      case ";\${PROMPT_COMMAND-};" in
-        *";__teamai_env_apply;"*) ;;
-        *) PROMPT_COMMAND="__teamai_env_apply\${PROMPT_COMMAND:+;$PROMPT_COMMAND}" ;;
-      esac
-    fi ;;
-esac
 if [ -n "$__teamai_env_chain" ]; then
   __teamai_env_chained=1
   if [ -n "\${__TEAMAI_ENV_BASH_ENV-}" ] && [ -f "$__TEAMAI_ENV_BASH_ENV" ]; then . "$__TEAMAI_ENV_BASH_ENV"; fi

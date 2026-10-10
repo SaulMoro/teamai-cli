@@ -18,6 +18,7 @@ import {
   type SecretStoreRead, type StoredEntryKind, type StoredSecret,
 } from './secret-store.js';
 import type { LocalConfig } from './types.js';
+import { isReservedTeamEnvKey } from './env-reserved.js';
 
 export interface SecretValue {
   readonly source: 'team' | 'global' | 'environment';
@@ -199,7 +200,7 @@ export function envShVariables(
 ): EnvVariable[] {
   return variables.flatMap((variable) => {
     const resolved = values.get(variable.name);
-    return resolved && !resolved.fromEnv ? [{ ...variable.entry, value: resolved.value }] : [];
+    return resolved && !resolved.fromEnv && !isReservedTeamEnvKey(variable.name) ? [{ ...variable.entry, value: resolved.value }] : [];
   });
 }
 

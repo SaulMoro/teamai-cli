@@ -26,6 +26,7 @@ import {
   type EnvBlock,
 } from '../utils/shell-profile.js';
 import { expandHome, getUserHome } from '../utils/home.js';
+import { isReservedTeamEnvKey, reservedTeamEnvWarning } from '../env-reserved.js';
 
 // ─── Schema for env.yaml ────────────────────────────────
 
@@ -339,9 +340,8 @@ export class EnvHandler extends ResourceHandler {
    * env, including an inherited user scope under an env-less project.
    */
   async writeResolvedEnv(variables: EnvVariable[], teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<boolean> {
-    if (variables.some(({ key }) => key === 'BASH_ENV' || key.startsWith('__TEAMAI_ENV_') || key.startsWith('__teamai_env_'))) {
-      log.warn('BASH_ENV and __teamai_env_*/__TEAMAI_ENV_* are reserved for TeamAI shell routing; those team env variables are ignored.');
-    }
+    const warning = reservedTeamEnvWarning(variables.map(({ key }) => key));
+    if (warning) log.warn(warning);
     // getEnvBackupPath returns <teamaiHome>/env normally, but <teamaiHome>/env.local
     // in self mode — where <teamaiHome>/env is a committed DIRECTORY (env/env.yaml)
     // and writing a file there would throw EISDIR.
@@ -367,7 +367,10 @@ export class EnvHandler extends ResourceHandler {
     // Conflict 10). The old ones are there too for an env.sh an older CLI wrote.
     const before = await readFileSafe(envShPath);
     const previous = parseEnvFile(before ?? '');
-    const recorded = await recordEnvShExports(envShPath, [...previous, ...variables.map((v): [string, string] => [v.key, v.value])]);
+    const recorded = await recordEnvShExports(envShPath, [
+      ...previous,
+      ...variables.filter(({ key }) => !isReservedTeamEnvKey(key)).map((v): [string, string] => [v.key, v.value]),
+    ]);
     const envSh = this.generateEnvFile(variables);
     const marker = envShMarker(teamaiHome, parseEnvFile(envSh), recorded);
     const content = marker ? `${envSh}export ${marker[0]}='${marker[1]}'\n` : envSh;
@@ -498,7 +501,7 @@ export class EnvHandler extends ResourceHandler {
    */
   generateEnvFile(variables: EnvVariable[]): string {
     const lines = variables
-      .filter(v => ENV_KEY_RE.test(v.key) && v.key !== 'BASH_ENV' && !v.key.startsWith('__TEAMAI_ENV_') && !v.key.startsWith('__teamai_env_'))
+      .filter(v => ENV_KEY_RE.test(v.key) && !isReservedTeamEnvKey(v.key))
       .map(v => `export ${v.key}=${shellQuoteValue(v.value)}`);
     return lines.join('\n') + '\n';
   }

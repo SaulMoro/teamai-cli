@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { EnvHandler, describeEnvYamlShapeProblem, parseEnvFile } from '../resources/env.js';
 import { resetWarnOnce } from '../utils/warn-once.js';
 import { TEAMAI_ENV_START, TEAMAI_ENV_END } from '../types.js';
+import { memberEnvironment } from '../member-env.js';
 import type { TeamaiConfig, LocalConfig, ResourceItem } from '../types.js';
 
 vi.mock('../utils/logger.js', () => ({
@@ -369,6 +370,19 @@ scope: 'user',
       ]);
 
       expect(content).toBe("export _PRIVATE='a'\nexport A1_b2='b'\n");
+    });
+
+    it.each(['BASH_ENV', 'ENV', 'ZDOTDIR', 'HOME', 'PROMPT_COMMAND', 'chpwd_functions', 'precmd_functions', 'preexec_functions', 'periodic_functions', 'zshaddhistory_functions', 'zshexit_functions', 'zsh_directory_name_functions', '__TEAMAI_ENV_FILES', '__teamai_env_apply'])('should drop reserved loader variable %s', (key) => {
+      expect(handler.generateEnvFile([{ key, value: 'team-value' }, { key: 'SAFE', value: 'yes' }]))
+        .toBe("export SAFE='yes'\n");
+    });
+
+    it('does not mark a filtered reserved value as team-exported', async () => {
+      await handler.writeResolvedEnv([{ key: 'BASH_ENV', value: '/tmp/team-bash-env' }], teamConfig, localConfig);
+
+      const member = await memberEnvironment(localConfig, { secretKeys: new Set(), envYaml: new Map() }, { BASH_ENV: '/tmp/team-bash-env' });
+
+      expect(member('BASH_ENV')).toBe('/tmp/team-bash-env');
     });
   });
 

@@ -272,6 +272,17 @@ describe('team env by directory (#1018)', () => {
 
     it.each([
       { key: 'BASH_ENV', value: '/tmp/team-bash-env' },
+      { key: 'ENV', value: '/tmp/team-env' },
+      { key: 'ZDOTDIR', value: '/tmp/team-zdotdir' },
+      { key: 'HOME', value: '/tmp/team-home' },
+      { key: 'PROMPT_COMMAND', value: 'echo team' },
+      { key: 'chpwd_functions', value: 'team_chpwd' },
+      { key: 'precmd_functions', value: 'team_precmd' },
+      { key: 'preexec_functions', value: 'team_preexec' },
+      { key: 'periodic_functions', value: 'team_periodic' },
+      { key: 'zshaddhistory_functions', value: 'team_history' },
+      { key: 'zshexit_functions', value: 'team_exit' },
+      { key: 'zsh_directory_name_functions', value: 'team_directory_name' },
       { key: '__TEAMAI_ENV_FILES', value: '/tmp/team-env.sh' },
       { key: '__teamai_env_loader', value: '/tmp/team-loader.sh' },
     ])('ignores team env control variable $key and warns that it is reserved', async ({ key, value }) => {
@@ -569,6 +580,68 @@ describe('team env by directory (#1018)', () => {
 
       expect(terminal.stdout.trim().split('\n').filter((line) => line !== 'kept')).toEqual(['project', 'mine']);
       expect(terminal.stdout).toContain('kept');
+    });
+
+    const r1Cases = ['PATH', 'GIT_DIR']
+      .flatMap((key) => ['startup', 'cd/chpwd', 'prompt hook', 'BASH_ENV child'].map((entry) => ({ key, entry })))
+      .filter(({ entry }) => (entry === 'cd/chpwd' ? hasShell('zsh') : hasShell('bash')));
+
+    it.each(r1Cases)('unapplies $key before $entry resolves the new directory', async ({ key, entry }) => {
+      const a = await project('a');
+      const b = await project('b');
+      const teamValue = key === 'GIT_DIR' ? path.join(a.projectRoot ?? '', '.git') : '/no-such-path';
+      const shellName = entry === 'cd/chpwd' ? '/bin/zsh' : '/bin/bash';
+      vi.stubEnv('SHELL', shellName);
+      await handler.writeResolvedEnv([{ key, value: teamValue }, { key: 'MARKER', value: 'from-a' }], teamConfig, a);
+      await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-b' }], teamConfig, b);
+      const env: NodeJS.ProcessEnv = {
+        HOME: homeDir, PATH: process.env.PATH, SHELL: shellName,
+        ...(entry === 'cd/chpwd' ? {} : { BASH_ENV: path.join(homeDir, '.teamai', 'env-loader.sh') }),
+      };
+      let output = '';
+      if (entry === 'startup') {
+        const shell = env.SHELL === '/bin/zsh' ? 'zsh' : 'bash';
+        const first = spawnSync(shell, ['-c', `'${process.execPath}' -e 'process.stdout.write(JSON.stringify(process.env))'`], {
+          cwd: a.projectRoot, env, encoding: 'utf-8',
+        });
+        const inherited = JSON.parse(first.stdout) as NodeJS.ProcessEnv;
+        output = spawnSync(`/bin/${shell}`, ['-c', `printf '%s\\n' "$MARKER"`], { cwd: b.projectRoot, env: inherited, encoding: 'utf-8' }).stdout;
+      } else if (entry === 'cd/chpwd') {
+        output = spawnSync('/bin/zsh', ['-i', '-c', `cd '${b.projectRoot}'; print -r -- "$MARKER"`], { cwd: a.projectRoot, env, encoding: 'utf-8' }).stdout;
+      } else if (entry === 'prompt hook') {
+        output = spawnSync('/bin/bash', ['-i'], {
+          cwd: a.projectRoot, env: { ...env, SHELL: '/bin/bash' }, encoding: 'utf-8',
+          input: `cd '${b.projectRoot}'\nprintf '%s\\n' "$MARKER"\nexit\n`,
+        }).stdout;
+      } else {
+        output = spawnSync('/bin/bash', ['-c', `cd '${b.projectRoot}'; /bin/bash -c 'printf "%s\\n" "$MARKER"'`], {
+          cwd: a.projectRoot, env, encoding: 'utf-8',
+        }).stdout;
+      }
+
+      expect(output).toContain('from-b');
+    });
+
+    it('preserves PROMPT_COMMAND arrays and removes only the loader hook when the env is unapplied', async () => {
+      const a = await project('a');
+      const b = await project('b');
+      await fse.writeFile(path.join(homeDir, '.bashrc'), [
+        "first() { printf 'first\\n'; }",
+        "second() { printf 'second\\n'; }",
+        "PROMPT_COMMAND=('first' 'second')",
+        '',
+      ].join('\n'));
+      await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-a' }], teamConfig, a);
+      await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-b' }], teamConfig, b);
+      const loader = path.join(homeDir, '.teamai', 'env-loader.sh');
+      const run = spawnSync('bash', ['-i'], {
+        cwd: a.projectRoot, env: { HOME: homeDir, PATH: process.env.PATH, SHELL: '/bin/bash' }, encoding: 'utf-8',
+        input: `cd '${b.projectRoot}'\nprintf '%s\\n' "$MARKER"\n__teamai_env_unapply\nprintf '%s\\n' "\${PROMPT_COMMAND[*]}"\n__teamai_env_hook\nrm '${loader}'\nprintf '%s\\n' "\${PROMPT_COMMAND[*]}"\nexit\n`,
+      });
+
+      expect(run.stdout).toContain('from-b');
+      expect(run.stdout).toContain('first second');
+      expect(run.stdout).not.toContain('__teamai_env_apply');
     });
   });
 });

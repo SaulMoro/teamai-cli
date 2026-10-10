@@ -96,6 +96,27 @@ describe('teamai env exec', () => {
     expect(env.__TEAMAI_ENV_BASH_ENV).toBeUndefined();
   });
 
+  it.each(['BASH_ENV', 'ENV', 'ZDOTDIR', 'HOME', 'PROMPT_COMMAND', 'chpwd_functions', 'precmd_functions', 'preexec_functions', 'periodic_functions', 'zshaddhistory_functions', 'zshexit_functions', 'zsh_directory_name_functions', '__TEAMAI_ENV_FILES', '__teamai_env_apply'])('does not overlay reserved team variable %s in env exec', async (key) => {
+    const { repoPath } = await team('reserved', { 'env/env.yaml': `variables:\n  - key: ${key}\n    value: team-value\n` });
+    await userScope(repoPath);
+
+    const env = await childEnv(home);
+
+    expect(env[key]).not.toBe('team-value');
+    expect(stderr.join('\n')).toContain(`${key} is reserved for TeamAI shell routing`);
+  });
+
+  it('does not pass a reserved team secret to env exec', async () => {
+    const { repoPath } = await team('reserved-secret', { 'env/secrets.yaml': 'secrets:\n  - key: BASH_ENV\n' });
+    const config = await userScope(repoPath);
+    await writeSecretStore(getTeamSecretsPath(config), { BASH_ENV: { value: 'team-value' } });
+
+    const env = await childEnv(home);
+
+    expect(env.BASH_ENV).not.toBe('team-value');
+    expect(stderr.join('\n')).toContain('BASH_ENV is reserved for TeamAI shell routing');
+  });
+
   beforeEach(async () => {
     tmpDir = fs.realpathSync(await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-env-exec-')));
     home = path.join(tmpDir, 'home');

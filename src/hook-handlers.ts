@@ -17,6 +17,7 @@ import type { LocalConfig } from './types.js';
 import type { GitHookEvent } from './git-hook.js';
 import { deriveDispatchSessionId, deriveSessionId } from './utils/session-id.js';
 import { log } from './utils/logger.js';
+import { isReservedTeamEnvKey } from './env-reserved.js';
 import { normalizeToolName } from './utils/tool-names.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { pathExists } from './utils/fs.js';
@@ -836,9 +837,9 @@ const teamEnvHintHandler: HookHandler = {
     const { envEntryReader } = await import('./resources/env.js');
     const { resolveEntriesFor } = await import('./namespaced-entries.js');
     const [declarations, variables] = await Promise.all([resolveSecretDeclarations(config), resolveEntriesFor(envEntryReader, config)]);
-    const secrets = declarations.kind === 'resolved' ? declarations.entries : [];
+    const secrets = declarations.kind === 'resolved' ? declarations.entries.filter(({ name }) => !isReservedTeamEnvKey(name)) : [];
     const secretNames = new Set(secrets.map(({ name }) => name));
-    const plain = variables.kind === 'resolved' ? variables.entries.filter(({ name }) => !secretNames.has(name)) : [];
+    const plain = variables.kind === 'resolved' ? variables.entries.filter(({ name }) => !secretNames.has(name) && !isReservedTeamEnvKey(name)) : [];
     if (secrets.length === 0 && plain.length === 0) return null;
     const described = (entries: readonly Pick<ResolvedEntry<{ description?: string }>, 'name' | 'entry'>[]): string => entries.map(({ name, entry }) => {
       const description = entry.description?.replace(/\s+/g, ' ').trim();

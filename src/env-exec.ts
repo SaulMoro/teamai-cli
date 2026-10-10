@@ -25,6 +25,7 @@ import { envLoaderPath } from './resources/env-loader.js';
 import { declaredSecretKeys } from './resources/secrets.js';
 import { getDataHome, type GlobalOptions, type LocalConfig } from './types.js';
 import { log, setStderrOnly } from './utils/logger.js';
+import { isReservedTeamEnvKey, reservedTeamEnvWarning } from './env-reserved.js';
 
 /** How the command ended. */
 export type ExecOutcome =
@@ -186,6 +187,11 @@ async function overlayTeamEnv(localConfig: LocalConfig): Promise<NodeJS.ProcessE
   const env = inheritedEnvironment();
   const teamEnv = await resolveTeamEnv(localConfig);
   const { variables, declarations, variableValues, secrets } = teamEnv;
+  const warning = reservedTeamEnvWarning([
+    ...(variables.kind === 'resolved' ? variables.entries.map(({ name }) => name) : []),
+    ...(declaredSecretKeys(declarations) ?? []),
+  ]);
+  if (warning) log.warn(warning);
   if (declarations.kind === 'failed') {
     // Any env.yaml key may be a secret the file declares, so no team value is applied (#879 Conflict 14),
     // and one a teamai env.sh exported is a team value, not the member's: it is removed.
@@ -207,7 +213,7 @@ async function overlayTeamEnv(localConfig: LocalConfig): Promise<NodeJS.ProcessE
     // a teamai env.sh exported is not this directory's, so it goes first (#1018).
     withoutTeamExports(env, teamEnv.member);
     for (const [key, value] of await inheritedUserVariables(localConfig)) setKey(env, key, value);
-    for (const [key, variable] of variableValues.values) setKey(env, key, variable.value);
+    for (const [key, variable] of variableValues.values) if (!isReservedTeamEnvKey(key)) setKey(env, key, variable.value);
   }
   const secretKeys = declaredSecretKeys(declarations);
   if (!secretKeys || secretKeys.size === 0) return env;
@@ -216,6 +222,7 @@ async function overlayTeamEnv(localConfig: LocalConfig): Promise<NodeJS.ProcessE
     log.warn(`${secrets.reason} The command runs without team secrets.`);
   }
   for (const key of secretKeys) {
+    if (isReservedTeamEnvKey(key)) continue;
     const secret = secrets.kind === 'resolved' ? secrets.values.get(key) : undefined;
     if (secret) setKey(env, key, secret.value);
     else removeKey(env, key);
@@ -238,7 +245,7 @@ async function inheritedUserVariables(localConfig: LocalConfig): Promise<Map<str
     log.warn(`${variableValues.reason} The command runs without the user scope's env variables.`);
     return new Map();
   }
-  return new Map([...variableValues.values].map(([key, variable]) => [key, variable.value]));
+  return new Map([...variableValues.values].filter(([key]) => !isReservedTeamEnvKey(key)).map(([key, variable]) => [key, variable.value]));
 }
 
 /** Remove `key` from `env`, in every case on Windows, where environment names are case-insensitive. */
