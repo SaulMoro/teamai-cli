@@ -19,8 +19,8 @@ import { buildIndex, loadIndex } from '../utils/search-index.js';
 
 /**
  * The index follows what the member receives, however much smaller that is.
- * Only files the build was given and could not read keep the previous index
- * (#1006).
+ * Only files the build was given and could not read keep their previous
+ * entries (#1006).
  */
 describe('buildIndex when the indexed set shrinks (#1006)', () => {
   let tmpDir: string;
@@ -57,7 +57,7 @@ describe('buildIndex when the indexed set shrinks (#1006)', () => {
     expect(warnings()).toEqual([]);
   });
 
-  it('keeps the previous index when it can read none of the files it was given', async () => {
+  it('keeps the previous entries of the files it was given and could not read', async () => {
     const dirs = await writeSkills(7);
     await buildIndex({ skills: { kind: 'dirs', dirs }, indexPath });
     for (const dir of dirs) await fse.remove(path.join(dir, 'SKILL.md'));
@@ -66,7 +66,7 @@ describe('buildIndex when the indexed set shrinks (#1006)', () => {
 
     expect((await loadIndex(indexPath))?.entries).toHaveLength(7);
     expect(warnings()).toEqual([
-      expect.stringMatching(/^Search index not rebuilt: none of the 7 files it indexes could be read \(.*zqx-skill-1[\\/]SKILL\.md: ENOENT, .*, and 4 more\)\. Recall keeps the previous index/),
+      expect.stringMatching(/^Search index could not read 7 file\(s\) \(.*zqx-skill-1[\\/]SKILL\.md: ENOENT, .*, and 4 more\); recall keeps what the previous index held for them\./),
     ]);
   });
 
@@ -80,51 +80,56 @@ describe('buildIndex when the indexed set shrinks (#1006)', () => {
 
     expect((await loadIndex(indexPath))?.entries.map((entry) => entry.filename).sort()).toEqual(['a.md', 'b.md']);
     expect(warnings()).toEqual([
-      `Search index left out 1 file(s) it could not read (${path.join(docsDir, 'gone.md')}: ENOENT). Fix them and run \`teamai pull\` to index them.`,
+      `Search index could not read 1 file(s) (${path.join(docsDir, 'gone.md')}: ENOENT); recall keeps what the previous index held for them. `
+        + 'Fix them and run `teamai pull` to index them again.',
     ]);
   });
 
-  // Every combination of what a rebuild can be handed. The older index stays
-  // only when the build read nothing, retained nothing and left nothing out;
-  // otherwise the result holds only what this build read or retained.
-  const cases = [false, true].flatMap((partial) => [false, true].flatMap((keepIndexed) =>
-    [0, 1].flatMap((readable) => [0, 1].flatMap((unreadable) => [false, true].map((existing) => {
-      const retained = keepIndexed && existing;
-      const keepsOld = existing && !partial && !retained && readable === 0 && unreadable > 0;
-      return { partial, keepIndexed, readable, unreadable, existing, keepsOld };
+  // Every combination of what a rebuild can be handed. The result is what it
+  // read, the skills keep-indexed retains, and the previous entries of the files
+  // it was given and could not read; nothing else of the previous index stays.
+  // The previous index holds docs A (`a.md`) and B (`b.md`) and one skill; the
+  // rebuild is given A, unreadable or not, and never B.
+  const cases = [false, true].flatMap((keepIndexed) => [0, 1].flatMap((readable) =>
+    [false, true].flatMap((unreadable) => [false, true].map((existing) => ({
+      name: `keep-indexed=${keepIndexed} readable=${readable} a-unreadable=${unreadable} index=${existing}`
+        + (!keepIndexed && readable === 0 && unreadable && existing ? ' (A unreadable, B no longer delivered)' : ''),
+      keepIndexed, readable, unreadable, existing,
     })))));
 
-  it.each(cases)(
-    'partial=$partial keep-indexed=$keepIndexed readable=$readable unreadable=$unreadable index=$existing keeps old=$keepsOld',
-    async ({ partial, keepIndexed, readable, unreadable, existing, keepsOld }) => {
+  it.each(cases.map((row) => [row.name, row] as const))(
+    '%s',
+    async (_name, { keepIndexed, readable, unreadable, existing }) => {
       const docsDir = path.join(tmpDir, 'docs');
-      await fse.outputFile(path.join(docsDir, 'old-doc.md'), '---\ntitle: old\n---\nbody');
       if (existing) {
-        await buildIndex({ docsDir, docFiles: ['old-doc.md'], skills: { kind: 'dirs', dirs: await writeSkills(1) }, indexPath });
+        await fse.outputFile(path.join(docsDir, 'a.md'), '---\ntitle: a\n---\nbody');
+        await fse.outputFile(path.join(docsDir, 'b.md'), '---\ntitle: b\n---\nbody');
+        await buildIndex({ docsDir, docFiles: ['a.md', 'b.md'], skills: { kind: 'dirs', dirs: await writeSkills(1) }, indexPath });
+        await fse.remove(path.join(docsDir, 'b.md'));
       }
-      const docFiles: string[] = [];
+      if (unreadable) await fse.remove(path.join(docsDir, 'a.md'));
+      else await fse.outputFile(path.join(docsDir, 'a.md'), '---\ntitle: a\n---\nbody');
+      const docFiles = ['a.md'];
       for (let i = 0; i < readable; i++) {
         await fse.outputFile(path.join(docsDir, `read-${i}.md`), `---\ntitle: read ${i}\n---\nbody`);
         docFiles.push(`read-${i}.md`);
       }
-      for (let i = 0; i < unreadable; i++) docFiles.push(`gone-${i}.md`);
 
       await buildIndex({
         docsDir,
         docFiles,
         skills: keepIndexed ? { kind: 'keep-indexed', reason: 'test' } : { kind: 'dirs', dirs: [] },
         indexPath,
-        partial,
       });
 
-      const entries = (await loadIndex(indexPath))?.entries.map((entry) => `${entry.type}:${entry.filename}`).sort() ?? [];
-      const expected = keepsOld
-        ? ['docs:old-doc.md', 'skills:zqx-skill-1.md']
-        : [
-          ...docFiles.filter((file) => file.startsWith('read-')).map((file) => `docs:${file}`),
-          ...(keepIndexed && existing ? ['skills:zqx-skill-1.md'] : []),
-        ].sort();
-      expect(entries).toEqual(expected);
+      const entries = (await loadIndex(indexPath))?.entries.map((entry) => `${entry.type}:${entry.filename}`).sort();
+      const read = docFiles.filter((file) => file !== 'a.md' || !unreadable).map((file) => `docs:${file}`);
+      const retainedSkills = keepIndexed && existing ? ['skills:zqx-skill-1.md'] : [];
+      const unreadableKept = unreadable && existing ? ['docs:a.md'] : [];
+      expect(entries).toEqual([...read, ...retainedSkills, ...unreadableKept].sort());
+      expect(warnings()).toEqual(unreadable
+        ? [expect.stringMatching(/^Search index could not read 1 file\(s\) \(.*a\.md: ENOENT\); recall keeps what the previous index held for them\./)]
+        : []);
     },
   );
 });

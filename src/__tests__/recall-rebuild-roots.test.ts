@@ -351,7 +351,6 @@ describe('recall rebuilding an older-format index with a team manifest it cannot
     expect(index.entries.map((e: { filename: string }) => e.filename).sort())
       .toEqual(Array.from({ length: 10 }, (_, i) => `note-${i}.md`).sort());
     expect(warnings()).toContainEqual(expect.stringContaining('Recall indexed learnings only'));
-    expect(warnings()).not.toContainEqual(expect.stringContaining('Search index not rebuilt'));
   });
   it('replaces the older index when the manifest reads, however much smaller the rebuild is (#1006)', async () => {
     fs.rmSync(path.join(repo(), 'manifest', 'roles.yaml'));
@@ -379,8 +378,7 @@ describe('recall rebuilding an older-format index with a team manifest it cannot
       }
 
       expect(out.join('')).not.toContain('stale');
-      expect(warnings()).not.toContainEqual(expect.stringContaining('Search index not rebuilt'));
-      expect(warnings()).toContainEqual(expect.stringMatching(/^Search index left out 10 file\(s\) it could not read \(.*EACCES/));
+      expect(warnings()).toContainEqual(expect.stringMatching(/^Search index could not read 10 file\(s\) \(.*EACCES/));
     },
   );
 

@@ -414,11 +414,9 @@ export interface UnreadableFile {
   readonly reason: string;
 }
 
-/** What every collector of one build shares: the vote counts, and what it read. */
+/** What every collector of one build shares: the vote counts, and the files it could not read. */
 interface BuildReads {
   readonly voteCounts: Map<string, number>;
-  /** Files handed to a read. */
-  given: number;
   readonly unreadable: UnreadableFile[];
 }
 
@@ -445,7 +443,6 @@ async function entryFromMdFile(
     }
   }
 
-  reads.given++;
   let content: string;
   try {
     content = await readFile(expandHome(absPath), 'utf-8');
@@ -733,11 +730,6 @@ export interface BuildIndexOptions {
   codebaseDir?: string;
   votesDir?: string;
   indexPath?: string;
-  /**
-   * The caller left sources out on purpose (a team manifest it cannot read):
-   * never keep the index on disk, which would serve what was left out (#823).
-   */
-  partial?: boolean;
 }
 
 /**
@@ -760,16 +752,12 @@ export async function buildIndex(
   const opts: BuildIndexOptions = typeof optionsOrLearningsDir === 'string'
     ? { learningsDir: optionsOrLearningsDir, votesDir, indexPath }
     : optionsOrLearningsDir;
-  const build = await indexInMemory(opts);
+  const index = await indexInMemory(opts);
   const elapsed = Date.now() - start;
-
-  const targetPath = opts.indexPath ?? getSearchIndexPath();
-  const index = keepIndexWhenUnreadable(build, opts.partial ? null : await loadIndex(targetPath));
-  if (index !== build.index) return elapsed;
 
   // A torn in-place write parses as null on the next loadIndex, which silently
   // wipes recall until the next rebuild — same shape as the votes file (#854).
-  await writeJsonAtomic(targetPath, index);
+  await writeJsonAtomic(opts.indexPath ?? getSearchIndexPath(), index);
 
   if (elapsed > 2000) {
     log.warn(`Search index build took ${elapsed}ms — consider incremental updates for large knowledge bases`);
@@ -778,46 +766,31 @@ export async function buildIndex(
   return elapsed;
 }
 
-/** An index built in memory, with the files it was given and could not read. */
-export interface IndexBuild {
-  readonly index: SearchIndex;
-  readonly given: number;
-  readonly unreadable: readonly UnreadableFile[];
-}
-
-/**
- * The index a rebuild leaves in place. It follows what the member receives,
- * however much smaller (#1006); only a build that could read none of the files
- * it was given, and kept no skills from the existing index, keeps that index.
- * One that missed some is written without them, and both name the files.
- */
-export function keepIndexWhenUnreadable(build: IndexBuild, existing: SearchIndex | null): SearchIndex {
-  const { given, unreadable } = build;
-  if (unreadable.length === 0) return build.index;
+/** Name the files a build could not read, which keep their entries from the previous index. */
+function warnUnreadable(unreadable: readonly UnreadableFile[]): void {
   const shown = unreadable.slice(0, 3).map((file) => `${file.path}: ${file.reason}`).join(', ');
   const files = unreadable.length > 3 ? `${shown}, and ${unreadable.length - 3} more` : shown;
-  if (unreadable.length === given && build.index.entries.length === 0 && existing) {
-    log.warn(`Search index not rebuilt: none of the ${given} files it indexes could be read (${files}). `
-      + 'Recall keeps the previous index until they can be read; fix them and run `teamai pull`.');
-    return existing;
-  }
-  log.warn(`Search index left out ${unreadable.length} file(s) it could not read (${files}). `
-    + 'Fix them and run `teamai pull` to index them.');
-  return build.index;
+  log.warn(`Search index could not read ${unreadable.length} file(s) (${files}); recall keeps what the previous index held for them. `
+    + 'Fix them and run `teamai pull` to index them again.');
 }
 
 /**
  * The index {@link buildIndex} would write, built in memory and not saved: for
  * a dry run, which must search what a real run would without writing it.
  */
-export async function indexInMemory(opts: BuildIndexOptions): Promise<IndexBuild> {
+export async function indexInMemory(opts: BuildIndexOptions): Promise<SearchIndex> {
   const start = Date.now();
 
   // Aggregate votes once and reuse across all collectors.
   const voteAgg = opts.votesDir
     ? await aggregateVotes(opts.votesDir)
     : { scores: new Map<string, number>(), confidenceMap: new Map<string, number>() };
-  const reads: BuildReads = { voteCounts: voteAgg.scores, given: 0, unreadable: [] };
+  const reads: BuildReads = { voteCounts: voteAgg.scores, unreadable: [] };
+  let previous: SearchIndex | null | undefined;
+  const previousEntries = async (): Promise<SearchIndexEntry[]> => {
+    if (previous === undefined) previous = await loadIndex(opts.indexPath ?? getSearchIndexPath());
+    return previous?.entries ?? [];
+  };
 
   const entries: SearchIndexEntry[] = [];
 
@@ -838,13 +811,21 @@ export async function indexInMemory(opts: BuildIndexOptions): Promise<IndexBuild
   if (opts.skills?.kind === 'dirs') {
     entries.push(...await collectSkillDirEntries(opts.skills.dirs, reads));
   } else if (opts.skills?.kind === 'keep-indexed') {
-    const previous = await loadIndex(opts.indexPath ?? getSearchIndexPath());
-    entries.push(...(previous?.entries ?? []).filter((entry) => entry.type === 'skills'));
+    entries.push(...(await previousEntries()).filter((entry) => entry.type === 'skills'));
   } else if (opts.skillsDir) {
     entries.push(...await collectSkillEntries(opts.skillsDir, reads));
   }
   if (opts.codebaseDir) {
     entries.push(...await collectRecursiveMdEntries(opts.codebaseDir, 'docs', reads));
+  }
+  // The index follows what the member receives (#1006): of the previous index,
+  // only the entries of files this build was given and could not read stay.
+  if (reads.unreadable.length > 0) {
+    const unreadable = new Set(reads.unreadable.map((file) => file.path));
+    const ids = new Set(entries.map((entry) => `${entry.type}:${entry.filename}`));
+    entries.push(...(await previousEntries()).filter((entry) => entry.path !== undefined
+      && unreadable.has(entry.path) && !ids.has(`${entry.type}:${entry.filename}`)));
+    warnUnreadable(reads.unreadable);
   }
 
   // Annotate entries with confidence/hotness for hot/cold scoring.
@@ -870,7 +851,7 @@ export async function indexInMemory(opts: BuildIndexOptions): Promise<IndexBuild
     }
   }
 
-  const index: SearchIndex = {
+  return {
     version: SEARCH_INDEX_VERSION,
     builtAt: new Date().toISOString(),
     elapsedMs: Date.now() - start,
@@ -878,7 +859,6 @@ export async function indexInMemory(opts: BuildIndexOptions): Promise<IndexBuild
     df,
     dfByDomain,
   };
-  return { index, given: reads.given, unreadable: reads.unreadable };
 }
 
 /**
