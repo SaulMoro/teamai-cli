@@ -67,6 +67,9 @@ export async function envSet(
   // Stored under the name the scope declares, which on Windows may differ in case from the one typed.
   let key = typed;
   if (!ENV_KEY_RE.test(key)) return fail(invalidKeyMessage(key));
+  if (key === 'BASH_ENV' || key.startsWith('__TEAMAI_ENV_') || key.startsWith('__teamai_env_')) {
+    log.warn(`${key} is reserved for TeamAI shell routing.`);
+  }
   if (options.stdin && options.fromEnv !== undefined) return fail('Pass either --stdin or --from-env, not both. Nothing was changed.');
   if (options.fromEnv !== undefined && !ENV_KEY_RE.test(options.fromEnv)) {
     return fail(invalidKeyMessage(options.fromEnv, '--from-env variable name'));

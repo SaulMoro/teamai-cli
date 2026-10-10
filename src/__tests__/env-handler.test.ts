@@ -586,7 +586,7 @@ scope: 'user',
       expect(content).toContain(expectedSourceLine(`${homeDir}/.teamai/env-loader.sh`));
     });
 
-    it('should skip when env.yaml has no variables and nothing was delivered before', async () => {
+    it('should install the loader when env.yaml has no variables but the scope is registered for shells', async () => {
       await fse.writeFile(path.join(repoPath, 'env', 'env.yaml'), YAML.stringify({ variables: [] }));
 
       vi.stubEnv('SHELL', '/bin/bash');
@@ -596,7 +596,8 @@ scope: 'user',
       await handler.pullItem(item, teamConfig, localConfig);
 
       const content = await fse.readFile(bashrcPath, 'utf-8');
-      expect(content).toBe('# original\n');
+      expect(content).toContain(TEAMAI_ENV_START);
+      expect(content).toContain(expectedSourceLine(`${homeDir}/.teamai/env-loader.sh`));
       expect(await fse.pathExists(path.join(homeDir, '.teamai', 'env.sh'))).toBe(false);
     });
 

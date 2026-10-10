@@ -5,7 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import fse from 'fs-extra';
 import { EnvHandler } from '../resources/env.js';
-import { directoryEnv } from '../resources/env-loader.js';
+import { directoryEnv, envLoaderFilesForProjects } from '../resources/env-loader.js';
+import { projectDataHome } from '../utils/partition.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
 vi.mock('../utils/logger.js', () => ({
@@ -47,6 +48,27 @@ describe('team env by directory (#1018)', () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
     await fse.remove(tmpDir);
+  });
+
+  it.each([
+    { kind: 'dir', key: path.join(os.tmpdir(), 'teamai-unmounted-dir-project'), anchor: path.join(os.tmpdir(), 'teamai-unmounted-dir-project') },
+    { kind: 'git', key: path.join(os.tmpdir(), 'teamai-unmounted-git-project', '.git'), anchor: path.join(os.tmpdir(), 'teamai-unmounted-git-project') },
+  ])('keeps the registered $kind project partition when its env is opted out and anchor is unavailable', async ({ kind, key, anchor }) => {
+    const partition = projectDataHome(anchor);
+    await fse.ensureDir(partition);
+    await fse.writeFile(path.join(homeDir, '.teamai', 'env-scopes'), `stamp\ttest\n${kind}\t${key}\t-\t0\t${partition}\n`);
+
+    const files = await envLoaderFilesForProjects();
+
+    expect(files).toContain(partition);
+  });
+
+  it('does not preserve a partition from a malformed project registry row', async () => {
+    const partition = projectDataHome(path.join(tmpDir, 'unregistered'));
+    await fse.ensureDir(partition);
+    await fse.writeFile(path.join(homeDir, '.teamai', 'env-scopes'), `stamp\ttest\ndir\t${tmpDir}\t-\t0\n`);
+
+    expect(await envLoaderFilesForProjects()).not.toContain(partition);
   });
 
   /** A project-scope install in its own git checkout, as `teamai init` leaves it. */
@@ -248,6 +270,20 @@ describe('team env by directory (#1018)', () => {
       expect(run.stdout.trim().split('\n')).toEqual(['from-a', 'from-b']);
     });
 
+    it.each([
+      { key: 'BASH_ENV', value: '/tmp/team-bash-env' },
+      { key: '__TEAMAI_ENV_FILES', value: '/tmp/team-env.sh' },
+      { key: '__teamai_env_loader', value: '/tmp/team-loader.sh' },
+    ])('ignores team env control variable $key and warns that it is reserved', async ({ key, value }) => {
+      const a = await project('reserved');
+      const { log } = await import('../utils/logger.js');
+
+      await handler.writeResolvedEnv([{ key, value }], teamConfig, a);
+
+      expect(await fse.readFile(path.join(a.dataHome ?? '', 'env.sh'), 'utf-8')).not.toContain(`export ${key}=`);
+      expect(vi.mocked(log.warn).mock.calls.some(([message]) => String(message).includes('reserved for TeamAI shell routing'))).toBe(true);
+    });
+
     // A BASH_ENV the member set: bash sources the loader, then theirs, once per bash.
     describe.skipIf(!hasShell('bash'))('with the member\'s own BASH_ENV', () => {
       const memberBashEnv = async (): Promise<{ file: string; log: string }> => {
@@ -406,6 +442,46 @@ describe('team env by directory (#1018)', () => {
         await handler.writeResolvedEnv([], teamConfig, a);
 
         expect(shellSees('zsh', a.projectRoot ?? '', 'USER_ONLY')).toBe('');
+      });
+
+      it.skipIf(!hasShell('zsh')).each([
+        { inheritUserScope: true, expected: 'u' },
+        { inheritUserScope: false, expected: '' },
+      ])('restores the loader after its profile block was removed (inheritUserScope=$inheritUserScope)', async ({ inheritUserScope, expected }) => {
+        const a = { ...await project('loader-repair'), inheritUserScope };
+        await fse.remove(path.join(homeDir, '.zshenv'));
+        await handler.writeResolvedEnv([], teamConfig, a);
+
+        expect(await fse.readFile(path.join(homeDir, '.zshenv'), 'utf-8').catch(() => '')).toContain('env-loader.sh');
+        expect(shellSees('zsh', a.projectRoot ?? '', 'USER_ONLY')).toBe(expected);
+      });
+
+      it.skipIf(!hasShell('zsh')).each([
+        { shell: 'zsh' },
+      ])('unapplies loaded env when a user opts out and the resolved file list becomes empty ($shell)', async () => {
+        const userConfig = userScope();
+        const optedOut = { ...teamConfig, sharing: { ...teamConfig.sharing, env: { injectShellProfile: false } } } as TeamaiConfig;
+        await handler.writeResolvedEnv([{ key: 'USER_ONLY', value: 'u' }], teamConfig, userConfig);
+        const a = { ...await project('a'), inheritUserScope: true };
+        await handler.writeResolvedEnv([], teamConfig, a);
+        const elsewhere = path.join(tmpDir, 'elsewhere');
+        await fse.ensureDir(elsewhere);
+        const inheritedResult = spawnSync('zsh', ['-c', 'env'], {
+          cwd: elsewhere, env: { HOME: homeDir, PATH: process.env.PATH, SHELL: '/bin/zsh' }, encoding: 'utf-8',
+        });
+        const inherited = Object.fromEntries(inheritedResult.stdout.split('\n').filter(Boolean).map((line) => {
+          const separator = line.indexOf('=');
+          return [line.slice(0, separator), line.slice(separator + 1)];
+        }));
+
+        await handler.writeResolvedEnv([], optedOut, userConfig);
+        const afterOptOut = spawnSync('zsh', ['-c', `printenv USER_ONLY || true`], {
+          cwd: elsewhere, env: inherited, encoding: 'utf-8',
+        });
+
+        expect(inherited.USER_ONLY).toBe('u');
+        expect(inherited.__TEAMAI_ENV_KEYS).toContain('USER_ONLY');
+        expect(afterOptOut.stdout.trim()).toBe('');
       });
     });
 

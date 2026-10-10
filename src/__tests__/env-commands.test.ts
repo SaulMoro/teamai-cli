@@ -301,6 +301,16 @@ scope: 'user',
       expect(process.exitCode).toBeUndefined();
     });
 
+    it.each(['BASH_ENV', '__TEAMAI_ENV_FILES'])('warns when env set targets reserved loader control %s', async (key) => {
+      await fse.writeFile(path.join(repoPath, 'env', 'secrets.yaml'), `secrets:\n  - key: ${key}\n`);
+      vi.mocked(readStdin).mockResolvedValue('reserved-value');
+
+      await envSet(key, { stdin: true });
+
+      expect(log.warn).toHaveBeenCalledWith(`${key} is reserved for TeamAI shell routing.`);
+      expect(process.exitCode).toBeUndefined();
+    });
+
     it('reads the value from the hidden prompt without a flag', async () => {
       vi.mocked(askSecret).mockResolvedValue('fixture-prompt-value');
 

@@ -258,7 +258,7 @@ agent 从不索要密钥值：缺少密钥时，它会请你在自己的终端�
 未变化而提示 `Already synced` 也一样。在那次 pull 之前，`teamai doctor` 会报告
 `env.sh` 中仍在导出的这类变量，前一个项目的密钥不会悄无声息地继续生效。
 
-团队环境变量按目录进入 shell：在某个目录中启动的 shell 获得管辖该目录的 scope 的环境变量，因此同时打开的多个项目各自拿到自己的。shell 配置文件里只有一个 teamai 区块，所有 scope 共用，它 source `~/.teamai/env-loader.sh`。每次项目 pull 都会把该 scope 登记到 `~/.teamai/env-scopes`，以检出与其 worktree 共享的 git 目录为键（不在 git 中时以目录本身为键），loader 在其中查找 shell 所在的目录：
+团队环境变量按目录进入 shell：在某个目录中启动的 shell 获得管辖该目录的 scope 的环境变量，因此同时打开的多个项目各自拿到自己的。shell 配置文件里只有一个 teamai 区块，所有 scope 共用，它 source `~/.teamai/env-loader.sh`。每次项目 pull 都会把该 scope 及其机器数据分区登记到 `~/.teamai/env-scopes`，以检出与其 worktree 共享的 git 目录为键（不在 git 中时以目录本身为键），loader 在其中查找 shell 所在的目录：
 
 - 在项目中，加载该项目的 `env.sh`，不加载用户级 scope 的任何内容，除非项目设置了 `inheritUserScope: true`：此时先加载用户级 scope 的变量，两者定义同一个键时以项目为准；用户级 scope 的密钥始终不会加载；
 - 在关联的 worktree 中，即使该 worktree 尚未 pull，也加载其所属项目的；
@@ -266,7 +266,7 @@ agent 从不索要密钥值：缺少密钥时，它会请你在自己的终端�
 
 用户级 scope 的团队设置了 `injectShellProfile: false` 时，它的 `env.sh` 在任何位置都不加载，继承它的项目中也不加载。
 
-交互式 shell 在 `cd` 时切换环境变量，并在离开项目时恢复你进入项目前设置的值。zsh 从 `.zshenv` 读取该区块，每个 zsh 都会读取它，因此工具执行命令时用的 `zsh -c` 也能拿到所在目录的环境变量。bash 在 `bash -c` 时不读取任何启动文件，所以 loader 会把 `BASH_ENV` 指向自身，并在加载团队环境后继续 source 你原有的 `BASH_ENV`；每个 bash 只运行你的文件一次。其他 shell（fish、PowerShell）不运行 loader：需要团队环境变量的命令请通过 `teamai env exec --` 运行，它按同样的方式解析。
+交互式 shell 在 `cd` 时切换环境变量，并在离开项目时恢复你进入项目前设置的值。zsh 从 `.zshenv` 读取该区块，每个 zsh 都会读取它，因此工具执行命令时用的 `zsh -c` 也能拿到所在目录的环境变量。bash 在 `bash -c` 时不读取任何启动文件，所以 loader 会把 `BASH_ENV` 指向自身，并在加载团队环境后继续 source 你原有的 `BASH_ENV`；每个 bash 只运行你的文件一次。团队环境不能设置 `BASH_ENV`、`__teamai_env_*` 或 `__TEAMAI_ENV_*`，这些名称由 loader 保留。团队声明这些名称时，pull 和 `env set` 会警告，因为 shell loader 会忽略它们。其他 shell（fish、PowerShell）不运行 loader：需要团队环境变量的命令请通过 `teamai env exec --` 运行，它按同样的方式解析。
 
 pull 不再为切换项目而改写 shell 配置文件。第一次用带 loader 的版本 pull 时（在没有环境变量的项目中也是如此），会从每个候选文件中移除旧版本写入的按 scope 区块；若某个项目因此不再获得以前能拿到的用户级变量，会提示一次。
 

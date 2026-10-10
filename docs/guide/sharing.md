@@ -297,7 +297,7 @@ not moved. Until that pull runs, `teamai doctor` reports a variable that
 `env.sh` still exports, so the previous project's secrets are not left live in
 silence.
 
-Team env reaches a shell by directory: a shell started in a directory gets the env of the scope that governs it, so several projects open at once each get their own. The shell profile carries one teamai block, the same for every scope, which sources `~/.teamai/env-loader.sh`. Each project pull records its scope in `~/.teamai/env-scopes`, keyed by the git directory a checkout shares with its worktrees (or the directory itself outside git), and the loader looks the shell's directory up there:
+Team env reaches a shell by directory: a shell started in a directory gets the env of the scope that governs it, so several projects open at once each get their own. The shell profile carries one teamai block, the same for every scope, which sources `~/.teamai/env-loader.sh`. Each project pull records its scope and machine-data partition in `~/.teamai/env-scopes`, keyed by the git directory a checkout shares with its worktrees (or the directory itself outside git), and the loader looks the shell's directory up there:
 
 - in a project, the project's `env.sh`, and nothing of the user scope's unless the project sets `inheritUserScope: true`: then the user scope's variables load first and the project wins a key both define; the user scope's secrets never do;
 - in a linked worktree, its project's, before the worktree has pulled;
@@ -305,7 +305,7 @@ Team env reaches a shell by directory: a shell started in a directory gets the e
 
 The user scope's `env.sh` loads nowhere when its team sets `injectShellProfile: false`, under a project that inherits it included.
 
-An interactive shell switches env on `cd` and puts back a value you had set before entering the project. zsh reads the block from `.zshenv`, which every zsh reads, so the `zsh -c` a tool runs a command with gets the env of its own directory. bash reads no startup file for `bash -c`, so the loader points `BASH_ENV` at itself and chains your existing `BASH_ENV` after loading the team env. Each bash runs your file once. Other shells (fish, PowerShell) run no loader: run the commands that need team env through `teamai env exec --`, which resolves the same way.
+An interactive shell switches env on `cd` and puts back a value you had set before entering the project. zsh reads the block from `.zshenv`, which every zsh reads, so the `zsh -c` a tool runs a command with gets the env of its own directory. bash reads no startup file for `bash -c`, so the loader points `BASH_ENV` at itself and chains your existing `BASH_ENV` after loading the team env. Each bash runs your file once. Team env files cannot set `BASH_ENV`, `__teamai_env_*` or `__TEAMAI_ENV_*`; those names belong to the loader. Pull and `env set` warn when a team declares them because the shell loader ignores them. Other shells (fish, PowerShell) run no loader: run the commands that need team env through `teamai env exec --`, which resolves the same way.
 
 A pull no longer rewrites the profile to switch projects. The first pull with a version that has the loader, also in a project without env, takes out the per-scope blocks earlier versions wrote, from every candidate file, and says so once when a project loses the user scope's variables it used to get.
 

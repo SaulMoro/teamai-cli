@@ -24,8 +24,8 @@ Secrets never come from the user scope in a project: `env.sh` holds no secret, a
 ## Mechanism
 
 ```text
-pull (user scope)    ── registers ──▶ ~/.teamai/env-scopes   user <TAB> - <TAB> env.sh|- <TAB> 0, before every project line
-pull (project scope) ── registers ──▶ ~/.teamai/env-scopes   git|dir <TAB> key <TAB> env.sh <TAB> inherits-user
+pull (user scope)    ── registers ──▶ ~/.teamai/env-scopes   user <TAB> - <TAB> env.sh|- <TAB> 0 <TAB> -
+pull (project scope) ── registers ──▶ ~/.teamai/env-scopes   git|dir <TAB> key <TAB> env.sh|- <TAB> inherits-user <TAB> partition
 pull (any scope)     ── new stamp ──▶ ~/.teamai/env-scopes   first line, when the registry or an env.sh changes
 pull (any scope)     ── writes ─────▶ ~/.teamai/env-loader.sh
                      ── one block ──▶ ${ZDOTDIR:-$HOME}/.zshenv (zsh) | .bashrc / the Git Bash chain (bash)
@@ -40,6 +40,7 @@ shell starts, or cd in an interactive shell
 - The loader exports the directory, the registry's stamp and the files it applied, so a child shell in the same directory does no work until a pull changes the registry or an `env.sh`, and the previous value of each key it set, so leaving a project puts the member's own value back.
 - A ZDOTDIR the CLI's environment carries is one every zsh started from it inherits, and those read `$ZDOTDIR/.zshenv`, never `~/.zshenv`, so the block goes there.
 - `teamai env exec` resolves the same contract for any shell or tool: it drops values another scope's `env.sh` exported (the marker `env.sh` writes identifies them), then applies the user scope's variables when the project inherits it, then the project's. It drops the loader's exported bookkeeping and restores the member's original `BASH_ENV` (or removes it when there was none), so a `bash` the command starts does not reapply the previous directory's env over the one `env exec` applied.
+- Project registry rows carry their partition path so user-scope uninstall can preserve registered machine data without reopening a checkout. Rows without that association are malformed and ignored by both routing and preservation.
 - `doctor` checks the contract where it is used: `This directory resolves its team env` starts the member's `$SHELL` in the directory and compares what the loader loaded with what this scope should. A shell that runs no loader passes it, with a note. The check that the profile carries the block keeps its earlier name, `Env variables injected in shell profile`, rather than the `Env loader installed` first proposed on the issue: it still checks env.yaml against env.sh too, and `doctor --json` consumers read it by name.
 - A team with `injectShellProfile: false` still registers its project, with no env.sh, so its directories load neither its env nor the user scope's. A user-scope team with it registers its line with no env.sh, so the user `env.sh` loads nowhere: not outside projects, not under a project that inherits the user scope.
 - A user scope last pulled by an earlier version has no registry line. Any pull, a project's too, writes it when it is missing, from the user scope's config and its team's `injectShellProfile`, as a user-scope pull would. When either cannot be read, the line says opted out and the pull warns: the user `env.sh` stays out of shells until a user-scope pull. The loader still falls back to the user `env.sh` with no line, so an opted-in user scope keeps its env in shells across the upgrade.

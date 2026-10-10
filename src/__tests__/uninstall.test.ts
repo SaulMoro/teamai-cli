@@ -516,7 +516,7 @@ describe('uninstall', () => {
       expect(await loaderBlocks(homeDir)).toBe(1);
     });
 
-    it('removes all teamai home state when no configuration is found', async () => {
+    it.skipIf(spawnSync('zsh', ['-c', 'true']).status !== 0 || spawnSync('bash', ['-c', 'true']).status !== 0)('removes all teamai home state when no configuration is found', async () => {
       const { homeDir, teamaiHome, projectConfig } = await setupUserAndProject();
       await fse.writeFile(path.join(homeDir, '.bashrc'), new EnvHandler().generateShellBlock(path.join(teamaiHome, 'env-loader.sh')));
       mockAutoDetectInit.mockRejectedValue(new Error('no configuration'));
