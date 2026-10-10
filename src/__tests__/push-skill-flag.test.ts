@@ -12,6 +12,7 @@ const mockLoadRolesManifest = vi.fn();
 const mockGetHandler = vi.fn();
 const mockPathExists = vi.fn();
 const mockListDirs = vi.fn();
+const mockResolveReal = vi.fn();
 
 vi.mock('../utils/prompt.js', () => ({
   isInteractive: vi.fn(() => true),
@@ -104,6 +105,15 @@ vi.mock('../utils/fs.js', async () => {
   };
 });
 
+// The tests that model the team tree with mocks use fictional paths, read as given.
+vi.mock('../utils/path-safety.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/path-safety.js')>();
+  return {
+    ...actual,
+    resolveReal: (p: string) => (mockResolveReal.getMockImplementation() ? mockResolveReal(p) : actual.resolveReal(p)),
+  };
+});
+
 vi.mock('../providers/index.js', () => ({
   getProvider: vi.fn().mockReturnValue({
     parseRepoInput: vi.fn().mockReturnValue({ owner: 'test', repo: 'repo' }),
@@ -166,6 +176,7 @@ function setupDefaultMocks() {
   // Default: pathExists returns false (most paths don't exist)
   mockPathExists.mockResolvedValue(false);
   mockListDirs.mockResolvedValue([]);
+  mockResolveReal.mockReset();
   // Default handler: no items from scan
   mockGetHandler.mockImplementation(() => ({
     scanLocalForPush: vi.fn().mockResolvedValue([]),
@@ -267,11 +278,16 @@ describe('push --skill flag', () => {
       if (pathStr === '/tmp/team-repo/skills') return true;
       // Namespace dir hai_dev contains our skill
       if (pathStr === '/tmp/team-repo/skills/hai_dev/my-skill') return true;
+      if (pathStr === '/tmp/team-repo/skills/hai_dev/my-skill/SKILL.md') return true;
       // hai_dev is a namespace (no SKILL.md at top level)
       if (pathStr === '/tmp/team-repo/skills/hai_dev/SKILL.md') return false;
       return false;
     });
-    mockListDirs.mockResolvedValue(['hai_dev']);
+    mockListDirs.mockImplementation(async (dir: string) => ({
+      '/tmp/team-repo/skills': ['hai_dev'],
+      '/tmp/team-repo/skills/hai_dev': ['my-skill'],
+    } as Record<string, string[]>)[String(dir)] ?? []);
+    mockResolveReal.mockImplementation((p: string) => p);
     // The role is given hai_dev: a copy teamai never delivered is tied by name
     // only to a skill this directory receives.
     mockLoadRolesManifest.mockResolvedValue({
@@ -316,7 +332,8 @@ describe('push --skill flag', () => {
       // No matching skill in any namespace
       return false;
     });
-    mockListDirs.mockResolvedValue(['hai_dev']);
+    mockListDirs.mockImplementation(async (dir: string) => (String(dir) === '/tmp/team-repo/skills' ? ['hai_dev'] : []));
+    mockResolveReal.mockImplementation((p: string) => p);
 
     await push({ all: true, skill: '/home/user/.claude/skills/brand-new-skill' });
 
@@ -360,7 +377,8 @@ describe('push --skill flag', () => {
       if (pathStr === '/tmp/team-repo/skills/flat-skill/SKILL.md') return true;
       return false;
     });
-    mockListDirs.mockResolvedValue(['hai_dev']);
+    mockListDirs.mockImplementation(async (dir: string) => (String(dir) === '/tmp/team-repo/skills' ? ['hai_dev', 'flat-skill'] : []));
+    mockResolveReal.mockImplementation((p: string) => p);
 
     await push({ all: true, skill: '/home/user/.claude/skills/flat-skill' });
 

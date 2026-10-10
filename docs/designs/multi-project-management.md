@@ -504,7 +504,9 @@ team repo is identified by its path, so same-named skills in two namespaces are
 two resources, and a new one by its name. Otherwise this push opens its own PR
 and leaves that one untouched. A new skill keeps the destination its open PR
 recorded even when a same-named team skill appears elsewhere and the scan would
-call the copy an edit of that skill. Edits from several tools of one team skill
+call the copy an edit of that skill. Open PRs holding a new skill's name at
+several destinations prove none of them: push leaves the copy out, and
+`--skill <path> --role <ns>` picks the one at that namespace. Edits from several tools of one team skill
 are one candidate, the newest, whether or not each copy has a delivery record.
 Each copy's destination is decided before copies are merged, so a new skill
 awaiting review in one tool and an edit of a same-named team skill in another

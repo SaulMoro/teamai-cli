@@ -49,24 +49,28 @@ export function recordedNamespace(recorded: PendingPushItem): string | undefined
 }
 
 /**
- * The open-PR record that decides where a new skill goes: the newest one
- * carrying a skill of that name whose destination is not on the team repo.
- * A same-named team skill elsewhere — a teammate's shared-root one, say — does
- * not change it: the copy was never delivered from there, and the record says
- * where it went. A record whose destination is on the team repo is an edit,
- * matched by path (`isRecordedItem`), and decides nothing here.
+ * The open-PR records that can decide where a new skill goes: for each
+ * destination not on the team repo, the newest record carrying a skill of that
+ * name, newest first. A same-named team skill elsewhere — a teammate's
+ * shared-root one, say — does not change them: the copy was never delivered
+ * from there, and the record says where it went. A record whose destination is
+ * on the team repo is an edit, matched by path (`isRecordedItem`), and decides
+ * nothing here. Several: the name awaits review at more than one destination,
+ * and no record says which of them a copy belongs to.
  */
-export async function openPrDestination(input: {
+export async function openPrDestinations(input: {
   pending: readonly PendingPush[];
   name: string;
   repoPath: string;
-}): Promise<PendingPushItem | undefined> {
+}): Promise<{ branch: string; recorded: PendingPushItem }[]> {
   const newestFirst = [...input.pending].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  const found: { branch: string; recorded: PendingPushItem }[] = [];
   for (const entry of newestFirst) {
     const recorded = entry.items.find((i) => i.type === 'skills' && i.name === input.name);
-    if (recorded && !await pathExists(path.join(input.repoPath, recorded.relativePath))) return recorded;
+    if (!recorded || found.some((f) => f.recorded.relativePath === recorded.relativePath)) continue;
+    if (!await pathExists(path.join(input.repoPath, recorded.relativePath))) found.push({ branch: entry.branch, recorded });
   }
-  return undefined;
+  return found;
 }
 
 /**

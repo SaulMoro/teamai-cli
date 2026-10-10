@@ -7,7 +7,7 @@ import {
   createGit, pullRepo, pushRepoBranch, checkoutMaster, generateBranchName,
   resetToCleanMaster, isDedicatedRepoRoot, getDefaultBranch, getFileContentAtRev, getHeadCommit,
 } from './utils/git.js';
-import { reconcilePlacementRecords, dropClosedPendingPushes, openPrDestination,
+import { reconcilePlacementRecords, dropClosedPendingPushes,
   findPendingForItem, isRecordedItem, partiallySelectedEntries, pendingNamespaceFor, planPushGroups, recordedNamespace,
   prunePendingPushes, recordPendingPush, toPendingItems, type PushGroup,
 } from './utils/pending-push.js';
@@ -1402,9 +1402,8 @@ async function pushCore(
   // Preserve blocked items in the full scan so their pending PR records survive.
   // Exclude them before selection and grouping: pushItem cannot write their paths.
   const allItems = fullScan.filter((item) => {
-    if (item.type === 'agents' && 'skipReason' in item
-      && typeof item.skipReason === 'string' && item.skipReason) {
-      log.warn(`[agents] Skipped ${item.name}: ${item.skipReason}`);
+    if ('skipReason' in item && typeof item.skipReason === 'string' && item.skipReason) {
+      log.warn(`[${item.type}] Skipped ${item.name}: ${item.skipReason}`);
       return false;
     }
     // A model alias kept its hand-edited model out (#830); the rest goes out.
@@ -1452,11 +1451,21 @@ async function pushCore(
       return;
     }
 
-    // Normalize the input path (expand ~ and resolve to absolute).
+    // Normalize the input path (expand ~ and resolve to absolute). Messages
+    // name it as given; the skill is the directory a symlink points to, and is
+    // named after that directory.
     const os = await import('node:os');
-    const skillPath = options.skill.startsWith('~')
+    const requestedPath = options.skill.startsWith('~')
       ? path.join(os.homedir(), options.skill.slice(1))
       : path.resolve(options.skill);
+    const skillPath = resolveReal(requestedPath);
+    try {
+      assertSafeResourceName(path.basename(skillPath));
+    } catch (e) {
+      console.error(`[push] Invalid --skill argument: ${(e as Error).message}`);
+      process.exitCode = 2;
+      return;
+    }
 
     // Try to find matching skill from scan results first
     let matchedItem: ResourceItem | undefined;
@@ -1466,7 +1475,7 @@ async function pushCore(
 
       // --skill selects this copy only. A same-named item from another tool
       // cannot stand in for a requested copy the scan skipped.
-      if (resolveReal(item.sourcePath) === resolveReal(skillPath)) {
+      if (resolveReal(item.sourcePath) === skillPath) {
         matchedItem = item;
         break;
       }
@@ -1483,65 +1492,64 @@ async function pushCore(
       if (await pathExists(skillPath) && await pathExists(path.join(skillPath, 'SKILL.md'))) {
         const skillName = path.basename(skillPath);
 
-        // The team skills of that name, at the shared root and in any namespace.
-        // Several of them: the one this copy was delivered from, by its record
-        // (#1020), never the first in directory order.
-        const teamSkillsDir = path.join(localConfig.repo.localPath, 'skills');
-        const copies: { dir: string; namespace?: string }[] = [];
-        if (await pathExists(path.join(teamSkillsDir, skillName, 'SKILL.md'))) copies.push({ dir: path.join(teamSkillsDir, skillName) });
-        const { listDirs } = await import('./utils/fs.js');
-        for (const dir of await listDirs(teamSkillsDir)) {
-          if (await pathExists(path.join(teamSkillsDir, dir, 'SKILL.md'))) continue;
-          if (await pathExists(path.join(teamSkillsDir, dir, skillName))) copies.push({ dir: path.join(teamSkillsDir, dir, skillName), namespace: dir });
-        }
-        let namespace: string | undefined;
-        let fromInactiveNamespace = false;
+        // The destination the skills scan gives this copy (`resolveDestination`).
+        // Where that is no single team skill, --skill asks for --role rather than guess.
         const { deliveredHashes } = await import('./pull.js');
-        const { recordedOrigin, resolvePushSkillNamespaces } = await import('./resources/skills.js');
-        const { recordedUnder } = await import('./resources/delivered-copies.js');
-        // Pull records the copy under its real path.
-        const record = { delivered: await deliveredHashes(localConfig) ?? {}, dest: resolveReal(skillPath), repoPath: localConfig.repo.localPath };
-        const deliveryRecorded = recordedUnder(record.delivered, record.dest).length > 0;
-        let origin = copies.length > 0 ? await recordedOrigin(copies, record) : undefined;
-        const hasRecordedOrigin = origin !== undefined;
-        // The scan's order of proof: an open PR decides where a copy teamai never delivered goes.
-        const awaiting = deliveryRecorded
-          ? undefined
-          : await openPrDestination({ pending: openPushes, name: skillName, repoPath: localConfig.repo.localPath });
-        const status: 'new' | 'modified' = copies.length > 0 && !awaiting ? 'modified' : 'new';
-        if (awaiting) {
-          namespace = recordedNamespace(awaiting);
-        } else if (copies.length > 0) {
-          if (!origin && recordedUnder(record.delivered, record.dest).length === 0) {
-            // A copy teamai never delivered here is tied by its name alone, so
-            // only to the one skill of that name this directory is given: the
-            // shared root or an active namespace, as the skills scan does.
-            const scoped = await resolvePushSkillNamespaces(localConfig);
-            const given = copies.filter((copy) => !copy.namespace || !scoped || scoped.includes(copy.namespace));
-            if (given.length === 1) origin = given[0];
-          }
-          if (!origin && !deliveryRecorded && !options.role && !options.project) {
-            log.error(
-              `[skills] Cannot tell which team skill ${skillPath} is: teamai has no record of delivering this copy from `
-              + `${copies.map((copy) => path.relative(localConfig.repo.localPath, copy.dir).split(path.sep).join('/')).join(' or ')}. `
-              + 'Pass --role <ns> to name the namespace it goes to.',
-            );
-            process.exitCode = 2;
-            return;
-          }
-          namespace = origin?.namespace;
-          fromInactiveNamespace = hasRecordedOrigin;
+        const { readTeamSkillIndex, resolveDestination, resolvePushSkillNamespaces } = await import('./resources/skills.js');
+        const team = await readTeamSkillIndex(localConfig.repo.localPath, await resolvePushSkillNamespaces(localConfig));
+        const destination = await resolveDestination({
+          name: skillName,
+          // Pull records the copy under its real path.
+          dest: skillPath,
+          team,
+          delivered: await deliveredHashes(localConfig) ?? {},
+          pending: openPushes,
+          repoPath: localConfig.repo.localPath,
+          role: options.role,
+        });
+        const copies = team.allTeamSkills.get(skillName) ?? [];
+        // Picked by name among several the scope is given (a namespace over the
+        // shared root, the first namespace), which the scan accepts and --skill
+        // does not. Every out-of-scope skill of the name is among `copies`.
+        const pickedByName = destination.kind === 'team' && !destination.proven
+          && copies.length - (team.blockedSkills.get(skillName)?.length ?? 0) > 1;
+        if (destination.kind === 'ambiguousOpenPr' && !options.role && !options.project) {
+          log.error(
+            `[skills] Cannot tell which open PR ${requestedPath} belongs to: it is awaiting review at `
+            + `${destination.records.map((r) => `${r.relativePath} (branch ${r.branch})`).join(' and ')}. `
+            + 'Pass --role <ns> to name the namespace it goes to.',
+          );
+          process.exitCode = 2;
+          return;
         }
+        const unresolved = pickedByName || destination.kind === 'ambiguous' || destination.kind === 'outOfScope'
+          || destination.kind === 'ambiguousOpenPr';
+        if (unresolved && !options.role && !options.project) {
+          log.error(
+            `[skills] Cannot tell which team skill ${requestedPath} is: teamai has no record of delivering this copy from `
+            + `${copies.map((copy) => path.relative(localConfig.repo.localPath, copy.dir).split(path.sep).join('/')).join(' or ')}. `
+            + 'Pass --role <ns> to name the namespace it goes to.',
+          );
+          process.exitCode = 2;
+          return;
+        }
+        const proven = destination.kind === 'team' && destination.proven;
+        const deliveryRecorded = proven || destination.kind === 'unproven';
+        const status: 'new' | 'modified' = destination.kind === 'openPr' || destination.kind === 'new'
+          || destination.kind === 'ambiguousOpenPr' ? 'new' : 'modified';
+        const namespace = destination.kind === 'openPr' ? destination.namespace
+          : destination.kind === 'team' && !unresolved ? destination.teamSkill.namespace
+            : undefined;
 
         const constructed = createSkillPushItem({
           name: skillName,
           sourcePath: skillPath,
           status,
           namespace,
-          ...fromInactiveNamespace ? { fromInactiveNamespace: true } : {},
+          ...proven ? { fromInactiveNamespace: true } : {},
           ...deliveryRecorded ? { deliveryRecorded: true } : {},
-          ...hasRecordedOrigin ? { originProven: true } : {},
-          ...(deliveryRecorded && !hasRecordedOrigin ? { reportSourcePath: true as const } : {}),
+          ...proven ? { originProven: true } : {},
+          ...(deliveryRecorded && !proven ? { reportSourcePath: requestedPath } : {}),
           originCandidates: copies,
           repoPath: localConfig.repo.localPath,
         });
