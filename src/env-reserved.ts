@@ -6,8 +6,9 @@ export const TEAM_ENV_RESERVED_NAMES = [
 ] as const;
 
 export function isReservedTeamEnvKey(key: string): boolean {
-  return TEAM_ENV_RESERVED_NAMES.includes(key as (typeof TEAM_ENV_RESERVED_NAMES)[number])
-    || key.startsWith('__TEAMAI_ENV_') || key.startsWith('__teamai_env_');
+  const normalized = key.toUpperCase();
+  return TEAM_ENV_RESERVED_NAMES.some((reserved) => reserved.toUpperCase() === normalized)
+    || normalized.startsWith('__TEAMAI_ENV_');
 }
 
 export function reservedTeamEnvKeys(keys: Iterable<string>): string[] {

@@ -372,7 +372,7 @@ scope: 'user',
       expect(content).toBe("export _PRIVATE='a'\nexport A1_b2='b'\n");
     });
 
-    it.each(['BASH_ENV', 'ENV', 'ZDOTDIR', 'HOME', 'PROMPT_COMMAND', 'chpwd_functions', 'precmd_functions', 'preexec_functions', 'periodic_functions', 'zshaddhistory_functions', 'zshexit_functions', 'zsh_directory_name_functions', '__TEAMAI_ENV_FILES', '__teamai_env_apply'])('should drop reserved loader variable %s', (key) => {
+    it.each(['BASH_ENV', 'ENV', 'ZDOTDIR', 'HOME', 'home', 'PROMPT_COMMAND', 'chpwd_functions', 'precmd_functions', 'preexec_functions', 'periodic_functions', 'zshaddhistory_functions', 'zshexit_functions', 'zsh_directory_name_functions', '__TEAMAI_ENV_FILES', '__teamai_env_apply'])('should drop reserved loader variable %s', (key) => {
       expect(handler.generateEnvFile([{ key, value: 'team-value' }, { key: 'SAFE', value: 'yes' }]))
         .toBe("export SAFE='yes'\n");
     });

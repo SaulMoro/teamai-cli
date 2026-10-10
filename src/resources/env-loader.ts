@@ -184,7 +184,7 @@ async function registeredProjectDataHomes(projectEntries: string[]): Promise<str
     // Rows without an explicit partition are malformed. The shell loader also
     // skips them, so they cannot preserve an unrelated machine partition.
     if ((kind !== 'git' && kind !== 'dir') || !partition || partition === '-') return [];
-    return [path.normalize(partition.replace(/[\\/]/g, path.sep))];
+    return [path.normalize(process.platform === 'win32' ? partition.replace(/[\\/]/g, path.sep) : partition)];
   });
 }
 
@@ -325,7 +325,7 @@ __teamai_env_files() {
         case $__teamai_i in 0 | 1) ;; *) continue ;; esac
         [ -n "$__teamai_f" ] || continue
         __teamai_found=1
-        [ "$__teamai_i" = 1 ] && [ -n "$__teamai_user" ] && printf '%s\\n' "$__teamai_user"
+        [ "$__teamai_f" != - ] && [ "$__teamai_i" = 1 ] && [ -n "$__teamai_user" ] && printf '%s\\n' "$__teamai_user"
         [ "$__teamai_f" = - ] || printf '%s\\n' "$__teamai_f"
         break
       fi
@@ -399,7 +399,8 @@ __teamai_env_unapply() {
 }
 
 # One file per line. No here-document: a sandboxed tool may not let the shell
-# create the temp file one needs.
+# create the temp file one needs. Read every file's keys before sourcing any;
+# env files can change PATH, and the loader runs no external command afterwards.
 __teamai_env_load() {
   __teamai_keys=
   __teamai_ifs_set=\${IFS+1} __teamai_ifs=\${IFS-}
@@ -410,12 +411,19 @@ __teamai_env_load() {
     for __teamai_k in $(sed -n 's/^export \\([A-Za-z_][A-Za-z0-9_]*\\)=.*/\\1/p' "$__teamai_f"); do
       case " $__teamai_keys " in *" $__teamai_k "*) continue ;; esac
       __teamai_keys="$__teamai_keys $__teamai_k"
-      eval "__teamai_set=\\\${$__teamai_k+1}"
-      if [ "$__teamai_set" = 1 ]; then
-        eval "export __TEAMAI_ENV_SET_$__teamai_k=1 __TEAMAI_ENV_PREV_$__teamai_k=\\"\\$$__teamai_k\\""
-      fi
     done
-    . "$__teamai_f"
+  done
+  __teamai_key_ifs=$IFS
+  IFS=' \n'
+  for __teamai_k in $__teamai_keys; do
+    eval "__teamai_set=\\\${$__teamai_k+1}"
+    if [ "$__teamai_set" = 1 ]; then
+      eval "export __TEAMAI_ENV_SET_$__teamai_k=1 __TEAMAI_ENV_PREV_$__teamai_k=\\"\\$$__teamai_k\\""
+    fi
+  done
+  IFS=$__teamai_key_ifs
+  for __teamai_f in $__TEAMAI_ENV_FILES; do
+    [ -f "$__teamai_f" ] && . "$__teamai_f"
   done
   if [ -n "$__teamai_ifs_set" ]; then IFS=$__teamai_ifs; else unset IFS; fi
   export __TEAMAI_ENV_KEYS="$__teamai_keys"

@@ -71,6 +71,14 @@ describe('team env by directory (#1018)', () => {
     expect(await envLoaderFilesForProjects()).not.toContain(partition);
   });
 
+  it.skipIf(process.platform === 'win32')('keeps a literal backslash in a POSIX partition path', async () => {
+    const partition = `${tmpDir}/data\\name`;
+    await fse.ensureDir(partition);
+    await fse.writeFile(path.join(homeDir, '.teamai', 'env-scopes'), `stamp\ttest\ndir\t${tmpDir}\t-\t0\t${partition}\n`);
+
+    expect(await envLoaderFilesForProjects()).toContain(partition);
+  });
+
   /** A project-scope install in its own git checkout, as `teamai init` leaves it. */
   const project = async (name: string): Promise<LocalConfig> => {
     const root = path.join(tmpDir, 'work', name);
@@ -275,6 +283,7 @@ describe('team env by directory (#1018)', () => {
       { key: 'ENV', value: '/tmp/team-env' },
       { key: 'ZDOTDIR', value: '/tmp/team-zdotdir' },
       { key: 'HOME', value: '/tmp/team-home' },
+      { key: 'home', value: '/tmp/team-home' },
       { key: 'PROMPT_COMMAND', value: 'echo team' },
       { key: 'chpwd_functions', value: 'team_chpwd' },
       { key: 'precmd_functions', value: 'team_precmd' },
@@ -424,8 +433,8 @@ describe('team env by directory (#1018)', () => {
         expect(shellSees('zsh', a.projectRoot ?? '', 'SHARED')).toBe('project');
       });
 
-      it('loads nothing in a project whose team opted out of shell-profile injection', async () => {
-        const c = await project('c');
+      it.each([false, true])('loads nothing in an opted-out project, including inherited user env (inheritUserScope=$inheritUserScope)', async (inheritUserScope) => {
+        const c = { ...await project(`c-${inheritUserScope}`), inheritUserScope };
         await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-c' }], {
           ...teamConfig, sharing: { ...teamConfig.sharing, env: { injectShellProfile: false } },
         } as TeamaiConfig, c);
@@ -620,6 +629,47 @@ describe('team env by directory (#1018)', () => {
       }
 
       expect(output).toContain('from-b');
+    });
+
+    const r3Cases = ['startup', 'cd', 'BASH_ENV child']
+      .filter((entry) => (entry === 'cd' ? hasShell('zsh') : hasShell('bash')));
+
+    it.each(r3Cases)('restores env keys after a sourced file removes sed and git from PATH during $entry', async (entry) => {
+      const a = await project('r3-a');
+      const elsewhere = path.join(tmpDir, 'r3-elsewhere');
+      await fse.ensureDir(elsewhere);
+      const userConfig = {
+        repo: { localPath: path.join(tmpDir, 'team-repo'), remote: teamConfig.repo }, username: 'member',
+        updatePolicy: 'auto', additionalRoles: [], scope: 'user',
+      } as LocalConfig;
+      await handler.writeResolvedEnv([{ key: 'PATH', value: '/no-sed-or-git' }], teamConfig, userConfig);
+      await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-a' }], teamConfig, { ...a, inheritUserScope: true });
+      const shell = entry === 'cd' ? '/bin/zsh' : '/bin/bash';
+      const env: NodeJS.ProcessEnv = {
+        HOME: homeDir, PATH: process.env.PATH, SHELL: shell,
+        BASH_ENV: path.join(homeDir, '.teamai', 'env-loader.sh'),
+      };
+      let output = '';
+      if (entry === 'startup') {
+        const first = spawnSync('/bin/bash', ['-c', `'${process.execPath}' -e 'process.stdout.write(JSON.stringify(process.env))'`], {
+          cwd: a.projectRoot, env, encoding: 'utf-8',
+        });
+        const inherited = JSON.parse(first.stdout) as NodeJS.ProcessEnv;
+        expect(inherited.MARKER).toBe('from-a');
+        output = spawnSync('/bin/bash', ['-c', `printf '%s\\n' "\${MARKER-unset}"`], {
+          cwd: elsewhere, env: inherited, encoding: 'utf-8',
+        }).stdout;
+      } else if (entry === 'cd') {
+        output = spawnSync('/bin/zsh', ['-i', '-c', `cd '${elsewhere}'; print -r -- "\${MARKER-unset}"`], {
+          cwd: a.projectRoot, env, encoding: 'utf-8',
+        }).stdout;
+      } else {
+        output = spawnSync('/bin/bash', ['-c', `cd '${elsewhere}'; /bin/bash -c 'printf "%s\\n" "\${MARKER-unset}"'`], {
+          cwd: a.projectRoot, env, encoding: 'utf-8',
+        }).stdout;
+      }
+
+      expect(output.trim()).toBe('unset');
     });
 
     it('preserves PROMPT_COMMAND arrays and removes only the loader hook when the env is unapplied', async () => {

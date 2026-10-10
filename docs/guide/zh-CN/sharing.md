@@ -266,6 +266,8 @@ agent 从不索要密钥值：缺少密钥时，它会请你在自己的终端�
 
 用户级 scope 的团队设置了 `injectShellProfile: false` 时，它的 `env.sh` 在任何位置都不加载，继承它的项目中也不加载。
 
+项目所属团队设置了 `injectShellProfile: false` 时，项目的 `env.sh` 和继承的用户级 scope 都不会加载。
+
 交互式 shell 在 `cd` 时切换环境变量，并在离开项目时恢复你进入项目前设置的值。zsh 从 `.zshenv` 读取该区块，每个 zsh 都会读取它，因此工具执行命令时用的 `zsh -c` 也能拿到所在目录的环境变量。bash 在 `bash -c` 时不读取任何启动文件，所以 loader 会把 `BASH_ENV` 指向自身，并在加载团队环境后继续 source 你原有的 `BASH_ENV`；每个 bash 只运行你的文件一次。团队环境不能设置 `BASH_ENV`、`ENV`、`ZDOTDIR`、`HOME`、`PROMPT_COMMAND`、zsh 钩子数组，以及以 `__TEAMAI_ENV_` 或 `__teamai_env_` 开头的名称；这些名称控制 shell 启动、钩子或 loader 状态。团队声明这些名称时，pull、`env set` 和 `env exec` 会警告，因为 TeamAI 会忽略这些值。其他 shell（fish、PowerShell）不运行 loader：需要团队环境变量的命令请通过 `teamai env exec --` 运行，它按同样的方式解析。
 
 pull 不再为切换项目而改写 shell 配置文件。第一次用带 loader 的版本 pull 时（在没有环境变量的项目中也是如此），会从每个候选文件中移除旧版本写入的按 scope 区块；若某个项目因此不再获得以前能拿到的用户级变量，会提示一次。
