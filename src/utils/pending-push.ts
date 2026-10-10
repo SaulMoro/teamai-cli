@@ -38,6 +38,36 @@ export function isRecordedItem(recorded: PendingPushItem, item: ResourceItem): b
 }
 
 /**
+ * Give a skill the destination of the open PR that added it, once a same-named
+ * team skill elsewhere — a teammate's shared-root one, say — makes the scan
+ * resolve the copy to that skill and call it modified. The copy was never
+ * delivered from there, while the record says where it went, so it stays a new
+ * skill at that destination until the record is gone, and every later step
+ * matches it to that PR. A copy with a proven origin keeps it, and a record
+ * whose destination is on the team repo is an edit, matched by path.
+ * Runs once, after pruning and before anything reads a destination.
+ */
+export async function adoptOpenPrDestinations(
+  items: ResourceItem[],
+  pending: PendingPush[],
+  repoPath: string,
+): Promise<void> {
+  const newestFirst = [...pending].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  for (const item of items) {
+    if (item.type !== 'skills' || item.status !== 'modified' || item.fromInactiveNamespace) continue;
+    for (const entry of newestFirst) {
+      const recorded = entry.items.find((i) => i.type === item.type && i.name === item.name);
+      if (!recorded || await pathExists(path.join(repoPath, recorded.relativePath))) continue;
+      const segments = recorded.relativePath.split('/');
+      item.status = 'new';
+      item.namespace = recorded.namespace ?? (segments.length === 3 ? segments[1] : undefined);
+      item.relativePath = recorded.relativePath;
+      break;
+    }
+  }
+}
+
+/**
  * Drop records that no longer describe an open PR:
  *   - the branch is gone from origin (PR merged or closed, branch deleted)
  *   - none of its resources show up in the current scan (PR merged with the

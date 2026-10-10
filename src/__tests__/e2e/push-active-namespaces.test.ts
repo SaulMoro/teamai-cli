@@ -419,6 +419,149 @@ describe('push an edit of a skill pull kept after a project switch (#1020)', () 
   });
 });
 
+describe('push gives each local copy one team destination, whatever its scan status', () => {
+  const pushBranches = () => git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/teamai/push/'], origin)
+    .split('\n').filter(Boolean);
+  const skillFilesOn = (branch: string) => git(['diff', '--name-only', 'main', branch], origin).split('\n')
+    .filter((file) => file.endsWith('/SKILL.md'));
+  const localSkill = (name: string) => path.join(project, '.claude', 'skills', name);
+
+  /**
+   * New skills pushed to `platform` and still awaiting review, then a
+   * teammate's unrelated shared-root `skills/foo`: from here the scan calls
+   * the local `foo` an edit of that shared skill.
+   */
+  function awaitReviewThenShareFooAtRoot(names: string[]): string {
+    expect(run(['projects', 'set', 'platform']).code).toBe(0);
+    for (const name of names) writeFile(path.join(localSkill(name), 'SKILL.md'), skillMd(name));
+    run(['push', '--all']);
+    const [openBranch] = pushBranches();
+    commitOnTeam('skills/foo/SKILL.md', `${skillMd('foo')}\nA teammate's shared skill.\n`);
+    fs.appendFileSync(path.join(localSkill('foo'), 'SKILL.md'), '\nSecond edit.\n');
+    // Push branch names carry a one-second timestamp; a second push in the same second reuses the name.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1100);
+    return openBranch!;
+  }
+
+  const untouchedSharedRoot = () => {
+    for (const branch of pushBranches()) expect(skillFilesOn(branch)).not.toContain('skills/foo/SKILL.md');
+  };
+
+  /**
+   * Edits of team skill svc-a/a-skill from Claude and Codex. Only the
+   * `recorded` tool's copy has a delivery record; `newer` holds the newer edit.
+   */
+  function editFromTwoTools(recorded: 'claude' | 'codex', newer: 'claude' | 'codex'): string {
+    commitOnTeam('teamai.yaml', [
+      'team: push-active-ns', `repo: ${origin}`, 'provider: git', 'usageReport: false',
+      'toolPaths:', '  claude:', '    skills: .claude/skills', '  codex:', '    skills: .codex/skills', '',
+    ].join('\n'));
+    git(['pull', '-q', 'origin', 'main'], path.join(project, '.teamai', 'team-repo'));
+    setConfig({ enabledAgents: ['claude', 'codex'] });
+    const copies = { claude: localSkill('a-skill'), codex: path.join(project, '.codex', 'skills', 'a-skill') };
+    writeFile(path.join(copies.codex, 'SKILL.md'), `${skillMd('a-skill')}\nCodex edit.\n`);
+    fs.appendFileSync(path.join(copies.claude, 'SKILL.md'), '\nClaude edit.\n');
+    if (recorded === 'codex') {
+      const file = path.join(project, '.teamai', 'state.json');
+      const state = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+        lastPullByWorkspace: Record<string, { delivered?: Record<string, string> }>;
+      };
+      for (const record of Object.values(state.lastPullByWorkspace)) {
+        for (const dest of Object.keys(record.delivered ?? {})) {
+          if (dest.includes(`${path.sep}.claude${path.sep}skills${path.sep}a-skill`)) delete record.delivered![dest];
+        }
+      }
+      writeFile(file, `${JSON.stringify(state, null, 2)}\n`);
+      recordDeliveredCopies({ [path.join(fs.realpathSync(copies.codex), 'SKILL.md')]: contentHash(skillMd('a-skill')) });
+    }
+    const later = new Date(Date.now() + 5_000);
+    fs.utimesSync(path.join(copies[newer], 'SKILL.md'), later, later);
+    return copies.codex;
+  }
+
+  it.each([
+    {
+      site: 'candidate dedup: two tools edit one destination and only one copy has a delivery record',
+      check: () => {
+        const codexSkill = editFromTwoTools('claude', 'claude');
+
+        const pushed = run(['push', '--all']);
+
+        const [branch] = pushBranches();
+        expect(skillFilesOn(branch!), pushed.output).toEqual(['skills/svc-a/a-skill/SKILL.md']);
+        const sent = git(['show', `${branch}:skills/svc-a/a-skill/SKILL.md`], origin);
+        expect(sent, pushed.output).toContain('Claude edit.');
+        expect(sent).not.toContain('Codex edit.');
+        expect(pushed.output).toContain(`Skipped a-skill at ${fs.realpathSync(codexSkill)}: another edited copy`);
+      },
+    },
+    ...([['claude', 'codex'], ['codex', 'claude']] as const).map(([recorded, newer]) => ({
+      site: `candidate dedup with --role: the newer unrecorded ${newer} copy still goes to the destination ${recorded}'s record proves`,
+      check: () => {
+        editFromTwoTools(recorded, newer);
+
+        const pushed = run(['push', '--all', '--role', 'platform']);
+
+        const [branch] = pushBranches();
+        expect(skillFilesOn(branch!), pushed.output).toEqual(['skills/svc-a/a-skill/SKILL.md']);
+        expect(git(['show', `${branch}:skills/svc-a/a-skill/SKILL.md`], origin))
+          .toContain(newer === 'codex' ? 'Codex edit.' : 'Claude edit.');
+      },
+    })),
+    {
+      site: 'open-PR matching, pruning, grouping and write namespace: the open PR is updated in place',
+      check: () => {
+        const openBranch = awaitReviewThenShareFooAtRoot(['foo']);
+
+        const pushed = run(['push', '--all']);
+
+        expect(pushBranches(), pushed.output).toEqual([openBranch]);
+        expect(skillFilesOn(openBranch)).toEqual(['skills/platform/foo/SKILL.md']);
+        expect(git(['show', `${openBranch}:skills/platform/foo/SKILL.md`], origin)).toContain('Second edit.');
+        untouchedSharedRoot();
+      },
+    },
+    {
+      site: 'preview: the copy is listed at its open PR destination',
+      check: () => {
+        awaitReviewThenShareFooAtRoot(['foo']);
+
+        const pushed = run(['push', '--dry-run']);
+
+        expect(pushed.output).toContain('to:   skills/platform/foo');
+        expect(pushed.output).toContain('awaiting review');
+      },
+    },
+    {
+      site: 'conflict check: --role naming another namespace opens a separate PR',
+      check: () => {
+        const openBranch = awaitReviewThenShareFooAtRoot(['foo']);
+
+        const pushed = run(['push', '--all', '--role', 'svc-a']);
+
+        expect(pushed.output).toContain('foo is awaiting review at skills/platform/foo');
+        expect(git(['show', `${openBranch}:skills/platform/foo/SKILL.md`], origin)).not.toContain('Second edit.');
+        expect(skillFilesOn(pushBranches().find((b) => b !== openBranch)!), pushed.output)
+          .toEqual(['skills/svc-a/foo/SKILL.md']);
+        untouchedSharedRoot();
+      },
+    },
+    {
+      site: 'partial selection: --skill picks one of the open PR\'s resources',
+      check: () => {
+        const openBranch = awaitReviewThenShareFooAtRoot(['foo', 'bar']);
+
+        const pushed = run(['push', '--skill', localSkill('foo')]);
+
+        expect(pushed.output).toContain('Only part of');
+        expect(skillFilesOn(pushBranches().find((b) => b !== openBranch)!), pushed.output)
+          .toEqual(['skills/platform/foo/SKILL.md']);
+        untouchedSharedRoot();
+      },
+    },
+  ])('$site', ({ check }) => check());
+});
+
 describe('push --skill sends a skill to the team skill it came from', () => {
   it('does not fall back to another tool when the requested delivered copy has no proven origin', () => {
     const requested = path.join(project, '.claude', 'skills', 'a-skill');

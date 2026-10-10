@@ -719,8 +719,9 @@ export class SkillsHandler extends ResourceHandler {
       return [];
     }
 
-    // Delivered copies are keyed by their proven team destination. New skills
-    // keep the existing name-based placement and deduplication behavior.
+    // An edit is keyed by the team destination it resolves to, proven or not,
+    // so two copies of one skill are one candidate. New skills keep the
+    // existing name-based placement and deduplication behavior.
     const candidates = new Map<string, {
       name: string; sourcePath: string; mtime: number; status: ResourceItemStatus; namespace?: string; fromInactiveNamespace?: true;
       deliveryRecorded?: true; originProven?: true; originCandidates?: readonly { dir: string }[];
@@ -852,22 +853,32 @@ export class SkillsHandler extends ResourceHandler {
 
           // Content differs — candidate for "modified"
           const mtime = await getDirLatestMtime(localDirPath);
-          const candidateKey = deliveryRecorded ? `destination:${teamSkill.dir}` : `name:${dir}`;
+          const candidateKey = `destination:${teamSkill.dir}`;
           const existing = candidates.get(candidateKey);
           if (!existing || mtime > existing.mtime) {
             if (existing && !await dirContentEqual(existing.sourcePath, localDirPath, [CONTRIBUTORS_FILE])) {
               warnOnce(`[skills] Skipped ${dir} at ${existing.sourcePath}: another edited copy for `
                 + `${path.relative(localConfig.repo.localPath, teamSkill.dir).split(path.sep).join('/')} has newer content.`);
             }
+            // A destination one copy proves stays proven whichever copy is
+            // newer, so a flag cannot move it.
+            const proven = fromInactiveNamespace || existing?.originProven === true;
             candidates.set(candidateKey, {
               name: dir, sourcePath: localDirPath, mtime, status: 'modified', namespace: teamSkill.namespace,
-              ...fromInactiveNamespace ? { fromInactiveNamespace: true } : {},
+              ...proven ? { fromInactiveNamespace: true } : {},
               ...deliveryRecorded ? { deliveryRecorded: true } : {},
-              ...fromInactiveNamespace ? { originProven: true, originCandidates: [teamSkill] } : {},
+              ...proven ? { originProven: true, originCandidates: [teamSkill] } : {},
             });
-          } else if (deliveryRecorded && !await dirContentEqual(existing.sourcePath, localDirPath, [CONTRIBUTORS_FILE])) {
-            warnOnce(`[skills] Skipped ${dir} at ${localDirPath}: another edited copy for `
-              + `${path.relative(localConfig.repo.localPath, teamSkill.dir).split(path.sep).join('/')} has newer content.`);
+          } else {
+            if (fromInactiveNamespace && !existing.originProven) {
+              candidates.set(candidateKey, {
+                ...existing, fromInactiveNamespace: true, originProven: true, originCandidates: [teamSkill],
+              });
+            }
+            if (!await dirContentEqual(existing.sourcePath, localDirPath, [CONTRIBUTORS_FILE])) {
+              warnOnce(`[skills] Skipped ${dir} at ${localDirPath}: another edited copy for `
+                + `${path.relative(localConfig.repo.localPath, teamSkill.dir).split(path.sep).join('/')} has newer content.`);
+            }
           }
         } else {
           // Skill does not exist in team repo — candidate for "new"

@@ -7,7 +7,7 @@ import {
   createGit, pullRepo, pushRepoBranch, checkoutMaster, generateBranchName,
   resetToCleanMaster, isDedicatedRepoRoot, getDefaultBranch, getFileContentAtRev, getHeadCommit,
 } from './utils/git.js';
-import { reconcilePlacementRecords,
+import { reconcilePlacementRecords, adoptOpenPrDestinations,
   findPendingForItem, isRecordedItem, partiallySelectedEntries, pendingNamespaceFor, planPushGroups,
   prunePendingPushes, recordPendingPush, toPendingItems, type PushGroup,
 } from './utils/pending-push.js';
@@ -1557,6 +1557,25 @@ async function pushCore(
     }
   }
 
+  // ── Step 0: Cross-check against still-open push PRs ────────────────
+  // Resources waiting in an unmerged PR are absent from the default branch, so
+  // the scan above flags them as new every single time. Without this check each
+  // run opens another duplicate PR.
+  const pushState = await loadStateForScope(localConfig);
+  const pruned = await prunePendingPushes(
+    localConfig.repo.localPath,
+    pushState.pendingPushes,
+    fullScan,
+  );
+  pushState.pendingPushes = pruned.pending;
+  if (pruned.changed) {
+    await saveStateForScope(pushState, localConfig);
+  }
+  const pendingPushes = pushState.pendingPushes;
+  // Before the flags below and every step that reads a destination: a skill an
+  // open PR added keeps that PR's destination whatever the scan now calls it.
+  await adoptOpenPrDestinations(allItems, pendingPushes, localConfig.repo.localPath);
+
   // An explicit --role or --project is a destination override for every selected
   // skill, including modified ones. Keep relativePath aligned with pushItem's
   // destination so git stages the files that were actually copied (#331).
@@ -1617,22 +1636,6 @@ async function pushCore(
       item.relativePath = placedAt;
     }
   }
-
-  // ── Step 0: Cross-check against still-open push PRs ────────────────
-  // Resources waiting in an unmerged PR are absent from the default branch, so
-  // the scan above flags them as new every single time. Without this check each
-  // run opens another duplicate PR.
-  const pushState = await loadStateForScope(localConfig);
-  const pruned = await prunePendingPushes(
-    localConfig.repo.localPath,
-    pushState.pendingPushes,
-    fullScan,
-  );
-  pushState.pendingPushes = pruned.pending;
-  if (pruned.changed) {
-    await saveStateForScope(pushState, localConfig);
-  }
-  const pendingPushes = pushState.pendingPushes;
 
   // A rule or agent awaiting review in a namespace whose name a shared-root
   // file now takes: the scan maps the author's root copy onto that shared file

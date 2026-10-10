@@ -502,7 +502,11 @@ holds the name. An open PR is reused for a resource only when it records the
 same destination this push sends the resource to: a resource already in the
 team repo is identified by its path, so same-named skills in two namespaces are
 two resources, and a new one by its name. Otherwise this push opens its own PR
-and leaves that one untouched. A new skill, rule or
+and leaves that one untouched. A new skill keeps the destination its open PR
+recorded even when a same-named team skill appears elsewhere and the scan would
+call the copy an edit of that skill. Edits from several tools of one team skill
+are one candidate, the newest, whether or not each copy has a delivery record.
+A new skill, rule or
 agent pushed without `--role` or `--project` is placed among the role ∪ active
 project namespaces on its own axis, as pull delivers them. When a role is
 configured but the role and active projects give no namespace, the resource
