@@ -8,7 +8,7 @@ import {
   resetToCleanMaster, isDedicatedRepoRoot, getDefaultBranch, getFileContentAtRev, getHeadCommit,
 } from './utils/git.js';
 import { reconcilePlacementRecords, adoptOpenPrDestinations,
-  findPendingForItem, isRecordedItem, partiallySelectedEntries, pendingNamespaceFor, planPushGroups,
+  findPendingForItem, isRecordedItem, partiallySelectedEntries, pendingNamespaceFor, planPushGroups, recordedNamespace,
   prunePendingPushes, recordPendingPush, toPendingItems, type PushGroup,
 } from './utils/pending-push.js';
 import { syncTeamUpdatesToLocal } from './utils/pre-push-sync.js';
@@ -525,10 +525,12 @@ function supersededPathOf(item: ResourceItem): string | undefined {
  * Give every resource waiting in an open PR back the destination that PR
  * recorded, rather than asking again — a different answer would silently move
  * the resource, and the branch is force-pushed, so the old copy would not even
- * stay behind. Runs before placement, so a resource with a recorded namespace
- * is no longer at the shared root and placement leaves it alone.
+ * stay behind. Runs before placement and returns the resources it settled,
+ * which placement leaves alone — the shared root included, as much a recorded
+ * destination as any namespace.
  */
-function reuseRecordedDestinations(groups: PushGroup[]): void {
+function reuseRecordedDestinations(groups: PushGroup[]): Set<ResourceItem> {
+  const settled = new Set<ResourceItem>();
   for (const group of groups) {
     if (!group.reuse) continue;
     log.info(
@@ -537,13 +539,13 @@ function reuseRecordedDestinations(groups: PushGroup[]): void {
     for (const item of group.items) {
       if (item.status !== 'new' || !isPlaceableType(item.type)) continue;
       const ns = pendingNamespaceFor(group.reuse, item);
-      if (!ns) continue;
+      settled.add(item);
       if (item.type === 'skills') {
         // A skill's path is derived from its name, so the recorded namespace
         // replaces whatever a --role/--project override wrote above.
         item.namespace = ns;
-        item.relativePath = skillNamespacePath(ns, item.name);
-      } else if (isAtSharedRoot(item)) {
+        item.relativePath = ns ? skillNamespacePath(ns, item.name) : `skills/${item.name}`;
+      } else if (ns && isAtSharedRoot(item)) {
         // A rule or agent carries its own path from the scanner, and that path
         // is authoritative when it already names a namespace (#654).
         item.namespace = ns;
@@ -551,6 +553,7 @@ function reuseRecordedDestinations(groups: PushGroup[]): void {
       }
     }
   }
+  return settled;
 }
 
 /**
@@ -573,8 +576,10 @@ async function placeNewResources(args: {
   skillsDestinationError?: string;
   /** The clone could not be refreshed this run; its manifests may be stale. */
   teamRepoStale?: boolean;
+  /** Resources whose open PR already decided where they go. */
+  settled: ReadonlySet<ResourceItem>;
 }): Promise<boolean> {
-  const { items, options, localConfig, projectsManifest, skillsDestinationError, teamRepoStale } = args;
+  const { items, options, localConfig, projectsManifest, skillsDestinationError, teamRepoStale, settled } = args;
 
   // A project that declares no skills namespace only blocks the push once a
   // skill the flag relocates is actually selected, so a rule can still go out
@@ -587,7 +592,7 @@ async function placeNewResources(args: {
 
   for (const type of PLACEABLE_TYPES) {
     const newAtRoot = items.filter(
-      (i) => i.type === type && i.status === 'new' && !i.namespace && isAtSharedRoot(i),
+      (i) => i.type === type && i.status === 'new' && !i.namespace && isAtSharedRoot(i) && !settled.has(i),
     );
     if (newAtRoot.length === 0) continue;
 
@@ -1650,7 +1655,7 @@ async function pushCore(
     if (item.status !== 'modified' || !isAtSharedRoot(item)) continue;
     const awaiting = pendingPushes.flatMap((entry) => entry.items.map((recorded) => ({ entry, recorded })))
       .find(({ recorded }) => recorded.type === item.type && recorded.name === item.name
-        && recorded.relativePath.split('/').length === 3);
+        && recordedNamespace(recorded) !== undefined);
     if (!awaiting) continue;
     log.warn(
       `[${item.type}] ${item.name}: ${item.relativePath} now exists at the shared root, so your local ${item.name} `
@@ -1739,15 +1744,12 @@ async function pushCore(
     // The path, not the field: a scan can record an item whose destination is
     // namespaced while leaving `namespace` unset, and trusting the field let
     // those entries slip past the check and be force-pushed into (#649 review).
-    const segments = recorded.relativePath.split('/');
-    const recordedNamespace = recorded.namespace
-      ?? (segments.length === 3 ? segments[1] : undefined);
     // A recorded path with no namespace is the shared root — as much a
     // destination as any namespace. Letting it through would reuse that PR's
     // branch and rebuild it with the namespaced path, moving a review the
     // user did not name from "everyone" to one namespace (#649 review).
     const requested = requestedNamespaceFor(recorded.type as PlaceableType);
-    return requested !== undefined && requested !== recordedNamespace;
+    return requested !== undefined && requested !== recordedNamespace(recorded);
   };
   const reusablePending = pendingPushes.filter((entry) => {
     const conflicting = entry.items.filter(conflictsWithRequest);
@@ -1810,9 +1812,9 @@ async function pushCore(
   if (options.dryRun) {
     // Same two steps, same order as a real run: an open PR's recorded
     // destination first, then placement for whatever is still at the root.
-    reuseRecordedDestinations(planPushGroups(allItems, reusablePending));
+    const settled = reuseRecordedDestinations(planPushGroups(allItems, reusablePending));
     const placed = await placeNewResources({
-      items: allItems, options, localConfig, projectsManifest, skillsDestinationError, teamRepoStale,
+      items: allItems, options, localConfig, projectsManifest, skillsDestinationError, teamRepoStale, settled,
     });
     if (!placed) return;
     log.info('Dry run — no changes made');
@@ -1841,7 +1843,7 @@ async function pushCore(
   // can happen in one run, so editing a resource under review updates its PR
   // without dragging unrelated resources into that review.
   const groups = planPushGroups(selectedItems, reusablePending);
-  reuseRecordedDestinations(groups);
+  const settled = reuseRecordedDestinations(groups);
   // The conflicting entries dropped above are deliberately not reused, so they
   // are not "partly selected" either — warning about them would contradict the
   // warning already given.
@@ -1854,7 +1856,7 @@ async function pushCore(
 
   // ── Step 4: Place NEW root-level resources in a namespace (after selection) ─
   if (!await placeNewResources({
-    items: selectedItems, options, localConfig, projectsManifest, skillsDestinationError, teamRepoStale,
+    items: selectedItems, options, localConfig, projectsManifest, skillsDestinationError, teamRepoStale, settled,
   })) return;
 
   // ── Step 5: Push each group — one branch/PR per group ──────────────

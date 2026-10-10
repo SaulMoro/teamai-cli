@@ -443,6 +443,27 @@ describe('push gives each local copy one team destination, whatever its scan sta
     return openBranch!;
   }
 
+  /**
+   * A new resource pushed by `open` and still awaiting review, its record as
+   * an earlier version wrote it — no `namespace` field — and then edited after
+   * switching the active project to platform.
+   */
+  function awaitReviewInOlderRecordThenSwitchProject(local: string, open: () => ReturnType<typeof run>): string {
+    const opened = open();
+    const [openBranch] = pushBranches();
+    expect(openBranch, opened.output).toBeDefined();
+    const file = path.join(project, '.teamai', 'state.json');
+    const state = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+      pendingPushes: { items: { namespace?: string }[] }[];
+    };
+    for (const entry of state.pendingPushes) for (const item of entry.items) delete item.namespace;
+    writeFile(file, `${JSON.stringify(state, null, 2)}\n`);
+    expect(run(['projects', 'set', 'platform']).code).toBe(0);
+    fs.appendFileSync(local, '\nSecond edit.\n');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1100);
+    return openBranch!;
+  }
+
   const untouchedSharedRoot = () => {
     for (const branch of pushBranches()) expect(skillFilesOn(branch)).not.toContain('skills/foo/SKILL.md');
   };
@@ -559,6 +580,42 @@ describe('push gives each local copy one team destination, whatever its scan sta
         untouchedSharedRoot();
       },
     },
+    ...[
+      {
+        at: 'svc-a skill',
+        local: () => path.join(localSkill('foo'), 'SKILL.md'),
+        destination: 'skills/svc-a/foo/SKILL.md',
+        open: () => {
+          writeFile(path.join(localSkill('foo'), 'SKILL.md'), skillMd('foo'));
+          return run(['push', '--all', '--role', 'svc-a']);
+        },
+      },
+      {
+        at: 'root rule',
+        local: () => path.join(project, '.claude', 'rules', 'foo.md'),
+        destination: 'rules/foo.md',
+        open: () => {
+          setConfig({ projects: [] });
+          writeFile(path.join(project, '.claude', 'rules', 'foo.md'), '# foo rule\n');
+          return run(['push', '--all']);
+        },
+      },
+    ].map(({ at, local, destination, open }) => ({
+      // An open PR's destination is its recorded path, once the active project names another namespace.
+      site: `reuse: ${at}, no namespace`,
+      check: () => {
+        const openBranch = awaitReviewInOlderRecordThenSwitchProject(local(), open);
+        const filesOn = (branch: string) => git(['diff', '--name-only', 'main', branch], origin).split('\n')
+          .filter((file) => file.endsWith('.md'));
+        expect(filesOn(openBranch)).toEqual([destination]);
+
+        const pushed = run(['push', '--all']);
+
+        expect(pushBranches(), pushed.output).toEqual([openBranch]);
+        expect(filesOn(openBranch), pushed.output).toEqual([destination]);
+        expect(git(['show', `${openBranch}:${destination}`], origin), pushed.output).toContain('Second edit.');
+      },
+    })),
   ])('$site', ({ check }) => check());
 });
 

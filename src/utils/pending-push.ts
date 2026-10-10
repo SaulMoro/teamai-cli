@@ -38,6 +38,17 @@ export function isRecordedItem(recorded: PendingPushItem, item: ResourceItem): b
 }
 
 /**
+ * The namespace a record's resource goes to, or undefined for the shared root.
+ * Read from `relativePath`, which every record carries and which is what the
+ * PR's branch holds, never from the `namespace` field alone: records written
+ * by earlier versions lack it, and where the two disagree the path wins.
+ */
+export function recordedNamespace(recorded: PendingPushItem): string | undefined {
+  const segments = recorded.relativePath.split('/');
+  return segments.length > 2 ? segments[1] : undefined;
+}
+
+/**
  * Give a skill the destination of the open PR that added it, once a same-named
  * team skill elsewhere — a teammate's shared-root one, say — makes the scan
  * resolve the copy to that skill and call it modified. The copy was never
@@ -58,9 +69,8 @@ export async function adoptOpenPrDestinations(
     for (const entry of newestFirst) {
       const recorded = entry.items.find((i) => i.type === item.type && i.name === item.name);
       if (!recorded || await pathExists(path.join(repoPath, recorded.relativePath))) continue;
-      const segments = recorded.relativePath.split('/');
       item.status = 'new';
-      item.namespace = recorded.namespace ?? (segments.length === 3 ? segments[1] : undefined);
+      item.namespace = recordedNamespace(recorded);
       item.relativePath = recorded.relativePath;
       break;
     }
@@ -164,9 +174,13 @@ export function partiallySelectedEntries(
   });
 }
 
-/** Namespace recorded for a skill in an open PR, so updates keep its destination. */
+/**
+ * Namespace recorded for a resource in an open PR, so updates keep its
+ * destination; undefined for the shared root or when the PR does not carry it.
+ */
 export function pendingNamespaceFor(entry: PendingPush, item: ResourceItem): string | undefined {
-  return entry.items.find((i) => isRecordedItem(i, item))?.namespace;
+  const recorded = entry.items.find((i) => isRecordedItem(i, item));
+  return recorded && recordedNamespace(recorded);
 }
 
 /** Insert or replace the record for a branch. */
