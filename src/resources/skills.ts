@@ -385,8 +385,10 @@ async function resolvePushSkillNamespaces(localConfig: LocalConfig): Promise<str
 /**
  * The team skill a local copy came from, among the same-named team skills
  * `copies` (absolute directories in the team repo at `repoPath`): the one whose
- * history holds the SKILL.md version pull recorded at `dest`, or the only one.
- * Undefined when the record matches none or several of them (#1020).
+ * history holds the SKILL.md version pull recorded at `dest`, or, when pull
+ * recorded nothing there, the only one. Undefined when the record matches none
+ * or several of them: a same-named skill that replaced a deleted one is not
+ * the copy's (#1020).
  */
 export async function recordedOrigin<TCopy extends { dir: string }>(
   copies: readonly TCopy[], record: { delivered: DeliveredHashes; dest: string; repoPath: string },
@@ -397,7 +399,7 @@ export async function recordedOrigin<TCopy extends { dir: string }>(
     if (await isRecordedFromTeamSkill(record.delivered, record.dest, record.repoPath, teamDir)) matched.push(copy);
   }
   if (matched.length === 1) return matched[0];
-  return copies.length === 1 ? copies[0] : undefined;
+  return copies.length === 1 && recordedUnder(record.delivered, record.dest).length === 0 ? copies[0] : undefined;
 }
 
 /**
@@ -599,10 +601,8 @@ export class SkillsHandler extends ResourceHandler {
         if (scopedNamespaces.includes(dir)) continue; // Already processed as allowed namespace
         const names = await listDirs(dirPath);
         for (const name of names) {
-          // A shared-root skill of the name does not decide alone: the copy may have come from here (#1020).
-          if (!teamSkills.get(name)?.namespace) {
-            blockedSkills.set(name, [...blockedSkills.get(name) ?? [], { dir: path.join(dirPath, name), namespace: dir }]);
-          }
+          // A shared-root or active skill of the name does not decide alone: the copy may have come from here (#1020).
+          blockedSkills.set(name, [...blockedSkills.get(name) ?? [], { dir: path.join(dirPath, name), namespace: dir }]);
         }
       }
     } else {
@@ -678,8 +678,8 @@ export class SkillsHandler extends ResourceHandler {
         // A skill in a namespace this scope doesn't select stays out, unless
         // teamai delivered this copy: then it is an edit of that skill, which
         // pull kept when the namespace went inactive, and it goes back there (#1020).
-        // The record tells it from a shared-root skill or another namespace's of the
-        // same name when it matches a version of exactly one of them.
+        // The record tells it from a shared-root or active skill or another namespace's
+        // of the same name when it matches a version of exactly one of them.
         let teamSkill = teamSkills.get(dir);
         let fromInactiveNamespace = false;
         const blockedCopies = blockedSkills.get(dir);
@@ -690,22 +690,25 @@ export class SkillsHandler extends ResourceHandler {
           } else {
             // Exactly what teamai delivered: not an edit, whatever the team changed since.
             if (await isUneditedSkillCopy(delivered, localDirPath)) continue;
-            const rootSkill = teamSkill;
-            const origin = await recordedOrigin(rootSkill ? [rootSkill, ...blockedCopies] : blockedCopies, {
+            const scopedSkill = teamSkill;
+            const origin = await recordedOrigin(scopedSkill ? [scopedSkill, ...blockedCopies] : blockedCopies, {
               delivered, dest: localDirPath, repoPath: localConfig.repo.localPath,
             });
-            if (origin?.namespace) {
+            if (origin && origin !== scopedSkill) {
               teamSkill = origin;
               fromInactiveNamespace = true;
-            } else if (!origin && !rootSkill) {
+            } else if (!origin && !scopedSkill) {
+              const holders = blockedCopies.map((copy) => `skills/${copy.namespace}/${dir}`).join(' and ');
               warnOnce(
-                `[skills] Skipped ${dir}: teamai delivered this copy, but ${blockedCopies.map((copy) => `skills/${copy.namespace}/${dir}`).join(' and ')} `
-                + 'each hold a skill of that name, and none of those namespaces is active here, so push cannot tell which one your copy came from. '
-                + 'Make the role or project it came from active (`teamai roles set` or `teamai projects set`), then push again.',
+                `[skills] Skipped ${dir}: teamai delivered this copy, but its record matches `
+                + `${blockedCopies.length === 1 ? `no version of ${holders}` : `no single one of ${holders}`}, `
+                + 'and none of those namespaces is active here, so push cannot tell which skill your copy came from. '
+                + 'Make the role or project it came from active (`teamai roles set` or `teamai projects set`), '
+                + 'or push it with `teamai push --skill <path> --role <ns>` to name its namespace.',
               );
               continue;
             }
-            // Otherwise the shared-root skill stays the copy's team file, as before.
+            // Otherwise the shared-root or active skill stays the copy's team file, as before.
           }
         }
 

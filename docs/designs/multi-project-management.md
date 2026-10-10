@@ -487,14 +487,16 @@ project namespaces. A skill outside them stays out unless the delivery record
 shows teamai wrote that copy, as when pull keeps an edited skill after a switch.
 A copy still exactly as recorded is not an edit and stays out. An edited one goes
 back to the team skill whose history holds the SKILL.md version pull recorded,
-inactive namespace or shared root, even after the team changed it; when that
-version matches no single copy, a lone inactive namespace still takes it, the
-shared-root skill keeps it as before, and otherwise it is skipped with a warning
-naming the namespaces (#1020). `push --skill` resolves its skill the same way, and
-asks for `--role` rather than taking the first directory that holds the name. A new skill, rule or
+inactive namespace, active namespace or shared root, even after the team changed
+it; when that version matches no single copy, the active or shared-root skill
+keeps it as before, and otherwise it is skipped with a warning naming the
+namespaces, also when only one inactive namespace holds the name (#1020).
+`push --skill` resolves its skill the same way, and asks for `--role` rather
+than taking the first directory that holds the name. A new skill, rule or
 agent pushed without `--role` or `--project` is placed among the role ∪ active
 project namespaces on its own axis, as pull delivers them; only when they give
-none does the pre-project fallback apply (#1021). `push` picks up a change to any `env/<ns>/env.yaml` or `env/<ns>/secrets.yaml`.
+none does the pre-project fallback apply. Active projects with no
+`manifest/projects.yaml` stop that placement instead (#1021). `push` picks up a change to any `env/<ns>/env.yaml` or `env/<ns>/secrets.yaml`.
 `teamai env add|remove` take `--role` / `--project`, and `--secret` for that namespace's `secrets.yaml`.
 
 

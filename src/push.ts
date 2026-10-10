@@ -23,7 +23,7 @@ import type {
 } from './types.js';
 import { getDataHome, SELF_KNOWLEDGE_SCAN_KEY, SYNC_LOCK_FILENAME } from './types.js';
 import { acquireLock, releaseLock } from './update.js';
-import { assertSafeResourceName } from './utils/path-safety.js';
+import { assertSafeResourceName, resolveReal } from './utils/path-safety.js';
 import { loadRolesManifest, resolveRoleResourceNamespaces, RolesManifestNotFoundError } from './roles.js';
 import { loadProjectsManifest, resolveProjectResourceNamespaces, type ProjectsManifest } from './projects.js';
 import { isSafeNamespaceSegment, NAMESPACE_RULE, fallbackNamespaceError } from './manifest-schema.js';
@@ -159,8 +159,8 @@ async function namespaceCandidates(
 /**
  * The namespaces the active projects declare on `type`'s axis: where this
  * directory's own resources live, so where a new one belongs unless a flag
- * says otherwise (#1021). None with no active project or no projects manifest.
- * An active project the manifest does not declare is a failure, as for
+ * says otherwise (#1021). None with no active project. An active project the
+ * manifest does not declare, or no manifest at all, is a failure, as for
  * `--project`: falling back would send a new rule or agent to the whole team.
  */
 async function activeProjectNamespaces(type: PlaceableType, localConfig: LocalConfig): Promise<CandidateResolution> {
@@ -170,7 +170,14 @@ async function activeProjectNamespaces(type: PlaceableType, localConfig: LocalCo
   let candidates: string[];
   try {
     const manifest = await loadProjectsManifest(localConfig.repo.localPath);
-    if (!manifest) return { ok: true, candidates: [] };
+    if (!manifest) {
+      return {
+        ok: false,
+        message: `Cannot resolve where new ${type} should go: active projects (${activeProjects.join(', ')}) are configured, `
+          + 'but the team repo has no manifest/projects.yaml to say where they keep them. '
+          + 'Restore manifest/projects.yaml, or pass --role <ns> to name the namespace for this push.',
+      };
+    }
     candidates = resolveProjectResourceNamespaces({ manifest, activeProjects })[axis];
   } catch (e) {
     return {
@@ -1468,12 +1475,13 @@ async function pushCore(
           const { deliveredHashes } = await import('./pull.js');
           const { recordedOrigin } = await import('./resources/skills.js');
           const origin = await recordedOrigin(copies, {
-            delivered: await deliveredHashes(localConfig) ?? {}, dest: skillPath, repoPath: localConfig.repo.localPath,
+            // Pull records the copy under its real path.
+            delivered: await deliveredHashes(localConfig) ?? {}, dest: resolveReal(skillPath), repoPath: localConfig.repo.localPath,
           });
           if (!origin && !options.role && !options.project) {
             log.error(
-              `[skills] Cannot tell which team skill ${skillPath} is: ${copies.map((copy) => path.relative(localConfig.repo.localPath, copy.dir).split(path.sep).join('/')).join(', ')} `
-              + 'all hold that name, and teamai has no record of delivering this copy from one of them. '
+              `[skills] Cannot tell which team skill ${skillPath} is: teamai has no record of delivering this copy from `
+              + `${copies.map((copy) => path.relative(localConfig.repo.localPath, copy.dir).split(path.sep).join('/')).join(' or ')}. `
               + 'Pass --role <ns> to name the namespace it goes to.',
             );
             process.exitCode = 2;
