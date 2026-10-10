@@ -264,6 +264,8 @@ agent 从不索要密钥值：缺少密钥时，它会请你在自己的终端�
 - 在关联的 worktree 中，即使该 worktree 尚未 pull，也加载其所属项目的；
 - 其他位置，加载用户级 scope 的。
 
+用户级 scope 的团队设置了 `injectShellProfile: false` 时，它的 `env.sh` 在任何位置都不加载，继承它的项目中也不加载。
+
 交互式 shell 在 `cd` 时切换环境变量，并在离开项目时恢复你进入项目前设置的值。zsh 从 `.zshenv` 读取该区块，每个 zsh 都会读取它，因此工具执行命令时用的 `zsh -c` 也能拿到所在目录的环境变量。bash 在 `bash -c` 时不读取任何启动文件，所以 loader 会导出 `BASH_ENV`（你自己设置了的话则不覆盖），从已加载它的 bash 或 zsh 启动的每个 `bash -c` 也会这样做。其他 shell（fish、PowerShell）不运行 loader：需要团队环境变量的命令请通过 `teamai env exec --` 运行，它按同样的方式解析。
 
 pull 不再为切换项目而改写 shell 配置文件。第一次用带 loader 的版本 pull 时（在没有环境变量的项目中也是如此），会从每个候选文件中移除旧版本写入的按 scope 区块；若某个项目因此不再获得以前能拿到的用户级变量，会提示一次。

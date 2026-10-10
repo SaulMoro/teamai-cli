@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fse from 'fs-extra';
 import { EnvHandler } from '../resources/env.js';
+import { directoryEnv } from '../resources/env-loader.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
 vi.mock('../utils/logger.js', () => ({
@@ -302,6 +303,20 @@ describe('team env by directory (#1018)', () => {
 
         expect(shellSees('zsh', c.projectRoot ?? '', 'MARKER')).toBe('');
         expect(shellSees('zsh', c.projectRoot ?? '', 'USER_ONLY')).toBe('');
+      });
+
+      it('loads none of the user scope\'s env once its team opts out of shell-profile injection, outside projects or under one that inherits it', async () => {
+        const optedOut = { ...teamConfig, sharing: { ...teamConfig.sharing, env: { injectShellProfile: false } } } as TeamaiConfig;
+        await handler.writeResolvedEnv([{ key: 'USER_ONLY', value: 'u' }], optedOut, userScope());
+        const a = { ...await project('a'), inheritUserScope: true };
+        await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-a' }], teamConfig, a);
+        const elsewhere = path.join(tmpDir, 'elsewhere');
+        await fse.ensureDir(elsewhere);
+
+        expect(shellSees('zsh', elsewhere, 'USER_ONLY')).toBe('');
+        expect(shellSees('zsh', a.projectRoot ?? '', 'USER_ONLY')).toBe('');
+        expect(shellSees('zsh', a.projectRoot ?? '', 'MARKER')).toBe('from-a');
+        expect(await directoryEnv(a, a.projectRoot ?? '', '/bin/zsh')).toEqual({ kind: 'loads-scope' });
       });
 
       it('loads nothing in a project whose team ships no env', async () => {

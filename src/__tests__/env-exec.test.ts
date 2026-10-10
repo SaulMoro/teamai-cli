@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import fse from 'fs-extra';
@@ -175,6 +175,32 @@ describe('teamai env exec', () => {
       expect(env.USER_ONLY).toBe('u');
       expect(env.SHARED).toBe('project');
       expect(env.GITHUB_TOKEN).toBeUndefined();
+    });
+
+    it.skipIf(spawnSync('bash', ['-c', 'true']).status !== 0)("keeps this project's secret in a bash the command starts, from a shell that loaded another directory's env", async () => {
+      const { repoPath } = await team('work', { 'env/secrets.yaml': GITHUB_SECRET });
+      const { root, config } = await project(repoPath);
+      await writeSecretStore(getTeamSecretsPath(config), { GITHUB_TOKEN: { value: 'fixture-work' } });
+      const b = path.join(tmpDir, 'b');
+      await fse.ensureDir(b);
+      vi.stubEnv('SHELL', '/bin/bash');
+      await new EnvHandler().writeResolvedEnv([{ key: 'GITHUB_TOKEN', value: 'fixture-b' }], { sharing: { env: { injectShellProfile: true } } } as TeamaiConfig, {
+        repo: { localPath: repoPath, remote: 'https://example.com/b.git' }, username: 't', scope: 'project',
+        projectRoot: b, additionalRoles: [], dataHome: path.join(home, '.teamai', 'projects', 'b'),
+      });
+      // What a script started in b carries: the loader's values and its bookkeeping.
+      const loaded = spawnSync('bash', ['-c', `${JSON.stringify(process.execPath)} -e '${DUMP}' "$0"`, out], {
+        cwd: b, env: { HOME: home, PATH: process.env.PATH, BASH_ENV: path.join(home, '.teamai', 'env-loader.sh') },
+      });
+      expect(loaded.status).toBe(0);
+      const inherited = JSON.parse(await fse.readFile(out, 'utf8')) as Record<string, string>;
+      expect(inherited.GITHUB_TOKEN).toBe('fixture-b');
+      for (const [key, value] of Object.entries(inherited)) if (key.startsWith('__TEAMAI_ENV_') || key === 'BASH_ENV' || key === 'GITHUB_TOKEN') vi.stubEnv(key, value);
+
+      const outcome = await envExec(['--', 'bash', '-c', 'printenv GITHUB_TOKEN > "$0"', out], {}, root);
+
+      expect((await fse.readFile(out, 'utf8')).trim()).toBe('fixture-work');
+      expect(outcome).toEqual({ kind: 'exited', code: 0 });
     });
   });
 

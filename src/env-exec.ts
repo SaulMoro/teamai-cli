@@ -21,6 +21,7 @@ import { resolveTeamEnv } from './env-resolution.js';
 import { memberEnvironmentWithoutScope, type MemberEnvironment } from './member-env.js';
 import { describeEntryFailure } from './namespaced-entries.js';
 import { envTable } from './resources/env-key.js';
+import { envLoaderPath } from './resources/env-loader.js';
 import { declaredSecretKeys } from './resources/secrets.js';
 import { getDataHome, type GlobalOptions, type LocalConfig } from './types.js';
 import { log, setStderrOnly } from './utils/logger.js';
@@ -151,9 +152,18 @@ async function commandEnvironment(cwd: string, dryRun: boolean | undefined): Pro
   return overlayTeamEnv(localConfig);
 }
 
-/** A copy of the inherited environment that keeps `__proto__` an own key when the overlay sets it. */
+/**
+ * A copy of the inherited environment that keeps `__proto__` an own key when
+ * the overlay sets it. Without the env loader's bookkeeping and its BASH_ENV
+ * (env-loader.ts): they describe the env of the directory a shell loaded, not
+ * the one teamai gives the command, and a bash the command starts would
+ * un-apply it over this scope's values, a secret included (#1018).
+ */
 function inheritedEnvironment(): NodeJS.ProcessEnv {
-  return envTable(Object.entries(process.env));
+  const env = envTable(Object.entries(process.env));
+  for (const key of Object.keys(env)) if (key.startsWith('__TEAMAI_ENV_')) delete env[key];
+  if (env.BASH_ENV && path.normalize(env.BASH_ENV) === envLoaderPath()) delete env.BASH_ENV;
+  return env;
 }
 
 /**

@@ -1197,7 +1197,7 @@ async function buildRemovalPlan(
     ]));
     // One loader block serves every scope (#1018): it goes with the last one.
     const { envLoaderPath, isLastEnvScope } = await import('./resources/env-loader.js');
-    plan.envScope = localConfig.scope === 'project' ? localConfig : null;
+    plan.envScope = localConfig;
     plan.shouldRemoveEnvLoader = await isLastEnvScope(localConfig);
     for (const candidate of candidateProfilePaths) {
       const profileContent = await readFileSafe(candidate);

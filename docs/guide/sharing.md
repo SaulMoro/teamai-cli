@@ -303,6 +303,8 @@ Team env reaches a shell by directory: a shell started in a directory gets the e
 - in a linked worktree, its project's, before the worktree has pulled;
 - anywhere else, the user scope's.
 
+The user scope's `env.sh` loads nowhere when its team sets `injectShellProfile: false`, under a project that inherits it included.
+
 An interactive shell switches env on `cd` and puts back a value you had set before entering the project. zsh reads the block from `.zshenv`, which every zsh reads, so the `zsh -c` a tool runs a command with gets the env of its own directory. bash reads no startup file for `bash -c`, so the loader exports `BASH_ENV` (unless you set your own), and every `bash -c` started from a bash or zsh that loaded it does the same. Other shells (fish, PowerShell) run no loader: run the commands that need team env through `teamai env exec --`, which resolves the same way.
 
 A pull no longer rewrites the profile to switch projects. The first pull with a version that has the loader, also in a project without env, takes out the per-scope blocks earlier versions wrote, from every candidate file, and says so once when a project loses the user scope's variables it used to get.
