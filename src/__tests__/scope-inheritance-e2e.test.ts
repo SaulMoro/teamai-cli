@@ -73,6 +73,7 @@ const TEAM_YAML = [
   '  claude:',
   '    skills: .claude/skills',
   '    rules: .claude/rules',
+  '    mcpProject: .mcp.json',
 ].join('\n');
 
 function makeRemote(
