@@ -7,7 +7,7 @@ import {
   createGit, pullRepo, pushRepoBranch, checkoutMaster, generateBranchName,
   resetToCleanMaster, isDedicatedRepoRoot, getDefaultBranch, getFileContentAtRev, getHeadCommit,
 } from './utils/git.js';
-import { reconcilePlacementRecords, adoptOpenPrDestinations,
+import { reconcilePlacementRecords, dropClosedPendingPushes, openPrDestination,
   findPendingForItem, isRecordedItem, partiallySelectedEntries, pendingNamespaceFor, planPushGroups, recordedNamespace,
   prunePendingPushes, recordPendingPush, toPendingItems, type PushGroup,
 } from './utils/pending-push.js';
@@ -1328,7 +1328,8 @@ async function pushCore(
     : teamConfig;
 
   // Scan for pushable resources first, then resolve namespace for new skills only.
-  // Modified skills already carry their namespace from scanLocalForPush.
+  // Skills already carry the destination scanLocalForPush decided: a modified
+  // one its team skill's, a new one awaiting review its open PR's.
   const pushableTypes: ResourceType[] = ['skills', 'rules', 'env', 'agents'];
   const fullScan: ResourceItem[] = [];
 
@@ -1350,13 +1351,21 @@ async function pushCore(
     }
   }
 
+  // Open PRs are proof of where a new skill goes, so the skills scan reads
+  // them while it decides each copy's destination. Records whose branch is gone
+  // are dropped first; the scan-presence rule needs the scan and runs after it.
+  const pushState = await loadStateForScope(localConfig);
+  const recordedPushes = pushState.pendingPushes ?? [];
+  const openPushes = await dropClosedPendingPushes(localConfig.repo.localPath, recordedPushes);
+
   for (const type of pushableTypes) {
     const handler = getHandler(type);
     try {
       const items = await handler.scanLocalForPush(
         scanTeamConfig,
         localConfig,
-        type === 'agents' ? { namespace: requestedAgentsNamespace } : undefined,
+        type === 'agents' ? { namespace: requestedAgentsNamespace }
+          : type === 'skills' ? { pending: openPushes } : undefined,
       );
       fullScan.push(...items);
     } catch (e) {
@@ -1485,7 +1494,6 @@ async function pushCore(
           if (await pathExists(path.join(teamSkillsDir, dir, 'SKILL.md'))) continue;
           if (await pathExists(path.join(teamSkillsDir, dir, skillName))) copies.push({ dir: path.join(teamSkillsDir, dir, skillName), namespace: dir });
         }
-        const status: 'new' | 'modified' = copies.length > 0 ? 'modified' : 'new';
         let namespace: string | undefined;
         let fromInactiveNamespace = false;
         const { deliveredHashes } = await import('./pull.js');
@@ -1496,7 +1504,14 @@ async function pushCore(
         const deliveryRecorded = recordedUnder(record.delivered, record.dest).length > 0;
         let origin = copies.length > 0 ? await recordedOrigin(copies, record) : undefined;
         const hasRecordedOrigin = origin !== undefined;
-        if (copies.length > 0) {
+        // The scan's order of proof: an open PR decides where a copy teamai never delivered goes.
+        const awaiting = deliveryRecorded
+          ? undefined
+          : await openPrDestination({ pending: openPushes, name: skillName, repoPath: localConfig.repo.localPath });
+        const status: 'new' | 'modified' = copies.length > 0 && !awaiting ? 'modified' : 'new';
+        if (awaiting) {
+          namespace = recordedNamespace(awaiting);
+        } else if (copies.length > 0) {
           if (!origin && recordedUnder(record.delivered, record.dest).length === 0) {
             // A copy teamai never delivered here is tied by its name alone, so
             // only to the one skill of that name this directory is given: the
@@ -1566,20 +1581,16 @@ async function pushCore(
   // Resources waiting in an unmerged PR are absent from the default branch, so
   // the scan above flags them as new every single time. Without this check each
   // run opens another duplicate PR.
-  const pushState = await loadStateForScope(localConfig);
   const pruned = await prunePendingPushes(
     localConfig.repo.localPath,
-    pushState.pendingPushes,
+    openPushes,
     fullScan,
   );
   pushState.pendingPushes = pruned.pending;
-  if (pruned.changed) {
+  if (pruned.pending.length !== recordedPushes.length) {
     await saveStateForScope(pushState, localConfig);
   }
   const pendingPushes = pushState.pendingPushes;
-  // Before the flags below and every step that reads a destination: a skill an
-  // open PR added keeps that PR's destination whatever the scan now calls it.
-  await adoptOpenPrDestinations(allItems, pendingPushes, localConfig.repo.localPath);
 
   // An explicit --role or --project is a destination override for every selected
   // skill, including modified ones. Keep relativePath aligned with pushItem's

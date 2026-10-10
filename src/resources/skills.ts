@@ -1,6 +1,6 @@
 import path from 'node:path';
 import YAML from 'yaml';
-import { isToolInstalledForConfig, ResourceHandler } from './base.js';
+import { isToolInstalledForConfig, ResourceHandler, type ScanForPushOptions } from './base.js';
 import type { CopyOrigin, ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
 import { getPushignorePath, isAgentExcluded, resolveToolBaseDir, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
 import { listDirs, listFilesRecursive, pathExists, copyDir, remove, pruneEmptyDirs, dirContentEqual, dirTeamSubsetEqual, fileContentEqual, fileHash, getDirLatestMtime, readFileSafe, writeFile } from '../utils/fs.js';
@@ -16,6 +16,7 @@ import {
 import { loadProjectsManifest, resolveProjectResourceNamespaces } from '../projects.js';
 import { assertSafeFallbackNamespaces } from '../manifest-schema.js';
 import { assertWithinRoot, resolveReal } from '../utils/path-safety.js';
+import { openPrDestination, recordedNamespace } from '../utils/pending-push.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 import {
   blockingEntries, deliveredSkillFiles, describeKeptDir, describeMembersDirLeft, describeMembersFile, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, keepsTrackedCopy,
@@ -598,6 +599,16 @@ async function isPastSkillVersion(
   return true;
 }
 
+/**
+ * Where one local copy goes on the team repo, as `scanLocalForPush` decides it
+ * once per copy: a team skill (`proven` when a delivery record ties the copy
+ * to it), the destination of the open PR that added it, or none yet (new).
+ */
+type CopyDestination =
+  | { kind: 'team'; teamSkill: { dir: string; namespace?: string }; proven: boolean }
+  | { kind: 'openPr'; dir: string; namespace?: string }
+  | { kind: 'new' };
+
 export class SkillsHandler extends ResourceHandler {
   readonly type = 'skills' as const;
 
@@ -609,7 +620,9 @@ export class SkillsHandler extends ResourceHandler {
    * When roles are configured, skips skills that exist in non-allowed namespaces
    * to enforce role-based access control.
    */
-  async scanLocalForPush(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<ResourceItem[]> {
+  async scanLocalForPush(
+    teamConfig: TeamaiConfig, localConfig: LocalConfig, options?: ScanForPushOptions,
+  ): Promise<ResourceItem[]> {
     const scopedNamespaces = await resolvePushSkillNamespaces(localConfig);
     const teamSkills = new Map<string, { dir: string; namespace?: string }>();
     const allTeamSkills = new Map<string, { dir: string; namespace?: string }[]>();
@@ -719,16 +732,90 @@ export class SkillsHandler extends ResourceHandler {
       return [];
     }
 
-    // An edit is keyed by the team destination it resolves to, proven or not,
-    // so two copies of one skill are one candidate. New skills keep the
-    // existing name-based placement and deduplication behavior.
+    // What pull last wrote here, read only when a blocked skill needs it.
+    let delivered: DeliveredHashes | undefined;
+
+    // The team destination of one local copy, decided once, before copies from
+    // several tools are merged, in order of proof: the delivery record (the
+    // team skill teamai delivered the copy from, shared-root, active or not;
+    // a same-named skill that replaced the deleted one is not its origin), then
+    // an open-PR record (where a new skill awaiting review goes), then the team
+    // tree (the shared-root or active skill of its name). A skill in a namespace
+    // this scope doesn't select stays out unless its record proves the copy
+    // came from there, and a flag cannot move a proven origin (#1020).
+    // Undefined: the copy is left out, and why has been said.
+    const resolveDestination = async (dir: string, localDirPath: string): Promise<CopyDestination | undefined> => {
+      let teamSkill = teamSkills.get(dir);
+      let fromInactiveNamespace = false;
+      delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
+      const deliveryRecorded = recordedUnder(delivered, localDirPath).length > 0;
+      if (deliveryRecorded) {
+        if (await isUneditedSkillCopy(delivered, localDirPath)) return undefined;
+        const copies = allTeamSkills.get(dir) ?? [];
+        const origin = await recordedOrigin(copies, { delivered, dest: localDirPath, repoPath: localConfig.repo.localPath });
+        if (!origin) {
+          warnUnprovenOrigin(dir, copies, localConfig.repo.localPath);
+          return undefined;
+        }
+        return { kind: 'team', teamSkill: origin, proven: true };
+      }
+      const awaiting = await openPrDestination({ pending: options?.pending ?? [], name: dir, repoPath: localConfig.repo.localPath });
+      if (awaiting) {
+        return { kind: 'openPr', dir: path.join(localConfig.repo.localPath, awaiting.relativePath), namespace: recordedNamespace(awaiting) };
+      }
+      const blockedCopies = blockedSkills.get(dir) ?? [];
+      const legacyCopies = legacyTeamSkills.get(dir) ?? [];
+      if (legacyCopies.length > 1) {
+        delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
+        if (recordedUnder(delivered, localDirPath).length === 0) {
+          const holders = legacyCopies.map((copy) => path.relative(localConfig.repo.localPath, copy.dir)
+            .split(path.sep).join('/')).join(', ');
+          warnOnce(
+            `[skills] Skipped ${dir}: the team has several skills with this name (${holders}), `
+            + 'and no delivery record proves which one this copy came from. '
+            + `Run \`teamai push --skill ${localDirPath} --role <ns>\` to name the destination.`,
+          );
+          return undefined;
+        }
+        if (await isUneditedSkillCopy(delivered, localDirPath)) return undefined;
+        const origin = await recordedOrigin(legacyCopies, {
+          delivered, dest: localDirPath, repoPath: localConfig.repo.localPath,
+        });
+        if (!origin) {
+          warnUnprovenOrigin(dir, legacyCopies, localConfig.repo.localPath);
+          return undefined;
+        }
+        teamSkill = origin;
+        fromInactiveNamespace = true;
+      }
+      if (blockedCopies.length > 0) {
+        delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
+        if (recordedUnder(delivered, localDirPath).length === 0) {
+          if (!teamSkill) return undefined;
+        } else {
+          // Exactly what teamai delivered: not an edit, whatever the team changed since.
+          if (await isUneditedSkillCopy(delivered, localDirPath)) return undefined;
+          const copies = teamSkill ? [teamSkill, ...blockedCopies] : blockedCopies;
+          const origin = await recordedOrigin(copies, { delivered, dest: localDirPath, repoPath: localConfig.repo.localPath });
+          if (!origin) {
+            warnUnprovenOrigin(dir, copies, localConfig.repo.localPath);
+            return undefined;
+          }
+          if (origin !== teamSkill) teamSkill = origin;
+          fromInactiveNamespace = true;
+        }
+      }
+      return teamSkill ? { kind: 'team', teamSkill, proven: fromInactiveNamespace } : { kind: 'new' };
+    };
+
+    // Every step below reads that destination. A copy with one is keyed by it,
+    // proven or not, so two copies of one skill are one candidate and copies
+    // with different destinations never meet. New skills keep the existing
+    // name-based placement and deduplication behavior.
     const candidates = new Map<string, {
       name: string; sourcePath: string; mtime: number; status: ResourceItemStatus; namespace?: string; fromInactiveNamespace?: true;
       deliveryRecorded?: true; originProven?: true; originCandidates?: readonly { dir: string }[];
     }>();
-    // What pull last wrote here, read only when a blocked skill needs it.
-    let delivered: DeliveredHashes | undefined;
-
     // Scan each tool's skills directory
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.skills) continue;
@@ -753,90 +840,38 @@ export class SkillsHandler extends ResourceHandler {
           continue;
         }
 
-        // A skill in a namespace this scope doesn't select stays out, unless
-        // teamai delivered this copy: then it is an edit of that skill and its
-        // recorded origin cannot be moved by --role/--project (#1020).
-        // A copy teamai delivered goes only to the team skill its record matches
-        // a version of, shared-root, active or not; a same-named skill that
-        // replaced the deleted one is not its origin.
-        let teamSkill = teamSkills.get(dir);
-        let fromInactiveNamespace = false;
-        delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
-        const deliveryRecorded = recordedUnder(delivered, localDirPath).length > 0;
-        let isOriginChecked = false;
-        if (deliveryRecorded) {
-          if (await isUneditedSkillCopy(delivered, localDirPath)) continue;
-          const copies = allTeamSkills.get(dir) ?? [];
-          const origin = await recordedOrigin(copies, { delivered, dest: localDirPath, repoPath: localConfig.repo.localPath });
-          if (!origin) {
-            warnUnprovenOrigin(dir, copies, localConfig.repo.localPath);
-            continue;
-          }
-          teamSkill = origin;
-          isOriginChecked = true;
-          fromInactiveNamespace = true;
-        }
-        const blockedCopies = blockedSkills.get(dir) ?? [];
-        const legacyCopies = legacyTeamSkills.get(dir) ?? [];
-        if (!deliveryRecorded && legacyCopies.length > 1) {
-          delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
-          if (recordedUnder(delivered, localDirPath).length === 0) {
-            const holders = legacyCopies.map((copy) => path.relative(localConfig.repo.localPath, copy.dir)
-              .split(path.sep).join('/')).join(', ');
-            warnOnce(
-              `[skills] Skipped ${dir}: the team has several skills with this name (${holders}), `
-              + 'and no delivery record proves which one this copy came from. '
-              + `Run \`teamai push --skill ${localDirPath} --role <ns>\` to name the destination.`,
-            );
-            continue;
-          }
-          if (await isUneditedSkillCopy(delivered, localDirPath)) continue;
-          const origin = await recordedOrigin(legacyCopies, {
-            delivered, dest: localDirPath, repoPath: localConfig.repo.localPath,
-          });
-          if (!origin) {
-            warnUnprovenOrigin(dir, legacyCopies, localConfig.repo.localPath);
-            continue;
-          }
-          teamSkill = origin;
-          isOriginChecked = true;
-          fromInactiveNamespace = true;
-        }
-        if (!deliveryRecorded && blockedCopies.length > 0) {
-          delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
-          if (recordedUnder(delivered, localDirPath).length === 0) {
-            if (!teamSkill) continue;
-          } else {
-            // Exactly what teamai delivered: not an edit, whatever the team changed since.
-            if (await isUneditedSkillCopy(delivered, localDirPath)) continue;
-            const copies = teamSkill ? [teamSkill, ...blockedCopies] : blockedCopies;
-            const origin = await recordedOrigin(copies, { delivered, dest: localDirPath, repoPath: localConfig.repo.localPath });
-            if (!origin) {
-              warnUnprovenOrigin(dir, copies, localConfig.repo.localPath);
-              continue;
+        const destination = await resolveDestination(dir, localDirPath);
+        if (!destination) continue;
+
+        if (destination.kind === 'new') {
+          // Skill does not exist in team repo — candidate for "new"
+          const existing = candidates.get(`name:${dir}`);
+          if (!existing) {
+            const mtime = await getDirLatestMtime(localDirPath);
+            candidates.set(`name:${dir}`, { name: dir, sourcePath: localDirPath, mtime, status: 'new' });
+          } else if (existing.status === 'new') {
+            // Multiple tool dirs have the same new skill — pick latest mtime
+            const mtime = await getDirLatestMtime(localDirPath);
+            if (mtime > existing.mtime) {
+              candidates.set(`name:${dir}`, { name: dir, sourcePath: localDirPath, mtime, status: 'new' });
             }
-            if (origin !== teamSkill) teamSkill = origin;
-            fromInactiveNamespace = true;
-            isOriginChecked = true;
           }
+          continue;
         }
 
-        if (teamSkill) {
+        // A copy awaiting review is new at the destination its open PR holds,
+        // which is not on the team repo, so there is nothing to compare it with.
+        let target: { dir: string; namespace?: string };
+        let status: ResourceItemStatus = 'new';
+        let fromInactiveNamespace = false;
+        if (destination.kind === 'openPr') {
+          target = destination;
+        } else {
           // Skill exists in team repo — check if content differs
+          const { teamSkill } = destination;
           const teamDirPath = teamSkill.dir;
           const equal = await dirTeamSubsetEqual(localDirPath, teamDirPath, [CONTRIBUTORS_FILE]);
           if (equal) continue; // This tool dir's copy is identical, skip
-          if (!isOriginChecked) {
-            delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
-            if (recordedUnder(delivered, localDirPath).length > 0) {
-              const origin = await recordedOrigin([teamSkill], { delivered, dest: localDirPath, repoPath: localConfig.repo.localPath });
-              if (!origin) {
-                warnUnprovenOrigin(dir, [teamSkill], localConfig.repo.localPath);
-                continue;
-              }
-              fromInactiveNamespace = true;
-            }
-          }
           // Single-repo mode: like `.teamai/rules` (see the rules scan), the
           // active tree's `.teamai/skills` is never refreshed, and a branch
           // behind the default branch holds older copies nobody edited (#823).
@@ -850,52 +885,38 @@ export class SkillsHandler extends ResourceHandler {
             );
             continue;
           }
-
           // Content differs — candidate for "modified"
-          const mtime = await getDirLatestMtime(localDirPath);
-          const candidateKey = `destination:${teamSkill.dir}`;
-          const existing = candidates.get(candidateKey);
-          if (!existing || mtime > existing.mtime) {
-            if (existing && !await dirContentEqual(existing.sourcePath, localDirPath, [CONTRIBUTORS_FILE])) {
-              warnOnce(`[skills] Skipped ${dir} at ${existing.sourcePath}: another edited copy for `
-                + `${path.relative(localConfig.repo.localPath, teamSkill.dir).split(path.sep).join('/')} has newer content.`);
-            }
-            // A destination one copy proves stays proven whichever copy is
-            // newer, so a flag cannot move it.
-            const proven = fromInactiveNamespace || existing?.originProven === true;
-            candidates.set(candidateKey, {
-              name: dir, sourcePath: localDirPath, mtime, status: 'modified', namespace: teamSkill.namespace,
-              ...proven ? { fromInactiveNamespace: true } : {},
-              ...deliveryRecorded ? { deliveryRecorded: true } : {},
-              ...proven ? { originProven: true, originCandidates: [teamSkill] } : {},
-            });
-          } else {
-            if (fromInactiveNamespace && !existing.originProven) {
-              candidates.set(candidateKey, {
-                ...existing, fromInactiveNamespace: true, originProven: true, originCandidates: [teamSkill],
-              });
-            }
-            if (!await dirContentEqual(existing.sourcePath, localDirPath, [CONTRIBUTORS_FILE])) {
-              warnOnce(`[skills] Skipped ${dir} at ${localDirPath}: another edited copy for `
-                + `${path.relative(localConfig.repo.localPath, teamSkill.dir).split(path.sep).join('/')} has newer content.`);
-            }
+          target = teamSkill;
+          status = 'modified';
+          fromInactiveNamespace = destination.proven;
+        }
+
+        const mtime = await getDirLatestMtime(localDirPath);
+        const candidateKey = `destination:${target.dir}`;
+        const existing = candidates.get(candidateKey);
+        if (!existing || mtime > existing.mtime) {
+          if (existing && !await dirContentEqual(existing.sourcePath, localDirPath, [CONTRIBUTORS_FILE])) {
+            warnOnce(`[skills] Skipped ${dir} at ${existing.sourcePath}: another edited copy for `
+              + `${path.relative(localConfig.repo.localPath, target.dir).split(path.sep).join('/')} has newer content.`);
           }
+          // A destination one copy proves stays proven whichever copy is
+          // newer, so a flag cannot move it.
+          const proven = fromInactiveNamespace || existing?.originProven === true;
+          candidates.set(candidateKey, {
+            name: dir, sourcePath: localDirPath, mtime, status, namespace: target.namespace,
+            ...proven ? { fromInactiveNamespace: true } : {},
+            ...fromInactiveNamespace ? { deliveryRecorded: true } : {},
+            ...proven ? { originProven: true, originCandidates: [target] } : {},
+          });
         } else {
-          // Skill does not exist in team repo — candidate for "new"
-          if (deliveryRecorded) {
-            warnUnprovenOrigin(dir, [], localConfig.repo.localPath);
-            continue;
+          if (fromInactiveNamespace && !existing.originProven) {
+            candidates.set(candidateKey, {
+              ...existing, fromInactiveNamespace: true, originProven: true, originCandidates: [target],
+            });
           }
-          const existing = candidates.get(`name:${dir}`);
-          if (!existing) {
-            const mtime = await getDirLatestMtime(localDirPath);
-            candidates.set(`name:${dir}`, { name: dir, sourcePath: localDirPath, mtime, status: 'new' });
-          } else if (existing.status === 'new') {
-            // Multiple tool dirs have the same new skill — pick latest mtime
-            const mtime = await getDirLatestMtime(localDirPath);
-            if (mtime > existing.mtime) {
-              candidates.set(`name:${dir}`, { name: dir, sourcePath: localDirPath, mtime, status: 'new' });
-            }
+          if (!await dirContentEqual(existing.sourcePath, localDirPath, [CONTRIBUTORS_FILE])) {
+            warnOnce(`[skills] Skipped ${dir} at ${localDirPath}: another edited copy for `
+              + `${path.relative(localConfig.repo.localPath, target.dir).split(path.sep).join('/')} has newer content.`);
           }
         }
       }

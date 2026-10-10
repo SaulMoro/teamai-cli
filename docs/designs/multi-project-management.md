@@ -506,6 +506,9 @@ and leaves that one untouched. A new skill keeps the destination its open PR
 recorded even when a same-named team skill appears elsewhere and the scan would
 call the copy an edit of that skill. Edits from several tools of one team skill
 are one candidate, the newest, whether or not each copy has a delivery record.
+Each copy's destination is decided before copies are merged, so a new skill
+awaiting review in one tool and an edit of a same-named team skill in another
+stay two candidates.
 A new skill, rule or
 agent pushed without `--role` or `--project` is placed among the role ∪ active
 project namespaces on its own axis, as pull delivers them. When a role is

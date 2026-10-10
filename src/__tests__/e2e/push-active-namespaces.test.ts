@@ -542,6 +542,38 @@ describe('push gives each local copy one team destination, whatever its scan sta
         untouchedSharedRoot();
       },
     },
+    ...(['codex', 'claude'] as const).map((newer) => ({
+      site: `candidate dedup: an open PR's copy and the ${newer === 'codex' ? 'newer ' : 'older '}delivered copy of a new shared skill keep their destinations`,
+      check: () => {
+        const openBranch = awaitReviewThenShareFooAtRoot(['foo']);
+        commitOnTeam('teamai.yaml', [
+          'team: push-active-ns', `repo: ${origin}`, 'provider: git', 'usageReport: false',
+          'toolPaths:', '  claude:', '    skills: .claude/skills', '  codex:', '    skills: .codex/skills', '',
+        ].join('\n'));
+        git(['pull', '-q', 'origin', 'main'], path.join(project, '.teamai', 'team-repo'));
+        setConfig({ enabledAgents: ['claude', 'codex'] });
+        // Codex holds a delivered copy of the shared skill.
+        const sharedContent = `${skillMd('foo')}\nA teammate's shared skill.\n`;
+        const codexFoo = path.join(project, '.codex', 'skills', 'foo', 'SKILL.md');
+        writeFile(codexFoo, sharedContent);
+        recordDeliveredCopies({ [fs.realpathSync(codexFoo)]: contentHash(sharedContent) });
+        fs.appendFileSync(codexFoo, '\nCodex edit.\n');
+        const later = new Date(Date.now() + 5_000);
+        fs.utimesSync(newer === 'codex' ? codexFoo : path.join(localSkill('foo'), 'SKILL.md'), later, later);
+
+        const pushed = run(['push', '--all']);
+
+        expect(skillFilesOn(openBranch), pushed.output).toEqual(['skills/platform/foo/SKILL.md']);
+        const platformFoo = git(['show', `${openBranch}:skills/platform/foo/SKILL.md`], origin);
+        expect(platformFoo, pushed.output).toContain('Second edit.');
+        expect(platformFoo).not.toContain('Codex edit.');
+        const shared = pushBranches().filter((b) => b !== openBranch);
+        expect(shared.map(skillFilesOn), pushed.output).toEqual([['skills/foo/SKILL.md']]);
+        const sharedFoo = git(['show', `${shared[0]}:skills/foo/SKILL.md`], origin);
+        expect(sharedFoo).toContain('Codex edit.');
+        expect(sharedFoo).not.toContain('Second edit.');
+      },
+    })),
     {
       site: 'preview: the copy is listed at its open PR destination',
       check: () => {

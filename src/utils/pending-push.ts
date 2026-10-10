@@ -49,32 +49,41 @@ export function recordedNamespace(recorded: PendingPushItem): string | undefined
 }
 
 /**
- * Give a skill the destination of the open PR that added it, once a same-named
- * team skill elsewhere — a teammate's shared-root one, say — makes the scan
- * resolve the copy to that skill and call it modified. The copy was never
- * delivered from there, while the record says where it went, so it stays a new
- * skill at that destination until the record is gone, and every later step
- * matches it to that PR. A copy with a proven origin keeps it, and a record
- * whose destination is on the team repo is an edit, matched by path.
- * Runs once, after pruning and before anything reads a destination.
+ * The open-PR record that decides where a new skill goes: the newest one
+ * carrying a skill of that name whose destination is not on the team repo.
+ * A same-named team skill elsewhere — a teammate's shared-root one, say — does
+ * not change it: the copy was never delivered from there, and the record says
+ * where it went. A record whose destination is on the team repo is an edit,
+ * matched by path (`isRecordedItem`), and decides nothing here.
  */
-export async function adoptOpenPrDestinations(
-  items: ResourceItem[],
-  pending: PendingPush[],
-  repoPath: string,
-): Promise<void> {
-  const newestFirst = [...pending].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-  for (const item of items) {
-    if (item.type !== 'skills' || item.status !== 'modified' || item.fromInactiveNamespace) continue;
-    for (const entry of newestFirst) {
-      const recorded = entry.items.find((i) => i.type === item.type && i.name === item.name);
-      if (!recorded || await pathExists(path.join(repoPath, recorded.relativePath))) continue;
-      item.status = 'new';
-      item.namespace = recordedNamespace(recorded);
-      item.relativePath = recorded.relativePath;
-      break;
-    }
+export async function openPrDestination(input: {
+  pending: readonly PendingPush[];
+  name: string;
+  repoPath: string;
+}): Promise<PendingPushItem | undefined> {
+  const newestFirst = [...input.pending].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  for (const entry of newestFirst) {
+    const recorded = entry.items.find((i) => i.type === 'skills' && i.name === input.name);
+    if (recorded && !await pathExists(path.join(input.repoPath, recorded.relativePath))) return recorded;
   }
+  return undefined;
+}
+
+/**
+ * Drop records whose branch is gone from origin, before the scan reads them
+ * for destinations. `prunePendingPushes` applies the scan-presence rule after
+ * the scan; the two together keep exactly what it keeps on its own.
+ */
+export async function dropClosedPendingPushes(repoPath: string, pending: PendingPush[]): Promise<PendingPush[]> {
+  const kept: PendingPush[] = [];
+  for (const entry of pending ?? []) {
+    if (await remoteBranchExists(repoPath, entry.branch) === false) {
+      log.debug(`Dropping pending push ${entry.branch}: branch gone from origin`);
+      continue;
+    }
+    kept.push(entry);
+  }
+  return kept;
 }
 
 /**
