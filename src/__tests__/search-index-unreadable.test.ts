@@ -83,4 +83,48 @@ describe('buildIndex when the indexed set shrinks (#1006)', () => {
       `Search index left out 1 file(s) it could not read (${path.join(docsDir, 'gone.md')}: ENOENT). Fix them and run \`teamai pull\` to index them.`,
     ]);
   });
+
+  // Every combination of what a rebuild can be handed. The older index stays
+  // only when the build read nothing, retained nothing and left nothing out;
+  // otherwise the result holds only what this build read or retained.
+  const cases = [false, true].flatMap((partial) => [false, true].flatMap((keepIndexed) =>
+    [0, 1].flatMap((readable) => [0, 1].flatMap((unreadable) => [false, true].map((existing) => {
+      const retained = keepIndexed && existing;
+      const keepsOld = existing && !partial && !retained && readable === 0 && unreadable > 0;
+      return { partial, keepIndexed, readable, unreadable, existing, keepsOld };
+    })))));
+
+  it.each(cases)(
+    'partial=$partial keep-indexed=$keepIndexed readable=$readable unreadable=$unreadable index=$existing keeps old=$keepsOld',
+    async ({ partial, keepIndexed, readable, unreadable, existing, keepsOld }) => {
+      const docsDir = path.join(tmpDir, 'docs');
+      await fse.outputFile(path.join(docsDir, 'old-doc.md'), '---\ntitle: old\n---\nbody');
+      if (existing) {
+        await buildIndex({ docsDir, docFiles: ['old-doc.md'], skills: { kind: 'dirs', dirs: await writeSkills(1) }, indexPath });
+      }
+      const docFiles: string[] = [];
+      for (let i = 0; i < readable; i++) {
+        await fse.outputFile(path.join(docsDir, `read-${i}.md`), `---\ntitle: read ${i}\n---\nbody`);
+        docFiles.push(`read-${i}.md`);
+      }
+      for (let i = 0; i < unreadable; i++) docFiles.push(`gone-${i}.md`);
+
+      await buildIndex({
+        docsDir,
+        docFiles,
+        skills: keepIndexed ? { kind: 'keep-indexed', reason: 'test' } : { kind: 'dirs', dirs: [] },
+        indexPath,
+        partial,
+      });
+
+      const entries = (await loadIndex(indexPath))?.entries.map((entry) => `${entry.type}:${entry.filename}`).sort() ?? [];
+      const expected = keepsOld
+        ? ['docs:old-doc.md', 'skills:zqx-skill-1.md']
+        : [
+          ...docFiles.filter((file) => file.startsWith('read-')).map((file) => `docs:${file}`),
+          ...(keepIndexed && existing ? ['skills:zqx-skill-1.md'] : []),
+        ].sort();
+      expect(entries).toEqual(expected);
+    },
+  );
 });

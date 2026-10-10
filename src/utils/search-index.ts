@@ -788,15 +788,15 @@ export interface IndexBuild {
 /**
  * The index a rebuild leaves in place. It follows what the member receives,
  * however much smaller (#1006); only a build that could read none of the files
- * it was given keeps the existing index. One that missed some is written
- * without them, and both name the files.
+ * it was given, and kept no skills from the existing index, keeps that index.
+ * One that missed some is written without them, and both name the files.
  */
 export function keepIndexWhenUnreadable(build: IndexBuild, existing: SearchIndex | null): SearchIndex {
   const { given, unreadable } = build;
   if (unreadable.length === 0) return build.index;
   const shown = unreadable.slice(0, 3).map((file) => `${file.path}: ${file.reason}`).join(', ');
   const files = unreadable.length > 3 ? `${shown}, and ${unreadable.length - 3} more` : shown;
-  if (unreadable.length === given && existing) {
+  if (unreadable.length === given && build.index.entries.length === 0 && existing) {
     log.warn(`Search index not rebuilt: none of the ${given} files it indexes could be read (${files}). `
       + 'Recall keeps the previous index until they can be read; fix them and run `teamai pull`.');
     return existing;
