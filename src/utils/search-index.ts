@@ -733,6 +733,11 @@ export interface BuildIndexOptions {
   codebaseDir?: string;
   votesDir?: string;
   indexPath?: string;
+  /**
+   * The caller left sources out on purpose (a team manifest it cannot read):
+   * never keep the index on disk, which would serve what was left out (#823).
+   */
+  partial?: boolean;
 }
 
 /**
@@ -759,7 +764,7 @@ export async function buildIndex(
   const elapsed = Date.now() - start;
 
   const targetPath = opts.indexPath ?? getSearchIndexPath();
-  const index = keepIndexWhenUnreadable(build, await loadIndex(targetPath));
+  const index = keepIndexWhenUnreadable(build, opts.partial ? null : await loadIndex(targetPath));
   if (index !== build.index) return elapsed;
 
   // A torn in-place write parses as null on the next loadIndex, which silently

@@ -365,6 +365,25 @@ describe('recall rebuilding an older-format index with a team manifest it cannot
     expect(warnings()).not.toContainEqual(expect.stringContaining('Search index'));
   });
 
+  // Root reads a file whatever its mode.
+  it.skipIf(process.getuid?.() === 0).each([false, true])(
+    'searches nothing, not the older index, when none of the learnings left can be read (dry run: %s)',
+    async (dryRun) => {
+      for (let i = 0; i < 10; i++) fs.chmodSync(path.join(repo(), 'learnings', `note-${i}.md`), 0o000);
+      const out: string[] = [];
+      const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { out.push(String(chunk)); return true; });
+      try {
+        await recall('retry budget', { dryRun });
+      } finally {
+        write.mockRestore();
+      }
+
+      expect(out.join('')).not.toContain('stale');
+      expect(warnings()).not.toContainEqual(expect.stringContaining('Search index not rebuilt'));
+      expect(warnings()).toContainEqual(expect.stringMatching(/^Search index left out 10 file\(s\) it could not read \(.*EACCES/));
+    },
+  );
+
   // The atomic index write (#854) stages a temp sibling and renames it into
   // place, so a read-only index file no longer fails the write — rename needs
   // only the directory. Fail the writes at the index path itself, the temp file

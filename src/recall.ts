@@ -480,9 +480,10 @@ async function loadOrBuildScopeIndex(
         codebaseDir: undefined, // codebase now served by teamwiki/ graph engine
         votesDir: votesExist ? votesDir : undefined,
         indexPath,
+        partial,
       };
       if (dryRun) {
-        index = keepIndexWhenUnreadable(await indexInMemory(buildOptions), index);
+        index = keepIndexWhenUnreadable(await indexInMemory(buildOptions), partial ? null : index);
       } else {
         await buildIndex(buildOptions);
         index = await loadIndex(indexPath);
