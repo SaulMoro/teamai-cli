@@ -206,7 +206,7 @@ describe('push --skill flag', () => {
     expect(pushedItems[0].name).toBe('skill-a');
   });
 
-  it('matches skill by name (basename of path)', async () => {
+  it('does not select another tool\'s skill by basename when the requested copy is outside the scan', async () => {
     const pushedItems: Array<Record<string, unknown>> = [];
     mockAutoDetectInit.mockResolvedValue({
       localConfig: makeLocalConfig(),
@@ -226,10 +226,16 @@ describe('push --skill flag', () => {
       return { scanLocalForPush: vi.fn().mockResolvedValue([]), pushItem: vi.fn() };
     });
 
+    mockPathExists.mockImplementation(async (p: string) => [
+      '/some/other/path/my-skill',
+      '/some/other/path/my-skill/SKILL.md',
+    ].includes(String(p)));
+
     await push({ all: true, skill: '/some/other/path/my-skill' });
 
     expect(pushedItems).toHaveLength(1);
     expect(pushedItems[0].name).toBe('my-skill');
+    expect(pushedItems[0].sourcePath).toBe('/some/other/path/my-skill');
   });
 
   it('force-constructs ResourceItem when skill path exists but not in scan results', async () => {

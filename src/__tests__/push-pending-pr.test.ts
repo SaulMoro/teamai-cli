@@ -441,7 +441,7 @@ describe('push() with an open PR', () => {
       pushItem: vi.fn(),
     }));
 
-    await push({ all: true, skill: 'target' });
+    await push({ all: true, skill: '/home/u/.cursor/skills/target' });
 
     const saved = mockSaveStateForScope.mock.calls.at(-1)?.[0] as State;
     const branches = saved.pendingPushes.map((p) => p.branch).sort();

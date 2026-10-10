@@ -93,6 +93,8 @@ The doc lands in the team's `learnings/` and appears for teammates on their next
    ```
 
    To publish into a specific role namespace: `teamai push --skill <path> --role <id>`.
+   `--skill <path>` selects that exact local copy after resolving `~` and
+   symlinks; a same-named copy in another tool is never a substitute.
    `--role <ns>` / `--project <id>` place every new resource, not only skills: a
    new rule and a new agent land in that namespace too (a project resolves each
    from its own axis — `knowledge` for rules, `agents` for agents). Without one,

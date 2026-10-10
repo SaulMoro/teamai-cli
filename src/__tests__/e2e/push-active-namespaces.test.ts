@@ -336,6 +336,33 @@ describe('push an edit of a skill pull kept after a project switch (#1020)', () 
 });
 
 describe('push --skill sends a skill to the team skill it came from', () => {
+  it('does not fall back to another tool when the requested delivered copy has no proven origin', () => {
+    const requested = path.join(project, '.claude', 'skills', 'a-skill');
+    fs.appendFileSync(path.join(requested, 'SKILL.md'), '\nEdited before the old origin was replaced.\n');
+    commitOnTeam('skills/svc-a/a-skill', null);
+    commitOnTeam('skills/svc-a/a-skill/SKILL.md', `${skillMd('a-skill')}\nAn unrelated recreated skill.\n`);
+    expect(run(['pull']).output).toContain('Kept ');
+    commitOnTeam('teamai.yaml', [
+      'team: push-active-ns',
+      `repo: ${origin}`,
+      'provider: git',
+      'usageReport: false',
+      'toolPaths:',
+      '  claude:',
+      '    skills: .claude/skills',
+      '  codex:',
+      '    skills: .codex/skills',
+      '',
+    ].join('\n'));
+    writeFile(path.join(project, '.codex', 'skills', 'a-skill', 'SKILL.md'), `${skillMd('a-skill')}\nAnother tool's pushable copy.\n`);
+
+    const pushed = run(['push', '--all', '--skill', requested]);
+
+    expect(pushed.output).toContain(`Skipped a-skill at ${requested}: teamai delivered this copy`);
+    expect(pushed.output).toContain('record matches no version of skills/svc-a/a-skill');
+    expect(pushedFiles()).toEqual([]);
+  });
+
   it('leaves another namespace\'s skill of the same name untouched', () => {
     commitOnTeam('skills/archive/a-skill/SKILL.md', `${skillMd('a-skill')}\nThe archived version.\n`);
     expect(run(['pull']).code).toBe(0);

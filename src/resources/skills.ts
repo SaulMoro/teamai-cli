@@ -415,9 +415,11 @@ export function createSkillPushItem(input: {
   originProven?: true;
   originCandidates?: readonly { dir: string }[];
   repoPath?: string;
+  reportSourcePath?: true;
 }): ResourceItem | undefined {
   if (input.deliveryRecorded && (!input.originProven || input.status === 'new')) {
-    warnUnprovenOrigin(input.name, input.originCandidates ?? [], input.repoPath ?? process.cwd());
+    warnUnprovenOrigin(input.name, input.originCandidates ?? [], input.repoPath ?? process.cwd(),
+      input.reportSourcePath ? input.sourcePath : undefined);
     return undefined;
   }
   const relativePath = input.namespace
@@ -439,10 +441,15 @@ export function createSkillPushItem(input: {
  * or to more than one, of the same-named team skills `copies`, so writing it
  * to any of them could replace a skill it never came from (#1020).
  */
-function warnUnprovenOrigin(name: string, copies: readonly { dir: string }[], repoPath: string): void {
+function warnUnprovenOrigin(
+  name: string,
+  copies: readonly { dir: string }[],
+  repoPath: string,
+  sourcePath?: string,
+): void {
   const holders = copies.map((copy) => path.relative(repoPath, copy.dir).split(path.sep).join('/')).join(' and ');
   warnOnce(
-    `[skills] Skipped ${name}: teamai delivered this copy, but its record matches `
+    `[skills] Skipped ${name}${sourcePath ? ` at ${sourcePath}` : ''}: teamai delivered this copy, but its record matches `
     + `${copies.length === 0 ? 'no current team skill' : copies.length === 1 ? `no version of ${holders}` : `no single one of ${holders}`}, `
     + 'so push cannot prove where it came from. To send the edit as a new skill, copy it under a new name and push that.',
   );

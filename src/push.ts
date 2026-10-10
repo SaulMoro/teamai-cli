@@ -1438,7 +1438,7 @@ async function pushCore(
       return;
     }
 
-    // Normalize the input path (expand ~, resolve to absolute)
+    // Normalize the input path (expand ~ and resolve to absolute).
     const os = await import('node:os');
     const skillPath = options.skill.startsWith('~')
       ? path.join(os.homedir(), options.skill.slice(1))
@@ -1450,21 +1450,9 @@ async function pushCore(
     for (const item of allItems) {
       if (item.type !== 'skills') continue;
 
-      // Match by sourcePath (absolute path)
-      if (path.resolve(item.sourcePath) === skillPath) {
-        matchedItem = item;
-        break;
-      }
-
-      // Match by skill name
-      if (item.name === path.basename(skillPath)) {
-        matchedItem = item;
-        break;
-      }
-
-      // Match by partial path (e.g., "skills/namespace/skillname" in sourcePath)
-      const skillInput = options.skill.replace(/^~/, os.homedir());
-      if (item.sourcePath.endsWith(skillInput) || item.sourcePath.includes(path.sep + skillInput)) {
+      // --skill selects this copy only. A same-named item from another tool
+      // cannot stand in for a requested copy the scan skipped.
+      if (resolveReal(item.sourcePath) === resolveReal(skillPath)) {
         matchedItem = item;
         break;
       }
@@ -1533,6 +1521,7 @@ async function pushCore(
           ...fromInactiveNamespace ? { fromInactiveNamespace: true } : {},
           ...deliveryRecorded ? { deliveryRecorded: true } : {},
           ...hasRecordedOrigin ? { originProven: true } : {},
+          ...(deliveryRecorded && !hasRecordedOrigin ? { reportSourcePath: true as const } : {}),
           originCandidates: copies,
           repoPath: localConfig.repo.localPath,
         });
@@ -1562,7 +1551,8 @@ async function pushCore(
     // because its content matches the team repo) is absent from fullScan. Add it
     // so prunePendingPushes still sees this skill as locally present — otherwise
     // its own open-PR record is dropped and the next run opens a duplicate.
-    if (!fullScan.some((i) => i.type === matchedItem!.type && i.name === matchedItem!.name)) {
+    if (!fullScan.some((i) => i.type === matchedItem!.type
+      && resolveReal(i.sourcePath) === resolveReal(matchedItem!.sourcePath))) {
       fullScan.push(matchedItem);
     }
   }

@@ -285,6 +285,7 @@ Choose namespace [1-3] (default: 1 = common):
 - 若某个激活的项目未在 `manifest/projects.yaml` 中声明，任何未带 `--role` 或 `--project` 的 push 都会报错停止（exit 2），而不会退回共享根目录，也不会把你的 skill 匹配到另一个项目的同名 skill：请执行 `teamai projects set <id>`，或用 `--project <id>` 或 `--role <ns>` 指定。有激活项目但 `manifest/projects.yaml` 缺失时同样如此：请恢复该文件，或用 `--role <ns>` 指定
 - 单一命名空间时自动选中；也可用 `--role <id>` 显式指定
 - 已下发 skill 的编辑只能推回其下发记录所能证明的来源团队 skill。证明范围是该路径在最近一次删除后重新创建以来的版本；删除前匹配的版本不算。即使来源 namespace 当前未激活、存在其他同名 skill，或命令带有 `--role`、`--project`、`--skill`，规则也相同。若来源已删除、被重新创建，或记录无法唯一匹配当前 skill，push 会跳过该编辑并给出警告。若要把它作为新 skill 发送，请将它复制为新名称后再 push。teamai 从未下发过的副本仍按现有规则使用名称或指定目标进行放置
+- `teamai push --skill <path>` 在解析 `~` 和符号链接后，只选择该本地副本。其他工具中同名的副本不会替代它；如果所选副本没有已证明的来源或无法推送，push 会说明该路径的原因，并且不发送该副本
 - 在没有激活角色或项目的旧版模式下，若多个 namespace 中有同名 skill，已下发副本只有在 delivery record 能在所有 namespace 中唯一识别来源时才会推回该来源。缺少记录或来源不唯一时，push 会跳过并警告。teamai 从未下发过的同名副本也会跳过；请用 `--role <ns>` 指定落点
 - 每个资源的落点都会打印出来，例如 `[rules] my-rule → rules/pm/my-rule.md`
 - 若 roles manifest 存在却无法给出答案，命令会报错停止，而不会退回共享根目录。未包含当前配置的角色时：请修复 `manifest/roles.yaml`、执行 `teamai roles set <role>`，或用 `--role <ns>` 显式指定。无法读取、无法解析或为空时，push 在扫描阶段即停止（exit 2），早于 `--role` 生效，因为扫描需要 manifest 才能判断哪些 namespace 属于你：请先修复 `manifest/roles.yaml`。团队仓库根本没有 `manifest/roles.yaml` 时，保持原有行为
