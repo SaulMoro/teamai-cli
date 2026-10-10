@@ -2575,12 +2575,8 @@ async function uninstallHomeOnly(opts: UninstallOptions): Promise<void> {
       process.exitCode = 1;
       return;
     }
-    // A project still loads its env through the loader and its registry (#1018).
-    const { envLoaderFilesForProjects } = await import('./resources/env-loader.js');
-    const kept = await envLoaderFilesForProjects();
-    if (kept.length > 0) await removeAllBut(home, kept);
-    else await remove(home);
-    log.success(kept.length > 0 ? `Removed ${home}/ but ${kept.join(', ')}` : `Removed ${home}/`);
+    await remove(home);
+    log.success(`Removed ${home}/`);
     log.success('teamai uninstalled');
   } catch (e) {
     log.warn(`Failed to remove ${home}: ${(e as Error).message}`);

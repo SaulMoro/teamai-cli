@@ -21,6 +21,7 @@ import { acquireLock, releaseLock } from '../update.js';
 import { getDataHome, getTeamaiHome, getTeamaiHomeDir, getUserConfigPath, type LocalConfig } from '../types.js';
 import { pathExists, readFileSafe, writeFileAtomic } from '../utils/fs.js';
 import { gitCommonDir } from '../utils/git.js';
+import { projectsRootDir, readAnchorFile } from '../utils/partition.js';
 import { log } from '../utils/logger.js';
 import { isWindowsFormPath, shellQuoteValue } from '../utils/shell-profile.js';
 
@@ -112,37 +113,73 @@ export async function unregisterEnvScope(localConfig: LocalConfig): Promise<void
 }
 
 /**
- * Whether no scope but `localConfig` still needs the loader: no other project
- * is registered, and no user scope stays. The user scope's config, not its
- * registry line, says whether it stays.
+ * Whether no remaining scope loads env through the loader. A registered scope
+ * with `-` in its env path keeps its data but does not need the shell loader.
  */
 export async function isLastEnvScope(localConfig: LocalConfig): Promise<boolean> {
   const entry = await scopeEntry(localConfig);
+  const hasUserConfig = await pathExists(getUserConfigPath());
   const others = (await readFileSafe(envScopesPath()) ?? '').split('\n')
-    .filter((line) => line !== '' && !line.startsWith(STAMP) && !line.startsWith(USER_LINE) && (entry === null || !line.startsWith(entry.id)));
-  if (others.length > 0) return false;
-  return localConfig.scope === 'user' || !await pathExists(getUserConfigPath());
+    .filter((line) => line !== '' && !line.startsWith(STAMP) && (entry === null || !line.startsWith(entry.id)));
+  if (others.some((line) => (!line.startsWith(USER_LINE) || hasUserConfig)
+    && Boolean(line.split('\t')[2]) && line.split('\t')[2] !== '-')) return false;
+  // An older user install has no registry line, so the loader still uses its
+  // fallback env.sh until a pull records the user's shell-loading preference.
+  return localConfig.scope === 'user' || Boolean(others.some((line) => line.startsWith(USER_LINE))) || !hasUserConfig;
 }
 
-/** Remove the loader script and the registry, once the last scope that needs them goes. */
+/** Remove the shell loader when no scope loads env; keep registry entries for opted-out scopes. */
 export async function removeEnvLoader(): Promise<void> {
-  await Promise.all([fs.promises.rm(envLoaderPath(), { force: true }), fs.promises.rm(envScopesPath(), { force: true })]);
+  if (!await pathExists(getUserConfigPath())) {
+    await updateEnvScopes((lines) => lines.filter((line) => !line.startsWith(USER_LINE)));
+  }
+  await fs.promises.rm(envLoaderPath(), { force: true });
+  const scopes = (await readFileSafe(envScopesPath()) ?? '').split('\n')
+    .filter((line) => line !== '' && !line.startsWith(STAMP));
+  if (scopes.length === 0) await fs.promises.rm(envScopesPath(), { force: true });
 }
 
 /**
- * The files a removal of `~/.teamai` keeps: the loader, its registry without
- * the user line, and each registered project's data directory (which holds
- * the env.sh the loader sources and the config doctor reads). Empty when no
- * project needs them.
+ * The files a removal of `~/.teamai` keeps for registered projects: the loader
+ * only when some project env loads, the registry, and each project's data
+ * directory (which holds its env.sh and config). Empty when none remain.
  */
 export async function envLoaderFilesForProjects(): Promise<string[]> {
   await updateEnvScopes((lines) => lines.filter((line) => !line.startsWith(USER_LINE)));
-  const projectHomes = [...new Set((await readFileSafe(envScopesPath()) ?? '').split('\n')
-    .filter((line) => line !== '' && !line.startsWith(STAMP) && !line.startsWith(USER_LINE))
-    .map((line) => line.split('\t')[2])
-    .filter((envSh) => envSh && envSh !== '-')
-    .map((envSh) => path.dirname(envSh)))];
-  return projectHomes.length > 0 ? [envLoaderPath(), envScopesPath(), ...projectHomes] : [];
+  const projectEntries = (await readFileSafe(envScopesPath()) ?? '').split('\n')
+    .filter((line) => line !== '' && !line.startsWith(STAMP) && !line.startsWith(USER_LINE));
+  const homes = [...new Set([
+    ...projectEntries.map((line) => line.split('\t')[2]).filter((envSh) => envSh && envSh !== '-').map((envSh) => path.dirname(envSh)),
+    ...await registeredProjectDataHomes(projectEntries),
+  ])];
+  return [
+    ...projectEntries.some((line) => {
+      const envSh = line.split('\t')[2];
+      return Boolean(envSh) && envSh !== '-';
+    }) ? [envLoaderPath()] : [],
+    ...projectEntries.length > 0 ? [envScopesPath()] : [],
+    ...homes,
+  ];
+}
+
+/** Match opted-out registrations to machine partitions by their authoritative anchor. */
+async function registeredProjectDataHomes(projectEntries: string[]): Promise<string[]> {
+  const registeredGitDirs = new Set(projectEntries.flatMap((line) => {
+    const [kind, key, envSh] = line.split('\t');
+    return kind === 'git' && envSh === '-' && key ? [path.normalize(key.replace(/[\\/]/g, path.sep))] : [];
+  }));
+  if (registeredGitDirs.size === 0) return [];
+  const root = projectsRootDir();
+  const partitions = (await fs.promises.readdir(root, { withFileTypes: true }).catch(() => []))
+    .filter((entry) => entry.isDirectory()).map((entry) => path.join(root, entry.name));
+  const homes: string[] = [];
+  for (const partition of partitions) {
+    const anchor = await readAnchorFile(partition);
+    if (!anchor) continue;
+    const commonDir = await gitCommonDir(anchor);
+    if (commonDir && registeredGitDirs.has(path.normalize(commonDir))) homes.push(partition);
+  }
+  return homes;
 }
 
 /** Tell shells that inherited their env that an env.sh changed, so they load it again. */
