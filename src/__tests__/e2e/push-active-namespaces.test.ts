@@ -110,6 +110,33 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(sandbox, { recursive: true, force: true }));
 
 describe('push an edit of a skill pull kept after a project switch (#1020)', () => {
+  it('resolves a legacy delivered duplicate against every namespace, not only the first', () => {
+    commitOnTeam('skills/z-archive/a-skill/SKILL.md', `${skillMd('a-skill')}\nDelivered from z-archive.\n`);
+    commitOnTeam('manifest/projects.yaml', null);
+    setConfig({ projects: [], primaryRole: undefined });
+
+    const pulled = run(['pull']);
+    expect(pulled.code, pulled.output).toBe(0);
+    const localSkill = path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md');
+    expect(fs.readFileSync(localSkill, 'utf8')).toContain('Delivered from z-archive.');
+    fs.appendFileSync(localSkill, '\nEdited after the legacy pull.\n');
+
+    const pushed = run(['push', '--all']);
+
+    expect(pushed.output).toContain('to:   skills/z-archive/a-skill');
+    expect(pushedFiles()).toContain('skills/z-archive/a-skill/SKILL.md');
+    expect(pushedFiles()).not.toContain('skills/svc-a/a-skill/SKILL.md');
+
+    commitOnTeam('skills/a-archive/member-owned/SKILL.md', skillMd('member-owned'));
+    commitOnTeam('skills/z-archive/member-owned/SKILL.md', skillMd('member-owned'));
+    writeFile(path.join(project, '.claude', 'skills', 'member-owned', 'SKILL.md'), skillMd('member-owned'));
+    const unrecorded = run(['push', '--all']);
+
+    expect(unrecorded.output).toContain('no delivery record proves which one this copy came from');
+    expect(pushedFiles()).not.toContain('skills/a-archive/member-owned/SKILL.md');
+    expect(pushedFiles()).not.toContain('skills/z-archive/member-owned/SKILL.md');
+  });
+
   it('offers the edit with --all and sends it back to the namespace it came from', () => {
     fs.appendFileSync(path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md'), '\nEdited while on svc-a.\n');
     expect(run(['projects', 'set', 'svc-b']).code).toBe(0);

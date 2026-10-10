@@ -491,8 +491,12 @@ inactive namespace, active namespace or shared root, even after the team changed
 it. When that version matches no single copy, wherever the copies are, it is
 skipped with a warning naming them, so a same-named skill that replaced the
 deleted one is never overwritten (#1020). A copy teamai never delivered matches
-by name only a shared-root or active skill. `push --skill` resolves its skill
-the same way, and asks for `--role` rather than taking the first directory that
+by name only a shared-root or active skill. In legacy mode with no active role
+or project, a delivered duplicate goes back only when its record identifies
+exactly one same-named skill across all namespaces; missing or ambiguous
+records are skipped with a warning. A never-delivered duplicate is also skipped
+instead of taking the first namespace. `push --skill` resolves its skill the
+same way, and asks for `--role` rather than taking the first directory that
 holds the name. An open PR is reused for a resource only when it records the
 same destination directory this push sends the resource to; otherwise this
 push opens its own PR and leaves that one untouched. A new skill, rule or

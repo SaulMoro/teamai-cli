@@ -247,13 +247,16 @@ async function resolveNamespaceForNew(
   if (candidates.length === 0) return { kind: 'shared-root' };
   if (candidates.length === 1) return { kind: 'namespace', namespace: candidates[0] };
   if (options.silent) {
-    // Skills keep their historical silent default (the primary role id); no
-    // other axis ever had that convention, so they take the first candidate.
+    // Preserve the historical skill default only when the role id is one of
+    // the destinations pull delivers. A role id absent from this list (for
+    // example, when projects supply the only namespaces) is not proof.
     const skillsDefault = type === 'skills' ? localConfig.primaryRole : undefined;
-    // The role id is not one of the candidates the manifest validated.
-    const unsafe = skillsDefault === undefined ? null : fallbackNamespaceError([skillsDefault], 'role id used as a skills namespace');
+    const unsafe = skillsDefault === undefined
+      ? null
+      : fallbackNamespaceError([skillsDefault], 'role id used as a skills namespace');
     if (unsafe !== null) return { kind: 'unresolvable', message: unsafe };
-    return { kind: 'namespace', namespace: skillsDefault ?? candidates[0] };
+    const preferred = skillsDefault && candidates.includes(skillsDefault) ? skillsDefault : candidates[0];
+    return { kind: 'namespace', namespace: preferred };
   }
   // No terminal to ask on (CI, a hook, TEAMAI_NONINTERACTIVE): say what the
   // choice is and how to make it, instead of failing inside the prompt.

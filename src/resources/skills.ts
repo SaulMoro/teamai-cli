@@ -577,6 +577,9 @@ export class SkillsHandler extends ResourceHandler {
   async scanLocalForPush(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<ResourceItem[]> {
     const scopedNamespaces = await resolvePushSkillNamespaces(localConfig);
     const teamSkills = new Map<string, { dir: string; namespace?: string }>();
+    // In legacy mode, pull can deliver one of several same-named skills. Keep
+    // every source so its delivery record can identify the right destination.
+    const legacyTeamSkills = new Map<string, { dir: string; namespace?: string }[]>();
     // Skills in namespaces neither the role nor an active project selects, with each team copy of the name
     const blockedSkills = new Map<string, { dir: string; namespace: string }[]>();
 
@@ -633,13 +636,17 @@ export class SkillsHandler extends ResourceHandler {
         const hasSkillMd = await pathExists(path.join(dirPath, 'SKILL.md'));
         if (hasSkillMd) {
           // Flat skill
-          teamSkills.set(dir, { dir: dirPath });
+          const candidate = { dir: dirPath };
+          legacyTeamSkills.set(dir, [...legacyTeamSkills.get(dir) ?? [], candidate]);
+          teamSkills.set(dir, candidate);
         } else {
           // Namespace directory — scan subdirectories as skills
           const subDirs = await listDirs(dirPath);
           for (const subDir of subDirs) {
+            const candidate = { dir: path.join(dirPath, subDir), namespace: dir };
+            legacyTeamSkills.set(subDir, [...legacyTeamSkills.get(subDir) ?? [], candidate]);
             if (!teamSkills.has(subDir)) {
-              teamSkills.set(subDir, { dir: path.join(dirPath, subDir), namespace: dir });
+              teamSkills.set(subDir, candidate);
             }
           }
         }
@@ -703,6 +710,29 @@ export class SkillsHandler extends ResourceHandler {
         let fromInactiveNamespace = false;
         const blockedCopies = blockedSkills.get(dir) ?? [];
         let isOriginChecked = false;
+        const legacyCopies = legacyTeamSkills.get(dir) ?? [];
+        if (legacyCopies.length > 1) {
+          delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
+          if (recordedUnder(delivered, localDirPath).length === 0) {
+            const holders = legacyCopies.map((copy) => path.relative(localConfig.repo.localPath, copy.dir)
+              .split(path.sep).join('/')).join(', ');
+            warnOnce(
+              `[skills] Skipped ${dir}: the team has several skills with this name (${holders}), `
+              + 'and no delivery record proves which one this copy came from. Pass --role <ns> to name the destination.',
+            );
+            continue;
+          }
+          if (await isUneditedSkillCopy(delivered, localDirPath)) continue;
+          const origin = await recordedOrigin(legacyCopies, {
+            delivered, dest: localDirPath, repoPath: localConfig.repo.localPath,
+          });
+          if (!origin) {
+            warnUnprovenOrigin(dir, legacyCopies, localConfig.repo.localPath);
+            continue;
+          }
+          teamSkill = origin;
+          isOriginChecked = true;
+        }
         if (blockedCopies.length > 0) {
           delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
           if (recordedUnder(delivered, localDirPath).length === 0) {
