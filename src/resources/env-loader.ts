@@ -388,8 +388,10 @@ __teamai_env_unapply() {
   __teamai_env_unhook
   for __teamai_k in \${__TEAMAI_ENV_KEYS-}; do
     eval "__teamai_set=\\\${__TEAMAI_ENV_SET_$__teamai_k-}"
-    if [ "$__teamai_set" = 1 ]; then
-      eval "export $__teamai_k=\\"\\\${__TEAMAI_ENV_PREV_$__teamai_k}\\""
+    if [ "$__teamai_set" = 1 ] || [ "$__teamai_set" = 2 ]; then
+      unset "$__teamai_k"
+      eval "$__teamai_k=\\\${__TEAMAI_ENV_PREV_$__teamai_k}"
+      [ "$__teamai_set" = 2 ] && export "$__teamai_k"
     else
       unset "$__teamai_k"
     fi
@@ -418,7 +420,19 @@ __teamai_env_load() {
   for __teamai_k in $__teamai_keys; do
     eval "__teamai_set=\\\${$__teamai_k+1}"
     if [ "$__teamai_set" = 1 ]; then
-      eval "export __TEAMAI_ENV_SET_$__teamai_k=1 __TEAMAI_ENV_PREV_$__teamai_k=\\"\\$$__teamai_k\\""
+      # Remove inherited export attributes from bookkeeping before writing it.
+      unset "__TEAMAI_ENV_SET_$__teamai_k" "__TEAMAI_ENV_PREV_$__teamai_k"
+      __teamai_exported=
+      if [ -n "\${ZSH_VERSION-}" ]; then
+        case $(typeset -p "$__teamai_k" 2>/dev/null) in *"export $__teamai_k="*) __teamai_exported=1 ;; esac
+      else
+        case $(declare -p "$__teamai_k" 2>/dev/null) in *"declare -x $__teamai_k="*) __teamai_exported=1 ;; esac
+      fi
+      if [ "$__teamai_exported" = 1 ]; then
+        eval "export __TEAMAI_ENV_SET_$__teamai_k=2 __TEAMAI_ENV_PREV_$__teamai_k=\\"\\$$__teamai_k\\""
+      else
+        eval "__TEAMAI_ENV_SET_$__teamai_k=1 __TEAMAI_ENV_PREV_$__teamai_k=\\"\\$$__teamai_k\\""
+      fi
     fi
   done
   IFS=$__teamai_key_ifs
@@ -434,7 +448,22 @@ __teamai_env_load() {
 # own directory. The member's own BASH_ENV is kept, to source after.
 __teamai_env_bash_env() {
   [ "\${BASH_ENV-}" = "$__teamai_env_loader" ] && return 0
-  if [ -n "\${BASH_ENV-}" ]; then export __TEAMAI_ENV_BASH_ENV="$BASH_ENV"; else unset __TEAMAI_ENV_BASH_ENV; fi
+  if [ "\${BASH_ENV+x}" = x ]; then
+    unset __TEAMAI_ENV_BASH_ENV __TEAMAI_ENV_BASH_ENV_SET
+    __teamai_bash_env_exported=
+    if [ -n "\${ZSH_VERSION-}" ]; then
+      case $(typeset -p BASH_ENV 2>/dev/null) in *'export BASH_ENV='*) __teamai_bash_env_exported=1 ;; esac
+    else
+      case $(declare -p BASH_ENV 2>/dev/null) in *'declare -x BASH_ENV='*) __teamai_bash_env_exported=1 ;; esac
+    fi
+    if [ "$__teamai_bash_env_exported" = 1 ]; then
+      export __TEAMAI_ENV_BASH_ENV="$BASH_ENV" __TEAMAI_ENV_BASH_ENV_SET=2
+    else
+      __TEAMAI_ENV_BASH_ENV="$BASH_ENV" __TEAMAI_ENV_BASH_ENV_SET=1
+    fi
+  else
+    unset __TEAMAI_ENV_BASH_ENV __TEAMAI_ENV_BASH_ENV_SET
+  fi
   export BASH_ENV="$__teamai_env_loader"
 }
 
@@ -445,7 +474,18 @@ __teamai_env_apply() {
   __teamai_env_unapply
   # An already-open shell may still hold this function after uninstall removes
   # the loader file. Unapply its values and hook, then leave it clean.
-  [ -f "$__teamai_env_loader" ] || { unset __TEAMAI_ENV_DIR __TEAMAI_ENV_STAMP __TEAMAI_ENV_FILES; return 0; }
+  if [ ! -f "$__teamai_env_loader" ]; then
+    case \${__TEAMAI_ENV_BASH_ENV_SET-} in
+      1 | 2)
+        unset BASH_ENV
+        BASH_ENV=$__TEAMAI_ENV_BASH_ENV
+        [ "$__TEAMAI_ENV_BASH_ENV_SET" = 2 ] && export BASH_ENV
+        ;;
+      *) unset BASH_ENV ;;
+    esac
+    unset __TEAMAI_ENV_BASH_ENV __TEAMAI_ENV_BASH_ENV_SET __TEAMAI_ENV_DIR __TEAMAI_ENV_STAMP __TEAMAI_ENV_FILES
+    return 0
+  fi
   # Again on each cd: a startup file the member's runs after this one may set its own.
   __teamai_env_bash_env
   __teamai_d=$(__teamai_env_pwd) || { unset __TEAMAI_ENV_DIR __TEAMAI_ENV_FILES; return 0; }

@@ -833,13 +833,13 @@ const teamEnvHintHandler: HookHandler = {
   name: 'team-env-hint',
   async execute(_stdin, _tool, config) {
     if (!config) return null;
-    const { resolveSecretDeclarations } = await import('./resources/secrets.js');
-    const { envEntryReader } = await import('./resources/env.js');
-    const { resolveEntriesFor } = await import('./namespaced-entries.js');
-    const [declarations, variables] = await Promise.all([resolveSecretDeclarations(config), resolveEntriesFor(envEntryReader, config)]);
+    const { resolveTeamEnv, effectiveTeamEnvVariables } = await import('./env-resolution.js');
+    const teamEnv = await resolveTeamEnv(config);
+    const { declarations } = teamEnv;
+    const variables = effectiveTeamEnvVariables(teamEnv);
     const secrets = declarations.kind === 'resolved' ? declarations.entries.filter(({ name }) => !isReservedTeamEnvKey(name)) : [];
     const secretNames = new Set(secrets.map(({ name }) => name));
-    const plain = variables.kind === 'resolved' ? variables.entries.filter(({ name }) => !secretNames.has(name) && !isReservedTeamEnvKey(name)) : [];
+    const plain = variables.filter(({ name }) => !secretNames.has(name) && !isReservedTeamEnvKey(name));
     if (secrets.length === 0 && plain.length === 0) return null;
     const described = (entries: readonly Pick<ResolvedEntry<{ description?: string }>, 'name' | 'entry'>[]): string => entries.map(({ name, entry }) => {
       const description = entry.description?.replace(/\s+/g, ' ').trim();

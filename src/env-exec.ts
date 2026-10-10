@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import crossSpawn from 'cross-spawn';
-import { loadLocalConfigForScope, resolveConfigForDir } from './config.js';
+import { resolveConfigForDir } from './config.js';
 import { reportMissingSecrets } from './env-advisories.js';
 import { resolveTeamEnv } from './env-resolution.js';
 import { memberEnvironmentWithoutScope, type MemberEnvironment } from './member-env.js';
@@ -212,7 +212,6 @@ async function overlayTeamEnv(localConfig: LocalConfig): Promise<NodeJS.ProcessE
     // A shell started in another directory carries that scope's env.sh: what
     // a teamai env.sh exported is not this directory's, so it goes first (#1018).
     withoutTeamExports(env, teamEnv.member);
-    for (const [key, value] of await inheritedUserVariables(localConfig)) setKey(env, key, value);
     for (const [key, variable] of variableValues.values) if (!isReservedTeamEnvKey(key)) setKey(env, key, variable.value);
   }
   const secretKeys = declaredSecretKeys(declarations);
@@ -229,23 +228,6 @@ async function overlayTeamEnv(localConfig: LocalConfig): Promise<NodeJS.ProcessE
   }
   if (secrets.kind === 'resolved') await reportMissingSecrets(localConfig, teamEnv);
   return env;
-}
-
-/**
- * The user scope's variables, for a project that inherits the user scope:
- * they go under the project's, which wins a key both define. Its secrets
- * never do, since the user scope may be another team's.
- */
-async function inheritedUserVariables(localConfig: LocalConfig): Promise<Map<string, string>> {
-  if (localConfig.scope !== 'project' || localConfig.inheritUserScope !== true) return new Map();
-  const userConfig = await loadLocalConfigForScope('user');
-  if (!userConfig || userConfig.repo.kind === 'http') return new Map();
-  const { variableValues } = await resolveTeamEnv(userConfig);
-  if (variableValues.kind === 'store-unreadable') {
-    log.warn(`${variableValues.reason} The command runs without the user scope's env variables.`);
-    return new Map();
-  }
-  return new Map([...variableValues.values].filter(([key]) => !isReservedTeamEnvKey(key)).map(([key, variable]) => [key, variable.value]));
 }
 
 /** Remove `key` from `env`, in every case on Windows, where environment names are case-insensitive. */

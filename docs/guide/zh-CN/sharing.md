@@ -436,7 +436,7 @@ OpenCode 支持 `stdio`（写成其 `type:"local"` 形态）、`http` 和 `sse`�
 
 与手写同名则跳过，除非 `--force`。
 
-**密钥**：在 `mcp.yaml` 里写 `${VAR}`，不要写明文。团队在 `env/secrets.yaml` 中声明的 key 优先取你为该团队设置的值（`teamai env set`），其次取你为本机设置的值（`teamai env set --global`），再次取你自己的环境，不包括 teamai `env.sh` 导出的值（见[团队密钥](../../designs/team-secrets.md#resolution)）。其他变量优先取你为该团队设置的值（`teamai env set KEY`），其次是该目录收到的团队环境变量（`env/env.yaml` 与活动的 `env/<ns>/env.yaml`）；
+**密钥**：在 `mcp.yaml` 里写 `${VAR}`，不要写明文。团队在 `env/secrets.yaml` 中声明的 key 优先取你为该团队设置的值（`teamai env set`），其次取你为本机设置的值（`teamai env set --global`），再次取你自己的环境，不包括 teamai `env.sh` 导出的值（见[团队密钥](../../designs/team-secrets.md#resolution)）。其他变量优先取你为该团队设置的值（`teamai env set KEY`），其次是该目录收到的团队环境变量（`env/env.yaml` 与活动的 `env/<ns>/env.yaml`）；对于设置了 `inheritUserScope: true` 的项目，用户级 scope 变量作为项目变量的后备值。
 
 环境只补充团队没有设置的 key，不再覆盖团队变量（见[团队密钥](../../designs/team-secrets.md#variables)）。你导出的值与团队的值不同而被忽略时，交互式 `pull` 和 `teamai doctor` 会指出。变量无法解析则跳过并提示。已声明的密钥不同：pull 找不到它时，之前某次 pull 写入的条目原样保留，因此里面可能是已经轮换掉的旧值，直到某次 pull 找到新值（见[团队密钥](../../designs/team-secrets.md#a-missing-secret-keeps-the-mcp-entry)）。交互式 `pull`、`teamai mcp list`、`teamai env list`、`teamai doctor` 和 `teamai env exec` 会指出没有值的已声明密钥、用到它的 server 以及设置它的命令：`` github: GITHUB_TOKEN is not set. Run `teamai env set GITHUB_TOKEN` (<url>). ``
 

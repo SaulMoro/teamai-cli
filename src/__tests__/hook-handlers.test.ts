@@ -103,6 +103,7 @@ vi.mock('../config.js', async (importOriginal) => ({
   // project config, so the gate asks the user config: the same mocked one.
   requireInit: mockAutoDetectInit,
   findUnreadableProjectConfig: mockFindUnreadableProjectConfig,
+  loadLocalConfigForScope: vi.fn().mockResolvedValue(null),
   resolveConfigForDir: vi.fn().mockResolvedValue({
     repo: { localPath: '/tmp/team-repo', remote: '' }, username: 'test', scope: 'user', additionalRoles: [],
   }),
@@ -1514,6 +1515,25 @@ describe('session-start team env hint (#875, #1018)', () => {
     expect(envLines).toHaveLength(1);
     expect(envLines[0]).toContain('teamai env exec --');
     expect(envLines[0]).not.toContain('teamai env set KEY');
+  });
+
+  it('includes inherited user variables in the hint through the shared env resolution', async () => {
+    const userRepo = path.join(teamRepo, 'user-team');
+    fs.mkdirSync(path.join(userRepo, 'env'), { recursive: true });
+    fs.writeFileSync(path.join(userRepo, 'teamai.yaml'), 'team: acme\nrepo: https://example.test/acme/team.git\n');
+    fs.writeFileSync(path.join(userRepo, 'env', 'env.yaml'), 'variables:\n  - key: USER_ONLY\n    value: inherited\n');
+    const { loadLocalConfigForScope } = await import('../config.js');
+    vi.mocked(loadLocalConfigForScope).mockResolvedValueOnce({
+      ...scope, scope: 'user', repo: { localPath: userRepo, remote: '' },
+    });
+    const projectConfig: LocalConfig = {
+      ...scope, scope: 'project', inheritUserScope: true, projectRoot: teamRepo, repo: { localPath: teamRepo, remote: '' },
+    };
+    const dispatcher = createDispatcher({ handlers: filterHandlersForConfig(buildHandlerRegistry(), projectConfig), localConfig: projectConfig });
+    const result = await dispatcher.dispatch('session-start', '*', { session_id: 'sid-inherited', cwd: teamRepo }, 'claude', 'foreground');
+
+    expect(result.errors).toEqual([]);
+    expect(result.output).toContain('Team env variables in this scope: USER_ONLY.');
   });
 
   it('adds nothing when the scope delivers no env', async () => {

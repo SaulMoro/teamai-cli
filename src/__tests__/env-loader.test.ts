@@ -109,6 +109,42 @@ describe('team env by directory (#1018)', () => {
     return run.stdout.trim();
   };
 
+  describe('restores the member environment exactly', () => {
+    const shells = ['bash', 'zsh'].filter(hasShell);
+    const states = [
+      { name: 'unset', setup: '', expected: 'unset' },
+      { name: 'local', setup: 'TOKEN=mine', expected: 'local:mine' },
+      { name: 'exported', setup: 'export TOKEN=mine', expected: 'exported:mine' },
+    ];
+    const report = 'if [ "${TOKEN+x}" != x ]; then printf unset; else case " $(export -p) " in *" TOKEN="*) printf "exported:%s" "$TOKEN";; *) printf "local:%s" "$TOKEN";; esac; fi; printf "\\n"';
+
+    it.each(shells.flatMap((shell) => states.flatMap((state) => [false, true].map((child) => ({ shell, state, child })))))(
+      '$shell restores $state.name after enter → $child', async ({ shell, state, child }) => {
+        const a = await project(`restore-${shell}-${state.name}-${child}`);
+        const elsewhere = path.join(tmpDir, 'outside');
+        await fse.ensureDir(elsewhere);
+        await handler.writeResolvedEnv([{ key: 'TOKEN', value: 'team' }], teamConfig, a);
+        const command = [
+          state.setup,
+          `cd '${a.projectRoot}'`,
+          ...(child ? [`${shell} -c 'cd "${elsewhere}"; . "${path.join(homeDir, '.teamai', 'env-loader.sh')}"; printf "child="; ${report}'`] : []),
+          `cd '${elsewhere}'`,
+          `printf 'parent='; ${report}`,
+          'exit',
+        ].filter(Boolean).join('\n');
+        const run = spawnSync(shell, ['-i'], {
+          cwd: elsewhere,
+          env: { HOME: homeDir, PATH: process.env.PATH, SHELL: `/bin/${shell}`, BASH_ENV: path.join(homeDir, '.teamai', 'env-loader.sh') },
+          input: command,
+          encoding: 'utf-8',
+        });
+        expect(run.status, run.stderr).toBe(0);
+        expect(run.stdout.trim().split('\n').slice(-1)[0]).toBe(`parent=${state.expected}`);
+        if (child) expect(run.stdout).toContain(`child=${state.name === 'exported' ? state.expected : 'unset'}\n`);
+      },
+    );
+  });
+
   /**
    * Every zsh, and every bash a terminal starts, runs the loader: a script's
    * output or its exit status must not change because of it, and it must not
@@ -364,6 +400,41 @@ describe('team env by directory (#1018)', () => {
         });
 
         expect(terminal.stdout.trim().split('\n')).toEqual(['from-b', '1']);
+      });
+
+      it('restores the member BASH_ENV when an open shell notices the loader was uninstalled', async () => {
+        const { file } = await memberBashEnv();
+        const a = await project('uninstalled-loader');
+        const elsewhere = path.join(tmpDir, 'uninstalled-outside');
+        const loader = path.join(homeDir, '.teamai', 'env-loader.sh');
+        await fse.ensureDir(elsewhere);
+        await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-a' }], teamConfig, a);
+
+        const terminal = spawnSync('zsh', ['-i'], {
+          cwd: a.projectRoot,
+          env: { HOME: homeDir, PATH: process.env.PATH, SHELL: '/bin/zsh', BASH_ENV: file },
+          encoding: 'utf-8',
+          input: `rm '${loader}'\ncd '${elsewhere}'\nbash -c 'printenv MEMBER_SET'\nexit\n`,
+        });
+
+        expect(terminal.stdout.trim().split('\n').slice(-1)[0]).toBe('1');
+      });
+
+      it('unsets BASH_ENV when an open shell notices the loader was uninstalled and had no member value', async () => {
+        const a = await project('uninstalled-loader-no-bash-env');
+        const elsewhere = path.join(tmpDir, 'uninstalled-outside-no-bash-env');
+        const loader = path.join(homeDir, '.teamai', 'env-loader.sh');
+        await fse.ensureDir(elsewhere);
+        await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-a' }], teamConfig, a);
+
+        const terminal = spawnSync('zsh', ['-i'], {
+          cwd: a.projectRoot,
+          env: { HOME: homeDir, PATH: process.env.PATH, SHELL: '/bin/zsh' },
+          encoding: 'utf-8',
+          input: `rm '${loader}'\ncd '${elsewhere}'\nbash -c 'if [ -n "\${BASH_ENV-}" ]; then echo present; else echo unset; fi'\nexit\n`,
+        });
+
+        expect(terminal.stdout.trim().split('\n').slice(-1)[0]).toBe('unset');
       });
     });
 
@@ -679,7 +750,7 @@ describe('team env by directory (#1018)', () => {
       expect(output.trim()).toBe('unset');
     });
 
-    it.skipIf(!hasBashAtLeast(5, 1))('preserves PROMPT_COMMAND arrays and removes only the loader hook when the env is unapplied', async () => {
+    it.skipIf(!hasShell('bash') || !hasBashAtLeast(5, 1))('preserves PROMPT_COMMAND arrays and removes only the loader hook when the env is unapplied', async () => {
       const a = await project('a');
       const b = await project('b');
       await fse.writeFile(path.join(homeDir, '.bashrc'), [
