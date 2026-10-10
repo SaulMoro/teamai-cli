@@ -8,7 +8,7 @@ import {
   resetToCleanMaster, isDedicatedRepoRoot, getDefaultBranch, getFileContentAtRev, getHeadCommit,
 } from './utils/git.js';
 import { reconcilePlacementRecords,
-  findPendingForItem, partiallySelectedEntries, pendingNamespaceFor, planPushGroups,
+  findPendingForItem, isRecordedItem, partiallySelectedEntries, pendingNamespaceFor, planPushGroups,
   prunePendingPushes, recordPendingPush, toPendingItems, type PushGroup,
 } from './utils/pending-push.js';
 import { syncTeamUpdatesToLocal } from './utils/pre-push-sync.js';
@@ -19,7 +19,7 @@ import { createSkillPushItem, scanTeamRepoNamespaces } from './resources/skills.
 import { AgentsHandler } from './resources/agents.js';
 import { deliversEveryNamespace } from './resource-namespaces.js';
 import type {
-  GlobalOptions, ResourceItem, ResourceType, LocalConfig, TeamaiConfig, State,
+  GlobalOptions, PendingPushItem, ResourceItem, ResourceType, LocalConfig, TeamaiConfig, State,
 } from './types.js';
 import { getDataHome, SELF_KNOWLEDGE_SCAN_KEY, SYNC_LOCK_FILENAME } from './types.js';
 import { acquireLock, releaseLock } from './update.js';
@@ -1636,11 +1636,11 @@ async function pushCore(
 
   // A rule or agent awaiting review in a namespace whose name a shared-root
   // file now takes: the scan maps the author's root copy onto that shared file
-  // and calls it modified. Reusing the open PR — matched by type and name —
-  // would rebuild it with the author's content over the shared file and drop
-  // the namespaced change from review (#649 review). The shared root owns the
-  // name in every tool dir, as reconcile already rules for a record, so this
-  // copy is left out: the open PR stays as it is.
+  // and calls it modified. Pushing it would send the author's content over the
+  // shared file while the namespaced change waits in review (#649 review). The
+  // record is found by name: the copy and its placement share it, not a path.
+  // The shared root owns the name in every tool dir, as reconcile already rules
+  // for a record, so this copy is left out: the open PR stays as it is.
   for (let i = allItems.length - 1; i >= 0; i--) {
     const item = allItems[i];
     if (!item || (item.type !== 'rules' && item.type !== 'agents')) continue;
@@ -1702,9 +1702,9 @@ async function pushCore(
     return;
   }
 
-  // An open PR is matched by type and name alone. A pending entry that put the
-  // same-named resource somewhere other than where this push sends it is a
-  // different resource: reusing its branch would force-push this content into
+  // An open PR is matched by destination, or by name for a new resource
+  // (`isRecordedItem`). A pending entry that put a new resource somewhere other
+  // than where this push sends it is a different resource: reusing its branch would force-push this content into
   // that PR and move it to the wrong namespace (#649 review). Where this push
   // sends it is the namespace the user NAMED, or else the path it was scanned
   // with, such as a kept skill's inactive namespace (#1020).
@@ -1719,14 +1719,13 @@ async function pushCore(
   // the shared root (step 4). Anything else keeps the path it was scanned with,
   // so an open PR recording that path is still the right one to update, and
   // treating it as a conflict opened a second PR on the same file (#649 review).
-  const scannedByKey = new Map(allItems.map((item) => [`${item.type}:${item.name}`, item]));
   const movedByFlag = (item: ResourceItem): boolean => isRelocatedByFlag(item)
     || (item.status === 'new' && !item.namespace && isAtSharedRoot(item));
   const conflictsWithRequest = (
-    recorded: { type: string; name: string; namespace?: string; relativePath: string },
+    recorded: PendingPushItem,
   ): boolean => {
     if (!isPlaceableType(recorded.type as ResourceType)) return false;
-    const scanned = scannedByKey.get(`${recorded.type}:${recorded.name}`);
+    const scanned = allItems.find((item) => isRecordedItem(recorded, item));
     if (!scanned) return false;
     if (!movedByFlag(scanned)) {
       // A new resource still at the shared root is placed later and takes the

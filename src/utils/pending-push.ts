@@ -17,11 +17,24 @@ import { pathExists } from './fs.js';
 import { remoteBranchExists, hashObject, blobInHistory, pathAddedSince, pathDeletedSince, getHeadCommit, getFileContentAtRev } from './git.js';
 import { placedResourcePath } from '../push-namespaces.js';
 import { log } from './logger.js';
-import type { PendingPush, ResourceItem, State } from '../types.js';
+import type { PendingPush, PendingPushItem, ResourceItem, State } from '../types.js';
 
-/** Identity used to match a recorded resource against a fresh scan result. */
+/** Type and name: the identity a record is kept by while anything of that name is still scanned. */
 function itemKey(type: string, name: string): string {
   return `${type}:${name}`;
+}
+
+/**
+ * Whether a recorded resource is this scanned item. A resource already on the
+ * team repo is its destination: same-named skills in two namespaces are two
+ * resources with two PRs. A new one has no destination until the PR's record
+ * or placement gives it one, and the scan keeps one new item per name, so its
+ * name identifies it. Every record carries `relativePath`, so records written
+ * by earlier versions match the same way.
+ */
+export function isRecordedItem(recorded: PendingPushItem, item: ResourceItem): boolean {
+  if (recorded.type !== item.type) return false;
+  return item.status === 'new' ? recorded.name === item.name : recorded.relativePath === item.relativePath;
 }
 
 /**
@@ -38,6 +51,9 @@ export async function prunePendingPushes(
   pending: PendingPush[],
   scanned: ResourceItem[],
 ): Promise<{ pending: PendingPush[]; changed: boolean }> {
+  // Kept by name, a superset of destination matches: a record kept too long is
+  // only ever used through `isRecordedItem`, while one dropped too early opens a
+  // duplicate PR — e.g. a --role run that moves the scanned path away from it.
   const scannedKeys = new Set(scanned.map((i) => itemKey(i.type, i.name)));
   const kept: PendingPush[] = [];
   // State files written before this field existed parse to undefined.
@@ -62,10 +78,7 @@ export async function prunePendingPushes(
 
 /** All open-PR records that already carry the given resource. */
 export function findPendingForItem(pending: PendingPush[], item: ResourceItem): PendingPush[] {
-  const key = itemKey(item.type, item.name);
-  return (pending ?? []).filter(
-    (entry) => entry.items.some((i) => itemKey(i.type, i.name) === key),
-  );
+  return (pending ?? []).filter((entry) => entry.items.some((i) => isRecordedItem(i, item)));
 }
 
 /** One branch + PR worth of resources. `reuse` set = update that open PR. */
@@ -89,20 +102,19 @@ export function planPushGroups(
   selected: ResourceItem[],
   pending: PendingPush[],
 ): PushGroup[] {
-  const byKey = new Map(selected.map((i) => [itemKey(i.type, i.name), i]));
-  const claimed = new Set<string>();
+  const claimed = new Set<ResourceItem>();
   const groups: PushGroup[] = [];
 
   const newestFirst = [...(pending ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   for (const entry of newestFirst) {
-    const keys = entry.items.map((i) => itemKey(i.type, i.name));
-    if (keys.length === 0) continue;
-    if (!keys.every((k) => byKey.has(k) && !claimed.has(k))) continue;
-    for (const k of keys) claimed.add(k);
-    groups.push({ items: keys.map((k) => byKey.get(k)!), reuse: entry });
+    if (entry.items.length === 0) continue;
+    const items = entry.items.map((recorded) => selected.find((i) => isRecordedItem(recorded, i)));
+    if (!items.every((i): i is ResourceItem => i !== undefined && !claimed.has(i))) continue;
+    for (const i of items) claimed.add(i);
+    groups.push({ items, reuse: entry });
   }
 
-  const rest = selected.filter((i) => !claimed.has(itemKey(i.type, i.name)));
+  const rest = selected.filter((i) => !claimed.has(i));
   if (rest.length > 0) groups.push({ items: rest });
 
   return groups;
@@ -116,18 +128,15 @@ export function partiallySelectedEntries(
   selected: ResourceItem[],
   pending: PendingPush[],
 ): PendingPush[] {
-  const selectedKeys = new Set(selected.map((i) => itemKey(i.type, i.name)));
   return (pending ?? []).filter((entry) => {
-    const keys = entry.items.map((i) => itemKey(i.type, i.name));
-    const hits = keys.filter((k) => selectedKeys.has(k)).length;
-    return hits > 0 && hits < keys.length;
+    const hits = entry.items.filter((recorded) => selected.some((i) => isRecordedItem(recorded, i))).length;
+    return hits > 0 && hits < entry.items.length;
   });
 }
 
 /** Namespace recorded for a skill in an open PR, so updates keep its destination. */
 export function pendingNamespaceFor(entry: PendingPush, item: ResourceItem): string | undefined {
-  const key = itemKey(item.type, item.name);
-  return entry.items.find((i) => itemKey(i.type, i.name) === key)?.namespace;
+  return entry.items.find((i) => isRecordedItem(i, item))?.namespace;
 }
 
 /** Insert or replace the record for a branch. */

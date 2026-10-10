@@ -150,8 +150,9 @@ scope: 'user',
           await addLocalCopy('claude', a, left),
           await addLocalCopy('codex', a, right),
         ];
+        // A copy's age is its newest file's mtime, not its directory's.
         const newer = new Date(Date.now() + 1_000);
-        await fse.utimes(copies[1], newer, newer);
+        await fse.utimes(path.join(copies[1], 'SKILL.md'), newer, newer);
       }
     }
     localConfig.enabledAgents = scenario === 'distinct' || scenario.startsWith('same-destination')
@@ -643,6 +644,26 @@ scope: 'user',
     // Modified skill should carry its original namespace from team repo
     expect(item!.namespace).toBe('tencent');
     expect(item!.relativePath).toBe('skills/tencent/tgit');
+  });
+
+  it('skips an undelivered copy of a name several namespaces hold, advising what can push it', async () => {
+    for (const namespace of ['svc-a', 'svc-b']) {
+      const dir = path.join(localConfig.repo.localPath, 'skills', namespace, 'foo');
+      await fse.ensureDir(dir);
+      await fse.writeFile(path.join(dir, 'SKILL.md'), `# ${namespace}`);
+    }
+    const localSkillDir = path.join(homeDir, '.claude/skills', 'foo');
+    await fse.ensureDir(localSkillDir);
+    await fse.writeFile(path.join(localSkillDir, 'SKILL.md'), '# edited');
+    vi.mocked(log.warn).mockClear();
+
+    const items = await handler.scanLocalForPush(teamConfig, localConfig);
+
+    expect(items.filter((i) => i.name === 'foo')).toEqual([]);
+    // The scan never sees --role, so the advice names the --skill run that does.
+    const warning = vi.mocked(log.warn).mock.calls.map(([message]) => String(message))
+      .find((message) => message.includes('several skills with this name'));
+    expect(warning).toContain(`teamai push --skill ${localSkillDir} --role <ns>`);
   });
 
   it('detects unchanged skill in namespaced team repo when no primaryRole is set', async () => {

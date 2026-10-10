@@ -170,6 +170,45 @@ describe('push an edit of a skill pull kept after a project switch (#1020)', () 
     ]));
   });
 
+  it('updates the open PR of one destination and opens another for a same-named skill elsewhere', () => {
+    const svcB = `${skillMd('a-skill')}\nThe svc-b version.\n`;
+    commitOnTeam('skills/svc-b/a-skill/SKILL.md', svcB);
+    commitOnTeam('teamai.yaml', [
+      'team: push-active-ns',
+      `repo: ${origin}`,
+      'provider: git',
+      'usageReport: false',
+      'toolPaths:',
+      '  claude:',
+      '    skills: .claude/skills',
+      '  codex:',
+      '    skills: .codex/skills',
+      '',
+    ].join('\n'));
+    git(['pull', '-q', 'origin', 'main'], path.join(project, '.teamai', 'team-repo'));
+    const codexSkill = path.join(project, '.codex', 'skills', 'a-skill');
+    writeFile(path.join(codexSkill, 'SKILL.md'), `${svcB}\nCodex edit.\n`);
+    recordDeliveredCopies({ [path.join(codexSkill, 'SKILL.md')]: contentHash(svcB) });
+    setConfig({ enabledAgents: ['claude', 'codex'] });
+    expect(run(['projects', 'set', 'svc-b']).code).toBe(0);
+    // A bare local remote cannot open a PR; the branch and its record are what count here.
+    run(['push', '--all']);
+    const [openBranch] = git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/teamai/push/'], origin).split('\n');
+
+    fs.appendFileSync(path.join(codexSkill, 'SKILL.md'), '\nSecond codex edit.\n');
+    fs.appendFileSync(path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md'), '\nClaude edit.\n');
+    const pushed = run(['push', '--all']);
+
+    const branches = git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/teamai/push/'], origin)
+      .split('\n').filter(Boolean);
+    const filesOn = (branch: string) => git(['diff', '--name-only', 'main', branch], origin).split('\n')
+      .filter((file) => file.endsWith('/SKILL.md'));
+    expect(branches, pushed.output).toHaveLength(2);
+    expect(filesOn(openBranch!), pushed.output).toEqual(['skills/svc-b/a-skill/SKILL.md']);
+    expect(git(['show', `${openBranch}:skills/svc-b/a-skill/SKILL.md`], origin)).toContain('Second codex edit.');
+    expect(filesOn(branches.find((b) => b !== openBranch)!), pushed.output).toEqual(['skills/svc-a/a-skill/SKILL.md']);
+  });
+
   it('resolves a legacy delivered duplicate against every namespace, not only the first', () => {
     commitOnTeam('skills/z-archive/a-skill/SKILL.md', `${skillMd('a-skill')}\nDelivered from z-archive.\n`);
     commitOnTeam('manifest/projects.yaml', null);
@@ -309,9 +348,8 @@ describe('push an edit of a skill pull kept after a project switch (#1020)', () 
 
     const pushed = run(['push', '--all']);
 
-    expect(pushed.output).toContain('awaiting review at skills/svc-b/dup-skill');
-    expect(pushed.output).toContain('separate PR');
-    expect(pushed.output).not.toContain('awaiting review: ');
+    // Another namespace's skill is another resource: no collision with its PR.
+    expect(pushed.output).not.toContain('awaiting review');
     expect(git(['show', `${svcBBranch}:skills/svc-b/dup-skill/SKILL.md`], origin)).toContain('Edited while on svc-b.');
     expect(pushedFiles()).toContain('skills/svc-a/dup-skill/SKILL.md');
   });

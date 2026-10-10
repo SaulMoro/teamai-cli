@@ -495,11 +495,14 @@ by name only a shared-root or active skill. In legacy mode with no active role
 or project, a delivered duplicate goes back only when its record identifies
 exactly one same-named skill across all namespaces; missing or ambiguous
 records are skipped with a warning. A never-delivered duplicate is also skipped
-instead of taking the first namespace. `push --skill` resolves its skill the
+instead of taking the first namespace, and the warning names the
+`push --skill <path> --role <ns>` run that sends it. `push --skill` resolves its skill the
 same way, and asks for `--role` rather than taking the first directory that
 holds the name. An open PR is reused for a resource only when it records the
-same destination directory this push sends the resource to; otherwise this
-push opens its own PR and leaves that one untouched. A new skill, rule or
+same destination this push sends the resource to: a resource already in the
+team repo is identified by its path, so same-named skills in two namespaces are
+two resources, and a new one by its name. Otherwise this push opens its own PR
+and leaves that one untouched. A new skill, rule or
 agent pushed without `--role` or `--project` is placed among the role ∪ active
 project namespaces on its own axis, as pull delivers them. When a role is
 configured but the role and active projects give no namespace, the resource

@@ -784,7 +784,8 @@ export class SkillsHandler extends ResourceHandler {
               .split(path.sep).join('/')).join(', ');
             warnOnce(
               `[skills] Skipped ${dir}: the team has several skills with this name (${holders}), `
-              + 'and no delivery record proves which one this copy came from. Pass --role <ns> to name the destination.',
+              + 'and no delivery record proves which one this copy came from. '
+              + `Run \`teamai push --skill ${localDirPath} --role <ns>\` to name the destination.`,
             );
             continue;
           }
