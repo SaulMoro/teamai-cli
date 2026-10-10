@@ -58,6 +58,7 @@ import { pull } from '../pull.js';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
 import { loadLocalConfigForScope, loadTeamConfig, detectProjectConfig } from '../config.js';
 import { log } from '../utils/logger.js';
+import { getProjectSearchIndexPath } from '../types.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
 
 const ROLES_YAML = `
@@ -299,6 +300,22 @@ describe('pull: docs by namespace', () => {
     await pull({});
 
     expect(await indexedDocs()).toEqual(['api/reference.md', 'frontend/components.md', 'frontend/styling.md', 'guide.md']);
+  });
+
+  it('empties a project index once the team removes the last directory it indexed (#1006)', async () => {
+    const config = configFor('frontend', { scope: 'project', projectRoot: path.join(tmpDir, 'proj') });
+    vi.mocked(loadLocalConfigForScope).mockResolvedValue(config);
+    const indexed = async (): Promise<string[]> => (
+      (await fse.readJson(getProjectSearchIndexPath(config)) as { entries: Array<{ filename: string }> })
+        .entries.map((entry) => entry.filename)
+    );
+    await pull({});
+    expect(await indexed()).not.toEqual([]);
+    await fse.remove(path.join(repoPath, 'docs'));
+
+    await pull({});
+
+    expect(await indexed()).toEqual([]);
   });
 
   it('rejects team-codebase as a docs namespace and syncs nothing for the scope', async () => {

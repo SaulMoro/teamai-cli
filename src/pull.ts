@@ -1407,9 +1407,11 @@ async function pullForScope(
       const repoCodebaseDir = path.join(localConfig.repo.localPath, 'docs', 'team-codebase');
       const effectiveCodebaseDir = await pathExists(repoCodebaseDir) ? repoCodebaseDir : undefined;
 
-      if (hasAnySource || effectiveCodebaseDir) {
+      const indexPath = getProjectSearchIndexPath(localConfig);
+      // An index already on disk follows the last source away (#1006): left
+      // alone, it would keep serving what the member no longer receives.
+      if (hasAnySource || effectiveCodebaseDir || await pathExists(indexPath)) {
         const votesExist = votesDir ? await pathExists(votesDir) : false;
-        const indexPath = getProjectSearchIndexPath(localConfig);
         const { buildIndex, dropOtherCheckoutIndexes } = await import('./utils/search-index.js');
         await dropOtherCheckoutIndexes(localConfig);
         const elapsed = await buildIndex({
