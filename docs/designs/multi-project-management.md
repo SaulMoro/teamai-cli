@@ -488,15 +488,22 @@ shows teamai wrote that copy, as when pull keeps an edited skill after a switch.
 A copy still exactly as recorded is not an edit and stays out. An edited one goes
 back to the team skill whose history holds the SKILL.md version pull recorded,
 inactive namespace, active namespace or shared root, even after the team changed
-it; when that version matches no single copy, the active or shared-root skill
-keeps it as before, and otherwise it is skipped with a warning naming the
-namespaces, also when only one inactive namespace holds the name (#1020).
-`push --skill` resolves its skill the same way, and asks for `--role` rather
-than taking the first directory that holds the name. A new skill, rule or
+it. When that version matches no single copy, wherever the copies are, it is
+skipped with a warning naming them, so a same-named skill that replaced the
+deleted one is never overwritten (#1020). A copy teamai never delivered matches
+by name only a shared-root or active skill. `push --skill` resolves its skill
+the same way, and asks for `--role` rather than taking the first directory that
+holds the name. An open PR is reused for a resource only when it records the
+same destination directory this push sends the resource to; otherwise this
+push opens its own PR and leaves that one untouched. A new skill, rule or
 agent pushed without `--role` or `--project` is placed among the role ∪ active
 project namespaces on its own axis, as pull delivers them; only when they give
-none does the pre-project fallback apply. Active projects with no
-`manifest/projects.yaml` stop that placement instead (#1021). `push` picks up a change to any `env/<ns>/env.yaml` or `env/<ns>/secrets.yaml`.
+none does the pre-project fallback apply. Active projects the projects
+manifest cannot resolve (an undeclared id, or no `manifest/projects.yaml`) stop
+a push without `--role` or `--project` before it scans anything, so neither the
+skills scan nor `push --skill` treats every namespace as the member's (#1021).
+With a flag the skills scan stays scoped to the role's namespaces rather than
+falling back to the unscoped legacy scan. `push` picks up a change to any `env/<ns>/env.yaml` or `env/<ns>/secrets.yaml`.
 `teamai env add|remove` take `--role` / `--project`, and `--secret` for that namespace's `secrets.yaml`.
 
 

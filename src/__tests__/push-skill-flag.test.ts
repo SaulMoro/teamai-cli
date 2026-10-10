@@ -266,6 +266,12 @@ describe('push --skill flag', () => {
       return false;
     });
     mockListDirs.mockResolvedValue(['hai_dev']);
+    // The role is given hai_dev: a copy teamai never delivered is tied by name
+    // only to a skill this directory receives.
+    mockLoadRolesManifest.mockResolvedValue({
+      version: 1,
+      roles: [{ id: 'hai', description: 'HyperAI', resources: { knowledge: ['hai'], skills: ['hai_dev'], agents: [] } }],
+    });
 
     await push({ all: true, skill: '/home/user/.claude/skills/hai/my-skill' });
 

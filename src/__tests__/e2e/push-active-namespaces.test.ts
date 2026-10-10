@@ -185,17 +185,48 @@ describe('push an edit of a skill pull kept after a project switch (#1020)', () 
     expect(pushedFiles()).not.toContain('skills/svc-b/dup-skill/SKILL.md');
   });
 
-  it('leaves an unrelated skill alone when the one the edit came from was deleted', () => {
+  it.each([
+    ['in an inactive namespace', 'skills/platform/a-skill'],
+    ['at the shared root', 'skills/a-skill'],
+    ['in an active namespace', 'skills/svc-b/a-skill'],
+  ])('leaves an unrelated skill %s alone when the one the edit came from was deleted', (_where, unrelated) => {
     fs.appendFileSync(path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md'), '\nEdited while on svc-a.\n');
     commitOnTeam('skills/svc-a/a-skill', null);
-    commitOnTeam('skills/platform/a-skill/SKILL.md', `${skillMd('a-skill')}\nAn unrelated skill.\n`);
+    commitOnTeam(`${unrelated}/SKILL.md`, `${skillMd('a-skill')}\nAn unrelated skill.\n`);
     expect(run(['projects', 'set', 'svc-b']).code).toBe(0);
     expect(run(['pull']).code).toBe(0);
 
     const pushed = run(['push', '--all']);
 
-    expect(pushed.output).toContain('Skipped a-skill');
+    expect(pushed.output).toContain(`Skipped a-skill: teamai delivered this copy, but its record matches no version of ${unrelated}`);
     expect(pushedFiles()).toEqual([]);
+  });
+
+  it('opens its own PR instead of replacing an open one for another namespace\'s skill of the same name', () => {
+    commitOnTeam('skills/svc-a/dup-skill/SKILL.md', `${skillMd('dup-skill')}\nThe svc-a version.\n`);
+    commitOnTeam('skills/svc-b/dup-skill/SKILL.md', `${skillMd('dup-skill')}\nThe svc-b version.\n`);
+    const local = path.join(project, '.claude', 'skills', 'dup-skill');
+    expect(run(['projects', 'set', 'svc-b']).code).toBe(0);
+    expect(run(['pull']).code).toBe(0);
+    fs.appendFileSync(path.join(local, 'SKILL.md'), '\nEdited while on svc-b.\n');
+    run(['push', '--all']);
+    const [svcBBranch] = git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/teamai/push/'], origin).split('\n');
+    fs.rmSync(local, { recursive: true });
+    expect(run(['projects', 'set', 'svc-a']).code).toBe(0);
+    expect(run(['pull']).code).toBe(0);
+    fs.appendFileSync(path.join(local, 'SKILL.md'), '\nEdited while on svc-a.\n');
+    expect(run(['projects', 'set', 'svc-b']).code).toBe(0);
+    expect(run(['pull']).output).toContain('Kept');
+    // Push branch names carry a one-second timestamp; a second push in the same second reuses the name.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1100);
+
+    const pushed = run(['push', '--all']);
+
+    expect(pushed.output).toContain('awaiting review at skills/svc-b/dup-skill');
+    expect(pushed.output).toContain('separate PR');
+    expect(pushed.output).not.toContain('awaiting review: ');
+    expect(git(['show', `${svcBBranch}:skills/svc-b/dup-skill/SKILL.md`], origin)).toContain('Edited while on svc-b.');
+    expect(pushedFiles()).toContain('skills/svc-a/dup-skill/SKILL.md');
   });
 
   it('names both namespaces and pushes nothing when two inactive namespaces hold the name', () => {
@@ -275,6 +306,16 @@ describe('push --skill sends a skill to the team skill it came from', () => {
 });
 
 describe('push --skill refuses a copy its record does not tie to a team skill', () => {
+  it('asks for --role for a copy it never delivered whose name only an inactive namespace holds', () => {
+    writeFile(path.join(project, '.claude', 'skills', 'b-skill', 'SKILL.md'), `${skillMd('b-skill')}\nMy own.\n`);
+
+    const pushed = run(['push', '--all', '--skill', path.join(project, '.claude', 'skills', 'b-skill')]);
+
+    expect(pushed.code, pushed.output).toBe(2);
+    expect(pushed.output).toContain('no record of delivering this copy from skills/svc-b/b-skill');
+    expect(pushedFiles()).toEqual([]);
+  });
+
   it('asks for --role when the only team skill of the name is not the one it delivered', () => {
     fs.appendFileSync(path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md'), '\nEdited while on svc-a.\n');
     commitOnTeam('skills/svc-a/a-skill', null);
@@ -363,5 +404,59 @@ describe('push places a new resource by the active projects (#1021)', () => {
 
     expect(pushed.output).toContain('[rules] new-rule → rules/new-rule.md (shared with everyone: no namespace resolved)');
     expect(pushedFiles()).toEqual(['rules/new-rule.md']);
+  });
+});
+
+describe('push stops when the active projects cannot be resolved', () => {
+  const unresolved: [string, () => void, string][] = [
+    ['the projects manifest is gone', () => commitOnTeam('manifest/projects.yaml', null), 'no manifest/projects.yaml'],
+    ['an active project is not in the manifest', () => setConfig({ projects: ['svc-b', 'retired'] }), 'Unknown project "retired"'],
+  ];
+  const pushes: [string, () => string[]][] = [
+    ['a new rule', () => {
+      writeFile(path.join(project, '.claude', 'rules', 'new-rule.md'), '# new rule\n');
+      return ['push', '--all'];
+    }],
+    ['a new skill named like another project\'s', () => {
+      writeFile(path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md'), `${skillMd('a-skill')}\nMy own.\n`);
+      return ['push', '--all'];
+    }],
+    ['--skill on a skill named like another project\'s', () => {
+      writeFile(path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md'), `${skillMd('a-skill')}\nMy own.\n`);
+      return ['push', '--all', '--skill', path.join(project, '.claude', 'skills', 'a-skill')];
+    }],
+    ['a new agent', () => {
+      writeFile(path.join(project, '.claude', 'agents', 'new-agent.md'), '---\nname: new-agent\ndescription: new agent\n---\n\nHelp.\n');
+      return ['push', '--all'];
+    }],
+  ];
+
+  describe.each(unresolved)('when %s', (_state, breakProjects, reason) => {
+    it.each(pushes)('pushes nothing for %s', (_resource, prepare) => {
+      setConfig({ projects: ['svc-b'] });
+      expect(run(['pull']).code).toBe(0);
+      breakProjects();
+
+      const pushed = run(prepare());
+
+      expect(pushed.code, pushed.output).toBe(2);
+      expect(pushed.output).toContain(reason);
+      expect(pushedFiles()).toEqual([]);
+    });
+
+    it('sends an edit back to the project it came from under --role, and a new skill to the role', () => {
+      setConfig({ projects: ['svc-b'] });
+      expect(run(['pull']).code).toBe(0);
+      breakProjects();
+      fs.appendFileSync(path.join(project, '.claude', 'skills', 'a-skill', 'SKILL.md'), '\nEdited while on svc-a.\n');
+      writeFile(path.join(project, '.claude', 'skills', 'new-skill', 'SKILL.md'), skillMd('new-skill'));
+
+      const pushed = run(['push', '--all', '--role', 'platform']);
+
+      expect(pushedFiles(), pushed.output).toEqual(expect.arrayContaining([
+        'skills/svc-a/a-skill/SKILL.md', 'skills/platform/new-skill/SKILL.md',
+      ]));
+      expect(pushedFiles()).not.toContain('skills/platform/a-skill/SKILL.md');
+    });
   });
 });

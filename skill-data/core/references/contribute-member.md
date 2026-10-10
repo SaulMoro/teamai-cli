@@ -96,10 +96,15 @@ The doc lands in the team's `learnings/` and appears for teammates on their next
    `--role <ns>` / `--project <id>` place every new resource, not only skills: a
    new rule and a new agent land in that namespace too (a project resolves each
    from its own axis — `knowledge` for rules, `agents` for agents). Without one,
-   the role and the active projects decide, and a new resource whose namespace
-   cannot be resolved stays at the shared root and reaches the whole team. An
-   edit of a skill, rule or agent you received from a namespace goes back to that namespace, even when it replaces a shared item of
-   the same name; the shared one is left as it is. Use `--branch <name>` when a new push must target a
+   the role and the active projects decide; with neither, a new rule or agent
+   stays at the shared root and reaches the whole team. When an active project
+   cannot be resolved (not in `manifest/projects.yaml`, or that file is
+   missing), push stops with exit 2 until you fix it or pass `--role` /
+   `--project`. An edit of a skill, rule or agent you received from a namespace
+   goes back to that namespace, even when it replaces a shared item of the same
+   name; the shared one is left as it is. A delivered skill copy whose record
+   ties it to no single current team skill is skipped with a warning rather than
+   written over a same-named one. Use `--branch <name>` when a new push must target a
    specific branch; an existing open PR keeps its recorded branch. TeamAI refuses
    to reset a team-repo clone with user changes, so commit or stash unrelated
    modified, staged, untracked, or conflicted files before retrying.

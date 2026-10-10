@@ -364,12 +364,16 @@ async function resolveSkillNamespaces(localConfig: LocalConfig): Promise<string[
  * (`resolveSkillNamespaces`, legacy fallbacks included), then those of the
  * active projects, the same union pull delivers from. Without the project
  * half, a project skill was pushable only through legacy mode's first-match
- * scan, which can pick another project's skill of the same name.
+ * scan, which can pick another project's skill of the same name. Null when no
+ * role or active project scopes this directory, so every namespace is given.
+ * When the active projects cannot be resolved this is the role half alone,
+ * never null: an unscoped scan would match a local skill to any project's
+ * skill of its name. Push without `--role` or `--project` stops before that.
  */
-async function resolvePushSkillNamespaces(localConfig: LocalConfig): Promise<string[]> {
+export async function resolvePushSkillNamespaces(localConfig: LocalConfig): Promise<string[] | null> {
   const roleNamespaces = await resolveSkillNamespaces(localConfig);
   const activeProjects = localConfig.projects ?? [];
-  if (activeProjects.length === 0) return roleNamespaces;
+  if (activeProjects.length === 0) return roleNamespaces.length > 0 ? roleNamespaces : null;
   const manifest = await loadProjectsManifest(localConfig.repo.localPath);
   if (!manifest) return roleNamespaces;
   let projectNamespaces: string[];
@@ -385,10 +389,9 @@ async function resolvePushSkillNamespaces(localConfig: LocalConfig): Promise<str
 /**
  * The team skill a local copy came from, among the same-named team skills
  * `copies` (absolute directories in the team repo at `repoPath`): the one whose
- * history holds the SKILL.md version pull recorded at `dest`, or, when pull
- * recorded nothing there, the only one. Undefined when the record matches none
- * or several of them: a same-named skill that replaced a deleted one is not
- * the copy's (#1020).
+ * history holds the SKILL.md version pull recorded at `dest`. Undefined when
+ * pull recorded nothing there or the record matches none or several of them:
+ * a same-named skill that replaced a deleted one is not the copy's (#1020).
  */
 export async function recordedOrigin<TCopy extends { dir: string }>(
   copies: readonly TCopy[], record: { delivered: DeliveredHashes; dest: string; repoPath: string },
@@ -398,8 +401,23 @@ export async function recordedOrigin<TCopy extends { dir: string }>(
     const teamDir = path.relative(record.repoPath, copy.dir).split(path.sep).join('/');
     if (await isRecordedFromTeamSkill(record.delivered, record.dest, record.repoPath, teamDir)) matched.push(copy);
   }
-  if (matched.length === 1) return matched[0];
-  return copies.length === 1 && recordedUnder(record.delivered, record.dest).length === 0 ? copies[0] : undefined;
+  return matched.length === 1 ? matched[0] : undefined;
+}
+
+/**
+ * Say why push leaves out a copy teamai delivered: its record ties it to none,
+ * or to more than one, of the same-named team skills `copies`, so writing it
+ * to any of them could replace a skill it never came from (#1020).
+ */
+function warnUnprovenOrigin(name: string, copies: readonly { dir: string }[], repoPath: string): void {
+  const holders = copies.map((copy) => path.relative(repoPath, copy.dir).split(path.sep).join('/')).join(' and ');
+  warnOnce(
+    `[skills] Skipped ${name}: teamai delivered this copy, but its record matches `
+    + `${copies.length === 1 ? `no version of ${holders}` : `no single one of ${holders}`}, `
+    + 'so push cannot tell which team skill your copy came from. '
+    + 'If it came from a role or project that is not active here, make it active (`teamai roles set` or `teamai projects set`); '
+    + 'otherwise push it with `teamai push --skill <path> --role <ns>` to name its namespace.',
+  );
 }
 
 /**
@@ -562,7 +580,7 @@ export class SkillsHandler extends ResourceHandler {
     // Skills in namespaces neither the role nor an active project selects, with each team copy of the name
     const blockedSkills = new Map<string, { dir: string; namespace: string }[]>();
 
-    if (scopedNamespaces.length > 0) {
+    if (scopedNamespaces !== null) {
       // Role-based mode: load allowed namespaces and track blocked ones.
       // Also recognize root-level flat skills (those with SKILL.md directly inside).
       const allSkillsDir = path.join(localConfig.repo.localPath, 'skills');
@@ -678,37 +696,31 @@ export class SkillsHandler extends ResourceHandler {
         // A skill in a namespace this scope doesn't select stays out, unless
         // teamai delivered this copy: then it is an edit of that skill, which
         // pull kept when the namespace went inactive, and it goes back there (#1020).
-        // The record tells it from a shared-root or active skill or another namespace's
-        // of the same name when it matches a version of exactly one of them.
+        // A copy teamai delivered goes only to the team skill its record matches
+        // a version of, shared-root, active or not; a same-named skill that
+        // replaced the deleted one is not its origin.
         let teamSkill = teamSkills.get(dir);
         let fromInactiveNamespace = false;
-        const blockedCopies = blockedSkills.get(dir);
-        if (blockedCopies) {
+        const blockedCopies = blockedSkills.get(dir) ?? [];
+        let isOriginChecked = false;
+        if (blockedCopies.length > 0) {
           delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
           if (recordedUnder(delivered, localDirPath).length === 0) {
             if (!teamSkill) continue;
           } else {
             // Exactly what teamai delivered: not an edit, whatever the team changed since.
             if (await isUneditedSkillCopy(delivered, localDirPath)) continue;
-            const scopedSkill = teamSkill;
-            const origin = await recordedOrigin(scopedSkill ? [scopedSkill, ...blockedCopies] : blockedCopies, {
-              delivered, dest: localDirPath, repoPath: localConfig.repo.localPath,
-            });
-            if (origin && origin !== scopedSkill) {
-              teamSkill = origin;
-              fromInactiveNamespace = true;
-            } else if (!origin && !scopedSkill) {
-              const holders = blockedCopies.map((copy) => `skills/${copy.namespace}/${dir}`).join(' and ');
-              warnOnce(
-                `[skills] Skipped ${dir}: teamai delivered this copy, but its record matches `
-                + `${blockedCopies.length === 1 ? `no version of ${holders}` : `no single one of ${holders}`}, `
-                + 'and none of those namespaces is active here, so push cannot tell which skill your copy came from. '
-                + 'Make the role or project it came from active (`teamai roles set` or `teamai projects set`), '
-                + 'or push it with `teamai push --skill <path> --role <ns>` to name its namespace.',
-              );
+            const copies = teamSkill ? [teamSkill, ...blockedCopies] : blockedCopies;
+            const origin = await recordedOrigin(copies, { delivered, dest: localDirPath, repoPath: localConfig.repo.localPath });
+            if (!origin) {
+              warnUnprovenOrigin(dir, copies, localConfig.repo.localPath);
               continue;
             }
-            // Otherwise the shared-root or active skill stays the copy's team file, as before.
+            if (origin !== teamSkill) {
+              teamSkill = origin;
+              fromInactiveNamespace = true;
+            }
+            isOriginChecked = true;
           }
         }
 
@@ -717,6 +729,14 @@ export class SkillsHandler extends ResourceHandler {
           const teamDirPath = teamSkill.dir;
           const equal = await dirTeamSubsetEqual(localDirPath, teamDirPath, [CONTRIBUTORS_FILE]);
           if (equal) continue; // This tool dir's copy is identical, skip
+          if (!isOriginChecked) {
+            delivered ??= (await (await import('../pull.js')).deliveredHashes(localConfig)) ?? {};
+            if (recordedUnder(delivered, localDirPath).length > 0
+              && !await recordedOrigin([teamSkill], { delivered, dest: localDirPath, repoPath: localConfig.repo.localPath })) {
+              warnUnprovenOrigin(dir, [teamSkill], localConfig.repo.localPath);
+              continue;
+            }
+          }
           // Single-repo mode: like `.teamai/rules` (see the rules scan), the
           // active tree's `.teamai/skills` is never refreshed, and a branch
           // behind the default branch holds older copies nobody edited (#823).
