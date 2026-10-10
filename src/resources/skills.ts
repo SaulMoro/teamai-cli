@@ -737,9 +737,10 @@ export async function readTeamSkillIndex(repoPath: string, scopedNamespaces: str
  * name). A skill in a namespace this scope doesn't select is never a
  * destination without a record proving the copy came from there, and a flag
  * cannot move a proven origin (#1020). Open PRs at several destinations of
- * the name prove none of them: only the namespace `push --skill <path> --role
- * <ns>` names (`role`) picks one. The skills scan and `push --skill` both call
- * it; each says in its own words why a copy without one is left out.
+ * the name prove none of them: only the namespace `--role` / `--project` names
+ * (`role`) picks one, and one none of them holds is a new destination. The
+ * skills scan and `push --skill` both call it; each says in its own words why
+ * a copy without one is left out.
  */
 export async function resolveDestination(input: {
   name: string;
@@ -761,6 +762,8 @@ export async function resolveDestination(input: {
     ? open.find((o) => input.role !== undefined && recordedNamespace(o.recorded) === input.role)?.recorded
     : open[0]?.recorded;
   if (!awaiting && open.length > 1) {
+    // A namespace the flag names that none of them holds is a new destination: the flag places it.
+    if (input.role !== undefined) return { kind: 'new' };
     return { kind: 'ambiguousOpenPr', records: open.map((o) => ({ branch: o.branch, relativePath: o.recorded.relativePath })) };
   }
   if (awaiting) {
@@ -848,6 +851,7 @@ export class SkillsHandler extends ResourceHandler {
         if (await isUneditedSkillCopy(delivered, localDirPath)) continue;
         const destination = await resolveDestination({
           name: dir, dest: localDirPath, team, delivered, pending: options?.pending ?? [], repoPath: localConfig.repo.localPath,
+          role: options?.namespace,
         });
         if (destination.kind === 'unproven') {
           warnUnprovenOrigin(dir, destination.candidates, localConfig.repo.localPath);

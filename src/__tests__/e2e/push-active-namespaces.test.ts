@@ -645,6 +645,49 @@ describe('push gives each local copy one team destination, whatever its scan sta
         untouchedSharedRoot();
       },
     })),
+    ...[
+      { label: '--skill <path> without --role', args: (skill: string) => ['--skill', skill] },
+      { label: '--skill <path> --role svc-a', args: (skill: string) => ['--skill', skill, '--role', 'svc-a'] },
+      { label: '--skill <path> --role svc-b, which neither PR uses', args: (skill: string) => ['--skill', skill, '--role', 'svc-b'] },
+      { label: 'push --all --role svc-b, which neither PR uses', args: (_skill: string) => ['--role', 'svc-b'] },
+    ].map(({ label, args }) => ({
+      site: `open PRs at two destinations for one name, explicit choice: ${label}`,
+      check: () => {
+        const platformBranch = awaitReviewThenShareFooAtRoot(['foo']);
+        run(['push', '--all', '--role', 'svc-a']);
+        const svcABranch = pushBranches().find((b) => b !== platformBranch)!;
+        expect(skillFilesOn(svcABranch)).toEqual(['skills/svc-a/foo/SKILL.md']);
+        fs.appendFileSync(path.join(localSkill('foo'), 'SKILL.md'), '\nThird edit.\n');
+        const tips = () => [platformBranch, svcABranch].map((b) => git(['rev-parse', b], origin));
+        const before = tips();
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1100);
+
+        const pushed = run(['push', '--all', ...args(localSkill('foo'))]);
+
+        if (label.includes('without --role')) {
+          expect(pushed.code, pushed.output).toBe(2);
+          expect(pushed.output).toContain(`skills/platform/foo (branch ${platformBranch})`);
+          expect(pushed.output).toContain(`skills/svc-a/foo (branch ${svcABranch})`);
+          expect(pushBranches().sort(), pushed.output).toEqual([platformBranch, svcABranch].sort());
+          expect(tips(), pushed.output).toEqual(before);
+        } else if (label.includes('svc-a')) {
+          // The flag picks the PR in the scan itself: no skip, and no advice to run this very command.
+          expect(pushed.output).not.toContain('is awaiting review at several destinations');
+          expect(git(['rev-parse', platformBranch], origin), pushed.output).toBe(before[0]);
+          expect(skillFilesOn(svcABranch), pushed.output).toEqual(['skills/svc-a/foo/SKILL.md']);
+          expect(git(['show', `${svcABranch}:skills/svc-a/foo/SKILL.md`], origin), pushed.output).toContain('Third edit.');
+        } else {
+          // A namespace neither PR uses is a new destination: its own PR, both open ones untouched.
+          expect(pushed.output).not.toContain('is awaiting review at several destinations');
+          expect(tips(), pushed.output).toEqual(before);
+          const added = pushBranches().filter((b) => b !== platformBranch && b !== svcABranch);
+          expect(added, pushed.output).toHaveLength(1);
+          expect(skillFilesOn(added[0]!), pushed.output).toEqual(['skills/svc-b/foo/SKILL.md']);
+          expect(git(['show', `${added[0]}:skills/svc-b/foo/SKILL.md`], origin)).toContain('Third edit.');
+        }
+        untouchedSharedRoot();
+      },
+    })),
     ...(['codex', 'claude'] as const).map((newer) => ({
       site: `candidate dedup: an open PR's copy and the ${newer === 'codex' ? 'newer ' : 'older '}delivered copy of a new shared skill keep their destinations`,
       check: () => {
@@ -793,6 +836,37 @@ describe('push --skill sends a skill to the team skill it came from', () => {
 
     expect(pushedFiles(), pushed.output).toContain('skills/platform/my-skill/SKILL.md');
     expect(pushedFiles().filter((file) => file.includes('alias'))).toEqual([]);
+  });
+
+  it('pushes a skill through a symlink whose own name is not a valid skill name', () => {
+    expect(run(['projects', 'set', 'platform']).code).toBe(0);
+    const real = path.join(sandbox, 'elsewhere', 'my-skill');
+    writeFile(path.join(real, 'SKILL.md'), skillMd('my-skill'));
+    const alias = path.join(sandbox, 'my alias');
+    fs.symlinkSync(real, alias, 'dir');
+
+    const pushed = run(['push', '--all', '--skill', alias]);
+
+    expect(pushed.output).not.toContain('Invalid --skill argument');
+    expect(pushedFiles(), pushed.output).toContain('skills/platform/my-skill/SKILL.md');
+  });
+
+  it('finds the delivery record of a copy whose skills directory is a symlink', () => {
+    // The skills directory is a link, as pull wrote through it: the record keeps the path pull wrote.
+    const skillsDir = path.join(project, '.claude', 'skills');
+    const store = path.join(sandbox, 'skills-store');
+    fs.renameSync(skillsDir, store);
+    fs.symlinkSync(store, skillsDir, 'dir');
+    expect(run(['pull']).code).toBe(0);
+    commitOnTeam('skills/svc-b/a-skill/SKILL.md', `${skillMd('a-skill')}\nThe svc-b version.\n`);
+    expect(run(['projects', 'set', 'svc-b']).code).toBe(0);
+
+    const pushed = run(['push', '--all', '--skill', path.join(skillsDir, 'a-skill')]);
+
+    expect(pushed.output).toContain('to:   skills/svc-a/a-skill');
+    expect(pushedFiles(), pushed.output).not.toContain('skills/svc-b/a-skill/SKILL.md');
+    expect(pushed.output).not.toContain('skills/svc-b/a-skill');
+    expect(git(['show', 'main:skills/svc-b/a-skill/SKILL.md'], origin)).toContain('The svc-b version.');
   });
 
   it('leaves another namespace\'s skill of the same name untouched', () => {

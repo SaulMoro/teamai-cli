@@ -1350,6 +1350,14 @@ async function pushCore(
       agentsDestinationError = resolved.message;
     }
   }
+  // The skills namespace the flags name: it picks among a name's several open PRs.
+  let requestedSkillsNamespace: string | undefined;
+  if (options.project && projectsManifest) {
+    const resolved = resolveProjectNamespace(projectsManifest, options.project, 'skills');
+    if (resolved.ok) requestedSkillsNamespace = resolved.namespace;
+  } else {
+    requestedSkillsNamespace = options.role;
+  }
 
   // Open PRs are proof of where a new skill goes, so the skills scan reads
   // them while it decides each copy's destination. Records whose branch is gone
@@ -1365,7 +1373,7 @@ async function pushCore(
         scanTeamConfig,
         localConfig,
         type === 'agents' ? { namespace: requestedAgentsNamespace }
-          : type === 'skills' ? { pending: openPushes } : undefined,
+          : type === 'skills' ? { pending: openPushes, namespace: requestedSkillsNamespace } : undefined,
       );
       fullScan.push(...items);
     } catch (e) {
@@ -1435,25 +1443,10 @@ async function pushCore(
 
   // ── Handle --skill parameter: filter to a single specific skill ──────
   if (options.skill) {
-    // Validate the skill name: take the basename of the input path as the
-    // resource name to defend against path traversal, URL-encoded bypasses,
-    // and other illegal characters.
-    const skillBasename = path.basename(
-      options.skill.startsWith('~')
-        ? options.skill.slice(1).replace(/^[/\\]+/, '')
-        : options.skill,
-    );
-    try {
-      assertSafeResourceName(skillBasename);
-    } catch (e) {
-      console.error(`[push] Invalid --skill argument: ${(e as Error).message}`);
-      process.exitCode = 2;
-      return;
-    }
-
     // Normalize the input path (expand ~ and resolve to absolute). Messages
     // name it as given; the skill is the directory a symlink points to, and is
-    // named after that directory.
+    // named after that directory. Validate that name: it defends against path
+    // traversal, URL-encoded bypasses, and other illegal characters.
     const os = await import('node:os');
     const requestedPath = options.skill.startsWith('~')
       ? path.join(os.homedir(), options.skill.slice(1))
@@ -1495,17 +1488,19 @@ async function pushCore(
         // The destination the skills scan gives this copy (`resolveDestination`).
         // Where that is no single team skill, --skill asks for --role rather than guess.
         const { deliveredHashes } = await import('./pull.js');
+        const { recordedSkillDir } = await import('./resources/delivered-copies.js');
         const { readTeamSkillIndex, resolveDestination, resolvePushSkillNamespaces } = await import('./resources/skills.js');
         const team = await readTeamSkillIndex(localConfig.repo.localPath, await resolvePushSkillNamespaces(localConfig));
+        const delivered = await deliveredHashes(localConfig) ?? {};
         const destination = await resolveDestination({
           name: skillName,
-          // Pull records the copy under its real path.
-          dest: skillPath,
+          // Pull's record of this copy is under the path pull wrote, not under its real path.
+          dest: recordedSkillDir(delivered, skillPath) ?? skillPath,
           team,
-          delivered: await deliveredHashes(localConfig) ?? {},
+          delivered,
           pending: openPushes,
           repoPath: localConfig.repo.localPath,
-          role: options.role,
+          role: requestedSkillsNamespace,
         });
         const copies = team.allTeamSkills.get(skillName) ?? [];
         // Picked by name among several the scope is given (a namespace over the

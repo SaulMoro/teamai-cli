@@ -6,6 +6,7 @@ import type { DeliveryRecorder } from '../git-exclude-delivered.js';
 import type { AgentModelRecords, CopyOrigin, DeliveryTarget, ResourceItem } from '../types.js';
 import { fileHash, listFilesRecursive } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
+import { resolveReal } from '../utils/path-safety.js';
 import { historicalVersions, matchesHistory, readBlob } from '../utils/team-history.js';
 import { warnOnce } from '../utils/warn-once.js';
 
@@ -117,6 +118,19 @@ export function contentHash(content: string | Buffer): string {
 /** The recorded paths of the copy at `dest`: the file, or every file under the skill directory. */
 export function recordedUnder(hashes: DeliveredHashes, dest: string): string[] {
   return Object.keys(hashes).filter((file) => file === dest || file.startsWith(dest + path.sep));
+}
+
+/**
+ * The skill directory pull recorded, in the form it wrote it, that is the copy
+ * at `dir`: the one whose real path is `dir`'s. A copy reached through a
+ * symlink, or under a linked skills directory, matches its record this way.
+ */
+export function recordedSkillDir(hashes: DeliveredHashes, dir: string): string | undefined {
+  const real = resolveReal(dir);
+  return Object.keys(hashes)
+    .filter((file) => path.basename(file) === SKILL_MD)
+    .map((file) => path.dirname(file))
+    .find((recorded) => resolveReal(recorded) === real);
 }
 
 /**
