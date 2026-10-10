@@ -54,11 +54,11 @@ describe('detectShellProfile', () => {
       expect(await detectShellProfile('linux')).toBe(path.join(homeDir, '.config', 'zsh', '.zshenv'));
     });
 
-    it('returns ~/.zshenv when it exists, even with ZDOTDIR set: it is what sets ZDOTDIR, and zsh reads it first', async () => {
+    it('returns the .zshenv in ZDOTDIR even when ~/.zshenv exists: a zsh started with ZDOTDIR set never reads ~/.zshenv', async () => {
       vi.stubEnv('SHELL', '/bin/zsh');
       vi.stubEnv('ZDOTDIR', path.join(homeDir, '.config', 'zsh'));
       await fse.writeFile(path.join(homeDir, '.zshenv'), 'export ZDOTDIR="$HOME/.config/zsh"\n');
-      expect(await detectShellProfile('linux')).toBe(path.join(homeDir, '.zshenv'));
+      expect(await detectShellProfile('linux')).toBe(path.join(homeDir, '.config', 'zsh', '.zshenv'));
     });
 
     it('returns .bashrc when SHELL is bash', async () => {

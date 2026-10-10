@@ -45,12 +45,10 @@ export async function detectShellProfile(
 
   // `.zshenv`, not `.zshrc`: zsh reads it for every invocation, so the
   // `zsh -c` a tool runs a command with gets the env too (#1018). zsh reads
-  // it from the ZDOTDIR it starts with: ~/.zshenv, unless the environment
-  // sets ZDOTDIR. A ~/.zshenv that exists is read first, and is usually what
-  // sets the ZDOTDIR this process sees, so it wins.
+  // it from the ZDOTDIR it starts with: a ZDOTDIR this process inherited is
+  // one every zsh it starts inherits too, and those never read ~/.zshenv.
   if (shell.includes('zsh')) {
-    const homeZshenv = path.join(home, '.zshenv');
-    return process.env.ZDOTDIR && !await pathExists(homeZshenv) ? path.join(process.env.ZDOTDIR, '.zshenv') : homeZshenv;
+    return path.join(process.env.ZDOTDIR || home, '.zshenv');
   }
 
   if (platform === 'win32') {

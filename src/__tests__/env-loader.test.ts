@@ -65,8 +65,8 @@ describe('team env by directory (#1018)', () => {
   };
 
   /** What `printenv key` prints in a non-interactive shell started in `dir`, as a tool runs a command there. */
-  const shellSees = (shell: string, dir: string, key: string): string => {
-    const env: NodeJS.ProcessEnv = { HOME: homeDir, PATH: process.env.PATH, SHELL: shell };
+  const shellSees = (shell: string, dir: string, key: string, inherited: NodeJS.ProcessEnv = {}): string => {
+    const env: NodeJS.ProcessEnv = { HOME: homeDir, PATH: process.env.PATH, SHELL: shell, ...inherited };
     const run = spawnSync(shell, ['-c', `printenv ${key} || true`], { cwd: dir, env, encoding: 'utf-8' });
     return run.stdout.trim();
   };
@@ -144,6 +144,20 @@ describe('team env by directory (#1018)', () => {
       expect(await blocksIn(path.join(homeDir, '.zshenv'))).toBe(1);
     });
 
+    it('takes the user block out when the first pull after the upgrade is a project that ships no env', async () => {
+      vi.stubEnv('SHELL', '/bin/zsh');
+      const a = await project('a');
+      const userEnvSh = path.join(homeDir, '.teamai', 'env.sh');
+      await fse.writeFile(userEnvSh, "export USER_ONLY='u'\n");
+      const zshrc = path.join(homeDir, '.zshrc');
+      await fse.writeFile(zshrc, `${oldBlock(userEnvSh)}\n`);
+
+      await handler.writeResolvedEnv([], teamConfig, a);
+
+      expect(await blocksIn(zshrc)).toBe(0);
+      expect(await blocksIn(path.join(homeDir, '.zshenv'))).toBe(1);
+    });
+
     it('says once that user env no longer loads in projects when the profile had both kinds of block', async () => {
       vi.stubEnv('SHELL', '/bin/zsh');
       const { log } = await import('../utils/logger.js');
@@ -175,6 +189,36 @@ describe('team env by directory (#1018)', () => {
 
       expect(shellSees('zsh', a.projectRoot ?? '', 'MARKER')).toBe('from-a');
       expect(shellSees('zsh', b.projectRoot ?? '', 'MARKER')).toBe('from-b');
+    });
+
+    it('gives a zsh -c started with ZDOTDIR set its own directory\'s env, when ~/.zshenv is what sets ZDOTDIR', async () => {
+      const zdotdir = path.join(homeDir, '.config', 'zsh');
+      await fse.ensureDir(zdotdir);
+      await fse.writeFile(path.join(homeDir, '.zshenv'), `export ZDOTDIR='${zdotdir}'\n`);
+      vi.stubEnv('ZDOTDIR', zdotdir);
+      const a = await project('a');
+      const b = await project('b');
+      await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-a' }], teamConfig, a);
+      await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-b' }], teamConfig, b);
+      const inA = JSON.parse(spawnSync('zsh', ['-c', `'${process.execPath}' -e 'process.stdout.write(JSON.stringify(process.env))'`], {
+        cwd: a.projectRoot, env: { HOME: homeDir, PATH: process.env.PATH, SHELL: '/bin/zsh', ZDOTDIR: zdotdir }, encoding: 'utf-8',
+      }).stdout) as NodeJS.ProcessEnv;
+
+      expect(shellSees('zsh', b.projectRoot ?? '', 'MARKER', inA)).toBe('from-b');
+    });
+
+    it('gives a bash -c that a zsh starts in another project that project\'s env', async () => {
+      const a = await project('a');
+      const b = await project('b');
+      await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-a' }], teamConfig, a);
+      await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-b' }], teamConfig, b);
+
+      const env: NodeJS.ProcessEnv = { HOME: homeDir, PATH: process.env.PATH, SHELL: '/bin/zsh' };
+      const run = spawnSync('zsh', ['-c', `printenv MARKER; cd '${b.projectRoot}' && bash -c 'printenv MARKER'`], {
+        cwd: a.projectRoot, env, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      expect(run.stdout.trim().split('\n')).toEqual(['from-a', 'from-b']);
     });
 
     it('switches env on cd in an interactive shell and puts back the member\'s own value on the way out', async () => {
@@ -267,6 +311,22 @@ describe('team env by directory (#1018)', () => {
         expect(shellSees('zsh', a.projectRoot ?? '', 'USER_ONLY')).toBe('');
       });
     });
+  });
+
+  it.each(['zsh', 'bash'].filter(hasShell))('gives a %s started from a shell in the same directory the env a later pull wrote', async (shell) => {
+    vi.stubEnv('SHELL', `/bin/${shell}`);
+    const a = await project('a');
+    await handler.writeResolvedEnv([{ key: 'MARKER', value: 'old' }, { key: 'DROPPED', value: 'x' }], teamConfig, a);
+    const loader = path.join(homeDir, '.teamai', 'env-loader.sh');
+    const parent = JSON.parse(spawnSync(shell, ['-c', `'${process.execPath}' -e 'process.stdout.write(JSON.stringify(process.env))'`], {
+      cwd: a.projectRoot, env: { HOME: homeDir, PATH: process.env.PATH, SHELL: `/bin/${shell}`, BASH_ENV: loader }, encoding: 'utf-8',
+    }).stdout) as NodeJS.ProcessEnv;
+    expect(parent.MARKER).toBe('old');
+
+    await handler.writeResolvedEnv([{ key: 'MARKER', value: 'new' }], teamConfig, a);
+
+    expect(shellSees(shell, a.projectRoot ?? '', 'MARKER', parent)).toBe('new');
+    expect(shellSees(shell, a.projectRoot ?? '', 'DROPPED', parent)).toBe('');
   });
 
   describe.skipIf(!hasShell('bash'))('bash', () => {

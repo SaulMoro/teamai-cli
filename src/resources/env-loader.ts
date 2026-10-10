@@ -12,6 +12,7 @@
  * between them.
  */
 import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -29,7 +30,10 @@ export function envLoaderPath(): string {
 
 /**
  * One line per project scope: `git|dir <TAB> key <TAB> env.sh <TAB> 0|1 (inherits the user scope)`.
- * The env.sh field is `-` for a team that keeps its env out of shells.
+ * The env.sh field is `-` for a team that keeps its env out of shells. The
+ * first line, `stamp <TAB> token`, changes with every change to the registry
+ * or to an env.sh: a shell that inherited its env from one started in the
+ * same directory loads again when the stamp it carries is not this one.
  */
 function envScopesPath(): string {
   return path.join(getTeamaiHomeDir(), 'env-scopes');
@@ -79,7 +83,7 @@ export async function unregisterEnvScope(localConfig: LocalConfig): Promise<void
 export async function isLastEnvScope(localConfig: LocalConfig): Promise<boolean> {
   const entry = await scopeEntry(localConfig);
   const others = (await readFileSafe(envScopesPath()) ?? '').split('\n')
-    .filter((line) => line !== '' && (entry === null || !line.startsWith(entry.id)));
+    .filter((line) => line !== '' && !line.startsWith(STAMP) && (entry === null || !line.startsWith(entry.id)));
   if (others.length > 0) return false;
   return localConfig.scope === 'user' || !await pathExists(getUserConfigPath());
 }
@@ -89,7 +93,14 @@ export async function removeEnvLoader(): Promise<void> {
   await Promise.all([fs.promises.rm(envLoaderPath(), { force: true }), fs.promises.rm(envScopesPath(), { force: true })]);
 }
 
-async function updateEnvScopes(change: (lines: string[]) => string[]): Promise<void> {
+/** Tell shells that inherited their env that an env.sh changed, so they load it again. */
+export async function markEnvChanged(): Promise<void> {
+  await updateEnvScopes((lines) => lines, true);
+}
+
+const STAMP = 'stamp\t';
+
+async function updateEnvScopes(change: (lines: string[]) => string[], changed = false): Promise<void> {
   const file = envScopesPath();
   const lock = `${file}.lock`;
   let held = false;
@@ -102,9 +113,11 @@ async function updateEnvScopes(change: (lines: string[]) => string[]): Promise<v
     return;
   }
   try {
-    const before = (await readFileSafe(file) ?? '').split('\n').filter(Boolean);
+    const before = (await readFileSafe(file) ?? '').split('\n').filter((line) => line !== '' && !line.startsWith(STAMP));
     const after = change(before);
-    if (after.join('\n') !== before.join('\n')) await writeFileAtomic(file, after.length > 0 ? `${after.join('\n')}\n` : '');
+    if (changed || after.join('\n') !== before.join('\n')) {
+      await writeFileAtomic(file, `${[`${STAMP}${crypto.randomUUID()}`, ...after].join('\n')}\n`);
+    }
   } finally {
     await releaseLock(lock);
   }
@@ -167,9 +180,9 @@ export async function writeEnvLoader(): Promise<void> {
 /**
  * The loader. POSIX sh that zsh (in sh emulation) and bash both run, sourced
  * by every shell the profile block reaches, so it prints nothing, fails
- * nothing, and does no work when the directory has not changed: the directory
- * and the files it loaded are exported, so a child shell started in the same
- * directory returns at once.
+ * nothing, and does no work when neither the directory nor the registry's
+ * stamp has changed: the directory, the stamp and the files it loaded are
+ * exported, so a child shell started in the same directory returns at once.
  *
  * Every variable it sets for its own bookkeeping starts with `__teamai_` (the
  * shell's) or `__TEAMAI_ENV_` (exported, so a child shell started elsewhere
@@ -250,9 +263,13 @@ __teamai_env_load() {
 __teamai_env_apply() {
   [ -n "\${ZSH_VERSION-}" ] && emulate -L sh
   __teamai_d=$(__teamai_env_pwd) || return 0
+  # Changes with the registry and with every env.sh a pull rewrites.
+  __teamai_stamp=
+  if [ -f "$__teamai_env_scopes" ]; then { IFS= read -r __teamai_stamp < "$__teamai_env_scopes"; } 2>/dev/null || :; fi
+  [ "$__teamai_stamp" = "\${__TEAMAI_ENV_STAMP-}" ] || unset __TEAMAI_ENV_DIR __TEAMAI_ENV_FILES
   [ "$__teamai_d" = "\${__TEAMAI_ENV_DIR-}" ] && return 0
   __teamai_files=$(__teamai_env_files "$__teamai_d")
-  export __TEAMAI_ENV_DIR="$__teamai_d"
+  export __TEAMAI_ENV_DIR="$__teamai_d" __TEAMAI_ENV_STAMP="$__teamai_stamp"
   [ "$__teamai_files" = "\${__TEAMAI_ENV_FILES-}" ] && return 0
   __teamai_env_unapply
   export __TEAMAI_ENV_FILES="$__teamai_files"
@@ -273,9 +290,9 @@ case $- in
     fi ;;
 esac
 # bash reads no startup file for \`bash -c\`, except the one BASH_ENV names: a
-# command a tool runs from this shell gets the env of its own directory. A
+# bash this shell starts, a zsh's too, gets the env of its own directory. A
 # BASH_ENV the member set is left alone.
-if [ -n "\${BASH_VERSION-}" ] && [ -z "\${BASH_ENV-}" ]; then export BASH_ENV=${shellQuoteValue(loaderFile)}; fi
+if [ -z "\${BASH_ENV-}" ]; then export BASH_ENV=${shellQuoteValue(loaderFile)}; fi
 :
 `;
 }

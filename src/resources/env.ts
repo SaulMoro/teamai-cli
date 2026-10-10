@@ -9,7 +9,7 @@ import { log } from '../utils/logger.js';
 import { envShMarker, isEnvShMarker, recordEnvShExports } from '../env-sh-exports.js';
 import { ENV_KEY_RE } from './env-key.js';
 import { SECRETS_LAYOUT } from './secrets.js';
-import { envLoaderPath, registerEnvScope, writeEnvLoader } from './env-loader.js';
+import { envLoaderPath, markEnvChanged, registerEnvScope, writeEnvLoader } from './env-loader.js';
 import {
   listEntryFiles, readEntryFileText, reportEntryResolution, resolveEntriesFor,
   unknownEntryKeys, writtenList, type EntryFile, type EntryReader,
@@ -228,6 +228,15 @@ function withoutOldBlocks(content: string, loaderPath: string): { content: strin
   return { content: kept === '\n' ? '' : kept, dropped };
 }
 
+/** Whether `profilePath`, or a profile file an older version could have written to, carries a teamai env block. */
+async function anyProfileCarriesEnvBlock(profilePath: string): Promise<boolean> {
+  const home = getUserHome();
+  for (const candidate of [profilePath, ...SHELL_PROFILE_CANDIDATE_NAMES.map((name) => path.join(home, name))]) {
+    if (findEnvBlocks(await readFileSafe(candidate) ?? '').length > 0) return true;
+  }
+  return false;
+}
+
 // ─── Handler ─────────────────────────────────────────────
 
 export class EnvHandler extends ResourceHandler {
@@ -333,7 +342,9 @@ export class EnvHandler extends ResourceHandler {
    * Write env.sh, its KEY=VALUE backup and the shell profile block from the
    * resolved variables. Runs with an empty set too, which is what removes the
    * variables of a namespace that deactivated or a file that was emptied; only
-   * a machine that never had env delivered is left alone (returns false), so
+   * a scope that never had env delivered writes no env.sh (returns false). It
+   * still puts in the loader block when a profile already loads team env, so
+   * an older version's block for another scope stops loading here; with none,
    * a team without env does not get a profile block for nothing.
    */
   async writeResolvedEnv(variables: EnvVariable[], teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<boolean> {
@@ -346,7 +357,10 @@ export class EnvHandler extends ResourceHandler {
     // directories, so the user scope's env must not load there (#1018).
     const inject = teamConfig.sharing.env.injectShellProfile !== false;
     await registerEnvScope(localConfig, inject);
-    if (variables.length === 0 && !await pathExists(envShPath)) return false;
+    if (variables.length === 0 && !await pathExists(envShPath)) {
+      if (inject) await this.installEnvLoader(teamConfig, true);
+      return false;
+    }
 
     // The machine-local KEY=VALUE backup (for loadEnvFile).
     const backupLines = variables.map(v => `${v.key}=${v.value}`);
@@ -357,23 +371,36 @@ export class EnvHandler extends ResourceHandler {
     // and after is recorded first: a shell opened before this rewrite still
     // carries those values, and they are the team's, not the member's (#879
     // Conflict 10). The old ones are there too for an env.sh an older CLI wrote.
-    const previous = parseEnvFile(await readFileSafe(envShPath) ?? '');
+    const before = await readFileSafe(envShPath);
+    const previous = parseEnvFile(before ?? '');
     const recorded = await recordEnvShExports(envShPath, [...previous, ...variables.map((v): [string, string] => [v.key, v.value])]);
     const envSh = this.generateEnvFile(variables);
     const marker = envShMarker(teamaiHome, parseEnvFile(envSh), recorded);
-    await writeFile(envShPath, marker ? `${envSh}export ${marker[0]}='${marker[1]}'\n` : envSh);
+    const content = marker ? `${envSh}export ${marker[0]}='${marker[1]}'\n` : envSh;
+    await writeFile(envShPath, content);
+    // A shell started from one that loaded the old env.sh loads it again.
+    if (content !== before && await pathExists(envLoaderPath())) await markEnvChanged();
 
-    if (inject) {
-      await writeEnvLoader();
-      const loaderPath = envLoaderPath();
-      const profilePath = teamConfig.sharing.env.shellProfilePath
-        ? teamConfig.sharing.env.shellProfilePath
-        : await this.detectShellProfile(loaderPath);
-
-      const shellBlock = this.generateShellBlock(loaderPath);
-      await this.injectShellProfile(profilePath, shellBlock, loaderPath);
-    }
+    if (inject) await this.installEnvLoader(teamConfig, false);
     return true;
+  }
+
+  /**
+   * Write the loader and put its block into the profile. With
+   * `onlyOverExistingBlock`, only where a profile file already carries a
+   * teamai block: a project without env needs no block for itself, but an
+   * older version's block for another scope must stop loading in it (#1018).
+   */
+  private async installEnvLoader(teamConfig: TeamaiConfig, onlyOverExistingBlock: boolean): Promise<void> {
+    const loaderPath = envLoaderPath();
+    const profilePath = teamConfig.sharing.env.shellProfilePath
+      ? teamConfig.sharing.env.shellProfilePath
+      : await this.detectShellProfile(loaderPath);
+    if (onlyOverExistingBlock && !await anyProfileCarriesEnvBlock(profilePath)) return;
+
+    await writeEnvLoader();
+    const shellBlock = this.generateShellBlock(loaderPath);
+    await this.injectShellProfile(profilePath, shellBlock, loaderPath);
   }
 
   /**
