@@ -161,8 +161,12 @@ async function commandEnvironment(cwd: string, dryRun: boolean | undefined): Pro
  */
 function inheritedEnvironment(): NodeJS.ProcessEnv {
   const env = envTable(Object.entries(process.env));
+  const memberBashEnv = env.__TEAMAI_ENV_BASH_ENV;
   for (const key of Object.keys(env)) if (key.startsWith('__TEAMAI_ENV_')) delete env[key];
-  if (env.BASH_ENV && path.normalize(env.BASH_ENV) === envLoaderPath()) delete env.BASH_ENV;
+  if (env.BASH_ENV && path.normalize(env.BASH_ENV) === envLoaderPath()) {
+    if (memberBashEnv) env.BASH_ENV = memberBashEnv;
+    else delete env.BASH_ENV;
+  }
   return env;
 }
 

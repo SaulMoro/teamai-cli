@@ -16,6 +16,7 @@ import {
 } from '../namespaced-entries.js';
 import {
   SHELL_PROFILE_CANDIDATE_NAMES,
+  envLoaderProfile,
   resolveActiveShellProfile,
   shellQuoteValue,
   isWindowsFormPath,
@@ -24,7 +25,7 @@ import {
   sameFile,
   type EnvBlock,
 } from '../utils/shell-profile.js';
-import { getUserHome } from '../utils/home.js';
+import { expandHome, getUserHome } from '../utils/home.js';
 
 // ─── Schema for env.yaml ────────────────────────────────
 
@@ -228,10 +229,10 @@ function withoutOldBlocks(content: string, loaderPath: string): { content: strin
   return { content: kept === '\n' ? '' : kept, dropped };
 }
 
-/** Whether `profilePath`, or a profile file an older version could have written to, carries a teamai env block. */
-async function anyProfileCarriesEnvBlock(profilePath: string): Promise<boolean> {
+/** Whether `profilePaths`, or a profile file an older version could have written to, carry a teamai env block. */
+async function anyProfileCarriesEnvBlock(profilePaths: string[]): Promise<boolean> {
   const home = getUserHome();
-  for (const candidate of [profilePath, ...SHELL_PROFILE_CANDIDATE_NAMES.map((name) => path.join(home, name))]) {
+  for (const candidate of [...profilePaths, ...SHELL_PROFILE_CANDIDATE_NAMES.map((name) => path.join(home, name))]) {
     if (findEnvBlocks(await readFileSafe(candidate) ?? '').length > 0) return true;
   }
   return false;
@@ -393,14 +394,19 @@ export class EnvHandler extends ResourceHandler {
    */
   private async installEnvLoader(teamConfig: TeamaiConfig, onlyOverExistingBlock: boolean): Promise<void> {
     const loaderPath = envLoaderPath();
-    const profilePath = teamConfig.sharing.env.shellProfilePath
-      ? teamConfig.sharing.env.shellProfilePath
-      : await this.detectShellProfile(loaderPath);
-    if (onlyOverExistingBlock && !await anyProfileCarriesEnvBlock(profilePath)) return;
+    const override = teamConfig.sharing.env.shellProfilePath;
+    const { path: profilePath, ignoredOverride } = await envLoaderProfile(override, loaderPath);
+    // An older version wrote its block to the override whatever the shell.
+    const overridden = override ? [expandHome(override)] : [];
+    if (onlyOverExistingBlock && !await anyProfileCarriesEnvBlock([profilePath, ...overridden])) return;
 
+    if (ignoredOverride) {
+      log.warn(`teamai.yaml sets sharing.env.shellProfilePath to ${ignoredOverride}, which not every zsh reads: `
+        + `the team env loader goes in ${profilePath} instead.`);
+    }
     await writeEnvLoader();
     const shellBlock = this.generateShellBlock(loaderPath);
-    await this.injectShellProfile(profilePath, shellBlock, loaderPath);
+    await this.injectShellProfile(profilePath, shellBlock, loaderPath, overridden);
   }
 
   /**
@@ -533,10 +539,10 @@ export class EnvHandler extends ResourceHandler {
    * of what the loader picked for the directory. An unclosed block has no end
    * to cut up to, so it is left as it is.
    */
-  private async injectShellProfile(profilePath: string, block: string, loaderPath: string): Promise<void> {
+  private async injectShellProfile(profilePath: string, block: string, loaderPath: string, overridden: string[]): Promise<void> {
     const removed: EnvBlock[] = [];
     const home = getUserHome();
-    const others = SHELL_PROFILE_CANDIDATE_NAMES.map((name) => path.join(home, name))
+    const others = [...new Set([...overridden, ...SHELL_PROFILE_CANDIDATE_NAMES.map((name) => path.join(home, name))])]
       .filter((candidate) => !sameFile(candidate, profilePath));
     for (const candidate of others) {
       const original = await readFileSafe(candidate);

@@ -459,7 +459,10 @@ describe('uninstall', () => {
       const projectRoot = path.join(tmpDir, 'work', 'api');
       await fse.ensureDir(projectRoot);
       execFileSync('git', ['init', '-q', projectRoot]);
-      const projectConfig = makeLocalConfig(projectRoot, fixture.repoPath, { scope: 'project', projectRoot });
+      const projectConfig = makeLocalConfig(projectRoot, fixture.repoPath, {
+        scope: 'project', projectRoot, dataHome: path.join(fixture.homeDir, '.teamai', 'projects', 'api'),
+      });
+      await fse.outputFile(path.join(projectConfig.dataHome!, 'config.yaml'), 'scope: project\n');
       const handler = new EnvHandler();
       await handler.writeResolvedEnv([{ key: 'USER_ONLY', value: 'u' }], teamConfig, userConfig);
       await handler.writeResolvedEnv([{ key: 'PROJECT_ONLY', value: 'p' }], teamConfig, projectConfig);
@@ -508,6 +511,27 @@ describe('uninstall', () => {
       await uninstall({ force: true });
 
       expect(await loaderBlocks(homeDir)).toBe(1);
+    });
+
+    // Both remove ~/.teamai, where the loader script and its registry live.
+    it.skipIf(spawnSync('zsh', ['-c', 'true']).status !== 0).each([
+      { uninstalling: 'the user scope', detects: 'user' },
+      { uninstalling: 'the home directory with no valid configuration', detects: null },
+    ])('keeps a remaining project\'s env in its shells after uninstalling $uninstalling', async ({ detects }) => {
+      const { homeDir, teamaiHome, teamConfig, userConfig, projectConfig, projectRoot } = await setupUserAndProject();
+      if (detects) mockAutoDetectInit.mockResolvedValue({ localConfig: userConfig, teamConfig });
+      else mockAutoDetectInit.mockRejectedValue(new Error('no configuration'));
+      const elsewhere = path.join(tmpDir, 'elsewhere');
+      await fse.ensureDir(elsewhere);
+
+      await uninstall({ force: true });
+
+      expect(shellSees(homeDir, projectRoot, 'PROJECT_ONLY')).toBe('p');
+      expect(shellSees(homeDir, elsewhere, 'USER_ONLY')).toBe('');
+      expect(await fse.readFile(path.join(teamaiHome, 'env-scopes'), 'utf-8')).not.toMatch(/^user\t/m);
+      expect(await fse.pathExists(path.join(teamaiHome, 'config.yaml'))).toBe(false);
+      expect(await fse.pathExists(path.join(projectConfig.dataHome!, 'config.yaml'))).toBe(true);
+      expect(await fse.pathExists(path.join(projectConfig.dataHome!, 'env.sh'))).toBe(true);
     });
   });
 

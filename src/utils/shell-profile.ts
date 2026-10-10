@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { pathExists, readFileSafe } from './fs.js';
-import { getUserHome } from './home.js';
+import { expandHome, getUserHome } from './home.js';
 import { TEAMAI_ENV_START, TEAMAI_ENV_END } from '../types.js';
 
 /** Every profile file `detectShellProfile()` could ever have resolved to, across platforms and CLI versions. */
@@ -59,6 +59,35 @@ export async function detectShellProfile(
   }
 
   return path.join(home, '.bashrc');
+}
+
+/** Whether `file` is one of zsh's startup files, or named for zsh: no bash reads it. */
+function isZshFile(file: string): boolean {
+  return /zsh|^\.z/.test(path.basename(file));
+}
+
+/**
+ * The profile file the env loader's block goes in (#1018), and the team's
+ * `sharing.env.shellProfilePath` override when it is not that file.
+ *
+ * For zsh, the file every zsh reads, `zsh -c` included: `.zshenv` (or a
+ * file it sources), whatever the override names. The override is for bash,
+ * where it picks the file a Git Bash login shell reads, so it is used there
+ * unless it names a zsh file. `ignoredOverride` is set when the override
+ * names a zsh file that is not where the block goes.
+ */
+export async function envLoaderProfile(
+  override: string | undefined,
+  loaderPath: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<{ path: string; ignoredOverride: string | null }> {
+  const overridePath = override ? expandHome(override) : null;
+  if (overridePath !== null && !isZshFile(overridePath) && !(process.env.SHELL ?? '').includes('zsh')) {
+    return { path: overridePath, ignoredOverride: null };
+  }
+  const profile = await resolveActiveShellProfile(loaderPath, platform);
+  const ignored = overridePath !== null && isZshFile(overridePath) && !sameFile(overridePath, profile, platform);
+  return { path: profile, ignoredOverride: ignored ? overridePath : null };
 }
 
 /**

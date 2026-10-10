@@ -16,6 +16,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { loadLocalConfig, loadTeamConfig } from '../config.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { getDataHome, getTeamaiHome, getTeamaiHomeDir, getUserConfigPath, type LocalConfig } from '../types.js';
 import { pathExists, readFileSafe, writeFileAtomic } from '../utils/fs.js';
@@ -78,7 +79,24 @@ export async function registerEnvScope(localConfig: LocalConfig, inShells: boole
   await updateEnvScopes((lines) => {
     const others = lines.filter((line) => !line.startsWith(entry.id));
     return localConfig.scope === 'user' ? [entry.line, ...others] : [...others, entry.line];
-  });
+  }, { fillUserLine: localConfig.scope !== 'user' });
+}
+
+/**
+ * The user scope's line for a registry that has none (an earlier version
+ * pulled it), as its own pull would write it: from its config and its team's
+ * `injectShellProfile`. Opted out when either cannot be read, so its env.sh
+ * stays out of shells until it is pulled. Null when there is no user scope.
+ */
+async function userScopeLine(): Promise<string | null> {
+  if (!await pathExists(getUserConfigPath())) return null;
+  const user = await loadLocalConfig({ dryRun: true, suppressMigrationNotice: true });
+  const team = user ? await loadTeamConfig(user.repo.localPath) : null;
+  if (!user || !team) {
+    log.warn('Could not read the user scope\'s config or its team\'s teamai.yaml, so its env stays out of shells. Fix that config, then run `teamai pull` outside any project.');
+    return `${USER_LINE}-\t0`;
+  }
+  return (await scopeEntry(user, team.sharing.env.injectShellProfile !== false))?.line ?? null;
 }
 
 /** Whether the registry lets the user scope's env.sh load in shells. */
@@ -90,7 +108,7 @@ async function userEnvInShells(): Promise<boolean> {
 export async function unregisterEnvScope(localConfig: LocalConfig): Promise<void> {
   const entry = await scopeEntry(localConfig);
   if (!entry) return;
-  await updateEnvScopes((lines) => lines.filter((line) => !line.startsWith(entry.id)));
+  await updateEnvScopes((lines) => lines.filter((line) => !line.startsWith(entry.id)), { fillUserLine: localConfig.scope !== 'user' });
 }
 
 /**
@@ -111,15 +129,39 @@ export async function removeEnvLoader(): Promise<void> {
   await Promise.all([fs.promises.rm(envLoaderPath(), { force: true }), fs.promises.rm(envScopesPath(), { force: true })]);
 }
 
+/**
+ * The files a removal of `~/.teamai` keeps: the loader, its registry without
+ * the user line, and each registered project's data directory (which holds
+ * the env.sh the loader sources and the config doctor reads). Empty when no
+ * project needs them.
+ */
+export async function envLoaderFilesForProjects(): Promise<string[]> {
+  await updateEnvScopes((lines) => lines.filter((line) => !line.startsWith(USER_LINE)));
+  const projectHomes = [...new Set((await readFileSafe(envScopesPath()) ?? '').split('\n')
+    .filter((line) => line !== '' && !line.startsWith(STAMP) && !line.startsWith(USER_LINE))
+    .map((line) => line.split('\t')[2])
+    .filter((envSh) => envSh && envSh !== '-')
+    .map((envSh) => path.dirname(envSh)))];
+  return projectHomes.length > 0 ? [envLoaderPath(), envScopesPath(), ...projectHomes] : [];
+}
+
 /** Tell shells that inherited their env that an env.sh changed, so they load it again. */
 export async function markEnvChanged(): Promise<void> {
-  await updateEnvScopes((lines) => lines, true);
+  await updateEnvScopes((lines) => lines, { changed: true, fillUserLine: true });
 }
 
 const STAMP = 'stamp\t';
 const USER_LINE = 'user\t-\t';
 
-async function updateEnvScopes(change: (lines: string[]) => string[], changed = false): Promise<void> {
+/**
+ * Change the registry under its lock. A pull (`fillUserLine`) also writes the
+ * user scope's line when it is missing, so no shell loads the user env.sh on
+ * the fallback alone once any pull has run.
+ */
+async function updateEnvScopes(
+  change: (lines: string[]) => string[],
+  { changed = false, fillUserLine = false }: { changed?: boolean; fillUserLine?: boolean } = {},
+): Promise<void> {
   const file = envScopesPath();
   const lock = `${file}.lock`;
   let held = false;
@@ -133,7 +175,8 @@ async function updateEnvScopes(change: (lines: string[]) => string[], changed = 
   }
   try {
     const before = (await readFileSafe(file) ?? '').split('\n').filter((line) => line !== '' && !line.startsWith(STAMP));
-    const after = change(before);
+    const userLine = fillUserLine && !before.some((line) => line.startsWith(USER_LINE)) ? await userScopeLine() : null;
+    const after = change(userLine ? [userLine, ...before] : before);
     if (changed || after.join('\n') !== before.join('\n')) {
       await writeFileAtomic(file, `${[`${STAMP}${crypto.randomUUID()}`, ...after].join('\n')}\n`);
     }
@@ -212,6 +255,7 @@ function envLoaderScript({ loaderFile, scopesFile, userEnvSh }: { loaderFile: st
 # the shell's directory (#1018).
 __teamai_env_scopes=${shellQuoteValue(scopesFile)}
 __teamai_env_user=${shellQuoteValue(userEnvSh)}
+__teamai_env_loader=${shellQuoteValue(loaderFile)}
 
 __teamai_env_pwd() { pwd -W 2>/dev/null || pwd -P; }
 
@@ -282,8 +326,19 @@ __teamai_env_load() {
   export __TEAMAI_ENV_KEYS="$__teamai_keys"
 }
 
+# bash reads no startup file for \`bash -c\`, except the one BASH_ENV names:
+# point it here, so a bash this shell starts, a zsh's too, gets the env of its
+# own directory. The member's own BASH_ENV is kept, to source after.
+__teamai_env_bash_env() {
+  [ "\${BASH_ENV-}" = "$__teamai_env_loader" ] && return 0
+  if [ -n "\${BASH_ENV-}" ]; then export __TEAMAI_ENV_BASH_ENV="$BASH_ENV"; else unset __TEAMAI_ENV_BASH_ENV; fi
+  export BASH_ENV="$__teamai_env_loader"
+}
+
 __teamai_env_apply() {
   [ -n "\${ZSH_VERSION-}" ] && emulate -L sh
+  # Again on each cd: a startup file the member's runs after this one may set its own.
+  __teamai_env_bash_env
   __teamai_d=$(__teamai_env_pwd) || return 0
   # Changes with the registry and with every env.sh a pull rewrites.
   __teamai_stamp=
@@ -299,6 +354,11 @@ __teamai_env_apply() {
   return 0
 }
 
+# A bash that runs this as its BASH_ENV sources the member's own after it, once.
+__teamai_env_chain=
+if [ -n "\${BASH_VERSION-}" ] && [ "\${BASH_ENV-}" = "$__teamai_env_loader" ] && [ -z "\${__teamai_env_chained-}" ]; then
+  case $- in *i*) ;; *) __teamai_env_chain=1 ;; esac
+fi
 __teamai_env_apply
 # An interactive shell follows cd. A script does not: its cd's would each run git.
 case $- in
@@ -311,10 +371,10 @@ case $- in
       esac
     fi ;;
 esac
-# bash reads no startup file for \`bash -c\`, except the one BASH_ENV names: a
-# bash this shell starts, a zsh's too, gets the env of its own directory. A
-# BASH_ENV the member set is left alone.
-if [ -z "\${BASH_ENV-}" ]; then export BASH_ENV=${shellQuoteValue(loaderFile)}; fi
+if [ -n "$__teamai_env_chain" ]; then
+  __teamai_env_chained=1
+  if [ -n "\${__TEAMAI_ENV_BASH_ENV-}" ] && [ -f "$__TEAMAI_ENV_BASH_ENV" ]; then . "$__TEAMAI_ENV_BASH_ENV"; fi
+fi
 :
 `;
 }

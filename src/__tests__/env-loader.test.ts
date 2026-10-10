@@ -176,6 +176,32 @@ describe('team env by directory (#1018)', () => {
       // The session-start pull is silent: debug.log keeps the notice.
       expect(vi.mocked(log.persist).mock.calls.filter(([message]) => String(message).includes('inheritUserScope'))).toHaveLength(1);
     });
+
+    // `sharing.env.shellProfilePath` picks the file for bash (Git Bash reads
+    // only its login files); every zsh, `zsh -c` too, reads only .zshenv.
+    it.each([
+      { shell: 'zsh', override: '.zshrc', loaderIn: '.zshenv', warns: true },
+      { shell: 'zsh', override: '.config/zsh/team.zsh', loaderIn: '.zshenv', warns: true },
+      { shell: 'zsh', override: '.bash_profile', loaderIn: '.zshenv', warns: false },
+      { shell: 'zsh', override: '.zshenv', loaderIn: '.zshenv', warns: false },
+      { shell: 'bash', override: '.bash_profile', loaderIn: '.bash_profile', warns: false },
+      { shell: 'bash', override: '.zshrc', loaderIn: '.bashrc', warns: true },
+    ].filter(({ shell }) => hasShell(shell)))('puts the loader of a $shell member whose team sets shellProfilePath to ~/$override in ~/$loaderIn, moving an older block out', async ({ shell, override, loaderIn, warns }) => {
+      vi.stubEnv('SHELL', `/bin/${shell}`);
+      const { log } = await import('../utils/logger.js');
+      const a = await project('a');
+      const overridden = path.join(homeDir, override);
+      await fse.outputFile(overridden, `${oldBlock(path.join(a.dataHome ?? '', 'env.sh'))}\n`);
+      const config = { ...teamConfig, sharing: { ...teamConfig.sharing, env: { injectShellProfile: true, shellProfilePath: `~/${override}` } } };
+
+      await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-a' }], config, a);
+
+      const loader = path.join(homeDir, '.teamai', 'env-loader.sh');
+      expect(await fse.readFile(path.join(homeDir, loaderIn), 'utf-8')).toContain(loader);
+      if (overridden !== path.join(homeDir, loaderIn)) expect(await blocksIn(overridden)).toBe(0);
+      expect(vi.mocked(log.warn).mock.calls.some(([message]) => String(message).includes('shellProfilePath'))).toBe(warns);
+      if (shell === 'zsh') expect(shellSees('zsh', a.projectRoot ?? '', 'MARKER')).toBe('from-a');
+    });
   });
 
   describe.skipIf(!hasShell('zsh'))('zsh', () => {
@@ -220,6 +246,62 @@ describe('team env by directory (#1018)', () => {
       });
 
       expect(run.stdout.trim().split('\n')).toEqual(['from-a', 'from-b']);
+    });
+
+    // A BASH_ENV the member set: bash sources the loader, then theirs, once per bash.
+    describe.skipIf(!hasShell('bash'))('with the member\'s own BASH_ENV', () => {
+      const memberBashEnv = async (): Promise<{ file: string; log: string }> => {
+        const file = path.join(homeDir, '.bash_env');
+        const log = path.join(tmpDir, 'bash-env.log');
+        await fse.writeFile(file, `export MEMBER_SET=1\necho x >> '${log}'\n`);
+        return { file, log };
+      };
+      const sourced = async (log: string): Promise<number> => (await fse.readFile(log, 'utf-8').catch(() => '')).split('\n').filter(Boolean).length;
+
+      it('gives a bash -c that a zsh starts in another project that project\'s env, then the member\'s BASH_ENV', async () => {
+        const { file, log } = await memberBashEnv();
+        const a = await project('a');
+        const b = await project('b');
+        await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-a' }], teamConfig, a);
+        await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-b' }], teamConfig, b);
+
+        const run = spawnSync('zsh', ['-c', `cd '${b.projectRoot}' && bash -c 'printenv MARKER; printenv MEMBER_SET'`], {
+          cwd: a.projectRoot, env: { HOME: homeDir, PATH: process.env.PATH, SHELL: '/bin/zsh', BASH_ENV: file }, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        expect(run.stderr).toBe('');
+        expect(run.stdout.trim().split('\n')).toEqual(['from-b', '1']);
+        expect(await sourced(log)).toBe(1);
+      });
+
+      it('sources the member\'s BASH_ENV once in each nested bash, and never chains the loader to itself', async () => {
+        const { file, log } = await memberBashEnv();
+        const a = await project('a');
+        await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-a' }], teamConfig, a);
+
+        const run = spawnSync('zsh', ['-c', 'bash -c \'bash -c "printenv __TEAMAI_ENV_BASH_ENV"\''], {
+          cwd: a.projectRoot, env: { HOME: homeDir, PATH: process.env.PATH, SHELL: '/bin/zsh', BASH_ENV: file }, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        expect(run.stdout.trim()).toBe(file);
+        expect(await sourced(log)).toBe(2);
+      });
+
+      it('takes BASH_ENV back on cd in an interactive zsh whose .zshrc sets the member\'s own', async () => {
+        const { file } = await memberBashEnv();
+        await fse.writeFile(path.join(homeDir, '.zshrc'), `export BASH_ENV='${file}'\n`);
+        const a = await project('a');
+        const b = await project('b');
+        await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-a' }], teamConfig, a);
+        await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-b' }], teamConfig, b);
+
+        const terminal = spawnSync('zsh', ['-i'], {
+          cwd: a.projectRoot, env: { HOME: homeDir, PATH: process.env.PATH, SHELL: '/bin/zsh' }, encoding: 'utf-8',
+          input: `cd '${b.projectRoot}'\nbash -c 'printenv MARKER; printenv MEMBER_SET'\nexit\n`,
+        });
+
+        expect(terminal.stdout.trim().split('\n')).toEqual(['from-b', '1']);
+      });
     });
 
     it('switches env on cd in an interactive shell and puts back the member\'s own value on the way out', async () => {
@@ -324,6 +406,40 @@ describe('team env by directory (#1018)', () => {
         await handler.writeResolvedEnv([], teamConfig, a);
 
         expect(shellSees('zsh', a.projectRoot ?? '', 'USER_ONLY')).toBe('');
+      });
+    });
+
+    // A user scope an earlier version pulled has an env.sh but no registry
+    // line: the next pull of any scope writes the line from the user scope's
+    // own config and team repo, as a user-scope pull would.
+    describe('with a user scope an earlier version pulled', () => {
+      const userConfig = (repo: string): string => [
+        'username: member', 'scope: user', 'primaryRole: dev', 'additionalRoles: []', 'repo:',
+        `  localPath: ${repo}`, '  remote: https://git.example.com/team/user.git', '',
+      ].join('\n');
+
+      it.each([
+        { userScope: 'opted out', teamYaml: { injectShellProfile: false }, config: true, loads: '', warns: false },
+        { userScope: 'opted in', teamYaml: { injectShellProfile: true }, config: true, loads: 'u', warns: false },
+        { userScope: 'with no team config', teamYaml: null, config: true, loads: '', warns: true },
+        { userScope: 'with an invalid config', teamYaml: { injectShellProfile: true }, config: false, loads: '', warns: true },
+      ])('loads the user scope $userScope as its own pull says, after a project pull', async ({ teamYaml, config, loads, warns }) => {
+        const userRepo = path.join(tmpDir, 'user-team-repo');
+        await fse.outputFile(path.join(homeDir, '.teamai', 'config.yaml'), config ? userConfig(userRepo) : 'scope: [');
+        await fse.outputFile(path.join(homeDir, '.teamai', 'env.sh'), "export USER_ONLY='u'\n");
+        if (teamYaml) {
+          await fse.outputFile(path.join(userRepo, 'teamai.yaml'), JSON.stringify({ ...teamConfig, sharing: { ...teamConfig.sharing, env: teamYaml } }));
+        }
+        const a = { ...await project('a'), inheritUserScope: true };
+        await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-a' }], teamConfig, a);
+        const elsewhere = path.join(tmpDir, 'elsewhere');
+        await fse.ensureDir(elsewhere);
+
+        expect(shellSees('zsh', elsewhere, 'USER_ONLY')).toBe(loads);
+        expect(shellSees('zsh', a.projectRoot ?? '', 'USER_ONLY')).toBe(loads);
+        expect(shellSees('zsh', a.projectRoot ?? '', 'MARKER')).toBe('from-a');
+        const { log } = await import('../utils/logger.js');
+        expect(vi.mocked(log.warn).mock.calls.some(([message]) => String(message).includes('user scope'))).toBe(warns);
       });
     });
   });

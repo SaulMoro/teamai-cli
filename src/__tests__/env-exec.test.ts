@@ -9,6 +9,7 @@ import YAML from 'yaml';
 
 import { envExec, exitLike, inTerminalForeground } from '../env-exec.js';
 import { EnvHandler } from '../resources/env.js';
+import { envLoaderPath } from '../resources/env-loader.js';
 import { envShMarker } from '../env-sh-exports.js';
 import { getMachineSecretsPath, getTeamSecretsPath, writeSecretStore, type SecretStore } from '../secret-store.js';
 import { resolveAnchors } from '../utils/git.js';
@@ -83,6 +84,17 @@ describe('teamai env exec', () => {
     expect(outcome).toEqual({ kind: 'exited', code: 0 });
     return JSON.parse(await fse.readFile(out, 'utf8')) as Record<string, string>;
   }
+
+  it('restores the member BASH_ENV when removing the loader from the child environment', async () => {
+    const memberBashEnv = path.join(home, '.bash_env');
+    vi.stubEnv('BASH_ENV', envLoaderPath());
+    vi.stubEnv('__TEAMAI_ENV_BASH_ENV', memberBashEnv);
+
+    const env = await childEnv(home);
+
+    expect(env.BASH_ENV).toBe(memberBashEnv);
+    expect(env.__TEAMAI_ENV_BASH_ENV).toBeUndefined();
+  });
 
   beforeEach(async () => {
     tmpDir = fs.realpathSync(await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-env-exec-')));

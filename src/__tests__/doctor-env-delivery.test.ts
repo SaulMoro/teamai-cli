@@ -205,6 +205,24 @@ describe('doctor — env variables reach a shell', () => {
     expect(stale.fix).toContain('teamai uninstall');
   });
 
+  // #1018: `zsh -c` reads .zshenv only, so for a zsh member the block counts
+  // there, whatever shellProfilePath names.
+  it.each([
+    { blockIn: '.zshrc', passes: false },
+    { blockIn: '.zshenv', passes: true },
+  ])('for a zsh member whose team sets shellProfilePath to ~/.zshrc, passes only with the block in ~/$blockIn', async ({ blockIn, passes }) => {
+    vi.stubEnv('SHELL', '/bin/zsh');
+    vi.stubEnv('ZDOTDIR', '');
+    await writeEnvSh("export JIRA_PASSWORD='s3cret'\n");
+    teamConfig.sharing.env.shellProfilePath = '~/.zshrc';
+    profilePath = path.join(homeDir, blockIn);
+    await writeProfile(loaderLine());
+
+    const check = await envCheck();
+    expect(await check.check()).toBe(passes);
+    if (!passes) expect(check.fix).toContain(path.join(homeDir, '.zshenv'));
+  });
+
   // Regression (#693 review round 4): an unexpanded `~/...` override made
   // the stray-block scan compare a literal `~/.profile` string against its
   // own always-absolute candidate paths, so the resolved file never matched

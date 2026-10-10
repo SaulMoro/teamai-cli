@@ -1357,9 +1357,6 @@ async function envDeliveryProblems(
   const none = { problems: [], staleProfiles: [] };
   if (teamConfig?.sharing?.env?.injectShellProfile === false) return none;
 
-  const { EnvHandler } = await import('./resources/env.js');
-  const envHandler = new EnvHandler();
-
   // The variables this member and directory receive: the same resolution pull
   // writes env.sh from, not a second copy of it. A file that cannot be used, or
   // a name defined twice, is reported here as pull reports it (#662), and a
@@ -1433,10 +1430,11 @@ async function envDeliveryProblems(
   // would never match its own resolved file and get reported as a stray
   // copy of itself (#693 review round 4).
   const { envLoaderPath } = await import('./resources/env-loader.js');
+  const { envLoaderProfile } = await import('./utils/shell-profile.js');
   const loaderPath = envLoaderPath();
-  const profilePath = expandHome(
-    teamConfig?.sharing?.env?.shellProfilePath ?? await envHandler.detectShellProfile(loaderPath),
-  );
+  // For zsh, a file every zsh reads, whatever shellProfilePath names (#1018).
+  const override = teamConfig?.sharing?.env?.shellProfilePath;
+  const { path: profilePath } = await envLoaderProfile(override, loaderPath);
   // One block for every scope: it sources the loader, which picks the env.sh
   // for the shell's directory (#1018).
   const profile = await readFileSafe(profilePath);
@@ -1458,8 +1456,7 @@ async function envDeliveryProblems(
   // sits in, say, `.bashrc` from a pre-#682/#661 install (#693 review).
   const home = getUserHome();
   const staleProfiles: string[] = [];
-  for (const name of SHELL_PROFILE_CANDIDATE_NAMES) {
-    const candidate = path.join(home, name);
+  for (const candidate of new Set([...override ? [expandHome(override)] : [], ...SHELL_PROFILE_CANDIDATE_NAMES.map((name) => path.join(home, name))])) {
     if (sameFile(candidate, profilePath)) continue;
     const content = await readFileSafe(candidate);
     if (content && findEnvBlockFor(content, envShPath)) staleProfiles.push(candidate);

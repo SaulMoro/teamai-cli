@@ -266,13 +266,13 @@ agent 从不索要密钥值：缺少密钥时，它会请你在自己的终端�
 
 用户级 scope 的团队设置了 `injectShellProfile: false` 时，它的 `env.sh` 在任何位置都不加载，继承它的项目中也不加载。
 
-交互式 shell 在 `cd` 时切换环境变量，并在离开项目时恢复你进入项目前设置的值。zsh 从 `.zshenv` 读取该区块，每个 zsh 都会读取它，因此工具执行命令时用的 `zsh -c` 也能拿到所在目录的环境变量。bash 在 `bash -c` 时不读取任何启动文件，所以 loader 会导出 `BASH_ENV`（你自己设置了的话则不覆盖），从已加载它的 bash 或 zsh 启动的每个 `bash -c` 也会这样做。其他 shell（fish、PowerShell）不运行 loader：需要团队环境变量的命令请通过 `teamai env exec --` 运行，它按同样的方式解析。
+交互式 shell 在 `cd` 时切换环境变量，并在离开项目时恢复你进入项目前设置的值。zsh 从 `.zshenv` 读取该区块，每个 zsh 都会读取它，因此工具执行命令时用的 `zsh -c` 也能拿到所在目录的环境变量。bash 在 `bash -c` 时不读取任何启动文件，所以 loader 会把 `BASH_ENV` 指向自身，并在加载团队环境后继续 source 你原有的 `BASH_ENV`；每个 bash 只运行你的文件一次。其他 shell（fish、PowerShell）不运行 loader：需要团队环境变量的命令请通过 `teamai env exec --` 运行，它按同样的方式解析。
 
 pull 不再为切换项目而改写 shell 配置文件。第一次用带 loader 的版本 pull 时（在没有环境变量的项目中也是如此），会从每个候选文件中移除旧版本写入的按 scope 区块；若某个项目因此不再获得以前能拿到的用户级变量，会提示一次。
 
 `pull` 时，若启用了 `injectShellProfile`（默认启用），`$SHELL` 为 zsh 时环境变量块会写入 `~/.zshenv`（设置了 `ZDOTDIR` 时为 `$ZDOTDIR/.zshenv`），否则写入 `~/.bashrc`——但 Windows 上例外：`$SHELL` 通常未设置，而 Git Bash 以*登录 shell*方式启动，从不读取 `.bashrc`，因此 teamai 会优先选择已存在的 `~/.bash_profile`、其次 `~/.bash_login`、再次 `~/.profile`，只有三者都不存在时才回退到 `~/.bashrc`（通过 MSYS2/Cygwin 安装、会设置 `$SHELL` 的 zsh 仍会解析到 `.zshenv`）。这与 Git for Windows 自身在 `/etc/profile.d/bash_profile.sh` 中的回退逻辑一致，其判断条件是 `[ -e ~/.bashrc -a ! -e ~/.bash_profile -a ! -e ~/.bash_login -a ! -e ~/.profile ]`——只有在这一种情况下它才会生成一个会 source `.bashrc` 的 `.bash_profile`；
 
-这也是为什么哪怕一个只 source 了其他内容（例如 `~/.local/bin/env`）的 `~/.profile` 存在，也足以让 `.bashrc` 单独失效。可通过 `teamai.yaml` 中的 `sharing.env.shellProfilePath` 覆盖目标文件。
+这也是为什么哪怕一个只 source 了其他内容（例如 `~/.local/bin/env`）的 `~/.profile` 存在，也足以让 `.bashrc` 单独失效。可通过 `teamai.yaml` 中的 `sharing.env.shellProfilePath` 覆盖 bash 的目标文件。对 zsh，teamai 始终把区块写入 `.zshenv`（若设置了 `$ZDOTDIR`，则写入其下的 `.zshenv`），因为 `zsh -c` 不会读取 `.zshrc`；若 override 指向其他 zsh 启动文件，会忽略并给出警告，pull 时也会把旧区块迁到 `.zshenv`。
 
 每次 pull 都会重新走一遍这个优先级判断，找到当前环境实际会读取的那个文件，然后沿着它对另外四个候选文件名的引用一路查下去——无论要经过多少跳
 
