@@ -66,7 +66,7 @@ describe('buildIndex when the indexed set shrinks (#1006)', () => {
 
     expect((await loadIndex(indexPath))?.entries).toHaveLength(7);
     expect(warnings()).toEqual([
-      expect.stringMatching(/^Search index could not read 7 file\(s\) \(.*zqx-skill-1[\\/]SKILL\.md: ENOENT, .*, and 4 more\); recall keeps what the previous index held for them\./),
+      expect.stringMatching(/^Search index could not read 7 path\(s\) \(.*zqx-skill-1[\\/]SKILL\.md: ENOENT, .*, and 4 more\); recall keeps what the previous index held for them\./),
     ]);
   });
 
@@ -80,7 +80,7 @@ describe('buildIndex when the indexed set shrinks (#1006)', () => {
 
     expect((await loadIndex(indexPath))?.entries.map((entry) => entry.filename).sort()).toEqual(['a.md', 'b.md']);
     expect(warnings()).toEqual([
-      `Search index could not read 1 file(s) (${path.join(docsDir, 'gone.md')}: ENOENT); recall keeps what the previous index held for them. `
+      `Search index could not read 1 path(s) (${path.join(docsDir, 'gone.md')}: ENOENT); recall keeps what the previous index held for them. `
         + 'Fix them and run `teamai pull` to index them again.',
     ]);
   });
@@ -128,8 +128,124 @@ describe('buildIndex when the indexed set shrinks (#1006)', () => {
       const unreadableKept = unreadable && existing ? ['docs:a.md'] : [];
       expect(entries).toEqual([...read, ...retainedSkills, ...unreadableKept].sort());
       expect(warnings()).toEqual(unreadable
-        ? [expect.stringMatching(/^Search index could not read 1 file\(s\) \(.*a\.md: ENOENT\); recall keeps what the previous index held for them\./)]
+        ? [expect.stringMatching(/^Search index could not read 1 path\(s\) \(.*a\.md: ENOENT\); recall keeps what the previous index held for them\./)]
         : []);
     },
   );
+});
+
+/**
+ * A root the build cannot list counts as given and unreadable as a whole: the
+ * previous entries of the files under it stay, the warning names it, and the
+ * rest of the index is still rebuilt (#1006).
+ */
+describe('buildIndex when a root cannot be listed (#1006)', () => {
+  let tmpDir: string;
+  let indexPath: string;
+  let locked: string[];
+  const warnings = (): string[] => vi.mocked(log.warn).mock.calls.map(([message]) => String(message));
+  const doc = (title: string): string => `---\ntitle: ${title}\n---\nbody`;
+  // chmod 0o000 has no effect when running as root (CI), nor on Windows.
+  const chmodApplies = process.platform !== 'win32' && process.getuid?.() !== 0;
+
+  beforeEach(async () => {
+    tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-index-unlistable-'));
+    indexPath = path.join(tmpDir, 'search-index.json');
+    locked = [];
+    vi.mocked(log.warn).mockClear();
+  });
+
+  afterEach(async () => {
+    for (const dir of locked) await fse.chmod(dir, 0o755);
+    await fse.remove(tmpDir);
+  });
+
+  type Failure = 'removed' | 'chmod 000' | 'parent chmod 000' | 'replaced by a file';
+  const breakPath = async (target: string, failure: Failure): Promise<void> => {
+    if (failure === 'removed') {
+      await fse.remove(target);
+      return;
+    }
+    if (failure === 'replaced by a file') {
+      await fse.remove(target);
+      await fse.outputFile(target, 'not a directory');
+      return;
+    }
+    const dir = failure === 'chmod 000' ? target : path.dirname(target);
+    await fse.chmod(dir, 0o000);
+    locked.push(dir);
+  };
+
+  // Each directory a collector lists, the entry the previous index holds for
+  // the file under it, and whether a walk found it (`found`) rather than being
+  // given it. A removed directory is gone, not unreadable, and so is what was
+  // under a found directory a file replaced: there is no directory to list.
+  const roots = [
+    { name: 'learnings root', file: 'learnings/root/x.md', broken: 'learnings/root', id: 'learnings:x.md', found: false },
+    { name: 'learnings namespace', file: 'learnings/root/ns/x.md', broken: 'learnings/root/ns', id: 'learnings:ns/x.md', found: false },
+    { name: 'walked docs root', file: 'docs/root/sub/x.md', broken: 'docs/root', id: 'docs:sub/x.md', found: false },
+    { name: 'walked docs subdirectory', file: 'docs/root/sub/x.md', broken: 'docs/root/sub', id: 'docs:sub/x.md', found: true },
+    { name: 'walked rules root', file: 'rules/root/sub/x.md', broken: 'rules/root', id: 'rules:sub/x.md', found: false },
+    { name: 'skills root', file: 'skills/root/ns/x/SKILL.md', broken: 'skills/root', id: 'skills:x.md', found: false },
+    { name: 'skills namespace', file: 'skills/root/ns/x/SKILL.md', broken: 'skills/root/ns', id: 'skills:x.md', found: true },
+    { name: 'codebase root', file: 'codebase/root/sub/x.md', broken: 'codebase/root', id: 'docs:sub/x.md', found: false },
+  ] as const;
+  const failures: readonly Failure[] = ['removed', 'chmod 000', 'parent chmod 000', 'replaced by a file'];
+  const cases = roots.flatMap((root) => failures.map((failure) => ({ ...root, failure })));
+
+  it.each(cases.map((row) => [`${row.name}, ${row.failure}`, row] as const))('%s', async (_name, row) => {
+    if (row.failure.includes('chmod') && !chmodApplies) return;
+    const other = path.join(tmpDir, 'other');
+    const w = (rel: string): string => path.join(tmpDir, rel);
+    const opts = {
+      learningsDirs: [w('learnings/root'), other],
+      learningsNamespaces: ['ns'],
+      docsDir: w('docs/root'),
+      rulesDir: w('rules/root'),
+      skillsDir: w('skills/root'),
+      codebaseDir: w('codebase/root'),
+      indexPath,
+    };
+    await fse.outputFile(path.join(tmpDir, row.file), doc('x'));
+    await fse.outputFile(path.join(other, 'b.md'), doc('b'));
+    await buildIndex(opts);
+    await fse.remove(path.join(other, 'b.md'));
+    await fse.outputFile(path.join(other, 'r.md'), doc('r'));
+    const broken = path.join(tmpDir, row.broken);
+    await breakPath(broken, row.failure);
+
+    await buildIndex(opts);
+
+    const entries = (await loadIndex(indexPath))?.entries.map((entry) => `${entry.type}:${entry.filename}`).sort();
+    if (row.failure === 'removed' || (row.found && row.failure === 'replaced by a file')) {
+      expect(entries).toEqual(['learnings:r.md']);
+      expect(warnings()).toEqual([]);
+      return;
+    }
+    expect(entries).toEqual([row.id, 'learnings:r.md'].sort());
+    // With its parent locked, a found directory cannot be seen, so the parent is what is named.
+    const named = row.found && row.failure === 'parent chmod 000' ? path.dirname(broken) : broken;
+    const reason = row.failure === 'replaced by a file' ? 'ENOTDIR' : 'EACCES';
+    expect(warnings()).toEqual([expect.stringMatching(/^Search index could not read \d+ path\(s\) \(/)]);
+    expect(warnings()[0]).toContain(`${named}: ${reason}`);
+  });
+
+  it.skipIf(!chmodApplies)('rebuilds without vote counts when the votes cannot be listed', async () => {
+    const learnings = path.join(tmpDir, 'learnings');
+    const votesDir = path.join(tmpDir, 'votes');
+    await fse.outputFile(path.join(learnings, 'b.md'), doc('b'));
+    await fse.outputFile(path.join(votesDir, 'alice.yaml'), 'version: 2\nvotes:\n  b:\n    recalled_count: 0\n    upvoted_count: 2\n    last_recalled_at: ""\n');
+    await buildIndex({ learningsDirs: [learnings], votesDir, indexPath });
+    expect((await loadIndex(indexPath))?.entries.map((entry) => entry.votes)).toEqual([2]);
+    await fse.remove(path.join(learnings, 'b.md'));
+    await fse.outputFile(path.join(learnings, 'r.md'), doc('r'));
+    await breakPath(votesDir, 'chmod 000');
+
+    await buildIndex({ learningsDirs: [learnings], votesDir, indexPath });
+
+    expect((await loadIndex(indexPath))?.entries.map((entry) => entry.filename)).toEqual(['r.md']);
+    expect(warnings()).toEqual([
+      `Search index could not read the votes in ${votesDir} (EACCES); it ranks without them until the next rebuild.`,
+    ]);
+  });
 });

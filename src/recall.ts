@@ -3,7 +3,7 @@ import path from 'node:path';
 import { existsSync } from 'node:fs';
 import { requireInit, detectProjectConfig, describeUnreadableConfig, loadLocalConfigForScope } from './config.js';
 import { loadIndex, buildIndex, indexInMemory, search, isLegacyIndex } from './utils/search-index.js';
-import type { BuildIndexOptions, SearchResult } from './utils/search-index.js';
+import type { BuildIndexOptions, SearchResult, UnreadableFile } from './utils/search-index.js';
 import { ensureDir, pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import type { GlobalOptions, SearchIndex, LocalConfig, KnowledgeDomain } from './types.js';
@@ -470,16 +470,19 @@ async function loadOrBuildScopeIndex(
       // this project's would (#808). The probe runs only here, when an index
       // is built, never on a plain recall.
       const { indexableLearningsRoots } = await import('./utils/learnings-roots.js');
+      const unreadable: UnreadableFile[] = [];
       const buildOptions: BuildIndexOptions = {
-        learningsDirs: [pendingLearningsDir(localConfig), ...await indexableLearningsRoots(localConfig)],
+        learningsDirs: [pendingLearningsDir(localConfig), ...await indexableLearningsRoots(localConfig, unreadable)],
         learningsNamespaces,
-        docsDir: await pathExists(docsDir) ? docsDir : undefined,
-        rulesDir: await pathExists(rulesDir) ? rulesDir : undefined,
+        // Given as is: the build tells a directory that is not there from one it cannot list.
+        docsDir,
+        rulesDir,
         // The docs and skills pull delivers here, not the whole trees (#707).
         ...delivered,
         codebaseDir: undefined, // codebase now served by teamwiki/ graph engine
         votesDir: votesExist ? votesDir : undefined,
         indexPath,
+        unreadable,
       };
       if (dryRun) {
         index = await indexInMemory(buildOptions);
@@ -496,8 +499,9 @@ async function loadOrBuildScopeIndex(
           + 'Resolve that error, fix the manifest, and run `teamai pull` to rebuild it.');
         return 'build-failed';
       }
+      // Never the older index either: it predates what this build was given (#1006).
       log.warn(`Recall could not build the ${scopeLabel} search index: ${cause}`);
-      if (!index) return 'build-failed';
+      return 'build-failed';
     }
   }
 

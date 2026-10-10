@@ -378,7 +378,7 @@ describe('recall rebuilding an older-format index with a team manifest it cannot
       }
 
       expect(out.join('')).not.toContain('stale');
-      expect(warnings()).toContainEqual(expect.stringMatching(/^Search index could not read 10 file\(s\) \(.*EACCES/));
+      expect(warnings()).toContainEqual(expect.stringMatching(/^Search index could not read 10 path\(s\) \(.*EACCES/));
     },
   );
 
@@ -408,6 +408,31 @@ describe('recall rebuilding an older-format index with a team manifest it cannot
     expect(warnings()).toContainEqual(expect.stringMatching(
       /Recall could not build the user search index: .*EACCES[\s\S]*skips[\s\S]*teamai pull/,
     ));
+  });
+
+  it('searches nothing, not the older index, and removes it when the index cannot be written (#1006)', async () => {
+    fs.rmSync(path.join(repo(), 'manifest', 'roles.yaml'));
+    const out: string[] = [];
+    const write = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { out.push(String(chunk)); return true; });
+    const realWriteFile = fse.writeFile;
+    const failIndexWrites = vi.spyOn(fse, 'writeFile').mockImplementation(async (file: unknown, data: unknown) => {
+      if (typeof file !== 'string' || typeof data !== 'string') throw new Error('unexpected writeFile call in test');
+      if (file === indexPath() || file.startsWith(`${indexPath()}.`)) {
+        throw Object.assign(new Error(`ENOSPC: no space left on device, open '${file}'`), { code: 'ENOSPC' });
+      }
+      return realWriteFile(file, data, 'utf-8');
+    });
+    try {
+      await recall('retry budget', {});
+    } finally {
+      write.mockRestore();
+      failIndexWrites.mockRestore();
+    }
+
+    expect(out.join('')).not.toContain('stale');
+    expect(fs.existsSync(indexPath())).toBe(false);
+    expect(warnings()).toContainEqual(`Search index could not be written to ${indexPath()} (ENOSPC); the previous one was removed. `
+      + 'Fix the cause and run `teamai pull` to build it again.');
   });
 });
 

@@ -336,7 +336,7 @@ describe('recall <query> --dry-run writes no local state (#900 C9)', () => {
 
     expect(preview.code).toBe(0);
     expect(snapshotTree(team.sandbox)).toEqual(before);
-    expect(preview.output).toContain('Search index could not read 1 file(s)');
+    expect(preview.output).toContain('Search index could not read 1 path(s)');
     expect(preview.output).toContain('Retained deployment timeout');
     expect(preview.output).not.toContain('Dropped deployment timeout');
     const real = await recallUnreadable([]);
