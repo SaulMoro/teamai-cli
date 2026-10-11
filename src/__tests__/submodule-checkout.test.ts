@@ -14,6 +14,7 @@ import { dashboardWorkspaces, workspaceEvents } from '../dashboard/workspaces.js
 import { status } from '../status.js';
 import { localAgentCheckouts } from '../local-agent.js';
 import { deployBuiltinSkills } from '../builtin-skills.js';
+import { allowsSkillDirectory } from '../resources/skills.js';
 
 let base: string;
 let parent: string;
@@ -89,12 +90,12 @@ describe('submodule checkouts', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('Member instructions');
   });
 
-  it('removes only recorded team hooks left in the git directory on the next reconcile', async () => {
+  it.each(['.claude/settings.json', '.custom/settings.json'])('removes only recorded team hooks left at %s in the git directory', async (settingsPath) => {
     const original = config();
     original.dataHome = await resolveProjectDataHome(checkout);
     const anchor = path.join(parent, '.git/modules/service');
     const manifest = path.join(original.dataHome!, 'managed-main-checkout-hooks.json');
-    const file = path.join(anchor, '.claude/settings.local.json');
+    const file = path.join(anchor, path.dirname(settingsPath), 'settings.local.json');
     const def = { key: 'fixture', description: '[teamai:hook:fixture] fixture', event: 'Stop', command: 'echo team', source: 'team' as const };
     await reconcileHooks(file, 'claude', [def], { manifestPath: manifest, teamOnly: true });
     const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -104,7 +105,7 @@ describe('submodule checkouts', () => {
     fs.mkdirSync(path.join(original.repo.localPath, 'hooks'), { recursive: true });
     fs.writeFileSync(path.join(original.repo.localPath, 'hooks/hooks.yaml'), 'hooks: []');
     const team = TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.com/team.git',
-      toolPaths: { claude: { settings: '.claude/settings.json' } } });
+      toolPaths: { claude: { settings: settingsPath } } });
     await reconcileTeamHooksForConfig(team, { ...original, enabledAgents: ['claude'] });
     const after = JSON.parse(fs.readFileSync(file, 'utf8'));
     expect(after.member).toBe(true);
@@ -121,6 +122,20 @@ describe('submodule checkouts', () => {
     }));
     expect(await localAgentCheckouts()).toContain(checkout);
     expect(await localAgentCheckouts()).not.toContain(anchor);
+  });
+
+  it.each(['.claude/settings.local.json', '.codex/hooks.json'])('preserves an empty old %s without blocking Git hook installation', async (relative) => {
+    const original = config();
+    original.dataHome = await resolveProjectDataHome(checkout);
+    const file = path.join(parent, '.git/modules/service', relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, '');
+    fs.mkdirSync(path.join(original.repo.localPath, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(original.repo.localPath, 'hooks/hooks.yaml'), 'hooks: []');
+    const team = TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.com/team.git' });
+    await reconcileTeamHooksForConfig(team, { ...original, enabledAgents: ['claude', 'codex'] });
+    expect(fs.readFileSync(file, 'utf8')).toBe('');
+    expect(git(checkout, 'config', '--get', 'hook.teamai-post-checkout.command')).toContain('hook-dispatch');
   });
 
   it('displays the submodule checkout in status while judging the identity for orphans', async () => {
@@ -159,6 +174,34 @@ describe('submodule checkouts', () => {
     await createProjectToolRoots({ cwd: linked });
     expect(fs.existsSync(path.join(linked, '.claude'))).toBe(true);
     expect((await resolveAnchors(linked))?.mainCheckout).toBe(checkout);
+  });
+
+  it('keeps the resolved main hook target when the current worktree disappears during pull', async () => {
+    const linked = path.join(base, 'removed-service-worktree');
+    git(checkout, 'worktree', 'add', '-q', '--detach', linked);
+    const local = config(linked);
+    const paths = { codex: { settings: '.codex/hooks.json' } };
+    expect((await resolveMainCheckoutHooks(local, paths))?.root).toBe(checkout);
+    git(checkout, 'worktree', 'remove', '--force', linked);
+    expect((await resolveMainCheckoutHooks(local, paths))?.root).toBe(checkout);
+  });
+
+  it('keeps a separate identity when the original submodule no longer exists', async () => {
+    const worktree = path.join(base, 'parent-without-original');
+    git(parent, 'worktree', 'add', '-q', '--detach', worktree);
+    git(worktree, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '-q');
+    fs.rmSync(path.join(parent, '.git/modules/service'), { recursive: true });
+    const child = path.join(worktree, 'service');
+    expect((await resolveAnchors(child))?.projectAnchor).toBe(path.join(parent, '.git/worktrees/parent-without-original/modules/service'));
+  });
+
+  it('allows a skill root linked inside a home directory outside Git', async () => {
+    const home = path.join(base, 'home');
+    fs.mkdirSync(path.join(home, '.agents/skills'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.symlinkSync('../.agents/skills', path.join(home, '.claude/skills'));
+    expect(await allowsSkillDirectory(home, path.join(home, '.claude/skills/fixture'))).toBe(true);
+    expect(await allowsSkillDirectory(home, path.join(base, 'elsewhere/fixture'))).toBe(false);
   });
 
   it('inherits the original submodule config in a superproject worktree', async () => {

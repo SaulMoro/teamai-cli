@@ -848,7 +848,7 @@ export interface ProjectAnchors {
  *    outside the checkout and its parent (e.g. a shared `gitdirs/`) would collide
  *    across unrelated repos. The porcelain first entry stays a stable, distinct
  *    identity in that case.
- *  - Both anchors are realpath-normalized so a symlinked prefix (macOS `/tmp` →
+ *  - Identity and checkout paths are realpath-normalized so a symlinked prefix (macOS `/tmp` →
  *    `/private/tmp`) does not make the same checkout look like two different ones.
  *    Case-insensitive-filesystem normalization is intentionally NOT done here; it
  *    is only needed for the P1 slug hash and belongs with that change.
@@ -871,8 +871,8 @@ export async function resolveAnchors(cwd?: string): Promise<ProjectAnchors | nul
 }
 
 async function readAnchors(cwd?: string): Promise<ProjectAnchors | null> {
-  const git = createGit(cwd);
   try {
+    const git = createGit(cwd);
     const toplevel = (await git.revparse(['--show-toplevel'])).trim();
     const entries = await readWorktreeList(cwd) ?? await readWorktreeList(cwd, true);
     const first = entries?.[0];

@@ -20,7 +20,8 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getTeamHookDispatchCommand } from './builtin-hooks.js';
-import { CODEX_TOOL_ID, getTeamaiHomeDir } from './types.js';
+import { CODEX_TOOL_ID, getTeamaiHomeDir, isSelfMode } from './types.js';
+import { checkoutForProjectAnchor, resolveAnchors } from './utils/git.js';
 import { ensureDir, readJson, readJsonObject, writeJson, writeJsonAtomic } from './utils/fs.js';
 import { log, setStderrOnly } from './utils/logger.js';
 
@@ -35,8 +36,8 @@ export interface CodexTeamHook {
 }
 
 interface CodexTeamHookIndex {
-  /** Keyed by project: the main checkout (realpath), or the checkout itself in self mode. */
-  projects: Record<string, { hooks: CodexTeamHook[] }>;
+  /** Keyed by stable project identity, or the checkout itself in self mode. */
+  projects: Record<string, { hooks: CodexTeamHook[]; checkouts?: string[] }>;
 }
 
 /** Codex's own default hook timeout, in seconds: 600, except 1 for SessionEnd. */
@@ -65,13 +66,15 @@ async function readIndex(): Promise<CodexTeamHookIndex> {
 }
 
 /** Whether `project`'s team hooks run from the dispatcher now. */
-export async function runsFromCodexDispatcher(project: string): Promise<boolean> {
-  return (await dispatchedCodexHooks(project)) !== undefined;
+export async function runsFromCodexDispatcher(project: string, checkout?: string): Promise<boolean> {
+  return (await dispatchedCodexHooks(project, checkout)) !== undefined;
 }
 
 /** The team hooks the dispatcher runs for `project`, if it runs them. */
-export async function dispatchedCodexHooks(project: string): Promise<CodexTeamHook[] | undefined> {
-  return (await readIndex()).projects[project]?.hooks;
+export async function dispatchedCodexHooks(project: string, checkout?: string): Promise<CodexTeamHook[] | undefined> {
+  const record = (await readIndex()).projects[project];
+  if (checkout && record?.checkouts && !record.checkouts.includes(checkout)) return undefined;
+  return record?.hooks;
 }
 
 /**
@@ -79,11 +82,12 @@ export async function dispatchedCodexHooks(project: string): Promise<CodexTeamHo
  * (`null`). Projects whose directory is gone are dropped on the way. False when
  * another process held the index for too long: nothing changed.
  */
-export async function setCodexDispatcherHooks(project: string, hooks: CodexTeamHook[] | null): Promise<boolean> {
+export async function setCodexDispatcherHooks(project: string, hooks: CodexTeamHook[] | null, checkout?: string): Promise<boolean> {
   const file = indexPath();
   // Nothing to change: no lock, no write (the common case, a project whose hooks stay in its file).
   const seen = (await readIndex()).projects[project];
-  if (hooks === null ? seen === undefined : JSON.stringify(seen?.hooks) === JSON.stringify(hooks)) return true;
+  if (hooks === null ? seen === undefined || (checkout && seen.checkouts && !seen.checkouts.includes(checkout))
+    : JSON.stringify(seen?.hooks) === JSON.stringify(hooks) && (!checkout || seen?.checkouts?.includes(checkout))) return true;
   const lock = `${file}.lock`;
   const { acquireLock, releaseLock } = await import('./update.js');
   const deadline = Date.now() + 3_000;
@@ -94,7 +98,15 @@ export async function setCodexDispatcherHooks(project: string, hooks: CodexTeamH
   try {
     const index = await readIndex();
     const before = JSON.stringify(index);
-    if (hooks) index.projects[project] = { hooks };
+    if (checkout) {
+      const previous = index.projects[project];
+      // Older entries described the original main checkout's shared file.
+      const roots = previous?.checkouts ?? (previous ? [await checkoutForProjectAnchor(project) ?? project] : []);
+      const checkouts = [...new Set([...roots.filter((root) => root !== checkout && fs.existsSync(root)), ...hooks ? [checkout] : []])];
+      const definitions = hooks ?? previous?.hooks;
+      if (checkouts.length && definitions) index.projects[project] = { hooks: definitions, checkouts };
+      else delete index.projects[project];
+    } else if (hooks) index.projects[project] = { hooks };
     else delete index.projects[project];
     for (const root of Object.keys(index.projects)) {
       if (!fs.existsSync(root)) delete index.projects[root];
@@ -250,6 +262,11 @@ export async function runCodexDispatcher(event: string): Promise<number> {
   const localConfig = await resolveHookConfig(payload, CODEX_TOOL_ID);
   const { codexTeamHookProject } = await import('./hooks.js');
   const project = localConfig ? await codexTeamHookProject(localConfig) : null;
+  if (project && localConfig && projects[project]?.checkouts) {
+    const anchors = await resolveAnchors(localConfig.projectRoot);
+    const checkout = isSelfMode(localConfig) ? project : anchors?.mainCheckout ?? anchors?.workspaceRoot ?? localConfig.projectRoot;
+    if (!checkout || !projects[project].checkouts!.includes(checkout)) return 0;
+  }
   const hooks = (project ? projects[project]?.hooks ?? [] : []).filter((hook) => hook.event === event && matches(hook, payload));
   if (hooks.length === 0) return 0;
 

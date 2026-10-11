@@ -962,7 +962,7 @@ async function isSharedWithOtherInstall(
   return await otherWorktreeInstalled(root, current);
 }
 async function mainCheckoutOf(projectRoot: string): Promise<{ root: string; worktreeScoped: boolean }> {
-  const anchors = await pathExists(projectRoot) ? await resolveAnchors(projectRoot) : null;
+  const anchors = await resolveAnchors(projectRoot);
   return {
     root: anchors?.mainCheckout
       ?? canonicalProjectRoot(projectRoot),
@@ -1027,6 +1027,7 @@ export async function stopCodexTeamHookDispatch(teamConfig: TeamaiConfig, localC
 /** Where a project scope's Codex team hooks go (#915); see placeCodexTeamHooks. */
 interface CodexTeamHookPlacement {
   project: string;
+  checkout: string;
   /** The resolved `sharing.gitExclude`; undefined leaves the hooks where they are. */
   gitExclude: boolean | undefined;
   /** Self mode: the committed file holds the built-ins, so it is never teamai's alone. */
@@ -1092,7 +1093,7 @@ async function placeCodexTeamHooks(
   recorded: ManagedHookRecord[],
   opts: { removeAll?: boolean; teamHookHistory?: TeamHookHistory },
 ): Promise<boolean> {
-  const current = await runsFromCodexDispatcher(placement.project);
+  const current = await runsFromCodexDispatcher(placement.project, placement.checkout);
   const dispatch = opts.removeAll ? false
     : placement.gitExclude === undefined ? current
       : placement.gitExclude && (placement.self || await holdsForeignCodexHooks(file, teamDefs, recorded, opts.teamHookHistory));
@@ -1101,7 +1102,7 @@ async function placeCodexTeamHooks(
     ...(def.matcher && def.matcher !== '*' ? { matcher: def.matcher } : {}),
     ...(def.timeout !== undefined ? { timeout: def.timeout } : {}),
   }));
-  if (!await setCodexDispatcherHooks(placement.project, dispatch && hooks.length > 0 ? hooks : null)) {
+  if (!await setCodexDispatcherHooks(placement.project, dispatch && hooks.length > 0 ? hooks : null, placement.checkout)) {
     log.warn(`Could not update ${path.join('~', '.teamai', 'codex-team-hooks.json')}: another teamai process held it. `
       + 'The Codex team hooks stay where they are; the next pull places them.');
     return current;
@@ -1113,7 +1114,7 @@ async function placeCodexTeamHooks(
     await reconcileCodexDispatchers(placement.homeFile);
     return true;
   } catch (e) {
-    await setCodexDispatcherHooks(placement.project, null);
+    await setCodexDispatcherHooks(placement.project, null, placement.checkout);
     log.warn(`Could not add the Codex team-hook dispatchers to ${placement.homeFile ?? '~/.codex/hooks.json'}: ${(e as Error).message}. `
       + `The team hooks stay in ${file}; fix the cause above, then run \`teamai pull\`.`);
     return false;
@@ -3154,7 +3155,7 @@ function hookFilterAgents(
 }
 
 /** Retire only proven team entries from the old Git-directory delivery target. */
-async function cleanGitDirectoryHooks(localConfig: LocalConfig): Promise<void> {
+async function cleanGitDirectoryHooks(localConfig: LocalConfig, toolPaths: TeamaiConfig['toolPaths']): Promise<void> {
   if (localConfig.scope !== 'project' || !localConfig.projectRoot || isSelfMode(localConfig)) return;
   const anchors = await resolveAnchors(localConfig.projectRoot);
   const common = await gitCommonDir(localConfig.projectRoot);
@@ -3173,9 +3174,17 @@ async function cleanGitDirectoryHooks(localConfig: LocalConfig): Promise<void> {
     await saveStateForScope(state, localConfig);
   }
   const manifestPath = path.join(getDataHome(localConfig), 'managed-main-checkout-hooks.json');
-  for (const [tool, relative] of [['claude', '.claude/settings.local.json'], ['codex', '.codex/hooks.json']]) {
+  for (const tool of MAIN_CHECKOUT_TEAM_HOOK_TOOLS) {
+    const settings = toolPaths[tool]?.settings;
+    if (!settings) continue;
+    const relative = tool === 'claude' ? path.join(path.dirname(settings), 'settings.local.json') : settings;
     const file = path.join(common, relative);
     if (!await pathExists(file)) continue;
+    const contents = await readJsonObject(file);
+    if (contents.kind === 'invalid') {
+      log.warn(`Kept ${file}: ${contents.error}. Fix the JSON, then run teamai pull to clean the old Git-directory hooks.`);
+      continue;
+    }
     await reconcileHooks(file, tool, [], {
       manifestPath, legacyManifestPath: legacyManagedHooksPath(common), removeAll: true, teamOnly: true,
       teamHookHistory: teamHookHistory(localConfig),
@@ -3240,10 +3249,11 @@ export async function reconcileTeamHooksForConfig(
   }
   // Before any reconcile reads this checkout's manifest (#993).
   await migrateLegacyManagedHooks(localConfig);
-  await cleanGitDirectoryHooks(localConfig);
+  await cleanGitDirectoryHooks(localConfig, teamConfig.toolPaths);
   const history = teamHookHistory(localConfig);
   const codexProject = await codexTeamHookProject(localConfig);
   const codexHome = codexHomeHooksFile(teamConfig, localConfig);
+  const mainCheckout = await resolveMainCheckoutHooks(localConfig, teamConfig.toolPaths);
   const reconciledMainTools = await reconcileHooksToAllTools(hookToolPaths, baseDir, teamDefs, manifestPath, {
     removeAll: opts.removeAll,
     builtinOverride: builtin,
@@ -3254,13 +3264,13 @@ export async function reconcileTeamHooksForConfig(
     installedBaseDir: localConfig.scope === 'project' ? (localConfig.projectRoot ?? baseDir) : undefined,
     scope: localConfig.scope,
     builtinsOnly,
-    mainCheckout: await resolveMainCheckoutHooks(localConfig, teamConfig.toolPaths),
+    mainCheckout,
     teamHookHistory: history,
     ...(isSelfMode(localConfig) && localConfig.scope === 'project' && localConfig.projectRoot
       ? { selfLocalTeamHooks: { relocate: isGitExcludeEnabled(localConfig, teamConfig) } }
       : {}),
     ...(codexProject
-      ? { codexTeamHooks: { project: codexProject, gitExclude: resolveGitExclude(localConfig, teamConfig), self: isSelfMode(localConfig), homeFile: codexHome } }
+      ? { codexTeamHooks: { project: codexProject, checkout: mainCheckout?.root ?? canonicalProjectRoot(localConfig.projectRoot!), gitExclude: resolveGitExclude(localConfig, teamConfig), self: isSelfMode(localConfig), homeFile: codexHome } }
       : {}),
   });
   // The dispatcher entries follow every project's choice, this one's included.

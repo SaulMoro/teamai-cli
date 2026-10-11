@@ -64,15 +64,21 @@ Status and skill inspection identify nested source installations by their record
 
 Do not run source installation/removal and push concurrently. The source mutex serializes source mutations, but push does not retain it through its entire staging/publication transaction; full cross-command snapshot isolation remains a limitation.
 
-## The two anchors (the core model)
+## Project identity and checkout roots
 
-A git worktree has two distinct "roots", and teamai needs both:
+A Git repository has one identity and checkout paths with separate purposes:
 
 ```
-projectAnchor  = first entry of `git worktree list --porcelain` (the main worktree)
-                 → the MAIN checkout, SHARED by the repo and all its worktrees.
+projectAnchor  = first entry of `git worktree list --porcelain`
+                 → a checkout or Git directory, SHARED by the repo and its worktrees.
                  → the stable per-project identity; P1 keys machine data under
                    ~/.teamai/projects/<slug(projectAnchor)>/ by it.
+
+mainCheckout   = first entry when it is a checkout, else the common dir's
+                 core.worktree, else show-toplevel for a main separate-git-dir
+                 checkout, else null
+                 → where agents read shared project hooks and Codex trust applies.
+                 → null means every checkout keeps its own hook files.
 
 workspaceRoot  = `git rev-parse --show-toplevel`
                  → the CURRENT checkout, DISTINCT per worktree.
@@ -80,7 +86,10 @@ workspaceRoot  = `git rev-parse --show-toplevel`
                    tool config, CLAUDE.md) must be written.
 ```
 
-They are equal for a plain (non-worktree) repository.
+All three are equal for a plain repository. An initialized submodule clone in
+a superproject worktree inherits `<common>/modules/<name>` as its identity when
+that original Git directory exists. Its checkout paths still refer to its own
+clone, so shared configuration does not share delivery destinations (#1041).
 
 **Why resources must go to `workspaceRoot`, not `projectAnchor`:** every AI tool
 (Claude, Codex, CodeBuddy, OpenCode) discovers project resources by scanning up
@@ -389,7 +398,7 @@ is a P1 concern. This keeps P0 independently reviewable (issue R7).
    keep their signatures and all benefit.
 
 2. **Anchor primitive** — `src/utils/git.ts` `resolveAnchors(cwd?)`.
-   Returns `{ workspaceRoot, projectAnchor }`, or `null` outside a git repo (callers
+   Returns `{ workspaceRoot, projectAnchor, mainCheckout }`, or `null` outside a git repo (callers
    fall back to cwd-based behavior).
 
 3. **Subdirectory / worktree-aware discovery** — `src/config.ts`
@@ -623,7 +632,8 @@ every checkout, so that is where they live now:
 ├── learnings-wt/                              getWorktreeDir → <dataHome>/<dirname>
 ├── reports-wt/                                (the side-branch locks sit beside them)
 ├── pending-learnings/                         pendingLearningsDir → <dataHome>/pending-learnings
-├── managed-main-checkout-hooks.json           team hooks teamai wrote ungated into the main checkout's Claude Code / Codex
+├── managed-main-checkout-hooks.json           legacy ownership, adopted into the original main checkout's workspace index (#1041)
+│                                              team hooks teamai wrote ungated into the main checkout's Claude Code / Codex
 │                                              settings, shared by every checkout (#955; the built-in hooks stay in HOME)
 │                                              project toolPaths choose the files; Claude uses settings.local.json beside its settings file
 │                                              Codex records event, matcher-group position and complete rendered entry; unique definitions recover moved entries
@@ -650,7 +660,10 @@ every checkout, so that is where they live now:
     │                                          doctor names a tracked one. Other records stay there for the pre-#370 import and legacy sweep.
     │                                          Self mode with sharing.gitExclude on: Claude's records describe .claude/settings.local.json, the
     │                                          tracked settings.json keeps only the built-ins; off, they describe settings.json again (#915)
-    ├── managed-main-checkout-hooks.json       bare repositories only: this workspace owns its Claude / Codex team-hook files and trust target, without sibling registrations
+    ├── managed-main-checkout-hooks.json        Claude / Codex team hooks indexed by their actual target checkout (#1041),
+    │                                          with sibling registrations when Git supplies a main checkout. Inherited submodule
+    │                                          clones have separate target indexes; a null mainCheckout keeps ownership per workspace.
+    │                                          The original checkout adopts the legacy flat index; inherited clones never adopt it.
     ├── managed-mcp.json                       managedMcpManifestPath, one per checkout; Copilot placement is true for bare, false for keyed, absent when unproven
     ├── managed-mcp-files.json                 resolvedMcpFilesPath: project MCP configs teamai may have written a resolved ${VAR} to, and whether
     │                                          the paths earlier teamai.yaml revisions mapped were read; one of those git tracks is marked tracked (#882);
@@ -1157,18 +1170,20 @@ A session written before that field existed is attributed by its first
 `cwd`: to the scope `resolveConfigForDir` resolves that directory to now, the
 dispatcher's rule, so a nested clone under a project is not the project's; no
 `cwd`, or one removed since, is no scope's. Inside git an event also carries `projectAnchor`, the repo's
-main checkout, which all of its worktrees share (#809); a Copilot event, with no
+stable identity, which all of its worktrees share (#809); a Copilot event, with no
 `cwd`, carries none. `stats --by-repo`,
 `session save` and the dashboard's Repository filter key a session by the last
 anchor it recorded, else by its `cwd`, and the dashboard gives an event to the
-project rooted at its anchor, so a worktree counts as its repo, also after it
-is removed. 
+project identified by its anchor, so a worktree counts as its repo, also after it
+is removed. Checkout recovery uses `mainCheckout`, `core.worktree`, recorded
+live checkout roots and Git's worktree list; it never exposes a Git directory as
+a dashboard workspace or local-agent checkout (#1041).
 
 A hook whose `cwd` no longer exists (a session that outlives its
 worktree) would resolve to the user scope, or be dropped without one, so it
 keeps the scope its session last recorded instead (#810): the config at that
-event's `projectAnchor` (for a bare repo, at one of its worktrees that still
-exists), used only while the key of its `getDataHome()` is still the recorded
+event's `projectAnchor`, resolved through a live checkout when the anchor is a
+Git directory, used only while the key of its `getDataHome()` is still the recorded
 `dataHomeKey`. Its events and skill uses stay with the project, and the share
 reminder's gate reads the project too. A project config there that
 cannot be read records nothing, and with nothing recorded to match the hook

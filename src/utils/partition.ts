@@ -11,7 +11,7 @@ import { completeWorktreeList, gitCommonDir, isLiveCheckout, isLiveProjectChecko
  * Per-project data partition identity (issue #374 P1).
  *
  * teamai keys a project's machine-local data by the SHARED `projectAnchor` (the
- * main checkout, so every linked worktree resolves to the same partition), NOT
+ * repository identity, so every linked worktree resolves to the same partition), NOT
  * the per-worktree workspace root. The partition lives at
  * `~/.teamai/projects/<slug>/`, entirely outside the business workspace.
  *
@@ -363,8 +363,8 @@ export async function writeWorkspaceRoot(dataHome: string, root: string): Promis
  * Remove `<dataHome>/workspaces/<id>/` for every checkout that no longer
  * exists: its search index, managed-MCP record and resource cache belong to a
  * removed worktree (#808). A directory goes when its `root` file names a
- * checkout that is no longer one of this repository's (isLiveCheckout, from
- * `currentRoot`'s common directory). One without a `root` file (an older
+ * checkout that no longer shares this Git common directory or TeamAI identity.
+ * The identity check retains inherited submodule clones. One without a `root` file (an older
  * teamai's, or one contribute, recall, viz, the MCP writers or the local agent
  * created before its checkout's first full pull) goes only when
  * completeWorktreeList proves its checkout gone: no listed checkout has its

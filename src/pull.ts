@@ -26,7 +26,7 @@ import {
   resolveDesiredDocs, resolveDocsDestination,
 } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
-import { CODEX_TOOL, SHARED_AGENT_SKILLS_PATH, skillOrigin, skillsDirForTool } from './resources/skills.js';
+import { CODEX_TOOL, mayDeleteSkillCopy, SHARED_AGENT_SKILLS_PATH, skillOrigin, skillsDirForTool } from './resources/skills.js';
 import { flatStemsOfRemoved, ruleFileExtensionForTool, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import {
@@ -348,6 +348,7 @@ export async function cleanupInactiveNamespaceSkills(
         continue;
       }
       if (await keepsTrackedCopy(localSkillDir)) continue;
+      if (!await mayDeleteSkillCopy(localConfig, localSkillDir)) continue;
 
       await remove(localSkillDir);
       removed.add(skillName);
@@ -386,6 +387,7 @@ async function sweepSharedSkillCopies(
       continue;
     }
     if (await keepsTrackedCopy(dir)) continue;
+    if (!await mayDeleteSkillCopy(localConfig, dir)) continue;
     await remove(dir);
     if (ledger) forgetDelivered(ledger.hashes, dir);
     removed.push(name);
@@ -639,6 +641,7 @@ async function cleanupTombstonedResources(
             continue;
           }
           if (await keepsTrackedCopy(localPath)) continue;
+          if (type === 'skills' && !await mayDeleteSkillCopy(localConfig, localPath)) continue;
           await remove(localPath);
           forgetDelivered(ledger.hashes, localPath);
           log.debug(`[${scopeLabel}] Cleaned up tombstoned ${type} ${name} from ${dir}`);
@@ -1899,6 +1902,7 @@ async function pullForScope(
           continue;
         }
         if (await keepsTrackedCopy(skillDir)) continue;
+        if (!await mayDeleteSkillCopy(localConfig, skillDir)) continue;
         await remove(skillDir);
         if (excludedSkills.has(dir)) {
           log.debug(`Removed excluded skill ${dir} from ${tool}`);

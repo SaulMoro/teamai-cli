@@ -67,7 +67,7 @@ function fixture(name: string, oldGit = false) {
   git(['submodule', 'add', '-q', source, 'service'], parent);
   git(['commit', '-qam', 'service'], parent);
   const checkout = path.join(parent, 'service');
-  return { base, home, parent, checkout, git, cli, url };
+  return { base, home, parent, checkout, git, cli, url, env, team, remote };
 }
 
 beforeAll(() => {
@@ -82,6 +82,30 @@ afterAll(async () => {
 });
 
 describe('multi-repo checkout delivery', () => {
+  it('keeps dispatcher ownership separate for submodule clones sharing an identity', () => {
+    const m = fixture('clone-dispatchers');
+    write(path.join(m.checkout, '.codex/hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo member' }] }] } }));
+    m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'codex', '--force'], m.checkout);
+    const homeFile = path.join(m.home, '.codex/hooks.json');
+    expect(read(homeFile)).toContain('--team-hooks');
+    const parentWorktree = path.join(m.base, 'parent-dispatchers');
+    m.git(['worktree', 'add', '-q', '--detach', parentWorktree], m.parent);
+    m.git(['submodule', 'update', '--init'], parentWorktree);
+    const child = path.join(parentWorktree, 'service');
+    m.cli(['pull', '--force'], child);
+    expect(read(homeFile)).toContain('--team-hooks');
+    expect(read(path.join(child, '.codex/hooks.json'))).toContain('echo fixture');
+    const dispatch = (cwd: string) => spawnSync(process.execPath, [CLI, 'hook-dispatch', 'Stop', '--tool', 'codex', '--team-hooks'], {
+      cwd, env: m.env, encoding: 'utf8', input: JSON.stringify({ cwd, hook_event_name: 'Stop' }),
+    });
+    expect(dispatch(m.checkout).stdout).toContain('fixture');
+    expect(dispatch(child).stdout).toBe('');
+    m.cli(['pull', '--force'], m.checkout);
+    expect(dispatch(child).stdout).toBe('');
+    m.cli(['uninstall', '--force'], child);
+    expect(read(homeFile)).not.toContain('--team-hooks');
+  });
+
   it('delivers, inherits, cleans up and uninstalls submodules through the real CLI', async () => {
     const m = fixture('submodules');
     fs.mkdirSync(path.join(m.checkout, '.claude'));
@@ -192,5 +216,22 @@ describe('multi-repo checkout delivery', () => {
     fs.symlinkSync(external, path.join(m.checkout, '.claude/skills'));
     m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'claude', '--force'], m.checkout);
     expect(fs.readdirSync(external)).toEqual([]);
+  });
+
+  it.each(['remove', 'tombstone', 'uninstall'])('keeps delivered skills when the root is redirected outside the checkout during %s', (action) => {
+    const m = fixture(`redirected-${action}`);
+    m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'claude', '--force'], m.checkout);
+    const root = path.join(m.checkout, '.claude/skills');
+    const external = path.join(m.base, 'external-skills');
+    fs.renameSync(root, external);
+    fs.symlinkSync(external, root);
+    const before = read(path.join(external, 'fixture/SKILL.md'));
+    if (action === 'tombstone') {
+      m.cli(['remove', 'skills', 'fixture', '--force'], m.checkout);
+      m.cli(['pull', '--force'], m.checkout);
+    } else if (action === 'remove') m.cli(['remove', 'skills', 'fixture', '--force'], m.checkout);
+    else m.cli(['uninstall', '--force'], m.checkout);
+    expect(read(path.join(external, 'fixture/SKILL.md'))).toBe(before);
+    expect(read(path.join(external, 'teamai/SKILL.md'))).toContain('name: teamai');
   });
 });

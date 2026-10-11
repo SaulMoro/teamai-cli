@@ -1279,7 +1279,7 @@ async function promptForProjectBinding(
  * Persist a ClawPro binding decision for the current checkout.
  *
  * Binding is a per-project decision, so it is recorded on the `projectAnchor`
- * (the main checkout, shared by a repo and all of its git worktrees — issue
+ * (the repository identity, shared by a repo and all of its git worktrees — issue
  * #374 / #387). It is ALSO stamped on the current `workspaceRoot` so this
  * checkout is reported with the project_id immediately and its resources land
  * in the current worktree (#387's workspaceRoot model — every AI tool discovers
@@ -1315,7 +1315,7 @@ async function persistWorkspaceBinding(
 }
 
 /**
- * If the current checkout is an unbound git worktree whose main checkout
+ * If the current checkout is unbound and its project identity
  * (`projectAnchor`) is already bound or skipped, copy that decision onto the
  * current `workspaceRoot` and report success — so a repo is never re-prompted
  * for binding once per new worktree (a `--skip` on the main checkout silences

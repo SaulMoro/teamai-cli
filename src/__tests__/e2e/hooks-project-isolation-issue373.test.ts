@@ -5,6 +5,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { CLAUDE_HOOK_OTHER_HOST_SKIP } from '../../hooks.js';
+import { managedMcpWorkspaceId } from '../../types.js';
 import { projectSlug } from '../../utils/partition.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -401,7 +402,7 @@ describe('issue #373 project hook isolation (real CLI)', () => {
     const injected = await runCLI(projectA, home);
     expect(injected.code, injected.output).toBe(0);
     if (legacyTracking) {
-      const manifestFile = path.join(partition, 'managed-main-checkout-hooks.json');
+      const manifestFile = path.join(partition, 'workspaces', managedMcpWorkspaceId(fs.realpathSync(projectA)), 'managed-main-checkout-hooks.json');
       const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
       delete manifest.checkouts;
       fs.writeFileSync(manifestFile, JSON.stringify(manifest));
@@ -434,7 +435,7 @@ describe('issue #373 project hook isolation (real CLI)', () => {
     expect(readSettings(mainFiles(projectA)[1]).hooks.Stop ?? []).toHaveLength(targeted ? 1 : 0);
     expect(fs.existsSync(partition)).toBe(targeted);
     if (targeted) {
-      const manifest = JSON.parse(fs.readFileSync(path.join(partition, 'managed-main-checkout-hooks.json'), 'utf8'));
+      const manifest = JSON.parse(fs.readFileSync(path.join(partition, 'workspaces', managedMcpWorkspaceId(fs.realpathSync(projectA)), 'managed-main-checkout-hooks.json'), 'utf8'));
       expect(manifest.checkouts.claude ?? []).toEqual([]);
       expect(manifest.checkouts.codex).toHaveLength(2);
       expect(manifest.codex).toHaveLength(1);

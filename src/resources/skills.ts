@@ -29,8 +29,11 @@ const SKILL_MD = 'SKILL.md';
 export const CODEX_TOOL = 'codex';
 export const SHARED_AGENT_SKILLS_PATH = '.agents/skills';
 
-/** Root links may share skills within one checkout; a skill's own link remains the member's. */
-export async function allowsSkillDirectory(baseDir: string, target: string): Promise<boolean> {
+/**
+ * Root links may share skills within one checkout; a skill's own link remains the member's.
+ * Delivery and every team-skill delete apply it, so a root redirected outside the checkout is neither written nor emptied.
+ */
+export async function allowsSkillDirectory(baseDir: string, target: string, keepSkillLink = false): Promise<boolean> {
   const relative = path.relative(baseDir, target);
   if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
   let walked = baseDir;
@@ -39,16 +42,25 @@ export async function allowsSkillDirectory(baseDir: string, target: string): Pro
     const entry = await lstat(walked).catch((e: NodeJS.ErrnoException) => e.code === 'ENOENT' ? null : Promise.reject(e));
     if (!entry) break;
     if (!entry.isSymbolicLink()) continue;
-    if (walked === target) return false;
+    // Team-skill ownership checks name and preserve a leaf link without following it.
+    if (walked === target) return keepSkillLink;
     const resolved = await realpath(walked).catch(() => null);
     if (!resolved) return false;
     const base = await realpath(baseDir);
     const rel = path.relative(base, resolved);
     if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return false;
     const [from, to] = await Promise.all([resolveAnchors(base), resolveAnchors(resolved)]);
-    if (!from || from.workspaceRoot !== to?.workspaceRoot) return false;
+    // Outside Git (a user-scope home), staying under the base is enough.
+    if (from && from.workspaceRoot !== to?.workspaceRoot) return false;
   }
   return true;
+}
+
+/** Whether a team-skill delete may reach `skillDir` by the delivery rule; warns and keeps it when not. */
+export async function mayDeleteSkillCopy(localConfig: LocalConfig, skillDir: string): Promise<boolean> {
+  if (await allowsSkillDirectory(skillsGuardBase(resolveBaseDir(localConfig), path.dirname(skillDir)), skillDir, true)) return true;
+  warnOnce(`Kept ${skillDir}: its skills directory is a link that leaves this checkout, so TeamAI does not delete through it.`);
+  return false;
 }
 
 /**
@@ -837,7 +849,7 @@ export class SkillsHandler extends ResourceHandler {
       const skillsDir = await skillsDirForTool(tool, toolPath.skills, localConfig);
       if (!skillsDir) continue;
       const guard = skillsGuardBase(resolveBaseDir(localConfig), skillsDir);
-      if (!await allowsSkillDirectory(guard, path.join(skillsDir, item.name))) {
+      if (!await allowsSkillDirectory(guard, path.join(skillsDir, item.name), true)) {
         log.warn(`Skipped ${item.name} (${tool}): the skill path leaves this checkout or is a member-owned link. Point the skill directory inside the same repository.`);
         continue;
       }
@@ -937,6 +949,7 @@ export class SkillsHandler extends ResourceHandler {
       }
       for (const skillDir of skillDirs) {
         if (!await pathExists(skillDir)) continue;
+        if (!await mayDeleteSkillCopy(localConfig, skillDir)) continue;
         // A link is the member's even at a built-in's name, so it is judged before the name.
         // A built-in's name loses the team's files and those a release packaged there, as on uninstall:
         // anything the member added stays.
