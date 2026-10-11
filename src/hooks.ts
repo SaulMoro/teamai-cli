@@ -3,7 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { realpathSync } from 'node:fs';
-import { lstat, rm, stat } from 'node:fs/promises';
+import { lstat, readdir, rm, stat } from 'node:fs/promises';
 import { readJson, readJsonObject, writeJson, readFileSafe, writeFile, expandHome, ensureDir, pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import {
@@ -42,7 +42,7 @@ import { entryLayout } from './namespaced-entries.js';
 import { historicalContents } from './utils/team-history.js';
 import { getUserHome } from './utils/home.js';
 import { CLAUDE_HOOK_OTHER_HOST_SKIP } from './claude-hook-host.js';
-import { listWorktrees, resolveAnchors } from './utils/git.js';
+import { gitCommonDir, listWorktrees, resolveAnchors } from './utils/git.js';
 import { findOnPath } from './utils/lookpath.js';
 import type { CodexHookTrustReport, CodexTrust } from './codex-trust.js';
 import { dispatchedCodexHooks, isCodexTeamHookDispatcher, reconcileCodexDispatchers, runsFromCodexDispatcher, setCodexDispatcherHooks } from './codex-team-hooks.js';
@@ -869,16 +869,27 @@ export async function resolveMainCheckoutHooks(
 }
 
 /**
+ * Every checkout of `root`'s repository but `root`. Git registers each linked
+ * worktree under `<common dir>/worktrees`: with none there, `root` is the only
+ * checkout, and no `git worktree list` is spawned.
+ */
+async function worktreesBesideRoot(root: string): Promise<string[]> {
+  const commonDir = await gitCommonDir(root);
+  const linked = commonDir && await readdir(path.join(commonDir, 'worktrees')).catch((e: NodeJS.ErrnoException) => e.code === 'ENOENT' ? [] : null);
+  if (linked && linked.length === 0) return [];
+  const canonicalRoot = canonicalProjectRoot(root);
+  return (await listWorktrees(root)).filter((worktree) => canonicalProjectRoot(worktree) !== canonicalRoot);
+}
+
+/**
  * Whether a linked worktree of `root` other than `current` has an un-migrated
  * install of its own (a migrated one would have made the main checkout's
  * config resolvable).
  */
 async function otherWorktreeInstalled(root: string, current: string): Promise<boolean> {
   const canonicalCurrent = canonicalProjectRoot(current);
-  const canonicalRoot = canonicalProjectRoot(root);
-  for (const worktree of await listWorktrees(root)) {
-    const canonical = canonicalProjectRoot(worktree);
-    if (canonical === canonicalRoot || canonical === canonicalCurrent) continue;
+  for (const worktree of await worktreesBesideRoot(root)) {
+    if (canonicalProjectRoot(worktree) === canonicalCurrent) continue;
     if (await pathExists(path.join(getTeamaiHome('project', worktree), 'config.yaml'))) return true;
   }
   return false;
@@ -886,10 +897,8 @@ async function otherWorktreeInstalled(root: string, current: string): Promise<bo
 
 async function otherWorktreeHasOwnManifest(root: string, current: string, tool: string): Promise<boolean> {
   const canonicalCurrent = canonicalProjectRoot(current);
-  const canonicalRoot = canonicalProjectRoot(root);
-  for (const worktree of await listWorktrees(root)) {
-    const canonical = canonicalProjectRoot(worktree);
-    if (canonical === canonicalRoot || canonical === canonicalCurrent) continue;
+  for (const worktree of await worktreesBesideRoot(root)) {
+    if (canonicalProjectRoot(worktree) === canonicalCurrent) continue;
     const manifest = await readManifest(path.join(getTeamaiHome('project', worktree), 'managed-main-checkout-hooks.json'));
     if (manifest[tool]?.length) return true;
   }
@@ -904,9 +913,8 @@ async function discoverInstalledCheckouts(root: string, tool: string): Promise<s
   const sharedPartition = mainConfig
     && path.resolve(getDataHome(mainConfig)) !== path.resolve(getTeamaiHome('project', canonicalRoot));
   if (mainConfig && !isAgentExcluded(mainConfig, tool)) result.push(canonicalRoot);
-  for (const worktree of await listWorktrees(root)) {
+  for (const worktree of await worktreesBesideRoot(root)) {
     const canonical = canonicalProjectRoot(worktree);
-    if (canonical === canonicalRoot) continue;
     // A partition config governs every linked worktree, without local configs.
     if (sharedPartition) {
       if (!isAgentExcluded(mainConfig, tool)) result.push(canonical);
