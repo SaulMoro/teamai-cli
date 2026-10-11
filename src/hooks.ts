@@ -1004,12 +1004,13 @@ function codexHomeHooksFile(teamConfig: TeamaiConfig, localConfig: LocalConfig):
  */
 export async function stopCodexTeamHookDispatch(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string | null> {
   const project = await codexTeamHookProject(localConfig);
+  const checkout = localConfig.projectRoot ? canonicalProjectRoot(localConfig.projectRoot) : undefined;
   const homeFile = codexHomeHooksFile(teamConfig, localConfig);
-  const hooks = project ? await dispatchedCodexHooks(project) : undefined;
+  const hooks = project && checkout ? await dispatchedCodexHooks(project, checkout) : undefined;
   if (!project || !hooks) return null;
   const checkouts = await codexDispatcherCheckouts(project);
   const index = path.join('~', '.teamai', 'codex-team-hooks.json');
-  if (!await setCodexDispatcherHooks(project, null)) {
+  if (!await setCodexDispatcherHooks(project, null, checkout)) {
     log.warn(`Could not update ${index}: another teamai process held it, so the Codex team hooks of ${project} still run.`);
     return index;
   }
@@ -1019,7 +1020,7 @@ export async function stopCodexTeamHookDispatch(teamConfig: TeamaiConfig, localC
     return null;
   } catch (e) {
     // The entry comes back, so the retry still finds the dispatcher entries to remove.
-    if (checkouts) for (const checkout of checkouts) await setCodexDispatcherHooks(project, hooks, checkout);
+    if (checkouts && checkout) await setCodexDispatcherHooks(project, hooks, checkout);
     else await setCodexDispatcherHooks(project, hooks);
     log.warn(`Could not remove the Codex team-hook dispatchers from ${homeFile}: ${(e as Error).message}. The Codex team hooks of ${project} still run.`);
     return homeFile;

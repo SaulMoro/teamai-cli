@@ -82,7 +82,7 @@ afterAll(async () => {
 });
 
 describe('multi-repo checkout delivery', () => {
-  it('keeps dispatcher ownership separate for submodule clones sharing an identity', () => {
+  it('keeps the sibling Codex team hook dispatching when uninstalling a checkout sharing its identity', () => {
     const m = fixture('clone-dispatchers');
     write(path.join(m.checkout, '.codex/hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo member' }] }] } }));
     m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'codex', '--force'], m.checkout);
@@ -92,18 +92,19 @@ describe('multi-repo checkout delivery', () => {
     m.git(['worktree', 'add', '-q', '--detach', parentWorktree], m.parent);
     m.git(['submodule', 'update', '--init'], parentWorktree);
     const child = path.join(parentWorktree, 'service');
+    write(path.join(child, '.codex/hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo member' }] }] } }));
     m.cli(['pull', '--force'], child);
     expect(read(homeFile)).toContain('--team-hooks');
-    expect(read(path.join(child, '.codex/hooks.json'))).toContain('echo fixture');
+    expect(read(path.join(child, '.codex/hooks.json'))).toContain('echo member');
     const dispatch = (cwd: string) => spawnSync(process.execPath, [CLI, 'hook-dispatch', 'Stop', '--tool', 'codex', '--team-hooks'], {
       cwd, env: m.env, encoding: 'utf8', input: JSON.stringify({ cwd, hook_event_name: 'Stop' }),
     });
     expect(dispatch(m.checkout).stdout).toContain('fixture');
+    expect(dispatch(child).stdout).toContain('fixture');
+    m.cli(['uninstall', '--agent', 'codex', '--force'], child);
+    expect(read(homeFile)).toContain('--team-hooks');
     expect(dispatch(child).stdout).toBe('');
-    m.cli(['pull', '--force'], m.checkout);
-    expect(dispatch(child).stdout).toBe('');
-    m.cli(['uninstall', '--force'], child);
-    expect(read(homeFile)).not.toContain('--team-hooks');
+    expect(dispatch(m.checkout).stdout).toContain('fixture');
   });
 
   it('delivers skills on the first pull of a submodule clone in a superproject worktree', () => {
