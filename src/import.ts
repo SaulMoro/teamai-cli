@@ -15,7 +15,6 @@ import { indexableLearningsRoots } from './utils/learnings-roots.js';
 import { pendingLearningsDir, queueWriteRefusal, savePendingLearning } from './utils/pending-learnings.js';
 import type { GlobalOptions } from './types.js';
 import { assertNotReadOnly } from './read-only.js';
-import { Listr, PRESET_TIMER } from 'listr2';
 import { log, setSilent } from './utils/logger.js';
 import { autoPushTeamRepo } from './utils/git.js';
 
@@ -129,6 +128,8 @@ async function reconcileAndDeepEnrich(params: {
  * @param opts - Merged global and subcommand options object
  */
 export async function importCmd(opts: ImportOptions): Promise<void> {
+  // Loaded here, not at startup: only this command shows a task list.
+  const { Listr, PRESET_TIMER } = await import('listr2');
   try {
     if (opts.fromOrg) {
       // 分支：--from-org <org>，组织级一键初始化

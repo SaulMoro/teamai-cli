@@ -1,7 +1,9 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: ['src/index.ts'],
+  // `index` is the executable: it turns on Node's compile cache, then loads
+  // `cli`, the CLI itself, which the cache can only cover as a separate file.
+  entry: { index: 'src/bin.ts', cli: 'src/index.ts' },
   format: ['esm'],
   target: 'node20',
   outDir: 'dist',
