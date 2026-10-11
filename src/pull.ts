@@ -1939,6 +1939,7 @@ async function pullForScope(
               continue;
             }
             if (await keepsTrackedCopy(nestedSkillDir)) continue;
+            if (!await mayDeleteSkillCopy(localConfig, nestedSkillDir)) continue;
             await remove(nestedSkillDir);
             forgetDelivered(ledger.hashes, nestedSkillDir);
             log.debug(`Removed excluded skill ${namespace}/${skillName} from ${tool}`);

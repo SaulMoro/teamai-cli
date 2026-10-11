@@ -33,7 +33,7 @@ export const SHARED_AGENT_SKILLS_PATH = '.agents/skills';
  * Root links may share skills within one checkout; a skill's own link remains the member's.
  * Delivery and every team-skill delete apply it, so a root redirected outside the checkout is neither written nor emptied.
  */
-export async function allowsSkillDirectory(baseDir: string, target: string, keepSkillLink = false): Promise<boolean> {
+export async function allowsSkillDirectory(baseDir: string, target: string, { keepSkillLink = false } = {}): Promise<boolean> {
   const relative = path.relative(baseDir, target);
   if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
   let walked = baseDir;
@@ -58,9 +58,13 @@ export async function allowsSkillDirectory(baseDir: string, target: string, keep
 
 /** Whether a team-skill delete may reach `skillDir` by the delivery rule; warns and keeps it when not. */
 export async function mayDeleteSkillCopy(localConfig: LocalConfig, skillDir: string): Promise<boolean> {
-  if (await allowsSkillDirectory(skillsGuardBase(resolveBaseDir(localConfig), path.dirname(skillDir)), skillDir, true)) return true;
-  warnOnce(`Kept ${skillDir}: its skills directory is a link that leaves this checkout, so TeamAI does not delete through it.`);
+  if (await allowsSkillDirectory(skillsGuardBase(resolveBaseDir(localConfig), path.dirname(skillDir)), skillDir, { keepSkillLink: true })) return true;
+  warnOnce(describeOutsideSkillLink(skillDir));
   return false;
+}
+
+export function describeOutsideSkillLink(skillDir: string): string {
+  return `Kept ${skillDir}: its skills directory is a link that leaves this checkout, so TeamAI does not delete through it.`;
 }
 
 /**
@@ -849,7 +853,7 @@ export class SkillsHandler extends ResourceHandler {
       const skillsDir = await skillsDirForTool(tool, toolPath.skills, localConfig);
       if (!skillsDir) continue;
       const guard = skillsGuardBase(resolveBaseDir(localConfig), skillsDir);
-      if (!await allowsSkillDirectory(guard, path.join(skillsDir, item.name), true)) {
+      if (!await allowsSkillDirectory(guard, path.join(skillsDir, item.name), { keepSkillLink: true })) {
         log.warn(`Skipped ${item.name} (${tool}): the skill path leaves this checkout or is a member-owned link. Point the skill directory inside the same repository.`);
         continue;
       }

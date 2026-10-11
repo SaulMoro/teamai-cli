@@ -45,7 +45,7 @@ import { CLAUDE_HOOK_OTHER_HOST_SKIP } from './claude-hook-host.js';
 import { gitCommonDir, listWorktrees, resolveAnchors } from './utils/git.js';
 import { findOnPath } from './utils/lookpath.js';
 import type { CodexHookTrustReport, CodexTrust } from './codex-trust.js';
-import { dispatchedCodexHooks, isCodexTeamHookDispatcher, reconcileCodexDispatchers, runsFromCodexDispatcher, setCodexDispatcherHooks } from './codex-team-hooks.js';
+import { codexDispatcherCheckouts, dispatchedCodexHooks, isCodexTeamHookDispatcher, reconcileCodexDispatchers, runsFromCodexDispatcher, setCodexDispatcherHooks } from './codex-team-hooks.js';
 import type { CodexTeamHook } from './codex-team-hooks.js';
 
 export { CLAUDE_HOOK_OTHER_HOST_SKIP };
@@ -1007,6 +1007,7 @@ export async function stopCodexTeamHookDispatch(teamConfig: TeamaiConfig, localC
   const homeFile = codexHomeHooksFile(teamConfig, localConfig);
   const hooks = project ? await dispatchedCodexHooks(project) : undefined;
   if (!project || !hooks) return null;
+  const checkouts = await codexDispatcherCheckouts(project);
   const index = path.join('~', '.teamai', 'codex-team-hooks.json');
   if (!await setCodexDispatcherHooks(project, null)) {
     log.warn(`Could not update ${index}: another teamai process held it, so the Codex team hooks of ${project} still run.`);
@@ -1018,7 +1019,8 @@ export async function stopCodexTeamHookDispatch(teamConfig: TeamaiConfig, localC
     return null;
   } catch (e) {
     // The entry comes back, so the retry still finds the dispatcher entries to remove.
-    await setCodexDispatcherHooks(project, hooks);
+    if (checkouts) for (const checkout of checkouts) await setCodexDispatcherHooks(project, hooks, checkout);
+    else await setCodexDispatcherHooks(project, hooks);
     log.warn(`Could not remove the Codex team-hook dispatchers from ${homeFile}: ${(e as Error).message}. The Codex team hooks of ${project} still run.`);
     return homeFile;
   }
@@ -3180,6 +3182,8 @@ async function cleanGitDirectoryHooks(localConfig: LocalConfig, toolPaths: Teama
     const relative = tool === 'claude' ? path.join(path.dirname(settings), 'settings.local.json') : settings;
     const file = path.join(common, relative);
     if (!await pathExists(file)) continue;
+    // An empty file holds nothing to clean, and is kept: teamai cannot prove it created it.
+    if ((await readFileSafe(file))?.trim() === '') continue;
     const contents = await readJsonObject(file);
     if (contents.kind === 'invalid') {
       log.warn(`Kept ${file}: ${contents.error}. Fix the JSON, then run teamai pull to clean the old Git-directory hooks.`);

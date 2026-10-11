@@ -65,6 +65,11 @@ async function readIndex(): Promise<CodexTeamHookIndex> {
     ? data : { projects: {} };
 }
 
+/** The checkouts whose Codex file `project`'s dispatcher entry stands for; undefined for an entry that predates the list. */
+export async function codexDispatcherCheckouts(project: string): Promise<string[] | undefined> {
+  return (await readIndex()).projects[project]?.checkouts;
+}
+
 /** Whether `project`'s team hooks run from the dispatcher now. */
 export async function runsFromCodexDispatcher(project: string, checkout?: string): Promise<boolean> {
   return (await dispatchedCodexHooks(project, checkout)) !== undefined;

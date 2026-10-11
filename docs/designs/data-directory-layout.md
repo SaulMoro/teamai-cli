@@ -141,7 +141,9 @@ A `.codex/hooks.json` that is not teamai's alone (tracked, or holding a member's
 entry; always in self mode) gets no team hooks while the flag is on: pull takes
 teamai's entries out of it through its hook manifest and records the project's
 Codex team hooks in `~/.teamai/codex-team-hooks.json` (machine-wide, keyed by the
-main checkout, or by the checkout in self mode; locked by
+project identity, or by the checkout in self mode; each entry lists the checkouts
+whose Codex file it stands for, so submodule clones sharing an identity keep
+separate entries (#1041); locked by
 `codex-team-hooks.json.lock`; a project whose directory is gone is dropped). The
 same pull makes `~/.codex/hooks.json` hold one
 `teamai hook-dispatch <Event> --tool codex --team-hooks` entry per event any

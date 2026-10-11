@@ -68,7 +68,7 @@ import {
 } from './builtin-skills.js';
 import { getHermesHome } from './hermes-home.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
-import { allowsSkillDirectory, CODEX_TOOL, SHARED_AGENT_SKILLS_PATH, skillOrigin } from './resources/skills.js';
+import { allowsSkillDirectory, CODEX_TOOL, describeOutsideSkillLink, SHARED_AGENT_SKILLS_PATH, skillOrigin } from './resources/skills.js';
 import { describeKeptDir, describeMembersDirLeft, isLink, keepsTrackedCopy, ownsSkillDir, teamaiSkillFiles } from './resources/delivered-copies.js';
 import { clearInstructionFile, instructionTargetFile, readsTeamRulesFromFile, retiredInstructionFiles, resolveInstructionTargets, userRulesFile } from './instruction-targets.js';
 import {
@@ -656,8 +656,8 @@ async function discoverToolResources(
           if (!teamSkillNames.has(dir)) continue;
           const skillDir = path.join(skillsDir, dir);
           // Delivery's rule: a root linked out of the checkout is not deleted through.
-          if (!await allowsSkillDirectory(rootBase, skillDir, true)) {
-            res.keptSkillDirs.push(await describeKeptDir(skillDir, `skills/${dir}`, 'uninstall'));
+          if (!await allowsSkillDirectory(rootBase, skillDir, { keepSkillLink: true })) {
+            res.keptSkillDirs.push(describeOutsideSkillLink(skillDir));
             continue;
           }
           if (await ownsSkill(skillDir, dir, tool)) {
