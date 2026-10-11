@@ -16,7 +16,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { SkillsHandler } from '../resources/skills.js';
-import { scanTeamRepoNamespaces, ensureSkillFrontmatter } from '../resources/skills.js';
+import { allowsSkillDirectory, mayDeleteSkillCopy, scanTeamRepoNamespaces, ensureSkillFrontmatter } from '../resources/skills.js';
 import { log } from '../utils/logger.js';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
@@ -75,6 +75,19 @@ scope: 'user',
     const item = items.find((i) => i.name === 'my-skill');
     expect(item).toBeDefined();
     expect(item!.status).toBe('new');
+  });
+
+  it('refuses deletion of a member-owned leaf link while delivery may keep it', async () => {
+    const skillDir = path.join(homeDir, '.claude', 'skills', 'member-skill');
+    const target = path.join(homeDir, 'my-skills', 'member-skill');
+    await fse.ensureDir(target);
+    await fse.writeFile(path.join(target, 'SKILL.md'), 'member-owned\n');
+    await fse.symlink(target, skillDir, 'dir');
+
+    expect(await allowsSkillDirectory(homeDir, skillDir)).toBe(false);
+    expect(await allowsSkillDirectory(homeDir, skillDir, { keepSkillLink: true })).toBe(true);
+    expect(await mayDeleteSkillCopy(localConfig, skillDir)).toBe(false);
+    expect(await fse.readFile(path.join(target, 'SKILL.md'), 'utf8')).toBe('member-owned\n');
   });
 
   it('should NOT detect a skill without SKILL.md', async () => {

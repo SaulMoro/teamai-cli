@@ -58,7 +58,7 @@ export async function allowsSkillDirectory(baseDir: string, target: string, { ke
 
 /** Whether a team-skill delete may reach `skillDir` by the delivery rule; warns and keeps it when not. */
 export async function mayDeleteSkillCopy(localConfig: LocalConfig, skillDir: string): Promise<boolean> {
-  if (await allowsSkillDirectory(skillsGuardBase(resolveBaseDir(localConfig), path.dirname(skillDir)), skillDir, { keepSkillLink: true })) return true;
+  if (await allowsSkillDirectory(skillsGuardBase(resolveBaseDir(localConfig), path.dirname(skillDir)), skillDir)) return true;
   warnOnce(describeOutsideSkillLink(skillDir));
   return false;
 }
