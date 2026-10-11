@@ -990,6 +990,14 @@ export async function codexTeamHookProject(localConfig: LocalConfig): Promise<st
   return root === canonicalProjectRoot(getUserHome()) ? null : root;
 }
 
+/** The checkout key shared by Codex team-hook placement, dispatch and uninstall. */
+export async function codexTeamHookCheckout(localConfig: LocalConfig): Promise<string | null> {
+  if (localConfig.scope !== 'project' || !localConfig.projectRoot) return null;
+  if (isSelfMode(localConfig)) return canonicalProjectRoot(localConfig.projectRoot);
+  const anchors = await resolveAnchors(localConfig.projectRoot);
+  return canonicalProjectRoot(anchors?.workspaceRoot ?? localConfig.projectRoot);
+}
+
 /** `~/.codex/hooks.json` as this scope resolves Codex's user hook file, or null. */
 function codexHomeHooksFile(teamConfig: TeamaiConfig, localConfig: LocalConfig): string | null {
   const settings = scopedToolPaths(teamConfig, { ...localConfig, scope: 'user' })[CODEX_TOOL_ID]?.settings;
@@ -1002,15 +1010,19 @@ function codexHomeHooksFile(teamConfig: TeamaiConfig, localConfig: LocalConfig):
  * hook removal does not go through the reconcile that does this on pull.
  * Returns the file it could not update, which keeps them running, or null.
  */
-export async function stopCodexTeamHookDispatch(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string | null> {
+export async function stopCodexTeamHookDispatch(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  retireIdentity = false,
+): Promise<string | null> {
   const project = await codexTeamHookProject(localConfig);
-  const checkout = localConfig.projectRoot ? canonicalProjectRoot(localConfig.projectRoot) : undefined;
+  const checkout = await codexTeamHookCheckout(localConfig);
   const homeFile = codexHomeHooksFile(teamConfig, localConfig);
-  const hooks = project && checkout ? await dispatchedCodexHooks(project, checkout) : undefined;
+  const hooks = project ? await dispatchedCodexHooks(project, retireIdentity ? undefined : checkout ?? undefined) : undefined;
   if (!project || !hooks) return null;
   const checkouts = await codexDispatcherCheckouts(project);
   const index = path.join('~', '.teamai', 'codex-team-hooks.json');
-  if (!await setCodexDispatcherHooks(project, null, checkout)) {
+  if (!await setCodexDispatcherHooks(project, null, retireIdentity ? undefined : checkout ?? undefined)) {
     log.warn(`Could not update ${index}: another teamai process held it, so the Codex team hooks of ${project} still run.`);
     return index;
   }
@@ -1020,7 +1032,9 @@ export async function stopCodexTeamHookDispatch(teamConfig: TeamaiConfig, localC
     return null;
   } catch (e) {
     // The entry comes back, so the retry still finds the dispatcher entries to remove.
-    if (checkouts && checkout) await setCodexDispatcherHooks(project, hooks, checkout);
+    if (retireIdentity && checkouts?.length) {
+      for (const root of checkouts) await setCodexDispatcherHooks(project, hooks, root);
+    } else if (checkouts && checkout) await setCodexDispatcherHooks(project, hooks, checkout);
     else await setCodexDispatcherHooks(project, hooks);
     log.warn(`Could not remove the Codex team-hook dispatchers from ${homeFile}: ${(e as Error).message}. The Codex team hooks of ${project} still run.`);
     return homeFile;
@@ -3160,9 +3174,8 @@ function hookFilterAgents(
 /** Retire only proven team entries from the old Git-directory delivery target. */
 async function cleanGitDirectoryHooks(localConfig: LocalConfig, toolPaths: TeamaiConfig['toolPaths']): Promise<void> {
   if (localConfig.scope !== 'project' || !localConfig.projectRoot || isSelfMode(localConfig)) return;
-  const anchors = await resolveAnchors(localConfig.projectRoot);
   const common = await gitCommonDir(localConfig.projectRoot);
-  if (!anchors || !common || anchors.mainCheckout === common || anchors.projectAnchor !== common) return;
+  if (!common) return;
   const { loadStateForScope, saveStateForScope } = await import('./config.js');
   const state = await loadStateForScope(localConfig);
   for (const receipt of state.codexProjectTrust ?? []) {
@@ -3275,7 +3288,7 @@ export async function reconcileTeamHooksForConfig(
       ? { selfLocalTeamHooks: { relocate: isGitExcludeEnabled(localConfig, teamConfig) } }
       : {}),
     ...(codexProject
-      ? { codexTeamHooks: { project: codexProject, checkout: mainCheckout?.root ?? canonicalProjectRoot(localConfig.projectRoot!), gitExclude: resolveGitExclude(localConfig, teamConfig), self: isSelfMode(localConfig), homeFile: codexHome } }
+      ? { codexTeamHooks: { project: codexProject, checkout: (await codexTeamHookCheckout(localConfig)) ?? canonicalProjectRoot(localConfig.projectRoot!), gitExclude: resolveGitExclude(localConfig, teamConfig), self: isSelfMode(localConfig), homeFile: codexHome } }
       : {}),
   });
   // The dispatcher entries follow every project's choice, this one's included.

@@ -2482,7 +2482,7 @@ async function removeConfirmed(
 
   // Codex team hooks that ran from the dispatcher in ~/.codex/hooks.json (#915),
   // before the data home goes: a dispatcher left running keeps the records for the retry.
-  const dispatchLeft = !agentKey || agentKey === 'codex' ? await stopCodexDispatch(teamConfig, localConfig) : null;
+  const dispatchLeft = !agentKey || agentKey === 'codex' ? await stopCodexDispatch(teamConfig, localConfig, !agentKey) : null;
   const { pendingOpencode, hooksLeft, blocksLeft, filesLeft } = await executeRemoval(plan, heldMcp, {
     hooks: dispatchLeft ? [{ what: `the Codex team-hook dispatchers in ${dispatchLeft}`, tool: 'codex' }] : [],
     files: [...httpSourceLeft, ...plan.keptUnjudged],
@@ -2534,9 +2534,9 @@ async function removeConfirmed(
  * Stop the project's Codex team hooks that run from the dispatcher in
  * ~/.codex/hooks.json (#915). The file that keeps them running, or null.
  */
-async function stopCodexDispatch(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string | null> {
+async function stopCodexDispatch(teamConfig: TeamaiConfig, localConfig: LocalConfig, retireIdentity = false): Promise<string | null> {
   try {
-    return await stopCodexTeamHookDispatch(teamConfig, localConfig);
+    return await stopCodexTeamHookDispatch(teamConfig, localConfig, retireIdentity);
   } catch (e) {
     const index = path.join('~', '.teamai', 'codex-team-hooks.json');
     log.warn(`Failed to remove the Codex team-hook dispatchers: ${(e as Error).message}.`);

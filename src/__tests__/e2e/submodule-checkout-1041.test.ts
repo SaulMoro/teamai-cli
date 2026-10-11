@@ -107,6 +107,70 @@ describe('multi-repo checkout delivery', () => {
     expect(dispatch(m.checkout).stdout).toContain('fixture');
   });
 
+  it('uninstall --agent codex from a linked worktree stops its team hooks and keeps the main checkout\'s', () => {
+    const m = fixture('linked-worktree-dispatchers');
+    write(path.join(m.checkout, '.codex/hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo member' }] }] } }));
+    m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'codex', '--force'], m.checkout);
+    const linked = path.join(m.base, 'service-linked-dispatchers');
+    m.git(['worktree', 'add', '-q', '--detach', linked], m.checkout);
+    write(path.join(linked, '.codex/hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo member' }] }] } }));
+    m.cli(['pull', '--force'], linked);
+    const homeFile = path.join(m.home, '.codex/hooks.json');
+    const dispatch = (cwd: string) => spawnSync(process.execPath, [CLI, 'hook-dispatch', 'Stop', '--tool', 'codex', '--team-hooks'], {
+      cwd, env: m.env, encoding: 'utf8', input: JSON.stringify({ cwd, hook_event_name: 'Stop' }),
+    });
+    expect(dispatch(m.checkout).stdout).toContain('fixture');
+    expect(dispatch(linked).stdout).toContain('fixture');
+    m.cli(['uninstall', '--agent', 'codex', '--force'], linked);
+    expect(read(homeFile)).toContain('--team-hooks');
+    expect(dispatch(linked).stdout).toBe('');
+    expect(dispatch(m.checkout).stdout).toContain('fixture');
+  });
+
+  it('full uninstall leaves no registration for that identity', () => {
+    const m = fixture('full-uninstall-dispatchers');
+    write(path.join(m.checkout, '.codex/hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo member' }] }] } }));
+    m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'codex', '--force'], m.checkout);
+    const parentWorktree = path.join(m.base, 'parent-full-uninstall');
+    m.git(['worktree', 'add', '-q', '--detach', parentWorktree], m.parent);
+    m.git(['submodule', 'update', '-q', '--init'], parentWorktree);
+    const child = path.join(parentWorktree, 'service');
+    write(path.join(child, '.codex/hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo member' }] }] } }));
+    m.cli(['pull', '--force'], child);
+    const index = json(path.join(m.home, '.teamai/codex-team-hooks.json'));
+    const [identity] = Object.keys(index.projects);
+    expect(index.projects[identity].checkouts.length).toBeGreaterThan(1);
+    m.cli(['uninstall', '--force'], child);
+    const after = path.join(m.home, '.teamai/codex-team-hooks.json');
+    expect(fs.existsSync(after) ? json(after).projects[identity] : undefined).toBeUndefined();
+  });
+
+  it('cleans older team hooks from an inherited clone Git directory and keeps member hooks', () => {
+    const m = fixture('inherited-clone-old-hooks');
+    m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'claude', '--force'], m.checkout);
+    const parentWorktree = path.join(m.base, 'parent-old-hooks');
+    m.git(['worktree', 'add', '-q', '--detach', parentWorktree], m.parent);
+    m.git(['submodule', 'update', '-q', '--init'], parentWorktree);
+    const child = path.join(parentWorktree, 'service');
+    const gitDir = path.resolve(child, m.git(['rev-parse', '--git-common-dir'], child));
+    const legacyHookFile = path.join(gitDir, '.claude/settings.local.json');
+    const ownedHook = json(path.join(m.checkout, '.claude/settings.local.json')).hooks.Stop[0];
+    write(legacyHookFile, JSON.stringify({ hooks: { Stop: [
+      ownedHook,
+      { hooks: [{ type: 'command', command: 'echo member' }] },
+    ] } }));
+    const partitions = path.join(m.home, '.teamai/projects');
+    const dataHome = path.join(partitions, fs.readdirSync(partitions)[0]);
+    const workspaces = path.join(dataHome, 'workspaces');
+    const owned = fs.readdirSync(workspaces).map((id) => path.join(workspaces, id, 'managed-main-checkout-hooks.json'))
+      .find((file) => fs.existsSync(file))!;
+    write(path.join(dataHome, 'managed-main-checkout-hooks.json'), read(owned));
+    m.cli(['pull', '--force'], child);
+    const hooks = json(legacyHookFile).hooks.Stop;
+    expect(JSON.stringify(hooks)).not.toContain('echo fixture');
+    expect(JSON.stringify(hooks)).toContain('echo member');
+  });
+
   it('delivers skills on the first pull of a submodule clone in a superproject worktree', () => {
     const m = fixture('first-clone-pull');
     m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'claude', '--force'], m.checkout);

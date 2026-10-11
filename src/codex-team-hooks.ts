@@ -20,8 +20,8 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getTeamHookDispatchCommand } from './builtin-hooks.js';
-import { CODEX_TOOL_ID, getTeamaiHomeDir, isSelfMode } from './types.js';
-import { checkoutForProjectAnchor, resolveAnchors } from './utils/git.js';
+import { CODEX_TOOL_ID, getTeamaiHomeDir } from './types.js';
+import { checkoutForProjectAnchor } from './utils/git.js';
 import { ensureDir, readJson, readJsonObject, writeJson, writeJsonAtomic } from './utils/fs.js';
 import { log, setStderrOnly } from './utils/logger.js';
 
@@ -265,11 +265,10 @@ export async function runCodexDispatcher(event: string): Promise<number> {
   const cwd = typeof payload.cwd === 'string' && fs.existsSync(payload.cwd) ? payload.cwd : undefined;
   const { resolveHookConfig } = await import('./dashboard-collector.js');
   const localConfig = await resolveHookConfig(payload, CODEX_TOOL_ID);
-  const { codexTeamHookProject } = await import('./hooks.js');
+  const { codexTeamHookCheckout, codexTeamHookProject } = await import('./hooks.js');
   const project = localConfig ? await codexTeamHookProject(localConfig) : null;
   if (project && localConfig && projects[project]?.checkouts) {
-    const anchors = await resolveAnchors(localConfig.projectRoot);
-    const checkout = isSelfMode(localConfig) ? project : anchors?.mainCheckout ?? anchors?.workspaceRoot ?? localConfig.projectRoot;
+    const checkout = await codexTeamHookCheckout(localConfig);
     if (!checkout || !projects[project].checkouts!.includes(checkout)) return 0;
   }
   const hooks = (project ? projects[project]?.hooks ?? [] : []).filter((hook) => hook.event === event && matches(hook, payload));
