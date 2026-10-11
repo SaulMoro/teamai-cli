@@ -13,6 +13,7 @@ const mockGit = {
   push: vi.fn(),
   revparse: vi.fn().mockResolvedValue('main'),
   raw: vi.fn(),
+  outputHandler: vi.fn().mockReturnThis(),
 };
 
 vi.mock('simple-git', () => ({

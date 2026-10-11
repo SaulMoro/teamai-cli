@@ -89,10 +89,18 @@ function spawnsByPath(candidate: string): boolean {
  * facilities such as credential helpers, SSH config, and SSH agents.
  */
 export function createGit(basePath?: string, abort?: AbortSignal): SimpleGit {
-  if (basePath) {
-    return simpleGit({ baseDir: basePath, binary: gitBinary(), abort });
-  }
-  return simpleGit({ binary: gitBinary(), abort });
+  const git = basePath
+    ? simpleGit({ baseDir: basePath, binary: gitBinary(), abort })
+    : simpleGit({ binary: gitBinary(), abort });
+  // simple-git already waits for the process to close, then sleeps 50ms more
+  // when it printed nothing (`deferClose` in its completion plugin, not
+  // configurable). Silent commands (`add`, `fetch`, `worktree prune`, a config
+  // write) are common, so a pull spent much of its time in that sleep. An empty
+  // chunk once stdout ends marks the output seen: `end` precedes the `close`
+  // simple-git waits for, and an empty chunk adds nothing to the output.
+  return git.outputHandler((_command, stdout) => {
+    stdout.once('end', () => stdout.emit('data', Buffer.alloc(0)));
+  });
 }
 
 /**
