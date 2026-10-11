@@ -197,6 +197,19 @@ export async function gitExcludeFile(dir: string): Promise<{ excludeFile: string
   return 'error' in location ? null : location;
 }
 
+/** {@link gitExcludeFile} of each of `dirs`, asking git once per repository among them. */
+export async function gitExcludeFiles(
+  dirs: Iterable<string>,
+): Promise<Map<string, { excludeFile: string; root: string; prefix: string } | null>> {
+  const context = new GitContext();
+  const found = new Map<string, { excludeFile: string; root: string; prefix: string } | null>();
+  for (const dir of new Set(dirs)) {
+    const location = await context.locate(dir);
+    found.set(dir, 'error' in location ? null : location);
+  }
+  return found;
+}
+
 /** Whether `dir` is inside a repository: some directory at or above it holds `.git`. */
 async function insideRepository(dir: string): Promise<boolean> {
   for (let d = path.resolve(dir); ; d = path.dirname(d)) {
