@@ -7,7 +7,7 @@ import { reconcileHooks, reconcileTeamHooksForConfig, resolveMainCheckoutHooks }
 import { LocalConfigSchema, TeamaiConfigSchema, type LocalConfig } from '../types.js';
 import { resolveAnchors } from '../utils/git.js';
 import { detectProjectConfig, resolveProjectDataHome, saveLocalConfigForScope } from '../config.js';
-import { createProjectToolRoots } from '../project-agent-root.js';
+import { createProjectToolRoots, seedInheritedCheckoutRoots } from '../project-agent-root.js';
 import { liveCheckoutRecords, checkoutKey } from '../pull.js';
 import { pruneWorkspaceDirs, writeWorkspaceRoot } from '../utils/partition.js';
 import { dashboardWorkspaces, workspaceEvents } from '../dashboard/workspaces.js';
@@ -174,6 +174,21 @@ describe('submodule checkouts', () => {
     await createProjectToolRoots({ cwd: linked });
     expect(fs.existsSync(path.join(linked, '.claude'))).toBe(true);
     expect((await resolveAnchors(linked))?.mainCheckout).toBe(checkout);
+  });
+
+  it('seeds an inherited submodule clone from the original tool roots', async () => {
+    const original = config();
+    original.dataHome = await resolveProjectDataHome(checkout);
+    await saveLocalConfigForScope(original);
+    fs.mkdirSync(path.join(checkout, '.claude'));
+    const worktree = path.join(base, 'parent-seeded');
+    git(parent, 'worktree', 'add', '-q', '--detach', worktree);
+    git(worktree, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '-q');
+    const child = path.join(worktree, 'service');
+    await seedInheritedCheckoutRoots(child);
+    expect(fs.existsSync(path.join(child, '.claude'))).toBe(true);
+    await seedInheritedCheckoutRoots(checkout);
+    expect(fs.existsSync(path.join(checkout, '.codex'))).toBe(false);
   });
 
   it('keeps the resolved main hook target when the current worktree disappears during pull', async () => {

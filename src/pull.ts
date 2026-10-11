@@ -1459,6 +1459,13 @@ async function pullForScope(
     log.warn(`[${scopeLabel}] Team model profiles were not updated: ${(error as Error).message}`);
   }
 
+  // Before anything probes which tools this checkout has; once, like a new worktree's post-checkout.
+  if (workspaceKey && localConfig.projectRoot && !options.dryRun
+    && !(await loadStateForScope(localConfig)).lastPullByWorkspace?.[workspaceKey]) {
+    const { seedInheritedCheckoutRoots } = await import('./project-agent-root.js');
+    await seedInheritedCheckoutRoots(localConfig.projectRoot);
+  }
+
   // Step 1b: Skip sync if the repo version hasn't changed since last pull
   let currentTargets: string[] | null = null;
   if (!options.force && !options.dryRun && !submodulesChanged) {

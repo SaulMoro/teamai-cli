@@ -79,7 +79,7 @@ teamai init https://github.com/your-org/your-repo
 工具创建：打开 Claude Code 时会创建 `.claude/`，再由 pull 写入。单独执行 `teamai pull`，以及非交互且不带
 `--agent` 的 `init`，仍会跳过项目里还不存在根目录的工具，因此不会给尚未在本项目选择或打开过的 Agent 凭空建目录。
 
-父仓库 worktree 中初始化的子模块在原始子模块存在时，共享其 TeamAI 分区。只需初始化原始子模块一次，然后在每个新克隆中运行 pull；首次 pull 会安装该克隆自己的 Git hooks。父仓库 hook 初始化子模块后，应在返回前完成分发：
+父仓库 worktree 中初始化的子模块在原始子模块存在时，共享其 TeamAI 分区。只需初始化原始子模块一次，然后在每个新克隆中运行 pull；首次 pull 会创建已启用 Agent（或原始子模块已有）的工具根目录、向其中分发资源，并安装该克隆自己的 Git hooks。父仓库 hook 初始化子模块后，应在返回前完成分发：
 
 ```sh
 git submodule update --init --recursive || exit "$?"

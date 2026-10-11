@@ -87,7 +87,7 @@ non-interactive `init` without `--agent`, still skip tools whose project root do
 not exist, so they never invent agent directories for tools you have not
 chosen or opened in this project.
 
-A submodule initialized inside a superproject worktree shares the original submodule's TeamAI partition when that original exists. Initialize the original once, then run a pull in each new clone; its first pull installs its own Git hooks. A parent hook that initializes submodules should deliver into them before returning:
+A submodule initialized inside a superproject worktree shares the original submodule's TeamAI partition when that original exists. Initialize the original once, then run a pull in each new clone; its first pull creates the tool roots of your enabled agents (or those the original submodule has), delivers into them, and installs the clone's own Git hooks. A parent hook that initializes submodules should deliver into them before returning:
 
 ```sh
 git submodule update --init --recursive || exit "$?"

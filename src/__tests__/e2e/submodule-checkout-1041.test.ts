@@ -106,6 +106,19 @@ describe('multi-repo checkout delivery', () => {
     expect(read(homeFile)).not.toContain('--team-hooks');
   });
 
+  it('delivers skills on the first pull of a submodule clone in a superproject worktree', () => {
+    const m = fixture('first-clone-pull');
+    m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'claude', '--force'], m.checkout);
+    const parentWorktree = path.join(m.base, 'parent-first-pull');
+    m.git(['worktree', 'add', '-q', '--detach', parentWorktree], m.parent);
+    m.git(['submodule', 'update', '-q', '--init'], parentWorktree);
+    const child = path.join(parentWorktree, 'service');
+    expect(fs.existsSync(path.join(child, '.claude'))).toBe(false);
+    m.cli(['pull', '--silent'], child);
+    expect(read(path.join(child, '.claude/skills/fixture/SKILL.md'))).toContain('name: fixture');
+    expect(read(path.join(child, '.claude/skills/teamai/SKILL.md'))).toContain('name: teamai');
+  });
+
   it('delivers, inherits, cleans up and uninstalls submodules through the real CLI', async () => {
     const m = fixture('submodules');
     fs.mkdirSync(path.join(m.checkout, '.claude'));
