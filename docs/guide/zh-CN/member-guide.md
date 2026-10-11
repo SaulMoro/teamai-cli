@@ -128,17 +128,23 @@ pull 既不写入也不删除它。在 teamai 下发某个团队 skill、rule �
 
 Rename or delete it, then run teamai pull, to receive the team version.``；若另一条检出记录表明 teamai 曾写过该路径（例如恢复备份之后），则输出上面那几行；`teamai doctor` 以 `not teamai's (kept by pull)` 列出它并给出同样的说明，在它被移走之前每次 pull 都做完整同步。团队从未有过的文件名不会被处理。`teamai remove` 对它刷新的 rule 做同样的检查，但不写入记录；本地 agent 的安装仍会不经这些检查重写团队 rule。旧版 CLI 保存 state 时会丢弃这份记录。
 
+**链接的 skill 目录。** 团队 skills 和内置 TeamAI skill 可以通过 `.claude/skills` → `.agents/skills` 这样的目录符号链接分发，前提是目标仍在当前 checkout 的同一仓库内。指向其他仓库（包括子克隆或子模块）的链接会被拒绝。单个 skill 的链接仍归你所有。pull 和 uninstall 保留目录链接、已跟踪的 skills，以及无关或被修改的本地文件；已跟踪或修改过的 TeamAI stub 也会保留。移除该 stub 后才能接收打包的版本。
+
 **Codex 与 `.agents/skills`。** Codex 还会读取共享目录 `.agents/skills/`（user scope 下为 `~/.agents/skills/`），其他工具和你也会往这里写。只有当那里已有的副本按上述规则属于 teamai 时，teamai 才会把团队 skill 下发到那里。其他副本属于你，保持不动：团队 skill 改为下发到 `.codex/skills/<name>/`，并且每次完整同步都会输出 ``Codex skill conflict for <name>: .agents/skills/<name> is not teamai's, so it was left alone; the team skill is in .codex/skills/<name>. 
 
 Codex now sees two skills named <name>.``。某个 skill 不再下发时（切换角色或项目、取消订阅某个 tag、团队移除该 skill），pull 会像处理 `.codex/skills/<name>/` 一样删除 teamai 在 `.agents/skills/<name>/` 中的副本；那里你改过的副本，或不属于 teamai 的副本，会保留并被指出。在每个工具的 skills 目录中，`teamai remove skills <name>` 和 `teamai uninstall` 只删除 teamai 的副本（检出记录中有它，或按历史是某个团队版本），并逐个指出它们保留的你自己的 skill：``Kept <path>: it is not teamai's (no delivery record, and it matches no team version of skills/<name>), so <command> left it.``
 
 > Project scope 默认与 user scope 隔离。当前工作目录属于一个以 project scope 初始化过的项目时（其分区在 `~/.teamai/projects/<slug>/` 下，或旧版仓库内的 `.teamai/config.yaml`），`pull` 会处理该项目并跳过 user scope；仅当本地配置包含 `inheritUserScope: true` 时，才会先刷新安全的 user 资源通道。当前目录没有 project 配置时，`pull` 处理 user scope。project 模式下，user 的 `env`、MCP 定义、sources、reporting 和写入行为仍保持隔离。hooks 是唯一例外：project scope 的内置 hooks 会注入到你的 **HOME** 工具设置（`~/.claude/settings.json` 等），而非 `<projectRoot>`
 
-> ——因为它们依据传给 `hook-dispatch` 的 `cwd` 门控，且 `~/.claude` 恒存在、能通过「已安装工具」门槛（详见 Hooks 章节）。团队自己的 hooks（`hooks/hooks.yaml`）对 Claude Code 和 Codex 则写入主 checkout，不加门控（`<主 checkout>/.claude/settings.local.json`、`<主 checkout>/.codex/hooks.json`），项目的所有 worktree 共用一份。开启 `sharing.gitExclude` 时，只要 `<主 checkout>/.codex/hooks.json` 含有不属于 teamai 的内容，Codex 的团队 hooks 就改由 `~/.codex/hooks.json` 运行（见[让分发的文件不进入 git](#让分发的文件不进入-git)）。路径遵循项目的 `toolPaths`；Claude 在其配置的 settings 文件旁使用 `settings.local.json`。bare 仓库没有主 checkout，因此各 worktree 保留自己的副本；其他工具仍写在 HOME，仅在 `cwd` 位于该项目内时运行。在没有 teamai 配置的目录中（既没有 project 配置也没有 user scope），团队 hooks 不做任何事：不显示提醒，也不记录会话或 skill 使用；
+> ——因为它们依据传给 `hook-dispatch` 的 `cwd` 门控，且 `~/.claude` 恒存在、能通过「已安装工具」门槛（详见 Hooks 章节）。团队自己的 hooks（`hooks/hooks.yaml`）对 Claude Code 和 Codex 则写入主 checkout，不加门控（`<主 checkout>/.claude/settings.local.json`、`<主 checkout>/.codex/hooks.json`），项目的所有 worktree 共用一份。开启 `sharing.gitExclude` 时，只要 `<主 checkout>/.codex/hooks.json` 含有不属于 teamai 的内容，Codex 的团队 hooks 就改由 `~/.codex/hooks.json` 运行（见[让分发的文件不进入 git](#让分发的文件不进入-git)）。路径遵循项目的 `toolPaths`；Claude 在其配置的 settings 文件旁使用 `settings.local.json`。bare 仓库，或 Git 无法定位主 checkout 的 `--separate-git-dir` 仓库的 linked worktree，各自保留 hooks 副本；其他工具仍写在 HOME，仅在 `cwd` 位于该项目内时运行。在没有 teamai 配置的目录中（既没有 project 配置也没有 user scope），团队 hooks 不做任何事：不显示提醒，也不记录会话或 skill 使用；
 
 > 只运行机器级别的工作（CLI 更新检查、SessionStart 时的 pull、本地 agent，以及 pull 暂存的包提示）。对团队 hooks 和 skill 使用记录而言，存在但无法读取的 project 配置视为没有配置，而不会退回 user scope，也不会退回其后优先级更低的 project 配置（如旧的 `.teamai/config.yaml`）。`pull` 遵循同一规则：此时不同步任何 scope，输出 ``Nothing was synced: <file>: <reason>. 
 
 > Fix the file, or move it aside and run `teamai init` to write a new one.`` 并以 exit 1 退出（加 `--silent` 时不输出，但仍以 exit 1 退出）；会话启动时不运行 pull，也不创建 agent 目录、不暂存包提示。`cwd` 已被删除的 hook（会话比它的 worktree 活得更久）沿用该会话最后记录的 scope，因此会话最后的事件和 skill 使用仍归属项目，分享提醒也遵循项目的设置，而不是 user scope 的。这需要本地事件日志中仍保留该会话之前的事件（压缩只保留活跃会话），且不适用于 Copilot，因为它的事件不记录目录。self 单仓模式则把 hooks 保留在业务仓库里，随 clone 传播；开启 `sharing.gitExclude` 时，团队的 Claude Code hooks 改为写入每个 checkout 自己的 `.claude/settings.local.json`，Codex hooks 改由 `~/.codex/hooks.json` 运行（见[让分发的文件不进入 git](#让分发的文件不进入-git)）。
+
+**子模块与独立 Git 目录。** 共享 hooks 和 Codex 项目信任使用实际的主 checkout，而不是 Git 目录。父仓库 worktree 中初始化的子模块在原始子模块存在时继承其 TeamAI 配置；文件下发到自己的 checkout，所有权记录在共享分区内按 checkout 分开。首次 pull 也会安装其 Git hooks。独立的子克隆仍是不同项目，需要分别初始化。
+
+升级后，pull 清理 Git 目录中能够证明属于 TeamAI 的 hook 条目，保留无关条目。旧版没有记录谁创建了文件或授予了 Codex 项目信任，因此空的旧 hook 文件和未记录的信任授权会保留。已记录的授权仅在未被修改时移除。自行移除旧 Git 目录的信任条目前，请先在 Codex 中检查它。
 
 启用角色化 skills 后，`pull` 的 skills 同步来源会变成 `skills/<namespace>/` 中的内容，按 `primaryRole + additionalRoles` 展开对应的 namespace，拍平安装到本地各 AI 工具 skills 目录。`rules/<namespace>/` 和 `claudemd/<namespace>/` 按 `knowledge` namespace 同步，`docs/<namespace>/` 在被声明后按 `docs` namespace 同步（见 [Docs（文档）](./sharing.md#docs文档)）；`agents/<namespace>/` 按角色的 `agents` namespace 同步（见 [Agents 资源类型](./advanced.md#agents-资源类型)）。`learnings/` 根目录对所有人共享，而 `learnings/<project-id>/` 子目录只对本目录激活的项目同步（见 [多项目](./admin-setup.md#多项目project-作为与-role-正交的维度)）。
 

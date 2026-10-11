@@ -105,7 +105,7 @@ import {
   type TeamaiConfig,
 } from './types.js';
 import { getUserHome } from './utils/home.js';
-import { completeWorktreeList, gitCommonDir, isLiveCheckout, listWorktrees, resolveAnchors } from './utils/git.js';
+import { checkoutForProjectAnchor, gitCommonDir, isLiveCheckout, listWorktrees, resolveAnchors } from './utils/git.js';
 import {
   ensure as ensureGitExclude, gitExcludeFile, gitTracks, gitUntracked, remove as removeGitExclude, report as reportGitExclude, stateHomeRecord,
   sync as syncGitExclude, type GitExcludeOwner,
@@ -3112,10 +3112,16 @@ export async function localAgentCheckouts(): Promise<string[]> {
   const manifest = (await readJson<ModelConfigManifest>(getModelManifestPath()).catch(() => null)) ?? {};
   const installed = Object.keys((await loadManifest().catch(() => null))?.scopes ?? {}).flatMap((key) => parseScopeKey(key).workspacePath ?? []);
   const workspaces = new Set([...Object.keys(config?.workspaceBindings ?? {}), ...Object.keys(manifest.workspaceModels ?? {}), ...installed]);
-  const roots = new Set(workspaces);
+  const roots = new Set<string>();
   for (const workspace of workspaces) {
-    const commonDir = await gitCommonDir(workspace);
-    for (const root of commonDir ? await completeWorktreeList(workspace, commonDir) ?? [] : []) roots.add(root);
+    const checkout = await pathExists(path.join(workspace, '.git')) ? workspace
+      : await checkoutForProjectAnchor(workspace);
+    if (!checkout) {
+      if (!await gitCommonDir(workspace)) roots.add(workspace);
+      continue;
+    }
+    roots.add(checkout);
+    for (const root of await listWorktrees(checkout)) roots.add(root);
   }
   return [...roots];
 }

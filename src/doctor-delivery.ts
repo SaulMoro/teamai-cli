@@ -1042,7 +1042,7 @@ export async function buildCodexProjectTrustCheck(ctx: DoctorContext): Promise<C
   const { realFilePath } = await import('./git-exclude.js');
   const root = await realFilePath(projectRoot);
   const anchors = await resolveAnchors(projectRoot);
-  const main = anchors?.projectAnchor ?? root;
+  const main = anchors?.mainCheckout ?? root;
   const dirs = [...new Set([root, anchors?.workspaceRoot ?? root, main])];
   const configFile = path.join(resolveToolRootDir(CODEX_TOOL_ID, DEFAULT_CODEX_ROOT, localConfig.toolRoots), 'config.toml');
   const trust = await codexProjectTrust(configFile, dirs);

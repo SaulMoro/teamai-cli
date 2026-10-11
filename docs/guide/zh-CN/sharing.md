@@ -356,7 +356,9 @@ namespace 文件；只有当根文件未定义、而多个 namespace 文件都�
 | pi | `~/.pi/agent/mcp.json` | `<project>/.pi/mcp.json` |
 | zcode | `~/.agents/mcp.json` | —（不写入 ZCode 的项目级 MCP 格式） |
 
-Codex 只在受信任的项目中读取 `<project>/.codex/config.toml`。写入团队 MCP servers 后，`teamai pull` 会自动信任主 checkout，除非设置了 `codexTrustEnabled: false`，或该项目已被明确标记为不信任。自动信任被禁用或失败时，可在 `~/.codex/config.toml` 中加入 `[projects."<主 checkout 的真实路径>"]` 表并设置 `trust_level = "trusted"`；信任主 checkout 即覆盖该仓库的所有 worktree。项目未受信任、而其文件含有团队 server 时，`teamai doctor` 会报告。
+skill 目录符号链接可以在同一个 checkout、同一仓库内共享团队 skills 和内置 TeamAI skill。指向子仓库或 checkout 之外的链接会被拒绝；已跟踪和属于成员的内容保留。详情见[成员指南](./member-guide.md)。
+
+Codex 只在受信任的项目中读取 `<project>/.codex/config.toml`。写入团队 MCP servers 后，`teamai pull` 会自动信任主 checkout，除非设置了 `codexTrustEnabled: false`，或该项目已被明确标记为不信任。自动信任被禁用或失败时，可在 `~/.codex/config.toml` 中加入 `[projects."<主 checkout 的真实路径>"]` 表并设置 `trust_level = "trusted"`；信任已定位的主 checkout 可覆盖其 linked worktrees。Git 无法定位主 checkout 时，需要分别信任每个 checkout；继承配置的子模块克隆也需要信任其自己的 checkout。项目未受信任、而其文件含有团队 server 时，`teamai doctor` 会报告。
 
 
 在用户级，CodeBuddy 只读取一个 MCP 文件：`~/.codebuddy/.mcp.json`、`~/.codebuddy/mcp.json`、

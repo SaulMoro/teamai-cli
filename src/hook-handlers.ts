@@ -257,7 +257,7 @@ async function ownCheckoutsDir(cwd: string): Promise<string[]> {
   if (!await pathExists(cwd)) return [];
   const { resolveAnchors } = await import('./utils/git.js');
   const anchors = await resolveAnchors(cwd);
-  return anchors ? [path.join(anchors.projectAnchor, '.teamai')] : [];
+  return anchors ? [path.join(anchors.mainCheckout ?? anchors.workspaceRoot, '.teamai')] : [];
 }
 
 /** Whether `dir` is one of `parents` or inside one (real paths). */

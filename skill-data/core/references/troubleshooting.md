@@ -92,6 +92,14 @@ This is the #1 onboarding issue. In order:
    `recall` refuses the same way with `Nothing was searched: <file>: <reason>`:
    no team knowledge was searched, so do not report that the team has none.
 
+## Submodule checkouts and linked skill directories
+
+A submodule's Git directory is an identity, not a delivery directory. Team hooks and Codex project trust use its real main checkout. An initialized submodule in a superproject worktree inherits the original submodule's configuration when it exists; run `teamai pull` there without repeating init. The first pull installs Git hooks in that clone. If the parent's hook initializes submodules, follow the admin guide's initialization-and-pull sequence before starting an AI session. With Git < 2.54 and a shared versioned `core.hooksPath`, one dispatch line in each parent hook covers its submodules.
+
+Both team skills and the built-in stub accept root-directory links within the same checkout and repository. Links outside it or into child repositories are rejected. Individual skill links, tracked skills, edited stubs and unrelated files stay. Remove a kept stub to receive the packaged one.
+
+Pull removes proven TeamAI hook entries left in a Git directory. Older releases did not record file creation or project trust ownership: empty legacy files and unrecorded Codex grants stay. Remove a grant manually only after checking that it is not the member's choice.
+
 ## "Last git hook run failed: ..." / a new worktree lacks team resources
 
 In project scope, teamai's git hook syncs on `git worktree add` and `git pull`
@@ -225,7 +233,7 @@ step — do not assume auto-sync just works.
 
 Codex runs a non-managed hook only once it is **trusted**. `teamai init`, `pull`
 and `teamai hooks inject` trust the hooks they write (and, in a project, the main
-checkout, or the current worktree for a bare repository) through `codex app-server`.
+checkout, or the current worktree when Git cannot locate a main checkout) through `codex app-server`.
 Trust written by a session-start pull applies from the next Codex session. `teamai doctor` names any teamai hook Codex will not
 run. Then: run `teamai pull`; if `codex` is not on PATH or `codexTrustEnabled: false`
 is set in `config.yaml`, guide the user to trust the teamai hooks in Codex `/hooks`,

@@ -42,7 +42,7 @@ import { entryLayout } from './namespaced-entries.js';
 import { historicalContents } from './utils/team-history.js';
 import { getUserHome } from './utils/home.js';
 import { CLAUDE_HOOK_OTHER_HOST_SKIP } from './claude-hook-host.js';
-import { listWorktrees, resolveAnchors } from './utils/git.js';
+import { gitCommonDir, listWorktrees, resolveAnchors } from './utils/git.js';
 import { findOnPath } from './utils/lookpath.js';
 import type { CodexHookTrustReport, CodexTrust } from './codex-trust.js';
 import { dispatchedCodexHooks, isCodexTeamHookDispatcher, reconcileCodexDispatchers, runsFromCodexDispatcher, setCodexDispatcherHooks } from './codex-team-hooks.js';
@@ -790,11 +790,11 @@ const MAIN_CHECKOUT_TEAM_HOOK_TOOLS = ['claude', 'codex'] as const;
 
 /** Where a non-self project scope keeps Claude/Codex team hooks. */
 export interface MainCheckoutHooks {
-  /** The main checkout (realpath), or the current workspace when the anchor is bare. */
+  /** The main checkout (realpath), or the current workspace when Git cannot locate a main checkout. */
   root: string;
   /** The current checkout's projectRoot. */
   current?: string;
-  /** Bare repositories have no main checkout; each workspace keeps its own files. */
+  /** Without a main checkout each workspace keeps its own files. */
   worktreeScoped: boolean;
   /** Manifest of the team hooks written in this target root. */
   manifestPath: string;
@@ -833,9 +833,18 @@ export async function resolveMainCheckoutHooks(
     return [[tool, path.join(root, relative)]];
   }));
   const manifestName = 'managed-main-checkout-hooks.json';
-  if (worktreeScoped) {
+  const checkoutHome = getDataHome(localConfig);
+  const partitioned = checkoutHome !== getTeamaiHome('project', localConfig.projectRoot);
+  if (worktreeScoped || partitioned) {
     const manifestRoot = path.join(getDataHome(localConfig), 'workspaces', managedMcpWorkspaceId(root));
-    return { root, current: canonicalProjectRoot(localConfig.projectRoot), worktreeScoped, manifestPath: path.join(manifestRoot, manifestName), files };
+    const anchors = await resolveAnchors(root);
+    const original = anchors?.projectAnchor === await gitCommonDir(root)
+      || anchors?.projectAnchor === root;
+    return {
+      root, current: canonicalProjectRoot(localConfig.projectRoot), worktreeScoped,
+      manifestPath: path.join(manifestRoot, manifestName), files,
+      ...(!worktreeScoped && original ? { checkoutManifestPath: path.join(checkoutHome, manifestName) } : {}),
+    };
   }
   // Every checkout shares the main checkout's files, so their ownership lives
   // in the main checkout's data home. An un-migrated linked worktree has a data
@@ -843,7 +852,6 @@ export async function resolveMainCheckoutHooks(
   // entries again. A main checkout without a config of its own still has one
   // data home: the in-checkout one its config would use.
   const current = canonicalProjectRoot(localConfig.projectRoot);
-  const checkoutHome = getDataHome(localConfig);
   const checkoutManifestPath = path.join(checkoutHome, manifestName);
   if (root === current || checkoutHome !== getTeamaiHome('project', localConfig.projectRoot)) {
     const sharedWithOtherInstall = await isSharedWithOtherInstall(root, current, checkoutManifestPath, true);
@@ -956,9 +964,9 @@ async function isSharedWithOtherInstall(
 async function mainCheckoutOf(projectRoot: string): Promise<{ root: string; worktreeScoped: boolean }> {
   const anchors = await pathExists(projectRoot) ? await resolveAnchors(projectRoot) : null;
   return {
-    root: (anchors?.projectAnchorIsBare ? anchors.workspaceRoot : anchors?.projectAnchor)
+    root: anchors?.mainCheckout
       ?? canonicalProjectRoot(projectRoot),
-    worktreeScoped: anchors?.projectAnchorIsBare === true,
+    worktreeScoped: anchors?.mainCheckout === null,
   };
 }
 
@@ -976,7 +984,9 @@ export function mainCheckoutHookFile(mainCheckout: MainCheckoutHooks | null | un
 export async function codexTeamHookProject(localConfig: LocalConfig): Promise<string | null> {
   if (localConfig.scope !== 'project' || !localConfig.projectRoot) return null;
   if (isSelfMode(localConfig)) return canonicalProjectRoot(localConfig.projectRoot);
-  const { root } = await mainCheckoutOf(localConfig.projectRoot);
+  const anchors = await resolveAnchors(localConfig.projectRoot);
+  const root = anchors?.mainCheckout === null ? anchors.workspaceRoot
+    : anchors?.projectAnchor ?? canonicalProjectRoot(localConfig.projectRoot);
   return root === canonicalProjectRoot(getUserHome()) ? null : root;
 }
 
@@ -3021,7 +3031,14 @@ export async function trustCodexForScope(
     return cached;
   }
   const { trustCodexHooks } = await import('./codex-trust.js');
-  const trust = await trustCodexHooks(targets);
+  const trust = await trustCodexHooks({ ...targets, onProjectTrusted: async (project) => {
+    const state = await loadStateForScope(localConfig);
+    state.codexProjectTrust = [...state.codexProjectTrust ?? []];
+    if (!state.codexProjectTrust.some((entry) => entry.home === targets.codexHome && entry.project === project)) {
+      state.codexProjectTrust.push({ home: targets.codexHome, project });
+      await saveStateForScope(state, localConfig);
+    }
+  } });
   const fingerprint = trust.kind === 'trusted' ? await codexTrustFingerprint(targets) : undefined;
   const state = await loadStateForScope(localConfig);
   if (state.codexTrustFingerprint !== fingerprint) {
@@ -3136,6 +3153,36 @@ function hookFilterAgents(
   return (filterAgents ?? Object.keys(teamConfig.toolPaths)).filter((t) => !disabled.includes(t));
 }
 
+/** Retire only proven team entries from the old Git-directory delivery target. */
+async function cleanGitDirectoryHooks(localConfig: LocalConfig): Promise<void> {
+  if (localConfig.scope !== 'project' || !localConfig.projectRoot || isSelfMode(localConfig)) return;
+  const anchors = await resolveAnchors(localConfig.projectRoot);
+  const common = await gitCommonDir(localConfig.projectRoot);
+  if (!anchors || !common || anchors.mainCheckout === common || anchors.projectAnchor !== common) return;
+  const { loadStateForScope, saveStateForScope } = await import('./config.js');
+  const state = await loadStateForScope(localConfig);
+  for (const receipt of state.codexProjectTrust ?? []) {
+    if (receipt.project !== common) continue;
+    const { removeOwnedCodexProjectTrust } = await import('./codex-trust.js');
+    const result = await removeOwnedCodexProjectTrust({ codexHome: receipt.home, project: receipt.project });
+    if (result.kind === 'failed' || result.kind === 'unavailable') {
+      log.warn(`Could not clean the recorded Codex trust for ${common}: ${result.reason}. Run teamai pull again after fixing Codex.`);
+      continue;
+    }
+    state.codexProjectTrust = state.codexProjectTrust?.filter((entry) => entry !== receipt);
+    await saveStateForScope(state, localConfig);
+  }
+  const manifestPath = path.join(getDataHome(localConfig), 'managed-main-checkout-hooks.json');
+  for (const [tool, relative] of [['claude', '.claude/settings.local.json'], ['codex', '.codex/hooks.json']]) {
+    const file = path.join(common, relative);
+    if (!await pathExists(file)) continue;
+    await reconcileHooks(file, tool, [], {
+      manifestPath, legacyManifestPath: legacyManagedHooksPath(common), removeAll: true, teamOnly: true,
+      teamHookHistory: teamHookHistory(localConfig),
+    });
+  }
+}
+
 /**
  * Reconcile built-in (A) + team (B) hooks for a single scope's tools.
  * Resolves the scope's team hooks, the scope base dir + manifest, and
@@ -3193,6 +3240,7 @@ export async function reconcileTeamHooksForConfig(
   }
   // Before any reconcile reads this checkout's manifest (#993).
   await migrateLegacyManagedHooks(localConfig);
+  await cleanGitDirectoryHooks(localConfig);
   const history = teamHookHistory(localConfig);
   const codexProject = await codexTeamHookProject(localConfig);
   const codexHome = codexHomeHooksFile(teamConfig, localConfig);

@@ -7,7 +7,7 @@ import {
 } from './resources/desired.js';
 import type { IndexedSkills } from './utils/search-index.js';
 import { detectProjectConfig, describeUnreadableConfig, loadLocalConfigForScope, loadTeamConfig, loadStateForScope, saveStateForScope } from './config.js';
-import { pullRepo, getHeadRev, createGit, getDefaultBranch, completeWorktreeList, gitCommonDir, isLiveCheckout, listWorktrees } from './utils/git.js';
+import { pullRepo, getHeadRev, createGit, getDefaultBranch, completeWorktreeList, gitCommonDir, isLiveCheckout, isLiveProjectCheckout, listWorktrees, resolveAnchors } from './utils/git.js';
 import { publishQueuedLearnings } from './utils/learnings-publish.js';
 import { pendingLearningsDir } from './utils/pending-learnings.js';
 import { indexableLearningsRoots } from './utils/learnings-roots.js';
@@ -789,10 +789,12 @@ export async function liveCheckoutRecords(
   if (!records) return undefined;
   const commonDir = await gitCommonDir(projectRoot);
   if (!commonDir) return records;
+  const identity = (await resolveAnchors(projectRoot))?.projectAnchor;
   const kept = await Promise.all(Object.entries(records).map(async ([key, record]) => {
     const { root } = record;
     const live = root === undefined
-      || (await isLiveCheckout(root, commonDir) && await checkoutKey(root) === key);
+      || ((await isLiveCheckout(root, commonDir) || (identity && await isLiveProjectCheckout(root, identity)))
+        && await checkoutKey(root) === key);
     return live ? [key, record] as const : null;
   }));
   return Object.fromEntries(kept.filter((entry) => entry !== null));

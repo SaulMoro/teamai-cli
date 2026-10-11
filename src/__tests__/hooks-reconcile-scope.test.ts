@@ -612,7 +612,7 @@ describe('reconcileTeamHooksForConfig — team hooks in the main checkout', () =
     const main = await fse.realpath(project);
     const worktree = path.join(await fse.realpath(os.tmpdir()), `teamai-recon-wt-${path.basename(main)}`);
     await fse.ensureDir(worktree);
-    vi.mocked(resolveAnchors).mockImplementation(async (cwd) => ({ workspaceRoot: cwd ?? main, projectAnchor: main }));
+    vi.mocked(resolveAnchors).mockImplementation(async (cwd) => ({ workspaceRoot: cwd ?? main, projectAnchor: main, mainCheckout: main }));
     vi.mocked(listWorktrees).mockResolvedValue([main, worktree]);
     return { main, worktree };
   }

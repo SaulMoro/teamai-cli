@@ -87,6 +87,17 @@ non-interactive `init` without `--agent`, still skip tools whose project root do
 not exist, so they never invent agent directories for tools you have not
 chosen or opened in this project.
 
+A submodule initialized inside a superproject worktree shares the original submodule's TeamAI partition when that original exists. Initialize the original once, then run a pull in each new clone; its first pull installs its own Git hooks. A parent hook that initializes submodules should deliver into them before returning:
+
+```sh
+git submodule update --init --recursive || exit "$?"
+git submodule foreach --recursive 'command -v teamai >/dev/null 2>&1 && teamai pull --silent || true'
+```
+
+Place those lines after the parent's checkout step. Each child uses its own checkout paths for delivery and ownership. Independent child clones and the workspace root keep separate project configurations.
+
+On Git older than 2.54, when the submodules share the superproject's versioned `core.hooksPath`, add the `hook-dispatch` line described below once to each applicable superproject hook. It covers every submodule using those shared hooks; do not append it once per submodule. TeamAI leaves the versioned hooks unchanged.
+
 A new worktree does not wait for that first session. In project scope, `teamai init`
 and `teamai pull` install a git hook in the repository's local git config, shared by
 every worktree: `hook.teamai-post-checkout`, `hook.teamai-post-merge` and

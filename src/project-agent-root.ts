@@ -91,7 +91,7 @@ async function toolsInMainCheckout(
   teamConfig: Awaited<ReturnType<typeof loadTeamConfig>>,
   rootOf: (id: string) => string | undefined,
 ): Promise<string[]> {
-  const mainCheckout = (await resolveAnchors(checkout))?.projectAnchor;
+  const mainCheckout = (await resolveAnchors(checkout))?.mainCheckout;
   if (!mainCheckout || mainCheckout === checkout) return [];
   const candidates = normalizeIds([
     ...KNOWN_AGENTS.map((agent) => agent.id),

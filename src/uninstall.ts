@@ -1,5 +1,6 @@
 import { lstat, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { gitCommonDir } from './utils/git.js';
 import { autoDetectInit, loadLocalConfig, loadStateForScope, resolveMemberToolRoots, saveLocalConfig, saveLocalConfigForScope, saveStateForScope, UnreadableProjectConfigError, detectProjectConfig } from './config.js';
 import { createDeliveryRecorder, deliveredOwner, deliveredOwnerElsewhere } from './git-exclude-delivered.js';
 import { gitExcludeFile, gitTracks, MCP_EXCLUDE_OWNER, realFilePath, remove as removeGitExclude, stateHomeRecord, type GitExcludeFileRemoval } from './git-exclude.js';
@@ -171,7 +172,7 @@ interface RemovalPlan {
   /** This project's checkouts, live by record or listed by git (every recorded root when git cannot list them all). */
   checkouts: string[];
   /** teamai's git hook in the project repository: config sections and hook scripts holding its block. */
-  gitHook: { repoDir: string; entries: string[] } | null;
+  gitHook: { repoDir: string; entries: string[]; checkouts?: string[] } | null;
   /** The .teamai home directory path. */
   teamaiHome: string;
   /** Whether teamaiHome exists on disk. */
@@ -816,13 +817,11 @@ async function buildRemovalPlan(
   // The project's Claude and Codex team hooks, in the main checkout (#955).
   const mainCheckout = await resolveMainCheckoutHooks(localConfig, teamConfig.toolPaths);
   const mainCheckouts = mainCheckout ? [mainCheckout] : [];
-  // A bare anchor has no shared checkout file. Uninstall removes the shared
-  // data home, so collect every live workspace's hooks before deleting ownership.
-  if (mainCheckout?.worktreeScoped) {
-    for (const root of await listWorktrees(localConfig.projectRoot!)) {
-      if (root === mainCheckout.root) continue;
+  // Shared partitions also cover submodule clones with distinct Git common dirs.
+  if (mainCheckout && localConfig.projectRoot) {
+    for (const root of await projectCheckouts(localConfig)) {
       const target = await resolveMainCheckoutHooks({ ...localConfig, projectRoot: root }, teamConfig.toolPaths);
-      if (target?.worktreeScoped) mainCheckouts.push(target);
+      if (target && !mainCheckouts.some((existing) => existing.root === target.root)) mainCheckouts.push(target);
     }
   }
   for (const target of mainCheckouts) {
@@ -1258,8 +1257,19 @@ async function buildRemovalPlan(
       // (h) teamai's git hook, in the config every worktree shares.
       if (localConfig.projectRoot) {
         const { removeGitHook } = await import('./git-hook.js');
-        const entries = await removeGitHook(localConfig.projectRoot, { dryRun: true }).catch(() => []);
-        if (entries.length > 0) plan.gitHook = { repoDir: localConfig.projectRoot, entries };
+        const checkouts: string[] = [];
+        let entries: string[] = [];
+        const seen = new Set<string>();
+        for (const root of plan.checkouts) {
+          const common = await gitCommonDir(root);
+          if (!common || seen.has(common)) continue;
+          seen.add(common);
+          const owned = await removeGitHook(root, { dryRun: true }).catch(() => []);
+          if (owned.length === 0) continue;
+          checkouts.push(root);
+          entries = [...new Set([...entries, ...owned])];
+        }
+        if (checkouts.length > 0) plan.gitHook = { repoDir: checkouts[0], entries, checkouts };
       }
     }
   }
@@ -1431,7 +1441,7 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
   }
 
   if (plan.gitHook) {
-    console.log(`   Git hook in ${plan.gitHook.repoDir} (teamai's entries and blocks):`);
+    console.log(`   Git hook in ${(plan.gitHook.checkouts ?? [plan.gitHook.repoDir]).join(', ')} (teamai's entries and blocks):`);
     for (const entry of plan.gitHook.entries) console.log(`     ${entry}`);
     console.log('');
   }
@@ -1638,7 +1648,11 @@ async function planHomeGitExcludeBlocks(home: string): Promise<HomeGitExcludeBlo
       for (const file of Object.values(state?.gitExcludeFiles ?? {}).flat()) files.add(file);
       for (const { root } of Object.values(state?.lastPullByWorkspace ?? {})) if (root) candidates.add(root);
       const anchor = dataHome === home ? null : await readAnchorFile(dataHome);
-      if (anchor) candidates.add(anchor);
+      if (anchor) {
+        const { checkoutForProjectAnchor } = await import('./utils/git.js');
+        const checkout = await checkoutForProjectAnchor(anchor);
+        if (checkout) candidates.add(checkout);
+      }
     }
   } catch (e) {
     log.warn(`Could not read where teamai's git exclude blocks are: ${(e as Error).message}`);
@@ -1670,8 +1684,10 @@ async function removeHomeLocalScopeMcpServers(): Promise<string[]> {
   for (const dir of await listDirs(projectsRootDir())) {
     const dataHome = path.join(projectsRootDir(), dir);
     const anchor = await readAnchorFile(dataHome);
-    const toolRoots = anchor && await pathExists(anchor)
-      ? await resolveMemberToolRoots(anchor, { selfHeal: false })
+    const { checkoutForProjectAnchor } = await import('./utils/git.js');
+    const checkout = anchor ? await checkoutForProjectAnchor(anchor) : null;
+    const toolRoots = checkout
+      ? await resolveMemberToolRoots(checkout, { selfHeal: false })
       : (await loadLocalConfig())?.toolRoots;
     for (const file of await removeLocalScopeMcpServers(dataHome, toolRoots)) left.add(file);
   }
@@ -1836,11 +1852,11 @@ async function executeRemoval(
   const filesLeft: string[] = [...alreadyLeft.files ?? []];
   if (plan.gitHook) {
     const { removeGitHook } = await import('./git-hook.js');
-    try {
-      await removeGitHook(plan.gitHook.repoDir);
-      log.info(`Removed the teamai git hook from ${plan.gitHook.repoDir}`);
+    for (const repoDir of plan.gitHook.checkouts ?? [plan.gitHook.repoDir]) try {
+      await removeGitHook(repoDir);
+      log.info(`Removed the teamai git hook from ${repoDir}`);
     } catch (e) {
-      log.warn(`Could not remove the teamai git hook from ${plan.gitHook.repoDir}: ${(e as Error).message}. `
+      log.warn(`Could not remove the teamai git hook from ${repoDir}: ${(e as Error).message}. `
         + 'Remove it yourself: `git config --local --remove-section hook.teamai-post-checkout` (and hook.teamai-post-merge and hook.teamai-post-rewrite), '
         + 'and the `# >>> teamai git hook` block in .git/hooks/post-checkout, post-merge and post-rewrite.');
     }

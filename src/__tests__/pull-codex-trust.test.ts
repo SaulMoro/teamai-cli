@@ -163,7 +163,7 @@ describe('pull trusts the Codex project after writing its MCP servers', () => {
   it('pull from a worktree without .codex trusts the main keys before SessionStart', async () => {
     const worktree = path.join(tempDir, 'worktree');
     await fse.ensureDir(worktree);
-    vi.mocked(resolveAnchors).mockImplementation(async (cwd) => ({ workspaceRoot: cwd ?? project, projectAnchor: project }));
+    vi.mocked(resolveAnchors).mockImplementation(async (cwd) => ({ workspaceRoot: cwd ?? project, projectAnchor: project, mainCheckout: project }));
     vi.mocked(listWorktrees).mockResolvedValue([project, worktree]);
     localConfig.projectRoot = worktree;
     writeFakeCodexOptions(path.join(homeDir, '.codex'), { projectLayers: { [worktree]: project } });

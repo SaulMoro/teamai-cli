@@ -53,11 +53,33 @@ afterAll(() => {
 });
 
 describe('resolveAnchors', () => {
+  it('keeps a submodule identity separate from its main checkout', async () => {
+    const parent = path.join(base, 'submodule-parent');
+    fs.mkdirSync(parent);
+    git(parent, 'init', '-q');
+    git(parent, '-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', repoRoot, 'service');
+    const checkout = path.join(parent, 'service');
+    expect(await resolveAnchors(checkout)).toEqual({
+      workspaceRoot: checkout,
+      projectAnchor: path.join(parent, '.git', 'modules', 'service'),
+      mainCheckout: checkout,
+    });
+  });
+
+  it('keeps a nested clone worktree anchored at the child clone', async () => {
+    const nested = path.join(repoRoot, 'child');
+    git(repoRoot, 'clone', '-q', repoRoot, nested);
+    const linked = path.join(repoRoot, 'child-worktree');
+    git(nested, 'worktree', 'add', '-q', '--detach', linked);
+    expect(await resolveAnchors(linked)).toEqual({ workspaceRoot: linked, projectAnchor: nested, mainCheckout: nested });
+  });
+
   it('returns workspace === anchor === repo root for a plain repository', async () => {
     const a = await resolveAnchors(repoRoot);
     expect(a).not.toBeNull();
     expect(a!.workspaceRoot).toBe(repoRoot);
     expect(a!.projectAnchor).toBe(repoRoot);
+    expect(a!.mainCheckout).toBe(repoRoot);
   });
 
   it('resolves a subdirectory of the main repo up to the repo root', async () => {
@@ -67,6 +89,7 @@ describe('resolveAnchors', () => {
     expect(a).not.toBeNull();
     expect(a!.workspaceRoot).toBe(repoRoot);
     expect(a!.projectAnchor).toBe(repoRoot);
+    expect(a!.mainCheckout).toBe(repoRoot);
   });
 
   it('gives a worktree its own workspaceRoot but the shared main-checkout anchor', async () => {
@@ -76,6 +99,7 @@ describe('resolveAnchors', () => {
     expect(a!.workspaceRoot).toBe(worktreeRoot);
     // ...but the anchor points back at the MAIN checkout, shared with the repo.
     expect(a!.projectAnchor).toBe(repoRoot);
+    expect(a!.mainCheckout).toBe(repoRoot);
     expect(a!.workspaceRoot).not.toBe(a!.projectAnchor);
   });
 
@@ -85,6 +109,7 @@ describe('resolveAnchors', () => {
     const a = await resolveAnchors(sub);
     expect(a!.workspaceRoot).toBe(worktreeRoot);
     expect(a!.projectAnchor).toBe(repoRoot);
+    expect(a!.mainCheckout).toBe(repoRoot);
   });
 
   it('returns null for a directory that is not inside any git repository', async () => {
@@ -114,6 +139,11 @@ describe('resolveAnchors', () => {
     expect(b).not.toBeNull();
     expect(a!.workspaceRoot).toBe(wsA);
     expect(b!.workspaceRoot).toBe(wsB);
+    expect(a!.mainCheckout).toBe(wsA);
+    expect(b!.mainCheckout).toBe(wsB);
+    const linked = path.join(base, 'separate-linked');
+    git(wsA, 'worktree', 'add', '-q', '--detach', linked);
+    expect(await resolveAnchors(linked)).toEqual({ workspaceRoot: linked, projectAnchor: a!.projectAnchor, mainCheckout: null });
     // The two repos must NOT share an anchor (no partition collision).
     expect(a!.projectAnchor).not.toBe(b!.projectAnchor);
     // And neither anchor is the shared parent directory.
@@ -150,7 +180,7 @@ describe('resolveAnchors memo (#809)', () => {
     git(dir, 'config', 'user.email', 'test@example.com');
     git(dir, 'config', 'user.name', 'Test');
     git(dir, 'commit', '--allow-empty', '-q', '-m', 'init');
-    expect(await resolveAnchors(dir)).toEqual({ workspaceRoot: dir, projectAnchor: dir });
+    expect(await resolveAnchors(dir)).toEqual({ workspaceRoot: dir, projectAnchor: dir, mainCheckout: dir });
   });
 
   it('keeps one entry per directory', async () => {
@@ -201,7 +231,7 @@ describe('defaultProjectSlug (#809)', () => {
       const checkout = path.join(base, 'bare-layout', wt);
       git(bare, 'worktree', 'add', '-q', checkout);
       expect((await resolveAnchors(checkout))?.projectAnchor).toBe(bare);
-      expect((await resolveAnchors(checkout))?.projectAnchorIsBare).toBe(true);
+      expect((await resolveAnchors(checkout))?.mainCheckout).toBeNull();
       expect(await defaultProjectSlug(checkout)).toBe('bare-layout');
     }
     const sub = path.join(base, 'bare-layout', 'main', 'pkg');

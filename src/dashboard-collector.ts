@@ -2330,19 +2330,17 @@ export async function resolveHookConfig(hookData: Record<string, unknown>, tool:
 }
 
 /**
- * A checkout of the repo anchored at `anchor` to resolve its scope from: the
- * anchor itself, or for a bare repo (whose anchor is the git directory, which
- * detection cannot read) the first of its worktrees that still exists.
+ * Recover a live checkout for scope detection, including Git-directory identities.
  */
 async function checkoutOf(anchor: string): Promise<string | undefined> {
   if (!fs.existsSync(anchor)) return undefined;
   if (fs.existsSync(path.join(anchor, '.git'))) return anchor;
-  const { listWorktrees } = await import('./utils/git.js');
-  return (await listWorktrees(anchor)).find((dir) => dir !== anchor && fs.existsSync(dir));
+  const { checkoutForProjectAnchor } = await import('./utils/git.js');
+  return await checkoutForProjectAnchor(anchor) ?? undefined;
 }
 
 /**
- * The `projectAnchor` an event records (#809): the main checkout of the repo
+ * The `projectAnchor` an event records (#809): the stable identity of the repo
  * holding the event's `cwd`, the directory the hook resolved its scope for.
  * Undefined for an event that records no cwd, which keeps it free of paths
  * (Copilot), and outside git. For a cwd that no longer exists, which git refuses

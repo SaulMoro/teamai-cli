@@ -1,0 +1,196 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { installFakeCodex, readFakeCodexState } from '../helpers/fake-codex.js';
+import { trackDetachedProcesses } from '../helpers/detached-processes.js';
+
+const CLI = fileURLToPath(new URL('../../../dist/index.js', import.meta.url));
+let sandbox: string;
+let fakeBin: string;
+let detached: ReturnType<typeof trackDetachedProcesses>;
+const write = (file: string, content: string) => {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+};
+const read = (file: string) => fs.readFileSync(file, 'utf8');
+const json = (file: string) => JSON.parse(read(file));
+const skill = (name: string) => `---\nname: ${name}\ndescription: fixture\n---\n${name}\n`;
+
+function fixture(name: string, oldGit = false) {
+  const base = fs.mkdtempSync(path.join(sandbox, `${name}-`));
+  const home = path.join(base, 'home');
+  fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+  fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+  const bin = path.join(base, 'bin');
+  fs.mkdirSync(bin);
+  const realGit = spawnSync('which', ['git'], { encoding: 'utf8' }).stdout.trim();
+  if (oldGit) {
+    write(path.join(bin, 'git'), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'git version 2.40.0'; else exec '${realGit}' "$@"; fi\n`);
+    fs.chmodSync(path.join(bin, 'git'), 0o755);
+  }
+  const env = { ...process.env, HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: path.join(home, '.config'),
+    CODEX_HOME: path.join(home, '.codex'), CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
+    GIT_CONFIG_GLOBAL: path.join(home, '.gitconfig'), GIT_CONFIG_NOSYSTEM: '1',
+    GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.com',
+    PATH: [bin, fakeBin, process.env.PATH].join(path.delimiter), FORCE_COLOR: '0',
+    NODE_OPTIONS: [process.env.NODE_OPTIONS, detached.nodeOptions].filter(Boolean).join(' ') };
+  const run = (command: string, args: string[], cwd = base) => {
+    const result = spawnSync(command, args, { cwd, env, encoding: 'utf8', timeout: 60_000 });
+    if (result.status !== 0) throw new Error(`${command} ${args.join(' ')}: ${result.stdout}${result.stderr}`);
+    return `${result.stdout}${result.stderr}`;
+  };
+  const git = (args: string[], cwd = base) => run('git', args, cwd).trim();
+  const cli = (args: string[], cwd: string) => run(process.execPath, [CLI, ...args], cwd);
+  git(['config', '--global', 'protocol.file.allow', 'always']);
+  const team = path.join(base, 'team');
+  const url = `https://team.example.com/team/${name}.git`;
+  write(path.join(team, 'teamai.yaml'), `team: fixture\nrepo: ${url}\nprovider: git\nreviewers: []\nsharing:\n  hooks:\n    autoApply: true\n    requireTeamScripts: false\n  gitExclude:\n    enabled: true\n`);
+  write(path.join(team, 'skills/fixture/SKILL.md'), skill('fixture'));
+  write(path.join(team, 'hooks/hooks.yaml'), 'hooks:\n  - id: fixture\n    description: fixture\n    event: Stop\n    command: echo fixture\n');
+  git(['init', '-q', '-b', 'main'], team);
+  git(['add', '-A'], team);
+  git(['commit', '-qm', 'team'], team);
+  const remote = path.join(base, 'team.git');
+  git(['clone', '-q', '--bare', team, remote]);
+  git(['config', '--global', `url.${remote}.insteadOf`, url]);
+  const source = path.join(base, 'source');
+  const parent = path.join(base, 'parent');
+  for (const root of [source, parent]) {
+    write(path.join(root, 'README.md'), '# fixture\n');
+    git(['init', '-q', '-b', 'main'], root);
+    git(['add', '-A'], root);
+    git(['commit', '-qm', 'init'], root);
+  }
+  git(['submodule', 'add', '-q', source, 'service'], parent);
+  git(['commit', '-qam', 'service'], parent);
+  const checkout = path.join(parent, 'service');
+  return { base, home, parent, checkout, git, cli, url };
+}
+
+beforeAll(() => {
+  sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-1041-e2e-')));
+  fakeBin = installFakeCodex();
+  detached = trackDetachedProcesses(sandbox);
+});
+afterAll(async () => {
+  await detached.waitForExit();
+  fs.rmSync(fakeBin, { recursive: true, force: true });
+  fs.rmSync(sandbox, { recursive: true, force: true });
+});
+
+describe('multi-repo checkout delivery', () => {
+  it('delivers, inherits, cleans up and uninstalls submodules through the real CLI', async () => {
+    const m = fixture('submodules');
+    fs.mkdirSync(path.join(m.checkout, '.claude'));
+    fs.mkdirSync(path.join(m.checkout, '.agents/skills/local'), { recursive: true });
+    fs.symlinkSync('../.agents/skills', path.join(m.checkout, '.claude/skills'));
+    write(path.join(m.checkout, '.agents/skills/local/SKILL.md'), skill('local'));
+    m.git(['add', '.claude/skills', '.agents/skills/local/SKILL.md'], m.checkout);
+    m.git(['commit', '-qm', 'local skills'], m.checkout);
+    const originalSkill = read(path.join(m.checkout, '.agents/skills/local/SKILL.md'));
+    m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'claude,codex', '--force'], m.checkout);
+    const anchor = path.join(m.parent, '.git/modules/service');
+    const claude = path.join(m.checkout, '.claude/settings.local.json');
+    const codex = path.join(m.checkout, '.codex/hooks.json');
+    expect(read(claude)).toContain('echo fixture');
+    expect(read(codex)).toContain('echo fixture');
+    expect(readFakeCodexState(path.join(m.home, '.codex')).projects[m.checkout]?.trust_level).toBe('trusted');
+    expect(readFakeCodexState(path.join(m.home, '.codex')).projects[anchor]).toBeUndefined();
+    expect(read(path.join(m.checkout, '.agents/skills/teamai/SKILL.md'))).toContain('name: teamai');
+    expect(read(path.join(m.checkout, '.agents/skills/fixture/SKILL.md'))).toContain('name: fixture');
+    expect(m.git(['status', '--porcelain'], m.checkout)).toBe('');
+
+    // Recreate the previous delivery target with its ownership and an unrelated entry.
+    const partitions = path.join(m.home, '.teamai/projects');
+    const dataHome = path.join(partitions, fs.readdirSync(partitions)[0]);
+    const workspaces = path.join(dataHome, 'workspaces');
+    const owned = fs.readdirSync(workspaces).map((id) => path.join(workspaces, id, 'managed-main-checkout-hooks.json'))
+      .find((file) => fs.existsSync(file))!;
+    const leftovers = json(claude);
+    leftovers.member = true;
+    leftovers.hooks.Stop.push({ hooks: [{ type: 'command', command: 'echo member' }] });
+    write(path.join(anchor, '.claude/settings.local.json'), JSON.stringify(leftovers));
+    write(path.join(anchor, '.codex/hooks.json'), read(codex));
+    write(path.join(dataHome, 'managed-main-checkout-hooks.json'), read(owned));
+    const fakeStateFile = path.join(m.home, '.codex/fake-state.json');
+    const fakeState = json(fakeStateFile);
+    fakeState.projects[anchor] = { trust_level: 'trusted' };
+    write(fakeStateFile, JSON.stringify(fakeState));
+    const stateFile = path.join(dataHome, 'state.json');
+    const state = json(stateFile);
+    state.codexProjectTrust = [...state.codexProjectTrust ?? [], { home: path.join(m.home, '.codex'), project: anchor }];
+    write(stateFile, JSON.stringify(state));
+    m.cli(['pull', '--force'], m.checkout);
+    expect(json(path.join(anchor, '.claude/settings.local.json')).member).toBe(true);
+    expect(read(path.join(anchor, '.claude/settings.local.json'))).not.toContain('echo fixture');
+    expect(read(path.join(anchor, '.codex/hooks.json'))).not.toContain('echo fixture');
+    expect(readFakeCodexState(path.join(m.home, '.codex')).projects[anchor]).toBeUndefined();
+
+    const linked = path.join(m.base, 'service-linked');
+    m.git(['worktree', 'add', '-q', '--detach', linked], m.checkout);
+    await detached.waitForExit();
+    m.cli(['pull', '--force'], linked);
+    expect(fs.existsSync(path.join(linked, '.claude'))).toBe(true);
+    expect(fs.existsSync(path.join(linked, '.codex'))).toBe(true);
+
+    // A versioned parent hook initializes each clone before its first session.
+    const hooks = path.join(m.parent, '.hooks');
+    write(path.join(hooks, 'post-checkout'), '#!/bin/sh\ngit submodule update --init\n');
+    fs.chmodSync(path.join(hooks, 'post-checkout'), 0o755);
+    m.git(['add', '.hooks'], m.parent);
+    m.git(['commit', '-qm', 'initialize submodules'], m.parent);
+    m.git(['config', 'core.hooksPath', '.hooks'], m.parent);
+    const parentWorktree = path.join(m.base, 'parent-linked');
+    m.git(['worktree', 'add', '-q', '--detach', parentWorktree], m.parent);
+    const child = path.join(parentWorktree, 'service');
+    expect(fs.existsSync(path.join(child, '.git'))).toBe(true);
+    m.git(['config', 'core.hooksPath', hooks], child);
+    const parentHookBefore = read(path.join(hooks, 'post-checkout'));
+    m.cli(['pull', '--force'], child);
+    expect(read(path.join(child, '.claude/settings.local.json'))).toContain('echo fixture');
+    expect(read(path.join(child, '.codex/hooks.json'))).toContain('echo fixture');
+    expect(m.git(['config', '--get', 'hook.teamai-post-checkout.command'], child)).toContain('hook-dispatch');
+    expect(read(path.join(hooks, 'post-checkout'))).toBe(parentHookBefore);
+    expect(fs.readdirSync(partitions)).toHaveLength(1);
+    m.cli(['pull', '--force'], m.checkout);
+    expect(read(path.join(m.checkout, '.agents/skills/local/SKILL.md'))).toBe(originalSkill);
+    expect(m.git(['status', '--porcelain'], m.checkout)).toBe('');
+    m.cli(['uninstall', '--force'], m.checkout);
+    expect(m.git(['config', '--local', '--list'], child)).not.toContain('hook.teamai-');
+    expect(read(claude)).not.toContain('echo fixture');
+    expect(read(path.join(child, '.claude/settings.local.json'))).not.toContain('echo fixture');
+    expect(fs.lstatSync(path.join(m.checkout, '.claude/skills')).isSymbolicLink()).toBe(true);
+    expect(read(path.join(m.checkout, '.agents/skills/local/SKILL.md'))).toBe(originalSkill);
+    expect(fs.existsSync(path.join(m.checkout, '.agents/skills/teamai/SKILL.md'))).toBe(false);
+  });
+
+  it.each([false, true])('uses the older-Git fallback with hooksPath=%s', async (hooksPath) => {
+    const m = fixture(`old-git-${hooksPath}`, true);
+    const sharedHook = path.join(m.parent, '.hooks/post-checkout');
+    if (hooksPath) {
+      write(sharedHook, '#!/bin/sh\necho parent\n');
+      fs.chmodSync(sharedHook, 0o755);
+      m.git(['config', 'core.hooksPath', path.dirname(sharedHook)], m.checkout);
+    }
+    m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'claude', '--force'], m.checkout);
+    expect(read(path.join(m.checkout, '.claude/settings.local.json'))).toContain('echo fixture');
+    const childHook = path.join(m.parent, '.git/modules/service/hooks/post-checkout');
+    if (hooksPath) {
+      expect(read(sharedHook)).toBe('#!/bin/sh\necho parent\n');
+      expect(fs.existsSync(childHook)).toBe(false);
+    } else expect(read(childHook)).toContain('hook-dispatch');
+  });
+
+  it('rejects a skill root pointing outside the checkout without writes', () => {
+    const m = fixture('foreign-skills');
+    const external = path.join(m.base, 'external');
+    fs.mkdirSync(external);
+    fs.mkdirSync(path.join(m.checkout, '.claude'));
+    fs.symlinkSync(external, path.join(m.checkout, '.claude/skills'));
+    m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'claude', '--force'], m.checkout);
+    expect(fs.readdirSync(external)).toEqual([]);
+  });
+});

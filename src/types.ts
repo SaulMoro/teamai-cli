@@ -982,6 +982,8 @@ export const StateSchema = z.object({
    * inputs still match skips spawning `codex app-server`. Absent = run it.
    */
   codexTrustFingerprint: z.string().optional(),
+  /** Project grants this installation actually created; pre-existing user choices are never recorded. */
+  codexProjectTrust: z.array(z.object({ home: z.string(), project: z.string() })).optional(),
   /**
    * OpenCode configs whose `instructions` entry for teamai's context file
    * teamai added, as `{ config, entry }`, so uninstall removes the entry even
@@ -1588,7 +1590,7 @@ export interface DashboardEvent {
    */
   dataHome?: string;
   /**
-   * Main checkout of the git repo holding `cwd` (`resolveAnchors().projectAnchor`),
+   * Stable identity of the git repo holding `cwd` (`resolveAnchors().projectAnchor`),
    * shared by all of its worktrees, so a session is attributed to its repo even
    * after its worktree is removed (#809). An event whose `cwd` no longer exists
    * carries the session's last anchor (#810). Absent outside git, on events that
@@ -2108,8 +2110,7 @@ export type CultureFrontmatter = z.infer<typeof CultureFrontmatterSchema>;
  * workspace root (subdirectory/worktree aware via `resolveAnchors`).
  *
  * This is deliberately separate from the per-project machine-data home: a later
- * phase (P1) keys machine-local data by the shared `projectAnchor` (the main
- * checkout) under `~/.teamai/projects/<slug>/`, while resources continue to land
+ * phase (P1) keys machine-local data by the shared `projectAnchor` (the repository identity) under `~/.teamai/projects/<slug>/`, while resources continue to land
  * at the workspace root returned here. This function only ever governs resource
  * landing, never machine-data location.
  */

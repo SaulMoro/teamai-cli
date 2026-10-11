@@ -18,6 +18,7 @@ import {
 } from './agent-skills.js';
 import { RESOURCE_TYPES, LocalConfigSchema, getDataHome, type GlobalOptions, type ResourceType } from './types.js';
 import { projectsRootDir, readAnchorFile, projectSlug, legacyProjectSlug } from './utils/partition.js';
+import { checkoutForProjectAnchor } from './utils/git.js';
 import { mcpEntryReader } from './resources/mcp.js';
 import { resolveTeamHookEntries } from './resources/hooks.js';
 import { envEntryReader } from './resources/env.js';
@@ -212,7 +213,9 @@ async function statusAll(): Promise<void> {
         const parsed = LocalConfigSchema.parse(YAML.parse(cfgRaw));
         scope = parsed.scope;
         kind = parsed.repo.kind;
-        if (!projectPath) projectPath = parsed.repo.businessRepoRoot ?? parsed.projectRoot ?? null;
+        const recordedRoot = parsed.repo.businessRepoRoot ?? parsed.projectRoot;
+        projectPath = anchor ? await checkoutForProjectAnchor(anchor, recordedRoot) ?? recordedRoot ?? anchor
+          : recordedRoot ?? null;
       } catch { /* unreadable config — leave fields undefined */ }
     }
 

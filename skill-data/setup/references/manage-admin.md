@@ -334,3 +334,7 @@ the nudge; members can still contribute on request.
 - Don't hand-run raw `git` commands.
 - Don't create a second team repo.
 - Don't use `owner/repo` short form — always the full URL.
+
+### Superproject worktrees
+
+Initialize each original submodule once. After the parent initializes submodules in a new worktree, run `teamai pull --silent` in each initialized child before starting an AI session; the children inherit the original config and install their own Git hooks. Independent child clones need separate init. On Git < 2.54, if the children use the parent's versioned `core.hooksPath`, put the dispatch line once in each applicable parent hook. Follow the admin guide for the full sequence.

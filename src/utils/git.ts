@@ -818,27 +818,18 @@ export async function isDedicatedRepoRoot(repoPath: string): Promise<boolean> {
 }
 
 /**
- * The two path anchors teamai derives from a git checkout (issue #374).
- *
- * These are deliberately distinct because a git worktree has two different
- * "roots":
- *  - `workspaceRoot` is the CURRENT checkout (`git rev-parse --show-toplevel`).
- *    Each worktree has its own. This is where project-scope AI-tool resources
- *    (skills/rules/agents) must be written, because every tool discovers them by
- *    scanning up from the launch directory to the current repository root — it
- *    does NOT follow `git-common-dir` back to the main checkout.
- *  - `projectAnchor` is the MAIN checkout, shared by the main repo and all of its
- *    worktrees (the first entry of `git worktree list --porcelain`). This is the
- *    stable per-project identity that P1 will use to key machine-local data under
- *    `~/.teamai/projects/<slug>/`.
- *
- * For a plain (non-worktree) repository the two are identical.
+ * Checkout paths and the stable identity used for project partitions.
+ * `workspaceRoot` receives this checkout's resources; `mainCheckout` receives
+ * shared tool files, or is null when each checkout needs its own files.
+ * `projectAnchor` remains Git's first worktree entry, including Git-directory
+ * identities, except initialized submodule clones in superproject worktrees
+ * inherit the original submodule's identity.
  */
 export interface ProjectAnchors {
   workspaceRoot: string;
   projectAnchor: string;
-  /** The shared identity is a bare repository, not a checkout suitable for project files. */
-  projectAnchorIsBare?: boolean;
+  /** Checkout whose shared project files tools read; null when Git cannot locate one. */
+  mainCheckout: string | null;
 }
 
 /**
@@ -849,7 +840,7 @@ export interface ProjectAnchors {
  *
  * Implementation notes:
  *  - `workspaceRoot` is `--show-toplevel` (the current checkout).
- *  - `projectAnchor` is the MAIN worktree, taken from the FIRST entry of
+ *  - `projectAnchor` is the stable identity, taken from the FIRST entry of
  *    `git worktree list --porcelain` (git always lists the main worktree first).
  *    Every linked worktree reports the same first entry, so all worktrees of a
  *    repo share one anchor. This is deliberately NOT `dirname(--git-common-dir)`:
@@ -881,27 +872,34 @@ export async function resolveAnchors(cwd?: string): Promise<ProjectAnchors | nul
 
 async function readAnchors(cwd?: string): Promise<ProjectAnchors | null> {
   const git = createGit(cwd);
-  let toplevel: string;
-  let mainWorktree: string;
-  let projectAnchorIsBare = false;
   try {
-    toplevel = (await git.revparse(['--show-toplevel'])).trim();
-    const list = await git.raw(['worktree', 'list', '--porcelain']);
-    // The first `worktree <path>` line is the main worktree, shared by all
-    // linked worktrees of this repository.
-    const first = list.split('\n').find((l) => l.startsWith('worktree '));
-    mainWorktree = first ? first.slice('worktree '.length).trim() : '';
-    projectAnchorIsBare = list.split('\n\n')[0].split('\n').some((line) => line.trim() === 'bare');
-  } catch {
-    return null;
-  }
-  if (!toplevel || !mainWorktree) return null;
-  try {
-    const [workspaceRoot, projectAnchor] = await Promise.all([
-      realpath(toplevel),
-      realpath(mainWorktree),
-    ]);
-    return { workspaceRoot, projectAnchor, ...(projectAnchorIsBare ? { projectAnchorIsBare: true } : {}) };
+    const toplevel = (await git.revparse(['--show-toplevel'])).trim();
+    const entries = await readWorktreeList(cwd) ?? await readWorktreeList(cwd, true);
+    const first = entries?.[0];
+    if (!toplevel || !first) return null;
+    const workspaceRoot = await realpath(toplevel);
+    let projectAnchor = first.path;
+    const commonDir = await gitCommonDir(workspaceRoot);
+    let mainCheckout: string | null = first.bare ? null : projectAnchor;
+    if (!first.bare && projectAnchor === commonDir) {
+      const worktree = await git.raw(['--git-dir', commonDir, 'config', '--get', 'core.worktree']).catch(() => '');
+      if (worktree.trim()) {
+        mainCheckout = await realpath(path.resolve(commonDir, worktree.trim()));
+      } else {
+        const gitDir = await realpath(path.resolve(cwd ?? process.cwd(), (await git.revparse(['--git-dir'])).trim()));
+        mainCheckout = gitDir === commonDir ? workspaceRoot : null;
+      }
+    }
+    // Superproject worktrees clone submodules into their own modules directory.
+    // Only an existing original submodule can supply their shared identity.
+    if (commonDir && projectAnchor === commonDir) {
+      const clone = commonDir.match(/^(.*)[\\/]worktrees[\\/][^\\/]+[\\/]modules[\\/](.+)$/);
+      if (clone) {
+        const original = path.join(clone[1], 'modules', clone[2]);
+        if (await fse.pathExists(original)) projectAnchor = await realpath(original);
+      }
+    }
+    return { workspaceRoot, projectAnchor, mainCheckout };
   } catch {
     return null;
   }
@@ -970,6 +968,26 @@ export async function gitCommonDir(cwd: string): Promise<string | null> {
 export async function isLiveCheckout(root: string, commonDir: string): Promise<boolean> {
   if (!await fse.pathExists(path.join(root, '.git'))) return false;
   return await gitCommonDir(root) === commonDir;
+}
+
+/** A live checkout sharing a TeamAI identity, including inherited submodule clones. */
+export async function isLiveProjectCheckout(root: string, projectAnchor: string): Promise<boolean> {
+  if (!await fse.pathExists(path.join(root, '.git'))) return false;
+  return (await resolveAnchors(root))?.projectAnchor === projectAnchor;
+}
+
+/** Recover a checkout from a persisted identity without treating a Git directory as one. */
+export async function checkoutForProjectAnchor(anchor: string, recordedRoot?: string): Promise<string | null> {
+  if (!await fse.pathExists(anchor)) return null;
+  const worktree = await createGit(anchor).raw(['config', '--get', 'core.worktree']).catch(() => '');
+  const candidates = [anchor, ...(worktree.trim() ? [path.resolve(anchor, worktree.trim())] : []),
+    ...recordedRoot ? [recordedRoot] : [], ...await listWorktrees(anchor)];
+  for (const candidate of candidates) {
+    if (!await fse.pathExists(path.join(candidate, '.git'))) continue;
+    const anchors = await resolveAnchors(candidate);
+    if (anchors?.projectAnchor === anchor) return anchors.mainCheckout ?? anchors.workspaceRoot;
+  }
+  return null;
 }
 
 /** A `git worktree list` entry, with `path` realpath'd and `listed` as git printed it. */

@@ -34,6 +34,8 @@ export interface CodexHookTrustRequest {
   hooks: Array<{ file: string; command: string; key: string }>;
   /** Project to trust first, so Codex reads its `.codex/` layer (realpath). */
   project?: string;
+  /** Record ownership only when this pass actually creates project trust. */
+  onProjectTrusted?: (project: string) => Promise<void>;
 }
 
 /** What Codex says about each hook teamai wrote, for `doctor`. */
@@ -186,13 +188,14 @@ async function batchWrite(server: AppServer, keyPath: string, value: Record<stri
  * after the call: `trusted`, or `untrusted` when the member marked it so in
  * Codex — that choice is theirs and is never overwritten.
  */
-async function ensureProjectTrusted(server: AppServer, project: string): Promise<'trusted' | 'untrusted'> {
+async function ensureProjectTrusted(server: AppServer, project: string, onWritten?: (project: string) => Promise<void>): Promise<'trusted' | 'untrusted'> {
   const read = await server.request('config/read', {}) as
     { config?: { projects?: Record<string, { trust_level?: string }> | null } } | null;
   const level = read?.config?.projects?.[project]?.trust_level;
   if (level === 'trusted') return 'trusted';
   if (level === 'untrusted') return 'untrusted';
   await batchWrite(server, 'projects', { [project]: { trust_level: 'trusted' } });
+  await onWritten?.(project);
   return 'trusted';
 }
 
@@ -208,6 +211,26 @@ export async function trustCodexProject(req: { codexHome: string; project: strin
     return level === 'trusted'
       ? { kind: 'trusted', hooks: 0, project }
       : { kind: 'project-untrusted', hooks: 0, project };
+  });
+}
+
+/** Remove a recorded trust grant only while it still contains exactly what teamai wrote. */
+export async function removeOwnedCodexProjectTrust(req: { codexHome: string; project: string }): Promise<
+  { kind: 'removed' | 'kept' } | AppServerFailure
+> {
+  const project = canonical(req.project);
+  return withAppServer(req.codexHome, async (server) => {
+    const read = await server.request('config/read', {}) as {
+      config?: { projects?: Record<string, Record<string, unknown>> };
+    } | null;
+    const entry = read?.config?.projects?.[project];
+    if (!entry || entry.trust_level !== 'trusted' || Object.keys(entry).length !== 1) return { kind: 'kept' as const };
+    const result = await server.request('config/batchWrite', {
+      edits: [{ keyPath: `projects.${JSON.stringify(project)}`, value: null, mergeStrategy: 'replace' }],
+      reloadUserConfig: true,
+    }) as { status?: string } | null;
+    if (result?.status !== 'ok') throw new AppServerError(`could not remove recorded project trust for ${project}`);
+    return { kind: 'removed' as const };
   });
 }
 
@@ -230,7 +253,7 @@ export async function trustCodexHooks(req: CodexHookTrustRequest): Promise<Codex
   const wanted = new Set(req.hooks.map((h) => hookId(h.file, h.command, h.key)));
   const project = req.project ? canonical(req.project) : undefined;
   return withAppServer(req.codexHome, async (server): Promise<CodexTrust> => {
-    const level = project ? await ensureProjectTrusted(server, project) : undefined;
+    const level = project ? await ensureProjectTrusted(server, project, req.onProjectTrusted) : undefined;
     const listed = await listHooks(server, req.cwd);
     const loaded = new Set(listed.map((h) => hookId(h.sourcePath, h.command, h.key)));
     const missing = req.hooks.filter((h) => !loaded.has(hookId(h.file, h.command, h.key)));

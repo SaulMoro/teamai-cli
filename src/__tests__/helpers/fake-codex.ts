@@ -75,6 +75,7 @@ process.stdin.on('data', (chunk) => {
     else if (m.method === 'config/batchWrite') {
       for (const e of m.params.edits) {
         if (e.keyPath === 'projects') Object.assign(s.projects, e.value);
+        else if (e.keyPath.startsWith('projects.') && e.value === null) delete s.projects[JSON.parse(e.keyPath.slice('projects.'.length))];
         else if (e.keyPath === 'hooks.state') for (const [k, v] of Object.entries(e.value)) s.hooksState[k] = { ...(s.hooksState[k] || {}), ...v };
       }
       save(s);

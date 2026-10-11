@@ -399,7 +399,9 @@ Where each tool's servers land:
 | pi | `~/.pi/agent/mcp.json` | `<project>/.pi/mcp.json` |
 | zcode | `~/.agents/mcp.json` | — (ZCode's project MCP format is not written) |
 
-Codex reads `<project>/.codex/config.toml` only in a trusted project. After writing team MCP servers, `teamai pull` trusts the main checkout automatically, unless `codexTrustEnabled: false` is set or the project was explicitly marked untrusted. If automatic trust is disabled or fails, add a `[projects."<main checkout real path>"]` table with `trust_level = "trusted"` to `~/.codex/config.toml`; trusting the main checkout covers every worktree of the repository. `teamai doctor` reports an untrusted project whose file holds team servers.
+Skill-directory symlinks can share team skills and the built-in TeamAI skill within the same checkout and repository. Links into child repositories or outside the checkout are rejected; tracked and member-owned content stays. See [linked skill directories](./member-guide.md#auto-sync) in the member guide.
+
+Codex reads `<project>/.codex/config.toml` only in a trusted project. After writing team MCP servers, `teamai pull` trusts the main checkout automatically, unless `codexTrustEnabled: false` is set or the project was explicitly marked untrusted. If automatic trust is disabled or fails, add a `[projects."<main checkout real path>"]` table with `trust_level = "trusted"` to `~/.codex/config.toml`; trusting the located main checkout covers its linked worktrees. When Git cannot locate it, trust each checkout; inherited submodule clones also need their own checkout trusted. `teamai doctor` reports an untrusted project whose file holds team servers.
 
 
 In user scope CodeBuddy reads one MCP file, the first that exists of

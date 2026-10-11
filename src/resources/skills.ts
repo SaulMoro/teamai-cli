@@ -1,13 +1,14 @@
 import path from 'node:path';
+import { lstat, realpath } from 'node:fs/promises';
 import YAML from 'yaml';
 import { isToolInstalledForConfig, ResourceHandler } from './base.js';
 import type { CopyOrigin, ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
-import { getPushignorePath, isAgentExcluded, resolveToolBaseDir, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
+import { getPushignorePath, isAgentExcluded, resolveBaseDir, resolveToolBaseDir, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY } from '../types.js';
 import { listDirs, listFilesRecursive, pathExists, copyDir, remove, pruneEmptyDirs, dirContentEqual, dirTeamSubsetEqual, fileContentEqual, fileHash, getDirLatestMtime, readFileSafe, writeFile } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { warnOnce } from '../utils/warn-once.js';
-import { getFileContentWhenAdded, isPastVersionOf } from '../utils/git.js';
-import { isCliOwnedSkillName, ownedSkillFiles, prunedWhole, removeOwnedFiles } from '../builtin-skills.js';
+import { getFileContentWhenAdded, isPastVersionOf, resolveAnchors } from '../utils/git.js';
+import { isCliOwnedSkillName, ownedSkillFiles, prunedWhole, removeOwnedFiles, skillsGuardBase } from '../builtin-skills.js';
 import { resolveOpenclawWorkspaceDir } from '../openclaw-hooks.js';
 import { getHermesHome } from '../hermes-home.js';
 import {
@@ -27,6 +28,28 @@ const CONTRIBUTORS_FILE = 'CONTRIBUTORS';
 const SKILL_MD = 'SKILL.md';
 export const CODEX_TOOL = 'codex';
 export const SHARED_AGENT_SKILLS_PATH = '.agents/skills';
+
+/** Root links may share skills within one checkout; a skill's own link remains the member's. */
+export async function allowsSkillDirectory(baseDir: string, target: string): Promise<boolean> {
+  const relative = path.relative(baseDir, target);
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return false;
+  let walked = baseDir;
+  for (const segment of relative.split(path.sep).filter(Boolean)) {
+    walked = path.join(walked, segment);
+    const entry = await lstat(walked).catch((e: NodeJS.ErrnoException) => e.code === 'ENOENT' ? null : Promise.reject(e));
+    if (!entry) break;
+    if (!entry.isSymbolicLink()) continue;
+    if (walked === target) return false;
+    const resolved = await realpath(walked).catch(() => null);
+    if (!resolved) return false;
+    const base = await realpath(baseDir);
+    const rel = path.relative(base, resolved);
+    if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return false;
+    const [from, to] = await Promise.all([resolveAnchors(base), resolveAnchors(resolved)]);
+    if (!from || from.workspaceRoot !== to?.workspaceRoot) return false;
+  }
+  return true;
+}
 
 /**
  * Whether the existing copy at `sharedDir`, in Codex's shared `.agents/skills`,
@@ -73,7 +96,7 @@ export async function resolveSkillDestination(
     // `doctor` and the post-pull pass would otherwise warn about a conflict
     // on every skill, for copies the write path treats as identical.
     if (!sourcePath) return sharedDestination;
-    if (await pathExists(configuredDestination)) {
+    if (await pathExists(configuredDestination) && resolveReal(sharedDestination) !== resolveReal(configuredDestination)) {
       // A link there is the member's: never deleted as a duplicate (#993).
       if (await isLink(configuredDestination)) {
         log.warn(describeMembersLink(configuredDestination, `skills/${skillName}`));
@@ -161,12 +184,18 @@ export async function skillTargetForTool(
 ): Promise<string | null> {
   const skillsDir = await skillsDirForTool(tool, configuredSkillsPath, localConfig);
   if (skillsDir === null || configuredSkillsPath === undefined) return null;
+  const baseDir = resolveToolBaseDir(tool, localConfig);
+  if (!await allowsSkillDirectory(skillsGuardBase(resolveBaseDir(localConfig), skillsDir), path.join(skillsDir, skillName))) {
+    log.warn(`Skipped ${skillName} (${tool}): the skill path leaves this checkout or is a member-owned link. Point the skill directory inside the same repository.`);
+    return null;
+  }
 
   // Codex alone can redirect a skill to the shared `.agents/skills` directory,
   // and only for a skill whose copy there is teamai's — so the destination is
   // per-skill and the gate above cannot answer it.
   if (tool === CODEX_TOOL) {
-    const baseDir = resolveToolBaseDir(tool, localConfig);
+    const shared = path.join(baseDir, SHARED_AGENT_SKILLS_PATH, skillName);
+    if (!await allowsSkillDirectory(baseDir, shared)) return path.join(skillsDir, skillName);
     return resolveSkillDestination(tool, configuredSkillsPath, baseDir, skillName, ownsShared, sourcePath);
   }
 

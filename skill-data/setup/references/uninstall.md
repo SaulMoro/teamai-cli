@@ -69,6 +69,8 @@ and give it your team repo URL."*
 - A migrated data partition is one installation shared by its checkouts. Uninstall
   removes the selected tools' shared hooks and registrations for that installation.
   Full uninstall removes the partition; targeted uninstall keeps the other tools.
+  Inherited submodule clones keep separate checkout ownership within that partition;
+  uninstall removes their recorded hooks too, preserving versioned parent hooks.
 - For OpenCode, uninstall also removes the rules globs teamai added to
   `instructions` in `opencode.json`, including the relative `rules/*.md` an
   earlier release wrote in user scope. In a project it removes

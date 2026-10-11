@@ -79,6 +79,17 @@ teamai init https://github.com/your-org/your-repo
 工具创建：打开 Claude Code 时会创建 `.claude/`，再由 pull 写入。单独执行 `teamai pull`，以及非交互且不带
 `--agent` 的 `init`，仍会跳过项目里还不存在根目录的工具，因此不会给尚未在本项目选择或打开过的 Agent 凭空建目录。
 
+父仓库 worktree 中初始化的子模块在原始子模块存在时，共享其 TeamAI 分区。只需初始化原始子模块一次，然后在每个新克隆中运行 pull；首次 pull 会安装该克隆自己的 Git hooks。父仓库 hook 初始化子模块后，应在返回前完成分发：
+
+```sh
+git submodule update --init --recursive || exit "$?"
+git submodule foreach --recursive 'command -v teamai >/dev/null 2>&1 && teamai pull --silent || true'
+```
+
+将这两行放在父仓库 checkout 步骤之后。每个子模块按自己的 checkout 路径分发并记录所有权。独立子克隆和工作区根目录仍使用各自的项目配置。
+
+Git 低于 2.54 时，如果子模块共用父仓库版本化的 `core.hooksPath`，在下文所述的每个适用父仓库 hook 中添加一次 `hook-dispatch` 行即可覆盖所有使用这些共享 hooks 的子模块；不要为每个子模块重复追加。TeamAI 不修改这些版本化 hooks。
+
 新 worktree 不必等到第一次会话。在项目 scope 下，`teamai init` 与 `teamai pull` 会在仓库的本地
 git 配置中安装一个 git hook，所有 worktree 共用：`hook.teamai-post-checkout`、
 `hook.teamai-post-merge` 与 `hook.teamai-post-rewrite`（需要 Git 2.54 或更高版本）。Git 会在任何
