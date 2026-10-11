@@ -550,7 +550,7 @@ export async function deployBuiltinSkills(
       // The other Codex copy is dealt with below, under the guard. A built-in
       // name is the CLI's (`isCliOwnedSkillName`), so an existing shared copy
       // takes the stub; its files are judged by what a release shipped.
-      const ownsShared = async (): Promise<boolean> => true;
+      const ownsShared = async (dir: string): Promise<boolean> => allowsSkillDirectory(baseDir, dir);
       const destDir = localConfig
         ? await skillTargetForTool(tool, toolPath.skills, localConfig, skillName, ownsShared) ?? path.join(target.skillsDir, skillName)
         : await resolveSkillDestination(tool, toolPath.skills, baseDir, skillName, ownsShared);

@@ -184,18 +184,11 @@ export async function skillTargetForTool(
 ): Promise<string | null> {
   const skillsDir = await skillsDirForTool(tool, configuredSkillsPath, localConfig);
   if (skillsDir === null || configuredSkillsPath === undefined) return null;
-  const baseDir = resolveToolBaseDir(tool, localConfig);
-  if (!await allowsSkillDirectory(skillsGuardBase(resolveBaseDir(localConfig), skillsDir), path.join(skillsDir, skillName))) {
-    log.warn(`Skipped ${skillName} (${tool}): the skill path leaves this checkout or is a member-owned link. Point the skill directory inside the same repository.`);
-    return null;
-  }
-
   // Codex alone can redirect a skill to the shared `.agents/skills` directory,
   // and only for a skill whose copy there is teamai's — so the destination is
   // per-skill and the gate above cannot answer it.
   if (tool === CODEX_TOOL) {
-    const shared = path.join(baseDir, SHARED_AGENT_SKILLS_PATH, skillName);
-    if (!await allowsSkillDirectory(baseDir, shared)) return path.join(skillsDir, skillName);
+    const baseDir = resolveToolBaseDir(tool, localConfig);
     return resolveSkillDestination(tool, configuredSkillsPath, baseDir, skillName, ownsShared, sourcePath);
   }
 
@@ -841,8 +834,15 @@ export class SkillsHandler extends ResourceHandler {
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (isAgentExcluded(localConfig, tool)) continue;
 
+      const skillsDir = await skillsDirForTool(tool, toolPath.skills, localConfig);
+      if (!skillsDir) continue;
+      const guard = skillsGuardBase(resolveBaseDir(localConfig), skillsDir);
+      if (!await allowsSkillDirectory(guard, path.join(skillsDir, item.name))) {
+        log.warn(`Skipped ${item.name} (${tool}): the skill path leaves this checkout or is a member-owned link. Point the skill directory inside the same repository.`);
+        continue;
+      }
       const ownsShared = async (dest: string): Promise<boolean> =>
-        (await judgeCopy(previous, item, { tool, dest, origin })).kind !== 'member';
+        await allowsSkillDirectory(guard, dest) && (await judgeCopy(previous, item, { tool, dest, origin })).kind !== 'member';
       const dest = await skillTargetForTool(tool, toolPath.skills, localConfig, item.name, ownsShared, sourcePath);
       if (dest) targets.push({ tool, dest, origin });
     }
