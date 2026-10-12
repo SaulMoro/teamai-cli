@@ -652,6 +652,12 @@ export const TeamaiConfigBaseSchema = z.object({
       mcpProject: 'opencode.json',
       userScope: { skills: '.config/opencode/skills', rules: '.config/opencode/rules', agents: '.config/opencode/agents' },
     },
+    // Muse Code (Meta, binary `muse`) keeps its user config in ~/.config/muse
+    // and reads user skills from ~/.config/muse/skills, ahead of the
+    // ~/.claude/skills and ~/.agents/skills it also scans.
+    muse: {
+      userScope: { skills: '.config/muse/skills' },
+    },
   }),
 });
 

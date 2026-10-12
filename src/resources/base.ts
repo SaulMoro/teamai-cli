@@ -13,9 +13,10 @@ const TOMBSTONE_FILE = '.removed';
 /**
  * The root that says a tool is installed, for a tool with a path under
  * another tool's root: WorkBuddy reads a project's rules from CodeBuddy's
- * `.codebuddy/rules` (#946), which says nothing about WorkBuddy.
+ * `.codebuddy/rules` (#946), which says nothing about WorkBuddy, and Muse
+ * Code's project paths sit under `.agents`, which Codex users have too.
  */
-const INSTALL_ROOTS: Readonly<Record<string, string>> = { workbuddy: '.workbuddy' };
+const INSTALL_ROOTS: Readonly<Record<string, string>> = { workbuddy: '.workbuddy', muse: '.config/muse' };
 
 /** Each edition of a product sharing one project directory, and the HOME root that alone says the member runs it. */
 const EDITION_HOME_ROOTS: Readonly<Record<string, string>> = {

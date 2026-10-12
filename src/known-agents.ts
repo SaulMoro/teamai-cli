@@ -113,6 +113,7 @@ export const KNOWN_AGENTS: KnownAgent[] = [
   { id: 'trae-cn', displayName: 'Trae CN', category: 'coding', skillsPath: '.trae-cn/skills' },
   { id: 'windsurf', displayName: 'Windsurf', category: 'coding', skillsPath: '.windsurf/skills' },
   { id: 'zcode', displayName: 'ZCode', category: 'coding', skillsPath: '.zcode/skills' },
+  { id: 'muse', displayName: 'Muse Code', category: 'coding', skillsPath: '.config/muse/skills' },
 
   // Lobster family
   { id: 'openclaw', displayName: 'OpenClaw', category: 'lobster', skillsPath: '.openclaw/skills' },
