@@ -659,6 +659,7 @@ export const TeamaiConfigBaseSchema = z.object({
     // which runs in every workspace, project hooks in <root>/.muse/hooks.json,
     // which runs only in a trusted one.
     muse: {
+      skills: '.agents/skills',
       settings: '.muse/hooks.json',
       // User MCP servers sit in the same settings.json. A project's come from
       // the <root>/.mcp.json the claude target writes, as for tclaude.

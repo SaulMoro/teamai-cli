@@ -171,6 +171,37 @@ describe('Muse Code resource delivery', () => {
     expect(fs.readFileSync(path.join(projectRoot, '.agents', 'agents', 'reviewer.md'), 'utf8')).toContain('  - read_file\n');
   }, 90_000);
 
+  // Muse and Codex both read <root>/.agents/skills in project scope.
+  it.each(['codex', 'muse'])('keeps one project copy in .agents/skills for Codex and Muse, and uninstalling %s keeps it for the other', async (first) => {
+    const projectRoot = path.join(sandbox, `project-shared-${first}`);
+    fs.mkdirSync(projectRoot, { recursive: true });
+    const home = makeHome(`home-shared-${first}`);
+    fs.mkdirSync(path.join(home, '.config', 'muse'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
+
+    const init = await runCLI(
+      ['init', FAKE_URL, '--scope', 'project', '--role', 'dev', '--agent', 'codex,muse', '--force'],
+      projectRoot,
+      home,
+    );
+    expect(init.code, init.output).toBe(0);
+    const shared = path.join(projectRoot, '.agents', 'skills', 'demo', 'SKILL.md');
+    expect(fs.readFileSync(shared, 'utf8')).toContain('Muse fixture skill');
+    expect(fs.existsSync(path.join(projectRoot, '.codex', 'skills', 'demo'))).toBe(false);
+    expect(fs.existsSync(path.join(projectRoot, '.agents', 'skills', 'teamai', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(path.join(projectRoot, '.codex', 'skills', 'teamai'))).toBe(false);
+    expect(init.output).not.toContain('skill conflict');
+
+    const other = first === 'codex' ? 'muse' : 'codex';
+    const partial = await runCLI(['uninstall', '--agent', first, '--force'], projectRoot, home);
+    expect(partial.code, partial.output).toBe(0);
+    expect(fs.existsSync(shared), `${other} still reads it`).toBe(true);
+
+    const last = await runCLI(['uninstall', '--agent', other, '--force'], projectRoot, home);
+    expect(last.code, last.output).toBe(0);
+    expect(fs.existsSync(shared)).toBe(false);
+  }, 120_000);
+
   it('does not take a Codex-only machine for a Muse Code install', async () => {
     const workDir = path.join(sandbox, 'codex-work');
     fs.mkdirSync(workDir, { recursive: true });
