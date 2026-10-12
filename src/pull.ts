@@ -1130,6 +1130,7 @@ function awaitingFullSync(records: Record<string, CheckoutRecord>): Record<strin
       ...(record.delivered ? { delivered: record.delivered } : {}),
       ...(record.agentModels ? { agentModels: record.agentModels } : {}),
       ...(record.gitExcludePaths ? { gitExcludePaths: record.gitExcludePaths } : {}),
+      ...(record.rootsSeeded ? { rootsSeeded: true } : {}),
     };
     return [key, pushBaseRevs.length === 0 ? reset : { ...reset, pushBaseRevs }];
   }));
@@ -1494,11 +1495,22 @@ async function pullForScope(
     log.warn(`[${scopeLabel}] Team model profiles were not updated: ${(error as Error).message}`);
   }
 
-  // Before anything probes which tools this checkout has; once, like a new worktree's post-checkout.
-  if (workspaceKey && localConfig.projectRoot && !options.dryRun
-    && !(await loadStateForScope(localConfig)).lastPullByWorkspace?.[workspaceKey]) {
-    const { seedInheritedCheckoutRoots } = await import('./project-agent-root.js');
-    await seedInheritedCheckoutRoots(localConfig.projectRoot);
+  // Before anything probes which tools this checkout has; once, like a new
+  // worktree's post-checkout. A record saved before seeding existed reads as
+  // never seeded; one with no record yet is marked when this pull writes it.
+  let rootsSeeded = false;
+  if (workspaceKey && localConfig.projectRoot && !options.dryRun) {
+    const state = await loadStateForScope(localConfig);
+    const record = state.lastPullByWorkspace?.[workspaceKey];
+    if (!record?.rootsSeeded) {
+      const { seedInheritedCheckoutRoots } = await import('./project-agent-root.js');
+      await seedInheritedCheckoutRoots(localConfig.projectRoot);
+      rootsSeeded = true;
+      if (record) {
+        record.rootsSeeded = true;
+        await saveStateForScope(state, localConfig);
+      }
+    }
   }
 
   // Step 1b: Skip sync if the repo version hasn't changed since last pull
@@ -2094,6 +2106,7 @@ async function pullForScope(
         ? await userScopeRecord(state)
         : state.lastPullByWorkspace?.[recordKey] ?? { rev: FORCED_FULL_SYNC_REV, targets: syncedTargets };
       if (localConfig.scope === 'project' && localConfig.projectRoot) record.root = localConfig.projectRoot;
+      if (rootsSeeded) record.rootsSeeded = true;
       addPushBaseRev(record, deliveredRev);
       record.delivered = ledger.hashes;
       setAgentModels(record, ledger.agentModels);
@@ -2120,12 +2133,14 @@ async function pullForScope(
       // The delivered paths are rewritten after the last writer of this pull
       // (see syncDeliveredGitExclude): until then, the checkout's previous ones.
       const gitExcludePaths = state.lastPullByWorkspace?.[recordKey]?.gitExcludePaths;
+      const seeded = rootsSeeded || state.lastPullByWorkspace?.[recordKey]?.rootsSeeded;
       const record: CheckoutRecord = {
         rev: deliveredRev,
         ...(localConfig.scope === 'project' && localConfig.projectRoot ? { root: localConfig.projectRoot } : {}),
         targets: syncedTargets,
         delivered: ledger.hashes,
         ...(gitExcludePaths ? { gitExcludePaths } : {}),
+        ...(seeded ? { rootsSeeded: true } : {}),
       };
       setAgentModels(record, ledger.agentModels);
       state.lastPullByWorkspace = {

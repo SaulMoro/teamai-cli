@@ -134,9 +134,14 @@ export async function setCodexDispatcherHooks(project: string, hooks: CodexTeamH
     const before = JSON.stringify(index);
     if (checkout) {
       const previous = index.projects[project];
-      // A record without checkouts described the original main checkout's shared file.
-      const registered = checkoutHooks(previous)
-        ?? (previous?.hooks ? { [await checkoutForProjectAnchor(project) ?? project]: previous.hooks } : {});
+      // A record without checkouts described the original main checkout's shared
+      // file: the one the identity recovers, or the identity when it is a
+      // checkout itself (self mode). A Git directory is none; each real
+      // checkout's next pull registers its own hooks.
+      const original = previous?.hooks
+        ? await checkoutForProjectAnchor(project) ?? (fs.existsSync(path.join(project, '.git')) ? project : undefined)
+        : undefined;
+      const registered = checkoutHooks(previous) ?? (original && previous?.hooks ? { [original]: previous.hooks } : {});
       const checkouts = Object.fromEntries(Object.entries(registered).filter(([root]) => root !== checkout && fs.existsSync(root)));
       if (hooks) checkouts[checkout] = hooks;
       if (Object.keys(checkouts).length) index.projects[project] = { checkouts };

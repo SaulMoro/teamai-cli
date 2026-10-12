@@ -924,6 +924,9 @@ export const StateSchema = z.object({
    * (#915). It is kept whatever `sharing.gitExclude` says. A record without
    * it, saved by an older CLI, misses the fast path, so the next pull is a
    * full sync that writes it. A writer id this CLI does not know is kept.
+   * `rootsSeeded` marks a checkout whose tool roots pull seeded (#1041), so a
+   * root its member removes afterwards is not seeded again. A record without
+   * it, saved before seeding existed, reads as never seeded.
    */
   lastPullByWorkspace: z.record(z.string(), z.object({
     rev: z.string(),
@@ -933,6 +936,7 @@ export const StateSchema = z.object({
     delivered: z.record(z.string(), z.string()).optional(),
     agentModels: z.record(z.string(), z.record(z.string(), RecordedAgentModelSchema)).optional(),
     gitExcludePaths: z.record(z.string(), z.array(z.string())).optional(),
+    rootsSeeded: z.boolean().optional(),
   })).optional(),
   /**
    * The exclude files holding each git exclude owner's block that this

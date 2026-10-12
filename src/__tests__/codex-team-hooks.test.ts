@@ -45,12 +45,22 @@ describe('Codex team-hook index keeps each checkout\'s own hooks', () => {
     expect({ a: await command(a), b: await command(b) }).toEqual({ ...after, b: undefined });
   });
 
+  it('a project-wide record under a Git directory identity leaves no entry once the other checkout stops', async () => {
+    // No checkout is recoverable from the identity: the Git directory is not one.
+    seed({ hooks: hook('echo old') });
+    expect(await setCodexDispatcherHooks(project, hook('echo b'), b)).toBe(true);
+    expect(await dispatchedCodexHooks(project, project)).toBeUndefined();
+    expect(await setCodexDispatcherHooks(project, null, b)).toBe(true);
+    expect(fs.existsSync(codexTeamHookIndexPath())).toBe(false);
+  });
+
   it('a project-wide record keeps running for its original checkout after another checkout registers', async () => {
+    fs.mkdirSync(path.join(project, '.git'));
     seed({ hooks: hook('echo old') });
     expect((await dispatchedCodexHooks(project))?.[0]?.command).toBe('echo old');
 
     expect(await setCodexDispatcherHooks(project, hook('echo b'), b)).toBe(true);
-    // Outside git the original checkout resolves to the project anchor itself.
+    // A checkout keyed by itself (self mode) is its own original checkout.
     expect((await dispatchedCodexHooks(project, project))?.[0]?.command).toBe('echo old');
     expect((await dispatchedCodexHooks(project, b))?.[0]?.command).toBe('echo b');
   });

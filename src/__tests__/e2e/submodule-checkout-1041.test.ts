@@ -206,6 +206,42 @@ describe('multi-repo checkout delivery', () => {
     expect(read(path.join(child, '.claude/skills/teamai/SKILL.md'))).toContain('name: teamai');
   });
 
+  it('seeds the tool roots of a submodule clone that pulled before they were seeded, once', () => {
+    const m = fixture('upgraded-clone-pull');
+    m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'claude', '--force'], m.checkout);
+    const parentWorktree = path.join(m.base, 'parent-upgraded-pull');
+    m.git(['worktree', 'add', '-q', '--detach', parentWorktree], m.parent);
+    m.git(['submodule', 'update', '-q', '--init'], parentWorktree);
+    const child = path.join(parentWorktree, 'service');
+    m.cli(['pull', '--silent'], child);
+    // An earlier release recorded the pull without seeding any root, so with no tool to deliver to.
+    const states = fs.readdirSync(path.join(m.home, '.teamai'), { recursive: true, encoding: 'utf8' })
+      .filter((file) => path.basename(file) === 'state.json')
+      .map((file) => path.join(m.home, '.teamai', file))
+      .filter((file) => json(file).lastPullByWorkspace);
+    expect(states).not.toHaveLength(0);
+    for (const file of states) {
+      const state = json(file) as { lastPullByWorkspace: Record<string, Record<string, unknown>> };
+      for (const record of Object.values(state.lastPullByWorkspace)) {
+        delete record.rootsSeeded;
+        record.targets = [];
+      }
+      write(file, JSON.stringify(state));
+    }
+    fs.rmSync(path.join(child, '.claude'), { recursive: true, force: true });
+    m.cli(['pull', '--silent'], child);
+    expect(read(path.join(child, '.claude/skills/fixture/SKILL.md'))).toContain('name: fixture');
+    // The member removes the seeded root; a full sync leaves it removed.
+    fs.rmSync(path.join(child, '.claude'), { recursive: true, force: true });
+    m.cli(['pull', '--force', '--silent'], child);
+    expect(fs.existsSync(path.join(child, '.claude/skills'))).toBe(false);
+    // A forced full sync from another checkout resets this one's record and keeps it seeded.
+    for (const file of states) write(file, JSON.stringify({ ...json(file), lastPullRev: null }));
+    m.cli(['pull', '--silent'], m.checkout);
+    const records = states.flatMap((file) => Object.values(json(file).lastPullByWorkspace) as Array<{ root: string; rev: string; rootsSeeded?: boolean }>);
+    expect(records.find((record) => record.root === child)).toMatchObject({ rev: '', rootsSeeded: true });
+  });
+
   it('delivers, inherits, cleans up and uninstalls submodules through the real CLI', async () => {
     const m = fixture('submodules');
     fs.mkdirSync(path.join(m.checkout, '.claude'));

@@ -114,6 +114,10 @@ The fast path also needs the entry's `gitExcludePaths`, what each writer of
 the pull delivered into the checkout (the paths teamai's `delivered` git
 exclude block lists, #915). An entry saved by an older CLI has none, so the
 first pull after the upgrade is a full sync, whatever `sharing.gitExclude` says.
+The entry's `rootsSeeded` says pull seeded the checkout's tool roots, as a new
+linked worktree's post-checkout does, for a submodule clone the superproject
+created (#1041). An entry without it, older CLI's included, is seeded on the
+next pull, and a root the member removes afterwards stays removed.
 The block is the union of the `gitExcludePaths` of the live checkouts
 (`liveCheckoutRecords`), less paths that hold a file outside another live
 checkout's list; paths in another repository (a submodule, a nested clone, a tool
