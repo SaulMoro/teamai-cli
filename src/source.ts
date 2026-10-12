@@ -22,7 +22,7 @@ import {
 } from './utils/fs.js';
 import { getHandler } from './resources/index.js';
 import {
-  CODEX_TOOL, codexSkillConflictLine, resolveSkillDestination, sharedSkillsDelivered, skillOrigin, skillTargetForTool,
+  CODEX_TOOL, codexSkillConflictLine, resolveSkillDestination, skillOrigin, skillTargetsFor,
 } from './resources/skills.js';
 import {
   deliveredSkillFiles, describeKeptEntry, describeMembersLink, describeSkippedLink, holdsGitDir, holdsNonRegular, isLink, isTeamaiSkillCopy,
@@ -894,7 +894,7 @@ async function pullSingleSource(
     let conflictingPath: string | undefined;
     let conflictingRecord: string | undefined;
     const toolPaths = scopedToolPaths(teamConfig, localConfig);
-    const sharedDelivered = await sharedSkillsDelivered(toolPaths, localConfig);
+    const skillTarget = skillTargetsFor(toolPaths, localConfig);
     for (const [tool, toolPath] of Object.entries(toolPaths)) {
       if (isAgentExcluded(localConfig, tool)) continue;
       let membersShared = false;
@@ -903,7 +903,7 @@ async function pullSingleSource(
         membersShared = !owns;
         return owns;
       };
-      const target = await skillTargetForTool(tool, toolPath.skills, localConfig, skill.name, ownsShared, undefined, sharedDelivered);
+      const target = await skillTarget({ tool, skillName: skill.name, ownsShared });
       if (!target || !toolPath.skills) continue;
       if (membersShared) log.warn(codexSkillConflictLine(skill.name, toolPath.skills));
       const destination = await resolveSourceCopyDestination(target);

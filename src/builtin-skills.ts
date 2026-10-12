@@ -9,7 +9,7 @@ import { getCopilotHome, resolveBaseDir, isAgentExcluded, scopedToolPaths } from
 import { getHermesHome } from './hermes-home.js';
 import { resolveOpenclawWorkspaceDir } from './openclaw-hooks.js';
 import { ResourceHandler } from './resources/base.js';
-import { CODEX_TOOL, allowsSkillDirectory, resolveSkillDestination, SHARED_AGENT_SKILLS_PATH, sharedSkillsDelivered, skillsDirForTool, skillTargetForTool } from './resources/skills.js';
+import { CODEX_TOOL, allowsSkillDirectory, resolveSkillDestination, SHARED_AGENT_SKILLS_PATH, skillsDirForTool, skillTargetsFor } from './resources/skills.js';
 import { getUserHome } from './utils/home.js';
 import { packagedSkillRoots } from './skill-content.js';
 import { PACKAGED_SKILL_DIGESTS } from './packaged-skill-digests.js';
@@ -535,7 +535,7 @@ export async function deployBuiltinSkills(
   let deployed = 0;
 
   const toolPaths = scopedToolPaths(teamConfig, localConfig ?? {});
-  const sharedDelivered = localConfig ? await sharedSkillsDelivered(toolPaths, localConfig) : false;
+  const skillTarget = localConfig && skillTargetsFor(toolPaths, localConfig);
   for (const [tool, toolPath] of Object.entries(toolPaths)) {
     if (!toolPath.skills) continue;
 
@@ -561,8 +561,8 @@ export async function deployBuiltinSkills(
       // name is the CLI's (`isCliOwnedSkillName`), so an existing shared copy
       // takes the stub; its files are judged by what a release shipped.
       const ownsShared = async (dir: string): Promise<boolean> => allowsSkillDirectory(baseDir, dir);
-      const destDir = localConfig
-        ? await skillTargetForTool(tool, toolPath.skills, localConfig, skillName, ownsShared, undefined, sharedDelivered) ?? path.join(target.skillsDir, skillName)
+      const destDir = skillTarget
+        ? await skillTarget({ tool, skillName, ownsShared }) ?? path.join(target.skillsDir, skillName)
         : await resolveSkillDestination(tool, toolPath.skills, baseDir, skillName, ownsShared);
 
       try {
