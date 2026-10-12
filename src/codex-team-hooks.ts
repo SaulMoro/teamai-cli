@@ -55,12 +55,13 @@ export function isCodexTeamHookDispatcher(command: string): boolean {
   return DISPATCHER_COMMAND.test(command);
 }
 
-function indexPath(): string {
+/** The index of the projects whose Codex team hooks run from the dispatcher. */
+export function codexTeamHookIndexPath(): string {
   return path.join(getTeamaiHomeDir(), 'codex-team-hooks.json');
 }
 
 async function readIndex(): Promise<CodexTeamHookIndex> {
-  const data = await readJson<CodexTeamHookIndex>(indexPath());
+  const data = await readJson<CodexTeamHookIndex>(codexTeamHookIndexPath());
   return data && typeof data === 'object' && data.projects && typeof data.projects === 'object'
     ? data : { projects: {} };
 }
@@ -88,7 +89,7 @@ export async function dispatchedCodexHooks(project: string, checkout?: string): 
  * another process held the index for too long: nothing changed.
  */
 export async function setCodexDispatcherHooks(project: string, hooks: CodexTeamHook[] | null, checkout?: string): Promise<boolean> {
-  const file = indexPath();
+  const file = codexTeamHookIndexPath();
   // Nothing to change: no lock, no write (the common case, a project whose hooks stay in its file).
   const seen = (await readIndex()).projects[project];
   if (hooks === null ? seen === undefined || (checkout && seen.checkouts && !seen.checkouts.includes(checkout))

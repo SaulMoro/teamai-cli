@@ -15,7 +15,23 @@ import type { LocalConfig } from '../types.js';
 vi.mock('node:child_process', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
   // The detached background pass: run inline instead (bgOnly) so its writes are observable.
-  spawn: vi.fn(() => ({ on: vi.fn(), stdin: { on: vi.fn(), end: vi.fn((_: string, done: () => void) => done()) }, unref: vi.fn() })),
+  // A foreground dispatch with a background handler still spawns the detached
+  // child for real (spawnBackground): on win32 that goes through the WMI
+  // escape first, whose promise only settles via the process's own
+  // 'close'/'error' event. A bare `on: vi.fn()` never fires it, hanging every
+  // such test until timeout -- so this fires 'close' with a success code,
+  // same as hook-dispatch-cli.test.ts's fakePowerShell helper.
+  spawn: vi.fn(() => {
+    const child = {
+      stdin: { on: vi.fn(), end: vi.fn((_: string, done: () => void) => done()) },
+      on(event: string, cb: (...args: unknown[]) => void) {
+        if (event === 'close') setTimeout(() => cb(0), 0);
+        return child;
+      },
+      unref: vi.fn(),
+    };
+    return child;
+  }),
 }));
 vi.mock('../pull.js', () => ({ pull: vi.fn(async () => undefined) }));
 vi.mock('../update.js', () => ({
@@ -38,6 +54,7 @@ vi.mock('../utils/reports-branch.js', () => ({
 const { hookDispatchCli } = await import('../hook-dispatch-cli.js');
 const { resolveProjectDataHome, saveLocalConfigForScope, resolveConfigForDir, loadLocalConfig } = await import('../config.js');
 const { reportUsageToTeam } = await import('../team-push.js');
+const { reconcileHooks } = await import('../hooks.js');
 const { getDataHome } = await import('../types.js');
 const { dataHomeKey } = await import('../dashboard-collector.js');
 const dataHomeKeyOf = (config: LocalConfig) => dataHomeKey(getDataHome(config));
@@ -46,12 +63,14 @@ let tmp: string;
 let originalHome: string | undefined;
 let originalCwd: string;
 
-beforeEach(() => {
+beforeEach(async () => {
   tmp = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-dashboard-scope-')));
   originalHome = process.env.HOME;
   originalCwd = process.cwd();
   process.env.HOME = path.join(tmp, 'home');
   fs.mkdirSync(process.env.HOME);
+  // Copilot runs the built-ins it has installed.
+  await reconcileHooks(path.join(process.env.HOME, '.copilot', 'hooks', 'teamai.json'), 'copilot');
 });
 
 afterEach(() => {

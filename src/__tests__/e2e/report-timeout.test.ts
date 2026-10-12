@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -10,14 +10,16 @@ import { dataHomeKey } from '../../dashboard-collector.js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const cli = path.join(root, 'dist/index.js');
 const agents = { claude: '.claude', codex: '.codex', codebuddy: '.codebuddy', opencode: '.config/opencode' };
-let sandbox: string;
+// Removed after the file: the slow-push cases run concurrently.
+const sandboxes = new Set<string>();
 
 function git(args: string[], cwd: string, env: NodeJS.ProcessEnv): string {
   return execFileSync('git', args, { cwd, env, encoding: 'utf8', windowsHide: true });
 }
 
 function fixture(agent: keyof typeof agents, provider: string, team: Record<string, unknown> = {}) {
-  sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-report-timeout-'));
+  const sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-report-timeout-'));
+  sandboxes.add(sandbox);
   const home = path.join(sandbox, 'home');
   const seed = path.join(sandbox, 'seed');
   const remote = path.join(sandbox, 'remote.git');
@@ -100,16 +102,19 @@ function fixture(agent: keyof typeof agents, provider: string, team: Record<stri
   return { home, env, clone, usage, usageLine, dashboard, seedEvents, receiver, pull, stats, snapshot, run, runId };
 }
 
-afterEach(() => {
-  if (sandbox && path.dirname(sandbox) === os.tmpdir() && path.basename(sandbox).startsWith('teamai-report-timeout-')) {
-    fs.rmSync(sandbox, { recursive: true, force: true });
+afterAll(() => {
+  for (const sandbox of sandboxes) {
+    if (path.dirname(sandbox) === os.tmpdir() && path.basename(sandbox).startsWith('teamai-report-timeout-')) {
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
   }
 });
 
 describe('real CLI report completion', () => {
   for (const provider of ['git', 'gitlab', 'github']) {
     for (const agent of Object.keys(agents) as Array<keyof typeof agents>) {
-      it(`acknowledges slow pushes once: ${provider}/${agent}`, async () => {
+      // Concurrent: each case mostly waits out the remote's slow push, in its own sandbox.
+      it.concurrent(`acknowledges slow pushes once: ${provider}/${agent}`, async ({ expect }) => {
         const f = fixture(agent, provider);
         await f.pull(); // Warm reports worktree without any session data.
         await f.seedEvents();
@@ -157,6 +162,18 @@ describe('real CLI report completion', () => {
     expect(stats.prompts).toBe(1);
     expect(stats.tokens.input).toBe(10);
     expect(fs.readFileSync(f.usage, 'utf8')).toBe('');
+  }, 60_000);
+
+  it('does not report for a member who set usageReportEnabled: false', async () => {
+    const f = fixture('claude', 'git');
+    const configPath = path.join(f.home, '.teamai/config.yaml');
+    const config = YAML.parse(fs.readFileSync(configPath, 'utf8'));
+    fs.writeFileSync(configPath, YAML.stringify({ ...config, usageReportEnabled: false }));
+    await f.seedEvents();
+    await f.pull();
+    expect(() => f.stats()).toThrow();
+    expect(fs.readFileSync(f.usage, 'utf8')).toBe(f.usageLine);
+    expect(f.run(['stats'])).toMatch(/review\s+1 uses/);
   }, 60_000);
 });
 

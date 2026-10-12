@@ -97,20 +97,36 @@ type Git = (args: string[]) => ReturnType<typeof execCommand>;
 const gitIn = (repoDir: string): Git => (args) => execCommand('git', args, { cwd: repoDir, timeoutMs: 10_000 });
 
 async function eventsToWrite(git: Git): Promise<GitHookEvent[]> {
-  const stale: GitHookEvent[] = [];
-  for (const event of GIT_HOOK_EVENTS) {
-    const key = `hook.${hookName(event)}`;
-    const current = (await git(['config', '--local', '--get', `${key}.command`])).stdout.trim();
-    const events = (await git(['config', '--local', '--get-all', `${key}.event`])).stdout.trim();
-    if (current !== gitHookCommand(event) || events !== event) stale.push(event);
+  // Every teamai hook key in one read, each value once (`-z`: `key\nvalue\0`).
+  const values = new Map<string, string[]>();
+  for (const entry of (await git(['config', '--local', '-z', '--get-regexp', '^hook\\.teamai-'])).stdout.split('\0')) {
+    if (!entry) continue;
+    const newline = entry.indexOf('\n');
+    const key = newline === -1 ? entry : entry.slice(0, newline);
+    values.set(key, [...values.get(key) ?? [], newline === -1 ? '' : entry.slice(newline + 1)]);
   }
-  return stale;
+  return GIT_HOOK_EVENTS.filter((event) => {
+    const key = `hook.${hookName(event)}`;
+    // As `--get` reads it: the last value. As `--get-all`: every value, one per line.
+    const current = (values.get(`${key}.command`)?.at(-1) ?? '').trim();
+    const events = (values.get(`${key}.event`) ?? []).join('\n').trim();
+    return current !== gitHookCommand(event) || events !== event;
+  });
+}
+
+const gitVersions = new Map<string | undefined, Promise<string>>();
+
+/** `git --version`, asked once per PATH: it names the git every repository gets. */
+function readGitVersion(git: Git): Promise<string> {
+  let version = gitVersions.get(process.env.PATH);
+  if (!version) gitVersions.set(process.env.PATH, version = git(['--version']).then((r) => r.stdout.trim()));
+  return version;
 }
 
 /** Whether the hook is in the local config of the repository holding `repoDir`, and why not. */
 export async function gitHookStatus(repoDir: string): Promise<GitHookStatus> {
   const git = gitIn(repoDir);
-  const version = (await git(['--version'])).stdout.trim();
+  const version = await readGitVersion(git);
   if ((await git(['rev-parse', '--git-dir'])).code !== 0) return { installed: false, reason: 'not-a-repository' };
   if (!supportsConfigHooks(version)) {
     const scripts = await scriptsToWrite(git, repoDir);
@@ -180,7 +196,7 @@ export function describeMissingGitHook(status: Exclude<GitHookStatus, { installe
  */
 export async function installGitHook(repoDir: string, opts: { dryRun?: boolean } = {}): Promise<GitHookInstall> {
   const git = gitIn(repoDir);
-  const configHooks = supportsConfigHooks((await git(['--version'])).stdout);
+  const configHooks = supportsConfigHooks(await readGitVersion(git));
   if ((await git(['rev-parse', '--git-dir'])).code !== 0) return { installed: false, reason: 'not-a-repository' };
   if (!configHooks) return installHookScripts(git, repoDir, opts);
 

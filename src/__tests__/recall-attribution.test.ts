@@ -19,7 +19,23 @@ import type { ExtensionContext } from './helpers/pi-extensions.js';
 vi.mock('node:child_process', async (importOriginal) => ({
   ...(await importOriginal<typeof import('node:child_process')>()),
   // The dispatcher's detached background pass: nothing under test runs there.
-  spawn: vi.fn(() => ({ on: vi.fn(), stdin: { on: vi.fn(), end: vi.fn((_: string, done: () => void) => done()) }, unref: vi.fn() })),
+  // A foreground dispatch with a background handler still spawns the detached
+  // child for real (spawnBackground): on win32 that goes through the WMI
+  // escape first, whose promise only settles via the process's own
+  // 'close'/'error' event. A bare `on: vi.fn()` never fires it, hanging every
+  // such test until timeout -- so this fires 'close' with a success code,
+  // same as hook-dispatch-cli.test.ts's fakePowerShell helper.
+  spawn: vi.fn(() => {
+    const child = {
+      stdin: { on: vi.fn(), end: vi.fn((_: string, done: () => void) => done()) },
+      on(event: string, cb: (...args: unknown[]) => void) {
+        if (event === 'close') setTimeout(() => cb(0), 0);
+        return child;
+      },
+      unref: vi.fn(),
+    };
+    return child;
+  }),
 }));
 vi.mock('../pull.js', () => ({ pull: vi.fn(async () => undefined) }));
 vi.mock('../update.js', async (importOriginal) => ({
@@ -63,6 +79,7 @@ const { loadOpencodePlugin } = await import('./helpers/opencode-plugin.js');
 const { loadOmpExtension, loadPiExtension } = await import('./helpers/pi-extensions.js');
 const { showStats } = await import('../stats.js');
 const { setStderrOnly } = await import('../utils/logger.js');
+const { reconcileHooks } = await import('../hooks.js');
 
 const SESSION = 'sess-main';
 /** A Codex session started from the main session's shell, which also sees CLAUDE_CODE_SESSION_ID. */
@@ -147,6 +164,8 @@ class Harness {
   async setUp(options: { inheritUserScope?: boolean } = {}): Promise<void> {
     process.env.HOME = path.join(this.tmp, 'home');
     fs.mkdirSync(process.env.HOME, { recursive: true });
+    // Copilot runs the built-ins it has installed.
+    await reconcileHooks(path.join(process.env.HOME, '.copilot', 'hooks', 'teamai.json'), 'copilot');
 
     // User scope: one learning in the machine-local mirror, which is a knowledge root.
     const userRepo = path.join(process.env.HOME, '.teamai', 'team-repo');

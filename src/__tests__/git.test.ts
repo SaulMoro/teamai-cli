@@ -21,6 +21,7 @@ const mockGit = {
   pull: vi.fn(),
   fetch: vi.fn(),
   raw: vi.fn(),
+  outputHandler: vi.fn().mockReturnThis(),
 };
 
 vi.mock('simple-git', () => ({

@@ -21,6 +21,7 @@ team: my-team
 description: 团队 AI 资源仓库
 repo: https://github.com/your-org/your-repo.git
 provider: github
+# language: en                # 可选；en | zh。省略或 zh 保持既有中英双语的 recall 规则、TodoWrite 提示和已合入 MR 提示。en 为仅英文。
 # scope: 若存在则忽略——本机安装位置由 `teamai init --scope` 决定
 
 reviewers:
@@ -59,6 +60,8 @@ sharing:
         retries: 3             # 可选，失败重试次数（默认 3）
 ```
 
+`language`（可选，`en` 或 `zh`）决定 teamai 注入给 agent 的文本语言：内置 `teamai-recall` 规则、TodoWrite 提示，以及已合入 MR 提示。`en` 为仅英文。`zh` 或省略该字段时，保持既有中英双语文本，逐字节不变。下一次 `teamai pull` 会按所选语言重写 recall 规则。
+
 `teamai pull` 将你收到的 `docs/` 非隐藏文件（见[按 namespace 分发 docs](./sharing.md#docs文档)）镜像同步到 `sharing.docs.localDir`：团队库删除的文档，本地也会一并删除，包括删除最后一篇文档或整个团队文档目录的情况。被删除文档路径上的本地文件，只有与团队仓库历史中该文档的某个版本相同时才会删除；
 
 其他文件会保留，并由 pull 指出（`Kept <path>: the team removed docs/<file>, but this copy matches no team version of it. Delete it when you no longer need it.`）。你在团队曾有文档的位置放置的目录会整体保留，并以同样方式指出。你在镜像中团队从未有过的路径上放置的链接也会保留，并被指出（`Kept <path>: it is a link of yours, and the team does not have docs/<file>. Delete it when you no longer need it.`）。若 `sharing.docs.localDir` 本身是链接，它属于你：
@@ -85,6 +88,7 @@ inheritUserScope: true         # 可选，仅 project scope，默认 false
 coAuthorEnabled: true          # 可选，每机器的 co-author 覆盖
 gitExcludeEnabled: true        # 可选，每机器对 sharing.gitExclude.enabled 的覆盖
 contributeHintEnabled: false   # 可选，每机器覆盖 sharing.contributeHint.enabled
+usageReportEnabled: false      # 可选，每机器覆盖 usageReport
 codexTrustEnabled: false       # 可选，每机器，停止 teamai 信任它写入的 Codex hooks 与项目（见 Hooks）
 toolRoots:                     # 可选，每机器的工具根目录（见下）
   claude: ~/.claude-work
@@ -103,7 +107,7 @@ toolRoots:                     # 可选，每机器的工具根目录（见下�
 
 根目录是这台机器的事实，而 project scope 的 hook 也注入到 home 目录。要结束迁移，把该变量设为空再执行一次 `init`（`CLAUDE_CONFIG_DIR= teamai init …`、`CODEX_HOME= teamai init …`）：记录会被清除，旧根目录按同样方式释放。除 hook 之外，旧根目录里 teamai 管理的 MCP server，以及（Claude Code 的）本地 agent 下发的网关凭据也会一并移除——它们是生效中的配置，不同于 skills 和 rules。
 
-根目录必须是 teamai 能够识别该工具的位置：home 目录下的一层目录（`~/.claude-work`，但 `~/.config` 本身除外），或者一个 `~/.config/<名称>` 目录（开头的 `~/` 会被展开）。这两种形态正是「该工具是否已安装」这项检查能够查找的范围；更深的层级、或 home 目录之外的路径都会被拒绝并给出警告，而不是只生效一半。
+根目录必须是 teamai 能够识别该工具的位置：home 目录下的一层目录（`~/.claude-work`，但 `~/.config` 本身除外），或者 `.config/` 下的目录——`~/.config/<名称>`，或更深的层级（`~/.config/cloak/profiles/work/claude`，即 cloak 这类「按目录切换 profile」的工具产生的布局）。开头的 `~/` 会被展开。`.config/` 下的深层根目录之所以可用，是因为「该工具是否已安装」这项检查读的是配置里记录的根目录本身，而不是路径上的某个前缀，而 `.config/` 是一个足够窄、能在其中定位到它的命名空间；不在 `.config` 之下的深层根目录、以及 home 目录之外的任何路径，都会被拒绝并给出警告，而不是只生效一半。
 
 skill 使用统计同样读取记录的根目录，迁移后的工具的 skills 也算作已安装；`import --from-claude` 读取迁移后的 Claude Code 的 rules。
 

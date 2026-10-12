@@ -21,6 +21,7 @@ team: my-team
 description: Team AI resource repo
 repo: https://github.com/your-org/your-repo.git
 provider: github
+# language: en                # optional; en | zh. Omit or zh keeps the historical bilingual recall rule, TodoWrite hint, and merged-MR hint. en is English only.
 # scope: ignored if present — local install location is set by `teamai init --scope`
 
 reviewers:
@@ -59,6 +60,8 @@ sharing:
         retries: 3             # optional; retry attempts on failure (default 3)
 ```
 
+`language` (`en` or `zh`, optional) chooses the language of the texts teamai injects into the agent: the built-in `teamai-recall` rule, the TodoWrite hint, and the merged-MR hint. `en` is English only. `zh` or omitting the field keeps the historical bilingual text, byte for byte. The next `teamai pull` rewrites the recall rule in the selected language.
+
 `teamai pull` mirrors the non-hidden `docs/` files you receive (see [Docs by namespace](./sharing.md#docs)) into `sharing.docs.localDir`: documents deleted from the team repo are also deleted locally, even when the last document or the entire team directory is removed. A local file at a deleted document's path is deleted only when it holds a version of that document from the team repo's history; any other is kept, and pull names it (`Kept <path>: the team removed docs/<file>, but this copy matches no team version of it. Delete it when you no longer need it.`). A directory you put where the team had a document is kept whole, and named the same way. 
 
 A link you put in the mirror at a path the team never had is kept too, and named (`Kept <path>: it is a link of yours, and the team does not have docs/<file>. Delete it when you no longer need it.`). When `sharing.docs.localDir` itself is a link, it is yours: pull delivers no docs through it, deletes nothing behind it and names it (`Kept <path>: it is a link of yours, so teamai delivers no docs through it. ...`), `teamai doctor` fails `Team docs delivered` with that line, and `teamai uninstall` leaves it and what it points at. 
@@ -85,6 +88,7 @@ inheritUserScope: true         # optional; project scope only, defaults to false
 coAuthorEnabled: true          # optional; per-machine co-author override
 gitExcludeEnabled: true        # optional; per-machine override of sharing.gitExclude.enabled
 contributeHintEnabled: false   # optional; per-machine override of sharing.contributeHint.enabled
+usageReportEnabled: false      # optional; per-machine override of usageReport
 codexTrustEnabled: false       # optional; per-machine, stops teamai trusting its Codex hooks and project (see Hooks)
 toolRoots:                     # optional; per-machine tool roots (see below)
   claude: ~/.claude-work
@@ -103,7 +107,7 @@ A re-init keeps a root that was recorded earlier, so running `init` from a shell
 
 To end a relocation, run `init` once with the variable set but blank (`CLAUDE_CONFIG_DIR= teamai init …`, `CODEX_HOME= teamai init …`): the record is cleared and the old root released the same way. Along with the hooks, the old root loses the teamai-managed MCP servers and, for Claude Code, any gateway credentials the local agent delivered there; they are active configuration, unlike the skills and rules.
 
-A root has to be somewhere teamai can recognize the tool at: a directory in your home other than `~/.config` itself (`~/.claude-work`), or a `~/.config/<name>` directory (a leading `~/` is expanded). Those are the two shapes the "is this tool installed?" check can look for; anything deeper, or outside your home directory, is refused with a warning rather than silently half-applied.
+A root has to be somewhere teamai can recognize the tool at: a directory in your home other than `~/.config` itself (`~/.claude-work`), or a directory under `.config/` — `~/.config/<name>`, or nested deeper (`~/.config/cloak/profiles/work/claude`, the layout per-directory profile managers such as cloak produce). A leading `~/` is expanded. A nested `.config/` root is fine because the "is this tool installed?" check reads the root the config recorded rather than a prefix of the path, and `.config/` is a narrow enough namespace to find it in; a nested root that is not under `.config`, or any root outside your home directory, is refused with a warning rather than silently half-applied.
 
 Skill-use tracking reads the recorded roots as well, so a relocated tool's skills count as installed, and `import --from-claude` reads a relocated Claude Code's rules.
 

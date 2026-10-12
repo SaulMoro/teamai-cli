@@ -191,10 +191,23 @@ async function locateExclude(dir: string): Promise<{ excludeFile: string; root: 
   return { excludeFile: path.resolve(base, gitPath), root, prefix };
 }
 
-/** {@link locateExclude}, or null when git cannot say. */
-export async function gitExcludeFile(dir: string): Promise<{ excludeFile: string; root: string; prefix: string } | null> {
-  const location = await locateExclude(dir);
+/** {@link locateExclude}, or null when git cannot say; asked through `context` when given. */
+export async function gitExcludeFile(dir: string, context?: GitContext): Promise<{ excludeFile: string; root: string; prefix: string } | null> {
+  const location = await (context ? context.locate(dir) : locateExclude(dir));
   return 'error' in location ? null : location;
+}
+
+/** {@link gitExcludeFile} of each of `dirs`, asking git once per repository among them. */
+export async function gitExcludeFiles(
+  dirs: Iterable<string>,
+): Promise<Map<string, { excludeFile: string; root: string; prefix: string } | null>> {
+  const context = new GitContext();
+  const found = new Map<string, { excludeFile: string; root: string; prefix: string } | null>();
+  for (const dir of new Set(dirs)) {
+    const location = await context.locate(dir);
+    found.set(dir, 'error' in location ? null : location);
+  }
+  return found;
 }
 
 /** Whether `dir` is inside a repository: some directory at or above it holds `.git`. */
@@ -407,7 +420,7 @@ export async function updateFileLocked(
 ): Promise<ExcludeUpdate> {
   const { acquireLock, releaseLock } = await import('./update.js');
   const lockPath = `${file}.teamai-lock`;
-  // acquireLock reads a lock directory it cannot create as a held lock; no wait would change that (#993).
+  // Report exclude-specific permission guidance before taking the shared lock (#993).
   await fse.ensureDir(path.dirname(file)).catch(async (e: NodeJS.ErrnoException) => {
     if (!['EEXIST', 'ENOTDIR', 'EACCES', 'EPERM', 'EROFS'].includes(e.code ?? '')) throw e;
     throw new NotWritableError(file, await existingAncestor(file), e.code === 'EEXIST' || e.code === 'ENOTDIR');
@@ -501,10 +514,13 @@ async function onDiskSpelling(file: string): Promise<string> {
   return file;
 }
 
-/** A per-run cache of what git says about directories and repositories. */
-class GitContext {
+/**
+ * A per-run cache of what git says about directories and repositories. A
+ * caller shares one across the calls of a single run (see
+ * applyDeliveredGitExclude), never across runs.
+ */
+export class GitContext {
   private readonly locations = new Map<string, ReturnType<typeof locateExclude>>();
-  private readonly repositories = new Map<string, ReturnType<typeof locateExclude>>();
   private readonly precompose = new Map<string, Promise<boolean>>();
 
   locate(dir: string): ReturnType<typeof locateExclude> {
@@ -523,9 +539,7 @@ class GitContext {
     let holder: string | null = dir;
     while (holder !== null && !await pathExists(path.join(holder, '.git'))) holder = path.dirname(holder) === holder ? null : path.dirname(holder);
     if (holder === null || holder === dir) return locateExclude(dir);
-    let repository = this.repositories.get(holder);
-    if (!repository) this.repositories.set(holder, repository = locateExclude(holder));
-    const location = await repository;
+    const location = await this.locate(holder);
     const rel = 'error' in location || location.prefix !== '' ? null : path.relative(location.root, dir);
     if (rel === null || rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return locateExclude(dir);
     return { ...location, prefix: `${rel.split(path.sep).join('/')}/` };
@@ -615,9 +629,11 @@ export interface GitExcludeSync {
  * so the run only adds: no block loses a line and every recorded file stays
  * recorded. `dryRun` writes nothing, not even `info/` or a lock file.
  */
-export async function sync(owner: GitExcludeOwner, paths: Iterable<string>, options: { dryRun?: boolean } = {}): Promise<GitExcludeSync> {
+export async function sync(
+  owner: GitExcludeOwner, paths: Iterable<string>, options: { dryRun?: boolean; context?: GitContext } = {},
+): Promise<GitExcludeSync> {
   markersOf(owner.name);
-  const context = new GitContext();
+  const context = options.context ?? new GitContext();
   const result: GitExcludeSync = { files: [], refused: [], outsideRepo: [], gitFailed: [] };
   const byFile = new Map<string, Placed[]>();
   for (const file of new Set(paths)) {
@@ -1081,9 +1097,8 @@ export interface GitExcludeReport {
  * a commit (one `ls-files --others`), then `check-ignore -v` only for the
  * listed paths it offers.
  */
-export async function report(owner: GitExcludeOwner, expectedPaths: Iterable<string>): Promise<GitExcludeReport> {
+export async function report(owner: GitExcludeOwner, expectedPaths: Iterable<string>, context = new GitContext()): Promise<GitExcludeReport> {
   markersOf(owner.name);
-  const context = new GitContext();
   const result: GitExcludeReport = { files: [], refused: [], outsideRepo: [], gitFailed: [] };
   const byFile = new Map<string, Placed[]>();
   for (const file of new Set(expectedPaths)) {
