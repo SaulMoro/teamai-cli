@@ -39,6 +39,7 @@ team:
 | ZCode | `~/.zcode/AGENTS.md` | 仅 `toolPaths` 里配置的 `claudemd` |
 | DeepSeek Harness | `$DSH_HOME/AGENTS.md`（未设置时 `~/.dsh/AGENTS.md`） | 仅 `toolPaths` 里配置的 `claudemd` |
 | JoyCode | `~/.joycode/rules.txt` | 仅 `toolPaths` 里配置的 `claudemd` |
+| Muse Code | `~/.config/muse/AGENTS.md` | 仅 `toolPaths` 里配置的 `claudemd` |
 
 ## 查看效果
 
