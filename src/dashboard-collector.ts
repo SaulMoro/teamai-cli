@@ -858,8 +858,8 @@ async function readMuseSessionTokens(sessionId: string): Promise<TokenUsage | nu
         cacheCreation: 0,
       });
     }
-  } catch {
-    log.debug('dashboard: failed to read the Muse Code session log');
+  } catch (e) {
+    log.debug(`dashboard: could not read the Muse Code session log ${file}: ${e instanceof Error ? e.message : String(e)}`);
   } finally {
     lines.close();
     stream.destroy();

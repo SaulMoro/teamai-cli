@@ -76,7 +76,7 @@ export function isWindowsFormPath(value: string): boolean {
 }
 
 /** `envShPath` rewritten to the forward-slash form the generator writes, regardless of which host built it. */
-function toGeneratedForm(envShPath: string): string {
+export function toGeneratedForm(envShPath: string): string {
   return isWindowsFormPath(envShPath) ? envShPath.replace(/\\/g, '/') : envShPath;
 }
 

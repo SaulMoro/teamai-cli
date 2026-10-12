@@ -1002,7 +1002,7 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
         .filter(([, entry]) => typeof entry === 'object' && entry !== null && (entry as { type?: unknown }).type === 'sse')
         .map(([name]) => name);
       checks.push({
-        name: `MCP servers load in ${MUSE_TOOL_ID}`,
+        name: 'MCP servers load in muse',
         source: 'local',
         check: async () => sse.length === 0,
         fix: `In ${target.file}, ${nameList(sse)} ${sse.length === 1 ? 'uses' : 'use'} the sse transport, which Muse Code rejects, `

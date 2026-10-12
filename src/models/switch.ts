@@ -7,7 +7,7 @@ import { getUserHome } from '../utils/home.js';
 import { pathExists, writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { entryHash } from '../resources/mcp-format.js';
-import { detectShellProfile, SHELL_PROFILE_CANDIDATE_NAMES, shellQuoteValue } from '../utils/shell-profile.js';
+import { detectShellProfile, SHELL_PROFILE_CANDIDATE_NAMES, shellQuoteValue, toGeneratedForm } from '../utils/shell-profile.js';
 import type { LocalConfig } from '../types.js';
 import { ALL_MODEL_AGENTS, type ModelAgent, type ModelProtocol, type ResolvedModelProfile, sameTeamIdentity } from './profile.js';
 
@@ -693,7 +693,7 @@ async function writeMuse(snapshot: MuseSnapshot): Promise<void> {
   if (sourced.some(Boolean)) return;
   const profile = await detectShellProfile();
   const content = (await readOptionalFile(profile)) ?? '';
-  const quoted = shellQuoteValue(keyFile);
+  const quoted = shellQuoteValue(toGeneratedForm(keyFile));
   const block = `${MUSE_KEY_BLOCK_START}\n[ -f ${quoted} ] && . ${quoted}\n${MUSE_KEY_BLOCK_END}\n`;
   await writeFileAtomic(profile, `${content}${content && !content.endsWith('\n') ? '\n' : ''}${block}`);
 }
