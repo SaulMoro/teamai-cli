@@ -24,6 +24,7 @@ import type { HookDef, TeamaiConfig, LocalConfig, ManagedMcpManifest, Scope } fr
 import {
   CODEX_TOOL_ID,
   DEFAULT_CODEX_ROOT,
+  MUSE_TOOL_ID,
   getDataHome,
   isGitExcludeEnabled,
   getTeamaiHome,
@@ -200,12 +201,18 @@ type ToolFormat = 'claude' | 'cursor' | 'codex' | 'copilot' | 'zcode';
 export type HookStatus = 'installed' | 'missing';
 
 const CURSOR_TOOLS = new Set(['cursor']);
-const CODEX_TOOLS = new Set<string>(CODEX_TOOL_IDS);
+/**
+ * Tools whose hooks file takes Codex's shape: `{ hooks: { <Event>: [{ matcher?,
+ * hooks: [{ type, command, timeout? }] }] } }` with no group `description`.
+ * Muse Code reads that shape too, and drops any group carrying a key besides
+ * `matcher` and `hooks`, so Claude's described groups never reach it.
+ */
+const CODEX_FORMAT_TOOLS = new Set<string>([...CODEX_TOOL_IDS, MUSE_TOOL_ID]);
 const ZCODE_TOOLS = new Set(['zcode']);
 
 function detectFormat(tool: string): ToolFormat {
   if (tool === COPILOT_TOOL_ID) return 'copilot';
-  if (CODEX_TOOLS.has(tool)) return 'codex';
+  if (CODEX_FORMAT_TOOLS.has(tool)) return 'codex';
   if (ZCODE_TOOLS.has(tool)) return 'zcode';
   return CURSOR_TOOLS.has(tool) ? 'cursor' : 'claude';
 }
@@ -1876,7 +1883,11 @@ async function reconcileCodexFormat(
   }
 
   if (changed) {
-    await writeJson(expanded, hooksJson);
+    // Muse Code refuses a settings.json without `schema_version: 1`.
+    const document = tool === MUSE_TOOL_ID && hooksJson.schema_version === undefined
+      ? { schema_version: 1, ...hooksJson }
+      : hooksJson;
+    await writeJson(expanded, document);
     log.success(`${opts.removeAll ? 'Removed' : 'Updated'} teamai hooks in ${hooksPath}`);
   } else {
     log.debug(`teamai hooks already up-to-date in ${hooksPath}`);

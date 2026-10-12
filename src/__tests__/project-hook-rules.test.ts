@@ -84,8 +84,8 @@ afterEach(async () => {
   await fse.remove(tmpDir);
 });
 
-describe('ZCode and DeepSeek Harness get the project\'s rules from their session-start hook (#946)', () => {
-  it.each(['zcode', 'dsh'])('%s: adds the project rules once at session start, a path-scoped rule after its globs', async (tool) => {
+describe('ZCode, DeepSeek Harness and Muse Code get the project\'s rules from their session-start hook (#946)', () => {
+  it.each(['zcode', 'dsh', 'muse'])('%s: adds the project rules once at session start, a path-scoped rule after its globs', async (tool) => {
     const text = await sessionStart(tool, config('project'));
 
     expect(count(text, 'PROJ-RULE-7')).toBe(1);
@@ -93,19 +93,19 @@ describe('ZCode and DeepSeek Harness get the project\'s rules from their session
     expect(text).not.toContain('paths:');
   });
 
-  it.each(['zcode', 'dsh'])('%s: adds nothing in a session outside a project, whose rules are in its own AGENTS.md', async (tool) => {
+  it.each(['zcode', 'dsh', 'muse'])('%s: adds nothing in a session outside a project, whose rules are in its own AGENTS.md', async (tool) => {
     expect(await sessionStart(tool, config('user'))).toBeNull();
   });
 
-  it.each(['zcode', 'dsh'])('%s: adds nothing on resume, whose history already holds them', async (tool) => {
+  it.each(['zcode', 'dsh', 'muse'])('%s: adds nothing on resume, whose history already holds them', async (tool) => {
     expect(await sessionStart(tool, config('project'), 'resume')).toBeNull();
   });
 
-  it.each(['zcode', 'dsh'])('%s: adds nothing once the project excludes it', async (tool) => {
+  it.each(['zcode', 'dsh', 'muse'])('%s: adds nothing once the project excludes it', async (tool) => {
     expect(await sessionStart(tool, config('project', ['claude']))).toBeNull();
   });
 
-  it.each(['zcode', 'dsh'])('%s: adds the rules only, not the instruction blocks, which #945 gives it no channel for', async (tool) => {
+  it.each(['zcode', 'dsh', 'muse'])('%s: adds the rules only, not the instruction blocks, which #945 gives it no channel for', async (tool) => {
     await fse.outputFile(path.join(repoPath, 'culture.md'), '---\ncompany:\n  name: Acme\n---\n\nBe kind to teammates.\n');
 
     const text = await sessionStart(tool, config('project'));

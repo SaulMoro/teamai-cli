@@ -654,9 +654,13 @@ export const TeamaiConfigBaseSchema = z.object({
     },
     // Muse Code (Meta, binary `muse`) keeps its user config in ~/.config/muse
     // and reads user skills from ~/.config/muse/skills, ahead of the
-    // ~/.claude/skills and ~/.agents/skills it also scans.
+    // ~/.claude/skills and ~/.agents/skills it also scans. Hooks take Codex's
+    // shape: user hooks in the `hooks` block of ~/.config/muse/settings.json,
+    // which runs in every workspace, project hooks in <root>/.muse/hooks.json,
+    // which runs only in a trusted one.
     muse: {
-      userScope: { skills: '.config/muse/skills' },
+      settings: '.muse/hooks.json',
+      userScope: { skills: '.config/muse/skills', settings: '.config/muse/settings.json' },
     },
   }),
 });
@@ -2193,6 +2197,9 @@ export const CLAUDE_TOOL_ID = 'claude';
 export const DEFAULT_CLAUDE_ROOT = '.claude';
 
 export const CODEX_TOOL_ID = 'codex';
+
+/** Muse Code (Meta), whose CLI binary is `muse`. */
+export const MUSE_TOOL_ID = 'muse';
 
 /** The `toolPaths.codex` root segment Codex uses when `CODEX_HOME` is unset. */
 export const DEFAULT_CODEX_ROOT = '.codex';

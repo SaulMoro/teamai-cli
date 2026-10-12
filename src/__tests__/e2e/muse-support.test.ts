@@ -126,6 +126,33 @@ describe('Muse Code resource delivery', () => {
     expect(fs.existsSync(path.join(skills, 'teamai', 'SKILL.md'))).toBe(true);
   }, 90_000);
 
+  it('installs the teamai hooks in ~/.config/muse/settings.json from a project init', async () => {
+    const projectRoot = path.join(sandbox, 'project-hooks');
+    fs.mkdirSync(projectRoot, { recursive: true });
+    const home = makeHome('home-project-hooks');
+    fs.mkdirSync(path.join(home, '.config', 'muse'), { recursive: true });
+
+    const result = await runCLI(
+      ['init', FAKE_URL, '--scope', 'project', '--role', 'dev', '--agent', 'muse', '--force'],
+      projectRoot,
+      home,
+    );
+    expect(result.code, result.output).toBe(0);
+
+    const settings = JSON.parse(fs.readFileSync(path.join(home, '.config', 'muse', 'settings.json'), 'utf8')) as {
+      schema_version?: number;
+      hooks?: Record<string, { hooks: { command: string }[] }[]>;
+    };
+    // Only what Muse reads: no co-author attribution keys from the Claude family.
+    expect(Object.keys(settings).sort()).toEqual(['hooks', 'schema_version']);
+    expect(settings.schema_version).toBe(1);
+    const commands = Object.values(settings.hooks ?? {}).flat().flatMap((group) => group.hooks.map((h) => h.command));
+    expect(commands.some((command) => command.includes('hook-dispatch session-start --tool muse'))).toBe(true);
+    expect(commands.some((command) => command.includes('hook-dispatch stop --tool muse'))).toBe(true);
+    // A project init writes no project hooks file: Muse runs user hooks in every workspace.
+    expect(fs.existsSync(path.join(projectRoot, '.muse'))).toBe(false);
+  }, 90_000);
+
   it('does not take a Codex-only machine for a Muse Code install', async () => {
     const workDir = path.join(sandbox, 'codex-work');
     fs.mkdirSync(workDir, { recursive: true });

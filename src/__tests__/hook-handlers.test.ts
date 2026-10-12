@@ -550,7 +550,7 @@ describe('hook-handlers registry', () => {
     expect(parsed.hookSpecificOutput.additionalContext).toBe('[teamai] hello');
   });
 
-  it.each(['codebuddy', 'codex', 'codex-internal', 'tcodex'])('contribute-check handler asks to stash (not stdout) for %s', async (tool) => {
+  it.each(['codebuddy', 'codex', 'codex-internal', 'tcodex', 'muse'])('contribute-check handler asks to stash (not stdout) for %s', async (tool) => {
     const registry = buildHandlerRegistry();
     const handler = registry.find(
       (r) => r.event === 'stop' && r.handler.name === 'contribute-check',
@@ -779,7 +779,7 @@ describe('hook-handlers registry', () => {
     expect(result).toBeNull();
   });
 
-  it.each(['codebuddy', 'codex'])('pending-hint handler injects stashed hint for %s on prompt-submit', async (tool) => {
+  it.each(['codebuddy', 'codex', 'muse'])('pending-hint handler injects stashed hint for %s on prompt-submit', async (tool) => {
     const registry = buildHandlerRegistry();
     const handler = registry.find(
       (r) => r.event === 'prompt-submit' && r.handler.name === 'pending-hint',
