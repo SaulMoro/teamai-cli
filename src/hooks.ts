@@ -1049,9 +1049,9 @@ export async function stopCodexTeamHookDispatch(
     await reconcileCodexDispatchers(homeFile);
     return null;
   } catch (e) {
-    // The entry comes back, so the retry still finds the dispatcher entries to remove.
-    if (retireIdentity && checkouts?.length) {
-      for (const root of checkouts) await setCodexDispatcherHooks(project, hooks, root);
+    // The entry comes back, each checkout with its own hooks, so the retry still finds the dispatcher entries to remove.
+    if (retireIdentity && checkouts) {
+      for (const [root, defs] of Object.entries(checkouts)) await setCodexDispatcherHooks(project, defs, root);
     } else if (checkouts && checkout) await setCodexDispatcherHooks(project, hooks, checkout);
     else await setCodexDispatcherHooks(project, hooks);
     log.warn(`Could not remove the Codex team-hook dispatchers from ${homeFile}: ${(e as Error).message}. The Codex team hooks of ${project} still run.`);

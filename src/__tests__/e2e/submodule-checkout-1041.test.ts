@@ -107,6 +107,28 @@ describe('multi-repo checkout delivery', () => {
     expect(dispatch(m.checkout).stdout).toContain('fixture');
   });
 
+  it('runs each checkout\'s own Codex team hooks when checkouts sharing an identity pulled different team revisions', () => {
+    const m = fixture('per-checkout-dispatchers');
+    write(path.join(m.checkout, '.codex/hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo member' }] }] } }));
+    m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'codex', '--force'], m.checkout);
+    write(path.join(m.team, 'hooks/hooks.yaml'), 'hooks:\n  - id: fixture\n    description: fixture\n    event: Stop\n    command: echo second\n');
+    m.git(['commit', '-qam', 'second'], m.team);
+    m.git(['push', '-q', m.remote, 'main'], m.team);
+    const parentWorktree = path.join(m.base, 'parent-per-checkout');
+    m.git(['worktree', 'add', '-q', '--detach', parentWorktree], m.parent);
+    m.git(['submodule', 'update', '-q', '--init'], parentWorktree);
+    const child = path.join(parentWorktree, 'service');
+    write(path.join(child, '.codex/hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo member' }] }] } }));
+    m.cli(['pull', '--force'], child);
+    const dispatch = (cwd: string) => spawnSync(process.execPath, [CLI, 'hook-dispatch', 'Stop', '--tool', 'codex', '--team-hooks'], {
+      cwd, env: m.env, encoding: 'utf8', input: JSON.stringify({ cwd, hook_event_name: 'Stop' }),
+    }).stdout;
+    expect(dispatch(m.checkout)).toContain('fixture');
+    expect(dispatch(m.checkout)).not.toContain('second');
+    expect(dispatch(child)).toContain('second');
+    expect(dispatch(child)).not.toContain('fixture');
+  });
+
   it('uninstall --agent codex from a linked worktree stops its team hooks and keeps the main checkout\'s', () => {
     const m = fixture('linked-worktree-dispatchers');
     write(path.join(m.checkout, '.codex/hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo member' }] }] } }));
@@ -139,7 +161,7 @@ describe('multi-repo checkout delivery', () => {
     m.cli(['pull', '--force'], child);
     const index = json(path.join(m.home, '.teamai/codex-team-hooks.json'));
     const [identity] = Object.keys(index.projects);
-    expect(index.projects[identity].checkouts.length).toBeGreaterThan(1);
+    expect(Object.keys(index.projects[identity].checkouts).length).toBeGreaterThan(1);
     m.cli(['uninstall', '--force'], child);
     const after = path.join(m.home, '.teamai/codex-team-hooks.json');
     expect(fs.existsSync(after) ? json(after).projects[identity] : undefined).toBeUndefined();
