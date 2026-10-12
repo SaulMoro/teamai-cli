@@ -17,6 +17,7 @@ import {
   getDataHome,
   isGitExcludeEnabled,
   isSelfMode,
+  MUSE_TOOL_ID,
   managedMcpManifestPath,
   managedMcpManifestKey,
   resolveToolBaseDir,
@@ -414,17 +415,35 @@ export async function projectMcpLocations(
  * `sharing.gitExclude` is on. For Claude, not in a single-repo (self) team,
  * where each worktree reads its own branch's servers while Claude files every
  * worktree under one key, so one worktree's pull would undo another's; and
- * not while tclaude, which reads the `.mcp.json` the claude target writes and
- * has a user config of its own, is installed and enabled here: it keeps the
- * file until its own local scope is checked.
+ * not while a tool of `CLAUDE_MCP_FILE_READERS` is installed and enabled here.
  */
 export async function mcpRelocated(teamConfig: TeamaiConfig, localConfig: LocalConfig, tool: string): Promise<boolean> {
   if (!LOCAL_SCOPE_MCP_TOOLS[tool] || !isGitExcludeEnabled(localConfig, teamConfig)) return false;
   if (tool !== 'claude') return true;
   if (isSelfMode(localConfig)) return false;
-  const tclaude = teamConfig.toolPaths.tclaude;
-  const probe = tclaude && (tclaude.skills ?? tclaude.settings ?? tclaude.agents);
-  return !probe || isAgentExcluded(localConfig, 'tclaude') || !await isToolInstalledForConfig('tclaude', probe, localConfig);
+  for (const reader of CLAUDE_MCP_FILE_READERS) {
+    if (await readsClaudeMcpFile(teamConfig, localConfig, reader)) return false;
+  }
+  return true;
+}
+
+/**
+ * Tools with no project MCP target of their own that read the `.mcp.json` the
+ * claude target writes: tclaude, which has a user config of its own and keeps
+ * the file until its own local scope is checked, and Muse Code, which has no
+ * local scope.
+ */
+const CLAUDE_MCP_FILE_READERS = ['tclaude', MUSE_TOOL_ID] as const;
+
+/** Whether `reader` (of `CLAUDE_MCP_FILE_READERS`) is installed and enabled here. */
+export async function readsClaudeMcpFile(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  reader: typeof CLAUDE_MCP_FILE_READERS[number],
+): Promise<boolean> {
+  const paths = teamConfig.toolPaths[reader];
+  const probe = paths && (paths.skills ?? paths.settings ?? paths.agents);
+  return !!probe && !isAgentExcluded(localConfig, reader) && await isToolInstalledForConfig(reader, probe, localConfig);
 }
 
 /**
@@ -1803,11 +1822,15 @@ export async function mcpConfigsNotProvenClean(
 
 export function mcpTargetExcluded(localConfig: LocalConfig, target: McpTarget): boolean {
   if (!isAgentExcluded(localConfig, target.tool)) return false;
-  // tclaude has no project-scope MCP file: it reads the <root>/.mcp.json the
-  // claude target writes, so that target stays live while tclaude is enabled.
+  // tclaude and Muse Code have no project-scope MCP file: they read the
+  // <root>/.mcp.json the claude target writes, so that target stays live
+  // while tclaude is enabled, or Muse Code is on the member's --agent list
+  // (its install is not probed here, and every member would otherwise
+  // count as running it).
   // Trae CN needs no such clause: its own target maps the shared
   // <root>/.trae/mcp.json under trae's ownership key (#904).
-  return !(target.projectScope && target.tool === 'claude' && !isAgentExcluded(localConfig, 'tclaude'));
+  return !(target.projectScope && target.tool === 'claude'
+    && (!isAgentExcluded(localConfig, 'tclaude') || localConfig.enabledAgents?.includes(MUSE_TOOL_ID) === true));
 }
 
 /**
@@ -2608,6 +2631,10 @@ async function applyJson(
   // A file that holds a resolved value is the member's alone, an existing one tightened.
   // Keyed by real path: two tools' paths may reach one file, which keeps the state before its first write.
   const snapshotKey = await realFilePath(target.file);
+  // Muse Code refuses a settings.json without `schema_version: 1`.
+  if (target.format === 'muse' && !target.projectScope && doc.data.schema_version === undefined) {
+    doc.data = { schema_version: 1, ...doc.data };
+  }
   await writeJsonDoc(target.file, serverKey, doc, holdsResolvedValue ? { mode: 0o600 } : undefined);
   if (!restoreConfigs.has(snapshotKey)) {
     restoreConfigs.set(snapshotKey, existed

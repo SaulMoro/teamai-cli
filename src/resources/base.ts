@@ -13,10 +13,16 @@ const TOMBSTONE_FILE = '.removed';
 /**
  * The root that says a tool is installed, for a tool with a path under
  * another tool's root: WorkBuddy reads a project's rules from CodeBuddy's
- * `.codebuddy/rules` (#946), which says nothing about WorkBuddy, and Muse
- * Code's project paths sit under `.agents`, which Codex users have too.
+ * `.codebuddy/rules` (#946), which says nothing about WorkBuddy.
  */
-const INSTALL_ROOTS: Readonly<Record<string, string>> = { workbuddy: '.workbuddy', muse: '.config/muse' };
+const INSTALL_ROOTS: Readonly<Record<string, string>> = { workbuddy: '.workbuddy' };
+
+/**
+ * The HOME root that says a tool is installed, in every scope, for a tool with
+ * no project path of its own: Muse Code's `.agents` and `.mcp.json` are read
+ * by Codex and Claude Code too.
+ */
+const HOME_INSTALL_ROOTS: Readonly<Record<string, string>> = { muse: '.config/muse' };
 
 /** Each edition of a product sharing one project directory, and the HOME root that alone says the member runs it. */
 const EDITION_HOME_ROOTS: Readonly<Record<string, string>> = {
@@ -50,6 +56,7 @@ export async function isToolInstalledForConfig(
     if (localConfig.enabledAgents?.includes(tool) === true) return true;
     return pathExists(path.join(getUserHome(), editionHomeRoot));
   }
+  if (Object.hasOwn(HOME_INSTALL_ROOTS, tool)) return pathExists(path.join(getUserHome(), HOME_INSTALL_ROOTS[tool]));
   const probe = Object.hasOwn(INSTALL_ROOTS, tool) ? INSTALL_ROOTS[tool] : toolPath;
   return ResourceHandler.isToolInstalled(probe, baseDir, toolGateRoot(tool, probe, localConfig.toolRoots));
 }

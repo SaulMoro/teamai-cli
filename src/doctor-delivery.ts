@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { spawnSync } from 'node:child_process';
 import { expandHome, listFilesRecursive, pathExists, readFileSafe, readJsonObject } from './utils/fs.js';
 import {
-  CODEX_TOOL_ID, DEFAULT_CODEX_ROOT, getDataHome, getMcpSharing, isAgentExcluded, isGitExcludeEnabled, managedMcpManifestKey,
+  CODEX_TOOL_ID, DEFAULT_CODEX_ROOT, getDataHome, getMcpSharing, isAgentExcluded, isGitExcludeEnabled, managedMcpManifestKey, MUSE_TOOL_ID,
   resolveToolBaseDir, resolveToolRootDir, scopedToolPaths,
 } from './types.js';
 import type { DeliveryTarget, LocalConfig, ManagedMcpManifest, ResourceItem, TeamaiConfig } from './types.js';
@@ -923,7 +923,7 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
 
   const {
     resolveMcpTargets, buildDesiredMcpContext, desiredMcpForTarget,
-    mcpTargetExcluded, installedMcpEntries, memberMcpServers, describeKeptMemberServer,
+    mcpTargetExcluded, installedMcpEntries, memberMcpServers, describeKeptMemberServer, readsClaudeMcpFile,
   } = await import('./mcp-reconcile.js');
   const { carriesResolvedValue, ensureExcludedFromGit } = await import('./mcp-git-exclude.js');
   const { mcpEntryReader, teamMcpToDef } = await import('./resources/mcp.js');
@@ -990,6 +990,26 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
       }
     }
     if (blocked.length > 0) problems.push(`skipped: ${nameList(blocked)}`);
+
+    // Muse Code rejects a config holding one sse server and then loads no MCP
+    // server at all, so an sse entry in a file it reads breaks Muse's MCP as a
+    // whole. In a project that is the .mcp.json the claude target writes.
+    const museReads = target.tool === MUSE_TOOL_ID
+      || (target.tool === 'claude' && target.projectScope && target.projectKey === undefined
+        && await readsClaudeMcpFile(teamConfig, localConfig, MUSE_TOOL_ID));
+    if (museReads && installed) {
+      const sse = [...installed]
+        .filter(([, entry]) => typeof entry === 'object' && entry !== null && (entry as { type?: unknown }).type === 'sse')
+        .map(([name]) => name);
+      checks.push({
+        name: `MCP servers load in ${MUSE_TOOL_ID}`,
+        source: 'local',
+        check: async () => sse.length === 0,
+        fix: `In ${target.file}, ${nameList(sse)} ${sse.length === 1 ? 'uses' : 'use'} the sse transport, which Muse Code rejects, `
+          + 'so it loads no MCP server at all. If the server speaks streamable HTTP, set `transport: http` for it in the team\'s '
+          + 'mcp.yaml and run `teamai pull`. Otherwise Muse Code has no MCP servers while this file holds it.',
+      });
+    }
 
     if (problems.length === 0 && !withheld && desired.size === 0) continue;
 

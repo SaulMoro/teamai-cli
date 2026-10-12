@@ -1,8 +1,12 @@
 import os from 'node:os';
 import path from 'node:path';
 import fse from 'fs-extra';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { reconcileHooks } from '../hooks.js';
+import { mcpRelocated, reconcileMcpForConfig } from '../mcp-reconcile.js';
+import { buildMcpDeliveryChecks } from '../doctor-delivery.js';
+import { isToolInstalledForConfig } from '../resources/base.js';
+import { TeamaiConfigSchema, type LocalConfig, type TeamaiConfig } from '../types.js';
 
 // The hooks contract of Muse Code 1.4.6, observed with the real binary and
 // its SDK docs: a group carries only `matcher` and `hooks` (a group with any
@@ -90,5 +94,163 @@ describe('Muse Code hooks', () => {
     expect(settings.schema_version).toBe(1);
     expect(JSON.stringify(settings)).not.toContain('teamai hook-dispatch');
     expect(settings.hooks?.SessionStart).toEqual([{ hooks: [{ type: 'command', command: 'echo mine' }] }]);
+  });
+});
+
+// Muse Code 1.4.6 loads `mcpServers` from its settings.json with `type: stdio`
+// or `type: http`; a single `type: sse` server fails startup validation and
+// disables every MCP server.
+describe('Muse Code MCP', () => {
+  let root: string;
+  let home: string;
+  let settingsPath: string;
+  let team: TeamaiConfig;
+  let config: LocalConfig;
+
+  beforeEach(async () => {
+    root = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-muse-mcp-'));
+    home = path.join(root, 'home');
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('USERPROFILE', home);
+    settingsPath = path.join(home, '.config', 'muse', 'settings.json');
+    await fse.outputFile(path.join(root, 'repo', 'mcp', 'mcp.yaml'), `servers:
+  - name: local
+    transport: stdio
+    command: node
+    args: [server.mjs]
+    env: { MODE: test }
+  - name: remote
+    transport: http
+    url: https://example.com/mcp
+    headers: { Authorization: 'Bearer public-fixture' }
+  - name: legacy
+    transport: sse
+    url: https://example.com/sse
+`);
+    team = TeamaiConfigSchema.parse({ team: 'fixture', repo: 'fixture', provider: 'git' });
+    config = {
+      repo: { localPath: path.join(root, 'repo'), remote: 'fixture' },
+      username: 'tester', scope: 'user', enabledAgents: ['muse'], additionalRoles: [],
+    };
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await fse.remove(root);
+  });
+
+  it('writes stdio and http servers into settings.json, keeping its schema_version and hooks, and leaves sse out', async () => {
+    const hooks = { SessionStart: [{ hooks: [{ type: 'command', command: 'echo mine' }] }] };
+    await fse.outputJson(settingsPath, { schema_version: 1, hooks });
+
+    const result = await reconcileMcpForConfig(team, config);
+
+    const settings = await fse.readJson(settingsPath) as MuseSettings;
+    expect(settings.schema_version).toBe(1);
+    expect(settings.hooks).toEqual(hooks);
+    expect(settings.mcpServers).toEqual({
+      local: { type: 'stdio', command: 'node', args: ['server.mjs'], env: { MODE: 'test' } },
+      remote: { type: 'http', url: 'https://example.com/mcp', headers: { Authorization: 'Bearer public-fixture' } },
+    });
+    expect(result.changes).toContainEqual(expect.objectContaining({
+      tool: 'muse', server: 'legacy', action: 'skipped', reason: 'muse does not support sse transport',
+    }));
+  });
+
+  describe('doctor, in a project whose .mcp.json Claude Code shares', () => {
+    const projectChecks = async (agents: string[]) => {
+      const projectRoot = path.join(root, 'project');
+      await fse.ensureDir(path.join(projectRoot, '.claude'));
+      await fse.ensureDir(path.join(home, '.config', 'muse'));
+      const local: LocalConfig = { ...config, scope: 'project', projectRoot, enabledAgents: agents };
+      await reconcileMcpForConfig(team, local);
+      const checks = await buildMcpDeliveryChecks({
+        localConfig: local, teamConfig: team, toolPaths: team.toolPaths, hookToolPaths: team.toolPaths, baseDir: home,
+      });
+      return { file: path.join(projectRoot, '.mcp.json'), checks };
+    };
+
+    it("names the sse server Claude Code's render left there, which stops Muse Code loading any", async () => {
+      const { file, checks } = await projectChecks(['claude', 'muse']);
+
+      expect((await fse.readJson(file)).mcpServers.legacy).toEqual({ type: 'sse', url: 'https://example.com/sse' });
+      const loads = checks.find((check) => check.name === 'MCP servers load in muse');
+      expect(loads).toBeDefined();
+      expect(await loads!.check()).toBe(false);
+      expect(loads!.fix).toContain(`In ${file}, legacy uses the sse transport`);
+    });
+
+    it('keeps writing .mcp.json for a Muse-only whitelist', async () => {
+      const { file } = await projectChecks(['muse']);
+
+      expect(Object.keys((await fse.readJson(file)).mcpServers)).toEqual(['local', 'remote', 'legacy']);
+    });
+
+    it('says nothing when only Claude Code reads the file', async () => {
+      const { checks } = await projectChecks(['claude']);
+
+      expect(checks.map((check) => check.name)).not.toContain('MCP servers load in muse');
+    });
+  });
+
+  // Muse Code reads a project's servers from the .mcp.json the claude target
+  // writes, as tclaude does, so that file stays while Muse is installed.
+  it.each([
+    ['moves Claude Code\'s project servers to its local scope without Muse Code', false, true],
+    ['keeps them in .mcp.json while Muse Code is installed', true, false],
+  ])('with sharing.gitExclude on, %s', async (_name, museInstalled, relocated) => {
+    const projectRoot = path.join(root, 'project');
+    await fse.ensureDir(path.join(projectRoot, '.claude'));
+    if (museInstalled) await fse.ensureDir(path.join(home, '.config', 'muse'));
+    const local: LocalConfig = { ...config, scope: 'project', projectRoot, gitExcludeEnabled: true, enabledAgents: undefined };
+
+    expect(await mcpRelocated(team, local, 'claude')).toBe(relocated);
+  });
+
+  it('creates a settings.json Muse Code loads when none exists', async () => {
+    await fse.ensureDir(path.dirname(settingsPath));
+
+    await reconcileMcpForConfig(team, config);
+
+    const settings = await fse.readJson(settingsPath) as MuseSettings;
+    expect(settings.schema_version).toBe(1);
+    expect(Object.keys(settings.mcpServers as object)).toEqual(['local', 'remote']);
+  });
+});
+
+// Every project path Muse Code reads (.agents/skills, .agents/agents, .mcp.json)
+// is shared with other tools, so only its HOME root says the member runs it.
+describe('Muse Code detection', () => {
+  let root: string;
+  let home: string;
+  let projectRoot: string;
+
+  beforeEach(async () => {
+    root = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-muse-detect-'));
+    home = path.join(root, 'home');
+    projectRoot = path.join(root, 'project');
+    vi.stubEnv('HOME', home);
+    vi.stubEnv('USERPROFILE', home);
+    await fse.ensureDir(path.join(projectRoot, '.agents', 'skills'));
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await fse.remove(root);
+  });
+
+  const projectConfig = (enabledAgents?: string[]): LocalConfig => ({
+    repo: { localPath: path.join(root, 'repo'), remote: 'fixture' },
+    username: 'tester', scope: 'project', projectRoot, additionalRoles: [], ...(enabledAgents ? { enabledAgents } : {}),
+  });
+
+  it('finds Muse Code in a project scope by ~/.config/muse', async () => {
+    await fse.ensureDir(path.join(home, '.config', 'muse'));
+
+    expect(await isToolInstalledForConfig('muse', '.agents/skills', projectConfig())).toBe(true);
+  });
+
+  it('does not take a project .agents directory for Muse Code', async () => {
+    expect(await isToolInstalledForConfig('muse', '.agents/skills', projectConfig())).toBe(false);
   });
 });
