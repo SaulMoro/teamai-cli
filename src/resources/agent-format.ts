@@ -416,8 +416,10 @@ export function renderForMuse(spec: AgentSpec): RenderResult {
   const frontmatterData: Record<string, unknown> = { name: spec.name, description: spec.description };
   if (spec.model !== undefined) frontmatterData['model'] = spec.model;
   Object.assign(frontmatterData, extras);
-  const tools = museTools(extras.tools ?? spec.tools).kept;
-  if (tools.length > 0) frontmatterData['tools'] = tools;
+  // Muse gives an agent with no `tools` every tool, so one that limits its
+  // tools keeps the limit, as `tools: []`, when Muse has none of them.
+  const { kept, dropped } = museTools(extras.tools ?? spec.tools);
+  if (kept.length > 0 || dropped.length > 0) frontmatterData['tools'] = kept;
   else delete frontmatterData['tools'];
   return { ext: agentFileExtensionForTool('muse'), content: matter.stringify(spec.instructions, frontmatterData) };
 }
