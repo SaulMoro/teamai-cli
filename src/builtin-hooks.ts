@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { TEAMAI_HOOK_DESCRIPTION_PREFIX } from './types.js';
+import { MUSE_TOOL_ID, TEAMAI_HOOK_DESCRIPTION_PREFIX } from './types.js';
 import { CODEX_TOOL_IDS, isCodexTool } from './utils/tool-names.js';
 import type { HookDef } from './types.js';
 import { getUserHome } from './utils/home.js';
@@ -395,7 +395,8 @@ export function builtinHookDefs(tool: string): HookDef[] {
     source: 'builtin' as const,
     key: spec.key,
     event: spec.event,
-    matcher: spec.matcher,
+    // Muse Code names its skill tool `read_skill`; the dispatcher still routes it as Skill.
+    matcher: tool === MUSE_TOOL_ID && spec.matcher === 'Skill' ? 'read_skill' : spec.matcher,
     command: buildCommand(spec.dispatchEvent, tool, spec.matcher),
     timeout: withTimeout ? spec.timeoutSec : undefined,
     // The team rules reach the Codex family through its start hooks (#938);

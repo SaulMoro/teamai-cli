@@ -19,6 +19,7 @@ const IDE_TO_CLI: Record<string, string> = {
   read_file: 'Read',
   task: 'Task',
   skill: 'Skill',
+  read_skill: 'Skill', // Muse Code
 };
 
 export function normalizeToolName(name: string): string {

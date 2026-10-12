@@ -50,6 +50,16 @@ describe('Muse Code hooks', () => {
     }
   });
 
+  // Muse names its skill tool `read_skill`; a `Skill` matcher never fires there.
+  it("runs the skill-usage hook on Muse's read_skill tool", async () => {
+    await reconcileHooks(settingsPath, 'muse');
+
+    const settings = await fse.readJson(settingsPath) as MuseSettings;
+    const skillGroups = (settings.hooks?.PostToolUse ?? [])
+      .filter((group) => group.hooks.some((handler) => String(handler.command).includes('--matcher Skill')));
+    expect(skillGroups.map((group) => group.matcher)).toEqual(['read_skill']);
+  });
+
   it('keeps the rest of an existing settings.json and its schema_version', async () => {
     await fse.writeJson(settingsPath, {
       schema_version: 1,

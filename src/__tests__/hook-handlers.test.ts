@@ -1832,6 +1832,46 @@ describe('post-tool-use Skill-matcher dispatch routes Cursor SKILL.md Read to th
   });
 });
 
+// PostToolUse payloads as Muse Code 1.4.6 sends them, tool_response trimmed.
+describe('track handler: Muse Code', () => {
+  const musePayload = (toolName: string, toolInput: Record<string, unknown>) => ({
+    hook_event_name: 'PostToolUse',
+    tool_name: toolName,
+    tool_input: toolInput,
+    tool_use_id: 'call_14',
+    tool_response: '<read-skill-result name="live-skill" status="ok"></read-skill-result>',
+    session_id: '01a131d0-7b02-7e90-bd5a-74e6934af652',
+    turn_id: '2d808450-3250-42fc-93e5-27b5a7b725ea',
+    cwd: '/work/project',
+    transcript_path: null,
+    model: 'muse-spark-1.3',
+    permission_mode: 'bypassPermissions',
+    model_provider: 'meta',
+  });
+  const track = () => buildHandlerRegistry()
+    .find((r) => r.event === 'post-tool-use' && r.matcher === 'Skill' && r.handler.name === 'track')!.handler;
+
+  it('records a read_skill call as a use of that skill', async () => {
+    const { appendUsageEvent, updateKnownSkills } = await import('../usage-tracker.js');
+    vi.mocked(appendUsageEvent).mockClear();
+
+    await track().execute(musePayload('read_skill', { name: 'live-skill' }), 'muse', scope);
+
+    expect(appendUsageEvent).toHaveBeenCalledOnce();
+    expect(vi.mocked(appendUsageEvent).mock.calls[0][0]).toMatchObject({ skill: 'live-skill', tool: 'muse' });
+    expect(updateKnownSkills).toHaveBeenCalledWith('live-skill');
+  });
+
+  it('records nothing for a shell call', async () => {
+    const { appendUsageEvent } = await import('../usage-tracker.js');
+    vi.mocked(appendUsageEvent).mockClear();
+
+    await track().execute(musePayload('bash', { command: 'echo hi', workdir: '/work/project' }), 'muse', scope);
+
+    expect(appendUsageEvent).not.toHaveBeenCalled();
+  });
+});
+
 describe('track-slash handler: dotted and colon skill names', () => {
   it('tracks a skill name that contains a dot', async () => {
     const { appendUsageEvent, updateKnownSkills } = await import('../usage-tracker.js');
