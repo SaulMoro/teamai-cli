@@ -145,6 +145,8 @@ const USER_TARGETS: Readonly<Record<string, TargetEntry>> = {
   dsh: { file: dshAgentsMd, teamRules: { label: 'DeepSeek Harness AGENTS.md' }, retired: [] },
   // JoyCode reads its user rules from one plain text file.
   joycode: { file: () => '.joycode/rules.txt', teamRules: { label: 'JoyCode rules.txt' }, retired: [] },
+  // Muse Code reads ~/.config/muse/AGENTS.md as its user rules file; the team rules sit beside the blocks.
+  muse: { file: () => '.config/muse/AGENTS.md', teamRules: { label: 'Muse Code AGENTS.md' }, retired: [] },
   // WorkBuddy reads user rules from ~/.workbuddy/rules; nothing else reads them.
   workbuddy: { file: contextRule('.md'), header: ALWAYS_APPLY, owned: true, retired: ['AGENTS.md'] },
   codebuddy: { file: configured, retired: [] },

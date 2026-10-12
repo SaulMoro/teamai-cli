@@ -160,6 +160,7 @@ describe('with teamai in both scopes, each rule reaches the tool once (#946)', (
     { tool: 'zcode', root: '.zcode', file: '.zcode/AGENTS.md', project: (cfg: LocalConfig) => sessionStart('zcode', cfg) },
     { tool: 'dsh', root: '.dsh', file: '.dsh/AGENTS.md', project: (cfg: LocalConfig) => sessionStart('dsh', cfg) },
     { tool: 'pi', root: '.pi/agent', file: '.pi/agent/AGENTS.md', project: piInstructions },
+    { tool: 'muse', root: '.config/muse', file: '.config/muse/AGENTS.md', project: (cfg: LocalConfig) => sessionStart('muse', cfg) },
   ];
   const teamConfig = () => TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' });
 
