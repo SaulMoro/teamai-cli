@@ -32,7 +32,7 @@ teamai uninstall --agent claude
 - 用户级卸载时的 HTTP 源（`init --http`），移除方式与 `teamai source remove-http` 相同：卸载会等待正在运行的 HTTP 同步或插件协调结束，最多 30 秒；若无法获得该锁，则以退出码 1 结束，不移除任何内容
 - 各工具指令文件中的 teamai 块（文化、共享指令、recall），以及早期版本写过这些块的文件（保留用户自写内容；teamai 写入的 `teamai-context` 文件整体删除，若 OpenCode 中对应的 `instructions` 条目由 teamai 添加，则一并移除，即使你自写的内容让该文件保留下来，或该文件已不存在；你自己列入的条目予以保留）
 - 没有自身 rules 格式的工具在用户作用域读取的文件中的团队规则块（`~/.codex/AGENTS.md`、`~/.zcode/AGENTS.md`、`$DSH_HOME/AGENTS.md`、OpenClaw workspace 的 `AGENTS.md`、`~/.pi/agent/AGENTS.md`、`~/.joycode/rules.txt`）；该文件若是 teamai 只为这个块创建的，则整个删除
-- 团队同步的 skills，包括 OpenClaw workspace skills（保留用户自建 skills）
+- 团队同步的 skills，包括 OpenClaw workspace skills（保留用户自建 skills）。两个版本在项目中共用的 skills 目录——Trae 与 Trae CN 的 `.trae/skills/`、Qoder 与 Qoder CN 的 `.qoder/skills/`——只要另一个版本仍已安装就会保留
 - 团队同步的 rules，包括旧版本留在 `.codex/rules/`、项目的 `.workbuddy/rules/` 与 `.pi/rules/`、`.openclaw/rules/`、`~/.pi/agent/rules/` 和 `~/.joycode/rules/` 中的副本，团队此后已删除的 rule 的副本也包括在内。项目 `.codebuddy/rules/` 中的副本，只要 CodeBuddy 与 WorkBuddy 中的另一个仍已安装就会保留。清理使用记录的 `toolRoots` 位置和发布者本地的文件名。其中你改过的副本会保留，并在警告中点名。已删除 rule 的副本只有与记录的投递哈希一致时才会删除；没有该记录时也会保留并点名。Codex 的 `*.rules` 文件保留
 - 团队同步的自定义 agents 和 CLI 内置 agents（保留用户自建 agents）
 - Shell profile 中的 env 块——会清理每一个候选文件（`.zshrc`、`.bashrc`、`.bash_profile`、`.bash_login`、`.profile`）中、代码块指向本作用域自身 `env.sh` 的那些，而不仅仅是当前 `pull` 会选中的那一个；指向其他作用域 `env.sh` 的代码块不受影响
@@ -40,7 +40,7 @@ teamai uninstall --agent claude
 - 项目中 teamai 的 git exclude 块，在删除它们所隐藏的文件之后移除：项目 `.git/info/exclude` 中的 `delivered` 块、其他仓库中的 `delivered/<id>` 块（作为嵌套克隆或 submodule 的工具目录、纳入 git 的工具主目录）、HTTP 本地 agent 为该项目写的行（agent 仍为你的其他工作区服务；user scope 的卸载会移除它在其记录的每个 exclude 文件中的 `local-agent` 块，包括其他仓库的），以及这些文件中 teamai 的其他所有块，因此你之后在这些路径上新建的文件对 git 可见。你自己的行保留，与其他项目共用的仓库中属于那个项目的块也保留。teamai 无法证明不含解析值的 MCP 配置所对应的行会保留并给出警告（见 [MCP Server](./sharing.md#mcp-server)），判断时会检查仓库的每个 checkout；`credentials` 行在该仓库任一 checkout 中其指向的模型文件仍含 API key 时同样保留。卸载未完成时，仍在磁盘上的文件的行全部保留，留待重试时移除。只读的 exclude 文件（或被另一个 teamai 命令占用超过短暂等待时间的文件）保持原样，警告中会列出需要手动删除的行；此时记录该文件的 teamai 数据目录也会保留，卸载报告未完成（退出码 1），文件可写后再次运行即可移除该块。所属仓库已不存在的 exclude 文件会跳过
 - 每个 checkout 的 `.teamai/.ignore` 中 teamai 的文档搜索白名单块，文件中没有其他内容时连同文件一起删除（见[让分发的文件不进入 git](./member-guide.md#让分发的文件不进入-git)）。
 - docs 目录（`sharing.docs.localDir`）中的团队文档：与团队仓库历史中该文档某个版本相同的文件或链接。其余内容会保留并被指出（`Kept <path>: it is not teamai's ... so uninstall left it.`）：被删除文档路径上或团队从未有过的路径上的文件、你自己的目录或链接。包含它们的目录也会保留，在 `~/.teamai/` 中也是如此。团队仓库历史无法读取时，整个 docs 目录都会保留
-- `~/.teamai/` 目录。卸载找不到任何配置时（在所有项目之外运行，且没有 user scope 配置，例如只用 `init --http` 设置过的机器），会移除该目录和 HTTP 源，并在此之前从其记录中提到的每个 exclude 文件里移除 teamai 的 git exclude 行；它留在磁盘上的文件，其行会保留并被指出；还会移除本地 agent 记录在 Claude 和 CodeBuddy local scope（`~/.claude.json`、`.codebuddy.json`）中的 MCP server，只移除仍与 teamai 写入时相同的：你改动过的副本会保留并被指出，你自己的 server 也保留。若存放 teamai server 的文件无法读取或写入（例如无法解析），该目录连同这些记录一并保留，卸载报告未完成（退出码 1）并指出该文件；修好文件后再次运行即可
+- `~/.teamai/` 目录。user scope 的卸载会保留本机上仍在使用 teamai 的每个项目的数据（`~/.teamai/projects/` 下含 `config.yaml` 的目录），以及这些项目读取的共享文件：`managed-hooks.json`、`codex-team-hooks.json`、这些团队的 secrets（还包括本机的 `secrets/machine.json`，除非这些团队的每个 checkout 都可读取且未声明任何 secret）和它们的 source 安装记录。卸载会列出这些项目；在每个项目中运行 `teamai uninstall` 即可移除，最后一个移除后，在所有项目之外运行 `teamai uninstall` 会删除剩余内容。卸载找不到任何配置时（在所有项目之外运行，且没有 user scope 配置，例如只用 `init --http` 设置过的机器），会移除该目录和 HTTP 源，并在此之前从其记录中提到的每个 exclude 文件里移除 teamai 的 git exclude 行；它留在磁盘上的文件，其行会保留并被指出；还会移除本地 agent 记录在 Claude 和 CodeBuddy local scope（`~/.claude.json`、`.codebuddy.json`）中的 MCP server，只移除仍与 teamai 写入时相同的：你改动过的副本会保留并被指出，你自己的 server 也保留。若存放 teamai server 的文件无法读取或写入（例如无法解析），该目录连同这些记录一并保留，卸载报告未完成（退出码 1）并指出该文件；修好文件后再次运行即可
 
 git 跟踪的 skill、rule 或 agent 副本绝不会被删除：uninstall 会指出它，并附上将其从仓库移除的 `git rm -r <path>`，摘要中把它列在 `Kept (tracked)` 下。
 
@@ -50,7 +50,7 @@ uninstall 只删除它所在 checkout 中的副本。其他 worktree 中的副�
 
 `--agent <tool>` 只移除该工具的 teamai 资源（hooks、团队指令块、skills、rules、团队同步的自定义 agents、内置 agents）。工具名即 `toolPaths` 的键（如 `claude`、`codex`、`codebuddy`），匹配大小写不敏感。传入未知工具名会直接报错并列出可用工具、不执行任何删除，并以非零状态码退出。
 
-多个工具共同映射的指令文件按区块清理：只要该文件上仍有剩余工具会写入某个 teamai 区块，该区块就保留。最常见的是 CodeBuddy 与 WorkBuddy 共用的 `.codebuddy/rules/teamai-context.md`：只要 CodeBuddy 仍已安装，`--agent workbuddy` 就会保留它。早期版本写过这些块的文件（例如项目 `AGENTS.md`）现在没有任何工具读取，因此其中的 teamai 区块会被移除，你自己的内容保留。teamai 创建的文件随最后一个区块一起删除；你原有的指令文件（即使是空文件）会保留。配置的 `claudemd` 即使名为 `teamai-context.md`，也仍是成员文件。
+多个工具共同映射的指令文件按区块清理：只要该文件上仍有剩余工具会写入某个 teamai 区块，该区块就保留。最常见的是 CodeBuddy 与 WorkBuddy 共用的 `.codebuddy/rules/teamai-context.md`：只要 CodeBuddy 仍已安装，`--agent workbuddy` 就会保留它。同样的保留逻辑也适用于两个版本共用的 skills 目录（`.trae/skills/`、`.qoder/skills/`）与 rule 副本（`.trae/rules/`、`.qoder/rules/`）：只要姊妹版本仍已安装就保留。当一对版本同时安装时，删除计划可能因此为空——所有资源都共用且保留——此时卸载仍会记录排除，与上面的全局通道工具一致。早期版本写过这些块的文件（例如项目 `AGENTS.md`）现在没有任何工具读取，因此其中的 teamai 区块会被移除，你自己的内容保留。teamai 创建的文件随最后一个区块一起删除；你原有的指令文件（即使是空文件）会保留。配置的 `claudemd` 即使名为 `teamai-context.md`，也仍是成员文件。
 
 在项目中，该工具的行会离开 `delivered` git exclude 块：uninstall 从每个 checkout 的列表中移除该工具目录下的路径（每个 `toolPaths` 条目的顶层目录，Codex 还包括 `.agents/skills`），然后更新这些块。仍在使用的其他工具读取的路径保留其行（例如 WorkBuddy 的 `.codebuddy/rules`）；卸载未完成时，仍在磁盘上的路径也保留其行。该工具在其他 worktree 中的副本保留在磁盘上，对 git 可见。
 
@@ -79,6 +79,14 @@ teamai init --repo https://github.com/your-org/your-repo --scope user --role <ro
 ---
 
 ## 常见问题 FAQ
+
+**Q: 命令提示 `Cannot acquire lock <path>: <reason>`？**
+
+锁无法检查、创建或回收，dry-run 预览也可能报告此错误。
+先修复提示中的文件系统错误（例如权限不足、磁盘已满，
+或父路径是文件），再重试；等待其他 teamai 进程结束无法解决这类错误。
+另一个进程持有锁时仍使用该命令原有的占用或跳过提示；已有锁因权限不足无法读取或
+未记录所有者时，也会被视为已占用以保护它。
 
 **Q: User scope 和 Project scope 可以共存吗？**
 

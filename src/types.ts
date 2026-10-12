@@ -255,6 +255,14 @@ export function isContributeHintEnabled(
   return teamConfig.sharing?.contributeHint?.enabled ?? true;
 }
 
+/** Resolve whether pull reports usage stats: user override > team config > default (true). */
+export function isUsageReportEnabled(
+  localConfig: { usageReportEnabled?: boolean },
+  teamConfig: { usageReport?: boolean },
+): boolean {
+  return localConfig.usageReportEnabled ?? teamConfig.usageReport ?? true;
+}
+
 /**
  * Resolve the effective co-author intent: user override > team config > no-op.
  *
@@ -328,7 +336,7 @@ export const TEAMAI_SOURCES_DIR = path.join(getUserHome(), '.teamai', 'sources')
 export const ProviderNameSchema = z.enum(['tgit', 'github', 'cnb', 'gitlab', 'gitcode', 'git']);
 export type ProviderName = z.infer<typeof ProviderNameSchema>;
 
-export const TeamaiConfigSchema = z.object({
+export const TeamaiConfigBaseSchema = z.object({
   team: z.string(),
   description: z.string().default(''),
   repo: z.string(),
@@ -499,6 +507,40 @@ export const TeamaiConfigSchema = z.object({
       mcp: '.kiro/settings/mcp.json',
       mcpProject: '.kiro/settings/mcp.json',
     },
+    // Trae (trae.ai) is a VS Code-family IDE. Per its docs and its bundled
+    // code (verified against the installed app): project skills live in
+    // <root>/.trae/skills/<name>/SKILL.md, project rules in .trae/rules/*.md
+    // (frontmatter `alwaysApply` / `globs`, globs comma-separated, parsed by
+    // lines — see trae-rule.ts), and project MCP in .trae/mcp.json holding a
+    // Claude-shaped `mcpServers` object map. User rules are NOT ~/.trae/rules
+    // but ~/.trae/user_rules (the default file is user_rules.md), so
+    // userScope.rules carries that name. User-level MCP has no
+    // teamai-writable cross-platform file: the IDE keeps it next to its
+    // user settings (~/Library/Application Support/Trae/User/mcp.json on
+    // macOS, %APPDATA%/… on Windows), so only `mcpProject` is set. Trae has
+    // no settings-based hook surface and no subagents directory, so those
+    // keys stay absent (like JoyCode, users sync via `teamai pull`).
+    trae: {
+      skills: '.trae/skills',
+      rules: '.trae/rules',
+      mcpProject: '.trae/mcp.json',
+      userScope: { rules: '.trae/user_rules' },
+    },
+    // Trae CN (domestic.trae.cn) shares every project path with the
+    // international build (verified on installed apps: only the user
+    // directory differs, ~/.trae-cn). Both map the same .trae/mcp.json, and
+    // one shared ownership record covers the pair
+    // (MCP_MANIFEST_KEY_ALIAS), so whichever build a member runs, its
+    // target writes, updates and cleans the file.
+    'trae-cn': {
+      skills: '.trae/skills',
+      rules: '.trae/rules',
+      mcpProject: '.trae/mcp.json',
+      userScope: {
+        skills: '.trae-cn/skills',
+        rules: '.trae-cn/user_rules',
+      },
+    },
     // ZCode: user-level config lives at ~/.zcode/cli/config.json (a shared file
     // that also carries plugin state — reconcile must merge, never replace).
     // Hooks are Claude-shaped but nested under `hooks.events` and gated by
@@ -594,6 +636,26 @@ export const TeamaiConfigSchema = z.object({
   }),
 });
 
+export const TeamaiConfigSchema = TeamaiConfigBaseSchema.superRefine((config, ctx) => {
+  // The Trae builds claim their MCP files under one shared ownership record
+  // (MCP_MANIFEST_KEY_ALIAS); that contract holds only while they map the
+  // same file. A team that maps them apart would see one reconcile clear the
+  // other's record, so reject the split instead (#904).
+  const trae = config.toolPaths.trae;
+  const traeCn = config.toolPaths['trae-cn'];
+  for (const field of ['mcp', 'mcpProject'] as const) {
+    const a = trae?.[field];
+    const b = traeCn?.[field];
+    if (a !== undefined && b !== undefined && a !== b) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['toolPaths', 'trae-cn', field],
+        message: `trae and trae-cn must map the same ${field} path: they claim their MCP servers under one shared ownership record`,
+      });
+    }
+  }
+});
+
 export type TeamaiConfig = z.infer<typeof TeamaiConfigSchema>;
 
 // ─── Member config (members/<user>.yaml) ────────────────
@@ -683,6 +745,9 @@ export const LocalConfigSchema = z.object({
   gitExcludeEnabled: z.boolean().optional(),
   /** User-level override for the share-learnings hint. When set, takes precedence over team config. */
   contributeHintEnabled: z.boolean().optional(),
+  /** Per-machine override of the team's `usageReport`. When set, takes
+   *  precedence over the team config. Undefined defers to the team. */
+  usageReportEnabled: z.boolean().optional(),
   /** Per-machine override for the co-author trailer in AI-tool commits. When set,
    *  takes precedence over the team `sharing.coAuthor` default. Undefined means
    *  "defer to the team" (see resolveCoAuthor). */
@@ -1157,9 +1222,20 @@ export type ManagedMcpManifest = Record<string, ManagedMcpRecord[]>;
  * Each project WORKTREE now has its OWN manifest file (see managedMcpManifestPath),
  * so the file already isolates ownership by worktree — the key needs no workspace
  * segment. It is `<tool>:project` for project scope and `<tool>` for user scope.
+ *
+ * `MCP_MANIFEST_KEY_ALIAS` maps a tool onto another's key: builds that write
+ * one shared project MCP file claim it under one record, so either build's
+ * target can update and clean what the other's pull wrote, instead of a
+ * per-tool claim the sibling's reconcile would skip as foreign.
  */
+const MCP_MANIFEST_KEY_ALIAS: Readonly<Record<string, string>> = {
+  // Trae and Trae CN map the same <root>/.trae/mcp.json (#904).
+  'trae-cn': 'trae',
+};
+
 export function managedMcpManifestKey(tool: string, projectScope: boolean): string {
-  return projectScope ? `${tool}:project` : tool;
+  const owner = MCP_MANIFEST_KEY_ALIAS[tool] ?? tool;
+  return projectScope ? `${owner}:project` : owner;
 }
 
 /** Stable per-worktree identity segment; names the worktree's manifest subdirectory (#374). */
@@ -2098,11 +2174,16 @@ function isUnderUserHome(dir: string): boolean {
 }
 
 /**
- * Root shapes the installed-tool gate can express: a single directory in HOME
- * (`.claude-work`), or `.config/<name>` — the two forms `toolInstallRoot`
- * recognises. Anything deeper (`configs/claude`) would leave every gate keying
- * on the first segment alone, so an unrelated `~/configs` would report the tool
- * as installed and teamai would write into a directory that does not exist.
+ * Root shapes a member may record: a single directory in HOME
+ * (`.claude-work`), or a directory under `.config/` at any depth
+ * (`~/.config/cloak/profiles/work/claude`).
+ *
+ * `configs/claude` is still refused: not being under `.config`, the recorded
+ * value alone does not say how deep the tool's own root sits, so nothing
+ * distinguishes it from an unrelated directory of the same name — an
+ * unrelated `~/configs` would report the tool as installed and teamai would
+ * write into a directory that does not exist. `.config` gives the gate a
+ * bounded namespace to look in; `toolGateRoot` finds the exact root within it.
  */
 function isAddressableRootSegment(segment: string): boolean {
   const segments = segment.split('/');
@@ -2110,7 +2191,7 @@ function isAddressableRootSegment(segment: string): boolean {
   // reads it as the two-segment OpenCode-style root, so the gate would look for
   // the settings FILE as the tool's directory and never find it.
   if (segments.length === 1) return segments[0] !== '.config';
-  return segments.length === 2 && segments[0] === '.config';
+  return segments[0] === '.config';
 }
 
 /**
@@ -2147,8 +2228,8 @@ export function toolRootRejection(dir: string): string | null {
   const segment = path.relative(getUserHome(), resolved).split(path.sep).join('/');
   if (!isAddressableRootSegment(segment)) {
     return 'a tool root has to be a directory in the home directory other than '
-      + '~/.config itself (~/.claude-work), or a ~/.config/<name> directory, '
-      + 'because that is what the "is this tool installed?" check can look for';
+      + '~/.config itself (~/.claude-work), or a directory under a ~/.config/<name> one, '
+      + 'so the "is this tool installed?" check can tell it apart from an unrelated directory';
   }
   return null;
 }
@@ -2210,15 +2291,16 @@ export function isAgentExcluded(
 }
 
 /**
- * The directory whose existence marks a tool as "installed" for a given
- * resource path. The tool root is normally the first path segment
- * (`.claude/skills` → `.claude`, `.openclaw/workspace/AGENTS.md` → `.openclaw`).
+ * The root a set of tool paths hangs off, derived from the path's shape: the
+ * first segment (`.claude/skills` → `.claude`, `.openclaw/workspace/AGENTS.md`
+ * → `.openclaw`), except under `.config/`, where `.config` alone is a directory
+ * nearly every user has, and the root is therefore the first two segments
+ * (`.config/opencode`).
  *
- * The one exception is OpenCode's user scope, whose paths live under
- * `.config/opencode/...`: there the first segment (`.config`) is a directory
- * nearly every user has, so it would wrongly report OpenCode as installed.
- * For a `.config/<tool>/...` path the root is the first two segments
- * (`.config/opencode`) instead.
+ * This is the shape a relocation keys on and rewrites (`relocateToolPaths`
+ * matches against it, `applyToolRoots` re-roots at it), so it must stay
+ * independent of any recorded root. The installed-tool gate needs the tool's
+ * real directory instead — that is `toolGateRoot`.
  */
 export function toolInstallRoot(toolPath: string): string {
   const segments = toolPath.split('/');
@@ -2226,6 +2308,37 @@ export function toolInstallRoot(toolPath: string): string {
     return `${segments[0]}/${segments[1]}`;
   }
   return segments[0] ?? toolPath;
+}
+
+/**
+ * The directory the installed-tool gate reads for `tool`: the recorded root
+ * when one is in play, and the path-derived one otherwise.
+ *
+ * `toolInstallRoot` answers from the path's shape, which is what relocation
+ * needs. The gate needs the directory the tool actually keeps its config in,
+ * and those stop agreeing once a member records a root nested below
+ * `~/.config/<name>` (`~/.config/cloak/profiles/work/claude`): the two-segment
+ * prefix (`.config/cloak`) is a directory that may exist for an unrelated
+ * reason while the recorded root itself does not. Probing the prefix would
+ * call the tool installed and the write below it would recreate a root the
+ * user had deleted — the very thing the gate exists to prevent.
+ *
+ * The record is consulted only when `toolPath` really does hang off it: the
+ * same `toolPaths` are used unrelocated in project scope, where a HOME-relative
+ * member root says nothing, and a root that cannot be used is ignored there
+ * too (see `toolRootSegment`).
+ */
+export function toolGateRoot(
+  tool: string,
+  toolPath: string,
+  toolRoots?: Record<string, string>,
+): string {
+  const recorded = toolRoots?.[tool];
+  if (recorded) {
+    const segment = toolRootSegment(tool, recorded);
+    if (segment && (toolPath === segment || toolPath.startsWith(`${segment}/`))) return segment;
+  }
+  return toolInstallRoot(toolPath);
 }
 
 /** Path fields of ToolPathsSchema that live under the tool's own user root. */
@@ -2403,6 +2516,9 @@ export function scopedToolPaths(
     if (us.rules === null) delete scoped.rules;
     out[tool] = scoped;
   }
+  // Copilot loads user hooks only from files directly in `$COPILOT_HOME/hooks/`.
+  const copilot = out[COPILOT_TOOL_ID];
+  if (copilot?.hooks) out[COPILOT_TOOL_ID] = { ...copilot, hooks: `hooks/${path.basename(copilot.hooks)}` };
   return out;
 }
 

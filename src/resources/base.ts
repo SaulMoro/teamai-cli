@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { COPILOT_TOOL_ID, getCopilotHome, resolveToolBaseDir, toolInstallRoot } from '../types.js';
+import { COPILOT_TOOL_ID, getCopilotHome, resolveToolBaseDir, toolGateRoot, toolInstallRoot } from '../types.js';
 import type { ResourceType, ResourceItem, ResourceDiff, DeliveryTarget, TeamaiConfig, LocalConfig, PendingPush, State } from '../types.js';
 
 /** The placement records `publishedNameFor` resolves a bare name through. */
@@ -17,6 +17,14 @@ const TOMBSTONE_FILE = '.removed';
  */
 const INSTALL_ROOTS: Readonly<Record<string, string>> = { workbuddy: '.workbuddy' };
 
+/** Each edition of a product sharing one project directory, and the HOME root that alone says the member runs it. */
+const EDITION_HOME_ROOTS: Readonly<Record<string, string>> = {
+  trae: '.trae',
+  'trae-cn': '.trae-cn',
+  qoder: '.qoder',
+  'qoder-cn': '.qoder-cn',
+};
+
 /** Detect an installed tool while respecting tool-specific user roots. */
 export async function isToolInstalledForConfig(
   tool: string,
@@ -30,7 +38,19 @@ export async function isToolInstalledForConfig(
       || (exactConfigPath !== undefined && await pathExists(exactConfigPath))
       || pathExists(getCopilotHome());
   }
-  return ResourceHandler.isToolInstalled(Object.hasOwn(INSTALL_ROOTS, tool) ? INSTALL_ROOTS[tool] : toolPath, baseDir);
+  // Editions of one product that share every project path (Trae and Trae CN
+  // share <root>/.trae/, Qoder and Qoder CN <root>/.qoder/): the shared root
+  // says nothing about which edition the member runs. Each edition counts as
+  // installed by its own HOME root, or by an explicit --agent whitelist entry
+  // naming it (#904) — the bootstrap a project-only init needs before the
+  // app has ever run and created its root.
+  const editionHomeRoot = EDITION_HOME_ROOTS[tool];
+  if (editionHomeRoot !== undefined) {
+    if (localConfig.enabledAgents?.includes(tool) === true) return true;
+    return pathExists(path.join(getUserHome(), editionHomeRoot));
+  }
+  const probe = Object.hasOwn(INSTALL_ROOTS, tool) ? INSTALL_ROOTS[tool] : toolPath;
+  return ResourceHandler.isToolInstalled(probe, baseDir, toolGateRoot(tool, probe, localConfig.toolRoots));
 }
 
 /**
@@ -153,10 +173,13 @@ export abstract class ResourceHandler {
    * e.g. for toolPath ".codebuddy/skills", checks if ~/.codebuddy/ exists.
    * This prevents creating directories for tools the user hasn't installed.
    * @param baseDir - Override base directory (defaults to HOME). Used for project scope.
+   * @param rootSegment - The root to probe, when the caller can name it better
+   *   than the path's shape can (a member's recorded `toolRoots` entry; see
+   *   `toolGateRoot`). Defaults to `toolInstallRoot(toolPath)`.
    */
-  static async isToolInstalled(toolPath: string, baseDir?: string): Promise<boolean> {
+  static async isToolInstalled(toolPath: string, baseDir?: string, rootSegment?: string): Promise<boolean> {
     const base = baseDir ?? getUserHome();
-    const toolRoot = path.join(base, toolInstallRoot(toolPath));
+    const toolRoot = path.join(base, rootSegment ?? toolInstallRoot(toolPath));
     return pathExists(toolRoot);
   }
 

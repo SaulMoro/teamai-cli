@@ -59,6 +59,17 @@ teamai import --from-repo https://github.com/org/repo --skip-enrich
 
 图谱存储组件、接口、配置和跨仓库依赖关系。`teamai recall` 会将 learnings 与图谱 BM25 命中转换到有界的相关性分数尺度后合并排序。
 
+**recall 中的源码新鲜度。** 完整运行 `teamai recall` 后，返回的可见代码库结果可能会在 `Sources:` 后附加单独的 `Source freshness:` 行：
+
+```text
+Sources: src/a.ts, src/b.ts
+Source freshness: src/a.ts=current (last scan: 2026-10-09T14:23:05.000Z); src/b.ts=stale
+```
+
+对于仓库身份已验证的源码，`current` 表示其内容哈希与代码库知识扫描基线一致，但不代表生成的知识一定正确。`stale` 表示哈希不同；依赖相关结论前应先读取当前源码并重新核对。`missing` 表示在仓库身份已验证的根目录下找不到该路径；依赖旧引用前应检查文件是否已移动或被替换。`unknown` 表示基线、仓库身份或安全的文件检查不可用；应明确说明新鲜度未知，并在可能时核对源码。可选的 `last scan` 时间是生成基线的扫描时间，不是知识文档的复核时间。这些本地检查只覆盖本次返回代码库结果中列出的源码，不访问网络、不重建索引、不调用 AI、不重新扫描代码库，也不会仅因 Git HEAD 改变就判为过期。`teamai recall --check` 仍是相关性预检，不执行源码新鲜度检查。
+
+旧 manifest 缺少足够的仓库身份或源码子目录信息时会保持 `unknown`，重新提取代码库后才能判定。增量提取无法确认基线与本次源码同源时会安全退回全量提取；子目录提取也可能触发这一回退。
+
 依赖边由两条并行轨道提取：WASM tree-sitter **AST 轨**（TypeScript/JavaScript、Python、Go、Swift），将 import、调用、以及 TS `implements` 子句解析为精确的文件到文件边（`code-ast`）；以及正则 **启发式轨**（所有语言，`code-heuristic`），同时覆盖 AST 轨未支持的语言。重叠时 AST 结果优先。AST 解析器无需原生编译工具链；加载失败时提取会降级到启发式并记录一条 `AST_UNAVAILABLE` gap。设置 `TEAMAI_SKIP_AST=1` 可强制仅用启发式提取。
 
 ```bash
@@ -212,7 +223,7 @@ Git hook 安装失败时，`hooks inject`、`init` 和单仓库自动初始化�
 
 在 Windows 上，经由 bash 执行的内置 hook 派发命令（如 Claude、Codex、Cursor、Copilot CLI）会以绝对路径引用 Git Bash——先查标准安装位置，再回退到 `HKLM\SOFTWARE\GitForWindows` 注册表——从而避免解析到 WSL 的 `bash.exe`；若找不到 Git Bash，则退回裸 `bash`。
 
-Cursor 也会加载 `~/.claude/settings.json`。Copilot CLI 会加载受信任项目里的 `.claude/settings.json`（self mode 把 hook 写在项目里；Copilot 不加载 `~/.claude/settings.json`）。只有另一边的 teamai hook 已经在磁盘上时，`hook-dispatch --tool claude` 才会退出：`~/.cursor/hooks.json` 或 `$CURSOR_PROJECT_DIR/.cursor/hooks.json` 含有 `--tool cursor`，或 `$COPILOT_PROJECT_DIR/.github/hooks/teamai.json` 含有 `--tool copilot`。写给 `claude` 的团队 hook 命令用同一判断。只启用了 Claude 时，Cursor 里这份 hook 照常运行，因为没有第二份可以接替。`COPILOT_CLI` 不能当信号：
+Cursor 也会加载 `~/.claude/settings.json`。Copilot CLI 会加载受信任项目里的 `.claude/settings.json`（self mode 把 hook 写在项目里；Copilot 不加载 `~/.claude/settings.json`）。只有另一边的 teamai hook 已经在磁盘上时，`hook-dispatch --tool claude` 才会退出：`~/.cursor/hooks.json` 或 `$CURSOR_PROJECT_DIR/.cursor/hooks.json` 含有 `--tool cursor`，或 `$COPILOT_HOME/hooks/`（默认 `~/.copilot/hooks/`）或 `$COPILOT_PROJECT_DIR/.github/hooks/` 中有效且未禁用的 version-1 JSON Hook 文件的命令含有 `--tool copilot`。无效的文件和设置了 `disableAllHooks` 的文件不会让 Claude Hook 退出，因为 Copilot 不会运行它们。self mode 只检查项目的 Copilot 目录：共享的全局内置 hook 会跳过 self 会话，因此不能接替本地的 Claude hook。写给 `claude` 的团队 hook 命令在 Copilot 下只有当 `$COPILOT_PROJECT_DIR/.github/hooks/` 中有效的 version-1 JSON 文件以相同的事件和 matcher 把同一条命令交给 Copilot 时才退出；全局文件不算数，所以只发给 Claude 的 hook，或以其他事件、matcher 发给 Copilot 的 hook，照常运行。只启用了 Claude 时，Cursor 里这份 hook 照常运行，因为没有第二份可以接替。`COPILOT_CLI` 不能当信号：
 
 Copilot 会给每个子进程设置它，包括从它的 shell 里启动的 Claude。Claude Code 不会设置 `CURSOR_VERSION` 或 `COPILOT_PROJECT_DIR`。已经装好的团队 hook 需要再跑一次 `teamai pull` 或 `teamai hooks inject`，才会带上这个判断。
 
@@ -228,7 +239,7 @@ Copilot 会给每个子进程设置它，包括从它的 shell 里启动的 Clau
 
 ### 团队 Hooks 声明
 
-团队可在仓库 `hooks/hooks.yaml` 中声明自定义 hooks，按 namespace 划分的写在 `hooks/<ns>/hooks.yaml`（见 [Env、hooks 与 MCP server 按 namespace 划分](./sharing.md#envhooks-与-mcp-server-按-namespace-划分)），`teamai pull` 会自动分发到支持团队 Hooks 的适配器。`builtin:` 只从 `hooks/hooks.yaml` 读取。Pi 目前仅支持 TeamAI 内置生命周期桥接；此文件中的自定义 Hooks 和内置 Hook 覆盖不会应用到 Pi。
+团队可在仓库 `hooks/hooks.yaml` 中声明自定义 hooks，按 namespace 划分的写在 `hooks/<ns>/hooks.yaml`（见 [Env、hooks 与 MCP server 按 namespace 划分](./sharing.md#envhooks-与-mcp-server-按-namespace-划分)），`teamai pull` 会自动分发到支持团队 Hooks 的适配器。`builtin:` 只从 `hooks/hooks.yaml` 读取。Pi 目前仅支持 TeamAI 内置生命周期桥接；此文件中的自定义 Hooks 和内置 Hook 覆盖不会应用到 Pi。非 self mode 下，Copilot 内置 Hook 由多个项目共用一个用户级文件：各项目的 `builtin.disabled` 在其事件触发时生效，但 `builtin.overrides` 的 timeout 不生效。无法解析的 `hooks/hooks.yaml` 不会禁用任何内置 Hook。
 
 ```yaml
 hooks:
@@ -434,6 +445,8 @@ models: how model: strong resolves for agents implementer, planner:
 
 ### GitHub Copilot CLI
 
+[VS Code Agent Host 中的 Copilot 会话](https://code.visualstudio.com/docs/agent-customization/hooks)与 Copilot CLI 使用同一套 Hook 实现。VS Code 的 Local harness 也会发现 `~/.copilot/hooks`，但事件和负载行为不同；CLI 验证不能替代该运行环境的验证。
+
 GitHub Copilot CLI 已支持其官方自定义指令、Rules、Skills、自定义 Agent、Hooks 和 MCP 配置面，以及 TeamAI Docs 和 Env 下发：
 
 - **作用域。** 用户资源位于 `$COPILOT_HOME`（默认 `~/.copilot`）下，项目资源位于 `<project>/.github` 下。TeamAI 在检测以及所有用户级读写中都会遵循 `COPILOT_HOME`。
@@ -443,7 +456,7 @@ GitHub Copilot CLI 已支持其官方自定义指令、Rules、Skills、自定�
 - **自定义 Agents。** 团队 Agents 会转换为 `$COPILOT_HOME/agents/` 或 `.github/agents/` 下的官方 `<name>.agent.md` 配置。TeamAI 将兼容的工具名映射为 Copilot 主别名，通过 `tool_extras.copilot` 保留 Copilot 专属 frontmatter，并且只删除与团队 Agent 或内置 recall 配置匹配的文件；用户自建配置保持不变。详见 [GitHub 自定义 Agent 配置](https://docs.github.com/zh/copilot/reference/custom-agents-configuration)。
 - **Team Context recall。** 内置 `teamai-recall.agent.md` 只获得 `execute`、`read` 和 `search`。它调用现有的 `teamai recall` 流程，让 Copilot 检索 learnings、codebase 证据和 teamwiki 结果，而不会复制或创建第二套知识库。
 - **Docs 和 Env。** 团队 Docs 同步到配置的本地文档目录（默认 `~/.teamai/docs`；project scope 使用项目内对应路径）。团队环境变量同步到该作用域由 TeamAI 管理的 `env.sh`；请从已 source 此文件的 shell 启动 Copilot。TeamAI 不会把环境变量值复制到 Copilot 配置中。
-- **Hooks 与隐私遥测。** TeamAI 在 `$COPILOT_HOME/hooks/teamai.json` 或 `.github/hooks/teamai.json` 写入独立的 version-1 Hook 文件，使用 Copilot 与 VS Code 兼容的 PascalCase 事件（`SessionStart`、`UserPromptSubmit`、`PostToolUse`、`Stop` 和 `SessionEnd`），从而保留 TeamAI 所需的 snake_case Hook 负载字段，并生成 `bash`、`powershell` 和后备 `command` 字段。会话 ID、Skill 使用、提示次数、生命周期状态和最终 Token 总数会进入本地 Dashboard；Copilot 提示原文、助手输出、Transcript 路径和请求元数据绝不会被保存。若最终 Token 计数不可用，会话仍会被记录，但不包含 Token 数据。对于恢复的会话，TeamAI 在 SessionStart 时保存不含路径的日志字节边界；
+- **Hooks 与隐私遥测。** TeamAI 将内置 Hook 写入 `$COPILOT_HOME/hooks/teamai.json`（默认 `~/.copilot/hooks/teamai.json`），普通 project scope 安装也使用该文件。自定义团队 Hook 仍放在项目的 `.github/hooks/teamai.json`；self mode 的内置 Hook 也保留在项目中。每个项目下次执行 `init`、`pull` 或 `hooks inject` 时，会移除原先生成的内置 Hook，并保留无关 Hook。self 会话跳过全局副本。其他情况下，会话加载的每个副本（多个全局 JSON 文件，或运行中会话仍持有的旧项目命令）对每个事件竞争认领：最先运行的副本在 `~/.teamai/copilot-hook-claims/` 下认领该事件，其余副本退出，因此无论会话加载了哪些文件，每个事件只执行一次。认领键由事件负载、matcher 以及（若已设置）`COPILOT_AGENT_SESSION_ID` 组成；这依赖 Copilot 把同一份带毫秒 `timestamp` 的负载传给该事件的每个 Hook（依据 Copilot CLI 0.0.411 的实现，未检查更新版本）。负载没有 `timestamp`，或认领无法写入时，所有已加载副本都会执行，事件可能执行两次，但不会丢失。超过两天的认领会被清除。当 Copilot 加载的启用 JSON 文件中不再有任何文件包含该内置 Hook 时，缓存的副本停止执行：全局副本检查 `$COPILOT_HOME/hooks/`，旧项目副本检查该目录及其项目的 `.github/hooks/`。Dispatcher 根据 Hook 的工作目录解析项目配置。项目卸载保留共享全局文件；`hooks remove` 则显式移除 `$COPILOT_HOME/hooks/` 下每个 JSON 文件中的内置 Hook，包括其他项目配置的文件名。文件采用 version-1 格式，使用 Copilot 与 VS Code 兼容的 PascalCase 事件（`SessionStart`、`UserPromptSubmit`、`PostToolUse`、`Stop` 和 `SessionEnd`），从而保留 TeamAI 所需的 snake_case Hook 负载字段，并生成 `bash`、`powershell` 和后备 `command` 字段。会话 ID、Skill 使用、提示次数、生命周期状态和最终 Token 总数会进入本地 Dashboard；Copilot 提示原文、助手输出、Transcript 路径和请求元数据绝不会被保存。若最终 Token 计数不可用，会话仍会被记录，但不包含 Token 数据。对于恢复的会话，TeamAI 在 SessionStart 时保存不含路径的日志字节边界；
 
   只有此前的运行标记尚未关闭、且未被上次运行使用时，才会采纳该标记。关闭计数必须关联这个标记或边界之后写入的标记。若标记仅在 SessionStart 之后出现，而 SessionEnd 没有提供方时间戳，则无法确认它属于本次运行；会话仍会被记录，但不包含 Token 数据。文件会被幂等合并，且保留无关条目。TeamAI 从不修改 Copilot 的 `settings.json`。
 - **MCP。** `teamai pull` 和 `teamai mcp inject` 使用 Copilot 原生结构，把本地与远程 Server 合并到 `$COPILOT_HOME/mcp-config.json` 或 `.github/mcp.json`。归属信息保存在 Copilot 文件之外，因此重复 pull 保持幂等，`mcp remove` 或卸载只会移除 TeamAI 管理的条目；手写 Server 与 `settings.json` 均保持不变。
@@ -497,7 +510,7 @@ Qoder 已作为内置目标支持。TeamAI 会将 Skills、Rules 和 Subagents �
 
 Rules 按 Qoder Desktop 写入的形式生成，Qoder CLI 也读取这种形式：带 `paths:` 的规则写成 `trigger: glob` 加一行不带引号、以逗号分隔的 `glob:`，由于该行会按每个逗号切分，`{a,b}` 形式的选择会展开为多个 glob；没有 `paths` 的规则写成 `trigger: always_on`。Qoder 未公开这种 frontmatter 的 schema，该形式取自 `alibaba/tron-one-agent` 中 Desktop 生成的规则文件。
 
-Qoder CN 是独立发行的版本，其**用户级**目录为 `~/.qoder-cn` 而非 `~/.qoder`，因此它作为独立的内置目标 `qoder-cn` 支持，而不是并入 `qoder`。两者仅用户作用域不同：用户级的资源写入 `~/.qoder-cn/{skills,rules,agents}`，Hooks 与 MCP 写入 `~/.qoder-cn/settings.json`；项目作用域则沿用 Qoder 的 `<project>/.qoder/` 布局。两者读取相同的 Claude 兼容资源格式，因此下发内容一致，仅用户级根目录不同。同时安装两个版本时，TeamAI 会分别同步到各自的用户目录，无需再建软链接。在项目中 Qoder 与 Qoder CN 都读取 `.qoder/rules/`，因此两者共用其中的一份副本：卸载其中一个时，只要另一个仍已安装，副本就会保留；`doctor` 也只检查一次，即 `Rules delivered to qoder, qoder-cn`。
+Qoder CN 是独立发行的版本，其**用户级**目录为 `~/.qoder-cn` 而非 `~/.qoder`，因此它作为独立的内置目标 `qoder-cn` 支持，而不是并入 `qoder`。两者仅用户作用域不同：用户级的资源写入 `~/.qoder-cn/{skills,rules,agents}`，Hooks 与 MCP 写入 `~/.qoder-cn/settings.json`；项目作用域则沿用 Qoder 的 `<project>/.qoder/` 布局。两者读取相同的 Claude 兼容资源格式，因此下发内容一致，仅用户级根目录不同。同时安装两个版本时，TeamAI 会分别同步到各自的用户目录，无需再建软链接。在项目中 Qoder 与 Qoder CN 都读取 `.qoder/rules/`，因此两者共用其中的一份副本：卸载其中一个时，只要另一个仍已安装，副本就会保留；`doctor` 也只检查一次，即 `Rules delivered to qoder, qoder-cn`。每个版本仅以自己的 HOME 根目录（`~/.qoder` / `~/.qoder-cn`）或显式 `--agent` 指定来判定为已安装，与 Trae 两个版本一致——项目中共用的 `.qoder/` 不代表任何一个版本在运行。
 
 ### Kiro
 
@@ -508,6 +521,14 @@ Kiro 内存中的内置默认 agent 无法修改，`--no-interactive` 也不会�
 Rules 以带 Kiro inclusion frontmatter 的 steering 文件写入 `.kiro/steering/` 与 `~/.kiro/steering/`：带 `paths:` 的规则写成 `inclusion: fileMatch`，并把其 glob 列表写入 `fileMatchPattern`；没有 `paths` 的规则写成 `inclusion: always`。Kiro 只读取 steering 目录的顶层（[kirodotdev/Kiro#10448](https://github.com/kirodotdev/Kiro/issues/10448)），因此与 [Oh My Pi](#oh-my-pi) 一样，namespace 下的规则会平铺写入：`rules/fe/style.md` 写成 `fe.style.md`，`push` 会把对该文件的修改写回 `rules/fe/style.md`。push 要求该平铺副本有下发记录；同名的个人文件既不会在 push 前被刷新，也不会被当作团队规则的修改。若你收到的另一条规则也对应同一个平铺文件名，该规则不会写入；
 
 与团队规则平铺文件名相同的你自己的文件永远不会被覆盖或删除。旧版写入的嵌套副本 `<ns>/<name>.md` 会在平铺副本写入后删除；你修改过的副本会保留并给出提示，因为 Kiro 不会读取它。Kiro 自己的 `product.md` 不是团队规则，`pull` 会留下它。Kiro CLI 无论 `inclusion` 取值都会加载全部 steering 文件（[kirodotdev/Kiro#7950](https://github.com/kirodotdev/Kiro/issues/7950)），因此在 CLI 中限定路径的规则也会始终生效。Kiro IDE 曾忽略 `~/.kiro/steering` 中的 `fileMatch`（[kirodotdev/Kiro#9176](https://github.com/kirodotdev/Kiro/issues/9176)，Kiro 0.12）；维护者称此后已修复，该 issue 未经复测即关闭。
+
+### Trae
+
+Trae 与 Trae CN 已作为内置目标支持。TeamAI 会将 Skills 下发到 `.trae/skills/`，Rules 下发到 `.trae/rules/`，与 [Trae 官方文档](https://docs.trae.cn/ide/rules)定义的布局一致。CN 版仅用户目录不同（`~/.trae-cn` 而非 `~/.trae`，同 Qoder CN）：项目中两个版本共用同一份 `.trae/`；用户级 pull 时，国际版写入 `~/.trae/skills/` 与 `~/.trae/user_rules/`，CN 版写入 `~/.trae-cn/skills/` 与 `~/.trae-cn/user_rules/`——注意 Trae 的用户规则目录名为 `user_rules` 而不是 `rules`。Trae 没有基于设置文件的 Hooks 表面，也没有 subagents 目录，这两类资源不做同步，需像 JoyCode 一样手动执行 `teamai pull`。MCP Server 合并进项目的 `.trae/mcp.json`，使用 Claude 的 `mcpServers` 结构（见分享指南的 MCP 章节）；两个版本的 target 在同一条共享归属记录下映射这同一个文件，任一版本的 pull 都能更新和清理它，用 `tools:` 限定到某一版本的服务器只要任一版本仍在使用就会保留。Trae 把用户级 MCP 保留在自身用户数据目录（随平台而异），因此不写用户级文件。
+
+每个版本仅以自己的 HOME 根目录（`~/.trae` / `~/.trae-cn`）或显式 `--agent` 指定来判定为已安装——项目中共用的 `.trae/` 不代表任何一个版本在运行（同 WorkBuddy 以 `.workbuddy/` 计数），因此任何一版都不会成为保留或重新同步另一版文件的“幻影兄弟”。项目中两个版本读取同一份 `.trae/skills/` 与 `.trae/rules/`，因此各只有一份副本：卸载其中一个时，只要另一个仍已安装，两份副本都会保留。
+
+Rules 是带 Trae frontmatter 的 `.md` 文件：带 `paths:` 的规则写成不加引号的 `globs: a, b`——Trae 的解析器按原样读取该行并按逗号拆分——外加 `alwaysApply: false`；没有 `paths` 的规则写成 `alwaysApply: true`。Trae 最多读取三层目录深的规则，因此 namespace 下的规则保持 `fe/style.md` 的目录形态。`push` 时只有 Markdown 正文回流；rules 目录中没有对应团队规则的文件属于你自己：`pull` 不会删除它，`push` 也不会把它当作新的团队规则提交。
 
 ### CodeBuddy 与 WorkBuddy
 
@@ -522,7 +543,7 @@ WorkBuddy 运行的是 CodeBuddy 的引擎，因此两者都按 CodeBuddy 的格
 ZCode 已作为内置目标支持。Skills 下发到 `.zcode/skills/`（ZCode 同时会读取中央目录 `~/.agents/skills/`，该目录由 `agents` 条目覆盖），Subagents 以 Claude 风格 Markdown 下发到 `.zcode/agents/`。Hooks 会合并进共享的 `~/.zcode/cli/config.json`，并保留插件状态等无关键值。写入器为你处理了两个 ZCode 特有的细节：
 
 - ZCode 的配置文件钩子**默认禁用**——TeamAI 会强制置 `hooks.enabled: true`，确保写入的条目真正生效。
-- Windows 上，钩子条目通过隐藏的 **wscript VBS 启动器**执行（`wscript.exe <teamai-hook-dispatch.vbs> <分发命令尾段>`）：wscript 属 GUI 子系统，钩子运行绝不弹控制台黑框；启动器把 STDIN 暂存为临时文件再转发，保证 payload 完整到达 `hook-dispatch`。超时按事件放宽（会话启动 180 秒、stop / prompt 提交 60 秒、工具调用后 30 秒），避免会话启动时携带仓库拉取的分发被中途掐断。含多字节文本（如中文）的 payload 在启动器的 ANSI 代码页暂存环节可能降级——身份字段会被抢救，降级分发仍能正确关联到会话；卸载时会同时清除条目与脚本文件。
+- Windows 上，钩子条目通过隐藏的 **Node 启动器**执行（`node <teamai-hook-dispatch.mjs> <分发命令尾段>`）：ZCode 通过 stdio 与 `process` 钩子通信，启动器把这份 stdin 与 stdout 原样交给分发进程，钩子的 JSON 回执因此逐字节到达 ZCode（多字节文本也完整保留），退出码一并回传（0 成功、2 阻塞）。启动器会让分发进程不开控制台窗口，且不需要 bash。超时按事件放宽（会话启动 180 秒、stop / prompt 提交 60 秒、工具调用后 30 秒），避免会话启动时携带仓库拉取的分发被中途掐断。`teamai hooks inject` 会在启动器内容变化时重写它，并删除旧版本写入的 VBS 启动器；卸载时会同时清除条目与脚本文件。
 - POSIX 上条目就是普通的 `bash -lc <分发命令尾段>` argv 向量，不写入启动器；两个平台上，命令尾段都以 argv 末位元素原样存储——这正是托管条目识别与托管清单比对的依据。
 
 以上路径已对照 ZCode 桌面端实测验证：设置页「新建子智能体」写入的就是 `~/.zcode/agents/*.md`，反向放入的文件也会出现在页面的已安装列表中。MCP Server 下发到 `~/.agents/mcp.json`（用户级，Claude 的 `mcpServers` 结构——正是 ZCode 自己的 MCP 设置页读取的文件）。项目级暂未接入：ZCode 的工作区 MCP 使用不同的键（`.zcode/config.json` 内的 `mcp.servers`），Claude 写入器无法生成该结构。ZCode 不读取 rules 目录：
@@ -575,7 +596,7 @@ JoyCode 规则清理采用保守策略：不在团队规则列表中的本地 `.
 
 Cursor 的子代理部署到 `.cursor/agents/*.md`，YAML frontmatter 携带 `agent_id`（团队代理名）、`description`、`tools`，以及团队代理声明了的 `model`，外加所有 `tool_extras.cursor` 字段；`reverseFromCursor` 按同样字段读回，因此 `pull` → `push` 往返不会丢 model。
 
-Cursor 的项目规则必须以 **`.mdc`** 文件形式放在 `.cursor/rules/` 下，且带 YAML frontmatter——放在那里的纯 `.md` 会被 Cursor 直接忽略。因此 teamai 向 Cursor 写规则时用 `<name>.mdc`（JoyCode、Copilot、Kiro、Qoder、Qoder CN、CodeBuddy、WorkBuddy 与 Oh My Pi 各有自己的格式，见各自小节；其他工具写纯 `.md`），并从团队规则派生 frontmatter：
+Cursor 的项目规则必须以 **`.mdc`** 文件形式放在 `.cursor/rules/` 下，且带 YAML frontmatter——放在那里的纯 `.md` 会被 Cursor 直接忽略。因此 teamai 向 Cursor 写规则时用 `<name>.mdc`（JoyCode、Copilot、Kiro、Qoder、Qoder CN、Trae、Trae CN、CodeBuddy、WorkBuddy 与 Oh My Pi 各有自己的格式，见各自小节；其他工具写纯 `.md`），并从团队规则派生 frontmatter：
 
 - 带 `paths:` 列表的规则会转成 `globs: "<逗号拼接>"` + `alwaysApply: false`（上下文中有匹配文件时 Cursor 自动附加该规则）。值加引号是因为以 `*` 开头的 glob 不加引号时并非合法 YAML。
 - 无 `paths` 的规则（团队强制规则）会转成 `alwaysApply: true`（每个 Cursor 会话都应用）。
@@ -623,7 +644,7 @@ pull 会删除未修改的副本，并点名你修改过的副本。`doctor` 还
 
 `Rules delivered to <tool>` 与 `Agents delivered to <tool>` 对另外两类按工具下发的资源做同样的事，并且都向 handler 询问落点，而不是自行拼路径：
 
-rule 的文件名和内容因工具而异（`.md` 原样、`.mdc` 带派生的 `globs`/`alwaysApply`（JoyCode 的不加引号）、`.instructions.md` 带 `applyTo`、Kiro 平铺的 `.md` 带 `inclusion`/`fileMatchPattern`、Qoder 的 `.md` 带 `trigger`/`glob`、Oh My Pi 平铺的 `.md` 带 `alwaysApply` 或 `globs`/`description`、CodeBuddy 的 `.md` 带 `alwaysApply`/`paths`；共用一份副本的工具，例如项目中的 CodeBuddy 与 WorkBuddy，只有一项同时点名两者的检查），agent 的落点来自渲染结果，且由 `targets:` 决定哪些工具应当收到。已送达的 rule 会与 handler 为该工具渲染出的字节逐一比对，而不只是检查该工具所需的键是否存在：
+rule 的文件名和内容因工具而异（`.md` 原样、`.mdc` 带派生的 `globs`/`alwaysApply`（JoyCode 的不加引号）、`.instructions.md` 带 `applyTo`、Kiro 平铺的 `.md` 带 `inclusion`/`fileMatchPattern`、Qoder 的 `.md` 带 `trigger`/`glob`、Trae 的 `.md` 带 `globs`/`alwaysApply`、Oh My Pi 平铺的 `.md` 带 `alwaysApply` 或 `globs`/`description`、CodeBuddy 的 `.md` 带 `alwaysApply`/`paths`；共用一份副本的工具，例如项目中的 CodeBuddy 与 WorkBuddy，只有一项同时点名两者的检查），agent 的落点来自渲染结果，且由 `targets:` 决定哪些工具应当收到。已送达的 rule 会与 handler 为该工具渲染出的字节逐一比对，而不只是检查该工具所需的键是否存在：
 
 `globs` 与团队 rule 的 `paths:` 不再一致的 `.mdc`，即使 `alwaysApply` 取值合法，也会作用到错误的文件上；这里会报告为 `delivered from an older copy`——正文漂移的副本同样如此，因为两者都写入成功，却都是错的。agent 会与渲染结果逐字节比对：
 
@@ -635,7 +656,7 @@ rule 的文件名和内容因工具而异（`.md` 原样、`.mdc` 带派生的 `
 
 ——Hermes 的常驻指令来自这一个文件而非某个目录，因此代码块被删除或停留在旧版规则集上，都意味着该工具读到的是错误的规则，而磁盘上看不出任何异常。user scope 下，`Team rules are inlined in <file>`（`Codex AGENTS.md`、`ZCode AGENTS.md`、`DeepSeek Harness AGENTS.md`、`OpenClaw workspace AGENTS.md`、`Pi AGENTS.md`、`JoyCode rules.txt`）把该工具所读文件中的 team-rules 区块与团队 rule 内联后的内容比对；对 Codex，旁边有 `AGENTS.override.md` 遮蔽该文件时也会失败。在项目中，当该工具 `hooks.json` 中的 teamai `SessionStart` 或 `SubagentStart` 条目缺失或没有设置 `additionalContextLimit: 0` 时，`Project rules and instructions reach <tool> whole through its session hooks` 会失败：
 
-没有它，Codex 对较大的内容只保留开头和结尾。在项目中，当 `~/.zcode/cli/config.json` 没有 teamai 的 `SessionStart` 条目或没有设置 `hooks.enabled: true` 时，`Project rules reach zcode through its SessionStart hook` 会失败；当 `~/.teamai/dsh/` 下的 patch 或 hook 配置缺失时，`Project rules reach dsh through its session-start hook` 会失败，doctor 无法看到 dsh 是否带 `--patch` 运行。对 Pi，teamai 的 Pi 扩展缺失或过期时，`pi adds the team instructions and rules to its prompt` 会失败。Codex、ZCode、DeepSeek Harness 和 Pi 没有 `Rules delivered to <tool>` 检查。
+没有它，Codex 对较大的内容只保留开头和结尾。在项目中，当 `~/.zcode/cli/config.json` 没有 teamai 的 `SessionStart` 条目或没有设置 `hooks.enabled: true` 时，`The teamai SessionStart hook is registered and enabled for zcode` 会失败；当 `~/.teamai/dsh/` 下的 patch 或 hook 配置缺失时，`Project rules reach dsh through its session-start hook` 会失败，doctor 无法看到 dsh 是否带 `--patch` 运行。对 Pi，teamai 的 Pi 扩展缺失或过期时，`pi adds the team instructions and rules to its prompt` 会失败。Codex、ZCode、DeepSeek Harness 和 Pi 没有 `Rules delivered to <tool>` 检查。
 
 `MCP servers delivered to <tool>` 将团队 `mcp.yaml` 为该工具解析出的每个 server 与该工具自己配置文件中的条目逐一比对，并列出 reconcile 跳过的 server 及原因。比对的是条目内容而非名字：reconcile 不会覆盖不属于 teamai 的条目，因此你自己写的同名 server 会占住这个名字，团队的定义从未真正送达；
 
@@ -720,6 +741,10 @@ clone 解析到它自己的项目或 user scope，而不是外层项目）；没
 ```yaml
 usageReport: false
 ```
+
+成员可在该 scope 的 `config.yaml` 中设置 `usageReportEnabled: false`（或 `true`），
+在本机覆盖团队设置；见 [config.yaml](reference.md#configyaml本地配置)。
+`teamai doctor` 会显示上报是否开启以及该设置的来源。
 
 Pull 在上报步骤之后把每个 scope 的使用文件限制为最新 5,000 条事件，丢弃更早的
 事件。对 HTTP 源或 `usageReport: false` 的团队，该文件是 `teamai stats` 唯一的
