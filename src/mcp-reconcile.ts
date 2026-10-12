@@ -318,6 +318,8 @@ export interface McpTarget {
    * no git exclusion applies to it.
    */
   projectKey?: string;
+  /** The claude project `.mcp.json`, which Muse Code reads too while it has no target of its own (`mcpTargetAgents`). */
+  museReads?: true;
 }
 
 /**
@@ -435,12 +437,21 @@ export async function mcpRelocated(teamConfig: TeamaiConfig, localConfig: LocalC
  */
 const CLAUDE_MCP_FILE_READERS = ['tclaude', MUSE_TOOL_ID] as const;
 
-/** Whether `reader` (of `CLAUDE_MCP_FILE_READERS`) is installed and enabled here. */
+/** The project MCP file Muse Code reads, relative to the project root. */
+const MUSE_PROJECT_MCP_FILE = '.mcp.json';
+
+/**
+ * Whether `reader` (of `CLAUDE_MCP_FILE_READERS`) is installed and enabled
+ * here. Muse Code reads only <root>/.mcp.json, so not while the team maps the
+ * claude project file elsewhere.
+ */
 export async function readsClaudeMcpFile(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
   reader: typeof CLAUDE_MCP_FILE_READERS[number],
 ): Promise<boolean> {
+  const claudeFile = teamConfig.toolPaths.claude?.mcpProject;
+  if (reader === MUSE_TOOL_ID && (claudeFile === undefined || path.normalize(claudeFile) !== MUSE_PROJECT_MCP_FILE)) return false;
   const paths = teamConfig.toolPaths[reader];
   const probe = paths && (paths.skills ?? paths.settings ?? paths.agents);
   return !!probe && !isAgentExcluded(localConfig, reader) && await isToolInstalledForConfig(reader, probe, localConfig);
@@ -585,6 +596,7 @@ export async function resolveMcpTargets(
 
     targets.push({
       tool, format: museOnly ? 'muse' : format, file, projectScope,
+      ...museReads && !museOnly ? { museReads: true as const } : {},
       ...builtinFallback ? { builtinFallback: true as const } : {},
       ...installed ? {} : { undetected: true as const },
       ...!projectScope && USER_MCP_LOOKUP[tool]
@@ -871,7 +883,7 @@ export function desiredMcpForTarget(
   const declared = declaredSecretKeys(ctx.secrets);
 
   for (const raw of teamDefs) {
-    if (raw.tools && !raw.tools.includes(target.tool)) continue;
+    if (!mcpTargetTakes(target, raw.tools)) continue;
     if (ctx.excluded.has(raw.name)) {
       skipped.push({ tool: target.tool, server: raw.name, action: 'skipped', reason: 'excluded by user' });
       continue;
@@ -1005,7 +1017,7 @@ function judgeUnrecordedMcpEntry(
     for (const version of versions) {
       if (path.posix.basename(version.path) !== layout.file) continue;
       for (const server of parseTeamMcpServers(version.content.toString('utf8')) ?? []) {
-        if (server.tools && !server.tools.includes(target.tool)) continue;
+        if (!mcpTargetTakes(target, server.tools)) continue;
         const def = teamMcpToDef(server);
         if (!supportsTransport(target.format, def.transport)) continue;
         const rendered = renderMcpEntry(target, def, vars);
@@ -1831,6 +1843,16 @@ export async function mcpConfigsNotProvenClean(
 /** The agent `target`'s servers are for: its tool, or Muse Code for the claude target only Muse reads (Muse's format). */
 export function mcpTargetAgent(target: McpTarget): string {
   return target.format === 'muse' ? MUSE_TOOL_ID : target.tool;
+}
+
+/** Every agent that reads `target`'s file: `mcpTargetAgent`, and Muse Code beside Claude Code (`museReads`). */
+export function mcpTargetAgents(target: McpTarget): string[] {
+  return target.museReads ? [target.tool, MUSE_TOOL_ID] : [mcpTargetAgent(target)];
+}
+
+/** Whether a team server limited to `tools`, when it is, goes to `target`: one of the agents reading its file is listed. */
+export function mcpTargetTakes(target: McpTarget, tools: readonly string[] | undefined): boolean {
+  return !tools || mcpTargetAgents(target).some((agent) => tools.includes(agent));
 }
 
 export function mcpTargetExcluded(localConfig: LocalConfig, target: McpTarget): boolean {

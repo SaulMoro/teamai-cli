@@ -943,8 +943,9 @@ async function teamMcpForDoctor(ctx: DoctorContext): Promise<TeamMcpForDoctor> {
 /** The team servers `target` gets none of because its format cannot express their transport, less those the member excluded. */
 async function unsupportedTransportServers(localConfig: LocalConfig, target: McpTarget, teamDefs: McpServerDef[]): Promise<McpServerDef[]> {
   const { supportsTransport } = await import('./resources/mcp-format.js');
+  const { mcpTargetTakes } = await import('./mcp-reconcile.js');
   const excludedByUser = new Set(localConfig.excludedSkills ?? []);
-  return teamDefs.filter((def) => (!def.tools || def.tools.includes(target.tool))
+  return teamDefs.filter((def) => mcpTargetTakes(target, def.tools)
     && !excludedByUser.has(def.name) && !supportsTransport(target.format, def.transport));
 }
 
@@ -983,7 +984,7 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
 
   const {
     resolveMcpTargets, buildDesiredMcpContext, desiredMcpForTarget,
-    mcpTargetAgent, installedMcpEntries, memberMcpServers, describeKeptMemberServer, readsClaudeMcpFile,
+    mcpTargetAgent, mcpTargetAgents, installedMcpEntries, memberMcpServers, describeKeptMemberServer,
   } = await import('./mcp-reconcile.js');
   const { carriesResolvedValue, ensureExcludedFromGit } = await import('./mcp-git-exclude.js');
 
@@ -1034,9 +1035,7 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
     // Muse Code rejects a config holding one sse server and then loads no MCP
     // server at all, so an sse entry in a file it reads breaks Muse's MCP as a
     // whole. In a project that is the .mcp.json the claude target writes.
-    const museReads = target.tool === MUSE_TOOL_ID
-      || (target.tool === 'claude' && target.projectScope && target.projectKey === undefined
-        && await readsClaudeMcpFile(teamConfig, localConfig, MUSE_TOOL_ID));
+    const museReads = mcpTargetAgents(target).includes(MUSE_TOOL_ID);
     if (museReads && installed) {
       const sse = [...installed]
         .filter(([, entry]) => typeof entry === 'object' && entry !== null && (entry as { type?: unknown }).type === 'sse')

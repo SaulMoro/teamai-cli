@@ -216,6 +216,37 @@ describe('Muse Code MCP', () => {
 
       expect(checks.map((check) => check.name)).not.toContain('MCP servers load in muse');
     });
+
+    // A server the team limits to Muse Code goes in the file Muse reads, shared with Claude Code or not.
+    it.each([[['muse']], [['claude', 'muse']]])('writes a server limited to muse into .mcp.json for %j', async (agents) => {
+      await fse.appendFile(path.join(root, 'repo', 'mcp', 'mcp.yaml'), `  - name: muse-only
+    transport: stdio
+    command: node
+    tools: [muse]
+`);
+      const { file, checks } = await projectChecks(agents);
+
+      expect(Object.keys((await fse.readJson(file)).mcpServers)).toContain('muse-only');
+      for (const check of checks.filter((item) => item.name.startsWith('MCP servers delivered to'))) {
+        expect((await check.check()) || check.fix).toBe(true);
+      }
+    });
+  });
+
+  // Muse Code reads only <root>/.mcp.json, so a claude mapping elsewhere is not a file Muse reads.
+  it('does not take a Claude Code project MCP file mapped elsewhere for one Muse Code reads', async () => {
+    const projectRoot = path.join(root, 'project');
+    await fse.ensureDir(projectRoot);
+    await fse.ensureDir(path.join(home, '.config', 'muse'));
+    const mapped = TeamaiConfigSchema.parse({
+      team: 'fixture', repo: 'fixture', provider: 'git',
+      toolPaths: { ...team.toolPaths, claude: { ...team.toolPaths.claude, mcpProject: '.claude/mcp.json' } },
+    });
+    const local: LocalConfig = { ...config, scope: 'project', projectRoot, enabledAgents: ['muse'] };
+
+    await reconcileMcpForConfig(mapped, local);
+
+    expect(await fse.pathExists(path.join(projectRoot, '.claude', 'mcp.json'))).toBe(false);
   });
 
   // Muse Code reads a project's servers from the .mcp.json the claude target
@@ -313,6 +344,19 @@ describe('Muse Code agents', () => {
     expect(frontmatter(content).tools).toEqual(['read_file']);
     expect(frontmatter(content)).not.toHaveProperty('color');
     expect(frontmatter(content)).not.toHaveProperty('effort');
+  });
+
+  // Muse Code gives an agent with no `tools` every tool; `tools: []` leaves it only its subagent controls.
+  it('keeps an agent whose tools Muse Code has none of restricted, rather than giving it every tool', () => {
+    const { content } = renderForTool({ ...spec, tools: ['NotebookEdit'] }, 'muse');
+
+    expect(frontmatter(content).tools).toEqual([]);
+  });
+
+  it('leaves tools out for an agent that limits none', () => {
+    const { content } = renderForTool({ ...spec, tools: undefined }, 'muse');
+
+    expect(frontmatter(content)).not.toHaveProperty('tools');
   });
 
   it('names what the render drops', () => {
