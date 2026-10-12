@@ -1859,13 +1859,12 @@ export function mcpTargetExcluded(localConfig: LocalConfig, target: McpTarget): 
   if (!isAgentExcluded(localConfig, target.tool)) return false;
   // tclaude and Muse Code have no project-scope MCP file: they read the
   // <root>/.mcp.json the claude target writes, so that target stays live
-  // while tclaude is enabled, or Muse Code is on the member's --agent list
-  // (its install is not probed here, and every member would otherwise
-  // count as running it).
+  // while tclaude is enabled, or while Muse Code reads it (`resolveMcpTargets`
+  // probed its install and the file, `mcpTargetAgents`).
   // Trae CN needs no such clause: its own target maps the shared
   // <root>/.trae/mcp.json under trae's ownership key (#904).
   return !(target.projectScope && target.tool === 'claude'
-    && (!isAgentExcluded(localConfig, 'tclaude') || localConfig.enabledAgents?.includes(MUSE_TOOL_ID) === true));
+    && (!isAgentExcluded(localConfig, 'tclaude') || mcpTargetAgents(target).includes(MUSE_TOOL_ID)));
 }
 
 /**
