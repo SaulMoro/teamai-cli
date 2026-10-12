@@ -33,6 +33,7 @@ import {
   buildInstructionDeliveryChecks,
   buildNamespaceNotes,
   buildMcpDeliveryChecks,
+  mcpTransportNotes,
   buildMcpReadFileChecks,
   buildLocalAgentMcpLocationChecks,
   buildCodexProjectTrustCheck,
@@ -790,6 +791,8 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
     ...await aliasNamespaceNotes(ctx),
     ...await agentModelNotes(ctx),
     ...(await envAdvisories(localConfig, ctx.teamConfig, ctx.teamEnv)).map(describeEnvAdvisory),
+    // A team MCP server a tool cannot use over its transport.
+    ...await mcpTransportNotes(ctx),
     ...await ruleChannelNotes(localConfig),
     ...codexTrust.notes,
     usageReportNote(ctx),

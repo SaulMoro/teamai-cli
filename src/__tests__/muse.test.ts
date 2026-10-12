@@ -4,7 +4,7 @@ import fse from 'fs-extra';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { reconcileHooks } from '../hooks.js';
 import { mcpRelocated, reconcileMcpForConfig } from '../mcp-reconcile.js';
-import { buildMcpDeliveryChecks } from '../doctor-delivery.js';
+import { buildMcpDeliveryChecks, mcpTransportNotes } from '../doctor-delivery.js';
 import { isToolInstalledForConfig } from '../resources/base.js';
 import { museAgentDrops, renderForTool, type AgentSpec } from '../resources/agent-format.js';
 import matter from 'gray-matter';
@@ -167,10 +167,9 @@ describe('Muse Code MCP', () => {
       await fse.ensureDir(path.join(home, '.config', 'muse'));
       const local: LocalConfig = { ...config, scope: 'project', projectRoot, enabledAgents: agents };
       const result = await reconcileMcpForConfig(team, local);
-      const checks = await buildMcpDeliveryChecks({
-        localConfig: local, teamConfig: team, toolPaths: team.toolPaths, hookToolPaths: team.toolPaths, baseDir: home,
-      });
-      return { file: path.join(projectRoot, '.mcp.json'), checks, result };
+      const context = { localConfig: local, teamConfig: team, toolPaths: team.toolPaths, hookToolPaths: team.toolPaths, baseDir: home };
+      const checks = await buildMcpDeliveryChecks(context);
+      return { file: path.join(projectRoot, '.mcp.json'), checks, result, notes: await mcpTransportNotes(context) };
     };
 
     it("names the sse server Claude Code's render left there, which stops Muse Code loading any", async () => {
@@ -195,6 +194,15 @@ describe('Muse Code MCP', () => {
       const names = checks.map((check) => check.name);
       expect(names).toContain('MCP servers delivered to muse');
       expect(names).not.toContain('MCP servers delivered to claude');
+    });
+
+    // The team cannot fix an sse server for Muse from Muse: doctor names it, and passes delivery.
+    it('notes the sse server Muse Code cannot use instead of failing its delivery', async () => {
+      const { file, checks, notes } = await projectChecks(['muse']);
+
+      const delivered = checks.find((check) => check.name === 'MCP servers delivered to muse');
+      expect(await delivered!.check()).toBe(true);
+      expect(notes).toEqual([`MCP servers muse cannot use: legacy (sse) in ${file}, over a transport muse does not support.`]);
     });
 
     it('writes .mcp.json for Muse Code in a project with no .claude directory', async () => {
