@@ -160,16 +160,17 @@ describe('Muse Code MCP', () => {
   });
 
   describe('doctor, in a project whose .mcp.json Claude Code shares', () => {
-    const projectChecks = async (agents: string[]) => {
+    const projectChecks = async (agents: string[] | undefined, { claudeDir = true } = {}) => {
       const projectRoot = path.join(root, 'project');
-      await fse.ensureDir(path.join(projectRoot, '.claude'));
+      if (claudeDir) await fse.ensureDir(path.join(projectRoot, '.claude'));
+      else await fse.ensureDir(projectRoot);
       await fse.ensureDir(path.join(home, '.config', 'muse'));
       const local: LocalConfig = { ...config, scope: 'project', projectRoot, enabledAgents: agents };
-      await reconcileMcpForConfig(team, local);
+      const result = await reconcileMcpForConfig(team, local);
       const checks = await buildMcpDeliveryChecks({
         localConfig: local, teamConfig: team, toolPaths: team.toolPaths, hookToolPaths: team.toolPaths, baseDir: home,
       });
-      return { file: path.join(projectRoot, '.mcp.json'), checks };
+      return { file: path.join(projectRoot, '.mcp.json'), checks, result };
     };
 
     it("names the sse server Claude Code's render left there, which stops Muse Code loading any", async () => {
@@ -182,10 +183,21 @@ describe('Muse Code MCP', () => {
       expect(loads!.fix).toContain(`In ${file}, legacy uses the sse transport`);
     });
 
-    it('keeps writing .mcp.json for a Muse-only whitelist', async () => {
-      const { file } = await projectChecks(['muse']);
+    it('writes .mcp.json for a Muse-only whitelist without the sse server, which no Claude Code reads there', async () => {
+      const { file, checks, result } = await projectChecks(['muse']);
 
-      expect(Object.keys((await fse.readJson(file)).mcpServers)).toEqual(['local', 'remote', 'legacy']);
+      expect(Object.keys((await fse.readJson(file)).mcpServers)).toEqual(['local', 'remote']);
+      expect(result.changes).toContainEqual(expect.objectContaining({
+        server: 'legacy', action: 'skipped', reason: 'muse does not support sse transport',
+      }));
+      const loads = checks.find((check) => check.name === 'MCP servers load in muse');
+      expect(await loads!.check()).toBe(true);
+    });
+
+    it('writes .mcp.json for Muse Code in a project with no .claude directory', async () => {
+      const { file } = await projectChecks(undefined, { claudeDir: false });
+
+      expect(Object.keys((await fse.readJson(file)).mcpServers)).toEqual(['local', 'remote']);
     });
 
     it('says nothing when only Claude Code reads the file', async () => {

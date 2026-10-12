@@ -559,7 +559,15 @@ export async function resolveMcpTargets(
 
     const probe = paths.skills ?? paths.settings ?? paths.agents;
     if (!probe) continue;
-    const installed = await isToolInstalledForConfig(tool, probe, localConfig, file);
+    const ownInstall = await isToolInstalledForConfig(tool, probe, localConfig, file);
+    // Muse Code reads the <root>/.mcp.json the claude target writes, so the
+    // target stays while Muse runs here, in a project with no <root>/.claude
+    // too, and takes Muse's transports while no Claude Code reads the file.
+    const museReads = tool === 'claude' && projectScope && !builtinFallback
+      && await readsClaudeMcpFile(teamConfig, localConfig, MUSE_TOOL_ID);
+    const installed = ownInstall || museReads;
+    const museOnly = museReads && (!ownInstall || isAgentExcluded(localConfig, 'claude'))
+      && !await readsClaudeMcpFile(teamConfig, localConfig, 'tclaude');
     if (!options.includeUndetected && !installed) {
       log.debug(`Skipping MCP sync for ${tool}: tool not installed`);
       continue;
@@ -576,7 +584,7 @@ export async function resolveMcpTargets(
     }
 
     targets.push({
-      tool, format, file, projectScope,
+      tool, format: museOnly ? 'muse' : format, file, projectScope,
       ...builtinFallback ? { builtinFallback: true as const } : {},
       ...installed ? {} : { undetected: true as const },
       ...!projectScope && USER_MCP_LOOKUP[tool]
@@ -873,7 +881,8 @@ export function desiredMcpForTarget(
         tool: target.tool,
         server: raw.name,
         action: 'skipped',
-        reason: `${target.tool} does not support ${raw.transport} transport`,
+        // A claude target in Muse's format is live for Muse Code alone.
+        reason: `${target.format === 'muse' ? MUSE_TOOL_ID : target.tool} does not support ${raw.transport} transport`,
       });
       continue;
     }
