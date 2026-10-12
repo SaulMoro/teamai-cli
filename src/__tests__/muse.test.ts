@@ -6,6 +6,8 @@ import { reconcileHooks } from '../hooks.js';
 import { mcpRelocated, reconcileMcpForConfig } from '../mcp-reconcile.js';
 import { buildMcpDeliveryChecks } from '../doctor-delivery.js';
 import { isToolInstalledForConfig } from '../resources/base.js';
+import { museAgentDrops, renderForTool, type AgentSpec } from '../resources/agent-format.js';
+import matter from 'gray-matter';
 import { TeamaiConfigSchema, type LocalConfig, type TeamaiConfig } from '../types.js';
 
 // The hooks contract of Muse Code 1.4.6, observed with the real binary and
@@ -252,5 +254,47 @@ describe('Muse Code detection', () => {
 
   it('does not take a project .agents directory for Muse Code', async () => {
     expect(await isToolInstalledForConfig('muse', '.agents/skills', projectConfig())).toBe(false);
+  });
+});
+
+// Muse Code 1.4.6 agent definitions: a closed frontmatter (name, description,
+// model, tools; any other key, such as effort, rejects the definition), and
+// `tools` naming Muse's own tools: a Claude name such as `Read` rejects the
+// definition with `tools: unknown_tool`, and the child never starts.
+describe('Muse Code agents', () => {
+  const spec: AgentSpec = {
+    name: 'reviewer',
+    description: 'Reviews a change',
+    instructions: 'Review the diff.',
+    model: 'muse-spark-1.3',
+    tools: ['Read', 'Grep', 'Glob', 'Bash', 'Edit', 'NotebookEdit', 'web_fetch'],
+  };
+  const frontmatter = (content: string) => matter(content).data;
+
+  it('writes only the keys Muse Code accepts, with tools in its own names', () => {
+    const { ext, content } = renderForTool(spec, 'muse', { model: 'muse-spark-1.3', effort: 'high' });
+
+    expect(ext).toBe('.md');
+    expect(frontmatter(content)).toEqual({
+      name: 'reviewer',
+      description: 'Reviews a change',
+      model: 'muse-spark-1.3',
+      tools: ['read_file', 'search', 'bash', 'edit_file', 'web_fetch'],
+    });
+    expect(matter(content).content.trim()).toBe('Review the diff.');
+  });
+
+  it('keeps from tool_extras.muse only the keys Muse Code accepts', () => {
+    const { content } = renderForTool({ ...spec, tool_extras: { muse: { tools: ['Read'], color: 'blue', effort: 'max' } } }, 'muse');
+
+    expect(frontmatter(content).tools).toEqual(['read_file']);
+    expect(frontmatter(content)).not.toHaveProperty('color');
+    expect(frontmatter(content)).not.toHaveProperty('effort');
+  });
+
+  it('names what the render drops', () => {
+    expect(museAgentDrops({ ...spec, tool_extras: { muse: { color: 'blue' } } })).toEqual({
+      tools: ['NotebookEdit'], extras: ['color'],
+    });
   });
 });

@@ -42,6 +42,7 @@ import {
   ALL_SUPPORTED_TOOLS,
   AGENT_FILE_EXTENSIONS,
   agentStemFromFilename,
+  museAgentDrops,
 } from './agent-format.js';
 import type { AgentSpec, ToolName, ReverseResult, ParseResult, MergeResult, RenderResult } from './agent-format.js';
 
@@ -730,6 +731,15 @@ export class AgentsHandler extends ResourceHandler {
     if (spec) {
       for (const { tool } of renders) {
         for (const warning of aliasWarningsFor(aliases, spec, tool)) warnOnce(`[agents] ${warning}`);
+        if (tool === 'muse') {
+          const drops = museAgentDrops(spec);
+          for (const name of drops.tools) {
+            warnOnce(`[agents] ${item.relativePath}: Muse Code has no tool for ${name}, so its muse copy leaves it out of tools.`);
+          }
+          for (const key of drops.extras) {
+            warnOnce(`[agents] ${item.relativePath}: Muse Code rejects an agent file setting ${key}, so its muse copy leaves tool_extras.muse.${key} out.`);
+          }
+        }
       }
     }
     for (const { tool, dest, render, origin } of renders) {
@@ -1839,5 +1849,7 @@ function reverseByParser(tool: ToolName, filePath: string, content: string): Rev
       return reverseFromOpencode(filePath, content);
     case 'workbuddy':
       return reverseFromWorkbuddy(filePath, content);
+    case 'muse':
+      return reverseFromClaude(filePath, content);
   }
 }

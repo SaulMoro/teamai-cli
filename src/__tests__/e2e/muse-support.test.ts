@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 // End-to-end leg for Muse Code delivery, run through the ACTUAL compiled CLI
 // against a local bare team repo. Every expected path below is where Muse Code
 // 1.4.6 reads its resources, observed with the real binary: user skills in
-// ~/.config/muse/skills.
+// ~/.config/muse/skills, agents in ~/.config/muse/agents and <root>/.agents/agents.
 //
 // The remote is a synthetic HTTPS URL bridged to a local bare repo through
 // git's url.<base>.insteadOf — the same no-network setup as
@@ -85,6 +85,17 @@ describe('Muse Code resource delivery', () => {
     remote = path.join(sandbox, 'team.git');
 
     fs.mkdirSync(path.join(seed, 'skills', 'demo'), { recursive: true });
+    fs.mkdirSync(path.join(seed, 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(seed, 'agents', 'reviewer.yaml'), [
+      'name: reviewer',
+      'description: Muse fixture agent',
+      'instructions: Review the change.',
+      'tools: [Read, Grep, Bash, NotebookEdit]',
+      'tool_extras:',
+      '  claude: { color: blue }',
+      '  muse: { color: blue }',
+      '',
+    ].join('\n'));
     fs.writeFileSync(path.join(seed, 'teamai.yaml'), [
       'team: muse-e2e',
       `repo: ${FAKE_URL}`,
@@ -124,6 +135,12 @@ describe('Muse Code resource delivery', () => {
     const skills = path.join(home, '.config', 'muse', 'skills');
     expect(fs.readFileSync(path.join(skills, 'demo', 'SKILL.md'), 'utf8')).toContain('Muse fixture skill');
     expect(fs.existsSync(path.join(skills, 'teamai', 'SKILL.md'))).toBe(true);
+    // Only the keys Muse accepts, tools in its names: anything else and Muse never starts the agent.
+    expect(fs.readFileSync(path.join(home, '.config', 'muse', 'agents', 'reviewer.md'), 'utf8')).toBe(
+      '---\nname: reviewer\ndescription: Muse fixture agent\ntools:\n  - read_file\n  - search\n  - bash\n---\nReview the change.\n',
+    );
+    expect(result.output).toContain('agents/reviewer.yaml: Muse Code has no tool for NotebookEdit, so its muse copy leaves it out of tools.');
+    expect(result.output).toContain('agents/reviewer.yaml: Muse Code rejects an agent file setting color, so its muse copy leaves tool_extras.muse.color out.');
   }, 90_000);
 
   it('installs the teamai hooks in ~/.config/muse/settings.json from a project init', async () => {
@@ -151,6 +168,7 @@ describe('Muse Code resource delivery', () => {
     expect(commands.some((command) => command.includes('hook-dispatch stop --tool muse'))).toBe(true);
     // A project init writes no project hooks file: Muse runs user hooks in every workspace.
     expect(fs.existsSync(path.join(projectRoot, '.muse'))).toBe(false);
+    expect(fs.readFileSync(path.join(projectRoot, '.agents', 'agents', 'reviewer.md'), 'utf8')).toContain('  - read_file\n');
   }, 90_000);
 
   it('does not take a Codex-only machine for a Muse Code install', async () => {
