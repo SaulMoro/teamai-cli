@@ -143,8 +143,9 @@ profiles:
 | CodeBuddy / WorkBuddy | `openai-chat-completions` | `models.json` |
 | Pi | 任意 | `~/.pi/agent/models.json` |
 | OMP | 任意 | `~/.omp/agent/models.yml` |
+| Muse Code | `openai-responses` | `~/.config/muse/settings.json`，密钥以 `META_API_KEY` 写入 `~/.teamai/models/env.sh`，由 shell 配置文件加载 |
 
-上面的例子没有 `openai-responses`，所以不会改 Codex。
+上面的例子没有 `openai-responses`，所以不会改 Codex 和 Muse Code。
 
 ### 使用团队配置
 

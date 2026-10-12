@@ -143,8 +143,9 @@ profiles:
 | CodeBuddy / WorkBuddy | `openai-chat-completions` | `models.json` |
 | Pi | any | `~/.pi/agent/models.json` |
 | OMP | any | `~/.omp/agent/models.yml` |
+| Muse Code | `openai-responses` | `~/.config/muse/settings.json`, and the key as `META_API_KEY` in `~/.teamai/models/env.sh`, which your shell profile loads |
 
-The example has no `openai-responses` group, so Codex is left alone.
+The example has no `openai-responses` group, so Codex and Muse Code are left alone.
 
 ### Use a team profile
 
