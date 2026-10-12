@@ -924,9 +924,10 @@ export const StateSchema = z.object({
    * (#915). It is kept whatever `sharing.gitExclude` says. A record without
    * it, saved by an older CLI, misses the fast path, so the next pull is a
    * full sync that writes it. A writer id this CLI does not know is kept.
-   * `rootsSeeded` marks a checkout whose tool roots pull seeded (#1041), so a
-   * root its member removes afterwards is not seeded again. A record without
-   * it, saved before seeding existed, reads as never seeded.
+   * `rootsSeeded` marks that pull's root-seeding step completed or did not
+   * apply (#1041), so a root its member removes afterwards is not recreated.
+   * An unavailable original checkout leaves it absent for a later retry. A
+   * record without it, saved before seeding existed, reads as never seeded.
    */
   lastPullByWorkspace: z.record(z.string(), z.object({
     rev: z.string(),

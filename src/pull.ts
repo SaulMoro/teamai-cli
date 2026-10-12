@@ -1497,16 +1497,17 @@ async function pullForScope(
 
   // Before anything probes which tools this checkout has; once, like a new
   // worktree's post-checkout. A record saved before seeding existed reads as
-  // never seeded; one with no record yet is marked when this pull writes it.
+  // never seeded; a missing original checkout leaves the marker unset so a
+  // later pull retries when that checkout is restored.
   let rootsSeeded = false;
   if (workspaceKey && localConfig.projectRoot && !options.dryRun) {
     const state = await loadStateForScope(localConfig);
     const record = state.lastPullByWorkspace?.[workspaceKey];
     if (!record?.rootsSeeded) {
       const { seedInheritedCheckoutRoots } = await import('./project-agent-root.js');
-      await seedInheritedCheckoutRoots(localConfig.projectRoot);
-      rootsSeeded = true;
-      if (record) {
+      const seedResult = await seedInheritedCheckoutRoots(localConfig.projectRoot);
+      rootsSeeded = seedResult !== 'source-missing';
+      if (rootsSeeded && record) {
         record.rootsSeeded = true;
         await saveStateForScope(state, localConfig);
       }

@@ -184,6 +184,32 @@ describe('multi-repo checkout delivery', () => {
     else expect(teamHooks(child)).not.toContain('fixture');
   });
 
+  it('retires sibling Codex dispatchers when targeted uninstall removes the shared project data', () => {
+    const m = fixture('targeted-claude-retires-dispatcher');
+    const memberFile = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo member' }] }] } });
+    write(path.join(m.checkout, '.codex/hooks.json'), memberFile);
+    m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'claude,codex', '--force'], m.checkout);
+    const parentWorktree = path.join(m.base, 'parent-targeted-claude');
+    m.git(['worktree', 'add', '-q', '--detach', parentWorktree], m.parent);
+    m.git(['submodule', 'update', '-q', '--init'], parentWorktree);
+    const child = path.join(parentWorktree, 'service');
+    write(path.join(child, '.codex/hooks.json'), memberFile);
+    m.cli(['pull', '--force'], child);
+    const dispatch = (cwd: string) => spawnSync(process.execPath, [CLI, 'hook-dispatch', 'Stop', '--tool', 'codex', '--team-hooks'], {
+      cwd, env: m.env, encoding: 'utf8', input: JSON.stringify({ cwd, hook_event_name: 'Stop' }),
+    });
+    expect(dispatch(child).stdout).toContain('fixture');
+    const dispatcherIndex = path.join(m.home, '.teamai/codex-team-hooks.json');
+    const [identity] = Object.keys(json(dispatcherIndex).projects);
+
+    m.cli(['uninstall', '--agent', 'codex', '--force'], m.checkout);
+    expect(dispatch(child).stdout).toContain('fixture');
+    m.cli(['uninstall', '--agent', 'claude', '--force'], m.checkout);
+
+    expect(dispatch(child).stdout).toBe('');
+    if (fs.existsSync(dispatcherIndex)) expect(json(dispatcherIndex).projects[identity]).toBeUndefined();
+  });
+
   it('full uninstall leaves no registration for that identity', () => {
     const m = fixture('full-uninstall-dispatchers');
     write(path.join(m.checkout, '.codex/hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo member' }] }] } }));
@@ -275,6 +301,30 @@ describe('multi-repo checkout delivery', () => {
     m.cli(['pull', '--silent'], m.checkout);
     const records = states.flatMap((file) => Object.values(json(file).lastPullByWorkspace) as Array<{ root: string; rev: string; rootsSeeded?: boolean }>);
     expect(records.find((record) => record.root === child)).toMatchObject({ rev: '', rootsSeeded: true });
+  });
+
+  it('retries inherited-root seeding after the original submodule checkout returns', () => {
+    const m = fixture('retry-inherited-root-seed');
+    m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'claude', '--force'], m.checkout);
+    const parentWorktree = path.join(m.base, 'parent-retry-seed');
+    m.git(['worktree', 'add', '-q', '--detach', parentWorktree], m.parent);
+    m.git(['submodule', 'deinit', '--force', '--quiet', 'service'], m.parent);
+    m.git(['submodule', 'update', '-q', '--init'], parentWorktree);
+    const child = path.join(parentWorktree, 'service');
+    const stateFiles = () => fs.readdirSync(path.join(m.home, '.teamai'), { recursive: true, encoding: 'utf8' })
+      .filter((file) => path.basename(file) === 'state.json')
+      .map((file) => path.join(m.home, '.teamai', file))
+      .filter((file) => json(file).lastPullByWorkspace);
+    const childRecord = () => stateFiles().flatMap((file) => Object.values(json(file).lastPullByWorkspace) as Array<{ root: string; rootsSeeded?: boolean }>)
+      .find((record) => record.root === child);
+
+    m.cli(['pull', '--silent'], child);
+    expect(childRecord()?.rootsSeeded).toBeUndefined();
+
+    m.git(['submodule', 'update', '-q', '--init'], m.parent);
+    m.cli(['pull', '--silent'], child);
+    expect(childRecord()?.rootsSeeded).toBe(true);
+    expect(read(path.join(child, '.claude/skills/fixture/SKILL.md'))).toContain('name: fixture');
   });
 
   it('delivers, inherits, cleans up and uninstalls submodules through the real CLI', async () => {

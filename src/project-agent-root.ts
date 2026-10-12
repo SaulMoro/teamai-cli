@@ -120,14 +120,17 @@ async function isDirectory(p: string): Promise<boolean> {
 /**
  * A submodule clone in a superproject worktree inherits its identity, but no
  * teamai post-checkout ran for it: the superproject created it. Its first pull
- * seeds the roots a new linked worktree gets (#1041).
+ * seeds the roots a new linked worktree gets (#1041). `source-missing` means
+ * the original checkout is gone; leave the marker unset so a later pull retries.
  */
-export async function seedInheritedCheckoutRoots(cwd: string): Promise<void> {
+export async function seedInheritedCheckoutRoots(cwd: string): Promise<'seeded' | 'not-needed' | 'source-missing'> {
   const anchors = await resolveAnchors(cwd);
-  if (!anchors || anchors.mainCheckout !== anchors.workspaceRoot) return;
+  if (!anchors || anchors.mainCheckout !== anchors.workspaceRoot) return 'not-needed';
   const original = await checkoutForProjectAnchor(anchors.projectAnchor);
-  if (!original || original === anchors.workspaceRoot) return;
+  if (original === anchors.workspaceRoot) return 'not-needed';
+  if (!original) return 'source-missing';
   await createProjectToolRoots({ cwd });
+  return 'seeded';
 }
 
 /**

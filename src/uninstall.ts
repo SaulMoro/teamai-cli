@@ -2633,7 +2633,9 @@ async function removeConfirmed(
 
   // Codex team hooks that ran from the dispatcher in ~/.codex/hooks.json (#915),
   // before the data home goes: a dispatcher left running keeps the records for the retry.
-  const dispatchLeft = !agentKey || agentKey === 'codex' ? await stopCodexDispatch(teamConfig, localConfig, plan.includeShared) : null;
+  const dispatchLeft = !agentKey || agentKey === 'codex' || plan.includeShared
+    ? await stopCodexDispatch(teamConfig, localConfig, plan.includeShared)
+    : null;
   const { pendingOpencode, hooksLeft, blocksLeft, filesLeft } = await executeRemoval(plan, heldMcp, {
     hooks: dispatchLeft ? [{ what: `the Codex team-hook dispatchers in ${dispatchLeft}`, tool: 'codex' }] : [],
     files: [...httpSourceLeft, ...plan.keptUnjudged],
