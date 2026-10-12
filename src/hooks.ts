@@ -45,7 +45,7 @@ import { LEGACY_CLAUDE_HOOK_OTHER_HOST_SKIP, claudeHookOtherHostSkip, copilotRun
 import { gitCommonDir, listWorktrees, resolveAnchors } from './utils/git.js';
 import { findOnPath } from './utils/lookpath.js';
 import type { CodexHookTrustReport, CodexTrust } from './codex-trust.js';
-import { codexDispatcherCheckouts, dispatchedCodexHooks, isCodexTeamHookDispatcher, reconcileCodexDispatchers, runsFromCodexDispatcher, setCodexDispatcherHooks } from './codex-team-hooks.js';
+import { codexDispatcherCheckouts, codexDispatcherProjects, dispatchedCodexHooks, isCodexTeamHookDispatcher, reconcileCodexDispatchers, runsFromCodexDispatcher, setCodexDispatcherHooks } from './codex-team-hooks.js';
 import type { CodexTeamHook } from './codex-team-hooks.js';
 
 export { claudeHookOtherHostSkip };
@@ -1023,9 +1023,31 @@ function codexHomeHooksFile(teamConfig: TeamaiConfig, localConfig: LocalConfig):
 }
 
 /**
+ * The dispatcher index keys holding registrations of `localConfig`'s project
+ * identity (its `projectAnchor`). A checkout registers under:
+ * - its main checkout, for a plain repository and its linked worktrees;
+ * - the Git directory, for a `--separate-git-dir` repository's main checkout,
+ *   and for its linked worktrees when `core.worktree` names a main checkout;
+ * - its own path, for such a linked worktree without `core.worktree`, and in self mode;
+ * - the original submodule's Git directory, for a submodule clone in a superproject worktree.
+ * So a key belongs when it is the identity itself, or a checkout that resolves to it.
+ */
+async function codexDispatcherKeysOf(localConfig: LocalConfig, project: string): Promise<string[]> {
+  const identity = (await resolveAnchors(localConfig.projectRoot))?.projectAnchor;
+  const keys: string[] = [];
+  for (const key of await codexDispatcherProjects()) {
+    if (key === project || (identity && (key === identity
+      || (await pathExists(path.join(key, '.git')) && (await resolveAnchors(key))?.projectAnchor === identity)))) keys.push(key);
+  }
+  return keys;
+}
+
+/**
  * Stop running this project's Codex team hooks from the dispatcher, and drop
  * the dispatcher entries no other project needs (#915). For `uninstall`, whose
  * hook removal does not go through the reconcile that does this on pull.
+ * `retireIdentity` stops them for every checkout of the project identity,
+ * whatever key each registered under; otherwise for the current checkout only.
  * Returns the file it could not update, which keeps them running, or null.
  */
 export async function stopCodexTeamHookDispatch(
@@ -1036,24 +1058,34 @@ export async function stopCodexTeamHookDispatch(
   const project = await codexTeamHookProject(localConfig);
   const checkout = await codexTeamHookCheckout(localConfig);
   const homeFile = codexHomeHooksFile(teamConfig, localConfig);
-  const hooks = project ? await dispatchedCodexHooks(project, retireIdentity ? undefined : checkout ?? undefined) : undefined;
-  if (!project || !hooks) return null;
-  const checkouts = await codexDispatcherCheckouts(project);
+  if (!project) return null;
+  const keys = retireIdentity ? await codexDispatcherKeysOf(localConfig, project) : [project];
+  // What each key ran, to put back when the dispatcher entries cannot be removed.
+  const retired: { key: string; hooks: CodexTeamHook[]; checkouts?: Record<string, CodexTeamHook[]> }[] = [];
+  for (const key of keys) {
+    const hooks = await dispatchedCodexHooks(key, retireIdentity ? undefined : checkout ?? undefined);
+    if (hooks) retired.push({ key, hooks, checkouts: await codexDispatcherCheckouts(key) });
+  }
+  if (retired.length === 0) return null;
   const index = path.join('~', '.teamai', 'codex-team-hooks.json');
-  if (!await setCodexDispatcherHooks(project, null, retireIdentity ? undefined : checkout ?? undefined)) {
-    log.warn(`Could not update ${index}: another teamai process held it, so the Codex team hooks of ${project} still run.`);
-    return index;
+  for (const { key } of retired) {
+    if (!await setCodexDispatcherHooks(key, null, retireIdentity ? undefined : checkout ?? undefined)) {
+      log.warn(`Could not update ${index}: another teamai process held it, so the Codex team hooks of ${key} still run.`);
+      return index;
+    }
   }
   if (!homeFile) return null;
   try {
     await reconcileCodexDispatchers(homeFile);
     return null;
   } catch (e) {
-    // The entry comes back, each checkout with its own hooks, so the retry still finds the dispatcher entries to remove.
-    if (retireIdentity && checkouts) {
-      for (const [root, defs] of Object.entries(checkouts)) await setCodexDispatcherHooks(project, defs, root);
-    } else if (checkouts && checkout) await setCodexDispatcherHooks(project, hooks, checkout);
-    else await setCodexDispatcherHooks(project, hooks);
+    // The entries come back, each checkout with its own hooks, so the retry still finds the dispatcher entries to remove.
+    for (const { key, hooks, checkouts } of retired) {
+      if (retireIdentity && checkouts) {
+        for (const [root, defs] of Object.entries(checkouts)) await setCodexDispatcherHooks(key, defs, root);
+      } else if (checkouts && checkout) await setCodexDispatcherHooks(key, hooks, checkout);
+      else await setCodexDispatcherHooks(key, hooks);
+    }
     log.warn(`Could not remove the Codex team-hook dispatchers from ${homeFile}: ${(e as Error).message}. The Codex team hooks of ${project} still run.`);
     return homeFile;
   }

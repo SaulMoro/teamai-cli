@@ -3,7 +3,8 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { reconcileHooks, reconcileTeamHooksForConfig, resolveMainCheckoutHooks } from '../hooks.js';
+import { codexTeamHookCheckout, codexTeamHookProject, reconcileHooks, reconcileTeamHooksForConfig, resolveMainCheckoutHooks, stopCodexTeamHookDispatch } from '../hooks.js';
+import { codexDispatcherProjects, setCodexDispatcherHooks } from '../codex-team-hooks.js';
 import { LocalConfigSchema, TeamaiConfigSchema, type LocalConfig } from '../types.js';
 import { resolveAnchors } from '../utils/git.js';
 import { detectProjectConfig, resolveProjectDataHome, saveLocalConfigForScope } from '../config.js';
@@ -43,6 +44,20 @@ afterEach(() => {
   vi.unstubAllEnvs();
   fs.rmSync(base, { recursive: true, force: true });
 });
+
+/** A second repository with a main checkout and one linked worktree, its Git directory placed as `layout` says. */
+function repoWithLinked(name: string, layout: 'plain' | 'separate' | 'separate-worktree'): [string, string, string] {
+  const main = path.join(base, name);
+  const gitDir = path.join(base, 'gitdirs', `${name}.git`);
+  fs.mkdirSync(main, { recursive: true });
+  fs.mkdirSync(path.dirname(gitDir), { recursive: true });
+  git(main, 'init', '-q', ...layout === 'plain' ? [] : ['--separate-git-dir', gitDir]);
+  if (layout === 'separate-worktree') git(main, 'config', 'core.worktree', main);
+  git(main, '-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '--allow-empty', '-q', '-m', 'init');
+  const linked = path.join(base, `${name}-linked`);
+  git(main, 'worktree', 'add', '-q', '--detach', linked);
+  return [main, linked, layout === 'plain' ? main : gitDir];
+}
 
 function config(root = checkout): LocalConfig {
   return LocalConfigSchema.parse({
@@ -260,6 +275,42 @@ describe('submodule checkouts', () => {
     const key = await checkoutKey(child);
     const records = { [key]: { root: child, rev: 'revision', targets: [] } };
     expect(await liveCheckoutRecords(checkout, records)).toEqual(records);
+  });
+
+  // Every key shape a checkout can register its dispatched Codex hooks under; a
+  // full uninstall from the first checkout retires them all, and only them.
+  it.each([
+    { shape: 'plain repository and linked worktree', keys: ['main', 'main'],
+      repo: () => repoWithLinked('plain', 'plain') },
+    { shape: 'separate Git directory with core.worktree', keys: ['gitDir', 'gitDir'],
+      repo: () => repoWithLinked('with-worktree', 'separate-worktree') },
+    { shape: 'separate Git directory without core.worktree', keys: ['gitDir', 'own'],
+      repo: () => repoWithLinked('without-worktree', 'separate') },
+    { shape: 'self mode', self: true, keys: ['own', 'own'],
+      repo: () => repoWithLinked('self', 'plain') },
+    { shape: 'submodule and its clone in a superproject worktree', keys: ['gitDir', 'gitDir'],
+      repo: () => {
+        const worktree = path.join(base, 'parent-dispatch');
+        git(parent, 'worktree', 'add', '-q', '--detach', worktree);
+        git(worktree, '-c', 'protocol.file.allow=always', 'submodule', 'update', '--init', '-q');
+        return [checkout, path.join(worktree, 'service'), path.join(parent, '.git/modules/service')] as const;
+      } },
+  ])('full uninstall retires the dispatcher registrations of every checkout: $shape', async ({ repo, keys, self }) => {
+    const [first, second, gitDir] = repo();
+    const unrelated = repoWithLinked('unrelated', 'plain')[0];
+    const hooks = [{ id: 'fixture', event: 'Stop', command: 'echo fixture' }];
+    const local = (root: string) => self ? { ...config(root), repo: { ...config(root).repo, kind: 'self' as const } } : config(root);
+    const expectedKey = (shape: string, root: string) => shape === 'main' ? first : shape === 'gitDir' ? gitDir : root;
+    for (const [root, shape] of [[first, keys[0]], [second, keys[1]], [unrelated, 'main']] as const) {
+      const project = (await codexTeamHookProject(local(root)))!;
+      expect(project).toBe(root === unrelated ? unrelated : expectedKey(shape, root));
+      await setCodexDispatcherHooks(project, hooks, (await codexTeamHookCheckout(local(root)))!);
+    }
+    const teamConfig = TeamaiConfigSchema.parse({ team: 'test', repo: 'https://example.invalid/x/team.git' });
+
+    expect(await stopCodexTeamHookDispatch(teamConfig, local(first), true)).toBeNull();
+
+    expect(await codexDispatcherProjects()).toEqual([unrelated]);
   });
 
   it('places shared team hooks in the checkout that tools read', async () => {

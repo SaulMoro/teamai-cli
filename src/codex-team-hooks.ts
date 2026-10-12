@@ -92,6 +92,11 @@ async function readIndex(): Promise<CodexTeamHookIndex> {
     ? data : { projects: {} };
 }
 
+/** Every key the index holds a record under. */
+export async function codexDispatcherProjects(): Promise<string[]> {
+  return Object.keys((await readIndex()).projects);
+}
+
 /** The hooks each checkout of `project` registered; undefined for a record that holds one set for the whole project. */
 export async function codexDispatcherCheckouts(project: string): Promise<Record<string, CodexTeamHook[]> | undefined> {
   return checkoutHooks((await readIndex()).projects[project]);

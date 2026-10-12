@@ -228,6 +228,37 @@ describe('multi-repo checkout delivery', () => {
     expect(fs.existsSync(after) ? json(after).projects[identity] : undefined).toBeUndefined();
   });
 
+  it('full uninstall retires a linked checkout registered under its own path in a separate Git directory repo', () => {
+    const m = fixture('separate-git-dir-full-uninstall');
+    const memberFile = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo member' }] }] } });
+    const main = path.join(m.base, 'separate');
+    const gitDir = path.join(m.base, 'gitdirs/separate.git');
+    write(path.join(main, 'README.md'), '# fixture\n');
+    fs.mkdirSync(path.dirname(gitDir), { recursive: true });
+    m.git(['init', '-q', '-b', 'main', '--separate-git-dir', gitDir], main);
+    expect(spawnSync('git', ['config', '--get', 'core.worktree'], { cwd: main, env: m.env }).status).not.toBe(0);
+    m.git(['add', '-A'], main);
+    m.git(['commit', '-qm', 'init'], main);
+    const linked = path.join(m.base, 'separate-linked');
+    m.git(['worktree', 'add', '-q', '--detach', linked], main);
+    write(path.join(main, '.codex/hooks.json'), memberFile);
+    write(path.join(linked, '.codex/hooks.json'), memberFile);
+    m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'codex', '--force'], main);
+    m.cli(['pull', '--force'], linked);
+    const dispatch = (cwd: string) => spawnSync(process.execPath, [CLI, 'hook-dispatch', 'Stop', '--tool', 'codex', '--team-hooks'], {
+      cwd, env: m.env, encoding: 'utf8', input: JSON.stringify({ cwd, hook_event_name: 'Stop' }),
+    });
+    const indexFile = path.join(m.home, '.teamai/codex-team-hooks.json');
+    expect(Object.keys(json(indexFile).projects)).toHaveLength(2);
+    expect(dispatch(linked).stdout).toContain('fixture');
+
+    m.cli(['uninstall', '--force'], main);
+
+    expect(dispatch(linked).stdout).toBe('');
+    expect(fs.existsSync(indexFile) ? json(indexFile).projects : {}).toEqual({});
+    expect(read(path.join(m.home, '.codex/hooks.json'))).not.toContain('--team-hooks');
+  });
+
   it('cleans older team hooks from an inherited clone Git directory and keeps member hooks', () => {
     const m = fixture('inherited-clone-old-hooks');
     m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', 'claude', '--force'], m.checkout);
