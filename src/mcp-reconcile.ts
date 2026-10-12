@@ -881,8 +881,7 @@ export function desiredMcpForTarget(
         tool: target.tool,
         server: raw.name,
         action: 'skipped',
-        // A claude target in Muse's format is live for Muse Code alone.
-        reason: `${target.format === 'muse' ? MUSE_TOOL_ID : target.tool} does not support ${raw.transport} transport`,
+        reason: `${mcpTargetAgent(target)} does not support ${raw.transport} transport`,
       });
       continue;
     }
@@ -1828,6 +1827,11 @@ export async function mcpConfigsNotProvenClean(
 }
 
 // ─── Main entry ──────────────────────────────────────────────
+
+/** The agent `target`'s servers are for: its tool, or Muse Code for the claude target only Muse reads (Muse's format). */
+export function mcpTargetAgent(target: McpTarget): string {
+  return target.format === 'muse' ? MUSE_TOOL_ID : target.tool;
+}
 
 export function mcpTargetExcluded(localConfig: LocalConfig, target: McpTarget): boolean {
   if (!isAgentExcluded(localConfig, target.tool)) return false;

@@ -192,6 +192,9 @@ describe('Muse Code MCP', () => {
       }));
       const loads = checks.find((check) => check.name === 'MCP servers load in muse');
       expect(await loads!.check()).toBe(true);
+      const names = checks.map((check) => check.name);
+      expect(names).toContain('MCP servers delivered to muse');
+      expect(names).not.toContain('MCP servers delivered to claude');
     });
 
     it('writes .mcp.json for Muse Code in a project with no .claude directory', async () => {

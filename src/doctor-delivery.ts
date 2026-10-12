@@ -923,7 +923,7 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
 
   const {
     resolveMcpTargets, buildDesiredMcpContext, desiredMcpForTarget,
-    mcpTargetExcluded, installedMcpEntries, memberMcpServers, describeKeptMemberServer, readsClaudeMcpFile,
+    mcpTargetExcluded, mcpTargetAgent, installedMcpEntries, memberMcpServers, describeKeptMemberServer, readsClaudeMcpFile,
   } = await import('./mcp-reconcile.js');
   const { carriesResolvedValue, ensureExcludedFromGit } = await import('./mcp-git-exclude.js');
   const { mcpEntryReader, teamMcpToDef } = await import('./resources/mcp.js');
@@ -1028,7 +1028,7 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
       ...member.map((name) => describeKeptMemberServer(name, target.file)),
       ...member.length > 0 ? ['Or run `teamai mcp inject --force` to replace it with the team\'s.'] : []];
     checks.push({
-      name: `MCP servers delivered to ${target.tool}`,
+      name: `MCP servers delivered to ${mcpTargetAgent(target)}`,
       source: 'local',
       check: async () => problems.length === 0 && !withheld,
       fix: [...withheld ? [withheld] : [], ...delivery].join(' '),
