@@ -234,9 +234,9 @@ describe('Muse Code MCP', () => {
   });
 
   // Muse Code reads only <root>/.mcp.json, so a claude mapping elsewhere is not a file Muse reads.
-  it('does not take a Claude Code project MCP file mapped elsewhere for one Muse Code reads', async () => {
+  it.each([['without', false], ['with', true]])('does not take a Claude Code project MCP file mapped elsewhere for one Muse Code reads, %s a .claude directory', async (_name, claudeDir) => {
     const projectRoot = path.join(root, 'project');
-    await fse.ensureDir(projectRoot);
+    await fse.ensureDir(claudeDir ? path.join(projectRoot, '.claude') : projectRoot);
     await fse.ensureDir(path.join(home, '.config', 'muse'));
     const mapped = TeamaiConfigSchema.parse({
       team: 'fixture', repo: 'fixture', provider: 'git',
@@ -349,6 +349,15 @@ describe('Muse Code agents', () => {
   // Muse Code gives an agent with no `tools` every tool; `tools: []` leaves it only its subagent controls.
   it('keeps an agent whose tools Muse Code has none of restricted, rather than giving it every tool', () => {
     const { content } = renderForTool({ ...spec, tools: ['NotebookEdit'] }, 'muse');
+
+    expect(frontmatter(content).tools).toEqual([]);
+  });
+
+  it.each([
+    ['tools: []', { tools: [] }],
+    ['tool_extras.muse.tools: []', { tool_extras: { muse: { tools: [] } } }],
+  ])('keeps an explicit %s as no tools', (_name, fields) => {
+    const { content } = renderForTool({ ...spec, ...fields }, 'muse');
 
     expect(frontmatter(content).tools).toEqual([]);
   });
