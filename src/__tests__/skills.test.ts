@@ -17,6 +17,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { SkillsHandler } from '../resources/skills.js';
+import { skillsGuardBase } from '../builtin-skills.js';
 import { allowsSkillDirectory, mayDeleteSkillCopy, scanTeamRepoNamespaces, ensureSkillFrontmatter, createSkillPushItem } from '../resources/skills.js';
 import { contentHash } from '../resources/delivered-copies.js';
 import { log } from '../utils/logger.js';
@@ -203,6 +204,26 @@ scope: 'user',
     expect(await allowsSkillDirectory(homeDir, skillDir, { keepSkillLink: true })).toBe(true);
     expect(await mayDeleteSkillCopy(localConfig, skillDir)).toBe(false);
     expect(await fse.readFile(path.join(target, 'SKILL.md'), 'utf8')).toBe('member-owned\n');
+  });
+
+  it.each([
+    { env: 'COPILOT_HOME', skillPath: 'nested/skills/fixture' },
+    { env: 'COPILOT_HOME', skillPath: 'skills/fixture' },
+    { env: 'HERMES_HOME', skillPath: 'skills/fixture' },
+    { env: 'HERMES_HOME', skillPath: 'skills/ns/fixture' },
+    { env: 'OPENCLAW_WORKSPACE_DIR', skillPath: 'skills/fixture' },
+    { env: 'OPENCLAW_WORKSPACE_DIR', skillPath: 'skills/ns/fixture' },
+  ])('refuses deletion through a linked $env outside home ($skillPath)', async ({ env, skillPath }) => {
+    const toolHome = path.join(tmpDir, 'outside', 'tool-home');
+    const target = path.join(tmpDir, 'elsewhere');
+    await fse.ensureDir(path.join(target, skillPath));
+    await fse.writeFile(path.join(target, skillPath, 'SKILL.md'), 'fixture\n');
+    await fse.ensureDir(path.dirname(toolHome));
+    await fse.symlink(target, toolHome, 'dir');
+    vi.stubEnv(env, toolHome);
+
+    expect(await skillsGuardBase(homeDir, path.join(toolHome, path.dirname(skillPath)))).toBe(path.dirname(toolHome));
+    expect(await mayDeleteSkillCopy(localConfig, path.join(toolHome, skillPath))).toBe(false);
   });
 
   it('should NOT detect a skill without SKILL.md', async () => {

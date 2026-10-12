@@ -5,7 +5,9 @@ import fse from 'fs-extra';
 import { pathExists, remove } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import type { TeamaiConfig, LocalConfig } from './types.js';
-import { resolveBaseDir, isAgentExcluded, scopedToolPaths } from './types.js';
+import { getCopilotHome, resolveBaseDir, isAgentExcluded, scopedToolPaths } from './types.js';
+import { getHermesHome } from './hermes-home.js';
+import { resolveOpenclawWorkspaceDir } from './openclaw-hooks.js';
 import { ResourceHandler } from './resources/base.js';
 import { CODEX_TOOL, allowsSkillDirectory, resolveSkillDestination, SHARED_AGENT_SKILLS_PATH, skillsDirForTool, skillTargetForTool } from './resources/skills.js';
 import { getUserHome } from './utils/home.js';
@@ -344,7 +346,7 @@ export interface BuiltinSkillsTarget {
   skillsDir: string;
   /**
    * The scope root (home, or the project root) when the skills directory sits
-   * under it, else the parent of the configured root: `COPILOT_HOME`,
+   * under it, else the parent of the tool home holding it: `COPILOT_HOME`,
    * `HERMES_HOME` and OpenClaw's workspace can live anywhere, and the guard
    * must still check that root and every component below it.
    */
@@ -356,14 +358,20 @@ export interface BuiltinSkillsTarget {
  * project root — when `skillsDir` sits under it, since a link at or above that
  * is ordinary. Not the tool's base directory: for Copilot that is
  * `COPILOT_HOME`, and starting there would never check whether `COPILOT_HOME`
- * itself is a link. A root configured outside the scope root (`HERMES_HOME`,
- * an OpenClaw workspace) has the walk start just above it, so that root is
+ * itself is a link. A root outside the scope root has the walk start at the
+ * parent of the tool home holding it (`COPILOT_HOME`, `HERMES_HOME`, the
+ * OpenClaw workspace), however deep the skills path below it, so that home is
  * checked too.
  */
-export function skillsGuardBase(scopeRoot: string, skillsDir: string): string {
-  const relative = path.relative(scopeRoot, skillsDir);
-  const underRoot = relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
-  return underRoot ? scopeRoot : path.dirname(path.dirname(skillsDir));
+export async function skillsGuardBase(scopeRoot: string, skillsDir: string): Promise<string> {
+  const under = (root: string): boolean => {
+    const relative = path.relative(root, skillsDir);
+    return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  };
+  if (under(scopeRoot)) return scopeRoot;
+  const homes = [getCopilotHome(), getHermesHome(), await resolveOpenclawWorkspaceDir()];
+  const home = homes.filter((dir): dir is string => dir !== null && under(dir)).sort((a, b) => a.length - b.length)[0];
+  return home ? path.dirname(home) : path.dirname(path.dirname(skillsDir));
 }
 
 /**
@@ -384,7 +392,7 @@ export async function builtinSkillsTarget(
   }
   const skillsDir = await skillsDirForTool(tool, configuredSkillsPath, localConfig);
   if (skillsDir === null) return null;
-  return { skillsDir, guardBase: skillsGuardBase(resolveBaseDir(localConfig), skillsDir) };
+  return { skillsDir, guardBase: await skillsGuardBase(resolveBaseDir(localConfig), skillsDir) };
 }
 
 /**

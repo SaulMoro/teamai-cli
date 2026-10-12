@@ -215,7 +215,7 @@ inject 和 remove 只会操作你实际已安装的工具（即 `~/.<tool>/` 根
 
 Git hook 安装失败时，`hooks inject`、`init` 和单仓库自动初始化仍会尝试信任已经写入的 Codex hooks。注入保留安装错误，不显示整体成功。init 报告错误，并在完成本地设置时保持退出码 1，HTTP 初始化也如此。自动初始化在 debug 日志中记录该错误，然后继续本地设置。
 
-非-self 的 project scope 中，`hooks remove` 会移除 HOME 中当前 checkout 的门控团队 hooks，并释放其在主 checkout 中的 Claude/Codex 团队 hook 所有权。共享团队 hooks 保留到最后一个 checkout 移除它们。`uninstall --agent <tool>` 只释放该工具的所有权。排除某个工具的 checkout 不会保留该工具的共享 hook。对于已迁移的共享数据分区，uninstall 会移除整个仓库中所选工具的共享 hooks；完整卸载还会删除该分区。bare 仓库的 worktree 会独立移除各自的 Claude/Codex 团队 hook 文件。其他项目的门控团队 hooks 保留在 HOME；共享的内置 hooks 会被移除。
+非-self 的 project scope 中，`hooks remove` 会移除 HOME 中当前 checkout 的门控团队 hooks，并释放其在主 checkout 中的 Claude/Codex 团队 hook 所有权。共享团队 hooks 保留到最后一个 checkout 移除它们。`uninstall --agent <tool>` 只释放该工具的所有权。排除某个工具的 checkout 不会保留该工具的共享 hook。对于已迁移的共享数据分区，完整卸载会移除所有 checkout 的共享 hooks，再删除该分区；`uninstall --agent <tool>` 只移除当前 checkout 使用的 hooks 和注册；若它是最后一个工具，则会删除该分区以及所有 checkout 的 hooks。bare 仓库的 worktree 会独立移除各自的 Claude/Codex 团队 hook 文件。其他项目的门控团队 hooks 保留在 HOME；共享的内置 hooks 会被移除。
 
 > **OpenClaw** — teamai 的 hook 是一个 workspace hook，位于 `<workspace>/hooks/teamai-status-report`。它在 `command:new`、`command:reset`、`session:auto-reset` 和 `gateway:startup` 时运行 `session-start`，在 `message:received` 时运行 `prompt-submit`，并以事件中的 workspace 作为 hook 的 `cwd`。OpenClaw 只有在 `openclaw.json` 启用了某个 workspace hook 的条目时才会加载它，因此 init、pull 和 `hooks inject` 会写入 `hooks.internal.entries.teamai-status-report.enabled: true`，`hooks remove` 和 uninstall 会将其移除。若 OpenClaw 正在加载它发现的所有 hook（`hooks.internal.enabled: true` 且没有具名条目），新增第一个条目会把发现模式变成白名单，从而停掉你的其他 hook，所以 teamai 不改动配置，只给出警告；
 

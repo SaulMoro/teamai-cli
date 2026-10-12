@@ -149,6 +149,41 @@ describe('multi-repo checkout delivery', () => {
     expect(dispatch(m.checkout).stdout).toContain('fixture');
   });
 
+  it.each([
+    { agent: 'codex', agents: 'codex', memberHooks: false, siblingKept: true },
+    { agent: 'codex', agents: 'codex', memberHooks: true, siblingKept: true },
+    { agent: 'claude', agents: 'claude,codex', memberHooks: false, siblingKept: true },
+    { agent: 'claude', agents: 'claude', memberHooks: false, siblingKept: false },
+  ])('uninstall --agent $agent with $agents (member hooks: $memberHooks) keeps a sibling clone\'s team hooks: $siblingKept', ({ agent, agents, memberHooks, siblingKept }) => {
+    const m = fixture(`agent-uninstall-sibling-${agents.replace(',', '-')}-${agent}-${memberHooks}`);
+    const memberFile = JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo member' }] }] } });
+    if (memberHooks) write(path.join(m.checkout, '.codex/hooks.json'), memberFile);
+    m.cli(['init', m.url, '--provider', 'git', '--scope', 'project', '--agent', agents, '--force'], m.checkout);
+    const parentWorktree = path.join(m.base, 'parent-agent-uninstall');
+    m.git(['worktree', 'add', '-q', '--detach', parentWorktree], m.parent);
+    m.git(['submodule', 'update', '-q', '--init'], parentWorktree);
+    const child = path.join(parentWorktree, 'service');
+    if (memberHooks) write(path.join(child, '.codex/hooks.json'), memberFile);
+    m.cli(['pull', '--force'], child);
+    const teamHooks = (cwd: string) => {
+      if (memberHooks) {
+        return spawnSync(process.execPath, [CLI, 'hook-dispatch', 'Stop', '--tool', 'codex', '--team-hooks'], {
+          cwd, env: m.env, encoding: 'utf8', input: JSON.stringify({ cwd, hook_event_name: 'Stop' }),
+        }).stdout;
+      }
+      const hookFile = path.join(cwd, agent === 'claude' ? '.claude/settings.local.json' : '.codex/hooks.json');
+      return fs.existsSync(hookFile) ? read(hookFile) : '';
+    };
+    const before = teamHooks(child);
+    expect(before).toContain('fixture');
+    expect(teamHooks(m.checkout)).toContain('fixture');
+    m.cli(['uninstall', '--agent', agent, '--force'], m.checkout);
+    expect(teamHooks(m.checkout)).not.toContain('fixture');
+    // A sibling's hooks go only with the data it shares, when this was the last tool.
+    if (siblingKept) expect(teamHooks(child)).toBe(before);
+    else expect(teamHooks(child)).not.toContain('fixture');
+  });
+
   it('full uninstall leaves no registration for that identity', () => {
     const m = fixture('full-uninstall-dispatchers');
     write(path.join(m.checkout, '.codex/hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo member' }] }] } }));

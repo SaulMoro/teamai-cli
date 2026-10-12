@@ -219,6 +219,22 @@ describe('submodule checkouts', () => {
     expect(await allowsSkillDirectory(home, path.join(base, 'elsewhere/fixture'))).toBe(false);
   });
 
+  it.each([
+    { target: 'a linked worktree of the same repository', sameRepo: true },
+    { target: 'another repository', sameRepo: false },
+  ])('follows a skill root linked to $target nested in the checkout only within the repository', async ({ sameRepo }) => {
+    const nested = path.join(checkout, 'nested');
+    if (sameRepo) git(checkout, 'worktree', 'add', '-q', '--detach', nested);
+    else {
+      fs.mkdirSync(nested);
+      git(nested, 'init', '-q');
+    }
+    fs.mkdirSync(path.join(nested, '.claude/skills'), { recursive: true });
+    fs.mkdirSync(path.join(checkout, '.claude'));
+    fs.symlinkSync(path.join(nested, '.claude/skills'), path.join(checkout, '.claude/skills'));
+    expect(await allowsSkillDirectory(checkout, path.join(checkout, '.claude/skills/fixture'))).toBe(sameRepo);
+  });
+
   it('inherits the original submodule config in a superproject worktree', async () => {
     const original = config();
     original.dataHome = await resolveProjectDataHome(checkout);

@@ -633,19 +633,19 @@ async function discoverToolResources(
   if (toolPath.skills) {
     // Skills root → the base the link guard starts from.
     const configuredSkills = path.join(baseDir, toolPath.skills);
-    const skillRoots = new Map([[configuredSkills, skillsGuardBase(scopeRoot, configuredSkills)]]);
+    const skillRoots = new Map([[configuredSkills, await skillsGuardBase(scopeRoot, configuredSkills)]]);
     // OpenClaw and Hermes receive skills where team sync and the stub put them
     // (`skillsDirForTool`): the workspace, and HERMES_HOME.
     if (tool === 'openclaw') {
       const workspaceDir = await resolveOpenclawWorkspaceDir();
       if (workspaceDir) {
         const workspaceSkills = path.join(workspaceDir, 'skills');
-        skillRoots.set(workspaceSkills, skillsGuardBase(scopeRoot, workspaceSkills));
+        skillRoots.set(workspaceSkills, await skillsGuardBase(scopeRoot, workspaceSkills));
       }
     }
     if (tool === 'hermes') {
       const hermesSkills = path.join(getHermesHome(), 'skills');
-      skillRoots.set(hermesSkills, skillsGuardBase(scopeRoot, hermesSkills));
+      skillRoots.set(hermesSkills, await skillsGuardBase(scopeRoot, hermesSkills));
     }
     // `resolveSkillDestination` writes Codex's copy into the shared
     // .agents/skills root when teamai's copy already lives there, so uninstall
@@ -653,7 +653,7 @@ async function discoverToolResources(
     // does. Codex only: another tool's pass must not reach into it.
     if (tool === CODEX_TOOL) {
       const sharedSkills = path.join(baseDir, SHARED_AGENT_SKILLS_PATH);
-      skillRoots.set(sharedSkills, skillsGuardBase(scopeRoot, sharedSkills));
+      skillRoots.set(sharedSkills, await skillsGuardBase(scopeRoot, sharedSkills));
     }
     // A team skill's name is no proof: only teamai's copies go (#993).
     for (const [skillsDir, rootBase] of skillRoots) {
@@ -835,6 +835,7 @@ async function buildRemovalPlan(
   localConfig: LocalConfig,
   teamConfig: TeamaiConfig,
   agentFilter?: string,
+  siblingCheckouts = !agentFilter,
 ): Promise<RemovalPlan> {
   const baseDir = resolveBaseDir(localConfig);
   const teamaiHome = getDataHome(localConfig);
@@ -932,7 +933,7 @@ async function buildRemovalPlan(
   const mainCheckout = await resolveMainCheckoutHooks(localConfig, teamConfig.toolPaths);
   const mainCheckouts = mainCheckout ? [mainCheckout] : [];
   // Shared partitions also cover submodule clones with distinct Git common dirs.
-  if (mainCheckout && localConfig.projectRoot) {
+  if (mainCheckout && localConfig.projectRoot && siblingCheckouts) {
     for (const root of await projectCheckouts(localConfig)) {
       const target = await resolveMainCheckoutHooks({ ...localConfig, projectRoot: root }, teamConfig.toolPaths);
       if (target && !mainCheckouts.some((existing) => existing.root === target.root)) mainCheckouts.push(target);
@@ -2439,7 +2440,13 @@ export async function uninstall(opts: UninstallOptions): Promise<void> {
     }
     // An index an older release left in the tree still owns Copilot's team hooks (#993).
     if (!opts.dryRun) await migrateLegacyManagedHooks(localConfig);
-    const plan = await buildRemovalPlan(localConfig, teamConfig, agentKey);
+    let plan = await buildRemovalPlan(localConfig, teamConfig, agentKey);
+    // The other checkouts of this identity are touched only with the data they share:
+    // a tool-only uninstall acts on this checkout unless it removes that data too.
+    if (agentKey && plan.includeShared) {
+      const withSiblings = await buildRemovalPlan(localConfig, teamConfig, agentKey, true);
+      if (withSiblings.includeShared) plan = withSiblings;
+    }
     // Uninstall never removes these, so they are named whatever happens next.
     await keepTrackedCopies(plan);
     for (const { files, entry } of plan.keptRuleFiles) log.warn(keptLegacyCopiesWarning(files, entry));
@@ -2626,7 +2633,7 @@ async function removeConfirmed(
 
   // Codex team hooks that ran from the dispatcher in ~/.codex/hooks.json (#915),
   // before the data home goes: a dispatcher left running keeps the records for the retry.
-  const dispatchLeft = !agentKey || agentKey === 'codex' ? await stopCodexDispatch(teamConfig, localConfig, !agentKey) : null;
+  const dispatchLeft = !agentKey || agentKey === 'codex' ? await stopCodexDispatch(teamConfig, localConfig, plan.includeShared) : null;
   const { pendingOpencode, hooksLeft, blocksLeft, filesLeft } = await executeRemoval(plan, heldMcp, {
     hooks: dispatchLeft ? [{ what: `the Codex team-hook dispatchers in ${dispatchLeft}`, tool: 'codex' }] : [],
     files: [...httpSourceLeft, ...plan.keptUnjudged],

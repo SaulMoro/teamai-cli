@@ -185,7 +185,7 @@ Generated: do not edit by hand. Regenerate with
 
 - `teamai uninstall` — Remove all teamai-managed resources and hooks from this machine
   - `--force` — Skip confirmation prompt
-  - `--agent <name>` — Only uninstall this agent's resources; shared resources go only if it is the last tool
+  - `--agent <name>` — Only uninstall this agent's resources in this checkout; shared resources, and the project's other checkouts, go only if it is the last tool
 
 ## env
 
