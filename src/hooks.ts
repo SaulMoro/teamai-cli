@@ -1372,17 +1372,12 @@ function toCopilotEntry(def: HookDef, globalSource?: string): CopilotHookEntry {
   const command = globalSource && def.source === 'builtin'
     ? def.command.replace('--tool copilot', `--tool copilot --copilot-global ${copilotGlobalSource(globalSource)}`)
     : def.command;
-  const matcher = def.source === 'builtin'
-    && def.event === 'PostToolUse'
-    && def.matcher === 'Skill'
-    ? 'skill'
-    : def.matcher;
   return {
     type: 'command',
     bash: command,
     powershell: copilotPowershellCommand(command),
     command,
-    ...(matcher && matcher !== '*' ? { matcher } : {}),
+    ...(def.matcher && def.matcher !== '*' ? { matcher: def.matcher } : {}),
     ...(def.timeout !== undefined ? { timeoutSec: def.timeout } : {}),
   };
 }

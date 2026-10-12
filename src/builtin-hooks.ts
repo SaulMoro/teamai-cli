@@ -374,6 +374,9 @@ const SUBAGENT_STOP_TOOLS = new Set([
 const WRAPPER_TOOLS = SHELL_DEPENDENT_TOOLS;
 
 
+/** What a tool names its Skill tool, where not `Skill`; the dispatcher still routes it as Skill. */
+const SKILL_TOOL_MATCHER: Readonly<Record<string, string>> = { copilot: 'skill', [MUSE_TOOL_ID]: 'read_skill' };
+
 export function builtinHookDefs(tool: string): HookDef[] {
   // ZCode renders per-event timeouts from the ZCODE_TIMEOUT_MS table in its own
   // writer (toZcodeEntry), so def.timeout stays unset for it.
@@ -395,8 +398,7 @@ export function builtinHookDefs(tool: string): HookDef[] {
     source: 'builtin' as const,
     key: spec.key,
     event: spec.event,
-    // Muse Code names its skill tool `read_skill`; the dispatcher still routes it as Skill.
-    matcher: tool === MUSE_TOOL_ID && spec.matcher === 'Skill' ? 'read_skill' : spec.matcher,
+    matcher: spec.matcher === 'Skill' ? SKILL_TOOL_MATCHER[tool] ?? spec.matcher : spec.matcher,
     command: buildCommand(spec.dispatchEvent, tool, spec.matcher),
     timeout: withTimeout ? spec.timeoutSec : undefined,
     // The team rules reach the Codex family through its start hooks (#938);
