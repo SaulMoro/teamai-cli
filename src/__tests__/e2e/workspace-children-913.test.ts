@@ -270,5 +270,31 @@ describe('a workspace delivers what the repos inside it select (#913)', () => {
     expect(await recalledFile('okapi')).toBeUndefined();
     expect(await recalledFile('narwhal')).toContain(path.join('learnings', 'svc-a', 'narwhal.md'));
   });
+
+  it('contributes to its own selection by default and to any namespace it reads with --namespace', async () => {
+    const note = path.join(sandbox, 'note.md');
+    fs.writeFileSync(note, '# Walrus cutover\n\nThe walrus cutover drains the queue before the switch.\n');
+    const contribute = (args: string[]): Promise<RunResult> => run(['contribute', '--file', note, ...args], ws);
+
+    const shared = await contribute(['--title', 'walrus-shared']);
+    expect(shared.code, shared.output).toBe(0);
+    expect(shared.output).toContain('Contributing to learnings/ (shared root). To choose a namespace, pass --namespace <ns>: svc-b, svc-a.');
+    expect(shared.output).toMatch(/Contributed: learnings\/walrus-shared-/);
+
+    const child = await contribute(['--title', 'walrus-child', '--namespace', 'svc-b']);
+    expect(child.code, child.output).toBe(0);
+    expect(child.output).toMatch(/Contributed: learnings\/svc-b\/walrus-child-/);
+    const recall = await run(['recall', 'narwhal'], ws);
+    expect(recall.output.match(/^File: (.+)$/m)?.[1]).toContain(path.join('learnings', 'svc-a', 'narwhal.md'));
+
+    const own = await run(['projects', 'set', 'platform'], ws);
+    expect(own.code, own.output).toBe(0);
+    const projects = await run(['projects', 'list'], ws);
+    expect(projects.output).toContain('Contributes to: learnings/platform/   --namespace accepts: platform, svc-b, svc-a');
+    const owned = await contribute(['--title', 'walrus-own']);
+    expect(owned.code, owned.output).toBe(0);
+    expect(owned.output).toMatch(/Contributed: learnings\/platform\/walrus-own-/);
+    expect(owned.output).not.toContain('To choose a namespace');
+  });
 });
 

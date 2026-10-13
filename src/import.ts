@@ -9,7 +9,6 @@ import { importFromRepo } from './import-repo.js';
 import { importFromRepoList } from './import-repo-list.js';
 import { importFromOrg } from './import-org.js';
 import { importFromIWikiDual } from './iwiki-dual.js';
-import { resolveActiveLearningsNamespaces } from './projects.js';
 import { indexableLearningsRoots } from './utils/learnings-roots.js';
 import { pendingLearningsDir, queueWriteRefusal, savePendingLearning } from './utils/pending-learnings.js';
 import type { GlobalOptions } from './types.js';
@@ -189,6 +188,8 @@ export async function importCmd(opts: ImportOptions): Promise<void> {
     } else if (opts.fromMr) {
       // 分支 1：--from-mr <url>，提取 learning + 增量更新 teamwiki
       const { localConfig, teamConfig } = await autoDetectInit(undefined, { dryRun: opts.dryRun });
+      // A workspace reads its children's learnings too (#913).
+      const { deliveredLearningsNamespaces } = await import('./workspace-children.js');
       // Its learning is published the way `teamai contribute` publishes, which a
       // read-only (HTTP) source refuses; a dry run or --output publishes nothing.
       if (!opts.dryRun && !opts.output) assertNotReadOnly(localConfig, 'teamai import --from-mr');
@@ -199,7 +200,7 @@ export async function importCmd(opts: ImportOptions): Promise<void> {
       // The namespaces recall finds learnings in here (#823). The duplicate
       // check is advisory: a broken projects.yaml narrows it to the shared
       // root, as recall does.
-      const learningsNamespaces = await resolveActiveLearningsNamespaces(localConfig.repo.localPath, localConfig.projects ?? [])
+      const learningsNamespaces = await deliveredLearningsNamespaces(localConfig)
         .catch((e: unknown) => {
           log.warn(`The duplicate check reads the shared learnings only: ${e instanceof Error ? e.message : String(e)}`);
           return [];

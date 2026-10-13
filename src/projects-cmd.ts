@@ -23,6 +23,7 @@ import { readFileSafe, listFiles } from './utils/fs.js';
 import { pullRepo } from './utils/git.js';
 import { log } from './utils/logger.js';
 import { MemberConfigSchema, type LocalConfig } from './types.js';
+import { deliveredLearningsNamespaces } from './workspace-children.js';
 import { memberReadRoots } from './members.js';
 import type { GlobalOptions } from './types.js';
 
@@ -49,8 +50,11 @@ export async function projectsList(_options: GlobalOptions): Promise<void> {
   const repoPath = localConfig.repo.localPath;
 
   const manifest = await loadProjectsManifest(repoPath);
-  const namespaces = await resolveActiveLearningsNamespaces(repoPath, localConfig.projects ?? []);
-  const destination = namespaces.length === 1 ? `learnings/${namespaces[0]}/` : 'learnings/ (shared root)';
+  // As contribute: the own selection picks the default, and a workspace accepts
+  // its children's namespaces too (#913).
+  const ownNamespaces = await resolveActiveLearningsNamespaces(repoPath, localConfig.projects ?? []);
+  const namespaces = await deliveredLearningsNamespaces(localConfig);
+  const destination = ownNamespaces.length === 1 ? `learnings/${ownNamespaces[0]}/` : 'learnings/ (shared root)';
   const contributionTarget = `Contributes to: ${destination}   --namespace accepts: ${namespaces.join(', ') || '(none)'}`;
   if (!manifest) {
     log.info('This team repo defines no projects (no manifest/projects.yaml).');
