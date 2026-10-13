@@ -431,6 +431,27 @@ describe('doctor — env variables reach a shell', () => {
     expect(check.fix).not.toContain('rotated-away');
   });
 
+  // On Windows `jira_password` is the same environment variable: a declaration
+  // whose spelling changed is still delivered, until the next pull respells it.
+  it.each([
+    { platform: 'linux', delivered: false },
+    { platform: 'win32', delivered: true },
+  ] as const)('on $platform, takes an env.sh export in another case of a declared name as delivered: $delivered', async ({ platform, delivered }) => {
+    await writeEnvSh("export jira_password='s3cret'\n");
+    await writeProfile(loaderLine());
+    const spy = vi.spyOn(process, 'platform', 'get').mockReturnValue(platform);
+    try {
+      const check = await envCheck();
+      const passed = await check.check();
+      const fix = passed ? '' : check.fix ?? '';
+      // Not missing JIRA_PASSWORD, and not still exporting jira_password, on Windows; both elsewhere.
+      expect(fix.includes('JIRA_PASSWORD'), fix).toBe(!delivered);
+      expect(fix.includes('jira_password'), fix).toBe(!delivered);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('fails when a declared variable never reached env.sh', async () => {
     await writeEnvSh("export OTHER='x'\n");
     await writeProfile(loaderLine());

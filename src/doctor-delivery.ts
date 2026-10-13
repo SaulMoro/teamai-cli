@@ -1555,11 +1555,18 @@ async function envDeliveryProblems(
   const teamEnv = ctx.teamEnv ?? await resolveTeamEnv(localConfig);
   const { variables: resolution, declarations: secrets, variableValues: values } = teamEnv;
   const { parseEnvFile, parseEnvFileKept } = await import('./resources/env.js');
-  /** The keys of `owed` that `delivered` lacks, and those it holds another value for. */
-  const compare = (owed: readonly EnvVariable[], delivered: ReadonlyMap<string, string>): { undelivered: string[]; stale: string[] } => ({
-    undelivered: owed.filter(({ key }) => !delivered.has(key)).map(({ key }) => key),
-    stale: owed.filter(({ key, value }) => delivered.has(key) && delivered.get(key) !== value).map(({ key }) => key),
-  });
+  const { sameEnvName } = await import('./resources/env-key.js');
+  /** The keys of `owed` that `delivered` lacks, and those it holds another value for, in any case on Windows. */
+  const compare = (owed: readonly EnvVariable[], delivered: ReadonlyMap<string, string>): { undelivered: string[]; stale: string[] } => {
+    const valueOf = (key: string): string | undefined => {
+      const name = sameEnvName(delivered.keys(), key);
+      return name === undefined ? undefined : delivered.get(name);
+    };
+    return {
+      undelivered: owed.filter(({ key }) => valueOf(key) === undefined).map(({ key }) => key),
+      stale: owed.filter(({ key, value }) => valueOf(key) !== undefined && valueOf(key) !== value).map(({ key }) => key),
+    };
+  };
 
   // An inheriting project's shells load the user scope's env.sh first, which
   // the user scope's own pull writes: its variables are owed here too, whatever
@@ -1611,7 +1618,6 @@ async function envDeliveryProblems(
   // no longer delivers, and this project does not set, still reaches this
   // project's shells, where `env exec` and MCP leave it out.
   if (inheritsUser && localConfig.inheritUserScope === true && teamEnv.inheritedValues.kind === 'resolved' && resolution.kind === 'resolved' && projectFailure === null) {
-    const { sameEnvName } = await import('./resources/env-key.js');
     const { declaredSecretKeys } = await import('./resources/secrets.js');
     const owed = [...inherited.map(({ key }) => key), ...resolution.entries.map(({ name }) => name), ...declaredSecretKeys(secrets) ?? []];
     const extra = [...parseEnvFile(await readFileSafe(userEnvShPath) ?? '').keys()].filter((key) => sameEnvName(owed, key) === undefined);
@@ -1646,8 +1652,8 @@ async function envDeliveryProblems(
     // env.sh holds only what pull wrote, so a key the resolved set lacks is
     // left over from before a namespace deactivated or the team removed it,
     // and still live in every new shell until the next pull.
-    const deliverable = new Set(declared.map((variable) => variable.key));
-    const leftover = [...delivered.keys()].filter((key) => !deliverable.has(key));
+    const deliverable = declared.map((variable) => variable.key);
+    const leftover = [...delivered.keys()].filter((key) => sameEnvName(deliverable, key) === undefined);
     if (leftover.length > 0) {
       problems.push(
         `${envShPath} still exports ${nameList(leftover)}, which the team no longer delivers to this `
@@ -1657,7 +1663,7 @@ async function envDeliveryProblems(
     // A key the project declares but does not export keeps the member's own
     // value, not the one the user scope's env.sh set before it.
     const keptInFile = parseEnvFileKept(envSh);
-    const unkept = kept.filter((key) => !keptInFile.has(key));
+    const unkept = kept.filter((key) => sameEnvName(keptInFile, key) === undefined);
     if (unkept.length > 0) problems.push(`${envShPath} does not keep ${nameList(unkept)} from the user scope's env.sh`);
     // Nothing is owed, so the profile block has nothing to load: a leftover is
     // the only thing that can be wrong here.
