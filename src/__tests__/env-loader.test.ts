@@ -167,8 +167,9 @@ describe('team env by directory (#1018)', () => {
       // An attribute beside export: `declare -p` prints `declare -ix`, zsh `export -i`.
       { name: 'exported integer', setup: 'typeset -ix TOKEN=3', expected: 'exported:3' },
       // Every attribute comes back, not only export: an integer still evaluates what it is given.
-      { name: 'exported integer, assigned after', setup: 'typeset -ix TOKEN=3', after: 'TOKEN=1+1', expected: 'exported:2', inChild: 'exported:3' },
-      { name: 'local integer, assigned after', setup: 'typeset -i TOKEN=3', after: 'TOKEN=1+1', expected: 'local:2' },
+      // bash before 4.2 cannot give a global its attribute back from a function (see below).
+      { name: 'exported integer, assigned after', setup: 'typeset -ix TOKEN=3', after: 'TOKEN=1+1', expected: 'exported:2', beforeBash42: 'exported:1+1', inChild: 'exported:3' },
+      { name: 'local integer, assigned after', setup: 'typeset -i TOKEN=3', after: 'TOKEN=1+1', expected: 'local:2', beforeBash42: 'local:1+1' },
     ];
     const report = 'if [ "${TOKEN+x}" != x ]; then printf unset; else case " $(export -p) " in *" TOKEN="*) printf "exported:%s" "$TOKEN";; *) printf "local:%s" "$TOKEN";; esac; fi; printf "\\n"';
 
@@ -194,7 +195,8 @@ describe('team env by directory (#1018)', () => {
           encoding: 'utf-8',
         });
         expect(run.status, run.stderr).toBe(0);
-        expect(run.stdout.trim().split('\n').slice(-1)[0]).toBe(`parent=${state.expected}`);
+        const expected = shell === 'bash' && !hasBashAtLeast(4, 2, shell) ? state.beforeBash42 ?? state.expected : state.expected;
+        expect(run.stdout.trim().split('\n').slice(-1)[0]).toBe(`parent=${expected}`);
         const inChild = state.inChild ?? state.expected;
         if (child) expect(run.stdout).toContain(`child=${inChild.startsWith('exported:') ? inChild : 'unset'}\n`);
       },
