@@ -321,6 +321,24 @@ export async function resolveDesiredSkills(
 }
 
 /**
+ * The team skill directories a workspace with children delivers skills from
+ * (#913): each member's, before the union, absolute. Null for a scope without
+ * children. Push sends an edit of one copy several delivered to these only.
+ */
+export async function deliveredSkillSources(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<ReadonlySet<string> | null> {
+  const members = await deliveredMembers(localConfig);
+  if (!members) return null;
+  const excluded = new Set(localConfig.excludedSkills ?? []);
+  const sources = new Set<string>();
+  for (const member of members) {
+    const desired = await resolveDesiredSkills(teamConfig, member, await buildRolePullContext(member));
+    if (desired.kind !== 'resolved') continue;
+    for (const item of desired.items) if (!excluded.has(item.name)) sources.add(path.resolve(item.sourcePath));
+  }
+  return sources;
+}
+
+/**
  * A workspace's skills (#913): each member's, resolved with that member's
  * namespaces, tags and exclusions, then unioned, with the workspace's own
  * exclusions on top. A conflict inside one member stops skills as it would

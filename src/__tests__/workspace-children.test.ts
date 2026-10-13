@@ -12,7 +12,9 @@ import { resolveEntriesFor } from '../namespaced-entries.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { mcpEntryReader } from '../resources/mcp.js';
 import { mcpRelocated } from '../mcp-reconcile.js';
-import { buildRolePullContext, resolveDesiredAgents, resolveDesiredRules, resolveDesiredSkills } from '../resources/desired.js';
+import { buildRolePullContext, deliveredSkillSources, resolveDesiredAgents, resolveDesiredRules, resolveDesiredSkills } from '../resources/desired.js';
+import { readTeamSkillIndex, resolveDestination, withSkillFrontmatter } from '../resources/skills.js';
+import { contentHash } from '../resources/delivered-copies.js';
 import { deliveredLearningsNamespaces, findAncestorWorkspaces, readWorkspaceChildren, syncWorkspaceInstructionExcludes } from '../workspace-children.js';
 
 const TEAM = 'https://git.example.com/team/team.git';
@@ -409,6 +411,32 @@ describe('delivered selection of a workspace with children', () => {
     ]);
     expect(resolution.notices.map((notice) => notice.message).join('\n'))
       .toContain('server "cache" differs between mcp/svc-a/mcp.yaml and mcp/svc-b/mcp.yaml');
+  });
+});
+
+describe('pushing an edit of a copy several children delivered', () => {
+  it('goes only to the team skills its members deliver, not to an equal root skill', async () => {
+    const repo = teamRepo();
+    const text = '---\nname: same\ndescription: fixture\n---\nThe same skill.\n';
+    for (const namespace of ['', 'svc-a', 'svc-b']) {
+      fs.mkdirSync(path.join(repo, 'skills', namespace, 'same'), { recursive: true });
+      fs.writeFileSync(path.join(repo, 'skills', namespace, 'same', 'SKILL.md'), text);
+    }
+    git(repo, 'init', '-q');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-qm', 'seed');
+    repoChild(path.join(ws, 'svc-a'), { projects: ['svc-a'] });
+    repoChild(path.join(ws, 'svc-b'), { projects: ['svc-b'] });
+    const delivered = await readWorkspaceChildren({ ...workspace, repo: { ...workspace.repo, localPath: repo } });
+    const dest = path.join(ws, '.claude', 'skills', 'same');
+
+    const destination = await resolveDestination({
+      name: 'same', dest, team: await readTeamSkillIndex(repo, ['svc-a', 'svc-b']), pending: [], repoPath: repo,
+      delivered: { [path.join(dest, 'SKILL.md')]: contentHash(withSkillFrontmatter(text, 'same')) },
+      deliveredSources: (await deliveredSkillSources(teamConfig, delivered)) ?? undefined,
+    });
+
+    expect(destination.kind === 'shared' && destination.teamSkills.map((copy) => copy.namespace)).toEqual(['svc-a', 'svc-b']);
   });
 });
 

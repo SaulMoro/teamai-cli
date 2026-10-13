@@ -11,7 +11,8 @@ import YAML from 'yaml';
 // Run through the compiled CLI. A plain folder `ws/` is set up with `init`,
 // and so is each repo inside it, each with its own project. A pull in `ws/`
 // delivers the workspace's own selection plus every child's, names the
-// children, and leaves out a child that uses another team repo.
+// children, and leaves out a child that uses another team repo. recall,
+// contribute and push there read the same selection.
 //
 // The team remote is a synthetic HTTPS URL that git's `url.<base>.insteadOf`
 // rewrites to a local bare repo, with a test-only `git` wrapper that reports
@@ -295,6 +296,58 @@ describe('a workspace delivers what the repos inside it select (#913)', () => {
     expect(owned.code, owned.output).toBe(0);
     expect(owned.output).toMatch(/Contributed: learnings\/platform\/walrus-own-/);
     expect(owned.output).not.toContain('To choose a namespace');
+  });
+
+  it('pushes an edit back to every child namespace whose copy it came from, and an agent to its child namespace', async () => {
+    const seed = path.join(sandbox, 'seed-team');
+    const publish = (message: string): void => {
+      git(['add', '-A'], seed);
+      git(['commit', '-q', '-m', message], seed);
+      git(['push', '-q', path.join(sandbox, 'team.git'), 'main'], seed);
+    };
+    const manifest = YAML.parse(fs.readFileSync(path.join(seed, 'manifest', 'projects.yaml'), 'utf8'));
+    for (const project of manifest.projects) project.resources.agents = [project.id];
+    fs.writeFileSync(path.join(seed, 'manifest', 'projects.yaml'), YAML.stringify(manifest));
+    fs.mkdirSync(path.join(seed, 'agents', 'svc-a'), { recursive: true });
+    fs.writeFileSync(path.join(seed, 'agents', 'svc-a', 'helper.yaml'),
+      'name: helper\ndescription: Help with svc-a\ninstructions: Answer questions about svc-a.\n');
+    const teamSkill = (namespace: string, name: string, body: string): void => {
+      fs.mkdirSync(path.join(seed, 'skills', namespace, name), { recursive: true });
+      fs.writeFileSync(path.join(seed, 'skills', namespace, name, 'SKILL.md'), `---\nname: ${name}\ndescription: fixture\n---\n\n${body}\n`);
+    };
+    for (const namespace of ['svc-a', 'svc-b']) {
+      teamSkill(namespace, 'shared-tool', 'Shared by both services.');
+      teamSkill(namespace, 'drift-tool', 'Shared until svc-b changes it.');
+    }
+    publish('shared skills and an agent');
+    expect((await run(['pull'], ws)).code).toBe(0);
+    teamSkill('svc-b', 'drift-tool', 'Changed by svc-b.');
+    publish('svc-b changes its copy');
+    const pull = await run(['pull'], ws);
+    expect(pull.code, pull.output).toBe(0);
+    expect(pull.output).toContain('Skill "drift-tool" differs between');
+
+    for (const file of ['skills/shared-tool/SKILL.md', 'skills/drift-tool/SKILL.md', 'agents/helper.md']) {
+      fs.appendFileSync(path.join(ws, '.claude', file), '\nEdited in the workspace.\n');
+    }
+    const result = await run(['push', '--dry-run'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('to:   skills/svc-a/shared-tool');
+    expect(result.output).toContain('to:   skills/svc-b/shared-tool');
+    expect(result.output).toContain('to:   skills/svc-a/drift-tool');
+    expect(result.output).not.toContain('to:   skills/svc-b/drift-tool');
+    expect(result.output).toContain('skills/svc-b/drift-tool changed on the team');
+    expect(result.output).toMatch(/\[agents\] helper \(modified\)\n\s+from: .+\n\s+to:   agents\/svc-a\/helper\.yaml/);
+
+    const pushed = await run(['push', '--all'], ws);
+    expect(pushed.output).toContain('Pushed branch teamai/push/');
+    const bare = path.join(sandbox, 'team.git');
+    const branch = git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/teamai/push/'], bare);
+    const changed = git(['diff', '--name-only', 'main', branch], bare).split('\n');
+    expect(changed.filter((file) => !file.endsWith('/CONTRIBUTORS')).sort()).toEqual([
+      'agents/svc-a/helper.yaml', 'skills/svc-a/drift-tool/SKILL.md', 'skills/svc-a/shared-tool/SKILL.md', 'skills/svc-b/shared-tool/SKILL.md',
+    ]);
   });
 });
 

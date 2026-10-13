@@ -175,6 +175,17 @@ export async function isUneditedSkillCopy(previous: DeliveredHashes, dest: strin
 }
 
 /**
+ * Whether the team skill at `teamDir` (absolute) would still deliver exactly
+ * what pull recorded for the skill directory `dest`: every file, and no other.
+ * Read-only.
+ */
+export async function isTeamSkillAsDelivered(previous: DeliveredHashes, dest: string, teamDir: string): Promise<boolean> {
+  const item: ResourceItem = { name: path.basename(teamDir), type: 'skills', sourcePath: teamDir, relativePath: '', status: 'modified' };
+  const next = await nextHashes(previous, item, { tool: '', dest });
+  return [...next].every(([file, hash]) => hash !== null && previous[file] === hash);
+}
+
+/**
  * Whether the SKILL.md recorded in the skill directory `dest` is what pull
  * writes from a version of `<teamDir>/SKILL.md` (repo-relative) in the
  * history of `repoPath`: the team skill the copy was delivered from, even

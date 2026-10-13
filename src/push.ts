@@ -876,6 +876,8 @@ export async function push(
 ): Promise<void> {
   // Auto-detect scope: project scope if cwd has project config, else user scope.
   // An unreadable project config stops here instead of selecting another team.
+  // A workspace sends an edit back where it came from, a child's namespace
+  // included; a new item still goes to its own selection (#913).
   const { localConfig, teamConfig } = await autoDetectInit(undefined, { dryRun: options.dryRun });
   assertNotReadOnly(localConfig, 'teamai push');
 
@@ -1479,19 +1481,12 @@ async function pushCore(
       return;
     }
 
-    // Try to find matching skill from scan results first
-    let matchedItem: ResourceItem | undefined;
-
-    for (const item of allItems) {
-      if (item.type !== 'skills') continue;
-
-      // --skill selects this copy only. A same-named item from another tool
-      // cannot stand in for a requested copy the scan skipped.
-      if (resolveReal(item.sourcePath) === skillPath) {
-        matchedItem = item;
-        break;
-      }
-    }
+    // Try to find matching skill from scan results first. --skill selects this
+    // copy only: a same-named item from another tool cannot stand in for a
+    // requested copy the scan skipped. One copy a workspace delivered for
+    // several team skills is an item for each (#913).
+    const matchedItems = allItems.filter((item) => item.type === 'skills' && resolveReal(item.sourcePath) === skillPath);
+    let matchedItem: ResourceItem | undefined = matchedItems[0];
 
     // If not found in scan results, force-construct a ResourceItem from the
     // specified path. This handles cases where:
@@ -1587,7 +1582,7 @@ async function pushCore(
 
     // Replace allItems with just this one skill
     allItems.length = 0;
-    allItems.push(matchedItem);
+    allItems.push(...matchedItems.length > 0 ? matchedItems : [matchedItem]);
 
     // A force-constructed matchedItem (scanner returned nothing for this skill
     // because its content matches the team repo) is absent from fullScan. Add it
