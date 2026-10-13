@@ -1079,7 +1079,7 @@ export async function promptForSelfModeAgents(options: {
   const detected = await detectHomeInstalledAgents();
   const tools = SELF_MODE_AGENT_CHOICES.map((id) => {
     const meta = KNOWN_AGENTS.find((a) => a.id === id);
-    const root = meta?.skillsPath.split('/')[0] ?? `.${id}`;
+    const root = meta ? path.posix.dirname(meta.skillsPath) : `.${id}`;
     return { id, label: meta?.displayName ?? id, root };
   });
 
