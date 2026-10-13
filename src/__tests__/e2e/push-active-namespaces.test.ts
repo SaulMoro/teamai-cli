@@ -402,6 +402,29 @@ describe('push an edit of a skill pull kept after a project switch (#1020)', () 
   });
 
   it.each([
+    { scope: 'no role', configure: () => setConfig({ projects: [] }) },
+    {
+      scope: 'a role with no skills namespace',
+      configure: () => {
+        commitOnTeam('manifest/roles.yaml', YAML.stringify({
+          version: 1,
+          roles: [{ id: 'reviewer', description: 'reviewer', resources: { knowledge: [], skills: [], agents: [] } }],
+        }));
+        setConfig({ projects: [], primaryRole: 'reviewer' });
+      },
+    },
+  ])('leaves out a member\'s own skill named like a project\'s with $scope and no active project', ({ configure }) => {
+    configure();
+    expect(run(['pull']).code).toBe(0);
+    writeFile(path.join(project, '.claude', 'skills', 'b-skill', 'SKILL.md'), skillMd('b-skill') + '\nMy own.\n');
+
+    const pushed = run(['push', '--all']);
+
+    expect(pushed.output).toContain('No new or modified resources to push');
+    expect(pushedFiles()).toEqual([]);
+  });
+
+  it.each([
     { label: '--role', flags: (_skillPath: string) => ['--role', 'platform'] },
     { label: '--project', flags: (_skillPath: string) => ['--project', 'platform'] },
     { label: '--skill with --role', flags: (skillPath: string) => ['--skill', skillPath, '--role', 'platform'] },

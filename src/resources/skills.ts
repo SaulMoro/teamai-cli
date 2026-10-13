@@ -15,6 +15,7 @@ import {
   loadRolesManifest, resolveRoleResourceNamespaces, RolesManifestNotFoundError, type RolesManifest,
 } from '../roles.js';
 import { loadProjectsManifest, resolveProjectResourceNamespaces } from '../projects.js';
+import { deliversEveryNamespace } from '../resource-namespaces.js';
 import { assertSafeFallbackNamespaces } from '../manifest-schema.js';
 import { assertWithinRoot, resolveReal } from '../utils/path-safety.js';
 import { openPrDestinations, recordedNamespace } from '../utils/pending-push.js';
@@ -446,8 +447,9 @@ async function resolveSkillNamespaces(localConfig: LocalConfig): Promise<string[
  * (`resolveSkillNamespaces`, legacy fallbacks included), then those of the
  * active projects, the same union pull delivers from. Without the project
  * half, a project skill was pushable only through legacy mode's first-match
- * scan, which can pick another project's skill of the same name. Null when no
- * role or active project scopes this directory, so every namespace is given.
+ * scan, which can pick another project's skill of the same name. Null only
+ * when pull delivers every namespace here (`deliversEveryNamespace`); a team
+ * with projects and none active gets the role half, as pull delivers it.
  * When the active projects cannot be resolved this is the role half alone,
  * never null: an unscoped scan would match a local skill to any project's
  * skill of its name. Push without `--role` or `--project` stops before that.
@@ -455,7 +457,10 @@ async function resolveSkillNamespaces(localConfig: LocalConfig): Promise<string[
 export async function resolvePushSkillNamespaces(localConfig: LocalConfig): Promise<string[] | null> {
   const roleNamespaces = await resolveSkillNamespaces(localConfig);
   const activeProjects = localConfig.projects ?? [];
-  if (activeProjects.length === 0) return roleNamespaces.length > 0 ? roleNamespaces : null;
+  if (activeProjects.length === 0) {
+    if (roleNamespaces.length === 0 && await deliversEveryNamespace(localConfig)) return null;
+    return roleNamespaces;
+  }
   const manifest = await loadProjectsManifest(localConfig.repo.localPath);
   if (!manifest) return roleNamespaces;
   let projectNamespaces: string[];
