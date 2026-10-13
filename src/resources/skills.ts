@@ -967,7 +967,7 @@ export class SkillsHandler extends ResourceHandler {
           continue;
         }
         if (destination.kind === 'outOfScope') {
-          warnOutOfScope(dir, destination.candidates, localConfig.repo.localPath);
+          if (physicalPath !== options?.requestedSkillPath) warnOutOfScope(dir, destination.candidates, localConfig.repo.localPath);
           continue;
         }
         if (destination.kind === 'ambiguousOpenPr') {

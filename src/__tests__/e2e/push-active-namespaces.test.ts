@@ -959,7 +959,13 @@ describe('push --skill refuses a copy its record does not tie to a team skill', 
 
     expect(pushed.code, pushed.output).toBe(2);
     expect(pushed.output).toContain('no record of delivering this copy from skills/svc-b/b-skill');
+    expect(pushed.output).not.toContain('Skipped b-skill');
     expect(pushedFiles()).toEqual([]);
+
+    const named = run(['push', '--all', '--skill', path.join(project, '.claude', 'skills', 'b-skill'), '--role', 'svc-b']);
+
+    expect(named.output).not.toContain('Skipped b-skill');
+    expect(pushedFiles(), named.output).toEqual(expect.arrayContaining(['skills/svc-b/b-skill/SKILL.md']));
   });
 
   it('does not overwrite a skill recreated after a merge deletion', () => {
