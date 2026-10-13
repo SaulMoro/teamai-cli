@@ -2262,6 +2262,8 @@ async function reconcileTargets(
   }
 
   let teamDefs: McpServerDef[] = [];
+  // The servers a workspace holds back (#913): each tool keeps what it has installed for them.
+  let held = new Set<string>();
   if (!removeAll) {
     // A file that does not parse, or a server name defined twice, keeps every
     // installed server as it is: reconciling to an empty set would remove them.
@@ -2269,6 +2271,7 @@ async function reconcileTargets(
     reportEntryResolution(resolution);
     if (resolution.kind === 'failed') return { changes, wrote, unresolved: true };
     teamDefs = resolution.entries.map((entry) => teamMcpToDef(entry.entry));
+    held = new Set(resolution.held);
   }
   if (!removeAll && teamDefs.length > 0 && !sharing.autoApply) {
     log.info(`${teamDefs.length} team MCP server(s) available. Run \`teamai mcp inject\` to apply.`);
@@ -2317,7 +2320,11 @@ async function reconcileTargets(
   // so every sharer works from the union of their desired sets.
   const desiredOf = new Map<McpTarget, ReturnType<typeof desiredMcpForTarget>>();
   const live = targets.filter((t) => removeAll || !mcpTargetExcluded(localConfig, t));
-  for (const target of live) desiredOf.set(target, desiredMcpForTarget(target, teamDefs, desiredContext));
+  for (const target of live) {
+    const desired = desiredMcpForTarget(target, teamDefs, desiredContext);
+    for (const name of held) desired.kept.add(name);
+    desiredOf.set(target, desired);
+  }
   for (const target of live) {
     const mine = desiredOf.get(target)!;
     for (const other of live) {
@@ -2338,7 +2345,19 @@ async function reconcileTargets(
     // Which of this team's servers apply to this tool, and in what rendered form.
     const { desired, skipped, kept } = desiredOf.get(resolved)!;
     changes.push(...skipped);
-    const judge = judgeUnrecordedMcpEntry(localConfig, resolved, desired, desiredContext.vars, await claimedByOtherTools(claimTargets, resolved, manifest), history);
+    // Whose an unrecorded entry is in each file this run reads for the tool. A held server's is not
+    // this run's to judge (#913): an entry of it whose record was lost stays where it is, except one
+    // equal to the entry a held move brings to that file, which is adopted as a relocation adopts one.
+    const judgeIn = async (
+      t: McpTarget,
+      { moved = new Map(), others }: { moved?: ReadonlyMap<string, DesiredMcpEntry>; others?: ReadonlySet<string> } = {},
+    ): Promise<McpEntryJudge> => {
+      const otherTools = others ?? await claimedByOtherTools(claimTargets, t, manifest);
+      const judgeHere = judgeUnrecordedMcpEntry(localConfig, t, desired, desiredContext.vars, new Set([...otherTools, ...held]), history);
+      return async (name, entry) => !otherTools.has(name) && moved.has(name) && isDeepStrictEqual(moved.get(name)?.entry, entry)
+        ? 'teamai' : judgeHere(name, entry);
+    };
+    const judge = await judgeIn(resolved);
     // A file an earlier teamai created that hides a later one, holding only teamai's servers, is left (#993).
     const leaving = removeAll ? null : await leaveFormerMcpFile(resolved, manifest[manifestKey] ?? [], judge);
     const target = leaving ? { ...resolved, file: leaving.next } : resolved;
@@ -2346,13 +2365,17 @@ async function reconcileTargets(
     // Records of servers in another file the tool does not read (#993) are moved out of it below.
     const { owned, elsewhere } = await splitByFile(target, records);
     const ownedNames = new Set(owned.map((r) => r.name));
+    const moving = removeAll ? new Map<string, DesiredMcpEntry>()
+      : await heldMcpEntriesToMove(teamConfig, localConfig, target, held, manifest, elsewhere.filter((r) => !ownedNames.has(r.name)), history);
     const nextRecords: ManagedMcpRecord[] = [];
     // Their old records, so a manifest this run writes still claims them.
     const keep = new Map(owned.filter((r) => kept.has(r.name)).map((r) => [r.name, r]));
 
     // A resolved value lands only in a file git leaves out of a commit (#882).
-    // Otherwise the file stays as it was, its manifest entry with it.
-    if (carriesResolvedValue(target, teamDefs, desired.keys())) {
+    // Otherwise the file stays as it was, its manifest entry with it. A held
+    // server moved as installed holds one when its record says so (#913).
+    if (carriesResolvedValue(target, teamDefs, desired.keys())
+      || (target.projectScope && !target.projectKey && [...moving.values()].some((entry) => entry.resolvedValue))) {
       const exclusion = exclusions.get(target.file) ?? await ensureExcludedFromGit(target.file, { dryRun: options.dryRun });
       exclusions.set(target.file, exclusion);
       if (exclusion.kind === 'failed') {
@@ -2373,7 +2396,8 @@ async function reconcileTargets(
 
     const wroteTarget = target.format === 'codex'
       ? await applyCodex(target, desired, keep, ownedNames, nextRecords, changes, judge, options, restoreConfigs)
-      : await applyJson(target, desired, keep, owned, ownedNames, nextRecords, changes, judge, options, restoreConfigs);
+      : await applyJson(target, moving.size > 0 ? new Map([...desired, ...moving]) : desired, keep, owned, ownedNames, nextRecords, changes,
+        moving.size > 0 ? await judgeIn(target, { moved: moving }) : judge, options, restoreConfigs);
     if (wroteTarget) {
       written.add(target.file);
       // A project config a pull leaves with no team server goes, as one a cleanup empties.
@@ -2387,24 +2411,26 @@ async function reconcileTargets(
       unparsed = true;
       continue;
     }
+    // A held server leaves where it was installed only once this file holds it under a record (#913):
+    // another entry of that name here is the member's, and the server stays where it is, with its record.
+    const blocked = new Set([...moving].filter(([name, { hash }]) => !nextRecords.some((r) => r.name === name && r.hash === hash)).map(([name]) => name));
+    const leavingElsewhere = elsewhere.filter((r) => !blocked.has(r.name));
     if (target.mappedFile && target.tool === 'opencode') {
       const other = target.file === target.mappedFile ? opencodeMcpFile(resolveToolBaseDir('opencode', localConfig)) : target.mappedFile;
-      const judgeOther = judgeUnrecordedMcpEntry(localConfig, { ...target, file: other }, desired, desiredContext.vars,
-        await claimedByOtherTools(claimTargets, { ...target, file: other }, manifest), history);
-      wrote = await moveOpencodeServers(target, other, elsewhere, nextRecords, changes, judgeOther, options, restoreConfigs) || wrote;
+      wrote = await moveOpencodeServers(target, other, leavingElsewhere, nextRecords, changes, await judgeIn({ ...target, file: other }), options, restoreConfigs) || wrote;
     } else if (target.mappedFile) {
       for (const record of nextRecords) record.file = target.file;
       // Each file is judged with the records of the tools that write it: a lookup file may link to another tool's.
-      const judgeFor = async (file: string): Promise<McpEntryJudge> => judgeUnrecordedMcpEntry(
-        localConfig, resolved, desired, desiredContext.vars, await claimedByOtherTools(claimTargets, { ...resolved, file }, manifest), history);
-      const moved = await removeFromOtherFiles(target, elsewhere, nextRecords, changes, judgeFor, options, restoreConfigs, leaving?.former);
+      const judgeFor = (file: string): Promise<McpEntryJudge> => judgeIn({ ...resolved, file });
+      const moved = await removeFromOtherFiles(target, leavingElsewhere, nextRecords, changes, judgeFor, options, restoreConfigs, leaving?.former);
       wrote = moved || wrote;
       if (leaving) {
         const names: string[] = [];
-        for (const r of elsewhere) if (await sameMcpFile(recordedFileOf(target, r), leaving.former)) names.push(r.name);
+        for (const r of leavingElsewhere) if (await sameMcpFile(recordedFileOf(target, r), leaving.former)) names.push(r.name);
         wrote = await deleteLeftMcpFile(target, leaving.former, names, options, restoreConfigs) || wrote;
       }
     }
+    nextRecords.push(...elsewhere.filter((r) => blocked.has(r.name)));
 
     // The unnoted mark stays until a note of what else is in the file lands.
     const marked = manifest[manifestKey]?.some((record) => record.unnoted) ?? false;
@@ -2412,7 +2438,7 @@ async function reconcileTargets(
     // needing one, what this pull wrote still does (#882).
     if (target.projectScope) {
       for (const record of nextRecords) {
-        record.resolved ??= carriesResolvedValue(target, teamDefs, [record.name]);
+        record.resolved ??= moving.get(record.name)?.resolvedValue || carriesResolvedValue(target, teamDefs, [record.name]);
         if (marked) record.unnoted = true;
         else delete record.unnoted;
       }
@@ -2429,7 +2455,7 @@ async function reconcileTargets(
     // The tool's other place for them (#915): what teamai wrote there goes, as sharing.gitExclude moved them.
     if (LOCAL_SCOPE_MCP_TOOLS[target.tool] && target.projectScope) {
       wrote = await leaveMcpLocation(teamConfig, localConfig, target, {
-        desired, kept, manifest, claimTargets, changes, vars: desiredContext.vars, history, options, restoreConfigs,
+        kept: new Set([...kept].filter((name) => !moving.has(name) || blocked.has(name))), manifest, claimTargets, changes, judgeIn, options, restoreConfigs,
       }) || wrote;
       // CodeBuddy's local scope of a worktree that is gone (#915).
       if (target.tool === 'codebuddy') {
@@ -2752,7 +2778,8 @@ function movedBecause(teamConfig: TeamaiConfig, localConfig: LocalConfig, active
   if (active.projectKey) {
     return isGitExcludeEnabled(localConfig, teamConfig) ? 'with sharing.gitExclude on, ' : 'in a workspace with children, so that a session in a child does not load them, ';
   }
-  if (!isGitExcludeEnabled(localConfig, teamConfig)) return 'with sharing.gitExclude off, ';
+  // In a workspace with children the servers come back for a tool that reads `.mcp.json`, whatever git exclude says (#913).
+  if (!isGitExcludeEnabled(localConfig, teamConfig) && !hasWorkspaceChildren(localConfig)) return 'with sharing.gitExclude off, ';
   return isSelfMode(localConfig) ? 'in a single-repo team, where each worktree has its own servers, ' : '';
 }
 
@@ -2774,14 +2801,13 @@ async function leaveMcpLocation(
   localConfig: LocalConfig,
   active: McpTarget,
   ctx: {
-    desired: ReadonlyMap<string, DesiredMcpEntry>;
     kept: ReadonlySet<string>;
     manifest: ManagedMcpManifest;
     /** Every tool mapping a file, detected or not: whose entries it holds (#993). */
     claimTargets: readonly McpTarget[];
     changes: McpChange[];
-    vars: Record<string, string>;
-    history: () => Promise<TeamMcpHistory>;
+    /** The judge of a file for this run, with the names other tools' records there claim. */
+    judgeIn: (t: McpTarget, claims: { others: ReadonlySet<string> }) => Promise<McpEntryJudge>;
     options: McpReconcileOptions;
     restoreConfigs: Map<string, () => Promise<void>>;
   },
@@ -2804,7 +2830,7 @@ async function leaveMcpLocation(
   }
   const owned = (records ?? []).filter((record) => !claimed.has(record.name) && (ctx.options.removeAll || !edited.includes(record)));
   const keep = new Map(ctx.options.removeAll ? [] : owned.filter((r) => ctx.kept.has(r.name)).map((r) => [r.name, r]));
-  const judge = judgeUnrecordedMcpEntry(localConfig, other, ctx.desired, ctx.vars, claimed, ctx.history);
+  const judge = await ctx.judgeIn(other, { others: claimed });
   const next: ManagedMcpRecord[] = [];
   const removed: McpChange[] = [];
   const wrote = await applyJson(other, new Map(), keep, owned, new Set(owned.map((r) => r.name)), next, removed, judge, ctx.options, ctx.restoreConfigs);
@@ -2819,6 +2845,64 @@ async function leaveMcpLocation(
     + `out of ${describeMcpLocation(other)}: ${movedBecause(teamConfig, localConfig, active)}`
     + `${LOCAL_SCOPE_MCP_TOOLS[active.tool]} reads them from ${describeMcpLocation(active)}.`);
   return wrote && !other.projectKey ? await deleteEmptiedMcpFile(other.file) || wrote : wrote;
+}
+
+/**
+ * The held servers (#913) teamai installed where `active`'s tool does not
+ * read them now, unchanged since, as installed, so they move to `active.file`
+ * as the servers the workspace delivers do: those its records `elsewhere`
+ * place in another file of the tool (OpenCode's two project files, #915), and
+ * for Claude and CodeBuddy those in their other place: their local scope in a
+ * workspace with children, so that a session in a child does not load them,
+ * and the project's `.mcp.json` again once a file reader (Muse Code, tclaude)
+ * or self mode puts them there.
+ */
+async function heldMcpEntriesToMove(
+  teamConfig: TeamaiConfig,
+  localConfig: LocalConfig,
+  active: McpTarget,
+  held: ReadonlySet<string>,
+  manifest: ManagedMcpManifest,
+  elsewhere: readonly ManagedMcpRecord[],
+  history: () => Promise<TeamMcpHistory>,
+): Promise<Map<string, DesiredMcpEntry>> {
+  const moving = new Map<string, DesiredMcpEntry>();
+  if (held.size === 0) return moving;
+  const add = async (record: ManagedMcpRecord, installed: Map<string, unknown> | null, fromLocalScope = false): Promise<void> => {
+    const entry = installed?.get(record.name);
+    if (held.has(record.name) && entry !== undefined && entryHash(entry) === record.hash) {
+      // A local scope's record never notes a resolved value: git sees no file there. Into the project's
+      // file, the entry is judged as a delivery is, by the server's definitions, now and before.
+      const resolvedValue = record.resolved === true || (fromLocalScope && await definedWithResolvedValue(active, record.name, history));
+      moving.set(record.name, { entry, hash: record.hash, resolvedValue });
+    }
+  };
+  for (const record of elsewhere.filter((r) => held.has(r.name))) {
+    await add(record, await installedMcpEntries({ ...active, file: recordedFileOf(active, record) }));
+  }
+  if (!active.projectScope || !LOCAL_SCOPE_MCP_TOOLS[active.tool]) return moving;
+  const places = await projectMcpLocations(teamConfig, localConfig, active.tool);
+  if (!places) return moving;
+  const other = active.projectKey ? places.tree : places.local;
+  const installed = await installedMcpEntries(other);
+  for (const record of manifest[mcpManifestKey(other)] ?? []) await add(record, installed, other.projectKey !== undefined);
+  return moving;
+}
+
+/**
+ * Whether a definition of `name` the team has now or had (its MCP history)
+ * needs a resolved `${VAR}` in `target`'s file (`carriesResolvedValue`). A
+ * history that cannot be read counts as yes.
+ */
+async function definedWithResolvedValue(target: McpTarget, name: string, history: () => Promise<TeamMcpHistory>): Promise<boolean> {
+  const versions = await history();
+  if (versions === null) return true;
+  const file = entryLayout('mcp').file;
+  return versions.some((version) => path.posix.basename(version.path) === file
+    && (parseTeamMcpServers(version.content.toString('utf8')) ?? []).some((server) => {
+      const def = teamMcpToDef(server);
+      return def.name === name && mcpTargetTakes(target, server.tools) && carriesResolvedValue(target, [def], [name]);
+    }));
 }
 
 /**

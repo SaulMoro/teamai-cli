@@ -321,6 +321,19 @@ describe('delivered selection of a workspace with children', () => {
     expect(desired.kind === 'resolved' && desired.held).toEqual([]);
   });
 
+  it('does not say it keeps a copy of a held skill the workspace excludes', async () => {
+    skill(repo, 'svc-a', 'differs', 'version a\n');
+    skill(repo, 'svc-b', 'differs', 'version b\n');
+    repoChild(path.join(ws, 'svc-a'), { projects: ['svc-a'] });
+    repoChild(path.join(ws, 'svc-b'), { projects: ['svc-b'] });
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    const delivered = await readWorkspaceChildren({ ...workspace, excludedSkills: ['differs'] });
+
+    await resolveDesiredSkills(teamConfig, delivered, await buildRolePullContext(delivered));
+
+    expect(warn.mock.calls.flat().join('\n')).not.toContain('Skill "differs" differs');
+  });
+
   it('names every child source of a skill it excludes, and none for a scope without children', async () => {
     skill(repo, 'svc-a', 'differs', 'version a\n');
     skill(repo, 'svc-b', 'differs', 'version b\n');
@@ -409,8 +422,27 @@ describe('delivered selection of a workspace with children', () => {
       'db mcp/svc-a/mcp.yaml',
       'shared mcp/svc-b/mcp.yaml',
     ]);
+    expect(resolution.held).toEqual(['cache']);
     expect(resolution.notices.map((notice) => notice.message).join('\n'))
       .toContain('server "cache" differs between mcp/svc-a/mcp.yaml and mcp/svc-b/mcp.yaml');
+  });
+
+  it('neither holds back nor names an MCP server the workspace excludes', async () => {
+    const manifest = YAML.parse(fs.readFileSync(path.join(repo, 'manifest', 'projects.yaml'), 'utf8'));
+    for (const project of manifest.projects) project.resources.mcp = [project.id];
+    fs.writeFileSync(path.join(repo, 'manifest', 'projects.yaml'), YAML.stringify(manifest));
+    for (const [namespace, url] of [['svc-a', 'https://cache-a.example.com'], ['svc-b', 'https://cache-b.example.com']]) {
+      fs.mkdirSync(path.join(repo, 'mcp', namespace), { recursive: true });
+      fs.writeFileSync(path.join(repo, 'mcp', namespace, 'mcp.yaml'), `servers:\n  - { name: cache, transport: http, url: ${url} }\n`);
+    }
+    repoChild(path.join(ws, 'svc-a'), { projects: ['svc-a'] });
+    repoChild(path.join(ws, 'svc-b'), { projects: ['svc-b'] });
+
+    const resolution = await resolveEntriesFor(mcpEntryReader, await readWorkspaceChildren({ ...workspace, excludedSkills: ['cache'] }));
+
+    expect(resolution.kind === 'resolved' && resolution.notices.map((notice) => notice.message).join('\n'))
+      .not.toContain('server "cache" differs');
+    expect(resolution.kind === 'resolved' && resolution.held).toEqual([]);
   });
 });
 

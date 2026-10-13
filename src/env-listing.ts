@@ -50,6 +50,8 @@ export function envListing(teamEnv: TeamEnv, options: { reveal?: boolean; verbos
   const secretKeys = declaredSecretKeys(declarations) ?? new Set<string>();
   // What shells, MCP and `env exec` receive: the project's variables and those it inherits from the user scope.
   const inherited = new Set(teamEnv.inheritedVariables);
+  // A key a workspace holds back (#913) has the value its last pull installed, which records no file or description.
+  const held = new Set(variables.kind === 'resolved' ? variables.held ?? [] : []);
   const received = effectiveTeamEnvVariables(teamEnv).filter((variable) => !secretKeys.has(variable.name) && !isReservedTeamEnvKey(variable.name));
   const lines: EnvListingLine[] = [];
   const line = (text: string): void => { lines.push({ text, detail: false }); };
@@ -70,7 +72,8 @@ export function envListing(teamEnv: TeamEnv, options: { reveal?: boolean; verbos
     line('');
     for (const variable of received) {
       const isInherited = inherited.has(variable);
-      const origin = `(${isInherited ? 'user scope' : describeOrigin(variable)})`;
+      const isHeld = !isInherited && held.has(variable.name);
+      const origin = `(${isInherited ? 'user scope' : isHeld ? 'held back' : describeOrigin(variable)})`;
       // Each part by its own scope's state, as `env exec` applies it (`appliedTeamEnv`):
       // what its last pull wrote while its own env can't be resolved, by name only.
       const values = isInherited ? teamEnv.inheritedValues : variableValues;
@@ -82,7 +85,8 @@ export function envListing(teamEnv: TeamEnv, options: { reveal?: boolean; verbos
         const resolved = values.values.get(variable.name);
         const value = resolved?.value ?? variable.entry.value;
         revealed ||= options.reveal === true;
-        line(`  ${variable.name}=${options.reveal ? value : maskEnvValue(value)}  ${resolved?.source ?? 'env.yaml'}  ${origin}`);
+        const source = resolved?.source ?? 'env.yaml';
+        line(`  ${variable.name}=${options.reveal ? value : maskEnvValue(value)}  ${isHeld && source === 'env.yaml' ? 'installed' : source}  ${origin}`);
         if (!inherited.has(variable)) stale(variable.name, 'env variable');
       }
       detail(variable.entry.description);

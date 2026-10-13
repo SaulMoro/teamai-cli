@@ -207,6 +207,12 @@ export interface EntryReader<E> {
   read(absolutePath: string, relativePath: string): Promise<EntryFileRead<E> | null>;
   nameOf(entry: E): string;
   scopeOf(entry: E): EntryScopeKeys;
+  /**
+   * The part of an entry that decides what is delivered, when not all of it
+   * does. A workspace whose members' entries of one name agree on it delivers
+   * the first and names the difference, instead of holding the name back (#913).
+   */
+  delivered?(entry: E): unknown;
 }
 
 export interface ResolvedEntry<E> {
@@ -254,6 +260,12 @@ export type EntryResolution<E> =
     readonly notices: readonly EntryNotice[];
     /** Names repeated in the root file; only legacy mode lets one through. */
     readonly repeated: readonly string[];
+    /**
+     * The names a workspace with children holds back (#913): its members
+     * define them differently. Each type's delivery leaves what is installed
+     * for them as it is. Absent outside such a workspace.
+     */
+    readonly held?: readonly string[];
   }
   | { readonly kind: 'failed'; readonly failure: EntryFailure; readonly notices: readonly EntryNotice[] };
 
@@ -300,7 +312,7 @@ export async function resolveEntries<E>(
   active: readonly string[] | null,
 ): Promise<EntryResolution<E>> {
   const members = await deliveredMembers(localConfig);
-  if (members) return resolveWorkspaceEntries(reader, members);
+  if (members) return resolveWorkspaceEntries(reader, localConfig, members);
   const { type } = reader;
   const layout = asLayout(reader.layout ?? type);
   const repoPath = localConfig.repo.localPath;
@@ -409,13 +421,17 @@ export async function resolveEntries<E>(
  * A workspace's entries of one type (#913): each member's, in that member's
  * namespaces, unioned by name. A name every member that delivers it defines
  * the same way is delivered once, from the first; a name whose definitions
- * differ is not delivered, and a notice names both files. An MCP server a
- * member excludes does not come through that member, so the workspace
- * delivers it while another member does (its own exclusions apply after).
- * A member whose files fail stops the type, as it would in that member's
- * own scope.
+ * differ is held back (`held`) and a notice names both files: each type's
+ * delivery leaves what is installed for it as it is. An MCP server a member
+ * excludes does not come through that member, so the workspace delivers it
+ * while another member does (its own exclusions apply after). A member whose
+ * files fail stops the type, as it would in that member's own scope.
  */
-async function resolveWorkspaceEntries<E>(reader: EntryReader<E>, members: readonly LocalConfig[]): Promise<EntryResolution<E>> {
+async function resolveWorkspaceEntries<E>(
+  reader: EntryReader<E>,
+  workspace: LocalConfig,
+  members: readonly LocalConfig[],
+): Promise<EntryResolution<E>> {
   const layout = asLayout(reader.layout ?? reader.type);
   const perMember: Array<Array<{ name: string; entries: ResolvedEntry<E>[] }>> = [];
   const notices = new Map<string, EntryNotice>();
@@ -434,15 +450,29 @@ async function resolveWorkspaceEntries<E>(reader: EntryReader<E>, members: reado
     for (const name of resolution.repeated) repeated.add(name);
     actives.push(resolution.active);
   }
+  const same = (a: { entries: ResolvedEntry<E>[] }, b: { entries: ResolvedEntry<E>[] }, part: (entry: E) => unknown): boolean =>
+    isDeepStrictEqual(a.entries.map((entry) => part(entry.entry)), b.entries.map((entry) => part(entry.entry)));
   const { items, held } = await unionMemberItems({
     perMember,
     nameOf: (group) => group.name,
-    sameContent: (a, b) => isDeepStrictEqual(a.entries.map((entry) => entry.entry), b.entries.map((entry) => entry.entry)),
+    sameContent: (a, b) => {
+      if (same(a, b, (entry) => entry)) return true;
+      if (!reader.delivered || !same(a, b, reader.delivered)) return false;
+      const message = `${layout.label}: ${layout.noun} "${a.name}" is described differently in ${a.entries[0]?.source} and ${b.entries[0]?.source}; `
+        + 'this workspace shows the first. Make the two equal in the team repo.';
+      notices.set(message, { kind: 'file-note', message });
+      return true;
+    },
   });
+  // The workspace's own MCP exclusions remove a name whatever its members ship, so it is neither held nor named.
+  const workspaceExcluded = new Set(reader.type === 'mcp' ? workspace.excludedSkills ?? [] : []);
+  const heldNames: string[] = [];
   for (const { name, first, second } of held) {
+    if (workspaceExcluded.has(name)) continue;
     const message = `${layout.label}: ${layout.noun} "${name}" differs between ${first.entries[0]?.source} and ${second.entries[0]?.source}, `
-      + 'so this workspace does not deliver it. Make the two definitions equal in the team repo, or rename one.';
+      + 'so this workspace holds it back; an installed copy is kept. Make the two definitions equal in the team repo, or rename one.';
     notices.set(message, { kind: 'file-note', message });
+    heldNames.push(name);
   }
   const known = actives.filter((active): active is readonly string[] => active !== null);
   return {
@@ -451,6 +481,7 @@ async function resolveWorkspaceEntries<E>(reader: EntryReader<E>, members: reado
     active: known.length === 0 ? null : [...new Set(known.flat())],
     notices: [...notices.values()],
     repeated: [...repeated],
+    held: heldNames,
   };
 }
 

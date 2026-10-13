@@ -5,6 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
+import { getTeamSecretsPath } from '../../secret-store.js';
+import { projectSlug } from '../../utils/partition.js';
 
 // ─── A workspace delivers what the repos inside it select (#913) ────────────
 //
@@ -373,5 +375,895 @@ describe('a workspace delivers what the repos inside it select (#913)', () => {
     expect(inject.code, inject.output).toBe(0);
     expect(claudeHooks()).toContain('svc-b-check-913');
   });
+
+  it('keeps the installed copy of an agent two children ship differently, and names it', async () => {
+    const seed = path.join(sandbox, 'seed-team');
+    const publish = (message: string): void => {
+      git(['add', '-A'], seed);
+      git(['commit', '-q', '-m', message], seed);
+      git(['push', '-q', path.join(sandbox, 'team.git'), 'main'], seed);
+    };
+    const teamAgent = (namespace: string, body: string): void => {
+      fs.mkdirSync(path.join(seed, 'agents', namespace), { recursive: true });
+      fs.writeFileSync(path.join(seed, 'agents', namespace, 'reviewer.yaml'), `name: reviewer\ndescription: Review changes\ninstructions: ${body}\n`);
+    };
+    teamAgent('svc-a', 'Review as svc-a does.');
+    publish('a reviewer agent for svc-a');
+    expect((await run(['pull'], ws)).code).toBe(0);
+    const installed = path.join(ws, '.claude', 'agents', 'reviewer.md');
+    const before = fs.readFileSync(installed, 'utf8');
+    expect(before).toContain('Review as svc-a does.');
+
+    teamAgent('svc-b', 'Review as svc-b does.');
+    publish('svc-b ships its own reviewer');
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('Agent "reviewer" differs between agents/svc-b/reviewer.yaml and agents/svc-a/reviewer.yaml, so this workspace holds it back; an installed copy is kept.');
+    expect(fs.readFileSync(installed, 'utf8')).toBe(before);
+  });
+
+  it('keeps the installed MCP server two children define differently, and names it', async () => {
+    const seed = path.join(sandbox, 'seed-team');
+    const publish = (message: string): void => {
+      git(['add', '-A'], seed);
+      git(['commit', '-q', '-m', message], seed);
+      git(['push', '-q', path.join(sandbox, 'team.git'), 'main'], seed);
+    };
+    const teamServer = (namespace: string, url: string): void => {
+      fs.mkdirSync(path.join(seed, 'mcp', namespace), { recursive: true });
+      fs.writeFileSync(path.join(seed, 'mcp', namespace, 'mcp.yaml'), `servers:\n  - { name: svc-api, transport: http, url: ${url} }\n`);
+    };
+    const manifest = YAML.parse(fs.readFileSync(path.join(seed, 'manifest', 'projects.yaml'), 'utf8'));
+    for (const project of manifest.projects) project.resources.mcp = [project.id];
+    fs.writeFileSync(path.join(seed, 'manifest', 'projects.yaml'), YAML.stringify(manifest));
+    teamServer('svc-a', 'https://svc-a.example.com/mcp');
+    publish('an MCP server for svc-a');
+    expect((await run(['pull'], ws)).code).toBe(0);
+    const installed = (): unknown => JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')).projects?.[ws]?.mcpServers?.['svc-api'];
+    expect(installed()).toMatchObject({ url: 'https://svc-a.example.com/mcp' });
+
+    teamServer('svc-b', 'https://svc-b.example.com/mcp');
+    publish('svc-b defines its own svc-api');
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('mcp: server "svc-api" differs between mcp/svc-b/mcp.yaml and mcp/svc-a/mcp.yaml, so this workspace holds it back; an installed copy is kept.');
+    expect(result.output).not.toMatch(/MCP: \d+ change/);
+    expect(installed()).toMatchObject({ url: 'https://svc-a.example.com/mcp' });
+  });
+
+  // Each case below pulls, then runs a normal command, and checks that the
+  // command keeps or shows what the pull delivered.
+
+  const publish = (message: string, edit: (seed: string) => void): void => {
+    const seed = path.join(sandbox, 'seed-team');
+    edit(seed);
+    git(['add', '-A'], seed);
+    git(['commit', '-q', '-m', message], seed);
+    git(['push', '-q', path.join(sandbox, 'team.git'), 'main'], seed);
+  };
+  const selectNamespaces = (seed: string, type: string): void => {
+    const file = path.join(seed, 'manifest', 'projects.yaml');
+    const manifest = YAML.parse(fs.readFileSync(file, 'utf8'));
+    for (const project of manifest.projects) project.resources[type] = [project.id];
+    fs.writeFileSync(file, YAML.stringify(manifest));
+  };
+  const claudeLocalServer = (name: string): unknown =>
+    JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')).projects?.[ws]?.mcpServers?.[name];
+
+  it('keeps the children\'s MCP servers in Claude\'s local scope when the workspace runs mcp inject', async () => {
+    const before = claudeLocalServer('svc-api');
+    expect(before).toMatchObject({ url: 'https://svc-a.example.com/mcp' });
+
+    const result = await run(['mcp', 'inject'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(claudeLocalServer('svc-api')).toEqual(before);
+    expect(fs.existsSync(path.join(ws, '.mcp.json'))).toBe(false);
+  });
+
+  it('lists and runs with the env a child selects, as the workspace\'s pull installed it', async () => {
+    publish('an env variable for svc-a', (seed) => {
+      selectNamespaces(seed, 'env');
+      fs.mkdirSync(path.join(seed, 'env', 'svc-a'), { recursive: true });
+      fs.writeFileSync(path.join(seed, 'env', 'svc-a', 'env.yaml'), 'variables:\n  - key: WS_CHILD_ENDPOINT\n    value: https://child.example.com\n');
+    });
+    const pull = await run(['pull'], ws);
+    expect(pull.code, pull.output).toBe(0);
+    expect(fs.readFileSync(path.join(ws, '.teamai', 'env.sh'), 'utf8')).toContain('WS_CHILD_ENDPOINT');
+
+    const list = await run(['env', 'list'], ws);
+    const exec = await run(['env', 'exec', '--', 'node', '-e', 'console.log(process.env.WS_CHILD_ENDPOINT ?? "MISSING")'], ws);
+
+    expect(list.output).toContain('WS_CHILD_ENDPOINT');
+    expect(exec.output).toContain('https://child.example.com');
+  });
+
+  it('lists the model profile a child selects, which the workspace\'s pull announced', async () => {
+    publish('a model profile for svc-a', (seed) => {
+      selectNamespaces(seed, 'models');
+      fs.mkdirSync(path.join(seed, 'models', 'svc-a'), { recursive: true });
+      fs.writeFileSync(path.join(seed, 'models', 'svc-a', 'models.yaml'), YAML.stringify({
+        profiles: [{ id: 'child-model', name: 'Child model', base_url: 'https://models.example.com', api_key: '${API_KEY}', model_groups: [{ protocols: ['anthropic'], models: ['child-llm'] }] }],
+      }));
+    });
+    const pull = await run(['pull'], ws);
+    expect(pull.code, pull.output).toBe(0);
+    expect(pull.output).toContain('1 team model profile(s) available');
+
+    const list = await run(['models', 'list'], ws);
+
+    expect(list.output).toContain('team:child-model');
+  });
+
+  it('pushes an edit only to the namespaces that delivered it, not to an equal root skill', async () => {
+    publish('an equal skill at the root and in both services', (seed) => {
+      for (const namespace of ['', 'svc-a', 'svc-b']) {
+        fs.mkdirSync(path.join(seed, 'skills', namespace, 'catalog-twin'), { recursive: true });
+        fs.writeFileSync(path.join(seed, 'skills', namespace, 'catalog-twin', 'SKILL.md'), '---\nname: catalog-twin\ndescription: fixture\n---\n\nThe same skill.\n');
+      }
+    });
+    expect((await run(['pull'], ws)).code).toBe(0);
+    fs.appendFileSync(path.join(ws, '.claude', 'skills', 'catalog-twin', 'SKILL.md'), '\nEdited in the workspace.\n');
+
+    const dryRun = await run(['push', '--dry-run'], ws);
+    expect(dryRun.output).toContain('to:   skills/svc-a/catalog-twin');
+    expect(dryRun.output).toContain('to:   skills/svc-b/catalog-twin');
+    const pushed = await run(['push', '--all'], ws);
+
+    expect(pushed.output).toContain('Pushed branch teamai/push/');
+    const bare = path.join(sandbox, 'team.git');
+    const branches = git(['for-each-ref', '--format=%(refname:short)', 'refs/heads/teamai/push/'], bare).split('\n').filter(Boolean);
+    const changed = branches.flatMap((branch) => git(['diff', '--name-only', 'main', branch], bare).split('\n'));
+    expect(changed).toContain('skills/svc-a/catalog-twin/SKILL.md');
+    expect(changed).not.toContain('skills/catalog-twin/SKILL.md');
+  });
+
+  it('does not deliver a held MCP server that no pull delivered, even one it excluded before', async () => {
+    publish('svc-a defines a server', (seed) => {
+      fs.writeFileSync(path.join(seed, 'mcp', 'svc-a', 'mcp.yaml'), 'servers:\n  - { name: never-shipped, transport: http, url: https://a.example.com }\n');
+      fs.writeFileSync(path.join(seed, 'mcp', 'svc-b', 'mcp.yaml'), 'servers: []\n');
+    });
+    expect((await run(['skill', 'exclude', 'add', 'never-shipped'], ws)).code).toBe(0);
+    expect((await run(['pull'], ws)).code).toBe(0);
+    expect(claudeLocalServer('never-shipped')).toBeUndefined();
+    publish('svc-b defines it differently', (seed) => {
+      fs.writeFileSync(path.join(seed, 'mcp', 'svc-b', 'mcp.yaml'), 'servers:\n  - { name: never-shipped, transport: http, url: https://b.example.com }\n');
+    });
+    expect((await run(['skill', 'exclude', 'remove', 'never-shipped'], ws)).code).toBe(0);
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('server "never-shipped" differs between');
+    expect(claudeLocalServer('never-shipped')).toBeUndefined();
+  });
+
+  it('does not deliver a held MCP server that allowedHosts kept out of every earlier pull', async () => {
+    publish('svc-a defines a server on a host the team does not allow', (seed) => {
+      fs.appendFileSync(path.join(seed, 'teamai.yaml'), 'sharing:\n  mcp:\n    allowedHosts: ["*.example.com"]\n');
+      fs.writeFileSync(path.join(seed, 'mcp', 'svc-a', 'mcp.yaml'), 'servers:\n  - { name: gated-host, transport: http, url: https://a.example.net }\n');
+    });
+    expect((await run(['pull'], ws)).code).toBe(0);
+    expect(claudeLocalServer('gated-host')).toBeUndefined();
+    publish('the team allows the host, and svc-b defines the server differently', (seed) => {
+      const file = path.join(seed, 'teamai.yaml');
+      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').replace('["*.example.com"]', '["*.example.com", "*.example.net"]'));
+      fs.writeFileSync(path.join(seed, 'mcp', 'svc-b', 'mcp.yaml'), 'servers:\n  - { name: gated-host, transport: http, url: https://b.example.net }\n');
+    });
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('server "gated-host" differs between');
+    expect(claudeLocalServer('gated-host')).toBeUndefined();
+  });
+
+  it('takes a held skill out once the workspace excludes it, when its copy equals the version of a child other than the first', async () => {
+    // As the first pull delivered it, which only svc-a, the second child, still ships.
+    const installed = path.join(ws, '.claude', 'skills', 'drift-tool', 'SKILL.md');
+    fs.copyFileSync(path.join(sandbox, 'seed-team', 'skills', 'svc-a', 'drift-tool', 'SKILL.md'), installed);
+    expect((await run(['skill', 'exclude', 'add', 'drift-tool'], ws)).code).toBe(0);
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(fs.existsSync(installed), result.output).toBe(false);
+    expect(result.output).not.toContain('Kept skill "drift-tool"');
+    expect(result.output).not.toContain('Skill "drift-tool" differs');
+    expect((await run(['skill', 'exclude', 'remove', 'drift-tool'], ws)).code).toBe(0);
+  });
+
+  it('takes a held skill out once the workspace excludes it, when its copy holds no change of the member\'s', async () => {
+    const installed = path.join(ws, '.claude', 'skills', 'drift-tool', 'SKILL.md');
+    fs.mkdirSync(path.dirname(installed), { recursive: true });
+    fs.copyFileSync(path.join(sandbox, 'seed-team', 'skills', 'svc-b', 'drift-tool', 'SKILL.md'), installed);
+    expect((await run(['skill', 'exclude', 'add', 'drift-tool'], ws)).code).toBe(0);
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(fs.existsSync(installed), result.output).toBe(false);
+    expect(result.output).not.toContain('Skill "drift-tool" differs');
+  });
+
+  it('keeps the workspace\'s hooks out of every checkout of a child, a linked worktree included', async () => {
+    publish('a workspace hook for Cursor', (seed) => {
+      fs.writeFileSync(path.join(seed, 'hooks', 'hooks.yaml'),
+        'hooks:\n  - id: ws-stop\n    description: Workspace stop hook\n    event: Stop\n    command: echo ws-hook-ran\n    tools: [cursor]\n');
+    });
+    const svcA = path.join(ws, 'svc-a');
+    const worktree = path.join(ws, 'svc-a-feature');
+    git(['worktree', 'add', '-q', '-b', 'feature', worktree], svcA);
+    fs.mkdirSync(path.join(home, '.cursor'), { recursive: true });
+    const configFile = path.join(ws, '.teamai', 'config.yaml');
+    fs.writeFileSync(configFile, YAML.stringify({ ...YAML.parse(fs.readFileSync(configFile, 'utf8')), enabledAgents: ['claude', 'cursor'] }));
+
+    const pull = await run(['pull'], ws);
+
+    expect(pull.code, pull.output).toBe(0);
+    expect(pull.output).toContain('[workspace] Workspace with 2 children: backend/svc-b, svc-a');
+    const stop: Array<{ command: string }> = JSON.parse(fs.readFileSync(path.join(home, '.cursor', 'hooks.json'), 'utf8')).hooks.stop;
+    const command = stop.find((entry) => entry.command.includes('ws-hook-ran'))!.command;
+    const runIn = (cwd: string): string => execFileSync('sh', ['-c', command], { cwd, encoding: 'utf8', env: { ...process.env, PWD: cwd } });
+    expect(runIn(ws)).toContain('ws-hook-ran');
+    expect(runIn(svcA)).toBe('');
+    expect(runIn(worktree)).toBe('');
+  });
+
+  it('takes back the workspace instruction excludes a child owns when the child is uninstalled', async () => {
+    const svcA = path.join(ws, 'svc-a');
+    const settings = path.join(svcA, '.claude', 'settings.local.json');
+    fs.writeFileSync(settings, JSON.stringify({ ...JSON.parse(fs.readFileSync(settings, 'utf8')), claudeMdExcludes: [
+      ...JSON.parse(fs.readFileSync(settings, 'utf8')).claudeMdExcludes, '/elsewhere/CLAUDE.md',
+    ] }, null, 2));
+
+    const result = await run(['uninstall', '--force'], svcA);
+
+    expect(result.code, result.output).toBe(0);
+    const excludes = fs.existsSync(settings) ? JSON.parse(fs.readFileSync(settings, 'utf8')).claudeMdExcludes : undefined;
+    expect(excludes).toEqual(['/elsewhere/CLAUDE.md']);
+  });
+  it('keeps one copy of the workspace\'s Cursor hook, gated out of a child added between pulls', async () => {
+    const cursorCommands = (): string[] => {
+      const hooks: Record<string, Array<{ command: string }>> = JSON.parse(fs.readFileSync(path.join(home, '.cursor', 'hooks.json'), 'utf8')).hooks;
+      return Object.values(hooks).flat().map((entry) => entry.command).filter((command) => command.includes('ws-hook-ran'));
+    };
+    expect((await run(['pull'], ws)).code).toBe(0);
+    expect(cursorCommands()).toHaveLength(1);
+    const late = path.join(ws, 'late-child');
+    const config = YAML.parse(fs.readFileSync(path.join(ws, '.teamai', 'config.yaml'), 'utf8'));
+    fs.mkdirSync(path.join(late, '.teamai'), { recursive: true });
+    fs.writeFileSync(path.join(late, '.teamai', 'config.yaml'), YAML.stringify({ ...config, projects: ['svc-b'] }));
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('late-child');
+    const commands = cursorCommands();
+    expect(commands).toHaveLength(1);
+    const runIn = (cwd: string): string => execFileSync('sh', ['-c', commands[0]!], { cwd, encoding: 'utf8', env: { ...process.env, PWD: cwd } });
+    expect(runIn(ws)).toContain('ws-hook-ran');
+    expect(runIn(late)).toBe('');
+  });
 });
 
+
+// ─── A name a workspace holds back keeps what is installed (#913) ───────────
+//
+// A workspace of its own (`--project platform`) that gets its children while
+// the cases run. A held name is left as each tool has it installed: no add,
+// no update, no removal. Where it is installed follows the current rules.
+
+describe('a workspace keeps what is installed for a name it holds back (#913)', () => {
+  let sandbox: string;
+  let home: string;
+  let ws: string;
+  let cliEnv: Record<string, string>;
+
+  const run = (args: string[], cwd: string): Promise<RunResult> => runCLI(args, cwd, home, cliEnv);
+  const setUpChild = async (dir: string, project: string): Promise<void> => {
+    fs.mkdirSync(path.join(dir, '.claude'), { recursive: true });
+    git(['init', '-q', '-b', 'main'], dir);
+    git(['commit', '-q', '--allow-empty', '-m', 'init'], dir);
+    const result = await run(['init', FAKE_URL, '--scope', 'workspace', '--agent', 'claude', '--force', '--project', project], dir);
+    expect(result.code, result.output).toBe(0);
+    for (const clone of fs.readdirSync(path.join(home, '.teamai', 'projects'))) {
+      const config = YAML.parse(fs.readFileSync(path.join(home, '.teamai', 'projects', clone, 'config.yaml'), 'utf8'));
+      git(['config', 'teamai-test.origin', FAKE_URL], config.repo.localPath);
+    }
+  };
+  const publish = (message: string, edit: (seed: string) => void): void => {
+    const seed = path.join(sandbox, 'seed-team');
+    edit(seed);
+    git(['add', '-A'], seed);
+    git(['commit', '-q', '-m', message], seed);
+    git(['push', '-q', path.join(sandbox, 'team.git'), 'main'], seed);
+  };
+  const writeEntries = (seed: string, type: string, namespace: string, document: object, file = `${type}.yaml`): void => {
+    fs.mkdirSync(path.join(seed, type, namespace), { recursive: true });
+    fs.writeFileSync(path.join(seed, type, namespace, file), YAML.stringify(document));
+  };
+  const extend = (seed: string, type: string, namespace: string, key: string, items: object[]): void => {
+    const file = path.join(seed, type, namespace, `${type}.yaml`);
+    const document = fs.existsSync(file) ? YAML.parse(fs.readFileSync(file, 'utf8')) ?? {} : {};
+    writeEntries(seed, type, namespace, { ...document, [key]: [...document[key] ?? [], ...items] });
+  };
+  const envSh = (): string => fs.readFileSync(path.join(ws, '.teamai', 'env.sh'), 'utf8');
+  // Once `ws` is a git repository, a pull moves its data home to its partition.
+  const dataHome = (): string => fs.existsSync(path.join(ws, '.teamai', 'config.yaml'))
+    ? path.join(ws, '.teamai') : path.join(home, '.teamai', 'projects', projectSlug(ws));
+  const mcpManifests = (dir: string): string[] => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory() ? mcpManifests(path.join(dir, entry.name)) : entry.name === 'managed-mcp.json' ? [path.join(dir, entry.name)] : []);
+  const claudeHooks = (): string => fs.readFileSync(path.join(ws, '.claude', 'settings.local.json'), 'utf8');
+  const cursorCommand = (marker: string): string | undefined => {
+    const hooks: Record<string, Array<{ command: string }>> = JSON.parse(fs.readFileSync(path.join(home, '.cursor', 'hooks.json'), 'utf8')).hooks;
+    return Object.values(hooks).flat().find((entry) => entry.command.includes(marker))?.command;
+  };
+  const claudeLocalServer = (name: string): { url?: string } | undefined =>
+    JSON.parse(fs.readFileSync(path.join(home, '.claude.json'), 'utf8')).projects?.[ws]?.mcpServers?.[name];
+  const projectFileServer = (name: string): { url?: string } | undefined => {
+    const file = path.join(ws, '.mcp.json');
+    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).mcpServers?.[name] : undefined;
+  };
+
+  beforeAll(async () => {
+    if (!fs.existsSync(CLI)) throw new Error(`CLI binary not found at ${CLI}. Run "npm run build" first.`);
+    sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-ws-held-e2e-')));
+    home = path.join(sandbox, 'home');
+    ws = path.join(sandbox, 'ws');
+    fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(home, '.cursor'), { recursive: true });
+    fs.mkdirSync(path.join(ws, '.claude'), { recursive: true });
+    fs.mkdirSync(path.join(ws, '.codex'), { recursive: true });
+
+    const seed = path.join(sandbox, 'seed-team');
+    seedTeamRepo(seed, FAKE_URL);
+    const manifest = YAML.parse(fs.readFileSync(path.join(seed, 'manifest', 'projects.yaml'), 'utf8'));
+    for (const project of manifest.projects) Object.assign(project.resources, { env: [project.id], hooks: [project.id], mcp: [project.id] });
+    fs.writeFileSync(path.join(seed, 'manifest', 'projects.yaml'), YAML.stringify(manifest));
+    git(['init', '-q', '-b', 'main'], seed);
+    git(['add', '-A'], seed);
+    git(['commit', '-q', '-m', 'seed'], seed);
+    const bare = path.join(sandbox, 'team.git');
+    git(['clone', '-q', '--bare', seed, bare], sandbox);
+    git(['config', '--global', `url.${bare}.insteadOf`, FAKE_URL], sandbox, home);
+    cliEnv = { PATH: `${installGitRemoteGetUrlWrapper(path.join(sandbox, 'bin'))}${path.delimiter}${process.env.PATH ?? ''}` };
+
+    const result = await run(['init', FAKE_URL, '--scope', 'workspace', '--agent', 'claude', '--force', '--project', 'platform'], ws);
+    expect(result.code, result.output).toBe(0);
+    git(['config', 'teamai-test.origin', FAKE_URL], path.join(ws, '.teamai', 'team-repo'));
+    const configFile = path.join(ws, '.teamai', 'config.yaml');
+    fs.writeFileSync(configFile, YAML.stringify({ ...YAML.parse(fs.readFileSync(configFile, 'utf8')), enabledAgents: ['claude', 'codex', 'cursor'] }));
+  }, 180_000);
+
+  afterAll(() => {
+    if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  it('keeps the env key, MCP server and hook it installed before a child defined them differently, and names each', async () => {
+    const define = (seed: string, namespace: string): void => {
+      writeEntries(seed, 'env', namespace, { variables: [{ key: 'WS_HELD', value: `${namespace}-value` }] });
+      writeEntries(seed, 'mcp', namespace, { servers: [{ name: 'held-api', transport: 'http', url: `https://${namespace}.example.com/mcp` }] });
+      writeEntries(seed, 'hooks', namespace, { hooks: [{ id: 'held-hook', description: 'Held hook', event: 'Stop', command: `echo held-${namespace}`, tools: ['claude', 'cursor'] }] });
+    };
+    publish('platform defines an env key, a server and a hook', (seed) => define(seed, 'platform'));
+    const first = await run(['pull'], ws);
+    expect(first.code, first.output).toBe(0);
+    expect(first.output).not.toContain('Workspace with');
+    expect(envSh()).toContain("WS_HELD='platform-value'");
+    expect(projectFileServer('held-api')?.url).toBe('https://platform.example.com/mcp');
+    expect(claudeHooks()).toContain('echo held-platform');
+    expect(cursorCommand('held-platform')).toBeDefined();
+
+    publish('svc-a defines them differently', (seed) => define(seed, 'svc-a'));
+    await setUpChild(path.join(ws, 'svc-a'), 'svc-a');
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('[workspace] Workspace with 1 child: svc-a');
+    expect(result.output).toContain('env: variable "WS_HELD" differs between env/platform/env.yaml and env/svc-a/env.yaml');
+    expect(result.output).toContain('mcp: server "held-api" differs between mcp/platform/mcp.yaml and mcp/svc-a/mcp.yaml');
+    expect(result.output).toContain('hooks: hook "held-hook" differs between hooks/platform/hooks.yaml and hooks/svc-a/hooks.yaml');
+    expect(envSh()).toContain("WS_HELD='platform-value'");
+    expect(claudeHooks()).toContain('echo held-platform');
+    expect(claudeHooks()).not.toContain('echo held-svc-a');
+    expect(cursorCommand('held-platform')).toBeDefined();
+    expect(cursorCommand('held-svc-a')).toBeUndefined();
+    expect((claudeLocalServer('held-api') ?? projectFileServer('held-api'))?.url).toBe('https://platform.example.com/mcp');
+    // The env backup records the value alone, not the file or description it came from.
+    expect((await run(['env', 'list'], ws)).output).toMatch(/WS_HELD=\S+ {2}installed {2}\(held back\)/);
+  });
+
+  it('moves a held MCP server it installed in .mcp.json to Claude\'s local scope, so a child does not load it', async () => {
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('mcp: server "held-api" differs between');
+    expect(claudeLocalServer('held-api')?.url).toBe('https://platform.example.com/mcp');
+    expect(projectFileServer('held-api')).toBeUndefined();
+  });
+
+  it('gates a held hook out of every child, one set up while the hook is held included', async () => {
+    const svcB = path.join(ws, 'backend', 'svc-b');
+    await setUpChild(svcB, 'svc-b');
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('[workspace] Workspace with 2 children: backend/svc-b, svc-a');
+    expect(result.output).toContain('hooks: hook "held-hook" differs between');
+    const command = cursorCommand('held-platform')!;
+    const runIn = (cwd: string): string => execFileSync('sh', ['-c', command], { cwd, encoding: 'utf8', env: { ...process.env, PWD: cwd } });
+    expect(runIn(ws)).toContain('held-platform');
+    expect(runIn(path.join(ws, 'svc-a'))).toBe('');
+    expect(runIn(svcB)).toBe('');
+  });
+
+  it('keeps the env value a pull installed for a held key when a later pull could not deliver env', async () => {
+    const storeFile = path.join(home, '.teamai', 'secrets', 'teams',
+      path.basename(getTeamSecretsPath(YAML.parse(fs.readFileSync(path.join(ws, '.teamai', 'config.yaml'), 'utf8')))));
+    const define = (seed: string, namespace: string, value: string): void => {
+      writeEntries(seed, 'env', namespace, { variables: [{ key: 'WS_HELD', value: `${namespace}-value` }, { key: 'WS_RECORD_ENV', value }] });
+    };
+    publish('svc-a defines WS_RECORD_ENV', (seed) => define(seed, 'svc-a', 'first-env'));
+    expect((await run(['pull'], ws)).code).toBe(0);
+    expect(envSh()).toContain("WS_RECORD_ENV='first-env'");
+    fs.mkdirSync(path.dirname(storeFile), { recursive: true });
+    fs.writeFileSync(storeFile, '{broken');
+    publish('svc-a changes it while the member\'s values cannot be read', (seed) => define(seed, 'svc-a', 'never-env'));
+    await run(['pull'], ws);
+    expect(envSh()).toContain("WS_RECORD_ENV='first-env'");
+    fs.writeFileSync(storeFile, '{}');
+    publish('platform defines it differently', (seed) => define(seed, 'platform', 'platform-env'));
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('env: variable "WS_RECORD_ENV" differs between');
+    expect(envSh()).toContain("WS_RECORD_ENV='first-env'");
+  });
+
+  it('keeps the env value installed while the workspace had no children when they come back with another', async () => {
+    publish('svc-a alone defines WS_RETURN', (seed) => {
+      writeEntries(seed, 'env', 'svc-a', { variables: [{ key: 'WS_HELD', value: 'svc-a-value' }, { key: 'WS_RETURN', value: 'child-v1' }] });
+      writeEntries(seed, 'env', 'platform', { variables: [{ key: 'WS_HELD', value: 'platform-value' }] });
+    });
+    expect((await run(['pull'], ws)).code).toBe(0);
+    expect(envSh()).toContain("WS_RETURN='child-v1'");
+    const parked = path.join(sandbox, 'parked');
+    fs.mkdirSync(parked, { recursive: true });
+    const children = ['svc-a', 'backend'].filter((dir) => fs.existsSync(path.join(ws, dir)));
+    for (const dir of children) fs.renameSync(path.join(ws, dir), path.join(parked, dir));
+    publish('platform defines WS_RETURN too', (seed) => {
+      writeEntries(seed, 'env', 'platform', { variables: [{ key: 'WS_HELD', value: 'platform-value' }, { key: 'WS_RETURN', value: 'own-v3' }] });
+    });
+    const alone = await run(['pull'], ws);
+    expect(alone.output).not.toContain('Workspace with');
+    expect(envSh()).toContain("WS_RETURN='own-v3'");
+    for (const dir of children) fs.renameSync(path.join(parked, dir), path.join(ws, dir));
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('env: variable "WS_RETURN" differs between');
+    expect(envSh()).toContain("WS_RETURN='own-v3'");
+  });
+
+  it('keeps a held hook that hooks inject installed, when the team does not apply hooks on pull', async () => {
+    const hooks = (namespace: string): object => ({
+      hooks: [
+        { id: 'held-hook', description: 'Held hook', event: 'Stop', command: `echo held-${namespace}`, tools: ['claude', 'cursor'] },
+        { id: 'inject-hook', description: 'Injected hook', event: 'Stop', command: `echo inject-${namespace}`, tools: ['claude'] },
+      ],
+    });
+    const teamYaml = path.join(sandbox, 'seed-team', 'teamai.yaml');
+    const shared = fs.readFileSync(teamYaml, 'utf8');
+    publish('hooks wait for hooks inject, and platform adds inject-hook', (seed) => {
+      fs.appendFileSync(teamYaml, 'sharing:\n  hooks:\n    autoApply: false\n');
+      writeEntries(seed, 'hooks', 'platform', hooks('platform'));
+    });
+    try {
+      expect((await run(['pull'], ws)).code).toBe(0);
+      expect((await run(['hooks', 'inject'], ws)).code).toBe(0);
+      expect(claudeHooks()).toContain('echo inject-platform');
+      publish('svc-a defines inject-hook differently', (seed) => writeEntries(seed, 'hooks', 'svc-a', hooks('svc-a')));
+      expect((await run(['pull'], ws)).code).toBe(0);
+
+      const result = await run(['hooks', 'inject'], ws);
+
+      expect(result.code, result.output).toBe(0);
+      expect(result.output).toContain('hooks: hook "inject-hook" differs between');
+      expect(claudeHooks()).toContain('echo inject-platform');
+      expect(claudeHooks()).not.toContain('echo inject-svc-a');
+    } finally {
+      publish('hooks apply on pull again', () => fs.writeFileSync(teamYaml, shared));
+    }
+  });
+
+  it('keeps the hook a pull installed for a held id when a later pull could not write the tool\'s file', async () => {
+    const hook = (seed: string, namespace: string, command: string): void => {
+      writeEntries(seed, 'hooks', namespace, { hooks: [{ id: 'failed-hook', description: 'fixture', event: 'Stop', command, tools: ['claude'] }] });
+    };
+    publish('svc-a defines failed-hook', (seed) => hook(seed, 'svc-a', 'echo first-hook'));
+    expect((await run(['pull'], ws)).code).toBe(0);
+    const settings = path.join(ws, '.claude', 'settings.local.json');
+    const installed = fs.readFileSync(settings, 'utf8');
+    expect(installed).toContain('echo first-hook');
+    fs.writeFileSync(settings, '{broken');
+    publish('svc-a changes it while Claude\'s settings do not parse', (seed) => hook(seed, 'svc-a', 'echo never-hook'));
+    await run(['pull'], ws);
+    fs.writeFileSync(settings, installed);
+    publish('platform defines failed-hook differently', (seed) => hook(seed, 'platform', 'echo different-hook'));
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('hooks: hook "failed-hook" differs between');
+    expect(claudeHooks()).toContain('echo first-hook');
+    expect(claudeHooks()).not.toContain('echo never-hook');
+    expect(claudeHooks()).not.toContain('echo different-hook');
+  });
+
+  it('keeps each tool\'s installed version of a held MCP server, one a tool skipped while disabled included', async () => {
+    const server = (seed: string, namespace: string, url: string): void => {
+      writeEntries(seed, 'mcp', namespace, { servers: [{ name: 'partial-tool', transport: 'http', url }] });
+    };
+    const codexConfig = (): string => fs.readFileSync(path.join(ws, '.codex', 'config.toml'), 'utf8');
+    publish('svc-a defines partial-tool', (seed) => server(seed, 'svc-a', 'https://first.example.com'));
+    expect((await run(['pull'], ws)).code).toBe(0);
+    expect(claudeLocalServer('partial-tool')?.url).toBe('https://first.example.com');
+    expect(codexConfig()).toContain('https://first.example.com');
+    const configFile = path.join(ws, '.teamai', 'config.yaml');
+    const config = YAML.parse(fs.readFileSync(configFile, 'utf8'));
+    fs.writeFileSync(configFile, YAML.stringify({ ...config, disabledAgents: ['claude'] }));
+    publish('svc-a changes it while Claude is disabled', (seed) => server(seed, 'svc-a', 'https://second.example.com'));
+    expect((await run(['pull'], ws)).code).toBe(0);
+    expect(codexConfig()).toContain('https://second.example.com');
+    fs.writeFileSync(configFile, YAML.stringify(config));
+    publish('platform defines partial-tool differently', (seed) => server(seed, 'platform', 'https://third.example.com'));
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('mcp: server "partial-tool" differs between');
+    expect(claudeLocalServer('partial-tool')?.url).toBe('https://first.example.com');
+    expect(codexConfig()).toContain('https://second.example.com');
+    expect(codexConfig()).not.toContain('https://third.example.com');
+  });
+
+  it('declares a secret two members describe differently, from the first, and names it instead of holding it back', async () => {
+    publish('platform and svc-a describe WS_TOKEN differently', (seed) => {
+      writeEntries(seed, 'env', 'platform', { secrets: [{ key: 'WS_TOKEN', description: 'Token for the platform API' }] }, 'secrets.yaml');
+      writeEntries(seed, 'env', 'svc-a', { secrets: [{ key: 'WS_TOKEN', description: 'Token for the svc-a API', url: 'https://svc-a.example.com/token' }] }, 'secrets.yaml');
+    });
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('secrets: secret "WS_TOKEN" is described differently in env/platform/secrets.yaml and env/svc-a/secrets.yaml; this workspace shows the first.');
+    expect(result.output).not.toContain('secret "WS_TOKEN" differs');
+    const list = await run(['env', 'list'], ws);
+    expect(list.output).toMatch(/Team secrets \(1\):\s+WS_TOKEN\s+missing\s+\(platform\)/);
+  });
+
+  it('runs with the variable a member set with --from-env for a held key', async () => {
+    publish('platform defines WS_FROM_ENV', (seed) => extend(seed, 'env', 'platform', 'variables', [{ key: 'WS_FROM_ENV', value: 'platform-from-env' }]));
+    expect((await run(['pull'], ws)).code).toBe(0);
+    const set = await run(['env', 'set', 'WS_FROM_ENV', '--from-env', 'MEMBER_FROM_ENV'], ws);
+    expect(set.code, set.output).toBe(0);
+    expect((await run(['pull'], ws)).code).toBe(0);
+    expect(envSh()).not.toContain('WS_FROM_ENV');
+    publish('svc-a defines WS_FROM_ENV differently', (seed) => extend(seed, 'env', 'svc-a', 'variables', [{ key: 'WS_FROM_ENV', value: 'svc-a-from-env' }]));
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('env: variable "WS_FROM_ENV" differs between');
+    expect(envSh()).not.toContain('WS_FROM_ENV');
+    const exec = (env: Record<string, string>): Promise<RunResult> =>
+      runCLI(['env', 'exec', '--', 'sh', '-c', 'printf "[%s]" "${WS_FROM_ENV-unset}"'], ws, home, { ...cliEnv, ...env });
+    expect((await exec({ MEMBER_FROM_ENV: 'member-value' })).output).toContain('[member-value]');
+    expect((await exec({})).output).toContain('[unset]');
+  });
+
+  it('moves a held MCP server with the credential it resolved, and keeps Claude\'s file to the member', async () => {
+    const server = (url: string, headers?: object): object => ({ name: 'held-credential', transport: 'http', url, ...headers ? { headers } : {} });
+    const parked = path.join(sandbox, 'parked-credential');
+    fs.mkdirSync(parked, { recursive: true });
+    const children = ['svc-a', 'backend'].filter((dir) => fs.existsSync(path.join(ws, dir)));
+    for (const dir of children) fs.renameSync(path.join(ws, dir), path.join(parked, dir));
+    publish('platform defines held-credential, with a header from MOVE_TOKEN', (seed) => {
+      extend(seed, 'mcp', 'platform', 'servers', [server('https://held.example.com/mcp', { 'X-Test': '${MOVE_TOKEN}' })]);
+      extend(seed, 'env', 'platform', 'variables', [{ key: 'MOVE_TOKEN', value: 'short' }]);
+    });
+    const alone = await run(['pull'], ws);
+    expect(alone.code, alone.output).toBe(0);
+    const tree = path.join(ws, '.mcp.json');
+    expect(fs.readFileSync(tree, 'utf8')).toContain('short');
+    expect(fs.statSync(tree).mode & 0o777).toBe(0o600);
+    const userFile = path.join(home, '.claude.json');
+    fs.chmodSync(userFile, 0o644);
+    for (const dir of children) fs.renameSync(path.join(parked, dir), path.join(ws, dir));
+    publish('svc-a defines held-credential differently', (seed) => extend(seed, 'mcp', 'svc-a', 'servers', [server('https://other.example.com/mcp')]));
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('mcp: server "held-credential" differs between');
+    expect((claudeLocalServer('held-credential') as { headers?: Record<string, string> } | undefined)?.headers?.['X-Test']).toBe('short');
+    expect(projectFileServer('held-credential')).toBeUndefined();
+    expect(fs.statSync(userFile).mode & 0o777).toBe(0o600);
+  });
+
+  it('keeps a held MCP server in .mcp.json, with its record, when the member has their own of that name in Claude\'s local scope', async () => {
+    const parked = path.join(sandbox, 'parked-blocked');
+    fs.mkdirSync(parked, { recursive: true });
+    const children = ['svc-a', 'backend'].filter((dir) => fs.existsSync(path.join(ws, dir)));
+    for (const dir of children) fs.renameSync(path.join(ws, dir), path.join(parked, dir));
+    publish('platform defines held-blocked', (seed) =>
+      extend(seed, 'mcp', 'platform', 'servers', [{ name: 'held-blocked', transport: 'http', url: 'https://blocked.example.com/mcp' }]));
+    const alone = await run(['pull'], ws);
+    expect(alone.code, alone.output).toBe(0);
+    expect(projectFileServer('held-blocked')?.url).toBe('https://blocked.example.com/mcp');
+    const userFile = path.join(home, '.claude.json');
+    const user = JSON.parse(fs.readFileSync(userFile, 'utf8'));
+    user.projects ??= {};
+    user.projects[ws] ??= {};
+    user.projects[ws].mcpServers = { ...user.projects[ws].mcpServers, 'held-blocked': { type: 'http', url: 'https://member.example.com/mcp' } };
+    fs.writeFileSync(userFile, JSON.stringify(user, null, 2));
+    for (const dir of children) fs.renameSync(path.join(parked, dir), path.join(ws, dir));
+    publish('svc-a defines held-blocked differently', (seed) =>
+      extend(seed, 'mcp', 'svc-a', 'servers', [{ name: 'held-blocked', transport: 'http', url: 'https://other.example.com/mcp' }]));
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('mcp: server "held-blocked" differs between');
+    expect(claudeLocalServer('held-blocked')?.url).toBe('https://member.example.com/mcp');
+    expect(projectFileServer('held-blocked')?.url).toBe('https://blocked.example.com/mcp');
+    const recorded = mcpManifests(dataHome()).flatMap((file) =>
+      Object.values(JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, Array<{ name: string }>>).flat().map((record) => record.name));
+    expect(recorded).toContain('held-blocked');
+  });
+
+  it('adopts an equal copy of a held MCP server already in Claude\'s local scope, with the credential it resolved', async () => {
+    const parked = path.join(sandbox, 'parked-equal');
+    fs.mkdirSync(parked, { recursive: true });
+    const children = ['svc-a', 'backend'].filter((dir) => fs.existsSync(path.join(ws, dir)));
+    for (const dir of children) fs.renameSync(path.join(ws, dir), path.join(parked, dir));
+    publish('platform defines held-equal, with a header from EQUAL_TOKEN', (seed) => {
+      extend(seed, 'mcp', 'platform', 'servers', [{ name: 'held-equal', transport: 'http', url: 'https://equal.example.com/mcp', headers: { 'X-Test': '${EQUAL_TOKEN}' } }]);
+      extend(seed, 'env', 'platform', 'variables', [{ key: 'EQUAL_TOKEN', value: 'short' }]);
+    });
+    const alone = await run(['pull'], ws);
+    expect(alone.code, alone.output).toBe(0);
+    const installed = JSON.parse(fs.readFileSync(path.join(ws, '.mcp.json'), 'utf8')).mcpServers['held-equal'];
+    expect(installed.headers['X-Test']).toBe('short');
+    const userFile = path.join(home, '.claude.json');
+    const user = JSON.parse(fs.readFileSync(userFile, 'utf8'));
+    user.projects[ws].mcpServers['held-equal'] = installed;
+    fs.writeFileSync(userFile, JSON.stringify(user, null, 2));
+    fs.chmodSync(userFile, 0o644);
+    for (const dir of children) fs.renameSync(path.join(parked, dir), path.join(ws, dir));
+    publish('svc-a defines held-equal differently', (seed) =>
+      extend(seed, 'mcp', 'svc-a', 'servers', [{ name: 'held-equal', transport: 'http', url: 'https://other.example.com/mcp' }]));
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('mcp: server "held-equal" differs between');
+    expect((claudeLocalServer('held-equal') as { headers?: Record<string, string> } | undefined)?.headers?.['X-Test']).toBe('short');
+    expect(projectFileServer('held-equal')).toBeUndefined();
+    expect(fs.statSync(userFile).mode & 0o777).toBe(0o600);
+    const local: Record<string, Array<{ name: string; resolved?: boolean }>> = JSON.parse(fs.readFileSync(path.join(dataHome(), 'managed-local-mcp.json'), 'utf8'));
+    expect(Object.values(local).flat().find((record) => record.name === 'held-equal')?.resolved).toBe(true);
+  });
+
+  it('keeps a held MCP server whose record was lost in .mcp.json, which Claude leaves for its local scope', async () => {
+    const parked = path.join(sandbox, 'parked-lost');
+    fs.mkdirSync(parked, { recursive: true });
+    const children = ['svc-a', 'backend'].filter((dir) => fs.existsSync(path.join(ws, dir)));
+    for (const dir of children) fs.renameSync(path.join(ws, dir), path.join(parked, dir));
+    publish('platform defines held-lost', (seed) =>
+      extend(seed, 'mcp', 'platform', 'servers', [{ name: 'held-lost', transport: 'http', url: 'https://lost.example.com/mcp' }]));
+    const alone = await run(['pull'], ws);
+    expect(alone.code, alone.output).toBe(0);
+    expect(projectFileServer('held-lost')?.url).toBe('https://lost.example.com/mcp');
+    let lost = 0;
+    for (const file of mcpManifests(dataHome())) {
+      const manifest: Record<string, Array<{ name: string }>> = JSON.parse(fs.readFileSync(file, 'utf8'));
+      for (const [key, records] of Object.entries(manifest)) {
+        manifest[key] = records.filter((record) => record.name !== 'held-lost');
+        lost += records.length - manifest[key]!.length;
+      }
+      fs.writeFileSync(file, JSON.stringify(manifest, null, 2));
+    }
+    expect(lost).toBeGreaterThan(0);
+    for (const dir of children) fs.renameSync(path.join(parked, dir), path.join(ws, dir));
+    publish('svc-a defines held-lost differently', (seed) =>
+      extend(seed, 'mcp', 'svc-a', 'servers', [{ name: 'held-lost', transport: 'http', url: 'https://other.example.com/mcp' }]));
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('mcp: server "held-lost" differs between');
+    expect(projectFileServer('held-lost')?.url).toBe('https://lost.example.com/mcp');
+  });
+
+  it('moves a held MCP server to the file OpenCode reads it from now, as installed', async () => {
+    // OpenCode V2 in HOME: once sharing.gitExclude is on, its servers go to .opencode/teamai-mcp.json.
+    const bin = path.join(sandbox, 'opencode-bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.writeFileSync(path.join(bin, 'opencode'), '#!/bin/sh\necho "opencode v2.0.24"\n', { mode: 0o755 });
+    cliEnv = { ...cliEnv, PATH: `${bin}${path.delimiter}${cliEnv.PATH}` };
+    fs.mkdirSync(path.join(home, '.config', 'opencode'), { recursive: true });
+    fs.mkdirSync(path.join(ws, '.opencode'), { recursive: true });
+    git(['init', '-q', '-b', 'main'], ws);
+    const configFile = path.join(ws, '.teamai', 'config.yaml');
+    const config = YAML.parse(fs.readFileSync(configFile, 'utf8'));
+    fs.writeFileSync(configFile, YAML.stringify({ ...config, enabledAgents: [...config.enabledAgents, 'opencode'] }));
+    const opencodeServer = (rel: string): { url?: string } | undefined => {
+      const file = path.join(ws, rel);
+      return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).mcp?.['moving-api'] : undefined;
+    };
+    const server = (seed: string, namespace: string, url: string): void => {
+      writeEntries(seed, 'mcp', namespace, { servers: [{ name: 'moving-api', transport: 'http', url }] });
+    };
+    publish('svc-a defines moving-api', (seed) => server(seed, 'svc-a', 'https://moving-first.example.com/mcp'));
+    expect((await run(['pull'], ws)).code).toBe(0);
+    expect(opencodeServer('opencode.json')?.url).toBe('https://moving-first.example.com/mcp');
+    publish('platform defines moving-api differently, and the team keeps delivered files out of git', (seed) => {
+      server(seed, 'platform', 'https://moving-second.example.com/mcp');
+      fs.appendFileSync(path.join(seed, 'teamai.yaml'), 'sharing:\n  gitExclude:\n    enabled: true\n');
+    });
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('mcp: server "moving-api" differs between');
+    expect(opencodeServer('.opencode/teamai-mcp.json')?.url).toBe('https://moving-first.example.com/mcp');
+    expect(opencodeServer('opencode.json')).toBeUndefined();
+  });
+
+  it('keeps a held MCP server whose record was lost in the file OpenCode leaves', async () => {
+    // moving-api is held, in .opencode/teamai-mcp.json since the case above.
+    const opencodeServer = (rel: string): { url?: string } | undefined => {
+      const file = path.join(ws, rel);
+      return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')).mcp?.['moving-api'] : undefined;
+    };
+    expect(opencodeServer('.opencode/teamai-mcp.json')?.url).toBe('https://moving-first.example.com/mcp');
+    // Its record is lost: no managed-mcp.json names it any more.
+    let lost = 0;
+    for (const file of mcpManifests(dataHome())) {
+      const manifest: Record<string, Array<{ name: string }>> = JSON.parse(fs.readFileSync(file, 'utf8'));
+      for (const [key, records] of Object.entries(manifest)) {
+        manifest[key] = records.filter((record) => record.name !== 'moving-api');
+        lost += records.length - manifest[key]!.length;
+      }
+      fs.writeFileSync(file, JSON.stringify(manifest, null, 2));
+    }
+    expect(lost).toBeGreaterThan(0);
+    const teamYaml = path.join(sandbox, 'seed-team', 'teamai.yaml');
+    publish('the team lets git see delivered files again', () =>
+      fs.writeFileSync(teamYaml, fs.readFileSync(teamYaml, 'utf8').replace('sharing:\n  gitExclude:\n    enabled: true\n', '')));
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('mcp: server "moving-api" differs between');
+    expect(opencodeServer('.opencode/teamai-mcp.json')?.url).toBe('https://moving-first.example.com/mcp');
+  });
+
+  it('keeps a held Cursor hook whose command runs teamai', async () => {
+    const command = 'echo before && teamai env exec -- node check.js';
+    const hook = (seed: string, namespace: string, run: string): void => {
+      writeEntries(seed, 'hooks', namespace, { hooks: [{ id: 'marked-hook', description: 'fixture', event: 'Stop', command: run, tools: ['cursor'] }] });
+    };
+    publish('platform defines marked-hook, which runs teamai', (seed) => hook(seed, 'platform', command));
+    expect((await run(['pull'], ws)).code).toBe(0);
+    expect(cursorCommand('teamai env exec')).toBeDefined();
+    publish('svc-a defines marked-hook differently', (seed) => hook(seed, 'svc-a', 'echo other-marked'));
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('hooks: hook "marked-hook" differs between');
+    expect(cursorCommand('teamai env exec')).toBeDefined();
+    expect(cursorCommand('other-marked')).toBeUndefined();
+  });
+
+  it('keeps a held hook in DeepSeek Harness\'s bridge', async () => {
+    fs.mkdirSync(path.join(home, '.dsh'), { recursive: true });
+    const configFile = path.join(dataHome(), 'config.yaml');
+    const config = YAML.parse(fs.readFileSync(configFile, 'utf8'));
+    fs.writeFileSync(configFile, YAML.stringify({ ...config, enabledAgents: [...config.enabledAgents, 'dsh'] }));
+    const bridge = (): string => fs.readFileSync(path.join(home, '.teamai', 'dsh', 'hooks.json'), 'utf8');
+    const hook = (seed: string, namespace: string, run: string): void => {
+      writeEntries(seed, 'hooks', namespace, { hooks: [{ id: 'bridge-hook', description: 'fixture', event: 'Stop', command: run, tools: ['dsh'] }] });
+    };
+    publish('platform defines bridge-hook', (seed) => hook(seed, 'platform', 'echo prior-dsh'));
+    expect((await run(['pull'], ws)).code).toBe(0);
+    expect(bridge()).toContain('echo prior-dsh');
+    publish('svc-a defines bridge-hook differently', (seed) => hook(seed, 'svc-a', 'echo other-dsh'));
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('hooks: hook "bridge-hook" differs between');
+    expect(bridge()).toContain('echo prior-dsh');
+    expect(bridge()).not.toContain('echo other-dsh');
+  });
+
+  it('moves a held MCP server back to .mcp.json with the credential it resolved, once Muse Code reads the servers there', async () => {
+    publish('platform defines held-return, with a header from RETURN_TOKEN', (seed) => {
+      extend(seed, 'mcp', 'platform', 'servers', [{ name: 'held-return', transport: 'http', url: 'https://return.example.com/mcp', headers: { 'X-Test': '${RETURN_TOKEN}' } }]);
+      extend(seed, 'env', 'platform', 'variables', [{ key: 'RETURN_TOKEN', value: 'short' }]);
+    });
+    const first = await run(['pull'], ws);
+    expect(first.code, first.output).toBe(0);
+    expect(claudeLocalServer('held-return')?.url).toBe('https://return.example.com/mcp');
+    publish('svc-a defines held-return differently', (seed) =>
+      extend(seed, 'mcp', 'svc-a', 'servers', [{ name: 'held-return', transport: 'http', url: 'https://other.example.com/mcp' }]));
+    expect((await run(['pull'], ws)).output).toContain('mcp: server "held-return" differs between');
+    // Muse Code reads only <root>/.mcp.json, so the workspace's servers go back there.
+    fs.mkdirSync(path.join(home, '.config', 'muse'), { recursive: true });
+    const configFile = path.join(dataHome(), 'config.yaml');
+    const config = YAML.parse(fs.readFileSync(configFile, 'utf8'));
+    fs.writeFileSync(configFile, YAML.stringify({ ...config, enabledAgents: [...config.enabledAgents, 'muse'] }));
+    // A file readable by others: the move must tighten it, as a delivery of a resolved value does.
+    const tree = path.join(ws, '.mcp.json');
+    if (!fs.existsSync(tree)) fs.writeFileSync(tree, '{ "mcpServers": {} }\n');
+    fs.chmodSync(tree, 0o644);
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('mcp: server "held-return" differs between');
+    // Muse Code moved them, not git exclude.
+    expect(result.output).not.toContain('sharing.gitExclude off');
+    expect(projectFileServer('team-db')).toBeDefined();
+    expect((projectFileServer('held-return') as { headers?: Record<string, string> } | undefined)?.headers?.['X-Test']).toBe('short');
+    expect(claudeLocalServer('held-return')).toBeUndefined();
+    expect(fs.statSync(tree).mode & 0o777).toBe(0o600);
+    const records = mcpManifests(dataHome()).flatMap((file) =>
+      Object.values(JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, Array<{ name: string; resolved?: boolean }>>).flat());
+    expect(records.find((record) => record.name === 'held-return')?.resolved).toBe(true);
+    const local: Record<string, Array<{ name: string }>> = JSON.parse(fs.readFileSync(path.join(dataHome(), 'managed-local-mcp.json'), 'utf8'));
+    expect(Object.values(local).flat().map((record) => record.name)).not.toContain('held-return');
+  });
+
+  it('keeps a held MCP server in Claude\'s local scope, with its record, when the member has their own of that name in .mcp.json', async () => {
+    const configFile = path.join(dataHome(), 'config.yaml');
+    const setMuse = (on: boolean): void => {
+      const config = YAML.parse(fs.readFileSync(configFile, 'utf8'));
+      const others = (config.enabledAgents as string[]).filter((agent) => agent !== 'muse');
+      fs.writeFileSync(configFile, YAML.stringify({ ...config, enabledAgents: on ? [...others, 'muse'] : others }));
+    };
+    setMuse(false);
+    publish('platform defines held-stuck', (seed) =>
+      extend(seed, 'mcp', 'platform', 'servers', [{ name: 'held-stuck', transport: 'http', url: 'https://stuck.example.com/mcp' }]));
+    const first = await run(['pull'], ws);
+    expect(first.code, first.output).toBe(0);
+    expect(claudeLocalServer('held-stuck')?.url).toBe('https://stuck.example.com/mcp');
+    publish('svc-a defines held-stuck differently', (seed) =>
+      extend(seed, 'mcp', 'svc-a', 'servers', [{ name: 'held-stuck', transport: 'http', url: 'https://other.example.com/mcp' }]));
+    expect((await run(['pull'], ws)).output).toContain('mcp: server "held-stuck" differs between');
+    const tree = path.join(ws, '.mcp.json');
+    const project = fs.existsSync(tree) ? JSON.parse(fs.readFileSync(tree, 'utf8')) : {};
+    project.mcpServers = { ...project.mcpServers, 'held-stuck': { type: 'http', url: 'https://member.example.com/mcp' } };
+    fs.writeFileSync(tree, JSON.stringify(project, null, 2));
+    setMuse(true);
+
+    const result = await run(['pull'], ws);
+
+    expect(result.code, result.output).toBe(0);
+    expect(result.output).toContain('mcp: server "held-stuck" differs between');
+    expect(projectFileServer('team-db')).toBeDefined();
+    expect(projectFileServer('held-stuck')?.url).toBe('https://member.example.com/mcp');
+    expect(claudeLocalServer('held-stuck')?.url).toBe('https://stuck.example.com/mcp');
+    const local: Record<string, Array<{ name: string }>> = JSON.parse(fs.readFileSync(path.join(dataHome(), 'managed-local-mcp.json'), 'utf8'));
+    expect(Object.values(local).flat().map((record) => record.name)).toContain('held-stuck');
+  });
+});

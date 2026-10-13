@@ -228,7 +228,7 @@ export type DesiredSkills = Extract<DesiredItems, { kind: 'resolved' }> & {
   /** How many skills the tag channel left out, for the sync line. */
   readonly skippedByTags: number;
   /**
-   * Skills a workspace does not deliver because two of its members deliver
+   * Skills a workspace holds back because two of its members deliver
    * different copies of one name (#913). Pull keeps an installed copy of them.
    */
   readonly held: readonly string[];
@@ -360,14 +360,16 @@ async function resolveWorkspaceSkills(
     nameOf: (item) => item.name,
     sameContent: (a, b) => a.sourcePath === b.sourcePath || dirContentEqual(a.sourcePath, b.sourcePath),
   });
+  const excluded = new Set(localConfig.excludedSkills ?? []);
   for (const { name, first, second } of held) {
-    warnOnce(`Skill "${name}" differs between ${first.relativePath} and ${second.relativePath}, so this workspace does not deliver it; an installed copy is kept. Make the copies equal in the team repo, or rename one.`);
+    // An excluded name is not held, so pull may take its copy out; saying it keeps one would be wrong.
+    if (excluded.has(name)) continue;
+    warnOnce(`Skill "${name}" differs between ${first.relativePath} and ${second.relativePath}, so this workspace holds it back; an installed copy is kept. Make the copies equal in the team repo, or rename one.`);
   }
   const memberSources = new Map<string, string[]>();
   for (const item of resolved.flatMap((desired) => desired.items)) {
     memberSources.set(item.name, [...memberSources.get(item.name) ?? [], item.sourcePath]);
   }
-  const excluded = new Set(localConfig.excludedSkills ?? []);
   const delivered = items.filter((item) => !excluded.has(item.name));
   const sources = new Set(delivered.map((item) => item.relativePath));
   const overrides = [...new Map(resolved.flatMap((desired) => desired.overrides)
@@ -655,7 +657,7 @@ async function workspaceClaudemd(
 /**
  * A workspace's agents (#913): each member's, unioned by stem. A stem two
  * members deliver with the same content is delivered once; one whose copies
- * differ is not delivered, and named. A conflict inside one member stops
+ * differ is held back and named, and pull keeps an installed copy of it. A conflict inside one member stops
  * agents as it would in that member's own scope.
  */
 async function resolveWorkspaceAgents(teamConfig: TeamaiConfig, members: readonly LocalConfig[]): Promise<DesiredItems> {
@@ -671,7 +673,7 @@ async function resolveWorkspaceAgents(teamConfig: TeamaiConfig, members: readonl
     sameContent: (a, b) => a.sourcePath === b.sourcePath || fileContentEqual(a.sourcePath, b.sourcePath),
   });
   for (const { name, first, second } of held) {
-    warnOnce(`Agent "${name}" differs between ${first.relativePath} and ${second.relativePath}, so this workspace does not deliver it. Make the copies equal in the team repo, or rename one.`);
+    warnOnce(`Agent "${name}" differs between ${first.relativePath} and ${second.relativePath}, so this workspace holds it back; an installed copy is kept. Make the copies equal in the team repo, or rename one.`);
   }
   const sources = new Set(items.map((item) => item.relativePath));
   return {

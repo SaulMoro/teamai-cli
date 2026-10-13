@@ -19,7 +19,7 @@ import {
   getMachineSecretsPath, getTeamSecretsPath, readSecretStore, storedEntryKind, storedSecretValue, type SecretStore,
   type SecretStoreRead, type StoredEntryKind, type StoredSecret,
 } from './secret-store.js';
-import { getDataHome, type LocalConfig } from './types.js';
+import { getDataHome, getEnvBackupPath, type LocalConfig } from './types.js';
 import { readFileSafe } from './utils/fs.js';
 import { isReservedTeamEnvKey } from './env-reserved.js';
 
@@ -116,9 +116,9 @@ export async function resolveTeamEnv(
   namespaces?: KnownNamespaces,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<TeamEnv> {
-  const variables = namespaces
+  const variables = await withHeldValues(namespaces
     ? await resolveEntries(envEntryReader, localConfig, namespaces.active)
-    : await resolveEntriesFor(envEntryReader, localConfig);
+    : await resolveEntriesFor(envEntryReader, localConfig), localConfig, env);
   const declarations = await resolveSecretDeclarations(localConfig, namespaces);
   const secretKeys = declaredSecretKeys(declarations) ?? new Set<string>();
   const received = variables.kind === 'resolved' ? variables.entries : [];
@@ -205,6 +205,37 @@ export function appliedTeamEnv(teamEnv: TeamEnv): AppliedTeamEnv {
     variables: new Map(values.filter(([key]) => !isReservedTeamEnvKey(key))),
     secretKeys: [...declaredSecretKeys(teamEnv.declarations) ?? []].filter((key) => !isReservedTeamEnvKey(key)),
   };
+}
+
+/**
+ * `variables` with each key a workspace holds back (#913) as its last pull
+ * exported it, from the env backup, so env.sh, env exec and MCP keep what is
+ * installed. A key the member set with `--from-env`, which env.sh and so the
+ * backup leave out, is kept while that variable is set, and read from it as
+ * when the key is not held. Any other held key the backup lacks stays out. A
+ * backup that cannot be read throws, as `lastPullOf` does: nothing is
+ * rewritten from a guess.
+ */
+async function withHeldValues(
+  variables: EntryResolution<EnvVariable>,
+  localConfig: LocalConfig,
+  env: NodeJS.ProcessEnv,
+): Promise<EntryResolution<EnvVariable>> {
+  if (variables.kind !== 'resolved' || !variables.held?.length) return variables;
+  const backup = await readEnvBackup(localConfig);
+  const unexported = variables.held.filter((key) => !Object.hasOwn(backup, key));
+  const team = unexported.length > 0 ? await readSecretStore(getTeamSecretsPath(localConfig)) : NO_VALUES;
+  const fromEnv = (key: string): boolean => {
+    const entry = team.ok ? storeEntry(team.values, key, 'variable') : undefined;
+    return entry !== undefined && 'env' in entry && storedSecretValue(entry, env) !== undefined;
+  };
+  const kept = variables.held.flatMap((key): ResolvedEntry<EnvVariable>[] => {
+    if (!Object.hasOwn(backup, key) && !fromEnv(key)) return [];
+    // Without a backup value, the member's entry decides the value (variableValues): this one is never read.
+    const [value, source] = Object.hasOwn(backup, key) ? [backup[key], getEnvBackupPath(localConfig)] : ['', getTeamSecretsPath(localConfig)];
+    return [{ entry: { key, value }, name: key, namespace: null, source, replaces: null, replacedEntry: null }];
+  });
+  return { ...variables, entries: [...variables.entries, ...kept] };
 }
 
 /** What this scope's last pull wrote: the values its env backup holds, and the keys its env.sh keeps from the user scope. */
