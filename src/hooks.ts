@@ -1766,7 +1766,6 @@ async function reconcileCopilotFormat(
     log.debug(`No teamai hooks to remove from ${hooksPath}`);
     return;
   }
-  await ensureDir(path.dirname(expanded));
   const hooksJson: CopilotHooksJson = await readHookFile<CopilotHooksJson>(expanded, {
     version: COPILOT_HOOK_SCHEMA_VERSION,
     hooks: {},
@@ -1813,7 +1812,19 @@ async function reconcileCopilotFormat(
     changed = true;
   }
 
-  if (changed || !existed) {
+  // A file left holding no hooks and nothing else does nothing in Copilot:
+  // never create one, and delete one git does not track. Not on a removal: it
+  // keeps the events it empties, so an empty file it finds was already empty
+  // and may be the member's (removeCopilotGlobalBuiltins visits every file).
+  const holdsNothing = Object.keys(hooksJson.hooks).length === 0
+    && Object.keys(hooksJson).every((key) => key === 'version' || key === 'hooks');
+  const { gitUntracked } = await import('./git-exclude.js');
+  if (holdsNothing && !existed) {
+    log.debug(`No teamai hooks to write to ${hooksPath}`);
+  } else if (holdsNothing && !opts.removeAll && await gitUntracked(expanded, 'entry')) {
+    await rm(expanded, { force: true });
+    log.success(`Removed ${hooksPath}: no hooks left in it`);
+  } else if (changed || !existed) {
     await writeJson(expanded, hooksJson);
     log.success(`${opts.removeAll ? 'Removed' : 'Updated'} teamai hooks in ${hooksPath}`);
   } else {
