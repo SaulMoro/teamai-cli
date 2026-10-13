@@ -87,7 +87,7 @@ Git ホスト（GitHub、GitLab、GitCode、CNB、TGit、またはプライベ�
 ```bash
 # Choose one, depending on where you want resources installed
 
-# Project-scope init (default, resources installed under the project directory)
+# Workspace-scope init (default, resources installed under the workspace directory)
 cd /path/to/my-project
 teamai init https://github.com/your-org/your-repo
 

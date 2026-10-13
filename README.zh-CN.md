@@ -93,7 +93,7 @@ npm install -g teamai-cli
 ```bash
 # 二选一：按你想要的安装范围选择其中一条
 
-# 项目级初始化（默认，资源安装到项目目录下）
+# 工作区级初始化（默认，资源安装到工作区目录下）
 cd /path/to/my-project
 teamai init https://github.com/your-org/your-repo
 
