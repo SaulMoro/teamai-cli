@@ -2155,8 +2155,8 @@ async function pullForScope(
   // double-truncation when both user and project scopes share events.
   // (no-op here; see pull() for the unified reporting logic)
 
-  // Step 6: Show skill recommendations
-  if (!options.silent && !options.dryRun) {
+  // Step 6: Show skill recommendations, among the skills Step 2 delivers
+  if (!options.silent && !options.dryRun && desiredSkillNames) {
     try {
       const YAML = (await import('yaml')).default;
       const { listFiles, readFileSafe } = await import('./utils/fs.js');
@@ -2176,7 +2176,7 @@ async function pullForScope(
         } catch { /* skip */ }
       }
       if (teamStats.length > 0) {
-        const recs = await getRecommendations(teamStats);
+        const recs = await getRecommendations(teamStats, desiredSkillNames);
         displayRecommendations(recs);
       }
     } catch {
