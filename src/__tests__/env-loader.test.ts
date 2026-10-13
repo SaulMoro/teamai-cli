@@ -200,6 +200,33 @@ describe('team env by directory (#1018)', () => {
       },
     );
 
+    // Inside the project the team's value arrives as written, as env exec gives
+    // it, whatever attribute the member's variable has; leaving puts it back.
+    // bash before 4.2 cannot set a global's attribute from a function, so
+    // there the variable comes back without it.
+    it.each([...new Set(['/bin/bash', 'bash', 'zsh'])].filter(hasShell).flatMap((shell) => [
+      { attribute: 'integer', setup: 'typeset -ix TOKEN=3', team: '1+1', after: 'TOKEN=2+2', expected: '4', since: [3, 0] },
+      { attribute: 'lowercase', setup: 'typeset -lx TOKEN=mine', team: 'Team', after: 'TOKEN=ABC', expected: 'abc', since: [4, 0] },
+      { attribute: 'uppercase', setup: 'typeset -ux TOKEN=MINE', team: 'Team', after: 'TOKEN=abc', expected: 'ABC', since: [4, 0] },
+    ].filter(({ since: [major, minor] }) => shell === 'zsh' || hasBashAtLeast(major, minor, shell)).map((state) => ({ shell, ...state }))))(
+      '$shell delivers the team value to an $attribute variable as written', async ({ shell, setup, team, after, expected }) => {
+        const a = await project(`attribute-${path.basename(shell)}-${shell.length}-${team}-${expected}`);
+        const elsewhere = path.join(tmpDir, 'outside');
+        await fse.ensureDir(elsewhere);
+        await handler.writeResolvedEnv([{ key: 'TOKEN', value: team }], teamConfig, a);
+        const run = spawnSync(shell, ['-i'], {
+          cwd: elsewhere,
+          env: { HOME: homeDir, PATH: process.env.PATH, SHELL: shell.startsWith('/') ? shell : `/bin/${shell}`, BASH_ENV: path.join(homeDir, '.teamai', 'env-loader.sh') },
+          input: [setup, `cd '${a.projectRoot}'`, 'printf "inside=%s child=%s\\n" "$TOKEN" "$(printenv TOKEN)"', `cd '${elsewhere}'`, after, 'printf "after=%s\\n" "$TOKEN"', 'exit'].join('\n'),
+          encoding: 'utf-8',
+        });
+        expect(run.status, run.stderr).toBe(0);
+        expect(run.stdout).toContain(`inside=${team} child=${team}\n`);
+        const keepsAttribute = shell === 'zsh' || hasBashAtLeast(4, 2, shell);
+        expect(run.stdout).toContain(`after=${keepsAttribute ? expected : after.slice('TOKEN='.length)}\n`);
+      },
+    );
+
     // The keys the loader saves, restores and unsets are the ones env.sh
     // assigns, never a line inside a value. On Windows the member's
     // `aws_secret_access_key` is another spelling of the same variable, which

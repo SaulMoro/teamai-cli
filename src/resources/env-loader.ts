@@ -840,9 +840,35 @@ __teamai_env_exported() {
   return 1
 }
 
+# Clear the attributes of $1 that change a value assigned to it (integer,
+# lowercase, uppercase), so a loaded file's value arrives as written, and save
+# them for \`__teamai_env_restore\`. bash before 4.2 cannot change a global's
+# attributes from a function, so the variable goes: its value and export are saved.
+__teamai_env_plain() {
+  if [ -n "\${ZSH_VERSION-}" ]; then
+    __teamai_decl=$(typeset -p "$1" 2>/dev/null)
+  else
+    __teamai_decl=$(declare -p "$1" 2>/dev/null)
+  fi
+  __teamai_decl=\${__teamai_decl%% "$1"*} __teamai_attrs=
+  for __teamai_a in i l u; do
+    case $__teamai_decl in *" -"*"$__teamai_a"*) __teamai_attrs=$__teamai_attrs$__teamai_a ;; esac
+  done
+  [ -n "$__teamai_attrs" ] || return 0
+  eval "__TEAMAI_ENV_ATTR_$1=$__teamai_attrs"
+  if [ -n "\${ZSH_VERSION-}" ]; then typeset -g +i +l +u "$1"
+  elif __teamai_env_global_attrs; then declare -g +i +l +u "$1"
+  else unset "$1"; fi
+}
+
+__teamai_env_global_attrs() {
+  [ "\${BASH_VERSINFO[0]}" -gt 4 ] || { [ "\${BASH_VERSINFO[0]}" = 4 ] && [ "\${BASH_VERSINFO[1]}" -ge 2 ]; }
+}
+
 # Put back the member's own value of $1, which a loaded file set. A project's
 # env.sh also calls it for a key it declares and the user scope's env.sh set.
-# Assigned over, not unset, so its other attributes (an integer's) stay.
+# Assigned over, not unset, so its other attributes stay, and those
+# \`__teamai_env_plain\` cleared come back after the value.
 __teamai_env_restore() {
   eval "__teamai_set=\\\${__TEAMAI_ENV_SET_$1-}"
   if [ "$__teamai_set" = 1 ] || [ "$__teamai_set" = 2 ]; then
@@ -850,6 +876,10 @@ __teamai_env_restore() {
     if [ "$__teamai_set" = 2 ]; then export "$1"
     elif [ -n "\${ZSH_VERSION-}" ]; then typeset -g +x "$1"
     else export -n "$1"; fi
+    eval "__teamai_attrs=\\\${__TEAMAI_ENV_ATTR_$1-}"
+    if [ -z "$__teamai_attrs" ]; then :
+    elif [ -n "\${ZSH_VERSION-}" ]; then typeset -g "-$__teamai_attrs" "$1"
+    elif __teamai_env_global_attrs; then declare -g "-$__teamai_attrs" "$1"; fi
   else
     unset "$1"
   fi
@@ -874,7 +904,7 @@ __teamai_env_unapply() {
   IFS=' '
   for __teamai_k in \${__TEAMAI_ENV_KEYS-}; do
     __teamai_env_restore "$__teamai_k"
-    unset "__TEAMAI_ENV_SET_$__teamai_k" "__TEAMAI_ENV_PREV_$__teamai_k"
+    unset "__TEAMAI_ENV_SET_$__teamai_k" "__TEAMAI_ENV_PREV_$__teamai_k" "__TEAMAI_ENV_ATTR_$__teamai_k"
   done
   if [ -n "$__teamai_unapply_ifs_set" ]; then IFS=$__teamai_unapply_ifs; else unset IFS; fi
   unset __TEAMAI_ENV_KEYS
@@ -932,12 +962,13 @@ $__teamai_f"
     eval "__teamai_set=\\\${$__teamai_k+1}"
     if [ "$__teamai_set" = 1 ]; then
       # Remove inherited export attributes from bookkeeping before writing it.
-      unset "__TEAMAI_ENV_SET_$__teamai_k" "__TEAMAI_ENV_PREV_$__teamai_k"
+      unset "__TEAMAI_ENV_SET_$__teamai_k" "__TEAMAI_ENV_PREV_$__teamai_k" "__TEAMAI_ENV_ATTR_$__teamai_k"
       if __teamai_env_exported "$__teamai_k"; then
         eval "export __TEAMAI_ENV_SET_$__teamai_k=2 __TEAMAI_ENV_PREV_$__teamai_k=\\"\\$$__teamai_k\\""
       else
         eval "__TEAMAI_ENV_SET_$__teamai_k=1 __TEAMAI_ENV_PREV_$__teamai_k=\\"\\$$__teamai_k\\""
       fi
+      __teamai_env_plain "$__teamai_k"
     fi
   done
   IFS=$__teamai_key_ifs
