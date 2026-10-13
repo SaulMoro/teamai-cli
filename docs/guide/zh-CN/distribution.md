@@ -48,6 +48,15 @@ cd /path/to/my-workspace
 teamai init . --agent claude,cursor
 ```
 
+### 包含仓库的 workspace
+
+workspace 也会交付其下已初始化的仓库所选择的资源。
+在 `ws/` 中运行 `teamai pull` 会查找最多三层目录以内的这些仓库，并列出它们的名字。
+它在仓库处停止：`svc-a/` 里的文件夹和 worktree 属于 `svc-a`。
+两个仓库以相同方式提供的 skill、agent、hook、env 键或 MCP server 只送达一次；内容不同的会被暂缓（held）并指出名字，每个仓库保留自己的那一份。
+使用其他团队仓库的子项会被排除，并有一行说明。
+你在 `svc-a/` 中的 agent 仍然只获得 `svc-a` 的资源。
+
 ## 仓库
 
 `init` 会写 `teamai.yaml`。独立团队仓库放在仓库根目录。业务仓库自己当团队仓库时，文件是 `.teamai/teamai.yaml`，并带 `mode: self`。

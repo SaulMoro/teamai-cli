@@ -79,6 +79,8 @@ toolRoots:
   codex: ~/.codex-alt
 ```
 
+The role, project and tag fields hold this directory's own selection. A workspace also delivers the selections of the repos set up inside it, read at each pull and never written here. See [Workspaces with repos inside](./distribution.md#workspaces-with-repos-inside).
+
 #### Relocated tool roots (`toolRoots`)
 
 When Claude Code uses `CLAUDE_CONFIG_DIR`, or Codex uses `CODEX_HOME`, `init` records that directory. Only `claude` and `codex` are accepted.

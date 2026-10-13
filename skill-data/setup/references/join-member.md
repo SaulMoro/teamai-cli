@@ -34,6 +34,10 @@ If it fails, Node.js ≥ 20 is missing — have them install Node 20+ first.
 
 - **This project only** (default): `cd` into the project directory first.
 - **Whole machine**: add `--scope user`.
+- **A folder holding several repos** (a workspace): set up each repo from
+  inside it, then run the same `init` in the folder. The folder also receives
+  what each repo inside selects; pass `--project` there only for a project the
+  folder itself belongs to.
 
 ## Step 3 — Log in to the same platform as the URL
 

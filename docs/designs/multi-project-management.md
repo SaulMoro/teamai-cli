@@ -190,6 +190,9 @@ suggested it does not hold: tags express a personal preference with no external
 basis and need an explicit toggle; a project has an external basis (cwd) and is
 already known at `init` time. Recorded here so it isn't re-proposed.
 
+A workspace also delivers the projects of the repos set up inside it, each still
+selected in its own directory; see [Workspace children](workspace-children.md) (#913).
+
 `--project all` (issue #509) is the one reserved value for the flag: it expands to
 every id the manifest declares, via `listProjectIds(manifest)`, and that snapshot
 is what `config.yaml` records. It keeps a monorepo's onboarding to a single line

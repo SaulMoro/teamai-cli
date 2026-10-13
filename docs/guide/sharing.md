@@ -142,6 +142,7 @@ teamai env exec -- gh pr create
 A shell gets the team env of the directory it starts in, so several projects open at once each get their own. `teamai pull` adds one block to your shell profile (`.zshenv` for zsh, the bash startup files for bash). An interactive shell switches env on `cd` and puts your own values back when you leave a project.
 
 - In a project: the project's env. With `inheritUserScope: true`, the user scope's variables load too, but a key the project declares stays the project's, and user-scope secrets never load.
+- In a workspace with repos set up inside it: its own env plus theirs. A key two of them set differently is held: the value installed before stays, and `pull` names it.
 - In a project no pull has registered yet: nothing, until you pull there.
 - Anywhere else: the user scope's env.
 - Where git cannot read the repository (git missing, a broken `.git`, `safe.directory`): nothing.
@@ -221,6 +222,8 @@ servers:
 ```
 
 Write secrets as `${VAR}` and declare the key in `env/secrets.yaml`. A server for one project goes in `mcp/<ns>/mcp.yaml`.
+
+In a workspace with repos set up inside it, Claude Code and CodeBuddy get the servers through their local scope, not the project's MCP file, so a session in one of those repos does not load them. In single-repo mode, or while tclaude or Muse Code reads that file, Claude Code's servers stay in it, and such a session does load them.
 
 ```bash
 teamai mcp list

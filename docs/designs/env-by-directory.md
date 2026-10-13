@@ -13,6 +13,7 @@ Before this, each scope wrote its own `source <env.sh>` block into the shell pro
 | Directory | Loads |
 | --- | --- |
 | A project | its `env.sh` |
+| A workspace with repos set up inside it | its `env.sh`, which holds its own env plus theirs ([Workspace children](workspace-children.md)) |
 | A project with `inheritUserScope: true` | the user scope's `env.sh`, then the project's; a key the project declares (variable or secret) is the project's |
 | A linked worktree of a project | that project's, before the worktree has pulled |
 | A project set up but not yet registered by a pull | nothing |

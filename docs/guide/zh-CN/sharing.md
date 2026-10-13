@@ -142,6 +142,7 @@ teamai env exec -- gh pr create
 shell 获得其启动目录的团队环境变量，因此同时打开的多个项目各自拿到自己的。`teamai pull` 会在 shell 配置文件中加入一个区块（zsh 为 `.zshenv`，bash 为 bash 启动文件）。交互式 shell 在 `cd` 时切换环境变量，离开项目时恢复你自己的值。
 
 - 在项目中：加载该项目的环境变量。设置 `inheritUserScope: true` 时也加载用户级 scope 的变量，但项目声明的键以项目为准，用户级 scope 的密钥始终不会加载。
+- 在包含已初始化仓库的 workspace 中：加载它自己的环境变量加上这些仓库的。两者取值不同的键会被暂缓（held）：之前安装的值保持不变，`pull` 会指出它。
 - 尚未被 pull 登记的项目：什么都不加载，直到你在那里 pull。
 - 其他位置：加载用户级 scope 的环境变量。
 - git 无法读取仓库时（未安装 git、`.git` 损坏、`safe.directory`）：什么都不加载。
@@ -221,6 +222,8 @@ servers:
 ```
 
 密钥写 `${VAR}`，并在 `env/secrets.yaml` 里声明。只给一个项目时，写到 `mcp/<ns>/mcp.yaml`。
+
+在包含已初始化仓库的 workspace 中，Claude Code 和 CodeBuddy 通过各自的 local scope 而不是项目 MCP 文件获得这些 server，所以在其中某个仓库里启动的会话不会加载它们。在单仓库模式下，或 tclaude、Muse Code 读取该文件时，Claude Code 的 server 仍留在其中，这样的会话会加载它们。
 
 ```bash
 teamai mcp list

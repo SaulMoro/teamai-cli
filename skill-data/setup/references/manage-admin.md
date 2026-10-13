@@ -137,6 +137,11 @@ teamai projects update <id> --add-namespaces <ns>   # or --remove-namespaces / -
 teamai projects remove <id>  # remove a project
 ```
 
+A workspace (a folder set up with `init`) also delivers the projects of the
+repos set up inside it, up to three levels down, with no list to keep: `teamai
+projects list` there shows each one and what it selects. A repo that uses
+another team repo, or single-repo mode, is left out and named.
+
 A member gets the union of their role resources and their active project's
 resources. Admins declare projects in `manifest/projects.yaml` with the commands
 above, each of which opens a PR. `roles init/add/update/remove` and

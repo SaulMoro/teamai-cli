@@ -48,6 +48,15 @@ cd /path/to/my-workspace
 teamai init . --agent claude,cursor
 ```
 
+### Workspaces with repos inside
+
+A workspace also delivers what the set-up repos under it select.
+`teamai pull` in `ws/` finds them up to three folders down and names them.
+It stops at a repo: folders and worktrees inside `svc-a/` belong to `svc-a`.
+A skill, agent, hook, env key or MCP server two repos ship the same way arrives once; one that differs is held and named, and each repo keeps its own.
+A child with another team repo is left out, with a line that says so.
+Your agent in `svc-a/` still gets only `svc-a`'s resources.
+
 ## Repo
 
 `init` writes `teamai.yaml`. A separate team repo keeps it at the repo root. When this repo is the team repo, the file is `.teamai/teamai.yaml` and includes `mode: self`.

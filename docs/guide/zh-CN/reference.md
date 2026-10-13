@@ -79,6 +79,8 @@ toolRoots:
   codex: ~/.codex-alt
 ```
 
+角色、项目和 tag 字段保存的是这个目录自己的选择。workspace 还会交付其中已初始化仓库的选择，这些选择在每次 pull 时读取，不会写入这里。参见[包含仓库的 workspace](./distribution.md#包含仓库的-workspace)。
+
 #### 迁移后的工具根目录（`toolRoots`）
 
 Claude Code 用 `CLAUDE_CONFIG_DIR`、Codex 用 `CODEX_HOME` 时，`init` 会记下那个目录。目前只认 `claude` 和 `codex`。

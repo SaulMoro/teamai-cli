@@ -186,6 +186,19 @@ held, or a git error, relay the fix the line gives.
 
 For new HTTP local-agent MCP installs, a failed initial ownership-manifest write leaves the MCP config and Git exclusions unchanged. Retry the install after fixing the manifest write error. A bare Copilot entry beside `mcpServers` is removed only with a matching ownership record proving a completed bare write. Older records without that evidence preserve the bare entry. A bare ownership record cannot claim a same-named member entry under `mcpServers`: updates skip the collision, and removal leaves that keyed entry alone. An unmarked Copilot record needs a matching keyed hash that does not also match the bare entry. Completed writes record `bare: true` or `bare: false`; missing placement remains unproven, including after a failed placement-record write. Existing JSON MCP updates keep the old ownership until the config write completes; a later manifest failure restores the config. `uninstall_mcp` keeps ownership if reading or writing the config fails, and restores the entry if removing its manifest record fails. MCP reconcile also restores all configs written before an ownership-save failure. If restoration fails too, repair the named configs and ownership records before retrying; the error reports both failures, and configs still carrying credentials stay excluded from Git.
 
+## "Workspace child <path> is left out" / "<item> differs between ..."
+
+`pull` in a workspace prints these; `teamai doctor` repeats the first.
+
+- **Left out**: that repo uses another team repo, is in single-repo mode, or
+  its config cannot be read. The line gives the reason. To include it, run
+  `teamai init <this workspace's team repo>` in it; otherwise it keeps working
+  on its own and nothing needs doing.
+- **Differs between**: two repos inside the workspace receive an item of that
+  name with different content, so the workspace holds it: what teamai
+  installed for it before stays, in the place the workspace's rules give it. Tell the user to make the two copies equal in the team repo or
+  rename one. Each repo still receives its own copy.
+
 ## Permission / access denied
 
 `init`, `pull`, or `push` failing with a permission error usually means the user

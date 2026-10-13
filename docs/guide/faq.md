@@ -59,6 +59,14 @@ held by a live process, or one that names no owner, is never removed.
 
 Yes, but workspace scope remains isolated by default. When the current working directory contains a workspace-scope config, it is active and user scope is skipped. Initialize user scope first, then initialize the workspace with `--inherit-user-scope` (or set `inheritUserScope: true` in the workspace's local config) to compose safe resources and Recall results. MCP and secrets remain workspace-only. A workspace with `inheritUserScope: true` also receives user-scope env variables unless the workspace declares the same key as a variable or a secret. Hooks are the exception: a non-self workspace scope injects the built-in hooks into HOME so `hook-dispatch` can gate on `cwd` (see the Hooks section).
 
+**Q: `pull` says a workspace child is left out?**
+
+A repo set up inside a workspace counts only when it uses the workspace's team repo and is not in single-repo mode. The line names the repo and the reason. Run `teamai init <team repo>` in that repo to include it, or leave it as is: it keeps working on its own. `teamai doctor` lists every child left out.
+
+**Q: `pull` in a workspace says a skill, agent or server "differs between" two namespaces?**
+
+Two repos inside the workspace receive an item of that name with different content, so the workspace holds it and names it: what teamai installed for it before stays, in the place the workspace's rules give it. Make the two copies equal in the team repo, or rename one. Each repo still receives its own copy.
+
 **Q: `teamai init` says it's already initialized?**
 
 In interactive mode, you'll be asked whether to overwrite — type `y` to confirm. You can also use `--force` to skip the confirmation:

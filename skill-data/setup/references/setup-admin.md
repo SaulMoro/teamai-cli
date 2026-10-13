@@ -157,6 +157,8 @@ One choice — this workspace or the whole machine?
 - Default (workspace): resources land in the current workspace's `.claude/` etc.
   `cd` into the workspace first.
 - Whole machine: add `--scope user` so every project gets the team resources.
+- A folder holding several repos (a workspace): set up each repo, then run the
+  same `init` in the folder. It also receives what each repo inside selects.
 
 (The repo name was already chosen when the user created the repo in Step 2c —
 suggested form `<team-name>-teamai`.)
