@@ -131,6 +131,8 @@ describe('Muse Code resource delivery', () => {
       home,
     );
     expect(result.code, result.output).toBe(0);
+    const pulled = await runCLI(['pull'], workDir, home);
+    expect(pulled.code, pulled.output).toBe(0);
 
     const skills = path.join(home, '.config', 'muse', 'skills');
     expect(fs.readFileSync(path.join(skills, 'demo', 'SKILL.md'), 'utf8')).toContain('Muse fixture skill');
@@ -139,8 +141,8 @@ describe('Muse Code resource delivery', () => {
     expect(fs.readFileSync(path.join(home, '.config', 'muse', 'agents', 'reviewer.md'), 'utf8')).toBe(
       '---\nname: reviewer\ndescription: Muse fixture agent\ntools:\n  - read_file\n  - search\n  - bash\n---\nReview the change.\n',
     );
-    expect(result.output).toContain('agents/reviewer.yaml: Muse Code has no tool for NotebookEdit, so its muse copy leaves it out of tools.');
-    expect(result.output).toContain('agents/reviewer.yaml: Muse Code rejects an agent file setting color, so its muse copy leaves tool_extras.muse.color out.');
+    expect(pulled.output).toContain('agents/reviewer.yaml: Muse Code has no tool for NotebookEdit, so its muse copy leaves it out of tools.');
+    expect(pulled.output).toContain('agents/reviewer.yaml: Muse Code rejects an agent file setting color, so its muse copy leaves tool_extras.muse.color out.');
   }, 90_000);
 
   it('installs the teamai hooks in ~/.config/muse/settings.json from a project init', async () => {
@@ -155,6 +157,8 @@ describe('Muse Code resource delivery', () => {
       home,
     );
     expect(result.code, result.output).toBe(0);
+    const pulled = await runCLI(['pull'], projectRoot, home);
+    expect(pulled.code, pulled.output).toBe(0);
 
     const settings = JSON.parse(fs.readFileSync(path.join(home, '.config', 'muse', 'settings.json'), 'utf8')) as {
       schema_version?: number;
@@ -185,12 +189,14 @@ describe('Muse Code resource delivery', () => {
       home,
     );
     expect(init.code, init.output).toBe(0);
+    const pulled = await runCLI(['pull'], projectRoot, home);
+    expect(pulled.code, pulled.output).toBe(0);
     const shared = path.join(projectRoot, '.agents', 'skills', 'demo', 'SKILL.md');
     expect(fs.readFileSync(shared, 'utf8')).toContain('Muse fixture skill');
     expect(fs.existsSync(path.join(projectRoot, '.codex', 'skills', 'demo'))).toBe(false);
     expect(fs.existsSync(path.join(projectRoot, '.agents', 'skills', 'teamai', 'SKILL.md'))).toBe(true);
     expect(fs.existsSync(path.join(projectRoot, '.codex', 'skills', 'teamai'))).toBe(false);
-    expect(init.output).not.toContain('skill conflict');
+    expect(pulled.output).not.toContain('skill conflict');
 
     const other = first === 'codex' ? 'muse' : 'codex';
     const partial = await runCLI(['uninstall', '--agent', first, '--force'], projectRoot, home);
