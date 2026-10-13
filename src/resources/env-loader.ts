@@ -48,6 +48,32 @@ for __teamai_k in $(compgen -v | command -p awk -v __teamai_exec_keys="\${__TEAM
   BEGIN { n = split(__teamai_exec_keys, team, " "); for (i = 1; i <= n; i++) { wanted[toupper(team[i])] = 1; kept[team[i]] = 1 } }
   (toupper($0) in wanted) && !($0 in kept)'); do unset "$__teamai_k"; done`;
 
+/** Shared by the loader and the env exec BASH_ENV: clears the attributes that would change a team value. */
+const ENV_PLAIN = `# Clear the attributes of $1 that change a value assigned to it (integer,
+# lowercase, uppercase), so a loaded file's value arrives as written, and save
+# them for \`__teamai_env_restore\`. bash before 4.2 cannot change a global's
+# attributes from a function, so the variable goes: its value and export are saved.
+__teamai_env_plain() {
+  if [ -n "\${ZSH_VERSION-}" ]; then
+    __teamai_decl=$(typeset -p "$1" 2>/dev/null)
+  else
+    __teamai_decl=$(declare -p "$1" 2>/dev/null)
+  fi
+  __teamai_decl=\${__teamai_decl%% "$1"*} __teamai_attrs=
+  for __teamai_a in i l u; do
+    case $__teamai_decl in *" -"*"$__teamai_a"*) __teamai_attrs=$__teamai_attrs$__teamai_a ;; esac
+  done
+  [ -n "$__teamai_attrs" ] || return 0
+  eval "__TEAMAI_ENV_ATTR_$1=$__teamai_attrs"
+  if [ -n "\${ZSH_VERSION-}" ]; then typeset -g +i +l +u "$1"
+  elif __teamai_env_global_attrs; then declare -g +i +l +u "$1"
+  else unset "$1"; fi
+}
+
+__teamai_env_global_attrs() {
+  [ "\${BASH_VERSINFO[0]}" -gt 4 ] || { [ "\${BASH_VERSINFO[0]}" = 4 ] && [ "\${BASH_VERSINFO[1]}" -ge 2 ]; }
+}`;
+
 function envExecBashEnvScript(windows: boolean): string {
   return `# DO NOT EDIT: written by teamai. The BASH_ENV of a command run with
 # \`teamai env exec\`: sources the member's own, the team env winning a key both set.
@@ -65,10 +91,15 @@ if [ -n "\${__TEAMAI_ENV_EXEC_BASH_ENV-}" ] && [ -f "$__TEAMAI_ENV_EXEC_BASH_ENV
   export BASH_ENV="$__teamai_exec_self"
   unset __teamai_exec_self __teamai_exec_member
 fi
+${ENV_PLAIN}
 __teamai_exec_ifs_set=\${IFS+1} __teamai_exec_ifs=\${IFS-}
 IFS=' '
 for __teamai_k in \${__TEAMAI_ENV_EXEC_KEYS-}; do
-  if eval "[ -n \\"\\$__teamai_exec_set_$__teamai_k\\" ]"; then eval "export $__teamai_k=\\"\\$__teamai_exec_$__teamai_k\\""; else unset "$__teamai_k"; fi
+  if eval "[ -n \\"\\$__teamai_exec_set_$__teamai_k\\" ]"; then
+    __teamai_env_plain "$__teamai_k"
+    unset "__TEAMAI_ENV_ATTR_$__teamai_k"
+    eval "export $__teamai_k=\\"\\$__teamai_exec_$__teamai_k\\""
+  else unset "$__teamai_k"; fi
   unset "__teamai_exec_$__teamai_k" "__teamai_exec_set_$__teamai_k"
 done
 ${windows ? `${ENV_EXEC_WINDOWS_SPELLINGS}\n` : ''}if [ -n "$__teamai_exec_ifs_set" ]; then IFS=$__teamai_exec_ifs; else unset IFS; fi
@@ -840,30 +871,7 @@ __teamai_env_exported() {
   return 1
 }
 
-# Clear the attributes of $1 that change a value assigned to it (integer,
-# lowercase, uppercase), so a loaded file's value arrives as written, and save
-# them for \`__teamai_env_restore\`. bash before 4.2 cannot change a global's
-# attributes from a function, so the variable goes: its value and export are saved.
-__teamai_env_plain() {
-  if [ -n "\${ZSH_VERSION-}" ]; then
-    __teamai_decl=$(typeset -p "$1" 2>/dev/null)
-  else
-    __teamai_decl=$(declare -p "$1" 2>/dev/null)
-  fi
-  __teamai_decl=\${__teamai_decl%% "$1"*} __teamai_attrs=
-  for __teamai_a in i l u; do
-    case $__teamai_decl in *" -"*"$__teamai_a"*) __teamai_attrs=$__teamai_attrs$__teamai_a ;; esac
-  done
-  [ -n "$__teamai_attrs" ] || return 0
-  eval "__TEAMAI_ENV_ATTR_$1=$__teamai_attrs"
-  if [ -n "\${ZSH_VERSION-}" ]; then typeset -g +i +l +u "$1"
-  elif __teamai_env_global_attrs; then declare -g +i +l +u "$1"
-  else unset "$1"; fi
-}
-
-__teamai_env_global_attrs() {
-  [ "\${BASH_VERSINFO[0]}" -gt 4 ] || { [ "\${BASH_VERSINFO[0]}" = 4 ] && [ "\${BASH_VERSINFO[1]}" -ge 2 ]; }
-}
+${ENV_PLAIN}
 
 # Put back the member's own value of $1, which a loaded file set. A project's
 # env.sh also calls it for a key it declares and the user scope's env.sh set.

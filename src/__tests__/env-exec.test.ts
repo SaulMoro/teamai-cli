@@ -123,6 +123,28 @@ describe('teamai env exec', () => {
     expect(await fse.readFile(out, 'utf8')).toBe('https://team.example|fixture-team||member|https://team.example|fixture-team');
   });
 
+  // An integer attribute the member's BASH_ENV gives a team key would evaluate the team value.
+  it.skipIf(spawnSync('bash', ['-c', 'true']).status !== 0).each([
+    { via: 'the member', loader: false },
+    { via: 'the env loader', loader: true },
+  ])("gives a bash the command starts the team value as written when the BASH_ENV $via chains declares the key an integer", async ({ loader }) => {
+    const { repoPath } = await team('personal', { 'env/env.yaml': "variables:\n  - key: TOKEN\n    value: '1+1'\n" });
+    await userScope(repoPath);
+    const memberBashEnv = path.join(home, '.bash_env');
+    await fse.writeFile(memberBashEnv, 'declare -ix TOKEN=3\n');
+    if (loader) {
+      vi.stubEnv('BASH_ENV', envLoaderPath());
+      vi.stubEnv('__TEAMAI_ENV_BASH_ENV', memberBashEnv);
+    } else {
+      vi.stubEnv('BASH_ENV', memberBashEnv);
+    }
+
+    const outcome = await envExec(['--', 'bash', '-c', 'printf "%s|%s" "$TOKEN" "$(printenv TOKEN)" > "$0"; bash -c \'printf "|%s" "$TOKEN" >> "$0"\' "$0"', out], {}, home);
+
+    expect(outcome).toEqual({ kind: 'exited', code: 0 });
+    expect(await fse.readFile(out, 'utf8')).toBe('1+1|1+1|1+1');
+  });
+
   it.skipIf(spawnSync('bash', ['-c', 'true']).status !== 0).each([
     { via: 'the member', loader: false },
     { via: 'the env loader', loader: true },
