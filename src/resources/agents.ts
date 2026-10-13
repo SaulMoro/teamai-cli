@@ -33,6 +33,7 @@ import {
   reverseFromCopilot,
   reverseFromJoycode,
   reverseFromKiro,
+  reverseFromMuse,
   reverseFromOpencode,
   reverseFromWorkbuddy,
   mergeReverseResults,
@@ -1850,6 +1851,6 @@ function reverseByParser(tool: ToolName, filePath: string, content: string): Rev
     case 'workbuddy':
       return reverseFromWorkbuddy(filePath, content);
     case 'muse':
-      return reverseFromClaude(filePath, content);
+      return reverseFromMuse(filePath, content);
   }
 }

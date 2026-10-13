@@ -695,6 +695,20 @@ export function reverseFromWorkbuddy(filePath: string, content: string): Reverse
 }
 
 /**
+ * Reverse a Muse Code .md file. Its `tools` are Muse Code's names
+ * (`read_file`), which no other tool has, so like OpenCode's they stay in
+ * tool_extras.muse, which the Muse render reads ahead of the canonical `tools`.
+ */
+export function reverseFromMuse(filePath: string, content: string): ReverseResult {
+  const result = reverseFromClaude(filePath, content);
+  if (!result.ok) return result;
+
+  const { tools, tool_extras, ...spec } = result.spec;
+  const extras = { ...tool_extras?.['claude'], ...(tools !== undefined ? { tools } : {}) };
+  return { ok: true, spec: Object.keys(extras).length > 0 ? { ...spec, tool_extras: { muse: extras } } : spec };
+}
+
+/**
  * Reverse a Kiro JSON agent config. The TeamAI-managed `agentSpawn` entry is a
  * local delivery detail, so it is removed before remaining private fields are
  * returned under `tool_extras.kiro`.

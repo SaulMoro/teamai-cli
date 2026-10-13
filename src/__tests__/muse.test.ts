@@ -6,6 +6,7 @@ import { reconcileHooks } from '../hooks.js';
 import { mcpRelocated, reconcileMcpForConfig } from '../mcp-reconcile.js';
 import { buildMcpDeliveryChecks, mcpTransportNotes } from '../doctor-delivery.js';
 import { isToolInstalledForConfig } from '../resources/base.js';
+import { AgentsHandler } from '../resources/agents.js';
 import { museAgentDrops, renderForTool, type AgentSpec } from '../resources/agent-format.js';
 import matter from 'gray-matter';
 import { TeamaiConfigSchema, type LocalConfig, type TeamaiConfig } from '../types.js';
@@ -371,6 +372,54 @@ describe('Muse Code agents', () => {
   it('names what the render drops', () => {
     expect(museAgentDrops({ ...spec, tool_extras: { muse: { color: 'blue' } } })).toEqual({
       tools: ['NotebookEdit'], extras: ['color'],
+    });
+  });
+
+  // Muse Code's tool names (`read_file`) mean nothing to other tools, so a pushed Muse copy keeps them in tool_extras.muse.
+  describe('push', () => {
+    let root: string;
+    let teamRepo: string;
+    let agentsDir: string;
+    const teamConfig = TeamaiConfigSchema.parse({ team: 'muse-agents', repo: 'fixture', provider: 'git' });
+    const localConfig = (): LocalConfig => ({
+      repo: { localPath: teamRepo, remote: 'fixture' }, username: 'tester', scope: 'user', enabledAgents: ['muse'], additionalRoles: [],
+    });
+
+    beforeEach(async () => {
+      root = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-muse-agents-'));
+      teamRepo = path.join(root, 'repo');
+      agentsDir = path.join(root, 'home', '.config', 'muse', 'agents');
+      vi.stubEnv('HOME', path.join(root, 'home'));
+      vi.stubEnv('USERPROFILE', path.join(root, 'home'));
+      await fse.ensureDir(agentsDir);
+      await fse.ensureDir(path.join(teamRepo, 'agents'));
+    });
+
+    afterEach(async () => {
+      vi.unstubAllEnvs();
+      await fse.remove(root);
+    });
+
+    it.each([
+      { change: 'an edited tool list', team: true, expected: { tools: ['Read', 'Grep'], tool_extras: { muse: { tools: ['read_file', 'search', 'write_file'] } } } },
+      { change: 'a new agent', team: false, expected: { tools: undefined, tool_extras: { muse: { tools: ['read_file', 'search', 'write_file'] } } } },
+    ])('pushes $change in Muse Code names to tool_extras.muse, never to tools', async ({ team, expected }) => {
+      const handler = new AgentsHandler();
+      const deployed = path.join(agentsDir, 'reviewer.md');
+      if (team) {
+        const sourcePath = path.join(teamRepo, 'agents', 'reviewer.yaml');
+        await fse.writeFile(sourcePath, 'name: reviewer\ndescription: Reviews a change\ninstructions: Review the diff.\ntools: [Read, Grep]\n');
+        await handler.pullItem({ name: 'reviewer', type: 'agents', sourcePath, relativePath: 'agents/reviewer.yaml' }, teamConfig, localConfig());
+        await fse.writeFile(deployed, (await fse.readFile(deployed, 'utf8')).replace('  - search\n', '  - search\n  - write_file\n'));
+      } else {
+        await fse.writeFile(deployed, '---\nname: reviewer\ndescription: Reviews a change\ntools:\n  - read_file\n  - search\n  - write_file\n---\nReview the diff.\n');
+      }
+
+      const pushed = (await handler.scanLocalForPush(teamConfig, localConfig())).find((candidate) => candidate.name === 'reviewer');
+
+      expect(pushed?.mergedSpec?.tools).toEqual(expected.tools);
+      expect(pushed?.mergedSpec?.tool_extras).toEqual(expected.tool_extras);
+      expect(frontmatter(renderForTool(pushed!.mergedSpec!, 'muse').content).tools).toEqual(['read_file', 'search', 'write_file']);
     });
   });
 });
