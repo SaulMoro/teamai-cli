@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { getUserHome, expandHome } from './utils/home.js';
 import { log } from './utils/logger.js';
+import type { WorkspaceChildren } from './workspace-children.js';
 
 const DEFAULT_COPILOT_HOME = '.copilot';
 const COPILOT_USER_MCP_CONFIG = 'mcp-config.json';
@@ -854,8 +855,16 @@ export const LocalConfigSchema = z.object({
  * migration could not read the roles manifest, so whether this role-less config
  * holds a role is unknown for this run; `activeRoleIds` then matches no
  * role-scoped entry instead of every one. The next load re-decides it.
+ *
+ * `children` is runtime-only too: the children a workspace read this run
+ * (`readWorkspaceChildren`, #913). It is never written, so a workspace's
+ * config keeps its own selection only.
  */
-export type LocalConfig = z.infer<typeof LocalConfigSchema> & { dataHome?: string; roleUnresolved?: true };
+export type LocalConfig = z.infer<typeof LocalConfigSchema> & {
+  dataHome?: string;
+  roleUnresolved?: true;
+  children?: WorkspaceChildren;
+};
 export type LocalConfigInput = z.input<typeof LocalConfigSchema>;
 
 // ─── Local state (~/.teamai/state.json) ────────────────────
@@ -987,6 +996,13 @@ export const StateSchema = z.object({
     agentModels: z.record(z.string(), z.record(z.string(), RecordedAgentModelSchema)).optional(),
     gitExcludePaths: z.record(z.string(), z.array(z.string())).optional(),
     rootsSeeded: z.boolean().optional(),
+    /** The children a workspace was last delivered with (`WorkspaceChildren.fingerprint`, #913). */
+    children: z.string().optional(),
+    /**
+     * The `claudeMdExcludes` entries teamai wrote into this checkout's
+     * `.claude/settings.local.json` for the workspaces above it (#913).
+     */
+    claudeMdExcludes: z.array(z.string()).optional(),
   })).optional(),
   /**
    * The exclude files holding each git exclude owner's block that this

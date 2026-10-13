@@ -1,6 +1,7 @@
 import path from 'node:path';
 import YAML from 'yaml';
 import { autoDetectInit, loadStateForScope } from './config.js';
+import { summarizeWorkspaceChildren } from './workspace-children.js';
 import { getRepoStatus } from './utils/git.js';
 import { assertSafeResourceName } from './utils/path-safety.js';
 import { log } from './utils/logger.js';
@@ -58,6 +59,8 @@ export async function status(options: GlobalOptions): Promise<void> {
   // Machine-data partition: where this project's teamai data actually lives
   // (~/.teamai/projects/<slug>/ for a partitioned install, else legacy .teamai).
   log.info(`  data: ${getDataHome(localConfig)}`);
+  const children = summarizeWorkspaceChildren(localConfig);
+  if (children) log.info(`  ${children}`);
 
   // Git status
   console.log('');

@@ -11,6 +11,7 @@ import matter from 'gray-matter';
 import { buildRolePullContext, filterRulesByKnowledgeNamespaces, resolveDesiredRules } from '../resources/desired.js';
 import { getHandler } from '../resources/index.js';
 import { filterByTags, loadTagsConfig } from '../utils/tags.js';
+import { deliveredMembers } from '../workspace-children.js';
 import { readFileSafe } from '../utils/fs.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
@@ -62,17 +63,23 @@ export async function collectRulesInventory(
     ...overrides.map((override) => override.replaces),
   ]);
   // The two channels below only label what the sets above left undelivered.
-  const knowledgeNs = roleContext ? roleContext.activeNamespaces.knowledge : null;
-  const inNamespace = new Set(
-    filterRulesByKnowledgeNamespaces(allItems, knowledgeNs).map((item) => item.relativePath),
-  );
-  const { skipped: tagSkipped } = filterByTags(
-    allItems.filter((item) => inNamespace.has(item.relativePath)),
-    await loadTagsConfig(localConfig.repo.localPath),
-    localConfig.subscribedTags,
-    'rules',
-  );
-  const tagSkippedPaths = new Set(tagSkipped.map((item) => item.relativePath));
+  // In a workspace with children each member reads its own (#913): a rule is
+  // outside the namespaces when no member's hold it, and left out by tags when
+  // every member whose namespaces hold it skips it.
+  const members = await deliveredMembers(localConfig);
+  const channels = members
+    ? await Promise.all(members.map(async (member) => ({ member, roleContext: await buildRolePullContext(member) })))
+    : [{ member: localConfig, roleContext }];
+  const tagsConfig = await loadTagsConfig(localConfig.repo.localPath);
+  const inNamespace = new Set<string>();
+  const tagIncluded = new Set<string>();
+  for (const channel of channels) {
+    const knowledgeNs = channel.roleContext ? channel.roleContext.activeNamespaces.knowledge : null;
+    const namespaced = filterRulesByKnowledgeNamespaces(allItems, knowledgeNs);
+    for (const item of namespaced) inNamespace.add(item.relativePath);
+    const { included } = filterByTags(namespaced, tagsConfig, channel.member.subscribedTags, 'rules');
+    for (const item of included) tagIncluded.add(item.relativePath);
+  }
 
   const rules: DashboardRule[] = [];
   for (const item of allItems) {
@@ -82,7 +89,7 @@ export async function collectRulesInventory(
     if (delivered.has(item.relativePath)) undeliveredReason = undefined;
     else if (superseded.has(item.relativePath)) undeliveredReason = 'replaced';
     else if (!inNamespace.has(item.relativePath)) undeliveredReason = 'namespace';
-    else if (tagSkippedPaths.has(item.relativePath)) undeliveredReason = 'tags';
+    else if (!tagIncluded.has(item.relativePath)) undeliveredReason = 'tags';
     else undeliveredReason = 'replaced';
     rules.push({
       name: item.name,

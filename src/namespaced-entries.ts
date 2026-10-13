@@ -22,6 +22,7 @@
  * keeps its old handling of a repeated name; doctor lists those as info.
  */
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { describeOverride, repeatedNames, resolveNamespacedItems, type NamespaceCandidate } from './namespace-resolver.js';
 import { resolveResourceNamespaces } from './resource-namespaces.js';
 import { activeRoleIds, findRole, loadRolesManifestIfPresent } from './roles.js';
@@ -31,6 +32,7 @@ import type { LocalConfig } from './types.js';
 import { listDirs, pathExists, readFileIfExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import { warnOnce } from './utils/warn-once.js';
+import { deliveredMembers, unionMemberItems } from './workspace-children.js';
 
 export type EntryType = 'env' | 'hooks' | 'mcp' | 'models';
 
@@ -297,6 +299,8 @@ export async function resolveEntries<E>(
   localConfig: LocalConfig,
   active: readonly string[] | null,
 ): Promise<EntryResolution<E>> {
+  const members = await deliveredMembers(localConfig);
+  if (members) return resolveWorkspaceEntries(reader, members);
   const { type } = reader;
   const layout = asLayout(reader.layout ?? type);
   const repoPath = localConfig.repo.localPath;
@@ -398,6 +402,55 @@ export async function resolveEntries<E>(
     active,
     notices,
     repeated,
+  };
+}
+
+/**
+ * A workspace's entries of one type (#913): each member's, in that member's
+ * namespaces, unioned by name. A name every member that delivers it defines
+ * the same way is delivered once, from the first; a name whose definitions
+ * differ is not delivered, and a notice names both files. An MCP server a
+ * member excludes does not come through that member, so the workspace
+ * delivers it while another member does (its own exclusions apply after).
+ * A member whose files fail stops the type, as it would in that member's
+ * own scope.
+ */
+async function resolveWorkspaceEntries<E>(reader: EntryReader<E>, members: readonly LocalConfig[]): Promise<EntryResolution<E>> {
+  const layout = asLayout(reader.layout ?? reader.type);
+  const perMember: Array<Array<{ name: string; entries: ResolvedEntry<E>[] }>> = [];
+  const notices = new Map<string, EntryNotice>();
+  const repeated = new Set<string>();
+  const actives: Array<readonly string[] | null> = [];
+  for (const member of members) {
+    const resolution = await resolveEntriesFor(reader, member);
+    for (const notice of resolution.notices) notices.set(notice.message, notice);
+    if (resolution.kind === 'failed') return { ...resolution, notices: [...notices.values()] };
+    const excluded = new Set(reader.type === 'mcp' ? member.excludedSkills ?? [] : []);
+    const byName = new Map<string, ResolvedEntry<E>[]>();
+    for (const entry of resolution.entries) {
+      if (!excluded.has(entry.name)) byName.set(entry.name, [...(byName.get(entry.name) ?? []), entry]);
+    }
+    perMember.push([...byName].map(([name, entries]) => ({ name, entries })));
+    for (const name of resolution.repeated) repeated.add(name);
+    actives.push(resolution.active);
+  }
+  const { items, held } = await unionMemberItems({
+    perMember,
+    nameOf: (group) => group.name,
+    sameContent: (a, b) => isDeepStrictEqual(a.entries.map((entry) => entry.entry), b.entries.map((entry) => entry.entry)),
+  });
+  for (const { name, first, second } of held) {
+    const message = `${layout.label}: ${layout.noun} "${name}" differs between ${first.entries[0]?.source} and ${second.entries[0]?.source}, `
+      + 'so this workspace does not deliver it. Make the two definitions equal in the team repo, or rename one.';
+    notices.set(message, { kind: 'file-note', message });
+  }
+  const known = actives.filter((active): active is readonly string[] => active !== null);
+  return {
+    kind: 'resolved',
+    entries: items.flatMap((group) => group.entries),
+    active: known.length === 0 ? null : [...new Set(known.flat())],
+    notices: [...notices.values()],
+    repeated: [...repeated],
   };
 }
 

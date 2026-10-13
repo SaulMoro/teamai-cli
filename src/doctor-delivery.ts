@@ -1913,7 +1913,7 @@ async function readNamespaceNoteInputs(teamConfig: TeamaiConfig, localConfig: Lo
     skills: await desired.resolveDesiredSkills(teamConfig, localConfig, roleContext),
     agents: await desired.resolveDesiredAgents(teamConfig, localConfig, roleContext),
     rules: await desired.resolveDesiredRules(teamConfig, localConfig, roleContext),
-    claudemd: await desired.collectClaudemdFiles(localConfig.repo.localPath, roleContext),
+    claudemd: await desired.collectClaudemdFiles(localConfig, roleContext),
   };
 }
 

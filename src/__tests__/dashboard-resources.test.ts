@@ -1,10 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fse from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
+import YAML from 'yaml';
 
 import { collectRulesInventory } from '../dashboard/resources.js';
-import type { RolePullContext } from '../resources/desired.js';
+import { buildRolePullContext, type RolePullContext } from '../resources/desired.js';
+import { readWorkspaceChildren } from '../workspace-children.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 
 /**
@@ -125,5 +127,71 @@ describe('collectRulesInventory', () => {
     await fse.remove(path.join(repoPath, 'rules'));
 
     await expect(collectRulesInventory(teamConfig, localConfig, null)).resolves.toEqual([]);
+  });
+});
+
+describe('collectRulesInventory in a workspace with children (#913)', () => {
+  let tempDir: string;
+  let repoPath: string;
+  let ws: string;
+  const remote = 'https://git.example.com/team/team.git';
+  const teamConfig = { toolPaths: {} } as unknown as TeamaiConfig;
+
+  async function write(file: string, content: string): Promise<void> {
+    await fse.ensureDir(path.dirname(file));
+    await fse.writeFile(file, content);
+  }
+
+  /** The workspace selects project a (backend); a child set up in it selects b (frontend), with `childTags`. */
+  async function workspaceWithChild(childTags?: string[]): Promise<LocalConfig> {
+    const own = { repo: { localPath: repoPath, remote }, username: 'tester', scope: 'project', projectRoot: ws, additionalRoles: [] } as LocalConfig;
+    await write(path.join(ws, 'svc-b', '.teamai', 'config.yaml'), YAML.stringify({
+      ...own, scope: 'workspace', projectRoot: path.join(ws, 'svc-b'), projects: ['b'], ...(childTags ? { subscribedTags: childTags } : {}),
+    }));
+    return readWorkspaceChildren({ ...own, projects: ['a'] });
+  }
+
+  beforeEach(async () => {
+    tempDir = await fse.realpath(await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-dashboard-resources-ws-')));
+    vi.stubEnv('HOME', path.join(tempDir, 'home'));
+    repoPath = path.join(tempDir, 'team-repo');
+    ws = path.join(tempDir, 'ws');
+    await fse.ensureDir(ws);
+    await write(path.join(repoPath, 'manifest', 'projects.yaml'), YAML.stringify({
+      version: 1,
+      projects: [{ id: 'a', resources: { knowledge: ['backend'] } }, { id: 'b', resources: { knowledge: ['frontend'] } }],
+    }));
+    for (const rule of ['api.md', 'backend/api.md', 'frontend/ui.md']) await write(path.join(repoPath, 'rules', rule), `# ${rule}\n`);
+    await write(path.join(repoPath, 'tags.yaml'), 'rules:\n  backend/api: [server]\n  frontend/ui: [client]\n');
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    await fse.remove(tempDir);
+  });
+
+  it('lists the rules a child delivers as delivered', async () => {
+    const config = await workspaceWithChild();
+
+    const rules = await collectRulesInventory(teamConfig, config, await buildRolePullContext(config));
+
+    // The root api.md stays: the child, without backend, receives it.
+    expect(rules.map((rule) => [rule.name, rule.delivered, rule.undeliveredReason])).toEqual([
+      ['api', true, undefined],
+      ['backend/api', true, undefined],
+      ['frontend/ui', true, undefined],
+    ]);
+  });
+
+  it('names the tag channel of the member whose namespace holds an undelivered rule', async () => {
+    const config = await workspaceWithChild(['server']);
+
+    const rules = await collectRulesInventory(teamConfig, config, await buildRolePullContext(config));
+
+    expect(rules.map((rule) => [rule.name, rule.delivered, rule.undeliveredReason])).toEqual([
+      ['api', true, undefined],
+      ['backend/api', true, undefined],
+      ['frontend/ui', false, 'tags'],
+    ]);
   });
 });

@@ -328,6 +328,8 @@ export interface ReconcileHooksOptions {
   builtinOverride?: BuiltinHookOverride;
   /** Project root used to gate non-self project-scope team hooks. */
   teamHookProjectRoot?: string;
+  /** The roots of a workspace's children, which the gate leaves out (#913). */
+  teamHookChildRoots?: readonly string[];
   /**
    * Write the team hooks alone: the built-ins are not desired here, and any
    * built-in entry found in the file is removed. Team entries are owned only
@@ -455,9 +457,9 @@ async function judgeUnrecordedTeamEntries(
   const loadRenders = async () => {
     if (renders) return renders;
     const history = await opts.teamHookHistory!();
-    const historicalDefs = scopedTeamDefs(history, opts.teamHookProjectRoot, tool);
+    const historicalDefs = scopedTeamDefs(history, opts.teamHookProjectRoot, tool, false, opts.teamHookChildRoots);
     // A render under the previous host guard still proves ownership.
-    if (format === 'claude' && tool === 'claude') historicalDefs.push(...scopedTeamDefs(history, opts.teamHookProjectRoot, tool, true));
+    if (format === 'claude' && tool === 'claude') historicalDefs.push(...scopedTeamDefs(history, opts.teamHookProjectRoot, tool, true, opts.teamHookChildRoots));
     return renders = [...teamDefsForTool(scopedDefs, tool), ...teamDefsForTool(historicalDefs, tool)]
       .map(def => ({ def, ...render(def) }));
   };
@@ -729,17 +731,26 @@ function cmdProjectGate(root: string): string {
  * Legacy cmd.exe gates are still recognised on read by isGatedForProject(), so
  * a re-render replaces 0.26.0's cmd gate instead of stacking a second one.
  */
-function gateTeamHookCommand(command: string, projectRoot: string | undefined): string {
+function gateTeamHookCommand(command: string, projectRoot: string | undefined, childRoots: readonly string[] = []): string {
   if (!projectRoot) return command;
   const root = canonicalProjectRoot(projectRoot);
   const msys = msysProjectRoot(root);
   const quoted = shellQuote(root);
+  // In a workspace, a child's folders are the child's own scope (#913): the
+  // gate passes there as it does outside the workspace, and the prefix
+  // isGatedForProject() reads stays the same.
+  const childPatterns = childRoots.flatMap((child) => {
+    const canonical = canonicalProjectRoot(child);
+    const forms = [...new Set([canonical, msysProjectRoot(canonical)])].map(shellQuote);
+    return forms.flatMap((form) => [form, `${form}/*`]);
+  });
+  const run = childPatterns.length > 0 ? `case "$PWD" in ${childPatterns.join('|')}) ;; *) (${command});; esac` : `(${command})`;
   if (msys === root) {
-    return `if [ "$PWD" = ${quoted} ] || case "$PWD" in ${quoted}/*) true;; *) false;; esac; then (${command}); fi`;
+    return `if [ "$PWD" = ${quoted} ] || case "$PWD" in ${quoted}/*) true;; *) false;; esac; then ${run}; fi`;
   }
   const shellQuoted = shellQuote(msys);
   return `if [ "$PWD" = ${quoted} ] || [ "$PWD" = ${shellQuoted} ]`
-    + ` || case "$PWD" in ${quoted}/*|${shellQuoted}/*) true;; *) false;; esac; then (${command}); fi`;
+    + ` || case "$PWD" in ${quoted}/*|${shellQuoted}/*) true;; *) false;; esac; then ${run}; fi`;
 }
 
 /** Recognise a project gate written by either renderer (entries outlive a platform switch). */
@@ -1289,18 +1300,31 @@ async function staleCheckoutGateRoots(
   return [...roots];
 }
 
-function scopedTeamDefs(teamDefs: HookDef[], projectRoot: string | undefined, tool: string, legacyGuard = false): HookDef[] {
+function scopedTeamDefs(
+  teamDefs: HookDef[],
+  projectRoot: string | undefined,
+  tool: string,
+  legacyGuard = false,
+  childRoots: readonly string[] = [],
+): HookDef[] {
   const prepared = teamDefs.map((def) => ({
     ...def,
     command: skipWhenAnotherHostLoadsClaudeSettings(def, tool, legacyGuard),
   }));
   if (!projectRoot) return prepared;
-  return prepared.map((def) => ({ ...def, command: gateTeamHookCommand(def.command, projectRoot) }));
+  return prepared.map((def) => ({ ...def, command: gateTeamHookCommand(def.command, projectRoot, childRoots) }));
 }
 
-function manifestRecordsForTool(teamDefs: HookDef[], tool: string, removeAll: boolean, projectRoot?: string): ManagedHookRecord[] {
+function manifestRecordsForTool(
+  teamDefs: HookDef[],
+  tool: string,
+  removeAll: boolean,
+  projectRoot?: string,
+  childRoots: readonly string[] = [],
+): ManagedHookRecord[] {
   if (removeAll) return [];
-  return teamDefsForTool(scopedTeamDefs(teamDefs, projectRoot, tool), tool).map((d) => ({
+  // The command as the file holds it, the children's gate included (#913).
+  return teamDefsForTool(scopedTeamDefs(teamDefs, projectRoot, tool, false, childRoots), tool).map((d) => ({
     id: d.key,
     event: d.event,
     ...(d.matcher && d.matcher !== '*' ? { matcher: d.matcher } : {}),
@@ -2285,7 +2309,7 @@ export async function reconcileHooks(
     await writeJson(expandHome(opts.manifestPath), manifest);
   }
   const allPriorRecords = manifest?.[tool] ?? [];
-  const scopedDefs = scopedTeamDefs(teamDefs, opts.teamHookProjectRoot, tool);
+  const scopedDefs = scopedTeamDefs(teamDefs, opts.teamHookProjectRoot, tool, false, opts.teamHookChildRoots);
   const recorded = opts.teamHookProjectRoot
     ? allPriorRecords.filter((r) => isGatedForProject(r.command, opts.teamHookProjectRoot!))
     : allPriorRecords;
@@ -2320,7 +2344,7 @@ export async function reconcileHooks(
 
   // Update the manifest's team-hook index for this tool (when manifest is active).
   if (opts.manifestPath && manifest) {
-    const records = codexRecords ?? manifestRecordsForTool(teamDefs, tool, !!opts.removeAll, opts.teamHookProjectRoot);
+    const records = codexRecords ?? manifestRecordsForTool(teamDefs, tool, !!opts.removeAll, opts.teamHookProjectRoot, opts.teamHookChildRoots);
     const prev = manifest[tool] ?? [];
     // Main-checkout team-only files belong to one project; their old gated
     // records are consumed on migration. HOME retains the other projects.
@@ -2750,7 +2774,7 @@ export async function reconcileHooksToAllTools(
   teamDefs: HookDef[],
   manifestPath: string,
   opts: {
-    removeAll?: boolean; builtinOverride?: BuiltinHookOverride; filterAgents?: string[]; settingsOnly?: boolean; installedBaseDir?: string; teamHookProjectRoot?: string; scope?: Scope; builtinsOnly?: BuiltinsOnly; mainCheckout?: MainCheckoutHooks | null; teamHookHistory?: TeamHookHistory;
+    removeAll?: boolean; builtinOverride?: BuiltinHookOverride; filterAgents?: string[]; settingsOnly?: boolean; installedBaseDir?: string; teamHookProjectRoot?: string; teamHookChildRoots?: readonly string[]; scope?: Scope; builtinsOnly?: BuiltinsOnly; mainCheckout?: MainCheckoutHooks | null; teamHookHistory?: TeamHookHistory;
     /**
      * The active config's `toolRoots`, so the gate probes a member's recorded
      * root rather than the path's two-segment shape (see `toolGateRoot`).
@@ -2955,6 +2979,7 @@ export async function reconcileHooksToAllTools(
             removeAll: opts.removeAll,
             builtinOverride: opts.builtinOverride,
             teamHookProjectRoot: opts.teamHookProjectRoot,
+            ...(opts.teamHookChildRoots ? { teamHookChildRoots: opts.teamHookChildRoots } : {}),
             teamHookHistory: opts.teamHookHistory,
           });
         }
@@ -3499,6 +3524,7 @@ export async function reconcileTeamHooksForConfig(
     teamHookProjectRoot: localConfig.scope === 'project' && !isSelfMode(localConfig)
       ? localConfig.projectRoot
       : undefined,
+    ...(localConfig.children ? { teamHookChildRoots: localConfig.children.roots } : {}),
     installedBaseDir: localConfig.scope === 'project' ? (localConfig.projectRoot ?? baseDir) : undefined,
     scope: localConfig.scope,
     toolRoots: localConfig.toolRoots,

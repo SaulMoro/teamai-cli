@@ -16,7 +16,7 @@ vi.mock('../utils/logger.js', () => ({
 import { resolveAnchors, listWorktrees } from '../utils/git.js';
 import { resetBundledRuntimeCache } from '../bundled-runtime.js';
 import { findOnPath } from '../utils/lookpath.js';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { claudeHookOtherHostSkip, reconcileTeamHooksForConfig } from '../hooks.js';
 import * as gitHook from '../git-hook.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
@@ -205,6 +205,111 @@ hooks:
       await fse.remove(projectB);
       await fse.remove(repoB);
     }
+  });
+
+  it('gates a workspace\'s team hooks for other tools to the workspace without its children (#913)', async () => {
+    await writeYaml(`
+hooks:
+  - id: ws-hook
+    description: workspace hook
+    event: Stop
+    command: echo ws-hook-ran
+`);
+    const root = await fse.realpath(project);
+    const child = path.join(root, 'svc-a');
+    await fse.ensureDir(path.join(child, 'src'));
+    await fse.ensureDir(path.join(root, 'notes'));
+    await reconcileTeamHooksForConfig(teamConfig, {
+      ...localConfig(),
+      children: {
+        children: [{ path: 'svc-a', root: child, anchor: path.join(home, 'svc-a'), selection: { additionalRoles: [], projects: [] } }],
+        leftOut: [],
+        roots: [child],
+        fingerprint: 'f',
+      },
+    });
+
+    const [command] = (await cursorSettings()).hooks.stop.map((entry) => entry.command).filter((c) => c.includes('ws-hook-ran'));
+    const runIn = (cwd: string): string => execFileSync('sh', ['-c', command!], { cwd, encoding: 'utf8' });
+    expect(runIn(root)).toBe('ws-hook-ran\n');
+    expect(runIn(path.join(root, 'notes'))).toBe('ws-hook-ran\n');
+    expect(runIn(child)).toBe('');
+    expect(runIn(path.join(child, 'src'))).toBe('');
+  });
+
+  it('records a workspace\'s Cursor hook as written, and keeps one copy gated out of a child added later (#913)', async () => {
+    await writeYaml(`
+hooks:
+  - id: ws-hook
+    description: workspace hook
+    event: Stop
+    command: echo ws-hook-ran
+`);
+    const root = await fse.realpath(project);
+    const [svcA, svcB] = [path.join(root, 'svc-a'), path.join(root, 'svc-b')];
+    await Promise.all([svcA, svcB].map((dir) => fse.ensureDir(dir)));
+    const withChildren = (roots: string[]): LocalConfig => ({
+      ...localConfig(),
+      children: {
+        children: roots.map((dir) => ({ path: path.basename(dir), root: dir, anchor: path.join(home, path.basename(dir)), selection: { additionalRoles: [], projects: [] } })),
+        leftOut: [],
+        roots,
+        fingerprint: roots.join(','),
+      },
+    });
+    const written = async (): Promise<string[]> =>
+      (await cursorSettings()).hooks.stop.map((entry) => entry.command).filter((c) => c.includes('ws-hook-ran'));
+    const recorded = async (): Promise<string[]> =>
+      ((await manifest()).cursor as unknown as Array<{ command: string }>).map((r) => r.command).filter((c) => c.includes('ws-hook-ran'));
+
+    await reconcileTeamHooksForConfig(teamConfig, withChildren([svcA]));
+    expect(await recorded()).toEqual(await written());
+
+    await reconcileTeamHooksForConfig(teamConfig, withChildren([svcA, svcB]));
+
+    const commands = await written();
+    expect(commands).toHaveLength(1);
+    expect(await recorded()).toEqual(commands);
+    const runIn = (cwd: string): string => execFileSync('sh', ['-c', commands[0]!], { cwd, encoding: 'utf8', env: { ...process.env, PWD: cwd } });
+    expect(runIn(root)).toBe('ws-hook-ran\n');
+    expect(runIn(svcB)).toBe('');
+  });
+
+  it('gates a workspace\'s team hooks out of every checkout of a child and out of a child it leaves out (#913)', async () => {
+    await writeYaml(`
+hooks:
+  - id: ws-hook
+    description: workspace hook
+    event: Stop
+    command: echo ws-hook-ran
+`);
+    const root = await fse.realpath(project);
+    const gitEnv = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
+    const { projectDataHome } = await import('../utils/partition.js');
+    const setUp = async (dir: string, remote: string): Promise<void> => {
+      await fse.ensureDir(dir);
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      execFileSync('git', ['commit', '--allow-empty', '-qm', 'init'], { cwd: dir, env: gitEnv });
+      await fse.outputFile(path.join(projectDataHome(dir), 'config.yaml'), `scope: workspace\nusername: u\nrepo:\n  remote: ${remote}\n  localPath: ${repo}\n`);
+    };
+    const child = path.join(root, 'svc-a');
+    const worktree = path.join(root, 'svc-a-feature');
+    const other = path.join(root, 'other-team');
+    await setUp(child, 'x');
+    execFileSync('git', ['worktree', 'add', '-q', worktree], { cwd: child, env: gitEnv });
+    await setUp(other, 'https://git.example.com/other/team.git');
+    const { readWorkspaceChildren } = await import('../workspace-children.js');
+    const configured = await readWorkspaceChildren({ ...localConfig(), dataHome: path.join(project, '.teamai') });
+    expect(configured.children?.children.map((found) => found.path)).toEqual(['svc-a']);
+
+    await reconcileTeamHooksForConfig(teamConfig, configured);
+
+    const [command] = (await cursorSettings()).hooks.stop.map((entry) => entry.command).filter((c) => c.includes('ws-hook-ran'));
+    const runIn = (cwd: string): string => execFileSync('sh', ['-c', command!], { cwd, encoding: 'utf8' });
+    expect(runIn(root)).toBe('ws-hook-ran\n');
+    expect(runIn(child)).toBe('');
+    expect(runIn(worktree)).toBe('');
+    expect(runIn(other)).toBe('');
   });
 
   it('applies hooks.yaml edits on the next reconcile (add/remove), built-in untouched', async () => {

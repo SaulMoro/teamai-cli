@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { detectProjectConfig, loadLocalConfig, loadTeamConfig } from './config.js';
+import { readWorkspaceChildren } from './workspace-children.js';
 import { pathExists, readFileSafe } from './utils/fs.js';
 import { log, setStderrOnly } from './utils/logger.js';
 import type { GlobalOptions } from './types.js';
@@ -430,7 +431,8 @@ async function codexHookTrust(ctx: DoctorContext): Promise<{ checks: Check[]; no
 export async function resolveDoctorContext(): Promise<DoctorContext | null> {
   // Read-only: the load never persists a migration (#893).
   const projectConfig = await detectProjectConfig(undefined, undefined, { dryRun: true });
-  const localConfig = projectConfig ?? (await loadLocalConfig({ dryRun: true }));
+  // A workspace is checked with what it delivers: its own selection and its children's (#913).
+  const localConfig = projectConfig ? await readWorkspaceChildren(projectConfig) : await loadLocalConfig({ dryRun: true });
   if (!localConfig) return null;
 
   const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
@@ -598,6 +600,7 @@ export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'docto
       fix: 'Run `teamai doctor --fix` to remove them. They are reclaimed anyway the '
         + 'next time the same lock is taken; removing them only clears the noise.',
     },
+    ...buildWorkspaceChildrenChecks(localConfig),
     ...await buildGitHookChecks(localConfig, stage),
     ...await buildTrackedHookIndexCheck(localConfig),
     ...buildToolRootChecks(localConfig, teamConfig),
@@ -625,6 +628,24 @@ export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'docto
   );
 
   return checks;
+}
+
+/**
+ * A workspace with children (#913): every folder set up under it is read, or
+ * the ones left out are named with what to do. None for a scope without
+ * children.
+ */
+function buildWorkspaceChildrenChecks(localConfig: LocalConfig): Check[] {
+  const found = localConfig.children;
+  if (!found) return [];
+  return [{
+    name: 'The workspace reads every child set up under it',
+    source: 'local',
+    reportedByPull: 'workspace-children',
+    check: async () => found.leftOut.length === 0,
+    fix: `${found.leftOut.map((child) => `${child.path} is left out: ${child.reason}`).join('; ')}. `
+      + 'Set each one up with this workspace\'s team repo (`teamai init <team repo>` there) to include it.',
+  }];
 }
 
 /**

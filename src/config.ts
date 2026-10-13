@@ -154,13 +154,14 @@ export async function loadLocalConfig(options: LoadOptions = {}): Promise<LocalC
  * `dataHome` is derived from the projectAnchor at runtime and the config file
  * lives inside that directory, so it must never be persisted (a stale absolute
  * path would defeat the anchor-derived design and break on another machine).
- * `roleUnresolved` describes one load of the roles manifest, not the member.
+ * `roleUnresolved` describes one load of the roles manifest, not the member,
+ * and `children` one read of a workspace (#913).
  * The workspace scope is written under its current name, `workspace` (#1099).
  * Only a write that happens anyway uses it (a save, or the legacy role
  * migration); a plain load leaves a `scope: project` file as it is.
  */
 function serializeLocalConfig(config: LocalConfig): string {
-  const { dataHome: _dataHome, roleUnresolved: _roleUnresolved, ...persisted } = config;
+  const { dataHome: _dataHome, roleUnresolved: _roleUnresolved, children: _children, ...persisted } = config;
   return YAML.stringify({ ...persisted, scope: installScopeName(persisted.scope) });
 }
 
@@ -725,8 +726,11 @@ export async function requireInitForScope(
  * cannot be read, throws instead of falling back to another team's config.
  * Otherwise falls back to user scope.
  * This is the recommended entry point for commands that support both scopes.
+ * A workspace comes with the children set up under it (#913), so a command
+ * resolves what pull delivers; `children: false` skips that walk, for a path
+ * a hook runs that reads no selection.
  */
-export async function autoDetectInit(cwd?: string, options: LoadOptions = {}): Promise<TeamaiInit> {
+export async function autoDetectInit(cwd?: string, options: LoadOptions & { children?: boolean } = {}): Promise<TeamaiInit> {
   let unreadable: string | undefined;
   const projectConfig = await detectProjectConfig(cwd, (configPath, error) => {
     unreadable ??= `${configPath}: ${error}`;
@@ -735,7 +739,10 @@ export async function autoDetectInit(cwd?: string, options: LoadOptions = {}): P
   if (projectConfig) {
     const teamConfig = await loadTeamConfig(projectConfig.repo.localPath);
     if (!teamConfig) return throwTeamConfigMissingOrInvalid(projectConfig.repo.localPath);
-    return { localConfig: projectConfig, teamConfig };
+    if (options.children === false) return { localConfig: projectConfig, teamConfig };
+    // Loaded here: the walk reaches this module through the resolvers it imports.
+    const { readWorkspaceChildren } = await import('./workspace-children.js');
+    return { localConfig: await readWorkspaceChildren(projectConfig), teamConfig };
   }
   return requireInit(options);
 }

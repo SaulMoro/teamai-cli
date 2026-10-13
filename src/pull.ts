@@ -79,6 +79,7 @@ import { mirrorLearnings } from './utils/learnings-mirror.js';
 import { withTimeout } from './utils/async.js';
 import { runDeclaredPostPull } from './post-pull.js';
 import { runTeamScript } from './team-scripts.js';
+import { describeWorkspaceChildren, readWorkspaceChildren, syncWorkspaceInstructionExcludes } from './workspace-children.js';
 import {
   applyDeliveredGitExclude, createDeliveryRecorder, deliveredUnion, describeForeign, describeUnreadableGitExcludeSetting,
   type DeliveryRecorder, type GitExcludePaths, type ListedCheckout, type WriterId,
@@ -312,6 +313,14 @@ async function skillSafeToRemove(deployedDir: string, source: string | undefined
   // The compare does not see links, and a link inside is the member's (#993).
   if (await holdsNonRegular(deployedDir)) return false;
   return dirContentEqual(deployedDir, source, [CONTRIBUTORS_FILE]);
+}
+
+/** `skillSafeToRemove` against each source a copy may come from: safe when one of them proves it. */
+async function safeToRemoveAgainstAny(deployedDir: string, sources: readonly string[] | undefined): Promise<boolean> {
+  for (const source of sources ?? []) {
+    if (await skillSafeToRemove(deployedDir, source)) return true;
+  }
+  return false;
 }
 
 export async function cleanupInactiveNamespaceSkills(
@@ -975,6 +984,48 @@ export async function recordedAgentModels(localConfig: LocalConfig, state?: Stat
   return (await deliveringCheckoutRecord(localConfig, state))?.agentModels ?? {};
 }
 
+/**
+ * In a repo inside a workspace, keep Claude Code from loading the
+ * workspace's instructions (#913): `claudeMdExcludes` in the checkout's
+ * `.claude/settings.local.json`, owned through the checkout record. Only
+ * where the checkout has the Claude settings folder and a record of its
+ * pull, so nothing is created for a member who does not use Claude Code.
+ */
+async function excludeWorkspaceInstructions(localConfig: LocalConfig, options: GlobalOptions): Promise<void> {
+  const { projectRoot } = localConfig;
+  if (localConfig.scope !== 'project' || !projectRoot || isAgentExcluded(localConfig, 'claude')) return;
+  try {
+    const teamConfig = await loadTeamConfig(localConfig.repo.localPath);
+    const settings = teamConfig ? scopedToolPaths(teamConfig, localConfig).claude?.settings : undefined;
+    if (!settings || !await pathExists(path.join(projectRoot, path.dirname(settings)))) return;
+    const key = await checkoutKey(projectRoot);
+    const state = await loadStateForScope(localConfig);
+    const record = state.lastPullByWorkspace?.[key];
+    if (!record) return;
+    const previous = record.claudeMdExcludes ?? [];
+    const settingsFile = path.join(projectRoot, path.dirname(settings), 'settings.local.json');
+    const written = await syncWorkspaceInstructionExcludes({ projectRoot, settingsFile, previous, dryRun: options.dryRun });
+    if (JSON.stringify(written) === JSON.stringify(previous)) return;
+    const added = written.filter((entry) => !previous.includes(entry));
+    if (added.length > 0) {
+      log.info(`[${installScopeName(localConfig.scope)}] ${options.dryRun ? 'Would exclude' : 'Excluded'} the instructions of the workspace above this repo from Claude Code sessions here (claudeMdExcludes in ${settingsFile})`);
+    }
+    if (options.dryRun) return;
+    if (written.length > 0) record.claudeMdExcludes = written;
+    else delete record.claudeMdExcludes;
+    await saveStateForScope(state, localConfig);
+  } catch (e) {
+    log.warn(`[${installScopeName(localConfig.scope)}] The workspace's instructions were not excluded from Claude Code sessions here: ${(e as Error).message}. Run \`teamai pull\` to retry.`);
+  }
+}
+
+/** Which children a workspace's checkout was delivered with (#913), for the fast path. */
+function setChildren(record: CheckoutRecord, localConfig: LocalConfig): void {
+  if (localConfig.scope !== 'project') return;
+  if (localConfig.children) record.children = localConfig.children.fingerprint;
+  else delete record.children;
+}
+
 /** Put `agentModels` on `record`, leaving the key out while there are none. */
 function setAgentModels(record: CheckoutRecord, agentModels: AgentModelRecords): void {
   if (Object.keys(agentModels).length > 0) record.agentModels = agentModels;
@@ -1144,6 +1195,7 @@ function awaitingFullSync(records: Record<string, CheckoutRecord>): Record<strin
       ...(record.agentModels ? { agentModels: record.agentModels } : {}),
       ...(record.gitExcludePaths ? { gitExcludePaths: record.gitExcludePaths } : {}),
       ...(record.rootsSeeded ? { rootsSeeded: true } : {}),
+      ...(record.claudeMdExcludes ? { claudeMdExcludes: record.claudeMdExcludes } : {}),
     };
     return [key, pushBaseRevs.length === 0 ? reset : { ...reset, pushBaseRevs }];
   }));
@@ -1542,7 +1594,11 @@ async function pullForScope(
       const listed = !workspaceKey || !policy.recorder
         || state.lastPullByWorkspace?.[workspaceKey]?.gitExcludePaths !== undefined;
       if (!listed) log.debug(`[${scopeLabel}] No record of the delivered paths yet, syncing`);
-      if (currentRev && state[revisionField] === currentRev && recorded?.rev === currentRev && listed) {
+      // A workspace's children can change their selection without a team
+      // commit: the record names the children it delivered (#913).
+      const sameChildren = !workspaceKey || state.lastPullByWorkspace?.[workspaceKey]?.children === localConfig.children?.fingerprint;
+      if (!sameChildren) log.debug(`[${scopeLabel}] The workspace's children changed, syncing`);
+      if (currentRev && state[revisionField] === currentRev && recorded?.rev === currentRev && listed && sameChildren) {
         currentTargets = await getInstalledResourceTargets(freshConfig, localConfig);
         const previousTargets = recorded.targets;
         const syncedTargets = new Set(previousTargets ?? []);
@@ -1677,8 +1733,8 @@ async function pullForScope(
   // the next pull must sync again, so it delivers once the file is gone.
   let membersFilesKept = false;
   let knownRepoSkillNames: Set<string> | null = null;
-  // name → team-repo source dir, for the data-safety check in Step 3b cleanup.
-  let knownRepoSkillSources: Map<string, string> | null = null;
+  // name → team-repo source dirs, for the data-safety check in Step 3b cleanup.
+  let knownRepoSkillSources: Map<string, readonly string[]> | null = null;
   // Root skills (no namespace) are the tag catalog: one of them removed by
   // either cleanup phase still means `tags subscribe` brings it back (#911).
   let rootRepoSkillNames: Set<string> | null = null;
@@ -1818,9 +1874,14 @@ async function pullForScope(
       }
       items = desired.items;
       skippedByTags = desired.skippedByTags;
-      desiredSkillNames = new Set(items.map((i) => i.name));
+      // A skill a workspace holds back keeps its installed copy (#913).
+      desiredSkillNames = new Set([...items.map((i) => i.name), ...desired.held]);
       knownRepoSkillNames = new Set(desired.teamItems.map((i) => i.name));
-      knownRepoSkillSources = new Map(desired.teamItems.map((i) => [i.name, i.sourcePath]));
+      knownRepoSkillSources = new Map(desired.teamItems.map((i) => [i.name, [i.sourcePath]]));
+      // A workspace's copy may come from any member's source of the name (#913).
+      for (const [name, sources] of desired.memberSources) {
+        knownRepoSkillSources.set(name, [...new Set([...knownRepoSkillSources.get(name) ?? [], ...sources])]);
+      }
       rootRepoSkillNames = new Set(desired.teamItems.filter((i) => !i.namespace).map((i) => i.name));
     } else if (type === 'agents') {
       const desired = await resolveDesiredAgents(freshConfig, localConfig, roleContext);
@@ -1985,7 +2046,7 @@ async function pullForScope(
         // Same data-safety gate as cleanupInactiveNamespaceSkills: never delete a
         // deployed skill that differs from its team-repo source (local edits or
         // unpushed files). Keep + warn instead of silently destroying work.
-        if (!await skillSafeToRemove(skillDir, knownRepoSkillSources?.get(dir))) {
+        if (!await safeToRemoveAgainstAny(skillDir, knownRepoSkillSources?.get(dir))) {
           warnOnce(`[${scopeLabel}] Kept skill "${dir}" (${tool}): it has local changes or unpushed files not in the team repo (or could not be verified). Push or back them up, then delete it manually.`);
           continue;
         }
@@ -2141,6 +2202,7 @@ async function pullForScope(
         : state.lastPullByWorkspace?.[recordKey] ?? { rev: FORCED_FULL_SYNC_REV, targets: syncedTargets };
       if (localConfig.scope === 'project' && localConfig.projectRoot) record.root = localConfig.projectRoot;
       if (rootsSeeded) record.rootsSeeded = true;
+      setChildren(record, localConfig);
       addPushBaseRev(record, deliveredRev);
       record.delivered = ledger.hashes;
       setAgentModels(record, ledger.agentModels);
@@ -2168,6 +2230,7 @@ async function pullForScope(
       // (see syncDeliveredGitExclude): until then, the checkout's previous ones.
       const gitExcludePaths = state.lastPullByWorkspace?.[recordKey]?.gitExcludePaths;
       const seeded = rootsSeeded || state.lastPullByWorkspace?.[recordKey]?.rootsSeeded;
+      const claudeMdExcludes = state.lastPullByWorkspace?.[recordKey]?.claudeMdExcludes;
       const record: CheckoutRecord = {
         rev: deliveredRev,
         ...(localConfig.scope === 'project' && localConfig.projectRoot ? { root: localConfig.projectRoot } : {}),
@@ -2175,7 +2238,9 @@ async function pullForScope(
         delivered: ledger.hashes,
         ...(gitExcludePaths ? { gitExcludePaths } : {}),
         ...(seeded ? { rootsSeeded: true } : {}),
+        ...(claudeMdExcludes ? { claudeMdExcludes } : {}),
       };
+      setChildren(record, localConfig);
       setAgentModels(record, ledger.agentModels);
       state.lastPullByWorkspace = {
         ...others,
@@ -2368,7 +2433,7 @@ export async function resolveInstructionBlocks(
   }
   let claudemdFiles = 0;
   try {
-    const { contents } = await collectClaudemdFiles(localConfig.repo.localPath, roleContext);
+    const { contents } = await collectClaudemdFiles(localConfig, roleContext);
     blocks.claudemd = compileClaudemd(contents);
     claudemdFiles = contents.length;
   } catch (e) {
@@ -2790,6 +2855,15 @@ export async function pull(
     process.exitCode = 1;
     return;
   }
+  // A workspace also delivers what the repos set up inside it select (#913):
+  // read them once, here, so every stage below resolves the same selection.
+  if (projectConfig) {
+    projectConfig = await readWorkspaceChildren(projectConfig);
+    if (!options.silent) {
+      for (const line of describeWorkspaceChildren(projectConfig)) log.info(`[${installScopeName(projectConfig.scope)}] ${line}`);
+      if (projectConfig.children?.leftOut.length) reported.add('workspace-children');
+    }
+  }
   const projectMode = projectConfig !== null;
   const inheritUserScope = projectConfig?.inheritUserScope === true;
 
@@ -2845,6 +2919,7 @@ export async function pull(
       if (await lockScope(projectConfig)) {
         if (!options.dryRun && !options.inline) await runTeamScript(projectConfig, 'prePull');
         await pullForScope(projectConfig, options, reported, { recorder: deliveryRecorder }, syncResult, teamEnvs, instructions);
+        await excludeWorkspaceInstructions(projectConfig, options);
       }
     } catch (e) {
       if (e instanceof EnvScopesUnreadableError) process.exitCode = 1;

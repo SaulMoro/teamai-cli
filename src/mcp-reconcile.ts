@@ -85,6 +85,7 @@ import {
   untrackResolvedMcpFiles,
   type McpFileObservation,
 } from './mcp-resolved-files.js';
+import { hasWorkspaceChildren } from './workspace-children.js';
 
 // ─── Reconcile engine ────────────────────────────────────────
 //
@@ -360,7 +361,12 @@ export function describeMcpLocation(target: Pick<McpTarget, 'file' | 'projectKey
   return target.projectKey ? `${target.file} (projects[${JSON.stringify(target.projectKey)}])` : target.file;
 }
 
-/** The tools whose project MCP servers move to their local scope while sharing.gitExclude is on (#915). */
+/**
+ * The tools whose project MCP servers move to their local scope while
+ * sharing.gitExclude is on (#915), and in a workspace with children (#913):
+ * these tools load a parent folder's project MCP file in a child, not its
+ * local scope.
+ */
 const LOCAL_SCOPE_MCP_TOOLS: Readonly<Record<string, string>> = { claude: 'Claude', codebuddy: 'CodeBuddy' };
 
 /**
@@ -412,13 +418,14 @@ export async function projectMcpLocations(
 
 /**
  * Whether `tool`'s project MCP servers go to its local scope (#915): while
- * `sharing.gitExclude` is on. For Claude, not in a single-repo (self) team,
+ * `sharing.gitExclude` is on, or in a workspace with children, so a session
+ * started in a child does not load the workspace's servers (#913). For Claude, not in a single-repo (self) team,
  * where each worktree reads its own branch's servers while Claude files every
  * worktree under one key, so one worktree's pull would undo another's; and
  * not while a tool of `CLAUDE_MCP_FILE_READERS` is installed and enabled here.
  */
 export async function mcpRelocated(teamConfig: TeamaiConfig, localConfig: LocalConfig, tool: string): Promise<boolean> {
-  if (!LOCAL_SCOPE_MCP_TOOLS[tool] || !isGitExcludeEnabled(localConfig, teamConfig)) return false;
+  if (!LOCAL_SCOPE_MCP_TOOLS[tool] || !(isGitExcludeEnabled(localConfig, teamConfig) || hasWorkspaceChildren(localConfig))) return false;
   if (tool !== 'claude') return true;
   if (isSelfMode(localConfig)) return false;
   for (const reader of CLAUDE_MCP_FILE_READERS) {
@@ -2742,7 +2749,9 @@ async function removeFromOtherFiles(
 
 /** Why a tool reads its servers from `active`, as the start of a sentence. */
 function movedBecause(teamConfig: TeamaiConfig, localConfig: LocalConfig, active: Pick<McpTarget, 'projectKey'>): string {
-  if (active.projectKey) return 'with sharing.gitExclude on, ';
+  if (active.projectKey) {
+    return isGitExcludeEnabled(localConfig, teamConfig) ? 'with sharing.gitExclude on, ' : 'in a workspace with children, so that a session in a child does not load them, ';
+  }
   if (!isGitExcludeEnabled(localConfig, teamConfig)) return 'with sharing.gitExclude off, ';
   return isSelfMode(localConfig) ? 'in a single-repo team, where each worktree has its own servers, ' : '';
 }

@@ -21,6 +21,7 @@ import type { GlobalOptions, LocalConfig } from './types.js';
 import { isSelfMode } from './types.js';
 import { isReservedTeamEnvKey, reservedTeamEnvWarning } from './env-reserved.js';
 import { reconcileMcpForConfig } from './mcp-reconcile.js';
+import { readWorkspaceChildren } from './workspace-children.js';
 
 const envHandler = new EnvHandler();
 
@@ -221,7 +222,8 @@ async function scopeHere(
     fail(`Cannot tell which team this directory belongs to: ${describeUnreadableConfig(problem)}`);
     return { kind: 'reported' };
   }
-  if (projectConfig) return { kind: 'scope', localConfig: projectConfig };
+  // A workspace's env includes its children's, as pull delivers it (#913).
+  if (projectConfig) return { kind: 'scope', localConfig: await readWorkspaceChildren(projectConfig) };
   try {
     return { kind: 'scope', localConfig: (await requireInit({ dryRun })).localConfig };
   } catch (e) {

@@ -22,7 +22,7 @@ import { runManifestEdit, pushManifestChange } from './manifest-edit.js';
 import { readFileSafe, listFiles } from './utils/fs.js';
 import { pullRepo } from './utils/git.js';
 import { log } from './utils/logger.js';
-import { MemberConfigSchema } from './types.js';
+import { MemberConfigSchema, type LocalConfig } from './types.js';
 import { memberReadRoots } from './members.js';
 import type { GlobalOptions } from './types.js';
 
@@ -55,6 +55,7 @@ export async function projectsList(_options: GlobalOptions): Promise<void> {
   if (!manifest) {
     log.info('This team repo defines no projects (no manifest/projects.yaml).');
     log.info('Projects are optional — resources fall back to roles + shared learnings.');
+    printWorkspaceChildren(localConfig);
     console.log(contributionTarget);
     return;
   }
@@ -81,7 +82,21 @@ export async function projectsList(_options: GlobalOptions): Promise<void> {
   } else {
     console.log('No active projects in this directory. Run `teamai projects set <id>` to set them.');
   }
+  printWorkspaceChildren(localConfig);
   console.log(contributionTarget);
+}
+
+/** Each child of a workspace and what it selects, which the workspace delivers too (#913). */
+function printWorkspaceChildren(workspace: LocalConfig): void {
+  const found = workspace.children;
+  if (!found) return;
+  console.log('This workspace also delivers what its children select:');
+  for (const child of found.children) {
+    const { projects = [], primaryRole, additionalRoles } = child.selection;
+    const roles = primaryRole ? `; roles: ${[primaryRole, ...additionalRoles].join(', ')}` : '';
+    console.log(`  ${child.path}: ${projects.join(', ') || '(no projects)'}${roles}`);
+  }
+  for (const child of found.leftOut) console.log(`  ${child.path}: left out, ${child.reason}`);
 }
 
 // ─── projects set ───────────────────────────────────────

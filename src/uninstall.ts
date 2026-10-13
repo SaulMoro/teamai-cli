@@ -2665,9 +2665,11 @@ async function removeConfirmed(
   const dispatchLeft = !agentKey || agentKey === 'codex' || plan.includeShared
     ? await stopCodexDispatch(teamConfig, localConfig, plan.includeShared)
     : null;
+  // The workspace instruction excludes a pull wrote (#913), before the records that own them go.
+  const excludesLeft = plan.includeShared ? await withdrawWorkspaceInstructionExcludes(teamConfig, localConfig) : [];
   const { pendingOpencode, hooksLeft, blocksLeft, filesLeft } = await executeRemoval(plan, heldMcp, {
     hooks: dispatchLeft ? [{ what: `the Codex team-hook dispatchers in ${dispatchLeft}`, tool: 'codex' }] : [],
-    files: [...httpSourceLeft, ...plan.keptUnjudged],
+    files: [...httpSourceLeft, ...plan.keptUnjudged, ...excludesLeft],
   });
   const incomplete = pendingOpencode.length > 0 || hooksLeft.length > 0 || blocksLeft.length > 0 || filesLeft.length > 0;
 
@@ -2710,6 +2712,30 @@ async function removeConfirmed(
   } else {
     log.success('teamai uninstalled');
   }
+}
+
+/**
+ * Take the `claudeMdExcludes` entries each checkout's pull wrote into its
+ * Claude settings for the workspaces above it (#913) back out, leaving the
+ * member's own. The settings files it could not edit, whose records then stay.
+ */
+async function withdrawWorkspaceInstructionExcludes(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string[]> {
+  const settings = scopedToolPaths(teamConfig, localConfig).claude?.settings;
+  if (localConfig.scope !== 'project' || !settings) return [];
+  const { syncWorkspaceInstructionExcludes } = await import('./workspace-children.js');
+  const left: string[] = [];
+  for (const { root, claudeMdExcludes } of Object.values((await loadStateForScope(localConfig)).lastPullByWorkspace ?? {})) {
+    if (!root || !claudeMdExcludes?.length) continue;
+    const settingsFile = path.join(root, path.dirname(settings), 'settings.local.json');
+    try {
+      const kept = await syncWorkspaceInstructionExcludes({ projectRoot: root, settingsFile, previous: claudeMdExcludes, withdraw: true });
+      if (kept.length > 0) left.push(settingsFile);
+    } catch (e) {
+      log.warn(`Could not take the workspace instruction excludes out of ${settingsFile}: ${(e as Error).message}`);
+      left.push(settingsFile);
+    }
+  }
+  return left;
 }
 
 /**

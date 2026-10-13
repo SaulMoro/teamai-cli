@@ -26,6 +26,7 @@ import { declaredSecretKeys } from './resources/secrets.js';
 import { getDataHome, type GlobalOptions, type LocalConfig } from './types.js';
 import { log, setStderrOnly } from './utils/logger.js';
 import { reservedTeamEnvWarning } from './env-reserved.js';
+import { readWorkspaceChildren } from './workspace-children.js';
 
 /** How the command ended. */
 export type ExecOutcome =
@@ -125,7 +126,9 @@ export function exitLike(outcome: ExecOutcome): void {
 /** The environment the command runs with, reporting on stderr whatever it leaves out. */
 async function commandEnvironment(cwd: string, dryRun: boolean | undefined): Promise<NodeJS.ProcessEnv> {
   const unreadable: { configPath: string; error: string }[] = [];
-  const localConfig = await resolveConfigForDir(cwd, (configPath, error) => { unreadable.push({ configPath, error }); }, { dryRun });
+  const found = await resolveConfigForDir(cwd, (configPath, error) => { unreadable.push({ configPath, error }); }, { dryRun });
+  // A workspace's env includes its children's, as pull delivers it (#913).
+  const localConfig = found && await readWorkspaceChildren(found);
   if (unreadable.length > 0) {
     // The project's config is unknown, so as while its declarations fail, a value a teamai env.sh exported is removed.
     const env = inheritedEnvironment();
