@@ -392,19 +392,17 @@ describe('push an edit of a skill pull kept after a project switch (#1020)', () 
     expect(pushedFiles()).toEqual([]);
   });
 
-  it('leaves out a member\'s own skill that only shares its name with an inactive namespace', () => {
-    writeFile(path.join(project, '.claude', 'skills', 'b-skill', 'SKILL.md'), skillMd('b-skill') + '\nMy own.\n');
-
-    const pushed = run(['push', '--all']);
-
-    expect(pushed.output).toContain('No new or modified resources to push');
-    expect(pushedFiles()).toEqual([]);
-  });
-
-  it.each([
-    { scope: 'no role', configure: () => setConfig({ projects: [] }) },
+  const ownSkillNamedLikeInactive = [
+    { scope: 'an active project', holders: 'skills/svc-b/b-skill', configure: () => {} },
     {
-      scope: 'a role with no skills namespace',
+      scope: 'an active project, two inactive namespaces holding the name',
+      holders: 'skills/platform/b-skill, skills/svc-b/b-skill',
+      configure: () => commitOnTeam('skills/platform/b-skill/SKILL.md', skillMd('b-skill')),
+    },
+    { scope: 'no role and no active project', holders: 'skills/svc-b/b-skill', configure: () => setConfig({ projects: [] }) },
+    {
+      scope: 'a role with no skills namespace and no active project',
+      holders: 'skills/svc-b/b-skill',
       configure: () => {
         commitOnTeam('manifest/roles.yaml', YAML.stringify({
           version: 1,
@@ -413,13 +411,20 @@ describe('push an edit of a skill pull kept after a project switch (#1020)', () 
         setConfig({ projects: [], primaryRole: 'reviewer' });
       },
     },
-  ])('leaves out a member\'s own skill named like a project\'s with $scope and no active project', ({ configure }) => {
+  ];
+
+  it.each(ownSkillNamedLikeInactive)('leaves out a member\'s own skill named like an inactive namespace\'s, and says why, with $scope', ({ holders, configure }) => {
     configure();
     expect(run(['pull']).code).toBe(0);
     writeFile(path.join(project, '.claude', 'skills', 'b-skill', 'SKILL.md'), skillMd('b-skill') + '\nMy own.\n');
 
     const pushed = run(['push', '--all']);
 
+    expect(pushed.code, pushed.output).toBe(0);
+    expect(pushed.output).toContain(
+      `[skills] Skipped b-skill: the team keeps a skill of this name only outside your active namespaces (${holders}). `
+      + 'Rename yours to share it, or run `teamai projects set <id>` or `teamai roles set <role>` if it is that skill.',
+    );
     expect(pushed.output).toContain('No new or modified resources to push');
     expect(pushedFiles()).toEqual([]);
   });

@@ -544,6 +544,19 @@ function warnUnprovenOrigin(
 }
 
 /**
+ * Say why push leaves out a local skill no record ties to the team: the team
+ * keeps a skill of its name only in `copies`, namespaces this scope does not
+ * select, so pushing it would replace a skill pull never delivered here.
+ */
+function warnOutOfScope(name: string, copies: readonly { dir: string }[], repoPath: string): void {
+  const holders = copies.map((copy) => path.relative(repoPath, copy.dir).split(path.sep).join('/')).join(', ');
+  warnOnce(
+    `[skills] Skipped ${name}: the team keeps a skill of this name only outside your active namespaces (${holders}). `
+    + 'Rename yours to share it, or run `teamai projects set <id>` or `teamai roles set <role>` if it is that skill.',
+  );
+}
+
+/**
  * Recursively scan a directory tree to find all subdirectories containing SKILL.md.
  * Returns a map of skill names to their full paths, supporting arbitrary nesting depth.
  * For example, if scanning ~/.claude/skills/, will find both:
@@ -953,7 +966,10 @@ export class SkillsHandler extends ResourceHandler {
           );
           continue;
         }
-        if (destination.kind === 'outOfScope') continue;
+        if (destination.kind === 'outOfScope') {
+          warnOutOfScope(dir, destination.candidates, localConfig.repo.localPath);
+          continue;
+        }
         if (destination.kind === 'ambiguousOpenPr') {
           // Returned with the reason it is skipped, so its open PRs' records survive the prune.
           const awaitingAt = destination.records.map((r) => `${r.relativePath} (branch ${r.branch})`).join(', ');
