@@ -35,7 +35,7 @@ shell start, or cd in an interactive shell
 
 - The registry key is the git common directory, shared by a checkout and its worktrees. On Windows it is the native path in lower case; the loader prints the shell's directory in the same form.
 - zsh reads `.zshenv` for every invocation, so `zsh -c` gets its directory's env. bash reads no startup file for `bash -c`, so the loader points `BASH_ENV` at itself and sources the member's own `BASH_ENV` before the team env.
-- Interactive shells route on `cd`, before the member's prompt and `chpwd` hooks. Leaving a project restores each key as it was: unset, local, or exported.
+- Interactive shells route on `cd`, before the member's prompt and `chpwd` hooks. Leaving a project restores each key as it was: unset, local, or exported. Inside it, a team value arrives as written whatever integer or case attribute the member's variable has; leaving puts the attribute back, except in bash before 4.2, which can't set one from a function.
 - Resolution runs in the member's environment, so a team `PATH` or `GIT_*` cannot hide git from the lookup.
 - `teamai env exec` and MCP delivery apply the same contract: values another scope's `env.sh` exported are dropped first.
 - A pull writes `env.sh`, its backup, the profile block and the registry row as one step; on failure it puts the files back and exits non-zero. A project that cannot be resolved keeps the last pull's values.
