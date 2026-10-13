@@ -147,7 +147,7 @@ Git을 기반으로 세 층의 역량을 구축합니다:
 
 <sup>✓¹</sup> rules는 항상 적용되며, 경로로 한정하지 않습니다.
 
-<sup>✓²</sup> teamai 자체로는 이 도구에 env를 전달하지 않습니다. `teamai env exec -- <command>`로 명령을 실행하면 해당 명령에 팀 env가 적용됩니다.
+<sup>✓²</sup> env는 `teamai env exec`를 통해서만 전달됩니다.
 
 ## 자세히 알아보기
 

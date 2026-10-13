@@ -147,7 +147,7 @@ Three layers of capability, built on Git:
 
 <sup>✓¹</sup> Rules stay on. They are not limited by path.
 
-<sup>✓²</sup> teamai delivers no env to this tool itself; run a command with `teamai env exec -- <command>` to give it the team env.
+<sup>✓²</sup> Env reaches it only through `teamai env exec`.
 
 ## Learn More
 

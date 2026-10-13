@@ -147,7 +147,7 @@ Git を基盤に、3 層の能力を構築します：
 
 <sup>✓¹</sup> rules は常に有効で、パスでは限定されません。
 
-<sup>✓²</sup> teamai 自身はこのツールに env を届けません。`teamai env exec -- <command>` でコマンドを実行すると、そのコマンドにチーム env が渡されます。
+<sup>✓²</sup> env は `teamai env exec` 経由でのみ渡されます。
 
 ## 詳細情報
 

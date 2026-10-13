@@ -147,7 +147,7 @@ teamai init https://github.com/your-org/your-repo --scope user
 
 <sup>✓¹</sup> rules มีผลเสมอ และไม่จำกัดตาม path
 
-<sup>✓²</sup> teamai ไม่ได้ส่ง env ให้เครื่องมือนี้เอง: รันคำสั่งด้วย `teamai env exec -- <command>` เพื่อให้คำสั่งนั้นได้ team env
+<sup>✓²</sup> env ส่งถึงได้ผ่าน `teamai env exec` เท่านั้น
 
 ## เรียนรู้เพิ่มเติม
 

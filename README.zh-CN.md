@@ -153,7 +153,7 @@ teamai init https://github.com/your-org/your-repo --scope user
 
 <sup>✓¹</sup> rules 始终生效，不按路径限定。
 
-<sup>✓²</sup> teamai 自身不向该工具送达 env；用 `teamai env exec -- <command>` 运行命令，即可让命令获得团队 env。
+<sup>✓²</sup> env 仅通过 `teamai env exec` 送达。
 
 ## 了解更多
 
