@@ -98,7 +98,7 @@ vi.mock('../update.js', () => ({
 }));
 
 import { pull } from '../pull.js';
-import { EnvHandler } from '../resources/env.js';
+import { EnvHandler, readEnvBackup } from '../resources/env.js';
 import {
   loadLocalConfigForScope,
   loadTeamConfig,
@@ -430,13 +430,19 @@ describe('pull scope isolation (issue #73)', () => {
       // The user env stays out of the project, and still loads outside it.
       expect(sees(projectRoot, 'USER_TOKEN')).toBe('');
       expect(sees(tmpDir, 'USER_TOKEN')).toBe('user-secret');
-      if (step === 'resolve') {
+      // An env that could not be resolved keeps what the last pull delivered,
+      // in shells as in env exec and MCP; a project never delivered loads none.
+      if (step === 'resolve' && before === 'first pull') {
         expect(await projectRow()).toMatch(/^dir\t[^\t]+\t-\t0\t/);
         expect(sees(projectRoot, 'MARKER')).toBe('');
         return;
       }
-      // Only an env that could not be resolved changes the row to load nothing.
       expect(await projectRow()).toBe(rowBefore);
+      if (step === 'resolve') {
+        expect(sees(projectRoot, 'MARKER')).toBe('old');
+        expect(await readEnvBackup(projectConfig)).toEqual({ MARKER: 'old' });
+        return;
+      }
       expect(sees(projectRoot, 'MARKER')).toBe(step === 'write' ? markerBefore : (before === 'first pull' ? '' : 'new'));
       expect(reported).toMatch(step.startsWith('register') ? /registry lock stayed busy/ : /EACCES/);
       expect(exitedWith).toBe(1);

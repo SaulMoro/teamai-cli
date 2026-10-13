@@ -739,7 +739,7 @@ async function reconcileEnvForUnchangedRepo(
     }
     await new EnvHandler().writeResolvedEnv(variables, freshConfig, localConfig, keptFromUserScope(localConfig, teamEnv, variables));
   } catch (e) {
-    // The scope's row stays: only an env that could not be resolved is registered as loading none.
+    // The scope's row stays: only a scope never delivered is registered as loading none.
     // Visible rather than debug-only, and still not rethrown. This is the path
     // that REMOVES a variable the member is no longer scoped to, so a failed
     // write leaves a withheld variable exported while the only thing on screen

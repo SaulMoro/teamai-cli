@@ -499,12 +499,17 @@ export class EnvHandler extends ResourceHandler {
     return true;
   }
 
-  /** Register a scope whose current env could not resolve, after its profile is ready. */
+  /**
+   * Register a scope whose current env could not resolve, after its profile is
+   * ready. Its last env.sh and backup stay, so shells keep loading what env
+   * exec and MCP keep; a scope never delivered loads none.
+   */
   async registerUnresolvedScope(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+    const envShPath = path.join(getDataHome(localConfig), 'env.sh');
     const inject = teamConfig.sharing.env.injectShellProfile !== false;
     if (localConfig.scope === 'project' && localConfig.projectRoot) await markEnvScopePending(localConfig.projectRoot);
-    await this.updateShellProfile(teamConfig, path.join(getDataHome(localConfig), 'env.sh'), inject, localConfig);
-    await registerEnvScope(localConfig, false);
+    await this.updateShellProfile(teamConfig, envShPath, inject, localConfig);
+    await registerEnvScope(localConfig, inject && await pathExists(envShPath));
   }
 
   /**
