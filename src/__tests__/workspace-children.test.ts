@@ -13,7 +13,7 @@ import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { mcpEntryReader } from '../resources/mcp.js';
 import { mcpRelocated } from '../mcp-reconcile.js';
 import { buildRolePullContext, resolveDesiredAgents, resolveDesiredRules, resolveDesiredSkills } from '../resources/desired.js';
-import { findAncestorWorkspaces, readWorkspaceChildren, syncWorkspaceInstructionExcludes } from '../workspace-children.js';
+import { deliveredLearningsNamespaces, findAncestorWorkspaces, readWorkspaceChildren, syncWorkspaceInstructionExcludes } from '../workspace-children.js';
 
 const TEAM = 'https://git.example.com/team/team.git';
 const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: TEAM, provider: 'git', reviewers: [] });
@@ -258,6 +258,16 @@ describe('delivered selection of a workspace with children', () => {
 
     expect(resolved?.activeNamespaces.skills).toEqual(['svc-a', 'payments']);
     expect(warn.mock.calls.flat().join('\n')).toContain('Workspace child svc-a selects project "gone"');
+  });
+
+  it('reads the learnings of its own projects and of every child, an unknown project of one child aside', async () => {
+    repoChild(path.join(ws, 'svc-a'), { projects: ['svc-a'] });
+    repoChild(path.join(ws, 'svc-b'), { projects: ['svc-b', 'gone'] });
+    vi.spyOn(log, 'warn').mockImplementation(() => {});
+
+    const namespaces = await deliveredLearningsNamespaces(await readWorkspaceChildren({ ...workspace, projects: ['platform'] }));
+
+    expect(namespaces).toEqual(['platform', 'svc-a', 'svc-b']);
   });
 
   it("delivers each child's skills after that child's exclusions and tags, and its own exclusions on top", async () => {

@@ -25,7 +25,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { findProject, loadProjectsManifest } from './projects.js';
+import { findProject, loadProjectsManifest, resolveActiveLearningsNamespaces } from './projects.js';
 import type { LocalConfig } from './types.js';
 import { readFileSafe, readJsonObject, writeJson } from './utils/fs.js';
 import { remotesMatch } from './utils/git.js';
@@ -153,6 +153,21 @@ export async function deliveredMembers(config: LocalConfig): Promise<readonly Lo
     });
   }
   return members;
+}
+
+/**
+ * The learnings namespaces this scope indexes: in a workspace with children,
+ * those of every member's projects, as pull indexes them; else its own.
+ * Throws when manifest/projects.yaml cannot be read.
+ */
+export async function deliveredLearningsNamespaces(config: LocalConfig): Promise<string[]> {
+  const namespaces = new Set<string>();
+  for (const member of await deliveredMembers(config) ?? [config]) {
+    for (const namespace of await resolveActiveLearningsNamespaces(config.repo.localPath, member.projects ?? [])) {
+      namespaces.add(namespace);
+    }
+  }
+  return [...namespaces];
 }
 
 /** One name whose copies differ between two members, so the workspace delivers neither. */

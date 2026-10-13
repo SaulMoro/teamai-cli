@@ -138,6 +138,16 @@ describe('a workspace delivers what the repos inside it select (#913)', () => {
       git(['init', '-q', '-b', 'main'], seed);
       git(['add', '-A'], seed);
       git(['commit', '-q', '-m', 'seed'], seed);
+      // One learning per project, on the branch learnings are published to.
+      git(['checkout', '-q', '--orphan', 'teamai-learnings'], seed);
+      git(['rm', '-rfq', '.'], seed);
+      for (const [namespace, word] of [['svc-a', 'narwhal'], ['platform', 'okapi']]) {
+        fs.mkdirSync(path.join(seed, 'learnings', namespace!), { recursive: true });
+        fs.writeFileSync(path.join(seed, 'learnings', namespace!, `${word}.md`), `# ${word} rollout\n\nThe ${word} rollout needs the ${word} cache warmed first.\n`);
+      }
+      git(['add', '-A'], seed);
+      git(['commit', '-q', '-m', 'learnings'], seed);
+      git(['checkout', '-q', 'main'], seed);
       const bare = path.join(sandbox, `${name}.git`);
       git(['clone', '-q', '--bare', seed, bare], sandbox);
       git(['config', '--global', `url.${bare}.insteadOf`, url], sandbox, home);
@@ -241,6 +251,24 @@ describe('a workspace delivers what the repos inside it select (#913)', () => {
     const doctor = await run(['doctor'], ws);
     expect(doctor.output).toContain('The workspace reads every child set up under it');
     expect(doctor.output).toContain('carol is left out: it uses another team repo');
+  });
+
+  it('recalls the children\'s project learnings, and follows a child that changes its selection before the next pull', async () => {
+    const recalledFile = async (word: string): Promise<string | undefined> => {
+      const result = await run(['recall', word], ws);
+      expect(result.code, result.output).toBe(0);
+      return result.output.match(/^File: (.+)$/m)?.[1];
+    };
+    const pull = await run(['pull'], ws);
+    expect(pull.code, pull.output).toBe(0);
+    expect(await recalledFile('narwhal')).toContain(path.join('learnings', 'svc-a', 'narwhal.md'));
+    expect(await recalledFile('okapi')).toContain(path.join('learnings', 'platform', 'okapi.md'));
+
+    const projects = await run(['projects', 'set', 'svc-a'], path.join(ws, 'svc-a'));
+    expect(projects.code, projects.output).toBe(0);
+
+    expect(await recalledFile('okapi')).toBeUndefined();
+    expect(await recalledFile('narwhal')).toContain(path.join('learnings', 'svc-a', 'narwhal.md'));
   });
 });
 

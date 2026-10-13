@@ -1536,6 +1536,7 @@ async function pullForScope(
           ruleFiles,
           skills: await skillsToIndex(),
           unreadable: unresolved,
+          children: localConfig.children?.fingerprint,
           codebaseDir: undefined, // codebase now served by teamwiki/ graph engine
           votesDir: votesExist ? votesDir : undefined,
           indexPath,

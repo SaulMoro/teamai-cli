@@ -2115,6 +2115,8 @@ export interface SearchIndex {
   /** Per-domain document-frequency maps, so unrelated knowledge domains do not
    *  change the IDF score of an entry. Missing on indexes that need rebuilding. */
   dfByDomain?: Partial<Record<KnowledgeDomain, Record<string, number>>>;
+  /** The workspace children this index was built for (#913), absent outside a workspace with children. */
+  children?: string;
 }
 
 /** Per-user vote file (votes/<user>.yaml). */
