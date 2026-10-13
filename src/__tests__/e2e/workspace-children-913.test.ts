@@ -349,5 +349,29 @@ describe('a workspace delivers what the repos inside it select (#913)', () => {
       'agents/svc-a/helper.yaml', 'skills/svc-a/drift-tool/SKILL.md', 'skills/svc-a/shared-tool/SKILL.md', 'skills/svc-b/shared-tool/SKILL.md',
     ]);
   });
+
+  it('keeps a hook only a child selects when the workspace injects its hooks again', async () => {
+    const seed = path.join(sandbox, 'seed-team');
+    const manifest = YAML.parse(fs.readFileSync(path.join(seed, 'manifest', 'projects.yaml'), 'utf8'));
+    for (const project of manifest.projects) project.resources.hooks = [project.id];
+    fs.writeFileSync(path.join(seed, 'manifest', 'projects.yaml'), YAML.stringify(manifest));
+    fs.mkdirSync(path.join(seed, 'hooks', 'svc-b'), { recursive: true });
+    fs.writeFileSync(path.join(seed, 'hooks', 'svc-b', 'hooks.yaml'),
+      'hooks:\n  - id: svc-b-check\n    description: Check svc-b commands\n    event: PreToolUse\n    matcher: Bash\n    command: echo svc-b-check-913\n    tools: [claude]\n');
+    git(['add', '-A'], seed);
+    git(['commit', '-q', '-m', 'a hook for svc-b'], seed);
+    git(['push', '-q', path.join(sandbox, 'team.git'), 'main'], seed);
+    const claudeHooks = (): string => ['settings.json', 'settings.local.json']
+      .map((file) => path.join(ws, '.claude', file)).filter((file) => fs.existsSync(file))
+      .map((file) => fs.readFileSync(file, 'utf8')).join('\n');
+    const pull = await run(['pull'], ws);
+    expect(pull.code, pull.output).toBe(0);
+    expect(claudeHooks()).toContain('svc-b-check-913');
+
+    const inject = await run(['hooks', 'inject'], ws);
+
+    expect(inject.code, inject.output).toBe(0);
+    expect(claudeHooks()).toContain('svc-b-check-913');
+  });
 });
 

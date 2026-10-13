@@ -1,6 +1,7 @@
 import YAML from 'yaml';
 import fs from 'node:fs';
 import path from 'node:path';
+import { readWorkspaceChildren } from './workspace-children.js';
 import { saveLocalConfig, loadTeamConfig, saveLocalConfigForScope, loadLocalConfigForScope, loadStateForScope, saveStateForScope, resolveProjectDataHome } from './config.js';
 import { deliveredHookFiles, describeUnappliedTeamHooks, hasTeamaiHooks, reconcileHooks, reconcileTeamHooksForConfig, reportCodexTrust, trustCodexForScope } from './hooks.js';
 import { configureGitUser, initRepo, isGitRepo, getRemoteUrl, remotesMatch, redactGitCredentials, pullRepoFastForward } from './utils/git.js';
@@ -795,7 +796,8 @@ async function reconcileHooksForInit(
 ): Promise<void> {
   let reconciled: Awaited<ReturnType<typeof reconcileTeamHooksForConfig>>;
   try {
-    reconciled = await reconcileTeamHooksForConfig(teamConfig, localConfig, { filterAgents });
+    // A workspace's hooks include its children's, as pull delivers them (#913).
+    reconciled = await reconcileTeamHooksForConfig(teamConfig, await readWorkspaceChildren(localConfig), { filterAgents });
   } catch (e) {
     // The agent hooks are in place; the rest of init still runs.
     log.error((e as Error).message);
