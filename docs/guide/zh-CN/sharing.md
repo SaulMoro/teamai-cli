@@ -139,43 +139,21 @@ teamai env exec -- gh pr create
 
 ### 按目录加载 Shell 环境变量
 
-团队环境变量按目录进入 shell：在某个目录中启动的 shell 获得管辖该目录的 scope 的环境变量，因此同时打开的多个项目各自拿到自己的。shell 配置文件里只有一个 teamai 区块，所有 scope 共用，它 source `~/.teamai/env-loader.sh`。每次项目 pull 都会把该 scope 及其机器数据分区登记到 `~/.teamai/env-scopes`，以检出与其 worktree 共享的 git 目录为键（不在 git 中时以目录本身为键），loader 在其中查找 shell 所在的目录：
+shell 获得其启动目录的团队环境变量，因此同时打开的多个项目各自拿到自己的。`teamai pull` 会在 shell 配置文件中加入一个区块（zsh 为 `.zshenv`，bash 为 bash 启动文件）。交互式 shell 在 `cd` 时切换环境变量，离开项目时恢复你自己的值。
 
-- 在项目中，加载该项目的 `env.sh`，不加载用户级 scope 的任何内容，除非项目设置了 `inheritUserScope: true`：此时先加载用户级 scope 的变量，项目声明的键（无论是变量还是密钥）以项目为准（项目密钥没有值时保持未设置，不会取用户级 scope 的值）；用户级 scope 的密钥始终不会加载；
-- 在关联的 worktree 中，即使该 worktree 尚未 pull，也加载其所属项目的；
-- 尚未被任何 pull 登记的项目，只要 teamai 已在其中完成设置、迁移或开始过 pull，什么都不加载；
-- 其他位置，加载用户级 scope 的；
-- 目录本身或其上层有 `.git`，但 git 无法读取该仓库（未安装 git、`.git` 损坏、元数据无法读取、`safe.directory` 拒绝）时，什么都不加载：无法判断哪个 scope 管辖它。`env exec` 在这里同样不应用团队环境变量，并说明原因；未安装 git 时，不在任何仓库中的目录仍加载用户级 scope 的。
+- 在项目中：加载该项目的环境变量。设置 `inheritUserScope: true` 时也加载用户级 scope 的变量，但项目声明的键以项目为准，用户级 scope 的密钥始终不会加载。
+- 尚未被 pull 登记的项目：什么都不加载，直到你在那里 pull。
+- 其他位置：加载用户级 scope 的环境变量。
+- git 无法读取仓库时（未安装 git、`.git` 损坏、`safe.directory`）：什么都不加载。
 
-用户级 scope 的团队设置了 `injectShellProfile: false` 时，它的 `env.sh` 在任何位置都不加载，继承它的项目中也不加载。
+`injectShellProfile: false` 会为该团队的 scope 关闭此功能。
 
-`~/.teamai/env-scopes` 存在但无法读取（例如权限问题）时，loader 无法判断哪个 scope 管辖某个目录，因此在任何位置都不加载团队环境变量。此时 pull 会失败、指出该文件并保持其原样；uninstall 会保留它、loader 以及 `~/.teamai/projects` 下每个项目的数据。修好该文件的权限后再次运行命令即可。
+限制：
 
-项目所属团队设置了 `injectShellProfile: false` 时，项目的 `env.sh` 和继承的用户级 scope 都不会加载。
+- 只有 bash 和 zsh 按目录加载环境变量。在 fish、PowerShell 或不启动这两种 shell 的工具中，请通过 `teamai env exec --` 运行命令。
+- 团队环境变量不能设置控制 shell 或 loader 的名称，例如 `BASH_ENV`、`HOME`、`IFS`、`PROMPT_COMMAND`，或以 `__TEAMAI_` 开头的名称。pull 会警告并忽略它们。
+- `teamai doctor` 会检查在此目录启动的 shell 是否加载了本 scope 的环境变量。
 
-退出后，下一次 pull 还会从每个候选文件中移除旧版本写入、source 该 scope `env.sh` 的区块；对用户级 scope，也包括最早那种直接 export 变量的区块。其他 scope 的区块保留，直到那个 scope 自己 pull。
-
-交互式 shell 在 `cd` 时切换环境变量，并在离开项目时恢复你进入项目前设置的值。loader 会先于 Bash 的 `PROMPT_COMMAND` 和 zsh 的 `chpwd_functions` 钩子更新环境，因此这些钩子（包括你在 loader 之后追加到 `PROMPT_COMMAND` 的命令）会看到当前目录对应的环境；Bash 提示符钩子仍能读取上一条命令的 `$?` 和 `PIPESTATUS`。zsh 从 `.zshenv` 读取该区块，每个 zsh 都会读取它，因此工具执行命令时用的 `zsh -c` 也能拿到所在目录的环境变量。bash 在 `bash -c` 时不读取任何启动文件，所以 loader 会把 `BASH_ENV` 指向自身，先 source 你原有的 `BASH_ENV`（运行期间 `BASH_ENV` 指向你的文件），再加载团队环境，两者设置同一个键时以团队的值为准；每个 bash 只运行你的文件一次。`teamai env exec` 启动的 `bash` 也同样先 source 你的 `BASH_ENV`，再应用团队的值。团队环境不能设置 `BASH_ENV`、`ENV`、`ZDOTDIR`、`HOME`、`PWD`、`PROMPT_COMMAND`、`BASH_VERSION`、`BASH_VERSINFO`、`ZSH_VERSION`、`PIPESTATUS`、`IFS`、Bash 只读的 `SHELLOPTS`、`BASHOPTS`、`UID`、`EUID` 和 `PPID`、zsh 钩子数组，以 `__TEAMAI_` 或 `__teamai_` 开头的名称，以及 `env.sh` 导出的 `TEAMAI_ENV_SH_<64 位十六进制>` 标记；这些名称控制 shell 启动、钩子或 loader 状态，或者 Bash 不允许设置。团队声明这些名称时，pull、`env set` 和 `env exec` 会警告，因为 TeamAI 会忽略这些值。其他 shell（fish、PowerShell）不运行 loader，未安装 bash 和 zsh 时 pull 也不会写入任何配置文件区块：需要团队环境变量的命令请通过 `teamai env exec --` 运行，它按同样的方式解析。
-
-pull 不再为切换项目而改写 shell 配置文件。第一次用带 loader 的版本 pull 时（在没有环境变量的项目中也是如此），会在写入 loader 区块的同时，从每个候选文件中移除旧版本写入的按 scope 区块（其中任一写入失败时，pull 会把已改动的文件全部恢复原样并报告失败；同一个文件有两个名字时，例如 `.zshrc` 链接到 `.zshenv` 或 dotfiles 仓库中的文件，只改写一次，并通过链接写入，链接保持不变，链接指向的文件或目录尚不存在时也一样；恢复时只删除 pull 新建的文件及为其新建的目录，不会删除链接；已存在但无法读取的配置文件会使 pull 报错停止，而不会被覆盖）；若某个项目因此不再获得以前能拿到的用户级变量，会提示一次。
-
-`pull` 时，若启用了 `injectShellProfile`（默认启用），`$SHELL` 为 zsh 时环境变量块会写入 `~/.zshenv`（设置了 `ZDOTDIR` 时为 `$ZDOTDIR/.zshenv`），否则写入 `~/.bashrc`——但 Windows 上例外：`$SHELL` 通常未设置，而 Git Bash 以*登录 shell*方式启动，从不读取 `.bashrc`，因此 teamai 会优先选择已存在的 `~/.bash_profile`、其次 `~/.bash_login`、再次 `~/.profile`，只有三者都不存在时才回退到 `~/.bashrc`（通过 MSYS2/Cygwin 安装、会设置 `$SHELL` 的 zsh 仍会解析到 `.zshenv`）。这与 Git for Windows 自身在 `/etc/profile.d/bash_profile.sh` 中的回退逻辑一致，其判断条件是 `[ -e ~/.bashrc -a ! -e ~/.bash_profile -a ! -e ~/.bash_login -a ! -e ~/.profile ]`——只有在这一种情况下它才会生成一个会 source `.bashrc` 的 `.bash_profile`；
-
-这也是为什么哪怕一个只 source 了其他内容（例如 `~/.local/bin/env`）的 `~/.profile` 存在，也足以让 `.bashrc` 单独失效。可通过 `teamai.yaml` 中的 `sharing.env.shellProfilePath` 覆盖 bash 的目标文件；在 Windows 以外，它只决定读取该文件的那种启动模式所用的文件，bash 的另一种模式仍按下文规则写入区块，除非其文件已经 source 了 override。对 zsh，teamai 始终把区块写入 `.zshenv`（若设置了 `$ZDOTDIR`，则写入其下的 `.zshenv`），因为 `zsh -c` 不会读取 `.zshrc`；若 override 指向其他 zsh 启动文件，会忽略并给出警告，pull 时也会把旧区块迁到 `.zshenv`。另一个 shell 的文件（`$SHELL` 为 zsh 时为上文 bash 的目标文件，为 bash 时为 `.zshenv`）也会写入区块，这样从 zsh 启动的 bash（或从 bash 启动的 zsh）同样会随目录切换环境：在 Windows 以外，该 shell 已安装（在 `PATH` 上）时 teamai 会创建该文件；否则，以及在 Windows 上，只有已存在的文件才会写入区块。`teamai uninstall` 和 `teamai doctor` 会与第一个文件一并处理它。在 Windows 以外，登录 bash（`bash -l`，或 macOS 终端）读取的是 `~/.bash_profile`、`~/.bash_login`、`~/.profile` 中第一个存在的文件，而不是 `.bashrc`，因此该文件也会写入区块，除非它已经 source 了上文的 bash 文件。若 override 指向登录文件，交互式 bash 仍读取 `.bashrc`，它也会写入区块（bash 是 `$SHELL` 或已安装时会创建），除非它已经 source 了 override。三者都不存在且 bash 是 `$SHELL` 或已安装时，teamai 会创建 `~/.profile`：它在 bash 的读取顺序中排在最后，因此之后新增的 `~/.bash_profile` 仍会生效，而读取 `.profile` 的 POSIX `sh` 会跳过该区块。teamai 不会创建 `.bash_profile` 或 `.bash_login`。
-
-每次 pull 都会重新走一遍这个优先级判断，找到当前环境实际会读取的那个文件，然后沿着它对另外四个候选文件名的引用一路查下去——无论要经过多少跳
-
-——寻找一个已经带着代码块的候选文件，而不是重复注入。如果链条中间经过的是这五个候选文件名之外的文件（比如某些环境会改用 `~/.config/shell/profile` 这类自定义文件来 source），这条链就不会被继续跟踪。这正是为了不让 Git for Windows 自身的引导逻辑把目标文件从脚下换掉：
-
-上面那条 `/etc/profile.d/bash_profile.sh` 判断条件，在第一次 pull 写入 `.bashrc` 之后同样会成立，于是下一次 Git Bash 登录 shell 启动时就会自动生成一个 source 它的 `~/.bash_profile`；如果不沿着这条转发链去找，下一次 pull 就会转而偏好这个新出现的文件，在那里注入第二个代码块，而原来那个——依旧在正常工作，只是绕得更远了——则会被误报为失效的遗留代码块。同样的道理也适用于一个普通的 `.profile`：它用一条扁平的存在性守卫（`[ -f "$HOME/.bashrc" ] && . "$HOME/.bashrc"`）为交互式 shell source `.bashrc`——这时登录 shell 最先读到的文件，离实际代码块有两跳之遥。
-
-不过，只有两种字面写法才算真正的引用：单独一行的裸 `source X` / `. X`，或者单独一行、与 Git for Windows 自己生成的写法完全一致的自引用存在性守卫 `test -f X && . X` / `[ -f X ] && . X`（被测试路径与被 source 路径完全相同）——两种情况下 `X` 都必须是不加引号的 `~/name`，或不加引号/用双引号包裹的 `$HOME/name`（绝不是加了引号的 `~`，也绝不是用单引号包裹的 `$HOME`：shell 不会展开这两种写法，看起来对的引用实际会 source 一个不存在的字面路径）。除此之外的写法——source 本身带了重定向或额外参数、`||` 回退、不相关的 `&&` 连接命令、任何这段逻辑无法独立验证的条件
-
-——一律不识别，直接回退到按优先级选出的文件，而不是去猜。这是刻意收窄到两种固定写法的封闭集合，而不是尝试解析任意的 shell 条件：真要匹配一个真实 shell 脚本能用来让某一行变成有条件执行（或者把可执行内容伪装成惰性文本）的所有手法，需要一个真正的 shell 解析器，任何固定规模的规则集合都不可能穷尽这件事。嵌在 `if`、`for`/`while`/`until`、`case`、`select`、函数体，或者 `(...)`/`{...}` 分组里的内容一律不算数，不管外层条件写的是什么
-
-——这些结构要么不保证一定会执行，要么即使一定会执行（比如子 shell 或大括号分组），它导出的环境变量也传不到调用它的 shell 里，这也意味着 Debian/Ubuntu 标准模板里那种嵌套两层 `if`、沿途还检查 `$BASH_VERSION` 的写法无法被识别，会回退到按优先级选出的文件。位于无条件的顶层 `return` 或 `exit` 之后的内容同样不算数，因为控制流根本不会执行到那里。凡是这套逻辑判断不了的情况，以及当前这条链条根本没触及到的候选文件——哪怕它本身带着代码块——都绝不会因此被优先选中，否则 #682 之前旧版本留下的失效代码块就会永远压过正确的文件，等于在升级后又悄悄把 #682 引入回来。
-
-`doctor`（以及 `pull` 结束后自动运行的检查）还会标记出旧版本遗留在候选文件中的按 scope 环境变量块——例如 #682 之前的旧版本写入 `.bashrc` 的代码块，即便该代码块本身已损坏、从未生效。下一次 pull 或 `teamai uninstall` 会清理它。`This directory resolves its team env` 会在该目录启动你的 `$SHELL`、在其中运行 loader，并检查它加载的是本 scope 的 `env.sh`；尚未被 pull 登记的项目会失败，直到你在那里 pull。若 shell 不运行 loader，该检查判定通过，doctor 会附一条说明指出这一缺口。
 ## Hooks
 
 `teamai init` 会装上这些内置 hook：
