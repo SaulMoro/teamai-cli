@@ -453,8 +453,15 @@ export async function scopeEnvFiles(localConfig: LocalConfig): Promise<string[]>
 export async function directoryEnv(localConfig: LocalConfig, dir: string, shell = process.env.SHELL ?? ''): Promise<DirectoryEnv> {
   if (!loaderShell(shell)) return { kind: 'shell-without-loader', shell: path.basename(shell) || 'no SHELL' };
   const expected = (await scopeEnvFiles(localConfig)).map(shellForm);
-  // A fresh resolution: none of what this process's shell already loaded.
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('__TEAMAI_ENV_') && key !== 'BASH_ENV'));
+  // A fresh resolution: none of what this process's shell already loaded. The
+  // member's own value of each key it loaded comes back first, as
+  // `__teamai_env_restore` puts it back, so a project's PATH cannot hide git.
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  for (const key of (process.env.__TEAMAI_ENV_KEYS ?? '').split(' ').filter(Boolean)) {
+    if (process.env[`__TEAMAI_ENV_SET_${key}`] === '2') env[key] = process.env[`__TEAMAI_ENV_PREV_${key}`];
+    else delete env[key];
+  }
+  for (const key of Object.keys(env)) if (key.startsWith('__TEAMAI_ENV_') || key === 'BASH_ENV') delete env[key];
   let loaded: string[];
   try {
     const { stdout } = await promisify(execFile)(shell, [

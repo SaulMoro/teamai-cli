@@ -221,6 +221,20 @@ describe('team env by directory (#1018)', () => {
         expect(run.stdout, run.stderr).toBe(`${value}|real|0\nunset|real|0\n`);
       },
     );
+
+    // A tool started from a shell in the project inherits the project's PATH;
+    // the check runs the loader with the member's, which finds git.
+    it.each(['bash', 'zsh'].filter(hasShell))('%s: the directory check runs with the member\'s PATH, not the one a project exports', async (shell) => {
+      const a = await project(`check-path-${shell}`);
+      await handler.writeResolvedEnv([{ key: 'PATH', value: '/no-such-path' }], teamConfig, a);
+      const inherited = spawnSync(shell, ['-c', '. "$1"; /usr/bin/env -0', 'teamai', path.join(homeDir, '.teamai', 'env-loader.sh')], {
+        cwd: a.projectRoot, env: { HOME: homeDir, PATH: process.env.PATH, ZDOTDIR: tmpDir }, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'],
+      }).stdout.split('\0').filter(Boolean).map((line) => line.split(/=(.*)/s));
+      expect(Object.fromEntries(inherited).PATH).toBe('/no-such-path');
+      for (const [key, value] of inherited) vi.stubEnv(key, value);
+
+      expect(await directoryEnv(a, a.projectRoot ?? '', `/bin/${shell}`)).toEqual({ kind: 'loads-scope' });
+    });
   });
 
   describe('isolates the loader from shell options', () => {
