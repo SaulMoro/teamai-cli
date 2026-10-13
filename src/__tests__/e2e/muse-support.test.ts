@@ -197,6 +197,10 @@ describe('Muse Code resource delivery', () => {
     expect(fs.existsSync(path.join(projectRoot, '.agents', 'skills', 'teamai', 'SKILL.md'))).toBe(true);
     expect(fs.existsSync(path.join(projectRoot, '.codex', 'skills', 'teamai'))).toBe(false);
     expect(pulled.output).not.toContain('skill conflict');
+    // The shared copy is the one both tools read, so a second pull updates it rather than calling it new.
+    const again = await runCLI(['pull', '--force'], projectRoot, home);
+    expect(again.code, again.output).toBe(0);
+    expect(again.output).not.toContain('new: demo');
 
     const other = first === 'codex' ? 'muse' : 'codex';
     const partial = await runCLI(['uninstall', '--agent', first, '--force'], projectRoot, home);

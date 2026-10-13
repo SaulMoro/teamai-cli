@@ -414,19 +414,17 @@ async function getExistingLocalNames(
   const baseDir = resolveBaseDir(localConfig);
 
   if (type === 'skills') {
-    // Check the first installed tool's skills directory
-    for (const [_tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+    // A skill exists if any tool has it, including the .agents/skills Codex reads.
+    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.skills) continue;
-      const skillsDir = path.join(baseDir, toolPath.skills);
-      if (!await pathExists(skillsDir)) continue;
-      for (const item of items) {
-        const skillDir = path.join(skillsDir, item.name);
-        if (await pathExists(skillDir)) {
-          existing.add(item.name);
+      const skillsDirs = [path.join(baseDir, toolPath.skills)];
+      if (tool === CODEX_TOOL) skillsDirs.push(path.join(resolveToolBaseDir(CODEX_TOOL, localConfig), SHARED_AGENT_SKILLS_PATH));
+      for (const skillsDir of skillsDirs) {
+        if (!await pathExists(skillsDir)) continue;
+        for (const item of items) {
+          if (await pathExists(path.join(skillsDir, item.name))) existing.add(item.name);
         }
       }
-      // Only need to check the first available target
-      break;
     }
   }
 

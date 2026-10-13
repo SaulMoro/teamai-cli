@@ -227,6 +227,7 @@ describe('Codex skills in the shared .agents/skills directory (#993 bug 3)', () 
     expect(read(path.join(shared, 'scripts', 'run.sh'))).toBe('echo two\n');
     expect(fs.existsSync(codex)).toBe(false);
     expect(pulled.output).not.toContain('Codex skill conflict');
+    expect(pulled.output).not.toContain('new: fe-skill');
 
     // teamai's copy in the shared directory is the one uninstall deletes.
     m.ok(['uninstall', '--force'], dir);
