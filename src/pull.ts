@@ -734,7 +734,7 @@ async function reconcileEnvForUnchangedRepo(
     const teamEnv = await resolvePullEnv(localConfig, roleContext, teamEnvs);
     const variables = deliverableEnvVariables(teamEnv);
     if (!variables) {
-      await new EnvHandler().registerUnresolvedScope(freshConfig, localConfig);
+      await new EnvHandler().registerUnresolvedScope(freshConfig, localConfig, [...declaredSecretKeys(teamEnv.declarations) ?? []]);
       return;
     }
     await new EnvHandler().writeResolvedEnv(variables, freshConfig, localConfig, keptFromUserScope(localConfig, teamEnv, variables));
@@ -1720,7 +1720,7 @@ async function pullForScope(
       if (!variables) {
         if (!options.dryRun) {
           try {
-            await new EnvHandler().registerUnresolvedScope(freshConfig, localConfig);
+            await new EnvHandler().registerUnresolvedScope(freshConfig, localConfig, [...declaredSecretKeys(teamEnv.declarations) ?? []]);
           } catch (error) {
             if (result) result.resourceSyncFailed = true;
             throw error;

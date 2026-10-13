@@ -8,7 +8,7 @@ import { TEAMAI_ENV_START, TEAMAI_ENV_END, getDataHome, getEnvBackupPath, getTea
 import { pathExists, readFileIfExists, readFileSafe, writeFile, ensureDir, fileContentEqual, remove, symlinkTarget } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { envShExportsPath, envShMarker, isEnvShMarker, recordEnvShExports } from '../env-sh-exports.js';
-import { ENV_KEY_RE, envNamePattern, envNamePatternKey, envTable } from './env-key.js';
+import { ENV_KEY_RE, envNamePattern, envNamePatternKey, envTable, sameEnvName } from './env-key.js';
 import { SECRETS_LAYOUT } from './secrets.js';
 import { envLoaderPath, hasEnvLoadingScope, markEnvScopePending, registerEnvScope, writeEnvLoader } from './env-loader.js';
 import {
@@ -502,10 +502,24 @@ export class EnvHandler extends ResourceHandler {
   /**
    * Register a scope whose current env could not resolve, after its profile is
    * ready. Its last env.sh and backup stay, so shells keep loading what env
-   * exec and MCP keep; a scope never delivered loads none.
+   * exec and MCP keep; a scope never delivered loads none. A key it now
+   * declares a secret (`secretKeys`) leaves them, as it leaves what env exec and
+   * MCP keep, and an inheriting project keeps the member's own value of it.
    */
-  async registerUnresolvedScope(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+  async registerUnresolvedScope(teamConfig: TeamaiConfig, localConfig: LocalConfig, secretKeys: readonly string[]): Promise<void> {
     const envShPath = path.join(getDataHome(localConfig), 'env.sh');
+    const last = await readFileIfExists(envShPath);
+    if (last !== null && secretKeys.length > 0) {
+      const exports = [...parseEnvFile(last)];
+      const keeps = [...parseEnvFileKept(last)];
+      const kept = exports.filter(([key]) => sameEnvName(secretKeys, key) === undefined);
+      const inherits = localConfig.scope === 'project' && localConfig.inheritUserScope === true;
+      const newKeeps = inherits ? secretKeys.filter((key) => sameEnvName(keeps, key) === undefined && !isReservedTeamEnvKey(key)) : [];
+      if (kept.length < exports.length || newKeeps.length > 0) {
+        await this.writeResolvedEnv(kept.map(([key, value]) => ({ key, value })), teamConfig, localConfig, [...keeps, ...newKeeps]);
+        return;
+      }
+    }
     const inject = teamConfig.sharing.env.injectShellProfile !== false;
     if (localConfig.scope === 'project' && localConfig.projectRoot) await markEnvScopePending(localConfig.projectRoot);
     await this.updateShellProfile(teamConfig, envShPath, inject, localConfig);

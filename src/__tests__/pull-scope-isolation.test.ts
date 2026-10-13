@@ -98,6 +98,7 @@ vi.mock('../update.js', () => ({
 }));
 
 import { pull } from '../pull.js';
+import { getTeamSecretsPath } from '../secret-store.js';
 import { EnvHandler, readEnvBackup } from '../resources/env.js';
 import {
   loadLocalConfigForScope,
@@ -555,6 +556,44 @@ describe('pull scope isolation (issue #73)', () => {
     expect(vi.mocked(log.success).mock.calls.some(([message]) => message === '[user] Already synced at abc1234, skipping')).toBe(rev === 'abc1234');
     expect(reconcileTeamHooksForConfig).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ scope: 'user' }), expect.anything());
     expect(reconcileMcpForConfig).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ scope: 'user' }));
+  });
+
+  // While an env.yaml can't resolve, shells keep the last pull's env.sh; a key
+  // now declared a secret leaves them as it leaves env exec and MCP.
+  it.skipIf(spawnSync('bash', ['-c', 'true']).status !== 0).each([
+    { declares: 'the user scope', repo: () => userRepoPath, last: 'old', breaks: 'env.yaml' },
+    { declares: 'the project, of an inherited variable', repo: () => projectRepoPath, last: 'old', breaks: 'env.yaml' },
+    { declares: 'the project, of its own variable', repo: () => projectRepoPath, last: 'proj', breaks: 'env.yaml' },
+    { declares: 'the project, of its own variable', repo: () => projectRepoPath, last: 'proj', breaks: 'values file' },
+  ])('keeps a key $declares now declares a secret out of shells while its $breaks cannot resolve', async ({ repo, last, breaks }) => {
+    vi.stubEnv('SHELL', '/bin/bash');
+    vi.mocked(gitCommonDir).mockResolvedValue(null);
+    projectConfig.inheritUserScope = true;
+    vi.mocked(detectProjectConfig).mockResolvedValue(projectConfig);
+    vi.mocked(loadLocalConfigForScope).mockResolvedValue(userConfig);
+    await fse.outputFile(path.join(projectRoot, '.teamai', 'config.yaml'), 'scope: project\n');
+    await fse.writeFile(path.join(userRepoPath, 'env', 'env.yaml'), 'variables:\n  - key: TOKEN\n    value: old\n');
+    await fse.outputFile(path.join(projectRepoPath, 'env', 'env.yaml'), `variables:\n  - key: PROJ\n    value: p\n${last === 'proj' ? '  - key: TOKEN\n    value: proj\n' : ''}`);
+    const sees = (dir: string, key: string): string => spawnSync('bash', ['-c', `printenv ${key} || true`], {
+      cwd: dir,
+      env: { HOME: homeDir, PATH: process.env.PATH, SHELL: '/bin/bash', BASH_ENV: path.join(homeDir, '.teamai', 'env-loader.sh') },
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).stdout.trim();
+    await pull({ force: true, silent: true });
+    expect(sees(projectRoot, 'TOKEN')).toBe(last);
+
+    await fse.outputFile(path.join(repo(), 'env', 'secrets.yaml'), 'secrets:\n  - key: TOKEN\n');
+    if (breaks === 'env.yaml') await fse.outputFile(path.join(repo(), 'env', 'env.yaml'), 'variables: [\n');
+    else await fse.outputFile(getTeamSecretsPath(projectConfig), '{');
+    await pull({ force: true, silent: true }).catch(() => undefined);
+    process.exitCode = undefined;
+
+    const { appliedTeamEnv, resolveTeamEnv } = await import('../env-resolution.js');
+    expect(appliedTeamEnv(await resolveTeamEnv(projectConfig)).variables.has('TOKEN')).toBe(false);
+    expect(sees(projectRoot, 'TOKEN')).toBe('');
+    // The rest of the last pull stays.
+    expect(sees(projectRoot, 'PROJ')).toBe('p');
   });
 
   it('project mode: warns but continues when inherited user scope is unavailable', async () => {
