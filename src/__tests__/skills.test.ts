@@ -1683,4 +1683,44 @@ describe('SkillsHandler.pullItem Codex shared skills', () => {
     expect(await fse.readFile(path.join(sharedSkillPath, 'SKILL.md'), 'utf8')).toContain('description: Updated');
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('Codex skill conflict for team-skill: keeping different copies'));
   });
+
+  // Muse Code receives project skills in .agents/skills, so Codex's copy moves there.
+  it.each([
+    { copy: 'an older team version', content: 'v1', kept: false },
+    { copy: 'a member edit', content: 'edited', kept: true },
+  ])('moves Codex to the .agents copy Muse Code shares when its .codex copy is $copy', async ({ content, kept }) => {
+    const homeDir = path.join(tmpDir, 'home');
+    const projectRoot = path.join(tmpDir, 'project');
+    const repoPath = path.join(tmpDir, 'team-repo');
+    const sourcePath = path.join(repoPath, 'skills', 'team-skill');
+    const codexSkillPath = path.join(projectRoot, '.codex', 'skills', 'team-skill');
+    const sharedSkillPath = path.join(projectRoot, '.agents', 'skills', 'team-skill');
+    await fse.ensureDir(path.join(homeDir, '.config', 'muse'));
+    await fse.ensureDir(sourcePath);
+    await fse.writeFile(path.join(sourcePath, 'SKILL.md'), 'v1');
+    commitTeamRepo(repoPath, 'v1');
+    await fse.ensureDir(codexSkillPath);
+    await fse.writeFile(path.join(codexSkillPath, 'SKILL.md'), content);
+    await fse.writeFile(path.join(sourcePath, 'SKILL.md'), '---\nname: team-skill\ndescription: v2\n---\n');
+    commitTeamRepo(repoPath, 'v2');
+
+    const teamConfig: TeamaiConfig = {
+      team: 'test', description: '', repo: 'https://example.test/team.git', provider: 'git', reviewers: [],
+      sharing: { skills: {}, rules: { enforced: [] }, docs: { localDir: '' }, env: { injectShellProfile: true } },
+      toolPaths: { codex: { skills: '.codex/skills' }, muse: { skills: '.agents/skills' } },
+    };
+    const localConfig: LocalConfig = {
+      repo: { localPath: repoPath, remote: 'https://example.test/team.git' },
+      username: 'testuser', updatePolicy: 'auto', additionalRoles: [], scope: 'project', projectRoot,
+      enabledAgents: ['codex', 'muse'],
+    };
+
+    await new SkillsHandler().pullItem({
+      name: 'team-skill', type: 'skills', sourcePath, relativePath: 'skills/team-skill',
+    }, teamConfig, localConfig);
+
+    expect(await fse.readFile(path.join(sharedSkillPath, 'SKILL.md'), 'utf8')).toContain('description: v2');
+    expect(await fse.pathExists(codexSkillPath)).toBe(kept);
+    if (kept) expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('Codex skill conflict for team-skill: keeping different copies'));
+  });
 });

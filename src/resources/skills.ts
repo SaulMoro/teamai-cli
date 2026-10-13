@@ -20,7 +20,7 @@ import { assertWithinRoot, resolveReal } from '../utils/path-safety.js';
 import { openPrDestinations, recordedNamespace } from '../utils/pending-push.js';
 import { splitFrontmatter, stringifyFrontmatter } from '../utils/frontmatter.js';
 import {
-  blockingEntries, deliveredSkillFiles, describeKeptDir, describeMembersDirLeft, describeMembersFile, describeMembersLink, describeSkippedLink, isLink, judgeCopy, keepsEditedCopy, keepsTrackedCopy,
+  blockingEntries, deliveredSkillFiles, describeKeptDir, describeMembersDirLeft, describeMembersFile, describeMembersLink, describeSkippedLink, isLink, judgeCopy, judgeRemoval, keepsEditedCopy, keepsTrackedCopy,
   isRecordedFromTeamSkill, isUneditedSkillCopy, membersLinkAt, ownsSkillDir, recordDelivered, recordedUnder, teamaiSkillFiles,
   type DeliveredHashes, type DeliveryLedger,
 } from './delivered-copies.js';
@@ -238,7 +238,20 @@ export function skillTargetsFor(
     const baseDir = resolveToolBaseDir(tool, localConfig);
     const sharedDestination = path.join(baseDir, SHARED_AGENT_SKILLS_PATH, skillName);
     sharedDelivered ??= sharedSkillsDelivered(toolPaths, localConfig);
-    if (await sharedDelivered && !await pathExists(sharedDestination)) return sharedDestination;
+    if (await sharedDelivered && !await pathExists(sharedDestination)) {
+      // Codex's earlier copy in its own directory goes once the team history
+      // proves it teamai's, so the move does not leave Codex a second version.
+      const configuredDestination = path.join(baseDir, configuredSkillsPath, skillName);
+      if (sourcePath && await pathExists(configuredDestination)) {
+        if (await judgeRemoval(undefined, configuredDestination, skillOrigin(localConfig.repo.localPath, skillName)) !== 'remove') {
+          log.warn(`Codex skill conflict for ${skillName}: keeping different copies in ${SHARED_AGENT_SKILLS_PATH} and ${configuredSkillsPath}`);
+        } else if (!await keepsTrackedCopy(configuredDestination, sharedDestination) && await mayDeleteSkillCopy(localConfig, configuredDestination)) {
+          await remove(configuredDestination);
+          log.debug(`Removed TeamAI skill ${skillName} from ${configuredSkillsPath}: Codex reads it from ${SHARED_AGENT_SKILLS_PATH}`);
+        }
+      }
+      return sharedDestination;
+    }
     return resolveSkillDestination(tool, configuredSkillsPath, baseDir, skillName, ownsShared, sourcePath);
   };
 }
