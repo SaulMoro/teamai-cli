@@ -263,6 +263,16 @@ describe('submodule checkouts', () => {
     );
   });
 
+  it('tells the member to remove their own skill link rather than move the directory', async () => {
+    fs.mkdirSync(path.join(checkout, 'mine'));
+    fs.mkdirSync(path.join(checkout, '.claude/skills'), { recursive: true });
+    fs.symlinkSync('../../mine', path.join(checkout, '.claude/skills/fixture'));
+    const block = await findSkillDirectoryBlock(checkout, path.join(checkout, '.claude/skills/fixture'));
+    expect(block && describeSkippedSkillDirectory('fixture', 'claude', block)).toBe(
+      `Skipped fixture (claude): ${path.join(checkout, '.claude/skills/fixture')} is your own link. Remove the link to let teamai deliver this skill.`,
+    );
+  });
+
   it('inherits the original submodule config in a superproject worktree', async () => {
     const original = config();
     original.dataHome = await resolveProjectDataHome(checkout);

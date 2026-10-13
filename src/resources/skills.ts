@@ -81,7 +81,10 @@ export async function allowsSkillDirectory(baseDir: string, target: string, opti
 /** The warning for a skill delivery skips at `block`. */
 export function describeSkippedSkillDirectory(skillName: string, tool: string, block: SkillDirectoryBlock): string {
   const why = describeSkillDirectoryBlock(block);
-  return `Skipped ${skillName} (${tool}): ${why}. Point the skill directory inside the same repository.`;
+  const next = block.kind === 'members-link'
+    ? 'Remove the link to let teamai deliver this skill.'
+    : 'Point the skill directory inside the same repository.';
+  return `Skipped ${skillName} (${tool}): ${why}. ${next}`;
 }
 
 function describeSkillDirectoryBlock(block: SkillDirectoryBlock): string {
