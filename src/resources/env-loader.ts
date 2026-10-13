@@ -821,6 +821,18 @@ __teamai_env_hook() {
   if [ -n "$__teamai_hook_ifs_set" ]; then IFS=$__teamai_hook_ifs; else unset IFS; fi
 }
 
+# Whether the shell exports $1, whatever other attributes it has: bash prints
+# \`declare -ix\`, zsh \`export -i\`.
+__teamai_env_exported() {
+  if [ -n "\${ZSH_VERSION-}" ]; then
+    __teamai_decl=$(typeset -p "$1" 2>/dev/null)
+  else
+    __teamai_decl=$(declare -p "$1" 2>/dev/null)
+  fi
+  case \${__teamai_decl%% "$1="*} in export | "export "* | *" -"*x*) return 0 ;; esac
+  return 1
+}
+
 # Put back the member's own value of $1, which a loaded file set. A project's
 # env.sh also calls it for a key it declares and the user scope's env.sh set.
 __teamai_env_restore() {
@@ -910,13 +922,7 @@ $__teamai_f"
     if [ "$__teamai_set" = 1 ]; then
       # Remove inherited export attributes from bookkeeping before writing it.
       unset "__TEAMAI_ENV_SET_$__teamai_k" "__TEAMAI_ENV_PREV_$__teamai_k"
-      __teamai_exported=
-      if [ -n "\${ZSH_VERSION-}" ]; then
-        case $(typeset -p "$__teamai_k" 2>/dev/null) in *"export $__teamai_k="*) __teamai_exported=1 ;; esac
-      else
-        case $(declare -p "$__teamai_k" 2>/dev/null) in *"declare -x $__teamai_k="*) __teamai_exported=1 ;; esac
-      fi
-      if [ "$__teamai_exported" = 1 ]; then
+      if __teamai_env_exported "$__teamai_k"; then
         eval "export __TEAMAI_ENV_SET_$__teamai_k=2 __TEAMAI_ENV_PREV_$__teamai_k=\\"\\$$__teamai_k\\""
       else
         eval "__TEAMAI_ENV_SET_$__teamai_k=1 __TEAMAI_ENV_PREV_$__teamai_k=\\"\\$$__teamai_k\\""
@@ -958,13 +964,7 @@ __teamai_env_bash_env() {
   [ "\${BASH_ENV-}" = "$__teamai_env_loader" ] && return 0
   if [ "\${BASH_ENV+x}" = x ]; then
     unset __TEAMAI_ENV_BASH_ENV __TEAMAI_ENV_BASH_ENV_SET
-    __teamai_bash_env_exported=
-    if [ -n "\${ZSH_VERSION-}" ]; then
-      case $(typeset -p BASH_ENV 2>/dev/null) in *'export BASH_ENV='*) __teamai_bash_env_exported=1 ;; esac
-    else
-      case $(declare -p BASH_ENV 2>/dev/null) in *'declare -x BASH_ENV='*) __teamai_bash_env_exported=1 ;; esac
-    fi
-    if [ "$__teamai_bash_env_exported" = 1 ]; then
+    if __teamai_env_exported BASH_ENV; then
       export __TEAMAI_ENV_BASH_ENV="$BASH_ENV" __TEAMAI_ENV_BASH_ENV_SET=2
     else
       __TEAMAI_ENV_BASH_ENV="$BASH_ENV" __TEAMAI_ENV_BASH_ENV_SET=1

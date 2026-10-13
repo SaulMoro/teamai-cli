@@ -164,6 +164,8 @@ describe('team env by directory (#1018)', () => {
       { name: 'unset', setup: '', expected: 'unset' },
       { name: 'local', setup: 'TOKEN=mine', expected: 'local:mine' },
       { name: 'exported', setup: 'export TOKEN=mine', expected: 'exported:mine' },
+      // An attribute beside export: `declare -p` prints `declare -ix`, zsh `export -i`.
+      { name: 'exported integer', setup: 'typeset -ix TOKEN=3', expected: 'exported:3' },
     ];
     const report = 'if [ "${TOKEN+x}" != x ]; then printf unset; else case " $(export -p) " in *" TOKEN="*) printf "exported:%s" "$TOKEN";; *) printf "local:%s" "$TOKEN";; esac; fi; printf "\\n"';
 
@@ -189,7 +191,7 @@ describe('team env by directory (#1018)', () => {
         });
         expect(run.status, run.stderr).toBe(0);
         expect(run.stdout.trim().split('\n').slice(-1)[0]).toBe(`parent=${state.expected}`);
-        if (child) expect(run.stdout).toContain(`child=${state.name === 'exported' ? state.expected : 'unset'}\n`);
+        if (child) expect(run.stdout).toContain(`child=${state.expected.startsWith('exported:') ? state.expected : 'unset'}\n`);
       },
     );
 
