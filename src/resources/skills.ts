@@ -238,7 +238,7 @@ export function skillTargetsFor(
     const baseDir = resolveToolBaseDir(tool, localConfig);
     const sharedDestination = path.join(baseDir, SHARED_AGENT_SKILLS_PATH, skillName);
     sharedDelivered ??= sharedSkillsDelivered(toolPaths, localConfig);
-    if (await sharedDelivered && !await pathExists(sharedDestination)) {
+    if (await sharedDelivered && !await pathExists(sharedDestination) && await ownsShared(sharedDestination)) {
       // Codex's earlier copy in its own directory goes once the team history
       // proves it teamai's, so the move does not leave Codex a second version.
       const configuredDestination = path.join(baseDir, configuredSkillsPath, skillName);

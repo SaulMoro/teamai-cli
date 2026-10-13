@@ -1723,4 +1723,34 @@ describe('SkillsHandler.pullItem Codex shared skills', () => {
     expect(await fse.pathExists(codexSkillPath)).toBe(kept);
     if (kept) expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('Codex skill conflict for team-skill: keeping different copies'));
   });
+
+  it('keeps Codex in .codex/skills when the .agents directory Muse Code shares links outside the checkout', async () => {
+    const homeDir = path.join(tmpDir, 'home');
+    const projectRoot = path.join(tmpDir, 'project');
+    const outside = path.join(tmpDir, 'outside');
+    const repoPath = path.join(tmpDir, 'team-repo');
+    const sourcePath = path.join(repoPath, 'skills', 'team-skill');
+    await fse.ensureDir(path.join(homeDir, '.config', 'muse'));
+    await fse.ensureDir(path.join(projectRoot, '.codex'));
+    await fse.ensureDir(path.join(outside, 'skills'));
+    await fse.ensureDir(projectRoot);
+    await fse.symlink(outside, path.join(projectRoot, '.agents'));
+    await fse.ensureDir(sourcePath);
+    await fse.writeFile(path.join(sourcePath, 'SKILL.md'), '---\nname: team-skill\ndescription: v1\n---\n');
+
+    await new SkillsHandler().pullItem({
+      name: 'team-skill', type: 'skills', sourcePath, relativePath: 'skills/team-skill',
+    }, {
+      team: 'test', description: '', repo: 'https://example.test/team.git', provider: 'git', reviewers: [],
+      sharing: { skills: {}, rules: { enforced: [] }, docs: { localDir: '' }, env: { injectShellProfile: true } },
+      toolPaths: { codex: { skills: '.codex/skills' }, muse: { skills: '.agents/skills' } },
+    }, {
+      repo: { localPath: repoPath, remote: 'https://example.test/team.git' },
+      username: 'testuser', updatePolicy: 'auto', additionalRoles: [], scope: 'project', projectRoot,
+      enabledAgents: ['codex', 'muse'],
+    });
+
+    expect(await fse.pathExists(path.join(outside, 'skills', 'team-skill'))).toBe(false);
+    expect(await fse.pathExists(path.join(projectRoot, '.codex', 'skills', 'team-skill', 'SKILL.md'))).toBe(true);
+  });
 });
