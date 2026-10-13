@@ -166,6 +166,9 @@ describe('team env by directory (#1018)', () => {
       { name: 'exported', setup: 'export TOKEN=mine', expected: 'exported:mine' },
       // An attribute beside export: `declare -p` prints `declare -ix`, zsh `export -i`.
       { name: 'exported integer', setup: 'typeset -ix TOKEN=3', expected: 'exported:3' },
+      // Every attribute comes back, not only export: an integer still evaluates what it is given.
+      { name: 'exported integer, assigned after', setup: 'typeset -ix TOKEN=3', after: 'TOKEN=1+1', expected: 'exported:2', inChild: 'exported:3' },
+      { name: 'local integer, assigned after', setup: 'typeset -i TOKEN=3', after: 'TOKEN=1+1', expected: 'local:2' },
     ];
     const report = 'if [ "${TOKEN+x}" != x ]; then printf unset; else case " $(export -p) " in *" TOKEN="*) printf "exported:%s" "$TOKEN";; *) printf "local:%s" "$TOKEN";; esac; fi; printf "\\n"';
 
@@ -180,6 +183,7 @@ describe('team env by directory (#1018)', () => {
           `cd '${a.projectRoot}'`,
           ...(child ? [`${shell} -c 'cd "${elsewhere}"; . "${path.join(homeDir, '.teamai', 'env-loader.sh')}"; printf "child="; ${report}'`] : []),
           `cd '${elsewhere}'`,
+          state.after ?? '',
           `printf 'parent='; ${report}`,
           'exit',
         ].filter(Boolean).join('\n');
@@ -191,7 +195,8 @@ describe('team env by directory (#1018)', () => {
         });
         expect(run.status, run.stderr).toBe(0);
         expect(run.stdout.trim().split('\n').slice(-1)[0]).toBe(`parent=${state.expected}`);
-        if (child) expect(run.stdout).toContain(`child=${state.expected.startsWith('exported:') ? state.expected : 'unset'}\n`);
+        const inChild = state.inChild ?? state.expected;
+        if (child) expect(run.stdout).toContain(`child=${inChild.startsWith('exported:') ? inChild : 'unset'}\n`);
       },
     );
 

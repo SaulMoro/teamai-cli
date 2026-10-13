@@ -842,12 +842,16 @@ __teamai_env_exported() {
 
 # Put back the member's own value of $1, which a loaded file set. A project's
 # env.sh also calls it for a key it declares and the user scope's env.sh set.
+# Assigned over, not unset, so its other attributes (an integer's) stay.
 __teamai_env_restore() {
   eval "__teamai_set=\\\${__TEAMAI_ENV_SET_$1-}"
-  unset "$1"
   if [ "$__teamai_set" = 1 ] || [ "$__teamai_set" = 2 ]; then
     eval "$1=\\\${__TEAMAI_ENV_PREV_$1}"
-    if [ "$__teamai_set" = 2 ]; then export "$1"; fi
+    if [ "$__teamai_set" = 2 ]; then export "$1"
+    elif [ -n "\${ZSH_VERSION-}" ]; then typeset -g +x "$1"
+    else export -n "$1"; fi
+  else
+    unset "$1"
   fi
 }
 
