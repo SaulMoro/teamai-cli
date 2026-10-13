@@ -21,7 +21,7 @@ The team's assets live in their own repo. This project points at it.
 This project:
 
 ```bash
-cd /path/to/my-project
+cd /path/to/my-workspace
 teamai init https://github.com/your-org/platform-teamai
 ```
 
@@ -44,7 +44,7 @@ teamai init https://github.com/your-org/java-service-teamai --inherit-user-scope
 This repo is the team repo. Assets go in `.teamai/`.
 
 ```bash
-cd /path/to/my-project
+cd /path/to/my-workspace
 teamai init . --agent claude,cursor
 ```
 

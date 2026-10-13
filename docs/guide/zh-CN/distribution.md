@@ -21,7 +21,7 @@
 只进当前项目：
 
 ```bash
-cd /path/to/my-project
+cd /path/to/my-workspace
 teamai init https://github.com/your-org/platform-teamai
 ```
 
@@ -44,7 +44,7 @@ teamai init https://github.com/your-org/java-service-teamai --inherit-user-scope
 业务仓库自己就是团队仓库。资产写在这个仓库的 `.teamai/` 里。
 
 ```bash
-cd /path/to/my-project
+cd /path/to/my-workspace
 teamai init . --agent claude,cursor
 ```
 

@@ -67,7 +67,7 @@ repo:
 username: your-name
 updatePolicy: auto             # auto / prompt / skip
 scope: workspace               # workspace（init 默认）或 user；project 按 workspace 读取
-projectRoot: /path/to/project
+projectRoot: /path/to/my-workspace
 inheritUserScope: true
 coAuthorEnabled: true
 gitExcludeEnabled: true

@@ -94,7 +94,7 @@ npm install -g teamai-cli
 # 二选一：按你想要的安装范围选择其中一条
 
 # 工作区级初始化（默认，资源安装到工作区目录下）
-cd /path/to/my-project
+cd /path/to/my-workspace
 teamai init https://github.com/your-org/your-repo
 
 # 或者，用户级初始化（资源安装到 ~/ 下）

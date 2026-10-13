@@ -88,7 +88,7 @@ Git 호스트(GitHub, GitLab, GitCode, CNB, TGit 또는 비공개 Git 서비스)
 # Choose one, depending on where you want resources installed
 
 # Workspace-scope init (default, resources installed under the workspace directory)
-cd /path/to/my-project
+cd /path/to/my-workspace
 teamai init https://github.com/your-org/your-repo
 
 # Or, user-scope init (resources installed under ~/)

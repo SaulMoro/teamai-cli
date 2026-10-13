@@ -67,7 +67,7 @@ repo:
 username: your-name
 updatePolicy: auto             # auto, prompt, or skip
 scope: workspace               # workspace (default from init) or user; project is read as workspace
-projectRoot: /path/to/project
+projectRoot: /path/to/my-workspace
 inheritUserScope: true
 coAuthorEnabled: true
 gitExcludeEnabled: true
