@@ -299,7 +299,7 @@ export async function loadLocalConfigForScope(
     const parsed = LocalConfigSchema.parse(raw);
     return await migrateLegacyRoleConfig(parsed, configPath, options);
   } catch (e) {
-    log.error(`Invalid ${scope} config at ${configPath}: ${describeConfigError(e)}`);
+    log.error(`Invalid ${installScopeName(scope)} config at ${configPath}: ${describeConfigError(e)}`);
     return null;
   }
 }
@@ -596,7 +596,7 @@ export async function readConfigFrom(
       // Anywhere else a config here that is not scope: project cannot say which
       // project it serves, and detection would read past it to the user config.
       if (!isUserTeamaiDir(dataHomeDir, projectRoot)) {
-        onUnreadable?.(configPath, `it is scope: ${config.scope}, but a config inside a project must be scope: project`);
+        onUnreadable?.(configPath, `it is scope: ${installScopeName(config.scope)}, but a config inside a workspace must be scope: workspace`);
       }
       return null;
     }
@@ -710,7 +710,7 @@ export async function requireInitForScope(
   const localConfig = await loadLocalConfigForScope(scope, projectRoot);
   if (!localConfig) {
     if (scope === 'project') {
-      throw new NotInitializedError(`teamai is not initialized in project scope at ${projectRoot}. Run \`teamai init\` first.`);
+      throw new NotInitializedError(`teamai is not initialized in workspace scope at ${projectRoot}. Run \`teamai init\` first.`);
     }
     return throwMissingOrInvalid(expandHome(getConfigPath(scope, projectRoot)));
   }

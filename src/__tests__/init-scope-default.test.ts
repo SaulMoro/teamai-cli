@@ -79,10 +79,10 @@ describe('resolveInitScope', () => {
 });
 
 describe('resolveInheritUserScope', () => {
-  it('enables inheritance only for project scope', () => {
+  it('enables inheritance only for workspace scope', () => {
     expect(resolveInheritUserScope('project', true, undefined)).toBe(true);
     expect(() => resolveInheritUserScope('user', true, undefined)).toThrow(
-      /only be used with project scope/,
+      /only be used with workspace scope/,
     );
   });
 

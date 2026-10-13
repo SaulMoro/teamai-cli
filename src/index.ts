@@ -135,9 +135,9 @@ program
   .option('--provider <name>', 'Git provider for the team repo on this machine: tgit, github, cnb, gitlab, gitcode, or git. Skips auto-detection. `git` uses your existing Git auth and needs no platform token, but opens no PR/MR.')
   .option('--self', 'Single-repo mode: the current git repo is the team repo (equivalent to `teamai init .`). Knowledge lives on main under .teamai/; reports go to the teamai-reports orphan branch.')
   .option('--token <key>', 'API key for HTTP team repo / status reporting (stored 0600, never committed). Also reads TEAMAI_API_TOKEN.')
-  .option('--scope <scope>', 'Install scope: project (default, <cwd>/.teamai + <cwd>/.claude) or user (~/.teamai + ~/.claude)')
-  .option('--inherit-user-scope', 'In project scope, also sync safe user-scope resources, load its env variables (not its secrets) in the project, and search its knowledge')
-  .option('--no-inherit-user-scope', 'Disable user-scope inheritance for this project')
+  .option('--scope <scope>', 'Install scope: workspace (default, <cwd>/.teamai + <cwd>/.claude) or user (~/.teamai + ~/.claude); project is the older name for workspace')
+  .option('--inherit-user-scope', 'In workspace scope, also sync safe user-scope resources, load its env variables (not its secrets) in the workspace, and search its knowledge')
+  .option('--no-inherit-user-scope', 'Disable user-scope inheritance for this workspace')
   .option('--role <id>', 'Primary role ID (e.g. hai_dev) for non-interactive setup')
   .option('--project <ids>', 'Active logical project(s) from manifest/projects.yaml (comma-separated); scopes which project resources and learnings this directory syncs. Pass "all" to activate every project the manifest declares (a snapshot taken now)')
   // Non-variadic + a collecting coercer: repeatable (`--agent a --agent b`) and
@@ -174,7 +174,7 @@ program
 
 program
   .command('pull')
-  .description('Pull team resources and inject into local AI tools. Team docs land in sharing.docs.localDir: .teamai/docs/ in a project by default, a hidden directory, so search that path directly')
+  .description('Pull team resources and inject into local AI tools. Team docs land in sharing.docs.localDir: .teamai/docs/ in a workspace by default, a hidden directory, so search that path directly')
   .option('--silent', 'Silent mode (for hooks)')
   .option('--force', 'Force full sync even if repo is unchanged')
   .action(async (cmdOpts) => {
@@ -983,7 +983,7 @@ sessionCmd
   .option('--push', 'Also push the summary to the team repo (feeds `teamai digest`)')
   .option('--force', 'Push even if the session is not flagged as valuable')
   .option('--include-prompt', 'Include the redacted first-prompt line in the pushed summary (default: off)')
-  .option('--scope <scope>', 'Config scope for --push: user | project (default: auto-detect)')
+  .option('--scope <scope>', 'Config scope for --push: user | workspace (default: auto-detect)')
   .action(async (cmdOpts) => {
     const globalOpts = program.opts() as GlobalOptions;
     const { saveSession } = await import('./save-session.js');
@@ -1120,7 +1120,7 @@ program
   .option('--title <title>', 'Title for the contribution document')
   .option('--namespace <ns>', 'Write to an active learnings namespace (default: the only active namespace, or the shared root when none or several are active)')
   .option('--session-id <id>', 'Session ID for dedup tracking')
-  .option('--scope <scope>', 'Target scope: user or project')
+  .option('--scope <scope>', 'Target scope: user or workspace')
   .action(async (cmdOpts) => {
     const globalOpts = program.opts() as GlobalOptions;
     const { contribute } = await import('./contribute.js');
