@@ -263,6 +263,23 @@ describe('MCP servers and declared secrets', () => {
     expect(Object.hasOwn(vars, 'github_token')).toBe(false);
   });
 
+  // Windows looks `${TOKEN}` up case-insensitively, so a member's `token` must not sit beside the secret.
+  it("on Windows, keeps a member's export under another case of a secret's name out of a server's table", async () => {
+    await write('env/secrets.yaml', 'secrets:\n  - key: TOKEN\n');
+    await writeSecretStore(getTeamSecretsPath(localConfig), { TOKEN: { value: 'team-secret' } });
+    vi.stubEnv('token', 'member');
+    const original = process.platform;
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+    let vars: Record<string, string>;
+    try {
+      vars = await buildVarTable(localConfig);
+    } finally {
+      Object.defineProperty(process, 'platform', { value: original, configurable: true });
+    }
+    expect(vars.TOKEN).toBe('team-secret');
+    expect(Object.keys(vars).filter((key) => key.toUpperCase() === 'TOKEN')).toEqual(['TOKEN']);
+  });
+
   // #875 (#879 S9): one order for a variable, member team value > env.yaml,
   // with no environment override and no machine value.
   it("resolves a variable from the member's value for this team, then env.yaml, never the environment", async () => {

@@ -327,6 +327,26 @@ describe('teamai env exec', () => {
       expect(env.GITHUB_TOKEN).toBeUndefined();
     });
 
+    // On Windows `token` and `TOKEN` are one variable, and `${TOKEN}` finds either spelling.
+    it.each<{ project: string; files: Record<string, string>; expected: string }>([
+      { project: 'a variable', files: { 'env/env.yaml': 'variables:\n  - key: TOKEN\n    value: project\n' }, expected: 'project' },
+      { project: 'a secret', files: { 'env/secrets.yaml': 'secrets:\n  - key: TOKEN\n' }, expected: 'team-secret' },
+    ])('on Windows, gives a server only the project\'s TOKEN when it declares $project and the inherited user scope sets token', async ({ files, expected }) => {
+      const personal = await team('personal', { 'env/env.yaml': 'variables:\n  - key: token\n    value: user\n' });
+      await userScope(personal.repoPath);
+      const work = await team('work', files);
+      const { partition, config } = await project(work.repoPath);
+      const inheriting = { ...config, inheritUserScope: true };
+      await fse.outputFile(path.join(partition, 'config.yaml'), YAML.stringify(inheriting));
+      await writeSecretStore(getTeamSecretsPath(inheriting), { TOKEN: { value: 'team-secret' } });
+      const { buildVarTable } = await import('../mcp-reconcile.js');
+      vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+
+      const vars = await buildVarTable(inheriting);
+
+      expect(Object.entries(vars).filter(([key]) => key.toUpperCase() === 'TOKEN')).toEqual([['TOKEN', expected]]);
+    });
+
     // While the project's env.yaml fails, a shell still loads the user scope's
     // env.sh and the project's as the last pull wrote it: so do exec and MCP.
     it('keeps the inherited user variables in exec and MCP while the project\'s env.yaml fails', async () => {
