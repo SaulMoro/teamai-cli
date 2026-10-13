@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fse from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
@@ -32,6 +32,7 @@ describe('deliveredUnion', () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllEnvs();
     await fse.remove(tmp);
   });
 
@@ -70,6 +71,30 @@ describe('deliveredUnion', () => {
     expect(await union()).toEqual(foreign);
     await fse.outputFile(exclude(), `!/${rel}\n# [teamai:delivered:start]\n/${rel}\n# [teamai:delivered:end]\n`);
     expect(await union()).toEqual(foreign);
+  });
+
+  it('holds a path back when the other checkout\'s .gitignore re-includes the directory the member\'s core.excludesFile hides', async () => {
+    const globalFile = path.join(tmp, 'global-ignore');
+    await fse.outputFile(globalFile, '/.claude/\n');
+    git(main, 'config', 'core.excludesFile', globalFile);
+    await fse.outputFile(path.join(wt, '.gitignore'), '!/.claude/\n');
+    await fse.outputFile(exclude(), `# [teamai:delivered:start]\n/${rel}\n# [teamai:delivered:end]\n`);
+    expect(await union()).toEqual({
+      paths: [],
+      foreign: [{ path: path.join(main, rel), rel, checkout: wt, file: path.join(wt, rel) }],
+    });
+  });
+
+  it('holds a path back when core.excludesFile is set empty, whatever git\'s default ignore file holds', async () => {
+    const xdg = path.join(tmp, 'xdg');
+    vi.stubEnv('XDG_CONFIG_HOME', xdg);
+    await fse.outputFile(path.join(xdg, 'git', 'ignore'), `/${rel}\n`);
+    git(main, 'config', 'core.excludesFile', '');
+    await fse.outputFile(exclude(), `# [teamai:delivered:start]\n/${rel}\n# [teamai:delivered:end]\n`);
+    expect(await union()).toEqual({
+      paths: [],
+      foreign: [{ path: path.join(main, rel), rel, checkout: wt, file: path.join(wt, rel) }],
+    });
   });
 
   it('holds a path back while another checkout\'s own file there is visible to git', async () => {

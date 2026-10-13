@@ -362,22 +362,26 @@ export async function ignoredByMembersRule(file: string): Promise<boolean> {
 /**
  * Whether git ignores `file` in the checkout at `root` by the member's rules
  * alone: `git ls-files` with every `.gitignore`, then copies of core.excludesFile
- * and of `excludeFile` (the checkout's `info/exclude`) without teamai's blocks,
- * outside the repository, in git's order of precedence. False when git or the
- * copies fail.
+ * (none when it is set empty, as git reads none) and of `excludeFile` (the
+ * checkout's `info/exclude`) without teamai's blocks, outside the repository,
+ * in git's order of precedence. False when git or the copies fail.
  */
 async function ignoredWithoutTeamaiBlocks(file: string, root: string, excludeFile: string): Promise<boolean> {
-  const configured = (await runGit(['config', '--path', 'core.excludesFile'], root)).stdout.trim();
+  const configured = await runGit(['config', '--path', 'core.excludesFile'], root);
+  if (configured.code !== 0 && configured.code !== 1) return false;
   const copies = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-member-rules-')).catch(() => null);
   if (copies === null) return false;
   try {
-    const globalFile = configured
-      ? path.resolve(root, configured)
-      : path.join(process.env.XDG_CONFIG_HOME || path.join(getUserHome(), '.config'), 'git', 'ignore');
-    // A later --exclude-from wins, as info/exclude wins over core.excludesFile.
+    // Unset (exit 1), git reads its default global file; set but empty, none.
+    const value = configured.stdout.trim();
+    const globalFile = configured.code === 1
+      ? path.join(process.env.XDG_CONFIG_HOME || path.join(getUserHome(), '.config'), 'git', 'ignore')
+      : value ? path.resolve(root, value) : null;
+    // --exclude-from files rank below every .gitignore, as git's own exclude files do, and the later one
+    // wins, as info/exclude wins over core.excludesFile.
     const args = ['--literal-pathspecs', 'ls-files', '--others', '--ignored', '--exclude-per-directory=.gitignore'];
     for (const [i, source] of [globalFile, excludeFile].entries()) {
-      const parsed = parseExclude((await readFileSafe(source)) ?? '');
+      const parsed = parseExclude((source === null ? null : await readFileSafe(source)) ?? '');
       const copy = path.join(copies, String(i));
       await fse.writeFile(copy, parsed.segments.map((s) => s.kind === 'text' ? s.raw : '').join(''));
       args.push(`--exclude-from=${copy}`);
