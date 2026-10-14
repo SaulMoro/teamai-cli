@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { log } from '../utils/logger.js';
-import { pathExists, readFileSafe, remove, writeJsonAtomic } from '../utils/fs.js';
+import { readFileSafe, remove, writeJsonAtomic } from '../utils/fs.js';
 import {
   getBusinessRoot,
   getDataHome,
@@ -86,30 +86,37 @@ export async function loadCachedWorkflow(config: LocalConfig, name: string): Pro
   return readCache(config, name);
 }
 
-async function dropCachesForMissingFiles(config: LocalConfig): Promise<void> {
-  const dir = cacheDir(config);
-  if (!await pathExists(dir)) return;
-  const knowledge = path.resolve(getKnowledgeDir(config));
+/** Removes every cached workflow this sync did not settle to a version, missing files included. */
+async function dropUnsettled(config: LocalConfig, settled: Set<string>): Promise<void> {
   let names: string[];
   try {
-    names = await fs.readdir(dir);
+    names = await fs.readdir(cacheDir(config));
   } catch {
     return;
   }
   for (const name of names) {
-    if (!name.endsWith('.json')) continue;
-    const cached = await readCache(config, name.replace(/\.json$/, ''));
-    if (!cached) continue;
-    const source = path.resolve(knowledge, cached.relativePath);
-    const inside = source === knowledge || source.startsWith(`${knowledge}${path.sep}`);
-    if (!inside || !await pathExists(source)) await remove(cachePath(config, cached.definition.name));
+    const stem = name.replace(/\.json$/, '');
+    if (stem !== name && !settled.has(stem)) await remove(cachePath(config, stem));
+  }
+}
+
+/** The `*.yaml` files in workflows/, or none when it is missing, a symlink, or cannot be listed. */
+async function workflowFileNames(dir: string): Promise<string[]> {
+  try {
+    // readdir follows a directory symlink, so reject the directory itself before listing it.
+    const stat = await fs.lstat(dir);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) return [];
+    return (await fs.readdir(dir)).filter((name) => name.endsWith('.yaml')).sort();
+  } catch {
+    return [];
   }
 }
 
 /**
  * Validate each `workflows/*.yaml` on its own and cache only files that pass.
  * An invalid file keeps its last cached definition; a file that was never valid
- * stays unrunnable. Nothing here fails the caller.
+ * stays unrunnable. The cache then holds only what this sync settled, so start
+ * finds no version that was not checked against the others. Nothing here fails the caller.
  */
 export async function syncWorkflowDefinitions(
   config: LocalConfig,
@@ -117,25 +124,8 @@ export async function syncWorkflowDefinitions(
 ): Promise<SyncWorkflowResult> {
   const result: SyncWorkflowResult = { cached: [], kept: [], invalid: [], unrunnable: [] };
   const dir = path.join(getKnowledgeDir(config), 'workflows');
-  if (!options.dryRun) await dropCachesForMissingFiles(config);
-  let dirStat: Awaited<ReturnType<typeof fs.lstat>>;
-  try {
-    dirStat = await fs.lstat(dir);
-  } catch {
-    return result;
-  }
-  // readdir follows a directory symlink, so reject the directory itself before listing it.
-  if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) return result;
-
-  let names: string[];
-  try {
-    names = (await fs.readdir(dir)).filter((name) => name.endsWith('.yaml')).sort();
-  } catch {
-    return result;
-  }
-
   const checked: Checked[] = [];
-  for (const name of names) {
+  for (const name of await workflowFileNames(dir)) {
     const relativePath = `workflows/${name}`;
     const full = path.join(dir, name);
     let stat: Awaited<ReturnType<typeof fs.lstat>>;
@@ -146,20 +136,12 @@ export async function syncWorkflowDefinitions(
     }
     // A symlink is not a workflow file, even when the target is a YAML file outside this directory.
     if (stat.isSymbolicLink() || !stat.isFile()) continue;
+    const stem = name.replace(/\.yaml$/, '');
     const content = await readFileSafe(full);
     if (content === null) {
-      const diagnostic: WorkflowDiagnostic = {
-        file: relativePath,
-        line: 1,
-        column: 1,
-        field: '(root)',
-        message: 'workflow file could not be read',
-      };
-      result.invalid.push(diagnostic);
-      log.warn(`[workflows] ${formatDiagnostic(diagnostic)}`);
+      checked.push({ stem, relativePath, diagnostics: [{ file: relativePath, line: 1, column: 1, field: '(root)', message: 'workflow file could not be read' }] });
       continue;
     }
-    const stem = name.replace(/\.yaml$/, '');
     const parsed = parseWorkflow(relativePath, content);
     if (!parsed.ok) {
       checked.push({ stem, relativePath, diagnostics: parsed.diagnostics });
@@ -186,7 +168,7 @@ export async function syncWorkflowDefinitions(
   }
   const settle = checkReferences(checked, kept);
 
-  const reject = async ({ stem, relativePath }: Checked, diagnostics: WorkflowDiagnostic[]): Promise<void> => {
+  const reject = ({ stem, relativePath }: Checked, diagnostics: WorkflowDiagnostic[]): void => {
     result.invalid.push(...diagnostics);
     for (const diagnostic of diagnostics) log.warn(`[workflows] ${formatDiagnostic(diagnostic)}`);
     const settled = settle(stem);
@@ -196,7 +178,6 @@ export async function syncWorkflowDefinitions(
       result.kept.push(stem);
       log.warn(`[workflows] Kept the last valid version of ${stem}; this revision was not cached`);
     } else {
-      if (!options.dryRun) await remove(cachePath(config, stem));
       result.unrunnable.push(relativePath);
       log.warn(`[workflows] ${relativePath} has no runnable version`);
     }
@@ -204,12 +185,12 @@ export async function syncWorkflowDefinitions(
   let wrote = 0;
   for (const file of checked) {
     if ('diagnostics' in file) {
-      await reject(file, file.diagnostics);
+      reject(file, file.diagnostics);
       continue;
     }
     const problems = settle(file.stem).revision;
     if (problems.length > 0) {
-      await reject(file, problems);
+      reject(file, problems);
       continue;
     }
     const previous = await readCache(config, file.definition.name);
@@ -224,6 +205,7 @@ export async function syncWorkflowDefinitions(
     } satisfies CachedWorkflow);
     wrote += 1;
   }
+  if (!options.dryRun) await dropUnsettled(config, new Set([...result.cached, ...result.kept]));
 
   const scope = options.scopeLabel ?? config.scope;
   if (options.dryRun && result.cached.length > 0) {
@@ -253,24 +235,45 @@ export function workflowsRunBy(definition: { steps: WorkflowStep[] }, prefix = '
 }
 
 /**
- * Settles what each file runs after this sync: this revision when it passes its checks against the
- * workflows it runs, else the kept copy when nothing dropped it and it still fits them, else nothing.
- * A child is settled before its parent is checked against it, so a child with no runnable version is
- * reported on its parent, and a kept parent never reads an output or end its child no longer declares.
+ * Settles what each file runs after this sync, checking every version only against the versions the others settle to.
+ * Each file starts at this revision when it passed its own checks, else at the kept copy unless a code dropped it.
+ * A version that fails falls back (revision, then kept copy, then nothing) and every version is checked again, until none fails.
+ * A failing version waits while a workflow it runs, directly or not, still fails, since that one may fall back to a version
+ * that fits. When every failing version waits, they run each other in a cycle: the revisions on it fall back first, because
+ * a kept copy taken out of a cycle only leaves the file that runs it with nothing to run.
  */
 function checkReferences(checked: Checked[], kept: Map<string, CachedWorkflow | null>): (stem: string) => Settled {
   const candidates = new Map(checked.flatMap((file) => ('definition' in file ? [[file.stem, file] as const] : [])));
-  const settled = new Map<string, Settled>();
-  const settling = new Set<string>();
-  // Recursion follows the version each file asks to run: this revision when it passed its own checks, else the kept one.
-  const asked = (workflow: string): WorkflowDefinition | null => candidates.get(workflow)?.definition ?? kept.get(workflow)?.definition ?? null;
+  // The version each file is at; a file with no version left is not in the map.
+  const chosen = new Map(checked.flatMap(({ stem }): Array<[string, 'revision' | 'kept']> => (
+    candidates.has(stem) ? [[stem, 'revision']] : kept.get(stem) ? [[stem, 'kept']] : [])));
+  const revisionProblems = new Map<string, WorkflowDiagnostic[]>();
+  const keptProblems = new Map<string, WorkflowDiagnostic[]>();
+  const runs = (workflow: string): WorkflowDefinition | null => {
+    const version = chosen.get(workflow);
+    if (version === 'revision') return candidates.get(workflow)?.definition ?? null;
+    return version === 'kept' ? kept.get(workflow)?.definition ?? null : null;
+  };
+  // Every workflow a file runs at its version, directly or not; the file itself when it runs in a cycle.
+  const reach = (stem: string): Set<string> => {
+    const found = new Set<string>();
+    const visit = (definition: WorkflowDefinition | null): void => {
+      for (const { workflow } of definition ? workflowsRunBy(definition) : []) {
+        if (found.has(workflow)) continue;
+        found.add(workflow);
+        visit(runs(workflow));
+      }
+    };
+    visit(runs(stem));
+    return found;
+  };
   const cycleBack = (from: string, to: string): string[] | undefined => {
     const seen = new Set<string>();
     const walk = (workflow: string, through: string[]): string[] | undefined => {
       if (workflow === to) return [...through, workflow];
       if (seen.has(workflow)) return undefined;
       seen.add(workflow);
-      const definition = asked(workflow);
+      const definition = runs(workflow);
       for (const { workflow: next } of definition ? workflowsRunBy(definition) : []) {
         const cycle = walk(next, [...through, workflow]);
         if (cycle) return cycle;
@@ -279,9 +282,8 @@ function checkReferences(checked: Checked[], kept: Map<string, CachedWorkflow | 
     };
     return walk(from, [to]);
   };
-  // Called only through settle, which settles each file once.
   const check = (stem: string, version: Version): WorkflowDiagnostic[] => {
-    const files: WorkflowFiles = { runnable: (workflow) => settle(workflow).definition, cycle: (workflow) => cycleBack(workflow, stem) };
+    const files: WorkflowFiles = { runnable: runs, cycle: (workflow) => cycleBack(workflow, stem) };
     const parsed = parseWorkflow(version.relativePath, version.content, files);
     const diagnostics = parsed.ok ? [] : parsed.diagnostics;
     const promptFiles = (steps: WorkflowStep[], trail: number[]): void => steps.forEach((step, index) => {
@@ -304,27 +306,35 @@ function checkReferences(checked: Checked[], kept: Map<string, CachedWorkflow | 
     const { relativePath, content, definition } = cached;
     return check(stem, { relativePath, content, definition, promptFileLocations: parsed.promptFileLocations });
   };
-  const settle = (stem: string): Settled => {
-    const known = settled.get(stem);
-    if (known) return known;
-    // Reached again while one of its versions is checked: the versions being checked run each other in a cycle.
-    if (settling.has(stem)) return { definition: null, revision: [], kept: [] };
-    settling.add(stem);
+  const problemsAt = (stem: string): WorkflowDiagnostic[] => {
     const candidate = candidates.get(stem);
-    const revision = candidate ? check(stem, candidate) : [];
-    let outcome: Settled;
-    if (candidate && revision.length === 0) {
-      outcome = { definition: candidate.definition, revision, kept: [] };
-    } else {
-      const cached = dropsKeptVersion(revision) ? null : kept.get(stem) ?? null;
-      const problems = cached ? checkKept(stem, cached) : [];
-      outcome = { definition: cached && problems.length === 0 ? cached.definition : null, revision, kept: problems };
-    }
-    settling.delete(stem);
-    settled.set(stem, outcome);
-    return outcome;
+    const cached = kept.get(stem);
+    if (chosen.get(stem) === 'revision' && candidate) return check(stem, candidate);
+    return cached ? checkKept(stem, cached) : [];
   };
-  return settle;
+  for (;;) {
+    const failing = [...chosen.keys()].flatMap((stem) => {
+      const problems = problemsAt(stem);
+      return problems.length > 0 ? [{ stem, problems, through: reach(stem) }] : [];
+    });
+    if (failing.length === 0) break;
+    const stems = new Set(failing.map(({ stem }) => stem));
+    const ready = failing.filter(({ through }) => ![...through].some((workflow) => stems.has(workflow)));
+    const onCycle = failing.filter(({ stem, through }) => through.has(stem));
+    const revisionsOnCycle = onCycle.filter(({ stem }) => chosen.get(stem) === 'revision');
+    // Nothing ready means a failing version runs itself through the others, so onCycle is never empty here.
+    for (const { stem, problems } of ready.length > 0 ? ready : revisionsOnCycle.length > 0 ? revisionsOnCycle : onCycle) {
+      if (chosen.get(stem) === 'revision') {
+        revisionProblems.set(stem, problems);
+        if (kept.get(stem) && !dropsKeptVersion(problems)) chosen.set(stem, 'kept');
+        else chosen.delete(stem);
+      } else {
+        keptProblems.set(stem, problems);
+        chosen.delete(stem);
+      }
+    }
+  }
+  return (stem) => ({ definition: runs(stem), revision: revisionProblems.get(stem) ?? [], kept: keptProblems.get(stem) ?? [] });
 }
 
 /** Resolves every `prompt_file`, including those inside inline workflows. */

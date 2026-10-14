@@ -212,6 +212,21 @@ steps:
     expect(started).toMatchObject({ error: { code: 'workflow_not_found' } });
   });
 
+  it('drops every cached workflow once the workflows directory is a symlink', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', VALID);
+    expect((await syncWorkflowDefinitions(config)).cached).toEqual(['build']);
+    const workflows = path.join(config.repo.localPath, 'workflows');
+    const outside = path.join(path.dirname(config.repo.localPath), 'outside-workflows');
+    fs.renameSync(workflows, outside);
+    fs.symlinkSync(outside, workflows);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result).toEqual({ cached: [], kept: [], invalid: [], unrunnable: [] });
+    expect(await startRun(config, 'build')).toMatchObject({ error: { code: 'workflow_not_found' } });
+  });
+
   it('does not read or cache a symlinked yaml outside workflows', async () => {
     const config = testConfig();
     const outside = path.join(path.dirname(config.repo.localPath), 'outside-build.yaml');
@@ -1497,7 +1512,7 @@ steps:
     expect(await loadCachedWorkflow(config, 'ship')).toBeNull();
   });
 
-  it('does not keep a last valid version that runs a workflow in a cycle with the versions this sync caches', async () => {
+  it('keeps a last valid version and rejects the revision that would run it in a cycle', async () => {
     const config = testConfig();
     const runs = (name: string, child: string): string => `schemaVersion: v1alpha1
 name: ${name}
@@ -1516,13 +1531,104 @@ steps:
 
     expect(result.invalid.map(formatDiagnostic)).toEqual([
       'workflows/a.yaml:6: field "steps[0].workflow": step "run" runs workflow "missing", which has no runnable version; fix or add workflows/missing.yaml',
-      'workflows/b.yaml:6: field "steps[0].workflow": step "run" runs workflow "a", which has no runnable version; fix or add workflows/a.yaml',
+      'workflows/b.yaml:6: field "steps[0].workflow": step "run" runs workflow "a" in a cycle: b -> a -> b',
     ]);
     expect(result.cached).toEqual([]);
-    expect(result.kept).toEqual(['b']);
-    expect(result.unrunnable).toEqual(['workflows/a.yaml']);
-    expect(await loadCachedWorkflow(config, 'a')).toBeNull();
-    expect(await startRun(config, 'b')).toMatchObject({ data: { name: 'b' } });
+    expect(result.kept).toEqual(['a', 'b']);
+    expect(result.unrunnable).toEqual([]);
+    expect(await startRun(config, 'a')).toMatchObject({ data: { name: 'a' } });
+  });
+
+  describe('checks every version against the versions the other files settle to', () => {
+    type ParentRevision = 'runs child' | 'runs missing' | 'invalid' | 'unreadable' | 'deleted' | 'symlink';
+    type ChildRevision = 'command' | 'renames output' | 'runs parent' | 'invalid' | 'unreadable' | 'deleted' | 'symlink';
+    type Outcome = 'cached' | 'kept' | 'unrunnable' | 'gone';
+    // Before the sync under test, the parent runs the child and reads its verdict, and the child is a command.
+    const settles: Array<[ParentRevision, ChildRevision, Outcome, Outcome]> = [
+      ['runs child', 'command', 'cached', 'cached'],
+      ['runs child', 'renames output', 'unrunnable', 'cached'],
+      ['runs child', 'runs parent', 'kept', 'kept'],
+      ['runs child', 'invalid', 'cached', 'kept'],
+      ['runs child', 'deleted', 'unrunnable', 'gone'],
+      ['runs missing', 'command', 'kept', 'cached'],
+      ['runs missing', 'renames output', 'unrunnable', 'cached'],
+      ['runs missing', 'runs parent', 'kept', 'kept'],
+      ['runs missing', 'invalid', 'kept', 'kept'],
+      ['runs missing', 'deleted', 'unrunnable', 'gone'],
+      ['invalid', 'command', 'kept', 'cached'],
+      ['invalid', 'renames output', 'unrunnable', 'cached'],
+      ['invalid', 'runs parent', 'kept', 'kept'],
+      ['invalid', 'invalid', 'kept', 'kept'],
+      ['invalid', 'deleted', 'unrunnable', 'gone'],
+      ['deleted', 'command', 'gone', 'cached'],
+      ['deleted', 'renames output', 'gone', 'cached'],
+      ['deleted', 'runs parent', 'gone', 'kept'],
+      ['deleted', 'invalid', 'gone', 'kept'],
+      ['deleted', 'deleted', 'gone', 'gone'],
+    ];
+    // A file that cannot be read is an invalid revision, and a symlink is not a workflow file.
+    const sameAs: Record<string, string> = { unreadable: 'invalid', symlink: 'deleted' };
+    const canHideFiles = process.platform !== 'win32' && process.getuid?.() !== 0;
+    const revisions = [...new Set([...settles.flatMap(([parent, child]) => [parent, child]), ...Object.keys(sameAs)])];
+    const cases = [['ship', 'check'], ['alpha', 'beta']].flatMap(([parent, child]) => revisions.flatMap((parentRevision) => revisions.flatMap((childRevision) => {
+      const row = settles.find(([p, c]) => p === (sameAs[parentRevision] ?? parentRevision) && c === (sameAs[childRevision] ?? childRevision));
+      if (!row || (!canHideFiles && [parentRevision, childRevision].includes('unreadable'))) return [];
+      return [{ parent, child, parentRevision: parentRevision as ParentRevision, childRevision: childRevision as ChildRevision, outcome: { [parent]: row[2], [child]: row[3] } }];
+    })));
+    const parentFile = (name: string, child: string, revision: ParentRevision): string => `schemaVersion: v1alpha1
+name: ${name}
+description: ${revision === 'invalid' ? '[not text]' : 'Ship the issue.'}
+steps:
+  - id: check
+    workflow: ${child}
+  - id: fix
+    needs: [check]
+    if: steps.check.outputs.verdict == 'fix'
+    command: node fix.js
+${revision === 'runs missing' ? '  - id: other\n    needs: []\n    workflow: missing\n' : ''}`;
+    const childFile = (name: string, parent: string, revision: ChildRevision): string => `schemaVersion: v1alpha1
+name: ${name}
+description: ${revision === 'invalid' ? '[not text]' : 'Classify the issue.'}
+outputs:
+  ${revision === 'renames output' ? 'decision' : 'verdict'}: steps.classify.outputs.verdict
+steps:
+  - id: classify
+    command: node classify.js
+    output:
+      verdict: fix | drop
+${revision === 'runs parent' ? `  - id: again\n    needs: [classify]\n    workflow: ${parent}\n` : ''}`;
+    const revise = (config: LocalConfig, name: string, revision: string, body: string): void => {
+      const file = path.join(config.repo.localPath, 'workflows', `${name}.yaml`);
+      fs.rmSync(file);
+      if (revision === 'deleted') return;
+      if (revision === 'symlink') {
+        const outside = path.join(path.dirname(config.repo.localPath), `${name}.yaml`);
+        fs.writeFileSync(outside, body);
+        fs.symlinkSync(outside, file);
+        return;
+      }
+      fs.writeFileSync(file, body);
+      if (revision === 'unreadable') fs.chmodSync(file, 0o000);
+    };
+    const outcomeOf = (result: SyncWorkflowResult, name: string): Outcome => (result.cached.includes(name) ? 'cached'
+      : result.kept.includes(name) ? 'kept' : result.unrunnable.includes(`workflows/${name}.yaml`) ? 'unrunnable' : 'gone');
+
+    it.each(cases)('$parent runs $child: parent $parentRevision, child $childRevision', async ({ parent, child, parentRevision, childRevision, outcome }) => {
+      const config = testConfig();
+      writeWorkflow(config, parent, parentFile(parent, child, 'runs child'));
+      writeWorkflow(config, child, childFile(child, parent, 'command'));
+      expect((await syncAndStart(config)).cached).toEqual([parent, child].sort());
+      revise(config, parent, parentRevision, parentFile(parent, child, parentRevision));
+      revise(config, child, childRevision, childFile(child, parent, childRevision));
+
+      const result = await syncAndStart(config);
+
+      expect({ [parent]: outcomeOf(result, parent), [child]: outcomeOf(result, child) }).toEqual(outcome);
+      for (const name of [parent, child]) {
+        const runnable = outcome[name] === 'cached' || outcome[name] === 'kept';
+        expect(await loadCachedWorkflow(config, name) !== null, `${name} has a cached version`).toBe(runnable);
+      }
+    });
   });
 
   it('reports an if that compares a sub-workflow end with a name the workflow does not declare in ends', async () => {
