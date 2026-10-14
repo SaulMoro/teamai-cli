@@ -359,7 +359,7 @@ steps:
     const end = queued.find((record) => record.phase === 'end');
     expect(end).toBeDefined();
     expect(end!.status).toBe('failed');
-    expect(end!.steps).toEqual({ total: 1, succeeded: 0, failed: 1 });
+    expect(end!.stepCounts).toEqual({ total: 1, succeeded: 0, failed: 1 });
   });
 
   it('queues an end record when the run settles', async () => {
@@ -373,6 +373,6 @@ steps:
     const end = queued.find((record) => record.phase === 'end');
     expect(end).toBeDefined();
     expect(end!.status).toBe('succeeded');
-    expect(end!.steps).toEqual({ total: 2, succeeded: 2, failed: 0 });
+    expect(end!.stepCounts).toEqual({ total: 2, succeeded: 2, failed: 0 });
   });
 });
