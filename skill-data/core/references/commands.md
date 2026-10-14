@@ -223,6 +223,7 @@ Generated: do not edit by hand. Regenerate with
   - `teamai workflow start <name>` — Create a run. With --driver local, execute command and prompt steps in this process.
     - `--driver <kind>` — Run the workflow in this process. Only local is available.
     - `--tools <list>` — Override local prompt tools for this run, as comma-separated name=tool pairs
+    - `--inputs <json>` — Values for the inputs the workflow declares, as a JSON object, for example {"issue":42}. Every declared input is required.
   - `teamai workflow next <run>` — Lease the next pending step of a run. Prints a JSON envelope.
     - `--json <payload>` — Driver identity, for example {"driver":{"kind":"local","machine":"host","workspace":"/work"}}
   - `teamai workflow report <run>` — Report the outcome of a leased step. Prints a JSON envelope.

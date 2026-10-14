@@ -29,9 +29,10 @@ export function localDriver(cwd: string): DriverIdentity {
   return { kind: 'local', machine, workspace: path.resolve(cwd) };
 }
 
-function runCommand(command: string, cwd: string): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+/** Runs a leased command. The lease `env` is set over the inherited environment, so values reach the shell only as variables. */
+function runCommand(command: string, cwd: string, env: Record<string, string>): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
-    const child = spawn(command, { cwd, shell: true, env: process.env, windowsHide: true });
+    const child = spawn(command, { cwd, shell: true, env: { ...process.env, ...env }, windowsHide: true });
     let stdout = '';
     let stderr = '';
     child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
@@ -61,8 +62,15 @@ interface Lease {
   attempt: string;
   revision: number;
   command?: string;
+  env?: Record<string, string>;
   prompt?: string;
   agent?: string;
+}
+
+function stringMap(value: unknown): Record<string, string> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value);
+  return entries.every(([, item]) => typeof item === 'string') ? Object.fromEntries(entries) as Record<string, string> : undefined;
 }
 
 function resultPath(config: LocalConfig, runId: string, attempt: string): string {
@@ -185,6 +193,7 @@ export async function runLocalDriver(
       attempt: rawLease.attempt,
       revision: rawLease.revision,
       ...(typeof rawLease.command === 'string' ? { command: rawLease.command } : {}),
+      ...(stringMap(rawLease.env) ? { env: stringMap(rawLease.env) } : {}),
       ...(typeof rawLease.prompt === 'string' ? { prompt: rawLease.prompt } : {}),
       ...(typeof rawLease.agent === 'string' ? { agent: rawLease.agent } : {}),
     };
@@ -197,7 +206,7 @@ export async function runLocalDriver(
     let body: Parameters<typeof reportAttempt>[2];
     const attemptResultPath = resultPath(config, runId, lease.attempt);
     if (lease.command !== undefined) {
-      const result = await runCommand(lease.command, driver.workspace);
+      const result = await runCommand(lease.command, driver.workspace, lease.env ?? {});
       const output = jsonStdout(result.stdout);
       await fs.mkdir(path.dirname(attemptResultPath), { recursive: true });
       await writeJsonAtomic(attemptResultPath, output !== undefined ? { output } : {});

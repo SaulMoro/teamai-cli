@@ -11,7 +11,7 @@ import {
   managedMcpWorkspaceId,
   type LocalConfig,
 } from '../types.js';
-import { formatDiagnostic, parseWorkflow } from './parse.js';
+import { formatDiagnostic, parseWorkflow, promptFileDiagnostics } from './parse.js';
 import type { CachedWorkflow, WorkflowDefinition, WorkflowDiagnostic } from './types.js';
 import { assertSafePath, assertWithinRoot } from '../utils/path-safety.js';
 
@@ -133,40 +133,30 @@ export async function syncWorkflowDefinitions(
       log.warn(`[workflows] ${formatDiagnostic(diagnostic)}`);
       continue;
     }
-    const parsed = parseWorkflow(relativePath, content);
-    if (!parsed.ok) {
-      result.invalid.push(...parsed.diagnostics);
-      for (const diagnostic of parsed.diagnostics) log.warn(`[workflows] ${formatDiagnostic(diagnostic)}`);
+    // An invalid revision keeps the last valid version, unless a diagnostic has a code:
+    // a code changes what the file means, so the previous definition must not keep running.
+    const reject = async (diagnostics: WorkflowDiagnostic[]): Promise<void> => {
+      result.invalid.push(...diagnostics);
+      for (const diagnostic of diagnostics) log.warn(`[workflows] ${formatDiagnostic(diagnostic)}`);
       const stem = name.replace(/\.yaml$/, '');
-      // A diagnostic with a code changes what the file means, so the previous definition must not keep running.
-      if (parsed.diagnostics.some((diagnostic) => diagnostic.code !== undefined)) {
-        if (!options.dryRun) await remove(cachePath(config, stem));
-        result.unrunnable.push(relativePath);
-        log.warn(`[workflows] ${relativePath} has no runnable version`);
-        continue;
-      }
-      const previous = await readCache(config, stem);
-      if (previous) {
+      const dropped = diagnostics.some((diagnostic) => diagnostic.code !== undefined);
+      if (dropped && !options.dryRun) await remove(cachePath(config, stem));
+      if (!dropped && await readCache(config, stem)) {
         result.kept.push(stem);
         log.warn(`[workflows] Kept the last valid version of ${stem}; this revision was not cached`);
       } else {
         result.unrunnable.push(relativePath);
         log.warn(`[workflows] ${relativePath} has no runnable version`);
       }
+    };
+    const parsed = parseWorkflow(relativePath, content);
+    if (!parsed.ok) {
+      await reject(parsed.diagnostics);
       continue;
     }
     const resolved = await resolvePromptFiles(config, parsed.definition, parsed.promptFileLocations, relativePath);
     if (!resolved.ok) {
-      result.invalid.push(...resolved.diagnostics);
-      for (const diagnostic of resolved.diagnostics) log.warn(`[workflows] ${formatDiagnostic(diagnostic)}`);
-      const previous = await readCache(config, parsed.definition.name);
-      if (previous) {
-        result.kept.push(parsed.definition.name);
-        log.warn(`[workflows] Kept the last valid version of ${parsed.definition.name}; this revision was not cached`);
-      } else {
-        result.unrunnable.push(relativePath);
-        log.warn(`[workflows] ${relativePath} has no runnable version`);
-      }
+      await reject(resolved.diagnostics);
       continue;
     }
     const hash = createHash('sha256').update(content);
@@ -230,6 +220,7 @@ async function resolvePromptFiles(
       });
       continue;
     }
+    diagnostics.push(...promptFileDiagnostics(workflowFile, definition, index, prompt, location));
     sources.push({ path: step.promptFile, content: prompt });
     steps[index] = { ...step, prompt };
   }

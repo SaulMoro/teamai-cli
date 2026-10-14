@@ -695,4 +695,241 @@ steps:
     expect(result.kept).toEqual([]);
     expect(await startRun(config, 'build')).toMatchObject({ error: { code: 'workflow_not_found' } });
   });
+
+  it('reports a template in a command and points to env', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Label the issue.
+inputs:
+  title: string
+steps:
+  - id: label
+    command: node label.js "{{inputs.title}}"
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:8: field "steps[0].command": step "label" command contains {{inputs.title}}; command strings are not templated; pass the value through env:',
+    ]);
+  });
+
+  it('reports env on a step that does not run a command', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Review the change.
+steps:
+  - id: review
+    prompt: Review the change.
+    env:
+      TITLE: fixed
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:7: field "steps[0].env": step "review" env is only allowed on a command step',
+    ]);
+  });
+
+  it('reports an env name that is not a valid variable name', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Label the issue.
+steps:
+  - id: label
+    command: node label.js
+    env:
+      GOOD_1: fine
+      1BAD: one
+      BAD-NAME: two
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:9: field "steps[0].env.1BAD": step "label" env name "1BAD" must match ^[A-Za-z_][A-Za-z0-9_]*$',
+      'workflows/build.yaml:10: field "steps[0].env.BAD-NAME": step "label" env name "BAD-NAME" must match ^[A-Za-z_][A-Za-z0-9_]*$',
+    ]);
+  });
+
+  it('reports a template in a prompt or env that reads a bad path', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Fix the issue.
+inputs:
+  title: string
+steps:
+  - id: plan
+    command: node plan.js
+    output:
+      task: string
+  - id: free
+    needs: []
+    command: node free.js
+  - id: fix
+    needs: [plan]
+    prompt: "{{ inputs.titel }} {{ steps.plan.outputs.tsk }} {{ steps.free.outcome }} {{ inputs.title }}"
+  - id: label
+    needs: [plan]
+    command: node label.js
+    env:
+      TASK: "{{ steps.plan.outputs.task }}"
+      FREE: "{{ steps.free.outputs.y }}"
+      SAME: "{{ inputs.title == 'x' }}"
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:23: field "steps[3].env.SAME": step "label" env.SAME template {{ inputs.title == \'x\' }}: a template reads one path',
+      'workflows/build.yaml:16: field "steps[2].prompt": step "fix" prompt reads inputs.titel, which is not an input the workflow declares',
+      'workflows/build.yaml:16: field "steps[2].prompt": step "fix" prompt reads steps.plan.outputs.tsk, which is not in the output step "plan" declares',
+      'workflows/build.yaml:16: field "steps[2].prompt": step "fix" prompt reads steps.free, which is not a step it needs, directly or through its needs',
+      'workflows/build.yaml:22: field "steps[3].env.FREE": step "label" env.FREE reads steps.free, which is not a step it needs, directly or through its needs',
+    ]);
+    expect(result.invalid.map((diagnostic) => diagnostic.code)).toEqual(Array(5).fill('bad_template'));
+  });
+
+  it('reports a bad template in prompt_file text and drops the version that rendered it as text', async () => {
+    const config = testConfig();
+    fs.mkdirSync(path.join(config.repo.localPath, 'prompts'));
+    const promptFile = path.join(config.repo.localPath, 'prompts', 'review.md');
+    fs.writeFileSync(promptFile, 'Review the issue.');
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Review the issue.
+steps:
+  - id: review
+    prompt_file: prompts/review.md
+`);
+    await syncWorkflowDefinitions(config);
+    // Stand in for the cache an older teamai wrote: the braces reached the agent as written.
+    const cacheFile = cacheFiles(config).find((file) => file.endsWith(`${path.sep}build.json`));
+    if (!cacheFile) throw new Error('cache missing');
+    const text = 'Review issue {{ inputs.issue }}.';
+    fs.writeFileSync(cacheFile, fs.readFileSync(cacheFile, 'utf8').replace('Review the issue.', text));
+    fs.writeFileSync(promptFile, text);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:6: field "steps[0].prompt_file": step "review" prompt_file reads inputs.issue, which is not an input the workflow declares',
+    ]);
+    expect(result.invalid[0]?.code).toBe('bad_template');
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.kept).toEqual([]);
+    expect(await startRun(config, 'build')).toMatchObject({ error: { code: 'workflow_not_found' } });
+  });
+
+  it('reports an if that reads an input the workflow does not declare', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Ship when asked.
+inputs:
+  ship: boolean
+  issue:
+    number: number
+steps:
+  - id: build
+    command: node build.js
+  - id: ship
+    needs: [build]
+    if: inputs.shipp || inputs.issue.numbr == 1 || inputs.issue.number == 1 || inputs.ship
+    command: node ship.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:13: field "steps[1].if": step "ship" if reads inputs.shipp, which is not an input the workflow declares',
+      'workflows/build.yaml:13: field "steps[1].if": step "ship" if reads inputs.issue.numbr, which is not an input the workflow declares',
+    ]);
+  });
+
+  it('reports a dot in a step id or a field name and drops the version that has one', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', VALID);
+    await syncWorkflowDefinitions(config);
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Compile the project.
+inputs:
+  issue.number: number
+steps:
+  - id: compile.all
+    command: node compile.js
+    output:
+      result.ok: boolean
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:5: field "inputs": field name "issue.number" cannot contain "."; a path reads "." as a separator',
+      'workflows/build.yaml:7: field "steps[0].id": step id "compile.all" cannot contain "."; a path reads "." as a separator',
+      'workflows/build.yaml:10: field "steps[0].output": field name "result.ok" cannot contain "."; a path reads "." as a separator',
+    ]);
+    expect(result.invalid.map((diagnostic) => diagnostic.code)).toEqual(['dotted_name', 'dotted_name', 'dotted_name']);
+    expect(result.kept).toEqual([]);
+    expect(await startRun(config, 'build')).toMatchObject({ error: { code: 'workflow_not_found' } });
+  });
+
+  it('reads env numbers and booleans as text and reports a value that is not a scalar', async () => {
+    const config = testConfig();
+    const body = `schemaVersion: v1alpha1
+name: build
+description: Label the issue.
+steps:
+  - id: label
+    command: node label.js
+    env:
+      RETRIES: 3
+      DRY: true
+`;
+    writeWorkflow(config, 'build', body);
+    await syncWorkflowDefinitions(config);
+    expect((await loadCachedWorkflow(config, 'build'))?.definition.steps[0]?.env).toEqual({ RETRIES: '3', DRY: 'true' });
+    writeWorkflow(config, 'build', `${body}      EMPTY:
+      LIST: [a]
+      MAP: { a: 1 }
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:10: field "steps[0].env.EMPTY": step "label" env.EMPTY must be a string, number, or boolean',
+      'workflows/build.yaml:11: field "steps[0].env.LIST": step "label" env.LIST must be a string, number, or boolean',
+      'workflows/build.yaml:12: field "steps[0].env.MAP": step "label" env.MAP must be a string, number, or boolean',
+    ]);
+  });
+
+  it('reports only a malformed inputs header, not every read of it', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Fix the issue.
+inputs:
+  issue: integer
+steps:
+  - id: fix
+    if: inputs.issue == 1
+    prompt: "Fix {{ inputs.issue }}."
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:5: field "inputs.issue": unknown output type "integer"',
+    ]);
+  });
 });

@@ -43,6 +43,23 @@ steps:
 
 工作流可以声明具名的 `ends`，每个结局是 `succeeded` 或 `failed`，例如 `ends: { dropped: succeeded, stuck: failed }`。带 `end: <name>` 的步骤成功后，工作流以该结局结束。只有 `id`、`needs`、`if` 和 `end` 的步骤不运行任何内容：它的依赖完成时就结束工作流。到达结局后，所有尚未运行的步骤都会被跳过，运行结果取该结局声明的结果，即使有其他步骤失败。此时 `done` 会带上结局：`{"done":{"run":"<run>","outcome":"succeeded","end":"dropped"}}`。`end` 不在 `ends` 中、有 `end` 但没有 `ends`、声明的结局没有步骤使用，或某个步骤依赖只用于结束工作流的步骤，都会让该文件无效。
 
+工作流可以用和 `output` 相同的简写声明 `inputs`，例如 `inputs: { issue: number, title: string }`。每个输入都必填。用 JSON 对象传入：`teamai workflow start fix --driver local --inputs '{"issue":42,"title":"Crash"}'`。缺少、多出或类型不对的输入会返回 `invalid_inputs` 并指出字段，且不会创建运行。`if` 可以读取 `inputs.<name>`。
+
+`{{ inputs.<name> }}` 和 `{{ steps.<id>.outputs.<field> }}`（或 `.outcome`）会在步骤开始时填入 `prompt`、`prompt_file` 的文本和 `env` 的值。其他 `{{ ... }}` 文本，例如 `${{ secrets.TOKEN }}`，保持原样。字符串原样填入，数字和布尔值填入其文本，对象和数组填入 JSON，`null` 或不存在的值填入空文本。模板只能读取该步骤的 `if` 能读取的内容。
+
+`command` 永远不会被填充。通过 `env` 把值传给命令，只有命令步骤可以有 `env`：
+
+```yaml
+  - id: label
+    needs: [plan]
+    command: gh issue edit "$ISSUE" --title "$TITLE"
+    env:
+      ISSUE: "{{ inputs.issue }}"
+      TITLE: "{{ steps.plan.outputs.title }}"
+```
+
+命令在原有环境之上获得这些变量，因此 `$(touch pwned)` 这样的值只是普通文本。变量名必须匹配 `^[A-Za-z_][A-Za-z0-9_]*$`。YAML 数字或布尔值按其文本传入。`command` 中出现模板、提示词步骤带 `env`，或 `if`、模板读取了工作流未声明的输入，都会让该文件无效。模板无法解析或读取了不能读取的内容时，即使之前有有效版本，该工作流也没有可运行版本。步骤 id 或字段名中含有 `.` 时也是如此。
+
 在本地配置中按机器选择无界面工具：
 
 ```yaml

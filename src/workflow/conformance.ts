@@ -66,6 +66,24 @@ steps:
     command: echo ship
 `;
 
+const RENDERED_ENV = `schemaVersion: v1alpha1
+name: build
+description: A command receives an earlier output through env.
+steps:
+  - id: plan
+    command: echo plan
+    output:
+      title: string
+      files: [string]
+  - id: label
+    needs: [plan]
+    command: node label.js
+    env:
+      TITLE: "{{ steps.plan.outputs.title }}"
+      FILES: "{{ steps.plan.outputs.files }}"
+      COUNT: 2
+`;
+
 export const workflowConformanceScenarios: ConformanceScenario[] = [
   {
     name: 'two-step command success',
@@ -139,6 +157,25 @@ export const workflowConformanceScenarios: ConformanceScenario[] = [
       { kind: 'next', saveAs: 'label', expect: { data: { lease: { step: 'label' } } } },
       { kind: 'report', lease: 'label', body: { outcome: 'success' }, expect: { data: { step: { status: 'succeeded' } } } },
       { kind: 'next', saveAs: 'done', expect: { data: { done: { outcome: 'failed' } } } },
+    ],
+  },
+  {
+    name: 'the lease carries a rendered env',
+    workflowName: 'build',
+    yaml: RENDERED_ENV,
+    operations: [
+      { kind: 'next', saveAs: 'plan', expect: { data: { lease: { step: 'plan' } } } },
+      {
+        kind: 'report',
+        lease: 'plan',
+        body: { outcome: 'success', outputs: { title: '$(touch pwned)', files: ['a.ts'] } },
+        expect: { data: { step: { status: 'succeeded' } } },
+      },
+      {
+        kind: 'next',
+        saveAs: 'label',
+        expect: { data: { lease: { step: 'label', command: 'node label.js', env: { TITLE: '$(touch pwned)', FILES: '["a.ts"]', COUNT: '2' } } } },
+      },
     ],
   },
 ];

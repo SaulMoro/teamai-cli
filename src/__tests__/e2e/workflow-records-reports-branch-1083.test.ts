@@ -71,7 +71,7 @@ describe('#1083 workflow run records reach the reports branch', () => {
     };
 
     await syncWorkflowDefinitions(config);
-    const started = await startRun(config, 'build', { driver: localDriver(work) });
+    const started = await startRun(config, 'build', {}, { driver: localDriver(work) });
     expect(started).toMatchObject({ data: { status: 'running', record: 'published' } });
     const runId = String((started as { data: { run: string } }).data.run);
 
