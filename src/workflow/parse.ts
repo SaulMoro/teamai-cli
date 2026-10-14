@@ -6,7 +6,7 @@ function isYamlNode(value: unknown): value is Node {
 import type { OutputSchema, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
 
 const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'steps']);
-const STEP_KEYS = new Set(['id', 'command', 'prompt', 'prompt_file', 'agent', 'output']);
+const STEP_KEYS = new Set(['id', 'needs', 'command', 'prompt', 'prompt_file', 'agent', 'output']);
 const TYPE_NAMES = new Set(['string', 'number', 'boolean']);
 const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -167,6 +167,7 @@ export function parseWorkflow(file: string, content: string): {
     diagnostics.push(locate(file, lineCounter, stepsNode ?? stepsPair?.key ?? root, 'steps', 'steps must be a non-empty list'));
   } else {
     const seen = new Set<string>();
+    const graph: GraphNode[] = [];
     stepsNode.items.forEach((item, index) => {
       const field = `steps[${index}]`;
       if (!isMap(item)) {
@@ -187,6 +188,23 @@ export function parseWorkflow(file: string, content: string): {
         diagnostics.push(locate(file, lineCounter, idPair?.value ?? item, `${field}.id`, `step id "${id}" is duplicated`));
       } else {
         seen.add(id);
+      }
+      const label = id ? `step "${id}"` : field;
+      const needsPair = item.items.find((pair) => scalarString(pair.key) === 'needs');
+      let needs: string[] | undefined;
+      if (needsPair) {
+        const values = isSeq(needsPair.value) ? needsPair.value.items.map((need) => scalarString(isYamlNode(need) ? need : undefined)) : [];
+        if (!isSeq(needsPair.value) || values.some((need) => !need || !TOKEN.test(need))) {
+          diagnostics.push(locate(file, lineCounter, needsPair.value ?? needsPair.key ?? item, `${field}.needs`, `${label} needs must be a list of step ids`));
+        } else {
+          needs = values as string[];
+          if (id && TOKEN.test(id)) graph.push({ id, field: `${field}.needs`, needs, node: needsPair.value as Node });
+        }
+      } else if (index > 0) {
+        diagnostics.push({
+          ...locate(file, lineCounter, item, `${field}.needs`, `${label} must declare needs; use needs: [] for another root`),
+          code: 'missing_needs',
+        });
       }
       const commandPair = item.items.find((pair) => scalarString(pair.key) === 'command');
       const command = scalarString(commandPair?.value);
@@ -226,9 +244,10 @@ export function parseWorkflow(file: string, content: string): {
       } else if (outputPair) {
         diagnostics.push(locate(file, lineCounter, outputPair.key ?? item, `${field}.output`, 'output must be a shorthand type'));
       }
-      if (id && TOKEN.test(id) && actions.length === 1 && !diagnostics.some((d) => d.field.startsWith(field))) {
+      if (id && TOKEN.test(id) && actions.length === 1 && !diagnostics.some((d) => d.field === field || d.field.startsWith(`${field}.`))) {
         steps.push({
           id,
+          ...(needs ? { needs } : {}),
           ...(command ? { command } : {}),
           ...(prompt ? { prompt } : {}),
           ...(promptFile ? { promptFile } : {}),
@@ -237,6 +256,7 @@ export function parseWorkflow(file: string, content: string): {
         });
       }
     });
+    diagnostics.push(...graphDiagnostics(file, lineCounter, graph, seen));
   }
 
   if (diagnostics.length > 0 || !name || !description) return { ok: false, diagnostics };
@@ -245,6 +265,52 @@ export function parseWorkflow(file: string, content: string): {
     definition: { schemaVersion: 'v1alpha1', name, description, steps },
     promptFileLocations,
   };
+}
+
+interface GraphNode {
+  id: string;
+  field: string;
+  needs: string[];
+  node: Node;
+}
+
+/** Diagnostics for the `needs` graph: ids that name no step, and cycles reported at their first declared step. */
+function graphDiagnostics(file: string, lineCounter: LineCounter, graph: GraphNode[], ids: Set<string>): WorkflowDiagnostic[] {
+  const diagnostics: WorkflowDiagnostic[] = [];
+  for (const step of graph) {
+    for (const need of step.needs) {
+      if (!ids.has(need)) {
+        diagnostics.push(locate(file, lineCounter, step.node, step.field, `step "${step.id}" needs "${need}", which is not a step in this workflow`));
+      }
+    }
+  }
+
+  const byId = new Map(graph.map((step) => [step.id, step]));
+  const order = new Map(graph.map((step, index) => [step.id, index]));
+  const visited = new Map<string, 'open' | 'closed'>();
+  const path: string[] = [];
+  const cycles: string[][] = [];
+  const visit = (id: string): void => {
+    visited.set(id, 'open');
+    path.push(id);
+    for (const need of byId.get(id)?.needs ?? []) {
+      if (visited.get(need) === 'open') cycles.push(path.slice(path.indexOf(need)));
+      else if (!visited.has(need) && byId.has(need)) visit(need);
+    }
+    path.pop();
+    visited.set(id, 'closed');
+  };
+  for (const step of graph) if (!visited.has(step.id)) visit(step.id);
+
+  const first = (cycle: string[]): number => Math.min(...cycle.map((id) => order.get(id) ?? 0));
+  for (const cycle of cycles.sort((left, right) => first(left) - first(right))) {
+    const start = cycle.findIndex((id) => order.get(id) === first(cycle));
+    const ids = [...cycle.slice(start), ...cycle.slice(0, start)];
+    const step = byId.get(ids[0] ?? '');
+    if (!step) continue;
+    diagnostics.push(locate(file, lineCounter, step.node, step.field, `step "${step.id}" is in a needs cycle: ${[...ids, step.id].join(' -> ')}`));
+  }
+  return diagnostics;
 }
 
 function pathIsAbsolute(value: string): boolean {

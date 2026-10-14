@@ -138,8 +138,8 @@ export async function syncWorkflowDefinitions(
       result.invalid.push(...parsed.diagnostics);
       for (const diagnostic of parsed.diagnostics) log.warn(`[workflows] ${formatDiagnostic(diagnostic)}`);
       const stem = name.replace(/\.yaml$/, '');
-      // A key this version does not know must not keep running the previous definition.
-      if (parsed.diagnostics.some((diagnostic) => diagnostic.code === 'unknown_key')) {
+      // A key this version does not know, or a step without needs, must not keep running the previous definition.
+      if (parsed.diagnostics.some((diagnostic) => diagnostic.code === 'unknown_key' || diagnostic.code === 'missing_needs')) {
         if (!options.dryRun) await remove(cachePath(config, stem));
         result.unrunnable.push(relativePath);
         log.warn(`[workflows] ${relativePath} has no runnable version`);

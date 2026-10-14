@@ -31,9 +31,24 @@ steps:
   - id: one
     command: echo one
   - id: two
+    needs: [one]
     command: echo two
     output:
       ok: boolean
+`;
+
+const FAILED_DEPENDENCY = `schemaVersion: v1alpha1
+name: build
+description: A step whose dependency failed is skipped.
+steps:
+  - id: build
+    command: echo build
+  - id: test
+    needs: [build]
+    command: echo test
+  - id: docs
+    needs: []
+    command: echo docs
 `;
 
 export const workflowConformanceScenarios: ConformanceScenario[] = [
@@ -57,7 +72,7 @@ export const workflowConformanceScenarios: ConformanceScenario[] = [
   {
     name: 'output mismatch fails the step',
     workflowName: 'build',
-    yaml: TWO_STEPS.replace('  - id: one\n    command: echo one\n', ''),
+    yaml: TWO_STEPS.replace('  - id: one\n    command: echo one\n', '').replace('    needs: [one]\n', ''),
     operations: [
       { kind: 'next', saveAs: 'step', expect: { data: { lease: { step: 'two' } } } },
       {
@@ -85,6 +100,18 @@ export const workflowConformanceScenarios: ConformanceScenario[] = [
     operations: [
       { kind: 'next', saveAs: 'step', expect: { data: { lease: { step: 'one' } } } },
       { kind: 'report', attempt: 'a00000000', revision: 1, body: { outcome: 'success' }, expect: { error: { code: 'wrong_attempt' } } },
+    ],
+  },
+  {
+    name: 'skipped step is never leased',
+    workflowName: 'build',
+    yaml: FAILED_DEPENDENCY,
+    operations: [
+      { kind: 'next', saveAs: 'build', expect: { data: { lease: { step: 'build' } } } },
+      { kind: 'report', lease: 'build', body: { outcome: 'failed' }, expect: { data: { step: { status: 'failed' } } } },
+      { kind: 'next', saveAs: 'docs', expect: { data: { lease: { step: 'docs' } } } },
+      { kind: 'report', lease: 'docs', body: { outcome: 'success' }, expect: { data: { step: { status: 'succeeded' } } } },
+      { kind: 'next', saveAs: 'done', expect: { data: { done: { outcome: 'failed' } } } },
     ],
   },
 ];

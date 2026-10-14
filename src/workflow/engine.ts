@@ -103,6 +103,36 @@ function settleRun(run: RunState, outcome: Exclude<RunStatus, 'running'>): void 
   run.updatedAt = new Date().toISOString();
 }
 
+/** A step that ran and did not succeed. Later issues add `timeout` and `cancelled`. */
+function stopped(step: StepState): boolean {
+  return step.status === 'failed';
+}
+
+/**
+ * Marks every pending step that can no longer run as `skipped`, until nothing changes.
+ * Returns the lookup from a step to the states of the steps it needs.
+ */
+function skipUnreachable(run: RunState): (step: StepState) => Array<StepState | undefined> {
+  const states = new Map(run.steps.map((step) => [step.id, step]));
+  const declared = new Map(run.definition.steps.map((step) => [step.id, step.needs ?? []]));
+  const needs = (step: StepState): Array<StepState | undefined> => (declared.get(step.id) ?? []).map((id) => states.get(id));
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const step of run.steps) {
+      if (step.status !== 'pending' || !mustSkip(needs(step))) continue;
+      step.status = 'skipped';
+      changed = true;
+    }
+  }
+  return needs;
+}
+
+/** A step is skipped when a step it needs stopped, or when every step it needs was skipped. */
+function mustSkip(needs: Array<StepState | undefined>): boolean {
+  if (needs.some((need) => need && stopped(need))) return true;
+  return needs.length > 0 && needs.every((need) => need?.status === 'skipped');
+}
+
 export async function startRun(config: LocalConfig, name: string): Promise<WorkflowEnvelope> {
   const cached = await loadCachedWorkflow(config, name);
   if (!cached) {
@@ -138,18 +168,18 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       }
       return { save: false, envelope: ok({ wait: { reason: `${leased.id} is leased` } }) };
     }
-    const index = run.steps.findIndex((step) => step.status === 'pending');
-    if (index < 0) {
-      const outcome = run.steps.every((step) => step.status === 'succeeded') ? 'succeeded' : 'failed';
+    // Settle the graph here, while no lease is open, so a later report still matches its lease revision.
+    const needs = skipUnreachable(run);
+    const step = run.steps.find((item) => item.status === 'pending'
+      && needs(item).every((need) => need?.status === 'succeeded' || need?.status === 'skipped'));
+    if (!step) {
+      if (run.steps.some((item) => item.status === 'pending')) {
+        return { save: false, envelope: error('run_unreadable', `Run ${run.id} has pending steps whose needs cannot be met`) };
+      }
+      const outcome = run.steps.some(stopped) ? 'failed' : 'succeeded';
       settleRun(run, outcome);
       return { save: true, envelope: ok({ done: { run: run.id, outcome } }) };
     }
-    if (run.steps.slice(0, index).some((step) => step.status !== 'succeeded')) {
-      settleRun(run, 'failed');
-      return { save: true, envelope: ok({ done: { run: run.id, outcome: 'failed' } }) };
-    }
-    const step = run.steps[index];
-    if (!step) return { save: false, envelope: error('run_unreadable', `Run ${run.id} has no step to lease`) };
     const attempt = `a${randomBytes(4).toString('hex')}`;
     step.status = 'leased';
     step.attempt = attempt;
@@ -276,8 +306,6 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
     }
     rememberSettledAttempt(run, report.attempt);
     run.revision += 1;
-    // Settle last, so the settled run carries this attempt and the new revision.
-    if (step.status === 'failed') settleRun(run, 'failed');
     return {
       save: true,
       envelope: ok({

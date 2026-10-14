@@ -16,6 +16,7 @@ steps:
   - id: compile
     command: npm run build
   - id: test
+    needs: [compile]
     command: npm test
     output:
       ok: boolean
@@ -42,15 +43,16 @@ steps:
     prompt: Review this repository.
     agent: reviewer
   - id: summarize
+    needs: [review]
     prompt_file: prompts/summary.md
 `);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.definition.steps).toEqual([
       { id: 'review', prompt: 'Review this repository.', agent: 'reviewer' },
-      { id: 'summarize', promptFile: 'prompts/summary.md' },
+      { id: 'summarize', needs: ['review'], promptFile: 'prompts/summary.md' },
     ]);
-    expect(result.promptFileLocations[1]?.line).toBe(9);
+    expect(result.promptFileLocations[1]?.line).toBe(10);
   });
 
   it('names the file, line, and field when the header does not match', () => {
@@ -77,6 +79,7 @@ steps:
   - id: one
     command: echo one
   - id: one
+    needs: []
     command: echo two
 `);
     expect(result.ok).toBe(false);
@@ -112,8 +115,10 @@ steps:
   - id: one
     prompt: ''
   - id: two
+    needs: [one]
     prompt_file: ../secret.md
   - id: three
+    needs: [two]
     prompt_file: .git/config
 `);
     expect(result.ok).toBe(false);
