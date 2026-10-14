@@ -45,7 +45,7 @@ steps:
 
 工作流可以用和 `output` 相同的简写声明 `inputs`，例如 `inputs: { issue: number, title: string }`。每个输入都必填。用 JSON 对象传入：`teamai workflow start fix --driver local --inputs '{"issue":42,"title":"Crash"}'`。缺少、多出或类型不对的输入会返回 `invalid_inputs` 并指出字段，且不会创建运行。`if` 可以读取 `inputs.<name>`。
 
-`{{ inputs.<name> }}` 和 `{{ steps.<id>.outputs.<field> }}`（或 `.outcome`）会在步骤开始时填入 `prompt`、`prompt_file` 的文本和 `env` 的值。其他 `{{ ... }}` 文本，例如 `${{ secrets.TOKEN }}`，保持原样。字符串原样填入，数字和布尔值填入其文本，对象和数组填入 JSON，`null` 或不存在的值填入空文本。模板只能读取该步骤的 `if` 能读取的内容。
+`{{ inputs.<name> }}` 和 `{{ steps.<id>.outputs.<field> }}`（或 `.outcome`）会在步骤开始时填入 `prompt`、`prompt_file` 的文本和 `env` 的值。其他 `{{ ... }}` 文本，例如 `${{ secrets.TOKEN }}`，保持原样。紧跟在 `$` 后面的 `{{` 也保持原样，例如讲解 GitHub Actions 的提示词中的 `${{ inputs.version }}`。要在 `$` 后面填入值，请加一个空格：`$ {{ inputs.price }}`。字符串原样填入，数字和布尔值填入其文本，对象和数组填入 JSON，`null` 或不存在的值填入空文本。模板只能读取该步骤的 `if` 能读取的内容。
 
 `command` 永远不会被填充。通过 `env` 把值传给命令，只有命令步骤可以有 `env`：
 
@@ -71,7 +71,9 @@ steps:
       task: "{{ steps.plan.outputs.task }}"
 ```
 
-`with` 中任意层级的字符串都是模板。恰好只有一个模板的字符串保留其 JSON 类型，所以 `task` 拿到的是对象本身；其他字符串都是文本。步骤就绪时，这些值会按子工作流的 `inputs` 校验，不匹配时该步骤以 `invalid_inputs` 失败。子工作流只能看到自己的输入和步骤。它的步骤代替该步骤运行，并按路径租用，例如 `check.classify`。该步骤的结果就是子工作流的结果。子工作流中的 `end` 只结束子工作流，父工作流通过 `steps.<id>.end` 读取它。子工作流用 `outputs` 返回值，每个值是指向它某个步骤的路径，例如 `outputs: { verdict: steps.classify.outputs.verdict }`，父工作流读取 `steps.<id>.outputs.verdict`。运行工作流的步骤不能有 `output`、`agent` 或 `env`，也只有这种步骤可以有 `with`。
+`with` 中任意层级的字符串都是模板。恰好只有一个模板的字符串保留其 JSON 类型，所以 `task` 拿到的是对象本身；其他字符串都是文本。步骤就绪时，这些值会按子工作流的 `inputs` 校验，不匹配时该步骤以 `invalid_inputs` 失败。子工作流只能看到自己的输入和步骤。它的步骤代替该步骤运行，并按路径租用，例如 `check.classify`。该步骤的结果就是子工作流的结果。子工作流中的 `end` 只结束子工作流，父工作流通过 `steps.<id>.end` 读取它。子工作流用 `outputs` 返回值，每个值是指向它某个步骤的路径，例如 `outputs: { verdict: steps.classify.outputs.verdict }`，父工作流读取 `steps.<id>.outputs.verdict`。运行工作流的步骤不能有 `output`、`agent` 或 `env`。
+
+`prompt` 或 `prompt_file` 步骤也可以有 `with`，这样多个工作流可以共用一个提示词文件。这些值遵循同样的规则，提示词用 `{{ with.<name> }}` 读取它们，例如 `Fix {{ with.task }}`。`{{ with.<name> }}` 只在 `with` 中有该名称的步骤的提示词里有效。命令步骤不能有 `with`，应使用 `env`。
 
 `workflow: <name>` 按名称在 `teamai pull` 写入的已校验缓存中查找，而不是在文件中查找。`workflow start` 从该缓存取出运行用到的每个工作流并保存在运行中，因此之后的 pull 不会改变进行中的运行。子工作流没有可运行版本，或工作流之间循环调用时，`start` 会报错并指出它们。
 

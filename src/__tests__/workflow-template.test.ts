@@ -52,4 +52,23 @@ describe('workflow templates', () => {
     expect(findTemplate('echo "{{inputs.title}}" "{{ steps.plan.outputs.task }}"')).toBe('{{inputs.title}}');
     expect(findTemplate('echo "${{ secrets.TOKEN }} {{ name }}"')).toBeUndefined();
   });
+
+  it('finds a ${{ … }} template in a command too, since the command would receive the braces as written', () => {
+    expect(findTemplate('echo "${{ inputs.title }}"')).toBe('{{ inputs.title }}');
+  });
+
+  it('renders a step\'s own with values, and leaves a template right after a $ as written', () => {
+    const withContext = { ...context, with: { task: { title: 'Crash' }, ref: 'main' } };
+
+    expect(renderText(template('{{ with.task.title }} on {{with.ref}}, {{ with.none }}'), withContext)).toBe('Crash on main, ');
+    expect(renderValue(template('{{ with.task }}'), withContext)).toEqual({ title: 'Crash' });
+    expect(renderText(template('${{ inputs.issue }} ${{with.ref}} $ {{ inputs.issue }}'), withContext)).toBe('${{ inputs.issue }} ${{with.ref}} $ 42');
+  });
+
+  it.each([
+    ['{{ with.task == 1 }}'],
+    ['{{ with. }}'],
+  ])('rejects %s as more than one with path', (text) => {
+    expect(parseTemplate(text)).toEqual({ ok: false, errors: [{ source: text, message: 'a template reads one path, such as with.<name>' }] });
+  });
 });

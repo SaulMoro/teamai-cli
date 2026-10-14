@@ -4,7 +4,7 @@ import type { LocalConfig } from '../types.js';
 import { loadCachedWorkflow } from './cache.js';
 import { evaluateExpression, expressionPaths, isTruthy, parseExpression, resolvePath, type Expression, type ExpressionPath, type ExpressionStep } from './expression.js';
 import { outputMismatch } from './output.js';
-import { parseTemplate, renderStrings, renderText, stringsIn, templatePaths } from './template.js';
+import { parseTemplate, renderStrings, renderText, stringsIn, templatePaths, type TemplateContext } from './template.js';
 import { isRunId, readRun, runLockPath, writeRun } from './store.js';
 import type {
   CachedWorkflow,
@@ -148,7 +148,13 @@ function locateStep(run: RunState, path: string): { scope: Scope; step: Workflow
  * Pull rejects a template that does not parse, so a failure here means the run file was changed.
  */
 function renderLease(scope: Scope, states: StepState[], state: StepState, definition: WorkflowStep): RenderedLease | WorkflowFailure {
-  const context = { inputs: scope.inputs, steps: expressionSteps(scope, states) };
+  const context: TemplateContext = { inputs: scope.inputs, steps: expressionSteps(scope, states) };
+  // A prompt step's `with` renders first, by the same rules as a workflow step's; its prompt reads it as `with.<name>`.
+  if (definition.with !== undefined) {
+    const values = renderStrings(definition.with, context);
+    if (!values.ok) return { code: 'invalid_template', message: `step "${state.id}" with template ${values.error.source}: ${values.error.message}` };
+    context.with = values.value;
+  }
   const texts: Array<[string, string]> = [
     ...(definition.prompt !== undefined ? [['prompt', definition.prompt] as [string, string]] : []),
     ...Object.entries(definition.env ?? {}).map(([name, text]): [string, string] => [`env.${name}`, text]),

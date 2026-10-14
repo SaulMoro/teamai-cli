@@ -1236,3 +1236,101 @@ describe('file sub-workflows', () => {
     expect(fs.existsSync(path.join(fixture.config.dataHome!, 'workflows', 'runs'))).toBe(false);
   });
 });
+
+describe('with on prompt steps', () => {
+  it('renders a shared prompt file with the with values of the step that runs it', async () => {
+    const fixture = testConfig();
+    const knowledge = fixture.config.repo.localPath;
+    fs.mkdirSync(path.join(knowledge, 'prompts'), { recursive: true });
+    fs.writeFileSync(path.join(knowledge, 'prompts', 'fix.md'), 'Fix {{ with.issue }} in {{ with.task }}, files {{ with.task.files }}.');
+    fs.writeFileSync(path.join(knowledge, 'workflows', 'build.yaml'), graph(`  - id: plan
+    command: node plan.js
+    output:
+      task:
+        files: [string]
+  - id: fix
+    needs: [plan]
+    prompt_file: prompts/fix.md
+    with:
+      issue: "#{{ inputs.issue }}"
+      task: "{{ steps.plan.outputs.task }}"
+`, 'inputs:\n  issue: number\n'));
+    await syncWorkflowDefinitions(fixture.config);
+    const started = await startRun(fixture.config, 'build', { issue: 42 });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    const plan = await leaseNext(fixture.config, runId, driverA);
+    if ('error' in plan) throw new Error(plan.error.message);
+    const lease = plan.data.lease as { attempt: string; revision: number };
+    await reportAttempt(fixture.config, runId, { ...lease, outcome: 'success', outputs: { task: { files: ['a.ts'] } }, driver: driverA });
+
+    const fix = await leaseNext(fixture.config, runId, driverA);
+
+    expect(fix).toMatchObject({ data: { lease: { step: 'fix', prompt: 'Fix #42 in {"files":["a.ts"]}, files ["a.ts"].' } } });
+  });
+
+  it('passes pull and leases verbatim a prompt that quotes GitHub Actions ${{ … }} expressions', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: explain
+    prompt: "Explain \${{ secrets.X }} and \${{ inputs.version }} in \${{with.file}}; ref {{ with.ref }}."
+    with:
+      file: release.yml
+      ref: "\${{ steps.build.outputs.sha }}"
+`));
+
+    const explain = await leaseNext(config, runId, driverA);
+
+    expect(explain).toMatchObject({ data: { lease: {
+      step: 'explain',
+      prompt: 'Explain ${{ secrets.X }} and ${{ inputs.version }} in ${{with.file}}; ref ${{ steps.build.outputs.sha }}.',
+    } } });
+  });
+
+  it('leases a prompt step only after every step its with values read has settled', async () => {
+    // gate is skipped as soon as build fails, while late is still pending; deploy reads late through gate.
+    const { config, runId } = await startBuild(graph(`  - id: build
+    command: node build.js
+  - id: docs
+    needs: []
+    command: node docs.js
+  - id: gate
+    needs: [build, late]
+    command: node gate.js
+  - id: deploy
+    needs: [gate, docs]
+    prompt: "Deploy after late {{ with.late }}."
+    with:
+      late: "{{ steps.late.outcome }}"
+  - id: late
+    needs: []
+    command: node late.js
+`));
+
+    const { leased } = await drive(config, runId, ['build']);
+
+    expect(leased).toEqual(['build', 'docs', 'late', 'deploy']);
+  });
+
+  it('fails a prompt step whose stored with template cannot render and keeps settling the run', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: fix
+    prompt: "Fix {{ with.task }}."
+    with:
+      task: fixed
+  - id: label
+    needs: []
+    command: node label.js
+`));
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object' || !run.definition.steps[0]?.with) throw new Error('run missing');
+    run.definition.steps[0].with = { task: '{{ inputs.task == 1 }}' };
+    await writeRun(config, run);
+
+    const { leased, done } = await drive(config, runId);
+
+    expect(leased).toEqual(['label']);
+    expect(done).toEqual({ run: runId, outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'fix', status: 'failed', failure: { code: 'invalid_template', message: 'step "fix" with template {{ inputs.task == 1 }}: a template reads one path' } },
+      { id: 'label', status: 'succeeded' },
+    ] });
+  });
+});
