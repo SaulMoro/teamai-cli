@@ -1094,6 +1094,47 @@ describe('session resume of a session already restored', () => {
   });
 });
 
+describe('session resume on Windows', () => {
+  const realPlatform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: realPlatform });
+  });
+
+  it.each(['cursor', 'workbuddy'])('refuses to restore into %s, which would never show the copy', async (platform) => {
+    mocks.remotes['/run/dir'] = 'https://github.com/org/alpha.git';
+    const session = mkSession({ cwd: '/run/dir', platform: 'claude-code' });
+    new SyncManager(repoRoot).saveSession(
+      session,
+      defaultSyncMeta(
+        {
+          platform: 'claude-code',
+          author: 'tester',
+          cwd: '/run/dir',
+          sessionId: session.sessionId,
+          repoIdentity: 'github.com/org/alpha',
+          title: session.title,
+        },
+        session.createdAt,
+      ),
+    );
+    const indexPath = path.join(repoRoot, 'sessions', 'repos', encodeRepoIdentity('github.com/org/alpha'), '_index.json');
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8')) as { sessions: Array<{ sessionName: string }> };
+    const writeSession = vi.fn(async () => 'should-not-write');
+    const existingSessionId = vi.fn(async () => undefined);
+    mocks.adaptersByPlatform[platform] = { platform, writeSession, existingSessionId, consumeWriteNotice: () => undefined };
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+
+    await runSession(
+      'resume', index.sessions[0].sessionName,
+      '--platform', platform, '--repo-root', repoRoot, '--cwd', '/run/dir',
+    );
+
+    expect(errored.join('\n')).toContain(`Writing ${platform} sessions is not supported on Windows`);
+    expect(writeSession).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+});
+
 describe('session resume --dry-run', () => {
   it('strips terminal control sequences from the archived title', async () => {
     const title = 'pay\u001b[31mment\u001b[0m';

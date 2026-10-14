@@ -10,7 +10,7 @@
  */
 
 import fs from 'node:fs';
-import { ADAPTER_REGISTRY, listInstalledPlatforms } from './adapters/index.js';
+import { ADAPTER_REGISTRY, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
 import type { AgentAdapter } from './adapters/base.js';
 import { imagePlaceholderText, type ContentBlock, type Message, type Session } from './ir.js';
 import { deriveTargetSessionId, legacyTargetSessionIds } from './ids.js';
@@ -24,7 +24,7 @@ import { scrubSession } from './scrub.js';
 export type AgentSessionRef = { platform: string; sessionId: string; cwd?: string; filePath?: string };
 
 export type AgentSessionFailure =
-  | { code: 'no_adapter'; platform: string; reason: 'unknown tool'; message: string }
+  | { code: 'no_adapter'; platform: string; reason: 'unknown tool' | 'unsupported on win32'; message: string }
   | { code: 'tool_unavailable'; platform: string; message: string }
   | { code: 'not_found'; ref: AgentSessionRef; message: string }
   | { code: 'unreadable'; ref: AgentSessionRef; message: string }
@@ -84,17 +84,42 @@ export type AgentSession = {
   transcript(session: Session): AgentSessionTranscriptEntry[];
 };
 
-function adapterFor(platform: string): AgentAdapter | AgentSessionFailure {
-  const factory = ADAPTER_REGISTRY[platform];
-  if (!factory) {
+/** Targets that list a copy only once the sqlite3 CLI registers it. Windows ships no sqlite3. */
+const LISTED_THROUGH_SQLITE3 = new Set(['cursor', 'workbuddy']);
+
+/**
+ * Why TeamAI cannot use `platform` on this machine, or undefined when it can. `write` also
+ * refuses a target whose copy would never show here. Every command that names a platform
+ * reports this failure, so its message has this one home.
+ */
+export function noAdapter(
+  platform: string,
+  use: 'read' | 'write',
+): Extract<AgentSessionFailure, { code: 'no_adapter' }> | undefined {
+  const known = listAvailablePlatforms();
+  if (!known.includes(platform)) {
     return {
       code: 'no_adapter',
       platform,
       reason: 'unknown tool',
-      message: `Unknown platform "${platform}". Known platforms: ${Object.keys(ADAPTER_REGISTRY).join(', ')}.`,
+      message: `Unknown platform "${platform}". Known platforms: ${known.join(', ')}.`,
     };
   }
-  return factory();
+  if (use === 'write' && process.platform === 'win32' && LISTED_THROUGH_SQLITE3.has(platform)) {
+    return {
+      code: 'no_adapter',
+      platform,
+      reason: 'unsupported on win32',
+      message:
+        `Writing ${platform} sessions is not supported on Windows: ${platform} lists a session only after ` +
+        'the sqlite3 CLI registers it, so the copy would never show. Pick another target platform.',
+    };
+  }
+  return undefined;
+}
+
+function adapterFor(platform: string, use: 'read' | 'write'): AgentAdapter | AgentSessionFailure {
+  return noAdapter(platform, use) ?? ADAPTER_REGISTRY[platform]();
 }
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -155,7 +180,7 @@ async function listedFilePath(target: AgentAdapter, sessionId: string, cwd: stri
  * redacted text without having to remember to ask for it.
  */
 async function find(ref: AgentSessionRef, { scrub = true }: { scrub?: boolean } = {}): Promise<AgentSessionFound> {
-  const source = adapterFor(ref.platform);
+  const source = adapterFor(ref.platform, 'read');
   if ('code' in source) return { status: 'failed', failure: source };
   const session = await readSource(source, ref);
   if ('code' in session) return { status: 'failed', failure: session };
@@ -165,9 +190,9 @@ async function find(ref: AgentSessionRef, { scrub = true }: { scrub?: boolean } 
 }
 
 async function copy({ from, to, scrub = false }: AgentSessionCopyRequest): Promise<AgentSessionCopy> {
-  const source = adapterFor(from.platform);
+  const source = adapterFor(from.platform, 'read');
   if ('code' in source) return failed(source);
-  const target = adapterFor(to.platform);
+  const target = adapterFor(to.platform, 'write');
   if ('code' in target) return failed(target);
   if (!target.isReady()) {
     return failed({

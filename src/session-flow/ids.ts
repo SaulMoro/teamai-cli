@@ -29,20 +29,27 @@ import * as path from 'node:path';
  * relative path or a placeholder such as `md5:<hash>` would resolve against
  * the directory the command runs in, so both the id and the file would move
  * with it.
+ *
+ * `platform` names the OS whose path rules apply; only a test passes another one, since no
+ * Windows CI runs.
  */
-export function deriveTargetSessionId(target: {
-  targetPlatform: string;
-  targetCwd: string;
-  sourceSessionId: string;
-}): string {
+export function deriveTargetSessionId(
+  target: {
+    targetPlatform: string;
+    targetCwd: string;
+    sourceSessionId: string;
+  },
+  platform: NodeJS.Platform = process.platform,
+): string {
   const { targetPlatform, targetCwd, sourceSessionId } = target;
-  if (!path.isAbsolute(targetCwd)) {
+  const paths = platform === 'win32' ? path.win32 : path.posix;
+  if (!paths.isAbsolute(targetCwd)) {
     throw new Error(
       `Target workspace "${targetCwd}" is not an absolute path, so the session was not written. ` +
         'Pass an absolute directory (--target-cwd for `session migrate`, --cwd for `session resume`).',
     );
   }
-  return uuidV7Shaped(`teamai:${targetPlatform}:${canonicalWorkspace(targetCwd)}:${sourceSessionId}`);
+  return uuidV7Shaped(`teamai:${targetPlatform}:${canonicalWorkspace(targetCwd, paths)}:${sourceSessionId}`);
 }
 
 /** Platforms whose copies an older TeamAI derived without the workspace: per-project stores. */
@@ -91,14 +98,19 @@ function uuidV7Shaped(key: string): string {
  * systems, letter case (`/Users/me/Repo` and `/users/me/repo`), so a retry
  * from another spelling names the same target. A path that does not exist yet
  * is only resolved, so its id can change once the directory is created through
- * another spelling.
+ * another spelling. On Windows, resolving also turns `/` into `\` and drops a
+ * trailing separator, and the drive letter is upper-cased: `c:\` (what VS Code
+ * terminals type) and `C:\` are one drive, even for a folder not created yet.
  */
-function canonicalWorkspace(cwd: string): string {
+function canonicalWorkspace(cwd: string, paths: path.PlatformPath): string {
+  const resolved = paths.resolve(cwd);
+  let real: string;
   try {
-    return fs.realpathSync.native(path.resolve(cwd));
+    real = fs.realpathSync.native(resolved);
   } catch {
-    return path.resolve(cwd);
+    real = resolved;
   }
+  return paths === path.win32 ? real.replace(/^[a-z]:/, (drive) => drive.toUpperCase()) : real;
 }
 
 const SAFE_SESSION_FILE_ID_RE = /^[A-Za-z0-9_-]+$/;

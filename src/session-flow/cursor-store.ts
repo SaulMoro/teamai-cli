@@ -20,6 +20,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { findSqlite3 } from './sqlite.js';
 
 // ---------------------------------------------------------------------------
 // Paths and helpers
@@ -41,25 +42,6 @@ export function getCursorStateRoot(): string | null {
 export function getCursorStateDbPath(): string | null {
   const root = getCursorStateRoot();
   return root ? path.join(root, 'User', 'globalStorage', 'state.vscdb') : null;
-}
-
- /** Locate the sqlite3 CLI: PATH first, then well-known install locations. */
-function findSqlite3(): string | null {
-  const candidates = [
-    ...(process.env.PATH ?? '').split(path.delimiter).filter(Boolean).map((d) => path.join(d, 'sqlite3')),
-    '/usr/bin/sqlite3',
-    '/opt/homebrew/bin/sqlite3',
-    '/usr/local/bin/sqlite3',
-  ];
-  for (const p of candidates) {
-    try {
-      fs.accessSync(p, fs.constants.X_OK);
-      return p;
-    } catch {
-      // continue
-    }
-  }
-  return null;
 }
 
  /** cwd -> Cursor workspaceId (resolved from workspaceStorage/<hash>/workspace.json's folder). */

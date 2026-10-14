@@ -48,7 +48,7 @@ The local copy goes to `~/.teamai/session-logs/<year-month>.md`. `--push` sends 
 
 `teamai session` moves a full transcript between tools, or archives it in the team repo. `session save` remains the scrubbed summary.
 
-Platforms: `claude-code`, `codex`, `codebuddy`, `codebuddy-ide`, `cursor`, `workbuddy`. `teamai session platforms` lists what is installed here.
+Platforms: `claude-code`, `codex`, `codebuddy`, `codebuddy-ide`, `cursor`, `workbuddy`. `teamai session platforms` lists what is installed here. On Windows, `cursor` and `workbuddy` cannot be a migrate or resume target: they list a session only once the `sqlite3` CLI registers it, so TeamAI refuses instead of writing a copy they never show.
 
 ```bash
 teamai session migrate <sessionId> -s codebuddy-ide -t claude-code

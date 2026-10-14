@@ -23,7 +23,7 @@ import readline from 'node:readline';
 import * as path from 'node:path';
 import { getAdapter, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
 import { MigrationEngine, resolveTargetCwd } from './migrate.js';
-import { AgentSession, existingCopyId, type AgentSessionCopy } from './agent-session.js';
+import { AgentSession, existingCopyId, noAdapter, type AgentSessionCopy } from './agent-session.js';
 import { SyncManager, getRepoIdentity, getGitAuthor, defaultSyncMeta, withSessionIndexLock } from './sync.js';
 import { SessionSearchEngine, type LoadedSession } from './search.js';
 import { deriveTargetSessionId, isSafeSessionFileId } from './ids.js';
@@ -188,14 +188,12 @@ async function promptSelect(question: string, options: string[]): Promise<string
  * instead of a stack trace.
  */
 function safeGetAdapter(platform: string) {
-  try {
-    return getAdapter(platform);
-  } catch {
-    const available = listAvailablePlatforms().join(', ');
-    console.error(`Error: Unknown platform "${platform}".`);
-    console.error(`Available platforms: ${available}`);
+  const unknown = noAdapter(platform, 'read');
+  if (unknown) {
+    console.error(`Error: ${unknown.message}`);
     process.exit(1);
   }
+  return getAdapter(platform);
 }
 
 /**
@@ -440,9 +438,9 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       }
 
       let workCwd = opts.cwd ?? process.cwd();
-      if (json && !listAvailablePlatforms().includes(source)) {
-        const known = listAvailablePlatforms().join(', ');
-        printEnvelope({ error: { code: 'no_adapter', message: `Unknown platform "${source}". Known platforms: ${known}.` } });
+      const unknownSource = json ? noAdapter(source, 'read') : undefined;
+      if (unknownSource) {
+        printEnvelope({ error: { code: unknownSource.code, message: unknownSource.message } });
         return;
       }
       const sourceAdapter = safeGetAdapter(source);
@@ -1121,6 +1119,12 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
     .option('--cwd <path>', 'Working directory for the restored session (defaults to current directory)')
     .option('--author <name>', 'Author of the session (if ambiguous)')
     .action(async (sessionName, opts) => {
+      const refused = noAdapter(opts.platform, 'write');
+      if (refused) {
+        console.error(`Error: ${refused.message}`);
+        process.exitCode = 1;
+        return;
+      }
       const workCwd = opts.cwd ?? process.cwd();
       const repoRoot = await resolveRepoRoot(opts.repoRoot, { materialize: !isDryRun() });
       const repoIdentity = resolveRepoIdentity(workCwd);

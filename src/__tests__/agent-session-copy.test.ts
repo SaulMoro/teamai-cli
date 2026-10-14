@@ -308,3 +308,28 @@ describe('AgentSession.copy', () => {
     expect(fs.existsSync(to.cwd)).toBe(false);
   });
 });
+
+// Cursor and WorkBuddy list a copy only once the sqlite3 CLI registers it, and Windows ships none.
+describe('AgentSession.copy on Windows', () => {
+  const realPlatform = process.platform;
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: realPlatform });
+  });
+
+  it.each(['cursor', 'workbuddy'])('%s: refused as a target with no_adapter, and nothing is written', async (platform) => {
+    const sourceId = await writeSource();
+    const from = { platform: SOURCE_PLATFORM, sessionId: sourceId, cwd: workspace('source') };
+    const to = { platform, cwd: workspace('target') };
+    const before = snapshot();
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+
+    const result = await AgentSession.copy({ from, to });
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      failure: { code: 'no_adapter', platform, reason: 'unsupported on win32' },
+    });
+    expect(result.status === 'failed' && result.failure.message).toContain('Windows');
+    expect(snapshot()).toEqual(before);
+  });
+});

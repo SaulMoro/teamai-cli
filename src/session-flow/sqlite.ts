@@ -10,19 +10,19 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { WIN_EXEC_EXTENSIONS } from '../utils/cli-path.js';
 
-/** Locate the sqlite3 CLI: PATH first, then well-known install locations.
- *  Callers should degrade to "skip the index write" when it is missing. */
-export function findSqlite3(): string | null {
-  const candidates = [
-    ...(process.env.PATH ?? '')
-      .split(path.delimiter)
-      .filter(Boolean)
-      .map((d) => path.join(d, 'sqlite3')),
-    '/usr/bin/sqlite3',
-    '/opt/homebrew/bin/sqlite3',
-    '/usr/local/bin/sqlite3',
-  ];
+/** Locate the sqlite3 CLI: PATH first, then well-known install locations off Windows.
+ *  On Windows a PATH entry holds `sqlite3.exe`, so the name carries the extension.
+ *  Each caller says what a missing CLI means for the write it skips. */
+export function findSqlite3(platform: NodeJS.Platform = process.platform): string | null {
+  const names = platform === 'win32' ? WIN_EXEC_EXTENSIONS.map((ext) => `sqlite3${ext}`) : ['sqlite3'];
+  const onPath = (process.env.PATH ?? '')
+    .split(path.delimiter)
+    .filter(Boolean)
+    .flatMap((d) => names.map((name) => path.join(d, name)));
+  const candidates =
+    platform === 'win32' ? onPath : [...onPath, '/usr/bin/sqlite3', '/opt/homebrew/bin/sqlite3', '/usr/local/bin/sqlite3'];
   for (const p of candidates) {
     try {
       fs.accessSync(p, fs.constants.X_OK);

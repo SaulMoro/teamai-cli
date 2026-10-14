@@ -37,9 +37,9 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execFile, spawn } from 'node:child_process';
-import { promisify } from 'node:util';
+import type { ChildProcess } from 'node:child_process';
 import { homedir } from 'node:os';
+import crossSpawn from 'cross-spawn';
 import { AgentAdapter, type SessionMeta, type SessionReadRef } from './base.js';
 import type { Session, Message, ContentBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock } from '../ir.js';
 import { imagePlaceholderText } from '../ir.js';
@@ -47,6 +47,7 @@ import { titleFromUserText, visibleUserText } from '../title.js';
 import { assertSafeSessionFileId, deriveTargetSessionId } from '../ids.js';
 import { findSqlite3 } from '../sqlite.js';
 import { log } from '../../utils/logger.js';
+import { execCommand, probeBinary } from '../../utils/exec.js';
 import {
   getCodexSessionsDir,
   resolveRealCwd,
@@ -216,8 +217,6 @@ function pushItemCompleted(records: Record<string, unknown>[], args: ItemComplet
   records.push(buildItemCompletedRecord(args));
 }
 
-const execFileAsync = promisify(execFile);
-
 /** Location of the codex CLI bundled with Codex Desktop (ChatGPT.app) on macOS. */
 const DESKTOP_CODEX_CANDIDATES = [
   '/Applications/ChatGPT.app/Contents/Resources/codex',
@@ -225,27 +224,14 @@ const DESKTOP_CODEX_CANDIDATES = [
   '/Applications/Codex.app/Contents/Resources/codex',
 ];
 
-function findCodexCli(): string | null {
-  // 1) codex on PATH (npm / brew install)
-  const pathEnv = process.env.PATH ?? '';
-  for (const dir of pathEnv.split(path.delimiter)) {
-    if (!dir) continue;
-    const p = path.join(dir, 'codex');
-    try {
-      fs.accessSync(p, fs.constants.X_OK);
-      return p;
-    } catch {
-      // continue
-    }
-  }
-  // 2) CLI bundled with Codex Desktop
-  for (const p of DESKTOP_CODEX_CANDIDATES) {
-    try {
-      fs.accessSync(p, fs.constants.X_OK);
-      return p;
-    } catch {
-      // continue
-    }
+/**
+ * The codex CLI that runs: `codex` on PATH (npm / brew install), else the one bundled with
+ * Codex Desktop. Probed and later started through cross-spawn, which resolves the npm
+ * `codex.cmd` shim on Windows that a plain PATH join and `spawn` miss.
+ */
+async function findCodexCli(): Promise<string | null> {
+  for (const candidate of ['codex', ...DESKTOP_CODEX_CANDIDATES]) {
+    if (await probeBinary(candidate)) return candidate;
   }
   return null;
 }
@@ -855,30 +841,24 @@ export class CodexAdapter extends AgentAdapter {
    * then retry. Everything is best-effort: keep the legacy rollout as-is when the CLI
    */
   private async paginateRollout(sessionId: string, codexHome: string): Promise<void> {
-    const bin = findCodexCli();
+    const bin = await findCodexCli();
     if (!bin) {
       this.noteWrite(
         'Codex CLI was not found. The rollout was written, but Codex will not list it until the CLI indexes it.',
       );
       return;
     }
-    const env = { ...process.env, CODEX_HOME: codexHome };
-    const opts = { env, timeout: 120_000, maxBuffer: 16 * 1024 * 1024 };
+    const opts = { env: { ...process.env, CODEX_HOME: codexHome }, timeoutMs: 120_000 };
 
     const runApply = async (): Promise<string | undefined> => {
       let stdout = '';
       try {
-        const r = await execFileAsync(
-          bin,
-          ['migrate-rollouts', '--apply', '--thread', sessionId, '--json'],
-          opts,
-        );
-        stdout = r.stdout ?? '';
-      } catch (e) {
-        // Non-zero exit (e.g. a corrupted rollout causing "one or more rollout
+        // A non-zero exit (e.g. a corrupted rollout causing "one or more rollout
         // migrations failed") still carries the full JSON report; parse it to
         // judge this thread's outcome.
-        stdout = (e as { stdout?: string }).stdout ?? '';
+        ({ stdout } = await execCommand(bin, ['migrate-rollouts', '--apply', '--thread', sessionId, '--json'], opts));
+      } catch {
+        // Timed out or could not start: no report.
       }
       try {
         const report = JSON.parse(stdout) as {
@@ -917,11 +897,12 @@ export class CodexAdapter extends AgentAdapter {
    */
   private indexThreadViaAppServer(bin: string, codexHome: string): Promise<void> {
     return new Promise((resolve) => {
-      let child: ReturnType<typeof spawn>;
+      let child: ChildProcess;
       try {
-        child = spawn(bin, ['app-server'], {
+        child = crossSpawn(bin, ['app-server'], {
           env: { ...process.env, CODEX_HOME: codexHome, RUST_LOG: 'error' },
           stdio: ['pipe', 'pipe', 'ignore'],
+          windowsHide: true,
         });
       } catch {
         resolve();
@@ -1080,7 +1061,9 @@ export class CodexAdapter extends AgentAdapter {
 
   /**
    * Remove the session's traces from both Codex stores: state_5.threads (list rows) and
-   * items/turns/projection watermark. Best-effort: a missing CLI or lock contention never blocks the rollout delete.
+   * items/turns/projection watermark. Lock contention or a missing table never blocks the
+   * rollout delete. A missing sqlite3 CLI does: the rows would stay listed, so this throws
+   * before the rollout is deleted, and a rollback run again once sqlite3 is installed finds it.
    */
   private async unregisterThread(sessionId: string): Promise<void> {
     // Defense in depth against SQL injection: the id comes straight from the CLI
@@ -1091,8 +1074,6 @@ export class CodexAdapter extends AgentAdapter {
       return;
     }
     const safeId = sessionId.replace(/'/g, "''");
-    const bin = findSqlite3();
-    if (!bin) return;
     const home = path.dirname(this.storageRoot); // ~/.codex
     const stmts: Array<[string, string[]]> = [
       [
@@ -1110,16 +1091,21 @@ export class CodexAdapter extends AgentAdapter {
         ],
       ],
     ];
+    const present = stmts.filter(([db]) => fileExists(db));
+    if (present.length === 0) return;
+    const bin = findSqlite3();
+    if (!bin) {
+      throw new Error(
+        `The sqlite3 CLI was not found, so TeamAI could not unregister Codex thread ${sessionId} ` +
+          'and Codex would keep listing it. Nothing was deleted: install sqlite3 and run the rollback again.',
+      );
+    }
     // Run statement by statement, no transaction: table shapes differ across Codex
     // versions (e.g. no projection_state table) and one error in a transaction
-    for (const [db, sqls] of stmts) {
-      if (!fileExists(db)) continue;
+    for (const [db, sqls] of present) {
       for (const sql of sqls) {
         try {
-          await execFileAsync(bin, [db, `PRAGMA busy_timeout=5000; ${sql}`], {
-            timeout: 30_000,
-            maxBuffer: 16 * 1024 * 1024,
-          });
+          await execCommand(bin, [db, `PRAGMA busy_timeout=5000; ${sql}`], { timeoutMs: 30_000 });
         } catch {
           // Missing table / lock contention: skip, other cleanup continues
         }

@@ -21,6 +21,7 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 import { getAdapter } from '../session-flow/adapters/index.js';
+import { deriveTargetSessionId } from '../session-flow/ids.js';
 import type { Session } from '../session-flow/ir.js';
 
 const WRITABLE = ['claude-code', 'codebuddy', 'codebuddy-ide', 'codex', 'cursor', 'workbuddy'] as const;
@@ -155,6 +156,29 @@ describe('target session id', () => {
     const before = listFiles(mocks.home);
     await expect(write(platform, UUID_SOURCE, cwd)).rejects.toThrow(cwd);
     expect(listFiles(mocks.home)).toEqual(before);
+  });
+});
+
+// Windows cannot run here: these spellings go through the derivation with the platform named.
+describe('target session id for a Windows workspace', () => {
+  const idFor = (targetCwd: string): string =>
+    deriveTargetSessionId({ targetPlatform: 'codex', targetCwd, sourceSessionId: UUID_SOURCE }, 'win32');
+
+  it.each([
+    ['a lower-case drive letter', 'c:\\work\\repo'],
+    ['forward slashes', 'C:/work/repo'],
+    ['mixed separators', 'c:/work\\repo'],
+    ['a trailing separator', 'C:\\work\\repo\\'],
+  ])('gives a workspace spelled with %s the id of C:\\work\\repo', (_spelling, cwd) => {
+    expect(idFor(cwd)).toBe(idFor('C:\\work\\repo'));
+  });
+
+  it('gives the same folder on two drives two ids', () => {
+    expect(idFor('D:\\work\\repo')).not.toBe(idFor('C:\\work\\repo'));
+  });
+
+  it.each(['C:work\\repo', 'work\\repo'])('refuses "%s", which is not absolute', (cwd) => {
+    expect(() => idFor(cwd)).toThrow(cwd);
   });
 });
 
