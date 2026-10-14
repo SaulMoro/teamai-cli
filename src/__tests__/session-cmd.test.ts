@@ -356,6 +356,32 @@ describe('session search --all', () => {
     expect(text).not.toMatch(CJK);
   });
 
+  it('prints a nonzero score for a session that matches only in tool output', async () => {
+    seed('github.com/org/alpha', 'alice', 'a-1', 'docs', 'fix the readme');
+    new SyncManager(repoRoot).saveSession(
+      mkSession({
+        sessionId: 'b-1',
+        title: 'build',
+        platform: 'claude-code',
+        cwd: '/proj/seed',
+        messages: [
+          { role: 'user', content: [{ type: 'text', text: 'run the build' }] },
+          { role: 'user', content: [{ type: 'tool_result', callId: 't1', content: 'error TS2304: Cannot find name ZZTOP', isError: true }] },
+        ],
+      }),
+      defaultSyncMeta(
+        { platform: 'claude-code', author: 'bob', cwd: '/proj/seed', sessionId: 'b-1', repoIdentity: 'github.com/org/alpha' },
+        '2026-01-02T00:00:00.000Z',
+      ),
+    );
+    mocks.remotes['/run/alpha'] = 'https://github.com/org/alpha.git';
+
+    await runSession('search', 'ZZTOP', '--repo-root', repoRoot, '--cwd', '/run/alpha');
+
+    const score = /Score: (\S+)/.exec(out.join('\n'))?.[1];
+    expect(Number(score)).toBeGreaterThan(0);
+  });
+
   it('scopes search to the current repo without --all', async () => {
     seed('github.com/org/alpha', 'alice', 'a-1', 'payment alpha', 'alpha payment retry');
     seed('gitlab.company.com/g/beta', 'bob', 'b-1', 'payment beta', 'beta payment retry');

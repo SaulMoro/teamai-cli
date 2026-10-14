@@ -1283,7 +1283,8 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         const snippet = safeText(hit.snippet);
         const snippetShown = snippet.length > 150 ? snippet.slice(0, 150) + '...' : snippet;
         console.log(`  [${i + 1}] ${safeText(hit.sessionName)} (${safeText(hit.author)}, ${date})`);
-        console.log(`      Score: ${hit.score.toFixed(1)}`);
+        // Two significant digits: a match only in tool output scores well under 0.1, and one decimal printed 0.0.
+        console.log(`      Score: ${Number(hit.score.toPrecision(2))}`);
         console.log(`      ${snippetShown}`);
         console.log('');
       }
