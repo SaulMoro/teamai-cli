@@ -620,6 +620,43 @@ export function registerCursorComposer(args: RegisterCursorComposerArgs): Regist
 }
 
 /**
+ * Whether Cursor's store holds composer `composerId`: its header, its data, or any of its
+ * bubbles. With `cwd`, only a header in that workspace counts. Where `registerCursorComposer`
+ * could not write either (no store, no sqlite3 CLI, an id that is not a UUID, a workspace Cursor
+ * does not know), the answer is no, since a write leaves the store alone there.
+ */
+export function cursorComposerExists(composerId: string, cwd?: string): { ok: true; exists: boolean } | { ok: false; reason: string } {
+  if (assertCursorSessionId(composerId)) return { ok: true, exists: false };
+  const dbPath = getCursorStateDbPath();
+  if (!dbPath || !fs.existsSync(dbPath)) return { ok: true, exists: false };
+  const sqlite3 = findSqlite3();
+  if (!sqlite3) return { ok: true, exists: false };
+
+  const id = esc(composerId);
+  let sql: string;
+  if (cwd) {
+    const ws = resolveCursorWorkspaceId(cwd);
+    if (!ws) return { ok: true, exists: false };
+    sql = `SELECT EXISTS(SELECT 1 FROM composerHeaders WHERE composerId='${id}' AND workspaceId='${esc(ws.id)}');`;
+  } else {
+    sql =
+      `SELECT EXISTS(SELECT 1 FROM composerHeaders WHERE composerId='${id}') ` +
+      `OR EXISTS(SELECT 1 FROM cursorDiskKV WHERE key='composerData:${id}' OR (${cursorBubbleCleanupWhere(composerId)}));`;
+  }
+
+  try {
+    const r = spawnSync(sqlite3, [dbPath], { input: `PRAGMA busy_timeout=5000;\n${sql}`, timeout: 30_000 });
+    if (r.status !== 0) {
+      const stderr = (r.stderr?.toString() ?? '').trim();
+      return { ok: false, reason: (stderr || `sqlite3 exit ${r.status}${r.signal ? ` signal ${r.signal}` : ''}`).slice(0, 300) };
+    }
+    return { ok: true, exists: (r.stdout?.toString() ?? '').trim().endsWith('1') };
+  } catch (e) {
+    return { ok: false, reason: (e as Error).message };
+  }
+}
+
+/**
  * Remove the session from Cursor's Agents list (called on rollback / delete).
  * Only rows for our own composerId are touched; best-effort.
  */

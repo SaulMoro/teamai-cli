@@ -290,7 +290,7 @@ export class WorkBuddyAdapter extends AgentAdapter {
         }
       }
     } catch {
-      return null;
+      // Still listed with what was read, so a lookup reports the session unreadable, not missing.
     }
 
     if (!createdAt) createdAt = new Date().toISOString();

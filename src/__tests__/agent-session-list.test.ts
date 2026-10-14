@@ -160,6 +160,29 @@ describe('AgentSession.list', () => {
     ]);
   });
 
+  // A session being written, or a damaged one, must not look absent: a lookup reports it unreadable.
+  const READS_A_HEAD = [
+    ['claude-code', ['.claude', 'projects']],
+    ['codebuddy', ['.codebuddy', 'projects']],
+    ['cursor', ['.cursor', 'projects']],
+    ['workbuddy', ['.workbuddy', 'projects']],
+  ] as const;
+  it.each(READS_A_HEAD)('%s: lists a session whose first lines do not parse, and find names it unreadable', async (platform, store) => {
+    fs.mkdirSync(path.join(mocks.home, ...store), { recursive: true });
+    const cwd = workspace('alpha');
+    const sessionId = await plant(platform, cwd, 'damaged work', '2026-09-24T10:00:05.000Z');
+    const [{ filePath }] = (await AgentSession.list({ platforms: [platform], cwd })).sessions;
+    fs.writeFileSync(filePath!, '{"truncated\nnot json either\n');
+
+    const listed = await AgentSession.list({ platforms: [platform], cwd });
+    const found = await AgentSession.find(listed.sessions[0], { scrub: false });
+
+    expect(listed.failures).toEqual([]);
+    expect(listed.sessions).toHaveLength(1);
+    expect(listed.sessions[0]).toMatchObject({ platform, sessionId, filePath, title: `Session ${sessionId.slice(0, 8)}` });
+    expect(found).toMatchObject({ status: 'failed', failure: { code: 'unreadable' } });
+  });
+
   it('names an unknown tool no_adapter and a tool that is not installed tool_unavailable, and still lists the others', async () => {
     fs.mkdirSync(path.join(mocks.home, '.claude', 'projects'), { recursive: true });
     const sessionId = await plant('claude-code', workspace('alpha'), 'alpha work', '2026-09-24T10:00:05.000Z');

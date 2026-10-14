@@ -21,7 +21,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { AgentAdapter, type SessionMeta, type SessionReadRef } from './base.js';
+import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef } from './base.js';
 import type { Session, Message, ContentBlock } from '../ir.js';
 import { imagePlaceholderText } from '../ir.js';
 import {
@@ -36,7 +36,7 @@ import {
   removeDirRecursive,
 } from '../fs.js';
 import { cleanTitleText, fallbackTitle, titleFromCandidates, titleFromUserText, isRenderableText, visibleUserText } from '../title.js';
-import { registerCursorComposer, unregisterCursorComposer, type CursorComposerMessage, type CursorComposerTool } from '../cursor-store.js';
+import { cursorComposerExists, registerCursorComposer, unregisterCursorComposer, type CursorComposerMessage, type CursorComposerTool } from '../cursor-store.js';
 import { assertSafeSessionFileId, deriveTargetSessionId } from '../ids.js';
 import { log } from '../../utils/logger.js';
 
@@ -229,7 +229,7 @@ export class CursorAdapter extends AgentAdapter {
         }
       }
     } catch {
-      return null;
+      // Still listed with what was read, so a lookup reports the session unreadable, not missing.
     }
 
     title = titleFromCandidates(userTextCandidates) || fallbackTitle(sessionId);
@@ -410,7 +410,15 @@ export class CursorAdapter extends AgentAdapter {
   }
 
   async existingSessionId(sessionId: string, projectPath?: string): Promise<string | undefined> {
-    return this.findSessionFile(sessionId, projectPath) ? sessionId : undefined;
+    if (this.findSessionFile(sessionId, projectPath)) return sessionId;
+    // Cursor shows the conversation from its store, which a write would replace, transcript or not.
+    const inStore = cursorComposerExists(sessionId, projectPath);
+    if (!inStore.ok) {
+      throw new ToolUnavailableError(
+        `Cursor's session store could not be read, so whether session ${sessionId} exists is unknown: ${inStore.reason}`,
+      );
+    }
+    return inStore.exists ? sessionId : undefined;
   }
 
   async writeSession(session: Session, projectPath?: string): Promise<string> {
@@ -603,10 +611,9 @@ export class CursorAdapter extends AgentAdapter {
       const tools: CursorComposerTool[] = [];
       for (const block of msg.content) {
         if (block.type === 'text') {
-          // AgentSession.copy degrades Cursor-unsupported ThinkingBlocks into `<thinking>...</thinking>`,
-          // wrapped text blocks (migrate.ts degradeThinkingBlocks). Left in the body they make Cursor
-          // rendered as an HTML block (markdown broken, newlines swallowed) -- strip before the DB bubble; the original stays in the
-          // transcript.
+          // AgentSession.copy hands thinking over as `<thinking>...</thinking>` text; writeSession degrades a
+          // raw ThinkingBlock to that text in the transcript itself. In a bubble body Cursor renders it as an
+          // HTML block (markdown broken, newlines swallowed), so strip it; the transcript keeps it.
           const stripped = block.text.replace(THINKING_WRAP_RE, '').trim();
           // user bubbles show the real question only: injected blocks (<user_info>/<rules>/<additional_data>/...) and attachment
           // paths are noise (Cursor renders them as chips natively; we cannot).

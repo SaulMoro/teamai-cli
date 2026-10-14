@@ -331,6 +331,42 @@ describe('AgentSession.copy', () => {
   });
 });
 
+// Cursor shows a conversation from its store, not from the transcript, so a composer whose
+// transcript was deleted is still a copy a member may have continued.
+describe.skipIf(!CAN_REGISTER_CURSOR)('AgentSession.copy into Cursor', () => {
+  it('a copy whose transcript was deleted but whose composer is still in the store is reused, and the store is unchanged', async () => {
+    const sourceId = await writeSource();
+    const from = { platform: SOURCE_PLATFORM, sessionId: sourceId, cwd: workspace('source') };
+    const to = { platform: 'cursor', cwd: workspace('target') };
+    const first = await AgentSession.copy({ from, to });
+    expect(first).toMatchObject({ status: 'done', reused: false });
+    expect(first).not.toHaveProperty('notice');
+    const transcripts = path.join(mocks.home, '.cursor', 'projects');
+    fs.rmSync(transcripts, { recursive: true });
+    fs.mkdirSync(transcripts);
+    const before = snapshot();
+
+    const second = await AgentSession.copy({ from, to });
+
+    expect(second).toMatchObject({ status: 'done', reused: true });
+    expect(second.status === 'done' && second.sessionId).toBe(first.status === 'done' && first.sessionId);
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('fails with tool_unavailable when the store cannot be read, and nothing is written', async () => {
+    const sourceId = await writeSource();
+    const from = { platform: SOURCE_PLATFORM, sessionId: sourceId, cwd: workspace('source') };
+    fs.writeFileSync(path.join(cursorUserDir(), 'globalStorage', 'state.vscdb'), 'not a database');
+    const to = { platform: 'cursor', cwd: workspace('target') };
+    const before = snapshot();
+
+    const result = await AgentSession.copy({ from, to });
+
+    expect(result).toMatchObject({ status: 'failed', failure: { code: 'tool_unavailable', platform: 'cursor' } });
+    expect(snapshot()).toEqual(before);
+  });
+});
+
 describe('AgentSession.copy into OpenCode', () => {
   const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
 

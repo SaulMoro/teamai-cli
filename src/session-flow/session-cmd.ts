@@ -480,6 +480,15 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         target = await promptSelect('Select target platform:', others);
       }
 
+      // A target no copy can be written to fails once here, not once per session after its preview.
+      const refusedTarget = noAdapter(target, 'write');
+      if (refusedTarget) {
+        if (json) return printEnvelope({ error: { code: refusedTarget.code, message: refusedTarget.message } });
+        console.error(`Error: ${refusedTarget.message}`);
+        process.exitCode = 1;
+        return;
+      }
+
       let workCwd = opts.cwd ?? process.cwd();
       let metas = await listSource({ platform: source, cwd: workCwd, asEnvelope: json });
       if (!metas) return;

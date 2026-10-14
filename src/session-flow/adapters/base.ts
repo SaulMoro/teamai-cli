@@ -41,7 +41,8 @@ export interface SessionReadRef {
 }
 
 /**
- * Thrown by an adapter whose tool CLI cannot run on this machine (absent, or too old).
+ * Thrown by an adapter whose tool CLI cannot run on this machine (absent, or too old), or whose
+ * store cannot be read.
  * `AgentSession` reports it as `tool_unavailable`, never as a missing session.
  */
 export class ToolUnavailableError extends Error {

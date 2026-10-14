@@ -60,6 +60,44 @@ function textOf(session: Session): string[] {
   );
 }
 
+/**
+ * A real Cursor composer store under the temporary home that knows the workspace `cwd`.
+ * Returns the path of its state.vscdb.
+ */
+function createCursorStore(cwd: string): string {
+  fs.mkdirSync(cwd, { recursive: true });
+  const userDir =
+    process.platform === 'darwin'
+      ? path.join(mocks.home, 'Library', 'Application Support', 'Cursor', 'User')
+      : path.join(mocks.home, '.config', 'Cursor', 'User');
+  const wsDir = path.join(userDir, 'workspaceStorage', 'ws1');
+  fs.mkdirSync(wsDir, { recursive: true });
+  fs.writeFileSync(path.join(wsDir, 'workspace.json'), JSON.stringify({ folder: `file://${cwd}` }));
+  const db = path.join(userDir, 'globalStorage', 'state.vscdb');
+  fs.mkdirSync(path.dirname(db), { recursive: true });
+  const schema = spawnSync('sqlite3', [db], {
+    encoding: 'utf-8',
+    input:
+      'CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);' +
+      'CREATE TABLE composerHeaders (composerId TEXT UNIQUE, workspaceId TEXT, createdAt INTEGER,' +
+      ' lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER, recency INTEGER,' +
+      ' checkpointAt INTEGER, value TEXT, subagentTypeName TEXT);',
+  });
+  expect(schema.status, schema.stderr).toBe(0);
+  return db;
+}
+
+/** The composer bubbles Cursor shows, oldest first. */
+function readBubbles(db: string): { type: number; text: string; createdAt: string }[] {
+  const rows = spawnSync('sqlite3', ['-json', db, "SELECT value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%';"], {
+    encoding: 'utf-8',
+  });
+  expect(rows.status, rows.stderr).toBe(0);
+  return (JSON.parse(rows.stdout || '[]') as { value: string }[])
+    .map((r) => JSON.parse(r.value) as { type: number; text: string; createdAt: string })
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
 beforeEach(() => {
   mocks.home = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-cursor-img-'));
   fs.mkdirSync(path.join(mocks.home, '.cursor', 'projects'), { recursive: true });
@@ -97,38 +135,48 @@ describe('migrating user images to Cursor', () => {
   // transcript, so the placeholder has to land there too.
   it.skipIf(process.platform === 'win32')('writes a placeholder for each user image in the composer bubbles', async () => {
     const cwd = path.join(mocks.home, 'work');
-    fs.mkdirSync(cwd, { recursive: true });
-    const userDir =
-      process.platform === 'darwin'
-        ? path.join(mocks.home, 'Library', 'Application Support', 'Cursor', 'User')
-        : path.join(mocks.home, '.config', 'Cursor', 'User');
-    const wsDir = path.join(userDir, 'workspaceStorage', 'ws1');
-    fs.mkdirSync(wsDir, { recursive: true });
-    fs.writeFileSync(path.join(wsDir, 'workspace.json'), JSON.stringify({ folder: `file://${cwd}` }));
-    const db = path.join(userDir, 'globalStorage', 'state.vscdb');
-    fs.mkdirSync(path.dirname(db), { recursive: true });
-    const schema = spawnSync('sqlite3', [db], {
-      encoding: 'utf-8',
-      input:
-        'CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB);' +
-        'CREATE TABLE composerHeaders (composerId TEXT UNIQUE, workspaceId TEXT, createdAt INTEGER,' +
-        ' lastUpdatedAt INTEGER, isArchived INTEGER, isSubagent INTEGER, recency INTEGER,' +
-        ' checkpointAt INTEGER, value TEXT, subagentTypeName TEXT);',
-    });
-    expect(schema.status, schema.stderr).toBe(0);
+    const db = createCursorStore(cwd);
 
     await new CursorAdapter().writeSession(sessionWithUserImages(), cwd);
 
-    const rows = spawnSync('sqlite3', ['-json', db, "SELECT value FROM cursorDiskKV WHERE key LIKE 'bubbleId:%';"], {
-      encoding: 'utf-8',
-    });
-    expect(rows.status, rows.stderr).toBe(0);
-    const bubbles = (JSON.parse(rows.stdout || '[]') as { value: string }[])
-      .map((r) => JSON.parse(r.value) as { type: number; text: string; createdAt: string })
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    const bubbles = readBubbles(db);
     expect(bubbles.filter((b) => b.type === 1).map((b) => b.text)).toEqual([
       `what is wrong in this screenshot\n\n${PLACEHOLDER}`,
       PLACEHOLDER,
     ]);
+  });
+});
+
+// Cursor has no reasoning blocks. The adapter keeps reasoning in the transcript as `<thinking>`
+// text, whatever wrote the session, and leaves it out of the bubbles Cursor renders.
+describe('writing reasoning to Cursor', () => {
+  const REASONING = 'weighing the margin against the padding';
+  const withReasoning: Session = {
+    ...sessionWithUserImages(),
+    messages: [
+      { role: 'user', timestamp: '2026-09-24T10:00:00.000Z', content: [{ type: 'text', text: 'why is it off' }] },
+      {
+        role: 'assistant',
+        timestamp: '2026-09-24T10:00:01.000Z',
+        content: [
+          { type: 'thinking', text: REASONING },
+          { type: 'text', text: 'the margin' },
+        ],
+      },
+    ],
+  };
+
+  it.skipIf(process.platform === 'win32')('keeps a raw reasoning block as <thinking> text in the transcript, not in the bubbles', async () => {
+    const cwd = path.join(mocks.home, 'work');
+    const db = createCursorStore(cwd);
+    const adapter = new CursorAdapter();
+
+    const id = await adapter.writeSession(withReasoning, cwd);
+
+    const back = await adapter.readSession({ sessionId: id, projectPath: cwd });
+    expect(textOf(back)).toEqual(['why is it off', `<thinking>\n${REASONING}\n</thinking> | the margin`]);
+    const bubbles = readBubbles(db);
+    expect(bubbles.map((b) => b.text)).toEqual(['why is it off', 'the margin']);
+    expect(bubbles.some((b) => JSON.stringify(b).includes(REASONING))).toBe(false);
   });
 });

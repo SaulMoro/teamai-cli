@@ -841,6 +841,11 @@ describe('session migrate of a session already migrated', () => {
     fidelity: { score: 1, mode: 1, preservedBlocks: 1, totalBlocks: 1, degradedBlocks: 0, degradations: [], warnings: [] },
   };
 
+  // The copy itself is mocked; the target only has to be a platform the CLI knows.
+  beforeEach(() => {
+    mocks.adaptersByPlatform['tgtplat'] = { platform: 'tgtplat' };
+  });
+
   it('reports the existing copy, how to refresh it, and succeeds', async () => {
     mocks.previewResult = preview;
     mocks.copyResult = { status: 'done', sessionId: 'tgt-1', cwd: '/run/dir', reused: true, fidelity: { score: 1 } };
@@ -1069,6 +1074,35 @@ describe('session migrate --json', () => {
     expect(process.exitCode).toBe(1);
   });
 
+  it('names a Claude Code session whose first lines do not parse unreadable, not not_found', async () => {
+    const sid = '11111111-2222-3333-4444-555555555555';
+    const projDir = path.join(mocks.home, '.claude', 'projects', '-run-dir');
+    fs.mkdirSync(projDir, { recursive: true });
+    fs.writeFileSync(path.join(projDir, `${sid}.jsonl`), '{"truncated\nnot json either\n');
+    mocks.adaptersByPlatform['claude-code'] = new ClaudeCodeAdapter();
+
+    await runSession('migrate', sid, '-s', 'claude-code', '-t', 'tgtplat', '--cwd', '/run/dir', '--json');
+
+    const { error } = envelope();
+    expect(error?.code).toBe('unreadable');
+    expect(error?.message).toContain(sid);
+    expect(process.exitCode).toBe(1);
+  });
+
+  // Cursor and WorkBuddy list a copy only once the sqlite3 CLI registers it, and Windows ships none.
+  it.each(['cursor', 'workbuddy'])('refuses %s as a target on Windows once, before listing anything', async (platform) => {
+    mocks.adaptersByPlatform[platform] = { platform };
+    mocks.os = 'win32';
+
+    await runSession('migrate', 's-1', '-s', 'fakeplat', '-t', platform, '--cwd', '/run/dir', '--json');
+
+    const { error } = envelope();
+    expect(error?.code).toBe('no_adapter');
+    expect(error?.message).toContain(`Writing ${platform} sessions is not supported on Windows`);
+    expect((mocks.adaptersByPlatform['fakeplat'] as ReturnType<typeof fakeAdapter>).listConversations).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+  });
+
   it('names an id prefix that matches several sessions ambiguous_id', async () => {
     fakeAdapter([mkSession({ sessionId: 's-1a' }), mkSession({ sessionId: 's-1b' })], 'fakeplat');
 
@@ -1088,6 +1122,22 @@ describe('session migrate --json', () => {
     const { error } = envelope();
     expect(error?.code).toBe('unsupported_option');
     expect(error?.message).toContain('--all');
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+describe('session migrate on Windows', () => {
+  it.each(['cursor', 'workbuddy'])('refuses %s as a target once, before any preview', async (platform) => {
+    const source = fakeAdapter([mkSession(), mkSession({ sessionId: 's-2' })], 'fakeplat');
+    mocks.adaptersByPlatform[platform] = { platform };
+    mocks.os = 'win32';
+
+    await runSession('migrate', '-s', 'fakeplat', '-t', platform, '--all', '-y', '--cwd', '/run/dir');
+
+    const refusals = errored.filter((line) => line.includes(`Writing ${platform} sessions is not supported on Windows`));
+    expect(refusals).toHaveLength(1);
+    expect(out.join('\n')).not.toContain('Migration Preview');
+    expect(source.listConversations).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
   });
 });
