@@ -4,7 +4,7 @@ function isYamlNode(value: unknown): value is Node {
   return !!value && typeof value === 'object' && 'range' in value;
 }
 import { evaluateExpression, expressionPaths, isTruthy, parseExpression, type Expression, type ExpressionPath } from './expression.js';
-import { findTemplate, parseTemplate, stringsIn, templatePaths } from './template.js';
+import { findTemplate, parseTemplate, stringsIn, templatePaths, templateWithPaths, type Template } from './template.js';
 import type { EndOutcome, OutputSchema, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
 
 const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'inputs', 'ends', 'outputs', 'steps']);
@@ -313,11 +313,12 @@ export function parseWorkflow(file: string, content: string): {
       const withPair = item.items.find((pair) => scalarString(pair.key) === 'with');
       let withValues: Record<string, unknown> | undefined;
       // A step with no action already reports every key it may not carry.
-      if (withPair && actions.length > 0 && !workflowPair) {
-        diagnostics.push(locate(file, lineCounter, withPair.key as Node, `${field}.with`, `${label} with is only allowed on a workflow step`));
-      } else if (withPair && workflowPair) {
+      if (withPair && commandPair) {
+        diagnostics.push(locate(file, lineCounter, withPair.key as Node, `${field}.with`, `${label} with is not allowed on a command step; pass values through env:`));
+      } else if (withPair && actions.length > 0) {
         if (!isMap(withPair.value) || withPair.value.items.length === 0) {
-          diagnostics.push(locate(file, lineCounter, withPair.value ?? withPair.key ?? item, `${field}.with`, `${label} with must map the workflow's inputs to values`));
+          const what = workflowPair ? "the workflow's inputs" : 'names';
+          diagnostics.push(locate(file, lineCounter, withPair.value ?? withPair.key ?? item, `${field}.with`, `${label} with must map ${what} to values`));
         } else {
           withValues = withPair.value.toJSON() as Record<string, unknown>;
         }
@@ -345,6 +346,12 @@ export function parseWorkflow(file: string, content: string): {
               ...locate(file, lineCounter, template.node, template.field, `${label} ${template.what} template ${problem.source}: ${problem.message}`),
               code: 'bad_template',
             });
+          }
+        }
+        // A malformed with is already reported; checking the prompt's reads against it would only add noise.
+        if (parsed.ok && !(template.what === 'prompt' && withPair && !withValues)) {
+          for (const problem of withReadProblems(label, template.what, parsed.template, withValues)) {
+            diagnostics.push({ ...locate(file, lineCounter, template.node, template.field, problem), code: 'bad_template' });
           }
         }
         if (id && TOKEN.test(id) && (needs !== undefined || index === 0) && parsed.ok) {
@@ -723,6 +730,16 @@ function endDiagnostics(
   return diagnostics;
 }
 
+/** `{{ with.<name> }}` reads a value its step's own `with` declares, and only from the step's prompt or prompt_file text. */
+function withReadProblems(label: string, what: string, template: Template, declared: Record<string, unknown> | undefined): string[] {
+  return templateWithPaths(template).flatMap((path) => {
+    const read = `${label} ${what} reads with.${path.fields.join('.')}`;
+    if (what !== 'prompt' && what !== 'prompt_file') return [`${read}; only a prompt reads with`];
+    if (!declared) return [`${read}, but the step has no with`];
+    return Object.hasOwn(declared, path.fields[0] ?? '') ? [] : [`${read}, which is not a name its with declares`];
+  });
+}
+
 /** Diagnostics for the templates in the text a step's `prompt_file` resolved to, placed at its `prompt_file` field. */
 export function promptFileDiagnostics(
   file: string,
@@ -740,9 +757,11 @@ export function promptFileDiagnostics(
       file, ...at, field, message: `step "${step.id}" prompt_file template ${problem.source}: ${problem.message}`, code: 'bad_template',
     }));
   }
+  const withProblems = withReadProblems(`step "${step.id}"`, 'prompt_file', parsed.template, step.with)
+    .map((message): WorkflowDiagnostic => ({ file, ...at, field, message, code: 'bad_template' }));
   const needs = new Map(definition.steps.map((item) => [item.id, item.needs ?? []]));
   const site: ReadSite = { id: step.id, field, at, what: 'prompt_file', paths: templatePaths(parsed.template), code: 'bad_template' };
-  return readDiagnostics(file, [site], readScope(needs, definition.steps, definition.inputs ?? {}));
+  return [...withProblems, ...readDiagnostics(file, [site], readScope(needs, definition.steps, definition.inputs ?? {}))];
 }
 
 function pathIsAbsolute(value: string): boolean {

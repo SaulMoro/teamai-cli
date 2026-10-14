@@ -830,6 +830,74 @@ steps:
     expect(await startRun(config, 'build')).toMatchObject({ error: { code: 'workflow_not_found' } });
   });
 
+  it('reports a with read outside the prompt of a step whose with declares it', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Fix the issue.
+steps:
+  - id: plan
+    prompt: "Plan {{ with.task }}."
+  - id: fix
+    needs: [plan]
+    prompt: "Fix {{ with.task.title }} and {{ with.tsk }}."
+    with:
+      task: "{{ steps.plan.outcome }}"
+      again: "{{ with.task }}"
+  - id: label
+    needs: [plan]
+    command: node label.js
+    env:
+      TASK: "{{ with.task }}"
+  - id: list
+    needs: [plan]
+    prompt: "List {{ with.task }}."
+    with: [1]
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:6: field "steps[0].prompt": step "plan" prompt reads with.task, but the step has no with',
+      'workflows/build.yaml:12: field "steps[1].with.again": step "fix" with.again reads with.task; only a prompt reads with',
+      'workflows/build.yaml:9: field "steps[1].prompt": step "fix" prompt reads with.tsk, which is not a name its with declares',
+      'workflows/build.yaml:17: field "steps[2].env.TASK": step "label" env.TASK reads with.task; only a prompt reads with',
+      'workflows/build.yaml:21: field "steps[3].with": step "list" with must map names to values',
+    ]);
+    expect(result.invalid.map((diagnostic) => diagnostic.code)).toEqual([...Array(4).fill('bad_template'), undefined]);
+  });
+
+  it('reports a with read in prompt_file text of a step with no with and drops the version that sent it as text', async () => {
+    const config = testConfig();
+    fs.mkdirSync(path.join(config.repo.localPath, 'prompts'));
+    const promptFile = path.join(config.repo.localPath, 'prompts', 'review.md');
+    fs.writeFileSync(promptFile, 'Review the issue.');
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Review the issue.
+steps:
+  - id: review
+    prompt_file: prompts/review.md
+`);
+    await syncWorkflowDefinitions(config);
+    // Stand in for the cache an older teamai wrote: it did not know with, so the braces reached the agent as written.
+    const cacheFile = cacheFiles(config).find((file) => file.endsWith(`${path.sep}build.json`));
+    if (!cacheFile) throw new Error('cache missing');
+    const text = 'Review {{ with.task }}.';
+    fs.writeFileSync(cacheFile, fs.readFileSync(cacheFile, 'utf8').replace('Review the issue.', text));
+    fs.writeFileSync(promptFile, text);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:6: field "steps[0].prompt_file": step "review" prompt_file reads with.task, but the step has no with',
+    ]);
+    expect(result.invalid[0]?.code).toBe('bad_template');
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(await startRun(config, 'build')).toMatchObject({ error: { code: 'workflow_not_found' } });
+  });
+
   it('reports an if that reads an input the workflow does not declare', async () => {
     const config = testConfig();
     writeWorkflow(config, 'build', `schemaVersion: v1alpha1
@@ -1007,7 +1075,7 @@ steps:
     const result = await syncWorkflowDefinitions(config);
 
     expect(result.invalid.map(formatDiagnostic)).toEqual([
-      'workflows/build.yaml:7: field "steps[0].with": step "plan" with is only allowed on a workflow step',
+      'workflows/build.yaml:7: field "steps[0].with": step "plan" with is not allowed on a command step; pass values through env:',
       'workflows/build.yaml:11: field "steps[1].workflow": step "check" workflow must be the name of a workflow in workflows/',
       'workflows/build.yaml:15: field "steps[2].agent": agent is only allowed on a prompt or prompt_file step',
       'workflows/build.yaml:16: field "steps[2].output": step "review" output is not allowed on a workflow step; declare outputs in the workflow it runs',

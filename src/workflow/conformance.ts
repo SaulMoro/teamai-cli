@@ -105,6 +105,21 @@ steps:
     command: echo classify
 `;
 
+const PROMPT_WITH = `schemaVersion: v1alpha1
+name: prompt-with
+description: A prompt step reads its with values and keeps GitHub Actions text.
+steps:
+  - id: plan
+    command: echo plan
+    output:
+      task: string
+  - id: fix
+    needs: [plan]
+    prompt: "Fix {{ with.task }}; keep \${{ inputs.version }}."
+    with:
+      task: "{{ steps.plan.outputs.task }}"
+`;
+
 export const workflowConformanceScenarios: ConformanceScenario[] = [
   {
     name: 'two-step command success',
@@ -210,6 +225,16 @@ export const workflowConformanceScenarios: ConformanceScenario[] = [
       { kind: 'next', saveAs: 'ship', expect: { data: { lease: { step: 'ship' } } } },
       { kind: 'report', lease: 'ship', body: { outcome: 'success' }, expect: { data: { step: { status: 'succeeded' } } } },
       { kind: 'next', saveAs: 'done', expect: { data: { done: { outcome: 'succeeded' } } } },
+    ],
+  },
+  {
+    name: 'a prompt step renders its with values',
+    workflowName: 'prompt-with',
+    yaml: PROMPT_WITH,
+    operations: [
+      { kind: 'next', saveAs: 'plan', expect: { data: { lease: { step: 'plan' } } } },
+      { kind: 'report', lease: 'plan', body: { outcome: 'success', outputs: { task: 'the crash' } }, expect: { data: { step: { status: 'succeeded' } } } },
+      { kind: 'next', saveAs: 'fix', expect: { data: { lease: { step: 'fix', prompt: 'Fix the crash; keep ${{ inputs.version }}.' } } } },
     ],
   },
 ];
