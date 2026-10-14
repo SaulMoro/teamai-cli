@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { loadCachedWorkflow, syncWorkflowDefinitions } from '../workflow/cache.js';
+import type { SyncWorkflowResult } from '../workflow/cache.js';
 import { formatDiagnostic } from '../workflow/parse.js';
 import { leaseNext, startRun } from '../workflow/engine.js';
 import { readRun } from '../workflow/store.js';
@@ -1245,6 +1246,18 @@ steps:
   });
 });
 
+/**
+ * Syncs, then starts every workflow the sync cached or kept, so a cache that start cannot run, through a missing
+ * child or a cycle among cached copies, fails the test that wrote it.
+ */
+async function syncAndStart(config: LocalConfig): Promise<SyncWorkflowResult> {
+  const result = await syncWorkflowDefinitions(config);
+  for (const name of [...result.cached, ...result.kept]) {
+    expect(await startRun(config, name), name).not.toMatchObject({ error: { code: expect.stringMatching(/^workflow_(recursion|not_found)$/) } });
+  }
+  return result;
+}
+
 describe('workflow references across files', () => {
   it('reports a step that runs a workflow with no runnable version, and still syncs the others', async () => {
     const config = testConfig();
@@ -1257,7 +1270,7 @@ steps:
 `);
     writeWorkflow(config, 'build', VALID);
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncAndStart(config);
 
     expect(result.invalid.map(formatDiagnostic)).toEqual([
       'workflows/ship.yaml:6: field "steps[0].workflow": step "check" runs workflow "check-issue", which has no runnable version; fix or add workflows/check-issue.yaml',
@@ -1280,7 +1293,7 @@ steps:
     writeWorkflow(config, 'loop', runs('loop', 'self', 'loop'));
     writeWorkflow(config, 'build', VALID);
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncAndStart(config);
 
     expect(result.invalid.map(formatDiagnostic)).toEqual([
       'workflows/check.yaml:6: field "steps[0].workflow": step "again" runs workflow "ship" in a cycle: check -> ship -> check',
@@ -1301,11 +1314,11 @@ steps:
 `;
     writeWorkflow(config, 'ship', runs('ship', 'check'));
     writeWorkflow(config, 'check', VALID.replace(/build/g, 'check'));
-    await syncWorkflowDefinitions(config);
+    await syncAndStart(config);
     writeWorkflow(config, 'check', runs('check', 'gone'));
     writeWorkflow(config, 'build', VALID);
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncAndStart(config);
 
     expect(result.invalid.map(formatDiagnostic)).toEqual([
       'workflows/check.yaml:6: field "steps[0].workflow": step "run" runs workflow "gone", which has no runnable version; fix or add workflows/gone.yaml',
@@ -1314,7 +1327,7 @@ steps:
     expect(result.cached).toEqual(['build', 'ship']);
 
     fs.rmSync(path.join(config.repo.localPath, 'workflows', 'check.yaml'));
-    const second = await syncWorkflowDefinitions(config);
+    const second = await syncAndStart(config);
 
     expect(second.invalid.map(formatDiagnostic)).toEqual([
       'workflows/ship.yaml:6: field "steps[0].workflow": step "run" runs workflow "check", which has no runnable version; fix or add workflows/check.yaml',
@@ -1337,7 +1350,7 @@ steps:
     writeWorkflow(config, 'ship', runs('ship', 'check'));
     writeWorkflow(config, 'check', runs('check', 'gone'));
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncAndStart(config);
 
     expect(result.invalid.map(formatDiagnostic)).toEqual([
       'workflows/check.yaml:6: field "steps[0].workflow": step "run" runs workflow "gone", which has no runnable version; fix or add workflows/gone.yaml',
@@ -1384,7 +1397,7 @@ steps:
       title: Fix it
 `);
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncAndStart(config);
 
     expect(result.invalid.map(formatDiagnostic)).toEqual([
       'workflows/ship.yaml:7: field "steps[0].with": step "check" with does not pass input "title", which workflow "check" declares',
@@ -1430,10 +1443,10 @@ steps:
     needs: [check]
     prompt_file: prompts/ask.md
 `);
-    expect((await syncWorkflowDefinitions(config)).cached).toEqual(['check', 'ship']);
+    expect((await syncAndStart(config)).cached).toEqual(['check', 'ship']);
     writeWorkflow(config, 'check', check('decision'));
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncAndStart(config);
 
     const undeclared = 'reads steps.check.outputs.verdict, which is not an output workflow "check" declares';
     expect(result.invalid.map(formatDiagnostic)).toEqual([
@@ -1472,11 +1485,11 @@ steps:
 `;
     writeWorkflow(config, 'check', check('verdict'));
     writeWorkflow(config, 'ship', ship('Ship the issue.'));
-    expect((await syncWorkflowDefinitions(config)).cached).toEqual(['check', 'ship']);
+    expect((await syncAndStart(config)).cached).toEqual(['check', 'ship']);
     writeWorkflow(config, 'check', check('decision'));
     writeWorkflow(config, 'ship', ship('[not text]'));
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncAndStart(config);
 
     expect(result.cached).toEqual(['check']);
     expect(result.kept).toEqual([]);
@@ -1495,11 +1508,11 @@ steps:
 `;
     writeWorkflow(config, 'a', runs('a', 'b'));
     writeWorkflow(config, 'b', VALID.replace(/build/g, 'b'));
-    expect((await syncWorkflowDefinitions(config)).cached).toEqual(['a', 'b']);
+    expect((await syncAndStart(config)).cached).toEqual(['a', 'b']);
     writeWorkflow(config, 'a', runs('a', 'missing'));
     writeWorkflow(config, 'b', runs('b', 'a'));
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncAndStart(config);
 
     expect(result.invalid.map(formatDiagnostic)).toEqual([
       'workflows/a.yaml:6: field "steps[0].workflow": step "run" runs workflow "missing", which has no runnable version; fix or add workflows/missing.yaml',
@@ -1540,7 +1553,7 @@ steps:
     command: node fix.js
 `);
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncAndStart(config);
 
     expect(result.invalid.map(formatDiagnostic)).toEqual([
       'workflows/ship.yaml:12: field "steps[2].if": step "fix" if compares steps.check.end with \'redy\', which is not an end workflow "check" declares',
@@ -1569,7 +1582,7 @@ steps:
     workflow: inline-a
 `);
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncAndStart(config);
 
     expect(result.invalid.map(formatDiagnostic)).toEqual([
       'workflows/inline-a.yaml:9: field "steps[0].workflow.steps[0].workflow": step "run-b" runs workflow "inline-b" in a cycle: inline-a -> inline-b -> inline-a',
@@ -1611,7 +1624,7 @@ steps:
           command: node note.js
 `);
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncAndStart(config);
 
     expect(result.invalid.map((diagnostic) => [formatDiagnostic(diagnostic), diagnostic.code])).toEqual([
       ['workflows/inline-ship.yaml:12: field "steps[1].workflow.steps[0].if": step "note" if reads steps.check.outputs.verdcit, which is not an output workflow "inline-check" declares', 'undeclared_output'],
@@ -1640,7 +1653,7 @@ steps:
     command: node use.js
 `);
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncAndStart(config);
 
     expect(result.invalid.map((diagnostic) => [formatDiagnostic(diagnostic), diagnostic.code])).toEqual([
       ['workflows/build.yaml:16: field "steps[1].if": step "use" if reads steps.grp.outputs.nope, which is not an output the inline workflow of step "grp" declares', 'undeclared_output'],
@@ -1667,7 +1680,7 @@ steps:
     command: node use.js
 `);
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncAndStart(config);
 
     expect(result.invalid.map((diagnostic) => [formatDiagnostic(diagnostic), diagnostic.code])).toEqual([
       ['workflows/build.yaml:15: field "steps[1].if": step "use" if compares steps.grp.end with \'unknown\', which is not an end the inline workflow of step "grp" declares', 'undeclared_end'],
