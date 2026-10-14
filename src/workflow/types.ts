@@ -67,8 +67,12 @@ export interface WorkflowDiagnostic {
    *   templates existed would now render it as empty text instead of the text it was written as.
    * `dotted_name`: a step id or an `inputs` or `output` field name contains "."; no path can read it, and a
    *   step id would clash with the dotted paths that address steps inside a sub-workflow.
+   * `undeclared_output`: a read of `steps.<id>.outputs.<name>` that the workflow step `<id>` runs does not declare;
+   *   the file may be unchanged while that workflow changed, and the kept copy would read null where it expects a value.
+   * `undeclared_end`: an `if` compares `steps.<id>.end` with a name the workflow step `<id>` runs does not declare in `ends`;
+   *   for the same reason, the kept copy would take a branch that can never match.
    */
-  code?: 'unknown_key' | 'missing_needs' | 'false_if' | 'bad_template' | 'dotted_name';
+  code?: 'unknown_key' | 'missing_needs' | 'false_if' | 'bad_template' | 'dotted_name' | 'undeclared_output' | 'undeclared_end';
 }
 
 /** `running`: a workflow step whose child steps are in the run and not all settled. */

@@ -1218,11 +1218,17 @@ describe('file sub-workflows', () => {
     expect(reported).toMatchObject({ data: { step: { id: 'check.classify', status: 'failed', outcome: 'failed' } } });
   });
 
-  it('refuses to start a workflow that runs itself through its sub-workflows', async () => {
+  it('refuses to start a workflow that runs itself through the version a sub-workflow kept', async () => {
     const fixture = testConfig();
     const workflows = path.join(fixture.config.repo.localPath, 'workflows');
     fs.writeFileSync(path.join(workflows, 'ship.yaml'), workflow('ship', `  - id: check
     workflow: check
+`));
+    fs.writeFileSync(path.join(workflows, 'check.yaml'), CHECK);
+    await syncWorkflowDefinitions(fixture.config);
+    // ship's new revision runs a missing workflow, so ship keeps the version that runs check.
+    fs.writeFileSync(path.join(workflows, 'ship.yaml'), workflow('ship', `  - id: check
+    workflow: gone
 `));
     fs.writeFileSync(path.join(workflows, 'check.yaml'), workflow('check', `  - id: again
     workflow: ship

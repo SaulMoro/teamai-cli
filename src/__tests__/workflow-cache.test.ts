@@ -1085,3 +1085,241 @@ steps:
     ]);
   });
 });
+
+describe('workflow references across files', () => {
+  it('reports a step that runs a workflow with no runnable version, and still syncs the others', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'ship', `schemaVersion: v1alpha1
+name: ship
+description: Ship the issue.
+steps:
+  - id: check
+    workflow: check-issue
+`);
+    writeWorkflow(config, 'build', VALID);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/ship.yaml:6: field "steps[0].workflow": step "check" runs workflow "check-issue", which has no runnable version; fix or add workflows/check-issue.yaml',
+    ]);
+    expect(result.unrunnable).toEqual(['workflows/ship.yaml']);
+    expect(result.cached).toEqual(['build']);
+  });
+
+  it('reports recursion in every file of the cycle', async () => {
+    const config = testConfig();
+    const runs = (name: string, id: string, child: string): string => `schemaVersion: v1alpha1
+name: ${name}
+description: Run ${child}.
+steps:
+  - id: ${id}
+    workflow: ${child}
+`;
+    writeWorkflow(config, 'ship', runs('ship', 'check', 'check'));
+    writeWorkflow(config, 'check', runs('check', 'again', 'ship'));
+    writeWorkflow(config, 'loop', runs('loop', 'self', 'loop'));
+    writeWorkflow(config, 'build', VALID);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/check.yaml:6: field "steps[0].workflow": step "again" runs workflow "ship" in a cycle: check -> ship -> check',
+      'workflows/loop.yaml:6: field "steps[0].workflow": step "self" runs workflow "loop" in a cycle: loop -> loop',
+      'workflows/ship.yaml:6: field "steps[0].workflow": step "check" runs workflow "check" in a cycle: ship -> check -> ship',
+    ]);
+    expect(result.cached).toEqual(['build']);
+  });
+
+  it('keeps the last valid version of a parent whose child loses its runnable version', async () => {
+    const config = testConfig();
+    const runs = (name: string, child: string): string => `schemaVersion: v1alpha1
+name: ${name}
+description: Run ${child}.
+steps:
+  - id: run
+    workflow: ${child}
+`;
+    writeWorkflow(config, 'ship', runs('ship', 'check'));
+    writeWorkflow(config, 'check', VALID.replace(/build/g, 'check'));
+    await syncWorkflowDefinitions(config);
+    writeWorkflow(config, 'check', runs('check', 'gone'));
+    writeWorkflow(config, 'build', VALID);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/check.yaml:6: field "steps[0].workflow": step "run" runs workflow "gone", which has no runnable version; fix or add workflows/gone.yaml',
+    ]);
+    expect(result.kept).toEqual(['check']);
+    expect(result.cached).toEqual(['build', 'ship']);
+
+    fs.rmSync(path.join(config.repo.localPath, 'workflows', 'check.yaml'));
+    const second = await syncWorkflowDefinitions(config);
+
+    expect(second.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/ship.yaml:6: field "steps[0].workflow": step "run" runs workflow "check", which has no runnable version; fix or add workflows/check.yaml',
+    ]);
+    expect(second.kept).toEqual(['ship']);
+    expect(second.cached).toEqual(['build']);
+    expect(await startRun(config, 'ship')).toMatchObject({ error: { code: 'workflow_not_found', message: expect.stringContaining('runs workflow "check"') } });
+  });
+
+  it('reports a parent whose child has no runnable version because of its own references', async () => {
+    const config = testConfig();
+    const runs = (name: string, child: string): string => `schemaVersion: v1alpha1
+name: ${name}
+description: Run ${child}.
+steps:
+  - id: run
+    workflow: ${child}
+`;
+    writeWorkflow(config, 'ship', runs('ship', 'check'));
+    writeWorkflow(config, 'check', runs('check', 'gone'));
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/check.yaml:6: field "steps[0].workflow": step "run" runs workflow "gone", which has no runnable version; fix or add workflows/gone.yaml',
+      'workflows/ship.yaml:6: field "steps[0].workflow": step "run" runs workflow "check", which has no runnable version; fix or add workflows/check.yaml',
+    ]);
+    expect(result.unrunnable).toEqual(['workflows/check.yaml', 'workflows/ship.yaml']);
+  });
+
+  it('reports with keys that do not match the inputs of the workflow a step runs', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'check', `schemaVersion: v1alpha1
+name: check
+description: Classify the issue.
+inputs:
+  issue: number
+  title: string
+steps:
+  - id: classify
+    command: node classify.js
+`);
+    writeWorkflow(config, 'build', VALID);
+    writeWorkflow(config, 'ship', `schemaVersion: v1alpha1
+name: ship
+description: Ship the issue.
+steps:
+  - id: check
+    workflow: check
+    with:
+      issue: 42
+      titel: Fix it
+  - id: bare
+    needs: []
+    workflow: check
+  - id: compile
+    needs: []
+    workflow: build
+    with:
+      issue: 42
+  - id: good
+    needs: []
+    workflow: check
+    with:
+      issue: 42
+      title: Fix it
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/ship.yaml:7: field "steps[0].with": step "check" with does not pass input "title", which workflow "check" declares',
+      'workflows/ship.yaml:9: field "steps[0].with.titel": step "check" with.titel is not an input workflow "check" declares',
+      'workflows/ship.yaml:12: field "steps[1].with": step "bare" with does not pass input "issue", which workflow "check" declares',
+      'workflows/ship.yaml:12: field "steps[1].with": step "bare" with does not pass input "title", which workflow "check" declares',
+      'workflows/ship.yaml:17: field "steps[2].with.issue": step "compile" with.issue is not an input workflow "build" declares',
+    ]);
+    expect(result.cached).toEqual(['build', 'check']);
+  });
+
+  it('reports a read of an output the workflow a step runs does not declare, and drops the parent that read it', async () => {
+    const config = testConfig();
+    fs.mkdirSync(path.join(config.repo.localPath, 'prompts'));
+    fs.writeFileSync(path.join(config.repo.localPath, 'prompts', 'ask.md'), 'Fix {{ steps.check.outputs.verdict }}');
+    const check = (name: string): string => `schemaVersion: v1alpha1
+name: check
+description: Classify the issue.
+outputs:
+  ${name}: steps.classify.outputs.verdict
+steps:
+  - id: classify
+    command: node classify.js
+    output:
+      verdict: fix | drop
+`;
+    writeWorkflow(config, 'check', check('verdict'));
+    writeWorkflow(config, 'ship', `schemaVersion: v1alpha1
+name: ship
+description: Ship the issue.
+outputs:
+  v: steps.check.outputs.verdict
+steps:
+  - id: check
+    workflow: check
+  - id: fix
+    needs: [check]
+    if: steps.check.outputs.verdict == 'fix'
+    command: node fix.js
+    env:
+      V: "{{ steps.check.outputs.verdict }}"
+  - id: ask
+    needs: [check]
+    prompt_file: prompts/ask.md
+`);
+    expect((await syncWorkflowDefinitions(config)).cached).toEqual(['check', 'ship']);
+    writeWorkflow(config, 'check', check('decision'));
+
+    const result = await syncWorkflowDefinitions(config);
+
+    const undeclared = 'reads steps.check.outputs.verdict, which is not an output workflow "check" declares';
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      `workflows/ship.yaml:14: field "steps[1].env.V": step "fix" env.V ${undeclared}`,
+      `workflows/ship.yaml:11: field "steps[1].if": step "fix" if ${undeclared}`,
+      `workflows/ship.yaml:5: field "outputs.v": output "v" ${undeclared}`,
+      `workflows/ship.yaml:17: field "steps[2].prompt_file": step "ask" prompt_file ${undeclared}`,
+    ]);
+    expect(result.unrunnable).toEqual(['workflows/ship.yaml']);
+    expect(await loadCachedWorkflow(config, 'ship')).toBeNull();
+  });
+
+  it('reports an if that compares a sub-workflow end with a name the workflow does not declare in ends', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'check', `schemaVersion: v1alpha1
+name: check
+description: Classify the issue.
+ends:
+  ready: succeeded
+steps:
+  - id: classify
+    command: node classify.js
+    end: ready
+`);
+    writeWorkflow(config, 'build', VALID);
+    writeWorkflow(config, 'ship', `schemaVersion: v1alpha1
+name: ship
+description: Ship the issue.
+steps:
+  - id: check
+    workflow: check
+  - id: compile
+    needs: []
+    workflow: build
+  - id: fix
+    needs: [check, compile]
+    if: steps.check.end == 'redy' || (steps.compile.end != 'done' && 'ready' == steps.check.end)
+    command: node fix.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/ship.yaml:12: field "steps[2].if": step "fix" if compares steps.check.end with \'redy\', which is not an end workflow "check" declares',
+      'workflows/ship.yaml:12: field "steps[2].if": step "fix" if compares steps.compile.end with \'done\', which is not an end workflow "build" declares',
+    ]);
+    expect(result.unrunnable).toEqual(['workflows/ship.yaml']);
+  });
+});
