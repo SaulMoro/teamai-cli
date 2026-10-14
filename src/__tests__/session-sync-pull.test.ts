@@ -90,8 +90,8 @@ class ExitCalled extends Error {
   }
 }
 
-/** Runs `teamai session pull --all` against the team repo checkout. */
-async function sessionPull(teamRepo: string): Promise<{ code: number; stdout: string; stderr: string }> {
+/** Runs `teamai session <args>`. */
+async function session(...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   const stdout: string[] = [];
   const stderr: string[] = [];
   vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => {
@@ -109,7 +109,7 @@ async function sessionPull(teamRepo: string): Promise<{ code: number; stdout: st
     const program = new Command();
     program.option('--dry-run', 'preview');
     registerSessionFlowCommands(program.command('session'));
-    await program.parseAsync(['node', 'teamai', 'session', 'pull', '--all', '--repo-root', teamRepo]);
+    await program.parseAsync(['node', 'teamai', 'session', ...args]);
     code = Number(process.exitCode ?? 0);
   } catch (err) {
     if (!(err instanceof ExitCalled)) throw err;
@@ -364,7 +364,7 @@ describe('session pull', () => {
     const { b } = divergeOnIndex();
     lock.heldBy = path.join(tmp, 'home', '.teamai', 'locks', 'sessions-held.lock');
 
-    const busy = await sessionPull(b);
+    const busy = await session('pull', '--all', '--repo-root', b);
 
     expect(git(b, 'status', '--porcelain')).toContain(`UU ${INDEX}`);
     expect(busy.code).toBe(1);
@@ -372,12 +372,44 @@ describe('session pull', () => {
     expect(busy.stderr).toContain('run `teamai session pull` once it has finished');
 
     lock.heldBy = '';
-    const rerun = await sessionPull(b);
+    const rerun = await session('pull', '--all', '--repo-root', b);
 
     expect(rerun.code).toBe(0);
     expect(rerun.stdout).toContain('Merged remote sessions and rebuilt 1 conflicted session index(es)');
     expect(() => git(b, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toThrow();
     expect(sessionIdsOf(git(b, 'show', `HEAD:${INDEX}`))).toEqual(['a1', 'b1', 's0']);
+  });
+});
+
+describe('session push --all', () => {
+  it('skips an unreadable session, still merges a diverged index and pushes the rest, and exits 1', async () => {
+    useGitConfig();
+    const { b } = divergeOnIndex();
+    const projects = path.join(tmp, 'home', '.claude', 'projects', '-proj-app');
+    fs.mkdirSync(projects, { recursive: true });
+    const record = (text: string) =>
+      JSON.stringify({
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'text', text }] },
+        cwd: '/proj/app',
+        timestamp: '2026-01-02T00:00:00.000Z',
+        uuid: 'u1',
+        parentUuid: null,
+        isSidechain: false,
+      }) + '\n';
+    fs.writeFileSync(path.join(projects, '11111111-1111-4111-8111-111111111111.jsonl'), record('first'));
+    fs.writeFileSync(path.join(projects, '22222222-2222-4222-8222-222222222222.jsonl'), '{"truncated\n');
+    fs.writeFileSync(path.join(projects, '33333333-3333-4333-8333-333333333333.jsonl'), record('third'));
+
+    const pushed = await session('push', '--source', 'claude-code', '--all', '-y', '--repo-root', b);
+
+    expect(pushed.stderr).toContain('Not archived: The claude-code session 22222222-2222-4222-8222-222222222222');
+    expect(pushed.stderr).toContain('1 session(s) could not be read and were not archived.');
+    expect(pushed.stdout).toContain('Pushed 2 session(s) from claude-code');
+    expect(pushed.code).toBe(1);
+    const fresh = clone('fresh');
+    expect(indexedSessionIds(fresh)).toEqual(['a1', 'b1', 's0']);
+    expect(git(fresh, 'log', '-1', '--format=%s', 'HEAD^1')).toBe('sync: push 2 session(s) from claude-code (all workspaces)');
   });
 });
 
