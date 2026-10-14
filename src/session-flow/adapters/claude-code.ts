@@ -358,6 +358,7 @@ export class ClaudeCodeAdapter extends AgentAdapter {
     let createdAt: string | undefined;
     let updatedAt: string | undefined;
     let messageCount = 0;
+    let recordedCwd: string | undefined;
     const userTextCandidates: string[] = [];
     let summaryTitle = '';
 
@@ -379,6 +380,10 @@ export class ClaudeCodeAdapter extends AgentAdapter {
 
         if (rtype === 'user' || rtype === 'assistant') {
           messageCount++;
+          // The directory name decodes only when the path has no '-', '_', '.' or space; the record has the real one.
+          if (recordedCwd === undefined && typeof record.cwd === 'string' && path.isAbsolute(record.cwd)) {
+            recordedCwd = record.cwd;
+          }
           if (rtype === 'user' && userTextCandidates.length < 5) {
             const msg = record.message as Record<string, unknown> | undefined;
             const content = msg?.content;
@@ -420,7 +425,7 @@ export class ClaudeCodeAdapter extends AgentAdapter {
     return {
       sessionId,
       title,
-      cwd,
+      cwd: recordedCwd ?? cwd,
       platform: this.platform,
       createdAt,
       updatedAt,

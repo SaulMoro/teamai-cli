@@ -71,7 +71,6 @@ async function plant(platform: string, cwd: string, text: string, updatedAt: str
 
 beforeEach(() => {
   mocks.writeAs = '';
-  // Claude Code lists a workspace by decoding its project directory name, which fails on a '-'.
   mocks.home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamailist')));
   // Keep Codex's indexing step from starting a real CLI.
   vi.stubEnv('PATH', '');
@@ -104,6 +103,16 @@ describe('AgentSession.list', () => {
       [older, alpha, 'older work'],
     ]);
     expect(listed.sessions[0]).toMatchObject({ platform: 'claude-code', messageCount: 2 });
+  });
+
+  it('lists a Claude Code session under the workspace it ran in, whatever characters its path has', async () => {
+    fs.mkdirSync(path.join(mocks.home, '.claude', 'projects'), { recursive: true });
+    const cwd = workspace('my_app-v2.0 copy');
+    const id = await plant('claude-code', cwd, 'tricky path', '2026-09-24T10:00:05.000Z');
+
+    const listed = await AgentSession.list({ platforms: ['claude-code'] });
+
+    expect(listed.sessions.map((s) => [s.sessionId, s.cwd])).toEqual([[id, cwd]]);
   });
 
   it('lists every installed tool when no tool is named, and nothing for the others', async () => {
