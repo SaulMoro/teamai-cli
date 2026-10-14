@@ -1,9 +1,6 @@
 /**
- * migrate.ts — migration engine.
- *
- * Orchestrates the full flow of source-platform adapter read → IR → target-platform
- * adapter write, and also computes fidelity (FidelityReport) and a migration preview
- * (MigrationPreview).
+ * migrate.ts — what a migration keeps: fidelity (FidelityReport) and the migration
+ * preview (MigrationPreview). The copy itself is `AgentSession.copy` in agent-session.ts.
  *
  * Enhanced fidelity: when a ThinkingBlock is migrated to a platform that does not
  * support thinking blocks, degrade it to a TextBlock instead of dropping it, wrapping
@@ -12,7 +9,6 @@
 
 import type { Session, ContentBlock } from './ir.js';
 import { getAdapter, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
-import { scrubSession } from './scrub.js';
 
 // ---------------------------------------------------------------------------
 // Per-platform capability matrix
@@ -217,7 +213,7 @@ export function degradeThinkingBlocks(session: Session, targetPlatform: string):
 }
 
 // ---------------------------------------------------------------------------
-// MigrationPreview / MigrationResult
+// MigrationPreview
 // ---------------------------------------------------------------------------
 
 export interface MigrationPreview {
@@ -229,25 +225,6 @@ export interface MigrationPreview {
   messageCount: number;
   fidelity: FidelityReport;
   targetSessionId?: string;
-}
-
-export interface MigrationResult {
-  preview: MigrationPreview;
-  success: boolean;
-  targetSessionId?: string;
-  /** Target workspace actually written (default = source session cwd; the explicit --target-cwd value when given). */
-  targetCwd?: string;
-  /** Number of suspected secrets replaced when --scrub is set (absent when not redacted). */
-  redactedCount?: number;
-  targetFilePath?: string;
-  /**
-   * The transcript was written, but the target client may not list it
-   * (Cursor/WorkBuddy registration or Codex indexing failed).
-   */
-  registrationNotice?: string;
-  error?: string;
-  startedAt: string;
-  completedAt?: string;
 }
 
 /** Whether cwd is a writable real absolute path (excludes irreversible placeholders such as md5:<hash>). */
@@ -299,151 +276,6 @@ export class MigrationEngine {
       messageCount: session.messages.length,
       fidelity,
     };
-  }
-
-  async migrate(
-    sessionId: string,
-    projectPath?: string,
-    targetProjectPath?: string,
-    scrub = false,
-  ): Promise<MigrationResult> {
-    const startedAt = new Date().toISOString();
-    let targetSid: string | undefined;
-
-    try {
-      const source = getAdapter(this.sourcePlatform);
-      const target = getAdapter(this.targetPlatform);
-
-      // Target install check: if the client is not installed, the write only lands in a directory
-      // nobody reads, and it used to still report "migration succeeded". Fail early with a clear reason.
-      if (!target.isReady()) {
-        throw new Error(
-          `Target platform "${this.targetPlatform}" is not installed or its storage directory was not found. ` +
-            `Install the client first, or pick another target (available: ${listInstalledPlatforms().join(', ') || 'none'}).`,
-        );
-      }
-
-      const session = await source.readSession(sessionId, projectPath);
-
-      // Redaction happens **before** thinking degradation: with --scrub, the whole IR is passed
-      // through redact so sensitive content does not spread to the target with the session
-      // (or into a later team archive).
-      // Local-to-local migration keeps image filePath: the target can still read that file, and
-      // dropping it would only turn the image into placeholder text (the archive path must drop
-      // it — that path would write the home-directory layout into the team repo).
-      const scrubbed = scrub ? scrubSession(session, { dropImagePaths: false }) : null;
-      const base = scrubbed ? scrubbed.session : session;
-      // Fidelity is taken "after redaction, before degradation": fidelityFromSession counts
-      // exactly the thinking blocks that will be degraded to text. If it runs after degradation,
-      // they are already text — the score is inflated, degradedBlocks warnings disappear, and it
-      // conflicts with the --dry-run preview (which uses the undegraded IR). Blocks dropped by
-      // scrub are already included at this point.
-      const fidelity = fidelityFromSession(base, this.targetPlatform);
-      const enhancedSession = degradeThinkingBlocks(base, this.targetPlatform);
-
-      // Target workspace semantics: **keep the source session's workspace by default**.
-      // Migration means "move thpc's session to Codex/WorkBuddy", not "move it to the directory
-      // I am in now". It is moved only when targetProjectPath (--target-cwd) is set explicitly.
-      const targetCwd = resolveTargetCwd(targetProjectPath, session.cwd, projectPath);
-      targetSid = await target.writeSession(enhancedSession, targetCwd);
-      const registrationNotice = target.consumeWriteNotice?.();
-
-      // Try to locate the target file path
-      let targetFilePath: string | undefined;
-      try {
-        const targetAdapter = getAdapter(this.targetPlatform);
-        // Find the session just written via list
-        const metas = await targetAdapter.listConversations(targetCwd);
-        const found = metas.find((m) => m.sessionId === targetSid);
-        if (found) targetFilePath = found.filePath;
-      } catch {
-        // ignore
-      }
-
-      const completedAt = new Date().toISOString();
-      return {
-        preview: {
-          sourcePlatform: this.sourcePlatform,
-          targetPlatform: this.targetPlatform,
-          sessionId: session.sessionId,
-          sessionTitle: session.title,
-          cwd: session.cwd,
-          messageCount: session.messages.length,
-          fidelity,
-          targetSessionId: targetSid,
-        },
-        success: true,
-        targetSessionId: targetSid,
-        targetCwd,
-        ...(scrubbed ? { redactedCount: scrubbed.redactedCount } : {}),
-        ...(registrationNotice ? { registrationNotice } : {}),
-        targetFilePath,
-        startedAt,
-        completedAt,
-      };
-    } catch (e) {
-      // Automatic rollback
-      if (targetSid) {
-        try {
-          const target = getAdapter(this.targetPlatform);
-          await target.deleteSession(targetSid);
-        } catch {
-          // A failed rollback must not hide the original error
-        }
-      }
-
-      const completedAt = new Date().toISOString();
-      return {
-        preview: {
-          sourcePlatform: this.sourcePlatform,
-          targetPlatform: this.targetPlatform,
-          sessionId,
-          sessionTitle: '',
-          cwd: '',
-          messageCount: 0,
-          fidelity: {
-            score: 0,
-            mode: 'A',
-            totalMessages: 0,
-            totalBlocks: 0,
-            preservedBlocks: 0,
-            degradedBlocks: 0,
-            lostBlocks: 0,
-            losses: [],
-            degradations: [],
-            warnings: [],
-            platformSpecificLosses: [],
-          },
-        },
-        success: false,
-        error: (e as Error).message,
-        startedAt,
-        completedAt,
-      };
-    }
-  }
-
-  async migrateBatch(
-    sessionIds: string[],
-    projectPath?: string,
-    targetProjectPath?: string,
-    scrub = false,
-  ): Promise<MigrationResult[]> {
-    const results: MigrationResult[] = [];
-    for (const sid of sessionIds) {
-      results.push(await this.migrate(sid, projectPath, targetProjectPath, scrub));
-    }
-    return results;
-  }
-
-  async rollback(targetSessionId: string): Promise<boolean> {
-    try {
-      const target = getAdapter(this.targetPlatform);
-      await target.deleteSession(targetSessionId);
-      return true;
-    } catch {
-      return false;
-    }
   }
 }
 

@@ -23,10 +23,11 @@ import readline from 'node:readline';
 import * as path from 'node:path';
 import { getAdapter, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
 import { scrubSession } from './scrub.js';
-import { MigrationEngine } from './migrate.js';
+import { MigrationEngine, resolveTargetCwd } from './migrate.js';
+import { AgentSession, existingCopyId } from './agent-session.js';
 import { SyncManager, getRepoIdentity, getGitAuthor, defaultSyncMeta, withSessionIndexLock } from './sync.js';
 import { SessionSearchEngine, type LoadedSession } from './search.js';
-import { isSafeSessionFileId } from './ids.js';
+import { deriveTargetSessionId, isSafeSessionFileId } from './ids.js';
 import { isInteractive } from '../utils/prompt.js';
 
 // ---------------------------------------------------------------------------
@@ -547,8 +548,10 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
 
       const engine = new MigrationEngine(source, target);
       let migrated = 0;
+      let reused = 0;
       let failed = 0;
-      // Record the target session ID and real fidelity of each successful migration.
+      // Record the target session ID and real fidelity of each successful migration, and of each
+      // copy that already existed (a retried --push archives it).
       // --push then reads those IDs back exactly (not "the N most recent on the target platform",
       // which would push the wrong sessions; see P4/P7).
       const migratedTargets: { sessionId: string; fidelityScore: number; cwd?: string }[] = [];
@@ -587,55 +590,62 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           continue;
         }
 
-        // Target cwd defaults to the current working directory (a real absolute path).
-        // If omitted, writeSession falls back to session.cwd, which may be the encoded
-        // form stored by the source platform (e.g. `-Users-foo-project`) and cannot be restored to a real path.
         // Target workspace default = source session workspace (keep the directory the same);
-        // only an explicit --target-cwd moves the session to another workspace.
-        const result = await engine.migrate(m.sessionId, sourceProjectPath, opts.targetCwd, Boolean(opts.scrub));
-        if (result.success) {
+        // only an explicit --target-cwd moves the session to another workspace. An encoded or
+        // placeholder source cwd (e.g. `-Users-foo-project`) falls back to --cwd, and copy
+        // refuses anything that is still not an existing absolute directory.
+        const targetCwd = resolveTargetCwd(opts.targetCwd, preview.cwd, sourceProjectPath) ?? preview.cwd;
+        const result = await AgentSession.copy({
+          from: { platform: source, sessionId: m.sessionId, cwd: sourceProjectPath },
+          to: { platform: target, cwd: targetCwd },
+          scrub: Boolean(opts.scrub),
+        });
+        if (result.status === 'failed') {
+          console.error(`\n  ✗ Migration failed: ${result.failure.message}`);
+          failed++;
+          continue;
+        }
+        if (result.reused) {
+          // Never overwritten: the member may have kept talking in the copy.
+          console.log(`\n  ✓ Session already migrated as ${result.sessionId}, nothing written.`);
+          console.log(`  Target CWD: ${result.cwd}`);
+          console.log(
+            `  To refresh it, delete that copy and migrate again: teamai session rollback ${result.sessionId} --platform ${target} --cwd "${result.cwd}"`,
+          );
+          reused++;
+        } else {
           console.log(`\n  ✓ Migration successful`);
-          console.log(`  Target session ID: ${result.targetSessionId}`);
-          if (result.targetCwd) console.log(`  Target CWD: ${result.targetCwd}`);
+          console.log(`  Target session ID: ${result.sessionId}`);
+          console.log(`  Target CWD: ${result.cwd}`);
           if (opts.scrub) {
             console.log(
               `  Redacted: ${result.redactedCount ?? 0} secret-looking value(s) (best-effort; review before archiving)`,
             );
           }
-          if (result.targetFilePath) {
-            console.log(`  Target file: ${result.targetFilePath}`);
+          if (result.filePath) {
+            console.log(`  Target file: ${result.filePath}`);
           }
-          if (result.registrationNotice) {
-            console.error(`  ⚠ ${result.registrationNotice}`);
+          if (result.notice) {
+            console.error(`  ⚠ ${result.notice}`);
           }
-          console.log(`  Fidelity: ${(result.preview.fidelity.score * 100).toFixed(1)}%`);
+          console.log(`  Fidelity: ${(result.fidelity.score * 100).toFixed(1)}%`);
           migrated++;
-          if (result.targetSessionId) {
-            migratedTargets.push({
-              sessionId: result.targetSessionId,
-              fidelityScore: result.preview.fidelity.score,
-              cwd: result.targetCwd,
-            });
-          }
-        } else {
-          console.error(`\n  ✗ Migration failed: ${result.error}`);
-          failed++;
         }
+        migratedTargets.push({ sessionId: result.sessionId, fidelityScore: result.fidelity.score, cwd: result.cwd });
       }
-
       // Scripted semantics: any single failure exits non-zero (--all batch does not stop the remaining sessions).
       if (failed > 0 && !isDryRun()) {
         process.exitCode = 1;
       }
 
       // --push: push to the team repo
-      if (opts.push && migrated > 0) {
-        const consent = await confirmUnredactedArchive(migrated, `${source} → ${target}`, {
+      if (opts.push && migratedTargets.length > 0) {
+        const consent = await confirmUnredactedArchive(migratedTargets.length, `${source} → ${target}`, {
           scrub: Boolean(opts.scrub),
           yes: Boolean(opts.yes),
         });
         if (consent !== 'ok') {
-          console.error(`\n  ${migrated} session(s) migrated locally, not archived.`);
+          console.error(`\n  ${migratedTargets.length} session(s) migrated locally, not archived.`);
           if (consent === 'refused') {
             console.error('Pass --scrub to redact the archive, or -y to archive as-is.');
             process.exitCode = 1;
@@ -716,7 +726,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       console.log(
         isDryRun()
           ? `\n  ${targets.length} session(s) would be migrated (--dry-run, no changes made).\n`
-          : `\n  ${migrated} session(s) migrated.\n`,
+          : `\n  ${migrated} session(s) migrated${reused > 0 ? `, ${reused} already migrated` : ''}.\n`,
       );
       } catch (err) {
         // Interactive cancel (promptSelect throws 'Selection cancelled'; on EOF, ask returns an empty string
@@ -1027,6 +1037,33 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         console.log(
           `Dry-run: would restore "${safeText(session.title)}" (${session.messages.length} msgs) into ${opts.platform} at ${resumeCwd}.`,
         );
+        return;
+      }
+
+      // Never overwrite: a member may have kept talking in an earlier restore of this session.
+      let targetId: string;
+      try {
+        targetId = deriveTargetSessionId({
+          targetPlatform: opts.platform,
+          targetCwd: resumeCwd,
+          sourceSessionId: session.sessionId,
+        });
+      } catch (e) {
+        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        process.exitCode = 1;
+        return;
+      }
+      const restoredId = await existingCopyId(resumeAdapter, {
+        targetId,
+        cwd: resumeCwd,
+        sourcePlatform: session.platform,
+        targetPlatform: opts.platform,
+        sourceSessionId: session.sessionId,
+      });
+      if (restoredId) {
+        console.log(`\n  ✓ Session already restored as ${restoredId}, nothing written.`);
+        console.log(`  CWD: ${resumeCwd}`);
+        console.log(`\n  To continue: ${opts.platform} --resume ${restoredId}\n`);
         return;
       }
 

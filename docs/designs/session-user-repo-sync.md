@@ -121,8 +121,8 @@ regression suite):
   the target workspace and the source id, and the source id is never reused. A
   cross-platform chain therefore accumulates one archive per platform, and the session id
   you resume with is always the target's. Copies made by an older TeamAI kept a source UUID,
-  or (claude-code, codebuddy) left the workspace out of the hash, so re-migrating one of them
-  writes a second copy next to it.
+  or (claude-code, codebuddy) left the workspace out of the hash. A re-migration also looks
+  for those ids in the target workspace, and reports a copy it finds there as reused.
 - **claude-code flattenDag** drops sidechain branches and can promote orphan nodes early;
   fork branches interleave into the main timeline.
 - **cursor has no stored title** — the title is derived from the first real user text;

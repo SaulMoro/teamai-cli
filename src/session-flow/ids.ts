@@ -14,7 +14,8 @@
  *
  * The same request (platform, workspace, source) always names the same target.
  * Copies written by an older TeamAI kept the source UUID, or (Claude Code and
- * CodeBuddy) left the workspace out of the hash, so they carry other ids.
+ * CodeBuddy) left the workspace out of the hash, so they carry other ids;
+ * `legacyTargetSessionIds` names them so a re-copy finds them.
  */
 
 import * as crypto from 'node:crypto';
@@ -41,10 +42,37 @@ export function deriveTargetSessionId(target: {
         'Pass an absolute directory (--target-cwd for `session migrate`, --cwd for `session resume`).',
     );
   }
-  const hex = crypto
-    .createHash('sha256')
-    .update(`teamai:${targetPlatform}:${canonicalWorkspace(targetCwd)}:${sourceSessionId}`)
-    .digest('hex');
+  return uuidV7Shaped(`teamai:${targetPlatform}:${canonicalWorkspace(targetCwd)}:${sourceSessionId}`);
+}
+
+/** Platforms whose copies an older TeamAI derived without the workspace: per-project stores. */
+const DERIVED_WITHOUT_WORKSPACE = new Set(['claude-code', 'claude-internal', 'tclaude', 'codebuddy']);
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Ids an older TeamAI wrote a copy of this source under, in the target workspace:
+ *
+ * - the source id itself, when it is a UUID and the target is another platform;
+ * - for Claude Code and CodeBuddy, the id derived without the workspace.
+ *
+ * Workspace-keyed stores (Codex, Cursor, WorkBuddy, CodeBuddy IDE) already
+ * hashed the workspace the way `deriveTargetSessionId` does for a correctly
+ * spelled path, so their derived id is the same.
+ */
+export function legacyTargetSessionIds(target: {
+  sourcePlatform: string;
+  targetPlatform: string;
+  sourceSessionId: string;
+}): string[] {
+  const { sourcePlatform, targetPlatform, sourceSessionId } = target;
+  const ids: string[] = [];
+  if (sourcePlatform !== targetPlatform && UUID_RE.test(sourceSessionId)) ids.push(sourceSessionId);
+  if (DERIVED_WITHOUT_WORKSPACE.has(targetPlatform)) ids.push(uuidV7Shaped(`teamai:${targetPlatform}:${sourceSessionId}`));
+  return ids;
+}
+
+function uuidV7Shaped(key: string): string {
+  const hex = crypto.createHash('sha256').update(key).digest('hex');
   const variant = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
   // Version nibble 7 keeps the UUIDv7 shape Codex expects of a thread id. The
   // time bits are hash, not a timestamp: sorting comes from session timestamps.

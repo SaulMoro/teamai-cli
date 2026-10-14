@@ -476,6 +476,10 @@ export class CodeBuddyAdapter extends AgentAdapter {
     return blocks;
   }
 
+  async existingSessionId(sessionId: string, projectPath?: string): Promise<string | undefined> {
+    return this.findSessionFile(sessionId, projectPath) ? sessionId : undefined;
+  }
+
   async writeSession(session: Session, projectPath?: string): Promise<string> {
     const cwd = projectPath ?? session.cwd;
     const sessionId = deriveTargetSessionId({

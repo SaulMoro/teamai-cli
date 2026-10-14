@@ -602,6 +602,22 @@ export class CodexAdapter extends AgentAdapter {
     return blocks;
   }
 
+  /**
+   * Every rollout counts, archived ones included: the file path comes from the session's
+   * creation time and the local timezone, so one id can sit in a file other than the one a
+   * write would compute. Matches the whole id, never a suffix.
+   */
+  async existingSessionId(sessionId: string, projectPath?: string): Promise<string | undefined> {
+    const archived = path.join(path.dirname(this.storageRoot), 'archived_sessions');
+    for (const f of [...this.scanJsonlFiles(), ...scanFiles(archived, /\.jsonl$/)]) {
+      const base = path.basename(f, '.jsonl');
+      if (base !== sessionId && !base.endsWith(`-${sessionId}`)) continue;
+      if (projectPath && !this.rolloutMatchesCwd(f, projectPath)) continue;
+      return sessionId;
+    }
+    return undefined;
+  }
+
   async writeSession(session: Session, projectPath?: string): Promise<string> {
     const cwd = projectPath ?? session.cwd;
     const sessionId = deriveTargetSessionId({

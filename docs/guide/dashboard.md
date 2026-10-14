@@ -61,4 +61,6 @@ teamai session search <query>
 teamai session resume <name> --platform claude-code
 ```
 
+A migration never overwrites. If the target workspace already has a copy of the session, from this TeamAI or an older one, `migrate` prints `already migrated as <id>` and writes nothing, so turns you added to the copy stay. To refresh a copy, delete it with `session rollback <id> --platform <tool> --cwd <workspace>` and migrate again. `session resume` follows the same rule: a session already restored into that workspace prints `already restored as <id>` and is left as it is.
+
 `--dry-run` previews. `--scrub` redacts before an archive; without it, an interactive run asks and a script needs `-y`. `--all` confirms above 10 sessions (push: 5). Archives go to `sessions/repos/<repo>/<author>/` under the session's own git remote, or `_unattributed`.

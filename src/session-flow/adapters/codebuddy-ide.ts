@@ -385,6 +385,15 @@ export class CodeBuddyIdeAdapter extends AgentAdapter {
     return { type: 'tool_result', callId, content, isError };
   }
 
+  /** Returns the 32-hex conversation id, the form `writeSession` returns. */
+  async existingSessionId(sessionId: string, projectPath?: string): Promise<string | undefined> {
+    const convId = toConvId(sessionId);
+    const found = projectPath
+      ? findIdeHistoryDirs(projectPath, false).some((historyDir) => fs.existsSync(path.join(historyDir, convId)))
+      : findIdeConversationDirs(convId).length > 0;
+    return found ? convId : undefined;
+  }
+
   async writeSession(session: Session, projectPath?: string): Promise<string> {
     const cwd = projectPath ?? session.cwd;
 

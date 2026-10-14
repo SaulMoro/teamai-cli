@@ -47,6 +47,15 @@ export abstract class AgentAdapter {
   /** Read one session and return a normalized IR Session. */
   abstract readSession(sessionId: string, projectPath?: string): Promise<Session>;
 
+  /**
+   * The id this platform stores `sessionId` under, when anything with that id exists, or undefined.
+   *
+   * A lookup by id across all of the platform's storage, not a computed path, and without parsing:
+   * a copy the client is writing at that moment, or one that no longer parses, still exists.
+   * With `projectPath`, only that workspace counts, the same scope `deleteSession` uses.
+   */
+  abstract existingSessionId(sessionId: string, projectPath?: string): Promise<string | undefined>;
+
   /** Write a normalized IR Session to the target platform and return the written session ID. */
   abstract writeSession(session: Session, projectPath?: string): Promise<string>;
 

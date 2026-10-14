@@ -6,6 +6,7 @@
  * writes JSONL as a stream.
  */
 
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { homedir } from 'node:os';
@@ -186,8 +187,10 @@ export function* readJsonlHead(filePath: string, maxLines: number): Generator<Re
 }
 
 /**
- * Stream-write a JSONL file, one object per line.
- * Parent directories are created automatically.
+ * Write a JSONL file, one object per line. Parent directories are created automatically.
+ *
+ * The lines go to a temp file beside the target, renamed into place, so a crash or a full disk
+ * never leaves a truncated transcript a tool would read as the session.
  */
 export function writeJsonl(filePath: string, records: Iterable<Record<string, unknown>>): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -195,7 +198,14 @@ export function writeJsonl(filePath: string, records: Iterable<Record<string, un
   for (const record of records) {
     lines.push(JSON.stringify(record));
   }
-  fs.writeFileSync(filePath, lines.join('\n') + '\n', 'utf-8');
+  const tmpPath = `${filePath}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  try {
+    fs.writeFileSync(tmpPath, lines.join('\n') + '\n', { encoding: 'utf-8', flag: 'wx' });
+    fs.renameSync(tmpPath, filePath);
+  } catch (error) {
+    fs.rmSync(tmpPath, { force: true });
+    throw error;
+  }
 }
 
 // ---------------------------------------------------------------------------

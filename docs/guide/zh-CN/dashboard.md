@@ -61,4 +61,6 @@ teamai session search <query>
 teamai session resume <name> --platform claude-code
 ```
 
+迁移从不覆盖。目标工作区里已有这个会话的副本时（不论是当前还是旧版 TeamAI 写的），`migrate` 输出 `already migrated as <id>`，不写任何东西，你在副本里新加的对话都会保留。要刷新副本，先用 `session rollback <id> --platform <工具> --cwd <工作区>` 删掉它，再迁移一次。`session resume` 遵循同一规则：已恢复到该工作区的会话会输出 `already restored as <id>`，保持原样。
+
 `--dry-run` 只预览。`--scrub` 先脱敏再归档；不加时，交互运行会询问，脚本需要 `-y`。`--all` 超过 10 条要确认（push 为 5 条）。归档在 `sessions/repos/<repo>/<author>/`，按会话自己的 git remote；否则归入 `_unattributed`。
