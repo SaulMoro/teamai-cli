@@ -316,6 +316,18 @@ export type GitCommitResult =
   | { status: 'no-changes' }
   | { status: 'failed'; reason: string };
 
+/** The outcomes of `gitPull`. `stopped` merged nothing, so the checkout is as it was before the pull. */
+export type PullResult =
+  | { status: 'pulled' }
+  | { status: 'indexes-rebuilt'; indexes: string[] }
+  | { status: 'stopped'; reason: string };
+
+function isSessionIndexPath(relPath: string): boolean {
+  const parts = relPath.split('/');
+  if (parts[0] !== 'sessions' || !isIndexFileName(parts[parts.length - 1])) return false;
+  return (parts.length === 3 && parts[1] === '_unattributed') || (parts.length === 4 && parts[1] === 'repos');
+}
+
 // ---------------------------------------------------------------------------
 // SyncManager
 // ---------------------------------------------------------------------------
@@ -1049,6 +1061,8 @@ export class SyncManager {
         encoding: 'utf-8',
         timeout: 30_000,
         stdio: ['pipe', 'pipe', 'pipe'],
+        // Untranslated, so the CLI's English output can quote git's reason.
+        env: { ...process.env, LANGUAGE: 'en' },
       }).trim();
     } catch (e) {
       if (check) throw e;
@@ -1093,15 +1107,126 @@ export class SyncManager {
     }
     // Errors must reach the caller: swallowing them here let `push` print
     // "✓ Pushed" after a rejected or unreachable remote.
+    try {
+      this.runGit(['push', remote, ref]);
+      return;
+    } catch (err) {
+      if (!this.isBehindRemote(remote, ref)) throw err;
+    }
+    const pulled = this.gitPull(remote, ref);
+    if (pulled.status === 'stopped') throw new Error(pulled.reason);
     this.runGit(['push', remote, ref]);
   }
 
-  gitPull(remote = 'origin', branch?: string): void {
+  /** Asked of git: a push fails for many reasons, and a pull fixes only this one. */
+  private isBehindRemote(remote: string, ref: string): boolean {
+    try {
+      this.runGit(['fetch', remote, ref]);
+    } catch {
+      return false;
+    }
+    try {
+      this.runGit(['merge-base', '--is-ancestor', 'FETCH_HEAD', 'HEAD']);
+      return false;
+    } catch {
+      return true;
+    }
+  }
+
+  /**
+   * Pull and merge. Two machines that archive sessions for the same repo both append to its `_index.json`,
+   * so their pulls conflict there. The index is derived from the session files, so those conflicts are
+   * resolved by a rebuild. A conflict in any other file aborts the merge and is returned to the caller.
+   */
+  gitPull(remote = 'origin', branch?: string): PullResult {
+    if (this.gitPathExists('rebase-merge') || this.gitPathExists('rebase-apply')) {
+      return { status: 'stopped', reason: `A rebase is in progress in ${this.repoRoot}. Run \`git rebase --abort\` there, then retry.` };
+    }
+    const unmerged = this.unmergedPaths();
+    // An older teamai or a manual `git pull` can leave the checkout mid-merge on an index conflict; finish that merge the same way.
+    if (this.gitPathExists('MERGE_HEAD')) {
+      if (unmerged.length === 0) {
+        return {
+          status: 'stopped',
+          reason: `A merge is in progress in ${this.repoRoot}. Run \`git commit\` or \`git merge --abort\` there, then retry.`,
+        };
+      }
+      const others = unmerged.filter((f) => !isSessionIndexPath(f));
+      if (others.length > 0) {
+        // Without an index left to rebuild, teamai has nothing to finish once the user adds the files.
+        const next =
+          others.length < unmerged.length
+            ? 'Resolve and `git add` them, or run `git merge --abort`, then run `teamai session pull`'
+            : 'Resolve and `git add` them and run `git commit`, or run `git merge --abort`, then retry';
+        return { status: 'stopped', reason: `A merge is in progress in ${this.repoRoot} with conflicts in ${others.join(', ')}. ${next}.` };
+      }
+      return this.commitRebuiltIndexes(unmerged);
+    }
+    if (unmerged.length > 0) {
+      return {
+        status: 'stopped',
+        reason: `Unmerged files in ${this.repoRoot} block the pull: ${unmerged.join(', ')}. Finish or abort the git operation that left them, then retry.`,
+      };
+    }
     const ref = branch?.trim() || this.runGit(['rev-parse', '--abbrev-ref', 'HEAD']);
     if (!ref || ref === 'HEAD') {
       throw new Error('Refusing to pull without an explicit branch refspec.');
     }
-    this.runGit(['pull', remote, ref]);
+    // Explicit flags: with pull.rebase unset git refuses any divergence, with it set a conflict stops
+    // mid-rebase on a detached HEAD, and an autostash reapplied after the merge commit can conflict unseen.
+    // The autostash is turned off through config (both keys) because `git pull --no-autostash` needs git 2.27.
+    try {
+      this.runGit(['-c', 'merge.autostash=false', '-c', 'pull.autostash=false', 'pull', '--no-rebase', '--ff', '--no-edit', remote, ref]);
+      return { status: 'pulled' };
+    } catch (err) {
+      const files = this.unmergedPaths();
+      if (files.length === 0) throw err;
+      const others = files.filter((f) => !isSessionIndexPath(f));
+      if (others.length === 0) return this.commitRebuiltIndexes(files);
+      this.runGit(['merge', '--abort']);
+      const next =
+        others.length < files.length
+          ? 'then run `teamai session pull` to rebuild the session indexes and finish the merge'
+          : 'run `git commit`, then retry';
+      return {
+        status: 'stopped',
+        reason: `Pull stopped on conflicts in ${others.join(', ')} and was aborted. Run \`git pull --no-rebase\` in ${this.repoRoot}, resolve and \`git add\` those files, ${next}.`,
+      };
+    }
+  }
+
+  private commitRebuiltIndexes(indexes: string[]): Extract<PullResult, { status: 'indexes-rebuilt' }> {
+    for (const index of indexes) {
+      this.rebuildIndex(this.conflictedIndexIdentity(index), path.join(this.repoRoot, path.dirname(index)));
+      this.runGit(['add', '--', index]);
+    }
+    this.runGit(['commit', '--no-edit']);
+    return { status: 'indexes-rebuilt', indexes };
+  }
+
+  /** The identity either side recorded; a legacy `_`-folded directory name cannot be decoded back to it. */
+  private conflictedIndexIdentity(index: string): string | null {
+    for (const stage of [2, 3]) {
+      try {
+        return (JSON.parse(this.runGit(['show', `:${stage}:./${index}`])) as RepoIndex).repoIdentity;
+      } catch {
+        // that side deleted the index or left it unparsable
+      }
+    }
+    const parts = index.split('/');
+    return parts[1] === '_unattributed' ? null : decodeLegacyRepoDirName(parts[2]);
+  }
+
+  private gitPathExists(name: string): boolean {
+    return fs.existsSync(path.resolve(this.repoRoot, this.runGit(['rev-parse', '--git-path', name])));
+  }
+
+  /** Unmerged paths relative to repoRoot (git reports them from the top of the work tree). */
+  private unmergedPaths(): string[] {
+    const files = this.runGit(['diff', '--name-only', '-z', '--diff-filter=U']).split('\0').filter(Boolean);
+    if (files.length === 0) return [];
+    const prefix = this.runGit(['rev-parse', '--show-prefix']);
+    return files.map((f) => (f.startsWith(prefix) ? f.slice(prefix.length) : path.posix.relative(prefix, f)));
   }
 
   getSyncStatus(): { uncommitted: number; ahead: number; behind: number } {

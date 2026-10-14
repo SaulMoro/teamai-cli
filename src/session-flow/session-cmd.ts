@@ -305,16 +305,18 @@ function pushToRemote(syncMgr: SyncManager): boolean {
     syncMgr.gitPush();
     return true;
   } catch (err) {
-    // The first line "Command failed: git push origin" carries no information;
-    // git's fatal line is the actual reason
-    const msg = err instanceof Error ? err.message : String(err);
-    const fatal = msg.split('\n').find((l) => /^(fatal|error):/i.test(l.trim()));
-    const reason = safeText(fatal?.trim() ?? msg.split('\n')[0]);
     // The local commit is kept, so nothing is lost -- but this is still a
     // failure and must not be printed as "✓ Pushed".
-    console.error(`  ✗ Remote push failed (local commit kept): ${reason}`);
+    console.error(`  ✗ Remote push failed (local commit kept): ${gitFailureReason(err)}`);
     return false;
   }
+}
+
+/** The first line ("Command failed: git ...") only repeats the command; git's fatal/error line is the actual reason. */
+function gitFailureReason(err: unknown): string {
+  const msg = err instanceof Error ? err.message : String(err);
+  const fatal = msg.split('\n').find((l) => /^(fatal|error):/i.test(l.trim()));
+  return safeText(fatal?.trim() ?? msg.split('\n')[0]);
 }
 
 /**
@@ -327,8 +329,7 @@ function runGitStep<T>(step: () => T, repoRoot: string, what: string): T {
   try {
     return step();
   } catch (err) {
-    const reason = err instanceof Error ? err.message.split('\n')[0] : String(err);
-    console.error(`Error: ${what} failed in ${repoRoot}: ${reason}`);
+    console.error(`Error: ${what} failed in ${repoRoot}: ${gitFailureReason(err)}`);
     console.error(`Check that ${repoRoot} is a git repository with a configured remote, then retry.`);
     process.exit(1);
   }
@@ -1098,10 +1099,14 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         return;
       }
       // [fixed] a gitPull failure (no remote / repoRoot does not exist) used to crash with a raw stack trace
-      runGitStep(() => {
-        syncMgr.gitPull();
-        return null;
-      }, repoRoot, 'git pull');
+      const pulled = runGitStep(() => syncMgr.gitPull(), repoRoot, 'git pull');
+      if (pulled.status === 'stopped') {
+        console.error(`Error: ${pulled.reason}`);
+        process.exit(1);
+      }
+      if (pulled.status === 'indexes-rebuilt') {
+        console.log(`  ✓ Merged remote sessions and rebuilt ${pulled.indexes.length} conflicted session index(es)`);
+      }
       if (opts.all) {
         // P2: rebuild by directory (including repos whose index is missing or corrupt — those are exactly the ones that most need repair),
         // rather than only rebuilding the ones whose identity can be recovered from _index.json.
