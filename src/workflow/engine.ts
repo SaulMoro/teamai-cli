@@ -14,6 +14,7 @@ import type {
   TokenUsage,
   WorkflowEnvelope,
   WorkflowFailure,
+  WorkflowStep,
 } from './types.js';
 
 const LOCK_ATTEMPTS = 40;
@@ -102,10 +103,20 @@ function leasePayload(run: RunState, step: StepState): Record<string, unknown> {
  * Ends the run. Every path that settles a run goes through here, so anything that reacts to a settled run hooks in here.
  * Returns a copy of the settled run for the end record, which publishes after the run lock is released (#1126).
  */
-function settleRun(run: RunState, outcome: Exclude<RunStatus, 'running'>): RunState {
+function settleRun(run: RunState, outcome: Exclude<RunStatus, 'running'>, end?: string): RunState {
   run.status = outcome;
+  if (end !== undefined) run.end = end;
   run.updatedAt = new Date().toISOString();
   return { ...run, steps: run.steps.map((step) => ({ ...step })) };
+}
+
+function doneEnvelope(run: RunState): WorkflowEnvelope {
+  return ok({ done: { run: run.id, outcome: run.status, ...(run.end !== undefined ? { end: run.end } : {}) } });
+}
+
+/** A step with `end` and no action only ends the workflow; the engine settles it without a lease. */
+function endsOnly(step: WorkflowStep | undefined): boolean {
+  return step?.end !== undefined && step.command === undefined && step.prompt === undefined;
 }
 
 /** A step that ran and did not succeed. Later issues add `timeout` and `cancelled`. */
@@ -179,7 +190,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       // Settled by an earlier next, which published the end record; the
       // done envelope still reports the queue-derived record state.
       alreadySettled = true;
-      return { save: false, envelope: ok({ done: { run: run.id, outcome: run.status } }) };
+      return { save: false, envelope: doneEnvelope(run) };
     }
     const leased = run.steps.find((step) => step.status === 'leased');
     if (leased?.lease) {
@@ -190,15 +201,26 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     }
     // Settle the graph here, while no lease is open, so a later report still matches its lease revision.
     const needs = skipUnreachable(run);
-    const step = run.steps.find((item) => item.status === 'pending'
-      && needs(item).every((need) => need?.status === 'succeeded' || need?.status === 'skipped'));
+    const ready = (item: StepState): boolean => item.status === 'pending'
+      && needs(item).every((need) => need?.status === 'succeeded' || need?.status === 'skipped');
+    const defined = new Map(run.definition.steps.map((item) => [item.id, item]));
+    const ending = run.steps.find((item) => ready(item) && endsOnly(defined.get(item.id)));
+    if (ending) ending.status = 'succeeded';
+    const reached = run.steps.find((item) => item.status === 'succeeded' && defined.get(item.id)?.end !== undefined);
+    const end = reached ? defined.get(reached.id)?.end : undefined;
+    if (end !== undefined) {
+      for (const item of run.steps) if (item.status === 'pending') item.status = 'skipped';
+      settledRun = settleRun(run, run.definition.ends?.[end] ?? 'failed', end);
+      return { save: true, envelope: doneEnvelope(run) };
+    }
+    const step = run.steps.find(ready);
     if (!step) {
       if (run.steps.some((item) => item.status === 'pending')) {
         return { save: false, envelope: error('run_unreadable', `Run ${run.id} has pending steps whose needs cannot be met`) };
       }
       const outcome = run.steps.some(stopped) ? 'failed' : 'succeeded';
       settledRun = settleRun(run, outcome);
-      return { save: true, envelope: ok({ done: { run: run.id, outcome } }) };
+      return { save: true, envelope: doneEnvelope(run) };
     }
     const attempt = `a${randomBytes(4).toString('hex')}`;
     step.status = 'leased';

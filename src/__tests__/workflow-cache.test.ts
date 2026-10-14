@@ -426,4 +426,165 @@ ${steps}
       'steps[1].prompt: prompt must be a non-empty string',
     ]);
   });
+
+  it('reports an end that is not declared in ends', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Stop early.
+ends:
+  dropped: succeeded
+steps:
+  - id: compile
+    command: node compile.js
+    end: dropped
+  - id: stop
+    needs: []
+    end: droped
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:12: field "steps[1].end": step "stop" ends with "droped", which is not declared in ends',
+    ]);
+  });
+
+  it('reports an end in a workflow that declares no ends', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Stop early.
+steps:
+  - id: compile
+    command: node compile.js
+  - id: stop
+    needs: [compile]
+    end: dropped
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:9: field "steps[1].end": step "stop" ends with "dropped", but the workflow declares no ends',
+    ]);
+  });
+
+  it('reports a declared end that no step reaches', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Stop early.
+ends:
+  dropped: succeeded
+  stuck: failed
+steps:
+  - id: compile
+    command: node compile.js
+  - id: stop
+    needs: [compile]
+    end: dropped
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:6: field "ends.stuck": end "stuck" is declared in ends, but no step ends with it',
+    ]);
+  });
+
+  it('reports a step that needs a step that only ends the workflow', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Stop early.
+ends:
+  dropped: succeeded
+steps:
+  - id: compile
+    command: node compile.js
+  - id: stop
+    needs: [compile]
+    end: dropped
+  - id: test
+    needs: [compile, stop]
+    command: node test.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:13: field "steps[2].needs": step "test" needs "stop", which only ends the workflow, so "test" can never run',
+    ]);
+  });
+
+  it('reports output on a step that only ends the workflow', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Stop early.
+ends:
+  dropped: succeeded
+steps:
+  - id: stop
+    end: dropped
+    output: string
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:9: field "steps[0].output": step "stop" has no action, so it carries only id, needs, if, and end',
+    ]);
+  });
+
+  it('reports an end whose outcome is not succeeded or failed', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Stop early.
+ends:
+  dropped: done
+steps:
+  - id: stop
+    end: dropped
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:5: field "ends.dropped": ends must map each end name to succeeded or failed',
+    ]);
+  });
+
+  it('keeps the last valid version when a revision ends with an undeclared end', async () => {
+    const config = testConfig();
+    const valid = `schemaVersion: v1alpha1
+name: build
+description: Stop early.
+ends:
+  dropped: succeeded
+steps:
+  - id: compile
+    command: node compile.js
+  - id: stop
+    needs: [compile]
+    end: dropped
+`;
+    writeWorkflow(config, 'build', valid);
+    await syncWorkflowDefinitions(config);
+    writeWorkflow(config, 'build', valid.replace('end: dropped', 'end: droped'));
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.kept).toEqual(['build']);
+    expect(await loadCachedWorkflow(config, 'build')).toMatchObject({
+      definition: { ends: { dropped: 'succeeded' }, steps: [{ id: 'compile' }, { id: 'stop', end: 'dropped' }] },
+    });
+  });
 });
+
