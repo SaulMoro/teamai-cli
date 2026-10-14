@@ -306,6 +306,7 @@ Generated: do not edit by hand. Regenerate with
     - `--all` — Migrate every session from source (not just the 5 most recent)
     - `--limit <n>` — Max sessions to migrate (only caps --all; ignored otherwise)
     - `-y, --yes` — Skip confirmation prompts, including archiving unredacted transcripts
+    - `--json` — Print one {data}|{error} JSON envelope on stdout; never prompts (needs a session id, -s and -t)
   - `teamai session push` — Push local sessions to the team repo
     - `--source <platform>` — Source platform to read sessions from
     - `--repo-root <path>` — Team repo root (defaults to cwd)

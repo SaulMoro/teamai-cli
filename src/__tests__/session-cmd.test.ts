@@ -29,9 +29,11 @@ const mocks = vi.hoisted(() => ({
   pushError: '',
   gitCalls: [] as Array<{ args: string[]; cwd?: string }>,
   adaptersByPlatform: {} as Record<string, unknown>,
-  /** migrate.js mock 的 preview 返回值；agent-session.js mock 的 copy 返回值 */
+  /** migrate.js mock 的 preview 返回值（Error 时抛出）；agent-session.js mock 的 copy 返回值 */
   previewResult: null as unknown,
   copyResult: null as unknown,
+  /** When set, the session archive lock reports this path as held by another command. */
+  heldArchiveLock: '',
   /** readline mock：ask() 等待输入时捕获的 'line' 回调 */
   lineCb: null as ((line: string) => void) | null,
   lineArmed: null as (() => void) | null,
@@ -109,15 +111,30 @@ vi.mock('../session-flow/migrate.js', () => ({
       public readonly target: string,
     ) {}
     async preview(): Promise<unknown> {
+      if (mocks.previewResult instanceof Error) throw mocks.previewResult;
       return mocks.previewResult;
     }
   },
   resolveTargetCwd: (explicit: string | undefined, sourceCwd: string | undefined) => explicit ?? sourceCwd,
 }));
 
+vi.mock('../session-flow/sync.js', async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import('../session-flow/sync.js');
+  return {
+    ...actual,
+    withSessionIndexLock: (async (repo, fn) =>
+      mocks.heldArchiveLock
+        ? { status: 'busy', lockPath: mocks.heldArchiveLock }
+        : actual.withSessionIndexLock(repo, fn)) as typeof actual.withSessionIndexLock,
+  };
+});
+
 vi.mock('../session-flow/agent-session.js', async (importOriginal) => {
   const actual = (await importOriginal()) as typeof import('../session-flow/agent-session.js');
-  return { ...actual, AgentSession: { ...actual.AgentSession, copy: async (): Promise<unknown> => mocks.copyResult } };
+  return {
+    ...actual,
+    AgentSession: { ...actual.AgentSession, copy: async (): Promise<unknown> => mocks.copyResult },
+  };
 });
 
 import { registerSessionFlowCommands } from '../session-flow/session-cmd.js';
@@ -149,6 +166,7 @@ beforeEach(() => {
   mocks.adaptersByPlatform = {};
   mocks.previewResult = null;
   mocks.copyResult = null;
+  mocks.heldArchiveLock = '';
   mocks.lineArmed = null;
   vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => {
     out.push(a.map(String).join(' '));
@@ -794,6 +812,186 @@ describe('session migrate of a session already migrated', () => {
     await runSession('migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--target-cwd', 'rel/ws');
 
     expect(errored.join('\n')).toContain('Migration failed: Target workspace "rel/ws" is not an absolute path');
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+describe('session migrate --json', () => {
+  const fidelity = { score: 1, mode: 1, preservedBlocks: 1, totalBlocks: 1, degradedBlocks: 0, degradations: [], warnings: [] };
+  const preview = {
+    sourcePlatform: 'fakeplat',
+    targetPlatform: 'tgtplat',
+    sessionTitle: 'task',
+    sessionId: 's-1',
+    cwd: '/run/dir',
+    messageCount: 1,
+    fidelity,
+  };
+
+  /** stdout must hold exactly one JSON line: the envelope. */
+  function envelope(): { data?: Record<string, unknown>; error?: { code: string; message: string } } {
+    const lines = out.join('').split('\n').filter((l) => l.trim() !== '');
+    expect(lines).toHaveLength(1);
+    return JSON.parse(lines[0]);
+  }
+
+  beforeEach(() => {
+    mocks.previewResult = preview;
+    fakeAdapter([mkSession()], 'fakeplat');
+    mocks.adaptersByPlatform['tgtplat'] = {
+      platform: 'tgtplat',
+      listConversations: vi.fn(async () => []),
+      readSession: vi.fn(async () => mkSession({ sessionId: 'tgt-1' })),
+    };
+  });
+
+  it('prints the copy as one data envelope and nothing else on stdout', async () => {
+    mocks.copyResult = { status: 'done', sessionId: 'tgt-1', cwd: '/run/dir', reused: false, fidelity };
+
+    await runSession('migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--json');
+
+    expect(envelope()).toEqual({ data: { sessionId: 'tgt-1', cwd: '/run/dir', reused: false, fidelity } });
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  it('reports an existing copy as reused', async () => {
+    mocks.copyResult = { status: 'done', sessionId: 'tgt-1', cwd: '/run/dir', reused: true, fidelity };
+
+    await runSession('migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--json');
+
+    expect(envelope()).toEqual({ data: { sessionId: 'tgt-1', cwd: '/run/dir', reused: true, fidelity } });
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  it('prints a failed copy as an error envelope with its code and exits 1', async () => {
+    const message = 'Target platform "tgtplat" is not installed or its storage directory was not found.';
+    mocks.copyResult = { status: 'failed', failure: { code: 'tool_unavailable', platform: 'tgtplat', message } };
+
+    await runSession('migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--json');
+
+    expect(envelope()).toEqual({ error: { code: 'tool_unavailable', message } });
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('names an unknown source platform no_adapter', async () => {
+    await runSession('migrate', 's-1', '-s', 'nope', '-t', 'tgtplat', '--cwd', '/run/dir', '--json');
+
+    const { error } = envelope();
+    expect(error?.code).toBe('no_adapter');
+    expect(error?.message).toContain('Unknown platform "nope"');
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('names a session missing from the workspace not_found, with the id and the workspace searched', async () => {
+    await runSession('migrate', 'gone-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--json');
+
+    expect(envelope()).toEqual({ error: { code: 'not_found', message: 'No fakeplat session gone-1 in /run/dir.' } });
+    expect(process.exitCode).toBe(1);
+  });
+
+  it.each([
+    ['the target platform', ['s-1', '-s', 'fakeplat'], '-t'],
+    ['the session', ['-s', 'fakeplat', '-t', 'tgtplat'], 'session id'],
+    ['consent to archive unredacted', ['s-1', '-s', 'fakeplat', '-t', 'tgtplat', '--push', '--repo-root', '/nowhere'], '-y'],
+  ])('refuses to prompt for %s and says which flag answers it', async (_what, args, flag) => {
+    // An interactive terminal: without --json each of these would ask.
+    const wasTTY = process.stdin.isTTY;
+    Object.defineProperty(process.stdin, 'isTTY', { value: true, configurable: true });
+    vi.stubEnv('CI', '');
+    vi.stubEnv('TEAMAI_NONINTERACTIVE', '');
+    try {
+      await runSession('migrate', ...args, '--cwd', '/run/dir', '--json');
+    } finally {
+      Object.defineProperty(process.stdin, 'isTTY', { value: wasTTY, configurable: true });
+      vi.unstubAllEnvs();
+    }
+
+    const { error } = envelope();
+    expect(error?.code).toBe('prompt_refused');
+    expect(error?.message).toContain(flag);
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('archives with --push -y and still prints only the envelope', async () => {
+    mocks.copyResult = { status: 'done', sessionId: 'tgt-1', cwd: '/run/dir', reused: false, fidelity };
+
+    await runSession(
+      'migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--push', '-y', '--repo-root', repoRoot, '--json',
+    );
+
+    expect(envelope()).toEqual({ data: { sessionId: 'tgt-1', cwd: '/run/dir', reused: false, fidelity } });
+    expect(fs.existsSync(path.join(repoRoot, 'sessions'))).toBe(true);
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  it('prints a held archive lock as a busy error that names the local copy', async () => {
+    mocks.copyResult = { status: 'done', sessionId: 'tgt-1', cwd: '/run/dir', reused: false, fidelity };
+    mocks.heldArchiveLock = '/home/.teamai/locks/sessions-x.lock';
+
+    await runSession(
+      'migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--push', '-y', '--repo-root', repoRoot, '--json',
+    );
+
+    const { error } = envelope();
+    expect(error?.code).toBe('busy');
+    expect(error?.message).toContain('/home/.teamai/locks/sessions-x.lock');
+    expect(error?.message).toContain('tgt-1');
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('prints a failed remote push as archive_failed that names the local copy and commit', async () => {
+    mocks.copyResult = { status: 'done', sessionId: 'tgt-1', cwd: '/run/dir', reused: false, fidelity };
+    mocks.pushError = 'Command failed: git push origin\nfatal: no upstream';
+
+    await runSession(
+      'migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--push', '-y', '--repo-root', repoRoot, '--json',
+    );
+
+    const { error } = envelope();
+    expect(error?.code).toBe('archive_failed');
+    expect(error?.message).toContain('Copied as tgt-1 in /run/dir');
+    expect(error?.message).toContain('abc123de');
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('prints a --dry-run preview as data and writes nothing', async () => {
+    mocks.copyResult = { status: 'failed', failure: { code: 'write_failed', platform: 'tgtplat', message: 'must not copy' } };
+
+    await runSession('migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--json', '--dry-run');
+
+    expect(envelope()).toEqual({ data: { dryRun: true, fidelity } });
+    expect(process.exitCode).not.toBe(1);
+  });
+
+  it('prints a source that cannot be read as an error envelope', async () => {
+    mocks.previewResult = new Error('bad record on line 3');
+
+    await runSession('migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--json');
+
+    const { error } = envelope();
+    expect(error?.message).toContain('bad record on line 3');
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('names an id prefix that matches several sessions ambiguous_id', async () => {
+    fakeAdapter([mkSession({ sessionId: 's-1a' }), mkSession({ sessionId: 's-1b' })], 'fakeplat');
+
+    await runSession('migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--json');
+
+    const { error } = envelope();
+    expect(error?.code).toBe('ambiguous_id');
+    expect(error?.message).toContain('matches 2 sessions');
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('refuses --all, which would migrate more than the one session an envelope reports', async () => {
+    mocks.copyResult = { status: 'done', sessionId: 'tgt-1', cwd: '/run/dir', reused: false, fidelity };
+
+    await runSession('migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--all', '-y', '--cwd', '/run/dir', '--json');
+
+    const { error } = envelope();
+    expect(error?.code).toBe('unsupported_option');
+    expect(error?.message).toContain('--all');
     expect(process.exitCode).toBe(1);
   });
 });

@@ -24,11 +24,13 @@ import * as path from 'node:path';
 import { getAdapter, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
 import { scrubSession } from './scrub.js';
 import { MigrationEngine, resolveTargetCwd } from './migrate.js';
-import { AgentSession, existingCopyId } from './agent-session.js';
+import { AgentSession, existingCopyId, type AgentSessionCopy } from './agent-session.js';
 import { SyncManager, getRepoIdentity, getGitAuthor, defaultSyncMeta, withSessionIndexLock } from './sync.js';
 import { SessionSearchEngine, type LoadedSession } from './search.js';
 import { deriveTargetSessionId, isSafeSessionFileId } from './ids.js';
 import { isInteractive } from '../utils/prompt.js';
+import { setStderrOnly } from '../utils/logger.js';
+import type { WorkflowEnvelope } from '../workflow/types.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -320,11 +322,38 @@ function runGitStep<T>(step: () => T, repoRoot: string, what: string): T {
   }
 }
 
+function archiveBusyMessage(repoRoot: string, lockPath: string): string {
+  return `another teamai command is writing the session archive in ${repoRoot} (lock: ${lockPath}).`;
+}
+
 /** Another command held the session archive lock for the whole wait: this write did not happen, so fail the run. */
 function reportArchiveBusy(repoRoot: string, lockPath: string): void {
-  console.error(`Error: another teamai command is writing the session archive in ${repoRoot} (lock: ${lockPath}).`);
+  console.error(`Error: ${archiveBusyMessage(repoRoot, lockPath)}`);
   console.error('Run this command again once it has finished.');
   process.exitCode = 1;
+}
+
+/** What `session migrate --json` reports for one copy: the copy result without its status. */
+type MigrateJsonData = Omit<Extract<AgentSessionCopy, { status: 'done' }>, 'status'>;
+
+/** `session migrate --json` prints the same `{ data } | { error }` envelope as the workflow commands. */
+function printEnvelope(envelope: WorkflowEnvelope): void {
+  process.stdout.write(`${JSON.stringify(envelope)}\n`);
+  if ('error' in envelope) process.exitCode = 1;
+}
+
+/**
+ * Under --json, stdout carries only the envelope: every progress line, from this command or a
+ * logger it reaches, goes to stderr until the returned restore runs.
+ */
+function reserveStdoutForEnvelope(): () => void {
+  const log = console.log;
+  console.log = console.error;
+  const wasStderrOnly = setStderrOnly(true);
+  return () => {
+    console.log = log;
+    setStderrOnly(wasStderrOnly);
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -380,8 +409,25 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
     .option('--all', 'Migrate every session from source (not just the 5 most recent)')
     .option('--limit <n>', 'Max sessions to migrate (only caps --all; ignored otherwise)')
     .option('-y, --yes', 'Skip confirmation prompts, including archiving unredacted transcripts')
+    .option('--json', 'Print one {data}|{error} JSON envelope on stdout; never prompts (needs a session id, -s and -t)')
     .action(async (sessionId, opts) => {
+      const json = Boolean(opts.json);
+      const restoreStdout = json ? reserveStdoutForEnvelope() : undefined;
       try {
+      // A driver never answers a prompt: refuse up front, before anything is copied.
+      if (json) {
+        const refuse = (message: string) => printEnvelope({ error: { code: 'prompt_refused', message } });
+        if (opts.all) {
+          return printEnvelope({
+            error: { code: 'unsupported_option', message: '--json migrates one session: pass its id instead of --all.' },
+          });
+        }
+        if (!opts.source || !opts.target) return refuse('--json never prompts: pass -s <platform> and -t <platform>.');
+        if (!sessionId) return refuse('--json never prompts: pass the session id to migrate.');
+        if (opts.push && !opts.scrub && !opts.yes) {
+          return refuse('--json never prompts: pass -y to archive the transcript as-is, or --scrub to redact it first.');
+        }
+      }
       let source = opts.source;
       let target = opts.target;
 
@@ -395,6 +441,11 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       }
 
       let workCwd = opts.cwd ?? process.cwd();
+      if (json && !listAvailablePlatforms().includes(source)) {
+        const known = listAvailablePlatforms().join(', ');
+        printEnvelope({ error: { code: 'no_adapter', message: `Unknown platform "${source}". Known platforms: ${known}.` } });
+        return;
+      }
       const sourceAdapter = safeGetAdapter(source);
       let metas = await sourceAdapter.listConversations(workCwd);
       let crossDirExpanded = false;
@@ -430,8 +481,11 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       }
       /** Workspace used for source lookup: when expanded across directories, sessions do not belong to workCwd, so the adapter searches globally. */
       const sourceProjectPath = crossDirExpanded ? undefined : workCwd;
+      const printNotFound = () =>
+        printEnvelope({ error: { code: 'not_found', message: `No ${source} session ${sessionId} in ${workCwd}.` } });
 
       if (metas.length === 0) {
+        if (json) return printNotFound();
         console.log('No sessions found on source platform.');
         return;
       }
@@ -475,12 +529,22 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           (m) => m.sessionId === sessionId || m.sessionId.startsWith(sessionId),
         );
         if (matches.length === 0) {
+          if (json) return printNotFound();
           console.error(`Session not found: ${sessionId}`);
           process.exit(1);
         }
         // Ambiguous prefix: taking every match silently migrates sessions the
         // user never named (and rollback then has to undo all of them).
         if (matches.length > 1) {
+          if (json) {
+            const ids = matches.slice(0, 10).map((m) => m.sessionId).join(', ');
+            return printEnvelope({
+              error: {
+                code: 'ambiguous_id',
+                message: `Session id "${sessionId}" matches ${matches.length} sessions (${ids}). Pass the full id.`,
+              },
+            });
+          }
           console.error(`Ambiguous session id "${sessionId}": matches ${matches.length} sessions.`);
           for (const m of matches.slice(0, 10)) {
             console.error(`  ${m.sessionId}  ${safeText(m.title).slice(0, 60)}`);
@@ -555,6 +619,8 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       // --push then reads those IDs back exactly (not "the N most recent on the target platform",
       // which would push the wrong sessions; see P4/P7).
       const migratedTargets: { sessionId: string; fidelityScore: number; cwd?: string }[] = [];
+      /** --json: the one copy this run made or found. */
+      let copied: MigrateJsonData | undefined;
 
       for (const m of targets) {
         const preview = await engine.preview(m.sessionId, sourceProjectPath);
@@ -586,6 +652,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         // Without honoring the global --dry-run, the only way to see fidelity and warnings
         // is to migrate for real and roll back if unhappy.
         if (isDryRun()) {
+          if (json) return printEnvelope({ data: { dryRun: true, fidelity: preview.fidelity } });
           console.log(`\n  · --dry-run: preview only, not migrated: ${m.sessionId.slice(0, 8)}...\n`);
           continue;
         }
@@ -601,6 +668,10 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           scrub: Boolean(opts.scrub),
         });
         if (result.status === 'failed') {
+          if (json) {
+            printEnvelope({ error: { code: result.failure.code, message: result.failure.message } });
+            return;
+          }
           console.error(`\n  ✗ Migration failed: ${result.failure.message}`);
           failed++;
           continue;
@@ -632,6 +703,8 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           migrated++;
         }
         migratedTargets.push({ sessionId: result.sessionId, fidelityScore: result.fidelity.score, cwd: result.cwd });
+        const { status: _status, ...copy } = result;
+        copied = copy;
       }
       // Scripted semantics: any single failure exits non-zero (--all batch does not stop the remaining sessions).
       if (failed > 0 && !isDryRun()) {
@@ -661,6 +734,9 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         const targetAdapter = safeGetAdapter(target);
 
         const syncMgr = new SyncManager(repoRoot);
+        /** --json: the copy stays on this machine whatever happens to its archive, so say where it is. */
+        const archiveFailed = (code: string, reason: string) =>
+          printEnvelope({ error: { code, message: `Copied as ${copied?.sessionId} in ${copied?.cwd}, but not archived: ${reason}` } });
         let saved = 0;
         for (const t of migratedTargets) {
           // Migration keeps image paths so the target can still open the file.
@@ -687,22 +763,23 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           try {
             const write = await withSessionIndexLock(repoRoot, async () => syncMgr.saveSession(session, meta));
             if (write.status === 'busy') {
+              if (json) return archiveFailed('busy', `${archiveBusyMessage(repoRoot, write.lockPath)} Run it again once that has finished.`);
               reportArchiveBusy(repoRoot, write.lockPath);
               return;
             }
           } catch (err) {
-            console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+            const reason = err instanceof Error ? err.message : String(err);
+            if (json) return archiveFailed('archive_failed', reason);
+            console.error(`Error: ${reason}`);
             process.exitCode = 1;
             return;
           }
           saved++;
         }
         // [fixed] a gitCommit failure (not a git directory / index.lock race) used to crash with a raw stack trace
-        const commit = runGitStep(
-          () => syncMgr.gitCommit(`sync: migrate ${saved} session(s) ${source}→${target}`),
-          repoRoot,
-          'git commit',
-        );
+        // Under --json a throw reaches the action's catch, which prints the envelope; runGitStep would exit without one.
+        const commitArchive = () => syncMgr.gitCommit(`sync: migrate ${saved} session(s) ${source}→${target}`);
+        const commit = json ? commitArchive() : runGitStep(commitArchive, repoRoot, 'git commit');
         if (commit.status === 'committed') {
           const pushed = pushToRemote(syncMgr);
           if (pushed) {
@@ -710,6 +787,12 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           } else {
             console.log(`\n  · ${saved} session(s) committed locally but not pushed`);
             process.exitCode = 1;
+            if (json) {
+              return archiveFailed(
+                'archive_failed',
+                `committed in ${repoRoot} as ${commit.commit.slice(0, 8)}, but the push to the remote failed (reason on stderr).`,
+              );
+            }
           }
           console.log(`  commit: ${commit.commit.slice(0, 8)}`);
         } else if (commit.status === 'failed') {
@@ -718,11 +801,16 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           // a broken archive.
           console.error(`\n  ✗ Commit failed, ${saved} session(s) left staged in ${repoRoot}: ${safeText(commit.reason)}`);
           process.exitCode = 1;
+          if (json) return archiveFailed('archive_failed', `the commit failed, files left staged in ${repoRoot}: ${safeText(commit.reason)}`);
         } else {
           console.log(`\n  · No changes to push\n`);
         }
       }
 
+      if (json && copied) {
+        printEnvelope({ data: copied });
+        return;
+      }
       console.log(
         isDryRun()
           ? `\n  ${targets.length} session(s) would be migrated (--dry-run, no changes made).\n`
@@ -732,6 +820,8 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         // Interactive cancel (promptSelect throws 'Selection cancelled'; on EOF, ask returns an empty string
         // and hits that path) is not a failure. Exit quietly, and do not turn it into an unhandled-rejection stack.
         const msg = err instanceof Error ? err.message : String(err);
+        // --json never prompts, so nothing here is a cancel: every throw is a failure with no known cause.
+        if (json) return printEnvelope({ error: { code: 'unexpected_error', message: msg } });
         if (/cancel/i.test(msg)) {
           console.log('Cancelled.');
           return;
@@ -739,6 +829,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         console.error(`Error: ${msg}`);
         process.exit(1);
       } finally {
+        restoreStdout?.();
         closeStdin();
       }
     });
