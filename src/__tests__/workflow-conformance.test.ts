@@ -32,6 +32,9 @@ describe('workflow protocol conformance in process', () => {
         dataHome: path.join(root, 'data'),
       };
       fs.writeFileSync(path.join(knowledge, 'workflows', `${scenario.workflowName}.yaml`), scenario.yaml);
+      for (const [name, yaml] of Object.entries(scenario.workflows ?? {})) {
+        fs.writeFileSync(path.join(knowledge, 'workflows', `${name}.yaml`), yaml);
+      }
       await syncWorkflowDefinitions(config);
       const client: WorkflowClient = {
         start: (name) => startRun(config, name),

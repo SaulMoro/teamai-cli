@@ -29,6 +29,10 @@ export interface WorkflowStep {
   output?: OutputSchema;
   /** Variables a command step receives, as written; `{{ inputs.… }}` and `{{ steps.… }}` render when the step is leased. */
   env?: Record<string, string>;
+  /** Name of the workflow this step runs. The cache keeps the name; `start` snapshots that workflow into the run. */
+  workflow?: string;
+  /** Values for the inputs of the workflow this step runs, as written; every string inside follows the template rules. */
+  with?: Record<string, unknown>;
   /** Name in `ends` this step finishes the workflow with when it succeeds. A step with no action only ends the workflow and is never leased. */
   end?: string;
 }
@@ -43,6 +47,8 @@ export interface WorkflowDefinition {
   inputs?: Record<string, OutputSchema>;
   /** Named ends a step can finish this workflow with, each with the run outcome it gives. */
   ends?: Record<string, EndOutcome>;
+  /** Values this workflow returns to a step that runs it, each a path such as `steps.<id>.outputs.<field>`. */
+  outputs?: Record<string, string>;
   steps: WorkflowStep[];
 }
 
@@ -65,7 +71,8 @@ export interface WorkflowDiagnostic {
   code?: 'unknown_key' | 'missing_needs' | 'false_if' | 'bad_template' | 'dotted_name';
 }
 
-export type StepStatus = 'pending' | 'leased' | 'succeeded' | 'failed' | 'skipped';
+/** `running`: a workflow step whose child steps are in the run and not all settled. */
+export type StepStatus = 'pending' | 'leased' | 'running' | 'succeeded' | 'failed' | 'skipped';
 export type StepOutcome = 'success' | 'failed' | 'released';
 export type RunStatus = 'running' | 'succeeded' | 'failed';
 
@@ -75,6 +82,10 @@ export interface StepLease {
   driver: DriverIdentity;
 }
 
+/**
+ * One step instance. `id` is its path: a top-level step id, or `<workflow step path>.<child step id>`
+ * for a step inside a sub-workflow, such as `check.classify`.
+ */
 export interface StepState {
   id: string;
   status: StepStatus;
@@ -82,6 +93,10 @@ export interface StepState {
   lease?: StepLease;
   outcome?: StepOutcome;
   outputs?: unknown;
+  /** The values `with` passed to the workflow this step runs, kept when that workflow declares inputs. */
+  inputs?: Record<string, unknown>;
+  /** The end the workflow this step runs reached. */
+  end?: string;
   exitCode?: number;
   message?: string;
   tool?: string;
@@ -113,8 +128,12 @@ export interface RunState {
   end?: string;
   /** The validated `--inputs`, stored when the workflow declares inputs. */
   inputs?: Record<string, unknown>;
+  /** Covers `definition` and every workflow in `workflows`. */
   sourceHash: string;
   definition: WorkflowDefinition;
+  /** The sub-workflows the run uses, by name, as they were cached when it started. */
+  workflows?: Record<string, WorkflowDefinition>;
+  /** Step instances in declaration order; a sub-workflow's steps follow the step that runs it. */
   steps: StepState[];
   settledAttempts: string[];
   createdAt: string;

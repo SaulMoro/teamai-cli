@@ -56,6 +56,9 @@ describe('workflow protocol conformance through the CLI', () => {
       const workflows = path.join(repo, '.teamai', 'workflows');
       fs.mkdirSync(workflows, { recursive: true });
       fs.writeFileSync(path.join(workflows, `${scenario.workflowName}.yaml`), scenario.yaml);
+      for (const [name, yaml] of Object.entries(scenario.workflows ?? {})) {
+        fs.writeFileSync(path.join(workflows, `${name}.yaml`), yaml);
+      }
       const pulled = await runCLI(['pull'], repo);
       expect(pulled.code, `${pulled.stdout}\n${pulled.stderr}`).toBe(0);
       const started = envelope((await runCLI(['workflow', 'start', scenario.workflowName], repo)).stdout);

@@ -903,3 +903,336 @@ describe('workflow engine', () => {
     });
   });
 });
+
+/** Writes each workflow file, syncs, and starts `name`. */
+async function startTree(
+  files: Record<string, string>,
+  name: string,
+  inputs: unknown = {},
+): Promise<{ config: LocalConfig; work: string; runId: string }> {
+  const fixture = testConfig();
+  for (const [file, body] of Object.entries(files)) {
+    fs.writeFileSync(path.join(fixture.config.repo.localPath, 'workflows', `${file}.yaml`), body);
+  }
+  await syncWorkflowDefinitions(fixture.config);
+  const started = await startRun(fixture.config, name, inputs);
+  if ('error' in started) throw new Error(started.error.message);
+  return { ...fixture, runId: String(started.data.run) };
+}
+
+function workflow(name: string, steps: string, header = ''): string {
+  return `schemaVersion: v1alpha1
+name: ${name}
+description: The ${name} workflow.
+${header}steps:
+${steps}`;
+}
+
+const CHECK = workflow('check', `  - id: classify
+    command: node classify.js
+  - id: comment
+    needs: [classify]
+    command: node comment.js
+`);
+
+describe('file sub-workflows', () => {
+  it('leases the child steps by path in place of the workflow step, then continues the parent', async () => {
+    const { config, runId } = await startTree({ check: CHECK, ship: workflow('ship', `  - id: check
+    workflow: check
+  - id: ship
+    needs: [check]
+    command: node ship.js
+`) }, 'ship');
+
+    const { leased, done } = await drive(config, runId);
+
+    expect(leased).toEqual(['check.classify', 'check.comment', 'ship']);
+    expect(done).toEqual({ run: runId, outcome: 'succeeded' });
+    expect(await readRun(config, runId)).toMatchObject({
+      revision: 4,
+      steps: [
+        { id: 'check', status: 'succeeded' },
+        { id: 'check.classify', status: 'succeeded' },
+        { id: 'check.comment', status: 'succeeded' },
+        { id: 'ship', status: 'succeeded' },
+      ],
+    });
+  });
+
+  it('fails start naming a child with no runnable version, without falling back to an older copy', async () => {
+    const fixture = testConfig();
+    const workflows = path.join(fixture.config.repo.localPath, 'workflows');
+    fs.writeFileSync(path.join(workflows, 'ship.yaml'), workflow('ship', `  - id: check
+    workflow: check
+`));
+    fs.writeFileSync(path.join(workflows, 'check.yaml'), CHECK);
+    await syncWorkflowDefinitions(fixture.config);
+    fs.writeFileSync(path.join(workflows, 'check.yaml'), `${CHECK}    for_each: [1]\n`);
+    await syncWorkflowDefinitions(fixture.config);
+
+    expect(await startRun(fixture.config, 'ship')).toEqual({ error: {
+      code: 'workflow_not_found',
+      message: 'Workflow "ship" step "check" runs workflow "check", which has no runnable version. Check workflows/check.yaml and pull again.',
+    } });
+    expect(fs.existsSync(path.join(fixture.config.dataHome!, 'workflows', 'runs'))).toBe(false);
+  });
+
+  it('keeps the parent and child it started with, under one source hash, after a later pull changes them', async () => {
+    const ship = workflow('ship', `  - id: check
+    workflow: check
+`);
+    const { config, runId } = await startTree({ check: CHECK, ship }, 'ship');
+    const workflows = path.join(config.repo.localPath, 'workflows');
+    fs.writeFileSync(path.join(workflows, 'check.yaml'), workflow('check', `  - id: other
+    command: node other.js
+`));
+    await syncWorkflowDefinitions(config);
+    const second = await startRun(config, 'ship');
+    if ('error' in second) throw new Error(second.error.message);
+    fs.writeFileSync(path.join(workflows, 'ship.yaml'), `${ship}  - id: extra\n    needs: []\n    command: node extra.js\n`);
+    await syncWorkflowDefinitions(config);
+
+    const { leased } = await drive(config, runId);
+
+    expect(leased).toEqual(['check.classify', 'check.comment']);
+    const first = await readRun(config, runId);
+    const later = await readRun(config, String(second.data.run));
+    if (typeof first !== 'object' || typeof later !== 'object') throw new Error('run missing');
+    expect(first.sourceHash).not.toBe(later.sourceHash);
+  });
+
+  it('passes with values to the child, keeping the JSON type of a value that is exactly one template', async () => {
+    const child = workflow('check', `  - id: classify
+    prompt: "Classify {{ inputs.note }} in {{ inputs.task }}."
+`, `inputs:
+  issue: number
+  task:
+    files: [string]
+  note: string
+  meta:
+    id: number
+    tags: [string]
+`);
+    const { config, runId } = await startTree({ check: child, ship: workflow('ship', `  - id: plan
+    command: node plan.js
+    output:
+      task:
+        files: [string]
+  - id: check
+    needs: [plan]
+    workflow: check
+    with:
+      issue: "{{ inputs.issue }}"
+      task: "{{ steps.plan.outputs.task }}"
+      note: "issue {{ inputs.issue }}"
+      meta:
+        id: "{{ inputs.issue }}"
+        tags: ["x-{{ inputs.issue }}"]
+`, 'inputs:\n  issue: number\n') }, 'ship', { issue: 42 });
+    const plan = await leaseNext(config, runId, driverA);
+    if ('error' in plan) throw new Error(plan.error.message);
+    const lease = plan.data.lease as { attempt: string; revision: number };
+    await reportAttempt(config, runId, { ...lease, outcome: 'success', outputs: { task: { files: ['a.ts'] } }, driver: driverA });
+
+    const classify = await leaseNext(config, runId, driverA);
+
+    expect(classify).toMatchObject({ data: { lease: { step: 'check.classify', prompt: 'Classify issue 42 in {"files":["a.ts"]}.' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'plan', status: 'succeeded' },
+      { id: 'check', status: 'running', inputs: { issue: 42, task: { files: ['a.ts'] }, note: 'issue 42', meta: { id: 42, tags: ['x-42'] } } },
+      { id: 'check.classify', status: 'leased' },
+    ] });
+  });
+
+  it('starts a workflow step only after every step its with values read has settled', async () => {
+    // gate is skipped as soon as build fails, while late is still pending; deploy reads late through gate.
+    const child = workflow('check', `  - id: classify
+    command: node classify.js
+`, 'inputs:\n  late: string\n');
+    const { config, runId } = await startTree({ check: child, ship: workflow('ship', `  - id: build
+    command: node build.js
+  - id: docs
+    needs: []
+    command: node docs.js
+  - id: gate
+    needs: [build, late]
+    command: node gate.js
+  - id: deploy
+    needs: [gate, docs]
+    workflow: check
+    with:
+      late: "{{ steps.late.outcome }}"
+  - id: late
+    needs: []
+    command: node late.js
+`) }, 'ship');
+
+    const { leased } = await drive(config, runId, ['build']);
+
+    expect(leased).toEqual(['build', 'docs', 'late', 'deploy.classify']);
+    expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([{ id: 'deploy', status: 'succeeded', outcome: 'success', inputs: { late: 'success' } }]) });
+  });
+
+  it('fails a workflow step with invalid_inputs when with does not fit the child inputs, and keeps settling', async () => {
+    const child = workflow('check', `  - id: classify
+    command: node classify.js
+`, 'inputs:\n  issue: number\n');
+    const { config, runId } = await startTree({ check: child, ship: workflow('ship', `  - id: check
+    workflow: check
+    with:
+      issue: "{{ inputs.title }}"
+  - id: label
+    needs: [check]
+    if: steps.check.outcome == 'failed'
+    command: node label.js
+`, 'inputs:\n  title: string\n') }, 'ship', { title: '42' });
+
+    const { leased, done } = await drive(config, runId);
+
+    expect(leased).toEqual(['label']);
+    expect(done).toEqual({ run: runId, outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({ revision: 2, steps: [
+      { id: 'check', status: 'failed', failure: { code: 'invalid_inputs', message: 'step "check" with does not fit workflow "check": inputs.issue must be a number' } },
+      { id: 'label', status: 'succeeded' },
+    ] });
+  });
+
+  it('finishes only the child at its end, and the parent branches on steps.<id>.end and reads its outputs', async () => {
+    const child = workflow('check', `  - id: classify
+    command: node classify.js
+    output:
+      verdict: fix | drop
+  - id: drop
+    needs: [classify]
+    if: steps.classify.outputs.verdict == 'drop'
+    end: dropped
+  - id: comment
+    needs: [classify]
+    command: node comment.js
+`, 'ends:\n  dropped: succeeded\noutputs:\n  verdict: steps.classify.outputs.verdict\n');
+    const { config, runId } = await startTree({ check: child, ship: workflow('ship', `  - id: check
+    workflow: check
+  - id: close
+    needs: [check]
+    if: steps.check.end == 'dropped'
+    command: node close.js
+    env:
+      VERDICT: "{{ steps.check.outputs.verdict }}"
+  - id: fix
+    needs: [check]
+    if: steps.check.end != 'dropped'
+    command: node fix.js
+`) }, 'ship');
+    const classify = await leaseNext(config, runId, driverA);
+    if ('error' in classify) throw new Error(classify.error.message);
+    const lease = classify.data.lease as { attempt: string; revision: number };
+    await reportAttempt(config, runId, { ...lease, outcome: 'success', outputs: { verdict: 'drop' }, driver: driverA });
+
+    const close = await leaseNext(config, runId, driverA);
+    if ('error' in close) throw new Error(close.error.message);
+    const closeLease = close.data.lease as { attempt: string; revision: number };
+    await reportAttempt(config, runId, { ...closeLease, outcome: 'success', driver: driverA });
+    const done = await leaseNext(config, runId, driverA);
+
+    expect(close).toMatchObject({ data: { lease: { step: 'close', env: { VERDICT: 'drop' } } } });
+    expect(done).toEqual({ data: { done: { run: runId, outcome: 'succeeded' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'check', status: 'succeeded', end: 'dropped', outputs: { verdict: 'drop' } },
+      { id: 'check.classify', status: 'succeeded' },
+      { id: 'check.drop', status: 'succeeded' },
+      { id: 'check.comment', status: 'skipped' },
+      { id: 'close', status: 'succeeded' },
+      { id: 'fix', status: 'skipped' },
+    ] });
+  });
+
+  it.each([
+    ['ends the parent when its child succeeds', [], ['check.classify', 'check.comment'], { outcome: 'succeeded', end: 'shipped' }],
+    ['reaches no end when its child fails', ['check.classify'], ['check.classify', 'docs'], { outcome: 'failed' }],
+  ])('a workflow step with end runs its child first and %s', async (_name, failing, order, expected) => {
+    const { config, runId } = await startTree({ check: CHECK, ship: workflow('ship', `  - id: check
+    workflow: check
+    end: shipped
+  - id: docs
+    needs: []
+    command: node docs.js
+`, 'ends:\n  shipped: succeeded\n') }, 'ship');
+
+    const { leased, done } = await drive(config, runId, failing);
+
+    expect(leased).toEqual(order);
+    expect(done).toEqual({ run: runId, ...expected });
+  });
+
+  it('fails the workflow step when its child fails, so a recovery step in the parent runs', async () => {
+    const { config, runId } = await startTree({ check: CHECK, ship: workflow('ship', `  - id: check
+    workflow: check
+  - id: label
+    needs: [check]
+    if: steps.check.outcome == 'failed'
+    command: node label.js
+`) }, 'ship');
+
+    const { leased, done } = await drive(config, runId, ['check.comment']);
+
+    expect(leased).toEqual(['check.classify', 'check.comment', 'label']);
+    expect(done).toEqual({ run: runId, outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'check', status: 'failed', outcome: 'failed' },
+      { id: 'check.classify', status: 'succeeded' },
+      { id: 'check.comment', status: 'failed' },
+      { id: 'label', status: 'succeeded' },
+    ] });
+  });
+
+  it('reports a run stored with a step after the first that has no needs, instead of running it as a root', async () => {
+    const { config, runId } = await startTree({ check: CHECK, ship: workflow('ship', `  - id: check
+    workflow: check
+`) }, 'ship');
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    delete run.workflows!.check!.steps[1]!.needs;
+    await writeRun(config, run);
+
+    expect(await leaseNext(config, runId, driverA)).toEqual({ error: {
+      code: 'run_unreadable',
+      message: `Run ${runId} was started by an older teamai: step "comment" in workflow "check" has no needs. Start a new run.`,
+    } });
+  });
+
+  it('checks a child step report against the output that child step declares', async () => {
+    const child = workflow('check', `  - id: classify
+    command: node classify.js
+    output:
+      verdict: fix | drop
+`);
+    const { config, runId } = await startTree({ check: child, ship: workflow('ship', `  - id: check
+    workflow: check
+`) }, 'ship');
+    const classify = await leaseNext(config, runId, driverA);
+    if ('error' in classify) throw new Error(classify.error.message);
+    const lease = classify.data.lease as { attempt: string; revision: number };
+
+    const reported = await reportAttempt(config, runId, { ...lease, outcome: 'success', outputs: { verdict: 'maybe' }, driver: driverA });
+
+    expect(reported).toMatchObject({ data: { step: { id: 'check.classify', status: 'failed', outcome: 'failed' } } });
+  });
+
+  it('refuses to start a workflow that runs itself through its sub-workflows', async () => {
+    const fixture = testConfig();
+    const workflows = path.join(fixture.config.repo.localPath, 'workflows');
+    fs.writeFileSync(path.join(workflows, 'ship.yaml'), workflow('ship', `  - id: check
+    workflow: check
+`));
+    fs.writeFileSync(path.join(workflows, 'check.yaml'), workflow('check', `  - id: again
+    workflow: ship
+`));
+    await syncWorkflowDefinitions(fixture.config);
+
+    expect(await startRun(fixture.config, 'ship')).toEqual({ error: {
+      code: 'workflow_recursion',
+      message: 'Workflow "ship" cannot start: its sub-workflows run in a cycle: ship -> check -> ship',
+    } });
+    expect(fs.existsSync(path.join(fixture.config.dataHome!, 'workflows', 'runs'))).toBe(false);
+  });
+});
