@@ -22,7 +22,6 @@ import type { Command } from 'commander';
 import readline from 'node:readline';
 import * as path from 'node:path';
 import { getAdapter, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
-import { scrubSession } from './scrub.js';
 import { MigrationEngine, resolveTargetCwd } from './migrate.js';
 import { AgentSession, existingCopyId, type AgentSessionCopy } from './agent-session.js';
 import { SyncManager, getRepoIdentity, getGitAuthor, defaultSyncMeta, withSessionIndexLock } from './sync.js';
@@ -623,7 +622,16 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       let copied: MigrateJsonData | undefined;
 
       for (const m of targets) {
-        const preview = await engine.preview(m.sessionId, sourceProjectPath);
+        // The preview shows what is stored; a --scrub run redacts in the copy itself.
+        const found = await AgentSession.find(
+          { platform: source, sessionId: m.sessionId, cwd: sourceProjectPath, filePath: m.filePath },
+          { scrub: false },
+        );
+        if (found.status === 'failed') {
+          if (json) return printEnvelope({ error: { code: found.failure.code, message: found.failure.message } });
+          throw new Error(found.failure.message);
+        }
+        const preview = engine.preview(found.session);
 
         console.log(`\n  Migration Preview`);
         console.log(`  ─────────────────────────────────`);
@@ -663,7 +671,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         // refuses anything that is still not an existing absolute directory.
         const targetCwd = resolveTargetCwd(opts.targetCwd, preview.cwd, sourceProjectPath) ?? preview.cwd;
         const result = await AgentSession.copy({
-          from: { platform: source, sessionId: m.sessionId, cwd: sourceProjectPath },
+          from: { platform: source, sessionId: m.sessionId, cwd: sourceProjectPath, filePath: m.filePath },
           to: { platform: target, cwd: targetCwd },
           scrub: Boolean(opts.scrub),
         });
@@ -731,7 +739,6 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         // When expanded across directories, sessions do not belong to workCwd; author should come from the repo the session actually lives in
         const authorCwd = migratedTargets.find((t) => t.cwd)?.cwd ?? workCwd;
         const author = getGitAuthor(authorCwd);
-        const targetAdapter = safeGetAdapter(target);
 
         const syncMgr = new SyncManager(repoRoot);
         /** --json: the copy stays on this machine whatever happens to its archive, so say where it is. */
@@ -742,8 +749,15 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           // Migration keeps image paths so the target can still open the file.
           // The copy that lands in the team repo must not: re-read the target
           // and scrub again with the archive default, which drops filePath.
-          const readBack = await targetAdapter.readSession(t.sessionId, t.cwd ?? opts.targetCwd ?? workCwd);
-          const session = opts.scrub ? scrubSession(readBack).session : readBack;
+          const readBack = await AgentSession.find(
+            { platform: target, sessionId: t.sessionId, cwd: t.cwd ?? opts.targetCwd ?? workCwd },
+            { scrub: Boolean(opts.scrub) },
+          );
+          if (readBack.status === 'failed') {
+            if (json) return archiveFailed(readBack.failure.code, readBack.failure.message);
+            throw new Error(readBack.failure.message);
+          }
+          const session = readBack.session;
           // P3: the archive key is derived from the session's native cwd, not the directory migrate is running in (see deriveArchiveIdentity)
           const meta = defaultSyncMeta(
             {
@@ -922,14 +936,20 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       let saved = 0;
       let redactedTotal = 0;
       for (const m of selected) {
-        // With --all, sessions may come from any workspace. A scoped lookup (by the cwd-encoded directory)
-        // can miss because directory-name decoding is lossy, so leave it to a global adapter lookup.
-        // Single-cwd mode still passes workCwd.
-        const readSession = await adapter.readSession(m.sessionId, opts.all ? undefined : workCwd);
+        // Read the file that was listed: with --all, one id can live in several workspaces.
         // What gets archived is the full original text, and the team can read it: redact first when --scrub is set; when not redacted, say so once explicitly.
-        const scrubbed = opts.scrub ? scrubSession(readSession) : null;
-        const session = scrubbed ? scrubbed.session : readSession;
-        if (scrubbed) redactedTotal += scrubbed.redactedCount;
+        const found = await AgentSession.find(
+          { platform: source, sessionId: m.sessionId, cwd: opts.all ? undefined : workCwd, filePath: m.filePath },
+          { scrub: Boolean(opts.scrub) },
+        );
+        if (found.status === 'failed') {
+          // Nothing is committed: a half-archive must not be published.
+          console.error(`Error: ${found.failure.message}`);
+          process.exitCode = 1;
+          return;
+        }
+        const session = found.session;
+        redactedTotal += found.redactedCount ?? 0;
         if (opts.all) {
           console.log(`  Source: ${safeText(session.cwd || 'unknown directory')}`);
         }

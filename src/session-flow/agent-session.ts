@@ -9,6 +9,7 @@
  * Adapters stay behind this module. Expected failures are values, never exceptions.
  */
 
+import fs from 'node:fs';
 import { ADAPTER_REGISTRY, listInstalledPlatforms } from './adapters/index.js';
 import type { AgentAdapter } from './adapters/base.js';
 import { imagePlaceholderText, type ContentBlock, type Message, type Session } from './ir.js';
@@ -16,8 +17,11 @@ import { deriveTargetSessionId, legacyTargetSessionIds } from './ids.js';
 import { degradeThinkingBlocks, fidelityFromSession, type FidelityReport } from './migrate.js';
 import { scrubSession } from './scrub.js';
 
-/** A session in one tool: its platform, its id there, and the workspace to look in. */
-export type AgentSessionRef = { platform: string; sessionId: string; cwd?: string };
+/**
+ * A session in one tool: its platform, its id there, and the workspace to look in. A caller that
+ * listed the session passes the `filePath` it listed, so exactly that session is read.
+ */
+export type AgentSessionRef = { platform: string; sessionId: string; cwd?: string; filePath?: string };
 
 export type AgentSessionFailure =
   | { code: 'no_adapter'; platform: string; reason: 'unknown tool'; message: string }
@@ -54,6 +58,16 @@ export type AgentSessionCopyRequest = {
   scrub?: boolean;
 };
 
+export type AgentSessionFound =
+  | {
+      status: 'done';
+      /** The session as stored, its id taken from what was opened, never from the request. */
+      session: Session;
+      /** Secret-looking values replaced, when `scrub` was set. */
+      redactedCount?: number;
+    }
+  | { status: 'failed'; failure: AgentSessionFailure };
+
 /** One message of a session as text, in order: what a search indexes and a scorer reads. */
 export type AgentSessionTranscriptEntry = {
   role: Message['role'];
@@ -66,6 +80,7 @@ export type AgentSessionTranscriptEntry = {
 
 export type AgentSession = {
   copy(request: AgentSessionCopyRequest): Promise<AgentSessionCopy>;
+  find(ref: AgentSessionRef, options?: { scrub?: boolean }): Promise<AgentSessionFound>;
   transcript(session: Session): AgentSessionTranscriptEntry[];
 };
 
@@ -88,10 +103,13 @@ const failed = (failure: AgentSessionFailure): AgentSessionCopy => ({ status: 'f
 
 async function readSource(source: AgentAdapter, ref: AgentSessionRef): Promise<Session | AgentSessionFailure> {
   try {
-    return await source.readSession(ref.sessionId, ref.cwd);
+    return await source.readSession({ sessionId: ref.sessionId, projectPath: ref.cwd, filePath: ref.filePath });
   } catch (e) {
-    const where = ref.cwd ? ` in ${ref.cwd}` : '';
-    if (!(await source.existingSessionId(ref.sessionId, ref.cwd))) {
+    const where = ref.filePath ? ` at ${ref.filePath}` : ref.cwd ? ` in ${ref.cwd}` : '';
+    const exists = ref.filePath
+      ? fs.existsSync(ref.filePath)
+      : Boolean(await source.existingSessionId(ref.sessionId, ref.cwd));
+    if (!exists) {
       return { code: 'not_found', ref, message: `No ${ref.platform} session ${ref.sessionId}${where}.` };
     }
     return {
@@ -130,6 +148,20 @@ async function listedFilePath(target: AgentAdapter, sessionId: string, cwd: stri
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Read one session. Redacted unless `scrub` is false: a new caller, such as a scorer, gets
+ * redacted text without having to remember to ask for it.
+ */
+async function find(ref: AgentSessionRef, { scrub = true }: { scrub?: boolean } = {}): Promise<AgentSessionFound> {
+  const source = adapterFor(ref.platform);
+  if ('code' in source) return { status: 'failed', failure: source };
+  const session = await readSource(source, ref);
+  if ('code' in session) return { status: 'failed', failure: session };
+  if (!scrub) return { status: 'done', session };
+  const scrubbed = scrubSession(session);
+  return { status: 'done', session: scrubbed.session, redactedCount: scrubbed.redactedCount };
 }
 
 async function copy({ from, to, scrub = false }: AgentSessionCopyRequest): Promise<AgentSessionCopy> {
@@ -247,4 +279,4 @@ function transcript(session: Session): AgentSessionTranscriptEntry[] {
   }));
 }
 
-export const AgentSession = { copy, transcript } as const satisfies AgentSession;
+export const AgentSession = { copy, find, transcript } as const satisfies AgentSession;

@@ -15,8 +15,26 @@ export interface SessionMeta {
   createdAt: string; // ISO8601
   updatedAt: string; // ISO8601
   messageCount: number;
+  /**
+   * Where the session lives: its transcript file, or on CodeBuddy IDE its conversation directory.
+   * Pass it back as `SessionReadRef.filePath` to read exactly this session.
+   */
   filePath?: string;
   sizeBytes: number;
+}
+
+/** Which session `readSession` opens. */
+export interface SessionReadRef {
+  /** The id the session is listed under. Codex also accepts a suffix of 8+ characters. */
+  sessionId: string;
+  /** The workspace to look in. */
+  projectPath?: string;
+  /**
+   * The `SessionMeta.filePath` the adapter listed: a transcript file on every platform except
+   * CodeBuddy IDE, where it is the conversation directory. When set, exactly that is read, so a
+   * caller that enumerated sessions never opens another copy with the same id.
+   */
+  filePath?: string;
 }
 
 export abstract class AgentAdapter {
@@ -44,8 +62,13 @@ export abstract class AgentAdapter {
   /** List every session under the given project (working directory) on this platform. When projectPath is undefined, list all. */
   abstract listConversations(projectPath?: string): Promise<SessionMeta[]>;
 
-  /** Read one session and return a normalized IR Session. */
-  abstract readSession(sessionId: string, projectPath?: string): Promise<Session>;
+  /**
+   * Read one session and return a normalized IR Session. Lookup order: `filePath`, then the id in
+   * `projectPath`, then (Cursor, WorkBuddy and CodeBuddy IDE, or when no `projectPath` is given)
+   * the id across the platform. The returned `sessionId` is the id of the session opened, never
+   * the one requested.
+   */
+  abstract readSession(ref: SessionReadRef): Promise<Session>;
 
   /**
    * The id this platform stores `sessionId` under, when anything with that id exists, or undefined.

@@ -77,7 +77,7 @@ describe('migrating user images to Cursor', () => {
     const cwd = path.join(mocks.home, 'work');
     const id = await adapter.writeSession(sessionWithUserImages(), cwd);
 
-    const back = await adapter.readSession(id, cwd);
+    const back = await adapter.readSession({ sessionId: id, projectPath: cwd });
     expect(textOf(back)).toEqual([
       `what is wrong in this screenshot | ${PLACEHOLDER}`,
       'the margin',

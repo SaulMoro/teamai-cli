@@ -197,7 +197,7 @@ describe('AgentSession.copy', () => {
   it.each(LEGACY)('%s: a copy an older TeamAI wrote under %s is reused', async (platform, kind) => {
     const sourceId = await writeSource();
     const cwd = workspace('target');
-    const sourceSession = await getAdapter(SOURCE_PLATFORM).readSession(sourceId, workspace('source'));
+    const sourceSession = await getAdapter(SOURCE_PLATFORM).readSession({ sessionId: sourceId, projectPath: workspace('source') });
     mocks.writeAs = legacyId(platform, kind, sourceId);
     await getAdapter(platform).writeSession(sourceSession, cwd);
     mocks.writeAs = '';
@@ -216,7 +216,7 @@ describe('AgentSession.copy', () => {
   // The legacy ids did not name the workspace, so a copy under one in another workspace belongs there.
   it.each(LEGACY)('%s: a copy an older TeamAI wrote under %s in another workspace is left alone', async (platform, kind) => {
     const sourceId = await writeSource();
-    const sourceSession = await getAdapter(SOURCE_PLATFORM).readSession(sourceId, workspace('source'));
+    const sourceSession = await getAdapter(SOURCE_PLATFORM).readSession({ sessionId: sourceId, projectPath: workspace('source') });
     mocks.writeAs = legacyId(platform, kind, sourceId);
     await getAdapter(platform).writeSession(sourceSession, workspace('elsewhere'));
     mocks.writeAs = '';

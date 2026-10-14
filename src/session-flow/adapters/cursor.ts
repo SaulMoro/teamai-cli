@@ -21,7 +21,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { AgentAdapter, type SessionMeta } from './base.js';
+import { AgentAdapter, type SessionMeta, type SessionReadRef } from './base.js';
 import type { Session, Message, ContentBlock } from '../ir.js';
 import { imagePlaceholderText } from '../ir.js';
 import {
@@ -254,11 +254,17 @@ export class CursorAdapter extends AgentAdapter {
     };
   }
 
-  async readSession(sessionId: string, projectPath?: string): Promise<Session> {
-    const jsonlPath = this.findSessionFile(sessionId, projectPath);
+  async readSession(ref: SessionReadRef): Promise<Session> {
+    // The listed file, else the id in the workspace, else the id anywhere.
+    const jsonlPath =
+      ref.filePath ??
+      this.findSessionFile(ref.sessionId, ref.projectPath) ??
+      (ref.projectPath ? this.findSessionFile(ref.sessionId) : null);
     if (!jsonlPath) {
-      throw new Error(`Cursor session file not found: session_id=${sessionId}`);
+      throw new Error(`Cursor session file not found: session_id=${ref.sessionId}`);
     }
+    // The file name is the id: a listed file decides it, not the request.
+    const sessionId = path.basename(jsonlPath, '.jsonl');
 
     // The directory layout is <encoded-cwd>/agent-transcripts/<uuid>/<uuid>.jsonl.
     // Go up 3 levels to reach the project directory; 2 levels lands on the intermediate agent-transcripts layer,

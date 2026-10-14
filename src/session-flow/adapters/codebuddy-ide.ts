@@ -19,7 +19,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { AgentAdapter, type SessionMeta } from './base.js';
+import { AgentAdapter, type SessionMeta, type SessionReadRef } from './base.js';
 import type { Session, Message, ContentBlock, ImageBlock, ToolResultBlock } from '../ir.js';
 import {
   findIdeHistoryDirs,
@@ -217,10 +217,12 @@ export class CodeBuddyIdeAdapter extends AgentAdapter {
     };
   }
 
-  async readSession(sessionId: string, projectPath?: string): Promise<Session> {
-    const convId = toConvId(sessionId);
+  async readSession(ref: SessionReadRef): Promise<Session> {
+    const projectPath = ref.projectPath;
+    // A listed conversation directory decides the id, not the request.
+    const convId = ref.filePath ? path.basename(ref.filePath) : toConvId(ref.sessionId);
 
-    // Look in the given workspace first, then search globally.
+    // The listed conversation directory, else the given workspace, else search globally.
     // Session ids are globally unique, so the user does not have to cd into the original workspace to migrate out —
     // and IDE workspace directory names are md5(cwd), so without projectPath there is no way to scope the search.
     let convDir: string | undefined;
@@ -230,7 +232,12 @@ export class CodeBuddyIdeAdapter extends AgentAdapter {
     // so cwd can only be marked with an md5 placeholder and must not impersonate the passed-in path (otherwise the archive key would be wrong too).
     let matchedGivenPath = false;
 
-    if (projectPath) {
+    if (ref.filePath) {
+      convDir = ref.filePath;
+      historyDir = path.dirname(ref.filePath);
+      workspaceHash = path.basename(historyDir);
+      matchedGivenPath = projectPath !== undefined && hashWorkspace(projectPath) === workspaceHash;
+    } else if (projectPath) {
       for (const dir of findIdeHistoryDirs(projectPath)) {
         const candidate = path.join(dir, convId);
         if (fs.existsSync(candidate)) {
@@ -251,7 +258,7 @@ export class CodeBuddyIdeAdapter extends AgentAdapter {
       }
     }
     if (!convDir || !historyDir) {
-      throw new Error(`CodeBuddy IDE session not found: session_id=${sessionId}`);
+      throw new Error(`CodeBuddy IDE session not found: session_id=${ref.sessionId}`);
     }
 
     const entry = readIdeConversations(historyDir).find((e) => e.id === convId);

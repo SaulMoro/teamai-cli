@@ -265,14 +265,14 @@ describe('CodeBuddyIdeAdapter', () => {
   it('falls back to a session id title when the first message is injected context', async () => {
     seed();
     const adapter = new CodeBuddyIdeAdapter();
-    const session = await adapter.readSession('22222222222222222222222222222222');
+    const session = await adapter.readSession({ sessionId: '22222222222222222222222222222222' });
     expect(session.title).toBe('Session 22222222');
   });
 
   it('converts IDE blocks into IR, folding tool results into a user message', async () => {
     seed();
     const adapter = new CodeBuddyIdeAdapter();
-    const session = await adapter.readSession('33333333333333333333333333333333', cwdA);
+    const session = await adapter.readSession({ sessionId: '33333333333333333333333333333333', projectPath: cwdA });
 
     expect(session.platform).toBe('codebuddy-ide');
     expect(session.cwd).toBe(cwdA);
@@ -297,12 +297,12 @@ describe('CodeBuddyIdeAdapter', () => {
     fs.mkdirSync(targetCwd, { recursive: true });
     const sourceId = '33333333333333333333333333333333';
 
-    const source = await adapter.readSession(sourceId, cwdA);
+    const source = await adapter.readSession({ sessionId: sourceId, projectPath: cwdA });
     const writtenId = await adapter.writeSession({ ...source, title: 'round trip' }, targetCwd);
     expect(writtenId).toMatch(/^[0-9a-f]{32}$/);
     expect(writtenId).not.toBe(sourceId);
 
-    const back = await adapter.readSession(writtenId, targetCwd);
+    const back = await adapter.readSession({ sessionId: writtenId, projectPath: targetCwd });
     expect(back.title).toBe('round trip');
     expect(back.messages).toHaveLength(source.messages.length);
 
@@ -311,7 +311,7 @@ describe('CodeBuddyIdeAdapter', () => {
 
     const replaced = await adapter.writeSession({ ...source, title: 'should not clobber' }, cwdA);
     expect(replaced).not.toBe(sourceId);
-    const still = await adapter.readSession(sourceId, cwdA);
+    const still = await adapter.readSession({ sessionId: sourceId, projectPath: cwdA });
     expect(still.title).not.toBe('should not clobber');
 
     expect(await adapter.deleteSession(writtenId, targetCwd)).toBe(true);
@@ -330,7 +330,7 @@ describe('CodeBuddyIdeAdapter', () => {
   it('refuses to write when the target cwd is not an absolute path', async () => {
     seed();
     const adapter = new CodeBuddyIdeAdapter();
-    const source = await adapter.readSession('33333333333333333333333333333333', cwdA);
+    const source = await adapter.readSession({ sessionId: '33333333333333333333333333333333', projectPath: cwdA });
 
     await expect(adapter.writeSession({ ...source, cwd: 'md5:abc' })).rejects.toThrow(/absolute working directory/);
   });
@@ -342,11 +342,11 @@ describe('CodeBuddyIdeAdapter', () => {
     // 会话在 cwdA 工作区，但用另一个 projectPath 读取 → 全局兜底命中。
     // cwd 必须标 md5 占位（真实工作区不可逆），绝不能冒充传入路径，
     // 否则下游按 session.cwd 派生的归档键会跟着错。
-    const session = await adapter.readSession('33333333333333333333333333333333', '/tmp/other-project');
+    const session = await adapter.readSession({ sessionId: '33333333333333333333333333333333', projectPath: '/tmp/other-project' });
     expect(session.cwd).toBe(`md5:${md5(cwdA)}`);
 
     // 对照：projectPath 与会话所在工作区一致时，cwd 就是该路径
-    const direct = await adapter.readSession('33333333333333333333333333333333', cwdA);
+    const direct = await adapter.readSession({ sessionId: '33333333333333333333333333333333', projectPath: cwdA });
     expect(direct.cwd).toBe(cwdA);
   });
 });

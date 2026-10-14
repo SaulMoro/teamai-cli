@@ -330,14 +330,14 @@ async function sweepRoute(aName: string, bName: string): Promise<void> {
 
   const fixture = buildFixture();
   const sidA = await (A as any).writeSession(fixture, cwdA);
-  const s1 = await (A as any).readSession(sidA, cwdA);
+  const s1 = await A.readSession({ sessionId: sidA, projectPath: cwdA });
 
   const enhanced = degradeThinkingBlocks(s1, bName);
   const sidB = await (B as any).writeSession(enhanced, cwdB);
-  const s2 = await (B as any).readSession(sidB, cwdB);
+  const s2 = await B.readSession({ sessionId: sidB, projectPath: cwdB });
 
   const sidA2 = await (A as any).writeSession(s2, cwdA2);
-  const s3 = await (A as any).readSession(sidA2, cwdA2);
+  const s3 = await A.readSession({ sessionId: sidA2, projectPath: cwdA2 });
 
   const expectDegrade = bName === 'cursor';
   const leg1 = compareSessions(s1, s2, `${aName}→${bName}`, expectDegrade);
@@ -417,7 +417,7 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
         records.map((r) => JSON.stringify(r)).join('\n') + '\n',
       );
 
-      const session = (await (adapter as any).readSession('dag00000-0000-4000-8000-000000000000', cwd)) as Session;
+      const session = await adapter.readSession({ sessionId: 'dag00000-0000-4000-8000-000000000000', projectPath: cwd });
       const outline = session.messages.map((m) => `${m.role}:${textOf(m)}`);
       (REPORT.extras as Record<string, unknown>).flattenDag = {
         expectedFileOrder: ['user:Q1', 'assistant:A1', 'user:Q2-main', 'assistant:A1-branch2', 'user:SIDECHAIN-Q', 'assistant:A2', 'user:ORPHAN-Q'],
@@ -475,7 +475,7 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
         ),
       );
       fs.writeFileSync(path.join(wsDir, 'index.json'), JSON.stringify({ conversations: [{ id: convId, type: 'craft', name: 'F1', createdAt: '2026-09-01T10:00:00.000Z', lastMessageAt: '2026-09-01T10:00:00.000Z' }] }));
-      await mk('F1 codebuddy-ide image block silently dropped', ide, () => ide.readSession(convId, cwd));
+      await mk('F1 codebuddy-ide image block silently dropped', ide, () => ide.readSession({ sessionId: convId, projectPath: cwd }));
 
       // F2: 空 content 消息被多平台写入端静默丢弃（score 按 block 计，看不见消息级丢失）
       const fixtureEmpty = buildFixture();
@@ -544,7 +544,7 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
       // The copy gets an id derived from the target workspace, never the source UUID.
       expect(claudeSid).not.toBe(session.sessionId);
       t0 = Date.now();
-      const back = (await claude.readSession(claudeSid, cwd)) as Session;
+      const back = (await claude.readSession({ sessionId: claudeSid, projectPath: cwd })) as Session;
       const claudeReadMs = Date.now() - t0;
 
       const codex = new CodexAdapter('codex');
@@ -553,7 +553,7 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
       const stressSid = (await codex.writeSession(session, cwd)) as string;
       const codexWriteMs = Date.now() - t0;
       t0 = Date.now();
-      await codex.readSession(stressSid);
+      await codex.readSession({ sessionId: stressSid });
       const codexReadMs = Date.now() - t0;
 
       const mem1 = process.memoryUsage();

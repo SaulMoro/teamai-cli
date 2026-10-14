@@ -21,7 +21,7 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { AgentAdapter, type SessionMeta } from './base.js';
+import { AgentAdapter, type SessionMeta, type SessionReadRef } from './base.js';
 import type { Session, Message, ContentBlock } from '../ir.js';
 import { assertSafeSessionFileId, deriveTargetSessionId } from '../ids.js';
 import { imagePlaceholderText } from '../ir.js';
@@ -430,11 +430,15 @@ export class ClaudeCodeAdapter extends AgentAdapter {
     };
   }
 
-  async readSession(sessionId: string, projectPath?: string): Promise<Session> {
-    const jsonlPath = this.findSessionFile(sessionId, projectPath);
+  async readSession(ref: SessionReadRef): Promise<Session> {
+    const jsonlPath = ref.filePath ?? this.findSessionFile(ref.sessionId, ref.projectPath);
     if (!jsonlPath) {
-      throw new Error(`Claude Code session file not found: session_id=${sessionId}, project_path=${projectPath ?? 'undefined'}`);
+      throw new Error(
+        `Claude Code session file not found: session_id=${ref.sessionId}, project_path=${ref.projectPath ?? 'undefined'}`,
+      );
     }
+    // The file name is the id: a listed file decides it, not the request.
+    const sessionId = path.basename(jsonlPath, '.jsonl');
 
     const cwd =
       bestEffortDecodeCwdClaude(path.basename(path.dirname(jsonlPath))) ??

@@ -40,7 +40,7 @@ import * as path from 'node:path';
 import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { homedir } from 'node:os';
-import { AgentAdapter, type SessionMeta } from './base.js';
+import { AgentAdapter, type SessionMeta, type SessionReadRef } from './base.js';
 import type { Session, Message, ContentBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock } from '../ir.js';
 import { imagePlaceholderText } from '../ir.js';
 import { titleFromUserText, visibleUserText } from '../title.js';
@@ -421,12 +421,17 @@ export class CodexAdapter extends AgentAdapter {
     return metas;
   }
 
-  async readSession(sessionId: string, _projectPath?: string): Promise<Session> {
-    const f = this.findSessionFile(sessionId);
-    if (!f) throw new Error(`Codex session not found: ${sessionId}`);
+  async readSession(ref: SessionReadRef): Promise<Session> {
+    const f = ref.filePath ?? this.findSessionFile(ref.sessionId, ref.projectPath);
+    if (!f) {
+      const where = ref.projectPath ? ` in ${ref.projectPath}` : '';
+      throw new Error(`Codex session not found: ${ref.sessionId}${where}`);
+    }
 
     const records = [...readJsonl(f)];
 
+    // A suffix of the id finds the session, so the id comes from the rollout opened.
+    let sessionId = path.basename(f, '.jsonl');
     let cwd = '';
     let createdAt = new Date().toISOString();
     const sessionMetadata: Record<string, unknown> = {};
@@ -434,6 +439,7 @@ export class CodexAdapter extends AgentAdapter {
     for (const rec of records) {
       if (rec.type === 'session_meta') {
         const payload = (rec.payload as Record<string, unknown>) ?? {};
+        if (typeof payload.id === 'string' && payload.id) sessionId = payload.id;
         cwd = String(payload.cwd ?? '');
         createdAt = parseCodexTimestamp(payload.timestamp);
         for (const key of ['originator', 'cli_version', 'source', 'model_provider'] as const) {

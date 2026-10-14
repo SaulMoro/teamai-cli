@@ -262,9 +262,8 @@ export class MigrationEngine {
     private targetPlatform: string,
   ) {}
 
-  async preview(sessionId: string, projectPath?: string): Promise<MigrationPreview> {
-    const source = getAdapter(this.sourcePlatform);
-    const session = await source.readSession(sessionId, projectPath);
+  /** What migrating `session`, read from the source platform, would carry over. */
+  preview(session: Session): MigrationPreview {
     const fidelity = fidelityFromSession(session, this.targetPlatform);
 
     return {
