@@ -5,7 +5,8 @@ import { fileURLToPath } from 'node:url';
 
 /**
  * A stand-in `opencode` (V2) for the session commands teamai runs: `--version`,
- * `session list --format json`, `session export <id>` and `session delete <id>`.
+ * `session list --format json`, `session export <id>`, `session delete <id>` and
+ * `session import <file> --directory <dir>`, which answers the way OpenCode 2.0.29 does.
  * Sessions are export files (`{ info, messages }`, the shape `session export`
  * prints) under `$XDG_DATA_HOME/fake-opencode/sessions/<id>.json`, so a test
  * plants one by writing its export. `list` shows the sessions whose
@@ -31,8 +32,9 @@ if (args[0] === '--version') {
 }
 if (args[0] !== 'session') fail('fake opencode: unsupported command ' + args.join(' '));
 if (!args.includes('--standalone')) fail('Managed service port 49374 on 127.0.0.1 is already in use by another process.');
-const positional = args.filter((a, i) => !a.startsWith('-') && !(i > 0 && ['--format', '-n', '--max-count'].includes(args[i - 1])));
+const positional = args.filter((a, i) => !a.startsWith('-') && !(i > 0 && ['--format', '-n', '--max-count', '--directory'].includes(args[i - 1])));
 const [, sub, id] = positional;
+const option = (name) => { const i = args.indexOf(name); return i === -1 ? undefined : args[i + 1]; };
 const file = (sid) => path.join(dir, sid + '.json');
 if (sub === 'list') {
   const cwd = real(process.cwd());
@@ -52,6 +54,33 @@ if (sub === 'list') {
 } else if (sub === 'delete') {
   if (!fs.existsSync(file(id))) fail('Session not found: ' + id);
   fs.rmSync(file(id));
+} else if (sub === 'import') {
+  const doc = JSON.parse(fs.readFileSync(id, 'utf8'));
+  const { info, messages } = doc;
+  for (const key of ['projectID', 'cost', 'tokens']) if (info[key] === undefined) fail('SchemaError: Missing key\n  at ["info"]["' + key + '"]');
+  if (!info.id.startsWith('ses')) fail('ID ' + info.id + ' does not start with ses');
+  for (const m of messages) {
+    if (!m.id.startsWith('msg_')) fail('Expected a string starting with "msg_"');
+    for (const part of m.content || []) {
+      if (part.type === 'tool' && !(part.time && part.time.created)) fail('SchemaError: Missing key\n  at ["content"]["time"]');
+      if (part.type === 'tool' && part.state.status === 'error' && !part.state.error) fail('SchemaError: Missing key\n  at ["state"]["error"]');
+    }
+  }
+  const directory = path.resolve(option('--directory') || process.cwd());
+  if (!fs.existsSync(directory)) fail('LocationNotFoundError: Location not found: ' + directory);
+  // OpenCode answers an existing id on stderr and exits 0.
+  if (fs.existsSync(file(info.id))) { process.stderr.write('Session already exists\n'); process.exit(0); }
+  const taken = new Set();
+  for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
+    try { for (const m of JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')).messages) taken.add(m.id); } catch {}
+  }
+  if (messages.some((m) => taken.has(m.id))) fail('Failed to import session: Internal Server Error');
+  // OpenCode keeps an assistant message only once it completed, and drops the rest without a word.
+  const kept = messages.filter((m) => m.type !== 'assistant' || (m.time && m.time.completed));
+  const stored = { info: { ...info, time: { ...info.time, updated: Date.now() }, location: { directory } }, messages: kept };
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file(info.id), JSON.stringify(stored, null, 2));
+  process.stdout.write('Imported session: ' + info.id + '\n');
 } else fail('fake opencode: unsupported command ' + args.join(' '));
 `;
 

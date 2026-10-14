@@ -3,7 +3,8 @@
  *
  * OpenCode 2 keeps sessions in a SQLite store whose schema is still moving, so this adapter talks
  * only to its CLI: `opencode session list --format json` (the sessions of the project the command
- * runs in), `opencode session export <id>` (one session by id, from any directory) and
+ * runs in), `opencode session export <id>` (one session by id, from any directory),
+ * `opencode session import <file> --directory <dir>` (the export shape) and
  * `opencode session delete <id>`. OpenCode 1 has no `session export`, so it counts as unavailable.
  *
  * Every call passes `--standalone`: without it the CLI talks to OpenCode's background service,
@@ -19,11 +20,12 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { z } from 'zod';
 import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef } from './base.js';
-import type { ContentBlock, Message, Session } from '../ir.js';
+import { imagePlaceholderText, type ContentBlock, type Message, type Session } from '../ir.js';
 import { resolveRealCwd } from '../fs.js';
+import { deriveOpencodeMessageIds, deriveTargetSessionId } from '../ids.js';
 import { execCommand, probeBinary, type ExecResult } from '../../utils/exec.js';
 
 const OPENCODE_TO_IR_TOOL: Record<string, string> = {
@@ -45,6 +47,9 @@ const LIST_MAX = 10_000;
 
 /** `opencode session export` and `delete` print this to stderr for an id it does not have. */
 const NOT_FOUND = /Session not found/i;
+
+/** `opencode session import` prints this to stderr, and exits 0, for an id it already has. */
+const ALREADY_EXISTS = /Session already exists/i;
 
 const ListedSessions = z.array(
   z.object({ id: z.string(), title: z.string(), created: z.number(), updated: z.number(), directory: z.string() }),
@@ -178,6 +183,115 @@ function sessionFromExport(stdout: string): Session {
   };
 }
 
+const IR_TO_OPENCODE_TOOL: Record<string, string> = Object.fromEntries(
+  Object.entries(OPENCODE_TO_IR_TOOL)
+    .filter(([opencode]) => opencode !== 'bash')
+    .map(([opencode, ir]) => [ir, opencode]),
+);
+
+type ExportMessage = { type: 'user' | 'assistant'; created: number; fields: Record<string, unknown> };
+type ToolPartState = { status: string; input: Record<string, unknown>; content: Array<{ type: 'text'; text: string }> } & Record<
+  string,
+  unknown
+>;
+
+const NO_TOKENS = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } };
+
+/**
+ * The `opencode session import` file for `session`, in the shape `session export` prints.
+ * Tool results, which arrive as user turns, go back into the tool part of the call they answer.
+ * Times never go backwards, and every message gets a new id (`deriveOpencodeMessageIds`).
+ * An assistant message needs `time.completed`: OpenCode 2.0.29 imports one without it, then
+ * drops it without a word.
+ */
+function exportOf(session: Session, sessionId: string, directory: string): Record<string, unknown> {
+  const tools = new Map<string, ToolPartState>();
+  const answer = (block: Extract<ContentBlock, { type: 'tool_result' }>): boolean => {
+    const state = tools.get(block.callId);
+    if (!state) return false;
+    const content = [{ type: 'text' as const, text: block.content }];
+    if (block.isError) Object.assign(state, { status: 'error', content, error: { type: 'tool', message: block.content } });
+    else Object.assign(state, { status: 'completed', content });
+    return true;
+  };
+
+  let clock = Date.parse(session.createdAt) || 0;
+  const start = clock;
+  const messages: ExportMessage[] = [];
+  for (const message of session.messages) {
+    clock = Math.max(clock, Date.parse(message.timestamp ?? '') || 0);
+    const created = clock;
+    if (message.role === 'user') {
+      const text: string[] = [];
+      const files: Array<Record<string, unknown>> = [];
+      for (const block of message.content) {
+        if (block.type === 'tool_result') {
+          if (!answer(block)) text.push(`[tool_result] ${block.content}`);
+        } else if (block.type === 'image' && block.data) {
+          files.push({ mime: block.mimeType, data: block.data, source: { type: 'inline' }, ...(block.label ? { name: block.label } : {}) });
+        } else {
+          text.push(blockText(block));
+        }
+      }
+      if (text.length === 0 && files.length === 0) continue;
+      messages.push({ type: 'user', created, fields: { text: text.join('\n\n'), ...(files.length > 0 ? { files } : {}) } });
+      continue;
+    }
+    const content: Array<Record<string, unknown>> = [];
+    for (const block of message.content) {
+      if (block.type === 'text') content.push({ type: 'text', text: block.text });
+      else if (block.type === 'thinking') content.push({ type: 'reasoning', text: block.text });
+      else if (block.type === 'tool_call') {
+        const state: ToolPartState = { status: 'completed', input: block.arguments, content: [] };
+        tools.set(block.callId, state);
+        content.push({ type: 'tool', id: block.callId, name: IR_TO_OPENCODE_TOOL[block.toolName] ?? block.toolName, state, time: { created } });
+      } else if (block.type !== 'tool_result' || !answer(block)) content.push({ type: 'text', text: blockText(block) });
+    }
+    if (content.length === 0) continue;
+    const model = { id: message.metadata?.model ?? session.metadata?.model ?? 'unknown', providerID: session.platform };
+    messages.push({ type: 'assistant', created, fields: { agent: 'build', model, content } });
+  }
+
+  const ids = deriveOpencodeMessageIds(sessionId, messages.map((m) => m.created));
+  return {
+    info: {
+      id: sessionId,
+      title: session.title,
+      // OpenCode works the project out from the directory on import.
+      projectID: 'global',
+      cost: 0,
+      tokens: NO_TOKENS,
+      time: { created: start, updated: clock },
+      location: { directory },
+    },
+    messages: messages.map((m, i) => ({
+      id: ids[i],
+      type: m.type,
+      time: m.type === 'assistant' ? { created: m.created, completed: m.created } : { created: m.created },
+      ...m.fields,
+    })),
+  };
+}
+
+/** A block OpenCode has no part for in that message, as text. */
+function blockText(block: ContentBlock): string {
+  switch (block.type) {
+    case 'text':
+    case 'thinking':
+      return block.text;
+    case 'image':
+      return imagePlaceholderText(block);
+    case 'tool_call':
+      return `[tool_call] ${block.toolName} ${JSON.stringify(block.arguments)}`;
+    case 'tool_result':
+      return `[tool_result] ${block.content}`;
+    default: {
+      const unhandled: never = block;
+      return unhandled;
+    }
+  }
+}
+
 export class OpencodeAdapter extends AgentAdapter {
   static readonly platform = 'opencode';
 
@@ -253,8 +367,36 @@ export class OpencodeAdapter extends AgentAdapter {
     return resolveRealCwd(directory) === resolveRealCwd(projectPath) ? sessionId : undefined;
   }
 
-  async writeSession(): Promise<string> {
-    throw new Error('Writing OpenCode sessions is not supported yet. Pick another target platform.');
+  /**
+   * Import the session into `projectPath` with `opencode session import`, under the id
+   * `deriveTargetSessionId` gives it. The caller checks first that no copy exists.
+   */
+  async writeSession(session: Session, projectPath?: string): Promise<string> {
+    const cwd = projectPath ?? session.cwd;
+    const sessionId = deriveTargetSessionId({
+      targetPlatform: this.platform,
+      targetCwd: cwd,
+      sourceSessionId: session.sessionId,
+      sourceCreatedAt: session.createdAt,
+    });
+    if (!fs.existsSync(cwd)) {
+      throw new Error(`OpenCode imports a session only into a directory that exists, and ${cwd} does not. Create it first.`);
+    }
+    const dir = fs.mkdtempSync(path.join(tmpdir(), 'teamai-opencode-'));
+    try {
+      const file = path.join(dir, `${sessionId}.json`);
+      // The real path, the one OpenCode records for a session started in that directory.
+      fs.writeFileSync(file, JSON.stringify(exportOf(session, sessionId, resolveRealCwd(cwd))));
+      const result = await this.session(['import', file, '--directory', resolveRealCwd(cwd)]);
+      if (result.code !== 0) throw new Error(`opencode session import failed: ${result.stderr.trim() || `exit ${result.code}`}`);
+      if (result.stdout.includes(`Imported session: ${sessionId}`)) return sessionId;
+      // OpenCode reports an id it already has on stderr and exits 0. The caller looked a moment
+      // ago, so another run just imported this same copy.
+      if (ALREADY_EXISTS.test(result.stderr)) return sessionId;
+      throw new Error(`opencode session import did not import ${sessionId}: ${result.stderr.trim() || result.stdout.trim()}`);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 
   async deleteSession(sessionId: string, projectPath?: string): Promise<boolean> {

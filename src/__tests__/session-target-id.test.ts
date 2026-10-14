@@ -21,10 +21,13 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 import { getAdapter } from '../session-flow/adapters/index.js';
-import { deriveTargetSessionId } from '../session-flow/ids.js';
+import { deriveOpencodeMessageIds, deriveTargetSessionId } from '../session-flow/ids.js';
 import type { Session } from '../session-flow/ir.js';
+import { installFakeOpencode } from './helpers/fake-opencode.js';
 
-const WRITABLE = ['claude-code', 'codebuddy', 'codebuddy-ide', 'codex', 'cursor', 'workbuddy'] as const;
+const WRITABLE = ['claude-code', 'codebuddy', 'codebuddy-ide', 'codex', 'cursor', 'opencode', 'workbuddy'] as const;
+/** OpenCode keeps its sessions behind its CLI: a stand-in `opencode`, the only command on PATH. */
+const FAKE_OPENCODE_BIN = installFakeOpencode();
 /** Platforms whose ids already included the workspace before every id was derived. */
 const WORKSPACE_KEYED = ['codebuddy-ide', 'codex', 'cursor', 'workbuddy'] as const;
 
@@ -86,7 +89,8 @@ beforeEach(() => {
     recursive: true,
   });
   // Keep Codex's indexing step from starting a real CLI.
-  vi.stubEnv('PATH', '');
+  vi.stubEnv('PATH', FAKE_OPENCODE_BIN);
+  vi.stubEnv('XDG_DATA_HOME', path.join(mocks.home, '.local', 'share'));
 });
 
 afterEach(() => {
@@ -179,6 +183,45 @@ describe('target session id for a Windows workspace', () => {
 
   it.each(['C:work\\repo', 'work\\repo'])('refuses "%s", which is not absolute', (cwd) => {
     expect(() => idFor(cwd)).toThrow(cwd);
+  });
+});
+
+// OpenCode ids are a prefix, 12 hex of time and 14 base62. OpenCode 2.0.29 itself created the
+// session `ses_ec4a5b73fffe…` at 1791997135040 ms and the message `msg_13b5a492d001…` at 1791997135149 ms.
+describe('target session id in OpenCode', () => {
+  const OPENCODE_ID = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
+
+  it('keeps the time part of an OpenCode source and derives the rest from the target workspace', () => {
+    const idIn = (targetCwd: string): string =>
+      deriveTargetSessionId({ targetPlatform: 'opencode', targetCwd, sourceSessionId: 'ses_ec4a5b73fffeRP6bDXlApNBFvY' });
+
+    expect(idIn('/work/a')).toMatch(OPENCODE_ID);
+    expect(idIn('/work/a').slice(0, 16)).toBe('ses_ec4a5b73fffe');
+    expect(idIn('/work/a')).not.toBe('ses_ec4a5b73fffeRP6bDXlApNBFvY');
+    expect(idIn('/work/a')).toBe(idIn('/work/a'));
+    expect(idIn('/work/b')).not.toBe(idIn('/work/a'));
+  });
+
+  it('encodes the creation time of another source the way OpenCode encodes a new session', () => {
+    const id = deriveTargetSessionId({
+      targetPlatform: 'opencode',
+      targetCwd: '/work/a',
+      sourceSessionId: UUID_SOURCE,
+      sourceCreatedAt: new Date(1791997135040).toISOString(),
+    });
+
+    expect(id).toMatch(OPENCODE_ID);
+    expect(id.slice(0, 16)).toBe('ses_ec4a5b73fffe');
+  });
+
+  it('gives messages ids that encode their time the way OpenCode does and sort in order, even within one millisecond', () => {
+    const ids = deriveOpencodeMessageIds('ses_ec4a5b73fffeAAAAAAAAAAAAAA', [1791997135149, 1791997135149, 1791997135150]);
+
+    expect(ids.every((id) => /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(id))).toBe(true);
+    expect(ids[0].slice(0, 16)).toBe('msg_13b5a492d001');
+    expect([...ids].sort()).toEqual(ids);
+    expect(new Set(ids).size).toBe(3);
+    expect(deriveOpencodeMessageIds('ses_ec4a5b73fffeBBBBBBBBBBBBBB', [1791997135149])[0]).not.toBe(ids[0]);
   });
 });
 

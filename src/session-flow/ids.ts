@@ -2,8 +2,8 @@
  * ids.ts -- the id a session gets when TeamAI writes it into a tool.
  *
  * Every target id is derived: sha256 over the target platform, the canonical
- * target workspace and the source session id, shaped as a UUIDv7. No source id
- * is ever reused, for any platform:
+ * target workspace and the source session id, shaped as a UUIDv7, or on
+ * OpenCode as an OpenCode id. No source id is ever reused, for any platform:
  *
  * - Reusing a source UUID wrote the copy over whatever already had that id in
  *   the target, and a same-platform CodeBuddy IDE copy replaced the live
@@ -38,6 +38,8 @@ export function deriveTargetSessionId(
     targetPlatform: string;
     targetCwd: string;
     sourceSessionId: string;
+    /** The source session's creation time (ISO 8601). Only an OpenCode id carries it. */
+    sourceCreatedAt?: string;
   },
   platform: NodeJS.Platform = process.platform,
 ): string {
@@ -49,7 +51,57 @@ export function deriveTargetSessionId(
         'Pass an absolute directory (--target-cwd for `session migrate`, --cwd for `session resume`).',
     );
   }
-  return uuidV7Shaped(`teamai:${targetPlatform}:${canonicalWorkspace(targetCwd, paths)}:${sourceSessionId}`);
+  const key = `teamai:${targetPlatform}:${canonicalWorkspace(targetCwd, paths)}:${sourceSessionId}`;
+  if (targetPlatform === 'opencode') {
+    const time =
+      OPENCODE_SESSION_TIME.exec(sourceSessionId)?.[1] ?? opencodeTime(opencodeClock(createdMs(target.sourceCreatedAt)), 'descending');
+    return `ses_${time}${base62Suffix(key)}`;
+  }
+  return uuidV7Shaped(key);
+}
+
+/**
+ * The ids of the messages TeamAI writes into the OpenCode session `sessionId`, one per creation
+ * time (epoch ms), in order. A copy needs its own message ids: OpenCode refuses a message id it
+ * already has, so two copies of one source cannot share them. Each id sorts after the one before,
+ * as OpenCode's own do, even when two messages share a time.
+ */
+export function deriveOpencodeMessageIds(sessionId: string, createdTimes: number[]): string[] {
+  let previous = -1n;
+  return createdTimes.map((ms, index) => {
+    const clock = opencodeClock(ms);
+    previous = clock > previous ? clock : previous + 1n;
+    return `msg_${opencodeTime(previous, 'ascending')}${base62Suffix(`${sessionId}:${index}`)}`;
+  });
+}
+
+/**
+ * OpenCode ids: a prefix, 12 hex of time, 14 base62 characters. OpenCode encodes the creation
+ * time so that session ids sort newest first and message ids oldest first, and a copy keeps that:
+ * the time part of an OpenCode source, or the time encoded the way OpenCode 2 encodes it, followed
+ * by a suffix derived like every other target id. OpenCode only checks the prefix.
+ */
+const OPENCODE_SESSION_TIME = /^ses_([0-9a-f]{12})/;
+const BASE62 = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+
+/** OpenCode 2 counts ids within one millisecond: `ms * 4096 + counter`, the first counter being 1. */
+const opencodeClock = (ms: number): bigint => BigInt(ms) * 4096n + 1n;
+
+/** OpenCode 2's time part: the low 48 bits of the clock, inverted for descending ids. */
+function opencodeTime(clock: bigint, order: 'ascending' | 'descending'): string {
+  const bits = (order === 'descending' ? ~clock : clock) & 0xffff_ffff_ffffn;
+  return bits.toString(16).padStart(12, '0');
+}
+
+/** A time OpenCode can encode; a missing or unparseable one sorts first. */
+function createdMs(iso: string | undefined): number {
+  const ms = iso ? Date.parse(iso) : NaN;
+  return Number.isFinite(ms) && ms > 0 ? ms : 0;
+}
+
+function base62Suffix(key: string): string {
+  const bytes = crypto.createHash('sha256').update(key).digest();
+  return Array.from(bytes.subarray(0, 14), (byte) => BASE62[byte % 62]).join('');
 }
 
 /** Platforms whose copies an older TeamAI derived without the workspace: per-project stores. */

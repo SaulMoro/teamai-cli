@@ -285,7 +285,12 @@ async function copy({ from, to, scrub = false }: AgentSessionCopyRequest): Promi
 
   let targetId: string;
   try {
-    targetId = deriveTargetSessionId({ targetPlatform: to.platform, targetCwd: to.cwd, sourceSessionId: session.sessionId });
+    targetId = deriveTargetSessionId({
+      targetPlatform: to.platform,
+      targetCwd: to.cwd,
+      sourceSessionId: session.sessionId,
+      sourceCreatedAt: session.createdAt,
+    });
   } catch (e) {
     return failed({ code: 'invalid_workspace', cwd: to.cwd, message: messageOf(e) });
   }

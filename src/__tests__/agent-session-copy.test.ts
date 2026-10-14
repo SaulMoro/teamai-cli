@@ -37,8 +37,11 @@ import { AgentSession } from '../session-flow/agent-session.js';
 import { getAdapter } from '../session-flow/adapters/index.js';
 import type { AgentAdapter } from '../session-flow/adapters/base.js';
 import type { Session } from '../session-flow/ir.js';
+import { installFakeOpencode } from './helpers/fake-opencode.js';
 
-const WRITABLE = ['claude-code', 'codebuddy', 'codebuddy-ide', 'codex', 'cursor', 'workbuddy'] as const;
+const WRITABLE = ['claude-code', 'codebuddy', 'codebuddy-ide', 'codex', 'cursor', 'opencode', 'workbuddy'] as const;
+/** OpenCode keeps its sessions behind its CLI: a stand-in `opencode`, the only command on PATH. */
+const FAKE_OPENCODE_BIN = installFakeOpencode();
 /** A Claude Code variant with its own store: a source on another platform than every target. */
 const SOURCE_PLATFORM = 'claude-internal';
 const CAN_REGISTER_CURSOR = process.platform !== 'win32' && spawnSync('sqlite3', ['-version']).status === 0;
@@ -121,10 +124,11 @@ const bare = (id: string): string => id.replace(/-/g, '');
 
 /**
  * Ids an older TeamAI wrote a copy of a UUID source under: the source id itself on another
- * platform, and for Claude Code and CodeBuddy the derived id without the workspace.
+ * platform, and for Claude Code and CodeBuddy the derived id without the workspace. No older
+ * TeamAI wrote OpenCode sessions.
  */
 const LEGACY = [
-  ...WRITABLE.map((platform) => [platform, 'the source UUID'] as const),
+  ...WRITABLE.filter((platform) => platform !== 'opencode').map((platform) => [platform, 'the source UUID'] as const),
   ['claude-code', 'the id derived without the workspace'] as const,
   ['codebuddy', 'the id derived without the workspace'] as const,
 ];
@@ -142,6 +146,7 @@ beforeEach(() => {
     ['.codebuddy', 'projects'],
     ['.codex', 'sessions'],
     ['.cursor', 'projects'],
+    ['.local', 'share', 'opencode'],
     ['.workbuddy', 'projects'],
   ]) {
     fs.mkdirSync(path.join(mocks.home, ...dir), { recursive: true });
@@ -152,7 +157,8 @@ beforeEach(() => {
   });
   if (CAN_REGISTER_CURSOR) createCursorStore();
   // Keep Codex's indexing step from starting a real CLI.
-  vi.stubEnv('PATH', '');
+  vi.stubEnv('PATH', FAKE_OPENCODE_BIN);
+  vi.stubEnv('XDG_DATA_HOME', path.join(mocks.home, '.local', 'share'));
 });
 
 afterEach(() => {
@@ -292,7 +298,8 @@ describe('AgentSession.copy', () => {
   });
 
   // An old session whose project was deleted still migrates, and the directory is not created.
-  it.each(WRITABLE)('%s: a workspace that does not exist gets a copy, and a repeat is reused', async (platform) => {
+  const KEEP_ANY_WORKSPACE = WRITABLE.filter((platform) => platform !== 'opencode');
+  it.each(KEEP_ANY_WORKSPACE)('%s: a workspace that does not exist gets a copy, and a repeat is reused', async (platform) => {
     const sourceId = await writeSource();
     const from = { platform: SOURCE_PLATFORM, sessionId: sourceId, cwd: workspace('source') };
     const to = { platform, cwd: path.join(mocks.home, 'work', 'deleted-project') };
@@ -306,6 +313,83 @@ describe('AgentSession.copy', () => {
     expect(second.status === 'done' && second.sessionId).toBe(first.status === 'done' && first.sessionId);
     expect(snapshot()).toEqual(before);
     expect(fs.existsSync(to.cwd)).toBe(false);
+  });
+
+  // `opencode session import` refuses a directory that does not exist.
+  it('opencode: a workspace that does not exist is refused with its path, and nothing is written', async () => {
+    const sourceId = await writeSource();
+    const from = { platform: SOURCE_PLATFORM, sessionId: sourceId, cwd: workspace('source') };
+    const to = { platform: 'opencode', cwd: path.join(mocks.home, 'work', 'deleted-project') };
+    const before = snapshot();
+
+    const result = await AgentSession.copy({ from, to });
+
+    expect(result).toMatchObject({ status: 'failed', failure: { code: 'write_failed', platform: 'opencode' } });
+    expect(result.status === 'failed' && result.failure.message).toContain(to.cwd);
+    expect(snapshot()).toEqual(before);
+    expect(fs.existsSync(to.cwd)).toBe(false);
+  });
+});
+
+describe('AgentSession.copy into OpenCode', () => {
+  const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+  function toolSession(cwd: string): Session {
+    return {
+      ...mkSession(cwd),
+      messages: [
+        {
+          role: 'user',
+          timestamp: '2026-09-24T10:00:00.000Z',
+          content: [
+            { type: 'text', text: 'read notes.txt' },
+            { type: 'image', mimeType: 'image/png', data: PNG },
+          ],
+        },
+        {
+          role: 'assistant',
+          timestamp: '2026-09-24T10:00:01.000Z',
+          content: [
+            { type: 'thinking', text: 'use the read tool' },
+            { type: 'tool_call', toolName: 'read_file', callId: 'call_1', arguments: { path: 'notes.txt' } },
+          ],
+        },
+        {
+          role: 'user',
+          timestamp: '2026-09-24T10:00:02.000Z',
+          content: [{ type: 'tool_result', callId: 'call_1', content: 'hello from notes', isError: false }],
+        },
+        { role: 'assistant', timestamp: '2026-09-24T10:00:03.000Z', content: [{ type: 'text', text: 'it says hello' }] },
+      ],
+    };
+  }
+
+  it('reads back with its messages in order, under new message ids that sort in that order', async () => {
+    const sourceCwd = workspace('source');
+    const sourceId = await getAdapter(SOURCE_PLATFORM).writeSession(toolSession(sourceCwd), sourceCwd);
+    const from = { platform: SOURCE_PLATFORM, sessionId: sourceId, cwd: sourceCwd };
+    const source = await AgentSession.find(from, { scrub: false });
+
+    const copies = [];
+    for (const name of ['ws-a', 'ws-b']) {
+      const copied = await AgentSession.copy({ from, to: { platform: 'opencode', cwd: workspace(name) } });
+      expect(copied).toMatchObject({ status: 'done', reused: false });
+      const found = await AgentSession.find(
+        { platform: 'opencode', sessionId: copied.status === 'done' ? copied.sessionId : '', cwd: workspace(name) },
+        { scrub: false },
+      );
+      copies.push(found.status === 'done' ? found.session : undefined);
+    }
+
+    const turns = (session: Session | undefined) => session?.messages.map(({ role, content }) => ({ role, content }));
+    expect(turns(copies[0])).toEqual(turns(source.status === 'done' ? source.session : undefined));
+    const ids = copies.map((copy) => [...new Set(copy?.messages.flatMap((m) => (m.messageId ? [m.messageId] : [])))]);
+    for (const messageIds of ids) {
+      expect(messageIds).toHaveLength(3);
+      expect(messageIds.every((id) => /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/.test(id))).toBe(true);
+      expect([...messageIds].sort()).toEqual(messageIds);
+    }
+    expect(ids[0].filter((id) => ids[1].includes(id))).toEqual([]);
   });
 });
 

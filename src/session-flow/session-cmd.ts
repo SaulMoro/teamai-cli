@@ -1199,6 +1199,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           targetPlatform: opts.platform,
           targetCwd: resumeCwd,
           sourceSessionId: session.sessionId,
+          sourceCreatedAt: session.createdAt,
         });
       } catch (e) {
         console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
