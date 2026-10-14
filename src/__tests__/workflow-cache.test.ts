@@ -234,7 +234,7 @@ steps:
     await syncWorkflowDefinitions(config);
     expect(await loadCachedWorkflow(config, 'build')).not.toBeNull();
 
-    writeWorkflow(config, 'build', VALID.replace('command: node compile.js', 'command: node compile.js\n    if: success'));
+    writeWorkflow(config, 'build', VALID.replace('command: node compile.js', 'command: node compile.js\n    for_each: items'));
     const synced = await syncWorkflowDefinitions(config);
 
     expect(synced.unrunnable).toContain('workflows/build.yaml');
@@ -586,5 +586,113 @@ steps:
       definition: { ends: { dropped: 'succeeded' }, steps: [{ id: 'compile' }, { id: 'stop', end: 'dropped' }] },
     });
   });
-});
+  it('reports an if that does not parse with its column', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Label the issue when the check fails.
+steps:
+  - id: check
+    command: node check.js
+  - id: label
+    needs: [check]
+    if: steps.check.outcome = 'failed'
+    command: node label.js
+`);
 
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:9: field "steps[1].if": step "label" if does not parse at column 21: unexpected "="',
+    ]);
+  });
+
+  it('reports an if that reads a step it does not need', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Label the issue when the check fails.
+steps:
+  - id: check
+    command: node check.js
+  - id: docs
+    needs: []
+    command: node docs.js
+  - id: label
+    needs: [check]
+    if: steps.check.outcome == 'failed' && steps.docs.outcome == 'success' || steps.nope.end == null
+    command: node label.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:12: field "steps[2].if": step "label" if reads steps.docs, which is not a step it needs, directly or through its needs',
+      'workflows/build.yaml:12: field "steps[2].if": step "label" if reads steps.nope, which is not a step it needs, directly or through its needs',
+    ]);
+  });
+
+  it('reports an if that reads an output field the step does not declare', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Fix what the review asks for.
+steps:
+  - id: review
+    command: node review.js
+    output:
+      verdict: pass | fix
+      notes:
+        summary: string
+  - id: free
+    needs: []
+    command: node free.js
+  - id: fix
+    needs: [review, free]
+    if: steps.review.outputs.verdcit == 'fix' || steps.review.outputs.notes.summary == '' || steps.review.outputs.verdict.text || steps.free.outputs.anything
+    command: node fix.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:16: field "steps[2].if": step "fix" if reads steps.review.outputs.verdcit, which is not in the output step "review" declares',
+      'workflows/build.yaml:16: field "steps[2].if": step "fix" if reads steps.review.outputs.verdict.text, which is not in the output step "review" declares',
+    ]);
+  });
+
+  it('reports a literally false if and drops the version that would still run the step', async () => {
+    const config = testConfig();
+    const body = `schemaVersion: v1alpha1
+name: build
+description: Publish after the build.
+steps:
+  - id: compile
+    command: node compile.js
+  - id: publish
+    needs: [compile]
+    command: node publish.js
+  - id: notify
+    needs: [compile]
+    command: node notify.js
+`;
+    writeWorkflow(config, 'build', body);
+    await syncWorkflowDefinitions(config);
+    writeWorkflow(config, 'build', body
+      .replace('command: node publish.js', 'if: false\n    command: node publish.js')
+      .replace('command: node notify.js', "if: \"!(1 == 1) || ''\"\n    command: node notify.js"));
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:9: field "steps[1].if": step "publish" if is always false, so the step never runs',
+      'workflows/build.yaml:13: field "steps[2].if": step "notify" if is always false, so the step never runs',
+    ]);
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.kept).toEqual([]);
+    expect(await startRun(config, 'build')).toMatchObject({ error: { code: 'workflow_not_found' } });
+  });
+});

@@ -577,5 +577,142 @@ describe('workflow engine', () => {
     expect(leased).toEqual(['check']);
     expect(done).toEqual({ run: runId, outcome: 'succeeded', end: 'dropped' });
   });
-});
+  it('runs a recovery step that reads a failed check, and the run still fails', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: check
+    command: node check.js
+  - id: label
+    needs: [check]
+    if: steps.check.outcome == 'failed'
+    command: node label.js
+  - id: ship
+    needs: [check]
+    command: node ship.js
+`));
 
+    const { leased, done } = await drive(config, runId, ['check']);
+
+    expect(leased).toEqual(['check', 'label']);
+    expect(done).toMatchObject({ outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({
+      steps: [{ id: 'check', status: 'failed' }, { id: 'label', status: 'succeeded' }, { id: 'ship', status: 'skipped' }],
+    });
+  });
+
+  it('skips a step whose if reads only one of two stopped dependencies', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: lint
+    command: node lint.js
+  - id: test
+    needs: []
+    command: node test.js
+  - id: report
+    needs: [lint, test]
+    if: steps.lint.outcome == 'failed'
+    command: node report.js
+  - id: both
+    needs: [lint, test]
+    if: steps.lint.outcome == 'failed' || steps.test.outcome == 'failed'
+    command: node both.js
+`));
+
+    const { leased, done } = await drive(config, runId, ['lint', 'test']);
+
+    expect(leased).toEqual(['lint', 'test', 'both']);
+    expect(done).toMatchObject({ outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{}, {}, { id: 'report', status: 'skipped' }, { id: 'both', status: 'succeeded' }] });
+  });
+
+  it('runs the branch whose if is true and skips the other without failing the run', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: review
+    command: node review.js
+    output:
+      verdict: pass | fix
+  - id: fix
+    needs: [review]
+    if: steps.review.outputs.verdict == 'fix'
+    command: node fix.js
+  - id: merge
+    needs: [review]
+    if: steps.review.outputs.verdict == 'pass'
+    command: node merge.js
+  - id: after-merge
+    needs: [merge]
+    command: node after.js
+`));
+    const first = await leaseNext(config, runId, driverA);
+    if ('error' in first) throw new Error(first.error.message);
+    const lease = first.data.lease as { attempt: string; revision: number };
+    await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', outputs: { verdict: 'fix' }, driver: driverA });
+
+    const { leased, done } = await drive(config, runId);
+
+    expect(leased).toEqual(['fix']);
+    expect(done).toMatchObject({ outcome: 'succeeded' });
+    expect(await readRun(config, runId)).toMatchObject({
+      revision: 3,
+      steps: [{}, { id: 'fix', status: 'succeeded' }, { id: 'merge', status: 'skipped' }, { id: 'after-merge', status: 'skipped' }],
+    });
+  });
+
+  it('evaluates an if only after every step it reads has settled', async () => {
+    // gate is skipped as soon as build fails, while late is still pending; deploy reads late through gate.
+    const { config, runId } = await startBuild(graph(`  - id: build
+    command: node build.js
+  - id: docs
+    needs: []
+    command: node docs.js
+  - id: gate
+    needs: [build, late]
+    command: node gate.js
+  - id: deploy
+    needs: [gate, docs]
+    if: steps.late.outcome == 'success'
+    command: node deploy.js
+  - id: late
+    needs: []
+    command: node late.js
+`));
+
+    const { leased } = await drive(config, runId, ['build']);
+
+    expect(leased).toEqual(['build', 'docs', 'late', 'deploy']);
+  });
+
+  it.each([
+    ['fails', ['check'], ['check'], { outcome: 'succeeded', end: 'handled' }],
+    ['succeeds', [], ['check', 'ship'], { outcome: 'succeeded' }],
+  ])('settles a recovery end-only step only when the check it reads %s', async (_case, failing, order, done) => {
+    const { config, runId } = await startBuild(graph(`  - id: check
+    command: node check.js
+  - id: handle
+    needs: [check]
+    if: steps.check.outcome == 'failed'
+    end: handled
+  - id: ship
+    needs: [check]
+    command: node ship.js
+`, 'ends:\n  handled: succeeded\n'));
+
+    const result = await drive(config, runId, failing);
+
+    expect(result.leased).toEqual(order);
+    expect(result.done).toEqual({ run: runId, ...done });
+  });
+
+  it('reports a run whose stored if does not parse instead of guessing', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: check
+    command: node check.js
+  - id: label
+    needs: [check]
+    if: steps.check.outcome == 'failed'
+    command: node label.js
+`));
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    run.definition.steps[1]!.if = 'steps.check.outcome = 1';
+    await writeRun(config, run);
+
+    expect(await leaseNext(config, runId, driverA)).toMatchObject({
+      error: { code: 'run_unreadable', message: expect.stringContaining('step "label" has an if that does not parse') },
+    });
+  });
+});

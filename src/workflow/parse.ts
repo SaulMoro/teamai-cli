@@ -3,10 +3,11 @@ import { isMap, isScalar, isSeq, LineCounter, parseDocument, type Node } from 'y
 function isYamlNode(value: unknown): value is Node {
   return !!value && typeof value === 'object' && 'range' in value;
 }
+import { evaluateExpression, expressionPaths, isTruthy, parseExpression, type Expression } from './expression.js';
 import type { EndOutcome, OutputSchema, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
 
 const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'ends', 'steps']);
-const STEP_KEYS = new Set(['id', 'needs', 'command', 'prompt', 'prompt_file', 'agent', 'output', 'end']);
+const STEP_KEYS = new Set(['id', 'needs', 'if', 'command', 'prompt', 'prompt_file', 'agent', 'output', 'end']);
 /** Keys a step without an action may carry. */
 const END_ONLY_KEYS = new Set(['id', 'needs', 'if', 'end']);
 const TYPE_NAMES = new Set(['string', 'number', 'boolean']);
@@ -173,6 +174,7 @@ export function parseWorkflow(file: string, content: string): {
   } else {
     const seen = new Set<string>();
     const graph: GraphNode[] = [];
+    const conditions: ConditionNode[] = [];
     const endings: Ending[] = [];
     stepsNode.items.forEach((item, index) => {
       const field = `steps[${index}]`;
@@ -211,6 +213,19 @@ export function parseWorkflow(file: string, content: string): {
           ...locate(file, lineCounter, item, `${field}.needs`, `${label} must declare needs; use needs: [] for another root`),
           code: 'missing_needs',
         });
+      }
+      const ifPair = item.items.find((pair) => scalarString(pair.key) === 'if');
+      const condition = ifPair ? conditionSource(ifPair.value) : undefined;
+      if (ifPair) {
+        const parsed = condition === undefined ? undefined : parseExpression(condition);
+        const at = ifPair.value ?? ifPair.key ?? item;
+        if (!parsed) {
+          diagnostics.push(locate(file, lineCounter, at, `${field}.if`, `${label} if must be an expression`));
+        } else if (!parsed.ok) {
+          diagnostics.push(locate(file, lineCounter, at, `${field}.if`, `${label} if does not parse at column ${parsed.column}: ${parsed.message}`));
+        } else if (id && TOKEN.test(id) && (needs !== undefined || index === 0)) {
+          conditions.push({ id, field: `${field}.if`, node: at as Node, expression: parsed.expression });
+        }
       }
       const commandPair = item.items.find((pair) => scalarString(pair.key) === 'command');
       const command = scalarString(commandPair?.value);
@@ -268,6 +283,7 @@ export function parseWorkflow(file: string, content: string): {
         steps.push({
           id,
           ...(needs ? { needs } : {}),
+          ...(condition !== undefined ? { if: condition } : {}),
           ...(command ? { command } : {}),
           ...(prompt ? { prompt } : {}),
           ...(promptFile ? { promptFile } : {}),
@@ -278,6 +294,7 @@ export function parseWorkflow(file: string, content: string): {
       }
     });
     diagnostics.push(...graphDiagnostics(file, lineCounter, graph, seen));
+    diagnostics.push(...conditionDiagnostics(file, lineCounter, conditions, graph, steps));
     // A malformed ends header is already reported; checking steps against it would only add noise.
     if (!endsPair || ends) diagnostics.push(...endDiagnostics(file, lineCounter, ends, endsPair?.value, endings, graph));
   }
@@ -356,6 +373,84 @@ function graphDiagnostics(file: string, lineCounter: LineCounter, graph: GraphNo
     const step = byId.get(ids[0] ?? '');
     if (!step) continue;
     diagnostics.push(locate(file, lineCounter, step.node, step.field, `step "${step.id}" is in a needs cycle: ${[...ids, step.id].join(' -> ')}`));
+  }
+  return diagnostics;
+}
+
+/** The text of an `if`. A YAML boolean or number is read as the same literal, so `if: false` is the expression `false`. */
+function conditionSource(node: unknown): string | undefined {
+  if (!isScalar(node)) return undefined;
+  const value: unknown = node.value;
+  return typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number' ? String(value) : undefined;
+}
+
+interface ConditionNode {
+  id: string;
+  field: string;
+  node: Node;
+  expression: Expression;
+}
+
+/** Whether `fields` names a value inside `schema`. Only object fields can be read further. */
+function declaresField(schema: OutputSchema, fields: string[]): boolean {
+  let current = schema;
+  for (const field of fields) {
+    if (current.type !== 'object' || !Object.hasOwn(current.fields, field)) return false;
+    current = current.fields[field]!;
+  }
+  return true;
+}
+
+/**
+ * Diagnostics for what each `if` reads: only steps it needs, directly or through their needs,
+ * and only output fields that a step with `output` declares.
+ */
+function conditionDiagnostics(
+  file: string,
+  lineCounter: LineCounter,
+  conditions: ConditionNode[],
+  graph: GraphNode[],
+  steps: WorkflowStep[],
+): WorkflowDiagnostic[] {
+  const byId = new Map(graph.map((step) => [step.id, step]));
+  const outputs = new Map(steps.map((step) => [step.id, step.output]));
+  const ancestors = (id: string): Set<string> => {
+    const found = new Set<string>();
+    const pending = [...(byId.get(id)?.needs ?? [])];
+    for (let need = pending.pop(); need !== undefined; need = pending.pop()) {
+      if (found.has(need)) continue;
+      found.add(need);
+      pending.push(...(byId.get(need)?.needs ?? []));
+    }
+    return found;
+  };
+  const diagnostics: WorkflowDiagnostic[] = [];
+  for (const condition of conditions) {
+    if (expressionPaths(condition.expression).length === 0 && !isTruthy(evaluateExpression(condition.expression, { steps: {} }))) {
+      diagnostics.push({
+        ...locate(file, lineCounter, condition.node, condition.field, `step "${condition.id}" if is always false, so the step never runs`),
+        code: 'false_if',
+      });
+      continue;
+    }
+    const readable = ancestors(condition.id);
+    const reported = new Set<string>();
+    for (const path of expressionPaths(condition.expression)) {
+      if (path.root !== 'steps') continue;
+      if (!readable.has(path.step)) {
+        if (!reported.has(path.step)) {
+          diagnostics.push(locate(file, lineCounter, condition.node, condition.field,
+            `step "${condition.id}" if reads steps.${path.step}, which is not a step it needs, directly or through its needs`));
+        }
+        reported.add(path.step);
+        continue;
+      }
+      const output = outputs.get(path.step);
+      if (path.field === 'outputs' && output && !declaresField(output, path.fields)) {
+        diagnostics.push(locate(file, lineCounter, condition.node, condition.field,
+          `step "${condition.id}" if reads steps.${path.step}.outputs.${path.fields.join('.')}, which is not in the output step "${path.step}" declares`));
+      }
+    }
   }
   return diagnostics;
 }
