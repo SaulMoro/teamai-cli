@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -389,6 +390,52 @@ describe('rebuildIndex', () => {
     const after = new SyncManager(repoRoot);
     expect(after.listAllRepoIdentities()).toEqual(['github.com/org/alpha']);
     expect(after.listSessions('github.com/org/alpha')).toHaveLength(1);
+  });
+});
+
+describe('session pull (gitPull + rebuildIndex) on a team checkout', () => {
+  const identity = 'github.com/org/alpha';
+  const git = (cwd: string, ...args: string[]): string =>
+    execFileSync('git', args, { cwd, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+
+  function initCheckout(dir: string, name: string): void {
+    git(dir, 'config', 'user.name', name);
+    git(dir, 'config', 'user.email', `${name}@example.com`);
+  }
+
+  function pushSession(checkout: string, sessionId: string, title: string): void {
+    const mgr = new SyncManager(checkout);
+    mgr.saveSession(mkSession({ sessionId, title }), mkMeta({ sessionId, title }));
+    expect(mgr.gitCommit(`push ${title}`).status).toBe('committed');
+    mgr.gitPush();
+  }
+
+  function pull(checkout: string): void {
+    const mgr = new SyncManager(checkout);
+    mgr.gitPull();
+    mgr.rebuildIndex(identity);
+  }
+
+  it('leaves the checkout clean when nothing changed, so the next index change merges', () => {
+    const remote = path.join(repoRoot, 'team.git');
+    git(repoRoot, 'init', '-q', '--bare', '-b', 'main', remote);
+    const alice = path.join(repoRoot, 'alice');
+    git(repoRoot, 'init', '-q', '-b', 'main', alice);
+    initCheckout(alice, 'alice');
+    git(alice, 'remote', 'add', 'origin', remote);
+    pushSession(alice, 's-1', 'fix payment');
+    const bob = path.join(repoRoot, 'bob');
+    git(repoRoot, 'clone', '-q', remote, bob);
+    initCheckout(bob, 'bob');
+
+    pull(bob);
+    pull(bob);
+    expect(git(bob, 'status', '--porcelain')).toBe('');
+
+    pushSession(alice, 's-2', 'add refunds');
+    pull(bob);
+    expect(git(bob, 'status', '--porcelain')).toBe('');
+    expect(new SyncManager(bob).listSessions(identity).map((s) => s.sessionId).sort()).toEqual(['s-1', 's-2']);
   });
 });
 
