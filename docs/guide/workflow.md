@@ -22,7 +22,7 @@ steps:
     agent: reviewer
 ```
 
-`schemaVersion` must be `v1alpha1`. `name` must match the file name. `description` is required. Each step has a unique `id` and exactly one of `command`, `prompt`, or `prompt_file`. `agent` is optional on prompt steps. `output` uses the existing shorthand: `string`, `number`, `boolean`, a literal union, an object, or an array with one item type. TeamAI validates successful command stdout or a prompt tool's `output` against it.
+`schemaVersion` must be `v1alpha1`. `name` must match the file name. `description` is required. Each step has a unique `id` and exactly one of `command`, `prompt`, `prompt_file`, or `workflow`. `agent` is optional on prompt steps. `output` uses the existing shorthand: `string`, `number`, `boolean`, a literal union, an object, or an array with one item type. TeamAI validates successful command stdout or a prompt tool's `output` against it.
 
 Every step after the first lists the steps it waits for in `needs`. `needs: []` starts another branch with no dependency. One step runs at a time: the first step in the file whose needs are done. A step is skipped when a step it needs failed, or when every step it needs was skipped. A skipped step never runs. A failure does not stop other branches. When nothing is left to run, the run ends `failed` if any step failed, otherwise `succeeded`. A missing `needs`, a `needs` id that is not a step, or a cycle makes the file invalid. A missing `needs` also leaves the workflow with nothing to run, even when an older version was valid.
 
@@ -59,6 +59,21 @@ A `command` is never filled in. Pass values to it through `env`, which only a co
 ```
 
 The command gets these variables on top of its usual environment, so a value such as `$(touch pwned)` stays plain text. Names must match `^[A-Za-z_][A-Za-z0-9_]*$`. A YAML number or boolean is passed as its text. A template inside `command`, `env` on a prompt step, or an `if` or template that reads an input the workflow does not declare makes the file invalid. A template that does not parse or reads something it may not read also leaves the workflow with nothing to run, even when an older version was valid. So does a `.` in a step id or a field name.
+
+A step can run another workflow from `workflows/` with `workflow: <name>` and pass that workflow's inputs with `with`:
+
+```yaml
+  - id: check
+    needs: [plan]
+    workflow: check-issue
+    with:
+      issue: "{{ inputs.issue }}"
+      task: "{{ steps.plan.outputs.task }}"
+```
+
+Every string in `with`, at any depth, is a template. A string that is exactly one template keeps its JSON type, so `task` gets the object itself; any other string is text. When the step is ready, the values are checked against the child's `inputs`, and a mismatch fails the step with `invalid_inputs`. The child sees only its own inputs and steps. Its steps run in place of the step and are leased by their path, such as `check.classify`. The step takes the child's outcome. An `end` inside the child finishes only the child, and the parent reads it as `steps.<id>.end`. A child returns values with `outputs`, each a path to one of its steps, such as `outputs: { verdict: steps.classify.outputs.verdict }`, and the parent reads `steps.<id>.outputs.verdict`. A step that runs a workflow cannot have `output`, `agent`, or `env`, and only such a step can have `with`.
+
+`workflow: <name>` is looked up by name in the validated cache that `teamai pull` writes, not in the files. `workflow start` takes every workflow the run uses from that cache and keeps them in the run, so a later pull does not change a run in progress. A child with no runnable version, or workflows that run each other in a cycle, stop `start` with an error that names them.
 
 Choose headless tools per machine in the local config:
 

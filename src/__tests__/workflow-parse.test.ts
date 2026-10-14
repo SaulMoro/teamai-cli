@@ -102,7 +102,7 @@ steps:
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ field: 'steps[0]', message: 'a step has exactly one action: command, prompt, or prompt_file' }),
+      expect.objectContaining({ field: 'steps[0]', message: 'a step has exactly one action: command, prompt, prompt_file, or workflow' }),
       expect.objectContaining({ field: 'steps[0].agent', message: 'agent is only allowed on a prompt or prompt_file step' }),
     ]));
   });

@@ -22,7 +22,7 @@ steps:
     agent: reviewer
 ```
 
-`schemaVersion` 必须是 `v1alpha1`。`name` 必须和文件名一致。`description` 必填。每个步骤有唯一的 `id`，并且必须且只能使用 `command`、`prompt`、`prompt_file` 之一。提示词步骤可选填 `agent`。`output` 沿用已有简写：`string`、`number`、`boolean`、字面量联合、对象，或只含一种元素类型的数组。TeamAI 会用它校验成功命令的 stdout 或提示词工具返回的 `output`。
+`schemaVersion` 必须是 `v1alpha1`。`name` 必须和文件名一致。`description` 必填。每个步骤有唯一的 `id`，并且必须且只能使用 `command`、`prompt`、`prompt_file`、`workflow` 之一。提示词步骤可选填 `agent`。`output` 沿用已有简写：`string`、`number`、`boolean`、字面量联合、对象，或只含一种元素类型的数组。TeamAI 会用它校验成功命令的 stdout 或提示词工具返回的 `output`。
 
 第一个步骤之后的每个步骤都要用 `needs` 列出它等待的步骤。`needs: []` 表示另起一个没有依赖的分支。每次只运行一个步骤：文件中第一个依赖都已完成的步骤。某个依赖失败，或所有依赖都被跳过时，该步骤会被跳过。被跳过的步骤不会运行。一个步骤失败不会停止其他分支。没有可运行的步骤时，只要有步骤失败，运行结果就是 `failed`，否则是 `succeeded`。缺少 `needs`、`needs` 中的 id 不是本工作流的步骤，或依赖成环，都会让该文件无效。缺少 `needs` 时，即使之前有有效版本，该工作流也没有可运行版本。
 
@@ -59,6 +59,21 @@ steps:
 ```
 
 命令在原有环境之上获得这些变量，因此 `$(touch pwned)` 这样的值只是普通文本。变量名必须匹配 `^[A-Za-z_][A-Za-z0-9_]*$`。YAML 数字或布尔值按其文本传入。`command` 中出现模板、提示词步骤带 `env`，或 `if`、模板读取了工作流未声明的输入，都会让该文件无效。模板无法解析或读取了不能读取的内容时，即使之前有有效版本，该工作流也没有可运行版本。步骤 id 或字段名中含有 `.` 时也是如此。
+
+步骤可以用 `workflow: <name>` 运行 `workflows/` 中的另一个工作流，并用 `with` 传入该工作流的输入：
+
+```yaml
+  - id: check
+    needs: [plan]
+    workflow: check-issue
+    with:
+      issue: "{{ inputs.issue }}"
+      task: "{{ steps.plan.outputs.task }}"
+```
+
+`with` 中任意层级的字符串都是模板。恰好只有一个模板的字符串保留其 JSON 类型，所以 `task` 拿到的是对象本身；其他字符串都是文本。步骤就绪时，这些值会按子工作流的 `inputs` 校验，不匹配时该步骤以 `invalid_inputs` 失败。子工作流只能看到自己的输入和步骤。它的步骤代替该步骤运行，并按路径租用，例如 `check.classify`。该步骤的结果就是子工作流的结果。子工作流中的 `end` 只结束子工作流，父工作流通过 `steps.<id>.end` 读取它。子工作流用 `outputs` 返回值，每个值是指向它某个步骤的路径，例如 `outputs: { verdict: steps.classify.outputs.verdict }`，父工作流读取 `steps.<id>.outputs.verdict`。运行工作流的步骤不能有 `output`、`agent` 或 `env`，也只有这种步骤可以有 `with`。
+
+`workflow: <name>` 按名称在 `teamai pull` 写入的已校验缓存中查找，而不是在文件中查找。`workflow start` 从该缓存取出运行用到的每个工作流并保存在运行中，因此之后的 pull 不会改变进行中的运行。子工作流没有可运行版本，或工作流之间循环调用时，`start` 会报错并指出它们。
 
 在本地配置中按机器选择无界面工具：
 

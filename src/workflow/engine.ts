@@ -1,13 +1,14 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { acquireLock, releaseLock } from '../update.js';
 import type { LocalConfig } from '../types.js';
 import { loadCachedWorkflow } from './cache.js';
-import { evaluateExpression, expressionPaths, isTruthy, parseExpression, type Expression, type ExpressionPath, type ExpressionStep } from './expression.js';
+import { evaluateExpression, expressionPaths, isTruthy, parseExpression, resolvePath, type Expression, type ExpressionPath, type ExpressionStep } from './expression.js';
 import { outputMismatch } from './output.js';
 import { noteRunRecord, pendingRecords } from './records.js';
-import { parseTemplate, renderText, templatePaths } from './template.js';
+import { parseTemplate, renderStrings, renderText, stringsIn, templatePaths } from './template.js';
 import { generateRunId, isRunId, readRun, runLockPath, writeRun } from './store.js';
 import type {
+  CachedWorkflow,
   DriverIdentity,
   OutputSchema,
   RunState,
@@ -15,6 +16,7 @@ import type {
   StepOutcome,
   StepState,
   TokenUsage,
+  WorkflowDefinition,
   WorkflowEnvelope,
   WorkflowFailure,
   WorkflowStep,
@@ -97,46 +99,88 @@ interface RenderedLease {
   env?: Record<string, string>;
 }
 
+/** A workflow inside a run: the top-level one, or the sub-workflow a step runs. */
+interface Scope {
+  /** What every step path inside it starts with: '' at the top, `<workflow step path>.` inside a sub-workflow. */
+  prefix: string;
+  definition: WorkflowDefinition;
+  inputs: Record<string, unknown> | undefined;
+}
+
+function topScope(run: RunState): Scope {
+  return { prefix: '', definition: run.definition, inputs: run.inputs };
+}
+
+/** The scope of the workflow a step runs, or undefined when the run did not keep that workflow. */
+function childScope(run: RunState, state: StepState, step: WorkflowStep): Scope | undefined {
+  const definition = step.workflow === undefined ? undefined : run.workflows?.[step.workflow];
+  return definition && { prefix: `${state.id}.`, definition, inputs: state.inputs };
+}
+
+/** The step instances directly inside a scope, in declaration order. */
+function statesIn(run: RunState, scope: Scope): StepState[] {
+  return run.steps.filter((state) => state.id.startsWith(scope.prefix) && !state.id.slice(scope.prefix.length).includes('.'));
+}
+
+/** The step id an instance has inside its own workflow. */
+function localId(scope: Scope, state: StepState): string {
+  return state.id.slice(scope.prefix.length);
+}
+
+/** The scope and definition of the step instance at `path`, or undefined when the run file does not describe it. */
+function locateStep(run: RunState, path: string): { scope: Scope; step: WorkflowStep } | undefined {
+  let scope = topScope(run);
+  const ids = path.split('.');
+  for (const [index, id] of ids.entries()) {
+    const step = scope.definition.steps.find((item) => item.id === id);
+    if (!step) return undefined;
+    if (index === ids.length - 1) return { scope, step };
+    const state = run.steps.find((item) => item.id === `${scope.prefix}${id}`);
+    const child = state && childScope(run, state, step);
+    if (!child) return undefined;
+    scope = child;
+  }
+  return undefined;
+}
+
 /**
- * Renders a step's prompt and env from the inputs and settled steps only,
+ * Renders a step's prompt and env from its workflow's inputs and settled steps only,
  * so a repeated `next` for the same attempt renders the same text.
  * Pull rejects a template that does not parse, so a failure here means the run file was changed.
  */
-function renderLease(run: RunState, step: StepState): RenderedLease | WorkflowFailure {
-  const definition = run.definition.steps.find((item) => item.id === step.id);
-  const context = { inputs: run.inputs, steps: expressionSteps(run) };
+function renderLease(scope: Scope, states: StepState[], state: StepState, definition: WorkflowStep): RenderedLease | WorkflowFailure {
+  const context = { inputs: scope.inputs, steps: expressionSteps(scope, states) };
   const texts: Array<[string, string]> = [
-    ...(definition?.prompt !== undefined ? [['prompt', definition.prompt] as [string, string]] : []),
-    ...Object.entries(definition?.env ?? {}).map(([name, text]): [string, string] => [`env.${name}`, text]),
+    ...(definition.prompt !== undefined ? [['prompt', definition.prompt] as [string, string]] : []),
+    ...Object.entries(definition.env ?? {}).map(([name, text]): [string, string] => [`env.${name}`, text]),
   ];
   const rendered = new Map<string, string>();
   for (const [what, text] of texts) {
     const parsed = parseTemplate(text);
     if (!parsed.ok) {
       const [problem] = parsed.errors;
-      return { code: 'invalid_template', message: `step "${step.id}" ${what} template ${problem?.source}: ${problem?.message}` };
+      return { code: 'invalid_template', message: `step "${state.id}" ${what} template ${problem?.source}: ${problem?.message}` };
     }
     rendered.set(what, renderText(parsed.template, context));
   }
-  const env = Object.keys(definition?.env ?? {}).map((name) => [name, rendered.get(`env.${name}`) ?? ''] as const);
+  const env = Object.keys(definition.env ?? {}).map((name) => [name, rendered.get(`env.${name}`) ?? ''] as const);
   return {
     ...(rendered.has('prompt') ? { prompt: rendered.get('prompt') } : {}),
-    ...(definition?.env ? { env: Object.fromEntries(env) } : {}),
+    ...(definition.env ? { env: Object.fromEntries(env) } : {}),
   };
 }
 
-function leaseEnvelope(run: RunState, step: StepState, rendered: RenderedLease): WorkflowEnvelope {
-  const definition = run.definition.steps.find((item) => item.id === step.id);
+function leaseEnvelope(run: RunState, state: StepState, definition: WorkflowStep, rendered: RenderedLease): WorkflowEnvelope {
   return ok({ lease: {
     run: run.id,
-    step: step.id,
-    attempt: step.lease?.attempt,
-    revision: step.lease?.revision,
-    ...(definition?.command !== undefined ? { command: definition.command } : {}),
+    step: state.id,
+    attempt: state.lease?.attempt,
+    revision: state.lease?.revision,
+    ...(definition.command !== undefined ? { command: definition.command } : {}),
     ...(rendered.env ? { env: rendered.env } : {}),
     ...(rendered.prompt !== undefined ? { prompt: rendered.prompt } : {}),
-    ...(definition?.agent !== undefined ? { agent: definition.agent } : {}),
-    ...(definition?.output ? { output: definition.output } : {}),
+    ...(definition.agent !== undefined ? { agent: definition.agent } : {}),
+    ...(definition.output ? { output: definition.output } : {}),
   } });
 }
 
@@ -167,7 +211,7 @@ function doneEnvelope(run: RunState): WorkflowEnvelope {
 
 /** A step with `end` and no action only ends the workflow; the engine settles it without a lease. */
 function endsOnly(step: WorkflowStep | undefined): boolean {
-  return step?.end !== undefined && step.command === undefined && step.prompt === undefined;
+  return step?.end !== undefined && step.command === undefined && step.prompt === undefined && step.workflow === undefined;
 }
 
 /** A step that ran and did not succeed. Later issues add `timeout` and `cancelled`. */
@@ -184,9 +228,9 @@ function stepsRead(paths: ExpressionPath[]): Set<string> {
   return new Set(paths.flatMap((path) => (path.root === 'steps' ? [path.step] : [])));
 }
 
-/** The templates a step renders when it is leased. */
+/** The templates a step renders when it is leased, or, for a workflow step, when its workflow starts. */
 function templateTexts(step: WorkflowStep): string[] {
-  return [...(step.prompt !== undefined ? [step.prompt] : []), ...Object.values(step.env ?? {})];
+  return [...(step.prompt !== undefined ? [step.prompt] : []), ...Object.values(step.env ?? {}), ...stringsIn(step.with)];
 }
 
 interface RunReads {
@@ -194,17 +238,19 @@ interface RunReads {
   conditions: Map<string, Expression>;
   /** The step ids each step's `if` and templates read. */
   reads: Map<string, Set<string>>;
+  /** The path each declared output reads. */
+  outputs: Map<string, ExpressionPath>;
 }
 
-/** Parses every `if` and template in the run. A run file whose `if` does not parse cannot settle; the message names the step. */
-function parseReads(run: RunState): RunReads | string {
+/** Parses every `if` and template in a workflow of the run. A run file whose `if` does not parse cannot settle; the message names the step. */
+function parseReads(run: RunState, scope: Scope): RunReads | string {
   const conditions = new Map<string, Expression>();
   const reads = new Map<string, Set<string>>();
-  for (const step of run.definition.steps) {
+  for (const step of scope.definition.steps) {
     const paths: ExpressionPath[] = [];
     if (step.if !== undefined) {
       const parsed = parseExpression(step.if);
-      if (!parsed.ok) return `Run ${run.id} step "${step.id}" has an if that does not parse: ${parsed.message}`;
+      if (!parsed.ok) return `Run ${run.id} step "${scope.prefix}${step.id}" has an if that does not parse: ${parsed.message}`;
       conditions.set(step.id, parsed.expression);
       paths.push(...expressionPaths(parsed.expression));
     }
@@ -215,37 +261,45 @@ function parseReads(run: RunState): RunReads | string {
     }
     reads.set(step.id, stepsRead(paths));
   }
-  return { conditions, reads };
+  const outputs = new Map<string, ExpressionPath>();
+  for (const [name, source] of Object.entries(scope.definition.outputs ?? {})) {
+    const parsed = parseExpression(source);
+    if (!parsed.ok || parsed.expression.kind !== 'path') return `Run ${run.id} workflow "${scope.definition.name}" output "${name}" is not a path`;
+    outputs.set(name, parsed.expression.path);
+  }
+  return { conditions, reads, outputs };
 }
 
 const VISIBLE_OUTCOMES: Partial<Record<StepState['status'], string>> = { succeeded: 'success', failed: 'failed', skipped: 'skipped' };
 
-function expressionSteps(run: RunState): Record<string, ExpressionStep> {
-  return Object.fromEntries(run.steps.map((step) => [step.id, {
+/** What expressions in a workflow read as `steps.<id>`: its own step instances, by their id in that workflow. */
+function expressionSteps(scope: Scope, states: StepState[]): Record<string, ExpressionStep> {
+  return Object.fromEntries(states.map((step) => [localId(scope, step), {
     ...(VISIBLE_OUTCOMES[step.status] ? { outcome: VISIBLE_OUTCOMES[step.status] } : {}),
+    ...(step.end !== undefined ? { end: step.end } : {}),
     ...(step.outputs !== undefined ? { outputs: step.outputs } : {}),
   }]));
 }
 
 /**
- * Marks every pending step that can no longer run as `skipped`, until nothing changes:
+ * Marks every pending step of a workflow that can no longer run as `skipped`, until nothing changes:
  * the skip rule in `mustSkip`, and a ready step whose `if` is false.
  * Returns whether a step is ready: everything it needs and everything its `if` and templates read has settled.
  */
-function skipUnreachable(run: RunState, { conditions, reads }: RunReads): (step: StepState) => boolean {
-  const states = new Map(run.steps.map((step) => [step.id, step]));
-  const declared = new Map(run.definition.steps.map((step) => [step.id, step.needs ?? []]));
-  const needs = (step: StepState): Array<StepState | undefined> => (declared.get(step.id) ?? []).map((id) => states.get(id));
+function skipUnreachable(scope: Scope, states: StepState[], { conditions, reads }: RunReads): (step: StepState) => boolean {
+  const byId = new Map(states.map((step) => [localId(scope, step), step]));
+  const declared = new Map(scope.definition.steps.map((step) => [step.id, step.needs ?? []]));
+  const needs = (step: StepState): Array<StepState | undefined> => (declared.get(localId(scope, step)) ?? []).map((id) => byId.get(id));
   const ready = (step: StepState): boolean => needs(step).every(settled)
-    && [...reads.get(step.id) ?? []].every((id) => settled(states.get(id)));
+    && [...reads.get(localId(scope, step)) ?? []].every((id) => settled(byId.get(id)));
   for (let changed = true; changed;) {
     changed = false;
-    for (const step of run.steps) {
+    for (const step of states) {
       if (step.status !== 'pending') continue;
-      const condition = conditions.get(step.id);
+      const condition = conditions.get(localId(scope, step));
       const conditionFalse = (): boolean => !!condition && ready(step)
-        && !isTruthy(evaluateExpression(condition, { inputs: run.inputs, steps: expressionSteps(run) }));
-      if (!mustSkip(needs(step), condition) && !conditionFalse()) continue;
+        && !isTruthy(evaluateExpression(condition, { inputs: scope.inputs, steps: expressionSteps(scope, states) }));
+      if (!mustSkip(needs(step), condition, (need) => localId(scope, need)) && !conditionFalse()) continue;
       step.status = 'skipped';
       changed = true;
     }
@@ -257,10 +311,106 @@ function skipUnreachable(run: RunState, { conditions, reads }: RunReads): (step:
  * A step is skipped when a step it needs stopped and its `if` does not read that step,
  * or when every step it needs was skipped. An `if` that reads every stopped dependency is a recovery step.
  */
-function mustSkip(needs: Array<StepState | undefined>, condition: Expression | undefined): boolean {
+function mustSkip(needs: Array<StepState | undefined>, condition: Expression | undefined, id: (need: StepState) => string): boolean {
   const read = stepsRead(condition ? expressionPaths(condition) : []);
-  if (needs.some((need) => need && stopped(need) && !read.has(need.id))) return true;
+  if (needs.some((need) => need && stopped(need) && !read.has(id(need)))) return true;
   return needs.length > 0 && needs.every((need) => need?.status === 'skipped');
+}
+
+/** How settling a workflow of the run ended: a step to lease, the workflow's outcome, or a run file that cannot settle. */
+type Settled =
+  | { lease: StepState; definition: WorkflowStep; rendered: RenderedLease }
+  | { outcome: Exclude<RunStatus, 'running'>; end?: string; outputs?: Record<string, unknown> }
+  | { unreadable: string };
+
+/**
+ * Starts the workflow a step runs with the values its `with` renders to in the step's own workflow.
+ * Its steps join the run right after the step, which is `running` until they settle.
+ */
+function startWorkflowStep(run: RunState, scope: Scope, states: StepState[], state: StepState, step: WorkflowStep, child: Scope): WorkflowFailure | undefined {
+  const rendered = renderStrings(step.with ?? {}, { inputs: scope.inputs, steps: expressionSteps(scope, states) });
+  if (!rendered.ok) {
+    return { code: 'invalid_template', message: `step "${state.id}" with template ${rendered.error.source}: ${rendered.error.message}` };
+  }
+  const mismatch = inputsMismatch(child.definition.name, child.definition.inputs, rendered.value);
+  if (mismatch) return { code: 'invalid_inputs', message: `step "${state.id}" with does not fit workflow "${child.definition.name}": ${mismatch}` };
+  if (child.definition.inputs) {
+    state.inputs = rendered.value as Record<string, unknown>;
+    child.inputs = state.inputs;
+  }
+  state.status = 'running';
+  const steps = child.definition.steps.map((step): StepState => ({ id: `${child.prefix}${step.id}`, status: 'pending' }));
+  run.steps.splice(run.steps.indexOf(state) + 1, 0, ...steps);
+  return undefined;
+}
+
+/** A workflow step takes the outcome, the end, and the outputs of the workflow it ran. */
+function finishWorkflowStep(state: StepState, result: { outcome: Exclude<RunStatus, 'running'>; end?: string; outputs?: Record<string, unknown> }): void {
+  state.status = result.outcome;
+  state.outcome = result.outcome === 'succeeded' ? 'success' : 'failed';
+  if (result.end !== undefined) state.end = result.end;
+  if (result.outputs !== undefined) state.outputs = result.outputs;
+}
+
+/** The values a workflow returns, read from its own steps; a skipped step reads null. */
+function workflowOutputs(scope: Scope, states: StepState[], paths: Map<string, ExpressionPath>): Record<string, unknown> | undefined {
+  if (!scope.definition.outputs) return undefined;
+  const context = { inputs: scope.inputs, steps: expressionSteps(scope, states) };
+  return Object.fromEntries([...paths].map(([name, path]) => [name, resolvePath(path, context)]));
+}
+
+/**
+ * Settles one workflow of the run while no lease is open: skips, end-only steps, and the workflows its steps run.
+ * Returns the first step to lease in declaration order, where a running workflow step stands for its own steps,
+ * or the workflow's outcome once nothing is left to run.
+ */
+function settleScope(run: RunState, scope: Scope): Settled {
+  const reads = parseReads(run, scope);
+  if (typeof reads === 'string') return { unreadable: reads };
+  const states = statesIn(run, scope);
+  const defined = new Map(scope.definition.steps.map((item) => [item.id, item]));
+  const definitionOf = (state: StepState): WorkflowStep | undefined => defined.get(localId(scope, state));
+  // A step that cannot render, or a workflow step that finishes, changes the graph, and settling starts again.
+  for (;;) {
+    const canRun = skipUnreachable(scope, states, reads);
+    const ready = (item: StepState): boolean => item.status === 'pending' && canRun(item);
+    const ending = states.find((item) => ready(item) && endsOnly(definitionOf(item)));
+    if (ending) ending.status = 'succeeded';
+    const reached = states.find((item) => item.status === 'succeeded' && definitionOf(item)?.end !== undefined);
+    const end = reached ? definitionOf(reached)?.end : undefined;
+    if (end !== undefined) {
+      for (const item of states) if (item.status === 'pending') item.status = 'skipped';
+      return { outcome: scope.definition.ends?.[end] ?? 'failed', end, outputs: workflowOutputs(scope, states, reads.outputs) };
+    }
+    const state = states.find((item) => item.status === 'running' || ready(item));
+    if (!state) {
+      if (states.some((item) => item.status === 'pending')) {
+        return { unreadable: `Run ${run.id} has pending steps whose needs cannot be met` };
+      }
+      return { outcome: states.some(stopped) ? 'failed' : 'succeeded', outputs: workflowOutputs(scope, states, reads.outputs) };
+    }
+    const definition = definitionOf(state);
+    if (!definition) return { unreadable: `Run ${run.id} has no definition for step "${state.id}"` };
+    if (definition.workflow !== undefined) {
+      const child = childScope(run, state, definition);
+      if (!child) return { unreadable: `Run ${run.id} step "${state.id}" runs workflow "${definition.workflow}", which the run did not keep` };
+      const failure = state.status === 'pending' ? startWorkflowStep(run, scope, states, state, definition, child) : undefined;
+      if (failure) {
+        failStep(state, failure);
+        continue;
+      }
+      const result = settleScope(run, child);
+      if (!('outcome' in result)) return result;
+      finishWorkflowStep(state, result);
+      continue;
+    }
+    const rendered = renderLease(scope, states, state, definition);
+    if ('code' in rendered) {
+      failStep(state, rendered);
+      continue;
+    }
+    return { lease: state, definition, rendered };
+  }
 }
 
 /** Why `inputs` do not fit what the workflow declares, naming the field, or null when they fit. Every declared input is required. */
@@ -271,6 +421,42 @@ function inputsMismatch(name: string, declared: Record<string, OutputSchema> | u
   // The shorthand allows extra object keys, so an undeclared input is checked here.
   const extra = Object.keys(inputs).find((key) => !declared || !Object.hasOwn(declared, key));
   return extra === undefined ? null : `inputs.${extra} is not an input workflow "${name}" declares`;
+}
+
+/** Every workflow `cached` runs through its steps, directly or not, from the cache, and one hash over all of their sources. */
+async function loadWorkflows(
+  config: LocalConfig,
+  cached: CachedWorkflow,
+): Promise<{ workflows: Record<string, WorkflowDefinition>; sourceHash: string } | { failed: WorkflowEnvelope }> {
+  const workflows: Record<string, WorkflowDefinition> = {};
+  const hashes: Array<[string, string]> = [];
+  const visit = async (definition: WorkflowDefinition, through: string[]): Promise<WorkflowEnvelope | undefined> => {
+    for (const step of definition.steps) {
+      if (step.workflow === undefined) continue;
+      if (through.includes(step.workflow)) {
+        const cycle = [...through.slice(through.indexOf(step.workflow)), step.workflow].join(' -> ');
+        return error('workflow_recursion', `Workflow "${cached.definition.name}" cannot start: its sub-workflows run in a cycle: ${cycle}`);
+      }
+      if (Object.hasOwn(workflows, step.workflow)) continue;
+      const child = await loadCachedWorkflow(config, step.workflow);
+      if (!child) {
+        return error('workflow_not_found', `Workflow "${definition.name}" step "${step.id}" runs workflow "${step.workflow}", which has no runnable version. Check workflows/${step.workflow}.yaml and pull again.`);
+      }
+      workflows[step.workflow] = child.definition;
+      hashes.push([step.workflow, child.sourceHash]);
+      const failed = await visit(child.definition, [...through, step.workflow]);
+      if (failed) return failed;
+    }
+    return undefined;
+  };
+  const failed = await visit(cached.definition, [cached.definition.name]);
+  if (failed) return { failed };
+  if (hashes.length === 0) return { workflows, sourceHash: cached.sourceHash };
+  const hash = createHash('sha256').update(cached.sourceHash);
+  for (const [name, sourceHash] of hashes.sort(([left], [right]) => left.localeCompare(right))) {
+    hash.update('\0').update(name).update('\0').update(sourceHash);
+  }
+  return { workflows, sourceHash: hash.digest('hex') };
 }
 
 /** Creates a run. `inputs` are checked against the declared inputs before the run file exists. */
@@ -286,6 +472,8 @@ export async function startRun(
   }
   const mismatch = inputsMismatch(cached.definition.name, cached.definition.inputs, inputs);
   if (mismatch) return error('invalid_inputs', mismatch);
+  const tree = await loadWorkflows(config, cached);
+  if ('failed' in tree) return tree.failed;
   const now = new Date().toISOString();
   const run: RunState = {
     schemaVersion: 'v1alpha1',
@@ -294,8 +482,9 @@ export async function startRun(
     revision: 1,
     status: 'running',
     ...(cached.definition.inputs ? { inputs: inputs as Record<string, unknown> } : {}),
-    sourceHash: cached.sourceHash,
+    sourceHash: tree.sourceHash,
     definition: cached.definition,
+    ...(Object.keys(tree.workflows).length > 0 ? { workflows: tree.workflows } : {}),
     steps: cached.definition.steps.map((step) => ({ id: step.id, status: 'pending' })),
     settledAttempts: [],
     createdAt: now,
@@ -306,6 +495,15 @@ export async function startRun(
   // and retried on the next pull — it never fails the run itself.
   const record = await noteRunRecord(config, run, options.driver, 'start');
   return ok({ run: run.id, name: run.name, status: run.status, revision: run.revision, record });
+}
+
+/** A run started before `needs` existed ran its steps in order; settling it as a graph would run every such step as a root. */
+function missingNeeds(run: RunState): string | undefined {
+  for (const definition of [run.definition, ...Object.values(run.workflows ?? {})]) {
+    const step = definition.steps.slice(1).find((item) => item.needs === undefined);
+    if (step) return `Run ${run.id} was started by an older teamai: step "${step.id}" in workflow "${definition.name}" has no needs. Start a new run.`;
+  }
+  return undefined;
 }
 
 export async function leaseNext(config: LocalConfig, runId: string, driver: DriverIdentity): Promise<WorkflowEnvelope> {
@@ -321,53 +519,33 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       alreadySettled = true;
       return { save: false, envelope: doneEnvelope(run) };
     }
+    const older = missingNeeds(run);
+    if (older) return { save: false, envelope: error('run_unreadable', older) };
     const leased = run.steps.find((step) => step.status === 'leased');
     if (leased?.lease) {
       if (!sameDriver(leased.lease.driver, driver)) {
         return { save: false, envelope: ok({ wait: { reason: `${leased.id} is leased` } }) };
       }
-      const rendered = renderLease(run, leased);
-      if (!('code' in rendered)) return { save: false, envelope: leaseEnvelope(run, leased, rendered) };
+      const located = locateStep(run, leased.id);
+      if (!located) return { save: false, envelope: error('run_unreadable', `Run ${run.id} has no definition for step "${leased.id}"`) };
+      const rendered = renderLease(located.scope, statesIn(run, located.scope), leased, located.step);
+      if (!('code' in rendered)) return { save: false, envelope: leaseEnvelope(run, leased, located.step, rendered) };
       failStep(leased, rendered);
     }
-    const reads = parseReads(run);
-    if (typeof reads === 'string') return { save: false, envelope: error('run_unreadable', reads) };
     // Settle the graph here, while no lease is open, so a later report still matches its lease revision.
-    // A step that cannot render fails here, and settling starts again.
-    for (;;) {
-      const canRun = skipUnreachable(run, reads);
-      const ready = (item: StepState): boolean => item.status === 'pending' && canRun(item);
-      const defined = new Map(run.definition.steps.map((item) => [item.id, item]));
-      const ending = run.steps.find((item) => ready(item) && endsOnly(defined.get(item.id)));
-      if (ending) ending.status = 'succeeded';
-      const reached = run.steps.find((item) => item.status === 'succeeded' && defined.get(item.id)?.end !== undefined);
-      const end = reached ? defined.get(reached.id)?.end : undefined;
-      if (end !== undefined) {
-        for (const item of run.steps) if (item.status === 'pending') item.status = 'skipped';
-        settledRun = settleRun(run, run.definition.ends?.[end] ?? 'failed', end);
-        return { save: true, envelope: doneEnvelope(run) };
-      }
-      const step = run.steps.find(ready);
-      if (!step) {
-        if (run.steps.some((item) => item.status === 'pending')) {
-          return { save: false, envelope: error('run_unreadable', `Run ${run.id} has pending steps whose needs cannot be met`) };
-        }
-        const outcome = run.steps.some(stopped) ? 'failed' : 'succeeded';
-        settledRun = settleRun(run, outcome);
-        return { save: true, envelope: doneEnvelope(run) };
-      }
-      const rendered = renderLease(run, step);
-      if ('code' in rendered) {
-        failStep(step, rendered);
-        continue;
-      }
-      const attempt = `a${randomBytes(4).toString('hex')}`;
-      step.status = 'leased';
-      step.attempt = attempt;
-      step.outcome = undefined;
-      step.lease = { attempt, revision: run.revision, driver };
-      return { save: true, envelope: leaseEnvelope(run, step, rendered) };
+    const result = settleScope(run, topScope(run));
+    if ('unreadable' in result) return { save: false, envelope: error('run_unreadable', result.unreadable) };
+    if ('outcome' in result) {
+      settledRun = settleRun(run, result.outcome, result.end);
+      return { save: true, envelope: doneEnvelope(run) };
     }
+    const step = result.lease;
+    const attempt = `a${randomBytes(4).toString('hex')}`;
+    step.status = 'leased';
+    step.attempt = attempt;
+    step.outcome = undefined;
+    step.lease = { attempt, revision: run.revision, driver };
+    return { save: true, envelope: leaseEnvelope(run, step, result.definition, result.rendered) };
   });
   if (settledRun || alreadySettled) {
     const record = settledRun
@@ -466,7 +644,7 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       return { save: false, envelope: error('wrong_driver', 'This lease belongs to a different driver') };
     }
 
-    const defined = run.definition.steps.find((item) => item.id === step.id);
+    const defined = locateStep(run, step.id)?.step;
     let outcome = report.outcome;
     let message = report.message;
     let failure = report.failure;

@@ -932,4 +932,88 @@ steps:
       'workflows/build.yaml:5: field "inputs.issue": unknown output type "integer"',
     ]);
   });
+
+  it('reports outputs that are not paths reading a step of the workflow, or read an undeclared field', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'check', `schemaVersion: v1alpha1
+name: check
+description: Classify the issue.
+outputs:
+  verdict: steps.classify.outputs.verdcit
+  missing: steps.clasify.outputs.verdict
+  text: "{{ steps.classify.outputs.verdict }}"
+  input: inputs.issue
+  ok: steps.classify.outputs.verdict
+  outcome: steps.classify.outcome
+steps:
+  - id: classify
+    command: node classify.js
+    output:
+      verdict: fix | drop
+`);
+    writeWorkflow(config, 'list', `schemaVersion: v1alpha1
+name: list
+description: Outputs as a list.
+outputs: [steps.classify.outputs.verdict]
+steps:
+  - id: classify
+    command: node classify.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/check.yaml', 'workflows/list.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/check.yaml:7: field "outputs.text": output "text" must be a path that reads a step, such as steps.<id>.outputs.<field>',
+      'workflows/check.yaml:8: field "outputs.input": output "input" must be a path that reads a step, such as steps.<id>.outputs.<field>',
+      'workflows/check.yaml:5: field "outputs.verdict": output "verdict" reads steps.classify.outputs.verdcit, which is not in the output step "classify" declares',
+      'workflows/check.yaml:6: field "outputs.missing": output "missing" reads steps.clasify, which is not a step in this workflow',
+      'workflows/list.yaml:4: field "outputs": outputs must map each name to a path such as steps.<id>.outputs.<field>',
+    ]);
+  });
+
+  it('reports a workflow step that names no workflow, carries agent or output, or passes with values it may not read', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Run sub-workflows.
+steps:
+  - id: plan
+    command: node plan.js
+    with:
+      issue: 1
+  - id: check
+    needs: [plan]
+    workflow: "../check"
+  - id: review
+    needs: [plan]
+    workflow: check
+    agent: reviewer
+    output:
+      ok: boolean
+  - id: list
+    needs: [plan]
+    workflow: check
+    with: [1]
+  - id: read
+    needs: []
+    workflow: check
+    with:
+      task: "{{ steps.plan.outputs.task }}"
+      deep:
+        title: "{{ inputs.titel }}"
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:7: field "steps[0].with": step "plan" with is only allowed on a workflow step',
+      'workflows/build.yaml:11: field "steps[1].workflow": step "check" workflow must be the name of a workflow in workflows/',
+      'workflows/build.yaml:15: field "steps[2].agent": agent is only allowed on a prompt or prompt_file step',
+      'workflows/build.yaml:16: field "steps[2].output": step "review" output is not allowed on a workflow step; declare outputs in the workflow it runs',
+      'workflows/build.yaml:21: field "steps[3].with": step "list" with must map the workflow\'s inputs to values',
+      'workflows/build.yaml:26: field "steps[4].with.task": step "read" with.task reads steps.plan, which is not a step it needs, directly or through its needs',
+      'workflows/build.yaml:28: field "steps[4].with.deep": step "read" with.deep reads inputs.titel, which is not an input the workflow declares',
+    ]);
+  });
 });

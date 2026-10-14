@@ -10,6 +10,8 @@ export interface ConformanceScenario {
   name: string;
   workflowName: string;
   yaml: string;
+  /** Other workflow files the scenario runs, by name. */
+  workflows?: Record<string, string>;
   operations: ConformanceOperation[];
 }
 
@@ -82,6 +84,25 @@ steps:
       TITLE: "{{ steps.plan.outputs.title }}"
       FILES: "{{ steps.plan.outputs.files }}"
       COUNT: 2
+`;
+
+const SUB_WORKFLOW = `schemaVersion: v1alpha1
+name: build
+description: A step runs another workflow.
+steps:
+  - id: check
+    workflow: check
+  - id: ship
+    needs: [check]
+    command: echo ship
+`;
+
+const CHECK = `schemaVersion: v1alpha1
+name: check
+description: The workflow build runs.
+steps:
+  - id: classify
+    command: echo classify
 `;
 
 export const workflowConformanceScenarios: ConformanceScenario[] = [
@@ -176,6 +197,19 @@ export const workflowConformanceScenarios: ConformanceScenario[] = [
         saveAs: 'label',
         expect: { data: { lease: { step: 'label', command: 'node label.js', env: { TITLE: '$(touch pwned)', FILES: '["a.ts"]', COUNT: '2' } } } },
       },
+    ],
+  },
+  {
+    name: 'a sub-workflow step is leased by its path',
+    workflowName: 'build',
+    yaml: SUB_WORKFLOW,
+    workflows: { check: CHECK },
+    operations: [
+      { kind: 'next', saveAs: 'classify', expect: { data: { lease: { step: 'check.classify', command: 'echo classify' } } } },
+      { kind: 'report', lease: 'classify', body: { outcome: 'success' }, expect: { data: { step: { id: 'check.classify', status: 'succeeded' } } } },
+      { kind: 'next', saveAs: 'ship', expect: { data: { lease: { step: 'ship' } } } },
+      { kind: 'report', lease: 'ship', body: { outcome: 'success' }, expect: { data: { step: { status: 'succeeded' } } } },
+      { kind: 'next', saveAs: 'done', expect: { data: { done: { outcome: 'succeeded' } } } },
     ],
   },
 ];

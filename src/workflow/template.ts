@@ -1,6 +1,6 @@
 /**
- * Workflow templates: `{{ inputs.… }}` and `{{ steps.… }}` inside prompt text, `env` values and,
- * later, `with` values. Any other `{{ … }}` is plain text, so prompts about GitHub Actions or Jinja stay as written.
+ * Workflow templates: `{{ inputs.… }}` and `{{ steps.… }}` inside prompt text, `env` values and
+ * every string inside a `with` value. Any other `{{ … }}` is plain text, so prompts about GitHub Actions or Jinja stay as written.
  */
 import { parseExpression, resolvePath, type ExpressionContext, type ExpressionPath } from './expression.js';
 
@@ -76,4 +76,30 @@ export function renderValue(template: Template, context: ExpressionContext): unk
   const only = template.length === 1 ? template[0] : undefined;
   if (only !== undefined && typeof only !== 'string') return resolvePath(only.path, context);
   return renderText(template, context);
+}
+
+/** Every string inside a value, at any depth: the templates a `with` value holds. */
+export function stringsIn(value: unknown): string[] {
+  if (typeof value === 'string') return [value];
+  if (value && typeof value === 'object') return Object.values(value).flatMap(stringsIn);
+  return [];
+}
+
+/**
+ * Renders every string inside a value, at any depth, with `renderValue`, so a string that is exactly one
+ * `{{ path }}` keeps the JSON value it reads. Other values stay as they are. Fails at the first template that does not parse.
+ */
+export function renderStrings(value: unknown, context: ExpressionContext): { ok: true; value: unknown } | { ok: false; error: TemplateError } {
+  if (typeof value === 'string') {
+    const parsed = parseTemplate(value);
+    return parsed.ok ? { ok: true, value: renderValue(parsed.template, context) } : { ok: false, error: parsed.errors[0]! };
+  }
+  if (!value || typeof value !== 'object') return { ok: true, value };
+  const rendered: Array<[string, unknown]> = [];
+  for (const [key, item] of Object.entries(value)) {
+    const result = renderStrings(item, context);
+    if (!result.ok) return result;
+    rendered.push([key, result.value]);
+  }
+  return { ok: true, value: Array.isArray(value) ? rendered.map(([, item]) => item) : Object.fromEntries(rendered) };
 }
