@@ -11,7 +11,7 @@ import {
   managedMcpWorkspaceId,
   type LocalConfig,
 } from '../types.js';
-import { formatDiagnostic, parseWorkflow, promptFileDiagnostics } from './parse.js';
+import { formatDiagnostic, parseWorkflow, promptFileDiagnostics, type WorkflowFiles } from './parse.js';
 import type { CachedWorkflow, WorkflowDefinition, WorkflowDiagnostic } from './types.js';
 import { assertSafePath, assertWithinRoot } from '../utils/path-safety.js';
 
@@ -26,6 +26,18 @@ export interface SyncWorkflowResult {
   invalid: WorkflowDiagnostic[];
   unrunnable: string[];
 }
+
+/** A file that passed its own checks, before the workflows it runs are checked. */
+interface Candidate {
+  stem: string;
+  relativePath: string;
+  content: string;
+  definition: WorkflowDefinition;
+  sourceHash: string;
+  promptFileLocations: Record<number, { line: number; column: number }>;
+}
+
+type Checked = Candidate | { stem: string; relativePath: string; diagnostics: WorkflowDiagnostic[] };
 
 function cacheDir(config: LocalConfig): string {
   const home = getDataHome(config);
@@ -108,7 +120,7 @@ export async function syncWorkflowDefinitions(
     return result;
   }
 
-  let wrote = 0;
+  const checked: Checked[] = [];
   for (const name of names) {
     const relativePath = `workflows/${name}`;
     const full = path.join(dir, name);
@@ -133,44 +145,66 @@ export async function syncWorkflowDefinitions(
       log.warn(`[workflows] ${formatDiagnostic(diagnostic)}`);
       continue;
     }
-    // An invalid revision keeps the last valid version, unless a diagnostic has a code:
-    // a code changes what the file means, so the previous definition must not keep running.
-    const reject = async (diagnostics: WorkflowDiagnostic[]): Promise<void> => {
-      result.invalid.push(...diagnostics);
-      for (const diagnostic of diagnostics) log.warn(`[workflows] ${formatDiagnostic(diagnostic)}`);
-      const stem = name.replace(/\.yaml$/, '');
-      const dropped = diagnostics.some((diagnostic) => diagnostic.code !== undefined);
-      if (dropped && !options.dryRun) await remove(cachePath(config, stem));
-      if (!dropped && await readCache(config, stem)) {
-        result.kept.push(stem);
-        log.warn(`[workflows] Kept the last valid version of ${stem}; this revision was not cached`);
-      } else {
-        result.unrunnable.push(relativePath);
-        log.warn(`[workflows] ${relativePath} has no runnable version`);
-      }
-    };
+    const stem = name.replace(/\.yaml$/, '');
     const parsed = parseWorkflow(relativePath, content);
     if (!parsed.ok) {
-      await reject(parsed.diagnostics);
+      checked.push({ stem, relativePath, diagnostics: parsed.diagnostics });
       continue;
     }
     const resolved = await resolvePromptFiles(config, parsed.definition, parsed.promptFileLocations, relativePath);
     if (!resolved.ok) {
-      await reject(resolved.diagnostics);
+      checked.push({ stem, relativePath, diagnostics: resolved.diagnostics });
       continue;
     }
     const hash = createHash('sha256').update(content);
     for (const source of resolved.sources) {
       hash.update('\0').update(source.path).update('\0').update(source.content);
     }
-    const sourceHash = hash.digest('hex');
-    const previous = await readCache(config, parsed.definition.name);
-    result.cached.push(parsed.definition.name);
-    if (options.dryRun || previous?.sourceHash === sourceHash) continue;
-    await writeJsonAtomic(cachePath(config, parsed.definition.name), {
-      relativePath,
-      sourceHash,
-      definition: resolved.definition,
+    checked.push({
+      stem, relativePath, content, definition: resolved.definition, sourceHash: hash.digest('hex'), promptFileLocations: parsed.promptFileLocations,
+    });
+  }
+
+  const kept = new Map<string, WorkflowDefinition | null>();
+  for (const file of checked) {
+    const dropped = 'diagnostics' in file && file.diagnostics.some((diagnostic) => diagnostic.code !== undefined);
+    kept.set(file.stem, dropped ? null : (await readCache(config, file.stem))?.definition ?? null);
+  }
+  const referenceProblems = checkReferences(checked, kept);
+
+  // An invalid revision keeps the last valid version, unless a diagnostic has a code:
+  // a code changes what the file means, so the previous definition must not keep running.
+  const reject = async ({ stem, relativePath }: Checked, diagnostics: WorkflowDiagnostic[]): Promise<void> => {
+    result.invalid.push(...diagnostics);
+    for (const diagnostic of diagnostics) log.warn(`[workflows] ${formatDiagnostic(diagnostic)}`);
+    const dropped = diagnostics.some((diagnostic) => diagnostic.code !== undefined);
+    if (dropped && !options.dryRun) await remove(cachePath(config, stem));
+    if (!dropped && await readCache(config, stem)) {
+      result.kept.push(stem);
+      log.warn(`[workflows] Kept the last valid version of ${stem}; this revision was not cached`);
+    } else {
+      result.unrunnable.push(relativePath);
+      log.warn(`[workflows] ${relativePath} has no runnable version`);
+    }
+  };
+  let wrote = 0;
+  for (const file of checked) {
+    if ('diagnostics' in file) {
+      await reject(file, file.diagnostics);
+      continue;
+    }
+    const problems = referenceProblems(file);
+    if (problems.length > 0) {
+      await reject(file, problems);
+      continue;
+    }
+    const previous = await readCache(config, file.definition.name);
+    result.cached.push(file.definition.name);
+    if (options.dryRun || previous?.sourceHash === file.sourceHash) continue;
+    await writeJsonAtomic(cachePath(config, file.definition.name), {
+      relativePath: file.relativePath,
+      sourceHash: file.sourceHash,
+      definition: file.definition,
       validatedAt: new Date().toISOString(),
     } satisfies CachedWorkflow);
     wrote += 1;
@@ -183,6 +217,61 @@ export async function syncWorkflowDefinitions(
     log.success(`[${scope}] Synced ${wrote} workflow${wrote === 1 ? '' : 's'}`);
   }
   return result;
+}
+
+/** The workflow files a definition runs by name. Every check across files follows references through this walk. */
+function workflowsRunBy(definition: WorkflowDefinition): string[] {
+  return definition.steps.flatMap((step) => (step.workflow === undefined ? [] : [step.workflow]));
+}
+
+/**
+ * The diagnostics of each file that passed its own checks, for the steps that run another workflow file.
+ * A step is checked against the version that file runs after this sync: this revision when it has no
+ * diagnostics, else the version it keeps. So a child with no runnable version is reported on its parent.
+ */
+function checkReferences(checked: Checked[], kept: Map<string, WorkflowDefinition | null>): (candidate: Candidate) => WorkflowDiagnostic[] {
+  const candidates = new Map(checked.flatMap((file) => ('definition' in file ? [[file.stem, file] as const] : [])));
+  const found = new Map<string, WorkflowDiagnostic[]>();
+  // Recursion follows the version each file asks to run: this revision when it passed its own checks, else the kept one.
+  const asked = (workflow: string): WorkflowDefinition | null => candidates.get(workflow)?.definition ?? kept.get(workflow) ?? null;
+  const cycleBack = (from: string, to: string): string[] | undefined => {
+    const seen = new Set<string>();
+    const walk = (workflow: string, through: string[]): string[] | undefined => {
+      if (workflow === to) return [...through, workflow];
+      if (seen.has(workflow)) return undefined;
+      seen.add(workflow);
+      const definition = asked(workflow);
+      for (const next of definition ? workflowsRunBy(definition) : []) {
+        const cycle = walk(next, [...through, workflow]);
+        if (cycle) return cycle;
+      }
+      return undefined;
+    };
+    return walk(from, [to]);
+  };
+  // A file is resolved only through children that do not lead back to it, so this recursion ends.
+  const runnable = (workflow: string): WorkflowDefinition | null => {
+    const candidate = candidates.get(workflow);
+    if (!candidate) return kept.get(workflow) ?? null;
+    const diagnostics = check(candidate);
+    if (diagnostics.length === 0) return candidate.definition;
+    return diagnostics.some((diagnostic) => diagnostic.code !== undefined) ? null : kept.get(workflow) ?? null;
+  };
+  const check = (candidate: Candidate): WorkflowDiagnostic[] => {
+    const known = found.get(candidate.stem);
+    if (known) return known;
+    const files: WorkflowFiles = { runnable, cycle: (workflow) => cycleBack(workflow, candidate.stem) };
+    const parsed = parseWorkflow(candidate.relativePath, candidate.content, files);
+    const diagnostics = parsed.ok ? [] : parsed.diagnostics;
+    candidate.definition.steps.forEach((step, index) => {
+      if (step.promptFile === undefined || step.prompt === undefined) return;
+      const at = candidate.promptFileLocations[index] ?? { line: 1, column: 1 };
+      diagnostics.push(...promptFileDiagnostics(candidate.relativePath, candidate.definition, index, step.prompt, at, files));
+    });
+    found.set(candidate.stem, diagnostics);
+    return diagnostics;
+  };
+  return check;
 }
 
 async function resolvePromptFiles(

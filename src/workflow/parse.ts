@@ -110,11 +110,19 @@ function parseOutput(
   return undefined;
 }
 
+/** What a sync knows about the other workflow files, so a step that runs one can be checked against it. */
+export interface WorkflowFiles {
+  /** The version of `name` a step would run after this sync, or null when it has none. */
+  runnable(name: string): WorkflowDefinition | null;
+  /** The workflows running `name` from this file passes through until it runs this file again, such as ship -> check -> ship. */
+  cycle(name: string): string[] | undefined;
+}
+
 /**
  * Parse one workflow file. A failure is a list of diagnostics; it does not throw,
- * so one bad file cannot stop the rest of a sync.
+ * so one bad file cannot stop the rest of a sync. Without `files`, the file is checked on its own.
  */
-export function parseWorkflow(file: string, content: string): {
+export function parseWorkflow(file: string, content: string, files?: WorkflowFiles): {
   ok: true;
   definition: WorkflowDefinition;
   promptFileLocations: Record<number, { line: number; column: number }>;
@@ -201,6 +209,7 @@ export function parseWorkflow(file: string, content: string): {
     const conditions: ConditionNode[] = [];
     const reads: ReadSite[] = [];
     const endings: Ending[] = [];
+    const references: Array<{ id: string; workflow: string }> = [];
     stepsNode.items.forEach((item, index) => {
       const field = `steps[${index}]`;
       if (!isMap(item)) {
@@ -323,6 +332,16 @@ export function parseWorkflow(file: string, content: string): {
           withValues = withPair.value.toJSON() as Record<string, unknown>;
         }
       }
+      if (workflowPair && workflow && TOKEN.test(workflow) && id && TOKEN.test(id)) references.push({ id, workflow });
+      if (workflowPair && workflow && TOKEN.test(workflow) && files) {
+        // A malformed with is already reported, so its keys are not compared.
+        const keys = !withPair ? [] : withValues && isMap(withPair.value)
+          ? withPair.value.items.map((pair) => ({ name: isScalar(pair.key) ? String(pair.key.value) : '', node: pair.key as Node }))
+          : undefined;
+        diagnostics.push(...referenceDiagnostics(file, lineCounter, files, {
+          label, field, workflow, node: workflowPair.value as Node, with: keys && { node: (withPair?.key ?? workflowPair.value) as Node, keys },
+        }));
+      }
       const withTemplates = isMap(withPair?.value) && withValues ? withPair.value.items.flatMap((pair) => {
         const key = scalarString(isYamlNode(pair.key) ? pair.key : undefined) ?? 'key';
         const node = (isYamlNode(pair.value) ? pair.value : pair.key) as Node;
@@ -391,11 +410,12 @@ export function parseWorkflow(file: string, content: string): {
     diagnostics.push(...graphDiagnostics(file, lineCounter, graph, seen));
     diagnostics.push(...conditionDiagnostics(file, lineCounter, conditions, reads));
     const needsById = new Map(graph.map((step) => [step.id, step.needs]));
+    const children = childrenOf(references, files);
     // A malformed inputs header is already reported; checking reads against it would only add noise.
-    diagnostics.push(...readDiagnostics(file, reads, readScope(needsById, steps, inputsPair && !inputs ? undefined : inputs ?? {})));
+    diagnostics.push(...readDiagnostics(file, reads, readScope(needsById, steps, inputsPair && !inputs ? undefined : inputs ?? {}, children)));
     // A malformed ends header is already reported; checking steps against it would only add noise.
     if (!endsPair || ends) diagnostics.push(...endDiagnostics(file, lineCounter, ends, endsPair?.value, endings, graph));
-    diagnostics.push(...outputDiagnostics(file, lineCounter, outputEntries ?? [], seen, steps));
+    diagnostics.push(...outputDiagnostics(file, lineCounter, outputEntries ?? [], seen, steps, children));
   }
 
   if (diagnostics.length > 0 || !name || !description) return { ok: false, diagnostics };
@@ -404,6 +424,56 @@ export function parseWorkflow(file: string, content: string): {
     definition: { schemaVersion: 'v1alpha1', name, description, ...(inputs ? { inputs } : {}), ...(ends ? { ends } : {}), ...(outputs ? { outputs } : {}), steps },
     promptFileLocations,
   };
+}
+
+/** A step that runs a workflow file by name. */
+interface Reference {
+  label: string;
+  field: string;
+  workflow: string;
+  node: Node;
+  /** The keys `with` passes, and where to report a missing one. Undefined when `with` is malformed. */
+  with?: { node: Node; keys: Array<{ name: string; node: Node }> };
+}
+
+/** Diagnostics for a step that runs a workflow file, checked against the version that step would run. */
+function referenceDiagnostics(file: string, lineCounter: LineCounter, files: WorkflowFiles, reference: Reference): WorkflowDiagnostic[] {
+  const { label, field, workflow, node } = reference;
+  const cycle = files.cycle(workflow);
+  if (cycle) return [locate(file, lineCounter, node, `${field}.workflow`, `${label} runs workflow "${workflow}" in a cycle: ${cycle.join(' -> ')}`)];
+  const child = files.runnable(workflow);
+  if (!child) {
+    return [locate(file, lineCounter, node, `${field}.workflow`,
+      `${label} runs workflow "${workflow}", which has no runnable version; fix or add workflows/${workflow}.yaml`)];
+  }
+  if (!reference.with) return [];
+  const inputs = child.inputs ?? {};
+  const passed = new Set(reference.with.keys.map((key) => key.name));
+  return [
+    ...Object.keys(inputs).filter((name) => !passed.has(name)).map((name) => locate(file, lineCounter, reference.with?.node, `${field}.with`,
+      `${label} with does not pass input "${name}", which workflow "${workflow}" declares`)),
+    ...reference.with.keys.filter((key) => !Object.hasOwn(inputs, key.name)).map((key) => locate(file, lineCounter, key.node, `${field}.with.${key.name}`,
+      `${label} with.${key.name} is not an input workflow "${workflow}" declares`)),
+  ];
+}
+
+/** The workflow each step runs, as a sync knows it. A step whose reference is reported has none, so its reads are not checked. */
+function childrenOf(steps: Array<{ id: string; workflow?: string }>, files: WorkflowFiles | undefined): Map<string, WorkflowDefinition> {
+  const children = new Map<string, WorkflowDefinition>();
+  for (const { id, workflow } of steps) {
+    if (!files || workflow === undefined || files.cycle(workflow)) continue;
+    const child = files.runnable(workflow);
+    if (child) children.set(id, child);
+  }
+  return children;
+}
+
+/** Why `path` reads an output the workflow its step runs does not declare, or undefined. */
+function undeclaredOutput(children: Map<string, WorkflowDefinition>, path: ExpressionPath): string | undefined {
+  if (path.root !== 'steps' || path.field !== 'outputs' || path.fields.length === 0) return undefined;
+  const child = children.get(path.step);
+  if (!child || Object.hasOwn(child.outputs ?? {}, path.fields[0]!)) return undefined;
+  return `reads steps.${path.step}.outputs.${path.fields.join('.')}, which is not an output workflow "${child.name}" declares`;
 }
 
 /** `env` maps variable names to text. A YAML number or boolean is read as its text. */
@@ -507,14 +577,26 @@ function parseOutputs(
   return entries;
 }
 
-/** Each output reads a step of this workflow, and only a field that step's `output` declares. */
-function outputDiagnostics(file: string, lineCounter: LineCounter, entries: OutputEntry[], ids: Set<string>, steps: WorkflowStep[]): WorkflowDiagnostic[] {
+/** Each output reads a step of this workflow, and only a field that step's `output`, or the workflow it runs, declares. */
+function outputDiagnostics(
+  file: string,
+  lineCounter: LineCounter,
+  entries: OutputEntry[],
+  ids: Set<string>,
+  steps: WorkflowStep[],
+  children: Map<string, WorkflowDefinition>,
+): WorkflowDiagnostic[] {
   const diagnostics: WorkflowDiagnostic[] = [];
   for (const { name, node, path } of entries) {
     if (path.root !== 'steps') continue;
     const at = (message: string): WorkflowDiagnostic => locate(file, lineCounter, node, `outputs.${name}`, `output "${name}" ${message}`);
     if (!ids.has(path.step)) {
       diagnostics.push(at(`reads steps.${path.step}, which is not a step in this workflow`));
+      continue;
+    }
+    const undeclared = undeclaredOutput(children, path);
+    if (undeclared) {
+      diagnostics.push({ ...at(undeclared), code: 'undeclared_output' });
       continue;
     }
     const output = steps.find((step) => step.id === path.step)?.output;
@@ -607,7 +689,7 @@ function conditionDiagnostics(file: string, lineCounter: LineCounter, conditions
       });
       continue;
     }
-    reads.push({ id: condition.id, field: condition.field, at: position(lineCounter, condition.node), what: 'if', paths });
+    reads.push({ id: condition.id, field: condition.field, at: position(lineCounter, condition.node), what: 'if', paths, ends: endComparisons(condition.expression) });
   }
   return diagnostics;
 }
@@ -625,6 +707,8 @@ interface ReadSite {
   /** `if`, `prompt`, `prompt_file` or `env.<NAME>`. */
   what: string;
   paths: ExpressionPath[];
+  /** The names an `if` compares a step's end with. */
+  ends?: Array<{ step: string; end: string }>;
   code?: WorkflowDiagnostic['code'];
 }
 
@@ -634,10 +718,18 @@ interface ReadScope {
   outputs: Map<string, OutputSchema | undefined>;
   /** Undefined when the inputs header is malformed, so `inputs.…` reads are not checked. */
   inputs?: OutputSchema;
+  /** The workflow each workflow step runs, when a sync knows it. */
+  children: Map<string, WorkflowDefinition>;
 }
 
-function readScope(needs: Map<string, string[]>, steps: WorkflowStep[], inputs: Record<string, OutputSchema> | undefined): ReadScope {
+function readScope(
+  needs: Map<string, string[]>,
+  steps: WorkflowStep[],
+  inputs: Record<string, OutputSchema> | undefined,
+  children: Map<string, WorkflowDefinition>,
+): ReadScope {
   return {
+    children,
     ancestors: (id) => {
       const found = new Set<string>();
       const pending = [...(needs.get(id) ?? [])];
@@ -679,13 +771,38 @@ function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScope): Wor
         reported.add(path.step);
         continue;
       }
+      const undeclared = undeclaredOutput(scope.children, path);
+      if (undeclared) {
+        diagnostics.push({ ...at(`step "${site.id}" ${site.what} ${undeclared}`), code: 'undeclared_output' });
+        continue;
+      }
       const output = scope.outputs.get(path.step);
       if (path.field === 'outputs' && output && !declaresField(output, path.fields)) {
         diagnostics.push(at(`step "${site.id}" ${site.what} reads steps.${path.step}.outputs.${path.fields.join('.')}, which is not in the output step "${path.step}" declares`));
       }
     }
+    for (const { step, end } of site.ends ?? []) {
+      const child = readable.has(step) ? scope.children.get(step) : undefined;
+      if (!child || Object.hasOwn(child.ends ?? {}, end)) continue;
+      diagnostics.push({
+        ...at(`step "${site.id}" ${site.what} compares steps.${step}.end with '${end}', which is not an end workflow "${child.name}" declares`),
+        code: 'undeclared_end',
+      });
+    }
   }
   return diagnostics;
+}
+
+/** The names an expression compares a step's end with, as in `steps.check.end == 'ready'`. */
+function endComparisons(expression: Expression): Array<{ step: string; end: string }> {
+  if (expression.kind === 'not') return endComparisons(expression.operand);
+  if (expression.kind !== 'binary') return [];
+  if (expression.operator === '&&' || expression.operator === '||') {
+    return [...endComparisons(expression.left), ...endComparisons(expression.right)];
+  }
+  const [read, value] = expression.left.kind === 'path' ? [expression.left, expression.right] : [expression.right, expression.left];
+  if (read.kind !== 'path' || read.path.root !== 'steps' || read.path.field !== 'end') return [];
+  return value.kind === 'literal' && typeof value.value === 'string' ? [{ step: read.path.step, end: value.value }] : [];
 }
 
 interface Ending {
@@ -747,6 +864,7 @@ export function promptFileDiagnostics(
   index: number,
   text: string,
   at: { line: number; column: number },
+  files?: WorkflowFiles,
 ): WorkflowDiagnostic[] {
   const step = definition.steps[index];
   if (!step) return [];
@@ -761,7 +879,7 @@ export function promptFileDiagnostics(
     .map((message): WorkflowDiagnostic => ({ file, ...at, field, message, code: 'bad_template' }));
   const needs = new Map(definition.steps.map((item) => [item.id, item.needs ?? []]));
   const site: ReadSite = { id: step.id, field, at, what: 'prompt_file', paths: templatePaths(parsed.template), code: 'bad_template' };
-  return [...withProblems, ...readDiagnostics(file, [site], readScope(needs, definition.steps, definition.inputs ?? {}))];
+  return [...withProblems, ...readDiagnostics(file, [site], readScope(needs, definition.steps, definition.inputs ?? {}, childrenOf(definition.steps, files)))];
 }
 
 function pathIsAbsolute(value: string): boolean {
