@@ -69,13 +69,13 @@ import { generateBranchName, pushRepoBranch, checkoutMaster, pushRepoDirectly, i
 import fse from 'fs-extra';
 
 describe('gitCommonDir', () => {
-  it('probes a stable checkout only once during a run', async () => {
-    const cwd = path.resolve('common-dir-stable');
-    mockGit.revparse.mockClear().mockResolvedValue('.git');
+  it('asks git each time when no repository on disk vouches for the answer', async () => {
+    const cwd = path.resolve('common-dir-unstamped');
+    mockGit.revparse.mockClear().mockResolvedValueOnce('.git').mockResolvedValue('other/.git');
 
     expect(await gitCommonDir(cwd)).toBe(path.join(cwd, '.git'));
-    expect(await gitCommonDir(cwd)).toBe(path.join(cwd, '.git'));
-    expect(mockGit.revparse).toHaveBeenCalledTimes(1);
+    expect(await gitCommonDir(cwd)).toBe(path.join(cwd, 'other', '.git'));
+    expect(mockGit.revparse).toHaveBeenCalledTimes(2);
   });
 
   it('retries when a repository becomes available after a failed probe', async () => {

@@ -4,10 +4,17 @@ import { GIT_REPOSITORY_ENV } from './git-env.js';
 
 const exists = (p: string): Promise<boolean> => fs.promises.lstat(p).then(() => true, () => false);
 
-/** The `.git` entry, or else the `HEAD`, git finds first at or above `dir` when it looks for a repository; null when none. */
-async function firstRepositoryEntry(dir: string): Promise<{ file: string; stat: fs.Stats } | null> {
+/** Where git starts looking from `dir`: its real path, symlinks resolved, as the working directory git runs in reads. */
+const realDir = (dir: string): Promise<string> => fs.promises.realpath(dir).catch(() => path.resolve(dir));
+
+/**
+ * The `.git` entry, or else the `HEAD`, git finds first at or above `real`
+ * (see realDir) when it looks for a repository; null when none. Git walks up
+ * the real path: a symlink's own parents are never searched.
+ */
+async function firstRepositoryEntry(real: string): Promise<{ file: string; stat: fs.Stats } | null> {
   const lstat = (file: string): Promise<fs.Stats | null> => fs.promises.lstat(file).catch(() => null);
-  for (let at = path.resolve(dir); ; at = path.dirname(at)) {
+  for (let at = real; ; at = path.dirname(at)) {
     const [dotGit, head] = await Promise.all([lstat(path.join(at, '.git')), lstat(path.join(at, 'HEAD'))]);
     if (dotGit) return { file: path.join(at, '.git'), stat: dotGit };
     if (head) return { file: path.join(at, 'HEAD'), stat: head };
@@ -29,7 +36,7 @@ async function firstRepositoryEntry(dir: string): Promise<{ file: string; stat: 
  */
 export async function gitFindsNoRepository(dir: string): Promise<boolean> {
   if (process.env.GIT_DIR || process.env.GIT_WORK_TREE || process.env.GIT_COMMON_DIR) return false;
-  return await firstRepositoryEntry(dir) === null;
+  return await firstRepositoryEntry(await realDir(dir)) === null;
 }
 
 /**
@@ -41,18 +48,20 @@ const identity = (stat: fs.Stats | null): number[] | null =>
   stat && (stat.isDirectory() ? [stat.dev, stat.ino] : [stat.dev, stat.ino, stat.mtimeMs, stat.size]);
 
 /**
- * Which repository git finds for `dir`, told without starting it: the entry
- * gitFindsNoRepository looks for, the git directory git opens from it (`.git`
- * itself, the one a `.git` file names, or the directory holding `HEAD`), and
- * the identity of each and of its `HEAD`. While the stamp stays equal, what git
- * said about where `dir` sits still holds; a repository moved, cloned again,
- * broken, removed, or created inside it later changes it. Null when git finds
- * none, and when the environment hands git a repository (GIT_REPOSITORY_ENV),
- * which no file tells.
+ * Which repository git finds for `dir`, told without starting it: `dir`'s real
+ * path, the entry gitFindsNoRepository looks for, the git directory git opens
+ * from it (`.git` itself, the one a `.git` file names, or the directory
+ * holding `HEAD`), and the identity of each and of its `HEAD`. While the stamp
+ * stays equal, what git said about where `dir` sits still holds, provided git
+ * opened `gitDir`: a symlink pointed elsewhere, or a repository moved, cloned
+ * again, broken, removed, or created inside it later changes it. Null when git
+ * finds none, and when the environment hands git a repository
+ * (GIT_REPOSITORY_ENV), which no file tells.
  */
-export async function repositoryStamp(dir: string): Promise<string | null> {
+export async function repositoryStamp(dir: string): Promise<{ stamp: string; gitDir: string } | null> {
   if (GIT_REPOSITORY_ENV.some((name) => process.env[name] !== undefined)) return null;
-  const entry = await firstRepositoryEntry(dir);
+  const real = await realDir(dir);
+  const entry = await firstRepositoryEntry(real);
   if (!entry) return null;
   let gitDir = path.dirname(entry.file);
   let link = '';
@@ -63,7 +72,7 @@ export async function repositoryStamp(dir: string): Promise<string | null> {
   }
   const stat = (file: string): Promise<fs.Stats | null> => fs.promises.stat(file).catch(() => null);
   const [gitDirStat, head] = await Promise.all([stat(gitDir), stat(path.join(gitDir, 'HEAD'))]);
-  return JSON.stringify([entry.file, identity(entry.stat), link, gitDir, identity(gitDirStat), identity(head)]);
+  return { stamp: JSON.stringify([real, entry.file, identity(entry.stat), link, gitDir, identity(gitDirStat), identity(head)]), gitDir };
 }
 
 /**

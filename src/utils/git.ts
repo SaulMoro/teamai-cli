@@ -1011,37 +1011,37 @@ const checkoutLocations = new Map<string, { stamp: string; location: Promise<Che
  * (repositoryStamp), and shared by callers asking at the same time. Null when
  * git cannot say it this way: no repository, a directory outside any work tree
  * (a bare repository, inside `.git`), the environment handing git a
- * repository, or git failing. Callers then ask git as before, for its answer
- * or its error. A null is not remembered.
+ * repository, git opening another git directory than the stamp's (one it
+ * passed over, which no stamp would follow), or git failing. Callers then ask
+ * git as before, for its answer or its error. A null is not remembered.
  */
 export async function checkoutLocation(dir: string): Promise<CheckoutLocation | null> {
-  const stamp = await repositoryStamp(dir);
-  if (stamp === null) return null;
+  const found = await repositoryStamp(dir);
+  if (found === null) return null;
+  const { stamp } = found;
   const key = path.resolve(dir);
   const known = checkoutLocations.get(key);
   if (known?.stamp === stamp) return known.location;
-  const location = readCheckoutLocation(dir);
+  const location = readCheckoutLocation(dir, found.gitDir);
   checkoutLocations.set(key, { stamp, location });
   if (await location === null && checkoutLocations.get(key)?.location === location) checkoutLocations.delete(key);
   return location;
 }
 
-async function readCheckoutLocation(dir: string): Promise<CheckoutLocation | null> {
+async function readCheckoutLocation(dir: string, stampGitDir: string): Promise<CheckoutLocation | null> {
   try {
-    const result = await execCommand('git', ['rev-parse', '--show-toplevel', '--show-prefix', '--git-common-dir', '--git-path', 'info/exclude'], { cwd: dir, timeoutMs: 10_000 });
-    const [toplevel = '', prefix = '', commonDir = '', gitPath = ''] = result.code === 0 ? result.stdout.split(/\r?\n/) : [];
-    if (!toplevel || !commonDir || !gitPath) return null;
-    // Real path, so one repository reached through a symlink (macOS /var) is one file.
-    const base = await realpath(dir).catch(() => dir);
-    return { toplevel, prefix, commonDir: await realpath(path.resolve(dir, commonDir)), excludeFile: path.resolve(base, gitPath) };
+    const result = await execCommand('git', ['rev-parse', '--show-toplevel', '--show-prefix', '--git-common-dir', '--git-path', 'info/exclude', '--git-dir'], { cwd: dir, timeoutMs: 10_000 });
+    const [toplevel = '', prefix = '', commonDir = '', gitPath = '', gitDir = ''] = result.code === 0 ? result.stdout.split(/\r?\n/) : [];
+    if (!toplevel || !commonDir || !gitPath || !gitDir) return null;
+    // Git prints relative paths from where it runs: the real path, symlinks resolved.
+    const base = await realpath(dir);
+    const [opened, stamped] = await Promise.all([realpath(path.resolve(base, gitDir)), realpath(stampGitDir)]);
+    if (opened !== stamped) return null;
+    return { toplevel, prefix, commonDir: await realpath(path.resolve(base, commonDir)), excludeFile: path.resolve(base, gitPath) };
   } catch {
     return null;
   }
 }
-
-// CLI invocations keep checkout locations stable. Cache successful probes only;
-// a failed probe must be retried if the repository becomes available later.
-const commonDirs = new Map<string, string>();
 
 /**
  * The realpath of the git common directory of the repository containing
@@ -1050,15 +1050,15 @@ const commonDirs = new Map<string, string>();
  * directory was pruned).
  */
 export async function gitCommonDir(cwd: string): Promise<string | null> {
-  const known = commonDirs.get(cwd);
-  if (known) return known;
   if (await gitFindsNoRepository(cwd)) return null;
+  // Remembered by checkoutLocation while the repository on disk stays the same;
+  // anything else asks git each time.
+  const located = await checkoutLocation(cwd);
+  if (located) return located.commonDir;
   try {
     // Inside the try: simple-git throws at once for a directory that does not exist.
-    const found = (await checkoutLocation(cwd))?.commonDir
-      ?? await realpath(path.resolve(cwd, (await createGit(cwd).revparse(['--git-common-dir'])).replace(/\r?\n$/, '')));
-    commonDirs.set(cwd, found);
-    return found;
+    const out = (await createGit(cwd).revparse(['--git-common-dir'])).replace(/\r?\n$/, '');
+    return await realpath(path.resolve(await realpath(cwd), out));
   } catch {
     return null;
   }
@@ -1120,9 +1120,10 @@ interface ListedWorktree extends WorktreeListEntry {
 }
 
 /**
- * `git worktree list` output by directory and form, kept while the linked
- * worktrees git reads it from are unchanged (linkedWorktreesStamp): one pull
- * asks for the same list several times.
+ * `git worktree list` output by directory and form, kept while the directory
+ * stays in the same repository (checkoutLocation) and its linked worktrees are
+ * unchanged (linkedWorktreesStamp): one pull asks for the same list several
+ * times.
  */
 const worktreeLists = new Map<string, { stamp: string; list: string }>();
 
@@ -1137,8 +1138,8 @@ async function readWorktreeList(cwd?: string, newlineSplit = false): Promise<Lis
   const dir = cwd ?? process.cwd();
   if (await gitFindsNoRepository(dir)) return null;
   // Taken before git runs: a worktree changed meanwhile changes the next stamp.
-  const commonDir = await gitCommonDir(dir);
-  const stamp = commonDir === null ? null : await linkedWorktreesStamp(commonDir);
+  const commonDir = (await checkoutLocation(dir))?.commonDir ?? null;
+  const stamp = commonDir === null ? null : JSON.stringify([commonDir, await linkedWorktreesStamp(commonDir)]);
   const key = `${newlineSplit}\0${dir}`;
   const known = worktreeLists.get(key);
   let list: string;

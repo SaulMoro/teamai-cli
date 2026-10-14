@@ -2473,10 +2473,14 @@ function recordPromptReach(scope: ManifestScope, reached: readonly string[]): vo
  * Whether `workspacePath` is a live checkout (#915). A directory a removed
  * worktree left inside another checkout is not, though git places it there;
  * nor is a subdirectory the agent keyed by its cwd while git could not answer.
+ * A workspace with its own `.git` that git cannot open is unknown and counts as
+ * live: git failed there rather than found none (nearestGitEntry), so its
+ * lines stay.
  */
 async function isLiveWorkspace(workspacePath: string): Promise<boolean> {
   const commonDir = await gitCommonDir(workspacePath);
-  return commonDir !== null && isLiveCheckout(workspacePath, commonDir);
+  if (commonDir === null) return fse.pathExists(path.join(workspacePath, '.git'));
+  return isLiveCheckout(workspacePath, commonDir);
 }
 
 /** The copies the manifest records in one project workspace, for each tool it names (#915). */
