@@ -168,6 +168,11 @@ export interface RunState {
 export interface CachedWorkflow {
   relativePath: string;
   sourceHash: string;
+  /**
+   * The YAML the definition was parsed from, so a kept copy can be checked again against the workflows it runs.
+   * Absent in a cache written before a workflow could run another file.
+   */
+  content?: string;
   definition: WorkflowDefinition;
   validatedAt: string;
 }

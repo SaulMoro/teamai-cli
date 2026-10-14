@@ -1290,7 +1290,7 @@ steps:
     expect(result.cached).toEqual(['build']);
   });
 
-  it('keeps the last valid version of a parent whose child loses its runnable version', async () => {
+  it('keeps a parent while its child keeps a runnable version, and drops it when the child has none', async () => {
     const config = testConfig();
     const runs = (name: string, child: string): string => `schemaVersion: v1alpha1
 name: ${name}
@@ -1319,9 +1319,10 @@ steps:
     expect(second.invalid.map(formatDiagnostic)).toEqual([
       'workflows/ship.yaml:6: field "steps[0].workflow": step "run" runs workflow "check", which has no runnable version; fix or add workflows/check.yaml',
     ]);
-    expect(second.kept).toEqual(['ship']);
+    expect(second.kept).toEqual([]);
+    expect(second.unrunnable).toEqual(['workflows/ship.yaml']);
     expect(second.cached).toEqual(['build']);
-    expect(await startRun(config, 'ship')).toMatchObject({ error: { code: 'workflow_not_found', message: expect.stringContaining('runs workflow "check"') } });
+    expect(await startRun(config, 'ship')).toMatchObject({ error: { code: 'workflow_not_found', message: expect.stringContaining('Workflow "ship" has no runnable version') } });
   });
 
   it('reports a parent whose child has no runnable version because of its own references', async () => {
@@ -1443,6 +1444,72 @@ steps:
     ]);
     expect(result.unrunnable).toEqual(['workflows/ship.yaml']);
     expect(await loadCachedWorkflow(config, 'ship')).toBeNull();
+  });
+
+  it('drops the last valid version of an invalid parent that reads an output its child no longer declares', async () => {
+    const config = testConfig();
+    const check = (name: string): string => `schemaVersion: v1alpha1
+name: check
+description: Classify the issue.
+outputs:
+  ${name}: steps.classify.outputs.verdict
+steps:
+  - id: classify
+    command: node classify.js
+    output:
+      verdict: fix | drop
+`;
+    const ship = (description: string): string => `schemaVersion: v1alpha1
+name: ship
+description: ${description}
+steps:
+  - id: check
+    workflow: check
+  - id: fix
+    needs: [check]
+    if: steps.check.outputs.verdict == 'fix'
+    command: node fix.js
+`;
+    writeWorkflow(config, 'check', check('verdict'));
+    writeWorkflow(config, 'ship', ship('Ship the issue.'));
+    expect((await syncWorkflowDefinitions(config)).cached).toEqual(['check', 'ship']);
+    writeWorkflow(config, 'check', check('decision'));
+    writeWorkflow(config, 'ship', ship('[not text]'));
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.cached).toEqual(['check']);
+    expect(result.kept).toEqual([]);
+    expect(result.unrunnable).toEqual(['workflows/ship.yaml']);
+    expect(await loadCachedWorkflow(config, 'ship')).toBeNull();
+  });
+
+  it('does not keep a last valid version that runs a workflow in a cycle with the versions this sync caches', async () => {
+    const config = testConfig();
+    const runs = (name: string, child: string): string => `schemaVersion: v1alpha1
+name: ${name}
+description: Run ${child}.
+steps:
+  - id: run
+    workflow: ${child}
+`;
+    writeWorkflow(config, 'a', runs('a', 'b'));
+    writeWorkflow(config, 'b', VALID.replace(/build/g, 'b'));
+    expect((await syncWorkflowDefinitions(config)).cached).toEqual(['a', 'b']);
+    writeWorkflow(config, 'a', runs('a', 'missing'));
+    writeWorkflow(config, 'b', runs('b', 'a'));
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/a.yaml:6: field "steps[0].workflow": step "run" runs workflow "missing", which has no runnable version; fix or add workflows/missing.yaml',
+      'workflows/b.yaml:6: field "steps[0].workflow": step "run" runs workflow "a", which has no runnable version; fix or add workflows/a.yaml',
+    ]);
+    expect(result.cached).toEqual([]);
+    expect(result.kept).toEqual(['b']);
+    expect(result.unrunnable).toEqual(['workflows/a.yaml']);
+    expect(await loadCachedWorkflow(config, 'a')).toBeNull();
+    expect(await startRun(config, 'b')).toMatchObject({ data: { name: 'b' } });
   });
 
   it('reports an if that compares a sub-workflow end with a name the workflow does not declare in ends', async () => {
