@@ -9,6 +9,7 @@ import { isRunId, readRun, runLockPath, writeRun } from './store.js';
 import type {
   CachedWorkflow,
   DriverIdentity,
+  InlineWorkflow,
   OutputSchema,
   RunState,
   RunStatus,
@@ -102,16 +103,24 @@ interface RenderedLease {
 interface Scope {
   /** What every step path inside it starts with: '' at the top, `<workflow step path>.` inside a sub-workflow. */
   prefix: string;
-  definition: WorkflowDefinition;
+  definition: WorkflowDefinition | InlineWorkflow;
   inputs: Record<string, unknown> | undefined;
+  /** For an inline workflow: the enclosing workflows' steps, by id, which its own steps hide. */
+  outer?: Record<string, ExpressionStep>;
 }
 
 function topScope(run: RunState): Scope {
   return { prefix: '', definition: run.definition, inputs: run.inputs };
 }
 
-/** The scope of the workflow a step runs, or undefined when the run did not keep that workflow. */
-function childScope(run: RunState, state: StepState, step: WorkflowStep): Scope | undefined {
+/**
+ * The scope of the workflow a step runs, or undefined when the run did not keep that workflow.
+ * An inline workflow reads the inputs and the steps of the workflow `scope` around it.
+ */
+function childScope(run: RunState, scope: Scope, states: StepState[], state: StepState, step: WorkflowStep): Scope | undefined {
+  if (typeof step.workflow === 'object') {
+    return { prefix: `${state.id}.`, definition: step.workflow, inputs: scope.inputs, outer: expressionSteps(scope, states) };
+  }
   const definition = step.workflow === undefined ? undefined : run.workflows?.[step.workflow];
   return definition && { prefix: `${state.id}.`, definition, inputs: state.inputs };
 }
@@ -135,7 +144,7 @@ function locateStep(run: RunState, path: string): { scope: Scope; step: Workflow
     if (!step) return undefined;
     if (index === ids.length - 1) return { scope, step };
     const state = run.steps.find((item) => item.id === `${scope.prefix}${id}`);
-    const child = state && childScope(run, state, step);
+    const child = state && childScope(run, scope, statesIn(run, scope), state, step);
     if (!child) return undefined;
     scope = child;
   }
@@ -234,6 +243,28 @@ function templateTexts(step: WorkflowStep): string[] {
   return [...(step.prompt !== undefined ? [step.prompt] : []), ...Object.values(step.env ?? {}), ...stringsIn(step.with)];
 }
 
+/**
+ * The step ids a step reads in its `if` and templates, and, when it runs an inline workflow, the ids that workflow's
+ * steps read outside it, at any depth. An `if` or template that does not parse reads nothing here; settling its own
+ * workflow reports it.
+ */
+function readsOf(step: WorkflowStep): Set<string> {
+  const parsed = step.if === undefined ? undefined : parseExpression(step.if);
+  const paths = [
+    ...(parsed?.ok ? expressionPaths(parsed.expression) : []),
+    ...templateTexts(step).flatMap((text) => {
+      const template = parseTemplate(text);
+      return template.ok ? templatePaths(template.template) : [];
+    }),
+  ];
+  const ids = stepsRead(paths);
+  if (typeof step.workflow === 'object') {
+    const own = new Set(step.workflow.steps.map((item) => item.id));
+    for (const item of step.workflow.steps) for (const id of readsOf(item)) if (!own.has(id)) ids.add(id);
+  }
+  return ids;
+}
+
 interface RunReads {
   /** Each step's parsed `if`. */
   conditions: Map<string, Expression>;
@@ -247,25 +278,22 @@ interface RunReads {
 function parseReads(run: RunState, scope: Scope): RunReads | string {
   const conditions = new Map<string, Expression>();
   const reads = new Map<string, Set<string>>();
+  const own = new Set(scope.definition.steps.map((step) => step.id));
   for (const step of scope.definition.steps) {
-    const paths: ExpressionPath[] = [];
     if (step.if !== undefined) {
       const parsed = parseExpression(step.if);
       if (!parsed.ok) return `Run ${run.id} step "${scope.prefix}${step.id}" has an if that does not parse: ${parsed.message}`;
       conditions.set(step.id, parsed.expression);
-      paths.push(...expressionPaths(parsed.expression));
     }
-    for (const text of templateTexts(step)) {
-      // A template that does not parse reads nothing; the step fails when it would be leased.
-      const parsed = parseTemplate(text);
-      if (parsed.ok) paths.push(...templatePaths(parsed.template));
-    }
-    reads.set(step.id, stepsRead(paths));
+    // A template that does not parse reads nothing; the step fails when it would be leased.
+    // An inline workflow's reads of enclosing steps settled before it started, so only its own steps are waited for.
+    reads.set(step.id, new Set([...readsOf(step)].filter((id) => !scope.outer || own.has(id))));
   }
   const outputs = new Map<string, ExpressionPath>();
   for (const [name, source] of Object.entries(scope.definition.outputs ?? {})) {
     const parsed = parseExpression(source);
-    if (!parsed.ok || parsed.expression.kind !== 'path') return `Run ${run.id} workflow "${scope.definition.name}" output "${name}" is not a path`;
+    const workflow = 'name' in scope.definition ? `workflow "${scope.definition.name}"` : `step "${scope.prefix.slice(0, -1)}" inline workflow`;
+    if (!parsed.ok || parsed.expression.kind !== 'path') return `Run ${run.id} ${workflow} output "${name}" is not a path`;
     outputs.set(name, parsed.expression.path);
   }
   return { conditions, reads, outputs };
@@ -273,13 +301,16 @@ function parseReads(run: RunState, scope: Scope): RunReads | string {
 
 const VISIBLE_OUTCOMES: Partial<Record<StepState['status'], string>> = { succeeded: 'success', failed: 'failed', skipped: 'skipped' };
 
-/** What expressions in a workflow read as `steps.<id>`: its own step instances, by their id in that workflow. */
+/**
+ * What expressions in a workflow read as `steps.<id>`: its own step instances, by their id in that workflow,
+ * and, in an inline workflow, the enclosing steps its own steps do not hide.
+ */
 function expressionSteps(scope: Scope, states: StepState[]): Record<string, ExpressionStep> {
-  return Object.fromEntries(states.map((step) => [localId(scope, step), {
+  return { ...scope.outer, ...Object.fromEntries(states.map((step) => [localId(scope, step), {
     ...(VISIBLE_OUTCOMES[step.status] ? { outcome: VISIBLE_OUTCOMES[step.status] } : {}),
     ...(step.end !== undefined ? { end: step.end } : {}),
     ...(step.outputs !== undefined ? { outputs: step.outputs } : {}),
-  }]));
+  }])) };
 }
 
 /**
@@ -329,15 +360,18 @@ type Settled =
  * Its steps join the run right after the step, which is `running` until they settle.
  */
 function startWorkflowStep(run: RunState, scope: Scope, states: StepState[], state: StepState, step: WorkflowStep, child: Scope): WorkflowFailure | undefined {
-  const rendered = renderStrings(step.with ?? {}, { inputs: scope.inputs, steps: expressionSteps(scope, states) });
-  if (!rendered.ok) {
-    return { code: 'invalid_template', message: `step "${state.id}" with template ${rendered.error.source}: ${rendered.error.message}` };
-  }
-  const mismatch = inputsMismatch(child.definition.name, child.definition.inputs, rendered.value);
-  if (mismatch) return { code: 'invalid_inputs', message: `step "${state.id}" with does not fit workflow "${child.definition.name}": ${mismatch}` };
-  if (child.definition.inputs) {
-    state.inputs = rendered.value as Record<string, unknown>;
-    child.inputs = state.inputs;
+  // An inline workflow takes no `with`: it already reads the enclosing inputs.
+  if ('name' in child.definition) {
+    const rendered = renderStrings(step.with ?? {}, { inputs: scope.inputs, steps: expressionSteps(scope, states) });
+    if (!rendered.ok) {
+      return { code: 'invalid_template', message: `step "${state.id}" with template ${rendered.error.source}: ${rendered.error.message}` };
+    }
+    const mismatch = inputsMismatch(child.definition.name, child.definition.inputs, rendered.value);
+    if (mismatch) return { code: 'invalid_inputs', message: `step "${state.id}" with does not fit workflow "${child.definition.name}": ${mismatch}` };
+    if (child.definition.inputs) {
+      state.inputs = rendered.value as Record<string, unknown>;
+      child.inputs = state.inputs;
+    }
   }
   state.status = 'running';
   const steps = child.definition.steps.map((step): StepState => ({ id: `${child.prefix}${step.id}`, status: 'pending' }));
@@ -393,7 +427,7 @@ function settleScope(run: RunState, scope: Scope): Settled {
     const definition = definitionOf(state);
     if (!definition) return { unreadable: `Run ${run.id} has no definition for step "${state.id}"` };
     if (definition.workflow !== undefined) {
-      const child = childScope(run, state, definition);
+      const child = childScope(run, scope, states, state, definition);
       if (!child) return { unreadable: `Run ${run.id} step "${state.id}" runs workflow "${definition.workflow}", which the run did not keep` };
       const failure = state.status === 'pending' ? startWorkflowStep(run, scope, states, state, definition, child) : undefined;
       if (failure) {
@@ -431,8 +465,14 @@ async function loadWorkflows(
 ): Promise<{ workflows: Record<string, WorkflowDefinition>; sourceHash: string } | { failed: WorkflowEnvelope }> {
   const workflows: Record<string, WorkflowDefinition> = {};
   const hashes: Array<[string, string]> = [];
-  const visit = async (definition: WorkflowDefinition, through: string[]): Promise<WorkflowEnvelope | undefined> => {
-    for (const step of definition.steps) {
+  // `prefix` is the path of the inline workflow `steps` belong to, inside the workflow file `definition`.
+  const visit = async (definition: WorkflowDefinition, through: string[], steps = definition.steps, prefix = ''): Promise<WorkflowEnvelope | undefined> => {
+    for (const step of steps) {
+      if (typeof step.workflow === 'object') {
+        const failed = await visit(definition, through, step.workflow.steps, `${prefix}${step.id}.`);
+        if (failed) return failed;
+        continue;
+      }
       if (step.workflow === undefined) continue;
       if (through.includes(step.workflow)) {
         const cycle = [...through.slice(through.indexOf(step.workflow)), step.workflow].join(' -> ');
@@ -441,7 +481,7 @@ async function loadWorkflows(
       if (Object.hasOwn(workflows, step.workflow)) continue;
       const child = await loadCachedWorkflow(config, step.workflow);
       if (!child) {
-        return error('workflow_not_found', `Workflow "${definition.name}" step "${step.id}" runs workflow "${step.workflow}", which has no runnable version. Check workflows/${step.workflow}.yaml and pull again.`);
+        return error('workflow_not_found', `Workflow "${definition.name}" step "${prefix}${step.id}" runs workflow "${step.workflow}", which has no runnable version. Check workflows/${step.workflow}.yaml and pull again.`);
       }
       workflows[step.workflow] = child.definition;
       hashes.push([step.workflow, child.sourceHash]);

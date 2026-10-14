@@ -77,6 +77,26 @@ A `prompt` or `prompt_file` step can have `with` too, so several workflows can s
 
 `workflow: <name>` is looked up by name in the validated cache that `teamai pull` writes, not in the files. `workflow start` takes every workflow the run uses from that cache and keeps them in the run, so a later pull does not change a run in progress. A child with no runnable version, or workflows that run each other in a cycle, stop `start` with an error that names them. `teamai pull` reports the same problems on the parent's step, along with `with` keys that do not match the child's `inputs` and a read of an output or end the child does not declare; such a read also leaves the parent with nothing to run.
 
+A step can also write the workflow it runs in place, to treat a group of steps as one step:
+
+```yaml
+  - id: check
+    needs: [plan]
+    workflow:
+      ends: { dropped: succeeded }
+      outputs: { verdict: steps.classify.outputs.verdict }
+      steps:
+        - id: classify
+          prompt: "Classify {{ inputs.title }} for {{ steps.plan.outputs.task }}."
+          output: { verdict: fix | drop }
+        - id: drop
+          needs: [classify]
+          if: steps.classify.outputs.verdict == 'drop'
+          end: dropped
+```
+
+An inline workflow has `steps` and optional `ends` and `outputs`, which work as in a file. It has no `inputs` and its step has no `with`: its steps read the enclosing workflow's inputs and the steps the enclosing step needs, directly or through their needs. A step inside it with the same id as an outer step hides that step. Its steps are leased by path, such as `check.classify`, and an `end` inside it finishes only the inline workflow. An inline workflow can run a workflow file or contain another inline workflow.
+
 Choose headless tools per machine in the local config:
 
 ```yaml

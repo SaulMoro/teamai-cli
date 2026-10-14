@@ -29,8 +29,11 @@ export interface WorkflowStep {
   output?: OutputSchema;
   /** Variables a command step receives, as written; `{{ inputs.… }}` and `{{ steps.… }}` render when the step is leased. */
   env?: Record<string, string>;
-  /** Name of the workflow this step runs. The cache keeps the name; `start` snapshots that workflow into the run. */
-  workflow?: string;
+  /**
+   * The workflow this step runs: a name, which the cache keeps and `start` snapshots into the run,
+   * or an inline workflow, kept in place.
+   */
+  workflow?: string | InlineWorkflow;
   /** Values for the inputs of the workflow this step runs, as written; every string inside follows the template rules. */
   with?: Record<string, unknown>;
   /** Name in `ends` this step finishes the workflow with when it succeeds. A step with no action only ends the workflow and is never leased. */
@@ -38,6 +41,16 @@ export interface WorkflowStep {
 }
 
 export type EndOutcome = 'succeeded' | 'failed';
+
+/**
+ * A workflow written inside a step. It has no inputs of its own: its steps read the enclosing workflow's inputs
+ * and the steps the enclosing step needs, directly or through their needs.
+ */
+export interface InlineWorkflow {
+  ends?: Record<string, EndOutcome>;
+  outputs?: Record<string, string>;
+  steps: WorkflowStep[];
+}
 
 export interface WorkflowDefinition {
   schemaVersion: 'v1alpha1';

@@ -52,7 +52,7 @@ steps:
       { id: 'review', prompt: 'Review this repository.', agent: 'reviewer' },
       { id: 'summarize', needs: ['review'], promptFile: 'prompts/summary.md' },
     ]);
-    expect(result.promptFileLocations[1]?.line).toBe(10);
+    expect(result.promptFileLocations['steps[1]']?.line).toBe(10);
   });
 
   it('names the file, line, and field when the header does not match', () => {
