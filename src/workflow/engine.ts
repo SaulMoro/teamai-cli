@@ -70,7 +70,7 @@ function delay(ms: number): Promise<void> {
 async function withRun<T extends WorkflowEnvelope>(
   config: LocalConfig,
   runId: string,
-  mutate: (run: RunState) => Promise<{ envelope: T; save: boolean }>,
+  mutate: (run: RunState, now: string) => Promise<{ envelope: T; save: boolean }>,
 ): Promise<T> {
   if (!isRunId(runId)) return error('invalid_run', 'Run id must look like r followed by 8 or 16 hex digits') as T;
   const lock = runLockPath(config, runId);
@@ -84,9 +84,11 @@ async function withRun<T extends WorkflowEnvelope>(
     const loaded = await readRun(config, runId);
     if (loaded === 'missing') return error('run_not_found', `Run ${runId} was not found`) as T;
     if (loaded === 'corrupt') return error('run_unreadable', `Run ${runId} could not be read`) as T;
-    const result = await mutate(loaded);
+    // One timestamp per operation, so a settled run's end record and its run file agree.
+    const now = new Date().toISOString();
+    const result = await mutate(loaded, now);
     if (result.save) {
-      loaded.updatedAt = new Date().toISOString();
+      loaded.updatedAt = now;
       await writeRun(config, loaded);
     }
     return result.envelope;
@@ -137,7 +139,7 @@ function localId(scope: Scope, state: StepState): string {
 }
 
 /** The scope and definition of the step instance at `path`, or undefined when the run file does not describe it. */
-function locateStep(run: RunState, path: string): { scope: Scope; step: WorkflowStep } | undefined {
+export function locateStep(run: RunState, path: string): { scope: Scope; step: WorkflowStep } | undefined {
   let scope = topScope(run);
   const ids = path.split('.');
   for (const [index, id] of ids.entries()) {
@@ -225,10 +227,10 @@ interface WorkflowResult {
  * Ends the run. Every path that settles a run goes through here, so anything that reacts to a settled run hooks in here.
  * Returns a copy of the settled run for the end record, which publishes after the run lock is released (#1126).
  */
-function settleRun(run: RunState, outcome: FinalRunStatus, end?: string): RunState {
+function settleRun(run: RunState, now: string, outcome: FinalRunStatus, end?: string): RunState {
   run.status = outcome;
   if (end !== undefined) run.end = end;
-  run.updatedAt = new Date().toISOString();
+  run.updatedAt = now;
   return { ...run, steps: run.steps.map((step) => ({ ...step })) };
 }
 
@@ -556,7 +558,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
   // lock other engine operations wait on.
   let settledRun: RunState | undefined;
   let alreadySettled = false;
-  const envelope = await withRun(config, runId, async (run) => {
+  const envelope = await withRun(config, runId, async (run, now) => {
     if (run.status !== 'running') {
       // Settled by an earlier next, which published the end record; the
       // done envelope still reports the queue-derived record state.
@@ -580,7 +582,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     const result = settleScope(run, topScope(run));
     if ('unreadable' in result) return { save: false, envelope: error('run_unreadable', result.unreadable) };
     if ('outcome' in result) {
-      settledRun = settleRun(run, result.outcome, result.end);
+      settledRun = settleRun(run, now, result.outcome, result.end);
       return { save: true, envelope: doneEnvelope(run) };
     }
     const step = result.lease;

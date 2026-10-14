@@ -5,9 +5,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
-import { leaseNext, parseReport, reportAttempt, SETTLED_ATTEMPTS_LIMIT, startRun } from '../workflow/engine.js';
+import { leaseNext, parseReport, reportAttempt, SETTLED_ATTEMPTS_LIMIT, startRun, type ReportInput } from '../workflow/engine.js';
 import { runLocalDriver } from '../workflow/local-driver.js';
 import { outputMismatch } from '../workflow/output.js';
+import { pendingRecords, type WorkflowRunRecord } from '../workflow/records.js';
 import { readRun, runLockPath, writeRun } from '../workflow/store.js';
 import type { DriverIdentity } from '../workflow/types.js';
 
@@ -428,7 +429,7 @@ steps:
     const end = (await pendingRecords(config)).find((record) => record.phase === 'end');
     expect(end).toBeDefined();
     expect(end!.status).toBe('failed');
-    expect(end!.stepCounts).toEqual({ total: 1, succeeded: 0, failed: 1 });
+    expect(end!.stepCounts).toEqual({ total: 1, succeeded: 0, failed: 1, skipped: 0 });
   });
 
   it('queues an end record when the run settles', async () => {
@@ -442,7 +443,7 @@ steps:
     const end = queued.find((record) => record.phase === 'end');
     expect(end).toBeDefined();
     expect(end!.status).toBe('succeeded');
-    expect(end!.stepCounts).toEqual({ total: 2, succeeded: 2, failed: 0 });
+    expect(end!.stepCounts).toEqual({ total: 2, succeeded: 2, failed: 0, skipped: 0 });
   });
 
   it('passes env to a command as variables over the inherited environment, never as shell', async () => {
@@ -1588,5 +1589,180 @@ describe('inline workflows', () => {
     const fix = await leaseNext(config, runId, driverA);
 
     expect(fix).toMatchObject({ data: { lease: { step: 'check.fix', prompt: 'Fix inner.' } } });
+  });
+});
+
+/** The end record the run queued; the fixtures have no reports remote, so it stays queued. */
+async function endRecord(config: LocalConfig): Promise<WorkflowRunRecord | undefined> {
+  return (await pendingRecords(config)).find((record) => record.phase === 'end');
+}
+
+/** Drives a run to done, reporting each step with the fields `reports` gives for its path. */
+async function driveWith(config: LocalConfig, runId: string, reports: Record<string, Partial<ReportInput>> = {}): Promise<void> {
+  for (;;) {
+    const next = await leaseNext(config, runId, driverA);
+    if ('error' in next) throw new Error(next.error.message);
+    if (next.data.done) return;
+    const lease = next.data.lease as { step: string; attempt: string; revision: number };
+    await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: driverA, ...reports[lease.step] });
+  }
+}
+
+describe('run records of graph runs', () => {
+  it('lists the steps of a sub-workflow by path, each with its own agent, tool, model and tokens', async () => {
+    const { config, runId } = await startTree({
+      review: workflow('review', `  - id: classify
+    prompt: Classify the issue.
+    agent: classifier
+  - id: comment
+    needs: [classify]
+    command: node comment.js
+`),
+      ship: workflow('ship', `  - id: check
+    workflow: review
+  - id: fix
+    needs: [check]
+    prompt: Fix the issue.
+    agent: implementer
+`),
+    }, 'ship');
+
+    await driveWith(config, runId, {
+      'check.classify': { tool: 'claude', model: 'claude-sonnet', tokens: { input: 10, output: 5 } },
+      fix: { tool: 'codex', model: 'gpt-codex', tokens: { input: 20, output: 8 } },
+    });
+
+    expect((await endRecord(config))?.steps).toEqual([
+      { step: 'check', outcome: 'success' },
+      { step: 'check.classify', agent: 'classifier', tool: 'claude', model: 'claude-sonnet', outcome: 'success', tokens: { input: 10, output: 5 } },
+      { step: 'check.comment', outcome: 'success' },
+      { step: 'fix', agent: 'implementer', tool: 'codex', model: 'gpt-codex', outcome: 'success', tokens: { input: 20, output: 8 } },
+    ]);
+  });
+
+  it('counts skipped steps, and not the steps of a sub-workflow that never started', async () => {
+    const { config, runId } = await startTree({ check: CHECK, ship: workflow('ship', `  - id: plan
+    command: node plan.js
+  - id: check
+    needs: [plan]
+    workflow: check
+  - id: docs
+    needs: []
+    command: node docs.js
+`) }, 'ship');
+
+    await driveWith(config, runId, { plan: { outcome: 'failed' } });
+
+    expect(await endRecord(config)).toMatchObject({
+      status: 'failed',
+      stepCounts: { total: 3, succeeded: 1, failed: 1, skipped: 1 },
+    });
+  });
+
+  it('carries the end the run reached, and no end when it reached none', async () => {
+    const shipped = await startTree({ ship: workflow('ship', `  - id: build
+    command: node build.js
+  - id: done
+    needs: [build]
+    end: shipped
+`, 'ends:\n  shipped: succeeded\n') }, 'ship');
+    const plain = await startBuild(TWO_STEPS);
+
+    await driveWith(shipped.config, shipped.runId);
+    await driveWith(plain.config, plain.runId);
+
+    expect(await endRecord(shipped.config)).toMatchObject({ status: 'succeeded', end: 'shipped' });
+    expect(await endRecord(plain.config)).not.toHaveProperty('end');
+  });
+
+  it('gives an end-only step that succeeded a success outcome, and a skipped step none', async () => {
+    const { config, runId } = await startTree({ ship: workflow('ship', `  - id: build
+    command: node build.js
+  - id: retry
+    needs: [build]
+    if: steps.build.outcome == 'failed'
+    command: node retry.js
+  - id: done
+    needs: [build]
+    end: shipped
+`, 'ends:\n  shipped: succeeded\n') }, 'ship');
+
+    await driveWith(config, runId);
+
+    expect((await endRecord(config))?.steps).toEqual([
+      { step: 'build', outcome: 'success' },
+      { step: 'retry' },
+      { step: 'done', outcome: 'success' },
+    ]);
+  });
+
+  it('lists inline steps by path with their agent, and a failed workflow step by its outcome alone', async () => {
+    const { config, runId } = await startTree({ check: CHECK, ship: workflow('ship', `  - id: review
+    workflow:
+      steps:
+        - id: read
+          prompt: Read the diff.
+          agent: reviewer
+  - id: check
+    needs: [review]
+    workflow: check
+`) }, 'ship');
+
+    await driveWith(config, runId, { 'check.comment': { outcome: 'failed', message: 'comment failed' } });
+
+    const record = await endRecord(config);
+    expect(record?.steps).toEqual([
+      { step: 'review', outcome: 'success' },
+      { step: 'review.read', agent: 'reviewer', outcome: 'success' },
+      { step: 'check', outcome: 'failed' },
+      { step: 'check.classify', outcome: 'success' },
+      { step: 'check.comment', outcome: 'failed' },
+    ]);
+    expect(JSON.stringify(record)).not.toContain('undefined');
+    expect(JSON.stringify(record)).not.toContain('comment failed');
+  });
+
+  it('publishes no input value, rendered env or prompt, or child definition', async () => {
+    const sentinel = 'SENTINEL-7f3a';
+    const child = workflow('triage', `  - id: classify
+    prompt: "Classify {{ inputs.title }}."
+    agent: classifier
+`, 'inputs:\n  title: string\n');
+    const { config, runId } = await startTree({ triage: child, ship: workflow('ship', `  - id: label
+    command: node label.js
+    env:
+      TITLE: "{{ inputs.title }}"
+  - id: triage
+    needs: [label]
+    workflow: triage
+    with:
+      title: "{{ inputs.title }}"
+`, 'inputs:\n  title: string\n') }, 'ship', { title: sentinel });
+
+    await driveWith(config, runId);
+
+    const records = await pendingRecords(config);
+    expect(records.map((record) => record.phase).sort()).toEqual(['end', 'start']);
+    expect(await readRun(config, runId)).toMatchObject({ inputs: { title: sentinel } });
+    const published = JSON.stringify(records);
+    expect(published).not.toContain(sentinel);
+    expect(published).not.toContain('Classify');
+    expect(published).not.toContain('node label.js');
+  });
+
+  it('ends the record at the time the run file was saved', async () => {
+    const { config, runId } = await startBuild(TWO_STEPS);
+    // A clock that moves on every reading, so two readings of "now" never agree.
+    let tick = 0;
+    const clock = vi.spyOn(Date.prototype, 'toISOString').mockImplementation(() => `2026-01-01T00:00:${String(10 + Math.floor(tick / 1000)).padStart(2, '0')}.${String(tick++ % 1000).padStart(3, '0')}Z`);
+    try {
+      await driveWith(config, runId);
+    } finally {
+      clock.mockRestore();
+    }
+
+    const stored = await readRun(config, runId);
+    if (typeof stored !== 'object') throw new Error('run missing');
+    expect((await endRecord(config))?.endedAt).toBe(stored.updatedAt);
   });
 });
