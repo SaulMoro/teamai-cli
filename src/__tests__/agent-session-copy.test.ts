@@ -353,6 +353,28 @@ describe.skipIf(!CAN_REGISTER_CURSOR)('AgentSession.copy into Cursor', () => {
     expect(snapshot()).toEqual(before);
   });
 
+  // What `session rollback` calls: the refresh a reused copy points to.
+  it('a copy left only in the store is deleted from its workspace, and the next copy writes it afresh', async () => {
+    const sourceId = await writeSource();
+    const from = { platform: SOURCE_PLATFORM, sessionId: sourceId, cwd: workspace('source') };
+    const to = { platform: 'cursor', cwd: workspace('target') };
+    const first = await AgentSession.copy({ from, to });
+    const id = first.status === 'done' ? first.sessionId : 'none';
+    const transcripts = path.join(mocks.home, '.cursor', 'projects');
+    fs.rmSync(transcripts, { recursive: true });
+    fs.mkdirSync(transcripts);
+    const elsewhere = workspace('elsewhere');
+    const before = snapshot();
+
+    expect(await getAdapter('cursor').deleteSession(id, elsewhere)).toBe(false);
+    expect(snapshot()).toEqual(before);
+    expect(await getAdapter('cursor').deleteSession(id, to.cwd)).toBe(true);
+    const again = await AgentSession.copy({ from, to });
+
+    expect(again).toMatchObject({ status: 'done', reused: false, sessionId: id });
+    expect(again).not.toHaveProperty('notice');
+  });
+
   it('fails with tool_unavailable when the store cannot be read, and nothing is written', async () => {
     const sourceId = await writeSource();
     const from = { platform: SOURCE_PLATFORM, sessionId: sourceId, cwd: workspace('source') };

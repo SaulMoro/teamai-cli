@@ -653,7 +653,15 @@ export class CursorAdapter extends AgentAdapter {
     // unregistering first would drop another workspace's copy of the same
     // session id when `rollback --cwd` matched nothing here.
     const jsonlPath = this.findSessionFile(sessionId, projectPath);
-    if (!jsonlPath) return false;
+    if (!jsonlPath) {
+      // No transcript, but the composer can still be in the store; with `projectPath`, only one in that workspace.
+      const inStore = cursorComposerExists(sessionId, projectPath);
+      if (!inStore.ok) throw new Error(`Cursor's session store could not be read: ${inStore.reason}`);
+      if (!inStore.exists) return false;
+      const removed = unregisterCursorComposer(sessionId);
+      if (!removed.ok) throw new Error(`Removing session ${sessionId} from Cursor's store failed: ${removed.reason}`);
+      return true;
+    }
 
     // Unregister (otherwise deleting the transcript leaves an unopenable entry in the Agents list)
     try {

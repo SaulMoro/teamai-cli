@@ -34,6 +34,7 @@ import {
   decodeCwdGeneric,
   readJsonl,
   readJsonlHead,
+  fileModifiedAt,
   writeJsonl,
   fileExists,
   dirExists,
@@ -263,7 +264,8 @@ export class CodeBuddyAdapter extends AgentAdapter {
       // Still listed with what was read, so a lookup reports the session unreadable, not missing.
     }
 
-    if (!createdAt) createdAt = new Date().toISOString();
+    // No record says when: date it by the file, so a damaged session does not sort as the newest.
+    if (!createdAt) createdAt = fileModifiedAt(jsonlPath);
     if (!updatedAt) updatedAt = createdAt;
 
     // ai-title is the title CodeBuddy itself chose, so it is the most reliable; otherwise fall back to the first user text.

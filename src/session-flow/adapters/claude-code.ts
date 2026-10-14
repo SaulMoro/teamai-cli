@@ -32,6 +32,7 @@ import {
   decodeCwdClaude,
   readJsonl,
   readJsonlHead,
+  fileModifiedAt,
   writeJsonl,
   fileExists,
   dirExists,
@@ -405,7 +406,8 @@ export class ClaudeCodeAdapter extends AgentAdapter {
       // Still listed with what was read, so a lookup reports the session unreadable, not missing.
     }
 
-    if (!createdAt) createdAt = new Date().toISOString();
+    // No record says when: date it by the file, so a damaged session does not sort as the newest.
+    if (!createdAt) createdAt = fileModifiedAt(jsonlPath);
     if (!updatedAt) updatedAt = createdAt;
 
     // Title: summary line (that is what CC /resume uses) > unwrapped user text > id fallback.

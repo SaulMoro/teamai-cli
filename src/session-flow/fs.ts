@@ -228,6 +228,15 @@ export function writeJsonl(filePath: string, records: Iterable<Record<string, un
 // Filesystem helpers
 // ---------------------------------------------------------------------------
 
+/** When the file was last modified (ISO 8601), or now when it cannot be read. */
+export function fileModifiedAt(p: string): string {
+  try {
+    return fs.statSync(p).mtime.toISOString();
+  } catch {
+    return new Date().toISOString();
+  }
+}
+
 export function fileExists(p: string): boolean {
   try {
     return fs.statSync(p).isFile();

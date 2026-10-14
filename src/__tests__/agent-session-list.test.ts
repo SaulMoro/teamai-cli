@@ -183,6 +183,22 @@ describe('AgentSession.list', () => {
     expect(found).toMatchObject({ status: 'failed', failure: { code: 'unreadable' } });
   });
 
+  // Dated now, a damaged session would sort above every recent one.
+  const DATED_BY_RECORDS = READS_A_HEAD.filter(([platform]) => platform === 'claude-code' || platform === 'codebuddy');
+  it.each(DATED_BY_RECORDS)('%s: dates a session whose first lines do not parse by its file, not by now', async (platform, store) => {
+    fs.mkdirSync(path.join(mocks.home, ...store), { recursive: true });
+    const cwd = workspace('alpha');
+    await plant(platform, cwd, 'damaged work', '2026-09-24T10:00:05.000Z');
+    const [{ filePath }] = (await AgentSession.list({ platforms: [platform], cwd })).sessions;
+    fs.writeFileSync(filePath!, '{"truncated\nnot json either\n');
+    const modified = new Date('2026-01-02T03:04:05.000Z');
+    fs.utimesSync(filePath!, modified, modified);
+
+    const [listed] = (await AgentSession.list({ platforms: [platform], cwd })).sessions;
+
+    expect(listed).toMatchObject({ createdAt: modified.toISOString(), updatedAt: modified.toISOString() });
+  });
+
   it('names an unknown tool no_adapter and a tool that is not installed tool_unavailable, and still lists the others', async () => {
     fs.mkdirSync(path.join(mocks.home, '.claude', 'projects'), { recursive: true });
     const sessionId = await plant('claude-code', workspace('alpha'), 'alpha work', '2026-09-24T10:00:05.000Z');
