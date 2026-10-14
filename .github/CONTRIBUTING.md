@@ -81,6 +81,8 @@ src/
 
 See [docs/dev/adding-a-provider.md](../docs/dev/adding-a-provider.md) for how to add a new git provider.
 
+Before you change `src/workflow/`, read [docs/dev/workflow-engine.md](../docs/dev/workflow-engine.md). It lists the rules that span more than one file.
+
 ## Making a Change
 
 1. Update from `upstream/main`, then create a feature branch. Prefer a git worktree for code changes when practical.
