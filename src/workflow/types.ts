@@ -90,6 +90,8 @@ export interface RunState {
   definition: WorkflowDefinition;
   steps: StepState[];
   settledAttempts: string[];
+  /** Cumulative settled-attempt count; settledAttempts is bounded at 32 for dedup. */
+  settledCount?: number;
   createdAt: string;
   updatedAt: string;
 }

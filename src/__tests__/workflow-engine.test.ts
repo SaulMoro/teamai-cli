@@ -340,6 +340,28 @@ describe('workflow engine', () => {
     expect(JSON.stringify(queued)).not.toContain('/work');
   });
 
+  it('queues an end record when reportAttempt fails the run (#1126 P1)', async () => {
+    const failing = `schemaVersion: v1alpha1
+name: build
+description: One command.
+steps:
+  - id: one
+    command: node one.js
+`;
+    const { config, work, runId } = await startBuild(failing);
+    fs.writeFileSync(path.join(work, 'one.js'), 'process.exit(1)\n');
+    const done = await runLocalDriver(config, runId, work);
+    expect(done).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    // The run was settled BY reportAttempt (failed command), not by leaseNext —
+    // the end record must still publish.
+    const { pendingRecords } = await import('../workflow/records.js');
+    const queued = await pendingRecords(config);
+    const end = queued.find((record) => record.phase === 'end');
+    expect(end).toBeDefined();
+    expect(end!.status).toBe('failed');
+    expect(end!.steps).toEqual({ total: 1, succeeded: 0, failed: 1 });
+  });
+
   it('queues an end record when the run settles', async () => {
     const { config, work, runId } = await startBuild(TWO_STEPS);
     fs.writeFileSync(path.join(work, 'one.js'), "process.stdout.write(JSON.stringify({ ok: true }))\n");

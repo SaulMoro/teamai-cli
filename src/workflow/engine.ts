@@ -304,7 +304,8 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
     rememberSettledAttempt(run, report.attempt);
     run.revision += 1;
     // A failed step settles the run HERE, not in leaseNext — the end record
-    // must publish from this transition too (#1126 P1).
+    // must publish from this transition too (#1126 P1), after the lock
+    // releases (#1126 P3).
     if (run.status !== 'running') {
       settledRun = { ...run, steps: run.steps.map((s2) => ({ ...s2 })) };
     }
