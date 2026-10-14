@@ -144,7 +144,11 @@ vi.mock('../session-flow/agent-session.js', async (importOriginal) => {
   const actual = (await importOriginal()) as typeof import('../session-flow/agent-session.js');
   return {
     ...actual,
-    AgentSession: { ...actual.AgentSession, copy: async (): Promise<unknown> => mocks.copyResult },
+    AgentSession: {
+      ...actual.AgentSession,
+      copy: async (request: unknown): Promise<unknown> =>
+        typeof mocks.copyResult === 'function' ? mocks.copyResult(request) : mocks.copyResult,
+    },
     noAdapter: (platform: string, use: 'read' | 'write') => actual.noAdapter(platform, use, mocks.os),
   };
 });
@@ -898,6 +902,121 @@ describe('session migrate of a session already migrated', () => {
     await runSession('migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--target-cwd', 'rel/ws');
 
     expect(errored.join('\n')).toContain('Migration failed: Target workspace "rel/ws" is not an absolute path');
+    expect(process.exitCode).toBe(1);
+  });
+});
+
+describe('a batch over sessions when one session cannot be read', () => {
+  // Three sessions, the middle one unreadable: every batch names it, finishes the other two, and exits 1.
+  const ids = ['ok-1', 'bad-2', 'ok-3'];
+  const fidelity = { score: 1, mode: 1, preservedBlocks: 1, totalBlocks: 1, degradedBlocks: 0, degradations: [], warnings: [] };
+  let copied: string[] = [];
+
+  /** An adapter listing every session in `sessionIds` whose `readSession` throws on `unreadable`. */
+  function adapterWith(platform: string, sessionIds: string[], unreadable: string) {
+    const adapter = fakeAdapter(
+      sessionIds.map((sessionId, i) =>
+        mkSession({ sessionId, platform, title: `task ${sessionId}`, updatedAt: `2026-01-0${9 - i}T00:00:00.000Z` }),
+      ),
+      platform,
+    );
+    const read = adapter.readSession.getMockImplementation()!;
+    adapter.readSession.mockImplementation(async (ref: SessionReadRef) => {
+      if (ref.sessionId === unreadable) throw new Error('Unexpected end of JSON input');
+      return read(ref);
+    });
+    // A read by id alone asks whether the session exists, to tell unreadable from missing.
+    Object.assign(adapter, { existingSessionId: async (id: string) => (sessionIds.includes(id) ? id : undefined) });
+  }
+
+  /** The source session ids archived in the team repo. */
+  function archivedIds(): string[] {
+    const sessionsDir = path.join(repoRoot, 'sessions');
+    if (!fs.existsSync(sessionsDir)) return [];
+    return (fs.readdirSync(sessionsDir, { recursive: true }) as string[])
+      .filter((f) => f.endsWith('.meta.json'))
+      .map((f) => JSON.parse(fs.readFileSync(path.join(sessionsDir, f), 'utf-8')).origin.sessionId as string)
+      .sort();
+  }
+
+  beforeEach(() => {
+    copied = [];
+    mocks.remotes['/proj/beta'] = 'https://gitlab.com/team/beta.git';
+    mocks.previewResult = {
+      sourcePlatform: 'fakeplat',
+      targetPlatform: 'tgtplat',
+      sessionTitle: 'task',
+      sessionId: 'x',
+      cwd: '/proj/beta',
+      messageCount: 2,
+      fidelity,
+    };
+    mocks.copyResult = (request: { from: { sessionId: string } }) => {
+      copied.push(request.from.sessionId);
+      return { status: 'done', sessionId: `tgt-${request.from.sessionId}`, cwd: '/proj/beta', reused: false, fidelity };
+    };
+  });
+
+  const cases: Array<{
+    name: string;
+    setup: () => void;
+    argv: string[];
+    /** What the run did to the healthy sessions. */
+    done: () => string[];
+    expected: string[];
+    summary: string;
+  }> = [
+    {
+      name: 'migrate --all copies the others',
+      setup: () => {
+        adapterWith('fakeplat', ids, 'bad-2');
+        mocks.adaptersByPlatform['tgtplat'] = { platform: 'tgtplat' };
+      },
+      argv: ['migrate', '-s', 'fakeplat', '-t', 'tgtplat', '--all', '-y', '--cwd', '/proj/beta'],
+      done: () => copied.sort(),
+      expected: ['ok-1', 'ok-3'],
+      summary: '2 session(s) migrated, 1 failed.',
+    },
+    {
+      name: 'migrate --all --dry-run previews the others',
+      setup: () => {
+        adapterWith('fakeplat', ids, 'bad-2');
+        mocks.adaptersByPlatform['tgtplat'] = { platform: 'tgtplat' };
+      },
+      argv: ['migrate', '-s', 'fakeplat', '-t', 'tgtplat', '--all', '-y', '--cwd', '/proj/beta', '--dry-run'],
+      done: () => out.flatMap((line) => line.match(/not migrated: (\S+?)\.\.\./)?.slice(1) ?? []).sort(),
+      expected: ['ok-1', 'ok-3'],
+      summary: '2 session(s) would be migrated, 1 failed (--dry-run, no changes made).',
+    },
+    {
+      name: 'migrate --all --push archives the copies it can read back',
+      setup: () => {
+        adapterWith('fakeplat', ids, '');
+        adapterWith('tgtplat', ids.map((id) => `tgt-${id}`), 'tgt-bad-2');
+      },
+      argv: ['migrate', '-s', 'fakeplat', '-t', 'tgtplat', '--all', '--push', '-y', '--repo-root', '<repo>', '--cwd', '/proj/beta'],
+      done: archivedIds,
+      expected: ['tgt-ok-1', 'tgt-ok-3'],
+      summary: 'Pushed 2 session(s) to team repo',
+    },
+    {
+      name: 'push --all archives the others',
+      setup: () => adapterWith('fakeplat', ids, 'bad-2'),
+      argv: ['push', '--source', 'fakeplat', '--all', '-y', '--repo-root', '<repo>', '--cwd', '/run/dir'],
+      done: archivedIds,
+      expected: ['ok-1', 'ok-3'],
+      summary: 'Pushed 2 session(s) from fakeplat',
+    },
+  ];
+
+  it.each(cases)('$name, names the failed one, and exits 1', async ({ setup, argv, done, expected, summary }) => {
+    setup();
+    // repoRoot is created per test, after the table is built.
+    await runSession(...argv.map((a) => (a === '<repo>' ? repoRoot : a)));
+
+    expect(done()).toEqual(expected);
+    expect(errored.join('\n')).toMatch(/bad-2/);
+    expect(out.join('\n')).toContain(summary);
     expect(process.exitCode).toBe(1);
   });
 });

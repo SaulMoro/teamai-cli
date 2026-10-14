@@ -677,7 +677,9 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         );
         if (found.status === 'failed') {
           if (json) return printEnvelope({ error: { code: found.failure.code, message: found.failure.message } });
-          throw new Error(found.failure.message);
+          console.error(`\n  ✗ Migration failed: ${found.failure.message}`);
+          failed++;
+          continue;
         }
         const preview = engine.preview(found.session);
 
@@ -764,7 +766,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         copied = copy;
       }
       // Scripted semantics: any single failure exits non-zero (--all batch does not stop the remaining sessions).
-      if (failed > 0 && !isDryRun()) {
+      if (failed > 0) {
         process.exitCode = 1;
       }
 
@@ -794,6 +796,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         const archiveFailed = (code: string, reason: string) =>
           printEnvelope({ error: { code, message: `Copied as ${copied?.sessionId} in ${copied?.cwd}, but not archived: ${reason}` } });
         let saved = 0;
+        let unarchived = 0;
         for (const t of migratedTargets) {
           // Migration keeps image paths so the target can still open the file.
           // The copy that lands in the team repo must not: re-read the target
@@ -804,7 +807,9 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           );
           if (readBack.status === 'failed') {
             if (json) return archiveFailed(readBack.failure.code, readBack.failure.message);
-            throw new Error(readBack.failure.message);
+            console.error(`\n  ✗ Not archived: ${readBack.failure.message}`);
+            unarchived++;
+            continue;
           }
           const session = readBack.session;
           // P3: the archive key is derived from the session's native cwd, not the directory migrate is running in (see deriveArchiveIdentity)
@@ -838,6 +843,10 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
             return;
           }
           saved++;
+        }
+        if (unarchived > 0) {
+          console.error(`\n  ✗ ${unarchived} migrated session(s) could not be read back and were not archived.`);
+          process.exitCode = 1;
         }
         // [fixed] a gitCommit failure (not a git directory / index.lock race) used to crash with a raw stack trace
         // Under --json a throw reaches the action's catch, which prints the envelope; runGitStep would exit without one.
@@ -874,10 +883,11 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         printEnvelope({ data: copied });
         return;
       }
+      const failedNote = failed > 0 ? `, ${failed} failed` : '';
       console.log(
         isDryRun()
-          ? `\n  ${targets.length} session(s) would be migrated (--dry-run, no changes made).\n`
-          : `\n  ${migrated} session(s) migrated${reused > 0 ? `, ${reused} already migrated` : ''}.\n`,
+          ? `\n  ${targets.length - failed} session(s) would be migrated${failedNote} (--dry-run, no changes made).\n`
+          : `\n  ${migrated} session(s) migrated${reused > 0 ? `, ${reused} already migrated` : ''}${failedNote}.\n`,
       );
       } catch (err) {
         // Interactive cancel (promptSelect throws 'Selection cancelled'; on EOF, ask returns an empty string
@@ -983,6 +993,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       const syncMgr = new SyncManager(repoRoot);
       const toolRootsFor = toolRootsLookup();
       let saved = 0;
+      let unreadable = 0;
       let redactedTotal = 0;
       for (const m of selected) {
         // Read the file that was listed: with --all, one id can live in several workspaces.
@@ -992,10 +1003,10 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           { scrub: Boolean(opts.scrub), toolRootsFor },
         );
         if (found.status === 'failed') {
-          // Nothing is committed: a half-archive must not be published.
-          console.error(`Error: ${found.failure.message}`);
-          process.exitCode = 1;
-          return;
+          // This session alone is skipped; the rest of the batch is still archived.
+          console.error(`  ✗ Not archived: ${found.failure.message}`);
+          unreadable++;
+          continue;
         }
         const session = found.session;
         redactedTotal += found.redactedCount ?? 0;
@@ -1030,6 +1041,10 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           return;
         }
         saved++;
+      }
+      if (unreadable > 0) {
+        console.error(`  ✗ ${unreadable} session(s) could not be read and were not archived.`);
+        process.exitCode = 1;
       }
       if (opts.scrub) {
         console.log(`  Redacted: ${redactedTotal} secret-looking value(s) (best-effort; review before sharing)`);
