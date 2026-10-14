@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
@@ -142,6 +142,41 @@ describe('workflow engine', () => {
     expect(done).toMatchObject({ data: { done: { outcome: 'failed' } } });
     const stored = await readRun(config, runId);
     expect(stored).toMatchObject({ status: 'failed', steps: [{ status: 'failed' }, { status: 'pending' }] });
+  });
+
+  it('stamps updatedAt when a failed report or a finished next settles the run', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const failing = await startBuild(TWO_STEPS);
+      const leased = await leaseNext(failing.config, failing.runId, driverA);
+      if ('error' in leased) throw new Error(leased.error.message);
+      vi.setSystemTime(new Date('2026-01-01T00:01:00.000Z'));
+      await reportAttempt(failing.config, failing.runId, {
+        attempt: String((leased.data.lease as { attempt: string }).attempt),
+        revision: 1,
+        outcome: 'failed',
+        driver: driverA,
+      });
+      expect(await readRun(failing.config, failing.runId)).toMatchObject({
+        status: 'failed',
+        updatedAt: '2026-01-01T00:01:00.000Z',
+      });
+
+      const finishing = await startBuild(TWO_STEPS);
+      const stored = await readRun(finishing.config, finishing.runId);
+      if (typeof stored !== 'object') throw new Error('run missing');
+      stored.steps = stored.steps.map((step) => ({ ...step, status: 'succeeded', outcome: 'success' }));
+      await writeRun(finishing.config, stored);
+      vi.setSystemTime(new Date('2026-01-01T00:02:00.000Z'));
+      await leaseNext(finishing.config, finishing.runId, driverA);
+      expect(await readRun(finishing.config, finishing.runId)).toMatchObject({
+        status: 'succeeded',
+        updatedAt: '2026-01-01T00:02:00.000Z',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects stale, repeated, wrong-attempt, and wrong-driver reports', async () => {

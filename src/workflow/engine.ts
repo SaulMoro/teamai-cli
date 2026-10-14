@@ -8,6 +8,7 @@ import { generateRunId, isRunId, readRun, runLockPath, writeRun } from './store.
 import type {
   DriverIdentity,
   RunState,
+  RunStatus,
   StepOutcome,
   StepState,
   TokenUsage,
@@ -97,6 +98,16 @@ function leasePayload(run: RunState, step: StepState): Record<string, unknown> {
   };
 }
 
+/**
+ * Ends the run. Every path that settles a run goes through here, so anything that reacts to a settled run hooks in here.
+ * Returns a copy of the settled run for the end record, which publishes after the run lock is released (#1126).
+ */
+function settleRun(run: RunState, outcome: Exclude<RunStatus, 'running'>): RunState {
+  run.status = outcome;
+  run.updatedAt = new Date().toISOString();
+  return { ...run, steps: run.steps.map((step) => ({ ...step })) };
+}
+
 export async function startRun(
   config: LocalConfig,
   name: string,
@@ -150,15 +161,11 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     const index = run.steps.findIndex((step) => step.status === 'pending');
     if (index < 0) {
       const outcome = run.steps.every((step) => step.status === 'succeeded') ? 'succeeded' : 'failed';
-      run.status = outcome;
-      run.updatedAt = new Date().toISOString();
-      settledRun = { ...run, steps: run.steps.map((step) => ({ ...step })) };
+      settledRun = settleRun(run, outcome);
       return { save: true, envelope: ok({ done: { run: run.id, outcome } }) };
     }
     if (run.steps.slice(0, index).some((step) => step.status !== 'succeeded')) {
-      run.status = 'failed';
-      run.updatedAt = new Date().toISOString();
-      settledRun = { ...run, steps: run.steps.map((step) => ({ ...step })) };
+      settledRun = settleRun(run, 'failed');
       return { save: true, envelope: ok({ done: { run: run.id, outcome: 'failed' } }) };
     }
     const step = run.steps[index];
@@ -299,16 +306,13 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       if (report.outputs !== undefined) step.outputs = report.outputs;
     } else {
       step.status = 'failed';
-      run.status = 'failed';
     }
     rememberSettledAttempt(run, report.attempt);
     run.revision += 1;
-    // A failed step settles the run HERE, not in leaseNext — the end record
-    // must publish from this transition too (#1126 P1), after the lock
-    // releases (#1126 P3).
-    if (run.status !== 'running') {
-      settledRun = { ...run, steps: run.steps.map((s2) => ({ ...s2 })) };
-    }
+    // Settle last, so the settled run carries this attempt and the new revision.
+    // The end record publishes from this transition too (#1126 P1), after the
+    // lock releases (#1126 P3).
+    if (step.status === 'failed') settledRun = settleRun(run, 'failed');
     return {
       save: true,
       envelope: ok({
