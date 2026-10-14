@@ -25,6 +25,7 @@ export const THINKING_SUPPORT: Record<string, boolean> = {
   'codebuddy-ide': true,
   workbuddy: true,
   cursor: false, // Cursor has no thinking; degrade to text
+  opencode: true, // reasoning parts
 };
 
 export const NATIVE_TOOLS: Record<string, Set<string>> = {
@@ -63,6 +64,10 @@ export const NATIVE_TOOLS: Record<string, Set<string>> = {
     'read_file', 'write_file', 'edit_file', 'bash', 'grep', 'glob', 'delete_file',
     'web_fetch', 'web_search', 'semantic_search',
   ]),
+  // The IR names adapters/opencode.ts reads OpenCode's tools as.
+  opencode: new Set([
+    'read_file', 'write_file', 'edit_file', 'bash', 'glob', 'grep', 'task', 'todo_write', 'web_fetch', 'web_search',
+  ]),
 };
 
 /**
@@ -81,6 +86,7 @@ export const IMAGE_SUPPORT: Record<string, boolean> = {
   codebuddy: false,
   workbuddy: false,
   cursor: false,
+  opencode: true, // a user message carries image files inline (base64 + mime)
 };
 
 // ---------------------------------------------------------------------------

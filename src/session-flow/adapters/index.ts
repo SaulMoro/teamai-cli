@@ -11,6 +11,7 @@ import { CodeBuddyAdapter } from './codebuddy.js';
 import { CodeBuddyIdeAdapter } from './codebuddy-ide.js';
 import { WorkBuddyAdapter } from './workbuddy.js';
 import { CursorAdapter } from './cursor.js';
+import { OpencodeAdapter } from './opencode.js';
 import {
   getClaudeCodeProjectsDir,
   getClaudeInternalProjectsDir,
@@ -33,6 +34,7 @@ export const ADAPTER_REGISTRY: Record<string, AdapterFactory> = {
   'codebuddy-ide': () => new CodeBuddyIdeAdapter(),
   workbuddy: () => new WorkBuddyAdapter(),
   cursor: () => new CursorAdapter(),
+  opencode: () => new OpencodeAdapter(),
   // TeamAI variants (different path prefixes, identical format)
   'claude-internal': () => new ClaudeCodeAdapter('claude-internal', getClaudeInternalProjectsDir()),
   tclaude: () => new ClaudeCodeAdapter('tclaude', getTClaudeProjectsDir()),
@@ -72,3 +74,4 @@ export { CodeBuddyAdapter } from './codebuddy.js';
 export { CodeBuddyIdeAdapter } from './codebuddy-ide.js';
 export { WorkBuddyAdapter } from './workbuddy.js';
 export { CursorAdapter } from './cursor.js';
+export { OpencodeAdapter } from './opencode.js';

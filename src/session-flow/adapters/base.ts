@@ -31,10 +31,19 @@ export interface SessionReadRef {
   projectPath?: string;
   /**
    * The `SessionMeta.filePath` the adapter listed: a transcript file on every platform except
-   * CodeBuddy IDE, where it is the conversation directory. When set, exactly that is read, so a
-   * caller that enumerated sessions never opens another copy with the same id.
+   * CodeBuddy IDE, where it is the conversation directory, and OpenCode, which lists none (its
+   * sessions live behind its CLI, where one id names one session). When set, exactly that is
+   * read, so a caller that enumerated sessions never opens another copy with the same id.
    */
   filePath?: string;
+}
+
+/**
+ * Thrown by an adapter whose tool CLI cannot run on this machine (absent, or too old).
+ * `AgentSession` reports it as `tool_unavailable`, never as a missing session.
+ */
+export class ToolUnavailableError extends Error {
+  override name = 'ToolUnavailableError';
 }
 
 export abstract class AgentAdapter {
@@ -64,8 +73,8 @@ export abstract class AgentAdapter {
 
   /**
    * Read one session and return a normalized IR Session. Lookup order: `filePath`, then the id in
-   * `projectPath`, then (Cursor, WorkBuddy and CodeBuddy IDE, or when no `projectPath` is given)
-   * the id across the platform. The returned `sessionId` is the id of the session opened, never
+   * `projectPath`, then (Cursor, WorkBuddy, CodeBuddy IDE and OpenCode, or when no `projectPath`
+   * is given) the id across the platform. The returned `sessionId` is the id of the session opened, never
    * the one requested.
    */
   abstract readSession(ref: SessionReadRef): Promise<Session>;

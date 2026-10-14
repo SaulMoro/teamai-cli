@@ -149,7 +149,7 @@ vi.mock('../session-flow/agent-session.js', async (importOriginal) => {
 import { registerSessionFlowCommands } from '../session-flow/session-cmd.js';
 import { SyncManager, defaultSyncMeta } from '../session-flow/sync.js';
 import type { Session } from '../session-flow/ir.js';
-import type { SessionReadRef } from '../session-flow/adapters/base.js';
+import { ToolUnavailableError, type SessionReadRef } from '../session-flow/adapters/base.js';
 import { ClaudeCodeAdapter } from '../session-flow/adapters/claude-code.js';
 import { CodeBuddyAdapter } from '../session-flow/adapters/codebuddy.js';
 import { CursorAdapter } from '../session-flow/adapters/cursor.js';
@@ -916,6 +916,22 @@ describe('session migrate --json', () => {
   it('prints a failed copy as an error envelope with its code and exits 1', async () => {
     const message = 'Target platform "tgtplat" is not installed or its storage directory was not found.';
     mocks.copyResult = { status: 'failed', failure: { code: 'tool_unavailable', platform: 'tgtplat', message } };
+
+    await runSession('migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--json');
+
+    expect(envelope()).toEqual({ error: { code: 'tool_unavailable', message } });
+    expect(process.exitCode).toBe(1);
+  });
+
+  // OpenCode lists its sessions through its CLI, so a missing CLI fails the listing itself.
+  it('names a source whose CLI cannot run tool_unavailable', async () => {
+    const message = 'The opencode CLI was not found on PATH. Install OpenCode 2 or later.';
+    mocks.adaptersByPlatform['fakeplat'] = {
+      platform: 'fakeplat',
+      listConversations: vi.fn(async () => {
+        throw new ToolUnavailableError(message);
+      }),
+    };
 
     await runSession('migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--json');
 

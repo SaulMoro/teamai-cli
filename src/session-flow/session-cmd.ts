@@ -22,6 +22,7 @@ import type { Command } from 'commander';
 import readline from 'node:readline';
 import * as path from 'node:path';
 import { getAdapter, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
+import { ToolUnavailableError } from './adapters/base.js';
 import { MigrationEngine, resolveTargetCwd } from './migrate.js';
 import { AgentSession, existingCopyId, noAdapter, type AgentSessionCopy } from './agent-session.js';
 import { SyncManager, getRepoIdentity, getGitAuthor, defaultSyncMeta, withSessionIndexLock } from './sync.js';
@@ -832,8 +833,12 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         // Interactive cancel (promptSelect throws 'Selection cancelled'; on EOF, ask returns an empty string
         // and hits that path) is not a failure. Exit quietly, and do not turn it into an unhandled-rejection stack.
         const msg = err instanceof Error ? err.message : String(err);
-        // --json never prompts, so nothing here is a cancel: every throw is a failure with no known cause.
-        if (json) return printEnvelope({ error: { code: 'unexpected_error', message: msg } });
+        // --json never prompts, so nothing here is a cancel. A source tool whose CLI cannot run is the
+        // one known cause (OpenCode lists through its CLI); any other throw has no known cause.
+        if (json) {
+          const code = err instanceof ToolUnavailableError ? 'tool_unavailable' : 'unexpected_error';
+          return printEnvelope({ error: { code, message: msg } });
+        }
         if (/cancel/i.test(msg)) {
           console.log('Cancelled.');
           return;

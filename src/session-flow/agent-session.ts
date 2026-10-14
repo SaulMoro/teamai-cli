@@ -11,7 +11,7 @@
 
 import fs from 'node:fs';
 import { ADAPTER_REGISTRY, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
-import type { AgentAdapter } from './adapters/base.js';
+import { ToolUnavailableError, type AgentAdapter } from './adapters/base.js';
 import { imagePlaceholderText, type ContentBlock, type Message, type Session } from './ir.js';
 import { deriveTargetSessionId, legacyTargetSessionIds } from './ids.js';
 import { degradeThinkingBlocks, fidelityFromSession, type FidelityReport } from './migrate.js';
@@ -82,6 +82,7 @@ export type AgentSession = {
   copy(request: AgentSessionCopyRequest): Promise<AgentSessionCopy>;
   find(ref: AgentSessionRef, options?: { scrub?: boolean }): Promise<AgentSessionFound>;
   transcript(session: Session): AgentSessionTranscriptEntry[];
+  platformForTool(tool: string): string | undefined;
 };
 
 /** Targets that list a copy only once the sqlite3 CLI registers it. Windows ships no sqlite3. */
@@ -130,6 +131,7 @@ async function readSource(source: AgentAdapter, ref: AgentSessionRef): Promise<S
   try {
     return await source.readSession({ sessionId: ref.sessionId, projectPath: ref.cwd, filePath: ref.filePath });
   } catch (e) {
+    if (e instanceof ToolUnavailableError) return { code: 'tool_unavailable', platform: ref.platform, message: e.message };
     const where = ref.filePath ? ` at ${ref.filePath}` : ref.cwd ? ` in ${ref.cwd}` : '';
     const exists = ref.filePath
       ? fs.existsSync(ref.filePath)
@@ -304,4 +306,13 @@ function transcript(session: Session): AgentSessionTranscriptEntry[] {
   }));
 }
 
-export const AgentSession = { copy, find, transcript } as const satisfies AgentSession;
+/** Tool names whose session platform has another name. Every other platform is its own tool name. */
+const PLATFORM_OF_TOOL: Record<string, string> = { claude: 'claude-code' };
+
+/** The session platform a tool (a workflow step's `tool`) reads and writes, or undefined when it has none. */
+function platformForTool(tool: string): string | undefined {
+  const platform = PLATFORM_OF_TOOL[tool] ?? tool;
+  return listAvailablePlatforms().includes(platform) ? platform : undefined;
+}
+
+export const AgentSession = { copy, find, transcript, platformForTool } as const satisfies AgentSession;

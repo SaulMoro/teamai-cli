@@ -33,6 +33,14 @@ vi.mock('../session-flow/ids.js', async (importOriginal) => {
 import { AgentSession } from '../session-flow/agent-session.js';
 import { getAdapter } from '../session-flow/adapters/index.js';
 import type { Session } from '../session-flow/ir.js';
+import { SessionSearchEngine } from '../session-flow/search.js';
+import { SyncManager, defaultSyncMeta, withSessionIndexLock } from '../session-flow/sync.js';
+import {
+  installFakeOpencode,
+  opencodeExportFixture,
+  plantOpencodeSession,
+  setFakeOpencodeVersion,
+} from './helpers/fake-opencode.js';
 
 const SECRET = 'sk-ABCDEFGH1234567890abcdefghij';
 
@@ -202,5 +210,192 @@ describe('AgentSession.find', () => {
     const found = await AgentSession.find({ platform, sessionId, cwd: workspace('ws-b') });
 
     expect(found).toMatchObject({ status: 'failed', failure: { code: 'not_found' } });
+  });
+});
+
+// OpenCode keeps its sessions behind its CLI. A stand-in `opencode` on PATH serves them from
+// export files under the temporary data home, in the shape a real OpenCode 2 exports.
+describe('AgentSession.find on OpenCode', () => {
+  let dataHome = '';
+
+  beforeEach(() => {
+    dataHome = path.join(mocks.home, '.local', 'share');
+    fs.mkdirSync(path.join(dataHome, 'opencode'), { recursive: true });
+    vi.stubEnv('XDG_DATA_HOME', dataHome);
+    vi.stubEnv('PATH', installFakeOpencode());
+  });
+
+  /** Plant the recorded export as a session with `id` in `cwd`, its first prompt replaced by `text`. */
+  function plantOpencode(cwd: string, text?: string, id = 'ses_ec4a5b73fffeRP6bDXlApNBFvY'): string {
+    const session = opencodeExportFixture();
+    session.info.id = id;
+    session.info.location.directory = cwd;
+    if (text !== undefined) session.messages[0].text = text;
+    plantOpencodeSession(dataHome, session);
+    return id;
+  }
+
+  it('reads a session with its tool calls, their results, and an attached image', async () => {
+    const cwd = workspace('ws');
+    const sessionId = plantOpencode(cwd);
+
+    const found = await AgentSession.find({ platform: 'opencode', sessionId, cwd }, { scrub: false });
+
+    expect(found.status).toBe('done');
+    if (found.status !== 'done') return;
+    expect(found.session).toMatchObject({
+      sessionId,
+      platform: 'opencode',
+      title: 'tool probe',
+      cwd,
+      createdAt: new Date(1791997135138).toISOString(),
+      updatedAt: new Date(1791997140333).toISOString(),
+    });
+    expect(found.session.messages.map((m) => ({ role: m.role, content: m.content }))).toEqual([
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'text',
+            text: "\"Use the read tool to read notes.txt, then use the bash tool to run 'ls'. Then reply with one short sentence describing the attached image.\"",
+          },
+          {
+            type: 'image',
+            mimeType: 'image/png',
+            data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+            label: 'dot.png',
+          },
+        ],
+      },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', text: expect.stringContaining('Let me first check the directory.') },
+          {
+            type: 'tool_call',
+            toolName: 'read_file',
+            callId: 'call_00_q74ylt4yvqpms9j096k4iuys',
+            arguments: { path: '/private/tmp/oc-iso/proj/notes.txt' },
+          },
+          {
+            type: 'tool_call',
+            toolName: 'bash',
+            callId: 'call_01_jd59tpf23t1tr03psnwyln88',
+            arguments: { command: 'ls', workdir: '/private/tmp/oc-iso/proj' },
+          },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            callId: 'call_00_q74ylt4yvqpms9j096k4iuys',
+            content: 'Read file /private/tmp/oc-iso/proj/notes.txt, lines 1-1\n1: hello from fixture',
+            isError: false,
+          },
+          { type: 'tool_result', callId: 'call_01_jd59tpf23t1tr03psnwyln88', content: 'dot.png\nnotes.txt\n', isError: false },
+        ],
+      },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'thinking', text: 'Now the image: I need to inform the user I cannot read the image.' },
+          { type: 'text', text: expect.stringContaining('notes.txt contains "hello from fixture"') },
+        ],
+      },
+    ]);
+  });
+
+  it('returns the session redacted by default, and raw when scrub is false', async () => {
+    const cwd = workspace('ws');
+    const sessionId = plantOpencode(cwd, `token ${SECRET}`);
+
+    const redacted = await AgentSession.find({ platform: 'opencode', sessionId, cwd });
+    const raw = await AgentSession.find({ platform: 'opencode', sessionId, cwd }, { scrub: false });
+
+    expect(redacted).toMatchObject({ status: 'done', redactedCount: 1 });
+    expect(redacted.status === 'done' && firstText(redacted.session)).not.toContain(SECRET);
+    expect(raw.status === 'done' && firstText(raw.session)).toBe(`token ${SECRET}`);
+  });
+
+  it('reads each session the workspace lists', async () => {
+    const cwd = workspace('ws');
+    plantOpencode(cwd, 'first', 'ses_ec4a5b73fffeAAAAAAAAAAAAAA');
+    plantOpencode(cwd, 'second', 'ses_ec4a5b73fffeBBBBBBBBBBBBBB');
+    plantOpencode(workspace('elsewhere'), 'elsewhere', 'ses_ec4a5b73fffeCCCCCCCCCCCCCC');
+
+    const listed = await getAdapter('opencode').listConversations(cwd);
+    const texts: string[] = [];
+    for (const meta of listed) {
+      const found = await AgentSession.find({ platform: 'opencode', sessionId: meta.sessionId, filePath: meta.filePath }, { scrub: false });
+      if (found.status === 'done') texts.push(firstText(found.session));
+    }
+
+    expect(listed.map((meta) => ({ platform: meta.platform, cwd: meta.cwd, title: meta.title }))).toEqual([
+      { platform: 'opencode', cwd, title: 'tool probe' },
+      { platform: 'opencode', cwd, title: 'tool probe' },
+    ]);
+    expect(texts.sort()).toEqual(['first', 'second']);
+  });
+
+  it('fails with not_found for a session that does not exist', async () => {
+    const ref = { platform: 'opencode', sessionId: 'ses_ec4a5b73fffeNoSuchSession', cwd: workspace('ws') };
+
+    expect(await AgentSession.find(ref)).toMatchObject({ status: 'failed', failure: { code: 'not_found', ref } });
+  });
+
+  it('fails with unreadable for a session that exists but does not parse', async () => {
+    const session = opencodeExportFixture();
+    session.info.location.directory = workspace('ws');
+    plantOpencodeSession(dataHome, session, '{"truncated');
+
+    const found = await AgentSession.find({ platform: 'opencode', sessionId: session.info.id });
+
+    expect(found).toMatchObject({ status: 'failed', failure: { code: 'unreadable' } });
+  });
+
+  it('fails with tool_unavailable when no opencode CLI is on PATH', async () => {
+    vi.stubEnv('PATH', '');
+
+    const found = await AgentSession.find({ platform: 'opencode', sessionId: 'ses_ec4a5b73fffeRP6bDXlApNBFvY' });
+
+    expect(found).toMatchObject({
+      status: 'failed',
+      failure: { code: 'tool_unavailable', platform: 'opencode', message: expect.stringContaining('opencode CLI was not found') },
+    });
+  });
+
+  // What `session push` does with a session it found, and what `session list` and `session search` read back.
+  it('an archived session is listed and searchable in the team repo, its tool output included', async () => {
+    const cwd = workspace('ws');
+    const sessionId = plantOpencode(cwd);
+    const repoRoot = fs.mkdtempSync(path.join(mocks.home, 'team-'));
+    const sync = new SyncManager(repoRoot);
+
+    const found = await AgentSession.find({ platform: 'opencode', sessionId, cwd });
+    if (found.status !== 'done') throw new Error(`find failed: ${JSON.stringify(found)}`);
+    const meta = defaultSyncMeta({ platform: 'opencode', author: 'tester', cwd, sessionId, title: found.session.title });
+    await withSessionIndexLock(repoRoot, async () => sync.saveSession(found.session, meta));
+
+    const listed = sync.listSessions(null);
+    const loaded = listed.map((entry) => ({ ...entry, session: sync.loadSession(null, entry.sessionName, entry.author).session }));
+    const hits = await new SessionSearchEngine().search(loaded, 'lines');
+
+    expect(listed).toMatchObject([{ platform: 'opencode', title: 'tool probe', messageCount: 4 }]);
+    expect(hits).toMatchObject([{ platform: 'opencode', title: 'tool probe' }]);
+  });
+
+  // OpenCode 1 has no `opencode session export`.
+  it('fails with tool_unavailable on OpenCode 1', async () => {
+    plantOpencode(workspace('ws'));
+    setFakeOpencodeVersion(dataHome, '1.18.23');
+
+    const found = await AgentSession.find({ platform: 'opencode', sessionId: 'ses_ec4a5b73fffeRP6bDXlApNBFvY' });
+
+    expect(found).toMatchObject({
+      status: 'failed',
+      failure: { code: 'tool_unavailable', message: expect.stringContaining('Upgrade OpenCode to version 2') },
+    });
   });
 });

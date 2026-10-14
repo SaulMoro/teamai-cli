@@ -185,4 +185,35 @@ describe('fidelityFromSession — 真实统计', () => {
     );
     expect(toCodex.score).toBeLessThan(1);
   });
+
+  // OpenCode keeps reasoning parts and inline image files (what `opencode session export` carries).
+  it('OpenCode keeps thinking, images and its own tools, and warns about a tool it does not have', () => {
+    const session = makeSession({
+      messages: [
+        {
+          role: 'user',
+          content: [{ type: 'image', mimeType: 'image/png', data: 'aGVsbG8=', label: 'shot.png' }],
+          timestamp: '2026-09-20T00:00:10.000Z',
+        },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'thinking', text: 'plan' },
+            { type: 'tool_call', toolName: 'read_file', callId: 'c1', arguments: {} },
+            { type: 'tool_call', toolName: 'notebook_edit', callId: 'c2', arguments: {} },
+          ],
+          timestamp: '2026-09-20T00:00:30.000Z',
+        },
+      ],
+    });
+
+    const report = fidelityFromSession(session, 'opencode');
+
+    expect(report).toMatchObject({
+      preservedBlocks: 3,
+      degradedBlocks: 1,
+      degradations: [],
+      warnings: ['tool_not_in_target: notebook_edit'],
+    });
+  });
 });
