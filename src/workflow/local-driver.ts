@@ -15,6 +15,7 @@ import { getDataHome, resolveToolBaseDir, type LocalConfig, type TeamaiConfig } 
 import { readFileSafe, writeJsonAtomic } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { leaseNext, reportAttempt } from './engine.js';
+import { isRecord } from './expression.js';
 import { createLocalToolAdapter, isLocalWorkflowTool, localToolFamily, type LocalToolAdapter, type LocalWorkflowTool } from './local-tool-adapter.js';
 import type { DriverIdentity, WorkflowEnvelope, WorkflowFailure } from './types.js';
 import { isWorkflowError } from './types.js';
@@ -68,7 +69,7 @@ interface Lease {
 }
 
 function stringMap(value: unknown): Record<string, string> | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  if (!isRecord(value)) return undefined;
   const entries = Object.entries(value);
   return entries.every(([, item]) => typeof item === 'string') ? Object.fromEntries(entries) as Record<string, string> : undefined;
 }
@@ -189,11 +190,12 @@ export async function runLocalDriver(
     if (!rawLease || typeof rawLease.attempt !== 'string' || typeof rawLease.revision !== 'number') {
       return { error: { code: 'run_unreadable', message: `Run ${runId} returned a lease the local driver cannot run` } };
     }
+    const env = stringMap(rawLease.env);
     const lease: Lease = {
       attempt: rawLease.attempt,
       revision: rawLease.revision,
       ...(typeof rawLease.command === 'string' ? { command: rawLease.command } : {}),
-      ...(stringMap(rawLease.env) ? { env: stringMap(rawLease.env) } : {}),
+      ...(env ? { env } : {}),
       ...(typeof rawLease.prompt === 'string' ? { prompt: rawLease.prompt } : {}),
       ...(typeof rawLease.agent === 'string' ? { agent: rawLease.agent } : {}),
     };

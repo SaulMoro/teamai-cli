@@ -1,11 +1,14 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { acquireLock, releaseLock } from '../update.js';
 import type { LocalConfig } from '../types.js';
-import { loadCachedWorkflow } from './cache.js';
-import { evaluateExpression, expressionPaths, isTruthy, parseExpression, resolvePath, type Expression, type ExpressionPath, type ExpressionStep } from './expression.js';
+import { loadCachedWorkflow, workflowsRunBy } from './cache.js';
+import {
+  evaluateExpression, expressionPaths, isRecord, isTruthy, parseExpression, resolvePath,
+  type Expression, type ExpressionPath, type ExpressionStep, type VisibleOutcome,
+} from './expression.js';
 import { outputMismatch } from './output.js';
 import { noteRunRecord, pendingRecords } from './records.js';
-import { parseTemplate, renderStrings, renderText, stringsIn, templatePaths, type TemplateContext } from './template.js';
+import { parseTemplate, renderStrings, renderText, stringsIn, templatePaths, type TemplateContext, type TemplateError } from './template.js';
 import { generateRunId, isRunId, readRun, runLockPath, writeRun } from './store.js';
 import type {
   CachedWorkflow,
@@ -53,10 +56,6 @@ function error(code: string, message: string): WorkflowEnvelope {
 
 function ok(value: Record<string, unknown>): WorkflowEnvelope {
   return { data: value };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function sameDriver(left: DriverIdentity, right: DriverIdentity): boolean {
@@ -152,6 +151,11 @@ function locateStep(run: RunState, path: string): { scope: Scope; step: Workflow
   return undefined;
 }
 
+/** A step's `with` holds a template that does not parse. Pull rejects one, so the run file was changed. */
+function withTemplateFailure(state: StepState, error: TemplateError): WorkflowFailure {
+  return { code: 'invalid_template', message: `step "${state.id}" with template ${error.source}: ${error.message}` };
+}
+
 /**
  * Renders a step's prompt and env from its workflow's inputs and settled steps only,
  * so a repeated `next` for the same attempt renders the same text.
@@ -162,7 +166,7 @@ function renderLease(scope: Scope, states: StepState[], state: StepState, defini
   // A prompt step's `with` renders first, by the same rules as a workflow step's; its prompt reads it as `with.<name>`.
   if (definition.with !== undefined) {
     const values = renderStrings(definition.with, context);
-    if (!values.ok) return { code: 'invalid_template', message: `step "${state.id}" with template ${values.error.source}: ${values.error.message}` };
+    if (!values.ok) return withTemplateFailure(state, values.error);
     context.with = values.value;
   }
   const texts: Array<[string, string]> = [
@@ -209,11 +213,21 @@ function failStep(step: StepState, failure: WorkflowFailure): void {
   step.failure = failure;
 }
 
+/** The status of a run, or of a workflow inside it, once it has settled. */
+type FinalRunStatus = Exclude<RunStatus, 'running'>;
+
+/** How a workflow of the run settled: its outcome, the end it reached, and the outputs it returns. */
+interface WorkflowResult {
+  outcome: FinalRunStatus;
+  end?: string;
+  outputs?: Record<string, unknown>;
+}
+
 /**
  * Ends the run. Every path that settles a run goes through here, so anything that reacts to a settled run hooks in here.
  * Returns a copy of the settled run for the end record, which publishes after the run lock is released (#1126).
  */
-function settleRun(run: RunState, outcome: Exclude<RunStatus, 'running'>, end?: string): RunState {
+function settleRun(run: RunState, outcome: FinalRunStatus, end?: string): RunState {
   run.status = outcome;
   if (end !== undefined) run.end = end;
   run.updatedAt = new Date().toISOString();
@@ -304,7 +318,7 @@ function parseReads(run: RunState, scope: Scope): RunReads | string {
   return { conditions, reads, outputs };
 }
 
-const VISIBLE_OUTCOMES: Partial<Record<StepState['status'], string>> = { succeeded: 'success', failed: 'failed', skipped: 'skipped' };
+const VISIBLE_OUTCOMES: Partial<Record<StepState['status'], VisibleOutcome>> ={ succeeded: 'success', failed: 'failed', skipped: 'skipped' };
 
 /**
  * What expressions in a workflow read as `steps.<id>`: its own step instances, by their id in that workflow,
@@ -357,7 +371,7 @@ function mustSkip(needs: Array<StepState | undefined>, condition: Expression | u
 /** How settling a workflow of the run ended: a step to lease, the workflow's outcome, or a run file that cannot settle. */
 type Settled =
   | { lease: StepState; definition: WorkflowStep; rendered: RenderedLease }
-  | { outcome: Exclude<RunStatus, 'running'>; end?: string; outputs?: Record<string, unknown> }
+  | WorkflowResult
   | { unreadable: string };
 
 /**
@@ -368,9 +382,7 @@ function startWorkflowStep(run: RunState, scope: Scope, states: StepState[], sta
   // An inline workflow takes no `with`: it already reads the enclosing inputs.
   if ('name' in child.definition) {
     const rendered = renderStrings(step.with ?? {}, { inputs: scope.inputs, steps: expressionSteps(scope, states) });
-    if (!rendered.ok) {
-      return { code: 'invalid_template', message: `step "${state.id}" with template ${rendered.error.source}: ${rendered.error.message}` };
-    }
+    if (!rendered.ok) return withTemplateFailure(state, rendered.error);
     const mismatch = inputsMismatch(child.definition.name, child.definition.inputs, rendered.value);
     if (mismatch) return { code: 'invalid_inputs', message: `step "${state.id}" with does not fit workflow "${child.definition.name}": ${mismatch}` };
     if (child.definition.inputs) {
@@ -385,7 +397,7 @@ function startWorkflowStep(run: RunState, scope: Scope, states: StepState[], sta
 }
 
 /** A workflow step takes the outcome, the end, and the outputs of the workflow it ran. */
-function finishWorkflowStep(state: StepState, result: { outcome: Exclude<RunStatus, 'running'>; end?: string; outputs?: Record<string, unknown> }): void {
+function finishWorkflowStep(state: StepState, result: WorkflowResult): void {
   state.status = result.outcome;
   state.outcome = result.outcome === 'succeeded' ? 'success' : 'failed';
   if (result.end !== undefined) state.end = result.end;
@@ -470,27 +482,20 @@ async function loadWorkflows(
 ): Promise<{ workflows: Record<string, WorkflowDefinition>; sourceHash: string } | { failed: WorkflowEnvelope }> {
   const workflows: Record<string, WorkflowDefinition> = {};
   const hashes: Array<[string, string]> = [];
-  // `prefix` is the path of the inline workflow `steps` belong to, inside the workflow file `definition`.
-  const visit = async (definition: WorkflowDefinition, through: string[], steps = definition.steps, prefix = ''): Promise<WorkflowEnvelope | undefined> => {
-    for (const step of steps) {
-      if (typeof step.workflow === 'object') {
-        const failed = await visit(definition, through, step.workflow.steps, `${prefix}${step.id}.`);
-        if (failed) return failed;
-        continue;
-      }
-      if (step.workflow === undefined) continue;
-      if (through.includes(step.workflow)) {
-        const cycle = [...through.slice(through.indexOf(step.workflow)), step.workflow].join(' -> ');
+  const visit = async (definition: WorkflowDefinition, through: string[]): Promise<WorkflowEnvelope | undefined> => {
+    for (const { step, workflow } of workflowsRunBy(definition)) {
+      if (through.includes(workflow)) {
+        const cycle = [...through.slice(through.indexOf(workflow)), workflow].join(' -> ');
         return error('workflow_recursion', `Workflow "${cached.definition.name}" cannot start: its sub-workflows run in a cycle: ${cycle}`);
       }
-      if (Object.hasOwn(workflows, step.workflow)) continue;
-      const child = await loadCachedWorkflow(config, step.workflow);
+      if (Object.hasOwn(workflows, workflow)) continue;
+      const child = await loadCachedWorkflow(config, workflow);
       if (!child) {
-        return error('workflow_not_found', `Workflow "${definition.name}" step "${prefix}${step.id}" runs workflow "${step.workflow}", which has no runnable version. Check workflows/${step.workflow}.yaml and pull again.`);
+        return error('workflow_not_found', `Workflow "${definition.name}" step "${step}" runs workflow "${workflow}", which has no runnable version. Check workflows/${workflow}.yaml and pull again.`);
       }
-      workflows[step.workflow] = child.definition;
-      hashes.push([step.workflow, child.sourceHash]);
-      const failed = await visit(child.definition, [...through, step.workflow]);
+      workflows[workflow] = child.definition;
+      hashes.push([workflow, child.sourceHash]);
+      const failed = await visit(child.definition, [...through, workflow]);
       if (failed) return failed;
     }
     return undefined;
