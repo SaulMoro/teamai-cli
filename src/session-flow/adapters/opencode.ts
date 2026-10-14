@@ -210,12 +210,14 @@ export class OpencodeAdapter extends AgentAdapter {
 
   /**
    * The sessions of the project `projectPath` is in, newest first. The CLI lists one project at
-   * a time, so without `projectPath` this lists the project the command runs in.
+   * a time, so without `projectPath` this throws rather than return one project as if it were all.
    */
   async listConversations(projectPath?: string): Promise<SessionMeta[]> {
-    const cwd = projectPath ?? process.cwd();
-    if (!fs.existsSync(cwd)) return [];
-    const result = await this.session(['list', '--format', 'json', '--max-count', String(LIST_MAX)], cwd);
+    if (projectPath === undefined) {
+      throw new Error('OpenCode lists one workspace at a time: name the workspace to list its sessions.');
+    }
+    if (!fs.existsSync(projectPath)) return [];
+    const result = await this.session(['list', '--format', 'json', '--max-count', String(LIST_MAX)], projectPath);
     if (result.code !== 0) throw new Error(`opencode session list failed: ${result.stderr.trim() || `exit ${result.code}`}`);
     return ListedSessions.parse(JSON.parse(result.stdout)).map((listed) => ({
       sessionId: listed.id,
@@ -224,9 +226,8 @@ export class OpencodeAdapter extends AgentAdapter {
       platform: 'opencode',
       createdAt: iso(listed.created),
       updatedAt: iso(listed.updated),
-      // The listing carries no message count or size; exporting each session to count is too slow.
-      messageCount: 0,
-      sizeBytes: 0,
+      // The listing carries no message count or size, so neither is reported; exporting each
+      // session to count is too slow.
     }));
   }
 

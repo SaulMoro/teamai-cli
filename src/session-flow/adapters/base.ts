@@ -14,13 +14,15 @@ export interface SessionMeta {
   platform: string;
   createdAt: string; // ISO8601
   updatedAt: string; // ISO8601
-  messageCount: number;
+  /** Absent when the tool's listing does not count messages (OpenCode). */
+  messageCount?: number;
   /**
    * Where the session lives: its transcript file, or on CodeBuddy IDE its conversation directory.
    * Pass it back as `SessionReadRef.filePath` to read exactly this session.
    */
   filePath?: string;
-  sizeBytes: number;
+  /** Absent when the tool's listing does not measure it (OpenCode). */
+  sizeBytes?: number;
 }
 
 /** Which session `readSession` opens. */

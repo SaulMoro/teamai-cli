@@ -234,6 +234,7 @@ function fakeAdapter(sessions: Session[], platform = 'fakeplat') {
   const byFile = new Map(sessions.map((s) => [fileOf(s), s]));
   const adapter = {
     platform,
+    isReady: () => true,
     listConversations: vi.fn(async () =>
       sessions.map((s) => ({
         sessionId: s.sessionId,
@@ -382,7 +383,7 @@ describe('session push --all', () => {
 
     expect(adapter.readSession).toHaveBeenCalledTimes(8);
     // --all 枚举全部工作区：listConversations 以无参形式调用
-    expect(adapter.listConversations).toHaveBeenCalledWith();
+    expect(adapter.listConversations).toHaveBeenCalledWith(undefined);
 
     const dir = path.join(repoRoot, 'sessions', 'repos', encodeRepoIdentity('gitlab.com/team/beta'), 'tester');
     expect(fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl'))).toHaveLength(8);
@@ -928,6 +929,7 @@ describe('session migrate --json', () => {
     const message = 'The opencode CLI was not found on PATH. Install OpenCode 2 or later.';
     mocks.adaptersByPlatform['fakeplat'] = {
       platform: 'fakeplat',
+      isReady: () => true,
       listConversations: vi.fn(async () => {
         throw new ToolUnavailableError(message);
       }),
@@ -936,6 +938,23 @@ describe('session migrate --json', () => {
     await runSession('migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--json');
 
     expect(envelope()).toEqual({ error: { code: 'tool_unavailable', message } });
+    expect(process.exitCode).toBe(1);
+  });
+
+  it('names a source that could not be listed list_failed', async () => {
+    mocks.adaptersByPlatform['fakeplat'] = {
+      platform: 'fakeplat',
+      isReady: () => true,
+      listConversations: vi.fn(async () => {
+        throw new Error('EACCES: permission denied');
+      }),
+    };
+
+    await runSession('migrate', 's-1', '-s', 'fakeplat', '-t', 'tgtplat', '--cwd', '/run/dir', '--json');
+
+    expect(envelope()).toEqual({
+      error: { code: 'list_failed', message: 'Listing fakeplat sessions failed: EACCES: permission denied' },
+    });
     expect(process.exitCode).toBe(1);
   });
 

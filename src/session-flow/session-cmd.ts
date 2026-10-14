@@ -22,9 +22,14 @@ import type { Command } from 'commander';
 import readline from 'node:readline';
 import * as path from 'node:path';
 import { getAdapter, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
-import { ToolUnavailableError } from './adapters/base.js';
 import { MigrationEngine, resolveTargetCwd } from './migrate.js';
-import { AgentSession, existingCopyId, noAdapter, type AgentSessionCopy } from './agent-session.js';
+import {
+  AgentSession,
+  existingCopyId,
+  noAdapter,
+  type AgentSessionCopy,
+  type AgentSessionListed,
+} from './agent-session.js';
 import { SyncManager, getRepoIdentity, getGitAuthor, defaultSyncMeta, withSessionIndexLock } from './sync.js';
 import { SessionSearchEngine, type LoadedSession } from './search.js';
 import { deriveTargetSessionId, isSafeSessionFileId } from './ids.js';
@@ -40,6 +45,13 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+/** `  (12 msgs)` or `  (12 msgs, 4.0KB)`; nothing when the tool's listing does not count (OpenCode). */
+function listedCounts(m: AgentSessionListed, { includeSize = false } = {}): string {
+  if (m.messageCount === undefined) return '';
+  if (!includeSize || m.sizeBytes === undefined) return `  (${m.messageCount} msgs)`;
+  return `  (${m.messageCount} msgs, ${formatBytes(m.sizeBytes)})`;
 }
 
 /**
@@ -341,6 +353,34 @@ function printEnvelope(envelope: WorkflowEnvelope): void {
 }
 
 /**
+ * The sessions of `platform` in `cwd`, or in every workspace without it. When the platform could
+ * not be listed, its failure is printed (as the envelope under --json), the run fails, and the
+ * result is undefined.
+ */
+async function listSource({
+  platform,
+  cwd,
+  asEnvelope = false,
+}: {
+  platform: string;
+  cwd?: string;
+  asEnvelope?: boolean;
+}): Promise<AgentSessionListed[] | undefined> {
+  const {
+    sessions,
+    failures: [failure],
+  } = await AgentSession.list({ platforms: [platform], cwd });
+  if (!failure) return sessions;
+  if (asEnvelope) {
+    printEnvelope({ error: { code: failure.code, message: failure.message } });
+  } else {
+    console.error(`Error: ${failure.message}`);
+    process.exitCode = 1;
+  }
+  return undefined;
+}
+
+/**
  * Under --json, stdout carries only the envelope: every progress line, from this command or a
  * logger it reaches, goes to stderr until the returned restore runs.
  */
@@ -439,19 +479,15 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       }
 
       let workCwd = opts.cwd ?? process.cwd();
-      const unknownSource = json ? noAdapter(source, 'read') : undefined;
-      if (unknownSource) {
-        printEnvelope({ error: { code: unknownSource.code, message: unknownSource.message } });
-        return;
-      }
-      const sourceAdapter = safeGetAdapter(source);
-      let metas = await sourceAdapter.listConversations(workCwd);
+      let metas = await listSource({ platform: source, cwd: workCwd, asEnvelope: json });
+      if (!metas) return;
       let crossDirExpanded = false;
       // --all means "every session from this source": with no --cwd, enumerate
       // across all workspaces, rather than only the current directory (that
       // would silently turn --all into "everything in the current directory").
       if (opts.all && !opts.cwd && !sessionId) {
-        const allMetas = await sourceAdapter.listConversations();
+        const allMetas = await listSource({ platform: source });
+        if (!allMetas) return;
         if (allMetas.length > 0) {
           metas = allMetas;
           crossDirExpanded = true;
@@ -465,7 +501,8 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       // Previously workCwd was still passed to the source adapter, and claude-code
       // only looked in the single encodeCwdClaude(workCwd) directory, so this path failed 100% of the time.
       if (metas.length === 0 && !opts.cwd && !sessionId) {
-        const allMetas = await sourceAdapter.listConversations();
+        const allMetas = await listSource({ platform: source });
+        if (!allMetas) return;
         if (allMetas.length > 0) {
           console.log(`\nNo sessions found in current directory: ${workCwd}`);
           console.log(`But ${allMetas.length} session(s) found across all directories on ${source}.`);
@@ -506,7 +543,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           console.log(`\nAbout to migrate ${targets.length} session(s) from ${source}:`);
           for (const m of targets) {
             const title = safeText(m.title);
-            console.log(`  ${m.sessionId.slice(0, 8)}  ${title.length > 50 ? title.slice(0, 50) + '...' : title}  (${m.messageCount} msgs)`);
+            console.log(`  ${m.sessionId.slice(0, 8)}  ${title.length > 50 ? title.slice(0, 50) + '...' : title}${listedCounts(m)}`);
           }
           // Nobody can answer in a non-interactive run. Cancelling with exit 0
           // there would tell a script that every session was migrated; refuse
@@ -570,7 +607,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
             const title = safeText(m.title);
             const titleShown = title.length > 50 ? title.slice(0, 50) + '...' : title;
             console.log(
-              `  [${start + i + 1}] ${m.sessionId.slice(0, 8)}  ${titleShown}  (${m.messageCount} msgs, ${formatBytes(m.sizeBytes)})`,
+              `  [${start + i + 1}] ${m.sessionId.slice(0, 8)}  ${titleShown}${listedCounts(m, { includeSize: true })}`,
             );
           }
 
@@ -833,12 +870,9 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         // Interactive cancel (promptSelect throws 'Selection cancelled'; on EOF, ask returns an empty string
         // and hits that path) is not a failure. Exit quietly, and do not turn it into an unhandled-rejection stack.
         const msg = err instanceof Error ? err.message : String(err);
-        // --json never prompts, so nothing here is a cancel. A source tool whose CLI cannot run is the
-        // one known cause (OpenCode lists through its CLI); any other throw has no known cause.
-        if (json) {
-          const code = err instanceof ToolUnavailableError ? 'tool_unavailable' : 'unexpected_error';
-          return printEnvelope({ error: { code, message: msg } });
-        }
+        // --json never prompts, so nothing here is a cancel. Listing, reading and copying report their
+        // failures as values, so a throw that reaches here has no known cause.
+        if (json) return printEnvelope({ error: { code: 'unexpected_error', message: msg } });
         if (/cancel/i.test(msg)) {
           console.log('Cancelled.');
           return;
@@ -873,12 +907,10 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       const workCwd = opts.cwd ?? process.cwd();
       const repoRoot = await resolveRepoRoot(opts.repoRoot, { materialize: !isDryRun() });
       const author = getGitAuthor(workCwd);
-      const adapter = safeGetAdapter(source);
-      // --all: listConversations() with no argument enumerates every workspace directory of that platform (P5).
+      // --all: no workspace lists every workspace directory of that platform (P5).
       // The blast radius stays on a single platform (same as status --all); single-cwd mode keeps the old behavior.
-      const metas = opts.all
-        ? await adapter.listConversations()
-        : await adapter.listConversations(workCwd);
+      const metas = await listSource({ platform: source, cwd: opts.all ? undefined : workCwd });
+      if (!metas) return;
       const limitRaw = parseInt(opts.limit, 10);
       // Non-numeric / 0 / negative all fall back to the default. slice(0, -1)'s negative semantics would quietly drop one result
       const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? limitRaw : 5;
@@ -894,7 +926,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       if (isDryRun()) {
         console.log(`\nDry-run: would archive ${selected.length} session(s) from ${source}:`);
         for (const m of selected) {
-          console.log(`  ${m.sessionId.slice(0, 8)}  ${safeText(m.title).slice(0, 50)}  (${m.messageCount} msgs)`);
+          console.log(`  ${m.sessionId.slice(0, 8)}  ${safeText(m.title).slice(0, 50)}${listedCounts(m)}`);
         }
         console.log(`  Repo root: ${repoRoot}`);
         return;
@@ -911,7 +943,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         console.log(`\nAbout to push ${selected.length} session(s) from ${source}:`);
         for (const m of selected) {
           const title = safeText(m.title);
-          console.log(`  ${m.sessionId.slice(0, 8)}  ${title.length > 50 ? title.slice(0, 50) + '...' : title}  (${m.messageCount} msgs)`);
+          console.log(`  ${m.sessionId.slice(0, 8)}  ${title.length > 50 ? title.slice(0, 50) + '...' : title}${listedCounts(m)}`);
         }
         const ans = await ask('\nPush all of the above? (y/N): ');
         if (ans.toLowerCase() !== 'y' && ans.toLowerCase() !== 'yes') {

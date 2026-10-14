@@ -11,7 +11,7 @@
 
 import fs from 'node:fs';
 import { ADAPTER_REGISTRY, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
-import { ToolUnavailableError, type AgentAdapter } from './adapters/base.js';
+import { ToolUnavailableError, type AgentAdapter, type SessionMeta } from './adapters/base.js';
 import { imagePlaceholderText, type ContentBlock, type Message, type Session } from './ir.js';
 import { deriveTargetSessionId, legacyTargetSessionIds } from './ids.js';
 import { degradeThinkingBlocks, fidelityFromSession, type FidelityReport } from './migrate.js';
@@ -26,6 +26,7 @@ export type AgentSessionRef = { platform: string; sessionId: string; cwd?: strin
 export type AgentSessionFailure =
   | { code: 'no_adapter'; platform: string; reason: 'unknown tool' | 'unsupported on win32'; message: string }
   | { code: 'tool_unavailable'; platform: string; message: string }
+  | { code: 'list_failed'; platform: string; message: string }
   | { code: 'not_found'; ref: AgentSessionRef; message: string }
   | { code: 'unreadable'; ref: AgentSessionRef; message: string }
   | { code: 'invalid_workspace'; cwd: string; message: string }
@@ -78,7 +79,37 @@ export type AgentSessionTranscriptEntry = {
   toolOutput: string;
 };
 
+/** A session a tool lists. Passed to `find` unchanged, it reads exactly this session. */
+export type AgentSessionListed = AgentSessionRef & {
+  /** The workspace the session belongs to. */
+  cwd: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  /** Absent when the tool's listing does not count them: OpenCode would have to export every session. */
+  messageCount?: number;
+  /** Absent when the tool's listing does not measure it (OpenCode). */
+  sizeBytes?: number;
+};
+
+export type AgentSessionListQuery = {
+  /** The tools to list; every installed tool when omitted. */
+  platforms?: string[];
+  /** The one workspace to list; every workspace of each tool when omitted. */
+  cwd?: string;
+  /** ISO 8601. Sessions last updated before it are left out. */
+  updatedSince?: string;
+};
+
+export type AgentSessionList = {
+  /** Newest `updatedAt` first, across tools. */
+  sessions: AgentSessionListed[];
+  /** One per tool that could not be listed; the other tools' sessions are still returned. */
+  failures: AgentSessionFailure[];
+};
+
 export type AgentSession = {
+  list(query?: AgentSessionListQuery): Promise<AgentSessionList>;
   copy(request: AgentSessionCopyRequest): Promise<AgentSessionCopy>;
   find(ref: AgentSessionRef, options?: { scrub?: boolean }): Promise<AgentSessionFound>;
   transcript(session: Session): AgentSessionTranscriptEntry[];
@@ -175,6 +206,49 @@ async function listedFilePath(target: AgentAdapter, sessionId: string, cwd: stri
   } catch {
     return undefined;
   }
+}
+
+async function listPlatform(platform: string, cwd: string | undefined): Promise<AgentSessionList> {
+  const adapter = adapterFor(platform, 'read');
+  if ('code' in adapter) return { sessions: [], failures: [adapter] };
+  if (!adapter.isReady()) {
+    const message = `${platform} is not installed or its session storage directory was not found.`;
+    return { sessions: [], failures: [{ code: 'tool_unavailable', platform, message }] };
+  }
+  let metas: SessionMeta[];
+  try {
+    metas = await adapter.listConversations(cwd);
+  } catch (e) {
+    const message = messageOf(e);
+    if (e instanceof ToolUnavailableError) return { sessions: [], failures: [{ code: 'tool_unavailable', platform, message }] };
+    return { sessions: [], failures: [{ code: 'list_failed', platform, message: `Listing ${platform} sessions failed: ${message}` }] };
+  }
+  const sessions = metas.map((meta): AgentSessionListed => ({
+    platform,
+    sessionId: meta.sessionId,
+    cwd: meta.cwd,
+    ...(meta.filePath ? { filePath: meta.filePath } : {}),
+    title: meta.title,
+    createdAt: meta.createdAt,
+    updatedAt: meta.updatedAt,
+    ...(meta.messageCount === undefined ? {} : { messageCount: meta.messageCount }),
+    ...(meta.sizeBytes === undefined ? {} : { sizeBytes: meta.sizeBytes }),
+  }));
+  return { sessions, failures: [] };
+}
+
+/**
+ * The sessions of the tools named, or of every installed tool. Tools are listed concurrently and
+ * each failure is that tool's alone.
+ */
+async function list({ platforms, cwd, updatedSince }: AgentSessionListQuery = {}): Promise<AgentSessionList> {
+  const listed = await Promise.all((platforms ?? listInstalledPlatforms()).map((platform) => listPlatform(platform, cwd)));
+  const since = updatedSince === undefined ? undefined : Date.parse(updatedSince);
+  const sessions = listed
+    .flatMap((one) => one.sessions)
+    .filter((session) => since === undefined || Date.parse(session.updatedAt) >= since);
+  sessions.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  return { sessions, failures: listed.flatMap((one) => one.failures) };
 }
 
 /**
@@ -315,4 +389,4 @@ function platformForTool(tool: string): string | undefined {
   return listAvailablePlatforms().includes(platform) ? platform : undefined;
 }
 
-export const AgentSession = { copy, find, transcript, platformForTool } as const satisfies AgentSession;
+export const AgentSession = { list, copy, find, transcript, platformForTool } as const satisfies AgentSession;
