@@ -6,8 +6,9 @@
  * order, a copy into a second workspace imports, and a repeat into the first is reused.
  *
  * Writing needs OpenCode 2 (`opencode session import`). The `opencode-ai` package the suite
- * installs is OpenCode 1 and npm publishes no OpenCode 2, so this runs against an OpenCode 2
- * found on PATH and is skipped, saying why, when there is none.
+ * installs is OpenCode 1 (OpenCode 2 is the separate `@opencode/cli`), so this runs against an
+ * OpenCode 2 found on PATH. Without one it is skipped, saying why, except under CI, which
+ * installs OpenCode 2 and fails here when it is missing.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { spawnSync } from 'node:child_process';
@@ -32,6 +33,11 @@ function opencode2Dir(): string | undefined {
 }
 
 const OPENCODE_DIR = opencode2Dir();
+if (!OPENCODE_DIR && process.env.CI) {
+  throw new Error(
+    'OpenCode 2 is not on PATH: no `opencode` there reports version 2 or later, so the session migrate E2E cannot run. CI installs it in the "Install OpenCode 2" step of .github/workflows/ci.yml; check that the step ran and added its directory to PATH.',
+  );
+}
 const SOURCE_ID = '6f0c2a9e-3b1d-4e5f-8a7b-9c0d1e2f3a4b';
 
 describe.skipIf(!OPENCODE_DIR)('session migrate into OpenCode (needs OpenCode 2 on PATH)', () => {

@@ -14,6 +14,13 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# OpenCode 2 for the session migrate and OpenCode hooks E2Es. `opencode-ai` on
+# npm is OpenCode 1; OpenCode 2 ships as `@opencode/cli`, one npm package per
+# platform. Bump both values together.
+env:
+  OPENCODE2_VERSION: 2.0.29
+  OPENCODE2_LINUX_X64_SHA256: 14b5a6638a1a093ac9d484599c844b10c29b445d04844b682ccc668ce26530a2
+
 jobs:
   lint-and-test:
     name: Lint & Test (Node ${{ matrix.node-version }} on ${{ matrix.os }})
@@ -120,6 +127,18 @@ jobs:
           name: dist
           path: dist
 
+      # A pinned tarball checked against its sha256, never a piped install script.
+      - name: Install OpenCode 2
+        run: |
+          dir="$RUNNER_TEMP/opencode2"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/cli.tgz" "https://registry.npmjs.org/@opencode/cli-linux-x64/-/cli-linux-x64-$OPENCODE2_VERSION.tgz"
+          echo "$OPENCODE2_LINUX_X64_SHA256  $dir/cli.tgz" | sha256sum -c -
+          tar -xzf "$dir/cli.tgz" -C "$dir"
+          "$dir/package/bin/opencode" --version
+          echo "$dir/package/bin" >> "$GITHUB_PATH"
+          echo "TEAMAI_OPENCODE_V2_BIN=$dir/package/bin/opencode" >> "$GITHUB_ENV"
+
       # Fork code is untrusted. Never expose repository secrets to this job.
       # Remote-provider cases skip themselves when credentials are absent.
       # The e2e setup file (src/__tests__/helpers/isolate-e2e-env.ts) gives each
@@ -161,6 +180,19 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # A pinned tarball checked against its sha256, never a piped install
+      # script: this job holds a repository token.
+      - name: Install OpenCode 2
+        run: |
+          dir="$RUNNER_TEMP/opencode2"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/cli.tgz" "https://registry.npmjs.org/@opencode/cli-linux-x64/-/cli-linux-x64-$OPENCODE2_VERSION.tgz"
+          echo "$OPENCODE2_LINUX_X64_SHA256  $dir/cli.tgz" | sha256sum -c -
+          tar -xzf "$dir/cli.tgz" -C "$dir"
+          "$dir/package/bin/opencode" --version
+          echo "$dir/package/bin" >> "$GITHUB_PATH"
+          echo "TEAMAI_OPENCODE_V2_BIN=$dir/package/bin/opencode" >> "$GITHUB_ENV"
 
       # Each test file runs in a sandbox HOME with its own git identity
       # (src/__tests__/helpers/isolate-e2e-env.ts); the remote cases clone the
