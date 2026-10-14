@@ -82,6 +82,22 @@ describe('session search', () => {
     expect(hits.map((h) => h.sessionName)).toEqual(['fix-reset', 'config-refactor']);
   });
 
+  it('finds an error at the end of a long build log, and cites that message', async () => {
+    const log = [...Array.from({ length: 200 }, (_, i) => `compiling module ${i}`), 'error TS2304: Cannot find name ZZTOP'].join('\n');
+    const sessions = [
+      loaded('build-run', 'Run the build', [
+        say('user', 'Build it'),
+        { role: 'user', content: [{ type: 'tool_result', callId: 'b1', content: log, isError: true }] },
+      ]),
+      loaded('docs-edit', 'Edit the docs', [say('user', 'Fix the typo in the README')]),
+    ];
+
+    const hits = await new SessionSearchEngine().search(sessions, 'ZZTOP', { enableDecay: false });
+
+    expect(hits.map((h) => h.sessionName)).toEqual(['build-run']);
+    expect(hits[0].matchedMessages[0].snippet).toContain('Cannot find name ZZTOP');
+  });
+
   it('shows a match inside multi-line tool output as a one-line snippet', async () => {
     const log = ['> npm test', '', 'FAIL api.test.ts', '  Error: read ECONNRESET', '    at TCP.onStreamRead'].join('\n');
     const sessions = [

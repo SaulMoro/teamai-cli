@@ -201,9 +201,13 @@ export class SessionSearchEngine {
 
     if (sessions.length === 0) return [];
 
-    // Build documents: one transcript entry per message, so a match cites its message.
+    // Build documents: one transcript entry per message, so a match cites its message. The transcript
+    // truncates each tool result; search indexes the whole output, where a build log's error often comes last.
     const docs = sessions.map((s) => {
-      const entries = AgentSession.transcript(s.session);
+      const entries = AgentSession.transcript(s.session).map((entry, i) => ({
+        ...entry,
+        toolOutput: s.session.messages[i].content.flatMap((b) => (b.type === 'tool_result' ? [b.content] : [])).join('\n'),
+      }));
       const messageTexts = entries.map((e) => [e.text, e.toolOutput].filter(Boolean).join('\n'));
       return {
         meta: s,
