@@ -282,6 +282,44 @@ describe('AgentSession.copy', () => {
     expect(again.status === 'done' && again.sessionId).toBe(earlier.status === 'done' && earlier.sessionId);
   });
 
+  // Two commands copying the same session into the same workspace at once must not both write it.
+  it('a copy started while another is writing the same target waits, then reuses it', async () => {
+    const platform = 'claude-code';
+    const sourceId = await writeSource();
+    const from = { platform: SOURCE_PLATFORM, sessionId: sourceId, cwd: workspace('source') };
+    const to = { platform, cwd: workspace('target') };
+    let firstWriting!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      firstWriting = resolve;
+    });
+    let releaseFirst!: () => void;
+    const firstHolds = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const prototype = Object.getPrototypeOf(getAdapter(platform)) as AgentAdapter;
+    const write = prototype.writeSession;
+    let writes = 0;
+    vi.spyOn(prototype, 'writeSession').mockImplementation(async function (this: AgentAdapter, ...args) {
+      if (++writes === 1) {
+        firstWriting();
+        await firstHolds;
+      }
+      return write.apply(this, args);
+    });
+
+    const first = AgentSession.copy({ from, to });
+    await firstStarted;
+    const second = AgentSession.copy({ from, to });
+    // Give the second copy the time to see "no copy yet" and write its own, which it must not.
+    await Promise.race([second, new Promise((resolve) => setTimeout(resolve, 250))]);
+    releaseFirst();
+    const [a, b] = await Promise.all([first, second]);
+
+    expect(a).toMatchObject({ status: 'done', reused: false });
+    expect(b).toMatchObject({ status: 'done', reused: true });
+    expect(b.status === 'done' && b.sessionId).toBe(a.status === 'done' && a.sessionId);
+  });
+
   const REFUSED = WRITABLE.flatMap((platform) =>
     ['relative/ws', 'md5:0f1e2d3c', '-Users-me-proj'].map((cwd) => [platform, cwd] as const),
   );
@@ -486,6 +524,35 @@ describe('AgentSession.copy into OpenCode', () => {
       failure: { code: 'tool_unavailable', platform: 'opencode', message: expect.stringContaining('database is locked') },
     });
     expect(snapshot()).toEqual(before);
+  });
+});
+
+// Codex moves an archived thread's rollout from sessions/ to archived_sessions/. The copy is still
+// there: a repeat reuses it, so reading it back (migrate --push) and rolling it back must find it too.
+describe('a Codex copy that was archived', () => {
+  it('is reused, read back, and deleted by rollback', async () => {
+    const sourceId = await writeSource();
+    const from = { platform: SOURCE_PLATFORM, sessionId: sourceId, cwd: workspace('source') };
+    const to = { platform: 'codex', cwd: workspace('target') };
+    const copied = await AgentSession.copy({ from, to });
+    const id = copied.status === 'done' ? copied.sessionId : 'none';
+    const sessionsDir = path.join(mocks.home, '.codex', 'sessions');
+    const [rel] = (fs.readdirSync(sessionsDir, { recursive: true }) as string[]).filter((f) => f.endsWith(`${id}.jsonl`));
+    const archived = path.join(mocks.home, '.codex', 'archived_sessions', path.basename(rel));
+    fs.mkdirSync(path.dirname(archived), { recursive: true });
+    fs.renameSync(path.join(sessionsDir, rel), archived);
+
+    const again = await AgentSession.copy({ from, to });
+    const found = await AgentSession.find({ platform: 'codex', sessionId: id, cwd: to.cwd }, { scrub: false });
+    const elsewhere = await getAdapter('codex').deleteSession(id, workspace('elsewhere'));
+    const deleted = await getAdapter('codex').deleteSession(id, to.cwd);
+
+    expect(again).toMatchObject({ status: 'done', reused: true, sessionId: id });
+    expect(found).toMatchObject({ status: 'done', session: { sessionId: id } });
+    expect(found.status === 'done' && found.session.messages.map((m) => m.role)).toEqual(['user', 'assistant']);
+    expect(elsewhere).toBe(false);
+    expect(deleted).toBe(true);
+    expect(fs.existsSync(archived)).toBe(false);
   });
 });
 

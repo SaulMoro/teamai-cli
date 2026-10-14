@@ -270,8 +270,14 @@ export class CodexAdapter extends AgentAdapter {
     return scanFiles(this.storageRoot, /\.jsonl$/);
   }
 
+  /** Every rollout, active then archived: Codex moves an archived thread's rollout to `archived_sessions/`. */
+  private scanAllRollouts(): string[] {
+    return [...this.scanJsonlFiles(), ...scanFiles(path.join(path.dirname(this.storageRoot), 'archived_sessions'), /\.jsonl$/)];
+  }
+
+  /** The rollout to read or delete, archived ones included, so it agrees with `existingSessionId`. */
   private findSessionFile(sessionId: string, projectPath?: string): string | null {
-    for (const f of this.scanJsonlFiles()) {
+    for (const f of this.scanAllRollouts()) {
       // The filename is rollout-<timestamp>-<sessionId>, matched as an infix; but the prefix is only accepted at 8+ characters,
       // otherwise a 4-character prefix substring would read someone else's session
       const base = path.basename(f, '.jsonl');
@@ -600,8 +606,7 @@ export class CodexAdapter extends AgentAdapter {
    * write would compute. Matches the whole id, never a suffix.
    */
   async existingSessionId(sessionId: string, projectPath?: string): Promise<string | undefined> {
-    const archived = path.join(path.dirname(this.storageRoot), 'archived_sessions');
-    for (const f of [...this.scanJsonlFiles(), ...scanFiles(archived, /\.jsonl$/)]) {
+    for (const f of this.scanAllRollouts()) {
       const base = path.basename(f, '.jsonl');
       if (base !== sessionId && !base.endsWith(`-${sessionId}`)) continue;
       if (projectPath && !this.rolloutMatchesCwd(f, projectPath)) continue;

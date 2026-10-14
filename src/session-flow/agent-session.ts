@@ -9,9 +9,12 @@
  * Adapters stay behind this module. Expected failures are values, never exceptions.
  */
 
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import { resolveMemberToolRoots } from '../config.js';
-import type { LocalConfig } from '../types.js';
+import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
+import { acquireLock, releaseLock } from '../update.js';
 import { ADAPTER_REGISTRY, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
 import { ToolUnavailableError, type AgentAdapter, type SessionMeta } from './adapters/base.js';
 import { imagePlaceholderText, type ContentBlock, type Message, type Session } from './ir.js';
@@ -32,7 +35,8 @@ export type AgentSessionFailure =
   | { code: 'not_found'; ref: AgentSessionRef; message: string }
   | { code: 'unreadable'; ref: AgentSessionRef; message: string }
   | { code: 'invalid_workspace'; cwd: string; message: string }
-  | { code: 'write_failed'; platform: string; message: string };
+  | { code: 'write_failed'; platform: string; message: string }
+  | { code: 'copy_busy'; platform: string; lockPath: string; message: string };
 
 export type AgentSessionCopy =
   | {
@@ -237,13 +241,26 @@ export type CopyWrite =
       /** True when the target already existed and nothing was written. */
       reused: boolean;
     }
-  | { status: 'failed'; failure: Extract<AgentSessionFailure, { code: 'invalid_workspace' | 'tool_unavailable' | 'write_failed' }> };
+  | {
+      status: 'failed';
+      failure: Extract<AgentSessionFailure, { code: 'invalid_workspace' | 'tool_unavailable' | 'write_failed' | 'copy_busy' }>;
+    };
+
+// A copy holds its lock for one existence check and one write (an OpenCode import, a sqlite3
+// registration). Ten seconds covers that without leaving a command stuck.
+const COPY_LOCK_ATTEMPTS = 100;
+const COPY_LOCK_RETRY_MS = 100;
 
 /**
  * Write `session`, read from `sourcePlatform`, into `target` in the workspace `cwd`, once. The
  * target id is derived; when a copy already exists, nothing is written and the result is
  * `reused`. A write that throws is rolled back: only the derived id, only in `cwd`, since the
  * target did not exist a moment ago. Every path that writes a session into a tool goes through here.
+ *
+ * The check, the write and the rollback run under a lock on this one target copy, keyed by the
+ * target platform and the derived id (which names the workspace), so a second command copying
+ * the same session there at once waits and then reuses the first copy instead of replacing it or
+ * rolling it back. The lock lives under `~/.teamai/locks/`, like the session index lock.
  */
 export async function writeCopyOnce(
   target: AgentAdapter,
@@ -262,6 +279,30 @@ export async function writeCopyOnce(
     return { status: 'failed', failure: { code: 'invalid_workspace', cwd, message: messageOf(e) } };
   }
 
+  const key = createHash('sha256').update(`${targetPlatform}\0${targetId}`).digest('hex').slice(0, 16);
+  const lockPath = path.join(getTeamaiHomeDir(), 'locks', `session-copy-${key}.lock`);
+  for (let attempt = 1; !(await acquireLock(lockPath)); attempt++) {
+    if (attempt === COPY_LOCK_ATTEMPTS) {
+      const message =
+        `Another teamai command is writing this session into ${targetPlatform} in ${cwd} (lock ${lockPath}). ` +
+        'Run this command again when it finishes.';
+      return { status: 'failed', failure: { code: 'copy_busy', platform: targetPlatform, lockPath, message } };
+    }
+    await new Promise((resolve) => setTimeout(resolve, COPY_LOCK_RETRY_MS));
+  }
+  try {
+    return await writeUnlessCopied(target, { session, sourcePlatform, cwd, targetId });
+  } finally {
+    await releaseLock(lockPath);
+  }
+}
+
+/** `writeCopyOnce` past the id and the lock: the check, the write, and its rollback. */
+async function writeUnlessCopied(
+  target: AgentAdapter,
+  { session, sourcePlatform, cwd, targetId }: { session: Session; sourcePlatform: string; cwd: string; targetId: string },
+): Promise<CopyWrite> {
+  const targetPlatform = target.platform;
   let existing: string | undefined;
   try {
     existing = await existingCopyId(target, { targetId, cwd, sourcePlatform, targetPlatform, sourceSessionId: session.sessionId });
