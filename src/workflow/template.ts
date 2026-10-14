@@ -3,6 +3,7 @@
  * every string inside a `with` value. Any other `{{ … }}` is plain text, so prompts about GitHub Actions or Jinja stay as written.
  */
 import { parseExpression, resolvePath, type ExpressionContext, type ExpressionPath } from './expression.js';
+import type { WorkflowStep } from './types.js';
 
 /** A `{{ with.<name>… }}` read: a value the step's own `with` names. Only templates read it; an `if` cannot. */
 export interface WithPath {
@@ -121,6 +122,18 @@ export function stringsIn(value: unknown): string[] {
   if (typeof value === 'string') return [value];
   if (value && typeof value === 'object') return Object.values(value).flatMap(stringsIn);
   return [];
+}
+
+/**
+ * The texts a step templates: `with.<name>` once per string inside that value, `prompt`, and `env.<NAME>`.
+ * Pull and the engine share this one list, so they agree on which fields are templates.
+ */
+export function templatedTexts(step: Pick<WorkflowStep, 'prompt' | 'env' | 'with'>): Array<{ what: string; text: string }> {
+  return [
+    ...Object.entries(step.with ?? {}).flatMap(([name, value]) => stringsIn(value).map((text) => ({ what: `with.${name}`, text }))),
+    ...(step.prompt !== undefined ? [{ what: 'prompt', text: step.prompt }] : []),
+    ...Object.entries(step.env ?? {}).map(([name, text]) => ({ what: `env.${name}`, text })),
+  ];
 }
 
 /**

@@ -4,13 +4,17 @@ function isYamlNode(value: unknown): value is Node {
   return !!value && typeof value === 'object' && 'range' in value;
 }
 import { evaluateExpression, expressionPaths, isTruthy, parseExpression, type Expression, type ExpressionPath } from './expression.js';
-import { findTemplate, parseTemplate, stringsIn, templatePaths, templateWithPaths, type Template } from './template.js';
+import { findTemplate, parseTemplate, templatedTexts, templatePaths, templateWithPaths, type Template } from './template.js';
 import type { EndOutcome, InlineWorkflow, OutputSchema, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
+import { STEP_ACTIONS } from './types.js';
 
 const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'inputs', 'ends', 'outputs', 'steps']);
-const STEP_KEYS = new Set(['id', 'needs', 'if', 'command', 'env', 'prompt', 'prompt_file', 'workflow', 'with', 'agent', 'output', 'end']);
+const ACTION_KEYS = Object.keys(STEP_ACTIONS);
+const STEP_KEYS = new Set(['id', 'needs', 'if', ...ACTION_KEYS, 'env', 'with', 'agent', 'output', 'end']);
 /** Keys a step without an action may carry. */
 const END_ONLY_KEYS = new Set(['id', 'needs', 'if', 'end']);
+/** The actions as a sentence: `command, prompt, prompt_file, or workflow`. */
+const ACTION_LIST = `${ACTION_KEYS.slice(0, -1).join(', ')}, or ${ACTION_KEYS.at(-1)}`;
 const TYPE_NAMES = new Set(['string', 'number', 'boolean']);
 const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -46,6 +50,12 @@ function locate(file: string, lineCounter: LineCounter, node: Node | null | unde
 function scalarString(node: Node | null | undefined): string | undefined {
   if (!isScalar(node) || typeof node.value !== 'string') return undefined;
   return node.value;
+}
+
+/** Where a map's `key` is written: its value, or the key when the value is empty. */
+function valueNode(map: unknown, key: string): Node | undefined {
+  const pair = isMap(map) ? map.items.find((item) => isScalar(item.key) && String(item.key.value) === key) : undefined;
+  return isYamlNode(pair?.value) ? pair.value : isYamlNode(pair?.key) ? pair.key : undefined;
 }
 
 /** What the checks of one workflow file share: where a diagnostic points, where it goes, and what a sync knows of the other files. */
@@ -303,7 +313,7 @@ function parseBody(
       const inline = isMap(workflowPair?.value)
         ? parseInline(workflowPair.value, `${field}.workflow`, label, ctx, inputs)
         : undefined;
-      const actions = [commandPair, promptPair, promptFilePair, workflowPair].filter(Boolean);
+      const actions = ACTION_KEYS.map((key) => item.items.find((pair) => scalarString(pair.key) === key)).filter(Boolean);
       const endPair = item.items.find((pair) => scalarString(pair.key) === 'end');
       const end = scalarString(endPair?.value)?.trim();
       if (endPair && (!end || !TOKEN.test(end))) {
@@ -319,7 +329,7 @@ function parseBody(
         }
       }
       if (actions.length > 1 || (actions.length === 0 && !endPair)) {
-        diagnostics.push(locate(file, lineCounter, item, field, 'a step has exactly one action: command, prompt, prompt_file, or workflow'));
+        diagnostics.push(locate(file, lineCounter, item, field, `a step has exactly one action: ${ACTION_LIST}`));
       }
       if (workflowPair && !inline && (!workflow || !TOKEN.test(workflow))) {
         diagnostics.push(locate(file, lineCounter, workflowPair.value ?? workflowPair.key ?? item, `${field}.workflow`, `${label} workflow must be the name of a workflow in workflows/`));
@@ -378,21 +388,11 @@ function parseBody(
           label, field, workflow, node: workflowPair.value as Node, with: keys && { node: (withPair?.key ?? workflowPair.value) as Node, keys },
         }));
       }
-      const withTemplates = isMap(withPair?.value) && withValues ? withPair.value.items.flatMap((pair) => {
-        const key = scalarString(isYamlNode(pair.key) ? pair.key : undefined) ?? 'key';
-        const node = (isYamlNode(pair.value) ? pair.value : pair.key) as Node;
-        return stringsIn(withValues?.[key]).map((text) => ({ what: `with.${key}`, field: `${field}.with.${key}`, node, text }));
-      }) : [];
-      const templates: Array<{ what: string; field: string; node: Node; text: string }> = [
-        ...withTemplates,
-        ...(prompt !== undefined ? [{ what: 'prompt', field: `${field}.prompt`, node: promptPair?.value as Node, text: prompt }] : []),
-        ...Object.entries(env ?? {}).map(([name, text]) => ({
-          what: `env.${name}`,
-          field: `${field}.env.${name}`,
-          node: (isMap(envPair?.value) ? envPair.value.items.find((pair) => scalarString(pair.key) === name)?.value : undefined) as Node,
-          text,
-        })),
-      ];
+      const templates = templatedTexts({ prompt, env, with: withValues }).map(({ what, text }) => {
+        const name = what.slice(what.indexOf('.') + 1);
+        const node = what === 'prompt' ? promptPair?.value : valueNode(what.startsWith('with.') ? withPair?.value : envPair?.value, name);
+        return { what, field: `${field}.${what}`, node: node as Node, text };
+      });
       for (const template of templates) {
         const parsed = parseTemplate(template.text);
         if (!parsed.ok) {

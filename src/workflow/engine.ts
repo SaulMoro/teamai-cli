@@ -8,7 +8,7 @@ import {
 } from './expression.js';
 import { outputMismatch } from './output.js';
 import { noteRunRecord, pendingRecords } from './records.js';
-import { parseTemplate, renderStrings, renderText, stringsIn, templatePaths, type TemplateContext, type TemplateError } from './template.js';
+import { parseTemplate, renderStrings, renderText, templatedTexts, templatePaths, type TemplateContext, type TemplateError } from './template.js';
 import { generateRunId, isRunId, readRun, runLockPath, writeRun } from './store.js';
 import type {
   CachedWorkflow,
@@ -25,6 +25,7 @@ import type {
   WorkflowFailure,
   WorkflowStep,
 } from './types.js';
+import { hasAction } from './types.js';
 
 const LOCK_ATTEMPTS = 40;
 const LOCK_WAIT_MS = 25;
@@ -169,12 +170,9 @@ function renderLease(scope: Scope, states: StepState[], state: StepState, defini
     if (!values.ok) return withTemplateFailure(state, values.error);
     context.with = values.value;
   }
-  const texts: Array<[string, string]> = [
-    ...(definition.prompt !== undefined ? [['prompt', definition.prompt] as [string, string]] : []),
-    ...Object.entries(definition.env ?? {}).map(([name, text]): [string, string] => [`env.${name}`, text]),
-  ];
   const rendered = new Map<string, string>();
-  for (const [what, text] of texts) {
+  for (const { what, text } of templatedTexts(definition)) {
+    if (what.startsWith('with.')) continue;
     const parsed = parseTemplate(text);
     if (!parsed.ok) {
       const [problem] = parsed.errors;
@@ -240,7 +238,7 @@ function doneEnvelope(run: RunState): WorkflowEnvelope {
 
 /** A step with `end` and no action only ends the workflow; the engine settles it without a lease. */
 function endsOnly(step: WorkflowStep | undefined): boolean {
-  return step?.end !== undefined && step.command === undefined && step.prompt === undefined && step.workflow === undefined;
+  return step?.end !== undefined && !hasAction(step);
 }
 
 /** A step that ran and did not succeed. Later issues add `timeout` and `cancelled`. */
@@ -257,11 +255,6 @@ function stepsRead(paths: ExpressionPath[]): Set<string> {
   return new Set(paths.flatMap((path) => (path.root === 'steps' ? [path.step] : [])));
 }
 
-/** The templates a step renders when it is leased, or, for a workflow step, when its workflow starts. */
-function templateTexts(step: WorkflowStep): string[] {
-  return [...(step.prompt !== undefined ? [step.prompt] : []), ...Object.values(step.env ?? {}), ...stringsIn(step.with)];
-}
-
 /**
  * The step ids a step reads in its `if` and templates, and, when it runs an inline workflow, the ids that workflow's
  * steps read outside it, at any depth. An `if` or template that does not parse reads nothing here; settling its own
@@ -271,7 +264,7 @@ function readsOf(step: WorkflowStep): Set<string> {
   const parsed = step.if === undefined ? undefined : parseExpression(step.if);
   const paths = [
     ...(parsed?.ok ? expressionPaths(parsed.expression) : []),
-    ...templateTexts(step).flatMap((text) => {
+    ...templatedTexts(step).flatMap(({ text }) => {
       const template = parseTemplate(text);
       return template.ok ? templatePaths(template.template) : [];
     }),

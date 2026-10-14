@@ -40,6 +40,14 @@ export interface WorkflowStep {
   end?: string;
 }
 
+/** The keys that give a step its action, as YAML writes them, each with the definition field it fills. */
+export const STEP_ACTIONS = { command: 'command', prompt: 'prompt', prompt_file: 'promptFile', workflow: 'workflow' } as const satisfies Record<string, keyof WorkflowStep>;
+
+/** A step with no action only ends its workflow. */
+export function hasAction(step: WorkflowStep): boolean {
+  return Object.values(STEP_ACTIONS).some((field) => step[field] !== undefined);
+}
+
 export type EndOutcome = 'succeeded' | 'failed';
 
 /**

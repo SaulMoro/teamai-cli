@@ -150,6 +150,23 @@ steps:
     ]));
   });
 
+  it('checks a with template under a key YAML reads as a number', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Review it.
+steps:
+  - id: review
+    prompt: Review {{ with.1 }}
+    with:
+      1: "{{ inputs.nope }}"
+`);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'bad_template', field: 'steps[0].with.1', line: 8 }),
+    ]));
+  });
+
   it('rejects a YAML syntax error with the file and line', () => {
     const result = parse('schemaVersion: [\n');
     expect(result.ok).toBe(false);
