@@ -232,6 +232,20 @@ describe('AgentSession.list on OpenCode', () => {
     expect(found.status === 'done' && found.session.sessionId).toBe(sessionId);
   });
 
+  // Inside a git repo its CLI lists the whole repo, every directory of it.
+  it('lists only the workspace given when another directory of the same git repo has sessions', async () => {
+    const repo = workspace('repo');
+    fs.mkdirSync(path.join(repo, '.git'));
+    const sub1 = workspace(path.join('repo', 'sub_1'));
+    const sessionId = plantOpencode(sub1, 'ses_ec4a5b73fffeAAAAAAAAAAAAAA');
+    plantOpencode(workspace(path.join('repo', 'sub_2')), 'ses_ec4a5b73fffeBBBBBBBBBBBBBB');
+
+    const listed = await AgentSession.list({ platforms: ['opencode'], cwd: sub1 });
+
+    expect(listed.failures).toEqual([]);
+    expect(listed.sessions.map((s) => [s.sessionId, s.cwd])).toEqual([[sessionId, sub1]]);
+  });
+
   // Its CLI cannot list every workspace; listing only the one this process runs in would look complete.
   it('reports list_failed without a workspace, and still lists the other tools', async () => {
     fs.mkdirSync(path.join(mocks.home, '.claude', 'projects'), { recursive: true });

@@ -71,8 +71,8 @@ describe('collectSession', () => {
   it('reports the git state of the earliest start that recorded one, whatever the event order', () => {
     const events = [
       ...sampleEvents(),
-      ev({ type: 'session_start', timestamp: '2026-03-10T10:00:00.000Z', sessionId: SID, gitHead: 'b'.repeat(40), gitDirty: true }),
-      ev({ type: 'session_start', timestamp: '2026-03-10T09:30:00.000Z', sessionId: SID, gitHead: 'a'.repeat(40), gitDirty: false }),
+      ev({ type: 'session_start', timestamp: '2026-03-10T10:00:00.000Z', sessionId: SID, gitAtStart: { head: 'b'.repeat(40), dirty: true } }),
+      ev({ type: 'session_start', timestamp: '2026-03-10T09:30:00.000Z', sessionId: SID, gitAtStart: { head: 'a'.repeat(40), dirty: false } }),
     ];
     expect(collectSession(SID, events)!.gitAtStart).toEqual({ head: 'a'.repeat(40), dirty: false });
   });
@@ -85,7 +85,7 @@ describe('collectSession', () => {
     const plain = collectSession(SID, sampleEvents())!;
     const withGit = collectSession(SID, [
       ...sampleEvents(),
-      ev({ type: 'session_start', timestamp: '2026-03-10T09:00:01.000Z', sessionId: SID, gitHead: 'a'.repeat(40), gitDirty: true }),
+      ev({ type: 'session_start', timestamp: '2026-03-10T09:00:01.000Z', sessionId: SID, gitAtStart: { head: 'a'.repeat(40), dirty: true } }),
     ])!;
     expect(renderSessionMarkdown(withGit, { includePrompt: true })).toBe(renderSessionMarkdown(plain, { includePrompt: true }));
   });

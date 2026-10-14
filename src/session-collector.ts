@@ -27,6 +27,7 @@ import { aggregateSessionMetrics } from './dashboard-collector.js';
 import { repoKeys, repoLabel } from './utils/repo-attribution.js';
 import { emptyTokenUsage } from './types.js';
 import type { DashboardEvent, SessionMetrics } from './types.js';
+import type { HeadState } from './utils/git.js';
 
 /** A folded, human-readable summary of a single session. */
 export interface SessionSummary {
@@ -55,7 +56,7 @@ export interface SessionSummary {
    * from its earliest `session_start` that recorded them. Absent when none did.
    * Not rendered into the monthly log.
    */
-  gitAtStart?: { head: string; dirty: boolean };
+  gitAtStart?: HeadState;
 }
 
 /** Max characters kept from the first prompt in a summary. */
@@ -87,12 +88,11 @@ export function collectSession(sessionId: string, events: DashboardEvent[]): Ses
   let firstPromptRaw = '';
   let startedAt = own[0].timestamp;
   let endedAt = own[0].timestamp;
-  let gitStart: { at: string; head: string; dirty: boolean } | undefined;
+  let gitStart: { at: string; state: HeadState } | undefined;
 
   for (const e of own) {
-    if (e.type === 'session_start' && e.gitHead !== undefined && e.gitDirty !== undefined
-      && (!gitStart || e.timestamp < gitStart.at)) {
-      gitStart = { at: e.timestamp, head: e.gitHead, dirty: e.gitDirty };
+    if (e.type === 'session_start' && e.gitAtStart && (!gitStart || e.timestamp < gitStart.at)) {
+      gitStart = { at: e.timestamp, state: e.gitAtStart };
     }
     if (e.tool) tool = e.tool;
     if (e.cwd) cwd = e.cwd;
@@ -138,7 +138,7 @@ export function collectSession(sessionId: string, events: DashboardEvent[]): Ses
     prompts: metrics.prompts,
     firstPrompt,
     valuable: isValuable({ interventionCount, distinctTools }),
-    ...gitStart ? { gitAtStart: { head: gitStart.head, dirty: gitStart.dirty } } : {},
+    ...gitStart ? { gitAtStart: gitStart.state } : {},
   };
 }
 

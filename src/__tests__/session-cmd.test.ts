@@ -32,6 +32,8 @@ const mocks = vi.hoisted(() => ({
   /** migrate.js mock 的 preview 返回值（Error 时抛出）；agent-session.js mock 的 copy 返回值 */
   previewResult: null as unknown,
   copyResult: null as unknown,
+  /** The OS the commands' `noAdapter` checks judge by; this machine's when unset. */
+  os: undefined as NodeJS.Platform | undefined,
   /** When set, the session archive lock reports this path as held by another command. */
   heldArchiveLock: '',
   /** readline mock：ask() 等待输入时捕获的 'line' 回调 */
@@ -143,6 +145,7 @@ vi.mock('../session-flow/agent-session.js', async (importOriginal) => {
   return {
     ...actual,
     AgentSession: { ...actual.AgentSession, copy: async (): Promise<unknown> => mocks.copyResult },
+    noAdapter: (platform: string, use: 'read' | 'write') => actual.noAdapter(platform, use, mocks.os),
   };
 });
 
@@ -176,6 +179,7 @@ beforeEach(() => {
   mocks.adaptersByPlatform = {};
   mocks.previewResult = null;
   mocks.copyResult = null;
+  mocks.os = undefined;
   mocks.heldArchiveLock = '';
   mocks.lineArmed = null;
   vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => {
@@ -1129,12 +1133,60 @@ describe('session resume of a session already restored', () => {
   });
 });
 
-describe('session resume on Windows', () => {
-  const realPlatform = process.platform;
-  afterEach(() => {
-    Object.defineProperty(process, 'platform', { value: realPlatform });
-  });
+describe('session resume of a restore whose write failed', () => {
+  it('leaves nothing behind, and a retry restores the session', async () => {
+    const ws = fs.realpathSync.native(fs.mkdtempSync(path.join(mocks.home, 'ws-')));
+    mocks.remotes[ws] = 'https://github.com/org/alpha.git';
+    const session = mkSession({ sessionId: '0b6f3c1e-5a2d-4c8e-9f10-7a1b2c3d4e5f', cwd: ws, platform: 'codex' });
+    new SyncManager(repoRoot).saveSession(
+      session,
+      defaultSyncMeta(
+        {
+          platform: 'codex',
+          author: 'tester',
+          cwd: ws,
+          sessionId: session.sessionId,
+          repoIdentity: 'github.com/org/alpha',
+          title: session.title,
+        },
+        session.createdAt,
+      ),
+    );
+    const indexPath = path.join(repoRoot, 'sessions', 'repos', encodeRepoIdentity('github.com/org/alpha'), '_index.json');
+    const name = (JSON.parse(fs.readFileSync(indexPath, 'utf-8')) as { sessions: Array<{ sessionName: string }> })
+      .sessions[0].sessionName;
+    mocks.adaptersByPlatform['claude-code'] = new ClaudeCodeAdapter();
+    const projects = path.join(mocks.home, '.claude', 'projects');
+    const transcripts = () =>
+      fs.existsSync(projects) ? (fs.readdirSync(projects, { recursive: true }) as string[]).filter((f) => f.endsWith('.jsonl')) : [];
+    const resume = () => runSession('resume', name, '--platform', 'claude-code', '--repo-root', repoRoot, '--cwd', ws);
+    // The transcript lands, then the write fails, the way a crash after a partial write looks.
+    const write = ClaudeCodeAdapter.prototype.writeSession;
+    const spy = vi.spyOn(ClaudeCodeAdapter.prototype, 'writeSession').mockImplementation(async function (
+      this: ClaudeCodeAdapter,
+      ...args
+    ) {
+      await write.apply(this, args);
+      throw new Error('disk full');
+    });
 
+    await resume();
+    spy.mockRestore();
+
+    expect(errored.join('\n')).toContain('disk full');
+    expect(process.exitCode).toBe(1);
+    expect(transcripts()).toEqual([]);
+
+    process.exitCode = 0;
+    await resume();
+
+    expect(out.join('\n')).toContain('Session restored to claude-code');
+    expect(transcripts()).toHaveLength(1);
+    expect(process.exitCode).not.toBe(1);
+  });
+});
+
+describe('session resume on Windows', () => {
   it.each(['cursor', 'workbuddy'])('refuses to restore into %s, which would never show the copy', async (platform) => {
     mocks.remotes['/run/dir'] = 'https://github.com/org/alpha.git';
     const session = mkSession({ cwd: '/run/dir', platform: 'claude-code' });
@@ -1157,7 +1209,7 @@ describe('session resume on Windows', () => {
     const writeSession = vi.fn(async () => 'should-not-write');
     const existingSessionId = vi.fn(async () => undefined);
     mocks.adaptersByPlatform[platform] = { platform, writeSession, existingSessionId, consumeWriteNotice: () => undefined };
-    Object.defineProperty(process, 'platform', { value: 'win32' });
+    mocks.os = 'win32';
 
     await runSession(
       'resume', index.sessions[0].sessionName,

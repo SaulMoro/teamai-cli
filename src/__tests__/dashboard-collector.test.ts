@@ -2753,8 +2753,7 @@ describe('dashboard-report records the git state a session started on', () => {
 
     const [start] = await readEvents();
     expect(start.type).toBe('session_start');
-    expect(start.gitHead).toBe(head);
-    expect(start.gitDirty).toBe(false);
+    expect(start.gitAtStart).toEqual({ head, dirty: false });
   });
 
   it('marks the tree dirty when a tracked file is modified', async () => {
@@ -2764,8 +2763,7 @@ describe('dashboard-report records the git state a session started on', () => {
     await runHook({ hook_event_name: 'SessionStart', session_id: 'git-modified', cwd: repo });
 
     const [start] = await readEvents();
-    expect(start.gitHead).toBe(head);
-    expect(start.gitDirty).toBe(true);
+    expect(start.gitAtStart).toEqual({ head, dirty: true });
   });
 
   it('marks the tree dirty when a change is staged', async () => {
@@ -2776,7 +2774,7 @@ describe('dashboard-report records the git state a session started on', () => {
     await runHook({ hook_event_name: 'SessionStart', session_id: 'git-staged', cwd: repo });
 
     const [start] = await readEvents();
-    expect(start.gitDirty).toBe(true);
+    expect(start.gitAtStart?.dirty).toBe(true);
   });
 
   it('does not count untracked files as dirty', async () => {
@@ -2786,8 +2784,7 @@ describe('dashboard-report records the git state a session started on', () => {
     await runHook({ hook_event_name: 'SessionStart', session_id: 'git-untracked', cwd: repo });
 
     const [start] = await readEvents();
-    expect(start.gitHead).toBe(head);
-    expect(start.gitDirty).toBe(false);
+    expect(start.gitAtStart).toEqual({ head, dirty: false });
   });
 
   it('still writes the event without git state outside git, and logs why', async () => {
@@ -2798,8 +2795,7 @@ describe('dashboard-report records the git state a session started on', () => {
 
     const [start] = await readEvents();
     expect(start.type).toBe('session_start');
-    expect(start).not.toHaveProperty('gitHead');
-    expect(start).not.toHaveProperty('gitDirty');
+    expect(start).not.toHaveProperty('gitAtStart');
     expect(fs.readFileSync(path.join(tmpDir, '.teamai', 'debug.log'), 'utf-8'))
       .toContain(`could not read the git state of ${plain} at session_start`);
   });
@@ -2813,8 +2809,7 @@ describe('dashboard-report records the git state a session started on', () => {
 
     const [start] = await readEvents();
     expect(start.type).toBe('session_start');
-    expect(start).not.toHaveProperty('gitHead');
-    expect(start).not.toHaveProperty('gitDirty');
+    expect(start).not.toHaveProperty('gitAtStart');
   });
 
   it('runs git only for session_start', async () => {
@@ -2826,8 +2821,7 @@ describe('dashboard-report records the git state a session started on', () => {
     const events = await readEvents();
     expect(events.map((e) => e.type)).toEqual(['tool_use', 'stop']);
     for (const e of events) {
-      expect(e).not.toHaveProperty('gitHead');
-      expect(e).not.toHaveProperty('gitDirty');
+      expect(e).not.toHaveProperty('gitAtStart');
     }
   });
 
@@ -2842,7 +2836,7 @@ describe('dashboard-report records the git state a session started on', () => {
     await runHook({ hook_event_name: 'SessionStart', session_id: 'git-resume', cwd: repo, source: 'resume' });
 
     const events = await readEvents();
-    expect(events.map((e) => [e.gitHead, e.gitDirty])).toEqual([[first, false], [second, true]]);
+    expect(events.map((e) => e.gitAtStart)).toEqual([{ head: first, dirty: false }, { head: second, dirty: true }]);
     expect(collectSession('git-resume', events)?.gitAtStart).toEqual({ head: first, dirty: false });
   });
 });

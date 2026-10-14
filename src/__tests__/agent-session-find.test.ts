@@ -39,10 +39,14 @@ import {
   installFakeOpencode,
   opencodeExportFixture,
   plantOpencodeSession,
+  setFakeOpencodeExportError,
   setFakeOpencodeVersion,
 } from './helpers/fake-opencode.js';
+import { WRITABLE } from './helpers/writable-platforms.js';
 
 const SECRET = 'sk-ABCDEFGH1234567890abcdefghij';
+/** OpenCode keeps its sessions behind its CLI: a stand-in `opencode`, the only command on PATH. */
+const FAKE_OPENCODE_BIN = installFakeOpencode();
 
 function mkSession(cwd: string, text: string, createdAt = '2026-09-24T10:00:00.000Z'): Session {
   return {
@@ -93,6 +97,7 @@ beforeEach(() => {
     ['.codebuddy', 'projects'],
     ['.codex', 'sessions'],
     ['.cursor', 'projects'],
+    ['.local', 'share', 'opencode'],
     ['.workbuddy', 'projects'],
   ]) {
     fs.mkdirSync(path.join(mocks.home, ...dir), { recursive: true });
@@ -102,7 +107,8 @@ beforeEach(() => {
     recursive: true,
   });
   // Keep Codex's indexing step from starting a real CLI.
-  vi.stubEnv('PATH', '');
+  vi.stubEnv('PATH', FAKE_OPENCODE_BIN);
+  vi.stubEnv('XDG_DATA_HOME', path.join(mocks.home, '.local', 'share'));
 });
 
 afterEach(() => {
@@ -152,10 +158,11 @@ describe('AgentSession.find', () => {
     expect(found).toMatchObject({ status: 'failed', failure: { code: 'unreadable' } });
   });
 
-  const WRITABLE = ['claude-code', 'codebuddy', 'codebuddy-ide', 'codex', 'cursor', 'workbuddy'] as const;
   const SHARED_ID = '0190a0b0-c0d0-7e0f-8a0b-0c0d0e0f1a2b';
+  // One OpenCode id names one session in every workspace, so one id never lives in two.
+  const ONE_ID_IN_TWO_WORKSPACES = WRITABLE.filter((platform) => platform !== 'opencode');
 
-  it.each(WRITABLE)('%s: each listed session is read from the file listed, when one id lives in two workspaces', async (platform) => {
+  it.each(ONE_ID_IN_TWO_WORKSPACES)('%s: each listed session is read from the file listed, when one id lives in two workspaces', async (platform) => {
     await plant(platform, workspace('ws-a'), 'in a', SHARED_ID);
     await plant(platform, workspace('ws-b'), 'in b', SHARED_ID, '2026-09-25T10:00:00.000Z');
     const listed = await getAdapter(platform).listConversations();
@@ -196,7 +203,11 @@ describe('AgentSession.find', () => {
     expect(inB.status === 'done' && firstText(inB.session)).toBe('in b');
   });
 
-  it.each(['cursor', 'workbuddy'])('%s: a session outside the workspace given is found by its id', async (platform) => {
+  // These stores keep a session under its id alone, so `readSession` falls back to the id across
+  // the platform. Every other platform reads only the workspace given.
+  const READ_BY_ID_ANYWHERE = new Set(['codebuddy-ide', 'cursor', 'opencode', 'workbuddy']);
+
+  it.each(WRITABLE.filter((platform) => READ_BY_ID_ANYWHERE.has(platform)))('%s: a session outside the workspace given is found by its id', async (platform) => {
     const sessionId = await plant(platform, workspace('ws-a'), 'in a');
 
     const found = await AgentSession.find({ platform, sessionId, cwd: workspace('ws-b') }, { scrub: false });
@@ -204,7 +215,7 @@ describe('AgentSession.find', () => {
     expect(found.status === 'done' && firstText(found.session)).toBe('in a');
   });
 
-  it.each(['claude-code', 'codebuddy', 'codex'])('%s: a session outside the workspace given is not found', async (platform) => {
+  it.each(WRITABLE.filter((platform) => !READ_BY_ID_ANYWHERE.has(platform)))('%s: a session outside the workspace given is not found', async (platform) => {
     const sessionId = await plant(platform, workspace('ws-a'), 'in a');
 
     const found = await AgentSession.find({ platform, sessionId, cwd: workspace('ws-b') });
@@ -220,9 +231,6 @@ describe('AgentSession.find on OpenCode', () => {
 
   beforeEach(() => {
     dataHome = path.join(mocks.home, '.local', 'share');
-    fs.mkdirSync(path.join(dataHome, 'opencode'), { recursive: true });
-    vi.stubEnv('XDG_DATA_HOME', dataHome);
-    vi.stubEnv('PATH', installFakeOpencode());
   });
 
   /** Plant the recorded export as a session with `id` in `cwd`, its first prompt replaced by `text`. */
@@ -363,6 +371,19 @@ describe('AgentSession.find on OpenCode', () => {
     expect(found).toMatchObject({
       status: 'failed',
       failure: { code: 'tool_unavailable', platform: 'opencode', message: expect.stringContaining('opencode CLI was not found') },
+    });
+  });
+
+  // Only "Session not found" says the session is absent; any other failure leaves it unknown.
+  it('fails with tool_unavailable when its CLI cannot tell whether the session exists', async () => {
+    const sessionId = plantOpencode(workspace('ws'));
+    setFakeOpencodeExportError(dataHome, 'Error: database is locked');
+
+    const found = await AgentSession.find({ platform: 'opencode', sessionId });
+
+    expect(found).toMatchObject({
+      status: 'failed',
+      failure: { code: 'tool_unavailable', platform: 'opencode', message: expect.stringContaining('database is locked') },
     });
   });
 

@@ -603,7 +603,7 @@ export class CursorAdapter extends AgentAdapter {
       const tools: CursorComposerTool[] = [];
       for (const block of msg.content) {
         if (block.type === 'text') {
-          // MigrationEngine degrades Cursor-unsupported ThinkingBlocks into `<thinking>...</thinking>`,
+          // AgentSession.copy degrades Cursor-unsupported ThinkingBlocks into `<thinking>...</thinking>`,
           // wrapped text blocks (migrate.ts degradeThinkingBlocks). Left in the body they make Cursor
           // rendered as an HTML block (markdown broken, newlines swallowed) -- strip before the DB bubble; the original stays in the
           // transcript.

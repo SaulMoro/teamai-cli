@@ -24,8 +24,8 @@ import { getAdapter } from '../session-flow/adapters/index.js';
 import { deriveOpencodeMessageIds, deriveTargetSessionId } from '../session-flow/ids.js';
 import type { Session } from '../session-flow/ir.js';
 import { installFakeOpencode } from './helpers/fake-opencode.js';
+import { WRITABLE } from './helpers/writable-platforms.js';
 
-const WRITABLE = ['claude-code', 'codebuddy', 'codebuddy-ide', 'codex', 'cursor', 'opencode', 'workbuddy'] as const;
 /** OpenCode keeps its sessions behind its CLI: a stand-in `opencode`, the only command on PATH. */
 const FAKE_OPENCODE_BIN = installFakeOpencode();
 /** Platforms whose ids already included the workspace before every id was derived. */

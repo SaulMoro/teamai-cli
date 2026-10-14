@@ -33,13 +33,13 @@ vi.mock('../session-flow/ids.js', async (importOriginal) => {
   };
 });
 
-import { AgentSession } from '../session-flow/agent-session.js';
+import { AgentSession, noAdapter } from '../session-flow/agent-session.js';
 import { getAdapter } from '../session-flow/adapters/index.js';
 import type { AgentAdapter } from '../session-flow/adapters/base.js';
 import type { Session } from '../session-flow/ir.js';
-import { installFakeOpencode } from './helpers/fake-opencode.js';
+import { installFakeOpencode, setFakeOpencodeExportError, setFakeOpencodeVersion } from './helpers/fake-opencode.js';
+import { WRITABLE } from './helpers/writable-platforms.js';
 
-const WRITABLE = ['claude-code', 'codebuddy', 'codebuddy-ide', 'codex', 'cursor', 'opencode', 'workbuddy'] as const;
 /** OpenCode keeps its sessions behind its CLI: a stand-in `opencode`, the only command on PATH. */
 const FAKE_OPENCODE_BIN = installFakeOpencode();
 /** A Claude Code variant with its own store: a source on another platform than every target. */
@@ -391,29 +391,56 @@ describe('AgentSession.copy into OpenCode', () => {
     }
     expect(ids[0].filter((id) => ids[1].includes(id))).toEqual([]);
   });
-});
 
-// Cursor and WorkBuddy list a copy only once the sqlite3 CLI registers it, and Windows ships none.
-describe('AgentSession.copy on Windows', () => {
-  const realPlatform = process.platform;
-  afterEach(() => {
-    Object.defineProperty(process, 'platform', { value: realPlatform });
-  });
-
-  it.each(['cursor', 'workbuddy'])('%s: refused as a target with no_adapter, and nothing is written', async (platform) => {
+  // OpenCode 1 creates the same data directory, so the target looks installed until its CLI runs.
+  it.each([
+    ['an OpenCode 1 CLI', 'Upgrade OpenCode to version 2'],
+    ['no opencode CLI on PATH', 'opencode CLI was not found'],
+  ])('fails with tool_unavailable on %s, and nothing is written', async (cli, message) => {
     const sourceId = await writeSource();
     const from = { platform: SOURCE_PLATFORM, sessionId: sourceId, cwd: workspace('source') };
-    const to = { platform, cwd: workspace('target') };
+    const to = { platform: 'opencode', cwd: workspace('target') };
+    if (cli === 'no opencode CLI on PATH') vi.stubEnv('PATH', '');
+    else setFakeOpencodeVersion(path.join(mocks.home, '.local', 'share'), '1.18.23');
     const before = snapshot();
-    Object.defineProperty(process, 'platform', { value: 'win32' });
 
     const result = await AgentSession.copy({ from, to });
 
     expect(result).toMatchObject({
       status: 'failed',
-      failure: { code: 'no_adapter', platform, reason: 'unsupported on win32' },
+      failure: { code: 'tool_unavailable', platform: 'opencode', message: expect.stringContaining(message) },
     });
-    expect(result.status === 'failed' && result.failure.message).toContain('Windows');
     expect(snapshot()).toEqual(before);
+  });
+
+  // Only "Session not found" says the copy is absent; any other failure leaves it unknown.
+  it('fails with tool_unavailable when its CLI cannot tell whether the copy exists, and nothing is written', async () => {
+    const sourceId = await writeSource();
+    const from = { platform: SOURCE_PLATFORM, sessionId: sourceId, cwd: workspace('source') };
+    const to = { platform: 'opencode', cwd: workspace('target') };
+    setFakeOpencodeExportError(path.join(mocks.home, '.local', 'share'), 'Error: database is locked');
+    const before = snapshot();
+
+    const result = await AgentSession.copy({ from, to });
+
+    expect(result).toMatchObject({
+      status: 'failed',
+      failure: { code: 'tool_unavailable', platform: 'opencode', message: expect.stringContaining('database is locked') },
+    });
+    expect(snapshot()).toEqual(before);
+  });
+});
+
+// Cursor and WorkBuddy list a copy only once the sqlite3 CLI registers it, and Windows ships none.
+// `copy` asks `noAdapter` about its target with 'write'.
+describe('a copy target on Windows', () => {
+  it.each(['cursor', 'workbuddy'])('%s: refused as a target with no_adapter, and still read', (platform) => {
+    expect(noAdapter(platform, 'write', 'win32')).toMatchObject({
+      code: 'no_adapter',
+      platform,
+      reason: 'unsupported on win32',
+      message: expect.stringContaining('Windows'),
+    });
+    expect(noAdapter(platform, 'read', 'win32')).toBeUndefined();
   });
 });

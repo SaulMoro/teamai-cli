@@ -91,17 +91,8 @@ export type AgentSessionTranscriptEntry = {
 };
 
 /** A session a tool lists. Passed to `find` unchanged, it reads exactly this session. */
-export type AgentSessionListed = AgentSessionRef & {
-  /** The workspace the session belongs to. */
-  cwd: string;
-  title: string;
-  createdAt: string;
-  updatedAt: string;
-  /** Absent when the tool's listing does not count them: OpenCode would have to export every session. */
-  messageCount?: number;
-  /** Absent when the tool's listing does not measure it (OpenCode). */
-  sizeBytes?: number;
-};
+export type AgentSessionListed = AgentSessionRef &
+  Pick<SessionMeta, 'cwd' | 'title' | 'createdAt' | 'updatedAt' | 'messageCount' | 'sizeBytes'>;
 
 export type AgentSessionListQuery = {
   /** The tools to list; every installed tool when omitted. */
@@ -138,6 +129,7 @@ const LISTED_THROUGH_SQLITE3 = new Set(['cursor', 'workbuddy']);
 export function noAdapter(
   platform: string,
   use: 'read' | 'write',
+  os: NodeJS.Platform = process.platform,
 ): Extract<AgentSessionFailure, { code: 'no_adapter' }> | undefined {
   const known = listAvailablePlatforms();
   if (!known.includes(platform)) {
@@ -148,7 +140,7 @@ export function noAdapter(
       message: `Unknown platform "${platform}". Known platforms: ${known.join(', ')}.`,
     };
   }
-  if (use === 'write' && process.platform === 'win32' && LISTED_THROUGH_SQLITE3.has(platform)) {
+  if (use === 'write' && os === 'win32' && LISTED_THROUGH_SQLITE3.has(platform)) {
     return {
       code: 'no_adapter',
       platform,
@@ -199,9 +191,14 @@ async function readSource(source: AgentAdapter, ref: AgentSessionRef): Promise<S
   } catch (e) {
     if (e instanceof ToolUnavailableError) return { code: 'tool_unavailable', platform: ref.platform, message: e.message };
     const where = ref.filePath ? ` at ${ref.filePath}` : ref.cwd ? ` in ${ref.cwd}` : '';
-    const exists = ref.filePath
-      ? fs.existsSync(ref.filePath)
-      : Boolean(await source.existingSessionId(ref.sessionId, ref.cwd));
+    let exists: boolean;
+    try {
+      exists = ref.filePath ? fs.existsSync(ref.filePath) : Boolean(await source.existingSessionId(ref.sessionId, ref.cwd));
+    } catch (probe) {
+      // The tool could not tell whether the session exists.
+      if (probe instanceof ToolUnavailableError) return { code: 'tool_unavailable', platform: ref.platform, message: probe.message };
+      throw probe;
+    }
     if (!exists) {
       return { code: 'not_found', ref, message: `No ${ref.platform} session ${ref.sessionId}${where}.` };
     }
@@ -218,10 +215,8 @@ async function readSource(source: AgentAdapter, ref: AgentSessionRef): Promise<S
  * `targetId` is the id `deriveTargetSessionId` gives the copy; it names the workspace, so it is
  * looked up anywhere on the platform. Ids an older TeamAI used did not name the workspace, so
  * they count only in `cwd`: a copy under one elsewhere is another workspace's.
- *
- * Every path that writes a session into a tool checks this first and writes nothing on a hit.
  */
-export async function existingCopyId(
+async function existingCopyId(
   target: AgentAdapter,
   copy: { targetId: string; cwd: string; sourcePlatform: string; targetPlatform: string; sourceSessionId: string },
 ): Promise<string | undefined> {
@@ -232,6 +227,64 @@ export async function existingCopyId(
     if (found) return found;
   }
   return undefined;
+}
+
+export type CopyWrite =
+  | {
+      status: 'done';
+      /** The target's id: the one just written, or the copy that already existed. */
+      sessionId: string;
+      /** True when the target already existed and nothing was written. */
+      reused: boolean;
+    }
+  | { status: 'failed'; failure: Extract<AgentSessionFailure, { code: 'invalid_workspace' | 'tool_unavailable' | 'write_failed' }> };
+
+/**
+ * Write `session`, read from `sourcePlatform`, into `target` in the workspace `cwd`, once. The
+ * target id is derived; when a copy already exists, nothing is written and the result is
+ * `reused`. A write that throws is rolled back: only the derived id, only in `cwd`, since the
+ * target did not exist a moment ago. Every path that writes a session into a tool goes through here.
+ */
+export async function writeCopyOnce(
+  target: AgentAdapter,
+  { session, sourcePlatform, cwd }: { session: Session; sourcePlatform: string; cwd: string },
+): Promise<CopyWrite> {
+  const targetPlatform = target.platform;
+  let targetId: string;
+  try {
+    targetId = deriveTargetSessionId({
+      targetPlatform,
+      targetCwd: cwd,
+      sourceSessionId: session.sessionId,
+      sourceCreatedAt: session.createdAt,
+    });
+  } catch (e) {
+    return { status: 'failed', failure: { code: 'invalid_workspace', cwd, message: messageOf(e) } };
+  }
+
+  let existing: string | undefined;
+  try {
+    existing = await existingCopyId(target, { targetId, cwd, sourcePlatform, targetPlatform, sourceSessionId: session.sessionId });
+  } catch (e) {
+    // The target tool could not tell whether the copy exists, so writing could overwrite it.
+    if (e instanceof ToolUnavailableError) {
+      return { status: 'failed', failure: { code: 'tool_unavailable', platform: targetPlatform, message: e.message } };
+    }
+    throw e;
+  }
+  if (existing) return { status: 'done', sessionId: existing, reused: true };
+
+  try {
+    return { status: 'done', sessionId: await target.writeSession(session, cwd), reused: false };
+  } catch (e) {
+    let message = `Writing the ${targetPlatform} copy failed: ${messageOf(e)}`;
+    try {
+      await target.deleteSession(targetId, cwd);
+    } catch (cleanup) {
+      message += `. Removing the partial copy ${targetId} also failed: ${messageOf(cleanup)}`;
+    }
+    return { status: 'failed', failure: { code: 'write_failed', platform: targetPlatform, message } };
+  }
 }
 
 /** Best-effort: the file the target tool lists for the copy. */
@@ -325,18 +378,6 @@ async function copy({ from, to, scrub = false, toolRootsFor = recordedToolRoots 
   const session = await readSource(source, from);
   if ('code' in session) return failed(session);
 
-  let targetId: string;
-  try {
-    targetId = deriveTargetSessionId({
-      targetPlatform: to.platform,
-      targetCwd: to.cwd,
-      sourceSessionId: session.sessionId,
-      sourceCreatedAt: session.createdAt,
-    });
-  } catch (e) {
-    return failed({ code: 'invalid_workspace', cwd: to.cwd, message: messageOf(e) });
-  }
-
   // Scrub before measuring, measure before degrading: the report counts exactly what is lost or
   // degraded on the way into the target, the same numbers the --dry-run preview shows.
   // A local copy keeps image file paths, so the target can still open the file.
@@ -345,34 +386,18 @@ async function copy({ from, to, scrub = false, toolRootsFor = recordedToolRoots 
   const fidelity = fidelityFromSession(base, to.platform);
   const redacted = scrubbed ? { redactedCount: scrubbed.redactedCount } : {};
 
-  const existing = await existingCopyId(target, {
-    targetId,
+  const write = await writeCopyOnce(target, {
+    session: degradeThinkingBlocks(base, to.platform),
     sourcePlatform: from.platform,
-    targetPlatform: to.platform,
-    sourceSessionId: session.sessionId,
     cwd: to.cwd,
   });
-  if (existing) return { status: 'done', sessionId: existing, cwd: to.cwd, reused: true, fidelity, ...redacted };
-
-  let written: string;
-  try {
-    written = await target.writeSession(degradeThinkingBlocks(base, to.platform), to.cwd);
-  } catch (e) {
-    // The target did not exist a moment ago, so whatever the write left there is this call's.
-    // Scoped to the target workspace, so a copy anywhere else is never touched.
-    let message = `Writing the ${to.platform} copy failed: ${messageOf(e)}`;
-    try {
-      await target.deleteSession(targetId, to.cwd);
-    } catch (cleanup) {
-      message += `. Removing the partial copy ${targetId} also failed: ${messageOf(cleanup)}`;
-    }
-    return failed({ code: 'write_failed', platform: to.platform, message });
-  }
+  if (write.status === 'failed') return failed(write.failure);
+  if (write.reused) return { status: 'done', sessionId: write.sessionId, cwd: to.cwd, reused: true, fidelity, ...redacted };
   const notice = target.consumeWriteNotice();
-  const filePath = await listedFilePath(target, written, to.cwd);
+  const filePath = await listedFilePath(target, write.sessionId, to.cwd);
   return {
     status: 'done',
-    sessionId: written,
+    sessionId: write.sessionId,
     cwd: to.cwd,
     reused: false,
     fidelity,

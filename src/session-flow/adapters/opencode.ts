@@ -94,6 +94,9 @@ const ToolPart = z.object({
   }),
 });
 
+/** A failed tool's `state.error` with its `message`; an error of any other shape is kept as JSON. */
+const ToolError = z.object({ message: z.string() });
+
 const TextPart = z.object({ text: z.string() });
 
 const iso = (epochMs: number): string => new Date(epochMs).toISOString();
@@ -113,8 +116,8 @@ function userContent(message: z.infer<typeof UserMessage>): ContentBlock[] {
 function toolResultText(state: z.infer<typeof ToolPart>['state']): string {
   const text = state.content.map((c) => c.text ?? '').join('');
   if (text || state.error === undefined) return text;
-  const error = state.error as { message?: unknown };
-  return typeof error?.message === 'string' ? error.message : JSON.stringify(state.error);
+  const error = ToolError.safeParse(state.error);
+  return error.success ? error.data.message : JSON.stringify(state.error);
 }
 
 /**
@@ -323,8 +326,10 @@ export class OpencodeAdapter extends AgentAdapter {
   }
 
   /**
-   * The sessions of the project `projectPath` is in, newest first. The CLI lists one project at
-   * a time, so without `projectPath` this throws rather than return one project as if it were all.
+   * The sessions of the workspace `projectPath`, newest first. The CLI lists one project at a
+   * time, so without `projectPath` this throws rather than return one project as if it were all.
+   * Inside a git repo that project is the whole repo, so sessions of its other directories are
+   * left out.
    */
   async listConversations(projectPath?: string): Promise<SessionMeta[]> {
     if (projectPath === undefined) {
@@ -333,7 +338,11 @@ export class OpencodeAdapter extends AgentAdapter {
     if (!fs.existsSync(projectPath)) return [];
     const result = await this.session(['list', '--format', 'json', '--max-count', String(LIST_MAX)], projectPath);
     if (result.code !== 0) throw new Error(`opencode session list failed: ${result.stderr.trim() || `exit ${result.code}`}`);
-    return ListedSessions.parse(JSON.parse(result.stdout)).map((listed) => ({
+    const workspace = resolveRealCwd(projectPath);
+    const inWorkspace = ListedSessions.parse(JSON.parse(result.stdout)).filter(
+      (listed) => resolveRealCwd(listed.directory) === workspace,
+    );
+    return inWorkspace.map((listed) => ({
       sessionId: listed.id,
       title: listed.title,
       cwd: listed.directory,
@@ -355,8 +364,14 @@ export class OpencodeAdapter extends AgentAdapter {
   async existingSessionId(sessionId: string, projectPath?: string): Promise<string | undefined> {
     if (!sessionId.startsWith('ses_')) return undefined;
     const result = await this.session(['export', sessionId]);
-    // Any other failure leaves the session's existence unknown, so it counts as existing.
-    if (result.code !== 0) return NOT_FOUND.test(result.stderr) ? undefined : sessionId;
+    if (result.code !== 0) {
+      if (NOT_FOUND.test(result.stderr)) return undefined;
+      // Neither absent nor present: the caller must not write, and must not report a copy either.
+      throw new ToolUnavailableError(
+        `opencode session export ${sessionId} failed, so whether that session exists is unknown: ` +
+          `${result.stderr.trim() || `exit ${result.code}`}`,
+      );
+    }
     if (!projectPath) return sessionId;
     let directory: string;
     try {

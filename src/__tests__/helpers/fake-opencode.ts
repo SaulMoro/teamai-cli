@@ -9,12 +9,14 @@ import { fileURLToPath } from 'node:url';
  * `session import <file> --directory <dir>`, which answers the way OpenCode 2.0.29 does.
  * Sessions are export files (`{ info, messages }`, the shape `session export`
  * prints) under `$XDG_DATA_HOME/fake-opencode/sessions/<id>.json`, so a test
- * plants one by writing its export. `list` shows the sessions whose
- * `info.location.directory` is the directory it runs in, newest first.
+ * plants one by writing its export. `list` shows the sessions of the project it
+ * runs in, newest first: inside a git repo (a `.git` entry above it) every
+ * directory of that repo, otherwise that directory alone.
  *
  * Like the real CLI under an isolated data home, any session command without
  * `--standalone` fails: it would try to start the managed background service.
- * `$XDG_DATA_HOME/fake-opencode/version` overrides the version it prints.
+ * `$XDG_DATA_HOME/fake-opencode/version` overrides the version it prints, and
+ * `$XDG_DATA_HOME/fake-opencode/export-error` makes `session export` fail with that message.
  */
 const CLI = String.raw`
 const fs = require('node:fs');
@@ -24,6 +26,7 @@ const dir = path.join(root, 'sessions');
 const args = process.argv.slice(2);
 const fail = (message) => { process.stderr.write(message + '\n'); process.exit(1); };
 const real = (p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
+const repoOf = (d) => fs.existsSync(path.join(d, '.git')) ? d : path.dirname(d) === d ? undefined : repoOf(path.dirname(d));
 if (args[0] === '--version') {
   let version = 'opencode v2.0.29';
   try { version = fs.readFileSync(path.join(root, 'version'), 'utf8').trim(); } catch {}
@@ -38,16 +41,20 @@ const option = (name) => { const i = args.indexOf(name); return i === -1 ? undef
 const file = (sid) => path.join(dir, sid + '.json');
 if (sub === 'list') {
   const cwd = real(process.cwd());
+  const repo = repoOf(cwd);
+  const inProject = (d) => (repo ? d === repo || d.startsWith(repo + path.sep) : d === cwd);
   const rows = [];
   for (const name of fs.existsSync(dir) ? fs.readdirSync(dir) : []) {
     let info;
     try { info = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8')).info; } catch { continue; }
-    if (real(info.location.directory) !== cwd) continue;
+    if (!inProject(real(info.location.directory))) continue;
     rows.push({ id: info.id, title: info.title, updated: info.time.updated, created: info.time.created, projectId: info.projectID, directory: info.location.directory });
   }
   rows.sort((a, b) => b.updated - a.updated);
   process.stdout.write(JSON.stringify(rows, null, 2) + '\n');
 } else if (sub === 'export') {
+  const exportError = path.join(root, 'export-error');
+  if (fs.existsSync(exportError)) fail(fs.readFileSync(exportError, 'utf8').trim());
   if (!id.startsWith('ses')) fail('Expected a string starting with "ses"');
   if (!fs.existsSync(file(id))) fail('Session not found: ' + id);
   process.stdout.write(fs.readFileSync(file(id), 'utf8'));
@@ -112,6 +119,12 @@ export function plantOpencodeSession(dataHome: string, session: OpencodeExport, 
   const dir = path.join(dataHome, 'fake-opencode', 'sessions');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, `${session.info.id}.json`), raw ?? JSON.stringify(session, null, 2));
+}
+
+/** Make the fake's `opencode session export` fail with `message`, as for a store it cannot open. */
+export function setFakeOpencodeExportError(dataHome: string, message: string): void {
+  fs.mkdirSync(path.join(dataHome, 'fake-opencode'), { recursive: true });
+  fs.writeFileSync(path.join(dataHome, 'fake-opencode', 'export-error'), message);
 }
 
 /** Make the fake print `version` for `opencode --version`. */

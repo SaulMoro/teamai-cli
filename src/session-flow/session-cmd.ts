@@ -25,16 +25,16 @@ import { getAdapter, listAvailablePlatforms, listInstalledPlatforms } from './ad
 import { MigrationEngine, resolveTargetCwd } from './migrate.js';
 import {
   AgentSession,
-  existingCopyId,
   noAdapter,
   recordedToolRoots,
   toolRootsLookup,
+  writeCopyOnce,
   type AgentSessionCopy,
   type AgentSessionListed,
 } from './agent-session.js';
 import { SyncManager, getRepoIdentity, getGitAuthor, defaultSyncMeta, withSessionIndexLock } from './sync.js';
 import { SessionSearchEngine, type LoadedSession } from './search.js';
-import { deriveTargetSessionId, isSafeSessionFileId } from './ids.js';
+import { isSafeSessionFileId } from './ids.js';
 import { isInteractive } from '../utils/prompt.js';
 import { setStderrOnly } from '../utils/logger.js';
 import type { WorkflowEnvelope } from '../workflow/types.js';
@@ -1198,34 +1198,20 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       }
 
       // Never overwrite: a member may have kept talking in an earlier restore of this session.
-      let targetId: string;
-      try {
-        targetId = deriveTargetSessionId({
-          targetPlatform: opts.platform,
-          targetCwd: resumeCwd,
-          sourceSessionId: session.sessionId,
-          sourceCreatedAt: session.createdAt,
-        });
-      } catch (e) {
-        console.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      const write = await writeCopyOnce(resumeAdapter, { session, sourcePlatform: session.platform, cwd: resumeCwd });
+      if (write.status === 'failed') {
+        console.error(`Error: ${write.failure.message}`);
         process.exitCode = 1;
         return;
       }
-      const restoredId = await existingCopyId(resumeAdapter, {
-        targetId,
-        cwd: resumeCwd,
-        sourcePlatform: session.platform,
-        targetPlatform: opts.platform,
-        sourceSessionId: session.sessionId,
-      });
-      if (restoredId) {
-        console.log(`\n  ✓ Session already restored as ${restoredId}, nothing written.`);
+      if (write.reused) {
+        console.log(`\n  ✓ Session already restored as ${write.sessionId}, nothing written.`);
         console.log(`  CWD: ${resumeCwd}`);
-        console.log(`\n  To continue: ${opts.platform} --resume ${restoredId}\n`);
+        console.log(`\n  To continue: ${opts.platform} --resume ${write.sessionId}\n`);
         return;
       }
 
-      const newSessionId = await resumeAdapter.writeSession(session, resumeCwd);
+      const newSessionId = write.sessionId;
       const registrationNotice = resumeAdapter.consumeWriteNotice?.();
 
       console.log(`\n  ✓ Session restored to ${opts.platform}`);

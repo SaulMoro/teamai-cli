@@ -2437,7 +2437,7 @@ const GIT_STATE_TIMEOUT_MS = 2_000;
  * whether tracked files had changes, so the session can be replayed on the
  * code it ran against. Every start records its own (resume and compaction fire
  * SessionStart too). Other events, and events with no cwd (Copilot), are left
- * as they are, so no other hook runs git. A failure leaves both fields absent
+ * as they are, so no other hook runs git. A failure leaves the field absent
  * and the event is still written. Both event writers go through here.
  */
 export async function addGitStateAtStart(event: DashboardEvent): Promise<void> {
@@ -2449,8 +2449,7 @@ export async function addGitStateAtStart(event: DashboardEvent): Promise<void> {
       log.debug(`dashboard: ${event.cwd} has no commit yet, so session_start records no git state`);
       return;
     }
-    event.gitHead = state.head;
-    event.gitDirty = state.dirty;
+    event.gitAtStart = state;
   } catch (e) {
     log.debug(`dashboard: could not read the git state of ${event.cwd} at session_start: ${e instanceof Error ? e.message : String(e)}`);
   }

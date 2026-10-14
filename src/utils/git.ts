@@ -1227,6 +1227,9 @@ export async function getHeadCommit(localPath: string, rev = 'HEAD'): Promise<st
   }
 }
 
+/** The full sha of the commit checked out, and whether tracked files differ from it. */
+export type HeadState = { head: string; dirty: boolean };
+
 /**
  * The commit checked out at `cwd` and whether tracked files differ from it
  * (modified or staged), from one `git status`. Untracked files are not listed,
@@ -1235,7 +1238,7 @@ export async function getHeadCommit(localPath: string, rev = 'HEAD'): Promise<st
  * `--no-optional-locks` keeps it from taking the index lock the user's own git
  * commands may need.
  */
-export async function getHeadState(cwd: string, abort?: AbortSignal): Promise<{ head: string; dirty: boolean } | null> {
+export async function getHeadState(cwd: string, abort?: AbortSignal): Promise<HeadState | null> {
   const out = await createGit(cwd, abort).raw([
     '--no-optional-locks', 'status', '--porcelain=v2', '--branch', '--untracked-files=no',
   ]);
