@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { acquireLock, releaseLock } from '../update.js';
 import type { LocalConfig } from '../types.js';
 import { loadCachedWorkflow } from './cache.js';
+import { evaluateExpression, expressionPaths, isTruthy, parseExpression, type Expression, type ExpressionStep } from './expression.js';
 import { outputMismatch } from './output.js';
 import { noteRunRecord, pendingRecords } from './records.js';
 import { generateRunId, isRunId, readRun, runLockPath, writeRun } from './store.js';
@@ -124,28 +125,69 @@ function stopped(step: StepState): boolean {
   return step.status === 'failed';
 }
 
+function settled(step: StepState | undefined): boolean {
+  return step?.status === 'succeeded' || step?.status === 'failed' || step?.status === 'skipped';
+}
+
+/** The step ids an `if` reads. */
+function stepsRead(condition: Expression | undefined): Set<string> {
+  return new Set((condition ? expressionPaths(condition) : []).flatMap((path) => (path.root === 'steps' ? [path.step] : [])));
+}
+
+/** Parses every `if` in the run. A run file whose `if` does not parse cannot settle; the message names the step. */
+function parseConditions(run: RunState): Map<string, Expression> | string {
+  const conditions = new Map<string, Expression>();
+  for (const step of run.definition.steps) {
+    if (step.if === undefined) continue;
+    const parsed = parseExpression(step.if);
+    if (!parsed.ok) return `Run ${run.id} step "${step.id}" has an if that does not parse: ${parsed.message}`;
+    conditions.set(step.id, parsed.expression);
+  }
+  return conditions;
+}
+
+const VISIBLE_OUTCOMES: Partial<Record<StepState['status'], string>> = { succeeded: 'success', failed: 'failed', skipped: 'skipped' };
+
+function expressionSteps(run: RunState): Record<string, ExpressionStep> {
+  return Object.fromEntries(run.steps.map((step) => [step.id, {
+    ...(VISIBLE_OUTCOMES[step.status] ? { outcome: VISIBLE_OUTCOMES[step.status] } : {}),
+    ...(step.outputs !== undefined ? { outputs: step.outputs } : {}),
+  }]));
+}
+
 /**
- * Marks every pending step that can no longer run as `skipped`, until nothing changes.
- * Returns the lookup from a step to the states of the steps it needs.
+ * Marks every pending step that can no longer run as `skipped`, until nothing changes:
+ * the skip rule in `mustSkip`, and a ready step whose `if` is false.
+ * Returns whether a step is ready: everything it needs and everything its `if` reads has settled.
  */
-function skipUnreachable(run: RunState): (step: StepState) => Array<StepState | undefined> {
+function skipUnreachable(run: RunState, conditions: Map<string, Expression>): (step: StepState) => boolean {
   const states = new Map(run.steps.map((step) => [step.id, step]));
   const declared = new Map(run.definition.steps.map((step) => [step.id, step.needs ?? []]));
   const needs = (step: StepState): Array<StepState | undefined> => (declared.get(step.id) ?? []).map((id) => states.get(id));
+  const ready = (step: StepState): boolean => needs(step).every(settled)
+    && [...stepsRead(conditions.get(step.id))].every((id) => settled(states.get(id)));
   for (let changed = true; changed;) {
     changed = false;
     for (const step of run.steps) {
-      if (step.status !== 'pending' || !mustSkip(needs(step))) continue;
+      if (step.status !== 'pending') continue;
+      const condition = conditions.get(step.id);
+      const conditionFalse = (): boolean => !!condition && ready(step)
+        && !isTruthy(evaluateExpression(condition, { steps: expressionSteps(run) }));
+      if (!mustSkip(needs(step), condition) && !conditionFalse()) continue;
       step.status = 'skipped';
       changed = true;
     }
   }
-  return needs;
+  return ready;
 }
 
-/** A step is skipped when a step it needs stopped, or when every step it needs was skipped. */
-function mustSkip(needs: Array<StepState | undefined>): boolean {
-  if (needs.some((need) => need && stopped(need))) return true;
+/**
+ * A step is skipped when a step it needs stopped and its `if` does not read that step,
+ * or when every step it needs was skipped. An `if` that reads every stopped dependency is a recovery step.
+ */
+function mustSkip(needs: Array<StepState | undefined>, condition: Expression | undefined): boolean {
+  const read = stepsRead(condition);
+  if (needs.some((need) => need && stopped(need) && !read.has(need.id))) return true;
   return needs.length > 0 && needs.every((need) => need?.status === 'skipped');
 }
 
@@ -199,10 +241,11 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       }
       return { save: false, envelope: ok({ wait: { reason: `${leased.id} is leased` } }) };
     }
+    const conditions = parseConditions(run);
+    if (typeof conditions === 'string') return { save: false, envelope: error('run_unreadable', conditions) };
     // Settle the graph here, while no lease is open, so a later report still matches its lease revision.
-    const needs = skipUnreachable(run);
-    const ready = (item: StepState): boolean => item.status === 'pending'
-      && needs(item).every((need) => need?.status === 'succeeded' || need?.status === 'skipped');
+    const canRun = skipUnreachable(run, conditions);
+    const ready = (item: StepState): boolean => item.status === 'pending' && canRun(item);
     const defined = new Map(run.definition.steps.map((item) => [item.id, item]));
     const ending = run.steps.find((item) => ready(item) && endsOnly(defined.get(item.id)));
     if (ending) ending.status = 'succeeded';

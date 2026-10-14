@@ -51,6 +51,21 @@ steps:
     command: echo docs
 `;
 
+const RECOVERY = `schemaVersion: v1alpha1
+name: build
+description: A recovery step runs after the check it reads fails.
+steps:
+  - id: check
+    command: echo check
+  - id: label
+    needs: [check]
+    if: steps.check.outcome == 'failed'
+    command: echo label
+  - id: ship
+    needs: [check]
+    command: echo ship
+`;
+
 export const workflowConformanceScenarios: ConformanceScenario[] = [
   {
     name: 'two-step command success',
@@ -111,6 +126,18 @@ export const workflowConformanceScenarios: ConformanceScenario[] = [
       { kind: 'report', lease: 'build', body: { outcome: 'failed' }, expect: { data: { step: { status: 'failed' } } } },
       { kind: 'next', saveAs: 'docs', expect: { data: { lease: { step: 'docs' } } } },
       { kind: 'report', lease: 'docs', body: { outcome: 'success' }, expect: { data: { step: { status: 'succeeded' } } } },
+      { kind: 'next', saveAs: 'done', expect: { data: { done: { outcome: 'failed' } } } },
+    ],
+  },
+  {
+    name: 'recovery runs after a failure',
+    workflowName: 'build',
+    yaml: RECOVERY,
+    operations: [
+      { kind: 'next', saveAs: 'check', expect: { data: { lease: { step: 'check' } } } },
+      { kind: 'report', lease: 'check', body: { outcome: 'failed' }, expect: { data: { step: { status: 'failed' } } } },
+      { kind: 'next', saveAs: 'label', expect: { data: { lease: { step: 'label' } } } },
+      { kind: 'report', lease: 'label', body: { outcome: 'success' }, expect: { data: { step: { status: 'succeeded' } } } },
       { kind: 'next', saveAs: 'done', expect: { data: { done: { outcome: 'failed' } } } },
     ],
   },

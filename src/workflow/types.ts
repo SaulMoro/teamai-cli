@@ -18,6 +18,8 @@ export interface WorkflowStep {
   id: string;
   /** Step ids this step waits for. Absent only on the first step, which is a root. */
   needs?: string[];
+  /** Expression source; a false value skips the step. */
+  if?: string;
   command?: string;
   /** Resolved, revision-bound prompt text. */
   prompt?: string;
@@ -47,11 +49,12 @@ export interface WorkflowDiagnostic {
   field: string;
   message: string;
   /**
-   * The cache must not keep an older runnable copy of a file with either code.
+   * The cache must not keep an older runnable copy of a file with any code.
    * `unknown_key`: a key this version does not know.
    * `missing_needs`: a step after the first has no `needs`; a copy cached under the old linear rules must not run as a graph.
+   * `false_if`: an `if` is always false; an older copy would still run the step the author turned off.
    */
-  code?: 'unknown_key' | 'missing_needs';
+  code?: 'unknown_key' | 'missing_needs' | 'false_if';
 }
 
 export type StepStatus = 'pending' | 'leased' | 'succeeded' | 'failed' | 'skipped';

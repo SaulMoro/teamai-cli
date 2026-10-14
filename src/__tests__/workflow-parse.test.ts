@@ -137,15 +137,15 @@ description: Build it.
 steps:
   - id: one
     command: npm test
-    if: success
+    for_each: items
 `);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'unknown_key',
-        field: 'steps[0].if',
-        message: 'workflows/build.yaml uses `if`, which this teamai does not know. Update teamai.',
+        field: 'steps[0].for_each',
+        message: 'workflows/build.yaml uses `for_each`, which this teamai does not know. Update teamai.',
       }),
     ]));
   });
