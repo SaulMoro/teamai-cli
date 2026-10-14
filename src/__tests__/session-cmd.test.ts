@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   /** 非空时 git commit / git push 抛错，用于验证失败路径 */
   commitError: '',
   pushError: '',
+  pullError: '',
   gitCalls: [] as Array<{ args: string[]; cwd?: string }>,
   adaptersByPlatform: {} as Record<string, unknown>,
   /** migrate.js mock 的 preview 返回值（Error 时抛出）；agent-session.js mock 的 copy 返回值 */
@@ -69,6 +70,7 @@ vi.mock('node:child_process', async (importOriginal) => {
       if (args[0] === 'rev-parse') return 'abc123def456\n';
       if (args[0] === 'commit' && mocks.commitError) throw new Error(mocks.commitError);
       if (args[0] === 'push' && mocks.pushError) throw new Error(mocks.pushError);
+      if (args.includes('pull') && mocks.pullError) throw new Error(mocks.pullError);
       return ''; // add / commit / push / pull
     },
   };
@@ -178,6 +180,7 @@ beforeEach(() => {
   mocks.porcelain = 'M  sessions/changed\n';
   mocks.commitError = '';
   mocks.pushError = '';
+  mocks.pullError = '';
   process.exitCode = 0;
   mocks.gitCalls.length = 0;
   mocks.adaptersByPlatform = {};
@@ -331,7 +334,7 @@ describe('session pull --all', () => {
 
     const text = out.join('\n');
     expect(text).toContain('Pulled and indexed 2 session(s) across 2 repo(s)');
-    expect(mocks.gitCalls.some((c) => c.args[0] === 'pull')).toBe(true);
+    expect(mocks.gitCalls.some((c) => c.args.includes('pull'))).toBe(true);
 
     const restored = JSON.parse(fs.readFileSync(idxPath, 'utf-8'));
     expect(restored.sessions).toHaveLength(1);
@@ -356,6 +359,22 @@ describe('session pull', () => {
 
     expect(errored).toEqual([]);
     expect(fs.readFileSync(idxPath, 'utf-8')).toBe(first);
+  });
+});
+
+describe('session pull failure', () => {
+  it("prints git's own reason instead of the command line", async () => {
+    mocks.pullError = 'Command failed: git pull --no-rebase --ff --no-edit origin main\n'
+      + 'hint: You have divergent branches.\nfatal: unable to access the remote: Could not resolve host';
+    vi.spyOn(process, 'exit').mockImplementation((code) => {
+      throw new Error(`exit ${code}`);
+    });
+
+    await expect(runSession('pull', '--all', '--repo-root', repoRoot)).rejects.toThrow('exit 1');
+
+    expect(errored.join('\n')).toContain(
+      `Error: git pull failed in ${repoRoot}: fatal: unable to access the remote: Could not resolve host`,
+    );
   });
 });
 

@@ -1,0 +1,324 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { SyncManager, defaultSyncMeta, encodeRepoIdentity } from '../session-flow/sync.js';
+import type { Session } from '../session-flow/ir.js';
+
+const REPO = 'github.com/acme/app';
+const INDEX = `sessions/repos/${encodeRepoIdentity(REPO)}/_index.json`;
+
+let tmp: string;
+const savedEnv = { global: process.env.GIT_CONFIG_GLOBAL, nosystem: process.env.GIT_CONFIG_NOSYSTEM };
+
+function git(cwd: string, ...args: string[]): string {
+  return execFileSync('git', args, { cwd, encoding: 'utf-8', stdio: 'pipe' }).trim();
+}
+
+function useGitConfig(extra = ''): void {
+  const file = path.join(tmp, 'gitconfig');
+  fs.writeFileSync(file, `[user]\n\tname = tester\n\temail = tester@example.com\n${extra}`);
+  process.env.GIT_CONFIG_GLOBAL = file;
+  process.env.GIT_CONFIG_NOSYSTEM = '1';
+}
+
+function archive(clone: string, sessionId: string, author: string): void {
+  const session: Session = {
+    sessionId,
+    title: `session ${sessionId}`,
+    cwd: '/proj/app',
+    platform: 'claude-code',
+    createdAt: '2026-01-02T03:04:05.000Z',
+    updatedAt: '2026-01-02T03:05:05.000Z',
+    messages: [{ role: 'user', content: [{ type: 'text', text: `work on ${sessionId}` }] }],
+    metadata: {},
+  };
+  const meta = defaultSyncMeta(
+    { platform: 'claude-code', author, cwd: '/proj/app', sessionId, repoIdentity: REPO, title: session.title },
+    session.createdAt,
+  );
+  const mgr = new SyncManager(clone);
+  mgr.saveSession(session, meta);
+  mgr.gitCommit(`sync: ${sessionId}`);
+}
+
+function clone(name: string): string {
+  const dir = path.join(tmp, name);
+  git(tmp, 'clone', '-q', path.join(tmp, 'remote.git'), dir);
+  return dir;
+}
+
+function indexedSessionIds(clone: string): string[] {
+  const index = JSON.parse(fs.readFileSync(path.join(clone, INDEX), 'utf-8')) as { sessions: { sessionId: string }[] };
+  return index.sessions.map((s) => s.sessionId).sort();
+}
+
+function conflictOnNotes(a: string, b: string): void {
+  for (const [clone, text] of [[a, 'from a\n'], [b, 'from b\n']]) {
+    fs.writeFileSync(path.join(clone, 'notes.md'), text);
+    git(clone, 'add', 'notes.md');
+    git(clone, 'commit', '-qm', 'notes');
+  }
+  git(a, 'push', '-q', 'origin', 'main');
+}
+
+function seedRemote(): { a: string; b: string } {
+  git(tmp, 'init', '-q', '--bare', '-b', 'main', 'remote.git');
+  const seed = clone('seed');
+  archive(seed, 's0', 'carol');
+  git(seed, 'push', '-q', 'origin', 'main');
+  return { a: clone('a'), b: clone('b') };
+}
+
+function divergeOnIndex(): { a: string; b: string } {
+  const { a, b } = seedRemote();
+  archive(a, 'a1', 'alice');
+  git(a, 'push', '-q', 'origin', 'main');
+  archive(b, 'b1', 'bob');
+  return { a, b };
+}
+
+beforeEach(() => {
+  tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-session-pull-')));
+});
+
+afterEach(() => {
+  process.env.GIT_CONFIG_GLOBAL = savedEnv.global;
+  process.env.GIT_CONFIG_NOSYSTEM = savedEnv.nosystem;
+  if (savedEnv.global === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+  if (savedEnv.nosystem === undefined) delete process.env.GIT_CONFIG_NOSYSTEM;
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+describe('SyncManager.gitPull', () => {
+  it.each([
+    ['no pull config', ''],
+    ['pull.rebase=false', '[pull]\n\trebase = false\n'],
+    ['pull.rebase=true', '[pull]\n\trebase = true\n'],
+    ['pull.ff=only', '[pull]\n\tff = only\n'],
+  ])('merges a diverged session index and rebuilds it (%s)', (_label, pullConfig) => {
+    useGitConfig(pullConfig);
+    const { b } = divergeOnIndex();
+
+    const result = new SyncManager(b).gitPull();
+
+    expect(result).toEqual({ status: 'indexes-rebuilt', indexes: [INDEX] });
+    expect(indexedSessionIds(b)).toEqual(['a1', 'b1', 's0']);
+    expect(git(b, 'status', '--porcelain')).toBe('');
+  });
+
+  it('aborts the merge and names the files when another file conflicts too', () => {
+    useGitConfig();
+    const { a, b } = divergeOnIndex();
+    conflictOnNotes(a, b);
+    const headBefore = git(b, 'rev-parse', 'HEAD');
+
+    const result = new SyncManager(b).gitPull();
+
+    expect(result).toEqual({
+      status: 'stopped',
+      reason: `Pull stopped on conflicts in notes.md and was aborted. Run \`git pull --no-rebase\` in ${b}, resolve and \`git add\` those files, then run \`teamai session pull\` to rebuild the session indexes and finish the merge.`,
+    });
+    expect(git(b, 'rev-parse', 'HEAD')).toBe(headBefore);
+    expect(git(b, 'status', '--porcelain')).toBe('');
+  });
+
+  it('points at git commit when only another file conflicts', () => {
+    useGitConfig();
+    const { a, b } = seedRemote();
+    conflictOnNotes(a, b);
+
+    const result = new SyncManager(b).gitPull();
+
+    expect(result).toEqual({
+      status: 'stopped',
+      reason: `Pull stopped on conflicts in notes.md and was aborted. Run \`git pull --no-rebase\` in ${b}, resolve and \`git add\` those files, run \`git commit\`, then retry.`,
+    });
+    expect(git(b, 'status', '--porcelain')).toBe('');
+  });
+
+  it('finishes a merge an earlier pull left stopped on the index', () => {
+    useGitConfig();
+    const { b } = divergeOnIndex();
+    expect(() => git(b, '-c', 'pull.rebase=false', 'pull', '-q', 'origin', 'main')).toThrow();
+
+    const result = new SyncManager(b).gitPull();
+
+    expect(result).toEqual({ status: 'indexes-rebuilt', indexes: [INDEX] });
+    expect(indexedSessionIds(b)).toEqual(['a1', 'b1', 's0']);
+    expect(git(b, 'status', '--porcelain')).toBe('');
+  });
+
+  it('leaves a merge with other conflicts for the user to finish', () => {
+    useGitConfig();
+    const { a, b } = divergeOnIndex();
+    conflictOnNotes(a, b);
+    expect(() => git(b, '-c', 'pull.rebase=false', 'pull', '-q', 'origin', 'main')).toThrow();
+
+    const result = new SyncManager(b).gitPull();
+
+    expect(result).toEqual({
+      status: 'stopped',
+      reason: `A merge is in progress in ${b} with conflicts in notes.md. Resolve and \`git add\` them, or run \`git merge --abort\`, then run \`teamai session pull\`.`,
+    });
+    expect(git(b, 'status', '--porcelain')).toMatch(/^AA notes\.md$/m);
+  });
+
+  it('leaves a merge with only another file in conflict for the user to commit', () => {
+    useGitConfig();
+    const { a, b } = seedRemote();
+    conflictOnNotes(a, b);
+    expect(() => git(b, '-c', 'pull.rebase=false', 'pull', '-q', 'origin', 'main')).toThrow();
+
+    const result = new SyncManager(b).gitPull();
+
+    expect(result).toEqual({
+      status: 'stopped',
+      reason: `A merge is in progress in ${b} with conflicts in notes.md. Resolve and \`git add\` them and run \`git commit\`, or run \`git merge --abort\`, then retry.`,
+    });
+    expect(git(b, 'status', '--porcelain')).toMatch(/^AA notes\.md$/m);
+  });
+
+  it('leaves a merge with nothing unmerged for the user to commit', () => {
+    useGitConfig();
+    const { b } = divergeOnIndex();
+    git(b, 'checkout', '-qb', 'feature');
+    fs.writeFileSync(path.join(b, 'notes.md'), 'feature\n');
+    git(b, 'add', 'notes.md');
+    git(b, 'commit', '-qm', 'feature');
+    git(b, 'checkout', '-q', 'main');
+    git(b, 'merge', '-q', '--no-commit', '--no-ff', 'feature');
+    const headBefore = git(b, 'rev-parse', 'HEAD');
+
+    const result = new SyncManager(b).gitPull();
+
+    expect(result).toEqual({
+      status: 'stopped',
+      reason: `A merge is in progress in ${b}. Run \`git commit\` or \`git merge --abort\` there, then retry.`,
+    });
+    expect(git(b, 'rev-parse', 'HEAD')).toBe(headBefore);
+    expect(() => git(b, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).not.toThrow();
+  });
+
+  it('leaves unmerged files from another git operation alone', () => {
+    useGitConfig();
+    const { b } = divergeOnIndex();
+    const index = path.join(b, INDEX);
+    const committed = fs.readFileSync(index, 'utf-8');
+    fs.writeFileSync(index, committed.replace('"version": 1', '"version": 2'));
+    git(b, 'stash', '-q');
+    fs.writeFileSync(index, committed.replace('"version": 1', '"version": 3'));
+    git(b, 'commit', '-qam', 'local index edit');
+    expect(() => git(b, 'stash', 'pop', '-q')).toThrow();
+    const headBefore = git(b, 'rev-parse', 'HEAD');
+
+    const result = new SyncManager(b).gitPull();
+
+    expect(result).toEqual({
+      status: 'stopped',
+      reason: `Unmerged files in ${b} block the pull: ${INDEX}. Finish or abort the git operation that left them, then retry.`,
+    });
+    expect(git(b, 'rev-parse', 'HEAD')).toBe(headBefore);
+    expect(git(b, 'status', '--porcelain')).toMatch(/^UU /m);
+  });
+
+  it.each([
+    ['merge.autostash', '[merge]\n\tautostash = true\n'],
+    ['pull.autostash', '[pull]\n\tautostash = true\n'],
+  ])('refuses to merge over local index edits instead of autostashing them (%s)', (_label, autostashConfig) => {
+    useGitConfig(autostashConfig);
+    const { b } = divergeOnIndex();
+    const index = path.join(b, INDEX);
+    fs.writeFileSync(index, fs.readFileSync(index, 'utf-8').replace('"version": 1', '"version": 2'));
+
+    expect(() => new SyncManager(b).gitPull()).toThrow(/would be overwritten by merge/);
+    expect(git(b, 'stash', 'list')).toBe('');
+    expect(git(b, 'diff', '--name-only')).toBe(INDEX);
+  });
+
+  it('keeps the identity a legacy directory name cannot encode', () => {
+    useGitConfig();
+    const identity = 'github.com/acme/my_app';
+    const dir = 'sessions/repos/github.com_acme_my_app';
+    const writeLegacy = (clone: string, ids: string[]): void => {
+      for (const id of ids) {
+        const meta = defaultSyncMeta(
+          { platform: 'claude-code', author: 'dana', cwd: '/proj/app', sessionId: id, repoIdentity: identity, title: id },
+          '2026-01-02T03:04:05.000Z',
+        );
+        fs.mkdirSync(path.join(clone, dir, 'dana'), { recursive: true });
+        fs.writeFileSync(path.join(clone, dir, 'dana', `${id}.meta.json`), JSON.stringify(meta));
+        fs.writeFileSync(path.join(clone, dir, 'dana', `${id}.jsonl`), '{}\n');
+      }
+      const sessions = ids.map((sessionId) => ({ sessionId }));
+      fs.writeFileSync(path.join(clone, dir, '_index.json'), JSON.stringify({ version: 1, repoIdentity: identity, sessions }, null, 2));
+      git(clone, 'add', '.');
+      git(clone, 'commit', '-qm', ids.join(' '));
+    };
+    git(tmp, 'init', '-q', '--bare', '-b', 'main', 'remote.git');
+    const seed = clone('seed');
+    writeLegacy(seed, ['s0']);
+    git(seed, 'push', '-q', 'origin', 'main');
+    const a = clone('a');
+    const b = clone('b');
+    writeLegacy(a, ['s0', 'a1']);
+    git(a, 'push', '-q', 'origin', 'main');
+    writeLegacy(b, ['s0', 'b1']);
+
+    const result = new SyncManager(b).gitPull();
+
+    expect(result).toEqual({ status: 'indexes-rebuilt', indexes: [`${dir}/_index.json`] });
+    const index = JSON.parse(fs.readFileSync(path.join(b, dir, '_index.json'), 'utf-8')) as { repoIdentity: string };
+    expect(index.repoIdentity).toBe(identity);
+  });
+
+  it('refuses to pull while a rebase is stopped', () => {
+    useGitConfig();
+    const { b } = divergeOnIndex();
+    expect(() => git(b, '-c', 'pull.rebase=true', 'pull', '-q', 'origin', 'main')).toThrow();
+
+    const result = new SyncManager(b).gitPull();
+
+    expect(result).toEqual({
+      status: 'stopped',
+      reason: `A rebase is in progress in ${b}. Run \`git rebase --abort\` there, then retry.`,
+    });
+  });
+});
+
+describe('SyncManager.gitPush', () => {
+  it('pulls and retries once when the remote moved on', () => {
+    useGitConfig();
+    const { b } = divergeOnIndex();
+
+    new SyncManager(b).gitPush();
+
+    expect(indexedSessionIds(clone('fresh'))).toEqual(['a1', 'b1', 's0']);
+  });
+
+  it('stops with the pull reason when the retry hits a real conflict', () => {
+    useGitConfig();
+    const { a, b } = divergeOnIndex();
+    conflictOnNotes(a, b);
+    const headBefore = git(b, 'rev-parse', 'HEAD');
+
+    expect(() => new SyncManager(b).gitPush()).toThrow(`Pull stopped on conflicts in notes.md and was aborted.`);
+    expect(git(b, 'rev-parse', 'HEAD')).toBe(headBefore);
+    expect(git(b, 'status', '--porcelain')).toBe('');
+  });
+
+  it('rethrows a rejection a pull cannot fix, without merging', () => {
+    useGitConfig();
+    git(tmp, 'init', '-q', '--bare', '-b', 'main', 'remote.git');
+    const seed = clone('seed');
+    archive(seed, 's0', 'carol');
+    git(seed, 'push', '-q', 'origin', 'main');
+    const hook = path.join(tmp, 'remote.git', 'hooks', 'pre-receive');
+    fs.writeFileSync(hook, '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    archive(seed, 's1', 'carol');
+
+    expect(() => new SyncManager(seed).gitPush()).toThrow(/pre-receive hook declined/);
+    expect(git(seed, 'rev-list', '--merges', 'HEAD')).toBe('');
+  });
+});
