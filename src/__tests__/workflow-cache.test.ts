@@ -1551,4 +1551,59 @@ steps:
       ['workflows/inline-ship.yaml:12: field "steps[1].workflow.steps[0].if": step "note" if compares steps.check.end with \'redy\', which is not an end workflow "inline-check" declares', 'undeclared_end'],
     ]);
   });
+
+  it('reports a read of an output an inline workflow does not declare', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Read an inline workflow's outputs.
+steps:
+  - id: grp
+    workflow:
+      outputs:
+        verdict: steps.classify.outputs.verdict
+      steps:
+        - id: classify
+          command: node classify.js
+          output:
+            verdict: fix | drop
+  - id: use
+    needs: [grp]
+    if: steps.grp.outputs.verdict == 'fix' && steps.grp.outputs.nope == 'x'
+    command: node use.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map((diagnostic) => [formatDiagnostic(diagnostic), diagnostic.code])).toEqual([
+      ['workflows/build.yaml:16: field "steps[1].if": step "use" if reads steps.grp.outputs.nope, which is not an output the inline workflow of step "grp" declares', 'undeclared_output'],
+    ]);
+  });
+
+  it('reports an if that compares an inline workflow end with a name it does not declare in ends', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Read an inline workflow's end.
+steps:
+  - id: grp
+    workflow:
+      ends:
+        ready: succeeded
+      steps:
+        - id: classify
+          command: node classify.js
+          end: ready
+  - id: use
+    needs: [grp]
+    if: steps.grp.end == 'ready' || steps.grp.end == 'unknown'
+    command: node use.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map((diagnostic) => [formatDiagnostic(diagnostic), diagnostic.code])).toEqual([
+      ['workflows/build.yaml:15: field "steps[1].if": step "use" if compares steps.grp.end with \'unknown\', which is not an end the inline workflow of step "grp" declares', 'undeclared_end'],
+    ]);
+  });
 });

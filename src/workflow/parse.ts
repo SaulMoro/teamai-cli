@@ -447,7 +447,8 @@ function parseBody(
     diagnostics.push(...graphDiagnostics(file, lineCounter, graph, seen));
     diagnostics.push(...conditionDiagnostics(file, lineCounter, conditions, reads));
     const needsById = new Map(graph.map((step) => [step.id, step.needs]));
-    const children = childrenOf(references, files);
+    // An inline workflow that is reported has no step here, so reads of it are not checked.
+    const children = childrenOf([...references, ...steps.filter((step) => typeof step.workflow === 'object')], files);
     // A malformed inputs header is already reported; checking reads against it would only add noise.
     // An inline workflow's reads of steps that are not its own are checked by the workflow around it.
     const split = splitReads(reads, at === '' ? undefined : seen);
@@ -533,23 +534,37 @@ function referenceDiagnostics(file: string, lineCounter: LineCounter, files: Wor
   ];
 }
 
-/** The workflow each step runs, as a sync knows it. A step whose reference is reported has none, so its reads are not checked. */
-function childrenOf(steps: Array<{ id: string; workflow?: string | InlineWorkflow }>, files: WorkflowFiles | undefined): Map<string, WorkflowDefinition> {
-  const children = new Map<string, WorkflowDefinition>();
+/** What a reader may read of the workflow a step runs, and how a message names that workflow. */
+interface Child {
+  label: string;
+  outputs?: Record<string, string>;
+  ends?: Record<string, EndOutcome>;
+}
+
+/**
+ * The workflow each step runs: an inline one as written, a file as a sync knows it.
+ * A step whose reference is reported has none, so its reads are not checked.
+ */
+function childrenOf(steps: Array<{ id: string; workflow?: string | InlineWorkflow }>, files: WorkflowFiles | undefined): Map<string, Child> {
+  const children = new Map<string, Child>();
   for (const { id, workflow } of steps) {
-    if (!files || typeof workflow !== 'string' || files.cycle(workflow)) continue;
+    if (typeof workflow === 'object') {
+      children.set(id, { label: `the inline workflow of step "${id}"`, outputs: workflow.outputs, ends: workflow.ends });
+      continue;
+    }
+    if (!files || workflow === undefined || files.cycle(workflow)) continue;
     const child = files.runnable(workflow);
-    if (child) children.set(id, child);
+    if (child) children.set(id, { label: `workflow "${child.name}"`, outputs: child.outputs, ends: child.ends });
   }
   return children;
 }
 
 /** Why `path` reads an output the workflow its step runs does not declare, or undefined. */
-function undeclaredOutput(children: Map<string, WorkflowDefinition>, path: ExpressionPath): string | undefined {
+function undeclaredOutput(children: Map<string, Child>, path: ExpressionPath): string | undefined {
   if (path.root !== 'steps' || path.field !== 'outputs' || path.fields.length === 0) return undefined;
   const child = children.get(path.step);
   if (!child || Object.hasOwn(child.outputs ?? {}, path.fields[0]!)) return undefined;
-  return `reads steps.${path.step}.outputs.${path.fields.join('.')}, which is not an output workflow "${child.name}" declares`;
+  return `reads steps.${path.step}.outputs.${path.fields.join('.')}, which is not an output ${child.label} declares`;
 }
 
 /** `env` maps variable names to text. A YAML number or boolean is read as its text. */
@@ -663,7 +678,7 @@ function outputDiagnostics(
   prefix: string,
   ids: Set<string>,
   steps: WorkflowStep[],
-  children: Map<string, WorkflowDefinition>,
+  children: Map<string, Child>,
 ): WorkflowDiagnostic[] {
   const diagnostics: WorkflowDiagnostic[] = [];
   for (const { name, node, path } of entries) {
@@ -800,15 +815,15 @@ interface ReadScope {
   outputs: Map<string, OutputSchema | undefined>;
   /** Undefined when the inputs header is malformed, so `inputs.…` reads are not checked. */
   inputs?: OutputSchema;
-  /** The workflow each workflow step runs, when a sync knows it. */
-  children: Map<string, WorkflowDefinition>;
+  /** The workflow each workflow step runs: an inline one, or a file when a sync knows it. */
+  children: Map<string, Child>;
 }
 
 function readScope(
   needs: Map<string, string[]>,
   steps: WorkflowStep[],
   inputs: Record<string, OutputSchema> | undefined,
-  children: Map<string, WorkflowDefinition>,
+  children: Map<string, Child>,
 ): ReadScope {
   return {
     children,
@@ -870,7 +885,7 @@ function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScope): Wor
       const child = readable.has(step) ? scope.children.get(step) : undefined;
       if (!child || Object.hasOwn(child.ends ?? {}, end)) continue;
       diagnostics.push({
-        ...at(`step "${reader}" ${site.what} compares steps.${step}.end with '${end}', which is not an end workflow "${child.name}" declares`),
+        ...at(`step "${reader}" ${site.what} compares steps.${step}.end with '${end}', which is not an end ${child.label} declares`),
         code: 'undeclared_end',
       });
     }
