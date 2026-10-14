@@ -4,7 +4,7 @@ import YAML from 'yaml';
 import { autoDetectInit, loadStateForScope, saveStateForScope } from './config.js';
 import { assertNotReadOnly } from './read-only.js';
 import {
-  createGit, pullRepo, pushRepoBranch, checkoutMaster, generateBranchName,
+  createGit, pullRepo, pushRepoBranch, checkoutMaster, generateBranchName, unusedBranchName,
   resetToCleanMaster, isDedicatedRepoRoot, getDefaultBranch, getFileContentAtRev, getHeadCommit,
 } from './utils/git.js';
 import { reconcilePlacementRecords, dropClosedPendingPushes,
@@ -733,11 +733,15 @@ async function pushGroup(args: {
     // sources / publicSkills changes ride along in the same PR as the resources.
     const configFiles = includeTeamConfig ? ['teamai.yaml'] : [];
     const gitFiles = [...new Set([...pushedFiles, ...existingSweepers, ...configFiles])];
-    const branchName = reuse?.branch ?? branch ?? generateBranchName(localConfig.username);
     const commitMsg = `[teamai] Push ${items.length} resource(s) from ${localConfig.username}`;
-    // The default-branch commit the branch is built on, which bounds the
-    // history that can prove a placement landed (`reconcilePlacementRecords`).
-    const base = await getHeadCommit(localConfig.repo.localPath) ?? undefined;
+    // Two independent reads. `base` is the default-branch commit the branch is
+    // built on, which bounds the history that can prove a placement landed
+    // (`reconcilePlacementRecords`).
+    const [branchName, headCommit] = await Promise.all([
+      reuse?.branch ?? branch ?? unusedBranchName(localConfig.repo.localPath, localConfig.username),
+      getHeadCommit(localConfig.repo.localPath),
+    ]);
+    const base = headCommit ?? undefined;
 
     const hasChanges = await pushRepoBranch(
       localConfig.repo.localPath,
@@ -1090,11 +1094,17 @@ async function pushCore(
       }
       const yamlPath = path.join(repoPath, 'teamai.yaml');
       const workingContent = await readFileSafe(yamlPath);
-      if (workingContent !== null) {
-        const committed = await getFileContentAtRev(repoPath, 'HEAD', 'teamai.yaml');
-        if (committed === null || committed.toString() !== workingContent) {
-          pendingTeamConfig = workingContent;
-        }
+      // Nothing below writes before these reads finish, so they run together:
+      // the env scan, the clone's status, and what HEAD holds of teamai.yaml.
+      const envScan = getHandler('env').scanLocalForPush(teamConfig, localConfig);
+      // Awaited after the status: a status failure is the one reported, as before.
+      envScan.catch(() => {});
+      const [committed, status] = await Promise.all([
+        workingContent === null ? null : getFileContentAtRev(repoPath, 'HEAD', 'teamai.yaml'),
+        git.status(),
+      ]);
+      if (workingContent !== null && (committed === null || committed.toString() !== workingContent)) {
+        pendingTeamConfig = workingContent;
       }
       const modeChangedPaths = new Set<string>();
       if (pendingTeamConfig !== null && await hasGitModeChange(git, 'teamai.yaml')) {
@@ -1106,7 +1116,6 @@ async function pushCore(
       // stays dirty and stops the push. So does any index state: the snapshot
       // holds only the working copy, and reset --hard would drop a staged,
       // conflicted, deleted or renamed entry.
-      const status = await git.status();
       const indexedPaths = new Set(collectDirtyPaths({
         staged: status.staged,
         created: status.created,
@@ -1114,7 +1123,7 @@ async function pushCore(
         deleted: status.deleted,
         renamed: status.renamed,
       }));
-      for (const item of await getHandler('env').scanLocalForPush(teamConfig, localConfig)) {
+      for (const item of await envScan) {
         if (indexedPaths.has(item.relativePath)) continue;
         const snapshot = await readFileSnapshot(item.sourcePath);
         if (snapshot !== null && !await hasGitModeChange(git, item.relativePath)) {

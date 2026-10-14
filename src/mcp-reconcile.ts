@@ -1481,11 +1481,17 @@ export async function earlierMappedMcpTargets(
     .flatMap(([file, { tools }]) => tools.map(async (tool) => ({ tool, real: await realFilePath(file) }))));
   const reached = (tool: string, real: string): boolean => [...mapped, ...recorded].some((r) => r.tool === tool && r.real === real);
   const found = new Map<string, McpTarget & { tracked: boolean; mappedBy: string[] }>();
-  for (const revision of [null, ...revisions]) {
+  // Each revision's teamai.yaml is read while earlier ones are judged, at most
+  // eight reads at a time. A read that fails is null, skipped as an empty file is.
+  const reads: Array<Promise<Buffer | null>> = [];
+  for (const [i, revision] of [null, ...revisions].entries()) {
+    while (reads.length < Math.min(i + 7, revisions.length)) {
+      reads.push(getFileContentAtRev(repoPath, revisions[reads.length], './teamai.yaml').catch(() => null));
+    }
     let toolPaths: unknown = EARLIER_BUILTIN_MCP_PROJECT;
     if (revision !== null) {
       try {
-        toolPaths = (YAML.parse((await getFileContentAtRev(repoPath, revision, './teamai.yaml'))?.toString() ?? '') as { toolPaths?: unknown } | null)?.toolPaths;
+        toolPaths = (YAML.parse((await reads[i - 1])?.toString() ?? '') as { toolPaths?: unknown } | null)?.toolPaths;
       } catch {
         continue;
       }

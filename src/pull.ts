@@ -66,7 +66,7 @@ import { deliversEveryNamespace } from './resource-namespaces.js';
 import { reportEntryResolution } from './namespaced-entries.js';
 import { resetWarnOnce, warnOnce } from './utils/warn-once.js';
 import { describeNoLongerTeamaiOnly, describeUnknownTracking, judgeTeamaiOnlyFiles, keptOutByMcpExclude, type SharedFileJudgement } from './teamai-only-files.js';
-import { realFilePath } from './git-exclude.js';
+import { GitContext, realFilePath } from './git-exclude.js';
 import type { EnvVariable } from './resources/env.js';
 import { EnvScopesUnreadableError } from './resources/env-loader.js';
 import { declaredSecretKeys } from './resources/secrets.js';
@@ -1394,6 +1394,9 @@ async function pullForScope(
   const syncLearningsAndRebuildIndex = async (): Promise<void> => {
     // Inline (new-worktree hook): the detached pull after it does this.
     if (options.dryRun || options.inline) return;
+    // The reports checkout refreshes meanwhile: another worktree, branch and
+    // lock, so neither waits on the other's fetch. Never rejects.
+    const reportsRootReady = resolveReportsReadRoot();
     try {
       // Bring the learnings branch up to date before reading it, or a member
       // only ever sees their own contributions. Read-only: a cold start
@@ -1418,7 +1421,7 @@ async function pullForScope(
       const docsRepoDir = path.join(localConfig.repo.localPath, 'docs');
       const rulesRepoDir = path.join(localConfig.repo.localPath, 'rules');
       const skillsRepoDir = path.join(localConfig.repo.localPath, 'skills');
-      const reportsRoot = await resolveReportsReadRoot();
+      const reportsRoot = await reportsRootReady;
       const votesDir = reportsRoot ? path.join(reportsRoot, 'votes') : undefined;
 
       // user scope: sync learnings to ~/.teamai/learnings/ (legacy behavior)
@@ -1549,6 +1552,9 @@ async function pullForScope(
       }
     } catch (e) {
       log.debug(`Learnings/index sync skipped: ${(e as Error).message}`);
+    } finally {
+      // Done before the caller lets the partition sync lock go.
+      await reportsRootReady;
     }
   };
   // Agents the user explicitly switched to one of this team's model profiles
@@ -3104,10 +3110,12 @@ export async function pull(
     reported.add('local-agent-git-exclude-failure');
   }
   const teamaiOnlyFailures = reconcileProject ? await reportTeamaiOnlyFiles(reconcileProject, deliveryRecorder, options) : [];
+  // What git says of the project's directories, for this run: the sync and the checks after it ask about the same ones.
+  const gitContext = new GitContext();
   if (reconcileProject && !options.dryRun) {
     if (!isBackgroundPull(options) && await sayGitExcludeNotices(reconcileProject)) reported.add('git-exclude-failure');
     try {
-      if (!await syncDeliveredGitExclude(reconcileProject, deliveryRecorder, options, teamaiOnlyFailures)) reported.add('git-exclude-sync');
+      if (!await syncDeliveredGitExclude(reconcileProject, deliveryRecorder, options, teamaiOnlyFailures, gitContext)) reported.add('git-exclude-sync');
       // It named every path another checkout's own file leaves visible.
       reported.add('git-exclude-foreign');
     } catch (e) {
@@ -3152,7 +3160,7 @@ export async function pull(
   //    clone-consuming stage above for the same reason the checks would need
   //    the clone, and reading it while the other process holds it on a
   //    transient branch is how a diagnostic invents a failure.
-  await reportPostPullChecks(options, reported, contended.size > 0);
+  await reportPostPullChecks(options, reported, contended.size > 0, gitContext);
   } finally {
     if (result) result.completed = syncResult.completed && !syncResult.docsSyncFailed && !syncResult.agentModelsHeld;
     const releaseSyncLocks = async () => {
@@ -3206,7 +3214,7 @@ export async function pull(
  */
 export async function syncDeliveredGitExclude(
   localConfig: LocalConfig, recorder: DeliveryRecorder, options: Pick<GlobalOptions, 'silent' | 'gitHook'> = {},
-  failures: readonly string[] = [],
+  failures: readonly string[] = [], context?: GitContext,
 ): Promise<boolean> {
   const key = await checkoutRecordKey(localConfig);
   if (!key || !localConfig.projectRoot) return true;
@@ -3227,7 +3235,7 @@ export async function syncDeliveredGitExclude(
     return false;
   }
   const union = await deliveredUnion(await liveDeliveredLists(localConfig.projectRoot, state.lastPullByWorkspace, { key, paths }));
-  const outcome = await applyDeliveredGitExclude(localConfig, enabled, union.paths);
+  const outcome = await applyDeliveredGitExclude(localConfig, enabled, union.paths, { context });
   if (whitelist?.failure) outcome.failures.push(whitelist.failure);
   if (enabled) outcome.failures.push(...failures);
   for (const notice of [...enabled ? describeForeign(union.foreign) : [], ...outcome.notices]) await noticeGitExclude(localConfig, notice, options);
@@ -3387,6 +3395,8 @@ async function reportPostPullChecks(
    * progress rather than about this machine.
    */
   contended: boolean,
+  /** What the pull's git exclude sync learned from git, for the checks to reuse. */
+  gitContext?: GitContext,
 ): Promise<void> {
   if (options.silent || options.dryRun) return;
   if (contended) {
@@ -3397,7 +3407,7 @@ async function reportPostPullChecks(
   }
   try {
     const { resolveDoctorContext, buildChecks, runChecks, formatCheckResult } = await import('./doctor.js');
-    const ctx = await resolveDoctorContext();
+    const ctx = await resolveDoctorContext({ gitContext });
     if (!ctx) return;
 
     // The budget covers building the registry as well as running it: the

@@ -65,6 +65,7 @@ export type CheckSource = 'local' | 'provider';
 import { hasPiHooks } from './pi-hooks.js';
 import { describeEnvAdvisory, envAdvisories } from './env-advisories.js';
 import { resolvesTeamEnv, resolveTeamEnv, type TeamEnv } from './env-resolution.js';
+import type { GitContext } from './git-exclude.js';
 
 export interface Check {
   name: string;
@@ -114,6 +115,8 @@ export interface DoctorContext {
   baseDir: string;
   /** This scope's env, resolved once for every check that reads it (env-resolution.ts); none in HTTP mode. */
   teamEnv?: TeamEnv;
+  /** What git said of directories earlier in the same run (a pull's git exclude sync); the checks ask it first. */
+  gitContext?: GitContext;
 }
 
 export interface DoctorOptions extends GlobalOptions {
@@ -428,7 +431,7 @@ async function codexHookTrust(ctx: DoctorContext): Promise<{ checks: Check[]; no
  * Resolve the local/team configuration the checks run against. Returns null
  * when TeamAI is not initialized here — the caller decides how to report that.
  */
-export async function resolveDoctorContext(): Promise<DoctorContext | null> {
+export async function resolveDoctorContext(options: { gitContext?: GitContext } = {}): Promise<DoctorContext | null> {
   // Read-only: the load never persists a migration (#893).
   const projectConfig = await detectProjectConfig(undefined, undefined, { dryRun: true });
   // A workspace is checked with what it delivers: its own selection and its children's (#913).
@@ -458,7 +461,7 @@ export async function resolveDoctorContext(): Promise<DoctorContext | null> {
   const baseDir = hookScope.baseDir;
   const teamEnv = resolvesTeamEnv(localConfig) ? await resolveTeamEnv(localConfig) : undefined;
 
-  return { localConfig, teamConfig, toolPaths, hookToolPaths, baseDir, teamEnv };
+  return { localConfig, teamConfig, toolPaths, hookToolPaths, baseDir, teamEnv, gitContext: options.gitContext };
 }
 
 /**

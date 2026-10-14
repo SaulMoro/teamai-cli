@@ -4,7 +4,8 @@ import fs from 'node:fs';
 import { realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { resolveAnchors, listWorktrees, parseWorktreeList } from '../utils/git.js';
+import { resolveAnchors, listWorktrees, parseWorktreeList, isDedicatedRepoRoot, gitCommonDir } from '../utils/git.js';
+import { gitExcludeFile } from '../git-exclude.js';
 import { defaultProjectSlug } from '../codebase-extract.js';
 
 // ─── Real-git tests for resolveAnchors (issue #374 P0) ──────────────────────
@@ -281,6 +282,55 @@ describe('listWorktrees', () => {
     git(checkout, 'worktree', 'add', '-q', linked, 'HEAD');
 
     expect(await listWorktrees(checkout)).toEqual([linked]);
+  });
+
+  it('follows worktrees added, moved, and deleted after an earlier call', async () => {
+    const repo = path.join(base, 'changing');
+    fs.mkdirSync(repo);
+    git(repo, 'init', '-q');
+    git(repo, '-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-q', '-m', 'init');
+    expect(await listWorktrees(repo)).toEqual([repo]);
+
+    const added = path.join(base, 'changing-wt');
+    git(repo, 'worktree', 'add', '-q', added, 'HEAD');
+    expect(await listWorktrees(repo)).toEqual([repo, added]);
+
+    const moved = path.join(base, 'changing-moved');
+    git(repo, 'worktree', 'move', added, moved);
+    expect(await listWorktrees(repo)).toEqual([repo, moved]);
+
+    // Deleted without `git worktree remove`: git lists it as prunable.
+    fs.rmSync(moved, { recursive: true, force: true });
+    expect(await listWorktrees(repo)).toEqual([repo]);
+  });
+});
+
+describe('what git says of a directory, asked again', () => {
+  it('follows a repository created later inside a directory git answered for before', async () => {
+    const outer = path.join(base, 'outer');
+    const inner = path.join(outer, 'inner');
+    fs.mkdirSync(inner, { recursive: true });
+    git(outer, 'init', '-q');
+    expect((await gitExcludeFile(inner))?.root).toBe(outer);
+    expect(await isDedicatedRepoRoot(inner)).toBe(false);
+
+    git(inner, 'init', '-q');
+    expect(await gitExcludeFile(inner)).toEqual({ root: inner, prefix: '', excludeFile: path.join(inner, '.git', 'info', 'exclude') });
+    expect(await isDedicatedRepoRoot(inner)).toBe(true);
+    expect(await gitCommonDir(inner)).toBe(path.join(inner, '.git'));
+  });
+
+  it('stops taking a clone root for its own repository once its .git is gone', async () => {
+    const outer = path.join(base, 'enclosing');
+    const clone = path.join(outer, 'clone');
+    fs.mkdirSync(clone, { recursive: true });
+    git(outer, 'init', '-q');
+    git(clone, 'init', '-q');
+    expect(await isDedicatedRepoRoot(clone)).toBe(true);
+
+    fs.rmSync(path.join(clone, '.git'), { recursive: true, force: true });
+    expect(await isDedicatedRepoRoot(clone)).toBe(false);
+    expect((await gitExcludeFile(clone))?.prefix).toBe('clone/');
   });
 });
 

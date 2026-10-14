@@ -1,4 +1,4 @@
-import http from 'node:http';
+import type http from 'node:http';
 import { dashboardWorkspaces, workspaceEvents, type DashboardWorkspace } from './dashboard/workspaces.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,7 +18,7 @@ import { aggregateDailySessions, computeDailyStatsDelta, summarizeTrendWindow, s
 
 // ─── Dashboard server architecture ──────────────────────
 //
-//  events.jsonl ──fs.watch──▶ rebuildSessions()
+//  events.jsonl ──fs.watch, stat each second──▶ rebuildSessions()
 //                                    │
 //                                    ▼
 //                             DashboardSession[]
@@ -76,7 +76,12 @@ export async function startDashboard(port?: number): Promise<void> {
   const clients: Set<SSEClient> = new Set();
 
   // Watch events file and push updates to SSE clients
+  /** The events file as last pushed: its inode, size and last change. */
+  let pushedStamp = '';
+  const eventsStamp = (): Promise<string> =>
+    fs.promises.stat(eventsPath).then((s) => `${s.ino}:${s.size}:${s.mtimeMs}`, () => '');
   const pushSessions = async () => {
+    pushedStamp = await eventsStamp();
     try {
       const events = await readEvents(eventsPath);
       const workspaces = await getWorkspaces(events);
@@ -94,12 +99,24 @@ export async function startDashboard(port?: number): Promise<void> {
   // Compaction atomically replaces events.jsonl. Watching the file itself
   // follows the old inode on Linux and macOS, so watch its directory instead.
   const eventsFileName = path.basename(eventsPath);
-  const watcher = fs.watch(path.dirname(eventsPath), (_eventType, filename) => {
-    if (filename && filename.toString() !== eventsFileName) return;
+  const schedulePush = (): void => {
     // Debounce rapid file changes (multiple hooks firing near-simultaneously)
     if (watchDebounce) clearTimeout(watchDebounce);
-    watchDebounce = setTimeout(() => void pushSessions(), 200);
+    watchDebounce = setTimeout(() => {
+      watchDebounce = null;
+      void pushSessions();
+    }, 200);
+  };
+  const watcher = fs.watch(path.dirname(eventsPath), (_eventType, filename) => {
+    if (filename && filename.toString() !== eventsFileName) return;
+    schedulePush();
   });
+  // fs.watch on macOS (FSEvents) falls behind on a busy disk: an append went
+  // unreported for over 20s. A stat every second pushes what it has not said.
+  void eventsStamp().then((stamp) => { pushedStamp ||= stamp; });
+  const eventsPoll = setInterval(() => {
+    void eventsStamp().then((stamp) => { if (stamp !== pushedStamp && !watchDebounce) schedulePush(); });
+  }, 1000);
 
   // ─── PID liveness monitor ────────────────────────────
   //
@@ -327,7 +344,10 @@ export async function startDashboard(port?: number): Promise<void> {
     res.end('Not Found');
   };
 
-  const server = http.createServer((req, res) => {
+  // Loaded here, not at the top: importing node:http loads undici for its
+  // WebSocket exports, a few milliseconds every other command paid.
+  const { createServer } = await import('node:http');
+  const server = createServer((req, res) => {
     handleRequest(req, res).catch((e: unknown) => {
       log.debug(`dashboard: request error: ${e instanceof Error ? e.message : String(e)}`);
       if (!res.headersSent) {
@@ -358,6 +378,7 @@ export async function startDashboard(port?: number): Promise<void> {
   const shutdown = () => {
     log.info('\nShutting down dashboard...');
     watcher.close();
+    clearInterval(eventsPoll);
     clearInterval(pidCheckInterval);
     for (const client of clients) {
       client.end();

@@ -3,7 +3,7 @@
  * and a local bare team repo. Destinations are read from the branch that
  * reached the remote, not from CLI output alone.
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -91,8 +91,16 @@ function pushedFiles(): string[] {
   return branches.flatMap((branch) => git(['diff', '--name-only', 'main', branch], origin).split('\n').filter(Boolean));
 }
 
-beforeEach(() => {
-  sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-push-active-ns-'));
+// Every test starts from the same pulled project. It is set up and pulled
+// once, then copied back to the same path before each test: the paths the
+// pull recorded (config, state, git worktrees) stay valid in every copy.
+let fixtureRoot: string;
+let template: string;
+
+beforeAll(() => {
+  fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-push-active-ns-'));
+  sandbox = path.join(fixtureRoot, 'sandbox');
+  template = path.join(fixtureRoot, 'template');
   const home = path.join(sandbox, 'home');
   const seed = path.join(sandbox, 'seed');
   project = path.join(sandbox, 'project');
@@ -135,9 +143,16 @@ beforeEach(() => {
   }));
   const pulled = run(['pull']);
   expect(pulled.code, pulled.output).toBe(0);
+  fs.renameSync(sandbox, template);
+});
+
+beforeEach(() => {
+  fs.cpSync(template, sandbox, { recursive: true, preserveTimestamps: true, verbatimSymlinks: true });
 });
 
 afterEach(() => fs.rmSync(sandbox, { recursive: true, force: true }));
+
+afterAll(() => fs.rmSync(fixtureRoot, { recursive: true, force: true }));
 
 describe('push an edit of a skill pull kept after a project switch (#1020)', () => {
   it('pushes two tool edits to their distinct delivered destinations', () => {

@@ -96,6 +96,7 @@ vi.mock('../utils/git.js', () => ({
   pushRepoBranch: (...args: unknown[]) => mockPushRepoBranch(...args),
   checkoutMaster: (...args: unknown[]) => mockCheckoutMaster(...args),
   generateBranchName: (...args: unknown[]) => mockGenerateBranchName(...args),
+  unusedBranchName: async (_localPath: string, username: string) => mockGenerateBranchName(username),
   resetToCleanMaster: (...args: unknown[]) => mockResetToCleanMaster(...args),
   isDedicatedRepoRoot: vi.fn().mockResolvedValue(true),
   // Without these two the PR step throws inside its own catch, which quietly

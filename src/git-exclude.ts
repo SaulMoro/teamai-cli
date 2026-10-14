@@ -4,6 +4,8 @@ import path from 'node:path';
 import fse from 'fs-extra';
 import { execCommand, type ExecResult } from './utils/exec.js';
 import { pathExists, readFileIfExists, readFileSafe, symlinkTarget, writeFileAtomic } from './utils/fs.js';
+import { gitFindsNoRepository } from './utils/git-discovery.js';
+import { checkoutLocation } from './utils/git.js';
 import { withoutGitRepositoryEnv } from './utils/git-env.js';
 import { getUserHome } from './utils/home.js';
 
@@ -185,6 +187,9 @@ function runGit(args: string[], cwd: string): Promise<ExecResult> {
  * included), the checkout's root, and `dir`'s path from it; or git's error.
  */
 async function locateExclude(dir: string): Promise<{ excludeFile: string; root: string; prefix: string } | { error: string }> {
+  if (await gitFindsNoRepository(dir)) return { error: `${dir} is not in a git repository` };
+  const located = await checkoutLocation(dir);
+  if (located) return { excludeFile: located.excludeFile, root: located.toplevel, prefix: located.prefix };
   const result = await runGit(['rev-parse', '--show-toplevel', '--show-prefix', '--git-path', 'info/exclude'], dir);
   const [root = '', prefix = '', gitPath = ''] = result.code === 0 ? result.stdout.split(/\r?\n/) : [];
   if (!root || !gitPath) return { error: result.stderr.trim() || `git exited with ${result.code}` };
@@ -283,6 +288,7 @@ export async function gitPathOf(file: string): Promise<{ label: string; path: st
 export async function gitTracking(file: string): Promise<GitTracking> {
   file = await realFilePath(file);
   const dir = await existingAncestor(file);
+  if (await gitFindsNoRepository(dir)) return { kind: 'outside-repo' };
   const result = await runGit(['check-ignore', '-q', '--', path.relative(dir, file)], dir);
   if (result.code === 0) return { kind: 'ignored' };
   if (result.code === 1) return { kind: 'would-commit' };
@@ -614,7 +620,8 @@ export class GitContext {
     const location = await this.locate(dir);
     if ('error' in location) return await insideRepository(dir) ? { kind: 'gitFailed', error: location.error } : { kind: 'outsideRepo' };
     let rel = `${location.prefix}${path.relative(dir, landed).split(path.sep).join('/')}`;
-    if (await this.precomposes(location.root)) rel = rel.normalize('NFC');
+    // NFC changes no ASCII name, so only another one asks git.
+    if (/\P{ASCII}/u.test(rel) && await this.precomposes(location.root)) rel = rel.normalize('NFC');
     if (await fse.lstat(landed).then((s) => s.isDirectory(), () => false)) {
       const message = `${JSON.stringify(file)} is a directory, and teamai lists only the files it delivers in a git exclude block, so git can still see what it holds`;
       return { kind: 'refused', refused: { path: file, problem: 'directory', message } };
@@ -963,8 +970,9 @@ async function ensureOne(
       },
     };
   }
-  // Only git saying it ignores the file lets the caller write a secret into it.
-  const after = await gitTracking(file);
+  // Only git saying it ignores the file lets the caller write a secret into it:
+  // asked again unless nothing was written since it said so above.
+  const after = write === 'unchanged' && tracking.kind === 'ignored' ? tracking : await gitTracking(file);
   if (after.kind === 'ignored') return { result: { kind: 'excluded', added: write === 'written' }, excludeFile };
   const named = await gitPathOf(file);
   if (after.kind !== 'would-commit') {
@@ -1166,10 +1174,12 @@ export async function report(owner: GitExcludeOwner, expectedPaths: Iterable<str
     const parsed = parseExclude(content);
     const lines = ownerLines(parsed, owner.name) ?? [];
     const checkFailed: GitCheckFailure[] = [];
-    const tracked = await trackedPaths(placed, checkFailed);
+    // Both only read, so asked together; a checkout keeps the first failure, as when asked in turn.
+    const offerFailed: GitCheckFailure[] = [];
+    const [tracked, offered] = await Promise.all([trackedPaths(placed, checkFailed), offeredPaths(placed, offerFailed)]);
+    for (const f of offerFailed) if (!checkFailed.some((c) => c.checkout === f.checkout)) checkFailed.push(f);
     const listed = placed.filter((p) => lines.includes(p.line));
     const missing = notReadable ? [] : placed.filter((p) => !lines.includes(p.line) && !tracked.some((t) => t.path === p.path));
-    const offered = await offeredPaths(placed, checkFailed);
     result.files.push({
       excludeFile,
       listed: listed.map((p) => p.path),

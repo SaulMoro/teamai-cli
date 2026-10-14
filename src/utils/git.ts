@@ -4,6 +4,8 @@ import { realpath } from 'node:fs/promises';
 import path from 'node:path';
 import fse from 'fs-extra';
 import simpleGit, { type SimpleGit } from 'simple-git';
+import { execCommand } from './exec.js';
+import { gitFindsNoRepository, linkedWorktreesStamp, repositoryStamp } from './git-discovery.js';
 import { log } from './logger.js';
 
 /** What simple-git accepts as a custom binary without its unsafe opt-in. */
@@ -79,7 +81,31 @@ function lookUpGit(pathEnv: string): string {
  * status does not matter.
  */
 function spawnsByPath(candidate: string): boolean {
+  if (isNativeExecutable(candidate)) return true;
   return spawnSync(candidate, ['--version'], { stdio: 'ignore', timeout: 10_000 }).error === undefined;
+}
+
+/** ELF, Mach-O (thin or universal): a format the kernel starts without an interpreter. */
+const NATIVE_MAGIC = ['7f454c46', 'feedface', 'feedfacf', 'cefaedfe', 'cffaedfe', 'cafebabe'];
+
+/**
+ * Whether `file` is a native executable this user may run, which starts when
+ * spawned: only a script can fail to, its interpreter gone. Read from its
+ * first bytes, where the spawn that proves it costs every command a process.
+ */
+function isNativeExecutable(file: string): boolean {
+  try {
+    fs.accessSync(file, fs.constants.X_OK);
+    const fd = fs.openSync(file, 'r');
+    try {
+      const head = Buffer.alloc(4);
+      return fs.readSync(fd, head, 0, 4, 0) === 4 && NATIVE_MAGIC.includes(head.toString('hex'));
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -356,7 +382,6 @@ export async function commitPaths(
  */
 export async function pullRepo(localPath: string, abort?: AbortSignal): Promise<string> {
   const git = createGit(localPath, abort);
-  const branch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
 
   try {
     const result = await git.pull(['--ff-only']);
@@ -372,6 +397,8 @@ export async function pullRepo(localPath: string, abort?: AbortSignal): Promise<
     if (!dedicated) {
       throw err;
     }
+    // Only a recovery needs the branch: a pull that fast-forwards never asks.
+    const branch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
     const reason = err instanceof Error ? err.message : String(err);
     log.debug(`ff-only pull failed (${branch}), attempting fetch + hard reset: ${reason}`);
     await git.fetch(['origin', branch]);
@@ -790,6 +817,26 @@ export function generateBranchName(username: string): string {
 }
 
 /**
+ * generateBranchName's name, or when the clone at `localPath` already has a
+ * branch by it (local, or origin's as last fetched), the first of `-2`, `-3`…
+ * after it that is free. Names are per second: a push that opens two PRs, or
+ * follows another within the second, would otherwise reuse one and fail.
+ */
+export async function unusedBranchName(localPath: string, username: string): Promise<string> {
+  const name = generateBranchName(username);
+  const prefixes = ['refs/heads/', 'refs/remotes/origin/'];
+  // A ref name holds no glob character, so `name` matches only itself.
+  const listed = await createGit(localPath)
+    .raw(['for-each-ref', '--format=%(refname)', ...prefixes.flatMap((p) => [`${p}${name}`, `${p}${name}-*`])])
+    .catch(() => '');
+  const taken = new Set(listed.split('\n').filter(Boolean)
+    .map((ref) => ref.slice(prefixes.find((p) => ref.startsWith(p))?.length ?? 0)));
+  let candidate = name;
+  for (let n = 2; taken.has(candidate); n++) candidate = `${name}-${n}`;
+  return candidate;
+}
+
+/**
  * Check whether repoPath is a dedicated git repository root of its own — i.e. safe
  * to run destructive maintenance (reset --hard, checkout) against as a disposable
  * cache clone.
@@ -804,10 +851,10 @@ export function generateBranchName(username: string): string {
  * @returns True if repoPath is its own git top level; false if unconfirmed/unsafe.
  */
 export async function isDedicatedRepoRoot(repoPath: string): Promise<boolean> {
-  const git = createGit(repoPath);
+  if (await gitFindsNoRepository(repoPath)) return true;
   let toplevel: string;
   try {
-    toplevel = (await git.revparse(['--show-toplevel'])).trim();
+    toplevel = (await checkoutLocation(repoPath))?.toplevel ?? (await createGit(repoPath).revparse(['--show-toplevel'])).trim();
   } catch {
     // Not inside a git repository at all — there is no enclosing repo to damage,
     // so treat repoPath as a plain dedicated dir (historical behavior). fail-open.
@@ -879,9 +926,10 @@ export async function resolveAnchors(cwd?: string): Promise<ProjectAnchors | nul
 }
 
 async function readAnchors(cwd?: string): Promise<ProjectAnchors | null> {
+  if (await gitFindsNoRepository(cwd ?? process.cwd())) return null;
   try {
     const git = createGit(cwd);
-    const toplevel = (await git.revparse(['--show-toplevel'])).trim();
+    const toplevel = (await checkoutLocation(cwd ?? process.cwd()))?.toplevel ?? (await git.revparse(['--show-toplevel'])).trim();
     const entries = await readWorktreeList(cwd) ?? await readWorktreeList(cwd, true);
     const first = entries?.[0];
     if (!toplevel || !first) return null;
@@ -941,6 +989,56 @@ export function parseWorktreeList(output: string): WorktreeListEntry[] {
   return entries;
 }
 
+/** Where a directory sits in its checkout, from one `git rev-parse` (checkoutLocation). */
+export interface CheckoutLocation {
+  /** The checkout's root, as git prints it. */
+  toplevel: string;
+  /** The directory's path from `toplevel`, `/`-separated with a trailing `/`; empty at the root. */
+  prefix: string;
+  /** The realpath of the git directory shared by every worktree of the repository. */
+  commonDir: string;
+  /** The `info/exclude` git reads there. */
+  excludeFile: string;
+}
+
+const checkoutLocations = new Map<string, { stamp: string; location: Promise<CheckoutLocation | null> }>();
+
+/**
+ * Where `dir` sits in its checkout, from one `git rev-parse` for what
+ * gitCommonDir, resolveAnchors, isDedicatedRepoRoot and the git exclude files
+ * each asked git for: a pull asked about four directories eleven times.
+ * Remembered while the repository git finds for `dir` stays the same
+ * (repositoryStamp), and shared by callers asking at the same time. Null when
+ * git cannot say it this way: no repository, a directory outside any work tree
+ * (a bare repository, inside `.git`), the environment handing git a
+ * repository, or git failing. Callers then ask git as before, for its answer
+ * or its error. A null is not remembered.
+ */
+export async function checkoutLocation(dir: string): Promise<CheckoutLocation | null> {
+  const stamp = await repositoryStamp(dir);
+  if (stamp === null) return null;
+  const key = path.resolve(dir);
+  const known = checkoutLocations.get(key);
+  if (known?.stamp === stamp) return known.location;
+  const location = readCheckoutLocation(dir);
+  checkoutLocations.set(key, { stamp, location });
+  if (await location === null && checkoutLocations.get(key)?.location === location) checkoutLocations.delete(key);
+  return location;
+}
+
+async function readCheckoutLocation(dir: string): Promise<CheckoutLocation | null> {
+  try {
+    const result = await execCommand('git', ['rev-parse', '--show-toplevel', '--show-prefix', '--git-common-dir', '--git-path', 'info/exclude'], { cwd: dir, timeoutMs: 10_000 });
+    const [toplevel = '', prefix = '', commonDir = '', gitPath = ''] = result.code === 0 ? result.stdout.split(/\r?\n/) : [];
+    if (!toplevel || !commonDir || !gitPath) return null;
+    // Real path, so one repository reached through a symlink (macOS /var) is one file.
+    const base = await realpath(dir).catch(() => dir);
+    return { toplevel, prefix, commonDir: await realpath(path.resolve(dir, commonDir)), excludeFile: path.resolve(base, gitPath) };
+  } catch {
+    return null;
+  }
+}
+
 // CLI invocations keep checkout locations stable. Cache successful probes only;
 // a failed probe must be retried if the repository becomes available later.
 const commonDirs = new Map<string, string>();
@@ -954,10 +1052,11 @@ const commonDirs = new Map<string, string>();
 export async function gitCommonDir(cwd: string): Promise<string | null> {
   const known = commonDirs.get(cwd);
   if (known) return known;
+  if (await gitFindsNoRepository(cwd)) return null;
   try {
     // Inside the try: simple-git throws at once for a directory that does not exist.
-    const out = await createGit(cwd).revparse(['--git-common-dir']);
-    const found = await realpath(path.resolve(cwd, out.replace(/\r?\n$/, '')));
+    const found = (await checkoutLocation(cwd))?.commonDir
+      ?? await realpath(path.resolve(cwd, (await createGit(cwd).revparse(['--git-common-dir'])).replace(/\r?\n$/, '')));
     commonDirs.set(cwd, found);
     return found;
   } catch {
@@ -1021,6 +1120,13 @@ interface ListedWorktree extends WorktreeListEntry {
 }
 
 /**
+ * `git worktree list` output by directory and form, kept while the linked
+ * worktrees git reads it from are unchanged (linkedWorktreesStamp): one pull
+ * asks for the same list several times.
+ */
+const worktreeLists = new Map<string, { stamp: string; list: string }>();
+
+/**
  * The entries of `git worktree list --porcelain -z` for the repo containing
  * `cwd`, or null when git fails: outside a repository, a missing `cwd`, or git
  * older than 2.36, which has no `-z`. With `newlineSplit`, the entries of
@@ -1028,12 +1134,24 @@ interface ListedWorktree extends WorktreeListEntry {
  * path holding one: never a proof of liveness (#993).
  */
 async function readWorktreeList(cwd?: string, newlineSplit = false): Promise<ListedWorktree[] | null> {
+  const dir = cwd ?? process.cwd();
+  if (await gitFindsNoRepository(dir)) return null;
+  // Taken before git runs: a worktree changed meanwhile changes the next stamp.
+  const commonDir = await gitCommonDir(dir);
+  const stamp = commonDir === null ? null : await linkedWorktreesStamp(commonDir);
+  const key = `${newlineSplit}\0${dir}`;
+  const known = worktreeLists.get(key);
   let list: string;
-  try {
-    // Inside the try: simple-git throws at once for a directory that does not exist.
-    list = await createGit(cwd).raw(['worktree', 'list', '--porcelain', ...newlineSplit ? [] : ['-z']]);
-  } catch {
-    return null;
+  if (stamp !== null && known?.stamp === stamp) {
+    list = known.list;
+  } else {
+    try {
+      // Inside the try: simple-git throws at once for a directory that does not exist.
+      list = await createGit(cwd).raw(['worktree', 'list', '--porcelain', ...newlineSplit ? [] : ['-z']]);
+    } catch {
+      return null;
+    }
+    if (stamp !== null) worktreeLists.set(key, { stamp, list });
   }
   if (newlineSplit) list = list.split(/\r?\n/).join('\0');
   return Promise.all(parseWorktreeList(list)

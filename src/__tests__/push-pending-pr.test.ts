@@ -59,6 +59,7 @@ vi.mock('../utils/git.js', () => ({
   pushRepoBranch: (...args: unknown[]) => mockPushRepoBranch(...args),
   checkoutMaster: (...args: unknown[]) => mockCheckoutMaster(...args),
   generateBranchName: (...args: unknown[]) => mockGenerateBranchName(...args),
+  unusedBranchName: async (_localPath: string, username: string) => mockGenerateBranchName(username),
   remoteBranchExists: (...args: unknown[]) => mockRemoteBranchExists(...args),
   resetToCleanMaster: vi.fn(),
   isDedicatedRepoRoot: vi.fn().mockResolvedValue(true),

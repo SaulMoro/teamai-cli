@@ -279,14 +279,14 @@ export interface DeliveredGitExcludeOutcome {
  * and prints one line per block it would change instead.
  */
 export async function applyDeliveredGitExclude(
-  localConfig: LocalConfig, enabled: boolean, paths: Iterable<string>, options: { dryRun?: boolean } = {},
+  localConfig: LocalConfig, enabled: boolean, paths: Iterable<string>, options: { dryRun?: boolean; context?: GitContext } = {},
 ): Promise<DeliveredGitExcludeOutcome> {
   const outcome: DeliveredGitExcludeOutcome = { failures: [], notices: [] };
   const projectRoot = localConfig.projectRoot;
   if (!projectRoot) return outcome;
   const { dryRun } = options;
   // One context for the run: what git says of a directory holds across both owners' syncs.
-  const context = new GitContext();
+  const context = options.context ?? new GitContext();
   const own = await gitExcludeFile(projectRoot, context);
   const here = deliveredOwner(localConfig);
   const elsewhere = deliveredOwnerElsewhere(localConfig);
@@ -339,10 +339,11 @@ export async function applyDeliveredGitExclude(
  * `paths` (what they should list), both owners, each path judged in the
  * block of the repository git reads it from. Writes nothing, creates no lock.
  */
-export async function reportDeliveredGitExclude(localConfig: LocalConfig, paths: Iterable<string>): Promise<GitExcludeReport[]> {
+export async function reportDeliveredGitExclude(
+  localConfig: LocalConfig, paths: Iterable<string>, context = new GitContext(),
+): Promise<GitExcludeReport[]> {
   const projectRoot = localConfig.projectRoot;
   if (!projectRoot) return [];
-  const context = new GitContext();
   const own = await gitExcludeFile(projectRoot, context);
   const split = await byRepository(own?.excludeFile ?? null, paths, context);
   return [
