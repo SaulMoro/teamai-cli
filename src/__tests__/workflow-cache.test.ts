@@ -1084,6 +1084,165 @@ steps:
       'workflows/build.yaml:28: field "steps[4].with.deep": step "read" with.deep reads inputs.titel, which is not an input the workflow declares',
     ]);
   });
+
+  it('caches, hashes, and checks the prompt_file of a step inside an inline workflow like a top-level one', async () => {
+    const config = testConfig();
+    fs.mkdirSync(path.join(config.repo.localPath, 'prompts'));
+    const promptFile = path.join(config.repo.localPath, 'prompts', 'fix.md');
+    fs.writeFileSync(promptFile, 'Fix {{ inputs.title }} after {{ steps.plan.outcome }}, {{ with.note }}.');
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Fix inside an inline workflow.
+inputs:
+  title: string
+steps:
+  - id: plan
+    command: node plan.js
+  - id: check
+    needs: [plan]
+    workflow:
+      steps:
+        - id: fix
+          prompt_file: prompts/fix.md
+          with:
+            note: "plan {{ steps.plan.outcome }}"
+`);
+    await syncWorkflowDefinitions(config);
+    const first = await loadCachedWorkflow(config, 'build');
+    const inline = first?.definition.steps[1]?.workflow;
+    expect(typeof inline === 'object' && inline.steps[0]).toMatchObject({
+      promptFile: 'prompts/fix.md',
+      prompt: 'Fix {{ inputs.title }} after {{ steps.plan.outcome }}, {{ with.note }}.',
+    });
+
+    fs.writeFileSync(promptFile, 'Fix {{ steps.free.outcome }}.');
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:14: field "steps[1].workflow.steps[0].prompt_file": step "fix" prompt_file reads steps.free, which is not a step it needs, or one the step that runs its workflow needs, directly or through their needs',
+    ]);
+
+    fs.writeFileSync(promptFile, 'Fix it.');
+    await syncWorkflowDefinitions(config);
+    expect((await loadCachedWorkflow(config, 'build'))?.sourceHash).not.toBe(first?.sourceHash);
+  });
+
+  it('reports inline outputs that do not read a step of the inline workflow, and a key an inline workflow does not know', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Return values from an inline workflow.
+steps:
+  - id: plan
+    command: node plan.js
+  - id: check
+    needs: [plan]
+    workflow:
+      outputs:
+        verdict: steps.classify.outputs.verdcit
+        planned: steps.plan.outcome
+        text: "{{ steps.classify.outputs.verdict }}"
+      steps:
+        - id: classify
+          command: node classify.js
+          output:
+            verdict: fix | drop
+`);
+    writeWorkflow(config, 'loop', `schemaVersion: v1alpha1
+name: loop
+description: An inline workflow with a key from a later teamai.
+steps:
+  - id: check
+    workflow:
+      for_each: [1, 2]
+      steps:
+        - id: classify
+          command: node classify.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map((diagnostic) => [formatDiagnostic(diagnostic), diagnostic.code])).toEqual([
+      ['workflows/build.yaml:13: field "steps[1].workflow.outputs.text": output "text" must be a path that reads a step, such as steps.<id>.outputs.<field>', undefined],
+      ['workflows/build.yaml:11: field "steps[1].workflow.outputs.verdict": output "verdict" reads steps.classify.outputs.verdcit, which is not in the output step "classify" declares', undefined],
+      ['workflows/build.yaml:12: field "steps[1].workflow.outputs.planned": output "planned" reads steps.plan, which is not a step in this workflow', undefined],
+      ['workflows/loop.yaml:7: field "steps[0].workflow.for_each": workflows/loop.yaml uses `for_each`, which this teamai does not know. Update teamai.', 'unknown_key'],
+    ]);
+  });
+
+  it('checks a read from a nested inline workflow against every enclosing level', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Nested inline workflows.
+steps:
+  - id: plan
+    command: node plan.js
+  - id: free
+    needs: []
+    command: node free.js
+  - id: outer
+    needs: [plan]
+    workflow:
+      steps:
+        - id: prepare
+          command: node prepare.js
+        - id: inner
+          needs: [prepare]
+          workflow:
+            steps:
+              - id: note
+                if: steps.prepare.outcome == 'success' && steps.plan.outcome == 'success' && steps.free.outcome == 'success'
+                command: node note.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:21: field "steps[2].workflow.steps[1].workflow.steps[0].if": step "note" if reads steps.free, which is not a step it needs, or one the step that runs its workflow needs, directly or through their needs',
+    ]);
+  });
+
+  it('reports inputs and with on an inline workflow, and an inline read of an enclosing step the enclosing step does not need', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Run an inline workflow.
+inputs:
+  title: string
+steps:
+  - id: plan
+    command: node plan.js
+  - id: free
+    needs: []
+    command: node free.js
+  - id: check
+    needs: [plan]
+    with:
+      title: x
+    workflow:
+      inputs:
+        title: string
+      name: check
+      steps:
+        - id: classify
+          prompt: "Classify {{ inputs.title }} after {{ steps.plan.outcome }} and {{ steps.free.outcome }}."
+        - id: comment
+          needs: [classify]
+          if: steps.free.outcome == 'success' && steps.classify.outcome == 'success'
+          command: node comment.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map((diagnostic) => [formatDiagnostic(diagnostic), diagnostic.code])).toEqual([
+      ['workflows/build.yaml:17: field "steps[2].workflow.inputs": step "check" runs an inline workflow, which declares no inputs; its steps read the enclosing workflow\'s inputs', undefined],
+      ['workflows/build.yaml:19: field "steps[2].workflow.name": step "check" runs an inline workflow, which carries only steps, outputs, and ends', undefined],
+      ['workflows/build.yaml:14: field "steps[2].with": step "check" with is not allowed on an inline workflow; its steps read the enclosing inputs and steps', undefined],
+      ['workflows/build.yaml:22: field "steps[2].workflow.steps[0].prompt": step "classify" prompt reads steps.free, which is not a step it needs, or one the step that runs its workflow needs, directly or through their needs', 'bad_template'],
+      ['workflows/build.yaml:25: field "steps[2].workflow.steps[1].if": step "comment" if reads steps.free, which is not a step it needs, or one the step that runs its workflow needs, directly or through their needs', undefined],
+    ]);
+  });
 });
 
 describe('workflow references across files', () => {
@@ -1321,5 +1480,75 @@ steps:
       'workflows/ship.yaml:12: field "steps[2].if": step "fix" if compares steps.compile.end with \'done\', which is not an end workflow "build" declares',
     ]);
     expect(result.unrunnable).toEqual(['workflows/ship.yaml']);
+  });
+
+  it('reports recursion through a workflow file run from an inline workflow in every file of the cycle', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'inline-a', `schemaVersion: v1alpha1
+name: inline-a
+description: Runs inline-b from an inline workflow.
+steps:
+  - id: group
+    workflow:
+      steps:
+        - id: run-b
+          workflow: inline-b
+`);
+    writeWorkflow(config, 'inline-b', `schemaVersion: v1alpha1
+name: inline-b
+description: Runs inline-a.
+steps:
+  - id: run-a
+    workflow: inline-a
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/inline-a.yaml:9: field "steps[0].workflow.steps[0].workflow": step "run-b" runs workflow "inline-b" in a cycle: inline-a -> inline-b -> inline-a',
+      'workflows/inline-b.yaml:6: field "steps[0].workflow": step "run-a" runs workflow "inline-a" in a cycle: inline-b -> inline-a -> inline-b',
+    ]);
+    expect(result.unrunnable).toEqual(['workflows/inline-a.yaml', 'workflows/inline-b.yaml']);
+  });
+
+  it('checks what an inline step reads of an enclosing workflow step against the workflow file that step runs', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'inline-check', `schemaVersion: v1alpha1
+name: inline-check
+description: Classify the issue.
+ends:
+  ready: succeeded
+outputs:
+  verdict: steps.classify.outputs.verdict
+steps:
+  - id: classify
+    command: node classify.js
+    output:
+      verdict: fix | drop
+  - id: done
+    needs: [classify]
+    end: ready
+`);
+    writeWorkflow(config, 'inline-ship', `schemaVersion: v1alpha1
+name: inline-ship
+description: Read a sub-workflow from an inline workflow.
+steps:
+  - id: check
+    workflow: inline-check
+  - id: group
+    needs: [check]
+    workflow:
+      steps:
+        - id: note
+          if: steps.check.end == 'redy' && steps.check.outputs.verdcit == 'fix'
+          command: node note.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map((diagnostic) => [formatDiagnostic(diagnostic), diagnostic.code])).toEqual([
+      ['workflows/inline-ship.yaml:12: field "steps[1].workflow.steps[0].if": step "note" if reads steps.check.outputs.verdcit, which is not an output workflow "inline-check" declares', 'undeclared_output'],
+      ['workflows/inline-ship.yaml:12: field "steps[1].workflow.steps[0].if": step "note" if compares steps.check.end with \'redy\', which is not an end workflow "inline-check" declares', 'undeclared_end'],
+    ]);
   });
 });

@@ -77,6 +77,26 @@ steps:
 
 `workflow: <name>` 按名称在 `teamai pull` 写入的已校验缓存中查找，而不是在文件中查找。`workflow start` 从该缓存取出运行用到的每个工作流并保存在运行中，因此之后的 pull 不会改变进行中的运行。子工作流没有可运行版本，或工作流之间循环调用时，`start` 会报错并指出它们。`teamai pull` 会在父工作流的对应步骤上报告同样的问题，以及与子工作流 `inputs` 不匹配的 `with` 键、读取子工作流未声明的输出或结束名称；出现这种读取时，父工作流也会没有可运行的版本。
 
+步骤也可以直接写出它运行的工作流，把一组步骤当作一个步骤：
+
+```yaml
+  - id: check
+    needs: [plan]
+    workflow:
+      ends: { dropped: succeeded }
+      outputs: { verdict: steps.classify.outputs.verdict }
+      steps:
+        - id: classify
+          prompt: "Classify {{ inputs.title }} for {{ steps.plan.outputs.task }}."
+          output: { verdict: fix | drop }
+        - id: drop
+          needs: [classify]
+          if: steps.classify.outputs.verdict == 'drop'
+          end: dropped
+```
+
+内联工作流包含 `steps`，以及可选的 `ends` 和 `outputs`，用法与文件中相同。它没有 `inputs`，它所在的步骤也不能有 `with`：它的步骤读取外层工作流的输入，以及外层步骤直接或间接 `needs` 的步骤。内联工作流中与外层步骤同 id 的步骤会遮住外层那个步骤。它的步骤按路径租用，例如 `check.classify`；其中的 `end` 只结束这个内联工作流。内联工作流可以运行工作流文件，也可以再包含内联工作流。
+
 在本地配置中按机器选择无界面工具：
 
 ```yaml

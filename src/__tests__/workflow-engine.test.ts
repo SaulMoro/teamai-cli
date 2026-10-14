@@ -1401,3 +1401,192 @@ describe('with on prompt steps', () => {
     ] });
   });
 });
+
+describe('inline workflows', () => {
+  it('leases inline steps by path, and they read the enclosing inputs and the enclosing step\'s ancestors', async () => {
+    const { config, runId } = await startTree({ ship: workflow('ship', `  - id: plan
+    command: node plan.js
+    output:
+      task: string
+  - id: check
+    needs: [plan]
+    workflow:
+      steps:
+        - id: classify
+          prompt: "Classify {{ inputs.title }} for {{ steps.plan.outputs.task }}."
+        - id: comment
+          needs: [classify]
+          if: steps.plan.outcome == 'success'
+          command: node comment.js
+  - id: ship
+    needs: [check]
+    command: node ship.js
+`, 'inputs:\n  title: string\n') }, 'ship', { title: 'Bug' });
+    const plan = await leaseNext(config, runId, driverA);
+    if ('error' in plan) throw new Error(plan.error.message);
+    const lease = plan.data.lease as { attempt: string; revision: number };
+    await reportAttempt(config, runId, { ...lease, outcome: 'success', outputs: { task: 'fix' }, driver: driverA });
+
+    const classify = await leaseNext(config, runId, driverA);
+    if ('error' in classify) throw new Error(classify.error.message);
+    const classifyLease = classify.data.lease as { attempt: string; revision: number };
+    await reportAttempt(config, runId, { ...classifyLease, outcome: 'success', driver: driverA });
+    const { leased, done } = await drive(config, runId);
+
+    expect(classify).toMatchObject({ data: { lease: { step: 'check.classify', prompt: 'Classify Bug for fix.' } } });
+    expect(leased).toEqual(['check.comment', 'ship']);
+    expect(done).toEqual({ run: runId, record: 'pending', outcome: 'succeeded' });
+  });
+
+  it('finishes only the inline workflow at its end, and the parent reads its end and outputs', async () => {
+    const { config, runId } = await startTree({ ship: workflow('ship', `  - id: check
+    workflow:
+      ends:
+        dropped: succeeded
+      outputs:
+        verdict: steps.classify.outputs.verdict
+      steps:
+        - id: classify
+          command: node classify.js
+          output:
+            verdict: fix | drop
+        - id: drop
+          needs: [classify]
+          if: steps.classify.outputs.verdict == 'drop'
+          end: dropped
+        - id: comment
+          needs: [classify]
+          command: node comment.js
+  - id: close
+    needs: [check]
+    if: steps.check.end == 'dropped'
+    command: node close.js
+    env:
+      VERDICT: "{{ steps.check.outputs.verdict }}"
+`) }, 'ship');
+    const classify = await leaseNext(config, runId, driverA);
+    if ('error' in classify) throw new Error(classify.error.message);
+    const lease = classify.data.lease as { attempt: string; revision: number };
+    await reportAttempt(config, runId, { ...lease, outcome: 'success', outputs: { verdict: 'drop' }, driver: driverA });
+
+    const close = await leaseNext(config, runId, driverA);
+
+    expect(close).toMatchObject({ data: { lease: { step: 'close', env: { VERDICT: 'drop' } } } });
+    expect(await readRun(config, runId)).toMatchObject({ status: 'running', steps: [
+      { id: 'check', status: 'succeeded', end: 'dropped', outputs: { verdict: 'drop' } },
+      { id: 'check.classify', status: 'succeeded' },
+      { id: 'check.drop', status: 'succeeded' },
+      { id: 'check.comment', status: 'skipped' },
+      { id: 'close', status: 'leased' },
+    ] });
+  });
+
+  it('starts an inline workflow only after every enclosing step its steps read has settled', async () => {
+    // gate is skipped as soon as build fails, while late is still pending; deploy reads late through gate.
+    const { config, runId } = await startTree({ ship: workflow('ship', `  - id: build
+    command: node build.js
+  - id: docs
+    needs: []
+    command: node docs.js
+  - id: gate
+    needs: [build, late]
+    command: node gate.js
+  - id: deploy
+    needs: [gate, docs]
+    workflow:
+      steps:
+        - id: push
+          command: node push.js
+          env:
+            LATE: "{{ steps.late.outcome }}"
+  - id: late
+    needs: []
+    command: node late.js
+`) }, 'ship');
+
+    const { leased } = await drive(config, runId, ['build']);
+
+    expect(leased).toEqual(['build', 'docs', 'late', 'deploy.push']);
+  });
+
+  it('snapshots a workflow file run from an inline workflow at any depth, and reads through every enclosing level', async () => {
+    const { config, runId } = await startTree({ check: CHECK, ship: workflow('ship', `  - id: plan
+    command: node plan.js
+  - id: outer
+    needs: [plan]
+    workflow:
+      steps:
+        - id: inner
+          workflow:
+            steps:
+              - id: note
+                command: node note.js
+                env:
+                  PLAN: "{{ steps.plan.outcome }}"
+              - id: check
+                needs: [note]
+                workflow: check
+`) }, 'ship');
+
+    const { leased, done } = await drive(config, runId);
+
+    expect(leased).toEqual(['plan', 'outer.inner.note', 'outer.inner.check.classify', 'outer.inner.check.comment']);
+    expect(done).toEqual({ run: runId, record: 'pending', outcome: 'succeeded' });
+    expect(await readRun(config, runId)).toMatchObject({ workflows: { check: { name: 'check' } } });
+  });
+
+  it('refuses to start when a workflow file run from an inline workflow runs the parent again', async () => {
+    const fixture = testConfig();
+    const workflows = path.join(fixture.config.repo.localPath, 'workflows');
+    fs.writeFileSync(path.join(workflows, 'ship.yaml'), workflow('ship', `  - id: outer
+    workflow:
+      steps:
+        - id: check
+          workflow: check
+`));
+    fs.writeFileSync(path.join(workflows, 'check.yaml'), CHECK);
+    await syncWorkflowDefinitions(fixture.config);
+    // ship's new revision runs a missing workflow, so ship keeps the version that runs check from its inline workflow.
+    fs.writeFileSync(path.join(workflows, 'ship.yaml'), workflow('ship', `  - id: outer
+    workflow: gone
+`));
+    fs.writeFileSync(path.join(workflows, 'check.yaml'), workflow('check', `  - id: again
+    workflow: ship
+`));
+    await syncWorkflowDefinitions(fixture.config);
+
+    expect(await startRun(fixture.config, 'ship')).toEqual({ error: {
+      code: 'workflow_recursion',
+      message: 'Workflow "ship" cannot start: its sub-workflows run in a cycle: ship -> check -> ship',
+    } });
+  });
+
+  it('reads its own step where an enclosing step has the same id', async () => {
+    const { config, runId } = await startTree({ ship: workflow('ship', `  - id: plan
+    command: node plan.js
+    output:
+      task: string
+  - id: check
+    needs: [plan]
+    workflow:
+      steps:
+        - id: plan
+          command: node inner-plan.js
+          output:
+            task: string
+        - id: fix
+          needs: [plan]
+          prompt: "Fix {{ steps.plan.outputs.task }}."
+`) }, 'ship');
+    for (const task of ['outer', 'inner']) {
+      const next = await leaseNext(config, runId, driverA);
+      if ('error' in next) throw new Error(next.error.message);
+      const lease = next.data.lease as { attempt: string; revision: number };
+      await reportAttempt(config, runId, { ...lease, outcome: 'success', outputs: { task }, driver: driverA });
+    }
+
+    const fix = await leaseNext(config, runId, driverA);
+
+    expect(fix).toMatchObject({ data: { lease: { step: 'check.fix', prompt: 'Fix inner.' } } });
+  });
+});

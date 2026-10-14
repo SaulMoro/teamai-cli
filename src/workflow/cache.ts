@@ -11,8 +11,8 @@ import {
   managedMcpWorkspaceId,
   type LocalConfig,
 } from '../types.js';
-import { formatDiagnostic, parseWorkflow, promptFileDiagnostics, type WorkflowFiles } from './parse.js';
-import type { CachedWorkflow, WorkflowDefinition, WorkflowDiagnostic } from './types.js';
+import { formatDiagnostic, parseWorkflow, promptFileDiagnostics, stepField, type WorkflowFiles } from './parse.js';
+import type { CachedWorkflow, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
 import { assertSafePath, assertWithinRoot } from '../utils/path-safety.js';
 
 export interface SyncWorkflowOptions {
@@ -34,7 +34,7 @@ interface Candidate {
   content: string;
   definition: WorkflowDefinition;
   sourceHash: string;
-  promptFileLocations: Record<number, { line: number; column: number }>;
+  promptFileLocations: Record<string, { line: number; column: number }>;
 }
 
 type Checked = Candidate | { stem: string; relativePath: string; diagnostics: WorkflowDiagnostic[] };
@@ -219,9 +219,13 @@ export async function syncWorkflowDefinitions(
   return result;
 }
 
-/** The workflow files a definition runs by name. Every check across files follows references through this walk. */
-function workflowsRunBy(definition: WorkflowDefinition): string[] {
-  return definition.steps.flatMap((step) => (step.workflow === undefined ? [] : [step.workflow]));
+/**
+ * The workflow files a definition runs by name, including from inside its inline workflows.
+ * Every check across files follows references through this walk.
+ */
+function workflowsRunBy(definition: { steps: WorkflowStep[] }): string[] {
+  return definition.steps.flatMap((step) => (typeof step.workflow === 'object' ? workflowsRunBy(step.workflow)
+    : step.workflow === undefined ? [] : [step.workflow]));
 }
 
 /**
@@ -263,21 +267,24 @@ function checkReferences(checked: Checked[], kept: Map<string, WorkflowDefinitio
     const files: WorkflowFiles = { runnable, cycle: (workflow) => cycleBack(workflow, candidate.stem) };
     const parsed = parseWorkflow(candidate.relativePath, candidate.content, files);
     const diagnostics = parsed.ok ? [] : parsed.diagnostics;
-    candidate.definition.steps.forEach((step, index) => {
+    const promptFiles = (steps: WorkflowStep[], trail: number[]): void => steps.forEach((step, index) => {
+      if (typeof step.workflow === 'object') promptFiles(step.workflow.steps, [...trail, index]);
       if (step.promptFile === undefined || step.prompt === undefined) return;
-      const at = candidate.promptFileLocations[index] ?? { line: 1, column: 1 };
-      diagnostics.push(...promptFileDiagnostics(candidate.relativePath, candidate.definition, index, step.prompt, at, files));
+      const at = candidate.promptFileLocations[stepField([...trail, index])] ?? { line: 1, column: 1 };
+      diagnostics.push(...promptFileDiagnostics(candidate.relativePath, candidate.definition, [...trail, index], step.prompt, at, files));
     });
+    promptFiles(candidate.definition.steps, []);
     found.set(candidate.stem, diagnostics);
     return diagnostics;
   };
   return check;
 }
 
+/** Resolves every `prompt_file`, including those inside inline workflows. */
 async function resolvePromptFiles(
   config: LocalConfig,
   definition: WorkflowDefinition,
-  locations: Record<number, { line: number; column: number }>,
+  locations: Record<string, { line: number; column: number }>,
   workflowFile: string,
 ): Promise<
   | { ok: true; definition: WorkflowDefinition; sources: Array<{ path: string; content: string }> }
@@ -286,33 +293,42 @@ async function resolvePromptFiles(
   const root = path.resolve(config.repo.localPath);
   const diagnostics: WorkflowDiagnostic[] = [];
   const sources: Array<{ path: string; content: string }> = [];
-  const steps = [...definition.steps];
-  for (const [index, step] of definition.steps.entries()) {
-    if (!step.promptFile) continue;
-    const target = path.resolve(root, step.promptFile);
-    const location = locations[index] ?? { line: 1, column: 1 };
-    let prompt: string | null = null;
-    try {
-      assertWithinRoot(path.join(root, 'prompts'), target);
-      const stat = await fs.lstat(target);
-      if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('not a regular file');
-      assertSafePath(target, [root]);
-      prompt = await readFileSafe(target);
-      if (prompt === null) throw new Error('unreadable');
-    } catch {
-      diagnostics.push({
-        file: workflowFile,
-        line: location.line,
-        column: location.column,
-        field: `steps[${index}].prompt_file`,
-        message: `prompt_file "${step.promptFile}" must be a readable, non-symlink file under prompts/`,
-      });
-      continue;
+  const resolveSteps = async (given: WorkflowStep[], trail: number[]): Promise<WorkflowStep[]> => {
+    const steps = [...given];
+    for (const [index, step] of given.entries()) {
+      const field = stepField([...trail, index]);
+      if (typeof step.workflow === 'object') {
+        steps[index] = { ...step, workflow: { ...step.workflow, steps: await resolveSteps(step.workflow.steps, [...trail, index]) } };
+        continue;
+      }
+      if (!step.promptFile) continue;
+      const target = path.resolve(root, step.promptFile);
+      const location = locations[field] ?? { line: 1, column: 1 };
+      let prompt: string | null = null;
+      try {
+        assertWithinRoot(path.join(root, 'prompts'), target);
+        const stat = await fs.lstat(target);
+        if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('not a regular file');
+        assertSafePath(target, [root]);
+        prompt = await readFileSafe(target);
+        if (prompt === null) throw new Error('unreadable');
+      } catch {
+        diagnostics.push({
+          file: workflowFile,
+          line: location.line,
+          column: location.column,
+          field: `${field}.prompt_file`,
+          message: `prompt_file "${step.promptFile}" must be a readable, non-symlink file under prompts/`,
+        });
+        continue;
+      }
+      diagnostics.push(...promptFileDiagnostics(workflowFile, definition, [...trail, index], prompt, location));
+      sources.push({ path: step.promptFile, content: prompt });
+      steps[index] = { ...step, prompt };
     }
-    diagnostics.push(...promptFileDiagnostics(workflowFile, definition, index, prompt, location));
-    sources.push({ path: step.promptFile, content: prompt });
-    steps[index] = { ...step, prompt };
-  }
+    return steps;
+  };
+  const steps = await resolveSteps(definition.steps, []);
   if (diagnostics.length > 0) return { ok: false, diagnostics };
   return { ok: true, definition: { ...definition, steps }, sources };
 }
