@@ -22,6 +22,19 @@ vi.mock('../utils/logger.js', () => ({
   })),
 }));
 
+// Makes every `git ls-files` spawn fail, as a process table at its limit does.
+const failLsFilesSpawn = vi.hoisted(() => ({ on: false }));
+vi.mock('../utils/exec.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../utils/exec.js')>();
+  return {
+    ...actual,
+    execCommand: (cmd: string, args: string[], opts?: Parameters<typeof actual.execCommand>[2]) =>
+      failLsFilesSpawn.on && cmd === 'git' && args.includes('ls-files')
+        ? Promise.reject(new Error('spawn git EAGAIN'))
+        : actual.execCommand(cmd, args, opts),
+  };
+});
+
 // What .git/info/exclude held at the moment each JSON config was written (#882).
 const excludeAtWrite = vi.hoisted(() => new Map<string, string | null>());
 // Runs just before each JSON config write, as a concurrent command would.
@@ -108,6 +121,7 @@ describe('MCP reconcile', () => {
   });
 
   afterEach(async () => {
+    failLsFilesSpawn.on = false;
     vi.unstubAllEnvs();
     await fse.remove(tmpDir);
   });
@@ -1974,6 +1988,30 @@ servers:
 
           expect(Object.keys((await ledger()).files)).not.toContain(customFile());
           expect(await excludeOf(projectRoot)).not.toMatch(/team-mcp\.json/);
+        });
+
+        // Gone from disk, still in git's index: only git saying it no longer tracks the file forgets it.
+        it('keeps its record when git cannot say whether it still tracks it', async () => {
+          commitIt();
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+          expect((await ledger()).files[customFile()]).toEqual({ tools: ['cursor'], tracked: true });
+          await fse.remove(customFile());
+          failLsFilesSpawn.on = true;
+
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+
+          expect((await ledger()).files[customFile()]).toEqual({ tools: ['cursor'], tracked: true });
+        });
+
+        it('forgets it once it is gone from disk and no repository holds it', async () => {
+          commitIt();
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+          await fse.remove(customFile());
+          await fse.remove(path.join(projectRoot, '.git'));
+
+          await reconcileMcpForConfig(teamConfig, projectConfig);
+
+          expect(Object.keys((await ledger()).files)).not.toContain(customFile());
         });
       });
 

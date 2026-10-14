@@ -74,7 +74,7 @@ import {
   resolvedVariableIn,
   type GitExclusion,
 } from './mcp-git-exclude.js';
-import { gitTracks, realFilePath } from './git-exclude.js';
+import { gitTracks, gitUntracked, realFilePath } from './git-exclude.js';
 import { opencodeDeliversThroughPlugin, opencodeMcpFile } from './opencode-hooks.js';
 import { createGit, getFileContentAtRev } from './utils/git.js';
 import {
@@ -1617,7 +1617,8 @@ async function observeMcpConfigs(
   }
   for (const [file, { targets: group, mappedBy, tracked }] of await recordedMcpTargets(localConfig, targets)) {
     const state = await mcpFileState(group);
-    const stillTracked = tracked && (await gitTracks(file)).kind === 'tracked';
+    // Only git saying it no longer tracks the file, or no repository holding it, ends that: a failed probe is no answer.
+    const stillTracked = tracked && !(await gitUntracked(file));
     const owned = ownedByMappers(mappedBy, manifest);
     const holding = !stillTracked && await recordedMcpFileEvidence(group, owned) !== null;
     for (const target of group) {
