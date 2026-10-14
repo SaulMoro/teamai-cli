@@ -9,6 +9,7 @@ import {
   encodeRepoIdentity,
   decodeRepoIdentity,
   canonicalizeRemote,
+  withSessionIndexLock,
 } from '../session-flow/sync.js';
 import type { Session } from '../session-flow/ir.js';
 
@@ -277,6 +278,66 @@ describe('saveSession dedup (origin sessionId + author)', () => {
     expect(sessions).toHaveLength(2);
     expect(sessions.find((s) => s.sessionId === 's-1')).toMatchObject({ title: 'fix payment v2' });
     expect(sessions.find((s) => s.sessionId === 's-2')).toBeTruthy();
+  });
+});
+
+describe('withSessionIndexLock', () => {
+  let home: string;
+  let previousHome: string | undefined;
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-sync-home-'));
+    previousHome = process.env.HOME;
+    process.env.HOME = home;
+  });
+
+  afterEach(() => {
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it('lands both of two concurrent saves of different sessions with the same title and day', async () => {
+    let releaseFirst!: () => void;
+    const firstHolds = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstHasLock!: () => void;
+    const firstLocked = new Promise<void>((resolve) => {
+      firstHasLock = resolve;
+    });
+    const first = withSessionIndexLock(repoRoot, async () => {
+      firstHasLock();
+      await firstHolds;
+      return new SyncManager(repoRoot).saveSession(mkSession({ sessionId: 's-a' }), mkMeta({ sessionId: 's-a' }));
+    });
+    await firstLocked;
+    const second = withSessionIndexLock(repoRoot, async () =>
+      new SyncManager(repoRoot).saveSession(mkSession({ sessionId: 's-b' }), mkMeta({ sessionId: 's-b' })),
+    );
+
+    // The second save waits for the first instead of picking the same free name.
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    expect(fs.existsSync(path.join(repoRoot, 'sessions'))).toBe(false);
+    releaseFirst();
+
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toEqual({ status: 'done', value: expect.stringMatching(/claude-code_fix-payment_20260102\.jsonl$/) });
+    expect(b).toEqual({ status: 'done', value: expect.stringMatching(/claude-code_fix-payment_20260102_1\.jsonl$/) });
+    const sessions = readRepoIndex('github.com/org/alpha').sessions;
+    expect(sessions.map((s) => s.sessionId).sort()).toEqual(['s-a', 's-b']);
+  });
+
+  it('keeps its lock file under the TeamAI home, never inside the team repo', async () => {
+    const held = await withSessionIndexLock(repoRoot, async () => ({
+      locks: fs.readdirSync(path.join(home, '.teamai', 'locks')),
+      repoFiles: fs.readdirSync(repoRoot, { recursive: true }).map(String),
+    }));
+
+    expect(held).toEqual({
+      status: 'done',
+      value: { locks: [expect.stringMatching(/^sessions-[0-9a-f]{16}\.lock$/)], repoFiles: [] },
+    });
   });
 });
 

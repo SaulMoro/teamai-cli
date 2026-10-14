@@ -30,6 +30,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import { getTeamaiHomeDir } from '../types.js';
+import { acquireLock, releaseLock } from '../update.js';
 import type { Session } from './ir.js';
 import { messageToDict, messageFromDict } from './ir.js';
 
@@ -350,6 +353,40 @@ function assertNoSymlinkedAncestors(target: string, root: string): void {
       // ENOENT: this and every deeper component does not exist yet.
       return;
     }
+  }
+}
+
+// A save holds the lock for a few file writes, a rebuild for one pass over the
+// archive. Ten seconds covers both without leaving a command stuck.
+const INDEX_LOCK_ATTEMPTS = 100;
+const INDEX_LOCK_RETRY_MS = 100;
+
+/**
+ * Run `fn` holding the lock on the team repo's `sessions/` archive, or report
+ * who holds it. Take it around each `saveSession` (dedup lookup, name choice,
+ * file writes, index upsert) and each index rebuild, so two pushes at once
+ * cannot pick the same free name or drop each other's index entry.
+ *
+ * The lock lives under `~/.teamai/locks/`, keyed by the archive's real path,
+ * not beside `_index.json`: there the commit and `pull --all`'s directory
+ * renames would reach it. SyncManager stays synchronous and never takes the
+ * lock itself, so it cannot re-enter it.
+ */
+export async function withSessionIndexLock<T>(
+  repoRoot: string,
+  fn: () => Promise<T>,
+): Promise<{ status: 'done'; value: T } | { status: 'busy'; lockPath: string }> {
+  const real = await fs.promises.realpath(repoRoot).catch(() => path.resolve(repoRoot));
+  const key = createHash('sha256').update(path.join(real, 'sessions')).digest('hex').slice(0, 16);
+  const lockPath = path.join(getTeamaiHomeDir(), 'locks', `sessions-${key}.lock`);
+  for (let attempt = 1; !(await acquireLock(lockPath)); attempt++) {
+    if (attempt === INDEX_LOCK_ATTEMPTS) return { status: 'busy', lockPath };
+    await new Promise((resolve) => setTimeout(resolve, INDEX_LOCK_RETRY_MS));
+  }
+  try {
+    return { status: 'done', value: await fn() };
+  } finally {
+    await releaseLock(lockPath);
   }
 }
 

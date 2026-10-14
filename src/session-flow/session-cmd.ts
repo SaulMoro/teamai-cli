@@ -24,7 +24,7 @@ import * as path from 'node:path';
 import { getAdapter, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
 import { scrubSession } from './scrub.js';
 import { MigrationEngine } from './migrate.js';
-import { SyncManager, getRepoIdentity, getGitAuthor, defaultSyncMeta } from './sync.js';
+import { SyncManager, getRepoIdentity, getGitAuthor, defaultSyncMeta, withSessionIndexLock } from './sync.js';
 import { SessionSearchEngine, type LoadedSession } from './search.js';
 import { isSafeSessionFileId } from './ids.js';
 import { isInteractive } from '../utils/prompt.js';
@@ -317,6 +317,13 @@ function runGitStep<T>(step: () => T, repoRoot: string, what: string): T {
     console.error(`Check that ${repoRoot} is a git repository with a configured remote, then retry.`);
     process.exit(1);
   }
+}
+
+/** Another command held the session archive lock for the whole wait: this write did not happen, so fail the run. */
+function reportArchiveBusy(repoRoot: string, lockPath: string): void {
+  console.error(`Error: another teamai command is writing the session archive in ${repoRoot} (lock: ${lockPath}).`);
+  console.error('Run this command again once it has finished.');
+  process.exitCode = 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -668,7 +675,11 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           meta.migration.targetPlatform = target;
           meta.migration.fidelityScore = t.fidelityScore;
           try {
-            syncMgr.saveSession(session, meta);
+            const write = await withSessionIndexLock(repoRoot, async () => syncMgr.saveSession(session, meta));
+            if (write.status === 'busy') {
+              reportArchiveBusy(repoRoot, write.lockPath);
+              return;
+            }
           } catch (err) {
             console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
             process.exitCode = 1;
@@ -838,7 +849,11 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         // mid-batch must not fall through to a commit that publishes a
         // half-archive.
         try {
-          syncMgr.saveSession(session, meta);
+          const write = await withSessionIndexLock(repoRoot, async () => syncMgr.saveSession(session, meta));
+          if (write.status === 'busy') {
+            reportArchiveBusy(repoRoot, write.lockPath);
+            return;
+          }
         } catch (err) {
           console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
           process.exitCode = 1;
@@ -905,12 +920,15 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       if (opts.all) {
         // P2: rebuild by directory (including repos whose index is missing or corrupt — those are exactly the ones that most need repair),
         // rather than only rebuilding the ones whose identity can be recovered from _index.json.
-        const { repos, sessions } = syncMgr.rebuildAllIndexes();
+        const rebuilt = await withSessionIndexLock(repoRoot, async () => syncMgr.rebuildAllIndexes());
+        if (rebuilt.status === 'busy') return reportArchiveBusy(repoRoot, rebuilt.lockPath);
+        const { repos, sessions } = rebuilt.value;
         console.log(`\n  ✓ Pulled and indexed ${sessions} session(s) across ${repos} repo(s)\n`);
       } else {
         const repoIdentity = resolveRepoIdentity(workCwd);
-        const count = syncMgr.rebuildIndex(repoIdentity);
-        console.log(`\n  ✓ Pulled and indexed ${count} session(s)\n`);
+        const rebuilt = await withSessionIndexLock(repoRoot, async () => syncMgr.rebuildIndex(repoIdentity));
+        if (rebuilt.status === 'busy') return reportArchiveBusy(repoRoot, rebuilt.lockPath);
+        console.log(`\n  ✓ Pulled and indexed ${rebuilt.value} session(s)\n`);
       }
     });
 
