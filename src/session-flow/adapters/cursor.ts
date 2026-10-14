@@ -440,6 +440,9 @@ export class CursorAdapter extends AgentAdapter {
             cursorContent.push({ type: 'text', text: block.text });
           } else if (block.type === 'thinking') {
             cursorContent.push({ type: 'text', text: `<thinking>\n${block.text}\n</thinking>` });
+          } else if (block.type === 'image') {
+            // Cursor storage has no images: degrade to a placeholder (counted degraded)
+            cursorContent.push({ type: 'text', text: imagePlaceholderText(block) });
           }
         }
         if (toolResults.length > 0 && lastAssistantRecord) {
@@ -596,6 +599,8 @@ export class CursorAdapter extends AgentAdapter {
           // paths are noise (Cursor renders them as chips natively; we cannot).
           const visible = msg.role === 'user' ? visibleUserText(stripped) : stripped;
           if (visible && isRenderableText(visible)) textParts.push(visible);
+        } else if (block.type === 'image') {
+          textParts.push(imagePlaceholderText(block));
         } else if (block.type === 'tool_call') {
           const res = toolResults.get(block.callId);
           tools.push({
