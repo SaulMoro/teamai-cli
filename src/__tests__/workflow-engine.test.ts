@@ -384,6 +384,24 @@ describe('workflow engine', () => {
     expect(fs.readFileSync(path.join(work, 'step-two.txt'), 'utf8')).toBe('2');
   });
 
+  it('passes env to a command as variables over the inherited environment, never as shell', async () => {
+    const fixture = testConfig();
+    fs.writeFileSync(path.join(fixture.config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: label
+    command: node -e "require('fs').writeFileSync('title.txt', process.env.TITLE + '|' + (process.env.PATH && 'inherited'))"
+    env:
+      TITLE: "{{ inputs.title }}"
+`, 'inputs:\n  title: string\n'));
+    await syncWorkflowDefinitions(fixture.config);
+    const started = await startRun(fixture.config, 'build', { title: '$(touch pwned)' });
+    if ('error' in started) throw new Error(started.error.message);
+
+    const done = await runLocalDriver(fixture.config, String(started.data.run), fixture.work);
+
+    expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(fs.readFileSync(path.join(fixture.work, 'title.txt'), 'utf8')).toBe('$(touch pwned)|inherited');
+    expect(fs.existsSync(path.join(fixture.work, 'pwned'))).toBe(false);
+  });
+
   it('skips a step whose dependency failed and still runs an independent branch', async () => {
     const { config, runId } = await startBuild(graph(`  - id: build
     command: node build.js
@@ -677,6 +695,49 @@ describe('workflow engine', () => {
     expect(leased).toEqual(['build', 'docs', 'late', 'deploy']);
   });
 
+  it('evaluates an if against the run inputs', async () => {
+    const fixture = testConfig();
+    fs.writeFileSync(path.join(fixture.config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: build
+    command: node build.js
+  - id: ship
+    needs: [build]
+    if: inputs.ship
+    command: node ship.js
+`, 'inputs:\n  ship: boolean\n'));
+    await syncWorkflowDefinitions(fixture.config);
+    const started = await startRun(fixture.config, 'build', { ship: true });
+    if ('error' in started) throw new Error(started.error.message);
+
+    const { leased } = await drive(fixture.config, String(started.data.run));
+
+    expect(leased).toEqual(['build', 'ship']);
+  });
+
+  it('leases a step only after every step its templates read has settled', async () => {
+    // gate is skipped as soon as build fails, while late is still pending; deploy reads late through gate.
+    const { config, runId } = await startBuild(graph(`  - id: build
+    command: node build.js
+  - id: docs
+    needs: []
+    command: node docs.js
+  - id: gate
+    needs: [build, late]
+    command: node gate.js
+  - id: deploy
+    needs: [gate, docs]
+    command: node deploy.js
+    env:
+      LATE: "{{ steps.late.outcome }}"
+  - id: late
+    needs: []
+    command: node late.js
+`));
+
+    const { leased } = await drive(config, runId, ['build']);
+
+    expect(leased).toEqual(['build', 'docs', 'late', 'deploy']);
+  });
+
   it.each([
     ['fails', ['check'], ['check'], { outcome: 'succeeded', end: 'handled' }],
     ['succeeds', [], ['check', 'ship'], { outcome: 'succeeded' }],
@@ -696,6 +757,132 @@ describe('workflow engine', () => {
 
     expect(result.leased).toEqual(order);
     expect(result.done).toEqual({ run: runId, ...done });
+  });
+
+  it.each([
+    ['a missing input', { issue: 42 }, 'inputs.title is missing'],
+    ['an undeclared input', { issue: 42, title: 'Fix', titel: 'Fix' }, 'inputs.titel is not an input workflow "build" declares'],
+    ['a mistyped input', { issue: '42', title: 'Fix' }, 'inputs.issue must be a number'],
+    ['inputs that are not an object', [42, 'Fix'], 'inputs must be a JSON object'],
+  ])('rejects %s with invalid_inputs before a run exists', async (_case, inputs, message) => {
+    const fixture = testConfig();
+    fs.writeFileSync(path.join(fixture.config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: fix
+    command: node fix.js
+`, 'inputs:\n  issue: number\n  title: string\n'));
+    await syncWorkflowDefinitions(fixture.config);
+
+    expect(await startRun(fixture.config, 'build', inputs)).toEqual({ error: { code: 'invalid_inputs', message } });
+    expect(fs.existsSync(path.join(fixture.config.dataHome!, 'workflows', 'runs'))).toBe(false);
+  });
+
+  it('stores the inputs and renders inputs and step outputs into a prompt, leaving other braces as written', async () => {
+    const fixture = testConfig();
+    fs.writeFileSync(path.join(fixture.config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: plan
+    command: node plan.js
+    output:
+      task:
+        files: [string]
+  - id: fix
+    needs: [plan]
+    prompt: "Fix #{{ inputs.issue }} {{inputs.title}} in {{ steps.plan.outputs.task }}. Keep \${{ secrets.TOKEN }} and {{ name }}."
+`, 'inputs:\n  issue: number\n  title: string\n'));
+    await syncWorkflowDefinitions(fixture.config);
+    const started = await startRun(fixture.config, 'build', { issue: 42, title: 'Crash' });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    const plan = await leaseNext(fixture.config, runId, driverA);
+    if ('error' in plan) throw new Error(plan.error.message);
+    const lease = plan.data.lease as { attempt: string; revision: number };
+    await reportAttempt(fixture.config, runId, { ...lease, outcome: 'success', outputs: { task: { files: ['a.ts'] } }, driver: driverA });
+
+    const fix = await leaseNext(fixture.config, runId, driverA);
+
+    expect(fix).toMatchObject({ data: { lease: { step: 'fix', prompt: 'Fix #42 Crash in {"files":["a.ts"]}. Keep ${{ secrets.TOKEN }} and {{ name }}.' } } });
+    expect(await readRun(fixture.config, runId)).toMatchObject({ inputs: { issue: 42, title: 'Crash' } });
+  });
+
+  it('leases a command with its env rendered to strings and its command as written', async () => {
+    const fixture = testConfig();
+    fs.writeFileSync(path.join(fixture.config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: plan
+    command: node plan.js
+  - id: label
+    needs: [plan]
+    command: node label.js "$TITLE"
+    env:
+      TITLE: "{{ inputs.title }}"
+      FILES: "{{ steps.plan.outputs.files }}"
+      LABEL: "issue-{{ inputs.issue }}"
+      PORT: 8080
+`, 'inputs:\n  issue: number\n  title: string\n'));
+    await syncWorkflowDefinitions(fixture.config);
+    const started = await startRun(fixture.config, 'build', { issue: 42, title: '$(touch pwned)' });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    const plan = await leaseNext(fixture.config, runId, driverA);
+    if ('error' in plan) throw new Error(plan.error.message);
+    const lease = plan.data.lease as { attempt: string; revision: number };
+    await reportAttempt(fixture.config, runId, { ...lease, outcome: 'success', outputs: { files: ['a.ts'] }, driver: driverA });
+
+    const label = await leaseNext(fixture.config, runId, driverA);
+    const again = await leaseNext(fixture.config, runId, driverA);
+
+    expect(label).toMatchObject({ data: { lease: {
+      step: 'label',
+      command: 'node label.js "$TITLE"',
+      env: { TITLE: '$(touch pwned)', FILES: '["a.ts"]', LABEL: 'issue-42', PORT: '8080' },
+    } } });
+    expect(again).toEqual(label);
+  });
+
+  it('renders every template in one value, in a prompt and in env', async () => {
+    const fixture = testConfig();
+    fs.writeFileSync(path.join(fixture.config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: label
+    command: node label.js
+    env:
+      REPO: "{{ inputs.owner }}/{{ inputs.repo }}"
+  - id: review
+    needs: [label]
+    prompt: "Review {{ inputs.owner }}/{{ inputs.repo }}."
+`, 'inputs:\n  owner: string\n  repo: string\n'));
+    await syncWorkflowDefinitions(fixture.config);
+    const started = await startRun(fixture.config, 'build', { owner: 'tencent', repo: 'teamai-cli' });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+
+    const label = await leaseNext(fixture.config, runId, driverA);
+    if ('error' in label) throw new Error(label.error.message);
+    const lease = label.data.lease as { attempt: string; revision: number; env: Record<string, string> };
+    await reportAttempt(fixture.config, runId, { ...lease, outcome: 'success', driver: driverA });
+    const review = await leaseNext(fixture.config, runId, driverA);
+
+    expect(lease.env).toEqual({ REPO: 'tencent/teamai-cli' });
+    expect(review).toMatchObject({ data: { lease: { step: 'review', prompt: 'Review tencent/teamai-cli.' } } });
+  });
+
+  it('fails a step whose stored template cannot render and keeps settling the run', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: label
+    command: node label.js
+    env:
+      TITLE: fixed
+  - id: docs
+    needs: []
+    command: node docs.js
+`));
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    run.definition.steps[0]!.env = { TITLE: '{{ inputs.a b }}' };
+    await writeRun(config, run);
+
+    const { leased, done } = await drive(config, runId);
+
+    expect(leased).toEqual(['docs']);
+    expect(done).toMatchObject({ outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({
+      steps: [
+        { id: 'label', status: 'failed', failure: { code: 'invalid_template', message: 'step "label" env.TITLE template {{ inputs.a b }}: unexpected "b"' } },
+        { id: 'docs', status: 'succeeded' },
+      ],
+    });
   });
 
   it('reports a run whose stored if does not parse instead of guessing', async () => {

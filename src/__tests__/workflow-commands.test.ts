@@ -20,7 +20,7 @@ vi.mock('../config.js', async (importOriginal) => {
 import { setStderrOnly } from '../utils/logger.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
 import { startRun } from '../workflow/engine.js';
-import { workflowNext, workflowReport } from '../workflow-commands.js';
+import { workflowNext, workflowReport, workflowStart } from '../workflow-commands.js';
 
 const dirs: string[] = [];
 
@@ -121,5 +121,43 @@ describe('workflow json payloads', () => {
 
     const missing = await capture(() => workflowNext('r00000000', { json: '  ' }));
     expect(missing).toMatchObject({ error: { code: 'invalid_json', message: 'Pass --json with a driver object' } });
+  });
+});
+
+describe('workflow start --inputs', () => {
+  function inputsConfig(): LocalConfig {
+    const config = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'fix.yaml'), `schemaVersion: v1alpha1
+name: fix
+description: Fix an issue.
+inputs:
+  issue: number
+steps:
+  - id: fix
+    command: node fix.js
+`);
+    return config;
+  }
+
+  it('rejects inputs that do not fit with invalid_inputs and creates no run', async () => {
+    const config = inputsConfig();
+    await syncWorkflowDefinitions(config);
+    state.config = config;
+
+    const started = await capture(() => workflowStart('fix', { inputs: '{"issue":"42"}' }));
+
+    expect(started).toEqual({ error: { code: 'invalid_inputs', message: 'inputs.issue must be a number' } });
+    expect(process.exitCode).toBe(1);
+    expect(fs.existsSync(path.join(config.dataHome!, 'workflows', 'runs'))).toBe(false);
+  });
+
+  it('rejects --inputs that is not JSON', async () => {
+    const config = inputsConfig();
+    await syncWorkflowDefinitions(config);
+    state.config = config;
+
+    expect(await capture(() => workflowStart('fix', { inputs: '{issue: 42}' }))).toEqual({
+      error: { code: 'invalid_json', message: 'Could not parse --inputs as JSON' },
+    });
   });
 });

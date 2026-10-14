@@ -27,6 +27,8 @@ export interface WorkflowStep {
   promptFile?: string;
   agent?: string;
   output?: OutputSchema;
+  /** Variables a command step receives, as written; `{{ inputs.… }}` and `{{ steps.… }}` render when the step is leased. */
+  env?: Record<string, string>;
   /** Name in `ends` this step finishes the workflow with when it succeeds. A step with no action only ends the workflow and is never leased. */
   end?: string;
 }
@@ -37,6 +39,8 @@ export interface WorkflowDefinition {
   schemaVersion: 'v1alpha1';
   name: string;
   description: string;
+  /** Values `start --inputs` must pass, each typed with the output shorthand. Every input is required. */
+  inputs?: Record<string, OutputSchema>;
   /** Named ends a step can finish this workflow with, each with the run outcome it gives. */
   ends?: Record<string, EndOutcome>;
   steps: WorkflowStep[];
@@ -53,8 +57,12 @@ export interface WorkflowDiagnostic {
    * `unknown_key`: a key this version does not know.
    * `missing_needs`: a step after the first has no `needs`; a copy cached under the old linear rules must not run as a graph.
    * `false_if`: an `if` is always false; an older copy would still run the step the author turned off.
+   * `bad_template`: a `{{ inputs.… }}` or `{{ steps.… }}` that does not read a valid path; a prompt cached before
+   *   templates existed would now render it as empty text instead of the text it was written as.
+   * `dotted_name`: a step id or an `inputs` or `output` field name contains "."; no path can read it, and a
+   *   step id would clash with the dotted paths that address steps inside a sub-workflow.
    */
-  code?: 'unknown_key' | 'missing_needs' | 'false_if';
+  code?: 'unknown_key' | 'missing_needs' | 'false_if' | 'bad_template' | 'dotted_name';
 }
 
 export type StepStatus = 'pending' | 'leased' | 'succeeded' | 'failed' | 'skipped';
@@ -103,6 +111,8 @@ export interface RunState {
   status: RunStatus;
   /** The end this run reached, set when it settles. */
   end?: string;
+  /** The validated `--inputs`, stored when the workflow declares inputs. */
+  inputs?: Record<string, unknown>;
   sourceHash: string;
   definition: WorkflowDefinition;
   steps: StepState[];

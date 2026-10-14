@@ -68,7 +68,7 @@ function parseTools(value: string | undefined): Record<string, string> | string 
   return tools;
 }
 
-export async function workflowStart(name: string, options: { driver?: string; tools?: string }): Promise<void> {
+export async function workflowStart(name: string, options: { driver?: string; tools?: string; inputs?: string }): Promise<void> {
   setStderrOnly(true);
   const loaded = await readyConfig();
   if (!loaded) return;
@@ -82,7 +82,16 @@ export async function workflowStart(name: string, options: { driver?: string; to
     writeEnvelope({ error: { code: 'invalid_tools', message: tools } });
     return;
   }
-  const started = await startRun(config, name);
+  let inputs: unknown = {};
+  if (options.inputs !== undefined) {
+    try {
+      inputs = JSON.parse(options.inputs) as unknown;
+    } catch {
+      writeEnvelope({ error: { code: 'invalid_json', message: 'Could not parse --inputs as JSON' } });
+      return;
+    }
+  }
+  const started = await startRun(config, name, inputs);
   if ('error' in started || options.driver !== 'local') {
     writeEnvelope(started);
     return;
