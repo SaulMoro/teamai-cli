@@ -10,13 +10,29 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { homedir } from 'node:os';
+import {
+  CLAUDE_TOOL_ID,
+  CODEX_TOOL_ID,
+  DEFAULT_CLAUDE_ROOT,
+  DEFAULT_CODEX_ROOT,
+  resolveToolRootDir,
+  type LocalConfig,
+} from '../types.js';
 
 // ---------------------------------------------------------------------------
 // Default per-platform storage paths
 // ---------------------------------------------------------------------------
 
-export function getClaudeCodeProjectsDir(): string {
-  return path.join(homedir(), '.claude', 'projects');
+/**
+ * The root of a relocatable tool: the one the member recorded (`toolRoots`, written by `teamai
+ * init` from CLAUDE_CONFIG_DIR or CODEX_HOME), else the default one in the home directory.
+ */
+function toolRootDir(tool: string, defaultRoot: string, toolRoots: LocalConfig['toolRoots']): string {
+  return toolRoots?.[tool] ? resolveToolRootDir(tool, defaultRoot, toolRoots) : path.join(homedir(), defaultRoot);
+}
+
+export function getClaudeCodeProjectsDir(toolRoots?: LocalConfig['toolRoots']): string {
+  return path.join(toolRootDir(CLAUDE_TOOL_ID, DEFAULT_CLAUDE_ROOT, toolRoots), 'projects');
 }
 
 /** TeamAI variant: claude-internal */
@@ -29,8 +45,8 @@ export function getTClaudeProjectsDir(): string {
   return path.join(homedir(), '.tclaude', 'projects');
 }
 
-export function getCodexSessionsDir(): string {
-  return path.join(homedir(), '.codex', 'sessions');
+export function getCodexSessionsDir(toolRoots?: LocalConfig['toolRoots']): string {
+  return path.join(toolRootDir(CODEX_TOOL_ID, DEFAULT_CODEX_ROOT, toolRoots), 'sessions');
 }
 
 /** TeamAI variant: codex-internal */

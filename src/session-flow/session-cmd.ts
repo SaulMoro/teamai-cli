@@ -27,6 +27,8 @@ import {
   AgentSession,
   existingCopyId,
   noAdapter,
+  recordedToolRoots,
+  toolRootsLookup,
   type AgentSessionCopy,
   type AgentSessionListed,
 } from './agent-session.js';
@@ -198,15 +200,15 @@ async function promptSelect(question: string, options: string[]): Promise<string
 
 /**
  * Look up an adapter safely; an invalid platform gets a friendly message
- * instead of a stack trace.
+ * instead of a stack trace. Its store follows the tool roots recorded for `cwd`.
  */
-function safeGetAdapter(platform: string) {
+async function safeGetAdapter(platform: string, cwd: string | undefined) {
   const unknown = noAdapter(platform, 'read');
   if (unknown) {
     console.error(`Error: ${unknown.message}`);
     process.exit(1);
   }
-  return getAdapter(platform);
+  return getAdapter(platform, await recordedToolRoots(cwd));
 }
 
 /**
@@ -424,7 +426,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
     .description('List supported and installed AI agent platforms')
     .action(async () => {
       const available = listAvailablePlatforms();
-      const installed = listInstalledPlatforms();
+      const installed = listInstalledPlatforms(await recordedToolRoots(undefined));
       console.log('Available platforms:');
       for (const p of available) {
         const status = installed.includes(p) ? '✓ installed' : '✗ not installed';
@@ -646,6 +648,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       }
 
       const engine = new MigrationEngine(source, target);
+      const toolRootsFor = toolRootsLookup();
       let migrated = 0;
       let reused = 0;
       let failed = 0;
@@ -661,7 +664,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         // The preview shows what is stored; a --scrub run redacts in the copy itself.
         const found = await AgentSession.find(
           { platform: source, sessionId: m.sessionId, cwd: sourceProjectPath, filePath: m.filePath },
-          { scrub: false },
+          { scrub: false, toolRootsFor },
         );
         if (found.status === 'failed') {
           if (json) return printEnvelope({ error: { code: found.failure.code, message: found.failure.message } });
@@ -710,6 +713,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           from: { platform: source, sessionId: m.sessionId, cwd: sourceProjectPath, filePath: m.filePath },
           to: { platform: target, cwd: targetCwd },
           scrub: Boolean(opts.scrub),
+          toolRootsFor,
         });
         if (result.status === 'failed') {
           if (json) {
@@ -787,7 +791,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
           // and scrub again with the archive default, which drops filePath.
           const readBack = await AgentSession.find(
             { platform: target, sessionId: t.sessionId, cwd: t.cwd ?? opts.targetCwd ?? workCwd },
-            { scrub: Boolean(opts.scrub) },
+            { scrub: Boolean(opts.scrub), toolRootsFor },
           );
           if (readBack.status === 'failed') {
             if (json) return archiveFailed(readBack.failure.code, readBack.failure.message);
@@ -968,6 +972,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
       }
 
       const syncMgr = new SyncManager(repoRoot);
+      const toolRootsFor = toolRootsLookup();
       let saved = 0;
       let redactedTotal = 0;
       for (const m of selected) {
@@ -975,7 +980,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         // What gets archived is the full original text, and the team can read it: redact first when --scrub is set; when not redacted, say so once explicitly.
         const found = await AgentSession.find(
           { platform: source, sessionId: m.sessionId, cwd: opts.all ? undefined : workCwd, filePath: m.filePath },
-          { scrub: Boolean(opts.scrub) },
+          { scrub: Boolean(opts.scrub), toolRootsFor },
         );
         if (found.status === 'failed') {
           // Nothing is committed: a half-archive must not be published.
@@ -1181,8 +1186,8 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         process.exit(1);
       }
 
-      const resumeAdapter = safeGetAdapter(opts.platform);
       const resumeCwd = opts.cwd ?? process.cwd();
+      const resumeAdapter = await safeGetAdapter(opts.platform, resumeCwd);
       session.cwd = resumeCwd;
 
       if (isDryRun()) {
@@ -1312,7 +1317,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         return;
       }
 
-      const adapter = safeGetAdapter(opts.platform);
+      const adapter = await safeGetAdapter(opts.platform, opts.cwd);
       let deleted: boolean;
       try {
         deleted = await adapter.deleteSession(sessionId, opts.cwd);

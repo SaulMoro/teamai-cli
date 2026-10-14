@@ -10,6 +10,8 @@
  */
 
 import fs from 'node:fs';
+import { resolveMemberToolRoots } from '../config.js';
+import type { LocalConfig } from '../types.js';
 import { ADAPTER_REGISTRY, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
 import { ToolUnavailableError, type AgentAdapter, type SessionMeta } from './adapters/base.js';
 import { imagePlaceholderText, type ContentBlock, type Message, type Session } from './ir.js';
@@ -57,6 +59,15 @@ export type AgentSessionCopyRequest = {
   to: { platform: string; cwd: string };
   /** Redact secret-looking values before writing. The copy stays on this machine, so off by default. */
   scrub?: boolean;
+  /** Where the recorded tool roots come from; a run that copies many sessions passes one `toolRootsLookup()`. */
+  toolRootsFor?: ToolRootsLookup;
+};
+
+export type AgentSessionFindOptions = {
+  /** Redact secret-looking values; on by default. */
+  scrub?: boolean;
+  /** Where the recorded tool roots come from; a run that reads many sessions passes one `toolRootsLookup()`. */
+  toolRootsFor?: ToolRootsLookup;
 };
 
 export type AgentSessionFound =
@@ -111,7 +122,7 @@ export type AgentSessionList = {
 export type AgentSession = {
   list(query?: AgentSessionListQuery): Promise<AgentSessionList>;
   copy(request: AgentSessionCopyRequest): Promise<AgentSessionCopy>;
-  find(ref: AgentSessionRef, options?: { scrub?: boolean }): Promise<AgentSessionFound>;
+  find(ref: AgentSessionRef, options?: AgentSessionFindOptions): Promise<AgentSessionFound>;
   transcript(session: Session): AgentSessionTranscriptEntry[];
   platformForTool(tool: string): string | undefined;
 };
@@ -150,8 +161,32 @@ export function noAdapter(
   return undefined;
 }
 
-function adapterFor(platform: string, use: 'read' | 'write'): AgentAdapter | AgentSessionFailure {
-  return noAdapter(platform, use) ?? ADAPTER_REGISTRY[platform]();
+type ToolRoots = LocalConfig['toolRoots'];
+
+/**
+ * The member's recorded tool roots as seen from `cwd`: a relocated Claude Code or Codex keeps its
+ * sessions there. Read-only, so looking a session up never sets up a project.
+ */
+export const recordedToolRoots = (cwd: string | undefined): Promise<ToolRoots> =>
+  resolveMemberToolRoots(cwd, { selfHeal: false, dryRun: true, suppressMigrationNotice: true });
+
+export type ToolRootsLookup = (cwd: string | undefined) => Promise<ToolRoots>;
+
+/** `recordedToolRoots` for one run: each workspace is resolved once, however many of its sessions are read. */
+export function toolRootsLookup(): ToolRootsLookup {
+  const byCwd = new Map<string | undefined, Promise<ToolRoots>>();
+  return (cwd) => {
+    let roots = byCwd.get(cwd);
+    if (!roots) {
+      roots = recordedToolRoots(cwd);
+      byCwd.set(cwd, roots);
+    }
+    return roots;
+  };
+}
+
+function adapterFor(platform: string, use: 'read' | 'write', toolRoots: ToolRoots): AgentAdapter | AgentSessionFailure {
+  return noAdapter(platform, use) ?? ADAPTER_REGISTRY[platform](toolRoots);
 }
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -208,8 +243,8 @@ async function listedFilePath(target: AgentAdapter, sessionId: string, cwd: stri
   }
 }
 
-async function listPlatform(platform: string, cwd: string | undefined): Promise<AgentSessionList> {
-  const adapter = adapterFor(platform, 'read');
+async function listPlatform(platform: string, cwd: string | undefined, toolRoots: ToolRoots): Promise<AgentSessionList> {
+  const adapter = adapterFor(platform, 'read', toolRoots);
   if ('code' in adapter) return { sessions: [], failures: [adapter] };
   if (!adapter.isReady()) {
     const message = `${platform} is not installed or its session storage directory was not found.`;
@@ -242,7 +277,10 @@ async function listPlatform(platform: string, cwd: string | undefined): Promise<
  * each failure is that tool's alone.
  */
 async function list({ platforms, cwd, updatedSince }: AgentSessionListQuery = {}): Promise<AgentSessionList> {
-  const listed = await Promise.all((platforms ?? listInstalledPlatforms()).map((platform) => listPlatform(platform, cwd)));
+  const toolRoots = await recordedToolRoots(cwd);
+  const listed = await Promise.all(
+    (platforms ?? listInstalledPlatforms(toolRoots)).map((platform) => listPlatform(platform, cwd, toolRoots)),
+  );
   const since = updatedSince === undefined ? undefined : Date.parse(updatedSince);
   const sessions = listed
     .flatMap((one) => one.sessions)
@@ -255,8 +293,11 @@ async function list({ platforms, cwd, updatedSince }: AgentSessionListQuery = {}
  * Read one session. Redacted unless `scrub` is false: a new caller, such as a scorer, gets
  * redacted text without having to remember to ask for it.
  */
-async function find(ref: AgentSessionRef, { scrub = true }: { scrub?: boolean } = {}): Promise<AgentSessionFound> {
-  const source = adapterFor(ref.platform, 'read');
+async function find(
+  ref: AgentSessionRef,
+  { scrub = true, toolRootsFor = recordedToolRoots }: AgentSessionFindOptions = {},
+): Promise<AgentSessionFound> {
+  const source = adapterFor(ref.platform, 'read', await toolRootsFor(ref.cwd));
   if ('code' in source) return { status: 'failed', failure: source };
   const session = await readSource(source, ref);
   if ('code' in session) return { status: 'failed', failure: session };
@@ -265,10 +306,11 @@ async function find(ref: AgentSessionRef, { scrub = true }: { scrub?: boolean } 
   return { status: 'done', session: scrubbed.session, redactedCount: scrubbed.redactedCount };
 }
 
-async function copy({ from, to, scrub = false }: AgentSessionCopyRequest): Promise<AgentSessionCopy> {
-  const source = adapterFor(from.platform, 'read');
+async function copy({ from, to, scrub = false, toolRootsFor = recordedToolRoots }: AgentSessionCopyRequest): Promise<AgentSessionCopy> {
+  const source = adapterFor(from.platform, 'read', await toolRootsFor(from.cwd));
   if ('code' in source) return failed(source);
-  const target = adapterFor(to.platform, 'write');
+  const targetToolRoots = await toolRootsFor(to.cwd);
+  const target = adapterFor(to.platform, 'write', targetToolRoots);
   if ('code' in target) return failed(target);
   if (!target.isReady()) {
     return failed({
@@ -276,7 +318,7 @@ async function copy({ from, to, scrub = false }: AgentSessionCopyRequest): Promi
       platform: to.platform,
       message:
         `Target platform "${to.platform}" is not installed or its storage directory was not found. ` +
-        `Install the client first, or pick another target (available: ${listInstalledPlatforms().join(', ') || 'none'}).`,
+        `Install the client first, or pick another target (available: ${listInstalledPlatforms(targetToolRoots).join(', ') || 'none'}).`,
     });
   }
 
