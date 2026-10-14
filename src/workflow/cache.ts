@@ -167,19 +167,17 @@ export async function syncWorkflowDefinitions(
 
   const kept = new Map<string, WorkflowDefinition | null>();
   for (const file of checked) {
-    const dropped = 'diagnostics' in file && file.diagnostics.some((diagnostic) => diagnostic.code !== undefined);
+    const dropped = 'diagnostics' in file && dropsKeptVersion(file.diagnostics);
     kept.set(file.stem, dropped ? null : (await readCache(config, file.stem))?.definition ?? null);
   }
   const referenceProblems = checkReferences(checked, kept);
 
-  // An invalid revision keeps the last valid version, unless a diagnostic has a code:
-  // a code changes what the file means, so the previous definition must not keep running.
   const reject = async ({ stem, relativePath }: Checked, diagnostics: WorkflowDiagnostic[]): Promise<void> => {
     result.invalid.push(...diagnostics);
     for (const diagnostic of diagnostics) log.warn(`[workflows] ${formatDiagnostic(diagnostic)}`);
-    const dropped = diagnostics.some((diagnostic) => diagnostic.code !== undefined);
+    const dropped = dropsKeptVersion(diagnostics);
     if (dropped && !options.dryRun) await remove(cachePath(config, stem));
-    if (!dropped && await readCache(config, stem)) {
+    if (!dropped && kept.get(stem)) {
       result.kept.push(stem);
       log.warn(`[workflows] Kept the last valid version of ${stem}; this revision was not cached`);
     } else {
@@ -220,12 +218,21 @@ export async function syncWorkflowDefinitions(
 }
 
 /**
- * The workflow files a definition runs by name, including from inside its inline workflows.
- * Every check across files follows references through this walk.
+ * An invalid revision keeps the last valid version, unless a diagnostic has a code:
+ * a code changes what the file means, so the previous definition must not keep running.
  */
-function workflowsRunBy(definition: { steps: WorkflowStep[] }): string[] {
-  return definition.steps.flatMap((step) => (typeof step.workflow === 'object' ? workflowsRunBy(step.workflow)
-    : step.workflow === undefined ? [] : [step.workflow]));
+function dropsKeptVersion(diagnostics: WorkflowDiagnostic[]): boolean {
+  return diagnostics.some((diagnostic) => diagnostic.code !== undefined);
+}
+
+/**
+ * The workflow files a definition runs by name, in step order, including from inside its inline workflows,
+ * with the path of the step that runs each one, such as `group.run-b`.
+ * Every walk across files, at pull and at start, follows references through here.
+ */
+export function workflowsRunBy(definition: { steps: WorkflowStep[] }, prefix = ''): Array<{ step: string; workflow: string }> {
+  return definition.steps.flatMap((step) => (typeof step.workflow === 'object' ? workflowsRunBy(step.workflow, `${prefix}${step.id}.`)
+    : step.workflow === undefined ? [] : [{ step: `${prefix}${step.id}`, workflow: step.workflow }]));
 }
 
 /**
@@ -245,7 +252,7 @@ function checkReferences(checked: Checked[], kept: Map<string, WorkflowDefinitio
       if (seen.has(workflow)) return undefined;
       seen.add(workflow);
       const definition = asked(workflow);
-      for (const next of definition ? workflowsRunBy(definition) : []) {
+      for (const { workflow: next } of definition ? workflowsRunBy(definition) : []) {
         const cycle = walk(next, [...through, workflow]);
         if (cycle) return cycle;
       }
@@ -259,7 +266,7 @@ function checkReferences(checked: Checked[], kept: Map<string, WorkflowDefinitio
     if (!candidate) return kept.get(workflow) ?? null;
     const diagnostics = check(candidate);
     if (diagnostics.length === 0) return candidate.definition;
-    return diagnostics.some((diagnostic) => diagnostic.code !== undefined) ? null : kept.get(workflow) ?? null;
+    return dropsKeptVersion(diagnostics) ? null : kept.get(workflow) ?? null;
   };
   const check = (candidate: Candidate): WorkflowDiagnostic[] => {
     const known = found.get(candidate.stem);

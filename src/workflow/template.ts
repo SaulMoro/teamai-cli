@@ -97,7 +97,7 @@ function resolve(path: ExpressionPath | WithPath, context: TemplateContext): unk
 }
 
 /** A value as text: strings as they are, numbers and booleans as text, objects and arrays as JSON, null as ''. */
-export function textOf(value: unknown): string {
+function textOf(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (typeof value === 'string') return value;
   if (typeof value === 'object') return JSON.stringify(value);

@@ -48,13 +48,17 @@ function scalarString(node: Node | null | undefined): string | undefined {
   return node.value;
 }
 
-function parseOutput(
-  node: Node,
-  field: string,
-  file: string,
-  lineCounter: LineCounter,
-  diagnostics: WorkflowDiagnostic[],
-): OutputSchema | undefined {
+/** What the checks of one workflow file share: where a diagnostic points, where it goes, and what a sync knows of the other files. */
+interface ParseContext {
+  file: string;
+  lineCounter: LineCounter;
+  diagnostics: WorkflowDiagnostic[];
+  promptFileLocations: Record<string, { line: number; column: number }>;
+  files: WorkflowFiles | undefined;
+}
+
+function parseOutput(node: Node, field: string, ctx: ParseContext): OutputSchema | undefined {
+  const { file, lineCounter, diagnostics } = ctx;
   if (isScalar(node)) {
     if (typeof node.value !== 'string') {
       diagnostics.push(locate(file, lineCounter, node, field, 'output shorthand must be string, number, boolean, a literal union, an object, or an array'));
@@ -80,7 +84,7 @@ function parseOutput(
       diagnostics.push(locate(file, lineCounter, node, field, 'an array shorthand has exactly one item type'));
       return undefined;
     }
-    const items = parseOutput(item, `${field}[]`, file, lineCounter, diagnostics);
+    const items = parseOutput(item, `${field}[]`, ctx);
     return items ? { type: 'array', items } : undefined;
   }
   if (isMap(node)) {
@@ -101,7 +105,7 @@ function parseOutput(
         diagnostics.push(locate(file, lineCounter, keyNode ?? node, field, 'output field names must be tokens'));
         continue;
       }
-      const child = parseOutput(valueNode, `${field}.${key}`, file, lineCounter, diagnostics);
+      const child = parseOutput(valueNode, `${field}.${key}`, ctx);
       if (child) fields[key] = child;
     }
     return Object.keys(fields).length === node.items.length ? { type: 'object', fields } : undefined;
@@ -134,6 +138,7 @@ export function parseWorkflow(file: string, content: string, files?: WorkflowFil
   }
 
   const lineCounter = new LineCounter();
+  const ctx: ParseContext = { file, lineCounter, diagnostics, promptFileLocations, files };
   const doc = parseDocument(content, { lineCounter, uniqueKeys: true });
   if (doc.errors.length > 0) {
     for (const error of doc.errors) {
@@ -187,12 +192,12 @@ export function parseWorkflow(file: string, content: string, files?: WorkflowFil
   if (inputsPair && !isMap(inputsPair.value)) {
     diagnostics.push(locate(file, lineCounter, inputsPair.value ?? inputsPair.key ?? root, 'inputs', 'inputs must map each input name to a type'));
   } else if (inputsPair) {
-    const schema = parseOutput(inputsPair.value as Node, 'inputs', file, lineCounter, diagnostics);
+    const schema = parseOutput(inputsPair.value as Node, 'inputs', ctx);
     if (schema?.type === 'object') inputs = schema.fields;
   }
 
   // A malformed inputs header is already reported; checking reads against it would only add noise.
-  const { workflow: { ends, outputs, steps } } = parseBody(root, '', file, lineCounter, diagnostics, promptFileLocations, inputsPair && !inputs ? undefined : inputs ?? {}, files);
+  const { workflow: { ends, outputs, steps } } = parseBody(root, '', ctx, inputsPair && !inputs ? undefined : inputs ?? {});
 
   if (diagnostics.length > 0 || !name || !description) return { ok: false, diagnostics };
   return {
@@ -209,18 +214,15 @@ export function parseWorkflow(file: string, content: string, files?: WorkflowFil
 function parseBody(
   root: YAMLMap.Parsed,
   at: string,
-  file: string,
-  lineCounter: LineCounter,
-  diagnostics: WorkflowDiagnostic[],
-  promptFileLocations: Record<string, { line: number; column: number }>,
+  ctx: ParseContext,
   inputs: Record<string, OutputSchema> | undefined,
-  files: WorkflowFiles | undefined,
 ): { workflow: InlineWorkflow; outer: ReadSite[] } {
+  const { file, lineCounter, diagnostics, promptFileLocations, files } = ctx;
   const endsPair = root.items.find((pair) => scalarString(pair.key) === 'ends');
-  const ends = endsPair ? parseEnds(endsPair.value ?? endsPair.key, at, file, lineCounter, diagnostics) : undefined;
+  const ends = endsPair ? parseEnds(endsPair.value ?? endsPair.key, at, ctx) : undefined;
 
   const outputsPair = root.items.find((pair) => scalarString(pair.key) === 'outputs');
-  const outputEntries = outputsPair ? parseOutputs(outputsPair.value ?? outputsPair.key, at, file, lineCounter, diagnostics) : undefined;
+  const outputEntries = outputsPair ? parseOutputs(outputsPair.value ?? outputsPair.key, at, ctx) : undefined;
   const outputs = outputEntries && Object.fromEntries(outputEntries.map((entry) => [entry.name, entry.source]));
 
   const stepsPair = root.items.find((pair) => scalarString(pair.key) === 'steps');
@@ -275,6 +277,8 @@ function parseBody(
           code: 'missing_needs',
         });
       }
+      // A step with a malformed id or missing needs is already reported; checking what it reads would only add noise.
+      const inGraph = id !== undefined && TOKEN.test(id) && (needs !== undefined || index === 0);
       const ifPair = item.items.find((pair) => scalarString(pair.key) === 'if');
       const condition = ifPair ? conditionSource(ifPair.value) : undefined;
       if (ifPair) {
@@ -284,7 +288,7 @@ function parseBody(
           diagnostics.push(locate(file, lineCounter, at, `${field}.if`, `${label} if must be an expression`));
         } else if (!parsed.ok) {
           diagnostics.push(locate(file, lineCounter, at, `${field}.if`, `${label} if does not parse at column ${parsed.column}: ${parsed.message}`));
-        } else if (id && TOKEN.test(id) && (needs !== undefined || index === 0)) {
+        } else if (inGraph) {
           conditions.push({ id, field: `${field}.if`, node: at as Node, expression: parsed.expression });
         }
       }
@@ -297,7 +301,7 @@ function parseBody(
       const workflowPair = item.items.find((pair) => scalarString(pair.key) === 'workflow');
       const workflow = scalarString(workflowPair?.value)?.trim();
       const inline = isMap(workflowPair?.value)
-        ? parseInline(workflowPair.value, `${field}.workflow`, label, file, lineCounter, diagnostics, promptFileLocations, inputs, files)
+        ? parseInline(workflowPair.value, `${field}.workflow`, label, ctx, inputs)
         : undefined;
       const actions = [commandPair, promptPair, promptFilePair, workflowPair].filter(Boolean);
       const endPair = item.items.find((pair) => scalarString(pair.key) === 'end');
@@ -347,7 +351,7 @@ function parseBody(
         diagnostics.push(locate(file, lineCounter, agentPair.key ?? item, `${field}.agent`, 'agent is only allowed on a prompt or prompt_file step'));
       }
       const envPair = item.items.find((pair) => scalarString(pair.key) === 'env');
-      const env = envPair ? parseEnv(envPair.value ?? envPair.key, `${field}.env`, label, file, lineCounter, diagnostics) : undefined;
+      const env = envPair ? parseEnv(envPair.value ?? envPair.key, `${field}.env`, label, ctx) : undefined;
       const withPair = item.items.find((pair) => scalarString(pair.key) === 'with');
       let withValues: Record<string, unknown> | undefined;
       // A step with no action already reports every key it may not carry.
@@ -370,7 +374,7 @@ function parseBody(
         const keys = !withPair ? [] : withValues && isMap(withPair.value)
           ? withPair.value.items.map((pair) => ({ name: isScalar(pair.key) ? String(pair.key.value) : '', node: pair.key as Node }))
           : undefined;
-        diagnostics.push(...referenceDiagnostics(file, lineCounter, files, {
+        diagnostics.push(...referenceDiagnostics(ctx, files, {
           label, field, workflow, node: workflowPair.value as Node, with: keys && { node: (withPair?.key ?? workflowPair.value) as Node, keys },
         }));
       }
@@ -405,12 +409,12 @@ function parseBody(
             diagnostics.push({ ...locate(file, lineCounter, template.node, template.field, problem), code: 'bad_template' });
           }
         }
-        if (id && TOKEN.test(id) && (needs !== undefined || index === 0) && parsed.ok) {
+        if (inGraph && parsed.ok) {
           reads.push({ id, field: template.field, at: position(lineCounter, template.node), what: template.what, paths: templatePaths(parsed.template), code: 'bad_template' });
         }
       }
       // What the inline workflow reads of this workflow's steps must be steps this step needs, directly or not.
-      if (inline && id && TOKEN.test(id) && (needs !== undefined || index === 0)) {
+      if (inline && inGraph) {
         reads.push(...inline.outer.map((site) => ({ ...site, id, reader: site.reader ?? site.id })));
       }
       // A step with no action already reports every key it may not carry.
@@ -422,7 +426,7 @@ function parseBody(
       if (outputPair && workflowPair) {
         diagnostics.push(locate(file, lineCounter, outputPair.key as Node, `${field}.output`, `${label} output is not allowed on a workflow step; declare outputs in the workflow it runs`));
       } else if (outputPair?.value) {
-        output = parseOutput(outputPair.value, `${field}.output`, file, lineCounter, diagnostics);
+        output = parseOutput(outputPair.value, `${field}.output`, ctx);
       } else if (outputPair) {
         diagnostics.push(locate(file, lineCounter, outputPair.key ?? item, `${field}.output`, 'output must be a shorthand type'));
       }
@@ -444,8 +448,8 @@ function parseBody(
         });
       }
     });
-    diagnostics.push(...graphDiagnostics(file, lineCounter, graph, seen));
-    diagnostics.push(...conditionDiagnostics(file, lineCounter, conditions, reads));
+    diagnostics.push(...graphDiagnostics(ctx, graph, seen));
+    diagnostics.push(...conditionDiagnostics(ctx, conditions, reads));
     const needsById = new Map(graph.map((step) => [step.id, step.needs]));
     // An inline workflow that is reported has no step here, so reads of it are not checked.
     const children = childrenOf([...references, ...steps.filter((step) => typeof step.workflow === 'object')], files);
@@ -455,8 +459,8 @@ function parseBody(
     outer = split.outer;
     diagnostics.push(...readDiagnostics(file, split.local, readScope(needsById, steps, inputs, children)));
     // A malformed ends header is already reported; checking steps against it would only add noise.
-    if (!endsPair || ends) diagnostics.push(...endDiagnostics(file, lineCounter, ends, endsPair?.value, at, endings, graph));
-    diagnostics.push(...outputDiagnostics(file, lineCounter, outputEntries ?? [], at, seen, steps, children));
+    if (!endsPair || ends) diagnostics.push(...endDiagnostics(ctx, ends, endsPair?.value, at, endings, graph));
+    diagnostics.push(...outputDiagnostics(ctx, outputEntries ?? [], at, seen, steps, children));
   }
   return { workflow: { ...(ends ? { ends } : {}), ...(outputs ? { outputs } : {}), steps }, outer };
 }
@@ -466,13 +470,10 @@ function parseInline(
   node: YAMLMap.Parsed,
   field: string,
   label: string,
-  file: string,
-  lineCounter: LineCounter,
-  diagnostics: WorkflowDiagnostic[],
-  promptFileLocations: Record<string, { line: number; column: number }>,
+  ctx: ParseContext,
   inputs: Record<string, OutputSchema> | undefined,
-  files: WorkflowFiles | undefined,
 ): { workflow: InlineWorkflow; outer: ReadSite[] } {
+  const { file, lineCounter, diagnostics } = ctx;
   for (const pair of node.items) {
     const key = scalarString(pair.key);
     if (key === 'steps' || key === 'outputs' || key === 'ends') continue;
@@ -484,7 +485,7 @@ function parseInline(
       diagnostics.push(locate(file, lineCounter, pair.key, `${field}.${key}`, `${label} runs an inline workflow, which carries only steps, outputs, and ends`));
     }
   }
-  return parseBody(node, `${field}.`, file, lineCounter, diagnostics, promptFileLocations, inputs, files);
+  return parseBody(node, `${field}.`, ctx, inputs);
 }
 
 /**
@@ -514,7 +515,7 @@ interface Reference {
 }
 
 /** Diagnostics for a step that runs a workflow file, checked against the version that step would run. */
-function referenceDiagnostics(file: string, lineCounter: LineCounter, files: WorkflowFiles, reference: Reference): WorkflowDiagnostic[] {
+function referenceDiagnostics({ file, lineCounter }: ParseContext, files: WorkflowFiles, reference: Reference): WorkflowDiagnostic[] {
   const { label, field, workflow, node } = reference;
   const cycle = files.cycle(workflow);
   if (cycle) return [locate(file, lineCounter, node, `${field}.workflow`, `${label} runs workflow "${workflow}" in a cycle: ${cycle.join(' -> ')}`)];
@@ -568,14 +569,8 @@ function undeclaredOutput(children: Map<string, Child>, path: ExpressionPath): s
 }
 
 /** `env` maps variable names to text. A YAML number or boolean is read as its text. */
-function parseEnv(
-  node: Node | null | undefined,
-  field: string,
-  label: string,
-  file: string,
-  lineCounter: LineCounter,
-  diagnostics: WorkflowDiagnostic[],
-): Record<string, string> | undefined {
+function parseEnv(node: Node | null | undefined, field: string, label: string, ctx: ParseContext): Record<string, string> | undefined {
+  const { file, lineCounter, diagnostics } = ctx;
   if (!isMap(node) || node.items.length === 0) {
     diagnostics.push(locate(file, lineCounter, node, field, `${label} env must map variable names to values`));
     return undefined;
@@ -599,13 +594,8 @@ function parseEnv(
   return Object.keys(env).length === node.items.length ? env : undefined;
 }
 
-function parseEnds(
-  node: Node | null | undefined,
-  prefix: string,
-  file: string,
-  lineCounter: LineCounter,
-  diagnostics: WorkflowDiagnostic[],
-): Record<string, EndOutcome> | undefined {
+function parseEnds(node: Node | null | undefined, prefix: string, ctx: ParseContext): Record<string, EndOutcome> | undefined {
+  const { file, lineCounter, diagnostics } = ctx;
   if (!isMap(node) || node.items.length === 0) {
     diagnostics.push(locate(file, lineCounter, node, `${prefix}ends`, 'ends must map each end name to succeeded or failed'));
     return undefined;
@@ -635,13 +625,8 @@ interface OutputEntry {
 }
 
 /** `outputs` maps names to paths that read this workflow's steps. Returns the well-formed entries; the others are reported. */
-function parseOutputs(
-  node: Node | null | undefined,
-  prefix: string,
-  file: string,
-  lineCounter: LineCounter,
-  diagnostics: WorkflowDiagnostic[],
-): OutputEntry[] {
+function parseOutputs(node: Node | null | undefined, prefix: string, ctx: ParseContext): OutputEntry[] {
+  const { file, lineCounter, diagnostics } = ctx;
   if (!isMap(node) || node.items.length === 0) {
     diagnostics.push(locate(file, lineCounter, node, `${prefix}outputs`, `outputs must map each name to a path ${OUTPUT_PATH}`));
     return [];
@@ -672,8 +657,7 @@ function parseOutputs(
 
 /** Each output reads a step of this workflow, and only a field that step's `output`, or the workflow it runs, declares. */
 function outputDiagnostics(
-  file: string,
-  lineCounter: LineCounter,
+  { file, lineCounter }: ParseContext,
   entries: OutputEntry[],
   prefix: string,
   ids: Set<string>,
@@ -709,7 +693,7 @@ interface GraphNode {
 }
 
 /** Diagnostics for the `needs` graph: ids that name no step, and cycles reported at their first declared step. */
-function graphDiagnostics(file: string, lineCounter: LineCounter, graph: GraphNode[], ids: Set<string>): WorkflowDiagnostic[] {
+function graphDiagnostics({ file, lineCounter }: ParseContext, graph: GraphNode[], ids: Set<string>): WorkflowDiagnostic[] {
   const diagnostics: WorkflowDiagnostic[] = [];
   for (const step of graph) {
     for (const need of step.needs) {
@@ -772,7 +756,7 @@ function declaresField(schema: OutputSchema, fields: string[]): boolean {
 }
 
 /** Reports an `if` that is always false, and queues what every other `if` reads for `readDiagnostics`. */
-function conditionDiagnostics(file: string, lineCounter: LineCounter, conditions: ConditionNode[], reads: ReadSite[]): WorkflowDiagnostic[] {
+function conditionDiagnostics({ file, lineCounter }: ParseContext, conditions: ConditionNode[], reads: ReadSite[]): WorkflowDiagnostic[] {
   const diagnostics: WorkflowDiagnostic[] = [];
   for (const condition of conditions) {
     const paths = expressionPaths(condition.expression);
@@ -916,8 +900,7 @@ interface Ending {
 
 /** Diagnostics that keep `end` on steps consistent with the declared `ends`. */
 function endDiagnostics(
-  file: string,
-  lineCounter: LineCounter,
+  { file, lineCounter }: ParseContext,
   ends: Record<string, EndOutcome> | undefined,
   endsNode: unknown,
   prefix: string,

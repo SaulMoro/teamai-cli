@@ -14,9 +14,12 @@ export type Expression =
   | { kind: 'not'; operand: Expression; column: number }
   | { kind: 'binary'; operator: '==' | '!=' | '&&' | '||'; left: Expression; right: Expression; column: number };
 
-/** A step as an expression sees it. `outcome` is `success`, `failed` or `skipped` once the step settled. */
+/** The outcome an expression reads of a settled step. */
+export type VisibleOutcome = 'success' | 'failed' | 'skipped';
+
+/** A step as an expression sees it. `outcome` is set once the step settled. */
 export interface ExpressionStep {
-  outcome?: string;
+  outcome?: VisibleOutcome;
   end?: string;
   outputs?: unknown;
 }
@@ -206,7 +209,7 @@ export function parseExpression(source: string): ExpressionParse {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
