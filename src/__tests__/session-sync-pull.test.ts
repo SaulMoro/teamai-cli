@@ -216,7 +216,7 @@ describe('SyncManager.gitPull', () => {
 
     const result = pullAndRebuild(b);
 
-    expect(result).toEqual({ status: 'indexes-conflicted', indexes: [INDEX] });
+    expect(result).toEqual({ status: 'indexes-conflicted', indexes: [INDEX], pending: true });
     expect(indexedSessionIds(b)).toEqual(['a1', 'b1', 's0']);
     expect(git(b, 'status', '--porcelain')).toBe('');
   });
@@ -308,6 +308,37 @@ describe('SyncManager.gitPull', () => {
     expect(git(b, 'diff', '--name-only')).toBe(INDEX);
   });
 
+  // Each side's index as committed: 'kept' leaves its repoIdentity, anything else replaces it (undefined drops it).
+  it.each([
+    ['ours has none, theirs has it', undefined, 'kept'],
+    ['ours is null, theirs has it', null, 'kept'],
+    ['ours is empty, theirs has it', '', 'kept'],
+    ['ours is not a string, theirs has it', 42, 'kept'],
+    ['ours has it, theirs has none', 'kept', undefined],
+    ['neither has one, so the directory name decides', undefined, null],
+  ])('takes the repo identity from a side that recorded one (%s)', (_label, ours, theirs) => {
+    useGitConfig();
+    const { a, b } = seedRemote();
+    const commitIndex = (clone: string, sessionId: string, author: string, identity: unknown): void => {
+      archive(clone, sessionId, author);
+      if (identity === 'kept') return;
+      const file = path.join(clone, INDEX);
+      const index = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown>;
+      if (identity === undefined) delete index.repoIdentity;
+      else index.repoIdentity = identity;
+      fs.writeFileSync(file, JSON.stringify(index, null, 2));
+      git(clone, 'commit', '-qam', `edit ${sessionId} index`);
+    };
+    commitIndex(a, 'a1', 'alice', theirs);
+    git(a, 'push', '-q', 'origin', 'main');
+    commitIndex(b, 'b1', 'bob', ours);
+
+    expect(pullAndRebuild(b).status).toBe('indexes-conflicted');
+
+    const index = JSON.parse(fs.readFileSync(path.join(b, INDEX), 'utf-8')) as { repoIdentity: unknown };
+    expect(index.repoIdentity).toBe(REPO);
+  });
+
   it('keeps the identity a legacy directory name cannot encode', () => {
     useGitConfig();
     const identity = 'github.com/acme/my_app';
@@ -359,6 +390,22 @@ describe('SyncManager.gitPull', () => {
 });
 
 describe('session pull', () => {
+  it('finishes a merge an earlier pull left on the session index, then pulls what the remote got since', async () => {
+    useGitConfig();
+    const { a, b } = divergeOnIndex();
+    expect(() => git(b, '-c', 'pull.rebase=false', 'pull', '-q', 'origin', 'main')).toThrow();
+    archive(a, 'a2', 'alice');
+    git(a, 'push', '-q', 'origin', 'main');
+
+    const pulled = await session('pull', '--all', '--repo-root', b);
+
+    expect(pulled.code).toBe(0);
+    expect(() => git(b, 'merge-base', '--is-ancestor', 'origin/main', 'HEAD')).not.toThrow();
+    expect(git(b, 'rev-parse', 'origin/main')).toBe(git(a, 'rev-parse', 'HEAD'));
+    expect(sessionIdsOf(git(b, 'show', `HEAD:${INDEX}`))).toEqual(['a1', 'a2', 'b1', 's0']);
+    expect(() => git(b, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toThrow();
+  });
+
   it('leaves a merge stopped on the session index for a rerun while another command holds the archive lock', async () => {
     useGitConfig();
     const { b } = divergeOnIndex();

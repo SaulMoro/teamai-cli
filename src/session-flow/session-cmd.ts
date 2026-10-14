@@ -1111,22 +1111,28 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         return;
       }
       // [fixed] a gitPull failure (no remote / repoRoot does not exist) used to crash with a raw stack trace
-      const pulled = runGitStep(() => syncMgr.gitPull(), repoRoot, 'git pull');
-      if (pulled.status === 'stopped') {
-        console.error(`Error: ${pulled.reason}`);
-        process.exit(1);
-      }
-      if (pulled.status === 'indexes-conflicted') {
-        // The rebuild takes the lock and the network pull above does not: a lock held across it would make other saves wait and fail busy.
+      const finishIndexMerge = async (indexes: string[]): Promise<void> => {
+        // The rebuild takes the lock and the network pull does not: a lock held across it would make other saves wait and fail busy.
         const merged = await withSessionIndexLock(repoRoot, async () =>
-          runGitStep(() => syncMgr.commitRebuiltIndexes(pulled.indexes), repoRoot, 'git pull'),
+          runGitStep(() => syncMgr.commitRebuiltIndexes(indexes), repoRoot, 'git pull'),
         );
         if (merged.status === 'busy') {
           console.error(`Error: ${mergeBusyMessage(repoRoot, merged.lockPath)}`);
           process.exit(1);
         }
-        console.log(`  ✓ Merged remote sessions and rebuilt ${pulled.indexes.length} conflicted session index(es)`);
+        console.log(`  ✓ Merged remote sessions and rebuilt ${indexes.length} conflicted session index(es)`);
+      };
+      let pulled = runGitStep(() => syncMgr.gitPull(), repoRoot, 'git pull');
+      // A merge an earlier pull left on the session indexes is finished first; it does not replace this pull.
+      if (pulled.status === 'indexes-conflicted' && pulled.pending) {
+        await finishIndexMerge(pulled.indexes);
+        pulled = runGitStep(() => syncMgr.gitPull(), repoRoot, 'git pull');
       }
+      if (pulled.status === 'stopped') {
+        console.error(`Error: ${pulled.reason}`);
+        process.exit(1);
+      }
+      if (pulled.status === 'indexes-conflicted') await finishIndexMerge(pulled.indexes);
       if (opts.all) {
         // P2: rebuild by directory (including repos whose index is missing or corrupt — those are exactly the ones that most need repair),
         // rather than only rebuilding the ones whose identity can be recovered from _index.json.

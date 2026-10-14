@@ -319,11 +319,12 @@ export type GitCommitResult =
 /**
  * The outcomes of `gitPull`. `stopped` merged nothing, so the checkout is as it was before the pull.
  * `indexes-conflicted` leaves the merge in progress with only these session indexes unmerged: the caller
- * finishes it with `commitRebuiltIndexes` under `withSessionIndexLock`.
+ * finishes it with `commitRebuiltIndexes` under `withSessionIndexLock`. `pending` means an earlier pull left
+ * that merge: the requested pull has not run yet, so the caller pulls again once the merge is finished.
  */
 export type PullResult =
   | { status: 'pulled' }
-  | { status: 'indexes-conflicted'; indexes: string[] }
+  | { status: 'indexes-conflicted'; indexes: string[]; pending?: true }
   | { status: 'stopped'; reason: string };
 
 /** The outcomes of `gitPush`. `indexes-conflicted` is the retry's pull, left for the caller as in `PullResult`. */
@@ -1170,7 +1171,7 @@ export class SyncManager {
             : 'Resolve and `git add` them and run `git commit`, or run `git merge --abort`, then retry';
         return { status: 'stopped', reason: `A merge is in progress in ${this.repoRoot} with conflicts in ${others.join(', ')}. ${next}.` };
       }
-      return { status: 'indexes-conflicted', indexes: unmerged };
+      return { status: 'indexes-conflicted', indexes: unmerged, pending: true };
     }
     if (unmerged.length > 0) {
       return {
@@ -1218,7 +1219,8 @@ export class SyncManager {
   private conflictedIndexIdentity(index: string): string | null {
     for (const stage of [2, 3]) {
       try {
-        return (JSON.parse(this.runGit(['show', `:${stage}:./${index}`])) as RepoIndex).repoIdentity;
+        const { repoIdentity } = JSON.parse(this.runGit(['show', `:${stage}:./${index}`])) as { repoIdentity?: unknown };
+        if (typeof repoIdentity === 'string' && repoIdentity) return repoIdentity;
       } catch {
         // that side deleted the index or left it unparsable
       }
