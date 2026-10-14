@@ -2,12 +2,14 @@
  * Session search engine — BM25 + time decay.
  *
  * Builds a BM25 index over migrated sessions and supports keyword search.
- * Titles are weighted 3x; time decay has a 30-day half-life (30% of the weight).
+ * Title, conversation and tool output are separate fields weighted 3x, 1x and 0.1x;
+ * time decay has a 30-day half-life (30% of the weight).
  *
  * Ported from sessionflow/core/search.py
  */
 
-import type { Session, Message } from './ir.js';
+import { AgentSession } from './agent-session.js';
+import type { Session } from './ir.js';
 
 // ---------------------------------------------------------------------------
 // Data structures
@@ -58,23 +60,10 @@ export function tokenize(text: string): string[] {
   return tokens;
 }
 
-function extractTextFromMessage(msg: Message): string {
-  const parts: string[] = [];
-  for (const block of msg.content) {
-    if (block.type === 'text') {
-      parts.push(block.text);
-    } else if (block.type === 'thinking') {
-      parts.push(block.text);
-    } else if (block.type === 'tool_call') {
-      parts.push(block.toolName);
-      parts.push(Object.values(block.arguments).map(String).join(' '));
-    }
-  }
-  return parts.join(' ');
-}
-
-function makeSnippet(text: string, query: string, maxLen = 200): string {
-  if (!text) return '';
+function makeSnippet(rawText: string, query: string, maxLen = 200): string {
+  if (!rawText) return '';
+  // One line: tool output is multi-line, and a snippet is printed in a list.
+  const text = rawText.replace(/\s+/g, ' ');
   const lowerText = text.toLowerCase();
   const lowerQuery = query.toLowerCase();
 
@@ -186,6 +175,10 @@ export interface LoadedSession {
   session: Session;
 }
 
+const TITLE_WEIGHT = 3;
+// A dump repeating a term stays below one conversation mention up to ~8x average length; 0.3 fails the tests.
+const TOOL_OUTPUT_WEIGHT = 0.1;
+
 export class SessionSearchEngine {
   /**
    * Search the already-loaded session list.
@@ -208,21 +201,31 @@ export class SessionSearchEngine {
 
     if (sessions.length === 0) return [];
 
-    // Build documents
+    // Build documents: one transcript entry per message, so a match cites its message.
     const docs = sessions.map((s) => {
-      const msgTexts = s.session.messages.map(extractTextFromMessage);
-      const fullText = msgTexts.join(' ');
-      let tokens = tokenize(fullText);
-      // Title weighted 3x
-      const titleTokens = tokenize(s.session.title);
-      tokens = [...titleTokens, ...titleTokens, ...titleTokens, ...tokens];
-      return { meta: s, tokens, fullText, msgTexts };
+      const entries = AgentSession.transcript(s.session);
+      const messageTexts = entries.map((e) => [e.text, e.toolOutput].filter(Boolean).join('\n'));
+      return {
+        meta: s,
+        entries,
+        messageTexts,
+        fullText: messageTexts.join(' '),
+        titleTokens: tokenize(s.session.title),
+        bodyTokens: tokenize(entries.map((e) => e.text).join(' ')),
+        toolOutputTokens: tokenize(entries.map((e) => e.toolOutput).join(' ')),
+      };
     });
 
-    // BM25 retrieval
-    const corpus = docs.map((d) => d.tokens);
-    const bm25 = new BM25Okapi(corpus);
-    const scores = bm25.getScores(queryTokens);
+    // BM25 retrieval, one field each for the title, the conversation, and tool output. Tool output
+    // is long and repetitive; inside one field with the conversation it would outweigh it.
+    const scoresOf = (field: (d: (typeof docs)[number]) => string[]) =>
+      new BM25Okapi(docs.map(field)).getScores(queryTokens);
+    const titleScores = scoresOf((d) => d.titleTokens);
+    const bodyScores = scoresOf((d) => d.bodyTokens);
+    const toolOutputScores = scoresOf((d) => d.toolOutputTokens);
+    const scores = docs.map(
+      (_, i) => bodyScores[i] + TITLE_WEIGHT * titleScores[i] + TOOL_OUTPUT_WEIGHT * toolOutputScores[i],
+    );
 
     // Build results
     const results: SearchHit[] = [];
@@ -237,13 +240,12 @@ export class SessionSearchEngine {
       // Find matching messages
       const lowerQuery = query.toLowerCase();
       const matched: SearchHit['matchedMessages'] = [];
-      for (let j = 0; j < doc.msgTexts.length; j++) {
-        if (doc.msgTexts[j].toLowerCase().includes(lowerQuery)) {
-          const msg = doc.meta.session.messages[j];
+      for (const [j, entry] of doc.entries.entries()) {
+        if (doc.messageTexts[j].toLowerCase().includes(lowerQuery)) {
           matched.push({
-            role: msg.role,
-            snippet: makeSnippet(doc.msgTexts[j], query),
-            timestamp: msg.timestamp,
+            role: entry.role,
+            snippet: makeSnippet(doc.messageTexts[j], query),
+            timestamp: entry.timestamp,
           });
           if (matched.length >= 3) break;
         }

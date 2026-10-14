@@ -11,7 +11,7 @@
 
 import { ADAPTER_REGISTRY, listInstalledPlatforms } from './adapters/index.js';
 import type { AgentAdapter } from './adapters/base.js';
-import type { Session } from './ir.js';
+import { imagePlaceholderText, type ContentBlock, type Message, type Session } from './ir.js';
 import { deriveTargetSessionId, legacyTargetSessionIds } from './ids.js';
 import { degradeThinkingBlocks, fidelityFromSession, type FidelityReport } from './migrate.js';
 import { scrubSession } from './scrub.js';
@@ -54,8 +54,19 @@ export type AgentSessionCopyRequest = {
   scrub?: boolean;
 };
 
+/** One message of a session as text, in order: what a search indexes and a scorer reads. */
+export type AgentSessionTranscriptEntry = {
+  role: Message['role'];
+  timestamp?: string;
+  /** What the member and the agent wrote, with tool calls and their input; empty when none. */
+  text: string;
+  /** The tool results the message carries, each truncated; empty when none. */
+  toolOutput: string;
+};
+
 export type AgentSession = {
   copy(request: AgentSessionCopyRequest): Promise<AgentSessionCopy>;
+  transcript(session: Session): AgentSessionTranscriptEntry[];
 };
 
 function adapterFor(platform: string): AgentAdapter | AgentSessionFailure {
@@ -191,4 +202,49 @@ async function copy({ from, to, scrub = false }: AgentSessionCopyRequest): Promi
   };
 }
 
-export const AgentSession = { copy } as const satisfies AgentSession;
+/**
+ * A tool result keeps this many characters. Whole file reads and build logs would otherwise
+ * dominate the transcript: the length search normalizes by, and the prompt a scorer reads.
+ */
+const TOOL_RESULT_MAX_CHARS = 2_000;
+
+function truncated(text: string): string {
+  if (text.length <= TOOL_RESULT_MAX_CHARS) return text;
+  return `${text.slice(0, TOOL_RESULT_MAX_CHARS)} [truncated ${text.length - TOOL_RESULT_MAX_CHARS} chars]`;
+}
+
+function blockText(block: ContentBlock): string {
+  switch (block.type) {
+    case 'text':
+      return block.text;
+    case 'thinking':
+      return `[thinking] ${block.text}`;
+    case 'tool_call':
+      return `[tool_call] ${block.toolName} ${JSON.stringify(block.arguments)}`;
+    case 'tool_result':
+      return `[tool_result${block.isError ? ' error' : ''}] ${truncated(block.content)}`;
+    case 'image':
+      return imagePlaceholderText(block);
+    default: {
+      const unhandled: never = block;
+      return unhandled;
+    }
+  }
+}
+
+/**
+ * One entry per message, so a match or a judgement cites the message it came from. Tool calls
+ * carry their input as JSON in `text`; tool results, which arrive as user messages, sit apart in
+ * `toolOutput`, so they never read as something the member typed and search can weigh them less.
+ * Redaction is the caller's: pass a redacted session.
+ */
+function transcript(session: Session): AgentSessionTranscriptEntry[] {
+  return session.messages.map((message) => ({
+    role: message.role,
+    ...(message.timestamp ? { timestamp: message.timestamp } : {}),
+    text: message.content.filter((block) => block.type !== 'tool_result').map(blockText).join('\n'),
+    toolOutput: message.content.filter((block) => block.type === 'tool_result').map(blockText).join('\n'),
+  }));
+}
+
+export const AgentSession = { copy, transcript } as const satisfies AgentSession;

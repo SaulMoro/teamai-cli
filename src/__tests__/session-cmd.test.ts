@@ -115,10 +115,10 @@ vi.mock('../session-flow/migrate.js', () => ({
   resolveTargetCwd: (explicit: string | undefined, sourceCwd: string | undefined) => explicit ?? sourceCwd,
 }));
 
-vi.mock('../session-flow/agent-session.js', async (importOriginal) => ({
-  ...((await importOriginal()) as Record<string, unknown>),
-  AgentSession: { copy: async (): Promise<unknown> => mocks.copyResult },
-}));
+vi.mock('../session-flow/agent-session.js', async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import('../session-flow/agent-session.js');
+  return { ...actual, AgentSession: { ...actual.AgentSession, copy: async (): Promise<unknown> => mocks.copyResult } };
+});
 
 import { registerSessionFlowCommands } from '../session-flow/session-cmd.js';
 import { SyncManager, defaultSyncMeta } from '../session-flow/sync.js';
