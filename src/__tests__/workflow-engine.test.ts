@@ -52,10 +52,38 @@ steps:
   - id: one
     command: node one.js
   - id: two
+    needs: [one]
     command: node two.js
     output:
       ok: boolean
 `;
+
+/** Drives a run with next and report, failing the steps in `failing`. Returns the leased step ids and the done envelope. */
+async function drive(config: LocalConfig, runId: string, failing: string[] = []): Promise<{ leased: string[]; done: unknown }> {
+  const leased: string[] = [];
+  for (;;) {
+    const next = await leaseNext(config, runId, driverA);
+    if ('error' in next) throw new Error(next.error.message);
+    if (next.data.done) return { leased, done: next.data.done };
+    const lease = next.data.lease as { step: string; attempt: string; revision: number };
+    leased.push(lease.step);
+    const reported = await reportAttempt(config, runId, {
+      attempt: lease.attempt,
+      revision: lease.revision,
+      outcome: failing.includes(lease.step) ? 'failed' : 'success',
+      driver: driverA,
+    });
+    if ('error' in reported) throw new Error(reported.error.message);
+  }
+}
+
+function graph(steps: string): string {
+  return `schemaVersion: v1alpha1
+name: build
+description: A needs graph.
+steps:
+${steps}`;
+}
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
@@ -127,7 +155,7 @@ describe('workflow engine', () => {
     expect((again.data.lease as { attempt: string }).attempt).not.toBe(attempt);
   });
 
-  it('stops the run when a step fails', async () => {
+  it('skips the steps after a failed step and fails the run', async () => {
     const { config, runId } = await startBuild(TWO_STEPS);
     const leased = await leaseNext(config, runId, driverA);
     if ('error' in leased) throw new Error(leased.error.message);
@@ -141,10 +169,10 @@ describe('workflow engine', () => {
     const done = await leaseNext(config, runId, driverA);
     expect(done).toMatchObject({ data: { done: { outcome: 'failed' } } });
     const stored = await readRun(config, runId);
-    expect(stored).toMatchObject({ status: 'failed', steps: [{ status: 'failed' }, { status: 'pending' }] });
+    expect(stored).toMatchObject({ status: 'failed', steps: [{ status: 'failed' }, { status: 'skipped' }] });
   });
 
-  it('stamps updatedAt when a failed report or a finished next settles the run', async () => {
+  it('stamps updatedAt when next settles the run after a failed report', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
       vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
@@ -158,9 +186,12 @@ describe('workflow engine', () => {
         outcome: 'failed',
         driver: driverA,
       });
+      expect(await readRun(failing.config, failing.runId)).toMatchObject({ status: 'running' });
+      vi.setSystemTime(new Date('2026-01-01T00:01:30.000Z'));
+      await leaseNext(failing.config, failing.runId, driverA);
       expect(await readRun(failing.config, failing.runId)).toMatchObject({
         status: 'failed',
-        updatedAt: '2026-01-01T00:01:00.000Z',
+        updatedAt: '2026-01-01T00:01:30.000Z',
       });
 
       const finishing = await startBuild(TWO_STEPS);
@@ -375,7 +406,7 @@ describe('workflow engine', () => {
     expect(JSON.stringify(queued)).not.toContain('/work');
   });
 
-  it('queues an end record when reportAttempt fails the run (#1126 P1)', async () => {
+  it('queues an end record on the next that settles a run after a failed report (#1126 P1)', async () => {
     const failing = `schemaVersion: v1alpha1
 name: build
 description: One command.
@@ -383,15 +414,18 @@ steps:
   - id: one
     command: node one.js
 `;
-    const { config, work, runId } = await startBuild(failing);
-    fs.writeFileSync(path.join(work, 'one.js'), 'process.exit(1)\n');
-    const done = await runLocalDriver(config, runId, work);
-    expect(done).toMatchObject({ data: { done: { outcome: 'failed' } } });
-    // The run was settled BY reportAttempt (failed command), not by leaseNext —
-    // the end record must still publish.
+    const { config, runId } = await startBuild(failing);
     const { pendingRecords } = await import('../workflow/records.js');
-    const queued = await pendingRecords(config);
-    const end = queued.find((record) => record.phase === 'end');
+    const leased = await leaseNext(config, runId, driverA);
+    if ('error' in leased) throw new Error(leased.error.message);
+    const lease = leased.data.lease as { attempt: string; revision: number };
+    await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'failed', driver: driverA });
+    // A failed report does not settle the run; the next `next` does.
+    expect((await pendingRecords(config)).find((record) => record.phase === 'end')).toBeUndefined();
+
+    const done = await leaseNext(config, runId, driverA);
+    expect(done).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    const end = (await pendingRecords(config)).find((record) => record.phase === 'end');
     expect(end).toBeDefined();
     expect(end!.status).toBe('failed');
     expect(end!.stepCounts).toEqual({ total: 1, succeeded: 0, failed: 1 });
@@ -409,5 +443,125 @@ steps:
     expect(end).toBeDefined();
     expect(end!.status).toBe('succeeded');
     expect(end!.stepCounts).toEqual({ total: 2, succeeded: 2, failed: 0 });
+  });
+
+  it('skips a step whose dependency failed and still runs an independent branch', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: build
+    command: node build.js
+  - id: test
+    needs: [build]
+    command: node test.js
+  - id: docs
+    needs: []
+    command: node docs.js
+`));
+
+    const { leased, done } = await drive(config, runId, ['build']);
+
+    expect(leased).toEqual(['build', 'docs']);
+    expect(done).toMatchObject({ outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({
+      status: 'failed',
+      steps: [{ id: 'build', status: 'failed' }, { id: 'test', status: 'skipped' }, { id: 'docs', status: 'succeeded' }],
+    });
+  });
+
+  it.each([
+    ['linear', `  - id: a
+    command: node a.js
+  - id: b
+    needs: [a]
+    command: node b.js
+  - id: c
+    needs: [b]
+    command: node c.js
+`, ['a', 'b', 'c']],
+    ['diamond', `  - id: a
+    command: node a.js
+  - id: d
+    needs: [b, c]
+    command: node d.js
+  - id: c
+    needs: [a]
+    command: node c.js
+  - id: b
+    needs: [a]
+    command: node b.js
+`, ['a', 'c', 'b', 'd']],
+    ['join of two roots', `  - id: a
+    command: node a.js
+  - id: join
+    needs: [a, b]
+    command: node join.js
+  - id: b
+    needs: []
+    command: node b.js
+`, ['a', 'b', 'join']],
+  ])('settles a %s graph in declaration order of ready steps', async (_shape, steps, order) => {
+    const { config, runId } = await startBuild(graph(steps));
+
+    const { leased, done } = await drive(config, runId);
+
+    expect(leased).toEqual(order);
+    expect(done).toMatchObject({ outcome: 'succeeded' });
+  });
+
+  it('skips a join only when every step it needs was skipped', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: check
+    command: node check.js
+  - id: fix
+    needs: [check]
+    command: node fix.js
+  - id: docs
+    needs: []
+    command: node docs.js
+  - id: some-skipped
+    needs: [fix, docs]
+    command: node some.js
+  - id: all-skipped
+    needs: [fix]
+    command: node all.js
+`));
+
+    const { leased, done } = await drive(config, runId, ['check']);
+
+    expect(leased).toEqual(['check', 'docs', 'some-skipped']);
+    expect(done).toMatchObject({ outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({
+      steps: [
+        { id: 'check', status: 'failed' },
+        { id: 'fix', status: 'skipped' },
+        { id: 'docs', status: 'succeeded' },
+        { id: 'some-skipped', status: 'succeeded' },
+        { id: 'all-skipped', status: 'skipped' },
+      ],
+    });
+  });
+
+  it('accepts the report for a lease handed out after skipping steps', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: build
+    command: node build.js
+  - id: test
+    needs: [build]
+    command: node test.js
+  - id: docs
+    needs: []
+    command: node docs.js
+`));
+    const first = await leaseNext(config, runId, driverA);
+    if ('error' in first) throw new Error(first.error.message);
+    const lease = first.data.lease as { attempt: string; revision: number };
+    await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'failed', driver: driverA });
+
+    const docs = await leaseNext(config, runId, driverA);
+    expect(docs).toMatchObject({ data: { lease: { step: 'docs', revision: 2 } } });
+    if ('error' in docs) return;
+    const docsLease = docs.data.lease as { attempt: string; revision: number };
+    expect(await readRun(config, runId)).toMatchObject({ revision: 2, steps: [{ status: 'failed' }, { status: 'skipped' }, { status: 'leased' }] });
+
+    const accepted = await reportAttempt(config, runId, {
+      attempt: docsLease.attempt, revision: docsLease.revision, outcome: 'success', driver: driverA,
+    });
+    expect(accepted).toMatchObject({ data: { accepted: true, revision: 3, step: { id: 'docs', status: 'succeeded' } } });
   });
 });

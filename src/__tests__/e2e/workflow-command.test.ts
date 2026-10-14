@@ -80,6 +80,7 @@ steps:
   - id: one
     command: node one.js
   - id: two
+    needs: [one]
     command: node two.js
 `);
     fs.writeFileSync(path.join(workflows, 'broken.yaml'), `schemaVersion: v1alpha1
@@ -96,6 +97,7 @@ steps:
   - id: one
     command: node -e "process.exit(0)"
   - id: two
+    needs: [one]
     command: node -e "process.exit(0)"
 `);
 

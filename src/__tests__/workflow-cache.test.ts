@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { loadCachedWorkflow, syncWorkflowDefinitions } from '../workflow/cache.js';
+import { formatDiagnostic } from '../workflow/parse.js';
 import { leaseNext, startRun } from '../workflow/engine.js';
 import { readRun } from '../workflow/store.js';
 
@@ -28,9 +29,9 @@ function writeWorkflow(config: LocalConfig, name: string, body: string): void {
   fs.writeFileSync(path.join(config.repo.localPath, 'workflows', `${name}.yaml`), body);
 }
 
-function cachedText(config: LocalConfig): string {
+function cacheFiles(config: LocalConfig): string[] {
   const home = config.dataHome ?? '';
-  if (!fs.existsSync(home)) return '';
+  if (!fs.existsSync(home)) return [];
   const files: string[] = [];
   const walk = (dir: string): void => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -40,7 +41,11 @@ function cachedText(config: LocalConfig): string {
     }
   };
   walk(home);
-  return files.map((file) => fs.readFileSync(file, 'utf8')).join('\n');
+  return files;
+}
+
+function cachedText(config: LocalConfig): string {
+  return cacheFiles(config).map((file) => fs.readFileSync(file, 'utf8')).join('\n');
 }
 
 const VALID = `schemaVersion: v1alpha1
@@ -280,5 +285,145 @@ steps:
     await syncWorkflowDefinitions(second);
     const afterDelete = await startRun(first, 'build');
     expect(afterDelete).toMatchObject({ data: { name: 'build', status: 'running' } });
+  });
+
+  it('reports a step after the first that does not declare needs', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Compile, then test.
+steps:
+  - id: compile
+    command: node compile.js
+  - id: test
+    command: node test.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:7: field "steps[1].needs": step "test" must declare needs; use needs: [] for another root',
+    ]);
+  });
+
+  it('reports a needs id that names no step', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Compile, then test.
+steps:
+  - id: compile
+    command: node compile.js
+  - id: test
+    needs: [compile, lint]
+    command: node test.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:8: field "steps[1].needs": step "test" needs "lint", which is not a step in this workflow',
+    ]);
+  });
+
+  it('reports a needs cycle with the steps that form it', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Two steps wait for each other.
+steps:
+  - id: compile
+    command: node compile.js
+  - id: test
+    needs: [compile, publish]
+    command: node test.js
+  - id: publish
+    needs: [test]
+    command: node publish.js
+  - id: lint
+    needs: [lint]
+    command: node lint.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:8: field "steps[1].needs": step "test" is in a needs cycle: test -> publish -> test',
+      'workflows/build.yaml:14: field "steps[3].needs": step "lint" is in a needs cycle: lint -> lint',
+    ]);
+  });
+
+  it('reports needs that is not a list of step ids', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Compile, then test.
+steps:
+  - id: compile
+    command: node compile.js
+  - id: test
+    needs: compile
+    command: node test.js
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:8: field "steps[1].needs": step "test" needs must be a list of step ids',
+    ]);
+  });
+
+  it('drops a cached copy from before needs when the file still has no needs', async () => {
+    const config = testConfig();
+    const linear = `schemaVersion: v1alpha1
+name: build
+description: Compile, then test.
+steps:
+  - id: compile
+    command: node compile.js
+  - id: test
+    command: node test.js
+`;
+    // Stand in for the cache an older teamai wrote under the linear rules: same file, no needs.
+    writeWorkflow(config, 'build', linear.replace('  - id: test\n', '  - id: test\n    needs: [compile]\n'));
+    await syncWorkflowDefinitions(config);
+    const cacheFile = cacheFiles(config).find((file) => file.endsWith(`${path.sep}build.json`));
+    if (!cacheFile) throw new Error('cache missing');
+    const cached = JSON.parse(fs.readFileSync(cacheFile, 'utf8')) as { definition: { steps: Array<{ needs?: string[] }> } };
+    for (const step of cached.definition.steps) delete step.needs;
+    fs.writeFileSync(cacheFile, JSON.stringify(cached));
+    writeWorkflow(config, 'build', linear);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid).toEqual([expect.objectContaining({ code: 'missing_needs', field: 'steps[1].needs' })]);
+    expect(result.unrunnable).toEqual(['workflows/build.yaml']);
+    expect(result.kept).toEqual([]);
+    expect(await startRun(config, 'build')).toMatchObject({ error: { code: 'workflow_not_found' } });
+  });
+
+  it('reports only the broken step when a step numbered 10 or higher is valid', async () => {
+    const config = testConfig();
+    const steps = Array.from({ length: 12 }, (_, index) => [
+      `  - id: s${index}`,
+      // Nothing needs the broken step, so the only reference that can go wrong is the one to s10.
+      ...(index === 0 ? [] : [`    needs: [${index === 11 ? 's10' : index === 2 ? 's0' : `s${index - 1}`}]`]),
+      index === 1 ? "    prompt: ''" : `    command: node s${index}.js`,
+    ].join('\n')).join('\n');
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Many steps.
+steps:
+${steps}
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map((diagnostic) => `${diagnostic.field}: ${diagnostic.message}`)).toEqual([
+      'steps[1].prompt: prompt must be a non-empty string',
+    ]);
   });
 });

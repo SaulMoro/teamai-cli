@@ -108,6 +108,36 @@ function settleRun(run: RunState, outcome: Exclude<RunStatus, 'running'>): RunSt
   return { ...run, steps: run.steps.map((step) => ({ ...step })) };
 }
 
+/** A step that ran and did not succeed. Later issues add `timeout` and `cancelled`. */
+function stopped(step: StepState): boolean {
+  return step.status === 'failed';
+}
+
+/**
+ * Marks every pending step that can no longer run as `skipped`, until nothing changes.
+ * Returns the lookup from a step to the states of the steps it needs.
+ */
+function skipUnreachable(run: RunState): (step: StepState) => Array<StepState | undefined> {
+  const states = new Map(run.steps.map((step) => [step.id, step]));
+  const declared = new Map(run.definition.steps.map((step) => [step.id, step.needs ?? []]));
+  const needs = (step: StepState): Array<StepState | undefined> => (declared.get(step.id) ?? []).map((id) => states.get(id));
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const step of run.steps) {
+      if (step.status !== 'pending' || !mustSkip(needs(step))) continue;
+      step.status = 'skipped';
+      changed = true;
+    }
+  }
+  return needs;
+}
+
+/** A step is skipped when a step it needs stopped, or when every step it needs was skipped. */
+function mustSkip(needs: Array<StepState | undefined>): boolean {
+  if (needs.some((need) => need && stopped(need))) return true;
+  return needs.length > 0 && needs.every((need) => need?.status === 'skipped');
+}
+
 export async function startRun(
   config: LocalConfig,
   name: string,
@@ -146,8 +176,8 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
   let alreadySettled = false;
   const envelope = await withRun(config, runId, async (run) => {
     if (run.status !== 'running') {
-      // Settled earlier (by reportAttempt, which published the end record);
-      // the done envelope still reports the queue-derived record state.
+      // Settled by an earlier next, which published the end record; the
+      // done envelope still reports the queue-derived record state.
       alreadySettled = true;
       return { save: false, envelope: ok({ done: { run: run.id, outcome: run.status } }) };
     }
@@ -158,18 +188,18 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       }
       return { save: false, envelope: ok({ wait: { reason: `${leased.id} is leased` } }) };
     }
-    const index = run.steps.findIndex((step) => step.status === 'pending');
-    if (index < 0) {
-      const outcome = run.steps.every((step) => step.status === 'succeeded') ? 'succeeded' : 'failed';
+    // Settle the graph here, while no lease is open, so a later report still matches its lease revision.
+    const needs = skipUnreachable(run);
+    const step = run.steps.find((item) => item.status === 'pending'
+      && needs(item).every((need) => need?.status === 'succeeded' || need?.status === 'skipped'));
+    if (!step) {
+      if (run.steps.some((item) => item.status === 'pending')) {
+        return { save: false, envelope: error('run_unreadable', `Run ${run.id} has pending steps whose needs cannot be met`) };
+      }
+      const outcome = run.steps.some(stopped) ? 'failed' : 'succeeded';
       settledRun = settleRun(run, outcome);
       return { save: true, envelope: ok({ done: { run: run.id, outcome } }) };
     }
-    if (run.steps.slice(0, index).some((step) => step.status !== 'succeeded')) {
-      settledRun = settleRun(run, 'failed');
-      return { save: true, envelope: ok({ done: { run: run.id, outcome: 'failed' } }) };
-    }
-    const step = run.steps[index];
-    if (!step) return { save: false, envelope: error('run_unreadable', `Run ${run.id} has no step to lease`) };
     const attempt = `a${randomBytes(4).toString('hex')}`;
     step.status = 'leased';
     step.attempt = attempt;
@@ -258,9 +288,7 @@ function rememberSettledAttempt(run: RunState, attempt: string): void {
 }
 
 export async function reportAttempt(config: LocalConfig, runId: string, report: ReportInput): Promise<WorkflowEnvelope> {
-  // The end record publishes AFTER withRun releases the run lock (#1126 P3).
-  let settledRun: RunState | undefined;
-  const envelope = await withRun(config, runId, async (run) => {
+  return withRun(config, runId, async (run) => {
     // Settled membership wins. An old revision of a settled attempt is still repeated_report.
     if (run.settledAttempts.includes(report.attempt)) {
       return { save: false, envelope: error('repeated_report', `Attempt ${report.attempt} was already reported`) };
@@ -309,10 +337,6 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
     }
     rememberSettledAttempt(run, report.attempt);
     run.revision += 1;
-    // Settle last, so the settled run carries this attempt and the new revision.
-    // The end record publishes from this transition too (#1126 P1), after the
-    // lock releases (#1126 P3).
-    if (step.status === 'failed') settledRun = settleRun(run, 'failed');
     return {
       save: true,
       envelope: ok({
@@ -322,10 +346,4 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       }),
     };
   });
-  if (settledRun) {
-    const record = await noteRunRecord(config, settledRun, report.driver, 'end');
-    const data = (envelope as { data?: Record<string, unknown> }).data;
-    if (data) data.record = record;
-  }
-  return envelope;
 }

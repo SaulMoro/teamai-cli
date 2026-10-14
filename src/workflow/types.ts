@@ -16,6 +16,8 @@ export type OutputSchema =
 
 export interface WorkflowStep {
   id: string;
+  /** Step ids this step waits for. Absent only on the first step, which is a root. */
+  needs?: string[];
   command?: string;
   /** Resolved, revision-bound prompt text. */
   prompt?: string;
@@ -38,11 +40,15 @@ export interface WorkflowDiagnostic {
   column: number;
   field: string;
   message: string;
-  /** A key this version does not know. The cache must not keep an older runnable copy. */
-  code?: 'unknown_key';
+  /**
+   * The cache must not keep an older runnable copy of a file with either code.
+   * `unknown_key`: a key this version does not know.
+   * `missing_needs`: a step after the first has no `needs`; a copy cached under the old linear rules must not run as a graph.
+   */
+  code?: 'unknown_key' | 'missing_needs';
 }
 
-export type StepStatus = 'pending' | 'leased' | 'succeeded' | 'failed';
+export type StepStatus = 'pending' | 'leased' | 'succeeded' | 'failed' | 'skipped';
 export type StepOutcome = 'success' | 'failed' | 'released';
 export type RunStatus = 'running' | 'succeeded' | 'failed';
 

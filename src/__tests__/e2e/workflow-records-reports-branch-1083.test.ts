@@ -20,6 +20,7 @@ steps:
   - id: one
     command: node one.js
   - id: two
+    needs: [one]
     command: node two.js
     output:
       ok: boolean
