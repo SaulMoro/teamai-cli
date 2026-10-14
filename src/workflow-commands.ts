@@ -1,7 +1,7 @@
 import { autoDetectInit } from './config.js';
 import { setStderrOnly } from './utils/logger.js';
 import { leaseNext, parseDriverPayload, parseReport, reportAttempt, startRun } from './workflow/engine.js';
-import { runLocalDriver } from './workflow/local-driver.js';
+import { localDriver, runLocalDriver } from './workflow/local-driver.js';
 import { scopedToolPaths, type LocalConfig, type TeamaiConfig } from './types.js';
 import type { WorkflowEnvelope } from './workflow/types.js';
 
@@ -82,7 +82,10 @@ export async function workflowStart(name: string, options: { driver?: string; to
     writeEnvelope({ error: { code: 'invalid_tools', message: tools } });
     return;
   }
-  const started = await startRun(config, name);
+  // The local driver identity rides the start record (#1083): the run's
+  // starter is this machine. Remote drivers lease later and land on the end
+  // record.
+  const started = await startRun(config, name, { driver: localDriver(process.cwd()) });
   if ('error' in started || options.driver !== 'local') {
     writeEnvelope(started);
     return;

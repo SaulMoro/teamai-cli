@@ -317,4 +317,40 @@ describe('workflow engine', () => {
     expect(done).toMatchObject({ data: { done: { outcome: 'succeeded', run: runId } } });
     expect(fs.readFileSync(path.join(work, 'step-two.txt'), 'utf8')).toBe('2');
   });
+
+  // #1083: run records publish at start and end; a publication failure is
+  // queued durably and surfaced as `record: pending`, never failing the run.
+  it('surfaces record publication state on start and done envelopes', async () => {
+    const { config, runId } = await startBuild(TWO_STEPS);
+    // The fixture has no reports remote, so publication cannot succeed —
+    // the run must still start, and the record must be queued for the next
+    // pull.
+    const stored = await readRun(config, runId);
+    if (typeof stored !== 'object') throw new Error('run missing');
+    const { pendingRecords } = await import('../workflow/records.js');
+    const queued = await pendingRecords(config);
+    expect(queued).toHaveLength(1);
+    expect(queued[0].phase).toBe('start');
+    expect(queued[0].run).toBe(runId);
+    // A machine that dies after start stays visible as started-but-not-ended:
+    // the queued record has no endedAt and status running.
+    expect(queued[0].status).toBe('running');
+    expect(queued[0]).not.toHaveProperty('endedAt');
+    // The driver workspace never crosses into the record.
+    expect(JSON.stringify(queued)).not.toContain('/work');
+  });
+
+  it('queues an end record when the run settles', async () => {
+    const { config, work, runId } = await startBuild(TWO_STEPS);
+    fs.writeFileSync(path.join(work, 'one.js'), "process.stdout.write(JSON.stringify({ ok: true }))\n");
+    fs.writeFileSync(path.join(work, 'two.js'), "process.stdout.write(JSON.stringify({ ok: true }))\n");
+    const done = await runLocalDriver(config, runId, work);
+    expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const { pendingRecords } = await import('../workflow/records.js');
+    const queued = await pendingRecords(config);
+    const end = queued.find((record) => record.phase === 'end');
+    expect(end).toBeDefined();
+    expect(end!.status).toBe('succeeded');
+    expect(end!.steps).toEqual({ total: 2, succeeded: 2, failed: 0 });
+  });
 });

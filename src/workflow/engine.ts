@@ -3,7 +3,8 @@ import { acquireLock, releaseLock } from '../update.js';
 import type { LocalConfig } from '../types.js';
 import { loadCachedWorkflow } from './cache.js';
 import { outputMismatch } from './output.js';
-import { isRunId, readRun, runLockPath, writeRun } from './store.js';
+import { noteRunRecord, pendingRecords } from './records.js';
+import { generateRunId, isRunId, readRun, runLockPath, writeRun } from './store.js';
 import type {
   DriverIdentity,
   RunState,
@@ -59,7 +60,7 @@ async function withRun<T extends WorkflowEnvelope>(
   runId: string,
   mutate: (run: RunState) => Promise<{ envelope: T; save: boolean }>,
 ): Promise<T> {
-  if (!isRunId(runId)) return error('invalid_run', 'Run id must look like r followed by 8 hex digits') as T;
+  if (!isRunId(runId)) return error('invalid_run', 'Run id must look like r followed by 8 or 16 hex digits') as T;
   const lock = runLockPath(config, runId);
   let held = false;
   for (let attempt = 0; attempt < LOCK_ATTEMPTS && !held; attempt += 1) {
@@ -96,7 +97,11 @@ function leasePayload(run: RunState, step: StepState): Record<string, unknown> {
   };
 }
 
-export async function startRun(config: LocalConfig, name: string): Promise<WorkflowEnvelope> {
+export async function startRun(
+  config: LocalConfig,
+  name: string,
+  options: { driver?: DriverIdentity } = {},
+): Promise<WorkflowEnvelope> {
   const cached = await loadCachedWorkflow(config, name);
   if (!cached) {
     return error('workflow_not_found', `Workflow "${name}" has no runnable version. Check workflows/${name}.yaml and pull again.`);
@@ -104,7 +109,7 @@ export async function startRun(config: LocalConfig, name: string): Promise<Workf
   const now = new Date().toISOString();
   const run: RunState = {
     schemaVersion: 'v1alpha1',
-    id: `r${randomBytes(4).toString('hex')}`,
+    id: generateRunId(),
     name: cached.definition.name,
     revision: 1,
     status: 'running',
@@ -116,12 +121,23 @@ export async function startRun(config: LocalConfig, name: string): Promise<Workf
     updatedAt: now,
   };
   await writeRun(config, run);
-  return ok({ run: run.id, name: run.name, status: run.status, revision: run.revision });
+  // #1083: publish the start record; a failed publication is queued locally
+  // and retried on the next pull — it never fails the run itself.
+  const record = await noteRunRecord(config, run, options.driver, 'start');
+  return ok({ run: run.id, name: run.name, status: run.status, revision: run.revision, record });
 }
 
 export async function leaseNext(config: LocalConfig, runId: string, driver: DriverIdentity): Promise<WorkflowEnvelope> {
-  return withRun(config, runId, async (run) => {
+  // The end record publishes AFTER withRun releases the run lock (#1126 P3):
+  // publication does a reports-branch push, and no network I/O may hold the
+  // lock other engine operations wait on.
+  let settledRun: RunState | undefined;
+  let alreadySettled = false;
+  const envelope = await withRun(config, runId, async (run) => {
     if (run.status !== 'running') {
+      // Settled earlier (by reportAttempt, which published the end record);
+      // the done envelope still reports the queue-derived record state.
+      alreadySettled = true;
       return { save: false, envelope: ok({ done: { run: run.id, outcome: run.status } }) };
     }
     const leased = run.steps.find((step) => step.status === 'leased');
@@ -135,10 +151,14 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     if (index < 0) {
       const outcome = run.steps.every((step) => step.status === 'succeeded') ? 'succeeded' : 'failed';
       run.status = outcome;
+      run.updatedAt = new Date().toISOString();
+      settledRun = { ...run, steps: run.steps.map((step) => ({ ...step })) };
       return { save: true, envelope: ok({ done: { run: run.id, outcome } }) };
     }
     if (run.steps.slice(0, index).some((step) => step.status !== 'succeeded')) {
       run.status = 'failed';
+      run.updatedAt = new Date().toISOString();
+      settledRun = { ...run, steps: run.steps.map((step) => ({ ...step })) };
       return { save: true, envelope: ok({ done: { run: run.id, outcome: 'failed' } }) };
     }
     const step = run.steps[index];
@@ -150,6 +170,14 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     step.lease = { attempt, revision: run.revision, driver };
     return { save: true, envelope: ok({ lease: leasePayload(run, step) }) };
   });
+  if (settledRun || alreadySettled) {
+    const record = settledRun
+      ? await noteRunRecord(config, settledRun, driver, 'end')
+      : ((await pendingRecords(config)).length > 0 ? 'pending' : 'published');
+    const done = (envelope as { data?: { done?: Record<string, unknown> } }).data?.done;
+    if (done) done.record = record;
+  }
+  return envelope;
 }
 
 function driverFrom(value: unknown): DriverIdentity | undefined {
@@ -217,10 +245,15 @@ function rememberSettledAttempt(run: RunState, attempt: string): void {
   run.settledAttempts.push(attempt);
   const extra = run.settledAttempts.length - SETTLED_ATTEMPTS_LIMIT;
   if (extra > 0) run.settledAttempts.splice(0, extra);
+  // settledAttempts is a bounded dedup history; the cumulative count feeds the
+  // run record's iterations field, which must not cap at SETTLED_ATTEMPTS_LIMIT.
+  run.settledCount = (run.settledCount ?? 0) + 1;
 }
 
 export async function reportAttempt(config: LocalConfig, runId: string, report: ReportInput): Promise<WorkflowEnvelope> {
-  return withRun(config, runId, async (run) => {
+  // The end record publishes AFTER withRun releases the run lock (#1126 P3).
+  let settledRun: RunState | undefined;
+  const envelope = await withRun(config, runId, async (run) => {
     // Settled membership wins. An old revision of a settled attempt is still repeated_report.
     if (run.settledAttempts.includes(report.attempt)) {
       return { save: false, envelope: error('repeated_report', `Attempt ${report.attempt} was already reported`) };
@@ -270,6 +303,11 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
     }
     rememberSettledAttempt(run, report.attempt);
     run.revision += 1;
+    // A failed step settles the run HERE, not in leaseNext — the end record
+    // must publish from this transition too (#1126 P1).
+    if (run.status !== 'running') {
+      settledRun = { ...run, steps: run.steps.map((s2) => ({ ...s2 })) };
+    }
     return {
       save: true,
       envelope: ok({
@@ -279,4 +317,10 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       }),
     };
   });
+  if (settledRun) {
+    const record = await noteRunRecord(config, settledRun, report.driver, 'end');
+    const data = (envelope as { data?: Record<string, unknown> }).data;
+    if (data) data.record = record;
+  }
+  return envelope;
 }
