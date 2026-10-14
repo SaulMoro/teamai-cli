@@ -50,6 +50,12 @@ export interface SessionSummary {
   firstPrompt: string;
   /** Whether this session is worth surfacing to the team (see isValuable). */
   valuable: boolean;
+  /**
+   * The commit the session started on and whether tracked files had changes,
+   * from its earliest `session_start` that recorded them. Absent when none did.
+   * Not rendered into the monthly log.
+   */
+  gitAtStart?: { head: string; dirty: boolean };
 }
 
 /** Max characters kept from the first prompt in a summary. */
@@ -81,8 +87,13 @@ export function collectSession(sessionId: string, events: DashboardEvent[]): Ses
   let firstPromptRaw = '';
   let startedAt = own[0].timestamp;
   let endedAt = own[0].timestamp;
+  let gitStart: { at: string; head: string; dirty: boolean } | undefined;
 
   for (const e of own) {
+    if (e.type === 'session_start' && e.gitHead !== undefined && e.gitDirty !== undefined
+      && (!gitStart || e.timestamp < gitStart.at)) {
+      gitStart = { at: e.timestamp, head: e.gitHead, dirty: e.gitDirty };
+    }
     if (e.tool) tool = e.tool;
     if (e.cwd) cwd = e.cwd;
     if (e.timestamp < startedAt) startedAt = e.timestamp;
@@ -127,6 +138,7 @@ export function collectSession(sessionId: string, events: DashboardEvent[]): Ses
     prompts: metrics.prompts,
     firstPrompt,
     valuable: isValuable({ interventionCount, distinctTools }),
+    ...gitStart ? { gitAtStart: { head: gitStart.head, dirty: gitStart.dirty } } : {},
   };
 }
 

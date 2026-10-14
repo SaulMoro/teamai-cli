@@ -1721,6 +1721,16 @@ export interface DashboardEvent {
   transcriptPath?: string;
   /** Resolved PID of the AI tool main process (for liveness monitoring) */
   monitorPid?: number;
+  /**
+   * On `session_start` only: the full commit sha checked out at `cwd` when the
+   * session (or its resume or compaction) started, and whether tracked files
+   * were modified or staged then (untracked files are not counted). Absent
+   * outside git, in a repo with no commits, on events that record no `cwd`
+   * (Copilot), when git failed or timed out, and on events written before
+   * these fields existed.
+   */
+  gitHead?: string;
+  gitDirty?: boolean;
   /** Last event timestamp the PID monitor observed, so a delayed exit targets that run. */
   processExitAfter?: string;
   /** Byte boundary captured at Copilot SessionStart; private log path is never stored. */

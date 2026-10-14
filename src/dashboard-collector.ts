@@ -2429,6 +2429,33 @@ export async function eventProjectAnchor(cwd: string | undefined, sessionId: str
   return (await resolveAnchors(cwd))?.projectAnchor;
 }
 
+/** How long a session start waits for `git status` before recording no git state. */
+const GIT_STATE_TIMEOUT_MS = 2_000;
+
+/**
+ * Add to a `session_start` event the commit its `cwd` had checked out and
+ * whether tracked files had changes, so the session can be replayed on the
+ * code it ran against. Every start records its own (resume and compaction fire
+ * SessionStart too). Other events, and events with no cwd (Copilot), are left
+ * as they are, so no other hook runs git. A failure leaves both fields absent
+ * and the event is still written. Both event writers go through here.
+ */
+export async function addGitStateAtStart(event: DashboardEvent): Promise<void> {
+  if (event.type !== 'session_start' || !event.cwd) return;
+  try {
+    const { getHeadState } = await import('./utils/git.js');
+    const state = await getHeadState(event.cwd, AbortSignal.timeout(GIT_STATE_TIMEOUT_MS));
+    if (!state) {
+      log.debug(`dashboard: ${event.cwd} has no commit yet, so session_start records no git state`);
+      return;
+    }
+    event.gitHead = state.head;
+    event.gitDirty = state.dirty;
+  } catch (e) {
+    log.debug(`dashboard: could not read the git state of ${event.cwd} at session_start: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
 // ─── CLI entry point ────────────────────────────────────
 
 /**
@@ -2468,7 +2495,11 @@ export async function dashboardReport(toolArg?: string): Promise<void> {
   if (!event) return;
 
   event.dataHomeKey = await dataHomeKey(getDataHome(config));
-  event.projectAnchor = await eventProjectAnchor(event.cwd, event.sessionId);
+  const [projectAnchor] = await Promise.all([
+    eventProjectAnchor(event.cwd, event.sessionId),
+    addGitStateAtStart(event),
+  ]);
+  event.projectAnchor = projectAnchor;
   await appendEvent(event);
 
   // Trigger compaction check (non-blocking)

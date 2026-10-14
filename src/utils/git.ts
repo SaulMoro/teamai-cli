@@ -1228,6 +1228,24 @@ export async function getHeadCommit(localPath: string, rev = 'HEAD'): Promise<st
 }
 
 /**
+ * The commit checked out at `cwd` and whether tracked files differ from it
+ * (modified or staged), from one `git status`. Untracked files are not listed,
+ * since that is the slow part in a large repo. Null in a repo with no commits;
+ * throws when git fails, is aborted, or `cwd` is not in a work tree.
+ * `--no-optional-locks` keeps it from taking the index lock the user's own git
+ * commands may need.
+ */
+export async function getHeadState(cwd: string, abort?: AbortSignal): Promise<{ head: string; dirty: boolean } | null> {
+  const out = await createGit(cwd, abort).raw([
+    '--no-optional-locks', 'status', '--porcelain=v2', '--branch', '--untracked-files=no',
+  ]);
+  const lines = out.split('\n').filter(Boolean);
+  const head = lines.find((l) => l.startsWith('# branch.oid '))?.slice('# branch.oid '.length).trim();
+  if (!head || head === '(initial)') return null;
+  return { head, dirty: lines.some((l) => !l.startsWith('#')) };
+}
+
+/**
  * Whether `absFile`'s content was, at some point on the current branch, the
  * content of `relPath`. A local copy that matches an OLDER team version and
  * not the current one is a stale copy nobody edited, not a local change.

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
+import { Readable } from 'node:stream';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -15,7 +16,9 @@ import {
   compactEvents,
   reconcileRequestLog,
   dedupeEvents,
+  dashboardReport,
 } from '../dashboard-collector.js';
+import { collectSession } from '../session-collector.js';
 import type { DashboardEvent } from '../types.js';
 import * as pidMonitor from '../pid-monitor.js';
 import { _resetState as resetLogger, _setLogFilePath } from '../utils/logger.js';
@@ -2683,5 +2686,163 @@ describe('dedupeEvents', () => {
     ];
     const out = dedupeEvents(events).map(e => e.timestamp);
     expect(out).toEqual([...out].sort());
+  });
+});
+
+// ─── git state at session start ─────────────────────────
+
+describe('dashboard-report records the git state a session started on', () => {
+  /** A user-scope config under HOME, so the hook resolves a scope for any cwd. */
+  function configureUserScope(): void {
+    const dir = path.join(tmpDir, '.teamai');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'config.yaml'), [
+      'username: tester',
+      'scope: user',
+      'repo:',
+      '  kind: git',
+      `  localPath: ${path.join(dir, 'team-repo')}`,
+      '  remote: https://example.test/acme/team.git',
+      'additionalRoles: []',
+      '',
+    ].join('\n'));
+  }
+
+  function git(cwd: string, ...args: string[]): string {
+    const run = spawnSync('git', [
+      '-c', 'user.name=Tester', '-c', 'user.email=tester@example.test', '-c', 'commit.gpgsign=false',
+      ...args,
+    ], { cwd, encoding: 'utf-8' });
+    if (run.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${run.stderr}`);
+    return run.stdout.trim();
+  }
+
+  /** A repo with one committed file; returns its path and the commit sha. */
+  function committedRepo(): { repo: string; head: string } {
+    const repo = path.join(tmpDir, 'repo');
+    fs.mkdirSync(repo, { recursive: true });
+    git(repo, 'init', '-q');
+    fs.writeFileSync(path.join(repo, 'tracked.txt'), 'one\n');
+    git(repo, 'add', 'tracked.txt');
+    git(repo, 'commit', '-q', '-m', 'init');
+    return { repo, head: git(repo, 'rev-parse', 'HEAD') };
+  }
+
+  /** Run `teamai dashboard-report --stdin` the way a hook does, with `payload` on STDIN. */
+  async function runHook(payload: Record<string, unknown>, tool = 'claude'): Promise<void> {
+    const fake = Readable.from([Buffer.from(JSON.stringify(payload), 'utf-8')]) as Readable & { isTTY?: boolean };
+    fake.isTTY = false;
+    const orig = Object.getOwnPropertyDescriptor(process, 'stdin')!;
+    Object.defineProperty(process, 'stdin', { value: fake, configurable: true });
+    try {
+      await dashboardReport(tool);
+    } finally {
+      Object.defineProperty(process, 'stdin', orig);
+    }
+  }
+
+  beforeEach(() => {
+    tmpDir = fs.realpathSync.native(tmpDir);
+    configureUserScope();
+  });
+
+  it('records the commit and a clean tree', async () => {
+    const { repo, head } = committedRepo();
+
+    await runHook({ hook_event_name: 'SessionStart', session_id: 'git-clean', cwd: repo });
+
+    const [start] = await readEvents();
+    expect(start.type).toBe('session_start');
+    expect(start.gitHead).toBe(head);
+    expect(start.gitDirty).toBe(false);
+  });
+
+  it('marks the tree dirty when a tracked file is modified', async () => {
+    const { repo, head } = committedRepo();
+    fs.writeFileSync(path.join(repo, 'tracked.txt'), 'two\n');
+
+    await runHook({ hook_event_name: 'SessionStart', session_id: 'git-modified', cwd: repo });
+
+    const [start] = await readEvents();
+    expect(start.gitHead).toBe(head);
+    expect(start.gitDirty).toBe(true);
+  });
+
+  it('marks the tree dirty when a change is staged', async () => {
+    const { repo } = committedRepo();
+    fs.writeFileSync(path.join(repo, 'added.txt'), 'new\n');
+    git(repo, 'add', 'added.txt');
+
+    await runHook({ hook_event_name: 'SessionStart', session_id: 'git-staged', cwd: repo });
+
+    const [start] = await readEvents();
+    expect(start.gitDirty).toBe(true);
+  });
+
+  it('does not count untracked files as dirty', async () => {
+    const { repo, head } = committedRepo();
+    fs.writeFileSync(path.join(repo, 'scratch.txt'), 'untracked\n');
+
+    await runHook({ hook_event_name: 'SessionStart', session_id: 'git-untracked', cwd: repo });
+
+    const [start] = await readEvents();
+    expect(start.gitHead).toBe(head);
+    expect(start.gitDirty).toBe(false);
+  });
+
+  it('still writes the event without git state outside git, and logs why', async () => {
+    const plain = path.join(tmpDir, 'plain');
+    fs.mkdirSync(plain, { recursive: true });
+
+    await runHook({ hook_event_name: 'SessionStart', session_id: 'no-git', cwd: plain });
+
+    const [start] = await readEvents();
+    expect(start.type).toBe('session_start');
+    expect(start).not.toHaveProperty('gitHead');
+    expect(start).not.toHaveProperty('gitDirty');
+    expect(fs.readFileSync(path.join(tmpDir, '.teamai', 'debug.log'), 'utf-8'))
+      .toContain(`could not read the git state of ${plain} at session_start`);
+  });
+
+  it('records no git state in a repo with no commits', async () => {
+    const repo = path.join(tmpDir, 'empty-repo');
+    fs.mkdirSync(repo, { recursive: true });
+    git(repo, 'init', '-q');
+
+    await runHook({ hook_event_name: 'SessionStart', session_id: 'no-commits', cwd: repo });
+
+    const [start] = await readEvents();
+    expect(start.type).toBe('session_start');
+    expect(start).not.toHaveProperty('gitHead');
+    expect(start).not.toHaveProperty('gitDirty');
+  });
+
+  it('runs git only for session_start', async () => {
+    const { repo } = committedRepo();
+
+    await runHook({ hook_event_name: 'PostToolUse', session_id: 'git-tool', cwd: repo, tool_name: 'Edit' });
+    await runHook({ hook_event_name: 'Stop', session_id: 'git-tool', cwd: repo });
+
+    const events = await readEvents();
+    expect(events.map((e) => e.type)).toEqual(['tool_use', 'stop']);
+    for (const e of events) {
+      expect(e).not.toHaveProperty('gitHead');
+      expect(e).not.toHaveProperty('gitDirty');
+    }
+  });
+
+  it('records each start on its own, and collectSession reports the earliest', async () => {
+    const { repo, head: first } = committedRepo();
+    await runHook({ hook_event_name: 'SessionStart', session_id: 'git-resume', cwd: repo });
+    fs.writeFileSync(path.join(repo, 'tracked.txt'), 'two\n');
+    git(repo, 'commit', '-q', '-am', 'second');
+    const second = git(repo, 'rev-parse', 'HEAD');
+    fs.writeFileSync(path.join(repo, 'tracked.txt'), 'three\n');
+    // A resume fires SessionStart again and records the state it resumed on.
+    await runHook({ hook_event_name: 'SessionStart', session_id: 'git-resume', cwd: repo, source: 'resume' });
+
+    const events = await readEvents();
+    expect(events.map((e) => [e.gitHead, e.gitDirty])).toEqual([[first, false], [second, true]]);
+    expect(collectSession('git-resume', events)?.gitAtStart).toEqual({ head: first, dirty: false });
   });
 });
