@@ -3,10 +3,12 @@ import { isMap, isScalar, isSeq, LineCounter, parseDocument, type Node } from 'y
 function isYamlNode(value: unknown): value is Node {
   return !!value && typeof value === 'object' && 'range' in value;
 }
-import type { OutputSchema, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
+import type { EndOutcome, OutputSchema, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
 
-const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'steps']);
-const STEP_KEYS = new Set(['id', 'needs', 'command', 'prompt', 'prompt_file', 'agent', 'output']);
+const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'ends', 'steps']);
+const STEP_KEYS = new Set(['id', 'needs', 'command', 'prompt', 'prompt_file', 'agent', 'output', 'end']);
+/** Keys a step without an action may carry. */
+const END_ONLY_KEYS = new Set(['id', 'needs', 'if', 'end']);
 const TYPE_NAMES = new Set(['string', 'number', 'boolean']);
 const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
@@ -160,6 +162,9 @@ export function parseWorkflow(file: string, content: string): {
     diagnostics.push(locate(file, lineCounter, descriptionPair?.value ?? descriptionPair?.key ?? root, 'description', 'description must be a non-empty string'));
   }
 
+  const endsPair = root.items.find((pair) => scalarString(pair.key) === 'ends');
+  const ends = endsPair ? parseEnds(endsPair.value ?? endsPair.key, file, lineCounter, diagnostics) : undefined;
+
   const stepsPair = root.items.find((pair) => scalarString(pair.key) === 'steps');
   const stepsNode = stepsPair?.value;
   const steps: WorkflowStep[] = [];
@@ -168,6 +173,7 @@ export function parseWorkflow(file: string, content: string): {
   } else {
     const seen = new Set<string>();
     const graph: GraphNode[] = [];
+    const endings: Ending[] = [];
     stepsNode.items.forEach((item, index) => {
       const field = `steps[${index}]`;
       if (!isMap(item)) {
@@ -213,7 +219,21 @@ export function parseWorkflow(file: string, content: string): {
       const promptFilePair = item.items.find((pair) => scalarString(pair.key) === 'prompt_file');
       const promptFile = scalarString(promptFilePair?.value);
       const actions = [commandPair, promptPair, promptFilePair].filter(Boolean);
-      if (actions.length !== 1) {
+      const endPair = item.items.find((pair) => scalarString(pair.key) === 'end');
+      const end = scalarString(endPair?.value)?.trim();
+      if (endPair && (!end || !TOKEN.test(end))) {
+        diagnostics.push(locate(file, lineCounter, endPair.value ?? endPair.key ?? item, `${field}.end`, `${label} end must be a name from ends`));
+      } else if (endPair && end && id && TOKEN.test(id)) {
+        endings.push({ id, field: `${field}.end`, end, node: endPair.value as Node, only: actions.length === 0 });
+      }
+      if (endPair && actions.length === 0) {
+        for (const pair of item.items) {
+          const key = scalarString(pair.key);
+          if (!key || !STEP_KEYS.has(key) || END_ONLY_KEYS.has(key)) continue;
+          diagnostics.push(locate(file, lineCounter, pair.key as Node, `${field}.${key}`, `${label} has no action, so it carries only id, needs, if, and end`));
+        }
+      }
+      if (actions.length > 1 || (actions.length === 0 && !endPair)) {
         diagnostics.push(locate(file, lineCounter, item, field, 'a step has exactly one action: command, prompt, or prompt_file'));
       }
       if (commandPair && (command === undefined || command.trim() === '')) {
@@ -244,7 +264,7 @@ export function parseWorkflow(file: string, content: string): {
       } else if (outputPair) {
         diagnostics.push(locate(file, lineCounter, outputPair.key ?? item, `${field}.output`, 'output must be a shorthand type'));
       }
-      if (id && TOKEN.test(id) && actions.length === 1 && !diagnostics.some((d) => d.field === field || d.field.startsWith(`${field}.`))) {
+      if (id && TOKEN.test(id) && (actions.length === 1 || endPair) && !diagnostics.some((d) => d.field === field || d.field.startsWith(`${field}.`))) {
         steps.push({
           id,
           ...(needs ? { needs } : {}),
@@ -253,18 +273,45 @@ export function parseWorkflow(file: string, content: string): {
           ...(promptFile ? { promptFile } : {}),
           ...(agent ? { agent } : {}),
           ...(output ? { output } : {}),
+          ...(end ? { end } : {}),
         });
       }
     });
     diagnostics.push(...graphDiagnostics(file, lineCounter, graph, seen));
+    // A malformed ends header is already reported; checking steps against it would only add noise.
+    if (!endsPair || ends) diagnostics.push(...endDiagnostics(file, lineCounter, ends, endsPair?.value, endings, graph));
   }
 
   if (diagnostics.length > 0 || !name || !description) return { ok: false, diagnostics };
   return {
     ok: true,
-    definition: { schemaVersion: 'v1alpha1', name, description, steps },
+    definition: { schemaVersion: 'v1alpha1', name, description, ...(ends ? { ends } : {}), steps },
     promptFileLocations,
   };
+}
+
+function parseEnds(
+  node: Node | null | undefined,
+  file: string,
+  lineCounter: LineCounter,
+  diagnostics: WorkflowDiagnostic[],
+): Record<string, EndOutcome> | undefined {
+  if (!isMap(node) || node.items.length === 0) {
+    diagnostics.push(locate(file, lineCounter, node, 'ends', 'ends must map each end name to succeeded or failed'));
+    return undefined;
+  }
+  const ends: Record<string, EndOutcome> = {};
+  for (const pair of node.items) {
+    const name = scalarString(isYamlNode(pair.key) ? pair.key : undefined);
+    const outcome = scalarString(isYamlNode(pair.value) ? pair.value : undefined);
+    if (!name || !TOKEN.test(name) || (outcome !== 'succeeded' && outcome !== 'failed')) {
+      const at = isYamlNode(pair.value) ? pair.value : isYamlNode(pair.key) ? pair.key : node;
+      diagnostics.push(locate(file, lineCounter, at, `ends.${name ?? 'key'}`, 'ends must map each end name to succeeded or failed'));
+      continue;
+    }
+    ends[name] = outcome;
+  }
+  return Object.keys(ends).length === node.items.length ? ends : undefined;
 }
 
 interface GraphNode {
@@ -309,6 +356,48 @@ function graphDiagnostics(file: string, lineCounter: LineCounter, graph: GraphNo
     const step = byId.get(ids[0] ?? '');
     if (!step) continue;
     diagnostics.push(locate(file, lineCounter, step.node, step.field, `step "${step.id}" is in a needs cycle: ${[...ids, step.id].join(' -> ')}`));
+  }
+  return diagnostics;
+}
+
+interface Ending {
+  id: string;
+  field: string;
+  end: string;
+  node: Node;
+  /** The step has no action and only ends the workflow. */
+  only: boolean;
+}
+
+/** Diagnostics that keep `end` on steps consistent with the declared `ends`. */
+function endDiagnostics(
+  file: string,
+  lineCounter: LineCounter,
+  ends: Record<string, EndOutcome> | undefined,
+  endsNode: unknown,
+  endings: Ending[],
+  graph: GraphNode[],
+): WorkflowDiagnostic[] {
+  const diagnostics: WorkflowDiagnostic[] = [];
+  const endOnly = new Set(endings.filter((step) => step.only).map((step) => step.id));
+  for (const step of graph) {
+    for (const need of step.needs.filter((id) => endOnly.has(id))) {
+      diagnostics.push(locate(file, lineCounter, step.node, step.field, `step "${step.id}" needs "${need}", which only ends the workflow, so "${step.id}" can never run`));
+    }
+  }
+  for (const step of endings) {
+    if (!ends) {
+      diagnostics.push(locate(file, lineCounter, step.node, step.field, `step "${step.id}" ends with "${step.end}", but the workflow declares no ends`));
+    } else if (!Object.hasOwn(ends, step.end)) {
+      diagnostics.push(locate(file, lineCounter, step.node, step.field, `step "${step.id}" ends with "${step.end}", which is not declared in ends`));
+    }
+  }
+  if (isMap(endsNode)) {
+    for (const pair of endsNode.items) {
+      const name = scalarString(isYamlNode(pair.key) ? pair.key : undefined);
+      if (!name || endings.some((step) => step.end === name)) continue;
+      diagnostics.push(locate(file, lineCounter, isYamlNode(pair.key) ? pair.key : endsNode, `ends.${name}`, `end "${name}" is declared in ends, but no step ends with it`));
+    }
   }
   return diagnostics;
 }

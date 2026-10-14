@@ -25,12 +25,18 @@ export interface WorkflowStep {
   promptFile?: string;
   agent?: string;
   output?: OutputSchema;
+  /** Name in `ends` this step finishes the workflow with when it succeeds. A step with no action only ends the workflow and is never leased. */
+  end?: string;
 }
+
+export type EndOutcome = 'succeeded' | 'failed';
 
 export interface WorkflowDefinition {
   schemaVersion: 'v1alpha1';
   name: string;
   description: string;
+  /** Named ends a step can finish this workflow with, each with the run outcome it gives. */
+  ends?: Record<string, EndOutcome>;
   steps: WorkflowStep[];
 }
 
@@ -92,6 +98,8 @@ export interface RunState {
   name: string;
   revision: number;
   status: RunStatus;
+  /** The end this run reached, set when it settles. */
+  end?: string;
   sourceHash: string;
   definition: WorkflowDefinition;
   steps: StepState[];

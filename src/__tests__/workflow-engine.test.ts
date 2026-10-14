@@ -77,11 +77,11 @@ async function drive(config: LocalConfig, runId: string, failing: string[] = [])
   }
 }
 
-function graph(steps: string): string {
+function graph(steps: string, header = ''): string {
   return `schemaVersion: v1alpha1
 name: build
 description: A needs graph.
-steps:
+${header}steps:
 ${steps}`;
 }
 
@@ -503,4 +503,79 @@ describe('workflow engine', () => {
     });
     expect(accepted).toMatchObject({ data: { accepted: true, revision: 3, step: { id: 'docs', status: 'succeeded' } } });
   });
+
+  it('settles an end-only step without a lease and skips what is left', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: check
+    command: node check.js
+  - id: drop
+    needs: [check]
+    end: dropped
+  - id: build
+    needs: [check]
+    command: node build.js
+`, 'ends:\n  dropped: succeeded\n'));
+
+    const { leased, done } = await drive(config, runId);
+
+    expect(leased).toEqual(['check']);
+    expect(done).toEqual({ run: runId, outcome: 'succeeded', end: 'dropped' });
+    expect(await readRun(config, runId)).toMatchObject({
+      status: 'succeeded',
+      revision: 2,
+      steps: [{ id: 'check', status: 'succeeded' }, { id: 'drop', status: 'succeeded' }, { id: 'build', status: 'skipped' }],
+    });
+  });
+
+  it.each([
+    ['a failed end fails the run', 'ends:\n  stuck: failed\n', `  - id: triage
+    command: node triage.js
+    end: stuck
+  - id: build
+    needs: []
+    command: node build.js
+`, [], ['triage'], { outcome: 'failed', end: 'stuck' }],
+    ['a succeeded end succeeds the run after another step failed', 'ends:\n  recovered: succeeded\n', `  - id: docs
+    command: node docs.js
+  - id: check
+    needs: []
+    command: node check.js
+    end: recovered
+  - id: later
+    needs: [check]
+    command: node later.js
+`, ['docs'], ['docs', 'check'], { outcome: 'succeeded', end: 'recovered' }],
+    ['a step with end that fails reaches no end', 'ends:\n  shipped: succeeded\n', `  - id: ship
+    command: node ship.js
+    end: shipped
+  - id: docs
+    needs: []
+    command: node docs.js
+`, ['ship'], ['ship', 'docs'], { outcome: 'failed' }],
+  ])('%s', async (_name, header, steps, failing, order, expected) => {
+    const { config, runId } = await startBuild(graph(steps, header));
+
+    const { leased, done } = await drive(config, runId, failing);
+
+    expect(leased).toEqual(order);
+    expect(done).toEqual({ run: runId, ...expected });
+    expect(await leaseNext(config, runId, driverA)).toEqual({ data: { done: { run: runId, ...expected } } });
+  });
+
+  it('reaches a ready end before it leases a step declared earlier', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: check
+    command: node check.js
+  - id: docs
+    needs: []
+    command: node docs.js
+  - id: drop
+    needs: [check]
+    end: dropped
+`, 'ends:\n  dropped: succeeded\n'));
+
+    const { leased, done } = await drive(config, runId);
+
+    expect(leased).toEqual(['check']);
+    expect(done).toEqual({ run: runId, outcome: 'succeeded', end: 'dropped' });
+  });
 });
+
