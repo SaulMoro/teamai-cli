@@ -316,11 +316,18 @@ export type GitCommitResult =
   | { status: 'no-changes' }
   | { status: 'failed'; reason: string };
 
-/** The outcomes of `gitPull`. `stopped` merged nothing, so the checkout is as it was before the pull. */
+/**
+ * The outcomes of `gitPull`. `stopped` merged nothing, so the checkout is as it was before the pull.
+ * `indexes-conflicted` leaves the merge in progress with only these session indexes unmerged: the caller
+ * finishes it with `commitRebuiltIndexes` under `withSessionIndexLock`.
+ */
 export type PullResult =
   | { status: 'pulled' }
-  | { status: 'indexes-rebuilt'; indexes: string[] }
+  | { status: 'indexes-conflicted'; indexes: string[] }
   | { status: 'stopped'; reason: string };
+
+/** The outcomes of `gitPush`. `indexes-conflicted` is the retry's pull, left for the caller as in `PullResult`. */
+export type PushResult = { status: 'pushed' } | { status: 'indexes-conflicted'; indexes: string[] };
 
 function isSessionIndexPath(relPath: string): boolean {
   const parts = relPath.split('/');
@@ -1100,7 +1107,7 @@ export class SyncManager {
     return { status: 'committed', commit: this.runGit(['rev-parse', 'HEAD']) };
   }
 
-  gitPush(remote = 'origin', branch?: string): void {
+  gitPush(remote = 'origin', branch?: string): PushResult {
     const ref = branch?.trim() || this.runGit(['rev-parse', '--abbrev-ref', 'HEAD']);
     if (!ref || ref === 'HEAD') {
       throw new Error('Refusing to push without an explicit branch refspec.');
@@ -1109,13 +1116,15 @@ export class SyncManager {
     // "✓ Pushed" after a rejected or unreachable remote.
     try {
       this.runGit(['push', remote, ref]);
-      return;
+      return { status: 'pushed' };
     } catch (err) {
       if (!this.isBehindRemote(remote, ref)) throw err;
     }
     const pulled = this.gitPull(remote, ref);
     if (pulled.status === 'stopped') throw new Error(pulled.reason);
+    if (pulled.status === 'indexes-conflicted') return pulled;
     this.runGit(['push', remote, ref]);
+    return { status: 'pushed' };
   }
 
   /** Asked of git: a push fails for many reasons, and a pull fixes only this one. */
@@ -1136,7 +1145,8 @@ export class SyncManager {
   /**
    * Pull and merge. Two machines that archive sessions for the same repo both append to its `_index.json`,
    * so their pulls conflict there. The index is derived from the session files, so those conflicts are
-   * resolved by a rebuild. A conflict in any other file aborts the merge and is returned to the caller.
+   * resolved by a rebuild, which this leaves to the caller: the rebuild takes the session index lock, and
+   * the network pull must not. A conflict in any other file aborts the merge and is returned to the caller.
    */
   gitPull(remote = 'origin', branch?: string): PullResult {
     if (this.gitPathExists('rebase-merge') || this.gitPathExists('rebase-apply')) {
@@ -1160,7 +1170,7 @@ export class SyncManager {
             : 'Resolve and `git add` them and run `git commit`, or run `git merge --abort`, then retry';
         return { status: 'stopped', reason: `A merge is in progress in ${this.repoRoot} with conflicts in ${others.join(', ')}. ${next}.` };
       }
-      return this.commitRebuiltIndexes(unmerged);
+      return { status: 'indexes-conflicted', indexes: unmerged };
     }
     if (unmerged.length > 0) {
       return {
@@ -1182,7 +1192,7 @@ export class SyncManager {
       const files = this.unmergedPaths();
       if (files.length === 0) throw err;
       const others = files.filter((f) => !isSessionIndexPath(f));
-      if (others.length === 0) return this.commitRebuiltIndexes(files);
+      if (others.length === 0) return { status: 'indexes-conflicted', indexes: files };
       this.runGit(['merge', '--abort']);
       const next =
         others.length < files.length
@@ -1195,13 +1205,13 @@ export class SyncManager {
     }
   }
 
-  private commitRebuiltIndexes(indexes: string[]): Extract<PullResult, { status: 'indexes-rebuilt' }> {
+  /** Finish a merge `gitPull` left on `indexes-conflicted`: rebuild those indexes from the session files and commit. */
+  commitRebuiltIndexes(indexes: string[]): void {
     for (const index of indexes) {
       this.rebuildIndex(this.conflictedIndexIdentity(index), path.join(this.repoRoot, path.dirname(index)));
       this.runGit(['add', '--', index]);
     }
     this.runGit(['commit', '--no-edit']);
-    return { status: 'indexes-rebuilt', indexes };
   }
 
   /** The identity either side recorded; a legacy `_`-folded directory name cannot be decoded back to it. */

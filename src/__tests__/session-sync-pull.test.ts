@@ -1,16 +1,34 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { SyncManager, defaultSyncMeta, encodeRepoIdentity } from '../session-flow/sync.js';
+import { Command } from 'commander';
+import { SyncManager, defaultSyncMeta, encodeRepoIdentity, type PullResult } from '../session-flow/sync.js';
+import { registerSessionFlowCommands } from '../session-flow/session-cmd.js';
 import type { Session } from '../session-flow/ir.js';
+
+const lock = vi.hoisted(() => ({
+  /** When set, the session archive lock reports this path as held by another command. */
+  heldBy: '',
+}));
+
+vi.mock('../session-flow/sync.js', async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import('../session-flow/sync.js');
+  return {
+    ...actual,
+    withSessionIndexLock: (async (repo, fn) =>
+      lock.heldBy
+        ? { status: 'busy', lockPath: lock.heldBy }
+        : actual.withSessionIndexLock(repo, fn)) as typeof actual.withSessionIndexLock,
+  };
+});
 
 const REPO = 'github.com/acme/app';
 const INDEX = `sessions/repos/${encodeRepoIdentity(REPO)}/_index.json`;
 
 let tmp: string;
-const savedEnv = { global: process.env.GIT_CONFIG_GLOBAL, nosystem: process.env.GIT_CONFIG_NOSYSTEM };
+const savedEnv = { global: process.env.GIT_CONFIG_GLOBAL, nosystem: process.env.GIT_CONFIG_NOSYSTEM, home: process.env.HOME };
 
 function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf-8', stdio: 'pipe' }).trim();
@@ -49,9 +67,58 @@ function clone(name: string): string {
   return dir;
 }
 
-function indexedSessionIds(clone: string): string[] {
-  const index = JSON.parse(fs.readFileSync(path.join(clone, INDEX), 'utf-8')) as { sessions: { sessionId: string }[] };
+function sessionIdsOf(indexJson: string): string[] {
+  const index = JSON.parse(indexJson) as { sessions: { sessionId: string }[] };
   return index.sessions.map((s) => s.sessionId).sort();
+}
+
+function indexedSessionIds(clone: string): string[] {
+  return sessionIdsOf(fs.readFileSync(path.join(clone, INDEX), 'utf-8'));
+}
+
+/** Pull, and finish a merge stopped on the session indexes the way the session commands do. */
+function pullAndRebuild(clone: string): PullResult {
+  const mgr = new SyncManager(clone);
+  const result = mgr.gitPull();
+  if (result.status === 'indexes-conflicted') mgr.commitRebuiltIndexes(result.indexes);
+  return result;
+}
+
+class ExitCalled extends Error {
+  constructor(readonly code: number) {
+    super(`exit ${code}`);
+  }
+}
+
+/** Runs `teamai session pull --all` against the team repo checkout. */
+async function sessionPull(teamRepo: string): Promise<{ code: number; stdout: string; stderr: string }> {
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  vi.spyOn(console, 'log').mockImplementation((...a: unknown[]) => {
+    stdout.push(a.map(String).join(' '));
+  });
+  vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => {
+    stderr.push(a.map(String).join(' '));
+  });
+  vi.spyOn(process, 'exit').mockImplementation((code) => {
+    throw new ExitCalled(Number(code ?? 0));
+  });
+  process.exitCode = 0;
+  let code: number;
+  try {
+    const program = new Command();
+    program.option('--dry-run', 'preview');
+    registerSessionFlowCommands(program.command('session'));
+    await program.parseAsync(['node', 'teamai', 'session', 'pull', '--all', '--repo-root', teamRepo]);
+    code = Number(process.exitCode ?? 0);
+  } catch (err) {
+    if (!(err instanceof ExitCalled)) throw err;
+    code = err.code;
+  } finally {
+    vi.restoreAllMocks();
+    process.exitCode = 0;
+  }
+  return { code, stdout: stdout.join('\n'), stderr: stderr.join('\n') };
 }
 
 function conflictOnNotes(a: string, b: string): void {
@@ -81,9 +148,13 @@ function divergeOnIndex(): { a: string; b: string } {
 
 beforeEach(() => {
   tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-session-pull-')));
+  process.env.HOME = path.join(tmp, 'home');
+  lock.heldBy = '';
 });
 
 afterEach(() => {
+  process.env.HOME = savedEnv.home;
+  if (savedEnv.home === undefined) delete process.env.HOME;
   process.env.GIT_CONFIG_GLOBAL = savedEnv.global;
   process.env.GIT_CONFIG_NOSYSTEM = savedEnv.nosystem;
   if (savedEnv.global === undefined) delete process.env.GIT_CONFIG_GLOBAL;
@@ -101,9 +172,9 @@ describe('SyncManager.gitPull', () => {
     useGitConfig(pullConfig);
     const { b } = divergeOnIndex();
 
-    const result = new SyncManager(b).gitPull();
+    const result = pullAndRebuild(b);
 
-    expect(result).toEqual({ status: 'indexes-rebuilt', indexes: [INDEX] });
+    expect(result).toEqual({ status: 'indexes-conflicted', indexes: [INDEX] });
     expect(indexedSessionIds(b)).toEqual(['a1', 'b1', 's0']);
     expect(git(b, 'status', '--porcelain')).toBe('');
   });
@@ -143,9 +214,9 @@ describe('SyncManager.gitPull', () => {
     const { b } = divergeOnIndex();
     expect(() => git(b, '-c', 'pull.rebase=false', 'pull', '-q', 'origin', 'main')).toThrow();
 
-    const result = new SyncManager(b).gitPull();
+    const result = pullAndRebuild(b);
 
-    expect(result).toEqual({ status: 'indexes-rebuilt', indexes: [INDEX] });
+    expect(result).toEqual({ status: 'indexes-conflicted', indexes: [INDEX] });
     expect(indexedSessionIds(b)).toEqual(['a1', 'b1', 's0']);
     expect(git(b, 'status', '--porcelain')).toBe('');
   });
@@ -266,9 +337,9 @@ describe('SyncManager.gitPull', () => {
     git(a, 'push', '-q', 'origin', 'main');
     writeLegacy(b, ['s0', 'b1']);
 
-    const result = new SyncManager(b).gitPull();
+    const result = pullAndRebuild(b);
 
-    expect(result).toEqual({ status: 'indexes-rebuilt', indexes: [`${dir}/_index.json`] });
+    expect(result).toEqual({ status: 'indexes-conflicted', indexes: [`${dir}/_index.json`] });
     const index = JSON.parse(fs.readFileSync(path.join(b, dir, '_index.json'), 'utf-8')) as { repoIdentity: string };
     expect(index.repoIdentity).toBe(identity);
   });
@@ -287,13 +358,40 @@ describe('SyncManager.gitPull', () => {
   });
 });
 
-describe('SyncManager.gitPush', () => {
-  it('pulls and retries once when the remote moved on', () => {
+describe('session pull', () => {
+  it('leaves a merge stopped on the session index for a rerun while another command holds the archive lock', async () => {
     useGitConfig();
     const { b } = divergeOnIndex();
+    lock.heldBy = path.join(tmp, 'home', '.teamai', 'locks', 'sessions-held.lock');
 
-    new SyncManager(b).gitPush();
+    const busy = await sessionPull(b);
 
+    expect(git(b, 'status', '--porcelain')).toContain(`UU ${INDEX}`);
+    expect(busy.code).toBe(1);
+    expect(busy.stderr).toContain(`another teamai command is writing the session archive in ${b} (lock: ${lock.heldBy}).`);
+    expect(busy.stderr).toContain('run `teamai session pull` once it has finished');
+
+    lock.heldBy = '';
+    const rerun = await sessionPull(b);
+
+    expect(rerun.code).toBe(0);
+    expect(rerun.stdout).toContain('Merged remote sessions and rebuilt 1 conflicted session index(es)');
+    expect(() => git(b, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toThrow();
+    expect(sessionIdsOf(git(b, 'show', `HEAD:${INDEX}`))).toEqual(['a1', 'b1', 's0']);
+  });
+});
+
+describe('SyncManager.gitPush', () => {
+  it('pulls once when the remote moved on and leaves a merge stopped on the index to the caller', () => {
+    useGitConfig();
+    const { b } = divergeOnIndex();
+    const mgr = new SyncManager(b);
+
+    expect(mgr.gitPush()).toEqual({ status: 'indexes-conflicted', indexes: [INDEX] });
+    expect(git(b, 'status', '--porcelain')).toContain(`UU ${INDEX}`);
+
+    mgr.commitRebuiltIndexes([INDEX]);
+    expect(mgr.gitPush()).toEqual({ status: 'pushed' });
     expect(indexedSessionIds(clone('fresh'))).toEqual(['a1', 'b1', 's0']);
   });
 

@@ -300,9 +300,16 @@ async function resolveRepoRoot(
  * up with a stack trace would disguise a successful archive as a total
  * failure, and running it again would create duplicate commits.
  */
-function pushToRemote(syncMgr: SyncManager): boolean {
+async function pushToRemote(syncMgr: SyncManager, repoRoot: string): Promise<boolean> {
   try {
-    syncMgr.gitPush();
+    const pushed = syncMgr.gitPush();
+    if (pushed.status === 'indexes-conflicted') {
+      const merged = await withSessionIndexLock(repoRoot, async () => syncMgr.commitRebuiltIndexes(pushed.indexes));
+      if (merged.status === 'busy') throw new Error(mergeBusyMessage(repoRoot, merged.lockPath));
+      if (syncMgr.gitPush().status !== 'pushed') {
+        throw new Error(`The remote moved on again and its merge stopped on the session indexes; run \`teamai session pull\` to finish it.`);
+      }
+    }
     return true;
   } catch (err) {
     // The local commit is kept, so nothing is lost -- but this is still a
@@ -337,6 +344,11 @@ function runGitStep<T>(step: () => T, repoRoot: string, what: string): T {
 
 function archiveBusyMessage(repoRoot: string, lockPath: string): string {
   return `another teamai command is writing the session archive in ${repoRoot} (lock: ${lockPath}).`;
+}
+
+/** A pull merged the remote, but the session indexes it left conflicted wait for the lock another command holds. */
+function mergeBusyMessage(repoRoot: string, lockPath: string): string {
+  return `${archiveBusyMessage(repoRoot, lockPath)} The pull is left mid-merge on the session indexes; run \`teamai session pull\` once it has finished.`;
 }
 
 /** Another command held the session archive lock for the whole wait: this write did not happen, so fail the run. */
@@ -854,7 +866,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         const commitArchive = () => syncMgr.gitCommit(`sync: migrate ${saved} session(s) ${source}→${target}`);
         const commit = json ? commitArchive() : runGitStep(commitArchive, repoRoot, 'git commit');
         if (commit.status === 'committed') {
-          const pushed = pushToRemote(syncMgr);
+          const pushed = await pushToRemote(syncMgr, repoRoot);
           if (pushed) {
             console.log(`\n  ✓ Pushed ${saved} session(s) to team repo`);
           } else {
@@ -1061,7 +1073,7 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         'git commit',
       );
       if (commit.status === 'committed') {
-        const pushed = pushToRemote(syncMgr);
+        const pushed = await pushToRemote(syncMgr, repoRoot);
         if (pushed) {
           console.log(`\n  ✓ Pushed ${saved} session(s) from ${source}`);
         } else {
@@ -1104,7 +1116,15 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
         console.error(`Error: ${pulled.reason}`);
         process.exit(1);
       }
-      if (pulled.status === 'indexes-rebuilt') {
+      if (pulled.status === 'indexes-conflicted') {
+        // The rebuild takes the lock and the network pull above does not: a lock held across it would make other saves wait and fail busy.
+        const merged = await withSessionIndexLock(repoRoot, async () =>
+          runGitStep(() => syncMgr.commitRebuiltIndexes(pulled.indexes), repoRoot, 'git pull'),
+        );
+        if (merged.status === 'busy') {
+          console.error(`Error: ${mergeBusyMessage(repoRoot, merged.lockPath)}`);
+          process.exit(1);
+        }
         console.log(`  ✓ Merged remote sessions and rebuilt ${pulled.indexes.length} conflicted session index(es)`);
       }
       if (opts.all) {
