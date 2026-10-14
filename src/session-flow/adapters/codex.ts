@@ -47,6 +47,7 @@ import { titleFromUserText, visibleUserText } from '../title.js';
 import { assertSafeSessionFileId, resolveWriteSessionId } from '../ids.js';
 import { findSqlite3 } from '../sqlite.js';
 import { log } from '../../utils/logger.js';
+import { isOnPath } from '../../utils/lookpath.js';
 import {
   getCodexSessionsDir,
   resolveRealCwd,
@@ -276,8 +277,13 @@ export class CodexAdapter extends AgentAdapter {
     return getCodexSessionsDir();
   }
 
+  /**
+   * Codex creates `sessions/` on its first session, so an installed Codex that
+   * has not run one yet only has its root (or just the CLI); writeSession
+   * creates the dated directory itself.
+   */
   isReady(): boolean {
-    return dirExists(this.storageRoot);
+    return dirExists(path.dirname(this.storageRoot)) || (this.platform === 'codex' && isOnPath('codex'));
   }
 
   private scanJsonlFiles(): string[] {
