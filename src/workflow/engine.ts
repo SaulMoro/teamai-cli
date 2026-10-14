@@ -7,6 +7,7 @@ import { isRunId, readRun, runLockPath, writeRun } from './store.js';
 import type {
   DriverIdentity,
   RunState,
+  RunStatus,
   StepOutcome,
   StepState,
   TokenUsage,
@@ -96,6 +97,12 @@ function leasePayload(run: RunState, step: StepState): Record<string, unknown> {
   };
 }
 
+/** Ends the run. Every path that settles a run goes through here, so anything that reacts to a settled run hooks in here. */
+function settleRun(run: RunState, outcome: Exclude<RunStatus, 'running'>): void {
+  run.status = outcome;
+  run.updatedAt = new Date().toISOString();
+}
+
 export async function startRun(config: LocalConfig, name: string): Promise<WorkflowEnvelope> {
   const cached = await loadCachedWorkflow(config, name);
   if (!cached) {
@@ -134,11 +141,11 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     const index = run.steps.findIndex((step) => step.status === 'pending');
     if (index < 0) {
       const outcome = run.steps.every((step) => step.status === 'succeeded') ? 'succeeded' : 'failed';
-      run.status = outcome;
+      settleRun(run, outcome);
       return { save: true, envelope: ok({ done: { run: run.id, outcome } }) };
     }
     if (run.steps.slice(0, index).some((step) => step.status !== 'succeeded')) {
-      run.status = 'failed';
+      settleRun(run, 'failed');
       return { save: true, envelope: ok({ done: { run: run.id, outcome: 'failed' } }) };
     }
     const step = run.steps[index];
@@ -266,10 +273,11 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       if (report.outputs !== undefined) step.outputs = report.outputs;
     } else {
       step.status = 'failed';
-      run.status = 'failed';
     }
     rememberSettledAttempt(run, report.attempt);
     run.revision += 1;
+    // Settle last, so the settled run carries this attempt and the new revision.
+    if (step.status === 'failed') settleRun(run, 'failed');
     return {
       save: true,
       envelope: ok({
