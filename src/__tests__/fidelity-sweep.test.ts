@@ -9,7 +9,7 @@
  *
  * 输出 JSON 报告到 /tmp/session-fidelity-report.json（含 diffs 明细）。
  */
-import { describe, it, vi, afterAll } from 'vitest';
+import { describe, it, expect, vi, afterAll } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -539,15 +539,17 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
       const mem0 = process.memoryUsage();
       const claude = new ClaudeCodeAdapter('claude-code');
       let t0 = Date.now();
-      void claude.writeSession(session, cwd);
+      const claudeSid = await claude.writeSession(session, cwd);
       const claudeWriteMs = Date.now() - t0;
+      // The copy gets an id derived from the target workspace, never the source UUID.
+      expect(claudeSid).not.toBe(session.sessionId);
       t0 = Date.now();
-      const back = (await claude.readSession(session.sessionId, cwd)) as Session;
+      const back = (await claude.readSession(claudeSid, cwd)) as Session;
       const claudeReadMs = Date.now() - t0;
 
       const codex = new CodexAdapter('codex');
       t0 = Date.now();
-      // 注意：codex.writeSession 对非 UUIDv7 的 id 会重新生成 —— 这里本就是一个发现
+      // Every write derives its id, so read back by the id the write returned.
       const stressSid = (await codex.writeSession(session, cwd)) as string;
       const codexWriteMs = Date.now() - t0;
       t0 = Date.now();

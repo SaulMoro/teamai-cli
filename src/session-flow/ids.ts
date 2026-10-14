@@ -1,53 +1,53 @@
 /**
- * ids.ts -- deterministic derivation of target-platform session ids.
+ * ids.ts -- the id a session gets when TeamAI writes it into a tool.
  *
- * Source session ids are often not UUIDs (e.g. CodeBuddy IDE's 32-hex
- * `60062279ff104372bc110594720a8016`). If a target adapter falls back to
- * `randomUUID()` in that case, every re-migration of the same session mints a
- * fresh duplicate in the target client.
+ * Every target id is derived: sha256 over the target platform, the canonical
+ * target workspace and the source session id, shaped as a UUIDv7. No source id
+ * is ever reused, for any platform:
  *
- * Deriving from sha256(platform + sourceId) yields a stable UUIDv7-shaped id:
- * the same (platform, source session) always maps to the same target id, so a
- * re-migration is an overwrite -- idempotent by construction.
+ * - Reusing a source UUID wrote the copy over whatever already had that id in
+ *   the target, and a same-platform CodeBuddy IDE copy replaced the live
+ *   conversation.
+ * - The workspace is part of the key for every platform. Claude Code resumes by
+ *   id across all project directories, and a rollback without a workspace
+ *   deletes the id everywhere, so one id in two workspaces is not two sessions.
+ *
+ * The same request (platform, workspace, source) always names the same target.
+ * Copies written by an older TeamAI kept the source UUID, or (Claude Code and
+ * CodeBuddy) left the workspace out of the hash, so they carry other ids.
  */
 
 import * as crypto from 'node:crypto';
-import { resolveRealCwd } from './fs.js';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 /**
- * Derive a deterministic target session id (UUIDv7 shape) from a source id.
+ * Derive the id to write a session under in `targetPlatform` at `targetCwd`.
  *
- * `targetCwd` participates when known: Cursor/WorkBuddy/Codex key their
- * records globally (one sqlite / threads table for every workspace), so
- * migrating one source session into two workspaces with the same derived id
- * makes the second copy replace the first.
- *
- * Only claude-code and codebuddy omit it: they store each session under
- * `<storageRoot>/<encoded cwd>/<id>.jsonl`, so one id in two workspaces is
- * already two files and nothing is overwritten. Adding cwd there would only
- * move already-migrated sessions to a new id. Note the consequence: a session
- * migrated into a global-key platform before this change gets a different id
- * when re-migrated (the old copy stays, orphaned).
+ * Throws before anything is written when `targetCwd` is not absolute: a
+ * relative path or a placeholder such as `md5:<hash>` would resolve against
+ * the directory the command runs in, so both the id and the file would move
+ * with it.
  */
-export function deriveTargetSessionId(
-  targetPlatform: string,
-  sourceId: string,
-  targetCwd?: string,
-): string {
-  // Resolve before hashing: `/tmp/x` and `/private/tmp/x` are one workspace on
-  // macOS, and two spellings would derive two ids for the same migration --
-  // a re-migration would then add a second copy instead of overwriting.
-  const scope = targetCwd ? `:${resolveRealCwd(targetCwd)}` : '';
+export function deriveTargetSessionId(target: {
+  targetPlatform: string;
+  targetCwd: string;
+  sourceSessionId: string;
+}): string {
+  const { targetPlatform, targetCwd, sourceSessionId } = target;
+  if (!path.isAbsolute(targetCwd)) {
+    throw new Error(
+      `Target workspace "${targetCwd}" is not an absolute path, so the session was not written. ` +
+        'Pass an absolute directory (--target-cwd for `session migrate`, --cwd for `session resume`).',
+    );
+  }
   const hex = crypto
     .createHash('sha256')
-    .update(`teamai:${targetPlatform}${scope}:${sourceId}`)
+    .update(`teamai:${targetPlatform}:${canonicalWorkspace(targetCwd)}:${sourceSessionId}`)
     .digest('hex');
   const variant = ((parseInt(hex[16], 16) & 0x3) | 0x8).toString(16);
-  // version nibble is **7**: targets (e.g. Codex's isUuidV7) treat the id as
-  // "already a native id" and reuse it. With 8, migrating an already-migrated
-  // session (codex->X->codex) would derive a *new* id and break idempotency
-  // across chains. The time bits are hash, not a real timestamp -- sorting
-  // fields (recency/updated_at) come from session timestamps, not the id.
+  // Version nibble 7 keeps the UUIDv7 shape Codex expects of a thread id. The
+  // time bits are hash, not a timestamp: sorting comes from session timestamps.
   return [
     hex.slice(0, 8),
     hex.slice(8, 12),
@@ -57,26 +57,23 @@ export function deriveTargetSessionId(
   ].join('-');
 }
 
-const UUID_ANY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const SAFE_SESSION_FILE_ID_RE = /^[A-Za-z0-9_-]+$/;
-
 /**
- * Id to write under `targetPlatform`.
- * Same-platform archives always derive, so the original file is not overwritten.
- * A dashed UUID from another platform is reused. `targetCwd` is hashed for
- * stores that key sessions globally (Cursor, WorkBuddy, Codex).
+ * One spelling per workspace: the native real path. It resolves symlinks
+ * (`/tmp/x` and `/private/tmp/x` on macOS) and, on case-insensitive file
+ * systems, letter case (`/Users/me/Repo` and `/users/me/repo`), so a retry
+ * from another spelling names the same target. A path that does not exist yet
+ * is only resolved, so its id can change once the directory is created through
+ * another spelling.
  */
-export function resolveWriteSessionId(
-  targetPlatform: string,
-  session: { sessionId: string; platform: string },
-  targetCwd?: string,
-): string {
-  if (session.platform === targetPlatform) {
-    return deriveTargetSessionId(targetPlatform, session.sessionId, targetCwd);
+function canonicalWorkspace(cwd: string): string {
+  try {
+    return fs.realpathSync.native(path.resolve(cwd));
+  } catch {
+    return path.resolve(cwd);
   }
-  if (UUID_ANY_RE.test(session.sessionId)) return session.sessionId;
-  return deriveTargetSessionId(targetPlatform, session.sessionId, targetCwd);
 }
+
+const SAFE_SESSION_FILE_ID_RE = /^[A-Za-z0-9_-]+$/;
 
 export function isSafeSessionFileId(sessionId: string): boolean {
   return SAFE_SESSION_FILE_ID_RE.test(sessionId);

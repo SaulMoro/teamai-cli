@@ -27,7 +27,7 @@ import * as path from 'node:path';
 import { AgentAdapter, type SessionMeta } from './base.js';
 import type { Session, Message, ContentBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock } from '../ir.js';
 import { imagePlaceholderText } from '../ir.js';
-import { assertSafeSessionFileId, resolveWriteSessionId } from '../ids.js';
+import { assertSafeSessionFileId, deriveTargetSessionId } from '../ids.js';
 import {
   getCodeBuddyProjectsDir,
   encodeCwdCodeBuddy,
@@ -120,9 +120,6 @@ function argumentsDisplayText(name: string, args: Record<string, unknown> | unde
 // UUID / timestamp helpers
 // ---------------------------------------------------------------------------
 
-// Do not check the version nibble: a source sessionId may be UUID v7 (codex / codex-internal / tcodex).
-// Accepting only v4 would mint a new v4 ID on every migration — not idempotent (repeated migrations pile up copies)
-// and the source sessionId could no longer be used to track or roll back. Any well-formed UUID shape is enough to reuse the source ID.
 function uuidV4(): string {
   return crypto.randomUUID();
 }
@@ -480,11 +477,12 @@ export class CodeBuddyAdapter extends AgentAdapter {
   }
 
   async writeSession(session: Session, projectPath?: string): Promise<string> {
-    // Same-platform archives derive a new id. cwd stays out of the hash:
-    // sessions live under the project directory, so one id in two dirs is two files.
-    const sessionId = resolveWriteSessionId(this.platform, session);
-
     const cwd = projectPath ?? session.cwd;
+    const sessionId = deriveTargetSessionId({
+      targetPlatform: this.platform,
+      targetCwd: cwd,
+      sourceSessionId: session.sessionId,
+    });
     const projDir = path.join(getCodeBuddyProjectsDir(), encodeCwdCodeBuddy(cwd));
     const jsonlPath = path.join(projDir, `${sessionId}.jsonl`);
 

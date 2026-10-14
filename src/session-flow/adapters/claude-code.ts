@@ -23,7 +23,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { AgentAdapter, type SessionMeta } from './base.js';
 import type { Session, Message, ContentBlock } from '../ir.js';
-import { assertSafeSessionFileId, resolveWriteSessionId } from '../ids.js';
+import { assertSafeSessionFileId, deriveTargetSessionId } from '../ids.js';
 import { imagePlaceholderText } from '../ir.js';
 import {
   getClaudeCodeProjectsDir,
@@ -616,13 +616,12 @@ export class ClaudeCodeAdapter extends AgentAdapter {
   }
 
   async writeSession(session: Session, projectPath?: string): Promise<string> {
-    // Same-platform archives derive a new id so the original jsonl is not overwritten.
-    // cwd is intentionally omitted: this store is per project directory, so one
-    // id in two directories is already two files.
-    const sessionId = resolveWriteSessionId(this.platform, session);
-
-    // Resolve the target directory
     const cwd = projectPath ?? session.cwd;
+    const sessionId = deriveTargetSessionId({
+      targetPlatform: this.platform,
+      targetCwd: cwd,
+      sourceSessionId: session.sessionId,
+    });
     const projDir = path.join(this.storageRoot, encodeCwdClaude(cwd));
     const jsonlPath = path.join(projDir, `${sessionId}.jsonl`);
 

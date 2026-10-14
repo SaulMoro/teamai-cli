@@ -44,7 +44,7 @@ import { AgentAdapter, type SessionMeta } from './base.js';
 import type { Session, Message, ContentBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock } from '../ir.js';
 import { imagePlaceholderText } from '../ir.js';
 import { titleFromUserText, visibleUserText } from '../title.js';
-import { assertSafeSessionFileId, resolveWriteSessionId } from '../ids.js';
+import { assertSafeSessionFileId, deriveTargetSessionId } from '../ids.js';
 import { findSqlite3 } from '../sqlite.js';
 import { log } from '../../utils/logger.js';
 import {
@@ -603,14 +603,12 @@ export class CodexAdapter extends AgentAdapter {
   }
 
   async writeSession(session: Session, projectPath?: string): Promise<string> {
-    // session_id: reuse if already UUIDv7; otherwise derive deterministically.
-    // Random ids would give every re-migration a fresh target id -- a fully
-    // duplicated second thread in Codex (threads doubled). Derived ids make a
-    // re-migration an overwrite: idempotent by construction.
-    // cwd participates in the derivation: a Codex rollout sessionId is a global key. If the same source session
-    // is migrated into two workspaces under one id, the second copy overwrites the first.
     const cwd = projectPath ?? session.cwd;
-    const sessionId = resolveWriteSessionId(this.platform, session, cwd);
+    const sessionId = deriveTargetSessionId({
+      targetPlatform: this.platform,
+      targetCwd: cwd,
+      sourceSessionId: session.sessionId,
+    });
 
     // Guard against corrupt input: an invalid session.createdAt makes new Date(...) an Invalid Date,
     // and calling toISOString() directly throws RangeError and crashes the whole write.

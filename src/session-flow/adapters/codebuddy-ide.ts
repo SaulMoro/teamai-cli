@@ -35,7 +35,7 @@ import {
   type IdeMessageParsed,
 } from '../ide-history.js';
 import { isInjectedText, titleFromCandidates } from '../title.js';
-import { resolveWriteSessionId } from '../ids.js';
+import { deriveTargetSessionId } from '../ids.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -398,13 +398,12 @@ export class CodeBuddyIdeAdapter extends AgentAdapter {
       );
     }
 
-    // Same-platform writes derive a new id, the way every other adapter does.
-    // Reusing the native 32-hex id replaced the live conversation, and a later
-    // rollback deleted that directory — including the backup of the original.
-    // A second write of the same session still lands on the same derived id.
-    const writeId = resolveWriteSessionId(this.platform, session, cwd);
-    const toWrite = writeId === session.sessionId ? session : { ...session, sessionId: writeId };
-    const result = writeIdeSession(toWrite, cwd);
+    const writeId = deriveTargetSessionId({
+      targetPlatform: this.platform,
+      targetCwd: cwd,
+      sourceSessionId: session.sessionId,
+    });
+    const result = writeIdeSession({ ...session, sessionId: writeId }, cwd);
     if (result.synced === 0 || !result.convId) {
       throw new Error(`CodeBuddy IDE write failed: ${result.skipped ?? 'no IDE history directory found'}`);
     }

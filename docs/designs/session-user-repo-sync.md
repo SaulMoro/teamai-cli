@@ -117,9 +117,12 @@ regression suite):
   separate codex response_items and read back as more messages than went in.
 - **Empty-content messages** are dropped by several adapters' writers/readers (semantic
   choice per adapter; unifying would change existing behavior).
-- **sessionId is platform-native.** v4 (claude-code), v7 (codex), 32-hex (codebuddy-ide)
-  each regenerate on write; a cross-platform chain therefore accumulates one archive per
-  platform. The session id you resume with is always the target platform's.
+- **Every write gets a new sessionId.** The target id is derived from the target platform,
+  the target workspace and the source id, and the source id is never reused. A
+  cross-platform chain therefore accumulates one archive per platform, and the session id
+  you resume with is always the target's. Copies made by an older TeamAI kept a source UUID,
+  or (claude-code, codebuddy) left the workspace out of the hash, so re-migrating one of them
+  writes a second copy next to it.
 - **claude-code flattenDag** drops sidechain branches and can promote orphan nodes early;
   fork branches interleave into the main timeline.
 - **cursor has no stored title** — the title is derived from the first real user text;
