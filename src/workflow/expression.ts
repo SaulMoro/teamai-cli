@@ -12,7 +12,7 @@ export type PathField = string | number;
 /** A value read by a path. A missing value is `null`. */
 export type ExpressionPath =
   | { root: 'inputs'; fields: PathField[]; column: number }
-  | { root: 'steps'; step: string; field: 'outcome' | 'end' | 'outputs'; fields: PathField[]; column: number };
+  | { root: 'steps'; step: string; field: 'outcome' | 'end' | 'outputs' | 'passes'; fields: PathField[]; column: number };
 
 /** `<`, `<=`, `>` and `>=` compare two numbers; with anything else they are false. */
 const COMPARISONS = {
@@ -51,6 +51,16 @@ export interface ExpressionStep {
   outcome?: VisibleOutcome;
   end?: string;
   outputs?: unknown;
+  /** Every settled pass of the step, earliest first: those a loop ran again, then the current one once it settled. */
+  passes?: ExpressionPass[];
+}
+
+/** One pass of a step in `steps.<id>.passes`. */
+export interface ExpressionPass {
+  pass: number;
+  outcome: VisibleOutcome;
+  outputs?: unknown;
+  end?: string;
 }
 
 export interface ExpressionContext {
@@ -183,15 +193,30 @@ function parsePath(token: { text: string; column: number }): ExpressionPath {
   if (typeof step === 'string' && typeof field === 'number') {
     throw new ExpressionError(token.column, `"${token.text}" indexes a step; an index reads an array in its outputs, as in steps.${step}.outputs.<field>[${field}]`);
   }
-  if (typeof step !== 'string' || !field) {
-    throw new ExpressionError(token.column, `"${token.text}" must read steps.<id>.outcome, steps.<id>.end or steps.<id>.outputs`);
-  }
-  if (field === 'outputs') return { root, step, field, fields, column: token.column };
+  if (typeof step !== 'string' || !field) throw new ExpressionError(token.column, `"${token.text}" ${STEP_FIELDS}`);
+  if (field === 'outputs' || field === 'passes') return { root, step, field, fields, column: token.column };
   if ((field === 'outcome' || field === 'end') && fields.length === 0) return { root, step, field, fields, column: token.column };
   if ((field === 'outcome' || field === 'end') && typeof fields[0] === 'number') {
     throw new ExpressionError(token.column, `"${token.text}" indexes ${field}, which is a name; compare it whole, as in steps.${step}.${field} == '<name>'`);
   }
-  throw new ExpressionError(token.column, `"${token.text}" must read steps.<id>.outcome, steps.<id>.end or steps.<id>.outputs`);
+  throw new ExpressionError(token.column, `"${token.text}" ${STEP_FIELDS}`);
+}
+
+const STEP_FIELDS = 'must read steps.<id>.outcome, steps.<id>.end, steps.<id>.outputs or steps.<id>.passes';
+
+/**
+ * The type the `output` a step declares gives `steps.<id>.<field>`, or undefined when it gives none: outcome and end
+ * are names, and each item of `passes` holds the outputs of one pass.
+ */
+export function stepFieldSchema(field: 'outcome' | 'end' | 'outputs' | 'passes', output: OutputSchema | undefined): OutputSchema | undefined {
+  switch (field) {
+    case 'outcome':
+    case 'end':
+      return { type: 'string' };
+    case 'outputs': return output;
+    case 'passes':
+      return output && { type: 'array', items: { type: 'object', fields: { pass: { type: 'number' }, outcome: { type: 'string' }, end: { type: 'string' }, outputs: output } } };
+  }
 }
 
 class Parser {

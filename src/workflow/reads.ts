@@ -1,6 +1,8 @@
 import { isMap, type Node } from 'yaml';
-import { evaluateExpression, expressionPaths, fieldsText, isTruthy, schemaAt, typeProblems, type Expression, type ExpressionPath } from './expression.js';
-import { isYamlNode, locate, position, scalarString, undeclaredOutput, type Child, type GraphNode, type ParseContext } from './parse-context.js';
+import { evaluateExpression, expressionPaths, fieldsText, isTruthy, schemaAt, stepFieldSchema, typeProblems, type Expression, type ExpressionPath } from './expression.js';
+import {
+  isYamlNode, locate, position, scalarString, undeclaredField, undeclaredOutput, type Child, type GraphNode, type ParseContext,
+} from './parse-context.js';
 import type { EndOutcome, OutputSchema, WorkflowDiagnostic, WorkflowStep } from './types.js';
 
 export interface ConditionNode {
@@ -22,15 +24,26 @@ export function conditionDiagnostics({ file, lineCounter }: ParseContext, condit
       });
       continue;
     }
-    reads.push({
-      id: condition.id, field: condition.field, at: position(lineCounter, condition.node), what: 'if', paths,
-      ends: endComparisons(condition.expression), expression: condition.expression,
-    });
+    reads.push(expressionSite(condition.id, condition.field, position(lineCounter, condition.node), 'if', condition.expression));
   }
   return diagnostics;
 }
 
-/** Where a step reads paths: its `if`, its prompt, or one `env` value. */
+export function expressionSite(
+  id: string,
+  field: string,
+  at: { line: number; column: number },
+  what: string,
+  expression: Expression,
+  afterRun?: { code: WorkflowDiagnostic['code'] },
+): ReadSite {
+  return {
+    id, field, at, what, paths: expressionPaths(expression), ends: endComparisons(expression), expression,
+    ...(afterRun ? { afterRun: true, code: afterRun.code } : {}),
+  };
+}
+
+/** Where a step reads paths, in one of the fields `what` names. */
 export interface ReadSite {
   /** The step whose ancestors the site may read: the reader, or the step that runs the inline workflow the reader is in. */
   id: string;
@@ -45,6 +58,8 @@ export interface ReadSite {
   ends?: Array<{ step: string; end: string }>;
   /** The `if` itself, whose comparisons and lists are checked against the types its paths declare. */
   expression?: Expression;
+  /** The site is evaluated after its step succeeds, so it may read that step too. */
+  afterRun?: boolean;
   code?: WorkflowDiagnostic['code'];
 }
 
@@ -91,7 +106,7 @@ export function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScop
     const at = (message: string): WorkflowDiagnostic => ({
       file, ...site.at, field: site.field, message, ...(site.code ? { code: site.code } : {}),
     });
-    const readable = scope.ancestors(site.id);
+    const readable = new Set([...scope.ancestors(site.id), ...(site.afterRun && site.reader === undefined ? [site.id] : [])]);
     const reader = site.reader ?? site.id;
     const reported = new Set<string>();
     for (const path of site.paths) {
@@ -115,10 +130,8 @@ export function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScop
         diagnostics.push({ ...at(`step "${reader}" ${site.what} ${undeclared}`), code: 'undeclared_output' });
         continue;
       }
-      const output = scope.outputs.get(path.step);
-      if (path.field === 'outputs' && output && !schemaAt(output, path.fields)) {
-        diagnostics.push(at(`step "${reader}" ${site.what} reads steps.${path.step}.outputs${fieldsText(path.fields)}, which is not in the output step "${path.step}" declares`));
-      }
+      const field = undeclaredField(path, scope.outputs.get(path.step));
+      if (field) diagnostics.push(at(`step "${reader}" ${site.what} ${field}`));
     }
     if (site.expression) {
       // A path this site does not list reads an enclosing workflow, which checks its type.
@@ -140,10 +153,8 @@ export function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScop
 function declaredSchema(scope: ReadScope, readable: Set<string>, path: ExpressionPath): OutputSchema | undefined {
   if (path.root === 'inputs') return scope.inputs && schemaAt(scope.inputs, path.fields);
   if (!readable.has(path.step)) return undefined;
-  // outcome and end are names.
-  if (path.field !== 'outputs') return { type: 'string' };
-  const output = scope.outputs.get(path.step);
-  return output && schemaAt(output, path.fields);
+  const schema = stepFieldSchema(path.field, scope.outputs.get(path.step));
+  return schema && schemaAt(schema, path.fields);
 }
 
 /**

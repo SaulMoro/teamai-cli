@@ -1,17 +1,21 @@
 import { isMap, isScalar, isSeq, LineCounter, parseDocument, type Node, type YAMLMap } from 'yaml';
-import { fieldsText, parseExpression, schemaAt, type ExpressionPath } from './expression.js';
+import { fieldsText, parseExpression, type ExpressionPath } from './expression.js';
 import { findTemplate, parseTemplate, templatedTexts, templatePaths, templateWithPaths, type Template } from './template.js';
-import type { EndOutcome, InlineWorkflow, OutputSchema, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
+import type { EndOutcome, InlineWorkflow, OutputSchema, StepLoop, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
 import { STEP_ACTIONS } from './types.js';
 import {
-  isYamlNode, locate, position, scalarString, undeclaredOutput,
+  isYamlNode, locate, position, scalarString, undeclaredField, undeclaredOutput,
   type Child, type GraphNode, type ParseContext, type WorkflowFiles,
 } from './parse-context.js';
-import { conditionDiagnostics, endDiagnostics, readDiagnostics, readScope, splitReads, type ConditionNode, type Ending, type ReadSite } from './reads.js';
+import {
+  conditionDiagnostics, endDiagnostics, expressionSite, readDiagnostics, readScope, splitReads, type ConditionNode, type Ending, type ReadSite,
+} from './reads.js';
+import { loopProblems } from './loop.js';
 
 const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'inputs', 'ends', 'outputs', 'steps']);
 const ACTION_KEYS = Object.keys(STEP_ACTIONS);
-const STEP_KEYS = new Set(['id', 'needs', 'if', ...ACTION_KEYS, 'env', 'with', 'agent', 'output', 'end']);
+const STEP_KEYS = new Set(['id', 'needs', 'if', ...ACTION_KEYS, 'env', 'with', 'agent', 'output', 'end', 'loop']);
+const STEP_LOOP_KEYS = new Set(['back_to', 'while', 'max_iterations']);
 /** Keys a step without an action may carry. */
 const END_ONLY_KEYS = new Set(['id', 'needs', 'if', 'end']);
 /** The actions as a sentence: `command, prompt, prompt_file, or workflow`. */
@@ -215,6 +219,7 @@ function parseBody(
     const reads: ReadSite[] = [];
     const endings: Ending[] = [];
     const references: Array<{ id: string; workflow: string }> = [];
+    const placed = new Map<string, { field: string; item: YAMLMap }>();
     stepsNode.items.forEach((item, index) => {
       const field = `${at}steps[${index}]`;
       if (!isMap(item)) {
@@ -235,6 +240,7 @@ function parseBody(
         diagnostics.push(locate(file, lineCounter, idPair?.value ?? item, `${field}.id`, `step id "${id}" is duplicated`));
       } else {
         seen.add(id);
+        placed.set(id, { field, item });
         if (id.includes('.')) diagnostics.push(dottedName(file, lineCounter, idPair?.value, `${field}.id`, `step id "${id}"`));
       }
       const label = id ? `step "${id}"` : field;
@@ -388,6 +394,13 @@ function parseBody(
       if (envPair && !commandPair && actions.length > 0) {
         diagnostics.push(locate(file, lineCounter, envPair.key as Node, `${field}.env`, `${label} env is only allowed on a command step`));
       }
+      const loopPair = item.items.find((pair) => scalarString(pair.key) === 'loop');
+      const loop = loopPair ? parseStepLoop(loopPair.value ?? loopPair.key, `${field}.loop`, label, ctx) : undefined;
+      const whileParsed = loop?.while === undefined ? undefined : parseExpression(loop.while);
+      if (inGraph && whileParsed?.ok) {
+        const at = position(lineCounter, valueNode(loopPair?.value, 'while'));
+        reads.push(expressionSite(id, `${field}.loop.while`, at, 'loop.while', whileParsed.expression, { code: 'bad_loop' }));
+      }
       let output: OutputSchema | undefined;
       const outputPair = item.items.find((pair) => scalarString(pair.key) === 'output');
       if (outputPair && workflowPair) {
@@ -412,6 +425,7 @@ function parseBody(
           ...(agent ? { agent } : {}),
           ...(output ? { output } : {}),
           ...(end ? { end } : {}),
+          ...(loop ? { loop } : {}),
         });
       }
     });
@@ -425,11 +439,26 @@ function parseBody(
     const split = splitReads(reads, at === '' ? undefined : seen);
     outer = split.outer;
     diagnostics.push(...readDiagnostics(file, split.local, readScope(needsById, steps, inputs, children)));
+    for (const problem of loopProblems(steps, stepReads(split.local))) {
+      const at = placed.get(problem.id);
+      const node = problem.key.split('.').reduce<unknown>((map, key) => valueNode(map, key), at?.item);
+      diagnostics.push({ ...locate(file, lineCounter, (node ?? at?.item) as Node, `${at?.field}.${problem.key}`, problem.message), code: 'bad_loop' });
+    }
     // A malformed ends header is already reported; checking steps against it would only add noise.
     if (!endsPair || ends) diagnostics.push(...endDiagnostics(ctx, ends, endsPair?.value, at, endings, graph));
     diagnostics.push(...outputDiagnostics(ctx, outputEntries ?? [], at, seen, steps, children));
   }
   return { workflow: { ...(ends ? { ends } : {}), ...(outputs ? { outputs } : {}), steps }, outer };
+}
+
+function stepReads(sites: ReadSite[]): Map<string, Set<string>> {
+  const reads = new Map<string, Set<string>>();
+  for (const site of sites) {
+    const ids = reads.get(site.id) ?? new Set<string>();
+    for (const path of site.paths) if (path.root === 'steps') ids.add(path.step);
+    reads.set(site.id, ids);
+  }
+  return reads;
 }
 
 /** An inline `workflow: { steps, outputs?, ends? }`. It reads the enclosing inputs and steps, so it declares no inputs. */
@@ -502,6 +531,41 @@ function childrenOf(steps: Array<{ id: string; workflow?: string | InlineWorkflo
     if (child) children.set(id, { label: `workflow "${child.name}"`, outputs: child.outputs, ends: child.ends });
   }
   return children;
+}
+
+/** A step's `loop`. Where `back_to` sits in the graph is checked once every step is known. */
+function parseStepLoop(node: Node | null | undefined, field: string, label: string, ctx: ParseContext): StepLoop | undefined {
+  const { file, lineCounter, diagnostics } = ctx;
+  const reject = (at: Node | null | undefined, where: string, message: string): void => {
+    diagnostics.push({ ...locate(file, lineCounter, at, where, message), code: 'bad_loop' });
+  };
+  if (!isMap(node)) {
+    reject(node, field, `${label} loop must map back_to, max_iterations, and optionally while`);
+    return undefined;
+  }
+  const before = diagnostics.length;
+  for (const pair of node.items) {
+    const keyNode = isYamlNode(pair.key) ? pair.key : undefined;
+    const key = scalarString(keyNode);
+    if (!key || !STEP_LOOP_KEYS.has(key)) diagnostics.push(unknownKey(file, lineCounter, keyNode ?? node, `${field}.${key ?? 'key'}`, key ?? 'key'));
+  }
+  const at = (key: string): Node | undefined => valueNode(node, key);
+  const backTo = scalarString(at('back_to'))?.trim();
+  if (!backTo || !TOKEN.test(backTo)) reject(at('back_to') ?? node, `${field}.back_to`, `${label} loop.back_to must name a step`);
+  const maxNode = at('max_iterations');
+  const max: unknown = isScalar(maxNode) ? maxNode.value : undefined;
+  if (typeof max !== 'number' || !Number.isInteger(max) || max < 1) {
+    reject(at('max_iterations') ?? node, `${field}.max_iterations`, `${label} loop.max_iterations must be a whole number from 1`);
+  }
+  const whileNode = at('while');
+  const condition = whileNode ? conditionSource(whileNode) : undefined;
+  if (whileNode) {
+    const parsed = condition === undefined ? undefined : parseExpression(condition);
+    if (!parsed) reject(whileNode, `${field}.while`, `${label} loop.while must be an expression`);
+    else if (!parsed.ok) reject(whileNode, `${field}.while`, `${label} loop.while does not parse at column ${parsed.column}: ${parsed.message}`);
+  }
+  if (diagnostics.length > before || !backTo) return undefined;
+  return { backTo, ...(condition !== undefined ? { while: condition } : {}), maxIterations: max as number };
 }
 
 /** `env` maps variable names to text. A YAML number or boolean is read as its text. */
@@ -613,10 +677,8 @@ function outputDiagnostics(
       diagnostics.push({ ...at(undeclared), code: 'undeclared_output' });
       continue;
     }
-    const output = steps.find((step) => step.id === path.step)?.output;
-    if (path.field === 'outputs' && output && !schemaAt(output, path.fields)) {
-      diagnostics.push(at(`reads steps.${path.step}.outputs${fieldsText(path.fields)}, which is not in the output step "${path.step}" declares`));
-    }
+    const field = undeclaredField(path, steps.find((step) => step.id === path.step)?.output);
+    if (field) diagnostics.push(at(field));
   }
   return diagnostics;
 }

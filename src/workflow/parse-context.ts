@@ -1,8 +1,8 @@
 /** The YAML and diagnostic helpers parse.ts and reads.ts share, kept apart so neither imports the other. */
 
 import { isScalar, type LineCounter, type Node } from 'yaml';
-import { fieldsText, type ExpressionPath } from './expression.js';
-import type { EndOutcome, WorkflowDefinition, WorkflowDiagnostic } from './types.js';
+import { fieldsText, schemaAt, stepFieldSchema, type ExpressionPath } from './expression.js';
+import type { EndOutcome, OutputSchema, WorkflowDefinition, WorkflowDiagnostic } from './types.js';
 
 export function isYamlNode(value: unknown): value is Node {
   return !!value && typeof value === 'object' && 'range' in value;
@@ -49,12 +49,26 @@ export interface Child {
   ends?: Record<string, EndOutcome>;
 }
 
-/** Why `path` reads an output the workflow its step runs does not declare, or undefined. */
+/** Why `path` reads an output the workflow its step runs does not declare, or undefined. A pass has the same outputs. */
 export function undeclaredOutput(children: Map<string, Child>, path: ExpressionPath): string | undefined {
-  if (path.root !== 'steps' || path.field !== 'outputs' || path.fields.length === 0) return undefined;
+  if (path.root !== 'steps') return undefined;
+  const [index, field, name] = path.fields;
+  const output = path.field === 'outputs' ? index : path.field === 'passes' && typeof index === 'number' && field === 'outputs' ? name : undefined;
+  if (output === undefined) return undefined;
   const child = children.get(path.step);
-  if (!child || Object.hasOwn(child.outputs ?? {}, path.fields[0]!)) return undefined;
-  return `reads steps.${path.step}.outputs${fieldsText(path.fields)}, which is not an output ${child.label} declares`;
+  if (!child || Object.hasOwn(child.outputs ?? {}, output)) return undefined;
+  return `reads steps.${path.step}.${path.field}${fieldsText(path.fields)}, which is not an output ${child.label} declares`;
+}
+
+/** Why `path` reads what the `output` its step declares does not have, or undefined. */
+export function undeclaredField(path: ExpressionPath, output: OutputSchema | undefined): string | undefined {
+  if (path.root !== 'steps' || (path.field !== 'outputs' && path.field !== 'passes')) return undefined;
+  const schema = stepFieldSchema(path.field, output);
+  if (!schema || schemaAt(schema, path.fields)) return undefined;
+  const read = `steps.${path.step}.${path.field}${fieldsText(path.fields)}`;
+  return path.field === 'outputs'
+    ? `reads ${read}, which is not in the output step "${path.step}" declares`
+    : `reads ${read}, which is not in a pass of step "${path.step}": pass, outcome, end, and outputs as its output declares`;
 }
 
 export interface GraphNode {

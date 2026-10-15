@@ -45,7 +45,7 @@ describe('workflow templates', () => {
   it.each([
     ['{{ inputs.issue == 1 }}', 'a template reads one path'],
     ['{{ inputs.issue < 1 }}', 'a template reads one path'],
-    ['{{ steps.plan }}', '"steps.plan" must read steps.<id>.outcome, steps.<id>.end or steps.<id>.outputs'],
+    ['{{ steps.plan }}', '"steps.plan" must read steps.<id>.outcome, steps.<id>.end, steps.<id>.outputs or steps.<id>.passes'],
     ['{{ inputs.a b }}', 'unexpected "b"'],
     ['{{ inputs.labels[-1] }}', '"[-1]" is not an index; write a whole number from 0, such as [0]'],
     ['{{ with.refs[x] }}', '"[x]" is not an index; write a whole number from 0, such as [0]'],

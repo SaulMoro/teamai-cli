@@ -106,6 +106,8 @@ type CancelledStep = StepIn<'cancelled'>;
 type Settlement<T extends StepState> = Omit<T, keyof StepBase | 'status' | 'outcome'>;
 
 const BASE_KEYS = Object.keys(StepBaseSchema.shape) as Array<keyof StepBase>;
+const SETTLED_KEYS = Object.keys(settledFields) as Array<keyof typeof settledFields>;
+const PASS_OUTCOMES = { succeeded: 'success', failed: 'failed', skipped: 'skipped', cancelled: 'cancelled' } as const;
 
 /**
  * Replaces a step's fields in place with `next`, keeping the fields every step has, and returns it as its new variant.
@@ -149,6 +151,45 @@ export function fail(state: StepState, settlement: Settlement<FailedStep>): Fail
 /** A leased or running step stops before it settles. A leased one keeps its attempt, which can no longer be reported. */
 export function cancel(state: LeasedStep | RunningStep, failure: WorkflowFailure): CancelledStep {
   return become<CancelledStep>(state, { status: 'cancelled', ...(state.status === 'leased' ? { attempt: state.attempt } : {}), failure });
+}
+
+/** The current pass of a settled step, as `passes` keeps it once a loop runs the step again; undefined while it has not settled. */
+export function passOf(state: StepState): StepPass | undefined {
+  if (!settled(state)) return undefined;
+  const outcome = PASS_OUTCOMES[state.status as keyof typeof PASS_OUTCOMES];
+  return StepPassSchema.parse({ ...state, pass: state.pass ?? 1, outcome });
+}
+
+/**
+ * A loop runs a settled step again: its current pass joins `passes`, and it waits as the next pass, with nothing of
+ * the workflow it ran. `iteration` is the runs a loop owner has had so far.
+ */
+export function repend(state: StepState, iteration?: number): PendingStep {
+  const current = passOf(state);
+  const passes = [...state.passes ?? [], ...(current ? [current] : [])];
+  const pass = (state.pass ?? 1) + 1;
+  const pending = become<PendingStep>(state, { status: 'pending' });
+  delete pending.inputs;
+  delete pending.round;
+  return Object.assign(pending, { pass, passes }, iteration !== undefined ? { iteration } : {});
+}
+
+/** A loop owner whose loop will not run again after `iteration` runs. */
+export function endLoop(owner: SucceededStep, iteration: number): SucceededStep {
+  return Object.assign(owner, { loopFinal: true, iteration });
+}
+
+/**
+ * A loop owner that would run more than `max_iterations` times fails instead. One that just ran keeps what that run
+ * reported; one that has not started takes the outputs of its latest pass.
+ */
+export function exhaust(state: SucceededStep | PendingStep, failure: WorkflowFailure, settledAt: number, iteration?: number): FailedStep {
+  const latest = state.status === 'succeeded' ? state : state.passes?.at(-1);
+  const ran = state.status === 'succeeded'
+    ? Object.fromEntries(SETTLED_KEYS.filter((key) => state[key] !== undefined).map((key) => [key, state[key]]))
+    : latest?.outputs !== undefined ? { outputs: latest.outputs } : {};
+  const failed = fail(state, { ...ran, settledAt, message: failure.message, failure });
+  return iteration === undefined ? failed : Object.assign(failed, { iteration });
 }
 
 /** A step that ran and did not succeed. */

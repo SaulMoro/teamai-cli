@@ -40,6 +40,20 @@ export interface WorkflowStep {
   with?: Record<string, unknown>;
   /** Name in `ends` this step finishes the workflow with when it succeeds. A step with no action only ends the workflow and is never leased. */
   end?: string;
+  /** Runs the steps from `backTo` to this step again after this step succeeds. */
+  loop?: StepLoop;
+}
+
+/**
+ * A step loop. After its step succeeds, every step from `backTo` to it runs again, while `while` is true, or always
+ * when there is none. The step runs at most `maxIterations` times; a run past that fails it with `loop_exhausted`.
+ */
+export interface StepLoop {
+  /** The step itself, or a step it needs, directly or not. */
+  backTo: string;
+  /** Expression source, evaluated when the step succeeds. */
+  while?: string;
+  maxIterations: number;
 }
 
 /** The keys that give a step its action, as YAML writes them, each with the definition field it fills. */
@@ -94,8 +108,9 @@ export interface WorkflowDiagnostic {
    *   the file may be unchanged while that workflow changed, and the kept copy would read null where it expects a value.
    * `undeclared_end`: an `if` compares `steps.<id>.end` with a name the workflow step `<id>` runs does not declare in `ends`;
    *   for the same reason, the kept copy would take a branch that can never match.
+   * `bad_loop`: a `loop` pull rejects; the kept copy would run once the steps the author wrote to repeat.
    */
-  code?: 'unknown_key' | 'missing_needs' | 'false_if' | 'bad_template' | 'dotted_name' | 'undeclared_output' | 'undeclared_end';
+  code?: 'unknown_key' | 'missing_needs' | 'false_if' | 'bad_template' | 'dotted_name' | 'undeclared_output' | 'undeclared_end' | 'bad_loop';
 }
 
 export type StepOutcome = 'success' | 'failed' | 'released';

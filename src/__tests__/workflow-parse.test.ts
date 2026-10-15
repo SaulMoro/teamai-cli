@@ -387,3 +387,131 @@ steps:
     expect(formatDiagnostic(result.diagnostics[0]!)).toContain(`${FILE}:`);
   });
 });
+
+function rejected(content: string): Array<{ message: string; code?: string }> {
+  const result = parse(content);
+  if (result.ok) throw new Error('expected the file to be rejected');
+  return result.diagnostics.map((diagnostic) => ({ message: formatDiagnostic(diagnostic), ...(diagnostic.code ? { code: diagnostic.code } : {}) }));
+}
+
+const REVIEW_AND_FIX = `schemaVersion: v1alpha1
+name: build
+description: Review and fix, up to three times.
+steps:
+  - id: review
+    command: node review.js
+    output:
+      verdict: pass | fix
+      findings: [string]
+  - id: fix
+    needs: [review]
+    if: steps.review.outputs.verdict == 'fix'
+    command: node fix.js
+    loop: { back_to: review, max_iterations: 3 }
+`;
+
+describe('step loops', () => {
+  it('parses a loop back to a step the owner needs, with an optional while', () => {
+    const result = parse(`${REVIEW_AND_FIX}  - id: decide
+    needs: [fix]
+    command: node decide.js
+    output:
+      choice: build | revise
+    loop:
+      back_to: decide
+      while: steps.decide.outputs.choice == 'revise'
+      max_iterations: 2
+`);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.definition.steps.map((step) => step.loop)).toEqual([
+      undefined,
+      { backTo: 'review', maxIterations: 3 },
+      { backTo: 'decide', while: "steps.decide.outputs.choice == 'revise'", maxIterations: 2 },
+    ]);
+  });
+
+  it('rejects a loop that is not a map of back_to, max_iterations and while', () => {
+    const loop = (value: string): string => REVIEW_AND_FIX.replace('loop: { back_to: review, max_iterations: 3 }', `loop: ${value}`);
+    expect(rejected(loop('3'))).toEqual([
+      { message: `${FILE}:14: field "steps[1].loop": step "fix" loop must map back_to, max_iterations, and optionally while`, code: 'bad_loop' },
+    ]);
+    expect(rejected(loop("{ back_to: '', max_iterations: 0, while: 'steps.review.outputs.verdict ==', until: x }"))).toEqual([
+      { message: `${FILE}:14: field "steps[1].loop.until": workflows/build.yaml uses \`until\`, which this teamai does not know. Update teamai.`, code: 'unknown_key' },
+      { message: `${FILE}:14: field "steps[1].loop.back_to": step "fix" loop.back_to must name a step`, code: 'bad_loop' },
+      { message: `${FILE}:14: field "steps[1].loop.max_iterations": step "fix" loop.max_iterations must be a whole number from 1`, code: 'bad_loop' },
+      { message: `${FILE}:14: field "steps[1].loop.while": step "fix" loop.while does not parse at column 32: expected a value, found the end of the expression`, code: 'bad_loop' },
+    ]);
+  });
+
+  it('rejects a loop back to a step its owner does not need, a loop on a step with end, and loops that share a step', () => {
+    expect(rejected(REVIEW_AND_FIX.replace('back_to: review', 'back_to: docs') + `  - id: docs
+    needs: []
+    command: node docs.js
+`)).toEqual([{
+      message: `${FILE}:14: field "steps[1].loop.back_to": step "fix" loop.back_to is "docs", which is not "fix" or a step it needs, directly or through its needs`,
+      code: 'bad_loop',
+    }]);
+    expect(rejected(`${REVIEW_AND_FIX.replace('description:', 'ends:\n  done: succeeded\ndescription:')}    end: done
+`)).toEqual([{
+      message: `${FILE}:16: field "steps[1].loop": step "fix" has loop and end; a step that ends its workflow cannot run again`,
+      code: 'bad_loop',
+    }]);
+    expect(rejected(`${REVIEW_AND_FIX}  - id: verify
+    needs: [fix]
+    command: node verify.js
+    loop: { back_to: fix, max_iterations: 2 }
+`)).toEqual([{
+      message: `${FILE}:18: field "steps[2].loop": step "verify" loop runs "fix" again, which the loop of step "fix" also runs; loops in one workflow share no step, so put the inner one in a sub-workflow`,
+      code: 'bad_loop',
+    }]);
+  });
+
+  it('checks what loop.while reads: its own step and the steps that step needs', () => {
+    expect(rejected(REVIEW_AND_FIX.replace('max_iterations: 3 }', "max_iterations: 3, while: \"steps.fix.outputs.again && steps.docs.outcome == 'success' || steps.review.outputs.verdcit\" }") + `  - id: docs
+    needs: []
+    command: node docs.js
+`)).toEqual([
+      { message: `${FILE}:14: field "steps[1].loop.while": step "fix" loop.while reads steps.docs, which is not a step it needs, directly or through its needs`, code: 'bad_loop' },
+      { message: `${FILE}:14: field "steps[1].loop.while": step "fix" loop.while reads steps.review.outputs.verdcit, which is not in the output step "review" declares`, code: 'bad_loop' },
+    ]);
+  });
+
+  it('types steps.<id>.passes from the output its step declares', () => {
+    const reads = (condition: string): string => `${REVIEW_AND_FIX}  - id: report
+    needs: [fix]
+    if: ${JSON.stringify(condition)}
+    command: node report.js
+`;
+    expect(parse(reads("length(steps.review.passes) > 1 && steps.review.passes[0].outputs.verdict == 'fix' && any(steps.review.passes, .outputs.findings != [] && .pass > 1)")).ok).toBe(true);
+    expect(rejected(reads("steps.review.passes[0].outputs.verdcit == 'fix' || steps.review.passes[0].round == 1 || any(steps.review.passes, .outcome > 1)"))).toEqual([
+      { message: `${FILE}:17: field "steps[2].if": step "report" if reads steps.review.passes[0].outputs.verdcit, which is not in a pass of step "review": pass, outcome, end, and outputs as its output declares` },
+      { message: `${FILE}:17: field "steps[2].if": step "report" if reads steps.review.passes[0].round, which is not in a pass of step "review": pass, outcome, end, and outputs as its output declares` },
+      { message: `${FILE}:17: field "steps[2].if": step "report" if compares .outcome with >, but it is not a number` },
+    ]);
+  });
+
+  it('rejects two loops that wait for each other through the steps they need', () => {
+    expect(rejected(`schemaVersion: v1alpha1
+name: build
+description: Two loops, each needed by the other's owner.
+steps:
+  - id: build
+    command: node build.js
+  - id: fetch
+    needs: []
+    command: node fetch.js
+  - id: test
+    needs: [build, fetch]
+    command: node test.js
+    loop: { back_to: build, max_iterations: 2 }
+  - id: lint
+    needs: [build, fetch]
+    command: node lint.js
+    loop: { back_to: fetch, max_iterations: 2 }
+`)).toEqual([{
+      message: `${FILE}:11: field "steps[2].needs": step "test" waits in a cycle: test -> lint -> test; a step that needs or reads a step inside a loop waits until the loop ends`,
+      code: 'bad_loop',
+    }]);
+  });
+});

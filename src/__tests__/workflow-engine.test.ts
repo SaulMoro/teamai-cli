@@ -2353,3 +2353,273 @@ describe('a run file written before loops and for_each', () => {
     expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { done: { run: runId, outcome: 'succeeded' } } });
   });
 });
+
+interface LoopLease {
+  step: string;
+  attempt: string;
+  revision: number;
+  pass: number;
+  prompt?: string;
+}
+
+/**
+ * Drives a run serially. `answer` reports each lease, given how many times its step has been leased before.
+ * Returns each lease as `<step>#<pass>`, and the done envelope.
+ */
+async function driveLoop(
+  config: LocalConfig,
+  runId: string,
+  answer: (lease: LoopLease, earlier: number) => { outcome?: 'success' | 'failed'; outputs?: unknown } = () => ({}),
+): Promise<{ leased: string[]; done: unknown }> {
+  const leased: string[] = [];
+  const counts = new Map<string, number>();
+  for (;;) {
+    const next = await leaseNext(config, runId, driverA);
+    if ('error' in next) throw new Error(next.error.message);
+    if (next.data.done) return { leased, done: next.data.done };
+    const lease = next.data.lease as LoopLease;
+    leased.push(`${lease.step}#${lease.pass}`);
+    const earlier = counts.get(lease.step) ?? 0;
+    counts.set(lease.step, earlier + 1);
+    const { outcome = 'success', outputs } = answer(lease, earlier);
+    const reported = await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome, outputs, driver: driverA });
+    if ('error' in reported) throw new Error(reported.error.message);
+  }
+}
+
+const REVIEW_AND_FIX = workflow('review-and-fix', `  - id: review
+    command: node review.js
+    output:
+      verdict: pass | fix
+      findings: [string]
+  - id: fix
+    needs: [review]
+    if: steps.review.outputs.verdict == 'fix'
+    command: node fix.js
+    output:
+      patch: string
+    loop: { back_to: review, max_iterations: 3 }
+`, 'outputs:\n  findings: steps.review.passes\n');
+
+function reviews(...verdicts: Array<'pass' | 'fix'>) {
+  return (lease: LoopLease, earlier: number) => (lease.step.endsWith('review')
+    ? { outputs: { verdict: verdicts[earlier], findings: [`finding ${earlier + 1}`] } }
+    : { outputs: { patch: `patch ${earlier + 1}` } });
+}
+
+const IMPLEMENT_TASK = workflow('implement-task', `  - id: implement
+    command: node implement.js
+  - id: e2e
+    needs: [implement]
+    command: npm run test:e2e
+  - id: fix
+    needs: [e2e]
+    if: steps.e2e.outcome == 'failed'
+    command: node fix.js
+    loop: { back_to: e2e, max_iterations: 3 }
+  - id: done
+    needs: [e2e]
+    if: steps.e2e.outcome == 'success'
+    end: done
+  - id: give-up
+    needs: [fix]
+    if: steps.fix.outcome == 'failed'
+    end: stuck
+`, 'ends:\n  done: succeeded\n  stuck: failed\n');
+
+const PLAN_CHANGE = workflow('plan-change', `  - id: plan
+    command: node plan.js
+    output:
+      summary: string
+  - id: decide
+    needs: [plan]
+    command: node decide.js
+    output:
+      choice: build | revise | drop
+      note: string
+    loop: { back_to: plan, while: "steps.decide.outputs.choice == 'revise'", max_iterations: 3 }
+  - id: accept
+    needs: [decide]
+    if: steps.decide.outputs.choice == 'build'
+    end: planned
+  - id: drop
+    needs: [decide]
+    if: steps.decide.outputs.choice == 'drop'
+    end: dropped
+`, 'ends:\n  planned: succeeded\n  dropped: succeeded\n');
+
+function decisions(...choices: Array<'build' | 'revise' | 'drop'>) {
+  return (lease: LoopLease, earlier: number) => (lease.step === 'plan'
+    ? { outputs: { summary: `plan ${earlier + 1}` } }
+    : { outputs: { choice: choices[earlier], note: `note ${earlier + 1}` } });
+}
+
+describe('step loops', () => {
+  it('plans again while the person asks for a revision, and builds the revised plan', async () => {
+    const { config, runId } = await startTree({ 'plan-change': PLAN_CHANGE }, 'plan-change');
+
+    const { leased, done } = await driveLoop(config, runId, decisions('revise', 'build'));
+
+    expect(leased).toEqual(['plan#1', 'decide#1', 'plan#2', 'decide#2']);
+    expect(done).toMatchObject({ outcome: 'succeeded', end: 'planned' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'plan', pass: 2, outputs: { summary: 'plan 2' } },
+      { id: 'decide', status: 'succeeded', pass: 2, iteration: 2, loopFinal: true, outputs: { choice: 'build' } },
+      { id: 'accept', status: 'succeeded' },
+      { id: 'drop', status: 'skipped' },
+    ] });
+  });
+
+  it('fails decide with loop_exhausted when the last pass still asks for a revision, keeping that answer', async () => {
+    const { config, runId } = await startTree({ 'plan-change': PLAN_CHANGE }, 'plan-change');
+
+    const { leased, done } = await driveLoop(config, runId, decisions('revise', 'revise', 'revise'));
+
+    expect(leased).toEqual(['plan#1', 'decide#1', 'plan#2', 'decide#2', 'plan#3', 'decide#3']);
+    expect(done).toMatchObject({ outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'plan', status: 'succeeded', pass: 3 },
+      {
+        id: 'decide', status: 'failed', pass: 3, iteration: 3, attempt: expect.any(String), outputs: { choice: 'revise', note: 'note 3' },
+        failure: { code: 'loop_exhausted' },
+      },
+      { id: 'accept', status: 'skipped' },
+      { id: 'drop', status: 'skipped' },
+    ] });
+  });
+
+  it('decides the loop of a workflow step once its workflow finishes, then runs what needs it', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: check
+    workflow:
+      outputs:
+        again: steps.run.outputs.again
+      steps:
+        - id: run
+          command: node check.js
+          output:
+            again: boolean
+    loop: { back_to: check, while: steps.check.outputs.again, max_iterations: 3 }
+  - id: ship
+    needs: [check]
+    command: node ship.js
+`));
+
+    const { leased, done } = await driveLoop(config, runId, (lease, earlier) => (lease.step === 'check.run' ? { outputs: { again: earlier === 0 } } : {}));
+
+    expect(leased).toEqual(['check.run#1', 'check.run#2', 'ship#1']);
+    expect(done).toMatchObject({ outcome: 'succeeded' });
+    expect(await readRun(config, runId)).toMatchObject({
+      steps: [
+        { id: 'check', status: 'succeeded', pass: 2, iteration: 2, loopFinal: true, outputs: { again: false }, passes: [{ pass: 1, outcome: 'success', outputs: { again: true } }] },
+        { id: 'check.run', status: 'succeeded', pass: 2, outputs: { again: false } },
+        { id: 'ship', status: 'succeeded' },
+      ],
+      archive: [{ step: 'check.run', pass: 1, outcome: 'success', attempt: expect.any(String), outputs: { again: true } }],
+    });
+  });
+
+  it('leases the child of a workflow step loop without while once when max_iterations is 1, and fails the step', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: check
+    workflow:
+      steps:
+        - id: run
+          command: node check.js
+    loop: { back_to: check, max_iterations: 1 }
+  - id: ship
+    needs: [check]
+    command: node ship.js
+`));
+
+    const { leased, done } = await driveLoop(config, runId);
+
+    expect(leased).toEqual(['check.run#1']);
+    expect(done).toMatchObject({ outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({
+      steps: [
+        { id: 'check', status: 'failed', pass: 2, iteration: 1, failure: { code: 'loop_exhausted' }, passes: [{ pass: 1, outcome: 'success' }] },
+        { id: 'ship', status: 'skipped' },
+      ],
+      archive: [{ step: 'check.run', pass: 1, outcome: 'success' }],
+    });
+  });
+
+  it.each([
+    ['passes on the first try', 1, ['implement#1', 'e2e#1'], { outcome: 'succeeded', end: 'done' }],
+    ['passes after one fix', 2, ['implement#1', 'e2e#1', 'fix#1', 'e2e#2'], { outcome: 'succeeded', end: 'done' }],
+    ['still fails after three fixes', 5, ['implement#1', 'e2e#1', 'fix#1', 'e2e#2', 'fix#2', 'e2e#3', 'fix#3', 'e2e#4'], { outcome: 'failed', end: 'stuck' }],
+  ] as const)('ends implement-task when e2e %s, and nothing outside the loop reads e2e before the loop settles', async (_case, passingRun, leases, outcome) => {
+    const { config, runId } = await startTree({ 'implement-task': IMPLEMENT_TASK }, 'implement-task');
+
+    const { leased, done } = await driveLoop(config, runId, (lease, earlier) => ({
+      outcome: lease.step === 'e2e' && earlier + 1 < passingRun ? 'failed' : 'success',
+    }));
+
+    expect(leased).toEqual(leases);
+    expect(done).toMatchObject(outcome);
+  });
+
+  it('runs review again after a fix, and leases each pass with its number', async () => {
+    const { config, runId } = await startTree({ 'review-and-fix': REVIEW_AND_FIX }, 'review-and-fix');
+
+    const { leased, done } = await driveLoop(config, runId, reviews('fix', 'pass'));
+
+    expect(leased).toEqual(['review#1', 'fix#1', 'review#2']);
+    expect(done).toMatchObject({ outcome: 'succeeded' });
+    const stored = await readRun(config, runId);
+    if (typeof stored !== 'object') throw new Error('run missing');
+    expect(stored.steps).toMatchObject([
+      {
+        id: 'review', status: 'succeeded', pass: 2, outputs: { verdict: 'pass' },
+        passes: [{ pass: 1, outcome: 'success', attempt: expect.any(String), outputs: { verdict: 'fix', findings: ['finding 1'] } }],
+      },
+      { id: 'fix', status: 'skipped', pass: 2, iteration: 1, passes: [{ pass: 1, outcome: 'success', outputs: { patch: 'patch 1' } }] },
+    ]);
+  });
+
+  it('succeeds when the fourth review passes after three fixes', async () => {
+    const { config, runId } = await startTree({ 'review-and-fix': REVIEW_AND_FIX }, 'review-and-fix');
+
+    const { leased, done } = await driveLoop(config, runId, reviews('fix', 'fix', 'fix', 'pass'));
+
+    expect(leased).toEqual(['review#1', 'fix#1', 'review#2', 'fix#2', 'review#3', 'fix#3', 'review#4']);
+    expect(done).toMatchObject({ outcome: 'succeeded' });
+  });
+
+  it('fails the loop owner with loop_exhausted instead of a fourth fix, and keeps the outputs of the third', async () => {
+    const { config, runId } = await startTree({ 'review-and-fix': REVIEW_AND_FIX }, 'review-and-fix');
+
+    const { leased, done } = await driveLoop(config, runId, reviews('fix', 'fix', 'fix', 'fix'));
+
+    expect(leased).toEqual(['review#1', 'fix#1', 'review#2', 'fix#2', 'review#3', 'fix#3', 'review#4']);
+    expect(done).toMatchObject({ outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'review', status: 'succeeded', pass: 4 },
+      {
+        id: 'fix', status: 'failed', pass: 4, iteration: 3, outputs: { patch: 'patch 3' },
+        failure: { code: 'loop_exhausted', message: 'Loop of step "fix" is exhausted: it ran 3 times, its max_iterations' },
+      },
+    ] });
+  });
+
+  it.each([
+    ['the first review passes', ['pass'], [{ pass: 1, outcome: 'success', outputs: { verdict: 'pass', findings: ['finding 1'] } }]],
+    ['a fix comes before the review that passes', ['fix', 'pass'], [
+      { pass: 1, outcome: 'success', outputs: { verdict: 'fix', findings: ['finding 1'] } },
+      { pass: 2, outcome: 'success', outputs: { verdict: 'pass', findings: ['finding 2'] } },
+    ]],
+  ] as const)('returns every review in findings, once each, when %s', async (_case, verdicts, findings) => {
+    const { config, runId } = await startTree({
+      'review-and-fix': REVIEW_AND_FIX,
+      ship: workflow('ship', `  - id: review
+    workflow: review-and-fix
+`),
+    }, 'ship');
+
+    const { done } = await driveLoop(config, runId, reviews(...verdicts));
+
+    expect(done).toMatchObject({ outcome: 'succeeded' });
+    const stored = await readRun(config, runId);
+    if (typeof stored !== 'object') throw new Error('run missing');
+    expect(stored.steps.find((step) => step.id === 'review')).toMatchObject({ status: 'succeeded', outputs: { findings } });
+  });
+});

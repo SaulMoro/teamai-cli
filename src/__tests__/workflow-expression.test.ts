@@ -137,9 +137,9 @@ describe('workflow expressions', () => {
     [".path == 'a.ts'", 1, '".path" reads the current element, which exists only inside the predicate of any, all or filter'],
     ['length(.) == 1', 8, '"." reads the current element, which exists only inside the predicate of any, all or filter'],
     ['process.env.SECRET', 1, '"process" is not readable; an expression reads only inputs and steps'],
-    ['steps.check', 1, '"steps.check" must read steps.<id>.outcome, steps.<id>.end or steps.<id>.outputs'],
-    ['steps.check.status', 1, '"steps.check.status" must read steps.<id>.outcome, steps.<id>.end or steps.<id>.outputs'],
-    ['steps.check.outcome.text', 1, '"steps.check.outcome.text" must read steps.<id>.outcome, steps.<id>.end or steps.<id>.outputs'],
+    ['steps.check', 1, '"steps.check" must read steps.<id>.outcome, steps.<id>.end, steps.<id>.outputs or steps.<id>.passes'],
+    ['steps.check.status', 1, '"steps.check.status" must read steps.<id>.outcome, steps.<id>.end, steps.<id>.outputs or steps.<id>.passes'],
+    ['steps.check.outcome.text', 1, '"steps.check.outcome.text" must read steps.<id>.outcome, steps.<id>.end, steps.<id>.outputs or steps.<id>.passes'],
     ['inputs.', 7, 'unexpected "."'],
     ['inputs.tags[-1]', 12, '"[-1]" is not an index; write a whole number from 0, such as [0]'],
     ['inputs.tags[inputs.n] == 1', 12, '"[inputs.n]" is not an index; write a whole number from 0, such as [0]'],
@@ -189,5 +189,21 @@ describe('workflow expressions', () => {
       { root: 'steps', step: 'review', field: 'outputs', fields: ['matrix', 0, 1], column: 1 },
       { root: 'inputs', fields: ['tags', 2], column: 38 },
     ]);
+  });
+
+  it.each([
+    ["steps.loop.passes[0].outputs.verdict == 'fix'", true],
+    ["steps.loop.passes[1].outcome == 'success'", true],
+    ['length(steps.loop.passes) == 2', true],
+    ["any(steps.loop.passes, .outputs.verdict == 'pass')", true],
+    ['steps.loop.passes[2] == null', true],
+    ['steps.check.passes == null', true],
+  ])('reads the passes of a step: %s is %s', (source, value) => {
+    const parsed = parseExpression(source);
+    if (!parsed.ok) throw new Error(parsed.message);
+    expect(evaluateExpression(parsed.expression, { steps: { ...context.steps, loop: { passes: [
+      { pass: 1, outcome: 'success', outputs: { verdict: 'fix' } },
+      { pass: 2, outcome: 'success', outputs: { verdict: 'pass' } },
+    ] } } })).toBe(value);
   });
 });
