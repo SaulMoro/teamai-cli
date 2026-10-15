@@ -404,6 +404,10 @@ describe('session pull', () => {
     expect(git(b, 'rev-parse', 'origin/main')).toBe(git(a, 'rev-parse', 'HEAD'));
     expect(sessionIdsOf(git(b, 'show', `HEAD:${INDEX}`))).toEqual(['a1', 'a2', 'b1', 's0']);
     expect(() => git(b, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toThrow();
+    expect(git(b, 'status', '--porcelain')).toBe('');
+    const merged = fs.readFileSync(path.join(b, INDEX), 'utf-8');
+    expect((await session('pull', '--all', '--repo-root', b)).code).toBe(0);
+    expect(fs.readFileSync(path.join(b, INDEX), 'utf-8')).toBe(merged);
   });
 
   it('leaves a merge stopped on the session index for a rerun while another command holds the archive lock', async () => {
@@ -425,6 +429,7 @@ describe('session pull', () => {
     expect(rerun.stdout).toContain('Merged remote sessions and rebuilt 1 conflicted session index(es)');
     expect(() => git(b, 'rev-parse', '-q', '--verify', 'MERGE_HEAD')).toThrow();
     expect(sessionIdsOf(git(b, 'show', `HEAD:${INDEX}`))).toEqual(['a1', 'b1', 's0']);
+    expect(git(b, 'status', '--porcelain')).toBe('');
   });
 });
 
