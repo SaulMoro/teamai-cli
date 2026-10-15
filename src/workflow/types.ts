@@ -177,8 +177,11 @@ export interface RunState {
   definition: WorkflowDefinition;
   /** The sub-workflows the run uses, by name, as they were cached when it started. */
   workflows?: Record<string, WorkflowDefinition>;
-  /** Step instances in declaration order; a sub-workflow's steps follow the step that runs it. */
-  steps: StepState[];
+  /**
+   * Step instances in declaration order; a sub-workflow's steps follow the step that runs it. Never changed in place:
+   * adding or removing an instance assigns a new array, so an index the engine keeps per array never goes stale.
+   */
+  steps: readonly StepState[];
   settledAttempts: string[];
   /** Cumulative settled-attempt count; settledAttempts is bounded at 32 for dedup. */
   settledCount?: number;

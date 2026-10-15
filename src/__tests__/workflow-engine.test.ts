@@ -1128,6 +1128,14 @@ steps:
       error: { code: 'run_unreadable', message: expect.stringContaining('step "label" has an if that does not parse') },
     });
   });
+
+  it('types the id of a step instance as read-only', () => {
+    const rename = (run: RunState): void => {
+      // @ts-expect-error The engine indexes instances by id, so an instance never changes its id.
+      run.steps[0]!.id = 'x';
+    };
+    expect(rename).toBeTypeOf('function');
+  });
 });
 
 /** Writes each workflow file, syncs, and starts `name`. */

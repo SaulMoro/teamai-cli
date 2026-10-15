@@ -21,11 +21,12 @@ export function itemsOf(run: RunState, state: StepState): StepState[] {
 
 /** Adds an instance per item right after the `for_each` step, each after every archived pass of its id. */
 export function addItems(run: RunState, state: StepState, items: unknown[]): void {
-  run.steps.splice(run.steps.indexOf(state) + 1, 0, ...items.map((item, index): StepState => {
+  const at = run.steps.indexOf(state) + 1;
+  run.steps = [...run.steps.slice(0, at), ...items.map((item, index): StepState => {
     const id = `${state.id}[${index}]`;
     const pass = firstPass(run, id);
     return { id, status: 'pending', item, ...(pass > 1 ? { pass } : {}) };
-  }));
+  }), ...run.steps.slice(at)];
 }
 
 function kindOf(value: unknown): string {
@@ -92,9 +93,9 @@ export function afterStanding(after: StepState[]): 'ready' | 'waiting' | 'skip' 
   return after.every((item) => item.status === 'succeeded') ? 'ready' : 'waiting';
 }
 
-/** Whether another item may start: fewer than `maxParallel` items are started and not yet settled. */
-export function roomForItem(items: StepState[], maxParallel: number | undefined): boolean {
-  return maxParallel === undefined || items.filter((item) => item.status === 'leased' || item.status === 'running').length < maxParallel;
+/** How many items are started and not yet settled, which `max_parallel` bounds. */
+export function startedItems(items: StepState[]): number {
+  return items.filter((item) => item.status === 'leased' || item.status === 'running').length;
 }
 
 /**

@@ -4,23 +4,23 @@ import type { LocalConfig } from '../types.js';
 import { loadCachedWorkflow, workflowsRunBy } from './cache.js';
 import {
   evaluateExpression, expressionPaths, isRecord, isTruthy, parseExpression, resolvePath,
-  type Expression, type ExpressionPath, type ExpressionStep,
+  type Expression, type ExpressionPath,
 } from './expression.js';
 import { outputMismatch } from './output.js';
 import { publishRunRecords, queueRunRecord, runRecordState } from './records.js';
 import {
   parseTemplate, renderStrings, renderText, stepExpressions, templatedTexts, templatePaths,
-  type StepExpression, type TemplateContext, type TemplateError,
+  type StepExpression, type TemplateError,
 } from './template.js';
 import { parseStepPath } from './step-path.js';
-import { cancel, fail, lease, release, settled, skip, start, stopped, succeed, VISIBLE_OUTCOMES, type ItemResult, type LeasedStep, type StepState } from './step-state.js';
-import { addItems, afterStanding, expandItems, isItem, itemsAfter, itemsOf, itemsSettled, roomForItem } from './fan-out.js';
-import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, loopSettled, passesOf, previousPass, stepLoops, type StepLoops } from './loop.js';
+import { cancel, fail, lease, release, settled, skip, start, stopped, succeed, type ItemResult, type LeasedStep, type StepState } from './step-state.js';
+import { addItems, afterStanding, expandItems, isItem, itemsAfter, itemsOf, itemsSettled, startedItems } from './fan-out.js';
+import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, loopSettled } from './loop.js';
+import { childScope, contextOf, insertChildren, localId, statesIn, topScope, type Scope } from './scope.js';
 import { generateRunId, isRunId, readRun, runLockPath, writeRun } from './store.js';
 import type {
   CachedWorkflow,
   DriverIdentity,
-  InlineWorkflow,
   OutputSchema,
   RunState,
   RunStatus,
@@ -108,66 +108,8 @@ interface RenderedLease {
   env?: Record<string, string>;
 }
 
-/** A workflow inside a run: the top-level one, or the sub-workflow a step runs. */
-interface Scope {
-  /** What every step path inside it starts with: '' at the top, `<workflow step path>.` inside a sub-workflow. */
-  prefix: string;
-  definition: WorkflowDefinition | InlineWorkflow;
-  inputs: Record<string, unknown> | undefined;
-  /** For an inline workflow: the enclosing workflows' steps, by id, which its own steps hide. */
-  outer?: Record<string, ExpressionStep>;
-  loops: StepLoops;
-  /** The step that runs this workflow, which keeps its round. The top-level workflow keeps its round on the run. */
-  runner?: StepState;
-  /** In the inline workflow of a `for_each` item, at any depth: that item, which its steps read as `item`. */
-  item?: unknown;
-}
-
-function topScope(run: RunState): Scope {
-  return { prefix: '', definition: run.definition, inputs: run.inputs, loops: stepLoops(run.definition.steps) };
-}
-
-/**
- * The scope of the workflow a step runs, or undefined when the run did not keep that workflow.
- * An inline workflow reads the inputs and the steps of the workflow `scope` around it.
- */
-function childScope(run: RunState, scope: Scope, states: StepState[], state: StepState, step: WorkflowStep): Scope | undefined {
-  if (typeof step.workflow === 'object') {
-    return {
-      prefix: `${state.id}.`, definition: step.workflow, inputs: scope.inputs, outer: expressionSteps(scope, states, state),
-      loops: stepLoops(step.workflow.steps), runner: state, ...itemOf(scope, state),
-    };
-  }
-  const definition = step.workflow === undefined ? undefined : run.workflows?.[step.workflow];
-  return definition && { prefix: `${state.id}.`, definition, inputs: state.inputs, loops: stepLoops(definition.steps), runner: state };
-}
-
 function workflowLabel(scope: Scope): string {
   return 'name' in scope.definition ? `workflow "${scope.definition.name}"` : `step "${scope.prefix.slice(0, -1)}" inline workflow`;
-}
-
-/** The step instances directly inside a scope, in declaration order. A `for_each` item such as `build[0]` is not one. */
-function statesIn(run: RunState, scope: Scope): StepState[] {
-  return run.steps.filter((state) => {
-    if (!state.id.startsWith(scope.prefix)) return false;
-    const segments = parseStepPath(state.id.slice(scope.prefix.length));
-    return segments.length === 1 && segments[0]?.index === undefined;
-  });
-}
-
-/** The step id an instance has inside its own workflow. */
-function localId(scope: Scope, state: StepState): string {
-  const [segment] = parseStepPath(state.id.slice(scope.prefix.length));
-  return segment?.id ?? state.id;
-}
-
-function itemOf(scope: Scope, state: StepState | undefined): { item?: unknown } {
-  if (state && isItem(state)) return { item: state.item };
-  return Object.hasOwn(scope, 'item') ? { item: scope.item } : {};
-}
-
-function contextOf(scope: Scope, states: StepState[], reader?: StepState): TemplateContext {
-  return { inputs: scope.inputs, steps: expressionSteps(scope, states, reader), ...itemOf(scope, reader) };
 }
 
 /** The scope and definition of the step instance at `path`, or undefined when the run file does not describe it. */
@@ -376,22 +318,6 @@ function parseReads(run: RunState, scope: Scope): RunReads | string {
 }
 
 /**
- * What expressions in a workflow read as `steps.<id>`: its own step instances, by their id in that workflow,
- * and, in an inline workflow, the enclosing steps its own steps do not hide. For `reader`, a step it reads in the
- * previous pass is that pass.
- */
-function expressionSteps(scope: Scope, states: StepState[], reader?: StepState): Record<string, ExpressionStep> {
-  const previous = reader ? scope.loops.previous(localId(scope, reader)) : new Set<string>();
-  return { ...scope.outer, ...Object.fromEntries(states.map((step) => [localId(scope, step), previous.has(localId(scope, step)) ? previousPass(step) : {
-    ...(settled(step) ? { outcome: VISIBLE_OUTCOMES[step.status] } : {}),
-    ...('end' in step && step.end !== undefined ? { end: step.end } : {}),
-    ...('outputs' in step && step.outputs !== undefined ? { outputs: step.outputs } : {}),
-    ...('results' in step && step.results !== undefined ? { results: step.results } : {}),
-    passes: passesOf(step),
-  }])) };
-}
-
-/**
  * Marks every pending step of a workflow that can no longer run as `skipped`, until nothing changes:
  * a stopped need its `if` does not read, all needs skipped, or a ready step whose `if` is false. A step that waits for a loop is neither skipped
  * nor ready until that loop is settled.
@@ -458,7 +384,7 @@ function startWorkflowStep(run: RunState, scope: Scope, states: StepState[], sta
     const pass = firstPass(run, id);
     return { id, status: 'pending', ...(pass > 1 ? { pass } : {}) };
   });
-  run.steps.splice(run.steps.indexOf(state) + 1, 0, ...steps);
+  insertChildren(run, state, steps);
   return undefined;
 }
 
@@ -556,22 +482,34 @@ function settleItems(
     if (!Array.isArray(after)) return { unreadable: `Run ${run.id} ${after.message}` };
     const dependencies = (index: number): StepState[] => after[index]?.map((other) => items[other]!) ?? [];
     const standing = (index: number): ReturnType<typeof afterStanding> => afterStanding(dependencies(index));
+    const dependents: number[][] = items.map(() => []);
+    after.forEach((others, index) => others.forEach((other) => dependents[other]!.push(index)));
+    const maxParallel = definition.forEach?.maxParallel;
+    let started = startedItems(items);
     let changed = false;
     let candidate: Settled | undefined;
     for (const [index, item] of items.entries()) {
       if (item.status === 'pending' && standing(index) === 'skip') {
-        skip(item, run.revision);
+        // A skip makes the items after it skippable wherever they are in item order, so it reaches them all now.
+        const skippable = [index];
+        for (const next of skippable) {
+          if (items[next]!.status !== 'pending' || standing(next) !== 'skip') continue;
+          skip(items[next]!, run.revision);
+          skippable.push(...dependents[next]!);
+        }
         changed = true;
-        break;
+        continue;
       }
-      if (item.status !== 'running' && (item.status !== 'pending' || standing(index) !== 'ready' || !roomForItem(items, definition.forEach?.maxParallel))) continue;
+      if (item.status !== 'running' && (item.status !== 'pending' || standing(index) !== 'ready' || (maxParallel !== undefined && started >= maxParallel))) continue;
       const advanced = advanceInstance(run, scope, states, item, definition);
       if (advanced && 'unreadable' in advanced) return advanced;
       if (advanced && 'lease' in advanced) candidate ??= advanced;
       if (advanced) continue;
       changed = true;
-      // Starting an item changes no other item's standing, so the scan goes on; settling one can, so it starts over.
+      // Starting an item changes no other item's standing, so the scan goes on. Settling one can make an earlier item
+      // ready, so the scan starts over.
       if (item.status !== 'running') break;
+      started += 1;
     }
     if (changed) continue;
     if (items.every(settled)) return itemsSettled(items, run.revision);

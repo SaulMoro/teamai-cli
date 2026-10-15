@@ -218,12 +218,12 @@ export function decideRound(
 
 /** Moves the instances under a step, those of the workflow it ran, from the run's steps to its archive, with every pass they had. */
 export function archiveUnder(run: RunState, path: string): void {
-  const under = run.steps.filter((state) => state.id.startsWith(`${path}.`) || state.id.startsWith(`${path}[`));
-  for (const state of under) {
+  const isUnder = (state: StepState): boolean => state.id.startsWith(`${path}.`) || state.id.startsWith(`${path}[`);
+  for (const state of run.steps.filter(isUnder)) {
     const current = passOf(state);
     for (const pass of [...state.passes ?? [], ...(current ? [current] : [])]) (run.archive ??= []).push({ step: state.id, ...pass });
   }
-  for (let index = run.steps.length - 1; index >= 0; index -= 1) if (under.includes(run.steps[index]!)) run.steps.splice(index, 1);
+  run.steps = run.steps.filter((state) => !isUnder(state));
 }
 
 /** The pass a new instance at `path` starts at: after every pass the archive holds for that path, so a pass id is never reused. */

@@ -96,7 +96,9 @@ export const StepStateSchema = z.discriminatedUnion('status', [
   StepBaseSchema.extend({ status: z.literal('skipped'), settledAt: z.number().int().default(0) }),
   StepBaseSchema.extend({ status: z.literal('cancelled'), settledAt: z.number().int().default(0), attempt: z.string().optional(), failure: FailureSchema }),
 ]);
-export type StepState = z.infer<typeof StepStateSchema>;
+type ReadonlyId<T> = T extends unknown ? Omit<T, 'id'> & { readonly id: string } : never;
+/** A step instance's `id` is read-only: the engine indexes instances by it, and every transition keeps it. */
+export type StepState = ReadonlyId<z.infer<typeof StepStateSchema>>;
 type StepStatus = StepState['status'];
 
 type StepIn<S extends StepStatus> = Extract<StepState, { status: S }>;
