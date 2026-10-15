@@ -491,6 +491,35 @@ describe('step loops', () => {
     ]);
   });
 
+  it('lets a step read a step after it in the same loop, in the previous pass, and no other step after it', () => {
+    expect(parse(REVIEW_AND_FIX.replace("    command: node review.js\n", "    if: steps.fix.outcome != 'failed'\n    command: node review.js\n")).ok).toBe(true);
+    expect(rejected(`schemaVersion: v1alpha1
+name: build
+description: Two checks between a build and a gate that loops.
+steps:
+  - id: build
+    command: node build.js
+  - id: unit
+    needs: [build]
+    if: steps.lint.outcome == 'success'
+    command: node unit.js
+  - id: lint
+    needs: [build]
+    command: node lint.js
+  - id: gate
+    needs: [unit, lint]
+    command: node gate.js
+    loop: { back_to: build, max_iterations: 2 }
+  - id: docs
+    needs: []
+    if: steps.gate.outcome == 'success'
+    command: node docs.js
+`)).toEqual([
+      { message: `${FILE}:9: field "steps[1].if": step "unit" if reads steps.lint, which is not a step it needs, directly or through its needs` },
+      { message: `${FILE}:20: field "steps[4].if": step "docs" if reads steps.gate, which is not a step it needs, directly or through its needs` },
+    ]);
+  });
+
   it('rejects two loops that wait for each other through the steps they need', () => {
     expect(rejected(`schemaVersion: v1alpha1
 name: build

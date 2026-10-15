@@ -11,7 +11,7 @@ import { noteRunRecord, runRecordState } from './records.js';
 import { parseTemplate, renderStrings, renderText, templatedTexts, templatePaths, type TemplateContext, type TemplateError } from './template.js';
 import { parseStepPath } from './step-path.js';
 import { cancel, fail, lease, release, settled, skip, start, stopped, succeed, type LeasedStep, type StepState } from './step-state.js';
-import { decideStepLoop, exhaustedAtStart, firstPass, loopSettled, passesOf, stepLoops, type StepLoops } from './loop.js';
+import { decideStepLoop, exhaustedAtStart, firstPass, loopSettled, passesOf, previousPass, stepLoops, type StepLoops } from './loop.js';
 import { generateRunId, isRunId, readRun, runLockPath, writeRun } from './store.js';
 import type {
   CachedWorkflow,
@@ -125,7 +125,7 @@ function topScope(run: RunState): Scope {
  */
 function childScope(run: RunState, scope: Scope, states: StepState[], state: StepState, step: WorkflowStep): Scope | undefined {
   if (typeof step.workflow === 'object') {
-    return { prefix: `${state.id}.`, definition: step.workflow, inputs: scope.inputs, outer: expressionSteps(scope, states), loops: stepLoops(step.workflow.steps) };
+    return { prefix: `${state.id}.`, definition: step.workflow, inputs: scope.inputs, outer: expressionSteps(scope, states, state), loops: stepLoops(step.workflow.steps) };
   }
   const definition = step.workflow === undefined ? undefined : run.workflows?.[step.workflow];
   return definition && { prefix: `${state.id}.`, definition, inputs: state.inputs, loops: stepLoops(definition.steps) };
@@ -174,7 +174,7 @@ function withTemplateFailure(state: StepState, error: TemplateError): WorkflowFa
  * Pull rejects a template that does not parse, so a failure here means the run file was changed.
  */
 function renderLease(scope: Scope, states: StepState[], state: StepState, definition: WorkflowStep): RenderedLease | WorkflowFailure {
-  const context: TemplateContext = { inputs: scope.inputs, steps: expressionSteps(scope, states) };
+  const context: TemplateContext = { inputs: scope.inputs, steps: expressionSteps(scope, states, state) };
   // A prompt step's `with` renders first, by the same rules as a workflow step's; its prompt reads it as `with.<name>`.
   if (definition.with !== undefined) {
     const values = renderStrings(definition.with, context);
@@ -319,7 +319,9 @@ function parseReads(run: RunState, scope: Scope): RunReads | string {
     }
     // A template that does not parse reads nothing; the step fails when it would be leased.
     // An inline workflow's reads of enclosing steps settled before it started, so only its own steps are waited for.
-    const read = new Set([...readsOf(step)].filter((id) => !scope.outer || own.has(id)));
+    // A read of a step's previous pass never waits.
+    const previous = scope.loops.previous(step.id);
+    const read = new Set([...readsOf(step)].filter((id) => (!scope.outer || own.has(id)) && !previous.has(id)));
     reads.set(step.id, read);
     waits.set(step.id, scope.loops.waitsFor(step.id, read));
   }
@@ -337,10 +339,12 @@ const VISIBLE_OUTCOMES: Partial<Record<StepState['status'], VisibleOutcome>> ={ 
 
 /**
  * What expressions in a workflow read as `steps.<id>`: its own step instances, by their id in that workflow,
- * and, in an inline workflow, the enclosing steps its own steps do not hide.
+ * and, in an inline workflow, the enclosing steps its own steps do not hide. For `reader`, a step it reads in the
+ * previous pass is that pass.
  */
-function expressionSteps(scope: Scope, states: StepState[]): Record<string, ExpressionStep> {
-  return { ...scope.outer, ...Object.fromEntries(states.map((step) => [localId(scope, step), {
+function expressionSteps(scope: Scope, states: StepState[], reader?: StepState): Record<string, ExpressionStep> {
+  const previous = reader ? scope.loops.previous(localId(scope, reader)) : new Set<string>();
+  return { ...scope.outer, ...Object.fromEntries(states.map((step) => [localId(scope, step), previous.has(localId(scope, step)) ? previousPass(step) : {
     ...(VISIBLE_OUTCOMES[step.status] ? { outcome: VISIBLE_OUTCOMES[step.status] } : {}),
     ...('end' in step && step.end !== undefined ? { end: step.end } : {}),
     ...('outputs' in step && step.outputs !== undefined ? { outputs: step.outputs } : {}),
@@ -367,7 +371,7 @@ function skipUnreachable(scope: Scope, states: StepState[], { conditions, reads,
       if (step.status !== 'pending' || waiting(step)) continue;
       const condition = conditions.get(localId(scope, step));
       const conditionFalse = (): boolean => !!condition && ready(step)
-        && !isTruthy(evaluateExpression(condition, { inputs: scope.inputs, steps: expressionSteps(scope, states) }));
+        && !isTruthy(evaluateExpression(condition, { inputs: scope.inputs, steps: expressionSteps(scope, states, step) }));
       if (!mustSkip(needs(step), condition, (need) => localId(scope, need)) && !conditionFalse()) continue;
       skip(step);
       changed = true;
@@ -404,7 +408,7 @@ function startWorkflowStep(run: RunState, scope: Scope, states: StepState[], sta
   // An inline workflow takes no `with`: it already reads the enclosing inputs.
   let inputs: Record<string, unknown> | undefined;
   if ('name' in child.definition) {
-    const rendered = renderStrings(step.with ?? {}, { inputs: scope.inputs, steps: expressionSteps(scope, states) });
+    const rendered = renderStrings(step.with ?? {}, { inputs: scope.inputs, steps: expressionSteps(scope, states, state) });
     if (!rendered.ok) return withTemplateFailure(state, rendered.error);
     const mismatch = inputsMismatch(child.definition.name, child.definition.inputs, rendered.value);
     if (mismatch) return { code: 'invalid_inputs', message: `step "${state.id}" with does not fit workflow "${child.definition.name}": ${mismatch}` };
@@ -492,7 +496,7 @@ function settleScope(run: RunState, scope: Scope, advancing: boolean): Settled {
       const loop = definitionOf(state)?.loop;
       if (!loop || state.status !== 'succeeded' || state.loopFinal) continue;
       const condition = reads.whiles.get(localId(scope, state));
-      const holds = !condition || isTruthy(evaluateExpression(condition, { inputs: scope.inputs, steps: expressionSteps(scope, states) }));
+      const holds = !condition || isTruthy(evaluateExpression(condition, { inputs: scope.inputs, steps: expressionSteps(scope, states, state) }));
       const range = scope.loops.ranges.get(localId(scope, state)) ?? new Set();
       decideStepLoop(run, state, loop, holds, states.filter((item) => range.has(localId(scope, item))));
       changed = true;

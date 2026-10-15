@@ -3,6 +3,7 @@ import { evaluateExpression, expressionPaths, fieldsText, isTruthy, schemaAt, st
 import {
   isYamlNode, locate, position, scalarString, undeclaredField, undeclaredOutput, type Child, type GraphNode, type ParseContext,
 } from './parse-context.js';
+import { ancestors, stepLoops } from './loop.js';
 import type { EndOutcome, OutputSchema, WorkflowDiagnostic, WorkflowStep } from './types.js';
 
 export interface ConditionNode {
@@ -63,9 +64,13 @@ export interface ReadSite {
   code?: WorkflowDiagnostic['code'];
 }
 
-/** What a workflow lets a step read: its ancestors through `needs`, the output each step declares, and the declared inputs. */
+/**
+ * What a workflow lets a step read: its ancestors through `needs`, the steps after it in its own loop's range in their
+ * previous pass, the output each step declares, and the declared inputs.
+ */
 export interface ReadScope {
   ancestors: (id: string) => Set<string>;
+  previous: (id: string) => Set<string>;
   outputs: Map<string, OutputSchema | undefined>;
   /** Undefined when the inputs header is malformed, so `inputs.…` reads are not checked. */
   inputs?: OutputSchema;
@@ -81,16 +86,8 @@ export function readScope(
 ): ReadScope {
   return {
     children,
-    ancestors: (id) => {
-      const found = new Set<string>();
-      const pending = [...(needs.get(id) ?? [])];
-      for (let need = pending.pop(); need !== undefined; need = pending.pop()) {
-        if (found.has(need)) continue;
-        found.add(need);
-        pending.push(...(needs.get(need) ?? []));
-      }
-      return found;
-    },
+    ancestors: (id) => ancestors(needs, id),
+    previous: stepLoops(steps).previous,
     outputs: new Map(steps.map((step) => [step.id, step.output])),
     ...(inputs ? { inputs: { type: 'object', fields: inputs } } : {}),
   };
@@ -106,7 +103,9 @@ export function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScop
     const at = (message: string): WorkflowDiagnostic => ({
       file, ...site.at, field: site.field, message, ...(site.code ? { code: site.code } : {}),
     });
-    const readable = new Set([...scope.ancestors(site.id), ...(site.afterRun && site.reader === undefined ? [site.id] : [])]);
+    const readable = new Set([
+      ...scope.ancestors(site.id), ...scope.previous(site.id), ...(site.afterRun && site.reader === undefined ? [site.id] : []),
+    ]);
     const reader = site.reader ?? site.id;
     const reported = new Set<string>();
     for (const path of site.paths) {

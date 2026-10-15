@@ -2360,6 +2360,7 @@ interface LoopLease {
   revision: number;
   pass: number;
   prompt?: string;
+  env?: Record<string, string>;
 }
 
 /**
@@ -2468,6 +2469,57 @@ describe('step loops', () => {
       { id: 'accept', status: 'succeeded' },
       { id: 'drop', status: 'skipped' },
     ] });
+  });
+
+  it('hands plan the note of the previous decision, and nothing on the first pass', async () => {
+    const planChange = PLAN_CHANGE.replace('    command: node plan.js\n', '    command: node plan.js\n    env:\n      NOTE: "{{ steps.decide.outputs.note }}"\n');
+    const { config, runId } = await startTree({ 'plan-change': planChange }, 'plan-change');
+    const notes: Array<string | undefined> = [];
+    const answer = decisions('revise', 'revise', 'build');
+
+    const { leased, done } = await driveLoop(config, runId, (lease, earlier) => {
+      if (lease.step === 'plan') notes.push(lease.env?.NOTE);
+      return answer(lease, earlier);
+    });
+
+    expect(leased).toEqual(['plan#1', 'decide#1', 'plan#2', 'decide#2', 'plan#3', 'decide#3']);
+    expect(notes).toEqual(['', 'note 1', 'note 2']);
+    expect(done).toMatchObject({ outcome: 'succeeded', end: 'planned' });
+  });
+
+  it('keeps an inner loop closed when the step it reads in the previous pass settles later, and reads that pass next time', async () => {
+    const reopen = workflow('reopen', `  - id: A
+    command: node a.js
+  - id: W
+    needs: [A]
+    workflow:
+      steps:
+        - id: p
+          command: node p.js
+        - id: q
+          needs: [p]
+          command: node q.js
+          loop: { back_to: p, while: "steps.C.outputs.again && length(steps.q.passes) < 2", max_iterations: 3 }
+  - id: C
+    needs: [W]
+    command: node c.js
+    output:
+      again: boolean
+  - id: D
+    needs: [C]
+    command: node d.js
+    output:
+      more: boolean
+    loop: { back_to: A, while: steps.D.outputs.more, max_iterations: 2 }
+`);
+    const { config, runId } = await startTree({ reopen }, 'reopen');
+
+    const { leased, done } = await driveLoop(config, runId, (lease, earlier) => (lease.step === 'C'
+      ? { outputs: { again: earlier === 0 } }
+      : lease.step === 'D' ? { outputs: { more: earlier === 0 } } : {}));
+
+    expect(leased).toEqual(['A#1', 'W.p#1', 'W.q#1', 'C#1', 'D#1', 'A#2', 'W.p#2', 'W.q#2', 'W.p#3', 'W.q#3', 'C#2', 'D#2']);
+    expect(done).toMatchObject({ outcome: 'succeeded' });
   });
 
   it('fails decide with loop_exhausted when the last pass still asks for a revision, keeping that answer', async () => {

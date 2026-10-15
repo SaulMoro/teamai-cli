@@ -2,8 +2,8 @@
  * Step loops. A step with `loop` runs its range again after it succeeds: `back_to`, the step, and every step between
  * them. These rules are shared by pull, which rejects loops a run could not settle, and by the engine, which settles them.
  */
-import type { ExpressionPass } from './expression.js';
-import { endLoop, exhaust, passOf, repend, type StepState } from './step-state.js';
+import type { ExpressionPass, ExpressionStep } from './expression.js';
+import { endLoop, exhaust, passOf, repend, type StepPass, type StepState } from './step-state.js';
 import type { RunState, StepLoop, WorkflowFailure, WorkflowStep } from './types.js';
 
 type LoopStep = Pick<WorkflowStep, 'id' | 'needs' | 'loop' | 'end'>;
@@ -14,6 +14,11 @@ export interface StepLoops {
   ranges: Map<string, Set<string>>;
   /** The loop owners a step waits for besides what it needs and reads: the loops outside whose range it needs or reads a step inside it. */
   waitsFor(id: string, reads: Iterable<string>): string[];
+  /**
+   * The steps a step reads in their previous pass: those in its own range that need it, directly or not. Such a read
+   * sees the target's latest archived pass, nothing on pass 1, and never waits.
+   */
+  previous(id: string): Set<string>;
 }
 
 /** A step loop pull rejects, at the key of the step it is reported on. */
@@ -24,7 +29,7 @@ export interface LoopProblem {
 }
 
 /** The ids `id` needs, directly or through their needs. */
-function ancestors(needs: Map<string, string[]>, id: string): Set<string> {
+export function ancestors(needs: Map<string, string[]>, id: string): Set<string> {
   const found = new Set<string>();
   const pending = [...needs.get(id) ?? []];
   for (let need = pending.pop(); need !== undefined; need = pending.pop()) {
@@ -49,6 +54,10 @@ export function stepLoops(steps: LoopStep[]): StepLoops {
     waitsFor: (id, reads) => {
       const used = [...needs.get(id) ?? [], ...reads];
       return [...ranges].filter(([, range]) => !range.has(id) && used.some((read) => range.has(read))).map(([owner]) => owner);
+    },
+    previous: (id) => {
+      const range = [...ranges.values()].find((members) => members.has(id)) ?? [];
+      return new Set([...range].filter((member) => ancestors(needs, member).has(id)));
     },
   };
 }
@@ -177,10 +186,21 @@ export function firstPass(run: RunState, path: string): number {
   return 1 + Math.max(0, ...(run.archive ?? []).filter((entry) => entry.step === path).map((entry) => entry.pass));
 }
 
+function expressionPasses(passes: StepPass[]): ExpressionPass[] {
+  return passes.map(({ pass, outcome, outputs, end }) => ({
+    pass, outcome, ...(outputs !== undefined ? { outputs } : {}), ...(end !== undefined ? { end } : {}),
+  }));
+}
+
 /** `steps.<id>.passes`: the passes a loop archived on the instance, then its current pass once it settled. */
 export function passesOf(state: StepState): ExpressionPass[] {
   const current = passOf(state);
-  return [...state.passes ?? [], ...(current ? [current] : [])].map(({ pass, outcome, outputs, end }) => ({
-    pass, outcome, ...(outputs !== undefined ? { outputs } : {}), ...(end !== undefined ? { end } : {}),
-  }));
+  return expressionPasses([...state.passes ?? [], ...(current ? [current] : [])]);
+}
+
+/** What a previous-pass read of a step sees: its latest archived pass, nothing of a pass on pass 1, and the archived passes. */
+export function previousPass(state: StepState): ExpressionStep {
+  const passes = expressionPasses(state.passes ?? []);
+  const { pass: _pass, ...latest } = passes.at(-1) ?? {};
+  return { ...latest, passes };
 }
