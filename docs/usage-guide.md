@@ -12,6 +12,7 @@ Start with [Getting Started](guide/getting-started.md): set up a team, join one,
 - [Distribution mechanism](guide/distribution.md) — scope, repo, roles, projects, tags, and subscriptions
 - [Core Harness](guide/sharing.md) — skills, rules, env, agents, hooks, MCP, models, and packages
 - [Workflows](guide/workflow.md) — command steps in `workflows/*.yaml`: pull, start, next, and report
+- [Advanced workflows](guide/workflow-advanced.md) — parallel steps, ends that cancel open steps, and the expression reference
 - [Team Context](guide/knowledge.md) — learnings, the codebase graph, teamwiki, and CI
 - [Team Culture](guide/team-culture.md) — Company and team culture injected into every agent
 - [Dashboard](guide/dashboard.md) — Local dashboard and session save

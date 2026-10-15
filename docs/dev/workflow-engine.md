@@ -1,6 +1,6 @@
 # Workflow engine
 
-Maintainer notes on `src/workflow/`. The workflow file format and the driver contract are in the [Workflows](../guide/workflow.md) guide page.
+Maintainer notes on `src/workflow/`. The workflow file format and the driver contract are in the [Workflows](../guide/workflow.md) and [Advanced workflows](../guide/workflow-advanced.md) guide pages.
 
 Each rule below spans more than one file. The rule names the code that owns it, so you can read the details there.
 
