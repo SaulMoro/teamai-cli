@@ -25,6 +25,7 @@ describe('workflow templates', () => {
     ['a missing path as empty text', '[{{ steps.lint.outputs.report }}]', '[]'],
     ['an outcome', '{{ steps.lint.outcome }}', 'skipped'],
     ['an array element', '{{ inputs.labels[1] }} {{ steps.plan.outputs.task.files[0] }}', 'p1 a.ts'],
+    ['a function call as written', '{{ length(inputs.labels) }}', '{{ length(inputs.labels) }}'],
     ['other braces as written', '${{ secrets.TOKEN }} {{ name }} {{ env.HOME }} {{inputs}}', '${{ secrets.TOKEN }} {{ name }} {{ env.HOME }} {{inputs}}'],
   ])('renders %s', (_case, text, rendered) => {
     expect(renderText(template(text), context)).toBe(rendered);
@@ -43,6 +44,7 @@ describe('workflow templates', () => {
 
   it.each([
     ['{{ inputs.issue == 1 }}', 'a template reads one path'],
+    ['{{ inputs.issue < 1 }}', 'a template reads one path'],
     ['{{ steps.plan }}', '"steps.plan" must read steps.<id>.outcome, steps.<id>.end or steps.<id>.outputs'],
     ['{{ inputs.a b }}', 'unexpected "b"'],
     ['{{ inputs.labels[-1] }}', '"[-1]" is not an index; write a whole number from 0, such as [0]'],

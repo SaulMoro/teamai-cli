@@ -1,10 +1,10 @@
 import { isMap, isScalar, isSeq, LineCounter, parseDocument, type Node, type YAMLMap } from 'yaml';
-import { fieldsText, parseExpression, type ExpressionPath } from './expression.js';
+import { fieldsText, parseExpression, schemaAt, type ExpressionPath } from './expression.js';
 import { findTemplate, parseTemplate, templatedTexts, templatePaths, templateWithPaths, type Template } from './template.js';
 import type { EndOutcome, InlineWorkflow, OutputSchema, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
 import { STEP_ACTIONS } from './types.js';
 import {
-  declaresField, isYamlNode, locate, position, scalarString, undeclaredOutput,
+  isYamlNode, locate, position, scalarString, undeclaredOutput,
   type Child, type GraphNode, type ParseContext, type WorkflowFiles,
 } from './parse-context.js';
 import { conditionDiagnostics, endDiagnostics, readDiagnostics, readScope, splitReads, type ConditionNode, type Ending, type ReadSite } from './reads.js';
@@ -614,7 +614,7 @@ function outputDiagnostics(
       continue;
     }
     const output = steps.find((step) => step.id === path.step)?.output;
-    if (path.field === 'outputs' && output && !declaresField(output, path.fields)) {
+    if (path.field === 'outputs' && output && !schemaAt(output, path.fields)) {
       diagnostics.push(at(`reads steps.${path.step}.outputs${fieldsText(path.fields)}, which is not in the output step "${path.step}" declares`));
     }
   }

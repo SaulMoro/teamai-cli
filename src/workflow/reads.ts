@@ -1,6 +1,6 @@
 import { isMap, type Node } from 'yaml';
-import { evaluateExpression, expressionPaths, fieldsText, isTruthy, type Expression, type ExpressionPath } from './expression.js';
-import { declaresField, isYamlNode, locate, position, scalarString, undeclaredOutput, type Child, type GraphNode, type ParseContext } from './parse-context.js';
+import { evaluateExpression, expressionPaths, fieldsText, isTruthy, schemaAt, typeProblems, type Expression, type ExpressionPath } from './expression.js';
+import { isYamlNode, locate, position, scalarString, undeclaredOutput, type Child, type GraphNode, type ParseContext } from './parse-context.js';
 import type { EndOutcome, OutputSchema, WorkflowDiagnostic, WorkflowStep } from './types.js';
 
 export interface ConditionNode {
@@ -22,7 +22,10 @@ export function conditionDiagnostics({ file, lineCounter }: ParseContext, condit
       });
       continue;
     }
-    reads.push({ id: condition.id, field: condition.field, at: position(lineCounter, condition.node), what: 'if', paths, ends: endComparisons(condition.expression) });
+    reads.push({
+      id: condition.id, field: condition.field, at: position(lineCounter, condition.node), what: 'if', paths,
+      ends: endComparisons(condition.expression), expression: condition.expression,
+    });
   }
   return diagnostics;
 }
@@ -40,6 +43,8 @@ export interface ReadSite {
   paths: ExpressionPath[];
   /** The names an `if` compares a step's end with. */
   ends?: Array<{ step: string; end: string }>;
+  /** The `if` itself, whose comparisons and lists are checked against the types its paths declare. */
+  expression?: Expression;
   code?: WorkflowDiagnostic['code'];
 }
 
@@ -91,7 +96,7 @@ export function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScop
     const reported = new Set<string>();
     for (const path of site.paths) {
       if (path.root === 'inputs') {
-        if (scope.inputs && !declaresField(scope.inputs, path.fields)) {
+        if (scope.inputs && !schemaAt(scope.inputs, path.fields)) {
           diagnostics.push(at(`step "${reader}" ${site.what} reads inputs${fieldsText(path.fields)}, which is not an input the workflow declares`));
         }
         continue;
@@ -111,9 +116,14 @@ export function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScop
         continue;
       }
       const output = scope.outputs.get(path.step);
-      if (path.field === 'outputs' && output && !declaresField(output, path.fields)) {
+      if (path.field === 'outputs' && output && !schemaAt(output, path.fields)) {
         diagnostics.push(at(`step "${reader}" ${site.what} reads steps.${path.step}.outputs${fieldsText(path.fields)}, which is not in the output step "${path.step}" declares`));
       }
+    }
+    if (site.expression) {
+      // A path this site does not list reads an enclosing workflow, which checks its type.
+      const schemaOf = (path: ExpressionPath): OutputSchema | undefined => (site.paths.includes(path) ? declaredSchema(scope, readable, path) : undefined);
+      for (const problem of typeProblems(site.expression, schemaOf)) diagnostics.push(at(`step "${reader}" ${site.what} ${problem.message}`));
     }
     for (const { step, end } of site.ends ?? []) {
       const child = readable.has(step) ? scope.children.get(step) : undefined;
@@ -125,6 +135,15 @@ export function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScop
     }
   }
   return diagnostics;
+}
+
+function declaredSchema(scope: ReadScope, readable: Set<string>, path: ExpressionPath): OutputSchema | undefined {
+  if (path.root === 'inputs') return scope.inputs && schemaAt(scope.inputs, path.fields);
+  if (!readable.has(path.step)) return undefined;
+  // outcome and end are names.
+  if (path.field !== 'outputs') return { type: 'string' };
+  const output = scope.outputs.get(path.step);
+  return output && schemaAt(output, path.fields);
 }
 
 /**
@@ -146,6 +165,7 @@ export function splitReads(sites: ReadSite[], ids: Set<string> | undefined): { l
 /** The names an expression compares a step's end with, as in `steps.check.end == 'ready'`. */
 function endComparisons(expression: Expression): Array<{ step: string; end: string }> {
   if (expression.kind === 'not') return endComparisons(expression.operand);
+  if (expression.kind === 'call') return [...endComparisons(expression.list), ...(expression.name === 'length' ? [] : endComparisons(expression.predicate))];
   if (expression.kind !== 'binary') return [];
   if (expression.operator === '&&' || expression.operator === '||') {
     return [...endComparisons(expression.left), ...endComparisons(expression.right)];

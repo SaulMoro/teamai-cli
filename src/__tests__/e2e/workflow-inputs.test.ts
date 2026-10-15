@@ -90,4 +90,36 @@ steps:
     expect(fs.readFileSync(path.join(repo, 'title.txt'), 'utf8')).toBe('$(touch pwned)');
     expect(fs.existsSync(path.join(repo, 'pwned'))).toBe(false);
   });
+
+  it('runs a step whose if reads an array element, compares numbers and calls any, and skips one that calls length', async () => {
+    const init = await runCLI(['init', '--self', '--agent', 'claude', '--force'], repo);
+    expect(init.code, `${init.stdout}\n${init.stderr}`).toBe(0);
+
+    const workflows = path.join(repo, '.teamai', 'workflows');
+    fs.mkdirSync(workflows, { recursive: true });
+    fs.writeFileSync(path.join(workflows, 'triage.yaml'), `schemaVersion: v1alpha1
+name: triage
+description: Label the first issue when it is small and another issue is large.
+inputs:
+  issues: [{ title: string, size: number }]
+steps:
+  - id: label
+    if: inputs.issues[0].size < 10 && any(inputs.issues, .size >= 100)
+    command: node -e "require('fs').writeFileSync('label.txt', process.env.TITLE)"
+    env:
+      TITLE: "{{ inputs.issues[0].title }}"
+  - id: many
+    needs: []
+    if: length(inputs.issues) > 2
+    command: node -e "require('fs').writeFileSync('many.txt', 'ran')"
+`);
+    const pulled = await runCLI(['pull'], repo);
+    expect(pulled.code, `${pulled.stdout}\n${pulled.stderr}`).toBe(0);
+
+    const started = await runCLI(['workflow', 'start', 'triage', '--driver', 'local', '--inputs', '{"issues":[{"title":"typo","size":3},{"title":"rewrite","size":400}]}'], repo);
+    expect(started.code, `${started.stdout}\n${started.stderr}`).toBe(0);
+    expect(envelope(started.stdout)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(fs.readFileSync(path.join(repo, 'label.txt'), 'utf8')).toBe('typo');
+    expect(fs.existsSync(path.join(repo, 'many.txt'))).toBe(false);
+  });
 });

@@ -1,8 +1,8 @@
 /** The YAML and diagnostic helpers parse.ts and reads.ts share, kept apart so neither imports the other. */
 
 import { isScalar, type LineCounter, type Node } from 'yaml';
-import { fieldsText, type ExpressionPath, type PathField } from './expression.js';
-import type { EndOutcome, OutputSchema, WorkflowDefinition, WorkflowDiagnostic } from './types.js';
+import { fieldsText, type ExpressionPath } from './expression.js';
+import type { EndOutcome, WorkflowDefinition, WorkflowDiagnostic } from './types.js';
 
 export function isYamlNode(value: unknown): value is Node {
   return !!value && typeof value === 'object' && 'range' in value;
@@ -62,21 +62,6 @@ export interface GraphNode {
   field: string;
   needs: string[];
   node: Node;
-}
-
-/** Whether `fields` names a value inside `schema`. A name reads an object field, and an index reads the items of an array. */
-export function declaresField(schema: OutputSchema, fields: PathField[]): boolean {
-  let current = schema;
-  for (const field of fields) {
-    if (typeof field === 'number') {
-      if (current.type !== 'array') return false;
-      current = current.items;
-    } else {
-      if (current.type !== 'object' || !Object.hasOwn(current.fields, field)) return false;
-      current = current.fields[field]!;
-    }
-  }
-  return true;
 }
 
 export function position(lineCounter: LineCounter, node: Node | null | undefined): { line: number; column: number } {

@@ -841,6 +841,40 @@ steps:
     expect(leased).toEqual(['build', 'docs', 'late', 'deploy']);
   });
 
+  it('compares numbers and runs a predicate over a list, and waits for every step a predicate reads', async () => {
+    // gate is skipped as soon as build fails, while late is still pending; deploy reads late only inside its predicate.
+    const { config, runId } = await startBuild(graph(`  - id: build
+    command: node build.js
+  - id: docs
+    needs: []
+    command: node docs.js
+    output:
+      pages: [{ size: number }]
+  - id: gate
+    needs: [build, late]
+    command: node gate.js
+  - id: deploy
+    needs: [gate, docs]
+    if: length(steps.docs.outputs.pages) == 2 && steps.docs.outputs.pages[0].size < 10 && any(steps.docs.outputs.pages, .size > 10 && steps.late.outcome == 'success')
+    command: node deploy.js
+  - id: late
+    needs: []
+    command: node late.js
+`));
+    const leased: string[] = [];
+    for (;;) {
+      const next = await leaseNext(config, runId, driverA);
+      if ('error' in next) throw new Error(next.error.message);
+      if (next.data.done) break;
+      const lease = next.data.lease as { step: string; attempt: string; revision: number };
+      leased.push(lease.step);
+      const outputs = lease.step === 'docs' ? { pages: [{ size: 5 }, { size: 50 }] } : undefined;
+      await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: lease.step === 'build' ? 'failed' : 'success', ...(outputs ? { outputs } : {}), driver: driverA });
+    }
+
+    expect(leased).toEqual(['build', 'docs', 'late', 'deploy']);
+  });
+
   it('evaluates an if against the run inputs', async () => {
     const fixture = testConfig();
     fs.writeFileSync(path.join(fixture.config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: build

@@ -70,6 +70,33 @@ describe('workflow expressions', () => {
     ['steps.review.outputs.meta[0] == null', true],
     ['steps.review.outputs.matrix[1][0] == 3', true],
     ["steps.review.outputs.files[0].path == 'a.ts'", true],
+    ['steps.review.outputs.count < 1', true],
+    ['steps.review.outputs.count <= 0', true],
+    ['steps.review.outputs.count > 0', false],
+    ['steps.review.outputs.count >= 0', true],
+    ['1.5 > 1', true],
+    ['steps.review.outputs.verdict < 1', false],
+    ['steps.review.outputs.verdict >= 1', false],
+    ['inputs.missing < 1', false],
+    ['1 < 2 == true', true],
+    ["!steps.check.outcome == 'success'", true],
+    ['length(steps.review.outputs.tags) == 2', true],
+    ["any(steps.review.outputs.files, .path == 'a.ts')", true],
+    ["all(steps.review.outputs.tags, . != 'c')", true],
+    ["filter(steps.review.outputs.tags, . == 'z') == []", true],
+    ["length(filter(steps.review.outputs.tags, . != 'a')) == 1", true],
+    ['any([], . == 1)', false],
+    ['all([], . == 1)', true],
+    ['filter([], true) == []', true],
+    ['filter(steps.review.outputs.tags, 1) == steps.copy.outputs.tags', true],
+    ['length(steps.review.outputs.verdict) == null', true],
+    ['any(steps.review.outputs.meta, true) == null', true],
+    ['all(inputs.missing, true) == null', true],
+    ['filter(steps.review.outputs.count, true) == null', true],
+    ['any(steps.review.outputs.matrix, any(., . == 4))', true],
+    ['all(steps.review.outputs.matrix, length(.) == 2)', true],
+    ['any(steps.review.outputs.matrix, .[1] == 4)', true],
+    ['any(steps.review.outputs.tags, . == steps.copy.outputs.tags[1])', true],
   ])('evaluates %s to %s', (source, expected) => {
     expect(evaluate(source)).toBe(expected);
   });
@@ -83,10 +110,32 @@ describe('workflow expressions', () => {
     ['(true', 6, 'expected ")", found the end of the expression'],
     ['true false', 6, 'unexpected "false"'],
     ["1 == 1 == 1", 8, 'unexpected "=="'],
+    ['1 < 2 < 3', 7, 'unexpected "<"'],
+    ["steps.review.outputs.count < '3'", 30, "compares '3' with <, but it is not a number"],
+    ['inputs.n > null', 12, 'compares null with >, but it is not a number'],
+    ['true >= 1', 1, 'compares true with >=, but it is not a number'],
+    ["'it''s' < 3", 1, "compares 'it''s' with <, but it is not a number"],
+    ["true 'it''s'", 6, "unexpected 'it''s'"],
+    ['inputs.n < .5', 12, 'numbers need a leading digit, as in 0.5'],
+    ['any(inputs.xs, . < .5)', 20, 'numbers need a leading digit, as in 0.5'],
+    ['all(inputs.xs, any(.ys, . == .25))', 30, 'numbers need a leading digit, as in 0.5'],
     ["['a']", 2, 'the only array literal is []'],
     ['env.HOME', 1, '"env" is not readable; an expression reads only inputs and steps'],
     ['github.ref', 1, '"github" is not readable; an expression reads only inputs and steps'],
-    ["contains(steps.review.outputs.tags, 'a')", 1, '"contains" is not readable; an expression reads only inputs and steps'],
+    ["contains(steps.review.outputs.tags, 'a')", 1, '"contains" is not a function; the functions are length, any, all and filter'],
+    ['inputs.list(1)', 12, 'unexpected "("'],
+    ['any(steps.review.outputs.tags, true) < 1', 1, 'compares any(...) with <, but it is not a number'],
+    ['filter(steps.review.outputs.tags, true) > 0', 1, 'compares filter(...) with >, but it is not a number'],
+    ['(1 == 1) < 2', 4, 'compares a condition with <, but it is not a number'],
+    ["length('abc') == 3", 8, "passes 'abc' to length as its list, but it is not an array"],
+    ['any(length(steps.review.outputs.tags), true)', 5, 'passes length(...) to any as its list, but it is not an array'],
+    ['all(null, true)', 5, 'passes null to all as its list, but it is not an array'],
+    ['length(steps.review.outputs.tags, 1)', 1, 'length is called as length(list)'],
+    ['length()', 1, 'length is called as length(list)'],
+    ['any(steps.review.outputs.tags)', 1, 'any is called as any(list, predicate)'],
+    ['all(steps.review.outputs.tags, true, false)', 1, 'all is called as all(list, predicate)'],
+    [".path == 'a.ts'", 1, '".path" reads the current element, which exists only inside the predicate of any, all or filter'],
+    ['length(.) == 1', 8, '"." reads the current element, which exists only inside the predicate of any, all or filter'],
     ['process.env.SECRET', 1, '"process" is not readable; an expression reads only inputs and steps'],
     ['steps.check', 1, '"steps.check" must read steps.<id>.outcome, steps.<id>.end or steps.<id>.outputs'],
     ['steps.check.status', 1, '"steps.check.status" must read steps.<id>.outcome, steps.<id>.end or steps.<id>.outputs'],
@@ -103,6 +152,13 @@ describe('workflow expressions', () => {
     expect(parseExpression(source)).toEqual({ ok: false, column, message });
   });
 
+  it('reads a digit-named field below the element, which only a lone .<digits> cannot be', () => {
+    const parsed = parseExpression('any(inputs.xs, .5.x == 1 || .a.5 == 1)');
+    if (!parsed.ok) throw new Error(parsed.message);
+
+    expect(evaluateExpression(parsed.expression, { inputs: { xs: [{ 5: { x: 1 } }] }, steps: {} })).toBe(true);
+  });
+
   it('lists the paths an expression reads, with their columns', () => {
     const parsed = parseExpression("inputs.issue.number == 1 || !(steps.check.outcome == 'failed' && steps.review.outputs.verdict.text)");
     if (!parsed.ok) throw new Error(parsed.message);
@@ -111,6 +167,17 @@ describe('workflow expressions', () => {
       { root: 'inputs', fields: ['issue', 'number'], column: 1 },
       { root: 'steps', step: 'check', field: 'outcome', fields: [], column: 31 },
       { root: 'steps', step: 'review', field: 'outputs', fields: ['verdict', 'text'], column: 66 },
+    ]);
+  });
+
+  it('lists the paths inside list arguments and predicates, and no relative path', () => {
+    const parsed = parseExpression("any(steps.review.outputs.files, .path == inputs.file) && length(steps.copy.outputs.tags) > 0");
+    if (!parsed.ok) throw new Error(parsed.message);
+
+    expect(expressionPaths(parsed.expression)).toEqual([
+      { root: 'steps', step: 'review', field: 'outputs', fields: ['files'], column: 5 },
+      { root: 'inputs', fields: ['file'], column: 42 },
+      { root: 'steps', step: 'copy', field: 'outputs', fields: ['tags'], column: 65 },
     ]);
   });
 
