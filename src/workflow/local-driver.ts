@@ -11,6 +11,7 @@ import {
   type AgentSpec,
   type ToolName,
 } from '../resources/agent-format.js';
+import { exitLike } from '../env-exec.js';
 import { getDataHome, resolveToolBaseDir, type LocalConfig, type TeamaiConfig } from '../types.js';
 import { readFileSafe, writeJsonAtomic } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
@@ -30,10 +31,31 @@ export function localDriver(cwd: string): DriverIdentity {
   return { kind: 'local', machine, workspace: path.resolve(cwd) };
 }
 
-/** Runs a leased command. The lease `env` is set over the inherited environment, so values reach the shell only as variables. */
-function runCommand(command: string, cwd: string, env: Record<string, string>): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  return new Promise((resolve) => {
-    const child = spawn(command, { cwd, shell: true, env: { ...process.env, ...env }, windowsHide: true });
+interface CommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+interface CommandProcess {
+  /** Settles when the command has exited and closed its output. */
+  exit: Promise<CommandResult>;
+  /** SIGTERM, then SIGKILL after the grace period. Settles with `exit`; a second call changes nothing. */
+  stop(): Promise<CommandResult>;
+}
+
+const STOP_GRACE_MS = 5000;
+
+const STOP_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGQUIT', 'SIGTERM', 'SIGHUP'];
+
+/**
+ * Starts a leased command. The lease `env` is set over the inherited environment, so values reach the shell only as
+ * variables. A detached command leads a process group of its own, so `stop` reaches everything it started; it has no
+ * controlling terminal, and a terminal's Ctrl-C does not reach it.
+ */
+function startCommand(command: string, cwd: string, env: Record<string, string>, detached: boolean): CommandProcess {
+  const child = spawn(command, { cwd, shell: true, env: { ...process.env, ...env }, windowsHide: true, detached });
+  const exit = new Promise<CommandResult>((resolve) => {
     let stdout = '';
     let stderr = '';
     child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
@@ -41,6 +63,28 @@ function runCommand(command: string, cwd: string, env: Record<string, string>): 
     child.on('error', (error) => resolve({ exitCode: 1, stdout, stderr: error.message }));
     child.on('close', (code) => resolve({ exitCode: code ?? 1, stdout, stderr }));
   });
+  const signal = (name: NodeJS.Signals): void => {
+    if (!detached || child.pid === undefined) {
+      child.kill(name);
+      return;
+    }
+    try {
+      process.kill(-child.pid, name);
+    } catch {
+      // The whole group has already exited.
+    }
+  };
+  let stopping: Promise<CommandResult> | undefined;
+  const stop = (): Promise<CommandResult> => {
+    if (process.platform === 'win32' && child.pid !== undefined) {
+      execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => {});
+      return exit;
+    }
+    signal('SIGTERM');
+    const timer = setTimeout(() => signal('SIGKILL'), STOP_GRACE_MS);
+    return exit.finally(() => clearTimeout(timer));
+  };
+  return { exit, stop: () => (stopping ??= stop()) };
 }
 
 function jsonStdout(stdout: string): unknown | undefined {
@@ -162,9 +206,111 @@ function failureReport(failure: WorkflowFailure): { outcome: 'failed'; message: 
   return { outcome: 'failed', message: failure.message, failure };
 }
 
+type ReportBody = Parameters<typeof reportAttempt>[2];
+
+function parseLease(raw: unknown): Lease | undefined {
+  const rawLease = raw as Record<string, unknown> | undefined;
+  if (!rawLease || typeof rawLease.attempt !== 'string' || typeof rawLease.revision !== 'number') return undefined;
+  const env = stringMap(rawLease.env);
+  const lease: Lease = {
+    attempt: rawLease.attempt,
+    revision: rawLease.revision,
+    ...(typeof rawLease.command === 'string' ? { command: rawLease.command } : {}),
+    ...(env ? { env } : {}),
+    ...(typeof rawLease.prompt === 'string' ? { prompt: rawLease.prompt } : {}),
+    ...(typeof rawLease.agent === 'string' ? { agent: rawLease.agent } : {}),
+  };
+  return (lease.command === undefined) === (lease.prompt === undefined) ? undefined : lease;
+}
+
+async function commandReport(attemptResultPath: string, driver: DriverIdentity, lease: Lease, result: CommandResult): Promise<ReportBody> {
+  const output = jsonStdout(result.stdout);
+  await fs.mkdir(path.dirname(attemptResultPath), { recursive: true });
+  await writeJsonAtomic(attemptResultPath, output !== undefined ? { output } : {});
+  const snippet = result.stderr.trim().slice(0, 400);
+  return {
+    attempt: lease.attempt,
+    revision: lease.revision,
+    outcome: result.exitCode === 0 ? 'success' : 'failed',
+    driver,
+    ...(output !== undefined ? { outputs: output } : {}),
+    exitCode: result.exitCode,
+    ...(result.exitCode !== 0
+      ? { message: snippet === '' ? `command exited with status ${result.exitCode}` : `command exited with status ${result.exitCode}: ${snippet}` }
+      : {}),
+  };
+}
+
+async function promptReport(
+  config: LocalConfig,
+  attemptResultPath: string,
+  driver: DriverIdentity,
+  lease: Lease,
+  tools: Record<string, string>,
+  adapter: LocalToolAdapter,
+  options: LocalDriverOptions,
+): Promise<ReportBody> {
+  const selected = lease.agent && tools[lease.agent] ? tools[lease.agent] : tools.default;
+  if (!selected) {
+    const failure = { code: 'tool_unconfigured', message: 'No local workflow tool is configured for this prompt step' };
+    return { attempt: lease.attempt, revision: lease.revision, driver, ...failureReport(failure) };
+  }
+  if (!supportedTool(selected)) {
+    const failure = { code: 'tool_unsupported', message: `The local workflow tool "${selected}" is not supported` };
+    return { attempt: lease.attempt, revision: lease.revision, driver, tool: selected, ...failureReport(failure) };
+  }
+  const agent = lease.agent ? await loadAgent(selected, lease.agent, config, options.toolPaths) : undefined;
+  if (lease.agent && !agent) {
+    const failure = {
+      code: 'agent_unavailable',
+      message: `Agent "${lease.agent}" is not available for ${selected}. Run teamai pull and try again.`,
+    };
+    return { attempt: lease.attempt, revision: lease.revision, driver, tool: selected, ...failureReport(failure) };
+  }
+  if (agent && localToolFamily(selected) === 'codex') {
+    const ignored = ignoredCodexSettings(agent);
+    if (ignored.length > 0) {
+      log.warn(`Agent "${agent.name}" on ${selected} does not apply ${ignored.join(', ')} from the deployed agent file. codex exec still has a shell. The step is not blocked.`);
+    }
+  }
+  const before = await snapshotWorktree(driver.workspace);
+  let result;
+  try {
+    result = await adapter.run(selected, {
+      prompt: lease.prompt!,
+      cwd: driver.workspace,
+      resultPath: attemptResultPath,
+      ...(agent ? { agent: { name: lease.agent!, instructions: agent.instructions, ...(agent.model ? { model: agent.model } : {}) } } : {}),
+    });
+  } catch {
+    result = {
+      exitCode: 1,
+      failure: { code: 'tool_failed', message: `${selected} could not complete the workflow step` },
+    };
+  }
+  const after = await snapshotWorktree(driver.workspace);
+  const paths = changedPaths(before, after);
+  const dirtyFailure = paths.length > 0
+    ? { code: 'read_only_dirty', message: `Read-only prompt step changed repository paths: ${paths.join(', ')}` }
+    : undefined;
+  const failure = dirtyFailure ?? result.failure;
+  return {
+    attempt: lease.attempt,
+    revision: lease.revision,
+    driver,
+    tool: selected,
+    ...(result.model ?? agent?.model ? { model: result.model ?? agent?.model } : {}),
+    ...(result.session ? { session: result.session } : {}),
+    ...(result.tokens ? { tokens: result.tokens } : {}),
+    ...(result.output !== undefined ? { outputs: result.output } : {}),
+    exitCode: result.exitCode,
+    ...(failure ? failureReport(failure) : { outcome: result.exitCode === 0 ? 'success' : 'failed' }),
+  };
+}
+
 /**
- * Run leased commands one at a time. Each lease and report goes through the
- * same engine operations an external driver calls.
+ * Run leased commands, up to `workflows.max_parallel` at once. Each lease and
+ * report goes through the same engine operations an external driver calls.
  */
 export async function runLocalDriver(
   config: LocalConfig,
@@ -175,118 +321,103 @@ export async function runLocalDriver(
   const driver = localDriver(cwd);
   const tools = { ...config.workflows?.tools, ...options.tools };
   const adapter = options.adapter ?? createLocalToolAdapter();
+  const maxParallel = config.workflows?.max_parallel ?? 1;
+  // One command at a time keeps the terminal: Ctrl-C reaches it, and it can prompt on /dev/tty. Parallel commands get
+  // process groups of their own, which `stop` and the signal handlers below can end as a whole.
+  const detached = maxParallel > 1 && process.platform !== 'win32';
   const reported = new Set<string>();
-  for (;;) {
-    const next = await leaseNext(config, runId, driver);
-    if (isWorkflowError(next)) return next;
-    if ('done' in next.data) return next;
-    if ('wait' in next.data) {
-      const reason = typeof (next.data.wait as { reason?: unknown }).reason === 'string'
-        ? (next.data.wait as { reason: string }).reason
-        : 'the next step is not available';
-      return { error: { code: 'busy', message: reason } };
-    }
-    const rawLease = next.data.lease as Record<string, unknown> | undefined;
-    if (!rawLease || typeof rawLease.attempt !== 'string' || typeof rawLease.revision !== 'number') {
-      return { error: { code: 'run_unreadable', message: `Run ${runId} returned a lease the local driver cannot run` } };
-    }
-    const env = stringMap(rawLease.env);
-    const lease: Lease = {
-      attempt: rawLease.attempt,
-      revision: rawLease.revision,
-      ...(typeof rawLease.command === 'string' ? { command: rawLease.command } : {}),
-      ...(env ? { env } : {}),
-      ...(typeof rawLease.prompt === 'string' ? { prompt: rawLease.prompt } : {}),
-      ...(typeof rawLease.agent === 'string' ? { agent: rawLease.agent } : {}),
-    };
-    if ((lease.command === undefined) === (lease.prompt === undefined)) {
-      return { error: { code: 'run_unreadable', message: `Run ${runId} returned a lease the local driver cannot run` } };
-    }
-    if (reported.has(lease.attempt)) {
-      return { error: { code: 'driver_stuck', message: `Attempt ${lease.attempt} was leased again before it could be reported` } };
-    }
-    let body: Parameters<typeof reportAttempt>[2];
-    const attemptResultPath = resultPath(config, runId, lease.attempt);
-    if (lease.command !== undefined) {
-      const result = await runCommand(lease.command, driver.workspace, lease.env ?? {});
-      const output = jsonStdout(result.stdout);
-      await fs.mkdir(path.dirname(attemptResultPath), { recursive: true });
-      await writeJsonAtomic(attemptResultPath, output !== undefined ? { output } : {});
-      const snippet = result.stderr.trim().slice(0, 400);
-      body = {
-        attempt: lease.attempt,
-        revision: lease.revision,
-        outcome: result.exitCode === 0 ? 'success' : 'failed',
-        driver,
-        ...(output !== undefined ? { outputs: output } : {}),
-        exitCode: result.exitCode,
-        ...(result.exitCode !== 0
-          ? { message: snippet === '' ? `command exited with status ${result.exitCode}` : `command exited with status ${result.exitCode}: ${snippet}` }
-          : {}),
-      };
-    } else {
-      const selected = lease.agent && tools[lease.agent] ? tools[lease.agent] : tools.default;
-      if (!selected) {
-        const failure = { code: 'tool_unconfigured', message: 'No local workflow tool is configured for this prompt step' };
-        body = { attempt: lease.attempt, revision: lease.revision, driver, ...failureReport(failure) };
-      } else if (!supportedTool(selected)) {
-        const failure = { code: 'tool_unsupported', message: `The local workflow tool "${selected}" is not supported` };
-        body = { attempt: lease.attempt, revision: lease.revision, driver, tool: selected, ...failureReport(failure) };
-      } else {
-        const agent = lease.agent ? await loadAgent(selected, lease.agent, config, options.toolPaths) : undefined;
-        if (lease.agent && !agent) {
-          const failure = {
-            code: 'agent_unavailable',
-            message: `Agent "${lease.agent}" is not available for ${selected}. Run teamai pull and try again.`,
-          };
-          body = { attempt: lease.attempt, revision: lease.revision, driver, tool: selected, ...failureReport(failure) };
-        } else {
-          if (agent && localToolFamily(selected) === 'codex') {
-            const ignored = ignoredCodexSettings(agent);
-            if (ignored.length > 0) {
-              log.warn(`Agent "${agent.name}" on ${selected} does not apply ${ignored.join(', ')} from the deployed agent file. codex exec still has a shell. The step is not blocked.`);
-            }
-          }
-          const before = await snapshotWorktree(driver.workspace);
-          let result;
-          try {
-            result = await adapter.run(selected, {
-              prompt: lease.prompt!,
-              cwd: driver.workspace,
-              resultPath: attemptResultPath,
-              ...(agent ? { agent: { name: lease.agent!, instructions: agent.instructions, ...(agent.model ? { model: agent.model } : {}) } } : {}),
-            });
-          } catch {
-            result = {
-              exitCode: 1,
-              failure: { code: 'tool_failed', message: `${selected} could not complete the workflow step` },
-            };
-          }
-          const after = await snapshotWorktree(driver.workspace);
-          const paths = changedPaths(before, after);
-          const dirtyFailure = paths.length > 0
-            ? { code: 'read_only_dirty', message: `Read-only prompt step changed repository paths: ${paths.join(', ')}` }
-            : undefined;
-          const failure = dirtyFailure ?? result.failure;
-          body = {
-            attempt: lease.attempt,
-            revision: lease.revision,
-            driver,
-            tool: selected,
-            ...(result.model ?? agent?.model ? { model: result.model ?? agent?.model } : {}),
-            ...(result.session ? { session: result.session } : {}),
-            ...(result.tokens ? { tokens: result.tokens } : {}),
-            ...(result.output !== undefined ? { outputs: result.output } : {}),
-            exitCode: result.exitCode,
-            ...(failure ? failureReport(failure) : { outcome: result.exitCode === 0 ? 'success' : 'failed' }),
-          };
+  const inFlight = new Map<string, { lease: Lease; command: CommandProcess }>();
+  // Leases not started yet, in lease order. A prompt starts only when no command runs, because its read-only check
+  // compares the whole worktree before and after it.
+  const held: Lease[] = [];
+  // Cancelled commands that have not exited yet. They are not sent as running, so `next` does not cancel them again.
+  const dying = new Map<string, CommandProcess>();
+  const room = (): boolean => inFlight.size + held.length < maxParallel && !held.some((lease) => lease.prompt !== undefined);
+  const cancel = (attempt: string): void => {
+    const index = held.findIndex((lease) => lease.attempt === attempt);
+    if (index !== -1) held.splice(index, 1);
+    const running = inFlight.get(attempt);
+    if (!running) return;
+    inFlight.delete(attempt);
+    dying.set(attempt, running.command);
+    void running.command.stop();
+  };
+  let signalled: NodeJS.Signals | undefined;
+  let wake = (): void => {};
+  const exitOn = (signal: NodeJS.Signals): void => {
+    for (const name of STOP_SIGNALS) process.off(name, onSignal);
+    exitLike({ kind: 'signaled', signal });
+  };
+  // Parallel commands do not get the terminal's Ctrl-C, so the driver stops them all before it exits the way the
+  // signal would. With none running, as during a prompt, the signal ends teamai at once, as it would without a handler.
+  const onSignal = (signal: NodeJS.Signals): void => {
+    if (inFlight.size === 0 && dying.size === 0) return exitOn(signal);
+    signalled ??= signal;
+    wake();
+  };
+  if (maxParallel > 1) for (const name of STOP_SIGNALS) process.on(name, onSignal);
+  const report = async (body: ReportBody): Promise<WorkflowEnvelope | undefined> => {
+    const answer = await reportAttempt(config, runId, body);
+    // Cancelled while it ran: the next `next` lists it in `cancelled`, and the run goes on without it.
+    if (isWorkflowError(answer)) return answer.error.code === 'lease_cancelled' ? undefined : answer;
+    reported.add(body.attempt);
+    return undefined;
+  };
+  try {
+    for (;;) {
+      if (signalled) return { error: { code: 'interrupted', message: `Stopped by ${signalled} after every command it started exited` } };
+      const running = [...inFlight.keys(), ...held.map((lease) => lease.attempt)];
+      const canTakeLease = room();
+      const next = await leaseNext(config, runId, driver, { running, canTakeLease });
+      if (signalled) continue;
+      if (isWorkflowError(next)) return next;
+      for (const attempt of Array.isArray(next.data.cancelled) ? next.data.cancelled as string[] : []) cancel(attempt);
+      if ('done' in next.data) return next;
+      if ('lease' in next.data) {
+        const lease = parseLease(next.data.lease);
+        if (!lease) return { error: { code: 'run_unreadable', message: `Run ${runId} returned a lease the local driver cannot run` } };
+        if (reported.has(lease.attempt)) {
+          return { error: { code: 'driver_stuck', message: `Attempt ${lease.attempt} was leased again before it could be reported` } };
         }
+        held.push(lease);
       }
+      while (held[0]?.command !== undefined && inFlight.size < maxParallel) {
+        const lease = held.shift()!;
+        inFlight.set(lease.attempt, { lease, command: startCommand(lease.command!, driver.workspace, lease.env ?? {}, detached) });
+      }
+      if (held[0]?.prompt !== undefined && inFlight.size === 0 && dying.size === 0) {
+        const lease = held.shift()!;
+        const failed = await report(await promptReport(config, resultPath(config, runId, lease.attempt), driver, lease, tools, adapter, options));
+        if (failed) return failed;
+        continue;
+      }
+      if ('lease' in next.data && room()) continue;
+      if (inFlight.size === 0 && dying.size === 0) {
+        // A wait for a call that could not take a lease says nothing about what is left; ask again with room.
+        if (!canTakeLease) continue;
+        const reason = typeof (next.data.wait as { reason?: unknown }).reason === 'string'
+          ? (next.data.wait as { reason: string }).reason
+          : 'the next step is not available';
+        return { error: { code: 'busy', message: reason } };
+      }
+      const exited = await Promise.race([
+        ...[...inFlight.values()].map(({ lease, command }) => command.exit.then((result) => ({ attempt: lease.attempt, lease, result }))),
+        ...[...dying].map(([attempt, command]) => command.exit.then(() => ({ attempt }))),
+        new Promise<undefined>((resolve) => { wake = () => resolve(undefined); }),
+      ]);
+      if (!exited) continue;
+      if (!('lease' in exited)) {
+        dying.delete(exited.attempt);
+        continue;
+      }
+      inFlight.delete(exited.attempt);
+      const failed = await report(await commandReport(resultPath(config, runId, exited.attempt), driver, exited.lease, exited.result));
+      if (failed) return failed;
     }
-    const reportedEnvelope = await reportAttempt(config, runId, {
-      ...body,
-    });
-    if (isWorkflowError(reportedEnvelope)) return reportedEnvelope;
-    reported.add(lease.attempt);
+  } finally {
+    for (const attempt of inFlight.keys()) cancel(attempt);
+    await Promise.all([...dying.values()].map((command) => command.stop()));
+    if (signalled) exitOn(signalled);
+    for (const name of STOP_SIGNALS) process.off(name, onSignal);
   }
 }

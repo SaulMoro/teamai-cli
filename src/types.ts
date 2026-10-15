@@ -858,6 +858,8 @@ export const LocalConfigSchema = z.object({
   /** Per-machine tool selection for locally executed workflow prompt steps. */
   workflows: z.object({
     tools: z.record(z.string(), z.string().min(1)).default({}),
+    /** How many command steps the local driver runs at once. Unset means 1. */
+    max_parallel: z.number().int().positive().optional(),
   }).optional(),
   /**
    * Per-machine map from a gateway/proxy model alias to a known Claude model

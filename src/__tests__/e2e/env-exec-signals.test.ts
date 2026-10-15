@@ -8,11 +8,12 @@
  * number.
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hasPython, IN_TERMINAL } from '../helpers/in-terminal.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.resolve(__dirname, '..', '..', '..', 'dist', 'index.js');
@@ -25,24 +26,6 @@ const COUNTER = [
   'setInterval(() => {}, 1000);',
 ].join('\n');
 
-/**
- * Runs argv[2:] as the foreground job of a new terminal (os.forkpty), writes
- * its pid to argv[1], and exits as it did.
- */
-const IN_TERMINAL = [
-  'import os, sys',
-  'pid, fd = os.forkpty()',
-  'if pid == 0:',
-  '    os.execvp(sys.argv[2], sys.argv[2:])',
-  'open(sys.argv[1], "w").write(str(pid))',
-  'while True:',
-  '    try:',
-  '        if not os.read(fd, 4096): break',
-  '    except OSError:',
-  '        break',
-  'sys.exit(os.waitstatus_to_exitcode(os.waitpid(pid, 0)[1]))',
-].join('\n');
-const hasPython = spawnSync('python3', ['-c', 'import os; os.forkpty'], { stdio: 'ignore' }).status === 0;
 
 type Ended = { code: number | null; signal: NodeJS.Signals | null; stderr: string };
 
