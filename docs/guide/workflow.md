@@ -126,7 +126,7 @@ The run is stored in this scope's TeamAI data directory. The command exits when 
 
 ## Run records
 
-Every run publishes a privacy-preserving record to the team's `teamai-reports` branch: once when it starts and once when it ends. Records live in `workflows/runs/<run id>.json`, keyed by run id, so a retried publication updates the same record instead of adding a copy.
+With [usage reporting](reporting.md) on, every run publishes a privacy-preserving record to the team's `teamai-reports` branch: once when it starts and once when it ends. With it off, nothing is published and the envelopes carry no `record`. Records live in `workflows/runs/<run id>.json`, keyed by run id, so a retried publication updates the same record instead of adding a copy.
 
 A record carries only: the run id, workflow name, phase (`start` or `end`), driver kind, status, the end the run reached (when it reached one), start and end times, duration, per-step entries (step path such as `check.classify`, agent, tool, model, outcome, tokens — a mixed-agent run records each step's own fields), summary step counts (succeeded, failed, skipped), the cumulative settled-attempt count, and the publishing username. Steps of a sub-workflow that never started are not counted. Prompts, command text, input values, `env` values, outputs, diffs, secret values, local workspace paths, session ids, and hostnames have no field to land in — the record is built from an allowlist, not filtered from the run state.
 

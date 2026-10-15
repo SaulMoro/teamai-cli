@@ -4,7 +4,7 @@
 
 ---
 
-`teamai pull` commits session and usage counts into the team repo. Turn that off with:
+`teamai pull` commits session and usage counts into the team repo, and `teamai workflow` commits [run records](workflow.md#run-records). Turn that off with:
 
 ```yaml
 # teamai.yaml

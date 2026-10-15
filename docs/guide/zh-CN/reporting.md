@@ -4,7 +4,7 @@
 
 ---
 
-`teamai pull` 默认把会话和使用次数提交进团队仓库。不想要这些提交时：
+`teamai pull` 默认把会话和使用次数提交进团队仓库，`teamai workflow` 也会提交[运行记录](workflow.md#运行记录)。不想要这些提交时：
 
 ```yaml
 # teamai.yaml
