@@ -9,6 +9,7 @@ import {
 import { outputMismatch } from './output.js';
 import { noteRunRecord, runRecordState } from './records.js';
 import { parseTemplate, renderStrings, renderText, templatedTexts, templatePaths, type TemplateContext, type TemplateError } from './template.js';
+import { parseStepPath } from './step-path.js';
 import { generateRunId, isRunId, readRun, runLockPath, writeRun } from './store.js';
 import type {
   CachedWorkflow,
@@ -128,25 +129,31 @@ function childScope(run: RunState, scope: Scope, states: StepState[], state: Ste
   return definition && { prefix: `${state.id}.`, definition, inputs: state.inputs };
 }
 
-/** The step instances directly inside a scope, in declaration order. */
+/** The step instances directly inside a scope, in declaration order. A `for_each` item such as `build[0]` is not one. */
 function statesIn(run: RunState, scope: Scope): StepState[] {
-  return run.steps.filter((state) => state.id.startsWith(scope.prefix) && !state.id.slice(scope.prefix.length).includes('.'));
+  return run.steps.filter((state) => {
+    if (!state.id.startsWith(scope.prefix)) return false;
+    const segments = parseStepPath(state.id.slice(scope.prefix.length));
+    return segments.length === 1 && segments[0]?.index === undefined;
+  });
 }
 
 /** The step id an instance has inside its own workflow. */
 function localId(scope: Scope, state: StepState): string {
-  return state.id.slice(scope.prefix.length);
+  const [segment] = parseStepPath(state.id.slice(scope.prefix.length));
+  return segment?.id ?? state.id;
 }
 
 /** The scope and definition of the step instance at `path`, or undefined when the run file does not describe it. */
 export function locateStep(run: RunState, path: string): { scope: Scope; step: WorkflowStep } | undefined {
   let scope = topScope(run);
-  const ids = path.split('.');
-  for (const [index, id] of ids.entries()) {
-    const step = scope.definition.steps.find((item) => item.id === id);
+  const segments = parseStepPath(path);
+  for (const [index, segment] of segments.entries()) {
+    const step = scope.definition.steps.find((item) => item.id === segment.id);
     if (!step) return undefined;
-    if (index === ids.length - 1) return { scope, step };
-    const state = run.steps.find((item) => item.id === `${scope.prefix}${id}`);
+    if (index === segments.length - 1) return { scope, step };
+    const instance = `${scope.prefix}${segment.id}${segment.index === undefined ? '' : `[${segment.index}]`}`;
+    const state = run.steps.find((item) => item.id === instance);
     const child = state && childScope(run, scope, statesIn(run, scope), state, step);
     if (!child) return undefined;
     scope = child;
