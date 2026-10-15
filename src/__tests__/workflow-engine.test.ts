@@ -1511,6 +1511,10 @@ describe('inline workflows', () => {
     expect(classify).toMatchObject({ data: { lease: { step: 'check.classify', prompt: 'Classify Bug for fix.' } } });
     expect(leased).toEqual(['check.comment', 'ship']);
     expect(done).toEqual({ run: runId, record: 'pending', outcome: 'succeeded' });
+    const stored = await readRun(config, runId);
+    if (typeof stored !== 'object') throw new Error('run missing');
+    // The inline workflow reads the enclosing inputs; its step does not store them.
+    expect(stored.steps.find((step) => step.id === 'check')).toEqual({ id: 'check', status: 'succeeded', outcome: 'success', settledAt: 4 });
   });
 
   it('finishes only the inline workflow at its end, and the parent reads its end and outputs', async () => {
