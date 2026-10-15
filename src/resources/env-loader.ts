@@ -588,6 +588,9 @@ function envLoaderScript({ loaderFile, scopesFile, userEnvSh, windows }: { loade
 # Only bash and zsh run it. The block can sit in ~/.profile, which a POSIX sh
 # login shell reads too: that shell returns here, before anything it cannot parse.
 [ -n "\${BASH_VERSION-}\${ZSH_VERSION-}" ] || return 0
+# A git that is a bash or zsh script starts a shell that reads this file
+# again: one the loader's own git call started routes nothing, or it recurses.
+[ -z "\${__TEAMAI_ENV_ROUTING-}" ] || return 0
 __teamai_env_start() {
   # Keep ambient shell options out of loader assignments and pattern matching.
   # In bash the positional args remember allexport and nocasematch; zsh's
@@ -625,7 +628,7 @@ __teamai_env_files() {
   # Git names the repository, else the directory is in none: a .git entry in
   # it or above means git could not read one (not installed, failing, refused
   # or unreadable), so no scope is known and none loads.
-  if __teamai_common=$(command git -C "$1" rev-parse --git-common-dir 2>/dev/null); then
+  if __teamai_common=$(export __TEAMAI_ENV_ROUTING=1; command git -C "$1" rev-parse --git-common-dir 2>/dev/null); then
     case $__teamai_common in /* | ?:/*) ;; *) __teamai_common=$1/$__teamai_common ;; esac
     __teamai_key=$(__teamai_env_realdir "$__teamai_common") || return 0
     __teamai_kind=git

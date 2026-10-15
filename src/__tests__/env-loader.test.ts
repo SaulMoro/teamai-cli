@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -775,6 +775,36 @@ describe('team env by directory (#1018)', () => {
 
       expect(median(a.projectRoot ?? '') - without).toBeLessThan(100);
     });
+
+    // A git on PATH that is a bash or zsh script starts a shell that runs the
+    // loader again. Without a guard each one routes, so runs git, until fork
+    // fails: the whole process group is killed after 10 s.
+    it.each(['bash', 'zsh'].filter(hasShell))('%s: a git that is a script in this shell runs once per route', async (shell) => {
+      vi.stubEnv('SHELL', `/bin/${shell}`);
+      const a = await project('a');
+      await handler.writeResolvedEnv([{ key: 'MARKER', value: 'from-a' }], teamConfig, a);
+      const which = (command: string): string => execFileSync('sh', ['-c', `command -v ${command}`], { encoding: 'utf-8' }).trim();
+      const bin = path.join(tmpDir, 'bin');
+      const gitLog = path.join(tmpDir, 'git-runs');
+      await fse.outputFile(path.join(bin, 'git'), `#!${which(shell)}\nprintf 'run\\n' >> '${gitLog}'\nexec '${which('git')}' "$@"\n`, { mode: 0o755 });
+      const env: NodeJS.ProcessEnv = {
+        HOME: homeDir, PATH: `${bin}${path.delimiter}${process.env.PATH}`, SHELL: `/bin/${shell}`,
+        ...(shell === 'bash' ? { BASH_ENV: path.join(homeDir, '.teamai', 'env-loader.sh') } : { ZDOTDIR: homeDir }),
+      };
+
+      const run = await new Promise<{ stdout: string; timedOut: boolean }>((resolve) => {
+        const child = spawn(shell, ['-c', 'printf "%s" "${MARKER-unset}"'], { cwd: a.projectRoot, env, detached: true, stdio: ['ignore', 'pipe', 'ignore'] });
+        const killGroup = (): void => { try { if (child.pid) process.kill(-child.pid, 'SIGKILL'); } catch { /* already gone */ } };
+        let stdout = '';
+        let timedOut = false;
+        const timer = setTimeout(() => { timedOut = true; killGroup(); }, 10_000);
+        child.stdout.on('data', (chunk) => { stdout += String(chunk); });
+        child.on('close', () => { clearTimeout(timer); killGroup(); resolve({ stdout, timedOut }); });
+      });
+      const gitRuns = (await fse.pathExists(gitLog)) ? (await fse.readFile(gitLog, 'utf-8')).split('\n').filter(Boolean).length : 0;
+
+      expect({ ...run, gitRuns }).toEqual({ stdout: 'from-a', timedOut: false, gitRuns: 1 });
+    }, 20_000);
   });
 
   describe('upgrading a profile an older version wrote', () => {
