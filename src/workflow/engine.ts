@@ -8,7 +8,10 @@ import {
 } from './expression.js';
 import { outputMismatch } from './output.js';
 import { noteRunRecord, runRecordState } from './records.js';
-import { parseTemplate, renderStrings, renderText, templatedTexts, templatePaths, type TemplateContext, type TemplateError } from './template.js';
+import {
+  parseTemplate, renderStrings, renderText, stepExpressions, templatedTexts, templatePaths,
+  type StepExpression, type TemplateContext, type TemplateError,
+} from './template.js';
 import { parseStepPath } from './step-path.js';
 import { cancel, fail, lease, release, settled, skip, start, stopped, succeed, type LeasedStep, type StepState } from './step-state.js';
 import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, loopSettled, passesOf, previousPass, stepLoops, type StepLoops } from './loop.js';
@@ -278,16 +281,16 @@ function stepsRead(paths: ExpressionPath[]): Set<string> {
 }
 
 /**
- * The step ids a step reads in its `if`, templates, `loop.while` and `break`, and, when it runs an inline workflow, the
- * ids that workflow's steps read outside it, at any depth. A `loop.while` or `break` that reads its own step reads it
- * after it ran, so the step is left out. An expression or template that does not parse reads nothing here; settling
- * its own workflow reports it.
+ * The step ids a step reads in its expressions and templates, and, when it runs an inline workflow, the ids that
+ * workflow's steps read outside it, at any depth. A `loop.while` or `break` that reads its own step reads it after it
+ * ran, so the step is left out. An expression or template that does not parse reads nothing here; settling its own
+ * workflow reports it.
  */
 function readsOf(step: WorkflowStep): Set<string> {
   const paths = [
-    ...[step.if, step.loop?.while, step.break].flatMap((source) => {
-      const parsed = source === undefined ? undefined : parseExpression(source);
-      return parsed?.ok ? expressionPaths(parsed.expression) : [];
+    ...stepExpressions(step).flatMap(({ source }) => {
+      const parsed = parseExpression(source);
+      return parsed.ok ? expressionPaths(parsed.expression) : [];
     }),
     ...templatedTexts(step).flatMap(({ text }) => {
       const template = parseTemplate(text);
@@ -327,14 +330,13 @@ function parseReads(run: RunState, scope: Scope): RunReads | string {
   const breaks = new Map<string, Expression>();
   const reads = new Map<string, Set<string>>();
   const waits = new Map<string, string[]>();
+  const parsedInto: Record<StepExpression['what'], Map<string, Expression>> = { if: conditions, 'loop.while': whiles, break: breaks };
   const own = new Set(scope.definition.steps.map((step) => step.id));
   for (const step of scope.definition.steps) {
-    const parsedFields = [['an if', step.if, conditions], ['a loop.while', step.loop?.while, whiles], ['a break', step.break, breaks]] as const;
-    for (const [what, source, parsedInto] of parsedFields) {
-      if (source === undefined) continue;
+    for (const { what, source } of stepExpressions(step)) {
       const parsed = parseExpression(source);
-      if (!parsed.ok) return `Run ${run.id} step "${scope.prefix}${step.id}" has ${what} that does not parse: ${parsed.message}`;
-      parsedInto.set(step.id, parsed.expression);
+      if (!parsed.ok) return `Run ${run.id} step "${scope.prefix}${step.id}" has ${what === 'if' ? 'an' : 'a'} ${what} that does not parse: ${parsed.message}`;
+      parsedInto[what].set(step.id, parsed.expression);
     }
     // A template that does not parse reads nothing; the step fails when it would be leased.
     // An inline workflow's reads of enclosing steps settled before it started, so only its own steps are waited for.

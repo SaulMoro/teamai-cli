@@ -138,6 +138,24 @@ export function templatedTexts(step: Pick<WorkflowStep, 'prompt' | 'env' | 'with
   ];
 }
 
+/** One expression a step evaluates, named by the field YAML writes it at. */
+export interface StepExpression {
+  what: 'if' | 'loop.while' | 'break';
+  source: string;
+}
+
+/**
+ * The expressions a step evaluates. Pull and the engine share this one list, so they agree on which fields are
+ * expressions and on what a step reads.
+ */
+export function stepExpressions(step: Pick<WorkflowStep, 'if' | 'loop' | 'break'>): StepExpression[] {
+  return [
+    ...(step.if !== undefined ? [{ what: 'if' as const, source: step.if }] : []),
+    ...(step.loop?.while !== undefined ? [{ what: 'loop.while' as const, source: step.loop.while }] : []),
+    ...(step.break !== undefined ? [{ what: 'break' as const, source: step.break }] : []),
+  ];
+}
+
 /**
  * Renders every string inside a value, at any depth, with `renderValue`, so a string that is exactly one
  * `{{ path }}` keeps the JSON value it reads. Other values stay as they are. Fails at the first template that does not parse.

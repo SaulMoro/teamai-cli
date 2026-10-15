@@ -1,6 +1,8 @@
 import { isMap, isScalar, isSeq, LineCounter, parseDocument, type Node, type YAMLMap } from 'yaml';
 import { fieldsText, parseExpression, type ExpressionPath } from './expression.js';
-import { findTemplate, parseTemplate, templatedTexts, templatePaths, templateWithPaths, type Template } from './template.js';
+import {
+  findTemplate, parseTemplate, stepExpressions, templatedTexts, templatePaths, templateWithPaths, type StepExpression, type Template,
+} from './template.js';
 import type { EndOutcome, InlineWorkflow, OutputSchema, StepLoop, WorkflowDefinition, WorkflowDiagnostic, WorkflowLoop, WorkflowStep } from './types.js';
 import { STEP_ACTIONS } from './types.js';
 import {
@@ -24,6 +26,14 @@ const ACTION_LIST = `${ACTION_KEYS.slice(0, -1).join(', ')}, or ${ACTION_KEYS.at
 const TYPE_NAMES = new Set(['string', 'number', 'boolean']);
 const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/**
+ * How pull checks what each step expression other than `if` reads; an `if` is also checked for being always false.
+ * `loop.while` and `break` are evaluated after their step succeeds, so they may read it.
+ */
+const EXPRESSION_SITES: Record<Exclude<StepExpression['what'], 'if'>, { code: WorkflowDiagnostic['code'] } | undefined> = {
+  'loop.while': { code: 'bad_loop' },
+  break: { code: 'bad_loop' },
+};
 
 export function formatDiagnostic(diagnostic: WorkflowDiagnostic): string {
   return `${diagnostic.file}:${diagnostic.line}: field "${diagnostic.field}": ${diagnostic.message}`;
@@ -285,8 +295,6 @@ function parseBody(
           diagnostics.push(locate(file, lineCounter, at, `${field}.if`, `${label} if must be an expression`));
         } else if (!parsed.ok) {
           diagnostics.push(locate(file, lineCounter, at, `${field}.if`, `${label} if does not parse at column ${parsed.column}: ${parsed.message}`));
-        } else if (inGraph) {
-          conditions.push({ id, field: `${field}.if`, node: at as Node, expression: parsed.expression });
         }
       }
       const commandPair = item.items.find((pair) => scalarString(pair.key) === 'command');
@@ -410,11 +418,6 @@ function parseBody(
       }
       const loopPair = item.items.find((pair) => scalarString(pair.key) === 'loop');
       const loop = loopPair ? parseLoop(loopPair.value ?? loopPair.key, `${field}.loop`, label, ctx, true) : undefined;
-      const whileParsed = loop?.while === undefined ? undefined : parseExpression(loop.while);
-      if (inGraph && whileParsed?.ok) {
-        const at = position(lineCounter, valueNode(loopPair?.value, 'while'));
-        reads.push(expressionSite(id, `${field}.loop.while`, at, 'loop.while', whileParsed.expression, { code: 'bad_loop' }));
-      }
       const breakPair = item.items.find((pair) => scalarString(pair.key) === 'break');
       const breakSource = breakPair ? conditionSource(breakPair.value) : undefined;
       if (breakPair) {
@@ -425,7 +428,16 @@ function parseBody(
         };
         if (!parsed) reject('must be an expression');
         else if (!parsed.ok) reject(`does not parse at column ${parsed.column}: ${parsed.message}`);
-        else if (inGraph) reads.push(expressionSite(id, `${field}.break`, position(lineCounter, node), 'break', parsed.expression, { code: 'bad_loop' }));
+      }
+      if (inGraph) {
+        const nodes: Record<StepExpression['what'], unknown> = { if: ifPair?.value, 'loop.while': valueNode(loopPair?.value, 'while'), break: breakPair?.value };
+        for (const { what, source } of stepExpressions({ if: condition, loop, break: breakSource })) {
+          const parsed = parseExpression(source);
+          if (!parsed.ok) continue;
+          const node = (nodes[what] ?? item) as Node;
+          if (what === 'if') conditions.push({ id, field: `${field}.if`, node, expression: parsed.expression });
+          else reads.push(expressionSite(id, `${field}.${what}`, position(lineCounter, node), what, parsed.expression, EXPRESSION_SITES[what]));
+        }
       }
       let output: OutputSchema | undefined;
       const outputPair = item.items.find((pair) => scalarString(pair.key) === 'output');
