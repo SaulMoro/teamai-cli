@@ -101,6 +101,7 @@ type RunningStep = StepIn<'running'>;
 type SucceededStep = StepIn<'succeeded'>;
 type FailedStep = StepIn<'failed'>;
 type SkippedStep = StepIn<'skipped'>;
+type CancelledStep = StepIn<'cancelled'>;
 
 type Settlement<T extends StepState> = Omit<T, keyof StepBase | 'status' | 'outcome'>;
 
@@ -143,6 +144,11 @@ export function succeed(state: StepState, settlement: Settlement<SucceededStep>)
 
 export function fail(state: StepState, settlement: Settlement<FailedStep>): FailedStep {
   return become<FailedStep>(state, { status: 'failed', outcome: 'failed', ...settlement });
+}
+
+/** A leased or running step stops before it settles. A leased one keeps its attempt, which can no longer be reported. */
+export function cancel(state: LeasedStep | RunningStep, failure: WorkflowFailure): CancelledStep {
+  return become<CancelledStep>(state, { status: 'cancelled', ...(state.status === 'leased' ? { attempt: state.attempt } : {}), failure });
 }
 
 /** A step that ran and did not succeed. */

@@ -10,7 +10,7 @@ import { outputMismatch } from './output.js';
 import { noteRunRecord, runRecordState } from './records.js';
 import { parseTemplate, renderStrings, renderText, templatedTexts, templatePaths, type TemplateContext, type TemplateError } from './template.js';
 import { parseStepPath } from './step-path.js';
-import { fail, lease, release, settled, skip, start, stopped, succeed, type LeasedStep, type StepState } from './step-state.js';
+import { cancel, fail, lease, release, settled, skip, start, stopped, succeed, type LeasedStep, type StepState } from './step-state.js';
 import { generateRunId, isRunId, readRun, runLockPath, writeRun } from './store.js';
 import type {
   CachedWorkflow,
@@ -318,7 +318,7 @@ function parseReads(run: RunState, scope: Scope): RunReads | string {
   return { conditions, reads, outputs };
 }
 
-const VISIBLE_OUTCOMES: Partial<Record<StepState['status'], VisibleOutcome>> ={ succeeded: 'success', failed: 'failed', skipped: 'skipped' };
+const VISIBLE_OUTCOMES: Partial<Record<StepState['status'], VisibleOutcome>> ={ succeeded: 'success', failed: 'failed', skipped: 'skipped', cancelled: 'cancelled' };
 
 /**
  * What expressions in a workflow read as `steps.<id>`: its own step instances, by their id in that workflow,
@@ -401,6 +401,25 @@ function startWorkflowStep(run: RunState, scope: Scope, states: StepState[], sta
   return undefined;
 }
 
+/**
+ * An end reached in a workflow stops everything under it that has not settled, in its sub-workflows too: a leased
+ * step is cancelled and its attempt kept in `cancelledAttempts`, a running workflow step is cancelled, and a
+ * pending step is skipped.
+ */
+function stopUnder(run: RunState, scope: Scope, end: string): void {
+  const workflow = 'name' in scope.definition ? `workflow "${scope.definition.name}"` : `step "${scope.prefix.slice(0, -1)}" inline workflow`;
+  const failure = { code: 'end_reached', message: `Cancelled: ${workflow} reached end "${end}"` };
+  for (const state of run.steps) {
+    if (!state.id.startsWith(scope.prefix)) continue;
+    if (state.status === 'pending') skip(state);
+    else if (state.status === 'running') cancel(state, failure);
+    else if (state.status === 'leased') {
+      (run.cancelledAttempts ??= []).push(state.attempt);
+      cancel(state, failure);
+    }
+  }
+}
+
 /** A workflow step takes the outcome, the end, and the outputs of the workflow it ran. */
 function finishWorkflowStep(state: StepState, result: WorkflowResult): void {
   const settlement = {
@@ -469,7 +488,7 @@ function settleScope(run: RunState, scope: Scope, advancing: boolean): Settled {
       .sort((left, right) => settledAtOf(left) - settledAtOf(right))[0];
     const end = reached ? definitionOf(reached)?.end : undefined;
     if (end !== undefined) {
-      for (const item of states) if (item.status === 'pending') skip(item);
+      stopUnder(run, scope, end);
       return { outcome: scope.definition.ends?.[end] ?? 'failed', end, outputs: workflowOutputs(scope, states, reads.outputs), settledAt: settledAtOf(reached) };
     }
     const finished = (): WorkflowResult => ({
@@ -772,6 +791,10 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
     // Settled membership wins. An old revision of a settled attempt is still repeated_report.
     if (run.settledAttempts.includes(report.attempt)) {
       return { save: false, envelope: error('repeated_report', `Attempt ${report.attempt} was already reported`) };
+    }
+    // Before the driver check, so any driver learns that the attempt was cancelled.
+    if (run.cancelledAttempts?.includes(report.attempt)) {
+      return { save: false, envelope: error('lease_cancelled', `Attempt ${report.attempt} was cancelled; its report is not recorded`) };
     }
     const step = run.steps.find((item): item is LeasedStep => item.status === 'leased' && item.lease.attempt === report.attempt);
     if (!step) {

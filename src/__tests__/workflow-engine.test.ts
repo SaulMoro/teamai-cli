@@ -2089,6 +2089,97 @@ describe('parallel leases', () => {
     ] });
   });
 
+  it('reaches a finished workflow end past a ready step when the driver takes no lease, and cancels what still runs', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: trigger
+    command: node trigger.js
+  - id: spare
+    needs: [trigger]
+    command: node spare.js
+  - id: w
+    needs: []
+    workflow:
+      steps:
+        - id: finish
+          command: node finish.js
+    end: done
+  - id: slow
+    needs: []
+    command: node slow.js
+  - id: ask
+    needs: []
+    prompt: Ask.
+`, 'ends:\n  done: succeeded\n'));
+    const leases = new Map<string, { step: string; attempt: string; revision: number }>();
+    for (let i = 0; i < 4; i += 1) {
+      const lease = leaseIn(await leaseNext(config, runId, driverA, { running: [...leases.values()].map((item) => item.attempt) }));
+      leases.set(lease.step, lease);
+    }
+    expect([...leases.keys()]).toEqual(['trigger', 'w.finish', 'slow', 'ask']);
+    await reportAttempt(config, runId, { ...leases.get('trigger')!, outcome: 'success', driver: driverA });
+    await reportAttempt(config, runId, { ...leases.get('w.finish')!, outcome: 'success', driver: driverA });
+    const slow = leases.get('slow')!;
+    const ask = leases.get('ask')!;
+
+    const reconciled = await leaseNext(config, runId, driverA, { running: [slow.attempt, ask.attempt], canTakeLease: false });
+
+    expect(reconciled).toEqual({ data: { done: { run: runId, record: 'pending', outcome: 'succeeded', end: 'done' }, cancelled: [slow.attempt, ask.attempt] } });
+    expect(await readRun(config, runId)).toMatchObject({
+      cancelledAttempts: [slow.attempt, ask.attempt],
+      steps: [
+        { id: 'trigger', status: 'succeeded' },
+        { id: 'spare', status: 'skipped' },
+        { id: 'w', status: 'succeeded' },
+        { id: 'w.finish', status: 'succeeded' },
+        { id: 'slow', status: 'cancelled', attempt: slow.attempt, failure: { code: 'end_reached', message: 'Cancelled: workflow "build" reached end "done"' } },
+        { id: 'ask', status: 'cancelled', attempt: ask.attempt },
+      ],
+    });
+    expect(await reportAttempt(config, runId, { ...slow, outcome: 'success', driver: driverB })).toEqual({ error: {
+      code: 'lease_cancelled', message: `Attempt ${slow.attempt} was cancelled; its report is not recorded`,
+    } });
+  });
+
+  it('cancels only what runs under a sub-workflow that reaches its end, and the run goes on', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: w
+    workflow:
+      ends:
+        stopped: succeeded
+      outputs:
+        long: steps.long.outcome
+      steps:
+        - id: stop
+          command: node stop.js
+          end: stopped
+        - id: long
+          needs: []
+          command: node long.js
+  - id: other
+    needs: []
+    command: node other.js
+  - id: after
+    needs: [w]
+    command: node after.js
+    env:
+      LONG: "{{ steps.w.outputs.long }}"
+`));
+    const stop = leaseIn(await leaseNext(config, runId, driverA));
+    const long = leaseIn(await leaseNext(config, runId, driverA, { running: [stop.attempt] }));
+    const other = leaseIn(await leaseNext(config, runId, driverA, { running: [stop.attempt, long.attempt] }));
+    await reportAttempt(config, runId, { ...stop, outcome: 'success', driver: driverA });
+
+    const after = await leaseNext(config, runId, driverA, { running: [long.attempt, other.attempt] });
+
+    expect([stop.step, long.step, other.step]).toEqual(['w.stop', 'w.long', 'other']);
+    expect(after).toMatchObject({ data: { lease: { step: 'after', env: { LONG: 'cancelled' } }, cancelled: [long.attempt] } });
+    expect(await readRun(config, runId)).toMatchObject({ cancelledAttempts: [long.attempt], steps: [
+      { id: 'w', status: 'succeeded', end: 'stopped', outputs: { long: 'cancelled' } },
+      { id: 'w.stop', status: 'succeeded' },
+      { id: 'w.long', status: 'cancelled', failure: { code: 'end_reached', message: 'Cancelled: step "w" inline workflow reached end "stopped"' } },
+      { id: 'other', status: 'leased' },
+      { id: 'after', status: 'leased' },
+    ] });
+  });
+
   it('waits while every ready step is leased and listed as running', async () => {
     const { config, runId } = await startBuild(ROOTS);
     const a = leaseIn(await leaseNext(config, runId, driverA));
@@ -2137,6 +2228,8 @@ describe('parallel leases', () => {
     const restarted = await leaseNext(config, runId, driverA);
 
     expect(restarted).toMatchObject({ data: { done: { run: runId, outcome: 'succeeded', end: 'done' } } });
+    expect(await readRun(config, runId)).toMatchObject({ cancelledAttempts: [slow.attempt], steps: [{ id: 'slow', status: 'cancelled' }, { id: 'finish' }] });
+    expect(await reportAttempt(config, runId, { ...slow, outcome: 'success', driver: driverA })).toMatchObject({ error: { code: 'lease_cancelled' } });
   });
 
   it('settles and saves without leasing when the driver takes no lease', async () => {

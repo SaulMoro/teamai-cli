@@ -135,6 +135,20 @@ steps:
     command: echo join
 `;
 
+const END_WHILE_RUNNING = `schemaVersion: v1alpha1
+name: build
+description: A step reaches the end while another one runs.
+ends:
+  done: succeeded
+steps:
+  - id: slow
+    command: echo slow
+  - id: finish
+    needs: []
+    command: echo finish
+    end: done
+`;
+
 export const workflowConformanceScenarios: ConformanceScenario[] = [
   {
     name: 'two-step command success',
@@ -275,6 +289,19 @@ export const workflowConformanceScenarios: ConformanceScenario[] = [
       { kind: 'report', lease: 'a', body: { outcome: 'success' }, expect: { data: { revision: 2, step: { id: 'a', status: 'succeeded' } } } },
       { kind: 'report', lease: 'b', body: { outcome: 'success' }, expect: { data: { revision: 3, step: { id: 'b', status: 'succeeded' } } } },
       { kind: 'next', saveAs: 'join', expect: { data: { lease: { step: 'join', revision: 3 } } } },
+    ],
+  },
+  {
+    name: 'an end cancels a running lease, and its report is lease_cancelled',
+    workflowName: 'build',
+    yaml: END_WHILE_RUNNING,
+    operations: [
+      { kind: 'next', saveAs: 'slow', expect: { data: { lease: { step: 'slow' } } } },
+      { kind: 'next', saveAs: 'finish', running: ['slow'], expect: { data: { lease: { step: 'finish' } } } },
+      { kind: 'report', lease: 'finish', body: { outcome: 'success' }, expect: { data: { step: { id: 'finish', status: 'succeeded' } } } },
+      { kind: 'next', saveAs: 'done', running: ['slow'], cancelled: ['slow'], expect: { data: { done: { outcome: 'succeeded', end: 'done' } } } },
+      { kind: 'next', saveAs: 'again', running: ['slow'], cancelled: ['slow'], expect: { data: { done: { outcome: 'succeeded', end: 'done' } } } },
+      { kind: 'report', lease: 'slow', body: { outcome: 'success' }, expect: { error: { code: 'lease_cancelled' } } },
     ],
   },
 ];

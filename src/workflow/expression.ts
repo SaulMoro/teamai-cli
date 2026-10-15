@@ -15,7 +15,7 @@ export type Expression =
   | { kind: 'binary'; operator: '==' | '!=' | '&&' | '||'; left: Expression; right: Expression; column: number };
 
 /** The outcome an expression reads of a settled step. */
-export type VisibleOutcome = 'success' | 'failed' | 'skipped';
+export type VisibleOutcome = 'success' | 'failed' | 'skipped' | 'cancelled';
 
 /** A step as an expression sees it. `outcome` is set once the step settled. */
 export interface ExpressionStep {
