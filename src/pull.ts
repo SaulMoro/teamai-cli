@@ -3063,7 +3063,7 @@ export async function pull(
           // failed at run start/end is retried here, once per pull.
           try {
             const { publishPendingRecords } = await import('./workflow/records.js');
-            await publishPendingRecords(t.opts.selfConfig, t.username);
+            await publishPendingRecords(t.opts.selfConfig);
           } catch (e) {
             log.debug(`Workflow record publish to ${t.repoPath} deferred: ${(e as Error).message}`);
           }

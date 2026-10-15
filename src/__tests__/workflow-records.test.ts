@@ -1,7 +1,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { simpleGit } from 'simple-git';
 import { afterEach, describe, expect, it } from 'vitest';
+import YAML from 'yaml';
 import type { LocalConfig } from '../types.js';
 import {
   buildEndRecord,
@@ -9,6 +11,7 @@ import {
   enqueueRecord,
   mergeRecord,
   pendingRecords,
+  publishPendingRecords,
   recordPath,
 } from '../workflow/records.js';
 import { generateRunId, isRunId } from '../workflow/store.js';
@@ -264,5 +267,41 @@ describe('#1083 workflow stats merge', () => {
     const start = buildStartRecord(runState({ status: 'running' }), driver, 'tester');
     const startOnly = statsDeltaRecords(new Map([['r1234567890abcdef', null]]), [start]);
     expect(startOnly).toEqual([]);
+  });
+
+  it('folds a queued record into the stats file of the member who ran it', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-workflow-drain-'));
+    dirs.push(root);
+    const seed = path.join(root, 'seed');
+    fs.mkdirSync(seed);
+    const seedGit = simpleGit(seed);
+    await seedGit.init(['--initial-branch=main']);
+    await seedGit.addConfig('user.email', 't@t.com');
+    await seedGit.addConfig('user.name', 't');
+    fs.writeFileSync(path.join(seed, 'teamai.yaml'), 'team: acme\n');
+    await seedGit.add(['.']);
+    await seedGit.commit('init');
+    const origin = path.join(root, 'origin.git');
+    await simpleGit().clone(seed, origin, ['--bare']);
+    const clone = path.join(root, 'team-repo');
+    await simpleGit().clone(origin, clone);
+    await simpleGit(clone).addConfig('user.email', 't@t.com');
+    await simpleGit(clone).addConfig('user.name', 't');
+    // The queue outlives a username change: alice ran the workflow, bob drains it.
+    const config: LocalConfig = {
+      repo: { localPath: clone, remote: origin, kind: 'git' },
+      username: 'bob',
+      scope: 'user',
+      additionalRoles: [],
+      dataHome: path.join(root, 'data'),
+    };
+    await enqueueRecord(config, buildEndRecord(runState(), driver, 'alice'));
+
+    expect(await publishPendingRecords(config)).toBe('published');
+
+    const reports = simpleGit(origin);
+    const stats = YAML.parse(await reports.show(['teamai-reports:stats/alice.yaml'])) as Record<string, unknown>;
+    expect(stats.workflows).toEqual({ runs: 1, succeeded: 1, failed: 0, totalDurationMs: 150000 });
+    expect(await reports.raw(['ls-tree', '--name-only', 'teamai-reports', 'stats/'])).toBe('stats/alice.yaml\n');
   });
 });

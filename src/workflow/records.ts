@@ -188,7 +188,7 @@ export async function noteRunRecord(
       ? buildStartRecord(run, driver, username)
       : buildEndRecord(run, driver, username);
     await enqueueRecord(config, record);
-    return await publishPendingRecords(config, username);
+    return await publishPendingRecords(config);
   } catch {
     return 'pending';
   }
@@ -252,16 +252,13 @@ async function dequeue(config: LocalConfig, record: WorkflowRunRecord): Promise<
 
 /**
  * Publish every queued record through the reports branch, then fold their
- * totals into the user's stats file in the same update.
+ * totals into each record's own member stats file in the same update.
  *
  * Returns `'published'` when the queue drained (or was empty) and `'pending'`
  * when anything remains queued — the value the engine surfaces as
  * `record: pending` (#1083).
  */
-export async function publishPendingRecords(
-  config: LocalConfig,
-  username: string,
-): Promise<'published' | 'pending'> {
+export async function publishPendingRecords(config: LocalConfig): Promise<RecordState> {
   const queued = await pendingRecords(config);
   if (queued.length === 0) return 'published';
   const { updateReports, readReportsOriginFile } = await import('../utils/reports-branch.js');
@@ -300,25 +297,31 @@ export async function publishPendingRecords(
       delivered.push(...records);
     }
     // Workflow totals ride the same update: one lock, one push, and the stats
-    // merge counts only what this update delivered.
-    const statsRel = `stats/${username}.yaml`;
+    // merge counts only what this update delivered. Each total lands in the
+    // stats file of the member who ran it, not of whoever drains the queue.
     const { default: YAML } = await import('yaml');
-    const existingStatsRaw = await readReportsOriginFile(worktree, statsRel);
-    let existingStats: Record<string, unknown> = {};
-    if (existingStatsRaw !== null && existingStatsRaw.trim() !== '') {
-      try {
-        existingStats = YAML.parse(existingStatsRaw) as Record<string, unknown>;
-      } catch {
-        existingStats = {};
-      }
+    const deltaByUser = new Map<string, WorkflowRunRecord[]>();
+    for (const record of statsDeltaRecords(originByRun, delivered)) {
+      const list = deltaByUser.get(record.username) ?? [];
+      list.push(record);
+      deltaByUser.set(record.username, list);
     }
-    const mergedStats = mergeWorkflowStats(
-      ensureStatsShape(existingStats, username),
-      statsDeltaRecords(originByRun, delivered),
-    );
-    await fs.mkdir(path.join(worktree, 'stats'), { recursive: true });
-    await fs.writeFile(path.join(worktree, statsRel), YAML.stringify(mergedStats), 'utf-8');
-    files.push(statsRel);
+    for (const [username, delta] of deltaByUser) {
+      const statsRel = `stats/${username}.yaml`;
+      const existingStatsRaw = await readReportsOriginFile(worktree, statsRel);
+      let existingStats: Record<string, unknown> = {};
+      if (existingStatsRaw !== null && existingStatsRaw.trim() !== '') {
+        try {
+          existingStats = YAML.parse(existingStatsRaw) as Record<string, unknown>;
+        } catch {
+          existingStats = {};
+        }
+      }
+      const mergedStats = mergeWorkflowStats(ensureStatsShape(existingStats, username), delta);
+      await fs.mkdir(path.join(worktree, 'stats'), { recursive: true });
+      await fs.writeFile(path.join(worktree, statsRel), YAML.stringify(mergedStats), 'utf-8');
+      files.push(statsRel);
+    }
     return {
       files: [...new Set(files)],
       message: `[teamai] Publish ${byRun.size} workflow run record${byRun.size === 1 ? '' : 's'}`,
