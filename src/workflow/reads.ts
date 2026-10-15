@@ -27,21 +27,22 @@ export function conditionDiagnostics({ file, lineCounter }: ParseContext, condit
       });
       continue;
     }
-    reads.push(expressionSite(condition.id, condition.field, position(lineCounter, condition.node), 'if', condition.expression));
+    reads.push(expressionSite(condition.id, condition.field, position(lineCounter, condition.node), 'if', [condition.expression]));
   }
   return diagnostics;
 }
 
+/** What an expression reads, or the expressions of one template, all checked as one `if` is. */
 export function expressionSite(
   id: string,
   field: string,
   at: { line: number; column: number },
   what: string,
-  expression: Expression,
+  expressions: Expression[],
   afterRun?: { code: WorkflowDiagnostic['code'] },
 ): ReadSite {
   return {
-    id, field, at, what, paths: expressionPaths(expression), ends: endComparisons(expression), expression,
+    id, field, at, what, paths: expressions.flatMap(expressionPaths), ends: expressions.flatMap(endComparisons), expressions,
     ...(afterRun ? { afterRun: true, code: afterRun.code } : {}),
   };
 }
@@ -59,8 +60,8 @@ export interface ReadSite {
   paths: ExpressionPath[];
   /** The names an `if` compares a step's end with. */
   ends?: Array<{ step: string; end: string }>;
-  /** The `if` itself, whose comparisons and lists are checked against the types its paths declare. */
-  expression?: Expression;
+  /** The `if` itself, or each expression of a template, whose comparisons and lists are checked against the types its paths declare. */
+  expressions: Expression[];
   /** The site is evaluated after its step succeeds, so it may read that step too. */
   afterRun?: boolean;
   /**
@@ -164,10 +165,10 @@ export function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScop
       const field = undeclaredField(path, scope.outputs.get(path.step), scope.forEach.has(path.step));
       if (field) diagnostics.push(at(`${subject} ${site.what} ${field}`));
     }
-    if (site.expression) {
-      // A path this site does not list reads an enclosing workflow, which checks its type.
-      const schemaOf = (path: ExpressionPath): DeclaredType | undefined => (site.paths.includes(path) ? declaredSchema(scope, readable, path) : undefined);
-      for (const problem of typeProblems(site.expression, schemaOf)) diagnostics.push(at(`${subject} ${site.what} ${problem.message}`));
+    // A path this site does not list reads an enclosing workflow, which checks its type.
+    const schemaOf = (path: ExpressionPath): DeclaredType | undefined => (site.paths.includes(path) ? declaredSchema(scope, readable, path) : undefined);
+    for (const problem of site.expressions.flatMap((expression) => typeProblems(expression, schemaOf))) {
+      diagnostics.push(at(`${subject} ${site.what} ${problem.message}`));
     }
     for (const { step, end } of site.ends ?? []) {
       const child = readable.has(step) ? scope.children.get(step) : undefined;

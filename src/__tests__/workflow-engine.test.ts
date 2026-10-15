@@ -1577,7 +1577,7 @@ describe('with on prompt steps', () => {
 `));
     const run = await readRun(config, runId);
     if (typeof run !== 'object' || !run.definition.steps[0]?.with) throw new Error('run missing');
-    run.definition.steps[0].with = { task: '{{ inputs.task == 1 }}' };
+    run.definition.steps[0].with = { task: '{{ inputs.task = 1 }}' };
     await writeRun(config, run);
 
     const { leased, done } = await drive(config, runId);
@@ -1585,7 +1585,7 @@ describe('with on prompt steps', () => {
     expect(leased).toEqual(['label']);
     expect(done).toEqual({ run: runId, record: 'pending', outcome: 'failed' });
     expect(await readRun(config, runId)).toMatchObject({ steps: [
-      { id: 'fix', status: 'failed', failure: { code: 'invalid_template', message: 'step "fix" with template {{ inputs.task == 1 }}: a template reads one path' } },
+      { id: 'fix', status: 'failed', failure: { code: 'invalid_template', message: 'step "fix" with template {{ inputs.task = 1 }}: unexpected "="' } },
       { id: 'label', status: 'succeeded' },
     ] });
   });
@@ -3393,6 +3393,87 @@ describe('for_each', () => {
     ]);
   });
 
+  it('evaluates an expression in a prompt, a prompt_file, env and with, and leaves other braces as written', async () => {
+    const fixture = testConfig();
+    const knowledge = fixture.config.repo.localPath;
+    fs.mkdirSync(path.join(knowledge, 'prompts'));
+    fs.writeFileSync(path.join(knowledge, 'prompts', 'review.md'), "Review {{ length(steps.build.results) }} builds; {{ filter(steps.build.results, .outcome == 'failed') }} failed.");
+    const kept = "Keep {{ filter(items) }}, {{ all(products) }}, {{ items | length }}, ${{ length(steps.build.results) }}, {{#each items}}{{this}}{{/each}}, {{{ x }}} and {{ item }} as written.";
+    fs.writeFileSync(path.join(knowledge, 'workflows', 'triage.yaml'), workflow('triage', `  - id: build
+    for_each: inputs.packages
+    command: node build.js
+    env:
+      PACKAGE: "{{ item.id }}"
+      LAST: "{{ item.id == 'cli' }}"
+  - id: notify
+    needs: [build]
+    if: steps.build.outcome == 'failed'
+    command: node notify.js
+    env:
+      FAILED: "{{ filter(steps.build.results, .outcome == 'failed') }}"
+      COUNT: "{{ length(steps.build.results) }}"
+      ANY: "{{ any(steps.build.results, .outcome == 'failed') }}"
+      MANY: "{{ length(steps.build.results) > 3 }}"
+      BROKE: "{{ steps.build.outcome == 'failed' }}"
+  - id: fix
+    needs: [notify]
+    with:
+      failed: "{{ filter(steps.build.results, .outcome == 'failed') }}"
+      summary: "{{ length(filter(steps.build.results, .outcome == 'failed')) }} of {{ length(steps.build.results) }}"
+    prompt: "Fix {{ with.failed[0].item.id }} ({{ with.summary }} failed): {{ with.failed }}"
+  - id: review
+    needs: [fix]
+    prompt_file: prompts/review.md
+  - id: quote
+    needs: [review]
+    prompt: "${kept}"
+`, 'inputs:\n  packages: [{ id: string, dir: string }]\n'));
+    const synced = await syncWorkflowDefinitions(fixture.config);
+    expect(synced.invalid.map((diagnostic) => diagnostic.message)).toEqual([]);
+    const started = await startRun(fixture.config, 'triage', { packages: [{ id: 'core', dir: 'packages/core' }, { id: 'cli', dir: 'packages/cli' }] });
+    if ('error' in started) throw new Error(started.error.message);
+    const leases: Array<Pick<LoopLease, 'step' | 'prompt' | 'env'>> = [];
+
+    const { done } = await driveLoop(fixture.config, String(started.data.run), ({ step, prompt, env }) => {
+      leases.push({ step, ...(prompt ? { prompt } : {}), ...(env ? { env } : {}) });
+      return step === 'build[1]' ? { outcome: 'failed' } : {};
+    });
+
+    const failed = '[{"item":{"id":"cli","dir":"packages/cli"},"outcome":"failed"}]';
+    expect(leases).toEqual([
+      { step: 'build[0]', env: { PACKAGE: 'core', LAST: 'false' } },
+      { step: 'build[1]', env: { PACKAGE: 'cli', LAST: 'true' } },
+      { step: 'notify', env: { FAILED: failed, COUNT: '2', ANY: 'true', MANY: 'false', BROKE: 'true' } },
+      { step: 'fix', prompt: `Fix cli (1 of 2 failed): ${failed}` },
+      { step: 'review', prompt: `Review 2 builds; ${failed} failed.` },
+      { step: 'quote', prompt: kept },
+    ]);
+    expect(done).toEqual({ run: String(started.data.run), record: 'pending', outcome: 'failed' });
+  });
+
+  it('renders a read of a skipped step as an if evaluates it: a list it does not have is null, so a count is empty and a comparison false', async () => {
+    const { config, runId } = await startTree({ lint: workflow('lint', `  - id: lint
+    if: inputs.lint
+    for_each: inputs.packages
+    command: node lint.js
+  - id: plan
+    needs: []
+    command: node plan.js
+  - id: report
+    needs: [plan, lint]
+    prompt: "Lint {{ steps.lint.outcome }}: [{{ length(steps.lint.results) }}] checked, any failed [{{ any(steps.lint.results, .outcome == 'failed') }}], over one {{ length(steps.lint.results) > 1 }}, first [{{ steps.lint.results[0].item.id }}], failed [{{ filter(steps.lint.results, .outcome == 'failed') }}]."
+`, 'inputs:\n  packages: [{ id: string }]\n  lint: boolean\n') }, 'lint', { packages: [{ id: 'core' }], lint: false });
+    const prompts: string[] = [];
+
+    const { leased } = await driveLoop(config, runId, ({ prompt }) => {
+      if (prompt) prompts.push(prompt);
+      return {};
+    });
+
+    expect(leased).toEqual(['plan#1', 'report#1']);
+    expect(prompts).toEqual(['Lint skipped: [] checked, any failed [], over one false, first [], failed [].']);
+  });
+
   it('checks each item against output, keeps its outputs in results, and a later step reads them by index', async () => {
     const sized = workflow('sized', `  - id: build
     for_each: inputs.targets
@@ -3739,5 +3820,54 @@ describe('for_each', () => {
       { id: 'build', status: 'failed', failure: { code: 'item_cycle', message: 'step "build" has items that run after each other in a cycle: a -> c -> b -> a' } },
       { id: 'ship', status: 'skipped' },
     ] });
+  });
+});
+
+describe('where an item is bound', () => {
+  const header = 'inputs:\n  items: [{ name: string, xs: [string] }]\n';
+  const pair = (prompt: string, indent = ''): string => `${indent}  - id: s
+${indent}    prompt: "${prompt}"
+${indent}  - id: p
+${indent}    needs: []
+${indent}    command: node p.js
+`;
+  const positions: Array<[string, (prompt: string) => Record<string, string>, string, boolean]> = [
+    ['a step outside a for_each', (prompt) => ({ top: workflow('top', pair(prompt), header) }), 's', false],
+    ['a for_each step', (prompt) => ({ top: workflow('top', `  - id: s
+    for_each: inputs.items
+    prompt: "${prompt}"
+  - id: p
+    needs: []
+    command: node p.js
+`, header) }), 's[0]', true],
+    ["a step of an item's inline workflow", (prompt) => ({ top: workflow('top', `  - id: each
+    for_each: inputs.items
+    workflow:
+      steps:
+${pair(prompt, '      ')}`, header) }), 'each[0].s', true],
+    ['a step of a named workflow an item runs', (prompt) => ({
+      top: workflow('top', '  - id: each\n    for_each: inputs.items\n    workflow: inner\n', header),
+      inner: workflow('inner', pair(prompt)),
+    }), 'each[0].s', false],
+  ];
+  const inputs = { items: [{ name: 'I', xs: ['success'] }] };
+
+  it.each(positions)('renders item in %s only where pull, the lease and what the step waits for all bind it', async (_case, files, step, bound) => {
+    const reads = await startTree(files('{{ item.name }}|{{ length(item.xs) }}'), 'top', inputs);
+    expect(leaseIn(await leaseNext(reads.config, reads.runId, driverA))).toMatchObject({
+      step, prompt: bound ? 'I|1' : '{{ item.name }}|{{ length(item.xs) }}',
+    });
+
+    const fixture = testConfig();
+    for (const [file, body] of Object.entries(files('{{ any(item.xs, . == steps.p.outcome) }}'))) {
+      fs.writeFileSync(path.join(fixture.config.repo.localPath, 'workflows', `${file}.yaml`), body);
+    }
+    const pulled = await syncWorkflowDefinitions(fixture.config);
+    expect(pulled.invalid.map((diagnostic) => diagnostic.message).filter((message) => message.includes('steps.p'))).toHaveLength(bound ? 1 : 0);
+    if (bound) return;
+    // Where item is not bound, the step reads no step, so it does not wait for p.
+    const started = await startRun(fixture.config, 'top', inputs);
+    if ('error' in started) throw new Error(started.error.message);
+    expect(leaseIn(await leaseNext(fixture.config, String(started.data.run), driverA)).step).toBe(step);
   });
 });

@@ -157,7 +157,7 @@ steps:
 
 `build` reads `inputs.packages` once, when it becomes ready. If the value is not a list, the step fails with `invalid_items`. If the list is empty, the step succeeds at once, and its results are `[]`.
 
-Each instance reads its item as `item` in `prompt`, `env`, and `with`, and in every step of the inline workflow it runs. A `with` value that is only `{{ item }}` keeps the item's JSON type. A `command` is not templated, so pass the item through `env`. The step's own `if` and `for_each` are evaluated once, before any item runs, so they cannot read the step's items. Outside a `for_each`, `{{ item }}` stays as written, and pull rejects an expression that reads `item`.
+Each instance reads its item as `item` in `prompt`, `env`, and `with`, and in every step of the inline workflow it runs. A `with` value that is only `{{ item }}` keeps the item's JSON type. A `command` is not templated, so pass the item through `env`. The step's own `if` and `for_each` are evaluated once, before any item runs, so they cannot read the step's items. Outside a `for_each`, `{{ item }}` stays as written, and pull rejects any other read of `item`, such as in an `if` or in `{{ filter(inputs.xs, . == item) }}`.
 
 A driver gets each item as an ordinary lease whose `step` is `build[0]`, `build[1]`, and so on. A driver that lists its open leases in `running` gets the next item while the others run. `max_parallel` limits how many items are leased or running at once. At the limit, `next` hands out no other item until one of them settles.
 
@@ -550,4 +550,26 @@ The outputs of a step that runs a workflow have no declared type, so pull does n
 
 ### Templates
 
-A template reads one path, indexes included, such as `{{ steps.review.outputs.files[0].path }}` or `{{ with.refs[1] }}`. Operators and functions work only in an `if`.
+A template reads one path, indexes included, such as `{{ steps.review.outputs.files[0].path }}` or `{{ with.refs[1] }}`. It also evaluates an expression as an `if` does, such as `{{ length(steps.build.results) }}` or `{{ steps.build.outcome == 'failed' }}`, when the expression starts with a path, after any `!` or `(`, or calls `length`, `any`, `all` or `filter` on one. An expression does not read `with`. A `with` value that is only one expression keeps its JSON type. `teamai pull` checks the expression as it checks an `if`, and says what to fix when it has a mistake in it, a misspelled function on a step such as `{{ lenght(steps.build.results) }}` included. Other text, such as `{{ filter(items) }}` in a Vue sample, stays as written.
+
+To put a count or a filtered list into a prompt, evaluate it in the template:
+
+```yaml
+schemaVersion: v1alpha1
+name: fan-build-failures
+description: Build each package, then look for what the failed builds share.
+inputs:
+  packages: [{ id: string, dir: string }]
+steps:
+  - id: build
+    for_each: inputs.packages
+    command: npm run build --prefix "$PACKAGE_DIR"
+    env:
+      PACKAGE_DIR: "{{ item.dir }}"
+  - id: explain
+    needs: [build]
+    if: steps.build.outcome == 'failed'
+    prompt: "{{ length(filter(steps.build.results, .outcome == 'failed')) }} packages failed to build: {{ filter(steps.build.results, .outcome == 'failed') }}. Find what they share."
+```
+
+Pass the whole list, as `explain` does in `fan-build`, when the prompt needs every entry.

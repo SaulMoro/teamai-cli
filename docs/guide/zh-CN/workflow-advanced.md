@@ -157,7 +157,7 @@ steps:
 
 `build` 在就绪时读取一次 `inputs.packages`。值不是列表时，该步骤以 `invalid_items` 失败。列表为空时，该步骤立即成功，其 results 为 `[]`。
 
-每个实例在 `prompt`、`env` 和 `with` 中，以及它运行的内联工作流的每个步骤中，以 `item` 读取自己的那一项。只有 `{{ item }}` 的 `with` 值保留该项的 JSON 类型。`command` 不会被填充，所以请通过 `env` 传入该项。步骤自己的 `if` 和 `for_each` 在任何一项运行之前求值一次，因此读不到该步骤的项。在 `for_each` 之外，`{{ item }}` 保持原样，读取 `item` 的表达式会被 pull 拒绝。
+每个实例在 `prompt`、`env` 和 `with` 中，以及它运行的内联工作流的每个步骤中，以 `item` 读取自己的那一项。只有 `{{ item }}` 的 `with` 值保留该项的 JSON 类型。`command` 不会被填充，所以请通过 `env` 传入该项。步骤自己的 `if` 和 `for_each` 在任何一项运行之前求值一次，因此读不到该步骤的项。在 `for_each` 之外，`{{ item }}` 保持原样，其他读取 `item` 的地方都会被 pull 拒绝，例如 `if` 中或 `{{ filter(inputs.xs, . == item) }}` 中。
 
 驱动拿到的每一项都是普通租约，其 `step` 为 `build[0]`、`build[1]` 等。在 `running` 中列出未结租约的驱动，会在其他项运行时拿到下一项。`max_parallel` 限制同时处于已租出或运行中的项数。达到上限时，`next` 不再租出其他项，直到其中一项完成。
 
@@ -550,4 +550,26 @@ predicate 用以 `.` 开头的路径读取当前元素，和 jq 一样：
 
 ### 模板
 
-模板读取一个路径，可以带下标，例如 `{{ steps.review.outputs.files[0].path }}` 或 `{{ with.refs[1] }}`。运算符和函数只能用在 `if` 里。
+模板读取一个路径，可以带下标，例如 `{{ steps.review.outputs.files[0].path }}` 或 `{{ with.refs[1] }}`。表达式以路径开头（前面可以有 `!` 或 `(`），或对路径调用 `length`、`any`、`all` 或 `filter` 时，模板也会像 `if` 一样对它求值，例如 `{{ length(steps.build.results) }}` 或 `{{ steps.build.outcome == 'failed' }}`。表达式不读取 `with`。只包含一个表达式的 `with` 值保留其 JSON 类型。`teamai pull` 像检查 `if` 一样检查该表达式，写错时还会指出要改什么，包括对步骤拼错的函数名，例如 `{{ lenght(steps.build.results) }}`。其他文本保持原样，例如 Vue 示例中的 `{{ filter(items) }}`。
+
+要把计数或过滤后的列表放进提示词，请在模板中对它求值：
+
+```yaml
+schemaVersion: v1alpha1
+name: fan-build-failures
+description: Build each package, then look for what the failed builds share.
+inputs:
+  packages: [{ id: string, dir: string }]
+steps:
+  - id: build
+    for_each: inputs.packages
+    command: npm run build --prefix "$PACKAGE_DIR"
+    env:
+      PACKAGE_DIR: "{{ item.dir }}"
+  - id: explain
+    needs: [build]
+    if: steps.build.outcome == 'failed'
+    prompt: "{{ length(filter(steps.build.results, .outcome == 'failed')) }} packages failed to build: {{ filter(steps.build.results, .outcome == 'failed') }}. Find what they share."
+```
+
+提示词需要每一项时，像 `fan-build` 中的 `explain` 那样传入整个列表。

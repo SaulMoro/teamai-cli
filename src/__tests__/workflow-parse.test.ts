@@ -386,6 +386,23 @@ steps:
     expect(result.diagnostics[0]?.line).toBeGreaterThan(0);
     expect(formatDiagnostic(result.diagnostics[0]!)).toContain(`${FILE}:`);
   });
+
+  it('reports an expression nested 5,000 levels deep in an if and in a prompt template', () => {
+    const deep = `${'('.repeat(5000)}length(inputs.xs)${')'.repeat(5000)}`;
+    expect(rejected(`schemaVersion: v1alpha1
+name: build
+description: Nest deep.
+inputs:
+  xs: [string]
+steps:
+  - id: explain
+    if: ${deep} > 0
+    prompt: "Explain {{ ${deep} }} and {{ ${'('.repeat(5000)} }}"
+`)).toEqual([
+      { message: `${FILE}:8: field "steps[0].if": step "explain" if does not parse at column 101: an expression nests at most 100 levels deep, counting each "(", "!", call, && and ||` },
+      { message: `${FILE}:9: field "steps[0].prompt": step "explain" prompt template {{ ${deep} }}: an expression nests at most 100 levels deep, counting each "(", "!", call, && and ||`, code: 'bad_template' },
+    ]);
+  });
 });
 
 function rejected(content: string): Array<{ message: string; code?: string }> {
@@ -685,6 +702,12 @@ describe('for_each', () => {
     ]);
   });
 
+  it('accepts a call on item in a template of a for_each step, where item is bound', () => {
+    const result = parse(FAN.replace('"{{ item }}"', '"{{ length(item.xs) }}"'));
+
+    expect(result.ok ? result.definition.steps[0]?.env : result.diagnostics.map(formatDiagnostic)).toEqual({ TARGET: '{{ length(item.xs) }}' });
+  });
+
   it('rejects an if that reads item in a step without for_each', () => {
     expect(rejected(ITEM_TEXT.replace('    command: ansible', '    if: item.x == 1\n    command: ansible'))).toEqual([
       { message: `${FILE}:11: field "steps[1].if": step "play" if reads item, which is bound only in the templates of a for_each step and in the workflow each item runs` },
@@ -752,6 +775,70 @@ steps:
   it('rejects item in a command, which is never rendered', () => {
     expect(rejected(FAN.replace('node build.js', 'node build.js {{ item.name }}'))).toEqual([
       { message: `${FILE}:9: field "steps[0].command": step "build" command contains {{ item.name }}; command strings are not templated; pass the value through env:` },
+    ]);
+  });
+});
+
+const TRIAGE = `schemaVersion: v1alpha1
+name: build
+description: Triage the builds.
+inputs:
+  packages: [{ id: string }]
+steps:
+  - id: plan
+    command: node plan.js
+    output:
+      title: string
+      files: [{ path: string }]
+  - id: build
+    needs: [plan]
+    for_each: inputs.packages
+    command: node build.js
+  - id: other
+    needs: []
+    command: node other.js
+  - id: fix
+    needs: [build]
+    prompt: "Fix {{ length(filter(steps.build.results, .outcome == 'failed')) }} builds: {{ filter(steps.build.results, .outcome == 'failed') }}."
+`;
+const FIX_PROMPT = `"Fix {{ length(filter(steps.build.results, .outcome == 'failed')) }} builds: {{ filter(steps.build.results, .outcome == 'failed') }}."`;
+
+describe('expressions in templates', () => {
+  it('accepts an expression in a template and keeps the text to render when the step starts', () => {
+    const result = parse(TRIAGE);
+
+    expect(result.ok ? result.definition.steps[3]?.prompt : result.diagnostics.map(formatDiagnostic))
+      .toBe("Fix {{ length(filter(steps.build.results, .outcome == 'failed')) }} builds: {{ filter(steps.build.results, .outcome == 'failed') }}.");
+  });
+
+  it.each([
+    ['a double-quoted string', '{{ filter(steps.build.results, .outcome == "failed") }}', "strings use single quotes, as in 'failed'"],
+    ['= for ==', "{{ any(steps.build.results, .outcome = 'failed') }}", 'any is called as any(list, predicate)'],
+    ['a field a step does not have', '{{ length(steps.build.result) }}',
+      '"steps.build.result" must read steps.<id>.outcome, steps.<id>.end, steps.<id>.outputs, steps.<id>.passes or steps.<id>.results'],
+    ['a string compared with <', "{{ length(steps.build.results) < 'x' }}", "compares 'x' with <, but it is not a number"],
+  ])('rejects a call with %s, with the parse error', (_case, text, message) => {
+    expect(rejected(TRIAGE.replace(FIX_PROMPT, `'Fix ${text.replaceAll("'", "''")}.'`))).toEqual([
+      { message: `${FILE}:21: field "steps[3].prompt": step "fix" prompt template ${text}: ${message}`, code: 'bad_template' },
+    ]);
+  });
+
+  it('rejects an expression in a template that reads a step its step does not need, as in an if', () => {
+    expect(rejected(TRIAGE.replace(FIX_PROMPT, `"Fix it if {{ steps.other.outcome == 'success' }}."`))).toEqual([
+      { message: `${FILE}:21: field "steps[3].prompt": step "fix" prompt reads steps.other, which is not a step it needs, directly or through its needs`, code: 'bad_template' },
+    ]);
+  });
+
+  it('checks the types an expression in a template reads, as in an if', () => {
+    expect(rejected(TRIAGE.replace(FIX_PROMPT, '"Fix {{ length(steps.plan.outputs.title) }} and {{ filter(steps.plan.outputs.files, .finding) }}."'))).toEqual([
+      { message: `${FILE}:21: field "steps[3].prompt": step "fix" prompt passes steps.plan.outputs.title to length as its list, but it is not an array`, code: 'bad_template' },
+      { message: `${FILE}:21: field "steps[3].prompt": step "fix" prompt reads .finding, which is not in an item of steps.plan.outputs.files`, code: 'bad_template' },
+    ]);
+  });
+
+  it('rejects a call in a command, which is never rendered', () => {
+    expect(rejected(TRIAGE.replace('node other.js', 'node other.js {{ length(inputs.packages) }}'))).toEqual([
+      { message: `${FILE}:18: field "steps[2].command": step "other" command contains {{ length(inputs.packages) }}; command strings are not templated; pass the value through env:` },
     ]);
   });
 });

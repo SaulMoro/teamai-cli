@@ -1,5 +1,5 @@
 /**
- * The workflow expression language: `if` conditions, and the paths that templates read.
+ * The workflow expression language: `if` conditions, and what templates read and evaluate.
  * It reads `inputs`, `steps` and the `item` of a `for_each`, compares numbers, and calls `length`, `any`, `all` and
  * `filter`, whose predicate reads each element of the list as `.`. Its evaluation never throws.
  */
@@ -244,6 +244,7 @@ export function stepFieldSchema(field: Extract<ExpressionPath, { root: 'steps' }
 class Parser {
   private lookahead: { token: Token; next: number } | undefined;
   private index = 0;
+  private depth = 0;
   private predicateDepth = 0;
 
   constructor(private readonly source: string) {}
@@ -273,26 +274,41 @@ class Parser {
     return this.take();
   }
 
+  /** One level deeper in the tree. Text pasted in a prompt could otherwise nest or chain deep enough to overflow the stack. */
+  private deeper(column: number): void {
+    if (this.depth === 100) throw new ExpressionError(column, 'an expression nests at most 100 levels deep, counting each "(", "!", call, && and ||');
+    this.depth += 1;
+  }
+
   private or(): Expression {
+    const depth = this.depth;
     let left = this.and();
     for (let operator = this.symbol('||'); operator; operator = this.symbol('||')) {
+      this.deeper(operator.column);
       left = { kind: 'binary', operator: '||', left, right: this.and(), column: operator.column };
     }
+    this.depth = depth;
     return left;
   }
 
   private and(): Expression {
+    const depth = this.depth;
     let left = this.not();
     for (let operator = this.symbol('&&'); operator; operator = this.symbol('&&')) {
+      this.deeper(operator.column);
       left = { kind: 'binary', operator: '&&', left, right: this.not(), column: operator.column };
     }
+    this.depth = depth;
     return left;
   }
 
   private not(): Expression {
+    const depth = this.depth;
+    this.deeper(this.peek().column);
     const operator = this.symbol('!');
-    if (operator) return { kind: 'not', operand: this.not(), column: operator.column };
-    return this.equality();
+    const expression: Expression = operator ? { kind: 'not', operand: this.not(), column: operator.column } : this.equality();
+    this.depth = depth;
+    return expression;
   }
 
   private equality(): Expression {
@@ -480,6 +496,44 @@ export function parseExpression(source: string): ExpressionParse {
   } catch (error) {
     if (error instanceof ExpressionError) return { ok: false, column: error.column, message: error.message };
     throw error;
+  }
+}
+
+/** A step field written as a path, `steps` misspelled `step` included, as in `steps.build.results`. */
+const STEP_FIELD = /^steps?\.[A-Za-z0-9_-]+\.(?:outcome|end|outputs|passes|results)(?![A-Za-z0-9_-])/;
+
+/**
+ * Whether `source` reads like an expression, judged by its tokens alone and past any that do not lex: its first value,
+ * or the first argument of a call in it, after any "!" and "(", is a path `path` matches, or a step field. Only a step
+ * field counts after a name that is not a function, since other text, such as a Vue sample, calls its own functions on
+ * its own names. Unlike parseExpression, it also finds an expression with a mistake in it, such as a misspelled
+ * function or a double-quoted string.
+ */
+export function readsLikeExpression(source: string, path: RegExp): boolean {
+  let first: 'value' | 'unknown call' | undefined = 'value';
+  let previous: Token | undefined;
+  for (let index = 0; ;) {
+    let lexed: { token: Token; next: number };
+    try {
+      lexed = lexAt(source, index);
+    } catch (error) {
+      if (!(error instanceof ExpressionError)) throw error;
+      index = error.column;
+      first = undefined;
+      previous = undefined;
+      continue;
+    }
+    const { token, next } = lexed;
+    if (token.kind === 'end') return false;
+    if (token.kind === 'symbol' && token.text === '(' && previous?.kind === 'word' && NAME.test(previous.text)) {
+      first = Object.hasOwn(FUNCTIONS, previous.text) ? 'value' : 'unknown call';
+    } else if (first !== undefined && token.kind === 'word' && (STEP_FIELD.test(token.text) || (first === 'value' && path.test(token.text)))) {
+      return true;
+    } else if (!(token.kind === 'symbol' && (token.text === '!' || token.text === '('))) {
+      first = undefined;
+    }
+    previous = token;
+    index = next;
   }
 }
 

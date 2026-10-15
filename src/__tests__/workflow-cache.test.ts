@@ -921,20 +921,93 @@ steps:
     env:
       TASK: "{{ steps.plan.outputs.task }}"
       FREE: "{{ steps.free.outputs.y }}"
-      SAME: "{{ inputs.title == 'x' }}"
+      SAME: "{{ inputs.title = 'x' }}"
 `);
 
     const result = await syncWorkflowDefinitions(config);
 
     expect(result.unrunnable).toEqual(['workflows/build.yaml']);
     expect(result.invalid.map(formatDiagnostic)).toEqual([
-      'workflows/build.yaml:23: field "steps[3].env.SAME": step "label" env.SAME template {{ inputs.title == \'x\' }}: a template reads one path',
+      'workflows/build.yaml:23: field "steps[3].env.SAME": step "label" env.SAME template {{ inputs.title = \'x\' }}: unexpected "="',
       'workflows/build.yaml:16: field "steps[2].prompt": step "fix" prompt reads inputs.titel, which is not an input the workflow declares',
       'workflows/build.yaml:16: field "steps[2].prompt": step "fix" prompt reads steps.plan.outputs.tsk, which is not in the output step "plan" declares',
       'workflows/build.yaml:16: field "steps[2].prompt": step "fix" prompt reads steps.free, which is not a step it needs, directly or through its needs',
       'workflows/build.yaml:22: field "steps[3].env.FREE": step "label" env.FREE reads steps.free, which is not a step it needs, directly or through its needs',
     ]);
     expect(result.invalid.map((diagnostic) => diagnostic.code)).toEqual(Array(5).fill('bad_template'));
+  });
+
+  it('accepts a function call in a template, drops the last valid version for a call with a mistake in it, and leaves other braces as text', async () => {
+    const config = testConfig();
+    fs.mkdirSync(path.join(config.repo.localPath, 'prompts'));
+    const promptFile = path.join(config.repo.localPath, 'prompts', 'review.md');
+    const body = (env: string, value: string, prompt: string): string => `schemaVersion: v1alpha1
+name: build
+description: Report the failed builds.
+inputs:
+  targets: [string]
+steps:
+  - id: build
+    for_each: inputs.targets
+    command: node build.js
+  - id: notify
+    needs: [build]
+    command: node notify.js
+    env:
+      FAILED: "${env}"
+  - id: fix
+    needs: [build]
+    with:
+      failed: "${value}"
+    prompt: "${prompt} {{ with.failed }}"
+`;
+    fs.writeFileSync(promptFile, 'Review the builds.');
+    writeWorkflow(config, 'build', body('{{ steps.build.results }}', '{{ steps.build.outcome }}', 'Fix the failed builds.'));
+    writeWorkflow(config, 'review', `schemaVersion: v1alpha1
+name: review
+description: Review the builds.
+inputs:
+  targets: [string]
+steps:
+  - id: build
+    for_each: inputs.targets
+    command: node build.js
+  - id: review
+    needs: [build]
+    prompt_file: prompts/review.md
+`);
+    expect((await syncWorkflowDefinitions(config)).cached).toEqual(['build', 'review']);
+    fs.writeFileSync(promptFile, 'Review {{ length(steps.build.results) }} builds.');
+    writeWorkflow(config, 'build', body(
+      "{{ filter(steps.build.results, .outcome == 'failed') }}",
+      "{{ any(steps.build.results, .outcome == 'failed') }}",
+      'Fix {{ length(steps.build.results) }} builds.',
+    ));
+    writeWorkflow(config, 'jinja', `schemaVersion: v1alpha1
+name: jinja
+description: Explain a Jinja template.
+steps:
+  - id: explain
+    prompt: "Explain {{ items | length }} and {{ name }} in this Jinja template."
+`);
+
+    const accepted = await syncWorkflowDefinitions(config);
+
+    expect(accepted.invalid.map(formatDiagnostic)).toEqual([]);
+    expect(accepted.cached).toEqual(['build', 'jinja', 'review']);
+    expect((await loadCachedWorkflow(config, 'build'))?.definition.steps[1]?.env).toEqual({ FAILED: "{{ filter(steps.build.results, .outcome == 'failed') }}" });
+    expect((await loadCachedWorkflow(config, 'jinja'))?.definition.steps[0]?.prompt).toBe('Explain {{ items | length }} and {{ name }} in this Jinja template.');
+
+    fs.writeFileSync(promptFile, 'Review {{ length(steps.build.result) }} builds.');
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([
+      'workflows/review.yaml:12: field "steps[1].prompt_file": step "review" prompt_file template {{ length(steps.build.result) }}: "steps.build.result" must read steps.<id>.outcome, steps.<id>.end, steps.<id>.outputs, steps.<id>.passes or steps.<id>.results',
+    ]);
+    expect(result.invalid.map((diagnostic) => diagnostic.code)).toEqual(['bad_template']);
+    expect(result.unrunnable).toEqual(['workflows/review.yaml']);
+    expect(result.kept).toEqual([]);
+    expect(await startRun(config, 'review', { targets: [] })).toMatchObject({ error: { code: 'workflow_not_found' } });
   });
 
   it('reports a bad template in prompt_file text and drops the version that rendered it as text', async () => {

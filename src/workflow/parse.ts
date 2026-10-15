@@ -1,7 +1,7 @@
 import { isMap, isScalar, isSeq, LineCounter, parseDocument, type Node, type YAMLMap } from 'yaml';
 import { fieldsText, parseExpression, type ExpressionPath } from './expression.js';
 import {
-  findTemplate, parseTemplate, stepExpressions, templatedTexts, templatePaths, templateWithPaths, type StepExpression, type Template,
+  findTemplate, parseTemplate, stepExpressions, templatedTexts, templateExpressions, templateWithPaths, type StepExpression, type Template,
 } from './template.js';
 import type {
   EndOutcome, ForEach, InlineWorkflow, OutputSchema, StepLoop, WorkflowDefinition, WorkflowDiagnostic, WorkflowLoop, WorkflowStep,
@@ -231,7 +231,7 @@ function parseBody(
   const loop = loopPair ? parseLoop(loopPair.value ?? loopPair.key, `${at}loop`, label, ctx, false) : undefined;
   const loopWhile = loop?.while === undefined ? undefined : parseExpression(loop.while);
   const loopSite: ReadSite | undefined = loopWhile?.ok ? {
-    ...expressionSite('', `${at}loop.while`, position(lineCounter, valueNode(loopPair?.value, 'while')), 'loop.while', loopWhile.expression),
+    ...expressionSite('', `${at}loop.while`, position(lineCounter, valueNode(loopPair?.value, 'while')), 'loop.while', [loopWhile.expression]),
     workflow: label,
     code: 'bad_loop',
   } : undefined;
@@ -415,7 +415,7 @@ function parseBody(
         }
         if (inGraph && parsed.ok) {
           reads.push({
-            id, field: template.field, at: position(lineCounter, template.node), what: template.what, paths: templatePaths(parsed.template),
+            ...expressionSite(id, template.field, position(lineCounter, template.node), template.what, templateExpressions(parsed.template)),
             ...(forEachPair ? { item: true } : {}), code: 'bad_template',
           });
         }
@@ -454,7 +454,7 @@ function parseBody(
           if (!parsed.ok) continue;
           const node = (nodes[what] ?? item) as Node;
           if (what === 'if') conditions.push({ id, field: `${field}.if`, node, expression: parsed.expression });
-          else reads.push(expressionSite(id, `${field}.${what}`, position(lineCounter, node), what, parsed.expression, EXPRESSION_SITES[what]));
+          else reads.push(expressionSite(id, `${field}.${what}`, position(lineCounter, node), what, [parsed.expression], EXPRESSION_SITES[what]));
         }
       }
       let output: OutputSchema | undefined;
@@ -868,14 +868,14 @@ export function promptFileDiagnostics(
   const bindsItem = step.forEach !== undefined || runners.some((runner) => runner.forEach !== undefined);
   const parsed = parseTemplate(text, bindsItem);
   if (!parsed.ok) {
-    return parsed.errors.map((problem) => ({
+    return parsed.errors.map((problem): WorkflowDiagnostic => ({
       file, ...at, field, message: `step "${step.id}" prompt_file template ${problem.source}: ${problem.message}`, code: 'bad_template',
     }));
   }
   const diagnostics: WorkflowDiagnostic[] = withReadProblems(`step "${step.id}"`, 'prompt_file', parsed.template, step.with)
     .map((message): WorkflowDiagnostic => ({ file, ...at, field, message, code: 'bad_template' }));
   let sites: ReadSite[] = [{
-    id: step.id, field, at, what: 'prompt_file', paths: templatePaths(parsed.template), ...(step.forEach ? { item: true } : {}), code: 'bad_template',
+    ...expressionSite(step.id, field, at, 'prompt_file', templateExpressions(parsed.template)), ...(step.forEach ? { item: true } : {}), code: 'bad_template',
   }];
   // Check the reads in the step's own workflow, then hand what it reads of enclosing steps out, one workflow at a time.
   for (let level = levels.length - 1; level >= 0 && sites.length > 0; level -= 1) {

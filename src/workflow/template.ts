@@ -1,9 +1,14 @@
 /**
- * Workflow templates: `{{ inputs.… }}`, `{{ steps.… }}`, `{{ with.… }}` and, where an item is bound, `{{ item }}` inside
- * prompt text, `env` values and every string inside a `with` value. Any other `{{ … }}` is plain text, so prompts about
- * GitHub Actions, Jinja or an Ansible loop stay as written.
+ * Workflow templates inside prompt text, `env` values and every string inside a `with` value: a `{{ … }}` that starts
+ * with `inputs.`, `steps.`, `with.` or, where an item is bound, `item`, after any "!" or "(", or that calls `length`,
+ * `any`, `all` or `filter` on one of those, or any function on a step field. It reads one path, or evaluates an
+ * expression as an `if` does. Any other `{{ … }}` is plain text, so prompts about GitHub Actions, Jinja, Vue or an
+ * Ansible loop stay as written.
  */
-import { parseExpression, parseFields, resolvePath, type ExpressionContext, type ExpressionPath, type PathField } from './expression.js';
+import {
+  evaluateExpression, expressionPaths, parseExpression, parseFields, resolvePath,
+  readsLikeExpression, type Expression, type ExpressionContext, type ExpressionPath, type PathField,
+} from './expression.js';
 import type { WorkflowStep } from './types.js';
 
 /** A `{{ with.<name>… }}` read: a value the step's own `with` names. Only templates read it; an `if` cannot. */
@@ -18,17 +23,16 @@ export interface TemplateContext extends ExpressionContext {
   with?: unknown;
 }
 
-/** One `{{ path }}` and where it sits in the source text. */
-export interface TemplateRead {
-  /** The whole `{{ … }}` as written. */
-  source: string;
-  path: ExpressionPath | WithPath;
-}
+/**
+ * One `{{ … }}` as written, and what it reads: an expression, which may be one path, or a value from the step's own
+ * `with`, which no expression reads.
+ */
+export type TemplateRead = { source: string; expression: Expression } | { source: string; path: WithPath };
 
 /** Literal text and reads, in source order. */
 export type Template = Array<string | TemplateRead>;
 
-/** A recognized template that is not one path: the `{{ … }}` as written and why. */
+/** A template that does not parse: the `{{ … }}` as written and why. */
 export interface TemplateError {
   source: string;
   message: string;
@@ -42,83 +46,114 @@ interface Syntax {
   template: RegExp;
   /** A template not preceded by `$`: `${{ inputs.x }}` is GitHub Actions text and stays as written. */
   recognized: RegExp;
+  /** The start of a path a template reads, which an expression must start with or call a function on. */
+  path: RegExp;
 }
 
-function syntax(template: RegExp): Syntax {
-  return { template, recognized: new RegExp(`(?<!\\$)${template.source}`, 'g') };
+/** `paths` is the regex source of what a template that reads one path holds between its braces. */
+function syntax(paths: string): Syntax {
+  const template = new RegExp(`\\{\\{\\s*(${paths})\\s*\\}\\}`);
+  return { template, recognized: new RegExp(`(?<!\\$)${template.source}`, 'g'), path: new RegExp(`^(?:${paths})`) };
 }
+
+/** `inputs.`, `steps.` or `with.`, then anything up to the closing braces. */
+const PATHS = String.raw`(?:inputs|steps|with)\.[^{}]*?`;
 
 /**
  * `item` is a root only where an item is bound: in the templates of a `for_each` step and of the workflow each item
  * runs. Elsewhere `{{ item }}` stays as written, as in a prompt that quotes an Ansible loop.
  */
 const SYNTAX = {
-  /** A `{{ … }}` whose content starts with `inputs.`, `steps.` or `with.`. */
-  unbound: syntax(/\{\{\s*((?:inputs|steps|with)\.[^{}]*?)\s*\}\}/),
-  /** Those, and a `{{ … }}` whose content is `item`, bare or with names and indexes. */
-  bound: syntax(/\{\{\s*((?:inputs|steps|with)\.[^{}]*?|item(?:[.[][^{}]*?)?)\s*\}\}/),
+  unbound: syntax(PATHS),
+  /** Those, and `item`, bare or with names and indexes. */
+  bound: syntax(String.raw`${PATHS}|item(?![A-Za-z0-9_-])(?:[.[][^{}]*?)?`),
 };
 /** `with.<name>`, then any names and indexes inside its value. */
 const WITH_PATH = /^with\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+|\[[^\]]*\]?)*$/;
+/** A `{{ … }}`, `${{ … }}` included, up to the first `}}`, that holds no other `{{`. */
+const ANY_BRACES = /\{\{((?:(?!\{\{)[\s\S])*?)\}\}/g;
+/** Those not preceded by `$`. */
+const BRACES = new RegExp(`(?<!\\$)${ANY_BRACES.source}`, 'g');
+
+const WITH_MESSAGE = 'with is read only as one path, such as with.<name>; an expression reads only inputs, steps and item';
 
 /**
- * The first template-like `{{ … }}` in `text` as written, if any; used to reject one where text is never rendered,
- * such as `command`. It also finds `${{ … }}`, since a command would receive those braces as written too.
+ * A template-like `{{ … }}` in `text` as written, if any; used to reject one where text is never rendered, such as
+ * `command`. Unlike parseTemplate, it also finds `${{ … }}`, path or expression, since a command would receive those
+ * braces as written too.
  */
 export function findTemplate(text: string, item: boolean): string | undefined {
-  return (item ? SYNTAX.bound : SYNTAX.unbound).template.exec(text)?.[0];
+  const { template, path } = item ? SYNTAX.bound : SYNTAX.unbound;
+  return template.exec(text)?.[0] ?? [...text.matchAll(ANY_BRACES)].find((match) => readsLikeExpression(match[1] ?? '', path))?.[0];
 }
 
-/** The one path a recognized template reads, or why it does not read exactly one. */
-function readOf(inner: string): ExpressionPath | WithPath | string {
+/** What a template reads, or why it does not parse. */
+function readOf(inner: string): { expression: Expression } | { path: WithPath } | string {
   if (inner.startsWith('with.')) {
-    if (!WITH_PATH.test(inner)) return 'a template reads one path, such as with.<name>';
+    if (!WITH_PATH.test(inner)) return WITH_MESSAGE;
     const parsed = parseFields(inner);
-    return parsed.ok ? { root: 'with', fields: parsed.fields.slice(1) } : parsed.message;
+    return parsed.ok ? { path: { root: 'with', fields: parsed.fields.slice(1) } } : parsed.message;
   }
   const parsed = parseExpression(inner);
-  if (!parsed.ok) return parsed.message;
-  return parsed.expression.kind === 'path' ? parsed.expression.path : 'a template reads one path';
+  return parsed.ok ? { expression: parsed.expression } : parsed.message;
 }
 
 /**
- * Splits `text` into literal text and reads. Every recognized template must be exactly one path. `item` is whether an
- * item is bound where the text renders; where none is, `{{ item }}` is literal text.
+ * Splits `text` into literal text and reads. A `{{ … }}` that starts with a path is a template, and so is one between
+ * them that reads like an expression, as written or with a mistake in it; every template must parse. `item` is
+ * whether an item is bound where the text renders; where none is, `{{ item }}` is literal text.
  */
 export function parseTemplate(text: string, item: boolean): TemplateParse {
+  const { recognized, path } = item ? SYNTAX.bound : SYNTAX.unbound;
   const template: Template = [];
   const errors: TemplateError[] = [];
-  let index = 0;
-  for (const match of text.matchAll((item ? SYNTAX.bound : SYNTAX.unbound).recognized)) {
-    const source = match[0];
-    const path = readOf(match[1] ?? '');
-    if (typeof path === 'string') {
-      errors.push({ source, message: path });
-    } else {
-      if (match.index > index) template.push(text.slice(index, match.index));
-      template.push({ source, path });
+  const read = (source: string, inner: string): void => {
+    const parsed = readOf(inner);
+    if (typeof parsed === 'string') errors.push({ source, message: parsed });
+    else template.push({ source, ...parsed });
+  };
+  const literal = (segment: string): void => {
+    let index = 0;
+    for (const match of segment.matchAll(BRACES)) {
+      if (!readsLikeExpression(match[1] ?? '', path)) continue;
+      if (match.index > index) template.push(segment.slice(index, match.index));
+      read(match[0], match[1] ?? '');
+      index = match.index + match[0].length;
     }
-    index = match.index + source.length;
+    if (index < segment.length) template.push(segment.slice(index));
+  };
+  let index = 0;
+  for (const match of text.matchAll(recognized)) {
+    literal(text.slice(index, match.index));
+    read(match[0], match[1] ?? '');
+    index = match.index + match[0].length;
   }
-  if (errors.length > 0) return { ok: false, errors };
-  if (index < text.length) template.push(text.slice(index));
-  return { ok: true, template };
+  literal(text.slice(index));
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, template };
+}
+
+/** Every expression a template evaluates, one path included, in source order. */
+export function templateExpressions(template: Template): Expression[] {
+  return template.flatMap((part) => (typeof part === 'string' || !('expression' in part) ? [] : [part.expression]));
 }
 
 /** Every `inputs`, `steps` and `item` path a template reads, in source order. */
 export function templatePaths(template: Template): ExpressionPath[] {
-  return template.flatMap((part) => (typeof part === 'string' || part.path.root === 'with' ? [] : [part.path]));
+  return templateExpressions(template).flatMap(expressionPaths);
 }
 
 /** Every `with` value a template reads, in source order. */
 export function templateWithPaths(template: Template): WithPath[] {
-  return template.flatMap((part) => (typeof part === 'string' || part.path.root !== 'with' ? [] : [part.path]));
+  return template.flatMap((part) => (typeof part === 'string' || !('path' in part) ? [] : [part.path]));
 }
 
-/** Reads a path. A `with` path walks the step's `with` values the way an `inputs` path walks the inputs. */
-function resolve(path: ExpressionPath | WithPath, context: TemplateContext): unknown {
-  if (path.root !== 'with') return resolvePath(path, context);
-  return resolvePath({ root: 'inputs', fields: path.fields, column: 1 }, { inputs: context.with, steps: {} });
+/**
+ * The value a read renders: its expression, evaluated as an `if` is, or its `with` path, which walks the step's `with`
+ * values the way an `inputs` path walks the inputs.
+ */
+function valueOf(read: TemplateRead, context: TemplateContext): unknown {
+  if ('expression' in read) return evaluateExpression(read.expression, context);
+  return resolvePath({ root: 'inputs', fields: read.path.fields, column: 1 }, { inputs: context.with, steps: {} });
 }
 
 /** A value as text: strings as they are, numbers and booleans as text, objects and arrays as JSON, null as ''. */
@@ -129,15 +164,15 @@ function textOf(value: unknown): string {
   return String(value);
 }
 
-/** Renders a template to text. A missing path renders as ''. */
+/** Renders a template to text. A missing value renders as ''. */
 export function renderText(template: Template, context: TemplateContext): string {
-  return template.map((part) => (typeof part === 'string' ? part : textOf(resolve(part.path, context)))).join('');
+  return template.map((part) => (typeof part === 'string' ? part : textOf(valueOf(part, context)))).join('');
 }
 
-/** Renders a whole value: a template that is exactly one `{{ path }}` keeps the JSON value it reads; anything else is text. */
+/** Renders a whole value: a template that is exactly one `{{ … }}` keeps the JSON value it reads; anything else is text. */
 export function renderValue(template: Template, context: TemplateContext): unknown {
   const only = template.length === 1 ? template[0] : undefined;
-  if (only !== undefined && typeof only !== 'string') return resolve(only.path, context);
+  if (only !== undefined && typeof only !== 'string') return valueOf(only, context);
   return renderText(template, context);
 }
 
@@ -181,7 +216,7 @@ export function stepExpressions(step: Pick<WorkflowStep, 'if' | 'loop' | 'break'
 
 /**
  * Renders every string inside a value, at any depth, with `renderValue`, so a string that is exactly one
- * `{{ path }}` keeps the JSON value it reads. Other values stay as they are. Fails at the first template that does not parse.
+ * `{{ … }}` keeps the JSON value it reads. Other values stay as they are. Fails at the first template that does not parse.
  * `item` is a template only when `context` binds one.
  */
 export function renderStrings(value: unknown, context: TemplateContext): { ok: true; value: unknown } | { ok: false; error: TemplateError } {
