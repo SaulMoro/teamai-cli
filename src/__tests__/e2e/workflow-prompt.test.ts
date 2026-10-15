@@ -76,6 +76,7 @@ steps:
     output:
       ready: boolean
   - id: review
+    needs: [prepare]
     prompt: Review the repository without changing it.
     output:
       ok: boolean

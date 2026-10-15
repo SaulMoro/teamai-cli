@@ -763,7 +763,8 @@ workflowCmd
   .description('Create a run. With --driver local, execute command and prompt steps in this process.')
   .option('--driver <kind>', 'Run the workflow in this process. Only local is available.')
   .option('--tools <list>', 'Override local prompt tools for this run, as comma-separated name=tool pairs')
-  .action(async (name: string, cmdOpts: { driver?: string; tools?: string }) => {
+  .option('--inputs <json>', 'Values for the inputs the workflow declares, as a JSON object, for example {"issue":42}. Every declared input is required.')
+  .action(async (name: string, cmdOpts: { driver?: string; tools?: string; inputs?: string }) => {
     const { workflowStart } = await import('./workflow-commands.js');
     await workflowStart(name, cmdOpts);
   });

@@ -16,6 +16,7 @@ steps:
   - id: compile
     command: npm run build
   - id: test
+    needs: [compile]
     command: npm test
     output:
       ok: boolean
@@ -42,15 +43,16 @@ steps:
     prompt: Review this repository.
     agent: reviewer
   - id: summarize
+    needs: [review]
     prompt_file: prompts/summary.md
 `);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.definition.steps).toEqual([
       { id: 'review', prompt: 'Review this repository.', agent: 'reviewer' },
-      { id: 'summarize', promptFile: 'prompts/summary.md' },
+      { id: 'summarize', needs: ['review'], promptFile: 'prompts/summary.md' },
     ]);
-    expect(result.promptFileLocations[1]?.line).toBe(9);
+    expect(result.promptFileLocations['steps[1]']?.line).toBe(10);
   });
 
   it('names the file, line, and field when the header does not match', () => {
@@ -77,6 +79,7 @@ steps:
   - id: one
     command: echo one
   - id: one
+    needs: []
     command: echo two
 `);
     expect(result.ok).toBe(false);
@@ -99,7 +102,7 @@ steps:
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.diagnostics).toEqual(expect.arrayContaining([
-      expect.objectContaining({ field: 'steps[0]', message: 'a step has exactly one action: command, prompt, or prompt_file' }),
+      expect.objectContaining({ field: 'steps[0]', message: 'a step has exactly one action: command, prompt, prompt_file, or workflow' }),
       expect.objectContaining({ field: 'steps[0].agent', message: 'agent is only allowed on a prompt or prompt_file step' }),
     ]));
   });
@@ -112,8 +115,10 @@ steps:
   - id: one
     prompt: ''
   - id: two
+    needs: [one]
     prompt_file: ../secret.md
   - id: three
+    needs: [two]
     prompt_file: .git/config
 `);
     expect(result.ok).toBe(false);
@@ -132,16 +137,33 @@ description: Build it.
 steps:
   - id: one
     command: npm test
-    if: success
+    for_each: items
 `);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'unknown_key',
-        field: 'steps[0].if',
-        message: 'workflows/build.yaml uses `if`, which this teamai does not know. Update teamai.',
+        field: 'steps[0].for_each',
+        message: 'workflows/build.yaml uses `for_each`, which this teamai does not know. Update teamai.',
       }),
+    ]));
+  });
+
+  it('checks a with template under a key YAML reads as a number', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Review it.
+steps:
+  - id: review
+    prompt: Review {{ with.1 }}
+    with:
+      1: "{{ inputs.nope }}"
+`);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.diagnostics).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'bad_template', field: 'steps[0].with.1', line: 8 }),
     ]));
   });
 
