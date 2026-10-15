@@ -11,7 +11,8 @@ import {
   managedMcpWorkspaceId,
   type LocalConfig,
 } from '../types.js';
-import { formatDiagnostic, parseWorkflow, promptFileDiagnostics, stepField, type WorkflowFiles } from './parse.js';
+import { formatDiagnostic, parseWorkflow, promptFileDiagnostics, stepField } from './parse.js';
+import type { WorkflowFiles } from './parse-context.js';
 import type { CachedWorkflow, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
 import { assertSafePath, assertWithinRoot } from '../utils/path-safety.js';
 
