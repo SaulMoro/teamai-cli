@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,8 +7,9 @@ import type { LocalConfig, TeamaiConfig } from '../types.js';
 import { log } from '../utils/logger.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
 import { leaseNext, reportAttempt, startRun } from '../workflow/engine.js';
-import type { LocalToolAdapter, LocalToolRun } from '../workflow/local-tool-adapter.js';
+import { createLocalToolAdapter, type LocalToolAdapter, type LocalToolRun, type ToolSpawn } from '../workflow/local-tool-adapter.js';
 import { localDriver, runLocalDriver } from '../workflow/local-driver.js';
+import { pendingRecords, type WorkflowRunRecord } from '../workflow/records.js';
 import { readRun } from '../workflow/store.js';
 
 const dirs: string[] = [];
@@ -366,7 +367,35 @@ sandbox_mode = "read-only"
       steps: [{ status: 'failed', failure: { code: 'tool_failed' } }],
     });
   });
+
+  it('publishes the failure code it sets when the tool is not on PATH', async () => {
+    const { config, workspace, runId } = await fixture();
+
+    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(undefined, () => null), toolPaths });
+
+    expect(await endRecord(config)).toMatchObject({ status: 'failed', failure: { code: 'tool_unavailable' } });
+  });
+
+  it('publishes no failure code the tool wrote into its result', async () => {
+    const { config, workspace, runId } = await fixture();
+    const writesFailure: ToolSpawn = (_command, _args, options) => spawn(process.execPath, [
+      '-e',
+      'require("fs").writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ failure: { code: "secret-x", message: "secret-x happened" } }))',
+    ], options);
+
+    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(writesFailure, () => process.execPath), toolPaths });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ status: 'failed', failure: { code: 'secret-x' } }] });
+    const record = await endRecord(config);
+    expect(record).toMatchObject({ status: 'failed' });
+    expect(JSON.stringify(record)).not.toContain('secret-x');
+  });
 });
+
+/** The end record the run queued; the fixtures have no reports remote, so it stays queued. */
+async function endRecord(config: LocalConfig): Promise<WorkflowRunRecord | undefined> {
+  return (await pendingRecords(config)).find((record) => record.phase === 'end');
+}
 
 const BARRIER = `const fs = require('fs');
 const [me, other] = process.argv.slice(2);

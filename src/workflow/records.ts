@@ -18,7 +18,22 @@ import { loadTeamConfig } from '../config.js';
 import type { LocalConfig } from '../types.js';
 import { getDataHome, isUsageReportEnabled } from '../types.js';
 import { locateStep } from './engine.js';
-import type { DriverIdentity, RunState, RunStatus, StepOutcome, TokenUsage } from './types.js';
+import { settled, VISIBLE_OUTCOMES, type StepPass, type StepState, type VisibleOutcome } from './step-state.js';
+import type { DriverIdentity, RunState, RunStatus, TokenUsage, WorkflowFailure } from './types.js';
+
+/**
+ * The failure codes the engine writes, then those the local driver sets. A code a model writes into its result, or
+ * another driver reports, can be any text, so a record carries only these.
+ */
+const RECORDED_FAILURES = [
+  'loop_exhausted', 'invalid_output', 'invalid_template', 'invalid_inputs', 'invalid_items', 'item_cycle',
+  'tool_failed', 'tool_unavailable', 'agent_unavailable', 'read_only_dirty', 'tool_unconfigured', 'tool_unsupported',
+] as const;
+type RecordedFailure = (typeof RECORDED_FAILURES)[number];
+
+function isRecordedFailure(failure: WorkflowFailure | undefined): failure is WorkflowFailure & { code: RecordedFailure } {
+  return failure !== undefined && (RECORDED_FAILURES as readonly string[]).includes(failure.code);
+}
 
 /** The record's schema tag; see #1083 for the field contract. */
 export type WorkflowRunRecord = {
@@ -36,29 +51,43 @@ export type WorkflowRunRecord = {
   status: RunStatus;
   /** The named end the run reached, when it reached one. */
   end?: string;
+  /** Why a run that reached no end failed, such as `loop_exhausted`. Code only: the message is free text. */
+  failure?: { code: RecordedFailure };
   startedAt: string;
   endedAt?: string;
   durationMs?: number;
   /**
    * Per-step entries (#1083: step, agent, tool/model, outcome, tokens) — a
    * run whose implementer runs on Codex and reviewer on Claude records each
-   * step's own fields. Unsettled steps carry no outcome.
+   * step's own fields. A skipped step, which never ran, carries no outcome.
+   * Every entry has its `pass`, 1 for a step that ran once. A step a loop ran
+   * more than once has an entry per pass, so the entries hold the tokens of
+   * every pass once.
    */
   steps?: Array<{
     step: string;
+    pass: number;
     agent?: string;
     tool?: string;
     model?: string;
-    outcome?: StepOutcome;
+    outcome?: Exclude<VisibleOutcome, 'skipped'>;
     tokens?: TokenUsage;
   }>;
-  /** Summary counts derived from the per-step entries. */
-  stepCounts?: { total: number; succeeded: number; failed: number; skipped: number };
+  /**
+   * Counts of the step instances the run ended with, by status. A step a loop
+   * ran again counts once, as its last pass ended.
+   */
+  stepCounts?: { total: number; succeeded: number; failed: number; skipped: number; cancelled: number };
   /** Settled attempts across the run — the cumulative iteration count. */
   iterations?: number;
   username: string;
   publishedAt: string;
 };
+
+type StepEntry = NonNullable<WorkflowRunRecord['steps']>[number];
+
+/** What one pass of a step reported. */
+type Reported = Pick<StepPass, 'outcome' | 'tool' | 'model' | 'tokens'>;
 
 /** A record's path on the reports branch, keyed by run id. */
 export function recordPath(runId: string): string {
@@ -98,6 +127,23 @@ export function buildStartRecord(
 }
 
 /**
+ * Why a run that reached no end failed, as the first failure with a code teamai sets: the run's own, from a looping
+ * workflow that ran out, else that of the top-level step that failed first, else the first one under that step.
+ */
+function failureOf(run: RunState): RecordedFailure | undefined {
+  if (run.status !== 'failed' || run.end !== undefined) return undefined;
+  if (isRecordedFailure(run.failure)) return run.failure.code;
+  const failed = run.steps
+    .filter((step): step is Extract<StepState, { status: 'failed' }> => step.status === 'failed')
+    .sort((left, right) => left.settledAt - right.settledAt);
+  const top = new Set(run.definition.steps.map((step) => step.id));
+  const first = failed.find((step) => top.has(step.id));
+  if (!first) return undefined;
+  const under = (step: StepState): boolean => step.id.startsWith(`${first.id}.`) || step.id.startsWith(`${first.id}[`);
+  return [first, ...failed.filter(under)].map((step) => step.failure).find(isRecordedFailure)?.code;
+}
+
+/**
  * Build the end-phase record: outcome, duration, iterations, and step counts,
  * all derived as counts so no step payload crosses into the record.
  */
@@ -109,35 +155,51 @@ export function buildEndRecord(
 ): WorkflowRunRecord {
   const started = Date.parse(run.createdAt);
   const ended = Date.parse(run.updatedAt);
-  const succeeded = run.steps.filter((step) => step.status === 'succeeded').length;
-  const failed = run.steps.filter((step) => step.status === 'failed').length;
-  const skipped = run.steps.filter((step) => step.status === 'skipped').length;
-  // Per-step entries: path + agent from the definition, the rest from the
-  // settled step state. Message, outputs, and session ids never cross.
-  const steps = run.steps.map((step) => {
-    const defined = locateStep(run, step.id)?.step;
-    // Only a succeeded or failed step has an outcome and what its report carried; an end-only step has no report.
-    const ran = step.status === 'succeeded' || step.status === 'failed' ? step : undefined;
+  const count = (status: StepState['status']): number => run.steps.filter((step) => step.status === status).length;
+  const failure = failureOf(run);
+  // An entry per pass: path + agent from the definition, the rest from what
+  // that pass reported. Message, outputs, results, and session ids never cross.
+  const entry = (step: string, pass: number | undefined, reported: Reported | undefined): StepEntry => {
+    const agent = locateStep(run, step)?.step.agent;
+    const outcome = reported?.outcome === 'skipped' ? undefined : reported?.outcome;
     return {
-      step: step.id,
-      ...(defined?.agent ? { agent: defined.agent } : {}),
-      ...(ran?.tool ? { tool: ran.tool } : {}),
-      ...(ran?.model ? { model: ran.model } : {}),
-      ...(ran ? { outcome: ran.outcome } : {}),
-      ...(ran?.tokens ? { tokens: ran.tokens } : {}),
+      step,
+      pass: pass ?? 1,
+      ...(agent ? { agent } : {}),
+      ...(reported?.tool ? { tool: reported.tool } : {}),
+      ...(reported?.model ? { model: reported.model } : {}),
+      ...(outcome ? { outcome } : {}),
+      ...(reported?.tokens ? { tokens: reported.tokens } : {}),
     };
-  });
+  };
+  // A loop keeps a step's earlier passes in `passes`, and the passes of the
+  // instances it removed from the run, such as the items of a for_each it ran
+  // again, in `archive`.
+  const steps = [
+    ...run.steps.flatMap((step) => [
+      ...(step.passes ?? []).map((earlier) => entry(step.id, earlier.pass, earlier)),
+      entry(step.id, step.pass, settled(step) ? { ...step, outcome: VISIBLE_OUTCOMES[step.status] } : undefined),
+    ]),
+    ...(run.archive ?? []).map((archived) => entry(archived.step, archived.pass, archived)),
+  ];
   return {
     ...buildStartRecord(run, driver, username, now),
     phase: 'end',
     status: run.status,
     ...(run.end !== undefined ? { end: run.end } : {}),
+    ...(failure ? { failure: { code: failure } } : {}),
     endedAt: run.updatedAt,
     ...(Number.isFinite(started) && Number.isFinite(ended) && ended >= started
       ? { durationMs: ended - started }
       : {}),
     steps,
-    stepCounts: { total: run.steps.length, succeeded, failed, skipped },
+    stepCounts: {
+      total: run.steps.length,
+      succeeded: count('succeeded'),
+      failed: count('failed'),
+      skipped: count('skipped'),
+      cancelled: count('cancelled'),
+    },
     // Cumulative when present; runs from before the counter fall back to the
     // bounded history length (their true count is unknowable now).
     iterations: run.settledCount ?? run.settledAttempts.length,

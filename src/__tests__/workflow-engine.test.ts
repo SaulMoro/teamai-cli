@@ -10,7 +10,7 @@ import { runLocalDriver } from '../workflow/local-driver.js';
 import { outputMismatch } from '../workflow/output.js';
 import { pendingRecords, type WorkflowRunRecord } from '../workflow/records.js';
 import { readRun, runFilePath, runLockPath, writeRun } from '../workflow/store.js';
-import type { DriverIdentity, RunState } from '../workflow/types.js';
+import type { DriverIdentity, RunState, TokenUsage } from '../workflow/types.js';
 
 const dirs: string[] = [];
 
@@ -433,7 +433,7 @@ steps:
     const end = (await pendingRecords(config)).find((record) => record.phase === 'end');
     expect(end).toBeDefined();
     expect(end!.status).toBe('failed');
-    expect(end!.stepCounts).toEqual({ total: 1, succeeded: 0, failed: 1, skipped: 0 });
+    expect(end!.stepCounts).toEqual({ total: 1, succeeded: 0, failed: 1, skipped: 0, cancelled: 0 });
   });
 
   it('queues an end record when the run settles', async () => {
@@ -447,7 +447,7 @@ steps:
     const end = queued.find((record) => record.phase === 'end');
     expect(end).toBeDefined();
     expect(end!.status).toBe('succeeded');
-    expect(end!.stepCounts).toEqual({ total: 2, succeeded: 2, failed: 0, skipped: 0 });
+    expect(end!.stepCounts).toEqual({ total: 2, succeeded: 2, failed: 0, skipped: 0, cancelled: 0 });
   });
 
   it.each([
@@ -1796,10 +1796,10 @@ describe('run records of graph runs', () => {
     });
 
     expect((await endRecord(config))?.steps).toEqual([
-      { step: 'check', outcome: 'success' },
-      { step: 'check.classify', agent: 'classifier', tool: 'claude', model: 'claude-sonnet', outcome: 'success', tokens: { input: 10, output: 5 } },
-      { step: 'check.comment', outcome: 'success' },
-      { step: 'fix', agent: 'implementer', tool: 'codex', model: 'gpt-codex', outcome: 'success', tokens: { input: 20, output: 8 } },
+      { step: 'check', pass: 1, outcome: 'success' },
+      { step: 'check.classify', pass: 1, agent: 'classifier', tool: 'claude', model: 'claude-sonnet', outcome: 'success', tokens: { input: 10, output: 5 } },
+      { step: 'check.comment', pass: 1, outcome: 'success' },
+      { step: 'fix', pass: 1, agent: 'implementer', tool: 'codex', model: 'gpt-codex', outcome: 'success', tokens: { input: 20, output: 8 } },
     ]);
   });
 
@@ -1853,9 +1853,9 @@ describe('run records of graph runs', () => {
     await driveWith(config, runId);
 
     expect((await endRecord(config))?.steps).toEqual([
-      { step: 'build', outcome: 'success' },
-      { step: 'retry' },
-      { step: 'done', outcome: 'success' },
+      { step: 'build', pass: 1, outcome: 'success' },
+      { step: 'retry', pass: 1 },
+      { step: 'done', pass: 1, outcome: 'success' },
     ]);
   });
 
@@ -1875,11 +1875,11 @@ describe('run records of graph runs', () => {
 
     const record = await endRecord(config);
     expect(record?.steps).toEqual([
-      { step: 'review', outcome: 'success' },
-      { step: 'review.read', agent: 'reviewer', outcome: 'success' },
-      { step: 'check', outcome: 'failed' },
-      { step: 'check.classify', outcome: 'success' },
-      { step: 'check.comment', outcome: 'failed' },
+      { step: 'review', pass: 1, outcome: 'success' },
+      { step: 'review.read', pass: 1, agent: 'reviewer', outcome: 'success' },
+      { step: 'check', pass: 1, outcome: 'failed' },
+      { step: 'check.classify', pass: 1, outcome: 'success' },
+      { step: 'check.comment', pass: 1, outcome: 'failed' },
     ]);
     expect(JSON.stringify(record)).not.toContain('undefined');
     expect(JSON.stringify(record)).not.toContain('comment failed');
@@ -1927,6 +1927,74 @@ describe('run records of graph runs', () => {
     const stored = await readRun(config, runId);
     if (typeof stored !== 'object') throw new Error('run missing');
     expect((await endRecord(config))?.endedAt).toBe(stored.updatedAt);
+  });
+
+  it('publishes no failure code a driver reported', async () => {
+    const { config, runId } = await startBuild(TWO_STEPS);
+
+    await driveWith(config, runId, { one: { outcome: 'failed', failure: { code: 'secret-x', message: 'secret-x happened' } } });
+
+    const record = await endRecord(config);
+    expect(record).toMatchObject({ status: 'failed' });
+    expect(JSON.stringify(record)).not.toContain('secret-x');
+  });
+
+  it('counts and marks cancelled steps, and publishes every pass a loop ran with its own tokens', async () => {
+    const fan = workflow('fan', `  - id: build
+    for_each: inputs.targets
+    command: node build.js
+  - id: check
+    needs: [build]
+    command: node check.js
+    loop: { back_to: build, while: "length(steps.check.passes) < 3", max_iterations: 3 }
+  - id: deploy
+    needs: [check]
+    for_each: { items: inputs.targets, max_parallel: 1 }
+    command: node deploy.js
+  - id: stop
+    needs: [check]
+    command: node stop.js
+    end: done
+`, 'inputs:\n  targets: [string]\nends:\n  done: succeeded\n');
+    const { config, runId } = await startTree({ fan }, 'fan', { targets: ['SENTINEL-web', 'SENTINEL-api'] });
+    const reported: TokenUsage[] = [];
+    const running: string[] = [];
+    for (;;) {
+      const next = await leaseNext(config, runId, driverA, { running });
+      if ('error' in next) throw new Error(next.error.message);
+      if (next.data.done) break;
+      const lease = leaseIn(next);
+      // A deploy item is still running when stop ends the workflow, which cancels it.
+      if (lease.step.startsWith('deploy')) {
+        running.push(lease.attempt);
+        continue;
+      }
+      const tokens = { input: 100 + reported.length, output: reported.length + 1 };
+      reported.push(tokens);
+      await reportAttempt(config, runId, { ...lease, outcome: 'success', outputs: { note: 'SENTINEL-output' }, tokens, driver: driverA });
+    }
+    const sum = (usages: Array<TokenUsage | undefined>): TokenUsage => usages.reduce<TokenUsage>(
+      (total, usage) => ({ input: (total.input ?? 0) + (usage?.input ?? 0), output: (total.output ?? 0) + (usage?.output ?? 0) }),
+      { input: 0, output: 0 },
+    );
+
+    const record = await endRecord(config);
+    if (!record?.stepCounts || !record.steps) throw new Error('no end record');
+    const { total, ...byStatus } = record.stepCounts;
+    const entries = record.steps;
+
+    expect(reported).toHaveLength(10);
+    expect.soft(byStatus).toEqual({ succeeded: 5, failed: 0, skipped: 1, cancelled: 2 });
+    expect.soft(total).toBe(Object.values(byStatus).reduce((all, count) => all + count, 0));
+    expect.soft(sum(entries.map((entry) => entry.tokens))).toEqual(sum(reported));
+    const passes = (step: string): typeof entries => entries.filter((entry) => entry.step === step).sort((a, b) => (a.pass ?? 0) - (b.pass ?? 0));
+    expect(passes('check')).toEqual([2, 5, 8].map((index, pass) => ({ step: 'check', pass: pass + 1, outcome: 'success', tokens: reported[index] })));
+    expect(passes('build[0]')).toEqual([0, 3, 6].map((index, pass) => ({ step: 'build[0]', pass: pass + 1, outcome: 'success', tokens: reported[index] })));
+    expect(passes('stop')).toEqual([{ step: 'stop', pass: 1, outcome: 'success', tokens: reported[9] }]);
+    expect(passes('deploy')).toEqual([{ step: 'deploy', pass: 1, outcome: 'cancelled' }]);
+    expect(passes('deploy[0]')).toEqual([{ step: 'deploy[0]', pass: 1, outcome: 'cancelled' }]);
+    expect(passes('deploy[1]')).toEqual([{ step: 'deploy[1]', pass: 1 }]);
+    expect(JSON.stringify(record)).not.toContain('SENTINEL');
   });
 });
 
@@ -3009,6 +3077,43 @@ describe('workflow loops', () => {
       outcome: 'failed',
       failure: { code: 'loop_exhausted', message: 'Loop of workflow "rounds" is exhausted: it ran 3 rounds, its max_iterations' },
     });
+  });
+
+  it('publishes the code of the run failure in the end record, without its message', async () => {
+    const { config, runId } = await startTree({ rounds: ROUNDS }, 'rounds');
+
+    const { done } = await driveLoop(config, runId, rounds(true, true, true));
+
+    const { message } = (done as { failure: { message: string } }).failure;
+    const record = await endRecord(config);
+    expect(record?.failure).toEqual({ code: 'loop_exhausted' });
+    expect(JSON.stringify(record)).not.toContain(message);
+  });
+
+  it.each([
+    ['its step loop ran out', { 'review-and-fix': REVIEW_AND_FIX }, 'review-and-fix', reviews('fix', 'fix', 'fix', 'fix')],
+    ['the step loop of a sub-workflow ran out', {
+      'review-and-fix': REVIEW_AND_FIX,
+      ship: workflow('ship', `  - id: review
+    workflow: review-and-fix
+`),
+    }, 'ship', reviews('fix', 'fix', 'fix', 'fix')],
+    ['the looping workflow of a step ran out', { retry: workflow('retry', `  - id: attempt
+    workflow:
+      loop: { while: "steps.try.outcome == 'success'", max_iterations: 2 }
+      steps:
+        - id: try
+          command: node try.js
+`) }, 'retry', () => ({})],
+  ])('publishes loop_exhausted without its message when a run fails because %s', async (_case, files, name, answer) => {
+    const { config, runId } = await startTree(files, name);
+
+    const { done } = await driveLoop(config, runId, answer);
+
+    expect(done).toMatchObject({ outcome: 'failed' });
+    const record = await endRecord(config);
+    expect(record?.failure).toEqual({ code: 'loop_exhausted' });
+    expect(JSON.stringify(record)).not.toContain('is exhausted');
   });
 
   it('runs another round after a round with a failed step, and ends with the outcome of the last round', async () => {
