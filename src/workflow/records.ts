@@ -14,8 +14,9 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { loadTeamConfig } from '../config.js';
 import type { LocalConfig } from '../types.js';
-import { getDataHome } from '../types.js';
+import { getDataHome, isUsageReportEnabled } from '../types.js';
 import { locateStep } from './engine.js';
 import type { DriverIdentity, RunState, RunStatus, StepOutcome, TokenUsage } from './types.js';
 
@@ -157,21 +158,31 @@ export function mergeRecord(origin: WorkflowRunRecord | null, next: WorkflowRunR
   return { ...origin, ...next, startedAt: origin.startedAt };
 }
 
+/** Whether a run record was delivered or still waits in the local queue. */
+type RecordState = 'published' | 'pending';
+
+/** The opt-out `pull` applies to stat commits covers run records too: the member's `usageReportEnabled`, else teamai.yaml `usageReport`. */
+async function isRecordingEnabled(config: LocalConfig): Promise<boolean> {
+  return isUsageReportEnabled(config, (await loadTeamConfig(config.repo.localPath)) ?? {});
+}
+
 /**
  * Build, queue, and try to publish a run's phase record (#1083).
  *
  * The enqueue happens before the publish attempt, so a crash mid-publish
  * leaves the record queued for the next pull. Publication failures — no
  * remote, a busy reports lock, a rejected push — surface as `'pending'` and
- * never fail the run operation that produced the record.
+ * never fail the run operation that produced the record. With usage reporting
+ * off nothing is queued and there is no state to report.
  */
 export async function noteRunRecord(
   config: LocalConfig,
   run: RunState,
   driver: DriverIdentity | undefined,
   phase: 'start' | 'end',
-): Promise<'published' | 'pending'> {
+): Promise<RecordState | undefined> {
   try {
+    if (!await isRecordingEnabled(config)) return undefined;
     const username = config.username ?? 'unknown';
     const record = phase === 'start'
       ? buildStartRecord(run, driver, username)
@@ -181,6 +192,12 @@ export async function noteRunRecord(
   } catch {
     return 'pending';
   }
+}
+
+/** The record state of a run that settled earlier: pending while any of its records waits in the queue. */
+export async function runRecordState(config: LocalConfig, runId: string): Promise<RecordState | undefined> {
+  if (!await isRecordingEnabled(config)) return undefined;
+  return (await pendingRecords(config)).some((record) => record.run === runId) ? 'pending' : 'published';
 }
 
 // ─── Local pending queue ────────────────────────────────

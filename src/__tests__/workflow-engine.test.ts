@@ -446,6 +446,60 @@ steps:
     expect(end!.stepCounts).toEqual({ total: 2, succeeded: 2, failed: 0, skipped: 0 });
   });
 
+  it.each([
+    ['the member', (config: LocalConfig) => { config.usageReportEnabled = false; }],
+    ['the team', (config: LocalConfig) => {
+      fs.writeFileSync(path.join(config.repo.localPath, 'teamai.yaml'), 'team: test\nrepo: local\nprovider: git\nusageReport: false\ntoolPaths:\n  claude:\n    skills: .claude/skills\n');
+    }],
+  ])('queues no run record and reports none when %s turned usage reporting off', async (_who, optOut) => {
+    const { config, work } = testConfig();
+    optOut(config);
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), TWO_STEPS);
+    fs.writeFileSync(path.join(work, 'one.js'), "process.stdout.write(JSON.stringify({ ok: true }))\n");
+    fs.writeFileSync(path.join(work, 'two.js'), "process.stdout.write(JSON.stringify({ ok: true }))\n");
+    await syncWorkflowDefinitions(config);
+
+    const started = await startRun(config, 'build');
+    if ('error' in started) throw new Error(started.error.message);
+    expect(started.data).not.toHaveProperty('record');
+    const runId = String(started.data.run);
+    expect(await runLocalDriver(config, runId, work)).toEqual({ data: { done: { run: runId, outcome: 'succeeded' } } });
+    expect(await leaseNext(config, runId, driverA)).toEqual({ data: { done: { run: runId, outcome: 'succeeded' } } });
+    expect(await pendingRecords(config)).toEqual([]);
+  });
+
+  it('reports the record state of the requested run, not of another queued run', async () => {
+    const { config, work, runId } = await startBuild(TWO_STEPS);
+    fs.writeFileSync(path.join(work, 'one.js'), "process.stdout.write(JSON.stringify({ ok: true }))\n");
+    fs.writeFileSync(path.join(work, 'two.js'), "process.stdout.write(JSON.stringify({ ok: true }))\n");
+    await runLocalDriver(config, runId, work);
+    // The fixture has no reports remote; clearing this run's queue entries stands in for a delivery.
+    const queue = path.join(config.dataHome!, 'workflows', 'pending');
+    for (const file of fs.readdirSync(queue)) if (file.startsWith(`${runId}.`)) fs.rmSync(path.join(queue, file));
+    const other = await startRun(config, 'build');
+    if ('error' in other) throw new Error(other.error.message);
+    expect(other.data.record).toBe('pending');
+
+    expect(await leaseNext(config, runId, driverA)).toEqual({ data: { done: { run: runId, outcome: 'succeeded', record: 'published' } } });
+  });
+
+  it('counts the attempts a run settled before the iteration counter existed', async () => {
+    const { config, runId } = await startBuild(TWO_STEPS);
+    const leased = await leaseNext(config, runId, driverA);
+    if ('error' in leased) throw new Error(leased.error.message);
+    const lease = leased.data.lease as { attempt: string; revision: number };
+    const stored = await readRun(config, runId);
+    if (typeof stored !== 'object') throw new Error('run missing');
+    // A run file from before settledCount: five settled attempts and no counter.
+    await writeRun(config, { ...stored, settledAttempts: ['x1', 'x2', 'x3', 'x4', 'x5'], settledCount: undefined });
+
+    await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: driverA });
+
+    const after = await readRun(config, runId);
+    if (typeof after !== 'object') throw new Error('run missing');
+    expect(after.settledCount).toBe(6);
+  });
+
   it('passes env to a command as variables over the inherited environment, never as shell', async () => {
     const fixture = testConfig();
     fs.writeFileSync(path.join(fixture.config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: label

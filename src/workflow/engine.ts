@@ -7,7 +7,7 @@ import {
   type Expression, type ExpressionPath, type ExpressionStep, type VisibleOutcome,
 } from './expression.js';
 import { outputMismatch } from './output.js';
-import { noteRunRecord, pendingRecords } from './records.js';
+import { noteRunRecord, runRecordState } from './records.js';
 import { parseTemplate, renderStrings, renderText, templatedTexts, templatePaths, type TemplateContext, type TemplateError } from './template.js';
 import { generateRunId, isRunId, readRun, runLockPath, writeRun } from './store.js';
 import type {
@@ -540,7 +540,7 @@ export async function startRun(
   // #1083: publish the start record; a failed publication is queued locally
   // and retried on the next pull — it never fails the run itself.
   const record = await noteRunRecord(config, run, options.driver, 'start');
-  return ok({ run: run.id, name: run.name, status: run.status, revision: run.revision, record });
+  return ok({ run: run.id, name: run.name, status: run.status, revision: run.revision, ...(record ? { record } : {}) });
 }
 
 /** A run started before `needs` existed ran its steps in order; settling it as a graph would run every such step as a root. */
@@ -596,9 +596,9 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
   if (settledRun || alreadySettled) {
     const record = settledRun
       ? await noteRunRecord(config, settledRun, driver, 'end')
-      : ((await pendingRecords(config)).length > 0 ? 'pending' : 'published');
+      : await runRecordState(config, runId);
     const done = (envelope as { data?: { done?: Record<string, unknown> } }).data?.done;
-    if (done) done.record = record;
+    if (done && record) done.record = record;
   }
   return envelope;
 }
@@ -665,12 +665,13 @@ export function parseDriverPayload(value: unknown): DriverIdentity | string {
 }
 
 function rememberSettledAttempt(run: RunState, attempt: string): void {
+  // settledAttempts is a bounded dedup history; the cumulative count feeds the
+  // run record's iterations field, which must not cap at SETTLED_ATTEMPTS_LIMIT.
+  // A run file from before settledCount starts from its history.
+  run.settledCount = (run.settledCount ?? run.settledAttempts.length) + 1;
   run.settledAttempts.push(attempt);
   const extra = run.settledAttempts.length - SETTLED_ATTEMPTS_LIMIT;
   if (extra > 0) run.settledAttempts.splice(0, extra);
-  // settledAttempts is a bounded dedup history; the cumulative count feeds the
-  // run record's iterations field, which must not cap at SETTLED_ATTEMPTS_LIMIT.
-  run.settledCount = (run.settledCount ?? 0) + 1;
 }
 
 export async function reportAttempt(config: LocalConfig, runId: string, report: ReportInput): Promise<WorkflowEnvelope> {
