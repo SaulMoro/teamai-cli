@@ -7,7 +7,7 @@ import {
   type Expression, type ExpressionPath, type ExpressionStep,
 } from './expression.js';
 import { outputMismatch } from './output.js';
-import { noteRunRecord, runRecordState } from './records.js';
+import { publishRunRecords, queueRunRecord, runRecordState } from './records.js';
 import {
   parseTemplate, renderStrings, renderText, stepExpressions, templatedTexts, templatePaths,
   type StepExpression, type TemplateContext, type TemplateError,
@@ -268,16 +268,12 @@ function settledAtOf(step: StepState | undefined): number {
   return step && 'settledAt' in step ? step.settledAt : 0;
 }
 
-/**
- * Ends the run. Every path that settles a run goes through here, so anything that reacts to a settled run hooks in here.
- * Returns a copy of the settled run for the end record, which publishes after the run lock is released (#1126).
- */
-function settleRun(run: RunState, now: string, { outcome, end, failure }: WorkflowResult): RunState {
+/** Ends the run. Every path that settles a run goes through here, so anything that reacts to a settled run hooks in here. */
+function settleRun(run: RunState, now: string, { outcome, end, failure }: WorkflowResult): void {
   run.status = outcome;
   if (end !== undefined) run.end = end;
   if (failure) run.failure = failure;
   run.updatedAt = now;
-  return { ...run, steps: run.steps.map((step) => ({ ...step })) };
 }
 
 function doneData(run: RunState): Record<string, unknown> {
@@ -747,7 +743,7 @@ export async function startRun(
   await writeRun(config, run);
   // #1083: publish the start record; a failed publication is queued locally
   // and retried on the next pull — it never fails the run itself.
-  const record = await noteRunRecord(config, run, options.driver, 'start');
+  const record = await queueRunRecord(config, run, options.driver, 'start') ? await publishRunRecords(config) : undefined;
   return ok({ run: run.id, name: run.name, status: run.status, revision: run.revision, ...(record ? { record } : {}) });
 }
 
@@ -770,11 +766,12 @@ export interface NextOptions {
 
 export async function leaseNext(config: LocalConfig, runId: string, driver: DriverIdentity, options: NextOptions = {}): Promise<WorkflowEnvelope> {
   const running = new Set(options.running);
-  // The end record publishes AFTER withRun releases the run lock (#1126 P3):
-  // publication does a reports-branch push, and no network I/O may hold the
-  // lock other engine operations wait on.
-  let settledRun: RunState | undefined;
-  let alreadySettled = false;
+  // The end record is queued under the run lock, so the run stores whether it
+  // was in the same save. It publishes AFTER withRun releases the lock (#1126
+  // P3): publication does a reports-branch push, and no network I/O may hold
+  // the lock other engine operations wait on.
+  let queued = false;
+  let alreadySettled: RunState | undefined;
   const envelope = await withRun(config, runId, async (run, now) => {
     const before = JSON.stringify(run);
     // Whatever settling changed is saved. `cancelled` is derived after settling: the attempts the driver runs that
@@ -787,17 +784,19 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           && step.lease.attempt === attempt && sameDriver(step.lease.driver, driver))),
       }),
     });
-    const done = (result: WorkflowResult): { save: boolean; envelope: WorkflowEnvelope } => {
-      settledRun = settleRun(run, now, result);
+    const done = async (result: WorkflowResult): Promise<{ save: boolean; envelope: WorkflowEnvelope }> => {
+      settleRun(run, now, result);
+      queued = await queueRunRecord(config, run, driver, 'end');
+      run.endRecordQueued = queued;
       return answer(doneData(run));
     };
     const wait = (open = run.steps.find((step) => step.status === 'leased')): { save: boolean; envelope: WorkflowEnvelope } => (
       answer({ wait: { reason: open ? `${open.id} is leased` : 'canTakeLease is false' } })
     );
     if (run.status !== 'running') {
-      // Settled by an earlier next, which published the end record; the
-      // done envelope still reports the queue-derived record state.
-      alreadySettled = true;
+      // Settled by an earlier next, which queued the end record unless usage
+      // reporting was off; the done envelope reports that record's state.
+      alreadySettled = run;
       return answer(doneData(run));
     }
     const older = missingNeeds(run);
@@ -824,13 +823,11 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       failStep(leased, rendered, leased.lease.revision);
     }
   });
-  if (settledRun || alreadySettled) {
-    const record = settledRun
-      ? await noteRunRecord(config, settledRun, driver, 'end')
-      : await runRecordState(config, runId);
-    const done = (envelope as { data?: { done?: Record<string, unknown> } }).data?.done;
-    if (done && record) done.record = record;
-  }
+  const record = queued
+    ? await publishRunRecords(config)
+    : alreadySettled && await runRecordState(config, alreadySettled);
+  const done = (envelope as { data?: { done?: Record<string, unknown> } }).data?.done;
+  if (done && record) done.record = record;
   return envelope;
 }
 

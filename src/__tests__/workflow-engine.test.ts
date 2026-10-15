@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
+import { log } from '../utils/logger.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
 import { leaseNext, parseReport, reportAttempt, SETTLED_ATTEMPTS_LIMIT, startRun, type ReportInput } from '../workflow/engine.js';
 import { runLocalDriver } from '../workflow/local-driver.js';
@@ -470,6 +471,51 @@ steps:
     expect(await runLocalDriver(config, runId, work)).toEqual({ data: { done: { run: runId, outcome: 'succeeded' }, cancelled: [] } });
     expect(await leaseNext(config, runId, driverA)).toEqual({ data: { done: { run: runId, outcome: 'succeeded' }, cancelled: [] } });
     expect(await pendingRecords(config)).toEqual([]);
+  });
+
+  it('reports no record for a run that settled with usage reporting off, after reporting is turned back on', async () => {
+    const { config, work } = testConfig();
+    config.usageReportEnabled = false;
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), TWO_STEPS);
+    fs.writeFileSync(path.join(work, 'one.js'), "process.stdout.write(JSON.stringify({ ok: true }))\n");
+    fs.writeFileSync(path.join(work, 'two.js'), "process.stdout.write(JSON.stringify({ ok: true }))\n");
+    await syncWorkflowDefinitions(config);
+    const started = await startRun(config, 'build');
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    await runLocalDriver(config, runId, work);
+
+    config.usageReportEnabled = true;
+    expect(await leaseNext(config, runId, driverA)).toEqual({ data: { done: { run: runId, outcome: 'succeeded' }, cancelled: [] } });
+  });
+
+  it('reports no record for a run whose records could not be queued', async () => {
+    const { config, work } = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), TWO_STEPS);
+    fs.writeFileSync(path.join(work, 'one.js'), "process.stdout.write(JSON.stringify({ ok: true }))\n");
+    fs.writeFileSync(path.join(work, 'two.js'), "process.stdout.write(JSON.stringify({ ok: true }))\n");
+    await syncWorkflowDefinitions(config);
+    const queue = path.join(config.dataHome!, 'workflows', 'pending');
+    fs.mkdirSync(path.dirname(queue), { recursive: true });
+    fs.writeFileSync(queue, '');
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+
+    const started = await startRun(config, 'build');
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    const settling = await runLocalDriver(config, runId, work);
+    const later = await leaseNext(config, runId, driverA);
+    const warnings = warn.mock.calls.map(([message]) => message);
+    warn.mockRestore();
+
+    expect(later).toEqual({ data: { done: { run: runId, outcome: 'succeeded' }, cancelled: [] } });
+    expect(settling).toEqual(later);
+    expect(started.data).not.toHaveProperty('record');
+    expect(await pendingRecords(config)).toEqual([]);
+    expect(warnings).toEqual([
+      expect.stringContaining(`[workflows] Could not queue the start record of run ${runId}, so the team report will not include it: `),
+      expect.stringContaining(`[workflows] Could not queue the end record of run ${runId}, so the team report will not include it: `),
+    ]);
   });
 
   it('reports the record state of the requested run, not of another queued run', async () => {

@@ -182,6 +182,8 @@ export interface RunState {
   settledAttempts: string[];
   /** Cumulative settled-attempt count; settledAttempts is bounded at 32 for dedup. */
   settledCount?: number;
+  /** Whether the run queued its end record when it settled. A run settled with usage reporting off, or before this field, queued none. */
+  endRecordQueued?: boolean;
   /** Attempts whose lease the engine cancelled; a report of one is answered `lease_cancelled`. */
   cancelledAttempts?: string[];
   /** Passes of child and item instances a loop removed from `steps`. */

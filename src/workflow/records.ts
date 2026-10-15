@@ -17,6 +17,7 @@ import path from 'node:path';
 import { loadTeamConfig } from '../config.js';
 import type { LocalConfig } from '../types.js';
 import { getDataHome, isUsageReportEnabled } from '../types.js';
+import { log } from '../utils/logger.js';
 import { locateStep } from './engine.js';
 import { settled, VISIBLE_OUTCOMES, type StepPass, type StepState, type VisibleOutcome } from './step-state.js';
 import type { DriverIdentity, RunState, RunStatus, TokenUsage, WorkflowFailure } from './types.js';
@@ -229,37 +230,49 @@ async function isRecordingEnabled(config: LocalConfig): Promise<boolean> {
 }
 
 /**
- * Build, queue, and try to publish a run's phase record (#1083).
- *
- * The enqueue happens before the publish attempt, so a crash mid-publish
- * leaves the record queued for the next pull. Publication failures — no
- * remote, a busy reports lock, a rejected push — surface as `'pending'` and
- * never fail the run operation that produced the record. With usage reporting
- * off nothing is queued and there is no state to report.
+ * Build and queue a run's phase record (#1083). True once the record is in
+ * the queue; false with usage reporting off, or when it could not be queued,
+ * which logs a warning and never fails the run operation that produced it.
+ * Queueing writes only local files, so it may run under the run lock.
  */
-export async function noteRunRecord(
+export async function queueRunRecord(
   config: LocalConfig,
   run: RunState,
   driver: DriverIdentity | undefined,
   phase: 'start' | 'end',
-): Promise<RecordState | undefined> {
+): Promise<boolean> {
   try {
-    if (!await isRecordingEnabled(config)) return undefined;
+    if (!await isRecordingEnabled(config)) return false;
     const username = config.username ?? 'unknown';
     const record = phase === 'start'
       ? buildStartRecord(run, driver, username)
       : buildEndRecord(run, driver, username);
     await enqueueRecord(config, record);
+    return true;
+  } catch (error) {
+    log.warn(`[workflows] Could not queue the ${phase} record of run ${run.id}, so the team report will not include it: ${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+}
+
+/**
+ * Try to publish the queued records. A record is queued before this attempt,
+ * so a crash mid-publish leaves it for the next pull. Publication failures —
+ * no remote, a busy reports lock, a rejected push — surface as `'pending'`
+ * and never fail the run operation that queued the record.
+ */
+export async function publishRunRecords(config: LocalConfig): Promise<RecordState> {
+  try {
     return await publishPendingRecords(config);
   } catch {
     return 'pending';
   }
 }
 
-/** The record state of a run that settled earlier: pending while any of its records waits in the queue. */
-export async function runRecordState(config: LocalConfig, runId: string): Promise<RecordState | undefined> {
-  if (!await isRecordingEnabled(config)) return undefined;
-  return (await pendingRecords(config)).some((record) => record.run === runId) ? 'pending' : 'published';
+/** The record state of a run that settled earlier: none when it queued no end record, pending while any of its records waits in the queue. */
+export async function runRecordState(config: LocalConfig, run: RunState): Promise<RecordState | undefined> {
+  if (!run.endRecordQueued || !await isRecordingEnabled(config)) return undefined;
+  return (await pendingRecords(config)).some((record) => record.run === run.id) ? 'pending' : 'published';
 }
 
 // ─── Local pending queue ────────────────────────────────
