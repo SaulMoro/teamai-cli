@@ -86,6 +86,15 @@ describe('file transport', () => {
     expect(fs.existsSync(nested)).toBe(true);
   });
 
+  it('does not recreate a dir removed while the process ran', () => {
+    const home = path.join(tmpDir, 'home');
+    fs.mkdirSync(home);
+    _setLogFilePath(path.join(home, 'debug.log'));
+    fs.rmSync(home, { recursive: true });
+    log.debug('after uninstall');
+    expect(fs.existsSync(home)).toBe(false);
+  });
+
   it('silent fail on bad path', () => {
     // Use a file as parent to trigger ENOTDIR on mkdirSync
     const blocker = path.join(tmpDir, 'file-not-dir');
