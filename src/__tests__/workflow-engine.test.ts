@@ -791,6 +791,32 @@ steps:
     });
   });
 
+  it('reads an array element by index in an if, and an index out of range as null', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: review
+    command: node review.js
+    output:
+      files: [string]
+  - id: fix
+    needs: [review]
+    if: steps.review.outputs.files[1] == 'b.ts'
+    command: node fix.js
+  - id: third
+    needs: [review]
+    if: steps.review.outputs.files[2] != null
+    command: node third.js
+`));
+    const first = await leaseNext(config, runId, driverA);
+    if ('error' in first) throw new Error(first.error.message);
+    const lease = first.data.lease as { attempt: string; revision: number };
+    await reportAttempt(config, runId, { ...lease, outcome: 'success', outputs: { files: ['a.ts', 'b.ts'] }, driver: driverA });
+
+    const { leased, done } = await drive(config, runId);
+
+    expect(leased).toEqual(['fix']);
+    expect(done).toMatchObject({ outcome: 'succeeded' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{}, { id: 'fix', status: 'succeeded' }, { id: 'third', status: 'skipped' }] });
+  });
+
   it('evaluates an if only after every step it reads has settled', async () => {
     // gate is skipped as soon as build fails, while late is still pending; deploy reads late through gate.
     const { config, runId } = await startBuild(graph(`  - id: build

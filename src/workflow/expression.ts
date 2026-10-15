@@ -2,11 +2,15 @@
  * The workflow expression language: `if` conditions, and the paths that templates read.
  * It reads only `inputs` and `steps`, has no functions, and its evaluation never throws.
  */
+import { INDEX } from './step-path.js';
+
+/** A field name, or an array index such as the 0 in `tags[0]`. */
+export type PathField = string | number;
 
 /** A value read by a path. A missing value is `null`. */
 export type ExpressionPath =
-  | { root: 'inputs'; fields: string[]; column: number }
-  | { root: 'steps'; step: string; field: 'outcome' | 'end' | 'outputs'; fields: string[]; column: number };
+  | { root: 'inputs'; fields: PathField[]; column: number }
+  | { root: 'steps'; step: string; field: 'outcome' | 'end' | 'outputs'; fields: PathField[]; column: number };
 
 export type Expression =
   | { kind: 'literal'; value: null | boolean | number | string | []; column: number }
@@ -46,7 +50,10 @@ class ExpressionError extends Error {
   }
 }
 
-const WORD = /[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*/y;
+const WORD = /[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+|\[[^\]]*\]?)*/y;
+/** One name or `[index]` of a path, in order. */
+const FIELD = /\.?([A-Za-z0-9_-]+)|\[([^\]]*)(\]?)/y;
+const WHOLE_INDEX = new RegExp(`^(?:${INDEX})$`);
 const NUMBER = /-?[0-9]+(?:\.[0-9]+)?/y;
 const SYMBOLS = ['==', '!=', '&&', '||', '!', '(', ')', '[', ']'];
 
@@ -94,18 +101,54 @@ function describe(token: Token): string {
   }
 }
 
+/** The names and indexes of a path written at `column`. The WORD token rule has already checked its shape. */
+function fieldsOf(text: string, column: number): PathField[] {
+  const fields: PathField[] = [];
+  for (FIELD.lastIndex = 0; FIELD.lastIndex < text.length;) {
+    const at = column + FIELD.lastIndex;
+    const match = FIELD.exec(text);
+    if (!match) break;
+    if (match[1] !== undefined) {
+      fields.push(match[1]);
+    } else if (match[3] === '') {
+      throw new ExpressionError(at, 'an index is not closed with ]');
+    } else if (WHOLE_INDEX.test(match[2] ?? '')) {
+      fields.push(Number(match[2]));
+    } else {
+      throw new ExpressionError(at, `"${match[0]}" is not an index; write a whole number from 0, such as [0]`);
+    }
+  }
+  return fields;
+}
+
+/** The names and indexes of a path, root included, such as a template's `with.refs[1]`, or why an index is malformed. */
+export function parseFields(text: string): { ok: true; fields: PathField[] } | { ok: false; message: string } {
+  try {
+    return { ok: true, fields: fieldsOf(text, 1) };
+  } catch (error) {
+    if (error instanceof ExpressionError) return { ok: false, message: error.message };
+    throw error;
+  }
+}
+
 function parsePath(token: { text: string; column: number }): ExpressionPath {
-  const [root, ...segments] = token.text.split('.');
+  const [root, ...segments] = fieldsOf(token.text, token.column);
   if (root === 'inputs') return { root, fields: segments, column: token.column };
   if (root !== 'steps') {
     throw new ExpressionError(token.column, `"${root}" is not readable; an expression reads only inputs and steps`);
   }
   const [step, field, ...fields] = segments;
-  if (!step || !field) {
+  if (typeof step === 'string' && typeof field === 'number') {
+    throw new ExpressionError(token.column, `"${token.text}" indexes a step; an index reads an array in its outputs, as in steps.${step}.outputs.<field>[${field}]`);
+  }
+  if (typeof step !== 'string' || !field) {
     throw new ExpressionError(token.column, `"${token.text}" must read steps.<id>.outcome, steps.<id>.end or steps.<id>.outputs`);
   }
   if (field === 'outputs') return { root, step, field, fields, column: token.column };
   if ((field === 'outcome' || field === 'end') && fields.length === 0) return { root, step, field, fields, column: token.column };
+  if ((field === 'outcome' || field === 'end') && typeof fields[0] === 'number') {
+    throw new ExpressionError(token.column, `"${token.text}" indexes ${field}, which is a name; compare it whole, as in steps.${step}.${field} == '<name>'`);
+  }
   throw new ExpressionError(token.column, `"${token.text}" must read steps.<id>.outcome, steps.<id>.end or steps.<id>.outputs`);
 }
 
@@ -213,6 +256,11 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+/** The names and indexes after a path's root, as a path writes them, such as `.files[0].path`. */
+export function fieldsText(fields: PathField[]): string {
+  return fields.map((field) => (typeof field === 'number' ? `[${field}]` : `.${field}`)).join('');
+}
+
 /** Reads a path. Anything missing along the way, including a step that has not settled, is `null`. */
 export function resolvePath(path: ExpressionPath, context: ExpressionContext): unknown {
   let value: unknown;
@@ -223,7 +271,8 @@ export function resolvePath(path: ExpressionPath, context: ExpressionContext): u
     value = step?.[path.field];
   }
   for (const field of path.fields) {
-    value = isRecord(value) && Object.hasOwn(value, field) ? value[field] : undefined;
+    if (typeof field === 'number') value = Array.isArray(value) ? value[field] : undefined;
+    else value = isRecord(value) && Object.hasOwn(value, field) ? value[field] : undefined;
   }
   return value ?? null;
 }

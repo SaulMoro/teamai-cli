@@ -1,5 +1,5 @@
 import { isMap, isScalar, isSeq, LineCounter, parseDocument, type Node, type YAMLMap } from 'yaml';
-import { parseExpression, type ExpressionPath } from './expression.js';
+import { fieldsText, parseExpression, type ExpressionPath } from './expression.js';
 import { findTemplate, parseTemplate, templatedTexts, templatePaths, templateWithPaths, type Template } from './template.js';
 import type { EndOutcome, InlineWorkflow, OutputSchema, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
 import { STEP_ACTIONS } from './types.js';
@@ -615,7 +615,7 @@ function outputDiagnostics(
     }
     const output = steps.find((step) => step.id === path.step)?.output;
     if (path.field === 'outputs' && output && !declaresField(output, path.fields)) {
-      diagnostics.push(at(`reads steps.${path.step}.outputs.${path.fields.join('.')}, which is not in the output step "${path.step}" declares`));
+      diagnostics.push(at(`reads steps.${path.step}.outputs${fieldsText(path.fields)}, which is not in the output step "${path.step}" declares`));
     }
   }
   return diagnostics;
@@ -670,7 +670,7 @@ function conditionSource(node: unknown): string | undefined {
 /** `{{ with.<name> }}` reads a value its step's own `with` declares, and only from the step's prompt or prompt_file text. */
 function withReadProblems(label: string, what: string, template: Template, declared: Record<string, unknown> | undefined): string[] {
   return templateWithPaths(template).flatMap((path) => {
-    const read = `${label} ${what} reads with.${path.fields.join('.')}`;
+    const read = `${label} ${what} reads with${fieldsText(path.fields)}`;
     if (what !== 'prompt' && what !== 'prompt_file') return [`${read}; only a prompt reads with`];
     if (!declared) return [`${read}, but the step has no with`];
     return Object.hasOwn(declared, path.fields[0] ?? '') ? [] : [`${read}, which is not a name its with declares`];

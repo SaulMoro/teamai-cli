@@ -4,7 +4,10 @@ import { evaluateExpression, expressionPaths, isTruthy, parseExpression, type Ex
 const context: ExpressionContext = {
   steps: {
     check: { outcome: 'failed' },
-    review: { outcome: 'success', outputs: { verdict: 'fix', count: 0, notes: '', tags: ['a', 'b'], meta: { level: 1, kind: 'x' } } },
+    review: {
+      outcome: 'success',
+      outputs: { verdict: 'fix', count: 0, notes: '', tags: ['a', 'b'], meta: { level: 1, kind: 'x' }, matrix: [[1, 2], [3, 4]], files: [{ path: 'a.ts' }] },
+    },
     copy: { outcome: 'success', outputs: { tags: ['a', 'b'], reversed: ['b', 'a'], meta: { kind: 'x', level: 1 }, other: { level: 1, kind: 'x', extra: null } } },
   },
 };
@@ -61,6 +64,12 @@ describe('workflow expressions', () => {
     ['true || false && false', true],
     ['(true || false) && false', false],
     ["!(steps.check.outcome == 'success') && steps.review.outputs.verdict == 'fix'", true],
+    ["steps.review.outputs.tags[1] == 'b'", true],
+    ['steps.review.outputs.tags[2] == null', true],
+    ['steps.review.outputs.verdict[0] == null', true],
+    ['steps.review.outputs.meta[0] == null', true],
+    ['steps.review.outputs.matrix[1][0] == 3', true],
+    ["steps.review.outputs.files[0].path == 'a.ts'", true],
   ])('evaluates %s to %s', (source, expected) => {
     expect(evaluate(source)).toBe(expected);
   });
@@ -83,6 +92,13 @@ describe('workflow expressions', () => {
     ['steps.check.status', 1, '"steps.check.status" must read steps.<id>.outcome, steps.<id>.end or steps.<id>.outputs'],
     ['steps.check.outcome.text', 1, '"steps.check.outcome.text" must read steps.<id>.outcome, steps.<id>.end or steps.<id>.outputs'],
     ['inputs.', 7, 'unexpected "."'],
+    ['inputs.tags[-1]', 12, '"[-1]" is not an index; write a whole number from 0, such as [0]'],
+    ['inputs.tags[inputs.n] == 1', 12, '"[inputs.n]" is not an index; write a whole number from 0, such as [0]'],
+    ['inputs.tags[01]', 12, '"[01]" is not an index; write a whole number from 0, such as [0]'],
+    ['inputs.tags[0', 12, 'an index is not closed with ]'],
+    ['steps.check.outcome[0]', 1, '"steps.check.outcome[0]" indexes outcome, which is a name; compare it whole, as in steps.check.outcome == \'<name>\''],
+    ['steps.check.end[0]', 1, '"steps.check.end[0]" indexes end, which is a name; compare it whole, as in steps.check.end == \'<name>\''],
+    ['steps.build[2].outcome', 1, '"steps.build[2].outcome" indexes a step; an index reads an array in its outputs, as in steps.build.outputs.<field>[2]'],
   ])('rejects %j at column %i', (source, column, message) => {
     expect(parseExpression(source)).toEqual({ ok: false, column, message });
   });
@@ -95,6 +111,16 @@ describe('workflow expressions', () => {
       { root: 'inputs', fields: ['issue', 'number'], column: 1 },
       { root: 'steps', step: 'check', field: 'outcome', fields: [], column: 31 },
       { root: 'steps', step: 'review', field: 'outputs', fields: ['verdict', 'text'], column: 66 },
+    ]);
+  });
+
+  it('lists an index as a number among the fields a path reads', () => {
+    const parsed = parseExpression('steps.review.outputs.matrix[0][1] == inputs.tags[2]');
+    if (!parsed.ok) throw new Error(parsed.message);
+
+    expect(expressionPaths(parsed.expression)).toEqual([
+      { root: 'steps', step: 'review', field: 'outputs', fields: ['matrix', 0, 1], column: 1 },
+      { root: 'inputs', fields: ['tags', 2], column: 38 },
     ]);
   });
 });

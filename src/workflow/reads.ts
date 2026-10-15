@@ -1,5 +1,5 @@
 import { isMap, type Node } from 'yaml';
-import { evaluateExpression, expressionPaths, isTruthy, type Expression, type ExpressionPath } from './expression.js';
+import { evaluateExpression, expressionPaths, fieldsText, isTruthy, type Expression, type ExpressionPath } from './expression.js';
 import { declaresField, isYamlNode, locate, position, scalarString, undeclaredOutput, type Child, type GraphNode, type ParseContext } from './parse-context.js';
 import type { EndOutcome, OutputSchema, WorkflowDiagnostic, WorkflowStep } from './types.js';
 
@@ -92,7 +92,7 @@ export function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScop
     for (const path of site.paths) {
       if (path.root === 'inputs') {
         if (scope.inputs && !declaresField(scope.inputs, path.fields)) {
-          diagnostics.push(at(`step "${reader}" ${site.what} reads inputs.${path.fields.join('.')}, which is not an input the workflow declares`));
+          diagnostics.push(at(`step "${reader}" ${site.what} reads inputs${fieldsText(path.fields)}, which is not an input the workflow declares`));
         }
         continue;
       }
@@ -112,7 +112,7 @@ export function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScop
       }
       const output = scope.outputs.get(path.step);
       if (path.field === 'outputs' && output && !declaresField(output, path.fields)) {
-        diagnostics.push(at(`step "${reader}" ${site.what} reads steps.${path.step}.outputs.${path.fields.join('.')}, which is not in the output step "${path.step}" declares`));
+        diagnostics.push(at(`step "${reader}" ${site.what} reads steps.${path.step}.outputs${fieldsText(path.fields)}, which is not in the output step "${path.step}" declares`));
       }
     }
     for (const { step, end } of site.ends ?? []) {

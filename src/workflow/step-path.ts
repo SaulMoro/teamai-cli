@@ -4,7 +4,9 @@ export interface StepPathSegment {
   index?: number;
 }
 
-const ITEM = /^([^[\]]+)\[(0|[1-9][0-9]*)\]$/;
+/** An index in a path, such as the 2 in `build[2]`: a whole number from 0 with no leading zero. */
+export const INDEX = '0|[1-9][0-9]*';
+const ITEM = new RegExp(`^([^[\\]]+)\\[(${INDEX})\\]$`);
 
 /**
  * The segments of a step instance's path, such as `a.b[2].c`. Step ids contain neither "." nor "[",

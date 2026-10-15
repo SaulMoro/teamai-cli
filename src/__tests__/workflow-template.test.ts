@@ -24,6 +24,7 @@ describe('workflow templates', () => {
     ['null as empty text', '[{{ inputs.none }}]', '[]'],
     ['a missing path as empty text', '[{{ steps.lint.outputs.report }}]', '[]'],
     ['an outcome', '{{ steps.lint.outcome }}', 'skipped'],
+    ['an array element', '{{ inputs.labels[1] }} {{ steps.plan.outputs.task.files[0] }}', 'p1 a.ts'],
     ['other braces as written', '${{ secrets.TOKEN }} {{ name }} {{ env.HOME }} {{inputs}}', '${{ secrets.TOKEN }} {{ name }} {{ env.HOME }} {{inputs}}'],
   ])('renders %s', (_case, text, rendered) => {
     expect(renderText(template(text), context)).toBe(rendered);
@@ -44,6 +45,8 @@ describe('workflow templates', () => {
     ['{{ inputs.issue == 1 }}', 'a template reads one path'],
     ['{{ steps.plan }}', '"steps.plan" must read steps.<id>.outcome, steps.<id>.end or steps.<id>.outputs'],
     ['{{ inputs.a b }}', 'unexpected "b"'],
+    ['{{ inputs.labels[-1] }}', '"[-1]" is not an index; write a whole number from 0, such as [0]'],
+    ['{{ with.refs[x] }}', '"[x]" is not an index; write a whole number from 0, such as [0]'],
   ])('rejects %s', (text, message) => {
     expect(parseTemplate(`before ${text} after`)).toEqual({ ok: false, errors: [{ source: text, message }] });
   });
@@ -62,6 +65,7 @@ describe('workflow templates', () => {
 
     expect(renderText(template('{{ with.task.title }} on {{with.ref}}, {{ with.none }}'), withContext)).toBe('Crash on main, ');
     expect(renderValue(template('{{ with.task }}'), withContext)).toEqual({ title: 'Crash' });
+    expect(renderValue(template('{{ with.refs[1] }}'), { ...withContext, with: { refs: ['main', 'dev'] } })).toBe('dev');
     expect(renderText(template('${{ inputs.issue }} ${{with.ref}} $ {{ inputs.issue }}'), withContext)).toBe('${{ inputs.issue }} ${{with.ref}} $ 42');
   });
 

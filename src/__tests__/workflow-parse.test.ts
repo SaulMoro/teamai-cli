@@ -167,6 +167,57 @@ steps:
     ]));
   });
 
+  it('reads an element of a declared array by index', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Fix the first file.
+inputs:
+  labels: [string]
+outputs:
+  first: steps.review.outputs.files[0].path
+steps:
+  - id: review
+    command: node review.js
+    output:
+      files: [{ path: string }]
+  - id: fix
+    needs: [review]
+    if: steps.review.outputs.files[0].path == 'a.ts' && inputs.labels[0] == 'bug'
+    prompt: Fix {{ steps.review.outputs.files[0].path }}
+`);
+    expect(result).toMatchObject({ ok: true });
+  });
+
+  it('rejects an index into a value that is not declared as an array, and names the path as written', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Fix the first file.
+inputs:
+  title: string
+outputs:
+  first: steps.review.outputs.verdict[0]
+steps:
+  - id: review
+    command: node review.js
+    output:
+      verdict: pass | fix
+  - id: fix
+    needs: [review]
+    if: inputs.title[0] == 'a' || steps.review.outputs.verdict[0] == 'p'
+    prompt: Fix {{ with.nope[0] }}
+    with:
+      refs: [a]
+`);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.diagnostics.map(formatDiagnostic).sort()).toEqual([
+      'workflows/build.yaml:15: field "steps[1].if": step "fix" if reads inputs.title[0], which is not an input the workflow declares',
+      'workflows/build.yaml:15: field "steps[1].if": step "fix" if reads steps.review.outputs.verdict[0], which is not in the output step "review" declares',
+      'workflows/build.yaml:16: field "steps[1].prompt": step "fix" prompt reads with.nope[0], which is not a name its with declares',
+      'workflows/build.yaml:7: field "outputs.first": output "first" reads steps.review.outputs.verdict[0], which is not in the output step "review" declares',
+    ]);
+  });
+
   it('rejects a YAML syntax error with the file and line', () => {
     const result = parse('schemaVersion: [\n');
     expect(result.ok).toBe(false);

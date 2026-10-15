@@ -2,14 +2,14 @@
  * Workflow templates: `{{ inputs.… }}`, `{{ steps.… }}` and `{{ with.… }}` inside prompt text, `env` values and
  * every string inside a `with` value. Any other `{{ … }}` is plain text, so prompts about GitHub Actions or Jinja stay as written.
  */
-import { parseExpression, resolvePath, type ExpressionContext, type ExpressionPath } from './expression.js';
+import { parseExpression, parseFields, resolvePath, type ExpressionContext, type ExpressionPath, type PathField } from './expression.js';
 import type { WorkflowStep } from './types.js';
 
 /** A `{{ with.<name>… }}` read: a value the step's own `with` names. Only templates read it; an `if` cannot. */
 export interface WithPath {
   root: 'with';
-  /** The `with` name, then the fields read inside its value. */
-  fields: string[];
+  /** The `with` name, then the names and indexes read inside its value. */
+  fields: PathField[];
 }
 
 /** What a template reads: an expression path, or a value from the step's own `with`. */
@@ -39,8 +39,8 @@ export type TemplateParse = { ok: true; template: Template } | { ok: false; erro
 const TEMPLATE = /\{\{\s*((?:inputs|steps|with)\.[^{}]*?)\s*\}\}/;
 /** A template not preceded by `$`: `${{ inputs.x }}` is GitHub Actions text and stays as written. */
 const RECOGNIZED = new RegExp(`(?<!\\$)${TEMPLATE.source}`, 'g');
-/** `with.<name>`, then any fields inside its value. */
-const WITH_PATH = /^with(?:\.[A-Za-z0-9_-]+)+$/;
+/** `with.<name>`, then any names and indexes inside its value. */
+const WITH_PATH = /^with\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+|\[[^\]]*\]?)*$/;
 
 /**
  * The first template-like `{{ … }}` in `text` as written, if any; used to reject one where text is never rendered,
@@ -53,7 +53,9 @@ export function findTemplate(text: string): string | undefined {
 /** The one path a recognized template reads, or why it does not read exactly one. */
 function readOf(inner: string): ExpressionPath | WithPath | string {
   if (inner.startsWith('with.')) {
-    return WITH_PATH.test(inner) ? { root: 'with', fields: inner.split('.').slice(1) } : 'a template reads one path, such as with.<name>';
+    if (!WITH_PATH.test(inner)) return 'a template reads one path, such as with.<name>';
+    const parsed = parseFields(inner);
+    return parsed.ok ? { root: 'with', fields: parsed.fields.slice(1) } : parsed.message;
   }
   const parsed = parseExpression(inner);
   if (!parsed.ok) return parsed.message;

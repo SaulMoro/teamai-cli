@@ -1,7 +1,7 @@
 /** The YAML and diagnostic helpers parse.ts and reads.ts share, kept apart so neither imports the other. */
 
 import { isScalar, type LineCounter, type Node } from 'yaml';
-import type { ExpressionPath } from './expression.js';
+import { fieldsText, type ExpressionPath, type PathField } from './expression.js';
 import type { EndOutcome, OutputSchema, WorkflowDefinition, WorkflowDiagnostic } from './types.js';
 
 export function isYamlNode(value: unknown): value is Node {
@@ -54,7 +54,7 @@ export function undeclaredOutput(children: Map<string, Child>, path: ExpressionP
   if (path.root !== 'steps' || path.field !== 'outputs' || path.fields.length === 0) return undefined;
   const child = children.get(path.step);
   if (!child || Object.hasOwn(child.outputs ?? {}, path.fields[0]!)) return undefined;
-  return `reads steps.${path.step}.outputs.${path.fields.join('.')}, which is not an output ${child.label} declares`;
+  return `reads steps.${path.step}.outputs${fieldsText(path.fields)}, which is not an output ${child.label} declares`;
 }
 
 export interface GraphNode {
@@ -64,12 +64,17 @@ export interface GraphNode {
   node: Node;
 }
 
-/** Whether `fields` names a value inside `schema`. Only object fields can be read further. */
-export function declaresField(schema: OutputSchema, fields: string[]): boolean {
+/** Whether `fields` names a value inside `schema`. A name reads an object field, and an index reads the items of an array. */
+export function declaresField(schema: OutputSchema, fields: PathField[]): boolean {
   let current = schema;
   for (const field of fields) {
-    if (current.type !== 'object' || !Object.hasOwn(current.fields, field)) return false;
-    current = current.fields[field]!;
+    if (typeof field === 'number') {
+      if (current.type !== 'array') return false;
+      current = current.items;
+    } else {
+      if (current.type !== 'object' || !Object.hasOwn(current.fields, field)) return false;
+      current = current.fields[field]!;
+    }
   }
   return true;
 }
