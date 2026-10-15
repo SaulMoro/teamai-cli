@@ -10,7 +10,7 @@ import { resolveEffectiveUpdatePolicy } from './update-policy.js';
 import { resolveTeamaiEntryScript } from './builtin-hooks.js';
 import { log } from './utils/logger.js';
 import { expandHome, ensureDir } from './utils/fs.js';
-import { getUpdateLockPath } from './types.js';
+import { getTeamaiHomeDir, getUpdateLockPath } from './types.js';
 import { askConfirmation, isInteractive } from './utils/prompt.js';
 
 // `getCurrentVersion` and `getCurrentPackageName` live in `./package-info.ts`
@@ -627,8 +627,14 @@ export async function checkForUpdate(options?: { force?: boolean; dryRun?: boole
   }
 
   // Fetch latest version from registry
+  const home = getTeamaiHomeDir();
+  const installed = fs.existsSync(home);
   const latest = await fetchLatestVersion();
   if (!latest) {
+    return { available: false, current, latest: current };
+  }
+  // An uninstall during the query removed the home; saving the check now would recreate it.
+  if (installed && !fs.existsSync(home)) {
     return { available: false, current, latest: current };
   }
 

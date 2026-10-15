@@ -65,6 +65,7 @@ vi.mock('../utils/fs.js', () => ({
 
 vi.mock('../types.js', () => ({
   getUpdateLockPath: () => '/tmp/test-update-lock',
+  getTeamaiHomeDir: () => '/home/test/.teamai',
 }));
 
 vi.mock('../builtin-hooks.js', () => ({
