@@ -129,7 +129,8 @@ describe('source freshness on codebase recall (real CLI)', () => {
       throw new Error(`TeamAI CLI not found at ${CLI}. Run "npm run build" first.`);
     }
 
-    sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-source-freshness-e2e-'));
+    // Real path: git reports the canonical toplevel (/private/var on macOS).
+    sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-source-freshness-e2e-')));
     sourceRepo = path.join(sandbox, 'source-repo');
     homeDir = path.join(sandbox, 'home');
     authPath = path.join(sourceRepo, 'src', 'auth.ts');
