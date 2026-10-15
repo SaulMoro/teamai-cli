@@ -117,7 +117,7 @@ describe('workflow inline CLI', () => {
 
     expect(started.code, `${started.stdout}\n${started.stderr}`).toBe(0);
     const done = envelope(started.stdout).data?.done as { run: string; outcome: string };
-    expect(done).toEqual({ run: expect.any(String), outcome: 'succeeded' });
+    expect(done).toEqual({ run: expect.any(String), outcome: 'succeeded', record: 'pending' });
     expect(fs.readFileSync(path.join(repo, 'title.txt'), 'utf8')).toBe('$(touch pwned)');
     expect(fs.existsSync(path.join(repo, 'pwned'))).toBe(false);
     expect(fs.existsSync(path.join(repo, 'never.txt'))).toBe(false);
