@@ -48,6 +48,11 @@ describe('local-agent rules (#993)', () => {
     const agentDir = path.join(home, '.teamai', 'local-agent');
     fs.mkdirSync(agentDir, { recursive: true });
     fs.mkdirSync(path.join(home, '.codebuddy'), { recursive: true });
+    // A fresh update check keeps the Stop hook's update handler off the npm registry,
+    // whose late reply would write ~/.teamai/state.json after an uninstall removed it.
+    const statePath = path.join(home, '.teamai', 'state.json');
+    const state = fs.existsSync(statePath) ? JSON.parse(fs.readFileSync(statePath, 'utf8')) : {};
+    fs.writeFileSync(statePath, JSON.stringify({ ...state, lastUpdateCheck: new Date().toISOString(), availableUpdate: null }));
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let started!: () => void;
