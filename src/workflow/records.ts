@@ -18,7 +18,7 @@ import { loadTeamConfig } from '../config.js';
 import type { LocalConfig } from '../types.js';
 import { getDataHome, isUsageReportEnabled } from '../types.js';
 import { log } from '../utils/logger.js';
-import { locateStep } from './engine.js';
+import { stepDefinitions } from './scope.js';
 import { settled, VISIBLE_OUTCOMES, type StepPass, type StepState, type VisibleOutcome } from './step-state.js';
 import type { DriverIdentity, RunState, RunStatus, TokenUsage, WorkflowFailure } from './types.js';
 
@@ -160,8 +160,9 @@ export function buildEndRecord(
   const failure = failureOf(run);
   // An entry per pass: path + agent from the definition, the rest from what
   // that pass reported. Message, outputs, results, and session ids never cross.
+  const definitionOf = stepDefinitions(run);
   const entry = (step: string, pass: number | undefined, reported: Reported | undefined): StepEntry => {
-    const agent = locateStep(run, step)?.step.agent;
+    const agent = definitionOf(step)?.agent;
     const outcome = reported?.outcome === 'skipped' ? undefined : reported?.outcome;
     return {
       step,

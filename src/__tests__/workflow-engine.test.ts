@@ -2050,6 +2050,34 @@ describe('run records of graph runs', () => {
     expect(passes('deploy[1]')).toEqual([{ step: 'deploy[1]', pass: 1 }]);
     expect(JSON.stringify(record)).not.toContain('SENTINEL');
   });
+
+  it('gives its agent to the pass of an item that a later pass of the loop no longer has', async () => {
+    const fan = workflow('fan', `  - id: plan
+    command: node plan.js
+    output:
+      targets: [string]
+  - id: build
+    needs: [plan]
+    for_each: steps.plan.outputs.targets
+    workflow:
+      steps:
+        - id: review
+          prompt: "Review {{ item }}."
+          agent: reviewer
+  - id: check
+    needs: [build]
+    command: node check.js
+    loop: { back_to: plan, while: "length(steps.check.passes) < 2", max_iterations: 2 }
+`);
+    const { config, runId } = await startTree({ fan }, 'fan');
+
+    const { leased } = await driveLoop(config, runId, (lease, earlier) => (lease.step === 'plan' ? { outputs: { targets: earlier === 0 ? ['web'] : [] } } : {}));
+
+    expect(leased).toEqual(['plan#1', 'build[0].review#1', 'check#1', 'plan#2', 'check#2']);
+    expect((await endRecord(config))?.steps?.filter((entry) => entry.step === 'build[0].review')).toEqual([
+      { step: 'build[0].review', pass: 1, agent: 'reviewer', outcome: 'success' },
+    ]);
+  });
 });
 
 /** The lease a `next` envelope hands out; throws on anything else. */

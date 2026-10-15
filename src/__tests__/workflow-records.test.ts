@@ -77,6 +77,36 @@ function runState(overrides: Partial<RunState> = {}): RunState {
   };
 }
 
+/** A settled run of a for_each over `items` items, each of which runs an inline workflow with a reviewer prompt. */
+function settledFan(items: number): RunState {
+  const done = { status: 'succeeded', outcome: 'success', settledAt: 2 } as const;
+  return runState({
+    definition: {
+      ...definition,
+      steps: [
+        {
+          id: 'build',
+          forEach: { items: 'inputs.xs' },
+          workflow: { steps: [
+            { id: 'compile', command: 'node compile.js' },
+            { id: 'review', needs: ['compile'], prompt: 'Review it.', agent: 'reviewer' },
+          ] },
+        },
+        { id: 'after', needs: ['build'], command: 'node after.js' },
+      ],
+    },
+    steps: [
+      { id: 'build', ...done },
+      ...Array.from({ length: items }, (_, index) => [
+        { id: `build[${index}]`, item: index, ...done },
+        { id: `build[${index}].compile`, ...done },
+        { id: `build[${index}].review`, ...done },
+      ]).flat(),
+      { id: 'after', ...done },
+    ],
+  });
+}
+
 describe('#1083 workflow run records', () => {
   it('builds a start record with exactly the allowlisted fields', () => {
     const record = buildStartRecord(runState({ status: 'running' }), driver, 'tester');
@@ -195,6 +225,27 @@ describe('#1083 workflow run records', () => {
       { step: 'one', pass: 1, agent: 'implementer', tool: 'codex', model: 'gpt-5.4-codex', outcome: 'success', tokens: { input: 100, output: 50 } },
       { step: 'two', pass: 1, agent: 'reviewer', tool: 'claude', model: 'claude-sonnet-4.6', outcome: 'success' },
     ]);
+  });
+
+  it('builds the end record of a for_each with work linear in the item count', () => {
+    // Every lookup over the run's step instances reads each one's path, so the number of `id` reads counts how many it looks at.
+    const work = (items: number): number => {
+      let read = 0;
+      const run = settledFan(items);
+      run.steps = run.steps.map((state) => new Proxy(state, {
+        get: (target, key, receiver) => {
+          if (key === 'id') read += 1;
+          return Reflect.get(target, key, receiver);
+        },
+      }));
+      expect(buildEndRecord(run, driver, 'tester').steps?.filter((entry) => entry.agent === 'reviewer')).toHaveLength(items);
+      return read;
+    };
+    const small = work(100);
+    const large = work(200);
+    expect(small).toBeGreaterThan(100);
+    // Linear work doubles with the items; a scan of every instance per entry grows about four times.
+    expect(large / small).toBeLessThan(3);
   });
 
   it('reports the cumulative iteration count, not the bounded history length', () => {

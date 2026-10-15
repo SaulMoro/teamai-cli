@@ -113,7 +113,7 @@ function workflowLabel(scope: Scope): string {
 }
 
 /** The scope and definition of the step instance at `path`, or undefined when the run file does not describe it. */
-export function locateStep(run: RunState, path: string): { scope: Scope; step: WorkflowStep } | undefined {
+function locateStep(run: RunState, path: string): { scope: Scope; step: WorkflowStep } | undefined {
   let scope = topScope(run);
   const segments = parseStepPath(path);
   for (const [index, segment] of segments.entries()) {

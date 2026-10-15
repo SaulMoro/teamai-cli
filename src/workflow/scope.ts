@@ -44,6 +44,26 @@ export function childScope(run: RunState, scope: Scope, states: StepState[], sta
   return definition && { prefix: `${state.id}.`, definition, inputs: state.inputs, loops: stepLoops(definition.steps), runner: state };
 }
 
+/**
+ * Finds the definition of the step at a path in the run's workflow definitions alone, so a path still resolves after
+ * a loop archived the instances along it. Each workflow's steps are indexed by id once, when a path first reaches it.
+ */
+export function stepDefinitions(run: RunState): (path: string) => WorkflowStep | undefined {
+  const indexes = new Map<WorkflowDefinition | InlineWorkflow, Map<string, WorkflowStep>>();
+  return (path) => {
+    let workflow: WorkflowDefinition | InlineWorkflow | undefined = run.definition;
+    let step: WorkflowStep | undefined;
+    for (const { id } of parseStepPath(path)) {
+      if (!workflow) return undefined;
+      const index: Map<string, WorkflowStep> = indexes.get(workflow) ?? new Map(workflow.steps.map((item) => [item.id, item]));
+      indexes.set(workflow, index);
+      step = index.get(id);
+      workflow = typeof step?.workflow === 'string' ? run.workflows?.[step.workflow] : step?.workflow;
+    }
+    return step;
+  };
+}
+
 /** For each `run.steps` array, its instances by the prefix of the scope they are directly inside. */
 const scopeIndex = new WeakMap<readonly StepState[], Map<string, StepState[]>>();
 
