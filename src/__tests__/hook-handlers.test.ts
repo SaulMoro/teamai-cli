@@ -1947,6 +1947,28 @@ describe('track-slash handler: dotted and colon skill names', () => {
     expect(vi.mocked(appendUsageEvent).mock.calls[0][0].skill).toBe('ns:deploy');
     expect(updateKnownSkills).toHaveBeenCalledWith('ns:deploy');
   });
+
+  it.each([
+    '/Volumes/External/project/.claude/skills/tdd/SKILL.md',
+    '/Users/alice/project',
+    '/tmp/project',
+    '/tdd/notes',
+    '/tdd\\notes',
+    '//server/share',
+    '/tdd+invalid',
+  ])('does not record a path or a partial skill name: %s', async (prompt) => {
+    const { appendUsageEvent, updateKnownSkills } = await import('../usage-tracker.js');
+    const handler = buildHandlerRegistry().find(
+      (r) => r.event === 'prompt-submit' && r.handler.name === 'track-slash',
+    )!.handler;
+    vi.mocked(appendUsageEvent).mockClear();
+    vi.mocked(updateKnownSkills).mockClear();
+
+    await handler.execute({ prompt, hook_event_name: 'UserPromptSubmit' }, 'claude', scope);
+
+    expect(appendUsageEvent).not.toHaveBeenCalled();
+    expect(updateKnownSkills).not.toHaveBeenCalled();
+  });
 });
 
 describe('buildAdoptedSummary', () => {
@@ -1975,7 +1997,10 @@ describe('mr-hint agent language (#1014)', () => {
         ...scope,
         repo: { localPath: dir, remote: 'https://example.invalid/t.git' },
       });
-      expect(mockMrHintOutput).toHaveBeenCalledWith('en');
+      expect(mockMrHintOutput.mock.calls.at(-1)).toEqual([
+        'en',
+        expect.objectContaining({ repo: expect.objectContaining({ localPath: dir }) }),
+      ]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1994,7 +2019,10 @@ describe('mr-hint agent language (#1014)', () => {
         ...scope,
         repo: { localPath: dir, remote: 'https://example.invalid/t.git' },
       });
-      expect(mockMrHintOutput.mock.calls.at(-1)).toEqual([undefined]);
+      expect(mockMrHintOutput.mock.calls.at(-1)).toEqual([
+        undefined,
+        expect.objectContaining({ repo: expect.objectContaining({ localPath: dir }) }),
+      ]);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

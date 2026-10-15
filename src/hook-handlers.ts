@@ -411,8 +411,9 @@ const trackSlashHandler: HookHandler = {
     // Extract skill name: first word after "/". Character class must match
     // SKILL_NAME_REGEX (types.ts) — the CLI path (trackSlashCommand) already
     // uses the full set; this handler was narrower, silently truncating names
-    // that contain dots or colons (both valid per the schema).
-    const match = prompt.match(/^\/([a-zA-Z0-9_\-:.]+)/);
+    // that contain dots or colons (both valid per the schema). Require a whole
+    // token so a prompt beginning with an absolute path is not a skill use.
+    const match = prompt.match(/^\/([a-zA-Z0-9_\-:.]+)(?=\s|$)/);
     if (!match) return null;
 
     const skillName = match[1];
@@ -867,7 +868,7 @@ const mrHintHandler: HookHandler = {
   name: 'mr-hint',
   async execute(_stdin, _tool, config) {
     const { computeMrHintOutput } = await import('./mr-hint.js');
-    return computeMrHintOutput(await teamAgentLanguage(config));
+    return computeMrHintOutput(await teamAgentLanguage(config), config);
   },
 };
 

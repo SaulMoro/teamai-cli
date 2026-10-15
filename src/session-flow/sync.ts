@@ -478,8 +478,18 @@ export class SyncManager {
     // then be checking a path that already exists on the wrong side.
     this.guardWrite(path.join(dir, '_index.json'));
     fs.mkdirSync(dir, { recursive: true });
-    index.updatedAt = utcNow();
     const target = path.join(dir, '_index.json');
+    // Same sessions → leave the file byte-identical. A fresh updatedAt on every
+    // `session pull` kept the team checkout modified, and the next pull that
+    // brought index changes then refused to merge.
+    try {
+      const previous = fs.readFileSync(target, 'utf-8');
+      const updatedAt = (JSON.parse(previous) as RepoIndex).updatedAt;
+      if (JSON.stringify({ ...index, updatedAt }, null, 2) === previous) return;
+    } catch {
+      // No index yet, or a corrupt one: write it.
+    }
+    index.updatedAt = utcNow();
     // Atomic write: land a temp file, then rename. A direct writeFileSync lets two concurrent pushes
     // truncate each other and leave a partial (or empty) _index.json, which makes every session in the repo
     // look like it vanished. rename is atomic on the same filesystem, so readers see either the old value or the new one.
@@ -922,6 +932,22 @@ export class SyncManager {
         }
       }
     }
+
+    // Push records the session's own updatedAt, which meta does not keep, and
+    // appends in push order. Keep both from the current index so rebuilding an
+    // unchanged archive reproduces the committed index instead of modifying it.
+    const key = (e: IndexEntry) => `${e.sessionName}:${e.author}`;
+    let known: IndexEntry[] = [];
+    try {
+      const sessions = (JSON.parse(fs.readFileSync(path.join(dir, '_index.json'), 'utf-8')) as RepoIndex).sessions;
+      if (Array.isArray(sessions)) known = sessions;
+    } catch {
+      // No index yet, or a corrupt one: rebuild from disk alone.
+    }
+    const knownAt = new Map(known.map((e, i) => [key(e), { i, updatedAt: e.updatedAt }]));
+    for (const e of entries) e.updatedAt = knownAt.get(key(e))?.updatedAt ?? e.updatedAt;
+    const rank = (e: IndexEntry) => knownAt.get(key(e))?.i ?? known.length;
+    entries.sort((a, b) => rank(a) - rank(b));
 
     this.writeIndex(
       repoIdentity,
