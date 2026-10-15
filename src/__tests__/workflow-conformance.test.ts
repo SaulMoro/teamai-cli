@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
 import { workflowConformanceScenarios, type WorkflowClient } from '../workflow/conformance.js';
-import { leaseNext, parseReport, reportAttempt, startRun } from '../workflow/engine.js';
+import { leaseNext, parseNextPayload, parseReport, reportAttempt, startRun } from '../workflow/engine.js';
 import { readRun } from '../workflow/store.js';
 import type { DriverIdentity } from '../workflow/types.js';
 
@@ -38,7 +38,12 @@ describe('workflow protocol conformance in process', () => {
       await syncWorkflowDefinitions(config);
       const client: WorkflowClient = {
         start: (name) => startRun(config, name),
-        next: (runId, identity) => leaseNext(config, runId, identity),
+        next: async (runId, body) => {
+          const parsed = parseNextPayload(body);
+          if (typeof parsed === 'string') return { error: { code: 'invalid_json', message: parsed } };
+          const { driver: identity, ...options } = parsed;
+          return leaseNext(config, runId, identity, options);
+        },
         report: async (runId, body) => {
           const parsed = parseReport(body);
           return typeof parsed === 'string'
@@ -50,10 +55,16 @@ describe('workflow protocol conformance in process', () => {
       if ('error' in started) throw new Error(started.error.message);
       const runId = String(started.data.run);
       const leases = new Map<string, { attempt: string; revision: number }>();
+      const attemptOf = (name: string): string | undefined => leases.get(name)?.attempt;
       for (const operation of scenario.operations) {
         if (operation.kind === 'next') {
-          const envelope = await client.next(runId, driver);
+          const envelope = await client.next(runId, {
+            driver,
+            ...(operation.running ? { running: operation.running.map(attemptOf) } : {}),
+            ...(operation.canTakeLease !== undefined ? { canTakeLease: operation.canTakeLease } : {}),
+          });
           expect(envelope).toMatchObject(operation.expect);
+          if (operation.cancelled) expect('data' in envelope && envelope.data.cancelled).toEqual(operation.cancelled.map(attemptOf));
           if ('data' in envelope && envelope.data.lease) {
             leases.set(operation.saveAs, envelope.data.lease as { attempt: string; revision: number });
           }

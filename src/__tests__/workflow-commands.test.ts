@@ -122,6 +122,28 @@ describe('workflow json payloads', () => {
     const missing = await capture(() => workflowNext('r00000000', { json: '  ' }));
     expect(missing).toMatchObject({ error: { code: 'invalid_json', message: 'Pass --json with a driver object' } });
   });
+
+  it.each([
+    ['running that is not an array', { running: 'a00000000' }, 'running must be an array of attempt ids'],
+    ['running that holds a number', { running: [1] }, 'running must be an array of attempt ids'],
+    ['canTakeLease that is not a boolean', { canTakeLease: 'false' }, 'canTakeLease must be a boolean'],
+  ])('rejects a next payload with %s', async (_case, fields, message) => {
+    const { config, runId } = await startBuild();
+    state.config = config;
+
+    const rejected = await capture(() => workflowNext(runId, { json: JSON.stringify({ driver, ...fields }) }));
+
+    expect(rejected).toEqual({ error: { code: 'invalid_json', message } });
+  });
+
+  it('passes running and canTakeLease from the next payload to the run', async () => {
+    const { config, runId } = await startBuild();
+    state.config = config;
+
+    const reconciled = await capture(() => workflowNext(runId, { json: JSON.stringify({ driver, running: ['a00000000'], canTakeLease: false }) }));
+
+    expect(reconciled).toEqual({ data: { wait: { reason: 'canTakeLease is false' }, cancelled: ['a00000000'] } });
+  });
 });
 
 describe('workflow start --inputs', () => {

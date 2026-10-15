@@ -1,8 +1,8 @@
-import type { DriverIdentity, WorkflowEnvelope } from './types.js';
+import type { WorkflowEnvelope } from './types.js';
 
 export interface WorkflowClient {
   start(name: string): Promise<WorkflowEnvelope>;
-  next(runId: string, driver: DriverIdentity): Promise<WorkflowEnvelope>;
+  next(runId: string, body: unknown): Promise<WorkflowEnvelope>;
   report(runId: string, body: unknown): Promise<WorkflowEnvelope>;
 }
 
@@ -15,8 +15,9 @@ export interface ConformanceScenario {
   operations: ConformanceOperation[];
 }
 
+/** `running` and `cancelled` name leases that earlier operations saved; `cancelled` must match exactly. */
 export type ConformanceOperation =
-  | { kind: 'next'; saveAs: string; expect: Record<string, unknown> }
+  | { kind: 'next'; saveAs: string; running?: string[]; canTakeLease?: boolean; cancelled?: string[]; expect: Record<string, unknown> }
   | {
     kind: 'report';
     lease?: string;
@@ -118,6 +119,20 @@ steps:
     prompt: "Fix {{ with.task }}; keep \${{ inputs.version }}."
     with:
       task: "{{ steps.plan.outputs.task }}"
+`;
+
+const PARALLEL_ROOTS = `schemaVersion: v1alpha1
+name: build
+description: Two roots a driver runs in parallel, then a join.
+steps:
+  - id: a
+    command: echo a
+  - id: b
+    needs: []
+    command: echo b
+  - id: join
+    needs: [a, b]
+    command: echo join
 `;
 
 export const workflowConformanceScenarios: ConformanceScenario[] = [
@@ -235,6 +250,19 @@ export const workflowConformanceScenarios: ConformanceScenario[] = [
       { kind: 'next', saveAs: 'plan', expect: { data: { lease: { step: 'plan' } } } },
       { kind: 'report', lease: 'plan', body: { outcome: 'success', outputs: { task: 'the crash' } }, expect: { data: { step: { status: 'succeeded' } } } },
       { kind: 'next', saveAs: 'fix', expect: { data: { lease: { step: 'fix', prompt: 'Fix the crash; keep ${{ inputs.version }}.' } } } },
+    ],
+  },
+  {
+    name: 'a driver that lists its running attempts gets parallel leases',
+    workflowName: 'build',
+    yaml: PARALLEL_ROOTS,
+    operations: [
+      { kind: 'next', saveAs: 'a', expect: { data: { lease: { step: 'a' }, cancelled: [] } } },
+      { kind: 'next', saveAs: 'b', running: ['a'], expect: { data: { lease: { step: 'b' }, cancelled: [] } } },
+      { kind: 'next', saveAs: 'wait', running: ['a', 'b'], expect: { data: { wait: { reason: 'a is leased' }, cancelled: [] } } },
+      { kind: 'next', saveAs: 'reconcile', running: ['a', 'b'], canTakeLease: false, expect: { data: { wait: { reason: 'a is leased' } } } },
+      { kind: 'next', saveAs: 'again', running: ['b'], expect: { data: { lease: { step: 'a' } } } },
+      { kind: 'report', lease: 'a', body: { outcome: 'success' }, expect: { data: { step: { id: 'a', status: 'succeeded' } } } },
     ],
   },
 ];

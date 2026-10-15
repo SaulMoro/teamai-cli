@@ -225,7 +225,7 @@ Generated: do not edit by hand. Regenerate with
     - `--tools <list>` — Override local prompt tools for this run, as comma-separated name=tool pairs
     - `--inputs <json>` — Values for the inputs the workflow declares, as a JSON object, for example {"issue":42}. Every declared input is required.
   - `teamai workflow next <run>` — Lease the next pending step of a run. Prints a JSON envelope.
-    - `--json <payload>` — Driver identity, for example {"driver":{"kind":"local","machine":"host","workspace":"/work"}}
+    - `--json <payload>` — Driver identity, for example {"driver":{"kind":"local","machine":"host","workspace":"/work"}}. Optional: running, the attempt ids of its open leases the driver still runs (an open lease left out is handed back), and canTakeLease, false to settle without taking a new lease. Every answer lists in cancelled the running attempts to stop.
   - `teamai workflow report <run>` — Report the outcome of a leased step. Prints a JSON envelope.
     - `--json <payload>` — attempt, revision, outcome (success, failed, or released), and driver
 

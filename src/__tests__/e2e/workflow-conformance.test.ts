@@ -65,11 +65,17 @@ describe('workflow protocol conformance through the CLI', () => {
       if ('error' in started) throw new Error(started.error.message);
       const runId = String(started.data.run);
       const leases = new Map<string, { attempt: string; revision: number }>();
+      const attemptOf = (name: string): string | undefined => leases.get(name)?.attempt;
       for (const operation of scenario.operations) {
         if (operation.kind === 'next') {
-          const result = await runCLI(['workflow', 'next', runId, '--json', JSON.stringify({ driver })], repo);
+          const result = await runCLI(['workflow', 'next', runId, '--json', JSON.stringify({
+            driver,
+            ...(operation.running ? { running: operation.running.map(attemptOf) } : {}),
+            ...(operation.canTakeLease !== undefined ? { canTakeLease: operation.canTakeLease } : {}),
+          })], repo);
           const value = envelope(result.stdout);
           expect(value).toMatchObject(operation.expect);
+          if (operation.cancelled) expect('data' in value && value.data.cancelled).toEqual(operation.cancelled.map(attemptOf));
           if ('data' in value && value.data.lease) {
             leases.set(operation.saveAs, value.data.lease as { attempt: string; revision: number });
           }

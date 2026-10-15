@@ -772,7 +772,7 @@ workflowCmd
 workflowCmd
   .command('next <run>')
   .description('Lease the next pending step of a run. Prints a JSON envelope.')
-  .option('--json <payload>', 'Driver identity, for example {"driver":{"kind":"local","machine":"host","workspace":"/work"}}')
+  .option('--json <payload>', 'Driver identity, for example {"driver":{"kind":"local","machine":"host","workspace":"/work"}}. Optional: running, the attempt ids of its open leases the driver still runs (an open lease left out is handed back), and canTakeLease, false to settle without taking a new lease. Every answer lists in cancelled the running attempts to stop.')
   .action(async (run: string, cmdOpts: { json?: string }) => {
     const { workflowNext } = await import('./workflow-commands.js');
     await workflowNext(run, cmdOpts);

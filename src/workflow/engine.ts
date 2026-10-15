@@ -196,8 +196,8 @@ function renderLease(scope: Scope, states: StepState[], state: StepState, defini
   };
 }
 
-function leaseEnvelope(run: RunState, state: LeasedStep, definition: WorkflowStep, rendered: RenderedLease): WorkflowEnvelope {
-  return ok({ lease: {
+function leaseData(run: RunState, state: LeasedStep, definition: WorkflowStep, rendered: RenderedLease): Record<string, unknown> {
+  return { lease: {
     run: run.id,
     step: state.id,
     attempt: state.lease.attempt,
@@ -207,7 +207,7 @@ function leaseEnvelope(run: RunState, state: LeasedStep, definition: WorkflowSte
     ...(rendered.prompt !== undefined ? { prompt: rendered.prompt } : {}),
     ...(definition.agent !== undefined ? { agent: definition.agent } : {}),
     ...(definition.output ? { output: definition.output } : {}),
-  } });
+  } };
 }
 
 /** Fails a step the engine cannot hand out, so the rest of the graph keeps settling. Like a skip, it does not bump `revision`. */
@@ -236,8 +236,8 @@ function settleRun(run: RunState, now: string, outcome: FinalRunStatus, end?: st
   return { ...run, steps: run.steps.map((step) => ({ ...step })) };
 }
 
-function doneEnvelope(run: RunState): WorkflowEnvelope {
-  return ok({ done: { run: run.id, outcome: run.status, ...(run.end !== undefined ? { end: run.end } : {}) } });
+function doneData(run: RunState): Record<string, unknown> {
+  return { done: { run: run.id, outcome: run.status, ...(run.end !== undefined ? { end: run.end } : {}) } };
 }
 
 /** A step with `end` and no action only ends the workflow; the engine settles it without a lease. */
@@ -356,10 +356,14 @@ function mustSkip(needs: Array<StepState | undefined>, condition: Expression | u
   return needs.length > 0 && needs.every((need) => need?.status === 'skipped');
 }
 
-/** How settling a workflow of the run ended: a step to lease, the workflow's outcome, or a run file that cannot settle. */
+/**
+ * How settling a workflow of the run ended: a step to lease, the workflow's outcome, nothing to do until an open
+ * lease is reported, or a run file that cannot settle.
+ */
 type Settled =
   | { lease: StepState; definition: WorkflowStep; rendered: RenderedLease }
   | WorkflowResult
+  | { inProgress: true }
   | { unreadable: string };
 
 /**
@@ -404,56 +408,79 @@ function workflowOutputs(scope: Scope, states: StepState[], paths: Map<string, E
 }
 
 /**
- * Settles one workflow of the run while no lease is open: skips, end-only steps, and the workflows its steps run.
- * Returns the first step to lease in declaration order, where a running workflow step stands for its own steps,
- * or the workflow's outcome once nothing is left to run.
+ * Settles one workflow of the run to a fixpoint, and any change starts it over. First, what needs no driver:
+ * skips, end-only steps, and the running workflow steps whose own workflow has a result. Then the reached end, if
+ * any. Only when `advancing`, the first ready step in declaration order is started or returned to lease; a running
+ * workflow step stands there for its own steps and is passed over while they have nothing to lease.
  */
-function settleScope(run: RunState, scope: Scope): Settled {
+function settleScope(run: RunState, scope: Scope, advancing: boolean): Settled {
   const reads = parseReads(run, scope);
   if (typeof reads === 'string') return { unreadable: reads };
   const states = statesIn(run, scope);
   const defined = new Map(scope.definition.steps.map((item) => [item.id, item]));
   const definitionOf = (state: StepState): WorkflowStep | undefined => defined.get(localId(scope, state));
-  // A step that cannot render, or a workflow step that finishes, changes the graph, and settling starts again.
+  const childOf = (state: StepState): { definition: WorkflowStep; child: Scope } | { unreadable: string } => {
+    const definition = definitionOf(state);
+    if (!definition) return { unreadable: `Run ${run.id} has no definition for step "${state.id}"` };
+    const child = childScope(run, scope, states, state, definition);
+    if (!child) return { unreadable: `Run ${run.id} step "${state.id}" runs workflow "${definition.workflow}", which the run did not keep` };
+    return { definition, child };
+  };
   for (;;) {
     const canRun = skipUnreachable(scope, states, reads);
     const ready = (item: StepState): boolean => item.status === 'pending' && canRun(item);
-    const ending = states.find((item) => ready(item) && endsOnly(definitionOf(item)));
-    if (ending) succeed(ending, { settledAt: run.revision });
+    let changed = false;
+    for (const state of states) {
+      if (ready(state) && endsOnly(definitionOf(state))) {
+        succeed(state, { settledAt: run.revision });
+        changed = true;
+      } else if (state.status === 'running') {
+        const located = childOf(state);
+        if ('unreadable' in located) return located;
+        const result = settleScope(run, located.child, false);
+        if ('unreadable' in result) return result;
+        if (!('outcome' in result)) continue;
+        finishWorkflowStep(run, state, result);
+        changed = true;
+      }
+    }
+    if (changed) continue;
     const reached = states.find((item) => item.status === 'succeeded' && definitionOf(item)?.end !== undefined);
     const end = reached ? definitionOf(reached)?.end : undefined;
     if (end !== undefined) {
       for (const item of states) if (item.status === 'pending') skip(item);
       return { outcome: scope.definition.ends?.[end] ?? 'failed', end, outputs: workflowOutputs(scope, states, reads.outputs) };
     }
-    const state = states.find((item) => item.status === 'running' || ready(item));
-    if (!state) {
-      if (states.some((item) => item.status === 'pending')) {
-        return { unreadable: `Run ${run.id} has pending steps whose needs cannot be met` };
+    const finished = (): WorkflowResult => ({ outcome: states.some(stopped) ? 'failed' : 'succeeded', outputs: workflowOutputs(scope, states, reads.outputs) });
+    if (!advancing) return states.every(settled) ? finished() : { inProgress: true };
+    for (const state of states) {
+      if (state.status !== 'running' && !ready(state)) continue;
+      const definition = definitionOf(state);
+      if (!definition) return { unreadable: `Run ${run.id} has no definition for step "${state.id}"` };
+      if (definition.workflow === undefined) {
+        const rendered = renderLease(scope, states, state, definition);
+        if (!('code' in rendered)) return { lease: state, definition, rendered };
+        failStep(run, state, rendered);
+      } else {
+        const located = childOf(state);
+        if ('unreadable' in located) return located;
+        if (state.status === 'pending') {
+          const failure = startWorkflowStep(run, scope, states, state, definition, located.child);
+          if (failure) failStep(run, state, failure);
+        } else {
+          const result = settleScope(run, located.child, true);
+          if ('inProgress' in result) continue;
+          if (!('outcome' in result)) return result;
+          finishWorkflowStep(run, state, result);
+        }
       }
-      return { outcome: states.some(stopped) ? 'failed' : 'succeeded', outputs: workflowOutputs(scope, states, reads.outputs) };
+      changed = true;
+      break;
     }
-    const definition = definitionOf(state);
-    if (!definition) return { unreadable: `Run ${run.id} has no definition for step "${state.id}"` };
-    if (definition.workflow !== undefined) {
-      const child = childScope(run, scope, states, state, definition);
-      if (!child) return { unreadable: `Run ${run.id} step "${state.id}" runs workflow "${definition.workflow}", which the run did not keep` };
-      const failure = state.status === 'pending' ? startWorkflowStep(run, scope, states, state, definition, child) : undefined;
-      if (failure) {
-        failStep(run, state, failure);
-        continue;
-      }
-      const result = settleScope(run, child);
-      if (!('outcome' in result)) return result;
-      finishWorkflowStep(run, state, result);
-      continue;
-    }
-    const rendered = renderLease(scope, states, state, definition);
-    if ('code' in rendered) {
-      failStep(run, state, rendered);
-      continue;
-    }
-    return { lease: state, definition, rendered };
+    if (changed) continue;
+    if (states.some((item) => item.status === 'leased' || item.status === 'running')) return { inProgress: true };
+    if (states.some((item) => item.status === 'pending')) return { unreadable: `Run ${run.id} has pending steps whose needs cannot be met` };
+    return finished();
   }
 }
 
@@ -549,41 +576,72 @@ function missingNeeds(run: RunState): string | undefined {
   return undefined;
 }
 
-export async function leaseNext(config: LocalConfig, runId: string, driver: DriverIdentity): Promise<WorkflowEnvelope> {
+/** What a driver tells `next` besides who it is. */
+export interface NextOptions {
+  /** The attempts of its open leases the driver is still running. An open lease it does not list is handed back to it. */
+  running?: string[];
+  /** False to only settle: `next` then answers `done`, an unlisted lease, or `wait`, and starts nothing new. */
+  canTakeLease?: boolean;
+}
+
+export async function leaseNext(config: LocalConfig, runId: string, driver: DriverIdentity, options: NextOptions = {}): Promise<WorkflowEnvelope> {
+  const running = new Set(options.running);
   // The end record publishes AFTER withRun releases the run lock (#1126 P3):
   // publication does a reports-branch push, and no network I/O may hold the
   // lock other engine operations wait on.
   let settledRun: RunState | undefined;
   let alreadySettled = false;
   const envelope = await withRun(config, runId, async (run, now) => {
+    const before = JSON.stringify(run);
+    // Whatever settling changed is saved. `cancelled` is derived after settling: the attempts the driver runs that
+    // are no longer its open leases.
+    const answer = (data: Record<string, unknown>): { save: boolean; envelope: WorkflowEnvelope } => ({
+      save: JSON.stringify(run) !== before,
+      envelope: ok({
+        ...data,
+        cancelled: [...running].filter((attempt) => !run.steps.some((step) => step.status === 'leased'
+          && step.lease.attempt === attempt && sameDriver(step.lease.driver, driver))),
+      }),
+    });
+    const done = (result: WorkflowResult): { save: boolean; envelope: WorkflowEnvelope } => {
+      settledRun = settleRun(run, now, result.outcome, result.end);
+      return answer(doneData(run));
+    };
+    const wait = (open = run.steps.find((step) => step.status === 'leased')): { save: boolean; envelope: WorkflowEnvelope } => (
+      answer({ wait: { reason: open ? `${open.id} is leased` : 'canTakeLease is false' } })
+    );
     if (run.status !== 'running') {
       // Settled by an earlier next, which published the end record; the
       // done envelope still reports the queue-derived record state.
       alreadySettled = true;
-      return { save: false, envelope: doneEnvelope(run) };
+      return answer(doneData(run));
     }
     const older = missingNeeds(run);
     if (older) return { save: false, envelope: error('run_unreadable', older) };
-    const leased = run.steps.find((step): step is LeasedStep => step.status === 'leased');
-    if (leased) {
-      if (!sameDriver(leased.lease.driver, driver)) {
-        return { save: false, envelope: ok({ wait: { reason: `${leased.id} is leased` } }) };
-      }
+    const other = run.steps.find((step): step is LeasedStep => step.status === 'leased' && !sameDriver(step.lease.driver, driver));
+    if (other) return wait(other);
+    for (;;) {
+      // Ends reached through reports apply before an open lease is handed back, so a restarted driver does not run
+      // again what an end already stopped.
+      const result = settleScope(run, topScope(run), false);
+      if ('unreadable' in result) return { save: false, envelope: error('run_unreadable', result.unreadable) };
+      if ('outcome' in result) return done(result);
+      // An open lease the driver does not list is handed back before anything new starts, as a restarted driver expects.
+      const leased = run.steps.find((step): step is LeasedStep => step.status === 'leased' && !running.has(step.lease.attempt));
+      if (!leased) break;
       const located = locateStep(run, leased.id);
       if (!located) return { save: false, envelope: error('run_unreadable', `Run ${run.id} has no definition for step "${leased.id}"`) };
       const rendered = renderLease(located.scope, statesIn(run, located.scope), leased, located.step);
-      if (!('code' in rendered)) return { save: false, envelope: leaseEnvelope(run, leased, located.step, rendered) };
+      if (!('code' in rendered)) return answer(leaseData(run, leased, located.step, rendered));
       failStep(run, leased, rendered);
     }
-    // Settle the graph here, while no lease is open, so a later report still matches its lease revision.
-    const result = settleScope(run, topScope(run));
+    if (options.canTakeLease === false) return wait();
+    const result = settleScope(run, topScope(run), true);
     if ('unreadable' in result) return { save: false, envelope: error('run_unreadable', result.unreadable) };
-    if ('outcome' in result) {
-      settledRun = settleRun(run, now, result.outcome, result.end);
-      return { save: true, envelope: doneEnvelope(run) };
-    }
+    if ('outcome' in result) return done(result);
+    if ('inProgress' in result) return wait();
     const step = lease(result.lease, { attempt: `a${randomBytes(4).toString('hex')}`, revision: run.revision, driver });
-    return { save: true, envelope: leaseEnvelope(run, step, result.definition, result.rendered) };
+    return answer(leaseData(run, step, result.definition, result.rendered));
   });
   if (settledRun || alreadySettled) {
     const record = settledRun
@@ -650,10 +708,28 @@ export function parseReport(value: unknown): ReportInput | string {
   return report;
 }
 
-export function parseDriverPayload(value: unknown): DriverIdentity | string {
+/** A `next` payload: who the driver is, and what else it tells `next`. */
+export interface NextRequest extends NextOptions {
+  driver: DriverIdentity;
+}
+
+export function parseNextPayload(value: unknown): NextRequest | string {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return 'next payload must be a JSON object';
-  const driver = driverFrom((value as { driver?: unknown }).driver);
-  return driver ?? 'driver must include kind, machine, and workspace';
+  const record = value as Record<string, unknown>;
+  const driver = driverFrom(record.driver);
+  if (!driver) return 'driver must include kind, machine, and workspace';
+  const request: NextRequest = { driver };
+  if (record.running !== undefined) {
+    if (!Array.isArray(record.running) || !record.running.every((attempt): attempt is string => typeof attempt === 'string')) {
+      return 'running must be an array of attempt ids';
+    }
+    request.running = record.running;
+  }
+  if (record.canTakeLease !== undefined) {
+    if (typeof record.canTakeLease !== 'boolean') return 'canTakeLease must be a boolean';
+    request.canTakeLease = record.canTakeLease;
+  }
+  return request;
 }
 
 function rememberSettledAttempt(run: RunState, attempt: string): void {

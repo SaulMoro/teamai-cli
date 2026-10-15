@@ -467,8 +467,8 @@ steps:
     if ('error' in started) throw new Error(started.error.message);
     expect(started.data).not.toHaveProperty('record');
     const runId = String(started.data.run);
-    expect(await runLocalDriver(config, runId, work)).toEqual({ data: { done: { run: runId, outcome: 'succeeded' } } });
-    expect(await leaseNext(config, runId, driverA)).toEqual({ data: { done: { run: runId, outcome: 'succeeded' } } });
+    expect(await runLocalDriver(config, runId, work)).toEqual({ data: { done: { run: runId, outcome: 'succeeded' }, cancelled: [] } });
+    expect(await leaseNext(config, runId, driverA)).toEqual({ data: { done: { run: runId, outcome: 'succeeded' }, cancelled: [] } });
     expect(await pendingRecords(config)).toEqual([]);
   });
 
@@ -484,7 +484,7 @@ steps:
     if ('error' in other) throw new Error(other.error.message);
     expect(other.data.record).toBe('pending');
 
-    expect(await leaseNext(config, runId, driverA)).toEqual({ data: { done: { run: runId, outcome: 'succeeded', record: 'published' } } });
+    expect(await leaseNext(config, runId, driverA)).toEqual({ data: { done: { run: runId, outcome: 'succeeded', record: 'published' }, cancelled: [] } });
   });
 
   it('counts the attempts a run settled before the iteration counter existed', async () => {
@@ -696,7 +696,7 @@ steps:
 
     expect(leased).toEqual(order);
     expect(done).toEqual({ run: runId, record: 'pending', ...expected });
-    expect(await leaseNext(config, runId, driverA)).toEqual({ data: { done: { run: runId, record: 'pending', ...expected } } });
+    expect(await leaseNext(config, runId, driverA)).toEqual({ data: { done: { run: runId, record: 'pending', ...expected }, cancelled: [] } });
   });
 
   it('reaches a ready end before it leases a step declared earlier', async () => {
@@ -1269,7 +1269,7 @@ describe('file sub-workflows', () => {
     const done = await leaseNext(config, runId, driverA);
 
     expect(close).toMatchObject({ data: { lease: { step: 'close', env: { VERDICT: 'drop' } } } });
-    expect(done).toEqual({ data: { done: { run: runId, record: 'pending', outcome: 'succeeded' } } });
+    expect(done).toEqual({ data: { done: { run: runId, record: 'pending', outcome: 'succeeded' }, cancelled: [] } });
     expect(await readRun(config, runId)).toMatchObject({ steps: [
       { id: 'check', status: 'succeeded', end: 'dropped', outputs: { verdict: 'drop' } },
       { id: 'check.classify', status: 'succeeded' },
@@ -1642,6 +1642,29 @@ describe('inline workflows', () => {
     } });
   });
 
+  it('settles a workflow step whose only child its if skips, then leases the step after it, in serial order', async () => {
+    const { config, runId } = await startTree({ ship: workflow('ship', `  - id: w
+    workflow:
+      steps:
+        - id: only
+          if: inputs.skip
+          command: node only.js
+  - id: after
+    needs: [w]
+    command: node after.js
+`, 'inputs:\n  skip: boolean\n') }, 'ship', { skip: false });
+
+    const { leased, done } = await drive(config, runId);
+
+    expect(leased).toEqual(['after']);
+    expect(done).toEqual({ run: runId, record: 'pending', outcome: 'succeeded' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'w', status: 'succeeded' },
+      { id: 'w.only', status: 'skipped' },
+      { id: 'after', status: 'succeeded' },
+    ] });
+  });
+
   it('reads its own step where an enclosing step has the same id', async () => {
     const { config, runId } = await startTree({ ship: workflow('ship', `  - id: plan
     command: node plan.js
@@ -1844,6 +1867,184 @@ describe('run records of graph runs', () => {
     const stored = await readRun(config, runId);
     if (typeof stored !== 'object') throw new Error('run missing');
     expect((await endRecord(config))?.endedAt).toBe(stored.updatedAt);
+  });
+});
+
+/** The lease a `next` envelope hands out; throws on anything else. */
+function leaseIn(envelope: Awaited<ReturnType<typeof leaseNext>>): { step: string; attempt: string; revision: number } {
+  if ('error' in envelope || !envelope.data.lease) throw new Error(`expected a lease, got ${JSON.stringify(envelope)}`);
+  return envelope.data.lease as { step: string; attempt: string; revision: number };
+}
+
+describe('parallel leases', () => {
+  const ROOTS = graph(`  - id: a
+    command: node a.js
+  - id: b
+    needs: []
+    command: node b.js
+  - id: join
+    needs: [a, b]
+    command: node join.js
+`);
+
+  it('leases a second root while the driver lists the first as running', async () => {
+    const { config, runId } = await startBuild(ROOTS);
+    const a = leaseIn(await leaseNext(config, runId, driverA));
+
+    const b = await leaseNext(config, runId, driverA, { running: [a.attempt] });
+
+    expect(a.step).toBe('a');
+    expect(b).toMatchObject({ data: { lease: { step: 'b', revision: 1 }, cancelled: [] } });
+    expect(leaseIn(b).attempt).not.toBe(a.attempt);
+  });
+
+  it('hands its open lease back to a driver that lists no running attempts', async () => {
+    const { config, runId } = await startBuild(ROOTS);
+    const first = await leaseNext(config, runId, driverA);
+
+    const again = await leaseNext(config, runId, driverA);
+
+    expect(leaseIn(first).step).toBe('a');
+    expect(again).toEqual(first);
+  });
+
+  it('lists as cancelled a running attempt that is not an open lease of the driver', async () => {
+    const { config, runId } = await startBuild(ROOTS);
+
+    const next = await leaseNext(config, runId, driverA, { running: ['a00000000'] });
+
+    expect(next).toMatchObject({ data: { lease: { step: 'a' }, cancelled: ['a00000000'] } });
+  });
+
+  it('hands an unlisted lease back to a restarted driver before a step declared earlier that became ready', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: gate
+    command: node gate.js
+  - id: step1
+    needs: [gate]
+    command: node step1.js
+  - id: step2
+    needs: []
+    command: node step2.js
+`));
+    const gate = leaseIn(await leaseNext(config, runId, driverA));
+    const step2 = await leaseNext(config, runId, driverA, { running: [gate.attempt] });
+    await reportAttempt(config, runId, { ...gate, outcome: 'success', driver: driverA });
+
+    const restarted = await leaseNext(config, runId, driverA);
+
+    expect(leaseIn(step2).step).toBe('step2');
+    expect(restarted).toEqual(step2);
+  });
+
+  it('settles a workflow step whose only child its if skips, and leases what needs it while another lease runs', async () => {
+    const fixture = testConfig();
+    fs.writeFileSync(path.join(fixture.config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: a
+    command: node a.js
+  - id: w
+    needs: []
+    workflow:
+      steps:
+        - id: only
+          if: inputs.skip
+          command: node only.js
+  - id: after
+    needs: [w]
+    command: node after.js
+`, 'inputs:\n  skip: boolean\n'));
+    await syncWorkflowDefinitions(fixture.config);
+    const started = await startRun(fixture.config, 'build', { skip: false });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    const a = leaseIn(await leaseNext(fixture.config, runId, driverA));
+
+    const after = await leaseNext(fixture.config, runId, driverA, { running: [a.attempt] });
+
+    expect(after).toMatchObject({ data: { lease: { step: 'after' } } });
+    expect(await readRun(fixture.config, runId)).toMatchObject({ steps: [
+      { id: 'a', status: 'leased' },
+      { id: 'w', status: 'succeeded' },
+      { id: 'w.only', status: 'skipped' },
+      { id: 'after', status: 'leased' },
+    ] });
+  });
+
+  it('waits while every ready step is leased and listed as running', async () => {
+    const { config, runId } = await startBuild(ROOTS);
+    const a = leaseIn(await leaseNext(config, runId, driverA));
+    const b = leaseIn(await leaseNext(config, runId, driverA, { running: [a.attempt] }));
+
+    const next = await leaseNext(config, runId, driverA, { running: [a.attempt, b.attempt] });
+
+    expect(next).toEqual({ data: { wait: { reason: 'a is leased' }, cancelled: [] } });
+  });
+
+  it('leases a later root while a workflow step waits for its leased child', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: w
+    workflow:
+      steps:
+        - id: x
+          command: node x.js
+  - id: c
+    needs: []
+    command: node c.js
+`));
+    const x = leaseIn(await leaseNext(config, runId, driverA));
+
+    const c = await leaseNext(config, runId, driverA, { running: [x.attempt] });
+
+    expect(x.step).toBe('w.x');
+    expect(c).toMatchObject({ data: { lease: { step: 'c' }, cancelled: [] } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'w', status: 'running' },
+      { id: 'w.x', status: 'leased' },
+      { id: 'c', status: 'leased' },
+    ] });
+  });
+
+  it('ends the run on a reported end before it hands an unlisted lease back to a restarted driver', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: slow
+    command: node slow.js
+  - id: finish
+    needs: []
+    command: node finish.js
+    end: done
+`, 'ends:\n  done: succeeded\n'));
+    const slow = leaseIn(await leaseNext(config, runId, driverA));
+    const finish = leaseIn(await leaseNext(config, runId, driverA, { running: [slow.attempt] }));
+    await reportAttempt(config, runId, { ...finish, outcome: 'success', driver: driverA });
+
+    const restarted = await leaseNext(config, runId, driverA);
+
+    expect(restarted).toMatchObject({ data: { done: { run: runId, outcome: 'succeeded', end: 'done' } } });
+  });
+
+  it('settles and saves without leasing when the driver takes no lease', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: a
+    command: node a.js
+  - id: w
+    needs: []
+    workflow:
+      steps:
+        - id: x
+          command: node x.js
+  - id: after
+    needs: [w]
+    command: node after.js
+`));
+    const a = leaseIn(await leaseNext(config, runId, driverA));
+    const x = leaseIn(await leaseNext(config, runId, driverA, { running: [a.attempt] }));
+    await reportAttempt(config, runId, { ...x, outcome: 'success', driver: driverA });
+
+    const reconciled = await leaseNext(config, runId, driverA, { running: [a.attempt], canTakeLease: false });
+
+    expect(reconciled).toEqual({ data: { wait: { reason: 'a is leased' }, cancelled: [] } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'a', status: 'leased' },
+      { id: 'w', status: 'succeeded' },
+      { id: 'w.x', status: 'succeeded' },
+      { id: 'after', status: 'pending' },
+    ] });
+    expect(await leaseNext(config, runId, driverA, { running: [a.attempt] })).toMatchObject({ data: { lease: { step: 'after' } } });
   });
 });
 

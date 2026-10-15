@@ -1,6 +1,6 @@
 import { autoDetectInit } from './config.js';
 import { setStderrOnly } from './utils/logger.js';
-import { leaseNext, parseDriverPayload, parseReport, reportAttempt, startRun } from './workflow/engine.js';
+import { leaseNext, parseNextPayload, parseReport, reportAttempt, startRun } from './workflow/engine.js';
 import { runLocalDriver } from './workflow/local-driver.js';
 import { scopedToolPaths, type LocalConfig, type TeamaiConfig } from './types.js';
 import type { WorkflowEnvelope } from './workflow/types.js';
@@ -114,12 +114,13 @@ export async function workflowNext(runId: string, options: { json?: string }): P
     writeEnvelope(payload.envelope);
     return;
   }
-  const driver = parseDriverPayload(payload.value);
-  if (typeof driver === 'string') {
-    writeEnvelope({ error: { code: 'invalid_json', message: driver } });
+  const request = parseNextPayload(payload.value);
+  if (typeof request === 'string') {
+    writeEnvelope({ error: { code: 'invalid_json', message: request } });
     return;
   }
-  writeEnvelope(await leaseNext(config, runId, driver));
+  const { driver, ...next } = request;
+  writeEnvelope(await leaseNext(config, runId, driver, next));
 }
 
 export async function workflowReport(runId: string, options: { json?: string }): Promise<void> {
