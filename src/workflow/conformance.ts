@@ -164,6 +164,21 @@ steps:
     loop: { back_to: review, max_iterations: 2 }
 `;
 
+const BREAK_LOOP = `schemaVersion: v1alpha1
+name: build
+description: Probe until ready while a slow check runs beside it.
+loop: { max_iterations: 3 }
+steps:
+  - id: slow
+    command: echo slow
+  - id: probe
+    needs: []
+    command: echo probe
+    output:
+      ready: boolean
+    break: steps.probe.outputs.ready
+`;
+
 export const workflowConformanceScenarios: ConformanceScenario[] = [
   {
     name: 'two-step command success',
@@ -331,6 +346,22 @@ export const workflowConformanceScenarios: ConformanceScenario[] = [
       { kind: 'next', saveAs: 'review2', cancelled: [], expect: { data: { lease: { step: 'review', pass: 2 } } } },
       { kind: 'report', lease: 'review2', body: { outcome: 'success', outputs: { verdict: 'pass' } }, expect: { data: { step: { id: 'review', status: 'succeeded' } } } },
       { kind: 'next', saveAs: 'done', cancelled: [], expect: { data: { done: { outcome: 'succeeded' } } } },
+    ],
+  },
+  {
+    name: 'a looping workflow runs every step again each round, and a break ends it and cancels what still runs',
+    workflowName: 'build',
+    yaml: BREAK_LOOP,
+    operations: [
+      { kind: 'next', saveAs: 'slow1', cancelled: [], expect: { data: { lease: { step: 'slow', pass: 1 } } } },
+      { kind: 'next', saveAs: 'probe1', running: ['slow1'], cancelled: [], expect: { data: { lease: { step: 'probe', pass: 1 } } } },
+      { kind: 'report', lease: 'probe1', body: { outcome: 'success', outputs: { ready: false } }, expect: { data: { step: { id: 'probe', status: 'succeeded' } } } },
+      { kind: 'report', lease: 'slow1', body: { outcome: 'success' }, expect: { data: { step: { id: 'slow', status: 'succeeded' } } } },
+      { kind: 'next', saveAs: 'slow2', cancelled: [], expect: { data: { lease: { step: 'slow', pass: 2 } } } },
+      { kind: 'next', saveAs: 'probe2', running: ['slow2'], cancelled: [], expect: { data: { lease: { step: 'probe', pass: 2 } } } },
+      { kind: 'report', lease: 'probe2', body: { outcome: 'success', outputs: { ready: true } }, expect: { data: { step: { id: 'probe', status: 'succeeded' } } } },
+      { kind: 'next', saveAs: 'done', running: ['slow2'], cancelled: ['slow2'], expect: { data: { done: { outcome: 'succeeded' } } } },
+      { kind: 'report', lease: 'slow2', body: { outcome: 'success' }, expect: { error: { code: 'lease_cancelled' } } },
     ],
   },
 ];

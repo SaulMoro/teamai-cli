@@ -2675,3 +2675,142 @@ describe('step loops', () => {
     expect(stored.steps.find((step) => step.id === 'review')).toMatchObject({ status: 'succeeded', outputs: { findings } });
   });
 });
+
+const ROUNDS = workflow('rounds', `  - id: check
+    workflow:
+      steps:
+        - id: review
+          command: node review.js
+          output:
+            verdict: string
+  - id: decide
+    needs: [check]
+    command: node decide.js
+    output:
+      again: boolean
+`, 'loop: { while: steps.decide.outputs.again, max_iterations: 3 }\n');
+
+function rounds(...again: boolean[]) {
+  return (lease: LoopLease, earlier: number) => (lease.step === 'decide'
+    ? { outputs: { again: again[earlier] } }
+    : { outputs: { verdict: `R${earlier + 1}` } });
+}
+
+describe('workflow loops', () => {
+  it('runs the workflow again while its loop holds, and keeps every earlier pass in the run file', async () => {
+    const { config, runId } = await startTree({ rounds: ROUNDS }, 'rounds');
+
+    const { leased, done } = await driveLoop(config, runId, rounds(true, false));
+
+    expect(leased).toEqual(['check.review#1', 'decide#1', 'check.review#2', 'decide#2']);
+    expect(done).toMatchObject({ outcome: 'succeeded' });
+    expect(await readRun(config, runId)).toMatchObject({
+      round: 2,
+      steps: [
+        { id: 'check', status: 'succeeded', pass: 2, passes: [{ pass: 1, outcome: 'success' }] },
+        { id: 'check.review', status: 'succeeded', pass: 2, outputs: { verdict: 'R2' } },
+        { id: 'decide', status: 'succeeded', pass: 2, outputs: { again: false }, passes: [{ pass: 1, outcome: 'success', outputs: { again: true } }] },
+      ],
+      archive: [{ step: 'check.review', pass: 1, outcome: 'success', outputs: { verdict: 'R1' } }],
+    });
+  });
+
+  it('fails the run with loop_exhausted when the loop still holds after its last round', async () => {
+    const { config, runId } = await startTree({ rounds: ROUNDS }, 'rounds');
+
+    const { leased, done } = await driveLoop(config, runId, rounds(true, true, true));
+
+    expect(leased).toEqual(['check.review#1', 'decide#1', 'check.review#2', 'decide#2', 'check.review#3', 'decide#3']);
+    expect(done).toEqual({
+      run: runId,
+      record: 'pending',
+      outcome: 'failed',
+      failure: { code: 'loop_exhausted', message: 'Loop of workflow "rounds" is exhausted: it ran 3 rounds, its max_iterations' },
+    });
+  });
+
+  it('runs another round after a round with a failed step, and ends with the outcome of the last round', async () => {
+    const again = workflow('again', `  - id: work
+    command: node work.js
+`, "loop: { while: \"steps.work.outcome == 'failed'\", max_iterations: 3 }\n");
+    const { config, runId } = await startTree({ again }, 'again');
+
+    const { leased, done } = await driveLoop(config, runId, (_lease, earlier) => ({ outcome: earlier === 0 ? 'failed' : 'success' }));
+
+    expect(leased).toEqual(['work#1', 'work#2']);
+    expect(done).toEqual({ run: runId, record: 'pending', outcome: 'succeeded' });
+  });
+
+  it('stops the loop at a succeeded end, with that end', async () => {
+    const shipLoop = workflow('ship-loop', `  - id: build
+    command: node build.js
+    output:
+      ready: boolean
+  - id: ship
+    needs: [build]
+    if: steps.build.outputs.ready
+    end: shipped
+`, 'ends:\n  shipped: succeeded\nloop: { max_iterations: 3 }\n');
+    const { config, runId } = await startTree({ 'ship-loop': shipLoop }, 'ship-loop');
+
+    const { leased, done } = await driveLoop(config, runId, (_lease, earlier) => ({ outputs: { ready: earlier === 1 } }));
+
+    expect(leased).toEqual(['build#1', 'build#2']);
+    expect(done).toMatchObject({ outcome: 'succeeded', end: 'shipped' });
+  });
+
+  it('ends the loop as success when a break holds after its step succeeds, and skips what has not run', async () => {
+    const poll = workflow('poll', `  - id: probe
+    command: node probe.js
+    output:
+      status: string
+    break: steps.probe.outputs.status == 'ready'
+  - id: notify
+    needs: [probe]
+    command: node notify.js
+`, 'loop: { max_iterations: 5 }\n');
+    const { config, runId } = await startTree({ poll }, 'poll');
+
+    const { leased, done } = await driveLoop(config, runId, (lease, earlier) => (lease.step === 'probe'
+      ? { outputs: { status: earlier === 1 ? 'ready' : 'waiting' } }
+      : {}));
+
+    expect(leased).toEqual(['probe#1', 'notify#1', 'probe#2']);
+    expect(done).toEqual({ run: runId, record: 'pending', outcome: 'succeeded' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'probe', status: 'succeeded', pass: 2, outputs: { status: 'ready' } },
+      { id: 'notify', status: 'skipped', pass: 2 },
+    ] });
+  });
+
+  it('fails the step that runs a looping workflow with loop_exhausted after its last round, keeping that round\'s outputs', async () => {
+    const retry = workflow('retry', `  - id: attempt
+    workflow:
+      outputs:
+        result: steps.try.outputs.result
+      loop: { while: "steps.try.outputs.result != 'ok'", max_iterations: 2 }
+      steps:
+        - id: try
+          command: node try.js
+          output:
+            result: string
+  - id: after
+    needs: [attempt]
+    command: node after.js
+`);
+    const { config, runId } = await startTree({ retry }, 'retry');
+
+    const { leased, done } = await driveLoop(config, runId, (_lease, earlier) => ({ outputs: { result: `flaky ${earlier + 1}` } }));
+
+    expect(leased).toEqual(['attempt.try#1', 'attempt.try#2']);
+    expect(done).toMatchObject({ outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      {
+        id: 'attempt', status: 'failed', round: 2, outputs: { result: 'flaky 2' },
+        failure: { code: 'loop_exhausted', message: 'Loop of step "attempt" inline workflow is exhausted: it ran 2 rounds, its max_iterations' },
+      },
+      { id: 'attempt.try', status: 'succeeded', pass: 2 },
+      { id: 'after', status: 'skipped' },
+    ] });
+  });
+});

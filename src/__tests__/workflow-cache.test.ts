@@ -1253,7 +1253,7 @@ steps:
 
     expect(result.invalid.map((diagnostic) => [formatDiagnostic(diagnostic), diagnostic.code])).toEqual([
       ['workflows/build.yaml:17: field "steps[2].workflow.inputs": step "check" runs an inline workflow, which declares no inputs; its steps read the enclosing workflow\'s inputs', undefined],
-      ['workflows/build.yaml:19: field "steps[2].workflow.name": step "check" runs an inline workflow, which carries only steps, outputs, and ends', undefined],
+      ['workflows/build.yaml:19: field "steps[2].workflow.name": step "check" runs an inline workflow, which carries only steps, outputs, ends, and loop', undefined],
       ['workflows/build.yaml:14: field "steps[2].with": step "check" with is not allowed on an inline workflow; its steps read the enclosing inputs and steps', undefined],
       ['workflows/build.yaml:22: field "steps[2].workflow.steps[0].prompt": step "classify" prompt reads steps.free, which is not a step it needs, or one the step that runs its workflow needs, directly or through their needs', 'bad_template'],
       ['workflows/build.yaml:25: field "steps[2].workflow.steps[1].if": step "comment" if reads steps.free, which is not a step it needs, or one the step that runs its workflow needs, directly or through their needs', undefined],

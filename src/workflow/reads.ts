@@ -61,6 +61,11 @@ export interface ReadSite {
   expression?: Expression;
   /** The site is evaluated after its step succeeds, so it may read that step too. */
   afterRun?: boolean;
+  /**
+   * For a workflow's own `loop.while`, how messages name the workflow. It is evaluated after a round, so it may read
+   * every step of the workflow, and `id` names no step.
+   */
+  workflow?: string;
   code?: WorkflowDiagnostic['code'];
 }
 
@@ -69,6 +74,7 @@ export interface ReadSite {
  * previous pass, the output each step declares, and the declared inputs.
  */
 export interface ReadScope {
+  ids: Set<string>;
   ancestors: (id: string) => Set<string>;
   previous: (id: string) => Set<string>;
   outputs: Map<string, OutputSchema | undefined>;
@@ -86,6 +92,7 @@ export function readScope(
 ): ReadScope {
   return {
     children,
+    ids: new Set([...needs.keys(), ...steps.map((step) => step.id)]),
     ancestors: (id) => ancestors(needs, id),
     previous: stepLoops(steps).previous,
     outputs: new Map(steps.map((step) => [step.id, step.output])),
@@ -103,45 +110,47 @@ export function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScop
     const at = (message: string): WorkflowDiagnostic => ({
       file, ...site.at, field: site.field, message, ...(site.code ? { code: site.code } : {}),
     });
-    const readable = new Set([
+    const readable = site.workflow !== undefined ? scope.ids : new Set([
       ...scope.ancestors(site.id), ...scope.previous(site.id), ...(site.afterRun && site.reader === undefined ? [site.id] : []),
     ]);
-    const reader = site.reader ?? site.id;
+    const subject = site.workflow ?? `step "${site.reader ?? site.id}"`;
     const reported = new Set<string>();
     for (const path of site.paths) {
       if (path.root === 'inputs') {
         if (scope.inputs && !schemaAt(scope.inputs, path.fields)) {
-          diagnostics.push(at(`step "${reader}" ${site.what} reads inputs${fieldsText(path.fields)}, which is not an input the workflow declares`));
+          diagnostics.push(at(`${subject} ${site.what} reads inputs${fieldsText(path.fields)}, which is not an input the workflow declares`));
         }
         continue;
       }
       if (!readable.has(path.step)) {
         if (!reported.has(path.step)) {
-          diagnostics.push(at(site.reader === undefined
-            ? `step "${reader}" ${site.what} reads steps.${path.step}, which is not a step it needs, directly or through its needs`
-            : `step "${reader}" ${site.what} reads steps.${path.step}, which is not a step it needs, or one the step that runs its workflow needs, directly or through their needs`));
+          diagnostics.push(at(site.workflow !== undefined
+            ? `${subject} ${site.what} reads steps.${path.step}, which is not one of its steps`
+            : site.reader === undefined
+              ? `${subject} ${site.what} reads steps.${path.step}, which is not a step it needs, directly or through its needs`
+              : `${subject} ${site.what} reads steps.${path.step}, which is not a step it needs, or one the step that runs its workflow needs, directly or through their needs`));
         }
         reported.add(path.step);
         continue;
       }
       const undeclared = undeclaredOutput(scope.children, path);
       if (undeclared) {
-        diagnostics.push({ ...at(`step "${reader}" ${site.what} ${undeclared}`), code: 'undeclared_output' });
+        diagnostics.push({ ...at(`${subject} ${site.what} ${undeclared}`), code: 'undeclared_output' });
         continue;
       }
       const field = undeclaredField(path, scope.outputs.get(path.step));
-      if (field) diagnostics.push(at(`step "${reader}" ${site.what} ${field}`));
+      if (field) diagnostics.push(at(`${subject} ${site.what} ${field}`));
     }
     if (site.expression) {
       // A path this site does not list reads an enclosing workflow, which checks its type.
       const schemaOf = (path: ExpressionPath): OutputSchema | undefined => (site.paths.includes(path) ? declaredSchema(scope, readable, path) : undefined);
-      for (const problem of typeProblems(site.expression, schemaOf)) diagnostics.push(at(`step "${reader}" ${site.what} ${problem.message}`));
+      for (const problem of typeProblems(site.expression, schemaOf)) diagnostics.push(at(`${subject} ${site.what} ${problem.message}`));
     }
     for (const { step, end } of site.ends ?? []) {
       const child = readable.has(step) ? scope.children.get(step) : undefined;
       if (!child || Object.hasOwn(child.ends ?? {}, end)) continue;
       diagnostics.push({
-        ...at(`step "${reader}" ${site.what} compares steps.${step}.end with '${end}', which is not an end ${child.label} declares`),
+        ...at(`${subject} ${site.what} compares steps.${step}.end with '${end}', which is not an end ${child.label} declares`),
         code: 'undeclared_end',
       });
     }

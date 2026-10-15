@@ -174,6 +174,11 @@ export function repend(state: StepState, iteration?: number): PendingStep {
   return Object.assign(pending, { pass, passes }, iteration !== undefined ? { iteration } : {});
 }
 
+/** A step whose looping workflow runs its next round. */
+export function nextRound(state: RunningStep): RunningStep {
+  return Object.assign(state, { round: (state.round ?? 1) + 1 });
+}
+
 /** A loop owner whose loop will not run again after `iteration` runs. */
 export function endLoop(owner: SucceededStep, iteration: number): SucceededStep {
   return Object.assign(owner, { loopFinal: true, iteration });

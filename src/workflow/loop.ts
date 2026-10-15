@@ -1,12 +1,13 @@
 /**
- * Step loops. A step with `loop` runs its range again after it succeeds: `back_to`, the step, and every step between
- * them. These rules are shared by pull, which rejects loops a run could not settle, and by the engine, which settles them.
+ * Loops. A step with `loop` runs its range again after it succeeds: `back_to`, the step, and every step between them.
+ * A workflow with `loop` runs all of its steps again, round after round. These rules are shared by pull, which rejects
+ * loops a run could not settle, and by the engine, which settles them.
  */
 import type { ExpressionPass, ExpressionStep } from './expression.js';
-import { endLoop, exhaust, passOf, repend, type StepPass, type StepState } from './step-state.js';
-import type { RunState, StepLoop, WorkflowFailure, WorkflowStep } from './types.js';
+import { endLoop, exhaust, nextRound, passOf, repend, type StepPass, type StepState } from './step-state.js';
+import type { RunState, StepLoop, WorkflowFailure, WorkflowLoop, WorkflowStep } from './types.js';
 
-type LoopStep = Pick<WorkflowStep, 'id' | 'needs' | 'loop' | 'end'>;
+type LoopStep = Pick<WorkflowStep, 'id' | 'needs' | 'loop' | 'end' | 'break'>;
 
 /** The steps of one workflow that loops run again, and what waits for those loops. */
 export interface StepLoops {
@@ -24,7 +25,7 @@ export interface StepLoops {
 /** A step loop pull rejects, at the key of the step it is reported on. */
 export interface LoopProblem {
   id: string;
-  key: 'loop' | 'loop.back_to' | 'needs';
+  key: 'loop' | 'loop.back_to' | 'needs' | 'break';
   message: string;
 }
 
@@ -86,16 +87,21 @@ function firstCycle(ids: string[], edges: Map<string, string[]>): string[] | und
 }
 
 /**
- * The step loops of one workflow that pull rejects. `reads` holds the steps of this workflow each step reads in the
- * current pass. A needs cycle is reported elsewhere, so a wait cycle is reported only when `needs` alone has none.
+ * The step loops and breaks of one workflow that pull rejects. `reads` holds the steps of this workflow each step reads
+ * in the current pass, and `looping` is whether the workflow has a loop of its own. A needs cycle is reported elsewhere,
+ * so a wait cycle is reported only when `needs` alone has none.
  */
-export function loopProblems(steps: LoopStep[], reads: Map<string, Set<string>>): LoopProblem[] {
+export function loopProblems(steps: LoopStep[], reads: Map<string, Set<string>>, looping: boolean): LoopProblem[] {
   const problems: LoopProblem[] = [];
   const needs = new Map(steps.map((step) => [step.id, step.needs ?? []]));
   const { ranges, waitsFor } = stepLoops(steps);
   const claimed = new Map<string, string>();
   for (const step of steps) {
     if (!step.loop) continue;
+    if (looping) {
+      problems.push({ id: step.id, key: 'loop', message: `step "${step.id}" has loop in a workflow that loops; put one of the two loops in a sub-workflow` });
+      continue;
+    }
     const { backTo } = step.loop;
     if (backTo !== step.id && !ancestors(needs, step.id).has(backTo)) {
       problems.push({ id: step.id, key: 'loop.back_to', message: `step "${step.id}" loop.back_to is "${backTo}", which is not "${step.id}" or a step it needs, directly or through its needs` });
@@ -116,6 +122,11 @@ export function loopProblems(steps: LoopStep[], reads: Map<string, Set<string>>)
       continue;
     }
     for (const id of range) claimed.set(id, step.id);
+  }
+  for (const step of steps) {
+    const owner = claimed.get(step.id);
+    if (step.break === undefined || owner === undefined) continue;
+    problems.push({ id: step.id, key: 'break', message: `step "${step.id}" has break inside the loop of step "${owner}", where its if and while already end the loop` });
   }
   if (problems.length > 0 || firstCycle(steps.map((step) => step.id), needs)) return problems;
   const waits = new Map(steps.map((step) => [step.id, [...needs.get(step.id) ?? [], ...waitsFor(step.id, reads.get(step.id) ?? [])]]));
@@ -169,6 +180,34 @@ export function exhaustedAtStart(owner: Extract<StepState, { status: 'pending' }
   if ((owner.iteration ?? 0) < loop.maxIterations) return false;
   exhaust(owner, exhausted(owner, loop), settledAt);
   return true;
+}
+
+/**
+ * Decides what follows a round of a looping workflow that reached no end and no break. `holds` is its `while`, or true
+ * when it has none. The workflow ends when `while` is false. While it holds, every step of the workflow runs again in
+ * the next round, kept on `runner`, the step that runs the workflow, or on the run at the top. After `max_iterations`
+ * rounds, the workflow fails `loop_exhausted` instead, with what its last round returned.
+ */
+export function decideRound(
+  run: RunState,
+  runner: StepState | undefined,
+  loop: WorkflowLoop,
+  holds: boolean,
+  label: string,
+  states: StepState[],
+): 'ended' | 'again' | WorkflowFailure {
+  const round = (runner ? runner.round : run.round) ?? 1;
+  if (!holds) return 'ended';
+  if (round >= loop.maxIterations) {
+    return { code: 'loop_exhausted', message: `Loop of ${label} is exhausted: it ran ${loop.maxIterations} rounds, its max_iterations` };
+  }
+  for (const state of states) {
+    archiveUnder(run, state.id);
+    repend(state);
+  }
+  if (!runner) run.round = round + 1;
+  else if (runner.status === 'running') nextRound(runner);
+  return 'again';
 }
 
 /** Moves the instances under a step, those of the workflow it ran, from the run's steps to its archive, with every pass they had. */

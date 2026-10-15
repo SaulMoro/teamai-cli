@@ -544,3 +544,84 @@ steps:
     }]);
   });
 });
+
+describe('workflow loops', () => {
+  const POLL = `schemaVersion: v1alpha1
+name: build
+description: Probe until ready.
+inputs:
+  target: string
+loop:
+  while: "steps.probe.outputs.status != 'ready' && inputs.target != ''"
+  max_iterations: 5
+steps:
+  - id: probe
+    command: node probe.js
+    output:
+      status: string
+  - id: report
+    needs: [probe]
+    command: node report.js
+    break: steps.probe.outputs.status == 'gone'
+  - id: retry
+    needs: []
+    workflow:
+      loop: { max_iterations: 2 }
+      steps:
+        - id: try
+          command: node try.js
+`;
+
+  it('parses a loop on a workflow file and on an inline workflow, and a break on a step', () => {
+    const result = parse(POLL);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.definition.loop).toEqual({ while: "steps.probe.outputs.status != 'ready' && inputs.target != ''", maxIterations: 5 });
+    expect(result.definition.steps[1]?.break).toBe("steps.probe.outputs.status == 'gone'");
+    const retry = result.definition.steps[2]?.workflow;
+    expect(typeof retry === 'object' ? retry.loop : undefined).toEqual({ maxIterations: 2 });
+  });
+
+  it('rejects a break inside the range of a step loop', () => {
+    expect(rejected(REVIEW_AND_FIX.replace("    command: node review.js\n", "    command: node review.js\n    break: steps.review.outputs.verdict == 'pass'\n"))).toEqual([{
+      message: `${FILE}:7: field "steps[0].break": step "review" has break inside the loop of step "fix", where its if and while already end the loop`,
+      code: 'bad_loop',
+    }]);
+  });
+
+  it('rejects a step loop in a workflow that loops', () => {
+    expect(rejected(REVIEW_AND_FIX.replace('steps:\n', 'loop: { max_iterations: 2 }\nsteps:\n'))).toEqual([{
+      message: `${FILE}:15: field "steps[1].loop": step "fix" has loop in a workflow that loops; put one of the two loops in a sub-workflow`,
+      code: 'bad_loop',
+    }]);
+  });
+
+  it('checks what a workflow loop.while reads: its own steps, the outputs they declare, and the inputs', () => {
+    expect(rejected(POLL
+      .replace("inputs.target != ''", "inputs.taget != '' || steps.probe.outputs.stauts == 'x' || steps.gone.outcome == 'success'")
+      .replace('loop: { max_iterations: 2 }', "loop: { while: \"steps.probe.outcome == 'failed'\", max_iterations: 2 }"))).toEqual([
+      { message: `${FILE}:21: field "steps[2].workflow.loop.while": step "retry" workflow loop.while reads steps.probe, which is not one of its steps`, code: 'bad_loop' },
+      { message: `${FILE}:7: field "loop.while": workflow loop.while reads inputs.taget, which is not an input the workflow declares`, code: 'bad_loop' },
+      { message: `${FILE}:7: field "loop.while": workflow loop.while reads steps.probe.outputs.stauts, which is not in the output step "probe" declares`, code: 'bad_loop' },
+      { message: `${FILE}:7: field "loop.while": workflow loop.while reads steps.gone, which is not one of its steps`, code: 'bad_loop' },
+    ]);
+  });
+
+  it('rejects a workflow loop that is not a map of max_iterations and while, and a break that is not an expression', () => {
+    const header = (value: string): string => POLL.replace(/loop:\n {2}while: .*\n {2}max_iterations: 5\n/, `loop: ${value}\n`);
+    expect(rejected(header('3'))).toEqual([
+      { message: `${FILE}:6: field "loop": workflow loop must map max_iterations, and optionally while`, code: 'bad_loop' },
+    ]);
+    expect(rejected(header("{ back_to: probe, max_iterations: 0, while: 'steps.probe.outcome ==' }"))).toEqual([
+      { message: `${FILE}:6: field "loop.back_to": workflow loop has no back_to; each round runs every step of the workflow`, code: 'bad_loop' },
+      { message: `${FILE}:6: field "loop.max_iterations": workflow loop.max_iterations must be a whole number from 1`, code: 'bad_loop' },
+      { message: `${FILE}:6: field "loop.while": workflow loop.while does not parse at column 23: expected a value, found the end of the expression`, code: 'bad_loop' },
+    ]);
+    expect(rejected(POLL.replace("break: steps.probe.outputs.status == 'gone'", "break: \"steps.probe.outputs.status ==\""))).toEqual([
+      { message: `${FILE}:17: field "steps[1].break": step "report" break does not parse at column 30: expected a value, found the end of the expression`, code: 'bad_loop' },
+    ]);
+    expect(rejected(POLL.replace("break: steps.probe.outputs.status == 'gone'", 'break: [gone]'))).toEqual([
+      { message: `${FILE}:17: field "steps[1].break": step "report" break must be an expression`, code: 'bad_loop' },
+    ]);
+  });
+});

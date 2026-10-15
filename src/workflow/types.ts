@@ -42,6 +42,18 @@ export interface WorkflowStep {
   end?: string;
   /** Runs the steps from `backTo` to this step again after this step succeeds. */
   loop?: StepLoop;
+  /** Expression source, evaluated when this step succeeds; when true, its workflow, or that workflow's loop, ends as success. */
+  break?: string;
+}
+
+/**
+ * A workflow loop. When a round reaches no end, every step of the workflow runs again, while `while` is true, or
+ * always when there is none. The workflow runs at most `maxIterations` rounds; one more fails it with `loop_exhausted`.
+ */
+export interface WorkflowLoop {
+  /** Expression source, evaluated when a round has nothing left to run. */
+  while?: string;
+  maxIterations: number;
 }
 
 /**
@@ -73,6 +85,7 @@ export type EndOutcome = 'succeeded' | 'failed';
 export interface InlineWorkflow {
   ends?: Record<string, EndOutcome>;
   outputs?: Record<string, string>;
+  loop?: WorkflowLoop;
   steps: WorkflowStep[];
 }
 
@@ -86,6 +99,8 @@ export interface WorkflowDefinition {
   ends?: Record<string, EndOutcome>;
   /** Values this workflow returns to a step that runs it, each a path such as `steps.<id>.outputs.<field>`. */
   outputs?: Record<string, string>;
+  /** Runs the workflow's steps again, round after round. */
+  loop?: WorkflowLoop;
   steps: WorkflowStep[];
 }
 
@@ -108,7 +123,8 @@ export interface WorkflowDiagnostic {
    *   the file may be unchanged while that workflow changed, and the kept copy would read null where it expects a value.
    * `undeclared_end`: an `if` compares `steps.<id>.end` with a name the workflow step `<id>` runs does not declare in `ends`;
    *   for the same reason, the kept copy would take a branch that can never match.
-   * `bad_loop`: a `loop` pull rejects; the kept copy would run once the steps the author wrote to repeat.
+   * `bad_loop`: a `loop` or `break` pull rejects; the kept copy would run once the steps the author wrote to repeat,
+   *   or run on past the point the author wrote to stop at.
    */
   code?: 'unknown_key' | 'missing_needs' | 'false_if' | 'bad_template' | 'dotted_name' | 'undeclared_output' | 'undeclared_end' | 'bad_loop';
 }
@@ -142,6 +158,8 @@ export interface RunState {
   status: RunStatus;
   /** The end this run reached, set when it settles. */
   end?: string;
+  /** Why the run failed when no end says it, such as `loop_exhausted` on a looping top-level workflow. */
+  failure?: WorkflowFailure;
   /** The validated `--inputs`, stored when the workflow declares inputs. */
   inputs?: Record<string, unknown>;
   /** Covers `definition` and every workflow in `workflows`. */

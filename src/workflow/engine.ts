@@ -11,7 +11,7 @@ import { noteRunRecord, runRecordState } from './records.js';
 import { parseTemplate, renderStrings, renderText, templatedTexts, templatePaths, type TemplateContext, type TemplateError } from './template.js';
 import { parseStepPath } from './step-path.js';
 import { cancel, fail, lease, release, settled, skip, start, stopped, succeed, type LeasedStep, type StepState } from './step-state.js';
-import { decideStepLoop, exhaustedAtStart, firstPass, loopSettled, passesOf, previousPass, stepLoops, type StepLoops } from './loop.js';
+import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, loopSettled, passesOf, previousPass, stepLoops, type StepLoops } from './loop.js';
 import { generateRunId, isRunId, readRun, runLockPath, writeRun } from './store.js';
 import type {
   CachedWorkflow,
@@ -113,6 +113,8 @@ interface Scope {
   /** For an inline workflow: the enclosing workflows' steps, by id, which its own steps hide. */
   outer?: Record<string, ExpressionStep>;
   loops: StepLoops;
+  /** The step that runs this workflow, which keeps its round. The top-level workflow keeps its round on the run. */
+  runner?: StepState;
 }
 
 function topScope(run: RunState): Scope {
@@ -125,10 +127,17 @@ function topScope(run: RunState): Scope {
  */
 function childScope(run: RunState, scope: Scope, states: StepState[], state: StepState, step: WorkflowStep): Scope | undefined {
   if (typeof step.workflow === 'object') {
-    return { prefix: `${state.id}.`, definition: step.workflow, inputs: scope.inputs, outer: expressionSteps(scope, states, state), loops: stepLoops(step.workflow.steps) };
+    return {
+      prefix: `${state.id}.`, definition: step.workflow, inputs: scope.inputs, outer: expressionSteps(scope, states, state),
+      loops: stepLoops(step.workflow.steps), runner: state,
+    };
   }
   const definition = step.workflow === undefined ? undefined : run.workflows?.[step.workflow];
-  return definition && { prefix: `${state.id}.`, definition, inputs: state.inputs, loops: stepLoops(definition.steps) };
+  return definition && { prefix: `${state.id}.`, definition, inputs: state.inputs, loops: stepLoops(definition.steps), runner: state };
+}
+
+function workflowLabel(scope: Scope): string {
+  return 'name' in scope.definition ? `workflow "${scope.definition.name}"` : `step "${scope.prefix.slice(0, -1)}" inline workflow`;
 }
 
 /** The step instances directly inside a scope, in declaration order. A `for_each` item such as `build[0]` is not one. */
@@ -233,6 +242,8 @@ interface WorkflowResult {
   end?: string;
   outputs?: Record<string, unknown>;
   settledAt: number;
+  /** Why a workflow that reached no failed end failed, such as `loop_exhausted`. */
+  failure?: WorkflowFailure;
 }
 
 /** The revision a step settled at, which orders the ends a workflow reaches; 0 for a step that has none, such as a skipped one. */
@@ -244,15 +255,16 @@ function settledAtOf(step: StepState | undefined): number {
  * Ends the run. Every path that settles a run goes through here, so anything that reacts to a settled run hooks in here.
  * Returns a copy of the settled run for the end record, which publishes after the run lock is released (#1126).
  */
-function settleRun(run: RunState, now: string, outcome: FinalRunStatus, end?: string): RunState {
+function settleRun(run: RunState, now: string, { outcome, end, failure }: WorkflowResult): RunState {
   run.status = outcome;
   if (end !== undefined) run.end = end;
+  if (failure) run.failure = failure;
   run.updatedAt = now;
   return { ...run, steps: run.steps.map((step) => ({ ...step })) };
 }
 
 function doneData(run: RunState): Record<string, unknown> {
-  return { done: { run: run.id, outcome: run.status, ...(run.end !== undefined ? { end: run.end } : {}) } };
+  return { done: { run: run.id, outcome: run.status, ...(run.end !== undefined ? { end: run.end } : {}), ...(run.failure ? { failure: run.failure } : {}) } };
 }
 
 /** A step with `end` and no action only ends the workflow; the engine settles it without a lease. */
@@ -266,13 +278,14 @@ function stepsRead(paths: ExpressionPath[]): Set<string> {
 }
 
 /**
- * The step ids a step reads in its `if`, templates and `loop.while`, and, when it runs an inline workflow, the ids that
- * workflow's steps read outside it, at any depth. A `loop.while` that reads its own step reads it after it ran, so the
- * step is left out. An expression or template that does not parse reads nothing here; settling its own workflow reports it.
+ * The step ids a step reads in its `if`, templates, `loop.while` and `break`, and, when it runs an inline workflow, the
+ * ids that workflow's steps read outside it, at any depth. A `loop.while` or `break` that reads its own step reads it
+ * after it ran, so the step is left out. An expression or template that does not parse reads nothing here; settling
+ * its own workflow reports it.
  */
 function readsOf(step: WorkflowStep): Set<string> {
   const paths = [
-    ...[step.if, step.loop?.while].flatMap((source) => {
+    ...[step.if, step.loop?.while, step.break].flatMap((source) => {
       const parsed = source === undefined ? undefined : parseExpression(source);
       return parsed?.ok ? expressionPaths(parsed.expression) : [];
     }),
@@ -295,23 +308,29 @@ interface RunReads {
   conditions: Map<string, Expression>;
   /** Each loop owner's parsed `loop.while`. */
   whiles: Map<string, Expression>;
+  /** Each step's parsed `break`. */
+  breaks: Map<string, Expression>;
   /** The step ids each step's `if` and templates read. */
   reads: Map<string, Set<string>>;
   /** The loop owners each step waits for besides what it needs and reads. */
   waits: Map<string, string[]>;
   /** The path each declared output reads. */
   outputs: Map<string, ExpressionPath>;
+  /** The workflow's own parsed `loop.while`. */
+  loopWhile?: Expression;
 }
 
 /** Parses every `if` and template in a workflow of the run. A run file whose `if` does not parse cannot settle; the message names the step. */
 function parseReads(run: RunState, scope: Scope): RunReads | string {
   const conditions = new Map<string, Expression>();
   const whiles = new Map<string, Expression>();
+  const breaks = new Map<string, Expression>();
   const reads = new Map<string, Set<string>>();
   const waits = new Map<string, string[]>();
   const own = new Set(scope.definition.steps.map((step) => step.id));
   for (const step of scope.definition.steps) {
-    for (const [what, source, parsedInto] of [['an if', step.if, conditions], ['a loop.while', step.loop?.while, whiles]] as const) {
+    const parsedFields = [['an if', step.if, conditions], ['a loop.while', step.loop?.while, whiles], ['a break', step.break, breaks]] as const;
+    for (const [what, source, parsedInto] of parsedFields) {
       if (source === undefined) continue;
       const parsed = parseExpression(source);
       if (!parsed.ok) return `Run ${run.id} step "${scope.prefix}${step.id}" has ${what} that does not parse: ${parsed.message}`;
@@ -325,14 +344,19 @@ function parseReads(run: RunState, scope: Scope): RunReads | string {
     reads.set(step.id, read);
     waits.set(step.id, scope.loops.waitsFor(step.id, read));
   }
+  let loopWhile: Expression | undefined;
+  if (scope.definition.loop?.while !== undefined) {
+    const parsed = parseExpression(scope.definition.loop.while);
+    if (!parsed.ok) return `Run ${run.id} ${workflowLabel(scope)} has a loop.while that does not parse: ${parsed.message}`;
+    loopWhile = parsed.expression;
+  }
   const outputs = new Map<string, ExpressionPath>();
   for (const [name, source] of Object.entries(scope.definition.outputs ?? {})) {
     const parsed = parseExpression(source);
-    const workflow = 'name' in scope.definition ? `workflow "${scope.definition.name}"` : `step "${scope.prefix.slice(0, -1)}" inline workflow`;
-    if (!parsed.ok || parsed.expression.kind !== 'path') return `Run ${run.id} ${workflow} output "${name}" is not a path`;
+    if (!parsed.ok || parsed.expression.kind !== 'path') return `Run ${run.id} ${workflowLabel(scope)} output "${name}" is not a path`;
     outputs.set(name, parsed.expression.path);
   }
-  return { conditions, whiles, reads, waits, outputs };
+  return { conditions, whiles, breaks, reads, waits, outputs, ...(loopWhile ? { loopWhile } : {}) };
 }
 
 const VISIBLE_OUTCOMES: Partial<Record<StepState['status'], VisibleOutcome>> ={ succeeded: 'success', failed: 'failed', skipped: 'skipped', cancelled: 'cancelled' };
@@ -428,13 +452,12 @@ function startWorkflowStep(run: RunState, scope: Scope, states: StepState[], sta
 }
 
 /**
- * An end reached in a workflow stops everything under it that has not settled, in its sub-workflows too: a leased
- * step is cancelled and its attempt kept in `cancelledAttempts`, a running workflow step is cancelled, and a
- * pending step is skipped.
+ * An end or break reached in a workflow stops everything under it that has not settled, in its sub-workflows too: a
+ * leased step is cancelled and its attempt kept in `cancelledAttempts`, a running workflow step is cancelled, and a
+ * pending step is skipped. `reached` names the end or break.
  */
-function stopUnder(run: RunState, scope: Scope, end: string): void {
-  const workflow = 'name' in scope.definition ? `workflow "${scope.definition.name}"` : `step "${scope.prefix.slice(0, -1)}" inline workflow`;
-  const failure = { code: 'end_reached', message: `Cancelled: ${workflow} reached end "${end}"` };
+function stopUnder(run: RunState, scope: Scope, reached: string): void {
+  const failure = { code: 'end_reached', message: `Cancelled: ${workflowLabel(scope)} reached ${reached}` };
   for (const state of run.steps) {
     if (!state.id.startsWith(scope.prefix)) continue;
     if (state.status === 'pending') skip(state);
@@ -454,7 +477,7 @@ function finishWorkflowStep(state: StepState, result: WorkflowResult): void {
     ...(result.outputs !== undefined ? { outputs: result.outputs } : {}),
   };
   if (result.outcome === 'succeeded') succeed(state, settlement);
-  else fail(state, settlement);
+  else fail(state, { ...settlement, ...(result.failure ? { message: result.failure.message, failure: result.failure } : {}) });
 }
 
 /** The values a workflow returns, read from its own steps; a skipped step reads null. */
@@ -519,21 +542,35 @@ function settleScope(run: RunState, scope: Scope, advancing: boolean): Settled {
       }
     }
     if (changed) continue;
-    // The end reached first wins, whatever order its step is declared in; a tie goes to the step declared first.
+    // A break that holds is a nameless succeeded end. The end reached first wins, whatever order its step is declared
+    // in; a tie goes to the step declared first.
+    const breaks = (state: StepState): boolean => {
+      const condition = reads.breaks.get(localId(scope, state));
+      return !!condition && isTruthy(evaluateExpression(condition, { inputs: scope.inputs, steps: expressionSteps(scope, states, state) }));
+    };
     const reached = states
-      .filter((item) => item.status === 'succeeded' && definitionOf(item)?.end !== undefined)
+      .filter((item) => item.status === 'succeeded' && (definitionOf(item)?.end !== undefined || breaks(item)))
       .sort((left, right) => settledAtOf(left) - settledAtOf(right))[0];
-    const end = reached ? definitionOf(reached)?.end : undefined;
-    if (end !== undefined) {
-      stopUnder(run, scope, end);
-      return { outcome: scope.definition.ends?.[end] ?? 'failed', end, outputs: workflowOutputs(scope, states, reads.outputs), settledAt: settledAtOf(reached) };
+    if (reached) {
+      const end = definitionOf(reached)?.end;
+      stopUnder(run, scope, end === undefined ? `the break of step "${reached.id}"` : `end "${end}"`);
+      const result = { outputs: workflowOutputs(scope, states, reads.outputs), settledAt: settledAtOf(reached) };
+      return end === undefined ? { outcome: 'succeeded', ...result } : { outcome: scope.definition.ends?.[end] ?? 'failed', end, ...result };
     }
-    const finished = (): WorkflowResult => ({
-      outcome: states.some(stopped) ? 'failed' : 'succeeded',
-      outputs: workflowOutputs(scope, states, reads.outputs),
-      settledAt: Math.max(0, ...states.map(settledAtOf)),
-    });
-    if (!advancing) return states.every(settled) ? finished() : { inProgress: true };
+    if (states.every(settled)) {
+      const result: WorkflowResult = {
+        outcome: states.some(stopped) ? 'failed' : 'succeeded',
+        outputs: workflowOutputs(scope, states, reads.outputs),
+        settledAt: Math.max(0, ...states.map(settledAtOf)),
+      };
+      const { loop } = scope.definition;
+      if (!loop) return result;
+      const holds = !reads.loopWhile || isTruthy(evaluateExpression(reads.loopWhile, { inputs: scope.inputs, steps: expressionSteps(scope, states) }));
+      const decided = decideRound(run, scope.runner, loop, holds, workflowLabel(scope), states);
+      if (decided === 'again') continue;
+      return decided === 'ended' ? result : { ...result, outcome: 'failed', failure: decided };
+    }
+    if (!advancing) return { inProgress: true };
     for (const state of states) {
       if (state.status !== 'running' && !ready(state)) continue;
       const definition = definitionOf(state);
@@ -564,8 +601,7 @@ function settleScope(run: RunState, scope: Scope, advancing: boolean): Settled {
     }
     if (changed) continue;
     if (states.some((item) => item.status === 'leased' || item.status === 'running')) return { inProgress: true };
-    if (states.some((item) => item.status === 'pending')) return { unreadable: `Run ${run.id} has pending steps whose needs cannot be met` };
-    return finished();
+    return { unreadable: `Run ${run.id} has pending steps whose needs cannot be met` };
   }
 }
 
@@ -689,7 +725,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       }),
     });
     const done = (result: WorkflowResult): { save: boolean; envelope: WorkflowEnvelope } => {
-      settledRun = settleRun(run, now, result.outcome, result.end);
+      settledRun = settleRun(run, now, result);
       return answer(doneData(run));
     };
     const wait = (open = run.steps.find((step) => step.status === 'leased')): { save: boolean; envelope: WorkflowEnvelope } => (

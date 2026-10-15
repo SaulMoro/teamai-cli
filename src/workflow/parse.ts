@@ -1,7 +1,7 @@
 import { isMap, isScalar, isSeq, LineCounter, parseDocument, type Node, type YAMLMap } from 'yaml';
 import { fieldsText, parseExpression, type ExpressionPath } from './expression.js';
 import { findTemplate, parseTemplate, templatedTexts, templatePaths, templateWithPaths, type Template } from './template.js';
-import type { EndOutcome, InlineWorkflow, OutputSchema, StepLoop, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
+import type { EndOutcome, InlineWorkflow, OutputSchema, StepLoop, WorkflowDefinition, WorkflowDiagnostic, WorkflowLoop, WorkflowStep } from './types.js';
 import { STEP_ACTIONS } from './types.js';
 import {
   isYamlNode, locate, position, scalarString, undeclaredField, undeclaredOutput,
@@ -12,10 +12,11 @@ import {
 } from './reads.js';
 import { loopProblems } from './loop.js';
 
-const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'inputs', 'ends', 'outputs', 'steps']);
+const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'inputs', 'ends', 'outputs', 'loop', 'steps']);
 const ACTION_KEYS = Object.keys(STEP_ACTIONS);
-const STEP_KEYS = new Set(['id', 'needs', 'if', ...ACTION_KEYS, 'env', 'with', 'agent', 'output', 'end', 'loop']);
+const STEP_KEYS = new Set(['id', 'needs', 'if', ...ACTION_KEYS, 'env', 'with', 'agent', 'output', 'end', 'loop', 'break']);
 const STEP_LOOP_KEYS = new Set(['back_to', 'while', 'max_iterations']);
+const WORKFLOW_LOOP_KEYS = new Set(['while', 'max_iterations']);
 /** Keys a step without an action may carry. */
 const END_ONLY_KEYS = new Set(['id', 'needs', 'if', 'end']);
 /** The actions as a sentence: `command, prompt, prompt_file, or workflow`. */
@@ -178,23 +179,27 @@ export function parseWorkflow(file: string, content: string, files?: WorkflowFil
   }
 
   // A malformed inputs header is already reported; checking reads against it would only add noise.
-  const { workflow: { ends, outputs, steps } } = parseBody(root, '', ctx, inputsPair && !inputs ? undefined : inputs ?? {});
+  const { workflow: { ends, outputs, loop, steps } } = parseBody(root, '', 'workflow', ctx, inputsPair && !inputs ? undefined : inputs ?? {});
 
   if (diagnostics.length > 0 || !name || !description) return { ok: false, diagnostics };
   return {
     ok: true,
-    definition: { schemaVersion: 'v1alpha1', name, description, ...(inputs ? { inputs } : {}), ...(ends ? { ends } : {}), ...(outputs ? { outputs } : {}), steps },
+    definition: {
+      schemaVersion: 'v1alpha1', name, description, ...(inputs ? { inputs } : {}), ...(ends ? { ends } : {}), ...(outputs ? { outputs } : {}),
+      ...(loop ? { loop } : {}), steps,
+    },
     promptFileLocations,
   };
 }
 
 /**
- * The `ends`, `outputs`, and `steps` of a workflow file, or of an inline workflow whose fields start with `at`.
+ * The `ends`, `outputs`, `loop`, and `steps` of a workflow file, or of an inline workflow whose fields start with `at`.
  * An inline workflow returns, in `outer`, what its steps read of enclosing steps, for the enclosing workflow to check.
  */
 function parseBody(
   root: YAMLMap.Parsed,
   at: string,
+  label: string,
   ctx: ParseContext,
   inputs: Record<string, OutputSchema> | undefined,
 ): { workflow: InlineWorkflow; outer: ReadSite[] } {
@@ -205,6 +210,15 @@ function parseBody(
   const outputsPair = root.items.find((pair) => scalarString(pair.key) === 'outputs');
   const outputEntries = outputsPair ? parseOutputs(outputsPair.value ?? outputsPair.key, at, ctx) : undefined;
   const outputs = outputEntries && Object.fromEntries(outputEntries.map((entry) => [entry.name, entry.source]));
+
+  const loopPair = root.items.find((pair) => scalarString(pair.key) === 'loop');
+  const loop = loopPair ? parseLoop(loopPair.value ?? loopPair.key, `${at}loop`, label, ctx, false) : undefined;
+  const loopWhile = loop?.while === undefined ? undefined : parseExpression(loop.while);
+  const loopSite: ReadSite | undefined = loopWhile?.ok ? {
+    ...expressionSite('', `${at}loop.while`, position(lineCounter, valueNode(loopPair?.value, 'while')), 'loop.while', loopWhile.expression),
+    workflow: label,
+    code: 'bad_loop',
+  } : undefined;
 
   const stepsPair = root.items.find((pair) => scalarString(pair.key) === 'steps');
   const stepsNode = stepsPair?.value;
@@ -395,11 +409,23 @@ function parseBody(
         diagnostics.push(locate(file, lineCounter, envPair.key as Node, `${field}.env`, `${label} env is only allowed on a command step`));
       }
       const loopPair = item.items.find((pair) => scalarString(pair.key) === 'loop');
-      const loop = loopPair ? parseStepLoop(loopPair.value ?? loopPair.key, `${field}.loop`, label, ctx) : undefined;
+      const loop = loopPair ? parseLoop(loopPair.value ?? loopPair.key, `${field}.loop`, label, ctx, true) : undefined;
       const whileParsed = loop?.while === undefined ? undefined : parseExpression(loop.while);
       if (inGraph && whileParsed?.ok) {
         const at = position(lineCounter, valueNode(loopPair?.value, 'while'));
         reads.push(expressionSite(id, `${field}.loop.while`, at, 'loop.while', whileParsed.expression, { code: 'bad_loop' }));
+      }
+      const breakPair = item.items.find((pair) => scalarString(pair.key) === 'break');
+      const breakSource = breakPair ? conditionSource(breakPair.value) : undefined;
+      if (breakPair) {
+        const parsed = breakSource === undefined ? undefined : parseExpression(breakSource);
+        const node = (breakPair.value ?? breakPair.key ?? item) as Node;
+        const reject = (message: string): void => {
+          diagnostics.push({ ...locate(file, lineCounter, node, `${field}.break`, `${label} break ${message}`), code: 'bad_loop' });
+        };
+        if (!parsed) reject('must be an expression');
+        else if (!parsed.ok) reject(`does not parse at column ${parsed.column}: ${parsed.message}`);
+        else if (inGraph) reads.push(expressionSite(id, `${field}.break`, position(lineCounter, node), 'break', parsed.expression, { code: 'bad_loop' }));
       }
       let output: OutputSchema | undefined;
       const outputPair = item.items.find((pair) => scalarString(pair.key) === 'output');
@@ -426,6 +452,7 @@ function parseBody(
           ...(output ? { output } : {}),
           ...(end ? { end } : {}),
           ...(loop ? { loop } : {}),
+          ...(breakSource !== undefined ? { break: breakSource } : {}),
         });
       }
     });
@@ -438,8 +465,8 @@ function parseBody(
     // An inline workflow's reads of steps that are not its own are checked by the workflow around it.
     const split = splitReads(reads, at === '' ? undefined : seen);
     outer = split.outer;
-    diagnostics.push(...readDiagnostics(file, split.local, readScope(needsById, steps, inputs, children)));
-    for (const problem of loopProblems(steps, stepReads(split.local))) {
+    diagnostics.push(...readDiagnostics(file, loopSite ? [...split.local, loopSite] : split.local, readScope(needsById, steps, inputs, children)));
+    for (const problem of loopProblems(steps, stepReads(split.local), loop !== undefined)) {
       const at = placed.get(problem.id);
       const node = problem.key.split('.').reduce<unknown>((map, key) => valueNode(map, key), at?.item);
       diagnostics.push({ ...locate(file, lineCounter, (node ?? at?.item) as Node, `${at?.field}.${problem.key}`, problem.message), code: 'bad_loop' });
@@ -448,7 +475,7 @@ function parseBody(
     if (!endsPair || ends) diagnostics.push(...endDiagnostics(ctx, ends, endsPair?.value, at, endings, graph));
     diagnostics.push(...outputDiagnostics(ctx, outputEntries ?? [], at, seen, steps, children));
   }
-  return { workflow: { ...(ends ? { ends } : {}), ...(outputs ? { outputs } : {}), steps }, outer };
+  return { workflow: { ...(ends ? { ends } : {}), ...(outputs ? { outputs } : {}), ...(loop ? { loop } : {}), steps }, outer };
 }
 
 function stepReads(sites: ReadSite[]): Map<string, Set<string>> {
@@ -472,16 +499,16 @@ function parseInline(
   const { file, lineCounter, diagnostics } = ctx;
   for (const pair of node.items) {
     const key = scalarString(pair.key);
-    if (key === 'steps' || key === 'outputs' || key === 'ends') continue;
+    if (key === 'steps' || key === 'outputs' || key === 'ends' || key === 'loop') continue;
     if (!key || !HEADER_KEYS.has(key)) {
       diagnostics.push(unknownKey(file, lineCounter, pair.key ?? node, `${field}.${key ?? 'key'}`, key ?? 'key'));
     } else if (key === 'inputs') {
       diagnostics.push(locate(file, lineCounter, pair.key, `${field}.inputs`, `${label} runs an inline workflow, which declares no inputs; its steps read the enclosing workflow's inputs`));
     } else {
-      diagnostics.push(locate(file, lineCounter, pair.key, `${field}.${key}`, `${label} runs an inline workflow, which carries only steps, outputs, and ends`));
+      diagnostics.push(locate(file, lineCounter, pair.key, `${field}.${key}`, `${label} runs an inline workflow, which carries only steps, outputs, ends, and loop`));
     }
   }
-  return parseBody(node, `${field}.`, ctx, inputs);
+  return parseBody(node, `${field}.`, `${label} workflow`, ctx, inputs);
 }
 
 /** A step that runs a workflow file by name. */
@@ -533,25 +560,32 @@ function childrenOf(steps: Array<{ id: string; workflow?: string | InlineWorkflo
   return children;
 }
 
-/** A step's `loop`. Where `back_to` sits in the graph is checked once every step is known. */
-function parseStepLoop(node: Node | null | undefined, field: string, label: string, ctx: ParseContext): StepLoop | undefined {
+/**
+ * A step's `loop`, or, with `step` false, a workflow's, which has no `back_to`. Where `back_to` sits in the graph is
+ * checked once every step is known.
+ */
+function parseLoop(node: Node | null | undefined, field: string, label: string, ctx: ParseContext, step: true): StepLoop | undefined;
+function parseLoop(node: Node | null | undefined, field: string, label: string, ctx: ParseContext, step: false): WorkflowLoop | undefined;
+function parseLoop(node: Node | null | undefined, field: string, label: string, ctx: ParseContext, step: boolean): StepLoop | WorkflowLoop | undefined {
   const { file, lineCounter, diagnostics } = ctx;
   const reject = (at: Node | null | undefined, where: string, message: string): void => {
     diagnostics.push({ ...locate(file, lineCounter, at, where, message), code: 'bad_loop' });
   };
   if (!isMap(node)) {
-    reject(node, field, `${label} loop must map back_to, max_iterations, and optionally while`);
+    reject(node, field, `${label} loop must map ${step ? 'back_to, ' : ''}max_iterations, and optionally while`);
     return undefined;
   }
   const before = diagnostics.length;
+  const keys = step ? STEP_LOOP_KEYS : WORKFLOW_LOOP_KEYS;
   for (const pair of node.items) {
     const keyNode = isYamlNode(pair.key) ? pair.key : undefined;
     const key = scalarString(keyNode);
-    if (!key || !STEP_LOOP_KEYS.has(key)) diagnostics.push(unknownKey(file, lineCounter, keyNode ?? node, `${field}.${key ?? 'key'}`, key ?? 'key'));
+    if (!step && key === 'back_to') reject(keyNode, `${field}.back_to`, `${label} loop has no back_to; each round runs every step of the workflow`);
+    else if (!key || !keys.has(key)) diagnostics.push(unknownKey(file, lineCounter, keyNode ?? node, `${field}.${key ?? 'key'}`, key ?? 'key'));
   }
   const at = (key: string): Node | undefined => valueNode(node, key);
-  const backTo = scalarString(at('back_to'))?.trim();
-  if (!backTo || !TOKEN.test(backTo)) reject(at('back_to') ?? node, `${field}.back_to`, `${label} loop.back_to must name a step`);
+  const backTo = step ? scalarString(at('back_to'))?.trim() : undefined;
+  if (step && (!backTo || !TOKEN.test(backTo))) reject(at('back_to') ?? node, `${field}.back_to`, `${label} loop.back_to must name a step`);
   const maxNode = at('max_iterations');
   const max: unknown = isScalar(maxNode) ? maxNode.value : undefined;
   if (typeof max !== 'number' || !Number.isInteger(max) || max < 1) {
@@ -564,8 +598,9 @@ function parseStepLoop(node: Node | null | undefined, field: string, label: stri
     if (!parsed) reject(whileNode, `${field}.while`, `${label} loop.while must be an expression`);
     else if (!parsed.ok) reject(whileNode, `${field}.while`, `${label} loop.while does not parse at column ${parsed.column}: ${parsed.message}`);
   }
-  if (diagnostics.length > before || !backTo) return undefined;
-  return { backTo, ...(condition !== undefined ? { while: condition } : {}), maxIterations: max as number };
+  if (diagnostics.length > before) return undefined;
+  const loop = { ...(condition !== undefined ? { while: condition } : {}), maxIterations: max as number };
+  return backTo ? { backTo, ...loop } : loop;
 }
 
 /** `env` maps variable names to text. A YAML number or boolean is read as its text. */
