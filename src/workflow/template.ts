@@ -1,6 +1,7 @@
 /**
- * Workflow templates: `{{ inputs.… }}`, `{{ steps.… }}` and `{{ with.… }}` inside prompt text, `env` values and
- * every string inside a `with` value. Any other `{{ … }}` is plain text, so prompts about GitHub Actions or Jinja stay as written.
+ * Workflow templates: `{{ inputs.… }}`, `{{ steps.… }}`, `{{ with.… }}` and, where an item is bound, `{{ item }}` inside
+ * prompt text, `env` values and every string inside a `with` value. Any other `{{ … }}` is plain text, so prompts about
+ * GitHub Actions, Jinja or an Ansible loop stay as written.
  */
 import { parseExpression, parseFields, resolvePath, type ExpressionContext, type ExpressionPath, type PathField } from './expression.js';
 import type { WorkflowStep } from './types.js';
@@ -35,10 +36,28 @@ export interface TemplateError {
 
 export type TemplateParse = { ok: true; template: Template } | { ok: false; errors: TemplateError[] };
 
-/** A `{{ … }}` whose content starts with `inputs.`, `steps.` or `with.`. */
-const TEMPLATE = /\{\{\s*((?:inputs|steps|with)\.[^{}]*?)\s*\}\}/;
-/** A template not preceded by `$`: `${{ inputs.x }}` is GitHub Actions text and stays as written. */
-const RECOGNIZED = new RegExp(`(?<!\\$)${TEMPLATE.source}`, 'g');
+/** What templates read, where no item is bound and where one is. */
+interface Syntax {
+  /** A template, `${{ … }}` included. */
+  template: RegExp;
+  /** A template not preceded by `$`: `${{ inputs.x }}` is GitHub Actions text and stays as written. */
+  recognized: RegExp;
+}
+
+function syntax(template: RegExp): Syntax {
+  return { template, recognized: new RegExp(`(?<!\\$)${template.source}`, 'g') };
+}
+
+/**
+ * `item` is a root only where an item is bound: in the templates of a `for_each` step and of the workflow each item
+ * runs. Elsewhere `{{ item }}` stays as written, as in a prompt that quotes an Ansible loop.
+ */
+const SYNTAX = {
+  /** A `{{ … }}` whose content starts with `inputs.`, `steps.` or `with.`. */
+  unbound: syntax(/\{\{\s*((?:inputs|steps|with)\.[^{}]*?)\s*\}\}/),
+  /** Those, and a `{{ … }}` whose content is `item`, bare or with names and indexes. */
+  bound: syntax(/\{\{\s*((?:inputs|steps|with)\.[^{}]*?|item(?:[.[][^{}]*?)?)\s*\}\}/),
+};
 /** `with.<name>`, then any names and indexes inside its value. */
 const WITH_PATH = /^with\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+|\[[^\]]*\]?)*$/;
 
@@ -46,8 +65,8 @@ const WITH_PATH = /^with\.[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+|\[[^\]]*\]?)*$/;
  * The first template-like `{{ … }}` in `text` as written, if any; used to reject one where text is never rendered,
  * such as `command`. It also finds `${{ … }}`, since a command would receive those braces as written too.
  */
-export function findTemplate(text: string): string | undefined {
-  return TEMPLATE.exec(text)?.[0];
+export function findTemplate(text: string, item: boolean): string | undefined {
+  return (item ? SYNTAX.bound : SYNTAX.unbound).template.exec(text)?.[0];
 }
 
 /** The one path a recognized template reads, or why it does not read exactly one. */
@@ -62,12 +81,15 @@ function readOf(inner: string): ExpressionPath | WithPath | string {
   return parsed.expression.kind === 'path' ? parsed.expression.path : 'a template reads one path';
 }
 
-/** Splits `text` into literal text and reads. Every recognized template must be exactly one path. */
-export function parseTemplate(text: string): TemplateParse {
+/**
+ * Splits `text` into literal text and reads. Every recognized template must be exactly one path. `item` is whether an
+ * item is bound where the text renders; where none is, `{{ item }}` is literal text.
+ */
+export function parseTemplate(text: string, item: boolean): TemplateParse {
   const template: Template = [];
   const errors: TemplateError[] = [];
   let index = 0;
-  for (const match of text.matchAll(RECOGNIZED)) {
+  for (const match of text.matchAll((item ? SYNTAX.bound : SYNTAX.unbound).recognized)) {
     const source = match[0];
     const path = readOf(match[1] ?? '');
     if (typeof path === 'string') {
@@ -83,7 +105,7 @@ export function parseTemplate(text: string): TemplateParse {
   return { ok: true, template };
 }
 
-/** Every `inputs` and `steps` path a template reads, in source order. */
+/** Every `inputs`, `steps` and `item` path a template reads, in source order. */
 export function templatePaths(template: Template): ExpressionPath[] {
   return template.flatMap((part) => (typeof part === 'string' || part.path.root === 'with' ? [] : [part.path]));
 }
@@ -140,7 +162,7 @@ export function templatedTexts(step: Pick<WorkflowStep, 'prompt' | 'env' | 'with
 
 /** One expression a step evaluates, named by the field YAML writes it at. */
 export interface StepExpression {
-  what: 'if' | 'loop.while' | 'break';
+  what: 'if' | 'loop.while' | 'break' | 'for_each';
   source: string;
 }
 
@@ -148,21 +170,23 @@ export interface StepExpression {
  * The expressions a step evaluates. Pull and the engine share this one list, so they agree on which fields are
  * expressions and on what a step reads.
  */
-export function stepExpressions(step: Pick<WorkflowStep, 'if' | 'loop' | 'break'>): StepExpression[] {
+export function stepExpressions(step: Pick<WorkflowStep, 'if' | 'loop' | 'break' | 'forEach'>): StepExpression[] {
   return [
     ...(step.if !== undefined ? [{ what: 'if' as const, source: step.if }] : []),
     ...(step.loop?.while !== undefined ? [{ what: 'loop.while' as const, source: step.loop.while }] : []),
     ...(step.break !== undefined ? [{ what: 'break' as const, source: step.break }] : []),
+    ...(step.forEach !== undefined ? [{ what: 'for_each' as const, source: step.forEach.items }] : []),
   ];
 }
 
 /**
  * Renders every string inside a value, at any depth, with `renderValue`, so a string that is exactly one
  * `{{ path }}` keeps the JSON value it reads. Other values stay as they are. Fails at the first template that does not parse.
+ * `item` is a template only when `context` binds one.
  */
 export function renderStrings(value: unknown, context: TemplateContext): { ok: true; value: unknown } | { ok: false; error: TemplateError } {
   if (typeof value === 'string') {
-    const parsed = parseTemplate(value);
+    const parsed = parseTemplate(value, Object.hasOwn(context, 'item'));
     return parsed.ok ? { ok: true, value: renderValue(parsed.template, context) } : { ok: false, error: parsed.errors[0]! };
   }
   if (!value || typeof value !== 'object') return { ok: true, value };

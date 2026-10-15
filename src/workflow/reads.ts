@@ -1,7 +1,9 @@
 import { isMap, type Node } from 'yaml';
-import { evaluateExpression, expressionPaths, fieldsText, isTruthy, schemaAt, stepFieldSchema, typeProblems, type Expression, type ExpressionPath } from './expression.js';
 import {
-  isYamlNode, locate, position, scalarString, undeclaredField, undeclaredOutput, type Child, type GraphNode, type ParseContext,
+  evaluateExpression, expressionPaths, fieldsText, isTruthy, schemaAt, stepFieldSchema, typeProblems, type DeclaredType, type Expression, type ExpressionPath,
+} from './expression.js';
+import {
+  isYamlNode, locate, position, scalarString, unavailableField, undeclaredField, undeclaredOutput, type Child, type GraphNode, type ParseContext,
 } from './parse-context.js';
 import { ancestors, stepLoops } from './loop.js';
 import type { EndOutcome, OutputSchema, WorkflowDiagnostic, WorkflowStep } from './types.js';
@@ -52,7 +54,7 @@ export interface ReadSite {
   reader?: string;
   field: string;
   at: { line: number; column: number };
-  /** `if`, `prompt`, `prompt_file` or `env.<NAME>`. */
+  /** `if`, `loop.while`, `break`, `for_each`, `prompt`, `prompt_file`, `with.<name>` or `env.<NAME>`. */
   what: string;
   paths: ExpressionPath[];
   /** The names an `if` compares a step's end with. */
@@ -66,6 +68,8 @@ export interface ReadSite {
    * every step of the workflow, and `id` names no step.
    */
   workflow?: string;
+  /** A template of a `for_each` step, rendered once per item, so it may read `item`. */
+  item?: boolean;
   code?: WorkflowDiagnostic['code'];
 }
 
@@ -78,10 +82,14 @@ export interface ReadScope {
   ancestors: (id: string) => Set<string>;
   previous: (id: string) => Set<string>;
   outputs: Map<string, OutputSchema | undefined>;
+  /** The steps with `for_each`, which have results in place of outputs. */
+  forEach: Set<string>;
   /** Undefined when the inputs header is malformed, so `inputs.…` reads are not checked. */
   inputs?: OutputSchema;
   /** The workflow each workflow step runs: an inline one, or a file when a sync knows it. */
   children: Map<string, Child>;
+  /** The workflow runs once per item of a `for_each` step, so every site in it may read `item`. */
+  item?: boolean;
 }
 
 export function readScope(
@@ -96,6 +104,7 @@ export function readScope(
     ancestors: (id) => ancestors(needs, id),
     previous: stepLoops(steps).previous,
     outputs: new Map(steps.map((step) => [step.id, step.output])),
+    forEach: new Set(steps.filter((step) => step.forEach).map((step) => step.id)),
     ...(inputs ? { inputs: { type: 'object', fields: inputs } } : {}),
   };
 }
@@ -115,11 +124,19 @@ export function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScop
     ]);
     const subject = site.workflow ?? `step "${site.reader ?? site.id}"`;
     const reported = new Set<string>();
+    let itemReported = false;
     for (const path of site.paths) {
       if (path.root === 'inputs') {
         if (scope.inputs && !schemaAt(scope.inputs, path.fields)) {
           diagnostics.push(at(`${subject} ${site.what} reads inputs${fieldsText(path.fields)}, which is not an input the workflow declares`));
         }
+        continue;
+      }
+      if (path.root === 'item') {
+        if (!site.item && !scope.item && !itemReported) {
+          diagnostics.push(at(`${subject} ${site.what} reads item, which is bound only in the templates of a for_each step and in the workflow each item runs`));
+        }
+        itemReported = true;
         continue;
       }
       if (!readable.has(path.step)) {
@@ -133,17 +150,23 @@ export function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScop
         reported.add(path.step);
         continue;
       }
+      // A step pull rejected has its own diagnostic already.
+      const unavailable = scope.outputs.has(path.step) && unavailableField(path, scope.forEach.has(path.step));
+      if (unavailable) {
+        diagnostics.push(at(`${subject} ${site.what} ${unavailable}`));
+        continue;
+      }
       const undeclared = undeclaredOutput(scope.children, path);
       if (undeclared) {
         diagnostics.push({ ...at(`${subject} ${site.what} ${undeclared}`), code: 'undeclared_output' });
         continue;
       }
-      const field = undeclaredField(path, scope.outputs.get(path.step));
+      const field = undeclaredField(path, scope.outputs.get(path.step), scope.forEach.has(path.step));
       if (field) diagnostics.push(at(`${subject} ${site.what} ${field}`));
     }
     if (site.expression) {
       // A path this site does not list reads an enclosing workflow, which checks its type.
-      const schemaOf = (path: ExpressionPath): OutputSchema | undefined => (site.paths.includes(path) ? declaredSchema(scope, readable, path) : undefined);
+      const schemaOf = (path: ExpressionPath): DeclaredType | undefined => (site.paths.includes(path) ? declaredSchema(scope, readable, path) : undefined);
       for (const problem of typeProblems(site.expression, schemaOf)) diagnostics.push(at(`${subject} ${site.what} ${problem.message}`));
     }
     for (const { step, end } of site.ends ?? []) {
@@ -158,10 +181,10 @@ export function readDiagnostics(file: string, sites: ReadSite[], scope: ReadScop
   return diagnostics;
 }
 
-function declaredSchema(scope: ReadScope, readable: Set<string>, path: ExpressionPath): OutputSchema | undefined {
+function declaredSchema(scope: ReadScope, readable: Set<string>, path: ExpressionPath): DeclaredType | undefined {
   if (path.root === 'inputs') return scope.inputs && schemaAt(scope.inputs, path.fields);
-  if (!readable.has(path.step)) return undefined;
-  const schema = stepFieldSchema(path.field, scope.outputs.get(path.step));
+  if (path.root === 'item' || !readable.has(path.step)) return undefined;
+  const schema = stepFieldSchema(path.field, scope.outputs.get(path.step), scope.forEach.has(path.step));
   return schema && schemaAt(schema, path.fields);
 }
 
@@ -170,7 +193,7 @@ function declaredSchema(scope: ReadScope, readable: Set<string>, path: Expressio
  * `ids` is undefined for a workflow file, whose steps can read nothing outside it.
  */
 export function splitReads(sites: ReadSite[], ids: Set<string> | undefined): { local: ReadSite[]; outer: ReadSite[] } {
-  const inside = (path: ExpressionPath): boolean => !ids || path.root === 'inputs' || ids.has(path.step);
+  const inside = (path: ExpressionPath): boolean => !ids || path.root !== 'steps' || ids.has(path.step);
   const endInside = ({ step }: { step: string }): boolean => !ids || ids.has(step);
   return {
     local: sites.map((site) => ({ ...site, paths: site.paths.filter(inside), ends: site.ends?.filter(endInside) })),

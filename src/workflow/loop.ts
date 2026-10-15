@@ -7,7 +7,7 @@ import type { ExpressionPass, ExpressionStep } from './expression.js';
 import { endLoop, exhaust, nextRound, passOf, repend, type StepPass, type StepState } from './step-state.js';
 import type { RunState, StepLoop, WorkflowFailure, WorkflowLoop, WorkflowStep } from './types.js';
 
-type LoopStep = Pick<WorkflowStep, 'id' | 'needs' | 'loop' | 'end' | 'break'>;
+type LoopStep = Pick<WorkflowStep, 'id' | 'needs' | 'loop' | 'end' | 'break' | 'forEach'>;
 
 /** The steps of one workflow that loops run again, and what waits for those loops. */
 export interface StepLoops {
@@ -25,7 +25,7 @@ export interface StepLoops {
 /** A step loop pull rejects, at the key of the step it is reported on. */
 export interface LoopProblem {
   id: string;
-  key: 'loop' | 'loop.back_to' | 'needs' | 'break';
+  key: 'loop' | 'loop.back_to' | 'needs' | 'break' | 'for_each';
   message: string;
 }
 
@@ -63,8 +63,8 @@ export function stepLoops(steps: LoopStep[]): StepLoops {
   };
 }
 
-/** The first cycle through `edges`, starting at the step declared first, or undefined when there is none. */
-function firstCycle(ids: string[], edges: Map<string, string[]>): string[] | undefined {
+/** The first cycle through `edges`, starting at the id listed first, or undefined when there is none. */
+export function firstCycle(ids: string[], edges: Map<string, string[]>): string[] | undefined {
   const state = new Map<string, 'open' | 'closed'>();
   const path: string[] = [];
   const visit = (id: string): string[] | undefined => {
@@ -97,7 +97,13 @@ export function loopProblems(steps: LoopStep[], reads: Map<string, Set<string>>,
   const { ranges, waitsFor } = stepLoops(steps);
   const claimed = new Map<string, string>();
   for (const step of steps) {
-    if (!step.loop) continue;
+    const other = step.forEach && (['loop', 'end', 'break'] as const).find((key) => step[key] !== undefined);
+    if (!other) continue;
+    const why = other === 'loop' ? 'put the loop in a sub-workflow' : 'a step that runs once per item cannot end its workflow';
+    problems.push({ id: step.id, key: 'for_each', message: `step "${step.id}" has for_each and ${other}; ${why}` });
+  }
+  for (const step of steps) {
+    if (!step.loop || step.forEach) continue;
     if (looping) {
       problems.push({ id: step.id, key: 'loop', message: `step "${step.id}" has loop in a workflow that loops; put one of the two loops in a sub-workflow` });
       continue;
@@ -125,7 +131,7 @@ export function loopProblems(steps: LoopStep[], reads: Map<string, Set<string>>,
   }
   for (const step of steps) {
     const owner = claimed.get(step.id);
-    if (step.break === undefined || owner === undefined) continue;
+    if (step.break === undefined || step.forEach || owner === undefined) continue;
     problems.push({ id: step.id, key: 'break', message: `step "${step.id}" has break inside the loop of step "${owner}", where its if and while already end the loop` });
   }
   if (problems.length > 0 || firstCycle(steps.map((step) => step.id), needs)) return problems;
@@ -226,8 +232,8 @@ export function firstPass(run: RunState, path: string): number {
 }
 
 function expressionPasses(passes: StepPass[]): ExpressionPass[] {
-  return passes.map(({ pass, outcome, outputs, end }) => ({
-    pass, outcome, ...(outputs !== undefined ? { outputs } : {}), ...(end !== undefined ? { end } : {}),
+  return passes.map(({ pass, outcome, outputs, end, results }) => ({
+    pass, outcome, ...(outputs !== undefined ? { outputs } : {}), ...(end !== undefined ? { end } : {}), ...(results !== undefined ? { results } : {}),
   }));
 }
 

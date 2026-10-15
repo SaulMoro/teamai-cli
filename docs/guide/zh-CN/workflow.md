@@ -2,7 +2,7 @@
 
 > 本文是 [TeamAI CLI 使用指南](../../usage-guide.zh-CN.md) 的一部分。
 
-工作流是团队仓库里的 `workflows/<name>.yaml`。它运行命令步骤和只读提示词步骤，每个步骤在它依赖的步骤之后运行。[高级工作流](workflow-advanced.md) 介绍并行步骤、到达结局时仍在运行的步骤会怎样，以及完整的表达式语言。
+工作流是团队仓库里的 `workflows/<name>.yaml`。它运行命令步骤和只读提示词步骤，每个步骤在它依赖的步骤之后运行。[高级工作流](workflow-advanced.md) 介绍并行步骤、循环、`for_each`、到达结局时仍在运行的步骤会怎样，以及完整的表达式语言。
 
 ```yaml
 schemaVersion: v1alpha1

@@ -133,6 +133,82 @@ steps:
     command: echo "lint failed before the tests finished"
 ```
 
+## 对每一项运行一次步骤
+
+`for_each` 让一个步骤对列表中的每一项各运行一次。它的值是给出列表的表达式，或一个映射，`items` 里写这个表达式，`max_parallel` 里写上限。每一项作为单独的实例运行，以步骤 id 和该项从 0 开始的下标命名：`build[0]`、`build[1]`，依此类推。
+
+```yaml
+schemaVersion: v1alpha1
+name: fan-build
+description: Build each package, two at a time, then explain the failures.
+inputs:
+  packages: [{ id: string, dir: string }]
+steps:
+  - id: build
+    for_each: { items: inputs.packages, max_parallel: 2 }
+    command: npm run build --prefix "$PACKAGE_DIR"
+    env:
+      PACKAGE_DIR: "{{ item.dir }}"
+  - id: explain
+    needs: [build]
+    if: any(steps.build.results, .outcome == 'failed')
+    prompt: "Explain each failed build in these results: {{ steps.build.results }}"
+```
+
+`build` 在就绪时读取一次 `inputs.packages`。值不是列表时，该步骤以 `invalid_items` 失败。列表为空时，该步骤立即成功，其 results 为 `[]`。
+
+每个实例在 `prompt`、`env` 和 `with` 中，以及它运行的内联工作流的每个步骤中，以 `item` 读取自己的那一项。只有 `{{ item }}` 的 `with` 值保留该项的 JSON 类型。`command` 不会被填充，所以请通过 `env` 传入该项。步骤自己的 `if` 和 `for_each` 在任何一项运行之前求值一次，因此读不到该步骤的项。在 `for_each` 之外，`{{ item }}` 保持原样，读取 `item` 的表达式会被 pull 拒绝。
+
+驱动拿到的每一项都是普通租约，其 `step` 为 `build[0]`、`build[1]` 等。在 `running` 中列出未结租约的驱动，会在其他项运行时拿到下一项。`max_parallel` 限制同时处于已租出或运行中的项数。达到上限时，`next` 不再租出其他项，直到其中一项完成。
+
+某一项失败不会停止其他项。所有项都完成后，该步骤才完成，任一项失败时该步骤失败。`output` 检查每一项的输出。
+
+`steps.<id>.results` 按项的顺序列出每一项的结果。每个条目有 `item`、`outcome`，该项有输出时还有 `outputs`：
+
+```json
+[{"item":{"id":"core","dir":"packages/core"},"outcome":"success"},{"item":{"id":"cli","dir":"packages/cli"},"outcome":"failed"}]
+```
+
+带 `for_each` 的步骤没有自己的输出，不带 `for_each` 的步骤没有 results。读取其中任何一个，pull 都会拒绝，包括在工作流 outputs 和之前的 pass 中的读取。要读取某一项，请对 results 使用下标，例如 `steps.build.results[1].outcome`。
+
+要重试失败的项，在带 `needs: [build]` 的步骤上同时设置 `for_each: "filter(steps.build.results, .outcome == 'failed')"` 和 `if: steps.build.outcome == 'failed'`。`if` 读取失败的依赖，所以重试步骤可以运行。每个重试项将原始值保存在 `item.item` 中。
+
+是对象的项可以带一个字符串 `id`，以及一个 `after` 列表，列出其他项的 id。该项要等这些项都成功后才开始。其中任一项失败、被跳过或被取消时，该项被跳过。
+
+```yaml
+schemaVersion: v1alpha1
+name: fan-publish
+description: Pack and check each package after the packages it depends on.
+inputs:
+  packages: [{ id: string, dir: string }]
+steps:
+  - id: publish
+    for_each: inputs.packages
+    workflow:
+      steps:
+        - id: pack
+          command: npm pack "$PACKAGE_DIR"
+          env:
+            PACKAGE_DIR: "{{ item.dir }}"
+        - id: verify
+          needs: [pack]
+          prompt: "Check that the tarball of {{ item.id }} holds only files from {{ item.dir }}."
+```
+
+```text
+teamai workflow start fan-publish --inputs '{"packages":[{"id":"core","dir":"packages/core"},{"id":"cli","dir":"packages/cli","after":["core"]}]}'
+```
+
+`publish[1]` 在 `publish[0]` 成功后开始。每一项的工作流中的步骤，id 形如 `publish[0].pack` 和 `publish[1].verify`。
+
+`after` 中的 id 没有对应的项、两项 id 相同，或 `after` 不是 id 列表时，该步骤在任何一项运行之前以 `invalid_items` 失败。项之间循环等待时，该步骤以 `item_cycle` 失败，消息会指出这个循环：
+
+```text
+step "publish" has items that run after each other in a cycle: core -> cli -> core
+```
+
+`for_each` 与 `loop`、`end` 或 `break` 一起使用时，pull 会拒绝。要再次运行某一项的工作，请把循环放进该项运行的工作流里。
+
 ## 先到达的结局生效
 
 驱动再次调用 `next` 之前，多个上报可能到达两个结局。此时 `next` 采用先到达的那个结局，与步骤在文件中的顺序无关。
@@ -156,7 +232,7 @@ steps:
     end: rewritten
 ```
 
-如果 `rewrite` 先上报成功，`patch` 随后上报成功，下一次 `next` 返回 `{"data":{"done":{"run":"ra0ca39d4","outcome":"succeeded","end":"rewritten"},"cancelled":[]}}`。驱动何时调用 `next` 不会改变生效的结局。
+如果 `rewrite` 先上报成功，`patch` 随后上报成功，下一次 `next` 返回 `{"data":{"done":{"run":"ra0ca39d4","outcome":"succeeded","end":"rewritten"},"cancelled":[]}}`。驱动何时调用 `next` 不会改变生效的结局。在胜出的结局之后才上报时，即使还没调用 `next`，也会返回 `lease_cancelled`。这次上报不会增加修订号、改变工作流的输出，也不会开始新的循环 pass。无需驱动即可发生的跳过和失败，使用导致该转换的修订号，因此也可能先到达另一个结局。
 
 ## 回到前面的步骤再运行
 
@@ -246,7 +322,7 @@ steps:
 {"data":{"lease":{"run":"rd50c3422","step":"e2e","attempt":"a54df2231","revision":4,"pass":2,"command":"npm run test:e2e"},"cancelled":[]}}
 ```
 
-`steps.<id>.outcome`、`steps.<id>.end` 和 `steps.<id>.outputs` 读取最新的 pass。`steps.<id>.passes` 列出该步骤的每个 pass，当前 pass 完成后也包括在内。每个元素都有 `pass` 和 `outcome`，该 pass 有 `outputs` 和 `end` 时也带上它们。在 `loop-review-and-fix` 中，工作流输出 `reviews` 返回每一次审查。
+`steps.<id>.outcome`、`steps.<id>.end` 和 `steps.<id>.outputs` 读取最新的 pass。`steps.<id>.passes` 列出该步骤的每个 pass，当前 pass 完成后也包括在内。每个元素都有 `pass` 和 `outcome`，该 pass 有 `outputs` 和 `end` 时也带上它们。`for_each` 步骤的 pass 带 `results`，没有 `outputs`，读取上一个 pass 时也如此。在 `loop-review-and-fix` 中，工作流输出 `reviews` 返回每一次审查。
 
 步骤可以读取它所在范围内后面的步骤，即直接或间接依赖它的步骤。这种读取得到后面那个步骤的上一个 pass，在第 1 个 pass 上为 `null`，并且不会等待它。在这种读取中，`passes` 只列出之前的 pass。这里 `plan` 读取上一次决定的备注：
 
@@ -390,6 +466,8 @@ steps:
 | 输入 | `inputs.issue`、`inputs.issue.labels` |
 | 步骤的 outcome、结局或输出 | `steps.check.outcome`、`steps.check.end`、`steps.review.outputs.files` |
 | 步骤的每个 pass | `steps.review.passes`、`steps.review.passes[0].outputs.verdict`。见[读取每一个 pass](#读取每一个-pass)。 |
+| `for_each` 步骤的 results | `steps.build.results`、`steps.build.results[0].outcome` |
+| `for_each` 实例的项 | `item`、`item.dir` |
 | 字符串 | `'failed'`。使用单引号。字符串里的单引号写两次：`'it''s'`。 |
 | 数字 | `3`、`-1`、`1.5`。小数点前要有数字：写 `0.5`，不写 `.5`。 |
 | 布尔值或 null | `true`、`false`、`null` |
@@ -401,7 +479,7 @@ steps:
 
 `[n]` 读取数组的第 `n` 个元素，从 0 开始计数：`steps.review.outputs.files[0].path`、`inputs.tags[1]` 或 `steps.grid.outputs.rows[1][0]`。超出末尾的下标，或对非数组值使用的下标，读作 `null`。
 
-下标是从 0 开始的整数。`[-1]`、`[01]` 和 `[inputs.n]` 无法解析。下标读取 `inputs`、`outputs` 或 `passes` 里的数组。它不能跟在步骤 id、`outcome` 或 `end` 后面，所以 `steps.build[2].outcome` 无法解析。
+下标是从 0 开始的整数。`[-1]`、`[01]` 和 `[inputs.n]` 无法解析。下标读取 `inputs`、`outputs`、`passes`、`results` 或 `item` 里的数组。它不能跟在步骤 id、`outcome` 或 `end` 后面，所以 `steps.build[2].outcome` 无法解析。
 
 ### 运算符和优先级
 

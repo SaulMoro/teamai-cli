@@ -3,10 +3,12 @@ import { fieldsText, parseExpression, type ExpressionPath } from './expression.j
 import {
   findTemplate, parseTemplate, stepExpressions, templatedTexts, templatePaths, templateWithPaths, type StepExpression, type Template,
 } from './template.js';
-import type { EndOutcome, InlineWorkflow, OutputSchema, StepLoop, WorkflowDefinition, WorkflowDiagnostic, WorkflowLoop, WorkflowStep } from './types.js';
+import type {
+  EndOutcome, ForEach, InlineWorkflow, OutputSchema, StepLoop, WorkflowDefinition, WorkflowDiagnostic, WorkflowLoop, WorkflowStep,
+} from './types.js';
 import { STEP_ACTIONS } from './types.js';
 import {
-  isYamlNode, locate, position, scalarString, undeclaredField, undeclaredOutput,
+  isYamlNode, locate, position, scalarString, unavailableField, undeclaredField, undeclaredOutput,
   type Child, type GraphNode, type ParseContext, type WorkflowFiles,
 } from './parse-context.js';
 import {
@@ -16,8 +18,9 @@ import { loopProblems } from './loop.js';
 
 const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'inputs', 'ends', 'outputs', 'loop', 'steps']);
 const ACTION_KEYS = Object.keys(STEP_ACTIONS);
-const STEP_KEYS = new Set(['id', 'needs', 'if', ...ACTION_KEYS, 'env', 'with', 'agent', 'output', 'end', 'loop', 'break']);
+const STEP_KEYS = new Set(['id', 'needs', 'if', ...ACTION_KEYS, 'env', 'with', 'agent', 'output', 'end', 'loop', 'break', 'for_each']);
 const STEP_LOOP_KEYS = new Set(['back_to', 'while', 'max_iterations']);
+const FOR_EACH_KEYS = new Set(['items', 'max_parallel']);
 const WORKFLOW_LOOP_KEYS = new Set(['while', 'max_iterations']);
 /** Keys a step without an action may carry. */
 const END_ONLY_KEYS = new Set(['id', 'needs', 'if', 'end']);
@@ -33,6 +36,7 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const EXPRESSION_SITES: Record<Exclude<StepExpression['what'], 'if'>, { code: WorkflowDiagnostic['code'] } | undefined> = {
   'loop.while': { code: 'bad_loop' },
   break: { code: 'bad_loop' },
+  for_each: undefined,
 };
 
 export function formatDiagnostic(diagnostic: WorkflowDiagnostic): string {
@@ -189,7 +193,7 @@ export function parseWorkflow(file: string, content: string, files?: WorkflowFil
   }
 
   // A malformed inputs header is already reported; checking reads against it would only add noise.
-  const { workflow: { ends, outputs, loop, steps } } = parseBody(root, '', 'workflow', ctx, inputsPair && !inputs ? undefined : inputs ?? {});
+  const { workflow: { ends, outputs, loop, steps } } = parseBody(root, '', 'workflow', ctx, inputsPair && !inputs ? undefined : inputs ?? {}, false);
 
   if (diagnostics.length > 0 || !name || !description) return { ok: false, diagnostics };
   return {
@@ -205,6 +209,7 @@ export function parseWorkflow(file: string, content: string, files?: WorkflowFil
 /**
  * The `ends`, `outputs`, `loop`, and `steps` of a workflow file, or of an inline workflow whose fields start with `at`.
  * An inline workflow returns, in `outer`, what its steps read of enclosing steps, for the enclosing workflow to check.
+ * `itemBound` is whether the workflow runs once per item of a `for_each` step, directly or inside one, so its steps may read `item`.
  */
 function parseBody(
   root: YAMLMap.Parsed,
@@ -212,6 +217,7 @@ function parseBody(
   label: string,
   ctx: ParseContext,
   inputs: Record<string, OutputSchema> | undefined,
+  itemBound: boolean,
 ): { workflow: InlineWorkflow; outer: ReadSite[] } {
   const { file, lineCounter, diagnostics, promptFileLocations, files } = ctx;
   const endsPair = root.items.find((pair) => scalarString(pair.key) === 'ends');
@@ -305,8 +311,11 @@ function parseBody(
       const promptFile = scalarString(promptFilePair?.value);
       const workflowPair = item.items.find((pair) => scalarString(pair.key) === 'workflow');
       const workflow = scalarString(workflowPair?.value)?.trim();
+      const forEachPair = item.items.find((pair) => scalarString(pair.key) === 'for_each');
+      // The step's templates and the inline workflow it runs render once per item, so they read item as a template.
+      const bindsItem = itemBound || forEachPair !== undefined;
       const inline = isMap(workflowPair?.value)
-        ? parseInline(workflowPair.value, `${field}.workflow`, label, ctx, inputs)
+        ? parseInline(workflowPair.value, `${field}.workflow`, label, ctx, inputs, bindsItem)
         : undefined;
       const actions = ACTION_KEYS.map((key) => item.items.find((pair) => scalarString(pair.key) === key)).filter(Boolean);
       const endPair = item.items.find((pair) => scalarString(pair.key) === 'end');
@@ -332,7 +341,7 @@ function parseBody(
       if (commandPair && (command === undefined || command.trim() === '')) {
         diagnostics.push(locate(file, lineCounter, commandPair?.value ?? commandPair?.key ?? item, `${field}.command`, 'command must be a non-empty string'));
       }
-      const commandTemplate = command === undefined ? undefined : findTemplate(command);
+      const commandTemplate = command === undefined ? undefined : findTemplate(command, bindsItem);
       if (commandTemplate !== undefined) {
         diagnostics.push(locate(file, lineCounter, commandPair?.value as Node, `${field}.command`,
           `${label} command contains ${commandTemplate}; command strings are not templated; pass the value through env:`));
@@ -389,7 +398,7 @@ function parseBody(
         return { what, field: `${field}.${what}`, node: node as Node, text };
       });
       for (const template of templates) {
-        const parsed = parseTemplate(template.text);
+        const parsed = parseTemplate(template.text, bindsItem);
         if (!parsed.ok) {
           for (const problem of parsed.errors) {
             diagnostics.push({
@@ -405,7 +414,10 @@ function parseBody(
           }
         }
         if (inGraph && parsed.ok) {
-          reads.push({ id, field: template.field, at: position(lineCounter, template.node), what: template.what, paths: templatePaths(parsed.template), code: 'bad_template' });
+          reads.push({
+            id, field: template.field, at: position(lineCounter, template.node), what: template.what, paths: templatePaths(parsed.template),
+            ...(forEachPair ? { item: true } : {}), code: 'bad_template',
+          });
         }
       }
       // What the inline workflow reads of this workflow's steps must be steps this step needs, directly or not.
@@ -429,9 +441,15 @@ function parseBody(
         if (!parsed) reject('must be an expression');
         else if (!parsed.ok) reject(`does not parse at column ${parsed.column}: ${parsed.message}`);
       }
+      const forEach = forEachPair ? parseForEach(forEachPair.value ?? forEachPair.key, `${field}.for_each`, label, ctx) : undefined;
       if (inGraph) {
-        const nodes: Record<StepExpression['what'], unknown> = { if: ifPair?.value, 'loop.while': valueNode(loopPair?.value, 'while'), break: breakPair?.value };
-        for (const { what, source } of stepExpressions({ if: condition, loop, break: breakSource })) {
+        const nodes: Record<StepExpression['what'], unknown> = {
+          if: ifPair?.value,
+          'loop.while': valueNode(loopPair?.value, 'while'),
+          break: breakPair?.value,
+          for_each: isMap(forEachPair?.value) ? valueNode(forEachPair.value, 'items') : forEachPair?.value,
+        };
+        for (const { what, source } of stepExpressions({ if: condition, loop, break: breakSource, forEach })) {
           const parsed = parseExpression(source);
           if (!parsed.ok) continue;
           const node = (nodes[what] ?? item) as Node;
@@ -465,6 +483,7 @@ function parseBody(
           ...(end ? { end } : {}),
           ...(loop ? { loop } : {}),
           ...(breakSource !== undefined ? { break: breakSource } : {}),
+          ...(forEach ? { forEach } : {}),
         });
       }
     });
@@ -477,7 +496,7 @@ function parseBody(
     // An inline workflow's reads of steps that are not its own are checked by the workflow around it.
     const split = splitReads(reads, at === '' ? undefined : seen);
     outer = split.outer;
-    diagnostics.push(...readDiagnostics(file, loopSite ? [...split.local, loopSite] : split.local, readScope(needsById, steps, inputs, children)));
+    diagnostics.push(...readDiagnostics(file, loopSite ? [...split.local, loopSite] : split.local, { ...readScope(needsById, steps, inputs, children), item: itemBound }));
     for (const problem of loopProblems(steps, stepReads(split.local), loop !== undefined)) {
       const at = placed.get(problem.id);
       const node = problem.key.split('.').reduce<unknown>((map, key) => valueNode(map, key), at?.item);
@@ -507,6 +526,7 @@ function parseInline(
   label: string,
   ctx: ParseContext,
   inputs: Record<string, OutputSchema> | undefined,
+  itemBound: boolean,
 ): { workflow: InlineWorkflow; outer: ReadSite[] } {
   const { file, lineCounter, diagnostics } = ctx;
   for (const pair of node.items) {
@@ -520,7 +540,7 @@ function parseInline(
       diagnostics.push(locate(file, lineCounter, pair.key, `${field}.${key}`, `${label} runs an inline workflow, which carries only steps, outputs, ends, and loop`));
     }
   }
-  return parseBody(node, `${field}.`, `${label} workflow`, ctx, inputs);
+  return parseBody(node, `${field}.`, `${label} workflow`, ctx, inputs, itemBound);
 }
 
 /** A step that runs a workflow file by name. */
@@ -613,6 +633,36 @@ function parseLoop(node: Node | null | undefined, field: string, label: string, 
   if (diagnostics.length > before) return undefined;
   const loop = { ...(condition !== undefined ? { while: condition } : {}), maxIterations: max as number };
   return backTo ? { backTo, ...loop } : loop;
+}
+
+function parseForEach(node: Node | null | undefined, field: string, label: string, ctx: ParseContext): ForEach | undefined {
+  const { file, lineCounter, diagnostics } = ctx;
+  const reject = (at: Node | null | undefined, where: string, message: string): void => {
+    diagnostics.push({ ...locate(file, lineCounter, at, where, message), code: 'bad_loop' });
+  };
+  const map = isMap(node) ? node : undefined;
+  const before = diagnostics.length;
+  for (const pair of map?.items ?? []) {
+    const keyNode = isYamlNode(pair.key) ? pair.key : undefined;
+    const key = scalarString(keyNode);
+    if (!key || !FOR_EACH_KEYS.has(key)) diagnostics.push(unknownKey(file, lineCounter, keyNode ?? node, `${field}.${key ?? 'key'}`, key ?? 'key'));
+  }
+  const itemsNode = map ? valueNode(map, 'items') : node;
+  const items = conditionSource(itemsNode);
+  const parsed = items === undefined ? undefined : parseExpression(items);
+  if (!parsed) {
+    reject(itemsNode ?? node, map ? `${field}.items` : field,
+      map ? `${label} for_each.items must be an expression` : `${label} for_each must be an expression, or a map of items and max_parallel`);
+  } else if (!parsed.ok) {
+    reject(itemsNode, map ? `${field}.items` : field, `${label} for_each does not parse at column ${parsed.column}: ${parsed.message}`);
+  }
+  const maxNode = map ? valueNode(map, 'max_parallel') : undefined;
+  const max: unknown = isScalar(maxNode) ? maxNode.value : undefined;
+  if (maxNode && (typeof max !== 'number' || !Number.isInteger(max) || max < 1)) {
+    reject(maxNode, `${field}.max_parallel`, `${label} for_each.max_parallel must be a whole number from 1`);
+  }
+  if (diagnostics.length > before || items === undefined) return undefined;
+  return { items, ...(maxNode ? { maxParallel: max as number } : {}) };
 }
 
 /** `env` maps variable names to text. A YAML number or boolean is read as its text. */
@@ -719,12 +769,18 @@ function outputDiagnostics(
       diagnostics.push(at(`reads steps.${path.step}, which is not a step in this workflow`));
       continue;
     }
+    const step = steps.find((step) => step.id === path.step);
+    const unavailable = step && unavailableField(path, !!step.forEach);
+    if (unavailable) {
+      diagnostics.push(at(unavailable));
+      continue;
+    }
     const undeclared = undeclaredOutput(children, path);
     if (undeclared) {
       diagnostics.push({ ...at(undeclared), code: 'undeclared_output' });
       continue;
     }
-    const field = undeclaredField(path, steps.find((step) => step.id === path.step)?.output);
+    const field = undeclaredField(path, step?.output, !!step?.forEach);
     if (field) diagnostics.push(at(field));
   }
   return diagnostics;
@@ -799,15 +855,18 @@ export function promptFileDiagnostics(
   files?: WorkflowFiles,
 ): WorkflowDiagnostic[] {
   const levels: WorkflowStep[][] = [definition.steps];
+  const runners: WorkflowStep[] = [];
   for (const index of trail.slice(0, -1)) {
-    const workflow = levels[levels.length - 1]?.[index]?.workflow;
-    if (typeof workflow !== 'object') return [];
-    levels.push(workflow.steps);
+    const runner = levels[levels.length - 1]?.[index];
+    if (typeof runner?.workflow !== 'object') return [];
+    runners.push(runner);
+    levels.push(runner.workflow.steps);
   }
   const step = levels[levels.length - 1]?.[trail[trail.length - 1] ?? -1];
   if (!step) return [];
   const field = `${stepField(trail)}.prompt_file`;
-  const parsed = parseTemplate(text);
+  const bindsItem = step.forEach !== undefined || runners.some((runner) => runner.forEach !== undefined);
+  const parsed = parseTemplate(text, bindsItem);
   if (!parsed.ok) {
     return parsed.errors.map((problem) => ({
       file, ...at, field, message: `step "${step.id}" prompt_file template ${problem.source}: ${problem.message}`, code: 'bad_template',
@@ -815,13 +874,16 @@ export function promptFileDiagnostics(
   }
   const diagnostics: WorkflowDiagnostic[] = withReadProblems(`step "${step.id}"`, 'prompt_file', parsed.template, step.with)
     .map((message): WorkflowDiagnostic => ({ file, ...at, field, message, code: 'bad_template' }));
-  let sites: ReadSite[] = [{ id: step.id, field, at, what: 'prompt_file', paths: templatePaths(parsed.template), code: 'bad_template' }];
+  let sites: ReadSite[] = [{
+    id: step.id, field, at, what: 'prompt_file', paths: templatePaths(parsed.template), ...(step.forEach ? { item: true } : {}), code: 'bad_template',
+  }];
   // Check the reads in the step's own workflow, then hand what it reads of enclosing steps out, one workflow at a time.
   for (let level = levels.length - 1; level >= 0 && sites.length > 0; level -= 1) {
     const steps = levels[level] ?? [];
     const split = splitReads(sites, level === 0 ? undefined : new Set(steps.map((item) => item.id)));
     const needs = new Map(steps.map((item) => [item.id, item.needs ?? []]));
-    diagnostics.push(...readDiagnostics(file, split.local, readScope(needs, steps, definition.inputs ?? {}, childrenOf(steps, files))));
+    const item = runners.slice(0, level).some((runner) => runner.forEach !== undefined);
+    diagnostics.push(...readDiagnostics(file, split.local, { ...readScope(needs, steps, definition.inputs ?? {}, childrenOf(steps, files)), item }));
     const enclosing = levels[level - 1]?.[trail[level - 1] ?? -1];
     sites = enclosing ? split.outer.map((site) => ({ ...site, id: enclosing.id, reader: site.reader ?? site.id })) : [];
   }

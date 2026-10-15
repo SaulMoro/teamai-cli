@@ -133,6 +133,82 @@ steps:
     command: echo "lint failed before the tests finished"
 ```
 
+## Run a step once per item
+
+`for_each` runs a step once per item of a list. It takes an expression that gives the list, or a map with that expression in `items` and a limit in `max_parallel`. Each item runs as an instance of its own, named by the step id and the item's index from 0: `build[0]`, `build[1]`, and so on.
+
+```yaml
+schemaVersion: v1alpha1
+name: fan-build
+description: Build each package, two at a time, then explain the failures.
+inputs:
+  packages: [{ id: string, dir: string }]
+steps:
+  - id: build
+    for_each: { items: inputs.packages, max_parallel: 2 }
+    command: npm run build --prefix "$PACKAGE_DIR"
+    env:
+      PACKAGE_DIR: "{{ item.dir }}"
+  - id: explain
+    needs: [build]
+    if: any(steps.build.results, .outcome == 'failed')
+    prompt: "Explain each failed build in these results: {{ steps.build.results }}"
+```
+
+`build` reads `inputs.packages` once, when it becomes ready. If the value is not a list, the step fails with `invalid_items`. If the list is empty, the step succeeds at once, and its results are `[]`.
+
+Each instance reads its item as `item` in `prompt`, `env`, and `with`, and in every step of the inline workflow it runs. A `with` value that is only `{{ item }}` keeps the item's JSON type. A `command` is not templated, so pass the item through `env`. The step's own `if` and `for_each` are evaluated once, before any item runs, so they cannot read the step's items. Outside a `for_each`, `{{ item }}` stays as written, and pull rejects an expression that reads `item`.
+
+A driver gets each item as an ordinary lease whose `step` is `build[0]`, `build[1]`, and so on. A driver that lists its open leases in `running` gets the next item while the others run. `max_parallel` limits how many items are leased or running at once. At the limit, `next` hands out no other item until one of them settles.
+
+A failed item does not stop the other items. The step settles when every item has settled, and it fails if any item failed. `output` checks the outputs of each item.
+
+`steps.<id>.results` lists how each item went, in item order. Each entry has `item`, `outcome`, and `outputs` when the item has outputs:
+
+```json
+[{"item":{"id":"core","dir":"packages/core"},"outcome":"success"},{"item":{"id":"cli","dir":"packages/cli"},"outcome":"failed"}]
+```
+
+A step with `for_each` has no outputs of its own, and a step without `for_each` has no results. Pull rejects a read of either, including in workflow outputs and earlier passes. To read one item, index the results, as in `steps.build.results[1].outcome`.
+
+To retry failed items, use `for_each: "filter(steps.build.results, .outcome == 'failed')"` and `if: steps.build.outcome == 'failed'` on a step with `needs: [build]`. The `if` reads the failed dependency, so the retry step can run. Each retry item wraps the original value in `item.item`.
+
+An item that is an object can carry a string `id` and an `after` list of the ids of other items. The item starts only after each of them succeeded. It is skipped when one of them failed, was skipped, or was cancelled.
+
+```yaml
+schemaVersion: v1alpha1
+name: fan-publish
+description: Pack and check each package after the packages it depends on.
+inputs:
+  packages: [{ id: string, dir: string }]
+steps:
+  - id: publish
+    for_each: inputs.packages
+    workflow:
+      steps:
+        - id: pack
+          command: npm pack "$PACKAGE_DIR"
+          env:
+            PACKAGE_DIR: "{{ item.dir }}"
+        - id: verify
+          needs: [pack]
+          prompt: "Check that the tarball of {{ item.id }} holds only files from {{ item.dir }}."
+```
+
+```text
+teamai workflow start fan-publish --inputs '{"packages":[{"id":"core","dir":"packages/core"},{"id":"cli","dir":"packages/cli","after":["core"]}]}'
+```
+
+`publish[1]` starts after `publish[0]` succeeded. The steps of each item's workflow have ids such as `publish[0].pack` and `publish[1].verify`.
+
+An `after` id that no item has, two items with the same id, or an `after` that is not a list of ids fails the step with `invalid_items` before any item runs. Items that wait for each other in a cycle fail it with `item_cycle`, and the message names the cycle:
+
+```text
+step "publish" has items that run after each other in a cycle: core -> cli -> core
+```
+
+Pull rejects `for_each` together with `loop`, `end`, or `break`. To run the work of an item again, put the loop in the workflow the item runs.
+
 ## The end reached first wins
 
 Reports can reach two ends before the driver calls `next` again. `next` then applies the end that was reached first, whatever order the steps have in the file.
@@ -156,7 +232,7 @@ steps:
     end: rewritten
 ```
 
-If `rewrite` reports success and then `patch` reports success, the next `next` answers `{"data":{"done":{"run":"ra0ca39d4","outcome":"succeeded","end":"rewritten"},"cancelled":[]}}`. The time at which the driver calls `next` does not change the winner.
+If `rewrite` reports success and then `patch` reports success, the next `next` answers `{"data":{"done":{"run":"ra0ca39d4","outcome":"succeeded","end":"rewritten"},"cancelled":[]}}`. The time at which the driver calls `next` does not change the winner. A report after the winning end returns `lease_cancelled`, even if `next` has not run yet. It does not advance the revision, change workflow outputs, or start another loop pass. Skips and failures that need no driver take the revision that caused them, so they can reach an earlier end too.
 
 ## Loop back to an earlier step
 
@@ -246,7 +322,7 @@ Each run of a step is a pass, numbered from 1. A lease carries its `pass`. In a 
 {"data":{"lease":{"run":"rd50c3422","step":"e2e","attempt":"a54df2231","revision":4,"pass":2,"command":"npm run test:e2e"},"cancelled":[]}}
 ```
 
-`steps.<id>.outcome`, `steps.<id>.end`, and `steps.<id>.outputs` read the latest pass. `steps.<id>.passes` lists every pass of the step, the current one included once it has settled. Each element has `pass` and `outcome`, and `outputs` and `end` when that pass has them. In `loop-review-and-fix`, the workflow output `reviews` returns every review.
+`steps.<id>.outcome`, `steps.<id>.end`, and `steps.<id>.outputs` read the latest pass. `steps.<id>.passes` lists every pass of the step, the current one included once it has settled. Each element has `pass` and `outcome`, and `outputs` and `end` when that pass has them. A pass of a `for_each` step has `results` instead of `outputs`, including in a previous-pass read. In `loop-review-and-fix`, the workflow output `reviews` returns every review.
 
 A step can read a later step of its own range, one that needs it directly or through its needs. That read gets the later step's previous pass, `null` on pass 1, and does not wait for it. In that read, `passes` lists only the earlier passes. Here `plan` reads the note of the last decision:
 
@@ -390,6 +466,8 @@ steps:
 | An input | `inputs.issue`, `inputs.issue.labels` |
 | A step's outcome, end, or output | `steps.check.outcome`, `steps.check.end`, `steps.review.outputs.files` |
 | Every pass of a step | `steps.review.passes`, `steps.review.passes[0].outputs.verdict`. See [Read every pass](#read-every-pass). |
+| The results of a `for_each` step | `steps.build.results`, `steps.build.results[0].outcome` |
+| The item of a `for_each` instance | `item`, `item.dir` |
 | A string | `'failed'`. Use single quotes. Write a quote inside a string twice: `'it''s'`. |
 | A number | `3`, `-1`, `1.5`. Write a digit before the decimal point: `0.5`, not `.5`. |
 | A boolean or null | `true`, `false`, `null` |
@@ -401,7 +479,7 @@ A missing value reads as `null`. A step that has not settled reads as `null` too
 
 `[n]` reads element `n` of an array, counting from 0: `steps.review.outputs.files[0].path`, `inputs.tags[1]`, or `steps.grid.outputs.rows[1][0]`. An index past the end, or an index into a value that is not an array, reads `null`.
 
-An index is a whole number from 0. `[-1]`, `[01]`, and `[inputs.n]` do not parse. An index reads an array inside `inputs`, `outputs`, or `passes`. It cannot follow a step id, `outcome`, or `end`, so `steps.build[2].outcome` does not parse.
+An index is a whole number from 0. `[-1]`, `[01]`, and `[inputs.n]` do not parse. An index reads an array inside `inputs`, `outputs`, `passes`, `results`, or `item`. It cannot follow a step id, `outcome`, or `end`, so `steps.build[2].outcome` does not parse.
 
 ### Operators and precedence
 

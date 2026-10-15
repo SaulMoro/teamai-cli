@@ -137,15 +137,15 @@ description: Build it.
 steps:
   - id: one
     command: npm test
-    for_each: items
+    timeout: 10m
 `);
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.diagnostics).toEqual(expect.arrayContaining([
       expect.objectContaining({
         code: 'unknown_key',
-        field: 'steps[0].for_each',
-        message: 'workflows/build.yaml uses `for_each`, which this teamai does not know. Update teamai.',
+        field: 'steps[0].timeout',
+        message: 'workflows/build.yaml uses `timeout`, which this teamai does not know. Update teamai.',
       }),
     ]));
   });
@@ -622,6 +622,136 @@ steps:
     ]);
     expect(rejected(POLL.replace("break: steps.probe.outputs.status == 'gone'", 'break: [gone]'))).toEqual([
       { message: `${FILE}:17: field "steps[1].break": step "report" break must be an expression`, code: 'bad_loop' },
+    ]);
+  });
+});
+
+const FAN = `schemaVersion: v1alpha1
+name: build
+description: Build each target.
+inputs:
+  targets: [string]
+steps:
+  - id: build
+    for_each: inputs.targets
+    command: node build.js
+    env:
+      TARGET: "{{ item }}"
+`;
+
+const ITEM_TEXT = `schemaVersion: v1alpha1
+name: build
+description: Explain loops that other tools run.
+steps:
+  - id: explain
+    prompt: "Explain {{ item }}, {{ item.name }}, {{ item[0] }} and {{ length(item.xs) }} in a Jinja loop: {{ with.loop }}."
+    with:
+      loop: ["{{ item }}", "{{ item.name }}", "{{ length(item.xs) }}"]
+  - id: play
+    needs: [explain]
+    command: ansible localhost -m debug -a 'msg={{ item }}'
+    env:
+      ITEM: "{{ item }}"
+      NAME: "{{ item.name }}"
+      COUNT: "{{ length(item.xs) }}"
+`;
+
+describe('for_each', () => {
+  it.each([
+    ['loop', '    loop: { back_to: build, max_iterations: 2 }\n', '', 'step "build" has for_each and loop; put the loop in a sub-workflow'],
+    ['end', '    end: built\n', 'ends: { built: succeeded }\n', 'step "build" has for_each and end; a step that runs once per item cannot end its workflow'],
+    ['break', '    break: "true"\n', '', 'step "build" has for_each and break; a step that runs once per item cannot end its workflow'],
+  ])('rejects for_each with %s', (_key, line, header, message) => {
+    expect(rejected(FAN.replace('steps:\n', `${header}steps:\n`).replace('    command: node build.js\n', `    command: node build.js\n${line}`))).toEqual([
+      { message: `${FILE}:${header ? 9 : 8}: field "steps[0].for_each": ${message}`, code: 'bad_loop' },
+    ]);
+  });
+
+  it('keeps item as written in the templates and command of a step without for_each, where no item is bound', () => {
+    const result = parse(ITEM_TEXT);
+
+    expect(result.ok ? result.definition.steps : result.diagnostics.map(formatDiagnostic)).toEqual([
+      {
+        id: 'explain',
+        prompt: 'Explain {{ item }}, {{ item.name }}, {{ item[0] }} and {{ length(item.xs) }} in a Jinja loop: {{ with.loop }}.',
+        with: { loop: ['{{ item }}', '{{ item.name }}', '{{ length(item.xs) }}'] },
+      },
+      {
+        id: 'play',
+        needs: ['explain'],
+        command: "ansible localhost -m debug -a 'msg={{ item }}'",
+        env: { ITEM: '{{ item }}', NAME: '{{ item.name }}', COUNT: '{{ length(item.xs) }}' },
+      },
+    ]);
+  });
+
+  it('rejects an if that reads item in a step without for_each', () => {
+    expect(rejected(ITEM_TEXT.replace('    command: ansible', '    if: item.x == 1\n    command: ansible'))).toEqual([
+      { message: `${FILE}:11: field "steps[1].if": step "play" if reads item, which is bound only in the templates of a for_each step and in the workflow each item runs` },
+    ]);
+  });
+
+  it.each([
+    ['if', "    if: item != 'docs'\n", 'if'],
+    ['for_each', '', 'for_each'],
+  ])('rejects item in the %s of a for_each step, which is evaluated once before any item', (_what, line, field) => {
+    const content = FAN.replace('    for_each: inputs.targets\n', `${line}    for_each: ${field === 'for_each' ? 'item.targets' : 'inputs.targets'}\n`);
+    expect(rejected(content)).toEqual([
+      { message: `${FILE}:8: field "steps[0].${field}": step "build" ${field} reads item, which is bound only in the templates of a for_each step and in the workflow each item runs` },
+    ]);
+  });
+
+  it.each([
+    ['a list', '[a, b]', 'steps[0].for_each', 'step "build" for_each must be an expression, or a map of items and max_parallel'],
+    ['a map without items', '{ max_parallel: 2 }', 'steps[0].for_each.items', 'step "build" for_each.items must be an expression'],
+    ['max_parallel 0', '{ items: inputs.targets, max_parallel: 0 }', 'steps[0].for_each.max_parallel', 'step "build" for_each.max_parallel must be a whole number from 1'],
+  ])('rejects a for_each that is %s, so a kept copy cannot run the step once', (_what, value, field, message) => {
+    expect(rejected(FAN.replace('for_each: inputs.targets', `for_each: ${value}`))).toEqual([
+      { message: `${FILE}:8: field "${field}": ${message}`, code: 'bad_loop' },
+    ]);
+  });
+
+  it('rejects a read of the outputs of a for_each step, whose outputs are per item', () => {
+    const content = `${FAN.replace('    env:\n', '    output: { ok: boolean }\n    env:\n')}  - id: report
+    needs: [build]
+    if: steps.build.outputs.ok
+    command: node report.js
+`;
+    expect(rejected(content)).toEqual([
+      { message: `${FILE}:15: field "steps[1].if": step "report" if reads steps.build.outputs, but step "build" has for_each, so its outputs are in steps.build.results` },
+    ]);
+  });
+
+  it('rejects a read of the results of a step without for_each', () => {
+    expect(rejected(`schemaVersion: v1alpha1
+name: build
+description: Build.
+steps:
+  - id: build
+    command: node build.js
+  - id: report
+    needs: [build]
+    if: any(steps.build.results, .outcome == 'failed')
+    command: node report.js
+`)).toEqual([
+      { message: `${FILE}:9: field "steps[1].if": step "report" if reads steps.build.results, but step "build" has no for_each, so it has no results` },
+    ]);
+  });
+
+  it('reports a rejected for_each step once, not again at each read of its results', () => {
+    const content = `${FAN.replace('node build.js', 'node build.js {{ item }}')}  - id: report
+    needs: [build]
+    if: any(steps.build.results, .outcome == 'failed')
+    command: node report.js
+`;
+    expect(rejected(content)).toEqual([
+      { message: `${FILE}:9: field "steps[0].command": step "build" command contains {{ item }}; command strings are not templated; pass the value through env:` },
+    ]);
+  });
+
+  it('rejects item in a command, which is never rendered', () => {
+    expect(rejected(FAN.replace('node build.js', 'node build.js {{ item.name }}'))).toEqual([
+      { message: `${FILE}:9: field "steps[0].command": step "build" command contains {{ item.name }}; command strings are not templated; pass the value through env:` },
     ]);
   });
 });

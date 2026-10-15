@@ -7,8 +7,8 @@ const context: ExpressionContext = {
   steps: { plan: { outcome: 'success', outputs: { task: { files: ['a.ts'] }, count: 0 } }, lint: { outcome: 'skipped' } },
 };
 
-function template(text: string): Template {
-  const parsed = parseTemplate(text);
+function template(text: string, item = false): Template {
+  const parsed = parseTemplate(text, item);
   if (!parsed.ok) throw new Error(`${text}: ${parsed.errors[0]?.message}`);
   return parsed.template;
 }
@@ -45,21 +45,31 @@ describe('workflow templates', () => {
   it.each([
     ['{{ inputs.issue == 1 }}', 'a template reads one path'],
     ['{{ inputs.issue < 1 }}', 'a template reads one path'],
-    ['{{ steps.plan }}', '"steps.plan" must read steps.<id>.outcome, steps.<id>.end, steps.<id>.outputs or steps.<id>.passes'],
+    ['{{ steps.plan }}', '"steps.plan" must read steps.<id>.outcome, steps.<id>.end, steps.<id>.outputs, steps.<id>.passes or steps.<id>.results'],
     ['{{ inputs.a b }}', 'unexpected "b"'],
     ['{{ inputs.labels[-1] }}', '"[-1]" is not an index; write a whole number from 0, such as [0]'],
     ['{{ with.refs[x] }}', '"[x]" is not an index; write a whole number from 0, such as [0]'],
   ])('rejects %s', (text, message) => {
-    expect(parseTemplate(`before ${text} after`)).toEqual({ ok: false, errors: [{ source: text, message }] });
+    expect(parseTemplate(`before ${text} after`, false)).toEqual({ ok: false, errors: [{ source: text, message }] });
   });
 
   it('finds a template in text that is never rendered', () => {
-    expect(findTemplate('echo "{{inputs.title}}" "{{ steps.plan.outputs.task }}"')).toBe('{{inputs.title}}');
-    expect(findTemplate('echo "${{ secrets.TOKEN }} {{ name }}"')).toBeUndefined();
+    expect(findTemplate('echo "{{inputs.title}}" "{{ steps.plan.outputs.task }}"', false)).toBe('{{inputs.title}}');
+    expect(findTemplate('echo "${{ secrets.TOKEN }} {{ name }}"', false)).toBeUndefined();
   });
 
   it('finds a ${{ … }} template in a command too, since the command would receive the braces as written', () => {
-    expect(findTemplate('echo "${{ inputs.title }}"')).toBe('{{ inputs.title }}');
+    expect(findTemplate('echo "${{ inputs.title }}"', false)).toBe('{{ inputs.title }}');
+  });
+
+  it('reads item only where an item is bound, and leaves it as written elsewhere', () => {
+    const text = 'Explain {{ item }}, {{ item.name }} and {{ item[0] }}.';
+    const itemContext = { ...context, item: { name: 'web' } };
+
+    expect(renderText(template(text, true), itemContext)).toBe('Explain {"name":"web"}, web and .');
+    expect(renderText(template(text, false), itemContext)).toBe(text);
+    expect(findTemplate('echo {{ item.name }}', true)).toBe('{{ item.name }}');
+    expect(findTemplate('echo {{ item.name }}', false)).toBeUndefined();
   });
 
   it('renders a step\'s own with values, and leaves a template right after a $ as written', () => {
@@ -75,6 +85,6 @@ describe('workflow templates', () => {
     ['{{ with.task == 1 }}'],
     ['{{ with. }}'],
   ])('rejects %s as more than one with path', (text) => {
-    expect(parseTemplate(text)).toEqual({ ok: false, errors: [{ source: text, message: 'a template reads one path, such as with.<name>' }] });
+    expect(parseTemplate(text, false)).toEqual({ ok: false, errors: [{ source: text, message: 'a template reads one path, such as with.<name>' }] });
   });
 });

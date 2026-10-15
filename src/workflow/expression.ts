@@ -1,8 +1,9 @@
 /**
  * The workflow expression language: `if` conditions, and the paths that templates read.
- * It reads `inputs` and `steps`, compares numbers, and calls `length`, `any`, `all` and `filter`, whose predicate reads
- * each element of the list as `.`. Its evaluation never throws.
+ * It reads `inputs`, `steps` and the `item` of a `for_each`, compares numbers, and calls `length`, `any`, `all` and
+ * `filter`, whose predicate reads each element of the list as `.`. Its evaluation never throws.
  */
+import type { VisibleOutcome } from './step-state.js';
 import { INDEX } from './step-path.js';
 import type { OutputSchema } from './types.js';
 
@@ -12,7 +13,9 @@ export type PathField = string | number;
 /** A value read by a path. A missing value is `null`. */
 export type ExpressionPath =
   | { root: 'inputs'; fields: PathField[]; column: number }
-  | { root: 'steps'; step: string; field: 'outcome' | 'end' | 'outputs' | 'passes'; fields: PathField[]; column: number };
+  /** The item a `for_each` step instance runs for. */
+  | { root: 'item'; fields: PathField[]; column: number }
+  | { root: 'steps'; step: string; field: 'outcome' | 'end' | 'outputs' | 'passes' | 'results'; fields: PathField[]; column: number };
 
 /** `<`, `<=`, `>` and `>=` compare two numbers; with anything else they are false. */
 const COMPARISONS = {
@@ -43,9 +46,6 @@ export type Expression =
   /** `.`, `.a.b` or `.a[0]`: the current element of a predicate, or a value inside it. */
   | { kind: 'element'; fields: PathField[]; column: number };
 
-/** The outcome an expression reads of a settled step. */
-export type VisibleOutcome = 'success' | 'failed' | 'skipped' | 'cancelled';
-
 /** A step as an expression sees it. `outcome` is set once the step settled. */
 export interface ExpressionStep {
   outcome?: VisibleOutcome;
@@ -53,6 +53,8 @@ export interface ExpressionStep {
   outputs?: unknown;
   /** Every settled pass of the step, earliest first: those a loop ran again, then the current one once it settled. */
   passes?: ExpressionPass[];
+  /** For a settled `for_each` step: how each item settled, in item order. */
+  results?: Array<{ item?: unknown; outcome: VisibleOutcome; outputs?: unknown }>;
 }
 
 /** One pass of a step in `steps.<id>.passes`. */
@@ -61,11 +63,14 @@ export interface ExpressionPass {
   outcome: VisibleOutcome;
   outputs?: unknown;
   end?: string;
+  results?: ExpressionStep['results'];
 }
 
 export interface ExpressionContext {
   inputs?: unknown;
   steps: Record<string, ExpressionStep>;
+  /** The item of the `for_each` the expression is evaluated for. */
+  item?: unknown;
   /** The element a predicate is evaluated for. */
   element?: unknown;
 }
@@ -185,16 +190,16 @@ export function parseFields(text: string): { ok: true; fields: PathField[] } | {
 
 function parsePath(token: { text: string; column: number }): ExpressionPath {
   const [root, ...segments] = fieldsOf(token.text, token.column);
-  if (root === 'inputs') return { root, fields: segments, column: token.column };
+  if (root === 'inputs' || root === 'item') return { root, fields: segments, column: token.column };
   if (root !== 'steps') {
-    throw new ExpressionError(token.column, `"${root}" is not readable; an expression reads only inputs and steps`);
+    throw new ExpressionError(token.column, `"${root}" is not readable; an expression reads only inputs, steps and item`);
   }
   const [step, field, ...fields] = segments;
   if (typeof step === 'string' && typeof field === 'number') {
     throw new ExpressionError(token.column, `"${token.text}" indexes a step; an index reads an array in its outputs, as in steps.${step}.outputs.<field>[${field}]`);
   }
   if (typeof step !== 'string' || !field) throw new ExpressionError(token.column, `"${token.text}" ${STEP_FIELDS}`);
-  if (field === 'outputs' || field === 'passes') return { root, step, field, fields, column: token.column };
+  if (field === 'outputs' || field === 'passes' || field === 'results') return { root, step, field, fields, column: token.column };
   if ((field === 'outcome' || field === 'end') && fields.length === 0) return { root, step, field, fields, column: token.column };
   if ((field === 'outcome' || field === 'end') && typeof fields[0] === 'number') {
     throw new ExpressionError(token.column, `"${token.text}" indexes ${field}, which is a name; compare it whole, as in steps.${step}.${field} == '<name>'`);
@@ -202,20 +207,37 @@ function parsePath(token: { text: string; column: number }): ExpressionPath {
   throw new ExpressionError(token.column, `"${token.text}" ${STEP_FIELDS}`);
 }
 
-const STEP_FIELDS = 'must read steps.<id>.outcome, steps.<id>.end, steps.<id>.outputs or steps.<id>.passes';
+const STEP_FIELDS = 'must read steps.<id>.outcome, steps.<id>.end, steps.<id>.outputs, steps.<id>.passes or steps.<id>.results';
+
+/**
+ * A type pull knows for a value before the run: a declared shorthand, or `unknown`, which any value fits, such as the
+ * item of a `for_each` result. Every field and index inside `unknown` reads `unknown` too.
+ */
+export type DeclaredType =
+  | OutputSchema
+  | { type: 'unknown' }
+  | { type: 'array'; items: DeclaredType }
+  | { type: 'object'; fields: Record<string, DeclaredType> };
+
+const UNKNOWN: DeclaredType = { type: 'unknown' };
 
 /**
  * The type the `output` a step declares gives `steps.<id>.<field>`, or undefined when it gives none: outcome and end
- * are names, and each item of `passes` holds the outputs of one pass.
+ * are names, each item of `passes` holds the outputs of one pass, and each item of `results` the item and outputs of one
+ * `for_each` item.
  */
-export function stepFieldSchema(field: 'outcome' | 'end' | 'outputs' | 'passes', output: OutputSchema | undefined): OutputSchema | undefined {
+export function stepFieldSchema(field: Extract<ExpressionPath, { root: 'steps' }>['field'], output: OutputSchema | undefined, forEach: boolean): DeclaredType | undefined {
+  const results: DeclaredType = { type: 'array', items: { type: 'object', fields: { item: UNKNOWN, outcome: { type: 'string' }, outputs: output ?? UNKNOWN } } };
   switch (field) {
     case 'outcome':
     case 'end':
       return { type: 'string' };
-    case 'outputs': return output;
+    case 'outputs': return forEach ? undefined : output;
     case 'passes':
-      return output && { type: 'array', items: { type: 'object', fields: { pass: { type: 'number' }, outcome: { type: 'string' }, end: { type: 'string' }, outputs: output } } };
+      return { type: 'array', items: { type: 'object', fields: { pass: { type: 'number' }, outcome: { type: 'string' }, end: { type: 'string' },
+        ...(forEach ? { results } : { outputs: output ?? UNKNOWN }),
+      } } };
+    case 'results': return forEach ? results : undefined;
   }
 }
 
@@ -358,7 +380,7 @@ function textOf(expression: Expression): string {
     case 'literal': return typeof expression.value === 'string' ? quoted(expression.value) : JSON.stringify(expression.value);
     case 'path': {
       const { path } = expression;
-      return path.root === 'inputs' ? `inputs${fieldsText(path.fields)}` : `steps.${path.step}.${path.field}${fieldsText(path.fields)}`;
+      return path.root === 'steps' ? `steps.${path.step}.${path.field}${fieldsText(path.fields)}` : `${path.root}${fieldsText(path.fields)}`;
     }
     case 'element': {
       const text = fieldsText(expression.fields);
@@ -370,14 +392,18 @@ function textOf(expression: Expression): string {
 }
 
 interface ElementType {
-  items: OutputSchema;
+  items: DeclaredType;
   list: Expression;
 }
 
 /** The type a workflow declares for what a path reads, or undefined when it is not known before the run. */
-export type SchemaOf = (path: ExpressionPath) => OutputSchema | undefined;
+export type SchemaOf = (path: ExpressionPath) => DeclaredType | undefined;
 
-type StaticType = OutputSchema | { type: 'array'; items?: undefined } | { type: 'null' };
+type StaticType = Exclude<DeclaredType, { type: 'unknown' }> | { type: 'array'; items?: undefined } | { type: 'null' };
+
+function known(type: DeclaredType | undefined): StaticType | undefined {
+  return type?.type === 'unknown' ? undefined : type;
+}
 
 function typeOf(expression: Expression, schemaOf: SchemaOf, element: ElementType | undefined): StaticType | undefined {
   switch (expression.kind) {
@@ -387,8 +413,8 @@ function typeOf(expression: Expression, schemaOf: SchemaOf, element: ElementType
       if (Array.isArray(value)) return { type: 'array' };
       return typeof value === 'number' ? { type: 'number' } : typeof value === 'string' ? { type: 'string' } : { type: 'boolean' };
     }
-    case 'path': return schemaOf(expression.path);
-    case 'element': return element && schemaAt(element.items, expression.fields);
+    case 'path': return known(schemaOf(expression.path));
+    case 'element': return element && known(schemaAt(element.items, expression.fields));
     case 'not':
     case 'binary':
       return { type: 'boolean' };
@@ -469,14 +495,16 @@ export function fieldsText(fields: PathField[]): string {
 /** Reads a path. Anything missing along the way, including a step that has not settled, is `null`. */
 export function resolvePath(path: ExpressionPath, context: ExpressionContext): unknown {
   if (path.root === 'inputs') return readFields(context.inputs, path.fields);
+  if (path.root === 'item') return readFields(context.item, path.fields);
   const step = Object.hasOwn(context.steps, path.step) ? context.steps[path.step] : undefined;
   return readFields(step?.[path.field], path.fields);
 }
 
 /** The type `schema` declares for the value `fields` names inside it, or undefined when it declares none. */
-export function schemaAt(schema: OutputSchema, fields: PathField[]): OutputSchema | undefined {
+export function schemaAt(schema: DeclaredType, fields: PathField[]): DeclaredType | undefined {
   let current = schema;
   for (const field of fields) {
+    if (current.type === 'unknown') return current;
     if (typeof field === 'number') {
       if (current.type !== 'array') return undefined;
       current = current.items;
@@ -550,7 +578,7 @@ export function evaluateExpression(expression: Expression, context: ExpressionCo
   }
 }
 
-/** Every path an expression reads, in source order. */
+/** Every `inputs`, `steps` and `item` path an expression reads, in source order. */
 export function expressionPaths(expression: Expression): ExpressionPath[] {
   switch (expression.kind) {
     case 'literal': return [];

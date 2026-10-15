@@ -62,6 +62,128 @@ afterEach(() => {
 });
 
 describe('workflow cache', () => {
+  it.each([
+    ['fan-out pass outputs', "steps.build.passes[0].outputs.ok", '    output: { ok: boolean }\n'],
+    ['fan-out pass outputs without an output schema', "steps.build.passes[0].outputs.ok", ''],
+    ['undeclared item output in a pass', "steps.build.passes[0].results[0].outputs.missing", '    output: { ok: boolean }\n'],
+    ['ordinary pass results', "steps.leaf.passes[0].results", ''],
+    ['typed pass result outcome', "steps.build.passes[0].results[0].outcome > 1", ''],
+    ['typed pass result predicate', "any(steps.build.passes, .results[0].outcome > 1)", ''],
+  ])('rejects %s during workflow sync', async (_name, read, output) => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Validate pass fields.
+steps:
+  - id: build
+    for_each: "[]"
+    command: echo build
+${output}  - id: leaf
+    needs: [build]
+    command: echo leaf
+  - id: summary
+    needs: [leaf]
+    if: ${JSON.stringify(read)}
+    command: echo summary
+`);
+    const synced = await syncWorkflowDefinitions(config);
+    expect(synced.invalid).not.toEqual([]);
+    expect(synced.cached).toEqual([]);
+  });
+
+  it.each([
+    ['an output', 'steps.build.outputs.ok', 'output "value" reads steps.build.outputs, but step "build" has for_each'],
+    ['an output', 'steps.leaf.results', 'output "value" reads steps.leaf.results, but step "leaf" has no for_each'],
+    ['an output', 'steps.build.passes[0].outputs.ok', 'output "value" reads steps.build.passes[0].outputs, but step "build" has for_each'],
+    ['an output', 'steps.leaf.passes[0].results', 'output "value" reads steps.leaf.passes[0].results, but step "leaf" has no for_each'],
+    ['an if', 'steps.build.outputs.ok', 'step "summary" if reads steps.build.outputs, but step "build" has for_each'],
+    ['an if', 'steps.build.passes[0].outputs.ok', 'step "summary" if reads steps.build.passes[0].outputs, but step "build" has for_each'],
+    ['an if', 'any(steps.build.passes, .outputs.ok)', 'step "summary" if reads .outputs.ok, which is not in an item of steps.build.passes'],
+    ['an if', 'steps.leaf.passes[0].results', 'step "summary" if reads steps.leaf.passes[0].results, but step "leaf" has no for_each'],
+  ])('keeps the last valid version when %s reads the unavailable %s', async (site, read, message) => {
+    const config = testConfig();
+    const body = `schemaVersion: v1alpha1
+name: build
+description: Read a field a step no longer has.
+steps:
+  - id: group
+    workflow:
+${site === 'an output' ? `      outputs:\n        value: ${read}\n` : ''}      steps:
+        - id: build
+          for_each: "[]"
+          command: echo build
+          output: { ok: boolean }
+        - id: leaf
+          needs: [build]
+          command: echo leaf
+        - id: summary
+          needs: [leaf]
+${site === 'an if' ? `          if: ${JSON.stringify(read)}\n` : ''}          command: echo summary
+`;
+    writeWorkflow(config, 'build', body.replace('          for_each: "[]"\n', '').replace('        - id: leaf\n', '        - id: leaf\n          for_each: "[]"\n'));
+    expect((await syncWorkflowDefinitions(config)).cached).toEqual(['build']);
+    const valid = await loadCachedWorkflow(config, 'build');
+    expect(valid).not.toBeNull();
+    writeWorkflow(config, 'build', body);
+    const synced = await syncWorkflowDefinitions(config);
+    expect(synced.invalid).toEqual([expect.objectContaining({ message: expect.stringContaining(message) })]);
+    expect(synced.invalid[0]).not.toHaveProperty('code');
+    expect(synced.kept).toEqual(['build']);
+    expect(await loadCachedWorkflow(config, 'build')).toEqual(valid);
+  });
+
+  it('accepts declared item outputs in fan-out pass results and workflow outputs', async () => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Read item outputs in passes.
+outputs:
+  ok: steps.build.passes[0].results[0].outputs.ok
+  results: steps.build.results
+steps:
+  - id: build
+    for_each: "[]"
+    command: echo build
+    output: { ok: boolean }
+  - id: summary
+    needs: [build]
+    if: steps.build.passes[0].results[0].outputs.ok && all(steps.build.passes, .results[0].outputs.ok)
+    command: echo summary
+`);
+    const synced = await syncWorkflowDefinitions(config);
+    expect(synced.invalid).toEqual([]);
+    expect(synced.cached).toEqual(['build']);
+  });
+
+  it.each(['ok', 'missing'])('checks the child output %s inside a fan-out pass result', async (field) => {
+    const config = testConfig();
+    writeWorkflow(config, 'build', `schemaVersion: v1alpha1
+name: build
+description: Read workflow item outputs in passes.
+steps:
+  - id: build
+    for_each: "[]"
+    workflow:
+      outputs: { ok: steps.run.outputs.ok }
+      steps:
+        - id: run
+          command: echo run
+          output: { ok: boolean }
+  - id: summary
+    needs: [build]
+    if: steps.build.passes[0].results[0].outputs.${field}
+    command: echo summary
+`);
+    const synced = await syncWorkflowDefinitions(config);
+    if (field === 'ok') {
+      expect(synced.invalid).toEqual([]);
+      expect(synced.cached).toEqual(['build']);
+    } else {
+      expect(synced.invalid).toEqual([expect.objectContaining({ code: 'undeclared_output' })]);
+      expect(synced.cached).toEqual([]);
+    }
+  });
+
   it('caches prompt_file bytes and snapshots them into a run', async () => {
     const config = testConfig();
     fs.mkdirSync(path.join(config.repo.localPath, 'prompts'));
@@ -250,7 +372,7 @@ steps:
     await syncWorkflowDefinitions(config);
     expect(await loadCachedWorkflow(config, 'build')).not.toBeNull();
 
-    writeWorkflow(config, 'build', VALID.replace('command: node compile.js', 'command: node compile.js\n    for_each: items'));
+    writeWorkflow(config, 'build', VALID.replace('command: node compile.js', 'command: node compile.js\n    timeout: 10m'));
     const synced = await syncWorkflowDefinitions(config);
 
     expect(synced.unrunnable).toContain('workflows/build.yaml');
@@ -844,6 +966,40 @@ steps:
     expect(result.unrunnable).toEqual(['workflows/build.yaml']);
     expect(result.kept).toEqual([]);
     expect(await startRun(config, 'build')).toMatchObject({ error: { code: 'workflow_not_found' } });
+  });
+
+  it('lets a prompt_file read item where a for_each binds it, and keeps item as written elsewhere', async () => {
+    const config = testConfig();
+    fs.mkdirSync(path.join(config.repo.localPath, 'prompts'));
+    fs.writeFileSync(path.join(config.repo.localPath, 'prompts', 'review.md'), 'Review {{ item.path }}.');
+    const quote = 'Quote {{ item }}, {{ item.path }}, {{ item[0] }} and {{ length(item.xs) }} from a playbook.';
+    fs.writeFileSync(path.join(config.repo.localPath, 'prompts', 'quote.md'), quote);
+    writeWorkflow(config, 'fan', `schemaVersion: v1alpha1
+name: fan
+description: Review each file.
+inputs:
+  files: [{ path: string }]
+steps:
+  - id: review
+    for_each: inputs.files
+    prompt_file: prompts/review.md
+  - id: check
+    needs: [review]
+    for_each: inputs.files
+    workflow:
+      steps:
+        - id: recheck
+          prompt_file: prompts/review.md
+  - id: summary
+    needs: [check]
+    prompt_file: prompts/quote.md
+`);
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid.map(formatDiagnostic)).toEqual([]);
+    expect(result.cached).toEqual(['fan']);
+    expect((await loadCachedWorkflow(config, 'fan'))?.definition.steps[2]?.prompt).toBe(quote);
   });
 
   it('reports a with read outside the prompt of a step whose with declares it', async () => {

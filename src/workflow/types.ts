@@ -44,6 +44,16 @@ export interface WorkflowStep {
   loop?: StepLoop;
   /** Expression source, evaluated when this step succeeds; when true, its workflow, or that workflow's loop, ends as success. */
   break?: string;
+  /** Runs the step's action once per item of a list, each as an instance such as `build[2]`. */
+  forEach?: ForEach;
+}
+
+/** A `for_each`: the list of items, and how many of them may run at once. */
+export interface ForEach {
+  /** Expression source that gives the list. */
+  items: string;
+  /** At most this many items are started and not yet settled. No limit when absent. */
+  maxParallel?: number;
 }
 
 /**
@@ -119,12 +129,12 @@ export interface WorkflowDiagnostic {
    *   templates existed would now render it as empty text instead of the text it was written as.
    * `dotted_name`: a step id or an `inputs` or `output` field name contains "."; no path can read it, and a
    *   step id would clash with the dotted paths that address steps inside a sub-workflow.
-   * `undeclared_output`: a read of `steps.<id>.outputs.<name>` that the workflow step `<id>` runs does not declare;
+   * `undeclared_output`: a read names an output the workflow a step runs does not declare;
    *   the file may be unchanged while that workflow changed, and the kept copy would read null where it expects a value.
    * `undeclared_end`: an `if` compares `steps.<id>.end` with a name the workflow step `<id>` runs does not declare in `ends`;
    *   for the same reason, the kept copy would take a branch that can never match.
-   * `bad_loop`: a `loop` or `break` pull rejects; the kept copy would run once the steps the author wrote to repeat,
-   *   or run on past the point the author wrote to stop at.
+   * `bad_loop`: a `loop`, `break` or `for_each` pull rejects; the kept copy would run once the steps the author wrote
+   *   to repeat or to run per item, or run on past the point the author wrote to stop at.
    */
   code?: 'unknown_key' | 'missing_needs' | 'false_if' | 'bad_template' | 'dotted_name' | 'undeclared_output' | 'undeclared_end' | 'bad_loop';
 }

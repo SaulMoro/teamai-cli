@@ -2,7 +2,7 @@
 
 > Part of the [TeamAI CLI Usage Guide](../usage-guide.md).
 
-A workflow is a YAML file at `workflows/<name>.yaml` in the team repo. It runs command and read-only prompt steps, each after the steps it needs. [Advanced workflows](workflow-advanced.md) covers parallel steps, what an end does to steps that still run, and the full expression language.
+A workflow is a YAML file at `workflows/<name>.yaml` in the team repo. It runs command and read-only prompt steps, each after the steps it needs. [Advanced workflows](workflow-advanced.md) covers parallel steps, loops, `for_each`, what an end does to steps that still run, and the full expression language.
 
 ```yaml
 schemaVersion: v1alpha1

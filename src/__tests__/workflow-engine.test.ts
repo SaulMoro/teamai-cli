@@ -10,7 +10,7 @@ import { runLocalDriver } from '../workflow/local-driver.js';
 import { outputMismatch } from '../workflow/output.js';
 import { pendingRecords, type WorkflowRunRecord } from '../workflow/records.js';
 import { readRun, runFilePath, runLockPath, writeRun } from '../workflow/store.js';
-import type { DriverIdentity } from '../workflow/types.js';
+import type { DriverIdentity, RunState } from '../workflow/types.js';
 
 const dirs: string[] = [];
 
@@ -1160,7 +1160,7 @@ describe('file sub-workflows', () => {
     fs.writeFileSync(path.join(workflows, 'check.yaml'), CHECK);
     await syncWorkflowDefinitions(fixture.config);
     const restoreShip = saveCachedCopy(fixture.config, 'ship');
-    fs.writeFileSync(path.join(workflows, 'check.yaml'), `${CHECK}    for_each: [1]\n`);
+    fs.writeFileSync(path.join(workflows, 'check.yaml'), `${CHECK}    timeout: 10m\n`);
     await syncWorkflowDefinitions(fixture.config);
     restoreShip();
 
@@ -2068,13 +2068,15 @@ describe('parallel leases', () => {
       leases.set(lease.step, lease);
     }
     for (const step of ['w.c1', 'c2', 'c3']) {
-      expect(await reportAttempt(config, runId, { ...leases.get(step)!, outcome: 'success', driver: driverA })).toMatchObject({ data: { accepted: true } });
+      expect(await reportAttempt(config, runId, { ...leases.get(step)!, outcome: 'success', driver: driverA })).toMatchObject(
+        step === 'w.c1' ? { data: { accepted: true } } : { error: { code: 'lease_cancelled' } },
+      );
     }
 
     expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { done: { run: runId, outcome: 'succeeded', end: 'a' } } });
     expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([
       expect.objectContaining({ id: 'w', status: 'succeeded', settledAt: 2 }),
-      expect.objectContaining({ id: 'c2', status: 'succeeded', settledAt: 3 }),
+      expect.objectContaining({ id: 'c2', status: 'cancelled', settledAt: 2 }),
     ]) });
   });
 
@@ -2144,7 +2146,7 @@ describe('parallel leases', () => {
     expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { done: { outcome: 'succeeded', end: 'early' } } });
     expect(await readRun(config, runId)).toMatchObject({ steps: [
       { id: 'check', settledAt: 2 },
-      { id: 'other', settledAt: 3 },
+      { id: 'other', status: 'cancelled', settledAt: 2 },
       { id: 'handle', status: 'succeeded', settledAt: 2 },
     ] });
   });
@@ -2322,6 +2324,285 @@ describe('parallel leases', () => {
   });
 });
 
+describe('causal settlement order', () => {
+  it.each(['workflow', 'for_each'])('checks an end-only condition after a %s step settles', async (action) => {
+    const build = action === 'workflow'
+      ? '    workflow:\n      steps:\n        - id: run\n          command: echo build\n'
+      : '    for_each: inputs.items\n    command: echo build\n';
+    const body = graph(`  - id: build
+${build}  - id: stop
+    needs: [build]
+    if: steps.build.outcome == 'failed'
+    end: broke
+  - id: after
+    needs: [build]
+    command: echo after
+`, 'ends: { broke: failed }\ninputs: { items: [number] }\n');
+    const { config } = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), body);
+    expect((await syncWorkflowDefinitions(config)).invalid).toEqual([]);
+    const started = await startRun(config, 'build', { items: [1] });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    const built = leaseIn(await leaseNext(config, runId, driverA));
+    expect(built.step).toBe(action === 'workflow' ? 'build.run' : 'build[0]');
+    await reportAttempt(config, runId, { ...built, outcome: 'success', driver: driverA });
+    const after = leaseIn(await leaseNext(config, runId, driverA));
+    expect(after.step).toBe('after');
+    expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([
+      expect.objectContaining({ id: 'stop', status: 'skipped' }),
+    ]) });
+    await reportAttempt(config, runId, { ...after, outcome: 'success', driver: driverA });
+    expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+  });
+
+  it('stamps a capped item with the report that freed its slot', async () => {
+    const build = workflow('build', `  - id: plan
+    command: echo plan
+  - id: build
+    needs: [plan]
+    for_each: { items: steps.plan.outputs.items, max_parallel: 1 }
+    workflow: child
+    with: { task: "{{ item.task }}" }
+`);
+    const child = workflow('child', '  - id: run\n    command: echo child\n', 'inputs: { task: string }\n');
+    const { config, runId } = await startTree({ build, child }, 'build');
+    const plan = leaseIn(await leaseNext(config, runId, driverA));
+    await reportAttempt(config, runId, { ...plan, outcome: 'success', outputs: { items: [{ task: 'valid' }, { task: 1 }] }, driver: driverA });
+    const first = leaseIn(await leaseNext(config, runId, driverA));
+    expect(first.step).toBe('build[0].run');
+    await reportAttempt(config, runId, { ...first, outcome: 'success', driver: driverA });
+    expect(await leaseNext(config, runId, driverA, { canTakeLease: false })).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([
+      expect.objectContaining({ id: 'build[1]', status: 'failed', settledAt: 3, failure: expect.objectContaining({ code: 'invalid_inputs' }) }),
+    ]) });
+  });
+
+  it('keeps downstream reports identical when next reconciles a nested end between reports', async () => {
+    const run = async (between: boolean) => {
+      const { config, runId } = await startBuild(graph(`  - id: inner
+    workflow:
+      ends: { stop: succeeded }
+      outputs: { review: steps.review.outputs.v, fix: steps.fix.outcome }
+      steps:
+        - id: review
+          command: echo review
+        - id: fix
+          needs: [review]
+          command: echo fix
+          loop: { back_to: review, max_iterations: 3 }
+        - id: guard
+          needs: []
+          command: echo guard
+          end: stop
+  - id: after
+    needs: [inner]
+    command: echo after
+    env: { VALUE: "{{ steps.inner.outputs }}" }
+`));
+      const review = leaseIn(await leaseNext(config, runId, driverA));
+      const guard = leaseIn(await leaseNext(config, runId, driverA, { running: [review.attempt] }));
+      await reportAttempt(config, runId, { ...review, outcome: 'success', outputs: { v: 'one' }, driver: driverA });
+      const fix = leaseIn(await leaseNext(config, runId, driverA, { running: [guard.attempt] }));
+      await reportAttempt(config, runId, { ...guard, outcome: 'success', driver: driverA });
+      if (between) await leaseNext(config, runId, driverA, { running: [fix.attempt], canTakeLease: false });
+      await reportAttempt(config, runId, { ...fix, outcome: 'success', driver: driverA });
+      const after = leaseIn(await leaseNext(config, runId, driverA));
+      await reportAttempt(config, runId, { ...after, outcome: 'success', driver: driverA });
+      expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const stored = await readRun(config, runId);
+      if (typeof stored !== 'object') throw new Error(`run ${stored}`);
+      const names = new Map([review, guard, fix, after].map((lease) => [lease.attempt, lease.step]));
+      return JSON.parse(JSON.stringify(stored.steps).replace(/a[0-9a-f]{8}/g, (attempt) => names.get(attempt) ?? attempt));
+    };
+    expect(await run(false)).toEqual(await run(true));
+  });
+
+  it.each([
+    ['invalid_items', '    for_each: steps.plan.outputs.items\n    command: echo build\n', { items: 1 }],
+    ['item_cycle', '    for_each: steps.plan.outputs.items\n    command: echo build\n', { items: [{ id: 'a', after: ['b'] }, { id: 'b', after: ['a'] }] }],
+    ['invalid_template', '    command: echo build\n    env: { TITLE: fixed }\n', {}],
+    ['invalid_inputs', '    workflow: child\n    with: { task: "{{ steps.plan.outputs.task }}" }\n', { task: 1 }],
+  ])('reconciles %s before a later end even without capacity for a lease', async (code, action, outputs) => {
+    const body = workflow('build', `  - id: plan
+    command: echo plan
+  - id: build
+    needs: [plan]
+${action}  - id: failed
+    needs: [build]
+    if: steps.build.outcome == 'failed'
+    end: failed
+  - id: fast
+    needs: []
+    command: echo fast
+    end: fast
+`, 'ends: { failed: failed, fast: succeeded }\n');
+    const child = workflow('child', '  - id: run\n    command: echo child\n', 'inputs: { task: string }\n');
+    const { config, runId } = await startTree({ build: body, child }, 'build');
+    if (code === 'invalid_template') {
+      const stored = await readRun(config, runId);
+      if (typeof stored !== 'object') throw new Error(`run ${stored}`);
+      stored.definition.steps[1]!.env = { TITLE: '{{ inputs.bad path }}' };
+      await writeRun(config, stored);
+    }
+    const plan = leaseIn(await leaseNext(config, runId, driverA));
+    const fast = leaseIn(await leaseNext(config, runId, driverA, { running: [plan.attempt] }));
+    await reportAttempt(config, runId, { ...plan, outcome: 'success', outputs, driver: driverA });
+    expect(await reportAttempt(config, runId, { ...fast, revision: fast.revision + 1, outcome: 'success', driver: driverB }))
+      .toMatchObject({ error: { code: 'lease_cancelled' } });
+    await reportAttempt(config, runId, { ...fast, outcome: 'success', driver: driverA });
+    expect(await leaseNext(config, runId, driverA, { running: [], canTakeLease: false })).toMatchObject({ data: { done: { outcome: 'failed', end: 'failed' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([
+      expect.objectContaining({ id: 'build', status: 'failed', settledAt: 2, failure: { code, message: expect.any(String) } }),
+      expect.objectContaining({ id: 'fast', status: 'cancelled', settledAt: 2 }),
+    ]) });
+    expect(await reportAttempt(config, runId, { ...fast, outcome: 'success', driver: driverA })).toMatchObject({ error: { code: 'lease_cancelled' } });
+  });
+
+  it('carries the loop report revision through a driverless exhausted pass', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: review
+    command: echo review
+  - id: fix
+    needs: [review]
+    command: echo fix
+    loop: { back_to: review, max_iterations: 1 }
+  - id: failed
+    needs: [fix]
+    if: steps.fix.outcome == 'failed'
+    end: failed
+  - id: fast
+    needs: []
+    command: echo fast
+    end: fast
+`, 'ends: { failed: failed, fast: succeeded }\n'));
+    const review = leaseIn(await leaseNext(config, runId, driverA));
+    const fast = leaseIn(await leaseNext(config, runId, driverA, { running: [review.attempt] }));
+    await reportAttempt(config, runId, { ...review, outcome: 'success', driver: driverA });
+    const fix = leaseIn(await leaseNext(config, runId, driverA, { running: [fast.attempt] }));
+    await reportAttempt(config, runId, { ...fix, outcome: 'success', driver: driverA });
+    const secondReview = leaseIn(await leaseNext(config, runId, driverA, { running: [fast.attempt] }));
+    await reportAttempt(config, runId, { ...secondReview, outcome: 'success', driver: driverA });
+    await reportAttempt(config, runId, { ...fast, outcome: 'success', driver: driverA });
+    expect(await leaseNext(config, runId, driverA, { running: [], canTakeLease: false })).toMatchObject({ data: { done: { outcome: 'failed', end: 'failed' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([
+      expect.objectContaining({ id: 'fix', status: 'failed', settledAt: 4, failure: expect.objectContaining({ code: 'loop_exhausted' }) }),
+      expect.objectContaining({ id: 'fast', status: 'cancelled', settledAt: 4 }),
+    ]) });
+  });
+
+  it.each([
+    {
+      name: 'an engine failure reaches an end before a later report',
+      body: graph(`  - id: plan
+    command: echo plan
+  - id: build
+    needs: [plan]
+    for_each: steps.plan.outputs.items
+    command: echo build
+  - id: stop
+    needs: [build]
+    if: steps.build.outcome == 'failed'
+    end: broke
+  - id: fast
+    needs: []
+    command: echo fast
+    end: won
+`, 'ends: { won: succeeded, broke: failed }\n'),
+      leases: ['plan', 'fast'],
+      reports: [
+        { step: 'plan', outcome: 'success', outputs: { items: 'not a list' } },
+        { step: 'fast', outcome: 'success' },
+      ],
+      done: { outcome: 'failed', end: 'broke' },
+    },
+    {
+      name: 'a late skip cannot reach an end before an earlier report',
+      body: graph(`  - id: a
+    command: echo a
+  - id: direct
+    needs: []
+    command: echo direct
+    end: direct
+  - id: b
+    needs: []
+    command: echo b
+  - id: skipped
+    needs: [b]
+    command: echo skip
+  - id: derived
+    needs: [a, skipped]
+    if: steps.skipped.outcome == 'skipped'
+    end: after_skip
+`, 'ends: { direct: succeeded, after_skip: failed }\n'),
+      leases: ['a', 'direct', 'b'],
+      reports: [
+        { step: 'a', outcome: 'success' },
+        { step: 'direct', outcome: 'success' },
+        { step: 'b', outcome: 'failed' },
+      ],
+      done: { outcome: 'succeeded', end: 'direct' },
+    },
+    {
+      name: 'a later loop report preserves the results before the end',
+      body: graph(`  - id: review
+    command: echo review
+  - id: fix
+    needs: [review]
+    command: echo fix
+    loop: { back_to: review, max_iterations: 3 }
+  - id: guard
+    needs: []
+    command: echo guard
+    end: stop
+`, 'ends: { stop: succeeded }\noutputs: { review: steps.review.outputs.v, fix: steps.fix.outcome }\n'),
+      leases: ['review', 'guard', 'fix'],
+      reports: [
+        { step: 'review', outcome: 'success', outputs: { v: 'one' } },
+        { step: 'guard', outcome: 'success' },
+        { step: 'fix', outcome: 'success' },
+      ],
+      done: { outcome: 'succeeded', end: 'stop' },
+    },
+  ] satisfies Array<{
+    name: string;
+    body: string;
+    leases: string[];
+    reports: Array<{ step: string; outcome: 'success' | 'failed'; outputs?: unknown }>;
+    done: { outcome: string; end: string };
+  }>)('gives the same done and stored steps with next between reports when $name', async ({ body, leases, reports, done }) => {
+    const run = async (between: boolean) => {
+      const { config, runId } = await startBuild(body);
+      const held = new Map<string, ReturnType<typeof leaseIn>>();
+      const running = () => [...held.values()].map((lease) => lease.attempt);
+      let reported = 0;
+      for (const step of leases) {
+        if (step === 'fix') {
+          const first = reports[reported++]!;
+          await reportAttempt(config, runId, { ...held.get(first.step)!, ...first, driver: driverA });
+        }
+        const next = leaseIn(await leaseNext(config, runId, driverA, { running: running() }));
+        expect(next.step).toBe(step);
+        held.set(step, next);
+      }
+      for (const report of reports.slice(reported)) {
+        await reportAttempt(config, runId, { ...held.get(report.step)!, ...report, driver: driverA });
+        if (between) await leaseNext(config, runId, driverA, { running: running(), canTakeLease: false });
+      }
+      const next = await leaseNext(config, runId, driverA, { running: running(), canTakeLease: false });
+      expect(next).toMatchObject({ data: { done } });
+      const stored = await readRun(config, runId);
+      if (typeof stored !== 'object') throw new Error(`run ${stored}`);
+      const normalize = (value: unknown) => JSON.parse(JSON.stringify(value).replaceAll(runId, '<run>').replace(/a[0-9a-f]{8}/g, (attempt) =>
+        [...held.values()].find((lease) => lease.attempt === attempt)?.step ?? attempt));
+      if ('error' in next) throw new Error(next.error.message);
+      return { done: normalize(next.data.done), steps: normalize(stored.steps) };
+    };
+    const interleaved = await run(true);
+    const batched = await run(false);
+    expect(batched).toEqual(interleaved);
+  });
+});
+
 describe('a run file written before loops and for_each', () => {
   // Written through `workflow next` and `report`: build succeeded, check ran an inline workflow
   // whose end-only step the engine settled, and ship was leased, then released.
@@ -2359,6 +2640,7 @@ interface LoopLease {
   attempt: string;
   revision: number;
   pass: number;
+  command?: string;
   prompt?: string;
   env?: Record<string, string>;
 }
@@ -2811,6 +3093,492 @@ describe('workflow loops', () => {
       },
       { id: 'attempt.try', status: 'succeeded', pass: 2 },
       { id: 'after', status: 'skipped' },
+    ] });
+  });
+});
+
+const FAN_PLAN = workflow('fan', `  - id: plan
+    command: node plan.js
+    output:
+      targets: [string]
+  - id: build
+    needs: [plan]
+    for_each: steps.plan.outputs.targets
+    command: node build.js
+    env:
+      TARGET: "{{ item }}"
+  - id: ship
+    needs: [build]
+    command: node ship.js
+`);
+
+const FAN_TASKS = workflow('fan', `  - id: plan
+    command: node plan.js
+  - id: build
+    needs: [plan]
+    for_each: steps.plan.outputs.tasks
+    command: node build.js
+    env:
+      TASK: "{{ item.id }}"
+  - id: ship
+    needs: [build]
+    command: node ship.js
+`);
+
+describe('for_each', () => {
+  it('keeps fan-out results in previous-pass reads and in every exposed pass', async () => {
+    const fan = workflow('fan', `  - id: plan
+    command: echo plan
+    env:
+      PRIOR: "{{ steps.build.results }}"
+      PASSES: "{{ steps.build.passes }}"
+  - id: build
+    needs: [plan]
+    for_each: steps.plan.outputs.targets
+    command: echo build
+    output: { ok: boolean }
+  - id: decide
+    needs: [build]
+    command: echo decide
+    loop: { back_to: plan, while: "length(steps.decide.passes) < 2", max_iterations: 2 }
+  - id: summary
+    needs: [decide]
+    command: echo summary
+    env:
+      PASSES: "{{ steps.build.passes }}"
+`);
+    const { config, runId } = await startTree({ fan }, 'fan');
+    const plans: Array<LoopLease['env']> = [];
+    let summary: LoopLease['env'];
+    const result = [{ item: 'a', outcome: 'success', outputs: { ok: true } }];
+    await driveLoop(config, runId, (lease) => {
+      if (lease.step === 'plan') plans.push(lease.env);
+      if (lease.step === 'summary') summary = lease.env;
+      return lease.step === 'plan' ? { outputs: { targets: ['a'] } }
+        : lease.step === 'build[0]' ? { outputs: { ok: true } } : {};
+    });
+    expect(plans).toEqual([
+      { PRIOR: '', PASSES: '[]' },
+      { PRIOR: JSON.stringify(result), PASSES: JSON.stringify([{ pass: 1, outcome: 'success', results: result }]) },
+    ]);
+    expect(JSON.parse(summary?.PASSES ?? 'null')).toEqual([
+      { pass: 1, outcome: 'success', results: result },
+      { pass: 2, outcome: 'success', results: result },
+    ]);
+  });
+
+  it('runs a command once per item, as build[0] and build[1] with the item in env, and keeps results in item order', async () => {
+    const fan = workflow('fan', `  - id: build
+    for_each: inputs.targets
+    command: node build.js
+    env:
+      TARGET: "{{ item }}"
+`, 'inputs:\n  targets: [string]\n');
+    const { config, runId } = await startTree({ fan }, 'fan', { targets: ['web', 'api'] });
+    const targets: Array<string | undefined> = [];
+
+    const { leased, done } = await driveLoop(config, runId, (lease) => {
+      targets.push(lease.env?.TARGET);
+      return {};
+    });
+
+    expect(leased).toEqual(['build[0]#1', 'build[1]#1']);
+    expect(targets).toEqual(['web', 'api']);
+    expect(done).toEqual({ run: runId, record: 'pending', outcome: 'succeeded' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'build', status: 'succeeded', results: [{ item: 'web', outcome: 'success' }, { item: 'api', outcome: 'success' }] },
+      { id: 'build[0]', status: 'succeeded', item: 'web' },
+      { id: 'build[1]', status: 'succeeded', item: 'api' },
+    ] });
+  });
+
+  it('leases item as written from a step without for_each, and fills it in a for_each step of the same workflow', async () => {
+    const fixture = testConfig();
+    const knowledge = fixture.config.repo.localPath;
+    fs.mkdirSync(path.join(knowledge, 'prompts'));
+    const quote = 'Quote {{ item }}, {{ item.name }}, {{ item[0] }} and {{ length(item.xs) }} from a playbook.';
+    fs.writeFileSync(path.join(knowledge, 'prompts', 'quote.md'), quote);
+    fs.writeFileSync(path.join(knowledge, 'workflows', 'fan.yaml'), workflow('fan', `  - id: explain
+    prompt: "Explain {{ item }}, {{ item.name }}, {{ item[0] }} and {{ length(item.xs) }} in a Jinja loop: {{ with.loop }}."
+    with:
+      loop: ["{{ item }}", "{{ length(item.xs) }}"]
+  - id: quote
+    needs: [explain]
+    prompt_file: prompts/quote.md
+  - id: play
+    needs: [quote]
+    command: ansible localhost -m debug -a 'msg={{ item }}'
+    env:
+      ITEM: "{{ item }}"
+      COUNT: "{{ length(item.xs) }}"
+  - id: build
+    needs: [play]
+    for_each: inputs.packages
+    prompt: "Build {{ item.dir }}."
+`, 'inputs:\n  packages: [{ dir: string }]\n'));
+    await syncWorkflowDefinitions(fixture.config);
+    const started = await startRun(fixture.config, 'fan', { packages: [{ dir: 'packages/core' }] });
+    if ('error' in started) throw new Error(started.error.message);
+    const leases: Array<Pick<LoopLease, 'step' | 'command' | 'prompt' | 'env'>> = [];
+
+    await driveLoop(fixture.config, String(started.data.run), ({ step, command, prompt, env }) => {
+      leases.push({ step, ...(command ? { command } : {}), ...(prompt ? { prompt } : {}), ...(env ? { env } : {}) });
+      return {};
+    });
+
+    expect(leases).toEqual([
+      { step: 'explain', prompt: 'Explain {{ item }}, {{ item.name }}, {{ item[0] }} and {{ length(item.xs) }} in a Jinja loop: ["{{ item }}","{{ length(item.xs) }}"].' },
+      { step: 'quote', prompt: quote },
+      { step: 'play', command: "ansible localhost -m debug -a 'msg={{ item }}'", env: { ITEM: '{{ item }}', COUNT: '{{ length(item.xs) }}' } },
+      { step: 'build[0]', prompt: 'Build packages/core.' },
+    ]);
+  });
+
+  it('checks each item against output, keeps its outputs in results, and a later step reads them by index', async () => {
+    const sized = workflow('sized', `  - id: build
+    for_each: inputs.targets
+    command: node build.js
+    output:
+      size: number
+  - id: report
+    needs: [build]
+    if: steps.build.results[1].outcome == 'failed'
+    command: node report.js
+    env:
+      FIRST: "{{ steps.build.results[0].outputs.size }}"
+`, 'inputs:\n  targets: [string]\n');
+    const { config, runId } = await startTree({ sized }, 'sized', { targets: ['web', 'api'] });
+    const env: Array<Record<string, string> | undefined> = [];
+
+    const { leased, done } = await driveLoop(config, runId, (lease) => {
+      env.push(lease.env);
+      return { outputs: { size: lease.step === 'build[0]' ? 3 : 'big' } };
+    });
+
+    expect(leased).toEqual(['build[0]#1', 'build[1]#1', 'report#1']);
+    expect(env.at(-1)).toEqual({ FIRST: '3' });
+    expect(done).toEqual({ run: runId, record: 'pending', outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'build', status: 'failed', results: [
+        { item: 'web', outcome: 'success', outputs: { size: 3 } },
+        { item: 'api', outcome: 'failed' },
+      ] },
+      { id: 'build[0]', status: 'succeeded', outputs: { size: 3 } },
+      { id: 'build[1]', status: 'failed', failure: { code: 'invalid_output', message: 'stdout JSON does not match output: output.size must be a number' } },
+      { id: 'report', status: 'succeeded' },
+    ] });
+  });
+
+  it('runs again only the items that failed, through a for_each that filters the results of an earlier step', async () => {
+    const retry = workflow('retry', `  - id: build
+    for_each: inputs.targets
+    command: node build.js
+    env:
+      TARGET: "{{ item }}"
+  - id: again
+    needs: [build]
+    if: steps.build.outcome == 'failed'
+    for_each: filter(steps.build.results, .outcome == 'failed')
+    command: node build.js
+    env:
+      TARGET: "{{ item.item }}"
+`, 'inputs:\n  targets: [string]\n');
+    const { config, runId } = await startTree({ retry }, 'retry', { targets: ['web', 'api', 'cli'] });
+    const targets: Array<string | undefined> = [];
+
+    const { leased } = await driveLoop(config, runId, (lease) => {
+      targets.push(lease.env?.TARGET);
+      return { outcome: lease.step === 'build[1]' ? 'failed' : 'success' };
+    });
+
+    expect(leased).toEqual(['build[0]#1', 'build[1]#1', 'build[2]#1', 'again[0]#1']);
+    expect(targets).toEqual(['web', 'api', 'cli', 'api']);
+    expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([
+      { id: 'again', status: 'succeeded', outcome: 'success', settledAt: 5, results: [{ item: { item: 'api', outcome: 'failed' }, outcome: 'success' }] },
+    ]) });
+  });
+
+  it('runs an inline workflow per item under ids such as build[2].verify, and its steps read the item', async () => {
+    const inline = workflow('inline', `  - id: build
+    for_each: inputs.targets
+    workflow:
+      outputs:
+        size: steps.verify.outputs.size
+      steps:
+        - id: compile
+          command: node compile.js
+          env:
+            TARGET: "{{ item.name }}"
+        - id: verify
+          needs: [compile]
+          if: item.check
+          command: node verify.js
+          env:
+            TARGET: "{{ item.name }}"
+          output:
+            size: number
+`, 'inputs:\n  targets: [{ name: string, check: boolean }]\n');
+    const targets = [{ name: 'web', check: true }, { name: 'api', check: false }, { name: 'cli', check: true }];
+    const { config, runId } = await startTree({ inline }, 'inline', { targets });
+    const leases: string[] = [];
+
+    const { leased, done } = await driveLoop(config, runId, (lease) => {
+      leases.push(`${lease.step}:${lease.env?.TARGET}`);
+      return lease.step.endsWith('verify') ? { outputs: { size: leases.length } } : {};
+    });
+
+    expect(leased).toEqual(['build[0].compile#1', 'build[0].verify#1', 'build[1].compile#1', 'build[2].compile#1', 'build[2].verify#1']);
+    expect(leases).toEqual(['build[0].compile:web', 'build[0].verify:web', 'build[1].compile:api', 'build[2].compile:cli', 'build[2].verify:cli']);
+    expect(done).toEqual({ run: runId, record: 'pending', outcome: 'succeeded' });
+    const run = await readRun(config, runId) as RunState;
+    expect(run.steps.map((step) => `${step.id}:${step.status}`)).toEqual([
+      'build:succeeded',
+      'build[0]:succeeded', 'build[0].compile:succeeded', 'build[0].verify:succeeded',
+      'build[1]:succeeded', 'build[1].compile:succeeded', 'build[1].verify:skipped',
+      'build[2]:succeeded', 'build[2].compile:succeeded', 'build[2].verify:succeeded',
+    ]);
+    expect(run.steps[0]).toMatchObject({ results: [
+      { item: targets[0], outcome: 'success', outputs: { size: 2 } },
+      { item: targets[1], outcome: 'success', outputs: { size: null } },
+      { item: targets[2], outcome: 'success', outputs: { size: 5 } },
+    ] });
+  });
+
+  it('passes a whole item to a workflow file through with, keeping its JSON type', async () => {
+    const ship = workflow('ship', `  - id: build
+    for_each: inputs.tasks
+    workflow: implement
+    with:
+      task: "{{ item }}"
+`, 'inputs:\n  tasks: [{ id: string, title: string }]\n');
+    const implement = workflow('implement', `  - id: work
+    command: node work.js
+    env:
+      TITLE: "{{ inputs.task.title }}"
+`, 'inputs:\n  task: { id: string, title: string }\n');
+    const tasks = [{ id: 'a', title: 'Parse' }, { id: 'b', title: 'Render' }];
+    const { config, runId } = await startTree({ ship, implement }, 'ship', { tasks });
+    const titles: Array<string | undefined> = [];
+
+    const { leased, done } = await driveLoop(config, runId, (lease) => {
+      titles.push(lease.env?.TITLE);
+      return {};
+    });
+
+    expect(leased).toEqual(['build[0].work#1', 'build[1].work#1']);
+    expect(titles).toEqual(['Parse', 'Render']);
+    expect(done).toEqual({ run: runId, record: 'pending', outcome: 'succeeded' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'build', status: 'succeeded' },
+      { id: 'build[0]', status: 'succeeded', item: tasks[0], inputs: { task: tasks[0] } },
+      { id: 'build[0].work', status: 'succeeded' },
+      { id: 'build[1]', status: 'succeeded', item: tasks[1], inputs: { task: tasks[1] } },
+      { id: 'build[1].work', status: 'succeeded' },
+    ] });
+  });
+
+  it('archives the items of a round when its workflow loops, and numbers the next round\'s items after them', async () => {
+    const rounds = workflow('rounds', `  - id: build
+    for_each: inputs.targets
+    command: node build.js
+    output:
+      round: number
+  - id: decide
+    needs: [build]
+    command: node decide.js
+    output:
+      again: boolean
+`, 'inputs:\n  targets: [string]\nloop: { while: steps.decide.outputs.again, max_iterations: 2 }\n');
+    const { config, runId } = await startTree({ rounds }, 'rounds', { targets: ['web', 'api'] });
+
+    const { leased, done } = await driveLoop(config, runId, (lease, earlier) => (lease.step === 'decide'
+      ? { outputs: { again: earlier === 0 } }
+      : { outputs: { round: earlier + 1 } }));
+
+    expect(leased).toEqual(['build[0]#1', 'build[1]#1', 'decide#1', 'build[0]#2', 'build[1]#2', 'decide#2']);
+    expect(done).toEqual({ run: runId, record: 'pending', outcome: 'succeeded' });
+    const run = await readRun(config, runId) as RunState;
+    expect(run.steps).toMatchObject([
+      { id: 'build', pass: 2, results: [{ item: 'web', outputs: { round: 2 } }, { item: 'api', outputs: { round: 2 } }], passes: [
+        { pass: 1, outcome: 'success', results: [{ item: 'web', outcome: 'success', outputs: { round: 1 } }, { item: 'api', outcome: 'success', outputs: { round: 1 } }] },
+      ] },
+      { id: 'build[0]', pass: 2, item: 'web', outputs: { round: 2 } },
+      { id: 'build[1]', pass: 2, item: 'api', outputs: { round: 2 } },
+      { id: 'decide', pass: 2 },
+    ]);
+    expect(run.archive).toEqual([
+      expect.objectContaining({ step: 'build[0]', pass: 1, outcome: 'success', outputs: { round: 1 } }),
+      expect.objectContaining({ step: 'build[1]', pass: 1, outcome: 'success', outputs: { round: 1 } }),
+    ]);
+  });
+
+  it('succeeds an empty fan-out with no results in the same next, and runs what needs it', async () => {
+    const { config, runId } = await startTree({ fan: FAN_PLAN }, 'fan');
+
+    const { leased, done } = await driveLoop(config, runId, (lease) => (lease.step === 'plan' ? { outputs: { targets: [] } } : {}));
+
+    expect(leased).toEqual(['plan#1', 'ship#1']);
+    expect(done).toEqual({ run: runId, record: 'pending', outcome: 'succeeded' });
+    expect((await readRun(config, runId) as RunState).steps).toEqual([
+      { id: 'plan', status: 'succeeded', outcome: 'success', attempt: expect.any(String), outputs: { targets: [] }, settledAt: 2 },
+      { id: 'build', status: 'succeeded', outcome: 'success', results: [], settledAt: 2 },
+      { id: 'ship', status: 'succeeded', outcome: 'success', attempt: expect.any(String), settledAt: 3 },
+    ]);
+  });
+
+  it('fails the step with invalid_items when for_each gives no list, and skips what needs it', async () => {
+    const { config, runId } = await startTree({ fan: FAN_PLAN.replace('    output:\n      targets: [string]\n', '') }, 'fan');
+
+    const { leased, done } = await driveLoop(config, runId, () => ({ outputs: { targets: 'web' } }));
+
+    expect(leased).toEqual(['plan#1']);
+    expect(done).toEqual({ run: runId, record: 'pending', outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'plan', status: 'succeeded' },
+      { id: 'build', status: 'failed', failure: { code: 'invalid_items', message: 'step "build" for_each gives a string, not a list of items' } },
+      { id: 'ship', status: 'skipped' },
+    ] });
+  });
+
+  it.each([
+    ['an unknown id', [{ id: 'a', after: [] }, { id: 'b', after: ['x'] }], 'step "build" item 1 runs after "x", which is not the id of an item'],
+    ['a duplicate id', [{ id: 'a' }, { id: 'b' }, { id: 'a' }], 'step "build" items 0 and 2 have the same id "a"'],
+    ['after that is not a list of ids', [{ id: 'a', after: 'b' }, { id: 'b' }], 'step "build" item 0 after must be a list of item ids'],
+  ])('fails the step with invalid_items for %s, before any item runs', async (_case, tasks, message) => {
+    const { config, runId } = await startTree({ fan: FAN_TASKS }, 'fan');
+
+    const { leased, done } = await driveLoop(config, runId, () => ({ outputs: { tasks } }));
+
+    expect(leased).toEqual(['plan#1']);
+    expect(done).toEqual({ run: runId, record: 'pending', outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'plan', status: 'succeeded' },
+      { id: 'build', status: 'failed', failure: { code: 'invalid_items', message } },
+      { id: 'ship', status: 'skipped' },
+    ] });
+  });
+
+  it('starts at most max_parallel items at once, and gives the next one to a driver that lists the ones it runs', async () => {
+    const capped = FAN_PLAN.replace('for_each: steps.plan.outputs.targets', 'for_each: { items: steps.plan.outputs.targets, max_parallel: 2 }');
+    const { config, runId } = await startTree({ fan: capped }, 'fan');
+    const plan = leaseIn(await leaseNext(config, runId, driverA));
+    await reportAttempt(config, runId, { ...plan, outcome: 'success', outputs: { targets: ['web', 'api', 'cli'] }, driver: driverA });
+
+    const web = leaseIn(await leaseNext(config, runId, driverA));
+    const api = leaseIn(await leaseNext(config, runId, driverA, { running: [web.attempt] }));
+    const full = await leaseNext(config, runId, driverA, { running: [web.attempt, api.attempt] });
+    await reportAttempt(config, runId, { ...web, outcome: 'success', driver: driverA });
+    const cli = await leaseNext(config, runId, driverA, { running: [api.attempt] });
+
+    expect([web.step, api.step]).toEqual(['build[0]', 'build[1]']);
+    expect(full).toEqual({ data: { wait: { reason: 'build[0] is leased' }, cancelled: [] } });
+    expect(cli).toMatchObject({ data: { lease: { step: 'build[2]', env: { TARGET: 'cli' } }, cancelled: [] } });
+  });
+
+  it('hands a restarted driver its item leases back with the same ids, attempts and env, one per call', async () => {
+    const { config, runId } = await startTree({ fan: FAN_PLAN }, 'fan');
+    const plan = leaseIn(await leaseNext(config, runId, driverA));
+    await reportAttempt(config, runId, { ...plan, outcome: 'success', outputs: { targets: ['web', 'api'] }, driver: driverA });
+    const web = await leaseNext(config, runId, driverA);
+    const api = await leaseNext(config, runId, driverA, { running: [leaseIn(web).attempt] });
+
+    const webAgain = await leaseNext(config, runId, driverA, { running: [] });
+    const apiAgain = await leaseNext(config, runId, driverA, { running: [leaseIn(webAgain).attempt] });
+
+    expect(webAgain).toEqual(web);
+    expect(apiAgain).toEqual(api);
+    expect(apiAgain).toMatchObject({ data: { lease: { step: 'build[1]', env: { TARGET: 'api' } } } });
+    await reportAttempt(config, runId, { ...leaseIn(webAgain), outcome: 'success', driver: driverA });
+    await reportAttempt(config, runId, { ...leaseIn(apiAgain), outcome: 'success', driver: driverA });
+    expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { lease: { step: 'ship' } } });
+  });
+
+  it('accepts the report of an item leased beside a sibling whose report came first', async () => {
+    const { config, runId } = await startTree({ fan: FAN_PLAN }, 'fan');
+    const plan = leaseIn(await leaseNext(config, runId, driverA));
+    await reportAttempt(config, runId, { ...plan, outcome: 'success', outputs: { targets: ['web', 'api'] }, driver: driverA });
+    const web = leaseIn(await leaseNext(config, runId, driverA));
+    const api = leaseIn(await leaseNext(config, runId, driverA, { running: [web.attempt] }));
+
+    const apiReport = await reportAttempt(config, runId, { ...api, outcome: 'success', driver: driverA });
+    const webReport = await reportAttempt(config, runId, { ...web, outcome: 'success', driver: driverA });
+
+    expect([web.revision, api.revision]).toEqual([2, 2]);
+    expect(apiReport).toMatchObject({ data: { accepted: true, revision: 3, step: { id: 'build[1]', status: 'succeeded' } } });
+    expect(webReport).toMatchObject({ data: { accepted: true, revision: 4, step: { id: 'build[0]', status: 'succeeded' } } });
+  });
+
+  it('keeps a sibling running when an item fails, and fails the step once every item settled', async () => {
+    const { config, runId } = await startTree({ fan: FAN_PLAN }, 'fan');
+    const plan = leaseIn(await leaseNext(config, runId, driverA));
+    await reportAttempt(config, runId, { ...plan, outcome: 'success', outputs: { targets: ['web', 'api'] }, driver: driverA });
+    const web = leaseIn(await leaseNext(config, runId, driverA));
+    const api = leaseIn(await leaseNext(config, runId, driverA, { running: [web.attempt] }));
+
+    await reportAttempt(config, runId, { ...web, outcome: 'failed', driver: driverA });
+    const meanwhile = await leaseNext(config, runId, driverA, { running: [api.attempt] });
+    const stored = await readRun(config, runId);
+    const reported = await reportAttempt(config, runId, { ...api, outcome: 'success', driver: driverA });
+    const done = await leaseNext(config, runId, driverA);
+
+    expect(meanwhile).toEqual({ data: { wait: { reason: 'build[1] is leased' }, cancelled: [] } });
+    expect(stored).toMatchObject({ steps: [
+      { id: 'plan' }, { id: 'build', status: 'running' }, { id: 'build[0]', status: 'failed' }, { id: 'build[1]', status: 'leased' }, { id: 'ship', status: 'pending' },
+    ] });
+    expect(reported).toMatchObject({ data: { accepted: true, step: { id: 'build[1]', status: 'succeeded' } } });
+    expect(done).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'plan' },
+      { id: 'build', status: 'failed', results: [{ item: 'web', outcome: 'failed' }, { item: 'api', outcome: 'success' }] },
+      { id: 'build[0]' }, { id: 'build[1]' },
+      { id: 'ship', status: 'skipped' },
+    ] });
+  });
+
+  it('starts an item only after the items its after names, and skips it when one of them failed or was skipped', async () => {
+    const { config, runId } = await startTree({ fan: FAN_TASKS }, 'fan');
+    const plan = leaseIn(await leaseNext(config, runId, driverA));
+    const tasks = [{ id: 'a' }, { id: 'b', after: ['a'] }, { id: 'c' }, { id: 'd', after: ['b'] }];
+    await reportAttempt(config, runId, { ...plan, outcome: 'success', outputs: { tasks }, driver: driverA });
+
+    const a = leaseIn(await leaseNext(config, runId, driverA));
+    const c = leaseIn(await leaseNext(config, runId, driverA, { running: [a.attempt] }));
+    const full = await leaseNext(config, runId, driverA, { running: [a.attempt, c.attempt] });
+    await reportAttempt(config, runId, { ...a, outcome: 'failed', driver: driverA });
+    await reportAttempt(config, runId, { ...c, outcome: 'success', driver: driverA });
+    const done = await leaseNext(config, runId, driverA);
+
+    expect([a.step, c.step]).toEqual(['build[0]', 'build[2]']);
+    expect(full).toMatchObject({ data: { wait: { reason: 'build[0] is leased' }, cancelled: [] } });
+    expect(done).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'plan', status: 'succeeded' },
+      { id: 'build', status: 'failed', results: [
+        { item: tasks[0], outcome: 'failed' },
+        { item: tasks[1], outcome: 'skipped' },
+        { item: tasks[2], outcome: 'success' },
+        { item: tasks[3], outcome: 'skipped' },
+      ] },
+      { id: 'build[0]', status: 'failed' },
+      { id: 'build[1]', status: 'skipped' },
+      { id: 'build[2]', status: 'succeeded' },
+      { id: 'build[3]', status: 'skipped' },
+      { id: 'ship', status: 'skipped' },
+    ] });
+  });
+
+  it('fails the step with item_cycle naming the cycle, before any item runs', async () => {
+    const { config, runId } = await startTree({ fan: FAN_TASKS }, 'fan');
+    const tasks = [{ id: 'd' }, { id: 'a', after: ['c'] }, { id: 'b', after: ['a'] }, { id: 'c', after: ['b'] }];
+
+    const { leased, done } = await driveLoop(config, runId, () => ({ outputs: { tasks } }));
+
+    expect(leased).toEqual(['plan#1']);
+    expect(done).toEqual({ run: runId, record: 'pending', outcome: 'failed' });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'plan', status: 'succeeded' },
+      { id: 'build', status: 'failed', failure: { code: 'item_cycle', message: 'step "build" has items that run after each other in a cycle: a -> c -> b -> a' } },
+      { id: 'ship', status: 'skipped' },
     ] });
   });
 });

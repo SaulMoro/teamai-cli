@@ -23,17 +23,22 @@ const report = {
   tokens: TokenUsageSchema.optional(),
 };
 
+export const OutcomeSchema = z.enum(['success', 'failed', 'skipped', 'cancelled']);
+/** The outcome an expression reads of a settled step. */
+export type VisibleOutcome = z.infer<typeof OutcomeSchema>;
+
 const ResultsSchema = z.array(z.object({
   item: z.unknown(),
-  outcome: z.enum(['success', 'failed', 'skipped', 'cancelled']),
+  outcome: OutcomeSchema,
   outputs: z.unknown().optional(),
 }));
+export type ItemResult = z.infer<typeof ResultsSchema>[number];
 
 /** One earlier pass of a step instance that a loop ran again. */
 export const StepPassSchema = z.object({
   pass: z.number().int(),
   attempt: z.string().optional(),
-  outcome: z.enum(['success', 'failed', 'skipped', 'cancelled']),
+  outcome: OutcomeSchema,
   outputs: z.unknown().optional(),
   end: z.string().optional(),
   results: ResultsSchema.optional(),
@@ -88,8 +93,8 @@ export const StepStateSchema = z.discriminatedUnion('status', [
     status: z.literal('succeeded'), outcome: z.literal('success').default('success'), ...settledFields, loopFinal: z.boolean().optional(),
   }),
   StepBaseSchema.extend({ status: z.literal('failed'), outcome: z.literal('failed').default('failed'), ...settledFields, failure: FailureSchema.optional() }),
-  StepBaseSchema.extend({ status: z.literal('skipped') }),
-  StepBaseSchema.extend({ status: z.literal('cancelled'), attempt: z.string().optional(), failure: FailureSchema }),
+  StepBaseSchema.extend({ status: z.literal('skipped'), settledAt: z.number().int().default(0) }),
+  StepBaseSchema.extend({ status: z.literal('cancelled'), settledAt: z.number().int().default(0), attempt: z.string().optional(), failure: FailureSchema }),
 ]);
 export type StepState = z.infer<typeof StepStateSchema>;
 type StepStatus = StepState['status'];
@@ -107,7 +112,7 @@ type Settlement<T extends StepState> = Omit<T, keyof StepBase | 'status' | 'outc
 
 const BASE_KEYS = Object.keys(StepBaseSchema.shape) as Array<keyof StepBase>;
 const SETTLED_KEYS = Object.keys(settledFields) as Array<keyof typeof settledFields>;
-const PASS_OUTCOMES = { succeeded: 'success', failed: 'failed', skipped: 'skipped', cancelled: 'cancelled' } as const;
+export const VISIBLE_OUTCOMES = { succeeded: 'success', failed: 'failed', skipped: 'skipped', cancelled: 'cancelled' } as const;
 
 /**
  * Replaces a step's fields in place with `next`, keeping the fields every step has, and returns it as its new variant.
@@ -120,8 +125,8 @@ function become<T extends StepState>(state: StepState, next: Omit<T, keyof StepB
   return Object.assign(fields, kept, next) as T;
 }
 
-export function skip(state: StepState): SkippedStep {
-  return become<SkippedStep>(state, { status: 'skipped' });
+export function skip(state: StepState, settledAt: number): SkippedStep {
+  return become<SkippedStep>(state, { status: 'skipped', settledAt });
 }
 
 /** A released lease returns the step to `pending` with nothing from the attempt. */
@@ -149,14 +154,14 @@ export function fail(state: StepState, settlement: Settlement<FailedStep>): Fail
 }
 
 /** A leased or running step stops before it settles. A leased one keeps its attempt, which can no longer be reported. */
-export function cancel(state: LeasedStep | RunningStep, failure: WorkflowFailure): CancelledStep {
-  return become<CancelledStep>(state, { status: 'cancelled', ...(state.status === 'leased' ? { attempt: state.attempt } : {}), failure });
+export function cancel(state: LeasedStep | RunningStep, failure: WorkflowFailure, settledAt: number): CancelledStep {
+  return become<CancelledStep>(state, { status: 'cancelled', settledAt, ...(state.status === 'leased' ? { attempt: state.attempt } : {}), failure });
 }
 
 /** The current pass of a settled step, as `passes` keeps it once a loop runs the step again; undefined while it has not settled. */
 export function passOf(state: StepState): StepPass | undefined {
   if (!settled(state)) return undefined;
-  const outcome = PASS_OUTCOMES[state.status as keyof typeof PASS_OUTCOMES];
+  const outcome = VISIBLE_OUTCOMES[state.status];
   return StepPassSchema.parse({ ...state, pass: state.pass ?? 1, outcome });
 }
 
@@ -217,7 +222,7 @@ export function stopped(step: StepState): boolean {
 }
 
 /** A step that will not run again in this pass, so steps that need or read it can go on. */
-export function settled(step: StepState | undefined): boolean {
+export function settled(step: StepState | undefined): step is Extract<StepState, { status: 'succeeded' | 'failed' | 'skipped' | 'cancelled' }> {
   if (!step) return false;
   switch (step.status) {
     case 'succeeded':
