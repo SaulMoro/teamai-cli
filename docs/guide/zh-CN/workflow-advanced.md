@@ -27,8 +27,8 @@ steps:
 
 | `driver` 之外的 `next` 字段 | 返回 |
 | --- | --- |
-| 无 | `{"data":{"lease":{"run":"ra780d018","step":"lint","attempt":"af143e3a7","revision":1,"command":"npm run lint"},"cancelled":[]}}` |
-| `"running":["af143e3a7"]` | `{"data":{"lease":{"run":"ra780d018","step":"test","attempt":"a0ce8107f","revision":1,"command":"npm test"},"cancelled":[]}}` |
+| 无 | `{"data":{"lease":{"run":"ra780d018","step":"lint","attempt":"af143e3a7","revision":1,"pass":1,"command":"npm run lint"},"cancelled":[]}}` |
+| `"running":["af143e3a7"]` | `{"data":{"lease":{"run":"ra780d018","step":"test","attempt":"a0ce8107f","revision":1,"pass":1,"command":"npm test"},"cancelled":[]}}` |
 | `"running":["af143e3a7","a0ce8107f"]` | `{"data":{"wait":{"reason":"lint is leased"},"cancelled":[]}}` |
 
 每次调用 `next` 都按顺序执行以下几步：
@@ -38,9 +38,9 @@ steps:
 3. 按文件顺序租出第一个就绪的步骤。子工作流的步骤位于运行它的那个步骤的位置。
 4. 每个就绪的步骤都已租出时，返回 `wait`，`reason` 指出第一个未结租约。
 
-不发送 `running` 的驱动每次调用都会拿回自己的未结租约，因此一次只运行一个步骤。`--driver local` 就是这样工作的。
+不发送 `running` 的驱动每次调用都会拿回自己的未结租约，因此一次只运行一个步骤。
 
-`"canTakeLease":false` 执行到第 2 步就停止。返回的是 `done`、一个 `running` 没有列出的未结租约，或 `wait`。没有任何租约时，`wait` 的 reason 是 `canTakeLease is false`。驱动没有空位运行新步骤时，可以用它来得知是否已到达结局。
+`"canTakeLease":false` 执行到第 2 步就停止。返回的是 `done`、一个 `running` 没有列出的未结租约，或 `wait`。没有任何租约时，`wait` 的 reason 是 `canTakeLease is false`。驱动没有空位运行新步骤时，可以用它来得知是否已到达结局。这个 `wait` 并不表示没有剩余的步骤可运行，所以驱动有空位后要再次调用 `next`。第 2 步仍可能交还一个驱动没有空位运行的未结租约，所以要为驱动尚未启动的租约维护一个队列。
 
 `next` 的每个 `data` 返回都带 `cancelled`。它列出 `running` 中已经不再是本驱动未结租约的 attempt。请停止这些进程。`error` 返回不带 `cancelled`。
 
@@ -51,6 +51,27 @@ steps:
 ```text
 {"error":{"code":"stale_revision","message":"Revision 2 is stale; attempt ae75cb049 was leased at 1"}}
 ```
+
+### 并行运行本地命令
+
+`--driver local` 最多同时运行 `workflows.max_parallel` 个命令步骤。在本地配置中设置它。默认值是 1，没有对应的命令行参数。
+
+```yaml
+workflows:
+  max_parallel: 4
+```
+
+提示词步骤总是单独运行。驱动等所有命令都退出后才启动它，它结束前不会启动任何命令。只读检查会比较提示词运行前后的整个工作树，所以提示词运行期间修改文件的命令会让它失败。
+
+`max_parallel` 大于 1 时：
+
+- 命令共用工作树。两个命令写同一个文件时可能互相覆盖。
+- 每个命令都在没有终端的情况下运行，因此无法读取你的输入。
+- 收到 Ctrl-C，或 SIGTERM、SIGQUIT、SIGHUP 时，teamai 停止所有命令，等它们退出，然后以该信号退出。
+
+为 1 时，驱动一次运行一个步骤，命令在你的终端里运行，Ctrl-C 会直接到达它。
+
+结局取消一个正在运行的命令时，驱动向它发送 SIGTERM，5 秒后如果它仍在运行，再发送 SIGKILL。它在退出前已不计入 `max_parallel`。
 
 ## 到达结局时取消仍未结束的步骤
 
@@ -137,6 +158,208 @@ steps:
 
 如果 `rewrite` 先上报成功，`patch` 随后上报成功，下一次 `next` 返回 `{"data":{"done":{"run":"ra0ca39d4","outcome":"succeeded","end":"rewritten"},"cancelled":[]}}`。驱动何时调用 `next` 不会改变生效的结局。
 
+## 回到前面的步骤再运行
+
+带 `loop` 的步骤成功后会再次运行，连同它前面直到 `back_to` 的步骤一起。这些步骤是循环的范围：`back_to`、带循环的步骤，以及两者之间的每个步骤。一个步骤依赖 `back_to`，而带循环的步骤又依赖它，无论直接依赖还是通过依赖的依赖，它就位于两者之间。
+
+```yaml
+schemaVersion: v1alpha1
+name: loop-review-and-fix
+description: Review the branch and fix what the review finds, up to three times.
+outputs:
+  reviews: steps.review.passes
+steps:
+  - id: review
+    prompt: Review the changes on this branch.
+    output:
+      verdict: pass | fix
+      findings: [string]
+  - id: fix
+    needs: [review]
+    if: steps.review.outputs.verdict == 'fix'
+    command: ./scripts/fix.sh
+    env:
+      FINDINGS: "{{ steps.review.outputs.findings }}"
+    loop: { back_to: review, max_iterations: 3 }
+```
+
+`loop` 有以下字段：
+
+- `back_to` 是范围的第一个步骤。它是带循环的步骤本身，或该步骤直接或间接依赖的步骤。
+- `max_iterations` 是带循环的步骤最多运行的次数，是从 1 开始的整数。
+- `while` 可选。它是一个表达式，带循环的步骤每次成功后求值。
+
+带循环的步骤成功且 `while` 为假时，循环结束。否则范围从 `back_to` 起再次运行。带循环的步骤被跳过或失败时，循环也会结束。上例中，审查通过后 `fix` 被跳过，于是循环结束，运行成功。
+
+`max_iterations` 限制带循环的步骤：
+
+- 有 `while` 时，如果最后一次运行后 `while` 仍为真，该步骤以 `loop_exhausted` 失败。
+- 没有 `while` 时，范围会再运行一次。如果该步骤的 `if` 让它超出上限运行，它以 `loop_exhausted` 失败。上例中，第三次修复之后会运行第四次审查。审查通过时 `fix` 被跳过，运行成功。否则 `fix` 以 `loop_exhausted` 失败。
+
+以 `loop_exhausted` 失败的步骤保留它最后一次运行的输出。
+
+范围外依赖或读取范围内步骤的步骤，会等到循环结束。在此之前它既不会被跳过，也不会运行。这里 `done` 只依赖 `e2e`，但仍要等 `fix` 循环：
+
+```yaml
+schemaVersion: v1alpha1
+name: loop-implement-task
+description: Implement a task, then fix it until the end-to-end tests pass, up to three times.
+ends: { done: succeeded, stuck: failed }
+steps:
+  - id: implement
+    command: ./scripts/implement.sh
+  - id: e2e
+    needs: [implement]
+    command: npm run test:e2e
+  - id: fix
+    needs: [e2e]
+    if: steps.e2e.outcome == 'failed'
+    command: ./scripts/fix-e2e.sh
+    loop: { back_to: e2e, max_iterations: 3 }
+  - id: done
+    needs: [e2e]
+    if: steps.e2e.outcome == 'success'
+    end: done
+  - id: give-up
+    needs: [fix]
+    if: steps.fix.outcome == 'failed'
+    end: stuck
+```
+
+使用 `--driver local` 时，如果 `e2e` 在一次修复后通过，运行结束：
+
+```text
+{"data":{"done":{"run":"re4b12bbc","outcome":"succeeded","end":"done"},"cancelled":[]}}
+```
+
+如果三次修复后 `e2e` 仍然失败，`fix` 不会运行第四次，而是以 `loop_exhausted` 失败，`give-up` 到达 `stuck`：
+
+```text
+{"data":{"done":{"run":"r3319969c","outcome":"failed","end":"stuck"},"cancelled":[]}}
+```
+
+### 读取每一个 pass
+
+步骤的每次运行是一个 pass，从 1 开始编号。租约带有它的 `pass`。在 `loop-implement-task` 的一次运行中，`e2e` 的第二个租约是：
+
+```text
+{"data":{"lease":{"run":"rd50c3422","step":"e2e","attempt":"a54df2231","revision":4,"pass":2,"command":"npm run test:e2e"},"cancelled":[]}}
+```
+
+`steps.<id>.outcome`、`steps.<id>.end` 和 `steps.<id>.outputs` 读取最新的 pass。`steps.<id>.passes` 列出该步骤的每个 pass，当前 pass 完成后也包括在内。每个元素都有 `pass` 和 `outcome`，该 pass 有 `outputs` 和 `end` 时也带上它们。在 `loop-review-and-fix` 中，工作流输出 `reviews` 返回每一次审查。
+
+步骤可以读取它所在范围内后面的步骤，即直接或间接依赖它的步骤。这种读取得到后面那个步骤的上一个 pass，在第 1 个 pass 上为 `null`，并且不会等待它。在这种读取中，`passes` 只列出之前的 pass。这里 `plan` 读取上一次决定的备注：
+
+```yaml
+schemaVersion: v1alpha1
+name: loop-plan-change
+description: Plan a change, and plan again while the review asks for a revision.
+inputs: { issue: number }
+ends: { planned: succeeded, dropped: succeeded }
+steps:
+  - id: plan
+    prompt: "Plan a fix for issue #{{ inputs.issue }}. Address this note on the last plan, if there is one: {{ steps.decide.outputs.note }}"
+    output:
+      summary: string
+  - id: decide
+    needs: [plan]
+    prompt: "Decide whether to build, revise, or drop this plan: {{ steps.plan.outputs.summary }}"
+    output:
+      verdict: build | revise | drop
+      note: string
+    loop: { back_to: plan, while: "steps.decide.outputs.verdict == 'revise'", max_iterations: 3 }
+  - id: build
+    needs: [decide]
+    if: steps.decide.outputs.verdict == 'build'
+    end: planned
+  - id: drop
+    needs: [decide]
+    if: steps.decide.outputs.verdict == 'drop'
+    end: dropped
+```
+
+在第 1 个 pass 上，`{{ steps.decide.outputs.note }}` 是空文本。在第 2 个 pass 上，它是 `decide` 在第 1 个 pass 返回的备注。
+
+### pull 拒绝的循环
+
+以下情况下，`teamai pull` 拒绝步骤循环：
+
+- `back_to` 既不是带循环的步骤，也不是它直接或间接依赖的步骤
+- 带循环的步骤还有 `end`
+- 它的范围与同一工作流中另一个循环的范围有共同的步骤
+- 它所在的工作流自身有 `loop`
+- 它范围内的某个步骤有 `break`
+- 多个循环通过依赖或读取循环内步骤的步骤互相等待，形成环
+
+此时该文件没有可运行版本，即使之前有有效版本也一样。循环只能通过子工作流嵌套，子工作流可以是文件，也可以内联。例如，在 `loop-implement-task` 中给 `e2e` 再加一个循环，它与 `fix` 循环共用 `e2e`：
+
+```yaml
+  - id: e2e
+    needs: [implement]
+    command: npm run test:e2e
+    loop: { back_to: implement, max_iterations: 2 }
+```
+
+`teamai pull` 报告：
+
+```text
+⚠ [workflows] workflows/loop-implement-task.yaml:16: field "steps[2].loop": step "fix" loop runs "e2e" again, which the loop of step "e2e" also runs; loops in one workflow share no step, so put the inner one in a sub-workflow
+⚠ [workflows] workflows/loop-implement-task.yaml has no runnable version
+```
+
+## 整个工作流再次运行，并用 `break` 停止
+
+带 `loop` 的工作流一轮接一轮地重新运行它的所有步骤。它的 `loop` 有 `max_iterations`（最多运行的轮数）和可选的 `while`。它没有 `back_to`。内联工作流也可以有 `loop`。
+
+```yaml
+schemaVersion: v1alpha1
+name: loop-wait-for-ci
+description: Check CI every minute until it passes or fails, for at most 30 minutes.
+ends: { red: failed }
+loop: { max_iterations: 30 }
+steps:
+  - id: check
+    command: ./scripts/ci-state.sh
+    output:
+      state: pending | passed | failed
+    break: steps.check.outputs.state == 'passed'
+  - id: red
+    needs: [check]
+    if: steps.check.outputs.state == 'failed'
+    end: red
+  - id: wait
+    needs: [check]
+    if: steps.check.outputs.state == 'pending'
+    command: sleep 60
+```
+
+带 `break` 的步骤成功时求值 `break`。值为真时，该步骤所在的工作流以成功结束，它的循环也停止。和结局一样，它会跳过尚未运行的步骤，并取消未结租约。`break` 和结局按 [先到达的结局生效](#先到达的结局生效) 的顺序竞争。没有 `loop` 的工作流也可以用 `break`。
+
+每一轮运行到它到达结局或 `break`，或没有可运行的步骤为止：
+
+- 结局停止循环，工作流取该结局的 outcome。上例中，`red` 让它以 `failed` 停止。
+- `break` 让循环以成功停止。上例中，那一轮的 `wait` 被跳过。
+- 否则 teamai 求值 `while`。为假时，工作流以这一轮的 outcome 和输出结束。为真，或没有 `while` 时，每个步骤都在下一轮再次运行。
+- 运行 `max_iterations` 轮之后，工作流以 `loop_exhausted` 失败，不再运行下一轮。
+
+仅有步骤失败不会停止循环。下一轮照常运行，工作流以最后一轮的 outcome 结束。要重试一个不稳定的步骤，可以写 `loop: { while: "steps.e2e.outcome == 'failed'", max_iterations: 3 }`。
+
+没有 `while` 的工作流循环只能通过结局或 `break` 成功。轮数用完时，它以 `loop_exhausted` 失败。
+
+每一轮都是每个步骤的一个新 pass，所以 `steps.<id>.passes` 列出之前的各轮。`while` 只读取它所在工作流的输入和步骤。
+
+`loop-wait-for-ci` 用 `--driver local` 运行三次，结果如下：
+
+| CI 状态 | 返回 |
+| --- | --- |
+| `pending`、`pending`、`passed` | `{"data":{"done":{"run":"re0ac0c1e","outcome":"succeeded"},"cancelled":[]}}` |
+| `pending`、`failed` | `{"data":{"done":{"run":"r7d3d9b06","outcome":"failed","end":"red"},"cancelled":[]}}` |
+| `pending` 30 次 | `{"data":{"done":{"run":"r7ac9a988","outcome":"failed","failure":{"code":"loop_exhausted","message":"Loop of workflow \"loop-wait-for-ci\" is exhausted: it ran 30 rounds, its max_iterations"}},"cancelled":[]}}` |
+
+运行失败的原因不是某个结局时，`done` 带有 `failure`，例如顶层的 `loop_exhausted`。运行循环工作流的步骤也以同样的方式以 `loop_exhausted` 失败，并保留最后一轮的输出。
+
+带 `loop` 的工作流不能包含带 `loop` 的步骤。请把其中一个循环放进子工作流。
+
 ## 表达式参考
 
 `if` 是一个表达式。它能读取哪些步骤、哪些值为真，见 [工作流](workflow.md)。
@@ -166,6 +389,7 @@ steps:
 | --- | --- |
 | 输入 | `inputs.issue`、`inputs.issue.labels` |
 | 步骤的 outcome、结局或输出 | `steps.check.outcome`、`steps.check.end`、`steps.review.outputs.files` |
+| 步骤的每个 pass | `steps.review.passes`、`steps.review.passes[0].outputs.verdict`。见[读取每一个 pass](#读取每一个-pass)。 |
 | 字符串 | `'failed'`。使用单引号。字符串里的单引号写两次：`'it''s'`。 |
 | 数字 | `3`、`-1`、`1.5`。小数点前要有数字：写 `0.5`，不写 `.5`。 |
 | 布尔值或 null | `true`、`false`、`null` |
@@ -177,7 +401,7 @@ steps:
 
 `[n]` 读取数组的第 `n` 个元素，从 0 开始计数：`steps.review.outputs.files[0].path`、`inputs.tags[1]` 或 `steps.grid.outputs.rows[1][0]`。超出末尾的下标，或对非数组值使用的下标，读作 `null`。
 
-下标是从 0 开始的整数。`[-1]`、`[01]` 和 `[inputs.n]` 无法解析。下标读取 `inputs` 或 `outputs` 里的数组。它不能跟在步骤 id、`outcome` 或 `end` 后面，所以 `steps.build[2].outcome` 无法解析。
+下标是从 0 开始的整数。`[-1]`、`[01]` 和 `[inputs.n]` 无法解析。下标读取 `inputs`、`outputs` 或 `passes` 里的数组。它不能跟在步骤 id、`outcome` 或 `end` 后面，所以 `steps.build[2].outcome` 无法解析。
 
 ### 运算符和优先级
 

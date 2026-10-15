@@ -27,8 +27,8 @@ Each call below sends `"driver":{"kind":"script","machine":"host","workspace":"/
 
 | `next` fields besides `driver` | Answer |
 | --- | --- |
-| none | `{"data":{"lease":{"run":"ra780d018","step":"lint","attempt":"af143e3a7","revision":1,"command":"npm run lint"},"cancelled":[]}}` |
-| `"running":["af143e3a7"]` | `{"data":{"lease":{"run":"ra780d018","step":"test","attempt":"a0ce8107f","revision":1,"command":"npm test"},"cancelled":[]}}` |
+| none | `{"data":{"lease":{"run":"ra780d018","step":"lint","attempt":"af143e3a7","revision":1,"pass":1,"command":"npm run lint"},"cancelled":[]}}` |
+| `"running":["af143e3a7"]` | `{"data":{"lease":{"run":"ra780d018","step":"test","attempt":"a0ce8107f","revision":1,"pass":1,"command":"npm test"},"cancelled":[]}}` |
 | `"running":["af143e3a7","a0ce8107f"]` | `{"data":{"wait":{"reason":"lint is leased"},"cancelled":[]}}` |
 
 Each call to `next` does this, in order:
@@ -38,9 +38,9 @@ Each call to `next` does this, in order:
 3. It leases the first ready step in file order. The steps of a sub-workflow take the place of the step that runs it.
 4. When every ready step is leased, it answers `wait`, and `reason` names the first open lease.
 
-A driver that sends no `running` gets its open lease back on every call, so it runs one step at a time. `--driver local` works this way.
+A driver that sends no `running` gets its open lease back on every call, so it runs one step at a time.
 
-`"canTakeLease":false` stops after step 2. The answer is `done`, an open lease that `running` leaves out, or `wait`. When nothing is leased, the `wait` reason is `canTakeLease is false`. Use it to learn about an end while the driver has no room for another step.
+`"canTakeLease":false` stops after step 2. The answer is `done`, an open lease that `running` leaves out, or `wait`. When nothing is leased, the `wait` reason is `canTakeLease is false`. Use it to learn about an end while the driver has no room for another step. That `wait` does not mean that nothing is left to run, so call `next` again once the driver has room. Step 2 can still hand back an open lease that the driver has no room for, so keep a queue of the leases the driver has not started.
 
 Every `data` answer of `next` has `cancelled`. It lists the attempts in `running` that are no longer open leases of this driver. Stop those processes. An `error` answer has no `cancelled`.
 
@@ -51,6 +51,27 @@ A wrong `running` or `canTakeLease` returns `invalid_json` with `running must be
 ```text
 {"error":{"code":"stale_revision","message":"Revision 2 is stale; attempt ae75cb049 was leased at 1"}}
 ```
+
+### Run local commands in parallel
+
+`--driver local` runs up to `workflows.max_parallel` command steps at once. Set it in the local config. It defaults to 1, and no flag sets it.
+
+```yaml
+workflows:
+  max_parallel: 4
+```
+
+A prompt step always runs alone. The driver starts it once every command has exited, and starts no command until it finishes. The read-only check compares the whole working tree before and after the prompt, so a command that changes files while the prompt runs would fail it.
+
+With `max_parallel` above 1:
+
+- Commands share the working tree. Two commands that write the same file can overwrite each other.
+- Each command runs without a terminal, so it cannot read input from you.
+- On Ctrl-C, or on a SIGTERM, SIGQUIT, or SIGHUP, teamai stops every command, waits for them to exit, and exits with that signal.
+
+With 1, the driver runs one step at a time, and a command runs in your terminal, where Ctrl-C reaches it.
+
+When an end cancels a running command, the driver sends it SIGTERM, and SIGKILL 5 seconds later if it still runs. Until it exits, it no longer counts toward `max_parallel`.
 
 ## An end cancels the steps still open
 
@@ -137,6 +158,208 @@ steps:
 
 If `rewrite` reports success and then `patch` reports success, the next `next` answers `{"data":{"done":{"run":"ra0ca39d4","outcome":"succeeded","end":"rewritten"},"cancelled":[]}}`. The time at which the driver calls `next` does not change the winner.
 
+## Loop back to an earlier step
+
+A step with `loop` runs again after it succeeds, together with the steps before it up to `back_to`. Those steps are the loop's range: `back_to`, the step that has the loop, and every step between them. A step is between them when it needs `back_to` and the looping step needs it, directly or through their needs.
+
+```yaml
+schemaVersion: v1alpha1
+name: loop-review-and-fix
+description: Review the branch and fix what the review finds, up to three times.
+outputs:
+  reviews: steps.review.passes
+steps:
+  - id: review
+    prompt: Review the changes on this branch.
+    output:
+      verdict: pass | fix
+      findings: [string]
+  - id: fix
+    needs: [review]
+    if: steps.review.outputs.verdict == 'fix'
+    command: ./scripts/fix.sh
+    env:
+      FINDINGS: "{{ steps.review.outputs.findings }}"
+    loop: { back_to: review, max_iterations: 3 }
+```
+
+`loop` has these fields:
+
+- `back_to` is the first step of the range. It is the looping step itself or a step it needs, directly or through its needs.
+- `max_iterations` is the most times the looping step runs, a whole number from 1.
+- `while` is optional. It is an expression, evaluated each time the looping step succeeds.
+
+When the looping step succeeds and `while` is false, the loop ends. Otherwise the range runs again from `back_to`. The loop also ends when the looping step is skipped or fails. Above, `fix` is skipped once a review passes, so the loop ends and the run succeeds.
+
+`max_iterations` limits the looping step:
+
+- With `while`, the step fails `loop_exhausted` when `while` is still true after its last run.
+- Without `while`, the range runs once more, and the step fails `loop_exhausted` when its `if` lets it run past the limit. Above, a fourth review runs after the third fix. If it passes, `fix` is skipped and the run succeeds. Otherwise `fix` fails `loop_exhausted`.
+
+A `loop_exhausted` step keeps the outputs of its last run.
+
+A step outside the range that needs or reads a step inside it waits until the loop ends. It is not skipped or run before. Here `done` needs only `e2e`, and it still waits for the `fix` loop:
+
+```yaml
+schemaVersion: v1alpha1
+name: loop-implement-task
+description: Implement a task, then fix it until the end-to-end tests pass, up to three times.
+ends: { done: succeeded, stuck: failed }
+steps:
+  - id: implement
+    command: ./scripts/implement.sh
+  - id: e2e
+    needs: [implement]
+    command: npm run test:e2e
+  - id: fix
+    needs: [e2e]
+    if: steps.e2e.outcome == 'failed'
+    command: ./scripts/fix-e2e.sh
+    loop: { back_to: e2e, max_iterations: 3 }
+  - id: done
+    needs: [e2e]
+    if: steps.e2e.outcome == 'success'
+    end: done
+  - id: give-up
+    needs: [fix]
+    if: steps.fix.outcome == 'failed'
+    end: stuck
+```
+
+With `--driver local`, when `e2e` passes after one fix, the run ends:
+
+```text
+{"data":{"done":{"run":"re4b12bbc","outcome":"succeeded","end":"done"},"cancelled":[]}}
+```
+
+When `e2e` still fails after three fixes, `fix` fails `loop_exhausted` instead of running a fourth time, and `give-up` reaches `stuck`:
+
+```text
+{"data":{"done":{"run":"r3319969c","outcome":"failed","end":"stuck"},"cancelled":[]}}
+```
+
+### Read every pass
+
+Each run of a step is a pass, numbered from 1. A lease carries its `pass`. In a run of `loop-implement-task`, the second lease of `e2e` is:
+
+```text
+{"data":{"lease":{"run":"rd50c3422","step":"e2e","attempt":"a54df2231","revision":4,"pass":2,"command":"npm run test:e2e"},"cancelled":[]}}
+```
+
+`steps.<id>.outcome`, `steps.<id>.end`, and `steps.<id>.outputs` read the latest pass. `steps.<id>.passes` lists every pass of the step, the current one included once it has settled. Each element has `pass` and `outcome`, and `outputs` and `end` when that pass has them. In `loop-review-and-fix`, the workflow output `reviews` returns every review.
+
+A step can read a later step of its own range, one that needs it directly or through its needs. That read gets the later step's previous pass, `null` on pass 1, and does not wait for it. In that read, `passes` lists only the earlier passes. Here `plan` reads the note of the last decision:
+
+```yaml
+schemaVersion: v1alpha1
+name: loop-plan-change
+description: Plan a change, and plan again while the review asks for a revision.
+inputs: { issue: number }
+ends: { planned: succeeded, dropped: succeeded }
+steps:
+  - id: plan
+    prompt: "Plan a fix for issue #{{ inputs.issue }}. Address this note on the last plan, if there is one: {{ steps.decide.outputs.note }}"
+    output:
+      summary: string
+  - id: decide
+    needs: [plan]
+    prompt: "Decide whether to build, revise, or drop this plan: {{ steps.plan.outputs.summary }}"
+    output:
+      verdict: build | revise | drop
+      note: string
+    loop: { back_to: plan, while: "steps.decide.outputs.verdict == 'revise'", max_iterations: 3 }
+  - id: build
+    needs: [decide]
+    if: steps.decide.outputs.verdict == 'build'
+    end: planned
+  - id: drop
+    needs: [decide]
+    if: steps.decide.outputs.verdict == 'drop'
+    end: dropped
+```
+
+On pass 1, `{{ steps.decide.outputs.note }}` is empty text. On pass 2, it is the note that `decide` returned on pass 1.
+
+### Loops that pull rejects
+
+`teamai pull` rejects a step loop when:
+
+- `back_to` is not the looping step or a step it needs, directly or through its needs
+- the looping step also has `end`
+- its range shares a step with the range of another loop in the same workflow
+- its workflow has a `loop` of its own
+- a step in its range has `break`
+- loops wait for each other in a cycle, through the steps that need or read a step inside a loop
+
+Then the file has nothing to run, even when an older version was valid. Loops nest only through a sub-workflow, in a file or inline. For example, a second loop on `e2e` in `loop-implement-task` shares `e2e` with the `fix` loop:
+
+```yaml
+  - id: e2e
+    needs: [implement]
+    command: npm run test:e2e
+    loop: { back_to: implement, max_iterations: 2 }
+```
+
+`teamai pull` reports:
+
+```text
+⚠ [workflows] workflows/loop-implement-task.yaml:16: field "steps[2].loop": step "fix" loop runs "e2e" again, which the loop of step "e2e" also runs; loops in one workflow share no step, so put the inner one in a sub-workflow
+⚠ [workflows] workflows/loop-implement-task.yaml has no runnable version
+```
+
+## Run a whole workflow again, and stop it with `break`
+
+A workflow with `loop` runs all of its steps again, round after round. Its `loop` has `max_iterations`, the most rounds, and an optional `while`. It has no `back_to`. An inline workflow can have `loop` too.
+
+```yaml
+schemaVersion: v1alpha1
+name: loop-wait-for-ci
+description: Check CI every minute until it passes or fails, for at most 30 minutes.
+ends: { red: failed }
+loop: { max_iterations: 30 }
+steps:
+  - id: check
+    command: ./scripts/ci-state.sh
+    output:
+      state: pending | passed | failed
+    break: steps.check.outputs.state == 'passed'
+  - id: red
+    needs: [check]
+    if: steps.check.outputs.state == 'failed'
+    end: red
+  - id: wait
+    needs: [check]
+    if: steps.check.outputs.state == 'pending'
+    command: sleep 60
+```
+
+A step with `break` evaluates it when the step succeeds. When it is true, the step's workflow ends as success, and its loop stops. Like an end, it skips the steps that have not run and cancels the open leases. A `break` and an end compete by the order of [The end reached first wins](#the-end-reached-first-wins). A `break` works in a workflow without `loop` too.
+
+Each round runs until it reaches an end or a `break`, or has nothing left to run:
+
+- An end stops the loop, and the workflow takes that end's outcome. Above, `red` stops it as `failed`.
+- A `break` stops the loop as success. Above, `wait` is skipped in that round.
+- Otherwise teamai evaluates `while`. When it is false, the workflow ends with the outcome and outputs of that round. When it is true, or there is no `while`, every step runs again in the next round.
+- After `max_iterations` rounds, the workflow fails `loop_exhausted` instead of running another round.
+
+A failed step alone does not stop the loop. The next round runs, and the workflow ends with the outcome of its last round. To retry a flaky step, write `loop: { while: "steps.e2e.outcome == 'failed'", max_iterations: 3 }`.
+
+A workflow loop without `while` succeeds only through an end or a `break`. Running out of rounds fails it with `loop_exhausted`.
+
+Each round is a new pass of every step, so `steps.<id>.passes` lists the earlier rounds. A `while` reads only the inputs and the steps of its own workflow.
+
+Three runs of `loop-wait-for-ci` with `--driver local` end like this:
+
+| CI states | Answer |
+| --- | --- |
+| `pending`, `pending`, `passed` | `{"data":{"done":{"run":"re0ac0c1e","outcome":"succeeded"},"cancelled":[]}}` |
+| `pending`, `failed` | `{"data":{"done":{"run":"r7d3d9b06","outcome":"failed","end":"red"},"cancelled":[]}}` |
+| `pending` 30 times | `{"data":{"done":{"run":"r7ac9a988","outcome":"failed","failure":{"code":"loop_exhausted","message":"Loop of workflow \"loop-wait-for-ci\" is exhausted: it ran 30 rounds, its max_iterations"}},"cancelled":[]}}` |
+
+`done` carries `failure` when a run fails for a reason that no end names, such as a top-level `loop_exhausted`. A step that runs a looping workflow fails `loop_exhausted` the same way, and keeps the outputs of the last round.
+
+A workflow with `loop` cannot contain a step with `loop`. Put one of the two loops in a sub-workflow.
+
 ## Expression reference
 
 An `if` is an expression. The rules for which steps it can read, and for what counts as true, are in [Workflows](workflow.md).
@@ -166,6 +389,7 @@ steps:
 | --- | --- |
 | An input | `inputs.issue`, `inputs.issue.labels` |
 | A step's outcome, end, or output | `steps.check.outcome`, `steps.check.end`, `steps.review.outputs.files` |
+| Every pass of a step | `steps.review.passes`, `steps.review.passes[0].outputs.verdict`. See [Read every pass](#read-every-pass). |
 | A string | `'failed'`. Use single quotes. Write a quote inside a string twice: `'it''s'`. |
 | A number | `3`, `-1`, `1.5`. Write a digit before the decimal point: `0.5`, not `.5`. |
 | A boolean or null | `true`, `false`, `null` |
@@ -177,7 +401,7 @@ A missing value reads as `null`. A step that has not settled reads as `null` too
 
 `[n]` reads element `n` of an array, counting from 0: `steps.review.outputs.files[0].path`, `inputs.tags[1]`, or `steps.grid.outputs.rows[1][0]`. An index past the end, or an index into a value that is not an array, reads `null`.
 
-An index is a whole number from 0. `[-1]`, `[01]`, and `[inputs.n]` do not parse. An index reads an array inside `inputs` or `outputs`. It cannot follow a step id, `outcome`, or `end`, so `steps.build[2].outcome` does not parse.
+An index is a whole number from 0. `[-1]`, `[01]`, and `[inputs.n]` do not parse. An index reads an array inside `inputs`, `outputs`, or `passes`. It cannot follow a step id, `outcome`, or `end`, so `steps.build[2].outcome` does not parse.
 
 ### Operators and precedence
 
