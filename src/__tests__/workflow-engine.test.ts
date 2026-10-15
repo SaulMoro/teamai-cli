@@ -1968,6 +1968,127 @@ describe('parallel leases', () => {
     ] });
   });
 
+  it('checks a report against the revision of its own lease, not the run revision a sibling report made', async () => {
+    const { config, runId } = await startBuild(ROOTS);
+    const a = leaseIn(await leaseNext(config, runId, driverA));
+    const b = leaseIn(await leaseNext(config, runId, driverA, { running: [a.attempt] }));
+    await reportAttempt(config, runId, { ...a, outcome: 'success', driver: driverA });
+
+    const stale = await reportAttempt(config, runId, { ...b, revision: 2, outcome: 'success', driver: driverA });
+
+    expect(stale).toEqual({ error: { code: 'stale_revision', message: `Revision 2 is stale; attempt ${b.attempt} was leased at 1` } });
+    expect(await reportAttempt(config, runId, { ...b, outcome: 'success', driver: driverA })).toMatchObject({ data: { accepted: true, revision: 3 } });
+  });
+
+  const W = `  - id: w
+    needs: []
+    workflow:
+      steps:
+        - id: c1
+          command: node c1.js
+    end: a
+`;
+  const C2 = `  - id: c2
+    needs: []
+    command: node c2.js
+    end: b
+`;
+  const C3 = `  - id: c3
+    needs: []
+    command: node c3.js
+`;
+  it.each([
+    ['the workflow step is declared first', `${W}${C2}${C3}`],
+    ['the other end is declared first', `${C2}${W}${C3}`],
+  ])('applies the end reported first when three reports arrive with no next between them and %s', async (_order, steps) => {
+    const { config, runId } = await startBuild(graph(steps, 'ends:\n  a: succeeded\n  b: failed\n'));
+    const leases = new Map<string, { step: string; attempt: string; revision: number }>();
+    for (let i = 0; i < 3; i += 1) {
+      const lease = leaseIn(await leaseNext(config, runId, driverA, { running: [...leases.values()].map((item) => item.attempt) }));
+      leases.set(lease.step, lease);
+    }
+    for (const step of ['w.c1', 'c2', 'c3']) {
+      expect(await reportAttempt(config, runId, { ...leases.get(step)!, outcome: 'success', driver: driverA })).toMatchObject({ data: { accepted: true } });
+    }
+
+    expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { done: { run: runId, outcome: 'succeeded', end: 'a' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([
+      expect.objectContaining({ id: 'w', status: 'succeeded', settledAt: 2 }),
+      expect.objectContaining({ id: 'c2', status: 'succeeded', settledAt: 3 }),
+    ]) });
+  });
+
+  it('stamps a step it cannot render with when it became ready, not with when next ran', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: check
+    command: node check.js
+  - id: other
+    needs: []
+    command: node other.js
+  - id: label
+    needs: [check]
+    command: node label.js
+    env:
+      TITLE: fixed
+`));
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    run.definition.steps[2]!.env = { TITLE: '{{ inputs.a b }}' };
+    await writeRun(config, run);
+    const check = leaseIn(await leaseNext(config, runId, driverA));
+    const other = leaseIn(await leaseNext(config, runId, driverA, { running: [check.attempt] }));
+    await reportAttempt(config, runId, { ...check, outcome: 'success', driver: driverA });
+    await reportAttempt(config, runId, { ...other, outcome: 'success', driver: driverA });
+
+    expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'check', settledAt: 2 },
+      { id: 'other', settledAt: 3 },
+      { id: 'label', status: 'failed', settledAt: 2, failure: { code: 'invalid_template' } },
+    ] });
+  });
+
+  it('stamps an open lease it cannot render again with the revision it was leased at', async () => {
+    const { config, runId } = await startBuild(ROOTS);
+    const a = leaseIn(await leaseNext(config, runId, driverA));
+    const b = leaseIn(await leaseNext(config, runId, driverA, { running: [a.attempt] }));
+    await reportAttempt(config, runId, { ...b, outcome: 'success', driver: driverA });
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    run.definition.steps[0]!.env = { TITLE: '{{ inputs.a b }}' };
+    await writeRun(config, run);
+
+    expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'a', status: 'failed', settledAt: 1, failure: { code: 'invalid_template' } },
+      { id: 'b', settledAt: 2 },
+      { id: 'join', status: 'skipped' },
+    ] });
+  });
+
+  it('orders an end-only step by the report that reached it, not by when next settled it', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: check
+    command: node check.js
+  - id: other
+    needs: []
+    command: node other.js
+    end: late
+  - id: handle
+    needs: [check]
+    end: early
+`, 'ends:\n  early: succeeded\n  late: failed\n'));
+    const check = leaseIn(await leaseNext(config, runId, driverA));
+    const other = leaseIn(await leaseNext(config, runId, driverA, { running: [check.attempt] }));
+    await reportAttempt(config, runId, { ...check, outcome: 'success', driver: driverA });
+    await reportAttempt(config, runId, { ...other, outcome: 'success', driver: driverA });
+
+    expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { done: { outcome: 'succeeded', end: 'early' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'check', settledAt: 2 },
+      { id: 'other', settledAt: 3 },
+      { id: 'handle', status: 'succeeded', settledAt: 2 },
+    ] });
+  });
+
   it('waits while every ready step is leased and listed as running', async () => {
     const { config, runId } = await startBuild(ROOTS);
     const a = leaseIn(await leaseNext(config, runId, driverA));

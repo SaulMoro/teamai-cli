@@ -210,19 +210,31 @@ function leaseData(run: RunState, state: LeasedStep, definition: WorkflowStep, r
   } };
 }
 
-/** Fails a step the engine cannot hand out, so the rest of the graph keeps settling. Like a skip, it does not bump `revision`. */
-function failStep(run: RunState, step: StepState, failure: WorkflowFailure): void {
-  fail(step, { settledAt: run.revision, message: failure.message, failure });
+/**
+ * Fails a step the engine cannot hand out, so the rest of the graph keeps settling. Like a skip, it does not bump
+ * `revision`. `settledAt` is when the step became ready, so that time does not depend on when `next` ran.
+ */
+function failStep(step: StepState, failure: WorkflowFailure, settledAt: number): void {
+  fail(step, { settledAt, message: failure.message, failure });
 }
 
 /** The status of a run, or of a workflow inside it, once it has settled. */
 type FinalRunStatus = Exclude<RunStatus, 'running'>;
 
-/** How a workflow of the run settled: its outcome, the end it reached, and the outputs it returns. */
+/**
+ * How a workflow of the run settled: its outcome, the end it reached, and the outputs it returns. `settledAt` is
+ * when it settled: that of its winning end, or else the latest of its steps.
+ */
 interface WorkflowResult {
   outcome: FinalRunStatus;
   end?: string;
   outputs?: Record<string, unknown>;
+  settledAt: number;
+}
+
+/** The revision a step settled at, which orders the ends a workflow reaches; 0 for a step that has none, such as a skipped one. */
+function settledAtOf(step: StepState | undefined): number {
+  return step && 'settledAt' in step ? step.settledAt : 0;
 }
 
 /**
@@ -390,9 +402,9 @@ function startWorkflowStep(run: RunState, scope: Scope, states: StepState[], sta
 }
 
 /** A workflow step takes the outcome, the end, and the outputs of the workflow it ran. */
-function finishWorkflowStep(run: RunState, state: StepState, result: WorkflowResult): void {
+function finishWorkflowStep(state: StepState, result: WorkflowResult): void {
   const settlement = {
-    settledAt: run.revision,
+    settledAt: result.settledAt,
     ...(result.end !== undefined ? { end: result.end } : {}),
     ...(result.outputs !== undefined ? { outputs: result.outputs } : {}),
   };
@@ -419,6 +431,12 @@ function settleScope(run: RunState, scope: Scope, advancing: boolean): Settled {
   const states = statesIn(run, scope);
   const defined = new Map(scope.definition.steps.map((item) => [item.id, item]));
   const definitionOf = (state: StepState): WorkflowStep | undefined => defined.get(localId(scope, state));
+  const byId = new Map(states.map((state) => [localId(scope, state), state]));
+  // A step is ready when the last of the steps it needs and reads settles, which is when an end-only step is reached.
+  const reachedAt = (state: StepState): number => Math.max(
+    0,
+    ...[...definitionOf(state)?.needs ?? [], ...reads.reads.get(localId(scope, state)) ?? []].map((id) => settledAtOf(byId.get(id))),
+  );
   const childOf = (state: StepState): { definition: WorkflowStep; child: Scope } | { unreadable: string } => {
     const definition = definitionOf(state);
     if (!definition) return { unreadable: `Run ${run.id} has no definition for step "${state.id}"` };
@@ -432,7 +450,7 @@ function settleScope(run: RunState, scope: Scope, advancing: boolean): Settled {
     let changed = false;
     for (const state of states) {
       if (ready(state) && endsOnly(definitionOf(state))) {
-        succeed(state, { settledAt: run.revision });
+        succeed(state, { settledAt: reachedAt(state) });
         changed = true;
       } else if (state.status === 'running') {
         const located = childOf(state);
@@ -440,18 +458,25 @@ function settleScope(run: RunState, scope: Scope, advancing: boolean): Settled {
         const result = settleScope(run, located.child, false);
         if ('unreadable' in result) return result;
         if (!('outcome' in result)) continue;
-        finishWorkflowStep(run, state, result);
+        finishWorkflowStep(state, result);
         changed = true;
       }
     }
     if (changed) continue;
-    const reached = states.find((item) => item.status === 'succeeded' && definitionOf(item)?.end !== undefined);
+    // The end reached first wins, whatever order its step is declared in; a tie goes to the step declared first.
+    const reached = states
+      .filter((item) => item.status === 'succeeded' && definitionOf(item)?.end !== undefined)
+      .sort((left, right) => settledAtOf(left) - settledAtOf(right))[0];
     const end = reached ? definitionOf(reached)?.end : undefined;
     if (end !== undefined) {
       for (const item of states) if (item.status === 'pending') skip(item);
-      return { outcome: scope.definition.ends?.[end] ?? 'failed', end, outputs: workflowOutputs(scope, states, reads.outputs) };
+      return { outcome: scope.definition.ends?.[end] ?? 'failed', end, outputs: workflowOutputs(scope, states, reads.outputs), settledAt: settledAtOf(reached) };
     }
-    const finished = (): WorkflowResult => ({ outcome: states.some(stopped) ? 'failed' : 'succeeded', outputs: workflowOutputs(scope, states, reads.outputs) });
+    const finished = (): WorkflowResult => ({
+      outcome: states.some(stopped) ? 'failed' : 'succeeded',
+      outputs: workflowOutputs(scope, states, reads.outputs),
+      settledAt: Math.max(0, ...states.map(settledAtOf)),
+    });
     if (!advancing) return states.every(settled) ? finished() : { inProgress: true };
     for (const state of states) {
       if (state.status !== 'running' && !ready(state)) continue;
@@ -460,18 +485,18 @@ function settleScope(run: RunState, scope: Scope, advancing: boolean): Settled {
       if (definition.workflow === undefined) {
         const rendered = renderLease(scope, states, state, definition);
         if (!('code' in rendered)) return { lease: state, definition, rendered };
-        failStep(run, state, rendered);
+        failStep(state, rendered, reachedAt(state));
       } else {
         const located = childOf(state);
         if ('unreadable' in located) return located;
         if (state.status === 'pending') {
           const failure = startWorkflowStep(run, scope, states, state, definition, located.child);
-          if (failure) failStep(run, state, failure);
+          if (failure) failStep(state, failure, reachedAt(state));
         } else {
           const result = settleScope(run, located.child, true);
           if ('inProgress' in result) continue;
           if (!('outcome' in result)) return result;
-          finishWorkflowStep(run, state, result);
+          finishWorkflowStep(state, result);
         }
       }
       changed = true;
@@ -633,7 +658,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       if (!located) return { save: false, envelope: error('run_unreadable', `Run ${run.id} has no definition for step "${leased.id}"`) };
       const rendered = renderLease(located.scope, statesIn(run, located.scope), leased, located.step);
       if (!('code' in rendered)) return answer(leaseData(run, leased, located.step, rendered));
-      failStep(run, leased, rendered);
+      failStep(leased, rendered, leased.lease.revision);
     }
     if (options.canTakeLease === false) return wait();
     const result = settleScope(run, topScope(run), true);
@@ -748,12 +773,16 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
     if (run.settledAttempts.includes(report.attempt)) {
       return { save: false, envelope: error('repeated_report', `Attempt ${report.attempt} was already reported`) };
     }
-    if (report.revision !== run.revision) {
-      return { save: false, envelope: error('stale_revision', `Revision ${report.revision} is stale; the run is at ${run.revision}`) };
-    }
     const step = run.steps.find((item): item is LeasedStep => item.status === 'leased' && item.lease.attempt === report.attempt);
     if (!step) {
+      if (report.revision !== run.revision) {
+        return { save: false, envelope: error('stale_revision', `Revision ${report.revision} is stale; the run is at ${run.revision}`) };
+      }
       return { save: false, envelope: error('wrong_attempt', `Attempt ${report.attempt} is not the leased attempt`) };
+    }
+    // A lease is checked against the revision it was handed out at, so a report of a parallel lease does not make it stale.
+    if (report.revision !== step.lease.revision) {
+      return { save: false, envelope: error('stale_revision', `Revision ${report.revision} is stale; attempt ${report.attempt} was leased at ${step.lease.revision}`) };
     }
     if (!sameDriver(step.lease.driver, report.driver)) {
       return { save: false, envelope: error('wrong_driver', 'This lease belongs to a different driver') };
