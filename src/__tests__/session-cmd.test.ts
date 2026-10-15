@@ -340,6 +340,25 @@ describe('session pull --all', () => {
   });
 });
 
+describe('session pull', () => {
+  it.each([
+    ['pull --all', ['--all']],
+    ['pull', ['--cwd', '/run/alpha']],
+  ])('a second %s leaves _index.json byte-identical', async (_name, args) => {
+    seed('github.com/org/alpha', 'alice', 'a-1', 'payment', 'payment alpha');
+    seed('github.com/org/alpha', 'bob', 'b-1', 'refunds', 'refund notes');
+    mocks.remotes['/run/alpha'] = 'https://github.com/org/alpha.git';
+    const idxPath = path.join(repoRoot, 'sessions', 'repos', encodeRepoIdentity('github.com/org/alpha'), '_index.json');
+
+    await runSession('pull', ...args, '--repo-root', repoRoot);
+    const first = fs.readFileSync(idxPath, 'utf-8');
+    await runSession('pull', ...args, '--repo-root', repoRoot);
+
+    expect(errored).toEqual([]);
+    expect(fs.readFileSync(idxPath, 'utf-8')).toBe(first);
+  });
+});
+
 describe('session search --all', () => {
   it('searches every repo including _unattributed without double-loading the current one', async () => {
     seed('github.com/org/alpha', 'alice', 'a-1', 'payment alpha', 'alpha payment retry');
