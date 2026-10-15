@@ -1,7 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
+import { z } from 'zod';
 import { readFileSafe, writeJsonAtomic } from '../utils/fs.js';
 import { getDataHome, type LocalConfig } from '../types.js';
+import { ArchivedPassSchema, StepStateSchema } from './step-state.js';
 import type { RunState, WorkflowDefinition } from './types.js';
 
 /**
@@ -51,12 +53,22 @@ export function isRunState(value: unknown): value is RunState {
     && Array.isArray(run.settledAttempts);
 }
 
+/** The parts of a run file the step union governs, with what a file written before them reads as. */
+const RunProgressSchema = z.object({
+  steps: z.array(StepStateSchema),
+  cancelledAttempts: z.array(z.string()).default([]),
+  archive: z.array(ArchivedPassSchema).default([]),
+  round: z.number().int().optional(),
+});
+
 export async function readRun(config: LocalConfig, runId: string): Promise<RunState | 'missing' | 'corrupt'> {
   const raw = await readFileSafe(runFilePath(config, runId));
   if (raw === null) return 'missing';
   try {
     const value: unknown = JSON.parse(raw);
-    return isRunState(value) ? value : 'corrupt';
+    if (!isRunState(value)) return 'corrupt';
+    const progress = RunProgressSchema.safeParse(value);
+    return progress.success ? { ...value, ...progress.data } : 'corrupt';
   } catch {
     return 'corrupt';
   }

@@ -1,0 +1,119 @@
+{
+  "schemaVersion": "v1alpha1",
+  "id": "rdc7b5bd3",
+  "name": "legacy",
+  "revision": 4,
+  "status": "running",
+  "sourceHash": "e1e478e5f06c5d7de569117b10e9b8a0b1d0a589c29d4e3a5db95186c80fa201",
+  "definition": {
+    "schemaVersion": "v1alpha1",
+    "name": "legacy",
+    "description": "A run file written before loops and for_each.",
+    "steps": [
+      {
+        "id": "build",
+        "command": "node -e \"process.stdout.write(JSON.stringify({artifact:'app.tgz'}))\"",
+        "output": {
+          "type": "object",
+          "fields": {
+            "artifact": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      {
+        "id": "check",
+        "needs": [
+          "build"
+        ],
+        "workflow": {
+          "ends": {
+            "ready": "succeeded"
+          },
+          "outputs": {
+            "verdict": "steps.classify.outputs.verdict"
+          },
+          "steps": [
+            {
+              "id": "classify",
+              "command": "node -e \"process.stdout.write(JSON.stringify({verdict:'ship'}))\"",
+              "output": {
+                "type": "object",
+                "fields": {
+                  "verdict": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            {
+              "id": "done",
+              "needs": [
+                "classify"
+              ],
+              "end": "ready"
+            }
+          ]
+        }
+      },
+      {
+        "id": "ship",
+        "needs": [
+          "check"
+        ],
+        "command": "node -e \"require('fs').writeFileSync('shipped.txt', process.env.ARTIFACT)\"",
+        "env": {
+          "ARTIFACT": "{{ steps.build.outputs.artifact }}"
+        }
+      }
+    ]
+  },
+  "steps": [
+    {
+      "id": "build",
+      "status": "succeeded",
+      "exitCode": 0,
+      "outcome": "success",
+      "outputs": {
+        "artifact": "app.tgz"
+      }
+    },
+    {
+      "id": "check",
+      "status": "succeeded",
+      "outcome": "success",
+      "end": "ready",
+      "outputs": {
+        "verdict": "ship"
+      }
+    },
+    {
+      "id": "check.classify",
+      "status": "succeeded",
+      "exitCode": 0,
+      "outcome": "success",
+      "outputs": {
+        "verdict": "ship"
+      }
+    },
+    {
+      "id": "check.done",
+      "status": "succeeded"
+    },
+    {
+      "id": "ship",
+      "status": "pending",
+      "exitCode": 130,
+      "message": "driver stopped before the step finished",
+      "outcome": "released"
+    }
+  ],
+  "settledAttempts": [
+    "adee20d55",
+    "a1baa570f",
+    "a466320c2"
+  ],
+  "createdAt": "2026-10-15T12:10:53.819Z",
+  "updatedAt": "2026-10-15T12:10:54.766Z"
+}

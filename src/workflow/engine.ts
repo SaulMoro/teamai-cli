@@ -10,6 +10,7 @@ import { outputMismatch } from './output.js';
 import { noteRunRecord, runRecordState } from './records.js';
 import { parseTemplate, renderStrings, renderText, templatedTexts, templatePaths, type TemplateContext, type TemplateError } from './template.js';
 import { parseStepPath } from './step-path.js';
+import { fail, lease, release, settled, skip, start, stopped, succeed, type LeasedStep, type StepState } from './step-state.js';
 import { generateRunId, isRunId, readRun, runLockPath, writeRun } from './store.js';
 import type {
   CachedWorkflow,
@@ -19,7 +20,6 @@ import type {
   RunState,
   RunStatus,
   StepOutcome,
-  StepState,
   TokenUsage,
   WorkflowDefinition,
   WorkflowEnvelope,
@@ -196,12 +196,12 @@ function renderLease(scope: Scope, states: StepState[], state: StepState, defini
   };
 }
 
-function leaseEnvelope(run: RunState, state: StepState, definition: WorkflowStep, rendered: RenderedLease): WorkflowEnvelope {
+function leaseEnvelope(run: RunState, state: LeasedStep, definition: WorkflowStep, rendered: RenderedLease): WorkflowEnvelope {
   return ok({ lease: {
     run: run.id,
     step: state.id,
-    attempt: state.lease?.attempt,
-    revision: state.lease?.revision,
+    attempt: state.lease.attempt,
+    revision: state.lease.revision,
     ...(definition.command !== undefined ? { command: definition.command } : {}),
     ...(rendered.env ? { env: rendered.env } : {}),
     ...(rendered.prompt !== undefined ? { prompt: rendered.prompt } : {}),
@@ -211,13 +211,8 @@ function leaseEnvelope(run: RunState, state: StepState, definition: WorkflowStep
 }
 
 /** Fails a step the engine cannot hand out, so the rest of the graph keeps settling. Like a skip, it does not bump `revision`. */
-function failStep(step: StepState, failure: WorkflowFailure): void {
-  step.status = 'failed';
-  step.outcome = 'failed';
-  step.lease = undefined;
-  step.attempt = undefined;
-  step.message = failure.message;
-  step.failure = failure;
+function failStep(run: RunState, step: StepState, failure: WorkflowFailure): void {
+  fail(step, { settledAt: run.revision, message: failure.message, failure });
 }
 
 /** The status of a run, or of a workflow inside it, once it has settled. */
@@ -248,15 +243,6 @@ function doneEnvelope(run: RunState): WorkflowEnvelope {
 /** A step with `end` and no action only ends the workflow; the engine settles it without a lease. */
 function endsOnly(step: WorkflowStep | undefined): boolean {
   return step?.end !== undefined && !hasAction(step);
-}
-
-/** A step that ran and did not succeed. Later issues add `timeout` and `cancelled`. */
-function stopped(step: StepState): boolean {
-  return step.status === 'failed';
-}
-
-function settled(step: StepState | undefined): boolean {
-  return step?.status === 'succeeded' || step?.status === 'failed' || step?.status === 'skipped';
 }
 
 /** The step ids these paths read. */
@@ -329,8 +315,8 @@ const VISIBLE_OUTCOMES: Partial<Record<StepState['status'], VisibleOutcome>> ={ 
 function expressionSteps(scope: Scope, states: StepState[]): Record<string, ExpressionStep> {
   return { ...scope.outer, ...Object.fromEntries(states.map((step) => [localId(scope, step), {
     ...(VISIBLE_OUTCOMES[step.status] ? { outcome: VISIBLE_OUTCOMES[step.status] } : {}),
-    ...(step.end !== undefined ? { end: step.end } : {}),
-    ...(step.outputs !== undefined ? { outputs: step.outputs } : {}),
+    ...('end' in step && step.end !== undefined ? { end: step.end } : {}),
+    ...('outputs' in step && step.outputs !== undefined ? { outputs: step.outputs } : {}),
   }])) };
 }
 
@@ -353,7 +339,7 @@ function skipUnreachable(scope: Scope, states: StepState[], { conditions, reads 
       const conditionFalse = (): boolean => !!condition && ready(step)
         && !isTruthy(evaluateExpression(condition, { inputs: scope.inputs, steps: expressionSteps(scope, states) }));
       if (!mustSkip(needs(step), condition, (need) => localId(scope, need)) && !conditionFalse()) continue;
-      step.status = 'skipped';
+      skip(step);
       changed = true;
     }
   }
@@ -382,28 +368,32 @@ type Settled =
  */
 function startWorkflowStep(run: RunState, scope: Scope, states: StepState[], state: StepState, step: WorkflowStep, child: Scope): WorkflowFailure | undefined {
   // An inline workflow takes no `with`: it already reads the enclosing inputs.
+  let inputs: Record<string, unknown> | undefined;
   if ('name' in child.definition) {
     const rendered = renderStrings(step.with ?? {}, { inputs: scope.inputs, steps: expressionSteps(scope, states) });
     if (!rendered.ok) return withTemplateFailure(state, rendered.error);
     const mismatch = inputsMismatch(child.definition.name, child.definition.inputs, rendered.value);
     if (mismatch) return { code: 'invalid_inputs', message: `step "${state.id}" with does not fit workflow "${child.definition.name}": ${mismatch}` };
     if (child.definition.inputs) {
-      state.inputs = rendered.value as Record<string, unknown>;
-      child.inputs = state.inputs;
+      inputs = rendered.value as Record<string, unknown>;
+      child.inputs = inputs;
     }
   }
-  state.status = 'running';
+  start(state, inputs);
   const steps = child.definition.steps.map((step): StepState => ({ id: `${child.prefix}${step.id}`, status: 'pending' }));
   run.steps.splice(run.steps.indexOf(state) + 1, 0, ...steps);
   return undefined;
 }
 
 /** A workflow step takes the outcome, the end, and the outputs of the workflow it ran. */
-function finishWorkflowStep(state: StepState, result: WorkflowResult): void {
-  state.status = result.outcome;
-  state.outcome = result.outcome === 'succeeded' ? 'success' : 'failed';
-  if (result.end !== undefined) state.end = result.end;
-  if (result.outputs !== undefined) state.outputs = result.outputs;
+function finishWorkflowStep(run: RunState, state: StepState, result: WorkflowResult): void {
+  const settlement = {
+    settledAt: run.revision,
+    ...(result.end !== undefined ? { end: result.end } : {}),
+    ...(result.outputs !== undefined ? { outputs: result.outputs } : {}),
+  };
+  if (result.outcome === 'succeeded') succeed(state, settlement);
+  else fail(state, settlement);
 }
 
 /** The values a workflow returns, read from its own steps; a skipped step reads null. */
@@ -429,11 +419,11 @@ function settleScope(run: RunState, scope: Scope): Settled {
     const canRun = skipUnreachable(scope, states, reads);
     const ready = (item: StepState): boolean => item.status === 'pending' && canRun(item);
     const ending = states.find((item) => ready(item) && endsOnly(definitionOf(item)));
-    if (ending) ending.status = 'succeeded';
+    if (ending) succeed(ending, { settledAt: run.revision });
     const reached = states.find((item) => item.status === 'succeeded' && definitionOf(item)?.end !== undefined);
     const end = reached ? definitionOf(reached)?.end : undefined;
     if (end !== undefined) {
-      for (const item of states) if (item.status === 'pending') item.status = 'skipped';
+      for (const item of states) if (item.status === 'pending') skip(item);
       return { outcome: scope.definition.ends?.[end] ?? 'failed', end, outputs: workflowOutputs(scope, states, reads.outputs) };
     }
     const state = states.find((item) => item.status === 'running' || ready(item));
@@ -450,17 +440,17 @@ function settleScope(run: RunState, scope: Scope): Settled {
       if (!child) return { unreadable: `Run ${run.id} step "${state.id}" runs workflow "${definition.workflow}", which the run did not keep` };
       const failure = state.status === 'pending' ? startWorkflowStep(run, scope, states, state, definition, child) : undefined;
       if (failure) {
-        failStep(state, failure);
+        failStep(run, state, failure);
         continue;
       }
       const result = settleScope(run, child);
       if (!('outcome' in result)) return result;
-      finishWorkflowStep(state, result);
+      finishWorkflowStep(run, state, result);
       continue;
     }
     const rendered = renderLease(scope, states, state, definition);
     if ('code' in rendered) {
-      failStep(state, rendered);
+      failStep(run, state, rendered);
       continue;
     }
     return { lease: state, definition, rendered };
@@ -574,8 +564,8 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     }
     const older = missingNeeds(run);
     if (older) return { save: false, envelope: error('run_unreadable', older) };
-    const leased = run.steps.find((step) => step.status === 'leased');
-    if (leased?.lease) {
+    const leased = run.steps.find((step): step is LeasedStep => step.status === 'leased');
+    if (leased) {
       if (!sameDriver(leased.lease.driver, driver)) {
         return { save: false, envelope: ok({ wait: { reason: `${leased.id} is leased` } }) };
       }
@@ -583,7 +573,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       if (!located) return { save: false, envelope: error('run_unreadable', `Run ${run.id} has no definition for step "${leased.id}"`) };
       const rendered = renderLease(located.scope, statesIn(run, located.scope), leased, located.step);
       if (!('code' in rendered)) return { save: false, envelope: leaseEnvelope(run, leased, located.step, rendered) };
-      failStep(leased, rendered);
+      failStep(run, leased, rendered);
     }
     // Settle the graph here, while no lease is open, so a later report still matches its lease revision.
     const result = settleScope(run, topScope(run));
@@ -592,12 +582,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       settledRun = settleRun(run, now, result.outcome, result.end);
       return { save: true, envelope: doneEnvelope(run) };
     }
-    const step = result.lease;
-    const attempt = `a${randomBytes(4).toString('hex')}`;
-    step.status = 'leased';
-    step.attempt = attempt;
-    step.outcome = undefined;
-    step.lease = { attempt, revision: run.revision, driver };
+    const step = lease(result.lease, { attempt: `a${randomBytes(4).toString('hex')}`, revision: run.revision, driver });
     return { save: true, envelope: leaseEnvelope(run, step, result.definition, result.rendered) };
   });
   if (settledRun || alreadySettled) {
@@ -690,8 +675,8 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
     if (report.revision !== run.revision) {
       return { save: false, envelope: error('stale_revision', `Revision ${report.revision} is stale; the run is at ${run.revision}`) };
     }
-    const step = run.steps.find((item) => item.status === 'leased' && item.lease?.attempt === report.attempt);
-    if (!step?.lease) {
+    const step = run.steps.find((item): item is LeasedStep => item.status === 'leased' && item.lease.attempt === report.attempt);
+    if (!step) {
       return { save: false, envelope: error('wrong_attempt', `Attempt ${report.attempt} is not the leased attempt`) };
     }
     if (!sameDriver(step.lease.driver, report.driver)) {
@@ -711,32 +696,27 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       }
     }
 
-    step.lease = undefined;
-    step.attempt = undefined;
-    step.exitCode = report.exitCode;
-    step.message = message;
-    step.tool = report.tool;
-    step.model = report.model;
-    step.session = report.session;
-    step.tokens = report.tokens;
-    step.failure = failure;
-    step.outcome = outcome;
-    if (outcome === 'released') {
-      step.status = 'pending';
-    } else if (outcome === 'success') {
-      step.status = 'succeeded';
-      if (report.outputs !== undefined) step.outputs = report.outputs;
-    } else {
-      step.status = 'failed';
-    }
     rememberSettledAttempt(run, report.attempt);
     run.revision += 1;
+    const settlement = {
+      settledAt: run.revision,
+      attempt: report.attempt,
+      exitCode: report.exitCode,
+      message,
+      tool: report.tool,
+      model: report.model,
+      session: report.session,
+      tokens: report.tokens,
+    };
+    const settledStep = outcome === 'released' ? release(step)
+      : outcome === 'success' ? succeed(step, { ...settlement, ...(report.outputs !== undefined ? { outputs: report.outputs } : {}) })
+        : fail(step, { ...settlement, failure });
     return {
       save: true,
       envelope: ok({
         accepted: true,
         revision: run.revision,
-        step: { id: step.id, status: step.status, outcome },
+        step: { id: settledStep.id, status: settledStep.status, outcome },
       }),
     };
   });

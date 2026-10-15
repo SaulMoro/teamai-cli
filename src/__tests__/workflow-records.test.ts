@@ -66,8 +66,8 @@ function runState(overrides: Partial<RunState> = {}): RunState {
     sourceHash: 'abc',
     definition,
     steps: [
-      { id: 'one', status: 'succeeded', attempt: 'a1', outcome: 'success', exitCode: 0 },
-      { id: 'two', status: 'succeeded', attempt: 'a2', outcome: 'success', exitCode: 0 },
+      { id: 'one', status: 'succeeded', attempt: 'a1', settledAt: 2, outcome: 'success', exitCode: 0 },
+      { id: 'two', status: 'succeeded', attempt: 'a2', settledAt: 3, outcome: 'success', exitCode: 0 },
     ],
     settledAttempts: ['a1', 'a2', 'a1'],
     createdAt: '2026-10-14T10:00:00.000Z',
@@ -102,6 +102,7 @@ describe('#1083 workflow run records', () => {
           id: 'one',
           status: 'failed',
           attempt: 'a1',
+          settledAt: 2,
           outcome: 'failed',
           exitCode: 1,
           // Step state may carry failure text quoting the command and paths.
@@ -144,8 +145,8 @@ describe('#1083 workflow run records', () => {
         ],
       },
       steps: [
-        { id: 'one', status: 'succeeded', attempt: 'a1', outcome: 'success', exitCode: 0, tool: 'codex', model: 'gpt-5.4-codex', tokens: { input: 100, output: 50 } },
-        { id: 'two', status: 'succeeded', attempt: 'a2', outcome: 'success', exitCode: 0, tool: 'claude', model: 'claude-sonnet-4.6' },
+        { id: 'one', status: 'succeeded', attempt: 'a1', settledAt: 2, outcome: 'success', exitCode: 0, tool: 'codex', model: 'gpt-5.4-codex', tokens: { input: 100, output: 50 } },
+        { id: 'two', status: 'succeeded', attempt: 'a2', settledAt: 3, outcome: 'success', exitCode: 0, tool: 'claude', model: 'claude-sonnet-4.6' },
       ],
     });
     const record = buildEndRecord(mixed, driver, 'tester');

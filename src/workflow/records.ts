@@ -116,15 +116,15 @@ export function buildEndRecord(
   // settled step state. Message, outputs, and session ids never cross.
   const steps = run.steps.map((step) => {
     const defined = locateStep(run, step.id)?.step;
-    // An end-only step settles without a report, so it has a status but no outcome.
-    const outcome = step.outcome ?? (step.status === 'succeeded' ? 'success' : undefined);
+    // Only a succeeded or failed step has an outcome and what its report carried; an end-only step has no report.
+    const ran = step.status === 'succeeded' || step.status === 'failed' ? step : undefined;
     return {
       step: step.id,
       ...(defined?.agent ? { agent: defined.agent } : {}),
-      ...(step.tool ? { tool: step.tool } : {}),
-      ...(step.model ? { model: step.model } : {}),
-      ...(outcome ? { outcome } : {}),
-      ...(step.tokens ? { tokens: step.tokens } : {}),
+      ...(ran?.tool ? { tool: ran.tool } : {}),
+      ...(ran?.model ? { model: ran.model } : {}),
+      ...(ran ? { outcome: ran.outcome } : {}),
+      ...(ran?.tokens ? { tokens: ran.tokens } : {}),
     };
   });
   return {

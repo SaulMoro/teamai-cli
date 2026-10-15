@@ -9,7 +9,7 @@ import { leaseNext, parseReport, reportAttempt, SETTLED_ATTEMPTS_LIMIT, startRun
 import { runLocalDriver } from '../workflow/local-driver.js';
 import { outputMismatch } from '../workflow/output.js';
 import { pendingRecords, type WorkflowRunRecord } from '../workflow/records.js';
-import { readRun, runLockPath, writeRun } from '../workflow/store.js';
+import { readRun, runFilePath, runLockPath, writeRun } from '../workflow/store.js';
 import type { DriverIdentity } from '../workflow/types.js';
 
 const dirs: string[] = [];
@@ -145,10 +145,14 @@ describe('workflow engine', () => {
     const leased = await leaseNext(config, runId, driverA);
     if ('error' in leased) throw new Error(leased.error.message);
     const attempt = String((leased.data.lease as { attempt: string }).attempt);
-    const released = await reportAttempt(config, runId, { attempt, revision: 1, outcome: 'released', driver: driverA });
+    const released = await reportAttempt(config, runId, {
+      attempt, revision: 1, outcome: 'released', driver: driverA, exitCode: 130, message: 'stopped',
+    });
     expect(released).toMatchObject({ data: { accepted: true, step: { status: 'pending', outcome: 'released' } } });
     const stored = await readRun(config, runId);
-    expect(stored).toMatchObject({ status: 'running', revision: 2, steps: [{ status: 'pending', outcome: 'released' }, { status: 'pending' }] });
+    expect(stored).toMatchObject({ status: 'running', revision: 2, steps: [{ id: 'one', status: 'pending' }, { id: 'two', status: 'pending' }] });
+    if (typeof stored !== 'object') throw new Error('run missing');
+    expect(stored.steps[0]).toEqual({ id: 'one', status: 'pending' });
 
     const again = await leaseNext(config, runId, driverA);
     expect(again).toMatchObject({ data: { lease: { step: 'one', revision: 2 } } });
@@ -198,7 +202,7 @@ describe('workflow engine', () => {
       const finishing = await startBuild(TWO_STEPS);
       const stored = await readRun(finishing.config, finishing.runId);
       if (typeof stored !== 'object') throw new Error('run missing');
-      stored.steps = stored.steps.map((step) => ({ ...step, status: 'succeeded', outcome: 'success' }));
+      stored.steps = stored.steps.map((step) => ({ ...step, status: 'succeeded', outcome: 'success', settledAt: 0 }));
       await writeRun(finishing.config, stored);
       vi.setSystemTime(new Date('2026-01-01T00:02:00.000Z'));
       await leaseNext(finishing.config, finishing.runId, driverA);
@@ -269,8 +273,8 @@ describe('workflow engine', () => {
     const stored = await readRun(config, runId);
     if (typeof stored !== 'object') throw new Error('run missing');
     stored.steps = [
-      { id: 'one', status: 'failed', outcome: 'failed' },
-      { id: 'two', status: 'succeeded', outcome: 'success' },
+      { id: 'one', status: 'failed', outcome: 'failed', settledAt: 0 },
+      { id: 'two', status: 'succeeded', outcome: 'success', settledAt: 0 },
     ];
     await writeRun(config, stored);
 
@@ -365,7 +369,7 @@ describe('workflow engine', () => {
     const stored = await readRun(config, runId);
     if (typeof stored !== 'object') throw new Error('run missing');
     expect(stored.steps.filter((step) => step.status === 'leased')).toHaveLength(1);
-    expect(new Set(stored.steps.map((step) => step.lease?.attempt).filter(Boolean)).size).toBe(1);
+    expect(new Set(stored.steps.map((step) => (step.status === 'leased' ? step.lease.attempt : undefined)).filter(Boolean)).size).toBe(1);
   });
 
   it('runs one command at a time through the same next and report operations', async () => {
@@ -1200,7 +1204,7 @@ describe('file sub-workflows', () => {
     const { leased } = await drive(config, runId, ['build']);
 
     expect(leased).toEqual(['build', 'docs', 'late', 'deploy.classify']);
-    expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([{ id: 'deploy', status: 'succeeded', outcome: 'success', inputs: { late: 'success' } }]) });
+    expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([{ id: 'deploy', status: 'succeeded', outcome: 'success', inputs: { late: 'success' }, settledAt: expect.any(Number) }]) });
   });
 
   it('fails a workflow step with invalid_inputs when with does not fit the child inputs, and keeps settling', async () => {
@@ -1836,5 +1840,37 @@ describe('run records of graph runs', () => {
     const stored = await readRun(config, runId);
     if (typeof stored !== 'object') throw new Error('run missing');
     expect((await endRecord(config))?.endedAt).toBe(stored.updatedAt);
+  });
+});
+
+describe('a run file written before loops and for_each', () => {
+  // Written through `workflow next` and `report`: build succeeded, check ran an inline workflow
+  // whose end-only step the engine settled, and ship was leased, then released.
+  const FIXTURE = path.join(__dirname, 'fixtures', 'workflow', 'run-before-loops.json');
+
+  it('reads the run and continues it', async () => {
+    const { config } = testConfig();
+    const runId = 'rdc7b5bd3';
+    fs.mkdirSync(path.dirname(runFilePath(config, runId)), { recursive: true });
+    fs.copyFileSync(FIXTURE, runFilePath(config, runId));
+
+    const stored = await readRun(config, runId);
+    if (typeof stored !== 'object') throw new Error(`run ${stored}`);
+    expect(stored.steps).toEqual([
+      { id: 'build', status: 'succeeded', outcome: 'success', exitCode: 0, outputs: { artifact: 'app.tgz' }, settledAt: 0 },
+      { id: 'check', status: 'succeeded', outcome: 'success', end: 'ready', outputs: { verdict: 'ship' }, settledAt: 0 },
+      { id: 'check.classify', status: 'succeeded', outcome: 'success', exitCode: 0, outputs: { verdict: 'ship' }, settledAt: 0 },
+      { id: 'check.done', status: 'succeeded', outcome: 'success', settledAt: 0 },
+      { id: 'ship', status: 'pending' },
+    ]);
+    expect(stored).toMatchObject({ revision: 4, cancelledAttempts: [], archive: [] });
+
+    const next = await leaseNext(config, runId, driverA);
+    expect(next).toMatchObject({ data: { lease: { step: 'ship', revision: 4, env: { ARTIFACT: 'app.tgz' } } } });
+    if ('error' in next) return;
+    const lease = next.data.lease as { attempt: string; revision: number };
+    const reported = await reportAttempt(config, runId, { ...lease, outcome: 'success', driver: driverA, exitCode: 0 });
+    expect(reported).toMatchObject({ data: { accepted: true, revision: 5, step: { id: 'ship', status: 'succeeded' } } });
+    expect(await leaseNext(config, runId, driverA)).toMatchObject({ data: { done: { run: runId, outcome: 'succeeded' } } });
   });
 });

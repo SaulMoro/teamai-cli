@@ -1,5 +1,7 @@
 /** Workflow types for the v1alpha1 local-driver subset. */
 
+import type { ArchivedPass, StepState } from './step-state.js';
+
 export interface DriverIdentity {
   kind: string;
   machine: string;
@@ -96,8 +98,6 @@ export interface WorkflowDiagnostic {
   code?: 'unknown_key' | 'missing_needs' | 'false_if' | 'bad_template' | 'dotted_name' | 'undeclared_output' | 'undeclared_end';
 }
 
-/** `running`: a workflow step whose child steps are in the run and not all settled. */
-export type StepStatus = 'pending' | 'leased' | 'running' | 'succeeded' | 'failed' | 'skipped';
 export type StepOutcome = 'success' | 'failed' | 'released';
 export type RunStatus = 'running' | 'succeeded' | 'failed';
 
@@ -105,30 +105,6 @@ export interface StepLease {
   attempt: string;
   revision: number;
   driver: DriverIdentity;
-}
-
-/**
- * One step instance. `id` is its path: a top-level step id, or `<workflow step path>.<child step id>`
- * for a step inside a sub-workflow, such as `check.classify`.
- */
-export interface StepState {
-  id: string;
-  status: StepStatus;
-  attempt?: string;
-  lease?: StepLease;
-  outcome?: StepOutcome;
-  outputs?: unknown;
-  /** The values `with` passed to the workflow this step runs, kept when that workflow declares inputs. */
-  inputs?: Record<string, unknown>;
-  /** The end the workflow this step runs reached. */
-  end?: string;
-  exitCode?: number;
-  message?: string;
-  tool?: string;
-  model?: string;
-  session?: string;
-  tokens?: TokenUsage;
-  failure?: WorkflowFailure;
 }
 
 export interface TokenUsage {
@@ -163,6 +139,12 @@ export interface RunState {
   settledAttempts: string[];
   /** Cumulative settled-attempt count; settledAttempts is bounded at 32 for dedup. */
   settledCount?: number;
+  /** Attempts whose lease the engine cancelled; a report of one is answered `lease_cancelled`. */
+  cancelledAttempts?: string[];
+  /** Passes of child and item instances a loop removed from `steps`. */
+  archive?: ArchivedPass[];
+  /** The round of a looping top-level workflow. */
+  round?: number;
   createdAt: string;
   updatedAt: string;
 }
