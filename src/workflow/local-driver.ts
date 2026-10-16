@@ -40,7 +40,10 @@ interface CommandResult {
 interface CommandProcess {
   /** Settles when the command has exited and closed its output. */
   exit: Promise<CommandResult>;
-  /** SIGTERM, then SIGKILL after the grace period. Settles with `exit`; a second call changes nothing. */
+  /**
+   * SIGTERM, then SIGKILL after the grace period. Settles once the command's process group is gone, which can be after
+   * `exit` when a process it started outlives it; a second call changes nothing.
+   */
   stop(): Promise<CommandResult>;
 }
 
@@ -63,26 +66,37 @@ function startCommand(command: string, cwd: string, env: Record<string, string>,
     child.on('error', (error) => resolve({ exitCode: 1, stdout, stderr: error.message }));
     child.on('close', (code) => resolve({ exitCode: code ?? 1, stdout, stderr }));
   });
-  const signal = (name: NodeJS.Signals): void => {
-    if (!detached || child.pid === undefined) {
-      child.kill(name);
-      return;
-    }
+  /** Whether the signal reached a process: the command, or for a detached command any process left in its group. */
+  const signal = (name: NodeJS.Signals | 0): boolean => {
+    if (!detached || child.pid === undefined) return name === 0 ? false : child.kill(name);
     try {
       process.kill(-child.pid, name);
+      return true;
     } catch {
       // The whole group has already exited.
+      return false;
     }
   };
   let stopping: Promise<CommandResult> | undefined;
-  const stop = (): Promise<CommandResult> => {
+  const stop = async (): Promise<CommandResult> => {
     if (process.platform === 'win32' && child.pid !== undefined) {
       execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => {});
       return exit;
     }
     signal('SIGTERM');
-    const timer = setTimeout(() => signal('SIGKILL'), STOP_GRACE_MS);
-    return exit.finally(() => clearTimeout(timer));
+    let timer: NodeJS.Timeout | undefined;
+    const killed = new Promise<void>((resolve) => {
+      timer = setTimeout(() => {
+        signal('SIGKILL');
+        resolve();
+      }, STOP_GRACE_MS);
+    });
+    const result = await exit;
+    // The shell closing its output does not mean the group is gone: a process it started with its own output can
+    // ignore SIGTERM and outlive it. Keep the SIGKILL for as long as any process in the group is left.
+    if (signal(0)) await killed;
+    else clearTimeout(timer);
+    return result;
   };
   return { exit, stop: () => (stopping ??= stop()) };
 }
@@ -330,7 +344,8 @@ export async function runLocalDriver(
   // Leases not started yet, in lease order. A prompt starts only when no command runs, because its read-only check
   // compares the whole worktree before and after it.
   const held: Lease[] = [];
-  // Cancelled commands that have not exited yet. They are not sent as running, so `next` does not cancel them again.
+  // Cancelled commands whose process group is not gone yet. They are not sent as running, so `next` does not cancel
+  // them again.
   const dying = new Map<string, CommandProcess>();
   const room = (): boolean => inFlight.size + held.length < maxParallel && !held.some((lease) => lease.prompt !== undefined);
   const cancel = (attempt: string): void => {
@@ -402,7 +417,7 @@ export async function runLocalDriver(
       }
       const exited = await Promise.race([
         ...[...inFlight.values()].map(({ lease, command }) => command.exit.then((result) => ({ attempt: lease.attempt, lease, result }))),
-        ...[...dying].map(([attempt, command]) => command.exit.then(() => ({ attempt }))),
+        ...[...dying].map(([attempt, command]) => command.stop().then(() => ({ attempt }))),
         new Promise<undefined>((resolve) => { wake = () => resolve(undefined); }),
       ]);
       if (!exited) continue;

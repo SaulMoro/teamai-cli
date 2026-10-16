@@ -71,7 +71,7 @@ With `max_parallel` above 1:
 
 With 1, the driver runs one step at a time, and a command runs in your terminal, where Ctrl-C reaches it.
 
-When an end cancels a running command, the driver sends it SIGTERM, and SIGKILL 5 seconds later if it still runs. Until it exits, it no longer counts toward `max_parallel`.
+When an end cancels a running command, the driver sends it SIGTERM, and SIGKILL 5 seconds later if it, or with `max_parallel` above 1 a process it started, still runs. Until it exits, it no longer counts toward `max_parallel`.
 
 ## An end cancels the steps still open
 

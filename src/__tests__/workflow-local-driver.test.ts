@@ -561,6 +561,42 @@ setInterval(() => {}, 1000);
     }
   });
 
+  it('kills a descendant that ignores SIGTERM after the cancelled command itself exited, and finishes', async () => {
+    const { config, workspace, runId } = await parallelFixture(`schemaVersion: v1alpha1
+name: build
+description: An end cancels a command whose child ignores SIGTERM and outlives it.
+ends:
+  done: succeeded
+steps:
+  - id: parent
+    needs: []
+    command: node parent.js
+  - id: finish
+    needs: []
+    command: node finish.js
+    end: done
+`, 2);
+    fs.writeFileSync(path.join(workspace, 'parent.js'), `require('child_process').spawn(process.execPath, ['-e', \`process.on('SIGTERM', () => {});
+require('fs').writeFileSync('child.pid', String(process.pid));
+setInterval(() => {}, 1000);\`], { stdio: 'ignore' });
+setInterval(() => {}, 1000);
+`);
+    fs.writeFileSync(path.join(workspace, 'finish.js'), `const timer = setInterval(() => {
+  if (require('fs').existsSync('child.pid')) clearInterval(timer);
+}, 20);
+`);
+    let pid: number | undefined;
+    try {
+      const done = await runLocalDriver(config, runId, workspace);
+      pid = Number(fs.readFileSync(path.join(workspace, 'child.pid'), 'utf8'));
+
+      expect(done).toMatchObject({ data: { done: { outcome: 'succeeded', end: 'done' } } });
+      expect(await exitsWithin(pid, 1000)).toBe(true);
+    } finally {
+      if (pid !== undefined && alive(pid)) process.kill(pid, 'SIGKILL');
+    }
+  });
+
   it.each([
     ['leased with the answer that cancels the command', 2, `  - id: ask
     needs: [w]
