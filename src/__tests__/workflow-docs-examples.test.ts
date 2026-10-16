@@ -6,9 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { parseDocument } from 'yaml';
 import type { LocalConfig } from '../types.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
-import { leaseNext, startRun } from '../workflow/engine.js';
+import { leaseNext, reportAttempt, startRun } from '../workflow/engine.js';
 import { formatDiagnostic } from '../workflow/parse.js';
-import type { DriverIdentity } from '../workflow/types.js';
+import type { DriverIdentity, WorkflowEnvelope } from '../workflow/types.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const GUIDE = path.join(ROOT, 'docs', 'guide');
@@ -121,10 +121,60 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
+const ADVANCED = PAGES.filter((page) => path.posix.basename(page) === 'workflow-advanced.md');
+/** The driver the advanced page's `next` table sends. */
+const scriptDriver: DriverIdentity = { kind: 'script', machine: 'host', workspace: '/work' };
+
+interface Lease {
+  step: string;
+  attempt: string;
+  revision: number;
+  pass: number;
+  prompt?: string;
+}
+
+/** Each first group of `pattern` on `page`, parsed as JSON. */
+function jsonOn(page: string, pattern: RegExp): unknown[] {
+  return [...fs.readFileSync(path.join(ROOT, page), 'utf8').matchAll(pattern)].map((match) => JSON.parse(match[1] ?? '') as unknown);
+}
+
+/** `value` with its run and attempt ids masked, which differ in every run. */
+function withoutIds(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value).replace(/"run":"r[0-9a-f]+"/g, '"run":"<run>"').replace(/"attempt":"a[0-9a-f]+"/g, '"attempt":"<attempt>"'));
+}
+
+function leaseOf(answer: WorkflowEnvelope): Lease | undefined {
+  return 'data' in answer ? answer.data.lease as Lease | undefined : undefined;
+}
+
+/** Starts the workflow `name` that `page` shows. */
+async function startExample(page: string, name: string, inputs?: unknown): Promise<{ config: LocalConfig; runId: string }> {
+  const config = teamRepo();
+  writeExamples(page, config);
+  await syncWorkflowDefinitions(config);
+  const started = await startRun(config, name, inputs);
+  if ('error' in started) throw new Error(`${page}: ${started.error.message}`);
+  return { config, runId: String(started.data.run) };
+}
+
+/** Reports each lease with `outcome` until `next` leases nothing more, and returns every answer that leased a step. */
+async function driveExample(config: LocalConfig, runId: string, outcome: (lease: Lease) => 'success' | 'failed'): Promise<WorkflowEnvelope[]> {
+  const answers: WorkflowEnvelope[] = [];
+  for (let turn = 0; turn < 50; turn += 1) {
+    const answer = await leaseNext(config, runId, scriptDriver);
+    const lease = leaseOf(answer);
+    if (!lease) return answers;
+    answers.push(answer);
+    await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: outcome(lease), driver: scriptDriver });
+  }
+  throw new Error(`run ${runId} still leases steps after 50 reports`);
+}
+
 describe('workflow guide examples', () => {
   it('finds the English and Chinese workflow pages', () => {
     expect(PAGES).toContain('docs/guide/workflow.md');
     expect(PAGES).toContain('docs/guide/zh-CN/workflow.md');
+    expect(ADVANCED).toEqual(['docs/guide/workflow-advanced.md', 'docs/guide/zh-CN/workflow-advanced.md']);
   });
 
   it.each(PAGES)('%s: each yaml block parses, and its complete workflows pass pull together', async (page) => {
@@ -189,6 +239,44 @@ describe('workflow guide examples', () => {
       if (!('data' in next) || !next.data.lease) failures.push(`${start.label}: the first next leases nothing: ${JSON.stringify(next)}`);
     }
     expect(failures).toEqual([]);
+  });
+
+  it.each(ADVANCED)('%s: the next table answers what the engine answers', async (page) => {
+    const { config, runId } = await startExample(page, 'checks');
+    const rows = [...fs.readFileSync(path.join(ROOT, page), 'utf8').matchAll(/^\| (.*) \| `(\{"data":\{"(?:lease|wait)".*\})` \|$/gm)];
+    expect(rows).toHaveLength(3);
+    // The table's own attempt ids, in the `running` it sends, stand for the ones this run leased.
+    const attempts = new Map<string, string>();
+    for (const [, fields = '', shown = ''] of rows) {
+      const running = /`"running":(\[[^`]*\])`/.exec(fields)?.[1];
+      const options = running === undefined ? {} : { running: (JSON.parse(running) as string[]).map((attempt) => attempts.get(attempt) ?? attempt) };
+      const answer = await leaseNext(config, runId, scriptDriver, options);
+      const expected = JSON.parse(shown) as WorkflowEnvelope;
+      const [shownLease, lease] = [leaseOf(expected), leaseOf(answer)];
+      if (shownLease && lease) attempts.set(shownLease.attempt, lease.attempt);
+      expect(withoutIds(answer), fields).toEqual(withoutIds(expected));
+    }
+  });
+
+  it.each(ADVANCED)('%s: the second lease of e2e in loop-implement-task is what the engine leases', async (page) => {
+    const { config, runId } = await startExample(page, 'loop-implement-task');
+    const shown = jsonOn(page, /^```text\n(\{"data":\{"lease".*\})\n```/gm);
+    expect(shown).toHaveLength(1);
+
+    const answers = await driveExample(config, runId, (lease) => (lease.step === 'e2e' && lease.pass === 1 ? 'failed' : 'success'));
+
+    expect(withoutIds(answers.filter((answer) => leaseOf(answer)?.step === 'e2e')[1])).toEqual(withoutIds(shown[0]));
+  });
+
+  it.each(ADVANCED)('%s: the for_each results are what fan-build renders, in item order', async (page) => {
+    const [shown] = jsonOn(page, /^```json\n(\[.*\])\n```/gm) as Array<Array<{ item: unknown; outcome: 'success' | 'failed' }>>;
+    if (!shown) throw new Error(`${page} shows no results`);
+    const { config, runId } = await startExample(page, 'fan-build', { packages: shown.map((entry) => entry.item) });
+
+    const answers = await driveExample(config, runId, (lease) => shown[Number(/\[(\d+)\]$/.exec(lease.step)?.[1])]?.outcome ?? 'success');
+
+    const prompt = answers.map(leaseOf).find((lease) => lease?.step === 'explain')?.prompt ?? '';
+    expect(JSON.parse(prompt.slice(prompt.indexOf('[')))).toEqual(shown);
   });
 
   it.each(PAGES)('%s: every relative link to a .md file resolves', (page) => {
