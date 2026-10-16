@@ -827,8 +827,8 @@ describe('the model a prompt step runs on', () => {
 
   /**
    * Runs `yaml` on `tool` through the real adapter, with a fake executable that appends its arguments as one JSON
-   * line to a file and writes a result, and answers `--version` with `version`. Returns every argument list the tool
-   * was started with, in order.
+   * line to a file and writes a result, and answers `--version` with `version`. Like OpenCode, it first reads stdin
+   * to its end. Returns every argument list the tool was started with, in order.
    */
   async function runOn(
     tool: FakeTool,
@@ -856,6 +856,7 @@ if (process.argv[2] === '--version') {
   process.stdout.write(${JSON.stringify(options.version ?? '1.18.23')} + '\\n');
   process.exit(0);
 }
+fs.readFileSync(0);
 fs.appendFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)) + '\\n');
 fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, '{"output":{"ok":true}}');
 process.stdout.write(${JSON.stringify(STDOUT[tool])} + '\\n');
@@ -1048,7 +1049,7 @@ steps:
     ]);
   });
 
-  it('passes --variant for an OpenCode agent only with an effort, and fails a step whose model is the agent\'s own without one when the agent sets a variant and is not a subagent', async () => {
+  it('passes --variant for an OpenCode agent, and fails an OpenCode 1 step on its primary agent\'s own model with no effort when the agent sets a variant', async () => {
     const reviewer = '---\ndescription: Reviews changes.\nmodel: anthropic/claude-sonnet\nvariant: low\n---\nFollow the review checklist.\n';
     const strong = await runOn('opencode', oneStep('    agent: reviewer\n    model: strong\n'), { agents: { reviewer } });
     const other = await runOn('opencode', oneStep('    agent: reviewer\n    model: anthropic/claude-haiku\n'), { agents: { reviewer } });
@@ -1057,6 +1058,9 @@ steps:
       agents: { helper: '---\ndescription: Helps.\nvariant: low\n---\nHelp out.\n' },
     });
     const own = await runOn('opencode', oneStep('    agent: reviewer\n    model: anthropic/claude-sonnet\n'), { agents: { reviewer } });
+    const ownOn2 = await runOn('opencode', oneStep('    agent: reviewer\n    model: anthropic/claude-sonnet\n'), {
+      agents: { reviewer }, version: 'opencode v2.0.30',
+    });
     const subagent = await runOn('opencode', oneStep('    agent: reviewer\n    model: anthropic/claude-sonnet\n'), {
       agents: { reviewer: reviewer.replace('variant: low', 'mode: subagent\nvariant: low') },
     });
@@ -1065,18 +1069,53 @@ steps:
       'run', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer', '--model', 'anthropic/claude-opus', '--variant', 'high',
     ]]);
     expect(other.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer', '--model', 'anthropic/claude-haiku']]);
-    expect(none.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer']]);
+    expect(none.argv).toEqual([[
+      'run', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer', '--model', 'anthropic/claude-sonnet', '--variant', 'low',
+    ]]);
     expect(defaults.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--agent', 'helper', '--model', 'anthropic/claude-haiku']]);
-    expect(subagent.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer', '--model', 'anthropic/claude-sonnet']]);
+    expect(ownOn2.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer', '--model', 'anthropic/claude-sonnet']]);
+    expect(subagent.argv).toEqual([['run', '--format', 'json', prompt('Follow the review checklist.\n\nReview this project.'), '--model', 'anthropic/claude-sonnet']]);
     expect(own.argv).toBeUndefined();
     expect(own.run.steps[0]).toMatchObject({
       status: 'failed',
       failure: {
         code: 'model_unavailable',
-        message: 'Step "plan" runs agent "reviewer" on its own model "anthropic/claude-sonnet" with no effort for opencode, so opencode would apply '
-          + 'the agent\'s variant "low". Remove model from the step to run at that variant, or set it to an alias with an effort for opencode.',
+        message: 'Agent "reviewer" runs on its own model "anthropic/claude-sonnet" with no effort, and opencode 1 applies the agent\'s variant "low" '
+          + 'to that model. Remove model from the step to run at that variant, or set it to an alias with an effort for opencode.',
       },
     });
+  });
+
+  it('runs an OpenCode definition on its model and variant, as --agent on OpenCode 2 and from the prompt for a subagent on OpenCode 1', async () => {
+    const reviewer = '---\ndescription: Reviews changes.\nmode: subagent\nmodel: anthropic/claude-sonnet\nvariant: low\npermission:\n  edit: deny\n---\n'
+      + 'Follow the review checklist.\n';
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
+    const on2 = await runOn('opencode', oneStep('    agent: reviewer\n'), { agents: { reviewer }, version: 'opencode v2.0.30' });
+    expect(warn).not.toHaveBeenCalled();
+    const on1 = await runOn('opencode', oneStep('    agent: reviewer\n'), { agents: { reviewer } });
+
+    expect(on2.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer', '--model', 'anthropic/claude-sonnet#low']]);
+    expect(on1.argv).toEqual([[
+      'run', '--format', 'json', prompt('Follow the review checklist.\n\nReview this project.'), '--model', 'anthropic/claude-sonnet', '--variant', 'low',
+    ]]);
+    expect(warn).toHaveBeenCalledWith(
+      'Agent "reviewer" runs on opencode 1 from the prompt, since opencode run does not start a subagent there, so it does not apply permission '
+        + 'from the deployed agent file. The step is not blocked.',
+    );
+
+    const helper = '---\ndescription: Helps.\nmode: subagent\nvariant: low\n---\nHelp out.\n';
+    const helperOn1 = await runOn('opencode', oneStep('    agent: helper\n'), { agents: { helper } });
+    expect(helperOn1.argv).toEqual([['run', '--format', 'json', prompt('Help out.\n\nReview this project.')]]);
+    expect(warn).toHaveBeenLastCalledWith(
+      'Agent "helper" runs on opencode 1 from the prompt, since opencode run does not start a subagent there, so it does not apply variant '
+        + 'from the deployed agent file. The step is not blocked.',
+    );
+    const helperOn2 = await runOn('opencode', oneStep('    agent: helper\n'), { agents: { helper }, version: 'opencode v2.0.30' });
+    expect(helperOn2.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--agent', 'helper']]);
+    expect(warn).toHaveBeenLastCalledWith(
+      'Agent "helper" sets a variant with no model, and opencode 2 takes a variant only with a model, so it does not apply variant '
+        + 'from the deployed agent file. The step is not blocked.',
+    );
   });
 
   it('passes the effort to OpenCode 2, which has no --variant, as model#variant', async () => {

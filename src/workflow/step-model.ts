@@ -1,7 +1,9 @@
 /**
  * Which model a prompt step runs on, first match wins: the step's `model`, the model its definition sets for the
  * tool, the `defaults.model` in effect, the tool's default. The lease carries the first and third as written; they
- * resolve here, with the member's aliases for the step's tool. A definition's model, or none, launches as before.
+ * resolve here, with the member's aliases for the step's tool. A definition's model, or none, launches as before,
+ * except on OpenCode: OpenCode 2 reads neither the model nor the variant from the agent file, and OpenCode 1 does not
+ * start a subagent, which is how pull deploys OpenCode agents, so the launch passes them.
  */
 import { isModelAlias, loadModelAliases, resolveModelValue, TEAM_ALIASES_FILE, type ResolutionStep } from '../models/aliases.js';
 import { toolExtrasFor, type AgentSpec } from '../resources/agent-format.js';
@@ -11,7 +13,7 @@ import type { WorkflowFailure } from './types.js';
 
 export type StepModel = NonNullable<LocalToolRun['model']>;
 
-/** The model the step chose, none when the launch is as before, or why the step cannot run. */
+/** The model and effort the launch passes, none when it passes none, or why the step cannot run. */
 export type StepModelChoice = { ok: true; model?: StepModel } | { ok: false; failure: WorkflowFailure };
 
 export interface StepModelRequest {
@@ -75,7 +77,11 @@ export async function chooseStepModel(request: StepModelRequest): Promise<StepMo
   const chosen: { origin: ModelOrigin; value: string } | undefined = request.model !== undefined
     ? { origin: 'step', value: request.model }
     : agent?.model === undefined && request.defaultModel !== undefined ? { origin: 'defaults', value: request.defaultModel } : undefined;
-  if (!chosen) return { ok: true };
+  if (!chosen) {
+    if (!agent?.model || localToolFamily(tool) !== 'opencode') return { ok: true };
+    const variant = toolExtrasFor(agent, 'opencode')?.['variant'];
+    return { ok: true, model: { name: agent.model, ...(variant !== undefined ? { effort: String(variant) } : {}) } };
+  }
   const aliases = await loadModelAliases(request.config);
   const resolution = resolveModelValue(aliases, chosen.value, tool);
   if (!resolution.ok || resolution.model === undefined) {
@@ -88,14 +94,5 @@ export async function chooseStepModel(request: StepModelRequest): Promise<StepMo
       reason: resolution.ok ? '' : resolution.reason,
     }));
   }
-  const model: StepModel = { name: resolution.model, ...(resolution.effort !== undefined ? { effort: resolution.effort } : {}) };
-  // OpenCode applies the agent's variant to a launch on the agent's own model that passes none. Not a subagent's:
-  // `opencode run --agent` runs the default agent in its place.
-  const extras = agent && agent.model === model.name && localToolFamily(tool) === 'opencode' ? toolExtrasFor(agent, 'opencode') : undefined;
-  const variant = extras?.['mode'] === 'subagent' ? undefined : extras?.['variant'];
-  if (agent && variant !== undefined && model.effort === undefined) {
-    return unavailable(`Step "${step}" runs agent "${agent.name}" on its own model "${model.name}" with no effort for ${tool}, so ${tool} would apply `
-      + `the agent's variant "${String(variant)}". Remove model from the step to run at that variant, or set it to an alias with an effort for ${tool}.`);
-  }
-  return { ok: true, model };
+  return { ok: true, model: { name: resolution.model, ...(resolution.effort !== undefined ? { effort: resolution.effort } : {}) } };
 }

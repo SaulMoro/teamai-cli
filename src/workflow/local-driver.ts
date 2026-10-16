@@ -8,6 +8,7 @@ import {
   reverseFromClaude,
   reverseFromCodex,
   reverseFromOpencode,
+  toolExtrasFor,
   type AgentSpec,
   type ToolName,
 } from '../resources/agent-format.js';
@@ -17,7 +18,9 @@ import { readFileSafe, writeJsonAtomic } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { leaseNext, reportAttempt } from './engine.js';
 import { isRecord } from './expression.js';
-import { createLocalToolAdapter, isLocalWorkflowTool, localToolFamily, type LocalToolAdapter, type LocalWorkflowTool } from './local-tool-adapter.js';
+import {
+  createLocalToolAdapter, isLocalWorkflowTool, localToolFamily, type LocalToolAdapter, type LocalToolRun, type LocalWorkflowTool,
+} from './local-tool-adapter.js';
 import { chooseStepModel } from './step-model.js';
 import type { DriverIdentity, WorkflowEnvelope, WorkflowFailure } from './types.js';
 import { isWorkflowError } from './types.js';
@@ -148,6 +151,11 @@ function supportedTool(value: string): value is LocalWorkflowTool {
 function ignoredCodexSettings(agent: AgentSpec): string[] {
   const extras = Object.keys(agent.tool_extras?.codex ?? {});
   return agent.tools?.length ? ['tools', ...extras] : extras;
+}
+
+function definitionRun(tool: LocalWorkflowTool, name: string, agent: AgentSpec): NonNullable<LocalToolRun['agent']> {
+  const settings = localToolFamily(tool) === 'opencode' ? toolExtrasFor(agent, 'opencode') : undefined;
+  return { name, instructions: agent.instructions, ...(agent.model ? { model: agent.model } : {}), ...(settings ? { settings } : {}) };
 }
 
 function reverseAgent(tool: LocalWorkflowTool, file: string, content: string) {
@@ -306,7 +314,7 @@ async function promptReport(
       prompt: lease.prompt!,
       cwd: driver.workspace,
       resultPath: attemptResultPath,
-      ...(agent ? { agent: { name: lease.agent!, instructions: agent.instructions, ...(agent.model ? { model: agent.model } : {}) } } : {}),
+      ...(agent ? { agent: definitionRun(selected, lease.agent!, agent) } : {}),
       ...(chosen.model ? { model: chosen.model } : {}),
     });
   } catch {
