@@ -829,7 +829,11 @@ describe('the model a prompt step runs on', () => {
    * Runs `yaml` on `tool` through the real adapter, with a fake executable that appends its arguments as one JSON
    * line to a file and writes a result. Returns every argument list the tool was started with, in order.
    */
-  async function runOn(tool: FakeTool, yaml: string, options: { agents?: Record<string, string>; aliases?: string; localAliases?: string } = {}) {
+  async function runOn(
+    tool: FakeTool,
+    yaml: string,
+    options: { agents?: Record<string, string>; aliases?: string; localAliases?: string; opencodeMajor?: number } = {},
+  ) {
     const { config, workspace, runId } = await workflowFixture(yaml);
     const root = path.dirname(workspace);
     config.workflows = { tools: { default: tool } };
@@ -852,7 +856,7 @@ fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, '{"output":{"ok":true}}');
 process.stdout.write(${JSON.stringify(STDOUT[tool])} + '\\n');
 `, { mode: 0o755 });
     const done = await runLocalDriver(config, runId, workspace, {
-      adapter: createLocalToolAdapter(undefined, () => executable),
+      adapter: createLocalToolAdapter(undefined, () => executable, async () => options.opencodeMajor ?? 1),
       toolPaths: Object.fromEntries(Object.entries(AGENT_FILES).map(([name, { dir }]) => [name, { agents: dir }])) as TeamaiConfig['toolPaths'],
     });
     const argv = fs.existsSync(argvFile)
@@ -1064,5 +1068,13 @@ steps:
           + 'the agent\'s variant "low". Remove model from the step to run at that variant, or set it to an alias with an effort for opencode.',
       },
     });
+  });
+
+  it('passes the effort to OpenCode 2, which has no --variant, as model#variant', async () => {
+    const strong = await runOn('opencode', oneStep('    model: strong\n'), { opencodeMajor: 2 });
+    const literal = await runOn('opencode', oneStep('    model: anthropic/claude-sonnet\n'), { opencodeMajor: 2 });
+
+    expect(strong.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--model', 'anthropic/claude-opus#high']]);
+    expect(literal.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--model', 'anthropic/claude-sonnet']]);
   });
 });

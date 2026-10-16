@@ -2,6 +2,7 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crossSpawn from 'cross-spawn';
+import { opencodeMajorVersion } from '../opencode-hooks.js';
 import { resolveCliPath } from '../utils/cli-path.js';
 import { writeJsonAtomic } from '../utils/fs.js';
 import type { TokenUsage, WorkflowFailure } from './types.js';
@@ -58,7 +59,7 @@ function resultInstruction(input: LocalToolRun, prompt: string): string {
     + 'Use this shape: {"output":{},"failure":{"code":"optional","message":"optional"}}.';
 }
 
-function invocation(tool: LocalWorkflowTool, input: LocalToolRun): { command: string; args: string[] } {
+function invocation(tool: LocalWorkflowTool, input: LocalToolRun, opencodeMajor: number): { command: string; args: string[] } {
   const family = localToolFamily(tool);
   const agentPrompt = input.agent?.instructions
     ? `${input.agent.instructions}\n\n${input.prompt}`
@@ -80,9 +81,11 @@ function invocation(tool: LocalWorkflowTool, input: LocalToolRun): { command: st
       args: ['exec', '--json', ...(codexModel ? ['--model', codexModel] : []), ...(effort ? ['-c', `model_reasoning_effort=${effort}`] : []), prompt],
     };
   }
+  // OpenCode 2 has no `--variant` and reads the effort from `--model provider/model#variant`.
+  const opencodeModel = input.model && effort && opencodeMajor >= 2 ? ['--model', `${input.model.name}#${effort}`] : [...model, ...(effort ? ['--variant', effort] : [])];
   return {
     command: tool,
-    args: ['run', '--format', 'json', prompt, ...agent, ...model, ...(effort ? ['--variant', effort] : [])],
+    args: ['run', '--format', 'json', prompt, ...agent, ...opencodeModel],
   };
 }
 
@@ -258,11 +261,13 @@ function combineResults(fileResult: ResultFile | null, reported: ResultFile | nu
 export function createLocalToolAdapter(
   spawnTool: ToolSpawn = crossSpawn,
   resolveTool: ToolResolve = resolveCliPath,
+  opencodeVersion: () => Promise<number> = opencodeMajorVersion,
 ): LocalToolAdapter {
   return {
     async run(tool, input) {
       await fs.mkdir(path.dirname(input.resultPath), { recursive: true });
-      const call = invocation(tool, input);
+      const opencodeMajor = localToolFamily(tool) === 'opencode' && input.model?.effort ? await opencodeVersion() : 1;
+      const call = invocation(tool, input, opencodeMajor);
       const executable = resolveTool(call.command);
       if (!executable) {
         return {
