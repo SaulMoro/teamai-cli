@@ -59,7 +59,7 @@ function resultInstruction(input: LocalToolRun, prompt: string): string {
     + 'Use this shape: {"output":{},"failure":{"code":"optional","message":"optional"}}.';
 }
 
-function invocation(tool: LocalWorkflowTool, input: LocalToolRun, opencodeMajor: number): { command: string; args: string[] } {
+function invocation(tool: LocalWorkflowTool, input: LocalToolRun, opencodeMajor: number): string[] {
   const family = localToolFamily(tool);
   const agentPrompt = input.agent?.instructions
     ? `${input.agent.instructions}\n\n${input.prompt}`
@@ -69,24 +69,15 @@ function invocation(tool: LocalWorkflowTool, input: LocalToolRun, opencodeMajor:
   const model = input.model ? ['--model', input.model.name] : [];
   const effort = input.model?.effort;
   if (family === 'claude') {
-    return {
-      command: tool,
-      args: ['-p', prompt, '--output-format', 'json', ...agent, ...model, ...(effort ? ['--effort', effort] : [])],
-    };
+    return ['-p', prompt, '--output-format', 'json', ...agent, ...model, ...(effort ? ['--effort', effort] : [])];
   }
   if (family === 'codex') {
     const codexModel = input.model?.name ?? input.agent?.model;
-    return {
-      command: tool,
-      args: ['exec', '--json', ...(codexModel ? ['--model', codexModel] : []), ...(effort ? ['-c', `model_reasoning_effort=${effort}`] : []), prompt],
-    };
+    return ['exec', '--json', ...(codexModel ? ['--model', codexModel] : []), ...(effort ? ['-c', `model_reasoning_effort=${effort}`] : []), prompt];
   }
   // OpenCode 2 has no `--variant` and reads the effort from `--model provider/model#variant`.
   const opencodeModel = input.model && effort && opencodeMajor >= 2 ? ['--model', `${input.model.name}#${effort}`] : [...model, ...(effort ? ['--variant', effort] : [])];
-  return {
-    command: tool,
-    args: ['run', '--format', 'json', prompt, ...agent, ...opencodeModel],
-  };
+  return ['run', '--format', 'json', prompt, ...agent, ...opencodeModel];
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -261,24 +252,23 @@ function combineResults(fileResult: ResultFile | null, reported: ResultFile | nu
 export function createLocalToolAdapter(
   spawnTool: ToolSpawn = crossSpawn,
   resolveTool: ToolResolve = resolveCliPath,
-  opencodeVersion: () => Promise<number> = opencodeMajorVersion,
 ): LocalToolAdapter {
   return {
     async run(tool, input) {
       await fs.mkdir(path.dirname(input.resultPath), { recursive: true });
-      const opencodeMajor = localToolFamily(tool) === 'opencode' && input.model?.effort ? await opencodeVersion() : 1;
-      const call = invocation(tool, input, opencodeMajor);
-      const executable = resolveTool(call.command);
+      const executable = resolveTool(tool);
       if (!executable) {
         return {
           exitCode: 1,
           failure: { code: 'tool_unavailable', message: `The ${tool} executable is not available on PATH` },
         };
       }
+      const opencodeMajor = localToolFamily(tool) === 'opencode' && input.model?.effort ? await opencodeMajorVersion(executable) : 1;
+      const args = invocation(tool, input, opencodeMajor);
       const completed = await new Promise<{ exitCode: number; stdout: string; error?: NodeJS.ErrnoException }>((resolve) => {
         let child: ChildProcess;
         try {
-          child = spawnTool(executable, call.args, {
+          child = spawnTool(executable, args, {
             cwd: input.cwd,
             env: { ...process.env, TEAMAI_WORKFLOW_RESULT: input.resultPath },
             windowsHide: true,

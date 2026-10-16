@@ -827,12 +827,13 @@ describe('the model a prompt step runs on', () => {
 
   /**
    * Runs `yaml` on `tool` through the real adapter, with a fake executable that appends its arguments as one JSON
-   * line to a file and writes a result. Returns every argument list the tool was started with, in order.
+   * line to a file and writes a result, and answers `--version` with `version`. Returns every argument list the tool
+   * was started with, in order.
    */
   async function runOn(
     tool: FakeTool,
     yaml: string,
-    options: { agents?: Record<string, string>; aliases?: string; localAliases?: string; opencodeMajor?: number } = {},
+    options: { agents?: Record<string, string>; aliases?: string; localAliases?: string; version?: string } = {},
   ) {
     const { config, workspace, runId } = await workflowFixture(yaml);
     const root = path.dirname(workspace);
@@ -851,12 +852,16 @@ describe('the model a prompt step runs on', () => {
     const executable = path.join(root, `fake-${tool}`);
     fs.writeFileSync(executable, `#!/usr/bin/env node
 const fs = require('node:fs');
+if (process.argv[2] === '--version') {
+  process.stdout.write(${JSON.stringify(options.version ?? '1.18.23')} + '\\n');
+  process.exit(0);
+}
 fs.appendFileSync(${JSON.stringify(argvFile)}, JSON.stringify(process.argv.slice(2)) + '\\n');
 fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, '{"output":{"ok":true}}');
 process.stdout.write(${JSON.stringify(STDOUT[tool])} + '\\n');
 `, { mode: 0o755 });
     const done = await runLocalDriver(config, runId, workspace, {
-      adapter: createLocalToolAdapter(undefined, () => executable, async () => options.opencodeMajor ?? 1),
+      adapter: createLocalToolAdapter(undefined, () => executable),
       toolPaths: Object.fromEntries(Object.entries(AGENT_FILES).map(([name, { dir }]) => [name, { agents: dir }])) as TeamaiConfig['toolPaths'],
     });
     const argv = fs.existsSync(argvFile)
@@ -1071,8 +1076,8 @@ steps:
   });
 
   it('passes the effort to OpenCode 2, which has no --variant, as model#variant', async () => {
-    const strong = await runOn('opencode', oneStep('    model: strong\n'), { opencodeMajor: 2 });
-    const literal = await runOn('opencode', oneStep('    model: anthropic/claude-sonnet\n'), { opencodeMajor: 2 });
+    const strong = await runOn('opencode', oneStep('    model: strong\n'), { version: 'opencode v2.0.30' });
+    const literal = await runOn('opencode', oneStep('    model: anthropic/claude-sonnet\n'), { version: 'opencode v2.0.30' });
 
     expect(strong.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--model', 'anthropic/claude-opus#high']]);
     expect(literal.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--model', 'anthropic/claude-sonnet']]);
