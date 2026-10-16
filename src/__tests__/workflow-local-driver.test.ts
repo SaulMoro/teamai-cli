@@ -1048,7 +1048,7 @@ steps:
     ]);
   });
 
-  it('passes --variant for an OpenCode agent only with an effort, and fails a step whose model is the agent\'s own without one when the agent sets a variant', async () => {
+  it('passes --variant for an OpenCode agent only with an effort, and fails a step whose model is the agent\'s own without one when the agent sets a variant and is not a subagent', async () => {
     const reviewer = '---\ndescription: Reviews changes.\nmodel: anthropic/claude-sonnet\nvariant: low\n---\nFollow the review checklist.\n';
     const strong = await runOn('opencode', oneStep('    agent: reviewer\n    model: strong\n'), { agents: { reviewer } });
     const other = await runOn('opencode', oneStep('    agent: reviewer\n    model: anthropic/claude-haiku\n'), { agents: { reviewer } });
@@ -1057,6 +1057,9 @@ steps:
       agents: { helper: '---\ndescription: Helps.\nvariant: low\n---\nHelp out.\n' },
     });
     const own = await runOn('opencode', oneStep('    agent: reviewer\n    model: anthropic/claude-sonnet\n'), { agents: { reviewer } });
+    const subagent = await runOn('opencode', oneStep('    agent: reviewer\n    model: anthropic/claude-sonnet\n'), {
+      agents: { reviewer: reviewer.replace('variant: low', 'mode: subagent\nvariant: low') },
+    });
 
     expect(strong.argv).toEqual([[
       'run', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer', '--model', 'anthropic/claude-opus', '--variant', 'high',
@@ -1064,6 +1067,7 @@ steps:
     expect(other.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer', '--model', 'anthropic/claude-haiku']]);
     expect(none.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer']]);
     expect(defaults.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--agent', 'helper', '--model', 'anthropic/claude-haiku']]);
+    expect(subagent.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--agent', 'reviewer', '--model', 'anthropic/claude-sonnet']]);
     expect(own.argv).toBeUndefined();
     expect(own.run.steps[0]).toMatchObject({
       status: 'failed',

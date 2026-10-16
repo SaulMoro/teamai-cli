@@ -89,8 +89,10 @@ export async function chooseStepModel(request: StepModelRequest): Promise<StepMo
     }));
   }
   const model: StepModel = { name: resolution.model, ...(resolution.effort !== undefined ? { effort: resolution.effort } : {}) };
-  // OpenCode applies the agent's variant to a launch on the agent's own model that passes none.
-  const variant = agent && agent.model === model.name && localToolFamily(tool) === 'opencode' ? toolExtrasFor(agent, 'opencode')?.['variant'] : undefined;
+  // OpenCode applies the agent's variant to a launch on the agent's own model that passes none. Not a subagent's:
+  // `opencode run --agent` runs the default agent in its place.
+  const extras = agent && agent.model === model.name && localToolFamily(tool) === 'opencode' ? toolExtrasFor(agent, 'opencode') : undefined;
+  const variant = extras?.['mode'] === 'subagent' ? undefined : extras?.['variant'];
   if (agent && variant !== undefined && model.effort === undefined) {
     return unavailable(`Step "${step}" runs agent "${agent.name}" on its own model "${model.name}" with no effort for ${tool}, so ${tool} would apply `
       + `the agent's variant "${String(variant)}". Remove model from the step to run at that variant, or set it to an alias with an effort for ${tool}.`);
