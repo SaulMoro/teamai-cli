@@ -4002,6 +4002,6 @@ describe('the agent a pass ran as (#1176)', () => {
     const stored = await readRun(config, runId);
 
     expect(stored).toMatchObject({ steps: [{ status: 'succeeded', tool: 'claude' }] });
-    expect(typeof stored === 'object' && stored.steps[0]).toMatchObject({ agent: undefined });
+    expect(typeof stored === 'object' && stored.steps[0]).toEqual(expect.not.objectContaining({ agent: expect.anything() }));
   });
 });

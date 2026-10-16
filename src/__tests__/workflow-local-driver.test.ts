@@ -3,14 +3,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { loadStateForScope, saveStateForScope } from '../config.js';
+import { checkoutRecordKey, type CheckoutRecord } from '../pull.js';
 import type { LocalConfig, TeamaiConfig } from '../types.js';
 import { log } from '../utils/logger.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
 import { leaseNext, reportAttempt, startRun } from '../workflow/engine.js';
-import { createLocalToolAdapter, type LocalToolAdapter, type LocalToolRun, type ToolSpawn } from '../workflow/local-tool-adapter.js';
+import { createLocalToolAdapter, type LocalToolAdapter, type LocalToolResult, type LocalToolRun, type ToolSpawn } from '../workflow/local-tool-adapter.js';
 import { localDriver, runLocalDriver } from '../workflow/local-driver.js';
 import { pendingRecords, type WorkflowRunRecord } from '../workflow/records.js';
 import { readRun } from '../workflow/store.js';
+import { commitFile, fakeClaude, git, recordDelivery } from './helpers/delivered-checkout.js';
 
 const dirs: string[] = [];
 
@@ -152,9 +155,10 @@ Follow the review checklist.
       instructions: 'Follow the review checklist.',
       model: 'gateway-model',
     });
-    expect(await readRun(config, runId)).toMatchObject({
-      steps: [{ status: 'succeeded', tool: 'claude', model: 'gateway-model' }],
-    });
+    // The file's model is what the launch asked for, not what the tool reported (#1176).
+    const stored = await readRun(config, runId);
+    expect(stored).toMatchObject({ steps: [{ status: 'succeeded', tool: 'claude' }] });
+    expect(typeof stored === 'object' && stored.steps[0]).toEqual(expect.not.objectContaining({ model: expect.anything() }));
   });
 
   it('loads a user-scope agent from the home directory pull writes', async () => {
@@ -391,6 +395,185 @@ sandbox_mode = "read-only"
     const record = await endRecord(config);
     expect(record).toMatchObject({ status: 'failed' });
     expect(JSON.stringify(record)).not.toContain('secret-x');
+  });
+});
+
+describe('the agent a local pass ran as (#1176)', () => {
+  const restore: Array<() => void> = [];
+  afterEach(() => {
+    for (const undo of restore.splice(0)) undo();
+  });
+
+  type Observed = Awaited<ReturnType<typeof workflowFixture>> & { rev: string; skill: string; agentFile: string };
+
+  /**
+   * A run whose checkout a pull of the team clone's head delivered a skill and the reviewer agent into, with a fake
+   * `claude --version` on PATH. `record` overrides fields of that pull's record.
+   */
+  async function observed(yaml: string, { tool = 'claude', record = {} }: { tool?: 'claude' | 'codex'; record?: Partial<CheckoutRecord> } = {}): Promise<Observed> {
+    const fixture = await workflowFixture(yaml);
+    const team = fixture.config.repo.localPath;
+    git(team, 'init', '-q');
+    const rev = commitFile(team, 'agents/reviewer.yaml');
+    const skill = path.join(fixture.workspace, '.claude', 'skills', 'review', 'SKILL.md');
+    fs.mkdirSync(path.dirname(skill), { recursive: true });
+    fs.writeFileSync(skill, 'Review carefully.\n');
+    const agentFile = tool === 'claude'
+      ? path.join(fixture.workspace, '.claude', 'agents', 'reviewer.md')
+      : path.join(fixture.workspace, '.codex', 'agents', 'reviewer.toml');
+    fs.mkdirSync(path.dirname(agentFile), { recursive: true });
+    fs.writeFileSync(agentFile, tool === 'claude'
+      ? '---\nname: reviewer\ndescription: Reviews changes.\nmodel: claude-opus-4-1\n---\nFollow the review checklist.\n'
+      : 'name = "reviewer"\ndescription = "Reviews changes."\ndeveloper_instructions = "Follow the review checklist."\nmodel = "gpt-5.4"\n');
+    fixture.config.workflows = { tools: { default: tool } };
+    await recordDelivery(fixture.config, {
+      rev: rev.slice(0, 7),
+      targets: [tool],
+      files: [skill, agentFile],
+      agentModels: { reviewer: { [tool]: { step: 'spec', model: tool === 'claude' ? 'claude-opus-4-1' : 'gpt-5.4' } } },
+      ...record,
+    });
+    restore.push(fakeClaude(path.dirname(fixture.workspace), '2.1.301'));
+    return { ...fixture, rev, skill, agentFile };
+  }
+
+  const reviewStep = (agent?: string) => `schemaVersion: v1alpha1
+name: build
+description: Review the project.
+steps:
+  - id: review
+    prompt: Review this project.
+${agent ? `    agent: ${agent}\n` : ''}`;
+
+  const reports = (result: Partial<Extract<LocalToolResult, { started: true }>> = {}): LocalToolAdapter => ({
+    run: vi.fn(async () => ({ started: true as const, exitCode: 0, ...result })),
+  });
+  const codexToolPaths = { codex: { agents: '.codex/agents' } } as TeamaiConfig['toolPaths'];
+
+  async function entry(config: LocalConfig): Promise<NonNullable<WorkflowRunRecord['steps']>[number] | undefined> {
+    return (await endRecord(config))?.steps?.[0];
+  }
+
+  it('publishes the definition, tool version, team commit and requested model of a Claude pass', async () => {
+    const { config, workspace, runId, rev } = await observed(reviewStep('reviewer'));
+
+    await runLocalDriver(config, runId, workspace, { adapter: reports({ model: 'claude-opus-4-1-20250805' }), toolPaths });
+
+    expect(await entry(config)).toMatchObject({
+      tool: 'claude',
+      model: 'claude-opus-4-1-20250805',
+      agent: {
+        v: 1,
+        definition: { name: 'reviewer', applied: 'main' },
+        tool: { name: 'claude', version: '2.1.301' },
+        model: { requested: 'claude-opus-4-1', reported: 'claude-opus-4-1-20250805' },
+        team: { revision: rev, localChanges: false },
+        project: { commit: git(workspace, 'rev-parse', 'HEAD'), dirty: false },
+        driver: 'local',
+        fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
+    });
+  });
+
+  it('publishes the --model a Codex launch passed as the requested model', async () => {
+    const { config, workspace, runId } = await observed(reviewStep('reviewer'), { tool: 'codex' });
+    let argv: string[] = [];
+    const codex: ToolSpawn = (_command, args, options) => {
+      argv = args;
+      return spawn(process.execPath, ['-e', 'require("fs").writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, "{}")'], options);
+    };
+
+    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(codex, () => process.execPath), toolPaths: codexToolPaths });
+
+    expect(argv).toEqual(expect.arrayContaining(['--model', 'gpt-5.4']));
+    expect((await entry(config))?.agent).toMatchObject({
+      definition: { name: 'reviewer', applied: 'prompt' },
+      tool: { name: 'codex' },
+      model: { requested: argv[argv.indexOf('--model') + 1] },
+    });
+  });
+
+  it('has no definition for a step without agent:', async () => {
+    const { config, workspace, runId } = await observed(reviewStep());
+
+    await runLocalDriver(config, runId, workspace, { adapter: reports(), toolPaths });
+
+    const published = await entry(config);
+    expect(published?.agent).toMatchObject({ v: 1, tool: { name: 'claude' } });
+    expect(published?.agent).not.toHaveProperty('definition');
+  });
+
+  it('reports no model when the tool names none, and still the requested one', async () => {
+    const { config, workspace, runId } = await observed(reviewStep('reviewer'));
+
+    await runLocalDriver(config, runId, workspace, { adapter: reports(), toolPaths });
+
+    const published = await entry(config);
+    expect(published).not.toHaveProperty('model');
+    expect(published?.agent).toMatchObject({ model: { requested: 'claude-opus-4-1' } });
+    expect(published?.agent).not.toHaveProperty('model.reported');
+  });
+
+  it('records local changes and no fingerprint after a delivered skill is edited', async () => {
+    const { config, workspace, runId, rev, skill } = await observed(reviewStep('reviewer'));
+    fs.appendFileSync(skill, 'My own note.\n');
+
+    await runLocalDriver(config, runId, workspace, { adapter: reports({ model: 'claude-opus-4-1' }), toolPaths });
+
+    const published = await entry(config);
+    expect(published?.agent).toMatchObject({ team: { revision: rev, localChanges: true } });
+    expect(published?.agent).not.toHaveProperty('fingerprint');
+  });
+
+  it('requests no model after the deployed agent file\'s model is edited', async () => {
+    const { config, workspace, runId, agentFile } = await observed(reviewStep('reviewer'));
+    fs.writeFileSync(agentFile, fs.readFileSync(agentFile, 'utf8').replace('claude-opus-4-1', 'claude-haiku-4-5'));
+
+    await runLocalDriver(config, runId, workspace, { adapter: reports(), toolPaths });
+
+    expect((await entry(config))?.agent).not.toHaveProperty('model');
+  });
+
+  it.each([
+    ['a push base at another commit', (team: string) => ({ pushBaseRevs: [commitFile(team, 'agents/later.yaml')] })],
+    ['no delivered baseline', () => ({ delivered: undefined })],
+  ])('names no team and no fingerprint for a record with %s', async (_case, record) => {
+    const { config, workspace, runId } = await observed(reviewStep('reviewer'));
+    const key = await checkoutRecordKey(config);
+    const state = await loadStateForScope(config);
+    Object.assign(state.lastPullByWorkspace![key!]!, record(config.repo.localPath));
+    await saveStateForScope(state, config);
+
+    await runLocalDriver(config, runId, workspace, { adapter: reports({ model: 'claude-opus-4-1' }), toolPaths });
+
+    const published = await entry(config);
+    expect(published?.agent).toMatchObject({ v: 1, tool: { name: 'claude' } });
+    expect(published?.agent).not.toHaveProperty('team');
+    expect(published?.agent).not.toHaveProperty('fingerprint');
+  });
+
+  it('records no observation of a tool that never started', async () => {
+    const { config, workspace, runId } = await observed(reviewStep('reviewer'));
+
+    await runLocalDriver(config, runId, workspace, { adapter: createLocalToolAdapter(undefined, () => null), toolPaths });
+
+    expect((await entry(config))?.agent).toEqual({ definition: { name: 'reviewer' } });
+  });
+
+  it('gives each pass a loop ran its own agent', async () => {
+    const { config, workspace, runId } = await observed(`${reviewStep('reviewer')}    loop: { back_to: review, while: "length(steps.review.passes) < 3", max_iterations: 3 }
+`);
+    let pass = 0;
+    const adapter: LocalToolAdapter = { run: vi.fn(async () => ({ started: true as const, exitCode: 0, model: `claude-model-${++pass}` })) };
+
+    await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
+
+    const published = (await endRecord(config))?.steps ?? [];
+    expect(published.map((step) => [step.pass, step.agent && 'model' in step.agent ? step.agent.model?.reported : undefined])).toEqual([
+      [1, 'claude-model-1'],
+      [2, 'claude-model-2'],
+      [3, 'claude-model-3'],
+    ]);
   });
 });
 
