@@ -17,7 +17,7 @@ import { readFileSafe, writeJsonAtomic } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { leaseNext, reportAttempt } from './engine.js';
 import { isRecord } from './expression.js';
-import { createLocalToolAdapter, isLocalWorkflowTool, localToolFamily, type LocalToolAdapter, type LocalWorkflowTool } from './local-tool-adapter.js';
+import { createLocalToolAdapter, isLocalWorkflowTool, localToolFamily, type LocalToolAdapter, type LocalToolResult, type LocalWorkflowTool } from './local-tool-adapter.js';
 import type { DriverIdentity, WorkflowEnvelope, WorkflowFailure } from './types.js';
 import { isWorkflowError } from './types.js';
 
@@ -288,7 +288,7 @@ async function promptReport(
     }
   }
   const before = await snapshotWorktree(driver.workspace);
-  let result;
+  let result: LocalToolResult;
   try {
     result = await adapter.run(selected, {
       prompt: lease.prompt!,
@@ -298,6 +298,7 @@ async function promptReport(
     });
   } catch {
     result = {
+      started: false,
       exitCode: 1,
       failure: { code: 'tool_failed', message: `${selected} could not complete the workflow step` },
     };
@@ -308,15 +309,16 @@ async function promptReport(
     ? { code: 'read_only_dirty', message: `Read-only prompt step changed repository paths: ${paths.join(', ')}` }
     : undefined;
   const failure = dirtyFailure ?? result.failure;
+  const ran = result.started ? result : undefined;
   return {
     attempt: lease.attempt,
     revision: lease.revision,
     driver,
     tool: selected,
-    ...(result.model ?? agent?.model ? { model: result.model ?? agent?.model } : {}),
-    ...(result.session ? { session: result.session } : {}),
-    ...(result.tokens ? { tokens: result.tokens } : {}),
-    ...(result.output !== undefined ? { outputs: result.output } : {}),
+    ...(ran?.model ?? agent?.model ? { model: ran?.model ?? agent?.model } : {}),
+    ...(ran?.session ? { session: ran.session } : {}),
+    ...(ran?.tokens ? { tokens: ran.tokens } : {}),
+    ...(ran?.output !== undefined ? { outputs: ran.output } : {}),
     exitCode: result.exitCode,
     ...(failure ? failureReport(failure) : { outcome: result.exitCode === 0 ? 'success' : 'failed' }),
   };

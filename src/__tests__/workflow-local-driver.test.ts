@@ -70,6 +70,7 @@ describe('local workflow prompt driver', () => {
       run: vi.fn(async (_tool, value) => {
         input = value;
         return {
+          started: true as const,
           exitCode: 0,
           output: { ok: true },
           model: 'claude-sonnet',
@@ -139,7 +140,7 @@ Follow the review checklist.
     const adapter: LocalToolAdapter = {
       run: vi.fn(async (_tool, value) => {
         input = value;
-        return { exitCode: 0, output: { ok: true } };
+        return { started: true as const, exitCode: 0, output: { ok: true } };
       }),
     };
 
@@ -186,7 +187,7 @@ Do not use this copy.
     const adapter: LocalToolAdapter = {
       run: vi.fn(async (_tool, value) => {
         input = value;
-        return { exitCode: 0, output: { ok: true } };
+        return { started: true as const, exitCode: 0, output: { ok: true } };
       }),
     };
 
@@ -208,7 +209,7 @@ Do not use this copy.
     const adapter: LocalToolAdapter = {
       run: vi.fn(async () => {
         fs.writeFileSync(path.join(workspace, 'left-behind.txt'), 'inspect me\n');
-        return { exitCode: 0, output: { ok: true } };
+        return { started: true as const, exitCode: 0, output: { ok: true } };
       }),
     };
 
@@ -227,7 +228,7 @@ Do not use this copy.
     const adapter: LocalToolAdapter = {
       run: vi.fn(async () => {
         fs.writeFileSync(tracked, 'changed again\n');
-        return { exitCode: 0, output: { ok: true } };
+        return { started: true as const, exitCode: 0, output: { ok: true } };
       }),
     };
 
@@ -251,7 +252,7 @@ Do not use this copy.
       run: vi.fn(async () => {
         if (change === 'remove') fs.rmSync(changed);
         else fs.writeFileSync(changed, 'after\n');
-        return { exitCode: 0, output: { ok: true } };
+        return { started: true as const, exitCode: 0, output: { ok: true } };
       }),
     };
 
@@ -270,7 +271,7 @@ Do not use this copy.
     fs.mkdirSync(path.join(workspace, 'notes'));
     fs.writeFileSync(path.join(workspace, 'notes', 'draft.txt'), 'before\n');
     const adapter: LocalToolAdapter = {
-      run: vi.fn(async () => ({ exitCode: 0, output: { ok: true } })),
+      run: vi.fn(async () => ({ started: true as const, exitCode: 0, output: { ok: true } })),
     };
 
     expect(await runLocalDriver(config, runId, workspace, { adapter, toolPaths }))
@@ -284,7 +285,7 @@ Do not use this copy.
     const adapter: LocalToolAdapter = {
       run: vi.fn(async () => {
         fs.rmSync(dirty);
-        return { exitCode: 0, output: { ok: true } };
+        return { started: true as const, exitCode: 0, output: { ok: true } };
       }),
     };
 
@@ -310,7 +311,7 @@ model = "gpt-5.4"
     const adapter: LocalToolAdapter = {
       run: vi.fn(async (_selected, value) => {
         input = value;
-        return { exitCode: 0, output: { ok: true } };
+        return { started: true as const, exitCode: 0, output: { ok: true } };
       }),
     };
 
@@ -338,7 +339,7 @@ sandbox_mode = "read-only"
 `);
     const warn = vi.spyOn(log, 'warn').mockImplementation(() => undefined);
     const adapter: LocalToolAdapter = {
-      run: vi.fn(async () => ({ exitCode: 0, output: { ok: true } })),
+      run: vi.fn(async () => ({ started: true as const, exitCode: 0, output: { ok: true } })),
     };
 
     await runLocalDriver(config, runId, workspace, {
@@ -356,6 +357,7 @@ sandbox_mode = "read-only"
     const { config, workspace, runId } = await fixture();
     const adapter: LocalToolAdapter = {
       run: vi.fn(async () => ({
+        started: true as const,
         exitCode: 1,
         failure: { code: 'tool_failed', message: 'claude exited with status 1' },
       })),
@@ -475,7 +477,7 @@ steps:
     const adapter: LocalToolAdapter = {
       run: vi.fn(async () => {
         commandExitedFirst.push(fs.existsSync(path.join(workspace, 'slow.done')));
-        return { exitCode: 0, output: { ok: true } };
+        return { started: true as const, exitCode: 0, output: { ok: true } };
       }),
     };
 
@@ -509,7 +511,7 @@ steps:
     needs: [w]
     command: node -e "process.exit(0)"
 `, 2);
-    const adapter: LocalToolAdapter = { run: vi.fn(async () => ({ exitCode: 0, output: { ok: true } })) };
+    const adapter: LocalToolAdapter = { run: vi.fn(async () => ({ started: true as const, exitCode: 0, output: { ok: true } })) };
 
     const done = await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
 
@@ -639,7 +641,7 @@ setInterval(() => {}, 1000);
     const adapter: LocalToolAdapter = {
       run: vi.fn(async () => {
         commandExitedFirst.push(fs.existsSync(path.join(workspace, 'lingering.exited')));
-        return { exitCode: 0, output: { ok: true } };
+        return { started: true as const, exitCode: 0, output: { ok: true } };
       }),
     };
 
@@ -772,7 +774,7 @@ steps:
     const adapter: LocalToolAdapter = {
       run: vi.fn(async () => {
         logAtPrompt.push(fs.readFileSync(path.join(workspace, 'log.txt'), 'utf8'));
-        return { exitCode: 0, output: { ok: true } };
+        return { started: true as const, exitCode: 0, output: { ok: true } };
       }),
     };
 
