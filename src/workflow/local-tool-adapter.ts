@@ -6,21 +6,12 @@ import { resolveCliPath } from '../utils/cli-path.js';
 import { writeJsonAtomic } from '../utils/fs.js';
 import type { TokenUsage, WorkflowFailure } from './types.js';
 
-export type LocalWorkflowTool =
-  | 'claude'
-  | 'claude-internal'
-  | 'tclaude'
-  | 'codex'
-  | 'codex-internal'
-  | 'tcodex'
-  | 'opencode';
+const LOCAL_WORKFLOW_TOOLS = ['claude', 'claude-internal', 'tclaude', 'codex', 'codex-internal', 'tcodex', 'opencode'] as const;
 
-const LOCAL_WORKFLOW_TOOLS = new Set<string>([
-  'claude', 'claude-internal', 'tclaude', 'codex', 'codex-internal', 'tcodex', 'opencode',
-]);
+export type LocalWorkflowTool = (typeof LOCAL_WORKFLOW_TOOLS)[number];
 
 export function isLocalWorkflowTool(value: string): value is LocalWorkflowTool {
-  return LOCAL_WORKFLOW_TOOLS.has(value);
+  return (LOCAL_WORKFLOW_TOOLS as readonly string[]).includes(value);
 }
 
 export function localToolFamily(tool: LocalWorkflowTool): 'claude' | 'codex' | 'opencode' {

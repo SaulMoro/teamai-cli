@@ -227,6 +227,25 @@ describe('#1083 workflow run records', () => {
     ]);
   });
 
+  it.each([
+    ['a local tool and a model name', 'claude-internal', 'anthropic/claude-sonnet-4.6@2026', { tool: 'claude-internal', model: 'anthropic/claude-sonnet-4.6@2026' }],
+    ['a secret as the tool', 'sk-ant-SECRET-token', 'gpt-5.4-codex', { model: 'gpt-5.4-codex' }],
+    ['an absolute path as the model', 'codex', '/Users/me/private/model', { tool: 'codex' }],
+    ['a relative path that climbs as the model', 'codex', 'models/../../home/me', { tool: 'codex' }],
+    ['a Windows absolute path as the model', 'codex', 'C:/Users/alice/private/model.gguf', { tool: 'codex' }],
+    ['a file URL as the model', 'codex', 'file:/Users/me/private/model', { tool: 'codex' }],
+    ['a tagged model name', 'codex', 'ollama:llama3.1:8b', { tool: 'codex', model: 'ollama:llama3.1:8b' }],
+    ['a model with a space', 'codex', 'my private model', { tool: 'codex' }],
+    ['a model longer than 80 characters', 'codex', `m${'x'.repeat(80)}`, { tool: 'codex' }],
+  ])('records the tool and model of a report with %s only when they are a local tool name and a model name', (_case, tool, model, fields) => {
+    const run = runState({
+      definition: { ...definition, steps: [{ id: 'one', command: 'node one.js' }] },
+      steps: [{ id: 'one', status: 'succeeded', attempt: 'a1', settledAt: 2, outcome: 'success', exitCode: 0, tool, model }],
+    });
+
+    expect(buildEndRecord(run, driver, 'tester').steps).toEqual([{ step: 'one', pass: 1, ...fields, outcome: 'success' }]);
+  });
+
   it('builds the end record of a for_each with work linear in the item count', () => {
     // Every lookup over the run's step instances reads each one's path, so the number of `id` reads counts how many it looks at.
     const work = (items: number): number => {

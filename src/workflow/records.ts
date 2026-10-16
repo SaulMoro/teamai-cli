@@ -18,6 +18,7 @@ import { loadTeamConfig } from '../config.js';
 import type { LocalConfig } from '../types.js';
 import { getDataHome, isUsageReportEnabled } from '../types.js';
 import { log } from '../utils/logger.js';
+import { isLocalWorkflowTool } from './local-tool-adapter.js';
 import { stepDefinitions } from './scope.js';
 import { settled, VISIBLE_OUTCOMES, type StepPass, type StepState, type VisibleOutcome } from './step-state.js';
 import type { DriverIdentity, RunState, RunStatus, TokenUsage, WorkflowFailure } from './types.js';
@@ -35,6 +36,13 @@ type RecordedFailure = (typeof RECORDED_FAILURES)[number];
 function isRecordedFailure(failure: WorkflowFailure | undefined): failure is WorkflowFailure & { code: RecordedFailure } {
   return failure !== undefined && (RECORDED_FAILURES as readonly string[]).includes(failure.code);
 }
+
+/**
+ * A model name as a driver reports it, such as `claude-sonnet-4.6` or `anthropic/claude-sonnet-4.6@2026`. A report is
+ * free text, so a record carries a model only when it is shaped like a name: no leading "/", no drive such as "C:", no
+ * ":/" as in a URL, no "..", no spaces, and at most 80 characters.
+ */
+const MODEL_NAME = /^(?![A-Za-z]:)(?!.*:\/)(?!.*\.\.)[A-Za-z0-9][A-Za-z0-9._:@/-]{0,79}$/;
 
 /** The record's schema tag; see #1083 for the field contract. */
 export type WorkflowRunRecord = {
@@ -168,8 +176,8 @@ export function buildEndRecord(
       step,
       pass: pass ?? 1,
       ...(agent ? { agent } : {}),
-      ...(reported?.tool ? { tool: reported.tool } : {}),
-      ...(reported?.model ? { model: reported.model } : {}),
+      ...(reported?.tool && isLocalWorkflowTool(reported.tool) ? { tool: reported.tool } : {}),
+      ...(reported?.model && MODEL_NAME.test(reported.model) ? { model: reported.model } : {}),
       ...(outcome ? { outcome } : {}),
       ...(reported?.tokens ? { tokens: reported.tokens } : {}),
     };
