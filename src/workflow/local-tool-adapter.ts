@@ -2,6 +2,7 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crossSpawn from 'cross-spawn';
+import { launchEnv, type Launch } from '../launch-context.js';
 import { resolveCliPath } from '../utils/cli-path.js';
 import { writeJsonAtomic } from '../utils/fs.js';
 import type { TokenUsage, WorkflowFailure } from './types.js';
@@ -25,6 +26,8 @@ export interface LocalToolRun {
   cwd: string;
   resultPath: string;
   agent?: { name: string; instructions: string; model?: string };
+  /** The workflow launch the tool's session-start hook reads from its environment (#1176). */
+  launch?: Launch;
 }
 
 /**
@@ -291,7 +294,7 @@ export function createLocalToolAdapter(
         try {
           child = spawnTool(executable, call.args, {
             cwd: input.cwd,
-            env: { ...process.env, TEAMAI_WORKFLOW_RESULT: input.resultPath },
+            env: { ...process.env, ...(input.launch ? launchEnv(input.launch) : {}), TEAMAI_WORKFLOW_RESULT: input.resultPath },
             windowsHide: true,
           });
         } catch (error) {

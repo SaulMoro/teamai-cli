@@ -227,6 +227,19 @@ describe('local tool adapter', () => {
     expect(result).toMatchObject({ started: true, output: { ok: true }, session: 'session-1' });
     expect(result.started && result.model).toBe(model ?? undefined);
   });
+  it('tells the tool\'s session-start hook which workflow launch started it (#1176)', async () => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-launch-${Date.now()}.json`);
+    files.push(resultPath);
+    const spawnTool = vi.fn(() => child(claudeStream(undefined, { result: '{}' }))) as unknown as ToolSpawn;
+
+    await createLocalToolAdapter(spawnTool, () => 'claude').run('claude', {
+      prompt: 'Review', cwd: os.tmpdir(), resultPath, launch: { by: 'workflow', tool: 'claude', checkout: 'checkout-1' },
+    });
+
+    expect(spawnTool).toHaveBeenCalledWith('claude', expect.anything(), expect.objectContaining({
+      env: expect.objectContaining({ TEAMAI_LAUNCHED_BY: 'workflow', TEAMAI_LAUNCHED_TOOL: 'claude', TEAMAI_LAUNCHED_CHECKOUT: 'checkout-1' }),
+    }));
+  });
 });
 
 describe('definitionHandoff (#1176)', () => {

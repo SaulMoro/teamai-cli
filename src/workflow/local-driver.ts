@@ -13,6 +13,7 @@ import {
 } from '../resources/agent-format.js';
 import { observeLaunch } from '../agent-observation.js';
 import { exitLike } from '../env-exec.js';
+import { workflowLaunch } from '../launch-context.js';
 import { getDataHome, resolveToolBaseDir, type LocalConfig, type TeamaiConfig } from '../types.js';
 import { readFileSafe, writeJsonAtomic } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
@@ -290,12 +291,15 @@ async function promptReport(
       log.warn(`Agent "${agent.name}" on ${selected} does not apply ${ignored.join(', ')} from the deployed agent file. codex exec still has a shell. The step is not blocked.`);
     }
   }
-  const observed = await observeLaunch({
-    config,
-    tool: selected,
-    cwd: driver.workspace,
-    ...(lease.agent && loaded ? { definition: { stem: lease.agent, file: loaded.file, ...definitionHandoff(selected, loaded.spec) } } : {}),
-  });
+  const [observed, launch] = await Promise.all([
+    observeLaunch({
+      config,
+      tool: selected,
+      cwd: driver.workspace,
+      ...(lease.agent && loaded ? { definition: { stem: lease.agent, file: loaded.file, ...definitionHandoff(selected, loaded.spec) } } : {}),
+    }),
+    workflowLaunch(config, selected),
+  ]);
   const before = await snapshotWorktree(driver.workspace);
   let result: LocalToolResult;
   try {
@@ -303,6 +307,7 @@ async function promptReport(
       prompt: lease.prompt!,
       cwd: driver.workspace,
       resultPath: attemptResultPath,
+      ...(launch ? { launch } : {}),
       ...(agent ? { agent: { name: lease.agent!, instructions: agent.instructions, ...(agent.model ? { model: agent.model } : {}) } } : {}),
     });
   } catch {

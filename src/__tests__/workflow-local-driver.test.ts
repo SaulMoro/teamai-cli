@@ -475,6 +475,19 @@ ${agent ? `    agent: ${agent}\n` : ''}`;
     });
   });
 
+  it('launches the tool bound to its checkout, so its session-start hook keeps the delivery', async () => {
+    const { config, workspace, runId } = await observed(reviewStep('reviewer'));
+    let input: LocalToolRun | undefined;
+    const adapter: LocalToolAdapter = { run: vi.fn(async (_tool, value) => {
+      input = value;
+      return { started: true as const, exitCode: 0 };
+    }) };
+
+    await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
+
+    expect(input?.launch).toEqual({ by: 'workflow', tool: 'claude', checkout: await checkoutRecordKey(config) });
+  });
+
   it('publishes the --model a Codex launch passed as the requested model', async () => {
     const { config, workspace, runId } = await observed(reviewStep('reviewer'), { tool: 'codex' });
     let argv: string[] = [];
