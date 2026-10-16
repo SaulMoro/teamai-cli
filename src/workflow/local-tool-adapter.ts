@@ -25,6 +25,8 @@ export interface LocalToolRun {
   cwd: string;
   resultPath: string;
   agent?: { name: string; instructions: string; model?: string };
+  /** The model the step chose, which replaces the definition's model and effort. */
+  model?: { name: string; effort?: string };
 }
 
 export interface LocalToolResult {
@@ -62,21 +64,25 @@ function invocation(tool: LocalWorkflowTool, input: LocalToolRun): { command: st
     ? `${input.agent.instructions}\n\n${input.prompt}`
     : input.prompt;
   const prompt = resultInstruction(input, family === 'codex' ? agentPrompt : input.prompt);
+  const agent = input.agent ? ['--agent', input.agent.name] : [];
+  const model = input.model ? ['--model', input.model.name] : [];
+  const effort = input.model?.effort;
   if (family === 'claude') {
     return {
       command: tool,
-      args: ['-p', prompt, '--output-format', 'json', ...(input.agent ? ['--agent', input.agent.name] : [])],
+      args: ['-p', prompt, '--output-format', 'json', ...agent, ...model, ...(effort ? ['--effort', effort] : [])],
     };
   }
   if (family === 'codex') {
+    const codexModel = input.model?.name ?? input.agent?.model;
     return {
       command: tool,
-      args: ['exec', '--json', ...(input.agent?.model ? ['--model', input.agent.model] : []), prompt],
+      args: ['exec', '--json', ...(codexModel ? ['--model', codexModel] : []), ...(effort ? ['-c', `model_reasoning_effort=${effort}`] : []), prompt],
     };
   }
   return {
     command: tool,
-    args: ['run', '--format', 'json', prompt, ...(input.agent ? ['--agent', input.agent.name] : [])],
+    args: ['run', '--format', 'json', prompt, ...agent, ...model, ...(effort ? ['--variant', effort] : [])],
   };
 }
 
