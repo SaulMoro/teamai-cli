@@ -397,11 +397,26 @@ function stopUnder(run: RunState, scope: Scope, reached: string, settledAt: numb
   const failure = { code: 'end_reached', message: `Cancelled: ${workflowLabel(scope)} reached ${reached}` };
   for (const state of run.steps) {
     if (!state.id.startsWith(scope.prefix)) continue;
-    if (state.status === 'pending') skip(state, settledAt);
-    else if (state.status === 'running') cancel(state, failure, settledAt);
-    else if (state.status === 'leased') {
-      (run.cancelledAttempts ??= []).push(state.attempt);
-      cancel(state, failure, settledAt);
+    switch (state.status) {
+      case 'pending':
+        skip(state, settledAt);
+        break;
+      case 'running':
+        cancel(state, failure, settledAt);
+        break;
+      case 'leased':
+        (run.cancelledAttempts ??= []).push(state.attempt);
+        cancel(state, failure, settledAt);
+        break;
+      case 'succeeded':
+      case 'failed':
+      case 'skipped':
+      case 'cancelled':
+        break;
+      default: {
+        const unknown: never = state;
+        return unknown;
+      }
     }
   }
 }
