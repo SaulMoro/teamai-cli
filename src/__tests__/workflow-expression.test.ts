@@ -159,6 +159,18 @@ describe('workflow expressions', () => {
     expect(evaluateExpression(parsed.expression, { inputs: { xs: [{ 5: { x: 1 } }] }, steps: {} })).toBe(true);
   });
 
+  it('compares values nested 4,000 levels deep without overflowing the stack', () => {
+    const nested = (bottom: unknown): unknown => {
+      let value = bottom;
+      for (let level = 0; level < 4000; level += 1) value = level % 2 === 0 ? [value] : { a: value };
+      return value;
+    };
+    const parsed = parseExpression('inputs.a == inputs.b && inputs.a != inputs.c');
+    if (!parsed.ok) throw new Error(parsed.message);
+
+    expect(evaluateExpression(parsed.expression, { inputs: { a: nested(1), b: nested(1), c: nested(2) }, steps: {} })).toBe(true);
+  });
+
   it('lists the paths an expression reads, with their columns', () => {
     const parsed = parseExpression("inputs.issue.number == 1 || !(steps.check.outcome == 'failed' && steps.review.outputs.verdict.text)");
     if (!parsed.ok) throw new Error(parsed.message);

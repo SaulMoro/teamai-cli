@@ -172,6 +172,13 @@ describe('workflow templates', () => {
     expect(parseTemplate(`Fix ${text} first.`, false)).toEqual({ ok: false, errors: [{ source: text, message }] });
   });
 
+  it('renders a comparison of values nested 4,000 levels deep', () => {
+    const nested = (bottom: unknown): unknown => JSON.parse(`${'['.repeat(4000)}${JSON.stringify(bottom)}${']'.repeat(4000)}`);
+    const deep = { inputs: { a: nested(1), b: nested(1), c: nested(2) }, steps: {} };
+
+    expect(renderText(template('{{ inputs.a == inputs.b }} {{ inputs.a == inputs.c }}'), deep)).toBe('true false');
+  });
+
   it('evaluates a call on item only where an item is bound', () => {
     const text = 'Count {{ length(item.xs) }}.';
 

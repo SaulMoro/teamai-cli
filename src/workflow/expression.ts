@@ -584,17 +584,26 @@ export function isTruthy(value: unknown): boolean {
   return !(value === false || value === null || value === undefined || value === 0 || value === '');
 }
 
-/** Strict JSON equality: no type coercion, case-sensitive strings, arrays in order, objects by their keys. */
+/**
+ * Strict JSON equality: no type coercion, case-sensitive strings, arrays in order, objects by their keys. It walks the
+ * pairs with a stack of its own, since a value a step reports can nest deeper than the call stack goes.
+ */
 function deepEqual(left: unknown, right: unknown): boolean {
-  if (left === right) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return Array.isArray(left) && Array.isArray(right) && left.length === right.length
-      && left.every((item, index) => deepEqual(item, right[index]));
+  const pairs: Array<[unknown, unknown]> = [[left, right]];
+  for (let pair = pairs.pop(); pair; pair = pairs.pop()) {
+    const [a, b] = pair;
+    if (a === b) continue;
+    if (Array.isArray(a) || Array.isArray(b)) {
+      if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+      a.forEach((item, index) => pairs.push([item, b[index]]));
+      continue;
+    }
+    if (!isRecord(a) || !isRecord(b)) return false;
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length || !keys.every((key) => Object.hasOwn(b, key))) return false;
+    for (const key of keys) pairs.push([a[key], b[key]]);
   }
-  if (!isRecord(left) || !isRecord(right)) return false;
-  const keys = Object.keys(left);
-  return keys.length === Object.keys(right).length
-    && keys.every((key) => Object.hasOwn(right, key) && deepEqual(left[key], right[key]));
+  return true;
 }
 
 /** Evaluates an expression. It never throws. */
