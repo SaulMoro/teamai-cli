@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { saveStateForScope } from '../config.js';
 import { checkoutRecordKey, teamDelivery, type CheckoutRecord } from '../pull.js';
 import { StateSchema, type LocalConfig } from '../types.js';
+import { commitFile, initRepo } from './helpers/delivered-checkout.js';
 
 const dirs: string[] = [];
 
@@ -13,30 +13,17 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
-function git(cwd: string, ...args: string[]): string {
-  return execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args], { cwd, encoding: 'utf-8' }).trim();
-}
-
-function commit(repo: string, file: string): string {
-  fs.writeFileSync(path.join(repo, file), `${file}\n`);
-  git(repo, 'add', file);
-  git(repo, 'commit', '-qm', file);
-  return git(repo, 'rev-parse', 'HEAD');
-}
-
 /** A project checkout, a team clone with two commits, and the config that pulls one into the other. */
 function fixture(): { config: LocalConfig; first: string; second: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-team-delivery-'));
   dirs.push(root);
   const team = path.join(root, 'team');
   const project = path.join(root, 'project');
-  for (const repo of [team, project]) {
-    fs.mkdirSync(repo);
-    git(repo, 'init', '-q');
-  }
-  commit(project, 'README.md');
-  const first = commit(team, 'one.md');
-  const second = commit(team, 'two.md');
+  initRepo(team);
+  initRepo(project);
+  commitFile(project, 'README.md');
+  const first = commitFile(team, 'one.md');
+  const second = commitFile(team, 'two.md');
   const config: LocalConfig = {
     repo: { localPath: team, remote: 'local', kind: 'git' },
     username: 'tester',
