@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { simpleGit } from 'simple-git';
 import { afterEach, describe, expect, it } from 'vitest';
 import YAML from 'yaml';
-import type { LocalConfig } from '../types.js';
+import type { LocalConfig, UserStats } from '../types.js';
 import {
   buildEndRecord,
   buildStartRecord,
@@ -379,6 +379,18 @@ describe('#1083 workflow stats merge', () => {
     const start = buildStartRecord(runState({ status: 'running' }), driver, 'tester');
     const startOnly = statsDeltaRecords(new Map([['r1234567890abcdef', null]]), [start]);
     expect(startOnly).toEqual([]);
+  });
+
+  it('keeps workflow totals through a later usage report', async () => {
+    const { mergeWorkflowStats } = await import('../workflow/records.js');
+    const { mergeStatsWithinTeamSkills } = await import('../team-push.js');
+    const published = mergeWorkflowStats(
+      { username: 'tester', updatedAt: '2026-10-13T00:00:00.000Z', skills: {} },
+      [buildEndRecord(runState(), driver, 'tester')],
+    );
+    const onDisk = YAML.parse(YAML.stringify(published)) as UserStats;
+    const reported = mergeStatsWithinTeamSkills(onDisk, 'tester', [], new Set());
+    expect(reported.workflows).toEqual({ runs: 1, succeeded: 1, failed: 0, totalDurationMs: 150000 });
   });
 
   it('folds a queued record into the stats file of the member who ran it', async () => {
