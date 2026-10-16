@@ -406,11 +406,30 @@ describe('the agent a local pass ran as (#1176)', () => {
 
   type Observed = Awaited<ReturnType<typeof workflowFixture>> & { rev: string; skill: string; agentFile: string };
 
+  /** The reviewer agent as pull deploys it for each tool, and the model it resolved to. */
+  const reviewer = {
+    claude: {
+      file: '.claude/agents/reviewer.md',
+      content: '---\nname: reviewer\ndescription: Reviews changes.\nmodel: claude-opus-4-1\n---\nFollow the review checklist.\n',
+      model: 'claude-opus-4-1',
+    },
+    codex: {
+      file: '.codex/agents/reviewer.toml',
+      content: 'name = "reviewer"\ndescription = "Reviews changes."\ndeveloper_instructions = "Follow the review checklist."\nmodel = "gpt-5.4"\n',
+      model: 'gpt-5.4',
+    },
+    opencode: {
+      file: '.opencode/agents/reviewer.md',
+      content: '---\ndescription: Reviews changes.\nmode: subagent\nmodel: anthropic/claude-sonnet-4-5\nvariant: high\n---\nFollow the review checklist.\n',
+      model: 'anthropic/claude-sonnet-4-5',
+    },
+  } as const;
+
   /**
    * A run whose checkout a pull of the team clone's head delivered a skill and the reviewer agent into, with a fake
    * `claude --version` on PATH. `record` overrides fields of that pull's record.
    */
-  async function observed(yaml: string, { tool = 'claude', record = {} }: { tool?: 'claude' | 'codex'; record?: Partial<CheckoutRecord> } = {}): Promise<Observed> {
+  async function observed(yaml: string, { tool = 'claude', record = {} }: { tool?: keyof typeof reviewer; record?: Partial<CheckoutRecord> } = {}): Promise<Observed> {
     const fixture = await workflowFixture(yaml);
     const team = fixture.config.repo.localPath;
     git(team, 'init', '-q');
@@ -418,19 +437,15 @@ describe('the agent a local pass ran as (#1176)', () => {
     const skill = path.join(fixture.workspace, '.claude', 'skills', 'review', 'SKILL.md');
     fs.mkdirSync(path.dirname(skill), { recursive: true });
     fs.writeFileSync(skill, 'Review carefully.\n');
-    const agentFile = tool === 'claude'
-      ? path.join(fixture.workspace, '.claude', 'agents', 'reviewer.md')
-      : path.join(fixture.workspace, '.codex', 'agents', 'reviewer.toml');
+    const agentFile = path.join(fixture.workspace, reviewer[tool].file);
     fs.mkdirSync(path.dirname(agentFile), { recursive: true });
-    fs.writeFileSync(agentFile, tool === 'claude'
-      ? '---\nname: reviewer\ndescription: Reviews changes.\nmodel: claude-opus-4-1\n---\nFollow the review checklist.\n'
-      : 'name = "reviewer"\ndescription = "Reviews changes."\ndeveloper_instructions = "Follow the review checklist."\nmodel = "gpt-5.4"\n');
+    fs.writeFileSync(agentFile, reviewer[tool].content);
     fixture.config.workflows = { tools: { default: tool } };
     await recordDelivery(fixture.config, {
       rev: rev.slice(0, 7),
       targets: [tool],
       files: [skill, agentFile],
-      agentModels: { reviewer: { [tool]: { step: 'spec', model: tool === 'claude' ? 'claude-opus-4-1' : 'gpt-5.4' } } },
+      agentModels: { reviewer: { [tool]: { step: 'spec', model: reviewer[tool].model } } },
       ...record,
     });
     restore.push(fakeClaude(path.dirname(fixture.workspace), '2.1.301'));
@@ -504,6 +519,17 @@ ${agent ? `    agent: ${agent}\n` : ''}`;
       tool: { name: 'codex' },
       model: { requested: argv[argv.indexOf('--model') + 1] },
     });
+  });
+
+  it('publishes an OpenCode pass without how the definition applied or the model its file sets', async () => {
+    const { config, workspace, runId } = await observed(reviewStep('reviewer'), { tool: 'opencode' });
+
+    await runLocalDriver(config, runId, workspace, { adapter: reports(), toolPaths: { opencode: { agents: '.opencode/agents' } } as TeamaiConfig['toolPaths'] });
+
+    const published = await entry(config);
+    expect(published?.agent).toMatchObject({ v: 1, definition: { name: 'reviewer' }, tool: { name: 'opencode' } });
+    expect(published?.agent).not.toHaveProperty('definition.applied');
+    expect(published?.agent).not.toHaveProperty('model');
   });
 
   it('has no definition for a step without agent:', async () => {

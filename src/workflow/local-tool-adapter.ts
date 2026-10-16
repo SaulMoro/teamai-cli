@@ -67,14 +67,18 @@ function resultInstruction(input: LocalToolRun, prompt: string): string {
 }
 
 /**
- * How a launch hands `tool` its definition: Claude and OpenCode read their own deployed file (`--agent`), while Codex
- * gets the instructions prepended to the prompt and the file's model on argv.
+ * How a launch hands `tool` its definition: Claude reads its own deployed file (`--agent`), while Codex gets the
+ * instructions prepended to the prompt and the file's model on argv. OpenCode gets `--agent` too, but OpenCode 1 runs
+ * its default agent in place of a `mode: subagent` file, and OpenCode 2 does not apply the file's model (#1193), so
+ * how it applied the definition is not known.
  */
 export function definitionHandoff(
   tool: LocalWorkflowTool,
   spec: Pick<NonNullable<LocalToolRun['agent']>, 'model'>,
-): { applied: 'main' | 'prompt'; model?: string } {
-  if (localToolFamily(tool) !== 'codex') return { applied: 'main' };
+): { applied?: 'main' | 'prompt'; model?: string } {
+  const family = localToolFamily(tool);
+  if (family === 'claude') return { applied: 'main' };
+  if (family === 'opencode') return {};
   return { applied: 'prompt', ...(spec.model ? { model: spec.model } : {}) };
 }
 

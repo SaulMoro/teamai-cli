@@ -88,7 +88,8 @@ export type ToolLaunch = {
     stem: string;
     /** The absolute path the launch read, the key of `delivered`. */
     file: string;
-    applied: z.infer<typeof Applied>;
+    /** Absent when the tool is not known to apply the file; then no model is requested from it. */
+    applied?: z.infer<typeof Applied>;
     /** The model the launch passes on argv (Codex `--model`); absent when the tool reads its own file. */
     model?: string;
   };
@@ -107,17 +108,16 @@ export async function observeLaunch(launch: ToolLaunch): Promise<ReportedAgent> 
   const resolved = definition && await recordedUnchanged(record?.delivered, definition.file)
     ? record?.agentModels?.[definition.stem]?.[launch.tool]
     : undefined;
-  const model = !definition ? undefined
-    : definition.applied === 'prompt'
-      ? names({ requested: definition.model, alias: definition.model && resolved?.model === definition.model ? resolved.alias : undefined })
-      : names({ requested: resolved?.model, alias: resolved?.alias });
+  const model = definition?.applied === 'prompt'
+    ? names({ requested: definition.model, alias: definition.model && resolved?.model === definition.model ? resolved.alias : undefined })
+    : definition?.applied === 'main' ? names({ requested: resolved?.model, alias: resolved?.alias }) : undefined;
   // No launch requests an effort: none passes one on argv. Claude does not apply an agent file's `effort:` under
   // `--agent`, and OpenCode 2 takes one only as the model's `#variant`, so the file's value is not what ran.
   const team = delivery?.complete
     ? { revision: delivery.commit, localChanges: !await allUnchanged(delivery.record.delivered ?? {}) }
     : undefined;
   return {
-    ...(definition ? { definition: { applied: definition.applied } } : {}),
+    ...(definition?.applied ? { definition: { applied: definition.applied } } : {}),
     ...(version ? { tool: { version } } : {}),
     ...(model ? { model } : {}),
     ...(team ? { team } : {}),

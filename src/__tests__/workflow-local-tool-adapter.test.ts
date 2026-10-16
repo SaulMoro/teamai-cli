@@ -243,9 +243,9 @@ describe('local tool adapter', () => {
 });
 
 describe('definitionHandoff (#1176)', () => {
-  it('hands Claude and OpenCode their own file, and Codex the instructions with the model on argv', () => {
+  it('hands Claude its own file and Codex the instructions with the model on argv, and knows no handoff for OpenCode', () => {
     expect(definitionHandoff('tclaude', { model: 'opus' })).toEqual({ applied: 'main' });
-    expect(definitionHandoff('opencode', { model: 'opus' })).toEqual({ applied: 'main' });
+    expect(definitionHandoff('opencode', { model: 'opus' })).toEqual({});
     expect(definitionHandoff('codex-internal', { model: 'gpt-5.4' })).toEqual({ applied: 'prompt', model: 'gpt-5.4' });
     expect(definitionHandoff('codex', {})).toEqual({ applied: 'prompt' });
   });
