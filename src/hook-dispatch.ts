@@ -254,10 +254,12 @@ export function createDispatcher(config: DispatcherConfig): Dispatcher {
       const length = contextLength(output);
       if (tool === 'cursor' && length > CURSOR_HOOK_CONTEXT_LIMIT && outputs.some(({ reg }) => reg.yieldsToContextLimit)) {
         const rest = mergeHookOutputs(outputs.filter(({ reg }) => !reg.yieldsToContextLimit).map(({ value }) => value));
+        const yielded = outputs.filter(({ reg }) => reg.yieldsToContextLimit).map(({ reg }) => reg.handler.name).join(', ');
         if (contextLength(rest) <= CURSOR_HOOK_CONTEXT_LIMIT) {
-          const yielded = outputs.filter(({ reg }) => reg.yieldsToContextLimit).map(({ reg }) => reg.handler.name);
-          log.debug(`[hook-dispatch] ${event}/${tool}: reply context is ${length} characters, over the ${CURSOR_HOOK_CONTEXT_LIMIT}-character limit; left out ${yielded.join(', ')}`);
+          log.debug(`[hook-dispatch] ${event}/${tool}: reply context is ${length} characters, over the ${CURSOR_HOOK_CONTEXT_LIMIT}-character limit; left out ${yielded}`);
           output = rest;
+        } else {
+          log.debug(`[hook-dispatch] ${event}/${tool}: reply context is ${length} characters, over the ${CURSOR_HOOK_CONTEXT_LIMIT}-character limit even without ${yielded}; Cursor drops it`);
         }
       }
       return { output, errors };
