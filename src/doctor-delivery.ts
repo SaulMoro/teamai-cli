@@ -529,8 +529,45 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
   }
 
   checks.push(...await buildUserRulesFileChecks(ctx, items));
+  checks.push(...await buildCursorUserRulesHookChecks(ctx));
   if (items.length > 0) checks.push(...await buildProjectRulesHookChecks(ctx));
   return checks;
+}
+
+/**
+ * Cursor loads the user-scope rules file only in a workspace under the home
+ * directory; elsewhere the sessionStart hook adds them (#1197). So the file
+ * check covers half the workspaces, and this one covers the rest: the hook is
+ * registered, and what it adds fits Cursor's limit.
+ */
+async function buildCursorUserRulesHookChecks(ctx: DoctorContext): Promise<Check[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig || localConfig.scope !== 'user' || isAgentExcluded(localConfig, 'cursor')) return [];
+  const toolPath = scopedToolPaths(teamConfig, localConfig).cursor;
+  if (!toolPath?.rules || !toolPath.settings || !await isToolInstalledForConfig('cursor', toolPath.rules, localConfig)) return [];
+  const { CURSOR_HOOK_CONTEXT_LIMIT, cursorUserRulesDir, cursorUserRulesText } = await import('./cursor-user-rules.js');
+  const text = await cursorUserRulesText(teamConfig, localConfig);
+  if (text === null) return [];
+
+  const file = path.join(resolveToolBaseDir('cursor', localConfig), toolPath.settings);
+  const read = await readJsonObject(file);
+  const sessionStart = read.kind === 'ok' ? (read.value.hooks as Record<string, unknown> | undefined)?.sessionStart : undefined;
+  const registered = Array.isArray(sessionStart)
+    && sessionStart.some((entry: { command?: unknown }) => String(entry?.command ?? '').includes('hook-dispatch session-start'));
+  const fits = text.length <= CURSOR_HOOK_CONTEXT_LIMIT;
+  const why = `Cursor loads ${cursorUserRulesDir(teamConfig, localConfig)} only in a workspace under the home directory; `
+    + 'elsewhere the teamai sessionStart hook adds the team rules and instructions';
+  return [{
+    name: 'Team rules reach Cursor workspaces outside the home directory',
+    source: 'local',
+    check: async () => registered && fits,
+    fix: !registered
+      ? `${why}, but ${file} ${read.kind === 'invalid' ? `is not valid JSON (${read.error})` : 'registers no teamai sessionStart hook'}, `
+        + 'so those workspaces get none of them. Run `teamai hooks inject` to rewrite it.'
+      : `${why}, but they are ${text.length} characters, over Cursor's ${CURSOR_HOOK_CONTEXT_LIMIT}-character limit for `
+        + 'hook context, so teamai leaves them out and those workspaces get none of them. Shorten the team rules, '
+        + 'culture.md or the claudemd/ files for this scope.',
+  }];
 }
 
 /** The entries under `SessionStart` that dispatch a teamai session-start. */
