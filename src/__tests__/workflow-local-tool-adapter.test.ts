@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
-import { createLocalToolAdapter, definitionHandoff, type ToolSpawn } from '../workflow/local-tool-adapter.js';
+import { createLocalToolAdapter, type ToolSpawn } from '../workflow/local-tool-adapter.js';
 
 const files: string[] = [];
 
@@ -241,6 +241,21 @@ describe('local tool adapter', () => {
     }));
   });
 
+  it('reports that Claude ran a definition from its own file and Codex from the prompt', async () => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-applied-${Date.now()}.json`);
+    files.push(resultPath);
+    const agent = { name: 'reviewer', instructions: 'Read only.' };
+    const claude = vi.fn(() => child(claudeStream(undefined, { result: '{}' }))) as unknown as ToolSpawn;
+    const codex = vi.fn(() => child('{"type":"thread.started","thread_id":"thread-1"}')) as unknown as ToolSpawn;
+
+    expect(await createLocalToolAdapter(claude, () => 'claude').run('tclaude', { prompt: 'Review', cwd: os.tmpdir(), resultPath, agent }))
+      .toMatchObject({ started: true, applied: 'main' });
+    expect(await createLocalToolAdapter(codex, () => 'codex').run('codex-internal', { prompt: 'Review', cwd: os.tmpdir(), resultPath, agent }))
+      .toMatchObject({ started: true, applied: 'prompt' });
+    expect(await createLocalToolAdapter(claude, () => 'claude').run('claude', { prompt: 'Review', cwd: os.tmpdir(), resultPath }))
+      .not.toHaveProperty('applied');
+  });
+
   it.each([['1.18.23', 'prompt'], ['opencode v2.0.30', 'main']])(
     'reports the OpenCode %s handoff of a run that started and wrote no result',
     async (version, applied) => {
@@ -276,13 +291,5 @@ process.exit(1);
     });
 
     expect(result).toMatchObject({ started: true, applied: 'main', failure: { code: 'tool_failed' } });
-  });
-});
-
-describe('definitionHandoff (#1176)', () => {
-  it('hands Claude its own file and Codex the instructions, and leaves OpenCode\'s to the launch', () => {
-    expect(definitionHandoff('tclaude')).toEqual({ applied: 'main' });
-    expect(definitionHandoff('opencode')).toEqual({});
-    expect(definitionHandoff('codex-internal')).toEqual({ applied: 'prompt' });
   });
 });

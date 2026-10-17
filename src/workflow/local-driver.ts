@@ -22,7 +22,6 @@ import { leaseNext, reportAttempt } from './engine.js';
 import { isRecord } from './expression.js';
 import {
   createLocalToolAdapter,
-  definitionHandoff,
   isLocalWorkflowTool,
   localToolFamily,
   type LocalToolAdapter,
@@ -326,7 +325,7 @@ async function promptReport(
       config,
       tool: selected,
       cwd: driver.workspace,
-      ...(lease.agent && loaded ? { definition: { stem: lease.agent, file: loaded.file, ...definitionHandoff(selected), ...definitionModel } } : {}),
+      ...(lease.agent && loaded ? { definition: { stem: lease.agent, file: loaded.file, ...definitionModel } } : {}),
       ...(chosen.model && chosen.by !== 'definition'
         ? { chosen: { model: chosen.model.name, ...(chosen.model.effort ? { effort: chosen.model.effort } : {}), ...(chosen.alias ? { alias: chosen.alias } : {}) } }
         : {}),
@@ -367,7 +366,7 @@ async function promptReport(
     ...(ran?.session ? { session: ran.session } : {}),
     ...(ran?.tokens ? { tokens: ran.tokens } : {}),
     ...(ran?.output !== undefined ? { outputs: ran.output } : {}),
-    // OpenCode's handoff depends on the major the launch probed, so only the run knows it.
+    // How the definition was handed over is known only once the launch resolved its tool: OpenCode's depends on its major.
     ...(ran ? { agent: ran.applied ? { ...observed, definition: { applied: ran.applied } } : observed } : {}),
     exitCode: result.exitCode,
     ...(failure ? failureReport(failure) : { outcome: result.exitCode === 0 ? 'success' : 'failed' }),

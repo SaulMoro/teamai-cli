@@ -73,18 +73,6 @@ function resultInstruction(input: LocalToolRun, prompt: string): string {
     + 'Use this shape: {"output":{},"failure":{"code":"optional","message":"optional"}}.';
 }
 
-/**
- * How a launch hands `tool` its definition before it starts: Claude reads its own deployed file (`--agent`), and Codex
- * gets the instructions prepended to the prompt. OpenCode's depends on the major of the executable the launch resolves,
- * so the adapter reports it in the result.
- */
-export function definitionHandoff(tool: LocalWorkflowTool): { applied?: 'main' | 'prompt' } {
-  const family = localToolFamily(tool);
-  if (family === 'claude') return { applied: 'main' };
-  if (family === 'opencode') return {};
-  return { applied: 'prompt' };
-}
-
 /** Codex, and OpenCode 1 for a subagent, which `opencode run --agent` does not start, get the definition's instructions in the prompt. */
 function promptHandoff(tool: LocalWorkflowTool, input: LocalToolRun, opencodeMajor: number): boolean {
   const family = localToolFamily(tool);

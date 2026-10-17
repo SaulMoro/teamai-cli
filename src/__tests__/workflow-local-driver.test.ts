@@ -472,7 +472,7 @@ ${agent ? `    agent: ${agent}\n` : ''}`;
   it('publishes the definition, tool version, team commit and requested model of a Claude pass', async () => {
     const { config, workspace, runId, rev } = await observed(reviewStep('reviewer'));
 
-    await runLocalDriver(config, runId, workspace, { adapter: reports({ model: 'claude-opus-4-1-20250805' }), toolPaths });
+    await runLocalDriver(config, runId, workspace, { adapter: reports({ model: 'claude-opus-4-1-20250805', applied: 'main' }), toolPaths });
 
     expect(await entry(config)).toMatchObject({
       tool: 'claude',

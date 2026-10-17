@@ -195,9 +195,8 @@ describe('observeLaunch (#1176)', () => {
 
     expect(await observeLaunch({
       config, tool: 'claude', cwd: project,
-      definition: { stem: 'reviewer', file: agent, applied: 'main' },
+      definition: { stem: 'reviewer', file: agent },
     })).toEqual({
-      definition: { applied: 'main' },
       tool: { version: '2.1.301' },
       model: { requested: 'claude-opus-4-1', alias: 'opus' },
       team: { revision: rev, localChanges: false },
@@ -218,21 +217,21 @@ describe('observeLaunch (#1176)', () => {
     await recordDelivery(config, { rev: rev.slice(0, 7), targets: ['claude'], files: [agent], agentModels });
     fs.writeFileSync(agent, 'model: another\n');
 
-    const observed = await observeLaunch({ config, tool: 'claude', cwd: project, definition: { stem: 'reviewer', file: agent, applied: 'main' } });
+    const observed = await observeLaunch({ config, tool: 'claude', cwd: project, definition: { stem: 'reviewer', file: agent } });
 
     expect(observed).not.toHaveProperty('model');
     expect(observed).not.toHaveProperty('effort');
   });
 
-  it('requests the model the launch passes on argv for a definition applied as prompt', async () => {
+  it('requests the model the launch passes on argv for a definition', async () => {
     const { config, project, rev, agent } = checkout();
     const codexModels = { reviewer: { codex: { step: 'alias', model: 'gpt-5', alias: 'smart', effort: 'high' } } };
     await recordDelivery(config, { rev: rev.slice(0, 7), targets: ['codex'], files: [agent], agentModels: codexModels });
     const launch = { config, tool: 'codex', cwd: project };
 
-    expect(await observeLaunch({ ...launch, definition: { stem: 'reviewer', file: agent, applied: 'prompt', model: 'gpt-5' } }))
-      .toMatchObject({ definition: { applied: 'prompt' }, model: { requested: 'gpt-5', alias: 'smart' } });
-    const edited = await observeLaunch({ ...launch, definition: { stem: 'reviewer', file: agent, applied: 'prompt', model: 'gpt-4' } });
+    expect(await observeLaunch({ ...launch, definition: { stem: 'reviewer', file: agent, model: 'gpt-5' } }))
+      .toMatchObject({ model: { requested: 'gpt-5', alias: 'smart' } });
+    const edited = await observeLaunch({ ...launch, definition: { stem: 'reviewer', file: agent, model: 'gpt-4' } });
     expect(edited.model).toEqual({ requested: 'gpt-4' });
     expect(edited).not.toHaveProperty('effort');
   });
