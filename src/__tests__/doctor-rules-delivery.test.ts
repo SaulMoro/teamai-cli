@@ -591,6 +591,7 @@ describe('doctor — rules delivered on disk', () => {
   describe('Cursor workspaces outside the home directory (#1197)', () => {
     const CURSOR_HOOKS = '.cursor/hooks.json';
     const OUTSIDE_HOME = 'Team rules reach Cursor workspaces outside the home directory';
+    const WITH_ENV_HINT = 'Team rules and the team env hint fit one Cursor hook reply';
 
     async function writeCursorHooks(sessionStart: unknown[]): Promise<void> {
       await fse.outputFile(path.join(homeDir, CURSOR_HOOKS), JSON.stringify({ version: 1, hooks: { sessionStart } }));
@@ -625,13 +626,24 @@ describe('doctor — rules delivered on disk', () => {
       expect(await (await namedCheck(OUTSIDE_HOME))!.check()).toBe(passes);
     });
 
-    it('fails close to the limit, where the session\'s own hints can push the rules out', async () => {
+    it('passes near the limit when nothing else shares the hook reply', async () => {
       await fse.writeFile(path.join(repoPath, 'rules', 'long.md'), `${'x'.repeat(9_500)}\n`);
       await writeCursorHooks([{ command: 'teamai hook-dispatch session-start --tool cursor' }]);
 
-      const check = (await namedCheck(OUTSIDE_HOME))!;
-      expect(await check.check()).toBe(false);
-      expect(check.fix).toContain('per-session hints');
+      expect(await (await namedCheck(OUTSIDE_HOME))!.check()).toBe(true);
+      expect(await (await namedCheck(WITH_ENV_HINT))!.check()).toBe(true);
+    });
+
+    it('flags the team env hint pushing the rules out of the shared hook reply', async () => {
+      await fse.writeFile(path.join(repoPath, 'rules', 'long.md'), `${'x'.repeat(9_800)}\n`);
+      await fse.outputFile(path.join(repoPath, 'env', 'env.yaml'), 'variables:\n  - key: API_URL\n    value: https://example.invalid\n');
+      await writeCursorHooks([{ command: 'teamai hook-dispatch session-start --tool cursor' }]);
+
+      expect(await (await namedCheck(OUTSIDE_HOME))!.check()).toBe(true);
+      const shared = (await namedCheck(WITH_ENV_HINT))!;
+      expect(shared.informational).toBe(true);
+      expect(await shared.check()).toBe(false);
+      expect(shared.fix).toContain('leaves the rules out');
     });
 
     it('names the length, not the team\'s builtin.disabled entry, while the hook is still registered', async () => {
@@ -667,7 +679,7 @@ describe('doctor — rules delivered on disk', () => {
 
       const check = (await namedCheck(OUTSIDE_HOME))!;
       expect(await check.check()).toBe(false);
-      expect(check.fix).toContain('at most 10000 characters');
+      expect(check.fix).toContain('10000-character limit');
     });
 
     it('emits no check in project scope, where the project delivers into the workspace itself', async () => {

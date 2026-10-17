@@ -534,15 +534,13 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
   return checks;
 }
 
-/** Room doctor keeps in Cursor's hook limit for the session-start hints that share it. */
-const CURSOR_SESSION_HINT_HEADROOM = 1_000;
-
 /**
  * Cursor loads the user-scope rules file only in a workspace under the home
  * directory; elsewhere the sessionStart hook adds them (#1197). So the file
  * check covers half the workspaces, and this one covers the rest: the hook is
- * registered, and what it adds fits Cursor's limit with room for the session's
- * own hints, which the dispatcher keeps when the reply does not fit.
+ * registered, and what it adds fits Cursor's limit. The team env hint shares
+ * that reply in every session, and the dispatcher keeps it over the rules when
+ * both do not fit, so a second check says when they do not.
  */
 async function buildCursorUserRulesHookChecks(ctx: DoctorContext): Promise<Check[]> {
   const { localConfig, teamConfig } = ctx;
@@ -565,8 +563,7 @@ async function buildCursorUserRulesHookChecks(ctx: DoctorContext): Promise<Check
     const command = entry !== null && typeof entry === 'object' ? String((entry as { command?: unknown }).command ?? '') : '';
     return /\bhook-dispatch session-start\b/.test(command) && /--tool[= ]cursor(?![\w-])/.test(command);
   });
-  const budget = CURSOR_HOOK_CONTEXT_LIMIT - CURSOR_SESSION_HINT_HEADROOM;
-  const fits = text.length <= budget;
+  const fits = text.length <= CURSOR_HOOK_CONTEXT_LIMIT;
   const why = `Cursor loads ${cursorUserRulesDir(teamConfig, localConfig)} only in a workspace under the home directory; `
     + 'elsewhere the teamai sessionStart hook adds the team rules and instructions';
   const fix = read.kind === 'invalid'
@@ -580,16 +577,33 @@ async function buildCursorUserRulesHookChecks(ctx: DoctorContext): Promise<Check
       : !registered
         ? `${why}, but ${file} registers no teamai sessionStart hook for Cursor, so those workspaces get none of them. `
           + 'Run `teamai hooks inject` to rewrite it.'
-        : `${why}, but they are ${text.length} characters. Cursor takes at most ${CURSOR_HOOK_CONTEXT_LIMIT} characters `
-          + `from the hook, shared with the per-session hints (team env, merge requests, packages), so past ${budget} `
-          + 'those workspaces can get none of the rules. Shorten the team rules, culture.md or the claudemd/ files '
-          + 'for this scope.';
-  return [{
+        : `${why}, but they are ${text.length} characters, over Cursor's ${CURSOR_HOOK_CONTEXT_LIMIT}-character limit `
+          + 'for hook context, so teamai leaves them out and those workspaces get none of them. Shorten the team rules, '
+          + 'culture.md or the claudemd/ files for this scope.';
+  const checks: Check[] = [{
     name: 'Team rules reach Cursor workspaces outside the home directory',
     source: 'local',
     check: async () => registered && fits,
     fix,
   }];
+  if (!registered || !fits) return checks;
+
+  const { buildHandlerRegistry } = await import('./hook-handlers.js');
+  const envHint = buildHandlerRegistry().find((registration) => registration.handler.name === 'team-env-hint');
+  const reply = await envHint?.handler.execute({ hook_event_name: 'SessionStart' }, 'cursor', localConfig) ?? null;
+  const envText = reply === null ? '' : String(JSON.parse(reply)?.hookSpecificOutput?.additionalContext ?? '');
+  const length = (envText === '' ? text : `${text}\n${envText}`).trim().length;
+  checks.push({
+    name: 'Team rules and the team env hint fit one Cursor hook reply',
+    source: 'local',
+    informational: true,
+    check: async () => length <= CURSOR_HOOK_CONTEXT_LIMIT,
+    fix: `In a Cursor workspace outside the home directory the team rules (${text.length} characters) and the team env `
+      + `hint (${envText.length}) make ${length} characters, over Cursor's ${CURSOR_HOOK_CONTEXT_LIMIT}-character limit `
+      + 'for hook context, so teamai keeps the env hint and leaves the rules out. Shorten the team rules, culture.md, '
+      + 'the claudemd/ files or the env variable descriptions for this scope.',
+  });
+  return checks;
 }
 
 /** The entries under `SessionStart` that dispatch a teamai session-start. */
