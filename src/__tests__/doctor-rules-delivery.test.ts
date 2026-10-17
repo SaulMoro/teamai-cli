@@ -588,6 +588,49 @@ describe('doctor — rules delivered on disk', () => {
     expect(await namedCheck('Team rules are inlined in Hermes SOUL.md')).toBeUndefined();
   });
 
+  describe('Cursor workspaces outside the home directory (#1197)', () => {
+    const CURSOR_HOOKS = '.cursor/hooks.json';
+    const OUTSIDE_HOME = 'Team rules reach Cursor workspaces outside the home directory';
+
+    async function writeCursorHooks(sessionStart: unknown[]): Promise<void> {
+      await fse.outputFile(path.join(homeDir, CURSOR_HOOKS), JSON.stringify({ version: 1, hooks: { sessionStart } }));
+    }
+
+    beforeEach(() => {
+      teamConfig.toolPaths.cursor = { rules: CURSOR_RULES, settings: CURSOR_HOOKS };
+    });
+
+    it('passes when ~/.cursor/hooks.json registers the teamai sessionStart hook', async () => {
+      await writeCursorHooks([{ command: 'bash -lc "teamai hook-dispatch session-start --tool cursor 2>/dev/null" || true' }]);
+
+      expect(await (await namedCheck(OUTSIDE_HOME))!.check()).toBe(true);
+    });
+
+    it('fails when no teamai sessionStart hook is registered, saying why the rules file is not enough', async () => {
+      await writeCursorHooks([]);
+
+      const check = (await namedCheck(OUTSIDE_HOME))!;
+      expect(await check.check()).toBe(false);
+      expect(check.fix).toContain('only in a workspace under the home directory');
+      expect(check.fix).toContain('teamai hooks inject');
+    });
+
+    it('fails when the rules are over Cursor\'s hook context limit', async () => {
+      await fse.writeFile(path.join(repoPath, 'rules', 'long.md'), `${'x'.repeat(10_000)}\n`);
+      await writeCursorHooks([{ command: 'teamai hook-dispatch session-start --tool cursor' }]);
+
+      const check = (await namedCheck(OUTSIDE_HOME))!;
+      expect(await check.check()).toBe(false);
+      expect(check.fix).toContain('10000-character limit');
+    });
+
+    it('emits no check in project scope, where the project delivers into the workspace itself', async () => {
+      Object.assign(localConfig, { scope: 'project', projectRoot: path.join(tempDir, 'project') });
+
+      expect(await namedCheck(OUTSIDE_HOME)).toBeUndefined();
+    });
+  });
+
   describe('Hermes in project scope (#946)', () => {
     beforeEach(async () => {
       const hermesHome = path.join(tempDir, 'hermes');
