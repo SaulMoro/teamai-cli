@@ -325,6 +325,7 @@ export function createLocalToolAdapter(
         }
       }
       const args = invocation(tool, input, opencodeMajor);
+      const applied = input.agent ? { applied: promptHandoff(tool, input, opencodeMajor) ? 'prompt' as const : 'main' as const } : {};
       let started = false;
       const completed = await new Promise<{ exitCode: number; stdout: string; error?: NodeJS.ErrnoException }>((resolve) => {
         let child: ChildProcess;
@@ -360,6 +361,7 @@ export function createLocalToolAdapter(
         return {
           started: true,
           exitCode: completed.exitCode,
+          ...applied,
           failure: { code: 'tool_failed', message: `${tool} could not be started` },
         };
       }
@@ -370,6 +372,7 @@ export function createLocalToolAdapter(
         return {
           started: true,
           exitCode: completed.exitCode,
+          ...applied,
           failure: { code: 'tool_failed', message: `${tool} did not write a valid workflow result` },
         };
       }
@@ -378,7 +381,6 @@ export function createLocalToolAdapter(
         result.failure = { code: 'tool_failed', message: `${tool} exited with status ${completed.exitCode}` };
       }
       if (!fileResult) await persistFallback(input.resultPath, result);
-      const applied = input.agent ? { applied: promptHandoff(tool, input, opencodeMajor) ? 'prompt' as const : 'main' as const } : {};
       return { started: true, exitCode: completed.exitCode, ...applied, ...result };
     },
   };

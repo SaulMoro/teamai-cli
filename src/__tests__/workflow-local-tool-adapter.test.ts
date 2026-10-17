@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createLocalToolAdapter, definitionHandoff, type ToolSpawn } from '../workflow/local-tool-adapter.js';
 
 const files: string[] = [];
@@ -239,6 +239,43 @@ describe('local tool adapter', () => {
     expect(spawnTool).toHaveBeenCalledWith('claude', expect.anything(), expect.objectContaining({
       env: expect.objectContaining({ TEAMAI_LAUNCHED_BY: 'workflow', TEAMAI_LAUNCHED_TOOL: 'claude', TEAMAI_LAUNCHED_CHECKOUT: 'checkout-1' }),
     }));
+  });
+
+  it.each([['1.18.23', 'prompt'], ['opencode v2.0.30', 'main']])(
+    'reports the OpenCode %s handoff of a run that started and wrote no result',
+    async (version, applied) => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-workflow-handoff-'));
+      onTestFinished(() => fs.rm(root, { recursive: true, force: true }));
+      const executable = path.join(root, 'opencode');
+      await fs.writeFile(executable, `#!/usr/bin/env node
+if (process.argv[2] === '--version') { console.log(${JSON.stringify(version)}); process.exit(0); }
+process.exit(1);
+`, { mode: 0o755 });
+
+      const result = await createLocalToolAdapter(undefined, () => executable).run('opencode', {
+        prompt: 'Review', cwd: root, resultPath: path.join(root, 'result.json'),
+        agent: { name: 'reviewer', instructions: 'Read only.', settings: { mode: 'subagent' } },
+      });
+
+      expect(result).toMatchObject({ started: true, exitCode: 1, applied, failure: { code: 'tool_failed' } });
+    },
+  );
+
+  it('reports the handoff of a run that started and then failed', async () => {
+    const failsAfterSpawn = (() => {
+      const process = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: Object.assign(new EventEmitter(), { resume: () => undefined }) });
+      queueMicrotask(() => {
+        process.emit('spawn');
+        process.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }));
+      });
+      return process;
+    }) as unknown as ToolSpawn;
+
+    const result = await createLocalToolAdapter(failsAfterSpawn, () => 'claude').run('claude', {
+      prompt: 'Review', cwd: os.tmpdir(), resultPath: path.join(os.tmpdir(), 'never-result.json'), agent: { name: 'reviewer', instructions: 'Read only.' },
+    });
+
+    expect(result).toMatchObject({ started: true, applied: 'main', failure: { code: 'tool_failed' } });
   });
 });
 
