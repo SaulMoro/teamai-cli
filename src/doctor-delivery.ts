@@ -545,28 +545,43 @@ async function buildCursorUserRulesHookChecks(ctx: DoctorContext): Promise<Check
   if (!teamConfig || localConfig.scope !== 'user' || isAgentExcluded(localConfig, 'cursor')) return [];
   const toolPath = scopedToolPaths(teamConfig, localConfig).cursor;
   if (!toolPath?.rules || !toolPath.settings || !await isToolInstalledForConfig('cursor', toolPath.rules, localConfig)) return [];
-  const { CURSOR_HOOK_CONTEXT_LIMIT, cursorUserRulesDir, cursorUserRulesText } = await import('./cursor-user-rules.js');
+  const { cursorUserRulesDir, cursorUserRulesText } = await import('./cursor-user-rules.js');
   const text = await cursorUserRulesText(teamConfig, localConfig);
   if (text === null) return [];
 
+  const { CURSOR_HOOK_CONTEXT_LIMIT } = await import('./hook-dispatch.js');
+  const { readBuiltinOverride } = await import('./resources/hooks.js');
+  const builtin = await readBuiltinOverride(localConfig);
+  const disabledByTeam = builtin.known && (builtin.override?.disabled ?? []).includes('Hook dispatch session-start');
   const file = path.join(resolveToolBaseDir('cursor', localConfig), toolPath.settings);
   const read = await readJsonObject(file);
-  const sessionStart = read.kind === 'ok' ? (read.value.hooks as Record<string, unknown> | undefined)?.sessionStart : undefined;
-  const registered = Array.isArray(sessionStart)
-    && sessionStart.some((entry: { command?: unknown }) => String(entry?.command ?? '').includes('hook-dispatch session-start'));
+  const hooks = read.kind === 'ok' ? read.value.hooks : undefined;
+  const sessionStart = hooks !== null && typeof hooks === 'object' ? (hooks as { sessionStart?: unknown }).sessionStart : undefined;
+  const registered = Array.isArray(sessionStart) && sessionStart.some((entry: unknown) => {
+    const command = entry !== null && typeof entry === 'object' ? String((entry as { command?: unknown }).command ?? '') : '';
+    return command.includes('hook-dispatch session-start') && command.includes('--tool cursor');
+  });
   const fits = text.length <= CURSOR_HOOK_CONTEXT_LIMIT;
   const why = `Cursor loads ${cursorUserRulesDir(teamConfig, localConfig)} only in a workspace under the home directory; `
     + 'elsewhere the teamai sessionStart hook adds the team rules and instructions';
+  const fix = disabledByTeam
+    ? `${why}, but the team's hooks/hooks.yaml lists \`Hook dispatch session-start\` under \`builtin.disabled\`, so `
+      + 'those workspaces get none of them. Ask the team to remove that entry, then run `teamai hooks inject`.'
+    : read.kind === 'invalid'
+      ? `${why}, but ${file} is not valid JSON (${read.error}), so Cursor runs no hooks from it and those workspaces `
+        + 'get none of them. Fix the file by hand (teamai does not rewrite a file it cannot parse), then run '
+        + '`teamai hooks inject`.'
+      : !registered
+        ? `${why}, but ${file} registers no teamai sessionStart hook for Cursor, so those workspaces get none of them. `
+          + 'Run `teamai hooks inject` to rewrite it.'
+        : `${why}, but they are ${text.length} characters, over Cursor's ${CURSOR_HOOK_CONTEXT_LIMIT}-character limit `
+          + 'for hook context, so teamai leaves them out and those workspaces get none of them. Shorten the team rules, '
+          + 'culture.md or the claudemd/ files for this scope.';
   return [{
     name: 'Team rules reach Cursor workspaces outside the home directory',
     source: 'local',
     check: async () => registered && fits,
-    fix: !registered
-      ? `${why}, but ${file} ${read.kind === 'invalid' ? `is not valid JSON (${read.error})` : 'registers no teamai sessionStart hook'}, `
-        + 'so those workspaces get none of them. Run `teamai hooks inject` to rewrite it.'
-      : `${why}, but they are ${text.length} characters, over Cursor's ${CURSOR_HOOK_CONTEXT_LIMIT}-character limit for `
-        + 'hook context, so teamai leaves them out and those workspaces get none of them. Shorten the team rules, '
-        + 'culture.md or the claudemd/ files for this scope.',
+    fix,
   }];
 }
 

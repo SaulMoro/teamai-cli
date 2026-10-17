@@ -30,6 +30,8 @@ export interface HandlerRegistration {
   timeoutMs: number;
   /** Fire-and-forget: run detached so it can't delay host hook completion. */
   background?: boolean;
+  /** Left out first when the merged reply is over the host's context limit (see hook-dispatch.ts). */
+  yieldsToContextLimit?: true;
   /**
    * Git-provider-only handler. When teamai is configured with an HTTP source
    * (localConfig.repo.kind === 'http'), these are filtered out at the dispatch
@@ -975,7 +977,7 @@ const cursorUserRulesHandler: HookHandler = {
 };
 
 /**
- * `instructions`:the culture, claudemd and recall blocks for a tool whose
+ * `instructions`: the culture, claudemd and recall blocks for a tool whose
  * extension adds them to the prompt instead of reading a file (#945), and for
  * Pi the project's team rules after them (#946). Resolved for the member,
  * project and scope of the session's cwd, as a pull would. Nothing when the
@@ -1150,7 +1152,7 @@ export function buildHandlerRegistry(): HandlerRegistration[] {
     { event: 'session-start', matcher: '*', handler: pullHandler, timeoutMs: PULL_TIMEOUT_MS, background: true },
     { event: 'session-start', matcher: '*', handler: dashboardReportHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
     { event: 'session-start', matcher: '*', handler: teamRulesHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
-    { event: 'session-start', matcher: '*', handler: cursorUserRulesHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
+    { event: 'session-start', matcher: '*', handler: cursorUserRulesHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true, yieldsToContextLimit: true },
     { event: 'session-start', matcher: '*', handler: mrHintHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, gitOnly: true, requiresConfig: true },
     { event: 'session-start', matcher: '*', handler: packageHintHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },
     { event: 'session-start', matcher: '*', handler: teamEnvHintHandler, timeoutMs: FOREGROUND_HOOK_TIMEOUT_MS, requiresConfig: true },

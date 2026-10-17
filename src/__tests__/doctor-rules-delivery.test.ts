@@ -615,6 +615,29 @@ describe('doctor — rules delivered on disk', () => {
       expect(check.fix).toContain('teamai hooks inject');
     });
 
+    it('fails when the only sessionStart dispatch is for another tool, which adds no Cursor rules', async () => {
+      await writeCursorHooks([{ command: 'teamai hook-dispatch session-start --tool claude' }]);
+
+      expect(await (await namedCheck(OUTSIDE_HOME))!.check()).toBe(false);
+    });
+
+    it('tells the member to repair invalid JSON by hand, which hooks inject will not rewrite', async () => {
+      await fse.outputFile(path.join(homeDir, CURSOR_HOOKS), '{ invalid JSON');
+
+      const check = (await namedCheck(OUTSIDE_HOME))!;
+      expect(await check.check()).toBe(false);
+      expect(check.fix).toContain('Fix the file by hand');
+    });
+
+    it('names the team\'s builtin.disabled entry when the team turned the session-start hook off', async () => {
+      await fse.outputFile(path.join(repoPath, 'hooks', 'hooks.yaml'), 'builtin:\n  disabled:\n    - Hook dispatch session-start\n');
+      await writeCursorHooks([]);
+
+      const check = (await namedCheck(OUTSIDE_HOME))!;
+      expect(await check.check()).toBe(false);
+      expect(check.fix).toContain('builtin.disabled');
+    });
+
     it('fails when the rules are over Cursor\'s hook context limit', async () => {
       await fse.writeFile(path.join(repoPath, 'rules', 'long.md'), `${'x'.repeat(10_000)}\n`);
       await writeCursorHooks([{ command: 'teamai hook-dispatch session-start --tool cursor' }]);
