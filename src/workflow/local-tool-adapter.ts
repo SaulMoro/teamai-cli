@@ -2,6 +2,7 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crossSpawn from 'cross-spawn';
+import { launchEnv, type Launch } from '../launch-context.js';
 import { opencodeMajorVersion } from '../opencode-hooks.js';
 import { resolveCliPath } from '../utils/cli-path.js';
 import { writeJsonAtomic } from '../utils/fs.js';
@@ -28,18 +29,29 @@ export interface LocalToolRun {
   resultPath: string;
   /** The definition the step runs as. `settings` are the deployed OpenCode file's other fields, such as `mode` and `variant`. */
   agent?: { name: string; instructions: string; model?: string; settings?: Record<string, unknown> };
-  /** The model and effort the launch passes: the step's, which replaces the definition's, or on OpenCode the definition's own. */
+  /** The model and effort the launch passes: the step's, which replaces the definition's, or on Codex and OpenCode the definition's own. */
   model?: { name: string; effort?: string };
+  /** The workflow launch the tool's session-start hook reads from its environment (#1176). */
+  launch?: Launch;
 }
 
-export interface LocalToolResult {
-  exitCode: number;
-  output?: unknown;
-  model?: string;
-  session?: string;
-  tokens?: TokenUsage;
-  failure?: WorkflowFailure;
-}
+/**
+ * What a run gave. `started` is whether the tool's process spawned, as its `spawn` event says, so a pass that
+ * launched nothing records no observation of a launch (#1176).
+ */
+export type LocalToolResult =
+  | {
+    started: true;
+    exitCode: number;
+    /** How the launch handed over the definition, when it ran one. */
+    applied?: 'main' | 'prompt';
+    output?: unknown;
+    model?: string;
+    session?: string;
+    tokens?: TokenUsage;
+    failure?: WorkflowFailure;
+  }
+  | { started: false; exitCode: number; failure: WorkflowFailure };
 
 export interface LocalToolAdapter {
   run(tool: LocalWorkflowTool, input: LocalToolRun): Promise<LocalToolResult>;
@@ -61,6 +73,18 @@ function resultInstruction(input: LocalToolRun, prompt: string): string {
     + 'Use this shape: {"output":{},"failure":{"code":"optional","message":"optional"}}.';
 }
 
+/**
+ * How a launch hands `tool` its definition before it starts: Claude reads its own deployed file (`--agent`), and Codex
+ * gets the instructions prepended to the prompt. OpenCode's depends on the major of the executable the launch resolves,
+ * so the adapter reports it in the result.
+ */
+export function definitionHandoff(tool: LocalWorkflowTool): { applied?: 'main' | 'prompt' } {
+  const family = localToolFamily(tool);
+  if (family === 'claude') return { applied: 'main' };
+  if (family === 'opencode') return {};
+  return { applied: 'prompt' };
+}
+
 /** Codex, and OpenCode 1 for a subagent, which `opencode run --agent` does not start, get the definition's instructions in the prompt. */
 function promptHandoff(tool: LocalWorkflowTool, input: LocalToolRun, opencodeMajor: number): boolean {
   const family = localToolFamily(tool);
@@ -78,7 +102,7 @@ function invocation(tool: LocalWorkflowTool, input: LocalToolRun, opencodeMajor:
   const model = input.model ? ['--model', input.model.name] : [];
   const effort = input.model?.effort;
   if (family === 'claude') {
-    return ['-p', prompt, '--output-format', 'json', ...agent, ...model, ...(effort ? ['--effort', effort] : [])];
+    return ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...agent, ...model, ...(effort ? ['--effort', effort] : [])];
   }
   if (family === 'codex') {
     const codexModel = input.model?.name ?? input.agent?.model;
@@ -123,36 +147,36 @@ function redactFailure(result: ResultFile, input: LocalToolRun): void {
 }
 
 function claudeStdout(stdout: string): ResultFile | null {
-  try {
-    const value = JSON.parse(stdout.trim()) as unknown;
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-    const record = value as Record<string, unknown>;
-    const usage = record.usage as Record<string, unknown> | undefined;
-    let output: unknown;
-    if (typeof record.result === 'string') {
-      try {
-        output = JSON.parse(record.result) as unknown;
-      } catch {
-        output = undefined;
-      }
-    } else if (record.result !== undefined) {
-      output = record.result;
+  const events = jsonRecords(stdout);
+  const record = events.filter((event) => event.type === 'result').at(-1);
+  if (!record) return null;
+  const usage = record.usage as Record<string, unknown> | undefined;
+  // The `init` event names the session's model. `modelUsage` keys every model the session billed, a side call's and a
+  // subagent's included, so it cannot tell which one ran the step (#1176).
+  const init = events.find((event) => event.type === 'system' && event.subtype === 'init');
+  const model = typeof init?.model === 'string' ? init.model : undefined;
+  let output: unknown;
+  if (typeof record.result === 'string') {
+    try {
+      output = JSON.parse(record.result) as unknown;
+    } catch {
+      output = undefined;
     }
-    return {
-      ...(output !== undefined ? { output } : {}),
-      ...(typeof record.model === 'string' ? { model: record.model } : {}),
-      ...(typeof record.session_id === 'string' ? { session: record.session_id } : {}),
-      ...(usage ? {
-        tokens: {
-          ...(finiteNumber(usage.input_tokens) !== undefined ? { input: finiteNumber(usage.input_tokens) } : {}),
-          ...(finiteNumber(usage.output_tokens) !== undefined ? { output: finiteNumber(usage.output_tokens) } : {}),
-          ...(finiteNumber(usage.cache_read_input_tokens) !== undefined ? { cachedInput: finiteNumber(usage.cache_read_input_tokens) } : {}),
-        },
-      } : {}),
-    };
-  } catch {
-    return null;
+  } else if (record.result !== undefined) {
+    output = record.result;
   }
+  return {
+    ...(output !== undefined ? { output } : {}),
+    ...(model !== undefined ? { model } : {}),
+    ...(typeof record.session_id === 'string' ? { session: record.session_id } : {}),
+    ...(usage ? {
+      tokens: {
+        ...(finiteNumber(usage.input_tokens) !== undefined ? { input: finiteNumber(usage.input_tokens) } : {}),
+        ...(finiteNumber(usage.output_tokens) !== undefined ? { output: finiteNumber(usage.output_tokens) } : {}),
+        ...(finiteNumber(usage.cache_read_input_tokens) !== undefined ? { cachedInput: finiteNumber(usage.cache_read_input_tokens) } : {}),
+      },
+    } : {}),
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -268,6 +292,7 @@ export function createLocalToolAdapter(
       const executable = resolveTool(tool);
       if (!executable) {
         return {
+          started: false,
           exitCode: 1,
           failure: { code: 'tool_unavailable', message: `The ${tool} executable is not available on PATH` },
         };
@@ -280,6 +305,7 @@ export function createLocalToolAdapter(
         // OpenCode 1 applies an agent's variant to a launch on the agent's own model that passes none.
         if (opencodeMajor < 2 && !viaPrompt && settings['variant'] !== undefined && input.model && input.model.name === model && input.model.effort === undefined) {
           return {
+            started: false,
             exitCode: 1,
             failure: {
               code: 'model_unavailable',
@@ -299,12 +325,13 @@ export function createLocalToolAdapter(
         }
       }
       const args = invocation(tool, input, opencodeMajor);
+      let started = false;
       const completed = await new Promise<{ exitCode: number; stdout: string; error?: NodeJS.ErrnoException }>((resolve) => {
         let child: ChildProcess;
         try {
           child = spawnTool(executable, args, {
             cwd: input.cwd,
-            env: { ...process.env, TEAMAI_WORKFLOW_RESULT: input.resultPath },
+            env: { ...process.env, ...(input.launch ? launchEnv(input.launch) : {}), TEAMAI_WORKFLOW_RESULT: input.resultPath },
             // OpenCode waits for the end of a piped stdin before it starts.
             stdio: ['ignore', 'pipe', 'pipe'],
             windowsHide: true,
@@ -314,19 +341,24 @@ export function createLocalToolAdapter(
           return;
         }
         let stdout = '';
+        child.on('spawn', () => { started = true; });
         child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
         child.stderr?.resume();
         child.on('error', (error: NodeJS.ErrnoException) => resolve({ exitCode: 1, stdout, error }));
         child.on('close', (code) => resolve({ exitCode: code ?? 1, stdout }));
       });
-      if (completed.error?.code === 'ENOENT') {
+      if (!started || completed.error?.code === 'ENOENT') {
         return {
+          started: false,
           exitCode: completed.exitCode,
-          failure: { code: 'tool_unavailable', message: `The ${tool} executable is not available on PATH` },
+          failure: completed.error?.code === 'ENOENT'
+            ? { code: 'tool_unavailable', message: `The ${tool} executable is not available on PATH` }
+            : { code: 'tool_failed', message: `${tool} could not be started` },
         };
       }
       if (completed.error) {
         return {
+          started: true,
           exitCode: completed.exitCode,
           failure: { code: 'tool_failed', message: `${tool} could not be started` },
         };
@@ -336,6 +368,7 @@ export function createLocalToolAdapter(
       const result = combineResults(fileResult, reported);
       if (!result) {
         return {
+          started: true,
           exitCode: completed.exitCode,
           failure: { code: 'tool_failed', message: `${tool} did not write a valid workflow result` },
         };
@@ -345,7 +378,8 @@ export function createLocalToolAdapter(
         result.failure = { code: 'tool_failed', message: `${tool} exited with status ${completed.exitCode}` };
       }
       if (!fileResult) await persistFallback(input.resultPath, result);
-      return { exitCode: completed.exitCode, ...result };
+      const applied = input.agent ? { applied: promptHandoff(tool, input, opencodeMajor) ? 'prompt' as const : 'main' as const } : {};
+      return { started: true, exitCode: completed.exitCode, ...applied, ...result };
     },
   };
 }

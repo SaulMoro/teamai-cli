@@ -12,14 +12,23 @@ import {
   type AgentSpec,
   type ToolName,
 } from '../resources/agent-format.js';
+import { observeLaunch } from '../agent-observation.js';
 import { exitLike } from '../env-exec.js';
+import { workflowLaunch } from '../launch-context.js';
 import { getDataHome, resolveToolBaseDir, type LocalConfig, type TeamaiConfig } from '../types.js';
 import { readFileSafe, writeJsonAtomic } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { leaseNext, reportAttempt } from './engine.js';
 import { isRecord } from './expression.js';
 import {
-  createLocalToolAdapter, isLocalWorkflowTool, localToolFamily, type LocalToolAdapter, type LocalToolRun, type LocalWorkflowTool,
+  createLocalToolAdapter,
+  definitionHandoff,
+  isLocalWorkflowTool,
+  localToolFamily,
+  type LocalToolAdapter,
+  type LocalToolResult,
+  type LocalToolRun,
+  type LocalWorkflowTool,
 } from './local-tool-adapter.js';
 import { chooseStepModel } from './step-model.js';
 import type { DriverIdentity, WorkflowEnvelope, WorkflowFailure } from './types.js';
@@ -165,12 +174,13 @@ function reverseAgent(tool: LocalWorkflowTool, file: string, content: string) {
   return reverseFromOpencode(file, content);
 }
 
+/** A deployed agent and the file it was read from, which is the key its pull recorded it under. */
 async function loadAgent(
   tool: LocalWorkflowTool,
   name: string,
   config: LocalConfig,
   toolPaths: TeamaiConfig['toolPaths'] | undefined,
-): Promise<AgentSpec | null> {
+): Promise<{ spec: AgentSpec; file: string } | null> {
   const agents = toolPaths?.[tool]?.agents;
   if (!agents) return null;
   // The same directory `teamai pull` writes: the tool base for this scope, not the step's cwd.
@@ -178,7 +188,7 @@ async function loadAgent(
   const content = await readFileSafe(file);
   if (content === null) return null;
   const reversed = reverseAgent(tool, file, content);
-  return reversed.ok ? reversed.spec : null;
+  return reversed.ok ? { spec: reversed.spec, file } : null;
 }
 
 interface WorktreeSnapshot {
@@ -289,7 +299,8 @@ async function promptReport(
     const failure = { code: 'tool_unsupported', message: `The local workflow tool "${selected}" is not supported` };
     return { attempt: lease.attempt, revision: lease.revision, driver, tool: selected, ...failureReport(failure) };
   }
-  const agent = lease.agent ? await loadAgent(selected, lease.agent, config, options.toolPaths) : undefined;
+  const loaded = lease.agent ? await loadAgent(selected, lease.agent, config, options.toolPaths) : undefined;
+  const agent = loaded?.spec;
   if (lease.agent && !agent) {
     const failure = {
       code: 'agent_unavailable',
@@ -307,18 +318,35 @@ async function promptReport(
       log.warn(`Agent "${agent.name}" on ${selected} does not apply ${ignored.join(', ')} from the deployed agent file. codex exec still has a shell. The step is not blocked.`);
     }
   }
+  const definitionModel = chosen.model && chosen.by === 'definition'
+    ? { model: chosen.model.name, ...(chosen.model.effort ? { effort: chosen.model.effort } : {}) }
+    : {};
+  const [observed, launch] = await Promise.all([
+    observeLaunch({
+      config,
+      tool: selected,
+      cwd: driver.workspace,
+      ...(lease.agent && loaded ? { definition: { stem: lease.agent, file: loaded.file, ...definitionHandoff(selected), ...definitionModel } } : {}),
+      ...(chosen.model && chosen.by !== 'definition'
+        ? { chosen: { model: chosen.model.name, ...(chosen.model.effort ? { effort: chosen.model.effort } : {}), ...(chosen.alias ? { alias: chosen.alias } : {}) } }
+        : {}),
+    }),
+    workflowLaunch(config, selected),
+  ]);
   const before = await snapshotWorktree(driver.workspace);
-  let result;
+  let result: LocalToolResult;
   try {
     result = await adapter.run(selected, {
       prompt: lease.prompt!,
       cwd: driver.workspace,
       resultPath: attemptResultPath,
+      ...(launch ? { launch } : {}),
       ...(agent ? { agent: definitionRun(selected, lease.agent!, agent) } : {}),
       ...(chosen.model ? { model: chosen.model } : {}),
     });
   } catch {
     result = {
+      started: false,
       exitCode: 1,
       failure: { code: 'tool_failed', message: `${selected} could not complete the workflow step` },
     };
@@ -329,15 +357,18 @@ async function promptReport(
     ? { code: 'read_only_dirty', message: `Read-only prompt step changed repository paths: ${paths.join(', ')}` }
     : undefined;
   const failure = dirtyFailure ?? result.failure;
+  const ran = result.started ? result : undefined;
   return {
     attempt: lease.attempt,
     revision: lease.revision,
     driver,
     tool: selected,
-    ...(result.model ?? chosen.model?.name ?? agent?.model ? { model: result.model ?? chosen.model?.name ?? agent?.model } : {}),
-    ...(result.session ? { session: result.session } : {}),
-    ...(result.tokens ? { tokens: result.tokens } : {}),
-    ...(result.output !== undefined ? { outputs: result.output } : {}),
+    ...(ran?.model ? { model: ran.model } : {}),
+    ...(ran?.session ? { session: ran.session } : {}),
+    ...(ran?.tokens ? { tokens: ran.tokens } : {}),
+    ...(ran?.output !== undefined ? { outputs: ran.output } : {}),
+    // OpenCode's handoff depends on the major the launch probed, so only the run knows it.
+    ...(ran ? { agent: ran.applied ? { ...observed, definition: { applied: ran.applied } } : observed } : {}),
     exitCode: result.exitCode,
     ...(failure ? failureReport(failure) : { outcome: result.exitCode === 0 ? 'success' : 'failed' }),
   };
