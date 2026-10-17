@@ -534,11 +534,15 @@ async function buildRulesActivationChecks(ctx: DoctorContext, items: ResourceIte
   return checks;
 }
 
+/** Room doctor keeps in Cursor's hook limit for the session-start hints that share it. */
+const CURSOR_SESSION_HINT_HEADROOM = 1_000;
+
 /**
  * Cursor loads the user-scope rules file only in a workspace under the home
  * directory; elsewhere the sessionStart hook adds them (#1197). So the file
  * check covers half the workspaces, and this one covers the rest: the hook is
- * registered, and what it adds fits Cursor's limit.
+ * registered, and what it adds fits Cursor's limit with room for the session's
+ * own hints, which the dispatcher keeps when the reply does not fit.
  */
 async function buildCursorUserRulesHookChecks(ctx: DoctorContext): Promise<Check[]> {
   const { localConfig, teamConfig } = ctx;
@@ -559,24 +563,27 @@ async function buildCursorUserRulesHookChecks(ctx: DoctorContext): Promise<Check
   const sessionStart = hooks !== null && typeof hooks === 'object' ? (hooks as { sessionStart?: unknown }).sessionStart : undefined;
   const registered = Array.isArray(sessionStart) && sessionStart.some((entry: unknown) => {
     const command = entry !== null && typeof entry === 'object' ? String((entry as { command?: unknown }).command ?? '') : '';
-    return command.includes('hook-dispatch session-start') && command.includes('--tool cursor');
+    return /\bhook-dispatch session-start\b/.test(command) && /--tool[= ]cursor(?![\w-])/.test(command);
   });
-  const fits = text.length <= CURSOR_HOOK_CONTEXT_LIMIT;
+  const budget = CURSOR_HOOK_CONTEXT_LIMIT - CURSOR_SESSION_HINT_HEADROOM;
+  const fits = text.length <= budget;
   const why = `Cursor loads ${cursorUserRulesDir(teamConfig, localConfig)} only in a workspace under the home directory; `
     + 'elsewhere the teamai sessionStart hook adds the team rules and instructions';
-  const fix = disabledByTeam
-    ? `${why}, but the team's hooks/hooks.yaml lists \`Hook dispatch session-start\` under \`builtin.disabled\`, so `
-      + 'those workspaces get none of them. Ask the team to remove that entry, then run `teamai hooks inject`.'
-    : read.kind === 'invalid'
-      ? `${why}, but ${file} is not valid JSON (${read.error}), so Cursor runs no hooks from it and those workspaces `
-        + 'get none of them. Fix the file by hand (teamai does not rewrite a file it cannot parse), then run '
+  const fix = read.kind === 'invalid'
+    ? `${why}, but ${file} is not valid JSON (${read.error}), so Cursor runs no hooks from it and those workspaces `
+      + 'get none of them. Fix the file by hand (teamai does not rewrite a file it cannot parse), then run '
+      + '`teamai hooks inject`.'
+    : !registered && disabledByTeam
+      ? `${why}, but the team's hooks/hooks.yaml lists \`Hook dispatch session-start\` under \`builtin.disabled\`, so `
+        + `${file} registers none and those workspaces get none of them. Ask the team to remove that entry, then run `
         + '`teamai hooks inject`.'
       : !registered
         ? `${why}, but ${file} registers no teamai sessionStart hook for Cursor, so those workspaces get none of them. `
           + 'Run `teamai hooks inject` to rewrite it.'
-        : `${why}, but they are ${text.length} characters, over Cursor's ${CURSOR_HOOK_CONTEXT_LIMIT}-character limit `
-          + 'for hook context, so teamai leaves them out and those workspaces get none of them. Shorten the team rules, '
-          + 'culture.md or the claudemd/ files for this scope.';
+        : `${why}, but they are ${text.length} characters. Cursor takes at most ${CURSOR_HOOK_CONTEXT_LIMIT} characters `
+          + `from the hook, shared with the per-session hints (team env, merge requests, packages), so past ${budget} `
+          + 'those workspaces can get none of the rules. Shorten the team rules, culture.md or the claudemd/ files '
+          + 'for this scope.';
   return [{
     name: 'Team rules reach Cursor workspaces outside the home directory',
     source: 'local',

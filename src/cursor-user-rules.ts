@@ -18,22 +18,17 @@ import { teamRulesContext } from './resources/rules.js';
 import { isAgentExcluded, resolveToolBaseDir, scopedToolPaths, type LocalConfig, type TeamaiConfig } from './types.js';
 import { log } from './utils/logger.js';
 
-function canonicalPath(p: string): string {
-  let resolved: string;
-  try {
-    resolved = fs.realpathSync.native(p);
-  } catch {
-    resolved = path.resolve(p);
-  }
+async function canonicalPath(p: string): Promise<string> {
+  const resolved = await fs.promises.realpath(p).catch(() => path.resolve(p));
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
 /** Whether Cursor's walk up from `workspace` reaches `rulesDir`, directly or through a link on the way. */
-function cursorWalkReaches(workspace: string, rulesDir: string): boolean {
-  const target = canonicalPath(rulesDir);
+async function cursorWalkReaches(workspace: string, rulesDir: string): Promise<boolean> {
+  const target = await canonicalPath(rulesDir);
   let dir = path.resolve(workspace);
   for (;;) {
-    if (canonicalPath(path.join(dir, '.cursor', 'rules')) === target) return true;
+    if (await canonicalPath(path.join(dir, '.cursor', 'rules')) === target) return true;
     const parent = path.dirname(dir);
     if (parent === dir) return false;
     dir = parent;
@@ -65,7 +60,7 @@ export async function cursorUserRulesContext(workspace: string, config: LocalCon
   const teamConfig = await loadTeamConfig(userConfig.repo.localPath);
   if (!teamConfig) return null;
   const rulesDir = cursorUserRulesDir(teamConfig, userConfig);
-  if (rulesDir === undefined || cursorWalkReaches(workspace, rulesDir)) return null;
+  if (rulesDir === undefined || await cursorWalkReaches(workspace, rulesDir)) return null;
   const text = await cursorUserRulesText(teamConfig, userConfig);
   if (text !== null && text.length > CURSOR_HOOK_CONTEXT_LIMIT) {
     log.debug(`cursor-user-rules: ${text.length} characters, over Cursor's ${CURSOR_HOOK_CONTEXT_LIMIT}-character hook limit; not added`);

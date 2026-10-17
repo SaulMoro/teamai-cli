@@ -201,6 +201,18 @@ describe('hook-dispatch', () => {
       expect(JSON.parse(claude.output!).hookSpecificOutput.additionalContext).toContain('R'.repeat(9_990));
     });
 
+    it('keeps a yielding handler\'s context when the others alone are still over Cursor\'s limit', async () => {
+      const context = (text: string) => JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } });
+      const dispatcher = createDispatcher({ localConfig: null, handlers: [
+        { event: 'session-start', matcher: '*', handler: createHandler('cursor-user-rules', context('RULES')), yieldsToContextLimit: true },
+        { event: 'session-start', matcher: '*', handler: createHandler('mr-hint', context('M'.repeat(10_200))) },
+      ] });
+
+      const result = await dispatcher.dispatch('session-start', '*', {}, 'cursor');
+
+      expect(JSON.parse(result.output!).hookSpecificOutput.additionalContext).toContain('RULES');
+    });
+
     it('keeps a yielding handler\'s context when the merged reply fits Cursor\'s limit', async () => {
       const context = (text: string) => JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } });
       const dispatcher = createDispatcher({ localConfig: null, handlers: [

@@ -615,10 +615,33 @@ describe('doctor — rules delivered on disk', () => {
       expect(check.fix).toContain('teamai hooks inject');
     });
 
-    it('fails when the only sessionStart dispatch is for another tool, which adds no Cursor rules', async () => {
-      await writeCursorHooks([{ command: 'teamai hook-dispatch session-start --tool claude' }]);
+    it.each([
+      ['teamai hook-dispatch session-start --tool claude', false],
+      ['teamai hook-dispatch session-start --tool cursor-agent', false],
+      ['teamai hook-dispatch session-start --tool=cursor', true],
+    ])('reads the dispatch\'s --tool value: %s', async (command, passes) => {
+      await writeCursorHooks([{ command }]);
 
-      expect(await (await namedCheck(OUTSIDE_HOME))!.check()).toBe(false);
+      expect(await (await namedCheck(OUTSIDE_HOME))!.check()).toBe(passes);
+    });
+
+    it('fails close to the limit, where the session\'s own hints can push the rules out', async () => {
+      await fse.writeFile(path.join(repoPath, 'rules', 'long.md'), `${'x'.repeat(9_500)}\n`);
+      await writeCursorHooks([{ command: 'teamai hook-dispatch session-start --tool cursor' }]);
+
+      const check = (await namedCheck(OUTSIDE_HOME))!;
+      expect(await check.check()).toBe(false);
+      expect(check.fix).toContain('per-session hints');
+    });
+
+    it('names the length, not the team\'s builtin.disabled entry, while the hook is still registered', async () => {
+      await fse.outputFile(path.join(repoPath, 'hooks', 'hooks.yaml'), 'builtin:\n  disabled:\n    - Hook dispatch session-start\n');
+      await fse.writeFile(path.join(repoPath, 'rules', 'long.md'), `${'x'.repeat(10_000)}\n`);
+      await writeCursorHooks([{ command: 'teamai hook-dispatch session-start --tool cursor' }]);
+
+      const check = (await namedCheck(OUTSIDE_HOME))!;
+      expect(check.fix).not.toContain('builtin.disabled');
+      expect(check.fix).toContain('characters');
     });
 
     it('tells the member to repair invalid JSON by hand, which hooks inject will not rewrite', async () => {
@@ -644,7 +667,7 @@ describe('doctor — rules delivered on disk', () => {
 
       const check = (await namedCheck(OUTSIDE_HOME))!;
       expect(await check.check()).toBe(false);
-      expect(check.fix).toContain('10000-character limit');
+      expect(check.fix).toContain('at most 10000 characters');
     });
 
     it('emits no check in project scope, where the project delivers into the workspace itself', async () => {
