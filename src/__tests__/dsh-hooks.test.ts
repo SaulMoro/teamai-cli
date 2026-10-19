@@ -117,6 +117,21 @@ describe('DeepSeek Harness hook bridge', () => {
     expect(await fse.readFile(homePatchFile(), 'utf8')).toBe(mine);
   });
 
+  it('preserves member comments after removing the last owned mount (#1219)', async () => {
+    await fse.ensureDir(path.join(home, '.dsh'));
+    const mine = '# my tweaks\n[]\n';
+    await fse.writeFile(homePatchFile(), mine);
+
+    await reconcileHooksToAllTools(toolPaths, home, [], manifest());
+    expect(await fse.readFile(homePatchFile(), 'utf8')).toContain('# my tweaks');
+
+    await reconcileHooksToAllTools(toolPaths, home, [], manifest(), { removeAll: true });
+    expect(await fse.pathExists(homePatchFile())).toBe(true);
+    const after = await fse.readFile(homePatchFile(), 'utf8');
+    expect(after).toContain('# my tweaks');
+    expect(YAML.parse(after)).toEqual([]);
+  });
+
   it('leaves a $DSH_HOME/cordis.patch.yml it cannot parse alone (#1219)', async () => {
     await fse.ensureDir(path.join(home, '.dsh'));
     await fse.writeFile(homePatchFile(), 'id: [unclosed\n');

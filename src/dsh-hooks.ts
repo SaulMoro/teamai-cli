@@ -96,6 +96,10 @@ async function mountDshHooks(configPath: string | null): Promise<boolean | null>
   }
   if (rows.items.length === 0) {
     if (content === null) return false;
+    const rendered = doc.toString();
+    if (/^\s*#/m.test(rendered)) {
+      return writeIfChanged(file, rendered);
+    }
     await remove(file);
     return true;
   }
