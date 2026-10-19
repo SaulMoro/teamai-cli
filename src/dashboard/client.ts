@@ -21,7 +21,7 @@ let rules = null, rulesError = false, rulesLoading = false;
 let dist = null, distError = false, distLoading = false, distDraft = null, preview = null, previewError = '', previewing = false, saving = false, saveError = '', savedNote = ''; let distVersion = 0;
 let skills = null, skillsError = false, skillsLoading = false, skillBusy = '';
 let skillFilterDelivery = '', skillFilterNamespace = '', skillFilterAgent = '';
-let workflows = null, workflowsError = false, workflowsLoading = false, runKey = null, runDetail = null, answering = '', answerError = '';
+let workflows = null, workflowsHtml = '', workflowsError = false, workflowsLoading = false, runKey = null, runDetail = null, runHtml = '', answering = '', answerError = '';
 let workspaceId = '', workspaceGeneration = 0, workspaces = [];
 const api = route => route + (workspaceId ? '?workspace=' + encodeURIComponent(workspaceId) : '');
 const apiQuery = (route, params) => { const query=new URLSearchParams(params); if(workspaceId)query.set('workspace',workspaceId); return route+'?'+query; };
@@ -195,10 +195,10 @@ const shortHash = hash => e(String(hash).slice(0,12));
 function revision(r) { return (r.teamRevision?'<span title="'+e(r.teamRevision)+'" data-verbatim>'+shortHash(r.teamRevision)+'</span>':'<span class="muted">'+label('No team revision')+'</span>')+(r.sourceHash?' <small title="'+e(r.sourceHash)+'">'+label('Source')+' <span data-verbatim>'+shortHash(r.sourceHash)+'</span></small>':''); }
 function prLinks(r) { return r.prs.length ? r.prs.map(url=>'<a class="link" href="'+e(url)+'" target="_blank" rel="noopener noreferrer" title="'+e(url)+'" data-verbatim>#'+e(url.split('/').filter(Boolean).pop())+'</a>').join(' ') : '—'; }
 function currentSteps(r) { const parts=[...r.waiting.map(step=>'<span class="amber">'+label('Waiting')+': <span data-verbatim>'+e(step)+'</span></span>'),...r.current.map(step=>'<span data-verbatim>'+e(step)+'</span>')]; return parts.length?parts.join('<br>'):'—'; }
-function recordState(r) { return r.record==='pending'?'<span class="amber">'+label('Pending publication')+'</span>':r.record==='published'?label('Published'):'—'; }
+function recordState(r) { return r.record==='pending'?'<span class="amber">'+label('Pending publication')+'</span>':label('Published'); }
 function runTable(rows, local) {
- const heads=['WORKFLOW / RUN','STATUS',...(local?['CURRENT STEP']:[]),'END','DURATION','Tokens','TEAM REVISION','PULL REQUESTS',...(local?['RECORD']:[]),''];
- return '<div class="table-scroll"><table class="session-table"><thead><tr>'+heads.map(x=>'<th>'+label(x)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr class="'+(r.status==='running'?'':'row-ended')+'"><td><span data-verbatim>'+e(r.workflow)+'</span><small><span data-verbatim>'+e(r.run)+'</span>'+(local?'':' · <span data-verbatim>'+e(r.username)+'</span>')+' · '+e(when(r.startedAt))+'</small></td><td>'+runStatus(r.status)+'<small data-verbatim>'+e(r.driver||'—')+'</small></td>'+(local?'<td>'+currentSteps(r)+'</td>':'')+'<td data-verbatim>'+e(r.end||'—')+'</td><td>'+e(runDuration(r))+'</td><td>'+number(r.tokens)+'</td><td>'+revision(r)+'</td><td>'+prLinks(r)+'</td>'+(local?'<td>'+recordState(r)+'</td>':'')+'<td><button class="link" data-run="'+e(r.run)+'" data-run-source="'+e(r.source)+'">'+label('Details')+' ↗<span class="sr-only"> '+e(r.workflow)+'</span></button></td></tr>').join('')+'</tbody></table></div>';
+ const heads=['WORKFLOW / RUN','STATUS',...(local?['CURRENT STEP']:[]),'END','DURATION','Tokens','TEAM REVISION','PULL REQUESTS'];
+ return '<div class="table-scroll"><table class="session-table"><thead><tr>'+heads.map(x=>'<th>'+label(x)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr class="'+(r.status==='running'?'':'row-ended')+'"><td><button class="link" data-run="'+e(r.run)+'" data-run-source="'+e(r.source)+'"><span class="sr-only">'+label('Details')+' </span><span data-verbatim>'+e(r.workflow)+'</span> ↗</button><small><span data-verbatim>'+e(r.run)+'</span>'+(local?'':' · <span data-verbatim>'+e(r.username)+'</span>')+' · '+e(when(r.startedAt))+'</small></td><td>'+runStatus(r.status)+'<small><span data-verbatim>'+e(r.driver||'—')+'</span>'+(r.record?' · '+recordState(r):'')+'</small></td>'+(local?'<td>'+currentSteps(r)+'</td>':'')+'<td data-verbatim>'+e(r.end||'—')+'</td><td>'+e(runDuration(r))+'</td><td>'+number(r.tokens)+'</td><td>'+revision(r)+'</td><td>'+prLinks(r)+'</td></tr>').join('')+'</tbody></table></div>';
 }
 function runPanel(title, source, rows, local, empty) { return '<section class="panel sessions"><div class="panelhead"><h2>'+label(title)+' <span class="count">'+number(rows.length)+'</span></h2><span class="tag">'+label(source)+'</span></div>'+(rows.length?runTable(rows,local):'<div class="empty"><p>'+label(empty)+'</p></div>')+'</section>'; }
 function workflowRuns() {
@@ -224,11 +224,11 @@ function runDetailHtml(d) {
   +detailSection('Steps','<div class="table-scroll"><table><thead><tr>'+['STEP','PASS','STATUS','Tokens','ANSWER'].map(x=>'<th>'+label(x)+'</th>').join('')+'</tr></thead><tbody>'+d.steps.map(s=>'<tr><td data-verbatim>'+e(s.step)+'</td><td>'+number(s.pass)+'</td><td>'+runStatus(s.status)+'</td><td>'+(s.tokens?number((s.tokens.input||0)+(s.tokens.output||0)):'—')+'</td><td>'+(s.answer?'<span data-verbatim>'+e(s.answer.choice)+'</span><small data-verbatim>'+e(s.answer.channel)+'</small>':'—')+'</td></tr>').join('')+'</tbody></table></div>')
   +'<p class="label">'+label('The dashboard shows only what a run record publishes: never prompts, inputs, outputs, or HITL messages.')+'</p>';
 }
-function renderRun() { if(!runDetail||!runKey||!$('session-dialog').open)return; const scroll=$('session-dialog').scrollTop; $('detail').innerHTML=runDetailHtml(runDetail); $('session-dialog').scrollTop=scroll; }
+function renderRun() { if(!runDetail||!runKey||!$('session-dialog').open)return; const html=runDetailHtml(runDetail); if(html===runHtml)return; runHtml=html; const scroll=$('session-dialog').scrollTop; $('detail').innerHTML=html; $('session-dialog').scrollTop=scroll; }
 function showRun(source, id) {
  const dialog=$('session-dialog');
  if(!dialog.open)focusBeforeDialog=document.activeElement;
- selectedSession=null;selectedSnapshot=null;runKey={source,id};runDetail=null;answerError='';
+ selectedSession=null;selectedSnapshot=null;runKey={source,id};runDetail=null;runHtml='';answerError='';
  $('detail').innerHTML='<div class="empty" role="status">'+label('Loading…')+'</div>';
  if(!dialog.open)dialog.showModal();
  loadRunDetail();
@@ -236,7 +236,7 @@ function showRun(source, id) {
 async function loadRunDetail() {
  const key=runKey, generation=workspaceGeneration;
  if(!key)return;
- try { const data=await json(apiQuery('/api/workflows/run',{source:key.source,id:key.id})); if(generation!==workspaceGeneration||key!==runKey)return; if(runDetail&&JSON.stringify(data)===JSON.stringify(runDetail))return; runDetail=data; renderRun(); }
+ try { const data=await json(apiQuery('/api/workflows/run',{source:key.source,id:key.id})); if(generation!==workspaceGeneration||key!==runKey)return; runDetail=data; renderRun(); }
  catch { if(generation===workspaceGeneration&&key===runKey&&!runDetail)$('detail').innerHTML=errorPanel('Could not load this run.','run'); }
 }
 async function answerGate(step, pass, choice) {
@@ -384,7 +384,7 @@ async function loadKb() { if(kbLoading)return;const generation=workspaceGenerati
 async function loadRules() { if(rulesLoading)return;const generation=workspaceGeneration;rulesLoading=true;try{const data=await json(api('/api/resources/rules'));if(generation===workspaceGeneration){rules=data;rulesError=false;}}catch{if(generation===workspaceGeneration)rulesError=true;}finally{if(generation===workspaceGeneration){rulesLoading=false;if(page==='resources')render();}} }
 async function postJson(route, body) { const response=await fetch(api(route),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(15000)}); const data=await response.json().catch(()=>null); if(!response.ok)throw Error(data&&data.error?data.error:'HTTP '+response.status); return data; }
 async function loadDistribution() { if(distLoading)return;const generation=workspaceGeneration;distLoading=true;try{const data=await json(api('/api/distribution'));if(generation===workspaceGeneration){dist=data;distError=false;distDraft=null;preview=null;previewError='';saveError='';savedNote='';}}catch{if(generation===workspaceGeneration)distError=true;}finally{if(generation===workspaceGeneration){distLoading=false;if(page==='distribution')render();}} }
-async function loadWorkflows() { if(workflowsLoading)return;const generation=workspaceGeneration;workflowsLoading=true;try{const data=await json(api('/api/workflows'));if(generation===workspaceGeneration){workflows=data;workflowsError=false;}}catch{if(generation===workspaceGeneration)workflowsError=true;}finally{if(generation===workspaceGeneration){workflowsLoading=false;if(page==='workflows')render();}} }
+async function loadWorkflows() { if(workflowsLoading)return;const generation=workspaceGeneration;workflowsLoading=true;try{const data=await json(api('/api/workflows'));if(generation===workspaceGeneration){workflows=data;workflowsError=false;}}catch{if(generation===workspaceGeneration)workflowsError=true;}finally{if(generation===workspaceGeneration){workflowsLoading=false;if(page==='workflows'){const html=workflowRuns();if(html!==workflowsHtml){workflowsHtml=html;render();}}}} }
 async function loadSkills() { if(skillsLoading)return;const generation=workspaceGeneration;skillsLoading=true;try{const data=await json(api('/api/resources/skills'));if(generation===workspaceGeneration){skills=data;skillsError=false;}}catch{if(generation===workspaceGeneration)skillsError=true;}finally{if(generation===workspaceGeneration){skillsLoading=false;if(page==='resources')render();}} }
 async function toggleSkillExclude(name, excluded) {
  if(skillBusy)return;skillBusy=name;render();
@@ -466,7 +466,7 @@ function switchWorkspace(id) {
  sessions=[];haveSessions=false;connected=false;trends=null;kb=null;trendLoading=false;kbLoading=false;trendError=false;kbError=false;
  rules=null;rulesError=false;rulesLoading=false;
  dist=null;distError=false;distLoading=false;distDraft=null;preview=null;previewError='';previewing=false;saving=false;saveError='';savedNote='';
- workflows=null;workflowsError=false;workflowsLoading=false;runKey=null;runDetail=null;answering='';answerError='';
+ workflows=null;workflowsHtml='';workflowsError=false;workflowsLoading=false;runKey=null;runDetail=null;answering='';answerError='';
  skills=null;skillsError=false;skillsLoading=false;skillBusy='';skillFilterDelivery='';skillFilterNamespace='';skillFilterAgent='';
  $('repo').value='';$('agent').value='';workspaceOptions();filters();render();connect();loadTrends();loadKb();loadRules();loadSkills();
 }

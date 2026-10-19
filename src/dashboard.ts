@@ -226,11 +226,11 @@ export async function startDashboard(port?: number): Promise<void> {
   // Workflow Runs (#1088). The team history refreshes the reports checkout
   // from origin, so it is cached like the KB report; local runs are read fresh.
   const loadReportedHistory = async (config: LocalConfig): Promise<ReportedHistory> => {
-    const { listReportedRuns } = await import('./dashboard/workflow-runs.js');
     try {
+      const { listReportedRuns } = await import('./dashboard/workflow-runs.js');
       return { state: 'ok', runs: await listReportedRuns(config) };
     } catch (e) {
-      log.debug(`dashboard: reported workflow runs failed: ${(e as Error).message}`);
+      log.debug(`dashboard: reported workflow runs failed: ${e instanceof Error ? e.message : String(e)}`);
       return { state: 'unavailable' };
     }
   };

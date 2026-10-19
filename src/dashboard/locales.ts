@@ -277,7 +277,6 @@ export const dashboardMessages: Record<string, string> = {
   "DURATION": "时长",
   "TEAM REVISION": "团队修订",
   "PULL REQUESTS": "拉取请求",
-  "RECORD": "记录",
   "STEP": "步骤",
   "PASS": "轮次",
   "ANSWER": "回答",

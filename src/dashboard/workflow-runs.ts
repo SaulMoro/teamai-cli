@@ -7,7 +7,8 @@
  * inputs, items, outputs, prompts, HITL messages and local paths have no field
  * to reach the API in. A published record is parsed through the same fields.
  * A local run adds only what the record lacks while it runs: the ids and
- * status of its steps, and the kind and options of a waiting HITL request.
+ * status of its steps, the kind, options and `required` flag of a waiting HITL
+ * request, and the answer of a pass not yet settled.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
