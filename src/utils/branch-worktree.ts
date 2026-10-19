@@ -1009,11 +1009,12 @@ async function syncWorktree(spec: BranchWorktreeSpec, wt: string, initPush = fal
     return;
   }
 
-  // Counted alongside the status: restoring conflicted files never moves HEAD.
-  const [status, counts] = await Promise.all([
-    restoreConflictedFiles(spec, git).then((unchanged) => unchanged ?? git.status()),
-    git.raw(['rev-list', '--left-right', '--count', `${upstream}...HEAD`]),
-  ]);
+  // Counted while conflicted files are restored, which never moves HEAD; the
+  // restore finishes first, so a failed count never leaves it writing unlocked.
+  const counting = git.raw(['rev-list', '--left-right', '--count', `${upstream}...HEAD`]);
+  counting.catch(() => undefined);
+  const status = await restoreConflictedFiles(spec, git) ?? await git.status();
+  const counts = await counting;
   const dirty = !status.isClean();
   const [behind, ahead] = counts.trim().split(/\s+/).map((count) => Number.parseInt(count, 10));
   // Already at origin's commit: nothing to fast-forward or rebase, uncommitted files stay as they are.

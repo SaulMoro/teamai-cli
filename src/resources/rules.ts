@@ -317,7 +317,7 @@ export class RulesHandler extends ResourceHandler {
 
       // Skip tools that are not installed
       if (!await isToolInstalledForConfig(tool, toolPath.rules, localConfig)) {
-        debugOnce(`Skipping rule sync for ${tool}: tool not installed`);
+        debugOnce(`Skipping rule sync for ${tool} in ${localConfig.scope} scope: tool not installed`);
         continue;
       }
 

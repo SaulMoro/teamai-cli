@@ -351,6 +351,20 @@ describe('a later run', () => {
     expect(await later.listWorktrees(sub)).toEqual([repo, linked]);
   });
 
+  it('lists no main checkout made bare in its own config after an earlier run asked', async () => {
+    const { repo } = checkout();
+    execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-q', '-m', 'init'], { cwd: repo });
+    const linked = path.join(root, 'linked');
+    execFileSync('git', ['worktree', 'add', '-q', linked, 'HEAD'], { cwd: repo });
+    execFileSync('git', ['config', 'extensions.worktreeConfig', 'true'], { cwd: repo });
+    expect(await listWorktrees(linked)).toEqual([repo, linked]);
+
+    execFileSync('git', ['config', '--worktree', 'core.bare', 'true'], { cwd: repo });
+    vi.resetModules();
+    const later = await import('../utils/git.js');
+    expect(await later.listWorktrees(linked)).toEqual([linked]);
+  });
+
   it.skipIf(process.getuid === undefined)('trusts no answers kept where another user can write', async () => {
     fs.mkdirSync(path.join(root, 'tmp', `teamai-${process.getuid?.()}`), { mode: 0o777 });
     fs.chmodSync(path.join(root, 'tmp', `teamai-${process.getuid?.()}`), 0o777);

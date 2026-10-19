@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
+import { getCurrentVersion } from '../package-info.js';
 import { writeFileAtomic } from './fs.js';
 import { log } from './logger.js';
 
@@ -56,12 +57,13 @@ const unwritten: Array<{ kind: string; key: string; entry: Kept[string][string] 
 let writing: Promise<void> = Promise.resolve();
 
 /**
- * Where the answers are kept: `teamai-<uid>/git-answers.json` in the temporary
- * directory, beside Node's compile cache, so a dry run leaves the TeamAI home
- * as it found it. Null, and nothing kept, when that directory is not this
- * user's alone (another user made it in a shared /tmp), or where its owner
- * cannot be read this way (Windows): answers read from there would say where
- * teamai writes.
+ * Where the answers are kept: `teamai-<uid>/git-answers-<version>.json` in
+ * the temporary directory, beside Node's compile cache, so a dry run leaves the
+ * TeamAI home as it found it. One file per CLI version: another release may
+ * stamp or answer differently under the same keys. Null, and nothing kept,
+ * when that directory is not this user's alone (another user made it in a
+ * shared /tmp), or where its owner cannot be read this way (Windows): answers
+ * read from there would say where teamai writes.
  */
 function keptFile(): Promise<string | null> {
   const tmp = os.tmpdir();
@@ -73,7 +75,7 @@ function keptFile(): Promise<string | null> {
     await fs.promises.mkdir(dir, { mode: 0o700 }).catch(() => undefined);
     const stat = await fs.promises.lstat(dir).catch(() => null);
     if (!stat?.isDirectory() || stat.uid !== uid || (stat.mode & 0o077) !== 0) return null;
-    return path.join(dir, 'git-answers.json');
+    return path.join(dir, `git-answers-${getCurrentVersion()}.json`);
   })();
   keptFileAt = { tmp, file };
   return file;

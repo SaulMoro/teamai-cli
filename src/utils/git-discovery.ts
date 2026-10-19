@@ -53,7 +53,8 @@ const identity = (stat: fs.Stats | null): number[] | null =>
  * from it (`.git` itself, the one a `.git` file names, or the directory
  * holding `HEAD`), and the identity of each, of its `HEAD`, of the common
  * directory it names and of the config files there (`core.worktree`, also
- * in `config.worktree`; git never takes it from a file those include), plus
+ * in `config.worktree`; git never takes it from a file those include, and a
+ * symlink inside its value retargeted later goes unseen), plus
  * the variables that stop git's search. While the stamp stays equal, what git
  * said about where `dir` sits still holds, provided git opened `gitDir`: a
  * symlink pointed elsewhere, a repository moved, cloned again, broken,
@@ -93,13 +94,15 @@ export async function repositoryStamp(dir: string): Promise<{ stamp: string; git
  * What `git worktree list` reads about the linked worktrees of the repository
  * whose common directory is `commonDir`, from git's own files: each worktree's
  * admin directory, where its checkout is, whether that is still there, and its
- * lock, and the config saying whether the main entry is bare. Equal stamps
+ * lock, and the config saying whether the main entry is bare (the common
+ * `config`, or the main checkout's own `config.worktree`). Equal stamps
  * mean an equal list; adding, moving, deleting, locking or pruning a worktree
  * changes it. Null when the admin directory cannot be read for another reason
  * than being absent: no stamp then tells that list from an empty one.
  */
 export async function linkedWorktreesStamp(commonDir: string): Promise<string | null> {
-  const config = identity(await fs.promises.stat(path.join(commonDir, 'config')).catch(() => null));
+  const stat = (file: string): Promise<fs.Stats | null> => fs.promises.stat(path.join(commonDir, file)).catch(() => null);
+  const config = (await Promise.all([stat('config'), stat('config.worktree')])).map(identity);
   const admin = path.join(commonDir, 'worktrees');
   const names = await fs.promises.readdir(admin).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? [] : null);
   if (names === null) return null;

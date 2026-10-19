@@ -1114,7 +1114,7 @@ export class AgentsHandler extends ResourceHandler {
     for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
       if (!toolPath.agents || !isKnownTool(tool) || isAgentExcluded(localConfig, tool)) continue;
       if (!await isToolInstalledForConfig(tool, toolPath.agents, localConfig)) {
-        debugOnce(`Skipping agent sync for ${tool}: tool not installed`);
+        debugOnce(`Skipping agent sync for ${tool} in ${localConfig.scope} scope: tool not installed`);
         continue;
       }
       dirs.push({ tool, dir: path.join(resolveToolBaseDir(tool, localConfig), toolPath.agents) });

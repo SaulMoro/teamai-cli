@@ -233,7 +233,7 @@ export async function skillsDirForTool(
   }
 
   if (!await isToolInstalledForConfig(tool, configuredSkillsPath, localConfig)) {
-    debugOnce(`Skipping skill sync for ${tool}: tool not installed`);
+    debugOnce(`Skipping skill sync for ${tool} in ${localConfig.scope} scope: tool not installed`);
     return null;
   }
 
