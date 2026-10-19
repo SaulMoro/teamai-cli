@@ -1002,6 +1002,22 @@ it.each([
   expect(m.git(['rev-parse', 'HEAD'], m.clone())).toBe(m.git(['rev-parse', 'refs/heads/trial'], m.remote));
 });
 
+it('refuses to switch while a leaving submodule directory cannot be emptied, and clears it once it can', () => {
+  const m = pinSubmoduleSkill();
+  const sub = path.join(m.clone(), 'skills/sub');
+  fs.chmodSync(sub, 0o555);
+  try {
+    const r = m.run(['pull', '--team-ref', 'main']);
+    expect(r.code, r.output).toBe(1);
+    expect(r.output).toContain('The team repo has uncommitted changes, so it was not switched to "main": skills/sub. Share them with teamai push, or discard them, then pull again.');
+    expect(m.git(['rev-parse', 'HEAD'], m.clone())).toBe(m.git(['rev-parse', 'refs/heads/trial'], m.remote));
+  } finally { fs.chmodSync(sub, 0o755); }
+  m.ok(['pull', '--team-ref', 'main']);
+  m.ok(['pull', '--force']);
+  expect(fs.existsSync(path.join(sub, 'SKILL.md'))).toBe(false);
+  expect(fs.existsSync(m.copy('sub'))).toBe(false);
+});
+
 it('keeps a regular file at a dropped gitlink path when repinning', () => {
   const m = pinSubmoduleSkill();
   m.git(['branch', 'no-sub', 'main']);

@@ -105,14 +105,19 @@ export async function transitionTeamRepo(
       const paths = status.files.filter((file) => file.index !== '?' && file.working_dir !== '?').map((file) => file.path);
       if (paths.length > 0) throw new DirtyTeamRepoError(target, paths);
     };
+    // Entries in the directory at `file`: 0 when there is none to deliver from, null when unreadable.
+    const entries = (file: string) => fs.readdir(path.join(localPath, file)).then(
+      (names) => names.length,
+      (error: NodeJS.ErrnoException) => error.code === 'ENOENT' || error.code === 'ENOTDIR' ? 0 : null);
     // Git empties a submodule worktree only when nothing in it would be lost, absorbing an
-    // embedded git directory first. A worktree it refuses to clear counts as an uncommitted change.
+    // embedded git directory first. A worktree it refuses to clear counts as an uncommitted change,
+    // and so does one it could not empty, since deinit then still exits 0.
     const clearSubmodules = async (target: string, leaving: string[]) => {
       const refused: string[] = [];
       for (const file of leaving) {
-        const entries = await fs.readdir(path.join(localPath, file)).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? [] : null);
-        if (entries?.length === 0) continue;
-        try { await git.raw(['submodule', 'deinit', '--', file]); } catch { refused.push(file); }
+        if (await entries(file) === 0) continue;
+        const cleared = await git.raw(['submodule', 'deinit', '--', file]).then(() => true, () => false);
+        if (!cleared || await entries(file) !== 0) refused.push(file);
       }
       if (refused.length > 0) throw new DirtyTeamRepoError(target, refused);
     };
