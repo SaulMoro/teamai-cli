@@ -339,6 +339,16 @@ describe('a later run', () => {
     expect(await later.checkoutLocation(sub)).toBeNull();
   });
 
+  it('asks git again for a checkout whose work tree moved since an earlier run', async () => {
+    const { repo, sub } = checkout();
+    expect((await checkoutLocation(sub))?.toplevel).toBe(repo);
+
+    execFileSync('git', ['config', 'core.worktree', sub], { cwd: repo });
+    vi.resetModules();
+    const later = await import('../utils/git.js');
+    expect((await later.checkoutLocation(sub))?.toplevel).toBe(sub);
+  });
+
   it('lists a worktree added after an earlier run asked', async () => {
     const { repo, sub } = checkout();
     execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-q', '-m', 'init'], { cwd: repo });
