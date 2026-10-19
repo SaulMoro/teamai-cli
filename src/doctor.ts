@@ -32,6 +32,7 @@ import {
   buildDeliveryChecks,
   buildRulesDeliveryChecks,
   buildAgentsDeliveryChecks,
+  cursorCliAgentsNotes,
   buildInstructionDeliveryChecks,
   buildNamespaceNotes,
   buildMcpDeliveryChecks,
@@ -816,6 +817,7 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
     ...ctx.teamConfig ? await keptTeamHookEntries(ctx.teamConfig, localConfig) : [],
     ...await aliasNamespaceNotes(ctx),
     ...await agentModelNotes(ctx),
+    ...await cursorCliAgentsNotes(ctx),
     ...(await envAdvisories(localConfig, ctx.teamConfig, ctx.teamEnv)).map(describeEnvAdvisory),
     // A team MCP server a tool cannot use over its transport.
     ...await mcpTransportNotes(ctx),

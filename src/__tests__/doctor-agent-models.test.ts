@@ -179,6 +179,18 @@ describe('doctor — how agents resolved their model alias', () => {
     expect(check(doctorReport, CHECK)).toEqual({ name: CHECK, ok: true });
   });
 
+  it('says the Cursor CLI does not read the user agents it checks for Cursor (#1218)', async () => {
+    await agent({ name: 'plain' });
+
+    const doctorReport = await report();
+
+    expect(check(doctorReport, 'Agents delivered to cursor')).toBeDefined();
+    expect(doctorReport.notes).toContain(
+      `Cursor: the Cursor IDE reads the agents in ${path.join(homeDir, '.cursor', 'agents')}. The Cursor CLI reads agents `
+      + 'only from the workspace, so it gets these only when it starts in your home directory.',
+    );
+  });
+
   it('shows a switched Codex, the member\'s override, and what the last pull deployed until pull updates it', async () => {
     await team('models/aliases.yaml', { aliases: { strong: { claude: [{ model: 'opus', effort: 'high' }], codex: { model: 'gpt-6-sol', effort: 'high' } } } });
     await agent({ name: 'implementer', model: 'strong', targets: ['claude', 'codex'] });
