@@ -190,7 +190,9 @@ async function saveSelection() { if(!dist||!distDraft||!preview)return; const ge
 const runStatusNames = { running:'Running', succeeded:'Succeeded', failed:'Failed', cancelled:'Cancelled' };
 const stepStatusNames = { pending:'Pending', waiting:'Waiting for an answer', leased:'Leased', running:'Running', succeeded:'Succeeded', failed:'Failed', skipped:'Skipped', cancelled:'Cancelled' };
 function runStatus(status) { return '<span class="'+(status==='running'||status==='succeeded'?'good':status==='failed'||status==='waiting'?'amber':'')+'">'+label(runStatusNames[status]||stepStatusNames[status]||status)+'</span>'; }
-function runDuration(r) { return elapsed(r.durationMs ?? (r.status==='running' ? Date.now()-Date.parse(r.startedAt) : NaN)); }
+// A running run's duration is filled by tickRunDurations, so a poll that changes nothing leaves the HTML, and the buttons in it, alone.
+function runDurationHtml(r) { return r.durationMs==null&&r.status==='running'?'<span data-run-started="'+e(r.startedAt)+'"></span>':e(elapsed(r.durationMs ?? NaN)); }
+function tickRunDurations() { document.querySelectorAll('[data-run-started]').forEach(span=>{span.textContent=elapsed(Date.now()-Date.parse(span.dataset.runStarted));}); }
 const shortHash = hash => e(String(hash).slice(0,12));
 function revision(r) { return (r.teamRevision?'<span title="'+e(r.teamRevision)+'" data-verbatim>'+shortHash(r.teamRevision)+'</span>':'<span class="muted">'+label('No team revision')+'</span>')+(r.sourceHash?' <small title="'+e(r.sourceHash)+'">'+label('Source')+' <span data-verbatim>'+shortHash(r.sourceHash)+'</span></small>':''); }
 function prLinks(r) { return r.prs.length ? r.prs.map(url=>'<a class="link" href="'+e(url)+'" target="_blank" rel="noopener noreferrer" title="'+e(url)+'" data-verbatim>#'+e(url.split('/').filter(Boolean).pop())+'</a>').join(' ') : '—'; }
@@ -198,7 +200,7 @@ function currentSteps(r) { const parts=[...r.waiting.map(step=>'<span class="amb
 function recordState(r) { return r.record==='pending'?'<span class="amber">'+label('Pending publication')+'</span>':label('Published'); }
 function runTable(rows, local) {
  const heads=['WORKFLOW / RUN','STATUS',...(local?['CURRENT STEP']:[]),'END','DURATION','Tokens','TEAM REVISION','PULL REQUESTS'];
- return '<div class="table-scroll"><table class="session-table"><thead><tr>'+heads.map(x=>'<th>'+label(x)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr class="'+(r.status==='running'?'':'row-ended')+'"><td><button class="link" data-run="'+e(r.run)+'" data-run-source="'+e(r.source)+'"><span class="sr-only">'+label('Details')+' </span><span data-verbatim>'+e(r.workflow)+'</span> ↗</button><small><span data-verbatim>'+e(r.run)+'</span>'+(local?'':' · <span data-verbatim>'+e(r.username)+'</span>')+' · '+e(when(r.startedAt))+'</small></td><td>'+runStatus(r.status)+'<small><span data-verbatim>'+e(r.driver||'—')+'</span>'+(r.record?' · '+recordState(r):'')+'</small></td>'+(local?'<td>'+currentSteps(r)+'</td>':'')+'<td data-verbatim>'+e(r.end||'—')+'</td><td>'+e(runDuration(r))+'</td><td>'+number(r.tokens)+'</td><td>'+revision(r)+'</td><td>'+prLinks(r)+'</td></tr>').join('')+'</tbody></table></div>';
+ return '<div class="table-scroll"><table class="session-table"><thead><tr>'+heads.map(x=>'<th>'+label(x)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr class="'+(r.status==='running'?'':'row-ended')+'"><td><button class="link" data-run="'+e(r.run)+'" data-run-source="'+e(r.source)+'"><span class="sr-only">'+label('Details')+' </span><span data-verbatim>'+e(r.workflow)+'</span> ↗</button><small><span data-verbatim>'+e(r.run)+'</span>'+(local?'':' · <span data-verbatim>'+e(r.username)+'</span>')+' · '+e(when(r.startedAt))+'</small></td><td>'+runStatus(r.status)+'<small><span data-verbatim>'+e(r.driver||'—')+'</span>'+(r.record?' · '+recordState(r):'')+'</small></td>'+(local?'<td>'+currentSteps(r)+'</td>':'')+'<td data-verbatim>'+e(r.end||'—')+'</td><td>'+runDurationHtml(r)+'</td><td>'+number(r.tokens)+'</td><td>'+revision(r)+'</td><td>'+prLinks(r)+'</td></tr>').join('')+'</tbody></table></div>';
 }
 function runPanel(title, source, rows, local, empty) { return '<section class="panel sessions"><div class="panelhead"><h2>'+label(title)+' <span class="count">'+number(rows.length)+'</span></h2><span class="tag">'+label(source)+'</span></div>'+(rows.length?runTable(rows,local):'<div class="empty"><p>'+label(empty)+'</p></div>')+'</section>'; }
 function workflowRuns() {
@@ -220,11 +222,11 @@ function runDetailHtml(d) {
  const r=d.run, local=r.source==='local', gates=d.steps.filter(s=>s.gate), counts=r.stepCounts;
  return '<div class="caption">'+label(local?'Local run':'Team-reported run')+'</div><h2 id="detailTitle" data-verbatim>'+e(r.workflow)+'</h2><div class="tag"><span data-verbatim>'+e(r.run)+'</span> · '+label(runStatusNames[r.status]||r.status)+'</div>'
   +(gates.length?detailSection('Waiting for an answer','<p>'+label('Read the question where the driver of this run asks it. The dashboard does not show HITL messages, because they can include step outputs.')+'</p>'+gates.map(gate).join('')+(answering?'<p role="status">'+label('Answering…')+'</p>':'')+(answerError?'<p class="amber" role="alert">'+e(answerError)+'</p>':'')):(answerError?'<p class="amber" role="alert">'+e(answerError)+'</p>':''))
-  +detailSection('Run','<p>'+label('Driver')+': <span data-verbatim>'+e(r.driver||'—')+'</span> · '+label('End')+': <span data-verbatim>'+e(r.end||'—')+'</span><br>'+label('Started')+': '+e(when(r.startedAt))+(r.endedAt?'<br>'+label('Ended')+': '+e(when(r.endedAt)):'')+'<br>'+label('Duration')+': '+e(runDuration(r))+' · '+label('Tokens')+': '+number(r.tokens)+(local?'':'<br>'+label('Member')+': <span data-verbatim>'+e(r.username)+'</span>')+'</p><p>'+label('Team revision')+': '+revision(r)+'</p>'+(counts?'<p>'+number(counts.total)+' '+label('Steps')+' · '+number(counts.succeeded)+' '+label('Succeeded')+' · '+number(counts.failed)+' '+label('Failed')+' · '+number(counts.skipped)+' '+label('Skipped')+' · '+number(counts.cancelled)+' '+label('Cancelled')+'</p>':'')+(r.prs.length?'<p>'+label('Pull requests')+': '+prLinks(r)+'</p>':''))
+  +detailSection('Run','<p>'+label('Driver')+': <span data-verbatim>'+e(r.driver||'—')+'</span> · '+label('End')+': <span data-verbatim>'+e(r.end||'—')+'</span><br>'+label('Started')+': '+e(when(r.startedAt))+(r.endedAt?'<br>'+label('Ended')+': '+e(when(r.endedAt)):'')+'<br>'+label('Duration')+': '+runDurationHtml(r)+' · '+label('Tokens')+': '+number(r.tokens)+(local?'':'<br>'+label('Member')+': <span data-verbatim>'+e(r.username)+'</span>')+'</p><p>'+label('Team revision')+': '+revision(r)+'</p>'+(counts?'<p>'+number(counts.total)+' '+label('Steps')+' · '+number(counts.succeeded)+' '+label('Succeeded')+' · '+number(counts.failed)+' '+label('Failed')+' · '+number(counts.skipped)+' '+label('Skipped')+' · '+number(counts.cancelled)+' '+label('Cancelled')+'</p>':'')+(r.prs.length?'<p>'+label('Pull requests')+': '+prLinks(r)+'</p>':''))
   +detailSection('Steps','<div class="table-scroll"><table><thead><tr>'+['STEP','PASS','STATUS','Tokens','ANSWER'].map(x=>'<th>'+label(x)+'</th>').join('')+'</tr></thead><tbody>'+d.steps.map(s=>'<tr><td data-verbatim>'+e(s.step)+'</td><td>'+number(s.pass)+'</td><td>'+runStatus(s.status)+'</td><td>'+(s.tokens?number((s.tokens.input||0)+(s.tokens.output||0)):'—')+'</td><td>'+(s.answer?'<span data-verbatim>'+e(s.answer.choice)+'</span><small data-verbatim>'+e(s.answer.channel)+'</small>':'—')+'</td></tr>').join('')+'</tbody></table></div>')
   +'<p class="label">'+label('The dashboard shows only what a run record publishes: never prompts, inputs, outputs, or HITL messages.')+'</p>';
 }
-function renderRun() { if(!runDetail||!runKey||!$('session-dialog').open)return; const html=runDetailHtml(runDetail); if(html===runHtml)return; runHtml=html; const scroll=$('session-dialog').scrollTop; $('detail').innerHTML=html; $('session-dialog').scrollTop=scroll; }
+function renderRun() { if(!runDetail||!runKey||!$('session-dialog').open)return; const html=runDetailHtml(runDetail); if(html===runHtml)return; runHtml=html; const scroll=$('session-dialog').scrollTop; $('detail').innerHTML=html; tickRunDurations(); $('session-dialog').scrollTop=scroll; }
 function showRun(source, id) {
  const dialog=$('session-dialog');
  if(!dialog.open)focusBeforeDialog=document.activeElement;
@@ -268,7 +270,7 @@ function render() {
  $('nav').innerHTML=Object.keys(pageNames).map(key=>'<button data-page="'+key+'" class="'+(page===key?'active':'')+'" '+(page===key?'aria-current="page"':'')+'>'+icon(key)+label(pageNames[key])+'</button>').join('');
  $('title').textContent=t(pageNames[page]);$('crumb').textContent=t(pageNames[page]);
  document.querySelector('.filters').hidden=page!=='execution';
- $('view').innerHTML=({overview,execution,workflows:workflowRuns,context:knowledge,resources,distribution,improvement})[page]();
+ $('view').innerHTML=({overview,execution,workflows:workflowRuns,context:knowledge,resources,distribution,improvement})[page]();tickRunDurations();
  localizeReport();connection();
  document.querySelectorAll('#kb-content details').forEach(d=>{if(opened.includes([...d.parentElement.children].indexOf(d)))d.open=true;});
  if(focusKey) [...document.querySelectorAll('[data-session]')].find(el=>el.dataset.session===focusKey)?.focus({preventScroll:true});
@@ -477,7 +479,7 @@ preferences();
 json('/api/workspaces').then(data=>{workspaces=data;const saved=read('teamai-dashboard-workspace','');const fallback=(workspaces.find(w=>w.scope==='project')||workspaces[0])?.id;switchWorkspace(workspaces.some(w=>w.id===saved)?saved:(fallback??''));}).catch(()=>{workspaceOptions();connect();loadTrends();loadKb();loadRules();loadSkills();});
 setInterval(loadTrends,30000);
 // Workflow runs change without a hook event, so their page polls while it is open.
-setInterval(()=>{if(page!=='workflows')return;loadWorkflows();if(runKey&&!answering)loadRunDetail();},5000);
+setInterval(()=>{if(page!=='workflows')return;tickRunDurations();loadWorkflows();if(runKey&&!answering)loadRunDetail();},5000);
 // Reconcile idle/ended expiry even when no hook emits another SSE event.
 setInterval(()=>{
  const generation=fallbackGeneration;
