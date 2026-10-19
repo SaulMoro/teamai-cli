@@ -1234,7 +1234,7 @@ export async function initSelfRepo(options: GlobalOptions & {
 
   // Step 2: authenticate (needed to push reports + open knowledge PRs).
   await provider.ensureInstalled();
-  const authSpin = spinner('Checking authentication...').start();
+  const authSpin = (await spinner('Checking authentication...')).start();
   let username: string;
   try {
     username = await provider.authenticate();
@@ -1670,7 +1670,7 @@ export async function init(options: GlobalOptions & {
   await provider.ensureInstalled();
 
   const isGenericGit = provider.name === 'git';
-  const authSpin = spinner(isGenericGit ? 'Checking Git identity...' : 'Checking authentication...').start();
+  const authSpin = (await spinner(isGenericGit ? 'Checking Git identity...' : 'Checking authentication...')).start();
   let username: string;
   try {
     if (provider.isAuthenticated()) {
@@ -1776,7 +1776,7 @@ export async function init(options: GlobalOptions & {
   if (!await pathExists(localPath)) {
     await settleReplacedInstall();
 
-    const cloneSpin = spinner('Cloning team repo...').start();
+    const cloneSpin = (await spinner('Cloning team repo...')).start();
     const cloneTarget = provider.name === 'git'
       ? repoInfo.httpsUrl
       : `${repoInfo.owner}/${repoInfo.repo}`;
@@ -1817,7 +1817,7 @@ export async function init(options: GlobalOptions & {
           log.error('Aborted. Please provide an existing repo or confirm creation.');
           process.exit(1);
         }
-        const createSpin = spinner(`Creating repo ${repoInfo.owner}/${repoInfo.repo}...`).start();
+        const createSpin = (await spinner(`Creating repo ${repoInfo.owner}/${repoInfo.repo}...`)).start();
         try {
           await provider.createRepo(repoInfo.owner, repoInfo.repo);
           createSpin.succeed(`Repo ${repoInfo.owner}/${repoInfo.repo} created`);
@@ -1846,7 +1846,7 @@ export async function init(options: GlobalOptions & {
           }
         }
         // Retry clone after creation
-        const retryCloneSpin = spinner('Cloning newly created repo...').start();
+        const retryCloneSpin = (await spinner('Cloning newly created repo...')).start();
         try {
           provider.cloneRepo(cloneTarget, localPath);
           retryCloneSpin.succeed('Team repo cloned');
@@ -1863,7 +1863,7 @@ export async function init(options: GlobalOptions & {
     // Cloning an empty remote repo may succeed without creating the local directory.
     // Fall back to git init + add remote so subsequent steps can proceed.
     if (!await pathExists(localPath)) {
-      const initSpin = spinner('Initializing empty repo...').start();
+      const initSpin = (await spinner('Initializing empty repo...')).start();
       try {
         await initRepo(repoInfo.httpsUrl, localPath);
         initSpin.succeed('Empty repo initialized');

@@ -7,7 +7,7 @@ import type { TeamaiConfig, LocalConfig } from './types.js';
 // (`roles add/update/remove`, `projects add/update/remove`).
 
 export async function pullLatest(repoPath: string): Promise<void> {
-    const pullSpin = spinner('Pulling latest changes...').start();
+    const pullSpin = (await spinner('Pulling latest changes...')).start();
     try {
         await pullRepo(repoPath);
         pullSpin.succeed('Up to date');

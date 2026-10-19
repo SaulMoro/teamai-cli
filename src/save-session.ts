@@ -141,7 +141,7 @@ export async function saveSession(options: SaveSessionOptions): Promise<void> {
   // orphan branch, written through an isolated worktree so the default branch
   // (and in self mode, the user's active tree) is never touched.
   if (usesBranchWorktree(localConfig)) {
-    const spin = spinner('Pushing session summary to team...').start();
+    const spin = (await spinner('Pushing session summary to team...')).start();
     try {
       const { updateReports } = await import('./utils/reports-branch.js');
       const { isPublished } = await import('./utils/branch-worktree.js');
@@ -175,7 +175,7 @@ export async function saveSession(options: SaveSessionOptions): Promise<void> {
   const repoPath = localConfig.repo.localPath;
   const teamDir = path.join(repoPath, 'sessions', username);
 
-  const spin = spinner('Pushing session summary to team...').start();
+  const spin = (await spinner('Pushing session summary to team...')).start();
   try {
     try {
       await pullRepo(repoPath);

@@ -254,7 +254,7 @@ async function removeCore(
     }
   }
 
-  const spin = spinner(`Removing ${found.length} ${type}...`).start();
+  const spin = (await spinner(`Removing ${found.length} ${type}...`)).start();
 
   // Remove all resources
   let totalRemoved = 0;

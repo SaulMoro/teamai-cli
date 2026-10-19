@@ -629,7 +629,7 @@ function declarationCount(duplicates: number): string {
  */
 async function refreshTeamRepo(localConfig: LocalConfig, project: string | undefined): Promise<boolean> {
   if (isSelfMode(localConfig)) return true;
-  const pullSpin = spinner('Pulling latest...').start();
+  const pullSpin = (await spinner('Pulling latest...')).start();
   try {
     await pullRepo(localConfig.repo.localPath);
     pullSpin.succeed('Up to date');

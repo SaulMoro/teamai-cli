@@ -1274,7 +1274,7 @@ async function pullForScope(
   const workspaceKey = revisionField === 'lastPullRev' && localConfig.scope === 'project' ? recordKey : undefined;
 
   // Step 1: refresh team repo (git pull, or HTTP /repo materialization)
-  const pullSpin = spinner(`[${scopeLabel}] Pulling team repo...`).start();
+  const pullSpin = (await spinner(`[${scopeLabel}] Pulling team repo...`)).start();
   let currentRev: string | null = null;
   // A failed submodule update holds the rev back below so the next pull
   // retries (see refreshTeamRepo).

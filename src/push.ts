@@ -351,7 +351,7 @@ async function createPrWithFallback(
 ): Promise<string | null> {
   // A member's `init --provider` choice outranks the team's provider (#789).
   const provider = getProvider(localConfig.provider ?? teamConfig.provider);
-  const mrSpin = spinner('Creating Pull Request...').start();
+  const mrSpin = (await spinner('Creating Pull Request...')).start();
   let repoInput = teamConfig.repo;
   try {
     let repoInfo;
@@ -691,7 +691,7 @@ async function pushGroup(args: {
   // step (refreshMarketplace, pushRepoBranch, createPullRequest) fails, we
   // must wipe those copies + any staging so the next `teamai push` scans
   // cleanly instead of reporting "No new resources" (BUG #2).
-  const pushSpin = spinner('Pushing resources...').start();
+  const pushSpin = (await spinner('Pushing resources...')).start();
   const pushedFiles: string[] = [];
   let workingTreeDirtied = false;
 
@@ -1085,7 +1085,7 @@ async function pushCore(
   // point is the previous pull's, manifests included.
   let teamRepoStale = false;
   if (!selfMode) {
-    const pullSpin = spinner('Pulling latest changes...').start();
+    const pullSpin = (await spinner('Pulling latest changes...')).start();
     try {
       const repoPath = localConfig.repo.localPath;
       const git = createGit(repoPath);
@@ -1339,7 +1339,7 @@ async function pushCore(
     );
   }
 
-  const spin = spinner('Scanning local resources...').start();
+  const spin = (await spinner('Scanning local resources...')).start();
 
   // In single-repo mode the team knowledge dirs (.teamai/skills, .teamai/rules)
   // live inside the user's own repo, so people naturally add or edit skills there
@@ -2038,7 +2038,7 @@ async function pushTeamConfigOnly(
     return;
   }
 
-  const pushSpin = spinner('Pushing team config...').start();
+  const pushSpin = (await spinner('Pushing team config...')).start();
   const branchName = options.branch ?? generateBranchName(localConfig.username);
   const commitMsg = `[teamai] Update team config from ${localConfig.username}`;
 

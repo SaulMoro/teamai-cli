@@ -344,7 +344,7 @@ async function ensureSourceRepo(source: SourceConfig, force: boolean, dryRun = f
   // (token, credential helper, or SSH agent) is used.
   try {
     await ensureDir(path.dirname(repoDir));
-    const cloneSpin = spinner(`[source:${source.name}] Cloning...`).start();
+    const cloneSpin = (await spinner(`[source:${source.name}] Cloning...`)).start();
 
     const providerName = detectProvider(source.repo);
     const provider = getProvider(providerName);
