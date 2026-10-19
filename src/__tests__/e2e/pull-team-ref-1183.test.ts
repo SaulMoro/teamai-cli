@@ -847,3 +847,36 @@ it.each(['reconcile', 'deep-enrich', 'hidden'])('refuses %s before writing into 
   expect(result.output).toContain('The team repo is checked out at a fixed commit (a team ref pin, or an interrupted switch), so this command cannot change it. Run teamai pull --team-ref main to follow the default branch again.');
   expect(m.git(['status', '--porcelain'], m.clone())).toBe('');
 });
+
+it('records the pinned team commit as a workflow step agent team revision', () => {
+  const m = machine();
+  const workflow = 'schemaVersion: v1alpha1\nname: check\ndescription: Check.\nsteps:\n  - id: review\n    prompt: Review.\n';
+  m.teamCommit({ 'workflows/check.yaml': workflow }, 'main');
+  const pinned = m.teamCommit({ 'workflows/check.yaml': workflow });
+  const bin = path.join(m.root, 'bin');
+  write(path.join(bin, 'claude'), `#!${process.execPath}
+const fs = require('node:fs');
+if (process.argv.includes('--version')) { console.log('2.1.301 (Claude Code)'); process.exit(0); }
+fs.mkdirSync(require('node:path').dirname(process.env.TEAMAI_WORKFLOW_RESULT), { recursive: true });
+fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({}));
+process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', model: 'fake-claude', session_id: 's' }) + '\\n');
+process.stdout.write(JSON.stringify({ type: 'result', session_id: 's' }) + '\\n');
+`);
+  fs.chmodSync(path.join(bin, 'claude'), 0o755);
+  m.env.PATH = `${bin}${path.delimiter}${m.env.PATH}`;
+  const recorded = (): string | undefined => {
+    const started = m.ok(['workflow', 'start', 'check', '--driver', 'local', '--tools', 'default=claude']);
+    const envelope = JSON.parse(started.output.trim().split('\n').filter((line) => line.startsWith('{')).at(-1)!);
+    const run = String(envelope.data.done.run);
+    const record = JSON.parse(m.git(['show', `teamai-reports:workflows/runs/${run}.json`], m.remote));
+    return record.steps[0].agent?.team?.revision;
+  };
+  m.ok(['pull', '--team-ref', 'trial']);
+  expect(recorded()).toBe(pinned);
+  const tip = m.teamCommit({ 'skills/trial/SKILL.md': skill('trial', 'NEW TIP') });
+  m.ok(['pull']);
+  expect(recorded()).toBe(tip);
+  m.ok(['pull', '--team-ref', 'main']);
+  m.ok(['pull']);
+  expect(recorded()).toBe(m.git(['rev-parse', 'refs/heads/main'], m.remote));
+});
