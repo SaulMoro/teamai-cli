@@ -907,6 +907,17 @@ it('drops a submodule skill the unpinned revision lacks, also on a forced pull',
   expect(fs.existsSync(m.copy('sub')), forced.output).toBe(false);
 });
 
+it('keeps a skill the default branch tracks as files where the pinned branch had a submodule', () => {
+  const m = pinSubmoduleSkill();
+  m.git(['checkout', '-q', 'main']);
+  fs.rmSync(path.join(m.seed, 'skills/sub'), { recursive: true, force: true });
+  m.teamCommit({ 'skills/sub/SKILL.md': skill('sub', 'FILES ON MAIN') }, 'main');
+  const unpin = m.ok(['pull', '--team-ref', 'main']);
+  expect(read(path.join(m.clone(), 'skills/sub/SKILL.md')), unpin.output).toBe(skill('sub', 'FILES ON MAIN'));
+  expect(m.git(['status', '--porcelain'], m.clone())).toBe('');
+  expect(read(m.copy('sub'))).toBe(skill('sub', 'FILES ON MAIN'));
+});
+
 it('refuses to unpin while a submodule the default branch lacks has local changes', () => {
   const m = pinSubmoduleSkill();
   const edited = path.join(m.clone(), 'skills/sub/SKILL.md');

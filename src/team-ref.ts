@@ -98,7 +98,10 @@ export async function transitionTeamRepo(
       const gitlinks = async (rev: string) => (await git.raw(['ls-tree', '-rz', rev])).split('\0')
         .filter((entry) => entry.startsWith('160000 ')).map((entry) => entry.split('\t')[1]);
       const kept = new Set(await gitlinks(target));
-      return (await gitlinks(previous)).filter((file) => !kept.has(file));
+      const dropped = (await gitlinks(previous)).filter((file) => !kept.has(file));
+      // A path the target still tracks, as files, is the checkout's to replace.
+      const tracked = await Promise.all(dropped.map(async (file) => (await git.raw(['ls-tree', target, '--', file])).trim() !== ''));
+      return dropped.filter((_, index) => !tracked[index]);
     };
     const checkClean = async (target: string, dropped: string[]) => {
       const status = await git.status(['--ignore-submodules=all']);
