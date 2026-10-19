@@ -248,6 +248,20 @@ describe('what teamai answers without git, against git itself', () => {
       change: (dir) => git(dir, 'config', '--worktree', 'core.worktree', path.join(root, 'elsewhere')),
     },
     {
+      // Git finds the work tree from the repository's own config, never from a
+      // file it includes, so the stamp leaves included files out: this case
+      // fails first should git ever read them there.
+      name: 'core.worktree changed in a file the config includes',
+      dir: () => {
+        const main = repo(dirAt('repo'));
+        const included = path.join(root, 'included.cfg');
+        fs.writeFileSync(included, `[core]\n\tworktree = ${main}\n`);
+        git(main, 'config', 'include.path', included);
+        return dirAt('repo', 'sub');
+      },
+      change: (dir) => fs.writeFileSync(path.join(root, 'included.cfg'), `[core]\n\tworktree = ${dir}\n`),
+    },
+    {
       name: 'the environment handing git another repository',
       dir: () => (repo(dirAt('other')), repo(dirAt('repo'))),
       change: () => vi.stubEnv('GIT_DIR', path.join(root, 'other', '.git')),

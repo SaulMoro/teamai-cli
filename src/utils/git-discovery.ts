@@ -53,7 +53,7 @@ const identity = (stat: fs.Stats | null): number[] | null =>
  * from it (`.git` itself, the one a `.git` file names, or the directory
  * holding `HEAD`), and the identity of each, of its `HEAD`, of the common
  * directory it names and of the config files there (`core.worktree`, also
- * in `config.worktree`), plus
+ * in `config.worktree`; git never takes it from a file those include), plus
  * the variables that stop git's search. While the stamp stays equal, what git
  * said about where `dir` sits still holds, provided git opened `gitDir`: a
  * symlink pointed elsewhere, a repository moved, cloned again, broken,
