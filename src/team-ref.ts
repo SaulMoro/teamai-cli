@@ -2,7 +2,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createGit, DetachedTeamRepoError, getDefaultBranch, pullRepo, remotesMatch } from './utils/git.js';
 import type { GlobalOptions, LocalConfig } from './types.js';
-import { pathExists } from './utils/fs.js';
 
 export type ResolvedTeamRef = { ref: string; kind: 'branch' | 'tag' | 'commit'; commit: string };
 
@@ -103,13 +102,17 @@ export async function transitionTeamRepo(
       const tracked = await Promise.all(dropped.map(async (file) => (await git.raw(['ls-tree', target, '--', file])).trim() !== ''));
       return dropped.filter((_, index) => !tracked[index]);
     };
+    // Removing a dropped worktree loses nothing only when it is empty, or when its history lives in
+    // the clone's .git/modules (a .git file) and it holds no uncommitted, untracked or ignored file.
+    const removable = async (worktree: string): Promise<boolean> => {
+      if ((await fs.readdir(worktree).catch(() => [])).length === 0) return true;
+      if (!(await fs.lstat(path.join(worktree, '.git')).catch(() => null))?.isFile()) return false;
+      return !(await createGit(worktree, signal).raw(['status', '--porcelain', '--untracked-files=all', '--ignored'])).trim();
+    };
     const checkClean = async (target: string, dropped: string[]) => {
       const status = await git.status(['--ignore-submodules=all']);
       const paths = status.files.filter((file) => file.index !== '?' && file.working_dir !== '?').map((file) => file.path);
-      for (const file of dropped) {
-        const worktree = path.join(localPath, file);
-        if (await pathExists(path.join(worktree, '.git')) && (await createGit(worktree, signal).raw(['status', '--porcelain'])).trim()) paths.push(file);
-      }
+      for (const file of dropped) if (!await removable(path.join(localPath, file))) paths.push(file);
       if (paths.length > 0) throw new DirtyTeamRepoError(target, paths);
     };
     const removeWorktrees = (dropped: string[]) => Promise.all(dropped.map((file) => fs.rm(path.join(localPath, file), { recursive: true, force: true })));
