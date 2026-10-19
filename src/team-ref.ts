@@ -92,7 +92,7 @@ export async function transitionTeamRepo(
     // Empty only on an unborn branch: every other failure throws.
     const previous = (await git.revparse(['-q', '--verify', 'HEAD^{commit}'])).trim() || null;
     // A checkout leaves the worktree of a submodule the target no longer has: handlers would deliver it
-    // again, and git refuses to write the target's files over it. Remove it before the checkout.
+    // again, and git refuses to write the target's files over it. Clear it before the checkout.
     const leavingSubmodules = async (target: string): Promise<string[]> => {
       if (!previous) return [];
       const gitlinks = async (rev: string) => (await git.raw(['ls-tree', '-rz', rev])).split('\0')
@@ -100,34 +100,36 @@ export async function transitionTeamRepo(
       const kept = new Set(await gitlinks(target));
       return (await gitlinks(previous)).filter((file) => !kept.has(file));
     };
-    // Removing such a worktree loses nothing only when it is empty, or when its history lives in
-    // the clone's .git/modules (a .git file) and it holds no uncommitted, untracked or ignored file.
-    const removable = async (worktree: string): Promise<boolean> => {
-      if ((await fs.readdir(worktree).catch(() => [])).length === 0) return true;
-      if (!(await fs.lstat(path.join(worktree, '.git')).catch(() => null))?.isFile()) return false;
-      return !(await createGit(worktree, signal).raw(['status', '--porcelain', '--untracked-files=all', '--ignored'])).trim();
-    };
-    const checkClean = async (target: string, leaving: string[]) => {
+    const checkClean = async (target: string) => {
       const status = await git.status(['--ignore-submodules=all']);
       const paths = status.files.filter((file) => file.index !== '?' && file.working_dir !== '?').map((file) => file.path);
-      for (const file of leaving) if (!await removable(path.join(localPath, file))) paths.push(file);
       if (paths.length > 0) throw new DirtyTeamRepoError(target, paths);
     };
-    const removeWorktrees = (leaving: string[]) => Promise.all(leaving.map((file) => fs.rm(path.join(localPath, file), { recursive: true, force: true })));
+    // Git empties a submodule worktree only when nothing in it would be lost, absorbing an
+    // embedded git directory first. A worktree it refuses to clear counts as an uncommitted change.
+    const clearSubmodules = async (target: string, leaving: string[]) => {
+      const refused: string[] = [];
+      for (const file of leaving) {
+        const entries = await fs.readdir(path.join(localPath, file)).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? [] : null);
+        if (entries?.length === 0) continue;
+        try { await git.raw(['submodule', 'deinit', '--', file]); } catch { refused.push(file); }
+      }
+      if (refused.length > 0) throw new DirtyTeamRepoError(target, refused);
+    };
     if (ref !== undefined && ref !== defaultBranch) {
       const resolved = await resolveTeamRef(localPath, ref, signal);
       if (branch !== 'HEAD' || previous !== resolved.commit) {
         const leaving = await leavingSubmodules(resolved.commit);
-        await checkClean(ref, leaving);
-        await removeWorktrees(leaving);
+        await checkClean(ref);
+        await clearSubmodules(ref, leaving);
         await git.checkout(['--detach', resolved.commit]);
       }
       return { label: `team ref "${ref}"`, transition: 'pinned', ref };
     }
     if (branch !== defaultBranch) {
       const leaving = await leavingSubmodules(`refs/remotes/origin/${defaultBranch}`);
-      await checkClean(defaultBranch, leaving);
-      await removeWorktrees(leaving);
+      await checkClean(defaultBranch);
+      await clearSubmodules(defaultBranch, leaving);
       await git.checkout(defaultBranch);
     }
     try {

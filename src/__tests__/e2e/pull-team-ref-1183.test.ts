@@ -951,40 +951,67 @@ it('refuses to unpin while a submodule the default branch lacks has local change
   expect(read(m.configPath())).toBe(before);
 });
 
-it.each(['local files at a deinitialized path', 'an embedded git directory'])('refuses to unpin over %s where the default branch lacks the submodule', (kind) => {
+it.each([
+  'local files at a deinitialized path',
+  'an embedded git directory',
+  'an unpushed submodule commit',
+  'an edited copy of another submodule worktree',
+  'a nested repository with an unpushed commit',
+])('refuses to unpin over %s where the default branch lacks the submodule', (kind) => {
   const m = pinSubmoduleSkill();
   const sub = path.join(m.clone(), 'skills/sub');
-  m.git(['submodule', 'deinit', '-f', '--', 'skills/sub'], m.clone());
-  let kept: string;
+  const commitIn = (dir: string, body: string) => {
+    write(path.join(dir, 'SKILL.md'), skill('sub', body));
+    m.git(['add', '-A'], dir);
+    m.git(['commit', '-qm', 'local only'], dir);
+  };
+  let kept = path.join(sub, 'SKILL.md');
   if (kind === 'local files at a deinitialized path') {
+    m.git(['submodule', 'deinit', '-f', '--', 'skills/sub'], m.clone());
     kept = path.join(sub, 'notes.txt');
     write(kept, 'local notes\n');
-  } else {
+  } else if (kind === 'an embedded git directory') {
+    m.git(['submodule', 'deinit', '-f', '--', 'skills/sub'], m.clone());
     fs.rmSync(sub, { recursive: true, force: true });
     m.git(['clone', '-q', path.join(m.root, 'sub'), sub], m.clone());
-    write(path.join(sub, 'SKILL.md'), skill('sub', 'LOCAL COMMIT'));
-    m.git(['add', '-A'], sub);
-    m.git(['commit', '-qm', 'local only'], sub);
+    commitIn(sub, 'LOCAL COMMIT');
     kept = path.join(sub, '.git');
+  } else if (kind === 'an unpushed submodule commit') {
+    commitIn(sub, 'LOCAL COMMIT');
+  } else if (kind === 'an edited copy of another submodule worktree') {
+    m.git(['submodule', 'add', '-q', path.join(m.root, 'sub'), 'skills/other']);
+    m.teamCommit({});
+    m.ok(['pull']);
+    m.git(['submodule', 'deinit', '-f', '--', 'skills/sub'], m.clone());
+    fs.rmSync(sub, { recursive: true, force: true });
+    fs.cpSync(path.join(m.clone(), 'skills/other'), sub, { recursive: true });
+    write(kept, skill('sub', 'LOCAL EDIT'));
+  } else {
+    const nested = path.join(sub, 'nested');
+    m.git(['clone', '-q', path.join(m.root, 'sub'), nested], m.clone());
+    commitIn(nested, 'NESTED COMMIT');
+    m.git(['add', 'nested'], sub);
+    m.git(['commit', '-qm', 'nested'], sub);
+    kept = path.join(nested, '.git');
   }
+  const before = fs.readFileSync(kept.endsWith('.git') ? path.join(kept, 'HEAD') : kept, 'utf8');
   const r = m.run(['pull', '--team-ref', 'main']);
   expect(r.code, r.output).toBe(1);
   expect(r.output).toContain('The team repo has uncommitted changes, so it was not switched to "main": skills/sub. Share them with teamai push, or discard them, then pull again.');
-  expect(fs.existsSync(kept)).toBe(true);
+  expect(fs.readFileSync(kept.endsWith('.git') ? path.join(kept, 'HEAD') : kept, 'utf8')).toBe(before);
   expect(m.git(['rev-parse', 'HEAD'], m.clone())).toBe(m.git(['rev-parse', 'refs/heads/trial'], m.remote));
 });
 
-it('keeps an unpushed submodule commit in the clone when unpinning removes its worktree', () => {
+it('keeps a regular file at a dropped gitlink path when repinning', () => {
   const m = pinSubmoduleSkill();
+  m.git(['branch', 'no-sub', 'main']);
+  m.git(['push', '-q', 'origin', 'no-sub']);
   const sub = path.join(m.clone(), 'skills/sub');
-  write(path.join(sub, 'SKILL.md'), skill('sub', 'LOCAL COMMIT'));
-  m.git(['add', '-A'], sub);
-  m.git(['commit', '-qm', 'local only'], sub);
-  const commit = m.git(['rev-parse', 'HEAD'], sub);
-  const gitdir = m.git(['rev-parse', '--absolute-git-dir'], sub);
-  m.ok(['pull', '--team-ref', 'main']);
-  expect(fs.existsSync(sub)).toBe(false);
-  expect(m.git(['--git-dir', gitdir, '--work-tree', m.clone(), 'cat-file', '-t', commit], m.clone())).toBe('commit');
+  m.git(['submodule', 'deinit', '-f', '--', 'skills/sub'], m.clone());
+  fs.rmSync(sub, { recursive: true, force: true });
+  write(sub, 'local notes\n');
+  m.run(['pull', '--team-ref', 'no-sub']);
+  expect(read(sub)).toBe('local notes\n');
 });
 
 it.each([true, false])('exits 1 only when pinned=%s and a valid team hook cannot be written', (pinned) => {
