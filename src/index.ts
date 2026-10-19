@@ -178,6 +178,7 @@ program
   .description('Pull team resources and inject into local AI tools. Team docs land in sharing.docs.localDir: .teamai/docs/ in a workspace by default, a hidden directory, so search that path directly')
   .option('--silent', 'Silent mode (for hooks)')
   .option('--force', 'Force full sync even if repo is unchanged')
+  .option('--team-ref <ref>', 'Pin this workspace to a branch, tag or commit of the team repo; the default branch unpins it')
   .action(async (cmdOpts) => {
     const globalOpts = program.opts() as GlobalOptions;
     if (cmdOpts.silent) setSilent(true);
@@ -1366,11 +1367,19 @@ program
   .option('--max-modules <n>', 'Max modules to process (cost control)', parseInt)
   .action(async (cmdOpts: { project: string; wikiRoot?: string; maxModules?: number }) => {
     const { runHiddenDeepEnrich } = await import('./deep-enrich.js');
-    await runHiddenDeepEnrich({
-      project: cmdOpts.project,
-      wikiRoot: cmdOpts.wikiRoot,
-      maxModules: cmdOpts.maxModules,
-    });
+    const { DetachedTeamRepoError } = await import('./utils/git.js');
+    try {
+      await runHiddenDeepEnrich({
+        project: cmdOpts.project,
+        wikiRoot: cmdOpts.wikiRoot,
+        maxModules: cmdOpts.maxModules,
+      });
+    } catch (error) {
+      if (!(error instanceof DetachedTeamRepoError)) throw error;
+      const { log } = await import('./utils/logger.js');
+      log.error(error.message);
+      process.exitCode = 1;
+    }
   });
 
 recallCmd

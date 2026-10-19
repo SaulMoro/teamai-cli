@@ -891,6 +891,12 @@ export async function push(
   // A workspace sends an edit back where it came from, a child's namespace
   // included; a new item still goes to its own selection (#913).
   const { localConfig, teamConfig } = await autoDetectInit(undefined, { dryRun: options.dryRun });
+  if (localConfig.scope === 'project' && localConfig.repo.ref !== undefined) {
+    const ref = localConfig.repo.ref;
+    log.error(`This workspace is pinned to team ref "${ref}", so its skill, rule and agent changes were not pushed: they were made on top of "${ref}". Commit them to "${ref}" in the team repo, or make them again in a workspace that follows the default branch.`);
+    process.exitCode = 1;
+    return;
+  }
   assertNotReadOnly(localConfig, 'teamai push');
 
   // --project is a destination override expressed as a logical project. Each

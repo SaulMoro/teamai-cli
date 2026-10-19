@@ -437,6 +437,24 @@ export async function commitPaths(
   return true;
 }
 
+export class DetachedTeamRepoError extends Error {
+  constructor(defaultBranch: string) {
+    super(`The team repo is checked out at a fixed commit (a team ref pin, or an interrupted switch), so this command cannot change it. Run teamai pull --team-ref ${defaultBranch} to follow the default branch again.`);
+    this.name = 'DetachedTeamRepoError';
+  }
+
+  static rethrow(error: unknown): void {
+    if (error instanceof DetachedTeamRepoError) throw error;
+  }
+}
+
+export async function assertAttachedTeamRepo(git: SimpleGit, localPath: string): Promise<void> {
+  if (await gitFindsNoRepository(localPath) || !await isDedicatedRepoRoot(localPath)) return;
+  if (!(await git.raw(['symbolic-ref', '-q', 'HEAD'])).trim()) {
+    throw new DetachedTeamRepoError(await getDefaultBranch(localPath));
+  }
+}
+
 /**
  * Pull the latest changes from origin into a local team-repo clone.
  *
@@ -455,6 +473,7 @@ export async function commitPaths(
  */
 export async function pullRepo(localPath: string, abort?: AbortSignal): Promise<string> {
   const git = createGit(localPath, abort);
+  await assertAttachedTeamRepo(git, localPath);
 
   try {
     const result = await git.pull(['--ff-only']);
@@ -520,6 +539,7 @@ const defaultBranchCache = new Map<string, string>();
  */
 export async function pullRepoFastForward(localPath: string): Promise<string> {
   const git = createGit(localPath);
+  await assertAttachedTeamRepo(git, localPath);
   const result = await git.pull(['--ff-only']);
   if (result.summary.changes === 0 && result.summary.insertions === 0 && result.summary.deletions === 0) {
     return 'already up to date';
@@ -575,6 +595,7 @@ export async function pushRepoDirectly(
   opts: { initPush?: boolean } = {},
 ): Promise<void> {
   const git = opts.initPush ? createGitForInitPush(localPath) : createGit(localPath);
+  await assertAttachedTeamRepo(git, localPath);
   const existingFiles = [];
   for (const f of files) {
     const fullPath = fs.existsSync(`${localPath}/${f}`);
@@ -633,13 +654,14 @@ export async function pushLearningToOrigin(
 
 /**
  * Best-effort push all changes in a team repo clone.
- * Logs success/failure without throwing.
+ * Logs other push failures; refuses detached team clones.
  * @deprecated Use autoPushViaMR instead for import flows.
  */
 export async function autoPushTeamRepo(repoPath: string, message: string): Promise<void> {
   try {
     await pushRepoDirectly(repoPath, message, ['.']);
   } catch (err) {
+    DetachedTeamRepoError.rethrow(err);
     log.warn(`[git] autoPush failed (non-blocking): ${(err as Error).message}`);
   }
 }
@@ -647,7 +669,7 @@ export async function autoPushTeamRepo(repoPath: string, message: string): Promi
 /**
  * Push changes via branch + MR/PR instead of direct push to main.
  * Creates a branch, commits, pushes, creates MR, then returns to default branch.
- * Non-blocking: logs warnings on failure without throwing.
+ * Logs other push failures; refuses detached team clones.
  */
 export async function autoPushViaMR(
   repoPath: string,
@@ -674,6 +696,7 @@ export async function autoPushViaMR(
     await checkoutMaster(repoPath);
     return prUrl;
   } catch (err) {
+    DetachedTeamRepoError.rethrow(err);
     log.warn(`[git] autoPushViaMR failed (non-blocking): ${(err as Error).message}`);
     try { await checkoutMaster(repoPath); } catch { /* best effort */ }
     return null;
@@ -755,6 +778,7 @@ export async function pushRepoBranch(
   opts: { reuseBranch?: boolean; initPush?: boolean } = {},
 ): Promise<boolean> {
   const git = opts.initPush ? createGitForInitPush(localPath) : createGit(localPath);
+  await assertAttachedTeamRepo(git, localPath);
 
   if (opts.reuseBranch) {
     // Fetch so the tree comparison below can see the remote branch's content.
@@ -888,6 +912,7 @@ async function leaveAndDeletePushBranch(
  */
 export async function checkoutMaster(localPath: string): Promise<void> {
   const git = createGit(localPath);
+  await assertAttachedTeamRepo(git, localPath);
   const defaultBranch = await getDefaultBranch(localPath);
   await switchToDefaultBranch(git, defaultBranch);
 }
@@ -1299,7 +1324,8 @@ export async function completeWorktreeList(cwd: string, commonDir: string): Prom
  *  3. Stuck on a stale push branch — switch back to the default branch.
  *  4. Uncommitted modifications — reset discards them.
  */
-export async function resetToCleanMaster(git: SimpleGit, localPath?: string): Promise<void> {
+export async function resetToCleanMaster(git: SimpleGit, localPath: string): Promise<void> {
+  await assertAttachedTeamRepo(git, localPath);
   const status = await git.status();
   const hasConflicts = status.conflicted.length > 0;
   const isDirty = hasConflicts
@@ -1317,18 +1343,7 @@ export async function resetToCleanMaster(git: SimpleGit, localPath?: string): Pr
 
   // Ensure we're on the default branch (previous push may have left us on a feature branch)
   const branch = (await git.revparse(['--abbrev-ref', 'HEAD'])).trim();
-  // Resolve default branch from localPath if given, otherwise infer from origin/HEAD via git
-  let defaultBranch = 'main';
-  if (localPath) {
-    defaultBranch = await getDefaultBranch(localPath);
-  } else {
-    try {
-      const ref = (await git.revparse(['--abbrev-ref', 'origin/HEAD'])).trim();
-      if (ref.startsWith('origin/')) defaultBranch = ref.slice('origin/'.length);
-    } catch {
-      // origin/HEAD not set; use 'main' as best guess
-    }
-  }
+  const defaultBranch = await getDefaultBranch(localPath);
   if (branch !== defaultBranch) {
     log.debug(`Switching from stale branch '${branch}' back to ${defaultBranch}`);
     await switchToDefaultBranch(git, defaultBranch);

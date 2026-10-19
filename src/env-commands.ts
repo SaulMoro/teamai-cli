@@ -1,5 +1,5 @@
 import { requireInit, detectProjectConfig, describeUnreadableConfig, loadTeamConfig, NotInitializedError } from './config.js';
-import { pullRepo } from './utils/git.js';
+import { DetachedTeamRepoError, pullRepo } from './utils/git.js';
 import { pathExists } from './utils/fs.js';
 import { log, spinner } from './utils/logger.js';
 import { EnvHandler, envEntryReader, unknownEnvVariableKeys, type EnvYaml } from './resources/env.js';
@@ -635,6 +635,11 @@ async function refreshTeamRepo(localConfig: LocalConfig, project: string | undef
     pullSpin.succeed('Up to date');
     return true;
   } catch (e) {
+    if (e instanceof DetachedTeamRepoError) {
+      pullSpin.fail(e.message);
+      process.exitCode = 1;
+      return false;
+    }
     if (project === undefined) {
       pullSpin.warn(`Pull failed: ${(e as Error).message}`);
       return true;

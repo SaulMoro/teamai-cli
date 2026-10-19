@@ -17,7 +17,7 @@ import {
   loadLocalConfigForScope,
 } from './config.js';
 import { assertNotReadOnly } from './read-only.js';
-import { pushRepoDirectly, pullRepo } from './utils/git.js';
+import { DetachedTeamRepoError, pushRepoDirectly, pullRepo } from './utils/git.js';
 import { readEvents } from './dashboard-collector.js';
 import {
   collectSession,
@@ -179,7 +179,8 @@ export async function saveSession(options: SaveSessionOptions): Promise<void> {
   try {
     try {
       await pullRepo(repoPath);
-    } catch {
+    } catch (e) {
+      DetachedTeamRepoError.rethrow(e);
       log.debug('session save: pull failed, continuing with local state');
     }
 
