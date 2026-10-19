@@ -284,27 +284,57 @@ export async function trustCodexHooks(req: CodexHookTrustRequest): Promise<Codex
   });
 }
 
+/** The hooks Codex lists from `file`, by event, in file order (Codex keys them `<file>:<event>:<group>:<handler>`). */
+function hooksByEvent(hooks: HookInfo[], file: string): Map<string, HookInfo[]> {
+  const position = (key: string): [string, number, number] => {
+    const parts = key.split(':');
+    const handler = Number(parts.pop());
+    const group = Number(parts.pop());
+    return [parts.pop() ?? '', group, handler];
+  };
+  const byEvent = new Map<string, Array<{ hook: HookInfo; group: number; handler: number }>>();
+  for (const hook of hooks) {
+    if (canonical(hook.sourcePath) !== file) continue;
+    const [event, group, handler] = position(hook.key);
+    byEvent.set(event, [...byEvent.get(event) ?? [], { hook, group, handler }]);
+  }
+  return new Map([...byEvent].map(([event, list]) => [
+    event,
+    list.sort((a, b) => a.group - b.group || a.handler - b.handler).map(({ hook }) => hook),
+  ]));
+}
+
 /**
- * Run `write`, a rewrite of the Codex hooks file `file`, and keep trusted the
- * hooks in it Codex trusted before. Codex keys trust by position, so removing
- * one entry leaves every later one `modified` (#1220). Only an entry whose hash
- * Codex trusted before the write is trusted again, so no hook the member had
- * not approved gains trust. `write` runs even when Codex cannot be asked.
+ * Run `write`, which removes entries from the Codex hooks file `file` and keeps
+ * the order of the rest, and keep trusted the entries Codex trusted before.
+ * Codex keys trust by position, so removing one entry leaves every later one
+ * `modified` (#1220). Each surviving entry is matched to the one it was, in
+ * order, and trusted again only when that one was: a copy of an approved hook
+ * the member never approved stays untrusted. `write` runs even when Codex
+ * cannot be asked.
  */
 export async function keepCodexHookTrust(
   req: { codexHome: string; cwd: string; file: string },
   write: () => Promise<void>,
 ): Promise<CodexTrust> {
   const file = canonical(req.file);
-  const inFile = (hooks: HookInfo[]): HookInfo[] => hooks.filter((h) => canonical(h.sourcePath) === file);
-  const before = await withAppServer(req.codexHome, async (server) =>
-    new Set(inFile(await listHooks(server, req.cwd)).filter((h) => h.trustStatus === 'trusted').map((h) => h.currentHash)));
+  const before = await withAppServer(req.codexHome, async (server) => hooksByEvent(await listHooks(server, req.cwd), file));
   await write();
-  if (!(before instanceof Set)) return before;
-  if (before.size === 0) return { kind: 'trusted', hooks: 0 };
+  if (!(before instanceof Map)) return before;
+  if (![...before.values()].flat().some((h) => h.trustStatus === 'trusted')) return { kind: 'trusted', hooks: 0 };
   return withAppServer(req.codexHome, async (server): Promise<CodexTrust> => {
-    const toTrust = inFile(await listHooks(server, req.cwd))
-      .filter((h) => h.trustStatus !== 'trusted' && before.has(h.currentHash));
+    const toTrust: HookInfo[] = [];
+    for (const [event, now] of hooksByEvent(await listHooks(server, req.cwd), file)) {
+      const was = before.get(event) ?? [];
+      let i = 0;
+      for (const hook of now) {
+        // The removed entries are the only ones skipped, so the next equal hash is this entry as it was.
+        while (i < was.length && was[i].currentHash !== hook.currentHash) i++;
+        if (i === was.length) break;
+        if (was[i].trustStatus === 'trusted' && hook.trustStatus !== 'trusted') toTrust.push(hook);
+        i++;
+      }
+    }
     if (toTrust.length > 0) {
       await batchWrite(server, 'hooks.state', Object.fromEntries(toTrust.map((h) => [h.key, { trusted_hash: h.currentHash }])));
     }

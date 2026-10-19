@@ -2178,11 +2178,16 @@ describe('local-agent: cmds[] migration', () => {
       });
       return report.kind === 'listed' ? report.notTrusted.map((h) => h.command) : report;
     };
+    const mine = { hooks: [{ type: 'command', command: 'echo mine' }] };
     try {
-      await fse.ensureDir(path.dirname(file));
+      // The member approved their hook at the top, and not the copy of it below the agent hook.
+      await fse.outputJson(file, { hooks: { Stop: [mine] } });
+      await actual.trustCodexHooks({
+        codexHome: path.dirname(file), cwd: tmpDir, hooks: [{ file, command: 'echo mine', key: `${file}:stop:0:0` }],
+      });
       await runResponse({ cmds: [install(60, 'a')] }, undefined, 'codex');
       const json = await fse.readJson(file);
-      json.hooks.Stop.push({ hooks: [{ type: 'command', command: 'echo mine' }] });
+      json.hooks.Stop.push(mine);
       await fse.writeJson(file, json);
       await runResponse({ cmds: [install(61, 'b')] }, undefined, 'codex');
       expect(await notTrusted()).toEqual(['echo mine']);
@@ -2195,7 +2200,8 @@ describe('local-agent: cmds[] migration', () => {
         id: 63, type: 'uninstall_hook_rule', handle_type: 'hook', slug: 'b', scope: 'user',
       }] }, undefined, 'codex');
       expect(removed.find((a) => a.id === 63)?.status).toBe('success');
-      expect((await fse.readJson(file)).hooks.Stop.map((g: any) => g.hooks[0].command)).toEqual(['echo mine', 'echo a']);
+      expect((await fse.readJson(file)).hooks.Stop.map((g: any) => g.hooks[0].command))
+        .toEqual(['echo mine', 'echo mine', 'echo a']);
       expect(await notTrusted()).toEqual(['echo mine']);
     } finally {
       vi.unstubAllEnvs();
