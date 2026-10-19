@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createGit, DetachedTeamRepoError, getDefaultBranch, getHeadCommit, pullRepo, remotesMatch } from './utils/git.js';
+import { createGit, DetachedTeamRepoError, getDefaultBranch, pullRepo, remotesMatch } from './utils/git.js';
 import type { GlobalOptions, LocalConfig } from './types.js';
 import { pathExists } from './utils/fs.js';
 
@@ -33,17 +33,19 @@ export async function resolveTeamRef(localPath: string, ref: string, signal?: Ab
   const branches = remoteRefs.map((name) => name.slice('refs/remotes/origin/'.length))
     .filter((name) => name && !['HEAD', 'teamai-reports', 'teamai-learnings'].includes(name));
   const invalid = () => new TeamRefError(ref, branches);
+  const commitWithManifest = async (name: string): Promise<string> => {
+    const commit = (await git.revparse(['-q', '--verify', `${name}^{commit}`])).trim();
+    if (!commit || !(await git.raw(['ls-tree', commit, '--', 'teamai.yaml'])).trim()) throw invalid();
+    return commit;
+  };
   // Fully qualified refs still accept revision operators, so require an exact ref first.
   for (const [kind, name] of [['branch', `refs/remotes/origin/${ref}`], ['tag', `refs/tags/${ref}`]] as const) {
     if (kind === 'branch' && !branches.includes(ref)) continue;
     if (kind === 'tag' && !(await git.raw(['for-each-ref', '--format=%(refname)', 'refs/tags/'])).split('\n').includes(name)) continue;
-    const commit = (await git.revparse(['-q', '--verify', `${name}^{commit}`])).trim();
-    if (!commit || !(await git.raw(['ls-tree', commit, '--', 'teamai.yaml'])).trim()) throw invalid();
-    return { ref, kind, commit };
+    return { ref, kind, commit: await commitWithManifest(name) };
   }
   if (/^[0-9a-f]{7,64}$/i.test(ref)) {
-    const commit = (await git.revparse(['-q', '--verify', `${ref}^{commit}`])).trim();
-    if (!commit || !(await git.raw(['ls-tree', commit, '--', 'teamai.yaml'])).trim()) throw invalid();
+    const commit = await commitWithManifest(ref);
     const containing = (await git.raw(['branch', '-r', '--contains', commit, '--format=%(refname)'])).trim().split('\n');
     if (!containing.some((name) => branches.some((branch) => name === `refs/remotes/origin/${branch}`))) throw invalid();
     return { ref, kind: 'commit', commit };
@@ -58,10 +60,10 @@ export class DirtyTeamRepoError extends Error {
   }
 }
 
-export class TeamRepoTransitionError extends Error {
+/** A failed reattachment of a detached clone with no pin, which fails the pull where a plain refresh would not. */
+export class DetachedRecoveryError extends Error {
   constructor(error: unknown) {
     super(error instanceof Error ? error.message : String(error), { cause: error });
-    this.name = 'TeamRepoTransitionError';
   }
 }
 
@@ -88,7 +90,8 @@ export async function transitionTeamRepo(
     const defaultBranch = await getDefaultBranch(localPath);
     const symbolic = (await git.raw(['symbolic-ref', '-q', 'HEAD'])).trim();
     const branch = symbolic ? symbolic.replace(/^refs\/heads\//, '') : 'HEAD';
-    const previous = await getHeadCommit(localPath);
+    // Empty only on an unborn branch: every other failure throws.
+    const previous = (await git.revparse(['-q', '--verify', 'HEAD^{commit}'])).trim() || null;
     // A checkout leaves the worktree of a submodule the target lacks behind, and handlers would deliver it again.
     const droppedSubmodules = async (target: string): Promise<string[]> => {
       if (!previous) return [];
@@ -132,7 +135,7 @@ export async function transitionTeamRepo(
     }
   } catch (error) {
     if (ref !== undefined) throw error;
-    throw new TeamRepoTransitionError(error);
+    throw new DetachedRecoveryError(error);
   }
 }
 
