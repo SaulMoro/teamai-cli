@@ -233,6 +233,11 @@ describe('what teamai answers without git, against git itself', () => {
       change: () => fs.rmSync(path.join(root, 'repo', '.git'), { recursive: true }),
     },
     {
+      name: 'core.worktree set to another directory',
+      dir: () => (repo(dirAt('repo')), dirAt('elsewhere'), path.join(root, 'repo')),
+      change: (dir) => git(dir, 'config', 'core.worktree', path.join(root, 'elsewhere')),
+    },
+    {
       name: 'the environment handing git another repository',
       dir: () => (repo(dirAt('other')), repo(dirAt('repo'))),
       change: () => vi.stubEnv('GIT_DIR', path.join(root, 'other', '.git')),
@@ -246,5 +251,58 @@ describe('what teamai answers without git, against git itself', () => {
 
     change(dir);
     await expectAgrees(dir);
+  });
+});
+
+describe('a later run', () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-git-later-')));
+    for (const name of GIT_REPOSITORY_ENV) vi.stubEnv(name, undefined);
+    fs.mkdirSync(path.join(root, 'tmp'));
+    vi.stubEnv('TMPDIR', path.join(root, 'tmp'));
+    vi.stubEnv('TMP', path.join(root, 'tmp'));
+    vi.stubEnv('TEMP', path.join(root, 'tmp'));
+  });
+
+  const checkout = (): { repo: string; sub: string } => {
+    const repo = path.join(root, 'repo');
+    const sub = path.join(repo, 'sub');
+    fs.mkdirSync(sub, { recursive: true });
+    execFileSync('git', ['init', '-q'], { cwd: repo });
+    return { repo, sub };
+  };
+
+  const laterRunWithoutGit = async (): Promise<typeof import('../utils/git.js')> => {
+    vi.resetModules();
+    vi.stubEnv('PATH', path.join(root, 'no-git'));
+    return import('../utils/git.js');
+  };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('answers from what an earlier run asked git, without starting git', async () => {
+    const { repo, sub } = checkout();
+    const earlier = { location: await checkoutLocation(sub), worktrees: await listWorktrees(sub) };
+    expect(earlier.location?.toplevel).toBe(repo);
+    expect(earlier.worktrees).toEqual([repo]);
+
+    const later = await laterRunWithoutGit();
+    expect({ location: await later.checkoutLocation(sub), worktrees: await later.listWorktrees(sub) }).toEqual(earlier);
+  });
+
+  it.skipIf(process.getuid === undefined)('trusts no answers kept where another user can write', async () => {
+    fs.mkdirSync(path.join(root, 'tmp', `teamai-${process.getuid?.()}`), { mode: 0o777 });
+    fs.chmodSync(path.join(root, 'tmp', `teamai-${process.getuid?.()}`), 0o777);
+    const { sub } = checkout();
+    expect(await checkoutLocation(sub)).not.toBeNull();
+
+    const later = await laterRunWithoutGit();
+    expect(await later.checkoutLocation(sub)).toBeNull();
   });
 });

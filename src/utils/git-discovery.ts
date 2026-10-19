@@ -51,11 +51,13 @@ const identity = (stat: fs.Stats | null): number[] | null =>
  * Which repository git finds for `dir`, told without starting it: `dir`'s real
  * path, the entry gitFindsNoRepository looks for, the git directory git opens
  * from it (`.git` itself, the one a `.git` file names, or the directory
- * holding `HEAD`), and the identity of each and of its `HEAD`. While the stamp
- * stays equal, what git said about where `dir` sits still holds, provided git
- * opened `gitDir`: a symlink pointed elsewhere, or a repository moved, cloned
- * again, broken, removed, or created inside it later changes it. Null when git
- * finds none, and when the environment hands git a repository
+ * holding `HEAD`), and the identity of each, of its `HEAD`, of the common
+ * directory it names and of the config files there (`core.worktree`), plus
+ * the variables that stop git's search. While the stamp stays equal, what git
+ * said about where `dir` sits still holds, provided git opened `gitDir`: a
+ * symlink pointed elsewhere, a repository moved, cloned again, broken,
+ * removed, created inside it later, or given another work tree changes it.
+ * Null when git finds none, and when the environment hands git a repository
  * (GIT_REPOSITORY_ENV), which no file tells.
  */
 export async function repositoryStamp(dir: string): Promise<{ stamp: string; gitDir: string } | null> {
@@ -71,18 +73,29 @@ export async function repositoryStamp(dir: string): Promise<{ stamp: string; git
     gitDir = named ? path.resolve(path.dirname(entry.file), named) : entry.file;
   }
   const stat = (file: string): Promise<fs.Stats | null> => fs.promises.stat(file).catch(() => null);
-  const [gitDirStat, head] = await Promise.all([stat(gitDir), stat(path.join(gitDir, 'HEAD'))]);
-  return { stamp: JSON.stringify([real, entry.file, identity(entry.stat), link, gitDir, identity(gitDirStat), identity(head)]), gitDir };
+  const commonDirFile = (await fs.promises.readFile(path.join(gitDir, 'commondir'), 'utf8').catch(() => '')).trim();
+  const [gitDirStat, head, config, commonConfig] = await Promise.all([
+    stat(gitDir), stat(path.join(gitDir, 'HEAD')), stat(path.join(gitDir, 'config')),
+    stat(path.join(path.resolve(gitDir, commonDirFile), 'config')),
+  ]);
+  const search = [process.env.GIT_CEILING_DIRECTORIES, process.env.GIT_DISCOVERY_ACROSS_FILESYSTEM];
+  return {
+    stamp: JSON.stringify([real, entry.file, identity(entry.stat), link, gitDir, identity(gitDirStat), identity(head),
+      commonDirFile, identity(config), identity(commonConfig), search]),
+    gitDir,
+  };
 }
 
 /**
  * What `git worktree list` reads about the linked worktrees of the repository
  * whose common directory is `commonDir`, from git's own files: each worktree's
  * admin directory, where its checkout is, whether that is still there, and its
- * lock. Equal stamps mean an equal list; adding, moving, deleting, locking or
- * pruning a worktree changes it.
+ * lock, and the config saying whether the main entry is bare. Equal stamps
+ * mean an equal list; adding, moving, deleting, locking or pruning a worktree
+ * changes it.
  */
 export async function linkedWorktreesStamp(commonDir: string): Promise<string> {
+  const config = identity(await fs.promises.stat(path.join(commonDir, 'config')).catch(() => null));
   const admin = path.join(commonDir, 'worktrees');
   const names = (await fs.promises.readdir(admin).catch(() => [] as string[])).sort();
   const entries = await Promise.all(names.map(async (name) => {
@@ -94,5 +107,5 @@ export async function linkedWorktreesStamp(commonDir: string): Promise<string> {
     ]);
     return JSON.stringify([name, gitdir, live, locked]);
   }));
-  return entries.join('\n');
+  return [JSON.stringify(config), ...entries].join('\n');
 }
