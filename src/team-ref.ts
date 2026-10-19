@@ -1,5 +1,8 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { createGit, DetachedTeamRepoError, getDefaultBranch, getHeadCommit, pullRepo, remotesMatch } from './utils/git.js';
 import type { GlobalOptions, LocalConfig } from './types.js';
+import { pathExists } from './utils/fs.js';
 
 export type ResolvedTeamRef = { ref: string; kind: 'branch' | 'tag' | 'commit'; commit: string };
 
@@ -86,25 +89,42 @@ export async function transitionTeamRepo(
     const symbolic = (await git.raw(['symbolic-ref', '-q', 'HEAD'])).trim();
     const branch = symbolic ? symbolic.replace(/^refs\/heads\//, '') : 'HEAD';
     const previous = await getHeadCommit(localPath);
-    const checkClean = async (target: string) => {
+    // A checkout leaves the worktree of a submodule the target lacks behind, and handlers would deliver it again.
+    const droppedSubmodules = async (target: string): Promise<string[]> => {
+      if (!previous) return [];
+      const gitlinks = async (rev: string) => (await git.raw(['ls-tree', '-rz', rev])).split('\0')
+        .filter((entry) => entry.startsWith('160000 ')).map((entry) => entry.split('\t')[1]);
+      const kept = new Set(await gitlinks(target));
+      return (await gitlinks(previous)).filter((file) => !kept.has(file));
+    };
+    const checkClean = async (target: string, dropped: string[]) => {
       const status = await git.status(['--ignore-submodules=all']);
       const paths = status.files.filter((file) => file.index !== '?' && file.working_dir !== '?').map((file) => file.path);
+      for (const file of dropped) {
+        const worktree = path.join(localPath, file);
+        if (await pathExists(path.join(worktree, '.git')) && (await createGit(worktree, signal).raw(['status', '--porcelain'])).trim()) paths.push(file);
+      }
       if (paths.length > 0) throw new DirtyTeamRepoError(target, paths);
     };
+    const removeWorktrees = (dropped: string[]) => Promise.all(dropped.map((file) => fs.rm(path.join(localPath, file), { recursive: true, force: true })));
     if (ref !== undefined && ref !== defaultBranch) {
       const resolved = await resolveTeamRef(localPath, ref, signal);
       if (branch !== 'HEAD' || previous !== resolved.commit) {
-        await checkClean(ref);
+        const dropped = await droppedSubmodules(resolved.commit);
+        await checkClean(ref, dropped);
         await git.checkout(['--detach', resolved.commit]);
+        await removeWorktrees(dropped);
       }
       return { label: `team ref "${ref}"`, transition: 'pinned', ref };
     }
+    const dropped = branch === defaultBranch ? [] : await droppedSubmodules(`refs/remotes/origin/${defaultBranch}`);
     if (branch !== defaultBranch) {
-      await checkClean(defaultBranch);
+      await checkClean(defaultBranch, dropped);
       await git.checkout(defaultBranch);
     }
     try {
       const label = await pullRepo(localPath, signal);
+      await removeWorktrees(dropped);
       return { label, transition: ref === undefined ? 'recovered' : 'unpinned' };
     } catch (error) {
       if (branch === 'HEAD' && previous) await git.checkout(['--detach', previous]);

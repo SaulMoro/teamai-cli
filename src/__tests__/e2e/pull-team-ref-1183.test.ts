@@ -880,3 +880,42 @@ process.stdout.write(JSON.stringify({ type: 'result', session_id: 's' }) + '\\n'
   m.ok(['pull']);
   expect(recorded()).toBe(m.git(['rev-parse', 'refs/heads/main'], m.remote));
 });
+
+function pinSubmoduleSkill() {
+  const m = machine();
+  const sub = path.join(m.root, 'sub');
+  m.git(['config', '--global', 'protocol.file.allow', 'always']);
+  write(path.join(sub, 'SKILL.md'), skill('sub'));
+  m.git(['init', '-q', '-b', 'main'], sub);
+  m.git(['add', '-A'], sub);
+  m.git(['commit', '-qm', 'first'], sub);
+  const config = `${read(path.join(m.seed, 'teamai.yaml'))}submodules: true\n`;
+  m.teamCommit({ 'teamai.yaml': config }, 'main');
+  m.git(['checkout', '-q', 'trial']);
+  m.git(['submodule', 'add', '-q', sub, 'skills/sub']);
+  m.teamCommit({ 'teamai.yaml': config });
+  m.ok(['pull', '--team-ref', 'trial']);
+  expect(read(m.copy('sub'))).toBe(skill('sub'));
+  return m;
+}
+
+it('drops a submodule skill the unpinned revision lacks, also on a forced pull', () => {
+  const m = pinSubmoduleSkill();
+  const unpin = m.ok(['pull', '--team-ref', 'main']);
+  const forced = m.ok(['pull', '--force']);
+  expect(fs.existsSync(path.join(m.clone(), 'skills/sub')), unpin.output).toBe(false);
+  expect(fs.existsSync(m.copy('sub')), forced.output).toBe(false);
+});
+
+it('refuses to unpin while a submodule the default branch lacks has local changes', () => {
+  const m = pinSubmoduleSkill();
+  const edited = path.join(m.clone(), 'skills/sub/SKILL.md');
+  write(edited, skill('sub', 'MY EDIT'));
+  const before = read(m.configPath());
+  const r = m.run(['pull', '--team-ref', 'main']);
+  expect(r.code, r.output).toBe(1);
+  expect(r.output).toContain('The team repo has uncommitted changes, so it was not switched to "main": skills/sub. Share them with teamai push, or discard them, then pull again.');
+  expect(read(edited)).toBe(skill('sub', 'MY EDIT'));
+  expect(m.git(['rev-parse', 'HEAD'], m.clone())).toBe(m.git(['rev-parse', 'refs/heads/trial'], m.remote));
+  expect(read(m.configPath())).toBe(before);
+});
