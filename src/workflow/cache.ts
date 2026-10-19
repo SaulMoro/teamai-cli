@@ -15,7 +15,7 @@ import { formatDiagnostic, parseWorkflow, promptFileDiagnostics, stepField } fro
 import type { WorkflowFiles } from './parse-context.js';
 import type { CachedWorkflow, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
 import { assertSafePath, assertWithinRoot } from '../utils/path-safety.js';
-import { createGit } from '../utils/git.js';
+import { createGit, getHeadCommit } from '../utils/git.js';
 
 export interface SyncWorkflowOptions {
   dryRun?: boolean;
@@ -136,11 +136,10 @@ async function isTeamRemoteRevision(root: string, revision: string): Promise<boo
 /** The checked-out commit, only when the team remote can reach it. */
 async function remotelyReachableRevision(root: string): Promise<ReachableRevision | undefined> {
   try {
-    const git = createGit(root);
-    const revision = (await git.revparse(['HEAD'])).trim();
-    if (!await isTeamRemoteRevision(root, revision)) return undefined;
+    const revision = await getHeadCommit(root);
+    if (!revision || !await isTeamRemoteRevision(root, revision)) return undefined;
     return {
-      repositoryRoot: await fs.realpath((await git.revparse(['--show-toplevel'])).trim()),
+      repositoryRoot: await fs.realpath((await createGit(root).revparse(['--show-toplevel'])).trim()),
       revision,
     };
   } catch {
@@ -269,13 +268,15 @@ export async function syncWorkflowDefinitions(
       reject(file, problems);
       continue;
     }
-    const previous = await readCache(config, file.definition.name);
+    const previous = kept.get(file.stem);
     result.cached.push(file.definition.name);
-    if (options.dryRun || (previous?.sourceHash === file.sourceHash && previous.teamRevision === file.teamRevision)) continue;
+    // Equal bytes are still stored at the kept revision, which the team remote still reaches.
+    const teamRevision = file.teamRevision ?? (previous?.sourceHash === file.sourceHash ? previous.teamRevision : undefined);
+    if (options.dryRun || (previous?.sourceHash === file.sourceHash && previous.teamRevision === teamRevision)) continue;
     await writeJsonAtomic(cachePath(config, file.definition.name), {
       relativePath: file.relativePath,
       sourceHash: file.sourceHash,
-      ...(file.teamRevision ? { teamRevision: file.teamRevision } : {}),
+      ...(teamRevision ? { teamRevision } : {}),
       content: file.content,
       definition: file.definition,
       validatedAt: new Date().toISOString(),
