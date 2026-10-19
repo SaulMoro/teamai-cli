@@ -2209,6 +2209,67 @@ describe('local-agent: cmds[] migration', () => {
     }
   });
 
+  it.each(['uninstall', 'reinstall', 'teardown'])(
+    'keeps an unapproved duplicate untrusted after %s removes its approved sibling group (#1220)',
+    async (operation) => {
+      const actual = await vi.importActual<typeof import('../codex-trust.js')>('../codex-trust.js');
+      vi.mocked(trustCodexHooks).mockImplementation(actual.trustCodexHooks);
+      vi.mocked(keepCodexHookTrust).mockImplementation(actual.keepCodexHookTrust);
+      const fakeBin = installFakeCodex();
+      vi.stubEnv('PATH', `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`);
+      const file = path.join(tmpDir, '.codex', 'hooks.json');
+      const install = {
+        id: 65, type: 'install_hook_rule', handle_type: 'hook', slug: 'a',
+        event: 'Stop', cmd: 'echo agent a', scope: 'user',
+      };
+      const handler = (command: string) => ({ type: 'command', command });
+      const request = (hooks: Array<{ command: string; key: string }>) => ({
+        codexHome: path.dirname(file), cwd: tmpDir, hooks: hooks.map((h) => ({ file, ...h })),
+      });
+      try {
+        await runResponse({ cmds: [install] }, undefined, 'codex');
+        const json = await fse.readJson(file);
+        json.hooks.Stop[0].hooks.push(handler('echo personal'));
+        json.hooks.Stop.push(
+          { hooks: [handler('echo personal')] },
+          { hooks: [handler('echo approved first'), handler('echo approved second')] },
+        );
+        await fse.writeJson(file, json);
+        await actual.trustCodexHooks(request([
+          { command: 'echo agent a', key: `${file}:stop:0:0` },
+          { command: 'echo personal', key: `${file}:stop:0:1` },
+          { command: 'echo approved first', key: `${file}:stop:2:0` },
+          { command: 'echo approved second', key: `${file}:stop:2:1` },
+        ]));
+        const notTrusted = async () => {
+          const hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> } = (await fse.readJson(file)).hooks;
+          const report = await actual.readCodexHookTrust(request(hooks.Stop.flatMap((g, i) =>
+            g.hooks.map((h, j) => ({ command: h.command, key: `${file}:stop:${i}:${j}` })))));
+          expect(report.kind).toBe('listed');
+          return report.kind === 'listed' ? report.notTrusted.map((h) => h.command) : report;
+        };
+        expect(await notTrusted()).toEqual(['echo personal']);
+
+        if (operation === 'teardown') {
+          const { removeAllAgentHooks } = await import('../local-agent.js');
+          expect(await removeAllAgentHooks()).toEqual([]);
+        } else {
+          const command = operation === 'reinstall' ? install : {
+            id: 66, type: 'uninstall_hook_rule', handle_type: 'hook', slug: 'a', scope: 'user',
+          };
+          const acks = await runResponse({ cmds: [command] }, undefined, 'codex');
+          expect(acks.find((a) => a.id === command.id)?.status).toBe('success');
+        }
+
+        expect((await fse.readJson(file)).hooks.Stop[0].hooks).toEqual([handler('echo personal')]);
+        expect(await notTrusted()).toEqual(['echo personal']);
+      } finally {
+        vi.unstubAllEnvs();
+        await fse.remove(fakeBin);
+      }
+    },
+  );
+
   it('install_hook_rule writes the schema version Muse requires to a new settings file (#1220)', async () => {
     const acks = await runResponse({ cmds: [{
       id: 64, type: 'install_hook_rule', handle_type: 'hook', slug: 'hk-muse-new',

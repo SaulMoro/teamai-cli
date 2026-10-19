@@ -2394,13 +2394,14 @@ export async function applyAgentHook(
 /**
  * Remove a single agent hook from a tool's settings file by slug (claude) or
  * command (codex). Silent if the file does not exist or there is no matching entry.
- * Only writes when content has actually changed.
+ * Only writes when content has actually changed. Codex returns each retained
+ * handler's new key mapped to its original key for preserving approval.
  */
 export async function removeAgentHook(
   settingsPath: string,
   tool: string,
   opts: { slug: string; command?: string },
-): Promise<void> {
+): Promise<ReadonlyMap<string, string> | void> {
   const expanded = expandHome(settingsPath);
   if (!(await pathExists(expanded))) return;
   const format = detectFormat(tool);
@@ -2412,10 +2413,19 @@ export async function removeAgentHook(
     if (!opts.command) return;
     const hooksJson: CodexHooksJson = await readHookFile<CodexHooksJson>(expanded, {});
     if (!hooksJson.hooks) return;
+    const retained = new Map<string, string>();
     let changed = false;
     for (const event of Object.keys(hooksJson.hooks)) {
       const before = hooksJson.hooks[event];
-      const after = before.filter((e) => (e.hooks?.[0]?.command ?? '') !== opts.command);
+      const after: CodexHookMatcher[] = [];
+      for (const [index, group] of before.entries()) {
+        if ((group.hooks?.[0]?.command ?? '') === opts.command) continue;
+        group.hooks?.forEach((_, handler) => retained.set(
+          codexHookKey(expanded, event, after.length, handler),
+          codexHookKey(expanded, event, index, handler),
+        ));
+        after.push(group);
+      }
       if (after.length !== before.length) {
         changed = true;
         if (after.length === 0) {
@@ -2429,6 +2439,7 @@ export async function removeAgentHook(
       await writeJson(expanded, hooksJson);
       log.success(`Removed agent hook [${opts.slug}] from ${settingsPath}`);
     }
+    return retained;
   } else {
     const settings: ClaudeSettingsJson = await readHookFile<ClaudeSettingsJson>(expanded, {});
     if (!settings.hooks) return;
@@ -3403,15 +3414,19 @@ async function teamaiCodexHooks(file: string, manifestPath: string): Promise<Cod
   }));
 }
 
+function codexHookKey(file: string, event: string, group: number, handler: number): string {
+  const snake = event.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+  return `${canonicalProjectRoot(file)}:${snake}:${group}:${handler}`;
+}
+
 /** One Codex hooks.json entry as a trust pass names it, with Codex's file/event/position key. */
 function codexTrustHook(file: string, event: string, index: number, group: CodexHookMatcher): CodexTrustTargets['hooks'][number] {
-  const snake = event.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
   const commandWindows = group.hooks?.[0]?.commandWindows;
   return {
     file,
     command: group.hooks?.[0]?.command ?? '',
     ...(commandWindows !== undefined ? { commandWindows } : {}),
-    key: `${canonicalProjectRoot(file)}:${snake}:${index}:0`,
+    key: codexHookKey(file, event, index, 0),
   };
 }
 
