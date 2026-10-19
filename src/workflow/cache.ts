@@ -189,7 +189,8 @@ export async function syncWorkflowDefinitions(
   const result: SyncWorkflowResult = { cached: [], kept: [], invalid: [], unrunnable: [] };
   const dir = path.join(getKnowledgeDir(config), 'workflows');
   const knowledgeRoot = getKnowledgeDir(config);
-  const reachable = await remotelyReachableRevision(knowledgeRoot);
+  // Asked on the first valid file: a team without workflows starts no git here.
+  let reachable: Promise<ReachableRevision | undefined> | undefined;
   const checked: Checked[] = [];
   for (const name of await workflowFileNames(dir)) {
     const relativePath = `workflows/${name}`;
@@ -223,8 +224,9 @@ export async function syncWorkflowDefinitions(
       hash.update('\0').update(source.path).update('\0').update(source.content);
     }
     const sources = [{ path: relativePath, content }, ...resolved.sources];
-    const teamRevision = await revisionHoldsSources(knowledgeRoot, reachable, sources)
-      ? reachable?.revision
+    const revision = await (reachable ??= remotelyReachableRevision(knowledgeRoot));
+    const teamRevision = await revisionHoldsSources(knowledgeRoot, revision, sources)
+      ? revision?.revision
       : undefined;
     checked.push({
       stem, relativePath, content, definition: resolved.definition, sourceHash: hash.digest('hex'),
