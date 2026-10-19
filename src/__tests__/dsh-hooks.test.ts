@@ -106,6 +106,17 @@ describe('DeepSeek Harness hook bridge', () => {
     expect(YAML.parse(await fse.readFile(homePatchFile(), 'utf8'))).toEqual([{ id: 'telemetry', disabled: true }]);
   });
 
+  it('preserves empty member-owned patches during removal when no teamai row is present (#1219)', async () => {
+    await fse.ensureDir(path.join(home, '.dsh'));
+    const mine = '# my tweaks\n[]\n';
+    await fse.writeFile(homePatchFile(), mine);
+
+    await reconcileDshHooks([], { manifestPath: manifest(), removeAll: true });
+
+    expect(await fse.pathExists(homePatchFile())).toBe(true);
+    expect(await fse.readFile(homePatchFile(), 'utf8')).toBe(mine);
+  });
+
   it('leaves a $DSH_HOME/cordis.patch.yml it cannot parse alone (#1219)', async () => {
     await fse.ensureDir(path.join(home, '.dsh'));
     await fse.writeFile(homePatchFile(), 'id: [unclosed\n');

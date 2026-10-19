@@ -79,9 +79,11 @@ async function mountDshHooks(configPath: string | null): Promise<boolean | null>
   if (doc.contents === null) doc.contents = doc.createNode([]);
   const rows = doc.contents;
   if (!YAML.isSeq(rows)) return null;
+  let removedAny = false;
   rows.items = rows.items.filter((row) => {
     const insert = YAML.isMap(row) ? row.get('insert') : undefined;
     if (!YAML.isSeq(insert) || !insert.items.some(isTeamaiRow)) return true;
+    removedAny = true;
     insert.items = insert.items.filter((entry) => !isTeamaiRow(entry));
     return insert.items.length > 0;
   });
@@ -89,6 +91,8 @@ async function mountDshHooks(configPath: string | null): Promise<boolean | null>
     rows.items.push(doc.createNode({
       insert: [{ id: DSH_HOOK_PLUGIN_ID, name: DSH_HOOK_PLUGIN_PACKAGE, config: { configPath } }],
     }));
+  } else if (!removedAny) {
+    return false;
   }
   if (rows.items.length === 0) {
     if (content === null) return false;
