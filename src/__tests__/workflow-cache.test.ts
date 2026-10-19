@@ -128,6 +128,21 @@ describe('workflow cache', () => {
     expect((await loadCachedWorkflow(config, 'build'))?.teamRevision).toBe(localRevision);
   });
 
+  it('keeps a verified revision when an unrelated unpushed commit moves HEAD', async () => {
+    const config = testConfig();
+    const repository = initializeTeamRepository(config);
+    writeWorkflow(config, 'build', VALID);
+    const pushed = repository.commit('add workflow');
+    repository.push();
+    await syncWorkflowDefinitions(config);
+
+    fs.writeFileSync(path.join(config.repo.localPath, 'README.md'), 'unrelated\n');
+    repository.commit('unrelated local commit');
+    await syncWorkflowDefinitions(config);
+
+    expect((await loadCachedWorkflow(config, 'build'))?.teamRevision).toBe(pushed);
+  });
+
   it('omits the team revision for an untracked workflow at a remote-reachable commit', async () => {
     const config = testConfig();
     const repository = initializeTeamRepository(config);
