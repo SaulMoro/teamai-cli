@@ -1665,12 +1665,11 @@ export async function ruleChannelNotes(localConfig: LocalConfig): Promise<string
       + 'a session: the rules come back in the next session.',
     );
   }
-  const { isDshInstalled, resolveDshPatchPath } = await import('../dsh-hooks.js');
+  const { isDshInstalled } = await import('../dsh-hooks.js');
   if (!isAgentExcluded(localConfig, 'dsh') && await isDshInstalled()) {
     notes.push(
-      'DeepSeek Harness gets the project\'s team rules from teamai\'s session-start hook only when dsh runs with '
-      + `\`--patch "${resolveDshPatchPath()}"\`. It runs that hook detached, so the first request can miss the rules, `
-      + 'and it drops them when it compacts a session: they come back in the next session.',
+      'DeepSeek Harness gets the project\'s team rules from teamai\'s session-start hook, and drops them when it '
+      + 'compacts a session: they come back in the next session.',
     );
   }
   return notes;
