@@ -238,6 +238,16 @@ describe('what teamai answers without git, against git itself', () => {
       change: (dir) => git(dir, 'config', 'core.worktree', path.join(root, 'elsewhere')),
     },
     {
+      name: 'core.worktree set in the per-worktree config',
+      dir: () => {
+        const dir = repo(dirAt('repo'));
+        git(dir, 'config', 'extensions.worktreeConfig', 'true');
+        dirAt('elsewhere');
+        return dir;
+      },
+      change: (dir) => git(dir, 'config', '--worktree', 'core.worktree', path.join(root, 'elsewhere')),
+    },
+    {
       name: 'the environment handing git another repository',
       dir: () => (repo(dirAt('other')), repo(dirAt('repo'))),
       change: () => vi.stubEnv('GIT_DIR', path.join(root, 'other', '.git')),
@@ -286,7 +296,7 @@ describe('a later run', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it('answers from what an earlier run asked git, without starting git', async () => {
+  it.skipIf(process.getuid === undefined)('answers from what an earlier run asked git, without starting git', async () => {
     const { repo, sub } = checkout();
     const earlier = { location: await checkoutLocation(sub), worktrees: await listWorktrees(sub) };
     expect(earlier.location?.toplevel).toBe(repo);
@@ -294,6 +304,37 @@ describe('a later run', () => {
 
     const later = await laterRunWithoutGit();
     expect({ location: await later.checkoutLocation(sub), worktrees: await later.listWorktrees(sub) }).toEqual(earlier);
+  });
+
+  it.skipIf(process.getuid === undefined)('keeps every answer an earlier run asked for at once', async () => {
+    const { repo } = checkout();
+    const dirs = ['a', 'b', 'c', 'd'].map((name) => path.join(repo, name));
+    for (const dir of dirs) fs.mkdirSync(dir);
+    const earlier = await Promise.all(dirs.map((dir) => checkoutLocation(dir)));
+
+    const later = await laterRunWithoutGit();
+    expect(await Promise.all(dirs.map((dir) => later.checkoutLocation(dir)))).toEqual(earlier);
+  });
+
+  it('answers nothing for a directory removed since an earlier run', async () => {
+    const { sub } = checkout();
+    expect(await checkoutLocation(sub)).not.toBeNull();
+
+    fs.rmSync(sub, { recursive: true });
+    const later = await laterRunWithoutGit();
+    expect(await later.checkoutLocation(sub)).toBeNull();
+  });
+
+  it('lists a worktree added after an earlier run asked', async () => {
+    const { repo, sub } = checkout();
+    execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-q', '-m', 'init'], { cwd: repo });
+    expect(await listWorktrees(sub)).toEqual([repo]);
+
+    const linked = path.join(root, 'linked');
+    execFileSync('git', ['worktree', 'add', '-q', linked, 'HEAD'], { cwd: repo });
+    vi.resetModules();
+    const later = await import('../utils/git.js');
+    expect(await later.listWorktrees(sub)).toEqual([repo, linked]);
   });
 
   it.skipIf(process.getuid === undefined)('trusts no answers kept where another user can write', async () => {
@@ -304,5 +345,19 @@ describe('a later run', () => {
 
     const later = await laterRunWithoutGit();
     expect(await later.checkoutLocation(sub)).toBeNull();
+  });
+
+  it('keeps no answers where it cannot tell the directory is this user\'s alone', async () => {
+    const getuid = Object.getOwnPropertyDescriptor(process, 'getuid');
+    Object.defineProperty(process, 'getuid', { value: undefined, configurable: true });
+    try {
+      const { sub } = checkout();
+      expect(await checkoutLocation(sub)).not.toBeNull();
+
+      const later = await laterRunWithoutGit();
+      expect(await later.checkoutLocation(sub)).toBeNull();
+    } finally {
+      if (getuid) Object.defineProperty(process, 'getuid', getuid);
+    }
   });
 });

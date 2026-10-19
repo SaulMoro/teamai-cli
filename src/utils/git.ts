@@ -1,13 +1,12 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { realpath } from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 import fse from 'fs-extra';
 import simpleGit, { type SimpleGit } from 'simple-git';
 import { z } from 'zod';
 import { execCommand } from './exec.js';
-import { writeFileAtomic } from './fs.js';
+import { GitAnswers } from './git-answers.js';
 import { gitFindsNoRepository, linkedWorktreesStamp, repositoryStamp } from './git-discovery.js';
 import { log } from './logger.js';
 
@@ -1090,88 +1089,9 @@ export interface CheckoutLocation {
   excludeFile: string;
 }
 
-/**
- * checkoutLocation and readWorktreeList answers kept on disk between runs,
- * under the stamps a run remembers them by: every command, each hook
- * included, otherwise started git twice for answers that change only with the
- * stamp. The newest KEPT_GIT_ANSWERS of each kind stay. Runs writing at once
- * keep one run's answers; the other asks git again next time.
- */
-const KeptGitAnswers = z.object({
-  locations: z.record(z.string(), z.object({
-    stamp: z.string(),
-    location: z.object({ toplevel: z.string(), prefix: z.string(), commonDir: z.string(), excludeFile: z.string() }) satisfies z.ZodType<CheckoutLocation>,
-  })),
-  worktreeLists: z.record(z.string(), z.object({ stamp: z.string(), list: z.string() })),
-});
-type KeptGitAnswers = z.infer<typeof KeptGitAnswers>;
-
-const KEPT_GIT_ANSWERS = 64;
-let keptGitAnswersAt: { tmp: string; file: Promise<string | null> } | undefined;
-let keptGitAnswers: { file: string; answers: Promise<KeptGitAnswers> } | undefined;
-
-/**
- * Where the answers are kept: `teamai-<uid>/git-answers.json` in the temporary
- * directory, beside Node's compile cache, so a dry run leaves the TeamAI home
- * as it found it. Null, and nothing kept, when that directory is not this
- * user's alone (another user made it in a shared /tmp): answers read from
- * there would say where teamai writes.
- */
-function keptGitAnswersFile(): Promise<string | null> {
-  const tmp = os.tmpdir();
-  if (keptGitAnswersAt?.tmp === tmp) return keptGitAnswersAt.file;
-  const file = (async () => {
-    const uid = process.getuid?.();
-    const dir = path.join(tmp, uid === undefined ? 'teamai' : `teamai-${uid}`);
-    await fs.promises.mkdir(dir, { mode: 0o700 }).catch(() => undefined);
-    const stat = await fs.promises.lstat(dir).catch(() => null);
-    if (!stat?.isDirectory()) return null;
-    if (uid !== undefined && (stat.uid !== uid || (stat.mode & 0o077) !== 0)) return null;
-    return path.join(dir, 'git-answers.json');
-  })();
-  keptGitAnswersAt = { tmp, file };
-  return file;
-}
-
-/** The answers kept in `file`: none when it is missing, unreadable, or not in their shape. */
-async function readKeptGitAnswers(file: string): Promise<KeptGitAnswers> {
-  const text = await fs.promises.readFile(file, 'utf8').catch(() => '');
-  let json: unknown;
-  try {
-    json = JSON.parse(text);
-  } catch {
-    json = null;
-  }
-  const parsed = KeptGitAnswers.safeParse(json);
-  return parsed.success ? parsed.data : { locations: {}, worktreeLists: {} };
-}
-
-/** This run's view of the kept answers, read once per file. */
-async function keptGitAnswersNow(): Promise<KeptGitAnswers> {
-  const file = await keptGitAnswersFile();
-  if (file === null) return { locations: {}, worktreeLists: {} };
-  if (keptGitAnswers?.file !== file) keptGitAnswers = { file, answers: readKeptGitAnswers(file) };
-  return keptGitAnswers.answers;
-}
-
-/** Keep one more answer: merged into what is on disk now, the oldest of its kind dropped past KEPT_GIT_ANSWERS. */
-async function keepGitAnswer<Kind extends keyof KeptGitAnswers>(kind: Kind, key: string, answer: KeptGitAnswers[Kind][string]): Promise<void> {
-  const file = await keptGitAnswersFile();
-  if (file === null) return;
-  const answers = await readKeptGitAnswers(file);
-  const entries = answers[kind];
-  // Deleted first, so the answer becomes the newest.
-  delete entries[key];
-  entries[key] = answer;
-  for (const old of Object.keys(entries).slice(0, -KEPT_GIT_ANSWERS)) delete entries[old];
-  try {
-    await writeFileAtomic(file, JSON.stringify(answers));
-  } catch (error) {
-    log.debug(`git answers not kept in ${file}, the next run asks git again: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-const checkoutLocations = new Map<string, { stamp: string; location: Promise<CheckoutLocation | null> }>();
+const checkoutLocations = GitAnswers.of('locations', z.object({
+  toplevel: z.string(), prefix: z.string(), commonDir: z.string(), excludeFile: z.string(),
+}) satisfies z.ZodType<CheckoutLocation>);
 
 /**
  * Where `dir` sits in its checkout, from one `git rev-parse` for what
@@ -1188,20 +1108,7 @@ const checkoutLocations = new Map<string, { stamp: string; location: Promise<Che
 export async function checkoutLocation(dir: string): Promise<CheckoutLocation | null> {
   const found = await repositoryStamp(dir);
   if (found === null) return null;
-  const { stamp } = found;
-  const key = path.resolve(dir);
-  const known = checkoutLocations.get(key);
-  if (known?.stamp === stamp) return known.location;
-  const location = (async () => {
-    const kept = (await keptGitAnswersNow()).locations[key];
-    if (kept?.stamp === stamp) return kept.location;
-    const read = await readCheckoutLocation(dir, found.gitDir);
-    if (read) await keepGitAnswer('locations', key, { stamp, location: read });
-    return read;
-  })();
-  checkoutLocations.set(key, { stamp, location });
-  if (await location === null && checkoutLocations.get(key)?.location === location) checkoutLocations.delete(key);
-  return location;
+  return checkoutLocations.answer(path.resolve(dir), found.stamp, () => readCheckoutLocation(dir, found.gitDir));
 }
 
 async function readCheckoutLocation(dir: string, stampGitDir: string): Promise<CheckoutLocation | null> {
@@ -1301,7 +1208,7 @@ interface ListedWorktree extends WorktreeListEntry {
  * unchanged (linkedWorktreesStamp): one pull asks for the same list several
  * times.
  */
-const worktreeLists = new Map<string, { stamp: string; list: string }>();
+const worktreeLists = GitAnswers.of('worktreeLists', z.string());
 
 /**
  * The entries of `git worktree list --porcelain -z` for the repo containing
@@ -1315,24 +1222,20 @@ async function readWorktreeList(cwd?: string, newlineSplit = false): Promise<Lis
   if (await gitFindsNoRepository(dir)) return null;
   // Taken before git runs: a worktree changed meanwhile changes the next stamp.
   const commonDir = (await checkoutLocation(dir))?.commonDir ?? null;
-  const stamp = commonDir === null ? null : JSON.stringify([commonDir, await linkedWorktreesStamp(commonDir)]);
-  const key = `${newlineSplit}\0${path.resolve(dir)}`;
-  const known = worktreeLists.get(key) ?? (await keptGitAnswersNow()).worktreeLists[key];
-  let list: string;
-  if (stamp !== null && known?.stamp === stamp) {
-    list = known.list;
-  } else {
+  const linked = commonDir === null ? null : await linkedWorktreesStamp(commonDir);
+  const readList = async (): Promise<string | null> => {
     try {
       // Inside the try: simple-git throws at once for a directory that does not exist.
-      list = await createGit(cwd).raw(['worktree', 'list', '--porcelain', ...newlineSplit ? [] : ['-z']]);
+      return await createGit(cwd).raw(['worktree', 'list', '--porcelain', ...newlineSplit ? [] : ['-z']]);
     } catch {
       return null;
     }
-    if (stamp !== null) {
-      worktreeLists.set(key, { stamp, list });
-      await keepGitAnswer('worktreeLists', key, { stamp, list });
-    }
-  }
+  };
+  // The list is the repository's, whichever of its directories git runs in.
+  let list = commonDir === null || linked === null
+    ? await readList()
+    : await worktreeLists.answer(`${newlineSplit}\0${commonDir}`, linked, readList);
+  if (list === null) return null;
   if (newlineSplit) list = list.split(/\r?\n/).join('\0');
   return Promise.all(parseWorktreeList(list)
     .filter((entry) => entry.path)

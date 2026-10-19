@@ -52,17 +52,20 @@ const identity = (stat: fs.Stats | null): number[] | null =>
  * path, the entry gitFindsNoRepository looks for, the git directory git opens
  * from it (`.git` itself, the one a `.git` file names, or the directory
  * holding `HEAD`), and the identity of each, of its `HEAD`, of the common
- * directory it names and of the config files there (`core.worktree`), plus
+ * directory it names and of the config files there (`core.worktree`, also
+ * in `config.worktree`), plus
  * the variables that stop git's search. While the stamp stays equal, what git
  * said about where `dir` sits still holds, provided git opened `gitDir`: a
  * symlink pointed elsewhere, a repository moved, cloned again, broken,
  * removed, created inside it later, or given another work tree changes it.
- * Null when git finds none, and when the environment hands git a repository
- * (GIT_REPOSITORY_ENV), which no file tells.
+ * Null when `dir` is missing or git finds none, and when the environment
+ * hands git a repository (GIT_REPOSITORY_ENV), which no file tells.
  */
 export async function repositoryStamp(dir: string): Promise<{ stamp: string; gitDir: string } | null> {
   if (GIT_REPOSITORY_ENV.some((name) => process.env[name] !== undefined)) return null;
-  const real = await realDir(dir);
+  // A directory gone since is no repository git enters, whatever was said about it.
+  const real = await fs.promises.realpath(dir).catch(() => null);
+  if (real === null) return null;
   const entry = await firstRepositoryEntry(real);
   if (!entry) return null;
   let gitDir = path.dirname(entry.file);
@@ -74,14 +77,14 @@ export async function repositoryStamp(dir: string): Promise<{ stamp: string; git
   }
   const stat = (file: string): Promise<fs.Stats | null> => fs.promises.stat(file).catch(() => null);
   const commonDirFile = (await fs.promises.readFile(path.join(gitDir, 'commondir'), 'utf8').catch(() => '')).trim();
-  const [gitDirStat, head, config, commonConfig] = await Promise.all([
-    stat(gitDir), stat(path.join(gitDir, 'HEAD')), stat(path.join(gitDir, 'config')),
+  const [gitDirStat, head, config, worktreeConfig, commonConfig] = await Promise.all([
+    stat(gitDir), stat(path.join(gitDir, 'HEAD')), stat(path.join(gitDir, 'config')), stat(path.join(gitDir, 'config.worktree')),
     stat(path.join(path.resolve(gitDir, commonDirFile), 'config')),
   ]);
   const search = [process.env.GIT_CEILING_DIRECTORIES, process.env.GIT_DISCOVERY_ACROSS_FILESYSTEM];
   return {
     stamp: JSON.stringify([real, entry.file, identity(entry.stat), link, gitDir, identity(gitDirStat), identity(head),
-      commonDirFile, identity(config), identity(commonConfig), search]),
+      commonDirFile, identity(config), identity(worktreeConfig), identity(commonConfig), search]),
     gitDir,
   };
 }
@@ -92,12 +95,15 @@ export async function repositoryStamp(dir: string): Promise<{ stamp: string; git
  * admin directory, where its checkout is, whether that is still there, and its
  * lock, and the config saying whether the main entry is bare. Equal stamps
  * mean an equal list; adding, moving, deleting, locking or pruning a worktree
- * changes it.
+ * changes it. Null when the admin directory cannot be read for another reason
+ * than being absent: no stamp then tells that list from an empty one.
  */
-export async function linkedWorktreesStamp(commonDir: string): Promise<string> {
+export async function linkedWorktreesStamp(commonDir: string): Promise<string | null> {
   const config = identity(await fs.promises.stat(path.join(commonDir, 'config')).catch(() => null));
   const admin = path.join(commonDir, 'worktrees');
-  const names = (await fs.promises.readdir(admin).catch(() => [] as string[])).sort();
+  const names = await fs.promises.readdir(admin).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? [] : null);
+  if (names === null) return null;
+  names.sort();
   const entries = await Promise.all(names.map(async (name) => {
     const dir = path.join(admin, name);
     const gitdir = (await fs.promises.readFile(path.join(dir, 'gitdir'), 'utf8').catch(() => '')).trim();
