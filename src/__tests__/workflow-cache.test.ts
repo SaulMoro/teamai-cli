@@ -263,6 +263,26 @@ steps:
     expect(mixedRun.teamRevision).toBeUndefined();
   });
 
+  it('records the earlier team revision on a run of a kept workflow', async () => {
+    const config = testConfig();
+    const repository = initializeTeamRepository(config);
+    writeWorkflow(config, 'build', VALID);
+    const pushed = repository.commit('add workflow');
+    repository.push();
+    await syncWorkflowDefinitions(config);
+
+    writeWorkflow(config, 'build', 'schemaVersion: [\n');
+    repository.commit('break workflow');
+    repository.push();
+    expect((await syncWorkflowDefinitions(config)).kept).toEqual(['build']);
+
+    const started = await startRun(config, 'build');
+    if ('error' in started) throw new Error(started.error.message);
+    const run = await readRun(config, String(started.data.run));
+    if (typeof run === 'string') throw new Error(`Could not read run: ${run}`);
+    expect(run.teamRevision).toBe(pushed);
+  });
+
   it('clears a kept workflow revision that the team remote no longer reaches', async () => {
     const config = testConfig();
     const repository = initializeTeamRepository(config);
