@@ -6,8 +6,9 @@ import os from 'node:os';
 import fse from 'fs-extra';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { agentHookDescription } from '../hooks.js';
-import { trustCodexHooks } from '../codex-trust.js';
+import { keepCodexHookTrust, trustCodexHooks } from '../codex-trust.js';
 import { TEAMAI_CLAUDEMD_START } from '../types.js';
+import { installFakeCodex } from './helpers/fake-codex.js';
 
 vi.mock('../utils/logger.js', () => ({
   log: {
@@ -23,6 +24,7 @@ vi.mock('../utils/logger.js', () => ({
 vi.mock('../codex-trust.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../codex-trust.js')>(),
   trustCodexHooks: vi.fn(),
+  keepCodexHookTrust: vi.fn(),
 }));
 
 let tmpDir: string;
@@ -41,6 +43,10 @@ beforeEach(async () => {
   origCopilotHome = process.env.COPILOT_HOME;
   process.env.HOME = tmpDir;
   vi.mocked(trustCodexHooks).mockResolvedValue({ kind: 'trusted', hooks: 1 });
+  vi.mocked(keepCodexHookTrust).mockImplementation(async (_req, write) => {
+    await write();
+    return { kind: 'trusted', hooks: 0 };
+  });
   // Bind prompt is on by default — start each test from that baseline.
   delete process.env.TEAMAI_BIND_PROMPT_ENABLED;
   // Clean hint markers (both old ppid-based and new sessionId-based)
@@ -2151,6 +2157,59 @@ describe('local-agent: cmds[] migration', () => {
     expect(optedOut.find((a) => a.id === 57)).toMatchObject({ status: 'failed' });
     expect(String(optedOut.find((a) => a.id === 57)?.error)).toContain('codexTrustEnabled is false');
     expect(trust).not.toHaveBeenCalled();
+  });
+
+  it('keeps the other Codex hooks trusted when an agent hook is reinstalled or removed (#1220)', async () => {
+    const actual = await vi.importActual<typeof import('../codex-trust.js')>('../codex-trust.js');
+    vi.mocked(trustCodexHooks).mockImplementation(actual.trustCodexHooks);
+    vi.mocked(keepCodexHookTrust).mockImplementation(actual.keepCodexHookTrust);
+    const fakeBin = installFakeCodex();
+    vi.stubEnv('PATH', `${fakeBin}${path.delimiter}${process.env.PATH ?? ''}`);
+    const file = path.join(tmpDir, '.codex', 'hooks.json');
+    const install = (id: number, slug: string) => ({
+      id, type: 'install_hook_rule', handle_type: 'hook', slug, event: 'Stop', cmd: `echo ${slug}`, scope: 'user',
+    });
+    const notTrusted = async () => {
+      const groups: Array<{ hooks: Array<{ command: string }> }> = (await fse.readJson(file)).hooks.Stop;
+      const report = await actual.readCodexHookTrust({
+        codexHome: path.dirname(file),
+        cwd: tmpDir,
+        hooks: groups.map((g, i) => ({ file, command: g.hooks[0].command, key: `${file}:stop:${i}:0` })),
+      });
+      return report.kind === 'listed' ? report.notTrusted.map((h) => h.command) : report;
+    };
+    try {
+      await fse.ensureDir(path.dirname(file));
+      await runResponse({ cmds: [install(60, 'a')] }, undefined, 'codex');
+      const json = await fse.readJson(file);
+      json.hooks.Stop.push({ hooks: [{ type: 'command', command: 'echo mine' }] });
+      await fse.writeJson(file, json);
+      await runResponse({ cmds: [install(61, 'b')] }, undefined, 'codex');
+      expect(await notTrusted()).toEqual(['echo mine']);
+
+      const reinstalled = await runResponse({ cmds: [install(62, 'a')] }, undefined, 'codex');
+      expect(reinstalled.find((a) => a.id === 62)?.status).toBe('success');
+      expect(await notTrusted()).toEqual(['echo mine']);
+
+      const removed = await runResponse({ cmds: [{
+        id: 63, type: 'uninstall_hook_rule', handle_type: 'hook', slug: 'b', scope: 'user',
+      }] }, undefined, 'codex');
+      expect(removed.find((a) => a.id === 63)?.status).toBe('success');
+      expect((await fse.readJson(file)).hooks.Stop.map((g: any) => g.hooks[0].command)).toEqual(['echo mine', 'echo a']);
+      expect(await notTrusted()).toEqual(['echo mine']);
+    } finally {
+      vi.unstubAllEnvs();
+      await fse.remove(fakeBin);
+    }
+  });
+
+  it('install_hook_rule writes the schema version Muse requires to a new settings file (#1220)', async () => {
+    const acks = await runResponse({ cmds: [{
+      id: 64, type: 'install_hook_rule', handle_type: 'hook', slug: 'hk-muse-new',
+      event: 'SessionStart', cmd: 'echo muse', scope: 'user',
+    }] }, undefined, 'muse');
+    expect(acks.find((a) => a.id === 64)?.status).toBe('success');
+    expect((await fse.readJson(path.join(tmpDir, '.config', 'muse', 'settings.json'))).schema_version).toBe(1);
   });
 
   it.each([

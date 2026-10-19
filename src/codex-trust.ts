@@ -285,6 +285,34 @@ export async function trustCodexHooks(req: CodexHookTrustRequest): Promise<Codex
 }
 
 /**
+ * Run `write`, a rewrite of the Codex hooks file `file`, and keep trusted the
+ * hooks in it Codex trusted before. Codex keys trust by position, so removing
+ * one entry leaves every later one `modified` (#1220). Only an entry whose hash
+ * Codex trusted before the write is trusted again, so no hook the member had
+ * not approved gains trust. `write` runs even when Codex cannot be asked.
+ */
+export async function keepCodexHookTrust(
+  req: { codexHome: string; cwd: string; file: string },
+  write: () => Promise<void>,
+): Promise<CodexTrust> {
+  const file = canonical(req.file);
+  const inFile = (hooks: HookInfo[]): HookInfo[] => hooks.filter((h) => canonical(h.sourcePath) === file);
+  const before = await withAppServer(req.codexHome, async (server) =>
+    new Set(inFile(await listHooks(server, req.cwd)).filter((h) => h.trustStatus === 'trusted').map((h) => h.currentHash)));
+  await write();
+  if (!(before instanceof Set)) return before;
+  if (before.size === 0) return { kind: 'trusted', hooks: 0 };
+  return withAppServer(req.codexHome, async (server): Promise<CodexTrust> => {
+    const toTrust = inFile(await listHooks(server, req.cwd))
+      .filter((h) => h.trustStatus !== 'trusted' && before.has(h.currentHash));
+    if (toTrust.length > 0) {
+      await batchWrite(server, 'hooks.state', Object.fromEntries(toTrust.map((h) => [h.key, { trusted_hash: h.currentHash }])));
+    }
+    return { kind: 'trusted', hooks: toTrust.length };
+  });
+}
+
+/**
  * Read-only: which of the hooks teamai wrote Codex will not run for `cwd` —
  * listed as untrusted or modified, or not loaded at all (an untrusted project,
  * a worktree whose `.codex/` does not exist yet). Writes nothing.

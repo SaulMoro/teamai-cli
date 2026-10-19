@@ -571,14 +571,33 @@ async function agentHookSettingsPaths(config: LocalAgentConfig | null, tool: str
   return [...new Set([settings, legacy ?? settings])].map((rel) => path.join(getUserHome(), rel));
 }
 
-/** Remove a settings-file agent hook from every file it can sit in. */
+/** The member turned off teamai's Codex trust writes (`codexTrustEnabled: false`). */
+async function codexTrustDisabled(): Promise<boolean> {
+  const { loadLocalConfig } = await import('./config.js');
+  return (await loadLocalConfig())?.codexTrustEnabled === false;
+}
+
+/**
+ * Remove a settings-file agent hook from every file it can sit in. In Codex,
+ * the hooks after it move up, so the ones Codex trusted are trusted again.
+ */
 async function removeSettingsAgentHook(
   config: LocalAgentConfig | null,
   tool: string,
   opts: { slug: string; command?: string },
 ): Promise<void> {
+  const keepTrust = isCodexTrustGatedTool(tool) && !(await codexTrustDisabled());
   for (const settingsPath of await agentHookSettingsPaths(config, tool)) {
-    await removeAgentHook(settingsPath, tool, opts);
+    const remove = () => removeAgentHook(settingsPath, tool, opts);
+    if (!keepTrust || !(await pathExists(settingsPath))) {
+      await remove();
+      continue;
+    }
+    const { keepCodexHookTrust } = await import('./codex-trust.js');
+    const trust = await keepCodexHookTrust({ codexHome: path.dirname(settingsPath), cwd: getUserHome(), file: settingsPath }, remove);
+    if (trust.kind === 'failed') {
+      log.warn(`Codex may skip the hooks after agent hook [${opts.slug}] in ${settingsPath} until you approve them in /hooks: ${trust.reason}`);
+    }
   }
 }
 
@@ -3796,8 +3815,7 @@ async function runHookRuleCommand(
   await saveAgentHookManifest(manifest);
   if (codexTrustPath) {
     // Recorded first, so an uninstall still finds the hook Codex will not run.
-    const { loadLocalConfig } = await import('./config.js');
-    const trust = (await loadLocalConfig())?.codexTrustEnabled === false
+    const trust = await codexTrustDisabled()
       ? { kind: 'disabled' as const }
       : await trustCodexAgentHook(codexTrustPath, event, cmd);
     if (trust.kind !== 'trusted') {

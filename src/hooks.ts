@@ -2042,6 +2042,13 @@ async function reconcileCopilotFormat(
 
 // ─── Codex (hooks.json) reconcile ───────────────────────────
 
+/** A Codex-format hooks document as `tool` loads it: Muse Code refuses a settings.json without `schema_version: 1`. */
+function codexFormatDocument(tool: string, hooksJson: CodexHooksJson): CodexHooksJson {
+  return tool === MUSE_TOOL_ID && hooksJson.schema_version === undefined
+    ? { schema_version: 1, ...hooksJson }
+    : hooksJson;
+}
+
 async function reconcileCodexFormat(
   hooksPath: string,
   tool: string,
@@ -2098,11 +2105,7 @@ async function reconcileCodexFormat(
   }
 
   if (changed) {
-    // Muse Code refuses a settings.json without `schema_version: 1`.
-    const document = tool === MUSE_TOOL_ID && hooksJson.schema_version === undefined
-      ? { schema_version: 1, ...hooksJson }
-      : hooksJson;
-    await writeJson(expanded, document);
+    await writeJson(expanded, codexFormatDocument(tool, hooksJson));
     log.success(`${opts.removeAll ? 'Removed' : 'Updated'} teamai hooks in ${hooksPath}`);
   } else {
     log.debug(`teamai hooks already up-to-date in ${hooksPath}`);
@@ -2367,7 +2370,7 @@ export async function applyAgentHook(
     const newArr = [...untouched, toCodexEntry(hookDef)];
     if (JSON.stringify(existing) !== JSON.stringify(newArr)) {
       hooksJson.hooks[def.event] = newArr;
-      await writeJson(expanded, hooksJson);
+      await writeJson(expanded, codexFormatDocument(tool, hooksJson));
       log.success(`Installed agent hook [${def.slug}] in ${settingsPath}`);
     } else {
       log.debug(`agent hook [${def.slug}] already up-to-date in ${settingsPath}`);
