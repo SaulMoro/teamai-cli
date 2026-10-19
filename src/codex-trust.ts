@@ -304,15 +304,37 @@ export async function keepCodexHookTrust(
   if (!retained || ![...before.values()].some((h) => h.trustStatus === 'trusted')) return { kind: 'trusted', hooks: 0 };
   return withAppServer(req.codexHome, async (server): Promise<CodexTrust> => {
     const toTrust: HookInfo[] = [];
+    const edits: Array<{ keyPath: string; value: unknown; mergeStrategy: 'upsert' | 'replace' }> = [];
     for (const hook of hooksByKey(await listHooks(server, req.cwd), file).values()) {
       const originalKey = retained.get(hook.key);
       const original = originalKey === undefined ? undefined : before.get(originalKey);
-      if (original?.trustStatus === 'trusted' && original.currentHash === hook.currentHash && hook.trustStatus !== 'trusted') {
-        toTrust.push(hook);
+      if (original?.trustStatus === 'trusted' && original.currentHash === hook.currentHash) {
+        if (hook.trustStatus !== 'trusted') {
+          toTrust.push(hook);
+        }
+      } else if (hook.trustStatus === 'trusted') {
+        edits.push({
+          keyPath: `hooks.state.${JSON.stringify(hook.key)}`,
+          value: null,
+          mergeStrategy: 'replace',
+        });
       }
     }
     if (toTrust.length > 0) {
-      await batchWrite(server, 'hooks.state', Object.fromEntries(toTrust.map((h) => [h.key, { trusted_hash: h.currentHash }])));
+      edits.push({
+        keyPath: 'hooks.state',
+        value: Object.fromEntries(toTrust.map((h) => [h.key, { trusted_hash: h.currentHash }])),
+        mergeStrategy: 'upsert',
+      });
+    }
+    if (edits.length > 0) {
+      const result = await server.request('config/batchWrite', {
+        edits,
+        reloadUserConfig: true,
+      }) as { status?: string } | null;
+      if (result?.status !== 'ok') {
+        throw new AppServerError(`config/batchWrite hooks.state: status ${result?.status ?? 'missing'}`);
+      }
     }
     return { kind: 'trusted', hooks: toTrust.length };
   });
