@@ -919,3 +919,33 @@ it('refuses to unpin while a submodule the default branch lacks has local change
   expect(m.git(['rev-parse', 'HEAD'], m.clone())).toBe(m.git(['rev-parse', 'refs/heads/trial'], m.remote));
   expect(read(m.configPath())).toBe(before);
 });
+
+it.each([true, false])('exits 1 only when pinned=%s and a valid team hook cannot be written', (pinned) => {
+  const m = machine();
+  const hooks = 'hooks:\n  - id: team-stop\n    description: Team stop\n    event: Stop\n    command: echo team-hook\n';
+  m.teamCommit({ 'hooks/hooks.yaml': hooks }, pinned ? 'trial' : 'main');
+  const local = path.join(m.dir, '.claude/settings.local.json');
+  write(local, 'not json\n');
+  const r = m.run(pinned ? ['pull', '--team-ref', 'trial'] : ['pull']);
+  expect(r.output).toContain('Failed to reconcile hooks for claude');
+  expect(read(local)).toBe('not json\n');
+  expect(r.code, r.output).toBe(pinned ? 1 : 0);
+});
+
+it.each([true, false])('exits 1 only when pinned=%s and the team co-author policy cannot be written', (pinned) => {
+  const m = machine();
+  m.ok(pinned ? ['pull', '--team-ref', 'trial'] : ['pull']);
+  const local = path.join(m.dir, '.claude/settings.local.json');
+  write(local, '{}\n');
+  fs.chmodSync(local, 0o444);
+  m.teamCommit({ 'teamai.yaml': `${read(path.join(m.seed, 'teamai.yaml'))}sharing:\n  coAuthor:\n    enabled: false\n` }, pinned ? 'trial' : 'main');
+  try {
+    const r = m.run(['pull', '--verbose']);
+    expect(r.output).toContain('[coauthor] claude: skipped');
+    expect(r.output).toContain('EACCES');
+    expect(read(local)).toBe('{}\n');
+    if (pinned) expect(r.output).toContain(`[workspace] The co-author setting was not written to ${local}: EACCES`);
+    else expect(r.output).not.toContain('The co-author setting was not written');
+    expect(r.code, r.output).toBe(pinned ? 1 : 0);
+  } finally { fs.chmodSync(local, 0o644); }
+});

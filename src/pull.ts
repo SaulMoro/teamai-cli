@@ -2869,6 +2869,10 @@ export async function pull(
   // A later successful scope must not hide an earlier docs failure (or vice versa).
   const syncResult: PullSyncResult = { completed: false, docsSyncFailed: false, agentModelsHeld: false, teamRepoFailed: false, resourceSyncFailed: false, delivery: 'pending' };
   const startupErrors: string[] = [];
+  // The project scope's hook and co-author writes that failed. Kept out of
+  // startupErrors, which also decides a git hook's failure record, so only
+  // the pinned outcome reads them.
+  const unwritten: string[] = [];
   // Each scope's env, resolved once by its env stage (resolvePullEnv).
   const teamEnvs = new Map<LocalConfig, TeamEnv>();
   const instructions = new Map<LocalConfig, InstructionDelivery>();
@@ -3101,7 +3105,9 @@ export async function pull(
   // what self-heals new built-in hooks and applies hooks.yaml changes on every
   // session start. In project mode user is null, even when safe resources are
   // inherited, so executable hook configuration is never composed implicitly.
-  startupErrors.push(...await reconcileHooksAllScopes(reconcileUser, reconcileProject, options, instructions, deliveryRecorder));
+  const hooks = await reconcileHooksAllScopes(reconcileUser, reconcileProject, options, instructions, deliveryRecorder);
+  startupErrors.push(...hooks.errors);
+  unwritten.push(...hooks.unwritten);
 
   // 3.6. Reconcile team MCP servers. Outside pullForScope for the same reason as
   // hooks. User-scope MCP remains isolated in project mode.
@@ -3122,7 +3128,7 @@ export async function pull(
   // Co-Authored-By / attribution trailer on its commits?). Outside pullForScope
   // for the same reason as hooks/MCP; write-only, so it self-heals but never
   // strips a trailer once the team drops the policy.
-  await reconcileCoAuthorAllScopes(reconcileUser, reconcileProject, options, deliveryRecorder);
+  unwritten.push(...await reconcileCoAuthorAllScopes(reconcileUser, reconcileProject, options, deliveryRecorder));
 
   // 4. Auto-report usage data to all active scopes. Skill usage lives in each
   //    scope's own file (`<dataHome>/usage.jsonl`, the user scope's
@@ -3298,7 +3304,7 @@ export async function pull(
   //    transient branch is how a diagnostic invents a failure.
   await reportPostPullChecks(options, reported, contended.size > 0, gitContext);
   } finally {
-    if (startupErrors.length > 0 || contended.size > 0) syncResult.delivery = 'failed';
+    if (startupErrors.length > 0 || unwritten.length > 0 || contended.size > 0) syncResult.delivery = 'failed';
     if (pinRequired && !options.dryRun && syncResult.delivery !== 'complete') process.exitCode = 1;
     if (!options.silent && projectConfig?.repo.ref) {
       try {
@@ -3620,8 +3626,9 @@ async function reconcileHooksAllScopes(
   instructions: Map<LocalConfig, InstructionDelivery>,
   /** The project scope's (#915). */
   recorder?: DeliveryRecorder,
-): Promise<string[]> {
+): Promise<{ errors: string[]; unwritten: string[] }> {
   const errors: string[] = [];
+  const unwritten: string[] = [];
   // A dry run still resolves the entries, so the warnings a maintainer runs
   // `--dry-run` to see — an unknown id, a deprecated per-entry `roles:`, a
   // hooks.yaml that does not parse — are reported; only the writes are skipped,
@@ -3656,6 +3663,7 @@ async function reconcileHooksAllScopes(
       // A dry run wrote nothing: its preview keeps the files that held entries before, too.
       if (!options.dryRun) scopeRecorder?.succeeded('hooks');
       if (!reconciled.ok) errors.push(`[${installScopeName(localConfig.scope)}] Team hooks could not be resolved`);
+      if (localConfig === projectConfig) unwritten.push(...(reconciled.unwritten ?? []).map((tool) => `hooks for ${tool}`));
       if (reconciled.ok && reconciled.defs.length > 0) {
         // Same preview rule as the user-facing line: a dry run resolved and
         // reported the entries but wrote nothing, so the debug trail must not
@@ -3707,7 +3715,7 @@ async function reconcileHooksAllScopes(
       errors.push(`[${installScopeName(localConfig.scope)}] Hooks: ${(e as Error).message}`);
     }
   }
-  return errors;
+  return { errors, unwritten };
 }
 
 /** Trust Codex hooks and projects after both hooks and MCP reconciliation. */
@@ -3841,7 +3849,7 @@ async function reconcileCoAuthorAllScopes(
   options: GlobalOptions,
   /** The project scope's (#915). */
   recorder?: DeliveryRecorder,
-): Promise<void> {
+): Promise<string[]> {
   if (options.dryRun) {
     // Nothing is written: the file that holds teamai's co-author entry now
     // stands in the preview of the delivered git exclude block (#915).
@@ -3857,8 +3865,9 @@ async function reconcileCoAuthorAllScopes(
         log.debug(`[dry-run] co-author preview skipped: ${(e as Error).message}`);
       }
     }
-    return;
+    return [];
   }
+  const unwritten: string[] = [];
   const scopes = [userConfig, projectConfig].filter((c): c is LocalConfig => !!c);
   for (const localConfig of scopes) {
     const scopeRecorder = localConfig === projectConfig ? recorder : undefined;
@@ -3884,12 +3893,18 @@ async function reconcileCoAuthorAllScopes(
       for (const c of changes) {
         if (c.action === 'skipped') log.debug(`[coauthor] ${c.tool}: skipped — ${c.reason}`);
       }
+      const failed = changes.filter((c) => c.failed);
+      if (localConfig === projectConfig) unwritten.push(...failed.map((c) => `co-author setting for ${c.tool}`));
       // Also persists a dropped record of a pre-#993 shared file (#993).
       if (JSON.stringify(managed) !== JSON.stringify(state.coAuthorManaged ?? {})) {
         state.coAuthorManaged = managed;
         await saveStateForScope(state, localConfig);
       }
       if (options.silent) continue;
+      // The pinned outcome fails on these, so a pinned pull says why.
+      if (localConfig.repo.ref !== undefined) {
+        for (const c of failed) log.warn(`[${installScopeName(localConfig.scope)}] The co-author setting was not written to ${c.file}: ${c.reason}`);
+      }
       for (const c of changes.filter((change) => change.action === 'removed')) {
         log.info(`Removed the co-author setting an earlier teamai wrote to ${c.file}, a shared project file (teamai now writes it only to .claude/settings.local.json). Commit the change if the file is tracked.`);
       }
@@ -3904,6 +3919,8 @@ async function reconcileCoAuthorAllScopes(
     } catch (e) {
       scopeRecorder?.failed('coauthor');
       log.debug(`[${installScopeName(localConfig.scope)}] co-author reconcile skipped: ${(e as Error).message}`);
+      if (localConfig === projectConfig) unwritten.push(`co-author: ${(e as Error).message}`);
     }
   }
+  return unwritten;
 }
