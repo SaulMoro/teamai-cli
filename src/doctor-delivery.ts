@@ -905,7 +905,9 @@ export async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Che
     const restoredByForce = [...delivery.problems.keys()]
       .some((label) => label !== MODEL_CHANGED && label !== CHANGED_BY_YOU && label !== MEMBERS_OWN);
     return {
-      name: `Agents delivered to ${tool}`,
+      name: tool === 'cursor' && localConfig.scope === 'user'
+        ? 'Agents delivered to cursor (the Cursor IDE reads them; the Cursor CLI reads agents only from the workspace)'
+        : `Agents delivered to ${tool}`,
       source: 'local',
       check: async () => !hasDeliveryProblem(delivery),
       fix: [
@@ -936,20 +938,6 @@ export async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Che
   }
 
   return checks;
-}
-
-/**
- * The Cursor IDE reads user agents from ~/.cursor/agents and the Cursor CLI
- * does not (#1218), so in user scope "Agents delivered to cursor" holds for
- * the IDE only. One tool id covers both, so teamai cannot write for each.
- */
-export async function cursorCliAgentsNotes({ localConfig, teamConfig }: DoctorContext): Promise<string[]> {
-  if (!teamConfig || localConfig.scope !== 'user') return [];
-  const { AgentsHandler } = await import('./resources/agents.js');
-  const cursor = (await new AgentsHandler().agentToolDirs(teamConfig, localConfig)).find((d) => d.tool === 'cursor');
-  if (!cursor) return [];
-  return [`Cursor: the Cursor IDE reads the agents in ${cursor.dir}. The Cursor CLI reads agents only from the `
-    + 'workspace, so it gets these only when it starts in your home directory.'];
 }
 
 const UNRESOLVED_VARS_RE = /^unresolved variable\(s\): (.+)$/;
