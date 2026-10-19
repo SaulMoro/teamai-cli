@@ -6,13 +6,15 @@
  * local run goes through `buildEndRecord`, as the record it will publish, so
  * inputs, items, outputs, prompts, HITL messages and local paths have no field
  * to reach the API in. A published record is parsed through the same fields.
+ * A local run adds only what the record lacks while it runs: the ids and
+ * status of its steps, and the kind and options of a waiting HITL request.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { getReportsDir, usesBranchWorktree, type LocalConfig } from '../types.js';
 import { locateStep } from '../workflow/engine.js';
-import { buildEndRecord, RECORDS_DIR, runRecordState, type WorkflowRunRecord } from '../workflow/records.js';
+import { buildEndRecord, RECORDS_DIR, runRecordStates, type RecordState, type WorkflowRunRecord } from '../workflow/records.js';
 import { respondToHitl } from '../workflow/run-controls.js';
 import { isRunId, readRun, runsDir } from '../workflow/store.js';
 import type { StepHitl, RunState, TokenUsage } from '../workflow/types.js';
@@ -27,12 +29,12 @@ const RUN_LIMIT = 50;
  */
 type ReadRecord = Pick<WorkflowRunRecord,
   'run' | 'workflow' | 'sourceHash' | 'teamRevision' | 'driver' | 'status' | 'end' | 'startedAt' | 'endedAt' | 'durationMs' | 'stepCounts' | 'username'>
-  & { steps?: StepEntry[]; prs?: string[] };
+  & { steps?: StepEntry[]; prs?: unknown[] };
 type StepEntry = Pick<NonNullable<WorkflowRunRecord['steps']>[number], 'step' | 'pass' | 'outcome' | 'tokens'>
   & { answer?: { choice: string; channel: string } };
 
 const TokensSchema: z.ZodType<TokenUsage> = z.object({ input: z.number().optional(), output: z.number().optional(), cachedInput: z.number().optional() });
-/** Only links a browser opens as a web page; a `javascript:` URL in a record never becomes a link. */
+/** Only links a browser opens as a web page; a `javascript:` URL from either source never becomes a link. */
 function isWebUrl(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   try {
@@ -62,7 +64,7 @@ const RecordSchema: z.ZodType<ReadRecord, z.ZodTypeDef, unknown> = z.object({
     tokens: TokensSchema.optional(),
     answer: z.object({ choice: z.string(), channel: z.string() }).optional(),
   })).optional(),
-  prs: z.array(z.unknown()).optional().catch(undefined).transform((prs) => prs?.filter(isWebUrl)),
+  prs: z.array(z.unknown()).optional().catch(undefined),
 });
 
 /** One run as a row of the page. */
@@ -92,7 +94,7 @@ export type LocalRunRow = RunRow & {
   /** The steps whose HITL request waits for an answer. */
   waiting: string[];
   /** Whether the end record reached the team, for a settled run that queued one. */
-  record?: 'pending' | 'published';
+  record?: RecordState;
 };
 
 /** A run as a member published it on the reports branch. */
@@ -112,10 +114,6 @@ interface StepRow {
 }
 
 export type RunDetail = { run: LocalRunRow | ReportedRunRow; steps: StepRow[] };
-
-export type WorkflowRunsView =
-  | { configured: false }
-  | { configured: true; local: LocalRunRow[]; reported: ReportedHistory };
 
 /** The team history, or why it could not be read; the local runs show either way. */
 export type ReportedHistory = { state: 'ok'; runs: ReportedRunRow[] } | { state: 'unavailable' };
@@ -139,7 +137,7 @@ function rowOf(record: ReadRecord): RunRow {
     tokens: tokenTotal(record.steps),
     ...(record.sourceHash !== undefined ? { sourceHash: record.sourceHash } : {}),
     ...(record.teamRevision !== undefined ? { teamRevision: record.teamRevision } : {}),
-    prs: record.prs ?? [],
+    prs: (record.prs ?? []).filter(isWebUrl),
     ...(record.stepCounts ? { stepCounts: record.stepCounts } : {}),
   };
 }
@@ -163,8 +161,8 @@ function localRecord(run: RunState): ReadRecord {
   return running;
 }
 
-async function localRow(config: LocalConfig, run: RunState): Promise<LocalRunRow> {
-  const record = await (run.status === 'running' ? undefined : runRecordState(config, run));
+function localRow(run: RunState, records: Map<string, RecordState>): LocalRunRow {
+  const record = records.get(run.id);
   return {
     ...rowOf(localRecord(run)),
     source: 'local',
@@ -194,7 +192,8 @@ export async function listLocalRuns(config: LocalConfig): Promise<LocalRunRow[]>
   const runs = (await localRuns(config)).sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   const running = runs.filter((run) => run.status === 'running');
   const settled = runs.filter((run) => run.status !== 'running').slice(0, Math.max(0, RUN_LIMIT - running.length));
-  return Promise.all([...running, ...settled].map((run) => localRow(config, run)));
+  const records = await runRecordStates(config, settled);
+  return [...running, ...settled].map((run) => localRow(run, records));
 }
 
 function recordsDir(config: LocalConfig): string {
@@ -243,7 +242,13 @@ export async function workflowRunDetail(config: LocalConfig, source: 'local' | '
   if (!isRunId(runId)) return undefined;
   if (source === 'local') {
     const run = await readRun(config, runId);
-    return typeof run === 'object' ? localDetail(run, await localRow(config, run)) : undefined;
+    if (typeof run !== 'object') return undefined;
+    return localDetail(run, localRow(run, await runRecordStates(config, run.status === 'running' ? [] : [run])));
+  }
+  if (usesBranchWorktree(config)) {
+    // The history refreshes the checkout; a detail only checks it is this repository's.
+    const { readableReportsWorktree } = await import('../utils/reports-branch.js');
+    await readableReportsWorktree(config, { dryRun: true });
   }
   const record = await readRecord(path.join(getReportsDir(config), RECORDS_DIR, `${runId}.json`));
   if (!record) return undefined;

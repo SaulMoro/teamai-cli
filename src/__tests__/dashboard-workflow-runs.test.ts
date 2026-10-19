@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -137,6 +138,24 @@ describe('dashboard workflow runs', () => {
       const rows = await listReportedRuns(config);
       expect(rows.map((row) => row.run)).toEqual(['r0000000000000001']);
       expect(JSON.stringify(rows)).not.toMatch(/TICKET-SECRET-42|private\/work|publishedAt/);
+    });
+
+    it('reads no run from another repository\'s reports checkout left at this scope\'s path', async () => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-dashboard-foreign-')));
+      roots.push(root);
+      const git = (cwd: string, args: string[]) => execFileSync('git', args, { cwd, stdio: 'ignore', env: { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t.co', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t.co' } });
+      const business = path.join(root, 'business');
+      const previous = path.join(root, 'previous-team');
+      for (const dir of [business, previous]) {
+        fs.mkdirSync(dir);
+        git(dir, ['init', '-q']);
+        git(dir, ['commit', '-q', '--allow-empty', '-m', 'init']);
+      }
+      const config: LocalConfig = { repo: { kind: 'self', localPath: path.join(business, '.teamai'), businessRepoRoot: business, remote: 'local' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: business, dataHome: path.join(root, 'data') };
+      git(previous, ['worktree', 'add', '-q', '-b', 'teamai-reports', getReportsDir(config)]);
+      publish(config, record('r0000000000000001'));
+      await expect(listReportedRuns(config)).rejects.toMatchObject({ name: 'ForeignCheckoutError' });
+      await expect(workflowRunDetail(config, 'reported', 'r0000000000000001')).rejects.toMatchObject({ name: 'ForeignCheckoutError' });
     });
   });
 });

@@ -225,22 +225,29 @@ export async function startDashboard(port?: number): Promise<void> {
 
   // Workflow Runs (#1088). The team history refreshes the reports checkout
   // from origin, so it is cached like the KB report; local runs are read fresh.
-  const reportedCaches = new Map<string, { ts: number; data: ReportedHistory }>();
-  const reportedHistory = async (key: string, config: LocalConfig): Promise<ReportedHistory> => {
-    const cached = reportedCaches.get(key);
-    if (cached && Date.now() - cached.ts <= KB_SUMMARY_TTL_MS) return cached.data;
+  const loadReportedHistory = async (config: LocalConfig): Promise<ReportedHistory> => {
     const { listReportedRuns } = await import('./dashboard/workflow-runs.js');
-    let data: ReportedHistory;
     try {
-      data = { state: 'ok', runs: await listReportedRuns(config) };
+      return { state: 'ok', runs: await listReportedRuns(config) };
     } catch (e) {
       log.debug(`dashboard: reported workflow runs failed: ${(e as Error).message}`);
-      data = { state: 'unavailable' };
+      return { state: 'unavailable' };
     }
-    reportedCaches.set(key, { ts: Date.now(), data });
-    return data;
   };
-  const handleWorkflows = async (req: http.IncomingMessage, res: http.ServerResponse, url: URL, scopeId: string | null, config: LocalConfig | null) => {
+  const reportedCaches = new Map<string, { ts: number; last: Promise<ReportedHistory>; refreshing: boolean }>();
+  // The last history answers while a refresh fetches, so a slow or unreachable origin holds the live local runs only
+  // on the first load.
+  const reportedHistory = (key: string, config: LocalConfig): Promise<ReportedHistory> => {
+    const cached = reportedCaches.get(key);
+    if (cached && (cached.refreshing || Date.now() - cached.ts <= KB_SUMMARY_TTL_MS)) return cached.last;
+    const refresh = loadReportedHistory(config);
+    const entry = { ts: Date.now(), last: cached?.last ?? refresh, refreshing: true };
+    reportedCaches.set(key, entry);
+    void refresh.then((data) => Object.assign(entry, { ts: Date.now(), last: Promise.resolve(data), refreshing: false }));
+    return entry.last;
+  };
+  const handleWorkflows = async (req: http.IncomingMessage, res: http.ServerResponse, url: URL, workspace: DashboardWorkspace | undefined) => {
+    const config = workspace?.config ?? null;
     const json = (status: number, body: unknown) => {
       res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       res.end(JSON.stringify(body));
@@ -258,8 +265,8 @@ export async function startDashboard(port?: number): Promise<void> {
     const runs = await import('./dashboard/workflow-runs.js');
     try {
       if (route === '') {
-        json(200, config
-          ? { configured: true, local: await runs.listLocalRuns(config), reported: await reportedHistory(scopeId ?? 'all', config) }
+        json(200, workspace?.config
+          ? { configured: true, local: await runs.listLocalRuns(workspace.config), reported: await reportedHistory(workspace.id, workspace.config) }
           : { configured: false });
         return;
       }
@@ -271,8 +278,9 @@ export async function startDashboard(port?: number): Promise<void> {
         else json(404, { error: 'This run is not in the selected workspace.' });
         return;
       }
-      // A browser sends Origin with every fetch POST; a request without one
-      // did not come from the dashboard page, so it cannot answer for a person.
+      // A browser sends Origin with every fetch POST, so a request without one
+      // did not come from the dashboard page. Like the TTY channel, this is a
+      // convention, not protection against a local process that sets it.
       if (req.headers.origin === undefined) throw new HttpError(403, 'Answer HITL requests from the dashboard page.');
       json(200, await runs.answerFromDashboard(config, await readJsonBody(req)));
     } catch (e) {
@@ -393,7 +401,7 @@ export async function startDashboard(port?: number): Promise<void> {
     }
 
     if (url.pathname === '/api/workflows' || url.pathname.startsWith('/api/workflows/')) {
-      await handleWorkflows(req, res, url, scopeId, workspace?.config ?? null);
+      await handleWorkflows(req, res, url, workspace);
       return;
     }
 

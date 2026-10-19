@@ -236,7 +236,7 @@ function showRun(source, id) {
 async function loadRunDetail() {
  const key=runKey, generation=workspaceGeneration;
  if(!key)return;
- try { const data=await json(apiQuery('/api/workflows/run',{source:key.source,id:key.id})); if(generation!==workspaceGeneration||key!==runKey)return; runDetail=data; renderRun(); }
+ try { const data=await json(apiQuery('/api/workflows/run',{source:key.source,id:key.id})); if(generation!==workspaceGeneration||key!==runKey)return; if(runDetail&&JSON.stringify(data)===JSON.stringify(runDetail))return; runDetail=data; renderRun(); }
  catch { if(generation===workspaceGeneration&&key===runKey&&!runDetail)$('detail').innerHTML=errorPanel('Could not load this run.','run'); }
 }
 async function answerGate(step, pass, choice) {
