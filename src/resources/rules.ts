@@ -4,7 +4,7 @@ import type { CopyOrigin, ResourceItem, ResourceItemStatus, DeliveryTarget, Team
 import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, listDirs, readFileSafe, writeFile, pruneEmptyDirs, fileHash } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { getUserHome } from '../utils/home.js';
-import { warnOnce } from '../utils/warn-once.js';
+import { debugOnce, warnOnce } from '../utils/warn-once.js';
 import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolBaseDir, resolveToolRootDir, isAgentExcluded, isGitExcludeEnabled, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY, getUserConfigPath, installScopeName } from '../types.js';
 import { EXCLUDED_RULE_NAMES, isDeployedRecallRule, TEAMAI_CONTEXT_RULE_NAME } from '../builtin-rules.js';
 import { rulePaths, teamRuleBody, teamRuleData } from './team-rule.js';
@@ -317,7 +317,7 @@ export class RulesHandler extends ResourceHandler {
 
       // Skip tools that are not installed
       if (!await isToolInstalledForConfig(tool, toolPath.rules, localConfig)) {
-        log.debug(`Skipping rule sync for ${tool}: tool not installed`);
+        debugOnce(`Skipping rule sync for ${tool}: tool not installed`);
         continue;
       }
 
