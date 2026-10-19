@@ -154,7 +154,13 @@ export async function reconcileDshHooks(
 
   const homePatchPath = resolveDshHomePatchPath();
   if (opts.removeAll) {
-    if (await mountDshHooks(null)) log.success(`Removed teamai's DeepSeek Harness hooks from ${homePatchPath}`);
+    const mounted = await mountDshHooks(null);
+    if (mounted === null) {
+      log.warn(`${homePatchPath} is not a YAML patch list, so teamai left it as it is and could not remove `
+        + "teamai's DeepSeek Harness hooks. Fix the file, then run `teamai hooks remove`.");
+    } else if (mounted) {
+      log.success(`Removed teamai's DeepSeek Harness hooks from ${homePatchPath}`);
+    }
     if (await pathExists(patchPath)) await remove(patchPath);
     return;
   }

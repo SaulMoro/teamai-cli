@@ -12,8 +12,10 @@ import {
   DSH_HOOK_CONFIG_FILE,
   DSH_PATCH_FILE,
   dshSandboxNote,
+  reconcileDshHooks,
   resolveDshHooksDir,
 } from '../dsh-hooks.js';
+import { log } from '../utils/logger.js';
 import { reconcileHooksToAllTools } from '../hooks.js';
 import type { HookDef } from '../types.js';
 
@@ -109,6 +111,21 @@ describe('DeepSeek Harness hook bridge', () => {
     await fse.writeFile(homePatchFile(), 'id: [unclosed\n');
     await reconcileHooksToAllTools(toolPaths, home, [], manifest());
     expect(await fse.readFile(homePatchFile(), 'utf8')).toBe('id: [unclosed\n');
+  });
+
+  it('warns and preserves an invalid home patch during removal (#1219)', async () => {
+    await fse.ensureDir(path.join(home, '.dsh'));
+    const invalid = 'id: [unclosed\n';
+    await fse.writeFile(homePatchFile(), invalid);
+    vi.mocked(log.warn).mockClear();
+
+    await reconcileDshHooks([], { manifestPath: manifest(), removeAll: true });
+
+    expect(await fse.readFile(homePatchFile(), 'utf8')).toBe(invalid);
+    expect(log.warn).toHaveBeenCalledWith(
+      `${homePatchFile()} is not a YAML patch list, so teamai left it as it is and could not remove `
+      + "teamai's DeepSeek Harness hooks. Fix the file, then run `teamai hooks remove`.",
+    );
   });
 
   it('preserves team hook definitions in the bridge config', async () => {
