@@ -918,6 +918,26 @@ it('keeps a skill the default branch tracks as files where the pinned branch had
   expect(read(m.copy('sub'))).toBe(skill('sub', 'FILES ON MAIN'));
 });
 
+it.each([false, true])('pins a branch that tracks a submodule skill as files (submodule edited: %s)', (edited) => {
+  const m = pinSubmoduleSkill();
+  m.git(['checkout', '-q', '-b', 'files', 'main']);
+  fs.rmSync(path.join(m.seed, 'skills/sub'), { recursive: true, force: true });
+  m.teamCommit({ 'skills/sub/SKILL.md': skill('sub', 'FILES BRANCH') }, 'files');
+  const file = path.join(m.clone(), 'skills/sub/SKILL.md');
+  if (edited) write(file, skill('sub', 'MY EDIT'));
+  const r = m.run(['pull', '--team-ref', 'files']);
+  if (edited) {
+    expect(r.code, r.output).toBe(1);
+    expect(r.output).toContain('The team repo has uncommitted changes, so it was not switched to "files": skills/sub. Share them with teamai push, or discard them, then pull again.');
+    expect(read(file)).toBe(skill('sub', 'MY EDIT'));
+  } else {
+    expect(r.code, r.output).toBe(0);
+    expect(read(file)).toBe(skill('sub', 'FILES BRANCH'));
+    expect(m.git(['status', '--porcelain'], m.clone())).toBe('');
+    expect(read(m.copy('sub'))).toBe(skill('sub', 'FILES BRANCH'));
+  }
+});
+
 it('refuses to unpin while a submodule the default branch lacks has local changes', () => {
   const m = pinSubmoduleSkill();
   const edited = path.join(m.clone(), 'skills/sub/SKILL.md');
@@ -977,6 +997,20 @@ it.each([true, false])('exits 1 only when pinned=%s and a valid team hook cannot
   expect(r.output).toContain('Failed to reconcile hooks for claude');
   expect(read(local)).toBe('not json\n');
   expect(r.code, r.output).toBe(pinned ? 1 : 0);
+});
+
+it('says why an unpin exits 1 when the co-author policy cannot be written', () => {
+  const m = machine();
+  m.ok(['pull', '--team-ref', 'trial']);
+  const local = path.join(m.dir, '.claude/settings.local.json');
+  write(local, '{}\n');
+  fs.chmodSync(local, 0o444);
+  m.teamCommit({ 'teamai.yaml': `${read(path.join(m.seed, 'teamai.yaml'))}sharing:\n  coAuthor:\n    enabled: false\n` }, 'main');
+  try {
+    const r = m.run(['pull', '--team-ref', 'main']);
+    expect(r.code, r.output).toBe(1);
+    expect(r.output).toContain(`[workspace] The co-author setting was not written to ${local}: EACCES`);
+  } finally { fs.chmodSync(local, 0o644); }
 });
 
 it.each([true, false])('exits 1 only when pinned=%s and the team co-author policy cannot be written', (pinned) => {

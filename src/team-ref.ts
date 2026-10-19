@@ -91,49 +91,47 @@ export async function transitionTeamRepo(
     const branch = symbolic ? symbolic.replace(/^refs\/heads\//, '') : 'HEAD';
     // Empty only on an unborn branch: every other failure throws.
     const previous = (await git.revparse(['-q', '--verify', 'HEAD^{commit}'])).trim() || null;
-    // A checkout leaves the worktree of a submodule the target lacks behind, and handlers would deliver it again.
-    const droppedSubmodules = async (target: string): Promise<string[]> => {
+    // A checkout leaves the worktree of a submodule the target no longer has: handlers would deliver it
+    // again, and git refuses to write the target's files over it. Remove it before the checkout.
+    const leavingSubmodules = async (target: string): Promise<string[]> => {
       if (!previous) return [];
       const gitlinks = async (rev: string) => (await git.raw(['ls-tree', '-rz', rev])).split('\0')
         .filter((entry) => entry.startsWith('160000 ')).map((entry) => entry.split('\t')[1]);
       const kept = new Set(await gitlinks(target));
-      const dropped = (await gitlinks(previous)).filter((file) => !kept.has(file));
-      // A path the target still tracks, as files, is the checkout's to replace.
-      const tracked = await Promise.all(dropped.map(async (file) => (await git.raw(['ls-tree', target, '--', file])).trim() !== ''));
-      return dropped.filter((_, index) => !tracked[index]);
+      return (await gitlinks(previous)).filter((file) => !kept.has(file));
     };
-    // Removing a dropped worktree loses nothing only when it is empty, or when its history lives in
+    // Removing such a worktree loses nothing only when it is empty, or when its history lives in
     // the clone's .git/modules (a .git file) and it holds no uncommitted, untracked or ignored file.
     const removable = async (worktree: string): Promise<boolean> => {
       if ((await fs.readdir(worktree).catch(() => [])).length === 0) return true;
       if (!(await fs.lstat(path.join(worktree, '.git')).catch(() => null))?.isFile()) return false;
       return !(await createGit(worktree, signal).raw(['status', '--porcelain', '--untracked-files=all', '--ignored'])).trim();
     };
-    const checkClean = async (target: string, dropped: string[]) => {
+    const checkClean = async (target: string, leaving: string[]) => {
       const status = await git.status(['--ignore-submodules=all']);
       const paths = status.files.filter((file) => file.index !== '?' && file.working_dir !== '?').map((file) => file.path);
-      for (const file of dropped) if (!await removable(path.join(localPath, file))) paths.push(file);
+      for (const file of leaving) if (!await removable(path.join(localPath, file))) paths.push(file);
       if (paths.length > 0) throw new DirtyTeamRepoError(target, paths);
     };
-    const removeWorktrees = (dropped: string[]) => Promise.all(dropped.map((file) => fs.rm(path.join(localPath, file), { recursive: true, force: true })));
+    const removeWorktrees = (leaving: string[]) => Promise.all(leaving.map((file) => fs.rm(path.join(localPath, file), { recursive: true, force: true })));
     if (ref !== undefined && ref !== defaultBranch) {
       const resolved = await resolveTeamRef(localPath, ref, signal);
       if (branch !== 'HEAD' || previous !== resolved.commit) {
-        const dropped = await droppedSubmodules(resolved.commit);
-        await checkClean(ref, dropped);
+        const leaving = await leavingSubmodules(resolved.commit);
+        await checkClean(ref, leaving);
+        await removeWorktrees(leaving);
         await git.checkout(['--detach', resolved.commit]);
-        await removeWorktrees(dropped);
       }
       return { label: `team ref "${ref}"`, transition: 'pinned', ref };
     }
-    const dropped = branch === defaultBranch ? [] : await droppedSubmodules(`refs/remotes/origin/${defaultBranch}`);
     if (branch !== defaultBranch) {
-      await checkClean(defaultBranch, dropped);
+      const leaving = await leavingSubmodules(`refs/remotes/origin/${defaultBranch}`);
+      await checkClean(defaultBranch, leaving);
+      await removeWorktrees(leaving);
       await git.checkout(defaultBranch);
     }
     try {
       const label = await pullRepo(localPath, signal);
-      await removeWorktrees(dropped);
       return { label, transition: ref === undefined ? 'recovered' : 'unpinned' };
     } catch (error) {
       if (branch === 'HEAD' && previous) await git.checkout(['--detach', previous]);

@@ -3901,8 +3901,8 @@ async function reconcileCoAuthorAllScopes(
         await saveStateForScope(state, localConfig);
       }
       if (options.silent) continue;
-      // The pinned outcome fails on these, so a pinned pull says why.
-      if (localConfig.repo.ref !== undefined) {
+      // The pinned outcome fails on these, so a pinned pull, or the unpin, says why.
+      if (localConfig === projectConfig && (localConfig.repo.ref !== undefined || options.teamRef !== undefined)) {
         for (const c of failed) log.warn(`[${installScopeName(localConfig.scope)}] The co-author setting was not written to ${c.file}: ${c.reason}`);
       }
       for (const c of changes.filter((change) => change.action === 'removed')) {
