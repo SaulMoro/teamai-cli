@@ -105,9 +105,12 @@ type StepEntry = NonNullable<WorkflowRunRecord['steps']>[number];
 /** What one pass of a step reported. */
 type Reported = Pick<StepPass, 'outcome' | 'tool' | 'model' | 'tokens' | 'agent' | 'answer'>;
 
+/** The directory on the reports branch that holds every run record. */
+export const RECORDS_DIR = 'workflows/runs';
+
 /** A record's path on the reports branch, keyed by run id. */
 export function recordPath(runId: string): string {
-  return `workflows/runs/${runId}.json`;
+  return `${RECORDS_DIR}/${runId}.json`;
 }
 
 function iso(date: Date): string {
