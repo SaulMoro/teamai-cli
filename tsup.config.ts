@@ -11,11 +11,16 @@ const SIMPLE_GIT_EXIT_FALLBACK = '(flag === true ? event.promise : event.promise
 const simpleGitExitFallbackUnref: Plugin = {
   name: 'simple-git-exit-fallback-unref',
   setup(build) {
-    build.onLoad({ filter: /[\\/]simple-git[\\/]dist[\\/]esm[\\/]index\.js$/ }, async (args) => {
+    let patched = 0;
+    build.onEnd((result) => {
+      if (result.errors.length === 0 && patched === 0) throw new Error('simple-git exit fallback patch matched no file: re-check its filter in tsup.config.ts');
+    });
+    build.onLoad({ filter: /[\\/]simple-git[\\/]dist[\\/](esm|cjs)[\\/]index\.js$/ }, async (args) => {
       const source = await readFile(args.path, 'utf8');
       if (!source.includes(SIMPLE_GIT_EXIT_FALLBACK)) {
         throw new Error(`simple-git changed its completion plugin: re-check the exit fallback patch in tsup.config.ts (${args.path})`);
       }
+      patched++;
       return {
         contents: source.replace(SIMPLE_GIT_EXIT_FALLBACK, '(flag === true ? event.promise : event.promise.then(() => new Promise((done) => setTimeout(done, flag).unref()))).then(timeout.done);'),
         loader: 'js',
