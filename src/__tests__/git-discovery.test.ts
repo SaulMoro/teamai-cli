@@ -343,6 +343,21 @@ describe('a later run', () => {
     }
   });
 
+  it.skipIf(process.getuid === undefined)('answers in a submodule from what an earlier run asked git', async () => {
+    const { repo } = checkout();
+    const lib = path.join(root, 'lib');
+    fs.mkdirSync(lib);
+    execFileSync('git', ['init', '-q'], { cwd: lib });
+    execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-q', '-m', 'init'], { cwd: lib });
+    execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', lib, 'lib'], { cwd: repo });
+    const submodule = path.join(repo, 'lib');
+    const earlier = await checkoutLocation(submodule);
+    expect(earlier?.toplevel).toBe(submodule);
+
+    const later = await laterRunWithoutGit();
+    expect(await later.checkoutLocation(submodule)).toEqual(earlier);
+  });
+
   it('answers nothing for a directory removed since an earlier run', async () => {
     const { sub } = checkout();
     expect(await checkoutLocation(sub)).not.toBeNull();
@@ -360,6 +375,51 @@ describe('a later run', () => {
     vi.resetModules();
     const later = await import('../utils/git.js');
     expect((await later.checkoutLocation(sub))?.toplevel).toBe(sub);
+  });
+
+  // Where the symlink points first and then, relative to the checkout, the
+  // core.worktree value, and the config line that sets it.
+  const retargets: Array<{ name: string; from: string; to: string; value: (link: string) => string; line?: boolean }> = [
+    { name: 'to a subdirectory', from: 'sub', to: 'other', value: (link) => link },
+    { name: 'to its own checkout', from: '.', to: 'other', value: (link) => link },
+    { name: 'followed before a parent segment', from: 'sub/inside', to: 'other/inside', value: (link) => `${link}/..` },
+    { name: 'set after another section header on its line', from: 'sub', to: 'other', value: (link) => link, line: true },
+  ];
+
+  it.each(retargets)('asks git again for a work tree named through a symlink $name, retargeted since', async ({ from, to, value, line }) => {
+    const { repo } = checkout();
+    for (const dir of [from, to]) fs.mkdirSync(path.join(repo, dir), { recursive: true });
+    const link = path.join(root, 'link');
+    fs.symlinkSync(path.join(repo, from), link);
+    if (line) fs.appendFileSync(path.join(repo, '.git', 'config'), `[unused] [core] worktree = ${value(link)}\n`);
+    else execFileSync('git', ['config', 'core.worktree', value(link)], { cwd: repo });
+    const gitToplevel = (): string => execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: repo, encoding: 'utf8' }).trim();
+    expect((await checkoutLocation(repo))?.toplevel).toBe(gitToplevel());
+
+    fs.rmSync(link);
+    fs.symlinkSync(path.join(repo, to), link);
+    vi.resetModules();
+    const later = await import('../utils/git.js');
+    expect((await later.checkoutLocation(repo))?.toplevel).toBe(gitToplevel());
+  });
+
+  it('asks git again for a relative work tree whose symlink, beside a git directory linked as .git, was retargeted', async () => {
+    const project = path.join(root, 'project');
+    const ext = path.join(root, 'ext');
+    for (const dir of [path.join(project, 'wt'), path.join(ext, 'a'), path.join(ext, 'b')]) fs.mkdirSync(dir, { recursive: true });
+    execFileSync('git', ['init', '-q', '--bare', path.join(ext, 'gd')]);
+    execFileSync('git', ['config', 'core.bare', 'false'], { cwd: path.join(ext, 'gd') });
+    execFileSync('git', ['config', 'core.worktree', '../wt'], { cwd: path.join(ext, 'gd') });
+    fs.symlinkSync(path.join(ext, 'gd'), path.join(project, '.git'));
+    fs.symlinkSync(path.join(ext, 'a'), path.join(ext, 'wt'));
+    const gitToplevel = (): string => execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: project, encoding: 'utf8' }).trim();
+    expect((await checkoutLocation(project))?.toplevel).toBe(gitToplevel());
+
+    fs.rmSync(path.join(ext, 'wt'));
+    fs.symlinkSync(path.join(ext, 'b'), path.join(ext, 'wt'));
+    vi.resetModules();
+    const later = await import('../utils/git.js');
+    expect((await later.checkoutLocation(project))?.toplevel).toBe(gitToplevel());
   });
 
   it('lists a worktree added after an earlier run asked', async () => {

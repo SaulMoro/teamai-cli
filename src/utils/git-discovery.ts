@@ -54,13 +54,14 @@ const identity = (stat: fs.Stats | null): number[] | null =>
  * holding `HEAD`), and the identity of each, of its `HEAD`, of the common
  * directory it names and of the config files there (`core.worktree`, also
  * in `config.worktree`; git never takes it from a file those include), plus
- * the variables that stop git's search. A symlink inside `core.worktree`
- * retargeted later goes unseen. While the stamp stays equal, what git
- * said about where `dir` sits still holds, provided git opened `gitDir`: a
- * symlink pointed elsewhere, a repository moved, cloned again, broken,
- * removed, created inside it later, or given another work tree changes it.
- * Null when `dir` is missing or git finds none, and when the environment
- * hands git a repository (GIT_REPOSITORY_ENV), which no file tells.
+ * the variables that stop git's search, and the real path each `core.worktree`
+ * there resolves to, since git follows its symlinks. While the stamp stays
+ * equal, what git said about where `dir` sits still holds, provided git
+ * opened `gitDir`: a symlink pointed elsewhere, a repository moved, cloned
+ * again, broken, removed, created inside it later, or given another work tree
+ * changes it. Null when `dir` is missing or git finds none, when the
+ * environment hands git a repository (GIT_REPOSITORY_ENV), which no file
+ * tells, and when a `worktree =` line names no path this can resolve.
  */
 export async function repositoryStamp(dir: string): Promise<{ stamp: string; gitDir: string } | null> {
   if (GIT_REPOSITORY_ENV.some((name) => process.env[name] !== undefined)) return null;
@@ -78,16 +79,39 @@ export async function repositoryStamp(dir: string): Promise<{ stamp: string; git
   }
   const stat = (file: string): Promise<fs.Stats | null> => fs.promises.stat(file).catch(() => null);
   const commonDirFile = (await fs.promises.readFile(path.join(gitDir, 'commondir'), 'utf8').catch(() => '')).trim();
+  const configFiles = [path.join(gitDir, 'config'), path.join(gitDir, 'config.worktree'), path.join(path.resolve(gitDir, commonDirFile), 'config')];
   const [gitDirStat, head, config, worktreeConfig, commonConfig] = await Promise.all([
-    stat(gitDir), stat(path.join(gitDir, 'HEAD')), stat(path.join(gitDir, 'config')), stat(path.join(gitDir, 'config.worktree')),
-    stat(path.join(path.resolve(gitDir, commonDirFile), 'config')),
+    stat(gitDir), stat(path.join(gitDir, 'HEAD')), ...configFiles.map(stat),
   ]);
+  const workTrees = await configuredWorkTrees(gitDir, configFiles);
+  if (workTrees === null) return null;
   const search = [process.env.GIT_CEILING_DIRECTORIES, process.env.GIT_DISCOVERY_ACROSS_FILESYSTEM];
   return {
     stamp: JSON.stringify([real, entry.file, identity(entry.stat), link, gitDir, identity(gitDirStat), identity(head),
-      commonDirFile, identity(config), identity(worktreeConfig), identity(commonConfig), search]),
+      commonDirFile, identity(config), identity(worktreeConfig), identity(commonConfig), workTrees, search]),
     gitDir,
   };
+}
+
+/**
+ * The real path of every `worktree =` value in `configFiles`, a relative one
+ * taken from `gitDir` as git takes `core.worktree`, and followed as written,
+ * so a symlink before a `..` resolves first. Lines in any section count, so
+ * none is missed. Null when a line names `worktree` in a form this does not
+ * read, or a value is quoted, escaped, commented or does not resolve: the
+ * stamp could not follow it.
+ */
+async function configuredWorkTrees(gitDir: string, configFiles: readonly string[]): Promise<string[] | null> {
+  const texts = await Promise.all(configFiles.map((file) => fs.promises.readFile(file, 'utf8').catch(() => '')));
+  const values: string[] = [];
+  for (const line of texts.flatMap((text) => text.split('\n')).filter((line) => /\bworktree\b/i.test(line))) {
+    const value = /^\s*(?:\[[^\]"]*\]\s*)*worktree\s*=(.*)$/i.exec(line)?.[1]?.trim();
+    if (value === undefined || /["\\#;]/.test(value)) return null;
+    values.push(value);
+  }
+  const reals = await Promise.all(values.map((value) =>
+    fs.promises.realpath(path.isAbsolute(value) ? value : `${gitDir}${path.sep}${value}`).catch(() => null)));
+  return reals.every((real) => real !== null) ? reals : null;
 }
 
 /**
