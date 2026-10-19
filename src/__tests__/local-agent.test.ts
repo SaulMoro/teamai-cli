@@ -6,6 +6,7 @@ import os from 'node:os';
 import fse from 'fs-extra';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { agentHookDescription } from '../hooks.js';
+import { trustCodexHooks } from '../codex-trust.js';
 import { TEAMAI_CLAUDEMD_START } from '../types.js';
 
 vi.mock('../utils/logger.js', () => ({
@@ -17,6 +18,11 @@ vi.mock('../utils/logger.js', () => ({
     debug: vi.fn(),
     persist: vi.fn(),
   },
+}));
+
+vi.mock('../codex-trust.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../codex-trust.js')>(),
+  trustCodexHooks: vi.fn(),
 }));
 
 let tmpDir: string;
@@ -34,6 +40,7 @@ beforeEach(async () => {
   origHome = process.env.HOME;
   origCopilotHome = process.env.COPILOT_HOME;
   process.env.HOME = tmpDir;
+  vi.mocked(trustCodexHooks).mockResolvedValue({ kind: 'trusted', hooks: 1 });
   // Bind prompt is on by default — start each test from that baseline.
   delete process.env.TEAMAI_BIND_PROMPT_ENABLED;
   // Clean hint markers (both old ppid-based and new sessionId-based)
@@ -2106,6 +2113,118 @@ describe('local-agent: cmds[] migration', () => {
     const hooksJson = await fse.readJson(path.join(tmpDir, '.codex', 'hooks.json'));
     const mine = hooksJson.hooks.PreToolUse.find((e: any) => e.hooks[0].command === 'echo cx');
     expect(mine).toBeDefined();
+  });
+
+  it('install_hook_rule trusts the Codex hook it wrote, and fails the ack when Codex will skip it (#1220)', async () => {
+    const trust = vi.mocked(trustCodexHooks);
+    await fse.ensureDir(path.join(tmpDir, '.codex'));
+    const acks = await runResponse({ cmds: [{
+      id: 50, type: 'install_hook_rule', handle_type: 'hook', slug: 'cx-trust',
+      event: 'Stop', cmd: 'echo trusted', scope: 'user',
+    }] }, undefined, 'codex');
+    expect(acks.find((a) => a.id === 50)?.status).toBe('success');
+    const file = path.join(tmpDir, '.codex', 'hooks.json');
+    expect(trust).toHaveBeenCalledWith(expect.objectContaining({
+      codexHome: path.join(tmpDir, '.codex'),
+      hooks: [{ file, command: 'echo trusted', key: `${file}:stop:0:0` }],
+    }));
+
+    trust.mockResolvedValueOnce({ kind: 'unavailable', reason: 'codex is not on PATH' });
+    const failed = await runResponse({ cmds: [{
+      id: 51, type: 'install_hook_rule', handle_type: 'hook', slug: 'cx-untrusted',
+      event: 'Stop', cmd: 'echo untrusted', scope: 'user',
+    }] }, undefined, 'codex');
+    expect(failed.find((a) => a.id === 51)).toMatchObject({ status: 'failed' });
+    expect(String(failed.find((a) => a.id === 51)?.error)).toContain('codex is not on PATH');
+    const manifest = await fse.readJson(path.join(tmpDir, '.teamai', 'local-agent', 'agent-hooks.json'));
+    expect(manifest['cx-untrusted']).toMatchObject({ tool: 'codex' });
+
+    trust.mockClear();
+    await fse.outputFile(path.join(tmpDir, '.teamai', 'config.yaml'), [
+      'username: tester', 'codexTrustEnabled: false', 'repo:', '  remote: https://example.com/team.git',
+      `  localPath: ${path.join(tmpDir, '.teamai', 'team-repo')}`, '',
+    ].join('\n'));
+    const optedOut = await runResponse({ cmds: [{
+      id: 57, type: 'install_hook_rule', handle_type: 'hook', slug: 'cx-opted-out',
+      event: 'Stop', cmd: 'echo opted out', scope: 'user',
+    }] }, undefined, 'codex');
+    expect(optedOut.find((a) => a.id === 57)).toMatchObject({ status: 'failed' });
+    expect(String(optedOut.find((a) => a.id === 57)?.error)).toContain('codexTrustEnabled is false');
+    expect(trust).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['muse', ['.config', 'muse', 'settings.json'], ['.muse', 'hooks.json']],
+    ['qoder-cn', ['.qoder-cn', 'settings.json'], ['.qoder', 'settings.json']],
+  ])('install_hook_rule writes the %s hook to the user file the tool reads (#1220)', async (tool, read, unread) => {
+    const acks = await runResponse({ cmds: [{
+      id: 52, type: 'install_hook_rule', handle_type: 'hook', slug: `hk-${tool}`,
+      event: 'SessionStart', cmd: `echo ${tool}`, scope: 'user',
+    }] }, undefined, tool);
+    expect(acks.find((a) => a.id === 52)?.status).toBe('success');
+    const settings = await fse.readJson(path.join(tmpDir, ...read));
+    expect(JSON.stringify(settings.hooks.SessionStart)).toContain(`echo ${tool}`);
+    expect(await fse.pathExists(path.join(tmpDir, ...unread))).toBe(false);
+  });
+
+  it('uninstall_hook_rule also removes a hook an older version wrote to the unread project path (#1220)', async () => {
+    const legacy = path.join(tmpDir, '.muse', 'hooks.json');
+    await fse.outputJson(legacy, { hooks: { SessionStart: [
+      { hooks: [{ type: 'command', command: 'echo old' }] },
+      { hooks: [{ type: 'command', command: 'echo mine' }] },
+    ] } });
+    await fse.outputJson(path.join(tmpDir, '.teamai', 'local-agent', 'agent-hooks.json'), {
+      'hk-old': { tool: 'muse', event: 'SessionStart', command: 'echo old' },
+    });
+    const acks = await runResponse({ cmds: [{
+      id: 53, type: 'uninstall_hook_rule', handle_type: 'hook', slug: 'hk-old', scope: 'user',
+    }] }, undefined, 'muse');
+    expect(acks.find((a) => a.id === 53)?.status).toBe('success');
+    expect((await fse.readJson(legacy)).hooks.SessionStart).toEqual([
+      { hooks: [{ type: 'command', command: 'echo mine' }] },
+    ]);
+  });
+
+  it('install_hook_rule refuses ZCode and leaves its config valid (#1220)', async () => {
+    const configPath = path.join(tmpDir, '.zcode', 'cli', 'config.json');
+    const config = { hooks: { events: {} }, mcpServers: { mine: { command: 'mine' } } };
+    await fse.outputJson(configPath, config);
+    const acks = await runResponse({ cmds: [{
+      id: 54, type: 'install_hook_rule', handle_type: 'hook', slug: 'hk-zcode',
+      event: 'SessionStart', cmd: 'echo zcode', scope: 'user',
+    }] }, undefined, 'zcode');
+    expect(acks.find((a) => a.id === 54)?.status).toBe('failed');
+    expect(String(acks.find((a) => a.id === 54)?.error)).toMatch(/zcode/i);
+    expect(await fse.readJson(configPath)).toEqual(config);
+  });
+
+  it.each([
+    ['SessionStart', 'on_session_start'],
+    ['UserPromptSubmit', 'pre_llm_call'],
+    ['PreToolUse', 'pre_tool_call'],
+    ['PostToolUse', 'post_tool_call'],
+    ['Stop', 'on_session_end'],
+  ])('install_hook_rule registers a Hermes %s hook under %s (#1220)', async (event, hermesEvent) => {
+    const acks = await runResponse({ cmds: [{
+      id: 55, type: 'install_hook_rule', handle_type: 'hook', slug: 'hk-hermes',
+      event, cmd: 'echo hermes', scope: 'user',
+    }] }, undefined, 'hermes');
+    expect(acks.find((a) => a.id === 55)?.status).toBe('success');
+    const { default: YAML } = await import('yaml');
+    const config = YAML.parse(await fse.readFile(path.join(tmpDir, '.hermes', 'config.yaml'), 'utf8'));
+    expect(Object.keys(config.hooks)).toEqual([hermesEvent]);
+    expect(config.hooks[hermesEvent]).toEqual([expect.objectContaining({ command: 'echo hermes' })]);
+  });
+
+  it('install_hook_rule fails the ack for an event OpenCode has no equivalent for (#1220)', async () => {
+    const acks = await runResponse({ cmds: [{
+      id: 56, type: 'install_hook_rule', handle_type: 'hook', slug: 'hk-oc',
+      event: 'PreToolUse', cmd: 'echo oc', scope: 'user',
+    }] }, undefined, 'opencode');
+    expect(acks.find((a) => a.id === 56)?.status).toBe('failed');
+    expect(String(acks.find((a) => a.id === 56)?.error)).toMatch(/PreToolUse/);
+    const manifestPath = path.join(tmpDir, '.teamai', 'local-agent', 'agent-hooks.json');
+    expect((await fse.pathExists(manifestPath)) ? (await fse.readJson(manifestPath))['hk-oc'] : undefined).toBeUndefined();
   });
 
   it('re-install same codex slug with a new command leaves no stale entry', async () => {

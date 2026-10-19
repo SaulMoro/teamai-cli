@@ -2338,6 +2338,10 @@ export async function applyAgentHook(
   def: AgentHookDef,
 ): Promise<void> {
   const format = detectFormat(tool);
+  // ZCode's strict schema rejects its whole config over a Claude-shaped `hooks` key (#1220).
+  if (format === 'zcode') {
+    throw new Error(`unsupported tool: ${tool} (agent hooks are not written in ZCode's hooks.events format)`);
+  }
   const expanded = expandHome(settingsPath);
   await ensureDir(path.dirname(expanded));
 
@@ -3392,15 +3396,38 @@ async function teamaiCodexHooks(file: string, manifestPath: string): Promise<Cod
     const builtin = group.hooks?.length === 1 && (isCodexTeamHookDispatcher(command ?? '') || builtins.some((def) =>
       def.event === event && def.command === command && toCodexEntry(def).matcher === group.matcher));
     if (typeof command !== 'string' || !(builtin || records.some((r) => ownsCodexEntry(r, event, index, groups)))) return [];
-    const snake = event.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
-    const commandWindows = group.hooks?.[0]?.commandWindows;
-    return [{
-      file,
-      command,
-      ...(commandWindows !== undefined ? { commandWindows } : {}),
-      key: `${canonicalProjectRoot(file)}:${snake}:${index}:0`,
-    }];
+    return [codexTrustHook(file, event, index, group)];
   }));
+}
+
+/** One Codex hooks.json entry as a trust pass names it, with Codex's file/event/position key. */
+function codexTrustHook(file: string, event: string, index: number, group: CodexHookMatcher): CodexTrustTargets['hooks'][number] {
+  const snake = event.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase();
+  const commandWindows = group.hooks?.[0]?.commandWindows;
+  return {
+    file,
+    command: group.hooks?.[0]?.command ?? '',
+    ...(commandWindows !== undefined ? { commandWindows } : {}),
+    key: `${canonicalProjectRoot(file)}:${snake}:${index}:0`,
+  };
+}
+
+/**
+ * Trust in Codex the user-scope agent hook `applyAgentHook` wrote to
+ * `settingsPath` (#1220). A pull's trust pass covers only the hooks a pull
+ * records, so without this Codex skips every server-pushed hook.
+ */
+export async function trustCodexAgentHook(settingsPath: string, event: string, command: string): Promise<CodexTrust> {
+  const file = expandHome(settingsPath);
+  const groups = (await readJson<CodexHooksJson>(file))?.hooks?.[event] ?? [];
+  const index = groups.findIndex((group) => group.hooks?.[0]?.command === command);
+  if (index === -1) return { kind: 'failed', reason: `${command} is not in ${file}` };
+  const { trustCodexHooks } = await import('./codex-trust.js');
+  return trustCodexHooks({
+    codexHome: path.dirname(file),
+    cwd: getUserHome(),
+    hooks: [codexTrustHook(file, event, index, groups[index])],
+  });
 }
 
 /**
