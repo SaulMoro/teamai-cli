@@ -330,6 +330,19 @@ describe('a later run', () => {
     expect(await Promise.all(dirs.map((dir) => later.checkoutLocation(dir)))).toEqual(earlier);
   });
 
+  it.skipIf(process.getuid === undefined)('reads no answers another release kept', async () => {
+    const { sub } = checkout();
+    expect(await checkoutLocation(sub)).not.toBeNull();
+
+    vi.doMock('../package-info.js', () => ({ getCurrentVersion: () => '0.0.0-another-release' }));
+    try {
+      const later = await laterRunWithoutGit();
+      expect(await later.checkoutLocation(sub)).toBeNull();
+    } finally {
+      vi.doUnmock('../package-info.js');
+    }
+  });
+
   it('answers nothing for a directory removed since an earlier run', async () => {
     const { sub } = checkout();
     expect(await checkoutLocation(sub)).not.toBeNull();

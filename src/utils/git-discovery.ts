@@ -53,9 +53,9 @@ const identity = (stat: fs.Stats | null): number[] | null =>
  * from it (`.git` itself, the one a `.git` file names, or the directory
  * holding `HEAD`), and the identity of each, of its `HEAD`, of the common
  * directory it names and of the config files there (`core.worktree`, also
- * in `config.worktree`; git never takes it from a file those include, and a
- * symlink inside its value retargeted later goes unseen), plus
- * the variables that stop git's search. While the stamp stays equal, what git
+ * in `config.worktree`; git never takes it from a file those include), plus
+ * the variables that stop git's search. A symlink inside `core.worktree`
+ * retargeted later goes unseen. While the stamp stays equal, what git
  * said about where `dir` sits still holds, provided git opened `gitDir`: a
  * symlink pointed elsewhere, a repository moved, cloned again, broken,
  * removed, created inside it later, or given another work tree changes it.
@@ -95,8 +95,8 @@ export async function repositoryStamp(dir: string): Promise<{ stamp: string; git
  * whose common directory is `commonDir`, from git's own files: each worktree's
  * admin directory, where its checkout is, whether that is still there, and its
  * lock, and the config saying whether the main entry is bare (the common
- * `config`, or the main checkout's own `config.worktree`). Equal stamps
- * mean an equal list; adding, moving, deleting, locking or pruning a worktree
+ * `config`, or the main checkout's own `config.worktree`; a `core.bare` set
+ * in a file those include goes unseen). Equal stamps mean an equal list; adding, moving, deleting, locking or pruning a worktree
  * changes it. Null when the admin directory cannot be read for another reason
  * than being absent: no stamp then tells that list from an empty one.
  */
