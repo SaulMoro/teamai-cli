@@ -270,7 +270,7 @@ export async function syncWorkflowDefinitions(
     }
     const previous = kept.get(file.stem);
     result.cached.push(file.definition.name);
-    // Equal bytes are still stored at the kept revision, which the team remote still reaches.
+    // Equal bytes are still stored at the earlier entry's revision; the loop that filled `kept` dropped it if origin no longer reaches it.
     const teamRevision = file.teamRevision ?? (previous?.sourceHash === file.sourceHash ? previous.teamRevision : undefined);
     if (options.dryRun || (previous?.sourceHash === file.sourceHash && previous.teamRevision === teamRevision)) continue;
     await writeJsonAtomic(cachePath(config, file.definition.name), {

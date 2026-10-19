@@ -141,6 +141,31 @@ describe('workflow cache', () => {
     await syncWorkflowDefinitions(config);
 
     expect((await loadCachedWorkflow(config, 'build'))?.teamRevision).toBe(pushed);
+    const started = await startRun(config, 'build');
+    if ('error' in started) throw new Error(started.error.message);
+    const run = await readRun(config, String(started.data.run));
+    if (typeof run === 'string') throw new Error(`Could not read run: ${run}`);
+    expect(run.teamRevision).toBe(pushed);
+  });
+
+  it('drops an unchanged workflow revision that the team remote no longer reaches', async () => {
+    const config = testConfig();
+    const repository = initializeTeamRepository(config);
+    writeWorkflow(config, 'build', VALID);
+    const pushed = repository.commit('add workflow');
+    repository.push();
+    await syncWorkflowDefinitions(config);
+    expect((await loadCachedWorkflow(config, 'build'))?.teamRevision).toBe(pushed);
+
+    const tree = git(config.repo.localPath, 'write-tree');
+    const rewritten = git(config.repo.localPath, 'commit-tree', tree, '-m', 'rewrite team history');
+    git(config.repo.localPath, 'checkout', '-B', 'main', rewritten);
+    git(config.repo.localPath, 'push', '--force', '--set-upstream', 'origin', 'main');
+    fs.writeFileSync(path.join(config.repo.localPath, 'README.md'), 'unrelated\n');
+    repository.commit('unrelated local commit');
+    await syncWorkflowDefinitions(config);
+
+    expect((await loadCachedWorkflow(config, 'build'))?.teamRevision).toBeUndefined();
   });
 
   it('omits the team revision for an untracked workflow at a remote-reachable commit', async () => {
