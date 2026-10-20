@@ -1395,6 +1395,36 @@ steps:
     expect(git(['show', `${branch}:AGENTS.md`], workspace)).toBe('edited\n');
   });
 
+  it('leaves the copy index clean when a prompt stops before it runs on a branch without most tool directories', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: Putting the branch agent file back also puts its index entry back.
+steps:
+  - id: work
+    needs: []
+    workspace: new
+    workflow:
+      steps:
+        - id: edit
+          needs: []
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('AGENTS.md', 'edited\\n')"
+        - id: ask
+          needs: [edit]
+          workspace: continue
+          prompt: Look
+`);
+    fs.writeFileSync(path.join(workspace, 'AGENTS.md'), 'base\n');
+    execFileSync('git', ['add', 'AGENTS.md'], { cwd: workspace });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'agents'], { cwd: workspace });
+
+    const done = await runLocalDriver(config, runId, workspace);
+
+    expect(done, JSON.stringify(done)).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    const copy = worktreePath(workspace, branchName(runId, 'work', 1));
+    expect(git(['status', '--porcelain'], copy)).toBe('');
+  });
+
   it('does not publish conflict markers when a prompt fails', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build

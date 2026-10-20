@@ -238,8 +238,20 @@ export async function restoreUneditedConfig(dir: string, _commit: string, saved:
   await fs.rm(saved, { recursive: true, force: true });
   // `checkout` of the base copies staged those paths. Put the index back with the files, or a step that
   // edits nothing still looks dirty and the empty commit fails it.
-  await git(dir, ['add', '-A', '--', ...AGENT_PATHS]);
+  const present = await presentAgentPaths(dir);
+  if (present.length > 0) await git(dir, ['add', '-A', '--', ...present]);
   if (unresolved.length > 0) await restoreConflictStages(dir, conflicts, unresolved);
+}
+
+/** Agent paths in the worktree or the index. `git add` stages nothing when one of its paths matches neither. */
+async function presentAgentPaths(dir: string): Promise<string[]> {
+  const indexed = await gitPaths(dir, ['ls-files', '--', ...AGENT_PATHS]);
+  const present: string[] = [];
+  for (const relative of AGENT_PATHS) {
+    const tracked = indexed.some((file) => file === relative || file.startsWith(`${relative}/`));
+    if (tracked || await fs.lstat(path.join(dir, relative)).then(() => true, () => false)) present.push(relative);
+  }
+  return present;
 }
 
 async function gitPaths(dir: string, args: string[]): Promise<string[]> {
