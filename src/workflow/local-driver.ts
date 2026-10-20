@@ -155,6 +155,8 @@ interface Lease {
   model?: string;
   defaultModel?: string;
   workspace?: WorkspaceContract;
+  /** The lease named a workspace this driver cannot read. The step fails instead of running in the active checkout. */
+  unreadableWorkspace?: true;
   session?: { tool: string; id: string };
   /** Set once the step has a directory to run in. */
   cwd?: string;
@@ -318,8 +320,8 @@ type ReportBody = Parameters<typeof reportAttempt>[2];
 
 function workspaceOf(value: unknown): WorkspaceContract | undefined {
   if (!isRecord(value) || (value.mode !== 'new' && value.mode !== 'continue') || typeof value.branch !== 'string') return undefined;
-  const base = isRecord(value.base) && typeof value.base.commit === 'string' && typeof value.base.ref === 'string'
-    ? { ref: value.base.ref, commit: value.base.commit } : undefined;
+  const base = isRecord(value.base) && typeof value.base.commit === 'string' && (value.base.ref === undefined || typeof value.base.ref === 'string')
+    ? { ...(typeof value.base.ref === 'string' ? { ref: value.base.ref } : {}), commit: value.base.commit } : undefined;
   const start = isRecord(value.start) && typeof value.start.commit === 'string'
     ? { commit: value.start.commit, ...(typeof value.start.branch === 'string' ? { branch: value.start.branch } : {}) } : undefined;
   if (!base || !start || typeof value.configCommit !== 'string' || !Array.isArray(value.merge)) return undefined;
@@ -333,6 +335,7 @@ function parseLease(raw: unknown): Lease | undefined {
   const rawLease = raw as Record<string, unknown> | undefined;
   if (!rawLease || typeof rawLease.step !== 'string' || typeof rawLease.attempt !== 'string' || typeof rawLease.revision !== 'number') return undefined;
   const env = stringMap(rawLease.env);
+  const workspace = workspaceOf(rawLease.workspace);
   const session = isRecord(rawLease.session) && typeof rawLease.session.tool === 'string' && typeof rawLease.session.id === 'string'
     ? { tool: rawLease.session.tool, id: rawLease.session.id } : undefined;
   const lease: Lease = {
@@ -347,7 +350,7 @@ function parseLease(raw: unknown): Lease | undefined {
     ...(rawLease.interactive === true ? { interactive: true } : {}),
     ...(rawLease.readOnly === true ? { readOnly: true } : {}),
     ...(typeof rawLease.defaultModel === 'string' ? { defaultModel: rawLease.defaultModel } : {}),
-    ...(workspaceOf(rawLease.workspace) ? { workspace: workspaceOf(rawLease.workspace) } : {}),
+    ...(workspace ? { workspace } : rawLease.workspace !== undefined ? { unreadableWorkspace: true } : {}),
     ...(session ? { session } : {}),
   };
   return (lease.command === undefined) === (lease.prompt === undefined) ? undefined : lease;
@@ -359,6 +362,9 @@ function placeOf(lease: Lease, active: string): string {
 }
 
 async function stageLease(active: string, lease: Lease): Promise<WorkflowFailure | undefined> {
+  if (lease.unreadableWorkspace) {
+    return { code: 'workspace_base', message: `Step "${lease.step}" was leased a workspace this teamai cannot read. Update teamai.` };
+  }
   if (!lease.workspace) {
     lease.cwd = active;
     lease.before = await snapshotWorktree(active);

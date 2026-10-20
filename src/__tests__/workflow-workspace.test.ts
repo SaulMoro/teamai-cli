@@ -6,12 +6,13 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { detectProjectConfig, loadStateForScope } from '../config.js';
 import { resolveAnchors } from '../utils/git.js';
 import { resolvePartitionDir } from '../utils/partition.js';
 import type { LocalConfig } from '../types.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
+import * as engine from '../workflow/engine.js';
 import { leaseNext, reportAttempt, startRun } from '../workflow/engine.js';
 import { runLocalDriver } from '../workflow/local-driver.js';
 import { cancelRun, retryStep } from '../workflow/run-controls.js';
@@ -58,6 +59,7 @@ function git(args: string[], cwd: string): string {
 const driver = (workspace: string, machine = 'host'): DriverIdentity => ({ kind: 'local', machine, workspace });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -415,6 +417,52 @@ steps:
     const other = await leaseNext(config, runId, driver(workspace, 'other'), { base, workspaceModes: [...modes] });
 
     expect(other).toMatchObject({ data: { wait: { reason: expect.stringContaining('another driver') } } });
+  });
+
+  it('runs a workspace step from a detached HEAD in its own worktree', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A detached checkout still opens a workspace.
+steps:
+  - id: edit
+    workspace: new
+    command: node -e "require('fs').writeFileSync('edited.txt','yes')"
+`);
+    git(['checkout', '-q', '--detach'], workspace);
+
+    const done = await runLocalDriver(config, runId, workspace);
+
+    expect(done, JSON.stringify(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const run = await readRun(config, runId);
+    const edit = typeof run === 'object' ? run.steps.find((step) => step.id === 'edit') : undefined;
+    const branch = edit && 'changes' in edit ? edit.changes?.branch : undefined;
+    expect(git(['show', `${branch}:edited.txt`], workspace)).toBe('yes');
+    expect(fs.existsSync(path.join(workspace, 'edited.txt'))).toBe(false);
+  });
+
+  it('fails a step whose lease carries a workspace this driver cannot read, and does not run it in the checkout', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A newer workspace contract.
+steps:
+  - id: edit
+    workspace: new
+    command: node -e "require('fs').writeFileSync('edited.txt','yes')"
+`);
+    const leaseNextAsSent = engine.leaseNext;
+    vi.spyOn(engine, 'leaseNext').mockImplementation(async (...args) => {
+      const answer = await leaseNextAsSent(...args);
+      const lease = 'data' in answer ? answer.data.lease : undefined;
+      if (lease && typeof lease === 'object' && 'workspace' in lease) Object.assign(lease, { workspace: { mode: 'clone' } });
+      return answer;
+    });
+
+    const done = await runLocalDriver(config, runId, workspace);
+
+    expect(done, JSON.stringify(done)).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    const run = await readRun(config, runId);
+    expect(typeof run === 'object' ? run.steps : run).toMatchObject([{ id: 'edit', status: 'failed', failure: { code: 'workspace_base' } }]);
+    expect(fs.existsSync(path.join(workspace, 'edited.txt'))).toBe(false);
   });
 
   it('rejects a report whose changes name another branch or base than the lease, and keeps the step leased', async () => {

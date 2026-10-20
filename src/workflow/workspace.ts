@@ -22,7 +22,7 @@ export interface StepChanges {
 /** The git contract on a `new` or `continue` lease. Paths stay off it. */
 export interface WorkspaceContract {
   mode: 'new' | 'continue';
-  base: { ref: string; commit: string };
+  base: { ref?: string; commit: string };
   /** The commit agent configuration is restored from before the step runs. */
   configCommit: string;
   branch: string;
@@ -220,7 +220,7 @@ export interface WorkspaceRequest {
   driver: DriverIdentity;
   /** Modes this driver can run. Omitted means read-only only, so a workspace step waits. */
   modes?: WorkspaceMode[];
-  base?: { ref: string; commit: string };
+  base?: { ref?: string; commit: string };
 }
 
 /**

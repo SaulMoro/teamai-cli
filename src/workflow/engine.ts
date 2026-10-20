@@ -793,7 +793,7 @@ export async function startRun(
   config: LocalConfig,
   name: string,
   inputs: unknown = {},
-  options: { driver?: DriverIdentity } = {},
+  options: { driver?: DriverIdentity; base?: RunState['base']; checkout?: string } = {},
 ): Promise<WorkflowEnvelope> {
   const cached = await loadCachedWorkflow(config, name);
   if (!cached) {
@@ -817,6 +817,8 @@ export async function startRun(
     ...(Object.keys(tree.workflows).length > 0 ? { workflows: tree.workflows } : {}),
     steps: cached.definition.steps.map((step) => ({ id: step.id, status: 'pending' })),
     settledAttempts: [],
+    ...(options.base ? { base: options.base } : {}),
+    ...(options.checkout ? { checkout: options.checkout } : {}),
     createdAt: now,
     updatedAt: now,
   };
@@ -849,8 +851,8 @@ export interface NextOptions {
   running?: string[];
   /** False to reconcile without issuing a new lease: `next` answers `done`, an unlisted lease, `hitl`, or `wait`. */
   canTakeLease?: boolean;
-  /** The checkout the run's workspaces start from. The first `next` that sends it fixes the run's base. */
-  base?: { ref: string; commit: string };
+  /** The checkout the run's workspaces start from. It fixes the run's base only when `workflow start` recorded none. */
+  base?: { ref?: string; commit: string };
   /** Workspace modes this driver can run. Omitted means read-only, so a `new` or `continue` step waits. */
   workspaceModes?: WorkspaceMode[];
   /** Whether a person is present for HITL requests and interactive work on this next request. */
@@ -1103,10 +1105,10 @@ export function parseNextPayload(value: unknown): ParsedNextPayload | string {
   if (record.base !== undefined) {
     if (!record.base || typeof record.base !== 'object' || Array.isArray(record.base)) return 'base must be an object';
     const base = record.base as Record<string, unknown>;
-    if (typeof base.ref !== 'string' || base.ref === '' || typeof base.commit !== 'string' || base.commit === '') {
-      return 'base must include ref and commit';
+    if ((base.ref !== undefined && (typeof base.ref !== 'string' || base.ref === '')) || typeof base.commit !== 'string' || base.commit === '') {
+      return 'base must include commit, and ref when it is set must not be empty';
     }
-    request.base = { ref: base.ref, commit: base.commit };
+    request.base = { ...(typeof base.ref === 'string' ? { ref: base.ref } : {}), commit: base.commit };
   }
   const ignored = unreadFields(record, NEXT_PAYLOAD_FIELDS);
   const can = isRecord(record.driver) ? record.driver.can : undefined;

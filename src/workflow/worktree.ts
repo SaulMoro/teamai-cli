@@ -94,11 +94,14 @@ export function hooksPath(main: string): string {
   return path.join(main, '.teamai', 'workflow-hooks');
 }
 
-export async function headCommit(cwd: string): Promise<{ ref: string; commit: string } | undefined> {
+/** The commit HEAD points to, and the branch when HEAD is not detached. */
+export async function headCommit(cwd: string): Promise<{ ref?: string; commit: string } | undefined> {
   const result = await git(cwd, ['rev-parse', 'HEAD']);
   if (result.code !== 0) return undefined;
   const commit = result.stdout.trim();
-  return commit ? { ref: 'HEAD', commit } : undefined;
+  if (!commit) return undefined;
+  const ref = (await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).stdout.trim();
+  return ref ? { ref, commit } : { commit };
 }
 
 /** Creates the worktree when it is missing. A branch that already exists is checked out as it is. */
