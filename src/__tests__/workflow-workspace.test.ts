@@ -417,6 +417,32 @@ steps:
     expect(other).toMatchObject({ data: { wait: { reason: expect.stringContaining('another driver') } } });
   });
 
+  it('rejects a report whose changes name another branch or base than the lease, and keeps the step leased', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: Changes must match the lease.
+steps:
+  - id: edit
+    workspace: new
+    command: echo edit
+`);
+    const owner = driver(workspace);
+    const base = { ref: 'HEAD', commit: git(['rev-parse', 'HEAD'], workspace).trim() };
+    const leased = await leaseNext(config, runId, owner, { base, workspaceModes: ['read-only', 'new', 'continue'] });
+    const lease = 'data' in leased ? leased.data.lease as { attempt: string; revision: number; workspace?: { branch: string } } : undefined;
+    if (!lease?.workspace) throw new Error(JSON.stringify(leased));
+    const changes = { branch: lease.workspace.branch, base: base.commit, from: base.commit, to: base.commit, commits: [] };
+    const report = (override: Partial<typeof changes>) => reportAttempt(config, runId, {
+      attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: owner, changes: { ...changes, ...override },
+    });
+
+    expect(await report({ branch: 'teamai/elsewhere' })).toMatchObject({ error: { code: 'invalid_report', message: expect.stringContaining('teamai/elsewhere') } });
+    expect(await report({ base: 'f'.repeat(40) })).toMatchObject({ error: { code: 'invalid_report', message: expect.stringContaining('f'.repeat(40)) } });
+    const run = await readRun(config, runId);
+    expect(typeof run === 'object' ? run.steps.find((step) => step.id === 'edit') : undefined).toMatchObject({ status: 'leased', lease: { attempt: lease.attempt } });
+    expect(await report({})).toMatchObject({ data: { accepted: true, cleanup: true } });
+  });
+
   it('merges a parent dependency into the first child that continues its copy', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build

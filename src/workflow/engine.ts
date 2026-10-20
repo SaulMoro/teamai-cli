@@ -1179,7 +1179,20 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       return { save: false, envelope: error('wrong_driver', 'This lease belongs to a different driver') };
     }
 
-    const defined = locateStep(run, step.id)?.step;
+    const located = locateStep(run, step.id);
+    const defined = located?.step;
+    if (report.changes) {
+      const contract = located && planWorkspace(run, located.scope, step, located.step, {
+        driver: step.lease.driver, modes: ['read-only', 'new', 'continue'],
+      }, true).contract;
+      if (!contract || report.changes.branch !== contract.branch || report.changes.base !== contract.base.commit) {
+        const leased = contract ? `branch ${contract.branch} on base ${contract.base.commit}` : 'no workspace';
+        return {
+          save: false,
+          envelope: error('invalid_report', `changes name branch ${report.changes.branch} on base ${report.changes.base}, but attempt ${report.attempt} was leased ${leased}`),
+        };
+      }
+    }
     let outcome = report.outcome;
     let message = report.message;
     let failure = report.failure;
