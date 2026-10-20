@@ -14,6 +14,7 @@ import {
   type ToolName,
 } from '../resources/agent-format.js';
 import { observeLaunch } from '../agent-observation.js';
+import { detectProjectConfig } from '../config.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { commandSignalPolicy, exitLike, terminalReachesCommand } from '../env-exec.js';
 import { workflowLaunch } from '../launch-context.js';
@@ -581,7 +582,9 @@ async function promptReport(
   if (!supportedTool(selected)) {
     return giveUp({ code: 'tool_unsupported', message: `The local workflow tool "${selected}" is not supported` }, selected);
   }
-  const loaded = lease.agent ? await loadAgent(selected, lease.agent, config, options.toolPaths) : undefined;
+  // A worktree has its own pull record, so the tool launched there is observed and bound as that checkout.
+  const stepConfig = lease.workspace && lease.cwd ? await detectProjectConfig(lease.cwd) ?? config : config;
+  const loaded = lease.agent ? await loadAgent(selected, lease.agent, stepConfig, options.toolPaths) : undefined;
   const agent = loaded?.spec;
   if (lease.agent && !agent) {
     return giveUp({
@@ -590,7 +593,7 @@ async function promptReport(
     }, selected);
   }
   const chosen = await chooseStepModel({
-    step: lease.step, tool: selected, model: lease.model, defaultModel: lease.defaultModel, agent: agent ?? undefined, config,
+    step: lease.step, tool: selected, model: lease.model, defaultModel: lease.defaultModel, agent: agent ?? undefined, config: stepConfig,
   });
   if (!chosen.ok) return giveUp(chosen.failure, selected);
   if (agent && localToolFamily(selected) === 'codex') {
@@ -607,7 +610,7 @@ async function promptReport(
     : {};
   const [observed, launch] = await Promise.all([
     observeLaunch({
-      config,
+      config: stepConfig,
       tool: selected,
       cwd,
       ...(lease.agent && loaded ? { definition: { stem: lease.agent, file: loaded.file, ...definitionModel } } : {}),
@@ -615,7 +618,7 @@ async function promptReport(
         ? { chosen: { model: chosen.model.name, ...(chosen.model.effort ? { effort: chosen.model.effort } : {}), ...(chosen.alias ? { alias: chosen.alias } : {}) } }
         : {}),
     }),
-    workflowLaunch(config, selected),
+    workflowLaunch(stepConfig, selected),
   ]);
   let result: LocalToolResult;
   try {

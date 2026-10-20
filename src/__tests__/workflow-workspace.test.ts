@@ -22,6 +22,9 @@ import { readRun, writeRun } from '../workflow/store.js';
 import type { DriverIdentity } from '../workflow/types.js';
 import { branchName } from '../workflow/workspace.js';
 import { pushIfOrigin, worktreePath } from '../workflow/worktree.js';
+import { launchHoldsCheckout } from '../launch-context.js';
+import { teamDelivery } from '../pull.js';
+import { pendingRecords } from '../workflow/records.js';
 
 const dirs: string[] = [];
 
@@ -54,6 +57,57 @@ async function fixture(yaml: string, inputs?: unknown): Promise<{ config: LocalC
 
 function git(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8' });
+}
+
+/** A checkout whose team repo is its own `.teamai`, pulled once with Claude enabled, and a started run of `yaml`. */
+async function teamWorkspace(yaml: string): Promise<{ config: LocalConfig; workspace: string; runId: string }> {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-workspace-')));
+  dirs.push(root);
+  const workspace = path.join(root, 'workspace');
+  const knowledge = path.join(workspace, '.teamai');
+  fs.mkdirSync(path.join(knowledge, 'skills', 'fe-skill'), { recursive: true });
+  fs.mkdirSync(path.join(knowledge, 'workflows'), { recursive: true });
+  fs.writeFileSync(path.join(knowledge, 'teamai.yaml'), [
+    'team: workspace',
+    'mode: self',
+    'repo: https://git.example.com/team/workspace.git',
+    'provider: git',
+    '',
+  ].join('\n'));
+  fs.writeFileSync(path.join(knowledge, '.gitignore'), 'config.yaml\nstate.json\n');
+  fs.writeFileSync(path.join(knowledge, 'skills', 'fe-skill', 'SKILL.md'), '---\nname: fe-skill\ndescription: fixture\n---\n\nTeam skill.\n');
+  fs.writeFileSync(path.join(knowledge, 'workflows', 'build.yaml'), yaml);
+  fs.writeFileSync(path.join(workspace, 'tracked.txt'), 'clean\n');
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: workspace });
+  execFileSync('git', ['add', '-A'], { cwd: workspace });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'base'], { cwd: workspace });
+  const anchors = await resolveAnchors(workspace);
+  if (!anchors) throw new Error('the workspace has no git anchors');
+  const partition = await resolvePartitionDir(anchors.projectAnchor);
+  fs.mkdirSync(partition, { recursive: true });
+  fs.writeFileSync(path.join(partition, 'config.yaml'), [
+    'repo:',
+    `  localPath: ${knowledge}`,
+    '  remote: https://git.example.com/team/workspace.git',
+    '  kind: self',
+    `  businessRepoRoot: ${workspace}`,
+    'username: tester',
+    'updatePolicy: auto',
+    'scope: project',
+    `projectRoot: ${workspace}`,
+    'enabledAgents: [claude]',
+    '',
+  ].join('\n'));
+  fs.mkdirSync(path.join(workspace, '.claude'));
+  const { pull } = await import('../pull.js');
+  await pull({ silent: true, cwd: workspace });
+  const config = await detectProjectConfig(workspace);
+  if (!config) throw new Error('project config was not found');
+  config.workflows = { tools: { default: 'claude' }, max_parallel: 1 };
+  await syncWorkflowDefinitions(config);
+  const started = await startRun(config, 'build');
+  if ('error' in started) throw new Error(started.error.message);
+  return { config, workspace, runId: String(started.data.run) };
 }
 
 const driver = (workspace: string, machine = 'host'): DriverIdentity => ({ kind: 'local', machine, workspace });
@@ -636,22 +690,7 @@ steps:
   });
 
   it('delivers a team skill into a new workspace and leaves it out of the branch', async () => {
-    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-workspace-')));
-    dirs.push(root);
-    const workspace = path.join(root, 'workspace');
-    const knowledge = path.join(workspace, '.teamai');
-    fs.mkdirSync(path.join(knowledge, 'skills', 'fe-skill'), { recursive: true });
-    fs.mkdirSync(path.join(knowledge, 'workflows'), { recursive: true });
-    fs.writeFileSync(path.join(knowledge, 'teamai.yaml'), [
-      'team: workspace',
-      'mode: self',
-      'repo: https://git.example.com/team/workspace.git',
-      'provider: git',
-      '',
-    ].join('\n'));
-    fs.writeFileSync(path.join(knowledge, '.gitignore'), 'config.yaml\nstate.json\n');
-    fs.writeFileSync(path.join(knowledge, 'skills', 'fe-skill', 'SKILL.md'), '---\nname: fe-skill\ndescription: fixture\n---\n\nTeam skill.\n');
-    fs.writeFileSync(path.join(knowledge, 'workflows', 'build.yaml'), `schemaVersion: v1alpha1
+    const { config, workspace, runId } = await teamWorkspace(`schemaVersion: v1alpha1
 name: build
 description: Read the delivered team skill.
 steps:
@@ -659,36 +698,6 @@ steps:
     workspace: new
     prompt: Read the team skill.
 `);
-    fs.writeFileSync(path.join(workspace, 'tracked.txt'), 'clean\n');
-    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: workspace });
-    execFileSync('git', ['add', '-A'], { cwd: workspace });
-    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'base'], { cwd: workspace });
-    const anchors = await resolveAnchors(workspace);
-    if (!anchors) throw new Error('the workspace has no git anchors');
-    const partition = await resolvePartitionDir(anchors.projectAnchor);
-    fs.mkdirSync(partition, { recursive: true });
-    fs.writeFileSync(path.join(partition, 'config.yaml'), [
-      'repo:',
-      `  localPath: ${knowledge}`,
-      '  remote: https://git.example.com/team/workspace.git',
-      '  kind: self',
-      `  businessRepoRoot: ${workspace}`,
-      'username: tester',
-      'updatePolicy: auto',
-      'scope: project',
-      `projectRoot: ${workspace}`,
-      'enabledAgents: [claude]',
-      '',
-    ].join('\n'));
-    fs.mkdirSync(path.join(workspace, '.claude'));
-    const { pull } = await import('../pull.js');
-    await pull({ silent: true, cwd: workspace });
-    const config = await detectProjectConfig(workspace);
-    if (!config) throw new Error('project config was not found');
-    config.workflows = { tools: { default: 'claude' }, max_parallel: 1 };
-    await syncWorkflowDefinitions(config);
-    const started = await startRun(config, 'build');
-    if ('error' in started) throw new Error(started.error.message);
     const adapter: LocalToolAdapter = {
       async runInteractive() {
         return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
@@ -700,10 +709,10 @@ steps:
       },
     };
 
-    const done = await runLocalDriver(config, String(started.data.run), workspace, { adapter });
+    const done = await runLocalDriver(config, runId, workspace, { adapter });
 
     expect(done, JSON.stringify(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
-    const run = await readRun(config, String(started.data.run));
+    const run = await readRun(config, runId);
     const ask = typeof run === 'object' ? run.steps.find((step) => step.id === 'ask') : undefined;
     expect(ask && 'outputs' in ask ? ask.outputs : undefined).toMatchObject({ skill: expect.stringContaining('Team skill.') });
     const branch = ask && 'changes' in ask ? ask.changes?.branch : undefined;
@@ -719,6 +728,41 @@ steps:
       expect.objectContaining({ root: expect.stringContaining('workflow-worktrees'), rev: member?.rev }),
     ]));
     expect(delivered?.rev).toBe(member?.rev);
+  });
+
+  it('observes a prompt in a new workspace through the worktree, so its tool keeps that delivery and the record its revision', async () => {
+    const { config, workspace, runId } = await teamWorkspace(`schemaVersion: v1alpha1
+name: build
+description: Review in a workspace.
+steps:
+  - id: ask
+    workspace: new
+    prompt: Review the change.
+`);
+    // A member's own edit to a delivered skill is not a local change of the worktree the step runs in.
+    fs.appendFileSync(path.join(workspace, '.claude', 'skills', 'fe-skill', 'SKILL.md'), 'Member edit.\n');
+    let holds: boolean | undefined;
+    let revision: string | undefined;
+    const adapter: LocalToolAdapter = {
+      async runInteractive() {
+        return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
+      },
+      async run(_tool, input) {
+        const own = await detectProjectConfig(input.cwd);
+        holds = own && input.launch ? await launchHoldsCheckout(own, input.launch) : false;
+        const delivery = own ? await teamDelivery(own, 'claude') : undefined;
+        revision = delivery?.complete ? delivery.commit : undefined;
+        return { started: true, exitCode: 0 };
+      },
+    };
+
+    const done = await runLocalDriver(config, runId, workspace, { adapter });
+
+    expect(done, JSON.stringify(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(holds).toBe(true);
+    expect(revision).toMatch(/^[0-9a-f]{40}$/);
+    const record = (await pendingRecords(config)).find((item) => item.run === runId && item.phase === 'end');
+    expect(record?.steps?.[0]).toMatchObject({ agent: { team: { revision, localChanges: false } } });
   });
 
   it('keeps hooksPath on the workflow worktree and runs from a linked checkout', async () => {
