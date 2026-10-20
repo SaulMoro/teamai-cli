@@ -448,6 +448,56 @@ describe('a later run', () => {
     expect(await later.listWorktrees(linked)).toEqual([linked]);
   });
 
+  // How the main checkout is made bare after an earlier run listed it: the
+  // config read then, and the change the later run must see.
+  const madeBare: Array<{ name: string; before: (repo: string, linked: string) => void; change: (repo: string, linked: string) => void }> = [
+    {
+      name: 'in a file its config includes',
+      before: (repo) => {
+        fs.writeFileSync(path.join(root, 'included.cfg'), '[core]\n\tbare = false\n');
+        fs.appendFileSync(path.join(repo, '.git', 'config'), `[include]\n\tpath = ${path.join(root, 'included.cfg')}\n`);
+      },
+      change: () => fs.writeFileSync(path.join(root, 'included.cfg'), '[core]\n\tbare = true\n'),
+    },
+    {
+      name: 'in a file its config includes from a header after another on its line',
+      before: (repo) => {
+        fs.writeFileSync(path.join(root, 'included.cfg'), '[core]\n\tbare = false\n');
+        fs.appendFileSync(path.join(repo, '.git', 'config'), `[core][include]\n\tpath = ${path.join(root, 'included.cfg')}\n`);
+      },
+      change: () => fs.writeFileSync(path.join(root, 'included.cfg'), '[core]\n\tbare = true\n'),
+    },
+    {
+      name: 'in the asking worktree\'s own config',
+      before: (repo) => execFileSync('git', ['config', 'extensions.worktreeConfig', 'true'], { cwd: repo }),
+      change: (_repo, linked) => execFileSync('git', ['config', '--worktree', 'core.bare', 'true'], { cwd: linked }),
+    },
+    {
+      name: 'by the environment',
+      before: () => undefined,
+      change: () => {
+        vi.stubEnv('GIT_CONFIG_COUNT', '1');
+        vi.stubEnv('GIT_CONFIG_KEY_0', 'core.bare');
+        vi.stubEnv('GIT_CONFIG_VALUE_0', 'true');
+      },
+    },
+  ];
+
+  it.each(madeBare)('lists the main checkout as git does once made bare $name after an earlier run asked', async ({ before, change }) => {
+    const { repo } = checkout();
+    execFileSync('git', ['-c', 'user.email=test@example.com', '-c', 'user.name=Test', 'commit', '--allow-empty', '-q', '-m', 'init'], { cwd: repo });
+    const linked = path.join(root, 'linked');
+    execFileSync('git', ['worktree', 'add', '-q', linked, 'HEAD'], { cwd: repo });
+    before(repo, linked);
+    expect(await listWorktrees(linked)).toEqual([repo, linked]);
+
+    change(repo, linked);
+    const gitLists = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: linked, encoding: 'utf8' });
+    vi.resetModules();
+    const later = await import('../utils/git.js');
+    expect(await later.listWorktrees(linked)).toEqual(gitLists.includes('\nbare\n') ? [linked] : [repo, linked]);
+  });
+
   it.skipIf(process.getuid === undefined)('trusts no answers kept where another user can write', async () => {
     fs.mkdirSync(path.join(root, 'tmp', `teamai-${process.getuid?.()}`), { mode: 0o777 });
     fs.chmodSync(path.join(root, 'tmp', `teamai-${process.getuid?.()}`), 0o777);

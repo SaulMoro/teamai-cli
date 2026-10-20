@@ -119,14 +119,17 @@ async function configuredWorkTrees(gitDir: string, configFiles: readonly string[
  * whose common directory is `commonDir`, from git's own files: each worktree's
  * admin directory, where its checkout is, whether that is still there, and its
  * lock, and the config saying whether the main entry is bare (the common
- * `config`, or the main checkout's own `config.worktree`; a `core.bare` set
- * in a file those include goes unseen). Equal stamps mean an equal list; adding, moving, deleting, locking or pruning a worktree
- * changes it. Null when the admin directory cannot be read for another reason
- * than being absent: no stamp then tells that list from an empty one.
+ * `config`, each checkout's own `config.worktree`, and the `GIT_CONFIG*`
+ * variables). Equal stamps mean an equal list; adding, moving, deleting,
+ * locking or pruning a worktree changes it. Null when the admin directory
+ * cannot be read for another reason than being absent: no stamp then tells
+ * that list from an empty one. Null too when that config includes another
+ * file, where git may also read `core.bare` and no stamp follows it.
  */
 export async function linkedWorktreesStamp(commonDir: string): Promise<string | null> {
-  const stat = (file: string): Promise<fs.Stats | null> => fs.promises.stat(path.join(commonDir, file)).catch(() => null);
-  const config = (await Promise.all([stat('config'), stat('config.worktree')])).map(identity);
+  const config = await configStamp([path.join(commonDir, 'config'), path.join(commonDir, 'config.worktree')]);
+  if (config === null) return null;
+  const env = Object.keys(process.env).filter((name) => name.startsWith('GIT_CONFIG')).sort().map((name) => [name, process.env[name]]);
   const admin = path.join(commonDir, 'worktrees');
   const names = await fs.promises.readdir(admin).catch((error: NodeJS.ErrnoException) => error.code === 'ENOENT' ? [] : null);
   if (names === null) return null;
@@ -134,11 +137,28 @@ export async function linkedWorktreesStamp(commonDir: string): Promise<string | 
   const entries = await Promise.all(names.map(async (name) => {
     const dir = path.join(admin, name);
     const gitdir = (await fs.promises.readFile(path.join(dir, 'gitdir'), 'utf8').catch(() => '')).trim();
-    const [live, locked] = await Promise.all([
+    const [live, locked, worktreeConfig] = await Promise.all([
       gitdir !== '' && fs.promises.stat(path.resolve(dir, gitdir)).then(() => true, () => false),
       exists(path.join(dir, 'locked')),
+      configStamp([path.join(dir, 'config.worktree')]),
     ]);
-    return JSON.stringify([name, gitdir, live, locked]);
+    return worktreeConfig === null ? null : JSON.stringify([name, gitdir, live, locked, worktreeConfig]);
   }));
-  return [JSON.stringify(config), ...entries].join('\n');
+  if (entries.includes(null)) return null;
+  return [JSON.stringify([config, env]), ...entries].join('\n');
+}
+
+/**
+ * The identity of each config file in `files`, or null when one includes
+ * another file, which no stamp follows. Any `[include` counts, wherever it
+ * stands on its line: a false match only costs keeping the answer.
+ */
+async function configStamp(files: readonly string[]): Promise<Array<number[] | null> | null> {
+  const read = await Promise.all(files.map(async (file) => {
+    const [stat, text] = await Promise.all([
+      fs.promises.stat(file).catch(() => null), fs.promises.readFile(file, 'utf8').catch(() => ''),
+    ]);
+    return { id: identity(stat), text };
+  }));
+  return read.some(({ text }) => /\[\s*include/i.test(text)) ? null : read.map(({ id }) => id);
 }
