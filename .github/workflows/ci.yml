@@ -101,10 +101,10 @@ jobs:
       - name: Confirm build and unit matrix passed
         run: echo "Build and unit test matrix passed."
 
-  # Two shards of the suite at once, each on its own 4-vCPU runner: the files
-  # split by vitest's hash into halves of about the same running time.
+  # Three shards of the suite at once, each on its own 4-vCPU runner: vitest's
+  # hash splits the files into thirds of about the same running time.
   fork-e2e-shard:
-    name: E2E (fork-safe, no credentials, shard ${{ matrix.shard }}/2)
+    name: E2E (fork-safe, no credentials, shard ${{ matrix.shard }}/3)
     needs: prepare-build
     if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
     runs-on: ubuntu-latest
@@ -113,7 +113,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -150,7 +150,7 @@ jobs:
       # The e2e setup file (src/__tests__/helpers/isolate-e2e-env.ts) gives each
       # test file a sandbox HOME with its own git identity.
       - name: Run E2E (no remote credentials)
-        run: npx vitest run --config vitest.e2e.config.ts --shard=${{ matrix.shard }}/2
+        run: npx vitest run --config vitest.e2e.config.ts --shard=${{ matrix.shard }}/3
 
   # Keeps the check name branch protection requires. Runs whatever the shards
   # did: a job that only needed them would be skipped when one fails, and a
@@ -161,7 +161,7 @@ jobs:
     if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
     runs-on: ubuntu-latest
     steps:
-      - name: Confirm both E2E shards passed
+      - name: Confirm every E2E shard passed
         run: test "${{ needs.fork-e2e-shard.result }}" = success
 
   e2e:
