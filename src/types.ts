@@ -1563,8 +1563,11 @@ export const TEAMAI_RECALL_RULES_END = '<!-- [teamai:recall-rules:end] -->';
 
 // ─── Usage tracking ────────────────────────────────────
 
-/** Regex for valid skill names: alphanumeric, hyphens, underscores, colons, dots. Max 200 chars. */
-export const SKILL_NAME_REGEX = /^[a-zA-Z0-9_\-:.]{1,200}$/;
+/** The characters a skill name may hold: alphanumeric, hyphens, underscores, colons, dots. */
+export const SKILL_NAME_CHARS = '[a-zA-Z0-9_\\-:.]';
+
+/** Regex for valid skill names: {@link SKILL_NAME_CHARS}, at most 200 of them. */
+export const SKILL_NAME_REGEX = new RegExp(`^${SKILL_NAME_CHARS}{1,200}$`);
 
 // TEAMAI_USAGE_PATH / TEAMAI_KNOWN_SKILLS_PATH / TEAMAI_PUSHIGNORE_PATH were
 // module-load consts with no live consumers — the code uses runtime getters
@@ -2720,7 +2723,7 @@ export function applyToolRoots(
  * HOME-relative member root has nothing to say about.
  */
 export function scopedToolPaths(
-  teamConfig: TeamaiConfig,
+  teamConfig: Pick<TeamaiConfig, 'toolPaths'>,
   localConfig: { scope?: Scope; toolRoots?: Record<string, string> },
 ): Record<string, z.infer<typeof ToolPathsSchema>> {
   if (localConfig.scope !== 'user') return teamConfig.toolPaths;

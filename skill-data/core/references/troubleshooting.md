@@ -111,7 +111,7 @@ This is the #1 onboarding issue. In order:
 
 ## Path names appear in skill usage statistics
 
-Slash-command tracking accepts complete `/skill-name` tokens followed by whitespace or the end of the prompt. Absolute paths such as `/Volumes/External/project` and URL components are not skill invocations. Updating prevents new false counts; already recorded usage remains.
+Slash-command tracking accepts a complete `/skill-name` token at the start of the prompt, followed by whitespace or the end of the prompt, and only for a skill installed for the tool. Absolute paths such as `/Volumes/External/project` and URL components are not skill invocations. Updating prevents new false counts; already recorded usage remains.
 
 ## Submodule checkouts and linked skill directories
 

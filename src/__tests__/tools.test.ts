@@ -95,6 +95,11 @@ describe('TOOLS skillLoad', () => {
     expect(known).toEqual(TOOL_IDS.filter(hasWildcardPostToolUse));
   });
 
+  it('stays unknown for Hermes and OpenClaw, so none of their tool calls is credited', () => {
+    expect(TOOLS.hermes.skillLoad).toBe('unknown');
+    expect(TOOLS.openclaw.skillLoad).toBe('unknown');
+  });
+
   it('is required on every descriptor', () => {
     const tools = {
       ...TOOLS,
