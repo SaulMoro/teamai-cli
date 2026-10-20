@@ -8,8 +8,27 @@ import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { TeamaiConfigBaseSchema } from '../types.js';
 
-const AGENT_PATHS = ['AGENTS.md', 'CLAUDE.md', '.claude', '.codex', '.opencode', '.cursor', '.agents', '.githooks'];
+/** Agent configuration a workspace step reads from the run's base rather than from its branch. */
+export const AGENT_PATHS: readonly string[] = agentConfigPaths();
+
+function agentConfigPaths(): string[] {
+  const paths = new Set(['AGENTS.md', 'CLAUDE.md', '.agents', '.githooks']);
+  for (const tool of Object.values(TeamaiConfigBaseSchema.shape.toolPaths.parse(undefined))) {
+    for (const field of ['skills', 'rules', 'settings', 'hooks', 'claudemd', 'agents', 'mcpProject'] as const) {
+      const relative = tool[field];
+      if (relative) paths.add(configRoot(field === 'hooks' ? path.posix.dirname(relative) : relative));
+    }
+  }
+  return [...paths];
+}
+
+/** A tool's own directory is reset whole. `.github` also holds workflows and code owners, so only its agent paths are. */
+function configRoot(relative: string): string {
+  const first = relative.split('/')[0] ?? relative;
+  return first !== relative && first.startsWith('.') && first !== '.github' ? first : relative;
+}
 
 export interface GitResult {
   code: number;

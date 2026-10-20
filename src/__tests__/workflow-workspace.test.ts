@@ -527,6 +527,40 @@ steps:
     expect(fs.existsSync(worktreePath(workspace, branch!))).toBe(false);
   });
 
+  it('runs a later step on the base MCP and tool settings an earlier step committed, and keeps its own edit', async () => {
+    const files = ['.mcp.json', 'opencode.json', '.tclaude/settings.json'];
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A later step does not see MCP or tool settings committed earlier.
+steps:
+  - id: work
+    workspace: new
+    workflow:
+      steps:
+        - id: plant
+          workspace: continue
+          command: node -e "const fs=require('fs'); for (const f of ${JSON.stringify(files).replace(/"/g, "'")}) fs.writeFileSync(f,'earlier')"
+        - id: check
+          needs: [plant]
+          workspace: continue
+          command: node -e "const fs=require('fs'); for (const f of ${JSON.stringify(files).replace(/"/g, "'")}) if (fs.readFileSync(f,'utf8')!=='base') process.exit(2); fs.writeFileSync('.mcp.json','later')"
+`);
+    fs.mkdirSync(path.join(workspace, '.tclaude'));
+    for (const file of files) fs.writeFileSync(path.join(workspace, file), 'base');
+    execFileSync('git', ['add', ...files], { cwd: workspace });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'tool config'], { cwd: workspace });
+
+    const done = await runLocalDriver(config, runId, workspace);
+
+    expect(done, JSON.stringify(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const run = await readRun(config, runId);
+    const check = typeof run === 'object' ? run.steps.find((step) => step.id === 'work.check') : undefined;
+    const branch = check && 'changes' in check ? check.changes?.branch : undefined;
+    expect(git(['show', `${branch}:.mcp.json`], workspace)).toBe('later');
+    expect(git(['show', `${branch}:opencode.json`], workspace)).toBe('earlier');
+    expect(git(['show', `${branch}:.tclaude/settings.json`], workspace)).toBe('earlier');
+  });
+
   it('delivers a team skill into a new workspace and leaves it out of the branch', async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-workspace-')));
     dirs.push(root);
