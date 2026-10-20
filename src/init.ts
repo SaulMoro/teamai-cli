@@ -107,6 +107,7 @@ import {
   SELF_MODE_AGENT_CHOICES,
   KNOWN_AGENTS,
 } from './known-agents.js';
+import { TOOLS } from './tools.js';
 
 /**
  * Record each relocated tool root (every entry of `RELOCATABLE_TOOLS`, by the
@@ -1082,8 +1083,7 @@ export async function promptForSelfModeAgents(options: {
   const detected = await detectHomeInstalledAgents();
   const tools = SELF_MODE_AGENT_CHOICES.map((id) => {
     const meta = KNOWN_AGENTS.find((a) => a.id === id);
-    const root = meta ? path.posix.dirname(meta.skillsPath) : `.${id}`;
-    return { id, label: meta?.displayName ?? id, root };
+    return { id, label: meta?.displayName ?? id, root: TOOLS[id].home.dir };
   });
 
   const detectedLabels = detected
