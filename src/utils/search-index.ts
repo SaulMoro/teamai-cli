@@ -850,7 +850,7 @@ export async function buildIndex(
   // wipes recall until the next rebuild — same shape as the votes file (#854).
   const target = opts.indexPath ?? getSearchIndexPath();
   try {
-    await writeJsonAtomic(target, index);
+    await writeJsonAtomic(target, index, { compact: true });
   } catch (e) {
     // The previous index would keep serving what the member no longer receives (#1006).
     if (await rm(target, { force: true }).then(() => true, () => false)) {
