@@ -22,13 +22,14 @@ export type HomeMove =
 /**
  * `dir` is relative to `$HOME`. The first of `moves.by` that applies moves the
  * home; `moves.root` is the `$HOME`-relative directory a move replaces when it
- * is not `dir` (Pi's variable moves `.pi/agent`). `moves.partial`: teamai
- * writes only some of the tool's files to a moved home; the rest still go to
- * the default home (#1221).
+ * is not `dir` (Pi's variable moves `.pi/agent`). `moves.settingsAtDefault`:
+ * teamai still writes the tool's hooks (OpenCode's plugin, Pi's extension,
+ * Muse's settings.json hooks) and `models switch` settings under the default
+ * home when the home moves, until B4 of #1221 moves them too.
  */
 export type Home = {
   readonly dir: string;
-  readonly moves?: { readonly root?: string; readonly by: readonly HomeMove[]; readonly partial?: true };
+  readonly moves?: { readonly root?: string; readonly by: readonly HomeMove[]; readonly settingsAtDefault?: true };
 };
 
 /** A skills directory the tool reads under `$HOME`, from any session. */
@@ -150,7 +151,7 @@ export const TOOLS = {
     skills: { user: [{ base: 'home', path: '.omp/agent/skills', evidence: 'verified' }], project: 'unknown' },
   },
   pi: {
-    home: { dir: '.pi', moves: { root: '.pi/agent', by: [{ kind: 'env', name: 'PI_CODING_AGENT_DIR', evidence: 'verified' }], partial: true } },
+    home: { dir: '.pi', moves: { root: '.pi/agent', by: [{ kind: 'env', name: 'PI_CODING_AGENT_DIR', evidence: 'verified' }], settingsAtDefault: true } },
     skillLoad: { calls: [], promptForm: 'skill-block' },
     skills: {
       user: [{ base: 'home', path: '.pi/agent/skills', evidence: 'verified' }],
@@ -201,7 +202,7 @@ export const TOOLS = {
   opencode: {
     home: {
       dir: '.config/opencode',
-      moves: { by: [{ kind: 'env', name: 'OPENCODE_CONFIG_DIR', evidence: 'source' }, { kind: 'xdg', child: 'opencode', evidence: 'source' }], partial: true },
+      moves: { by: [{ kind: 'env', name: 'OPENCODE_CONFIG_DIR', evidence: 'source' }, { kind: 'xdg', child: 'opencode', evidence: 'source' }], settingsAtDefault: true },
     },
     skillLoad: { calls: [{ name: 'skill', evidence: 'verified' }] },
     skills: {
@@ -214,7 +215,7 @@ export const TOOLS = {
   },
   // muse-bin 1.4.11: $XDG_CONFIG_HOME/muse, else ~/.config/muse; with XDG_CONFIG_HOME set, ~/.config/muse is never read.
   muse: {
-    home: { dir: '.config/muse', moves: { by: [{ kind: 'xdg', child: 'muse', evidence: 'source' }], partial: true } },
+    home: { dir: '.config/muse', moves: { by: [{ kind: 'xdg', child: 'muse', evidence: 'source' }], settingsAtDefault: true } },
     installedBy: 'home',
     skillLoad: { calls: [{ name: 'read_skill', evidence: 'verified' }] },
     skills: {
@@ -232,10 +233,10 @@ export function isToolId(value: string): value is ToolId {
   return Object.hasOwn(TOOLS, value);
 }
 
-/** Whether teamai writes only some of `tool`'s files to a moved home (`Home.moves.partial`). */
-export function movesPartly(tool: ToolId): boolean {
+/** Whether teamai still writes `tool`'s hooks and settings under its default home when the home moves (`Home.moves.settingsAtDefault`). */
+export function settingsAtDefault(tool: ToolId): boolean {
   const { home }: ToolDescriptor = TOOLS[tool];
-  return home.moves?.partial === true;
+  return home.moves?.settingsAtDefault === true;
 }
 
 /** Whether where `tool` takes skills follows each session's inputs (`ToolDescriptor.skillsFollowSession`). */

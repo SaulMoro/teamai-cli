@@ -28,7 +28,7 @@ import { installOf, locate, unreadWrites, writable, writesOf, type Location, typ
 import { codexProjectTrust, codexTrustFix } from './codex-project-trust.js';
 import { amongSkillDirs, sameSkillDir, sameSkillDirs } from './resources/skill-dirs.js';
 import { defaultToolHome, realHost, toolHome } from './tool-home.js';
-import { isToolId, movesPartly } from './tools.js';
+import { isToolId, settingsAtDefault } from './tools.js';
 import { getsRulesFromExtension, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
 import { declaredSecretKeys } from './resources/secrets.js';
 import { isReservedTeamEnvKey } from './env-reserved.js';
@@ -430,7 +430,7 @@ export async function skillReadNotes(ctx: DoctorContext): Promise<string[]> {
   const notes: string[] = [];
   const host = realHost();
   for (const { tool, own, where } of await writableSkillLocations(ctx)) {
-    if (ctx.localConfig.scope === 'user' && isToolId(tool) && movesPartly(tool)) {
+    if (ctx.localConfig.scope === 'user' && isToolId(tool) && settingsAtDefault(tool)) {
       const defaultHome = defaultToolHome(tool, host);
       if (!await sameSkillDir(toolHome(tool, host), defaultHome)) notes.push(`${tool} takes skills from ${own}, but teamai still writes some of its other files under ${defaultHome}.`);
     }
