@@ -2,12 +2,13 @@
  * The one shell command-line parser (#884): an agent's shell call split into
  * simple commands, and what the call did with files.
  *
- * Only a call that surely ran its reader or search is one: one simple command,
- * or a pipeline that starts with it. Any `;`, `&&`, `||` or `&` means it may
- * never have run, so the call is neither. The files are the command's file
- * operands only: never a flag's value, a sed script, a search pattern or a
- * redirect target.
+ * A call is a read, a search or a listing when it is one simple command, or a
+ * pipeline that starts with it. A list (`;`, `&&`, `||`) is a read when any of
+ * its pipelines reads, except one after `||`; any `&` makes the call neither.
+ * The files are the command's file operands only: never a flag's value, a sed
+ * script, a search pattern or a redirect target.
  */
+import { isAbsolutePath } from './agent-path.js';
 
 /** An operator that ends a simple command. A newline is a `;`. */
 export type ShellOperator = ';' | '&&' | '||' | '|' | '&';
@@ -38,10 +39,10 @@ export interface ShellClassification {
   paths: string[];
   /** A search's only file or directory operand, when it has one with nothing to expand. */
   target?: string;
-  /** True when the reader or search is the call's only command, not the head of a pipeline. */
+  /** True when the reader or search is the call's only command, not the head of a pipeline or an item of a list. */
   simple: boolean;
-  /** A read's or search's command word, as written: `cat`, `/bin/cat`. */
-  verb?: string;
+  /** A read's or search's command word, as written: `cat`, `/bin/cat`. A list's are every read's, one after `||` included. */
+  verbs: string[];
 }
 
 const REDIRECT = /^(?:&>>?|<<<|<<-?|<>|<&|>>|>&|>\||<|>)/;
@@ -405,7 +406,12 @@ function searchRoot(operand: string): string {
   return dir.replace(/[\\/]$/, '') || '.';
 }
 
-const SHELL: ShellClassification = { category: 'shell', paths: [], simple: false };
+/** A command word's name: its base name, without `.exe`. */
+export function commandName(word: string): string {
+  return word.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '');
+}
+
+const SHELL: ShellClassification = { category: 'shell', paths: [], simple: false, verbs: [] };
 
 /**
  * What one simple command did with files. Only a stderr redirect
@@ -416,7 +422,7 @@ function classifySimple(command: SimpleCommand, simple: boolean, flavor: ShellFl
   const [verb, ...rest] = commandWords(command.words);
   if (verb === undefined || !command.redirects.every((r) => r.op.startsWith('2>'))) return SHELL;
   // By path on either platform, `.exe` too: `C:\\…\\cat.exe`, `Microsoft.PowerShell.Management\\Get-Content`.
-  const base = verb.split(/[\\/]/).pop()!.replace(/\.exe$/i, '');
+  const base = commandName(verb);
   const name = base === 'git' && rest.length > 0 ? `git-${rest[0]}` : base;
   const args = name === base ? rest : rest.slice(1);
 
@@ -426,25 +432,61 @@ function classifySimple(command: SimpleCommand, simple: boolean, flavor: ShellFl
   if (read) {
     const files = read(args);
     if (WINDOWS_ONLY_READERS.has(name.toLowerCase()) && !flavor.powershell && !files.every((f) => WINDOWS_PATH.test(f))) return SHELL;
-    return files.length > 0 && !files.some((f) => EXPANDS.test(f)) ? { category: 'read', paths: files, simple, verb } : SHELL;
+    return files.length > 0 && !files.some((f) => EXPANDS.test(f)) ? { category: 'read', paths: files, simple, verbs: [verb] } : SHELL;
   }
-  if (LISTERS.has(name)) return { category: 'list', paths: [], simple };
+  if (LISTERS.has(name)) return { category: 'list', paths: [], simple, verbs: [] };
   const search = Object.hasOwn(SEARCHERS, name) ? SEARCHERS[name] : undefined;
   if (!search) return SHELL;
   const { shows, operands: roots } = searchArgs(args, search);
-  if (shows === 'paths') return { category: 'list', paths: [], simple };
-  if (shows === 'counts') return { category: 'search', paths: [], simple, verb };
+  if (shows === 'paths') return { category: 'list', paths: [], simple, verbs: [] };
+  if (shows === 'counts') return { category: 'search', paths: [], simple, verbs: [verb] };
   const target = roots.length === 1 && !EXPANDS.test(roots[0]) ? roots[0] : undefined;
-  return { category: 'search', paths: roots.length > 0 ? roots.map(searchRoot) : ['.'], ...(target ? { target } : {}), simple, verb };
+  return { category: 'search', paths: roots.length > 0 ? roots.map(searchRoot) : ['.'], ...(target ? { target } : {}), simple, verbs: [verb] };
 }
+
+/** The commands, besides reads, searches and listings, after which a relative path still resolves against the call's cwd. */
+const KEEPS_CWD = new Set(['pwd', 'echo', 'printf', 'test', '[', '[[', 'set', 'true', 'false', ':']);
 
 /**
  * What a shell command line did with files: a read, a search or a listing
- * when it is one such command, or a pipeline that starts with one; otherwise
- * just a shell call.
+ * when it is one such command, or a pipeline that starts with one. A list of
+ * pipelines (`;`, `&&`, `||`) is a read, never a simple one, of the files its
+ * reading pipelines read, except a pipeline after `||`. After a command that
+ * is no read, search or listing and whose command word is not in KEEPS_CWD,
+ * only absolute paths count; an assignment alone (`X=1`) has no command word
+ * and keeps the cwd. Anything else, a line with an `&`, and a line ending in
+ * `|`, `&&` or `||` is just a shell call.
  */
 export function classifyShellCommand(command: string, flavor: ShellFlavor = {}): ShellClassification {
   const commands = simpleCommands(command, flavor.home);
-  const pipeline = commands.every((c, i) => c.op === (i === commands.length - 1 ? null : '|'));
-  return pipeline && commands.length > 0 ? classifySimple(commands[0], commands.length === 1, flavor) : SHELL;
+  const last = commands.at(-1);
+  // A line that ends in `|`, `&&` or `||` runs nothing; a trailing `;` changes nothing.
+  if (last === undefined || (last.op !== null && last.op !== ';') || commands.some((c) => c.op === '&')) return SHELL;
+  const isList = commands.slice(0, -1).some((c) => c.op !== '|');
+  if (!isList) return classifySimple(commands[0], commands.length === 1, flavor);
+  return classifyList(commands, flavor);
+}
+
+/**
+ * A list of pipelines: a read of the files its reading pipelines read. A
+ * pipeline after `||` runs only when the one before it failed, so it may not
+ * have run and credits no file; its verb still marks its error lines.
+ */
+function classifyList(commands: SimpleCommand[], flavor: ShellFlavor): ShellClassification {
+  const paths = new Set<string>();
+  const verbs = new Set<string>();
+  let moved = false;
+  for (const [i, command] of commands.entries()) {
+    const before = commands[i - 1]?.op;
+    if (before === '|') continue;
+    const item = classifySimple(command, false, flavor);
+    if (item.category === 'read') {
+      item.verbs.forEach((v) => verbs.add(v));
+      if (before !== '||') item.paths.filter((f) => !moved || isAbsolutePath(f)).forEach((f) => paths.add(f));
+    }
+    const [word] = commandWords(command.words);
+    if (item.category === 'shell' && word !== undefined && !KEEPS_CWD.has(commandName(word).toLowerCase())) moved = true;
+  }
+  if (paths.size === 0) return SHELL;
+  return { category: 'read', paths: [...paths], simple: false, verbs: [...verbs] };
 }
