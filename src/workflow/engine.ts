@@ -16,11 +16,14 @@ import {
   type StepExpression, type TemplateError,
 } from './template.js';
 import { parseStepPath } from './step-path.js';
-import { DriverSchema, answerHitl, cancel, fail, lease, release, settled, skip, start, stopped, succeed, waitForAnswer, type ItemResult, type LeasedStep, type StepState } from './step-state.js';
+import {
+  DriverSchema, ReadSchema, answerHitl, cancel, fail, lease, release, settled, skip, start, stopped, succeed, waitForAnswer,
+  type ItemResult, type LeasedStep, type StepRead, type StepState,
+} from './step-state.js';
 import { addItems, afterStanding, expandItems, isItem, itemsAfter, itemsOf, itemsSettled, startedItems } from './fan-out.js';
 import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, loopSettled } from './loop.js';
 import { childScope, contextOf, insertChildren, localId, statesIn, stepDefinitions, topScope, type Scope } from './scope.js';
-import { planWorkspace, plannedBranch, type WorkspaceMode, type WorkspacePlan } from './workspace.js';
+import { planWorkspace, plannedBranch, type WorkspaceContract, type WorkspaceMode, type WorkspacePlan } from './workspace.js';
 import { generateRunId, isRunId, readRun, runLockPath, writeRun } from './store.js';
 import type {
   CachedWorkflow,
@@ -61,6 +64,8 @@ export interface ReportInput {
   failure?: WorkflowFailure;
   /** The branch this attempt committed, when it ran in a workspace. */
   changes?: { branch: string; base: string; from: string; to: string; commits: string[] };
+  /** The branch and commit this attempt read, when it ran read-only in a workspace. */
+  read?: StepRead;
   agent?: ReportedAgent;
 }
 
@@ -996,7 +1001,7 @@ const NEXT_PAYLOAD_FIELDS = new Set(['driver', 'running', 'canTakeLease', 'base'
 
 /** The top-level payload fields `parseReport` reads. Keep in sync with the fields it picks. */
 const REPORT_FIELDS = new Set([
-  'attempt', 'revision', 'outcome', 'driver', 'outputs', 'exitCode', 'message', 'tool', 'model', 'session', 'tokens', 'failure', 'changes', 'agent',
+  'attempt', 'revision', 'outcome', 'driver', 'outputs', 'exitCode', 'message', 'tool', 'model', 'session', 'tokens', 'failure', 'changes', 'read', 'agent',
 ]);
 
 /**
@@ -1093,6 +1098,11 @@ export function parseReport(value: unknown): ParsedReport | string {
     }
     report.changes = { branch: value.branch, base: value.base, from: value.from, to: value.to, commits: value.commits };
   }
+  if (record.read !== undefined) {
+    const read = ReadSchema.safeParse(record.read);
+    if (!read.success) return 'read must include branch, base, and commit';
+    report.read = read.data;
+  }
   if (record.agent !== undefined) {
     const agent = parseReportedAgent(record.agent);
     if (typeof agent === 'string') return agent;
@@ -1159,6 +1169,26 @@ function rememberSettledAttempt(run: RunState, attempt: string): void {
   if (extra > 0) run.settledAttempts.splice(0, extra);
 }
 
+/**
+ * Why a report's `changes` or `read` do not fit the workspace its attempt was leased, or undefined when they fit.
+ * A step that writes reports `changes`. A read-only step in a copy reports `read`, and a success must carry it.
+ */
+function workspaceMismatch(report: ReportInput, contract: WorkspaceContract | undefined): string | undefined {
+  const readOnly = contract?.mode === 'read-only';
+  const leased = contract ? `${readOnly ? 'read-only ' : ''}branch ${contract.branch} on base ${contract.base.commit}` : 'no workspace';
+  const elsewhere = (branch: string, base: string): boolean => !contract || branch !== contract.branch || base !== contract.base.commit;
+  if (report.changes && (readOnly || elsewhere(report.changes.branch, report.changes.base))) {
+    return `changes name branch ${report.changes.branch} on base ${report.changes.base}, but attempt ${report.attempt} was leased ${leased}`;
+  }
+  if (report.read && (!readOnly || elsewhere(report.read.branch, report.read.base))) {
+    return `read names branch ${report.read.branch} on base ${report.read.base}, but attempt ${report.attempt} was leased ${leased}`;
+  }
+  if (readOnly && report.outcome === 'success' && !report.read) {
+    return `attempt ${report.attempt} was leased ${leased}, and its success report has no read`;
+  }
+  return undefined;
+}
+
 /** A later leaf still runs in `branch`. Workflow and `for_each` steps are not leaves; their children are. */
 function branchStillUsed(run: RunState, branch: string, except: string): boolean {
   for (const item of run.steps) {
@@ -1203,18 +1233,11 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
 
     const located = locateStep(run, step.id);
     const defined = located?.step;
-    if (report.changes) {
-      const contract = located && planWorkspace(run, located.scope, step, located.step, {
-        driver: step.lease.driver, modes: ['read-only', 'new', 'continue'],
-      }, true).contract;
-      if (!contract || report.changes.branch !== contract.branch || report.changes.base !== contract.base.commit) {
-        const leased = contract ? `branch ${contract.branch} on base ${contract.base.commit}` : 'no workspace';
-        return {
-          save: false,
-          envelope: error('invalid_report', `changes name branch ${report.changes.branch} on base ${report.changes.base}, but attempt ${report.attempt} was leased ${leased}`),
-        };
-      }
-    }
+    const contract = located && planWorkspace(run, located.scope, step, located.step, {
+      driver: step.lease.driver, modes: ['read-only', 'new', 'continue'],
+    }, true).contract;
+    const mismatch = workspaceMismatch(report, contract);
+    if (mismatch) return { save: false, envelope: error('invalid_report', mismatch) };
     let outcome = report.outcome;
     let message = report.message;
     let failure = report.failure;
@@ -1239,6 +1262,7 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       session: report.session,
       tokens: report.tokens,
       ...(report.changes ? { changes: report.changes } : {}),
+      ...(report.read ? { read: report.read } : {}),
       agent: settleObservation(report, defined?.agent),
     };
     if (report.changes) {
@@ -1249,7 +1273,8 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
     const settledStep = outcome === 'released' ? release(step)
       : outcome === 'success' ? succeed(step, { ...settlement, ...(report.outputs !== undefined ? { outputs: report.outputs } : {}) })
         : fail(step, { ...settlement, failure });
-    const cleanup = outcome === 'success' && report.changes !== undefined && !branchStillUsed(run, report.changes.branch, settledStep.id);
+    // From the lease, so a reader that was the copy's last user lets the driver remove the worktree.
+    const cleanup = outcome === 'success' && contract !== undefined && !branchStillUsed(run, contract.branch, settledStep.id);
     return {
       save: true,
       envelope: ok({
