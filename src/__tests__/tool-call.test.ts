@@ -73,11 +73,7 @@ describe('classifyToolCall', () => {
     'cat notes.txt > doc.md',
     'cat < doc.md',
     'cat doc.md >&2',
-    'cat doc.md && echo ok',
-    'cat doc.md || true',
-    'cat doc.md; echo ok',
     'cat doc.md &',
-    'cat doc.md\necho ok',
     'echo x | cat doc.md',
     'echo "cat doc.md"',
     'sed 1p doc.md',
@@ -134,6 +130,75 @@ describe('classifyToolCall', () => {
     expect(shell('cat doc.md 2>&1 | head -n 20')).toMatchObject({ category: 'read', paths: [at('doc.md')], simple: false });
   });
 
+  it.each<[string, string[], boolean]>([
+    ['cat doc.md', ['doc.md'], true],
+    ['cat doc.md | head -n 5', ['doc.md'], false],
+    ['pwd; cat doc.md', ['doc.md'], false],
+    ['pwd\ncat doc.md', ['doc.md'], false],
+    ['test -f doc.md && cat doc.md', ['doc.md'], false],
+    ['cat doc.md || echo missing', ['doc.md'], false],
+    ['cat doc.md && echo ok', ['doc.md'], false],
+    ['cat doc.md || true', ['doc.md'], false],
+    ['cat doc.md; echo ok', ['doc.md'], false],
+    ['cat doc.md\necho ok', ['doc.md'], false],
+    ['pwd; cat doc.md 2>&1 | head -n 5', ['doc.md'], false],
+    ['ls docs; cat doc.md', ['doc.md'], false],
+    ['cat a.md; cat b.md; cat a.md', ['a.md', 'b.md'], false],
+    ['cat a.md && head -n 5 b.md', ['a.md', 'b.md'], false],
+    ['cd docs && cat /abs/doc.md', ['/abs/doc.md'], false],
+    ['cat a.md; cd docs && cat b.md', ['a.md'], false],
+    ['cat a.md || cat b.md', ['a.md'], false],
+    ['cat doc.md;', ['doc.md'], true],
+    ['cat doc.md | head -n 5;', ['doc.md'], false],
+    ['pwd; cat doc.md;', ['doc.md'], false],
+    ['echo x; printf y; true; :; [ -f doc.md ] && cat doc.md', ['doc.md'], false],
+    ['/bin/echo x; ECHO.exe y; cat doc.md', ['doc.md'], false],
+    ['grep -rn needle learnings; cat doc.md', ['doc.md'], false],
+    ['Set-Location docs; Get-Content /abs/doc.md', ['/abs/doc.md'], false],
+    ['cat a.md || cat b.md; cat c.md', ['a.md', 'c.md'], false],
+    ['[[ -f doc.md ]] && cat doc.md', ['doc.md'], false],
+    ['set -e; cat doc.md', ['doc.md'], false],
+    ['X=1; cat doc.md', ['doc.md'], false],
+  ])('the command line %j reads %j (simple: %s)', (command, files, simple) => {
+    expect(shell(command)).toMatchObject({ category: 'read', paths: files.map(at), simple, status: 'success' });
+  });
+
+  it.each([
+    'cat doc.md & cat b.md',
+    'pwd; cat doc.md &',
+    'pwd; echo ok',
+    'pwd; grep -rn needle learnings',
+    'pwd; echo x | cat doc.md',
+    'pwd; cat doc.md > copy.md',
+    'cd docs && cat rel.md',
+    'test -f a.md || cat b.md',
+    'cat doc.md |',
+    'cat doc.md &&',
+    'pwd; cat doc.md |',
+    'pwd; cat doc.md &&',
+    'pwd; cat doc.md ||',
+    'Set-Location docs; Get-Content rel.md',
+    'CD docs && cat rel.md',
+    'builtin cd docs && cat rel.md',
+    '{ cd docs; cat rel.md; }',
+    'source env.sh; cat rel.md',
+    '. ./env.sh; cat rel.md',
+    'eval "cd docs"; cat rel.md',
+    'git -C docs show x; cat rel.md',
+  ])('the command line %j is no read', (command) => {
+    expect(shell(command)).toMatchObject({ category: 'shell', paths: [], simple: false, command });
+  });
+
+  it('drops a file the error of any of a list\'s reader verbs names', () => {
+    const output = 'cat: a.md: No such file or directory\n# b';
+    expect(shell('cat a.md; cat b.md', output)).toMatchObject({ category: 'read', status: 'unknown', paths: [at('b.md')] });
+    expect(shell('cat a.md; head b.md', output)).toMatchObject({ category: 'read', status: 'unknown', paths: [at('b.md')] });
+    expect(shell('head a.md; cat b.md', 'x\ncat: b.md: No such file or directory'))
+      .toMatchObject({ category: 'read', status: 'unknown', paths: [at('a.md')] });
+    expect(shell('cat a.md || head b.md', 'cat: a.md: No such file or directory\nhead: b.md: No such file or directory'))
+      .toMatchObject({ category: 'read', status: 'failure', paths: [] });
+  });
+
   it('a Read tool reads its file_path, resolved against the cwd when there is one', () => {
     expect(classifyToolCall({ tool_name: 'Read', tool_input: { file_path: 'doc.md' }, tool_response: {}, cwd: CWD }))
       .toEqual({ category: 'read', paths: [at('doc.md')], status: 'success', simple: true });
@@ -175,6 +240,7 @@ describe('classifyToolCall', () => {
     ['cat a.md ./doc.md', '# a\ncat: doc.md: Permission denied', ['a.md']],
     ['cat a.md doc.md', `# a\ncat: ${at('doc.md')}: Permission denied`, ['a.md']],
     ['/bin/cat a.md "my doc.md"', "# a\n/bin/cat: 'my doc.md': No such file or directory", ['a.md']],
+    ['cat.exe a.md doc.md', '# a\ncat: doc.md: No such file or directory', ['a.md']],
     ['head -n 5 a.md doc.md', '==> a.md <==\n# a\nhead: doc.md: x\n', ['a.md']],
     ['cat a.md doc.md', '# a\ncat: b.md: No such file or directory', ['a.md', 'doc.md']],
     ['cat a.md doc.md', '# a\ngrep: doc.md: No such file or directory', ['a.md', 'doc.md']],
@@ -184,6 +250,15 @@ describe('classifyToolCall', () => {
 
   it('status success: an error line names no operand to drop', () => {
     expect(shell('cat a.md doc.md', { stdout: '# a\ncat: doc.md: Permission denied' }).paths).toEqual([at('a.md'), at('doc.md')]);
+  });
+
+  it('status success: a list\'s or pipeline\'s status is its last command\'s, so a read its error names is dropped', () => {
+    expect(shell('cat a.md || echo missing', { stdout: 'cat: a.md: No such file or directory\nmissing' }))
+      .toMatchObject({ category: 'read', status: 'success', paths: [] });
+    expect(shell('cat missing.md | head', { stdout: 'cat: missing.md: No such file or directory' }))
+      .toMatchObject({ category: 'read', status: 'failure', paths: [] });
+    expect(shell('pwd; cat a.md doc.md', { stdout: '/w\n# a\ncat: doc.md: Permission denied' }))
+      .toMatchObject({ category: 'read', status: 'success', paths: [at('a.md')] });
   });
 
   it.each<[string, string, string[]]>([
