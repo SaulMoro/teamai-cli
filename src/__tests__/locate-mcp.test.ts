@@ -78,14 +78,14 @@ const ROWS: readonly MatrixRow[] = [
   {
     tool: 'codebuddy', scope: 'user', env: { CODEBUDDY_CONFIG_DIR: '/cb' },
     writes: [{ at: '/cb/.codebuddy.json', key: ['mcpServers'] }],
-    existingDirs: ['~/.codebuddy', '/cb/.codebuddy.json'], installed: { probe: '~/.codebuddy', met: true },
+    existingDirs: ['/cb', '/cb/.codebuddy.json'], installed: { probe: '/cb', met: true },
     reads: [
-      { at: '~/.codebuddy/.mcp.json', key: ['mcpServers'], shadowedBy: '/cb/.codebuddy.json', when: 'always' },
-      { at: '~/.codebuddy/mcp.json', key: ['mcpServers'], shadowedBy: '/cb/.codebuddy.json', when: 'always' },
+      { at: '/cb/.mcp.json', key: ['mcpServers'], shadowedBy: '/cb/.codebuddy.json', when: 'always' },
+      { at: '/cb/mcp.json', key: ['mcpServers'], shadowedBy: '/cb/.codebuddy.json', when: 'always' },
       { at: '/cb/.codebuddy.json', key: ['mcpServers'], when: 'always' },
     ],
-    retired: [{ at: '~/.codebuddy/.mcp.json', was: 'lookup' }, { at: '~/.codebuddy/mcp.json', was: 'lookup' }],
-    source: `${CODEBUDDY_SOURCE}; CODEBUDDY_CONFIG_DIR moves only .codebuddy.json`,
+    retired: [{ at: '/cb/.mcp.json', was: 'lookup' }, { at: '/cb/mcp.json', was: 'lookup' }],
+    source: 'CodeBuddy 2.168.0 `mcp list` (recorded run): CODEBUDDY_CONFIG_DIR replaces ~/.codebuddy, and ~/.codebuddy.json moves into it',
   },
   {
     tool: 'codex', scope: 'project',

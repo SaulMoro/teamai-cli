@@ -257,6 +257,13 @@ const ROWS: readonly MatrixRow[] = [
     source: 'CodeBuddy engine source: user agents in ~/.codebuddy/agents; #1221 matrix user Agents ◐s (CODEBUDDY_CONFIG_DIR moves them)',
   },
   {
+    tool: 'codebuddy', scope: 'user', env: { CODEBUDDY_CONFIG_DIR: '/cb' },
+    writes: ['/cb/agents'],
+    existingDirs: ['/cb'], installed: { probe: '/cb', met: true },
+    reads: [{ at: '/cb/agents', when: 'always' }],
+    source: "CodeBuddy 2.168.0 bundle: resolveCliHomeDir() is CODEBUDDY_CONFIG_DIR, else ~/.codebuddy, and user agents are in its agents",
+  },
+  {
     tool: 'codebuddy', scope: 'project',
     writes: ['<root>/.codebuddy/agents'],
     existingDirs: ['<root>/.codebuddy'], installed: { probe: '<root>/.codebuddy', met: true },

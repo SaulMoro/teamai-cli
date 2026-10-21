@@ -17,7 +17,7 @@ import {
   DEFAULT_TOOL_PATHS, isAgentExcluded, isGitExcludeEnabled, isSelfMode, resolveBaseDir, scopedToolPaths, toolGateRoot,
   type HomePaths, type LocalConfig, type Scope, type TeamaiConfig, type ToolId,
 } from './types.js';
-import { homeRoot, realHost, toolHome, type Host } from './tool-home.js';
+import { homeRoot, movedToolHome, realHost, toolHome, type Host } from './tool-home.js';
 import { resolveOpenclawConfigPath, resolveOpenclawWorkspace, type OpenclawWorkspace } from './openclaw-home.js';
 import { hasWorkspaceChildren } from './workspace-children.js';
 
@@ -378,7 +378,7 @@ function rootsOf(tool: string, install: Install, host: Host): Roots {
       if (from === 'project') return join(base, relative);
       return underHome(install.scope === 'user' ? relocated(relative) : relative);
     },
-    codebuddyConfigDir: host.env.CODEBUDDY_CONFIG_DIR?.trim() || host.home,
+    codebuddyConfigDir: movedToolHome('codebuddy', host) ?? host.home,
     join,
     underHome,
   };

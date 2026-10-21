@@ -96,7 +96,12 @@ function absoluteEnv(host: Host, name: string): string | null {
 
 /** Where `tool`'s home sits on `host`: the recorded home, else the env's, else under `$HOME`. */
 export function toolHome(tool: ToolId, host: Host = realHost()): string {
-  return recordedHomes(host)[tool] ?? envToolHome(tool, host)?.dir ?? defaultToolHome(tool, host);
+  return movedToolHome(tool, host) ?? defaultToolHome(tool, host);
+}
+
+/** The recorded home, else the env's, or null when nothing moves `tool`'s home. */
+export function movedToolHome(tool: ToolId, host: Host = realHost()): string | null {
+  return recordedHomes(host)[tool] ?? envToolHome(tool, host)?.dir ?? null;
 }
 
 /** The homes `host` records: none while the record is missing or invalid. */

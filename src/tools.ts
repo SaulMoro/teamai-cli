@@ -26,7 +26,7 @@ export type HomeMove =
  * home; `moves.root` is the `$HOME`-relative directory a move replaces when it
  * is not `dir` (Pi's variable moves `.pi/agent`). `moves.settingsAtDefault`:
  * teamai still writes the tool's hooks (OpenCode's plugin, Pi's extension,
- * Muse's settings.json hooks) and `models switch` settings under the default
+ * Muse's and CodeBuddy's settings.json hooks) and `models switch` settings under the default
  * home when the home moves, until B4 of #1221 moves them too.
  */
 export type Home = {
@@ -48,7 +48,7 @@ export type ProjectRead = {
   readonly evidence: Evidence;
 };
 
-/** `$CODEBUDDY_CONFIG_DIR` when it is set and not blank, else `$HOME`: where CodeBuddy's engine keeps `.codebuddy.json`. */
+/** CodeBuddy's moved home (`CODEBUDDY_CONFIG_DIR`) when it moves, else `$HOME`: where CodeBuddy's engine keeps `.codebuddy.json`. */
 export type CodebuddyConfigFile = { readonly in: 'codebuddy-config-dir'; readonly path: '.codebuddy.json' };
 
 /** Files the tool tries in order, reading only the first that exists, never merging them (#993). */
@@ -566,9 +566,9 @@ export const TOOLS = {
       project: { format: 'pi', reads: [{ base: 'project', path: '.pi/mcp.json', when: 'cwdOnly', evidence: 'verified' }] },
     },
   },
-  // The CodeBuddy IDE sends `skill` (src/utils/tool-names.ts). CODEBUDDY_CONFIG_DIR moves only the engine's .codebuddy.json, not this home.
+  // The CodeBuddy IDE sends `skill` (src/utils/tool-names.ts). CODEBUDDY_CONFIG_DIR replaces ~/.codebuddy, and ~/.codebuddy.json moves into it.
   codebuddy: {
-    home: { dir: '.codebuddy' },
+    home: { dir: '.codebuddy', moves: { by: [{ kind: 'env', name: 'CODEBUDDY_CONFIG_DIR', evidence: 'verified' }], settingsAtDefault: true } },
     skillLoad: { calls: [{ name: 'Skill', evidence: 'verified' }, { name: 'skill', evidence: 'assumed' }] },
     skills: { user: [{ base: 'home', path: '.codebuddy/skills', evidence: 'verified' }], project: 'unknown' },
     rules: {
