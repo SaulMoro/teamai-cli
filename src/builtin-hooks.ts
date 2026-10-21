@@ -255,6 +255,19 @@ export function getTeamHookDispatchCommand(event: string, tool: string): string 
 }
 
 /**
+ * The `commandWindows` of a team-hook dispatcher entry: the bare dispatch,
+ * without the POSIX form's bash wrapper. Codex runs hook commands through
+ * `%COMSPEC% /C` on Windows — cmd.exe, not PowerShell (#1215) — which cannot
+ * resolve `bash`, so the wrapper has to go. Nothing else is added: cmd /C
+ * propagates the child's exit code and stderr natively, so the dispatcher's
+ * block contract (exit 2 blocks the run, stderr reaches the user) passes
+ * through the same way the bash form passes it on POSIX (#1209).
+ */
+export function getTeamHookDispatchCommandWindows(event: string, tool: string): string {
+  return `teamai hook-dispatch ${event} --tool ${tool} --team-hooks`;
+}
+
+/**
  * Raw dispatch command without a shell wrapper. Used by ZCode, whose hook
  * entries are `process`-typed (an executable plus an argv vector): the writer
  * puts `bash -lc <raw>` into `args` itself, so the wrapper must not be baked
