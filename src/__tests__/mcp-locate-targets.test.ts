@@ -11,7 +11,7 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { log } from '../utils/logger.js';
-import { reconcileMcpForConfig } from '../mcp-reconcile.js';
+import { judgeTeamaiOnlyMcpConfigs, reconcileMcpForConfig } from '../mcp-reconcile.js';
 import { entryHash, renderJsonEntry } from '../resources/mcp-format.js';
 import { TeamaiConfigSchema, type LocalConfig, type McpServerDef, type TeamaiConfig } from '../types.js';
 
@@ -105,6 +105,57 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
 
     expect((await fse.readJson(path.join(configDir(dir), 'opencode.json'))).mcp).toEqual({ api: renderJsonEntry('opencode', API) });
     expect(await fse.pathExists(path.join(home, '.config', 'opencode', 'opencode.json'))).toBe(false);
+  });
+
+  describe('ZCode, which reads mcp.servers in its own config files (ZCode 3.16.2 source; 3.15.1 not certified)', () => {
+    it('writes the user servers to ~/.zcode/cli/config.json, keeping its other keys', async () => {
+      const config = path.join(home, '.zcode', 'cli', 'config.json');
+      await fse.outputJson(config, { hooks: { enabled: true }, mcp: { timeout: 5 } });
+
+      await reconcileMcpForConfig(team(), userConfig('zcode'));
+
+      expect(await fse.readJson(config)).toEqual({ hooks: { enabled: true }, mcp: { timeout: 5, servers: { api: renderJsonEntry('claude', API) } } });
+      expect(await fse.pathExists(path.join(home, '.agents', 'mcp.json'))).toBe(false);
+    });
+
+    it('takes the servers an earlier pull wrote out of ~/.agents/mcp.json, and leaves the member\'s', async () => {
+      const api = renderJsonEntry('claude', API);
+      await fse.ensureDir(path.join(home, '.zcode', 'cli'));
+      await fse.outputJson(path.join(home, '.agents', 'mcp.json'), { mcpServers: { api, mine: MINE } });
+      await fse.outputJson(path.join(home, '.teamai', 'managed-mcp.json'), { zcode: [{ name: 'api', hash: entryHash(api) }] });
+
+      await reconcileMcpForConfig(team(), userConfig('zcode'));
+
+      expect((await fse.readJson(path.join(home, '.zcode', 'cli', 'config.json'))).mcp.servers).toEqual({ api });
+      expect(await fse.readJson(path.join(home, '.agents', 'mcp.json'))).toEqual({ mcpServers: { mine: MINE } });
+    });
+
+    it('writes a project\'s servers to <project>/.zcode/config.json', async () => {
+      const project = path.join(root, 'project');
+      await fse.ensureDir(path.join(home, '.zcode'));
+      await fse.outputJson(path.join(project, '.zcode', 'config.json'), { model: 'glm' });
+      execFileSync('git', ['init', '-q', project]);
+      const local: LocalConfig = { ...userConfig('zcode'), scope: 'project', projectRoot: project, dataHome: path.join(root, 'data') };
+
+      await reconcileMcpForConfig(team(), local);
+
+      expect(await fse.readJson(path.join(project, '.zcode', 'config.json'))).toEqual({ model: 'glm', mcp: { servers: { api: renderJsonEntry('claude', API) } } });
+    });
+
+    it('judges a project\'s .zcode/config.json holding nothing but teamai\'s servers teamai\'s alone, and one with other keys not', async () => {
+      const project = path.join(root, 'project');
+      await fse.ensureDir(path.join(project, '.zcode'));
+      execFileSync('git', ['init', '-q', project]);
+      const local: LocalConfig = { ...userConfig('zcode'), scope: 'project', projectRoot: project, dataHome: path.join(root, 'data') };
+      const file = path.join(project, '.zcode', 'config.json');
+
+      await reconcileMcpForConfig(team(), local);
+      const alone = await judgeTeamaiOnlyMcpConfigs(team(), local);
+      await fse.writeJson(file, { ...await fse.readJson(file), model: 'glm' });
+
+      expect(alone).toEqual([{ file, teamaiOnly: true }]);
+      expect(await judgeTeamaiOnlyMcpConfigs(team(), local)).toEqual([{ file, teamaiOnly: false }]);
+    });
   });
 
   describe('the file each server was written to, in its ownership record', () => {

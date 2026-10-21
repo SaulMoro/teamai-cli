@@ -311,8 +311,8 @@ export interface McpTarget {
   lookupFiles?: string[];
   /** OpenCode's project file its V2 plugin delivers from (#915): the one of `mappedFile` and this that `file` is not holds no team server. */
   alternateFile?: string;
-  /** Files an earlier release wrote the tool's servers to, which it no longer reads (`Retired`): teamai moves its servers out of them. */
-  retiredFiles?: string[];
+  /** Files an earlier release wrote the tool's servers to, under their key then, which it no longer reads: teamai moves its servers out of them. */
+  retired?: Array<{ file: string; key: McpKey }>;
   /** OpenCode, Muse and Pi: the file under their default home, where a record with no `file` has its server, when a home move puts `file` elsewhere. */
   unmovedFile?: string;
   /**
@@ -589,7 +589,7 @@ export async function resolveMcpTargets(
     const plugin = where.alternate !== null && await opencodeDeliversThroughPlugin(teamConfig, localConfig);
     const inTree = place.projectKey === undefined;
     const lookup = inTree ? where.lookup : null;
-    const retiredFiles = inTree ? where.retired.filter((retired) => retired.was === 'default').map((retired) => retired.place.path) : [];
+    const retired = inTree ? where.retired.filter(({ was }) => was === 'default').map(({ place }) => ({ file: place.path, key: place.key })) : [];
     const unmovedFile = inTree && isToolId(tool) && settingsAtDefault(tool) ? ownOf(await locate(tool, 'mcp', install, unmovedHost(host)))?.path : undefined;
     targets.push({
       ...mcpTargetAt(tool, museOnly ? 'muse' : channel.format, plugin && where.alternate ? where.alternate : place, projectScope),
@@ -597,7 +597,7 @@ export async function resolveMcpTargets(
       ...installed || museReads ? {} : { undetected: true as const },
       ...lookup ? { mappedFile: lookup.mapped, lookupFiles: [...lookup.files] } : {},
       ...where.alternate ? { mappedFile: place.path, alternateFile: where.alternate.path } : {},
-      ...retiredFiles.length > 0 ? { retiredFiles } : {},
+      ...retired.length > 0 ? { retired } : {},
       ...unmovedFile !== undefined && unmovedFile !== place.path ? { unmovedFile } : {},
     });
   }
@@ -1341,8 +1341,8 @@ export async function judgeTeamaiOnlyMcpConfigs(
       continue;
     }
     // The names teamai's records claim in this file, for the tools keeping their servers under `key`.
-    const claimed = (key: string | null): Set<string> => new Set(writers
-      .filter((t) => (t.format === 'codex' ? null : MCP_SERVER_KEY[t.format as Exclude<McpFormat, 'codex'>]) === key)
+    const claimed = (key: McpKey | null): Set<string> => new Set(writers
+      .filter((t) => isDeepStrictEqual(t.format === 'codex' ? null : mcpKeyOf(t), key))
       .flatMap((t) => manifest[managedMcpManifestKey(t.tool, true)] ?? [])
       .map((record) => record.name));
     if (writers.every((t) => t.format === 'codex')) {
@@ -1366,20 +1366,30 @@ export async function judgeTeamaiOnlyMcpConfigs(
     if (keys.length === 0) continue;
     // A Copilot project file may hold its servers bare, at the top level (#882).
     const bare = writers.every((t) => t.format === 'copilot') && !(MCP_SERVER_KEY.copilot in data);
-    const groups: Array<[string, unknown]> = bare ? [[MCP_SERVER_KEY.copilot, data]] : Object.entries(data);
+    const serverKeys = writers.map(mcpKeyOf);
     let owned = 0;
     let foreign = false;
-    for (const [key, servers] of groups) {
-      const ours = claimed(key);
-      if (typeof servers !== 'object' || servers === null || Array.isArray(servers)) {
+    const inspect = (value: unknown, keys: readonly string[]): void => {
+      if (!isJsonObject(value)) {
         foreign = true;
-        continue;
+        return;
       }
-      for (const name of Object.keys(servers)) {
-        if (ours.has(name)) owned++;
+      const serverKey = serverKeys.find((key) => isDeepStrictEqual(key, keys));
+      if (serverKey !== undefined) {
+        const ours = claimed(serverKey);
+        for (const name of Object.keys(value)) {
+          if (ours.has(name)) owned++;
+          else foreign = true;
+        }
+        return;
+      }
+      for (const [key, child] of Object.entries(value)) {
+        const next = [...keys, key];
+        if (serverKeys.some((serverKey) => next.every((part, i) => serverKey[i] === part))) inspect(child, next);
         else foreign = true;
       }
-    }
+    };
+    inspect(bare ? { [MCP_SERVER_KEY.copilot]: data } : data, []);
     verdicts.push({ file, teamaiOnly: owned > 0 && !foreign });
   }
   return verdicts;
@@ -1426,7 +1436,7 @@ async function splitByFile(
   const owned: ManagedMcpRecord[] = [];
   const elsewhere: ManagedMcpRecord[] = [];
   const left: ManagedMcpRecord[] = [];
-  const relocations = [target.mappedFile, target.alternateFile, ...target.lookupFiles ?? [], ...target.retiredFiles ?? []];
+  const relocations = [target.mappedFile, target.alternateFile, ...target.lookupFiles ?? [], ...(target.retired ?? []).map(({ file }) => file)];
   for (const record of records) {
     const retired = record.file === undefined ? await retiredFileHolding(target, record) : undefined;
     if (retired !== undefined) {
@@ -1444,8 +1454,8 @@ async function splitByFile(
 
 /** The retired file of `target` holding `record`'s server as teamai wrote it. */
 async function retiredFileHolding(target: McpTarget, record: ManagedMcpRecord): Promise<string | undefined> {
-  for (const file of target.retiredFiles ?? []) {
-    const entry = (await installedMcpEntries({ ...target, file }))?.get(record.name);
+  for (const { file, key } of target.retired ?? []) {
+    const entry = (await installedMcpEntries({ ...target, file, key }))?.get(record.name);
     if (entry !== undefined && entryHash(entry) === record.hash) return file;
   }
   return undefined;
@@ -2820,7 +2830,8 @@ async function removeFromOtherFiles(
   for (const [real, { file, records }] of byFile) {
     const names = new Set(records.map((r) => r.name));
     const removed: McpChange[] = [];
-    const result = await applyJson({ ...target, file }, new Map(), new Map(), records, names, [], removed, await judgeFor(file), options, restoreConfigs);
+    const key = target.retired?.find((retired) => retired.file === file)?.key ?? target.key;
+    const result = await applyJson({ ...target, file, key }, new Map(), new Map(), records, names, [], removed, await judgeFor(file), options, restoreConfigs);
     if (result === null) {
       nextRecords.push(...records);
       continue;

@@ -65,7 +65,6 @@ describe('TOOLS home', () => {
   // User-scope paths that sit outside the tool's home, each for a reason.
   const OUTSIDE_HOME: Record<string, string> = {
     'claude.mcp': 'Claude Code keeps its user MCP servers in ~/.claude.json, beside ~/.claude',
-    'zcode.mcp': 'ZCode reads user MCP servers from the shared ~/.agents/mcp.json',
     'hermes.claudemd': 'retired ~/AGENTS.md, kept only so cleanup can find it; Hermes reads SOUL.md',
     'workbuddy.claudemd': 'retired ~/AGENTS.md, kept only so cleanup can find it',
   };

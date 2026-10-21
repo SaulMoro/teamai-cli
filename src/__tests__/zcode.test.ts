@@ -19,7 +19,8 @@ describe('ZCode support', () => {
       skills: '.zcode/skills',
       agents: '.zcode/agents',
       settings: '.zcode/cli/config.json',
-      mcp: '.agents/mcp.json',
+      mcp: '.zcode/cli/config.json',
+      mcpProject: '.zcode/config.json',
     });
   });
 

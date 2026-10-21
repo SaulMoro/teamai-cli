@@ -555,11 +555,11 @@ export const DEFAULT_TOOL_PATHS = {
   // `hooks.enabled` (config-file hooks are disabled by default; the writer
   // must force it on). Subagents deploy to ~/.zcode/agents/ as Claude-style
   // Markdown (the CLI also reads <project>/.zcode/agents/ per workspace).
-  // User-scope MCP mirrors Claude's shape (`mcpServers` key) in
-  // ~/.agents/mcp.json; project scope writes `mcp.servers` inside
-  // .zcode/config.json (a different key), which the Claude writer cannot
-  // emit — so no mcpProject. ZCode has no user-level rules dir convention.
-  zcode: { skills: '.zcode/skills', agents: '.zcode/agents', settings: '.zcode/cli/config.json', mcp: '.agents/mcp.json' },
+  // MCP servers go under `mcp.servers` in that config.json, and in a
+  // project's .zcode/config.json (#1221). ZCode has no user-level rules dir convention.
+  zcode: {
+    skills: '.zcode/skills', agents: '.zcode/agents', settings: '.zcode/cli/config.json', mcp: '.zcode/cli/config.json', mcpProject: '.zcode/config.json',
+  },
   // Oh My Pi (OMP): the config root is ~/.omp on every platform (no %APPDATA%
   // on Windows); user-scope resources live in the agent dir ~/.omp/agent/, a
   // different prefix from the project <root>/.omp/, hence userScope. Rules are

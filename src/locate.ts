@@ -689,7 +689,7 @@ async function locateAgents(tool: string, install: Install, host: Host): Promise
   };
 }
 
-function mcpKeyOf(channel: McpUser | McpProject): readonly [string, ...string[]] {
+function mcpKeyOf(channel: Pick<McpUser, 'format' | 'key'>): readonly [string, ...string[]] {
   if (channel.key !== undefined) return channel.key;
   return channel.format === 'codex' ? ['mcp_servers'] : [MCP_SERVER_KEY[channel.format]];
 }
@@ -838,13 +838,17 @@ async function mcpFilesOf(
 }> {
   const key = mcpKeyOf(channel);
   const entry = (file: string): EntryPlace => ({ kind: 'entry', path: file, key });
+  // An earlier release wrote the format's own key: ZCode's servers sat under `mcpServers` in ~/.agents/mcp.json.
+  const earlierKey = mcpKeyOf({ format: channel.format });
   const { file, lookup } = await mcpFileOf(channel, scope, roots, host);
   return {
     key,
     tree: file === null ? null : entry(file),
     lookup,
     earlier: [
-      ...(earlierFiles ?? []).map((earlierFile): Retired<EntryPlace> => ({ place: entry(roots.declared(scope === 'user' ? 'home' : 'project', earlierFile)), was: 'default' })),
+      ...(earlierFiles ?? []).map((earlierFile): Retired<EntryPlace> => ({
+        place: { kind: 'entry', path: roots.declared(scope === 'user' ? 'home' : 'project', earlierFile), key: earlierKey }, was: 'default',
+      })),
       ...(lookup?.files ?? []).filter((other) => other !== file).map((other): Retired<EntryPlace> => ({ place: entry(other), was: 'lookup' })),
     ],
     reads: await readsOf(channel.reads, roots, host, key),
