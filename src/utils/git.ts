@@ -201,9 +201,14 @@ const markOutputSeen: outputHandler = (_command, stdout) => {
  */
 export function createGitWithBlockTimeout(basePath?: string): SimpleGit {
   const block = gitBlockTimeoutMs();
+  // The kill reaches git alone: its HTTP helper would keep the stalled
+  // connection, and the CLI with it, until the server dropped it. curl's own
+  // stall limit ends the helper, a second after the kill so the kill still
+  // decides how the command fails.
+  const config = ['http.lowSpeedLimit=1', `http.lowSpeedTime=${Math.ceil(block / 1000) + 1}`];
   const git = basePath
-    ? simpleGit({ baseDir: basePath, binary: gitBinary(), timeout: { block } })
-    : simpleGit({ binary: gitBinary(), timeout: { block } });
+    ? simpleGit({ baseDir: basePath, binary: gitBinary(), timeout: { block }, config })
+    : simpleGit({ binary: gitBinary(), timeout: { block }, config });
   return git.outputHandler(markOutputSeen);
 }
 

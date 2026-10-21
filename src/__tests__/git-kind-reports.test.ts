@@ -853,4 +853,26 @@ describe('git-kind reports: a stalled origin', () => {
     expect(Date.now() - start).toBeLessThan(6_000);
     expect((await updateReports(cfg, async () => null)).status).toBe('already-present');
   }, 30_000);
+
+  it('drops every connection to the stalled origin once the write fails, so the CLI can exit', async () => {
+    const { origin, clone } = await seedBareOrigin();
+    const cfg = gitConfig(clone, origin);
+    await ensureReportsWorktree(cfg);
+    await simpleGit(clone).remote(['set-url', 'origin', stalledUrl]);
+    vi.stubEnv('TEAMAI_INIT_PUSH_TIMEOUT_MS', '1000');
+
+    const result = await updateReports(cfg, async (wt) => {
+      fs.mkdirSync(path.join(wt, 'stats'), { recursive: true });
+      fs.writeFileSync(path.join(wt, 'stats', 'alice.yaml'), 'sessions: 1\n');
+      return { files: ['stats/alice.yaml'], message: '[teamai] Update stats for alice' };
+    });
+
+    expect(result).toMatchObject({ status: 'failed' });
+    const openConnections = () => new Promise<number>((resolve, reject) => {
+      server.getConnections((err, count) => (err ? reject(err) : resolve(count)));
+    });
+    // curl averages the speed over about six seconds, and this origin sent a
+    // body chunk, so its stall limit lands that long after the kill.
+    await vi.waitFor(async () => expect(await openConnections()).toBe(0), { timeout: 20_000, interval: 100 });
+  }, 30_000);
 });
