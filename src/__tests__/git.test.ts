@@ -81,8 +81,8 @@ describe('createGit', () => {
   // process-wide by disableGitTerminalPrompt (tested separately), NOT per
   // simple-git instance — simple-git's .env() replaces the whole child env,
   // which would drop PATH/HOME and break git. The spawn-level block timeout
-  // is NOT global either — it lives in createGitWithBlockTimeout so it cannot kill
-  // slow clones/fetches elsewhere.
+  // is NOT global either — it lives in createGitWithBlockTimeout, so slow
+  // clones/fetches through createGit are never killed.
   beforeEach(() => {
     simpleGitCalls.length = 0;
   });
