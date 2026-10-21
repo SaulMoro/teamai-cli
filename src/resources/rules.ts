@@ -1286,7 +1286,7 @@ export class RulesHandler extends ResourceHandler {
     const { opencodeProjectRuleGlobs, opencodeRuleGlobs } = await import('./opencode-config.js');
     if (install.scope === 'project') {
       // Earlier releases listed the glob in the project's opencode.json, the file its MCP servers go to.
-      const rootConfig = ownOf(await locate('opencode', 'mcp', install))?.path ?? null;
+      const rootConfig = location.retiredActivation?.path ?? null;
       return { ...opencodeProjectRuleGlobs(install.projectRoot, rulesDir, rootConfig), configFile };
     }
 

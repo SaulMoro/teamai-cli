@@ -1076,6 +1076,15 @@ scope: 'user',
   });
 });
 
+describe('OpenCode rules activation does not ask locate for mcp', () => {
+  it('rules.ts does not call locate with resource mcp', async () => {
+    const source = await fse.readFile(new URL('../resources/rules.ts', import.meta.url), 'utf8');
+    const resources = [...source.matchAll(/\blocate\s*\(\s*[^,]+,\s*(['"])([^'"]+)\1/g)].map((match) => match[2]);
+    expect(resources).toContain('rules');
+    expect(resources).not.toContain('mcp');
+  });
+});
+
 describe('RulesHandler.pullAllRules — OpenCode instructions activation', () => {
   let tmpDir: string;
   let homeDir: string;
@@ -1289,6 +1298,31 @@ describe('RulesHandler.pullAllRules — OpenCode instructions activation', () =>
       await handler.pullAllRules(teamConfig, projectConfig, []);
 
       expect((await fse.readJson(dotConfig())).instructions).toBeUndefined();
+    });
+
+    it('names the project opencode.json as retired.configFile under the default MCP path', async () => {
+      const target = await handler.opencodeInstructionsTarget(teamConfig, projectConfig, []);
+      expect(target?.retired?.configFile).toBe(path.join(projectRoot, 'opencode.json'));
+    });
+
+    it('leaves retired null when the project MCP place is absent', async () => {
+      const target = await handler.opencodeInstructionsTarget({
+        ...teamConfig,
+        toolPaths: {
+          opencode: {
+            skills: '.opencode/skills',
+            rules: '.opencode/rules',
+            agents: '.opencode/agents',
+            mcp: '.config/opencode/opencode.json',
+            userScope: {
+              skills: '.config/opencode/skills',
+              rules: '.config/opencode/rules',
+              agents: '.config/opencode/agents',
+            },
+          },
+        },
+      }, projectConfig, []);
+      expect(target?.retired).toBeNull();
     });
   });
 });
