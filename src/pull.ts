@@ -31,7 +31,7 @@ import { CODEX_TOOL, mayDeleteSkillCopy, skillOrigin } from './resources/skills.
 import { installOf, locate, SHARED_AGENT_SKILLS_PATH, writable, writesOf } from './locate.js';
 import { describeToolHomeChange, recordToolHomes } from './tool-home-record.js';
 import { describeInvalidToolHomes, realHost } from './tool-home.js';
-import { recordSkillDirs, skillDirsOf, skillDirsUnmoved, type SessionToolHomes, type SkillDirs } from './resources/skill-dirs.js';
+import { placesOf, placesRecordOf, placesUnmoved, recordPlaces, type PlacesRecord, type SessionToolHomes } from './resources/places.js';
 import { flatStemsOfRemoved, ruleFileExtensionForTool, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
 import { AGENT_FILE_EXTENSIONS } from './resources/agent-format.js';
 import {
@@ -1258,6 +1258,7 @@ const REDEPLOYED: Record<RedeployedCopy['reason'], (count: number) => string> = 
 function awaitingFullSync(records: Record<string, CheckoutRecord>): Record<string, CheckoutRecord> {
   return Object.fromEntries(Object.entries(records).map(([key, record]) => {
     const pushBaseRevs = checkoutBaseRevs(record).slice(0, MAX_PUSH_BASE_REVS);
+    const places = placesRecordOf(record);
     const reset: CheckoutRecord = {
       rev: FORCED_FULL_SYNC_REV,
       ...(record.teamRef !== undefined ? { teamRef: record.teamRef } : {}),
@@ -1266,7 +1267,7 @@ function awaitingFullSync(records: Record<string, CheckoutRecord>): Record<strin
       ...(record.delivered ? { delivered: record.delivered } : {}),
       ...(record.agentModels ? { agentModels: record.agentModels } : {}),
       ...(record.gitExcludePaths ? { gitExcludePaths: record.gitExcludePaths } : {}),
-      ...(record.skillDirs ? { skillDirs: record.skillDirs } : {}),
+      ...(places ? { places } : {}),
       ...(record.rootsSeeded ? { rootsSeeded: true } : {}),
       ...(record.claudeMdExcludes ? { claudeMdExcludes: record.claudeMdExcludes } : {}),
     };
@@ -1677,7 +1678,7 @@ async function pullForScope(
 
   // Step 1b: Skip sync if the repo version hasn't changed since last pull
   let currentTargets: string[] | null = null;
-  let currentSkillDirs: SkillDirs | null = null;
+  let currentPlaces: PlacesRecord | null = null;
   if (!options.force && !options.dryRun && !submodulesChanged) {
     try {
       const state = await loadStateForScope(localConfig);
@@ -1704,13 +1705,13 @@ async function pullForScope(
           && currentTargets.every((target) => syncedTargets.has(target));
         // A tool whose skills directory moved (a recorded home changed) is still
         // a target by name: compare the directories too.
-        currentSkillDirs = await skillDirsOf(installOf(freshConfig, localConfig));
+        currentPlaces = await placesOf(installOf(freshConfig, localConfig));
         const checkout = recordKey ? state.lastPullByWorkspace?.[recordKey] : undefined;
-        const recordedSkillDirs = checkout?.skillDirs;
-        if (targetSetMatches && recordedSkillDirs === undefined) log.debug(`[${scopeLabel}] No record of the skills directories yet, syncing`);
+        const recordedPlaces = placesRecordOf(checkout);
+        if (targetSetMatches && recordedPlaces === undefined) log.debug(`[${scopeLabel}] No record of the skills directories yet, syncing`);
 
-        if (targetSetMatches && recordedSkillDirs !== undefined
-          && await skillDirsUnmoved({ skillDirs: recordedSkillDirs, sessionToolHomes: checkout?.sessionToolHomes }, currentSkillDirs)) {
+        if (targetSetMatches && recordedPlaces !== undefined
+          && await placesUnmoved({ places: recordedPlaces, sessionToolHomes: checkout?.sessionToolHomes }, currentPlaces)) {
           log.success(`[${scopeLabel}] Already synced at ${currentRev}, skipping`);
           // 即使 repo 未变化，仍部署 CLI 内置资源（确保 CLI 升级后新版本 agent/rules 生效）
           const skipRecall = !isRecallEnabled(localConfig, freshConfig);
@@ -2265,18 +2266,18 @@ async function pullForScope(
 
   // Step 4b: Record where each tool took skills, once the skills and the stub
   // had their chance at the new place, and name the directories a tool left.
-  const currentDirs = currentSkillDirs ?? await skillDirsOf(installOf(freshConfig, localConfig));
-  let syncedSkillDirs: SkillDirs | undefined;
+  const current = currentPlaces ?? await placesOf(installOf(freshConfig, localConfig));
+  let syncedPlaces: PlacesRecord | undefined;
   let syncedSessionToolHomes: SessionToolHomes | undefined;
   if (!options.dryRun && resourceTypes.includes('skills')) {
     const previous = recordKey ? (await loadStateForScope(localConfig)).lastPullByWorkspace?.[recordKey] : undefined;
-    const incomplete = workspaceHeldSkills || stubFailed ? new Set(Object.keys(currentDirs)) : ledger.toolsMissingSkills;
+    const incomplete = workspaceHeldSkills || stubFailed ? new Set(Object.keys(current.skills ?? {})) : ledger.toolsMissingSkills;
     if (skillsHeld) {
-      syncedSkillDirs = previous?.skillDirs;
+      syncedPlaces = placesRecordOf(previous);
       syncedSessionToolHomes = previous?.sessionToolHomes;
     } else {
-      ({ skillDirs: syncedSkillDirs, sessionToolHomes: syncedSessionToolHomes } = await recordSkillDirs({
-        previous, current: currentDirs, incomplete, scopeLabel,
+      ({ places: syncedPlaces, sessionToolHomes: syncedSessionToolHomes } = await recordPlaces({
+        previous, current, incomplete: { skills: incomplete }, scopeLabel,
       }));
     }
   }
@@ -2358,7 +2359,8 @@ async function pullForScope(
       setChildren(record, localConfig);
       addPushBaseRev(record, deliveredRev);
       record.delivered = ledger.hashes;
-      record.skillDirs = syncedSkillDirs;
+      record.places = syncedPlaces;
+      delete record.skillDirs;
       record.sessionToolHomes = syncedSessionToolHomes;
       if (localConfig.repo.ref !== undefined) record.teamRef = localConfig.repo.ref;
       else delete record.teamRef;
@@ -2394,7 +2396,7 @@ async function pullForScope(
         ...(localConfig.scope === 'project' && localConfig.projectRoot ? { root: localConfig.projectRoot } : {}),
         targets: syncedTargets,
         delivered: ledger.hashes,
-        ...(syncedSkillDirs ? { skillDirs: syncedSkillDirs } : {}),
+        ...(syncedPlaces ? { places: syncedPlaces } : {}),
         ...(syncedSessionToolHomes ? { sessionToolHomes: syncedSessionToolHomes } : {}),
         ...(gitExcludePaths ? { gitExcludePaths } : {}),
         ...(seeded ? { rootsSeeded: true } : {}),

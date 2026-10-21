@@ -1059,12 +1059,20 @@ export const StateSchema = z.object({
     agentModels: z.record(z.string(), z.record(z.string(), RecordedAgentModelSchema)).optional(),
     gitExcludePaths: z.record(z.string(), z.array(z.string())).optional(),
     /**
-     * Each tool's skills directories (`writesOf(locate(...))`) the last full pull
-     * of this checkout delivered into, write gates met only, and for a tool
-     * that missed a skill there, the directories it took skills from before
-     * (`settleSkillDirs`). A tool whose skills follow the session is left out.
-     * A record without it, from an older CLI, misses the fast path once.
+     * Per resource, each tool's places (`writesOf(locate(...))`) the last full
+     * pull of this checkout delivered into, write gates met only, and for a
+     * tool that missed an item there, the places it took the resource from
+     * before (`settlePlaces`). A tool whose skills follow the session is left
+     * out. A record without a resource, from an older CLI, misses the fast
+     * path once.
      */
+    places: z.object({
+      skills: z.record(z.string(), z.array(z.string())).optional(),
+      rules: z.record(z.string(), z.array(z.string())).optional(),
+      blocks: z.record(z.string(), z.array(z.string())).optional(),
+      agents: z.record(z.string(), z.array(z.string())).optional(),
+    }).optional(),
+    /** An earlier release's `places.skills`: read as that when `places` is missing (`placesRecordOf`), never written. */
     skillDirs: z.record(z.string(), z.array(z.string())).optional(),
     /** The home (`toolHome`) of each tool whose skills follow the session, at the last full pull that delivered it every skill. */
     sessionToolHomes: z.record(z.string(), z.string()).optional(),

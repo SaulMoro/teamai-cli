@@ -139,6 +139,23 @@ describe('a pull and the homes the env moves', () => {
     expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.targets)).toEqual([['opencode']]);
   });
 
+  it('takes the fast path on the skills directories an earlier release recorded, and records them only as places', async () => {
+    await pull({});
+    const [[key, record]] = Object.entries(saved.lastPullByWorkspace ?? {});
+    const { places, ...earlier } = record;
+    saved.lastPullByWorkspace = { [key]: { ...earlier, skillDirs: places?.skills } };
+    vi.mocked(log.success).mockClear();
+
+    await pull({});
+
+    expect(vi.mocked(log.success).mock.calls.flat()).toContainEqual(expect.stringContaining('Already synced at abc1234'));
+
+    await pull({ force: true });
+
+    expect(saved.lastPullByWorkspace?.[key]?.places?.skills).toEqual(places?.skills);
+    expect(saved.lastPullByWorkspace?.[key]?.skillDirs).toBeUndefined();
+  });
+
   describe('when a tool\'s skills directory moves at one team revision', () => {
     let before: string; let after: string;
     beforeEach(async () => {
@@ -166,13 +183,13 @@ describe('a pull and the homes the env moves', () => {
 
       expect(await fse.pathExists(path.join(before, 'skills', 'deploy', 'SKILL.md'))).toBe(true);
       expect(await fse.pathExists(path.join(after, 'skills', 'deploy'))).toBe(false);
-      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.skillDirs?.hermes)).toEqual([[path.join(before, 'skills')]]);
+      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.places?.skills?.hermes)).toEqual([[path.join(before, 'skills')]]);
 
       await fse.remove(path.join(repo, 'skills', 'b'));
       await pull({});
 
       expect(await fse.pathExists(path.join(after, 'skills', 'deploy', 'SKILL.md'))).toBe(true);
-      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.skillDirs?.hermes)).toEqual([[path.join(after, 'skills')]]);
+      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.places?.skills?.hermes)).toEqual([[path.join(after, 'skills')]]);
     });
 
     it('keeps the old copies when the new directory cannot take the skills', async () => {
@@ -186,7 +203,7 @@ describe('a pull and the homes the env moves', () => {
 
       expect(vi.mocked(log.warn).mock.calls.flat()).toContainEqual(expect.stringContaining('Failed to sync skill deploy to hermes'));
       expect(await fse.pathExists(path.join(before, 'skills', 'deploy', 'SKILL.md'))).toBe(true);
-      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.skillDirs?.hermes)).toEqual([[path.join(before, 'skills'), path.join(after, 'skills')]]);
+      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.places?.skills?.hermes)).toEqual([[path.join(before, 'skills'), path.join(after, 'skills')]]);
     });
 
     it('keeps the old copies and the old record while a file of the member\'s holds a skill back at the new directory', async () => {
@@ -196,13 +213,13 @@ describe('a pull and the homes the env moves', () => {
 
       expect(await fse.readFile(path.join(after, 'skills', 'deploy', 'SKILL.md'), 'utf8')).toContain('member skill');
       expect(await fse.pathExists(path.join(before, 'skills', 'deploy', 'SKILL.md'))).toBe(true);
-      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.skillDirs?.hermes)).toEqual([[path.join(before, 'skills'), path.join(after, 'skills')]]);
+      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.places?.skills?.hermes)).toEqual([[path.join(before, 'skills'), path.join(after, 'skills')]]);
 
       await fse.remove(path.join(after, 'skills', 'deploy'));
       await pull({});
 
       expect(await fse.pathExists(path.join(after, 'skills', 'deploy', 'SKILL.md'))).toBe(true);
-      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.skillDirs?.hermes)).toEqual([[path.join(after, 'skills')]]);
+      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.places?.skills?.hermes)).toEqual([[path.join(after, 'skills')]]);
     });
 
     it('keeps the old copies while the new directory skips a skill', async () => {
@@ -212,7 +229,7 @@ describe('a pull and the homes the env moves', () => {
 
       expect(vi.mocked(log.warn).mock.calls.flat()).toContainEqual(expect.stringContaining('Skipped deploy (hermes)'));
       expect(await fse.pathExists(path.join(before, 'skills', 'deploy', 'SKILL.md'))).toBe(true);
-      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.skillDirs?.hermes)).toEqual([[path.join(before, 'skills'), path.join(after, 'skills')]]);
+      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.places?.skills?.hermes)).toEqual([[path.join(before, 'skills'), path.join(after, 'skills')]]);
     });
 
     it('keeps the old copies, the built-in one included, while a file of the member\'s holds the built-in skill back at the new directory', async () => {
@@ -245,7 +262,7 @@ describe('a pull and the homes the env moves', () => {
 
       expect(await fse.pathExists(path.join(after, 'skills', 'deploy', 'SKILL.md'))).toBe(true);
       expect(await fse.pathExists(path.join(before, 'skills', 'deploy', 'SKILL.md'))).toBe(true);
-      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.skillDirs?.hermes)).toEqual([[path.join(before, 'skills'), path.join(after, 'skills')]]);
+      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.places?.skills?.hermes)).toEqual([[path.join(before, 'skills'), path.join(after, 'skills')]]);
     });
 
     it('keeps the old copy of a skill a workspace holds back', async () => {
@@ -267,7 +284,7 @@ describe('a pull and the homes the env moves', () => {
       await fse.outputFile(path.join(after, 'skills', 'deploy', 'SKILL.md'), 'This is a member skill, unrelated to team deploy.\n');
       await pull({});
       expect(await fse.pathExists(path.join(after, 'skills', 'review', 'SKILL.md'))).toBe(true);
-      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.skillDirs?.hermes)).toEqual([[path.join(before, 'skills'), path.join(after, 'skills')]]);
+      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.places?.skills?.hermes)).toEqual([[path.join(before, 'skills'), path.join(after, 'skills')]]);
       const third = path.join(tmp, 'hermes-c');
       await fse.ensureDir(third);
       await saveToolHomes({ ...recordedHomes(realHost()), hermes: third });
@@ -286,7 +303,7 @@ describe('a pull and the homes the env moves', () => {
       await pull({});
 
       expect(await fse.pathExists(path.join(after, 'skills', 'deploy', 'SKILL.md'))).toBe(true);
-      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.skillDirs?.hermes)).toEqual([[path.join(after, 'skills')]]);
+      expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.places?.skills?.hermes)).toEqual([[path.join(after, 'skills')]]);
     });
   });
 

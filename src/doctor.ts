@@ -26,7 +26,7 @@ import {
 } from './types.js';
 import { isToolInstalledForConfig } from './resources/base.js';
 import { installOf, locate, writable } from './locate.js';
-import { sameSkillDir } from './resources/skill-dirs.js';
+import { samePlace } from './resources/places.js';
 import { describeInvalidToolHomes, envToolHome, realHost, reloadToolHomes, toolHomesPath } from './tool-home.js';
 import { isToolId } from './tools.js';
 import { isCodexTool } from './utils/tool-names.js';
@@ -298,7 +298,7 @@ function buildToolHomeChecks(localConfig: LocalConfig): Check[] {
     checks.push({
       name: `${tool} home matches ${live.variable}`,
       source: 'local',
-      check: async () => sameSkillDir(live.dir, recorded),
+      check: async () => samePlace(live.dir, recorded),
       fix: `${live.variable} puts the ${tool} home at ${live.dir}; this machine syncs ${tool} to ${recorded}. `
         + 'Re-run `teamai init` to record it.',
     });

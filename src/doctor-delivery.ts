@@ -26,7 +26,7 @@ import { getUserHome } from './utils/home.js';
 import { loadStateForScope } from './config.js';
 import { installOf, locate, unreadWrites, writable, writesOf, type Location, type ReadGate } from './locate.js';
 import { codexProjectTrust, codexTrustFix } from './codex-project-trust.js';
-import { amongSkillDirs, sameSkillDir, sameSkillDirs } from './resources/skill-dirs.js';
+import { amongPlaces, placesRecordOf, samePlace, samePlaces } from './resources/places.js';
 import { defaultToolHome, realHost, toolHome } from './tool-home.js';
 import { isToolId, settingsAtDefault } from './tools.js';
 import { getsRulesFromExtension, ruleFormatForTool, ruleStemsForTool } from './resources/rule-format.js';
@@ -328,10 +328,10 @@ export async function buildSkillDirChecks(ctx: DoctorContext): Promise<Check[]> 
   if (located.length === 0) return [];
   const { checkoutRecordKey } = await import('./pull.js');
   const key = await checkoutRecordKey(ctx.localConfig);
-  const recorded = key === undefined ? undefined : (await loadStateForScope(ctx.localConfig)).lastPullByWorkspace?.[key]?.skillDirs;
+  const recorded = key === undefined ? undefined : placesRecordOf((await loadStateForScope(ctx.localConfig)).lastPullByWorkspace?.[key])?.skills;
   const unmoved = async (tool: string, where: Location<'skills'>): Promise<boolean> => {
     const wrote = recorded?.[tool];
-    return wrote === undefined || sameSkillDirs({ [tool]: wrote }, { [tool]: writesOf(where).map((place) => place.path) });
+    return wrote === undefined || samePlaces({ [tool]: wrote }, { [tool]: writesOf(where).map((place) => place.path) });
   };
   const moved = (await Promise.all(located.map(({ tool, where }) => unmoved(tool, where)))).includes(false);
   const holds = moved ? await moveHolds(ctx, located) : { members: new Map<string, string[]>(), workspaceHeld: [] };
@@ -369,9 +369,9 @@ async function moveFix({ tool, own, writes, wrote, members, workspaceHeld }: {
   readonly workspaceHeld: readonly string[];
 }): Promise<string> {
   const earlier: string[] = [];
-  for (const dir of wrote) if (!await amongSkillDirs(dir, writes)) earlier.push(dir);
+  for (const dir of wrote) if (!await amongPlaces(dir, writes)) earlier.push(dir);
   let keptOldCopies = earlier.length > 0;
-  for (const write of writes) keptOldCopies &&= await amongSkillDirs(write, wrote);
+  for (const write of writes) keptOldCopies &&= await amongPlaces(write, wrote);
   if (!keptOldCopies) {
     return `${tool} takes skills from ${own}, but the last pull wrote them to ${wrote[0]}. `
       + (members.length > 0 ? members.join(' ') : 'Run `teamai pull` to sync them there.');
@@ -432,7 +432,7 @@ export async function skillReadNotes(ctx: DoctorContext): Promise<string[]> {
   for (const { tool, own, where } of await writableSkillLocations(ctx)) {
     if (ctx.localConfig.scope === 'user' && isToolId(tool) && settingsAtDefault(tool)) {
       const defaultHome = defaultToolHome(tool, host);
-      if (!await sameSkillDir(toolHome(tool, host), defaultHome)) notes.push(`${tool} takes skills from ${own}, but teamai still writes some of its other files under ${defaultHome}.`);
+      if (!await samePlace(toolHome(tool, host), defaultHome)) notes.push(`${tool} takes skills from ${own}, but teamai still writes some of its other files under ${defaultHome}.`);
     }
     for (const unread of unreadWrites(where)) {
       switch (unread.reason) {

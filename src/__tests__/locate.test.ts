@@ -6,7 +6,7 @@ import { nextToolHomes } from '../tool-home-record.js';
 import { cleanupOf, installOf, ownOf, unreadWrites, writable, writesOf, type EntryPlace, type FilePlace, type FilesChannel, type Read } from '../locate.js';
 import { envToolHome, type Host } from '../tool-home.js';
 import { isToolId, TOOLS } from '../tools.js';
-import { sameSkillDirs } from '../resources/skill-dirs.js';
+import { samePlaces } from '../resources/places.js';
 
 function linuxHost(env: Record<string, string>, existing: readonly string[] = ['/new/hermes', '/x/opencode', '/home/m/.openclaw']): Host {
   return {
@@ -178,8 +178,8 @@ describe('skills directories compared on a host', () => {
     const recorded = { hermes: ['C:\\Users\\M\\AppData\\Local\\hermes\\skills'] };
     const current = { hermes: ['c:\\users\\m\\appdata\\local\\hermes\\skills\\'] };
 
-    expect(await sameSkillDirs(recorded, current)).toBe(true);
-    expect(await sameSkillDirs({ hermes: ['/Users/M/hermes/skills'] }, { hermes: ['/users/m/hermes/skills'] })).toBe(false);
+    expect(await samePlaces(recorded, current)).toBe(true);
+    expect(await samePlaces({ hermes: ['/Users/M/hermes/skills'] }, { hermes: ['/users/m/hermes/skills'] })).toBe(false);
   });
 });
 
