@@ -8,9 +8,8 @@
  *                                                  ├─ list    nothing: it shows paths, not a file's lines
  *                                                  └─ shell   classifyShellCommand(command), shownFiles(output) for a search
  *   responseOf ── statusOf (or a bridge's tool_status), outputOf, searchOutputOf
- *   stderr (when separate) or merged output when status is unknown:
- *                   withoutErrors(diagnostic), a call that printed only its command's errors
- *                   failed, and a read did not read a file an error names
+ *   status unknown: withoutErrors(output), a shell call that printed only its command's errors failed,
+ *                   and a read did not read a file an error names
  *
  * Paths are resolved and compared by agent-path, the same on every OS, so a
  * Windows member's `C:\kb\x.md` is one file however it is written. A new
@@ -20,7 +19,7 @@
 import { isAbsolutePath, isWithin, resolvePath, samePath, withoutReadSelector } from './agent-path.js';
 import { getUserHome } from './home.js';
 import { resolveHookCwd } from './hook-cwd.js';
-import { classifyShellCommand, commandName } from './shell-command.js';
+import { classifyShellCommand } from './shell-command.js';
 import { normalizeToolName } from './tool-names.js';
 
 /** What a call did: `read`/`search`/`list` whether a tool or a shell command did it; `shell` for any other shell call. */
@@ -138,11 +137,6 @@ function outputOf(response: unknown): string | undefined {
   return typeof output === 'string' ? output : undefined;
 }
 
-function stderrOf(response: unknown): string | undefined {
-  const stderr = asObject(response)?.stderr;
-  return typeof stderr === 'string' ? stderr : undefined;
-}
-
 /**
  * A search tool's text output: the string itself (OpenCode, Pi), Claude's
  * and ZCode's `content`, Qoder's `results`, or Copilot's text result. A
@@ -224,14 +218,14 @@ const SHELL_DIAGNOSTIC = /^(?:\S*\/)?(?:ba|z)?sh: /;
 
 /**
  * A shell call's output without the lines its command printed as errors:
- * those that start with one of its command words, as written or by name, and `: `
+ * those that start with its command word, as written or by name, and `: `
  * (`cat: x.md: No such file or directory`, `/bin/cat: …`, `grep: …`), and the
  * shell's own diagnostics. `content` is null when those lines were all it
  * printed, as when the call failed. `named` holds the file each such
  * `<verb>: <file>: …` line names, unquoted.
  */
-function withoutErrors(output: string, verbs: string[]): { content: string | null; named: string[] } {
-  const prefixes = [...new Set(verbs.flatMap((verb) => [verb, verb.replace(/^.*[\\/]/, ''), commandName(verb)]))].map((name) => `${name}: `);
+function withoutErrors(output: string, verb: string): { content: string | null; named: string[] } {
+  const prefixes = [...new Set([verb, verb.split(/[\\/]/).pop()!])].map((name) => `${name}: `);
   const lines = output.split('\n');
   const named: string[] = [];
   const kept = lines.filter((line) => {
@@ -283,18 +277,14 @@ export function classifyToolCall(stdin: Record<string, unknown>, agent?: string)
 
   const command = input.command;
   if (typeof command !== 'string') return unknown;
-  const shell = classifyShellCommand(command, { powershell: name.toLowerCase() === 'powershell', home: getUserHome() });
+  const shell = classifyShellCommand(command, { powershell: name.toLowerCase() === 'powershell', home: getUserHome() }, status === 'success');
   const output = outputOf(response);
-  const stderr = stderrOf(response);
   const optional = output !== undefined ? { output } : {};
-  // Diagnostics come from stderr when the host separates it, or from merged output when the status is unknown.
-  const diagnostic = stderr ?? (status === 'unknown' ? output : undefined);
-  const errors = diagnostic !== undefined && shell.verbs.length > 0
-    ? withoutErrors(diagnostic, shell.verbs)
+  // With no status, only the command's own error lines tell a failure apart.
+  const errors = status === 'unknown' && output !== undefined && shell.verb !== undefined
+    ? withoutErrors(output, shell.verb)
     : { content: output, named: [] };
-  const content = stderr !== undefined
-    ? (errors.content === null && (output ?? '').trim() === '' ? null : output)
-    : errors.content;
+  const content = errors.content;
   if (content === null) return { category: shell.category, paths: [], status: 'failure', simple: shell.simple, command, ...optional };
   if (shell.category === 'search') {
     // A shell search prints paths as its operands wrote them: relative to the cwd.

@@ -1098,32 +1098,23 @@ const ROWS: Row[] = [
     project: {},
   },
   {
-    name: '05: Claude recall; cat <doc>; echo done (a read in a command list, status success) → +1',
+    name: '05: Claude recall; cat <doc>; echo done, or cat <doc> & (any ;, &&, || or & makes the call no read) → 0',
     trace: async (h) => {
       const { files } = await h.recall('redis timeout');
       await h.shell(`cat '${files[0]}'; echo done`, '---\ndone');
-      await h.stop();
-    },
-    project: { 'redis-timeout': 1 },
-  },
-  {
-    name: '05: Claude recall; cat <doc> || cat <other> (the read after || runs only when the first failed) → only <doc> +1',
-    trace: async (h) => {
-      await h.recall('redis timeout');
-      await h.recall('setup');
-      await h.shell(`cat '${h.docs['redis-timeout']}' || cat '${h.docs.setup}'`, '---');
-      await h.stop();
-    },
-    project: { 'redis-timeout': 1 },
-  },
-  {
-    name: '05: Claude recall; cat <doc> & (a background read is no read) → 0',
-    trace: async (h) => {
-      const { files } = await h.recall('redis timeout');
       await h.shell(`cat '${files[0]}' &`, '');
       await h.stop();
     },
     project: {},
+  },
+  {
+    name: '05: Claude recall; pwd; cat <doc> (a read that ends a command list, status success) → +1',
+    trace: async (h) => {
+      const { files } = await h.recall('redis timeout');
+      await h.shell(`pwd; cat '${files[0]}'`, '/w\n---');
+      await h.stop();
+    },
+    project: { 'redis-timeout': 1 },
   },
   {
     name: '05: Claude recall; sed -i \'s/pool/POOL/\' <doc> → 0',

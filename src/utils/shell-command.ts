@@ -2,11 +2,12 @@
  * The one shell command-line parser (#884): an agent's shell call split into
  * simple commands, and what the call did with files.
  *
- * A call is a read, a search or a listing when it is one simple command, or a
- * pipeline that starts with it. A list (`;`, `&&`, `||`) is a read when any of
- * its pipelines reads, except one after `||`; any `&` makes the call neither.
- * The files are the command's file operands only: never a flag's value, a sed
- * script, a search pattern or a redirect target.
+ * Only a call that surely ran its reader or search is one: one simple command,
+ * a pipeline that starts with it, or a command list in the small grammar
+ * classifyList reads. Whether an item of any other list ran cannot be known
+ * without running the shell, so such a call is neither. The files are the
+ * command's file operands only: never a flag's value, a sed script, a search
+ * pattern or a redirect target.
  */
 import { isAbsolutePath } from './agent-path.js';
 
@@ -41,8 +42,8 @@ export interface ShellClassification {
   target?: string;
   /** True when the reader or search is the call's only command, not the head of a pipeline or an item of a list. */
   simple: boolean;
-  /** A read's or search's command word, as written: `cat`, `/bin/cat`. A list's are every read's, one after `||` included. */
-  verbs: string[];
+  /** A read's or search's command word, as written: `cat`, `/bin/cat`. A list's is the first one it counts. */
+  verb?: string;
 }
 
 const REDIRECT = /^(?:&>>?|<<<|<<-?|<>|<&|>>|>&|>\||<|>)/;
@@ -73,25 +74,18 @@ export function simpleCommands(command: string, home?: string): SimpleCommand[] 
   const commands: SimpleCommand[] = [];
   let current: SimpleCommand = { words: [], redirects: [], op: null };
   let word: string | null = null;
-  const stack: ("'" | '"' | '`' | ')')[] = [];
+  let quote: string | null = null;
   let redirect: string | null = null;
-  const heredocs: { stripTabs: boolean; delimiter: string | null }[] = [];
-  const isHeredoc = (): boolean => redirect !== null && /^\d*<<-?$/.test(redirect);
   const endWord = (): void => {
     if (word === null) return;
-    if (redirect !== null) {
-      if (isHeredoc()) heredocs.push({ stripTabs: redirect.endsWith('-'), delimiter: word });
-      current.redirects.push({ op: redirect, target: word });
-    } else current.words.push(word);
+    if (redirect !== null) current.redirects.push({ op: redirect, target: word });
+    else current.words.push(word);
     word = null;
     redirect = null;
   };
   const endCommand = (op: ShellOperator | null): void => {
     endWord();
-    if (redirect !== null) {
-      if (isHeredoc()) heredocs.push({ stripTabs: false, delimiter: null });
-      current.redirects.push({ op: redirect, target: '' });
-    }
+    if (redirect !== null) current.redirects.push({ op: redirect, target: '' });
     redirect = null;
     // An empty command (a blank line, a doubled `;`) ends nothing: the previous command keeps its operator.
     if (current.words.length === 0 && current.redirects.length === 0) return;
@@ -103,48 +97,21 @@ export function simpleCommands(command: string, home?: string): SimpleCommand[] 
   for (let i = 0; i < line.length; i++) {
     const c = line[i];
     const next = line[i + 1];
-    const top = stack.at(-1);
-    if (top === "'" || top === '"' || top === '`') {
-      if (c === top) {
-        if (top === '`' || stack.length > 1) word += c;
-        stack.pop();
-      } else if (c === '\\' && top !== "'" && next === '\n') i++;
-      else if (c === '\\' && top !== "'" && (next === top || next === '\\' || next === '$' || next === '`')) {
-        if (stack.length > 1) word += c;
-        word += line[++i];
-      } else if (top === '"' && c === '$' && next === '(') {
-        stack.push(')');
-        word += '$(';
-        i++;
-      } else if (top === '"' && c === '`') {
-        stack.push('`');
-        word += c;
-      } else if (top === '"' && c === '$' && home !== undefined && !isHeredoc() && homeRefLength(line, i) > 0) {
+    if (quote) {
+      if (c === quote) quote = null;
+      else if (c === '\\' && quote === '"' && (next === '"' || next === '\\' || next === '$')) word += line[++i];
+      else if (quote === '"' && c === '$' && home !== undefined && homeRefLength(line, i) > 0) {
         i += homeRefLength(line, i) - 1;
         word += home;
       } else word += c;
     } else if (c === '"' || c === "'") {
-      stack.push(c);
-      if (stack.length > 1) word = (word ?? '') + c;
-      else word ??= '';
-    } else if (c === '`') {
-      stack.push(c);
-      word = (word ?? '') + c;
+      quote = c;
+      word ??= '';
     } else if (c === '\\' && next === '\n') {
       i++;
-    } else if (c === '\\' && next !== undefined && (ESCAPABLE.test(next) || isHeredoc())) {
-      if (stack.length > 0) word = (word ?? '') + c;
+    } else if (c === '\\' && next !== undefined && ESCAPABLE.test(next)) {
       word = (word ?? '') + next;
       i++;
-    } else if (top === ')') {
-      if (c === '(') stack.push(')');
-      else if (c === ')') stack.pop();
-      if (c === '#' && /(?:^|[\s(;|&])$/.test(word ?? '')) {
-        while (i + 1 < line.length && line[i + 1] !== '\n') i++;
-      } else word += c;
-    } else if (c === '(') {
-      stack.push(')');
-      word = (word ?? '') + c;
     } else if (c === '#' && word === null) {
       // A `#` that starts a word starts a comment, up to the newline; `a#b` is a word.
       while (i + 1 < line.length && line[i + 1] !== '\n') i++;
@@ -164,36 +131,15 @@ export function simpleCommands(command: string, home?: string): SimpleCommand[] 
       endCommand(next === '&' ? '&&' : '&');
     } else if (c === ';' || c === '\n') {
       endCommand(';');
-      if (c === '\n' && heredocs.length > 0) {
-        for (const { stripTabs, delimiter } of heredocs) {
-          if (delimiter === null) return [];
-          let matched = false;
-          while (i < line.length) {
-            const start = i + 1;
-            if (start > line.length) break;
-            const nl = line.indexOf('\n', start);
-            const end = nl === -1 ? line.length : nl;
-            const raw = line.slice(start, end).replace(/\r$/, '');
-            i = end;
-            if ((stripTabs ? raw.replace(/^\t+/, '') : raw) === delimiter) {
-              matched = true;
-              break;
-            }
-          }
-          if (!matched) return [];
-        }
-        heredocs.length = 0;
-      }
     } else if (/\s/.test(c)) {
       endWord();
-    } else if (word === null && home !== undefined && !isHeredoc() && homeRefLength(line, i) > 0) {
+    } else if (word === null && home !== undefined && homeRefLength(line, i) > 0) {
       i += homeRefLength(line, i) - 1;
       word = home;
     } else {
       word = (word ?? '') + c;
     }
   }
-  if (stack.length > 0 || heredocs.length > 0) return [];
   endCommand(null);
   return commands;
 }
@@ -461,12 +407,7 @@ function searchRoot(operand: string): string {
   return dir.replace(/[\\/]$/, '') || '.';
 }
 
-/** A command word's name: its base name, without `.exe`. */
-export function commandName(word: string): string {
-  return word.replace(/^.*[\\/]/, '').replace(/\.exe$/i, '');
-}
-
-const SHELL: ShellClassification = { category: 'shell', paths: [], simple: false, verbs: [] };
+const SHELL: ShellClassification = { category: 'shell', paths: [], simple: false };
 
 /**
  * What one simple command did with files. Only a stderr redirect
@@ -477,7 +418,7 @@ function classifySimple(command: SimpleCommand, simple: boolean, flavor: ShellFl
   const [verb, ...rest] = commandWords(command.words);
   if (verb === undefined || !command.redirects.every((r) => r.op.startsWith('2>'))) return SHELL;
   // By path on either platform, `.exe` too: `C:\\…\\cat.exe`, `Microsoft.PowerShell.Management\\Get-Content`.
-  const base = commandName(verb);
+  const base = verb.split(/[\\/]/).pop()!.replace(/\.exe$/i, '');
   const name = base === 'git' && rest.length > 0 ? `git-${rest[0]}` : base;
   const args = name === base ? rest : rest.slice(1);
 
@@ -487,244 +428,152 @@ function classifySimple(command: SimpleCommand, simple: boolean, flavor: ShellFl
   if (read) {
     const files = read(args);
     if (WINDOWS_ONLY_READERS.has(name.toLowerCase()) && !flavor.powershell && !files.every((f) => WINDOWS_PATH.test(f))) return SHELL;
-    return files.length > 0 && !files.some((f) => EXPANDS.test(f)) ? { category: 'read', paths: files, simple, verbs: [verb] } : SHELL;
+    return files.length > 0 && !files.some((f) => EXPANDS.test(f)) ? { category: 'read', paths: files, simple, verb } : SHELL;
   }
-  if (LISTERS.has(name)) return { category: 'list', paths: [], simple, verbs: [] };
+  if (LISTERS.has(name)) return { category: 'list', paths: [], simple };
   const search = Object.hasOwn(SEARCHERS, name) ? SEARCHERS[name] : undefined;
   if (!search) return SHELL;
   const { shows, operands: roots } = searchArgs(args, search);
-  if (shows === 'paths') return { category: 'list', paths: [], simple, verbs: [] };
-  if (shows === 'counts') return { category: 'search', paths: [], simple, verbs: [verb] };
+  if (shows === 'paths') return { category: 'list', paths: [], simple };
+  if (shows === 'counts') return { category: 'search', paths: [], simple, verb };
   const target = roots.length === 1 && !EXPANDS.test(roots[0]) ? roots[0] : undefined;
-  return { category: 'search', paths: roots.length > 0 ? roots.map(searchRoot) : ['.'], ...(target ? { target } : {}), simple, verbs: [verb] };
+  return { category: 'search', paths: roots.length > 0 ? roots.map(searchRoot) : ['.'], ...(target ? { target } : {}), simple, verb };
 }
-
-/** The commands, besides reads, searches and listings, after which a relative path still resolves against the call's cwd. */
-const KEEPS_CWD = new Set(['pwd', 'echo', 'printf', 'test', '[', '[[', 'set', 'true', 'false', ':']);
-
-/** The commands that always exit 0 without depending on arguments or system state. */
-const ALWAYS_SUCCEEDS = new Set(['true', ':', 'echo', 'pwd']);
-
-/** The commands that terminate the shell process or script. */
-const TERMINATES_SHELL = new Set(['exit', 'exec', 'return', 'logout', 'throw']);
-
-/** The commands that terminate the shell or the current control flow before later list items can run. */
-const TERMINATES_LIST = new Set([...TERMINATES_SHELL, 'break', 'continue']);
 
 /**
  * What a shell command line did with files: a read, a search or a listing
- * when it is one such command, or a pipeline that starts with one. A list of
- * pipelines (`;`, `&&`, `||`) is a read, never a simple one, of the files its
- * reading pipelines read when they are guaranteed to have run. After a command
- * that is no read, search or listing and whose command word is not in
- * KEEPS_CWD, only absolute paths count; an assignment alone (`X=1`) has no
- * command word and keeps the cwd. Anything else, a line with an `&`, and a
- * line ending in `|`, `&&` or `||` is just a shell call.
+ * when it is one such command, or a pipeline that starts with one; a read
+ * when it is a list classifyList reads; otherwise just a shell call.
+ * `succeeded`: the call exited 0.
  */
-export function classifyShellCommand(command: string, flavor: ShellFlavor = {}): ShellClassification {
+export function classifyShellCommand(command: string, flavor: ShellFlavor = {}, succeeded = false): ShellClassification {
   const commands = simpleCommands(command, flavor.home);
-  const last = commands.at(-1);
-  // A line that ends in `|`, `&&` or `||` runs nothing; a trailing `;` changes nothing.
-  if (last === undefined || (last.op !== null && last.op !== ';') || commands.some((c) => c.op === '&')) return SHELL;
-  const isList = commands.slice(0, -1).some((c) => c.op !== '|');
-  if (!isList) return classifySimple(commands[0], commands.length === 1, flavor);
-  return classifyList(commands, flavor);
+  const pipeline = commands.every((c, i) => c.op === (i === commands.length - 1 ? null : '|'));
+  if (commands.length === 0) return SHELL;
+  return pipeline ? classifySimple(commands[0], commands.length === 1, flavor) : classifyList(command, commands, flavor, succeeded);
 }
 
-const COMPOUND_OPENERS = new Map<string, string>([
-  ['if', 'fi'],
-  ['for', 'done'],
-  ['while', 'done'],
-  ['until', 'done'],
-  ['select', 'done'],
-  ['case', 'esac'],
-  ['{', '}'],
-]);
-const COMPOUND_CLOSERS = new Set(['fi', 'done', 'esac', '}']);
-const COMPOUND_CLAUSES = new Map<string, string>([
-  ['then', 'fi'],
-  ['elif', 'fi'],
-  ['else', 'fi'],
-  ['do', 'done'],
-]);
+/** A character a plain list has nowhere, quoted or not. */
+const NOT_PLAIN = /[|$`(){}<#]|[^\S \t\n]/;
 
-/** Whether a single-command pipeline always exits 0 without depending on external state. */
-function isUnconditionalZero(command: SimpleCommand): boolean {
-  if (command.redirects.length > 0) return false;
-  const words = commandWords(command.words);
-  if (words.length === 0) {
-    return !command.words.some((w) => w.includes('$(') || w.includes('`'));
+/**
+ * Whether the shell reads `command` as plain words and the operators `;`,
+ * `&&` and newline: every quote closed, no command left empty before an
+ * operator or after a final `&&`, and none of `|`, a lone `&`, `$` (but a
+ * `$HOME` or `${HOME}` path prefix), a backtick, `(`, `)`, `{`, `}`, `<`, `#`,
+ * a line continuation, or whitespace other than a space, a tab or a newline,
+ * quoted or not.
+ */
+function isPlainList(command: string): boolean {
+  let quote: string | null = null;
+  // No word since the start or the last operator, and an `&&` still waiting for its command.
+  let empty = true;
+  let pending = false;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (c === '$' && homeRefLength(command, i) > 0) {
+      i += homeRefLength(command, i) - 1;
+    } else if (NOT_PLAIN.test(c)) {
+      return false;
+    } else if (quote) {
+      if (c === quote) quote = null;
+      else if (c === '\\' && quote === '"') i++;
+      continue;
+    } else if (c === "'" || c === '"') {
+      quote = c;
+    } else if (c === '\\') {
+      if (command[i + 1] === '\n') return false;
+      i++;
+    } else if (c === ';' || (c === '&' && command[i + 1] === '&')) {
+      if (empty) return false;
+      if (c === '&') i++;
+      pending = c === '&';
+      empty = true;
+      continue;
+    } else if (c === '&' && command[i - 1] !== '>' && command[i + 1] !== '>') {
+      return false;
+    } else if (/\s/.test(c)) {
+      if (c === '\n') empty = true;
+      continue;
+    }
+    empty = false;
+    pending = false;
   }
-  const [word] = words;
-  return ALWAYS_SUCCEEDS.has(commandName(word).toLowerCase());
+  return quote === null && !pending;
 }
 
-/** Whether a command is known to fail unconditionally. */
-function isKnownFailure(command: SimpleCommand): boolean {
-  const [word] = commandWords(command.words);
-  return word !== undefined && commandName(word).toLowerCase() === 'false';
+/** A `test` or `[` check of one file: it exists, is a file, a directory, readable, or not empty. */
+const FILE_TESTS = new Set(['-e', '-f', '-d', '-r', '-s']);
+
+/**
+ * One command of a list: a read classifySimple accepts, by its bare name, or
+ * a guard that cannot end, replace or reconfigure the shell. `fails`: whether
+ * the guard can exit non-zero.
+ */
+type ListItem =
+  | { kind: 'read'; read: ShellClassification }
+  | { kind: 'cd'; dir: string }
+  | { kind: 'guard'; fails: boolean };
+
+/** A list's command, when it is a read or a guard with no redirect but one that cannot fail: `2>/dev/null`, `2>&1`. */
+function listItem(command: SimpleCommand, flavor: ShellFlavor): ListItem | undefined {
+  const [name, ...args] = command.words;
+  const redirects = command.redirects.every((r) => (r.op === '2>' && r.target === '/dev/null') || (r.op === '2>&' && r.target === '1'));
+  if (name === undefined || !redirects) return undefined;
+  if (['pwd', 'true', ':'].includes(name) && args.length === 0) return { kind: 'guard', fails: false };
+  if (name === 'echo') return { kind: 'guard', fails: false };
+  if (name === 'ls') return { kind: 'guard', fails: true };
+  if (name === 'test' && args.length === 2 && FILE_TESTS.has(args[0])) return { kind: 'guard', fails: true };
+  if (name === '[' && args.length === 3 && FILE_TESTS.has(args[0]) && args[2] === ']') return { kind: 'guard', fails: true };
+  if (name === 'cd') return args.length === 1 && /^[^-+~]/.test(args[0]) && !EXPANDS.test(args[0]) ? { kind: 'cd', dir: args[0] } : undefined;
+  // A name with a path, an extension or an assignment may be no reader at all.
+  if (/[\\/.=]/.test(name)) return undefined;
+  const read = classifySimple(command, false, flavor);
+  return read.category === 'read' ? { kind: 'read', read } : undefined;
+}
+
+/** `file` under the relative or absolute directory `dir` (`''`: the call's cwd). */
+function under(dir: string, file: string): string {
+  return isAbsolutePath(file) || dir === '' ? file : `${dir}/${file}`;
 }
 
 /**
- * A list of pipelines: a read of the files its top-level reading pipelines
- * read. A pipeline after `||`, inside a compound command or function body,
- * after a shell-terminating command (`exit`, `exec`, `return`, `logout`,
- * `break`, `continue`, `throw`), after `false &&`, or after `&&` in a chain
- * followed by `;` or `||` when a prior step can fail, may not have run and
- * credits no file; its verb still marks its error lines.
+ * A list of reads and guards (listItem) joined by `;`, `&&` or newlines in a
+ * plain command line (isPlainList): a read, never a simple one, of the files
+ * the reads of its last `&&` chain read. A read earlier in the list may have
+ * failed with the call still exiting 0, so it counts for nothing. Without
+ * `succeeded` only the chain's first read counts, and only when no command
+ * before it in the chain can fail. A `cd` in the chain moves its later
+ * relative paths; after one in an earlier chain, which may have failed, only
+ * absolute paths count.
  */
-function classifyList(commands: SimpleCommand[], flavor: ShellFlavor): ShellClassification {
-  const paths = new Set<string>();
-  const verbs = new Set<string>();
-  const blocks: string[] = [];
-  let pendingFn = false;
-  let inFnDepth: number | null = null;
+function classifyList(command: string, commands: SimpleCommand[], flavor: ShellFlavor, succeeded: boolean): ShellClassification {
+  if (!isPlainList(command)) return SHELL;
+  let paths = new Set<string>();
+  let verb: string | undefined;
+  // The chain's directory from the call's cwd, null when unknown; whether it moved; whether nothing before can fail.
+  let dir: string | null = '';
   let moved = false;
-  let terminated = false;
-
-  type CondState = 'INITIAL' | 'ZERO' | 'NONZERO' | 'UNKNOWN';
-  let condState: CondState = 'INITIAL';
-  let chainFollowed = false;
-
-  for (const [i, command] of commands.entries()) {
-    const words = commandWords(command.words);
-    let idx = 0;
-    while (idx < words.length && COMPOUND_CLOSERS.has(words[idx])) {
-      if (blocks.at(-1) !== words[idx]) return SHELL;
-      blocks.pop();
-      idx++;
-      if (inFnDepth !== null && blocks.length < inFnDepth) inFnDepth = null;
-      if (blocks.length === 0) pendingFn = false;
+  let sure = true;
+  for (const [i, c] of commands.entries()) {
+    const item = listItem(c, flavor);
+    if (item === undefined) return SHELL;
+    if (item.kind === 'read' && (succeeded || sure)) {
+      for (const file of item.read.paths) if (dir !== null || isAbsolutePath(file)) paths.add(under(dir ?? '', file));
+      verb ??= item.read.verb;
     }
-    let compound = idx > 0 || blocks.length > 0 || pendingFn || inFnDepth !== null;
-    while (idx < words.length) {
-      const w = words[idx];
-      if (blocks.at(-1) === 'esac' && w !== 'esac' && w.endsWith(')')) {
-        idx++;
-      } else if (COMPOUND_CLAUSES.has(w)) {
-        if (!blocks.includes(COMPOUND_CLAUSES.get(w)!)) return SHELL;
-        idx++;
-      } else if (w === '!' || w === 'time' || w === 'coproc') {
-        compound = true;
-        idx++;
-      } else if (w === 'function') {
-        compound = true;
-        idx++;
-        if (idx < words.length && words[idx] !== '{' && !words[idx].startsWith('(')) idx++;
-        if (idx < words.length && words[idx] === '()') idx++;
-        inFnDepth = blocks.length + 1;
-        if (idx >= words.length) pendingFn = true;
-      } else if (/^[A-Za-z_][A-Za-z0-9_]*\(\)$/.test(w)) {
-        compound = true;
-        idx++;
-        inFnDepth = blocks.length + 1;
-        if (idx >= words.length) pendingFn = true;
-      } else if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(w) && words[idx + 1] === '()') {
-        compound = true;
-        idx += 2;
-        inFnDepth = blocks.length + 1;
-        if (idx >= words.length) pendingFn = true;
-      } else if (w === 'case') {
-        blocks.push('esac');
-        compound = true;
-        idx++;
-        while (idx < words.length && words[idx] !== 'in') idx++;
-        if (words[idx] === 'in') idx++;
-        if (idx < words.length && words[idx] !== 'esac' && words[idx].endsWith(')')) idx++;
-      } else if (COMPOUND_OPENERS.has(w)) {
-        blocks.push(COMPOUND_OPENERS.get(w)!);
-        compound = true;
-        idx++;
-      } else if (w.startsWith('(')) {
-        compound = true;
-        pendingFn = false;
-        idx++;
-      } else {
-        break;
-      }
-    }
-    if (blocks.at(-1) === 'esac' && words.at(-1) === 'esac' && idx < words.length) {
-      blocks.pop();
-      if (inFnDepth !== null && blocks.length < inFnDepth) inFnDepth = null;
-      if (blocks.length === 0) pendingFn = false;
-    }
-    const before = commands[i - 1]?.op;
-    if (before !== '|' && before !== '&&') {
-      let end = i;
-      while (commands[end]?.op === '|' || commands[end]?.op === '&&') end++;
-      const afterChain = commands[end]?.op;
-      chainFollowed = (afterChain === '||' || afterChain === ';') && end < commands.length - 1;
-      if (before !== '||') condState = 'INITIAL';
-    }
-    if (compound || blocks.length > 0) {
+    if (item.kind === 'cd') {
+      dir = dir === null && !isAbsolutePath(item.dir) ? null : under(dir ?? '', item.dir);
       moved = true;
-      if (words[0] === '!' && ALWAYS_SUCCEEDS.has(commandName(words[1] ?? '').toLowerCase())) {
-        condState = 'NONZERO';
-      } else {
-        condState = 'UNKNOWN';
-      }
-      const inFn = inFnDepth !== null || pendingFn;
-      if (!inFn && commands[i - 1]?.op !== '|' && command.op !== '|') {
-        const cmdWord = words[idx];
-        if (cmdWord !== undefined) {
-          const name = commandName(cmdWord).toLowerCase();
-          if (name === 'exec' && words.length <= idx + 1) {
-            // exec without args does not terminate
-          } else if (TERMINATES_SHELL.has(name)) {
-            terminated = true;
-          }
-        }
-      }
-      if (pendingFn && blocks.length === 0 && idx < words.length) pendingFn = false;
-      continue;
     }
-    if (before === '|') continue;
-    let pipeEnd = i;
-    while (commands[pipeEnd]?.op === '|') pipeEnd++;
-
-    let executed = true;
-    if (before === '&&') {
-      if (condState === 'NONZERO') executed = false;
-      else if (condState === 'UNKNOWN' && chainFollowed) executed = false;
-    } else if (before === '||') {
-      if (condState === 'ZERO') executed = false;
-      else if (condState === 'UNKNOWN') executed = false;
+    if (item.kind !== 'guard' || item.fails) sure = false;
+    if (c.op === ';' && i < commands.length - 1) {
+      paths = new Set();
+      verb = undefined;
+      if (moved) dir = null;
+      moved = false;
+      sure = true;
     }
-
-    const item = classifySimple(command, false, flavor);
-    const skipped = terminated || !executed;
-    if (item.category === 'read') {
-      item.verbs.forEach((v) => verbs.add(v));
-      if (!skipped && before !== '||') {
-        item.paths.filter((f) => !moved || isAbsolutePath(f)).forEach((f) => paths.add(f));
-      }
-    }
-    if (!skipped && pipeEnd === i) {
-      const [w] = commandWords(command.words);
-      const name = w !== undefined ? commandName(w).toLowerCase() : undefined;
-      if (name !== undefined) {
-        if (name === 'exec' && commandWords(command.words).length <= 1) {
-          // exec without args does not terminate
-        } else if (TERMINATES_LIST.has(name)) {
-          terminated = true;
-        }
-      }
-    }
-    const lastCmd = commands[pipeEnd];
-    if (before === '||' && pipeEnd === i && isUnconditionalZero(lastCmd)) {
-      condState = 'ZERO';
-    } else if (executed) {
-      if (pipeEnd === i && isUnconditionalZero(lastCmd)) {
-        condState = 'ZERO';
-      } else if (pipeEnd === i && isKnownFailure(lastCmd)) {
-        condState = 'NONZERO';
-      } else {
-        condState = 'UNKNOWN';
-      }
-    }
-    const [word] = commandWords(command.words);
-    if (!skipped && item.category === 'shell' && word !== undefined && !KEEPS_CWD.has(commandName(word).toLowerCase())) moved = true;
   }
-  if (blocks.length > 0 || pendingFn || paths.size === 0) return SHELL;
-  return { category: 'read', paths: [...paths], simple: false, verbs: [...verbs] };
+  return paths.size > 0 ? { category: 'read', paths: [...paths], simple: false, verb } : SHELL;
 }

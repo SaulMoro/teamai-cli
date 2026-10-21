@@ -197,7 +197,7 @@ describe('skill use from a tool call (#1221)', () => {
 
   it('credits a Claude Bash skill read guarded by a test', async () => {
     const file = install('.claude/skills');
-    await toolCall({ ...fixture('claude-skill'), tool_name: 'Bash', tool_input: { command: `test -f ${file} && cat ${file}` } }, 'claude');
+    await toolCall({ ...fixture('claude-skill'), tool_name: 'Bash', tool_input: { command: `test -f ${file} && cat ${file}` }, tool_response: { stdout: `# ${SKILL}\n`, stderr: '' } }, 'claude');
     expect(await credits()).toEqual([{ skill: SKILL, tool: 'claude' }]);
   });
 
