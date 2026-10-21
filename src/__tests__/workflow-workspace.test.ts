@@ -195,6 +195,33 @@ steps:
     expect(fs.readFileSync(path.join(workspace, 'dirty.txt'), 'utf8')).toBe('x');
   });
 
+  it.each([
+    ['switches to a new branch', "cp.execFileSync('git',['switch','-q','-c','side'])", 'refs/heads/side'],
+    ['detaches HEAD', "cp.execFileSync('git',['checkout','-q','--detach'])", ''],
+  ])('fails a command with no workspace when it %s without committing, and leaves HEAD there', async (_name, script, ref) => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A read-only command that moves HEAD off its branch changes the checkout.
+steps:
+  - id: move
+    command: node -e "const cp=require('child_process'); ${script}"
+`);
+
+    await runLocalDriver(config, runId, workspace);
+
+    expect(await readRun(config, runId)).toMatchObject({
+      steps: [{ status: 'failed', failure: { code: 'read_only_dirty', message: expect.stringContaining('HEAD') } }],
+    });
+    const head = ((): string => {
+      try {
+        return git(['symbolic-ref', '--quiet', 'HEAD'], workspace).trim();
+      } catch {
+        return '';
+      }
+    })();
+    expect(head).toBe(ref);
+  });
+
   it('fails a command with no workspace when it commits, and leaves the commit', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build

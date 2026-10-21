@@ -228,6 +228,8 @@ interface WorktreeSnapshot {
   ok: boolean;
   files: Map<string, string>;
   head?: string;
+  /** The ref HEAD points to, empty when it is detached, so a switch at the same commit is a change too. */
+  branch: string;
 }
 
 function gitStatus(workspace: string): Promise<{ ok: boolean; text: string }> {
@@ -283,7 +285,8 @@ async function worktreeMode(workspace: string, relative: string): Promise<string
 async function snapshotWorktree(workspace: string, depth = 0): Promise<WorktreeSnapshot> {
   const status = await gitStatus(workspace);
   const head = (await git(workspace, ['rev-parse', 'HEAD'])).stdout.trim();
-  if (!status.ok) return { ok: false, files: new Map(), ...(head ? { head } : {}) };
+  const branch = (await git(workspace, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
+  if (!status.ok) return { ok: false, files: new Map(), ...(head ? { head } : {}), branch };
   const files = new Map<string, string>();
   for (const { mark, relative } of statusEntries(status.text)) {
     if (files.has(relative)) continue;
@@ -295,7 +298,7 @@ async function snapshotWorktree(workspace: string, depth = 0): Promise<WorktreeS
       : await hashPath(workspace, relative);
     files.set(relative, `${mark}:${staged}:${mode}:${body}`);
   }
-  return { ok: true, files, ...(head ? { head } : {}) };
+  return { ok: true, files, ...(head ? { head } : {}), branch };
 }
 
 async function submoduleSnapshot(dir: string, depth: number): Promise<string> {
@@ -311,7 +314,7 @@ function changedPaths(before: WorktreeSnapshot, after: WorktreeSnapshot): string
     : !before.ok
       ? (after.files.size === 0 ? [] : [...after.files.keys()])
       : [...new Set([...before.files.keys(), ...after.files.keys()])].filter((name) => before.files.get(name) !== after.files.get(name));
-  if (before.head && after.head && before.head !== after.head) files.push('HEAD');
+  if ((before.head && after.head && before.head !== after.head) || before.branch !== after.branch) files.push('HEAD');
   return files;
 }
 
