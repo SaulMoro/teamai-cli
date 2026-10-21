@@ -1217,6 +1217,19 @@ describe('RulesHandler.pullAllRules — OpenCode instructions activation', () =>
     expect(doc.instructions ?? []).not.toContain(`${ocRules()}/*.md`);
   });
 
+  it('follows $XDG_CONFIG_HOME: the rules and their glob go to the opencode dir there (#1221)', async () => {
+    const xdgOpencode = path.join(tmpDir, 'xdg', 'opencode');
+    await fse.ensureDir(xdgOpencode);
+    vi.stubEnv('XDG_CONFIG_HOME', path.join(tmpDir, 'xdg'));
+    await fse.writeFile(path.join(localConfig.repo.localPath, 'rules', 'team-rule.md'), 'team content');
+
+    await handler.pullAllRules(teamConfig, localConfig);
+
+    expect(await fse.pathExists(path.join(xdgOpencode, 'rules', 'team-rule.md'))).toBe(true);
+    expect((await fse.readJson(path.join(xdgOpencode, 'opencode.json'))).instructions).toEqual([`${path.join(xdgOpencode, 'rules')}/*.md`]);
+    expect(await fse.pathExists(ocRules())).toBe(false);
+  });
+
   it('does not create opencode.json when OpenCode is not installed', async () => {
     // Remove the install marker.
     await fse.remove(path.join(homeDir, '.config', 'opencode'));

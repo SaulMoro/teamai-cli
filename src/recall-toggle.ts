@@ -9,6 +9,7 @@ import {
   type ToolName,
 } from './resources/agent-format.js';
 import { ruleFileExtensionForTool } from './resources/rule-format.js';
+import { installOf, locate, ownOf } from './locate.js';
 import { LEGACY_RECALL_SKILL_NAMES, builtinSkillsTarget, pruneLegacyBuiltinSkills } from './builtin-skills.js';
 import {
   resolveToolBaseDir,
@@ -21,14 +22,16 @@ import {
 } from './types.js';
 
 async function removeRecallArtifacts(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+  const install = installOf(teamConfig, localConfig);
   for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
     const baseDir = resolveToolBaseDir(tool, localConfig);
     // Remove recall rule file
-    if (toolPath.rules) {
+    const rulesDir = ownOf(await locate(tool, 'rules', install));
+    if (rulesDir?.kind === 'dir') {
       // Cursor and JoyCode copies are `.mdc`; older layouts also left `.md` files.
       const extensions = new Set<string>([ruleFileExtensionForTool(tool), '.md']);
       for (const extension of extensions) {
-        const ruleFile = path.join(baseDir, toolPath.rules, `teamai-recall${extension}`);
+        const ruleFile = path.join(rulesDir.path, `teamai-recall${extension}`);
         if (await pathExists(ruleFile)) {
           await remove(ruleFile);
           log.debug(`Removed recall rule from ${tool}`);

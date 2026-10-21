@@ -556,7 +556,9 @@ async function getInstalledResourceTargets(
       if (!resourcePath) continue;
       const receives = resource === 'skills'
         ? writable(await locate(tool, 'skills', install)) !== null
-        : await isToolInstalledForConfig(tool, resourcePath, localConfig);
+        : resource === 'rules'
+          ? writable(await locate(tool, 'rules', install))?.kind === 'dir'
+          : await isToolInstalledForConfig(tool, resourcePath, localConfig);
       if (receives) {
         targets.push(tool);
         break;
@@ -627,6 +629,10 @@ async function cleanupTombstonedResources(
         const skillsDir = writable(await locate(tool, 'skills', installOf(freshConfig, localConfig)))?.path ?? null;
         if (skillsDir === null) continue;
         typeDir = skillsDir;
+      } else if (type === 'rules') {
+        const rulesDir = writable(await locate(tool, 'rules', installOf(freshConfig, localConfig)));
+        if (rulesDir?.kind !== 'dir') continue;
+        typeDir = rulesDir.path;
       } else {
         if (!await isToolInstalledForConfig(tool, dir, localConfig)) continue;
         if (isAgentExcluded(localConfig, tool)) continue;

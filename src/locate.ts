@@ -548,11 +548,15 @@ async function locateSkills(tool: string, install: Install, host: Host): Promise
 
 async function locateRules(tool: string, install: Install, host: Host): Promise<Location<'rules'>> {
   const channel = channelsOf(tool).rules[install.scope];
-  if (channel === 'none' || channel === 'unknown') return { channel, retired: [], gates: await gatesOf(tool, install, host) };
+  const roots = rootsOf(tool, install, host);
+  const dir = roots.configured('rules');
+  // A team entry written before the tool's rules moved (#938, #946) still names a directory the tool never reads: teamai writes there as the entry says, and doctor fails it.
+  if (dir !== null && (typeof channel !== 'object' || channel.channel !== 'dir')) {
+    return { channel: 'files', own: { kind: 'dir', path: dir }, activation: null, reads: [], readGates: [], retired: [], gates: await gatesOf(tool, install, host, roots) };
+  }
+  if (channel === 'none' || channel === 'unknown') return { channel, retired: [], gates: await gatesOf(tool, install, host, roots) };
   switch (channel.channel) {
     case 'dir': {
-      const roots = rootsOf(tool, install, host);
-      const dir = roots.configured('rules');
       return {
         channel: 'files',
         own: dir === null ? null : { kind: 'dir', path: dir },

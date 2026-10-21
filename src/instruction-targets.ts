@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { isToolInstalledForConfig } from './resources/base.js';
 import { getsRulesFromExtension } from './resources/rule-format.js';
-import { pathExists, readFileSafe, remove, writeFile } from './utils/fs.js';
+import { pathExists, readFileSafe, readJsonObject, remove, writeFile } from './utils/fs.js';
 import { getUserHome } from './utils/home.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import {
@@ -495,11 +495,13 @@ export interface UserRulesFile {
 
 /**
  * What happened and what to do when `tool`'s config, which names its rules
- * file, cannot be read (`UserRulesFile.unreadable`): pull warns with it and
- * doctor's fix says it.
+ * file, cannot be read (OpenClaw's openclaw.json, the `readable-config` gate):
+ * pull warns with it and doctor's fix says it.
  */
-export function unreadableRulesFileMessage(tool: string, unreadable: NonNullable<UserRulesFile['unreadable']>): string {
-  return `teamai cannot read ${unreadable.config} as plain JSON (${unreadable.error}), so it cannot tell which `
+export async function unreadableRulesFileMessage(tool: string, gate: { readonly file: string }): Promise<string> {
+  const read = await readJsonObject(gate.file);
+  const why = read.kind === 'invalid' ? ` (${read.error})` : '';
+  return `teamai cannot read ${gate.file} as plain JSON${why}, so it cannot tell which `
     + `workspace ${tool} reads: it writes no team-rules block, and ${tool} gets none of the team rules from teamai. `
     + 'Make that file plain JSON (no comments or trailing commas), then run `teamai pull`.';
 }

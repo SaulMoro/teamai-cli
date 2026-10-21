@@ -30,6 +30,18 @@ const ROWS: readonly MatrixRow[] = [
     source: 'Codex reads no rules directory; the team rules are a block in $CODEX_HOME/AGENTS.md (#946)',
   },
   {
+    tool: 'codex', scope: 'user', install: { toolPaths: { codex: { skills: '.codex/skills', rules: '.codex/rules', userScope: { claudemd: '.codex/AGENTS.md' } } } },
+    writes: ['~/.codex/rules'],
+    existingDirs: ['~/.codex'], installed: { probe: '~/.codex', met: true },
+    reads: [],
+    broken: {
+      'project-root': { reason: 'not-read', issue: '#938' },
+      'project-subdir': { reason: 'not-read', issue: '#938' },
+      'root-outside-home': { reason: 'not-read', issue: '#938' },
+    },
+    source: 'A team entry written before #938 still names .codex/rules, which holds Codex\'s exec-policy files: teamai writes there as the entry says, and doctor fails it',
+  },
+  {
     tool: 'codex', scope: 'project',
     channel: { via: 'session-hook', probe: 'codex-hooks', limit: null },
     existingDirs: ['~/.codex'], installed: { probe: '~/.codex', met: true },
@@ -256,6 +268,18 @@ const ROWS: readonly MatrixRow[] = [
     channel: { via: 'extension', probe: 'pi-extension', limit: null },
     existingDirs: ['~/.pi'], installed: { probe: '~/.pi', met: true },
     source: "Pi 0.99.2 run: teamai's extension adds a project's rules to each run's system prompt (#946)",
+  },
+  {
+    tool: 'pi', scope: 'project', install: { toolPaths: { pi: { skills: '.pi/skills', rules: '.pi/rules', claudemd: 'AGENTS.md' } } },
+    writes: ['<root>/.pi/rules'],
+    existingDirs: ['~/.pi', '<root>/.pi'], installed: { probe: '<root>/.pi', met: true },
+    reads: [],
+    broken: {
+      'project-root': { reason: 'not-read', issue: '#946' },
+      'project-subdir': { reason: 'not-read', issue: '#946' },
+      'root-outside-home': { reason: 'not-read', issue: '#946' },
+    },
+    source: 'Pi 0.99.2 run: Pi reads no .pi/rules; a team entry written before #946 still names it, so teamai writes there and doctor fails it',
   },
   {
     tool: 'codebuddy', scope: 'user',

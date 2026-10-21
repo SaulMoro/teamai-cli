@@ -1,11 +1,11 @@
 import path from 'node:path';
-import { isToolInstalledForConfig, ResourceHandler, type PlacementRecords } from './base.js';
+import { ResourceHandler, type PlacementRecords } from './base.js';
 import type { CopyOrigin, ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig } from '../types.js';
 import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, listDirs, readFileSafe, writeFile, pruneEmptyDirs, fileHash } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { getUserHome } from '../utils/home.js';
 import { debugOnce, warnOnce } from '../utils/warn-once.js';
-import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveBaseDir, resolveToolBaseDir, resolveToolRootDir, isAgentExcluded, isGitExcludeEnabled, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY, getUserConfigPath, installScopeName } from '../types.js';
+import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveToolBaseDir, resolveToolRootDir, isAgentExcluded, isGitExcludeEnabled, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY, getUserConfigPath, installScopeName } from '../types.js';
 import { EXCLUDED_RULE_NAMES, isDeployedRecallRule, TEAMAI_CONTEXT_RULE_NAME } from '../builtin-rules.js';
 import { rulePaths, teamRuleBody, teamRuleData } from './team-rule.js';
 import { joycodeQuotedGlobsWarning } from './joycode-rule.js';
@@ -40,6 +40,8 @@ import {
   type RuleFormat,
 } from './rule-format.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from '../utils/claudemd.js';
+import { installOf, locate, ownOf, writable, type Gate, type Install, type Location } from '../locate.js';
+import { channelsOf } from '../tools.js';
 
 /** The copies earlier pulls left in one of `LEGACY_RULE_DIRS` (`RulesHandler.legacyRuleCopies`). */
 export interface LegacyRuleCopies {
@@ -107,16 +109,15 @@ export class RulesHandler extends ResourceHandler {
     };
 
     // Scan each tool's rules/ directory (recursively)
-    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-      const rulesPath = toolPath.rules;
-      if (!rulesPath) continue;
+    for (const { tool, location } of await rulesLocations(teamConfig, localConfig)) {
+      const rulesDir = rulesDirOf(location);
+      if (rulesDir === null) continue;
       // Not written or cleaned by teamai, so not a source either: `removeItem`
       // leaves an excluded tool's copy behind, and read here it would republish
       // the rule just removed (#649 review). The single-repo scan source is not
       // a tool, and `enabledAgents` — which single-repo init always writes —
       // never lists it.
       if (tool !== SELF_KNOWLEDGE_SCAN_KEY && isAgentExcluded(localConfig, tool)) continue;
-      const rulesDir = path.join(resolveToolBaseDir(tool, localConfig), rulesPath);
       if (!await pathExists(rulesDir)) continue;
 
       // A tool with its own rules format holds a render: its frontmatter is
@@ -251,7 +252,7 @@ export class RulesHandler extends ResourceHandler {
       `Invalid rule destination outside team repo rules directory: ${item.relativePath}`,
     );
     if (item.sourcePath !== dest) {
-      const format = this.ruleFormatOfSource(item.sourcePath, teamConfig, localConfig);
+      const format = await this.ruleFormatOfSource(item.sourcePath, teamConfig, localConfig);
       if (format) {
         // Source is a tool's render. Only its markdown body is pushed: the
         // tool frontmatter is machine-derived, and the team file keeps its own
@@ -275,12 +276,11 @@ export class RulesHandler extends ResourceHandler {
    * `scanLocalForPush` found it there; undefined for a verbatim copy. The
    * deepest directory wins, should one tool's sit inside another's.
    */
-  private ruleFormatOfSource(sourcePath: string, teamConfig: TeamaiConfig, localConfig: LocalConfig): RuleFormat | undefined {
+  private async ruleFormatOfSource(sourcePath: string, teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<RuleFormat | undefined> {
     let match: { dirLength: number; tool: string } | undefined;
-    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-      if (!toolPath.rules) continue;
-      const dir = path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules);
-      if (!sourcePath.startsWith(dir + path.sep)) continue;
+    for (const { tool, location } of await rulesLocations(teamConfig, localConfig)) {
+      const dir = rulesDirOf(location);
+      if (dir === null || !sourcePath.startsWith(dir + path.sep)) continue;
       if (!match || dir.length > match.dirLength) match = { dirLength: dir.length, tool };
     }
     return match ? ruleFormatForTool(match.tool) : undefined;
@@ -311,17 +311,16 @@ export class RulesHandler extends ResourceHandler {
     // once on first need.
     let received: readonly string[] | undefined = receivedNames;
     const targets: DeliveryTarget[] = [];
-    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+    for (const { tool, location } of await rulesLocations(teamConfig, localConfig)) {
       if (isAgentExcluded(localConfig, tool)) continue;
-      if (!toolPath.rules) continue;
+      const destDir = rulesDirOf(location);
+      if (destDir === null) continue;
 
-      // Skip tools that are not installed
-      if (!await isToolInstalledForConfig(tool, toolPath.rules, localConfig)) {
+      if (writable(location) === null) {
         debugOnce(`Skipping rule sync for ${tool} in ${localConfig.scope} scope: tool not installed`);
         continue;
       }
 
-      const destDir = path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules);
       const ext = ruleFileExtensionForTool(tool);
       let stem = localName;
       let supersededStem: string | undefined = localName !== item.name ? item.name : undefined;
@@ -629,16 +628,16 @@ export class RulesHandler extends ResourceHandler {
     // Remove from each tool's rules directory. `.mdc` tools may have an older
     // teamai layout wrote `.md` there, so both are removed — otherwise `remove`
     // would report success while leaving the rule on disk.
-    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-      if (!toolPath.rules) continue;
+    for (const { tool, location } of await rulesLocations(teamConfig, localConfig)) {
+      const rulesDir = rulesDirOf(location);
+      if (rulesDir === null) continue;
       // Not ours to write to, so not ours to delete from. Same gate as the
       // tombstone pass in pull.
       if (isAgentExcluded(localConfig, tool)) continue;
-      const baseDir = resolveToolBaseDir(tool, localConfig);
       const extensions = new Set<string>([ruleFileExtensionForTool(tool), '.md']);
       for (const localName of localNames) {
         for (const extension of extensions) {
-          const filePath = path.join(baseDir, toolPath.rules, `${localName}${extension}`);
+          const filePath = path.join(rulesDir, `${localName}${extension}`);
           // A link is the member's, on record or not: teamai never deletes one (#993).
           if (await isLink(filePath)) continue;
           // The team file is gone from the working tree only: its history still proves a copy teamai's.
@@ -686,9 +685,11 @@ export class RulesHandler extends ResourceHandler {
       name: TEAMAI_CONTEXT_RULE_NAME, type: 'rules', relativePath, sourcePath: path.join(localConfig.repo.localPath, relativePath),
     };
     let deliveredRevs: readonly string[] | undefined;
-    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-      if (!toolPath.rules || isAgentExcluded(localConfig, tool)) continue;
-      const file = path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules, `${TEAMAI_CONTEXT_RULE_NAME}${ruleFileExtensionForTool(tool)}`);
+    const toolPaths = scopedToolPaths(teamConfig, localConfig);
+    for (const { tool, location } of await rulesLocations(teamConfig, localConfig)) {
+      const dir = rulesDirOf(location);
+      if (dir === null || isAgentExcluded(localConfig, tool)) continue;
+      const file = path.join(dir, `${TEAMAI_CONTEXT_RULE_NAME}${ruleFileExtensionForTool(tool)}`);
       if (await isLink(file) || !await pathExists(file) || await holdsInstructionBlocks(file)) continue;
       const recorded = ledger?.previous?.[file];
       deliveredRevs ??= (
@@ -702,7 +703,7 @@ export class RulesHandler extends ResourceHandler {
       // so a tracked copy shows ` M`, as any update does, and keeping the old
       // file would block that sync. Elsewhere (OpenCode, Kiro) nothing
       // rewrites it: a tracked copy is kept, as every removal keeps one.
-      const target = await instructionTargetPath(tool, toolPath, localConfig, isGitExcludeEnabled(localConfig, teamConfig));
+      const target = await instructionTargetPath(tool, toolPaths[tool], localConfig, isGitExcludeEnabled(localConfig, teamConfig));
       if (target !== file && await keepsTrackedCopy(file)) continue;
       await remove(file);
       if (ledger) forgetDelivered(ledger.hashes, file);
@@ -827,15 +828,11 @@ export class RulesHandler extends ResourceHandler {
     const deliveredRevs = async (): Promise<readonly string[]> => checkoutRevs
       ??= (await (await import('../pull.js')).resolveCheckoutBases(localConfig, state)).revs;
     const rulesByName = new Map(rules.map((rule) => [rule.name, rule]));
-    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-      if (!toolPath.rules) continue;
+    for (const { tool, location } of await rulesLocations(teamConfig, localConfig)) {
       // `pullItem` above skips excluded tools, so this pass must skip them too.
       // Without it the stale sweep deletes from a directory teamai never wrote.
-      if (isAgentExcluded(localConfig, tool)) continue;
-      if (!await isToolInstalledForConfig(tool, toolPath.rules, localConfig)) continue;
-
-      const baseDir = resolveToolBaseDir(tool, localConfig);
-      const destDir = path.join(baseDir, toolPath.rules);
+      const destDir = rulesDirOf(location);
+      if (destDir === null || writable(location) === null) continue;
       if (!await pathExists(destDir)) continue;
 
       const ext = ruleFileExtensionForTool(tool);
@@ -999,35 +996,35 @@ export class RulesHandler extends ResourceHandler {
     // is global, so only a user-scope pull writes it; Hermes gets no project
     // rules (see `ruleChannelNotes`, #946). Here, so the "Already synced" pull
     // repairs a block an older project pull overwrote.
-    if (!isAgentExcluded(localConfig, 'hermes')) {
-      const { getHermesHome } = await import('../hermes-home.js');
-      if (await pathExists(getHermesHome())) {
-        const { getHermesSoulPath, upsertSoulRules } = await import('../hermes-config.js');
-        try {
-          await upsertSoulRules(await inlinedRulesText(rules));
-        } catch (e) {
-          log.warn(`Could not write the team rules to ${getHermesSoulPath()}: ${(e as Error).message}. Hermes reads that `
-            + 'file as it is until this succeeds; run `teamai pull` again once the cause above is fixed.');
-        }
+    const install = installOf(teamConfig, localConfig);
+    const soul = await inlineRulesLocationOf('hermes', install);
+    if (soul !== null && writable(soul) !== null) {
+      const { getHermesSoulPath, upsertSoulRules } = await import('../hermes-config.js');
+      try {
+        await upsertSoulRules(await inlinedRulesText(rules));
+      } catch (e) {
+        log.warn(`Could not write the team rules to ${getHermesSoulPath()}: ${(e as Error).message}. Hermes reads that `
+          + 'file as it is until this succeeds; run `teamai pull` again once the cause above is fixed.');
       }
     }
     const block = await teamRulesBlock(rules);
-    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+    for (const tool of Object.keys(install.toolPaths)) {
+      // SOUL.md holds Hermes' rules in its own block, above.
+      if (tool === 'hermes') continue;
+      const location = await inlineRulesLocationOf(tool, install);
+      if (location?.channel !== 'files') continue;
+      const unreadable = unreadableConfigOf(location);
+      if (unreadable !== undefined && !isAgentExcluded(localConfig, tool)) {
+        const { unreadableRulesFileMessage } = await import('../instruction-targets.js');
+        log.warn(await unreadableRulesFileMessage(tool, unreadable));
+        continue;
+      }
+      const file = location.own?.path ?? null;
+      if (file === null) continue;
+      const wanted = writable(location) !== null ? block : null;
+      const writing = wanted !== null;
       // One tool's failure leaves the others' files to be written.
-      let file: string | undefined;
-      let writing = false;
       try {
-        const { userRulesFile } = await import('../instruction-targets.js');
-        const target = await userRulesFile(tool, toolPath, localConfig);
-        if (target?.unreadable && !isAgentExcluded(localConfig, tool)) {
-          const { unreadableRulesFileMessage } = await import('../instruction-targets.js');
-          log.warn(unreadableRulesFileMessage(tool, target.unreadable));
-          continue;
-        }
-        file = target?.file;
-        if (target === undefined || file === undefined) continue;
-        const wanted = target.installed && !isAgentExcluded(localConfig, tool) ? block : null;
-        writing = wanted !== null;
         if (wanted !== null) {
           await injectClaudeMdSection(file, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, wanted);
         } else {
@@ -1036,10 +1033,8 @@ export class RulesHandler extends ResourceHandler {
         }
       } catch (e) {
         const action = writing ? 'write the team-rules block to' : 'remove the team-rules block from';
-        log.warn(file === undefined
-          ? `Could not find the file ${tool} reads the team rules from: ${(e as Error).message}. Run \`teamai pull\` to retry.`
-          : `Could not ${action} ${file}: ${(e as Error).message}. ${tool} reads that file as it is until this succeeds; `
-            + 'run `teamai pull` again once the cause above is fixed.');
+        log.warn(`Could not ${action} ${file}: ${(e as Error).message}. ${tool} reads that file as it is until this succeeds; `
+          + 'run `teamai pull` again once the cause above is fixed.');
       }
     }
   }
@@ -1157,9 +1152,7 @@ export class RulesHandler extends ResourceHandler {
     const out: LegacyRuleCopies[] = [];
     // A team `toolPaths` that still names one of these dirs delivers there.
     const deliveredDirs = new Set(
-      Object.entries(scopedToolPaths(teamConfig, localConfig))
-        .filter(([, toolPath]) => toolPath.rules)
-        .map(([tool, toolPath]) => path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules!)),
+      (await rulesLocations(teamConfig, localConfig)).map(({ location }) => rulesDirOf(location)).filter((dir) => dir !== null),
     );
     for (const entry of LEGACY_RULE_DIRS) {
       const { tool, ext } = entry;
@@ -1273,22 +1266,21 @@ export class RulesHandler extends ResourceHandler {
     rules: readonly ResourceItem[],
   ): Promise<OpencodeRulesTarget | null> {
     if (isAgentExcluded(localConfig, 'opencode')) return null;
-    const paths = scopedToolPaths(teamConfig, localConfig)['opencode'];
-    if (!paths?.rules) return null;
-
-    const baseDir = resolveBaseDir(localConfig);
+    const install = installOf(teamConfig, localConfig);
+    const location = await locate('opencode', 'rules', install);
     // Only touch opencode.json when OpenCode is actually installed for this scope.
-    if (!await ResourceHandler.isToolInstalled(paths.rules, baseDir)) return null;
+    const own = writable(location);
+    if (own?.kind !== 'dir' || location.channel !== 'files' || location.activation === null) return null;
 
-    const rulesDir = path.join(baseDir, paths.rules);
+    const rulesDir = own.path;
+    const configFile = location.activation.path;
     const { opencodeProjectRuleGlobs, opencodeRuleGlobs } = await import('./opencode-config.js');
-    if (localConfig.scope === 'project') {
-      return opencodeProjectRuleGlobs(baseDir, rulesDir, paths.mcpProject ? path.join(baseDir, paths.mcpProject) : null);
+    if (install.scope === 'project') {
+      // Earlier releases listed the glob in the project's opencode.json, the file its MCP servers go to.
+      const rootConfig = ownOf(await locate('opencode', 'mcp', install))?.path ?? null;
+      return { ...opencodeProjectRuleGlobs(install.projectRoot, rulesDir, rootConfig), configFile };
     }
 
-    // The user config file mirrors the MCP field: ~/.config/opencode/opencode.json.
-    if (!paths.mcp) return null;
-    const configFile = path.join(baseDir, paths.mcp);
     // The directories pull writes the rules to, from the same seam it uses.
     const ruleDirs: string[] = [];
     // OpenCode does not write its rules flat, so `rules` serves as the received names.
@@ -1338,6 +1330,7 @@ export class RulesHandler extends ResourceHandler {
       await (await import('../pull.js')).resolveCheckoutBases(localConfig, await loadStateForScope(localConfig))
     ).revs;
     const touchedDirs = new Set<string>();
+    const locations = new Map((await rulesLocations(teamConfig, localConfig)).map(({ tool, location }) => [tool, location]));
     for (const item of teamRules) {
       for (const { tool, dest, supersedes } of await this.deliveryTargets(teamConfig, localConfig, item, received)) {
         // `supersedes` marks the author's own root copy, not a delivered one.
@@ -1346,7 +1339,9 @@ export class RulesHandler extends ResourceHandler {
         if (await keepsTrackedCopy(dest)) continue;
         await remove(dest);
         if (ledger) forgetDelivered(ledger.hashes, dest);
-        touchedDirs.add(path.join(resolveToolBaseDir(tool, localConfig), scopedToolPaths(teamConfig, localConfig)[tool].rules!));
+        const location = locations.get(tool);
+        const dir = location === undefined ? null : rulesDirOf(location);
+        if (dir !== null) touchedDirs.add(dir);
         log.debug(`Removed unselected team rule ${item.name} from ${tool}`);
       }
     }
@@ -1368,6 +1363,41 @@ export class RulesHandler extends ResourceHandler {
       }
     }
   }
+}
+
+/** Where each tool of the team's `toolPaths` takes rules in this scope. */
+async function rulesLocations(
+  teamConfig: TeamaiConfig, localConfig: LocalConfig,
+): Promise<{ readonly tool: string; readonly location: Location<'rules'> }[]> {
+  const install = installOf(teamConfig, localConfig);
+  return Promise.all(Object.keys(install.toolPaths).map(async (tool) => ({ tool, location: await locate(tool, 'rules', install) })));
+}
+
+/** The rules directory teamai writes for the tool, whatever its gates say; null for a tool that takes no rule files here. */
+function rulesDirOf(location: Location<'rules'>): string | null {
+  const own = ownOf(location);
+  return own?.kind === 'dir' ? own.path : null;
+}
+
+/** How doctor names the file `tool` reads the team rules from in user scope, inlined there; null for a tool that reads rule files. */
+export function inlineRulesLabelOf(tool: string): string | null {
+  const channel = channelsOf(tool).rules.user;
+  return typeof channel === 'object' && channel.channel === 'inline' ? channel.label : null;
+}
+
+/**
+ * Where `tool` keeps the team rules inlined in this scope: its blocks file
+ * (`locate`'s `inline` rules), also while a team entry written before the
+ * tool's rules moved still names a rules directory; null for a tool that
+ * reads rule files.
+ */
+export async function inlineRulesLocationOf(tool: string, install: Install): Promise<Location<'blocks'> | null> {
+  return install.scope === 'user' && inlineRulesLabelOf(tool) !== null ? locate(tool, 'blocks', install) : null;
+}
+
+/** The `readable-config` gate `location` does not meet: teamai cannot read the config that names the tool's rules file. */
+export function unreadableConfigOf(location: { readonly gates: readonly Gate[] }): Extract<Gate, { kind: 'readable-config' }> | undefined {
+  return location.gates.find((gate): gate is Extract<Gate, { kind: 'readable-config' }> => gate.kind === 'readable-config' && !gate.met);
 }
 
 /** Where one of `LEGACY_RULE_DIRS` is in the active scope (a `toolRoots` entry moves it in user scope). */

@@ -1922,12 +1922,11 @@ export async function buildReportPayload(
     const localConfig = await createResourceLocalConfig(config, scope, workspacePath ?? getUserHome(), workspacePath);
     const toolPath = scopedToolPaths(teamConfig, localConfig)[tool];
     if (!toolPath) return { skills: [], rules: [] };
-    const baseDir = resolveToolBaseDir(tool, localConfig);
-    const skillsDir = ownOf(await locate(tool, 'skills', installOf(teamConfig, localConfig)))?.path ?? null;
+    const install = installOf(teamConfig, localConfig);
+    const skillsDir = ownOf(await locate(tool, 'skills', install))?.path ?? null;
     const skills = skillsDir === null ? [] : await scanSkillsFromDisk(skillsDir, manifestSlugs.skills);
-    const rules = toolPath.rules
-      ? await scanRulesFromDisk(path.join(baseDir, toolPath.rules), manifestSlugs.rules)
-      : [];
+    const rulesDir = ownOf(await locate(tool, 'rules', install));
+    const rules = rulesDir?.kind === 'dir' ? await scanRulesFromDisk(rulesDir.path, manifestSlugs.rules) : [];
     return { skills, rules };
   };
 
