@@ -2547,6 +2547,40 @@ steps:
     expect(git(['show', `${branch}:polish.txt`], workspace)).toBe('yes');
   });
 
+  it('fails a reader that created a git repository in its copy unrestored, keeps that repository, and refuses the next writer there', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A nested repository survives git clean, so the copy is not put back.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('impl.txt','yes')"
+        - id: test
+          needs: [implement]
+          command: node -e "const cp=require('child_process'); cp.execFileSync('git',['init','-q','nested']); require('fs').writeFileSync('nested/a.txt','x'); cp.execFileSync('git',['add','a.txt'],{cwd:'nested'}); cp.execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.com','commit','-qm','fixture'],{cwd:'nested'})"
+        - id: polish
+          needs: [implement]
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('polish.txt','yes')"
+`);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    const branch = branchName(runId, 'change', 1);
+    expect(run.steps.find((step) => step.id === 'change.test')).toMatchObject({
+      status: 'failed', failure: { code: 'workspace_base', message: expect.stringMatching(/could NOT be put back.*nested/) },
+    });
+    expect(fs.existsSync(path.join(worktreePath(workspace, branch), 'nested', 'a.txt'))).toBe(true);
+    expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({ status: 'failed', failure: { code: 'workspace_base' } });
+    expect(() => git(['show', `${branch}:nested`], workspace)).toThrow();
+  });
+
   it('puts a submodule a reader changed back at the commit the copy records, so a later step does not commit it', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build

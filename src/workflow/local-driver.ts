@@ -628,7 +628,9 @@ async function leaveReadCopy(lease: Lease): Promise<ReadCopy | undefined> {
     const restored = await git(cwd, args);
     if (restored.code !== 0) return unrestored(restored.stderr.trim() || `git ${args.join(' ')} failed`, kept);
   }
-  return { read, state: 'restored', changed, kept };
+  // Exit codes are not enough: git clean skips a repository the step created, and a later git add -A commits it.
+  const left = await copyLeftOver(cwd, read.branch, read.commit);
+  return left ? unrestored(left, kept) : { read, state: 'restored', changed, kept };
 }
 
 /** A reader that changed its copy fails. `changed` is the step's own sentence naming the paths. */
