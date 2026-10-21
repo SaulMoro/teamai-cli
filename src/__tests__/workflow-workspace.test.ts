@@ -2633,7 +2633,8 @@ steps:
     expect(() => git(['show', `${branch}:nested`], workspace)).toThrow();
     const test = run.steps.find((step) => step.id === 'change.test');
     const attempt = test && 'attempt' in test ? test.attempt : 'none';
-    expect(git(['show', `refs/teamai/kept-modules/${attempt}/nested:a.txt`], workspace)).toBe('x');
+    const nested = git(['rev-parse', `refs/teamai/kept/${attempt}:nested`], workspace).trim();
+    expect(git(['show', `refs/teamai/kept-modules/${attempt}/${nested}:a.txt`], workspace)).toBe('x');
   });
 
   it('fails a reader that created a git repository in its copy unrestored when the repository hides untracked files from status', async () => {
@@ -2893,7 +2894,7 @@ steps:
     expect(reader).not.toBe(recorded);
     expect(fs.existsSync(worktreePath(workspace, branch))).toBe(false);
     expect(git(['cat-file', '-t', reader], workspace).trim()).toBe('commit');
-    expect(git(['rev-parse', `refs/teamai/kept-modules/${attempt}/vendor`], workspace).trim()).toBe(reader);
+    expect(git(['rev-parse', `refs/teamai/kept-modules/${attempt}/${reader}`], workspace).trim()).toBe(reader);
     expect(test).toMatchObject({ failure: { message: expect.stringContaining(`refs/teamai/kept-modules/${attempt}/`) } });
   });
 
@@ -3115,8 +3116,10 @@ steps:
     expect(test).toMatchObject({ status: 'failed', failure: { code: 'read_only_dirty' } });
     expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({ status: 'succeeded' });
     expect(fs.existsSync(worktreePath(workspace, branchName(runId, 'change', 1)))).toBe(false);
-    const modules = `refs/teamai/kept-modules/${test && 'attempt' in test ? test.attempt : 'none'}`;
-    expect(git(['show', `${modules}/vendor%2Finner:inside.txt`], workspace)).toBe('reader');
+    const attempt = test && 'attempt' in test ? test.attempt : 'none';
+    const vendor = git(['rev-parse', `refs/teamai/kept/${attempt}:vendor`], workspace).trim();
+    const nested = git(['rev-parse', `refs/teamai/kept-modules/${attempt}/${vendor}:inner`], workspace).trim();
+    expect(git(['show', `refs/teamai/kept-modules/${attempt}/${nested}:inside.txt`], workspace)).toBe('reader');
   });
 
   it('refuses a later step in a copy whose reader edited a submodule an earlier writer left dirty, though its status line is the same', async () => {

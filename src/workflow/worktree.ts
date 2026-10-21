@@ -118,15 +118,10 @@ export async function ensureWorktree(main: string, branch: string, start: string
   const hooks = hooksPath(main);
   await fs.mkdir(hooks, { recursive: true });
   await hideTeamaiWorktrees(main);
-  const listed = await git(main, ['worktree', 'list', '--porcelain']);
-  // Git lists the resolved path, which differs from `dir` under a symlinked temp or home directory.
-  const real = path.join(await fs.realpath(path.dirname(dir)).catch(() => path.dirname(dir)), path.basename(dir));
-  const known = listed.code === 0 && listed.stdout.split('\n').some((line) => line.startsWith('worktree ') && [path.resolve(dir), real].includes(path.resolve(line.slice('worktree '.length))));
   const present = await fs.stat(dir).then((stats) => stats.isDirectory(), () => false);
   // A deleted worktree stays registered, and `worktree add` refuses its path until it is pruned.
-  if (known && !present) await git(main, ['worktree', 'prune']);
-  const existing = present && (known || await git(dir, ['rev-parse', '--is-inside-work-tree']).then((result) => result.stdout.trim() === 'true').catch(() => false));
-  if (existing) {
+  if (!present) await git(main, ['worktree', 'prune']);
+  if (present) {
     const prefix = await git(dir, ['rev-parse', '--show-prefix']);
     if (prefix.code !== 0 || prefix.stdout.trim() !== '') {
       return { error: `${dir} is not a workflow worktree, so no step runs there. Move it out of the way, then retry the step.` };
@@ -583,8 +578,8 @@ async function clearReadCopyMark(dir: string): Promise<void> {
 }
 
 /**
- * A copy a reader could not put back, while it is still not back. Once it is, the marker is removed, so the person who
- * put it back only retries the step.
+ * A copy a reader could not put back, while it is still not back. Once a copy that was clean is back, the marker is
+ * removed, so the person who put it back only retries the step.
  */
 export async function unrestoredCopy(dir: string): Promise<
   { state: 'unrestored'; dir: string; marker: UnrestoredMarker; left: string } | { state: 'unreadable'; dir: string; marker: string } | undefined
@@ -655,9 +650,9 @@ async function keepModuleCommits(dir: string, { from, to, attempt }: { from: str
   if (common.code !== 0) return { error: common.stderr.trim() || 'the git directory could not be found' };
   const modules = `refs/teamai/kept-modules/${attempt}/`;
   for (const module of moved) {
-    // One ref per path, so vendor and vendor/inner do not clash. Not the user's push policy: this copy stays local.
-    const ref = `${modules}${module.path.replaceAll('/', '%2F')}`;
-    const pushed = await git(module.dir, ['push', '-q', '--no-recurse-submodules', common.stdout.trim(), `${module.commit}:${ref}`]);
+    // Named by commit: a path need not be a valid ref name, and vendor would clash with vendor/inner. This copy stays
+    // local, so the user's push policy and hooks do not apply.
+    const pushed = await git(module.dir, ['push', '-q', '--no-verify', '--no-recurse-submodules', common.stdout.trim(), `${module.commit}:${modules}${module.commit}`]);
     if (pushed.code !== 0) return { error: pushed.stderr.trim() || `the commit in ${module.path} could not be kept` };
   }
   return { modules };
