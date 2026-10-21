@@ -128,7 +128,10 @@ describe('a pull and the agents of a moved home', () => {
 
       expect(await fse.pathExists(path.join(after, 'agents', 'reviewer.md'))).toBe(true);
       expect(await fse.pathExists(path.join(before, 'agents', 'reviewer.md'))).toBe(true);
-      expect(notices()).toEqual([`[user] opencode takes agents from ${path.join(after, 'agents')} now, so teamai no longer updates its copies in ${path.join(before, 'agents')}. Delete them once no tool reads that directory.`]);
+      expect(notices()).toEqual([
+        `[user] opencode takes the instruction blocks from ${path.join(after, 'teamai-context.md')} now, so teamai no longer updates them in ${path.join(before, 'teamai-context.md')}. Delete them there once no tool reads it.`,
+        `[user] opencode takes agents from ${path.join(after, 'agents')} now, so teamai no longer updates its copies in ${path.join(before, 'agents')}. Delete them once no tool reads that directory.`,
+      ]);
       expect(recordedAgents()).toEqual([[path.join(after, 'agents')]]);
 
       vi.mocked(log.info).mockClear();
@@ -143,7 +146,9 @@ describe('a pull and the agents of a moved home', () => {
       await pull({});
 
       expect(await fse.readFile(path.join(after, 'agents', 'reviewer.md'), 'utf8')).toContain('member\'s own');
-      expect(notices()).toEqual([]);
+      expect(notices()).toEqual([
+        `[user] opencode takes the instruction blocks from ${path.join(after, 'teamai-context.md')} now, so teamai no longer updates them in ${path.join(before, 'teamai-context.md')}. Delete them there once no tool reads it.`,
+      ]);
       expect(recordedAgents()).toEqual([[path.join(before, 'agents'), path.join(after, 'agents')]]);
 
       await fse.remove(path.join(after, 'agents', 'reviewer.md'));
