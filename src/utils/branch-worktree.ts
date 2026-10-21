@@ -27,7 +27,7 @@
  */
 import path from 'node:path';
 import fse from 'fs-extra';
-import type { SimpleGit, StatusResult } from 'simple-git';
+import { GitPluginError, type SimpleGit, type StatusResult } from 'simple-git';
 import { createGitWithBlockTimeout, isGitRepo, commitSkippingHooks, isDedicatedRepoRoot, gitCommonDir, checkoutLocation } from './git.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { ensureDir, writeFile, pathExists } from './fs.js';
@@ -641,7 +641,10 @@ async function commitAndPushAt(
       await git.push(['origin', spec.branch]);
       return { status: 'published' };
     } catch (pushErr) {
-      if (attempt === maxRetries) {
+      // Killed by the block timeout: origin stopped answering, which no
+      // fetch + rebase fixes, and each retry would wait on it again.
+      const stalled = pushErr instanceof GitPluginError && pushErr.plugin === 'timeout';
+      if (attempt === maxRetries || stalled) {
         log.debug(`[${spec.logTag}] push failed after ${attempt} attempts: ${(pushErr as Error).message}`);
         return { status: 'failed', reason: (pushErr as Error).message };
       }

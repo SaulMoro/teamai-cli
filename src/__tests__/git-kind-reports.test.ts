@@ -838,15 +838,19 @@ describe('git-kind reports: a stalled origin', () => {
     const cfg = gitConfig(clone, origin);
     await ensureReportsWorktree(cfg);
     await simpleGit(clone).remote(['set-url', 'origin', stalledUrl]);
-    vi.stubEnv('TEAMAI_INIT_PUSH_TIMEOUT_MS', '500');
+    vi.stubEnv('TEAMAI_INIT_PUSH_TIMEOUT_MS', '1000');
 
+    const start = Date.now();
     const result = await updateReports(cfg, async (wt) => {
       fs.mkdirSync(path.join(wt, 'stats'), { recursive: true });
       fs.writeFileSync(path.join(wt, 'stats', 'alice.yaml'), 'sessions: 1\n');
       return { files: ['stats/alice.yaml'], message: '[teamai] Update stats for alice' };
     });
 
-    expect(result.status).toBe('failed');
+    expect(result).toMatchObject({ status: 'failed', reason: expect.stringMatching(/block timeout/) });
+    // One stalled fetch and one stalled push; retrying the push would add a
+    // stalled fetch and push per attempt, 10s or more.
+    expect(Date.now() - start).toBeLessThan(6_000);
     expect((await updateReports(cfg, async () => null)).status).toBe('already-present');
   }, 30_000);
 });
