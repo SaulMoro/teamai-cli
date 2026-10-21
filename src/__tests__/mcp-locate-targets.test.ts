@@ -10,6 +10,9 @@ vi.mock('../utils/logger.js', () => ({
   spinner: vi.fn(() => ({ start: vi.fn().mockReturnThis(), succeed: vi.fn().mockReturnThis(), fail: vi.fn().mockReturnThis() })),
 }));
 
+import { buildMcpReadFileChecks, mcpTransportNotes } from '../doctor-delivery.js';
+import type { DoctorContext } from '../doctor.js';
+import { detectMcpFormat } from '../resources/mcp-format.js';
 import { log } from '../utils/logger.js';
 import { judgeTeamaiOnlyMcpConfigs, reconcileMcpForConfig } from '../mcp-reconcile.js';
 import { entryHash, renderJsonEntry } from '../resources/mcp-format.js';
@@ -180,6 +183,70 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
       expect(alone).toEqual([{ file, teamaiOnly: true }]);
       expect(await judgeTeamaiOnlyMcpConfigs(team(), local)).toEqual([{ file, teamaiOnly: false }]);
     });
+  });
+
+  const context = (teamConfig: TeamaiConfig, localConfig: LocalConfig): DoctorContext => ({
+    teamConfig, localConfig, toolPaths: teamConfig.toolPaths, hookToolPaths: {}, baseDir: home,
+  });
+
+  it('doctor rejects a mapped MCP file the tool does not read', async () => {
+    await fse.ensureDir(path.join(home, '.cursor'));
+    const config = team();
+    config.toolPaths = { ...config.toolPaths, cursor: { ...config.toolPaths.cursor, mcp: '.cursor/unread.json' } };
+
+    const check = (await buildMcpReadFileChecks(context(config, userConfig('cursor'))))
+      .find((check) => check.name === 'cursor reads the MCP servers teamai writes');
+
+    expect(check).toBeDefined();
+    expect(await check?.check()).toBe(false);
+    expect(check?.fix).toContain('toolPaths.cursor.mcp');
+  });
+
+  it('doctor reports the MCP file moved since the last write', async () => {
+    const before = path.join(home, '.config', 'opencode', 'opencode.json');
+    const entry = renderJsonEntry('opencode', API);
+    await fse.outputJson(before, { mcp: { api: entry } });
+    await fse.outputJson(path.join(home, '.teamai', 'managed-mcp.json'), { opencode: [{ name: 'api', hash: entryHash(entry), file: before }] });
+    const xdg = path.join(root, 'xdg');
+    await fse.ensureDir(path.join(xdg, 'opencode'));
+    vi.stubEnv('XDG_CONFIG_HOME', xdg);
+
+    const check = (await buildMcpReadFileChecks(context(team(), userConfig('opencode'))))
+      .find((check) => check.name === 'opencode MCP servers are where the last write put them');
+
+    expect(check).toBeDefined();
+    expect(await check?.check()).toBe(false);
+    expect(check?.fix).toContain(before);
+  });
+
+  it('doctor warns about ZCode desktop fallback servers the native file hides', async () => {
+    await fse.ensureDir(path.join(home, '.zcode'));
+    await fse.outputJson(path.join(home, '.agents', 'mcp.json'), { mcpServers: { mine: MINE, api: renderJsonEntry('claude', API) } });
+    await fse.outputJson(path.join(home, '.teamai', 'managed-mcp.json'), { zcode: [{ name: 'api', hash: entryHash(renderJsonEntry('claude', API)) }] });
+
+    expect(await mcpTransportNotes(context(team(), userConfig('zcode')))).toContain(
+      'ZCode reads ~/.agents/mcp.json only while ~/.zcode/cli/config.json has no servers; move these servers there: mine',
+    );
+  });
+
+  it.each(['claude-internal', 'codex-internal', 'tcodex'])('doctor notes %s has an unknown MCP channel', async (tool) => {
+    await fse.ensureDir(path.join(home, `.${tool}`));
+
+    expect(detectMcpFormat(tool)).toBeNull();
+    expect(await mcpTransportNotes(context(team(), userConfig(tool)))).toContain(`${tool}'s MCP channel is unknown; teamai does not write its servers.`);
+  });
+
+  it('doctor notes cwd-only MCP and settings that still stay at the default home', async () => {
+    const agentDir = path.join(root, 'pi-agent');
+    await fse.ensureDir(agentDir);
+    vi.stubEnv('PI_CODING_AGENT_DIR', agentDir);
+    expect(await mcpTransportNotes(context(team(), userConfig('pi')))).toContain(
+      `pi takes MCP servers from ${path.join(agentDir, 'mcp.json')}, but teamai still writes hooks and model settings under ${path.join(home, '.pi', 'agent')}.`,
+    );
+    const project = path.join(root, 'project');
+    await fse.ensureDir(path.join(project, '.pi'));
+    const local: LocalConfig = { ...userConfig('pi'), scope: 'project', projectRoot: project };
+    expect(await mcpTransportNotes(context(team(), local))).toContain(`pi reads project MCP servers only from a session started in ${project}.`);
   });
 
   describe('the file each server was written to, in its ownership record', () => {

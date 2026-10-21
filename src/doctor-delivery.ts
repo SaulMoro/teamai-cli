@@ -4,8 +4,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { spawnSync } from 'node:child_process';
 import { expandHome, listFilesRecursive, pathExists, readFileSafe, readJsonObject } from './utils/fs.js';
 import {
-  CODEX_TOOL_ID, DEFAULT_CODEX_ROOT, getDataHome, getMcpSharing, getTeamaiHome, isAgentExcluded, isGitExcludeEnabled, managedMcpManifestKey, MUSE_TOOL_ID,
-  resolveToolBaseDir, resolveToolRootDir, scopedToolPaths,
+  getDataHome, getMcpSharing, getTeamaiHome, isAgentExcluded, isGitExcludeEnabled, managedMcpManifestKey, MUSE_TOOL_ID,
+  resolveToolBaseDir, scopedToolPaths,
 } from './types.js';
 import type { DeliveryTarget, LocalConfig, ManagedMcpManifest, McpServerDef, ResourceItem, TeamaiConfig } from './types.js';
 import type { EntryLayout, EntryResolution } from './namespaced-entries.js';
@@ -24,7 +24,7 @@ import {
 } from './utils/shell-profile.js';
 import { getUserHome } from './utils/home.js';
 import { loadStateForScope } from './config.js';
-import { installOf, locate, unreadWrites, writable, writesOf, type Location, type ReadGate } from './locate.js';
+import { installOf, locate, unreadWrites, writable, writesOf, type Location } from './locate.js';
 import { codexProjectTrust, codexTrustFix } from './codex-project-trust.js';
 import { amongPlaces, placesRecordOf, samePlace, samePlaces } from './resources/places.js';
 import { defaultToolHome, realHost, toolHome } from './tool-home.js';
@@ -1193,8 +1193,38 @@ async function unsupportedTransportServers(localConfig: LocalConfig, target: Mcp
 export async function mcpTransportNotes(ctx: DoctorContext): Promise<string[]> {
   const team = await teamMcpForDoctor(ctx);
   if (team.kind !== 'read') return [];
-  const { mcpTargetAgent } = await import('./mcp-reconcile.js');
+  const { mcpTargetAgent, installedMcpEntries, loadMcpManifest } = await import('./mcp-reconcile.js');
+  const { entryHash } = await import('./resources/mcp-format.js');
   const notes: string[] = [];
+  const install = installOf(team.teamConfig, ctx.localConfig);
+  const host = realHost();
+  for (const tool of Object.keys(team.teamConfig.toolPaths)) {
+    const where = await locate(tool, 'mcp', install, host);
+    if (!where.gates.every((gate) => gate.met)) continue;
+    if (where.channel === 'unknown') {
+      notes.push(`${tool}'s MCP channel is unknown; teamai does not write its servers.`);
+      continue;
+    }
+    const own = writable(where);
+    if (where.channel !== 'files' || own === null) continue;
+    if (install.scope === 'user' && isToolId(tool) && settingsAtDefault(tool)
+      && !await samePlace(toolHome(tool, host), defaultToolHome(tool, host))) {
+      notes.push(`${tool} takes MCP servers from ${own.path}, but teamai still writes hooks and model settings under ${defaultToolHome(tool, host)}.`);
+    }
+    for (const unread of unreadWrites(where, host)) {
+      if (unread.reason === 'cwd-only') notes.push(`${tool} reads project MCP servers only from a session started in ${unread.readFrom}.`);
+      else if (unread.reason === 'outside-workspace') notes.push(`${tool} reads MCP servers in ${unread.write} only from sessions under ${unread.readFrom}.`);
+    }
+    if (tool === 'zcode' && install.scope === 'user') {
+      const fallback = where.retired.find(({ was }) => was === 'default')?.place;
+      if (fallback === undefined) continue;
+      const installed = await installedMcpEntries({ tool, format: 'claude', file: fallback.path, key: fallback.key, projectScope: false });
+      const { manifest } = await loadMcpManifest(ctx.localConfig, true);
+      const records = manifest.zcode ?? [];
+      const names = [...installed ?? []].filter(([name, entry]) => !records.some((record) => record.name === name && record.hash === entryHash(entry))).map(([name]) => name);
+      if (names.length > 0) notes.push(`ZCode reads ~/.agents/mcp.json only while ~/.zcode/cli/config.json has no servers; move these servers there: ${names.sort().join(', ')}`);
+    }
+  }
   for (const target of team.targets) {
     const unsupported = await unsupportedTransportServers(ctx.localConfig, target, team.teamDefs);
     if (unsupported.length === 0) continue;
@@ -1323,11 +1353,32 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
 export async function buildMcpReadFileChecks(ctx: DoctorContext): Promise<Check[]> {
   const { localConfig, teamConfig } = ctx;
   // An HTTP-backed team's servers arrive through the local agent, which a pull does not run.
-  if (!teamConfig || localConfig.scope !== 'user' || localConfig.repo.kind === 'http') return [];
-  const { resolveMcpTargets, shadowedMcpRecords } = await import('./mcp-reconcile.js');
+  if (!teamConfig || localConfig.repo.kind === 'http') return [];
+  const { resolveMcpTargets, shadowedMcpRecords, loadMcpManifest, mcpManifestKey, recordedFileOf, sameMcpFile, installedMcpEntries } = await import('./mcp-reconcile.js');
   const home = getUserHome();
   const checks: Check[] = [];
+  const install = installOf(teamConfig, localConfig);
+  const { manifest } = await loadMcpManifest(localConfig, true);
   for (const target of await resolveMcpTargets(teamConfig, localConfig)) {
+    if (isAgentExcluded(localConfig, target.tool)) continue;
+    const where = await locate(target.tool, 'mcp', install);
+    const unread = unreadWrites(where).filter((read) => read.reason === 'not-read' || read.reason === 'shadowed');
+    if (where.channel === 'files' && where.reads !== 'unknown') checks.push({
+      name: `${target.tool} reads the MCP servers teamai writes`, source: 'local',
+      check: async () => unread.length === 0,
+      fix: unread.map((read) => read.reason === 'shadowed' ? `${read.write} is shadowed by ${read.by}.` : `${target.tool} does not read ${read.write}.`).join(' ')
+        + ` Point toolPaths.${target.tool}.${install.scope === 'user' ? 'mcp' : 'mcpProject'} in teamai.yaml at a file ${target.tool} reads.`,
+    });
+    const moved = new Set<string>();
+    for (const record of manifest[mcpManifestKey(target)] ?? []) {
+      const file = recordedFileOf(target, record);
+      if (!await sameMcpFile(file, target.file) && (await installedMcpEntries({ ...target, file }))?.has(record.name)) moved.add(file);
+    }
+    if (moved.size > 0) checks.push({
+      name: `${target.tool} MCP servers are where the last write put them`, source: 'local', check: async () => false,
+      fix: `${target.tool} takes MCP servers from ${target.file} now, but the last write put them in ${[...moved].join(', ')}. Run `
+        + '`teamai pull` to sync them there. Old copies outside teamai relocation paths stay for you to remove when no tool reads them.',
+    });
     const shadowed = await shadowedMcpRecords(localConfig, target);
     if (shadowed.size === 0) continue;
     const lookup = (target.lookupFiles ?? []).map((file) => file.startsWith(home + path.sep) ? `~${file.slice(home.length)}` : file);
@@ -1403,11 +1454,9 @@ export async function buildCodexProjectTrustCheck(ctx: DoctorContext): Promise<C
     .filter((name) => installed?.has(name));
   if (names.length === 0) return [];
 
-  const gate: ReadGate = {
-    kind: 'codex-project-trust',
-    config: path.join(resolveToolRootDir(CODEX_TOOL_ID, DEFAULT_CODEX_ROOT, localConfig.toolRoots), 'config.toml'),
-    checkout: projectRoot,
-  };
+  const where = await locate(target.tool, 'mcp', installOf(teamConfig, localConfig));
+  const gate = where.channel === 'files' ? where.readGates.find((gate) => gate.kind === 'codex-project-trust') : undefined;
+  if (gate === undefined) return [];
   const trust = await codexProjectTrust(gate);
   const cause = `${target.file} holds team MCP servers (${nameList(names)}), but Codex loads a project's `
     + '.codex/config.toml only in a trusted project';

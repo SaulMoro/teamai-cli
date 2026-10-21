@@ -10,8 +10,8 @@ import { OMP_RULE_FORMAT } from '../resources/omp-rule.js';
 import { QODER_RULE_FORMAT } from '../resources/qoder-rule.js';
 import { getsRulesFromExtension, getsRulesFromSessionHook, ruleFormatById, ruleFormatForTool, type RuleFormat } from '../resources/rule-format.js';
 import { TRAE_RULE_FORMAT } from '../resources/trae-rule.js';
-import { AGENT_TOOLS, isToolId, mcpFormatOf, ruleFormatIdOf, runTimeRulesOf, settingsAtDefault, TOOLS } from '../tools.js';
-import { DEFAULT_TOOL_PATHS, type ToolId } from '../types.js';
+import { AGENT_TOOLS, isToolId, mcpFormatOf, ruleFormatIdOf, runTimeRulesOf, settingsAtDefault } from '../tools.js';
+import { DEFAULT_TOOL_PATHS } from '../types.js';
 
 const TOOL_IDS = Object.keys(DEFAULT_TOOL_PATHS).filter(isToolId);
 const TOOLS_AND_A_CUSTOM_ONE = [...TOOL_IDS, 'my-ide'];
@@ -50,10 +50,6 @@ const BEFORE: {
   ],
 };
 
-/** Tools whose MCP channel the descriptor already gives as #1221 decided (D-f), while pull still renders them as before. */
-const MCP_DECIDED_AHEAD: readonly ToolId[] = ['claude-internal', 'codex-internal', 'tcodex'];
-const decidedAhead = (tool: string): boolean => MCP_DECIDED_AHEAD.some((id) => id === tool);
-
 const descriptorFormat = (tool: string): RuleFormat | undefined => {
   const id = ruleFormatIdOf(tool);
   return id === 'verbatim' ? undefined : ruleFormatById(id);
@@ -70,17 +66,14 @@ describe('the descriptor\'s channels agree with the tables they replaced', () =>
       BEFORE.sessionHookRules.includes(tool) ? 'session-hook' : BEFORE.extensionRules.includes(tool) ? 'extension' : null,
     );
 
-    expect(detectMcpFormat(tool)).toBe(BEFORE.mcpFormats[tool] ?? null);
-    expect(mcpFormatOf(tool)).toBe(decidedAhead(tool) ? null : BEFORE.mcpFormats[tool] ?? null);
+    const internal = ['claude-internal', 'codex-internal', 'tcodex'].includes(tool);
+    expect(detectMcpFormat(tool)).toBe(internal ? null : BEFORE.mcpFormats[tool] ?? null);
+    expect(mcpFormatOf(tool)).toBe(detectMcpFormat(tool));
   });
 
   it('renders agents for the same tools', () => {
     expect([...ALL_SUPPORTED_TOOLS].sort()).toEqual([...BEFORE.agentTools].sort());
     expect([...AGENT_TOOLS].sort()).toEqual([...BEFORE.agentTools].sort());
-  });
-
-  it('gives the internal builds no MCP channel, which is where only their detected format still differs', () => {
-    expect(MCP_DECIDED_AHEAD.map((tool) => [TOOLS[tool].mcp.user, TOOLS[tool].mcp.project])).toEqual(MCP_DECIDED_AHEAD.map(() => ['unknown', 'unknown']));
   });
 
   it('marks the tools whose hooks and settings stay at the default home', () => {
