@@ -2425,6 +2425,28 @@ steps:
     expect(() => git(['show', `${branch}:junk.txt`], workspace)).toThrow();
   });
 
+  it('does not fail a reader that changed nothing when a tag has its branch name', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A tag named like the copy's branch is not a move off the branch.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('child_process').execFileSync('git',['tag',require('child_process').execFileSync('git',['symbolic-ref','--short','HEAD']).toString().trim()]); require('fs').writeFileSync('impl.txt','yes')"
+        - id: test
+          needs: [implement]
+          command: node -e "0"
+`);
+
+    const done = await runLocalDriver(config, runId, workspace);
+
+    expect(done, JSON.stringify(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+  });
+
   it('keeps what a reader changed on a ref named in its failure before putting the copy back', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build

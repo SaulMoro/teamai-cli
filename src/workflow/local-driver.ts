@@ -599,7 +599,8 @@ async function leaveReadCopy(lease: Lease): Promise<ReadCopy | undefined> {
   if (!cwd || !before?.head || workspace?.mode !== 'read-only') return undefined;
   const changed = changedPaths(before, await snapshotWorktree(cwd));
   // A detach or a switch to another branch at the same commit changes no file, but a later step would commit off the branch.
-  const onBranch = (await git(cwd, ['symbolic-ref', '--quiet', '--short', 'HEAD'])).stdout.trim() === workspace.branch;
+  // The full ref: --short prints heads/<branch> when a tag has the same name.
+  const onBranch = (await git(cwd, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim() === `refs/heads/${workspace.branch}`;
   if (!onBranch && !changed.includes('HEAD')) changed.push('HEAD');
   await restoreLeaseOverlay(lease);
   const read = { branch: workspace.branch, base: workspace.base.commit, commit: before.head };
