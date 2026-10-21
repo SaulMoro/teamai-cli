@@ -6,10 +6,10 @@ import { ResourceHandler, type PlacementRecords, type ScanForPushOptions } from 
 import type { CopyOrigin, ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig, AgentModelRecords, RecordedAgentModel } from '../types.js';
 import { listFiles, listDirs, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, writeFile, readFileSafe, fileHash } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
-import { resolveToolBaseDir, installScopeName, isAgentExcluded, isSelfMode, scopedToolPaths } from '../types.js';
+import { installScopeName, isAgentExcluded, isSelfMode } from '../types.js';
 import { BUILTIN_AGENT_NAMES } from '../builtin-agents.js';
 import { isAgentToolId } from '../tools.js';
-import { installOf, locate, ownOf, writable } from '../locate.js';
+import { cleanupOf, installOf, locate, ownOf, writable } from '../locate.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { isSafeNamespaceSegment } from '../manifest-schema.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
@@ -311,16 +311,15 @@ export class AgentsHandler extends ResourceHandler {
     // Collect all local agent files grouped by stem
     const grouped = new Map<string, Map<string, string>>(); // stem → (tool → filePath)
 
-    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-      if (!toolPath.agents) continue;
+    const install = installOf(teamConfig, localConfig);
+    for (const tool of Object.keys(install.toolPaths)) {
       // An excluded tool is neither written nor cleaned by teamai, so what it
       // holds is not a source either: `removeItem` leaves its copy behind, and
       // a namespaced removal tombstones only `<ns>/<stem>`, so reading that
       // copy republished the agent just removed (#649 review).
       if (isAgentExcluded(localConfig, tool)) continue;
-      const baseDir = resolveToolBaseDir(tool, localConfig);
-      const agentsDir = path.join(baseDir, toolPath.agents);
-      if (!await pathExists(agentsDir)) continue;
+      const agentsDir = ownOf(await locate(tool, 'agents', install))?.path;
+      if (agentsDir === undefined || !await pathExists(agentsDir)) continue;
 
       const files = await listFiles(agentsDir);
       for (const file of files) {
@@ -882,28 +881,29 @@ export class AgentsHandler extends ResourceHandler {
     // teamai's only on proof, here as in pull (#993).
     const { deliveredHashes } = await import('../pull.js');
     const previous = await deliveredHashes(localConfig);
-    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-      if (!toolPath.agents) continue;
+    const install = installOf(teamConfig, localConfig);
+    for (const tool of Object.keys(install.toolPaths)) {
       // A tool the member excluded is not ours to write to, so it is not ours
       // to delete from either. This is the gate pull's tombstone pass applies.
       if (isAgentExcluded(localConfig, tool)) continue;
-      const baseDir = resolveToolBaseDir(tool, localConfig);
-      // Try every native agent extension: the render format varies per tool.
-      for (const localName of localNames) {
-        for (const ext of AGENT_FILE_EXTENSIONS) {
-          const filePath = path.join(baseDir, toolPath.agents, `${localName}${ext}`);
-          // A link is the member's, whatever the records say: teamai never deletes one (#993).
-          if (await isLink(filePath)) continue;
-          // The author's root copy is this agent's by the placement record, which proves it here.
-          if (localName === name && await pathExists(filePath)
-            && !await ownsAgentCopy(localConfig, filePath, stem, tool, previous)) {
-            log.warn(describeMembersDirLeft(filePath, resource, 'remove'));
-            continue;
-          }
-          if (await pathExists(filePath) && !await keepsTrackedCopy(filePath)) {
-            await remove(filePath);
-            removed.push(filePath);
-            log.debug(`Removed agent ${localName} from ${tool}`);
+      for (const { path: agentsDir } of cleanupOf(await locate(tool, 'agents', install))) {
+        // Try every native agent extension: the render format varies per tool.
+        for (const localName of localNames) {
+          for (const ext of AGENT_FILE_EXTENSIONS) {
+            const filePath = path.join(agentsDir, `${localName}${ext}`);
+            // A link is the member's, whatever the records say: teamai never deletes one (#993).
+            if (await isLink(filePath)) continue;
+            // The author's root copy is this agent's by the placement record, which proves it here.
+            if (localName === name && await pathExists(filePath)
+              && !await ownsAgentCopy(localConfig, filePath, stem, tool, previous)) {
+              log.warn(describeMembersDirLeft(filePath, resource, 'remove'));
+              continue;
+            }
+            if (await pathExists(filePath) && !await keepsTrackedCopy(filePath)) {
+              await remove(filePath);
+              removed.push(filePath);
+              log.debug(`Removed agent ${localName} from ${tool}`);
+            }
           }
         }
       }
