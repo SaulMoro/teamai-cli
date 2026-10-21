@@ -25,7 +25,7 @@ import {
   installScopeName,
 } from './types.js';
 import { isToolInstalledForConfig } from './resources/base.js';
-import { installOf, locate, writableDir } from './locate.js';
+import { installOf, locate, writable } from './locate.js';
 import { sameSkillDir } from './resources/skill-dirs.js';
 import { describeInvalidToolHomes, envToolHome, realHost, reloadToolHomes, toolHomesPath } from './tool-home.js';
 import { isToolId } from './tools.js';
@@ -191,7 +191,7 @@ async function buildEnabledToolChecks(ctx: DoctorContext): Promise<Check[]> {
     // check exists to catch. A tool with no skills path (rules only) has no
     // such resolver, so it keeps the generic probe.
     const isInstalled = paths.skills
-      ? async (): Promise<boolean> => writableDir(await locate(tool, 'skills', installOf(ctx.teamConfig ?? { toolPaths }, localConfig))) !== null
+      ? async (): Promise<boolean> => writable(await locate(tool, 'skills', installOf(ctx.teamConfig ?? { toolPaths }, localConfig))) !== null
       : (): Promise<boolean> => isToolInstalledForConfig(tool, probePath, localConfig);
 
     // Pushed whether or not it passes. Every other check in the registry

@@ -28,7 +28,7 @@ import {
 } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { CODEX_TOOL, mayDeleteSkillCopy, skillOrigin } from './resources/skills.js';
-import { installOf, locate, SHARED_AGENT_SKILLS_PATH, writableDir, writesOf } from './locate.js';
+import { installOf, locate, SHARED_AGENT_SKILLS_PATH, writable, writesOf } from './locate.js';
 import { describeToolHomeChange, recordToolHomes } from './tool-home-record.js';
 import { describeInvalidToolHomes, realHost } from './tool-home.js';
 import { recordSkillDirs, skillDirsOf, skillDirsUnmoved, type SessionToolHomes, type SkillDirs } from './resources/skill-dirs.js';
@@ -353,7 +353,7 @@ export async function cleanupInactiveNamespaceSkills(
     // Ask where delivery writes, not where the tool root sits: OpenClaw keeps
     // its skills under a workspace directory, so the generic probe sweeps a
     // directory a pull never wrote to and leaves the real one untouched (#624).
-    const skillsDir = writableDir(await locate(tool, 'skills', install));
+    const skillsDir = writable(await locate(tool, 'skills', install))?.path ?? null;
     if (skillsDir === null) continue;
     if (tool === CODEX_TOOL) {
       const swept = (name: string): boolean => !retainedSkillNames.has(name) && inactiveSkillNames.has(name);
@@ -444,7 +444,7 @@ async function getExistingLocalNames(
     // A skill exists if any tool has it, including the .agents/skills Codex reads.
     const install = installOf(teamConfig, localConfig);
     for (const tool of Object.keys(install.toolPaths)) {
-      for (const skillsDir of writesOf(await locate(tool, 'skills', install))) {
+      for (const { path: skillsDir } of writesOf(await locate(tool, 'skills', install))) {
         if (!await pathExists(skillsDir)) continue;
         for (const item of items) {
           if (await pathExists(path.join(skillsDir, item.name))) existing.add(item.name);
@@ -555,7 +555,7 @@ async function getInstalledResourceTargets(
       const resourcePath = toolPath[resource];
       if (!resourcePath) continue;
       const receives = resource === 'skills'
-        ? writableDir(await locate(tool, 'skills', install)) !== null
+        ? writable(await locate(tool, 'skills', install)) !== null
         : await isToolInstalledForConfig(tool, resourcePath, localConfig);
       if (receives) {
         targets.push(tool);
@@ -624,7 +624,7 @@ async function cleanupTombstonedResources(
       if (!dir) continue;
       let typeDir: string;
       if (type === 'skills') {
-        const skillsDir = writableDir(await locate(tool, 'skills', installOf(freshConfig, localConfig)));
+        const skillsDir = writable(await locate(tool, 'skills', installOf(freshConfig, localConfig)))?.path ?? null;
         if (skillsDir === null) continue;
         typeDir = skillsDir;
       } else {
@@ -2158,7 +2158,7 @@ async function pullForScope(
   if (!options.dryRun && desiredSkillNames && knownRepoSkillNames) {
     const install = installOf(freshConfig, localConfig);
     for (const tool of Object.keys(install.toolPaths)) {
-      const skillsDir = writableDir(await locate(tool, 'skills', install));
+      const skillsDir = writable(await locate(tool, 'skills', install))?.path ?? null;
       if (skillsDir === null) continue;
       if (tool === CODEX_TOOL) {
         const swept = (name: string): boolean => !desiredSkillNames.has(name) && knownRepoSkillNames.has(name);

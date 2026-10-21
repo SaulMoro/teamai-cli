@@ -17,7 +17,7 @@ import {
 } from './fs.js';
 import { getFileContentAtRev, getFileContentWhenAdded } from './git.js';
 import { isToolInstalledForConfig } from '../resources/base.js';
-import { installOf, locate } from '../locate.js';
+import { installOf, locate, ownOf } from '../locate.js';
 import { ruleFileExtensionForTool, ruleFormatForTool, teamRuleNameForFile, usesCopilotInstructions } from '../resources/rule-format.js';
 import { EXCLUDED_RULE_NAMES } from '../builtin-rules.js';
 import { log } from './logger.js';
@@ -237,7 +237,7 @@ async function syncSkillsToLocal(
 
   const install = installOf(teamConfig, localConfig);
   for (const tool of Object.keys(install.toolPaths)) {
-    const skillsDir = (await locate(tool, 'skills', install)).own;
+    const skillsDir = ownOf(await locate(tool, 'skills', install))?.path ?? null;
     if (skillsDir === null || !await pathExists(skillsDir)) continue;
 
     const localSkillNames = await listDirs(skillsDir);

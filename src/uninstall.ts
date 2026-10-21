@@ -1001,7 +1001,7 @@ async function buildRemovalPlan(
         toolPath,
         resolveToolBaseDir(tool, localConfig),
         baseDir,
-        writesOf(await locate(tool, 'skills', install)),
+        writesOf(await locate(tool, 'skills', install)).map((place) => place.path),
         teamSkillNames,
         ownsSkill,
         skillFiles,

@@ -51,6 +51,21 @@ export type SkillReads = {
 };
 
 /**
+ * The check that says a run-time channel is installed where the tool runs it.
+ * A closed union, so a new probe fails `tsc` until its check is written.
+ */
+export type ChannelProbe = 'codex-hooks' | 'zcode-session-start' | 'dsh-session-start' | 'muse-session-start' | 'pi-extension' | 'omp-extension' | 'hermes-plugin';
+
+/** How teamai adds a resource to each session of the tool instead of writing it to a file the tool reads. */
+export type RunTimeVia = 'session-hook' | 'extension' | 'plugin';
+
+/** A condition outside teamai's write that decides whether the tool reads it. */
+export type ReadGateKind = 'codex-project-trust';
+
+/** The frontmatter teamai writes above its blocks when it creates an owned blocks file a rules loader reads. */
+export type BlocksHeader = 'always-apply' | 'apply-to-all';
+
+/**
  * What says the tool is installed when its configured paths do not:
  * - `home-edition`: its home under `$HOME`, or an `--agent` entry naming it,
  *   in every scope. Editions of one product share every project path (Trae

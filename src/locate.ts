@@ -7,7 +7,10 @@
  * can resolve a Windows member's paths.
  */
 import path from 'node:path';
-import { installGateOf, isToolId, TOOLS, type HomeSkillRead, type ProjectSkillRead } from './tools.js';
+import {
+  installGateOf, isToolId, TOOLS,
+  type BlocksHeader, type ChannelProbe, type HomeSkillRead, type ProjectSkillRead, type ReadGateKind, type RunTimeVia,
+} from './tools.js';
 import {
   isAgentExcluded, resolveBaseDir, scopedToolPaths, toolGateRoot,
   type HomePaths, type LocalConfig, type TeamaiConfig,
@@ -50,83 +53,194 @@ export function installOf(
 /** Resources `locate` answers for. */
 export type Resource = 'skills';
 
+/** A directory teamai writes one file or folder per item into: skills, agents, rule files. */
+export type DirPlace = { readonly kind: 'dir'; readonly path: string };
+
 /**
- * A directory the tool reads. `always`: from any session. `workspaceUnder`:
- * from a session at or under `root`. `cwdOnly`: from a session at `root` only.
+ * A file teamai keeps marked blocks in: the instruction blocks, or the
+ * team-rules block of a tool that reads no rules directory. `owned`: the
+ * whole file is teamai's, deleted once its blocks are gone; otherwise it is
+ * the member's or the tool's.
  */
-export type Read =
-  | { readonly path: string; readonly when: 'always' }
-  | { readonly path: string; readonly when: 'workspaceUnder' | 'cwdOnly'; readonly root: string };
+export type FilePlace = { readonly kind: 'file'; readonly path: string; readonly owned: boolean; readonly header: BlocksHeader | null };
+
+/**
+ * A map under `key` of a JSON or TOML file teamai shares with the tool, under
+ * `projects[projectKey]` of that file for a local scope (#915).
+ */
+export type EntryPlace = { readonly kind: 'entry'; readonly path: string; readonly key: readonly [string, ...string[]]; readonly projectKey?: string };
+
+export type Place = DirPlace | FilePlace | EntryPlace;
+
+/** What each resource writes. */
+export type PlaceOf = {
+  readonly skills: DirPlace;
+};
+
+/**
+ * Where the tool reads. `always`: from any session. `workspaceUnder`: from a
+ * session at or under `root`. `cwdOnly`: from a session at `root` only. A file
+ * read names the map it takes (`key`, and `projectKey` for a local scope).
+ * `shadowedBy`: the tool reads only the first of several files that exists
+ * (#993), and that is this other file, so this one is not read now.
+ */
+export type Read = {
+  readonly path: string;
+  readonly key?: readonly string[];
+  readonly projectKey?: string;
+  readonly shadowedBy?: string;
+} & (
+  | { readonly when: 'always' }
+  | { readonly when: 'workspaceUnder' | 'cwdOnly'; readonly root: string }
+);
 
 /** A condition on teamai's write: pull skips a tool whose gates are not all met. */
 export type Gate =
   | { readonly kind: 'selected'; readonly met: boolean }
-  | { readonly kind: 'installed'; readonly probe: string; readonly met: boolean };
+  | { readonly kind: 'installed'; readonly probe: string; readonly met: boolean }
+  /** OpenClaw's instruction files: an openclaw.json teamai cannot parse may name another workspace (#946). */
+  | { readonly kind: 'readable-config'; readonly file: string; readonly met: boolean };
 
 /**
- * The directories teamai writes into are present whether or not the gates are
- * met, so uninstall looks wherever teamai may have written.
+ * A condition outside teamai's write that decides whether the tool reads it.
+ * Declared, not evaluated: doctor evaluates it, and pull writes regardless,
+ * so a trust a later step of the same pull grants never holds a write back.
  */
-export type Location = {
-  /** The tool's own directory; null when it has none (no configured path, no OpenClaw workspace). */
-  readonly own: string | null;
-  /** Codex's shared `.agents/skills`, chosen per skill by its writer; null for every other tool. */
-  readonly shared: string | null;
-  readonly reads: readonly Read[] | 'unknown';
-  readonly gates: readonly Gate[];
+export type ReadGate = {
+  readonly kind: ReadGateKind;
+  /** The tool config that holds the verdict. */
+  readonly config: string;
+  readonly checkout: string;
 };
+
+/**
+ * A place teamai wrote this resource to before and no longer writes, and why.
+ * Pull strips or moves teamai's content out of it, never the member's, and
+ * uninstall clears it. A place a tool left because its home moved is not one:
+ * pull keeps that and names it once (`places.ts`).
+ */
+export type Retired<P extends Place> = {
+  readonly place: P;
+  readonly was:
+    /** An earlier release's default, or the built-in path of a tool the team remapped. */
+    | 'default'
+    /** The team's configured path, where teamai no longer writes. */
+    | 'configured'
+    /** The target the other value of `sharing.gitExclude` selects (#915). */
+    | 'git-exclude'
+    /** Another file of a first-existing lookup (#993). */
+    | 'lookup'
+    /** A tool's project file or its local scope, whichever is not in use (#915). */
+    | 'other-scope';
+};
+
+type Common<P extends Place> = { readonly retired: readonly Retired<P>[]; readonly gates: readonly Gate[] };
+
+/**
+ * teamai writes `own`: null when the tool has no place in the scope (no
+ * configured path, no OpenClaw workspace). Present whether or not the gates
+ * are met, so uninstall and push look where teamai may have written.
+ */
+export type FilesChannel<P extends Place> = Common<P> & {
+  readonly channel: 'files';
+  readonly own: P | null;
+  readonly reads: readonly Read[] | 'unknown';
+  readonly readGates: readonly ReadGate[];
+};
+
+/** teamai's session hook, extension or plugin adds the resource to each session; `probe` names the check that says it is installed there. */
+export type RunTimeChannel<P extends Place> = Common<P> & {
+  readonly channel: 'run-time';
+  readonly via: RunTimeVia;
+  readonly probe: ChannelProbe;
+  /** Characters the channel takes before the tool drops the text whole. */
+  readonly limit: number | null;
+};
+
+/** `none`: teamai builds nothing here, by decision. `unknown`: teamai builds nothing because where the tool takes it is unknown. */
+export type SilentChannel<P extends Place> = Common<P> & { readonly channel: 'none' | 'unknown' };
+
+/** How a resource of places `P` reaches a tool. */
+export type Located<P extends Place> = FilesChannel<P> | RunTimeChannel<P> | SilentChannel<P>;
+
+type LocationOf = {
+  /** `shared`: Codex's `.agents/skills`, chosen per skill by its writer; null for every other tool. */
+  readonly skills: FilesChannel<DirPlace> & { readonly shared: DirPlace | null };
+};
+
+/** Where `locate` says a tool takes `R`: one type per resource, so a caller never narrows a place kind it asked for. */
+export type Location<R extends Resource = Resource> = LocationOf[R];
 
 /** `.agents/skills`: Codex reads it, and Muse writes it in a project. */
 export const SHARED_AGENT_SKILLS_PATH = '.agents/skills';
 
+type Locator<R extends Resource> = (tool: string, install: Install, host: Host) => Promise<Location<R>>;
+
+/** One locator per resource: a resource without one fails `tsc` here. */
+const LOCATORS: { readonly [R in Resource]: Locator<R> } = {
+  skills: locateSkills,
+};
+
 /** Where `tool` takes `resource` on `host` under `install`. */
-export async function locate(tool: string, resource: Resource, install: Install, host: Host = realHost()): Promise<Location> {
-  switch (resource) {
-    case 'skills':
-      return locateSkills(tool, install, host);
-    default: {
-      const unhandled: never = resource;
-      return unhandled;
-    }
-  }
+export async function locate<R extends Resource>(tool: string, resource: R, install: Install, host: Host = realHost()): Promise<Location<R>> {
+  return LOCATORS[resource](tool, install, host);
 }
 
-/** The tool's own directory when it has one and every gate is met, else null: the one rule a writer applies. */
-export function writableDir(location: Location): string | null {
-  return location.own !== null && location.gates.every((gate) => gate.met) ? location.own : null;
+/** A place beside `own` that teamai also writes: Codex's shared skills directory. */
+type Beside<P extends Place> = { readonly shared?: P | null };
+
+/** `own` when the channel writes files and every gate is met, else null: the one rule a writer applies. */
+export function writable<P extends Place>(location: Located<P>): P | null {
+  return location.channel === 'files' && location.gates.every((gate) => gate.met) ? location.own : null;
 }
 
-/** Every directory teamai may write the tool's resource into: its own, then the shared one. */
-export function writesOf(location: Location): string[] {
-  return [location.own, location.shared].filter((dir): dir is string => dir !== null);
+/** `own` whatever the gates say: what push and the scans read, where pull would write. */
+export function ownOf<P extends Place>(location: Located<P>): P | null {
+  return location.channel === 'files' ? location.own : null;
+}
+
+/** Every place teamai writes the tool's resource to: its own, then the shared one. */
+export function writesOf<P extends Place>(location: Located<P> & Beside<P>): P[] {
+  if (location.channel !== 'files') return [];
+  return [location.own, location.shared ?? null].filter((place) => place !== null);
+}
+
+/** Every place teamai may hold the tool's resource in: its writes and the places it retired. Uninstall clears these. */
+export function cleanupOf<P extends Place>(location: Located<P> & Beside<P>): P[] {
+  return [...writesOf(location), ...location.retired.map((retired) => retired.place)];
 }
 
 /** A write the tool does not read from a session at the host's cwd, and why. */
 export type Unread =
   | { readonly write: string; readonly reason: 'not-read' }
+  | { readonly write: string; readonly reason: 'shadowed'; readonly by: string }
   | { readonly write: string; readonly reason: 'cwd-only' | 'outside-workspace'; readonly readFrom: string };
 
-/** The writes of `location` the tool would not read from a session in `host.cwd()`; none when its reads are unknown. */
-export function unreadWrites(location: Location, host: Host = realHost()): readonly Unread[] {
+/** The writes of `location` the tool would not read from a session in `host.cwd()`; none when it writes no files or its reads are unknown. */
+export function unreadWrites<P extends Place>(location: Located<P> & Beside<P>, host: Host = realHost()): readonly Unread[] {
+  if (location.channel !== 'files' || location.reads === 'unknown') return [];
   const { reads } = location;
-  if (reads === 'unknown') return [];
   const p = host.path;
   const cwd = host.cwd();
   const unread: Unread[] = [];
   for (const write of writesOf(location)) {
-    const read = reads.find((candidate) => isAtOrUnder(p, write, candidate.path) && isAtOrUnder(p, candidate.path, write));
+    const read = reads.find((candidate) => readsPlace(p, candidate, write));
     if (!read) {
-      unread.push({ write, reason: 'not-read' });
+      unread.push({ write: write.path, reason: 'not-read' });
+      continue;
+    }
+    if (read.shadowedBy !== undefined) {
+      unread.push({ write: write.path, reason: 'shadowed', by: read.shadowedBy });
       continue;
     }
     switch (read.when) {
       case 'always':
         break;
       case 'cwdOnly':
-        if (!(isAtOrUnder(p, cwd, read.root) && isAtOrUnder(p, read.root, cwd))) unread.push({ write, reason: 'cwd-only', readFrom: read.root });
+        if (!samePathOn(p, cwd, read.root)) unread.push({ write: write.path, reason: 'cwd-only', readFrom: read.root });
         break;
       case 'workspaceUnder':
-        if (!isAtOrUnder(p, cwd, read.root)) unread.push({ write, reason: 'outside-workspace', readFrom: read.root });
+        if (!isAtOrUnder(p, cwd, read.root)) unread.push({ write: write.path, reason: 'outside-workspace', readFrom: read.root });
         break;
       default: {
         const unhandled: never = read;
@@ -137,18 +251,39 @@ export function unreadWrites(location: Location, host: Host = realHost()): reado
   return unread;
 }
 
+/** Whether `read` is where the tool takes `write` from: the directory itself, the file or a directory holding it, or the same map of the same file. */
+function readsPlace(p: path.PlatformPath, read: Read, write: Place): boolean {
+  switch (write.kind) {
+    case 'dir':
+      return read.key === undefined && samePathOn(p, write.path, read.path);
+    case 'file':
+      return read.key === undefined && isAtOrUnder(p, write.path, read.path);
+    case 'entry':
+      return samePathOn(p, write.path, read.path) && write.projectKey === read.projectKey
+        && read.key !== undefined && read.key.length === write.key.length && read.key.every((part, i) => part === write.key[i]);
+    default: {
+      const unhandled: never = write;
+      return unhandled;
+    }
+  }
+}
+
+function samePathOn(p: path.PlatformPath, a: string, b: string): boolean {
+  return isAtOrUnder(p, a, b) && isAtOrUnder(p, b, a);
+}
+
 function isAtOrUnder(p: path.PlatformPath, dir: string, root: string): boolean {
   const relative = p.relative(root, dir);
   return relative === '' || (relative !== '..' && !relative.startsWith(`..${p.sep}`) && !p.isAbsolute(relative));
 }
 
-async function locateSkills(tool: string, install: Install, host: Host): Promise<Location> {
+async function locateSkills(tool: string, install: Install, host: Host): Promise<Location<'skills'>> {
   const p = host.path;
   const at: HomePaths = { home: host.home, path: p };
   const configured = install.scope === 'user'
     ? scopedToolPaths(install, { scope: 'user', toolRoots: install.toolRoots }, at)[tool]?.skills
     : install.toolPaths[tool]?.skills;
-  if (configured === undefined) return { own: null, shared: null, reads: 'unknown', gates: [] };
+  if (configured === undefined) return { channel: 'files', own: null, shared: null, reads: 'unknown', readGates: [], retired: [], gates: [] };
 
   const known = isToolId(tool) ? tool : undefined;
   const base = install.scope === 'user' ? host.home : install.projectRoot;
@@ -240,5 +375,13 @@ async function locateSkills(tool: string, install: Install, host: Host): Promise
     }
   });
 
-  return { own, shared, reads, gates: [{ kind: 'selected', met: !isAgentExcluded(install.agents, tool) }, installed] };
+  return {
+    channel: 'files',
+    own: own === null ? null : { kind: 'dir', path: own },
+    shared: shared === null ? null : { kind: 'dir', path: shared },
+    reads,
+    readGates: [],
+    retired: [],
+    gates: [{ kind: 'selected', met: !isAgentExcluded(install.agents, tool) }, installed],
+  };
 }

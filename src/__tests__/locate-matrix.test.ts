@@ -394,7 +394,7 @@ describe('locate: skills matrix', () => {
             toolRoots: expand(row.toolRoots, platform, cwd, env),
           });
           const where = await locate(row.tool, 'skills', install, host);
-          expect(writesOf(where)).toEqual(row.writes.map((write) => at(write, platform, cwd, env)));
+          expect(writesOf(where).map((place) => place.path)).toEqual(row.writes.map((write) => at(write, platform, cwd, env)));
           expect(where.gates).toEqual([{ kind: 'selected', met: true }, { kind: 'installed', probe: at(row.installed.probe, platform, cwd, env), met: row.installed.met }]);
           expect(where.reads).toEqual(row.reads === 'unknown' ? 'unknown' : row.reads.map((read) => read.when === 'always'
             ? { path: at(read.at, platform, cwd, env), when: read.when }

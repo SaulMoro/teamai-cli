@@ -1,5 +1,5 @@
 import { realpath } from 'node:fs/promises';
-import { locate, writableDir, writesOf, type Install } from '../locate.js';
+import { locate, writable, writesOf, type Install } from '../locate.js';
 import { realHost, toolHome, type Host } from '../tool-home.js';
 import { isToolId, skillsFollowSession } from '../tools.js';
 import type { State } from '../types.js';
@@ -19,7 +19,7 @@ export async function skillDirsOf(install: Install, host: Host = realHost()): Pr
   const located = await Promise.all(Object.keys(install.toolPaths).sort()
     .map(async (tool) => ({ tool, where: await locate(tool, 'skills', install, host) })));
   const dirs: SkillDirs = {};
-  for (const { tool, where } of located) if (writableDir(where) !== null) dirs[tool] = writesOf(where);
+  for (const { tool, where } of located) if (writable(where) !== null) dirs[tool] = writesOf(where).map((place) => place.path);
   return dirs;
 }
 

@@ -24,7 +24,7 @@ import {
 } from './utils/shell-profile.js';
 import { getUserHome } from './utils/home.js';
 import { loadStateForScope } from './config.js';
-import { installOf, locate, unreadWrites, writableDir, writesOf, type Location } from './locate.js';
+import { installOf, locate, unreadWrites, writable, writesOf, type Location } from './locate.js';
 import { amongSkillDirs, sameSkillDir, sameSkillDirs } from './resources/skill-dirs.js';
 import { defaultToolHome, realHost, toolHome } from './tool-home.js';
 import { isToolId, movesPartly } from './tools.js';
@@ -304,15 +304,15 @@ export async function buildDeliveryChecks(ctx: DoctorContext): Promise<Check[]> 
 }
 
 /** Each tool teamai writes skills for now, with where it takes them. */
-async function writableSkillLocations(ctx: DoctorContext): Promise<{ tool: string; own: string; where: Location }[]> {
+async function writableSkillLocations(ctx: DoctorContext): Promise<{ tool: string; own: string; where: Location<'skills'> }[]> {
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return [];
   const install = installOf(teamConfig, localConfig);
-  const located: { tool: string; own: string; where: Location }[] = [];
+  const located: { tool: string; own: string; where: Location<'skills'> }[] = [];
   for (const tool of Object.keys(ctx.toolPaths)) {
     const where = await locate(tool, 'skills', install);
-    const own = writableDir(where);
-    if (own !== null) located.push({ tool, own, where });
+    const own = writable(where);
+    if (own !== null) located.push({ tool, own: own.path, where });
   }
   return located;
 }
@@ -328,9 +328,9 @@ export async function buildSkillDirChecks(ctx: DoctorContext): Promise<Check[]> 
   const { checkoutRecordKey } = await import('./pull.js');
   const key = await checkoutRecordKey(ctx.localConfig);
   const recorded = key === undefined ? undefined : (await loadStateForScope(ctx.localConfig)).lastPullByWorkspace?.[key]?.skillDirs;
-  const unmoved = async (tool: string, where: Location): Promise<boolean> => {
+  const unmoved = async (tool: string, where: Location<'skills'>): Promise<boolean> => {
     const wrote = recorded?.[tool];
-    return wrote === undefined || sameSkillDirs({ [tool]: wrote }, { [tool]: writesOf(where) });
+    return wrote === undefined || sameSkillDirs({ [tool]: wrote }, { [tool]: writesOf(where).map((place) => place.path) });
   };
   const moved = (await Promise.all(located.map(({ tool, where }) => unmoved(tool, where)))).includes(false);
   const holds = moved ? await moveHolds(ctx, located) : { members: new Map<string, string[]>(), workspaceHeld: [] };
@@ -342,7 +342,7 @@ export async function buildSkillDirChecks(ctx: DoctorContext): Promise<Check[]> 
         name: `${tool} skills are where the last pull wrote them`,
         source: 'local',
         check: async () => unmoved(tool, where),
-        fix: await moveFix({ tool, own, writes: writesOf(where), wrote, members: holds.members.get(tool) ?? [], workspaceHeld: holds.workspaceHeld }),
+        fix: await moveFix({ tool, own, writes: writesOf(where).map((place) => place.path), wrote, members: holds.members.get(tool) ?? [], workspaceHeld: holds.workspaceHeld }),
       });
     }
     if (where.reads === 'unknown') continue;
@@ -393,12 +393,12 @@ async function moveFix({ tool, own, writes, wrote, members, workspaceHeld }: {
  */
 async function moveHolds(
   ctx: DoctorContext,
-  located: readonly { readonly tool: string; readonly where: Location }[],
+  located: readonly { readonly tool: string; readonly where: Location<'skills'> }[],
 ): Promise<{ readonly members: Map<string, string[]>; readonly workspaceHeld: readonly string[] }> {
   const members = new Map<string, string[]>();
   const { keptStubLine, BUILTIN_SKILL_NAMES } = await import('./builtin-skills.js');
   for (const { tool, where } of located) {
-    for (const dir of writesOf(where)) {
+    for (const dir of writesOf(where).map((place) => place.path)) {
       for (const name of BUILTIN_SKILL_NAMES) {
         const kept = await keptStubLine(path.join(dir, name), name);
         if (kept !== null) linesFor(members, tool).push(kept);
@@ -436,6 +436,7 @@ export async function skillReadNotes(ctx: DoctorContext): Promise<string[]> {
     for (const unread of unreadWrites(where)) {
       switch (unread.reason) {
         case 'not-read':
+        case 'shadowed':
           break;
         case 'cwd-only':
           notes.push(`${tool} reads project skills only from a session started in ${unread.readFrom}.`);

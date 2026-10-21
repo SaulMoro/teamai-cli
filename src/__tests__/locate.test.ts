@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { nextToolHomes } from '../tool-home-record.js';
+import { cleanupOf, ownOf, unreadWrites, writable, writesOf, type EntryPlace, type FilePlace, type FilesChannel, type Read } from '../locate.js';
 import { envToolHome, type Host } from '../tool-home.js';
 import { isToolId, TOOLS } from '../tools.js';
 import { sameSkillDirs } from '../resources/skill-dirs.js';
@@ -176,5 +177,49 @@ describe('skills directories compared on a host', () => {
 
     expect(await sameSkillDirs(recorded, current)).toBe(true);
     expect(await sameSkillDirs({ hermes: ['/Users/M/hermes/skills'] }, { hermes: ['/users/m/hermes/skills'] })).toBe(false);
+  });
+});
+
+describe('the helpers every caller of locate uses', () => {
+  const host = linuxHost({});
+  const met = [{ kind: 'selected', met: true }] as const;
+  const blocks = (reads: readonly Read[]): FilesChannel<FilePlace> => ({
+    channel: 'files', own: { kind: 'file', path: '/home/m/.cursor/rules/teamai-context.mdc', owned: true, header: 'always-apply' },
+    reads, readGates: [], retired: [], gates: met,
+  });
+  const servers = (reads: readonly Read[]): FilesChannel<EntryPlace> => ({
+    channel: 'files', own: { kind: 'entry', path: '/home/m/.claude.json', key: ['mcpServers'], projectKey: '/home/m/work' },
+    reads, readGates: [], gates: met,
+    retired: [{ place: { kind: 'entry', path: '/home/m/work/.mcp.json', key: ['mcpServers'] }, was: 'other-scope' }],
+  });
+
+  it('counts a file as read by the directory that holds it', () => {
+    expect(unreadWrites(blocks([{ path: '/home/m/.cursor/rules', when: 'always' }]), host)).toEqual([]);
+    expect(unreadWrites(blocks([{ path: '/home/m/.cursor', key: ['rules'], when: 'always' }]), host)).toEqual([{ write: '/home/m/.cursor/rules/teamai-context.mdc', reason: 'not-read' }]);
+  });
+
+  it('counts a map as read only from the same file, key and project key', () => {
+    const read = { path: '/home/m/.claude.json', key: ['mcpServers'], projectKey: '/home/m/work', when: 'always' } as const;
+    expect(unreadWrites(servers([read]), host)).toEqual([]);
+    expect(unreadWrites(servers([{ ...read, key: ['mcp'] }]), host).map((unread) => unread.reason)).toEqual(['not-read']);
+    expect(unreadWrites(servers([{ ...read, projectKey: '/home/m/other' }]), host).map((unread) => unread.reason)).toEqual(['not-read']);
+    expect(unreadWrites(servers([{ path: '/home/m/.claude.json', when: 'always' }]), host).map((unread) => unread.reason)).toEqual(['not-read']);
+    const nested = { ...servers([{ ...read, key: ['mcp'] }]), own: { kind: 'entry', path: '/home/m/.claude.json', key: ['mcp', 'servers'], projectKey: '/home/m/work' } } as const;
+    expect(unreadWrites(nested, host).map((unread) => unread.reason)).toEqual(['not-read']);
+  });
+
+  it('names the file that hides a write the tool would read if it were first', () => {
+    const shadowed = { path: '/home/m/.claude.json', key: ['mcpServers'], projectKey: '/home/m/work', when: 'always', shadowedBy: '/home/m/.mcp.json' } as const;
+    expect(unreadWrites(servers([shadowed]), host)).toEqual([{ write: '/home/m/.claude.json', reason: 'shadowed', by: '/home/m/.mcp.json' }]);
+  });
+
+  it('writes only through a files channel whose gates are all met, and cleans its retired places too', () => {
+    const where = servers([]);
+    expect(writable(where)).toEqual(where.own);
+    expect(writable({ ...where, gates: [...met, { kind: 'installed', probe: '/home/m/.claude', met: false }] })).toBeNull();
+    expect(ownOf({ ...where, gates: [{ kind: 'selected', met: false }] })).toEqual(where.own);
+    expect(writable({ channel: 'run-time', via: 'session-hook', probe: 'codex-hooks', limit: null, retired: [], gates: met })).toBeNull();
+    expect(cleanupOf(where)).toEqual([where.own, { kind: 'entry', path: '/home/m/work/.mcp.json', key: ['mcpServers'] }]);
+    expect(writesOf({ channel: 'none', retired: [], gates: met })).toEqual([]);
   });
 });
