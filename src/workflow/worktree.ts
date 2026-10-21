@@ -573,12 +573,39 @@ export async function unrestoredCopy(dir: string): Promise<
   return undefined;
 }
 
-/** Initialized submodules, at any depth, with uncommitted or untracked files. */
-async function dirtySubmodules(dir: string): Promise<{ paths: string[] } | { error: string }> {
-  // Each submodule's own status ignores its nested submodules: --recursive visits those itself.
-  const listed = await git(dir, ['submodule', '--quiet', 'foreach', '--recursive', 'test -z "$(git status --porcelain --untracked-files=all --ignore-submodules=all)" || echo "$displaypath"']);
-  if (listed.code !== 0) return { error: listed.stderr.trim() || 'git submodule foreach failed' };
-  return { paths: listed.stdout.split('\n').filter((line) => line !== '') };
+/**
+ * Repositories among `paths`, submodules and ones the step created, whose changes the kept commit cannot hold: uncommitted
+ * or untracked files, or a nested submodule's commit its parent has not recorded. A submodule with no checkout left counts
+ * too, since its files may have gone with it.
+ */
+async function unkeptRepositories(dir: string, { paths, commit }: { paths: string[]; commit: string }): Promise<{ paths: string[] } | { error: string }> {
+  const listed = [await git(dir, ['ls-tree', '-r', '-z', commit]), await git(dir, ['ls-files', '-s', '-z'])];
+  const failed = listed.find((entries) => entries.code !== 0);
+  if (failed) return { error: failed.stderr.trim() || 'the submodules could not be listed' };
+  const gitlinks = new Set(listed.flatMap((entries) => entries.stdout.split('\0'))
+    .filter((entry) => entry.startsWith('160000 ')).map((entry) => entry.slice(entry.indexOf('\t') + 1)));
+  // Dirty, not all: a nested submodule's new commit shows only as a change in its parent.
+  const status = ['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=dirty'];
+  const unkept: string[] = [];
+  for (const relative of paths) {
+    // Status lists a repository the step created as its directory with a trailing slash.
+    const name = relative.replace(/\/$/, '');
+    if (!gitlinks.has(name) && name === relative) continue;
+    const repo = path.join(dir, name);
+    const top = await git(repo, ['rev-parse', '--show-prefix']);
+    if (top.code !== 0 || top.stdout.trim() !== '') {
+      if (gitlinks.has(name)) unkept.push(name);
+      continue;
+    }
+    for (const args of [status, ['submodule', '--quiet', 'foreach', '--recursive', `test -z "$(git ${status.join(' ')})" || echo "$displaypath"`]]) {
+      const listed = await git(repo, args);
+      if (listed.code !== 0) return { error: listed.stderr.trim() || `git ${args[0]} failed in ${name}` };
+      if (listed.stdout.trim() === '') continue;
+      unkept.push(name);
+      break;
+    }
+  }
+  return { paths: unkept };
 }
 
 /**
@@ -586,7 +613,9 @@ async function dirtySubmodules(dir: string): Promise<{ paths: string[] } | { err
  * keeping what it changed on `refs/teamai/kept/<attempt>`. A copy it cannot put back is marked, so later steps there are
  * refused until it is.
  */
-export async function putBackCopy({ dir, branch, commit, found, attempt, step }: { dir: string; branch: string; commit: string; found: string[]; attempt: string; step: string }): Promise<
+export async function putBackCopy({ dir, branch, commit, found, changed, attempt, step }: {
+  dir: string; branch: string; commit: string; found: string[]; changed: string[]; attempt: string; step: string;
+}): Promise<
   { state: 'restored'; kept: string } | { state: 'unrestored'; reason: string; kept?: string }
 > {
   const unrestored = async (reason: string, kept?: string): Promise<{ state: 'unrestored'; reason: string; kept?: string }> => {
@@ -596,7 +625,7 @@ export async function putBackCopy({ dir, branch, commit, found, attempt, step }:
     return { state: 'unrestored', reason, ...(kept ? { kept } : {}) };
   };
   // The keep below records a submodule only as its commit, so a submodule update would destroy its files.
-  const dirty = await dirtySubmodules(dir);
+  const dirty = await unkeptRepositories(dir, { paths: changed, commit });
   if ('error' in dirty) return unrestored(dirty.error);
   if (dirty.paths.length > 0) return unrestored(`submodules have uncommitted or untracked files: ${dirty.paths.join(', ')}`);
   // A commit of the whole tree, not `git stash`: the stash list is shared by every worktree, and a stash leaves out a submodule's commit.
@@ -610,8 +639,10 @@ export async function putBackCopy({ dir, branch, commit, found, attempt, step }:
   // Without the ref, a reset would lose the changes.
   if (recorded.code !== 0) return unrestored(recorded.stderr.trim() || 'its changes could not be kept');
   // Back on the copy's branch first: a reset on a branch the step switched to would leave the copy elsewhere.
-  // A superproject reset leaves initialized submodules where the step moved them.
-  for (const args of [['checkout', '-q', '-f', branch], ['reset', '-q', '--hard', commit], ['clean', '-q', '-fd'], ['submodule', '--quiet', 'update', '--checkout', '--recursive']]) {
+  // A superproject reset leaves initialized submodules where the step moved them. It must not recurse into a submodule an
+  // earlier step left dirty.
+  const noRecurse = ['-c', 'submodule.recurse=false'];
+  for (const args of [[...noRecurse, 'checkout', '-q', '-f', branch], [...noRecurse, 'reset', '-q', '--hard', commit], ['clean', '-q', '-fd'], ['submodule', '--quiet', 'update', '--checkout', '--recursive']]) {
     const restored = await git(dir, args);
     if (restored.code !== 0) return unrestored(restored.stderr.trim() || `git ${args.join(' ')} failed`, kept);
   }

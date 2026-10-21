@@ -560,7 +560,7 @@ async function leaveReadCopy(lease: Lease): Promise<ReadCopy | undefined> {
   await restoreLeaseOverlay(lease);
   const read = { branch: workspace.branch, base: workspace.base.commit, commit: before.head };
   if (changed.length === 0) return { read, state: 'untouched' };
-  const put = await putBackCopy({ dir: cwd, branch: read.branch, commit: read.commit, found, attempt: lease.attempt, step: lease.step });
+  const put = await putBackCopy({ dir: cwd, branch: read.branch, commit: read.commit, found, changed, attempt: lease.attempt, step: lease.step });
   return put.state === 'restored' ? { read, changed, ...put } : { read, changed, dir: cwd, ...put };
 }
 

@@ -112,12 +112,13 @@ async function teamWorkspace(yaml: string): Promise<{ config: LocalConfig; works
 }
 
 /** Commits a submodule `vendor` holding `inside.txt` (`one`) to the workspace, and returns the commit it records. */
-function addSubmodule(workspace: string): string {
+function addSubmodule(workspace: string, inner?: string): string {
   const source = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-sub-'));
   dirs.push(source);
   execFileSync('git', ['init', '-q'], { cwd: source });
   fs.writeFileSync(path.join(source, 'inside.txt'), 'one\n');
   execFileSync('git', ['add', 'inside.txt'], { cwd: source });
+  if (inner) execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', inner, 'inner'], { cwd: source });
   execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'one'], { cwd: source });
   execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', source, 'vendor'], { cwd: workspace });
   execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'vendor'], { cwd: workspace });
@@ -2805,6 +2806,82 @@ steps:
     expect(fs.existsSync(path.join(copy, 'vendor', 'untracked.txt'))).toBe(true);
     expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({ status: 'failed', failure: { code: 'workspace_base', message: expect.stringContaining(`teamai workflow retry ${runId} change.polish`) } });
     expect(() => git(['show', `${branch}:polish.txt`], workspace)).toThrow();
+  });
+
+  it('puts the copy back around a submodule an earlier writer left dirty when the reader changed only a superproject file', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A reader is not blamed for a submodule it did not touch.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('child_process').execFileSync('git',['-c','protocol.file.allow=always','submodule','update','-q','--init']); require('fs').writeFileSync('vendor/inside.txt','writer'); require('fs').writeFileSync('impl.txt','yes')"
+        - id: test
+          needs: [implement]
+          command: node -e "require('fs').writeFileSync('report.txt','reader')"
+        - id: polish
+          needs: [test]
+          workspace: continue
+          command: node -e "const fs=require('fs'); if (fs.readFileSync('vendor/inside.txt','utf8')!=='writer') process.exit(2); fs.writeFileSync('polish.txt','yes')"
+`);
+    addSubmodule(workspace);
+    git(['config', 'submodule.recurse', 'true'], workspace);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    const test = run.steps.find((step) => step.id === 'change.test');
+    const kept = `refs/teamai/kept/${test && 'attempt' in test ? test.attempt : 'none'}`;
+    expect(test).toMatchObject({ status: 'failed', failure: { code: 'read_only_dirty', message: expect.stringContaining(kept) } });
+    expect(git(['show', `${kept}:report.txt`], workspace)).toBe('reader');
+  });
+
+  it('leaves the copy untouched when a reader commits only in a nested submodule, and says its change was NOT saved', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A commit in vendor/inner shows only as an uncommitted gitlink in vendor, which the kept ref cannot hold.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('child_process').execFileSync('git',['-c','protocol.file.allow=always','submodule','update','-q','--init','--recursive']); require('fs').writeFileSync('impl.txt','yes')"
+        - id: test
+          needs: [implement]
+          command: node -e "const cp=require('child_process'),fs=require('fs'); fs.writeFileSync('vendor/inner/inside.txt','reader'); cp.execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.com','commit','-qam','reader'],{cwd:'vendor/inner'})"
+        - id: polish
+          needs: [implement]
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('polish.txt','yes')"
+`);
+    const inner = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-sub-'));
+    dirs.push(inner);
+    execFileSync('git', ['init', '-q'], { cwd: inner });
+    fs.writeFileSync(path.join(inner, 'inside.txt'), 'one\n');
+    execFileSync('git', ['add', 'inside.txt'], { cwd: inner });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'one'], { cwd: inner });
+    const original = git(['rev-parse', 'HEAD'], inner).trim();
+    addSubmodule(workspace, inner);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    const branch = branchName(runId, 'change', 1);
+    const copy = worktreePath(workspace, branch);
+    expect(run.steps.find((step) => step.id === 'change.test')).toMatchObject({
+      status: 'failed', failure: { code: 'workspace_base', message: expect.stringContaining(`Its changes were NOT saved and are still in ${copy}`) },
+    });
+    expect(git(['rev-parse', 'HEAD'], path.join(copy, 'vendor', 'inner')).trim()).not.toBe(original);
+    expect(fs.readFileSync(path.join(copy, 'vendor', 'inner', 'inside.txt'), 'utf8')).toBe('reader');
+    expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({ status: 'failed', failure: { code: 'workspace_base' } });
   });
 
   it('runs a reader in a copy on the base tool settings, so a hook an earlier step committed there is absent', async () => {
