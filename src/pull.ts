@@ -28,7 +28,7 @@ import {
 } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { CODEX_TOOL, mayDeleteSkillCopy, skillOrigin } from './resources/skills.js';
-import { installOf, locate, SHARED_AGENT_SKILLS_PATH, writable, writesOf } from './locate.js';
+import { installOf, locate, ownOf, SHARED_AGENT_SKILLS_PATH, writable, writesOf } from './locate.js';
 import { describeToolHomeChange, recordToolHomes } from './tool-home-record.js';
 import { describeInvalidToolHomes, realHost } from './tool-home.js';
 import { placesOf, placesRecordOf, placesUnmoved, recordPlaces, type PlacesRecord, type SessionToolHomes } from './resources/places.js';
@@ -554,9 +554,9 @@ async function getInstalledResourceTargets(
     for (const resource of field ? [field] : (['skills', 'rules', 'agents'] as const)) {
       const resourcePath = toolPath[resource];
       if (!resourcePath) continue;
-      const receives = resource === 'skills'
-        ? writable(await locate(tool, 'skills', install)) !== null
-        : await isToolInstalledForConfig(tool, resourcePath, localConfig);
+      const receives = resource === 'rules'
+        ? await isToolInstalledForConfig(tool, resourcePath, localConfig)
+        : writable(await locate(tool, resource, install)) !== null;
       if (receives) {
         targets.push(tool);
         break;
@@ -627,6 +627,12 @@ async function cleanupTombstonedResources(
         const skillsDir = writable(await locate(tool, 'skills', installOf(freshConfig, localConfig)))?.path ?? null;
         if (skillsDir === null) continue;
         typeDir = skillsDir;
+      } else if (type === 'agents') {
+        const where = await locate(tool, 'agents', installOf(freshConfig, localConfig));
+        // A tool teamai renders no agents for keeps an earlier release's verbatim copies in its configured directory (#993).
+        const agentsDir = where.gates.every((gate) => gate.met) ? (ownOf(where) ?? where.retired[0]?.place)?.path : undefined;
+        if (agentsDir === undefined) continue;
+        typeDir = agentsDir;
       } else {
         if (!await isToolInstalledForConfig(tool, dir, localConfig)) continue;
         if (isAgentExcluded(localConfig, tool)) continue;

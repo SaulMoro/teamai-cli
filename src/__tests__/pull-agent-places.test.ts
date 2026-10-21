@@ -88,4 +88,17 @@ describe('a pull and the agents of a moved home', () => {
 
     for (const file of recallAgents) expect(await fse.pathExists(file), file).toBe(false);
   });
+
+  it('removes a tombstoned agent from there', async () => {
+    await fse.ensureDir(path.join(xdg, 'opencode'));
+    vi.stubEnv('XDG_CONFIG_HOME', xdg);
+    await pull({});
+    expect(await fse.pathExists(path.join(xdg, 'opencode', 'agents', 'reviewer.md'))).toBe(true);
+
+    await fse.remove(path.join(repo, 'agents', 'reviewer.yaml'));
+    await fse.outputFile(path.join(repo, 'agents', '.removed'), 'reviewer\n');
+    await pull({ force: true });
+
+    expect(await fse.pathExists(path.join(xdg, 'opencode', 'agents', 'reviewer.md'))).toBe(false);
+  });
 });
