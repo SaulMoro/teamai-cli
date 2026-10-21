@@ -550,9 +550,13 @@ const COMPOUND_CLAUSES = new Map<string, string>([
 
 /** Whether a single-command pipeline always exits 0 without depending on external state. */
 function isUnconditionalZero(command: SimpleCommand): boolean {
-  if (!command.redirects.every((r) => r.op.startsWith('2>'))) return false;
-  const [word] = commandWords(command.words);
-  return word === undefined || ALWAYS_SUCCEEDS.has(commandName(word).toLowerCase());
+  if (command.redirects.length > 0) return false;
+  const words = commandWords(command.words);
+  if (words.length === 0) {
+    return !command.words.some((w) => w.includes('$(') || w.includes('`'));
+  }
+  const [word] = words;
+  return ALWAYS_SUCCEEDS.has(commandName(word).toLowerCase());
 }
 
 /** Whether a command is known to fail unconditionally. */
@@ -574,6 +578,7 @@ function classifyList(commands: SimpleCommand[], flavor: ShellFlavor): ShellClas
   const verbs = new Set<string>();
   const blocks: string[] = [];
   let pendingFn = false;
+  let inFnDepth: number | null = null;
   let moved = false;
   let terminated = false;
 
@@ -588,9 +593,10 @@ function classifyList(commands: SimpleCommand[], flavor: ShellFlavor): ShellClas
       if (blocks.at(-1) !== words[idx]) return SHELL;
       blocks.pop();
       idx++;
+      if (inFnDepth !== null && blocks.length < inFnDepth) inFnDepth = null;
       if (blocks.length === 0) pendingFn = false;
     }
-    let compound = idx > 0 || blocks.length > 0 || pendingFn;
+    let compound = idx > 0 || blocks.length > 0 || pendingFn || inFnDepth !== null;
     while (idx < words.length) {
       const w = words[idx];
       if (blocks.at(-1) === 'esac' && w !== 'esac' && w.endsWith(')')) {
@@ -606,14 +612,17 @@ function classifyList(commands: SimpleCommand[], flavor: ShellFlavor): ShellClas
         idx++;
         if (idx < words.length && words[idx] !== '{' && !words[idx].startsWith('(')) idx++;
         if (idx < words.length && words[idx] === '()') idx++;
+        inFnDepth = blocks.length + 1;
         if (idx >= words.length) pendingFn = true;
       } else if (/^[A-Za-z_][A-Za-z0-9_]*\(\)$/.test(w)) {
         compound = true;
         idx++;
+        inFnDepth = blocks.length + 1;
         if (idx >= words.length) pendingFn = true;
       } else if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(w) && words[idx + 1] === '()') {
         compound = true;
         idx += 2;
+        inFnDepth = blocks.length + 1;
         if (idx >= words.length) pendingFn = true;
       } else if (w === 'case') {
         blocks.push('esac');
@@ -636,6 +645,7 @@ function classifyList(commands: SimpleCommand[], flavor: ShellFlavor): ShellClas
     }
     if (blocks.at(-1) === 'esac' && words.at(-1) === 'esac' && idx < words.length) {
       blocks.pop();
+      if (inFnDepth !== null && blocks.length < inFnDepth) inFnDepth = null;
       if (blocks.length === 0) pendingFn = false;
     }
     const before = commands[i - 1]?.op;
@@ -648,11 +658,21 @@ function classifyList(commands: SimpleCommand[], flavor: ShellFlavor): ShellClas
     }
     if (compound || blocks.length > 0) {
       moved = true;
-      condState = 'NONZERO';
-      if (commands[i - 1]?.op !== '|' && command.op !== '|') {
-        for (let j = idx; j < words.length; j++) {
-          const name = commandName(words[j]).toLowerCase();
-          if (TERMINATES_SHELL.has(name)) terminated = true;
+      if (words[0] === '!' && ALWAYS_SUCCEEDS.has(commandName(words[1] ?? '').toLowerCase())) {
+        condState = 'NONZERO';
+      } else {
+        condState = 'UNKNOWN';
+      }
+      const inFn = inFnDepth !== null || pendingFn;
+      if (!inFn && commands[i - 1]?.op !== '|' && command.op !== '|') {
+        const cmdWord = words[idx];
+        if (cmdWord !== undefined) {
+          const name = commandName(cmdWord).toLowerCase();
+          if (name === 'exec' && words.length <= idx + 1) {
+            // exec without args does not terminate
+          } else if (TERMINATES_SHELL.has(name)) {
+            terminated = true;
+          }
         }
       }
       if (pendingFn && blocks.length === 0 && idx < words.length) pendingFn = false;
@@ -682,10 +702,18 @@ function classifyList(commands: SimpleCommand[], flavor: ShellFlavor): ShellClas
     if (!skipped && pipeEnd === i) {
       const [w] = commandWords(command.words);
       const name = w !== undefined ? commandName(w).toLowerCase() : undefined;
-      if (name !== undefined && TERMINATES_LIST.has(name)) terminated = true;
+      if (name !== undefined) {
+        if (name === 'exec' && commandWords(command.words).length <= 1) {
+          // exec without args does not terminate
+        } else if (TERMINATES_LIST.has(name)) {
+          terminated = true;
+        }
+      }
     }
-    if (executed) {
-      const lastCmd = commands[pipeEnd];
+    const lastCmd = commands[pipeEnd];
+    if (before === '||' && pipeEnd === i && isUnconditionalZero(lastCmd)) {
+      condState = 'ZERO';
+    } else if (executed) {
       if (pipeEnd === i && isUnconditionalZero(lastCmd)) {
         condState = 'ZERO';
       } else if (pipeEnd === i && isKnownFailure(lastCmd)) {

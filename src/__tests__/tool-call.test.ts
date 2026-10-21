@@ -168,6 +168,11 @@ describe('classifyToolCall', () => {
     ['test -f doc.md && cat doc.md;', ['doc.md'], false],
     ['echo ok | exit 0; cat doc.md', ['doc.md'], false],
     ['true || false && cat doc.md', ['doc.md'], false],
+    ['if true; then true; fi && cat /abs/doc.md', ['/abs/doc.md'], false],
+    ['if true; then echo exit; fi; cat /abs/doc.md', ['/abs/doc.md'], false],
+    ['f() { exit 0; }; cat /abs/doc.md', ['/abs/doc.md'], false],
+    ['exec 2>/tmp/teamai-review.log; cat /abs/doc.md', ['/abs/doc.md'], false],
+    ['test -f /missing || true && cat /abs/doc.md; echo ok', ['/abs/doc.md'], false],
   ])('the command line %j reads %j (simple: %s)', (command, files, simple) => {
     expect(shell(command)).toMatchObject({ category: 'read', paths: files.map(at), simple, status: 'success' });
   });
@@ -250,6 +255,8 @@ it.each<[string, string]>([
     ['pipeline && read; trailing command', 'false | false && cat /abs/SKILL.md; echo ok'],
     ['cd && read; trailing command', 'cd /nonexistent && cat /abs/SKILL.md; echo ok'],
     ['printf failure in && chain; trailing command', "printf '%' && cat /abs/SKILL.md; echo ok"],
+    ['failed stderr redirection guard', 'true 2>/nonexistent/err && cat /abs/SKILL.md; echo ok'],
+    ['assignment with failing substitution', 'X=$(false) && cat /abs/SKILL.md; echo ok'],
     // Category 2: shell-terminating commands stop subsequent list pipelines
     ['exit 0; read', 'exit 0; cat /abs/SKILL.md'],
     ['compound body with exit; read', 'if true; then exit 0; fi; cat /abs/SKILL.md'],
