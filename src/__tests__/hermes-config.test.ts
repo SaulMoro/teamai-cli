@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -17,13 +17,19 @@ import { TEAMAI_RULES_START, TEAMAI_RULES_END } from '../types.js';
 let tmpDir: string;
 let savedHermesHome: string | undefined;
 
+function defaultHermesHome(): string {
+  return process.platform === 'win32' ? path.join(tmpDir, 'local-app-data', 'hermes') : path.join(os.homedir(), '.hermes');
+}
+
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-hermes-test-'));
   savedHermesHome = process.env.HERMES_HOME;
   process.env.HERMES_HOME = tmpDir;
+  vi.stubEnv('LOCALAPPDATA', path.join(tmpDir, 'local-app-data'));
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   if (savedHermesHome === undefined) {
     delete process.env.HERMES_HOME;
   } else {
@@ -39,17 +45,15 @@ describe('getHermesHome', () => {
     expect(getHermesHome()).toBe(tmpDir);
   });
 
-  it('resolves HERMES_HOME to an absolute path when it is relative', () => {
+  it('ignores a relative HERMES_HOME, which names another home from each directory', () => {
     process.env.HERMES_HOME = 'relative/path';
-    const result = getHermesHome();
-    expect(path.isAbsolute(result)).toBe(true);
-    expect(result).toBe(path.resolve('relative/path'));
+    expect(getHermesHome()).toBe(defaultHermesHome());
   });
 
-  it('returns ~/.hermes when HERMES_HOME is not set', () => {
+  it('returns the platform default when HERMES_HOME is not set', () => {
     delete process.env.HERMES_HOME;
     const result = getHermesHome();
-    expect(result).toBe(path.join(os.homedir(), '.hermes'));
+    expect(result).toBe(defaultHermesHome());
     // restore for afterEach cleanup
     process.env.HERMES_HOME = tmpDir;
   });

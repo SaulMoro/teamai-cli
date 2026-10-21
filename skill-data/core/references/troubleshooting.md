@@ -84,7 +84,10 @@ This is the #1 onboarding issue. In order:
    `teamai init` from a shell that has the variable exported; it records the root
    and moves the install. If the check says the value cannot be synced to (outside
    your home, or neither a plain directory in it nor one under `.config/`), fix the
-   variable first.
+   variable first. `<tool> home matches <variable>` (`XDG_CONFIG_HOME`,
+   `HERMES_HOME`, `COPILOT_HOME`, ...) is the same check for the homes recorded in
+   `~/.teamai/tool-homes.json`, and `<tool> home exists` fails when a recorded home
+   is gone; re-run `teamai init` from the shell with the variable you want.
 6. **A command reports a broken manifest** (`Invalid roles manifest…`,
    `Invalid projects manifest…`, `Invalid manifests…`, or `…manifest … could not
    be read`). `pull` skips that scope on purpose, since syncing without the
@@ -108,6 +111,13 @@ This is the #1 onboarding issue. In order:
    for that project: do it only with their consent.
    `recall` refuses the same way with `Nothing was searched: <file>: <reason>`:
    no team knowledge was searched, so do not report that the team has none.
+8. **`pull` says `<file> is not a tool-homes record (<reason>)`.** The file
+   where teamai records moved tool homes, `~/.teamai/tool-homes.json`, cannot
+   be read, so pull syncs nothing in any scope. Hook-run pulls stop the same
+   way and write the line only to `~/.teamai/debug.log`; `teamai doctor`
+   reports it as `tool homes record is readable`. Fix the entry the reason
+   names (each home must be an absolute directory), or delete the file and
+   re-run `teamai init` from a shell your tools run in.
 
 ## Path names appear in skill usage statistics
 

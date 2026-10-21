@@ -108,6 +108,7 @@ import {
   KNOWN_AGENTS,
 } from './known-agents.js';
 import { TOOLS } from './tools.js';
+import { describeToolHomeChange, recordToolHomes } from './tool-home-record.js';
 
 /**
  * Record each relocated tool root (every entry of `RELOCATABLE_TOOLS`, by the
@@ -731,6 +732,7 @@ export async function initHttp(
     ?? (scope === 'project' ? (await loadLocalConfigForScope('user'))?.toolRoots : undefined);
   if (carriedToolRoots) localConfig.toolRoots = { ...carriedToolRoots };
   recordToolRoots(localConfig);
+  for (const change of await recordToolHomes('init')) log.info(describeToolHomeChange(change));
   await releasePreviousToolRoots(teamConfig, existingLocalConfig, localConfig);
 
   await ensureDir(teamaiHome);
@@ -1336,6 +1338,7 @@ export async function initSelfRepo(options: GlobalOptions & {
   // entry when its variable IS set.
   if (preInitConfig?.toolRoots) localConfig.toolRoots = { ...preInitConfig.toolRoots };
   recordToolRoots(localConfig);
+  for (const change of await recordToolHomes('init')) log.info(describeToolHomeChange(change));
 
   // Step 5: write local config (into the partition via dataHome) + single-repo
   // gitignore. ensureDir both the knowledge dir (class B, in the repo) and the
@@ -2174,6 +2177,7 @@ export async function init(options: GlobalOptions & {
     ?? (scope === 'project' ? (await loadLocalConfigForScope('user'))?.toolRoots : undefined);
   if (carriedToolRoots) localConfig.toolRoots = { ...carriedToolRoots };
   recordToolRoots(localConfig);
+  for (const change of await recordToolHomes('init')) log.info(describeToolHomeChange(change));
   await releasePreviousToolRoots(currentConfig, carriedConfig, localConfig);
 
   await ensureDir(teamaiHome);
