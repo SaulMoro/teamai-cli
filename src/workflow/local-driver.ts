@@ -522,7 +522,12 @@ async function restoreLeaseOverlay(lease: Lease): Promise<void> {
   lease.overlay = undefined;
 }
 
-type ReadCopy = { read: StepRead; changed: string[]; kept?: string; unrestored?: { error: string; dir: string } };
+/** How a reader left its copy. `kept` is the ref holding what the step changed; an unrestored copy lacks it when keeping failed. */
+type ReadCopy = { read: StepRead } & (
+  | { state: 'untouched' }
+  | { state: 'restored'; changed: string[]; kept: string }
+  | { state: 'unrestored'; changed: string[]; reason: string; dir: string; kept?: string }
+);
 
 /**
  * Leaves a read-only copy as the step found it: the base agent files go back, and a copy the step changed is reset to
@@ -538,30 +543,42 @@ async function leaveReadCopy(lease: Lease): Promise<ReadCopy | undefined> {
   if (!onBranch && !changed.includes('HEAD')) changed.push('HEAD');
   await restoreLeaseOverlay(lease);
   const read = { branch: workspace.branch, base: workspace.base.commit, commit: before.head };
-  if (changed.length === 0) return { read, changed };
+  if (changed.length === 0) return { read, state: 'untouched' };
   // Not `git stash push`: the stash list is shared by every worktree of the checkout.
   const kept = `refs/teamai/kept/${lease.attempt}`;
   const added = await git(cwd, ['add', '-A']);
   const stashed = added.code === 0 ? await git(cwd, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'stash', 'create']) : added;
   const recorded = stashed.code === 0 ? await git(cwd, ['update-ref', kept, stashed.stdout.trim() || 'HEAD']) : stashed;
   // Without the ref, a reset would lose the changes.
-  if (recorded.code !== 0) return { read, changed, unrestored: { error: recorded.stderr.trim() || 'its changes could not be kept', dir: cwd } };
+  if (recorded.code !== 0) return { read, state: 'unrestored', changed, reason: recorded.stderr.trim() || 'its changes could not be kept', dir: cwd };
   // Back on the copy's branch first: a reset on a branch the step switched to would leave the copy elsewhere.
   // A superproject reset leaves initialized submodules where the step moved them.
   const submodules = [['submodule', '--quiet', 'update', '--recursive', '--force'], ['submodule', '--quiet', 'foreach', '--recursive', 'git clean -q -fd']];
   for (const args of [['checkout', '-q', '-f', workspace.branch], ['reset', '-q', '--hard', before.head], ['clean', '-q', '-fd'], ...submodules]) {
     const restored = await git(cwd, args);
-    if (restored.code !== 0) return { read, changed, kept, unrestored: { error: restored.stderr.trim() || `git ${args.join(' ')} failed`, dir: cwd } };
+    if (restored.code !== 0) return { read, state: 'unrestored', changed, kept, reason: restored.stderr.trim() || `git ${args.join(' ')} failed`, dir: cwd };
   }
-  return { read, changed, kept };
+  return { read, state: 'restored', changed, kept };
 }
 
 /** A reader that changed its copy fails. `changed` is the step's own sentence naming the paths. */
-function readCopyFailure(left: ReadCopy, changed: string): WorkflowFailure {
-  const kept = left.kept ? ` Its changes are kept on ${left.kept}.` : '';
-  return left.unrestored
-    ? { code: 'workspace_base', message: `${changed} Workspace ${left.read.branch} could NOT be put back at ${left.read.commit}: ${left.unrestored.error}.${kept} Put ${left.unrestored.dir} back on ${left.read.branch} at ${left.read.commit} before a later step runs there.` }
-    : { code: 'read_only_dirty', message: `${changed} Workspace ${left.read.branch} was put back at ${left.read.commit}.${kept}` };
+function readCopyFailure(left: Exclude<ReadCopy, { state: 'untouched' }>, changed: string): WorkflowFailure {
+  const { branch, commit } = left.read;
+  switch (left.state) {
+    case 'restored':
+      return { code: 'read_only_dirty', message: `${changed} Workspace ${branch} was put back at ${commit}. Its changes are kept on ${left.kept}.` };
+    case 'unrestored':
+      return {
+        code: 'workspace_base',
+        message: left.kept
+          ? `${changed} Workspace ${branch} could NOT be put back at ${commit}: ${left.reason}. Its changes are kept on ${left.kept}. Put ${left.dir} back on ${branch} at ${commit} before a later step runs there.`
+          : `${changed} Workspace ${branch} could NOT be put back at ${commit}: ${left.reason}. Its changes were NOT saved and are still in ${left.dir}. Copy them out before you put ${left.dir} back on ${branch} at ${commit}, and before a later step runs there.`,
+      };
+    default: {
+      const unhandled: never = left;
+      return unhandled;
+    }
+  }
 }
 
 async function finishWorkspace(lease: Lease, push: boolean): Promise<{ changes?: { branch: string; base: string; from: string; to: string; commits: string[] }; failure?: WorkflowFailure }> {
@@ -597,8 +614,9 @@ async function commandReport(attemptResultPath: string, driver: DriverIdentity, 
     }
   }
   const left = await leaveReadCopy(lease);
-  const dirty = left && (result.exitCode === 0 || left.unrestored) && left.changed.length > 0
-    ? readCopyFailure(left, `Read-only command step changed repository paths: ${left.changed.join(', ')}.`)
+  const touched = left?.state === 'untouched' ? undefined : left;
+  const dirty = touched && (result.exitCode === 0 || touched.state === 'unrestored')
+    ? readCopyFailure(touched, `Read-only command step changed repository paths: ${touched.changed.join(', ')}.`)
     : undefined;
   const finished = lease.workspace && !left ? await finishWorkspace(lease, result.exitCode === 0) : {};
   const failure = dirty ?? finished.failure;
@@ -700,10 +718,11 @@ async function promptReport(
     };
   }
   const left = await leaveReadCopy(lease);
-  const paths = left ? left.changed : before && !lease.workspace ? changedPaths(before, await snapshotWorktree(cwd)) : [];
-  const dirtyFailure = paths.length === 0 ? undefined : left
-    ? readCopyFailure(left, `Read-only prompt step changed repository paths: ${paths.join(', ')}.`)
-    : { code: 'read_only_dirty', message: `Read-only prompt step changed repository paths: ${paths.join(', ')}` };
+  const touched = left?.state === 'untouched' ? undefined : left;
+  const paths = !left && before && !lease.workspace ? changedPaths(before, await snapshotWorktree(cwd)) : [];
+  const dirtyFailure = touched
+    ? readCopyFailure(touched, `Read-only prompt step changed repository paths: ${touched.changed.join(', ')}.`)
+    : paths.length === 0 ? undefined : { code: 'read_only_dirty', message: `Read-only prompt step changed repository paths: ${paths.join(', ')}` };
   const finished = lease.workspace && !left && !dirtyFailure ? await finishWorkspace(lease, result.exitCode === 0 && !result.failure) : {};
   const failure = dirtyFailure ?? finished.failure ?? result.failure;
   const ran = result.started ? result : undefined;

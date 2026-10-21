@@ -111,6 +111,19 @@ async function teamWorkspace(yaml: string): Promise<{ config: LocalConfig; works
   return { config, workspace, runId: String(started.data.run) };
 }
 
+/** Commits a submodule `vendor` holding `inside.txt` (`one`) to the workspace, and returns the commit it records. */
+function addSubmodule(workspace: string): string {
+  const source = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-sub-'));
+  dirs.push(source);
+  execFileSync('git', ['init', '-q'], { cwd: source });
+  fs.writeFileSync(path.join(source, 'inside.txt'), 'one\n');
+  execFileSync('git', ['add', 'inside.txt'], { cwd: source });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'one'], { cwd: source });
+  execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', source, 'vendor'], { cwd: workspace });
+  execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'vendor'], { cwd: workspace });
+  return git(['rev-parse', 'HEAD:vendor'], workspace).trim();
+}
+
 const driver = (workspace: string, machine = 'host'): DriverIdentity => ({ kind: 'local', machine, workspace });
 
 afterEach(() => {
@@ -2439,6 +2452,33 @@ steps:
     expect(() => git(['show', `${branchName(runId, 'change', 1)}:junk.txt`], workspace)).toThrow();
   });
 
+  it('says the changes were NOT saved, and leaves them in the copy, when they cannot be kept on a ref', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A ref in the way of refs/teamai/kept/<attempt> stops the keep.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('impl.txt','yes')"
+        - id: test
+          needs: [implement]
+          command: node -e "require('fs').writeFileSync('junk.txt','reader')"
+`);
+    git(['update-ref', 'refs/teamai/kept', 'HEAD'], workspace);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    const test = typeof run === 'object' ? run.steps.find((step) => step.id === 'change.test') : undefined;
+    const copy = worktreePath(workspace, branchName(runId, 'change', 1));
+    expect(test).toMatchObject({ status: 'failed', failure: { code: 'workspace_base', message: expect.stringContaining(`Its changes were NOT saved and are still in ${copy}`) } });
+    expect(fs.readFileSync(path.join(copy, 'junk.txt'), 'utf8')).toBe('reader');
+  });
+
   it('fails a reader with workspace_base, and does not say the copy was put back, when git cannot put it back', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build
@@ -2484,15 +2524,7 @@ steps:
           workspace: continue
           command: node -e "const fs=require('fs'); if (fs.readFileSync('vendor/inside.txt','utf8')!=='one\\\\n' || fs.existsSync('vendor/untracked.txt')) process.exit(2); fs.writeFileSync('polish.txt','yes')"
 `);
-    const source = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-sub-'));
-    dirs.push(source);
-    execFileSync('git', ['init', '-q'], { cwd: source });
-    fs.writeFileSync(path.join(source, 'inside.txt'), 'one\n');
-    execFileSync('git', ['add', 'inside.txt'], { cwd: source });
-    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'one'], { cwd: source });
-    execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', source, 'vendor'], { cwd: workspace });
-    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'vendor'], { cwd: workspace });
-    const recorded = git(['rev-parse', 'HEAD:vendor'], workspace).trim();
+    const recorded = addSubmodule(workspace);
 
     await runLocalDriver(config, runId, workspace);
 
