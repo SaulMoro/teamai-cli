@@ -502,11 +502,14 @@ function classifySimple(command: SimpleCommand, simple: boolean, flavor: ShellFl
 /** The commands, besides reads, searches and listings, after which a relative path still resolves against the call's cwd. */
 const KEEPS_CWD = new Set(['pwd', 'echo', 'printf', 'test', '[', '[[', 'set', 'true', 'false', ':']);
 
-/** The commands that always exit 0, so a following `&&` in a non-final chain still runs. */
-const ALWAYS_SUCCEEDS = new Set(['true', ':', 'pwd', 'echo', 'printf']);
+/** The commands that always exit 0 without depending on arguments or system state. */
+const ALWAYS_SUCCEEDS = new Set(['true', ':', 'echo', 'pwd']);
+
+/** The commands that terminate the shell process or script. */
+const TERMINATES_SHELL = new Set(['exit', 'exec', 'return', 'logout', 'throw']);
 
 /** The commands that terminate the shell or the current control flow before later list items can run. */
-const TERMINATES_LIST = new Set(['exit', 'exec', 'return', 'logout', 'break', 'continue', 'throw']);
+const TERMINATES_LIST = new Set([...TERMINATES_SHELL, 'break', 'continue']);
 
 /**
  * What a shell command line did with files: a read, a search or a listing
@@ -552,6 +555,12 @@ function isUnconditionalZero(command: SimpleCommand): boolean {
   return word === undefined || ALWAYS_SUCCEEDS.has(commandName(word).toLowerCase());
 }
 
+/** Whether a command is known to fail unconditionally. */
+function isKnownFailure(command: SimpleCommand): boolean {
+  const [word] = commandWords(command.words);
+  return word !== undefined && commandName(word).toLowerCase() === 'false';
+}
+
 /**
  * A list of pipelines: a read of the files its top-level reading pipelines
  * read. A pipeline after `||`, inside a compound command or function body,
@@ -567,8 +576,11 @@ function classifyList(commands: SimpleCommand[], flavor: ShellFlavor): ShellClas
   let pendingFn = false;
   let moved = false;
   let terminated = false;
-  let chainSkipsAnd = false;
+
+  type CondState = 'INITIAL' | 'ZERO' | 'NONZERO' | 'UNKNOWN';
+  let condState: CondState = 'INITIAL';
   let chainFollowed = false;
+
   for (const [i, command] of commands.entries()) {
     const words = commandWords(command.words);
     let idx = 0;
@@ -631,33 +643,59 @@ function classifyList(commands: SimpleCommand[], flavor: ShellFlavor): ShellClas
       let end = i;
       while (commands[end]?.op === '|' || commands[end]?.op === '&&') end++;
       const afterChain = commands[end]?.op;
-      chainSkipsAnd = false;
-      chainFollowed = afterChain !== null && afterChain !== undefined;
+      chainFollowed = (afterChain === '||' || afterChain === ';') && end < commands.length - 1;
+      if (before !== '||') condState = 'INITIAL';
     }
     if (compound || blocks.length > 0) {
       moved = true;
-      chainSkipsAnd = true;
+      condState = 'NONZERO';
+      if (commands[i - 1]?.op !== '|' && command.op !== '|') {
+        for (let j = idx; j < words.length; j++) {
+          const name = commandName(words[j]).toLowerCase();
+          if (TERMINATES_SHELL.has(name)) terminated = true;
+        }
+      }
       if (pendingFn && blocks.length === 0 && idx < words.length) pendingFn = false;
       continue;
     }
     if (before === '|') continue;
     let pipeEnd = i;
     while (commands[pipeEnd]?.op === '|') pipeEnd++;
+
+    let executed = true;
+    if (before === '&&') {
+      if (condState === 'NONZERO') executed = false;
+      else if (condState === 'UNKNOWN' && chainFollowed) executed = false;
+    } else if (before === '||') {
+      if (condState === 'ZERO') executed = false;
+      else if (condState === 'UNKNOWN') executed = false;
+    }
+
     const item = classifySimple(command, false, flavor);
-    const skipped = terminated || before === '||' || (before === '&&' && chainSkipsAnd);
+    const skipped = terminated || !executed;
     if (item.category === 'read') {
       item.verbs.forEach((v) => verbs.add(v));
-      if (!skipped) item.paths.filter((f) => !moved || isAbsolutePath(f)).forEach((f) => paths.add(f));
+      if (!skipped && before !== '||') {
+        item.paths.filter((f) => !moved || isAbsolutePath(f)).forEach((f) => paths.add(f));
+      }
     }
-    for (let k = i; k <= pipeEnd; k++) {
-      const [w] = commandWords(commands[k].words);
+    if (!skipped && pipeEnd === i) {
+      const [w] = commandWords(command.words);
       const name = w !== undefined ? commandName(w).toLowerCase() : undefined;
-      if (!skipped && name !== undefined && TERMINATES_LIST.has(name)) terminated = true;
-      if (k === pipeEnd && name === 'false') chainSkipsAnd = true;
+      if (name !== undefined && TERMINATES_LIST.has(name)) terminated = true;
     }
-    if (chainFollowed && (pipeEnd > i || !isUnconditionalZero(command))) chainSkipsAnd = true;
+    if (executed) {
+      const lastCmd = commands[pipeEnd];
+      if (pipeEnd === i && isUnconditionalZero(lastCmd)) {
+        condState = 'ZERO';
+      } else if (pipeEnd === i && isKnownFailure(lastCmd)) {
+        condState = 'NONZERO';
+      } else {
+        condState = 'UNKNOWN';
+      }
+    }
     const [word] = commandWords(command.words);
-    if (item.category === 'shell' && word !== undefined && !KEEPS_CWD.has(commandName(word).toLowerCase())) moved = true;
+    if (!skipped && item.category === 'shell' && word !== undefined && !KEEPS_CWD.has(commandName(word).toLowerCase())) moved = true;
   }
   if (blocks.length > 0 || pendingFn || paths.size === 0) return SHELL;
   return { category: 'read', paths: [...paths], simple: false, verbs: [...verbs] };

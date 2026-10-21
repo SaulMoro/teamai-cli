@@ -162,9 +162,12 @@ describe('classifyToolCall', () => {
     ['true && cat doc.md; echo ok', ['doc.md'], false],
     [': && cat doc.md; echo ok', ['doc.md'], false],
     ['pwd && cat doc.md; echo ok', ['doc.md'], false],
-    ['echo x && printf y && X=1 && cat doc.md || true', ['doc.md'], false],
+    ['echo x && echo y && X=1 && cat doc.md || true', ['doc.md'], false],
     ['echo "$(echo "x; echo y")"; cat doc.md', ['doc.md'], false],
     ['echo $(echo ")"; echo ok); cat doc.md', ['doc.md'], false],
+    ['test -f doc.md && cat doc.md;', ['doc.md'], false],
+    ['echo ok | exit 0; cat doc.md', ['doc.md'], false],
+    ['true || false && cat doc.md', ['doc.md'], false],
   ])('the command line %j reads %j (simple: %s)', (command, files, simple) => {
     expect(shell(command)).toMatchObject({ category: 'read', paths: files.map(at), simple, status: 'success' });
   });
@@ -246,8 +249,10 @@ it.each<[string, string]>([
     ['guard && read || fallback', 'test -f /abs/SKILL.md && cat /abs/SKILL.md || true'],
     ['pipeline && read; trailing command', 'false | false && cat /abs/SKILL.md; echo ok'],
     ['cd && read; trailing command', 'cd /nonexistent && cat /abs/SKILL.md; echo ok'],
+    ['printf failure in && chain; trailing command', "printf '%' && cat /abs/SKILL.md; echo ok"],
     // Category 2: shell-terminating commands stop subsequent list pipelines
     ['exit 0; read', 'exit 0; cat /abs/SKILL.md'],
+    ['compound body with exit; read', 'if true; then exit 0; fi; cat /abs/SKILL.md'],
     ['exit; read', 'exit; cat /abs/SKILL.md'],
     ['true && exit 0; read', 'true && exit 0; cat /abs/SKILL.md'],
     ['exec; read', 'exec echo ok; cat /abs/SKILL.md'],
