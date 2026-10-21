@@ -24,7 +24,7 @@ import {
 } from './utils/shell-profile.js';
 import { getUserHome } from './utils/home.js';
 import { loadStateForScope } from './config.js';
-import { installOf, locate, unreadWrites, writable, writesOf, type Location, type ReadGate } from './locate.js';
+import { installOf, locate, ownOf, unreadWrites, writable, writesOf, type Location, type ReadGate } from './locate.js';
 import { codexProjectTrust, codexTrustFix } from './codex-project-trust.js';
 import { amongPlaces, placesRecordOf, samePlace, samePlaces } from './resources/places.js';
 import { defaultToolHome, realHost, toolHome } from './tool-home.js';
@@ -2126,7 +2126,7 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return [];
   const {
-    channelReadiness, holdsInstructionBlocks, hookLimitProblem, instructionHookText, instructionTargetPath,
+    channelReadiness, holdsInstructionBlocks, hookLimitProblem, instructionHookText,
     planInstructionFiles, resolveInstructionTargets,
   } = await import('./instruction-targets.js');
   const { resolveInstructionBlocks } = await import('./pull.js');
@@ -2149,8 +2149,8 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
     });
   }
 
-  const opencodePaths = scopedToolPaths(teamConfig, localConfig).opencode;
-  const opencodeFile = opencodePaths && await instructionTargetPath('opencode', opencodePaths, localConfig);
+  const opencodeFile = teamConfig.toolPaths.opencode === undefined ? undefined
+    : ownOf(await locate('opencode', 'blocks', installOf(teamConfig, localConfig)))?.path;
   // Only a file holding the blocks needs listing; pull registers it once it
   // writes them. Beside the Claude fallback V1 reads CLAUDE.md instead.
   const opencodeDelivered = opencodeFile !== undefined && targets.some((t) => t.path === opencodeFile) && await holdsInstructionBlocks(opencodeFile);

@@ -70,10 +70,10 @@ import { normalizeAgentType } from './utils/tool-names.js';
 import { logHttpRequest, logHttpResponse } from './utils/http-log.js';
 import {
   applyInstructionPlan, channelReadiness, deliversInstructionsByHook, holdsInstructionBlocks, instructionHookText, instructionHookTextFor,
-  instructionTargetAt, instructionTargetFile, isInstructionToolInstalled, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets,
+  instructionTargetOf, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets,
   retiredFilesOfReached, nativeProjectInstructions,
 } from './instruction-targets.js';
-import { opencodeClaudeFallback } from './resources/opencode-config.js';
+import { opencodeV1ClaudeFile } from './resources/opencode-config.js';
 import { reconcilePlugins, teardownAllPlugins, parseGetConfig, substituteVars, unresolvedPlaceholders, type ReconcileDeps, type PluginState } from './plugin-lifecycle.js';
 import {
   resolveBaseDir,
@@ -115,7 +115,7 @@ import {
 } from './git-exclude-notices.js';
 import { blockingEntries, contentHash, deliveredSkillFiles, describeMembersDirLeft, isLink, keepsTrackedCopy, ownsSkillDir } from './resources/delivered-copies.js';
 import { skillOrigin, withSkillFrontmatter } from './resources/skills.js';
-import { installOf, locate, ownOf } from './locate.js';
+import { installOf, locate, ownOf, writable, type FilePlace } from './locate.js';
 import { acquireLock, releaseLock } from './update.js';
 
 const execFileAsync = promisify(execFile);
@@ -2564,11 +2564,9 @@ async function recordedProjectCopies(config: LocalAgentConfig, workspacePath: st
     new RulesHandler());
   // The instruction file teamai owns of each tool the claudemd block reached, while it holds teamai's blocks, as pull lists its own.
   for (const tool of new Set(Object.values(scope.claudemd ?? {}).flatMap((entry) => entry.tools ?? []))) {
-    const toolPath = fullTeamConfig.toolPaths[tool];
-    const file = toolPath && await instructionTargetFile(tool, toolPath, 'project', true);
-    if (!file) continue;
-    const target = await instructionTargetAt(tool, path.resolve(resolveToolBaseDir(tool, localConfig), file), 'project', toolPath, true);
-    if (target.owned && await holdsInstructionBlocks(target.path)) copies.push(target.path);
+    if (fullTeamConfig.toolPaths[tool] === undefined) continue;
+    const own = ownOf(await locate(tool, 'blocks', { ...installOf(fullTeamConfig, localConfig), gitExclude: true }));
+    if (own?.owned === true && await holdsInstructionBlocks(own.path)) copies.push(own.path);
   }
   const gitignore = await workspaceCacheGitignore(workspacePath, repoPath);
   if (gitignore) copies.push(gitignore);
@@ -2799,9 +2797,9 @@ async function syncClaudemd(
   const skipped: string[] = [];
   const reached: string[] = [];
   // The targets resolveInstructionTargets checks below (#915: Copilot's moves with the flag).
-  const gitExclude = isGitExcludeEnabled(localConfig, fullTeamConfig);
+  const install = { ...installOf(teamConfig, localConfig), gitExclude: isGitExcludeEnabled(localConfig, fullTeamConfig) };
 
-  for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
+  for (const tool of Object.keys(install.toolPaths)) {
     // Pi, OMP and Hermes in a project take the cache from their extension or
     // plugin through `hook-dispatch instructions` (localAgentInstructionText).
     if (deliversInstructionsByHook(tool, localConfig.scope)) {
@@ -2816,39 +2814,28 @@ async function syncClaudemd(
       reached.push(tool);
       continue;
     }
-    const targetFile = await instructionTargetFile(tool, toolPath, localConfig.scope, gitExclude)
-      // A server-sent workspace can exist where OpenClaw's own lookup finds none.
-      ?? (tool === 'openclaw' && localConfig.scope !== 'project' && workspacePath ? toolPath.claudemd : undefined);
-    if (!targetFile) continue;
-
-    let baseDir = resolveToolBaseDir(tool, localConfig);
-    let resolvedAbsPath: string | null = null;
-
-    if (tool === 'openclaw' && localConfig.scope !== 'project') {
-      const openclawWs = await resolveOpenclawWorkspaceDir(workspacePath);
-      if (openclawWs) {
-        resolvedAbsPath = path.join(openclawWs, path.basename(targetFile));
-      }
-    }
-
-    // Probed through the tool's own paths, as pull does: WorkBuddy's project
-    // target sits under .codebuddy, which says nothing about WorkBuddy.
-    const toolInstalled = resolvedAbsPath
-      ? await pathExists(path.dirname(resolvedAbsPath))
-      : await isInstructionToolInstalled(tool, toolPath, localConfig);
+    const location = await locate(tool, 'blocks', install);
+    // A server-sent workspace can exist where OpenClaw's own lookup finds none.
+    const openclawWs = tool === 'openclaw' && localConfig.scope !== 'project' ? await resolveOpenclawWorkspaceDir(workspacePath) : null;
+    const own: FilePlace | null = openclawWs
+      ? { kind: 'file', path: path.join(openclawWs, 'AGENTS.md'), owned: false, header: null }
+      : ownOf(location);
+    if (own === null) continue;
+    const toolInstalled = openclawWs ? await pathExists(openclawWs) : writable(location) !== null;
     if (!toolInstalled) {
       log.debug(`Skipped CLAUDE.md sync for ${tool}: target not found`);
       continue;
     }
 
-    const claudeMdPath = resolvedAbsPath ?? path.resolve(baseDir, targetFile);
+    const claudeMdPath = own.path;
+    const baseDir = resolveToolBaseDir(tool, localConfig);
     // OpenCode V1's Claude fallback already carries the blocks, as in pull
     // (#945), so OpenCode's file is written for V2's plugin but not listed.
-    const claudeUserFile = path.join(getUserHome(), '.claude', 'CLAUDE.md');
+    const claudeUserFile = opencodeV1ClaudeFile(getUserHome());
     const viaClaude = tool === 'opencode' && localConfig.scope === 'user'
       && (await readFileSafe(claudeUserFile))?.includes(TEAMAI_CLAUDEMD_START) === true
-      && await opencodeClaudeFallback(getUserHome(), [claudeUserFile]) !== null;
-    const target = await instructionTargetAt(tool, claudeMdPath, localConfig.scope, toolPath, gitExclude);
+      && !await pathExists(path.join(path.dirname(claudeMdPath), 'AGENTS.md'));
+    const target = instructionTargetOf(own);
     const plan = await planInstructionFiles([target], { claudemd: block });
     // A warning means the file was left as it was: nothing reached the tool.
     if (plan.warnings.length > 0) {

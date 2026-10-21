@@ -107,8 +107,12 @@ export type RulesChannels = Scoped<RulesDir<HomeRead> | RulesInline, RulesDir<Ho
 /** Where a blocks file sits; `owned`: the whole file is teamai's. */
 export type BlocksFile = { readonly owned?: true; readonly header?: BlocksHeader } & (
   | { readonly in: 'claudemd' }
-  /** teamai's own file in the scope's configured rules directory; the configured `claudemd` when the team maps no rules directory. */
-  | { readonly in: 'rules-dir'; readonly name: string }
+  /**
+   * teamai's own file in the scope's configured rules directory, or in `dir`
+   * when the tool reads that one whatever the team maps; the configured
+   * `claudemd` when the team maps no rules directory.
+   */
+  | { readonly in: 'rules-dir'; readonly name: string; readonly dir?: string }
   /** A fixed `$HOME`-relative file, re-rooted where the tool's home moves. */
   | { readonly in: 'home'; readonly path: string }
   | { readonly in: 'project'; readonly path: string }
@@ -575,7 +579,7 @@ export const TOOLS = {
       user: { channel: 'file', file: { in: 'claudemd' }, reads: [{ base: 'home', path: '.codebuddy/CODEBUDDY.md', evidence: 'source' }] },
       // WorkBuddy's project entry names the same file: one copy.
       project: {
-        channel: 'file', file: { in: 'rules-dir', name: 'teamai-context.md', owned: true, header: 'always-apply' },
+        channel: 'file', file: { in: 'rules-dir', name: 'teamai-context.md', dir: '.codebuddy/rules', owned: true, header: 'always-apply' },
         reads: [{ base: 'project', path: '.codebuddy/rules', when: 'cwdOnly', evidence: 'source' }],
       },
       retired: { project: ['.codebuddy/CODEBUDDY.md'] },
@@ -667,7 +671,8 @@ export const TOOLS = {
         channel: 'file', file: { in: 'rules-dir', name: 'teamai-context.md', owned: true, header: 'always-apply' },
         reads: [{ base: 'home', path: '.workbuddy/rules', evidence: 'assumed' }],
       },
-      project: { channel: 'file', file: { in: 'rules-dir', name: 'teamai-context.md', owned: true, header: 'always-apply' }, reads: 'unknown' },
+      // CodeBuddy's engine reads the project's .codebuddy/rules, so WorkBuddy shares CodeBuddy's copy there.
+      project: { channel: 'file', file: { in: 'rules-dir', name: 'teamai-context.md', dir: '.codebuddy/rules', owned: true, header: 'always-apply' }, reads: 'unknown' },
       retired: { user: ['AGENTS.md'], project: ['AGENTS.md'] },
     },
     agents: {

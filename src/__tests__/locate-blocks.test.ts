@@ -309,6 +309,14 @@ const ROWS: readonly MatrixRow[] = [
     source: "WorkBuddy's project entry names CodeBuddy's file: one copy (#946); the cell is ?t",
   },
   {
+    tool: 'workbuddy', scope: 'project', install: { toolPaths: { workbuddy: { skills: '.workbuddy/skills', rules: '.workbuddy/rules' } } },
+    writes: [{ at: '<root>/.codebuddy/rules/teamai-context.md', owned: true, header: 'always-apply' }],
+    existingDirs: ['<root>/.workbuddy'], installed: { probe: '<root>/.workbuddy', met: true },
+    reads: 'unknown',
+    retired: [{ at: '<root>/AGENTS.md', was: 'default' }],
+    source: "CodeBuddy's engine reads the project's .codebuddy/rules whatever the team maps, so WorkBuddy keeps sharing CodeBuddy's copy (#946)",
+  },
+  {
     tool: 'opencode', scope: 'user',
     writes: [{ at: '~/.config/opencode/teamai-context.md', owned: true, header: null }],
     activation: { at: '~/.config/opencode/opencode.json', key: ['instructions'] },

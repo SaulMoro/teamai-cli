@@ -619,7 +619,7 @@ async function blocksFileOf(file: BlocksFile, roots: Roots, host: Host): Promise
       return { place: placed(roots.configured('claudemd')), gates: [] };
     case 'rules-dir': {
       const dir = roots.configured('rules');
-      if (dir !== null) return { place: placed(host.path.join(dir, file.name)), gates: [] };
+      if (dir !== null) return { place: placed(file.dir === undefined ? host.path.join(dir, file.name) : roots.join(roots.base, `${file.dir}/${file.name}`)), gates: [] };
       const claudemd = roots.configured('claudemd');
       return { place: claudemd === null ? null : { kind: 'file', path: claudemd, owned: false, header: null }, gates: [] };
     }
