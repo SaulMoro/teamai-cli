@@ -53,8 +53,6 @@ import {
   codexServerNames,
   recordedFileOf,
   sameMcpFile,
-  userMcpFile,
-  USER_MCP_LOOKUP,
   claimedByOtherTools,
   deleteEmptiedMcpFile,
   describeMcpLocation,
@@ -3885,8 +3883,19 @@ function updateManifestRecord(
 }
 
 /**
+ * The file a pull writes `tool`'s MCP servers to in `localConfig`'s scope, and
+ * for a tool that reads only the first of its files that exists (#993) the
+ * one its mapping names. Null when the tool takes none there.
+ */
+async function mcpPlaceOf(teamConfig: TeamaiConfig, localConfig: LocalConfig, tool: string): Promise<{ file: string; mappedFile?: string } | null> {
+  const where = await locate(tool, 'mcp', installOf(teamConfig, localConfig));
+  if (where.channel !== 'files' || where.own === null || where.writtenBy !== null) return null;
+  return { file: where.own.path, ...(where.lookup && where.own.projectKey === undefined ? { mappedFile: where.lookup.mapped } : {}) };
+}
+
+/**
  * `tool`'s two places for a workspace's project MCP servers (#915), as a pull
- * resolves them: the project's file (`tree`) and, for Claude and CodeBuddy,
+ * resolves them: the project's file (`tree`) and, for a tool with one,
  * the tool's local scope (`local`), with `config`, the workspace's config the
  * places were resolved with (the member's tool roots: Claude's local scope is
  * in its user config). Null for a tool that has no local scope.
@@ -3968,14 +3977,13 @@ async function installMcpServer(
   // the member relocated (`toolRoots`) the way `teamai pull` writes it. Project
   // scope returns `mcpProject` unchanged — it belongs to the workspace.
   const localConfig = await createResourceLocalConfig(config, scope, getUserHome(), workspacePath);
-  const toolPath = scopedToolPaths(fullTeamConfig, localConfig)[tool];
-  if (!toolPath) {
+  if (!Object.hasOwn(fullTeamConfig.toolPaths, tool)) {
     throw new Error(`install_mcp: unknown tool "${tool}"`);
   }
 
   const projectScope = scope === 'project';
-  const mcpRel = projectScope ? toolPath.mcpProject : toolPath.mcp;
-  if (!mcpRel) {
+  const place = await mcpPlaceOf(fullTeamConfig, localConfig, tool);
+  if (!place) {
     throw new Error(`install_mcp: tool "${tool}" has no MCP config path for scope "${scope}"`);
   }
 
@@ -3987,21 +3995,19 @@ async function installMcpServer(
     throw new Error(`install_mcp: tool "${tool}" does not support ${def.transport} transport`);
   }
 
-  const baseDir = resolveToolBaseDir(tool, localConfig);
-  const mappedFile = path.join(baseDir, mcpRel);
-  // Claude's and CodeBuddy's go to the tool's local scope while the workspace's git exclude flag moves them, as a
+  // A tool with a local scope writes there while the workspace's git exclude flag moves its servers, as a
   // pull's do (#915); the other place is where an earlier install may have left this server.
   const places = projectScope && workspacePath ? await workspaceMcpLocations(config, localConfig, tool, workspacePath) : null;
   const relocated = places !== null
     && await mcpRelocated(await localAgentTeamConfig(config.endpoint, scope, workspacePath, `install ${slug}`), places.config, tool);
   const active = places && (relocated ? places.local : places.tree);
   const other = places && (relocated ? places.tree : places.local);
-  // CodeBuddy reads only the first of its user MCP files that exists (#993), as a pull writes it.
-  const lookup = !projectScope && USER_MCP_LOOKUP[tool] !== undefined;
-  const targetFile = active?.file ?? (lookup ? await userMcpFile(tool, mcpRel, baseDir) : mappedFile);
+  // A tool that reads only the first of its MCP files that exists (#993) gets them there, as a pull writes them.
+  const mappedFile = active?.projectKey === undefined ? place.mappedFile : undefined;
+  const lookup = mappedFile !== undefined;
+  const targetFile = active?.file ?? place.file;
   const target = describeMcpLocation({ file: targetFile, projectKey: active?.projectKey });
-  const fileOf = (record: ManagedMcpRecord): string =>
-    recordedFileOf({ file: targetFile, ...(lookup ? { mappedFile } : {}) }, record);
+  const fileOf = (record: ManagedMcpRecord): string => recordedFileOf({ file: targetFile, mappedFile }, record);
 
   const { resolveDataHomeForScope } = await import('./config.js');
   const dataHome = await resolveDataHomeForScope(projectScope ? 'project' : 'user', projectScope ? workspacePath : undefined);
@@ -4178,17 +4184,12 @@ async function uninstallMcpServer(
   const fullTeamConfig = createLocalAgentTeamConfig(config.endpoint);
   // Removal has to look where the install wrote: same scope seam, same root.
   const localConfig = await createResourceLocalConfig(config, scope, getUserHome(), workspacePath);
-  const toolPath = scopedToolPaths(fullTeamConfig, localConfig)[tool];
-  if (!toolPath) return;
+  const place = await mcpPlaceOf(fullTeamConfig, localConfig, tool);
+  if (!place) return;
 
   const projectScope = scope === 'project';
-  const mcpRel = projectScope ? toolPath.mcpProject : toolPath.mcp;
-  if (!mcpRel) return;
-
   const format = detectMcpFormat(tool);
   if (!format) return;
-
-  const baseDir = resolveToolBaseDir(tool, localConfig);
 
   const { resolveDataHomeForScope } = await import('./config.js');
   const dataHome = await resolveDataHomeForScope(projectScope ? 'project' : 'user', projectScope ? workspacePath : undefined);
@@ -4203,9 +4204,9 @@ async function uninstallMcpServer(
   for (const { manifestKey, file, projectKey } of locations) {
     const owned = manifest[manifestKey] ?? [];
     if (!owned.some((r: ManagedMcpRecord) => r.name === slug)) continue;
-    // CodeBuddy's user servers are where the install recorded them (#993); an older one recorded no file.
-    const recordedFile = !projectScope && USER_MCP_LOOKUP[tool] ? owned.find((r) => r.name === slug)?.file : undefined;
-    const targetFile = file ?? recordedFile ?? path.join(baseDir, mcpRel);
+    // A lookup tool's servers are where the install recorded them (#993); an older one recorded no file.
+    const record = owned.find((r) => r.name === slug);
+    const targetFile = file ?? (record ? recordedFileOf({ file: place.file, mappedFile: place.mappedFile }, record) : place.file);
     const where = describeMcpLocation({ file: targetFile, projectKey });
 
     let restoreConfig: (() => Promise<void>) | undefined;

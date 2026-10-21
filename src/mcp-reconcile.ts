@@ -446,29 +446,6 @@ async function mcpFileReaders(writer: string, file: string, install: Install, ho
   return readers;
 }
 
-/**
- * The user MCP files CodeBuddy looks for, in order. It reads only the first
- * that exists and does not merge them (#993), so teamai writes there, and
- * creates the first only when none exists.
- */
-export const USER_MCP_LOOKUP: Readonly<Record<string, readonly string[]>> = {
-  codebuddy: ['.codebuddy/.mcp.json', '.codebuddy/mcp.json', '.codebuddy.json'],
-};
-
-/**
- * The user MCP file `tool` reads, for a mapping `rel` under `baseDir`: the
- * first existing file of its lookup order when `rel` is one of them, the
- * first of them when none exists; otherwise the mapped file.
- */
-export async function userMcpFile(tool: string, rel: string, baseDir: string): Promise<string> {
-  const lookup = USER_MCP_LOOKUP[tool];
-  if (!lookup?.includes(path.normalize(rel).replace(/\\/g, '/'))) return path.join(baseDir, rel);
-  for (const candidate of lookup) {
-    if (await pathExists(path.join(baseDir, candidate))) return path.join(baseDir, candidate);
-  }
-  return path.join(baseDir, lookup[0]);
-}
-
 /** The file `record` holds its server in: for a lookup target, the one it recorded, or the mapped one. */
 export function recordedFileOf(target: Pick<McpTarget, 'file' | 'mappedFile'>, record: ManagedMcpRecord): string {
   return target.mappedFile ? record.file ?? target.mappedFile : target.file;

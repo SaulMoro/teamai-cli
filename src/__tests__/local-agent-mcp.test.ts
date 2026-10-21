@@ -35,6 +35,7 @@ afterEach(async () => {
   else process.env.COPILOT_HOME = origCopilotHome;
   await fse.remove(tmpDir);
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 async function setupConfig(bindings: Record<string, unknown> = {}): Promise<void> {
@@ -634,6 +635,33 @@ describe('local-agent: MCP install/uninstall commands', () => {
     expect(manifest.codebuddy).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: 'clawpro' })]),
     );
+  });
+
+  it('install_mcp and uninstall_mcp use the first of WorkBuddy\'s user MCP files that exists (#1221)', async () => {
+    const file = path.join(tmpDir, '.workbuddy', '.mcp.json');
+    await fse.outputJson(file, { mcpServers: { mine: { command: 'mine' } } });
+    const command = { scope: 'user', slug: 'clawpro', version: '1', mcp_config: { transport: 'http', url: 'https://clawpro.example.com/mcp' } };
+
+    expect((await runResponse({ cmds: [{ id: 9101, type: 'install_mcp', ...command }] }, 'workbuddy'))[0].status).toBe('success');
+    expect(Object.keys((await fse.readJson(file)).mcpServers)).toEqual(['mine', 'clawpro']);
+    expect(await fse.pathExists(path.join(tmpDir, '.workbuddy', 'mcp.json'))).toBe(false);
+
+    expect((await runResponse({ cmds: [{ id: 9102, type: 'uninstall_mcp', ...command }] }, 'workbuddy'))[0].status).toBe('success');
+    expect((await fse.readJson(file)).mcpServers).toEqual({ mine: { command: 'mine' } });
+  });
+
+  it('install_mcp writes OpenCode\'s user server to the config directory XDG_CONFIG_HOME moves it to (#1221)', async () => {
+    const xdg = path.join(tmpDir, 'xdg');
+    await fse.ensureDir(path.join(xdg, 'opencode'));
+    vi.stubEnv('XDG_CONFIG_HOME', xdg);
+
+    const acks = await runResponse({ cmds: [{
+      id: 9103, type: 'install_mcp', scope: 'user', slug: 'clawpro', version: '1', mcp_config: { transport: 'http', url: 'https://clawpro.example.com/mcp' },
+    }] }, 'opencode');
+
+    expect(acks[0].status).toBe('success');
+    expect(Object.keys((await fse.readJson(path.join(xdg, 'opencode', 'opencode.json'))).mcp)).toEqual(['clawpro']);
+    expect(await fse.pathExists(path.join(tmpDir, '.config', 'opencode', 'opencode.json'))).toBe(false);
   });
 
   // A member who relocated Claude Code's root records it in the local config;

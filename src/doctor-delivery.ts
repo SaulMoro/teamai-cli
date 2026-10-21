@@ -1314,7 +1314,7 @@ export async function buildMcpDeliveryChecks(ctx: DoctorContext): Promise<Check[
 }
 
 /**
- * CodeBuddy reads only the first of its user MCP files that exists (#993).
+ * CodeBuddy and WorkBuddy read only the first of their user MCP files that exists (#993).
  * Once the member creates an earlier one (`codebuddy mcp add -s user`
  * creates ~/.codebuddy/.mcp.json), teamai's servers in a later one are not
  * loaded, until a pull moves them. Built only while a file teamai's records
@@ -1324,12 +1324,13 @@ export async function buildMcpReadFileChecks(ctx: DoctorContext): Promise<Check[
   const { localConfig, teamConfig } = ctx;
   // An HTTP-backed team's servers arrive through the local agent, which a pull does not run.
   if (!teamConfig || localConfig.scope !== 'user' || localConfig.repo.kind === 'http') return [];
-  const { resolveMcpTargets, shadowedMcpRecords, USER_MCP_LOOKUP } = await import('./mcp-reconcile.js');
+  const { resolveMcpTargets, shadowedMcpRecords } = await import('./mcp-reconcile.js');
+  const home = getUserHome();
   const checks: Check[] = [];
   for (const target of await resolveMcpTargets(teamConfig, localConfig)) {
     const shadowed = await shadowedMcpRecords(localConfig, target);
     if (shadowed.size === 0) continue;
-    const lookup = (USER_MCP_LOOKUP[target.tool] ?? []).map((rel) => `~/${rel}`);
+    const lookup = (target.lookupFiles ?? []).map((file) => file.startsWith(home + path.sep) ? `~${file.slice(home.length)}` : file);
     checks.push({
       name: `${target.tool} reads the file holding teamai's MCP servers`,
       source: 'local',
