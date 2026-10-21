@@ -24,7 +24,7 @@ import {
 } from './utils/shell-profile.js';
 import { getUserHome } from './utils/home.js';
 import { loadStateForScope } from './config.js';
-import { installOf, locate, unreadWrites, writable, writesOf, type Location, type ReadGate } from './locate.js';
+import { installOf, locate, unreadWrites, writable, writesOf, type DirPlace, type FilesChannel, type Location, type ReadGate } from './locate.js';
 import { codexProjectTrust, codexTrustFix } from './codex-project-trust.js';
 import { amongPlaces, placesRecordOf, samePlace, samePlaces } from './resources/places.js';
 import { defaultToolHome, realHost, toolHome } from './tool-home.js';
@@ -1094,7 +1094,106 @@ export async function buildAgentsDeliveryChecks(ctx: DoctorContext): Promise<Che
     });
   }
 
+  checks.push(...await agentsTrustChecks(ctx, handler, items));
   return checks;
+}
+
+/**
+ * A tool that loads a project's agents only once it trusts the project (Codex,
+ * #954), while teamai delivers team agents there. Pull writes them whatever
+ * the verdict, so they are on disk and inert until the member trusts it.
+ */
+async function agentsTrustChecks(ctx: DoctorContext, handler: ResourceHandler, items: ResourceItem[]): Promise<Check[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig) return [];
+  const received = items.map((item) => item.name);
+  const checks: Check[] = [];
+  for (const { tool, own, where } of await writableAgentLocations(ctx)) {
+    if (where.readGates.length === 0) continue;
+    const names: string[] = [];
+    for (const item of items) {
+      if ((await handler.deliveryTargets(teamConfig, localConfig, item, received)).some((target) => target.tool === tool)) names.push(item.name);
+    }
+    if (names.length === 0) continue;
+    for (const gate of where.readGates) {
+      switch (gate.kind) {
+        case 'codex-project-trust': {
+          const trust = await codexProjectTrust(gate);
+          const cause = `${own} holds team agents (${nameList(names)}), but Codex loads a project's agents only in a trusted project`;
+          checks.push({
+            name: 'Codex trusts this project, so it loads its team agents',
+            source: 'local',
+            check: async () => trust.kind === 'trusted',
+            fix: trust.kind === 'trusted' ? '' : codexTrustFix(trust, gate, cause),
+          });
+          break;
+        }
+        default: {
+          const unhandled: never = gate.kind;
+          return unhandled;
+        }
+      }
+    }
+  }
+  return checks;
+}
+
+/** Each tool teamai writes agents for now, with where it takes them. */
+async function writableAgentLocations(ctx: DoctorContext): Promise<{ tool: string; own: string; where: FilesChannel<DirPlace> }[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig) return [];
+  const install = installOf(teamConfig, localConfig);
+  const located: { tool: string; own: string; where: FilesChannel<DirPlace> }[] = [];
+  for (const tool of Object.keys(ctx.toolPaths)) {
+    const where = await locate(tool, 'agents', install);
+    if (where.channel !== 'files') continue;
+    const own = writable(where);
+    if (own !== null) located.push({ tool, own: own.path, where });
+  }
+  return located;
+}
+
+/**
+ * Per tool, whether the last pull wrote its agents where it takes them now
+ * (#1221): the env, or a recorded home, can move them after that pull.
+ */
+export async function buildAgentPlaceChecks(ctx: DoctorContext): Promise<Check[]> {
+  const located = await writableAgentLocations(ctx);
+  if (located.length === 0) return [];
+  const { checkoutRecordKey } = await import('./pull.js');
+  const key = await checkoutRecordKey(ctx.localConfig);
+  const recorded = key === undefined ? undefined : placesRecordOf((await loadStateForScope(ctx.localConfig)).lastPullByWorkspace?.[key])?.agents;
+  const checks: Check[] = [];
+  for (const { tool, own, where } of located) {
+    const wrote = recorded?.[tool];
+    if (wrote === undefined) continue;
+    const writes = writesOf(where).map((place) => place.path);
+    const earlier: string[] = [];
+    for (const dir of wrote) if (!await amongPlaces(dir, writes)) earlier.push(dir);
+    checks.push({
+      name: `${tool} agents are where the last pull wrote them`,
+      source: 'local',
+      check: async () => samePlaces({ [tool]: wrote }, { [tool]: writes }),
+      fix: await amongPlaces(own, wrote)
+        ? `${tool} takes agents from ${own}, but the last pull could not deliver every agent there, so it kept teamai's copies in ${earlier.join(', ')}. `
+          + 'Run `teamai pull`: it says what holds them back.'
+        : `${tool} takes agents from ${own}, but the last pull wrote them to ${wrote[0]}. Run \`teamai pull\` to sync them there.`,
+    });
+  }
+  return checks;
+}
+
+/** A tool whose agents follow its moved home while teamai writes its other files under the default one (#1221). */
+export async function agentReadNotes(ctx: DoctorContext): Promise<string[]> {
+  if (ctx.localConfig.scope !== 'user') return [];
+  const notes: string[] = [];
+  const host = realHost();
+  for (const { tool, own } of await writableAgentLocations(ctx)) {
+    if (!isToolId(tool) || !settingsAtDefault(tool)) continue;
+    const defaultHome = defaultToolHome(tool, host);
+    if (!await samePlace(toolHome(tool, host), defaultHome)) notes.push(`${tool} takes agents from ${own}, but teamai still writes some of its other files under ${defaultHome}.`);
+  }
+  return notes;
 }
 
 const UNRESOLVED_VARS_RE = /^unresolved variable\(s\): (.+)$/;
