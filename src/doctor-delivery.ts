@@ -10,7 +10,7 @@ import {
 import type { DeliveryTarget, LocalConfig, ManagedMcpManifest, McpServerDef, ResourceItem, TeamaiConfig } from './types.js';
 import type { EntryLayout, EntryResolution } from './namespaced-entries.js';
 import { splitFrontmatter } from './utils/frontmatter.js';
-import { isToolInstalledForConfig, type ResourceHandler } from './resources/base.js';
+import type { ResourceHandler } from './resources/base.js';
 import type { Check, DoctorContext } from './doctor.js';
 import type { DirectoryEnv } from './resources/env-loader.js';
 import type { EnvVariable } from './resources/env.js';
@@ -24,7 +24,7 @@ import {
 } from './utils/shell-profile.js';
 import { getUserHome } from './utils/home.js';
 import { loadStateForScope } from './config.js';
-import { installOf, locate, unreadWrites, writable, writesOf, type DirPlace, type FilesChannel, type Location, type ReadGate } from './locate.js';
+import { installOf, locate, ownOf, unreadWrites, writable, writesOf, type DirPlace, type FilesChannel, type Location, type ReadGate, type Unread } from './locate.js';
 import { codexProjectTrust, codexTrustFix } from './codex-project-trust.js';
 import { amongPlaces, placesRecordOf, samePlace, samePlaces } from './resources/places.js';
 import { defaultToolHome, realHost, toolHome } from './tool-home.js';
@@ -455,6 +455,115 @@ export async function skillReadNotes(ctx: DoctorContext): Promise<string[]> {
   return notes;
 }
 
+const RECORDED_WORDS = {
+  rules: { noun: 'rules', every: 'every rule', field: 'rules' },
+  blocks: { noun: 'instruction blocks', every: 'every instruction block', field: 'claudemd' },
+} as const;
+
+/** What doctor compares for one tool that teamai writes rules or blocks for now. */
+type WrittenPlace = {
+  readonly tool: string;
+  readonly own: string;
+  readonly writes: readonly string[];
+  readonly unread: 'unknown' | readonly Unread[];
+};
+
+async function writtenPlaces(ctx: DoctorContext, resource: 'rules' | 'blocks'): Promise<WrittenPlace[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig) return [];
+  const install = installOf(teamConfig, localConfig);
+  const located: WrittenPlace[] = [];
+  for (const tool of Object.keys(ctx.toolPaths)) {
+    const where = resource === 'rules'
+      ? await locate(tool, 'rules', install)
+      : await locate(tool, 'blocks', install);
+    if (where.channel !== 'files') continue;
+    const own = writable(where);
+    if (own === null) continue;
+    located.push({
+      tool,
+      own: own.path,
+      writes: writesOf(where).map((place) => place.path),
+      unread: where.reads === 'unknown' ? 'unknown' : unreadWrites(where),
+    });
+  }
+  return located;
+}
+
+/**
+ * Per tool, whether it reads the rules or instruction blocks teamai writes,
+ * and whether the last pull wrote them where it takes them now (#1221).
+ */
+export async function buildRecordedPlaceChecks(ctx: DoctorContext, resource: 'rules' | 'blocks'): Promise<Check[]> {
+  const located = await writtenPlaces(ctx, resource);
+  if (located.length === 0) return [];
+  const words = RECORDED_WORDS[resource];
+  const { checkoutRecordKey } = await import('./pull.js');
+  const key = await checkoutRecordKey(ctx.localConfig);
+  const recorded = key === undefined ? undefined : placesRecordOf((await loadStateForScope(ctx.localConfig)).lastPullByWorkspace?.[key])?.[resource];
+  const checks: Check[] = [];
+  for (const { tool, own, writes, unread } of located) {
+    if (unread !== 'unknown') {
+      const notRead = unread.filter((entry) => entry.reason === 'not-read');
+      checks.push({
+        name: `${tool} reads the ${words.noun} teamai writes`,
+        source: 'local',
+        check: async () => notRead.length === 0,
+        fix: `${notRead.map((entry) => `${tool} does not read ${entry.write}`).join('; ')}. `
+          + `Point toolPaths.${tool}.${words.field} in teamai.yaml at a place ${tool} reads.`,
+      });
+    }
+    const wrote = recorded?.[tool];
+    if (wrote === undefined) continue;
+    const earlier: string[] = [];
+    for (const place of wrote) if (!await amongPlaces(place, writes)) earlier.push(place);
+    checks.push({
+      name: `${tool} ${words.noun} are where the last pull wrote them`,
+      source: 'local',
+      check: async () => samePlaces({ [tool]: wrote }, { [tool]: [...writes] }),
+      fix: await amongPlaces(own, wrote)
+        ? `${tool} takes ${words.noun} from ${own}, but the last pull could not deliver ${words.every} there, so it kept teamai's copies in ${earlier.join(', ')}. `
+          + 'Run `teamai pull`: it says what holds them back.'
+        : `${tool} takes ${words.noun} from ${own}, but the last pull wrote them to ${wrote[0]}. Run \`teamai pull\` to sync them there.`,
+    });
+  }
+  return checks;
+}
+
+/** A session-limited read, and a home that moved while teamai still writes other files under the default one (#1221). */
+export async function recordedPlaceNotes(ctx: DoctorContext, resource: 'rules' | 'blocks'): Promise<string[]> {
+  const notes: string[] = [];
+  const words = RECORDED_WORDS[resource];
+  const host = realHost();
+  for (const { tool, own, unread } of await writtenPlaces(ctx, resource)) {
+    if (ctx.localConfig.scope === 'user' && isToolId(tool) && settingsAtDefault(tool)) {
+      const defaultHome = defaultToolHome(tool, host);
+      if (!await samePlace(toolHome(tool, host), defaultHome)) {
+        notes.push(`${tool} takes ${words.noun} from ${own}, but teamai still writes some of its other files under ${defaultHome}.`);
+      }
+    }
+    if (unread === 'unknown') continue;
+    for (const entry of unread) {
+      switch (entry.reason) {
+        case 'not-read':
+        case 'shadowed':
+          break;
+        case 'cwd-only':
+          notes.push(`${tool} reads project ${words.noun} only from a session started in ${entry.readFrom}.`);
+          break;
+        case 'outside-workspace':
+          notes.push(`${tool} reads ${entry.write} only from sessions under ${entry.readFrom}.`);
+          break;
+        default: {
+          const unhandled: never = entry;
+          return unhandled;
+        }
+      }
+    }
+  }
+  return notes;
+}
+
 /**
  * Build one delivery check per tool that receives rules: every rule the member
  * should have, against what is on disk for that tool.
@@ -503,15 +612,21 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
   );
   // A tool that reads only the top of its rules directory gets no file for a
   // namespaced rule whose flat name another rule has (`deliveryTargets`).
-  for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-    if (!toolPath.rules || !ruleFormatForTool(tool)?.flat || isAgentExcluded(localConfig, tool)) continue;
-    if (!await isToolInstalledForConfig(tool, toolPath.rules, localConfig)) continue;
+  const install = installOf(teamConfig, localConfig);
+  const rulesDirOf = async (tool: string): Promise<string | null> => {
+    const own = writable(await locate(tool, 'rules', install));
+    return own?.kind === 'dir' ? own.path : null;
+  };
+  for (const tool of Object.keys(install.toolPaths)) {
+    if (!ruleFormatForTool(tool)?.flat) continue;
+    const dir = await rulesDirOf(tool);
+    if (dir === null) continue;
     const stems = ruleStemsForTool(tool, items.map((item) => item.name));
     const collisions = items.filter((item) => !stems.has(item.name));
     if (collisions.length === 0) continue;
     let delivery = byTool.get(tool);
     if (!delivery) {
-      delivery = { tool, dir: path.join(resolveToolBaseDir(tool, localConfig), toolPath.rules), problems: new Map() };
+      delivery = { tool, dir, problems: new Map() };
       byTool.set(tool, delivery);
     }
     for (const item of collisions) appendTo(delivery.problems, FLAT_NAME_TAKEN, item.name);
@@ -521,9 +636,8 @@ export async function buildRulesDeliveryChecks(ctx: DoctorContext): Promise<Chec
   for (const [tool, delivery] of byTool) {
     // A team `toolPaths` entry written before the tool's rules moved still
     // sends them to a directory it never reads (#946).
-    const rulesPath = scopedToolPaths(teamConfig, localConfig)[delivery.tool]?.rules;
-    const rulesDir = rulesPath ? path.join(resolveToolBaseDir(delivery.tool, localConfig), rulesPath) : undefined;
-    const unread = rulesDir ? unreadRulesDir(delivery.tool, rulesDir, localConfig) : undefined;
+    const rulesDir = await rulesDirOf(delivery.tool);
+    const unread = rulesDir === null ? undefined : unreadRulesDir(delivery.tool, rulesDir, localConfig);
     const problems = describeProblems(delivery.problems, ruleLabels);
     const restore = delivery.problems.has(ruleLabels[0]) || delivery.problems.has(ruleLabels[1]);
     perTool.push({
@@ -703,8 +817,9 @@ async function buildCursorUserRulesHookChecks(ctx: DoctorContext): Promise<Check
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig || localConfig.scope !== 'user' || isAgentExcluded(localConfig, 'cursor')) return [];
   const toolPath = scopedToolPaths(teamConfig, localConfig).cursor;
-  if (!toolPath?.rules || !toolPath.settings || !await isToolInstalledForConfig('cursor', toolPath.rules, localConfig)) return [];
-  const { cursorUserRulesDir, cursorUserRulesText } = await import('./cursor-user-rules.js');
+  const rulesDir = writable(await locate('cursor', 'rules', installOf(teamConfig, localConfig)));
+  if (rulesDir?.kind !== 'dir' || !toolPath?.settings) return [];
+  const { cursorUserRulesText } = await import('./cursor-user-rules.js');
   const text = await cursorUserRulesText(teamConfig, localConfig);
   if (text === null) return [];
 
@@ -721,7 +836,7 @@ async function buildCursorUserRulesHookChecks(ctx: DoctorContext): Promise<Check
     return /\bhook-dispatch session-start\b/.test(command) && /--tool[= ]cursor(?![\w-])/.test(command);
   });
   const fits = text.length <= CURSOR_HOOK_CONTEXT_LIMIT;
-  const why = `Cursor loads ${cursorUserRulesDir(teamConfig, localConfig)} only in a workspace under the home directory; `
+  const why = `Cursor loads ${rulesDir.path} only in a workspace under the home directory; `
     + 'elsewhere the teamai sessionStart hook adds the team rules and instructions';
   const fix = read.kind === 'invalid'
     ? `${why}, but ${file} is not valid JSON (${read.error}), so Cursor runs no hooks from it and those workspaces `
@@ -926,32 +1041,37 @@ async function buildUserRulesFileChecks(ctx: DoctorContext, items: ResourceItem[
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig || localConfig.scope !== 'user') return [];
 
-  const { teamRulesBlock } = await import('./resources/rules.js');
+  const { inlineRulesLabelOf, inlineRulesLocationOf, teamRulesBlock, unreadableConfigOf } = await import('./resources/rules.js');
   const { isCodexTool } = await import('./utils/tool-names.js');
-  const { userRulesFile } = await import('./instruction-targets.js');
   const { TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, scopedToolPaths } = await import('./types.js');
   const expected = await teamRulesBlock(items);
+  const install = installOf(teamConfig, localConfig);
   const checks: Check[] = [];
-  for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-    if (isAgentExcluded(localConfig, tool)) continue;
-    const target = await userRulesFile(tool, toolPath, localConfig);
-    if (!target?.installed) continue;
+  for (const tool of Object.keys(install.toolPaths)) {
+    const label = inlineRulesLabelOf(tool);
+    // Hermes keeps its rules in its own SOUL.md block.
+    if (label === null || tool === 'hermes' || isAgentExcluded(localConfig, tool)) continue;
+    const location = await inlineRulesLocationOf(tool, install);
+    if (location === null) continue;
     const codexFamily = isCodexTool(tool);
     const name = codexFamily && tool !== 'codex'
-      ? `Team rules are inlined in ${target.label} (${tool})`
-      : `Team rules are inlined in ${target.label}`;
-    if (target.unreadable) {
+      ? `Team rules are inlined in ${label} (${tool})`
+      : `Team rules are inlined in ${label}`;
+    const unreadable = unreadableConfigOf(location);
+    if (unreadable !== undefined) {
       const { unreadableRulesFileMessage } = await import('./instruction-targets.js');
-      checks.push({ name, source: 'local', check: async () => false, fix: unreadableRulesFileMessage(tool, target.unreadable) });
+      const fix = await unreadableRulesFileMessage(tool, unreadable);
+      checks.push({ name, source: 'local', check: async () => false, fix });
       continue;
     }
-    const { file } = target;
-    if (file === undefined) {
+    if (!location.gates.every((gate) => gate.met)) continue;
+    const file = location.channel === 'files' ? location.own?.path ?? null : null;
+    if (file === null) {
       // A team `toolPaths` entry replaces the default one whole, so a Codex
       // entry written before #938 leaves it nowhere to read user rules from.
       // One with no `rules` path delivers no rules to it on purpose; with no
       // team rules it misses none.
-      if (!codexFamily || items.length === 0 || !toolPath.rules) continue;
+      if (!codexFamily || items.length === 0 || !scopedToolPaths(teamConfig, localConfig)[tool]?.rules) continue;
       checks.push({
         name,
         source: 'local',
@@ -2214,7 +2334,7 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return [];
   const {
-    holdsInstructionBlocks, hookLimitProblem, instructionHookChannel, instructionHookText, instructionTargetPath,
+    channelReadiness, holdsInstructionBlocks, hookLimitProblem, instructionHookText,
     planInstructionFiles, resolveInstructionTargets,
   } = await import('./instruction-targets.js');
   const { resolveInstructionBlocks } = await import('./pull.js');
@@ -2237,8 +2357,8 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
     });
   }
 
-  const opencodePaths = scopedToolPaths(teamConfig, localConfig).opencode;
-  const opencodeFile = opencodePaths && await instructionTargetPath('opencode', opencodePaths, localConfig);
+  const opencodeFile = teamConfig.toolPaths.opencode === undefined ? undefined
+    : ownOf(await locate('opencode', 'blocks', installOf(teamConfig, localConfig)))?.path;
   // Only a file holding the blocks needs listing; pull registers it once it
   // writes them. Beside the Claude fallback V1 reads CLAUDE.md instead.
   const opencodeDelivered = opencodeFile !== undefined && targets.some((t) => t.path === opencodeFile) && await holdsInstructionBlocks(opencodeFile);
@@ -2284,7 +2404,7 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
     const text = instructionHookText(blocks, hook.recall);
     if (!text && !getsRulesFromExtension(hook.tool)) continue;
     if (!text && !(hasTeamRules ??= await teamRulesContext(teamConfig, localConfig) !== null)) continue;
-    const channel = await instructionHookChannel(hook.tool, { teamConfig, localConfig });
+    const channel = await channelReadiness(hook.tool, hook.probe, { teamConfig, localConfig });
     const overLimit = hookLimitProblem(hook, text);
     checks.push({
       name: `${hook.tool} adds the team instructions${getsRulesFromExtension(hook.tool) ? ' and rules' : ''} to its prompt`,

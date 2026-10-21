@@ -194,7 +194,10 @@ type Activated = { readonly activation: EntryPlace | null };
 type LocationOf = {
   /** `shared`: Codex's `.agents/skills`, chosen per skill by its writer; null for every other tool. */
   readonly skills: FilesChannel<DirPlace> & { readonly shared: DirPlace | null };
-  readonly rules: (FilesChannel<PlaceOf['rules']> & Activated) | RunTimeChannel<PlaceOf['rules']> | SilentChannel<PlaceOf['rules']>;
+  readonly rules: (FilesChannel<PlaceOf['rules']> & Activated & {
+    /** OpenCode's project MCP file, where an earlier release wrote the rules glob. Unset elsewhere, and not a `retired` rules place. */
+    readonly retiredActivation?: EntryPlace | null;
+  }) | RunTimeChannel<PlaceOf['rules']> | SilentChannel<PlaceOf['rules']>;
   readonly blocks: (FilesChannel<FilePlace> & Activated) | RunTimeChannel<FilePlace> | SilentChannel<FilePlace>;
   readonly agents: FilesChannel<DirPlace> | SilentChannel<DirPlace>;
   readonly mcp: (FilesChannel<EntryPlace> & {
@@ -548,11 +551,19 @@ async function locateSkills(tool: string, install: Install, host: Host): Promise
 
 async function locateRules(tool: string, install: Install, host: Host): Promise<Location<'rules'>> {
   const channel = channelsOf(tool).rules[install.scope];
-  if (channel === 'none' || channel === 'unknown') return { channel, retired: [], gates: await gatesOf(tool, install, host) };
+  const roots = rootsOf(tool, install, host);
+  const dir = roots.configured('rules');
+  // An earlier release copied team rules verbatim into any configured rules directory (#993).
+  if (channel === 'none' || channel === 'unknown') {
+    return { channel, retired: dir === null ? [] : [{ place: { kind: 'dir', path: dir }, was: 'configured' }], gates: await gatesOf(tool, install, host, roots) };
+  }
+  // A team entry written before the tool's rules moved (#938, #946) still names a directory the tool never reads: teamai writes there as the entry says, and doctor fails it.
+  if (dir !== null && channel.channel !== 'dir') {
+    return { channel: 'files', own: { kind: 'dir', path: dir }, activation: null, reads: [], readGates: [], retired: [], gates: await gatesOf(tool, install, host, roots) };
+  }
   switch (channel.channel) {
     case 'dir': {
-      const roots = rootsOf(tool, install, host);
-      const dir = roots.configured('rules');
+      const retiredActivation = await retiredRulesActivation(tool, install, host, roots);
       return {
         channel: 'files',
         own: dir === null ? null : { kind: 'dir', path: dir },
@@ -560,6 +571,7 @@ async function locateRules(tool: string, install: Install, host: Host): Promise<
         reads: await readsOf(channel.reads, roots, host),
         readGates: [],
         retired: [],
+        ...(retiredActivation === undefined ? {} : { retiredActivation }),
         gates: await gatesOf(tool, install, host, roots),
       };
     }
@@ -615,7 +627,7 @@ async function blocksFileOf(file: BlocksFile, roots: Roots, host: Host): Promise
       return { place: placed(roots.configured('claudemd')), gates: [] };
     case 'rules-dir': {
       const dir = roots.configured('rules');
-      if (dir !== null) return { place: placed(host.path.join(dir, file.name)), gates: [] };
+      if (dir !== null) return { place: placed(file.dir === undefined ? host.path.join(dir, file.name) : roots.join(roots.base, `${file.dir}/${file.name}`)), gates: [] };
       const claudemd = roots.configured('claudemd');
       return { place: claudemd === null ? null : { kind: 'file', path: claudemd, owned: false, header: null }, gates: [] };
     }
@@ -646,6 +658,15 @@ async function blocksFileOf(file: BlocksFile, roots: Roots, host: Host): Promise
       return unhandled;
     }
   }
+}
+
+/** OpenCode project rules only. `mcpFileOf` returns the tree file, not the V2 alternate. */
+async function retiredRulesActivation(tool: string, install: Install, host: Host, roots: Roots): Promise<EntryPlace | null | undefined> {
+  if (tool !== 'opencode' || install.scope !== 'project') return undefined;
+  const channel = channelsOf(tool).mcp[install.scope];
+  if (channel === 'none' || channel === 'unknown') return null;
+  const { file } = await mcpFileOf(channel, install.scope, roots, host);
+  return file === null ? null : { kind: 'entry', path: file, key: ['instructions'] };
 }
 
 async function activationOf(activation: Activation | undefined, tool: string, install: Install, host: Host, roots: Roots): Promise<EntryPlace | null> {

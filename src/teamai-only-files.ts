@@ -2,13 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { gitTracks, realFilePath } from './git-exclude.js';
 import { judgeTeamaiOnlyCodexHooks } from './hooks.js';
-import { instructionTargetPath } from './instruction-targets.js';
+import { installOf, locate, ownOf } from './locate.js';
 import { findMcpGitExcludes } from './mcp-git-exclude.js';
 import { judgeTeamaiOnlyMcpConfigs, opencodeV1Servers } from './mcp-reconcile.js';
 import { opencodeDeliversThroughPlugin } from './opencode-hooks.js';
 import { opencodeContextReference, readOpencodeInstructionList, reconcileOpencodeInstructionSet } from './resources/opencode-config.js';
 import { RulesHandler } from './resources/rules.js';
-import { resolveToolBaseDir, scopedToolPaths, type LocalConfig, type TeamaiConfig } from './types.js';
+import { resolveToolBaseDir, type LocalConfig, type TeamaiConfig } from './types.js';
 import { readFileSafe } from './utils/fs.js';
 
 // ─── teamai-only files (#915) ─────────────────────────────────
@@ -112,8 +112,7 @@ async function opencodeInstructionEntries(
   const target = await new RulesHandler().opencodeInstructionsTarget(teamConfig, localConfig, []);
   if (target === null) return null;
   const file = target.configFile;
-  const paths = scopedToolPaths(teamConfig, localConfig).opencode;
-  const contextFile = paths ? await instructionTargetPath('opencode', paths, localConfig) : undefined;
+  const contextFile = ownOf(await locate('opencode', 'blocks', installOf(teamConfig, localConfig)))?.path;
   const context = contextFile ? opencodeContextReference(contextFile, 'project', resolveToolBaseDir('opencode', localConfig)) : null;
   return {
     file,

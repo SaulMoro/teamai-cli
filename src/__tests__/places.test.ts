@@ -146,11 +146,23 @@ describe('samePlace', () => {
 
 describe('placesUnmoved', () => {
   it('holds while every recorded resource is where the last full pull wrote it, and not for a record without one', async () => {
-    const current = { skills: { hermes: ['/a/skills'] }, agents: { claude: ['/a/agents'] } };
+    const current = {
+      skills: { hermes: ['/a/skills'] },
+      rules: { hermes: ['/a/SOUL.md'] },
+      blocks: { hermes: ['/a/SOUL.md'] },
+      agents: { claude: ['/a/agents'] },
+    };
 
     expect(await placesUnmoved({ places: current }, current)).toBe(true);
     expect(await placesUnmoved({ places: { ...current, skills: { hermes: ['/b/skills'] } } }, current)).toBe(false);
+    expect(await placesUnmoved({ places: { ...current, rules: { hermes: ['/b/SOUL.md'] } } }, current)).toBe(false);
+    expect(await placesUnmoved({ places: { ...current, blocks: { hermes: ['/b/SOUL.md'] } } }, current)).toBe(false);
     expect(await placesUnmoved({ places: { ...current, agents: { claude: ['/b/agents'] } } }, current)).toBe(false);
+    const { skills, rules, blocks, agents } = current;
+    expect(await placesUnmoved({ places: { rules, blocks, agents } }, current)).toBe(false);
+    expect(await placesUnmoved({ places: { skills, blocks, agents } }, current)).toBe(false);
+    expect(await placesUnmoved({ places: { skills, rules, agents } }, current)).toBe(false);
+    expect(await placesUnmoved({ places: { skills, rules, blocks } }, current)).toBe(false);
     expect(await placesUnmoved({ places: { skills: current.skills } }, current)).toBe(false);
   });
 });

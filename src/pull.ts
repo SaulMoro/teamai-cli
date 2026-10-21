@@ -16,7 +16,7 @@ import { DetachedRecoveryError, transitionTeamRepo, teamRefBlocker, teamRefNotic
 import { pathExists, readJson, writeJson, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
 import { reconcilePlacementRecords } from './utils/pending-push.js';
 import {
-  applyInstructionPlan, holdsInstructionBlocks, hookLimitProblem, instructionHookChannel, instructionHookChannelInstallable, instructionHookText,
+  applyInstructionPlan, channelReadiness, holdsInstructionBlocks, hookLimitProblem, instructionHookChannelInstallable, instructionHookText,
   planInstructionFiles, registerOpencodeContext, resolveInstructionTargets, retiredFilesOfReached, type InstructionBlocks, type InstructionTarget,
 } from './instruction-targets.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
@@ -555,7 +555,7 @@ async function getInstalledResourceTargets(
       const resourcePath = toolPath[resource];
       if (!resourcePath) continue;
       const receives = resource === 'rules'
-        ? await isToolInstalledForConfig(tool, resourcePath, localConfig)
+        ? writable(await locate(tool, 'rules', install))?.kind === 'dir'
         : writable(await locate(tool, resource, install)) !== null;
       if (receives) {
         targets.push(tool);
@@ -633,6 +633,14 @@ async function cleanupTombstonedResources(
         const agentsDir = where.gates.every((gate) => gate.met) ? (ownOf(where) ?? where.retired[0]?.place)?.path : undefined;
         if (agentsDir === undefined) continue;
         typeDir = agentsDir;
+      } else if (type === 'rules') {
+        const where = await locate(tool, 'rules', installOf(freshConfig, localConfig));
+        // A tool teamai writes no rules for keeps an earlier release's verbatim copies in its configured directory (#993).
+        if (!where.gates.every((gate) => gate.met)) continue;
+        const own = ownOf(where);
+        const rulesDir = own?.kind === 'dir' ? own : where.retired.find((retired) => retired.place.kind === 'dir')?.place;
+        if (rulesDir === undefined) continue;
+        typeDir = rulesDir.path;
       } else {
         if (!await isToolInstalledForConfig(tool, dir, localConfig)) continue;
         if (isAgentExcluded(localConfig, tool)) continue;
@@ -2274,7 +2282,7 @@ async function pullForScope(
   try {
     const { deployBuiltinRules } = await import('./builtin-rules.js');
     const skipRecall = !isRecallEnabled(localConfig, freshConfig);
-    const deployed = await deployBuiltinRules(freshConfig, localConfig, { skipRecall, recorder, dryRun });
+    const deployed = await deployBuiltinRules(freshConfig, localConfig, { skipRecall, recorder, dryRun, toolsMissingRules: ledger.toolsMissingRules });
     if (deployed > 0 && !dryRun) {
       log.debug(`[${scopeLabel}] Deployed built-in rules to ${deployed} tool(s)`);
     }
@@ -2297,19 +2305,27 @@ async function pullForScope(
   }
   recorder?.succeeded('builtin');
 
-  // Step 4b: Record where each tool took skills and agents, once they and the
-  // built-ins had their chance at the new place, and name the places a tool left.
+  // Step 4b: Record where each tool took skills, rules, instruction blocks and
+  // agents, once they and the built-ins had their chance at the new place, and
+  // name the places a tool left.
   const current = currentPlaces ?? await placesOf(installOf(freshConfig, localConfig));
   let syncedPlaces: PlacesRecord | undefined;
   let syncedSessionToolHomes: SessionToolHomes | undefined;
   if (!options.dryRun && resourceTypes.includes('skills')) {
     const previous = recordKey ? (await loadStateForScope(localConfig)).lastPullByWorkspace?.[recordKey] : undefined;
-    // A resource a collision held keeps the places recorded before.
+    // A resource a collision held, or this pull did not sync, keeps the places recorded before.
     ({ places: syncedPlaces, sessionToolHomes: syncedSessionToolHomes } = await recordPlaces({
       previous,
-      current: { ...skillsHeld ? {} : { skills: current.skills }, ...agentsHeld ? {} : { agents: current.agents } },
+      current: {
+        ...skillsHeld ? {} : { skills: current.skills },
+        ...resourceTypes.includes('rules') ? { rules: current.rules } : {},
+        blocks: current.blocks,
+        ...agentsHeld ? {} : { agents: current.agents },
+      },
       incomplete: {
         skills: workspaceHeldSkills || stubFailed ? new Set(Object.keys(current.skills ?? {})) : ledger.toolsMissingSkills,
+        rules: ledger.toolsMissingRules,
+        blocks: new Set(Object.keys(current.blocks ?? {}).filter((tool) => !delivery.reached.includes(tool))),
         agents: ledger.toolsMissingAgents,
       },
       scopeLabel,
@@ -3744,7 +3760,7 @@ async function reconcileHooksAllScopes(
       if (delivery) {
         const { hooks } = await resolveInstructionTargets(teamConfig, localConfig);
         for (const hook of hooks) {
-          const channel = await instructionHookChannel(hook.tool, { teamConfig, localConfig });
+          const channel = await channelReadiness(hook.tool, hook.probe, { teamConfig, localConfig });
           // A dry run installed nothing: preview what the real pull's install leaves ready.
           const ready = channel.ready
             || (Boolean(options.dryRun) && reconciled.ok && await instructionHookChannelInstallable(hook.tool));

@@ -55,7 +55,7 @@ import { isLegacyCursorRuleFile, keptLegacyCopiesWarning, ruleStemFromFilename, 
 import { agentStemFromFilename } from './resources/agent-format.js';
 import { resolveDocsDestination } from './resources/docs.js';
 import { listTeamAgentDirs, ownsAgentCopy } from './resources/agents.js';
-import { RulesHandler, isLegacyLayoutCopy, ownsRuleCopy } from './resources/rules.js';
+import { RulesHandler, inlineRulesLabelOf, inlineRulesLocationOf, isLegacyLayoutCopy, ownsRuleCopy } from './resources/rules.js';
 import { deliveredHashes, projectCheckouts, syncDeliveredGitExclude } from './pull.js';
 import { isToolInstalledForConfig } from './resources/base.js';
 import { BUILTIN_AGENT_NAMES } from './builtin-agents.js';
@@ -68,11 +68,11 @@ import {
   removeOwnedFiles,
   skillsGuardBase,
 } from './builtin-skills.js';
-import { cleanupOf, installOf, locate, SHARED_AGENT_SKILLS_PATH, writesOf } from './locate.js';
+import { cleanupOf, installOf, locate, ownOf, SHARED_AGENT_SKILLS_PATH, writesOf, type Location } from './locate.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import { allowsSkillDirectory, CODEX_TOOL, describeOutsideSkillLink, skillOrigin } from './resources/skills.js';
 import { describeKeptDir, describeMembersDirLeft, isLink, keepsTrackedCopy, ownsSkillDir, teamaiSkillFiles } from './resources/delivered-copies.js';
-import { clearInstructionFile, instructionTargetFile, readsTeamRulesFromFile, retiredInstructionFiles, resolveInstructionTargets, userRulesFile } from './instruction-targets.js';
+import { clearInstructionFile, resolveInstructionTargets } from './instruction-targets.js';
 import {
   pathExists,
   readFileSafe,
@@ -308,12 +308,12 @@ const INSTRUCTION_BLOCK_STARTS: Record<InstructionBlock, string> = {
  * (#945): culture, claudemd and recall always (a tool without the
  * `teamai-recall` subagent gets the direct variant, under the same markers),
  * and team rules for a tool that reads them from a file of its own
- * (`readsTeamRulesFromFile`). Nobody writes the
+ * (`inlineRulesLabelOf`; Hermes keeps its own SOUL.md block). Nobody writes the
  * legacy `[teamai:rules]` block any more.
  */
 function instructionBlocksWrittenBy(tool: string): string[] {
   return (Object.keys(INSTRUCTION_BLOCK_STARTS) as InstructionBlock[])
-    .filter((block) => block !== 'team-rules' || readsTeamRulesFromFile(tool))
+    .filter((block) => block !== 'team-rules' || (tool !== 'hermes' && inlineRulesLabelOf(tool) !== null))
     .map((block) => INSTRUCTION_BLOCK_STARTS[block]);
 }
 
@@ -426,6 +426,17 @@ interface HookTarget {
   teamHookHistory?: TeamHookHistory;
 }
 
+/** The directory in `dirs` that holds `file`, the longest one when several do. */
+function directoryHolding(file: string, dirs: readonly string[]): string | undefined {
+  let match: string | undefined;
+  for (const dir of dirs) {
+    const rel = path.relative(dir, file);
+    const inside = rel !== '' && !path.isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${path.sep}`);
+    if (inside && (match === undefined || dir.length > match.length)) match = dir;
+  }
+  return match;
+}
+
 async function discoverToolResources(
   tool: string,
   toolPath: TeamaiConfig['toolPaths'][string],
@@ -434,6 +445,10 @@ async function discoverToolResources(
   scopeRoot: string,
   /** Where pull writes `tool`'s skills (`locate`), whether or not it is selected or installed now. */
   skillWrites: readonly string[],
+  /** Where pull writes `tool`'s instruction blocks (`locate`), and the files earlier releases wrote them to. */
+  blocks: Location<'blocks'>,
+  /** Directories `locate` says may hold `tool`'s rules, including one it retired. */
+  rulesDirs: readonly string[],
   teamSkillNames: Set<string>,
   /** Whether `tool`'s skill directory `dir`, at a name in `teamSkillNames`, is teamai's (#993). */
   ownsSkill: (dir: string, name: string, tool: string) => Promise<boolean>,
@@ -622,23 +637,15 @@ async function discoverToolResources(
     }
   }
 
-  // (b) CLAUDE.md teamai section blocks
-  const instructionFile = await instructionTargetFile(tool, toolPath, scope);
-  if (instructionFile) {
-    const claudeMdPath = path.resolve(baseDir, instructionFile);
-    const content = await readFileSafe(claudeMdPath);
-    if (content && CLAUDEMD_MARKER_PAIRS.some(([start]) => content.includes(start))) {
-      res.claudeMdFiles.push(claudeMdPath);
-    }
-  }
-  // OpenCode's instructions entry goes only when teamai recorded adding it
-  // (buildRemovalPlan): an entry the member listed is theirs, whatever the file holds.
-  for (const retired of await retiredInstructionFiles(tool, toolPath, scope)) {
-    const file = path.resolve(baseDir, retired);
-    const content = await readFileSafe(file);
-    if (content && CLAUDEMD_MARKER_PAIRS.some(([start]) => content.includes(start))) {
-      res.retiredInstructionFiles.push(file);
-    }
+  // (b) CLAUDE.md teamai section blocks. OpenCode's instructions entry goes
+  // only when teamai recorded adding it (buildRemovalPlan): an entry the
+  // member listed is theirs, whatever the file holds.
+  const own = ownOf(blocks);
+  for (const place of cleanupOf(blocks)) {
+    if (place.kind !== 'file') continue;
+    const content = await readFileSafe(place.path);
+    if (!content || !CLAUDEMD_MARKER_PAIRS.some(([start]) => content.includes(start))) continue;
+    (place === own ? res.claudeMdFiles : res.retiredInstructionFiles).push(place.path);
   }
 
   // (c) Skills — only those matching team repo
@@ -681,25 +688,22 @@ async function discoverToolResources(
   // (d) Rules — team-synced rules plus CLI built-in rules (teamRuleNames
   // now includes BUILTIN_RULE_NAMES). User-authored rules are left alone.
   // A legacy rules directory is buildRemovalPlan's: its copies go on ownership.
-  if (toolPath.rules) {
-    const rulesDir = path.join(baseDir, toolPath.rules);
-    if (await pathExists(rulesDir)) {
-      const files = await listFilesRecursive(rulesDir);
-      for (const file of files) {
-        // Cursor's copies are `.mdc`; match by stem so both extensions are
-        // collected and uninstall does not leave team rules behind.
-        const ruleName = ruleStemFromFilename(file);
-        if (ruleName === null) continue;
-        if (teamRuleNames.has(ruleName)) {
-          // teamai's instruction file shares the reserved name; its blocks are
-          // stripped above, keeping what another tool or the member still uses.
-          if (ruleName === TEAMAI_CONTEXT_RULE_NAME) {
-            const text = await readFileSafe(path.join(rulesDir, file));
-            if (text && CLAUDEMD_MARKER_PAIRS.some(([start]) => text.includes(start))) continue;
-          }
-          res.ruleFiles.push(path.join(rulesDir, file));
-        }
+  for (const rulesDir of rulesDirs) {
+    if (!await pathExists(rulesDir)) continue;
+    const files = await listFilesRecursive(rulesDir);
+    for (const file of files) {
+      // Cursor's copies are `.mdc`; match by stem so both extensions are
+      // collected and uninstall does not leave team rules behind.
+      const ruleName = ruleStemFromFilename(file);
+      if (ruleName === null) continue;
+      if (!teamRuleNames.has(ruleName)) continue;
+      // teamai's instruction file shares the reserved name; its blocks are
+      // stripped above, keeping what another tool or the member still uses.
+      if (ruleName === TEAMAI_CONTEXT_RULE_NAME) {
+        const text = await readFileSafe(path.join(rulesDir, file));
+        if (text && CLAUDEMD_MARKER_PAIRS.some(([start]) => text.includes(start))) continue;
       }
+      res.ruleFiles.push(path.join(rulesDir, file));
     }
   }
 
@@ -992,8 +996,11 @@ async function buildRemovalPlan(
   const toolPaths = scopedToolPaths(teamConfig, localConfig);
   const install = installOf(teamConfig, localConfig);
   const perTool = new Map<string, ToolResources>();
+  const rulesDirsByTool = new Map<string, readonly string[]>();
   const globalAdapters = localConfig.scope === 'user';
   for (const [tool, toolPath] of Object.entries(toolPaths)) {
+    const rulesDirs = cleanupOf(await locate(tool, 'rules', install)).flatMap((place) => place.kind === 'dir' ? [place.path] : []);
+    rulesDirsByTool.set(tool, rulesDirs);
     perTool.set(
       tool,
       await discoverToolResources(
@@ -1002,6 +1009,8 @@ async function buildRemovalPlan(
         resolveToolBaseDir(tool, localConfig),
         baseDir,
         writesOf(await locate(tool, 'skills', install)).map((place) => place.path),
+        await locate(tool, 'blocks', install),
+        rulesDirs,
         teamSkillNames,
         ownsSkill,
         skillFiles,
@@ -1033,9 +1042,11 @@ async function buildRemovalPlan(
   // tool that reads only `.mdc` goes only as a copy an older layout wrote, and
   // is kept silently: the tool never reads it.
   for (const [tool, res] of perTool) {
-    const rulesDir = path.join(resolveToolBaseDir(tool, localConfig), toolPaths[tool]?.rules ?? '');
+    const rulesDirs = rulesDirsByTool.get(tool) ?? [];
     const owned: string[] = [];
     for (const file of res.ruleFiles) {
+      const rulesDir = directoryHolding(file, rulesDirs);
+      if (rulesDir === undefined) continue;
       const rel = path.relative(rulesDir, file).split(path.sep).join('/');
       if (usesMdcRules(tool) && isLegacyCursorRuleFile(tool, file)) {
         if (await isLegacyLayoutCopy(file, `rules/${rel}`, previous, repoPath)) owned.push(file);
@@ -1063,11 +1074,9 @@ async function buildRemovalPlan(
   if (opencodeRes) {
     const { loadStateForScope } = await import('./config.js');
     const { opencodeContextReference, readOpencodeInstructionList } = await import('./resources/opencode-config.js');
-    const contextFile = toolPaths.opencode && await instructionTargetFile('opencode', toolPaths.opencode, localConfig.scope);
+    const contextFile = ownOf(await locate('opencode', 'blocks', install))?.path;
     // Worktrees share state.json: only this checkout's own record counts.
-    const own = contextFile
-      ? opencodeContextReference(path.resolve(resolveToolBaseDir('opencode', localConfig), contextFile), localConfig.scope, resolveToolBaseDir('opencode', localConfig))
-      : undefined;
+    const own = contextFile === undefined ? undefined : opencodeContextReference(contextFile, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
     const recorded = (await loadStateForScope(localConfig)).opencodeContextEntries ?? [];
     if (own && recorded.some((ref) => ref.config === own.config && ref.entry === own.entry)) {
       const listed = await readOpencodeInstructionList(own.config);
@@ -1103,9 +1112,10 @@ async function buildRemovalPlan(
   // (b) continued: the team-rules block in the user file a tool with no
   // rules format reads them from (#938, #946), when that is not its
   // instruction file already.
-  for (const [tool, toolPath] of Object.entries(toolPaths)) {
+  for (const tool of Object.keys(toolPaths)) {
     const res = perTool.get(tool);
-    const file = (await userRulesFile(tool, toolPath, localConfig))?.file;
+    const located = tool === 'hermes' ? null : await inlineRulesLocationOf(tool, install);
+    const file = located === null ? undefined : ownOf(located)?.path;
     if (!res || file === undefined || res.claudeMdFiles.includes(file)) continue;
     if ((await readFileSafe(file))?.includes(TEAMAI_TEAM_RULES_START)) res.claudeMdFiles.push(file);
   }
@@ -1281,7 +1291,8 @@ async function buildRemovalPlan(
       const blocks = CLAUDEMD_MARKER_PAIRS
         .filter(([start]) => content.includes(start) && !kept?.has(start));
       // The configured `claudemd` (no `rules`) is the member's, whatever its name.
-      const owned = await instructionTargetFile(tool, toolPaths[tool], localConfig.scope) !== toolPaths[tool].claudemd;
+      const ownPlace = ownOf(await locate(tool, 'blocks', install));
+      const owned = ownPlace?.path === file && ownPlace.owned;
       if (blocks.length > 0) plan.claudeMdFiles.push({ path: file, blocks, owned });
     }
     // A retired file keeps only the blocks a remaining tool still writes
