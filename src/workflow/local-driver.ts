@@ -42,7 +42,7 @@ import type { DriverIdentity, StepHitl, WorkflowEnvelope, WorkflowFailure } from
 import { isWorkflowError } from './types.js';
 import type { WorkspaceContract } from './workspace.js';
 import {
-  applyBaseConfig, commitWork, ensureWorktree, git, headCommit, hooksPath, mergeBranch, pushIfOrigin, putBackCopy, recordConfigOverlay, removeWorktree, reopenConfigConflicts, restoreUneditedConfig, unrestoredCopy, worktreePath,
+  applyBaseConfig, commitWork, copyStatus, ensureWorktree, git, headCommit, hooksPath, mergeBranch, pushIfOrigin, putBackCopy, recordConfigOverlay, removeWorktree, reopenConfigConflicts, restoreUneditedConfig, unrestoredCopy, worktreePath,
 } from './worktree.js';
 
 /** Local lease identity, stable across restarts in the same workspace. */
@@ -163,6 +163,8 @@ interface Lease {
   /** Set once the step has a directory to run in. */
   cwd?: string;
   before?: WorktreeSnapshot;
+  /** A read copy's status before the base overlay, which putting the copy back returns it to. */
+  found?: string[];
   /** Branch agent files saved while the base overlay is in place. */
   overlay?: string;
   /** HEAD before this step merges or commits, so the reported range includes both. */
@@ -386,6 +388,11 @@ async function stageLease(lease: Lease, { active, runId }: { active: string; run
   const opened = await ensureWorktree(active, lease.workspace.branch, lease.workspace.start.commit);
   if ('error' in opened) return { code: 'workspace_base', message: opened.error };
   lease.cwd = opened.dir;
+  if (lease.workspace.mode === 'read-only') {
+    const found = await copyStatus(opened.dir);
+    if ('error' in found) return { code: 'workspace_base', message: `Step "${lease.step}" could not read workspace ${lease.workspace.branch}: ${found.error}` };
+    lease.found = found.lines;
+  }
   lease.rangeFrom = (await headCommit(opened.dir))?.commit;
   let conflict: { branch: string; files: string[] } | undefined;
   const remaining: string[] = [];
@@ -543,8 +550,8 @@ type ReadCopy = { read: StepRead } & (
  * Undefined for any other lease.
  */
 async function leaveReadCopy(lease: Lease): Promise<ReadCopy | undefined> {
-  const { cwd, before, workspace } = lease;
-  if (!cwd || !before?.head || workspace?.mode !== 'read-only') return undefined;
+  const { cwd, before, found, workspace } = lease;
+  if (!cwd || !before?.head || !found || workspace?.mode !== 'read-only') return undefined;
   const changed = changedPaths(before, await snapshotWorktree(cwd));
   // A detach or a switch to another branch at the same commit changes no file, but a later step would commit off the branch.
   // The full ref: --short prints heads/<branch> when a tag has the same name.
@@ -553,7 +560,7 @@ async function leaveReadCopy(lease: Lease): Promise<ReadCopy | undefined> {
   await restoreLeaseOverlay(lease);
   const read = { branch: workspace.branch, base: workspace.base.commit, commit: before.head };
   if (changed.length === 0) return { read, state: 'untouched' };
-  const put = await putBackCopy({ dir: cwd, branch: read.branch, commit: read.commit, attempt: lease.attempt, step: lease.step });
+  const put = await putBackCopy({ dir: cwd, branch: read.branch, commit: read.commit, found, attempt: lease.attempt, step: lease.step });
   return put.state === 'restored' ? { read, changed, ...put } : { read, changed, dir: cwd, ...put };
 }
 

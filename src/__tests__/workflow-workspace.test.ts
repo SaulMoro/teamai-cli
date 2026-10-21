@@ -2632,6 +2632,40 @@ steps:
     expect(() => git(['show', `${branch}:nested`], workspace)).toThrow();
   });
 
+  it('fails a reader that created a git repository in its copy unrestored when the repository hides untracked files from status', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: status.showUntrackedFiles=no does not hide a repository the reader left.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('impl.txt','yes')"
+        - id: test
+          needs: [implement]
+          command: node -e "const cp=require('child_process'); cp.execFileSync('git',['init','-q','nested']); require('fs').writeFileSync('nested/a.txt','x'); cp.execFileSync('git',['add','a.txt'],{cwd:'nested'}); cp.execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.com','commit','-qm','fixture'],{cwd:'nested'})"
+        - id: polish
+          needs: [implement]
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('polish.txt','yes')"
+`);
+    git(['config', 'status.showUntrackedFiles', 'no'], workspace);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    const branch = branchName(runId, 'change', 1);
+    expect(run.steps.find((step) => step.id === 'change.test')).toMatchObject({
+      status: 'failed', failure: { code: 'workspace_base', message: expect.stringMatching(/could NOT be put back.*nested/) },
+    });
+    expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({ status: 'failed', failure: { code: 'workspace_base' } });
+    expect(() => git(['show', `${branch}:nested`], workspace)).toThrow();
+  });
+
   it('refuses a writer whose existing copy is on a detached HEAD, naming the branch to put it back on', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build

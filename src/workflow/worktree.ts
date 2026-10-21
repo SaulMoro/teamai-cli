@@ -521,21 +521,30 @@ export async function removeWorktree(main: string, dir: string): Promise<void> {
   await git(main, ['worktree', 'prune']);
 }
 
-const UnrestoredMarker = z.object({ branch: z.string(), commit: z.string(), step: z.string(), reason: z.string() });
+const UnrestoredMarker = z.object({ branch: z.string(), commit: z.string(), step: z.string(), reason: z.string(), found: z.array(z.string()) });
 export type UnrestoredMarker = z.infer<typeof UnrestoredMarker>;
 
 /** In the worktree's own git dir, so the marker never shows in its status. */
 const UNRESTORED_MARKER = 'teamai-unrestored';
 
-/** Why `dir` is not on `branch` at `commit` with nothing changed, submodules included. Undefined when it is. */
-async function copyLeftOver(dir: string, branch: string, commit: string): Promise<string | undefined> {
+/** A copy's status, with every untracked file and submodule change whatever the user's status config hides. */
+export async function copyStatus(dir: string): Promise<{ lines: string[] } | { error: string }> {
+  const status = await git(dir, ['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none']);
+  if (status.code !== 0) return { error: status.stderr.trim() || 'git status failed' };
+  return { lines: status.stdout.split('\n').filter((line) => line.trim() !== '') };
+}
+
+/** Why `dir` is not on `branch` at `commit` with the status `found`, submodules included. Undefined when it is. */
+async function copyLeftOver(dir: string, { branch, commit, found }: { branch: string; commit: string; found: string[] }): Promise<string | undefined> {
   const head = (await git(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
   if (head !== `refs/heads/${branch}`) return head ? `HEAD is on ${head}` : 'HEAD is detached';
   const at = (await git(dir, ['rev-parse', 'HEAD'])).stdout.trim();
   if (at !== commit) return `HEAD is at ${at}`;
-  const status = await git(dir, ['status', '--porcelain', '--ignore-submodules=none']);
-  if (status.code !== 0) return status.stderr.trim() || 'git status failed';
-  const lines = status.stdout.split('\n').filter((line) => line.trim() !== '');
+  const status = await copyStatus(dir);
+  if ('error' in status) return status.error;
+  const was = new Set(found);
+  const now = new Set(status.lines);
+  const lines = [...status.lines.filter((line) => !was.has(line)), ...found.filter((line) => !now.has(line))];
   if (lines.length === 0) return undefined;
   return `it has changes: ${lines.slice(0, 5).map((line) => line.trim()).join(', ')}${lines.length > 5 ? `, and ${lines.length - 5} more` : ''}`;
 }
@@ -558,7 +567,7 @@ export async function unrestoredCopy(dir: string): Promise<
   }
   const parsed = UnrestoredMarker.safeParse(raw);
   if (!parsed.success) return { state: 'unreadable', dir, marker: file };
-  const left = await copyLeftOver(dir, parsed.data.branch, parsed.data.commit);
+  const left = await copyLeftOver(dir, parsed.data);
   if (left) return { state: 'unrestored', dir, marker: parsed.data, left };
   await fs.rm(file, { force: true });
   return undefined;
@@ -567,21 +576,22 @@ export async function unrestoredCopy(dir: string): Promise<
 /** Initialized submodules, at any depth, with uncommitted or untracked files. */
 async function dirtySubmodules(dir: string): Promise<{ paths: string[] } | { error: string }> {
   // Each submodule's own status ignores its nested submodules: --recursive visits those itself.
-  const listed = await git(dir, ['submodule', '--quiet', 'foreach', '--recursive', 'test -z "$(git status --porcelain --ignore-submodules=all)" || echo "$displaypath"']);
+  const listed = await git(dir, ['submodule', '--quiet', 'foreach', '--recursive', 'test -z "$(git status --porcelain --untracked-files=all --ignore-submodules=all)" || echo "$displaypath"']);
   if (listed.code !== 0) return { error: listed.stderr.trim() || 'git submodule foreach failed' };
   return { paths: listed.stdout.split('\n').filter((line) => line !== '') };
 }
 
 /**
- * Resets a copy a reader changed to `commit` on `branch`, after keeping what it changed on `refs/teamai/kept/<attempt>`.
- * A copy it cannot put back is marked, so later steps there are refused until it is.
+ * Puts a copy a reader changed back on `branch` at `commit` with the status `found` it had when the reader started, after
+ * keeping what it changed on `refs/teamai/kept/<attempt>`. A copy it cannot put back is marked, so later steps there are
+ * refused until it is.
  */
-export async function putBackCopy({ dir, branch, commit, attempt, step }: { dir: string; branch: string; commit: string; attempt: string; step: string }): Promise<
+export async function putBackCopy({ dir, branch, commit, found, attempt, step }: { dir: string; branch: string; commit: string; found: string[]; attempt: string; step: string }): Promise<
   { state: 'restored'; kept: string } | { state: 'unrestored'; reason: string; kept?: string }
 > {
   const unrestored = async (reason: string, kept?: string): Promise<{ state: 'unrestored'; reason: string; kept?: string }> => {
     const marker = await gitPath(dir, UNRESTORED_MARKER);
-    const record: UnrestoredMarker = { branch, commit, step, reason };
+    const record: UnrestoredMarker = { branch, commit, step, reason, found };
     if (marker) await writeJsonAtomic(marker, record);
     return { state: 'unrestored', reason, ...(kept ? { kept } : {}) };
   };
@@ -606,6 +616,6 @@ export async function putBackCopy({ dir, branch, commit, attempt, step }: { dir:
     if (restored.code !== 0) return unrestored(restored.stderr.trim() || `git ${args.join(' ')} failed`, kept);
   }
   // Exit codes are not enough: git clean skips a repository the step created, and a later git add -A commits it.
-  const left = await copyLeftOver(dir, branch, commit);
+  const left = await copyLeftOver(dir, { branch, commit, found });
   return left ? unrestored(left, kept) : { state: 'restored', kept };
 }
