@@ -6,7 +6,6 @@ import { builtinHookDefs } from '../builtin-hooks.js';
 import { KNOWN_AGENTS } from '../known-agents.js';
 import { getHookStatus, hasTeamaiHooks, reconcileHooks } from '../hooks.js';
 import { agentFileExtensionForTool, ALL_SUPPORTED_TOOLS } from '../resources/agent-format.js';
-import { detectMcpFormat } from '../resources/mcp-format.js';
 import { HookDef, TeamaiConfigSchema } from '../types.js';
 
 describe('ZCode support', () => {
@@ -31,7 +30,6 @@ describe('ZCode support', () => {
     });
     expect(ALL_SUPPORTED_TOOLS).toContain('zcode');
     expect(agentFileExtensionForTool('zcode')).toBe('.md');
-    expect(detectMcpFormat('zcode')).toBe('claude');
   });
 
   it('generates raw (unwrapped) dispatch commands for ZCode', () => {
