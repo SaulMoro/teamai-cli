@@ -4,7 +4,6 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import { z } from 'zod';
 import {
   agentFileExtensionForTool,
   reverseFromClaude,
@@ -43,7 +42,7 @@ import type { DriverIdentity, StepHitl, WorkflowEnvelope, WorkflowFailure } from
 import { isWorkflowError } from './types.js';
 import type { WorkspaceContract } from './workspace.js';
 import {
-  applyBaseConfig, commitWork, ensureWorktree, git, gitPath, headCommit, hooksPath, mergeBranch, pushIfOrigin, recordConfigOverlay, removeWorktree, reopenConfigConflicts, restoreUneditedConfig, worktreePath,
+  applyBaseConfig, commitWork, ensureWorktree, git, headCommit, hooksPath, mergeBranch, pushIfOrigin, putBackCopy, recordConfigOverlay, removeWorktree, reopenConfigConflicts, restoreUneditedConfig, unrestoredCopy, worktreePath,
 } from './worktree.js';
 
 /** Local lease identity, stable across restarts in the same workspace. */
@@ -531,57 +530,6 @@ async function restoreLeaseOverlay(lease: Lease): Promise<void> {
   lease.overlay = undefined;
 }
 
-const UnrestoredMarker = z.object({ branch: z.string(), commit: z.string(), step: z.string(), reason: z.string() });
-type UnrestoredMarker = z.infer<typeof UnrestoredMarker>;
-
-/** In the worktree's own git dir, so the marker never shows in its status. */
-const UNRESTORED_MARKER = 'teamai-unrestored';
-
-/** Why `dir` is not on `branch` at `commit` with nothing changed, submodules included. Undefined when it is. */
-async function copyLeftOver(dir: string, branch: string, commit: string): Promise<string | undefined> {
-  const head = (await git(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
-  if (head !== `refs/heads/${branch}`) return head ? `HEAD is on ${head}` : 'HEAD is detached';
-  const at = (await git(dir, ['rev-parse', 'HEAD'])).stdout.trim();
-  if (at !== commit) return `HEAD is at ${at}`;
-  const status = await git(dir, ['status', '--porcelain', '--ignore-submodules=none']);
-  if (status.code !== 0) return status.stderr.trim() || 'git status failed';
-  const lines = status.stdout.split('\n').filter((line) => line.trim() !== '');
-  if (lines.length === 0) return undefined;
-  return `it has changes: ${lines.slice(0, 5).map((line) => line.trim()).join(', ')}${lines.length > 5 ? `, and ${lines.length - 5} more` : ''}`;
-}
-
-/**
- * A copy a reader could not put back, while it is still not back. Once it is, the marker is removed, so the person who
- * put it back only retries the step.
- */
-async function unrestoredCopy(dir: string): Promise<
-  { state: 'unrestored'; dir: string; marker: UnrestoredMarker; left: string } | { state: 'unreadable'; dir: string; marker: string } | undefined
-> {
-  const file = await gitPath(dir, UNRESTORED_MARKER);
-  const text = file ? await readFileSafe(file) : null;
-  if (!file || text === null) return undefined;
-  let raw: unknown;
-  try {
-    raw = JSON.parse(text);
-  } catch {
-    return { state: 'unreadable', dir, marker: file };
-  }
-  const parsed = UnrestoredMarker.safeParse(raw);
-  if (!parsed.success) return { state: 'unreadable', dir, marker: file };
-  const left = await copyLeftOver(dir, parsed.data.branch, parsed.data.commit);
-  if (left) return { state: 'unrestored', dir, marker: parsed.data, left };
-  await fs.rm(file, { force: true });
-  return undefined;
-}
-
-/** Initialized submodules, at any depth, with uncommitted or untracked files. */
-async function dirtySubmodules(dir: string): Promise<{ paths: string[] } | { error: string }> {
-  // Each submodule's own status ignores its nested submodules: --recursive visits those itself.
-  const listed = await git(dir, ['submodule', '--quiet', 'foreach', '--recursive', 'test -z "$(git status --porcelain --ignore-submodules=all)" || echo "$displaypath"']);
-  if (listed.code !== 0) return { error: listed.stderr.trim() || 'git submodule foreach failed' };
-  return { paths: listed.stdout.split('\n').filter((line) => line !== '') };
-}
-
 /** How a reader left its copy. `kept` is the ref holding what the step changed; an unrestored copy lacks it when keeping failed. */
 type ReadCopy = { read: StepRead } & (
   | { state: 'untouched' }
@@ -605,36 +553,8 @@ async function leaveReadCopy(lease: Lease): Promise<ReadCopy | undefined> {
   await restoreLeaseOverlay(lease);
   const read = { branch: workspace.branch, base: workspace.base.commit, commit: before.head };
   if (changed.length === 0) return { read, state: 'untouched' };
-  // Later steps in this copy are refused until it is put back, so nothing commits what was left here.
-  const unrestored = async (reason: string, kept?: string): Promise<ReadCopy> => {
-    const marker = await gitPath(cwd, UNRESTORED_MARKER);
-    const record: UnrestoredMarker = { branch: read.branch, commit: read.commit, step: lease.step, reason };
-    if (marker) await writeJsonAtomic(marker, record);
-    return { read, state: 'unrestored', changed, reason, dir: cwd, ...(kept ? { kept } : {}) };
-  };
-  // The keep below records a submodule only as its commit, so a submodule update would destroy its files.
-  const dirty = await dirtySubmodules(cwd);
-  if ('error' in dirty) return unrestored(dirty.error);
-  if (dirty.paths.length > 0) return unrestored(`submodules have uncommitted or untracked files: ${dirty.paths.join(', ')}`);
-  // A commit of the whole tree, not `git stash`: the stash list is shared by every worktree, and a stash leaves out a submodule's commit.
-  const kept = `refs/teamai/kept/${lease.attempt}`;
-  const added = await git(cwd, ['add', '-A']);
-  const tree = added.code === 0 ? await git(cwd, ['write-tree']) : added;
-  const committed = tree.code === 0
-    ? await git(cwd, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'commit-tree', tree.stdout.trim(), '-p', 'HEAD', '-m', `teamai: kept ${lease.step}`])
-    : tree;
-  const recorded = committed.code === 0 ? await git(cwd, ['update-ref', kept, committed.stdout.trim()]) : committed;
-  // Without the ref, a reset would lose the changes.
-  if (recorded.code !== 0) return unrestored(recorded.stderr.trim() || 'its changes could not be kept');
-  // Back on the copy's branch first: a reset on a branch the step switched to would leave the copy elsewhere.
-  // A superproject reset leaves initialized submodules where the step moved them.
-  for (const args of [['checkout', '-q', '-f', workspace.branch], ['reset', '-q', '--hard', before.head], ['clean', '-q', '-fd'], ['submodule', '--quiet', 'update', '--checkout', '--recursive']]) {
-    const restored = await git(cwd, args);
-    if (restored.code !== 0) return unrestored(restored.stderr.trim() || `git ${args.join(' ')} failed`, kept);
-  }
-  // Exit codes are not enough: git clean skips a repository the step created, and a later git add -A commits it.
-  const left = await copyLeftOver(cwd, read.branch, read.commit);
-  return left ? unrestored(left, kept) : { read, state: 'restored', changed, kept };
+  const put = await putBackCopy({ dir: cwd, branch: read.branch, commit: read.commit, attempt: lease.attempt, step: lease.step });
+  return put.state === 'restored' ? { read, changed, ...put } : { read, changed, dir: cwd, ...put };
 }
 
 /** A reader that changed its copy fails. `changed` is the step's own sentence naming the paths. */
