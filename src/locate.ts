@@ -670,11 +670,13 @@ async function locateAgents(tool: string, install: Install, host: Host): Promise
   const channel = channelsOf(tool).agents[install.scope];
   const roots = rootsOf(tool, install, host);
   const gates = await gatesOf(tool, install, host, roots);
-  if (channel === 'none' || channel === 'unknown') return { channel, retired: [], gates };
   const dir = roots.configured('agents');
+  const own: DirPlace | null = dir === null ? null : { kind: 'dir', path: dir };
+  // An earlier release copied team agents verbatim into any configured agents directory.
+  if (channel === 'none' || channel === 'unknown') return { channel, retired: own === null ? [] : [{ place: own, was: 'configured' }], gates };
   return {
     channel: 'files',
-    own: dir === null ? null : { kind: 'dir', path: dir },
+    own,
     reads: await readsOf(channel.reads, roots, host),
     readGates: readGatesOf(channel.readGates, install, host),
     retired: [],

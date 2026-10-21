@@ -316,6 +316,22 @@ const ROWS: readonly MatrixRow[] = [
     source: 'Assumed: CodeBuddy\'s engine with WorkBuddy\'s projectDirName, cwd only; #1221 matrix workspace Agents ?s',
   },
   {
+    tool: 'mytool', scope: 'user',
+    install: { toolPaths: { mytool: { skills: '.mytool/skills', agents: '.mytool/agents' } } },
+    channel: 'none',
+    existingDirs: ['~/.mytool'], installed: { probe: '~/.mytool', met: true },
+    retired: [{ at: '~/.mytool/agents', was: 'configured' }],
+    source: 'teamai renders no agents for a custom tool; an earlier release copied team .md agents into its agents directory (pull-tombstone.test.ts, #993)',
+  },
+  {
+    tool: 'trae', scope: 'project',
+    install: { toolPaths: { trae: { skills: '.trae/skills', agents: '.trae/agents' } } },
+    channel: 'unknown',
+    existingDirs: ['~/.trae'], installed: { probe: '~/.trae', met: true },
+    retired: [{ at: '<root>/.trae/agents', was: 'configured' }],
+    source: 'Where Trae takes agents from is not established, so teamai writes none to the directory a team maps',
+  },
+  {
     tool: 'opencode', scope: 'user',
     writes: ['~/.config/opencode/agents'],
     existingDirs: ['~/.config/opencode'], installed: { probe: '~/.config/opencode', met: true },
