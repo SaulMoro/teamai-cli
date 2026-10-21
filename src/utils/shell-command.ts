@@ -74,17 +74,25 @@ export function simpleCommands(command: string, home?: string): SimpleCommand[] 
   let current: SimpleCommand = { words: [], redirects: [], op: null };
   let word: string | null = null;
   let quote: string | null = null;
+  let parens = 0;
   let redirect: string | null = null;
+  const heredocs: { stripTabs: boolean; delimiter: string | null }[] = [];
+  const isHeredoc = (): boolean => redirect !== null && /^\d*<<-?$/.test(redirect);
   const endWord = (): void => {
     if (word === null) return;
-    if (redirect !== null) current.redirects.push({ op: redirect, target: word });
-    else current.words.push(word);
+    if (redirect !== null) {
+      if (isHeredoc()) heredocs.push({ stripTabs: redirect.endsWith('-'), delimiter: word });
+      current.redirects.push({ op: redirect, target: word });
+    } else current.words.push(word);
     word = null;
     redirect = null;
   };
   const endCommand = (op: ShellOperator | null): void => {
     endWord();
-    if (redirect !== null) current.redirects.push({ op: redirect, target: '' });
+    if (redirect !== null) {
+      if (isHeredoc()) heredocs.push({ stripTabs: false, delimiter: null });
+      current.redirects.push({ op: redirect, target: '' });
+    }
     redirect = null;
     // An empty command (a blank line, a doubled `;`) ends nothing: the previous command keeps its operator.
     if (current.words.length === 0 && current.redirects.length === 0) return;
@@ -97,20 +105,35 @@ export function simpleCommands(command: string, home?: string): SimpleCommand[] 
     const c = line[i];
     const next = line[i + 1];
     if (quote) {
-      if (c === quote) quote = null;
-      else if (c === '\\' && quote === '"' && (next === '"' || next === '\\' || next === '$')) word += line[++i];
-      else if (quote === '"' && c === '$' && home !== undefined && homeRefLength(line, i) > 0) {
+      if (c === quote) {
+        if (quote === '`') word += c;
+        quote = null;
+      } else if (c === '\\' && quote !== "'" && next === '\n') i++;
+      else if (c === '\\' && quote !== "'" && (next === quote || next === '\\' || next === '$' || next === '`')) word += line[++i];
+      else if (quote === '"' && c === '$' && home !== undefined && !isHeredoc() && homeRefLength(line, i) > 0) {
         i += homeRefLength(line, i) - 1;
         word += home;
       } else word += c;
     } else if (c === '"' || c === "'") {
       quote = c;
       word ??= '';
+    } else if (c === '`') {
+      quote = c;
+      word = (word ?? '') + c;
     } else if (c === '\\' && next === '\n') {
       i++;
-    } else if (c === '\\' && next !== undefined && ESCAPABLE.test(next)) {
+    } else if (c === '\\' && next !== undefined && (ESCAPABLE.test(next) || isHeredoc())) {
       word = (word ?? '') + next;
       i++;
+    } else if (parens > 0) {
+      if (c === '(') parens++;
+      else if (c === ')') parens--;
+      if (c === '#' && /(?:^|[\s(;|&])$/.test(word ?? '')) {
+        while (i + 1 < line.length && line[i + 1] !== '\n') i++;
+      } else word += c;
+    } else if (c === '(') {
+      parens = 1;
+      word = (word ?? '') + c;
     } else if (c === '#' && word === null) {
       // A `#` that starts a word starts a comment, up to the newline; `a#b` is a word.
       while (i + 1 < line.length && line[i + 1] !== '\n') i++;
@@ -130,15 +153,36 @@ export function simpleCommands(command: string, home?: string): SimpleCommand[] 
       endCommand(next === '&' ? '&&' : '&');
     } else if (c === ';' || c === '\n') {
       endCommand(';');
+      if (c === '\n' && heredocs.length > 0) {
+        for (const { stripTabs, delimiter } of heredocs) {
+          if (delimiter === null) return [];
+          let matched = false;
+          while (i < line.length) {
+            const start = i + 1;
+            if (start > line.length) break;
+            const nl = line.indexOf('\n', start);
+            const end = nl === -1 ? line.length : nl;
+            const raw = line.slice(start, end).replace(/\r$/, '');
+            i = end;
+            if ((stripTabs ? raw.replace(/^\t+/, '') : raw) === delimiter) {
+              matched = true;
+              break;
+            }
+          }
+          if (!matched) return [];
+        }
+        heredocs.length = 0;
+      }
     } else if (/\s/.test(c)) {
       endWord();
-    } else if (word === null && home !== undefined && homeRefLength(line, i) > 0) {
+    } else if (word === null && home !== undefined && !isHeredoc() && homeRefLength(line, i) > 0) {
       i += homeRefLength(line, i) - 1;
       word = home;
     } else {
       word = (word ?? '') + c;
     }
   }
+  if (quote !== null || parens > 0 || heredocs.length > 0) return [];
   endCommand(null);
   return commands;
 }
@@ -467,16 +511,97 @@ export function classifyShellCommand(command: string, flavor: ShellFlavor = {}):
   return classifyList(commands, flavor);
 }
 
+const COMPOUND_OPENERS = new Map<string, string>([
+  ['if', 'fi'],
+  ['for', 'done'],
+  ['while', 'done'],
+  ['until', 'done'],
+  ['select', 'done'],
+  ['case', 'esac'],
+  ['{', '}'],
+]);
+const COMPOUND_CLOSERS = new Set(['fi', 'done', 'esac', '}']);
+const COMPOUND_CLAUSES = new Map<string, string>([
+  ['then', 'fi'],
+  ['elif', 'fi'],
+  ['else', 'fi'],
+  ['do', 'done'],
+]);
+
 /**
- * A list of pipelines: a read of the files its reading pipelines read. A
- * pipeline after `||` runs only when the one before it failed, so it may not
- * have run and credits no file; its verb still marks its error lines.
+ * A list of pipelines: a read of the files its top-level reading pipelines
+ * read. A pipeline after `||`, or inside a compound command or function body,
+ * may not have run and credits no file; after `||` its verb still marks its
+ * error lines.
  */
 function classifyList(commands: SimpleCommand[], flavor: ShellFlavor): ShellClassification {
   const paths = new Set<string>();
   const verbs = new Set<string>();
+  const blocks: string[] = [];
+  let pendingFn = false;
   let moved = false;
   for (const [i, command] of commands.entries()) {
+    const words = commandWords(command.words);
+    let idx = 0;
+    while (idx < words.length && COMPOUND_CLOSERS.has(words[idx])) {
+      if (blocks.at(-1) !== words[idx]) return SHELL;
+      blocks.pop();
+      idx++;
+      if (blocks.length === 0) pendingFn = false;
+    }
+    let compound = idx > 0 || blocks.length > 0 || pendingFn;
+    while (idx < words.length) {
+      const w = words[idx];
+      if (blocks.at(-1) === 'esac' && w !== 'esac' && w.endsWith(')')) {
+        idx++;
+      } else if (COMPOUND_CLAUSES.has(w)) {
+        if (!blocks.includes(COMPOUND_CLAUSES.get(w)!)) return SHELL;
+        idx++;
+      } else if (w === '!' || w === 'time' || w === 'coproc') {
+        compound = true;
+        idx++;
+      } else if (w === 'function') {
+        compound = true;
+        idx++;
+        if (idx < words.length && words[idx] !== '{' && !words[idx].startsWith('(')) idx++;
+        if (idx < words.length && words[idx] === '()') idx++;
+        if (idx >= words.length) pendingFn = true;
+      } else if (/^[A-Za-z_][A-Za-z0-9_]*\(\)$/.test(w)) {
+        compound = true;
+        idx++;
+        if (idx >= words.length) pendingFn = true;
+      } else if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(w) && words[idx + 1] === '()') {
+        compound = true;
+        idx += 2;
+        if (idx >= words.length) pendingFn = true;
+      } else if (w === 'case') {
+        blocks.push('esac');
+        compound = true;
+        idx++;
+        while (idx < words.length && words[idx] !== 'in') idx++;
+        if (words[idx] === 'in') idx++;
+        if (idx < words.length && words[idx] !== 'esac' && words[idx].endsWith(')')) idx++;
+      } else if (COMPOUND_OPENERS.has(w)) {
+        blocks.push(COMPOUND_OPENERS.get(w)!);
+        compound = true;
+        idx++;
+      } else if (w.startsWith('(')) {
+        compound = true;
+        pendingFn = false;
+        idx++;
+      } else {
+        break;
+      }
+    }
+    if (blocks.at(-1) === 'esac' && words.at(-1) === 'esac' && idx < words.length) {
+      blocks.pop();
+      if (blocks.length === 0) pendingFn = false;
+    }
+    if (compound || blocks.length > 0) {
+      moved = true;
+      if (pendingFn && blocks.length === 0 && idx < words.length) pendingFn = false;
+      continue;
+    }
     const before = commands[i - 1]?.op;
     if (before === '|') continue;
     const item = classifySimple(command, false, flavor);
@@ -487,6 +612,6 @@ function classifyList(commands: SimpleCommand[], flavor: ShellFlavor): ShellClas
     const [word] = commandWords(command.words);
     if (item.category === 'shell' && word !== undefined && !KEEPS_CWD.has(commandName(word).toLowerCase())) moved = true;
   }
-  if (paths.size === 0) return SHELL;
+  if (blocks.length > 0 || pendingFn || paths.size === 0) return SHELL;
   return { category: 'read', paths: [...paths], simple: false, verbs: [...verbs] };
 }

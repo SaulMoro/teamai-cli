@@ -201,6 +201,12 @@ describe('skill use from a tool call (#1221)', () => {
     expect(await credits()).toEqual([{ skill: SKILL, tool: 'claude' }]);
   });
 
+  it('credits nothing when a skill path only appears inside a heredoc body', async () => {
+    const file = install('.codex/skills');
+    await toolCall({ ...fixture('codex-real-a-cat'), tool_input: { command: `cat <<'EOF'\ncat ${file}\nEOF` } }, 'codex');
+    expect(await credits()).toEqual([]);
+  });
+
   it('gates a named Skill call on its calling tool but accepts a real read from another tool root', async () => {
     const file = install('.pi/agent/skills');
     await toolCall(fixture('claude-skill'), 'claude');

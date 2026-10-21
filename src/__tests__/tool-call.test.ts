@@ -189,6 +189,44 @@ describe('classifyToolCall', () => {
     expect(shell(command)).toMatchObject({ category: 'shell', paths: [], simple: false, command });
   });
 
+it.each<[string, string]>([
+    ["heredoc (<<EOF)", "cat <<EOF\ncat /abs/SKILL.md\nEOF"],
+    ["single-quoted heredoc (<<'EOF')", "cat <<'EOF'\ncat /abs/SKILL.md\nEOF"],
+    ["double-quoted heredoc (<<\"EOF\")", "cat <<\"EOF\"\ncat /abs/SKILL.md\nEOF"],
+    ["escaped heredoc (<<\\EOF)", "cat <<\\EOF\ncat /abs/SKILL.md\nEOF"],
+    ["indented heredoc (<<-EOF)", "cat <<-EOF\n\tcat /abs/SKILL.md\n\tEOF"],
+    ["indented quoted heredoc (<<-'EOF')", "cat <<-'EOF'\n\tcat /abs/SKILL.md\n\tEOF"],
+    ["here-string (<<<)", "cat <<< \"cat /abs/SKILL.md\""],
+    ["multiline here-string (<<<)", "cat <<< 'line\ncat /abs/SKILL.md'"],
+    ["single-quoted multiline string", "echo 'line\ncat /abs/SKILL.md'"],
+    ["double-quoted multiline string", "echo \"line\ncat /abs/SKILL.md\""],
+    ["comment (#)", "# cat /abs/SKILL.md"],
+    ["trailing comment (#)", "pwd # ; cat /abs/SKILL.md"],
+    ["backslash line continuation", "echo \\\ncat /abs/SKILL.md"],
+    ["command substitution $(...)", "echo $(true; cat /abs/SKILL.md)"],
+    ["multiline command substitution $(...)", "echo $(\ncat /abs/SKILL.md\n)"],
+    ["backtick command substitution", "echo `true; cat /abs/SKILL.md`"],
+    ["subshell (...)", "(false && cat /abs/SKILL.md)"],
+    ["multiline subshell (...)", "(\ncat /abs/SKILL.md\n)"],
+    ["brace group { ...; }", "{ false && cat /abs/SKILL.md; }"],
+    ["multiline brace group", "{\ncat /abs/SKILL.md\n}"],
+    ["if / then / fi", "if false; then\ncat /abs/SKILL.md\nfi"],
+    ["single-line if / then / fi", "if false; then true; cat /abs/SKILL.md; fi"],
+    ["if / else / fi", "if true; then\necho ok\nelse\ncat /abs/SKILL.md\nfi"],
+    ["for / do / done", "for x in a; do\ncat /abs/SKILL.md\ndone"],
+    ["while / do / done", "while false; do\ncat /abs/SKILL.md\ndone"],
+    ["until / do / done", "until true; do\ncat /abs/SKILL.md\ndone"],
+    ["select / do / done", "select x in a; do\ncat /abs/SKILL.md\ndone"],
+    ["case / in / esac", "case x in\na)\ncat /abs/SKILL.md\n;;\nesac"],
+    ["POSIX function f() { ... }", "f() {\ncat /abs/SKILL.md\n}"],
+    ["single-line function f() { ...; }", "f() { true; cat /abs/SKILL.md; }"],
+    ["ksh function", "function f {\ncat /abs/SKILL.md\n}"],
+  ])("%s: cat /abs/SKILL.md inside credits nothing, and outside is still credited", (_kind, construct) => {
+    expect(shell(construct)).toMatchObject({ category: "shell", paths: [] });
+    expect(shell(`${construct}\ncat /abs/other.md`)).toMatchObject({ category: "read", paths: [at("/abs/other.md")] });
+    expect(shell(`${construct}\ncat /abs/SKILL.md`)).toMatchObject({ category: "read", paths: [at("/abs/SKILL.md")] });
+  });
+
   it('drops a file the error of any of a list\'s reader verbs names', () => {
     const output = 'cat: a.md: No such file or directory\n# b';
     expect(shell('cat a.md; cat b.md', output)).toMatchObject({ category: 'read', status: 'unknown', paths: [at('b.md')] });
@@ -235,30 +273,33 @@ describe('classifyToolCall', () => {
     expect(shell('cat doc.md', { stdout: 'cat: doc.md: Permission denied' })).toMatchObject({ status: 'success' });
   });
 
-  it.each<[string, string, string[]]>([
-    ['cat a.md doc.md', '# a\ncat: doc.md: Permission denied', ['a.md']],
-    ['cat a.md ./doc.md', '# a\ncat: doc.md: Permission denied', ['a.md']],
-    ['cat a.md doc.md', `# a\ncat: ${at('doc.md')}: Permission denied`, ['a.md']],
-    ['/bin/cat a.md "my doc.md"', "# a\n/bin/cat: 'my doc.md': No such file or directory", ['a.md']],
-    ['cat.exe a.md doc.md', '# a\ncat: doc.md: No such file or directory', ['a.md']],
-    ['head -n 5 a.md doc.md', '==> a.md <==\n# a\nhead: doc.md: x\n', ['a.md']],
-    ['cat a.md doc.md', '# a\ncat: b.md: No such file or directory', ['a.md', 'doc.md']],
-    ['cat a.md doc.md', '# a\ngrep: doc.md: No such file or directory', ['a.md', 'doc.md']],
-  ])('status unknown: %j with output %j reads only %j: an operand its command\'s error names is dropped', (command, output, files) => {
-    expect(shell(command, output)).toMatchObject({ category: 'read', status: 'unknown', paths: files.map(at) });
-  });
-
-  it('status success: an error line names no operand to drop', () => {
-    expect(shell('cat a.md doc.md', { stdout: '# a\ncat: doc.md: Permission denied' }).paths).toEqual([at('a.md'), at('doc.md')]);
-  });
-
-  it('status success: a list\'s or pipeline\'s status is its last command\'s, so a read its error names is dropped', () => {
-    expect(shell('cat a.md || echo missing', { stdout: 'cat: a.md: No such file or directory\nmissing' }))
-      .toMatchObject({ category: 'read', status: 'success', paths: [] });
-    expect(shell('cat missing.md | head', { stdout: 'cat: missing.md: No such file or directory' }))
-      .toMatchObject({ category: 'read', status: 'failure', paths: [] });
-    expect(shell('pwd; cat a.md doc.md', { stdout: '/w\n# a\ncat: doc.md: Permission denied' }))
-      .toMatchObject({ category: 'read', status: 'success', paths: [at('a.md')] });
+  it.each<[string, unknown, string, string[]]>([
+    // Merged output with unknown status: diagnostics match command as written, basename with .exe, and basename without .exe.
+    ['cat a.md doc.md', '# a\ncat: doc.md: Permission denied', 'unknown', ['a.md']],
+    ['cat a.md ./doc.md', '# a\ncat: doc.md: Permission denied', 'unknown', ['a.md']],
+    ['cat a.md doc.md', `# a\ncat: ${at('doc.md')}: Permission denied`, 'unknown', ['a.md']],
+    ['/bin/cat a.md "my doc.md"', "# a\n/bin/cat: 'my doc.md': No such file or directory", 'unknown', ['a.md']],
+    ['cat.exe a.md doc.md', '# a\ncat.exe: doc.md: Permission denied', 'unknown', ['a.md']],
+    ['cat.exe a.md doc.md', '# a\ncat: doc.md: No such file or directory', 'unknown', ['a.md']],
+    ['C:\\bin\\cat.exe a.md doc.md', '# a\nC:\\bin\\cat.exe: doc.md: Permission denied', 'unknown', ['a.md']],
+    ['C:\\bin\\cat.exe a.md doc.md', '# a\ncat.exe: doc.md: Permission denied', 'unknown', ['a.md']],
+    ['C:\\bin\\cat.exe a.md doc.md', '# a\ncat: doc.md: Permission denied', 'unknown', ['a.md']],
+    ['head -n 5 a.md doc.md', '==> a.md <==\n# a\nhead: doc.md: x\n', 'unknown', ['a.md']],
+    ['cat a.md doc.md', '# a\ncat: b.md: No such file or directory', 'unknown', ['a.md', 'doc.md']],
+    ['cat a.md doc.md', '# a\ngrep: doc.md: No such file or directory', 'unknown', ['a.md', 'doc.md']],
+    // Known status with stderr: diagnostics on stderr drop the failed file (or fail the call when stdout is empty).
+    ['cat a.md doc.md', { stdout: '# a', stderr: 'cat: doc.md: Permission denied' }, 'success', ['a.md']],
+    ['cat.exe a.md doc.md', { stdout: '# a', stderr: 'cat.exe: doc.md: Permission denied' }, 'success', ['a.md']],
+    ['cat a.md || echo missing', { stdout: 'missing', stderr: 'cat: a.md: No such file or directory' }, 'success', []],
+    ['cat missing.md | head', { stdout: '', stderr: 'cat: missing.md: No such file or directory' }, 'failure', []],
+    ['pwd; cat a.md doc.md', { stdout: '/w\n# a', stderr: 'cat: doc.md: Permission denied' }, 'success', ['a.md']],
+    // Known status with diagnostic-shaped text on stdout: file content on stdout never cancels a read.
+    ['cat a.md doc.md', { stdout: '# a\ncat: doc.md: Permission denied' }, 'success', ['a.md', 'doc.md']],
+    ['cat doc.md | head', { stdout: 'cat: missing.md: No such file or directory', stderr: '' }, 'success', ['doc.md']],
+    ['cat doc.md | head', { stdout: 'cat: doc.md: No such file or directory' }, 'success', ['doc.md']],
+    ['pwd; cat doc.md', { stdout: '/w\ncat: doc.md: No such file or directory', stderr: '' }, 'success', ['doc.md']],
+  ])('failed-read rule: %j with response %j gives status %s and paths %j', (command, response, status, files) => {
+    expect(shell(command, response)).toMatchObject({ category: 'read', status, paths: files.map(at) });
   });
 
   it.each<[string, string, string[]]>([
