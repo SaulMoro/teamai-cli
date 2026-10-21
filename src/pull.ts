@@ -2270,29 +2270,11 @@ async function pullForScope(
     if (!dryRun) warnStubNotDeployed(scopeLabel, e);
   }
 
-  // Step 4b: Record where each tool took skills, once the skills and the stub
-  // had their chance at the new place, and name the directories a tool left.
-  const current = currentPlaces ?? await placesOf(installOf(freshConfig, localConfig));
-  let syncedPlaces: PlacesRecord | undefined;
-  let syncedSessionToolHomes: SessionToolHomes | undefined;
-  if (!options.dryRun && resourceTypes.includes('skills')) {
-    const previous = recordKey ? (await loadStateForScope(localConfig)).lastPullByWorkspace?.[recordKey] : undefined;
-    const incomplete = workspaceHeldSkills || stubFailed ? new Set(Object.keys(current.skills ?? {})) : ledger.toolsMissingSkills;
-    if (skillsHeld) {
-      syncedPlaces = placesRecordOf(previous);
-      syncedSessionToolHomes = previous?.sessionToolHomes;
-    } else {
-      ({ places: syncedPlaces, sessionToolHomes: syncedSessionToolHomes } = await recordPlaces({
-        previous, current, incomplete: { skills: incomplete }, scopeLabel,
-      }));
-    }
-  }
-
   // Step 4.5: Deploy CLI built-in rules
   try {
     const { deployBuiltinRules } = await import('./builtin-rules.js');
     const skipRecall = !isRecallEnabled(localConfig, freshConfig);
-    const deployed = await deployBuiltinRules(freshConfig, localConfig, { skipRecall, recorder, dryRun });
+    const deployed = await deployBuiltinRules(freshConfig, localConfig, { skipRecall, recorder, dryRun, toolsMissingRules: ledger.toolsMissingRules });
     if (deployed > 0 && !dryRun) {
       log.debug(`[${scopeLabel}] Deployed built-in rules to ${deployed} tool(s)`);
     }
@@ -2314,6 +2296,32 @@ async function pullForScope(
     log.debug(`[${scopeLabel}] Built-in agents deployment skipped: ${(e as Error).message}`);
   }
   recorder?.succeeded('builtin');
+
+  // Step 4b: Record where each tool took skills, rules and instruction blocks,
+  // once they and the built-ins had their chance at the new place, and name
+  // the places a tool left.
+  const current = currentPlaces ?? await placesOf(installOf(freshConfig, localConfig));
+  let syncedPlaces: PlacesRecord | undefined;
+  let syncedSessionToolHomes: SessionToolHomes | undefined;
+  if (!options.dryRun && resourceTypes.includes('skills')) {
+    const previous = recordKey ? (await loadStateForScope(localConfig)).lastPullByWorkspace?.[recordKey] : undefined;
+    // A resource a collision held, or this pull did not sync, keeps the places recorded before.
+    ({ places: syncedPlaces, sessionToolHomes: syncedSessionToolHomes } = await recordPlaces({
+      previous,
+      current: {
+        ...skillsHeld ? {} : { skills: current.skills },
+        ...resourceTypes.includes('rules') ? { rules: current.rules } : {},
+        blocks: current.blocks,
+      },
+      incomplete: {
+        skills: workspaceHeldSkills || stubFailed ? new Set(Object.keys(current.skills ?? {})) : ledger.toolsMissingSkills,
+        rules: ledger.toolsMissingRules,
+        blocks: new Set(Object.keys(current.blocks ?? {}).filter((tool) => !delivery.reached.includes(tool))),
+      },
+      scopeLabel,
+    }));
+    if (skillsHeld) syncedSessionToolHomes = previous?.sessionToolHomes;
+  }
 
   // Record the revision only after every resource and knowledge phase has had
   // a chance to run. Inherited pulls use an independent marker so a partial,

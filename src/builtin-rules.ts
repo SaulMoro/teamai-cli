@@ -55,7 +55,11 @@ export const EXCLUDED_RULE_NAMES = new Set<string>([
 export async function deployBuiltinRules(
     teamConfig: TeamaiConfig,
     localConfig?: LocalConfig,
-    options?: { skipRecall?: boolean; recorder?: DeliveryRecorder; dryRun?: boolean },
+    options?: {
+        skipRecall?: boolean; recorder?: DeliveryRecorder; dryRun?: boolean;
+        /** Gets each tool that did not take every built-in rule (`DeliveryLedger.toolsMissingRules`). */
+        toolsMissingRules?: Set<string>;
+    },
 ): Promise<number> {
     const install: Install = localConfig === undefined
         ? { toolPaths: teamConfig.toolPaths, agents: {}, toolRoots: {}, gitExclude: false, scope: 'user' }
@@ -126,6 +130,7 @@ export async function deployBuiltinRules(
             deployed++;
         } catch (e) {
             options?.recorder?.failed('builtin');
+            options?.toolsMissingRules?.add(tool);
             log.error(`Failed to deploy built-in rules to ${tool}: ${(e as Error).message}`);
         }
     }

@@ -422,6 +422,7 @@ export class RulesHandler extends ResourceHandler {
         }
         await ensureDir(destDir);
         if (target.movedFrom !== undefined && await isMembersOwnFile(dest, content, ledger)) {
+          ledger?.toolsMissingRules.add(tool);
           // The flat name of a namespaced rule may be a file the member wrote.
           warnOnce(`Kept ${dest}: teamai did not write it, and it is where ${tool} would read team rule ${item.name}. `
             + 'Rename your file, then run `teamai pull --force`.');
@@ -437,6 +438,7 @@ export class RulesHandler extends ResourceHandler {
           if (ledger) await recordDelivered(ledger.hashes, dest);
           ledger?.recorder?.report('rules', dest);
         } else {
+          ledger.toolsMissingRules.add(tool);
           await warnIfKeptCopyIsInert(target);
         }
         // Drop the `.md` copy left by an older layout; a tool that reads a
@@ -482,6 +484,7 @@ export class RulesHandler extends ResourceHandler {
         ledger?.recorder?.failed('rules');
         log.warn(`Failed to sync rule ${item.name} to ${tool}: ${(e as Error).message}`);
         ledger?.failed.push({ name: item.name, tool });
+        ledger?.toolsMissingRules.add(tool);
       }
     }
   }
@@ -765,7 +768,7 @@ export class RulesHandler extends ResourceHandler {
     }
     await this.reclaimReservedRuleCopies(teamConfig, localConfig, ledger);
 
-    await this.syncUserRulesFiles(teamConfig, localConfig, rules);
+    await this.syncUserRulesFiles(teamConfig, localConfig, rules, ledger?.toolsMissingRules);
     // Before the empty-set return: a copy outlives the rule that selected it.
     await this.reclaimLegacyRuleCopies(teamConfig, localConfig, rules, ledger);
 
@@ -985,6 +988,8 @@ export class RulesHandler extends ResourceHandler {
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
     rules: ResourceItem[],
+    /** Gets each tool whose team-rules block was not written. */
+    toolsMissingRules?: Set<string>,
   ): Promise<void> {
     if (localConfig.scope !== 'user') {
       await this.removeStaleProjectSoulRules(localConfig);
@@ -1003,6 +1008,7 @@ export class RulesHandler extends ResourceHandler {
       try {
         await upsertSoulRules(await inlinedRulesText(rules));
       } catch (e) {
+        toolsMissingRules?.add('hermes');
         log.warn(`Could not write the team rules to ${getHermesSoulPath()}: ${(e as Error).message}. Hermes reads that `
           + 'file as it is until this succeeds; run `teamai pull` again once the cause above is fixed.');
       }
@@ -1017,6 +1023,7 @@ export class RulesHandler extends ResourceHandler {
       if (unreadable !== undefined && !isAgentExcluded(localConfig, tool)) {
         const { unreadableRulesFileMessage } = await import('../instruction-targets.js');
         log.warn(await unreadableRulesFileMessage(tool, unreadable));
+        toolsMissingRules?.add(tool);
         continue;
       }
       const file = location.own?.path ?? null;
@@ -1032,6 +1039,7 @@ export class RulesHandler extends ResourceHandler {
           await removeClaudeMdSection(file, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, { deleteIfEmpty: true });
         }
       } catch (e) {
+        if (writing) toolsMissingRules?.add(tool);
         const action = writing ? 'write the team-rules block to' : 'remove the team-rules block from';
         log.warn(`Could not ${action} ${file}: ${(e as Error).message}. ${tool} reads that file as it is until this succeeds; `
           + 'run `teamai pull` again once the cause above is fixed.');
