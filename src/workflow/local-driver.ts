@@ -378,11 +378,11 @@ async function stageLease(lease: Lease, { active, runId }: { active: string; run
   }
   const blocked = await unrestoredCopy(worktreePath(active, lease.workspace.branch));
   if (blocked?.state === 'unreadable') {
-    return { code: 'workspace_base', message: `Workspace ${blocked.dir} has a marker teamai cannot read: ${blocked.marker}. Put ${blocked.dir} back on ${lease.workspace.branch} with nothing changed, delete ${blocked.marker}, then retry this step with teamai workflow retry ${runId} ${lease.step}.` };
+    return { code: 'workspace_base', message: `Workspace ${blocked.dir} has a marker teamai cannot read: ${blocked.marker}. Put ${blocked.dir} back on ${lease.workspace.branch} as the step found it, delete ${blocked.marker}, then retry this step with teamai workflow retry ${runId} ${lease.step}.` };
   }
   if (blocked) {
-    const { branch, commit, step } = blocked.marker;
-    return { code: 'workspace_base', message: `Step "${step}" could not put workspace ${blocked.dir} back, and it is still not back: ${blocked.left}. Put ${blocked.dir} back on ${branch} at ${commit} with nothing changed, then retry this step with teamai workflow retry ${runId} ${lease.step}.` };
+    const { branch, commit, step, reason } = blocked.marker;
+    return { code: 'workspace_base', message: `Step "${step}" read workspace ${blocked.dir} and it was not put back (${reason}). It is still not back: ${blocked.left}. Put ${blocked.dir} back on ${branch} at ${commit} as the step found it, then retry this step with teamai workflow retry ${runId} ${lease.step}.` };
   }
   const opened = await ensureWorktree(active, lease.workspace.branch, lease.workspace.start.commit);
   if ('error' in opened) return { code: 'workspace_base', message: opened.error };
@@ -572,8 +572,8 @@ function readCopyFailure(left: Exclude<ReadCopy, { state: 'untouched' }>, change
       return {
         code: 'workspace_base',
         message: left.kept
-          ? `${changed} Workspace ${branch} could NOT be put back at ${commit}: ${left.reason}. ${keptSentence(left.kept)} Later steps there fail until ${left.dir} is back on ${branch} at ${commit} with nothing changed.`
-          : `${changed} Workspace ${branch} could NOT be put back at ${commit}: ${left.reason}. Its changes were NOT saved and are still in ${left.dir}. Copy them out before you put ${left.dir} back on ${branch} at ${commit} with nothing changed. Later steps there fail until it is.`,
+          ? `${changed} Workspace ${branch} could NOT be put back at ${commit}: ${left.reason}. ${keptSentence(left.kept)} Later steps there fail until ${left.dir} is back on ${branch} at ${commit} as the step found it.`
+          : `${changed} Workspace ${branch} could NOT be put back at ${commit}: ${left.reason}. Its changes were NOT saved and are still in ${left.dir}. Copy them out before you put ${left.dir} back on ${branch} at ${commit} as the step found it. Later steps there fail until it is.`,
       };
     default: {
       const unhandled: never = left;
