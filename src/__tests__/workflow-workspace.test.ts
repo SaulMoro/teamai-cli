@@ -2417,7 +2417,9 @@ steps:
     if (typeof run !== 'object') throw new Error('run missing');
     const test = run.steps.find((step) => step.id === 'change.test');
     const polish = run.steps.find((step) => step.id === 'change.polish');
-    expect(test).toMatchObject({ status: 'failed', ...(failure ? { failure } : { message: 'command exited with status 1' }) });
+    const kept = `refs/teamai/kept/${test && 'attempt' in test ? test.attempt : 'none'}`;
+    expect(test).toMatchObject({ status: 'failed', ...(failure ? { failure } : { message: expect.stringMatching(/^command exited with status 1\. Read-only command step changed repository paths: junk\.txt\. .*was put back/) }) });
+    expect(test).toMatchObject({ message: expect.stringContaining(kept) });
     expect(polish).toMatchObject({ status: 'succeeded' });
     const branch = branchName(runId, 'change', 1);
     expect(test && 'read' in test ? test.read?.commit : undefined).toBe(polish && 'changes' in polish ? polish.changes?.from : 'none');

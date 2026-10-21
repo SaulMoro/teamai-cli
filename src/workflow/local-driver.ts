@@ -688,14 +688,16 @@ async function commandReport(attemptResultPath: string, driver: DriverIdentity, 
   }
   const left = await leaveReadCopy(lease);
   const touched = left?.state === 'untouched' ? undefined : left;
-  const dirty = touched && (result.exitCode === 0 || touched.state === 'unrestored')
-    ? readCopyFailure(touched, `Read-only command step changed repository paths: ${touched.changed.join(', ')}.`)
-    : undefined;
+  const exited = result.exitCode === 0
+    ? undefined
+    : snippet === '' ? `command exited with status ${result.exitCode}` : `command exited with status ${result.exitCode}: ${snippet}`;
+  // A failing command keeps its own failure, and still says where the changes it made went.
+  const copy = touched && readCopyFailure(touched, `${exited ? `${exited}. ` : ''}Read-only command step changed repository paths: ${touched.changed.join(', ')}.`);
+  const dirty = copy && (!exited || copy.code === 'workspace_base') ? copy : undefined;
   const finished = lease.workspace && !left ? await finishWorkspace(lease, result.exitCode === 0) : {};
   const failure = dirty ?? finished.failure;
   const failed = result.exitCode !== 0 || failure;
-  const message = failure?.message
-    ?? (result.exitCode !== 0 ? (snippet === '' ? `command exited with status ${result.exitCode}` : `command exited with status ${result.exitCode}: ${snippet}`) : undefined);
+  const message = failure?.message ?? copy?.message ?? exited;
   return {
     attempt: lease.attempt,
     revision: lease.revision,
