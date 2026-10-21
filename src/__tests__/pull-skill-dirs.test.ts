@@ -139,7 +139,7 @@ describe('a pull and the homes the env moves', () => {
     expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.targets)).toEqual([['opencode']]);
   });
 
-  it('takes the fast path on the skills directories an earlier release recorded, and records them only as places', async () => {
+  it('misses the fast path once for an earlier release\'s skill directories, and records rules and instruction blocks with them', async () => {
     await pull({});
     const [[key, record]] = Object.entries(saved.lastPullByWorkspace ?? {});
     const { places, ...earlier } = record;
@@ -148,12 +148,12 @@ describe('a pull and the homes the env moves', () => {
 
     await pull({});
 
-    expect(vi.mocked(log.success).mock.calls.flat()).toContainEqual(expect.stringContaining('Already synced at abc1234'));
-
-    await pull({ force: true });
-
-    expect(saved.lastPullByWorkspace?.[key]?.places?.skills).toEqual(places?.skills);
-    expect(saved.lastPullByWorkspace?.[key]?.skillDirs).toBeUndefined();
+    expect(vi.mocked(log.success).mock.calls.flat()).not.toContainEqual(expect.stringContaining('Already synced at abc1234'));
+    const next = saved.lastPullByWorkspace?.[key];
+    expect(next?.places?.skills).toEqual(places?.skills);
+    expect(next?.places?.rules).toBeDefined();
+    expect(next?.places?.blocks).toBeDefined();
+    expect(next?.skillDirs).toBeUndefined();
   });
 
   describe('when a tool\'s skills directory moves at one team revision', () => {
@@ -293,7 +293,15 @@ describe('a pull and the homes the env moves', () => {
       await pull({});
 
       expect(await fse.pathExists(path.join(third, 'skills', 'review', 'SKILL.md'))).toBe(true);
-      expect(notices()).toEqual([before, after].map((dir) => `[user] hermes takes skills from ${path.join(third, 'skills')} now, so teamai no longer updates its copies in ${path.join(dir, 'skills')}. Delete them once no tool reads that directory.`));
+      const leftFile = (noun: 'team rules' | 'instruction blocks', now: string, old: string): string =>
+        `[user] hermes takes the ${noun} from ${path.join(now, 'SOUL.md')} now, so teamai no longer updates them in ${path.join(old, 'SOUL.md')}. Delete them there once no tool reads it.`;
+      expect(notices()).toEqual([
+        leftFile('team rules', after, before),
+        leftFile('instruction blocks', after, before),
+        ...[before, after].map((dir) => `[user] hermes takes skills from ${path.join(third, 'skills')} now, so teamai no longer updates its copies in ${path.join(dir, 'skills')}. Delete them once no tool reads that directory.`),
+        leftFile('team rules', third, after),
+        leftFile('instruction blocks', third, after),
+      ]);
       expect(await fse.readFile(path.join(after, 'skills', 'deploy', 'SKILL.md'), 'utf8')).toContain('member skill');
     });
 
@@ -409,7 +417,13 @@ describe('a pull and the homes the env moves', () => {
       expect(await fse.pathExists(path.join(newHome, 'skills', 'deploy', 'SKILL.md'))).toBe(true);
       expect(await fse.pathExists(path.join(oldHome, 'skills', 'deploy', 'SKILL.md'))).toBe(true);
       expect(await fse.pathExists(path.join(oldHome, 'skills', 'teamai', 'SKILL.md'))).toBe(true);
-      expect(notices()).toEqual([`[${scope === 'user' ? 'user' : 'workspace'}] hermes takes skills from ${path.join(newHome, 'skills')} now, so teamai no longer updates its copies in ${path.join(oldHome, 'skills')}. Delete them once no tool reads that directory.`]);
+      const scopeLabel = scope === 'user' ? 'user' : 'workspace';
+      const skillsNotice = `[${scopeLabel}] hermes takes skills from ${path.join(newHome, 'skills')} now, so teamai no longer updates its copies in ${path.join(oldHome, 'skills')}. Delete them once no tool reads that directory.`;
+      const fileNotice = (noun: 'team rules' | 'instruction blocks'): string =>
+        `[${scopeLabel}] hermes takes the ${noun} from ${path.join(newHome, 'SOUL.md')} now, so teamai no longer updates them in ${path.join(oldHome, 'SOUL.md')}. Delete them there once no tool reads it.`;
+      expect(notices()).toEqual(scope === 'user'
+        ? [skillsNotice, fileNotice('team rules'), fileNotice('instruction blocks')]
+        : [skillsNotice]);
 
       vi.mocked(log.info).mockClear();
       await pull({ force: true });

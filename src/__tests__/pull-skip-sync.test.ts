@@ -688,7 +688,7 @@ describe('pull skip-sync refreshes CLAUDE.md recall block (CLI upgrade)', () => 
       lastPull: '2026-04-01',
       lastPullRev: 'abc1234', // matches HEAD → triggers "Already synced" fast-path
       lastPullTargets: ['claude'],
-      ...await homeRecord(homeDir, ['claude'], { claude: [path.join(homeDir, '.claude', 'skills')] }),
+      ...await homeRecord(homeDir, ['claude'], { claude: [path.join(homeDir, '.claude', 'skills')] }, { claude: [path.join(homeDir, '.claude', 'CLAUDE.md')] }),
       lastPush: null,
       pushedRules: [],
       pushedSkills: [],
@@ -780,9 +780,25 @@ describe('pull skip-sync refreshes CLAUDE.md recall block (CLI upgrade)', () => 
   });
 });
 
-/** The record a pull of this CLI leaves for HOME after delivering skills to `skillDirs` at abc1234. */
-async function homeRecord(home: string, targets: string[], skillDirs: Record<string, string[]>): Promise<Pick<State, 'lastPullByWorkspace'>> {
-  return { lastPullByWorkspace: { [await checkoutKey(home)]: { rev: 'abc1234', targets, skillDirs } } };
+/** Places a current pull records for these skill homes. Pass Claude's instruction-block file when `claudemd` is configured. Otherwise that resource is empty. */
+async function homeRecord(
+  home: string,
+  targets: string[],
+  skillDirs: Record<string, string[]>,
+  blocks: Record<string, string[]> = {},
+): Promise<Pick<State, 'lastPullByWorkspace'>> {
+  const rules: Record<string, string[]> = {};
+  const blockPlaces = { ...blocks };
+  for (const [tool, dirs] of Object.entries(skillDirs)) {
+    const toolHome = path.dirname(dirs[0] ?? home);
+    if (tool === 'copilot') {
+      rules[tool] = [path.join(toolHome, 'instructions')];
+      blockPlaces[tool] ??= [path.join(toolHome, 'copilot-instructions.md')];
+    } else if (tool === 'claude') {
+      rules[tool] = [path.join(toolHome, 'rules')];
+    }
+  }
+  return { lastPullByWorkspace: { [await checkoutKey(home)]: { rev: 'abc1234', targets, places: { skills: skillDirs, rules, blocks: blockPlaces } } } };
 }
 
 function emptyState(overrides: Partial<State> = {}): State {
