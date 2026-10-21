@@ -426,6 +426,17 @@ interface HookTarget {
   teamHookHistory?: TeamHookHistory;
 }
 
+/** The directory in `dirs` that holds `file`, the longest one when several do. */
+function directoryHolding(file: string, dirs: readonly string[]): string | undefined {
+  let match: string | undefined;
+  for (const dir of dirs) {
+    const rel = path.relative(dir, file);
+    const inside = rel !== '' && !path.isAbsolute(rel) && rel !== '..' && !rel.startsWith(`..${path.sep}`);
+    if (inside && (match === undefined || dir.length > match.length)) match = dir;
+  }
+  return match;
+}
+
 async function discoverToolResources(
   tool: string,
   toolPath: TeamaiConfig['toolPaths'][string],
@@ -436,6 +447,8 @@ async function discoverToolResources(
   skillWrites: readonly string[],
   /** Where pull writes `tool`'s instruction blocks (`locate`), and the files earlier releases wrote them to. */
   blocks: Location<'blocks'>,
+  /** Directories `locate` says may hold `tool`'s rules, including one it retired. */
+  rulesDirs: readonly string[],
   teamSkillNames: Set<string>,
   /** Whether `tool`'s skill directory `dir`, at a name in `teamSkillNames`, is teamai's (#993). */
   ownsSkill: (dir: string, name: string, tool: string) => Promise<boolean>,
@@ -673,25 +686,22 @@ async function discoverToolResources(
   // (d) Rules — team-synced rules plus CLI built-in rules (teamRuleNames
   // now includes BUILTIN_RULE_NAMES). User-authored rules are left alone.
   // A legacy rules directory is buildRemovalPlan's: its copies go on ownership.
-  if (toolPath.rules) {
-    const rulesDir = path.join(baseDir, toolPath.rules);
-    if (await pathExists(rulesDir)) {
-      const files = await listFilesRecursive(rulesDir);
-      for (const file of files) {
-        // Cursor's copies are `.mdc`; match by stem so both extensions are
-        // collected and uninstall does not leave team rules behind.
-        const ruleName = ruleStemFromFilename(file);
-        if (ruleName === null) continue;
-        if (teamRuleNames.has(ruleName)) {
-          // teamai's instruction file shares the reserved name; its blocks are
-          // stripped above, keeping what another tool or the member still uses.
-          if (ruleName === TEAMAI_CONTEXT_RULE_NAME) {
-            const text = await readFileSafe(path.join(rulesDir, file));
-            if (text && CLAUDEMD_MARKER_PAIRS.some(([start]) => text.includes(start))) continue;
-          }
-          res.ruleFiles.push(path.join(rulesDir, file));
-        }
+  for (const rulesDir of rulesDirs) {
+    if (!await pathExists(rulesDir)) continue;
+    const files = await listFilesRecursive(rulesDir);
+    for (const file of files) {
+      // Cursor's copies are `.mdc`; match by stem so both extensions are
+      // collected and uninstall does not leave team rules behind.
+      const ruleName = ruleStemFromFilename(file);
+      if (ruleName === null) continue;
+      if (!teamRuleNames.has(ruleName)) continue;
+      // teamai's instruction file shares the reserved name; its blocks are
+      // stripped above, keeping what another tool or the member still uses.
+      if (ruleName === TEAMAI_CONTEXT_RULE_NAME) {
+        const text = await readFileSafe(path.join(rulesDir, file));
+        if (text && CLAUDEMD_MARKER_PAIRS.some(([start]) => text.includes(start))) continue;
       }
+      res.ruleFiles.push(path.join(rulesDir, file));
     }
   }
 
@@ -986,8 +996,11 @@ async function buildRemovalPlan(
   const toolPaths = scopedToolPaths(teamConfig, localConfig);
   const install = installOf(teamConfig, localConfig);
   const perTool = new Map<string, ToolResources>();
+  const rulesDirsByTool = new Map<string, readonly string[]>();
   const globalAdapters = localConfig.scope === 'user';
   for (const [tool, toolPath] of Object.entries(toolPaths)) {
+    const rulesDirs = cleanupOf(await locate(tool, 'rules', install)).flatMap((place) => place.kind === 'dir' ? [place.path] : []);
+    rulesDirsByTool.set(tool, rulesDirs);
     perTool.set(
       tool,
       await discoverToolResources(
@@ -997,6 +1010,7 @@ async function buildRemovalPlan(
         baseDir,
         writesOf(await locate(tool, 'skills', install)).map((place) => place.path),
         await locate(tool, 'blocks', install),
+        rulesDirs,
         teamSkillNames,
         ownsSkill,
         skillFiles,
@@ -1027,9 +1041,11 @@ async function buildRemovalPlan(
   // tool that reads only `.mdc` goes only as a copy an older layout wrote, and
   // is kept silently: the tool never reads it.
   for (const [tool, res] of perTool) {
-    const rulesDir = path.join(resolveToolBaseDir(tool, localConfig), toolPaths[tool]?.rules ?? '');
+    const rulesDirs = rulesDirsByTool.get(tool) ?? [];
     const owned: string[] = [];
     for (const file of res.ruleFiles) {
+      const rulesDir = directoryHolding(file, rulesDirs);
+      if (rulesDir === undefined) continue;
       const rel = path.relative(rulesDir, file).split(path.sep).join('/');
       if (usesMdcRules(tool) && isLegacyCursorRuleFile(tool, file)) {
         if (await isLegacyLayoutCopy(file, `rules/${rel}`, previous, repoPath)) owned.push(file);

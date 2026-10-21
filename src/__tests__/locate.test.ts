@@ -173,6 +173,58 @@ describe('a skills directory outside locate', () => {
   });
 });
 
+describe('a rules directory or claudemd path outside locate', () => {
+  const RULES_JOINS_OUTSIDE_LOCATE: Readonly<Record<string, string>> = {};
+
+  it('is joined from a configured path only where the allow-list says why', async () => {
+    const srcDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const found = new Set<string>();
+    async function walk(dir: string): Promise<void> {
+      for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== '__tests__') await walk(full);
+          continue;
+        }
+        const rel = path.relative(srcDir, full).split(path.sep).join('/');
+        if (!entry.name.endsWith('.ts') || rel === 'locate.ts') continue;
+        const source = await fs.readFile(full, 'utf8');
+        for (const call of joinedRulesOrClaudemd(source)) found.add(`${rel}: ${call}`);
+      }
+    }
+    await walk(srcDir);
+
+    expect([...found].filter((call) => !Object.hasOwn(RULES_JOINS_OUTSIDE_LOCATE, call))).toEqual([]);
+    expect(Object.keys(RULES_JOINS_OUTSIDE_LOCATE).filter((call) => !found.has(call))).toEqual([]);
+  });
+});
+
+/** Balanced parentheses, so `?.rules` inside `join(resolve(...), ...)` still counts. */
+function joinedRulesOrClaudemd(source: string): string[] {
+  const calls: string[] = [];
+  for (const match of source.matchAll(/\b(?:path\.)?(?:join|resolve)\(/g)) {
+    const open = match.index + match[0].length - 1;
+    const close = matchingParen(source, open);
+    if (close === undefined) continue;
+    const call = source.slice(match.index, close + 1);
+    if (/\??\.(?:rules|claudemd)\b/.test(call)) calls.push(call);
+  }
+  return calls;
+}
+
+function matchingParen(source: string, open: number): number | undefined {
+  let depth = 0;
+  for (let i = open; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === '(') depth++;
+    else if (ch === ')') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return undefined;
+}
+
 describe('skills directories compared on a host', () => {
   it('compare in the path\'s own flavor, wherever the check runs', async () => {
     const recorded = { hermes: ['C:\\Users\\M\\AppData\\Local\\hermes\\skills'] };

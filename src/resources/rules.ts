@@ -5,7 +5,7 @@ import { listFilesRecursive, pathExists, copyFile, ensureDir, remove, fileConten
 import { log } from '../utils/logger.js';
 import { getUserHome } from '../utils/home.js';
 import { debugOnce, warnOnce } from '../utils/warn-once.js';
-import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveToolBaseDir, resolveToolRootDir, isAgentExcluded, scopedToolPaths, SELF_KNOWLEDGE_SCAN_KEY, getUserConfigPath, installScopeName } from '../types.js';
+import { TEAMAI_RULES_START, TEAMAI_RULES_END, TEAMAI_TEAM_RULES_START, TEAMAI_TEAM_RULES_END, resolveToolBaseDir, resolveToolRootDir, isAgentExcluded, SELF_KNOWLEDGE_SCAN_KEY, getUserConfigPath, installScopeName } from '../types.js';
 import { EXCLUDED_RULE_NAMES, isDeployedRecallRule, TEAMAI_CONTEXT_RULE_NAME } from '../builtin-rules.js';
 import { rulePaths, teamRuleBody, teamRuleData } from './team-rule.js';
 import { joycodeQuotedGlobsWarning } from './joycode-rule.js';
@@ -40,7 +40,7 @@ import {
   type RuleFormat,
 } from './rule-format.js';
 import { injectClaudeMdSection, removeClaudeMdSection } from '../utils/claudemd.js';
-import { installOf, locate, ownOf, writable, type Gate, type Install, type Location } from '../locate.js';
+import { cleanupOf, installOf, locate, ownOf, writable, type Gate, type Install, type Location } from '../locate.js';
 import { channelsOf } from '../tools.js';
 
 /** The copies earlier pulls left in one of `LEGACY_RULE_DIRS` (`RulesHandler.legacyRuleCopies`). */
@@ -940,16 +940,17 @@ export class RulesHandler extends ResourceHandler {
     }
 
     // 2. Remove legacy rules section from CLAUDE.md (no longer injected)
-    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-      if (!toolPath.claudemd) continue;
-      const baseDir = resolveToolBaseDir(tool, localConfig);
-      const claudeMdPath = path.join(baseDir, toolPath.claudemd);
-      try {
-        if (await removeClaudeMdSection(claudeMdPath, TEAMAI_RULES_START, TEAMAI_RULES_END, { deleteIfEmpty: true })) {
-          log.debug(`Removed legacy rules section from ${claudeMdPath}`);
+    const install = installOf(teamConfig, localConfig);
+    for (const tool of Object.keys(install.toolPaths)) {
+      const location = await locate(tool, 'blocks', install);
+      for (const file of legacyRulesSectionPaths(tool, install.scope, location)) {
+        try {
+          if (await removeClaudeMdSection(file, TEAMAI_RULES_START, TEAMAI_RULES_END, { deleteIfEmpty: true })) {
+            log.debug(`Removed legacy rules section from ${file}`);
+          }
+        } catch {
+          // Best-effort cleanup
         }
-      } catch {
-        // Best-effort cleanup
       }
     }
   }
@@ -1379,6 +1380,27 @@ async function rulesLocations(
 ): Promise<{ readonly tool: string; readonly location: Location<'rules'> }[]> {
   const install = installOf(teamConfig, localConfig);
   return Promise.all(Object.keys(install.toolPaths).map(async (tool) => ({ tool, location: await locate(tool, 'rules', install) })));
+}
+
+/**
+ * Files whose legacy `TEAMAI_RULES` section this pull strips.
+ * The configured claudemd, including when `locate` retired it, and the blocks
+ * file when that file is the claudemd. A live rules file that is not the
+ * claudemd (Hermes' SOUL.md) stays. OpenClaw's configured claudemd is the
+ * workspace file `locate` names as its own, not a separate retired place.
+ */
+function legacyRulesSectionPaths(tool: string, scope: Install['scope'], location: Location<'blocks'>): string[] {
+  const channel = channelsOf(tool).blocks[scope];
+  const namesClaudemd = typeof channel === 'object' && channel.channel === 'file' && channel.file.in === 'claudemd';
+  const own = ownOf(location);
+  const keepOwn = namesClaudemd || tool === 'openclaw';
+  const paths: string[] = [];
+  for (const place of cleanupOf(location)) {
+    if (place.kind !== 'file') continue;
+    if (!keepOwn && own?.kind === 'file' && place.path === own.path) continue;
+    paths.push(place.path);
+  }
+  return paths;
 }
 
 /** The rules directory teamai writes for the tool, whatever its gates say; null for a tool that takes no rule files here. */
