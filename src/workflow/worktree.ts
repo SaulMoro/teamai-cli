@@ -220,11 +220,17 @@ export async function applyBaseConfig(
 /** An agent path whose parent is a symlink. Copying or removing it would reach outside the worktree. */
 async function symlinkedParent(dir: string): Promise<{ relative: string; parent: string } | undefined> {
   for (const relative of AGENT_PATHS) {
-    const parts = relative.split('/');
-    for (let end = 1; end < parts.length; end += 1) {
-      const parent = parts.slice(0, end).join('/');
-      if (await fs.lstat(path.join(dir, parent)).then((stats) => stats.isSymbolicLink(), () => false)) return { relative, parent };
-    }
+    const parent = await linkedParent(dir, relative);
+    if (parent) return { relative, parent };
+  }
+  return undefined;
+}
+
+async function linkedParent(dir: string, relative: string): Promise<string | undefined> {
+  const parts = relative.split('/');
+  for (let end = 1; end < parts.length; end += 1) {
+    const parent = parts.slice(0, end).join('/');
+    if (await fs.lstat(path.join(dir, parent)).then((stats) => stats.isSymbolicLink(), () => false)) return parent;
   }
   return undefined;
 }
@@ -257,8 +263,13 @@ export async function restoreUneditedConfig(dir: string, _commit: string, saved:
     ...conflictPaths(conflicts).filter((relative) => current[relative] === overlay[relative] && unmerged.has(relative)),
     ...marked,
   ])];
+  // The step replaced a parent of these agent paths with a symlink. That is its edit, and restoring under it would
+  // delete or write files outside the worktree.
+  const linked: string[] = [];
+  for (const root of AGENT_PATHS) if (await linkedParent(dir, root)) linked.push(path.join(root));
   const files = new Set([...Object.keys(overlay), ...Object.keys(current), ...Object.keys(branch)]);
   for (const relative of files) {
+    if (linked.some((root) => relative === root || relative.startsWith(`${root}${path.sep}`))) continue;
     if (unresolved.includes(relative)) continue;
     if (relative === '_overlay.json' || current[relative] !== overlay[relative]) continue;
     // The step replaced a parent, for example a directory with a symlink. Do not restore through that edit.

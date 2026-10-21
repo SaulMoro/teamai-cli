@@ -862,6 +862,32 @@ steps:
     expect(work).toMatchObject({ status: 'failed', failure: { code: 'base_config', message: expect.stringContaining('Commit .github as a directory on the base branch, then start a new run.') } });
   });
 
+  it('leaves the target alone when a step replaces .github with a symlink while the base has agent files there', async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-outside-'));
+    dirs.push(outside);
+    const shared = path.join(outside, 'shared');
+    const { config, workspace } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: Restoring agent files does not follow a parent symlink the step made.
+steps:
+  - id: work
+    workspace: new
+    command: node -e "const fs=require('fs'); fs.renameSync('.github',${JSON.stringify(shared).replace(/"/g, "'")}); fs.symlinkSync(${JSON.stringify(shared).replace(/"/g, "'")},'.github')"
+`);
+    fs.mkdirSync(path.join(workspace, '.github', 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(workspace, '.github', 'agents', 'a.md'), 'agent');
+    execFileSync('git', ['add', '.github'], { cwd: workspace });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'agent'], { cwd: workspace });
+    const started = await startRun(config, 'build');
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+
+    await runLocalDriver(config, runId, workspace);
+
+    expect(fs.readFileSync(path.join(shared, 'agents', 'a.md'), 'utf8')).toBe('agent');
+    expect(git(['ls-tree', branchName(runId, 'work', 1), '--', '.github'], workspace)).toMatch(/^120000 /);
+  });
+
   it('keeps .github workflows from the branch and resets only its agent paths', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build
