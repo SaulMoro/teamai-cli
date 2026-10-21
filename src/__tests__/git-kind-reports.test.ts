@@ -4,6 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { simpleGit } from 'simple-git';
@@ -810,4 +811,42 @@ describe('git-kind reports: a delivered push without its confirmation (#1027)', 
     const votes = readUserVotesFromContent(await originReportsFile(origin, 'votes/alice.yaml'));
     expect(votes.votes['doc-a']).toMatchObject({ recalled_count: 1, upvoted_count: 1 });
   }, 60_000);
+});
+
+describe('git-kind reports: a stalled origin', () => {
+  let server: http.Server;
+  let stalledUrl: string;
+
+  beforeEach(async () => {
+    server = http.createServer((_req, res) => {
+      res.write('HTTP/1.1 200 OK\r\n');
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const addr = server.address();
+    if (!addr || typeof addr === 'string') throw new Error('failed to bind test server');
+    stalledUrl = `http://127.0.0.1:${addr.port}/team.git`;
+  });
+
+  afterEach(async () => {
+    vi.unstubAllEnvs();
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  it('fails the write within the block timeout and releases the reports lock', async () => {
+    const { origin, clone } = await seedBareOrigin();
+    const cfg = gitConfig(clone, origin);
+    await ensureReportsWorktree(cfg);
+    await simpleGit(clone).remote(['set-url', 'origin', stalledUrl]);
+    vi.stubEnv('TEAMAI_INIT_PUSH_TIMEOUT_MS', '500');
+
+    const result = await updateReports(cfg, async (wt) => {
+      fs.mkdirSync(path.join(wt, 'stats'), { recursive: true });
+      fs.writeFileSync(path.join(wt, 'stats', 'alice.yaml'), 'sessions: 1\n');
+      return { files: ['stats/alice.yaml'], message: '[teamai] Update stats for alice' };
+    });
+
+    expect(result.status).toBe('failed');
+    expect((await updateReports(cfg, async () => null)).status).toBe('already-present');
+  }, 30_000);
 });
