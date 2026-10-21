@@ -731,7 +731,34 @@ steps:
     const run = await readRun(config, runId);
     const check = typeof run === 'object' ? run.steps.find((step) => step.id === 'work.check') : undefined;
     expect(check).toMatchObject({ status: 'failed', failure: { code: 'base_config', message: expect.stringContaining('.github') } });
+    const branch = branchName(runId, 'work', 1);
+    expect(check).toMatchObject({ failure: { message: expect.stringContaining(`Commit .github as a directory on branch ${branch} in ${worktreePath(workspace, branch)}, then retry the step.`) } });
     expect(fs.readFileSync(path.join(outside, 'skills', 'keep.txt'), 'utf8')).toBe('keep');
+  });
+
+  it('fails a workspace step with base_config, telling the user to fix the base branch and start a new run, when the run base has .github as a symlink', async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-outside-'));
+    dirs.push(outside);
+    const { config, workspace } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A symlink in the run base cannot be fixed by a step.
+steps:
+  - id: work
+    workspace: new
+    command: node -e "require('fs').writeFileSync('ok.txt','yes')"
+`);
+    fs.symlinkSync(outside, path.join(workspace, '.github'));
+    execFileSync('git', ['add', '.github'], { cwd: workspace });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'link'], { cwd: workspace });
+    const started = await startRun(config, 'build');
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    const work = typeof run === 'object' ? run.steps.find((step) => step.id === 'work') : undefined;
+    expect(work).toMatchObject({ status: 'failed', failure: { code: 'base_config', message: expect.stringContaining('Commit .github as a directory on the base branch, then start a new run.') } });
   });
 
   it('keeps .github workflows from the branch and resets only its agent paths', async () => {

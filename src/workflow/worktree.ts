@@ -168,7 +168,13 @@ export async function applyBaseConfig(
   await git(dir, ['config', '--worktree', 'core.hooksPath', hooks]);
   const linked = await symlinkedParent(dir);
   if (linked) {
-    return { ok: false, message: `Agent configuration ${linked.relative} is under the symlink ${linked.parent} on this branch, so it was not reset. Commit ${linked.parent} as a directory on the branch and retry the step.` };
+    // Every run branch starts from the base, so no step can fix a symlink the base has.
+    const inBase = (await git(dir, ['ls-tree', commit, '--', linked.parent])).stdout.startsWith('120000 ');
+    if (inBase) {
+      return { ok: false, message: `Agent configuration ${linked.relative} is under the symlink ${linked.parent} in the run's base commit ${commit}, so it was not reset. Commit ${linked.parent} as a directory on the base branch, then start a new run.` };
+    }
+    const branch = (await git(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim().replace(/^refs\/heads\//, '');
+    return { ok: false, message: `Agent configuration ${linked.relative} is under the symlink ${linked.parent} on branch ${branch}, so it was not reset. Commit ${linked.parent} as a directory on branch ${branch} in ${dir}, then retry the step.` };
   }
   const saved = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-agent-'));
   const conflicts = (await git(dir, ['ls-files', '-u', '-z', '--', ...AGENT_PATHS])).stdout;
