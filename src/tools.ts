@@ -785,6 +785,26 @@ export function settingsAtDefault(tool: ToolId): boolean {
   return home.moves?.settingsAtDefault === true;
 }
 
+/** The env variables that move `tool`'s home (`Home.moves.by`): a tool's own, and `XDG_CONFIG_HOME` for an XDG home. */
+export function homeVariables(tool: ToolId): readonly string[] {
+  const { home }: ToolDescriptor = TOOLS[tool];
+  return (home.moves?.by ?? []).flatMap((move): string[] => {
+    switch (move.kind) {
+      case 'env':
+      case 'profile-suffix':
+        return [move.name];
+      case 'xdg':
+        return ['XDG_CONFIG_HOME'];
+      case 'win32-appdata':
+        return [];
+      default: {
+        const unhandled: never = move;
+        return unhandled;
+      }
+    }
+  });
+}
+
 /** Whether where `tool` takes skills follows each session's inputs (`ToolDescriptor.skillsFollowSession`). */
 export function skillsFollowSession(tool: string): boolean {
   if (!isToolId(tool)) return false;
