@@ -255,7 +255,7 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
     await fse.outputJson(path.join(home, '.teamai', 'managed-mcp.json'), { zcode: [{ name: 'api', hash: entryHash(renderJsonEntry('claude', API)) }] });
 
     expect(await mcpTransportNotes(context(team(), userConfig('zcode')))).toContain(
-      'ZCode reads ~/.agents/mcp.json only while ~/.zcode/cli/config.json has no servers; move these servers there: mine',
+      '⚠ ZCode reads ~/.agents/mcp.json only while ~/.zcode/cli/config.json has no servers; move these servers there: mine',
     );
   });
 

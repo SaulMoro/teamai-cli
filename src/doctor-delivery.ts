@@ -1221,7 +1221,7 @@ export async function mcpTransportNotes(ctx: DoctorContext): Promise<string[]> {
       const { manifest } = await loadMcpManifest(ctx.localConfig, true);
       const records = manifest.zcode ?? [];
       const names = [...installed ?? []].filter(([name, entry]) => !records.some((record) => record.name === name && record.hash === entryHash(entry))).map(([name]) => name);
-      if (names.length > 0) notes.push(`ZCode reads ~/.agents/mcp.json only while ~/.zcode/cli/config.json has no servers; move these servers there: ${names.sort().join(', ')}`);
+      if (names.length > 0) notes.push(`⚠ ZCode reads ~/.agents/mcp.json only while ~/.zcode/cli/config.json has no servers; move these servers there: ${names.sort().join(', ')}`);
     }
   }
   for (const target of team.targets) {
