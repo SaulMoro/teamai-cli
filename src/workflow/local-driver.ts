@@ -232,7 +232,7 @@ interface WorktreeSnapshot {
 
 function gitStatus(workspace: string): Promise<{ ok: boolean; text: string }> {
   return new Promise((resolve) => {
-    execFile('git', ['status', '--porcelain', '-z', '--untracked-files=all'], { cwd: workspace, env: process.env }, (error, stdout, stderr) => {
+    execFile('git', ['status', '--porcelain', '-z', '--untracked-files=all', '--ignore-submodules=none'], { cwd: workspace, env: process.env }, (error, stdout, stderr) => {
       resolve(error ? { ok: false, text: stderr.trim() } : { ok: true, text: stdout });
     });
   });

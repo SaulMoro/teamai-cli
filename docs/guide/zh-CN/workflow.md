@@ -137,7 +137,7 @@ teamai workflow report <run> --json '{"attempt":"<attempt>","revision":1,"outcom
 
 ## 工作区
 
-没有 `workspace` 的命令是只读的。在工作区之外，它在当前检出目录中运行。退出码为 0，且改了仓库文件、文件权限、符号链接目标、已暂存重命名的新路径、已脏子模块里的文件、暂存区或 HEAD 时，步骤以 `read_only_dirty` 失败，改动留在原地。没有 `workspace` 的无头提示词也一样，除非外层工作流或 `for_each` 打开了工作区。交互提示词会保留人的修改，除非该提示词设置了 `workspace: read-only`。
+没有 `workspace` 的命令是只读的。在工作区之外，它在当前检出目录中运行。退出码为 0，且改了仓库文件、文件权限、符号链接目标、已暂存重命名的新路径、已脏子模块里的文件、暂存区或 HEAD 时，步骤以 `read_only_dirty` 失败，改动留在原地。没有 `workspace` 的无头提示词也一样，除非外层工作流或 `for_each` 打开了工作区。交互提示词会保留人的修改，除非该提示词设置了 `workspace: read-only`。即使 `submodule.<name>.ignore` 或 `diff.ignoreSubmodules` 让 `git status` 不显示子模块的改动，这些改动也算数：只读步骤做了这类改动会失败，写入的步骤会提交子模块的新提交。
 
 在外层步骤打开的工作区里，只读步骤在该工作区中运行，因此测试能看到它所跟随的改动。它读取 `needs` 改动过的分支；`needs` 没有改动任何分支时，读取外层分支。`needs` 改动了不止一个分支时，它以 `workspace_base` 失败：添加一个合并这些分支的步骤，并依赖该步骤。它与该工作区的其他步骤一次只运行一个，使用同样的基准 agent 文件，只有声明了 `continue` 且拥有该工作区的驱动才会领取它。它不提交任何内容。结束后，驱动把工作区恢复成步骤开始时的样子：步骤改动了工作区或离开了它的分支时，改动先保存在 `refs/teamai/kept/<attempt>`，它在子模块里做的提交保存在 `refs/teamai/kept-modules/<attempt>/` 下。然后 worktree 和步骤改动过的子模块重置到它读取的提交，并删除未跟踪文件；退出码为 0 时仍以 `read_only_dirty` 失败。被忽略的文件留在原地。步骤改动过的子模块里有未提交或未跟踪的文件时无法保存，这时什么都不重置。工作区没有恢复时，步骤以 `workspace_base` 失败。步骤开始时工作区就会被标记，所以即使驱动在步骤运行时被杀掉，之后在该工作区的步骤也都会失败，直到你把它放回它的分支、停在那个提交、恢复成步骤开始时的样子，再运行 `teamai workflow retry <run> <step>`。如果步骤开始时工作区已有改动，还要删除失败信息中给出的标记文件。该 pass 记录 `read`：分支、基准和它读取的提交。工作区是新的 worktree，没有 `node_modules` 这类被忽略的文件，所以测试要自己安装依赖，例如 `npm ci && npm test`，除非团队的 [`postDeploy`](distribution.md#团队脚本) 已经安装。
 

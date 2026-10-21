@@ -347,24 +347,29 @@ async function fileManifest(root: string): Promise<Record<string, string>> {
   return files;
 }
 
+/** Stages every change. `git add -A` skips a submodule whose `ignore` is `all`, so each submodule is also staged by name. */
+async function stageAll(dir: string): Promise<GitResult> {
+  const added = await git(dir, ['add', '-A']);
+  if (added.code !== 0) return added;
+  const listed = await git(dir, ['ls-files', '-s', '-z']);
+  if (listed.code !== 0) return listed;
+  const modules = gitlinkLines(listed.stdout).map((line) => line.slice(line.indexOf('\t') + 1));
+  return modules.length > 0 ? git(dir, ['add', '-f', '--', ...modules]) : added;
+}
+
 export async function commitWork(
   dir: string, message: string, fromCommit?: string,
 ): Promise<{ from: string; to: string; commits: string[] } | { error: string }> {
   const before = fromCommit === undefined ? await git(dir, ['rev-parse', 'HEAD']) : { code: 0, stdout: fromCommit, stderr: '' };
   if (before.code !== 0) return { error: before.stderr.trim() || 'HEAD could not be read' };
   const from = before.stdout.trim();
-  const status = await git(dir, ['status', '--porcelain']);
   const merging = (await git(dir, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD'])).code === 0;
-  if (status.stdout.trim() !== '' || merging) {
-    if (status.stdout.trim() !== '') {
-      const added = await git(dir, ['add', '-A']);
-      if (added.code !== 0) return { error: added.stderr.trim() || 'git add failed' };
-    }
-    const staged = await git(dir, ['diff', '--cached', '--quiet']);
-    if (staged.code !== 0 || merging) {
-      const committed = await git(dir, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'commit', '-m', message]);
-      if (committed.code !== 0) return { error: committed.stderr.trim() || committed.stdout.trim() || 'git commit failed' };
-    }
+  const added = await stageAll(dir);
+  if (added.code !== 0) return { error: added.stderr.trim() || 'git add failed' };
+  const staged = await git(dir, ['diff', '--cached', '--quiet', '--ignore-submodules=none']);
+  if (staged.code !== 0 || merging) {
+    const committed = await git(dir, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'commit', '-m', message]);
+    if (committed.code !== 0) return { error: committed.stderr.trim() || committed.stdout.trim() || 'git commit failed' };
   }
   const after = await git(dir, ['rev-parse', 'HEAD']);
   const to = after.stdout.trim();
@@ -727,7 +732,7 @@ export async function putBackCopy({ dir, branch, commit, found, changed, attempt
   if (dirty.paths.length > 0) return unrestored(`submodules have uncommitted or untracked files: ${dirty.paths.join(', ')}`);
   // A commit of the whole tree, not `git stash`: the stash list is shared by every worktree, and a stash leaves out a submodule's commit.
   const ref = `refs/teamai/kept/${attempt}`;
-  const added = await git(dir, ['add', '-A']);
+  const added = await stageAll(dir);
   const tree = added.code === 0 ? await git(dir, ['write-tree']) : added;
   const committed = tree.code === 0
     ? await git(dir, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'commit-tree', tree.stdout.trim(), '-p', 'HEAD', '-m', `teamai: kept ${step}`])

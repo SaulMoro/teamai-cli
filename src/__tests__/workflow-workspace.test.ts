@@ -3311,6 +3311,68 @@ steps:
     expect(fs.existsSync(path.join(copy, 'vendor'))).toBe(false);
   });
 
+  it.each([
+    ['submodule.vendor.ignore=all in .gitmodules', ['config', '-f', '.gitmodules', 'submodule.vendor.ignore', 'all']],
+    ['submodule.vendor.ignore=all in the git config', ['config', 'submodule.vendor.ignore', 'all']],
+    ['diff.ignoreSubmodules=all', ['config', 'diff.ignoreSubmodules', 'all']],
+  ])('sees what a step changed in a submodule whatever git is told to ignore: %s', async (_name, setting) => {
+    const init = "cp.execFileSync('git',['-c','protocol.file.allow=always','submodule','update','-q','--init'])";
+    const commit = "fs.writeFileSync('vendor/inside.txt','step'); cp.execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.com','commit','-qam','step'],{cwd:'vendor'})";
+    const run = (script: string): string => `node -e "const cp=require('child_process'),fs=require('fs'); ${script}"`;
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A submodule change is seen when git config hides it.
+steps:
+  - id: active
+    command: ${run("fs.writeFileSync('vendor/inside.txt','step')")}
+  - id: commits
+    needs: []
+    workspace: new
+    workflow:
+      steps:
+        - id: init
+          workspace: continue
+          command: ${run(init)}
+        - id: read
+          needs: [init]
+          command: ${run(commit)}
+  - id: edits
+    needs: []
+    workspace: new
+    workflow:
+      steps:
+        - id: init
+          workspace: continue
+          command: ${run(init)}
+        - id: read
+          needs: [init]
+          command: ${run("fs.writeFileSync('vendor/inside.txt','step')")}
+  - id: writes
+    needs: []
+    workspace: new
+    command: ${run(`${init}; ${commit}`)}
+`);
+    const recorded = addSubmodule(workspace);
+    git(setting, workspace);
+    git(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qam', 'ignore', '--allow-empty'], workspace);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const state = await readRun(config, runId);
+    if (typeof state !== 'object') throw new Error('run missing');
+    const step = (id: string) => state.steps.find((item) => item.id === id);
+    expect(step('active')).toMatchObject({ status: 'failed', failure: { code: 'read_only_dirty', message: expect.stringContaining('vendor') } });
+    const read = step('commits.read');
+    expect(read).toMatchObject({ status: 'failed', failure: { code: 'read_only_dirty', message: expect.stringContaining('vendor') } });
+    const attempt = read && 'attempt' in read ? read.attempt : 'none';
+    const kept = git(['rev-parse', `refs/teamai/kept/${attempt}:vendor`], workspace).trim();
+    expect(kept).not.toBe(recorded);
+    expect(git(['rev-parse', `refs/teamai/kept-modules/${attempt}/${kept}`], workspace).trim()).toBe(kept);
+    expect(step('edits.read')).toMatchObject({ status: 'failed', failure: { code: 'workspace_base', message: expect.stringContaining('NOT saved') } });
+    expect(step('writes')).toMatchObject({ status: 'succeeded' });
+    expect(git(['rev-parse', `${branchName(runId, 'writes', 1)}:vendor`], workspace).trim()).not.toBe(recorded);
+  });
+
   it('runs a reader in a copy on the base tool settings, so a hook an earlier step committed there is absent', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build
