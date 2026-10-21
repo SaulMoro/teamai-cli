@@ -1189,13 +1189,18 @@ function workspaceMismatch(report: ReportInput, contract: WorkspaceContract | un
   return undefined;
 }
 
-/** A later leaf still runs in `branch`. Workflow and `for_each` steps are not leaves; their children are. */
-function branchStillUsed(run: RunState, branch: string, except: string): boolean {
-  for (const item of run.steps) {
-    if (item.id === except || settled(item)) continue;
-    const located = locateStep(run, item.id);
-    if (!located || located.step.workflow !== undefined || (located.step.forEach && !isItem(item))) continue;
-    if (plannedBranch(run, located.scope, item, located.step) === branch) return true;
+/**
+ * Whether a step that can still run uses `branch`. It reads the run as the next `next` settles it, so a loop that runs
+ * steps again has made them pending, and a workflow or fan-out that can start has added its steps. A running workflow
+ * or `for_each` step is skipped, since its steps are in the run; one that has not started counts by what it would run.
+ */
+function branchStillUsed(run: RunState, branch: string): boolean {
+  const ahead = structuredClone(run);
+  if ('unreadable' in reconcileRun(ahead)) return true;
+  for (const item of ahead.steps) {
+    if (item.status === 'running' || settled(item)) continue;
+    const located = locateStep(ahead, item.id);
+    if (located && plannedBranch(ahead, located.scope, item, located.step) === branch) return true;
   }
   return false;
 }
@@ -1274,7 +1279,7 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       : outcome === 'success' ? succeed(step, { ...settlement, ...(report.outputs !== undefined ? { outputs: report.outputs } : {}) })
         : fail(step, { ...settlement, failure });
     // From the lease, so a reader that was the copy's last user lets the driver remove the worktree.
-    const cleanup = outcome === 'success' && contract !== undefined && !branchStillUsed(run, contract.branch, settledStep.id);
+    const cleanup = outcome === 'success' && contract !== undefined && !branchStillUsed(run, contract.branch);
     return {
       save: true,
       envelope: ok({

@@ -270,8 +270,7 @@ export function planWorkspace(
   const sessionResult = sessionOf(run, scope, state, definition);
   if (sessionResult && 'code' in sessionResult) return { mode, fail: sessionResult };
   const session = sessionResult ? { session: sessionResult } : {};
-  const owner = [...ancestors].reverse().find((ancestor) => ancestor.step.workspace === 'new'
-    || (ancestor.step.forEach !== undefined && ancestor.step.workspace === 'continue'));
+  const owner = [...ancestors].reverse().find((ancestor) => opensCopy(ancestor.step));
   const modes = request.modes ?? ['read-only'];
   if (mode === 'read-only') {
     if (!owner) return { mode, ...session };
@@ -330,8 +329,22 @@ export function planWorkspace(
   };
 }
 
-/** The branch a step would use, when it runs in a workspace. */
+/** Whether the steps inside `step` run in a copy it opens rather than in the one around it. */
+function opensCopy(step: WorkflowStep): boolean {
+  return step.workspace === 'new' || (step.forEach !== undefined && step.workspace === 'continue');
+}
+
+/**
+ * The existing branch a step that has not started yet would run in. A leaf, or a `for_each` step whose items are leaves,
+ * uses the branch its lease names. The steps of a workflow continue or read the copy around it, unless it opens its own;
+ * a branch they open themselves does not exist yet.
+ */
 export function plannedBranch(run: RunState, scope: Scope, state: StepState, definition: WorkflowStep): string | undefined {
+  if (definition.workflow !== undefined) {
+    if (opensCopy(definition)) return undefined;
+    const owner = [...ancestorsOf(run, state.id)].reverse().find((ancestor) => opensCopy(ancestor.step));
+    return owner && branchName(run.id, owner.instance, owner.pass);
+  }
   return planWorkspace(run, scope, state, definition, {
     driver: { kind: '', machine: '', workspace: '' },
     modes: ['read-only', 'new', 'continue'],

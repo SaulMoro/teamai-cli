@@ -16,7 +16,7 @@ import { syncWorkflowDefinitions } from '../workflow/cache.js';
 import * as engine from '../workflow/engine.js';
 import { leaseNext, parseReport, reportAttempt, startRun } from '../workflow/engine.js';
 import { runLocalDriver } from '../workflow/local-driver.js';
-import { cancelRun, retryStep } from '../workflow/run-controls.js';
+import { cancelRun, respondToHitl, retryStep } from '../workflow/run-controls.js';
 import type { LocalToolAdapter } from '../workflow/local-tool-adapter.js';
 import { parseWorkflow } from '../workflow/parse.js';
 import { readRun, writeRun } from '../workflow/store.js';
@@ -2380,6 +2380,134 @@ steps:
 
     expect(accepted).toMatchObject({ data: { accepted: true, step: { id: 'change.implement' } } });
     expect(accepted).not.toHaveProperty('data.cleanup');
+  });
+
+  it.each([
+    ['a sub-workflow that needs the writer', `steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          prompt: Implement.
+        - id: verify
+          needs: [implement]
+          workflow:
+            steps:
+              - id: test
+                command: npm test
+`, [['change.implement', false], ['change.verify.test', true]]],
+    ['a sub-workflow that also waits for a step in another copy', `steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          prompt: Implement.
+        - id: side
+          needs: []
+          workspace: new
+          command: echo side
+        - id: verify
+          needs: [implement, side]
+          workflow:
+            steps:
+              - id: test
+                command: npm test
+`, [['change.implement', false], ['change.side', true], ['change.verify.test', true]]],
+    ['a fan-out that waits for an answer and reads the writer', `inputs:
+  items: [string]
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: fix
+          workspace: new
+          prompt: Fix.
+        - id: gate
+          needs: []
+          approve: { message: Check now? }
+        - id: check
+          needs: [fix, gate]
+          for_each: inputs.items
+          command: npm test
+`, [['change.fix', false], ['change.check[0]', false], ['change.check[1]', true]]],
+    ['a step loop that runs the writer again', `steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          prompt: Implement.
+        - id: review
+          needs: [implement]
+          command: npm run review
+          loop: { back_to: implement, while: "length(steps.review.passes) < 2", max_iterations: 2 }
+`, [['change.implement', false], ['change.review', false], ['change.implement', false], ['change.review', true]]],
+    ['a step loop that runs the reporter again', `steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: review
+          prompt: Review.
+          loop: { back_to: review, while: "length(steps.review.passes) < 2", max_iterations: 2 }
+`, [['change.review', false], ['change.review', true]]],
+    ['a looping workflow that runs its steps again', `steps:
+  - id: change
+    workspace: new
+    workflow:
+      loop: { while: "length(steps.implement.passes) < 2", max_iterations: 2 }
+      steps:
+        - id: implement
+          prompt: Implement.
+`, [['change.implement', false], ['change.implement', true]]],
+    ['a loop that opens the copy again on a new branch', `steps:
+  - id: change
+    workspace: new
+    loop: { back_to: change, while: "length(steps.change.passes) < 2", max_iterations: 2 }
+    workflow:
+      steps:
+        - id: implement
+          prompt: Implement.
+`, [['change.implement', true], ['change.implement', true]]],
+  ] as const)('removes a copy only when no step that can still run uses it: %s', async (_name, steps, expected) => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A copy stays while a step that can still run uses it.
+${steps}`, steps.startsWith('inputs:') ? { items: ['a', 'b'] } : undefined);
+    const owner = driver(workspace);
+    const base = { commit: git(['rev-parse', 'HEAD'], workspace).trim() };
+    const open: Leased[] = [];
+    const reported: Array<[string, boolean]> = [];
+    for (let turn = 0; turn < 50; turn += 1) {
+      const next = await leaseNext(config, runId, owner, { base, workspaceModes: [...modes], hitl: true, running: open.map((lease) => lease.attempt) });
+      if ('error' in next) throw new Error(JSON.stringify(next));
+      if (next.data.done) break;
+      if (next.data.lease) {
+        open.push(next.data.lease as Leased);
+        continue;
+      }
+      const lease = open.shift();
+      if (!lease) {
+        const hitl = next.data.hitl as { step: string } | undefined;
+        if (!hitl) throw new Error(JSON.stringify(next));
+        await respondToHitl(config, runId, { step: hitl.step, choice: 'yes', channel: 'cli', agent: false });
+        continue;
+      }
+      const contract = lease.workspace;
+      const to = createHash('sha1').update(`${lease.step}:${turn}`).digest('hex');
+      const answer = await reportAttempt(config, runId, {
+        attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: owner,
+        ...(contract?.mode === 'read-only' ? { read: { branch: contract.branch, base: base.commit, commit: base.commit } } : {}),
+        ...(contract && contract.mode !== 'read-only' ? { changes: { branch: contract.branch, base: base.commit, from: base.commit, to, commits: [to] } } : {}),
+      });
+      if ('error' in answer) throw new Error(JSON.stringify(answer));
+      reported.push([lease.step, answer.data.cleanup === true]);
+    }
+
+    expect(reported).toEqual(expected);
   });
 
   it('runs a test in the copy its implement step changed, and records the commit it read', async () => {
