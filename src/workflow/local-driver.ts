@@ -42,7 +42,7 @@ import type { DriverIdentity, StepHitl, WorkflowEnvelope, WorkflowFailure } from
 import { isWorkflowError } from './types.js';
 import type { WorkspaceContract } from './workspace.js';
 import {
-  applyBaseConfig, commitWork, copyStatus, type KeptChanges, ensureWorktree, git, headCommit, hooksPath, mergeBranch, pushIfOrigin, putBackCopy, recordConfigOverlay, removeWorktree, reopenConfigConflicts, restoreUneditedConfig, unrestoredCopy, worktreePath,
+  applyBaseConfig, clearReadCopyMark, commitWork, ensureWorktree, git, headCommit, hooksPath, type KeptChanges, markReadCopy, mergeBranch, pushIfOrigin, putBackCopy, recordConfigOverlay, removeWorktree, reopenConfigConflicts, restoreUneditedConfig, unrestoredCopy, worktreePath,
 } from './worktree.js';
 
 /** Local lease identity, stable across restarts in the same workspace. */
@@ -389,9 +389,9 @@ async function stageLease(lease: Lease, { active, runId }: { active: string; run
   if ('error' in opened) return { code: 'workspace_base', message: opened.error };
   lease.cwd = opened.dir;
   if (lease.workspace.mode === 'read-only') {
-    const found = await copyStatus(opened.dir);
-    if ('error' in found) return { code: 'workspace_base', message: `Step "${lease.step}" could not read workspace ${lease.workspace.branch}: ${found.error}` };
-    lease.found = found.lines;
+    const marked = await markReadCopy(opened.dir, { branch: lease.workspace.branch, step: lease.step });
+    if ('error' in marked) return { code: 'workspace_base', message: `Step "${lease.step}" cannot mark workspace ${opened.dir} as in use by a reader: ${marked.error}` };
+    lease.found = marked.found;
   }
   lease.rangeFrom = (await headCommit(opened.dir))?.commit;
   let conflict: { branch: string; files: string[] } | undefined;
@@ -559,7 +559,10 @@ async function leaveReadCopy(lease: Lease): Promise<ReadCopy | undefined> {
   if (!onBranch && !changed.includes('HEAD')) changed.push('HEAD');
   await restoreLeaseOverlay(lease);
   const read = { branch: workspace.branch, base: workspace.base.commit, commit: before.head };
-  if (changed.length === 0) return { read, state: 'untouched' };
+  if (changed.length === 0) {
+    await clearReadCopyMark(cwd);
+    return { read, state: 'untouched' };
+  }
   const put = await putBackCopy({ dir: cwd, branch: read.branch, commit: read.commit, found, changed, attempt: lease.attempt, step: lease.step });
   return put.state === 'restored' ? { read, changed, ...put } : { read, changed, dir: cwd, ...put };
 }

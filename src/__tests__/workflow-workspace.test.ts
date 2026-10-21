@@ -2670,6 +2670,59 @@ steps:
     expect(() => git(['show', `${branch}:nested`], workspace)).toThrow();
   });
 
+  it('refuses a writer in a copy whose reader never finished, and clears that by itself once the copy is back', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: The marker staging writes outlives a driver killed mid-reader.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('impl.txt','yes')"
+        - id: test
+          needs: [implement]
+          command: node -e "const m=require('child_process').execFileSync('git',['rev-parse','--git-path','teamai-unrestored']).toString().trim(); require('fs').copyFileSync(m,'../../../marker')"
+        - id: polish
+          needs: [implement]
+          workspace: continue
+          command: node -e "const fs=require('fs'); if (!fs.existsSync('../../../go')) process.exit(1); fs.writeFileSync('polish.txt','yes')"
+`);
+    const branch = branchName(runId, 'change', 1);
+    const copy = worktreePath(workspace, branch);
+    await runLocalDriver(config, runId, workspace);
+    const marker = path.resolve(copy, git(['rev-parse', '--git-path', 'teamai-unrestored'], copy).trim());
+    expect(fs.existsSync(marker)).toBe(false);
+    const staged = fs.readFileSync(path.join(workspace, 'marker'), 'utf8');
+    expect(JSON.parse(staged)).toMatchObject({ branch, step: 'change.test', reason: 'the reader did not finish', found: [] });
+    // What a driver killed while the reader ran leaves: the marker as staging wrote it, and the reader's file.
+    fs.writeFileSync(marker, staged);
+    fs.writeFileSync(path.join(copy, 'junk.txt'), 'reader');
+    fs.writeFileSync(path.join(workspace, 'go'), '');
+    expect(await retryStep(config, runId, 'change.polish')).toMatchObject({ data: { retried: { pass: 2 } } });
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({
+      status: 'failed', failure: { code: 'workspace_base', message: expect.stringContaining('junk.txt') },
+    });
+    expect(() => git(['show', `${branch}:junk.txt`], workspace)).toThrow();
+    fs.rmSync(path.join(copy, 'junk.txt'));
+    expect(await retryStep(config, runId, 'change.polish')).toMatchObject({ data: { retried: { pass: 3 } } });
+
+    await runLocalDriver(config, runId, workspace);
+
+    const again = await readRun(config, runId);
+    if (typeof again !== 'object') throw new Error('run missing');
+    expect(again.steps.find((step) => step.id === 'change.polish')).toMatchObject({ status: 'succeeded', changes: { branch } });
+    expect(git(['show', `${branch}:polish.txt`], workspace)).toBe('yes');
+    expect(() => git(['show', `${branch}:junk.txt`], workspace)).toThrow();
+  });
+
   it('refuses a writer whose existing copy is on a detached HEAD, naming the branch to put it back on', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build

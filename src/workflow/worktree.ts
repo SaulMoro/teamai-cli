@@ -528,7 +528,7 @@ export type UnrestoredMarker = z.infer<typeof UnrestoredMarker>;
 const UNRESTORED_MARKER = 'teamai-unrestored';
 
 /** A copy's status, with every untracked file and submodule change whatever the user's status config hides. */
-export async function copyStatus(dir: string): Promise<{ lines: string[] } | { error: string }> {
+async function copyStatus(dir: string): Promise<{ lines: string[] } | { error: string }> {
   const status = await git(dir, ['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none']);
   if (status.code !== 0) return { error: status.stderr.trim() || 'git status failed' };
   return { lines: status.stdout.split('\n').filter((line) => line.trim() !== '') };
@@ -547,6 +547,30 @@ async function copyLeftOver(dir: string, { branch, commit, found }: { branch: st
   const lines = [...status.lines.filter((line) => !was.has(line)), ...found.filter((line) => !now.has(line))];
   if (lines.length === 0) return undefined;
   return `it has changes: ${lines.slice(0, 5).map((line) => line.trim()).join(', ')}${lines.length > 5 ? `, and ${lines.length - 5} more` : ''}`;
+}
+
+/**
+ * Marks `dir` as left by a reader before the reader changes anything, with the status it has now. Putting the copy back
+ * removes the mark, so a driver killed before that leaves the copy refused to later steps until it is back.
+ */
+export async function markReadCopy(dir: string, { branch, step }: { branch: string; step: string }): Promise<{ found: string[] } | { error: string }> {
+  const status = await copyStatus(dir);
+  if ('error' in status) return status;
+  const head = await git(dir, ['rev-parse', 'HEAD']);
+  const marker = await gitPath(dir, UNRESTORED_MARKER);
+  if (head.code !== 0 || !marker) return { error: head.stderr.trim() || 'its git directory could not be found' };
+  const record: UnrestoredMarker = { branch, commit: head.stdout.trim(), step, reason: 'the reader did not finish', found: status.lines };
+  try {
+    await writeJsonAtomic(marker, record);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : String(error) };
+  }
+  return { found: status.lines };
+}
+
+export async function clearReadCopyMark(dir: string): Promise<void> {
+  const marker = await gitPath(dir, UNRESTORED_MARKER);
+  if (marker) await fs.rm(marker, { force: true });
 }
 
 /**
@@ -647,8 +671,8 @@ export type KeptChanges = { ref: string; modules?: string };
 
 /**
  * Puts a copy a reader changed back on `branch` at `commit` with the status `found` it had when the reader started, after
- * keeping what it changed on `refs/teamai/kept/<attempt>`. A copy it cannot put back is marked, so later steps there are
- * refused until it is.
+ * keeping what it changed on `refs/teamai/kept/<attempt>`. A copy it cannot put back keeps its mark with the reason, so
+ * later steps there are refused until it is.
  */
 export async function putBackCopy({ dir, branch, commit, found, changed, attempt, step }: {
   dir: string; branch: string; commit: string; found: string[]; changed: string[]; attempt: string; step: string;
@@ -689,5 +713,7 @@ export async function putBackCopy({ dir, branch, commit, found, changed, attempt
   }
   // Exit codes are not enough: git clean skips a repository the step created, and a later git add -A commits it.
   const left = await copyLeftOver(dir, { branch, commit, found });
-  return left ? unrestored(left, kept) : { state: 'restored', kept };
+  if (left) return unrestored(left, kept);
+  await clearReadCopyMark(dir);
+  return { state: 'restored', kept };
 }
