@@ -2614,6 +2614,40 @@ steps:
     expect(git(['rev-parse', `${branch}:vendor`], workspace).trim()).toBe(recorded);
   });
 
+  it('puts a submodule whose update mode is rebase back at the recorded commit after a reader commits in it', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A configured submodule update mode does not keep the reader's commit.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('child_process').execFileSync('git',['-c','protocol.file.allow=always','submodule','update','-q','--init']); require('fs').writeFileSync('impl.txt','yes')"
+        - id: test
+          needs: [implement]
+          command: node -e "const cp=require('child_process'),fs=require('fs'); fs.writeFileSync('vendor/inside.txt','reader'); cp.execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.com','commit','-qam','reader'],{cwd:'vendor'})"
+        - id: polish
+          needs: [implement]
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('polish.txt','yes')"
+`);
+    const recorded = addSubmodule(workspace);
+    git(['config', '-f', '.gitmodules', 'submodule.vendor.update', 'rebase'], workspace);
+    git(['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qam', 'rebase'], workspace);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    expect(run.steps.find((step) => step.id === 'change.test')).toMatchObject({ status: 'failed', failure: { code: 'read_only_dirty', message: expect.stringContaining('was put back') } });
+    expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({ status: 'succeeded' });
+    const branch = branchName(runId, 'change', 1);
+    expect(git(['rev-parse', `${branch}:vendor`], workspace).trim()).toBe(recorded);
+  });
+
   it('leaves a submodule a reader edited untouched, fails it unrestored, and refuses the next step in that copy', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build

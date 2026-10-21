@@ -624,7 +624,7 @@ async function leaveReadCopy(lease: Lease): Promise<ReadCopy | undefined> {
   if (recorded.code !== 0) return unrestored(recorded.stderr.trim() || 'its changes could not be kept');
   // Back on the copy's branch first: a reset on a branch the step switched to would leave the copy elsewhere.
   // A superproject reset leaves initialized submodules where the step moved them.
-  for (const args of [['checkout', '-q', '-f', workspace.branch], ['reset', '-q', '--hard', before.head], ['clean', '-q', '-fd'], ['submodule', '--quiet', 'update', '--recursive', '--force']]) {
+  for (const args of [['checkout', '-q', '-f', workspace.branch], ['reset', '-q', '--hard', before.head], ['clean', '-q', '-fd'], ['submodule', '--quiet', 'update', '--checkout', '--recursive']]) {
     const restored = await git(cwd, args);
     if (restored.code !== 0) return unrestored(restored.stderr.trim() || `git ${args.join(' ')} failed`, kept);
   }
