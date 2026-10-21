@@ -4,7 +4,7 @@ import { getsRulesFromExtension } from './resources/rule-format.js';
 import { pathExists, readFileSafe, readJsonObject, remove, writeFile } from './utils/fs.js';
 import { getUserHome } from './utils/home.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
-import { channelsOf, type ChannelProbe } from './tools.js';
+import { channelsOf, type ChannelProbe, type RunTime } from './tools.js';
 import {
   opencodeClaudeFallback, opencodeContextReference, readOpencodeInstructionList, reconcileOpencodeInstructions,
 } from './resources/opencode-config.js';
@@ -319,7 +319,12 @@ export async function retiredInstructionFiles(tool: string, paths: ToolPaths, sc
 
 /** Whether `tool` gets this scope's blocks from teamai's session hook or extension rather than a file. */
 export function deliversInstructionsByHook(tool: string, scope: Scope): boolean {
-  return entryFor(tool, scope)?.hook === true;
+  return runTimeBlocksOf(tool, scope) !== null;
+}
+
+function runTimeBlocksOf(tool: string, scope: Scope): RunTime | null {
+  const channel = channelsOf(tool).blocks[scope];
+  return typeof channel === 'object' && channel.channel !== 'file' ? channel : null;
 }
 
 /**
@@ -678,7 +683,6 @@ export async function resolveInstructionTargets(
   const toolPaths = scopedToolPaths(teamConfig, localConfig);
   const gitExclude = isGitExcludeEnabled(localConfig, teamConfig);
   for (const [tool, paths] of Object.entries(toolPaths)) {
-    const entry = entryFor(tool, localConfig.scope, gitExclude);
     const file = await instructionTargetPath(tool, paths, localConfig, gitExclude);
     if (isAgentExcluded(localConfig, tool)) {
       if (file) inUse.add(file);
@@ -687,23 +691,19 @@ export async function resolveInstructionTargets(
       }
       continue;
     }
-    if (entry?.hook) {
-      // Codex's hooks are user-level, so a project without its own `.codex/`
-      // still reaches an installed Codex.
-      // Probe at the member's recorded root (toolRoots), as hook install does.
-      let probeConfig = localConfig;
-      let probePaths = paths;
-      if (entry === codexHook) {
-        // A project config records no tool roots; the member's are in the
-        // user config, which a user-scope init may have written later.
-        const { loadLocalConfig } = await import('./config.js');
-        const toolRoots = localConfig.toolRoots ?? (await loadLocalConfig())?.toolRoots;
-        probeConfig = { ...localConfig, scope: 'user', toolRoots };
-        probePaths = scopedToolPaths(teamConfig, probeConfig)[tool] ?? paths;
-      }
-      const runTime = channelsOf(tool).blocks[localConfig.scope];
-      if (typeof runTime === 'object' && runTime.channel !== 'file' && await isInstructionToolInstalled(tool, probePaths, probeConfig)) {
-        hooks.push({ tool, probe: runTime.probe, recall: hasRecallAgent(tool, paths, localConfig.scope), limit: entry.hookLimit });
+    const runTime = runTimeBlocksOf(tool, localConfig.scope);
+    if (runTime !== null) {
+      // The hooks and extensions are user-level, so a project without the
+      // tool's own directory still reaches an installed tool. Probe at the
+      // member's recorded root (toolRoots), as hook install does: a project
+      // config records none; the member's are in the user config, which a
+      // user-scope init may have written later.
+      const { loadLocalConfig } = await import('./config.js');
+      const toolRoots = localConfig.toolRoots ?? (await loadLocalConfig())?.toolRoots;
+      const probeConfig: LocalConfig = { ...localConfig, scope: 'user', toolRoots };
+      const probePaths = scopedToolPaths(teamConfig, probeConfig)[tool] ?? paths;
+      if (await isInstructionToolInstalled(tool, probePaths, probeConfig)) {
+        hooks.push({ tool, probe: runTime.probe, recall: hasRecallAgent(tool, paths, localConfig.scope), limit: runTime.limit });
       }
       continue;
     }
@@ -743,7 +743,7 @@ export async function retiredFilesOfReached(
     if (!hooks.some((hook) => hook.tool === tool) && !await isInstructionToolInstalled(tool, paths, localConfig)) continue;
     // A tool with no file and no hook channel here (OpenClaw in a project, #946)
     // has no replacement to wait for; a hook tool whose hook is not installed does.
-    if (!entryFor(tool, localConfig.scope, gitExclude)?.hook
+    if (!deliversInstructionsByHook(tool, localConfig.scope)
       && await instructionTargetPath(tool, paths, localConfig, gitExclude) === undefined) continue;
     for (const file of await retiredInstructionFiles(tool, paths, localConfig.scope, gitExclude)) {
       const absolute = path.resolve(resolveToolBaseDir(tool, localConfig), file);

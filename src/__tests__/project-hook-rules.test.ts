@@ -106,13 +106,14 @@ describe('ZCode, DeepSeek Harness and Muse Code get the project\'s rules from th
     expect(await sessionStart(tool, config('project', ['claude']))).toBeNull();
   });
 
-  it.each(['zcode', 'dsh', 'muse'])('%s: adds the rules only, not the instruction blocks, which #945 gives it no channel for', async (tool) => {
+  it.each(['zcode', 'dsh', 'muse'])('%s: adds the instruction blocks before the rules, the only channel it has for them in a project (#1221)', async (tool) => {
     await fse.outputFile(path.join(repoPath, 'culture.md'), '---\ncompany:\n  name: Acme\n---\n\nBe kind to teammates.\n');
 
     const text = await sessionStart(tool, config('project'));
 
-    expect(text).toContain('PROJ-RULE-7');
-    expect(text).not.toContain('Be kind to teammates.');
+    expect(count(text, 'Be kind to teammates.')).toBe(1);
+    expect(count(text, 'PROJ-RULE-7')).toBe(1);
+    expect(text?.indexOf('Be kind to teammates.')).toBeLessThan(text?.indexOf('PROJ-RULE-7') ?? -1);
   });
 });
 

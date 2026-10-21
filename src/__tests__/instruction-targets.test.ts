@@ -873,7 +873,8 @@ describe('every tool and toolPaths shape keeps its instructions (#945)', () => {
       } as unknown as LocalConfig;
       const paths = SHAPES[shape](scopedToolPaths(DEFAULTS, localConfig)[tool]);
       const base = scope === 'project' ? projectRoot : process.env.HOME;
-      for (const dir of [process.env.HERMES_HOME, process.env.COPILOT_HOME, path.join(process.env.HOME, '.omp')]) fs.mkdirSync(dir, { recursive: true });
+      // Pi's and OMP's extensions are user-level: a project reaches them through the member's home.
+      for (const dir of [process.env.HERMES_HOME, process.env.COPILOT_HOME, path.join(process.env.HOME, '.omp'), path.join(process.env.HOME, '.pi')]) fs.mkdirSync(dir, { recursive: true });
       for (const value of Object.values(paths)) {
         if (typeof value === 'string') fs.mkdirSync(path.join(base, toolInstallRoot(value)), { recursive: true });
       }

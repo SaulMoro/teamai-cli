@@ -2797,6 +2797,17 @@ describe('local-agent: project prompts reach every installed tool (#945)', () =>
     expect(output).toContain('PROJECT-PROMPT');
   });
 
+  it('gives ZCode a project prompt through its SessionStart hook and writes it no file (#1221)', async () => {
+    await fse.ensureDir(path.join(tmpDir, '.zcode', 'skills'));
+    const { reconcileHooks } = await import('../hooks.js');
+    await reconcileHooks(path.join(tmpDir, '.zcode', 'cli', 'config.json'), 'zcode', []);
+    const { repo, ack, output } = await installProjectPrompt('zcode', [], { sessionStart: true });
+
+    expect(ack?.status).toBe('success');
+    expect(output).toContain('PROJECT-PROMPT');
+    expect(await fse.readdir(repo)).toEqual(expect.not.arrayContaining(['AGENTS.md', '.zcode']));
+  });
+
   it('records the OpenCode entry it adds in the project\'s data home, where uninstall reads it', async () => {
     // A partitioned project: its data home is under ~/.teamai/projects.
     const { projectSlug } = await import('../utils/partition.js');
