@@ -148,8 +148,10 @@ export type ReadGate = {
 export type Retired<P extends Place> = {
   readonly place: P;
   readonly was:
-    /** An earlier release's default, or the built-in path of a tool the team remapped. */
+    /** An earlier release's default. */
     | 'default'
+    /** The built-in path of a tool the team maps elsewhere or not at all: what a pull wrote there outlives the mapping. */
+    | 'builtin'
     /** The team's configured path, where teamai no longer writes. */
     | 'configured'
     /** The target the other value of `sharing.gitExclude` selects (#915). */
@@ -804,7 +806,7 @@ async function locateMcp(tool: string, install: Install, host: Host): Promise<Lo
   const builtin: Readonly<Record<string, ToolPaths>> = DEFAULT_TOOL_PATHS;
   const builtinFile = Object.hasOwn(builtin, tool) ? builtin[tool].mcpProject : undefined;
   if (builtinFile !== undefined && builtinFile !== install.toolPaths[tool]?.mcpProject) {
-    retired.push({ place: { kind: 'entry', path: roots.declared('project', builtinFile), key }, was: 'default' });
+    retired.push({ place: { kind: 'entry', path: roots.declared('project', builtinFile), key }, was: 'builtin' });
   }
   return {
     channel: 'files',

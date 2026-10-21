@@ -10,6 +10,7 @@ vi.mock('../utils/logger.js', () => ({
   spinner: vi.fn(() => ({ start: vi.fn().mockReturnThis(), succeed: vi.fn().mockReturnThis(), fail: vi.fn().mockReturnThis() })),
 }));
 
+import { log } from '../utils/logger.js';
 import { reconcileMcpForConfig } from '../mcp-reconcile.js';
 import { entryHash, renderJsonEntry } from '../resources/mcp-format.js';
 import { TeamaiConfigSchema, type LocalConfig, type McpServerDef, type TeamaiConfig } from '../types.js';
@@ -104,6 +105,38 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
 
     expect((await fse.readJson(path.join(configDir(dir), 'opencode.json'))).mcp).toEqual({ api: renderJsonEntry('opencode', API) });
     expect(await fse.pathExists(path.join(home, '.config', 'opencode', 'opencode.json'))).toBe(false);
+  });
+
+  describe('the file each server was written to, in its ownership record', () => {
+    it('is recorded for every server a pull writes', async () => {
+      await fse.ensureDir(path.join(home, '.cursor'));
+
+      await reconcileMcpForConfig(team(), userConfig('cursor'));
+
+      expect(await fse.readJson(path.join(home, '.teamai', 'managed-mcp.json'))).toEqual({
+        cursor: [{ name: 'api', hash: entryHash(renderJsonEntry('cursor', API)), file: path.join(home, '.cursor', 'mcp.json') }],
+      });
+    });
+
+    it('names once, and keeps, the servers an earlier release wrote to OpenCode\'s default home after XDG_CONFIG_HOME moves it', async () => {
+      const api = renderJsonEntry('opencode', API);
+      const before = path.join(home, '.config', 'opencode', 'opencode.json');
+      await fse.outputJson(before, { mcp: { api } });
+      await fse.outputJson(path.join(home, '.teamai', 'managed-mcp.json'), { opencode: [{ name: 'api', hash: entryHash(api) }] });
+      const xdg = path.join(root, 'xdg');
+      const now = path.join(xdg, 'opencode', 'opencode.json');
+      await fse.ensureDir(path.dirname(now));
+      vi.stubEnv('XDG_CONFIG_HOME', xdg);
+      const left = `[user] opencode takes MCP servers from ${now} now, so teamai no longer updates its entries in ${before} (api). `
+        + 'Remove them once no tool reads that file.';
+
+      await reconcileMcpForConfig(team(), userConfig('opencode'));
+      await reconcileMcpForConfig(team(), userConfig('opencode'));
+
+      expect((await fse.readJson(now)).mcp).toEqual({ api });
+      expect(await fse.readJson(before)).toEqual({ mcp: { api } });
+      expect(vi.mocked(log.info).mock.calls.filter(([line]) => line === left)).toHaveLength(1);
+    });
   });
 
   it('writes Muse\'s user servers to $XDG_CONFIG_HOME/muse/settings.json', async () => {

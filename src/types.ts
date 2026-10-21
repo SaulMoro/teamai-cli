@@ -1352,9 +1352,8 @@ export interface ManagedMcpRecord {
    */
   unnoted?: true;
   /**
-   * User scope, a tool that reads the first of several files (CodeBuddy,
-   * #993): the file holding this server. Absent in records an older teamai
-   * wrote, whose server is in the tool's mapped file (`McpTarget.mappedFile`).
+   * The file holding this server, which every MCP writer notes (#1221).
+   * Absent in records an older teamai wrote (`recordedFileOf`).
    */
   file?: string;
 }

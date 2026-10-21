@@ -3858,22 +3858,9 @@ function mcpConfigToDef(slug: string, cfg: NonNullable<LocalAgentCommand['mcp_co
   };
 }
 
-function updateManifestRecord(
-  manifest: ManagedMcpManifest,
-  key: string,
-  name: string,
-  hash: string,
-  /** Project scope: whether the entry carries a credential, as `resolved` notes for a pull's (#882). */
-  resolved?: boolean,
-  bare?: boolean,
-  /** User scope, CodeBuddy: the file it wrote (#993). */
-  file?: string,
-): void {
+function updateManifestRecord(manifest: ManagedMcpManifest, key: string, record: ManagedMcpRecord): void {
   const records = manifest[key] ?? [];
-  const idx = records.findIndex((r: ManagedMcpRecord) => r.name === name);
-  const record: ManagedMcpRecord = {
-    name, hash, ...resolved === undefined ? {} : { resolved }, ...bare === undefined ? {} : { bare }, ...file === undefined ? {} : { file },
-  };
+  const idx = records.findIndex((r: ManagedMcpRecord) => r.name === record.name);
   if (idx >= 0) {
     records[idx] = record;
   } else {
@@ -4004,7 +3991,6 @@ async function installMcpServer(
   const other = places && (relocated ? places.tree : places.local);
   // A tool that reads only the first of its MCP files that exists (#993) gets them there, as a pull writes them.
   const mappedFile = active?.projectKey === undefined ? place.mappedFile : undefined;
-  const lookup = mappedFile !== undefined;
   const targetFile = active?.file ?? place.file;
   const target = describeMcpLocation({ file: targetFile, projectKey: active?.projectKey });
   const fileOf = (record: ManagedMcpRecord): string => recordedFileOf({ file: targetFile, mappedFile }, record);
@@ -4022,7 +4008,6 @@ async function installMcpServer(
   const otherKey = other ? mcpManifestKey(other) : undefined;
   const movedFrom = records.find((r: ManagedMcpRecord, i) => r.name === slug && !inTarget[i])
     ?? (otherKey ? manifest[otherKey]?.find((r) => r.name === slug) : undefined);
-  const file = lookup ? targetFile : undefined;
 
   if (format === 'codex') {
     const block = renderCodexBlock(def);
@@ -4032,7 +4017,7 @@ async function installMcpServer(
     if (present.has(slug) && !ownedNames.has(slug)) {
       throw new Error(`install_mcp: server "${slug}" exists in ${tool} config and is not managed by teamai`);
     }
-    updateManifestRecord(manifest, manifestKey, slug, hash);
+    updateManifestRecord(manifest, manifestKey, { name: slug, hash, file: targetFile });
     await save();
     source = spliceCodexBlock(source, slug, block);
     await writeCodexAtomic(targetFile, source);
@@ -4060,7 +4045,7 @@ async function installMcpServer(
     // Existing ownership stays valid until the config write completes. New installs
     // still persist a provisional record before adding a Git exclusion (#882).
     if (!previousRecord) {
-      updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined, undefined, file);
+      updateManifestRecord(manifest, manifestKey, { name: slug, hash, ...projectScope ? { resolved: credential } : {}, file: targetFile });
       await save();
     }
     if (credential) await keepCredentialOutOfGit({ ...localConfig, dataHome }, tool, slug, targetFile, entry);
@@ -4069,7 +4054,9 @@ async function installMcpServer(
     await writeJsonDoc(targetFile, serverKey, doc);
     if (allowBare || previousRecord) {
       // Placement is evidence of a completed write, not just an attempted install.
-      updateManifestRecord(manifest, manifestKey, slug, hash, projectScope ? credential : undefined, allowBare ? doc.bare : undefined, file);
+      updateManifestRecord(manifest, manifestKey, {
+        name: slug, hash, ...projectScope ? { resolved: credential } : {}, ...allowBare ? { bare: doc.bare } : {}, file: targetFile,
+      });
       // A record in the tool's other place goes with the copy there, once this write holds the server.
       if (otherKey && manifest[otherKey]) {
         manifest[otherKey] = manifest[otherKey].filter((r) => r.name !== slug);
@@ -4630,7 +4617,7 @@ async function moveToLocalScope(
   const wrote = moved.some((record) => !owned.has(record.name));
   if (wrote) await writeJsonDoc(local.file, serverKey, to);
   for (const record of moved) {
-    if (!owned.has(record.name)) updateManifestRecord(manifest, localKey, record.name, record.hash, false);
+    if (!owned.has(record.name)) updateManifestRecord(manifest, localKey, { name: record.name, hash: record.hash, resolved: false, file: local.file });
   }
   if (left.length > 0) manifest[treeKey] = left;
   else delete manifest[treeKey];

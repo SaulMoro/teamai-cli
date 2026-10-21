@@ -650,6 +650,16 @@ describe('local-agent: MCP install/uninstall commands', () => {
     expect((await fse.readJson(file)).mcpServers).toEqual({ mine: { command: 'mine' } });
   });
 
+  it('install_mcp records the file it wrote the server to (#1221)', async () => {
+    const acks = await runResponse({ cmds: [{
+      id: 9104, type: 'install_mcp', scope: 'user', slug: 'clawpro', version: '1', mcp_config: { transport: 'http', url: 'https://clawpro.example.com/mcp' },
+    }] }, 'cursor');
+
+    expect(acks[0].status).toBe('success');
+    expect((await fse.readJson(path.join(tmpDir, '.teamai', 'managed-mcp.json'))).cursor)
+      .toEqual([expect.objectContaining({ name: 'clawpro', file: path.join(tmpDir, '.cursor', 'mcp.json') })]);
+  });
+
   it('install_mcp writes OpenCode\'s user server to the config directory XDG_CONFIG_HOME moves it to (#1221)', async () => {
     const xdg = path.join(tmpDir, 'xdg');
     await fse.ensureDir(path.join(xdg, 'opencode'));
