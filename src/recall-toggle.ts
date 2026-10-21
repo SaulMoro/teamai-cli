@@ -9,7 +9,6 @@ import { cleanupOf, installOf, locate, ownOf } from './locate.js';
 import { ruleFileExtensionForTool } from './resources/rule-format.js';
 import { LEGACY_RECALL_SKILL_NAMES, builtinSkillsTarget, pruneLegacyBuiltinSkills } from './builtin-skills.js';
 import {
-  resolveToolBaseDir,
   isRecallEnabled,
   isAgentExcluded,
   scopedToolPaths,
@@ -21,7 +20,6 @@ import {
 async function removeRecallArtifacts(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
   const install = installOf(teamConfig, localConfig);
   for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-    const baseDir = resolveToolBaseDir(tool, localConfig);
     // Remove recall rule file
     const rulesDir = ownOf(await locate(tool, 'rules', install));
     if (rulesDir?.kind === 'dir') {

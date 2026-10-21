@@ -4476,6 +4476,19 @@ describe('user-scope uninstall and the projects still set up (#1025)', () => {
     expect(await fse.readFile(path.join(app.dir, 'managed-local-mcp.json'), 'utf8')).toBe(records(app.anchor));
   });
 
+  it('removes the servers of a partition that is not a project from WorkBuddy\'s local scope in .codebuddy.json (#1221)', async () => {
+    const { homeDir, teamaiHome } = await userScope();
+    const server = { type: 'stdio', command: 'team-tool', args: [] };
+    const stale = await partition(teamaiHome, 'stale', {});
+    await fse.outputJson(path.join(stale.dir, 'managed-local-mcp.json'), { [`workbuddy:local:${stale.anchor}`]: [{ name: 'team-api', hash: entryHash(server) }] });
+    const codebuddyJson = path.join(homeDir, '.codebuddy.json');
+    await fse.writeJson(codebuddyJson, { projects: { [stale.anchor]: { mcpServers: { 'team-api': server, mine: server } } } });
+
+    await uninstall({ force: true });
+
+    expect((await fse.readJson(codebuddyJson)).projects[stale.anchor].mcpServers).toEqual({ mine: server });
+  });
+
   // The project-gated records a user-scope hook removal retains, and the project's Codex dispatchers.
   it.each([
     ['managed-hooks.json', '{"claude":[{"event":"SessionStart","matcher":"*","command":"if [ \\"$PWD\\" = \'/app\' ]; then teamai pull; fi"}]}\n'],

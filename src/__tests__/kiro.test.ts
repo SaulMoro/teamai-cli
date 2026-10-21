@@ -4,7 +4,6 @@ import path from 'node:path';
 import fse from 'fs-extra';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KNOWN_AGENTS } from '../known-agents.js';
-import { resolveMcpTargets } from '../mcp-reconcile.js';
 import {
   agentFileExtensionForTool,
   KIRO_SESSION_START_COMMAND,
@@ -12,7 +11,6 @@ import {
   reverseFromKiro,
 } from '../resources/agent-format.js';
 import { AgentsHandler } from '../resources/agents.js';
-import { detectMcpFormat } from '../resources/mcp-format.js';
 import { ruleFileExtensionForTool, usesMdcRules } from '../resources/rule-format.js';
 import { RulesHandler } from '../resources/rules.js';
 import { openLedger } from '../resources/delivered-copies.js';
@@ -165,33 +163,7 @@ describe('Kiro support', () => {
     }
   });
 
-  it('uses the mcpServers JSON format in the Kiro MCP config', () => {
-    expect(detectMcpFormat('kiro')).toBe('claude');
-  });
 
-  it('resolves the installed Kiro MCP file as an MCP target', async () => {
-    const home = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-kiro-test-'));
-    try {
-      await fse.ensureDir(path.join(home, '.kiro', 'skills'));
-      vi.stubEnv('HOME', home);
-      const config = TeamaiConfigSchema.parse({ team: 'test', repo: 'test/repo' });
-      const localConfig = {
-        repo: { localPath: path.join(home, 'team-repo'), remote: 'test/repo' },
-        username: 'test',
-        scope: 'user',
-        additionalRoles: [],
-      } as unknown as LocalConfig;
-
-      expect(await resolveMcpTargets(config, localConfig)).toContainEqual({
-        tool: 'kiro',
-        format: 'claude',
-        file: path.join(home, '.kiro', 'settings', 'mcp.json'),
-        projectScope: false,
-      });
-    } finally {
-      await fse.remove(home);
-    }
-  });
 });
 
 describe('Kiro gets namespaced team rules flat, as it reads one level of steering (#946)', () => {

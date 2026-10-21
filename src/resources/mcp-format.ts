@@ -20,16 +20,9 @@ export type McpFormat = 'claude' | 'cursor' | 'buddy' | 'codex' | 'opencode' | '
 
 const COPILOT_ALL_TOOLS = '*';
 
-/**
- * The format pull still renders for a tool whose descriptor already says
- * where it takes MCP servers is unknown (#1221 D-f), until the MCP writers
- * go through `locate` and stop writing for it.
- */
-const FORMAT_BEFORE_LOCATE: Readonly<Record<string, McpFormat>> = { 'claude-internal': 'claude', 'codex-internal': 'codex', tcodex: 'codex' };
-
-/** The format `tool`'s MCP servers take (`mcpFormatOf`); null for a tool teamai writes no MCP servers for. */
+/** The format of the tool's declared MCP channel, or null when none is known. */
 export function detectMcpFormat(tool: string): McpFormat | null {
-  return Object.hasOwn(FORMAT_BEFORE_LOCATE, tool) ? FORMAT_BEFORE_LOCATE[tool] : mcpFormatOf(tool);
+  return mcpFormatOf(tool);
 }
 
 /**

@@ -148,8 +148,10 @@ export type ReadGate = {
 export type Retired<P extends Place> = {
   readonly place: P;
   readonly was:
-    /** An earlier release's default, or the built-in path of a tool the team remapped. */
+    /** An earlier release's default. */
     | 'default'
+    /** The built-in path of a tool the team maps elsewhere or not at all: what a pull wrote there outlives the mapping. */
+    | 'builtin'
     /** The team's configured path, where teamai no longer writes. */
     | 'configured'
     /** The target the other value of `sharing.gitExclude` selects (#915). */
@@ -205,8 +207,13 @@ type LocationOf = {
     readonly alternate: EntryPlace | null;
     /** The tool reads another tool's project file (Muse and tclaude: claude's `.mcp.json`): `own` is that tool's place, and that tool writes it. */
     readonly writtenBy: ToolId | null;
+    /** `own` is the first of `files` that exists (#993); `mapped` is the one the team's mapping names, where teamai wrote before #993. */
+    readonly lookup: McpLookup | null;
   }) | SilentChannel<EntryPlace>;
 };
+
+/** Files a tool tries in order, reading only the first that exists. */
+export type McpLookup = { readonly files: readonly string[]; readonly mapped: string };
 
 /** Where `locate` says a tool takes `R`: one type per resource, so a caller never narrows a place kind it asked for. */
 export type Location<R extends Resource = Resource> = LocationOf[R];
@@ -705,22 +712,22 @@ async function locateAgents(tool: string, install: Install, host: Host): Promise
   };
 }
 
-function mcpKeyOf(channel: McpUser | McpProject): readonly [string, ...string[]] {
+function mcpKeyOf(channel: Pick<McpUser, 'format' | 'key'>): readonly [string, ...string[]] {
   if (channel.key !== undefined) return channel.key;
   return channel.format === 'codex' ? ['mcp_servers'] : [MCP_SERVER_KEY[channel.format]];
 }
 
 async function mcpFileOf(
   channel: McpUser | McpProject, scope: Scope, roots: Roots, host: Host,
-): Promise<{ readonly file: string | null; readonly others: readonly string[] }> {
+): Promise<{ readonly file: string | null; readonly lookup: McpLookup | null }> {
   const configured = roots.configured(scope === 'user' ? 'mcp' : 'mcpProject');
-  if (configured === null || channel.reads === 'unknown') return { file: configured, others: [] };
+  if (configured === null || channel.reads === 'unknown') return { file: configured, lookup: null };
   for (const read of channel.reads) {
     if (!('firstOf' in read)) continue;
     const { files, first } = await lookupOf(read, roots, host);
-    if (files.some((file) => samePathOn(host.path, file, configured))) return { file: first, others: files.filter((file) => file !== first) };
+    if (files.some((file) => samePathOn(host.path, file, configured))) return { file: first, lookup: { files, mapped: configured } };
   }
-  return { file: configured, others: [] };
+  return { file: configured, lookup: null };
 }
 
 /**
@@ -788,8 +795,11 @@ async function locateMcp(tool: string, install: Install, host: Host): Promise<Lo
   if (install.scope === 'user') {
     const channel = mcp.user;
     if (channel === 'none' || channel === 'unknown') return { channel, retired: [], gates };
-    const { tree, earlier, reads } = await mcpFilesOf(channel, mcp.retired?.user, 'user', roots, host);
-    return { channel: 'files', own: tree, alternate: null, writtenBy: null, reads, readGates: [], retired: settled(tree, earlier, p), gates };
+    const { tree, lookup, earlier, reads } = await mcpFilesOf(channel, mcp.retired?.user, 'user', roots, host);
+    return {
+      channel: 'files', own: tree, alternate: null, writtenBy: null, lookup, reads, readGates: [], retired: settled(tree, earlier, p),
+      gates: await mcpGatesOf(tool, gates, tree, host),
+    };
   }
 
   const channel = mcp.project;
@@ -798,10 +808,10 @@ async function locateMcp(tool: string, install: Install, host: Host): Promise<Lo
   if (channel.writtenBy !== undefined) {
     const own = ownOf(await locateMcp(channel.writtenBy, install, host));
     const reads = await readsOf(channel.reads, roots, host, own?.key ?? mcpKeyOf(channel));
-    return { channel: 'files', own, alternate: null, writtenBy: channel.writtenBy, reads, readGates, retired: [], gates };
+    return { channel: 'files', own, alternate: null, writtenBy: channel.writtenBy, lookup: null, reads, readGates, retired: [], gates };
   }
 
-  const { key, tree, earlier, reads } = await mcpFilesOf(channel, mcp.retired?.project, 'project', roots, host);
+  const { key, tree, lookup, earlier, reads } = await mcpFilesOf(channel, mcp.retired?.project, 'project', roots, host);
   let own = tree;
   const retired = [...earlier];
   const localReads: Read[] = [];
@@ -817,34 +827,52 @@ async function locateMcp(tool: string, install: Install, host: Host): Promise<Lo
     }
   }
   const builtin: Readonly<Record<string, ToolPaths>> = DEFAULT_TOOL_PATHS;
-  const builtinFile = Object.hasOwn(builtin, tool) ? builtin[tool].mcpProject : undefined;
+  const builtinFile = mcp.retired?.project?.[0] ?? (Object.hasOwn(builtin, tool) ? builtin[tool].mcpProject : undefined);
   if (builtinFile !== undefined && builtinFile !== install.toolPaths[tool]?.mcpProject) {
-    retired.push({ place: { kind: 'entry', path: roots.declared('project', builtinFile), key }, was: 'default' });
+    retired.push({ place: { kind: 'entry', path: roots.declared('project', builtinFile), key }, was: 'builtin' });
   }
   return {
     channel: 'files',
     own,
     alternate: channel.alternate === undefined ? null : { kind: 'entry', path: roots.declared('project', channel.alternate.path), key },
     writtenBy: null,
+    lookup,
     reads: reads === 'unknown' ? reads : [...reads, ...localReads],
     readGates,
     retired: settled(own, retired, p),
-    gates,
+    gates: await mcpGatesOf(tool, gates, own, host),
   };
+}
+
+/** Copilot is installed, for its servers, also where its MCP file exists (#628). */
+async function mcpGatesOf(tool: string, gates: readonly Gate[], own: EntryPlace | null, host: Host): Promise<readonly Gate[]> {
+  if (tool !== 'copilot' || own === null || !await host.exists(own.path)) return gates;
+  return gates.map((gate) => gate.kind === 'installed' ? { ...gate, met: true } : gate);
 }
 
 async function mcpFilesOf(
   channel: McpUser | McpProject, earlierFiles: readonly string[] | undefined, scope: Scope, roots: Roots, host: Host,
-): Promise<{ readonly key: readonly [string, ...string[]]; readonly tree: EntryPlace | null; readonly earlier: readonly Retired<EntryPlace>[]; readonly reads: readonly Read[] | 'unknown' }> {
+): Promise<{
+  readonly key: readonly [string, ...string[]];
+  readonly tree: EntryPlace | null;
+  readonly lookup: McpLookup | null;
+  readonly earlier: readonly Retired<EntryPlace>[];
+  readonly reads: readonly Read[] | 'unknown';
+}> {
   const key = mcpKeyOf(channel);
   const entry = (file: string): EntryPlace => ({ kind: 'entry', path: file, key });
-  const { file, others } = await mcpFileOf(channel, scope, roots, host);
+  // An earlier release wrote the format's own key: ZCode's servers sat under `mcpServers` in ~/.agents/mcp.json.
+  const earlierKey = mcpKeyOf({ format: channel.format });
+  const { file, lookup } = await mcpFileOf(channel, scope, roots, host);
   return {
     key,
     tree: file === null ? null : entry(file),
+    lookup,
     earlier: [
-      ...(earlierFiles ?? []).map((earlierFile): Retired<EntryPlace> => ({ place: entry(roots.declared(scope === 'user' ? 'home' : 'project', earlierFile)), was: 'default' })),
-      ...others.map((other): Retired<EntryPlace> => ({ place: entry(other), was: 'lookup' })),
+      ...(earlierFiles ?? []).map((earlierFile): Retired<EntryPlace> => ({
+        place: { kind: 'entry', path: roots.declared(scope === 'user' ? 'home' : 'project', earlierFile), key: earlierKey }, was: 'default',
+      })),
+      ...(lookup?.files ?? []).filter((other) => other !== file).map((other): Retired<EntryPlace> => ({ place: entry(other), was: 'lookup' })),
     ],
     reads: await readsOf(channel.reads, roots, host, key),
   };

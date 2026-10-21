@@ -35,6 +35,7 @@ afterEach(async () => {
   else process.env.COPILOT_HOME = origCopilotHome;
   await fse.remove(tmpDir);
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 async function setupConfig(bindings: Record<string, unknown> = {}): Promise<void> {
@@ -634,6 +635,87 @@ describe('local-agent: MCP install/uninstall commands', () => {
     expect(manifest.codebuddy).toEqual(
       expect.arrayContaining([expect.objectContaining({ name: 'clawpro' })]),
     );
+  });
+
+  it('install_mcp and uninstall_mcp use the first of WorkBuddy\'s user MCP files that exists (#1221)', async () => {
+    const file = path.join(tmpDir, '.workbuddy', '.mcp.json');
+    await fse.outputJson(file, { mcpServers: { mine: { command: 'mine' } } });
+    const command = { scope: 'user', slug: 'clawpro', version: '1', mcp_config: { transport: 'http', url: 'https://clawpro.example.com/mcp' } };
+
+    expect((await runResponse({ cmds: [{ id: 9101, type: 'install_mcp', ...command }] }, 'workbuddy'))[0].status).toBe('success');
+    expect(Object.keys((await fse.readJson(file)).mcpServers)).toEqual(['mine', 'clawpro']);
+    expect(await fse.pathExists(path.join(tmpDir, '.workbuddy', 'mcp.json'))).toBe(false);
+
+    expect((await runResponse({ cmds: [{ id: 9102, type: 'uninstall_mcp', ...command }] }, 'workbuddy'))[0].status).toBe('success');
+    expect((await fse.readJson(file)).mcpServers).toEqual({ mine: { command: 'mine' } });
+  });
+
+  it('install_mcp records the file it wrote the server to (#1221)', async () => {
+    const acks = await runResponse({ cmds: [{
+      id: 9104, type: 'install_mcp', scope: 'user', slug: 'clawpro', version: '1', mcp_config: { transport: 'http', url: 'https://clawpro.example.com/mcp' },
+    }] }, 'cursor');
+
+    expect(acks[0].status).toBe('success');
+    expect((await fse.readJson(path.join(tmpDir, '.teamai', 'managed-mcp.json'))).cursor)
+      .toEqual([expect.objectContaining({ name: 'clawpro', file: path.join(tmpDir, '.cursor', 'mcp.json') })]);
+  });
+
+  it('install_mcp writes OpenCode\'s user server to the config directory XDG_CONFIG_HOME moves it to (#1221)', async () => {
+    const xdg = path.join(tmpDir, 'xdg');
+    await fse.ensureDir(path.join(xdg, 'opencode'));
+    vi.stubEnv('XDG_CONFIG_HOME', xdg);
+
+    const acks = await runResponse({ cmds: [{
+      id: 9103, type: 'install_mcp', scope: 'user', slug: 'clawpro', version: '1', mcp_config: { transport: 'http', url: 'https://clawpro.example.com/mcp' },
+    }] }, 'opencode');
+
+    expect(acks[0].status).toBe('success');
+    expect(Object.keys((await fse.readJson(path.join(xdg, 'opencode', 'opencode.json'))).mcp)).toEqual(['clawpro']);
+    expect(await fse.pathExists(path.join(tmpDir, '.config', 'opencode', 'opencode.json'))).toBe(false);
+  });
+
+  it('keeps the old OpenCode home copy after a session home move', async () => {
+    const command = { scope: 'user', slug: 'clawpro', version: '1', mcp_config: { transport: 'http', url: 'https://clawpro.example.com/mcp' } };
+    expect((await runResponse({ cmds: [{ id: 9301, type: 'install_mcp', ...command }] }, 'opencode'))[0].status).toBe('success');
+    const old = path.join(tmpDir, '.config', 'opencode', 'opencode.json');
+    const before = await fse.readJson(old);
+    const moved = path.join(tmpDir, 'xdg');
+    await fse.ensureDir(path.join(moved, 'opencode'));
+    vi.stubEnv('XDG_CONFIG_HOME', moved);
+
+    expect((await runResponse({ cmds: [{ id: 9302, type: 'install_mcp', ...command }] }, 'opencode'))[0].status).toBe('success');
+
+    expect(await fse.readJson(old)).toEqual(before);
+    expect(await fse.readJson(path.join(moved, 'opencode', 'opencode.json'))).toEqual(before);
+  });
+
+  it('names the Codex config it stops updating after a mapping change', async () => {
+    const { log } = await import('../utils/logger.js');
+    const { entryHash, renderCodexBlock } = await import('../resources/mcp-format.js');
+    const old = path.join(tmpDir, 'old-codex', 'config.toml');
+    const block = renderCodexBlock({ name: 'clawpro', transport: 'http', url: 'https://clawpro.example.com/mcp' });
+    await fse.outputFile(old, block);
+    await fse.outputJson(path.join(tmpDir, '.teamai', 'managed-mcp.json'), { codex: [{ name: 'clawpro', hash: entryHash(block), file: old }] });
+
+    const acks = await runResponse({ cmds: [{ id: 9304, type: 'install_mcp', scope: 'user', slug: 'clawpro', version: '1', mcp_config: { transport: 'http', url: 'https://clawpro.example.com/mcp' } }] }, 'codex');
+
+    expect(acks[0].status).toBe('success');
+    expect(await fse.readFile(old, 'utf8')).toBe(block);
+    expect(vi.mocked(log.info).mock.calls.some(([line]) => String(line).includes(`no longer updates its entries in ${old}`))).toBe(true);
+  });
+
+  it('moves a legacy ZCode entry from the shared map into its native nested map', async () => {
+    const { entryHash } = await import('../resources/mcp-format.js');
+    const entry = { type: 'http', url: 'https://clawpro.example.com/mcp' };
+    const old = path.join(tmpDir, '.agents', 'mcp.json');
+    await fse.outputJson(old, { mcpServers: { clawpro: entry, mine: { command: 'mine' } } });
+    await fse.outputJson(path.join(tmpDir, '.teamai', 'managed-mcp.json'), { zcode: [{ name: 'clawpro', hash: entryHash(entry) }] });
+
+    const acks = await runResponse({ cmds: [{ id: 9303, type: 'install_mcp', scope: 'user', slug: 'clawpro', version: '1', mcp_config: { transport: 'http', url: entry.url } }] }, 'zcode');
+
+    expect(acks[0].status).toBe('success');
+    expect((await fse.readJson(path.join(tmpDir, '.zcode', 'cli', 'config.json'))).mcp.servers).toEqual({ clawpro: entry });
+    expect(await fse.readJson(old)).toEqual({ mcpServers: { mine: { command: 'mine' } } });
   });
 
   // A member who relocated Claude Code's root records it in the local config;

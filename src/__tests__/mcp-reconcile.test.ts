@@ -869,8 +869,7 @@ servers:
 
     const targets = await resolveMcpTargets(defaults, projectConfig);
     expect(targets.find((target) => target.tool === 'codebuddy')?.file).toBe(projectFile);
-    expect(targets.find((target) => target.tool === 'workbuddy')?.file)
-      .toBe(path.join(projectRoot, '.workbuddy', 'mcp.json'));
+    expect(targets.find((target) => target.tool === 'workbuddy')?.file).toBe(projectFile);
     const userTargets = await resolveMcpTargets(defaults, localConfig);
     expect(userTargets.find((target) => target.tool === 'codebuddy')?.file).toBe(userFile);
 
