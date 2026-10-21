@@ -574,6 +574,14 @@ async function unrestoredCopy(dir: string): Promise<
   return undefined;
 }
 
+/** Initialized submodules, at any depth, with uncommitted or untracked files. */
+async function dirtySubmodules(dir: string): Promise<{ paths: string[] } | { error: string }> {
+  // Each submodule's own status ignores its nested submodules: --recursive visits those itself.
+  const listed = await git(dir, ['submodule', '--quiet', 'foreach', '--recursive', 'test -z "$(git status --porcelain --ignore-submodules=all)" || echo "$displaypath"']);
+  if (listed.code !== 0) return { error: listed.stderr.trim() || 'git submodule foreach failed' };
+  return { paths: listed.stdout.split('\n').filter((line) => line !== '') };
+}
+
 /** How a reader left its copy. `kept` is the ref holding what the step changed; an unrestored copy lacks it when keeping failed. */
 type ReadCopy = { read: StepRead } & (
   | { state: 'untouched' }
@@ -603,6 +611,10 @@ async function leaveReadCopy(lease: Lease): Promise<ReadCopy | undefined> {
     if (marker) await writeJsonAtomic(marker, record);
     return { read, state: 'unrestored', changed, reason, dir: cwd, ...(kept ? { kept } : {}) };
   };
+  // The keep below records a submodule only as its commit, so a submodule update would destroy its files.
+  const dirty = await dirtySubmodules(cwd);
+  if ('error' in dirty) return unrestored(dirty.error);
+  if (dirty.paths.length > 0) return unrestored(`submodules have uncommitted or untracked files: ${dirty.paths.join(', ')}`);
   // Not `git stash push`: the stash list is shared by every worktree of the checkout.
   const kept = `refs/teamai/kept/${lease.attempt}`;
   const added = await git(cwd, ['add', '-A']);
@@ -612,8 +624,7 @@ async function leaveReadCopy(lease: Lease): Promise<ReadCopy | undefined> {
   if (recorded.code !== 0) return unrestored(recorded.stderr.trim() || 'its changes could not be kept');
   // Back on the copy's branch first: a reset on a branch the step switched to would leave the copy elsewhere.
   // A superproject reset leaves initialized submodules where the step moved them.
-  const submodules = [['submodule', '--quiet', 'update', '--recursive', '--force'], ['submodule', '--quiet', 'foreach', '--recursive', 'git clean -q -fd']];
-  for (const args of [['checkout', '-q', '-f', workspace.branch], ['reset', '-q', '--hard', before.head], ['clean', '-q', '-fd'], ...submodules]) {
+  for (const args of [['checkout', '-q', '-f', workspace.branch], ['reset', '-q', '--hard', before.head], ['clean', '-q', '-fd'], ['submodule', '--quiet', 'update', '--recursive', '--force']]) {
     const restored = await git(cwd, args);
     if (restored.code !== 0) return unrestored(restored.stderr.trim() || `git ${args.join(' ')} failed`, kept);
   }

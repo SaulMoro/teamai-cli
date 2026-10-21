@@ -2550,7 +2550,7 @@ steps:
   it('puts a submodule a reader changed back at the commit the copy records, so a later step does not commit it', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build
-description: A reader's commit and untracked file inside a submodule do not reach the branch.
+description: A reader's commit inside a submodule does not reach the branch.
 steps:
   - id: change
     workspace: new
@@ -2561,11 +2561,11 @@ steps:
           command: node -e "require('child_process').execFileSync('git',['-c','protocol.file.allow=always','submodule','update','-q','--init']); require('fs').writeFileSync('impl.txt','yes')"
         - id: test
           needs: [implement]
-          command: node -e "const cp=require('child_process'),fs=require('fs'); fs.writeFileSync('vendor/inside.txt','reader'); cp.execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.com','commit','-qam','reader'],{cwd:'vendor'}); fs.writeFileSync('vendor/untracked.txt','x')"
+          command: node -e "const cp=require('child_process'),fs=require('fs'); fs.writeFileSync('vendor/inside.txt','reader'); cp.execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.com','commit','-qam','reader'],{cwd:'vendor'})"
         - id: polish
           needs: [implement]
           workspace: continue
-          command: node -e "const fs=require('fs'); if (fs.readFileSync('vendor/inside.txt','utf8')!=='one\\\\n' || fs.existsSync('vendor/untracked.txt')) process.exit(2); fs.writeFileSync('polish.txt','yes')"
+          command: node -e "const fs=require('fs'); if (fs.readFileSync('vendor/inside.txt','utf8')!=='one\\\\n') process.exit(2); fs.writeFileSync('polish.txt','yes')"
 `);
     const recorded = addSubmodule(workspace);
 
@@ -2578,6 +2578,42 @@ steps:
     const branch = branchName(runId, 'change', 1);
     expect(git(['show', `${branch}:polish.txt`], workspace)).toBe('yes');
     expect(git(['rev-parse', `${branch}:vendor`], workspace).trim()).toBe(recorded);
+  });
+
+  it('leaves a submodule a reader edited untouched, fails it unrestored, and refuses the next step in that copy', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: Uncommitted and untracked files inside a submodule are not kept, so they stay.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('child_process').execFileSync('git',['-c','protocol.file.allow=always','submodule','update','-q','--init']); require('fs').writeFileSync('impl.txt','yes')"
+        - id: test
+          needs: [implement]
+          command: node -e "const fs=require('fs'); fs.writeFileSync('vendor/inside.txt','reader'); fs.writeFileSync('vendor/untracked.txt','x')"
+        - id: polish
+          needs: [implement]
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('polish.txt','yes')"
+`);
+    addSubmodule(workspace);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    const branch = branchName(runId, 'change', 1);
+    const copy = worktreePath(workspace, branch);
+    expect(run.steps.find((step) => step.id === 'change.test')).toMatchObject({ status: 'failed', failure: { code: 'workspace_base', message: expect.stringContaining('vendor') } });
+    expect(run.steps.find((step) => step.id === 'change.test')).toMatchObject({ failure: { message: expect.stringContaining('could NOT be put back') } });
+    expect(fs.readFileSync(path.join(copy, 'vendor', 'inside.txt'), 'utf8')).toBe('reader');
+    expect(fs.existsSync(path.join(copy, 'vendor', 'untracked.txt'))).toBe(true);
+    expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({ status: 'failed', failure: { code: 'workspace_base', message: expect.stringContaining(`teamai workflow retry ${runId} change.polish`) } });
+    expect(() => git(['show', `${branch}:polish.txt`], workspace)).toThrow();
   });
 
   it('runs a reader in a copy on the base tool settings, so a hook an earlier step committed there is absent', async () => {
