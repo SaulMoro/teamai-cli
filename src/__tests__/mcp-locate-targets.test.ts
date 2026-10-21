@@ -309,6 +309,23 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
       expect(await fse.readJson(before)).toEqual({ mcp: { api } });
       expect(vi.mocked(log.info).mock.calls.filter(([line]) => line === left)).toHaveLength(1);
     });
+
+    it('lets uninstall remove the unchanged servers an earlier release wrote to OpenCode\'s default home after OPENCODE_CONFIG_DIR moves it', async () => {
+      const api = renderJsonEntry('opencode', API);
+      const before = path.join(home, '.config', 'opencode', 'opencode.json');
+      const edited = { ...api, url: 'https://edited.example.com/mcp' };
+      await fse.outputJson(before, { mcp: { api, edited, mine: MINE } });
+      await fse.outputJson(path.join(home, '.teamai', 'managed-mcp.json'), {
+        opencode: [{ name: 'api', hash: entryHash(api) }, { name: 'edited', hash: entryHash(api) }],
+      });
+      const moved = path.join(root, 'moved');
+      await fse.ensureDir(moved);
+      vi.stubEnv('OPENCODE_CONFIG_DIR', moved);
+
+      await reconcileMcpForConfig(team(), userConfig('opencode'), { removeAll: true });
+
+      expect(await fse.readJson(before)).toEqual({ mcp: { edited, mine: MINE } });
+    });
   });
 
   it('writes Muse\'s user servers to $XDG_CONFIG_HOME/muse/settings.json', async () => {

@@ -2436,7 +2436,10 @@ async function reconcileTargets(
     const target = leaving ? { ...resolved, file: leaving.next } : resolved;
     const records = [...manifest[manifestKey] ?? [], ...leaving?.adopted ?? []];
     // Records of servers in another file the tool does not read (#993) are moved out of it below.
-    const { owned, elsewhere, left } = await splitByFile(target, records);
+    const split = await splitByFile(target, records);
+    const { owned, left } = split;
+    // Uninstall takes teamai's servers out of a file the tool left too; a copy the member changed stays.
+    const elsewhere = removeAll ? [...split.elsewhere, ...left] : split.elsewhere;
     const ownedNames = new Set(owned.map((r) => r.name));
     const moving = removeAll ? new Map<string, DesiredMcpEntry>()
       : await heldMcpEntriesToMove(teamConfig, localConfig, target, held, manifest, elsewhere.filter((r) => !ownedNames.has(r.name)), history);
