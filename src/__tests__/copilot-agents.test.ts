@@ -180,7 +180,7 @@ targets: [copilot]
     const defaultScopeDeployments = await deployBuiltinAgents({
       ...teamConfig,
       toolPaths: { claude: { agents: '.claude/agents' } },
-    });
+    }, { ...userConfig, enabledAgents: ['claude'] });
     expect(defaultScopeDeployments).toBeGreaterThan(0);
 
     const roleSource = path.join(teamRepo, 'agents', 'frontend', `${ROLE_AGENT}.yaml`);

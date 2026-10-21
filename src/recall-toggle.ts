@@ -5,6 +5,7 @@ import { remove, pathExists } from './utils/fs.js';
 import { applyInstructionPlan, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets } from './instruction-targets.js';
 import { agentFileExtensionForTool } from './resources/agent-format.js';
 import { isAgentToolId } from './tools.js';
+import { cleanupOf, installOf, locate } from './locate.js';
 import { ruleFileExtensionForTool } from './resources/rule-format.js';
 import { LEGACY_RECALL_SKILL_NAMES, builtinSkillsTarget, pruneLegacyBuiltinSkills } from './builtin-skills.js';
 import {
@@ -18,6 +19,7 @@ import {
 } from './types.js';
 
 async function removeRecallArtifacts(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<void> {
+  const install = installOf(teamConfig, localConfig);
   for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
     const baseDir = resolveToolBaseDir(tool, localConfig);
     // Remove recall rule file
@@ -44,9 +46,7 @@ async function removeRecallArtifacts(teamConfig: TeamaiConfig, localConfig: Loca
       if (target) await pruneLegacyBuiltinSkills(tool, target, LEGACY_RECALL_SKILL_NAMES);
     }
 
-    // Remove recall agent file
-    if (toolPath.agents) {
-      const agentsDir = path.join(baseDir, toolPath.agents);
+    for (const { path: agentsDir } of cleanupOf(await locate(tool, 'agents', install))) {
       const extensions = new Set<string>(['.md']);
       if (isAgentToolId(tool)) {
         extensions.add(agentFileExtensionForTool(tool));

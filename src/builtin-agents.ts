@@ -4,12 +4,10 @@ import { fileURLToPath } from 'node:url';
 import { ensureDir, pathExists, readFileSafe, writeFile, remove, listFiles } from './utils/fs.js';
 import { log } from './utils/logger.js';
 import type { TeamaiConfig, LocalConfig } from './types.js';
-import { resolveToolBaseDir, isAgentExcluded, scopedToolPaths } from './types.js';
-import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
-import { getUserHome } from './utils/home.js';
 import { keepsTrackedCopy } from './resources/delivered-copies.js';
 import { agentStemFromFilename, renderForTool, reverseFromClaude } from './resources/agent-format.js';
 import { isAgentToolId } from './tools.js';
+import { installOf, locate, writable } from './locate.js';
 import type { DeliveryRecorder } from './git-exclude-delivered.js';
 
 // ─── Built-in agents deployment ──────────────────────────
@@ -94,7 +92,7 @@ async function removeStaleAgentSiblings(targetAgentsDir: string, stem: string, t
 
 export async function deployBuiltinAgents(
   teamConfig: TeamaiConfig,
-  localConfig?: LocalConfig,
+  localConfig: LocalConfig,
   options?: { skipRecall?: boolean; recorder?: DeliveryRecorder; dryRun?: boolean },
 ): Promise<number> {
   const builtinDir = getBuiltinAgentsDir();
@@ -115,32 +113,29 @@ export async function deployBuiltinAgents(
     .filter((f) => !(options?.skipRecall && f === 'teamai-recall.md'));
   if (agentFiles.length === 0) return 0;
 
-  const defaultBaseDir = getUserHome();
+  const install = installOf(teamConfig, localConfig);
   let deployed = 0;
 
-  for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig ?? {}))) {
-    if (!toolPath.agents) {
+  for (const tool of Object.keys(install.toolPaths)) {
+    const where = await locate(tool, 'agents', install);
+    if (!where.gates.every((gate) => gate.met)) {
+      log.debug(`Skipping built-in agent deployment for ${tool}: excluded or not installed`);
+      continue;
+    }
+    if (!isAgentToolId(tool)) {
+      if (install.toolPaths[tool]?.agents) {
+        log.warn(
+          `Skipping built-in agent deployment for ${tool}: unsupported agent format; ` +
+          'disable this target or add a native renderer',
+        );
+      }
+      continue;
+    }
+    const targetAgentsDir = writable(where)?.path;
+    if (targetAgentsDir === undefined) {
       log.debug(`Skipping built-in agent deployment for ${tool}: no agents path`);
       continue;
     }
-    const baseDir = localConfig ? resolveToolBaseDir(tool, localConfig) : defaultBaseDir;
-    const installed = localConfig
-      ? await isToolInstalledForConfig(tool, toolPath.agents, localConfig)
-      : await ResourceHandler.isToolInstalled(toolPath.agents, baseDir);
-    if (!installed) {
-      log.debug(`Skipping built-in agent deployment for ${tool}: tool not installed`);
-      continue;
-    }
-    if (localConfig && isAgentExcluded(localConfig, tool)) continue;
-    if (!isAgentToolId(tool)) {
-      log.warn(
-        `Skipping built-in agent deployment for ${tool}: unsupported agent format; ` +
-        'disable this target or add a native renderer',
-      );
-      continue;
-    }
-
-    const targetAgentsDir = path.join(baseDir, toolPath.agents);
     try {
       // A dry run writes nothing (#915): no directory, no sibling removed.
       if (!options?.dryRun) await ensureDir(targetAgentsDir);

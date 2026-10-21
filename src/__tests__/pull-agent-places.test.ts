@@ -14,6 +14,7 @@ vi.mock('../config.js', async (importOriginal) => ({
   loadTeamConfig: vi.fn(),
   detectProjectConfig: vi.fn().mockResolvedValue(null),
   autoDetectInit: vi.fn(),
+  saveLocalConfigForScope: vi.fn(),
 }));
 vi.mock('../utils/git.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../utils/git.js')>()),
@@ -32,7 +33,8 @@ vi.mock('../utils/logger.js', () => ({
 }));
 
 import { pull } from '../pull.js';
-import { detectProjectConfig, loadLocalConfigForScope, loadStateForScope, loadTeamConfig, saveStateForScope } from '../config.js';
+import { autoDetectInit, detectProjectConfig, loadLocalConfigForScope, loadStateForScope, loadTeamConfig, saveStateForScope } from '../config.js';
+import { recallDisable } from '../recall-toggle.js';
 import { log } from '../utils/logger.js';
 import { TeamaiConfigSchema, type LocalConfig, type State } from '../types.js';
 
@@ -68,5 +70,22 @@ describe('a pull and the agents of a moved home', () => {
     expect(await fse.pathExists(path.join(xdg, 'opencode', 'agents', 'reviewer.md'))).toBe(true);
     expect(await fse.pathExists(path.join(xdg, 'muse', 'agents', 'reviewer.md'))).toBe(true);
     expect(await fse.pathExists(path.join(home, '.config'))).toBe(false);
+  });
+
+  it('deploys the built-in recall agent there, and recall off removes it from there', async () => {
+    await fse.ensureDir(path.join(xdg, 'opencode'));
+    await fse.ensureDir(path.join(xdg, 'muse'));
+    vi.stubEnv('XDG_CONFIG_HOME', xdg);
+    config.recallEnabled = true;
+    const recallAgents = [path.join(xdg, 'opencode', 'agents', 'teamai-recall.md'), path.join(xdg, 'muse', 'agents', 'teamai-recall.md')];
+
+    await pull({});
+
+    for (const file of recallAgents) expect(await fse.pathExists(file), file).toBe(true);
+
+    vi.mocked(autoDetectInit).mockResolvedValue({ localConfig: config, teamConfig: await loadTeamConfig(repo) } as never);
+    await recallDisable({});
+
+    for (const file of recallAgents) expect(await fse.pathExists(file), file).toBe(false);
   });
 });
