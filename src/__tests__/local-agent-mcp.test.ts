@@ -689,6 +689,21 @@ describe('local-agent: MCP install/uninstall commands', () => {
     expect(await fse.readJson(path.join(moved, 'opencode', 'opencode.json'))).toEqual(before);
   });
 
+  it('names the Codex config it stops updating after a mapping change', async () => {
+    const { log } = await import('../utils/logger.js');
+    const { entryHash, renderCodexBlock } = await import('../resources/mcp-format.js');
+    const old = path.join(tmpDir, 'old-codex', 'config.toml');
+    const block = renderCodexBlock({ name: 'clawpro', transport: 'http', url: 'https://clawpro.example.com/mcp' });
+    await fse.outputFile(old, block);
+    await fse.outputJson(path.join(tmpDir, '.teamai', 'managed-mcp.json'), { codex: [{ name: 'clawpro', hash: entryHash(block), file: old }] });
+
+    const acks = await runResponse({ cmds: [{ id: 9304, type: 'install_mcp', scope: 'user', slug: 'clawpro', version: '1', mcp_config: { transport: 'http', url: 'https://clawpro.example.com/mcp' } }] }, 'codex');
+
+    expect(acks[0].status).toBe('success');
+    expect(await fse.readFile(old, 'utf8')).toBe(block);
+    expect(vi.mocked(log.info).mock.calls.some(([line]) => String(line).includes(`no longer updates its entries in ${old}`))).toBe(true);
+  });
+
   it('moves a legacy ZCode entry from the shared map into its native nested map', async () => {
     const { entryHash } = await import('../resources/mcp-format.js');
     const entry = { type: 'http', url: 'https://clawpro.example.com/mcp' };

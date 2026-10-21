@@ -4079,14 +4079,14 @@ async function installMcpServer(
         throw error;
       }
     }
-    if (movedFrom && places && other) {
-      await leaveOtherMcpLocation(config, places, other, serverKey, [movedFrom], target, manifest);
-    } else if (movedFrom) {
-      const from = recordedTargets.get(movedFrom) ?? await recordedMcpTarget(place, movedFrom);
-      const relocations = [place.mappedFile, place.alternateFile, ...place.lookupFiles ?? [], ...(place.retired ?? []).map(({ file }) => file)];
-      if (relocations.includes(from.file)) await removeMovedMcpEntry(from, mcpKeyOf(from), slug, target, movedFrom.hash);
-      else logLeftMcpFiles(localConfig, { ...place, file: targetFile }, [{ ...movedFrom, file: from.file }]);
-    }
+  }
+  if (movedFrom && places && other) {
+    await leaveOtherMcpLocation(config, places, other, active ? mcpKeyOf(active) : place.key, [movedFrom], target, manifest);
+  } else if (movedFrom) {
+    const from = recordedTargets.get(movedFrom) ?? await recordedMcpTarget(place, movedFrom);
+    const relocations = [place.mappedFile, place.alternateFile, ...place.lookupFiles ?? [], ...(place.retired ?? []).map(({ file }) => file)];
+    if (relocations.includes(from.file)) await removeMovedMcpEntry(from, mcpKeyOf(from), slug, target, movedFrom.hash);
+    else logLeftMcpFiles(localConfig, { ...place, file: targetFile }, [{ ...movedFrom, file: from.file }]);
   }
   if (projectScope && workspacePath) {
     const resources = await loadManifest();
