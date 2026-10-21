@@ -2631,6 +2631,9 @@ steps:
     expect(fs.existsSync(path.join(worktreePath(workspace, branch), 'nested', 'a.txt'))).toBe(true);
     expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({ status: 'failed', failure: { code: 'workspace_base' } });
     expect(() => git(['show', `${branch}:nested`], workspace)).toThrow();
+    const test = run.steps.find((step) => step.id === 'change.test');
+    const attempt = test && 'attempt' in test ? test.attempt : 'none';
+    expect(git(['show', `refs/teamai/kept-modules/${attempt}/nested:a.txt`], workspace)).toBe('x');
   });
 
   it('fails a reader that created a git repository in its copy unrestored when the repository hides untracked files from status', async () => {
@@ -2734,8 +2737,13 @@ steps:
     const branch = branchName(runId, 'change', 1);
     expect(git(['show', `${branch}:polish.txt`], workspace)).toBe('yes');
     expect(git(['rev-parse', `${branch}:vendor`], workspace).trim()).toBe(recorded);
-    const kept = `refs/teamai/kept/${test && 'attempt' in test ? test.attempt : 'none'}`;
-    expect(git(['rev-parse', `${kept}:vendor`], workspace).trim()).not.toBe(recorded);
+    const attempt = test && 'attempt' in test ? test.attempt : 'none';
+    const reader = git(['rev-parse', `refs/teamai/kept/${attempt}:vendor`], workspace).trim();
+    expect(reader).not.toBe(recorded);
+    expect(fs.existsSync(worktreePath(workspace, branch))).toBe(false);
+    expect(git(['cat-file', '-t', reader], workspace).trim()).toBe('commit');
+    expect(git(['rev-parse', `refs/teamai/kept-modules/${attempt}/vendor`], workspace).trim()).toBe(reader);
+    expect(test).toMatchObject({ failure: { message: expect.stringContaining(`refs/teamai/kept-modules/${attempt}/`) } });
   });
 
   it('puts a submodule whose update mode is rebase back at the recorded commit after a reader commits in it', async () => {

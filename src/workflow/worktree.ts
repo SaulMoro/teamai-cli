@@ -573,17 +573,51 @@ export async function unrestoredCopy(dir: string): Promise<
   return undefined;
 }
 
+function gitlinkLines(listed: string): string[] {
+  return listed.split('\0').filter((line) => line.startsWith('160000 '));
+}
+
+/** Each submodule path `commit` records, with the commit it records there. */
+async function treeGitlinks(dir: string, commit: string): Promise<Map<string, string> | { error: string }> {
+  const listed = await git(dir, ['ls-tree', '-r', '-z', commit]);
+  if (listed.code !== 0) return { error: listed.stderr.trim() || `git ls-tree ${commit} failed` };
+  return new Map(gitlinkLines(listed.stdout).map((line) => {
+    const tab = line.indexOf('\t');
+    return [line.slice(tab + 1), line.slice(0, tab).split(' ')[2] ?? ''];
+  }));
+}
+
+/**
+ * Copies each submodule commit `to` records and `from` does not into this repository's own store. A gitlink does not keep
+ * its commit reachable, and removing the copy deletes the submodule's store with it.
+ */
+async function keepModuleCommits(dir: string, { from, to, attempt }: { from: string; to: string; attempt: string }): Promise<{ modules?: string } | { error: string }> {
+  const before = await treeGitlinks(dir, from);
+  const after = await treeGitlinks(dir, to);
+  if ('error' in before) return before;
+  if ('error' in after) return after;
+  const moved = [...after].filter(([relative, commit]) => before.get(relative) !== commit);
+  if (moved.length === 0) return {};
+  const common = await git(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+  if (common.code !== 0) return { error: common.stderr.trim() || 'the git directory could not be found' };
+  const modules = `refs/teamai/kept-modules/${attempt}/`;
+  for (const [relative, commit] of moved) {
+    const pushed = await git(path.join(dir, relative), ['push', '-q', common.stdout.trim(), `${commit}:${modules}${relative}`]);
+    if (pushed.code !== 0) return { error: pushed.stderr.trim() || `the commit in ${relative} could not be kept` };
+  }
+  return { modules };
+}
+
 /**
  * Repositories among `paths`, submodules and ones the step created, whose changes the kept commit cannot hold: uncommitted
  * or untracked files, or a nested submodule's commit its parent has not recorded. A submodule with no checkout left counts
  * too, since its files may have gone with it.
  */
 async function unkeptRepositories(dir: string, { paths, commit }: { paths: string[]; commit: string }): Promise<{ paths: string[] } | { error: string }> {
-  const listed = [await git(dir, ['ls-tree', '-r', '-z', commit]), await git(dir, ['ls-files', '-s', '-z'])];
-  const failed = listed.find((entries) => entries.code !== 0);
-  if (failed) return { error: failed.stderr.trim() || 'the submodules could not be listed' };
-  const gitlinks = new Set(listed.flatMap((entries) => entries.stdout.split('\0'))
-    .filter((entry) => entry.startsWith('160000 ')).map((entry) => entry.slice(entry.indexOf('\t') + 1)));
+  const recorded = await treeGitlinks(dir, commit);
+  const staged = await git(dir, ['ls-files', '-s', '-z']);
+  if ('error' in recorded || staged.code !== 0) return { error: 'error' in recorded ? recorded.error : staged.stderr.trim() || 'git ls-files failed' };
+  const gitlinks = new Set([...recorded.keys(), ...gitlinkLines(staged.stdout).map((line) => line.slice(line.indexOf('\t') + 1))]);
   // Dirty, not all: a nested submodule's new commit shows only as a change in its parent.
   const status = ['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=dirty'];
   const unkept: string[] = [];
@@ -608,6 +642,9 @@ async function unkeptRepositories(dir: string, { paths, commit }: { paths: strin
   return { paths: unkept };
 }
 
+/** Where a reader's changes were kept: the whole tree on `ref`, and each submodule commit it made under `modules`. */
+export type KeptChanges = { ref: string; modules?: string };
+
 /**
  * Puts a copy a reader changed back on `branch` at `commit` with the status `found` it had when the reader started, after
  * keeping what it changed on `refs/teamai/kept/<attempt>`. A copy it cannot put back is marked, so later steps there are
@@ -616,9 +653,9 @@ async function unkeptRepositories(dir: string, { paths, commit }: { paths: strin
 export async function putBackCopy({ dir, branch, commit, found, changed, attempt, step }: {
   dir: string; branch: string; commit: string; found: string[]; changed: string[]; attempt: string; step: string;
 }): Promise<
-  { state: 'restored'; kept: string } | { state: 'unrestored'; reason: string; kept?: string }
+  { state: 'restored'; kept: KeptChanges } | { state: 'unrestored'; reason: string; kept?: KeptChanges }
 > {
-  const unrestored = async (reason: string, kept?: string): Promise<{ state: 'unrestored'; reason: string; kept?: string }> => {
+  const unrestored = async (reason: string, kept?: KeptChanges): Promise<{ state: 'unrestored'; reason: string; kept?: KeptChanges }> => {
     const marker = await gitPath(dir, UNRESTORED_MARKER);
     const record: UnrestoredMarker = { branch, commit, step, reason, found };
     if (marker) await writeJsonAtomic(marker, record);
@@ -629,15 +666,19 @@ export async function putBackCopy({ dir, branch, commit, found, changed, attempt
   if ('error' in dirty) return unrestored(dirty.error);
   if (dirty.paths.length > 0) return unrestored(`submodules have uncommitted or untracked files: ${dirty.paths.join(', ')}`);
   // A commit of the whole tree, not `git stash`: the stash list is shared by every worktree, and a stash leaves out a submodule's commit.
-  const kept = `refs/teamai/kept/${attempt}`;
+  const ref = `refs/teamai/kept/${attempt}`;
   const added = await git(dir, ['add', '-A']);
   const tree = added.code === 0 ? await git(dir, ['write-tree']) : added;
   const committed = tree.code === 0
     ? await git(dir, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'commit-tree', tree.stdout.trim(), '-p', 'HEAD', '-m', `teamai: kept ${step}`])
     : tree;
-  const recorded = committed.code === 0 ? await git(dir, ['update-ref', kept, committed.stdout.trim()]) : committed;
+  if (committed.code !== 0) return unrestored(committed.stderr.trim() || 'its changes could not be kept');
+  const modules = await keepModuleCommits(dir, { from: commit, to: committed.stdout.trim(), attempt });
+  if ('error' in modules) return unrestored(modules.error);
+  const recorded = await git(dir, ['update-ref', ref, committed.stdout.trim()]);
   // Without the ref, a reset would lose the changes.
   if (recorded.code !== 0) return unrestored(recorded.stderr.trim() || 'its changes could not be kept');
+  const kept: KeptChanges = { ref, ...modules };
   // Back on the copy's branch first: a reset on a branch the step switched to would leave the copy elsewhere.
   // A superproject reset leaves initialized submodules where the step moved them. It must not recurse into a submodule an
   // earlier step left dirty.

@@ -42,7 +42,7 @@ import type { DriverIdentity, StepHitl, WorkflowEnvelope, WorkflowFailure } from
 import { isWorkflowError } from './types.js';
 import type { WorkspaceContract } from './workspace.js';
 import {
-  applyBaseConfig, commitWork, copyStatus, ensureWorktree, git, headCommit, hooksPath, mergeBranch, pushIfOrigin, putBackCopy, recordConfigOverlay, removeWorktree, reopenConfigConflicts, restoreUneditedConfig, unrestoredCopy, worktreePath,
+  applyBaseConfig, commitWork, copyStatus, type KeptChanges, ensureWorktree, git, headCommit, hooksPath, mergeBranch, pushIfOrigin, putBackCopy, recordConfigOverlay, removeWorktree, reopenConfigConflicts, restoreUneditedConfig, unrestoredCopy, worktreePath,
 } from './worktree.js';
 
 /** Local lease identity, stable across restarts in the same workspace. */
@@ -537,11 +537,11 @@ async function restoreLeaseOverlay(lease: Lease): Promise<void> {
   lease.overlay = undefined;
 }
 
-/** How a reader left its copy. `kept` is the ref holding what the step changed; an unrestored copy lacks it when keeping failed. */
+/** How a reader left its copy. `kept` holds what the step changed; an unrestored copy lacks it when keeping failed. */
 type ReadCopy = { read: StepRead } & (
   | { state: 'untouched' }
-  | { state: 'restored'; changed: string[]; kept: string }
-  | { state: 'unrestored'; changed: string[]; reason: string; dir: string; kept?: string }
+  | { state: 'restored'; changed: string[]; kept: KeptChanges }
+  | { state: 'unrestored'; changed: string[]; reason: string; dir: string; kept?: KeptChanges }
 );
 
 /**
@@ -564,17 +564,23 @@ async function leaveReadCopy(lease: Lease): Promise<ReadCopy | undefined> {
   return put.state === 'restored' ? { read, changed, ...put } : { read, changed, dir: cwd, ...put };
 }
 
+function keptSentence(kept: KeptChanges): string {
+  return kept.modules
+    ? `Its changes are kept on ${kept.ref}, and the submodule commits it made under ${kept.modules}.`
+    : `Its changes are kept on ${kept.ref}.`;
+}
+
 /** A reader that changed its copy fails. `changed` is the step's own sentence naming the paths. */
 function readCopyFailure(left: Exclude<ReadCopy, { state: 'untouched' }>, changed: string): WorkflowFailure {
   const { branch, commit } = left.read;
   switch (left.state) {
     case 'restored':
-      return { code: 'read_only_dirty', message: `${changed} Workspace ${branch} was put back at ${commit}. Its changes are kept on ${left.kept}.` };
+      return { code: 'read_only_dirty', message: `${changed} Workspace ${branch} was put back at ${commit}. ${keptSentence(left.kept)}` };
     case 'unrestored':
       return {
         code: 'workspace_base',
         message: left.kept
-          ? `${changed} Workspace ${branch} could NOT be put back at ${commit}: ${left.reason}. Its changes are kept on ${left.kept}. Later steps there fail until ${left.dir} is back on ${branch} at ${commit} with nothing changed.`
+          ? `${changed} Workspace ${branch} could NOT be put back at ${commit}: ${left.reason}. ${keptSentence(left.kept)} Later steps there fail until ${left.dir} is back on ${branch} at ${commit} with nothing changed.`
           : `${changed} Workspace ${branch} could NOT be put back at ${commit}: ${left.reason}. Its changes were NOT saved and are still in ${left.dir}. Copy them out before you put ${left.dir} back on ${branch} at ${commit} with nothing changed. Later steps there fail until it is.`,
       };
     default: {
