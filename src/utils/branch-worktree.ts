@@ -290,7 +290,8 @@ async function openWorktree(
     }
     if (options.pushIfCreated !== false) {
       try {
-        await createGitWithBlockTimeout(wt).push(['-u', 'origin', spec.branch]);
+        // `--progress` keeps a slow upload alive under the block timeout, as in fetchTrackingRef.
+        await createGitWithBlockTimeout(wt).push(['--progress', '-u', 'origin', spec.branch]);
         return { wt, current: true };
       } catch (e) {
         log.debug(`[${spec.logTag}] initial push skipped: ${(e as Error).message}`);
@@ -642,7 +643,7 @@ async function commitAndPushAt(
       // when it refuses one. Do NOT re-check the remote-tracking ref here — it
       // is only updated through the remote's fetch refspec, so a `--single-branch`
       // clone would report failure for every successful side-branch push.
-      await git.push(['origin', spec.branch]);
+      await git.push(['--progress', 'origin', spec.branch]);
       return { status: 'published' };
     } catch (pushErr) {
       // Killed by the block timeout: origin stopped answering, which no

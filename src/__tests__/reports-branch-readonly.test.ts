@@ -109,6 +109,7 @@ describe('ensureReportsWorktree read-only cold start', () => {
     await ensureReportsWorktree(config);
 
     expect(mocks.worktreeGit.push).toHaveBeenCalledWith([
+      '--progress',
       '-u',
       'origin',
       'teamai-reports',
@@ -143,7 +144,7 @@ describe('ensureReportsWorktree read-only cold start', () => {
 
     await ensureReportsWorktree(config);
 
-    expect(mocks.worktreeGit.push).toHaveBeenCalledWith(['-u', 'origin', 'teamai-reports']);
+    expect(mocks.worktreeGit.push).toHaveBeenCalledWith(['--progress', '-u', 'origin', 'teamai-reports']);
   });
 });
 
@@ -184,7 +185,7 @@ describe('commitAndPushReports', () => {
     stageInWorktree([]);
     expect(await commitAndPushReports(config, 'retry stats', ['stats/alice.yaml'], { pushIfUnchanged: true })).toBe(true);
     expect(mocks.worktreeGit.commit).not.toHaveBeenCalled();
-    expect(mocks.worktreeGit.push).toHaveBeenCalledWith(['origin', 'teamai-reports']);
+    expect(mocks.worktreeGit.push).toHaveBeenCalledWith(['--progress', 'origin', 'teamai-reports']);
     expect(releaseLock).toHaveBeenCalled();
   });
 
