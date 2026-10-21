@@ -18,7 +18,10 @@ function agentConfigPaths(): string[] {
   for (const tool of Object.values(TeamaiConfigBaseSchema.shape.toolPaths.parse(undefined))) {
     for (const field of ['skills', 'rules', 'settings', 'hooks', 'claudemd', 'agents', 'mcpProject'] as const) {
       const relative = tool[field];
-      if (relative) paths.add(configRoot(field === 'hooks' ? path.posix.dirname(relative) : relative));
+      if (!relative) continue;
+      const root = field === 'hooks' ? path.posix.dirname(relative) : relative;
+      // A hooks file at the repository root has dirname `.`, which would reset the whole worktree.
+      paths.add(configRoot(root === '.' ? relative : root));
     }
   }
   return [...paths];
@@ -155,6 +158,10 @@ export async function applyBaseConfig(
   dir: string, commit: string, hooks: string,
 ): Promise<{ ok: true; saved: string } | { ok: false; message: string }> {
   await git(dir, ['config', '--worktree', 'core.hooksPath', hooks]);
+  const linked = await symlinkedParent(dir);
+  if (linked) {
+    return { ok: false, message: `Agent configuration ${linked.relative} is under the symlink ${linked.parent} on this branch, so it was not reset. Commit ${linked.parent} as a directory on the branch and retry the step.` };
+  }
   const saved = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-agent-'));
   const conflicts = (await git(dir, ['ls-files', '-u', '-z', '--', ...AGENT_PATHS])).stdout;
   await fs.writeFile(path.join(saved, '_conflicts'), conflicts);
@@ -184,6 +191,18 @@ export async function applyBaseConfig(
     }
   }
   return { ok: true, saved };
+}
+
+/** An agent path whose parent is a symlink. Copying or removing it would reach outside the worktree. */
+async function symlinkedParent(dir: string): Promise<{ relative: string; parent: string } | undefined> {
+  for (const relative of AGENT_PATHS) {
+    const parts = relative.split('/');
+    for (let end = 1; end < parts.length; end += 1) {
+      const parent = parts.slice(0, end).join('/');
+      if (await fs.lstat(path.join(dir, parent)).then((stats) => stats.isSymbolicLink(), () => false)) return { relative, parent };
+    }
+  }
+  return undefined;
 }
 
 /** Puts saved conflict stages back after the base checkout cleared them, before the step runs. */

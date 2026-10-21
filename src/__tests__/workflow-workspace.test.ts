@@ -690,6 +690,82 @@ steps:
     expect(git(['show', `${branch}:.tclaude/settings.json`], workspace)).toBe('earlier');
   });
 
+  it('fails a later step with base_config when an earlier step committed .github as a symlink, and leaves its target alone', async () => {
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-outside-'));
+    dirs.push(outside);
+    fs.mkdirSync(path.join(outside, 'skills'));
+    fs.writeFileSync(path.join(outside, 'skills', 'keep.txt'), 'keep');
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: An agent path under a symlinked parent is not touched.
+steps:
+  - id: work
+    workspace: new
+    workflow:
+      steps:
+        - id: plant
+          workspace: continue
+          command: node -e "require('fs').symlinkSync(${JSON.stringify(outside).replace(/"/g, "'")},'.github')"
+        - id: check
+          needs: [plant]
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('ok.txt','yes')"
+`);
+
+    const done = await runLocalDriver(config, runId, workspace);
+
+    expect(done, JSON.stringify(done)).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    const run = await readRun(config, runId);
+    const check = typeof run === 'object' ? run.steps.find((step) => step.id === 'work.check') : undefined;
+    expect(check).toMatchObject({ status: 'failed', failure: { code: 'base_config', message: expect.stringContaining('.github') } });
+    expect(fs.readFileSync(path.join(outside, 'skills', 'keep.txt'), 'utf8')).toBe('keep');
+  });
+
+  it('keeps .github workflows from the branch and resets only its agent paths', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A later step sees the workflows an earlier step committed, not its hooks.
+steps:
+  - id: work
+    workspace: new
+    workflow:
+      steps:
+        - id: plant
+          workspace: continue
+          command: node -e "const fs=require('fs'); fs.mkdirSync('.github/workflows',{recursive:true}); fs.mkdirSync('.github/hooks',{recursive:true}); fs.writeFileSync('.github/workflows/ci.yml','ci'); fs.writeFileSync('.github/hooks/x.json','{}')"
+        - id: check
+          needs: [plant]
+          workspace: continue
+          command: node -e "const fs=require('fs'); if (!fs.existsSync('.github/workflows/ci.yml') || fs.existsSync('.github/hooks/x.json')) process.exit(2); fs.writeFileSync('ok.txt','yes')"
+`);
+
+    const done = await runLocalDriver(config, runId, workspace);
+
+    expect(done, JSON.stringify(done)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const run = await readRun(config, runId);
+    const check = typeof run === 'object' ? run.steps.find((step) => step.id === 'work.check') : undefined;
+    const branch = check && 'changes' in check ? check.changes?.branch : 'none';
+    expect(git(['show', `${branch}:ok.txt`], workspace)).toBe('yes');
+    expect(git(['show', `${branch}:.github/workflows/ci.yml`], workspace)).toBe('ci');
+    expect(git(['show', `${branch}:.github/hooks/x.json`], workspace)).toBe('{}');
+  });
+
+  it('never resets the whole worktree for a hooks file at the repository root', async () => {
+    vi.resetModules();
+    vi.doMock('../types.js', () => ({
+      TeamaiConfigBaseSchema: { shape: { toolPaths: { parse: () => ({ tool: { hooks: 'hooks.json', skills: '.tool/skills' } }) } } },
+    }));
+    try {
+      const { AGENT_PATHS } = await import('../workflow/worktree.js');
+      expect(AGENT_PATHS).toContain('hooks.json');
+      expect(AGENT_PATHS).not.toContain('.');
+      expect(AGENT_PATHS).not.toContain('');
+    } finally {
+      vi.doUnmock('../types.js');
+      vi.resetModules();
+    }
+  });
+
   it('delivers a team skill into a new workspace and leaves it out of the branch', async () => {
     const { config, workspace, runId } = await teamWorkspace(`schemaVersion: v1alpha1
 name: build
