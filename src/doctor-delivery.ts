@@ -24,7 +24,7 @@ import {
 } from './utils/shell-profile.js';
 import { getUserHome } from './utils/home.js';
 import { loadStateForScope } from './config.js';
-import { installOf, locate, ownOf, unreadWrites, writable, writesOf, type Location, type ReadGate } from './locate.js';
+import { installOf, locate, ownOf, unreadWrites, writable, writesOf, type Location, type ReadGate, type Unread } from './locate.js';
 import { codexProjectTrust, codexTrustFix } from './codex-project-trust.js';
 import { amongPlaces, placesRecordOf, samePlace, samePlaces } from './resources/places.js';
 import { defaultToolHome, realHost, toolHome } from './tool-home.js';
@@ -447,6 +447,115 @@ export async function skillReadNotes(ctx: DoctorContext): Promise<string[]> {
           break;
         default: {
           const unhandled: never = unread;
+          return unhandled;
+        }
+      }
+    }
+  }
+  return notes;
+}
+
+const RECORDED_WORDS = {
+  rules: { noun: 'rules', every: 'every rule', field: 'rules' },
+  blocks: { noun: 'instruction blocks', every: 'every instruction block', field: 'claudemd' },
+} as const;
+
+/** What doctor compares for one tool that teamai writes rules or blocks for now. */
+type WrittenPlace = {
+  readonly tool: string;
+  readonly own: string;
+  readonly writes: readonly string[];
+  readonly unread: 'unknown' | readonly Unread[];
+};
+
+async function writtenPlaces(ctx: DoctorContext, resource: 'rules' | 'blocks'): Promise<WrittenPlace[]> {
+  const { localConfig, teamConfig } = ctx;
+  if (!teamConfig) return [];
+  const install = installOf(teamConfig, localConfig);
+  const located: WrittenPlace[] = [];
+  for (const tool of Object.keys(ctx.toolPaths)) {
+    const where = resource === 'rules'
+      ? await locate(tool, 'rules', install)
+      : await locate(tool, 'blocks', install);
+    if (where.channel !== 'files') continue;
+    const own = writable(where);
+    if (own === null) continue;
+    located.push({
+      tool,
+      own: own.path,
+      writes: writesOf(where).map((place) => place.path),
+      unread: where.reads === 'unknown' ? 'unknown' : unreadWrites(where),
+    });
+  }
+  return located;
+}
+
+/**
+ * Per tool, whether it reads the rules or instruction blocks teamai writes,
+ * and whether the last pull wrote them where it takes them now (#1221).
+ */
+export async function buildRecordedPlaceChecks(ctx: DoctorContext, resource: 'rules' | 'blocks'): Promise<Check[]> {
+  const located = await writtenPlaces(ctx, resource);
+  if (located.length === 0) return [];
+  const words = RECORDED_WORDS[resource];
+  const { checkoutRecordKey } = await import('./pull.js');
+  const key = await checkoutRecordKey(ctx.localConfig);
+  const recorded = key === undefined ? undefined : placesRecordOf((await loadStateForScope(ctx.localConfig)).lastPullByWorkspace?.[key])?.[resource];
+  const checks: Check[] = [];
+  for (const { tool, own, writes, unread } of located) {
+    if (unread !== 'unknown') {
+      const notRead = unread.filter((entry) => entry.reason === 'not-read');
+      checks.push({
+        name: `${tool} reads the ${words.noun} teamai writes`,
+        source: 'local',
+        check: async () => notRead.length === 0,
+        fix: `${notRead.map((entry) => `${tool} does not read ${entry.write}`).join('; ')}. `
+          + `Point toolPaths.${tool}.${words.field} in teamai.yaml at a place ${tool} reads.`,
+      });
+    }
+    const wrote = recorded?.[tool];
+    if (wrote === undefined) continue;
+    const earlier: string[] = [];
+    for (const place of wrote) if (!await amongPlaces(place, writes)) earlier.push(place);
+    checks.push({
+      name: `${tool} ${words.noun} are where the last pull wrote them`,
+      source: 'local',
+      check: async () => samePlaces({ [tool]: wrote }, { [tool]: [...writes] }),
+      fix: await amongPlaces(own, wrote)
+        ? `${tool} takes ${words.noun} from ${own}, but the last pull could not deliver ${words.every} there, so it kept teamai's copies in ${earlier.join(', ')}. `
+          + 'Run `teamai pull`: it says what holds them back.'
+        : `${tool} takes ${words.noun} from ${own}, but the last pull wrote them to ${wrote[0]}. Run \`teamai pull\` to sync them there.`,
+    });
+  }
+  return checks;
+}
+
+/** A session-limited read, and a home that moved while teamai still writes other files under the default one (#1221). */
+export async function recordedPlaceNotes(ctx: DoctorContext, resource: 'rules' | 'blocks'): Promise<string[]> {
+  const notes: string[] = [];
+  const words = RECORDED_WORDS[resource];
+  const host = realHost();
+  for (const { tool, own, unread } of await writtenPlaces(ctx, resource)) {
+    if (ctx.localConfig.scope === 'user' && isToolId(tool) && settingsAtDefault(tool)) {
+      const defaultHome = defaultToolHome(tool, host);
+      if (!await samePlace(toolHome(tool, host), defaultHome)) {
+        notes.push(`${tool} takes ${words.noun} from ${own}, but teamai still writes some of its other files under ${defaultHome}.`);
+      }
+    }
+    if (unread === 'unknown') continue;
+    for (const entry of unread) {
+      switch (entry.reason) {
+        case 'not-read':
+        case 'shadowed':
+          break;
+        case 'cwd-only':
+          notes.push(`${tool} reads project ${words.noun} only from a session started in ${entry.readFrom}.`);
+          break;
+        case 'outside-workspace':
+          notes.push(`${tool} reads ${entry.write} only from sessions under ${entry.readFrom}.`);
+          break;
+        default: {
+          const unhandled: never = entry;
           return unhandled;
         }
       }

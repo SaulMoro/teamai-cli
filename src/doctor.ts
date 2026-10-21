@@ -35,6 +35,8 @@ import {
   buildDeliveryChecks,
   buildSkillDirChecks,
   skillReadNotes,
+  buildRecordedPlaceChecks,
+  recordedPlaceNotes,
   buildRulesDeliveryChecks,
   buildAgentsDeliveryChecks,
   buildInstructionDeliveryChecks,
@@ -660,6 +662,8 @@ export async function buildChecks(ctx: DoctorContext, stage: CheckStage = 'docto
     ...await buildHookChecks(toolPaths, hookToolPaths, baseDir, localConfig),
     ...await buildDeliveryChecks(ctx),
     ...await buildSkillDirChecks(ctx),
+    ...await buildRecordedPlaceChecks(ctx, 'rules'),
+    ...await buildRecordedPlaceChecks(ctx, 'blocks'),
     // Built only for `doctor`: the work is in building these, not in running
     // them, so skipping them post-pull is what keeps the budget for the rest.
     ...(stage === 'doctor' ? await buildRulesDeliveryChecks(ctx) : []),
@@ -880,6 +884,8 @@ export async function doctor(options: DoctorOptions): Promise<boolean> {
     ...await localAgentGitExcludeNotes(),
     ...await keptDocNotes(ctx),
     ...await skillReadNotes(ctx),
+    ...await recordedPlaceNotes(ctx, 'rules'),
+    ...await recordedPlaceNotes(ctx, 'blocks'),
   ];
 
   if (jsonMode) {
