@@ -325,6 +325,16 @@ export interface McpTarget {
   projectKey?: string;
   /** The claude project `.mcp.json`, which Muse Code reads too while it has no target of its own (`mcpTargetAgents`). */
   museReads?: true;
+  /** Where the servers sit in `file` when not under the format's key: ZCode's `mcp.servers`. */
+  key?: McpKey;
+}
+
+/** The keys from a JSON file's top to its server map. */
+export type McpKey = EntryPlace['key'];
+
+/** Where `target`'s servers sit in its file. */
+export function mcpKeyOf(target: Pick<McpTarget, 'format' | 'key'>): McpKey {
+  return target.key ?? (target.format === 'codex' ? ['mcp_servers'] : [MCP_SERVER_KEY[target.format]]);
 }
 
 /**
@@ -414,7 +424,12 @@ function unmovedHost(host: Host): Host {
 
 /** `place` as the target of `tool`'s servers in `format`. */
 function mcpTargetAt(tool: string, format: McpFormat, place: EntryPlace, projectScope: boolean): McpTarget {
-  return { tool, format, file: place.path, projectScope, ...(place.projectKey === undefined ? {} : { projectKey: place.projectKey }) };
+  const ownKey = format !== 'codex' && isDeepStrictEqual(place.key, [MCP_SERVER_KEY[format]]);
+  return {
+    tool, format, file: place.path, projectScope,
+    ...(place.projectKey === undefined ? {} : { projectKey: place.projectKey }),
+    ...(format === 'codex' || ownKey ? {} : { key: place.key }),
+  };
 }
 
 /**
@@ -667,12 +682,13 @@ const SERVER_KEYS = new Set<string>(Object.values(MCP_SERVER_KEY));
  */
 export async function readJsonDoc(
   file: string,
-  serverKey: string,
+  serverKey: string | McpKey,
   allowBare = false,
   /** A local scope (#915): read the servers of `projects[projectKey]`. */
   projectKey?: string,
 ): Promise<JsonDoc | null> {
   const local = projectKey === undefined ? {} : { projectKey };
+  const keys = typeof serverKey === 'string' ? [serverKey] : serverKey;
   if (!await pathExists(file)) return { data: {}, servers: {}, bare: false, ...local };
   const raw = await readFileSafe(file);
   if (raw === null) return null;
@@ -684,13 +700,13 @@ export async function readJsonDoc(
       const projects = data.projects ?? {};
       if (typeof projects !== 'object' || projects === null || Array.isArray(projects)) return null;
       const project = (projects as Record<string, unknown>)[projectKey] ?? {};
-      if (typeof project !== 'object' || project === null || Array.isArray(project)) return null;
-      const servers = (project as Record<string, unknown>)[serverKey] ?? {};
+      if (!isJsonObject(project)) return null;
+      const servers = valueAt(project, keys) ?? {};
       if (typeof servers !== 'object' || servers === null || Array.isArray(servers)) return null;
       return { data, servers: { ...servers }, bare: false, projectKey };
     }
-    const bare = allowBare && !(serverKey in data);
-    const servers = bare ? data : (data[serverKey] as Record<string, unknown>) ?? {};
+    const bare = allowBare && !(keys[0] in data);
+    const servers = bare ? data : valueAt(data, keys) ?? {};
     if (typeof servers !== 'object' || servers === null || Array.isArray(servers)) return null;
     const beside = allowBare && !bare ? Object.fromEntries(Object.entries(data).filter(([key, value]) =>
       !SERVER_KEYS.has(key) && typeof value === 'object' && value !== null && !Array.isArray(value))) : {};
@@ -706,7 +722,7 @@ export async function readJsonDoc(
  */
 export async function writeJsonDoc(
   file: string,
-  serverKey: string,
+  serverKey: string | McpKey,
   doc: JsonDoc,
   options?: { mode?: number },
 ): Promise<void> {
@@ -714,19 +730,50 @@ export async function writeJsonDoc(
     await writeMcpJson(file, doc.servers, options);
     return;
   }
+  const keys = typeof serverKey === 'string' ? [serverKey] : serverKey;
   if (doc.projectKey !== undefined) {
     // Every other key of the project's entry and of the file is carried over. An entry left holding
     // nothing but an empty server map goes: the tool reads a missing one as the same.
     const projects = (doc.data.projects ?? {}) as Record<string, Record<string, unknown>>;
-    const project = { ...projects[doc.projectKey], [serverKey]: doc.servers };
+    const project = withValueAt(projects[doc.projectKey] ?? {}, keys, doc.servers);
     if (Object.keys(doc.servers).length === 0 && Object.keys(project).length === 1) delete projects[doc.projectKey];
     else projects[doc.projectKey] = project;
     doc.data.projects = projects;
     await writeMcpJson(file, doc.data, options);
     return;
   }
-  doc.data[serverKey] = doc.servers;
+  doc.data = withValueAt(doc.data, keys, doc.servers);
   await writeMcpJson(file, doc.data, options);
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** What `data` holds under `keys`: undefined where a key is missing, and the first value on the way that is not an object. */
+function valueAt(data: Record<string, unknown>, keys: readonly string[]): unknown {
+  let value: unknown = data;
+  for (const key of keys) {
+    if (!isJsonObject(value)) return value;
+    value = value[key];
+  }
+  return value;
+}
+
+/** `data` with `value` under `keys`, every other key on the way kept. */
+function withValueAt(data: Record<string, unknown>, keys: readonly string[], value: unknown): Record<string, unknown> {
+  const [key, ...rest] = keys;
+  if (key === undefined) return data;
+  const inner = data[key];
+  return { ...data, [key]: rest.length === 0 ? value : withValueAt(isJsonObject(inner) ? inner : {}, rest, value) };
+}
+
+/** Whether `data` holds nothing but an empty server map under `keys`. */
+function holdsOnlyEmptyServers(data: Record<string, unknown>, keys: readonly string[]): boolean {
+  const [key, ...rest] = keys;
+  if (key === undefined) return isJsonObject(data) && Object.keys(data).length === 0;
+  const inner = data[key];
+  return Object.keys(data).every((other) => other === key) && (inner === undefined || (isJsonObject(inner) && holdsOnlyEmptyServers(inner, rest)));
 }
 
 /**
@@ -1072,9 +1119,8 @@ export async function installedMcpEntries(
     if (raw === null) return new Map();
     return new Map(codexServerNames(raw).map((name) => [name, codexBlockIn(raw, name)]));
   }
-  const serverKey = MCP_SERVER_KEY[target.format as Exclude<McpFormat, 'codex'>];
   const allowBare = target.format === 'copilot' && target.projectScope;
-  const doc = await readJsonDoc(target.file, serverKey, allowBare, target.projectKey);
+  const doc = await readJsonDoc(target.file, mcpKeyOf(target), allowBare, target.projectKey);
   if (doc === null) return null;
   return new Map([...options.underKeyOnly ? [] : Object.entries(doc.beside ?? {}), ...Object.entries(doc.servers)]);
 }
@@ -2416,7 +2462,7 @@ async function reconcileTargets(
       written.add(target.file);
       // A project config a pull leaves with no team server goes, as one a cleanup empties.
       if (!removeAll && target.projectScope && target.projectKey === undefined) {
-        await deleteEmptiedMcpFile(target.file, target.format === 'codex' ? null : MCP_SERVER_KEY[target.format]);
+        await deleteEmptiedMcpFile(target.file, target.format === 'codex' ? null : mcpKeyOf(target));
       }
     }
     wrote = wroteTarget || wrote;
@@ -2625,7 +2671,7 @@ async function applyJson(
   options: McpReconcileOptions,
   restoreConfigs: Map<string, () => Promise<void>>,
 ): Promise<boolean | null> {
-  const serverKey = MCP_SERVER_KEY[target.format as Exclude<McpFormat, 'codex'>];
+  const serverKey = mcpKeyOf(target);
   const allowBare = target.format === 'copilot' && target.projectScope;
   const doc = await readJsonDoc(target.file, serverKey, allowBare, target.projectKey);
   if (!doc) {
@@ -3117,13 +3163,13 @@ export async function removeLocalScopeMcpServers(dataHome: string, toolRoots?: R
  * text. A symlink is the member's, and a file git tracks, or cannot say it
  * does not, stays.
  */
-export async function deleteEmptiedMcpFile(file: string, serverKey: string | null = MCP_SERVER_KEY.claude): Promise<boolean> {
+export async function deleteEmptiedMcpFile(file: string, serverKey: string | McpKey | null = MCP_SERVER_KEY.claude): Promise<boolean> {
   if (await fs.promises.lstat(file).then((stat) => stat.isSymbolicLink(), () => true)) return false;
   if (serverKey === null) {
     if ((await readFileSafe(file))?.trim() !== '') return false;
   } else {
     const doc = await readJsonDoc(file, serverKey);
-    if (!doc || Object.keys(doc.servers).length > 0 || Object.keys(doc.data).some((key) => key !== serverKey)) return false;
+    if (!doc || !holdsOnlyEmptyServers(doc.data, typeof serverKey === 'string' ? [serverKey] : serverKey)) return false;
   }
   if (await keepsTrackedCopy(file) || (await gitTracks(file)).kind === 'unknown') return false;
   await fs.promises.rm(file, { force: true });
@@ -3156,7 +3202,7 @@ async function leaveFormerMcpFile(
     }
   }
   if (!next) return null;
-  const serverKey = MCP_SERVER_KEY[target.format as Exclude<McpFormat, 'codex'>];
+  const [serverKey] = mcpKeyOf(target);
   const doc = await readJsonDoc(former, serverKey);
   if (!doc || Object.keys(doc.data).some((key) => key !== serverKey)) return null;
   const adopted: ManagedMcpRecord[] = [];
@@ -3184,7 +3230,7 @@ async function deleteLeftMcpFile(
   // Never a link, and never the file `target.file` writes to through one.
   if (await fs.promises.lstat(former).then((stat) => stat.isSymbolicLink(), () => false)
     || await sameMcpFile(former, target.file)) return false;
-  const serverKey = MCP_SERVER_KEY[target.format as Exclude<McpFormat, 'codex'>];
+  const [serverKey] = mcpKeyOf(target);
   const raw = await readFileSafe(former);
   const doc = await readJsonDoc(former, serverKey);
   if (!options.dryRun && (raw === null || !doc || Object.keys(doc.servers).length > 0

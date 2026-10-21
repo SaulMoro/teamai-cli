@@ -40,7 +40,6 @@ import {
   renderJsonEntry,
   renderCodexBlock,
   entryHash,
-  MCP_SERVER_KEY,
 } from './resources/mcp-format.js';
 import {
   readJsonDoc,
@@ -57,11 +56,13 @@ import {
   deleteEmptiedMcpFile,
   describeMcpLocation,
   loadMcpManifest,
+  mcpKeyOf,
   mcpManifestKey,
   mcpRelocated,
   projectMcpLocations,
   resolveMcpTargets,
   saveMcpManifest,
+  type McpKey,
   type McpTarget,
 } from './mcp-reconcile.js';
 import { normalizeAgentType } from './utils/tool-names.js';
@@ -3874,10 +3875,13 @@ function updateManifestRecord(manifest: ManagedMcpManifest, key: string, record:
  * for a tool that reads only the first of its files that exists (#993) the
  * one its mapping names. Null when the tool takes none there.
  */
-async function mcpPlaceOf(teamConfig: TeamaiConfig, localConfig: LocalConfig, tool: string): Promise<{ file: string; mappedFile?: string } | null> {
+async function mcpPlaceOf(
+  teamConfig: TeamaiConfig, localConfig: LocalConfig, tool: string,
+): Promise<{ file: string; key: McpKey; mappedFile?: string } | null> {
   const where = await locate(tool, 'mcp', installOf(teamConfig, localConfig));
   if (where.channel !== 'files' || where.own === null || where.writtenBy !== null) return null;
-  return { file: where.own.path, ...(where.lookup && where.own.projectKey === undefined ? { mappedFile: where.lookup.mapped } : {}) };
+  const { path: file, key, projectKey } = where.own;
+  return { file, key, ...(where.lookup && projectKey === undefined ? { mappedFile: where.lookup.mapped } : {}) };
 }
 
 /**
@@ -3929,7 +3933,7 @@ async function leaveOtherMcpLocation(
   config: LocalAgentConfig,
   places: { tree: McpTarget; config: LocalConfig },
   other: McpTarget,
-  serverKey: string,
+  serverKey: McpKey,
   records: readonly ManagedMcpRecord[],
   target: string,
   manifest: ManagedMcpManifest,
@@ -4023,7 +4027,7 @@ async function installMcpServer(
     await writeCodexAtomic(targetFile, source);
   } else {
     const entry = renderJsonEntry(format, def);
-    const serverKey = MCP_SERVER_KEY[format];
+    const serverKey = active ? mcpKeyOf(active) : place.key;
     const hash = entryHash(entry);
     const allowBare = format === 'copilot' && projectScope;
     const doc = await readJsonDoc(targetFile, serverKey, allowBare, active?.projectKey);
@@ -4103,7 +4107,7 @@ async function installMcpServer(
  * where. Whether it took it out.
  */
 async function removeMovedMcpEntry(
-  from: Pick<McpTarget, 'file' | 'projectKey'>, serverKey: string, slug: string, target: string, recordedHash: string,
+  from: Pick<McpTarget, 'file' | 'projectKey'>, serverKey: McpKey, slug: string, target: string, recordedHash: string,
 ): Promise<boolean> {
   const file = describeMcpLocation(from);
   try {
@@ -4205,7 +4209,7 @@ async function uninstallMcpServer(
         restoreConfig = () => writeCodexAtomic(targetFile, source);
       }
     } else {
-      const serverKey = MCP_SERVER_KEY[format];
+      const serverKey = place.key;
       const allowBare = format === 'copilot' && projectScope;
       const doc = await readJsonDoc(targetFile, serverKey, allowBare, projectKey);
       if (!doc) throw new Error(`uninstall_mcp: cannot parse ${targetFile}. Ownership was kept; repair the config and uninstall the server again.`);
@@ -4579,7 +4583,7 @@ async function moveToLocalScope(
   const localKey = mcpManifestKey(local);
   const records = manifest[treeKey] ?? [];
   if (records.length === 0 || tree.format === 'codex') return;
-  const serverKey = MCP_SERVER_KEY[tree.format];
+  const serverKey = mcpKeyOf(tree);
   const there = describeMcpLocation(local);
   const from = await readJsonDoc(tree.file, serverKey);
   const to = await readJsonDoc(local.file, serverKey, false, local.projectKey);
