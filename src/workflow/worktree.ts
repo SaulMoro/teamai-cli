@@ -600,6 +600,10 @@ export async function unrestoredCopy(dir: string): Promise<
   }
   const parsed = UnrestoredMarker.safeParse(raw);
   if (!parsed.success) return { state: 'unreadable', dir, marker: file };
+  // A status line names a path, not its content, so only a copy that was clean can be seen to be back.
+  if (parsed.data.found.length > 0) {
+    return { state: 'unrestored', dir, marker: parsed.data, left: `it had changes when the step started, so teamai cannot tell when it is back; delete ${file} once it is` };
+  }
   const left = await copyLeftOver(dir, parsed.data);
   if (left) return { state: 'unrestored', dir, marker: parsed.data, left };
   await fs.rm(file, { force: true });
@@ -620,23 +624,41 @@ async function treeGitlinks(dir: string, commit: string): Promise<Map<string, st
   }));
 }
 
-/**
- * Copies each submodule commit `to` records and `from` does not into this repository's own store. A gitlink does not keep
- * its commit reachable, and removing the copy deletes the submodule's store with it.
- */
-async function keepModuleCommits(dir: string, { from, to, attempt }: { from: string; to: string; attempt: string }): Promise<{ modules?: string } | { error: string }> {
-  const before = await treeGitlinks(dir, from);
+/** Submodule paths whose commit `to` records and `from` does not, at any depth below `prefix`. */
+async function movedModules(dir: string, from: string | undefined, to: string, prefix: string): Promise<{ path: string; dir: string; commit: string }[] | { error: string }> {
+  const before = from ? await treeGitlinks(dir, from) : new Map<string, string>();
   const after = await treeGitlinks(dir, to);
   if ('error' in before) return before;
   if ('error' in after) return after;
-  const moved = [...after].filter(([relative, commit]) => before.get(relative) !== commit);
+  const moved: { path: string; dir: string; commit: string }[] = [];
+  for (const [relative, commit] of after) {
+    const was = before.get(relative);
+    if (was === commit) continue;
+    const sub = path.join(dir, relative);
+    moved.push({ path: `${prefix}${relative}`, dir: sub, commit });
+    const nested = await movedModules(sub, was, commit, `${prefix}${relative}/`);
+    if ('error' in nested) return nested;
+    moved.push(...nested);
+  }
+  return moved;
+}
+
+/**
+ * Copies each submodule commit `to` records and `from` does not, at any depth, into this repository's own store. A gitlink
+ * does not keep its commit reachable, and removing the copy deletes the submodule's store with it.
+ */
+async function keepModuleCommits(dir: string, { from, to, attempt }: { from: string; to: string; attempt: string }): Promise<{ modules?: string } | { error: string }> {
+  const moved = await movedModules(dir, from, to, '');
+  if ('error' in moved) return moved;
   if (moved.length === 0) return {};
   const common = await git(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   if (common.code !== 0) return { error: common.stderr.trim() || 'the git directory could not be found' };
   const modules = `refs/teamai/kept-modules/${attempt}/`;
-  for (const [relative, commit] of moved) {
-    const pushed = await git(path.join(dir, relative), ['push', '-q', common.stdout.trim(), `${commit}:${modules}${relative}`]);
-    if (pushed.code !== 0) return { error: pushed.stderr.trim() || `the commit in ${relative} could not be kept` };
+  for (const module of moved) {
+    // One ref per path, so vendor and vendor/inner do not clash. Not the user's push policy: this copy stays local.
+    const ref = `${modules}${module.path.replaceAll('/', '%2F')}`;
+    const pushed = await git(module.dir, ['push', '-q', '--no-recurse-submodules', common.stdout.trim(), `${module.commit}:${ref}`]);
+    if (pushed.code !== 0) return { error: pushed.stderr.trim() || `the commit in ${module.path} could not be kept` };
   }
   return { modules };
 }
@@ -726,7 +748,12 @@ export async function putBackCopy({ dir, branch, commit, found, changed, attempt
   // A superproject reset leaves initialized submodules where the step moved them. It must not recurse into a submodule an
   // earlier step left dirty.
   const noRecurse = ['-c', 'submodule.recurse=false'];
-  for (const args of [[...noRecurse, 'checkout', '-q', '-f', branch], [...noRecurse, 'reset', '-q', '--hard', commit], ['clean', '-q', '-fd'], ['submodule', '--quiet', 'update', '--checkout', '--recursive']]) {
+  const gitlinks = await treeGitlinks(dir, commit);
+  if ('error' in gitlinks) return unrestored(gitlinks.error, kept);
+  // Only the submodules the step changed: an update of any other would undo what an earlier step left there.
+  const touched = changed.map((relative) => relative.replace(/\/$/, '')).filter((relative) => gitlinks.has(relative));
+  const update = touched.length > 0 ? [['submodule', '--quiet', 'update', '--checkout', '--recursive', '--', ...touched]] : [];
+  for (const args of [[...noRecurse, 'checkout', '-q', '-f', branch], [...noRecurse, 'reset', '-q', '--hard', commit], ['clean', '-q', '-fd'], ...update]) {
     const restored = await git(dir, args);
     if (restored.code !== 0) return unrestored(restored.stderr.trim() || `git ${args.join(' ')} failed`, kept);
   }
