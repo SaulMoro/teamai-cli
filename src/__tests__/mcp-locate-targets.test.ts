@@ -241,7 +241,7 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
     await fse.ensureDir(agentDir);
     vi.stubEnv('PI_CODING_AGENT_DIR', agentDir);
     expect(await mcpTransportNotes(context(team(), userConfig('pi')))).toContain(
-      `pi takes MCP servers from ${path.join(agentDir, 'mcp.json')}, but teamai still writes hooks and model settings under ${path.join(home, '.pi', 'agent')}.`,
+      `pi takes MCP servers from ${path.join(agentDir, 'mcp.json')}, but teamai still writes some of its other files under ${path.join(home, '.pi', 'agent')}.`,
     );
     const project = path.join(root, 'project');
     await fse.ensureDir(path.join(project, '.pi'));

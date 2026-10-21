@@ -3872,11 +3872,6 @@ function updateManifestRecord(manifest: ManagedMcpManifest, key: string, record:
   manifest[key] = records;
 }
 
-/**
- * The file a pull writes `tool`'s MCP servers to in `localConfig`'s scope, and
- * for a tool that reads only the first of its files that exists (#993) the
- * one its mapping names. Null when the tool takes none there.
- */
 async function mcpPlaceOf(
   teamConfig: TeamaiConfig, localConfig: LocalConfig, tool: string,
 ): Promise<(McpTarget & { key: McpKey }) | null> {
@@ -3994,7 +3989,6 @@ async function installMcpServer(
     && await mcpRelocated(await localAgentTeamConfig(config.endpoint, scope, workspacePath, `install ${slug}`), places.config, tool);
   const active = places && (relocated ? places.local : places.tree);
   const other = places && (relocated ? places.tree : places.local);
-  // A tool that reads only the first of its MCP files that exists (#993) gets them there, as a pull writes them.
   const mappedFile = active?.projectKey === undefined ? place.mappedFile : undefined;
   const targetFile = active?.file ?? place.file;
   const target = describeMcpLocation({ file: targetFile, projectKey: active?.projectKey });

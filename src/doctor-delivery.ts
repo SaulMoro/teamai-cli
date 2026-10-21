@@ -1209,11 +1209,10 @@ export async function mcpTransportNotes(ctx: DoctorContext): Promise<string[]> {
     if (where.channel !== 'files' || own === null) continue;
     if (install.scope === 'user' && isToolId(tool) && settingsAtDefault(tool)
       && !await samePlace(toolHome(tool, host), defaultToolHome(tool, host))) {
-      notes.push(`${tool} takes MCP servers from ${own.path}, but teamai still writes hooks and model settings under ${defaultToolHome(tool, host)}.`);
+      notes.push(`${tool} takes MCP servers from ${own.path}, but teamai still writes some of its other files under ${defaultToolHome(tool, host)}.`);
     }
     for (const unread of unreadWrites(where, host)) {
       if (unread.reason === 'cwd-only') notes.push(`${tool} reads project MCP servers only from a session started in ${unread.readFrom}.`);
-      else if (unread.reason === 'outside-workspace') notes.push(`${tool} reads MCP servers in ${unread.write} only from sessions under ${unread.readFrom}.`);
     }
     if (tool === 'zcode' && install.scope === 'user') {
       const fallback = where.retired.find(({ was }) => was === 'default')?.place;

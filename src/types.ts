@@ -589,9 +589,8 @@ export const DEFAULT_TOOL_PATHS = {
   // from AGENTS.md/CLAUDE.md walking up the workspace tree. Hooks are
   // TypeScript extensions rather than a settings hook list, so the adapter
   // keeps one user extension and forwards the active cwd to hook-dispatch.
-  // Profile overrides (PI_CODING_AGENT_DIR / PI_CONFIG_DIR) that relocate
-  // the agent dir are not supported for hooks or MCP, same as the OMP adapter;
-  // model profiles do read PI_CODING_AGENT_DIR. Pi reads no rules
+  // MCP and model profiles follow PI_CODING_AGENT_DIR; hooks stay at the
+  // default agent dir until their callers move to locate. Pi reads no rules
   // directory: its user team rules are a block in ~/.pi/agent/AGENTS.md, and
   // in a project teamai's extension adds them to the system prompt (#946).
   pi: {

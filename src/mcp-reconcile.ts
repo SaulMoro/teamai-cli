@@ -329,10 +329,8 @@ export interface McpTarget {
   key?: McpKey;
 }
 
-/** The keys from a JSON file's top to its server map. */
 export type McpKey = EntryPlace['key'];
 
-/** Where `target`'s servers sit in its file. */
 export function mcpKeyOf(target: Pick<McpTarget, 'format' | 'key'>): McpKey {
   return target.key ?? (target.format === 'codex' ? ['mcp_servers'] : [MCP_SERVER_KEY[target.format]]);
 }
@@ -422,7 +420,6 @@ function unmovedHost(host: Host): Host {
   return { ...host, env: {}, toolHomes: { kind: 'missing' } };
 }
 
-/** `place` as the target of `tool`'s servers in `format`. */
 function mcpTargetAt(tool: string, format: McpFormat, place: EntryPlace, projectScope: boolean): McpTarget {
   const ownKey = format !== 'codex' && isDeepStrictEqual(place.key, [MCP_SERVER_KEY[format]]);
   return {
@@ -1458,7 +1455,6 @@ async function splitByFile(
   return { owned, elsewhere, left };
 }
 
-/** The retired file of `target` holding `record`'s server as teamai wrote it. */
 async function retiredFileHolding(target: McpTarget, record: ManagedMcpRecord): Promise<string | undefined> {
   for (const { file, key } of target.retired ?? []) {
     const entry = (await installedMcpEntries({ ...target, file, key }))?.get(record.name);
@@ -1467,7 +1463,6 @@ async function retiredFileHolding(target: McpTarget, record: ManagedMcpRecord): 
   return undefined;
 }
 
-/** `load`, run once, on the first call. */
 function once<T>(load: () => Promise<T>): () => Promise<T> {
   let value: Promise<T> | undefined;
   return () => value ??= load();
