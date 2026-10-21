@@ -76,7 +76,7 @@ export function worktreePath(main: string, branch: string): string {
 }
 
 /** A path git keeps for this checkout. A linked worktree's `.git` is a file, so the path is not `<checkout>/.git`. */
-async function gitPath(cwd: string, name: string): Promise<string | undefined> {
+export async function gitPath(cwd: string, name: string): Promise<string | undefined> {
   const result = await git(cwd, ['rev-parse', '--git-path', name]);
   const printed = result.code === 0 ? result.stdout.trim() : '';
   return printed === '' ? undefined : path.resolve(cwd, printed);

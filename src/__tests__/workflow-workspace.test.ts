@@ -2504,6 +2504,49 @@ steps:
     expect(test).not.toMatchObject({ failure: { message: expect.stringContaining('was put back') } });
   });
 
+  it('refuses a later writer in a copy a reader left off its branch, and runs it on the branch once the copy is back and the step is retried', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A copy that could not be put back blocks the next writer until a person puts it back.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('impl.txt','yes')"
+        - id: test
+          needs: [implement]
+          command: node -e "const cp=require('child_process'); const b=cp.execFileSync('git',['symbolic-ref','--short','HEAD']).toString().trim(); cp.execFileSync('git',['checkout','-q','--detach']); cp.execFileSync('git',['branch','-qD',b])"
+        - id: polish
+          needs: [implement]
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('polish.txt','yes')"
+`);
+    const branch = branchName(runId, 'change', 1);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({
+      status: 'failed', failure: { code: 'workspace_base', message: expect.stringContaining(`teamai workflow retry ${runId} change.polish`) },
+    });
+    const copy = worktreePath(workspace, branch);
+    expect(fs.existsSync(path.join(copy, 'polish.txt'))).toBe(false);
+    git(['checkout', '-q', '-b', branch], copy);
+    expect(await retryStep(config, runId, 'change.polish')).toMatchObject({ data: { retried: { pass: 2 } } });
+
+    const done = await runLocalDriver(config, runId, workspace);
+
+    expect(done, JSON.stringify(done)).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    const again = await readRun(config, runId);
+    if (typeof again !== 'object') throw new Error('run missing');
+    expect(again.steps.find((step) => step.id === 'change.polish')).toMatchObject({ status: 'succeeded', changes: { branch } });
+    expect(git(['show', `${branch}:polish.txt`], workspace)).toBe('yes');
+  });
+
   it('puts a submodule a reader changed back at the commit the copy records, so a later step does not commit it', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build

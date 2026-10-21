@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createInterface } from 'node:readline/promises';
+import { z } from 'zod';
 import {
   agentFileExtensionForTool,
   reverseFromClaude,
@@ -42,7 +43,7 @@ import type { DriverIdentity, StepHitl, WorkflowEnvelope, WorkflowFailure } from
 import { isWorkflowError } from './types.js';
 import type { WorkspaceContract } from './workspace.js';
 import {
-  applyBaseConfig, commitWork, ensureWorktree, git, headCommit, hooksPath, mergeBranch, pushIfOrigin, recordConfigOverlay, removeWorktree, reopenConfigConflicts, restoreUneditedConfig, worktreePath,
+  applyBaseConfig, commitWork, ensureWorktree, git, gitPath, headCommit, hooksPath, mergeBranch, pushIfOrigin, recordConfigOverlay, removeWorktree, reopenConfigConflicts, restoreUneditedConfig, worktreePath,
 } from './worktree.js';
 
 /** Local lease identity, stable across restarts in the same workspace. */
@@ -366,7 +367,7 @@ function placeOf(lease: Lease, active: string): string {
   return lease.cwd ?? (lease.workspace ? worktreePath(active, lease.workspace.branch) : active);
 }
 
-async function stageLease(active: string, lease: Lease): Promise<WorkflowFailure | undefined> {
+async function stageLease(lease: Lease, { active, runId }: { active: string; runId: string }): Promise<WorkflowFailure | undefined> {
   if (lease.unreadableWorkspace) {
     return { code: 'workspace_base', message: `Step "${lease.step}" was leased a workspace this teamai cannot read. Update teamai.` };
   }
@@ -374,6 +375,14 @@ async function stageLease(active: string, lease: Lease): Promise<WorkflowFailure
     lease.cwd = active;
     lease.before = await snapshotWorktree(active);
     return undefined;
+  }
+  const blocked = await unrestoredCopy(worktreePath(active, lease.workspace.branch));
+  if (blocked?.state === 'unreadable') {
+    return { code: 'workspace_base', message: `Workspace ${blocked.dir} has a marker teamai cannot read: ${blocked.marker}. Put ${blocked.dir} back on ${lease.workspace.branch} with nothing changed, delete ${blocked.marker}, then retry this step with teamai workflow retry ${runId} ${lease.step}.` };
+  }
+  if (blocked) {
+    const { branch, commit, step } = blocked.marker;
+    return { code: 'workspace_base', message: `Step "${step}" could not put workspace ${blocked.dir} back, and it is still not back: ${blocked.left}. Put ${blocked.dir} back on ${branch} at ${commit} with nothing changed, then retry this step with teamai workflow retry ${runId} ${lease.step}.` };
   }
   const opened = await ensureWorktree(active, lease.workspace.branch, lease.workspace.start.commit);
   if ('error' in opened) return { code: 'workspace_base', message: opened.error };
@@ -522,6 +531,49 @@ async function restoreLeaseOverlay(lease: Lease): Promise<void> {
   lease.overlay = undefined;
 }
 
+const UnrestoredMarker = z.object({ branch: z.string(), commit: z.string(), step: z.string(), reason: z.string() });
+type UnrestoredMarker = z.infer<typeof UnrestoredMarker>;
+
+/** In the worktree's own git dir, so the marker never shows in its status. */
+const UNRESTORED_MARKER = 'teamai-unrestored';
+
+/** Why `dir` is not on `branch` at `commit` with nothing changed, submodules included. Undefined when it is. */
+async function copyLeftOver(dir: string, branch: string, commit: string): Promise<string | undefined> {
+  const head = (await git(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
+  if (head !== `refs/heads/${branch}`) return head ? `HEAD is on ${head}` : 'HEAD is detached';
+  const at = (await git(dir, ['rev-parse', 'HEAD'])).stdout.trim();
+  if (at !== commit) return `HEAD is at ${at}`;
+  const status = await git(dir, ['status', '--porcelain', '--ignore-submodules=none']);
+  if (status.code !== 0) return status.stderr.trim() || 'git status failed';
+  const lines = status.stdout.split('\n').filter((line) => line.trim() !== '');
+  if (lines.length === 0) return undefined;
+  return `it has changes: ${lines.slice(0, 5).map((line) => line.trim()).join(', ')}${lines.length > 5 ? `, and ${lines.length - 5} more` : ''}`;
+}
+
+/**
+ * A copy a reader could not put back, while it is still not back. Once it is, the marker is removed, so the person who
+ * put it back only retries the step.
+ */
+async function unrestoredCopy(dir: string): Promise<
+  { state: 'unrestored'; dir: string; marker: UnrestoredMarker; left: string } | { state: 'unreadable'; dir: string; marker: string } | undefined
+> {
+  const file = await gitPath(dir, UNRESTORED_MARKER);
+  const text = file ? await readFileSafe(file) : null;
+  if (!file || text === null) return undefined;
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return { state: 'unreadable', dir, marker: file };
+  }
+  const parsed = UnrestoredMarker.safeParse(raw);
+  if (!parsed.success) return { state: 'unreadable', dir, marker: file };
+  const left = await copyLeftOver(dir, parsed.data.branch, parsed.data.commit);
+  if (left) return { state: 'unrestored', dir, marker: parsed.data, left };
+  await fs.rm(file, { force: true });
+  return undefined;
+}
+
 /** How a reader left its copy. `kept` is the ref holding what the step changed; an unrestored copy lacks it when keeping failed. */
 type ReadCopy = { read: StepRead } & (
   | { state: 'untouched' }
@@ -544,19 +596,26 @@ async function leaveReadCopy(lease: Lease): Promise<ReadCopy | undefined> {
   await restoreLeaseOverlay(lease);
   const read = { branch: workspace.branch, base: workspace.base.commit, commit: before.head };
   if (changed.length === 0) return { read, state: 'untouched' };
+  // Later steps in this copy are refused until it is put back, so nothing commits what was left here.
+  const unrestored = async (reason: string, kept?: string): Promise<ReadCopy> => {
+    const marker = await gitPath(cwd, UNRESTORED_MARKER);
+    const record: UnrestoredMarker = { branch: read.branch, commit: read.commit, step: lease.step, reason };
+    if (marker) await writeJsonAtomic(marker, record);
+    return { read, state: 'unrestored', changed, reason, dir: cwd, ...(kept ? { kept } : {}) };
+  };
   // Not `git stash push`: the stash list is shared by every worktree of the checkout.
   const kept = `refs/teamai/kept/${lease.attempt}`;
   const added = await git(cwd, ['add', '-A']);
   const stashed = added.code === 0 ? await git(cwd, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'stash', 'create']) : added;
   const recorded = stashed.code === 0 ? await git(cwd, ['update-ref', kept, stashed.stdout.trim() || 'HEAD']) : stashed;
   // Without the ref, a reset would lose the changes.
-  if (recorded.code !== 0) return { read, state: 'unrestored', changed, reason: recorded.stderr.trim() || 'its changes could not be kept', dir: cwd };
+  if (recorded.code !== 0) return unrestored(recorded.stderr.trim() || 'its changes could not be kept');
   // Back on the copy's branch first: a reset on a branch the step switched to would leave the copy elsewhere.
   // A superproject reset leaves initialized submodules where the step moved them.
   const submodules = [['submodule', '--quiet', 'update', '--recursive', '--force'], ['submodule', '--quiet', 'foreach', '--recursive', 'git clean -q -fd']];
   for (const args of [['checkout', '-q', '-f', workspace.branch], ['reset', '-q', '--hard', before.head], ['clean', '-q', '-fd'], ...submodules]) {
     const restored = await git(cwd, args);
-    if (restored.code !== 0) return { read, state: 'unrestored', changed, kept, reason: restored.stderr.trim() || `git ${args.join(' ')} failed`, dir: cwd };
+    if (restored.code !== 0) return unrestored(restored.stderr.trim() || `git ${args.join(' ')} failed`, kept);
   }
   return { read, state: 'restored', changed, kept };
 }
@@ -571,8 +630,8 @@ function readCopyFailure(left: Exclude<ReadCopy, { state: 'untouched' }>, change
       return {
         code: 'workspace_base',
         message: left.kept
-          ? `${changed} Workspace ${branch} could NOT be put back at ${commit}: ${left.reason}. Its changes are kept on ${left.kept}. Put ${left.dir} back on ${branch} at ${commit} before a later step runs there.`
-          : `${changed} Workspace ${branch} could NOT be put back at ${commit}: ${left.reason}. Its changes were NOT saved and are still in ${left.dir}. Copy them out before you put ${left.dir} back on ${branch} at ${commit}, and before a later step runs there.`,
+          ? `${changed} Workspace ${branch} could NOT be put back at ${commit}: ${left.reason}. Its changes are kept on ${left.kept}. Later steps there fail until ${left.dir} is back on ${branch} at ${commit} with nothing changed.`
+          : `${changed} Workspace ${branch} could NOT be put back at ${commit}: ${left.reason}. Its changes were NOT saved and are still in ${left.dir}. Copy them out before you put ${left.dir} back on ${branch} at ${commit} with nothing changed. Later steps there fail until it is.`,
       };
     default: {
       const unhandled: never = left;
@@ -884,7 +943,7 @@ async function driveRun(config: LocalConfig, runId: string, cwd: string, options
           continue;
         }
         held.splice(index, 1);
-        const failure = await stageLease(cwd, lease);
+        const failure = await stageLease(lease, { active: cwd, runId });
         if (failure) {
           const failed = await failStaged(lease, failure);
           if (failed) return failed;
@@ -905,7 +964,7 @@ async function driveRun(config: LocalConfig, runId: string, cwd: string, options
             if (failed) return failed;
             continue;
           }
-          const failure = await stageLease(cwd, lease);
+          const failure = await stageLease(lease, { active: cwd, runId });
           if (failure) {
             const failed = await failStaged(lease, failure);
             if (failed) return failed;
