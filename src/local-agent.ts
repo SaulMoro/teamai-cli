@@ -57,6 +57,8 @@ import {
   describeMcpLocation,
   loadMcpManifest,
   mcpKeyOf,
+  recordedMcpTarget,
+  logLeftMcpFiles,
   mcpManifestKey,
   mcpRelocated,
   projectMcpLocations,
@@ -3877,11 +3879,10 @@ function updateManifestRecord(manifest: ManagedMcpManifest, key: string, record:
  */
 async function mcpPlaceOf(
   teamConfig: TeamaiConfig, localConfig: LocalConfig, tool: string,
-): Promise<{ file: string; key: McpKey; mappedFile?: string } | null> {
-  const where = await locate(tool, 'mcp', installOf(teamConfig, localConfig));
-  if (where.channel !== 'files' || where.own === null || where.writtenBy !== null) return null;
-  const { path: file, key, projectKey } = where.own;
-  return { file, key, ...(where.lookup && projectKey === undefined ? { mappedFile: where.lookup.mapped } : {}) };
+): Promise<(McpTarget & { key: McpKey }) | null> {
+  const target = (await resolveMcpTargets(teamConfig, localConfig, { includeUndetected: true }))
+    .find((target) => target.tool === tool && !target.builtinFallback);
+  return target === undefined ? null : { ...target, key: mcpKeyOf(target) };
 }
 
 /**
@@ -3997,7 +3998,7 @@ async function installMcpServer(
   const mappedFile = active?.projectKey === undefined ? place.mappedFile : undefined;
   const targetFile = active?.file ?? place.file;
   const target = describeMcpLocation({ file: targetFile, projectKey: active?.projectKey });
-  const fileOf = (record: ManagedMcpRecord): string => recordedFileOf({ file: targetFile, mappedFile }, record);
+  const fileOf = (record: ManagedMcpRecord): string => recordedFileOf({ ...place, file: targetFile, mappedFile }, record);
 
   const { resolveDataHomeForScope } = await import('./config.js');
   const dataHome = await resolveDataHomeForScope(projectScope ? 'project' : 'user', projectScope ? workspacePath : undefined);
@@ -4006,7 +4007,8 @@ async function installMcpServer(
   // Only records of this file: a server an earlier install left in a file CodeBuddy no longer reads moves below.
   // By real path, as reconciliation compares them: a lookup file linked to another is that file.
   const records = manifest[manifestKey] ?? [];
-  const inTarget = await Promise.all(records.map((r: ManagedMcpRecord) => sameMcpFile(fileOf(r), targetFile)));
+  const recordedTargets = new Map(await Promise.all(records.map(async (record) => [record, await recordedMcpTarget(place, record)] as const)));
+  const inTarget = await Promise.all(records.map((r: ManagedMcpRecord) => sameMcpFile(recordedTargets.get(r)?.file ?? fileOf(r), targetFile)));
   const owned = records.filter((_, i) => inTarget[i]);
   const ownedNames = new Set(owned.map((r: ManagedMcpRecord) => r.name));
   const otherKey = other ? mcpManifestKey(other) : undefined;
@@ -4086,7 +4088,10 @@ async function installMcpServer(
     if (movedFrom && places && other) {
       await leaveOtherMcpLocation(config, places, other, serverKey, [movedFrom], target, manifest);
     } else if (movedFrom) {
-      await removeMovedMcpEntry({ file: fileOf(movedFrom) }, serverKey, slug, target, movedFrom.hash);
+      const from = recordedTargets.get(movedFrom) ?? await recordedMcpTarget(place, movedFrom);
+      const relocations = [place.mappedFile, place.alternateFile, ...place.lookupFiles ?? [], ...(place.retired ?? []).map(({ file }) => file)];
+      if (relocations.includes(from.file)) await removeMovedMcpEntry(from, mcpKeyOf(from), slug, target, movedFrom.hash);
+      else logLeftMcpFiles(localConfig, { ...place, file: targetFile }, [{ ...movedFrom, file: from.file }]);
     }
   }
   if (projectScope && workspacePath) {
@@ -4197,7 +4202,8 @@ async function uninstallMcpServer(
     if (!owned.some((r: ManagedMcpRecord) => r.name === slug)) continue;
     // A lookup tool's servers are where the install recorded them (#993); an older one recorded no file.
     const record = owned.find((r) => r.name === slug);
-    const targetFile = file ?? (record ? recordedFileOf({ file: place.file, mappedFile: place.mappedFile }, record) : place.file);
+    const recorded = record ? await recordedMcpTarget(place, record) : place;
+    const targetFile = file ?? recorded.file;
     const where = describeMcpLocation({ file: targetFile, projectKey });
 
     let restoreConfig: (() => Promise<void>) | undefined;
@@ -4209,7 +4215,7 @@ async function uninstallMcpServer(
         restoreConfig = () => writeCodexAtomic(targetFile, source);
       }
     } else {
-      const serverKey = place.key;
+      const serverKey = mcpKeyOf(recorded);
       const allowBare = format === 'copilot' && projectScope;
       const doc = await readJsonDoc(targetFile, serverKey, allowBare, projectKey);
       if (!doc) throw new Error(`uninstall_mcp: cannot parse ${targetFile}. Ownership was kept; repair the config and uninstall the server again.`);

@@ -487,6 +487,12 @@ export function recordedFileOf(target: Pick<McpTarget, 'file' | 'mappedFile' | '
   return record.file ?? target.mappedFile ?? target.unmovedFile ?? target.file;
 }
 
+/** The recorded file and server key, including the key a retired config used. */
+export async function recordedMcpTarget(target: McpTarget, record: ManagedMcpRecord): Promise<McpTarget> {
+  const file = record.file ?? await retiredFileHolding(target, record) ?? recordedFileOf(target, record);
+  return { ...target, file, key: target.retired?.find((place) => place.file === file)?.key ?? target.key };
+}
+
 /**
  * Whether two paths name one file: a lookup path may be a symlink to another
  * (`~/.codebuddy/.mcp.json` -> `mcp.json`), and is then not another file (#993).
@@ -2852,7 +2858,7 @@ async function removeFromOtherFiles(
  * Name, once, the servers `left` records in a file `target`'s tool no longer
  * takes them from (#1221): their record goes, so the next pull does not.
  */
-function logLeftMcpFiles(localConfig: LocalConfig, target: McpTarget, left: readonly ManagedMcpRecord[]): void {
+export function logLeftMcpFiles(localConfig: LocalConfig, target: McpTarget, left: readonly ManagedMcpRecord[]): void {
   const byFile = new Map<string, string[]>();
   for (const record of left) {
     const file = recordedFileOf(target, record);

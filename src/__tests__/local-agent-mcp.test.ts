@@ -674,6 +674,35 @@ describe('local-agent: MCP install/uninstall commands', () => {
     expect(await fse.pathExists(path.join(tmpDir, '.config', 'opencode', 'opencode.json'))).toBe(false);
   });
 
+  it('keeps the old OpenCode home copy after a session home move', async () => {
+    const command = { scope: 'user', slug: 'clawpro', version: '1', mcp_config: { transport: 'http', url: 'https://clawpro.example.com/mcp' } };
+    expect((await runResponse({ cmds: [{ id: 9301, type: 'install_mcp', ...command }] }, 'opencode'))[0].status).toBe('success');
+    const old = path.join(tmpDir, '.config', 'opencode', 'opencode.json');
+    const before = await fse.readJson(old);
+    const moved = path.join(tmpDir, 'xdg');
+    await fse.ensureDir(path.join(moved, 'opencode'));
+    vi.stubEnv('XDG_CONFIG_HOME', moved);
+
+    expect((await runResponse({ cmds: [{ id: 9302, type: 'install_mcp', ...command }] }, 'opencode'))[0].status).toBe('success');
+
+    expect(await fse.readJson(old)).toEqual(before);
+    expect(await fse.readJson(path.join(moved, 'opencode', 'opencode.json'))).toEqual(before);
+  });
+
+  it('moves a legacy ZCode entry from the shared map into its native nested map', async () => {
+    const { entryHash } = await import('../resources/mcp-format.js');
+    const entry = { type: 'http', url: 'https://clawpro.example.com/mcp' };
+    const old = path.join(tmpDir, '.agents', 'mcp.json');
+    await fse.outputJson(old, { mcpServers: { clawpro: entry, mine: { command: 'mine' } } });
+    await fse.outputJson(path.join(tmpDir, '.teamai', 'managed-mcp.json'), { zcode: [{ name: 'clawpro', hash: entryHash(entry) }] });
+
+    const acks = await runResponse({ cmds: [{ id: 9303, type: 'install_mcp', scope: 'user', slug: 'clawpro', version: '1', mcp_config: { transport: 'http', url: entry.url } }] }, 'zcode');
+
+    expect(acks[0].status).toBe('success');
+    expect((await fse.readJson(path.join(tmpDir, '.zcode', 'cli', 'config.json'))).mcp.servers).toEqual({ clawpro: entry });
+    expect(await fse.readJson(old)).toEqual({ mcpServers: { mine: { command: 'mine' } } });
+  });
+
   // A member who relocated Claude Code's root records it in the local config;
   // the user-scope MCP file then lives inside that root (~/.claude-work/
   // .claude.json), where a `teamai pull` would also write it.
