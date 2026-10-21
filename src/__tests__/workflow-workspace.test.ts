@@ -2375,6 +2375,7 @@ steps:
     ['writes a file and exits 1', `require('fs').writeFileSync('junk.txt','x'); process.exit(1)`, undefined],
     ['commits a file', `const cp=require('child_process'); require('fs').writeFileSync('junk.txt','x'); cp.execFileSync('git',['add','junk.txt']); cp.execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.com','commit','-qm','junk'])`, { code: 'read_only_dirty', message: expect.stringContaining('HEAD') }],
     ['commits on a branch it switched to', `const cp=require('child_process'); cp.execFileSync('git',['checkout','-qb','side']); require('fs').writeFileSync('junk.txt','x'); cp.execFileSync('git',['add','junk.txt']); cp.execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.com','commit','-qm','junk'])`, { code: 'read_only_dirty', message: expect.stringContaining('HEAD') }],
+    ['detaches HEAD', `require('child_process').execFileSync('git',['checkout','-q','--detach','HEAD'])`, { code: 'read_only_dirty', message: expect.stringContaining('HEAD') }],
   ])('puts the copy back at the commit a reader read when it %s, so a later step does not commit it', async (_case, script, failure) => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build
@@ -2409,6 +2410,99 @@ steps:
     expect(test && 'read' in test ? test.read?.commit : undefined).toBe(polish && 'changes' in polish ? polish.changes?.from : 'none');
     expect(git(['show', `${branch}:polish.txt`], workspace)).toBe('yes');
     expect(() => git(['show', `${branch}:junk.txt`], workspace)).toThrow();
+  });
+
+  it('keeps what a reader changed on a ref named in its failure before putting the copy back', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A reader's edits are recoverable after the copy is put back.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('impl.txt','yes')"
+        - id: test
+          needs: [implement]
+          command: node -e "require('fs').writeFileSync('junk.txt','reader')"
+`);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    const test = typeof run === 'object' ? run.steps.find((step) => step.id === 'change.test') : undefined;
+    const kept = `refs/teamai/kept/${test && 'attempt' in test ? test.attempt : 'none'}`;
+    expect(test).toMatchObject({ status: 'failed', failure: { code: 'read_only_dirty', message: expect.stringContaining(kept) } });
+    expect(git(['show', `${kept}:junk.txt`], workspace)).toBe('reader');
+    expect(() => git(['show', `${branchName(runId, 'change', 1)}:junk.txt`], workspace)).toThrow();
+  });
+
+  it('fails a reader with workspace_base, and does not say the copy was put back, when git cannot put it back', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A reader that deletes its copy's branch leaves a copy that cannot be put back.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('impl.txt','yes')"
+        - id: test
+          needs: [implement]
+          command: node -e "const cp=require('child_process'); const b=cp.execFileSync('git',['symbolic-ref','--short','HEAD']).toString().trim(); cp.execFileSync('git',['checkout','-q','--detach']); cp.execFileSync('git',['branch','-qD',b])"
+`);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    const test = typeof run === 'object' ? run.steps.find((step) => step.id === 'change.test') : undefined;
+    expect(test).toMatchObject({ status: 'failed', failure: { code: 'workspace_base', message: expect.stringContaining('could NOT be put back') } });
+    expect(test).not.toMatchObject({ failure: { message: expect.stringContaining('was put back') } });
+  });
+
+  it('puts a submodule a reader changed back at the commit the copy records, so a later step does not commit it', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A reader's commit and untracked file inside a submodule do not reach the branch.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('child_process').execFileSync('git',['-c','protocol.file.allow=always','submodule','update','-q','--init']); require('fs').writeFileSync('impl.txt','yes')"
+        - id: test
+          needs: [implement]
+          command: node -e "const cp=require('child_process'),fs=require('fs'); fs.writeFileSync('vendor/inside.txt','reader'); cp.execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.com','commit','-qam','reader'],{cwd:'vendor'}); fs.writeFileSync('vendor/untracked.txt','x')"
+        - id: polish
+          needs: [implement]
+          workspace: continue
+          command: node -e "const fs=require('fs'); if (fs.readFileSync('vendor/inside.txt','utf8')!=='one\\\\n' || fs.existsSync('vendor/untracked.txt')) process.exit(2); fs.writeFileSync('polish.txt','yes')"
+`);
+    const source = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-sub-'));
+    dirs.push(source);
+    execFileSync('git', ['init', '-q'], { cwd: source });
+    fs.writeFileSync(path.join(source, 'inside.txt'), 'one\n');
+    execFileSync('git', ['add', 'inside.txt'], { cwd: source });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'one'], { cwd: source });
+    execFileSync('git', ['-c', 'protocol.file.allow=always', 'submodule', 'add', '-q', source, 'vendor'], { cwd: workspace });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'vendor'], { cwd: workspace });
+    const recorded = git(['rev-parse', 'HEAD:vendor'], workspace).trim();
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    expect(run.steps.find((step) => step.id === 'change.test')).toMatchObject({ status: 'failed', failure: { code: 'read_only_dirty', message: expect.stringContaining('vendor') } });
+    expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({ status: 'succeeded' });
+    const branch = branchName(runId, 'change', 1);
+    expect(git(['show', `${branch}:polish.txt`], workspace)).toBe('yes');
+    expect(git(['rev-parse', `${branch}:vendor`], workspace).trim()).toBe(recorded);
   });
 
   it('runs a reader in a copy on the base tool settings, so a hook an earlier step committed there is absent', async () => {
