@@ -24,7 +24,8 @@ import {
 } from './utils/shell-profile.js';
 import { getUserHome } from './utils/home.js';
 import { loadStateForScope } from './config.js';
-import { installOf, locate, unreadWrites, writable, writesOf, type Location } from './locate.js';
+import { installOf, locate, unreadWrites, writable, writesOf, type Location, type ReadGate } from './locate.js';
+import { codexProjectTrust, codexTrustFix } from './codex-project-trust.js';
 import { amongSkillDirs, sameSkillDir, sameSkillDirs } from './resources/skill-dirs.js';
 import { defaultToolHome, realHost, toolHome } from './tool-home.js';
 import { isToolId, movesPartly } from './tools.js';
@@ -1375,56 +1376,6 @@ export async function buildLocalAgentMcpLocationChecks(ctx: DoctorContext): Prom
   return checks;
 }
 
-/** Codex's verdict on a project, from the `projects` table of its user config. */
-type CodexProjectTrust =
-  | { kind: 'trusted' }
-  | { kind: 'untrusted'; decidedBy?: { dir: string; level: string } }
-  | { kind: 'unreadable'; reason: string };
-
-/**
- * Codex takes the first `projects."<dir>"` entry holding a `trust_level` for
- * the checkout, then for the main checkout of its repository, each keyed by
- * real path; an entry without one decides nothing. `dirs` lists them in that
- * order.
- */
-async function codexProjectTrust(configFile: string, dirs: string[]): Promise<CodexProjectTrust> {
-  if (!await pathExists(configFile)) return { kind: 'untrusted' };
-  const raw = await readFileSafe(configFile);
-  if (raw === null) return { kind: 'unreadable', reason: 'could not be read' };
-  let projects: unknown;
-  try {
-    const { parse } = await import('smol-toml');
-    projects = parse(raw).projects;
-  } catch (error) {
-    return { kind: 'unreadable', reason: `could not be parsed (${error instanceof Error ? error.message.split('\n')[0] : String(error)})` };
-  }
-  if (typeof projects !== 'object' || projects === null) return { kind: 'untrusted' };
-  for (const dir of dirs) {
-    const level = ((projects as Record<string, { trust_level?: unknown } | undefined>)[dir])?.trust_level;
-    if (typeof level !== 'string') continue;
-    return level === 'trusted' ? { kind: 'trusted' } : { kind: 'untrusted', decidedBy: { dir, level } };
-  }
-  return { kind: 'untrusted' };
-}
-
-/** The manual fix for a project Codex does not trust; `cause` opens the sentence. */
-function codexTrustFix(trust: Exclude<CodexProjectTrust, { kind: 'trusted' }>, cause: string, configFile: string, main: string): string {
-  const table = (dir: string): string => `[projects.${JSON.stringify(dir)}]`;
-  switch (trust.kind) {
-    case 'unreadable':
-      return `${cause}, and ${configFile} ${trust.reason}, so whether Codex trusts this checkout is unknown. `
-        + `Fix ${configFile}, then run \`teamai doctor\` again.`;
-    case 'untrusted':
-      if (trust.decidedBy) {
-        return `${cause}, and ${configFile} sets trust_level = ${JSON.stringify(trust.decidedBy.level)} in `
-          + `${table(trust.decidedBy.dir)}, the entry Codex reads for this checkout. Set it to "trusted".`;
-      }
-      return `${cause}, and ${configFile} does not trust ${main}. Open Codex in ${main} and trust the project `
-        + `when it asks, or add a ${table(main)} table holding trust_level = "trusted" to ${configFile}. `
-        + 'Trusting the main checkout covers every worktree of it.';
-  }
-}
-
 /**
  * Codex loads a project's `.codex/config.toml` only in a trusted project, and
  * skips an untrusted one silently (#954), so team servers a pull or
@@ -1451,14 +1402,12 @@ export async function buildCodexProjectTrustCheck(ctx: DoctorContext): Promise<C
     .filter((name) => installed?.has(name));
   if (names.length === 0) return [];
 
-  const { resolveAnchors } = await import('./utils/git.js');
-  const { realFilePath } = await import('./git-exclude.js');
-  const root = await realFilePath(projectRoot);
-  const anchors = await resolveAnchors(projectRoot);
-  const main = anchors?.mainCheckout ?? root;
-  const dirs = [...new Set([root, anchors?.workspaceRoot ?? root, main])];
-  const configFile = path.join(resolveToolRootDir(CODEX_TOOL_ID, DEFAULT_CODEX_ROOT, localConfig.toolRoots), 'config.toml');
-  const trust = await codexProjectTrust(configFile, dirs);
+  const gate: ReadGate = {
+    kind: 'codex-project-trust',
+    config: path.join(resolveToolRootDir(CODEX_TOOL_ID, DEFAULT_CODEX_ROOT, localConfig.toolRoots), 'config.toml'),
+    checkout: projectRoot,
+  };
+  const trust = await codexProjectTrust(gate);
   const cause = `${target.file} holds team MCP servers (${nameList(names)}), but Codex loads a project's `
     + '.codex/config.toml only in a trusted project';
 
@@ -1466,7 +1415,7 @@ export async function buildCodexProjectTrustCheck(ctx: DoctorContext): Promise<C
     name: 'Codex trusts this project, so it loads its team MCP servers',
     source: 'local',
     check: async () => trust.kind === 'trusted',
-    fix: trust.kind === 'trusted' ? '' : codexTrustFix(trust, cause, configFile, main),
+    fix: trust.kind === 'trusted' ? '' : codexTrustFix(trust, gate, cause),
   }];
 }
 
