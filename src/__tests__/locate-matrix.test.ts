@@ -369,6 +369,8 @@ function hostFor(row: Row, platform: Platform, cwd: Cwd, env: Readonly<Record<st
       const value = files.get(file);
       return value === undefined ? { kind: 'missing' } : { kind: 'ok', value };
     },
+    realpath: async (file) => file,
+    readText: async () => null,
   };
 }
 
@@ -392,6 +394,7 @@ describe('locate: skills matrix', () => {
             scope: row.scope,
             projectRoot: row.scope === 'project' ? rootFor(platform, cwd) : undefined,
             toolRoots: expand(row.toolRoots, platform, cwd, env),
+            repo: {},
           });
           const where = await locate(row.tool, 'skills', install, host);
           expect(writesOf(where).map((place) => place.path)).toEqual(row.writes.map((write) => at(write, platform, cwd, env)));

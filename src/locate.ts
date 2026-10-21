@@ -12,37 +12,58 @@ import {
   type BlocksHeader, type ChannelProbe, type HomeSkillRead, type ProjectSkillRead, type ReadGateKind, type RunTimeVia,
 } from './tools.js';
 import {
-  isAgentExcluded, resolveBaseDir, scopedToolPaths, toolGateRoot,
+  isAgentExcluded, isGitExcludeEnabled, isSelfMode, resolveBaseDir, scopedToolPaths, toolGateRoot,
   type HomePaths, type LocalConfig, type TeamaiConfig,
 } from './types.js';
 import { homeRoot, realHost, toolHome, type Host } from './tool-home.js';
 import { resolveOpenclawWorkspace } from './openclaw-home.js';
+import { hasWorkspaceChildren } from './workspace-children.js';
 
 /**
  * What the member's config decides. `toolRoots` re-root user-scope paths only,
  * as they always have. A tool's home is the machine's (`Host`), not the config's.
+ * `gitExclude` is `sharing.gitExclude` as the member's config resolves it.
  */
 export type Install = {
   readonly toolPaths: TeamaiConfig['toolPaths'];
   readonly agents: Pick<LocalConfig, 'enabledAgents' | 'disabledAgents'>;
   readonly toolRoots: Readonly<Record<string, string>>;
-} & ({ readonly scope: 'user' } | { readonly scope: 'project'; readonly projectRoot: string });
+  readonly gitExclude: boolean;
+} & (
+  | { readonly scope: 'user' }
+  | {
+    readonly scope: 'project';
+    readonly projectRoot: string;
+    /** `self`: the business repo is the team repo. */
+    readonly repo: 'team' | 'self';
+    /** The workspace has child checkouts (#913). */
+    readonly workspaceChildren: boolean;
+  }
+);
 
 /** The one parse of the config shapes into an `Install`; a project config without its root throws `resolveBaseDir`'s error. */
 export function installOf(
-  team: Pick<TeamaiConfig, 'toolPaths'>,
-  local: Pick<LocalConfig, 'scope' | 'projectRoot' | 'toolRoots' | 'enabledAgents' | 'disabledAgents'>,
+  team: Pick<TeamaiConfig, 'toolPaths'> & Parameters<typeof isGitExcludeEnabled>[1],
+  local: Pick<LocalConfig, 'scope' | 'projectRoot' | 'toolRoots' | 'enabledAgents' | 'disabledAgents' | 'gitExcludeEnabled' | 'dataHome' | 'children'>
+    & Parameters<typeof isSelfMode>[0],
 ): Install {
   const shared = {
     toolPaths: team.toolPaths,
     agents: { enabledAgents: local.enabledAgents, disabledAgents: local.disabledAgents },
     toolRoots: local.toolRoots ?? {},
+    gitExclude: isGitExcludeEnabled(local, team),
   };
   switch (local.scope) {
     case 'user':
       return { ...shared, scope: 'user' };
     case 'project':
-      return { ...shared, scope: 'project', projectRoot: resolveBaseDir(local) };
+      return {
+        ...shared,
+        scope: 'project',
+        projectRoot: resolveBaseDir(local),
+        repo: isSelfMode(local) ? 'self' : 'team',
+        workspaceChildren: hasWorkspaceChildren(local),
+      };
     default: {
       const unhandled: never = local.scope;
       return unhandled;

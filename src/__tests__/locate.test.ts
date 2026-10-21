@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { nextToolHomes } from '../tool-home-record.js';
-import { cleanupOf, ownOf, unreadWrites, writable, writesOf, type EntryPlace, type FilePlace, type FilesChannel, type Read } from '../locate.js';
+import { cleanupOf, installOf, ownOf, unreadWrites, writable, writesOf, type EntryPlace, type FilePlace, type FilesChannel, type Read } from '../locate.js';
 import { envToolHome, type Host } from '../tool-home.js';
 import { isToolId, TOOLS } from '../tools.js';
 import { sameSkillDirs } from '../resources/skill-dirs.js';
@@ -12,6 +12,7 @@ function linuxHost(env: Record<string, string>, existing: readonly string[] = ['
   return {
     platform: 'linux', path: path.posix, home: '/home/m', env, toolHomes: { kind: 'missing' }, cwd: () => '/home/m',
     exists: async (file) => existing.includes(file), readJson: async () => ({ kind: 'missing' }),
+    realpath: async (file) => file, readText: async () => null,
   };
 }
 
@@ -76,6 +77,7 @@ describe('nextToolHomes on Windows', () => {
   const windowsHost = (env: Record<string, string>, existing: readonly string[]): Host => ({
     platform: 'win32', path: path.win32, home: 'C:\\Users\\m', env, toolHomes: { kind: 'missing' },
     cwd: () => 'C:\\repo', exists: async (file) => existing.includes(file), readJson: async () => ({ kind: 'missing' }),
+    realpath: async (file) => file, readText: async () => null,
   });
   const appData = 'C:\\Users\\m\\AppData\\Local';
 
@@ -136,6 +138,7 @@ describe('envToolHome', () => {
     const host: Host = {
       platform: 'win32', path: path.win32, home: 'C:\\Users\\m', env: { LOCALAPPDATA: 'relative-appdata' }, toolHomes: { kind: 'missing' },
       cwd: () => 'C:\\repo', exists: async () => true, readJson: async () => ({ kind: 'missing' }),
+      realpath: async (file) => file, readText: async () => null,
     };
 
     expect(envToolHome('hermes', host)).toEqual({ dir: 'C:\\Users\\m\\AppData\\Local\\hermes', variable: 'LOCALAPPDATA', kind: 'win32-appdata' });
@@ -221,5 +224,18 @@ describe('the helpers every caller of locate uses', () => {
     expect(writable({ channel: 'run-time', via: 'session-hook', probe: 'codex-hooks', limit: null, retired: [], gates: met })).toBeNull();
     expect(cleanupOf(where)).toEqual([where.own, { kind: 'entry', path: '/home/m/work/.mcp.json', key: ['mcpServers'] }]);
     expect(writesOf({ channel: 'none', retired: [], gates: met })).toEqual([]);
+  });
+});
+
+describe('installOf', () => {
+  const team = { toolPaths: {}, sharing: { gitExclude: { enabled: true } } };
+  const child = { path: 'app', root: '/repo/app', anchor: '/repo/app/.teamai', selection: { additionalRoles: [] } };
+
+  it('parses sharing.gitExclude, self mode and workspace children once, the member\'s setting first', () => {
+    expect(installOf(team, { scope: 'user', repo: {} }).gitExclude).toBe(true);
+    expect(installOf(team, { scope: 'user', repo: {}, gitExcludeEnabled: false }).gitExclude).toBe(false);
+    expect(installOf({ toolPaths: {} }, { scope: 'project', projectRoot: '/repo', repo: { kind: 'self' } })).toMatchObject({ gitExclude: false, repo: 'self', workspaceChildren: false });
+    expect(installOf(team, { scope: 'project', projectRoot: '/repo', repo: { kind: 'git' }, children: { children: [child], leftOut: [], roots: [], fingerprint: 'f' } }))
+      .toMatchObject({ gitExclude: true, repo: 'team', workspaceChildren: true });
   });
 });

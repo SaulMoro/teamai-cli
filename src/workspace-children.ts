@@ -233,7 +233,7 @@ export function summarizeWorkspaceChildren(config: LocalConfig): string | null {
 }
 
 /** Whether `config` is a workspace that reads at least one child this run. */
-export function hasWorkspaceChildren(config: LocalConfig): boolean {
+export function hasWorkspaceChildren(config: Pick<LocalConfig, 'children'>): boolean {
   return (config.children?.children.length ?? 0) > 0;
 }
 

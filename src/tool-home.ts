@@ -3,7 +3,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { TOOLS, type HomeMove } from './tools.js';
 import type { ToolId } from './types.js';
-import { pathExists, readJsonObject, writeJsonAtomic, type JsonObjectRead } from './utils/fs.js';
+import { pathExists, readFileSafe, readJsonObject, writeJsonAtomic, type JsonObjectRead } from './utils/fs.js';
 import { getUserHome } from './utils/home.js';
 
 export type Host = {
@@ -20,6 +20,10 @@ export type Host = {
   exists(file: string): Promise<boolean>;
   /** A JSON object file, as `readJsonObject` reads it: OpenClaw's openclaw.json. */
   readJson(file: string): Promise<JsonObjectRead>;
+  /** `file` through its links; `file` itself when it cannot be resolved (missing, a loop, unreadable). */
+  realpath(file: string): Promise<string>;
+  /** A small text file, or null when it is missing or unreadable: a linked worktree's `.git` and its `commondir`. */
+  readText(file: string): Promise<string | null>;
 };
 
 /** The machine teamai runs on, the default host of every function that takes one. */
@@ -33,6 +37,8 @@ export function realHost(overrides: Partial<Pick<Host, 'env'>> = {}): Host {
     cwd: () => process.cwd(),
     exists: pathExists,
     readJson: readJsonObject,
+    realpath: (file) => fs.promises.realpath(file).catch(() => file),
+    readText: readFileSafe,
   };
 }
 
