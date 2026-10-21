@@ -21,7 +21,7 @@ for (const name of AGENT_SESSION_ENV) {
 // remove the developer's real tool files. A test that needs one sets it.
 for (const name of [
   'CLAUDE_CONFIG_DIR', 'COPILOT_HOME', 'OPENCLAW_STATE_DIR', 'OPENCLAW_PROFILE', 'HERMES_HOME', 'DSH_HOME',
-  'PI_CODING_AGENT_DIR', 'OPENCODE_CONFIG_DIR', 'XDG_CONFIG_HOME',
+  'PI_CODING_AGENT_DIR', 'OPENCODE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'CODEBUDDY_CONFIG_DIR',
 ]) {
   delete process.env[name];
 }

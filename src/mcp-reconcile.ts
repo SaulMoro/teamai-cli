@@ -313,7 +313,7 @@ export interface McpTarget {
   alternateFile?: string;
   /** Files an earlier release wrote the tool's servers to, under their key then, which it no longer reads: teamai moves its servers out of them. */
   retired?: Array<{ file: string; key: McpKey }>;
-  /** OpenCode, Muse and Pi: the file under their default home, where a record with no `file` has its server, when a home move puts `file` elsewhere. */
+  /** OpenCode, Muse, Pi and CodeBuddy: the file under their default home, where a record with no `file` has its server, when a home move puts `file` elsewhere. */
   unmovedFile?: string;
   /**
    * A local scope (#915): `file` is Claude Code's user config or CodeBuddy's
@@ -477,11 +477,11 @@ async function mcpFileReaders(writer: string, file: string, install: Install, ho
 
 /**
  * The file `record` holds its server in: the one it notes. An older teamai
- * noted none and wrote the mapped file of a lookup target, the default home
- * of OpenCode, Muse and Pi, and every other tool's file.
+ * noted none and wrote under the default home of OpenCode, Muse, Pi and
+ * CodeBuddy, the mapped file of a lookup target, and every other tool's file.
  */
 export function recordedFileOf(target: Pick<McpTarget, 'file' | 'mappedFile' | 'unmovedFile'>, record: ManagedMcpRecord): string {
-  return record.file ?? target.mappedFile ?? target.unmovedFile ?? target.file;
+  return record.file ?? target.unmovedFile ?? target.mappedFile ?? target.file;
 }
 
 /** The recorded file and server key, including the key a retired config used. */
@@ -593,7 +593,9 @@ export async function resolveMcpTargets(
     const inTree = place.projectKey === undefined;
     const lookup = inTree ? where.lookup : null;
     const retired = inTree ? where.retired.filter(({ was }) => was === 'default').map(({ place }) => ({ file: place.path, key: place.key })) : [];
-    const unmovedFile = inTree && isToolId(tool) && settingsAtDefault(tool) ? ownOf(await locate(tool, 'mcp', install, unmovedHost(host)))?.path : undefined;
+    // Every release before #1221 wrote there under the default home: a lookup tool's mapped file (#993).
+    const unmoved = inTree && isToolId(tool) && settingsAtDefault(tool) ? await locate(tool, 'mcp', install, unmovedHost(host)) : null;
+    const unmovedFile = unmoved?.channel === 'files' ? unmoved.lookup?.mapped ?? ownOf(unmoved)?.path : undefined;
     targets.push({
       ...mcpTargetAt(tool, museOnly ? 'muse' : channel.format, plugin && where.alternate ? where.alternate : place, projectScope),
       ...museReads && !museOnly ? { museReads: true as const } : {},
@@ -601,7 +603,7 @@ export async function resolveMcpTargets(
       ...lookup ? { mappedFile: lookup.mapped, lookupFiles: [...lookup.files] } : {},
       ...where.alternate ? { mappedFile: place.path, alternateFile: where.alternate.path } : {},
       ...retired.length > 0 ? { retired } : {},
-      ...unmovedFile !== undefined && unmovedFile !== place.path ? { unmovedFile } : {},
+      ...unmovedFile !== undefined && unmovedFile !== (lookup?.mapped ?? place.path) ? { unmovedFile } : {},
     });
   }
   return [...targets, ...builtins];
@@ -3044,28 +3046,33 @@ async function leaveGoneCheckouts(
   for (const key of keys) {
     const root = key.slice(prefix.length);
     if (live.has(root)) continue;
-    const target: McpTarget = { ...local, projectKey: root };
-    const records = shared[key];
-    const installed = await installedMcpEntries(target);
-    const edited = ctx.options.removeAll ? []
-      : records.filter((r) => installed?.has(r.name) && entryHash(installed.get(r.name)) !== r.hash);
-    for (const { name } of edited) {
-      log.warn(`Kept MCP server ${name} in ${describeMcpLocation(target)}: you changed it since teamai wrote it, and that worktree is gone. `
-        + `Remove ${name} from ${describeMcpLocation(target)} when you no longer need it.`);
+    const kept: ManagedMcpRecord[] = [];
+    for (const [file, records] of recordsByFile(shared[key], local.file)) {
+      const target: McpTarget = { ...local, file, projectKey: root };
+      const installed = await installedMcpEntries(target);
+      const edited = ctx.options.removeAll ? []
+        : records.filter((r) => installed?.has(r.name) && entryHash(installed.get(r.name)) !== r.hash);
+      for (const { name } of edited) {
+        log.warn(`Kept MCP server ${name} in ${describeMcpLocation(target)}: you changed it since teamai wrote it, and that worktree is gone. `
+          + `Remove ${name} from ${describeMcpLocation(target)} when you no longer need it.`);
+      }
+      const owned = records.filter((record) => !edited.includes(record));
+      const judge = judgeUnrecordedMcpEntry(localConfig, target, ctx.desired, ctx.vars, new Set(), ctx.history);
+      const removed: McpChange[] = [];
+      const result = await applyJson(target, new Map(), new Map(), owned, new Set(owned.map((r) => r.name)), [], removed, judge, ctx.options, ctx.restoreConfigs);
+      // Not read: its records stay, for the next pull.
+      if (result === null) {
+        kept.push(...records);
+        continue;
+      }
+      wrote ||= result;
+      ctx.changes.push(...removed);
+      if (removed.length > 0 && !ctx.options.removeAll) {
+        log.info(`${ctx.options.dryRun ? 'Would take' : 'Took'} teamai's MCP servers for ${local.tool} (${removed.map((c) => c.server).join(', ')}) `
+          + `out of ${describeMcpLocation(target)}: that worktree is gone.`);
+      }
     }
-    const owned = records.filter((record) => !edited.includes(record));
-    const judge = judgeUnrecordedMcpEntry(localConfig, target, ctx.desired, ctx.vars, new Set(), ctx.history);
-    const removed: McpChange[] = [];
-    const result = await applyJson(target, new Map(), new Map(), owned, new Set(owned.map((r) => r.name)), [], removed, judge, ctx.options, ctx.restoreConfigs);
-    // Not read: its records stay, for the next pull.
-    if (result === null) continue;
-    manifest[key] = [];
-    wrote ||= result;
-    ctx.changes.push(...removed);
-    if (removed.length > 0 && !ctx.options.removeAll) {
-      log.info(`${ctx.options.dryRun ? 'Would take' : 'Took'} teamai's MCP servers for ${local.tool} (${removed.map((c) => c.server).join(', ')}) `
-        + `out of ${describeMcpLocation(target)}: that worktree is gone.`);
-    }
+    if (kept.length < shared[key].length) manifest[key] = kept;
   }
   return wrote;
 }
@@ -3098,20 +3105,36 @@ async function leaveOtherLocalScopes(
   let wrote = false;
   for (const [key, records] of Object.entries(await readManifest(localMcpManifestPath(localConfig)))) {
     if (!key.startsWith(prefix) || ours(key) || key in ctx.manifest || !Array.isArray(records) || records.length === 0) continue;
-    const target: McpTarget = { ...local, projectKey: key.slice(prefix.length) };
-    const result = await leaveLocalScope(target, records, ctx.options, ctx.restoreConfigs);
-    // Not read: its records stay.
-    if (result === null) continue;
-    const { removed } = result;
-    wrote ||= result.wrote;
-    ctx.changes.push(...removed);
-    ctx.manifest[key] = [];
-    if (removed.length === 0 || ctx.options.removeAll) continue;
-    log.info(`${ctx.options.dryRun ? 'Would take' : 'Took'} teamai's MCP servers for ${local.tool} (${removed.map((c) => c.server).join(', ')}) `
-      + `out of ${describeMcpLocation(target)}: ${movedBecause(teamConfig, localConfig, { projectKey: undefined })}`
-      + `${toolLabel(local.tool)} reads them from each checkout's MCP file.`);
+    const kept: ManagedMcpRecord[] = [];
+    for (const [file, owned] of recordsByFile(records, local.file)) {
+      const target: McpTarget = { ...local, file, projectKey: key.slice(prefix.length) };
+      const result = await leaveLocalScope(target, owned, ctx.options, ctx.restoreConfigs);
+      // Not read: its records stay.
+      if (result === null) {
+        kept.push(...owned);
+        continue;
+      }
+      const { removed } = result;
+      wrote ||= result.wrote;
+      ctx.changes.push(...removed);
+      if (removed.length === 0 || ctx.options.removeAll) continue;
+      log.info(`${ctx.options.dryRun ? 'Would take' : 'Took'} teamai's MCP servers for ${local.tool} (${removed.map((c) => c.server).join(', ')}) `
+        + `out of ${describeMcpLocation(target)}: ${movedBecause(teamConfig, localConfig, { projectKey: undefined })}`
+        + `${toolLabel(local.tool)} reads them from each checkout's MCP file.`);
+    }
+    if (kept.length < records.length) ctx.manifest[key] = kept;
   }
   return wrote;
+}
+
+/** `records` by the file each notes, `file` for one an earlier release wrote without one. */
+function recordsByFile(records: readonly ManagedMcpRecord[], file: string): Map<string, ManagedMcpRecord[]> {
+  const byFile = new Map<string, ManagedMcpRecord[]>();
+  for (const record of records) {
+    const recordedFile = record.file ?? file;
+    byFile.set(recordedFile, [...byFile.get(recordedFile) ?? [], record]);
+  }
+  return byFile;
 }
 
 /**
@@ -3163,13 +3186,8 @@ export async function removeLocalScopeMcpServers(dataHome: string, toolRoots?: R
     const format = mcpFormatOf(tool);
     const file = at < 0 ? null : await localMcpFileOf(tool, dataHome, toolRoots);
     if (!Array.isArray(records) || !format || !file) continue;
-    const byFile = new Map<string, ManagedMcpRecord[]>();
-    for (const record of records) {
-      const recordedFile = record.file ?? file;
-      byFile.set(recordedFile, [...byFile.get(recordedFile) ?? [], record]);
-    }
     const kept: ManagedMcpRecord[] = [];
-    for (const [recordedFile, owned] of byFile) {
+    for (const [recordedFile, owned] of recordsByFile(records, file)) {
       const target: McpTarget = { tool, format, file: recordedFile, projectScope: true, projectKey: key.slice(at + LOCAL_KEY_INFIX.length) };
       try {
         const result = await leaveLocalScope(target, owned, { removeAll: false }, new Map());

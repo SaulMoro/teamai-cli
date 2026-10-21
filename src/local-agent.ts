@@ -4182,10 +4182,10 @@ async function uninstallMcpServer(
   for (const { manifestKey, file, projectKey } of locations) {
     const owned = manifest[manifestKey] ?? [];
     if (!owned.some((r: ManagedMcpRecord) => r.name === slug)) continue;
-    // A lookup tool's servers are where the install recorded them (#993); an older one recorded no file.
+    // A server is in the file its record names (#993), even one a home move left; an older record names none.
     const record = owned.find((r) => r.name === slug);
     const recorded = record ? await recordedMcpTarget(place, record) : place;
-    const targetFile = file ?? recorded.file;
+    const targetFile = record?.file ?? file ?? recorded.file;
     const where = describeMcpLocation({ file: targetFile, projectKey });
 
     let restoreConfig: (() => Promise<void>) | undefined;

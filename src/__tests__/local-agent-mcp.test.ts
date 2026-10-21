@@ -1560,6 +1560,22 @@ describe('local-agent: MCP install/uninstall commands', () => {
       expect((await servers(path.join(tmpDir, '.claude.json'), app))?.api).toMatchObject({ command: 'api-server-2' });
     });
 
+    it('uninstalls a CodeBuddy server from the .codebuddy.json its record names after CODEBUDDY_CONFIG_DIR moves the home', async () => {
+      const app = await repo('app');
+      await fse.ensureDir(path.join(app, '.codebuddy'));
+      await flag(true);
+      expect((await run([install(1, 'api', app)], 'codebuddy', app))[0].status).toBe('success');
+      expect(Object.keys(await servers(path.join(tmpDir, '.codebuddy.json'), app) ?? {})).toEqual(['api']);
+      const moved = path.join(tmpDir, 'moved');
+      await fse.ensureDir(moved);
+      vi.stubEnv('CODEBUDDY_CONFIG_DIR', moved);
+
+      const acks = await run([{ id: 2, type: 'uninstall_mcp', scope: 'workspace', workspace_path: app, slug: 'api', version: '1.0.0' }], 'codebuddy', app);
+
+      expect(acks[0]).toMatchObject({ status: 'success' });
+      expect((await servers(path.join(tmpDir, '.codebuddy.json'), app))?.api).toBeUndefined();
+    });
+
     it('installs nothing and moves nothing while the flag is unknown, and says why', async () => {
       const app = await repo('app');
       await flag(false);

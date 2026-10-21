@@ -202,6 +202,20 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
     expect(await installedMcpEntries(target)).toEqual(new Map([['api', renderJsonEntry('claude', API)]]));
   });
 
+  it('keeps a member\'s server in the moved CodeBuddy home that an earlier release\'s record, noting no file, does not own', async () => {
+    const api = renderJsonEntry('buddy', API);
+    const moved = path.join(root, 'moved');
+    await fse.outputJson(path.join(home, '.codebuddy', 'mcp.json'), { mcpServers: { api } });
+    await fse.outputJson(path.join(moved, 'mcp.json'), { mcpServers: { api: MINE } });
+    await fse.outputJson(path.join(home, '.teamai', 'managed-mcp.json'), { codebuddy: [{ name: 'api', hash: entryHash(api) }] });
+    await fse.outputFile(path.join(repo, 'mcp', 'mcp.yaml'), 'servers:\n  - name: api\n    transport: http\n    url: https://api.example.com/v2\n');
+    vi.stubEnv('CODEBUDDY_CONFIG_DIR', moved);
+
+    await reconcileMcpForConfig(team(), userConfig('codebuddy'));
+
+    expect(await fse.readJson(path.join(moved, 'mcp.json'))).toEqual({ mcpServers: { api: MINE } });
+  });
+
   it('lets uninstall remove CodeBuddy\'s unchanged local-scope servers from the .codebuddy.json it left when CODEBUDDY_CONFIG_DIR moves its home', async () => {
     const project = path.join(root, 'project');
     const before = path.join(home, '.codebuddy.json');
@@ -219,6 +233,29 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
     await reconcileMcpForConfig(team(), local, { removeAll: true });
 
     expect((await fse.readJson(before)).projects[project].mcpServers).toEqual({ mine: MINE });
+  });
+
+  it('lets uninstall remove another checkout\'s CodeBuddy servers from the .codebuddy.json its record names after the home moves', async () => {
+    const project = path.join(root, 'project');
+    const sibling = path.join(root, 'sibling');
+    const dataHome = path.join(root, 'data');
+    const before = path.join(home, '.codebuddy.json');
+    await fse.ensureDir(path.join(project, '.codebuddy'));
+    execFileSync('git', ['init', '-q', project]);
+    execFileSync('git', ['-C', project, '-c', 'user.name=t', '-c', 'user.email=t@example.com', 'commit', '--allow-empty', '-qm', 'fixture']);
+    execFileSync('git', ['-C', project, 'worktree', 'add', '-q', '-b', 'sibling', sibling]);
+    const api = renderJsonEntry('buddy', API);
+    await fse.outputJson(before, { projects: { [project]: { mcpServers: { api } }, [sibling]: { mcpServers: { api, mine: MINE } } } });
+    const record = { name: 'api', hash: entryHash(api), file: before };
+    await fse.outputJson(path.join(dataHome, 'managed-local-mcp.json'), { [`codebuddy:local:${project}`]: [record], [`codebuddy:local:${sibling}`]: [record] });
+    const moved = path.join(root, 'moved');
+    await fse.ensureDir(moved);
+    vi.stubEnv('CODEBUDDY_CONFIG_DIR', moved);
+    const local: LocalConfig = { ...userConfig('codebuddy'), scope: 'project', projectRoot: project, dataHome };
+
+    await reconcileMcpForConfig(team(), local, { removeAll: true });
+
+    expect((await fse.readJson(before)).projects).toEqual({ [sibling]: { mcpServers: { mine: MINE } } });
   });
 
   it('uninstall removes a local scope from the file its record names when no team config remains', async () => {
