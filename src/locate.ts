@@ -9,7 +9,7 @@
 import path from 'node:path';
 import {
   installGateOf, isToolId, TOOLS,
-  type BlocksHeader, type ChannelProbe, type HomeSkillRead, type ProjectSkillRead, type ReadGateKind, type RunTimeVia,
+  type BlocksHeader, type ChannelProbe, type HomeRead, type ProjectRead, type ReadGateKind, type RunTimeVia,
 } from './tools.js';
 import {
   isAgentExcluded, isGitExcludeEnabled, isSelfMode, resolveBaseDir, scopedToolPaths, toolGateRoot,
@@ -378,7 +378,7 @@ async function locateSkills(tool: string, install: Install, host: Host): Promise
     }
   }
 
-  const declared: readonly (HomeSkillRead | ProjectSkillRead)[] | 'unknown' = known === undefined ? 'unknown' : TOOLS[known].skills[install.scope];
+  const declared: readonly (HomeRead | ProjectRead)[] | 'unknown' = known === undefined ? 'unknown' : TOOLS[known].skills[install.scope];
   const reads = declared === 'unknown' ? 'unknown' : declared.map((read): Read => {
     switch (read.base) {
       case 'home': {

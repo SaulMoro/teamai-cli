@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import type { McpServerDef, McpTransport } from '../types.js';
 import { sameEnvName } from './env-key.js';
+import { mcpFormatOf } from '../tools.js';
 
 // ─── Per-tool rendering ──────────────────────────────────────
 //
@@ -17,24 +18,18 @@ import { sameEnvName } from './env-key.js';
 
 export type McpFormat = 'claude' | 'cursor' | 'buddy' | 'codex' | 'opencode' | 'copilot' | 'pi' | 'muse';
 
-const CLAUDE_TOOLS = new Set(['claude', 'claude-internal', 'tclaude', 'qoder', 'qoder-cn', 'kiro', 'zcode', 'omp', 'trae', 'trae-cn']);
-const CURSOR_TOOLS = new Set(['cursor']);
-const CODEX_TOOLS = new Set(['codex', 'codex-internal', 'tcodex']);
-const BUDDY_TOOLS = new Set(['codebuddy', 'workbuddy']);
-const OPENCODE_TOOLS = new Set(['opencode']);
-const COPILOT_TOOLS = new Set(['copilot']);
 const COPILOT_ALL_TOOLS = '*';
 
+/**
+ * The format pull still renders for a tool whose descriptor already says
+ * where it takes MCP servers is unknown (#1221 D-f), until the MCP writers
+ * go through `locate` and stop writing for it.
+ */
+const FORMAT_BEFORE_LOCATE: Readonly<Record<string, McpFormat>> = { 'claude-internal': 'claude', 'codex-internal': 'codex', tcodex: 'codex' };
+
+/** The format `tool`'s MCP servers take (`mcpFormatOf`); null for a tool teamai writes no MCP servers for. */
 export function detectMcpFormat(tool: string): McpFormat | null {
-  if (tool === 'pi') return 'pi';
-  if (tool === 'muse') return 'muse';
-  if (CLAUDE_TOOLS.has(tool)) return 'claude';
-  if (CURSOR_TOOLS.has(tool)) return 'cursor';
-  if (CODEX_TOOLS.has(tool)) return 'codex';
-  if (BUDDY_TOOLS.has(tool)) return 'buddy';
-  if (OPENCODE_TOOLS.has(tool)) return 'opencode';
-  if (COPILOT_TOOLS.has(tool)) return 'copilot';
-  return null;
+  return Object.hasOwn(FORMAT_BEFORE_LOCATE, tool) ? FORMAT_BEFORE_LOCATE[tool] : mcpFormatOf(tool);
 }
 
 /**

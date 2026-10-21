@@ -23,6 +23,7 @@ export const WINDOWS_TESTS = [
   'src/__tests__/qoder-cn.test.ts',
   'src/__tests__/skill-use.test.ts',
   'src/__tests__/tool-roots.test.ts',
+  'src/__tests__/tools-channels.test.ts',
   'src/__tests__/tools.test.ts',
   'src/__tests__/trae.test.ts',
   'src/__tests__/user-home-resolution.test.ts',
