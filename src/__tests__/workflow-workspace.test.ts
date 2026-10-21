@@ -2693,11 +2693,14 @@ steps:
 
     const run = await readRun(config, runId);
     if (typeof run !== 'object') throw new Error('run missing');
-    expect(run.steps.find((step) => step.id === 'change.test')).toMatchObject({ status: 'failed', failure: { code: 'read_only_dirty', message: expect.stringContaining('vendor') } });
+    const test = run.steps.find((step) => step.id === 'change.test');
+    expect(test).toMatchObject({ status: 'failed', failure: { code: 'read_only_dirty', message: expect.stringContaining('vendor') } });
     expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({ status: 'succeeded' });
     const branch = branchName(runId, 'change', 1);
     expect(git(['show', `${branch}:polish.txt`], workspace)).toBe('yes');
     expect(git(['rev-parse', `${branch}:vendor`], workspace).trim()).toBe(recorded);
+    const kept = `refs/teamai/kept/${test && 'attempt' in test ? test.attempt : 'none'}`;
+    expect(git(['rev-parse', `${kept}:vendor`], workspace).trim()).not.toBe(recorded);
   });
 
   it('puts a submodule whose update mode is rebase back at the recorded commit after a reader commits in it', async () => {

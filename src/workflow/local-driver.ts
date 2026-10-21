@@ -616,11 +616,14 @@ async function leaveReadCopy(lease: Lease): Promise<ReadCopy | undefined> {
   const dirty = await dirtySubmodules(cwd);
   if ('error' in dirty) return unrestored(dirty.error);
   if (dirty.paths.length > 0) return unrestored(`submodules have uncommitted or untracked files: ${dirty.paths.join(', ')}`);
-  // Not `git stash push`: the stash list is shared by every worktree of the checkout.
+  // A commit of the whole tree, not `git stash`: the stash list is shared by every worktree, and a stash leaves out a submodule's commit.
   const kept = `refs/teamai/kept/${lease.attempt}`;
   const added = await git(cwd, ['add', '-A']);
-  const stashed = added.code === 0 ? await git(cwd, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'stash', 'create']) : added;
-  const recorded = stashed.code === 0 ? await git(cwd, ['update-ref', kept, stashed.stdout.trim() || 'HEAD']) : stashed;
+  const tree = added.code === 0 ? await git(cwd, ['write-tree']) : added;
+  const committed = tree.code === 0
+    ? await git(cwd, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'commit-tree', tree.stdout.trim(), '-p', 'HEAD', '-m', `teamai: kept ${lease.step}`])
+    : tree;
+  const recorded = committed.code === 0 ? await git(cwd, ['update-ref', kept, committed.stdout.trim()]) : committed;
   // Without the ref, a reset would lose the changes.
   if (recorded.code !== 0) return unrestored(recorded.stderr.trim() || 'its changes could not be kept');
   // Back on the copy's branch first: a reset on a branch the step switched to would leave the copy elsewhere.
