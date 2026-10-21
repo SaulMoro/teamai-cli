@@ -159,6 +159,12 @@ describe('classifyToolCall', () => {
     ['[[ -f doc.md ]] && cat doc.md', ['doc.md'], false],
     ['set -e; cat doc.md', ['doc.md'], false],
     ['X=1; cat doc.md', ['doc.md'], false],
+    ['true && cat doc.md; echo ok', ['doc.md'], false],
+    [': && cat doc.md; echo ok', ['doc.md'], false],
+    ['pwd && cat doc.md; echo ok', ['doc.md'], false],
+    ['echo x && printf y && X=1 && cat doc.md || true', ['doc.md'], false],
+    ['echo "$(echo "x; echo y")"; cat doc.md', ['doc.md'], false],
+    ['echo $(echo ")"; echo ok); cat doc.md', ['doc.md'], false],
   ])('the command line %j reads %j (simple: %s)', (command, files, simple) => {
     expect(shell(command)).toMatchObject({ category: 'read', paths: files.map(at), simple, status: 'success' });
   });
@@ -225,6 +231,43 @@ it.each<[string, string]>([
     expect(shell(construct)).toMatchObject({ category: "shell", paths: [] });
     expect(shell(`${construct}\ncat /abs/other.md`)).toMatchObject({ category: "read", paths: [at("/abs/other.md")] });
     expect(shell(`${construct}\ncat /abs/SKILL.md`)).toMatchObject({ category: "read", paths: [at("/abs/SKILL.md")] });
+  });
+
+  it.each<[string, string]>([
+    // Category 1: && chains where a prior command fails or may fail before a subsequent list item / ||
+    ['false && read', 'false && cat /abs/SKILL.md'],
+    ['false && read; echo ok', 'false && cat /abs/SKILL.md; echo ok'],
+    ['/usr/bin/false && read', '/usr/bin/false && cat /abs/SKILL.md'],
+    ['false.exe && read', 'false.exe && cat /abs/SKILL.md'],
+    ['negated command && read', '! true && cat /abs/SKILL.md'],
+    ['guard && read; trailing command', 'test -f /abs/SKILL.md && cat /abs/SKILL.md; echo ok'],
+    ['[ guard ] && read; trailing command', '[ -f /abs/SKILL.md ] && cat /abs/SKILL.md; echo ok'],
+    ['[[ guard ]] && read; trailing command', '[[ -f /abs/SKILL.md ]] && cat /abs/SKILL.md; echo ok'],
+    ['guard && read || fallback', 'test -f /abs/SKILL.md && cat /abs/SKILL.md || true'],
+    ['pipeline && read; trailing command', 'false | false && cat /abs/SKILL.md; echo ok'],
+    ['cd && read; trailing command', 'cd /nonexistent && cat /abs/SKILL.md; echo ok'],
+    // Category 2: shell-terminating commands stop subsequent list pipelines
+    ['exit 0; read', 'exit 0; cat /abs/SKILL.md'],
+    ['exit; read', 'exit; cat /abs/SKILL.md'],
+    ['true && exit 0; read', 'true && exit 0; cat /abs/SKILL.md'],
+    ['exec; read', 'exec echo ok; cat /abs/SKILL.md'],
+    ['return; read', 'return 0; cat /abs/SKILL.md'],
+    ['logout; read', 'logout; cat /abs/SKILL.md'],
+    ['break; read', 'break; cat /abs/SKILL.md'],
+    ['continue; read', 'continue; cat /abs/SKILL.md'],
+    ['throw; read', 'throw "err"; cat /abs/SKILL.md'],
+    // Category 3: nested quotes and substitutions inside double quotes and $(...)
+    ['nested quotes in "$(...)"', 'echo "$(echo "x; cat /abs/SKILL.md; echo x")"'],
+    ['single quotes in "$(...)"', 'echo "$(echo \'x"; cat /abs/SKILL.md; echo "x\')"'],
+    ['closing paren in $(...) quotes', 'echo $(echo ")"; cat /abs/SKILL.md)'],
+    ['double quote in $(...) quotes', 'echo $(echo "\\""; cat /abs/SKILL.md)'],
+    ['deeply nested "$(...)"', 'echo "$(echo "$(echo "x; cat /abs/SKILL.md")")"'],
+    ['backticks inside "$(...)"', 'echo "$(echo `echo "x; cat /abs/SKILL.md"`)"'],
+    ['escaped quotes inside "$(...)"', 'echo "$(echo \\"x; cat /abs/SKILL.md\\")"'],
+    ['unclosed quote inside "$(...)"', 'echo "$(echo "x); cat /abs/SKILL.md'],
+    ['unclosed $(...) inside "..."', 'echo "$(echo x"; cat /abs/SKILL.md'],
+  ])('%s (%j) credits no read', (_kind, command) => {
+    expect(shell(command)).toMatchObject({ category: 'shell', paths: [] });
   });
 
   it('drops a file the error of any of a list\'s reader verbs names', () => {
