@@ -2935,8 +2935,10 @@ async function leaveMcpLocation(
   // Not read: its records stay.
   if (wrote === null) return false;
   for (const record of next) record.file = other.file;
-  const leaving = split.elsewhere.filter((record) => ctx.options.removeAll || !ctx.kept.has(record.name));
-  next.push(...split.elsewhere.filter((record) => !leaving.includes(record)));
+  // As for a target: uninstall takes teamai's servers out of a file the tool left too.
+  const elsewhere = ctx.options.removeAll ? [...split.elsewhere, ...split.left] : split.elsewhere;
+  const leaving = elsewhere.filter((record) => ctx.options.removeAll || !ctx.kept.has(record.name));
+  next.push(...elsewhere.filter((record) => !leaving.includes(record)));
   wrote = await removeFromOtherFiles(other, leaving, next, ctx.changes,
     (file) => ctx.judgeIn({ ...other, file }, { others: claimed }), ctx.options, ctx.restoreConfigs) || wrote;
   if (!ctx.options.removeAll) logLeftMcpFiles(localConfig, other, split.left);
