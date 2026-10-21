@@ -1378,7 +1378,7 @@ async function buildRemovalPlan(
     // that of any nested repository an MCP config sits in. It counts on its
     // own: a clone whose other resources are gone still gets it removed.
     if (localConfig.scope === 'project') {
-      const { resolveMcpTargets, projectWorktreeConfigs } = await import('./mcp-reconcile.js');
+      const { mcpCleanupFiles, projectWorktreeConfigs } = await import('./mcp-reconcile.js');
       const { findMcpGitExcludes } = await import('./mcp-git-exclude.js');
       const { readResolvedMcpFiles } = await import('./mcp-resolved-files.js');
       // Every checkout judges a line they share, also the main checkout `git worktree list` leaves out
@@ -1388,7 +1388,7 @@ async function buildRemovalPlan(
       for (const cfg of await projectWorktreeConfigs(localConfig)) {
         if (cfg.projectRoot) dirs.push(cfg.projectRoot);
         const files = [
-          ...(await resolveMcpTargets(teamConfig, cfg, { includeUndetected: true })).map((target) => target.file),
+          ...await mcpCleanupFiles(teamConfig, cfg),
           // A file a pull wrote under a toolPaths mapping since changed.
           ...Object.keys((await readResolvedMcpFiles(cfg)).files),
         ];

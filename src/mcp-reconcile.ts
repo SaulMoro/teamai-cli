@@ -10,7 +10,6 @@ import type {
   ManagedMcpRecord,
 } from './types.js';
 import {
-  applyToolRoots,
   DEFAULT_TOOL_PATHS,
   getMcpSharing,
   isAgentExcluded,
@@ -21,7 +20,6 @@ import {
   managedMcpManifestPath,
   managedMcpManifestKey,
   resolveToolBaseDir,
-  TeamaiConfigBaseSchema,
 } from './types.js';
 import YAML from 'yaml';
 import {
@@ -47,7 +45,7 @@ import { appliedTeamEnv, resolvesTeamEnv, resolveTeamEnv, variablesKeptWarning, 
 import { readEnvBackup } from './resources/env.js';
 import { isEnvShMarker } from './env-sh-exports.js';
 import { memberEnvironmentWithoutScope } from './member-env.js';
-import { installOf, locate, ownOf, writable, type EntryPlace, type Install } from './locate.js';
+import { cleanupOf, installOf, locate, ownOf, writable, type EntryPlace, type Install } from './locate.js';
 import { channelsOf, isToolId, mcpFormatOf, settingsAtDefault, TOOLS, type McpProject } from './tools.js';
 import { realHost, type Host } from './tool-home.js';
 import { KNOWN_AGENTS } from './known-agents.js';
@@ -62,7 +60,6 @@ import {
   expandHome,
 } from './utils/fs.js';
 import { log } from './utils/logger.js';
-import { getUserHome } from './utils/home.js';
 import { warnOnce } from './utils/warn-once.js';
 import { loadProjectMcpManifest } from './utils/mcp-manifest.js';
 import { isOnPath, SAFE_BIN_RE, type LookPathOptions } from './utils/lookpath.js';
@@ -394,9 +391,17 @@ function toolLabel(tool: string): string {
   return KNOWN_AGENTS.find((agent) => agent.id === tool)?.displayName ?? tool;
 }
 
-/** The `.codebuddy.json` CodeBuddy keeps its local scope in: in `CODEBUDDY_CONFIG_DIR` when that is set, else in HOME. */
-function codebuddyLocalFile(): string {
-  return path.join(process.env.CODEBUDDY_CONFIG_DIR?.trim() || getUserHome(), '.codebuddy.json');
+/**
+ * The file `tool` keeps its local scope in (#915), as `locate` places it
+ * under `toolRoots` with every team mapping at its default; null for a tool
+ * with none. `projectRoot` is any directory: the key is not wanted here.
+ */
+async function localMcpFileOf(tool: string, projectRoot: string, toolRoots: Readonly<Record<string, string>> = {}): Promise<string | null> {
+  const where = await locate(tool, 'mcp', {
+    toolPaths: DEFAULT_TOOL_PATHS, agents: {}, toolRoots, gitExclude: true, scope: 'project', projectRoot, repo: 'team', workspaceChildren: false,
+  });
+  if (where.channel !== 'files') return null;
+  return [where.own, ...where.retired.map((retired) => retired.place)].find((place) => place?.projectKey !== undefined)?.path ?? null;
 }
 
 /**
@@ -490,6 +495,24 @@ export async function shadowedMcpRecords(localConfig: LocalConfig, target: McpTa
     shadowed.set(file, [...shadowed.get(file) ?? [], record.name]);
   }
   return shadowed;
+}
+
+/**
+ * Every file in or beside the project teamai may hold `localConfig`'s MCP
+ * servers in (`cleanupOf`), for each tool the team maps or teamai builds in:
+ * where the git exclusions an uninstall removes are. Not a local scope (#915),
+ * which is outside the working tree.
+ */
+export async function mcpCleanupFiles(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string[]> {
+  const install = installOf(teamConfig, localConfig);
+  const host = realHost();
+  const files = new Set<string>();
+  for (const tool of new Set([...Object.keys(teamConfig.toolPaths), ...Object.keys(DEFAULT_TOOL_PATHS)])) {
+    for (const place of cleanupOf(await locate(tool, 'mcp', install, host))) {
+      if (place.kind === 'entry' && place.projectKey === undefined) files.add(place.path);
+    }
+  }
+  return [...files];
 }
 
 /**
@@ -3049,8 +3072,9 @@ async function leaveLocalScope(
 /**
  * Take teamai's servers out of every local scope the records in `dataHome`
  * name (#915), for an uninstall that finds no configuration and so deletes
- * those records with the data home: Claude's in its user config (as
- * `toolRoots` places it), CodeBuddy's in `.codebuddy.json`. Only an entry
+ * those records with the data home, each where `locate` places it: Claude's
+ * in its user config (as `toolRoots` places it), CodeBuddy's and WorkBuddy's
+ * in `.codebuddy.json`. Only an entry
  * that still equals what teamai wrote goes; a copy the member changed stays,
  * named. The records of a scope it cleaned go; those of one it could not
  * read or write stay. The files it could not clean.
@@ -3059,19 +3083,14 @@ export async function removeLocalScopeMcpServers(dataHome: string, toolRoots?: R
   const manifestPath = path.join(dataHome, 'managed-local-mcp.json');
   const manifest = await readManifest(manifestPath);
   const recorded = Object.keys(manifest).length > 0;
-  const userMcp = applyToolRoots(TeamaiConfigBaseSchema.shape.toolPaths.parse(undefined), toolRoots).claude?.mcp;
-  const files: Record<string, string | undefined> = {
-    claude: userMcp && path.join(getUserHome(), userMcp),
-    codebuddy: codebuddyLocalFile(),
-  };
   const left = new Set<string>();
   let removedTotal = 0;
   for (const [key, records] of Object.entries(manifest)) {
     const at = key.indexOf(LOCAL_KEY_INFIX);
     const tool = key.slice(0, at);
-    const format = detectMcpFormat(tool);
-    const file = files[tool];
-    if (at < 0 || !Array.isArray(records) || !format || !file) continue;
+    const format = mcpFormatOf(tool);
+    const file = at < 0 ? null : await localMcpFileOf(tool, dataHome, toolRoots);
+    if (!Array.isArray(records) || !format || !file) continue;
     const target: McpTarget = { tool, format, file, projectScope: true, projectKey: key.slice(at + LOCAL_KEY_INFIX.length) };
     try {
       const result = await leaveLocalScope(target, records, { removeAll: false }, new Map());
