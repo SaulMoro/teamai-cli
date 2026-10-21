@@ -553,11 +553,14 @@ async function locateRules(tool: string, install: Install, host: Host): Promise<
   const channel = channelsOf(tool).rules[install.scope];
   const roots = rootsOf(tool, install, host);
   const dir = roots.configured('rules');
+  // An earlier release copied team rules verbatim into any configured rules directory (#993).
+  if (channel === 'none' || channel === 'unknown') {
+    return { channel, retired: dir === null ? [] : [{ place: { kind: 'dir', path: dir }, was: 'configured' }], gates: await gatesOf(tool, install, host, roots) };
+  }
   // A team entry written before the tool's rules moved (#938, #946) still names a directory the tool never reads: teamai writes there as the entry says, and doctor fails it.
-  if (dir !== null && (typeof channel !== 'object' || channel.channel !== 'dir')) {
+  if (dir !== null && channel.channel !== 'dir') {
     return { channel: 'files', own: { kind: 'dir', path: dir }, activation: null, reads: [], readGates: [], retired: [], gates: await gatesOf(tool, install, host, roots) };
   }
-  if (channel === 'none' || channel === 'unknown') return { channel, retired: [], gates: await gatesOf(tool, install, host, roots) };
   switch (channel.channel) {
     case 'dir': {
       const retiredActivation = await retiredRulesActivation(tool, install, host, roots);

@@ -28,7 +28,7 @@ import {
 } from './resources/docs.js';
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { CODEX_TOOL, mayDeleteSkillCopy, skillOrigin } from './resources/skills.js';
-import { installOf, locate, SHARED_AGENT_SKILLS_PATH, writable, writesOf } from './locate.js';
+import { installOf, locate, ownOf, SHARED_AGENT_SKILLS_PATH, writable, writesOf } from './locate.js';
 import { describeToolHomeChange, recordToolHomes } from './tool-home-record.js';
 import { describeInvalidToolHomes, realHost } from './tool-home.js';
 import { placesOf, placesRecordOf, placesUnmoved, recordPlaces, type PlacesRecord, type SessionToolHomes } from './resources/places.js';
@@ -630,8 +630,12 @@ async function cleanupTombstonedResources(
         if (skillsDir === null) continue;
         typeDir = skillsDir;
       } else if (type === 'rules') {
-        const rulesDir = writable(await locate(tool, 'rules', installOf(freshConfig, localConfig)));
-        if (rulesDir?.kind !== 'dir') continue;
+        const where = await locate(tool, 'rules', installOf(freshConfig, localConfig));
+        // A tool teamai writes no rules for keeps an earlier release's verbatim copies in its configured directory (#993).
+        if (!where.gates.every((gate) => gate.met)) continue;
+        const own = ownOf(where);
+        const rulesDir = own?.kind === 'dir' ? own : where.retired.find((retired) => retired.place.kind === 'dir')?.place;
+        if (rulesDir === undefined) continue;
         typeDir = rulesDir.path;
       } else {
         if (!await isToolInstalledForConfig(tool, dir, localConfig)) continue;

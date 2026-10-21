@@ -324,6 +324,14 @@ const ROWS: readonly MatrixRow[] = [
     source: 'Hermes reads the project AGENTS.md itself; teamai writes no project rules for it (#946)',
   },
   {
+    tool: 'hermes', scope: 'project', platforms: ['darwin', 'linux'],
+    install: { toolPaths: { hermes: { rules: '.hermes/rules' } } },
+    channel: 'none',
+    existingDirs: ['~/.hermes'], installed: { probe: '~/.hermes', met: true },
+    retired: [{ at: '<root>/.hermes/rules', was: 'configured' }],
+    source: 'Hermes writes no project rules; an earlier release copied them into the rules directory a team entry still names (#993)',
+  },
+  {
     tool: 'dsh', scope: 'user',
     writes: [{ at: '~/.dsh/AGENTS.md', owned: false, header: null }],
     existingDirs: ['~/.dsh'], installed: { probe: '~/.dsh', met: true },
