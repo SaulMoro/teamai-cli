@@ -2758,6 +2758,104 @@ steps:
     expect(fs.existsSync(path.join(copy, 'polish.txt'))).toBe(false);
   });
 
+  it('creates the copy again when its directory was deleted', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A deleted copy is created again.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('impl.txt','yes')"
+        - id: polish
+          needs: [implement]
+          workspace: continue
+          command: node -e "const fs=require('fs'); if (!fs.existsSync('../../../go')) process.exit(1); fs.writeFileSync('polish.txt','yes')"
+`);
+    const branch = branchName(runId, 'change', 1);
+    await runLocalDriver(config, runId, workspace);
+    fs.rmSync(worktreePath(workspace, branch), { recursive: true, force: true });
+    fs.writeFileSync(path.join(workspace, 'go'), '');
+    expect(await retryStep(config, runId, 'change.polish')).toMatchObject({ data: { retried: { pass: 2 } } });
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({ status: 'succeeded', changes: { branch } });
+    expect(git(['show', `${branch}:polish.txt`], workspace)).toBe('yes');
+  });
+
+  it('refuses a directory at the copy path that is not a workflow worktree, without telling the user to check out a branch there', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A plain directory where the copy goes is not used.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('impl.txt','yes')"
+        - id: polish
+          needs: [implement]
+          workspace: continue
+          command: node -e "const fs=require('fs'); if (!fs.existsSync('../../../go')) process.exit(1); fs.writeFileSync('polish.txt','yes')"
+`);
+    const branch = branchName(runId, 'change', 1);
+    const copy = worktreePath(workspace, branch);
+    fs.mkdirSync(copy, { recursive: true });
+    const active = git(['symbolic-ref', 'HEAD'], workspace).trim();
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    expect(run.steps.find((step) => step.id === 'change.implement')).toMatchObject({
+      status: 'failed', failure: { code: 'workspace_base', message: expect.stringContaining(`${copy} is not a workflow worktree`) },
+    });
+    expect(run.steps.find((step) => step.id === 'change.implement')).not.toMatchObject({ failure: { message: expect.stringContaining('Check out') } });
+    expect(git(['symbolic-ref', 'HEAD'], workspace).trim()).toBe(active);
+  });
+
+  it('refuses a writer in a copy whose marker cannot be read', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: An unreadable marker fails closed.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('impl.txt','yes')"
+        - id: polish
+          needs: [implement]
+          workspace: continue
+          command: node -e "const fs=require('fs'); if (!fs.existsSync('../../../go')) process.exit(1); fs.writeFileSync('polish.txt','yes')"
+`);
+    const branch = branchName(runId, 'change', 1);
+    const copy = worktreePath(workspace, branch);
+    await runLocalDriver(config, runId, workspace);
+    fs.mkdirSync(path.resolve(copy, git(['rev-parse', '--git-path', 'teamai-unrestored'], copy).trim()));
+    fs.writeFileSync(path.join(workspace, 'go'), '');
+    expect(await retryStep(config, runId, 'change.polish')).toMatchObject({ data: { retried: { pass: 2 } } });
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({
+      status: 'failed', failure: { code: 'workspace_base', message: expect.stringContaining('has a marker teamai cannot read') },
+    });
+    expect(() => git(['show', `${branch}:polish.txt`], workspace)).toThrow();
+  });
+
   it('puts a submodule a reader changed back at the commit the copy records, so a later step does not commit it', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build

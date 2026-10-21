@@ -10,7 +10,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { TeamaiConfigBaseSchema } from '../types.js';
-import { readFileSafe, writeJsonAtomic } from '../utils/fs.js';
+import { writeJsonAtomic } from '../utils/fs.js';
 
 /** Agent configuration a workspace step reads from the run's base rather than from its branch. */
 export const AGENT_PATHS: readonly string[] = agentConfigPaths();
@@ -119,9 +119,18 @@ export async function ensureWorktree(main: string, branch: string, start: string
   await fs.mkdir(hooks, { recursive: true });
   await hideTeamaiWorktrees(main);
   const listed = await git(main, ['worktree', 'list', '--porcelain']);
-  const known = listed.code === 0 && listed.stdout.split('\n').some((line) => line.startsWith('worktree ') && path.resolve(line.slice('worktree '.length)) === path.resolve(dir));
-  const existing = known || await git(dir, ['rev-parse', '--is-inside-work-tree']).then((result) => result.stdout.trim() === 'true').catch(() => false);
+  // Git lists the resolved path, which differs from `dir` under a symlinked temp or home directory.
+  const real = path.join(await fs.realpath(path.dirname(dir)).catch(() => path.dirname(dir)), path.basename(dir));
+  const known = listed.code === 0 && listed.stdout.split('\n').some((line) => line.startsWith('worktree ') && [path.resolve(dir), real].includes(path.resolve(line.slice('worktree '.length))));
+  const present = await fs.stat(dir).then((stats) => stats.isDirectory(), () => false);
+  // A deleted worktree stays registered, and `worktree add` refuses its path until it is pruned.
+  if (known && !present) await git(main, ['worktree', 'prune']);
+  const existing = present && (known || await git(dir, ['rev-parse', '--is-inside-work-tree']).then((result) => result.stdout.trim() === 'true').catch(() => false));
   if (existing) {
+    const prefix = await git(dir, ['rev-parse', '--show-prefix']);
+    if (prefix.code !== 0 || prefix.stdout.trim() !== '') {
+      return { error: `${dir} is not a workflow worktree, so no step runs there. Move it out of the way, then retry the step.` };
+    }
     const head = (await git(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
     if (head !== `refs/heads/${branch}`) {
       const on = head ? `on ${head}` : `detached at ${(await git(dir, ['rev-parse', 'HEAD'])).stdout.trim()}`;
@@ -581,12 +590,12 @@ export async function unrestoredCopy(dir: string): Promise<
   { state: 'unrestored'; dir: string; marker: UnrestoredMarker; left: string } | { state: 'unreadable'; dir: string; marker: string } | undefined
 > {
   const file = await gitPath(dir, UNRESTORED_MARKER);
-  const text = file ? await readFileSafe(file) : null;
-  if (!file || text === null) return undefined;
+  if (!file) return undefined;
   let raw: unknown;
   try {
-    raw = JSON.parse(text);
-  } catch {
+    raw = JSON.parse(await fs.readFile(file, 'utf8'));
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined;
     return { state: 'unreadable', dir, marker: file };
   }
   const parsed = UnrestoredMarker.safeParse(raw);
