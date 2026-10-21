@@ -481,6 +481,49 @@ steps:
     expect(git(['show', `${branch}:right.txt`], workspace)).toBe('R');
   });
 
+  it('commits a writer whose only change is a new file when the repository hides untracked files from status', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: status.showUntrackedFiles=no does not hide a writer's new file.
+steps:
+  - id: change
+    workspace: new
+    command: node -e "require('fs').writeFileSync('new.txt','yes')"
+`);
+    git(['config', 'status.showUntrackedFiles', 'no'], workspace);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    const change = run.steps.find((step) => step.id === 'change');
+    expect(change && 'changes' in change && change.changes?.commits.length).toBe(1);
+    expect(git(['show', `${branchName(runId, 'change', 1)}:new.txt`], workspace)).toBe('yes');
+  });
+
+  it('commits a writer whose change an external diff the user trusts calls equal', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: diff.external with diff.trustExitCode does not decide whether there is something to commit.
+steps:
+  - id: change
+    workspace: new
+    command: node -e "require('fs').writeFileSync('tracked.txt','clean \\\\n')"
+`);
+    const wrapper = path.join(path.dirname(workspace), 'diff-w.sh');
+    fs.writeFileSync(wrapper, '#!/bin/sh\nexec diff -w "$2" "$5"\n', { mode: 0o755 });
+    git(['config', 'diff.external', wrapper], workspace);
+    git(['config', 'diff.trustExitCode', 'true'], workspace);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    const change = run.steps.find((step) => step.id === 'change');
+    expect(change && 'changes' in change && change.changes?.commits.length).toBe(1);
+    expect(git(['show', `${branchName(runId, 'change', 1)}:tracked.txt`], workspace)).toBe('clean \n');
+  });
+
   it('does not lease a continue step to a driver that does not own the copy', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build
@@ -1257,6 +1300,24 @@ steps:
     expect(git(['rev-parse', 'teamai/solo'], bare)).toBe(git(['rev-parse', 'HEAD'], repo));
     execFileSync('git', ['checkout', '-q', '-b', 'teamai/same', 'main'], { cwd: repo });
     expect(await pushIfOrigin(repo, 'teamai/same', [])).toBe('unchanged');
+  });
+
+  it('pushes a branch only it holds when the user forces branch colors', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-push-'));
+    dirs.push(root);
+    const bare = path.join(root, 'origin.git');
+    const repo = path.join(root, 'repo');
+    execFileSync('git', ['init', '-q', '--bare', bare]);
+    execFileSync('git', ['init', '-q', '-b', 'main', repo]);
+    fs.writeFileSync(path.join(repo, 'tracked.txt'), 'one\n');
+    execFileSync('git', ['add', 'tracked.txt'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-qm', 'one'], { cwd: repo });
+    execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo });
+    execFileSync('git', ['checkout', '-q', '-b', 'teamai/solo'], { cwd: repo });
+    execFileSync('git', ['-c', 'user.name=Test', '-c', 'user.email=test@example.com', 'commit', '-q', '--allow-empty', '-m', 'two'], { cwd: repo });
+    git(['config', 'color.branch', 'always'], repo);
+
+    expect(await pushIfOrigin(repo, 'teamai/solo', [])).toBe('pushed');
   });
 
   it('commits a hook a step made executable without editing its text', async () => {

@@ -370,7 +370,7 @@ export async function commitWork(
   const merging = (await git(dir, ['rev-parse', '--verify', '--quiet', 'MERGE_HEAD'])).code === 0;
   const added = await stageAll(dir);
   if (added.code !== 0) return { error: added.stderr.trim() || 'git add failed' };
-  const staged = await git(dir, ['diff', '--cached', '--quiet', '--ignore-submodules=none']);
+  const staged = await git(dir, ['diff', '--cached', '--quiet', '--ignore-submodules=none', '--no-ext-diff']);
   if (staged.code !== 0 || merging) {
     const committed = await git(dir, ['-c', 'user.name=TeamAI', '-c', 'user.email=teamai@localhost', 'commit', '-m', message]);
     if (committed.code !== 0) return { error: committed.stderr.trim() || committed.stdout.trim() || 'git commit failed' };
@@ -419,7 +419,7 @@ async function branchNeedsPush(dir: string, branch: string): Promise<boolean> {
 
 /** True when no other local branch already contains this tip. */
 async function tipIsOnlyOn(dir: string, branch: string, tip: string): Promise<boolean> {
-  const holders = await git(dir, ['branch', '--contains', tip]);
+  const holders = await git(dir, ['branch', '--no-color', '--contains', tip]);
   if (holders.code !== 0) return true;
   const names = holders.stdout.split('\n').map((line) => line.trim().replace(/^[*+] /, '')).filter((name) => name !== '');
   return names.every((name) => name === branch);
