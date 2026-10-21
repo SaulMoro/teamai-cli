@@ -4,7 +4,7 @@ import path from 'node:path';
 import { readWorkspaceChildren } from './workspace-children.js';
 import { saveLocalConfig, loadTeamConfig, saveLocalConfigForScope, loadLocalConfigForScope, loadStateForScope, saveStateForScope, resolveProjectDataHome } from './config.js';
 import { deliveredHookFiles, describeUnappliedTeamHooks, hasTeamaiHooks, reconcileHooks, reconcileTeamHooksForConfig, reportCodexTrust, trustCodexForScope } from './hooks.js';
-import { configureGitUser, initRepo, isGitRepo, getRemoteUrl, remotesMatch, redactGitCredentials, pullRepoFastForward, DetachedTeamRepoError, pushRepoDirectly, autoPushViaMR, initPushBlockTimeoutMs } from './utils/git.js';
+import { configureGitUser, initRepo, isGitRepo, getRemoteUrl, remotesMatch, redactGitCredentials, pullRepoFastForward, DetachedTeamRepoError, pushRepoDirectly, autoPushViaMR, gitBlockTimeoutMs } from './utils/git.js';
 import { withTimeout } from './utils/async.js';
 import { getProvider, detectProvider, detectProviderForInit, RepoNotFoundError, OrganizationNotFoundError, RepoCreatePermissionError } from './providers/index.js';
 import { parseGenericGitExistingRemote } from './providers/git/repo-url.js';
@@ -1461,7 +1461,7 @@ export async function initSelfRepo(options: GlobalOptions & {
               : `[teamai] Update member roster: ${username}`,
           };
         }, { initPush: true }),
-        initPushBlockTimeoutMs(),
+        gitBlockTimeoutMs(),
         'Member registration push',
       ));
       if (selfMemberChanged) {
@@ -1983,7 +1983,7 @@ export async function init(options: GlobalOptions & {
           'env/.gitkeep',
           'members/.gitkeep',
         ], { initPush: true }),
-        initPushBlockTimeoutMs(),
+        gitBlockTimeoutMs(),
         'Skeleton push',
       );
     } catch (e) {
@@ -2023,7 +2023,7 @@ export async function init(options: GlobalOptions & {
               : `[teamai] Update member roster: ${username}`,
           };
         }, { initPush: true }),
-        initPushBlockTimeoutMs(),
+        gitBlockTimeoutMs(),
         'Member registration push',
       ));
       if (memberChanged) {
@@ -2076,7 +2076,7 @@ export async function init(options: GlobalOptions & {
               // Reviewer config goes via MR: a protected default branch rejects
               // a direct push (the original bug), and an MR lands it on a
               // feature branch for a maintainer to merge. The push itself uses
-              // createGitForInitPush (spawn-level timeout); the provider's
+              // createGitWithBlockTimeout (spawn-level timeout); the provider's
               // pr-create spawnSync also carries the init-push timeout so a
               // stalled gh/gf process cannot block the event loop past it.
               const mrTeamConfig = await loadTeamConfig(localPath);
@@ -2095,7 +2095,7 @@ export async function init(options: GlobalOptions & {
                     mrLocalConfig,
                     { initPush: true },
                   ),
-                  initPushBlockTimeoutMs(),
+                  gitBlockTimeoutMs(),
                   'Reviewer config push',
                 );
                 if (prUrl) {

@@ -28,7 +28,7 @@
 import path from 'node:path';
 import fse from 'fs-extra';
 import type { SimpleGit, StatusResult } from 'simple-git';
-import { createGit, createGitForInitPush, isGitRepo, commitSkippingHooks, isDedicatedRepoRoot, gitCommonDir, checkoutLocation } from './git.js';
+import { createGit, createGitWithBlockTimeout, isGitRepo, commitSkippingHooks, isDedicatedRepoRoot, gitCommonDir, checkoutLocation } from './git.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { ensureDir, writeFile, pathExists } from './fs.js';
 import { isSilent, log } from './logger.js';
@@ -127,7 +127,7 @@ async function nothingLeftToPush(git: SimpleGit, spec: BranchWorktreeSpec): Prom
 
 /** Whether origin has the branch; null when git could not ask it. */
 async function remoteBranchExists(spec: BranchWorktreeSpec, repoRoot: string, initPush = false): Promise<boolean | null> {
-  const git = initPush ? createGitForInitPush(repoRoot) : createGit(repoRoot);
+  const git = initPush ? createGitWithBlockTimeout(repoRoot) : createGit(repoRoot);
   try {
     const res = await git.listRemote(['--heads', 'origin', spec.branch]);
     return typeof res === 'string' && res.trim().length > 0;
@@ -210,7 +210,7 @@ async function openWorktree(
   // open is removed and recreated only while this repo still registers it;
   // after the clone is deleted and cloned again its registration
   // (`<clone>/.git/worktrees/<dirname>`) is gone, and it is refused and kept.
-  const makeGit = options.initPush ? createGitForInitPush : createGit;
+  const makeGit = options.initPush ? createGitWithBlockTimeout : createGit;
   if (await isGitRepo(wt)) {
     // A stale/dangling worktree link is recreated below if this repo registers it.
     if (await gitOpensCheckout(wt)) {
@@ -534,7 +534,7 @@ function refuse(error: Error): never {
  * and falls back to the detach + `checkout --orphan` dance for older git.
  */
 async function createOrphanWorktree(spec: BranchWorktreeSpec, repoRoot: string, wt: string, initPush = false): Promise<void> {
-  const git = initPush ? createGitForInitPush(repoRoot) : createGit(repoRoot);
+  const git = initPush ? createGitWithBlockTimeout(repoRoot) : createGit(repoRoot);
   try {
     // git 2.42+: create a worktree on a fresh orphan branch directly.
     // The branch name must be given via -b; a positional after <path> is treated
@@ -542,7 +542,7 @@ async function createOrphanWorktree(spec: BranchWorktreeSpec, repoRoot: string, 
     await git.raw(['worktree', 'add', '--orphan', '-b', spec.branch, wt]);
     // The --orphan worktree may inherit the index/files from HEAD in some git
     // versions; clear tracked entries so the branch starts empty.
-    const wtGit = initPush ? createGitForInitPush(wt) : createGit(wt);
+    const wtGit = initPush ? createGitWithBlockTimeout(wt) : createGit(wt);
     try {
       await wtGit.raw(['rm', '-rf', '--cached', '.']);
     } catch {
@@ -552,7 +552,7 @@ async function createOrphanWorktree(spec: BranchWorktreeSpec, repoRoot: string, 
   } catch {
     // Older git (<2.42): detach a worktree at HEAD, then orphan-checkout inside it.
     await git.raw(['worktree', 'add', '--detach', wt, 'HEAD']);
-    const wtGit = initPush ? createGitForInitPush(wt) : createGit(wt);
+    const wtGit = initPush ? createGitWithBlockTimeout(wt) : createGit(wt);
     await wtGit.raw(['checkout', '--orphan', spec.branch]);
     try {
       await wtGit.raw(['rm', '-rf', '--cached', '.']);
@@ -610,7 +610,7 @@ async function commitAndPushAt(
   files: string[],
   options: BranchPushOptions = {},
 ): Promise<PublishResult> {
-  const git = options.initPush ? createGitForInitPush(wt) : createGit(wt);
+  const git = options.initPush ? createGitWithBlockTimeout(wt) : createGit(wt);
 
   // Literal: a filename with `[` or `*` would otherwise stage whatever it matches as a pattern.
   await git.raw(['--literal-pathspecs', 'add', '--', ...files]);
@@ -998,7 +998,7 @@ async function restageSnapshotIndex(spec: BranchWorktreeSpec, git: SimpleGit, sh
  *    conflicts restore the original uncommitted files, never conflict markers.
  */
 async function syncWorktree(spec: BranchWorktreeSpec, wt: string, initPush = false): Promise<void> {
-  const git = initPush ? createGitForInitPush(wt) : createGit(wt);
+  const git = initPush ? createGitWithBlockTimeout(wt) : createGit(wt);
   const upstream = `origin/${spec.branch}`;
   try {
     // Explicit refspec so the `merge --ff-only`/`rebase` against origin/<branch>

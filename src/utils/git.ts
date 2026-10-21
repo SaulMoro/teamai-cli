@@ -154,7 +154,7 @@ export function disableGitTerminalPrompt(): void {
  * back to the default rather than reaching simple-git (which would either
  * silently disable the timeout or misbehave).
  */
-export function initPushBlockTimeoutMs(): number {
+export function gitBlockTimeoutMs(): number {
   const raw = process.env.TEAMAI_INIT_PUSH_TIMEOUT_MS;
   if (raw !== undefined) {
     const parsed = Number(raw);
@@ -197,8 +197,8 @@ export function createGit(basePath?: string, abort?: AbortSignal): SimpleGit {
  * `withTimeout` wrapper around the await is only a second layer), while
  * unrelated commands keep simple-git's default of no spawn timeout.
  */
-export function createGitForInitPush(basePath?: string): SimpleGit {
-  const block = initPushBlockTimeoutMs();
+export function createGitWithBlockTimeout(basePath?: string): SimpleGit {
+  const block = gitBlockTimeoutMs();
   return basePath
     ? simpleGit({ baseDir: basePath, binary: gitBinary(), timeout: { block } })
     : simpleGit({ binary: gitBinary(), timeout: { block } });
@@ -588,7 +588,7 @@ export async function getDefaultBranch(localPath: string): Promise<string> {
  * `master` or anything else. Used during init for first-time setup, and by CI.
  *
  * `opts.initPush` selects the spawn-level block timeout factory used by init
- * (see {@link createGitForInitPush}); other callers get the plain factory.
+ * (see {@link createGitWithBlockTimeout}); other callers get the plain factory.
  */
 export async function pushRepoDirectly(
   localPath: string,
@@ -596,7 +596,7 @@ export async function pushRepoDirectly(
   files: string[],
   opts: { initPush?: boolean } = {},
 ): Promise<void> {
-  const git = opts.initPush ? createGitForInitPush(localPath) : createGit(localPath);
+  const git = opts.initPush ? createGitWithBlockTimeout(localPath) : createGit(localPath);
   await assertAttachedTeamRepo(git, localPath);
   const existingFiles = [];
   for (const f of files) {
@@ -692,7 +692,7 @@ export async function autoPushViaMR(
     const { createPrWithFallback } = await import('../push.js');
     const prUrl = await createPrWithFallback(
       teamConfig, localConfig, branchName, message, message,
-      opts.initPush ? { spawnTimeoutMs: initPushBlockTimeoutMs() } : {},
+      opts.initPush ? { spawnTimeoutMs: gitBlockTimeoutMs() } : {},
     );
 
     await checkoutMaster(repoPath);
@@ -770,7 +770,7 @@ export async function remoteBranchExists(
  * pushed and the function returns false.
  *
  * `opts.initPush` selects the spawn-level block timeout factory used by init
- * (see {@link createGitForInitPush}); other callers get the plain factory.
+ * (see {@link createGitWithBlockTimeout}); other callers get the plain factory.
  */
 export async function pushRepoBranch(
   localPath: string,
@@ -779,7 +779,7 @@ export async function pushRepoBranch(
   branchName: string,
   opts: { reuseBranch?: boolean; initPush?: boolean } = {},
 ): Promise<boolean> {
-  const git = opts.initPush ? createGitForInitPush(localPath) : createGit(localPath);
+  const git = opts.initPush ? createGitWithBlockTimeout(localPath) : createGit(localPath);
   await assertAttachedTeamRepo(git, localPath);
 
   if (opts.reuseBranch) {
