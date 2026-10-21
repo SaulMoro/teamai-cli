@@ -107,7 +107,10 @@ export async function headCommit(cwd: string): Promise<{ ref?: string; commit: s
   return ref ? { ref, commit } : { commit };
 }
 
-/** Creates the worktree when it is missing. A branch that already exists is checked out as it is. */
+/**
+ * Creates the worktree when it is missing. A branch that already exists is checked out as it is. An existing worktree
+ * off its branch is refused, so a step never commits on whatever HEAD was left.
+ */
 export async function ensureWorktree(main: string, branch: string, start: string): Promise<{ dir: string } | { error: string }> {
   const dir = worktreePath(main, branch);
   const hooks = hooksPath(main);
@@ -117,6 +120,11 @@ export async function ensureWorktree(main: string, branch: string, start: string
   const known = listed.code === 0 && listed.stdout.split('\n').some((line) => line.startsWith('worktree ') && path.resolve(line.slice('worktree '.length)) === path.resolve(dir));
   const existing = known || await git(dir, ['rev-parse', '--is-inside-work-tree']).then((result) => result.stdout.trim() === 'true').catch(() => false);
   if (existing) {
+    const head = (await git(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
+    if (head !== `refs/heads/${branch}`) {
+      const on = head ? `on ${head}` : `detached at ${(await git(dir, ['rev-parse', 'HEAD'])).stdout.trim()}`;
+      return { error: `Workspace ${dir} is ${on}, not on branch ${branch}. Check out ${branch} in ${dir}, then retry the step.` };
+    }
     await worktreeHooks(main, dir, hooks);
     return { dir };
   }

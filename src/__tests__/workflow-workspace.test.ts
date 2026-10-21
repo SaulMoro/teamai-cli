@@ -2605,6 +2605,41 @@ steps:
     expect(() => git(['show', `${branch}:nested`], workspace)).toThrow();
   });
 
+  it('refuses a writer whose existing copy is on a detached HEAD, naming the branch to put it back on', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A copy left detached, as by a driver stopped before it put the copy back, is not reused.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('fs').writeFileSync('impl.txt','yes')"
+        - id: polish
+          needs: [implement]
+          workspace: continue
+          command: node -e "const fs=require('fs'); if (!fs.existsSync('../../../go')) process.exit(1); fs.writeFileSync('polish.txt','yes')"
+`);
+    const branch = branchName(runId, 'change', 1);
+    await runLocalDriver(config, runId, workspace);
+    const copy = worktreePath(workspace, branch);
+    git(['checkout', '-q', '--detach'], copy);
+    fs.writeFileSync(path.join(workspace, 'go'), '');
+    expect(await retryStep(config, runId, 'change.polish')).toMatchObject({ data: { retried: { pass: 2 } } });
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({
+      status: 'failed', failure: { code: 'workspace_base', message: expect.stringMatching(new RegExp(`${copy.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} is detached at .*not on branch ${branch}`)) },
+    });
+    expect(() => git(['show', `${branch}:polish.txt`], workspace)).toThrow();
+    expect(fs.existsSync(path.join(copy, 'polish.txt'))).toBe(false);
+  });
+
   it('puts a submodule a reader changed back at the commit the copy records, so a later step does not commit it', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build
