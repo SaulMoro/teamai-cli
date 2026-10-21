@@ -42,7 +42,7 @@ import type { DriverIdentity, StepHitl, WorkflowEnvelope, WorkflowFailure } from
 import { isWorkflowError } from './types.js';
 import type { WorkspaceContract } from './workspace.js';
 import {
-  applyBaseConfig, clearReadCopyMark, commitWork, ensureWorktree, git, headCommit, hooksPath, type KeptChanges, markReadCopy, mergeBranch, pushIfOrigin, putBackCopy, recordConfigOverlay, removeWorktree, reopenConfigConflicts, restoreUneditedConfig, unrestoredCopy, worktreePath,
+  applyBaseConfig, commitWork, ensureWorktree, git, headCommit, hooksPath, keptSentence, type KeptChanges, markReadCopy, mergeBranch, pushIfOrigin, putBackCopy, recordConfigOverlay, removeWorktree, reopenConfigConflicts, restoreUneditedConfig, unrestoredCopy, worktreePath,
 } from './worktree.js';
 
 /** Local lease identity, stable across restarts in the same workspace. */
@@ -163,7 +163,6 @@ interface Lease {
   /** Set once the step has a directory to run in. */
   cwd?: string;
   before?: WorktreeSnapshot;
-  /** A read copy's status before the base overlay, which putting the copy back returns it to. */
   found?: string[];
   /** Branch agent files saved while the base overlay is in place. */
   overlay?: string;
@@ -559,18 +558,8 @@ async function leaveReadCopy(lease: Lease): Promise<ReadCopy | undefined> {
   if (!onBranch && !changed.includes('HEAD')) changed.push('HEAD');
   await restoreLeaseOverlay(lease);
   const read = { branch: workspace.branch, base: workspace.base.commit, commit: before.head };
-  if (changed.length === 0) {
-    await clearReadCopyMark(cwd);
-    return { read, state: 'untouched' };
-  }
   const put = await putBackCopy({ dir: cwd, branch: read.branch, commit: read.commit, found, changed, attempt: lease.attempt, step: lease.step });
-  return put.state === 'restored' ? { read, changed, ...put } : { read, changed, dir: cwd, ...put };
-}
-
-function keptSentence(kept: KeptChanges): string {
-  return kept.modules
-    ? `Its changes are kept on ${kept.ref}, and the submodule commits it made under ${kept.modules}.`
-    : `Its changes are kept on ${kept.ref}.`;
+  return put.state === 'unrestored' ? { read, changed, dir: cwd, ...put } : put.state === 'restored' ? { read, changed, ...put } : { read, ...put };
 }
 
 /** A reader that changed its copy fails. `changed` is the step's own sentence naming the paths. */

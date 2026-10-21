@@ -577,7 +577,7 @@ export async function markReadCopy(dir: string, { branch, step }: { branch: stri
   return { found: status.lines };
 }
 
-export async function clearReadCopyMark(dir: string): Promise<void> {
+async function clearReadCopyMark(dir: string): Promise<void> {
   const marker = await gitPath(dir, UNRESTORED_MARKER);
   if (marker) await fs.rm(marker, { force: true });
 }
@@ -678,16 +678,26 @@ async function unkeptRepositories(dir: string, { paths, commit }: { paths: strin
 /** Where a reader's changes were kept: the whole tree on `ref`, and each submodule commit it made under `modules`. */
 export type KeptChanges = { ref: string; modules?: string };
 
+export function keptSentence(kept: KeptChanges): string {
+  return kept.modules
+    ? `Its changes are kept on ${kept.ref}, and the submodule commits it made under ${kept.modules}.`
+    : `Its changes are kept on ${kept.ref}.`;
+}
+
 /**
- * Puts a copy a reader changed back on `branch` at `commit` with the status `found` it had when the reader started, after
+ * Puts a copy a reader read back on `branch` at `commit` with the status `found` it had when the reader started, after
  * keeping what it changed on `refs/teamai/kept/<attempt>`. A copy it cannot put back keeps its mark with the reason, so
  * later steps there are refused until it is.
  */
 export async function putBackCopy({ dir, branch, commit, found, changed, attempt, step }: {
   dir: string; branch: string; commit: string; found: string[]; changed: string[]; attempt: string; step: string;
 }): Promise<
-  { state: 'restored'; kept: KeptChanges } | { state: 'unrestored'; reason: string; kept?: KeptChanges }
+  { state: 'untouched' } | { state: 'restored'; kept: KeptChanges } | { state: 'unrestored'; reason: string; kept?: KeptChanges }
 > {
+  if (changed.length === 0) {
+    await clearReadCopyMark(dir);
+    return { state: 'untouched' };
+  }
   const unrestored = async (reason: string, kept?: KeptChanges): Promise<{ state: 'unrestored'; reason: string; kept?: KeptChanges }> => {
     const marker = await gitPath(dir, UNRESTORED_MARKER);
     const record: UnrestoredMarker = { branch, commit, step, reason, found };
