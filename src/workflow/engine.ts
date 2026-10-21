@@ -445,12 +445,19 @@ function skipUnreachable(run: RunState, scope: Scope, states: StepState[], { con
   return ready;
 }
 
+/** A leaf step that can be leased, with what its lease renders to. */
+interface Ready {
+  lease: StepState;
+  definition: WorkflowStep;
+  rendered: RenderedLease;
+}
+
 /**
- * How settling a workflow of the run ended: a step to lease, the workflow's outcome, nothing to do until an open
- * lease is reported, or a run file that cannot settle.
+ * How settling a workflow of the run ended: the steps to lease, in the order they were found, the workflow's outcome,
+ * nothing to do until an open lease is reported, or a run file that cannot settle.
  */
 type Settled =
-  | { lease: StepState; definition: WorkflowStep; rendered: RenderedLease }
+  | { ready: Ready[] }
   | WorkflowResult
   | { inProgress: true }
   | { unreadable: string };
@@ -570,7 +577,7 @@ function advanceInstance(
   }
   if (definition.workflow === undefined) {
     const rendered = renderLease(scope, states, state, definition);
-    if (!('code' in rendered)) return { lease: state, definition, rendered };
+    if (!('code' in rendered)) return { ready: [{ lease: state, definition, rendered }] };
     failStep(state, rendered, run.revision);
     return undefined;
   }
@@ -582,8 +589,9 @@ function advanceInstance(
 }
 
 /**
- * Settles items at the current revision and returns the first leaf available to lease. An item waits for its
- * `after` dependencies and for room under `max_parallel`.
+ * Settles items at the current revision and returns the leaves available to lease. An item waits for its
+ * `after` dependencies and for room under `max_parallel`. A ready leaf does not take room until it is leased, and
+ * `next` leases one step per call, so a held-back item leaves its room to the next one.
  */
 function settleItems(
   run: RunState, scope: Scope, states: StepState[], state: StepState, definition: WorkflowStep,
@@ -599,7 +607,7 @@ function settleItems(
     const maxParallel = definition.forEach?.maxParallel;
     let started = startedItems(items);
     let changed = false;
-    let candidate: Settled | undefined;
+    const ready: Ready[] = [];
     for (const [index, item] of items.entries()) {
       if (item.status === 'pending' && standing(index) === 'skip') {
         // A skip makes the items after it skippable wherever they are in item order, so it reaches them all now.
@@ -615,7 +623,7 @@ function settleItems(
       if (item.status !== 'running' && (item.status !== 'pending' || standing(index) !== 'ready' || (maxParallel !== undefined && started >= maxParallel))) continue;
       const advanced = advanceInstance(run, scope, states, item, definition);
       if (advanced && 'unreadable' in advanced) return advanced;
-      if (advanced && 'lease' in advanced) candidate ??= advanced;
+      if (advanced && 'ready' in advanced) ready.push(...advanced.ready);
       if (advanced) continue;
       changed = true;
       // Starting an item changes no other item's standing, so the scan goes on. Settling one can make an earlier item
@@ -625,7 +633,7 @@ function settleItems(
     }
     if (changed) continue;
     if (items.every(settled)) return itemsSettled(items, run.revision, run);
-    return candidate ?? { inProgress: true };
+    return ready.length > 0 ? { ready } : { inProgress: true };
   }
 }
 
@@ -637,8 +645,8 @@ function workflowOutputs(scope: Scope, states: StepState[], paths: Map<string, E
 }
 
 /**
- * Settles driverless transitions before applying an end or deciding a loop. A lease candidate is returned only
- * after this fixpoint, before another report can advance the revision.
+ * Settles driverless transitions before applying an end or deciding a loop. The steps ready to lease are returned
+ * only after this fixpoint, before another report can advance the revision.
  */
 function settleScope(run: RunState, scope: Scope): Settled {
   const reads = parseReads(run, scope);
@@ -648,7 +656,7 @@ function settleScope(run: RunState, scope: Scope): Settled {
   const definitionOf = (state: StepState): WorkflowStep | undefined => defined.get(localId(scope, state));
   for (;;) {
     let changed = false;
-    let candidate: Settled | undefined;
+    const ready: Ready[] = [];
     const canRun = skipUnreachable(run, scope, states, reads);
     for (const state of states) {
       if (state.status !== 'running' && (state.status !== 'pending' || !canRun(state))) continue;
@@ -682,7 +690,7 @@ function settleScope(run: RunState, scope: Scope): Settled {
       } else {
         const advanced = advanceInstance(run, scope, states, state, definition, reads.items.get(localId(scope, state)));
         if (advanced && 'unreadable' in advanced) return advanced;
-        if (advanced && 'lease' in advanced) candidate ??= advanced;
+        if (advanced && 'ready' in advanced) ready.push(...advanced.ready);
         if (advanced) continue;
       }
       changed = true;
@@ -727,7 +735,7 @@ function settleScope(run: RunState, scope: Scope): Settled {
       if (decided === 'again') continue;
       return decided === 'ended' ? result : { ...result, outcome: 'failed', failure: decided };
     }
-    if (candidate) return candidate;
+    if (ready.length > 0) return { ready };
     if (states.some((item) => item.status === 'waiting' || item.status === 'leased' || item.status === 'running')) return { inProgress: true };
     return { unreadable: `Run ${run.id} has pending steps whose needs cannot be met` };
   }
@@ -914,25 +922,37 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           const hitl = options.hitl ? waitingHitl(run) : undefined;
           return hitl ? answer({ hitl }) : wait();
         }
-        if (result.definition.interactive && !options.hitl) {
-          const failure = interactiveHitlRequired(run.id, result.lease.id);
-          failStep(result.lease, failure, run.revision);
-          continue;
+        // A step this driver must not take is held back, and the next ready one is tried. A failed step can change
+        // what is ready, so the run settles again.
+        const held: string[] = [];
+        let failed = false;
+        for (const { lease: state, definition, rendered } of result.ready) {
+          if (definition.interactive && !options.hitl) {
+            failStep(state, interactiveHitlRequired(run.id, state.id), run.revision);
+            failed = true;
+            break;
+          }
+          const located = locateStep(run, state.id);
+          if (!located) return { save: false, envelope: error('run_unreadable', `Run ${run.id} has no definition for step "${state.id}"`) };
+          const plan = planWorkspace(run, located.scope, state, definition, {
+            driver, modes: options.workspaceModes, base: run.base ?? options.base,
+          });
+          if (plan.defer) {
+            held.push(plan.defer);
+            continue;
+          }
+          if (plan.fail) {
+            failStep(state, plan.fail, run.revision);
+            failed = true;
+            break;
+          }
+          if (plan.contract && options.base && !run.base) run.base = options.base;
+          const step = lease(state, { attempt: `a${randomBytes(4).toString('hex')}`, revision: run.revision, driver });
+          rememberCopy(run, plan, driver);
+          return answer(leaseData(run, step, definition, rendered, plan));
         }
-        const located = locateStep(run, result.lease.id);
-        if (!located) return { save: false, envelope: error('run_unreadable', `Run ${run.id} has no definition for step "${result.lease.id}"`) };
-        const plan = planWorkspace(run, located.scope, result.lease, result.definition, {
-          driver, modes: options.workspaceModes, base: run.base ?? options.base,
-        });
-        if (plan.defer) return answer({ wait: { reason: plan.defer } });
-        if (plan.fail) {
-          failStep(result.lease, plan.fail, run.revision);
-          continue;
-        }
-        if (plan.contract && options.base && !run.base) run.base = options.base;
-        const step = lease(result.lease, { attempt: `a${randomBytes(4).toString('hex')}`, revision: run.revision, driver });
-        rememberCopy(run, plan, driver);
-        return answer(leaseData(run, step, result.definition, result.rendered, plan));
+        if (failed) continue;
+        return answer({ wait: { reason: held.join('; ') } });
       }
       const located = locateStep(run, leased.id);
       if (!located) return { save: false, envelope: error('run_unreadable', `Run ${run.id} has no definition for step "${leased.id}"`) };

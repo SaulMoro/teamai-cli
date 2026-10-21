@@ -35,8 +35,8 @@ Each call to `next` does this, in order:
 
 1. It settles the run. If the run has ended, it answers `done`.
 2. It hands back an open lease of this driver that `running` leaves out. A restarted driver sends `"running":[]` and gets its open leases back, one per call.
-3. It leases the first ready step in file order. The steps of a sub-workflow take the place of the step that runs it.
-4. When every ready step is leased, it answers `wait`, and `reason` names the first open lease.
+3. It leases the first ready step in file order. The steps of a sub-workflow take the place of the step that runs it. A step that needs a workspace mode `driver.can.workspace` does not list, or a workspace another driver opened, is held back, and the next ready step is leased.
+4. When every ready step is leased, it answers `wait`, and `reason` names the first open lease. When every ready step is held back, `reason` names each one, separated by `; `.
 
 A driver that sends no `running` gets its open lease back on every call, so it runs one step at a time.
 
