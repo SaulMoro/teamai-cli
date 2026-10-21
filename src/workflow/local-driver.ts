@@ -795,7 +795,9 @@ async function driveRun(config: LocalConfig, runId: string, cwd: string, options
   const base = await headCommit(cwd);
   let prompt: { lease: Lease; controller: AbortController; exit: Promise<ReportBody> } | undefined;
   let question: { hitl: LocalHitl; controller: AbortController; exit: Promise<{ kind: 'question'; line?: string }> } | undefined;
-  const room = (): boolean => !prompt && inFlight.size + dying.size + held.length < maxParallel && !held.some((lease) => lease.prompt !== undefined);
+  // A headless prompt takes a slot as a command does, so a step in another checkout starts beside it. An interactive one has the terminal.
+  const busy = (): number => inFlight.size + dying.size + (prompt ? 1 : 0);
+  const room = (): boolean => !prompt?.lease.interactive && busy() + held.length < maxParallel && !held.some((lease) => lease.prompt !== undefined);
   const cancel = (attempt: string): void => {
     if (prompt?.lease.attempt === attempt) prompt.controller.abort();
     const index = held.findIndex((lease) => lease.attempt === attempt);
@@ -881,7 +883,7 @@ async function driveRun(config: LocalConfig, runId: string, cwd: string, options
         ...[...dying.values()].map(({ lease }) => placeOf(lease, cwd)),
         ...(prompt ? [placeOf(prompt.lease, cwd)] : []),
       ]);
-      for (let index = 0; !prompt?.lease.interactive && held[index]?.command !== undefined && inFlight.size + dying.size < maxParallel;) {
+      for (let index = 0; !prompt?.lease.interactive && held[index]?.command !== undefined && busy() < maxParallel;) {
         const lease = held[index]!;
         if ([...dying.values()].some((stopping) => stopping.step === lease.step)
           || placesBusy().has(placeOf(lease, cwd))
@@ -898,7 +900,7 @@ async function driveRun(config: LocalConfig, runId: string, cwd: string, options
         }
         inFlight.set(lease.attempt, { lease, command: startCommand(lease.command!, lease.cwd ?? cwd, lease.env ?? {}, detached) });
       }
-      if (!prompt && inFlight.size + dying.size < maxParallel) {
+      if (!prompt && busy() < maxParallel) {
         const promptAt = held.findIndex((lease) => lease.prompt !== undefined
           && !placesBusy().has(placeOf(lease, cwd))
           && ![...dying.values()].some((stopping) => stopping.step === lease.step)
