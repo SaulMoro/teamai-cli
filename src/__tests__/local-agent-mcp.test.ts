@@ -1544,6 +1544,22 @@ describe('local-agent: MCP install/uninstall commands', () => {
       expect(await fse.pathExists(path.join(tmpDir, '.claude.json'))).toBe(false);
     });
 
+    it('updates a server in the local scope whose record an earlier release wrote without a file', async () => {
+      const app = await repo('app');
+      await flag(true);
+      expect((await run([install(1, 'api', app)], 'claude', app))[0].status).toBe('success');
+      const { resolveDataHomeForScope } = await import('../config.js');
+      const localRecords = path.join(await resolveDataHomeForScope('project', app), 'managed-local-mcp.json');
+      const recorded: Record<string, Array<Record<string, unknown>>> = await fse.readJson(localRecords);
+      expect(Object.keys(recorded)).toEqual([expect.stringMatching(/^claude:local:/)]);
+      await fse.writeJson(localRecords, Object.fromEntries(Object.entries(recorded).map(([key, records]) => [key, records.map(({ file: _file, ...record }) => record)])));
+
+      const acks = await run([{ ...install(2, 'api', app), version: '2.0.0', mcp_config: { transport: 'stdio', command: 'api-server-2' } }], 'claude', app);
+
+      expect(acks[0]).toMatchObject({ status: 'success' });
+      expect((await servers(path.join(tmpDir, '.claude.json'), app))?.api).toMatchObject({ command: 'api-server-2' });
+    });
+
     it('installs nothing and moves nothing while the flag is unknown, and says why', async () => {
       const app = await repo('app');
       await flag(false);

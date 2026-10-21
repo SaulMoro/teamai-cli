@@ -3987,7 +3987,9 @@ async function installMcpServer(
   // Only records of this file: a server an earlier install left in a file CodeBuddy no longer reads moves below.
   // By real path, as reconciliation compares them: a lookup file linked to another is that file.
   const records = manifest[manifestKey] ?? [];
-  const recordedTargets = new Map(await Promise.all(records.map(async (record) => [record, await recordedMcpTarget(place, record)] as const)));
+  // A local scope's record that notes no file is in that scope, not in a file the project's place names.
+  const recordedIn = active?.projectKey === undefined ? place : active;
+  const recordedTargets = new Map(await Promise.all(records.map(async (record) => [record, await recordedMcpTarget(recordedIn, record)] as const)));
   const inTarget = await Promise.all(records.map((r: ManagedMcpRecord) => sameMcpFile(recordedTargets.get(r)?.file ?? fileOf(r), targetFile)));
   const owned = records.filter((_, i) => inTarget[i]);
   const ownedNames = new Set(owned.map((r: ManagedMcpRecord) => r.name));
