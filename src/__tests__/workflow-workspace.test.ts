@@ -2887,6 +2887,50 @@ steps:
     expect(fs.existsSync(path.join(copy, 'polish.txt'))).toBe(false);
   });
 
+  it.each([
+    ['a command that switches to another branch', "cp.execFileSync('git',['switch','-q','-c','scratch']); fs.writeFileSync('edited.txt','yes')", 'on refs/heads/scratch'],
+    ['a command that detaches HEAD and commits', "cp.execFileSync('git',['checkout','-q','--detach']); fs.writeFileSync('edited.txt','yes'); cp.execFileSync('git',['add','edited.txt']); cp.execFileSync('git',['-c','user.name=Test','-c','user.email=test@example.com','commit','-qm','step'])", 'detached at'],
+    ['a failing command that switches to another branch', "cp.execFileSync('git',['switch','-q','-c','scratch']); fs.writeFileSync('edited.txt','yes'); process.exit(3)", 'on refs/heads/scratch'],
+    ['a prompt that switches to another branch', undefined, 'on refs/heads/scratch'],
+  ])('fails a writer that leaves its branch without committing, reporting, or pushing for that branch: %s', async (_name, script, where) => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A writer's changes reach its branch only from that branch.
+steps:
+  - id: edit
+    workspace: new
+    ${script === undefined ? 'prompt: Edit.' : `command: node -e "const cp=require('child_process'),fs=require('fs'); ${script}"`}
+`);
+    const base = git(['rev-parse', 'HEAD'], workspace).trim();
+    const origin = path.join(path.dirname(workspace), 'origin.git');
+    execFileSync('git', ['init', '-q', '--bare', origin]);
+    git(['remote', 'add', 'origin', origin], workspace);
+    config.workflows = { tools: { default: 'claude' }, max_parallel: 1 };
+    const adapter: LocalToolAdapter = {
+      async runInteractive() {
+        return { started: false, exitCode: 1, failure: { code: 'tool_failed', message: 'interactive is not used' } };
+      },
+      async run(_tool, input) {
+        execFileSync('git', ['switch', '-q', '-c', 'scratch'], { cwd: input.cwd });
+        fs.writeFileSync(path.join(input.cwd, 'edited.txt'), 'yes');
+        return { started: true, exitCode: 0 };
+      },
+    };
+
+    await runLocalDriver(config, runId, workspace, { adapter });
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    const branch = branchName(runId, 'edit', 1);
+    const edit = run.steps.find((step) => step.id === 'edit');
+    expect(edit).toMatchObject({ status: 'failed', failure: { code: 'workspace_base', message: expect.stringContaining(`${where}`) } });
+    expect(edit).toMatchObject({ failure: { message: expect.stringContaining(`not on branch ${branch}`) } });
+    expect(edit).not.toHaveProperty('changes');
+    expect(git(['rev-parse', branch], workspace).trim()).toBe(base);
+    expect(git(['log', '--all', '--format=%an'], workspace)).not.toContain('TeamAI');
+    expect(git(['for-each-ref', '--format=%(refname)', 'refs/heads'], origin)).toBe('');
+  });
+
   it('creates the copy again when its directory was deleted', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build

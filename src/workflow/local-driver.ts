@@ -42,7 +42,7 @@ import type { DriverIdentity, StepHitl, WorkflowEnvelope, WorkflowFailure } from
 import { isWorkflowError } from './types.js';
 import type { WorkspaceContract } from './workspace.js';
 import {
-  applyBaseConfig, commitWork, ensureWorktree, git, headCommit, hooksPath, keptSentence, type KeptChanges, markReadCopy, mergeBranch, pushIfOrigin, putBackCopy, recordConfigOverlay, removeWorktree, reopenConfigConflicts, restoreUneditedConfig, unrestoredCopy, worktreePath,
+  applyBaseConfig, commitWork, ensureWorktree, git, headCommit, hooksPath, keptSentence, type KeptChanges, markReadCopy, mergeBranch, offBranch, pushIfOrigin, putBackCopy, recordConfigOverlay, removeWorktree, reopenConfigConflicts, restoreUneditedConfig, unrestoredCopy, worktreePath,
 } from './worktree.js';
 
 /** Local lease identity, stable across restarts in the same workspace. */
@@ -586,6 +586,9 @@ async function finishWorkspace(lease: Lease, push: boolean): Promise<{ changes?:
   if (!lease.workspace || lease.workspace.mode === 'read-only' || !lease.cwd) return {};
   if (lease.overlay) await restoreUneditedConfig(lease.cwd, lease.workspace.configCommit, lease.overlay);
   lease.overlay = undefined;
+  // A commit on whatever HEAD the step left would be reported and pushed as the leased branch, which would lack it.
+  const on = await offBranch(lease.cwd, lease.workspace.branch);
+  if (on) return { failure: { code: 'workspace_base', message: `Step "${lease.step}" left workspace ${lease.cwd} ${on}, not on branch ${lease.workspace.branch}, so nothing was committed or pushed. Check out ${lease.workspace.branch} in ${lease.cwd} with the changes to keep, then retry the step.` } };
   const open = await unresolvedConflicts(lease.cwd, lease.conflicts);
   if (open.length > 0) return { failure: { code: 'merge_conflict', message: `Unresolved merge conflict: ${open.join(', ')}` } };
   const committed = await commitWork(lease.cwd, `teamai: ${lease.step}`, lease.rangeFrom);

@@ -126,11 +126,8 @@ export async function ensureWorktree(main: string, branch: string, start: string
     if (prefix.code !== 0 || prefix.stdout.trim() !== '') {
       return { error: `${dir} is not a workflow worktree, so no step runs there. Move it out of the way, then retry the step.` };
     }
-    const head = (await git(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
-    if (head !== `refs/heads/${branch}`) {
-      const on = head ? `on ${head}` : `detached at ${(await git(dir, ['rev-parse', 'HEAD'])).stdout.trim()}`;
-      return { error: `Workspace ${dir} is ${on}, not on branch ${branch}. Check out ${branch} in ${dir}, then retry the step.` };
-    }
+    const on = await offBranch(dir, branch);
+    if (on) return { error: `Workspace ${dir} is ${on}, not on branch ${branch}. Check out ${branch} in ${dir}, then retry the step.` };
     await worktreeHooks(main, dir, hooks);
     return { dir };
   }
@@ -143,6 +140,13 @@ export async function ensureWorktree(main: string, branch: string, start: string
   if (created.code !== 0) return { error: created.stderr.trim() || created.stdout.trim() || 'git worktree add failed' };
   await worktreeHooks(main, dir, hooks);
   return { dir };
+}
+
+/** Where HEAD is, such as `on refs/heads/other` or `detached at <commit>`, when it is not on `branch`. Undefined when it is. */
+export async function offBranch(dir: string, branch: string): Promise<string | undefined> {
+  const head = (await git(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
+  if (head === `refs/heads/${branch}`) return undefined;
+  return head ? `on ${head}` : `detached at ${(await git(dir, ['rev-parse', 'HEAD'])).stdout.trim()}`;
 }
 
 /** Points this worktree's hooks at `hooks` without changing the active checkout's hooks. */
