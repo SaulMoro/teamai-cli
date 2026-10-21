@@ -481,6 +481,36 @@ steps:
     expect(git(['show', `${branch}:right.txt`], workspace)).toBe('R');
   });
 
+  it('says where a failed push left the commits, so pushing them from there works', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: origin refuses the push.
+steps:
+  - id: change
+    workspace: new
+    command: node -e "require('fs').writeFileSync('new.txt','yes')"
+`);
+    git(['remote', 'add', 'origin', path.join(path.dirname(workspace), 'missing.git')], workspace);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    const branch = branchName(runId, 'change', 1);
+    const copy = worktreePath(workspace, branch);
+    expect(run.steps.find((step) => step.id === 'change')).toMatchObject({
+      status: 'failed',
+      failure: {
+        code: 'push_failed',
+        message: expect.stringMatching(new RegExp(`^Step "change" committed on ${branch} in ${copy}, but pushing it to origin failed\\. The commits stay on ${branch}\\. Fix what blocked the push, then push ${branch} from ${copy} or retry the step\\. Git said: .*missing\\.git`, 's')),
+      },
+    });
+    const bare = path.join(path.dirname(workspace), 'missing.git');
+    execFileSync('git', ['init', '-q', '--bare', bare]);
+    git(['push', '-q', 'origin', branch], copy);
+    expect(git(['show', `${branch}:new.txt`], bare)).toBe('yes');
+  });
+
   it('commits a writer whose only change is a new file when the repository hides untracked files from status', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build

@@ -605,7 +605,8 @@ async function finishWorkspace(lease: Lease, push: boolean): Promise<{ changes?:
     to: committed.to,
     commits: committed.commits,
   };
-  return typeof pushed === 'object' ? { changes, failure: { code: 'push_failed', message: pushed.error } } : { changes };
+  if (typeof pushed !== 'object') return { changes };
+  return { changes, failure: { code: 'push_failed', message: `Step "${lease.step}" committed on ${lease.workspace.branch} in ${lease.cwd}, but pushing it to origin failed. The commits stay on ${lease.workspace.branch}. Fix what blocked the push, then push ${lease.workspace.branch} from ${lease.cwd} or retry the step. Git said: ${pushed.error}` } };
 }
 
 async function commandReport(attemptResultPath: string, driver: DriverIdentity, lease: Lease, result: CommandResult): Promise<ReportBody> {
