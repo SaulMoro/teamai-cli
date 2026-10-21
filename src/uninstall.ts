@@ -68,7 +68,7 @@ import {
   removeOwnedFiles,
   skillsGuardBase,
 } from './builtin-skills.js';
-import { installOf, locate, SHARED_AGENT_SKILLS_PATH, writesOf } from './locate.js';
+import { cleanupOf, installOf, locate, SHARED_AGENT_SKILLS_PATH, writesOf } from './locate.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import { allowsSkillDirectory, CODEX_TOOL, describeOutsideSkillLink, skillOrigin } from './resources/skills.js';
 import { describeKeptDir, describeMembersDirLeft, isLink, keepsTrackedCopy, ownsSkillDir, teamaiSkillFiles } from './resources/delivered-copies.js';
@@ -440,6 +440,8 @@ async function discoverToolResources(
   /** The files of a skill directory teamai does not own whole that are teamai's, and the member's (#993). */
   skillFiles: (dir: string, name: string, tool: string) => Promise<{ teamais: string[]; members: string[] }>,
   teamRuleNames: Set<string>,
+  /** Every directory pull writes `tool`'s agents to (`locate`), whether or not it is selected or installed now. */
+  agentDirs: readonly string[],
   teamAgentNames: ReadonlyMap<string, string>,
   hookTargets: HookTarget[],
   standaloneHookManifestPath: string,
@@ -704,15 +706,13 @@ async function discoverToolResources(
   // (d2) Team-synced custom agents plus CLI built-ins. Native output uses
   // .agent.md for Copilot, .md for most tools, .toml for Codex, and .json for
   // Kiro, so match by stem.
-  if (toolPath.agents) {
-    const agentsDir = path.join(baseDir, toolPath.agents);
-    if (await pathExists(agentsDir)) {
-      for (const file of await listFiles(agentsDir)) {
-        const name = agentStemFromFilename(path.basename(file));
-        if (name === null) continue;
-        if (!teamAgentNames.has(name) && !BUILTIN_AGENT_NAMES.has(name)) continue;
-        res.agentFiles.push(path.join(agentsDir, file));
-      }
+  for (const agentsDir of agentDirs) {
+    if (!await pathExists(agentsDir)) continue;
+    for (const file of await listFiles(agentsDir)) {
+      const name = agentStemFromFilename(path.basename(file));
+      if (name === null) continue;
+      if (!teamAgentNames.has(name) && !BUILTIN_AGENT_NAMES.has(name)) continue;
+      res.agentFiles.push(path.join(agentsDir, file));
     }
   }
 
@@ -1006,6 +1006,7 @@ async function buildRemovalPlan(
         ownsSkill,
         skillFiles,
         teamRuleNames,
+        cleanupOf(await locate(tool, 'agents', install)).map((place) => place.path),
         teamAgentNames,
         hookTargets,
         standaloneHookManifestPath,
