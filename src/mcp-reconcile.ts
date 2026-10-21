@@ -452,7 +452,7 @@ export async function projectMcpLocations(
   const other = where.retired.find((retired) => retired.was === 'other-scope')?.place;
   if (own === null || other === undefined) return null;
   const [tree, local] = own.projectKey === undefined ? [own, other] : [other, own];
-  return { tree: mcpTargetAt(tool, format, tree, true), local: mcpTargetAt(tool, format, local, true), active: own === local ? 'local' : 'tree' };
+  return { tree: { ...mcpTargetAt(tool, format, tree, true), retired: where.retired.filter(({ was }) => was === 'default').map(({ place }) => ({ file: place.path, key: place.key })) }, local: mcpTargetAt(tool, format, local, true), active: own === local ? 'local' : 'tree' };
 }
 
 /** Whether `tool`'s project MCP servers go to its local scope now (#915): `projectMcpLocations`' `active`. */
@@ -2908,25 +2908,32 @@ async function leaveMcpLocation(
   const other = active.projectKey ? places.tree : places.local;
   const key = mcpManifestKey(other);
   const records = ctx.manifest[key];
+  const split = await splitByFile(other, records ?? []);
   if (other.projectKey && !records?.length) return false;
   const claimed = other.projectKey
     ? new Set<string>()
     : await claimedByOtherTools(ctx.claimTargets, other, ctx.manifest);
   // A copy the member changed since teamai wrote it is theirs: it stays where it is, named, and its record goes.
   const installed = await installedMcpEntries(other);
-  const edited = (records ?? []).filter((r) => !claimed.has(r.name) && installed?.has(r.name) && entryHash(installed.get(r.name)) !== r.hash);
+  const edited = split.owned.filter((r) => !claimed.has(r.name) && installed?.has(r.name) && entryHash(installed.get(r.name)) !== r.hash);
   for (const { name } of ctx.options.removeAll ? [] : edited) {
     log.warn(`Kept MCP server ${name} in ${describeMcpLocation(other)}: you changed it since teamai wrote it. teamai writes the team's ${name} `
       + `to ${describeMcpLocation(active)} now; remove ${name} from ${describeMcpLocation(other)} when you no longer need it.`);
   }
-  const owned = (records ?? []).filter((record) => !claimed.has(record.name) && (ctx.options.removeAll || !edited.includes(record)));
+  const owned = split.owned.filter((record) => !claimed.has(record.name) && (ctx.options.removeAll || !edited.includes(record)));
   const keep = new Map(ctx.options.removeAll ? [] : owned.filter((r) => ctx.kept.has(r.name)).map((r) => [r.name, r]));
   const judge = await ctx.judgeIn(other, { others: claimed });
   const next: ManagedMcpRecord[] = [];
   const removed: McpChange[] = [];
-  const wrote = await applyJson(other, new Map(), keep, owned, new Set(owned.map((r) => r.name)), next, removed, judge, ctx.options, ctx.restoreConfigs);
+  let wrote = await applyJson(other, new Map(), keep, owned, new Set(owned.map((r) => r.name)), next, removed, judge, ctx.options, ctx.restoreConfigs);
   // Not read: its records stay.
   if (wrote === null) return false;
+  for (const record of next) record.file = other.file;
+  const leaving = split.elsewhere.filter((record) => ctx.options.removeAll || !ctx.kept.has(record.name));
+  next.push(...split.elsewhere.filter((record) => !leaving.includes(record)));
+  wrote = await removeFromOtherFiles(other, leaving, next, ctx.changes,
+    (file) => ctx.judgeIn({ ...other, file }, { others: claimed }), ctx.options, ctx.restoreConfigs) || wrote;
+  if (!ctx.options.removeAll) logLeftMcpFiles(localConfig, other, split.left);
   ctx.changes.push(...removed);
   // As for a target: an emptied project record says teamai owns nothing left in that file (#882).
   if (next.length > 0 || (!other.projectKey && records !== undefined && !records.some((r) => r.unnoted))) ctx.manifest[key] = next;

@@ -804,7 +804,7 @@ async function locateMcp(tool: string, install: Install, host: Host): Promise<Lo
     }
   }
   const builtin: Readonly<Record<string, ToolPaths>> = DEFAULT_TOOL_PATHS;
-  const builtinFile = Object.hasOwn(builtin, tool) ? builtin[tool].mcpProject : undefined;
+  const builtinFile = mcp.retired?.project?.[0] ?? (Object.hasOwn(builtin, tool) ? builtin[tool].mcpProject : undefined);
   if (builtinFile !== undefined && builtinFile !== install.toolPaths[tool]?.mcpProject) {
     retired.push({ place: { kind: 'entry', path: roots.declared('project', builtinFile), key }, was: 'builtin' });
   }

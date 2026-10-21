@@ -82,6 +82,30 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
     expect(await fse.pathExists(path.join(project, '.workbuddy', 'mcp.json'))).toBe(false);
   });
 
+  it.each([['.mcp.json', false], ['mcp.json', false], ['.mcp.json', true]] as const)('writes WorkBuddy project servers to %s with gitExclude=%s and retires the old project file', async (name, gitExclude) => {
+    const project = path.join(root, 'project');
+    const api = renderJsonEntry('buddy', API);
+    const old = path.join(project, '.workbuddy', 'mcp.json');
+    await fse.outputJson(old, { mcpServers: { api, other: MINE } });
+    await fse.outputJson(path.join(project, name), { mcpServers: { mine: MINE } });
+    execFileSync('git', ['init', '-q', project]);
+    const local: LocalConfig = { ...userConfig('workbuddy'), scope: 'project', projectRoot: project, dataHome: path.join(root, 'data') };
+    const { loadMcpManifest, saveMcpManifest } = await import('../mcp-reconcile.js');
+    const { manifestPath, manifest } = await loadMcpManifest(local, false);
+    manifest['workbuddy:project'] = [{ name: 'api', hash: entryHash(api) }];
+    await saveMcpManifest(local, manifestPath, manifest);
+
+    await reconcileMcpForConfig(team({ gitExclude: { enabled: gitExclude } }), local);
+
+    if (gitExclude) {
+      expect((await fse.readJson(path.join(home, '.codebuddy.json'))).projects[project].mcpServers).toEqual({ api });
+    } else {
+      expect((await fse.readJson(path.join(project, name))).mcpServers).toEqual({ mine: MINE, api });
+    }
+    expect(await fse.readJson(old)).toEqual({ mcpServers: { other: MINE } });
+    if (name === 'mcp.json') expect(await fse.pathExists(path.join(project, '.mcp.json'))).toBe(false);
+  });
+
   it('writes Pi\'s user servers to the agent directory PI_CODING_AGENT_DIR names', async () => {
     const agentDir = path.join(root, 'pi-agent');
     await fse.ensureDir(agentDir);

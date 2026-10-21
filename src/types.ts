@@ -624,7 +624,7 @@ export const DEFAULT_TOOL_PATHS = {
     claudemd: 'AGENTS.md',
     agents: '.workbuddy/agents',
     mcp: '.workbuddy/mcp.json',
-    mcpProject: '.workbuddy/mcp.json',
+    mcpProject: '.mcp.json',
     userScope: { rules: '.workbuddy/rules' },
   },
   // OpenCode reads project config from <root>/.opencode/ but user config from
