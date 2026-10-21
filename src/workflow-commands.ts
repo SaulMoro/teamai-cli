@@ -3,7 +3,7 @@ import { setStderrOnly } from './utils/logger.js';
 import { leaseNext, parseNextPayload, parseReport, parseResponsePayload, reportAttempt, startRun, withIgnored, type ParsedResponsePayload } from './workflow/engine.js';
 import { cancelRun, respondToHitl, retryStep } from './workflow/run-controls.js';
 import { localDriver, runLocalDriver } from './workflow/local-driver.js';
-import { scopedToolPaths, type LocalConfig, type TeamaiConfig } from './types.js';
+import type { LocalConfig, TeamaiConfig } from './types.js';
 import { isRunId, readRun } from './workflow/store.js';
 import type { WorkflowEnvelope } from './workflow/types.js';
 
@@ -103,7 +103,7 @@ export async function workflowStart(name: string, options: { driver?: string; to
     writeEnvelope({ error: { code: 'run_unreadable', message: 'The new run id was missing' } });
     return;
   }
-  writeEnvelope(await runLocalDriver(config, runId, process.cwd(), { tools, toolPaths: scopedToolPaths(teamConfig, config), autoApprove: options.autoApprove }));
+  writeEnvelope(await runLocalDriver(config, runId, process.cwd(), { tools, toolPaths: teamConfig.toolPaths, autoApprove: options.autoApprove }));
 }
 
 export async function workflowNext(runId: string, options: { json?: string }): Promise<void> {
@@ -213,5 +213,5 @@ export async function workflowResume(runId: string, options: { tools?: string; a
   const lease = stored.steps.find((step) => step.status === 'leased' && step.lease.driver.kind === 'local' && step.lease.driver.machine === local.machine);
   const cwd = lease?.status === 'leased' ? lease.lease.driver.workspace
     : stored.driver?.kind === 'local' && stored.driver.machine === local.machine ? stored.driver.workspace : process.cwd();
-  writeEnvelope(await runLocalDriver(loaded.config, runId, cwd, { tools, toolPaths: scopedToolPaths(loaded.teamConfig, loaded.config), autoApprove: options.autoApprove }));
+  writeEnvelope(await runLocalDriver(loaded.config, runId, cwd, { tools, toolPaths: loaded.teamConfig.toolPaths, autoApprove: options.autoApprove }));
 }

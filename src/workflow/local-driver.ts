@@ -11,13 +11,14 @@ import {
   reverseFromOpencode,
   toolExtrasFor,
   type AgentSpec,
-  type ToolName,
 } from '../resources/agent-format.js';
+import { installOf, locate, ownOf } from '../locate.js';
+import { isAgentToolId } from '../tools.js';
 import { observeLaunch } from '../agent-observation.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { commandSignalPolicy, exitLike, terminalReachesCommand } from '../env-exec.js';
 import { workflowLaunch } from '../launch-context.js';
-import { getDataHome, resolveToolBaseDir, type LocalConfig, type TeamaiConfig } from '../types.js';
+import { getDataHome, type LocalConfig, type TeamaiConfig } from '../types.js';
 import { readFileSafe, readJson, writeJsonAtomic } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { AgentSession } from '../session-flow/agent-session.js';
@@ -139,6 +140,7 @@ export interface LocalDriverOptions {
   /** The terminal question implementation, injectable for callers without readline. */
   question?: (hitl: LocalHitl, signal: AbortSignal) => Promise<string>;
   tools?: Record<string, string>;
+  /** The team's `toolPaths`, as teamai.yaml states them. */
   toolPaths?: TeamaiConfig['toolPaths'];
   adapter?: LocalToolAdapter;
 }
@@ -209,10 +211,11 @@ async function loadAgent(
   config: LocalConfig,
   toolPaths: TeamaiConfig['toolPaths'] | undefined,
 ): Promise<{ spec: AgentSpec; file: string } | null> {
-  const agents = toolPaths?.[tool]?.agents;
-  if (!agents) return null;
-  // The same directory `teamai pull` writes: the tool base for this scope, not the step's cwd.
-  const file = path.join(resolveToolBaseDir(tool, config), agents, `${name}${agentFileExtensionForTool(tool as ToolName)}`);
+  if (toolPaths === undefined || !isAgentToolId(tool)) return null;
+  // The same directory `teamai pull` writes, not the step's cwd.
+  const agents = ownOf(await locate(tool, 'agents', installOf({ toolPaths }, config)))?.path;
+  if (agents === undefined) return null;
+  const file = path.join(agents, `${name}${agentFileExtensionForTool(tool)}`);
   const content = await readFileSafe(file);
   if (content === null) return null;
   const reversed = reverseAgent(tool, file, content);

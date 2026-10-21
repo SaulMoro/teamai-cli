@@ -342,6 +342,36 @@ model = "gpt-5.4"
     });
   });
 
+  it('loads a user-scope OpenCode agent from the home XDG_CONFIG_HOME moves', async () => {
+    const { config, workspace, runId } = await fixture('reviewer');
+    const xdg = path.join(path.dirname(workspace), 'xdg');
+    vi.stubEnv('HOME', path.join(path.dirname(workspace), 'home'));
+    vi.stubEnv('XDG_CONFIG_HOME', xdg);
+    fs.mkdirSync(path.join(xdg, 'opencode', 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(xdg, 'opencode', 'agents', 'reviewer.md'), '---\ndescription: Reviews changes.\nmode: subagent\n---\n\nReview the change.\n');
+    const userConfig: LocalConfig = { ...config, scope: 'user', workflows: { tools: { reviewer: 'opencode' } } };
+    let input: LocalToolRun | undefined;
+    const adapter: LocalToolAdapter = {
+      runInteractive: vi.fn(),
+      run: vi.fn(async (_selected, value) => {
+        input = value;
+        return { started: true as const, exitCode: 0, output: { ok: true } };
+      }),
+    };
+
+    try {
+      await runLocalDriver(userConfig, runId, workspace, {
+        adapter,
+        toolPaths: { opencode: { agents: '.opencode/agents', userScope: { agents: '.config/opencode/agents' } } } as TeamaiConfig['toolPaths'],
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+
+    expect(await readRun(userConfig, runId)).toMatchObject({ steps: [{ status: 'succeeded' }] });
+    expect(input?.agent).toMatchObject({ instructions: 'Review the change.' });
+  });
+
   it('warns when codex exec cannot apply the deployed agent settings, and still runs the step', async () => {
     const { config, workspace, runId } = await fixture('reviewer');
     config.workflows = { tools: { reviewer: 'codex' } };
