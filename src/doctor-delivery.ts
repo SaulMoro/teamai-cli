@@ -2126,7 +2126,7 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
   const { localConfig, teamConfig } = ctx;
   if (!teamConfig) return [];
   const {
-    holdsInstructionBlocks, hookLimitProblem, instructionHookChannel, instructionHookText, instructionTargetPath,
+    channelReadiness, holdsInstructionBlocks, hookLimitProblem, instructionHookText, instructionTargetPath,
     planInstructionFiles, resolveInstructionTargets,
   } = await import('./instruction-targets.js');
   const { resolveInstructionBlocks } = await import('./pull.js');
@@ -2196,7 +2196,7 @@ export async function buildInstructionDeliveryChecks(ctx: DoctorContext): Promis
     const text = instructionHookText(blocks, hook.recall);
     if (!text && !getsRulesFromExtension(hook.tool)) continue;
     if (!text && !(hasTeamRules ??= await teamRulesContext(teamConfig, localConfig) !== null)) continue;
-    const channel = await instructionHookChannel(hook.tool, { teamConfig, localConfig });
+    const channel = await channelReadiness(hook.tool, hook.probe, { teamConfig, localConfig });
     const overLimit = hookLimitProblem(hook, text);
     checks.push({
       name: `${hook.tool} adds the team instructions${getsRulesFromExtension(hook.tool) ? ' and rules' : ''} to its prompt`,

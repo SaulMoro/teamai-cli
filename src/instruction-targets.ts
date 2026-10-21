@@ -4,6 +4,7 @@ import { getsRulesFromExtension } from './resources/rule-format.js';
 import { pathExists, readFileSafe, readJsonObject, remove, writeFile } from './utils/fs.js';
 import { getUserHome } from './utils/home.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
+import { channelsOf, type ChannelProbe } from './tools.js';
 import {
   opencodeClaudeFallback, opencodeContextReference, readOpencodeInstructionList, reconcileOpencodeInstructions,
 } from './resources/opencode-config.js';
@@ -254,6 +255,8 @@ export interface InstructionTarget {
 /** An installed, non-excluded tool that gets this scope's blocks from its session hook or extension. */
 export interface InstructionHook {
   tool: string;
+  /** What says the hook, extension or plugin is installed (`channelReadiness`). */
+  probe: ChannelProbe;
   recall: boolean;
   /** The most characters its channel takes, when it has a limit. */
   limit?: number;
@@ -366,56 +369,114 @@ export function hookLimitProblem(hook: InstructionHook, text: string): string | 
 }
 
 /**
- * Whether the extension or plugin that adds a hook tool's team instructions is
- * installed as this build writes it, and if not, what to do.
+ * Whether the hook, extension or plugin `probe` names is installed where
+ * `tool` runs it, as this build writes it, and if not, what to do. The probe
+ * comes from the tool's run-time channel (`locate`); every probe has its own
+ * check, so a new one fails the type check until it has one.
  */
-export async function instructionHookChannel(
+export async function channelReadiness(
   tool: string,
+  probe: ChannelProbe,
   context?: { teamConfig: TeamaiConfig; localConfig: LocalConfig },
 ): Promise<{ ready: boolean; fix: string }> {
   const rerun = 'Run `teamai hooks inject` to reinstall it; `teamai hooks remove` takes it away.';
-  if (tool === 'omp' || tool === 'pi') {
-    const { buildOmpExtensionSource, resolveOmpExtensionsDir, OMP_HOOK_FILE } = await import('./omp-hooks.js');
-    const { buildPiExtensionSource, resolvePiExtensionsDir, PI_HOOK_FILE } = await import('./pi-hooks.js');
-    const file = tool === 'omp' ? path.join(resolveOmpExtensionsDir(), OMP_HOOK_FILE) : path.join(resolvePiExtensionsDir(), PI_HOOK_FILE);
-    const expected = tool === 'omp' ? buildOmpExtensionSource() : buildPiExtensionSource();
-    return {
-      ready: await readFileSafe(file) === expected,
-      // Pi's extension also carries a project's team rules (#946); OMP reads its own rules files.
-      fix: `${file} is missing or out of date, so ${tool} sessions in this project get no team instructions`
-        + `${getsRulesFromExtension(tool) ? ' or rules' : ''}. ${rerun}`,
-    };
-  }
-  if (tool === 'hermes') {
-    const {
-      buildInstructionsPlugin, foreignInstructionsPlugin, getInstructionsPluginDir, HERMES_INSTRUCTIONS_PLUGIN, ownsInstructionsPlugin,
-    } = await import('./hermes-hooks.js');
-    const { getHermesConfigPath, isHermesPluginEnabled } = await import('./hermes-config.js');
-    if (!await ownsInstructionsPlugin()) return { ready: false, fix: foreignInstructionsPlugin() };
-    const dir = getInstructionsPluginDir();
-    const plugin = buildInstructionsPlugin();
-    const installed = await readFileSafe(path.join(dir, '__init__.py')) === plugin.init
-      && await readFileSafe(path.join(dir, 'plugin.yaml')) === plugin.manifest;
-    if (!installed) {
-      return { ready: false, fix: `The Hermes plugin ${dir} is missing or out of date, so Hermes sessions in this project get no team instructions. ${rerun}` };
+  switch (probe) {
+    case 'omp-extension':
+    case 'pi-extension': {
+      const { buildOmpExtensionSource, resolveOmpExtensionsDir, OMP_HOOK_FILE } = await import('./omp-hooks.js');
+      const { buildPiExtensionSource, resolvePiExtensionsDir, PI_HOOK_FILE } = await import('./pi-hooks.js');
+      const omp = probe === 'omp-extension';
+      const file = omp ? path.join(resolveOmpExtensionsDir(), OMP_HOOK_FILE) : path.join(resolvePiExtensionsDir(), PI_HOOK_FILE);
+      const expected = omp ? buildOmpExtensionSource() : buildPiExtensionSource();
+      return {
+        ready: await readFileSafe(file) === expected,
+        // Pi's extension also carries a project's team rules (#946); OMP reads its own rules files.
+        fix: `${file} is missing or out of date, so ${tool} sessions in this project get no team instructions`
+          + `${getsRulesFromExtension(tool) ? ' or rules' : ''}. ${rerun}`,
+      };
     }
-    return {
-      ready: await isHermesPluginEnabled(HERMES_INSTRUCTIONS_PLUGIN),
-      fix: `${HERMES_INSTRUCTIONS_PLUGIN} is not in plugins.enabled of ${getHermesConfigPath()}, and Hermes loads no user plugin that is not listed there. `
-        + 'Add it there (or remove it from plugins.disabled), then start a new Hermes session.',
-    };
+    case 'hermes-plugin': {
+      const {
+        buildInstructionsPlugin, foreignInstructionsPlugin, getInstructionsPluginDir, HERMES_INSTRUCTIONS_PLUGIN, ownsInstructionsPlugin,
+      } = await import('./hermes-hooks.js');
+      const { getHermesConfigPath, isHermesPluginEnabled } = await import('./hermes-config.js');
+      if (!await ownsInstructionsPlugin()) return { ready: false, fix: foreignInstructionsPlugin() };
+      const dir = getInstructionsPluginDir();
+      const plugin = buildInstructionsPlugin();
+      const installed = await readFileSafe(path.join(dir, '__init__.py')) === plugin.init
+        && await readFileSafe(path.join(dir, 'plugin.yaml')) === plugin.manifest;
+      if (!installed) {
+        return { ready: false, fix: `The Hermes plugin ${dir} is missing or out of date, so Hermes sessions in this project get no team instructions. ${rerun}` };
+      }
+      return {
+        ready: await isHermesPluginEnabled(HERMES_INSTRUCTIONS_PLUGIN),
+        fix: `${HERMES_INSTRUCTIONS_PLUGIN} is not in plugins.enabled of ${getHermesConfigPath()}, and Hermes loads no user plugin that is not listed there. `
+          + 'Add it there (or remove it from plugins.disabled), then start a new Hermes session.',
+      };
+    }
+    case 'codex-hooks': {
+      const file = hooksFileOf(tool, context);
+      return {
+        ready: file !== undefined && await hooksInstalled(file, tool),
+        fix: `${file ?? `${tool}'s hooks file`} is missing or out of date, so ${tool} sessions get no team instructions. ${rerun}`,
+      };
+    }
+    case 'muse-session-start': {
+      const file = hooksFileOf(tool, context);
+      return {
+        ready: file !== undefined && await hooksInstalled(file, tool),
+        fix: `${file ?? `${tool}'s hooks file`} registers no current teamai SessionStart hook, so Muse Code sessions in this project `
+          + `get none of the team rules or instructions. ${rerun}`,
+      };
+    }
+    case 'zcode-session-start': {
+      const file = hooksFileOf(tool, context);
+      if (file === undefined || !await hooksInstalled(file, tool)) {
+        return {
+          ready: false,
+          fix: `${file ?? `${tool}'s hooks file`} registers no current teamai SessionStart hook, so ZCode sessions in this project `
+            + `get none of the team rules or instructions. ${rerun}`,
+        };
+      }
+      const read = await readJsonObject(file);
+      const hooks = read.kind === 'ok' ? read.value.hooks : undefined;
+      return {
+        ready: typeof hooks === 'object' && hooks !== null && 'enabled' in hooks && hooks.enabled === true,
+        fix: `${file} sets hooks.enabled to something other than true, so ZCode runs none of the hooks it registers, and sessions `
+          + 'in this project get none of the team rules or instructions. Run `teamai hooks inject`, which turns them on.',
+      };
+    }
+    case 'dsh-session-start': {
+      const { isDshHooksMounted, resolveDshHomePatchPath, resolveDshHookConfigPath } = await import('./dsh-hooks.js');
+      const configPath = resolveDshHookConfigPath();
+      const broken = [
+        ...await isDshHooksMounted(configPath) ? [] : [resolveDshHomePatchPath()],
+        ...await hooksInstalled(configPath, tool) ? [] : [configPath],
+      ];
+      return {
+        ready: broken.length === 0,
+        fix: `${broken.join(' and ')} ${broken.length === 1 ? 'is' : 'are'} missing or out of date, so DeepSeek Harness sessions in this `
+          + `project get none of the team rules or instructions. ${rerun}`,
+      };
+    }
+    default: {
+      const unhandled: never = probe;
+      return unhandled;
+    }
   }
-  if (CODEX_TOOL_IDS.some((id) => id === tool)) {
-    const { getHookStatus } = await import('./hooks.js');
-    const hookScope = context && resolveHookScope(context.localConfig);
-    const settings = context && hookScope && scopedToolPaths(context.teamConfig, { ...context.localConfig, scope: hookScope.scope })[tool]?.settings;
-    const file = settings && hookScope ? path.resolve(hookScope.baseDir, settings) : undefined;
-    return {
-      ready: file !== undefined && await getHookStatus(file, tool) === 'installed',
-      fix: `${file ?? `${tool}'s hooks file`} is missing or out of date, so ${tool} sessions get no team instructions. ${rerun}`,
-    };
-  }
-  return { ready: true, fix: '' };
+}
+
+/** The hooks file teamai writes `tool`'s hooks to for this member, user-level for a project that is not the team repo. */
+function hooksFileOf(tool: string, context: { teamConfig: TeamaiConfig; localConfig: LocalConfig } | undefined): string | undefined {
+  if (context === undefined) return undefined;
+  const hookScope = resolveHookScope(context.localConfig);
+  const settings = scopedToolPaths(context.teamConfig, { ...context.localConfig, scope: hookScope.scope })[tool]?.settings;
+  return settings === undefined ? undefined : path.resolve(hookScope.baseDir, settings);
+}
+
+async function hooksInstalled(file: string, tool: string): Promise<boolean> {
+  const { getHookStatus } = await import('./hooks.js');
+  return await getHookStatus(file, tool) === 'installed';
 }
 
 /**
@@ -450,7 +511,7 @@ export async function instructionChannelProblems(teamConfig: TeamaiConfig, local
   for (const hook of hooks) {
     const text = await instructionHookTextFor(teamConfig, localConfig, hook.tool);
     if (!text) continue;
-    const channel = await instructionHookChannel(hook.tool, { teamConfig, localConfig });
+    const channel = await channelReadiness(hook.tool, hook.probe, { teamConfig, localConfig });
     if (!channel.ready) {
       problems.push(channel.fix);
       continue;
@@ -640,8 +701,9 @@ export async function resolveInstructionTargets(
         probeConfig = { ...localConfig, scope: 'user', toolRoots };
         probePaths = scopedToolPaths(teamConfig, probeConfig)[tool] ?? paths;
       }
-      if (await isInstructionToolInstalled(tool, probePaths, probeConfig)) {
-        hooks.push({ tool, recall: hasRecallAgent(tool, paths, localConfig.scope), limit: entry.hookLimit });
+      const runTime = channelsOf(tool).blocks[localConfig.scope];
+      if (typeof runTime === 'object' && runTime.channel !== 'file' && await isInstructionToolInstalled(tool, probePaths, probeConfig)) {
+        hooks.push({ tool, probe: runTime.probe, recall: hasRecallAgent(tool, paths, localConfig.scope), limit: entry.hookLimit });
       }
       continue;
     }

@@ -16,7 +16,7 @@ import { DetachedRecoveryError, transitionTeamRepo, teamRefBlocker, teamRefNotic
 import { pathExists, readJson, writeJson, remove, listFiles, listDirs, listFilesRecursive, readFileSafe, dirContentEqual, hasVcsMetadataRecursive } from './utils/fs.js';
 import { reconcilePlacementRecords } from './utils/pending-push.js';
 import {
-  applyInstructionPlan, holdsInstructionBlocks, hookLimitProblem, instructionHookChannel, instructionHookChannelInstallable, instructionHookText,
+  applyInstructionPlan, channelReadiness, holdsInstructionBlocks, hookLimitProblem, instructionHookChannelInstallable, instructionHookText,
   planInstructionFiles, registerOpencodeContext, resolveInstructionTargets, retiredFilesOfReached, type InstructionBlocks, type InstructionTarget,
 } from './instruction-targets.js';
 import { getHandler, RulesHandler, DocsHandler, EnvHandler, AgentsHandler } from './resources/index.js';
@@ -3742,7 +3742,7 @@ async function reconcileHooksAllScopes(
       if (delivery) {
         const { hooks } = await resolveInstructionTargets(teamConfig, localConfig);
         for (const hook of hooks) {
-          const channel = await instructionHookChannel(hook.tool, { teamConfig, localConfig });
+          const channel = await channelReadiness(hook.tool, hook.probe, { teamConfig, localConfig });
           // A dry run installed nothing: preview what the real pull's install leaves ready.
           const ready = channel.ready
             || (Boolean(options.dryRun) && reconciled.ok && await instructionHookChannelInstallable(hook.tool));

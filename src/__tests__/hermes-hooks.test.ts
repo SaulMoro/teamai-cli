@@ -4,7 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { injectHermesHooks, removeHermesHooks, getReportScriptPath, getInstructionsPluginDir } from '../hermes-hooks.js';
 import { log } from '../utils/logger.js';
-import { instructionHookChannel } from '../instruction-targets.js';
+import { channelReadiness } from '../instruction-targets.js';
 
 let tmpDir: string;
 let savedHermesHome: string | undefined;
@@ -80,7 +80,7 @@ describe('the teamai-instructions plugin (#945)', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining(`${dir} exists without the TeamAI marker`));
     expect(fs.readFileSync(path.join(dir, '__init__.py'), 'utf8')).toBe('def register(ctx): pass\n');
     expect(fs.existsSync(getReportScriptPath())).toBe(true);
-    expect(await instructionHookChannel('hermes')).toEqual({ ready: false, fix: expect.stringContaining(`${dir} holds a plugin teamai did not write`) });
+    expect(await channelReadiness('hermes', 'hermes-plugin')).toEqual({ ready: false, fix: expect.stringContaining(`${dir} holds a plugin teamai did not write`) });
 
     await removeHermesHooks();
     expect(fs.readdirSync(dir).sort()).toEqual(['__init__.py', 'notes.txt', 'plugin.yaml']);

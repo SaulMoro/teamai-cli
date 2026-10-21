@@ -69,7 +69,7 @@ import {
 import { normalizeAgentType } from './utils/tool-names.js';
 import { logHttpRequest, logHttpResponse } from './utils/http-log.js';
 import {
-  applyInstructionPlan, deliversInstructionsByHook, holdsInstructionBlocks, instructionHookChannel, instructionHookText, instructionHookTextFor,
+  applyInstructionPlan, channelReadiness, deliversInstructionsByHook, holdsInstructionBlocks, instructionHookText, instructionHookTextFor,
   instructionTargetAt, instructionTargetFile, isInstructionToolInstalled, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets,
   retiredFilesOfReached, nativeProjectInstructions,
 } from './instruction-targets.js';
@@ -2944,7 +2944,7 @@ async function hookDeliveryProblem(
 ): Promise<string | null> {
   const hook = (await resolveInstructionTargets(teamConfig, localConfig)).hooks.find((entry) => entry.tool === tool);
   if (!hook) return `${tool} is not installed here.`;
-  const channel = await instructionHookChannel(tool, { teamConfig, localConfig });
+  const channel = await channelReadiness(tool, hook.probe, { teamConfig, localConfig });
   if (!channel.ready) return channel.fix;
   if (hook.limit === undefined) return null;
   const parts = [block ? instructionHookText({ claudemd: block }, false) : ''];
