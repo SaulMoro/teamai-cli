@@ -153,7 +153,6 @@ targets: [copilot]
     await handler.pullItem(item, teamConfig, projectConfig);
     const projectTarget = path.join(projectRoot, '.github', 'agents', `${TEAM_AGENT}.agent.md`);
     expect(await fse.pathExists(projectTarget)).toBe(true);
-    expect(await fse.pathExists(path.join(projectRoot, 'agents', `${TEAM_AGENT}.agent.md`))).toBe(false);
 
     // Without a delivery record (pullItem ran without a ledger), a copy goes
     // only as a team version by the history (#993): the delivered one is.

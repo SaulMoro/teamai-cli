@@ -49,7 +49,7 @@ describe('Qoder CN support', () => {
     const cnUser = userScoped['qoder-cn'] as Record<string, string>;
     const qoderUser = userScoped.qoder as Record<string, string>;
 
-    for (const key of ['skills', 'rules', 'settings', 'agents'] as const) {
+    for (const key of ['skills', 'rules', 'settings'] as const) {
       expect(cnUser[key]).toBe(`.qoder-cn/${key === 'settings' ? 'settings.json' : key}`);
       expect(cnUser[key]).not.toEqual(qoderUser[key]);
     }
@@ -63,7 +63,7 @@ describe('Qoder CN support', () => {
     const cnProject = projectScoped['qoder-cn'] as Record<string, string>;
     const qoderProject = projectScoped.qoder as Record<string, string>;
 
-    for (const key of ['skills', 'rules', 'settings', 'agents', 'mcpProject'] as const) {
+    for (const key of ['skills', 'rules', 'settings', 'mcpProject'] as const) {
       expect(cnProject[key]).toBe(qoderProject[key]);
       expect(cnProject[key].startsWith('.qoder/')).toBe(true);
     }

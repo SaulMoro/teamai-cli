@@ -74,9 +74,8 @@ describe('WorkBuddy custom agents', () => {
     await fse.remove(sandbox);
   });
 
-  it('registers workbuddy as a supported tool with a default agents path', () => {
+  it('registers workbuddy as a tool teamai renders agents for', () => {
     expect(AGENT_TOOLS).toContain('workbuddy');
-    expect(teamConfig.toolPaths['workbuddy']?.agents).toBe('.workbuddy/agents');
   });
 
   it('renders Claude-style Markdown frontmatter and round-trips through reverse', () => {

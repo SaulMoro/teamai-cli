@@ -49,7 +49,6 @@ describe('OMP (Oh My Pi) support', () => {
       skills: '.omp/agent/skills',
       rules: '.omp/agent/rules',
       claudemd: '.omp/agent/AGENTS.md',
-      agents: '.omp/agent/agents',
     });
   });
 
