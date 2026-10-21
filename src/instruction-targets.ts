@@ -469,7 +469,7 @@ export async function registerOpencodeContext(
   if (teamConfig.toolPaths.opencode === undefined) return null;
   const location = await locate('opencode', 'blocks', installOf(teamConfig, localConfig));
   const contextFile = ownOf(location)?.path;
-  if (contextFile === undefined || location.channel !== 'files' || location.activation === null) return null;
+  if (contextFile === undefined || location.channel !== 'files') return null;
   // OpenCode V2 ignores the entry, and teamai's plugin reads the file (#915).
   const { opencodeDeliversThroughPlugin } = await import('./opencode-hooks.js');
   if (await opencodeDeliversThroughPlugin(teamConfig, localConfig)) return null;
@@ -485,8 +485,8 @@ export async function registerOpencodeContext(
   if (!delivered && await pathExists(contextFile)) return null;
   // Old or malformed blocks the plan could not replace are not this sync's.
   const present = wanted && delivered && ready;
-  const config = location.activation.path;
-  const { entry } = opencodeContextReference(contextFile, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
+  // Pull, doctor and uninstall read the entry from the config beside the file, whatever the team maps MCP to.
+  const { config, entry } = opencodeContextReference(contextFile, localConfig.scope, resolveToolBaseDir('opencode', localConfig));
   // An entry goes only if teamai recorded adding it: one the member listed
   // before teamai wrote the file is theirs.
   if (!present) {

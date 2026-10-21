@@ -698,6 +698,33 @@ describe('OpenCode instructions registration (#945)', () => {
     }
   });
 
+  it('lists the user file in opencode.json beside it when the team maps no OpenCode MCP config', async () => {
+    const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-ocreg-')));
+    vi.stubEnv('HOME', path.join(root, 'home'));
+    try {
+      const opencodeHome = path.join(root, 'home', '.config', 'opencode');
+      fs.mkdirSync(path.join(opencodeHome, 'skills'), { recursive: true });
+      const localConfig = LocalConfigSchema.parse({
+        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
+        username: 'u', scope: 'user', enabledAgents: ['opencode'],
+      });
+      const teamConfig = TeamaiConfigSchema.parse({
+        team: 't', repo: 'https://example.invalid/t.git',
+        toolPaths: { opencode: { skills: '.opencode/skills', userScope: { skills: '.config/opencode/skills' } } },
+      });
+      const resolved = await resolveInstructionTargets(teamConfig, localConfig);
+      const { files } = await applyInstructionPlan(await planInstructionFiles(resolved.targets, { claudemd: claudemd('desired') }), { dryRun: false });
+
+      await registerOpencodeContext(teamConfig, localConfig, resolved, false, files);
+
+      expect(JSON.parse(fs.readFileSync(path.join(opencodeHome, 'opencode.json'), 'utf8')).instructions)
+        .toEqual([path.join(opencodeHome, 'teamai-context.md')]);
+    } finally {
+      vi.unstubAllEnvs();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('leaves the member\'s own listed teamai-context.md entry alone, in a dry run and a real pull', async () => {
     const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-ocreg-')));
     try {
