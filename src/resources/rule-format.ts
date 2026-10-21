@@ -71,7 +71,6 @@ const RULE_FORMATS = {
 
 export type RuleFormatId = keyof typeof RULE_FORMATS;
 
-/** The rules format `id` names. */
 export function ruleFormatById(id: RuleFormatId): RuleFormat {
   return RULE_FORMATS[id];
 }

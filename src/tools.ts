@@ -1,6 +1,6 @@
 import type { McpFormat } from './resources/mcp-format.js';
 import type { RuleFormatId } from './resources/rule-format.js';
-import type { Scope, ToolId } from './types.js';
+import type { ToolId } from './types.js';
 
 export type Evidence = 'verified' | 'source' | 'docs' | 'assumed';
 
@@ -74,22 +74,18 @@ export type SkillReads = {
  */
 type Scoped<U, P> = { readonly user: U | 'none' | 'unknown'; readonly project: P | 'none' | 'unknown' };
 
-/**
- * The check that says a run-time channel is installed where the tool runs it.
- * A closed union, so a new probe fails `tsc` until its check is written.
- */
+/** The check that says a run-time channel is installed where the tool runs it. */
 export type ChannelProbe = 'codex-hooks' | 'zcode-session-start' | 'dsh-session-start' | 'muse-session-start' | 'pi-extension' | 'omp-extension' | 'hermes-plugin';
 
 /** How teamai adds a resource to each session of the tool instead of writing it to a file the tool reads. */
 export type RunTimeVia = 'session-hook' | 'extension' | 'plugin';
 
-/** A condition outside teamai's write that decides whether the tool reads it. */
 export type ReadGateKind = 'codex-project-trust';
 
 /** The frontmatter teamai writes above its blocks when it creates an owned blocks file a rules loader reads. */
 export type BlocksHeader = 'always-apply' | 'apply-to-all';
 
-/** teamai's session hook, extension or plugin adds the resource to each session. `limit`: the size the channel takes before the tool drops the text whole. */
+/** `limit`: the size the channel takes before the tool drops the text whole. */
 export type RunTime = { readonly channel: RunTimeVia; readonly probe: ChannelProbe; readonly limit?: number; readonly evidence: Evidence };
 
 /**
@@ -110,7 +106,6 @@ export type RulesChannels = Scoped<RulesDir<HomeRead> | RulesInline, RulesDir<Ho
 
 /** Where a blocks file sits; `owned`: the whole file is teamai's. */
 export type BlocksFile = { readonly owned?: true; readonly header?: BlocksHeader } & (
-  /** The scope's configured `claudemd`. */
   | { readonly in: 'claudemd' }
   /** teamai's own file in the scope's configured rules directory; the configured `claudemd` when the team maps no rules directory. */
   | { readonly in: 'rules-dir'; readonly name: string }
@@ -293,7 +288,6 @@ export const TOOLS = {
       retired: { project: ['AGENTS.md'] },
     },
     agents: { user: { reads: 'unknown' }, project: { reads: 'unknown' } },
-    // Where an internal build reads MCP servers is not established; no channel is invented.
     mcp: UNKNOWN,
   },
   'claude-internal': {
@@ -739,7 +733,6 @@ export const TOOLS = {
         format: 'opencode', alternate: { path: '.opencode/teamai-mcp.json', when: 'opencode-v2-plugin' },
         reads: [
           { base: 'project', path: 'opencode.json', when: 'workspaceUnder', evidence: 'verified' },
-          // Read by teamai's V2 plugin.
           { base: 'project', path: '.opencode/teamai-mcp.json', when: 'workspaceUnder', evidence: 'verified' },
         ],
       },
@@ -820,8 +813,7 @@ export type AgentToolId = {
   [T in ToolId]: Entry<T>['agents'] extends { readonly user: 'none' | 'unknown'; readonly project: 'none' | 'unknown' } ? never : T
 }[ToolId];
 
-/** What a custom tool id in a team's `toolPaths` gets: rule files and blocks where the team maps them, no agents and no MCP. */
-export const CUSTOM_TOOL = {
+const CUSTOM_TOOL = {
   rules: { user: { channel: 'dir', format: 'verbatim', reads: 'unknown' }, project: { channel: 'dir', format: 'verbatim', reads: 'unknown' } },
   blocks: { user: { channel: 'file', file: { in: 'claudemd' }, reads: 'unknown' }, project: { channel: 'file', file: { in: 'claudemd' }, reads: 'unknown' } },
   agents: NONE,
@@ -833,8 +825,7 @@ export function channelsOf(tool: string): Pick<ToolDescriptor, 'rules' | 'blocks
   return isToolId(tool) ? TOOLS[tool] : CUSTOM_TOOL;
 }
 
-/** Whether teamai renders agents for `tool` in either scope. */
-export function isAgentToolId(tool: string): tool is AgentToolId {
+function isAgentToolId(tool: string): tool is AgentToolId {
   if (!isToolId(tool)) return false;
   const { agents }: ToolDescriptor = TOOLS[tool];
   return [agents.user, agents.project].some((channel) => channel !== 'none' && channel !== 'unknown');
@@ -875,9 +866,4 @@ export function mcpFormatOf(tool: string): McpFormat | null {
   const { mcp } = channelsOf(tool);
   for (const channel of [mcp.user, mcp.project]) if (typeof channel === 'object') return channel.format;
   return null;
-}
-
-/** The rules channel of `tool` in `scope`. */
-export function rulesChannel(tool: string, scope: Scope): RulesChannels['user'] | RulesChannels['project'] {
-  return channelsOf(tool).rules[scope];
 }
