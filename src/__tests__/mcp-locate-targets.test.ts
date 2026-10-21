@@ -185,6 +185,36 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
     });
   });
 
+  it('reads a recorded ZCode config through its nested key after the team changes its mapping', async () => {
+    const project = path.join(root, 'project');
+    const file = path.join(project, '.zcode', 'before.json');
+    await fse.outputJson(file, { mcp: { servers: { api: renderJsonEntry('claude', API) } } });
+    execFileSync('git', ['init', '-q', project]);
+    const local: LocalConfig = { ...userConfig('zcode'), scope: 'project', projectRoot: project, dataHome: path.join(root, 'data') };
+    const { trackResolvedMcpFiles } = await import('../mcp-resolved-files.js');
+    const { recordedMcpTargets, installedMcpEntries } = await import('../mcp-reconcile.js');
+    await trackResolvedMcpFiles(local, [{ tool: 'zcode', file }]);
+
+    const group = (await recordedMcpTargets(local, [])).get(file);
+    const target = group?.targets[0];
+    if (target === undefined) throw new Error('missing recorded ZCode config');
+
+    expect(await installedMcpEntries(target)).toEqual(new Map([['api', renderJsonEntry('claude', API)]]));
+  });
+
+  it('uninstall removes a local scope from the file its record names when no team config remains', async () => {
+    const dataHome = path.join(root, 'orphan');
+    const file = path.join(home, '.claude-team', 'custom.json');
+    const project = path.join(root, 'project');
+    const api = renderJsonEntry('claude', API);
+    await fse.outputJson(file, { projects: { [project]: { mcpServers: { api, mine: MINE } } } });
+    await fse.outputJson(path.join(dataHome, 'managed-local-mcp.json'), { [`claude:local:${project}`]: [{ name: 'api', hash: entryHash(api), file }] });
+    const { removeLocalScopeMcpServers } = await import('../mcp-reconcile.js');
+
+    expect(await removeLocalScopeMcpServers(dataHome)).toEqual([]);
+    expect((await fse.readJson(file)).projects[project].mcpServers).toEqual({ mine: MINE });
+  });
+
   const context = (teamConfig: TeamaiConfig, localConfig: LocalConfig): DoctorContext => ({
     teamConfig, localConfig, toolPaths: teamConfig.toolPaths, hookToolPaths: {}, baseDir: home,
   });

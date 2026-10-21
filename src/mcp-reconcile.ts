@@ -1493,7 +1493,8 @@ export async function recordedMcpTargets(cfg: LocalConfig, known: McpTarget[]): 
     const mappedBy = [...new Set(reach.filter((r) => r.real === real).map((r) => r.tool))];
     const targets = entry.tools.filter((tool) => !mappedBy.includes(tool)).flatMap((tool): McpTarget[] => {
       const format = detectMcpFormat(tool);
-      return format ? [{ tool, format, file, projectScope: true }] : [];
+      const channel = channelsOf(tool).mcp.project;
+      return format ? [{ tool, format, file, projectScope: true, ...(typeof channel === 'object' && channel.key !== undefined ? { key: channel.key } : {}) }] : [];
     });
     if (targets.length > 0) recorded.set(file, { targets, mappedBy, tracked: entry.tracked === true });
   }
@@ -1573,7 +1574,8 @@ export async function earlierMappedMcpTargets(
       if (inside === '' || inside === '..' || inside.startsWith(`..${path.sep}`) || path.isAbsolute(inside)) continue;
       if (reached(tool, real) || !await pathExists(file)) continue;
       const mappedBy = [...new Set(mapped.filter((r) => r.real === real).map((r) => r.tool))];
-      found.set(key, { tool, format, file, projectScope: true, tracked: (await gitTracks(file)).kind === 'tracked', mappedBy });
+      const channel = channelsOf(tool).mcp.project;
+      found.set(key, { tool, format, file, projectScope: true, ...(typeof channel === 'object' && channel.key !== undefined ? { key: channel.key } : {}), tracked: (await gitTracks(file)).kind === 'tracked', mappedBy });
     }
   }
   return [...found.values()];
@@ -3156,19 +3158,30 @@ export async function removeLocalScopeMcpServers(dataHome: string, toolRoots?: R
     const format = mcpFormatOf(tool);
     const file = at < 0 ? null : await localMcpFileOf(tool, dataHome, toolRoots);
     if (!Array.isArray(records) || !format || !file) continue;
-    const target: McpTarget = { tool, format, file, projectScope: true, projectKey: key.slice(at + LOCAL_KEY_INFIX.length) };
-    try {
-      const result = await leaveLocalScope(target, records, { removeAll: false }, new Map());
-      if (result === null) {
-        left.add(file);
-        continue;
-      }
-      removedTotal += result.removed.length;
-      delete manifest[key];
-    } catch (e) {
-      log.warn(`Could not remove teamai's MCP servers from ${describeMcpLocation(target)}: ${(e as Error).message}`);
-      left.add(file);
+    const byFile = new Map<string, ManagedMcpRecord[]>();
+    for (const record of records) {
+      const recordedFile = record.file ?? file;
+      byFile.set(recordedFile, [...byFile.get(recordedFile) ?? [], record]);
     }
+    const kept: ManagedMcpRecord[] = [];
+    for (const [recordedFile, owned] of byFile) {
+      const target: McpTarget = { tool, format, file: recordedFile, projectScope: true, projectKey: key.slice(at + LOCAL_KEY_INFIX.length) };
+      try {
+        const result = await leaveLocalScope(target, owned, { removeAll: false }, new Map());
+        if (result === null) {
+          left.add(recordedFile);
+          kept.push(...owned);
+          continue;
+        }
+        removedTotal += result.removed.length;
+      } catch (error) {
+        log.warn(`Could not remove teamai's MCP servers from ${describeMcpLocation(target)}: ${error instanceof Error ? error.message : String(error)}`);
+        left.add(recordedFile);
+        kept.push(...owned);
+      }
+    }
+    if (kept.length > 0) manifest[key] = kept;
+    else delete manifest[key];
   }
   if (removedTotal > 0) log.info(`Removed ${removedTotal} teamai-managed MCP server(s)`);
   if (recorded) await writeJsonAtomic(manifestPath, manifest);
