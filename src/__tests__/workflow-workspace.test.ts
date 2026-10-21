@@ -3043,6 +3043,35 @@ steps:
     expect(run.steps.find((step) => step.id === 'change.polish')).toMatchObject({ status: 'failed', failure: { code: 'workspace_base' } });
   });
 
+  it('leaves the copy as the reader left it when it deletes a submodule that held uncommitted files, and says they were NOT saved', async () => {
+    const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
+name: build
+description: A submodule directory the reader removed cannot be put back without losing what was in it.
+steps:
+  - id: change
+    workspace: new
+    workflow:
+      steps:
+        - id: implement
+          workspace: continue
+          command: node -e "require('child_process').execFileSync('git',['-c','protocol.file.allow=always','submodule','update','-q','--init']); require('fs').writeFileSync('vendor/inside.txt','writer'); require('fs').writeFileSync('impl.txt','yes')"
+        - id: test
+          needs: [implement]
+          command: node -e "require('fs').rmSync('vendor',{recursive:true,force:true})"
+`);
+    addSubmodule(workspace);
+
+    await runLocalDriver(config, runId, workspace);
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+    const copy = worktreePath(workspace, branchName(runId, 'change', 1));
+    expect(run.steps.find((step) => step.id === 'change.test')).toMatchObject({
+      status: 'failed', failure: { code: 'workspace_base', message: expect.stringContaining(`Its changes were NOT saved and are still in ${copy}`) },
+    });
+    expect(fs.existsSync(path.join(copy, 'vendor'))).toBe(false);
+  });
+
   it('runs a reader in a copy on the base tool settings, so a hook an earlier step committed there is absent', async () => {
     const { config, workspace, runId } = await fixture(`schemaVersion: v1alpha1
 name: build
