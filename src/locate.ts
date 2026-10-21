@@ -605,10 +605,11 @@ async function locateBlocks(tool: string, install: Install, host: Host): Promise
   const memberFile = (file: string): FilePlace => ({ kind: 'file', path: file, owned: false, header: null });
   const earlier = (blocks.retired?.[install.scope] ?? [])
     .map((file): Retired<FilePlace> => ({ place: memberFile(roots.declared(install.scope === 'user' ? 'home' : 'project', file)), was: 'default' }));
-  if (channel === 'none' || channel === 'unknown') return { channel, retired: earlier, gates: await gatesOf(tool, install, host, roots) };
   // OpenClaw's default workspace stays read by its default profile (#946).
   const claudemd = tool === 'openclaw' ? null : roots.configured('claudemd');
+  // An earlier release wrote the blocks into any claudemd the team mapped.
   const configured: Retired<FilePlace> | null = claudemd === null ? null : { place: memberFile(claudemd), was: 'configured' };
+  if (channel === 'none' || channel === 'unknown') return { channel, retired: settled(null, [...earlier, configured], p), gates: await gatesOf(tool, install, host, roots) };
   if (channel.channel !== 'file') return runTimeOf(channel, settled(null, [...earlier, configured], p), await gatesOf(tool, userViewOf(install), host));
 
   const [file, other] = install.gitExclude && channel.gitExcluded !== undefined

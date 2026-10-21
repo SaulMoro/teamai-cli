@@ -157,6 +157,13 @@ const ROWS: readonly MatrixRow[] = [
     existingDirs: ['<root>/.joycode'], installed: { probe: '<root>/.joycode', met: true },
     source: 'Issue matrix: JoyCode workspace blocks are +s, a channel teamai does not build',
   },
+  {
+    tool: 'joycode', scope: 'project', install: { toolPaths: { joycode: { skills: '.joycode/skills', rules: '.joycode/rules', claudemd: '.joycode/AGENTS.md' } } },
+    channel: 'none',
+    existingDirs: ['<root>/.joycode'], installed: { probe: '<root>/.joycode', met: true },
+    retired: [{ at: '<root>/.joycode/AGENTS.md', was: 'configured' }],
+    source: 'An earlier release wrote the blocks into a claudemd the team mapped for a tool with no blocks channel',
+  },
   ...(['qoder', 'qoder-cn', 'trae', 'trae-cn'] as const).flatMap((tool): MatrixRow[] => (['user', 'project'] as const).map((scope): MatrixRow => ({
     tool, scope,
     channel: 'none',
