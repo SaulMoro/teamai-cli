@@ -718,8 +718,13 @@ export class AgentsHandler extends ResourceHandler {
       specModel = parseResult.spec.model;
       if (specModel !== undefined) {
         const holds = await this.modelHolds(item.name, spec, teamConfig, localConfig, aliases);
-        if (ledger) ledger.held.push(...holds);
-        else reportHeld(holds);
+        if (ledger) {
+          ledger.held.push(...holds);
+          const everyTool = async (): Promise<string[]> => (await this.agentToolDirs(teamConfig, localConfig)).map(({ tool }) => tool);
+          for (const hold of holds) for (const tool of hold.tools ?? await everyTool()) ledger.toolsMissingAgents.add(tool);
+        } else {
+          reportHeld(holds);
+        }
       }
     } else {
       warnLegacyAlias(item, content, aliases);
@@ -746,7 +751,10 @@ export class AgentsHandler extends ResourceHandler {
     for (const { tool, dest, render, origin } of renders) {
       const destDir = path.dirname(dest);
       try {
-        if (ledger && await keepsEditedCopy(ledger, item, { tool, dest, content: render.content, origin })) continue;
+        if (ledger && await keepsEditedCopy(ledger, item, { tool, dest, content: render.content, origin })) {
+          ledger.toolsMissingAgents.add(tool);
+          continue;
+        }
         await ensureDir(destDir);
         // Only a rendered spec can leave a sibling behind: its extension follows
         // the tool's format and changes when `targets` does. A legacy `.md` is
@@ -767,6 +775,7 @@ export class AgentsHandler extends ResourceHandler {
         ledger?.recorder?.failed('agents');
         log.warn(`Failed to sync agent ${item.name} to ${tool}: ${(e as Error).message}`);
         ledger?.failed.push({ name: item.name, tool });
+        ledger?.toolsMissingAgents.add(tool);
       }
     }
     if (ledger?.recorder) await this.reportHeldCopies(agentItem, teamConfig, localConfig, aliases, ledger);

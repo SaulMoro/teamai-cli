@@ -146,10 +146,11 @@ describe('samePlace', () => {
 
 describe('placesUnmoved', () => {
   it('holds while every recorded resource is where the last full pull wrote it, and not for a record without one', async () => {
-    const current = { skills: { hermes: ['/a/skills'] } };
+    const current = { skills: { hermes: ['/a/skills'] }, agents: { claude: ['/a/agents'] } };
 
-    expect(await placesUnmoved({ places: { skills: { hermes: ['/a/skills'] } } }, current)).toBe(true);
-    expect(await placesUnmoved({ places: { skills: { hermes: ['/b/skills'] } } }, current)).toBe(false);
-    expect(await placesUnmoved({ places: { agents: { hermes: ['/a/agents'] } } }, current)).toBe(false);
+    expect(await placesUnmoved({ places: current }, current)).toBe(true);
+    expect(await placesUnmoved({ places: { ...current, skills: { hermes: ['/b/skills'] } } }, current)).toBe(false);
+    expect(await placesUnmoved({ places: { ...current, agents: { claude: ['/b/agents'] } } }, current)).toBe(false);
+    expect(await placesUnmoved({ places: { skills: current.skills } }, current)).toBe(false);
   });
 });

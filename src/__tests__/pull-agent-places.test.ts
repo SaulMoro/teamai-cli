@@ -37,9 +37,11 @@ import { autoDetectInit, detectProjectConfig, loadLocalConfigForScope, loadState
 import { recallDisable } from '../recall-toggle.js';
 import { log } from '../utils/logger.js';
 import { TeamaiConfigSchema, type LocalConfig, type State } from '../types.js';
+import { saveToolHomes } from '../tool-home.js';
 
 describe('a pull and the agents of a moved home', () => {
   let tmp: string; let home: string; let repo: string; let xdg: string; let saved: State; let config: LocalConfig;
+  const notices = (): string[] => vi.mocked(log.info).mock.calls.map(([message]) => String(message)).filter((line) => line.includes('no longer updates'));
 
   beforeEach(async () => {
     tmp = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-agent-places-'));
@@ -100,5 +102,55 @@ describe('a pull and the agents of a moved home', () => {
     await pull({ force: true });
 
     expect(await fse.pathExists(path.join(xdg, 'opencode', 'agents', 'reviewer.md'))).toBe(false);
+  });
+
+  describe('when OpenCode\'s agents move at one team revision', () => {
+    let before: string; let after: string;
+    const recordedAgents = (): unknown => Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.places?.agents?.opencode);
+    beforeEach(async () => {
+      // Agents only, so the skills places cannot be what notices the move.
+      vi.mocked(loadTeamConfig).mockResolvedValue(TeamaiConfigSchema.parse({
+        team: 't', repo: 'https://example.invalid/x/t.git',
+        toolPaths: { opencode: { agents: '.opencode/agents', userScope: { agents: '.config/opencode/agents' } } },
+      }));
+      config.enabledAgents = ['opencode'];
+      before = path.join(tmp, 'opencode-a'); after = path.join(tmp, 'opencode-b');
+      await fse.ensureDir(before); await fse.ensureDir(after);
+      await saveToolHomes({ opencode: before });
+      await pull({});
+      expect(await fse.pathExists(path.join(before, 'agents', 'reviewer.md'))).toBe(true);
+      await saveToolHomes({ opencode: after });
+      vi.mocked(log.info).mockClear();
+    });
+
+    it('syncs in full, keeps the old copies and names the old directory once', async () => {
+      await pull({});
+
+      expect(await fse.pathExists(path.join(after, 'agents', 'reviewer.md'))).toBe(true);
+      expect(await fse.pathExists(path.join(before, 'agents', 'reviewer.md'))).toBe(true);
+      expect(notices()).toEqual([`[user] opencode takes agents from ${path.join(after, 'agents')} now, so teamai no longer updates its copies in ${path.join(before, 'agents')}. Delete them once no tool reads that directory.`]);
+      expect(recordedAgents()).toEqual([[path.join(after, 'agents')]]);
+
+      vi.mocked(log.info).mockClear();
+      await pull({ force: true });
+
+      expect(notices()).toEqual([]);
+    });
+
+    it('keeps the old directory on record while a file of the member\'s holds an agent back at the new one', async () => {
+      await fse.outputFile(path.join(after, 'agents', 'reviewer.md'), 'The member\'s own reviewer.\n');
+
+      await pull({});
+
+      expect(await fse.readFile(path.join(after, 'agents', 'reviewer.md'), 'utf8')).toContain('member\'s own');
+      expect(notices()).toEqual([]);
+      expect(recordedAgents()).toEqual([[path.join(before, 'agents'), path.join(after, 'agents')]]);
+
+      await fse.remove(path.join(after, 'agents', 'reviewer.md'));
+      await pull({});
+
+      expect(await fse.pathExists(path.join(after, 'agents', 'reviewer.md'))).toBe(true);
+      expect(recordedAgents()).toEqual([[path.join(after, 'agents')]]);
+    });
   });
 });

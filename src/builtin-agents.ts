@@ -93,7 +93,11 @@ async function removeStaleAgentSiblings(targetAgentsDir: string, stem: string, t
 export async function deployBuiltinAgents(
   teamConfig: TeamaiConfig,
   localConfig: LocalConfig,
-  options?: { skipRecall?: boolean; recorder?: DeliveryRecorder; dryRun?: boolean },
+  options?: {
+    skipRecall?: boolean; recorder?: DeliveryRecorder; dryRun?: boolean;
+    /** Gets each tool that did not take every built-in agent (`DeliveryLedger.toolsMissingAgents`). */
+    toolsMissingAgents?: Set<string>;
+  },
 ): Promise<number> {
   const builtinDir = getBuiltinAgentsDir();
   if (!await pathExists(builtinDir)) {
@@ -141,6 +145,7 @@ export async function deployBuiltinAgents(
       if (!options?.dryRun) await ensureDir(targetAgentsDir);
     } catch (e) {
       options?.recorder?.failed('builtin');
+      options?.toolsMissingAgents?.add(tool);
       log.warn(`Failed to create agents dir for ${tool}: ${(e as Error).message}`);
       continue;
     }
@@ -172,6 +177,7 @@ export async function deployBuiltinAgents(
         deployed++;
       } catch (e) {
         options?.recorder?.failed('builtin');
+        options?.toolsMissingAgents?.add(tool);
         log.warn(`Failed to deploy built-in agent ${file} to ${tool}: ${(e as Error).message}`);
       }
     }

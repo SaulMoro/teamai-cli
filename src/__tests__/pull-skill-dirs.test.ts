@@ -139,7 +139,7 @@ describe('a pull and the homes the env moves', () => {
     expect(Object.values(saved.lastPullByWorkspace ?? {}).map((record) => record.targets)).toEqual([['opencode']]);
   });
 
-  it('takes the fast path on the skills directories an earlier release recorded, and records them only as places', async () => {
+  it('syncs in full once on the skills directories an earlier release recorded, which say nothing of agents, and records them only as places', async () => {
     await pull({});
     const [[key, record]] = Object.entries(saved.lastPullByWorkspace ?? {});
     const { places, ...earlier } = record;
@@ -148,12 +148,13 @@ describe('a pull and the homes the env moves', () => {
 
     await pull({});
 
-    expect(vi.mocked(log.success).mock.calls.flat()).toContainEqual(expect.stringContaining('Already synced at abc1234'));
-
-    await pull({ force: true });
-
-    expect(saved.lastPullByWorkspace?.[key]?.places?.skills).toEqual(places?.skills);
+    expect(vi.mocked(log.success).mock.calls.flat()).not.toContainEqual(expect.stringContaining('Already synced at abc1234'));
+    expect(saved.lastPullByWorkspace?.[key]?.places).toEqual(places);
     expect(saved.lastPullByWorkspace?.[key]?.skillDirs).toBeUndefined();
+
+    await pull({});
+
+    expect(vi.mocked(log.success).mock.calls.flat()).toContainEqual(expect.stringContaining('Already synced at abc1234'));
   });
 
   describe('when a tool\'s skills directory moves at one team revision', () => {

@@ -25,13 +25,15 @@ export type SessionToolHomes = NonNullable<CheckoutRecord['sessionToolHomes']>;
  * tool left. A resource joins once every writer of it goes through `locate`,
  * or the record would name a place pull still writes.
  */
-const RECORDED = ['skills'] as const satisfies readonly PlacedResource[];
+const RECORDED = ['skills', 'agents'] as const satisfies readonly PlacedResource[];
 
 type Recorded = (typeof RECORDED)[number];
 
 const LEFT_LINE: { readonly [R in Recorded]: (left: LeftPlace, scopeLabel: string) => string } = {
   skills: ({ tool, place, currentPlace }, scopeLabel) =>
     `[${scopeLabel}] ${tool} takes skills from ${currentPlace} now, so teamai no longer updates its copies in ${place}. Delete them once no tool reads that directory.`,
+  agents: ({ tool, place, currentPlace }, scopeLabel) =>
+    `[${scopeLabel}] ${tool} takes agents from ${currentPlace} now, so teamai no longer updates its copies in ${place}. Delete them once no tool reads that directory.`,
 };
 
 /** The places a checkout record names: an earlier release's `skillDirs` reads as `places.skills`. */
