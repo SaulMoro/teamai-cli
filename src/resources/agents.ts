@@ -2,13 +2,14 @@ import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { parse as parseYaml } from 'yaml';
 import matter from 'gray-matter';
-import { isToolInstalledForConfig, ResourceHandler, type PlacementRecords, type ScanForPushOptions } from './base.js';
+import { ResourceHandler, type PlacementRecords, type ScanForPushOptions } from './base.js';
 import type { CopyOrigin, ResourceItem, ResourceItemStatus, DeliveryTarget, TeamaiConfig, LocalConfig, AgentModelRecords, RecordedAgentModel } from '../types.js';
 import { listFiles, listDirs, pathExists, copyFile, ensureDir, remove, fileContentEqual, getFileMtime, writeFile, readFileSafe, fileHash } from '../utils/fs.js';
 import { log } from '../utils/logger.js';
 import { resolveToolBaseDir, installScopeName, isAgentExcluded, isSelfMode, scopedToolPaths } from '../types.js';
 import { BUILTIN_AGENT_NAMES } from '../builtin-agents.js';
 import { isAgentToolId } from '../tools.js';
+import { installOf, locate, ownOf, writable } from '../locate.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
 import { isSafeNamespaceSegment } from '../manifest-schema.js';
 import { assertWithinRoot } from '../utils/path-safety.js';
@@ -1110,16 +1111,17 @@ export class AgentsHandler extends ResourceHandler {
     localConfig: LocalConfig,
   ): Promise<{ tool: ToolName; dir: string }[]> {
     const dirs: { tool: ToolName; dir: string }[] = [];
-
-    for (const [tool, toolPath] of Object.entries(scopedToolPaths(teamConfig, localConfig))) {
-      if (!toolPath.agents || !isAgentToolId(tool) || isAgentExcluded(localConfig, tool)) continue;
-      if (!await isToolInstalledForConfig(tool, toolPath.agents, localConfig)) {
-        debugOnce(`Skipping agent sync for ${tool} in ${localConfig.scope} scope: tool not installed`);
+    const install = installOf(teamConfig, localConfig);
+    for (const tool of Object.keys(install.toolPaths)) {
+      if (!isAgentToolId(tool)) continue;
+      const where = await locate(tool, 'agents', install);
+      const dir = writable(where)?.path ?? null;
+      if (dir === null) {
+        if (ownOf(where) !== null && !isAgentExcluded(localConfig, tool)) debugOnce(`Skipping agent sync for ${tool} in ${localConfig.scope} scope: tool not installed`);
         continue;
       }
-      dirs.push({ tool, dir: path.join(resolveToolBaseDir(tool, localConfig), toolPath.agents) });
+      dirs.push({ tool, dir });
     }
-
     return dirs;
   }
 
