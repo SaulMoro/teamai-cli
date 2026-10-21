@@ -146,9 +146,13 @@ async function remoteBranchExists(spec: BranchWorktreeSpec, repoRoot: string): P
  * `rebase origin/<branch>` and `merge --ff-only origin/<branch>` all fail or read
  * stale. An explicit refspec creates and updates that tracking ref in every
  * clone (#706). Used by both the reports and learnings branches.
+ *
+ * `--progress`: on a pipe git prints nothing until it finishes, and the block
+ * timeout kills a silent git, so a slow fetch of a large branch that is still
+ * moving data would be killed with a stalled one.
  */
 export async function fetchTrackingRef(git: SimpleGit, branch: string): Promise<void> {
-  await git.fetch(['origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
+  await git.fetch(['--progress', 'origin', `+refs/heads/${branch}:refs/remotes/origin/${branch}`]);
 }
 
 /**
