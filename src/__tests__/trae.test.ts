@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { detectHomeInstalledAgents, KNOWN_AGENTS } from '../known-agents.js';
 import { mcpTargetExcluded, reconcileMcpForConfig, resolveMcpTargets } from '../mcp-reconcile.js';
 import { isToolInstalledForConfig } from '../resources/base.js';
-import { ALL_SUPPORTED_TOOLS } from '../resources/agent-format.js';
 import { detectMcpFormat } from '../resources/mcp-format.js';
 import { ruleFileExtensionForTool, ruleFormatForTool, usesMdcRules } from '../resources/rule-format.js';
 import { RulesHandler } from '../resources/rules.js';
@@ -14,6 +13,7 @@ import { loadStateForScope, saveStateForScope } from '../config.js';
 import { checkoutKey } from '../pull.js';
 import { getDataHome, managedMcpManifestKey, managedMcpManifestPath, TeamaiConfigSchema, scopedToolPaths } from '../types.js';
 import type { LocalConfig } from '../types.js';
+import { AGENT_TOOLS } from '../tools.js';
 
 describe('Trae support', () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -78,8 +78,8 @@ describe('Trae support', () => {
       skillsPath: '.trae-cn/skills',
     });
     for (const id of ['trae', 'trae-cn']) {
-      // Trae has no subagents directory, so it is not in ALL_SUPPORTED_TOOLS.
-      expect(ALL_SUPPORTED_TOOLS).not.toContain(id);
+      // Trae has no subagents directory, so it is not in AGENT_TOOLS.
+      expect(AGENT_TOOLS).not.toContain(id);
       expect(ruleFileExtensionForTool(id)).toBe('.md');
       expect(usesMdcRules(id)).toBe(false);
       expect(ruleFormatForTool(id)?.scopeFields).toEqual(['globs', 'alwaysApply']);

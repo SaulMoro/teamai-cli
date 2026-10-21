@@ -6,7 +6,6 @@ import { KNOWN_AGENTS } from '../known-agents.js';
 import { resolveMcpTargets } from '../mcp-reconcile.js';
 import {
   agentFileExtensionForTool,
-  ALL_SUPPORTED_TOOLS,
 } from '../resources/agent-format.js';
 import { AgentsHandler } from '../resources/agents.js';
 import { detectMcpFormat } from '../resources/mcp-format.js';
@@ -20,6 +19,7 @@ import { loadStateForScope, saveStateForScope } from '../config.js';
 import { TeamaiConfigSchema, scopedToolPaths } from '../types.js';
 import type { LocalConfig, ResourceItem } from '../types.js';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
+import { AGENT_TOOLS } from '../tools.js';
 
 describe('OMP (Oh My Pi) support', () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -58,7 +58,7 @@ describe('OMP (Oh My Pi) support', () => {
       displayName: 'Oh My Pi',
       skillsPath: '.omp/skills',
     });
-    expect(ALL_SUPPORTED_TOOLS).toContain('omp');
+    expect(AGENT_TOOLS).toContain('omp');
     expect(agentFileExtensionForTool('omp')).toBe('.md');
     expect(ruleFileExtensionForTool('omp')).toBe('.md');
     expect(usesMdcRules('omp')).toBe(false);

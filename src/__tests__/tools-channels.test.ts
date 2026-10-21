@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { ALL_SUPPORTED_TOOLS } from '../resources/agent-format.js';
 import { CODEBUDDY_RULE_FORMAT } from '../resources/codebuddy-rule.js';
 import { COPILOT_INSTRUCTIONS_FORMAT } from '../resources/copilot-instructions.js';
 import { CURSOR_MDC_FORMAT } from '../resources/cursor-mdc.js';
@@ -75,7 +74,6 @@ describe('the descriptor\'s channels agree with the tables they replaced', () =>
   });
 
   it('renders agents for the same tools', () => {
-    expect([...ALL_SUPPORTED_TOOLS].sort()).toEqual([...BEFORE.agentTools].sort());
     expect([...AGENT_TOOLS].sort()).toEqual([...BEFORE.agentTools].sort());
   });
 

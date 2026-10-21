@@ -8,8 +8,8 @@ import { resolveToolBaseDir, isAgentExcluded, scopedToolPaths } from './types.js
 import { isToolInstalledForConfig, ResourceHandler } from './resources/base.js';
 import { getUserHome } from './utils/home.js';
 import { keepsTrackedCopy } from './resources/delivered-copies.js';
-import { ALL_SUPPORTED_TOOLS, agentStemFromFilename, renderForTool, reverseFromClaude } from './resources/agent-format.js';
-import type { ToolName } from './resources/agent-format.js';
+import { agentStemFromFilename, renderForTool, reverseFromClaude } from './resources/agent-format.js';
+import { isAgentToolId } from './tools.js';
 import type { DeliveryRecorder } from './git-exclude-delivered.js';
 
 // ─── Built-in agents deployment ──────────────────────────
@@ -132,7 +132,7 @@ export async function deployBuiltinAgents(
       continue;
     }
     if (localConfig && isAgentExcluded(localConfig, tool)) continue;
-    if (!(ALL_SUPPORTED_TOOLS as string[]).includes(tool)) {
+    if (!isAgentToolId(tool)) {
       log.warn(
         `Skipping built-in agent deployment for ${tool}: unsupported agent format; ` +
         'disable this target or add a native renderer',
@@ -160,7 +160,7 @@ export async function deployBuiltinAgents(
         if (!parsed.ok) {
           throw new Error(`invalid built-in agent ${file}: ${parsed.reason}`);
         }
-        const rendered = renderForTool(parsed.spec, tool as ToolName);
+        const rendered = renderForTool(parsed.spec, tool);
         const stem = path.basename(file, '.md');
         if (options?.dryRun) {
           options.recorder?.report('builtin', path.join(targetAgentsDir, `${stem}${rendered.ext}`));

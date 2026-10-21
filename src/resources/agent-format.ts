@@ -3,14 +3,12 @@ import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import matter from 'gray-matter';
 import { stringify as stringifyToml, parse as parseToml } from 'smol-toml';
 import { getDispatchCommand } from '../builtin-hooks.js';
-import { AGENT_TOOLS, type AgentToolId } from '../tools.js';
+import type { AgentToolId } from '../tools.js';
 
 // ─── Tool name type ──────────────────────────────────────────────────────────
 
 /** The built-in tools that get subagents: their descriptor has an agents channel (tools.ts). `ToolId` (types.ts) is the full built-in set. */
 export type ToolName = AgentToolId;
-
-export const ALL_SUPPORTED_TOOLS: ToolName[] = [...AGENT_TOOLS];
 
 export type AgentFileExtension = '.agent.md' | '.md' | '.toml' | '.json';
 

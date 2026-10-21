@@ -3,11 +3,8 @@ import { autoDetectInit, saveLocalConfigForScope } from './config.js';
 import { log } from './utils/logger.js';
 import { remove, pathExists } from './utils/fs.js';
 import { applyInstructionPlan, planInstructionFiles, registerOpencodeContext, resolveInstructionTargets } from './instruction-targets.js';
-import {
-  ALL_SUPPORTED_TOOLS,
-  agentFileExtensionForTool,
-  type ToolName,
-} from './resources/agent-format.js';
+import { agentFileExtensionForTool } from './resources/agent-format.js';
+import { isAgentToolId } from './tools.js';
 import { ruleFileExtensionForTool } from './resources/rule-format.js';
 import { LEGACY_RECALL_SKILL_NAMES, builtinSkillsTarget, pruneLegacyBuiltinSkills } from './builtin-skills.js';
 import {
@@ -51,8 +48,8 @@ async function removeRecallArtifacts(teamConfig: TeamaiConfig, localConfig: Loca
     if (toolPath.agents) {
       const agentsDir = path.join(baseDir, toolPath.agents);
       const extensions = new Set<string>(['.md']);
-      if ((ALL_SUPPORTED_TOOLS as string[]).includes(tool)) {
-        extensions.add(agentFileExtensionForTool(tool as ToolName));
+      if (isAgentToolId(tool)) {
+        extensions.add(agentFileExtensionForTool(tool));
       }
       for (const extension of extensions) {
         const agentFile = path.join(agentsDir, `teamai-recall${extension}`);

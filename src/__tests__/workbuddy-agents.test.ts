@@ -4,7 +4,6 @@ import matter from 'gray-matter';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  ALL_SUPPORTED_TOOLS,
   agentStemFromFilename,
   renderForTool,
   reverseFromWorkbuddy,
@@ -14,6 +13,7 @@ import {
 import { AgentsHandler } from '../resources/agents.js';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
 import { TeamaiConfigSchema, type LocalConfig, type TeamaiConfig } from '../types.js';
+import { AGENT_TOOLS } from '../tools.js';
 
 vi.mock('../utils/logger.js', () => ({
   log: {
@@ -75,7 +75,7 @@ describe('WorkBuddy custom agents', () => {
   });
 
   it('registers workbuddy as a supported tool with a default agents path', () => {
-    expect(ALL_SUPPORTED_TOOLS).toContain('workbuddy');
+    expect(AGENT_TOOLS).toContain('workbuddy');
     expect(teamConfig.toolPaths['workbuddy']?.agents).toBe('.workbuddy/agents');
   });
 

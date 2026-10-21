@@ -47,7 +47,8 @@ import { activeEntryNamespaces, describeEntryFailure, entryLayout, listEntryFile
 import { resolveNamespacedItems, type NamespaceCandidate } from '../namespace-resolver.js';
 import { listDirs } from '../utils/fs.js';
 import { liveModelSwitches, type LiveModelSwitch } from './switch.js';
-import { ALL_SUPPORTED_TOOLS, agentEffortField, toolExtrasFor, type AgentSpec, type ToolName } from '../resources/agent-format.js';
+import { agentEffortField, toolExtrasFor, type AgentSpec, type ToolName } from '../resources/agent-format.js';
+import { AGENT_TOOLS, isAgentToolId } from '../tools.js';
 
 /**
  * Alias names every team has, whether or not it maps them. A team maps one
@@ -63,8 +64,6 @@ const RESERVED_ALIASES = ['strong', 'fast'] as const;
  * A full model id is not covered.
  */
 const NATIVE_MODEL_ALIASES: ReadonlySet<string> = new Set(['opus', 'sonnet', 'haiku', 'fable', 'inherit', 'default', 'auto', 'lite']);
-
-const KNOWN_TOOLS: ReadonlySet<string> = new Set(ALL_SUPPORTED_TOOLS);
 
 const OPTION_FIELDS: ReadonlySet<string> = new Set(['model', 'effort']);
 
@@ -396,7 +395,7 @@ function dropUnknownEntries(document: unknown, file: string): { document: unknow
     const entries: Record<string, unknown> = {};
     for (const [tool, entry] of Object.entries(value)) {
       if (tool === 'gateways') continue;
-      if (!KNOWN_TOOLS.has(tool)) {
+      if (!isAgentToolId(tool)) {
         warnings.push({ alias, file, message: `${file}: alias "${alias}" maps "${tool}", which is not a tool teamai knows, so that entry `
           + 'is ignored. Fix the tool id, or update teamai if a newer version added that tool.' });
         continue;
@@ -411,7 +410,7 @@ function dropUnknownEntries(document: unknown, file: string): { document: unknow
       entries[tool] = Array.isArray(entry) ? entry.map(withoutUnknown) : withoutUnknown(entry);
       if (unknown.size > 0) {
         const fields = [...unknown].map((field) => `"${field}"`).join(', ');
-        warnings.push({ alias, file, tool: tool as ToolName, message: `${file}: alias "${alias}" sets ${fields} for ${tool}, which teamai `
+        warnings.push({ alias, file, tool, message: `${file}: alias "${alias}" sets ${fields} for ${tool}, which teamai `
           + `does not know, so ${tool} receives that entry without it. Remove it, or update teamai if a newer version added it.` });
       }
     }
@@ -427,7 +426,7 @@ function dropUnknownEntries(document: unknown, file: string): { document: unknow
  */
 function droppedEffortWarnings(alias: string, entries: AliasEntries, file: string): AliasWarning[] {
   const warnings: AliasWarning[] = [];
-  for (const tool of ALL_SUPPORTED_TOOLS) {
+  for (const tool of AGENT_TOOLS) {
     const entry = entries[tool];
     if (entry === undefined || entry === null || agentEffortField(tool) !== undefined) continue;
     const withEffort = (Array.isArray(entry) ? entry : [entry]).find((option) => typeof option !== 'string' && option.effort !== undefined);

@@ -7,7 +7,6 @@ import { KNOWN_AGENTS } from '../known-agents.js';
 import { resolveMcpTargets } from '../mcp-reconcile.js';
 import {
   agentFileExtensionForTool,
-  ALL_SUPPORTED_TOOLS,
   KIRO_SESSION_START_COMMAND,
   renderForKiro,
   reverseFromKiro,
@@ -23,6 +22,7 @@ import { TeamaiConfigSchema } from '../types.js';
 import type { LocalConfig } from '../types.js';
 import { resolveHookCwd } from '../utils/hook-cwd.js';
 import { deriveSessionId } from '../utils/session-id.js';
+import { AGENT_TOOLS } from '../tools.js';
 
 describe('Kiro support', () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -50,7 +50,7 @@ describe('Kiro support', () => {
       displayName: 'Kiro',
       skillsPath: '.kiro/skills',
     });
-    expect(ALL_SUPPORTED_TOOLS).toContain('kiro');
+    expect(AGENT_TOOLS).toContain('kiro');
     expect(agentFileExtensionForTool('kiro')).toBe('.json');
     expect(ruleFileExtensionForTool('kiro')).toBe('.md');
     expect(usesMdcRules('kiro')).toBe(false);

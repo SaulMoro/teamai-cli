@@ -6,12 +6,12 @@ import { KNOWN_AGENTS } from '../known-agents.js';
 import { resolveMcpTargets } from '../mcp-reconcile.js';
 import {
   agentFileExtensionForTool,
-  ALL_SUPPORTED_TOOLS,
 } from '../resources/agent-format.js';
 import { detectMcpFormat } from '../resources/mcp-format.js';
 import { ruleFileExtensionForTool, usesMdcRules } from '../resources/rule-format.js';
 import { TeamaiConfigSchema } from '../types.js';
 import type { LocalConfig } from '../types.js';
+import { AGENT_TOOLS } from '../tools.js';
 
 describe('Qoder support', () => {
   afterEach(() => vi.unstubAllEnvs());
@@ -34,7 +34,7 @@ describe('Qoder support', () => {
       displayName: 'Qoder',
       skillsPath: '.qoder/skills',
     });
-    expect(ALL_SUPPORTED_TOOLS).toContain('qoder');
+    expect(AGENT_TOOLS).toContain('qoder');
     expect(agentFileExtensionForTool('qoder')).toBe('.md');
     expect(ruleFileExtensionForTool('qoder')).toBe('.md');
     expect(usesMdcRules('qoder')).toBe(false);

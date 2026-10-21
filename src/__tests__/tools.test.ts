@@ -3,8 +3,8 @@ import path from 'node:path';
 import { installedBuiltinHookDefs } from '../builtin-hooks.js';
 import { KNOWN_AGENTS, SELF_MODE_AGENT_CHOICES } from '../known-agents.js';
 import { ModelAgentSchema, type ModelAgent } from '../models/profile.js';
-import { ALL_SUPPORTED_TOOLS, EXTRAS_BASE_TOOL, type ToolName } from '../resources/agent-format.js';
-import { isToolId, TOOLS, type ToolDescriptor } from '../tools.js';
+import { EXTRAS_BASE_TOOL, type ToolName } from '../resources/agent-format.js';
+import { AGENT_TOOLS, isToolId, TOOLS, type ToolDescriptor } from '../tools.js';
 import { DEFAULT_TOOL_PATHS, scopedToolPaths, TeamaiConfigSchema, type ToolId } from '../types.js';
 import { CODEX_TOOL_IDS, normalizeAgentType } from '../utils/tool-names.js';
 import type { LocalWorkflowTool } from '../workflow/local-tool-adapter.js';
@@ -34,7 +34,7 @@ describe('ToolId', () => {
 
   it('covers every runtime tool list and alias table', () => {
     const ids = [
-      ...ALL_SUPPORTED_TOOLS,
+      ...AGENT_TOOLS,
       ...ModelAgentSchema.options,
       ...SELF_MODE_AGENT_CHOICES,
       ...CODEX_TOOL_IDS,

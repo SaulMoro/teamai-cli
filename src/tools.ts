@@ -825,7 +825,8 @@ export function channelsOf(tool: string): Pick<ToolDescriptor, 'rules' | 'blocks
   return isToolId(tool) ? TOOLS[tool] : CUSTOM_TOOL;
 }
 
-function isAgentToolId(tool: string): tool is AgentToolId {
+/** Whether teamai renders agents for `tool` in either scope (`AgentToolId`). */
+export function isAgentToolId(tool: string): tool is AgentToolId {
   if (!isToolId(tool)) return false;
   const { agents }: ToolDescriptor = TOOLS[tool];
   return [agents.user, agents.project].some((channel) => channel !== 'none' && channel !== 'unknown');
