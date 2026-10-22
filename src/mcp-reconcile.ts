@@ -1430,8 +1430,8 @@ async function someMcpEntryInstalled(targets: readonly McpTarget[]): Promise<boo
  * `records` split by where their server is: in `target`'s file, by real path
  * (#993); in a file teamai moved them out of (`elsewhere`: another file of the
  * lookup order, the mapped or alternate file, a retired one); or still in a
- * file the tool took them from before its home or mapping moved (`left`),
- * which teamai leaves as it is (#1221). A record that notes no file, of an
+ * file the tool took them from before its home or mapping moved, or one
+ * that no longer parses (`left`), which a pull leaves as it is (#1221). A record that notes no file, of an
  * earlier release, is in a retired file holding its entry unchanged.
  */
 async function splitByFile(
@@ -1451,7 +1451,7 @@ async function splitByFile(
     const file = recordedFileOf(target, record);
     if (await sameMcpFile(file, target.file)) owned.push(record);
     else if (relocations.includes(file)) elsewhere.push(record);
-    else if ((await installedMcpEntries({ ...target, file }))?.has(record.name)) left.push(record);
+    else if ((await installedMcpEntries({ ...target, file }))?.has(record.name) ?? true) left.push(record);
     else owned.push(record);
   }
   return { owned, elsewhere, left };
@@ -2493,17 +2493,23 @@ async function reconcileTargets(
     // another entry of that name here is the member's, and the server stays where it is, with its record.
     const blocked = new Set([...moving].filter(([name, { hash }]) => !nextRecords.some((r) => r.name === name && r.hash === hash)).map(([name]) => name));
     const leavingElsewhere = elsewhere.filter((r) => !blocked.has(r.name));
+    // Every record is cleaned in the file it names: OpenCode's other project file, or any other.
+    let apart = leavingElsewhere;
     if (target.mappedFile && target.alternateFile) {
       const other = target.file === target.mappedFile ? target.alternateFile : target.mappedFile;
-      wrote = await moveOpencodeServers(target, other, leavingElsewhere, nextRecords, changes, await judgeIn({ ...target, file: other }), options, restoreConfigs) || wrote;
-    } else if (target.mappedFile || elsewhere.length > 0) {
+      const inOther: ManagedMcpRecord[] = [];
+      apart = [];
+      for (const r of leavingElsewhere) (await sameMcpFile(recordedFileOf(target, r), other) ? inOther : apart).push(r);
+      wrote = await moveOpencodeServers(target, other, inOther, nextRecords, changes, await judgeIn({ ...target, file: other }), options, restoreConfigs) || wrote;
+    }
+    if ((target.mappedFile && !target.alternateFile) || apart.length > 0) {
       // Each file is judged with the records of the tools that write it: a lookup file may link to another tool's.
       const judgeFor = (file: string): Promise<McpEntryJudge> => judgeIn({ ...resolved, file });
-      const moved = await removeFromOtherFiles(target, leavingElsewhere, nextRecords, changes, judgeFor, options, restoreConfigs, leaving?.former);
+      const moved = await removeFromOtherFiles(target, apart, nextRecords, changes, judgeFor, options, restoreConfigs, leaving?.former);
       wrote = moved || wrote;
       if (leaving) {
         const names: string[] = [];
-        for (const r of leavingElsewhere) if (await sameMcpFile(recordedFileOf(target, r), leaving.former)) names.push(r.name);
+        for (const r of apart) if (await sameMcpFile(recordedFileOf(target, r), leaving.former)) names.push(r.name);
         wrote = await deleteLeftMcpFile(target, leaving.former, names, options, restoreConfigs) || wrote;
       }
     }

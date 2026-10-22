@@ -16,7 +16,7 @@ import { detectMcpFormat } from '../resources/mcp-format.js';
 import { log } from '../utils/logger.js';
 import { judgeTeamaiOnlyMcpConfigs, reconcileMcpForConfig } from '../mcp-reconcile.js';
 import { entryHash, renderCodexBlock, renderJsonEntry } from '../resources/mcp-format.js';
-import { TeamaiConfigSchema, type LocalConfig, type McpServerDef, type TeamaiConfig } from '../types.js';
+import { managedMcpManifestKey, TeamaiConfigSchema, type LocalConfig, type McpServerDef, type TeamaiConfig } from '../types.js';
 
 const API: McpServerDef = { name: 'api', transport: 'http', url: 'https://api.example.com/mcp' };
 const MINE = { type: 'stdio', command: 'my-own-server' };
@@ -366,43 +366,73 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
       expect(vi.mocked(log.info).mock.calls.filter(([line]) => line === left)).toHaveLength(1);
     });
 
-    // Each MCP file format, in the file teamai wrote under the tool's earlier home: an earlier release's record notes no file.
+    // Uninstall takes teamai's unchanged servers out of the file each record names, whatever the tool now reads:
+    // under an earlier home (an earlier release's record notes no file) or an earlier toolPaths mapping.
+    const json = (tool: Parameters<typeof renderJsonEntry>[0], key: string) => ({
+      format: 'JSON', render: (def: McpServerDef) => renderJsonEntry(tool, def),
+      write: (entries: Record<string, unknown>) => JSON.stringify({ [key]: entries }),
+      read: (text: string) => Object.keys(JSON.parse(text)[key]),
+    });
+    const toml = {
+      format: 'TOML', render: (def: McpServerDef) => renderCodexBlock(def),
+      write: (entries: Record<string, unknown>) => `model = "o3"\n\n${Object.values(entries).join('\n')}`,
+      read: (text: string) => [...text.matchAll(/^\[mcp_servers\.([\w-]+)\]$/gm)].map(([, name]) => name),
+    };
     const leftFiles = [
-      {
-        tool: 'opencode', moves: 'OPENCODE_CONFIG_DIR', file: ['.config', 'opencode', 'opencode.json'], notesFile: false,
-        render: (def: McpServerDef) => renderJsonEntry('opencode', def),
-        write: (entries: Record<string, unknown>) => JSON.stringify({ mcp: entries }),
-        read: (text: string) => Object.keys(JSON.parse(text).mcp),
-      },
-      {
-        tool: 'codex', moves: 'toolRoots', file: ['.codex', 'config.toml'], notesFile: true,
-        render: (def: McpServerDef) => renderCodexBlock(def),
-        write: (entries: Record<string, unknown>) => `model = "o3"\n\n${Object.values(entries).join('\n')}`,
-        read: (text: string) => [...text.matchAll(/^\[mcp_servers\.([\w-]+)\]$/gm)].map(([, name]) => name),
-      },
-    ];
+      { tool: 'opencode', scope: 'user', moves: 'OPENCODE_CONFIG_DIR', file: '.config/opencode/opencode.json', notesFile: false, ...json('opencode', 'mcp') },
+      { tool: 'codex', scope: 'user', moves: 'toolRoots', file: '.codex/config.toml', notesFile: true, ...toml },
+      { tool: 'opencode', scope: 'project', moves: 'mcpProject', file: 'opencode.json', notesFile: true, ...json('opencode', 'mcp') },
+      { tool: 'claude', scope: 'project', moves: 'mcpProject', file: '.mcp.json', notesFile: true, ...json('claude', 'mcpServers') },
+      { tool: 'codex', scope: 'project', moves: 'mcpProject', file: '.codex/config.toml', notesFile: true, ...toml },
+    ] as const;
+    // A file that no longer parses keeps teamai's servers, and so their records. A Codex config.toml always reads.
+    const cases = leftFiles.flatMap((row) => [
+      { ...row, outcome: 'removed' as const },
+      ...row.format === 'JSON' ? [{ ...row, outcome: 'kept' as const }] : [],
+    ]);
 
-    it.each(leftFiles)('lets uninstall remove the unchanged servers teamai wrote to $tool\'s earlier home after $moves moves it',
-      async ({ tool, moves, file, notesFile, render, write, read }) => {
+    it.each(cases)('lets uninstall take $tool\'s $scope servers ($format) out of the file its record names after $moves moves it: $outcome',
+      async ({ tool, scope, moves, file, notesFile, render, write, read, outcome }) => {
+        const { loadMcpManifest, saveMcpManifest } = await import('../mcp-reconcile.js');
         const api = render(API);
         const edited = render({ ...API, name: 'edited', url: 'https://edited.example.com/mcp' });
         const mine = render({ name: 'mine', transport: 'stdio', command: 'my-own-server' });
-        const before = path.join(home, ...file);
-        await fse.outputFile(before, write({ api, edited, mine }));
+        const project = path.join(root, 'project');
+        const before = path.join(scope === 'user' ? home : project, file);
+        const contents = write({ api, edited, mine }) + (outcome === 'kept' ? '\n}' : '');
+        await fse.outputFile(before, contents);
+        let config = userConfig(tool);
+        const teamConfig = team();
+        if (scope === 'project') {
+          execFileSync('git', ['init', '-q', project]);
+          await fse.ensureDir(path.join(project, `.${tool}`));
+          config = { ...config, scope: 'project', projectRoot: project, dataHome: path.join(root, 'data') };
+          teamConfig.toolPaths = { ...teamConfig.toolPaths, [tool]: { ...teamConfig.toolPaths[tool], mcpProject: `config/${path.basename(file)}` } };
+        } else {
+          // A tool root stays under HOME.
+          const moved = path.join(home, `.${tool}-work`);
+          await fse.ensureDir(moved);
+          if (moves === 'toolRoots') config.toolRoots = { [tool]: moved };
+          else vi.stubEnv(moves, moved);
+        }
         const noted = notesFile ? { file: before } : {};
-        await fse.outputJson(path.join(home, '.teamai', 'managed-mcp.json'), {
-          [tool]: [{ name: 'api', hash: entryHash(api), ...noted }, { name: 'edited', hash: entryHash(render({ ...API, name: 'edited' })), ...noted }],
-        });
-        // A tool root stays under HOME.
-        const moved = path.join(home, `.${tool}-work`);
-        await fse.ensureDir(moved);
-        const config = userConfig(tool);
-        if (moves === 'toolRoots') config.toolRoots = { [tool]: moved };
-        else vi.stubEnv(moves, moved);
+        const records = [{ name: 'api', hash: entryHash(api), ...noted }, { name: 'edited', hash: entryHash(render({ ...API, name: 'edited' })), ...noted }];
+        const key = managedMcpManifestKey(tool, scope === 'project');
+        const saved = await loadMcpManifest(config, false);
+        saved.manifest[key] = records;
+        await saveMcpManifest(config, saved.manifestPath, saved.manifest);
 
-        await reconcileMcpForConfig(team(), config, { removeAll: true });
+        await reconcileMcpForConfig(teamConfig, config, { removeAll: true });
 
-        expect(read(await fse.readFile(before, 'utf8'))).toEqual(['edited', 'mine']);
+        const after = await fse.readFile(before, 'utf8');
+        const left = (await loadMcpManifest(config, false)).manifest[key] ?? [];
+        if (outcome === 'kept') {
+          expect(after).toBe(contents);
+          expect(left).toEqual(records.map((record) => expect.objectContaining(record)));
+        } else {
+          expect(read(after)).toEqual(['edited', 'mine']);
+          expect(left).toEqual([]);
+        }
       });
   });
 
