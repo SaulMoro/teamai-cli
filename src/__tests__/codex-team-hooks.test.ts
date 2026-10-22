@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { _resetShellCache } from '../builtin-hooks.js';
 import { codexTeamHookIndexPath, dispatchedCodexHooks, reconcileCodexDispatchers, setCodexDispatcherHooks, type CodexTeamHook } from '../codex-team-hooks.js';
 
 const hook = (command: string): CodexTeamHook[] => [{ id: 'team', event: 'Stop', command }];
@@ -73,12 +74,17 @@ describe('reconcileCodexDispatchers — the Windows override keeps the block con
   let project: string;
 
   beforeEach(() => {
+    // `command` pins the POSIX rendering; Windows renders the Git Bash path there.
+    vi.spyOn(process, 'platform', 'get').mockReturnValue('linux');
+    _resetShellCache();
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-codex-dispatch-')));
     process.env.HOME = path.join(root, 'home');
     project = path.join(root, 'project');
     fs.mkdirSync(project, { recursive: true });
   });
   afterEach(() => {
+    _resetShellCache();
+    vi.restoreAllMocks();
     process.env.HOME = originalHome;
     fs.rmSync(root, { recursive: true, force: true });
   });
