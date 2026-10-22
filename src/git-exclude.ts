@@ -188,6 +188,8 @@ function runGit(args: string[], cwd: string): Promise<ExecResult> {
  */
 async function locateExclude(dir: string): Promise<{ excludeFile: string; root: string; prefix: string } | { error: string }> {
   if (await gitFindsNoRepository(dir)) return { error: `${dir} is not in a git repository` };
+  // git cannot start there: an agent's config directory not created yet.
+  if (!await pathExists(dir)) return { error: `${dir} does not exist` };
   const located = await checkoutLocation(dir);
   if (located) return { excludeFile: located.excludeFile, root: located.toplevel, prefix: located.prefix };
   const result = await runGit(['rev-parse', '--show-toplevel', '--show-prefix', '--git-path', 'info/exclude'], dir);
