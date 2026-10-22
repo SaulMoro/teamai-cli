@@ -2472,10 +2472,8 @@ async function reconcileTargets(
       }
     }
 
-    const wroteTarget = target.format === 'codex'
-      ? await applyCodex(target, desired, keep, ownedNames, nextRecords, changes, judge, options, restoreConfigs)
-      : await applyJson(target, moving.size > 0 ? new Map([...desired, ...moving]) : desired, keep, owned, ownedNames, nextRecords, changes,
-        moving.size > 0 ? await judgeIn(target, { moved: moving }) : judge, options, restoreConfigs);
+    const wroteTarget = await applyMcpFile(target, moving.size > 0 ? new Map([...desired, ...moving]) : desired, keep, owned, ownedNames, nextRecords, changes,
+      moving.size > 0 ? await judgeIn(target, { moved: moving }) : judge, options, restoreConfigs);
     if (wroteTarget) {
       written.add(target.file);
       // A project config a pull leaves with no team server goes, as one a cleanup empties.
@@ -2676,6 +2674,14 @@ function unrecordedServerKept(target: McpTarget, name: string, owner: Exclude<Un
   return owner === 'member' ? { ...change, file: target.file, member: true } : change;
 }
 
+/**
+ * Reconcile `target`'s file in its format: every write to a tool's MCP file goes through here, the
+ * cleanup of a file the tool no longer reads too (a Codex config.toml a moved root left, #1221).
+ */
+async function applyMcpFile(...args: Parameters<typeof applyJson>): ReturnType<typeof applyJson> {
+  return args[0].format === 'codex' ? await applyCodex(...args) : await applyJson(...args);
+}
+
 /** Whether it wrote `target`'s file; null when the file does not parse, and so was not read. */
 async function applyJson(
   target: McpTarget,
@@ -2839,7 +2845,7 @@ async function removeFromOtherFiles(
     const names = new Set(records.map((r) => r.name));
     const removed: McpChange[] = [];
     const key = target.retired?.find((retired) => retired.file === file)?.key ?? target.key;
-    const result = await applyJson({ ...target, file, key }, new Map(), new Map(), records, names, [], removed, await judgeFor(file), options, restoreConfigs);
+    const result = await applyMcpFile({ ...target, file, key }, new Map(), new Map(), records, names, [], removed, await judgeFor(file), options, restoreConfigs);
     if (result === null) {
       nextRecords.push(...records);
       continue;
@@ -2933,7 +2939,7 @@ async function leaveMcpLocation(
   const judge = await ctx.judgeIn(other, { others: claimed });
   const next: ManagedMcpRecord[] = [];
   const removed: McpChange[] = [];
-  let wrote = await applyJson(other, new Map(), keep, owned, new Set(owned.map((r) => r.name)), next, removed, judge, ctx.options, ctx.restoreConfigs);
+  let wrote = await applyMcpFile(other, new Map(), keep, owned, new Set(owned.map((r) => r.name)), next, removed, judge, ctx.options, ctx.restoreConfigs);
   // Not read: its records stay.
   if (wrote === null) return false;
   for (const record of next) record.file = other.file;
@@ -3059,7 +3065,7 @@ async function leaveGoneCheckouts(
       const owned = records.filter((record) => !edited.includes(record));
       const judge = judgeUnrecordedMcpEntry(localConfig, target, ctx.desired, ctx.vars, new Set(), ctx.history);
       const removed: McpChange[] = [];
-      const result = await applyJson(target, new Map(), new Map(), owned, new Set(owned.map((r) => r.name)), [], removed, judge, ctx.options, ctx.restoreConfigs);
+      const result = await applyMcpFile(target, new Map(), new Map(), owned, new Set(owned.map((r) => r.name)), [], removed, judge, ctx.options, ctx.restoreConfigs);
       // Not read: its records stay, for the next pull.
       if (result === null) {
         kept.push(...records);
@@ -3159,7 +3165,7 @@ async function leaveLocalScope(
   }
   const owned = present.filter((record) => !edited.includes(record));
   const removed: McpChange[] = [];
-  const wrote = await applyJson(target, new Map(), new Map(), owned, new Set(owned.map((r) => r.name)), [], removed,
+  const wrote = await applyMcpFile(target, new Map(), new Map(), owned, new Set(owned.map((r) => r.name)), [], removed,
     async () => 'member', options, restoreConfigs);
   return wrote === null ? null : { removed, wrote };
 }
@@ -3372,7 +3378,7 @@ async function moveOpencodeServersOut(
   const raw = await readFileSafe(other);
   const removed: McpChange[] = [];
   const names = new Set(elsewhere.map((record) => record.name));
-  const result = await applyJson({ ...target, file: other }, new Map(), new Map(), elsewhere, names, [], removed, judge, options, restoreConfigs);
+  const result = await applyMcpFile({ ...target, file: other }, new Map(), new Map(), elsewhere, names, [], removed, judge, options, restoreConfigs);
   if (result === null) return keep();
   if (options.removeAll) changes.push(...removed);
   const deleted = !options.dryRun && raw !== null && await deleteEmptiedOpencodeFile(other, raw, restoreConfigs);
@@ -3391,6 +3397,7 @@ async function applyCodex(
   target: McpTarget,
   desired: Map<string, DesiredMcpEntry>,
   keep: Map<string, ManagedMcpRecord>,
+  owned: ManagedMcpRecord[],
   ownedNames: Set<string>,
   nextRecords: ManagedMcpRecord[],
   changes: McpChange[],
@@ -3426,6 +3433,12 @@ async function applyCodex(
 
   for (const name of ownedNames) {
     if (desired.has(name)) continue;
+    const previous = owned.find((record) => record.name === name);
+    if (options.removeAll && previous && present.has(name) && entryHash(codexBlockIn(source, name)) !== previous.hash) {
+      log.warn(`Kept MCP server ${name} in ${describeMcpLocation(target)}: you changed it since teamai wrote it. `
+        + 'Remove it there when you no longer need it.');
+      continue;
+    }
     const kept = keep.get(name);
     if (kept && present.has(name)) {
       nextRecords.push(kept);

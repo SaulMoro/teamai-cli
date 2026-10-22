@@ -15,7 +15,7 @@ import type { DoctorContext } from '../doctor.js';
 import { detectMcpFormat } from '../resources/mcp-format.js';
 import { log } from '../utils/logger.js';
 import { judgeTeamaiOnlyMcpConfigs, reconcileMcpForConfig } from '../mcp-reconcile.js';
-import { entryHash, renderJsonEntry } from '../resources/mcp-format.js';
+import { entryHash, renderCodexBlock, renderJsonEntry } from '../resources/mcp-format.js';
 import { TeamaiConfigSchema, type LocalConfig, type McpServerDef, type TeamaiConfig } from '../types.js';
 
 const API: McpServerDef = { name: 'api', transport: 'http', url: 'https://api.example.com/mcp' };
@@ -366,22 +366,44 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
       expect(vi.mocked(log.info).mock.calls.filter(([line]) => line === left)).toHaveLength(1);
     });
 
-    it('lets uninstall remove the unchanged servers an earlier release wrote to OpenCode\'s default home after OPENCODE_CONFIG_DIR moves it', async () => {
-      const api = renderJsonEntry('opencode', API);
-      const before = path.join(home, '.config', 'opencode', 'opencode.json');
-      const edited = { ...api, url: 'https://edited.example.com/mcp' };
-      await fse.outputJson(before, { mcp: { api, edited, mine: MINE } });
-      await fse.outputJson(path.join(home, '.teamai', 'managed-mcp.json'), {
-        opencode: [{ name: 'api', hash: entryHash(api) }, { name: 'edited', hash: entryHash(api) }],
+    // Each MCP file format, in the file teamai wrote under the tool's earlier home: an earlier release's record notes no file.
+    const leftFiles = [
+      {
+        tool: 'opencode', moves: 'OPENCODE_CONFIG_DIR', file: ['.config', 'opencode', 'opencode.json'], notesFile: false,
+        render: (def: McpServerDef) => renderJsonEntry('opencode', def),
+        write: (entries: Record<string, unknown>) => JSON.stringify({ mcp: entries }),
+        read: (text: string) => Object.keys(JSON.parse(text).mcp),
+      },
+      {
+        tool: 'codex', moves: 'toolRoots', file: ['.codex', 'config.toml'], notesFile: true,
+        render: (def: McpServerDef) => renderCodexBlock(def),
+        write: (entries: Record<string, unknown>) => `model = "o3"\n\n${Object.values(entries).join('\n')}`,
+        read: (text: string) => [...text.matchAll(/^\[mcp_servers\.([\w-]+)\]$/gm)].map(([, name]) => name),
+      },
+    ];
+
+    it.each(leftFiles)('lets uninstall remove the unchanged servers teamai wrote to $tool\'s earlier home after $moves moves it',
+      async ({ tool, moves, file, notesFile, render, write, read }) => {
+        const api = render(API);
+        const edited = render({ ...API, name: 'edited', url: 'https://edited.example.com/mcp' });
+        const mine = render({ name: 'mine', transport: 'stdio', command: 'my-own-server' });
+        const before = path.join(home, ...file);
+        await fse.outputFile(before, write({ api, edited, mine }));
+        const noted = notesFile ? { file: before } : {};
+        await fse.outputJson(path.join(home, '.teamai', 'managed-mcp.json'), {
+          [tool]: [{ name: 'api', hash: entryHash(api), ...noted }, { name: 'edited', hash: entryHash(render({ ...API, name: 'edited' })), ...noted }],
+        });
+        // A tool root stays under HOME.
+        const moved = path.join(home, `.${tool}-work`);
+        await fse.ensureDir(moved);
+        const config = userConfig(tool);
+        if (moves === 'toolRoots') config.toolRoots = { [tool]: moved };
+        else vi.stubEnv(moves, moved);
+
+        await reconcileMcpForConfig(team(), config, { removeAll: true });
+
+        expect(read(await fse.readFile(before, 'utf8'))).toEqual(['edited', 'mine']);
       });
-      const moved = path.join(root, 'moved');
-      await fse.ensureDir(moved);
-      vi.stubEnv('OPENCODE_CONFIG_DIR', moved);
-
-      await reconcileMcpForConfig(team(), userConfig('opencode'), { removeAll: true });
-
-      expect(await fse.readJson(before)).toEqual({ mcp: { edited, mine: MINE } });
-    });
   });
 
   it('writes Muse\'s user servers to $XDG_CONFIG_HOME/muse/settings.json', async () => {
