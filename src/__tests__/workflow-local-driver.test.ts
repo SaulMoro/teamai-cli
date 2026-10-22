@@ -12,10 +12,12 @@ import { syncWorkflowDefinitions } from '../workflow/cache.js';
 import { leaseNext, reportAttempt, startRun } from '../workflow/engine.js';
 import { cancelRun, respondToHitl, retryStep } from '../workflow/run-controls.js';
 import { createLocalToolAdapter, type LocalToolAdapter, type LocalToolResult, type LocalToolRun, type ToolSpawn } from '../workflow/local-tool-adapter.js';
-import { localDriver, runLocalDriver } from '../workflow/local-driver.js';
+import { _setDriverPollMs, localDriver, runLocalDriver } from '../workflow/local-driver.js';
 import { pendingRecords, type WorkflowRunRecord } from '../workflow/records.js';
 import { driverLockPath, readRun } from '../workflow/store.js';
 import { commitFile, fakeClaude, git, recordDelivery } from './helpers/delivered-checkout.js';
+
+_setDriverPollMs(20);
 
 const dirs: string[] = [];
 

@@ -15,7 +15,7 @@ import type { LocalConfig } from '../types.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
 import * as engine from '../workflow/engine.js';
 import { leaseNext, parseReport, reportAttempt, startRun } from '../workflow/engine.js';
-import { runLocalDriver } from '../workflow/local-driver.js';
+import { _setDriverPollMs, runLocalDriver } from '../workflow/local-driver.js';
 import { cancelRun, respondToHitl, retryStep } from '../workflow/run-controls.js';
 import type { LocalToolAdapter } from '../workflow/local-tool-adapter.js';
 import { parseWorkflow } from '../workflow/parse.js';
@@ -26,6 +26,8 @@ import { pushIfOrigin, worktreePath } from '../workflow/worktree.js';
 import { launchHoldsCheckout } from '../launch-context.js';
 import { teamDelivery } from '../pull.js';
 import { pendingRecords } from '../workflow/records.js';
+
+_setDriverPollMs(20);
 
 const dirs: string[] = [];
 

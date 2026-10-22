@@ -452,6 +452,13 @@ async function readExisting(file: string): Promise<string | null> {
   }
 }
 
+let lockRetryMs = 100;
+
+/** Shorten the wait between lock attempts in {@link updateFileLocked} (for testing only). */
+export function _setExcludeLockRetryMs(ms: number): void {
+  lockRetryMs = ms;
+}
+
 /**
  * Rewrite `file` with `edit` (null: leave it as it is), holding a lock
  * across the read and an atomic write: the worktrees of a repository share
@@ -478,7 +485,7 @@ export async function updateFileLocked(
   let held = false;
   for (let attempt = 0; attempt < 25 && !held; attempt++) {
     held = await acquireLock(lockPath);
-    if (!held) await new Promise((resolve) => setTimeout(resolve, 100));
+    if (!held) await new Promise((resolve) => setTimeout(resolve, lockRetryMs));
   }
   if (!held) return 'locked';
   try {

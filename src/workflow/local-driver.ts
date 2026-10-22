@@ -74,6 +74,14 @@ interface CommandProcess {
 
 const STOP_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGQUIT', 'SIGTERM', 'SIGHUP'];
 
+/** How long the driver waits for a command or prompt before asking the run again; half that while a question is open. */
+let pollMs = 2000;
+
+/** Shorten the driver's poll (for testing only). */
+export function _setDriverPollMs(ms: number): void {
+  pollMs = ms;
+}
+
 /**
  * Starts a leased command. The lease `env` is set over the inherited environment, so values reach the shell only as
  * variables. A detached command leads a process group of its own, so `stop` reaches everything it started; it has no
@@ -960,7 +968,7 @@ async function driveRun(config: LocalConfig, runId: string, cwd: string, options
         ...(question ? [question.exit] : []),
         new Promise<undefined>((resolve) => {
           wake = () => resolve(undefined);
-          timer = setTimeout(wake, question ? 1000 : 2000);
+          timer = setTimeout(wake, question ? pollMs / 2 : pollMs);
         }),
       ]);
       clearTimeout(timer);
