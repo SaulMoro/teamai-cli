@@ -422,11 +422,8 @@ async function loadOrBuildScopeIndex(
   const needsRebuild = !index || isLegacyIndex(index) || index.children !== localConfig.children?.fingerprint;
   // A legacy index is rebuilt even when no source can be seen, or it would serve what it holds whole (#1006).
   if (needsRebuild && (index || effectiveLearningsDir || await pathExists(path.join(localConfig.repo.localPath, 'docs')) || await pathExists(path.join(localConfig.repo.localPath, 'rules')) || await pathExists(path.join(localConfig.repo.localPath, 'skills')))) {
-    // Votes live on the teamai-reports orphan branch for non-HTTP repos;
-    // getReportsDir points at the worktree (sibling of the clone in git-kind).
-    // If it isn't materialized yet, votesExist is false and vote-weighted
-    // ranking is simply skipped (graceful degradation — leftover default-branch
-    // votes/ are not used).
+    // Legacy votesDir callers use the reports checkout; voteScope also supplies
+    // local feedback when no reports votes directory exists yet.
     // Not another repository's reports checkout (#808).
     const { indexableVotesDir } = await import('./utils/reports-branch.js');
     const votesDir = await indexableVotesDir(localConfig);
@@ -495,6 +492,7 @@ async function loadOrBuildScopeIndex(
         ...delivered,
         codebaseDir: undefined, // codebase now served by teamwiki/ graph engine
         votesDir: votesExist ? votesDir : undefined,
+        voteScope: localConfig,
         indexPath,
         unreadable,
         children: localConfig.children?.fingerprint,

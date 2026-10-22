@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import YAML from 'yaml';
 
-import type { UserVotes, UserVotesV2, VoteEntryV2 } from './types.js';
+import type { LocalConfig, UserVotes, UserVotesV2, VoteEntryV2 } from './types.js';
 import { readFileSafe, writeFileAtomic, ensureDir, expandHome } from './utils/fs.js';
 import { log } from './utils/logger.js';
 
@@ -204,7 +204,9 @@ function parseUserVotesContent(content: string): { data: UserVotesV2; migrated: 
 
   if (obj['version'] === 2) {
     const v2 = obj as unknown as UserVotesV2;
-    if (!v2.deltas) v2.deltas = {};
+    // Older stages serialized deltas and pendingSync.deltas as YAML aliases.
+    // Detach live counters before a writer increments them, preserving the receipt.
+    v2.deltas = structuredClone(v2.deltas ?? {});
     return { data: v2, migrated: false };
   }
 
@@ -535,6 +537,55 @@ function deliveredSyncIdsOf(remote: UserVotesV2): string[] {
   return raw.filter((id): id is string => typeof id === 'string');
 }
 
+/** Confirmed team votes plus this scope's undelivered deltas, for index builds.
+ * Never reads staged worktree counts or changes delivery/cleanup state. */
+export async function readIndexVoteFiles(config: LocalConfig): Promise<string[]> {
+  const { getVotesDir, REPORTS_BRANCH } = await import('./types.js');
+  const localPath = path.join(getVotesDir(config), `${config.username}.yaml`);
+  const { acquireLock, releaseLock } = await import('./update.js');
+  // No retries: Stop/sync may hold this lock. A first build without local
+  // votes must not create a votes directory just to read it.
+  const { pathExists } = await import('./utils/fs.js');
+  const held = await pathExists(localPath) && await acquireLock(`${localPath}.lock`);
+  try {
+    const files = new Map<string, string>();
+    if (config.repo.kind !== 'http') {
+      const { indexableVotesDir } = await import('./utils/reports-branch.js');
+      const votesDir = await indexableVotesDir(config);
+      if (votesDir && await pathExists(path.dirname(votesDir))) {
+        const { createGit } = await import('./utils/git.js');
+        const git = createGit(path.dirname(votesDir));
+        // Pin one confirmed snapshot: a push can update the ref while we read.
+        const ref = await git.revparse(['--verify', `refs/remotes/origin/${REPORTS_BRANCH}^{commit}`]).catch(() => null);
+        if (ref) {
+          const names = await git.raw(['ls-tree', '-r', '--name-only', '-z', ref.trim(), '--', 'votes/']);
+          for (const name of names.split('\0')) {
+            if (/^votes\/[^/]+\.ya?ml$/.test(name)) {
+              files.set(path.basename(name), await git.raw(['show', `${ref.trim()}:${name}`]));
+            }
+          }
+        }
+      }
+    }
+    if (held) {
+      const local = await readUserVotes(localPath);
+      const filename = `${config.username}.yaml`;
+      const base = readUserVotesFromContent(files.get(filename) ?? '');
+      const pending = readPendingSync(local);
+      // Same delivery accounting as stageVotesMerge, but entirely in memory.
+      const deltas = pending && deliveredSyncIdsOf(base).includes(pending.syncId)
+        ? remainingDeltasAfter(local.deltas, pending.deltas)
+        : local.deltas;
+      if (Object.keys(deltas).length > 0) {
+        files.set(filename, YAML.stringify(mergeDeltas({ ...local, deltas }, base)));
+      }
+    }
+    return [...files.values()];
+  } finally {
+    if (held) await releaseLock(`${localPath}.lock`);
+  }
+}
+
 /**
  * Merge local vote deltas into the reports worktree WITHOUT clearing them
  * locally. The push follows after the write callback returns, and the deltas
@@ -610,10 +661,12 @@ export async function stageVotesMerge(
       deliveredSyncIds: [...deliveredSyncIdsOf(base), syncId].slice(-MAX_DELIVERED_SYNC_IDS),
     };
     await saveUserVotes(remoteVotePath, merged);
+    // Keep the historical snapshot independent: YAML aliases would otherwise
+    // let a later increment mutate both live deltas and pendingSync.deltas.
     // Persist the delivery record in the same locked write-path, before the
     // push runs: whatever happens to the process afterwards, the next stage can
     // tell a landed push from a failed one.
-    await saveUserVotes(localVotePath, withPendingSync(local, { syncId, deltas: syncedDeltas }));
+    await saveUserVotes(localVotePath, withPendingSync(local, { syncId, deltas: structuredClone(syncedDeltas) }));
     return { syncedDeltas } satisfies StagedVotes;
   });
 

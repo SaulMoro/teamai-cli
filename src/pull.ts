@@ -1646,6 +1646,7 @@ async function pullForScope(
           children: localConfig.children?.fingerprint,
           codebaseDir: undefined, // codebase now served by teamwiki/ graph engine
           votesDir: votesExist ? votesDir : undefined,
+          voteScope: localConfig,
           indexPath,
         });
         if (learningsCount > 0) {

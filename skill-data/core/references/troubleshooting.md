@@ -366,6 +366,10 @@ Pending votes reach the team repo's `teamai-reports` branch on the next Stop or
 keeps the deltas pending; the next session re-sends them, and each delta is
 added to the team totals exactly once.
 
+Index rebuilds (including `teamai pull`) use confirmed team votes plus pending
+local votes, even when reporting is disabled or a push fails. A busy votes lock
+makes that rebuild use confirmed counts only; it does not wait for the lock.
+
 Manual `teamai recall feedback --positive <docId>` adds an upvote without adding
 a recall. Confidence caps the upvote-to-recall ratio at 1: more feedback cannot
 exceed that factor's 30% weight or replace recency. This is an activity score,

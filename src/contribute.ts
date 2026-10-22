@@ -82,6 +82,7 @@ export async function rebuildIndexAfterContribute(localConfig: LocalConfig): Pro
     // The docs and skills pull delivers here, not the whole trees (#707).
     ...await deliveredIndexSources(localConfig),
     votesDir: votesDir && (await pathExists(votesDir)) ? votesDir : undefined,
+    voteScope: localConfig,
     indexPath,
     children: localConfig.children?.fingerprint,
   });
