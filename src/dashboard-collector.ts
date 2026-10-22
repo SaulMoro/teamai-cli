@@ -1212,17 +1212,22 @@ export interface ParseHookEventOptions {
 }
 
 function codexReplyText(prompt: string): string {
-  const match = /^\s*<send_user_message_question_reply>\s*([\s\S]*?)\s*<\/send_user_message_question_reply>\s*$/.exec(prompt);
+  // JSON.parse skips the whitespace around the array, so the pattern needs no
+  // whitespace quantifiers inside the tags: those backtrack on long runs.
+  const match = /^\s*<send_user_message_question_reply>([\s\S]*)<\/send_user_message_question_reply>\s*$/.exec(prompt);
   if (!match) return prompt;
   try {
     const replies: unknown = JSON.parse(match[1]);
     if (!Array.isArray(replies) || replies.length === 0) return prompt;
+    const items: unknown[] = replies;
     const answers: string[] = [];
-    for (const reply of replies) {
-      if (!reply || typeof reply !== 'object' || typeof reply.answer !== 'string') return prompt;
+    for (const reply of items) {
+      if (!reply || typeof reply !== 'object' || !('answer' in reply) || typeof reply.answer !== 'string') return prompt;
       answers.push(reply.answer);
     }
-    return answers.join('\n');
+    // A reply with no answer text keeps the prompt, so the turn is still counted.
+    const text = answers.join('\n');
+    return text.trim() ? text : prompt;
   } catch {
     return prompt;
   }
@@ -1302,7 +1307,7 @@ export async function parseHookEvent(
   // is purely injected content produces no event at all, so it neither inflates the
   // prompt count nor shows up as a session prompt.
   if (eventType === 'prompt_submit' && typeof hookData.prompt === 'string') {
-    const prompt = normalizeToolName(tool) === 'codex' ? codexReplyText(hookData.prompt) : hookData.prompt;
+    const prompt = isCodexTool(tool) ? codexReplyText(hookData.prompt) : hookData.prompt;
     const human = stripInjectedPrompt(prompt);
     if (!human) return null;
     // Decide "correction" here, over the full prompt, because only the hook knows

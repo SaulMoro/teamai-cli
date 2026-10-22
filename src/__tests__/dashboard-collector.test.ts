@@ -1169,6 +1169,12 @@ describe('parseHookEvent', () => {
     expect(event?.correction).toBe(false);
   });
 
+  it.each(['tcodex', 'codex-internal'])('extracts Codex answers for %s', async (tool) => {
+    const prompt = '<send_user_message_question_reply>[{"questionItemId":"q1","answer":"Use the web interface."}]</send_user_message_question_reply>';
+    const event = await parseHookEvent(JSON.stringify({ hook_event_name: 'UserPromptSubmit', prompt }), tool);
+    expect(event?.promptSummary).toBe('Use the web interface.');
+  });
+
   it('redacts and caps extracted Codex answers', async () => {
     const answer = 'ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ' + 'x'.repeat(250) + ' wrong';
     const prompt = '<send_user_message_question_reply>' + JSON.stringify([{ answer }]) + '</send_user_message_question_reply>';
@@ -1179,7 +1185,7 @@ describe('parseHookEvent', () => {
     expect(event?.correction).toBe(true);
   });
 
-  it.each(['not JSON', '[]', '[{"answer":42}]', '[{"answer":"Yes"},{}]'])('preserves unsupported Codex reply payloads: %s', async (payload) => {
+  it.each(['not JSON', '[]', '[{"answer":42}]', '[{"answer":"Yes"},{}]', '[{"answer":""}]'])('preserves unsupported Codex reply payloads: %s', async (payload) => {
     const prompt = '<send_user_message_question_reply>' + payload + '</send_user_message_question_reply>';
     const event = await parseHookEvent(JSON.stringify({ hook_event_name: 'UserPromptSubmit', prompt }), 'codex');
     expect(event?.promptSummary).toBe(prompt);
