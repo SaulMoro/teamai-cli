@@ -2631,7 +2631,8 @@ async function removeConfirmed(
       for (const cfg of await projectWorktreeConfigs(localConfig)) {
         const { changes } = await reconcileMcpForConfig(teamConfig, cfg, { removeAll: true });
         removedTotal += changes.filter((c) => c.action === 'removed').length;
-        mcpLeft.push(...await unreadMcpPlaces(teamConfig, cfg));
+        // Every checkout's config sees the other checkouts' local scopes: name each place once.
+        for (const place of await unreadMcpPlaces(teamConfig, cfg)) if (!mcpLeft.includes(place)) mcpLeft.push(place);
       }
       if (removedTotal > 0) log.info(`Removed ${removedTotal} teamai-managed MCP server(s)`);
       // Worktrees share one info/exclude, so a line goes once they are all clean,

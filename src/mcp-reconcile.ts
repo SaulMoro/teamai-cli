@@ -1976,16 +1976,24 @@ export function mcpTargetExcluded(localConfig: LocalConfig, target: McpTarget): 
 
 /**
  * The places teamai's records put a server in that cannot be read or parsed, among the records of the tools a
- * reconcile of `localConfig` reaches. After a removal these are the records it kept for a retry: uninstall
- * keeps the data home holding them.
+ * reconcile of `localConfig` reaches: its own, and in project scope every checkout's local scope of such a tool,
+ * a gone one's included (`leaveGoneCheckouts`, `leaveOtherLocalScopes`). After a removal these are the records it
+ * kept for a retry: uninstall keeps the data home holding them.
  */
 export async function unreadMcpPlaces(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string[]> {
   const { manifest } = await loadMcpManifest(localConfig, true);
+  const shared = localConfig.scope === 'project' ? await readManifest(localMcpManifestPath(localConfig)) : {};
   const places = new Map<string, McpTarget>();
   for (const target of await resolveMcpTargets(teamConfig, localConfig)) {
     const both = target.projectScope && localMcpScopeOf(target.tool) ? await projectMcpLocations(teamConfig, localConfig, target.tool) : null;
     for (const place of both ? [both.tree, both.local] : [target]) places.set(mcpManifestKey(place), place);
+    if (!both) continue;
+    const prefix = `${both.local.tool}${LOCAL_KEY_INFIX}`;
+    for (const key of Object.keys(shared)) {
+      if (key.startsWith(prefix) && !places.has(key)) places.set(key, { ...both.local, projectKey: key.slice(prefix.length) });
+    }
   }
+  for (const [key, records] of Object.entries(shared)) if (manifest[key] === undefined && Array.isArray(records)) manifest[key] = records;
   const unread = new Set<string>();
   for (const [key, target] of places) {
     for (const record of manifest[key] ?? []) {
@@ -2410,7 +2418,9 @@ async function reconcileTargets(
 
   // An empty desired set still has to run: it is how servers dropped from
   // mcp.yaml get cleaned out of the tools we previously injected them into.
-  const nothingOwned = Object.values(manifest).every((r) => r.length === 0);
+  // Other checkouts' local scopes count too: `leaveGoneCheckouts` and `leaveOtherLocalScopes` take theirs out below.
+  const others = localConfig.scope === 'project' ? Object.values(await readManifest(localMcpManifestPath(localConfig))) : [];
+  const nothingOwned = [...Object.values(manifest), ...others].every((r) => !Array.isArray(r) || r.length === 0);
   // A server the team deleted can still sit unrecorded in a tool's file (#993): only target
   // files with no server at all prove there is nothing to look for, without reading the history.
   if (teamDefs.length === 0 && nothingOwned && !await someMcpEntryInstalled(targets)) return { changes, wrote };
