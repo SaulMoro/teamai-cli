@@ -1572,7 +1572,7 @@ export async function buildMcpReadFileChecks(ctx: DoctorContext): Promise<Check[
   const { localConfig, teamConfig } = ctx;
   // An HTTP-backed team's servers arrive through the local agent, which a pull does not run.
   if (!teamConfig || localConfig.repo.kind === 'http') return [];
-  const { resolveMcpTargets, shadowedMcpRecords, loadMcpManifest, mcpManifestKey, recordedFileOf, sameMcpFile, installedMcpEntries } = await import('./mcp-reconcile.js');
+  const { resolveMcpTargets, shadowedMcpRecords, loadMcpManifest, mcpManifestKey, recordedMcpTarget, sameMcpPlace, installedMcpEntries } = await import('./mcp-reconcile.js');
   const home = getUserHome();
   const checks: Check[] = [];
   const install = installOf(teamConfig, localConfig);
@@ -1589,8 +1589,8 @@ export async function buildMcpReadFileChecks(ctx: DoctorContext): Promise<Check[
     });
     const moved = new Set<string>();
     for (const record of manifest[mcpManifestKey(target)] ?? []) {
-      const file = recordedFileOf(target, record);
-      if (!await sameMcpFile(file, target.file) && (await installedMcpEntries({ ...target, file }))?.has(record.name)) moved.add(file);
+      const recorded = await recordedMcpTarget(target, record);
+      if (!await sameMcpPlace(recorded, target) && (await installedMcpEntries(recorded))?.has(record.name)) moved.add(recorded.file);
     }
     if (moved.size > 0) checks.push({
       name: `${target.tool} MCP servers are where the last write put them`, source: 'local', check: async () => false,

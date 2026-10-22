@@ -58,6 +58,7 @@ import {
   loadMcpManifest,
   mcpKeyOf,
   recordedMcpTarget,
+  sameMcpPlace,
   logLeftMcpFiles,
   mcpManifestKey,
   mcpRelocated,
@@ -3990,7 +3991,10 @@ async function installMcpServer(
   // A local scope's record that notes no file is in that scope, not in a file the project's place names.
   const recordedIn = active?.projectKey === undefined ? place : active;
   const recordedTargets = new Map(await Promise.all(records.map(async (record) => [record, await recordedMcpTarget(recordedIn, record)] as const)));
-  const inTarget = await Promise.all(records.map((r: ManagedMcpRecord) => sameMcpFile(recordedTargets.get(r)?.file ?? fileOf(r), targetFile)));
+  const inTarget = await Promise.all(records.map(async (r: ManagedMcpRecord) => {
+    const recorded = recordedTargets.get(r);
+    return recorded === undefined ? sameMcpFile(fileOf(r), targetFile) : sameMcpPlace(recorded, { ...recordedIn, file: targetFile });
+  }));
   const owned = records.filter((_, i) => inTarget[i]);
   const ownedNames = new Set(owned.map((r: ManagedMcpRecord) => r.name));
   const otherKey = other ? mcpManifestKey(other) : undefined;

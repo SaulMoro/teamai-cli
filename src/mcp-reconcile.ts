@@ -484,10 +484,20 @@ export function recordedFileOf(target: Pick<McpTarget, 'file' | 'mappedFile' | '
   return record.file ?? target.unmovedFile ?? target.mappedFile ?? target.file;
 }
 
-/** The recorded file and server key, including the key a retired config used. */
+/** `target` at the place `record` holds its server in: its file, and the key it notes there. */
+function recordedPlaceOf(target: McpTarget, record: ManagedMcpRecord): McpTarget {
+  return { ...target, file: recordedFileOf(target, record), ...record.key === undefined ? {} : { key: record.key } };
+}
+
+/** The recorded file and server key, including the retired place an earlier release's record, noting no file, holds its server in. */
 export async function recordedMcpTarget(target: McpTarget, record: ManagedMcpRecord): Promise<McpTarget> {
-  const file = record.file ?? await retiredFileHolding(target, record) ?? recordedFileOf(target, record);
-  return { ...target, file, key: target.retired?.find((place) => place.file === file)?.key ?? target.key };
+  const retired = record.file === undefined ? await retiredPlaceHolding(target, record) : undefined;
+  return retired === undefined ? recordedPlaceOf(target, record) : { ...target, ...retired };
+}
+
+/** Whether two targets name one place: one file by real path, one key in it, and one project under that key. */
+export async function sameMcpPlace(a: McpTarget, b: McpTarget): Promise<boolean> {
+  return isDeepStrictEqual(mcpKeyOf(a), mcpKeyOf(b)) && a.projectKey === b.projectKey && await sameMcpFile(a.file, b.file);
 }
 
 /**
@@ -1445,16 +1455,18 @@ async function splitByFile(
   const left: ManagedMcpRecord[] = [];
   const relocations = [target.mappedFile, target.alternateFile, ...target.lookupFiles ?? [], ...(target.retired ?? []).map(({ file }) => file)];
   for (const record of records) {
-    const retired = record.file === undefined ? await retiredFileHolding(target, record) : undefined;
+    const retired = record.file === undefined ? await retiredPlaceHolding(target, record) : undefined;
     if (retired !== undefined) {
-      elsewhere.push({ ...record, file: retired });
+      const { file, key } = retired;
+      elsewhere.push({ ...record, file, ...isDeepStrictEqual(key, mcpKeyOf(target)) ? {} : { key } });
       continue;
     }
-    const file = recordedFileOf(target, record);
-    if (await sameMcpFile(file, target.file)) owned.push(record);
+    const recorded = recordedPlaceOf(target, record);
+    const { file } = recorded;
+    if (await sameMcpPlace(recorded, target)) owned.push(record);
     else if (relocations.includes(file)) elsewhere.push(record);
     else {
-      const installed = await installedMcpEntries({ ...target, file });
+      const installed = await installedMcpEntries(recorded);
       if (installed === null || installed.has(record.name)) left.push(record);
       else if (record.file === undefined) owned.push(record);
     }
@@ -1462,10 +1474,10 @@ async function splitByFile(
   return { owned, elsewhere, left };
 }
 
-async function retiredFileHolding(target: McpTarget, record: ManagedMcpRecord): Promise<string | undefined> {
-  for (const { file, key } of target.retired ?? []) {
-    const entry = (await installedMcpEntries({ ...target, file, key }))?.get(record.name);
-    if (entry !== undefined && entryHash(entry) === record.hash) return file;
+async function retiredPlaceHolding(target: McpTarget, record: ManagedMcpRecord): Promise<{ file: string; key: McpKey } | undefined> {
+  for (const place of target.retired ?? []) {
+    const entry = (await installedMcpEntries({ ...target, ...place }))?.get(record.name);
+    if (entry !== undefined && entryHash(entry) === record.hash) return place;
   }
   return undefined;
 }
@@ -2510,7 +2522,7 @@ async function reconcileTargets(
         }
         if ((target.mappedFile && !target.alternateFile) || apart.length > 0) {
           // Each file is judged with the records of the tools that write it: a lookup file may link to another tool's.
-          const judgeFor = (file: string): Promise<McpEntryJudge> => judgeIn({ ...resolved, file });
+          const judgeFor = (place: McpTarget): Promise<McpEntryJudge> => judgeIn({ ...resolved, file: place.file, key: mcpKeyOf(place) });
           cleaned = await removeFromOtherFiles(target, apart, nextRecords, changes, judgeFor, options, restoreConfigs, leaving?.former) || cleaned;
           if (leaving) {
             const names: string[] = [];
@@ -2533,7 +2545,8 @@ async function reconcileTargets(
     // needing one, what this pull wrote still does (#882).
     if (target.projectScope) {
       for (const record of nextRecords) {
-        record.resolved ??= moving.get(record.name)?.resolvedValue || carriesResolvedValue(target, teamDefs, [record.name]);
+        // A record kept in a file this run did not write says what it said: an older one's silence keeps the credential hold.
+        if (!elsewhere.includes(record)) record.resolved ??= moving.get(record.name)?.resolvedValue || carriesResolvedValue(target, teamDefs, [record.name]);
         if (marked) record.unnoted = true;
         else delete record.unnoted;
       }
@@ -2862,33 +2875,34 @@ async function removeFromOtherFiles(
   elsewhere: ManagedMcpRecord[],
   nextRecords: ManagedMcpRecord[],
   changes: McpChange[],
-  judgeFor: (file: string) => Promise<McpEntryJudge>,
+  judgeFor: (place: McpTarget) => Promise<McpEntryJudge>,
   options: McpReconcileOptions,
   restoreConfigs: Map<string, () => Promise<void>>,
   /** A file `deleteLeftMcpFile` deletes and reports. */
   leaving?: string,
 ): Promise<boolean> {
-  const here = await realFilePath(target.file);
-  const byFile = new Map<string, { file: string; records: ManagedMcpRecord[] }>();
-  const add = async (file: string, records: ManagedMcpRecord[]): Promise<void> => {
-    const real = await realFilePath(file);
-    if (real === here) return;
-    const group = byFile.get(real) ?? { file, records: [] };
+  // By place: a retired key in `target`'s own file is another place (ZCode's `mcpServers` beside `mcp.servers`).
+  const byPlace = new Map<string, { place: McpTarget; real: string; records: ManagedMcpRecord[] }>();
+  const add = async (place: McpTarget, records: ManagedMcpRecord[]): Promise<void> => {
+    if (await sameMcpPlace(place, target)) return;
+    const real = await realFilePath(place.file);
+    const id = JSON.stringify([real, mcpKeyOf(place)]);
+    const group = byPlace.get(id) ?? { place, real, records: [] };
     group.records.push(...records);
-    byFile.set(real, group);
+    byPlace.set(id, group);
   };
-  for (const record of elsewhere) await add(recordedFileOf(target, record), [record]);
+  for (const record of elsewhere) await add(recordedPlaceOf(target, record), [record]);
   // With no record left there, an entry teamai wrote is still found by `judge`; a file holding no server is not read.
   for (const file of target.lookupFiles ?? []) {
-    if (((await installedMcpEntries({ ...target, file }))?.size ?? 0) > 0) await add(file, []);
+    if (((await installedMcpEntries({ ...target, file }))?.size ?? 0) > 0) await add({ ...target, file }, []);
   }
   const left = leaving ? await realFilePath(leaving) : undefined;
   let wrote = false;
-  for (const [real, { file, records }] of byFile) {
+  for (const { place, real, records } of byPlace.values()) {
+    const { file } = place;
     const names = new Set(records.map((r) => r.name));
     const removed: McpChange[] = [];
-    const key = target.retired?.find((retired) => retired.file === file)?.key ?? target.key;
-    const result = await applyMcpFile({ ...target, file, key }, new Map(), new Map(), records, names, [], removed, await judgeFor(file), options, restoreConfigs);
+    const result = await applyMcpFile(place, new Map(), new Map(), records, names, [], removed, await judgeFor(place), options, restoreConfigs);
     if (result === null) {
       nextRecords.push(...records);
       continue;
@@ -2896,10 +2910,12 @@ async function removeFromOtherFiles(
     wrote ||= result;
     changes.push(...removed);
     if (!options.removeAll && removed.length > 0 && real !== left) {
+      const inTargetFile = await sameMcpFile(file, target.file);
       const why = target.lookupFiles?.includes(file)
         ? `${target.tool} reads only ${target.file}, the first of its ${target.projectScope ? 'project' : 'user'} MCP files that exists.`
-        : `${target.tool} reads them from ${target.file} now.`;
-      log.info(`${options.dryRun ? 'Would take' : 'Took'} teamai's MCP servers for ${target.tool} (${removed.map((c) => c.server).join(', ')}) out of ${file}: ${why}`);
+        : `${target.tool} reads them from ${inTargetFile ? `${mcpKeyOf(target).join('.')} there` : target.file} now.`;
+      const from = inTargetFile ? `${mcpKeyOf(place).join('.')} in ${file}` : file;
+      log.info(`${options.dryRun ? 'Would take' : 'Took'} teamai's MCP servers for ${target.tool} (${removed.map((c) => c.server).join(', ')}) out of ${from}: ${why}`);
     }
   }
   return wrote;
@@ -2991,7 +3007,7 @@ async function leaveMcpLocation(
     cleanOthers: () => {
       next.push(...elsewhere.filter((record) => !leaving.includes(record)));
       return removeFromOtherFiles(other, leaving, next, ctx.changes,
-        (file) => ctx.judgeIn({ ...other, file }, { others: claimed }), ctx.options, ctx.restoreConfigs);
+        (place) => ctx.judgeIn({ ...other, file: place.file, key: mcpKeyOf(place) }, { others: claimed }), ctx.options, ctx.restoreConfigs);
     },
   });
   if (step === null) return false;
@@ -3041,7 +3057,7 @@ async function heldMcpEntriesToMove(
     }
   };
   for (const record of elsewhere.filter((r) => held.has(r.name))) {
-    await add(record, await installedMcpEntries({ ...active, file: recordedFileOf(active, record) }));
+    await add(record, await installedMcpEntries(recordedPlaceOf(active, record)));
   }
   if (!active.projectScope || !localMcpScopeOf(active.tool)) return moving;
   const places = await projectMcpLocations(teamConfig, localConfig, active.tool);

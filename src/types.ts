@@ -1355,6 +1355,11 @@ export interface ManagedMcpRecord {
    * Absent in records an older teamai wrote (`recordedFileOf`).
    */
   file?: string;
+  /**
+   * The key the server sits under in `file` when it is not the tool's current
+   * one: a retired place's, as ZCode's `mcpServers` (#1221). Absent: the current key.
+   */
+  key?: readonly [string, ...string[]];
 }
 
 /** ~/.teamai/managed-mcp.json — team MCP servers injected per tool+scope key. */

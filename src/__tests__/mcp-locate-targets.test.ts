@@ -157,6 +157,33 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
       expect(await fse.readJson(path.join(home, '.agents', 'mcp.json'))).toEqual({ mcpServers: { mine: MINE } });
     });
 
+    it.each([
+      { mode: 'uninstall', mapped: '.agents/mcp.json' },
+      { mode: 'pull', mapped: '.agents/mcp.json' },
+      { mode: 'uninstall', mapped: '.zcode/cli/config.json' },
+      { mode: 'pull', mapped: '.zcode/cli/config.json' },
+    ] as const)('$mode: an earlier release\'s servers under mcpServers in ~/.agents/mcp.json, with the team mapping mcp to $mapped', async ({ mode, mapped }) => {
+      const api = renderJsonEntry('claude', API);
+      const edited = { type: 'stdio', command: 'edited' };
+      const legacy = path.join(home, '.agents', 'mcp.json');
+      const current = path.join(home, mapped);
+      await fse.ensureDir(path.join(home, '.zcode', 'cli'));
+      await fse.outputJson(legacy, { mcpServers: { api, edited: { ...edited, args: ['by-member'] }, mine: MINE } });
+      await fse.outputJson(path.join(home, '.teamai', 'managed-mcp.json'), { zcode: [{ name: 'api', hash: entryHash(api) }, { name: 'edited', hash: entryHash(edited) }] });
+      const legacyTeam = TeamaiConfigSchema.parse({
+        team: 'fixture', repo: 'fixture', provider: 'git',
+        toolPaths: { zcode: { skills: '.zcode/skills', agents: '.zcode/agents', settings: '.zcode/cli/config.json', mcp: mapped } },
+      });
+
+      await reconcileMcpForConfig(legacyTeam, userConfig('zcode'), { removeAll: mode === 'uninstall' });
+
+      const left = { edited: { ...edited, args: ['by-member'] }, mine: MINE };
+      expect((await fse.readJson(legacy)).mcpServers).toEqual(left);
+      expect((await fse.readJson(current).catch(() => ({}))).mcp?.servers ?? {}).toEqual(mode === 'pull' ? { api } : {});
+      const manifest = await fse.readJson(path.join(home, '.teamai', 'managed-mcp.json'));
+      expect(manifest.zcode ?? []).toEqual(mode === 'pull' ? [{ name: 'api', hash: entryHash(api), file: current }] : []);
+    });
+
     it('writes a project\'s servers to <project>/.zcode/config.json', async () => {
       const project = path.join(root, 'project');
       await fse.ensureDir(path.join(home, '.zcode'));
@@ -458,6 +485,8 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
         const followsCurrent = !notesFile && !currentRead && mode === 'uninstall'
           ? records.filter((record) => recorded === 'missing' || record.name === 'gone') : [];
         expect(left.map((record) => record.name)).toEqual((keptAll ? records : followsCurrent).map((record) => record.name));
+        // A kept record keeps what it said of a resolved value: an earlier release's says nothing, so the credential hold stays.
+        expect(left.map((record) => record.resolved)).toEqual(left.map(() => undefined));
       });
 
     // The same rule in the scope a project's servers left once sharing.gitExclude goes off: the local scope's

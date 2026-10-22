@@ -7,6 +7,7 @@
  * can resolve a Windows member's paths.
  */
 import path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { MCP_SERVER_KEY } from './resources/mcp-format.js';
 import {
   channelsOf, installGateOf, isToolId, TOOLS,
@@ -531,9 +532,11 @@ function settled<P extends Place>(own: Place | null, candidates: readonly (Retir
   return kept;
 }
 
+/** One place: one file, and for an entry one key in it and one project under that key (ZCode's `mcpServers` and `mcp.servers` in one file are two). */
 function samePlaceOn(p: path.PlatformPath, a: Place, b: Place): boolean {
-  const projectKey = (place: Place): string | undefined => place.kind === 'entry' ? place.projectKey : undefined;
-  return samePathOn(p, a.path, b.path) && projectKey(a) === projectKey(b);
+  const entry = (place: Place): readonly [readonly string[] | undefined, string | undefined] =>
+    place.kind === 'entry' ? [place.key, place.projectKey] : [undefined, undefined];
+  return samePathOn(p, a.path, b.path) && isDeepStrictEqual(entry(a), entry(b));
 }
 
 async function locateSkills(tool: string, install: Install, host: Host): Promise<Location<'skills'>> {
