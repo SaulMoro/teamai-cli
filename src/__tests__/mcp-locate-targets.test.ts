@@ -379,60 +379,85 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
       read: (text: string) => [...text.matchAll(/^\[mcp_servers\.([\w-]+)\]$/gm)].map(([, name]) => name),
     };
     const leftFiles = [
-      { tool: 'opencode', scope: 'user', moves: 'OPENCODE_CONFIG_DIR', file: '.config/opencode/opencode.json', notesFile: false, ...json('opencode', 'mcp') },
-      { tool: 'codex', scope: 'user', moves: 'toolRoots', file: '.codex/config.toml', notesFile: true, ...toml },
-      { tool: 'opencode', scope: 'project', moves: 'mcpProject', file: 'opencode.json', notesFile: true, ...json('opencode', 'mcp') },
-      { tool: 'claude', scope: 'project', moves: 'mcpProject', file: '.mcp.json', notesFile: true, ...json('claude', 'mcpServers') },
-      { tool: 'codex', scope: 'project', moves: 'mcpProject', file: '.codex/config.toml', notesFile: true, ...toml },
+      { tool: 'opencode', scope: 'user', moves: 'OPENCODE_CONFIG_DIR', file: '.config/opencode/opencode.json', now: 'opencode.json', notesFile: false, ...json('opencode', 'mcp') },
+      { tool: 'codex', scope: 'user', moves: 'toolRoots', file: '.codex/config.toml', now: 'config.toml', notesFile: true, ...toml },
+      { tool: 'opencode', scope: 'project', moves: 'mcpProject', file: 'opencode.json', now: 'config/opencode.json', notesFile: true, ...json('opencode', 'mcp') },
+      { tool: 'claude', scope: 'project', moves: 'mcpProject', file: '.mcp.json', now: 'config/.mcp.json', notesFile: true, ...json('claude', 'mcpServers') },
+      { tool: 'codex', scope: 'project', moves: 'mcpProject', file: '.codex/config.toml', now: 'config/config.toml', notesFile: true, ...toml },
     ] as const;
-    // A file that no longer parses keeps teamai's servers, and so their records. A Codex config.toml always reads.
-    const cases = leftFiles.flatMap((row) => [
-      { ...row, outcome: 'removed' as const },
-      ...row.format === 'JSON' ? [{ ...row, outcome: 'kept' as const }] : [],
-    ]);
+    // A permission a test can take away only from a user who is not root.
+    const canDenyRead = process.platform !== 'win32' && process.getuid?.() !== 0;
+    const states = ['missing', 'parses', 'unparsable', 'unreadable'] as const;
+    // A Codex config.toml is scanned, not parsed: it always reads.
+    const occurs = (state: typeof states[number], format: string): boolean =>
+      (state !== 'unparsable' || format === 'JSON') && (state !== 'unreadable' || canDenyRead);
+    const cases = leftFiles.flatMap((row) => (['uninstall', 'pull'] as const).flatMap((mode) => states.flatMap((current) => states
+      .filter((recorded) => occurs(current, row.format) && occurs(recorded, row.format))
+      .map((recorded) => ({ ...row, mode, current, recorded })))));
 
-    it.each(cases)('lets uninstall take $tool\'s $scope servers ($format) out of the file its record names after $moves moves it: $outcome',
-      async ({ tool, scope, moves, file, notesFile, render, write, read, outcome }) => {
+    // What happens to the file a record names and to that record depends on the mode and on that file alone, except
+    // that a pull touches nothing while the current file cannot be read, and a record that notes no file (an earlier
+    // release's) may name an entry in the current file when its guessed file lacks it.
+    it.each(cases)('$mode: $tool $scope ($format) after $moves moves it, current file $current, recorded file $recorded',
+      async ({ tool, scope, moves, file, now, notesFile, render, write, read, mode, current, recorded }) => {
         const { loadMcpManifest, saveMcpManifest } = await import('../mcp-reconcile.js');
         const api = render(API);
         const edited = render({ ...API, name: 'edited', url: 'https://edited.example.com/mcp' });
         const mine = render({ name: 'mine', transport: 'stdio', command: 'my-own-server' });
         const project = path.join(root, 'project');
-        const before = path.join(scope === 'user' ? home : project, file);
-        const contents = write({ api, edited, mine }) + (outcome === 'kept' ? '\n}' : '');
-        await fse.outputFile(before, contents);
+        const base = scope === 'user' ? home : project;
+        const before = path.join(base, file);
+        const moved = path.join(home, `.${tool}-work`);
+        const target = path.join(scope === 'user' ? moved : project, now);
         let config = userConfig(tool);
         const teamConfig = team();
         if (scope === 'project') {
           execFileSync('git', ['init', '-q', project]);
           await fse.ensureDir(path.join(project, `.${tool}`));
           config = { ...config, scope: 'project', projectRoot: project, dataHome: path.join(root, 'data') };
-          teamConfig.toolPaths = { ...teamConfig.toolPaths, [tool]: { ...teamConfig.toolPaths[tool], mcpProject: `config/${path.basename(file)}` } };
+          teamConfig.toolPaths = { ...teamConfig.toolPaths, [tool]: { ...teamConfig.toolPaths[tool], mcpProject: now } };
         } else {
           // A tool root stays under HOME.
-          const moved = path.join(home, `.${tool}-work`);
           await fse.ensureDir(moved);
           if (moves === 'toolRoots') config.toolRoots = { [tool]: moved };
           else vi.stubEnv(moves, moved);
         }
+        await fse.ensureDir(path.dirname(target));
+        const setUp = async (at: string, state: typeof states[number], entries: Record<string, unknown>): Promise<string | null> => {
+          if (state === 'missing') return null;
+          const contents = write(entries) + (state === 'unparsable' ? '\n}' : '');
+          await fse.outputFile(at, contents);
+          if (state === 'unreadable') await fs.promises.chmod(at, 0o000);
+          return contents;
+        };
+        const contents = await setUp(before, recorded, { api, edited, mine });
+        await setUp(target, current, { mine });
         const noted = notesFile ? { file: before } : {};
-        const records = [{ name: 'api', hash: entryHash(api), ...noted }, { name: 'edited', hash: entryHash(render({ ...API, name: 'edited' })), ...noted }];
+        const records = [
+          { name: 'api', hash: entryHash(api), ...noted },
+          { name: 'edited', hash: entryHash(render({ ...API, name: 'edited' })), ...noted },
+          { name: 'gone', hash: entryHash(render({ ...API, name: 'gone' })), ...noted },
+        ];
         const key = managedMcpManifestKey(tool, scope === 'project');
         const saved = await loadMcpManifest(config, false);
         saved.manifest[key] = records;
         await saveMcpManifest(config, saved.manifestPath, saved.manifest);
 
-        await reconcileMcpForConfig(teamConfig, config, { removeAll: true });
+        await reconcileMcpForConfig(teamConfig, config, { removeAll: mode === 'uninstall' });
 
-        const after = await fse.readFile(before, 'utf8');
-        const left = (await loadMcpManifest(config, false)).manifest[key] ?? [];
-        if (outcome === 'kept') {
-          expect(after).toBe(contents);
-          expect(left).toEqual(records.map((record) => expect.objectContaining(record)));
-        } else {
-          expect(read(after)).toEqual(['edited', 'mine']);
-          expect(left).toEqual([]);
-        }
+        if (contents !== null) await fs.promises.chmod(before, 0o600);
+        const after = contents === null ? null : await fse.readFile(before, 'utf8');
+        const left = ((await loadMcpManifest(config, false)).manifest[key] ?? []).filter((record) => record.file === undefined || record.file === before);
+        const currentRead = current === 'missing' || current === 'parses';
+        const fileRead = recorded === 'missing' || recorded === 'parses';
+        if (mode === 'uninstall' && recorded === 'parses') expect(read(after ?? '')).toEqual(['edited', 'mine']);
+        else expect(after).toBe(contents);
+        // Kept: the file could not be read, or a pull could not write the current one.
+        const keptAll = (mode === 'uninstall' && !fileRead) || (mode === 'pull' && !currentRead);
+        // A record of an earlier release whose guessed file lacks its entry follows the current file.
+        const followsCurrent = !notesFile && !currentRead && mode === 'uninstall'
+          ? records.filter((record) => recorded === 'missing' || record.name === 'gone') : [];
+        expect(left.map((record) => record.name)).toEqual((keptAll ? records : followsCurrent).map((record) => record.name));
       });
   });
 

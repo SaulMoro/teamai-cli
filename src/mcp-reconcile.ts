@@ -1120,7 +1120,8 @@ export async function installedMcpEntries(
   options: { underKeyOnly?: boolean } = {},
 ): Promise<Map<string, unknown> | null> {
   if (target.format === 'codex') {
-    const raw = await readFileSafe(target.file);
+    const raw = await readCodexConfig(target.file);
+    if (raw === undefined) return null;
     if (raw === null) return new Map();
     return new Map(codexServerNames(raw).map((name) => [name, codexBlockIn(raw, name)]));
   }
@@ -1431,8 +1432,9 @@ async function someMcpEntryInstalled(targets: readonly McpTarget[]): Promise<boo
  * (#993); in a file teamai moved them out of (`elsewhere`: another file of the
  * lookup order, the mapped or alternate file, a retired one); or still in a
  * file the tool took them from before its home or mapping moved, or one
- * that no longer parses (`left`), which a pull leaves as it is (#1221). A record that notes no file, of an
- * earlier release, is in a retired file holding its entry unchanged.
+ * that cannot be read (`left`), which a pull leaves as it is (#1221). A record that notes no file, of an
+ * earlier release, is in a retired file holding its entry unchanged, or in `target`'s file when the file it
+ * guesses lacks the entry. A record of a file that holds no such entry is dropped: nothing of it is left.
  */
 async function splitByFile(
   target: McpTarget,
@@ -1451,8 +1453,11 @@ async function splitByFile(
     const file = recordedFileOf(target, record);
     if (await sameMcpFile(file, target.file)) owned.push(record);
     else if (relocations.includes(file)) elsewhere.push(record);
-    else if ((await installedMcpEntries({ ...target, file }))?.has(record.name) ?? true) left.push(record);
-    else owned.push(record);
+    else {
+      const installed = await installedMcpEntries({ ...target, file });
+      if (installed === null || installed.has(record.name)) left.push(record);
+      else if (record.file === undefined) owned.push(record);
+    }
   }
   return { owned, elsewhere, left };
 }
@@ -2482,10 +2487,11 @@ async function reconcileTargets(
       }
     }
     wrote = wroteTarget || wrote;
-    // Not read: its record stays as it was, or absent. An empty one would say teamai owns nothing there (#882).
+    // Not read: its records stay as they were, or absent. An empty one would say teamai owns nothing there (#882).
+    // A pull moves nothing out of another file then; uninstall still cleans each record in the file it names.
     if (wroteTarget === null) {
       unparsed = true;
-      continue;
+      if (!removeAll) continue;
     }
     for (const record of nextRecords) record.file = target.file;
     if (!removeAll) logLeftMcpFiles(localConfig, target, left);
@@ -2528,7 +2534,8 @@ async function reconcileTargets(
     }
     // Rebuilt this run, or by one that could not note what else was in the file.
     const unnoted = manifest[manifestKey] === undefined || manifest[manifestKey].some((record) => record.unnoted);
-    if (listed.has(target.file) && unnoted && nextRecords.length > 0) rebuilt.push({ target, records: nextRecords });
+    if (wroteTarget === null) nextRecords.unshift(...owned);
+    else if (listed.has(target.file) && unnoted && nextRecords.length > 0) rebuilt.push({ target, records: nextRecords });
     // An emptied project record stays: it says teamai owns nothing left in that
     // file, which a lost record cannot, and so lets its exclude line go (#882).
     // Not while the file's other servers are unnoted: it would say the same.
@@ -3399,6 +3406,11 @@ async function moveOpencodeServersOut(
   return result || deleted;
 }
 
+/** A Codex config.toml: null when it does not exist, undefined when it cannot be read. */
+async function readCodexConfig(file: string): Promise<string | null | undefined> {
+  return await readFileIfExists(file).catch(() => undefined);
+}
+
 async function applyCodex(
   target: McpTarget,
   desired: Map<string, DesiredMcpEntry>,
@@ -3410,8 +3422,12 @@ async function applyCodex(
   judge: McpEntryJudge,
   options: McpReconcileOptions,
   restoreConfigs: Map<string, () => Promise<void>>,
-): Promise<boolean> {
-  const previous = await readFileIfExists(target.file);
+): Promise<boolean | null> {
+  const previous = await readCodexConfig(target.file);
+  if (previous === undefined) {
+    log.warn(`Could not read ${target.file} — skipping MCP injection for ${target.tool}`);
+    return null;
+  }
   let source = previous ?? '';
   const present = new Set(codexServerNames(source));
   let dirty = false;
