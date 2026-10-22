@@ -2477,49 +2477,55 @@ async function reconcileTargets(
       }
     }
 
-    const wroteTarget = await applyMcpFile(target, moving.size > 0 ? new Map([...desired, ...moving]) : desired, keep, owned, ownedNames, nextRecords, changes,
-      moving.size > 0 ? await judgeIn(target, { moved: moving }) : judge, options, restoreConfigs);
-    if (wroteTarget) {
-      written.add(target.file);
-      // A project config a pull leaves with no team server goes, as one a cleanup empties.
-      if (!removeAll && target.projectScope && target.projectKey === undefined) {
-        await deleteEmptiedMcpFile(target.file, target.format === 'codex' ? null : mcpKeyOf(target));
-      }
-    }
-    wrote = wroteTarget || wrote;
-    // Not read: its records stay as they were, or absent. An empty one would say teamai owns nothing there (#882).
-    // A pull moves nothing out of another file then; uninstall still cleans each record in the file it names.
-    if (wroteTarget === null) {
-      unparsed = true;
-      if (!removeAll) continue;
-    }
-    for (const record of nextRecords) record.file = target.file;
-    if (!removeAll) logLeftMcpFiles(localConfig, target, left);
     // A held server leaves where it was installed only once this file holds it under a record (#913):
     // another entry of that name here is the member's, and the server stays where it is, with its record.
-    const blocked = new Set([...moving].filter(([name, { hash }]) => !nextRecords.some((r) => r.name === name && r.hash === hash)).map(([name]) => name));
-    const leavingElsewhere = elsewhere.filter((r) => !blocked.has(r.name));
-    // Every record is cleaned in the file it names: OpenCode's other project file, or any other.
-    let apart = leavingElsewhere;
-    if (target.mappedFile && target.alternateFile) {
-      const other = target.file === target.mappedFile ? target.alternateFile : target.mappedFile;
-      const inOther: ManagedMcpRecord[] = [];
-      apart = [];
-      for (const r of leavingElsewhere) (await sameMcpFile(recordedFileOf(target, r), other) ? inOther : apart).push(r);
-      wrote = await moveOpencodeServers(target, other, inOther, nextRecords, changes, await judgeIn({ ...target, file: other }), options, restoreConfigs) || wrote;
-    }
-    if ((target.mappedFile && !target.alternateFile) || apart.length > 0) {
-      // Each file is judged with the records of the tools that write it: a lookup file may link to another tool's.
-      const judgeFor = (file: string): Promise<McpEntryJudge> => judgeIn({ ...resolved, file });
-      const moved = await removeFromOtherFiles(target, apart, nextRecords, changes, judgeFor, options, restoreConfigs, leaving?.former);
-      wrote = moved || wrote;
-      if (leaving) {
-        const names: string[] = [];
-        for (const r of apart) if (await sameMcpFile(recordedFileOf(target, r), leaving.former)) names.push(r.name);
-        wrote = await deleteLeftMcpFile(target, leaving.former, names, options, restoreConfigs) || wrote;
-      }
-    }
-    nextRecords.push(...elsewhere.filter((r) => blocked.has(r.name)));
+    const blocked = new Set<string>();
+    const step = await applyMcpFileThenOthers({
+      file: target.file, nextRecords, options,
+      apply: async () => {
+        const result = await applyMcpFile(target, moving.size > 0 ? new Map([...desired, ...moving]) : desired, keep, owned, ownedNames, nextRecords, changes,
+          moving.size > 0 ? await judgeIn(target, { moved: moving }) : judge, options, restoreConfigs);
+        if (result) {
+          written.add(target.file);
+          // A project config a pull leaves with no team server goes, as one a cleanup empties.
+          if (!removeAll && target.projectScope && target.projectKey === undefined) {
+            await deleteEmptiedMcpFile(target.file, target.format === 'codex' ? null : mcpKeyOf(target));
+          }
+        }
+        return result;
+      },
+      cleanOthers: async () => {
+        if (!removeAll) logLeftMcpFiles(localConfig, target, left);
+        for (const [name, { hash }] of moving) if (!nextRecords.some((r) => r.name === name && r.hash === hash)) blocked.add(name);
+        const leavingElsewhere = elsewhere.filter((r) => !blocked.has(r.name));
+        let cleaned = false;
+        // Every record is cleaned in the file it names: OpenCode's other project file, or any other.
+        let apart = leavingElsewhere;
+        if (target.mappedFile && target.alternateFile) {
+          const other = target.file === target.mappedFile ? target.alternateFile : target.mappedFile;
+          const inOther: ManagedMcpRecord[] = [];
+          apart = [];
+          for (const r of leavingElsewhere) (await sameMcpFile(recordedFileOf(target, r), other) ? inOther : apart).push(r);
+          cleaned = await moveOpencodeServers(target, other, inOther, nextRecords, changes, await judgeIn({ ...target, file: other }), options, restoreConfigs) || cleaned;
+        }
+        if ((target.mappedFile && !target.alternateFile) || apart.length > 0) {
+          // Each file is judged with the records of the tools that write it: a lookup file may link to another tool's.
+          const judgeFor = (file: string): Promise<McpEntryJudge> => judgeIn({ ...resolved, file });
+          cleaned = await removeFromOtherFiles(target, apart, nextRecords, changes, judgeFor, options, restoreConfigs, leaving?.former) || cleaned;
+          if (leaving) {
+            const names: string[] = [];
+            for (const r of apart) if (await sameMcpFile(recordedFileOf(target, r), leaving.former)) names.push(r.name);
+            cleaned = await deleteLeftMcpFile(target, leaving.former, names, options, restoreConfigs) || cleaned;
+          }
+        }
+        nextRecords.push(...elsewhere.filter((r) => blocked.has(r.name)));
+        return cleaned;
+      },
+    });
+    // Not read: its records stay as they were, or absent. An empty one would say teamai owns nothing there (#882).
+    if (step === null || !step.read) unparsed = true;
+    if (step === null) continue;
+    wrote = step.wrote || wrote;
 
     // The unnoted mark stays until a note of what else is in the file lands.
     const marked = manifest[manifestKey]?.some((record) => record.unnoted) ?? false;
@@ -2534,7 +2540,7 @@ async function reconcileTargets(
     }
     // Rebuilt this run, or by one that could not note what else was in the file.
     const unnoted = manifest[manifestKey] === undefined || manifest[manifestKey].some((record) => record.unnoted);
-    if (wroteTarget === null) nextRecords.unshift(...owned);
+    if (!step.read) nextRecords.unshift(...owned);
     else if (listed.has(target.file) && unnoted && nextRecords.length > 0) rebuilt.push({ target, records: nextRecords });
     // An emptied project record stays: it says teamai owns nothing left in that
     // file, which a lost record cannot, and so lets its exclude line go (#882).
@@ -2818,6 +2824,30 @@ async function applyJson(
 }
 
 /**
+ * Reconcile a tool's current MCP file with `apply`, then the other files its
+ * records name with `cleanOthers`: the order every place teamai's servers are
+ * in follows (#1221). A current file that does not parse, or cannot be read,
+ * keeps its records, which the caller puts back after noting what this run
+ * wrote. A pull then stops: it moves nothing out of another file while the one
+ * it moves them to is not read. Uninstall cleans the other files anyway, as
+ * what happens there does not depend on the current one. Null when the pull
+ * stopped; else whether it read the current file, and whether it wrote a file.
+ */
+async function applyMcpFileThenOthers(step: {
+  file: string;
+  nextRecords: ManagedMcpRecord[];
+  options: McpReconcileOptions;
+  apply: () => Promise<boolean | null>;
+  cleanOthers: () => Promise<boolean>;
+}): Promise<{ read: boolean; wrote: boolean } | null> {
+  const current = await step.apply();
+  if (current === null && !step.options.removeAll) return null;
+  for (const record of step.nextRecords) record.file = step.file;
+  const cleaned = await step.cleanOthers();
+  return { read: current !== null, wrote: current === true || cleaned };
+}
+
+/**
  * Take teamai's servers out of the files its records `elsewhere` place them
  * in, and out of the other files of the tool's lookup order, none of which
  * `target`'s tool reads (#993): a pull writes them to the file it reads,
@@ -2952,16 +2982,22 @@ async function leaveMcpLocation(
   const judge = await ctx.judgeIn(other, { others: claimed });
   const next: ManagedMcpRecord[] = [];
   const removed: McpChange[] = [];
-  let wrote = await applyMcpFile(other, new Map(), keep, owned, new Set(owned.map((r) => r.name)), next, removed, judge, ctx.options, ctx.restoreConfigs);
-  // Not read: its records stay.
-  if (wrote === null) return false;
-  for (const record of next) record.file = other.file;
   // As for a target: uninstall takes teamai's servers out of a file the tool left too.
   const elsewhere = ctx.options.removeAll ? [...split.elsewhere, ...split.left] : split.elsewhere;
   const leaving = elsewhere.filter((record) => ctx.options.removeAll || !ctx.kept.has(record.name));
-  next.push(...elsewhere.filter((record) => !leaving.includes(record)));
-  wrote = await removeFromOtherFiles(other, leaving, next, ctx.changes,
-    (file) => ctx.judgeIn({ ...other, file }, { others: claimed }), ctx.options, ctx.restoreConfigs) || wrote;
+  const step = await applyMcpFileThenOthers({
+    file: other.file, nextRecords: next, options: ctx.options,
+    apply: () => applyMcpFile(other, new Map(), keep, owned, new Set(owned.map((r) => r.name)), next, removed, judge, ctx.options, ctx.restoreConfigs),
+    cleanOthers: () => {
+      next.push(...elsewhere.filter((record) => !leaving.includes(record)));
+      return removeFromOtherFiles(other, leaving, next, ctx.changes,
+        (file) => ctx.judgeIn({ ...other, file }, { others: claimed }), ctx.options, ctx.restoreConfigs);
+    },
+  });
+  if (step === null) return false;
+  // Not read: its records stay.
+  if (!step.read) next.unshift(...split.owned);
+  const { wrote } = step;
   if (!ctx.options.removeAll) logLeftMcpFiles(localConfig, other, split.left);
   ctx.changes.push(...removed);
   // As for a target: an emptied project record says teamai owns nothing left in that file (#882).

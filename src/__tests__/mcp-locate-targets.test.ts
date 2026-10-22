@@ -459,6 +459,53 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
           ? records.filter((record) => recorded === 'missing' || record.name === 'gone') : [];
         expect(left.map((record) => record.name)).toEqual((keptAll ? records : followsCurrent).map((record) => record.name));
       });
+
+    // The same rule in the scope a project's servers left once sharing.gitExclude goes off: the local scope's
+    // file under the tool's old home is cleaned on uninstall whatever state the file under its new home is in.
+    const movedHomes = [
+      { tool: 'claude', moves: 'the team\'s user MCP file', now: '.claude-team/custom.json' },
+      { tool: 'codebuddy', moves: 'CODEBUDDY_CONFIG_DIR', now: '.codebuddy-work/.codebuddy.json' },
+    ] as const;
+    const localCases = movedHomes.flatMap((row) => (['uninstall', 'pull'] as const).flatMap((mode) => states
+      .filter((current) => occurs(current, 'JSON')).map((current) => ({ ...row, mode, current }))));
+    it.each(localCases)('$mode: $tool local scope after $moves moves it and sharing.gitExclude goes off, current file $current',
+      async ({ tool, now, mode, current }) => {
+        const api = renderJsonEntry(tool === 'claude' ? 'claude' : 'buddy', API);
+        const project = path.join(root, 'project');
+        const dataHome = path.join(root, 'data');
+        const before = path.join(home, tool === 'claude' ? '.claude.json' : '.codebuddy.json');
+        const target = path.join(home, now);
+        await fse.ensureDir(path.join(project, `.${tool}`));
+        execFileSync('git', ['init', '-q', project]);
+        const local: LocalConfig = { ...userConfig(tool), scope: 'project', projectRoot: project, dataHome };
+        await reconcileMcpForConfig(team({ gitExclude: { enabled: true } }), local);
+        const written = await fse.readJson(before);
+        expect(written.projects[project].mcpServers).toEqual({ api });
+        written.projects[project].mcpServers.mine = MINE;
+        await fse.outputJson(before, written);
+        const contents = await fse.readFile(before, 'utf8');
+        const teamConfig = team();
+        if (tool === 'claude') teamConfig.toolPaths = { ...teamConfig.toolPaths, claude: { ...teamConfig.toolPaths.claude, mcp: now } };
+        else vi.stubEnv('CODEBUDDY_CONFIG_DIR', path.dirname(target));
+        await fse.ensureDir(path.dirname(target));
+        if (current !== 'missing') {
+          await fse.outputFile(target, JSON.stringify({ projects: { [project]: { mcpServers: { mine: MINE } } } }) + (current === 'unparsable' ? '\n}' : ''));
+          if (current === 'unreadable') await fs.promises.chmod(target, 0o000);
+        }
+        const recordsOf = async (): Promise<unknown[]> => Object.entries(await fse.readJson(path.join(dataHome, 'managed-local-mcp.json')).catch(() => ({})))
+          .filter(([key]) => key.startsWith(`${tool}:local:`)).flatMap(([, records]) => records as unknown[]);
+        const recorded = await recordsOf();
+        expect(recorded).toHaveLength(1);
+
+        await reconcileMcpForConfig(teamConfig, local, { removeAll: mode === 'uninstall' });
+
+        if (current === 'unreadable') await fs.promises.chmod(target, 0o600);
+        if (mode === 'uninstall') expect((await fse.readJson(before)).projects[project].mcpServers).toEqual({ mine: MINE });
+        else expect(await fse.readFile(before, 'utf8')).toBe(contents);
+        // A pull that cannot read the scope's current file keeps its records; otherwise the old file's record goes.
+        const currentRead = current === 'missing' || current === 'parses';
+        expect(await recordsOf()).toEqual(mode === 'pull' && !currentRead ? recorded : []);
+      });
   });
 
   it('writes Muse\'s user servers to $XDG_CONFIG_HOME/muse/settings.json', async () => {
