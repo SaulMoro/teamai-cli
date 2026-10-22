@@ -1975,6 +1975,28 @@ export function mcpTargetExcluded(localConfig: LocalConfig, target: McpTarget): 
 }
 
 /**
+ * The places teamai's records put a server in that cannot be read or parsed, among the records of the tools a
+ * reconcile of `localConfig` reaches. After a removal these are the records it kept for a retry: uninstall
+ * keeps the data home holding them.
+ */
+export async function unreadMcpPlaces(teamConfig: TeamaiConfig, localConfig: LocalConfig): Promise<string[]> {
+  const { manifest } = await loadMcpManifest(localConfig, true);
+  const places = new Map<string, McpTarget>();
+  for (const target of await resolveMcpTargets(teamConfig, localConfig)) {
+    const both = target.projectScope && localMcpScopeOf(target.tool) ? await projectMcpLocations(teamConfig, localConfig, target.tool) : null;
+    for (const place of both ? [both.tree, both.local] : [target]) places.set(mcpManifestKey(place), place);
+  }
+  const unread = new Set<string>();
+  for (const [key, target] of places) {
+    for (const record of manifest[key] ?? []) {
+      const recorded = await recordedMcpTarget(target, record);
+      if (await installedMcpEntries(recorded) === null) unread.add(describeMcpLocation(recorded));
+    }
+  }
+  return [...unread];
+}
+
+/**
  * Reconcile one scope's tool configs to the team's desired MCP server set.
  * Idempotent: unchanged servers produce no write at all.
  */

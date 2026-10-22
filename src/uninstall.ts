@@ -2615,9 +2615,11 @@ async function removeConfirmed(
   // must leave the remaining tools' MCP servers intact.
   // Every MCP line stays unless judged clean below (`<exclude file>\0<line>`).
   const heldMcp = new Set([...plan.gitExcludes].flatMap(([file, entries]) => entries.map(({ pattern }) => `${file}\0${pattern}`)));
+  // The MCP configs that could not be read: their records, and the data home holding them, stay for the retry.
+  const mcpLeft: string[] = [];
   if (plan.includeShared) {
     try {
-      const { reconcileMcpForConfig, projectWorktreeConfigs, mcpConfigsNotProvenClean } = await import('./mcp-reconcile.js');
+      const { reconcileMcpForConfig, projectWorktreeConfigs, mcpConfigsNotProvenClean, unreadMcpPlaces } = await import('./mcp-reconcile.js');
       // Project scope: the managed-mcp manifests are PER-WORKTREE under the
       // shared partition (#374 P1-2C), and each worktree's MCP config lives in
       // its own checkout. Since executeRemoval deletes the whole shared
@@ -2629,6 +2631,7 @@ async function removeConfirmed(
       for (const cfg of await projectWorktreeConfigs(localConfig)) {
         const { changes } = await reconcileMcpForConfig(teamConfig, cfg, { removeAll: true });
         removedTotal += changes.filter((c) => c.action === 'removed').length;
+        mcpLeft.push(...await unreadMcpPlaces(teamConfig, cfg));
       }
       if (removedTotal > 0) log.info(`Removed ${removedTotal} teamai-managed MCP server(s)`);
       // Worktrees share one info/exclude, so a line goes once they are all clean,
@@ -2668,7 +2671,7 @@ async function removeConfirmed(
   const excludesLeft = plan.includeShared ? await withdrawWorkspaceInstructionExcludes(teamConfig, localConfig) : [];
   const { pendingOpencode, hooksLeft, blocksLeft, filesLeft } = await executeRemoval(plan, heldMcp, {
     hooks: dispatchLeft ? [{ what: `the Codex team-hook dispatchers in ${dispatchLeft}`, tool: 'codex' }] : [],
-    files: [...httpSourceLeft, ...plan.keptUnjudged, ...excludesLeft],
+    files: [...httpSourceLeft, ...plan.keptUnjudged, ...excludesLeft, ...mcpLeft],
   });
   const incomplete = pendingOpencode.length > 0 || hooksLeft.length > 0 || blocksLeft.length > 0 || filesLeft.length > 0;
 
