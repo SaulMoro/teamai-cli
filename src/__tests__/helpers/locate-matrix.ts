@@ -47,6 +47,8 @@ type RowCommon = {
   readonly existingDirs: readonly Spot[];
   readonly toolHomes?: Readonly<Record<string, Spot>>;
   readonly toolRoots?: Readonly<Record<string, Spot>>;
+  /** The `toolRoots` the member's user config records, which a project config recording none follows. */
+  readonly userToolRoots?: Readonly<Record<string, Spot>>;
   /** The `Install` fields a row sets; the rest are the defaults: built-in `toolPaths`, no gitExclude, a team repo, no children. */
   readonly install?: {
     readonly toolPaths?: TeamaiConfig['toolPaths'];
@@ -148,6 +150,7 @@ function hostFor(row: MatrixRow, cell: Cell): Host {
     },
     realpath: async (file) => file,
     readText: async (file) => texts.get(file) ?? null,
+    userToolRoots: async () => row.userToolRoots && expand(row.userToolRoots, cell),
   };
 }
 
@@ -185,6 +188,7 @@ function conditionsOf(row: MatrixRow): string {
   const conditions = [
     ...Object.keys(row.env ?? {}), ...Object.entries(row.envLiterals ?? {}).map(([name, value]) => `${name}=${value}`),
     ...(row.json ?? []).map((file) => file.at), ...(row.texts ?? []).map((file) => file.at), ...Object.keys(row.toolHomes ?? {}).map((tool) => `recorded ${tool}`),
+    ...Object.keys(row.userToolRoots ?? {}).map((tool) => `user toolRoots.${tool}`),
     ...(row.install?.gitExclude ? ['gitExclude'] : []), ...(row.install?.self ? ['self'] : []),
     ...(row.install?.workspaceChildren ? ['children'] : []), ...(row.installed === null || row.installed.met ? [] : ['not installed']),
   ];

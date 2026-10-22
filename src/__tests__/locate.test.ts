@@ -12,7 +12,7 @@ function linuxHost(env: Record<string, string>, existing: readonly string[] = ['
   return {
     platform: 'linux', path: path.posix, home: '/home/m', env, toolHomes: { kind: 'missing' }, cwd: () => '/home/m',
     exists: async (file) => existing.includes(file), readJson: async () => ({ kind: 'missing' }),
-    realpath: async (file) => file, readText: async () => null,
+    realpath: async (file) => file, readText: async () => null, userToolRoots: async () => undefined,
   };
 }
 
@@ -77,7 +77,7 @@ describe('nextToolHomes on Windows', () => {
   const windowsHost = (env: Record<string, string>, existing: readonly string[]): Host => ({
     platform: 'win32', path: path.win32, home: 'C:\\Users\\m', env, toolHomes: { kind: 'missing' },
     cwd: () => 'C:\\repo', exists: async (file) => existing.includes(file), readJson: async () => ({ kind: 'missing' }),
-    realpath: async (file) => file, readText: async () => null,
+    realpath: async (file) => file, readText: async () => null, userToolRoots: async () => undefined,
   });
   const appData = 'C:\\Users\\m\\AppData\\Local';
 
@@ -138,7 +138,7 @@ describe('envToolHome', () => {
     const host: Host = {
       platform: 'win32', path: path.win32, home: 'C:\\Users\\m', env: { LOCALAPPDATA: 'relative-appdata' }, toolHomes: { kind: 'missing' },
       cwd: () => 'C:\\repo', exists: async () => true, readJson: async () => ({ kind: 'missing' }),
-      realpath: async (file) => file, readText: async () => null,
+      realpath: async (file) => file, readText: async () => null, userToolRoots: async () => undefined,
     };
 
     expect(envToolHome('hermes', host)).toEqual({ dir: 'C:\\Users\\m\\AppData\\Local\\hermes', variable: 'LOCALAPPDATA', kind: 'win32-appdata' });

@@ -754,7 +754,8 @@ describe('OpenCode instructions registration (#945)', () => {
 });
 
 describe('Codex project instructions (#945)', () => {
-  it('reaches a Codex the member relocated with toolRoots, with no project .codex/', async () => {
+  // A project config that records no toolRoots follows the user config's, as `resolveMemberToolRoots` does.
+  it.each(['project', 'user'] as const)('reaches a Codex the member relocated with toolRoots in the %s config, with no project .codex/', async (recordedIn) => {
     const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-945-codexroot-')));
     const prevHome = process.env.HOME;
     process.env.HOME = path.join(root, 'home');
@@ -762,9 +763,15 @@ describe('Codex project instructions (#945)', () => {
       const projectRoot = path.join(root, 'project');
       fs.mkdirSync(projectRoot, { recursive: true });
       fs.mkdirSync(path.join(root, 'home', '.codex-work', 'skills'), { recursive: true });
+      const repo = { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' };
+      if (recordedIn === 'user') {
+        fs.mkdirSync(path.join(root, 'home', '.teamai'), { recursive: true });
+        fs.writeFileSync(path.join(root, 'home', '.teamai', 'config.yaml'),
+          `repo:\n  localPath: ${repo.localPath}\n  remote: ${repo.remote}\nusername: u\nscope: user\ntoolRoots:\n  codex: ~/.codex-work\n`);
+      }
       const localConfig = {
-        repo: { localPath: path.join(root, 'repo'), remote: 'https://example.invalid/t.git' },
-        username: 'u', additionalRoles: [], scope: 'project', projectRoot, toolRoots: { codex: '~/.codex-work' },
+        repo, username: 'u', additionalRoles: [], scope: 'project', projectRoot,
+        ...recordedIn === 'project' ? { toolRoots: { codex: '~/.codex-work' } } : {},
       } as unknown as LocalConfig;
 
       const resolved = await resolveInstructionTargets(TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' }), localConfig);

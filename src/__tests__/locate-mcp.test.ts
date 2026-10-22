@@ -33,6 +33,14 @@ const ROWS: readonly MatrixRow[] = [
     source: 'sharing.gitExclude keeps team servers out of the working tree, in the local scope (#915)',
   },
   {
+    tool: 'claude', scope: 'project', install: { gitExclude: true }, userToolRoots: { claude: '~/.claude-work' },
+    writes: [{ at: '~/.claude-work/.claude.json', key: ['mcpServers'], projectKey: '<root>' }],
+    existingDirs: ['<root>/.claude'], installed: { probe: '<root>/.claude', met: true },
+    reads: [CLAUDE_PROJECT_READS[0], { ...CLAUDE_PROJECT_READS[1], at: '~/.claude-work/.claude.json' }],
+    retired: [{ at: '<root>/.mcp.json', was: 'other-scope' }],
+    source: 'CLAUDE_CONFIG_DIR moves .claude.json, local scope included; a project config recording no toolRoots follows the user config\'s',
+  },
+  {
     tool: 'claude', scope: 'project', install: { gitExclude: true, self: true },
     writes: [{ at: '<root>/.mcp.json', key: ['mcpServers'] }],
     existingDirs: ['<root>/.claude'], installed: { probe: '<root>/.claude', met: true },
@@ -94,6 +102,14 @@ const ROWS: readonly MatrixRow[] = [
     reads: [{ at: '<root>/.codex/config.toml', key: ['mcp_servers'], when: 'workspaceUnder' }],
     readGates: [{ kind: 'codex-project-trust', config: '~/.codex/config.toml', checkout: '<root>' }],
     source: 'Codex reads the project MCP config only in a trusted project (#954)',
+  },
+  {
+    tool: 'codex', scope: 'project', userToolRoots: { codex: '~/.codex-work' },
+    writes: [{ at: '<root>/.codex/config.toml', key: ['mcp_servers'] }],
+    existingDirs: ['<root>/.codex'], installed: { probe: '<root>/.codex', met: true },
+    reads: [{ at: '<root>/.codex/config.toml', key: ['mcp_servers'], when: 'workspaceUnder' }],
+    readGates: [{ kind: 'codex-project-trust', config: '~/.codex-work/config.toml', checkout: '<root>' }],
+    source: 'Codex records trust in the config.toml of the home the user config\'s toolRoots names, which a project config recording none follows',
   },
   {
     tool: 'muse', scope: 'project',

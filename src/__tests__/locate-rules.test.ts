@@ -48,6 +48,12 @@ const ROWS: readonly MatrixRow[] = [
     source: "Codex runs teamai's user-level SessionStart hook in every project (#938)",
   },
   {
+    tool: 'codex', scope: 'project', userToolRoots: { codex: '~/.codex-work' },
+    channel: { via: 'session-hook', probe: 'codex-hooks', limit: null },
+    existingDirs: ['~/.codex-work'], installed: { probe: '~/.codex-work', met: true },
+    source: 'A project config that records no toolRoots follows the user config\'s: the hook runs from the Codex init recorded there',
+  },
+  {
     tool: 'codex-internal', scope: 'user',
     writes: [{ at: '~/.codex-internal/AGENTS.md', owned: false, header: null }],
     existingDirs: ['~/.codex-internal'], installed: { probe: '~/.codex-internal', met: true },

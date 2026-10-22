@@ -24,6 +24,8 @@ export type Host = {
   realpath(file: string): Promise<string>;
   /** A small text file, or null when it is missing or unreadable: a linked worktree's `.git` and its `commondir`. */
   readText(file: string): Promise<string | null>;
+  /** The `toolRoots` the member's user config records: a project config that records none follows them (`resolveMemberToolRoots`). */
+  userToolRoots(): Promise<Readonly<Record<string, string>> | undefined>;
 };
 
 /** The machine teamai runs on, the default host of every function that takes one. */
@@ -39,6 +41,7 @@ export function realHost(overrides: Partial<Pick<Host, 'env'>> = {}): Host {
     readJson: readJsonObject,
     realpath: (file) => fs.promises.realpath(file).catch(() => file),
     readText: readFileSafe,
+    userToolRoots: async () => (await (await import('./config.js')).loadLocalConfig())?.toolRoots,
   };
 }
 

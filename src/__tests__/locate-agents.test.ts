@@ -66,6 +66,14 @@ const ROWS: readonly MatrixRow[] = [
     source: 'Codex reads project config only in a trusted project (#954); #1221 matrix workspace Agents ◐v',
   },
   {
+    tool: 'codex', scope: 'project', userToolRoots: { codex: '~/.codex-work' },
+    writes: ['<root>/.codex/agents'],
+    existingDirs: ['<root>/.codex'], installed: { probe: '<root>/.codex', met: true },
+    reads: [{ at: '<root>/.codex/agents', when: 'workspaceUnder' }],
+    readGates: [{ kind: 'codex-project-trust', config: '~/.codex-work/config.toml', checkout: '<root>' }],
+    source: 'Codex records trust in the config.toml of the home the user config\'s toolRoots names, which a project config recording none follows',
+  },
+  {
     tool: 'codex-internal', scope: 'user',
     writes: ['~/.codex-internal/agents'],
     existingDirs: ['~/.codex-internal'], installed: { probe: '~/.codex-internal', met: true },

@@ -38,6 +38,13 @@ const ROWS: readonly MatrixRow[] = [
     source: "Codex 0.163.0 run: teamai's SessionStart and SubagentStart hooks add the blocks; the project AGENTS.md is the owners' (#938, #940)",
   },
   {
+    tool: 'codex', scope: 'project', userToolRoots: { codex: '~/.codex-work' },
+    channel: { via: 'session-hook', probe: 'codex-hooks', limit: null },
+    existingDirs: ['~/.codex-work'], installed: { probe: '~/.codex-work', met: true },
+    retired: [{ at: '<root>/AGENTS.md', was: 'default' }],
+    source: 'A project config that records no toolRoots follows the user config\'s: the hook runs from the Codex init recorded there',
+  },
+  {
     tool: 'codex-internal', scope: 'user',
     writes: [{ at: '~/.codex-internal/AGENTS.md', owned: false, header: null }],
     existingDirs: ['~/.codex-internal'], installed: { probe: '~/.codex-internal', met: true },

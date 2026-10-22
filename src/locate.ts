@@ -384,9 +384,16 @@ function rootsOf(tool: string, install: Install, host: Host): Roots {
   };
 }
 
-/** `install` seen from its user scope: a run-time channel and a local MCP scope run from the tool's user config. */
-function userViewOf(install: Install): Install {
-  return { toolPaths: install.toolPaths, agents: install.agents, toolRoots: install.toolRoots, gitExclude: install.gitExclude, scope: 'user' };
+/**
+ * `install` seen from its user scope: a run-time channel and a local MCP scope run from the tool's user config.
+ * A project config that records no `toolRoots` takes the user config's: a root is the machine's, and a
+ * user-scope init may have recorded it after the project was set up.
+ */
+async function userViewOf(install: Install, host: Host): Promise<Install> {
+  const toolRoots = install.scope === 'project' && Object.keys(install.toolRoots).length === 0
+    ? await host.userToolRoots() ?? {}
+    : install.toolRoots;
+  return { toolPaths: install.toolPaths, agents: install.agents, toolRoots, gitExclude: install.gitExclude, scope: 'user' };
 }
 
 async function gatesOf(tool: string, install: Install, host: Host, roots: Roots = rootsOf(tool, install, host)): Promise<Gate[]> {
@@ -496,12 +503,13 @@ async function readsOf(
   return reads;
 }
 
-function readGatesOf(kinds: readonly ReadGateKind[] | undefined, install: Install, host: Host): ReadGate[] {
+async function readGatesOf(kinds: readonly ReadGateKind[] | undefined, install: Install, host: Host): Promise<ReadGate[]> {
   if (kinds === undefined || install.scope !== 'project') return [];
+  const user = await userViewOf(install, host);
   return kinds.map((kind): ReadGate => {
     switch (kind) {
       case 'codex-project-trust':
-        return { kind, config: rootsOf('codex', userViewOf(install), host).declared('home', '.codex/config.toml'), checkout: install.projectRoot };
+        return { kind, config: rootsOf('codex', user, host).declared('home', '.codex/config.toml'), checkout: install.projectRoot };
       default: {
         const unhandled: never = kind;
         return unhandled;
@@ -589,7 +597,7 @@ async function locateRules(tool: string, install: Install, host: Host): Promise<
     case 'session-hook':
     case 'extension':
     case 'plugin':
-      return runTimeOf(channel, [], await gatesOf(tool, userViewOf(install), host));
+      return runTimeOf(channel, [], await gatesOf(tool, await userViewOf(install, host), host));
     default: {
       const unhandled: never = channel;
       return unhandled;
@@ -610,7 +618,7 @@ async function locateBlocks(tool: string, install: Install, host: Host): Promise
   // An earlier release wrote the blocks into any claudemd the team mapped.
   const configured: Retired<FilePlace> | null = claudemd === null ? null : { place: memberFile(claudemd), was: 'configured' };
   if (channel === 'none' || channel === 'unknown') return { channel, retired: settled(null, [...earlier, configured], p), gates: await gatesOf(tool, install, host, roots) };
-  if (channel.channel !== 'file') return runTimeOf(channel, settled(null, [...earlier, configured], p), await gatesOf(tool, userViewOf(install), host));
+  if (channel.channel !== 'file') return runTimeOf(channel, settled(null, [...earlier, configured], p), await gatesOf(tool, await userViewOf(install, host), host));
 
   const [file, other] = install.gitExclude && channel.gitExcluded !== undefined
     ? [channel.gitExcluded, channel.file] : [channel.file, channel.gitExcluded];
@@ -707,7 +715,7 @@ async function locateAgents(tool: string, install: Install, host: Host): Promise
     channel: 'files',
     own,
     reads: await readsOf(channel.reads, roots, host),
-    readGates: readGatesOf(channel.readGates, install, host),
+    readGates: await readGatesOf(channel.readGates, install, host),
     retired: [],
     gates,
   };
@@ -748,7 +756,7 @@ async function localScopeOf(
   tree: EntryPlace,
 ): Promise<{ readonly place: EntryPlace; readonly inUse: boolean } | null> {
   const file = scope.file === 'user-mcp-file'
-    ? rootsOf(tool, userViewOf(install), host).configured('mcp')
+    ? rootsOf(tool, await userViewOf(install, host), host).configured('mcp')
     : host.path.join(roots.codebuddyConfigDir, scope.file.path);
   if (file === null) return null;
   const projectKey = scope.key === 'git-common-root' ? await claudeProjectKey(install.projectRoot, host) : await host.realpath(install.projectRoot);
@@ -805,7 +813,7 @@ async function locateMcp(tool: string, install: Install, host: Host): Promise<Lo
 
   const channel = mcp.project;
   if (channel === 'none' || channel === 'unknown') return { channel, retired: [], gates };
-  const readGates = readGatesOf(channel.readGates, install, host);
+  const readGates = await readGatesOf(channel.readGates, install, host);
   if (channel.writtenBy !== undefined) {
     const own = ownOf(await locateMcp(channel.writtenBy, install, host));
     const reads = await readsOf(channel.reads, roots, host, own?.key ?? mcpKeyOf(channel));
