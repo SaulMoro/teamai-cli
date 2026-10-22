@@ -49,8 +49,9 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
-      - name: Unit tests with coverage
-        run: npx vitest run --coverage
+      # Coverage only where it is uploaded: it costs the other legs time and nothing reads it.
+      - name: Unit tests
+        run: npx vitest run ${{ matrix.os == 'ubuntu-latest' && matrix.node-version == 20 && '--coverage' || '' }}
 
       - name: Upload coverage
         if: matrix.os == 'ubuntu-latest' && matrix.node-version == 20
