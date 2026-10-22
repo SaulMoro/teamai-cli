@@ -184,6 +184,36 @@ describe('pull writes MCP servers where each tool reads them (#1221)', () => {
       expect(manifest.zcode ?? []).toEqual(mode === 'pull' ? [{ name: 'api', hash: entryHash(api), file: current }] : []);
     });
 
+    it.each([
+      { mode: 'uninstall', legacyState: 'unparsable' },
+      { mode: 'pull', legacyState: 'unparsable' },
+      { mode: 'uninstall', legacyState: 'unreadable' },
+      { mode: 'pull', legacyState: 'unreadable' },
+    ] as const)('$mode keeps an earlier release\'s record while ~/.agents/mcp.json is $legacyState, so an uninstall after it is repaired removes the server', async ({ mode, legacyState }) => {
+      if (legacyState === 'unreadable' && (process.platform === 'win32' || process.getuid?.() === 0)) return;
+      const api = renderJsonEntry('claude', API);
+      const legacy = path.join(home, '.agents', 'mcp.json');
+      const current = path.join(home, '.zcode', 'cli', 'config.json');
+      const repaired = { mcpServers: { api, mine: MINE } };
+      await fse.ensureDir(path.dirname(current));
+      await fse.outputFile(legacy, legacyState === 'unparsable' ? '{ "mcpServers": {' : JSON.stringify(repaired));
+      if (legacyState === 'unreadable') await fs.promises.chmod(legacy, 0o000);
+      await fse.outputJson(path.join(home, '.teamai', 'managed-mcp.json'), { zcode: [{ name: 'api', hash: entryHash(api) }] });
+
+      await reconcileMcpForConfig(team(), userConfig('zcode'), { removeAll: mode === 'uninstall' });
+
+      const manifest = await fse.readJson(path.join(home, '.teamai', 'managed-mcp.json')).catch(() => ({}));
+      expect(manifest.zcode ?? []).toContainEqual({ name: 'api', hash: entryHash(api), file: legacy, key: ['mcpServers'] });
+
+      if (legacyState === 'unreadable') await fs.promises.chmod(legacy, 0o644);
+      await fse.outputJson(legacy, repaired);
+      await reconcileMcpForConfig(team(), userConfig('zcode'), { removeAll: true });
+
+      expect(await fse.readJson(legacy)).toEqual({ mcpServers: { mine: MINE } });
+      expect((await fse.readJson(current).catch(() => ({}))).mcp?.servers ?? {}).toEqual({});
+      expect((await fse.readJson(path.join(home, '.teamai', 'managed-mcp.json')).catch(() => ({}))).zcode ?? []).toEqual([]);
+    });
+
     it('writes a project\'s servers to <project>/.zcode/config.json', async () => {
       const project = path.join(root, 'project');
       await fse.ensureDir(path.join(home, '.zcode'));

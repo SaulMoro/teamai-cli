@@ -489,9 +489,9 @@ function recordedPlaceOf(target: McpTarget, record: ManagedMcpRecord): McpTarget
   return { ...target, file: recordedFileOf(target, record), ...record.key === undefined ? {} : { key: record.key } };
 }
 
-/** The recorded file and server key, including the retired place an earlier release's record, noting no file, holds its server in. */
+/** The recorded file and server key, including the retired place an earlier release's record, noting no file, holds its server in (`retiredPlaceOf`). */
 export async function recordedMcpTarget(target: McpTarget, record: ManagedMcpRecord): Promise<McpTarget> {
-  const retired = record.file === undefined ? await retiredPlaceHolding(target, record) : undefined;
+  const retired = record.file === undefined ? await retiredPlaceOf(target, record) : undefined;
   return retired === undefined ? recordedPlaceOf(target, record) : { ...target, ...retired };
 }
 
@@ -1443,7 +1443,7 @@ async function someMcpEntryInstalled(targets: readonly McpTarget[]): Promise<boo
  * lookup order, the mapped or alternate file, a retired one); or still in a
  * file the tool took them from before its home or mapping moved, or one
  * that cannot be read (`left`), which a pull leaves as it is (#1221). A record that notes no file, of an
- * earlier release, is in a retired file holding its entry unchanged, or in `target`'s file when the file it
+ * earlier release, is in a retired file holding its entry unchanged or that cannot be read, or in `target`'s file when the file it
  * guesses lacks the entry. A record of a file that holds no such entry is dropped: nothing of it is left.
  */
 async function splitByFile(
@@ -1455,7 +1455,7 @@ async function splitByFile(
   const left: ManagedMcpRecord[] = [];
   const relocations = [target.mappedFile, target.alternateFile, ...target.lookupFiles ?? [], ...(target.retired ?? []).map(({ file }) => file)];
   for (const record of records) {
-    const retired = record.file === undefined ? await retiredPlaceHolding(target, record) : undefined;
+    const retired = record.file === undefined ? await retiredPlaceOf(target, record) : undefined;
     if (retired !== undefined) {
       const { file, key } = retired;
       elsewhere.push({ ...record, file, ...isDeepStrictEqual(key, mcpKeyOf(target)) ? {} : { key } });
@@ -1474,12 +1474,19 @@ async function splitByFile(
   return { owned, elsewhere, left };
 }
 
-async function retiredPlaceHolding(target: McpTarget, record: ManagedMcpRecord): Promise<{ file: string; key: McpKey } | undefined> {
+/**
+ * The retired place holding `record`'s server unchanged, or else one that cannot be read and so may hold it:
+ * the record stays tied to that place until a run reads it.
+ */
+async function retiredPlaceOf(target: McpTarget, record: ManagedMcpRecord): Promise<{ file: string; key: McpKey } | undefined> {
+  let unread: { file: string; key: McpKey } | undefined;
   for (const place of target.retired ?? []) {
-    const entry = (await installedMcpEntries({ ...target, ...place }))?.get(record.name);
+    const installed = await installedMcpEntries({ ...target, ...place });
+    if (installed === null) unread ??= place;
+    const entry = installed?.get(record.name);
     if (entry !== undefined && entryHash(entry) === record.hash) return place;
   }
-  return undefined;
+  return unread;
 }
 
 function once<T>(load: () => Promise<T>): () => Promise<T> {
