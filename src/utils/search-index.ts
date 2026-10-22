@@ -350,14 +350,14 @@ interface VoteAggregation {
 
 async function aggregateVotes(votesDir?: string, voteScope?: LocalConfig): Promise<VoteAggregation> {
   const scores = new Map<string, number>();
-  const agg = new Map<string, { recalled: number; upvoted: number; lastRecalled: string }>();
+  const agg = new Map<string, { recalled: number; upvoted: number; lastRecalled: string; lastUpvoted: string }>();
   const contents = voteScope
     ? await (await import('../votes.js')).readIndexVoteFiles(voteScope)
     : await Promise.all((votesDir ? await listFiles(votesDir) : [])
       .filter((file) => /\.ya?ml$/.test(file))
-      .map((file) => readFileSafe(path.join(votesDir!, file))));
+      .map(async (file) => ({ path: path.join(votesDir!, file), content: await readFileSafe(path.join(votesDir!, file)) })));
 
-  for (const content of contents) {
+  for (const { path: votePath, content } of contents) {
     if (!content) continue;
 
     try {
@@ -372,11 +372,14 @@ async function aggregateVotes(votesDir?: string, voteScope?: LocalConfig): Promi
           const upvoted = entry.upvoted_count ?? 0;
           scores.set(docId, (scores.get(docId) ?? 0) + recalled * 0.3 + upvoted * 1.0);
 
-          const existing = agg.get(docId) ?? { recalled: 0, upvoted: 0, lastRecalled: '' };
+          const existing = agg.get(docId) ?? { recalled: 0, upvoted: 0, lastRecalled: '', lastUpvoted: '' };
           existing.recalled += recalled;
           existing.upvoted += upvoted;
           if (entry.last_recalled_at > existing.lastRecalled) {
             existing.lastRecalled = entry.last_recalled_at;
+          }
+          if (entry.last_upvoted_at && entry.last_upvoted_at > existing.lastUpvoted) {
+            existing.lastUpvoted = entry.last_upvoted_at;
           }
           agg.set(docId, existing);
         }
@@ -385,14 +388,14 @@ async function aggregateVotes(votesDir?: string, voteScope?: LocalConfig): Promi
         for (const [docId, entry] of Object.entries(votes)) {
           scores.set(docId, (scores.get(docId) ?? 0) + 1);
 
-          const existing = agg.get(docId) ?? { recalled: 0, upvoted: 0, lastRecalled: '' };
+          const existing = agg.get(docId) ?? { recalled: 0, upvoted: 0, lastRecalled: '', lastUpvoted: '' };
           existing.recalled += 1;
           if (entry.at > existing.lastRecalled) existing.lastRecalled = entry.at;
           agg.set(docId, existing);
         }
       }
     } catch {
-      log.error('Failed to parse index votes');
+      log.error(`Failed to parse index votes: ${votePath}`);
     }
   }
 
@@ -403,6 +406,7 @@ async function aggregateVotes(votesDir?: string, voteScope?: LocalConfig): Promi
       recalledCount: data.recalled,
       upvotedCount: data.upvoted,
       lastRecalledAt: data.lastRecalled,
+      lastUpvotedAt: data.lastUpvoted || undefined,
     }));
   }
 
