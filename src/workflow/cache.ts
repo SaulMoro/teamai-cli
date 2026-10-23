@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { log } from '../utils/logger.js';
-import { readFileSafe, remove, writeJsonAtomic } from '../utils/fs.js';
+import { pathExists, readFileSafe, remove, writeJsonAtomic } from '../utils/fs.js';
+import { isSafeNamespaceSegment } from '../manifest-schema.js';
+import { resolveResourceNamespaces } from '../resource-namespaces.js';
+import { resolveNamespacedItems, type NamespaceCandidate } from '../namespace-resolver.js';
 import {
   getBusinessRoot,
   getDataHome,
@@ -191,9 +194,133 @@ export async function syncWorkflowDefinitions(
   // Asked on the first valid file: a team without workflows starts no git here.
   let reachable: Promise<ReachableRevision | undefined> | undefined;
   const checked: Checked[] = [];
+  const rawCandidates: Array<{ stem: string; relativePath: string; full: string; namespace: string | null }> = [];
   for (const name of await workflowFileNames(dir)) {
-    const relativePath = `workflows/${name}`;
-    const full = path.join(dir, name);
+    rawCandidates.push({
+      stem: name.replace(/\.yaml$/, ''),
+      relativePath: `workflows/${name}`,
+      full: path.join(dir, name),
+      namespace: null,
+    });
+  }
+
+  try {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.isSymbolicLink() || entry.name.startsWith('.')) continue;
+      if (!isSafeNamespaceSegment(entry.name)) continue;
+      const ns = entry.name;
+      const nsDir = path.join(dir, ns);
+      for (const name of await workflowFileNames(nsDir)) {
+        rawCandidates.push({
+          stem: name.replace(/\.yaml$/, ''),
+          relativePath: `workflows/${ns}/${name}`,
+          full: path.join(nsDir, name),
+          namespace: ns,
+        });
+      }
+    }
+  } catch {
+    // dir missing or unreadable
+  }
+
+  // Resolve namespaces when namespaced candidates exist on disk — workflows
+  // OR prompts. A root-only tree needs no manifest read, and an unconditional
+  // read here would fire before the push's pull refreshes the clone — the
+  // stale mapping the #649 review forbids. A manifest that cannot be read
+  // resolves to an empty namespace set (conservative), while a manifest-free
+  // team discovers prompt namespaces from disk below.
+  let hasNamespaced = rawCandidates.some((c) => c.namespace !== null);
+  if (!hasNamespaced) {
+    // Prompt namespaces are independent of workflow layout: a root-only
+    // workflows/ tree with prompts/<ns>/ still needs resolution.
+    try {
+      const promptsDir = path.join(knowledgeRoot, 'prompts');
+      for (const entry of await fs.readdir(promptsDir, { withFileTypes: true })) {
+        if (entry.isDirectory() && !entry.isSymbolicLink() && isSafeNamespaceSegment(entry.name)) {
+          hasNamespaced = true;
+          break;
+        }
+      }
+    } catch {
+      // prompts dir missing or unreadable
+    }
+  }
+  let resourceNamespaces: Awaited<ReturnType<typeof resolveResourceNamespaces>> = null;
+  if (hasNamespaced) {
+    try {
+      resourceNamespaces = await resolveResourceNamespaces(config);
+    } catch {
+      // A manifest exists but cannot be read: be conservative. Treating
+      // every on-disk namespace as active (the null fallback) would cache
+      // an inactive namespace's workflow as runnable for this member.
+      // An empty resolution means "no namespace is active".
+      resourceNamespaces = { activeNamespaces: {} } as Awaited<ReturnType<typeof resolveResourceNamespaces>>;
+    }
+  }
+  const activeWorkflows = resourceNamespaces?.activeNamespaces.workflows ?? (resourceNamespaces ? [] : null);
+  const activePrompts = resourceNamespaces?.activeNamespaces.prompts ?? (resourceNamespaces ? [] : null);
+  // Manifest-free: discover prompt namespaces from disk so a namespaced
+  // prompt directory is still found even without a roles/projects manifest.
+  let effectiveActivePrompts: readonly string[] | null = activePrompts;
+  if (effectiveActivePrompts === null) {
+    const discovered = new Set<string>();
+    try {
+      const promptsDir = path.join(knowledgeRoot, 'prompts');
+      for (const entry of await fs.readdir(promptsDir, { withFileTypes: true })) {
+        if (entry.isDirectory() && !entry.isSymbolicLink() && isSafeNamespaceSegment(entry.name)) {
+          discovered.add(entry.name);
+        }
+      }
+    } catch { /* prompts dir missing */ }
+    effectiveActivePrompts = discovered.size > 0 ? [...discovered] : null;
+  }
+  const effectiveActiveWorkflows = activeWorkflows ?? [
+    ...new Set(rawCandidates.flatMap((candidate) => (
+      candidate.namespace === null ? [] : [candidate.namespace]
+    ))),
+  ];
+
+  const byStem = new Map<string, Array<{ stem: string; relativePath: string; full: string; namespace: string | null }>>();
+  for (const cand of rawCandidates) {
+    const group = byStem.get(cand.stem) ?? [];
+    group.push(cand);
+    byStem.set(cand.stem, group);
+  }
+
+  const toCheck: Array<{ stem: string; relativePath: string; full: string }> = [];
+
+  for (const [stem, group] of byStem) {
+    const namespaceCandidatesList: NamespaceCandidate<{ stem: string; relativePath: string; full: string }>[] = group.map((c) => ({
+      name: c.stem,
+      source: c.relativePath,
+      namespace: c.namespace,
+      value: c,
+    }));
+
+    const resolution = resolveNamespacedItems(namespaceCandidatesList, effectiveActiveWorkflows);
+    if (resolution.kind === 'conflict') {
+      checked.push({
+        stem,
+        relativePath: resolution.first.source,
+        diagnostics: [{
+          file: resolution.first.source,
+          line: 1,
+          column: 1,
+          field: '(root)',
+          code: 'workflow_namespace_conflict',
+          message: `Workflow "${stem}" is defined in multiple active namespaces (${resolution.first.source} and ${resolution.second.source}); conflicting workflows have no runnable version`,
+        }],
+      });
+      continue;
+    }
+
+    if (resolution.items.length > 0) {
+      toCheck.push(resolution.items[0].value);
+    }
+  }
+
+  for (const { stem, relativePath, full } of toCheck) {
     let stat: Awaited<ReturnType<typeof fs.lstat>>;
     try {
       stat = await fs.lstat(full);
@@ -202,7 +329,6 @@ export async function syncWorkflowDefinitions(
     }
     // A symlink is not a workflow file, even when the target is a YAML file outside this directory.
     if (stat.isSymbolicLink() || !stat.isFile()) continue;
-    const stem = name.replace(/\.yaml$/, '');
     const content = await readFileSafe(full);
     if (content === null) {
       checked.push({ stem, relativePath, diagnostics: [{ file: relativePath, line: 1, column: 1, field: '(root)', message: 'workflow file could not be read' }] });
@@ -213,7 +339,7 @@ export async function syncWorkflowDefinitions(
       checked.push({ stem, relativePath, diagnostics: parsed.diagnostics });
       continue;
     }
-    const resolved = await resolvePromptFiles(config, parsed.definition, parsed.promptFileLocations, relativePath);
+    const resolved = await resolvePromptFiles(config, parsed.definition, parsed.promptFileLocations, relativePath, effectiveActivePrompts);
     if (!resolved.ok) {
       checked.push({ stem, relativePath, diagnostics: resolved.diagnostics });
       continue;
@@ -423,6 +549,7 @@ async function resolvePromptFiles(
   definition: WorkflowDefinition,
   locations: Record<string, { line: number; column: number }>,
   workflowFile: string,
+  activePromptsNamespaces: readonly string[] | null = null,
 ): Promise<
   | { ok: true; definition: WorkflowDefinition; sources: Array<{ path: string; content: string }> }
   | { ok: false; diagnostics: WorkflowDiagnostic[] }
@@ -439,8 +566,45 @@ async function resolvePromptFiles(
         continue;
       }
       if (!step.promptFile) continue;
-      const target = path.resolve(root, step.promptFile);
+
+      let promptPath = step.promptFile;
       const location = locations[field] ?? { line: 1, column: 1 };
+
+      const promptRelative = promptPath.replace(/^[\\/]/, '');
+      if (promptRelative.startsWith('prompts/') && activePromptsNamespaces && activePromptsNamespaces.length > 0) {
+        const leaf = promptRelative.slice('prompts/'.length);
+        // Namespace lookup works for any leaf depth — a nested path like
+        // prompts/topic/note.md resolves to prompts/<ns>/topic/note.md
+        // just as a flat prompts/note.md resolves to prompts/<ns>/note.md.
+        //
+        // A leaf whose first segment is already an active namespace is explicit
+        // and resolved as written: prepending another namespace would look up
+        // prompts/<other>/ops/note.md and load that file instead.
+        const lead = leaf.split('/')[0];
+        const alreadyNamespaced = lead !== undefined && activePromptsNamespaces.includes(lead);
+        const found = alreadyNamespaced ? [] : (await Promise.all(
+          activePromptsNamespaces.map(async (ns) => {
+            const candidate = path.join(root, 'prompts', ns, ...leaf.split('/'));
+            return (await pathExists(candidate)) ? `prompts/${ns}/${leaf}` : null;
+          }),
+        )).filter((p): p is string => p !== null);
+
+        if (found.length === 1) {
+          promptPath = found[0];
+        } else if (found.length > 1) {
+          diagnostics.push({
+            file: workflowFile,
+            line: location.line,
+            column: location.column,
+            field: `${field}.prompt_file`,
+            code: 'prompt_namespace_conflict',
+            message: `prompt_file "${step.promptFile}" is ambiguous between active namespaces (${found.join(', ')}); fix the conflict or specify the prompt path explicitly`,
+          });
+          continue;
+        }
+      }
+
+      const target = path.resolve(root, promptPath);
       let prompt: string | null = null;
       try {
         assertWithinRoot(path.join(root, 'prompts'), target);
@@ -460,7 +624,7 @@ async function resolvePromptFiles(
         continue;
       }
       diagnostics.push(...promptFileDiagnostics(workflowFile, definition, [...trail, index], prompt, location));
-      sources.push({ path: step.promptFile, content: prompt });
+      sources.push({ path: promptPath, content: prompt });
       steps[index] = { ...step, prompt };
     }
     return steps;

@@ -95,7 +95,18 @@ import {
 // A timed-out report still owns its success bookkeeping. Do not start another
 // batch in this process until it settles and finishes consuming its events.
 let pendingUsageReport: Promise<void> | undefined;
+// That report together with the release of the sync locks it holds.
+let lateUsageReport: Promise<void> | undefined;
 const FILE_NOT_FOUND_ERROR_CODE = 'ENOENT';
+
+/**
+ * Resolves once a usage report that pull() stopped waiting for has finished
+ * and released its sync locks. A process that exits right after pull(), such
+ * as the hook dispatcher, awaits this first, or its exit cuts the push (#1322).
+ */
+export async function settleLateUsageReport(): Promise<void> {
+  await lateUsageReport;
+}
 
 /**
  * When the team clone was last fetched, beside the clone (as a source cache's
@@ -359,7 +370,7 @@ export async function cleanupInactiveNamespaceSkills(
       const swept = (name: string): boolean => !retainedSkillNames.has(name) && inactiveSkillNames.has(name);
       for (const name of await sweepSharedSkillCopies(localConfig, swept, ledger, installScopeName(localConfig.scope))) removed.add(name);
     }
-    if (!await pathExists(skillsDir)) continue;
+    if (!await pathExists(skillsDir) || !(await stat(skillsDir)).isDirectory()) continue;
 
     const localSkillNames = await listDirs(skillsDir);
     for (const skillName of localSkillNames) {
@@ -2181,7 +2192,7 @@ async function pullForScope(
           if (rootRepoSkillNames?.has(name)) rootSkillUndelivered = true;
         }
       }
-      if (!await pathExists(skillsDir)) continue;
+      if (!await pathExists(skillsDir) || !(await stat(skillsDir)).isDirectory()) continue;
 
       const localDirs = await listDirs(skillsDir);
       for (const dir of localDirs) {
@@ -3406,7 +3417,7 @@ export async function pull(
     // Keep its partition locks until completion so another CLI cannot re-report
     // the same data while this pull is no longer waiting.
     if (usageReport && usageReport === pendingUsageReport) {
-      void usageReport.then(releaseSyncLocks, releaseSyncLocks).catch((e) => {
+      lateUsageReport = usageReport.then(releaseSyncLocks, releaseSyncLocks).catch((e) => {
         log.error(`Could not release report sync locks: ${(e as Error).message}`);
       });
     } else {

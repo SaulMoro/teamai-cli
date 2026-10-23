@@ -947,6 +947,13 @@ export const PendingPushItemSchema = z.object({
    */
   placed: z.boolean().optional(),
   /**
+   * For a placement, the path the author still edits — the shared-root form
+   * `relativePath` was derived from, e.g. "docs/guide.md" for a destination of
+   * "docs/ops/guide.md". A self-mode scan compares that file against its placed
+   * counterpart once the record lands (`state.placements`).
+   */
+  sourcePath: z.string().optional(),
+  /**
    * Git blob id of the file this push wrote at `relativePath`, for a placed
    * item. Landing is proven by that blob appearing in the default branch's
    * history for the path after the entry's `base` — not by the path merely
@@ -999,6 +1006,10 @@ const RecordedAgentModelSchema = z.object({
 export type RecordedAgentModel = z.infer<typeof RecordedAgentModelSchema>;
 /** `RecordedAgentModel` by agent stem, then tool. */
 export type AgentModelRecords = Record<string, Record<string, RecordedAgentModel>>;
+
+/** A repo-backed placement that landed: the placed path and the blob push delivered there. */
+const PlacementRecordSchema = z.object({ path: z.string(), blob: z.string() });
+export type PlacementRecord = z.infer<typeof PlacementRecordSchema>;
 
 export const StateSchema = z.object({
   lastPush: z.string().nullable().default(null),
@@ -1117,6 +1128,26 @@ export const StateSchema = z.object({
    */
   placedAgents: z.record(z.string(), z.string()).optional(),
   /**
+   * Where push placed a repo-backed resource (docs, wiki, prompts, workflows,
+   * scorers, models, env, hooks, claudemd, learnings) that the author still edits at
+   * its shared-root path, keyed `<type>:<path the author edits>`, e.g.
+   * `{ "docs:docs/guide.md": { "path": "docs/ops/guide.md", "blob": "<git blob id>" } }`.
+   * `blob` is what that push delivered. A self-mode scan compares the author's
+   * copy with it, not with the placed file: equal means already delivered,
+   * whatever the team did to the placed file since, and different is the
+   * author's edit. Recorded only after the placement landed, in
+   * `reconcilePlacementRecords`, on the same blob-in-history proof as
+   * `placedRules`, so a PR closed unmerged leaves no record behind. An entry
+   * holding only the path, as earlier builds wrote, is dropped: without the
+   * blob nothing tells an unchanged copy from an edit.
+   */
+  placements: z.record(z.string(), z.unknown())
+    .transform((records) => Object.fromEntries(Object.entries(records).flatMap(([key, record]) => {
+      const parsed = PlacementRecordSchema.safeParse(record);
+      return parsed.success ? [[key, parsed.data] as const] : [];
+    })))
+    .optional(),
+  /**
    * Default-branch commit the placement records were last checked against. A
    * record whose file was deleted after it is dropped even if something is at
    * that path again: whatever is there now is somebody else's.
@@ -1184,9 +1215,21 @@ export interface TagsConfig {
   rules: Record<string, string[]>;
 }
 
-// ─── Resource types ─────────────────────────────────────
-
-export type ResourceType = 'skills' | 'rules' | 'docs' | 'env' | 'agents' | 'hooks' | 'mcp';
+export type ResourceType =
+  | 'skills'
+  | 'rules'
+  | 'docs'
+  | 'env'
+  | 'agents'
+  | 'hooks'
+  | 'mcp'
+  | 'models'
+  | 'claudemd'
+  | 'learnings'
+  | 'wiki'
+  | 'workflows'
+  | 'prompts'
+  | 'scorers';
 
 export type ResourceItemStatus = 'new' | 'modified';
 
@@ -1199,6 +1242,8 @@ export interface ResourceItem {
   namespace?: string;
   /** A kept skill with a recorded origin: `--role`/`--project` never relocate it (#1020). */
   fromInactiveNamespace?: true;
+  /** When placed into a namespace, the original relative path superseded by this item. */
+  supersedes?: string;
 }
 
 export interface ResourceDiff {
@@ -1537,7 +1582,22 @@ export function getUpdateLockPath(): string {
   return path.join(getTeamaiHomeDir(), '.update-lock');
 }
 
-export const RESOURCE_TYPES: ResourceType[] = ['skills', 'rules', 'docs', 'env', 'agents', 'hooks', 'mcp'];
+export const RESOURCE_TYPES: ResourceType[] = [
+  'skills',
+  'rules',
+  'docs',
+  'env',
+  'agents',
+  'hooks',
+  'mcp',
+  'models',
+  'claudemd',
+  'learnings',
+  'wiki',
+  'workflows',
+  'prompts',
+  'scorers',
+];
 
 export const TEAMAI_RULES_START = '<!-- [teamai:rules:start] -->';
 export const TEAMAI_RULES_END = '<!-- [teamai:rules:end] -->';
