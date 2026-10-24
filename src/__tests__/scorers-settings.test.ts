@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { LocalConfig } from '../types.js';
+import { LocalConfigSchema, type LocalConfig } from '../types.js';
 import { scopeScoring } from '../scorers/settings.js';
 
 const dirs: string[] = [];
@@ -90,6 +90,27 @@ describe('scopeScoring batch', () => {
   it('ignores a batch that is not true or false, with a problem', async () => {
     expect(await scopeScoring(teamRepo({ 'scorers/scoring.yaml': 'batch: yes please\n' }))).toMatchObject({
       ok: true, batch: undefined, problems: ['scorers/scoring.yaml: batch is "yes please", not true or false, so it is ignored'],
+    });
+  });
+});
+
+describe('scopeScoring sessions', () => {
+  /** `config.yaml` `scoring`, read as teamai reads the file. */
+  const member = (scoring: Record<string, unknown>): Partial<LocalConfig> => ({ scoring: LocalConfigSchema.shape.scoring.parse(scoring) });
+
+  it.each([
+    ['sessions: true takes the built-in daily limit', { sessions: true }, { enabled: true, dailyLimit: 10 }],
+    ['daily_limit sets how many sessions a day may lease', { sessions: true, daily_limit: 3 }, { enabled: true, dailyLimit: 3 }],
+    ['daily_limit: 0 turns session scoring off', { sessions: true, daily_limit: 0 }, { enabled: false, reason: 'config.yaml scoring.daily_limit is 0' }],
+  ])('%s', async (_, scoring, sessions) => {
+    expect(await scopeScoring(teamRepo({}, member(scoring)))).toMatchObject({ ok: true, problems: [], sessions });
+  });
+
+  it('reports a daily_limit that is not a whole number of 0 or more, and keeps the built-in one', async () => {
+    expect(await scopeScoring(teamRepo({}, member({ sessions: true, daily_limit: -2 })))).toMatchObject({
+      ok: true,
+      problems: ['config.yaml scoring.daily_limit is -2, not a whole number of 0 or more, so 10 applies'],
+      sessions: { enabled: true, dailyLimit: 10 },
     });
   });
 });

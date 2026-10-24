@@ -902,6 +902,8 @@ export const LocalConfigSchema = z.object({
     isolation: z.string().optional().catch(({ input }) => JSON.stringify(input)),
     /** Judge this scope's finished agent sessions in the background. A value that is not true or false is kept as its text, which turns nothing on. */
     sessions: z.union([z.boolean(), z.string()]).optional().catch(({ input }) => JSON.stringify(input)),
+    /** How many sessions a local day may lease for judging; 0 turns session scoring off. Another value is kept as its text, which sets nothing. */
+    daily_limit: z.union([z.number().int().nonnegative(), z.string()]).optional().catch(({ input }) => JSON.stringify(input)),
   }).optional(),
 });
 

@@ -69,34 +69,41 @@ const leaseOf = (envelope: WorkflowEnvelope) => LeaseSchema.parse(data(envelope)
 
 const line = (record: unknown): string => `${JSON.stringify(record)}\n`;
 
-/** A user scope that turns session scoring on, with `scorerText` cached and one Claude session captured `idleFor` ago. */
-async function fixture({ scorerText = SESSION_SCORER, sessions = true, idleFor = 7 * HOUR }: { scorerText?: string; sessions?: boolean; idleFor?: number } = {}): Promise<LocalConfig> {
+/** A Claude session `sessionId` in `<root>/app`, captured in `config`'s data home, with nothing happening in it for `idleFor`. */
+function plantSession(sessionId: string, idleFor = 7 * HOUR): void {
+  const cwd = path.join(root, 'app');
+  const project = path.join(mocks.home, '.claude', 'projects', encodeCwdClaude(cwd));
+  fs.mkdirSync(project, { recursive: true });
+  const file = path.join(project, `${sessionId}.jsonl`);
+  fs.writeFileSync(file,
+    line({ type: 'user', uuid: 'u1', parentUuid: null, cwd, sessionId, timestamp: '2026-10-20T10:00:00.000Z', message: { role: 'user', content: 'Add retries to the client' } })
+    + line({ type: 'assistant', uuid: 'u2', parentUuid: 'u1', cwd, sessionId, timestamp: '2026-10-20T10:00:01.000Z',
+      message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text: 'Added the retries.' }] } }));
+  const idleSince = new Date(Date.parse(NOW) - idleFor);
+  fs.utimesSync(file, idleSince, idleSince);
+
+  const captures = path.join(root, 'data', 'sessions', 'captures', 'claude-code', sessionId);
+  fs.mkdirSync(captures, { recursive: true });
+  const captureId = `0b6f2a52-5d7e-4c7e-9a43-${sessionId.slice(-12)}`;
+  fs.writeFileSync(path.join(captures, `${captureId}.json`), JSON.stringify({ captureId, platform: 'claude-code', sessionId,
+    capturedAt: '2026-10-20T10:00:00.000Z', agent: { v: 1, tool: { name: 'claude' }, teamai: '1.0.0', driver: 'session' }, sessionFile: file }));
+}
+
+/** A user scope with `scoring` in its `config.yaml`, `scorerText` cached, and session `SESSION` captured `idleFor` ago. */
+async function fixture({ scorerText = SESSION_SCORER, scoring = { sessions: true }, idleFor = 7 * HOUR }: {
+  scorerText?: string;
+  scoring?: LocalConfig['scoring'];
+  idleFor?: number;
+} = {}): Promise<LocalConfig> {
   const knowledge = path.join(root, 'knowledge');
   fs.mkdirSync(path.join(knowledge, 'scorers'), { recursive: true });
   fs.writeFileSync(path.join(knowledge, 'scorers', 'quality.md'), scorerText);
   const config: LocalConfig = {
     repo: { localPath: knowledge, remote: 'local', kind: 'self' },
-    username: 'tester', scope: 'user', additionalRoles: [], dataHome: path.join(root, 'data'),
-    ...(sessions ? { scoring: { sessions: true } } : {}),
+    username: 'tester', scope: 'user', additionalRoles: [], dataHome: path.join(root, 'data'), scoring,
   };
   await syncScorerDefinitions(config);
-
-  const cwd = path.join(root, 'app');
-  const project = path.join(mocks.home, '.claude', 'projects', encodeCwdClaude(cwd));
-  fs.mkdirSync(project, { recursive: true });
-  const file = path.join(project, `${SESSION}.jsonl`);
-  fs.writeFileSync(file,
-    line({ type: 'user', uuid: 'u1', parentUuid: null, cwd, sessionId: SESSION, timestamp: '2026-10-20T10:00:00.000Z', message: { role: 'user', content: 'Add retries to the client' } })
-    + line({ type: 'assistant', uuid: 'u2', parentUuid: 'u1', cwd, sessionId: SESSION, timestamp: '2026-10-20T10:00:01.000Z',
-      message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text: 'Added the retries.' }] } }));
-  const idleSince = new Date(Date.parse(NOW) - idleFor);
-  fs.utimesSync(file, idleSince, idleSince);
-
-  const captures = path.join(root, 'data', 'sessions', 'captures', 'claude-code', SESSION);
-  fs.mkdirSync(captures, { recursive: true });
-  const captureId = '0b6f2a52-5d7e-4c7e-9a43-6a3c1d0e2f01';
-  fs.writeFileSync(path.join(captures, `${captureId}.json`), JSON.stringify({ captureId, platform: 'claude-code', sessionId: SESSION,
-    capturedAt: '2026-10-20T10:00:00.000Z', agent: { v: 1, tool: { name: 'claude' }, teamai: '1.0.0', driver: 'session' }, sessionFile: file }));
+  plantSession(SESSION, idleFor);
   return config;
 }
 
@@ -138,7 +145,7 @@ describe('a finished session as judge work', () => {
   });
 
   it.each([
-    ['config.yaml does not set scoring.sessions', { sessions: false }],
+    ['config.yaml does not set scoring.sessions', { scoring: {} }],
     ['no scorer sets sessions: true', { scorerText: scorer('samplingRate: 100\n') }],
     ['the scorer samples no session', { scorerText: scorer('samplingRate: 0\nsessions: true\n') }],
     ['something happened in the session within six hours', { idleFor: 5 * HOUR }],
@@ -199,5 +206,18 @@ describe('a finished session as judge work', () => {
 
     expect(data(await nextJudgeLease(config, request(), NOW))).toMatchObject({ ...IDLE, closed: [{ code: 'evidence_empty' }] });
     expect(data(await nextJudgeLease(config, request(), at(HOUR)))).toEqual(IDLE);
+  });
+
+  it('stops leasing for the local day once the daily limit is reached, counting a session that could not be read', async () => {
+    const config = await fixture({ scoring: { sessions: true, daily_limit: 1 } });
+    const OTHER = '7c1e0000-0000-4000-8000-000000000003';
+    plantSession(OTHER, 8 * HOUR);
+    fs.writeFileSync(path.join(mocks.home, '.claude', 'projects', encodeCwdClaude(path.join(root, 'app')), `${OTHER}.jsonl`), '');
+    const idleSince = new Date(Date.parse(NOW) - 8 * HOUR);
+    fs.utimesSync(path.join(mocks.home, '.claude', 'projects', encodeCwdClaude(path.join(root, 'app')), `${OTHER}.jsonl`), idleSince, idleSince);
+
+    expect(data(await nextJudgeLease(config, request(), NOW))).toEqual({ ...IDLE, closed: [{ ref: expect.any(String), code: 'evidence_empty' }] });
+    expect(data(await nextJudgeLease(config, request(), at(HOUR)))).toEqual(IDLE);
+    expect(leaseOf(await nextJudgeLease(config, request(), at(24 * HOUR)))).toMatchObject({ subject: { sessionId: SESSION } });
   });
 });

@@ -437,13 +437,15 @@ async function takeOneLease(config: LocalConfig, request: JudgeRequest, now: str
   for (const problem of scoring.problems) log.warn(`${problem}.`);
   const skipped: SkippedEntry[] = [];
   const released = new Set<string>();
+  // Whether the day's session launches are spent: then no session is open, until the next local day.
+  let limited = sessions.length > 0 && SessionWork.launchesToday([...(await AttemptStore.read(config)).values()].flat(), now) >= dailyLimit;
   // A session is judged once: a release under this lock closes it rather than opening it again.
   const isOpen = (entry: ScoreEntry): boolean => {
     switch (entry.source) {
       case 'workflow':
         return entry.state.kind === 'open' || released.has(entry.id);
       case 'session':
-        return entry.state.kind === 'open';
+        return entry.state.kind === 'open' && !limited;
       default: {
         const unhandled: never = entry;
         return unhandled;
@@ -454,8 +456,7 @@ async function takeOneLease(config: LocalConfig, request: JudgeRequest, now: str
   const judges = (entry: ScoreEntry) => leasable(entry) && chooseJudgeModel(aliases, entry.definition, request.judge.tools).ok;
   const running = new Set(request.running.flatMap((ref) => parseLeaseRef(ref)?.attempt ?? []));
   // A session is read before the lock, which a slow read must not hold: the first one this lock would lease.
-  const next = sessions.length === 0 || runs.some(judges) || SessionWork.launchesToday([...(await AttemptStore.read(config)).values()].flat(), now) >= dailyLimit
-    ? undefined : sessions.find(judges);
+  const next = runs.some(judges) ? undefined : sessions.find(judges);
   const prepared = next && { entry: next, read: await SessionWork.read(config, next.subject) };
   const outcome = await AttemptStore.locked(config, async (): Promise<LockedLease> => {
     for (const entry of all) {
@@ -500,7 +501,10 @@ async function takeOneLease(config: LocalConfig, request: JudgeRequest, now: str
         skipped.push({ scorer: entry.scorer, subject: entry.subject, code: chosen.code, message: chosen.message });
         return undefined;
       }
-      if (SessionWork.launchesToday([...(await AttemptStore.read(config)).values()].flat(), now) >= dailyLimit) return { kind: 'none' };
+      if (SessionWork.launchesToday([...(await AttemptStore.read(config)).values()].flat(), now) >= dailyLimit) {
+        limited = true;
+        return { kind: 'none' };
+      }
       if (prepared?.entry.id !== entry.id) return { kind: 'raced' };
       const mates: Array<{ entry: SessionEntry; choice: JudgeChoice }> = [];
       for (const other of entry.batch ? sessions : []) {

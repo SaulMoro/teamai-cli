@@ -82,12 +82,18 @@ export type ScopeScoring =
   | { ok: true; batch: boolean | undefined; isolation: IsolationSetting[]; sessions: SessionScoring; problems: string[] }
   | { ok: false; reason: string };
 
-/** `config.yaml` `scoring.sessions`: a value that is not true or false is reported and turns nothing on. */
+/**
+ * `config.yaml` `scoring.sessions` and `scoring.daily_limit`: a value that is not true or false, or not a whole number of
+ * 0 or more, is reported and sets nothing. A limit of 0 turns session scoring off.
+ */
 function sessionScoring(config: LocalConfig, problems: string[]): SessionScoring {
   const member = config.scoring?.sessions;
+  const limit = config.scoring?.daily_limit;
   if (typeof member === 'string') problems.push(`config.yaml scoring.sessions is "${member}", not true or false, so it is ignored`);
-  if (member === true) return { enabled: true, dailyLimit: SESSION_DAILY_LIMIT };
-  return { enabled: false, reason: member === false ? 'config.yaml scoring.sessions is false' : 'nothing sets scoring.sessions: true in config.yaml' };
+  if (typeof limit === 'string') problems.push(`config.yaml scoring.daily_limit is ${limit}, not a whole number of 0 or more, so ${SESSION_DAILY_LIMIT} applies`);
+  if (member !== true) return { enabled: false, reason: member === false ? 'config.yaml scoring.sessions is false' : 'nothing sets scoring.sessions: true in config.yaml' };
+  const dailyLimit = typeof limit === 'number' ? limit : SESSION_DAILY_LIMIT;
+  return dailyLimit === 0 ? { enabled: false, reason: 'config.yaml scoring.daily_limit is 0' } : { enabled: true, dailyLimit };
 }
 
 function failed(cause: string): ScopeScoring {
