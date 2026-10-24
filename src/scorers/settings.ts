@@ -20,6 +20,14 @@ import { listDirs, pathExists } from '../utils/fs.js';
 import { SCORING_FILE, scorerNamespaces } from './cache.js';
 import { machineIsolation, type IsolationSetting } from './isolation.js';
 
+/** Every key a `scoring.yaml` may set: the parser handles each one, and the problem for any other key lists them. */
+const SCORING_KEYS = ['batch', 'isolation'] as const;
+type ScoringKey = (typeof SCORING_KEYS)[number];
+
+function isScoringKey(key: string): key is ScoringKey {
+  return SCORING_KEYS.some((known) => known === key);
+}
+
 /** What one `scoring.yaml` sets, or why it cannot be read; every message names the file. */
 export type ScoringFileRead =
   | { ok: true; batch?: boolean; isolation?: string; problems: string[] }
@@ -39,10 +47,23 @@ export function parseScoringFile(relativePath: string, text: string): ScoringFil
   }
   const read: ScoringFileRead & { ok: true } = { ok: true, problems: [] };
   for (const [key, value] of Object.entries(document)) {
-    if (key === 'batch' && typeof value === 'boolean') read.batch = value;
-    else if (key === 'batch') read.problems.push(`${relativePath}: batch is ${JSON.stringify(value)}, not true or false, so it is ignored`);
-    else if (key === 'isolation') read.isolation = typeof value === 'string' ? value : JSON.stringify(value);
-    else read.problems.push(`${relativePath}: "${key}" is not a scoring setting (batch, isolation), so it is ignored`);
+    if (!isScoringKey(key)) {
+      read.problems.push(`${relativePath}: "${key}" is not a scoring setting (${SCORING_KEYS.join(', ')}), so it is ignored`);
+      continue;
+    }
+    switch (key) {
+      case 'batch':
+        if (typeof value === 'boolean') read.batch = value;
+        else read.problems.push(`${relativePath}: batch is ${JSON.stringify(value)}, not true or false, so it is ignored`);
+        break;
+      case 'isolation':
+        read.isolation = typeof value === 'string' ? value : JSON.stringify(value);
+        break;
+      default: {
+        const unhandled: never = key;
+        void unhandled;
+      }
+    }
   }
   return read;
 }
