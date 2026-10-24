@@ -26,6 +26,7 @@ import { LabelStore, reasoningPath, shareFailedLabelHint } from '../scorers/labe
 import { pinnedDefinition, type PinnedScorer } from '../scorers/pin.js';
 import { typedIn, usedSkills } from '../skill-use.js';
 import type { LocalConfig } from '../types.js';
+import { readWorkspaceChildren } from '../workspace-children.js';
 import { log } from '../utils/logger.js';
 import { collectEnvSecrets, redact } from '../utils/redact.js';
 import type { WorkflowEnvelope } from '../workflow/types.js';
@@ -117,11 +118,15 @@ function firstPrompt(session: Session): string {
   return flat.length > 200 ? `${flat.slice(0, 200)}…` : flat;
 }
 
-/** The config of the scope a session ran in, found from its directory as the hooks that captured it found it, else `config`. */
+/**
+ * The config of the scope a session ran in, found from its directory as the hooks that captured it found it, else
+ * `config`, with its workspace children, whose namespaces it receives too.
+ */
 async function scopeOf(config: LocalConfig, platform: string, session: Session): Promise<LocalConfig> {
   if (!session.cwd) return config;
   const { resolveHookConfig } = await import('../dashboard-collector.js');
-  return await resolveHookConfig({ cwd: session.cwd, session_id: session.sessionId }, AgentSession.toolForPlatform(platform)) ?? config;
+  const resolved = await resolveHookConfig({ cwd: session.cwd, session_id: session.sessionId }, AgentSession.toolForPlatform(platform));
+  return resolved ? readWorkspaceChildren(resolved) : config;
 }
 
 /**
