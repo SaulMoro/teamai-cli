@@ -157,6 +157,8 @@ The label is kept in the scope the session ran in, from whichever directory you 
 
 A member who sets `scoring.sessions: true` in `config.yaml` turns each session captured in that scope into judge work once nothing has happened in it for six hours, for every scorer with `sessions: true`, sampled by its `samplingRate`. `score --next` hands out workflow work first, then sessions. A session lease has `"source":"session"`, and its `cwd` is where to submit from.
 
+The team can set `sessions` and `daily_limit` in `scorers/scoring.yaml` or in an active namespace's `scoring.yaml`, which overrides the root file. When two active namespaces disagree, `sessions: false` and the lowest `daily_limit` win. A member's `config.yaml` overrides them all.
+
 A session is judged once per scorer and rubric. A release, a lapse, or a local judge that fails closes it. An answer to a lapsed lease is still recorded, unless a judge has labelled the session since. `scoring.daily_limit` in `config.yaml` sets how many sessions one data home leases per local day, 10 by default, counting those that failed or could not be read. `0` turns session scoring off. Editing a scorer's rubric makes the captured sessions judge work again for it, and the daily limit spreads that over the following days.
 
 ## Batching
