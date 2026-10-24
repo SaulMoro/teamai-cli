@@ -571,9 +571,23 @@ describe('teamai score --session', () => {
     fakeClaude('good', '2.0.0 (Claude Code)');
 
     expect(await scoreSession(workspace, { session: SESSION, source: 'claude-code', scorers: ['quality'] })).toEqual({
-      error: { code: 'judge_tool_unavailable', message: 'claude 2.0.0 (Claude Code) has no verified judge profile. Install a supported version or use another driver.' },
+      error: { code: 'judge_tool_unavailable', message: 'claude 2.0.0 (Claude Code) has no verified judge profile. Install a supported version or use another driver. scorers/checkout/scoring.yaml isolation asks for verified.' },
     });
     expect(fs.existsSync(path.join(workspace.dataHome ?? '', 'scores', 'labels.jsonl'))).toBe(false);
+  });
+
+  it('names the scorer file that asks for a verified judge when no tool here judges at verified', async () => {
+    const config = await fixture({});
+    fs.mkdirSync(path.join(config.repo.localPath, 'scorers', 'checkout'));
+    fs.writeFileSync(path.join(config.repo.localPath, 'scorers', 'checkout', 'quality.md'), SCORER.replace('samplingRate: 0', 'samplingRate: 0\nisolation: verified'));
+    await syncScorerDefinitions(config);
+    plantClaudeSession(path.join(root, 'app'), 'Add retries to the client');
+    fakeClaude('good', '2.0.0 (Claude Code)');
+
+    expect(await scoreSession(config, { session: SESSION, source: 'claude-code', scorers: ['quality'] })).toEqual({ error: {
+      code: 'judge_tool_unavailable',
+      message: 'claude 2.0.0 (Claude Code) has no verified judge profile. Install a supported version or use another driver. scorers/checkout/quality.md isolation asks for verified.',
+    } });
   });
 
   it('publishes from the scope the session ran in with push, also when it is scored from another one', async () => {

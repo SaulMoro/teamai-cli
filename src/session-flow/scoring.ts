@@ -209,8 +209,8 @@ export async function scoreSession(from: LocalConfig, demand: SessionDemand, now
           { title: 'transcripts/session.md', body },
         ], 'transcripts/session.md and evidence.json'));
       });
-      const isolation = requiredIsolation([...scoring.isolation, ...members.map(({ scorer, definition }) => ({ source: scorerIsolationSource(scorer), value: definition.isolation }))]).level;
-      const result = await runLocalJudge({ tool: choice.tool, model: choice.model, evidence, schema: answerSchema(rubrics), isolation });
+      const required = requiredIsolation([...scoring.isolation, ...members.map(({ scorer, pin, definition }) => ({ source: scorerIsolationSource(scorer, pin.relativePath), value: definition.isolation }))]);
+      const result = await runLocalJudge({ tool: choice.tool, model: choice.model, evidence, schema: answerSchema(rubrics), isolation: required.level });
       const verdicts = result.ok ? verdictsOf(members, (member) => member.definition, result.answer) : undefined;
       if (!result.ok || !verdicts?.ok) {
         const raw = result.ok ? JSON.stringify(result.answer) : result.raw;
@@ -223,7 +223,7 @@ export async function scoreSession(from: LocalConfig, demand: SessionDemand, now
         }
         return result.ok
           ? failure('judge_answer_invalid', `The judge's answer names no label of the scorer: ${verdicts && !verdicts.ok ? verdicts.message : ''} No label was written.${saved}`)
-          : failure(result.code, result.message + saved);
+          : failure(result.code, result.message + (result.code === 'judge_tool_unavailable' && required.level === 'verified' ? ` ${required.setBy.join(' and ')} asks for verified.` : '') + saved);
       }
       const labels = verdicts.verdicts.map(({ judged, label, passed, reasoning }) => {
         const model = observedModel({ ...result.judge.model, alias: judged.alias });
