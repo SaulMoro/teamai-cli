@@ -769,7 +769,7 @@ async function settleJudgeLease<T extends { kind: string }>(
       // A session is tried once: a lapsed lease still settles, unless a judge has labelled the session since.
       for (const { attempt, pin } of leased.members) {
         if (await SessionWork.isLabelled(config, { scorer: attempt.scorer, pin, subject: attempt.subject })) {
-          return error('lease_expired', `Judge lease ${ref} expired at ${attempt.expiresAt} and another judge has labelled this session since.`);
+          return error('lease_expired', `Judge lease ${ref} is not recorded: another judge has labelled this session since it was leased.`);
         }
       }
       return settle(leased);
@@ -848,8 +848,11 @@ function toSucceeded(attempt: LeasedAttempt, settled: { settledAt: string; usage
  * A success must name a label of each scorer it judges, else nothing is written and the lease stays open; TeamAI
  * computes the score and whether it passed. `local` is the local judge that ran, at the isolation it measured. A driver's
  * own judge has the access its lease declared, and ran the model and effort the lease named, as the driver reports it.
+ * With `publish: false` the labels stay pending, for the next pull to publish.
  */
-async function labelJudgeLease(config: LocalConfig, ref: string, submission: Extract<JudgeSubmission, { outcome: 'success' }>, now: string, local?: LocalRun): Promise<SettledLease> {
+async function labelJudgeLease(
+  config: LocalConfig, ref: string, submission: Extract<JudgeSubmission, { outcome: 'success' }>, now: string, { local, publish = true }: { local?: LocalRun; publish?: boolean } = {},
+): Promise<SettledLease> {
   const result = await settleJudgeLease(config, ref, submission.driver, now, async (lease): Promise<Labelled | Refusal> => {
     switch (lease.source) {
       case 'workflow':
@@ -868,7 +871,8 @@ async function labelJudgeLease(config: LocalConfig, ref: string, submission: Ext
       }
     }
   });
-  return 'error' in result ? result : publishLabels(config, result);
+  if ('error' in result) return result;
+  return publish ? publishLabels(config, result) : { ...result, published: false };
 }
 
 async function labelMembers<T extends LeasedAttempt>({ config, submission, now, local, members, labelOf }: {
@@ -989,24 +993,64 @@ async function recordSpend(config: LocalConfig, head: AttemptRecord, usage: Judg
   if (recorded.status === 'busy') log.warn(`[scores] The judge attempts are locked by another process, so the spend of this judge call is not counted: ${JSON.stringify(usage)}.`);
 }
 
+/** How often, and how far apart, a session lease's write is tried while another process holds the attempts lock. */
+const SESSION_WRITE_TRIES = 20;
+const SESSION_WRITE_WAIT_MS = 250;
+
+/** `write` tried again while it answers busy, so a session judge that ran is neither lost nor paid for twice. */
+async function untilNotBusy<T>(write: () => Promise<T>, busy: (written: T) => boolean): Promise<T> {
+  let written = await write();
+  for (let tries = 1; tries < SESSION_WRITE_TRIES && busy(written); tries++) {
+    await new Promise((resolve) => setTimeout(resolve, SESSION_WRITE_WAIT_MS));
+    written = await write();
+  }
+  return written;
+}
+
+/**
+ * Marks a session lease as judged here from `now` on, or refuses when it is settled or a local judge already started on
+ * it: a session is judged once, whoever runs `score --lease <ref>` on it again.
+ */
+async function claimSessionJudge(config: LocalConfig, members: JudgedMembers<SessionAttempt>, ref: string, now: string): Promise<Refusal | undefined> {
+  const claimed = await untilNotBusy(() => AttemptStore.locked(config, async (): Promise<Refusal | undefined> => {
+    const current: LeasedSessionAttempt[] = [];
+    for (const { attempt } of members) {
+      const record = await AttemptStore.get(config, attempt.entry, attempt.attempt);
+      if (record?.source !== 'session' || record.status !== 'leased') return error('lease_settled', `Judge lease ${ref} was already settled. Run score --next for more work.`);
+      if (record.judgingSince !== undefined) {
+        return error('lease_judging', `A local judge started on judge lease ${ref} at ${record.judgingSince}, and a session is judged once. Submit its answer, or run score --next for more work.`);
+      }
+      current.push(record);
+    }
+    for (const record of current) await AttemptStore.write(config, { ...record, judgingSince: now });
+    return undefined;
+  }), (outcome) => outcome.status === 'busy');
+  return claimed.status === 'busy' ? error('busy', 'The judge attempts are locked by another process. Run the lease again.') : claimed.value;
+}
+
 /**
  * Closes a session lease whose local judge failed, with what the judge spent on its first scorer: a session is tried once,
  * so a background driver does not pay for it again.
  */
 async function closeSessionLease(config: LocalConfig, members: JudgedMembers<SessionAttempt>, code: Exclude<JudgeFailureCode, 'evidence_empty'>, usage: JudgeUsage | undefined, now: string): Promise<void> {
-  const closed = await AttemptStore.locked(config, async () => {
+  const closed = await untilNotBusy(() => AttemptStore.locked(config, async () => {
     for (const { attempt } of members) {
       const current = await AttemptStore.get(config, attempt.entry, attempt.attempt);
       if (current?.status !== 'leased' || current.source !== 'session') continue;
       const spent = attempt === members[0].attempt ? sumUsage(current.usage, usage) : current.usage;
       await AttemptStore.write(config, { ...current, ...(spent ? { usage: spent } : {}), status: 'failed', code, settledAt: now });
     }
-  });
+  }), (outcome) => outcome.status === 'busy');
   if (closed.status === 'busy') log.warn('[scores] The judge attempts are locked by another process, so a failed session lease stays leased until it lapses.');
 }
 
-/** Runs the lease's judge with its local tool profile, then settles the lease through the same path as `--submit`. */
-export async function judgeLease(config: LocalConfig, ref: string, driver: JudgeDriver, now: string): Promise<SettledLease> {
+/**
+ * Runs the lease's judge with its local tool profile, then settles the lease through the same path as `--submit`, at the
+ * time `clock` gives once the judge returned. With `publish: false` its labels stay pending.
+ */
+export async function judgeLease(
+  config: LocalConfig, ref: string, driver: JudgeDriver, { clock = () => new Date().toISOString(), publish = true }: { clock?: () => string; publish?: boolean } = {},
+): Promise<SettledLease> {
   const key = parseLeaseRef(ref);
   const attempt = key && await AttemptStore.get(config, key.entry, key.attempt);
   if (!attempt) return error('lease_unknown', `Judge lease ${ref} is not on this machine. Run score --next in this scope.`);
@@ -1029,12 +1073,16 @@ export async function judgeLease(config: LocalConfig, ref: string, driver: Judge
   const scoring = await scopeScoring(config);
   if (!scoring.ok) return error('scoring_settings_invalid', scoring.reason);
   const isolation = requiredIsolation([...scoring.isolation, ...members.map(({ attempt: member, pin, definition }) => ({ source: scorerIsolationSource(member.scorer, pin.relativePath), value: definition.isolation }))]).level;
+  if (lease.source === 'session') {
+    const refused = await claimSessionJudge(config, lease.members, ref, clock());
+    if (refused) return refused;
+  }
   const result = await runLocalJudge({ tool: attempt.judge.tool, model: attempt.judge.model, evidence, schema: answerSchema(rubrics), isolation });
   const verdicts = result.ok ? verdictsOf(members, (member) => member.definition, result.answer) : undefined;
   if (!result.ok || !verdicts?.ok) {
     const spent = result.ok ? result.judge.usage : result.usage;
     if (lease.source === 'session') {
-      await closeSessionLease(config, lease.members, result.ok ? 'judge_answer_invalid' : result.code, spent, now);
+      await closeSessionLease(config, lease.members, result.ok ? 'judge_answer_invalid' : result.code, spent, clock());
       await fs.rm(evidence, { recursive: true, force: true, maxRetries: 3 });
     } else {
       await recordSpend(config, lease.members[0].attempt, spent);
@@ -1050,16 +1098,25 @@ export async function judgeLease(config: LocalConfig, ref: string, driver: Judge
     const closed = lease.source === 'session' ? ' The session lease closed, and the session is not judged again.' : '';
     return result.ok
       ? error('judge_answer_invalid', `The judge's answer does not fit the lease: ${verdicts && !verdicts.ok ? verdicts.message : ''}${closed || ' Retry or submit a valid answer.'}${saved}`)
-      : error(result.code, result.message + closed + saved);
+      : error(result.code, closed ? `The session lease closed, and the session is not judged again. The judge reported: ${result.message}${saved}` : result.message + saved);
   }
   const { access, model, effort, ...judge } = result.judge;
-  return labelJudgeLease(config, ref, { driver, outcome: 'success', answer: result.answer, judge }, now, { access, isolation: judge.isolation, model, effort });
+  const settledAt = clock();
+  const label = () => labelJudgeLease(config, ref, { driver, outcome: 'success', answer: result.answer, judge }, settledAt, { local: { access, isolation: judge.isolation, model, effort }, publish });
+  // A session judge's answer is kept through a busy lock: it is not judged again to recover it.
+  const labelled = lease.source === 'session' ? await untilNotBusy(label, (settled) => 'error' in settled && settled.error.code === 'busy') : await label();
+  // A session is judged once: a judge that ran below the isolation its scorers ask for closes the lease too.
+  if (lease.source === 'session' && 'error' in labelled && labelled.error.code === 'isolation_unmet') {
+    await closeSessionLease(config, lease.members, 'judge_failed', judge.usage, clock());
+    await fs.rm(evidence, { recursive: true, force: true, maxRetries: 3 });
+  }
+  return labelled;
 }
 
-export async function runJudgeLease(config: LocalConfig, ref: string, value: unknown, now = new Date().toISOString()): Promise<WorkflowEnvelope> {
+export async function runJudgeLease(config: LocalConfig, ref: string, value: unknown, clock?: () => string): Promise<WorkflowEnvelope> {
   const parsed = z.object({ driver: DriverSchema }).safeParse(value);
   if (!parsed.success) return error('invalid_json', issueText(parsed.error.issues));
-  return settledAnswer(config, ref, await judgeLease(config, ref, parsed.data.driver, now));
+  return settledAnswer(config, ref, await judgeLease(config, ref, parsed.data.driver, clock ? { clock } : {}));
 }
 
 /** What `teamai score --run <id> --step <path> [--pass <n>] --scorer <name>… [--queue] [--batch]` asks for. */
@@ -1137,7 +1194,7 @@ export async function scoreOnDemand(config: LocalConfig, demand: ScoreDemand, no
       const kept = labelled.map((attempt) => `${attempt.scorer}: ${attempt.verdict.label}`).join(', ');
       return { error: { code: 'judge_model_unavailable', message: `${message} Kept the label of ${kept}.`, labels: labelled.map((attempt) => labelAnswer(config, attempt)) } };
     }
-    const judged = await judgeLease(config, taken.lease.ref, driver, now);
+    const judged = await judgeLease(config, taken.lease.ref, driver);
     if ('error' in judged) return judged;
     labelled.push(...judged.attempts);
     published &&= judged.published;

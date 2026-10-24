@@ -76,7 +76,8 @@ const RunAttemptSchema = z.discriminatedUnion('status', [
 const SessionPart = { ...AttemptBase, source: z.literal('session'), subject: SessionSubjectSchema, session: SessionLabelContextSchema };
 
 const SessionAttemptSchema = z.union([
-  z.object({ ...SessionPart, status: z.literal('leased') }),
+  /** `judgingSince`: a local judge started on it then, so no other local judge starts; a session is judged once. */
+  z.object({ ...SessionPart, status: z.literal('leased'), judgingSince: z.string().optional() }),
   z.object({ ...SessionPart, ...Settled, status: z.literal('succeeded'), ...Verdict }),
   z.object({ ...SessionPart, ...Settled, status: z.literal('released') }),
   z.object({ ...SessionPart, ...Settled, status: z.literal('failed'), code: z.literal('evidence_empty'), session: SessionLabelContextSchema.optional() }),
