@@ -220,4 +220,48 @@ describe('a finished session as judge work', () => {
     expect(data(await nextJudgeLease(config, request(), at(HOUR)))).toEqual(IDLE);
     expect(leaseOf(await nextJudgeLease(config, request(), at(24 * HOUR)))).toMatchObject({ subject: { sessionId: SESSION } });
   });
+
+  describe('of a namespace scorer', () => {
+    const ROLES = 'version: 1\nroles:\n  - id: dev\n    resources: { knowledge: [], skills: [] }\n  - id: ops\n    resources: { knowledge: [], skills: [], scorers: [ops] }\n';
+
+    /** A member of role ops whose team keeps the session scorer in the ops namespace, with `SESSION` captured once per selection. */
+    async function namespaced(...selections: Array<Record<string, unknown> | undefined>): Promise<LocalConfig> {
+      const knowledge = path.join(root, 'knowledge');
+      fs.mkdirSync(path.join(knowledge, 'scorers', 'ops'), { recursive: true });
+      fs.mkdirSync(path.join(knowledge, 'manifest'), { recursive: true });
+      fs.writeFileSync(path.join(knowledge, 'manifest', 'roles.yaml'), ROLES);
+      fs.writeFileSync(path.join(knowledge, 'scorers', 'ops', 'quality.md'), SESSION_SCORER);
+      const config: LocalConfig = {
+        repo: { localPath: knowledge, remote: 'local', kind: 'self' },
+        username: 'tester', scope: 'user', primaryRole: 'ops', additionalRoles: [], dataHome: path.join(root, 'data'), scoring: { sessions: true },
+      };
+      await syncScorerDefinitions(config);
+      plantSession(SESSION);
+      const dir = path.join(root, 'data', 'sessions', 'captures', 'claude-code', SESSION);
+      const sessionFile = path.join(mocks.home, '.claude', 'projects', encodeCwdClaude(path.join(root, 'app')), `${SESSION}.jsonl`);
+      fs.rmSync(dir, { recursive: true });
+      fs.mkdirSync(dir);
+      for (const [index, selection] of selections.entries()) {
+        const captureId = `0b6f2a52-5d7e-4c7e-9a43-6a3c1d0e2f1${index}`;
+        const team = selection && { revision: 'a'.repeat(40), localChanges: false, selection: { scope: 'user', additionalRoles: [], ...selection } };
+        fs.writeFileSync(path.join(dir, `${captureId}.json`), JSON.stringify({ captureId, platform: 'claude-code', sessionId: SESSION, capturedAt: `2026-10-20T10:00:1${index}.000Z`,
+          agent: { v: 1, tool: { name: 'claude' }, ...(team ? { team } : {}), teamai: '1.0.0', driver: 'session' }, sessionFile }));
+      }
+      return config;
+    }
+
+    it('judges a session whose captures all had the namespace active', async () => {
+      const config = await namespaced({ primaryRole: 'ops' }, { primaryRole: 'ops' });
+      expect(leaseOf(await nextJudgeLease(config, request(), NOW))).toMatchObject({ scorer: 'quality', subject: { sessionId: SESSION } });
+    });
+
+    it.each([
+      ['a capture had another role', [{ primaryRole: 'ops' }, { primaryRole: 'dev' }]],
+      ['a capture records no selection', [{ primaryRole: 'ops' }, undefined]],
+      ['a capture saw other workspace children', [{ primaryRole: 'ops', children: 'f'.repeat(64) }]],
+    ])('leaves the session alone when %s', async (_, selections) => {
+      const config = await namespaced(...selections);
+      expect(data(await nextJudgeLease(config, request(), NOW))).toEqual(IDLE);
+    });
+  });
 });

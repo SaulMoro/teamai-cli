@@ -155,7 +155,7 @@ The label is kept in the scope the session ran in, from whichever directory you 
 
 ### Finished sessions
 
-A member who sets `scoring.sessions: true` in `config.yaml` turns each session captured in that scope into judge work once nothing has happened in it for six hours, for every scorer with `sessions: true`, sampled by its `samplingRate`. `score --next` hands out workflow work first, then sessions. A session lease has `"source":"session"`, and its `cwd` is where to submit from.
+A member who sets `scoring.sessions: true` in `config.yaml` turns each session captured in that scope into judge work once nothing has happened in it for six hours, for every scorer with `sessions: true`, sampled by its `samplingRate`. A namespace scorer judges a session only when the roles and projects each of its starts recorded make that namespace active. `score --next` hands out workflow work first, then sessions. A session lease has `"source":"session"`, and its `cwd` is where to submit from.
 
 The team can set `sessions` and `daily_limit` in `scorers/scoring.yaml` or in an active namespace's `scoring.yaml`, which overrides the root file. When two active namespaces disagree, `sessions: false` and the lowest `daily_limit` win. A member's `config.yaml` overrides them all.
 

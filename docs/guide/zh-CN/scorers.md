@@ -155,7 +155,7 @@ $ teamai score --session 7c1e… --source codex --scorer review-quality --push
 
 ### 已结束的会话
 
-成员在 `config.yaml` 中设置 `scoring.sessions: true` 后，该作用域捕获的每个会话在六小时内没有任何活动时，就成为评审工作，由每个设置了 `sessions: true` 的评分器按其 `samplingRate` 抽样评判。`score --next` 先分发工作流的评审工作，再分发会话。会话租约带有 `"source":"session"`，其 `cwd` 是提交答案时所在的目录。
+成员在 `config.yaml` 中设置 `scoring.sessions: true` 后，该作用域捕获的每个会话在六小时内没有任何活动时，就成为评审工作，由每个设置了 `sessions: true` 的评分器按其 `samplingRate` 抽样评判。命名空间中的评分器只在会话每次启动时记录的角色和项目都使该命名空间生效时，才评判该会话。`score --next` 先分发工作流的评审工作，再分发会话。会话租约带有 `"source":"session"`，其 `cwd` 是提交答案时所在的目录。
 
 团队可以在 `scorers/scoring.yaml` 或某个生效命名空间的 `scoring.yaml` 中设置 `sessions` 和 `daily_limit`，命名空间的设置覆盖根文件。两个生效命名空间不一致时，`sessions: false` 和最低的 `daily_limit` 生效。成员的 `config.yaml` 覆盖以上所有设置。
 

@@ -23,6 +23,7 @@ import { isSampled } from '../scorers/sampling.js';
 import type { ScopeScoring } from '../scorers/settings.js';
 import { typedIn, usedSkills } from '../skill-use.js';
 import { getDataHome, type LocalConfig } from '../types.js';
+import { readWorkspaceChildren } from '../workspace-children.js';
 import { collectEnvSecrets, redact } from '../utils/redact.js';
 import { AgentSession } from './agent-session.js';
 import type { SubagentsRead } from './adapters/base.js';
@@ -154,8 +155,16 @@ function sameSessionKey(label: ScoreLabel, scorer: string, sourceHash: string, s
     && label.subject.platform === subject.platform && label.subject.sessionId === subject.sessionId;
 }
 
-/** The scorers of this scope that judge sessions: cached ones that set `sessions: true`, outside a namespace or in a shared dir. */
-async function sessionScorers(config: LocalConfig): Promise<Array<{ scorer: string; pin: PinnedScorer; definition: ScorerDefinition }>> {
+/** A cached scorer that sets `sessions: true`; `namespace` is the scorers namespace it is in, none for the root or a shared dir. */
+interface SessionScorer {
+  scorer: string;
+  pin: PinnedScorer;
+  definition: ScorerDefinition;
+  namespace?: string;
+}
+
+/** The scorers of this scope that judge sessions. */
+async function sessionScorers(config: LocalConfig): Promise<SessionScorer[]> {
   const pins = await pinScorers(config, await cachedScorerNames(config));
   const scorers = Object.entries(pins).flatMap(([scorer, pin]) => {
     const definition = pinnedDefinition(scorer, pin);
@@ -163,7 +172,42 @@ async function sessionScorers(config: LocalConfig): Promise<Array<{ scorer: stri
     return definition?.sessions ? [{ scorer, pin, definition, dir: file === undefined ? undefined : dir }] : [];
   });
   const { shared } = await scorerNamespaces(config, [...new Set(scorers.flatMap(({ dir }) => dir ?? []))]);
-  return scorers.filter(({ dir }) => dir === undefined || shared.includes(dir));
+  return scorers.map(({ dir, ...scorer }) => (dir === undefined || shared.includes(dir) ? scorer : { ...scorer, namespace: dir }));
+}
+
+type CaptureSelection = NonNullable<NonNullable<SessionCapture['agent']['team']>['selection']>;
+
+/**
+ * `scope` as a capture's selection had it, so the namespaces it resolves are the ones the session was delivered. Its
+ * workspace children count only while the capture saw the same ones; else none is known, and undefined.
+ */
+function selectedAs(scope: LocalConfig, selection: CaptureSelection): LocalConfig | undefined {
+  const { children, roleUnresolved: _roleUnresolved, ...own } = scope;
+  if (selection.children !== children?.fingerprint) return undefined;
+  return {
+    ...own,
+    primaryRole: selection.primaryRole,
+    additionalRoles: selection.additionalRoles,
+    projects: selection.projects ?? [],
+    subscribedTags: selection.subscribedTags,
+    excludedSkills: selection.excludedSkills,
+    ...(children ? { children } : {}),
+  };
+}
+
+/**
+ * The scorers namespaces of `dirs` active for every capture of a session, each resolved as its selection had the scope.
+ * None when a capture records no selection: only root and shared scorers judge such a session.
+ */
+async function sessionNamespaces(scope: LocalConfig, captures: readonly SessionCapture[], dirs: readonly string[]): Promise<Set<string>> {
+  let active = new Set(dirs);
+  for (const capture of captures) {
+    const selection = capture.agent.team?.selection;
+    const selected = selection && selectedAs(scope, selection);
+    const resolved = selected ? (await scorerNamespaces(selected, dirs)).active : [];
+    active = new Set(resolved.filter((dir) => active.has(dir)));
+  }
+  return active;
 }
 
 /** The latest dashboard event of each session, by platform and session id. */
@@ -210,12 +254,20 @@ async function entries(config: LocalConfig, now: string, scoring: Extract<ScopeS
   finished.sort((left, right) => left.activeAt - right.activeAt);
   const [labels, attempts] = await Promise.all([LabelStore.local(config), AttemptStore.read(config)]);
   const batch = batchesScorers({ team: scoring.batch });
-  return finished.flatMap(({ captured: { platform, sessionId } }) => scorers.flatMap(({ scorer, pin, definition }): SessionEntry[] => {
+  const dirs = [...new Set(scorers.flatMap(({ namespace }) => namespace ?? []))];
+  const scope = dirs.length > 0 ? await readWorkspaceChildren(config) : config;
+  const sessions: Array<{ platform: string; sessionId: string; scorers: SessionScorer[] }> = [];
+  for (const { captured } of finished) {
+    const active = dirs.length > 0 ? await sessionNamespaces(scope, captured.captures, dirs) : new Set<string>();
+    sessions.push({ ...captured, scorers: scorers.filter(({ namespace }) => namespace === undefined || active.has(namespace)) });
+  }
+  return sessions.flatMap(({ platform, sessionId, scorers: applying }) => applying.flatMap(({ scorer, pin, definition }): SessionEntry[] => {
     const subject = { platform, sessionId };
     if (!isSampled(scorer, subject, definition.samplingRate)) return [];
     const id = sessionEntryIdOf(scorer, pin.sourceHash, subject);
     const state = sessionEntryState({ labels: labels.filter((label) => sameSessionKey(label, scorer, pin.sourceHash, subject)), attempts: attempts.get(id) ?? [], now });
-    return [{ source: 'session', id, scorer, pin, definition, subject, state, batch }];
+    // A tried or labelled key is never work again; leaving it out keeps the attempts lock's scan to open and live keys.
+    return state.kind === 'open' || state.kind === 'leased' ? [{ source: 'session', id, scorer, pin, definition, subject, state, batch }] : [];
   }));
 }
 
