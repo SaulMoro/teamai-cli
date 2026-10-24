@@ -428,7 +428,7 @@ async function takeOneLease(config: LocalConfig, request: JudgeRequest, now: str
   }
   const all = request.only === 'session' ? [] : await scoreEntries(config, now, scoring.batch);
   const runs = all.filter((entry) => !request.entries || request.entries.includes(entry.id));
-  const sessions = request.entries ? [] : await SessionWork.entries(config, now, scoring);
+  const { entries: sessions, captured } = request.entries ? { entries: [], captured: undefined } : await SessionWork.entries(config, now, scoring);
   const found: ScoreEntry[] = [...runs, ...sessions];
   const dailyLimit = scoring.sessions.enabled ? scoring.sessions.dailyLimit : 0;
   const aliases = await loadModelAliases(config);
@@ -463,6 +463,14 @@ async function takeOneLease(config: LocalConfig, request: JudgeRequest, now: str
       if (entry.requestedAt !== undefined && entry.state.kind !== 'open' && entry.state.kind !== 'leased') await AttemptStore.closeRequest(config, entry.id, entry.requestedAt);
     }
     await AttemptStore.sweep(config);
+    if (captured) {
+      const attempts = await AttemptStore.read(config);
+      for (const entry of SessionWork.gone(attempts, captured, now)) {
+        // Evidence first: an attempt is the only record that names it, and a crash in between leaves both to retry.
+        await sweepEvidence(scoresDir(config), new Set((attempts.get(entry) ?? []).map((attempt) => attempt.attempt)));
+        await AttemptStore.removeEntry(config, entry);
+      }
+    }
     // Re-read under the lock: another driver may have taken an entry since the unlocked read.
     const isFresh = async (entry: RunEntry) =>
       entryState({ labels: [], attempts: await AttemptStore.ofEntry(config, entry.id), subjectChangedAt: entry.run.updatedAt, requestedAt: entry.requestedAt, now }).kind === 'open';

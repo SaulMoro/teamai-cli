@@ -12,7 +12,7 @@ import { AttemptStore, type AttemptRecord } from '../scorers/attempts.js';
 import { batchesScorers } from '../scorers/batch.js';
 import { cachedScorerNames, pinScorers, scorerNamespaces } from '../scorers/cache.js';
 import type { ScorerDefinition } from '../scorers/definition.js';
-import { sessionEntryIdOf, sessionEntryState, type SessionEntryState } from '../scorers/entry.js';
+import { hasLapsed, sessionEntryIdOf, sessionEntryState, type SessionEntryState } from '../scorers/entry.js';
 import {
   fencedEvidence, isEvidenceReady, keepEnds, rubricPrompt, writeEvidence, EVIDENCE_MAX_CHARS, TOOL_CALL_MAX_CHARS, type EvidenceGap, type Rubrics,
 } from '../scorers/evidence.js';
@@ -217,7 +217,7 @@ async function lastEvents(): Promise<Map<string, string>> {
   for (const event of await readEvents()) {
     const platform = AgentSession.platformForTool(event.tool);
     if (!platform) continue;
-    const key = `${platform}\0${event.sessionId}`;
+    const key = sessionKey(platform, event.sessionId);
     if ((latest.get(key) ?? '') < event.timestamp) latest.set(key, event.timestamp);
   }
   return latest;
@@ -232,19 +232,32 @@ async function lastActiveAt(captured: CapturedSession, events: ReadonlyMap<strin
   const written = await Promise.all(files.map((file) => fs.stat(file).then((stat) => stat.mtimeMs, () => undefined)));
   const known = written.filter((at): at is number => at !== undefined);
   if (known.length < files.length) return undefined;
-  const event = events.get(`${captured.platform}\0${captured.sessionId}`);
+  const event = events.get(sessionKey(captured.platform, captured.sessionId));
   return Math.max(...known, ...(event ? [Date.parse(event)] : []), ...captured.captures.map((capture) => Date.parse(capture.capturedAt)));
+}
+
+const sessionKey = (platform: string, sessionId: string) => `${platform}\0${sessionId}`;
+
+/** Every session captured here by `platform\0sessionId`, while a session attempt is kept here to prune by it; else none. */
+async function prunableBy(config: LocalConfig): Promise<ReadonlySet<string> | undefined> {
+  const attempts = [...(await AttemptStore.read(config)).values()].flat();
+  if (!attempts.some((attempt) => attempt.source === 'session')) return undefined;
+  return new Set((await SessionCaptures.list(config)).map((one) => sessionKey(one.platform, one.sessionId)));
 }
 
 /**
  * The session entries of this scope, oldest activity first: each finished session captured here, for each scorer of
- * the scope that judges sessions and samples it. None while the scope does not turn session scoring on.
+ * the scope that judges sessions and samples it, and every session captured here by `platform\0sessionId`. None while
+ * the scope does not turn session scoring on or no scorer judges sessions; `captured` is then listed only while
+ * session attempts are kept, so they are pruned after the team or the member turned it off.
  */
-async function entries(config: LocalConfig, now: string, scoring: Extract<ScopeScoring, { ok: true }>): Promise<SessionEntry[]> {
-  if (!scoring.sessions.enabled) return [];
+async function entries(config: LocalConfig, now: string, scoring: Extract<ScopeScoring, { ok: true }>): Promise<{ entries: SessionEntry[]; captured?: ReadonlySet<string> }> {
+  if (!scoring.sessions.enabled) return { entries: [], captured: await prunableBy(config) };
   const scorers = await sessionScorers(config);
-  const captured = scorers.length > 0 ? await SessionCaptures.list(config) : [];
-  if (captured.length === 0) return [];
+  if (scorers.length === 0) return { entries: [], captured: await prunableBy(config) };
+  const captured = await SessionCaptures.list(config);
+  const keys = new Set(captured.map((one) => sessionKey(one.platform, one.sessionId)));
+  if (captured.length === 0) return { entries: [], captured: keys };
   const events = await lastEvents();
   const finished: Array<{ captured: CapturedSession; activeAt: number }> = [];
   for (const one of captured) {
@@ -261,7 +274,7 @@ async function entries(config: LocalConfig, now: string, scoring: Extract<ScopeS
     const active = dirs.length > 0 ? await sessionNamespaces(scope, captured.captures, dirs) : new Set<string>();
     sessions.push({ ...captured, scorers: scorers.filter(({ namespace }) => namespace === undefined || active.has(namespace)) });
   }
-  return sessions.flatMap(({ platform, sessionId, scorers: applying }) => applying.flatMap(({ scorer, pin, definition }): SessionEntry[] => {
+  const found = sessions.flatMap(({ platform, sessionId, scorers: applying }) => applying.flatMap(({ scorer, pin, definition }): SessionEntry[] => {
     const subject = { platform, sessionId };
     if (!isSampled(scorer, subject, definition.samplingRate)) return [];
     const id = sessionEntryIdOf(scorer, pin.sourceHash, subject);
@@ -269,6 +282,7 @@ async function entries(config: LocalConfig, now: string, scoring: Extract<ScopeS
     // A tried or labelled key is never work again; leaving it out keeps the attempts lock's scan to open and live keys.
     return state.kind === 'open' || state.kind === 'leased' ? [{ source: 'session', id, scorer, pin, definition, subject, state, batch }] : [];
   }));
+  return { entries: found, captured: keys };
 }
 
 /** Whether a judge has labelled this key with a model label on this machine since it was offered. */
@@ -276,11 +290,24 @@ async function isLabelled(config: LocalConfig, entry: Pick<SessionEntry, 'scorer
   return (await LabelStore.local(config)).some((label) => label.judge.kind === 'model' && sameSessionKey(label, entry.scorer, entry.pin.sourceHash, entry.subject));
 }
 
+const localDay = (at: string) => new Date(at).toDateString();
+
 /** The day's launches: distinct attempt ids of session attempts leased on `now`'s local date. A batch shares one id. */
 function launchesToday(attempts: Iterable<AttemptRecord>, now: string): number {
-  const day = (at: string) => new Date(at).toDateString();
-  const today = day(now);
-  return new Set([...attempts].filter((attempt) => attempt.source === 'session' && day(attempt.leasedAt) === today).map((attempt) => attempt.attempt)).size;
+  const today = localDay(now);
+  return new Set([...attempts].filter((attempt) => attempt.source === 'session' && localDay(attempt.leasedAt) === today).map((attempt) => attempt.attempt)).size;
+}
+
+/**
+ * The session entries whose attempts can go: every attempt is of a session no longer captured here, so it is never
+ * judge work again, and none was leased today, which it would count towards, or is still live.
+ */
+function gone(attempts: ReadonlyMap<string, readonly AttemptRecord[]>, captured: ReadonlySet<string>, now: string): string[] {
+  const today = localDay(now);
+  return [...attempts].filter(([, ofEntry]) => ofEntry.length > 0 && ofEntry.every((attempt) => attempt.source === 'session'
+    && !captured.has(sessionKey(attempt.subject.platform, attempt.subject.sessionId))
+    && localDay(attempt.leasedAt) !== today
+    && !(attempt.status === 'leased' && !hasLapsed(attempt, now)))).map(([entry]) => entry);
 }
 
 /**
@@ -313,4 +340,4 @@ function leaseCwd(config: LocalConfig): string {
   return config.scope === 'project' && config.projectRoot ? config.projectRoot : getDataHome(config);
 }
 
-export const SessionWork = { entries, isLabelled, launchesToday, read, ensureEvidence, leaseCwd } as const;
+export const SessionWork = { entries, isLabelled, launchesToday, gone, read, ensureEvidence, leaseCwd } as const;

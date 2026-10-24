@@ -228,6 +228,11 @@ export const AttemptStore = {
     await remove(path.join(scoresDir(config), 'raw'), /^(a[0-9a-f]{8})\.txt$/, latest);
   },
 
+  /** Removes every attempt of `entry`. Call under `locked`. */
+  async removeEntry(config: LocalConfig, entry: string): Promise<void> {
+    if (ENTRY_ID.test(entry)) await fs.rm(path.join(attemptsDir(config), entry), { recursive: true, force: true });
+  },
+
   /** Runs `change` under `scores/attempts.lock`; `change` re-reads what it decides on. */
   async locked<T>(config: LocalConfig, change: () => Promise<T>): Promise<{ status: 'done'; value: T } | { status: 'busy' }> {
     const lock = path.join(scoresDir(config), 'attempts.lock');

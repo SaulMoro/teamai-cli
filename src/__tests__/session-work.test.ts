@@ -33,7 +33,8 @@ Judge the session.
 const SESSION_SCORER = scorer('samplingRate: 100\nsessions: true\n');
 
 const SESSION = '7c1e0000-0000-4000-8000-000000000002';
-const NOW = '2026-10-25T12:00:00.000Z';
+// Local noon, so a few hours either side stay on the same local day in every time zone.
+const NOW = new Date(2026, 9, 25, 12).toISOString();
 const HOUR = 60 * 60 * 1000;
 const at = (ms: number) => new Date(Date.parse(NOW) + ms).toISOString();
 
@@ -248,6 +249,74 @@ describe('a finished session as judge work', () => {
     expect(data(await nextJudgeLease(config, request(), NOW))).toEqual({ ...IDLE, closed: [{ ref: expect.any(String), code: 'evidence_empty' }] });
     expect(data(await nextJudgeLease(config, request(), at(HOUR)))).toEqual(IDLE);
     expect(leaseOf(await nextJudgeLease(config, request(), at(24 * HOUR)))).toMatchObject({ subject: { sessionId: SESSION } });
+  });
+
+  it('stays closed after a lease its driver never settled lapses, and that launch still counts for the day', async () => {
+    const config = await fixture({ scoring: { sessions: true, daily_limit: 1 } });
+    const OTHER = '7c1e0000-0000-4000-8000-000000000003';
+    plantSession(OTHER, 8 * HOUR);
+    expect(leaseOf(await nextJudgeLease(config, request(), NOW))).toMatchObject({ subject: { sessionId: OTHER } });
+
+    expect(data(await nextJudgeLease(config, request(), at(HOUR)))).toEqual(IDLE);
+    expect(leaseOf(await nextJudgeLease(config, request(), at(24 * HOUR)))).toMatchObject({ subject: { sessionId: SESSION } });
+  });
+
+  it('counts a launch whose local judge failed towards the daily limit', async () => {
+    const config = await fixture({ scoring: { sessions: true, daily_limit: 1 } });
+    plantSession('7c1e0000-0000-4000-8000-000000000003', 8 * HOUR);
+    fakeClaude(undefined);
+    const lease = leaseOf(await nextJudgeLease(config, request(), NOW));
+    errorOf(await runJudgeLease(config, lease.ref, { driver }, () => NOW));
+
+    expect(data(await nextJudgeLease(config, request(), at(HOUR)))).toEqual(IDLE);
+  });
+
+  describe('attempts of a session whose captures are gone', () => {
+    async function released(): Promise<{ config: LocalConfig; ref: string }> {
+      const config = await fixture();
+      const lease = leaseOf(await nextJudgeLease(config, request(), NOW));
+      data(await submitJudgeLease(config, lease.ref, { driver, outcome: 'released' }, NOW));
+      return { config, ref: lease.ref };
+    }
+    const dropCaptures = () => fs.rmSync(path.join(root, 'data', 'sessions', 'captures', 'claude-code', SESSION), { recursive: true });
+
+    it('are removed on a later day', async () => {
+      const { config, ref } = await released();
+      dropCaptures();
+      data(await nextJudgeLease(config, request(), at(24 * HOUR)));
+      expect(await attemptOf(config, ref)).toBeUndefined();
+    });
+
+    it('are removed with the evidence of a lease that lapsed', async () => {
+      const config = await fixture();
+      const lease = leaseOf(await nextJudgeLease(config, request(), NOW));
+      dropCaptures();
+      data(await nextJudgeLease(config, request(), at(24 * HOUR)));
+      expect(await attemptOf(config, lease.ref)).toBeUndefined();
+      expect(fs.existsSync(String(lease.evidence))).toBe(false);
+    });
+
+    it('are removed after the team removed its last session scorer', async () => {
+      const { config, ref } = await released();
+      dropCaptures();
+      fs.rmSync(path.join(root, 'knowledge', 'scorers', 'quality.md'));
+      await syncScorerDefinitions(config);
+      data(await nextJudgeLease(config, request(), at(24 * HOUR)));
+      expect(await attemptOf(config, ref)).toBeUndefined();
+    });
+
+    it('are kept on the day they were leased, which they count towards', async () => {
+      const { config, ref } = await released();
+      dropCaptures();
+      data(await nextJudgeLease(config, request(), at(HOUR)));
+      expect(await attemptOf(config, ref)).toMatchObject({ status: 'released' });
+    });
+
+    it('are kept while the session is still captured', async () => {
+      const { config, ref } = await released();
+      data(await nextJudgeLease(config, request(), at(24 * HOUR)));
+      expect(await attemptOf(config, ref)).toMatchObject({ status: 'released' });
+    });
   });
 
   describe('of a namespace scorer', () => {
