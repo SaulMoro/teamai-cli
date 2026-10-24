@@ -1,0 +1,203 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
+
+const mocks = vi.hoisted(() => ({ home: '' }));
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>();
+  return { ...actual, homedir: () => mocks.home, default: { ...actual, homedir: () => mocks.home } };
+});
+
+import type { LocalConfig } from '../types.js';
+import { AttemptStore } from '../scorers/attempts.js';
+import { parseLeaseRef } from '../scorers/entry.js';
+import { parseScoreLabels } from '../scorers/label.js';
+import { syncScorerDefinitions } from '../scorers/cache.js';
+import { encodeCwdClaude } from '../session-flow/fs.js';
+import { scoreSession } from '../session-flow/scoring.js';
+import { AGENT_SESSION_ENV } from '../utils/session-id.js';
+import { nextJudgeLease, runJudgeLease, submitJudgeLease, type JudgeRequest } from '../workflow/scoring.js';
+import type { WorkflowEnvelope } from '../workflow/types.js';
+
+const scorer = (frontmatter: string) => `---
+labels:
+  - { value: good, score: 1, description: Did the work }
+  - { value: bad, score: 0, description: Did not }
+passingScore: 0.5
+${frontmatter}---
+Judge the session.
+`;
+const SESSION_SCORER = scorer('samplingRate: 100\nsessions: true\n');
+
+const SESSION = '7c1e0000-0000-4000-8000-000000000002';
+const NOW = '2026-10-25T12:00:00.000Z';
+const HOUR = 60 * 60 * 1000;
+const at = (ms: number) => new Date(Date.parse(NOW) + ms).toISOString();
+
+const driver = { kind: 't3', machine: 'm1', workspace: '/w' };
+const request = (overrides: Partial<JudgeRequest> = {}): JudgeRequest => ({ driver, judge: { isolation: 'verified', tools: ['claude'] }, running: [], ...overrides });
+
+let root = '';
+beforeEach(() => {
+  root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-session-work-')));
+  mocks.home = path.join(root, 'home');
+  fs.mkdirSync(path.join(mocks.home, '.claude', 'projects'), { recursive: true });
+  for (const name of AGENT_SESSION_ENV) vi.stubEnv(name, '');
+  vi.stubEnv('HOME', mocks.home);
+  vi.stubEnv('USERPROFILE', mocks.home);
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+function data(envelope: WorkflowEnvelope): Record<string, unknown> {
+  if ('error' in envelope) throw new Error(`${envelope.error.code}: ${envelope.error.message}`);
+  return envelope.data;
+}
+
+function errorOf(envelope: WorkflowEnvelope): { code: string; message: string } {
+  if (!('error' in envelope)) throw new Error(`expected an error, got ${JSON.stringify(envelope.data)}`);
+  return envelope.error;
+}
+
+const LeaseSchema = z.object({ ref: z.string() }).passthrough();
+const leaseOf = (envelope: WorkflowEnvelope) => LeaseSchema.parse(data(envelope).lease);
+
+const line = (record: unknown): string => `${JSON.stringify(record)}\n`;
+
+/** A user scope that turns session scoring on, with `scorerText` cached and one Claude session captured `idleFor` ago. */
+async function fixture({ scorerText = SESSION_SCORER, sessions = true, idleFor = 7 * HOUR }: { scorerText?: string; sessions?: boolean; idleFor?: number } = {}): Promise<LocalConfig> {
+  const knowledge = path.join(root, 'knowledge');
+  fs.mkdirSync(path.join(knowledge, 'scorers'), { recursive: true });
+  fs.writeFileSync(path.join(knowledge, 'scorers', 'quality.md'), scorerText);
+  const config: LocalConfig = {
+    repo: { localPath: knowledge, remote: 'local', kind: 'self' },
+    username: 'tester', scope: 'user', additionalRoles: [], dataHome: path.join(root, 'data'),
+    ...(sessions ? { scoring: { sessions: true } } : {}),
+  };
+  await syncScorerDefinitions(config);
+
+  const cwd = path.join(root, 'app');
+  const project = path.join(mocks.home, '.claude', 'projects', encodeCwdClaude(cwd));
+  fs.mkdirSync(project, { recursive: true });
+  const file = path.join(project, `${SESSION}.jsonl`);
+  fs.writeFileSync(file,
+    line({ type: 'user', uuid: 'u1', parentUuid: null, cwd, sessionId: SESSION, timestamp: '2026-10-20T10:00:00.000Z', message: { role: 'user', content: 'Add retries to the client' } })
+    + line({ type: 'assistant', uuid: 'u2', parentUuid: 'u1', cwd, sessionId: SESSION, timestamp: '2026-10-20T10:00:01.000Z',
+      message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text: 'Added the retries.' }] } }));
+  const idleSince = new Date(Date.parse(NOW) - idleFor);
+  fs.utimesSync(file, idleSince, idleSince);
+
+  const captures = path.join(root, 'data', 'sessions', 'captures', 'claude-code', SESSION);
+  fs.mkdirSync(captures, { recursive: true });
+  const captureId = '0b6f2a52-5d7e-4c7e-9a43-6a3c1d0e2f01';
+  fs.writeFileSync(path.join(captures, `${captureId}.json`), JSON.stringify({ captureId, platform: 'claude-code', sessionId: SESSION,
+    capturedAt: '2026-10-20T10:00:00.000Z', agent: { v: 1, tool: { name: 'claude' }, teamai: '1.0.0', driver: 'session' }, sessionFile: file }));
+  return config;
+}
+
+/** A Claude judge on PATH that answers `{ label: answer }`, or with `answer: undefined` exits 1 without one. */
+function fakeClaude(answer: string | undefined): void {
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'claude'), `#!${process.execPath}
+if (process.argv.includes('--version')) { console.log('2.1.308 (Claude Code)'); process.exit(); }
+${answer === undefined ? 'process.exit(1);' : ''}
+process.stdin.resume(); process.stdin.on('end', () => {
+console.log(JSON.stringify({ type: 'system', subtype: 'init', model: 'm1' }));
+console.log(JSON.stringify({ type: 'result', structured_output: { label: ${JSON.stringify(answer)}, reasoning: 'the reasoning' } }));
+});\n`, { mode: 0o755 });
+  vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+}
+
+async function attemptOf(config: LocalConfig, ref: string) {
+  const key = parseLeaseRef(ref);
+  return key && AttemptStore.get(config, key.entry, key.attempt);
+}
+
+const IDLE = { idle: { open: 0, leased: 0 } };
+
+describe('a finished session as judge work', () => {
+  it('is leased to be submitted from the data home, and the submit keeps a session label with its agent, skills and first prompt', async () => {
+    const config = await fixture();
+
+    const lease = leaseOf(await nextJudgeLease(config, request(), NOW));
+    expect(lease).toMatchObject({ source: 'session', scorer: 'quality', subject: { platform: 'claude-code', sessionId: SESSION }, cwd: path.join(root, 'data') });
+    expect(fs.readFileSync(String(lease.prompt), 'utf8')).toContain('Add retries to the client');
+
+    const labelled = data(await submitJudgeLease(config, lease.ref, { driver, outcome: 'success', answer: { label: 'good', reasoning: 'r' } }, NOW));
+    expect(labelled).toMatchObject({ label: { scorer: 'quality', subject: { platform: 'claude-code', sessionId: SESSION }, label: 'good', passed: true } });
+    const [label] = parseScoreLabels(fs.readFileSync(path.join(root, 'data', 'scores', 'labels.jsonl'), 'utf8'));
+    expect(label).toMatchObject({ source: 'session', subject: { platform: 'claude-code', sessionId: SESSION }, used: { skills: [] }, agent: { tool: { name: 'claude' } } });
+    expect(fs.readFileSync(String(z.object({ label: z.object({ reasoning: z.string() }) }).parse(labelled).label.reasoning), 'utf8')).toContain('Add retries to the client');
+    expect(data(await nextJudgeLease(config, request(), NOW))).toEqual(IDLE);
+  });
+
+  it.each([
+    ['config.yaml does not set scoring.sessions', { sessions: false }],
+    ['no scorer sets sessions: true', { scorerText: scorer('samplingRate: 100\n') }],
+    ['the scorer samples no session', { scorerText: scorer('samplingRate: 0\nsessions: true\n') }],
+    ['something happened in the session within six hours', { idleFor: 5 * HOUR }],
+  ])('is not handed out when %s', async (_, options) => {
+    const config = await fixture(options);
+    expect(data(await nextJudgeLease(config, request(), NOW))).toEqual(IDLE);
+  });
+
+  it('is not opened again once its lease is released', async () => {
+    const config = await fixture();
+    const lease = leaseOf(await nextJudgeLease(config, request(), NOW));
+    data(await submitJudgeLease(config, lease.ref, { driver, outcome: 'released' }, NOW));
+
+    expect(data(await nextJudgeLease(config, request(), at(HOUR)))).toEqual(IDLE);
+  });
+
+  it('is left leased when the driver leaves it out of running, and not handed back', async () => {
+    const config = await fixture();
+    const lease = leaseOf(await nextJudgeLease(config, request(), NOW));
+
+    expect(data(await nextJudgeLease(config, request(), at(60_000)))).toEqual({ idle: { open: 0, leased: 1 } });
+    expect(await attemptOf(config, lease.ref)).toMatchObject({ status: 'leased' });
+  });
+
+  it('accepts a late submit while no judge has labelled the session since', async () => {
+    const config = await fixture();
+    const lease = leaseOf(await nextJudgeLease(config, request(), NOW));
+
+    expect(data(await submitJudgeLease(config, lease.ref, { driver, outcome: 'success', answer: { label: 'bad', reasoning: 'r' } }, at(HOUR))))
+      .toMatchObject({ label: { label: 'bad' } });
+  });
+
+  it('refuses a late submit once teamai score --session has labelled the session with the same rubric', async () => {
+    const config = await fixture();
+    const lease = leaseOf(await nextJudgeLease(config, request(), NOW));
+    fakeClaude('good');
+    data(await scoreSession(config, { session: SESSION, source: 'claude-code', scorers: ['quality'] }, at(HOUR)));
+
+    expect(errorOf(await submitJudgeLease(config, lease.ref, { driver, outcome: 'success', answer: { label: 'bad', reasoning: 'r' } }, at(2 * HOUR))))
+      .toMatchObject({ code: 'lease_expired' });
+  });
+
+  it('closes when the local judge fails, so it is not judged again', async () => {
+    const config = await fixture();
+    fakeClaude(undefined);
+    const lease = leaseOf(await nextJudgeLease(config, request(), NOW));
+
+    expect(errorOf(await runJudgeLease(config, lease.ref, { driver }, NOW))).toMatchObject({ code: 'judge_failed', message: expect.stringContaining('not judged again') });
+    expect(await attemptOf(config, lease.ref)).toMatchObject({ status: 'failed', code: 'judge_failed' });
+    expect(data(await nextJudgeLease(config, request(), at(HOUR)))).toEqual(IDLE);
+  });
+
+  it('closes as evidence_empty when its session file can no longer be read', async () => {
+    const config = await fixture();
+    fs.writeFileSync(path.join(mocks.home, '.claude', 'projects', encodeCwdClaude(path.join(root, 'app')), `${SESSION}.jsonl`), '');
+    const idleSince = new Date(Date.parse(NOW) - 7 * HOUR);
+    fs.utimesSync(path.join(mocks.home, '.claude', 'projects', encodeCwdClaude(path.join(root, 'app')), `${SESSION}.jsonl`), idleSince, idleSince);
+
+    expect(data(await nextJudgeLease(config, request(), NOW))).toMatchObject({ ...IDLE, closed: [{ code: 'evidence_empty' }] });
+    expect(data(await nextJudgeLease(config, request(), at(HOUR)))).toEqual(IDLE);
+  });
+});

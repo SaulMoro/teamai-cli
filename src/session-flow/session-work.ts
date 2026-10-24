@@ -1,18 +1,32 @@
 /**
- * A finished agent session as a judge reads it (#1178, #1179): one redacted read gives the evidence of every judge call
- * and the context its labels carry, so `teamai score --session` and a session judge lease build both alike.
+ * A finished agent session as judge work (#1178, #1179). One redacted read gives the evidence of every judge call and
+ * the context its labels carry, so `teamai score --session` and a session judge lease build both alike. A session
+ * captured in a scope is judge work there once nothing happened in it for six hours, for each scorer that sets
+ * `sessions: true`; the lease machinery (`workflow/scoring.ts`) hands it out and settles it.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
+import { collectTeamSecrets } from '../env-resolution.js';
+import { AttemptStore, type AttemptRecord } from '../scorers/attempts.js';
+import { batchesScorers } from '../scorers/batch.js';
+import { cachedScorerNames, pinScorers, scorerNamespaces } from '../scorers/cache.js';
+import type { ScorerDefinition } from '../scorers/definition.js';
+import { sessionEntryIdOf, sessionEntryState, type SessionEntryState } from '../scorers/entry.js';
 import {
-  fencedEvidence, keepEnds, rubricPrompt, writeEvidence, EVIDENCE_MAX_CHARS, TOOL_CALL_MAX_CHARS, type EvidenceGap, type Rubrics,
+  fencedEvidence, isEvidenceReady, keepEnds, rubricPrompt, writeEvidence, EVIDENCE_MAX_CHARS, TOOL_CALL_MAX_CHARS, type EvidenceGap, type Rubrics,
 } from '../scorers/evidence.js';
-import type { SessionLabel, SessionLabelContext, SessionSubject } from '../scorers/label.js';
+import type { ScoreLabel, SessionLabel, SessionLabelContext, SessionSubject } from '../scorers/label.js';
+import { LabelStore } from '../scorers/label-store.js';
+import { pinnedDefinition, type PinnedScorer } from '../scorers/pin.js';
+import { isSampled } from '../scorers/sampling.js';
+import type { ScopeScoring } from '../scorers/settings.js';
 import { typedIn, usedSkills } from '../skill-use.js';
+import { getDataHome, type LocalConfig } from '../types.js';
+import { collectEnvSecrets, redact } from '../utils/redact.js';
 import { AgentSession } from './agent-session.js';
 import type { SubagentsRead } from './adapters/base.js';
-import { SessionCaptures, type SessionCapture } from './captures.js';
+import { SessionCaptures, type CapturedSession, type SessionCapture } from './captures.js';
 import type { Session } from './ir.js';
 
 function transcriptOf(session: Session, budget: number): string {
@@ -118,3 +132,133 @@ export function sessionLabel(verdict: Omit<SessionLabel, 'source' | 'subject' | 
   const { scorer, rubric, label, score, passed, judge, scoredAt } = verdict;
   return { scorer, rubric, label, score, passed, source: 'session', subject, ...(context.agent ? { agent: context.agent } : {}), used: context.used, judge, scoredAt };
 }
+
+/** Nothing happened in a session for this long: it is finished, and judge work. */
+export const FINISHED_AFTER_MS = 6 * 60 * 60 * 1000;
+
+/** One sampled (scorer, finished session) of this scope with its derived state. */
+export interface SessionEntry {
+  source: 'session';
+  id: string;
+  scorer: string;
+  pin: PinnedScorer;
+  definition: ScorerDefinition;
+  subject: SessionSubject;
+  state: SessionEntryState;
+  /** Whether its scorers share one judge call: the team's `batch`, as `score --session` decides it. */
+  batch: boolean;
+}
+
+function sameSessionKey(label: ScoreLabel, scorer: string, sourceHash: string, subject: SessionSubject): boolean {
+  return label.source === 'session' && label.scorer === scorer && label.rubric.sourceHash === sourceHash
+    && label.subject.platform === subject.platform && label.subject.sessionId === subject.sessionId;
+}
+
+/** The scorers of this scope that judge sessions: cached ones that set `sessions: true`, outside a namespace or in a shared dir. */
+async function sessionScorers(config: LocalConfig): Promise<Array<{ scorer: string; pin: PinnedScorer; definition: ScorerDefinition }>> {
+  const pins = await pinScorers(config, await cachedScorerNames(config));
+  const scorers = Object.entries(pins).flatMap(([scorer, pin]) => {
+    const definition = pinnedDefinition(scorer, pin);
+    const [, dir, file] = (pin.relativePath ?? '').split('/');
+    return definition?.sessions ? [{ scorer, pin, definition, dir: file === undefined ? undefined : dir }] : [];
+  });
+  const { shared } = await scorerNamespaces(config, [...new Set(scorers.flatMap(({ dir }) => dir ?? []))]);
+  return scorers.filter(({ dir }) => dir === undefined || shared.includes(dir));
+}
+
+/** The latest dashboard event of each session, by platform and session id. */
+async function lastEvents(): Promise<Map<string, string>> {
+  const { readEvents } = await import('../dashboard-collector.js');
+  const latest = new Map<string, string>();
+  for (const event of await readEvents()) {
+    const platform = AgentSession.platformForTool(event.tool);
+    if (!platform) continue;
+    const key = `${platform}\0${event.sessionId}`;
+    if ((latest.get(key) ?? '') < event.timestamp) latest.set(key, event.timestamp);
+  }
+  return latest;
+}
+
+/**
+ * When something last happened in `captured`: its latest dashboard event, its session file's last write, or its latest
+ * start or resume. Undefined once a file its hooks named is gone, since its session cannot be read any more.
+ */
+async function lastActiveAt(captured: CapturedSession, events: ReadonlyMap<string, string>): Promise<number | undefined> {
+  const files = [...new Set(captured.captures.flatMap((capture) => capture.sessionFile ?? []))];
+  const written = await Promise.all(files.map((file) => fs.stat(file).then((stat) => stat.mtimeMs, () => undefined)));
+  const known = written.filter((at): at is number => at !== undefined);
+  if (known.length < files.length) return undefined;
+  const event = events.get(`${captured.platform}\0${captured.sessionId}`);
+  return Math.max(...known, ...(event ? [Date.parse(event)] : []), ...captured.captures.map((capture) => Date.parse(capture.capturedAt)));
+}
+
+/**
+ * The session entries of this scope, oldest activity first: each finished session captured here, for each scorer of
+ * the scope that judges sessions and samples it. None while the scope does not turn session scoring on.
+ */
+async function entries(config: LocalConfig, now: string, scoring: Extract<ScopeScoring, { ok: true }>): Promise<SessionEntry[]> {
+  if (!scoring.sessions.enabled) return [];
+  const scorers = await sessionScorers(config);
+  const captured = scorers.length > 0 ? await SessionCaptures.list(config) : [];
+  if (captured.length === 0) return [];
+  const events = await lastEvents();
+  const finished: Array<{ captured: CapturedSession; activeAt: number }> = [];
+  for (const one of captured) {
+    const activeAt = await lastActiveAt(one, events);
+    if (activeAt !== undefined && activeAt + FINISHED_AFTER_MS <= Date.parse(now)) finished.push({ captured: one, activeAt });
+  }
+  finished.sort((left, right) => left.activeAt - right.activeAt);
+  const [labels, attempts] = await Promise.all([LabelStore.local(config), AttemptStore.read(config)]);
+  const batch = batchesScorers({ team: scoring.batch });
+  return finished.flatMap(({ captured: { platform, sessionId } }) => scorers.flatMap(({ scorer, pin, definition }): SessionEntry[] => {
+    const subject = { platform, sessionId };
+    if (!isSampled(scorer, subject, definition.samplingRate)) return [];
+    const id = sessionEntryIdOf(scorer, pin.sourceHash, subject);
+    const state = sessionEntryState({ labels: labels.filter((label) => sameSessionKey(label, scorer, pin.sourceHash, subject)), attempts: attempts.get(id) ?? [], now });
+    return [{ source: 'session', id, scorer, pin, definition, subject, state, batch }];
+  }));
+}
+
+/** Whether a judge has labelled this key with a model label on this machine since it was offered. */
+async function isLabelled(config: LocalConfig, entry: Pick<SessionEntry, 'scorer' | 'pin' | 'subject'>): Promise<boolean> {
+  return (await LabelStore.local(config)).some((label) => label.judge.kind === 'model' && sameSessionKey(label, entry.scorer, entry.pin.sourceHash, entry.subject));
+}
+
+/** The day's launches: distinct attempt ids of session attempts leased on `now`'s local date. A batch shares one id. */
+function launchesToday(attempts: Iterable<AttemptRecord>, now: string): number {
+  const day = (at: string) => new Date(at).toDateString();
+  const today = day(now);
+  return new Set([...attempts].filter((attempt) => attempt.source === 'session' && day(attempt.leasedAt) === today).map((attempt) => attempt.attempt)).size;
+}
+
+/**
+ * Reads the session for a judge, redacted with this scope's team secrets: from the file its hooks last named, else
+ * where its tool keeps it. Not ok when it is gone or holds nothing to judge.
+ */
+async function read(config: LocalConfig, subject: SessionSubject): Promise<{ ok: true; judged: JudgedSession } | { ok: false }> {
+  const captures = await SessionCaptures.read(config, subject.platform, subject.sessionId);
+  const filePath = captures.flatMap((capture) => capture.sessionFile ?? []).at(-1);
+  const found = await AgentSession.find({ ...subject, ...(filePath ? { filePath } : {}) }, { subagents: true });
+  if (found.status !== 'done' || found.session.messages.length === 0) return { ok: false };
+  const envSecrets = { ...collectEnvSecrets(), ...await collectTeamSecrets(config) };
+  return { ok: true, judged: judgeSession({ platform: subject.platform, found, captures, mask: (text) => redact(text, { envSecrets }) }) };
+}
+
+/** A session lease's evidence in `dir`: kept when it is ready, else read again and written. */
+async function ensureEvidence(config: LocalConfig, subject: SessionSubject, rubrics: Rubrics, dir: string): Promise<{ ok: true } | { ok: false; code: 'evidence_empty' }> {
+  if (await isEvidenceReady(dir)) return { ok: true };
+  const session = await read(config, subject);
+  if (!session.ok) return { ok: false, code: 'evidence_empty' };
+  await writeSessionEvidence(dir, session.judged, rubrics);
+  return { ok: true };
+}
+
+/**
+ * Where a session lease is submitted from: a directory whose teamai resolves to this scope's data home, which holds
+ * its attempt. The project's root, or for the user scope its data home, which no project holds.
+ */
+function leaseCwd(config: LocalConfig): string {
+  return config.scope === 'project' && config.projectRoot ? config.projectRoot : getDataHome(config);
+}
+
+export const SessionWork = { entries, isLabelled, launchesToday, read, ensureEvidence, leaseCwd } as const;

@@ -28,16 +28,17 @@ function teamRepo(files: Record<string, string>, member: Partial<LocalConfig> = 
 }
 
 const MACHINE = { source: 'config.yaml scoring.isolation', value: undefined };
+const SESSIONS_OFF = { enabled: false, reason: 'nothing sets scoring.sessions: true in config.yaml' };
 
 describe('scopeScoring isolation', () => {
   it('reads the root file, and an active namespace file in its place; an inactive one is not read', async () => {
     const files = { 'scorers/scoring.yaml': 'isolation: best-effort\n', 'scorers/ops/scoring.yaml': 'isolation: verified\n' };
 
     expect(await scopeScoring(teamRepo(files, { primaryRole: 'dev' }))).toEqual({
-      ok: true, batch: undefined, problems: [], isolation: [{ source: 'scorers/scoring.yaml isolation', value: 'best-effort' }, MACHINE],
+      ok: true, batch: undefined, problems: [], isolation: [{ source: 'scorers/scoring.yaml isolation', value: 'best-effort' }, MACHINE], sessions: SESSIONS_OFF,
     });
     expect(await scopeScoring(teamRepo(files, { primaryRole: 'ops' }))).toEqual({
-      ok: true, batch: undefined, problems: [], isolation: [{ source: 'scorers/ops/scoring.yaml isolation', value: 'verified' }, MACHINE],
+      ok: true, batch: undefined, problems: [], isolation: [{ source: 'scorers/ops/scoring.yaml isolation', value: 'verified' }, MACHINE], sessions: SESSIONS_OFF,
     });
   });
 

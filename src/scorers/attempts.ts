@@ -89,6 +89,8 @@ export type AttemptRecord = z.infer<typeof AttemptRecordSchema>;
 export type RunAttempt = z.infer<typeof RunAttemptSchema>;
 export type SessionAttempt = z.infer<typeof SessionAttemptSchema>;
 export type LeasedAttempt = Extract<AttemptRecord, { status: 'leased' }>;
+export type LeasedRunAttempt = Extract<RunAttempt, { status: 'leased' }>;
+export type LeasedSessionAttempt = Extract<SessionAttempt, { status: 'leased' }>;
 export type SucceededAttempt = Extract<AttemptRecord, { status: 'succeeded' }>;
 
 export function isRunAttempt(attempt: AttemptRecord): attempt is RunAttempt {

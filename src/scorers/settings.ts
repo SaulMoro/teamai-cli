@@ -68,10 +68,27 @@ export function parseScoringFile(relativePath: string, text: string): ScoringFil
   return read;
 }
 
-/** What scoring in this scope follows: the team's `batch` default and every isolation setting that applies here. */
+/** Whether this scope's finished sessions are judge work, and how many judge launches a local day may take for them. */
+export type SessionScoring = { enabled: false; reason: string } | { enabled: true; dailyLimit: number };
+
+/** Judge launches a local day takes for finished sessions in one data home, when nothing sets another limit. */
+export const SESSION_DAILY_LIMIT = 10;
+
+/**
+ * What scoring in this scope follows: the team's `batch` default, every isolation setting that applies here, and whether
+ * finished sessions are judge work.
+ */
 export type ScopeScoring =
-  | { ok: true; batch: boolean | undefined; isolation: IsolationSetting[]; problems: string[] }
+  | { ok: true; batch: boolean | undefined; isolation: IsolationSetting[]; sessions: SessionScoring; problems: string[] }
   | { ok: false; reason: string };
+
+/** `config.yaml` `scoring.sessions`: a value that is not true or false is reported and turns nothing on. */
+function sessionScoring(config: LocalConfig, problems: string[]): SessionScoring {
+  const member = config.scoring?.sessions;
+  if (typeof member === 'string') problems.push(`config.yaml scoring.sessions is "${member}", not true or false, so it is ignored`);
+  if (member === true) return { enabled: true, dailyLimit: SESSION_DAILY_LIMIT };
+  return { enabled: false, reason: member === false ? 'config.yaml scoring.sessions is false' : 'nothing sets scoring.sessions: true in config.yaml' };
+}
 
 function failed(cause: string): ScopeScoring {
   return { ok: false, reason: `${cause}. Scoring is off in this scope until the team repo fixes it.` };
@@ -114,6 +131,7 @@ export async function scopeScoring(config: LocalConfig): Promise<ScopeScoring> {
     ok: true,
     batch: first?.batch ?? rootFile?.batch,
     isolation: [...teamIsolation.map((file) => ({ source: `${file.relativePath} isolation`, value: file.isolation })), machineIsolation(config)],
+    sessions: sessionScoring(config, problems),
     problems,
   };
 }

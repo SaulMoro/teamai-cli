@@ -900,6 +900,8 @@ export const LocalConfigSchema = z.object({
   scoring: z.object({
     /** The least isolation a judge of this scope needs, raising the team's and the scorer's. A value teamai does not know counts as `verified`. */
     isolation: z.string().optional().catch(({ input }) => JSON.stringify(input)),
+    /** Judge this scope's finished agent sessions in the background. A value that is not true or false is kept as its text, which turns nothing on. */
+    sessions: z.union([z.boolean(), z.string()]).optional().catch(({ input }) => JSON.stringify(input)),
   }).optional(),
 });
 
