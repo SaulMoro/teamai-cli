@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,9 +14,10 @@ import type { LocalConfig } from '../types.js';
 import { scoresDir } from '../scorers/attempts.js';
 import { parseScoreLabels } from '../scorers/label.js';
 import { syncScorerDefinitions } from '../scorers/cache.js';
-import { scoreSessions } from '../score-sessions.js';
+import { scoreSessions, sessionScoringScopes } from '../score-sessions.js';
 import { encodeCwdClaude } from '../session-flow/fs.js';
 import { acquireLock, releaseLock } from '../update.js';
+import { projectDataHome } from '../utils/partition.js';
 import { AGENT_SESSION_ENV } from '../utils/session-id.js';
 
 const SCORER = `---
@@ -155,5 +157,61 @@ describe('teamai score-sessions', () => {
     await scoreSessions([config], { clock: clockFrom(20 * 60 * 1000) });
 
     expect(labels(config)).toHaveLength(1);
+  });
+});
+
+describe('the scopes a session start scores sessions in', () => {
+  /** The user scope's config.yaml, with `scoring` as given. */
+  function userConfig(scoring: string): void {
+    const knowledge = path.join(root, 'knowledge');
+    fs.mkdirSync(path.join(knowledge, 'scorers'), { recursive: true });
+    fs.mkdirSync(path.join(mocks.home, '.teamai'), { recursive: true });
+    fs.writeFileSync(path.join(mocks.home, '.teamai', 'config.yaml'),
+      `repo:\n  localPath: ${JSON.stringify(knowledge)}\n  remote: local\n  kind: self\nusername: tester\nscope: user\nadditionalRoles: []\n${scoring}`);
+  }
+
+  it('is the user scope from a directory that no longer exists, when it turns session scoring on', async () => {
+    userConfig('scoring:\n  sessions: true\n');
+    expect(await sessionScoringScopes(path.join(root, 'gone'))).toMatchObject([{ scope: 'user' }]);
+  });
+
+  /** A workspace that selects project billing, with a child repo that selects checkout, and `files` in the team repo. */
+  function workspace(files: Record<string, string>): string {
+    const knowledge = path.join(root, 'knowledge');
+    for (const [file, text] of Object.entries({
+      'manifest/roles.yaml': 'version: 1\nroles:\n  - id: dev\n    resources: { knowledge: [], skills: [] }\n',
+      'manifest/projects.yaml': 'version: 1\nprojects:\n  - id: billing\n    name: Billing\n    resources: { scorers: [billing] }\n  - id: checkout\n    name: Checkout\n    resources: { scorers: [checkout] }\n',
+      ...files,
+    })) {
+      fs.mkdirSync(path.dirname(path.join(knowledge, file)), { recursive: true });
+      fs.writeFileSync(path.join(knowledge, file), text);
+    }
+    const repoAt = (dir: string, project: string) => {
+      fs.mkdirSync(dir, { recursive: true });
+      execFileSync('git', ['init', '-q'], { cwd: dir });
+      const home = projectDataHome(fs.realpathSync(dir));
+      fs.mkdirSync(home, { recursive: true });
+      fs.writeFileSync(path.join(home, 'config.yaml'),
+        `repo:\n  localPath: ${JSON.stringify(knowledge)}\n  remote: https://git.example.com/team/team.git\nusername: tester\nscope: project\nadditionalRoles: []\nprojects: [${project}]\n`);
+    };
+    const ws = path.join(root, 'ws');
+    repoAt(ws, 'billing');
+    repoAt(path.join(ws, 'svc'), 'checkout');
+    return ws;
+  }
+
+  it('reads the settings of the namespaces a workspace child makes active', async () => {
+    const ws = workspace({ 'scorers/scoring.yaml': 'sessions: true\n', 'scorers/checkout/scoring.yaml': 'sessions: false\n' });
+    expect(await sessionScoringScopes(ws)).toEqual([]);
+  });
+
+  it('is the workspace when only a workspace child\'s namespace turns session scoring on', async () => {
+    const ws = workspace({ 'scorers/checkout/scoring.yaml': 'sessions: true\n' });
+    expect(await sessionScoringScopes(ws)).toMatchObject([{ scope: 'project', children: expect.any(Object) }]);
+  });
+
+  it('is none while no scope turns session scoring on', async () => {
+    userConfig('');
+    expect(await sessionScoringScopes(path.join(root, 'gone'))).toEqual([]);
   });
 });

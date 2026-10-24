@@ -13,7 +13,9 @@ import { scopeScoring } from './scorers/settings.js';
 import { SessionWork } from './session-flow/session-work.js';
 import { getDataHome, type LocalConfig } from './types.js';
 import { acquireLock, releaseLock } from './update.js';
+import { pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';
+import { readWorkspaceChildren } from './workspace-children.js';
 import { localDriver } from './workflow/local-driver.js';
 import { judgeLease, takeJudgeLease } from './workflow/scoring.js';
 
@@ -65,16 +67,27 @@ export async function scoreSessions(configs: readonly LocalConfig[], { clock = (
   }
 }
 
-/** The hidden command: this directory's project scope, then the user scope, each scored once. */
-export async function scoreSessionsCommand(): Promise<void> {
-  const project = await detectProjectConfig().catch(() => null);
+/**
+ * The scopes `cwd` reaches that turn session scoring on: its project scope, with its workspace children, whose
+ * namespaces set scoring too, then the user scope, each data home once. A directory that no longer exists reaches the
+ * user scope only.
+ */
+export async function sessionScoringScopes(cwd?: string): Promise<LocalConfig[]> {
+  const detected = cwd === undefined || await pathExists(cwd) ? await detectProjectConfig(cwd).catch(() => null) : null;
+  const project = detected && await readWorkspaceChildren(detected);
   const user = await loadLocalConfig();
-  const configs = [project, user].filter((config): config is LocalConfig => config !== null);
   const homes = new Set<string>();
-  await scoreSessions(configs.filter((config) => {
-    const home = getDataHome(config);
-    if (homes.has(home)) return false;
-    homes.add(home);
-    return true;
-  }));
+  const scopes: LocalConfig[] = [];
+  for (const config of [project, user]) {
+    if (config === null || homes.has(getDataHome(config)) || scoringUnavailable(config)) continue;
+    homes.add(getDataHome(config));
+    const scoring = await scopeScoring(config);
+    if (scoring.ok && scoring.sessions.enabled) scopes.push(config);
+  }
+  return scopes;
+}
+
+/** The hidden command: the scopes of this directory that score sessions. */
+export async function scoreSessionsCommand(): Promise<void> {
+  await scoreSessions(await sessionScoringScopes());
 }
