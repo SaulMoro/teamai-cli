@@ -282,6 +282,95 @@ describe('assigned roles (#1186)', () => {
 });
 
 /**
+ * A team that stops assigning roles hands role selection back to each member.
+ * A user-scope member with no role of their own then holds the `hai` role the
+ * team declares, as on any user-scope load, starting with the pull that
+ * fetches the deletion.
+ */
+describe('assigned roles removed (#1392)', () => {
+  let sandbox: string;
+
+  afterAll(() => {
+    if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  it('delivers the hai role, not every namespace, on the pull that drops members.yaml', async () => {
+    if (!fs.existsSync(CLI)) throw new Error(`CLI binary not found at ${CLI}. Run "npm run build" first.`);
+
+    sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-assigned-removed-e2e-'));
+    const homeDir = path.join(sandbox, 'home');
+    const remote = path.join(sandbox, 'remote');
+    const localRepo = path.join(homeDir, '.teamai', 'team-repo');
+    const write = (file: string, text: string): void => {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, text);
+    };
+    fs.mkdirSync(homeDir, { recursive: true });
+
+    write(path.join(remote, 'teamai.yaml'), [
+      'team: assigned-removed-e2e',
+      `repo: ${remote}`,
+      'provider: tgit',
+      'toolPaths:',
+      '  claude:',
+      '    skills: .claude/skills',
+      '',
+    ].join('\n'));
+    write(path.join(remote, 'manifest', 'roles.yaml'), [
+      'version: 1',
+      'roles:',
+      '  - id: hai',
+      '    resources: { knowledge: [hai], skills: [hai] }',
+      '  - id: frontend',
+      '    resources: { knowledge: [frontend], skills: [frontend] }',
+      '  - id: backend',
+      '    resources: { knowledge: [backend], skills: [backend] }',
+      '',
+    ].join('\n'));
+    write(path.join(remote, 'manifest', 'members.yaml'), 'version: 1\nmembers:\n  frank: [frontend]\ndefault: []\n');
+    for (const namespace of ['hai', 'frontend', 'backend']) {
+      write(
+        path.join(remote, 'skills', namespace, `${namespace}-only`, 'SKILL.md'),
+        `---\nname: ${namespace}-only\ndescription: ${namespace}-only fixture\n---\n\n# ${namespace}-only\n`,
+      );
+    }
+    git(['init', '-q', '-b', 'main'], remote);
+    git(['add', '-A'], remote);
+    git(['commit', '-qm', 'fixture'], remote);
+
+    fs.mkdirSync(path.join(homeDir, '.claude', 'skills'), { recursive: true });
+    git(['clone', '-q', remote, localRepo], sandbox);
+    write(path.join(homeDir, '.teamai', 'config.yaml'), [
+      'repo:',
+      `  localPath: ${localRepo}`,
+      `  remote: ${remote}`,
+      'username: frank',
+      'updatePolicy: auto',
+      'scope: user',
+      '',
+    ].join('\n'));
+    const delivered = (): string[] => fs.readdirSync(path.join(homeDir, '.claude', 'skills')).sort();
+
+    const first = await runCLI(['pull', '--force'], homeDir, homeDir);
+    expect(first.code, first.output).toBe(0);
+    expect(delivered()).toEqual(['frontend-only', 'teamai']);
+
+    git(['rm', '-q', 'manifest/members.yaml'], remote);
+    git(['commit', '-qm', 'stop assigning roles'], remote);
+
+    const second = await runCLI(['pull'], homeDir, homeDir);
+    expect(second.code, second.output).toBe(0);
+    expect(delivered(), second.output).toEqual(['hai-only', 'teamai']);
+
+    const third = await runCLI(['pull'], homeDir, homeDir);
+    expect(third.code, third.output).toBe(0);
+    expect(delivered(), third.output).toEqual(['hai-only', 'teamai']);
+    const list = await runCLI(['roles', 'list', '--json'], homeDir, homeDir);
+    expect(JSON.parse(list.output)).toMatchObject({ roles: ['hai'], source: 'local' });
+  });
+});
+
+/**
  * `init` builds its config in memory and hands it to the hook, MCP and env
  * reconciliation before any load can overlay it (#1186). Without the
  * assignment, that config is role-less, and a role-less config matches every
