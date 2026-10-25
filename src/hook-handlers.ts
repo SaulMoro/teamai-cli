@@ -747,17 +747,24 @@ const votesJudgeHandler: HookHandler = {
       // judge from ever running on the later turns that DO have recalls. So we
       // only spend the claim once there is real work to do.
       const { parseTranscriptForVotes } = await import('./transcript-parser.js');
-      // Codex, Muse and ZCode provide the reply directly. Their native session
-      // files are not Claude transcripts; use our settled recall log as evidence.
-      const { recalledDocsForSession } = await import('./recall-adoption.js');
-      const docs = finalReply ? await recalledDocsForSession(localConfig, dispatchSessionId) : [];
-      const voteData = finalReply ? {
-        finalAssistantText: finalReply,
-        recalledDocIds: docs.map(d => d.key),
-        recalledDocPaths: Object.fromEntries(docs.map(d => [d.key, d.path])),
-        recalledDocScopes: Object.fromEntries(docs.map(d => [d.key, d.scope])),
-      } : await parseTranscriptForVotes(transcriptPath!);
-      if (voteData.recalledDocIds.length === 0) return null;
+      // A Claude transcript stays the evidence whenever it shows a recall, even
+      // when the payload also carries the final reply (Claude Code sends both).
+      // Codex, Muse and ZCode send the reply, and their session files (Codex's
+      // rollout arrives as `transcript_path`) are not Claude transcripts, so
+      // with no recall found there, the settled recall log is the evidence.
+      const fromTranscript = transcriptPath ? await parseTranscriptForVotes(transcriptPath) : null;
+      let voteData = fromTranscript;
+      if (finalReply && !fromTranscript?.recalledDocIds.length) {
+        const { recalledDocsForSession } = await import('./recall-adoption.js');
+        const docs = await recalledDocsForSession(localConfig, dispatchSessionId);
+        voteData = {
+          finalAssistantText: finalReply,
+          recalledDocIds: docs.map(d => d.key),
+          recalledDocPaths: Object.fromEntries(docs.map(d => [d.key, d.path])),
+          recalledDocScopes: Object.fromEntries(docs.map(d => [d.key, d.scope])),
+        };
+      }
+      if (!voteData || voteData.recalledDocIds.length === 0) return null;
 
       // The session's upvote ledger holds every doc the hook path (or an earlier
       // judge pass) upvoted for it: those are not judged again (#884).
