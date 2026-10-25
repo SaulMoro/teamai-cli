@@ -47,6 +47,20 @@ async function migrateLegacyRoleConfig(
   configPath: string,
   options: LoadOptions = {},
 ): Promise<LocalConfig> {
+  const migrated = await resolveLegacyRole(config);
+  if (migrated.primaryRole === config.primaryRole) return migrated;
+
+  if (options.dryRun) {
+    if (!options.suppressMigrationNotice) log.info('[dry-run] Would migrate legacy teamai config to default role profile: hai');
+    return migrated;
+  }
+  await writeFileAtomic(expandHome(configPath), serializeLocalConfig(migrated));
+  log.info('Migrated legacy teamai config to default role profile: hai');
+  return migrated;
+}
+
+/** `config` with the `hai` role the team declares, when it holds no role; nothing is written. */
+async function resolveLegacyRole(config: LocalConfig): Promise<LocalConfig> {
   // The assignment overlay runs first, and an assignment already decided this
   // member's roles — holding none is one of its answers (`default: []`).
   // Migrating would persist a `hai` the team did not assign.
@@ -74,20 +88,12 @@ async function migrateLegacyRoleConfig(
     return config;
   }
 
-  const migrated: LocalConfig = {
+  return {
     ...config,
     primaryRole: 'hai',
     additionalRoles: config.additionalRoles ?? [],
     resourceProfileVersion: manifest.version,
   };
-
-  if (options.dryRun) {
-    if (!options.suppressMigrationNotice) log.info('[dry-run] Would migrate legacy teamai config to default role profile: hai');
-    return migrated;
-  }
-  await writeFileAtomic(expandHome(configPath), serializeLocalConfig(migrated));
-  log.info('Migrated legacy teamai config to default role profile: hai');
-  return migrated;
 }
 
 /**
@@ -182,7 +188,14 @@ function withLocalRoles(config: LocalConfig): LocalConfig {
 export async function refreshRoleAssignment(config: LocalConfig): Promise<void> {
   // The local selection is restored first, so an assignments file that just
   // arrived is applied over it — and one that just went away hands it back.
-  const resolved = await applyRoleAssignment(withLocalRoles(config));
+  let resolved = await applyRoleAssignment(withLocalRoles(config));
+  // A user-scope load runs the legacy migration after the overlay, and skipped
+  // it while the assignment held. A member the assignment just handed back
+  // falls back to `hai` here, as the next load would. Workspace detection never
+  // migrates, so a workspace member stays as its next load leaves it.
+  if (config.scope === 'user' && config.roleAssignment && !resolved.roleAssignment) {
+    resolved = await resolveLegacyRole(resolved);
+  }
   if (resolved.primaryRole) config.primaryRole = resolved.primaryRole;
   else delete config.primaryRole;
   config.additionalRoles = resolved.additionalRoles;
@@ -193,6 +206,7 @@ export async function refreshRoleAssignment(config: LocalConfig): Promise<void> 
     delete config.roleUnresolved;
   } else {
     delete config.roleAssignment;
+    if (resolved.roleUnresolved) config.roleUnresolved = true;
   }
 }
 
