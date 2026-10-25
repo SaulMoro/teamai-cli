@@ -60,7 +60,7 @@ async function migrateLegacyRoleConfig(
 }
 
 /** `config` with the `hai` role the team declares, when it holds no role; nothing is written. */
-async function resolveLegacyRole(config: LocalConfig): Promise<LocalConfig> {
+export async function resolveLegacyRole(config: LocalConfig): Promise<LocalConfig> {
   // The assignment overlay runs first, and an assignment already decided this
   // member's roles — holding none is one of its answers (`default: []`).
   // Migrating would persist a `hai` the team did not assign.
@@ -189,13 +189,10 @@ export async function refreshRoleAssignment(config: LocalConfig): Promise<void> 
   // The local selection is restored first, so an assignments file that just
   // arrived is applied over it — and one that just went away hands it back.
   let resolved = await applyRoleAssignment(withLocalRoles(config));
-  // A user-scope load runs the legacy migration after the overlay, and skipped
-  // it while the assignment held. A member the assignment just handed back
-  // falls back to `hai` here, as the next load would. Workspace detection never
-  // migrates, so a workspace member stays as its next load leaves it.
-  if (config.scope === 'user' && config.roleAssignment && !resolved.roleAssignment) {
-    resolved = await resolveLegacyRole(resolved);
-  }
+  // A load runs the legacy migration after the overlay, and skipped it while
+  // the assignment held. A member the assignment just handed back falls back
+  // to `hai` here, as the next load would.
+  if (config.roleAssignment && !resolved.roleAssignment) resolved = await resolveLegacyRole(resolved);
   if (resolved.primaryRole) config.primaryRole = resolved.primaryRole;
   else delete config.primaryRole;
   config.additionalRoles = resolved.additionalRoles;
@@ -435,7 +432,7 @@ export async function loadLocalConfigForScope(
     if (!projectRoot) return null;
     // Reuse the single detection path so config location never drifts between
     // "detect the active project" and "load a named project's config".
-    const detected = await detectProjectConfig(projectRoot, undefined, options);
+    const detected = await findProjectConfig(projectRoot, undefined, options);
     if (!detected) return null;
     return migrateLegacyRoleConfig(await applyRoleAssignment(detected), path.join(getDataHome(detected), 'config.yaml'), options);
   }
@@ -630,6 +627,17 @@ export async function detectProjectConfig(
   cwd?: string,
   onUnreadable?: UnreadableConfigSink,
   options: LoadOptions = {},
+): Promise<LocalConfig | null> {
+  // `hai` is resolved in memory: many callers are metadata lookups or dry
+  // runs, which must not write the config. loadLocalConfigForScope persists it.
+  const found = await findProjectConfig(cwd, onUnreadable, options);
+  return found && resolveLegacyRole(found);
+}
+
+async function findProjectConfig(
+  cwd: string | undefined,
+  onUnreadable: UnreadableConfigSink | undefined,
+  options: LoadOptions,
 ): Promise<LocalConfig | null> {
   const dir = cwd ?? process.cwd();
 
