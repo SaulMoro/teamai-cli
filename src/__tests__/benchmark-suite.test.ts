@@ -75,7 +75,9 @@ describe('parseSuite', () => {
     ['check.add without source.fix', taskText({ check: "{ run: node test.js, protect: ['test/**'], add: [test/startup.test.js] }" }), 'check.add', 'check.add writes its files from source.fix; add source.fix, the full commit that brought them'],
     ['check.add outside protect', taskText({ check: "{ run: node test.js, protect: ['test/**'], add: [lib/startup.test.js] }", source: `{ platform: claude-code, sessionId: s1, fix: ${'b'.repeat(40)} }` }), 'check.add.0', 'check.add "lib/startup.test.js" is not under check.protect, so the agent could supply it; add a protect path that covers it'],
     ['a glob in check.add', taskText({ check: "{ run: node test.js, protect: ['test/**'], add: ['test/*.js'] }", source: `{ platform: claude-code, sessionId: s1, fix: ${'b'.repeat(40)} }` }), 'check.add.0', 'must name one file, without glob characters'],
-    ['an unclosed class in check.protect', taskText({ check: "{ run: node test.js, protect: ['test/['], add: ['test/check.js'] }", source: `{ platform: claude-code, sessionId: s1, fix: ${'b'.repeat(40)} }` }), 'check.protect.0', 'has a [ class with no closing ]'],
+    ...['test/[', 'test/[!'].map((entry) => [
+      `an unclosed class ${entry} in check.protect`, taskText({ check: `{ run: node test.js, protect: ['${entry}'], add: ['test/check.js'] }`, source: `{ platform: claude-code, sessionId: s1, fix: ${'b'.repeat(40)} }` }), 'check.protect.0', 'has a [ class with no closing ]',
+    ]),
     ...['./test.js', 'lib/../test.js', 'test//check.js', 'test/', 'te\\sts/**'].map((entry) => [
       `a protected path ${entry}`, taskText({ check: `{ run: node test.js, protect: ['${entry}'] }` }), 'check.protect.0', 'must be a path relative to the repo, with no backslash and no ".", ".." or empty segment',
     ]),
