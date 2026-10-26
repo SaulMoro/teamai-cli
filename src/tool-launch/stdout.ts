@@ -198,6 +198,17 @@ function agyStdout(stdout: string): ToolReport | null {
 export function tokenMeter(adapter: LaunchAdapterId): (line: string) => TokenUsage | undefined {
   if (adapter === 'claude') {
     const messages = new Map<string, TokenUsage>();
+    // The sum over `messages` of each count, and how many of them state it, kept as each message's usage changes.
+    const totals = { input: { sum: 0, stated: 0 }, output: { sum: 0, stated: 0 }, cachedInput: { sum: 0, stated: 0 } };
+    const keys = ['input', 'output', 'cachedInput'] as const;
+    const count = (usage: TokenUsage | undefined, sign: 1 | -1): void => {
+      for (const key of keys) {
+        const value = usage?.[key];
+        if (value === undefined) continue;
+        totals[key].sum += sign * value;
+        totals[key].stated += sign;
+      }
+    };
     let current: string | undefined;
     return (line) => {
       for (const record of jsonRecords(line)) {
@@ -205,9 +216,14 @@ export function tokenMeter(adapter: LaunchAdapterId): (line: string) => TokenUsa
         const started = event?.type === 'message_start' ? asRecord(event.message) : undefined;
         if (typeof started?.id === 'string') current = started.id;
         const usage = started ? tokenUsage(started) : event?.type === 'message_delta' ? tokenUsage(event) : undefined;
-        if (current !== undefined && usage) messages.set(current, usage);
+        if (current === undefined || !usage) continue;
+        count(messages.get(current), -1);
+        count(usage, 1);
+        messages.set(current, usage);
       }
-      return [...messages.values()].reduce<TokenUsage | undefined>(addTokens, undefined);
+      const tokens: TokenUsage = {};
+      for (const key of keys) if (totals[key].stated > 0) tokens[key] = totals[key].sum;
+      return Object.keys(tokens).length > 0 ? tokens : undefined;
     };
   }
   const found: ToolReport = {};

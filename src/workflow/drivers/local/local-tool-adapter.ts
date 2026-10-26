@@ -267,8 +267,14 @@ export function createLocalToolAdapter(
           const text = decoder.write(chunk);
           stdout += text;
           if (!meter || input.budget === undefined) return;
-          const lines = `${partial}${text}`.split('\n');
-          partial = lines.pop() ?? '';
+          // A long line arrives over many chunks: only the chunk that ends it is split.
+          const end = text.lastIndexOf('\n');
+          if (end === -1) {
+            partial += text;
+            return;
+          }
+          const lines = `${partial}${text.slice(0, end)}`.split('\n');
+          partial = text.slice(end + 1);
           for (const line of lines) metered = meter(line);
           if (budgeted(metered) > input.budget) stopAt('budget');
         });
