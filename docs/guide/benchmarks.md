@@ -72,7 +72,7 @@ successCriteria: The error names the wrong field and still reveals nothing about
 | --- | --- |
 | `startingCommit` | The full commit of `repo` the task starts from. |
 | `check` | `run`, a command that exits 0 once the task is done, and `protect`, the paths the agent must not supply. |
-| `check.add` | Optional: files written as `source.fix` has them before the check, such as the fix's test. See [Tests the fix brought](#tests-the-fix-brought). |
+| `check.add` | Optional: files written before the check that the agent never has: a file as `source.fix` has it, such as the fix's test, or `{ from, to }`, a file or directory of the suite directory. See [Tests the fix brought](#tests-the-fix-brought) and [Tests in the suite directory](#tests-in-the-suite-directory). |
 | `successCriteria` | Instead of `check`: a judge decides from these. |
 | `source` | Optional: the session the task came from, `platform` and `sessionId`, and `fix`, the full commit that fixed it there, which [`--try`](#try-a-task) checks. |
 
@@ -119,6 +119,35 @@ baseline at 3f2c9a7           written from 9a1d4e7 before setup: the check must 
 | A `check.add` path no `protect` entry matches | The agent could supply it. |
 | A glob in `check.add` | Each entry names one file. |
 
+### Tests in the suite directory
+
+A test the task's commits do not have, such as one you wrote for the task, can live in the suite directory. A `{ from, to }` entry of `check.add` writes it where the check reads it, at the same steps as a fix's test; the agent never has it:
+
+```text
+benchmarks/fix-auth/
+  suite.yaml
+  tasks/expired-token.yaml
+  check-files/expired-token/refresh.test.ts
+```
+
+```yaml
+check:
+  run: npx vitest run test/auth/refresh.test.ts
+  protect: ['test/**', 'vitest.config.ts', 'package.json', 'package-lock.json']
+  add:
+    - from: check-files/expired-token/refresh.test.ts
+      to: test/auth/refresh.test.ts
+```
+
+`from` is a file or a directory of the suite directory; a directory writes every file under it below `to`. Each file is written as bytes, with its executable bit. `teamai pull` keeps the files with the suite, and a run writes them as they were when it started, so a pull during the run changes no check. Editing one changes the task's `sourceHash`. The entry needs no `source.fix`.
+
+| `teamai pull` and `teamai review --branch` refuse | Because |
+| --- | --- |
+| A `from` that names nothing in the suite directory, leaves it, or is a symlink | Only the suite directory's own files are read. |
+| A `to` with `..` or a glob | It names one path in the clone. |
+| A `to`, or a file under it, that no `protect` entry matches | The agent could supply it. |
+| Two entries that write one path | Each path is written once. |
+
 ### Baselines
 
 Before a task's first trial, teamai runs setup and the check once on a fresh clone of the starting commit:
@@ -163,7 +192,7 @@ missing-tool   could not run          not tried                          1: name
 setup-error    setup failed           not tried                          1: names setup and 3f2c9a7
 ```
 
-`--try` reads the task file and the `suite.yaml` two directories up from it as they are written, validates both as `teamai pull` does, and checks that `<suite>` is that suite's `name`. It needs no `teamai init`. A commit the checkout lacks is fetched by SHA from the suite's `repo`, as a run does. Each commit gets a fresh clone, the suite's `setup`, the environment a trial gets (see [Run a suite](#run-a-suite)), and the suite's `timeout`. It creates no run and no record, and needs `--sandbox`, since the check runs the project's code.
+`--try` reads the task file and the `suite.yaml` two directories up from it as they are written, validates both as `teamai pull` does, with the files its `check.add` entries name from that suite directory, and checks that `<suite>` is that suite's `name`. It needs no `teamai init`. A commit the checkout lacks is fetched by SHA from the suite's `repo`, as a run does. Each commit gets a fresh clone, the suite's `setup`, the environment a trial gets (see [Run a suite](#run-a-suite)), and the suite's `timeout`. It creates no run and no record, and needs `--sandbox`, since the check runs the project's code.
 
 ## Run a suite
 
@@ -188,6 +217,7 @@ $ teamai workflow start fix-auth --benchmark --driver local --sandbox
 | The team assets and the suite | Of the team revision this checkout last pulled, which must be pushed. Frozen at start: a pull during the run changes nothing it runs. |
 | An environment | Without `GITHUB_TOKEN`, `GH_TOKEN`, `GITLAB_TOKEN`, `GL_TOKEN`, `CI_JOB_TOKEN`, `SSH_AUTH_SOCK`, `GIT_ASKPASS` and `SSH_ASKPASS`. |
 | Your home directory | As it is: teamai cannot remove its logins, MCP servers and plugins. |
+| The team repo on this machine | As it is: your team checkout, and the copy of the team revision beside each trial's clone that its team assets are installed from, hold `benchmarks/`, check files included. An agent that searches the machine can find them. |
 
 The local driver runs one trial at a time: fresh clone, team assets, setup, the arm's tool on the prompt, then the check.
 

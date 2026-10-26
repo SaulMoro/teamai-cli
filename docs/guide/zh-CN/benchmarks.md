@@ -72,7 +72,7 @@ successCriteria: The error names the wrong field and still reveals nothing about
 | --- | --- |
 | `startingCommit` | 任务开始时 `repo` 的完整提交。 |
 | `check` | `run`：任务完成后以 0 退出的命令；`protect`：agent 不能提供的路径。 |
-| `check.add` | 可选：check 之前按 `source.fix` 中的样子写入的文件，例如修复的测试。见[修复带来的测试](#修复带来的测试)。 |
+| `check.add` | 可选：check 之前写入、agent 永远拿不到的文件：按 `source.fix` 中的样子写入的文件，例如修复的测试；或者 `{ from, to }`，套件目录中的一个文件或目录。见[修复带来的测试](#修复带来的测试)和[套件目录中的测试](#套件目录中的测试)。 |
 | `successCriteria` | 代替 `check`：由评判器按这些标准判定。 |
 | `source` | 可选：任务来自的会话，`platform` 和 `sessionId`，以及 `fix`，即在那里修复它的完整提交，[`--try`](#试运行任务) 会检查它。 |
 
@@ -119,6 +119,35 @@ baseline at 3f2c9a7           written from 9a1d4e7 before setup: the check must 
 | 没有任何 `protect` 条目匹配的 `check.add` 路径 | agent 可以自己提供它。 |
 | `check.add` 里的通配符 | 每一项都只指明一个文件。 |
 
+### 套件目录中的测试
+
+任务的提交里没有的测试，例如你专门为任务写的测试，可以放在套件目录中。`check.add` 的 `{ from, to }` 条目把它写到 check 读取的位置，写入的时机和修复的测试相同；agent 永远拿不到它：
+
+```text
+benchmarks/fix-auth/
+  suite.yaml
+  tasks/expired-token.yaml
+  check-files/expired-token/refresh.test.ts
+```
+
+```yaml
+check:
+  run: npx vitest run test/auth/refresh.test.ts
+  protect: ['test/**', 'vitest.config.ts', 'package.json', 'package-lock.json']
+  add:
+    - from: check-files/expired-token/refresh.test.ts
+      to: test/auth/refresh.test.ts
+```
+
+`from` 是套件目录中的一个文件或目录；目录会把其下的每个文件写到 `to` 之下。每个文件按字节写入，保留可执行位。`teamai pull` 把这些文件和套件一起保存，运行写入的是它启动时的版本，所以运行期间 pull 不会改变任何 check。修改其中一个文件会改变任务的 `sourceHash`。这种条目不需要 `source.fix`。
+
+| `teamai pull` 和 `teamai review --branch` 拒绝 | 原因 |
+| --- | --- |
+| `from` 在套件目录中找不到、指向套件目录之外，或者是符号链接 | 只读取套件目录自己的文件。 |
+| 带 `..` 或通配符的 `to` | 它只指明克隆中的一个路径。 |
+| 没有任何 `protect` 条目匹配的 `to` 或其下的文件 | agent 可以自己提供它。 |
+| 两个条目写同一个路径 | 每个路径只写一次。 |
+
 ### 基线
 
 在任务的第一个 trial 之前，teamai 在起始提交的全新克隆上运行一次 setup 和 check：
@@ -163,7 +192,7 @@ missing-tool   could not run          not tried                          1: name
 setup-error    setup failed           not tried                          1: names setup and 3f2c9a7
 ```
 
-`--try` 按原样读取任务文件及其上两级目录中的 `suite.yaml`，像 `teamai pull` 一样校验两者，并检查 `<suite>` 就是该套件的 `name`。它不需要 `teamai init`。检出目录缺少的提交会像运行时一样，按 SHA 从套件的 `repo` 获取。每个提交都有一个全新克隆、套件的 `setup`、trial 得到的环境（见[运行套件](#运行套件)），以及套件的 `timeout`。它不创建运行，也不写记录；因为 check 会运行项目代码，它需要 `--sandbox`。
+`--try` 按原样读取任务文件及其上两级目录中的 `suite.yaml`，像 `teamai pull` 一样校验两者（连同其 `check.add` 条目从该套件目录指明的文件），并检查 `<suite>` 就是该套件的 `name`。它不需要 `teamai init`。检出目录缺少的提交会像运行时一样，按 SHA 从套件的 `repo` 获取。每个提交都有一个全新克隆、套件的 `setup`、trial 得到的环境（见[运行套件](#运行套件)），以及套件的 `timeout`。它不创建运行，也不写记录；因为 check 会运行项目代码，它需要 `--sandbox`。
 
 ## 运行套件
 
@@ -188,6 +217,7 @@ $ teamai workflow start fix-auth --benchmark --driver local --sandbox
 | 团队资产和套件 | 来自本检出目录上次 pull 到的团队修订，该修订必须已推送。启动时冻结：运行期间 pull 不会改变它运行的任何内容。 |
 | 环境 | 去掉 `GITHUB_TOKEN`、`GH_TOKEN`、`GITLAB_TOKEN`、`GL_TOKEN`、`CI_JOB_TOKEN`、`SSH_AUTH_SOCK`、`GIT_ASKPASS` 和 `SSH_ASKPASS`。 |
 | 你的主目录 | 保持原样：teamai 去不掉其中的登录信息、MCP 服务器和插件。 |
+| 本机上的团队仓库 | 保持原样：你的团队检出目录，以及每个 trial 克隆旁边用来安装其团队资产的那份团队修订副本，都包含 `benchmarks/`，check 文件也在其中。在本机上搜索的 agent 能找到它们。 |
 
 本地驱动一次运行一个 trial：全新克隆、团队资产、setup、用 prompt 启动 arm 的工具，然后运行 check。
 
