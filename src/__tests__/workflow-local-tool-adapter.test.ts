@@ -22,6 +22,28 @@ function child(stdout: string | Buffer[], exitCode = 0) {
   return childProcess;
 }
 
+/** A child that prints `lines` and then works on until it is stopped, as a tool in the middle of its work does. */
+function workingChild(lines: string[]) {
+  const stdoutEmitter = new EventEmitter();
+  const stderr = Object.assign(new EventEmitter(), { resume: () => undefined });
+  let running = true;
+  const childProcess = Object.assign(new EventEmitter(), {
+    stdout: stdoutEmitter,
+    stderr,
+    kill: (signal?: NodeJS.Signals | number): boolean => {
+      if (!running || signal === 0) return running;
+      running = false;
+      queueMicrotask(() => childProcess.emit('close', null));
+      return true;
+    },
+  });
+  queueMicrotask(() => {
+    childProcess.emit('spawn');
+    for (const line of lines) stdoutEmitter.emit('data', Buffer.from(`${line}\n`));
+  });
+  return childProcess;
+}
+
 /** What `claude -p --output-format stream-json --verbose` prints: an `init` event naming the session's model, then the result. */
 function claudeStream(model: string | undefined, result: Record<string, unknown>): string {
   const init = { type: 'system', subtype: 'init', session_id: 'session-1', ...(model ? { model } : {}) };
@@ -157,6 +179,59 @@ describe('local tool adapter', () => {
 
     expect(result).toMatchObject({ started: true, exitCode });
     expect(result.started && result.reachedMaxTurns).toBe(reachedMaxTurns);
+  });
+
+  it.each([
+    // As Claude streams with --include-partial-messages: an assistant event repeats the usage of its message's start, and
+    // the message's message_delta states its final usage.
+    ['headless Claude, counting each message at its final usage', 'claude', [
+      JSON.stringify({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1', usage: { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 500 } } } }),
+      JSON.stringify({ type: 'assistant', message: { id: 'm1', usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 500 } } }),
+      JSON.stringify({ type: 'assistant', message: { id: 'm1', usage: { input_tokens: 10, output_tokens: 2, cache_read_input_tokens: 500 } } }),
+      JSON.stringify({ type: 'stream_event', event: { type: 'message_delta', usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 500 } } }),
+      JSON.stringify({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm2', usage: { input_tokens: 30, output_tokens: 1, cache_read_input_tokens: 500 } } } }),
+      JSON.stringify({ type: 'assistant', message: { id: 'm2', usage: { input_tokens: 30, output_tokens: 2, cache_read_input_tokens: 500 } } }),
+      JSON.stringify({ type: 'stream_event', event: { type: 'message_delta', usage: { input_tokens: 30, output_tokens: 50, cache_read_input_tokens: 500 } } }),
+    ]],
+    ['OpenCode, counting each finished step', 'opencode', [
+      JSON.stringify({ type: 'step_finish', part: { type: 'step-finish', tokens: { input: 10, output: 20, cache: { read: 500 } } } }),
+      JSON.stringify({ type: 'step_finish', part: { type: 'step-finish', tokens: { input: 30, output: 50, cache: { read: 500 } } } }),
+    ]],
+  ] as const)('stops %s, once the tokens its stdout states pass the budget, and reports them', async (_, tool, lines) => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-budget-${tool}-${Date.now()}.json`);
+    files.push(resultPath);
+    const adapter = createLocalToolAdapter(() => workingChild([...lines]) as unknown as ReturnType<ToolSpawn>, () => tool);
+
+    const result = await adapter.run(tool, { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, budget: 100 });
+
+    expect(result).toMatchObject({ started: true, reachedBudget: true, tokens: { input: 40, output: 70, cachedInput: 1000 } });
+  });
+
+  it.each([
+    ['with a budget, streams partial messages', 100, true],
+    ['without one, does not', undefined, false],
+  ] as const)('headless Claude %s, whose message_delta events state each message\'s final usage', async (_, budget, streams) => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-partial-${String(budget)}-${Date.now()}.json`);
+    files.push(resultPath);
+    const spawnTool = vi.fn(() => child(claudeStream('claude-sonnet', { result: JSON.stringify({ ok: true }) }))) as unknown as ToolSpawn;
+    const adapter = createLocalToolAdapter(spawnTool, () => 'claude');
+
+    await adapter.run('claude', { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, ...(budget !== undefined ? { budget } : {}) });
+
+    const args = vi.mocked(spawnTool).mock.calls[0]?.[1] ?? [];
+    expect(args.includes('--include-partial-messages')).toBe(streams);
+  });
+
+  it('lets a tool under its budget run to the end, with the tokens it stated', async () => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-budget-under-${Date.now()}.json`);
+    files.push(resultPath);
+    const stdout = claudeStream('claude-sonnet', { usage: { input_tokens: 40, output_tokens: 60 } });
+    const adapter = createLocalToolAdapter(() => child(stdout) as ReturnType<ToolSpawn>, () => 'claude');
+
+    const result = await adapter.run('claude', { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, budget: 100 });
+
+    expect(result).toMatchObject({ started: true, exitCode: 0, tokens: { input: 40, output: 60 } });
+    expect(result.started && result.reachedBudget).toBeUndefined();
   });
 
   it('writes the Claude stdout fallback when the tool does not write result.json', async () => {

@@ -9,8 +9,9 @@ import { resolveCliPath } from '../../../utils/cli-path.js';
 import { writeJsonAtomic } from '../../../utils/fs.js';
 import { log } from '../../../utils/logger.js';
 import { stopProcess } from '../../../tool-launch/process-stop.js';
-import { toolStdout, type TokenUsage, type ToolReport } from '../../../tool-launch/stdout.js';
+import { tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '../../../tool-launch/stdout.js';
 import { executableOf, launchAdapterIdOf, opencodeModelArgs, type LaunchTool } from '../../../tool-launch/tools.js';
+import { budgeted } from '../../limits.js';
 import type { StepModel } from '../../step-model.js';
 import type { WorkflowFailure } from '../../types.js';
 import { agyGatewayEnv } from '../../../models/agy-gateway.js';
@@ -31,6 +32,8 @@ export interface LocalToolRun {
   env?: NodeJS.ProcessEnv;
   /** The most agent turns headless Claude may take. Other tools have no such flag. */
   maxTurns?: number;
+  /** The most tokens the run may bill, counted as a budget counts them: once its stdout states more, it is stopped. */
+  budget?: number;
 }
 
 /**
@@ -50,6 +53,8 @@ export type LocalToolResult =
     /** What the tool said the run cost, as it said it. */
     cost?: ToolReport['cost'];
     reachedMaxTurns?: boolean;
+    /** Whether the run was stopped once its stdout stated more tokens than its budget. */
+    reachedBudget?: boolean;
     failure?: WorkflowFailure;
   }
   | { started: false; exitCode: number; failure: WorkflowFailure };
@@ -91,7 +96,8 @@ function invocation(tool: LaunchTool, input: LocalToolRun, opencodeMajor: number
   switch (family) {
     case 'claude':
       if (interactive) return [...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume, prompt];
-      return ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...turns, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume];
+      // Only partial messages state each message's final usage as it ends, which the budget meter counts.
+      return ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...(input.budget !== undefined ? ['--include-partial-messages'] : []), ...turns, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume];
     case 'codebuddy':
       // Claude's flags, with no --effort.
       if (interactive) return [...agent, ...model, ...resume, prompt];
@@ -215,6 +221,9 @@ export function createLocalToolAdapter(
       const applied = input.agent ? { applied: promptHandoff(tool, input, opencodeMajor) ? 'prompt' as const : 'main' as const } : {};
       let started = false;
       let childProcess: ChildProcess | undefined;
+      const meter = input.budget !== undefined ? tokenMeter(launchAdapterIdOf(tool)) : undefined;
+      let metered: TokenUsage | undefined;
+      const overBudget = new AbortController();
       const closed = new Promise<{ exitCode: number; stdout: string; error?: NodeJS.ErrnoException }>((resolve) => {
         let child: ChildProcess;
         try {
@@ -238,9 +247,18 @@ export function createLocalToolAdapter(
         }
         childProcess = child;
         let stdout = '';
+        let partial = '';
         const decoder = new StringDecoder('utf8');
         child.on('spawn', () => { started = true; });
-        child.stdout?.on('data', (chunk: Buffer) => { stdout += decoder.write(chunk); });
+        child.stdout?.on('data', (chunk: Buffer) => {
+          const text = decoder.write(chunk);
+          stdout += text;
+          if (!meter || input.budget === undefined) return;
+          const lines = `${partial}${text}`.split('\n');
+          partial = lines.pop() ?? '';
+          for (const line of lines) metered = meter(line);
+          if (budgeted(metered) > input.budget) overBudget.abort();
+        });
         child.stderr?.resume();
         child.on('error', (error: NodeJS.ErrnoException) => resolve({ exitCode: 1, stdout, error }));
         child.on('close', (code) => resolve({ exitCode: code ?? 1, stdout: stdout + decoder.end() }));
@@ -253,9 +271,11 @@ export function createLocalToolAdapter(
       };
       signal?.addEventListener('abort', abort, { once: true });
       if (signal?.aborted) abort();
+      overBudget.signal.addEventListener('abort', () => void stop?.(), { once: true });
       const completed = await closed;
-      if (signal?.aborted) await stop?.();
+      if (signal?.aborted || overBudget.signal.aborted) await stop?.();
       signal?.removeEventListener('abort', abort);
+      const reachedBudget = overBudget.signal.aborted ? { reachedBudget: true } : {};
       if (!started || completed.error?.code === 'ENOENT') {
         return {
           started: false,
@@ -270,17 +290,21 @@ export function createLocalToolAdapter(
           started: true,
           exitCode: completed.exitCode,
           ...applied,
+          ...reachedBudget,
           failure: { code: 'tool_failed', message: `${tool} could not be started` },
         };
       }
       const fileResult = await readResultFile(input.resultPath);
-      const reported = toolStdout(launchAdapterIdOf(tool), completed.stdout);
+      const stated = toolStdout(launchAdapterIdOf(tool), completed.stdout);
+      // A tool stopped mid-run, such as Claude before its final result, states no total: what the meter counted stands in.
+      const reported = metered && !stated?.tokens ? { ...stated, tokens: metered } : stated;
       const result = combineResults(fileResult, reported) ?? (interactive ? {} : null);
       if (!result) {
         return {
           started: true,
           exitCode: completed.exitCode,
           ...applied,
+          ...reachedBudget,
           failure: { code: 'tool_failed', message: `${tool} did not write a valid workflow result` },
         };
       }
@@ -289,7 +313,7 @@ export function createLocalToolAdapter(
         result.failure = { code: 'tool_failed', message: `${tool} exited with status ${completed.exitCode}` };
       }
       if (!fileResult) await persistFallback(input.resultPath, result);
-      return { started: true, exitCode: completed.exitCode, ...applied, ...result };
+      return { started: true, exitCode: completed.exitCode, ...applied, ...reachedBudget, ...result };
     };
   return {
     run(tool, input, signal) {

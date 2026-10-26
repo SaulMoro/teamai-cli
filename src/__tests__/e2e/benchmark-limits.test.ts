@@ -64,6 +64,18 @@ describe('trial limits on the local driver', () => {
     expect(record.benchmark.trials[1]).not.toHaveProperty('limit');
   }, 120_000);
 
+  it('stops a claude trial whose stdout passes its budget, and marks the budget unenforced on a codex trial that passed it', async () => {
+    const suite = limitedSuite('{ budget: { tokens: 100 } }').replace('  - name: claude\n', '  - name: claude\n  - name: codex\n    tool: codex\n');
+    const { done, record } = await runLocally('fixes-and-spends', suite);
+
+    expect(done).toMatchObject({ outcome: 'succeeded', end: 'settled' });
+    expect(record.benchmark.trials).toEqual([
+      expect.objectContaining({ arm: 'claude', result: 'passed', limit: 'budget', tokens: { input: 80, output: 60 } }),
+      expect.objectContaining({ arm: 'codex', result: 'passed', limit: 'budget', unenforced: ['budget'] }),
+    ]);
+    expect(record.benchmark.trials[0]).not.toHaveProperty('unenforced');
+  }, 120_000);
+
   it('ends the run at its timeout when that comes before the trial timeout, with no limit on the trial', async () => {
     const fixture = await benchmarkFixture({ tool: 'hangs', sandbox: true, suite: limitedSuite('{ timeout: 19900ms }').replace('timeout: 10m', 'timeout: 20s') });
     fixtures.push(fixture);

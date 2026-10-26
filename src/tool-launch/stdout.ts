@@ -182,6 +182,34 @@ function agyStdout(stdout: string): ToolReport | null {
   };
 }
 
+/**
+ * Counts what a tool billed while its stdout streams, fed one line at a time, and returns the total so far: Claude's
+ * messages once each, at the usage the `message_delta` of `--include-partial-messages` states as a message ends, since
+ * its assistant events repeat the usage of the message's start and it states a run's total only in its final result;
+ * Codex's finished turns and OpenCode's finished steps, as `toolStdout` adds them up.
+ */
+export function tokenMeter(adapter: LaunchAdapterId): (line: string) => TokenUsage | undefined {
+  if (adapter === 'claude') {
+    const messages = new Map<string, TokenUsage>();
+    let current: string | undefined;
+    return (line) => {
+      for (const record of jsonRecords(line)) {
+        const event = record.type === 'stream_event' ? asRecord(record.event) : undefined;
+        const started = event?.type === 'message_start' ? asRecord(event.message) : undefined;
+        if (typeof started?.id === 'string') current = started.id;
+        const usage = started ? tokenUsage(started) : event?.type === 'message_delta' ? tokenUsage(event) : undefined;
+        if (current !== undefined && usage) messages.set(current, usage);
+      }
+      return [...messages.values()].reduce<TokenUsage | undefined>(addTokens, undefined);
+    };
+  }
+  const found: ToolReport = {};
+  return (line) => {
+    for (const record of jsonRecords(line)) absorbMetadata(record, found, 0);
+    return found.tokens;
+  };
+}
+
 /** What stdout of a tool on this adapter reports. CodeBuddy prints Claude's result record. */
 export function toolStdout(adapter: LaunchAdapterId, stdout: string): ToolReport | null {
   if (adapter === 'claude' || adapter === 'codebuddy') return claudeStdout(stdout);

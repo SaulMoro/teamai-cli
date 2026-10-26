@@ -64,7 +64,8 @@ function spentUnder(run: RunState, state: StepState): number {
   return spentBy(run.steps.slice(at, end), run, under);
 }
 
-function budgeted(tokens: TokenUsage | undefined): number {
+/** What a budget counts of `tokens`: input plus output. Cached input is shown, never counted. */
+export function budgeted(tokens: TokenUsage | undefined): number {
   return (tokens?.input ?? 0) + (tokens?.output ?? 0);
 }
 

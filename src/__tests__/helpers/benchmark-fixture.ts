@@ -48,9 +48,12 @@ export const PRODUCT_URL = 'https://github.com/fixture/app.git';
  * test/auth/refresh.test.js that always passes, and no fix. `hangs` never exits; `fixes-and-hangs` makes the check pass,
  * takes git's index lock in the clone as a commit does, and never exits. `fixes-and-runs-out-of-turns` makes the check
  * pass, then, when launched with --max-turns, ends as Claude does at that cap: an `error_max_turns` result and exit 1.
+ * `fixes-and-spends` makes the check pass and bills 140 tokens: as claude, in two messages streamed as Claude streams
+ * them with partial messages, and then works on with no result; as codex, in the one turn.completed Codex prints as it
+ * ends.
  */
 export type FakeTool = 'fixes' | 'does-nothing' | 'fails-first' | 'skips-the-check' | 'adds-a-helper' | 'adds-a-helper-repository' | 'writes-a-passing-test' | 'hangs'
-  | 'fixes-and-hangs' | 'fixes-and-runs-out-of-turns';
+  | 'fixes-and-hangs' | 'fixes-and-runs-out-of-turns' | 'fixes-and-spends';
 
 /**
  * What a fake tool does on the fixture's first launch of any fake tool, before it answers: push a team commit of
@@ -173,6 +176,16 @@ const FAKE_TOOLS: Record<FakeTool, string> = {
   'does-nothing': '',
   hangs: 'setInterval(() => {}, 60_000);',
   'fixes-and-hangs': `${FIX} fs.writeFileSync('.git/index.lock', ''); setInterval(() => {}, 60_000);`,
+  'fixes-and-spends': `${FIX} if (path.basename(process.argv[1]) === 'claude') {
+  for (const id of ['m1', 'm2']) {
+    process.stdout.write(JSON.stringify({ type: 'stream_event', event: { type: 'message_start', message: { id, usage: { input_tokens: 40, output_tokens: 1 } } } }) + '\\n');
+    process.stdout.write(JSON.stringify({ type: 'assistant', message: { id, usage: { input_tokens: 40, output_tokens: 2 } } }) + '\\n');
+    process.stdout.write(JSON.stringify({ type: 'stream_event', event: { type: 'message_delta', usage: { input_tokens: 40, output_tokens: 30 } } }) + '\\n');
+  }
+  setInterval(() => {}, 60_000);
+  return;
+}
+process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 80, output_tokens: 60 } }) + '\\n');`,
   'fixes-and-runs-out-of-turns': `${FIX} if (process.argv.includes('--max-turns')) {
   process.stdout.write(JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, session_id: 'fake-session', usage: { input_tokens: 4, output_tokens: 2 } }) + '\\n');
   process.exit(1);
