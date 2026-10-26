@@ -14,7 +14,7 @@ import { isYamlNode, locate } from '../parse-context.js';
 import { durationMs } from '../parse.js';
 import { SetupSchema, type Setup } from '../requirements.js';
 import type { WorkflowDiagnostic } from '../types.js';
-import { BENCHMARK_NAME, BenchmarkNameSchema, CommitSchema } from './terms.js';
+import { BENCHMARK_NAME, BenchmarkNameSchema, CommitSchema, type TrialLimits } from './terms.js';
 
 /** The project the tasks start from. A URL, never a local path or a URL with credentials: it travels in plan and record. */
 const RepoUrlSchema = z.string().url().refine((value) => {
@@ -39,6 +39,9 @@ const RepoPathSchema = z.string().min(1).refine(
 
 /** A file or directory of the suite directory, `benchmarks/<suite>/`, read as bytes by the sync. */
 const SuitePathSchema = z.string().min(1).refine(isRelativePath, 'must be a path inside the suite directory, with no backslash and no ".", ".." or empty segment');
+
+const TOKENS = 'must be a positive whole number of tokens';
+const WHOLE = 'must be a positive whole number';
 
 const DurationSchema = z.string({ required_error: 'timeout is required: the run\'s timeout, such as 6h' }).transform((text, ctx): number => {
   const ms = durationMs(text);
@@ -72,9 +75,22 @@ const SuiteFileSchema = z.object({
   repetitions: z.number().int().min(1).max(10).default(3),
   /** Required: the run's timeout. */
   timeout: DurationSchema,
+  /** The limits of every trial's prompt. */
+  trial: z.object({
+    timeout: DurationSchema.optional(),
+    budget: z.object({ tokens: z.number().int(TOKENS).positive(TOKENS) }).strict().optional(),
+    max_turns: z.number().int(WHOLE).positive(WHOLE).optional(),
+  }).strict().transform((trial): TrialLimits => ({
+    ...(trial.timeout !== undefined ? { timeoutMs: trial.timeout } : {}),
+    ...(trial.budget ? { tokens: trial.budget.tokens } : {}),
+    ...(trial.max_turns !== undefined ? { maxTurns: trial.max_turns } : {}),
+  })).optional(),
   setup: SetupSchema.optional(),
   scorers: z.array(z.string().min(1)).default([]),
 }).strict().superRefine((suite, ctx) => {
+  if (suite.trial?.timeoutMs !== undefined && suite.trial.timeoutMs >= suite.timeout) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['trial', 'timeout'], message: 'trial.timeout must be shorter than timeout, which bounds the whole run' });
+  }
   const seen = new Set<string>();
   let unchanged: string | undefined;
   suite.arms.forEach((arm, index) => {
@@ -248,6 +264,8 @@ export interface Suite {
   arms: [Arm, ...Arm[]];
   repetitions: number;
   timeoutMs: number;
+  /** Absent: no trial has a limit of its own. */
+  trial?: TrialLimits;
   setup?: Setup;
   scorers: string[];
   /** The valid tasks, in file-name order. Never empty. */
@@ -330,6 +348,7 @@ export function parseSuite(input: { suite: SourceFile; tasks: readonly SourceFil
       arms: [arm(firstArm), ...otherArms.map(arm)],
       repetitions: file.repetitions,
       timeoutMs: file.timeout,
+      ...(file.trial ? { trial: file.trial } : {}),
       ...(file.setup ? { setup: file.setup } : {}),
       scorers: file.scorers,
       tasks: [first, ...rest],

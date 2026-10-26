@@ -16,7 +16,7 @@ import { isLabelShaped, isNameShaped } from '../../agent-observation.js';
 import type { PinnedScorer } from '../../scorers/pin.js';
 import type { WorkflowDefinition, WorkflowStep } from '../types.js';
 import type { Suite, Task, TaskJudge } from './suite.js';
-import { BenchmarkNameSchema, CommitSchema, TRIAL_WITHHELD_ENV, TrialSelectionSchema, type Added, type PromptTerms, type TrialSelection } from './terms.js';
+import { BenchmarkNameSchema, CommitSchema, TRIAL_WITHHELD_ENV, TrialLimitsSchema, TrialSelectionSchema, type Added, type PromptTerms, type TrialSelection } from './terms.js';
 
 const Sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 
@@ -64,6 +64,8 @@ export const BenchmarkPlanSchema = z.object({
   /** The names every trial step withholds from setup, the tool and the check. */
   withhold: z.array(z.string()),
   repetitions: z.number().int().min(1).max(10),
+  /** The suite's `trial`: the limits of every trial's prompt. */
+  limits: TrialLimitsSchema.optional(),
   tasks: z.array(PlannedTaskSchema).nonempty(),
   arms: z.array(PlannedArmSchema).nonempty(),
   /** Every scorer that judges a trial, the generated correctness scorers included, with the rubric hash it was pinned with. */
@@ -121,6 +123,7 @@ export function freezePlan(input: {
     selection: input.selection,
     withhold: [...TRIAL_WITHHELD_ENV],
     repetitions: suite.repetitions,
+    ...(suite.trial ? { limits: suite.trial } : {}),
     tasks: [planned(first), ...rest.map(planned)],
     arms: input.arms,
     scorers: Object.entries({ ...input.scorers, ...correctnessScorers(suite) }).map(([name, pin]) => ({ name, rubric: { sourceHash: pin.sourceHash } })),
@@ -265,6 +268,7 @@ function promptTerms(plan: BenchmarkPlan, trial: PlannedTrial, arm: PlannedArm, 
     kind: 'prompt', task: task.id, arm: arm.name, repetition: trial.repetition, order: trial.order, tool: arm.tool,
     ...(arm.model ? { model: arm.model } : {}), ...(arm.effort ? { effort: arm.effort } : {}),
     startingCommit: task.startingCommit, teamRevision: arm.teamRevision, selection: plan.selection,
+    ...(plan.limits ? { limits: plan.limits } : {}),
   };
 }
 

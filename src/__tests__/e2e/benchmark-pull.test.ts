@@ -78,6 +78,22 @@ describe('benchmark suites at pull', () => {
     expect(started.error).toMatchObject({ code: 'benchmark_not_found' });
   }, 120_000);
 
+  it('reports a trial.timeout not shorter than the suite timeout with its line, and start refuses the suite', async () => {
+    const fixture = await benchmarkFixture({ tool: 'does-nothing', sandbox: false });
+    fixtures.push(fixture);
+    fixture.pushTeam({
+      'benchmarks/capped/suite.yaml': suite('capped', { arms: '[{ name: claude }]', trial: '{ timeout: 1h }' }),
+      'benchmarks/capped/tasks/fix.yaml': fixTask(fixture.startingCommit),
+    });
+
+    const pulled = await fixture.teamai(['pull']);
+    const started = envelope(await fixture.teamai(['workflow', 'start', 'capped', '--benchmark']));
+
+    expect(pulled.code, said(pulled)).toBe(0);
+    expect(`${pulled.stdout}\n${pulled.stderr}`).toContain('benchmarks/capped/suite.yaml:8: field "trial.timeout": trial.timeout must be shorter than timeout, which bounds the whole run');
+    expect(started.error).toMatchObject({ code: 'benchmark_not_found' });
+  }, 120_000);
+
   it('starts from the last valid version of a suite whose newest revision has no valid task', async () => {
     const fixture = await benchmarkFixture({ tool: 'does-nothing', sandbox: false });
     fixtures.push(fixture);

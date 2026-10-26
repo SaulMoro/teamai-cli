@@ -74,6 +74,27 @@ describe('parseSuite', () => {
     expect(parsed.diagnostics).toEqual([expect.objectContaining({ file: 'benchmarks/fix/suite.yaml', field, message })]);
   });
 
+  it('keeps the limits a suite sets for every trial', () => {
+    const parsed = parse(suiteText({ timeout: '45m', trial: '{ timeout: 8m, budget: { tokens: 300000 }, max_turns: 60 }' }));
+    const without = parse(suiteText());
+
+    expect(parsed).toMatchObject({ ok: true, diagnostics: [], suite: { trial: { timeoutMs: 8 * 60_000, tokens: 300_000, maxTurns: 60 } } });
+    expect(without.ok && without.suite.trial).toBeUndefined();
+  });
+
+  it.each([
+    ['a trial timeout as long as the suite\'s', suiteText({ timeout: '45m', trial: '{ timeout: 45m }' }), 'trial.timeout', 'trial.timeout must be shorter than timeout, which bounds the whole run'],
+    ['a trial timeout longer than the suite\'s', suiteText({ timeout: '45m', trial: '{ timeout: 1h }' }), 'trial.timeout', 'trial.timeout must be shorter than timeout, which bounds the whole run'],
+    ['a trial budget of no tokens', suiteText({ trial: '{ budget: { tokens: 0 } }' }), 'trial.budget.tokens', 'must be a positive whole number of tokens'],
+    ['a fractional max_turns', suiteText({ trial: '{ max_turns: 1.5 }' }), 'trial.max_turns', 'must be a positive whole number'],
+    ['a trial key the suite does not know', suiteText({ trial: '{ turns: 3 }' }), 'trial', "Unrecognized key(s) in object: 'turns'"],
+  ])('reports %s at its suite file', (_rule, suite, field, message) => {
+    const parsed = parse(suite);
+
+    expect(parsed.ok).toBe(false);
+    expect(parsed.diagnostics).toEqual([expect.objectContaining({ file: 'benchmarks/fix/suite.yaml', field, message })]);
+  });
+
   it.each([
     ['a task with both check and successCriteria', taskText({ successCriteria: 'The test passes.' }), 'check', 'a task has exactly one of check and successCriteria'],
     ['a task with an empty protect', taskText({ check: '{ run: node test.js, protect: [] }' }), 'check.protect', 'check.protect lists every path the check reads and the agent must not supply'],

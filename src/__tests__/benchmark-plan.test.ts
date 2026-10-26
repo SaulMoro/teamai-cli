@@ -29,13 +29,14 @@ afterEach(() => {
 
 /**
  * A check suite of `tasks` tasks t01.. and `arms` arms a01.., arm i on `tools[i]`, and on claude past them; an arm after
- * the first with no tool of its own runs model m<i>, as each arm changes one of the defaults.
+ * the first with no tool of its own runs model m<i>, as each arm changes one of the defaults. `trial` is the suite's
+ * `trial` value.
  */
-function suiteOf({ tasks = 1, arms = 1, repetitions = 1, tools = [] as string[] } = {}): BenchmarkSuiteFiles {
+function suiteOf({ tasks = 1, arms = 1, repetitions = 1, tools = [] as string[], trial = '' } = {}): BenchmarkSuiteFiles {
   const names = (prefix: string, count: number): string[] => Array.from({ length: count }, (_, index) => `${prefix}${String(index + 1).padStart(2, '0')}`);
   return {
     name: 'fix',
-    suite: `schemaVersion: v1alpha1\nname: fix\nrepo: https://github.com/fixture/app.git\ndefaults: { tool: claude }\narms: [${names('a', arms).map((name, index) => `{ name: ${name}${tools[index] ? `, tool: ${tools[index]}` : index > 0 ? `, model: m${index + 1}` : ''} }`).join(', ')}]\nrepetitions: ${repetitions}\ntimeout: 10m\n`,
+    suite: `schemaVersion: v1alpha1\nname: fix\nrepo: https://github.com/fixture/app.git\ndefaults: { tool: claude }\narms: [${names('a', arms).map((name, index) => `{ name: ${name}${tools[index] ? `, tool: ${tools[index]}` : index > 0 ? `, model: m${index + 1}` : ''} }`).join(', ')}]\nrepetitions: ${repetitions}\ntimeout: 10m\n${trial ? `trial: ${trial}\n` : ''}`,
     tasks: Object.fromEntries(names('t', tasks).map((name) => [name,
       "schemaVersion: v1alpha1\ntitle: Fix it\nprompt: Make the test pass.\nstartingCommit: '{{startingCommit}}'\ncheck: { run: node test.js, protect: [test.js] }\n"])),
   };
@@ -93,6 +94,23 @@ describe('benchmark plan run', () => {
       trial: { kind: 'prompt', task: 't01', arm: 'a01', repetition: 1, order: 1, tool: 'claude', startingCommit: RUN_START, teamRevision: RUN_TEAM },
       workspace: { base: { commit: RUN_START }, configCommit: RUN_START },
     } } });
+  });
+
+  it.each([
+    ['the limits its suite sets', '{ timeout: 5m, budget: { tokens: 1000 }, max_turns: 3 }', { timeoutMs: 300_000, tokens: 1000, maxTurns: 3 }],
+    ['no limits when its suite sets none', '', undefined],
+  ])('leases each trial prompt %s, and records them', async (_, trial, limits) => {
+    const { config, runId } = await startFix({ trial });
+    await settleBaselines(config, runId, driver, can);
+
+    const next = LeaseSchema.extend({ data: z.object({ lease: z.object({ trial: z.record(z.unknown()) }) }) })
+      .parse(await leaseNext(config, runId, driver, { can, prepare: true }));
+    await cancelRun(config, runId, {});
+    const run = await readRun(config, runId);
+
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    expect(next.data.lease.trial.limits).toEqual(limits);
+    expect(buildEndRecord(run, run.driver, '').benchmark?.limits).toEqual(limits);
   });
 
   it('refuses a trial report teamai did not complete, and accepts the one it did', async () => {

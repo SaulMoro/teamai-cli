@@ -1516,6 +1516,25 @@ describe('reviewBranchDir — benchmarks', () => {
     }]);
   });
 
+  it('fails a suite whose trial.timeout is not shorter than its timeout, with the line', async () => {
+    await fse.outputFile(path.join(repoDir, 'benchmarks', 'fix', 'suite.yaml'), [
+      'schemaVersion: v1alpha1', 'name: fix', 'repo: https://github.com/acme/app.git', 'defaults: { tool: claude }', 'arms: [{ name: claude }]', 'timeout: 45m', 'trial: { timeout: 1h }', '',
+    ].join('\n'));
+    await fse.outputFile(path.join(repoDir, 'benchmarks', 'fix', 'tasks', 'fix.yaml'), [
+      'schemaVersion: v1alpha1', 'title: Fix it', 'prompt: Make the test pass.', `startingCommit: ${'a'.repeat(40)}`, 'check: { run: node test.js, protect: [test.js] }', '',
+    ].join('\n'));
+
+    const review = await reviewBranchDir(BRANCH, repoDir);
+
+    expect(review.ok).toBe(false);
+    expect(review.findings).toEqual([{
+      level: 'fail',
+      check: 'workflows',
+      path: 'benchmarks/fix/suite.yaml',
+      message: 'benchmarks/fix/suite.yaml:7: field "trial.timeout": trial.timeout must be shorter than timeout, which bounds the whole run',
+    }]);
+  });
+
   it('fails a suite that lists a scorer the branch does not have', async () => {
     await writeScorer(repoDir, 'quality.md', VALID_SCORER);
     await fse.outputFile(path.join(repoDir, 'benchmarks', 'fix', 'suite.yaml'), [

@@ -35,6 +35,19 @@ export const TrialSelectionSchema = z.object({
 }).strict();
 export type TrialSelection = z.infer<typeof TrialSelectionSchema>;
 
+/**
+ * The limits a suite's `trial` sets on every trial's prompt; an absent key is no limit. The driver that launches the
+ * tool enforces them. Reaching one ends the agent's turn, and the trial's check or judge still decides it.
+ */
+export const TrialLimitsSchema = z.object({
+  timeoutMs: z.number().int().positive().optional(),
+  /** Input plus output tokens, as a workflow budget counts them. */
+  tokens: z.number().int().positive().optional(),
+  /** Agent turns, as the tool counts them. */
+  maxTurns: z.number().int().positive().optional(),
+}).strict();
+export type TrialLimits = z.infer<typeof TrialLimitsSchema>;
+
 const Shared = {
   task: BenchmarkNameSchema,
   /** Where the step's clone starts, and the commit agent configuration comes from. */
@@ -59,6 +72,7 @@ export const PromptTermsSchema = z.object({
   /** The team commit the trial's assets come from: the arm's. */
   teamRevision: CommitSchema,
   selection: TrialSelectionSchema,
+  limits: TrialLimitsSchema.optional(),
 }).strict();
 
 /**

@@ -11,6 +11,7 @@ import type { EntryVerdict } from '../../scorers/entry.js';
 import type { StepState } from '../step-state.js';
 import type { RunState } from '../types.js';
 import { baselineStepOf, correctnessScorerName, stepOf, type BenchmarkPlan, type PlannedTask, type PlannedTrial } from './plan.js';
+import { TrialLimitsSchema } from './terms.js';
 
 export const TRIAL_RESULTS = ['passed', 'failed', 'error', 'unscored', 'not_run'] as const;
 export type TrialResult = (typeof TRIAL_RESULTS)[number];
@@ -26,6 +27,8 @@ export type Baseline = (typeof BASELINES)[number];
 export const BenchmarkRecordSchema = z.object({
   suite: z.object({ name: z.string(), sourceHash: z.string() }),
   repetitions: z.number().int(),
+  /** The limits every trial's prompt ran under; absent when the suite set none. */
+  limits: TrialLimitsSchema.optional(),
   baselineTeamRevision: z.string(),
   scorers: z.array(z.object({ name: z.string(), rubric: z.object({ sourceHash: z.string() }) })),
   tasks: z.array(z.object({ id: z.string(), startingCommit: z.string(), sourceHash: z.string(), baseline: z.enum(BASELINES) })),
@@ -56,6 +59,7 @@ export function benchmarkRecord(run: RunState & { benchmark: BenchmarkPlan }): B
   return {
     suite: { name: plan.suite.name, sourceHash: plan.suite.sourceHash },
     repetitions: plan.repetitions,
+    ...(plan.limits ? { limits: plan.limits } : {}),
     baselineTeamRevision: plan.baselineTeamRevision,
     scorers: plan.scorers,
     tasks: plan.tasks.map((task) => ({ id: task.id, startingCommit: task.startingCommit, sourceHash: task.sourceHash, baseline: baselineOf(run, task) })),
