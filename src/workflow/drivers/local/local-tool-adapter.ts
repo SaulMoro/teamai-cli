@@ -49,6 +49,7 @@ export type LocalToolResult =
     tokens?: TokenUsage;
     /** What the tool said the run cost, as it said it. */
     cost?: ToolReport['cost'];
+    reachedMaxTurns?: boolean;
     failure?: WorkflowFailure;
   }
   | { started: false; exitCode: number; failure: WorkflowFailure };
@@ -164,6 +165,7 @@ function combineResults(fileResult: ResultFile | null, reported: ToolReport | nu
   if (reported?.session) result.session = reported.session;
   if (reported?.tokens) result.tokens = reported.tokens;
   if (reported?.cost) result.cost = reported.cost;
+  if (reported?.reachedMaxTurns) result.reachedMaxTurns = true;
   return result;
 }
 

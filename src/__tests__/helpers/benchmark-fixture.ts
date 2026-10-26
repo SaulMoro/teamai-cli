@@ -46,10 +46,11 @@ export const PRODUCT_URL = 'https://github.com/fixture/app.git';
  * check that reads them: set `skip` in check.config.js, add test/pass.setup.js, which stubs out assert, or commit that
  * helper as test/helpers/pass.setup.js into a git repository of its own. `writes-a-passing-test` writes an executable
  * test/auth/refresh.test.js that always passes, and no fix. `hangs` never exits; `fixes-and-hangs` makes the check pass,
- * takes git's index lock in the clone as a commit does, and never exits.
+ * takes git's index lock in the clone as a commit does, and never exits. `fixes-and-runs-out-of-turns` makes the check
+ * pass, then, when launched with --max-turns, ends as Claude does at that cap: an `error_max_turns` result and exit 1.
  */
 export type FakeTool = 'fixes' | 'does-nothing' | 'fails-first' | 'skips-the-check' | 'adds-a-helper' | 'adds-a-helper-repository' | 'writes-a-passing-test' | 'hangs'
-  | 'fixes-and-hangs';
+  | 'fixes-and-hangs' | 'fixes-and-runs-out-of-turns';
 
 /**
  * What a fake tool does on the fixture's first launch of any fake tool, before it answers: push a team commit of
@@ -172,6 +173,10 @@ const FAKE_TOOLS: Record<FakeTool, string> = {
   'does-nothing': '',
   hangs: 'setInterval(() => {}, 60_000);',
   'fixes-and-hangs': `${FIX} fs.writeFileSync('.git/index.lock', ''); setInterval(() => {}, 60_000);`,
+  'fixes-and-runs-out-of-turns': `${FIX} if (process.argv.includes('--max-turns')) {
+  process.stdout.write(JSON.stringify({ type: 'result', subtype: 'error_max_turns', is_error: true, session_id: 'fake-session', usage: { input_tokens: 4, output_tokens: 2 } }) + '\\n');
+  process.exit(1);
+}`,
   'fails-first': `if (first) process.exitCode = 1; else ${FIX}`,
   'skips-the-check': "fs.writeFileSync('check.config.js', 'module.exports = { skip: true };\\n');",
   'adds-a-helper': "fs.mkdirSync('test', { recursive: true }); fs.writeFileSync('test/pass.setup.js', \"require('node:assert').strictEqual = () => {};\\n\");",

@@ -595,8 +595,9 @@ async function driveBenchmarkRun(config: LocalConfig, lock: RunLock, cwd: string
  * One prepared prompt, launched by the trial rules: the lease's tool, never the member's --tools mapping; the lease's
  * model and effort as given, with no alias lookup; the env without every name the lease withholds; in the clone. The
  * report carries the time around the tool's run alone, and the cost only when the tool stated one. A tool still running
- * at the lease's `trial.limits` timeout is stopped with everything it started, and the prompt succeeds with that
- * limit, so the check decides the trial on what it left.
+ * at the lease's `trial.limits` timeout is stopped with everything it started, and headless Claude runs with its
+ * `maxTurns`; either way the prompt succeeds with that limit, so the check decides the trial on what the agent left.
+ * Other tools have no turn cap, so their report lists max_turns as unenforced.
  */
 async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, signal }: {
   driver: DriverIdentity;
@@ -612,22 +613,24 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
   const scoped = await stepEnvironment(env.values, lease.envScope);
   if (!scoped.ok) return { ...reported, ...failureReport(scoped.failure) };
   let result: LocalToolResult;
+  const maxTurns = localToolFamily(tool) === 'claude' ? limits?.maxTurns : undefined;
   const timeout = timeoutSignal(limits?.timeoutMs);
   const started = performance.now();
   try {
     result = await adapter.run(tool, {
       prompt: lease.prompt, cwd: lease.cwd, resultPath: resultFile, env: { ...scoped.env, ...lease.env },
       ...(model ? { model: { name: model, ...(effort ? { effort } : {}) } } : {}),
+      ...(maxTurns !== undefined ? { maxTurns } : {}),
     }, AbortSignal.any([signal, timeout]));
   } catch {
     result = { started: false, exitCode: 1, failure: { code: 'tool_failed', message: `${tool} could not complete the trial` } };
   }
   const durationMs = Math.round(performance.now() - started);
   const ran = result.started ? result : undefined;
-  const limit = ran && timeout.aborted ? 'timeout' : undefined;
+  const limit = !ran ? undefined : timeout.aborted ? 'timeout' : ran.reachedMaxTurns ? 'max_turns' : undefined;
   // A tool stopped while git wrote the index leaves its lock, on which the report's commit of the clone would fail.
   // The adapter returns once the tool's process group is gone, so nothing holds it any more.
-  if (limit) await fs.rm(path.join(lease.cwd, '.git', 'index.lock'), { force: true });
+  if (limit === 'timeout') await fs.rm(path.join(lease.cwd, '.git', 'index.lock'), { force: true });
   return {
     ...reported,
     ...(ran ? { durationMs } : {}),
@@ -635,6 +638,7 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
     ...(ran?.session ? { session: ran.session } : {}),
     ...(ran?.tokens ? { tokens: ran.tokens } : {}),
     ...(ran?.cost ? { cost: ran.cost } : {}),
+    ...(limits?.maxTurns !== undefined && maxTurns === undefined ? { unenforced: ['max_turns' as const] } : {}),
     ...(limit ? { outcome: 'success', limit }
       : result.failure ? failureReport(result.failure) : { outcome: result.exitCode === 0 ? 'success' : 'failed' }),
   };

@@ -8,7 +8,7 @@ import { createLocalToolAdapter, type ToolSpawn } from '../workflow/drivers/loca
 
 const files: string[] = [];
 
-function child(stdout: string | Buffer[]) {
+function child(stdout: string | Buffer[], exitCode = 0) {
   const stdoutEmitter = new EventEmitter();
   const stderr = Object.assign(new EventEmitter(), { resume: () => undefined });
   const childProcess = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter };
@@ -17,7 +17,7 @@ function child(stdout: string | Buffer[]) {
   queueMicrotask(() => {
     childProcess.emit('spawn');
     for (const chunk of typeof stdout === 'string' ? [Buffer.from(stdout)] : stdout) stdoutEmitter.emit('data', chunk);
-    childProcess.emit('close', 0);
+    childProcess.emit('close', exitCode);
   });
   return childProcess;
 }
@@ -143,6 +143,20 @@ describe('local tool adapter', () => {
     await adapter.run('claude', { prompt: 'Plan.', cwd: os.tmpdir(), resultPath, maxTurns: 3 });
 
     expect(spawnTool).toHaveBeenCalledWith('claude', expect.arrayContaining(['-p', '--max-turns', '3']), expect.anything());
+  });
+
+  it.each([
+    ['stopped at its --max-turns cap', 'error_max_turns', 1, true],
+    ['ran to the end', 'success', 0, undefined],
+  ])('says whether headless Claude %s', async (_, subtype, exitCode, reachedMaxTurns) => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-turns-${subtype}-${Date.now()}.json`);
+    files.push(resultPath);
+    const adapter = createLocalToolAdapter(() => child(claudeStream('claude-sonnet', { subtype, is_error: exitCode !== 0 }), exitCode) as ReturnType<ToolSpawn>, () => 'claude');
+
+    const result = await adapter.run('claude', { prompt: 'Plan.', cwd: os.tmpdir(), resultPath, maxTurns: 3 });
+
+    expect(result).toMatchObject({ started: true, exitCode });
+    expect(result.started && result.reachedMaxTurns).toBe(reachedMaxTurns);
   });
 
   it('writes the Claude stdout fallback when the tool does not write result.json', async () => {

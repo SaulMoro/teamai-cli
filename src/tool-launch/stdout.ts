@@ -14,6 +14,8 @@ export interface ToolReport {
   session?: string;
   tokens?: TokenUsage;
   cost?: { amount: number; unit: string };
+  /** Whether the run ended at the turn cap it was launched with: Claude's `error_max_turns` result. */
+  reachedMaxTurns?: boolean;
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -45,6 +47,7 @@ function claudeStdout(stdout: string): ToolReport | null {
     ...(model !== undefined ? { model } : {}),
     ...(typeof record.session_id === 'string' ? { session: record.session_id } : {}),
     ...(cost !== undefined && cost >= 0 ? { cost: { amount: cost, unit: 'USD' } } : {}),
+    ...(record.subtype === 'error_max_turns' ? { reachedMaxTurns: true } : {}),
     ...(usage ? {
       tokens: {
         ...(finiteNumber(usage.input_tokens) !== undefined ? { input: finiteNumber(usage.input_tokens) } : {}),
