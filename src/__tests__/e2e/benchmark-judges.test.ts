@@ -51,10 +51,10 @@ afterEach(() => {
   for (const fixture of fixtures.splice(0)) fixture.remove();
 });
 
-async function judgedFixture(options: { judge?: FakeJudge; arms?: Array<{ name: string; model?: string }>; scorers?: string[]; tools?: Array<'claude' | 'codex'> } = {}): Promise<BenchmarkFixture> {
+async function judgedFixture(options: { judge?: FakeJudge; arms?: Array<{ name: string; model?: string }>; scorers?: string[]; tools?: Array<'claude' | 'codex'>; timeout?: string } = {}): Promise<BenchmarkFixture> {
   const fixture = await benchmarkFixture({
     tool: 'fixes', sandbox: true, judge: options.judge, tools: options.tools ?? ['claude'],
-    suite: suite({ arms: options.arms ?? [{ name: 'claude' }], scorers: options.scorers }), tasks: { fix: CRITERIA_TASK },
+    suite: suite({ arms: options.arms ?? [{ name: 'claude' }], scorers: options.scorers }).replace('timeout: 10m', `timeout: ${options.timeout ?? '10m'}`), tasks: { fix: CRITERIA_TASK },
     team: options.scorers ? { 'scorers/quality.md': QUALITY } : {},
   });
   fixtures.push(fixture);
@@ -102,6 +102,18 @@ describe('benchmark judges on the local driver', () => {
     expect(done.benchmark.text).toContain(row);
     expect(RecordSchema.parse(fixture.endRecord(done.run)).benchmark.trials).toMatchObject([{ result }]);
     expect(RunSchema.parse(fixture.runFile(done.run)).verdicts).toEqual([expect.objectContaining({ scorer: CORRECTNESS, outcome })]);
+  }, 120_000);
+
+  it('stops a judge still running at the suite timeout, and ends the run timed out with the trial unscored', async () => {
+    const fixture = await judgedFixture({ judge: 'hangs', timeout: '20s' });
+
+    const started = Date.now();
+    const done = await runLocally(fixture);
+
+    expect(Date.now() - started).toBeLessThan(60_000);
+    expect(fixture.judgeLaunches()).toHaveLength(1);
+    expect(done.outcome).toBe('failed');
+    expect(done.benchmark.text).toContain('| claude | claude | tool default (team) | 1 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0% (0/1) |');
   }, 120_000);
 
   it('refuses to start a suite that needs a judge on a machine with no judge tool, and leaves no run', async () => {

@@ -24,6 +24,7 @@ import { callerProvenance, respondProvenance, respondToHitl } from '../../run-co
 import { isRecord } from '../../expression.js';
 import { MAX_TIMER_DELAY } from '../../shell-command.js';
 import { judgeRunEntries } from '../../scoring.js';
+import { runDeadline } from '../../limits.js';
 import type { BenchmarkPlan } from '../../benchmark/plan.js';
 import { benchmarkNotices, trialBlocker, Trials } from '../../benchmark/trial.js';
 import { PreparedTrialLeaseSchema, type PreparedTrialLease } from '../../benchmark/terms.js';
@@ -555,8 +556,12 @@ async function driveBenchmarkRun(config: LocalConfig, lock: RunLock, cwd: string
       }
       if (!('lease' in answer.data)) {
         const wait = isRecord(answer.data.wait) ? answer.data.wait : {};
-        const judging = typeof wait.judging === 'number' ? await judgeRunEntries(config, runId, cwd) : undefined;
-        if (judging?.kind === 'settled') continue;
+        const run = await readRun(config, runId);
+        // Judging stops at the run's deadline, so the next `next` ends the run as timed out.
+        const ends = deadlineSignal(typeof run === 'object' ? runDeadline(run) : undefined);
+        const judging = typeof wait.judging === 'number' ? await judgeRunEntries(config, runId, cwd, AbortSignal.any([controller.signal, ends])) : undefined;
+        if (controller.signal.aborted) return { error: { code: 'interrupted', message: `Stopped while the judges of run ${runId} ran. Continue with teamai workflow resume ${runId}${options.sandbox ? ' --sandbox' : ''}.` } };
+        if (judging?.kind === 'settled' || judging?.kind === 'stopped') continue;
         if (judging?.kind === 'skipped') log.info(judging.message);
         return { error: { code: 'busy', message: typeof wait.reason === 'string' ? wait.reason : 'the next step is not available' } };
       }

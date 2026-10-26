@@ -56,7 +56,7 @@ export type FakeTool = 'fixes' | 'does-nothing' | 'fails-first' | 'skips-the-che
 export type FirstLaunch = 'pulls-a-team-change' | 'kills-its-driver';
 
 /** What the fake `claude` judge answers: the first label of its scorer, `incorrect` where its scorer has one, a label its scorer lacks, or exit 1. */
-export type FakeJudge = 'first-label' | 'incorrect' | 'another-label' | 'fails';
+export type FakeJudge = 'first-label' | 'incorrect' | 'another-label' | 'fails' | 'hangs';
 
 /** One launch of the fake judge: the labels its answer schema allows, its evidence's diff.patch, and the trial roots left. */
 const JudgeLaunchSchema = z.object({ labels: z.array(z.string()), diff: z.string().nullable(), trialRoots: z.array(z.string()) });
@@ -406,6 +406,7 @@ if (process.argv.includes('--json-schema')) {
   fs.appendFileSync(${JSON.stringify(log)}, JSON.stringify({ labels, diff, trialRoots: fs.existsSync(${JSON.stringify(trialRoots)}) ? fs.readdirSync(${JSON.stringify(trialRoots)}) : [] }) + '\\n');
   process.stdin.resume();
   process.stdin.on('end', () => {
+    if (${JSON.stringify(judge)} === 'hangs') { setInterval(() => {}, 1000); return; }
     if (${JSON.stringify(judge)} === 'fails') process.exit(1);
     const label = ${JSON.stringify(judge)} === 'another-label' ? 'no-such-label' : ${JSON.stringify(judge)} === 'incorrect' && labels.includes('incorrect') ? 'incorrect' : labels[0];
     console.log(JSON.stringify({ type: 'system', subtype: 'init', model: 'fake-judge' }));

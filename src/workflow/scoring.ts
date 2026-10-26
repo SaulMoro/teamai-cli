@@ -1152,7 +1152,7 @@ async function closeSessionLease(config: LocalConfig, members: JudgedMembers<Ses
  */
 export async function judgeLease(
   config: LocalConfig, ref: string, driver: JudgeDriver,
-  { clock = () => new Date().toISOString(), publish = true, group }: { clock?: () => string; publish?: boolean; group?: string } = {},
+  { clock = () => new Date().toISOString(), publish = true, group, signal }: { clock?: () => string; publish?: boolean; group?: string; signal?: AbortSignal } = {},
 ): Promise<SettledLease> {
   const key = parseLeaseRef(ref);
   const attempt = key && await AttemptStore.get(config, key.entry, key.attempt);
@@ -1180,7 +1180,7 @@ export async function judgeLease(
     const refused = await claimSessionJudge(config, lease.members, ref, clock());
     if (refused) return refused;
   }
-  const result = await runLocalJudge({ tool: attempt.judge.tool, model: attempt.judge.model, evidence, schema: answerSchema(rubrics), isolation, ...(group !== undefined ? { group } : {}) });
+  const result = await runLocalJudge({ tool: attempt.judge.tool, model: attempt.judge.model, evidence, schema: answerSchema(rubrics), isolation, ...(group !== undefined ? { group } : {}), ...(signal ? { signal } : {}) });
   const verdicts = result.ok ? verdictsOf(members, (member) => member.definition, result.answer) : undefined;
   if (!result.ok || !verdicts?.ok) {
     const spent = result.ok ? result.judge.usage : result.usage;
@@ -1256,14 +1256,16 @@ export type RunJudging =
   /** Entries stay open that no judge on this machine can settle; the message says why and what to do. */
   | { kind: 'skipped'; message: string }
   /** Another process holds the attempts lock. */
-  | { kind: 'busy' };
+  | { kind: 'busy' }
+  /** `signal` stopped the judge: its lease and the entries left open settle when the run's timeout passes. */
+  | { kind: 'stopped' };
 
 /**
  * The local driver's judge loop: judges the open entries of `runId`'s required scorers with this machine's judge tools,
  * leasing only those entries, as `scoreOnDemand` judges a pass. A judge that fails is submitted failed at once, so its
  * entry settles now instead of when its lease lapses. Any other driver may still judge them with `teamai score --next`.
  */
-export async function judgeRunEntries(config: LocalConfig, runId: string, cwd: string): Promise<RunJudging> {
+export async function judgeRunEntries(config: LocalConfig, runId: string, cwd: string, signal?: AbortSignal): Promise<RunJudging> {
   const run = await readRun(config, runId);
   if (typeof run !== 'object') return { kind: 'settled', count: 0 };
   const open = (await requiredEntries(config, run, new Date().toISOString())).filter(isUnsettled);
@@ -1280,6 +1282,7 @@ export async function judgeRunEntries(config: LocalConfig, runId: string, cwd: s
   const entries = open.map(({ scorer, subject }) => entryIdOf(scorer, subject));
   let count = 0;
   for (;;) {
+    if (signal?.aborted) return { kind: 'stopped' };
     const taken = await takeJudgeLease(config, { driver, judge: { isolation: 'verified', tools: [tool, ...tools] }, running: [], entries: { source: 'workflow', ids: entries } }, new Date().toISOString());
     if (taken.kind === 'busy') return taken;
     count += taken.closed.length;
@@ -1287,7 +1290,9 @@ export async function judgeRunEntries(config: LocalConfig, runId: string, cwd: s
       if (count > 0) return { kind: 'settled', count };
       return skipped(taken.skipped.map((entry) => entry.message).join(' ') || (taken.leased > 0 ? 'another driver holds their judge leases' : 'no judge here meets the isolation they need'));
     }
-    const judged = await judgeLease(config, taken.lease.ref, driver);
+    const judged = await judgeLease(config, taken.lease.ref, driver, signal ? { signal } : {});
+    // A judge stopped by the signal did not fail: its lease is left for the timeout.
+    if (signal?.aborted) return { kind: 'stopped' };
     if (!('error' in judged)) {
       count += judged.attempts.length;
       continue;

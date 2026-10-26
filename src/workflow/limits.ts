@@ -109,7 +109,7 @@ export function itemsSpent(run: RunState, state: StepState): number {
 }
 
 /** The run's own deadline, from when it started or a retry reopened it. */
-function runDeadline(run: RunState): string | undefined {
+export function runDeadline(run: RunState): string | undefined {
   return run.definition.timeout === undefined ? undefined : after(limitsFrom(run, topScope(run)).at, run.definition.timeout);
 }
 
