@@ -273,9 +273,11 @@ async function reportPrompt({ config, runId, report, secrets, file, terms }: {
       : undefined;
   const changes = committed && !('error' in committed) ? { branch: receipt.state.branch, base: terms.startingCommit, ...committed } : undefined;
   const evidence = report.outcome === 'success' && !failure ? await stageJudgeEvidence(config, run, { leased, report, changes, clone, env: scoped.env }) : undefined;
+  // A limit goes only with a prompt that succeeded: the failure to keep its work replaces both.
+  const { limit, ...unlimited } = report;
   const answer = await reportAttempt(config, runId, {
-    ...report,
-    ...(failure ? { outcome: 'failed', message: failure.message, failure } : {}),
+    ...unlimited,
+    ...(failure ? { outcome: 'failed', message: failure.message, failure } : limit !== undefined ? { limit } : {}),
     ...(changes ? { changes } : {}),
     agent: trialAgent(receipt.state.observed, terms, report),
     trialReport: {},

@@ -47,14 +47,15 @@ export const PRODUCT_URL = 'https://github.com/fixture/app.git';
  * check that reads them: set `skip` in check.config.js, add test/pass.setup.js, which stubs out assert, or commit that
  * helper as test/helpers/pass.setup.js into a git repository of its own. `writes-a-passing-test` writes an executable
  * test/auth/refresh.test.js that always passes, and no fix. `hangs` never exits; `fixes-and-hangs` makes the check pass,
- * takes git's index, HEAD and branch locks in the clone as a commit does, and never exits. `fixes-and-runs-out-of-turns` makes the check
+ * takes git's index, HEAD and branch locks in the clone as a commit does, and never exits. `corrupts-git-and-hangs` leaves
+ * the clone's index unreadable, so nothing can commit its work, and never exits. `fixes-and-runs-out-of-turns` makes the check
  * pass, then, when launched with --max-turns, ends as Claude does at that cap: an `error_max_turns` result and exit 1.
  * `fixes-and-spends` makes the check pass and bills 140 tokens: as claude, in two messages streamed as Claude streams
  * them with partial messages, and then works on with no result; as codex, in the one turn.completed Codex prints as it
  * ends.
  */
 export type FakeTool = 'fixes' | 'does-nothing' | 'fails-first' | 'skips-the-check' | 'adds-a-helper' | 'adds-a-helper-repository' | 'writes-a-passing-test' | 'hangs'
-  | 'fixes-and-hangs' | 'fixes-and-runs-out-of-turns' | 'fixes-and-spends';
+  | 'fixes-and-hangs' | 'corrupts-git-and-hangs' | 'fixes-and-runs-out-of-turns' | 'fixes-and-spends';
 
 /**
  * What a fake tool does on the fixture's first launch of any fake tool, before it answers: push a team commit of
@@ -181,6 +182,8 @@ for (const name of ['index', 'HEAD', ...(ref ? [ref[1]] : [])]) {
   fs.mkdirSync(path.dirname('.git/' + name), { recursive: true });
   fs.writeFileSync('.git/' + name + '.lock', '');
 }
+setInterval(() => {}, 60_000);`,
+  'corrupts-git-and-hangs': `fs.writeFileSync('.git/index', 'not an index');
 setInterval(() => {}, 60_000);`,
   'fixes-and-spends': `${FIX} if (path.basename(process.argv[1]) === 'claude') {
   for (const id of ['m1', 'm2']) {

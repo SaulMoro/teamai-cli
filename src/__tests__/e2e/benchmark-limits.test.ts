@@ -52,6 +52,14 @@ describe('trial limits on the local driver', () => {
     expect(record.benchmark.trials).toEqual([expect.objectContaining({ result: 'passed', limit: 'timeout' })]);
   }, 120_000);
 
+  it('records a trial a limit stopped as an error, without its limit, when its work cannot be committed, and settles the run', async () => {
+    const { done, record } = await runLocally('corrupts-git-and-hangs', limitedSuite('{ timeout: 3s }'));
+
+    expect(done).toMatchObject({ outcome: 'succeeded', end: 'settled' });
+    expect(record.benchmark.trials).toEqual([expect.objectContaining({ result: 'error' })]);
+    expect(record.benchmark.trials[0]).not.toHaveProperty('limit');
+  }, 120_000);
+
   it('caps the turns of a claude trial, and lists max_turns as unenforced on a codex trial', async () => {
     const suite = limitedSuite('{ max_turns: 3 }').replace('  - name: claude\n', '  - name: claude\n  - name: codex\n    tool: codex\n');
     const { done, record, stderr } = await runLocally('fixes-and-runs-out-of-turns', suite);
