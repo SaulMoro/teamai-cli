@@ -371,10 +371,11 @@ function providedIsolation(can: DriverCan, hasContract: boolean): Isolation {
   return hasContract && rank(declared) < rank('worktree') ? 'worktree' : declared;
 }
 
-/** What a handed-back lease records: what it already had, then what this driver adds. The list only grows. */
+/** What a handed-back lease records: what it already had, then what this driver adds, each requirement once. The list only grows. */
 export function unionUnenforced(stored: readonly Unenforced[], added: readonly Unenforced[]): Unenforced[] {
-  const has = (entry: Unenforced): boolean => stored.some((item) => item.requirement === entry.requirement);
-  return [...stored, ...added.filter((entry) => !has(entry))];
+  const union = [...stored];
+  for (const entry of added) if (!union.some((item) => item.requirement === entry.requirement)) union.push(entry);
+  return union;
 }
 
 /** Every key a step or the setup of these workflow files requires, `defaults.requires` and inline workflows included. */

@@ -79,6 +79,15 @@ describe('trial limits on the local driver', () => {
     expect(record.benchmark.trials[0]).not.toHaveProperty('unenforced');
   }, 120_000);
 
+  it('stops a codex trial at its timeout under a budget it cannot be held to, and lets the check decide it', async () => {
+    const suite = limitedSuite('{ timeout: 3s, budget: { tokens: 100000 } }').replace('  - name: claude\n', '  - name: codex\n    tool: codex\n');
+    const { done, record, stderr } = await runLocally('hangs', suite);
+
+    expect(done).toMatchObject({ outcome: 'succeeded', end: 'settled' });
+    expect(record.benchmark.trials).toEqual([expect.objectContaining({ arm: 'codex', result: 'failed', limit: 'timeout', unenforced: ['budget'] })]);
+    expect(stderr).toContain('| codex | codex | tool default (team) | 1 | 0 | 1 | 0 | 0 | 0 | 1 | 1 | 0 | 0% (0/1) |');
+  }, 120_000);
+
   it('ends the run at its timeout when that comes before the trial timeout, with no limit on the trial', async () => {
     const fixture = await benchmarkFixture({ tool: 'hangs', sandbox: true, suite: limitedSuite('{ timeout: 19900ms }').replace('timeout: 10m', 'timeout: 20s') });
     fixtures.push(fixture);

@@ -166,11 +166,14 @@ describe('benchmark plan run', () => {
     expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ result: 'error' })]);
   });
 
-  it('records the budget as unenforced when another limit stopped a trial prompt before its tool stated tokens, and lets its check decide', async () => {
+  it.each<[string, Array<'budget'> | undefined]>([
+    ['', undefined],
+    [', once when its report also lists it, as a driver that cannot hold the tool to it does', ['budget']],
+  ])('records the budget as unenforced when another limit stopped a trial prompt before its tool stated tokens%s, and lets its check decide', async (_, listed) => {
     const { config, runId } = await startFix({ trial: '{ timeout: 5m, budget: { tokens: 1000 } }' });
     const lease = await leasePrompt(config, runId);
 
-    await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {}, limit: 'timeout' });
+    await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {}, limit: 'timeout', ...(listed ? { unenforced: listed } : {}) });
     await cancelRun(config, runId, {});
     const run = await readRun(config, runId);
 
