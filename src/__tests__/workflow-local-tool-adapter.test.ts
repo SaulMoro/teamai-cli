@@ -22,21 +22,34 @@ function child(stdout: string | Buffer[], exitCode = 0) {
   return childProcess;
 }
 
-/** A child that prints `lines` and then works on until it is stopped, as a tool in the middle of its work does. */
-function workingChild(lines: string[]) {
+/**
+ * A child that prints `lines` and then works on until it is stopped, as a tool in the middle of its work does. It takes
+ * `closesAfterMs` to close once stopped, and with `exitsAfterMs` it exits on its own then.
+ */
+function workingChild(lines: string[], { closesAfterMs, exitsAfterMs }: { closesAfterMs?: number; exitsAfterMs?: number } = {}) {
   const stdoutEmitter = new EventEmitter();
   const stderr = Object.assign(new EventEmitter(), { resume: () => undefined });
   let running = true;
+  const close = (code: number | null): void => {
+    if (closesAfterMs === undefined) queueMicrotask(() => childProcess.emit('close', code));
+    else setTimeout(() => childProcess.emit('close', code), closesAfterMs);
+  };
   const childProcess = Object.assign(new EventEmitter(), {
     stdout: stdoutEmitter,
     stderr,
     kill: (signal?: NodeJS.Signals | number): boolean => {
       if (!running || signal === 0) return running;
       running = false;
-      queueMicrotask(() => childProcess.emit('close', null));
+      close(null);
       return true;
     },
   });
+  if (exitsAfterMs !== undefined) {
+    setTimeout(() => {
+      running = false;
+      childProcess.emit('close', 0);
+    }, exitsAfterMs);
+  }
   queueMicrotask(() => {
     childProcess.emit('spawn');
     for (const line of lines) stdoutEmitter.emit('data', Buffer.from(`${line}\n`));
@@ -170,7 +183,7 @@ describe('local tool adapter', () => {
   it.each([
     ['stopped at its --max-turns cap', 'error_max_turns', 1, true],
     ['ran to the end', 'success', 0, undefined],
-  ])('says whether headless Claude %s', async (_, subtype, exitCode, reachedMaxTurns) => {
+  ])('says whether headless Claude %s', async (_, subtype, exitCode, stoppedAtMaxTurns) => {
     const resultPath = path.join(os.tmpdir(), `teamai-workflow-turns-${subtype}-${Date.now()}.json`);
     files.push(resultPath);
     const adapter = createLocalToolAdapter(() => child(claudeStream('claude-sonnet', { subtype, is_error: exitCode !== 0 }), exitCode) as ReturnType<ToolSpawn>, () => 'claude');
@@ -178,7 +191,7 @@ describe('local tool adapter', () => {
     const result = await adapter.run('claude', { prompt: 'Plan.', cwd: os.tmpdir(), resultPath, maxTurns: 3 });
 
     expect(result).toMatchObject({ started: true, exitCode });
-    expect(result.started && result.reachedMaxTurns).toBe(reachedMaxTurns);
+    expect(result.started && result.stoppedBy).toBe(stoppedAtMaxTurns ? 'max_turns' : undefined);
   });
 
   it.each([
@@ -204,7 +217,39 @@ describe('local tool adapter', () => {
 
     const result = await adapter.run(tool, { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, budget: 100 });
 
-    expect(result).toMatchObject({ started: true, reachedBudget: true, tokens: { input: 40, output: 70, cachedInput: 1000 } });
+    expect(result).toMatchObject({ started: true, stoppedBy: 'budget', tokens: { input: 40, output: 70, cachedInput: 1000 } });
+  });
+
+  it('stops a tool still running at its timeout, and says the timeout stopped it', async () => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-timeout-${Date.now()}.json`);
+    files.push(resultPath);
+    const adapter = createLocalToolAdapter(() => workingChild([]) as unknown as ReturnType<ToolSpawn>, () => 'codex');
+
+    const result = await adapter.run('codex', { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, timeoutMs: 20 });
+
+    expect(result).toMatchObject({ started: true, stoppedBy: 'timeout' });
+  });
+
+  it('says the budget stopped a tool that passed it, though the tool closed only after its timeout', async () => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-budget-slow-${Date.now()}.json`);
+    files.push(resultPath);
+    const over = JSON.stringify({ type: 'step_finish', part: { type: 'step-finish', tokens: { input: 60, output: 60 } } });
+    const adapter = createLocalToolAdapter(() => workingChild([over], { closesAfterMs: 80 }) as unknown as ReturnType<ToolSpawn>, () => 'opencode');
+
+    const result = await adapter.run('opencode', { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, budget: 100, timeoutMs: 20 });
+
+    expect(result).toMatchObject({ started: true, stoppedBy: 'budget' });
+  });
+
+  it('names no stop for a tool that exited on its own as its timeout came', async () => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-timeout-exit-${Date.now()}.json`);
+    files.push(resultPath);
+    const adapter = createLocalToolAdapter(() => workingChild([], { exitsAfterMs: 30 }) as unknown as ReturnType<ToolSpawn>, () => 'codex');
+
+    const result = await adapter.run('codex', { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, timeoutMs: 30 });
+
+    expect(result).toMatchObject({ started: true, exitCode: 0 });
+    expect(result.started && result.stoppedBy).toBeUndefined();
   });
 
   it.each([
@@ -231,7 +276,7 @@ describe('local tool adapter', () => {
     const result = await adapter.run('claude', { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, budget: 100 });
 
     expect(result).toMatchObject({ started: true, exitCode: 0, tokens: { input: 40, output: 60 } });
-    expect(result.started && result.reachedBudget).toBeUndefined();
+    expect(result.started && result.stoppedBy).toBeUndefined();
   });
 
   it('writes the Claude stdout fallback when the tool does not write result.json', async () => {

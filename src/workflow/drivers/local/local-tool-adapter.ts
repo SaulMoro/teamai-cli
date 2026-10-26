@@ -12,6 +12,8 @@ import { stopProcess } from '../../../tool-launch/process-stop.js';
 import { tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '../../../tool-launch/stdout.js';
 import { executableOf, launchAdapterIdOf, opencodeModelArgs, type LaunchTool } from '../../../tool-launch/tools.js';
 import { budgeted } from '../../limits.js';
+import { MAX_TIMER_DELAY } from '../../shell-command.js';
+import type { TrialLimit } from '../../benchmark/terms.js';
 import type { StepModel } from '../../step-model.js';
 import type { WorkflowFailure } from '../../types.js';
 import { agyGatewayEnv } from '../../../models/agy-gateway.js';
@@ -34,6 +36,8 @@ export interface LocalToolRun {
   maxTurns?: number;
   /** The most tokens the run may bill, counted as a budget counts them: once its stdout states more, it is stopped. */
   budget?: number;
+  /** How long the tool may run from its spawn before it is stopped. */
+  timeoutMs?: number;
 }
 
 /**
@@ -52,9 +56,11 @@ export type LocalToolResult =
     tokens?: TokenUsage;
     /** What the tool said the run cost, as it said it. */
     cost?: ToolReport['cost'];
-    reachedMaxTurns?: boolean;
-    /** Whether the run was stopped once its stdout stated more tokens than its budget. */
-    reachedBudget?: boolean;
+    /**
+     * The limit that ended the run: the first one at which the adapter stopped the tool, its timeout or its budget, or
+     * the turn cap, at which headless Claude ends itself with `error_max_turns`.
+     */
+    stoppedBy?: TrialLimit;
     failure?: WorkflowFailure;
   }
   | { started: false; exitCode: number; failure: WorkflowFailure };
@@ -171,7 +177,6 @@ function combineResults(fileResult: ResultFile | null, reported: ToolReport | nu
   if (reported?.session) result.session = reported.session;
   if (reported?.tokens) result.tokens = reported.tokens;
   if (reported?.cost) result.cost = reported.cost;
-  if (reported?.reachedMaxTurns) result.reachedMaxTurns = true;
   return result;
 }
 
@@ -223,7 +228,12 @@ export function createLocalToolAdapter(
       let childProcess: ChildProcess | undefined;
       const meter = input.budget !== undefined ? tokenMeter(launchAdapterIdOf(tool)) : undefined;
       let metered: TokenUsage | undefined;
-      const overBudget = new AbortController();
+      // The first reason a stop was sent, so a limit crossed while the tool shuts down does not replace it.
+      let stopCause: 'timeout' | 'budget' | 'aborted' | undefined;
+      const stopAt = (limit: 'timeout' | 'budget'): void => {
+        stopCause ??= limit;
+        void stop?.();
+      };
       const closed = new Promise<{ exitCode: number; stdout: string; error?: NodeJS.ErrnoException }>((resolve) => {
         let child: ChildProcess;
         try {
@@ -246,6 +256,9 @@ export function createLocalToolAdapter(
           return;
         }
         childProcess = child;
+        const timer = input.timeoutMs !== undefined && input.timeoutMs <= MAX_TIMER_DELAY
+          ? setTimeout(() => stopAt('timeout'), input.timeoutMs)
+          : undefined;
         let stdout = '';
         let partial = '';
         const decoder = new StringDecoder('utf8');
@@ -257,25 +270,31 @@ export function createLocalToolAdapter(
           const lines = `${partial}${text}`.split('\n');
           partial = lines.pop() ?? '';
           for (const line of lines) metered = meter(line);
-          if (budgeted(metered) > input.budget) overBudget.abort();
+          if (budgeted(metered) > input.budget) stopAt('budget');
         });
         child.stderr?.resume();
-        child.on('error', (error: NodeJS.ErrnoException) => resolve({ exitCode: 1, stdout, error }));
-        child.on('close', (code) => resolve({ exitCode: code ?? 1, stdout: stdout + decoder.end() }));
+        child.on('error', (error: NodeJS.ErrnoException) => {
+          clearTimeout(timer);
+          resolve({ exitCode: 1, stdout, error });
+        });
+        child.on('close', (code) => {
+          clearTimeout(timer);
+          resolve({ exitCode: code ?? 1, stdout: stdout + decoder.end() });
+        });
       });
       const stop = childProcess && stopProcess(childProcess, closed, !interactive && process.platform !== 'win32');
       const abort = (): void => {
         const reason: unknown = signal?.reason;
         const forwarded = reason === 'SIGINT' || reason === 'SIGQUIT' || reason === 'SIGTERM' || reason === 'SIGHUP' ? reason : undefined;
+        stopCause ??= 'aborted';
         void stop?.(interactive ? forwarded : undefined);
       };
       signal?.addEventListener('abort', abort, { once: true });
       if (signal?.aborted) abort();
-      overBudget.signal.addEventListener('abort', () => void stop?.(), { once: true });
       const completed = await closed;
-      if (signal?.aborted || overBudget.signal.aborted) await stop?.();
+      if (stopCause !== undefined) await stop?.();
       signal?.removeEventListener('abort', abort);
-      const reachedBudget = overBudget.signal.aborted ? { reachedBudget: true } : {};
+      const stopped = stopCause === 'aborted' ? undefined : stopCause;
       if (!started || completed.error?.code === 'ENOENT') {
         return {
           started: false,
@@ -290,7 +309,7 @@ export function createLocalToolAdapter(
           started: true,
           exitCode: completed.exitCode,
           ...applied,
-          ...reachedBudget,
+          ...(stopped ? { stoppedBy: stopped } : {}),
           failure: { code: 'tool_failed', message: `${tool} could not be started` },
         };
       }
@@ -299,12 +318,14 @@ export function createLocalToolAdapter(
       // A tool stopped mid-run, such as Claude before its final result, states no total: what the meter counted stands in.
       const reported = metered && !stated?.tokens ? { ...stated, tokens: metered } : stated;
       const result = combineResults(fileResult, reported) ?? (interactive ? {} : null);
+      const stoppedBy: TrialLimit | undefined = stopped ?? (stated?.reachedMaxTurns ? 'max_turns' : undefined);
+      const ended = stoppedBy ? { stoppedBy } : {};
       if (!result) {
         return {
           started: true,
           exitCode: completed.exitCode,
           ...applied,
-          ...reachedBudget,
+          ...ended,
           failure: { code: 'tool_failed', message: `${tool} did not write a valid workflow result` },
         };
       }
@@ -313,7 +334,7 @@ export function createLocalToolAdapter(
         result.failure = { code: 'tool_failed', message: `${tool} exited with status ${completed.exitCode}` };
       }
       if (!fileResult) await persistFallback(input.resultPath, result);
-      return { started: true, exitCode: completed.exitCode, ...applied, ...reachedBudget, ...result };
+      return { started: true, exitCode: completed.exitCode, ...applied, ...ended, ...result };
     };
   return {
     run(tool, input, signal) {

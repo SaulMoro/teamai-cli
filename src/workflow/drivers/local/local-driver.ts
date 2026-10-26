@@ -517,12 +517,8 @@ const DoneTableSchema = z.object({ benchmark: z.object({ text: z.string() }) });
 
 /** A signal that aborts at `expiresAt`. A deadline further away than a timer can wait never aborts it. */
 function deadlineSignal(expiresAt: string | undefined): AbortSignal {
-  return timeoutSignal(expiresAt === undefined ? undefined : Math.max(0, Date.parse(expiresAt) - Date.now()));
-}
-
-/** A signal that aborts once `ms` passed. A wait longer than a timer can wait never aborts it. */
-function timeoutSignal(ms: number | undefined): AbortSignal {
-  return ms === undefined || ms > MAX_TIMER_DELAY ? new AbortController().signal : AbortSignal.timeout(ms);
+  const remaining = expiresAt === undefined ? undefined : Math.max(0, Date.parse(expiresAt) - Date.now());
+  return remaining === undefined || remaining > MAX_TIMER_DELAY ? new AbortController().signal : AbortSignal.timeout(remaining);
 }
 
 /**
@@ -618,7 +614,6 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
   // Codex states its usage only as it ends, and CodeBuddy's stream is not known to state each message's final usage,
   // so neither can be stopped at its budget.
   const budget = family === 'claude' || family === 'opencode' ? limits?.tokens : undefined;
-  const timeout = timeoutSignal(limits?.timeoutMs);
   const started = performance.now();
   try {
     result = await adapter.run(tool, {
@@ -626,21 +621,22 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
       ...(model ? { model: { name: model, ...(effort ? { effort } : {}) } } : {}),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
       ...(budget !== undefined ? { budget } : {}),
-    }, AbortSignal.any([signal, timeout]));
+      ...(limits?.timeoutMs !== undefined ? { timeoutMs: limits.timeoutMs } : {}),
+    }, signal);
   } catch {
     result = { started: false, exitCode: 1, failure: { code: 'tool_failed', message: `${tool} could not complete the trial` } };
   }
   const durationMs = Math.round(performance.now() - started);
   const ran = result.started ? result : undefined;
-  const passedBudget = ran?.reachedBudget === true || (limits?.tokens !== undefined && budgeted(ran?.tokens) > limits.tokens);
-  const limit = !ran ? undefined : timeout.aborted ? 'timeout' : passedBudget ? 'budget' : ran.reachedMaxTurns ? 'max_turns' : undefined;
+  const unenforcedPassed = limits?.tokens !== undefined && budget === undefined && budgeted(ran?.tokens) > limits.tokens;
+  const limit = !ran ? undefined : ran.stoppedBy ?? (unenforcedPassed ? 'budget' : undefined);
   const unenforced = [
     ...(limits?.maxTurns !== undefined && maxTurns === undefined ? ['max_turns' as const] : []),
     ...(limits?.tokens !== undefined && budget === undefined ? ['budget' as const] : []),
   ];
   // A tool stopped while git wrote the index leaves its lock, on which the report's commit of the clone would fail.
   // The adapter returns once the tool's process group is gone, so nothing holds it any more.
-  if (timeout.aborted || ran?.reachedBudget) await fs.rm(path.join(lease.cwd, '.git', 'index.lock'), { force: true });
+  if (ran?.stoppedBy === 'timeout' || ran?.stoppedBy === 'budget') await fs.rm(path.join(lease.cwd, '.git', 'index.lock'), { force: true });
   return {
     ...reported,
     ...(ran ? { durationMs } : {}),
