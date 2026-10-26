@@ -135,7 +135,10 @@ export const UnenforcedSchema = z.discriminatedUnion('requirement', [
   /** The run's env keys a driver whose `can.env` does not cover the step may have passed to it. */
   z.object({ requirement: z.literal('withhold'), keys: z.array(z.string()) }),
   z.object({ requirement: z.literal('max_turns'), asked: z.number().int().positive() }),
-  /** An interactive prompt under a budget whose report had no tokens, so the budget did not count what it spent. */
+  /**
+   * A budget nothing held the step to: an interactive prompt's whose report had no tokens, or a benchmark trial's whose
+   * tool its driver could not stop once it passed the budget.
+   */
   z.object({ requirement: z.literal('budget') }),
 ]) satisfies z.ZodType<{ requirement: BestEffortKey }>;
 export type Unenforced = z.infer<typeof UnenforcedSchema>;
@@ -144,17 +147,24 @@ export type Unenforced = z.infer<typeof UnenforcedSchema>;
  * What a report's `unenforced` may name: a best-effort requirement whose enforcement the driver learns only once it
  * runs the step, such as the tool it picked not capping turns.
  */
-export const ReportedUnenforcedSchema = z.array(z.enum(['max_turns'])) satisfies z.ZodType<BestEffortKey[]>;
+export const ReportedUnenforcedSchema = z.array(z.enum(['max_turns', 'budget'])) satisfies z.ZodType<BestEffortKey[]>;
 export type ReportedUnenforced = z.infer<typeof ReportedUnenforcedSchema>;
 
-/** The entries a report's `unenforced` adds, or why it names a requirement the step did not ask for. */
-export function reportedUnenforced(keys: ReportedUnenforced, asked: { maxTurns?: number }): Unenforced[] | string {
+/**
+ * The entries a report's `unenforced` adds, or why it names a requirement the step did not ask for. `tokens` is a
+ * benchmark trial's budget: a run's budget is counted by teamai, never by a driver.
+ */
+export function reportedUnenforced(keys: ReportedUnenforced, asked: { maxTurns?: number; tokens?: number }): Unenforced[] | string {
   const entries: Unenforced[] = [];
   for (const key of keys) {
     switch (key) {
       case 'max_turns':
         if (asked.maxTurns === undefined) return 'unenforced names max_turns, which the step does not set';
         entries.push({ requirement: 'max_turns', asked: asked.maxTurns });
+        break;
+      case 'budget':
+        if (asked.tokens === undefined) return 'unenforced names budget, which the step does not set';
+        entries.push({ requirement: 'budget' });
         break;
       default: {
         const unknown: never = key;

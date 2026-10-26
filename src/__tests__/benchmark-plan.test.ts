@@ -126,6 +126,71 @@ describe('benchmark plan run', () => {
     expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ step: 'trials.r1.t01.a01.prompt', limit: 'timeout' })]);
   });
 
+  it("records the suite limits a trial's driver did not enforce", async () => {
+    const { config, runId } = await startFix({ trial: '{ budget: { tokens: 1000 }, max_turns: 3 }' });
+    const lease = await leasePrompt(config, runId);
+
+    await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {}, tokens: { input: 10, output: 10 }, unenforced: ['budget', 'max_turns'] });
+    await cancelRun(config, runId, {});
+    const run = await readRun(config, runId);
+
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    expect(run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({
+      status: 'succeeded', unenforced: expect.arrayContaining([{ requirement: 'budget' }, { requirement: 'max_turns', asked: 3 }]),
+    });
+    expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ unenforced: ['budget', 'max_turns'] })]);
+  });
+
+  it('refuses a trial report that names an unenforced budget its suite does not set', async () => {
+    const { config, runId } = await startFix();
+    const lease = await leasePrompt(config, runId);
+
+    const answer = await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {}, unenforced: ['budget'] });
+
+    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Attempt ${lease.attempt} of step "trials.r1.t01.a01.prompt": unenforced names budget, which the step does not set` } });
+  });
+
+  it('fails a trial prompt under a budget whose report has no tokens, so the trial is an error', async () => {
+    const { config, runId } = await startFix({ trial: '{ budget: { tokens: 1000 } }' });
+    const lease = await leasePrompt(config, runId);
+
+    await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {} });
+    await leaseNext(config, runId, driver, { can, prepare: true });
+    const run = await readRun(config, runId);
+
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    expect(run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({ status: 'failed', failure: {
+      code: 'budget_unmeasured',
+      message: 'Trial step "trials.r1.t01.a01.prompt" runs under its suite\'s trial budget, and its report has no tokens, so the budget cannot count what it spent. Run the arm\'s tool with a driver that reports its tokens, and start the benchmark again.',
+    } });
+    expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ result: 'error' })]);
+  });
+
+  it('records the budget as unenforced when another limit stopped a trial prompt before its tool stated tokens, and lets its check decide', async () => {
+    const { config, runId } = await startFix({ trial: '{ timeout: 5m, budget: { tokens: 1000 } }' });
+    const lease = await leasePrompt(config, runId);
+
+    await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {}, limit: 'timeout' });
+    await cancelRun(config, runId, {});
+    const run = await readRun(config, runId);
+
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    expect(run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({ status: 'succeeded', limit: 'timeout', unenforced: expect.arrayContaining([{ requirement: 'budget' }]) });
+    expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ limit: 'timeout', unenforced: ['budget'] })]);
+  });
+
+  it('refuses a trial report whose limit comes with an outcome other than success, and keeps the trial leased', async () => {
+    const { config, runId } = await startFix({ trial: '{ timeout: 5m }' });
+    const lease = await leasePrompt(config, runId);
+
+    const answer = await reportAttempt(config, runId, { ...lease, outcome: 'failed', driver, trialReport: {}, limit: 'timeout' });
+    const run = await readRun(config, runId);
+
+    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Attempt ${lease.attempt} of step "trials.r1.t01.a01.prompt": limit goes with outcome success, since a limit ends the agent's turn and the trial's check or judge decides it; send outcome success, or omit limit` } });
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    expect(run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({ status: 'leased' });
+  });
+
   it('refuses a trial report teamai did not complete, and accepts the one it did', async () => {
     const { config, runId } = await startFix();
     const lease = await leasePrompt(config, runId);

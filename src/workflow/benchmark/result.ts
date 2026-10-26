@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import type { EntryVerdict } from '../../scorers/entry.js';
 import type { StepState } from '../step-state.js';
+import { ReportedUnenforcedSchema } from '../requirements.js';
 import type { RunState } from '../types.js';
 import { baselineStepOf, correctnessScorerName, stepOf, type BenchmarkPlan, type PlannedTask, type PlannedTrial } from './plan.js';
 import { TrialLimitSchema, TrialLimitsSchema } from './terms.js';
@@ -41,6 +42,8 @@ export const BenchmarkRecordSchema = z.object({
     result: z.enum(TRIAL_RESULTS),
     /** The suite limit that ended the prompt; the check or judge still decided `result`. */
     limit: TrialLimitSchema.optional(),
+    /** The suite limits the prompt's driver reported it did not enforce, which make the trial a deviation. */
+    unenforced: ReportedUnenforcedSchema.optional(),
     /** The prompt's, as its driver measured them around the tool launch and the tool stated them. */
     durationMs: z.number().int().nonnegative().optional(),
     tokens: z.object({ input: z.number().optional(), output: z.number().optional(), cachedInput: z.number().optional() }).optional(),
@@ -68,7 +71,7 @@ export function benchmarkRecord(run: RunState & { benchmark: BenchmarkPlan }): B
     arms: plan.arms,
     trials: plan.trials.map((trial) => {
       const scoringCost = scoringCostOf(verdictsOf(run, trial));
-      return { ...trial, result: trialResultOf(run, plan, trial), ...usageOf(stateOf(run, trial.step)), ...(scoringCost ? { scoringCost } : {}) };
+      return { ...trial, result: trialResultOf(run, plan, trial), ...promptEntryOf(stateOf(run, trial.step)), ...(scoringCost ? { scoringCost } : {}) };
     }),
   };
 }
@@ -91,19 +94,22 @@ function scoringCostOf(verdicts: readonly EntryVerdict[]): BenchmarkRecord['tria
   };
 }
 
-/** What a trial's prompt reported it spent: absent for a prompt that never settled a report. */
-function usageOf(prompt: StepState | undefined): Pick<BenchmarkRecord['trials'][number], 'limit' | 'durationMs' | 'tokens' | 'cost'> {
+/** What a trial's prompt reported it spent, and the limits that ended or did not hold it: absent for a prompt that never settled a report. */
+function promptEntryOf(prompt: StepState | undefined): Pick<BenchmarkRecord['trials'][number], 'limit' | 'unenforced' | 'durationMs' | 'tokens' | 'cost'> {
   switch (prompt?.status) {
     case 'succeeded':
     case 'failed':
     case 'cancelled':
-    case 'delivering':
+    case 'delivering': {
+      const unenforced = (prompt.unenforced ?? []).flatMap(({ requirement }) => (requirement === 'budget' || requirement === 'max_turns' ? [requirement] : []));
       return {
         ...(prompt.limit ? { limit: prompt.limit } : {}),
+        ...(unenforced.length > 0 ? { unenforced } : {}),
         ...(prompt.durationMs !== undefined ? { durationMs: prompt.durationMs } : {}),
         ...(prompt.tokens ? { tokens: prompt.tokens } : {}),
         ...(prompt.cost ? { cost: prompt.cost } : {}),
       };
+    }
     case undefined:
     case 'pending':
     case 'waiting':

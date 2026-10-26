@@ -1522,7 +1522,7 @@ export function parseReport(value: unknown): ParsedReport | string {
   }
   if (record.unenforced !== undefined) {
     const unenforced = ReportedUnenforcedSchema.safeParse(record.unenforced);
-    if (!unenforced.success) return 'unenforced must list the requirements the driver did not enforce: max_turns';
+    if (!unenforced.success) return 'unenforced must list the requirements the driver did not enforce: max_turns or budget';
     report.unenforced = unenforced.data;
   }
   if (record.limit !== undefined) {
@@ -1809,18 +1809,26 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
     if (report.limit !== undefined && defined?.trial?.kind !== 'prompt') {
       return { save: false, envelope: error('invalid_report', `Attempt ${report.attempt} of step "${step.id}": limit is for the prompt of a benchmark trial, which its suite's trial limits stop; omit it`) };
     }
-    const added = reportedUnenforced(report.unenforced ?? [], { maxTurns: defined?.maxTurns });
+    if (report.limit !== undefined && report.outcome !== 'success') {
+      return { save: false, envelope: error('invalid_report', `Attempt ${report.attempt} of step "${step.id}": limit goes with outcome success, since a limit ends the agent's turn and the trial's check or judge decides it; send outcome success, or omit limit`) };
+    }
+    const limits = defined?.trial?.kind === 'prompt' ? defined.trial.limits : undefined;
+    const added = reportedUnenforced(report.unenforced ?? [], { maxTurns: defined?.maxTurns ?? limits?.maxTurns, tokens: limits?.tokens });
     if (typeof added === 'string') return { save: false, envelope: error('invalid_report', `Attempt ${report.attempt} of step "${step.id}": ${added}`) };
     let outcome = report.outcome;
     let message = report.message;
     let failure = report.failure;
     const measured = report.tokens?.input !== undefined || report.tokens?.output !== undefined;
-    const unmeasured = outcome === 'success' && defined?.prompt !== undefined && located?.scope.budgeted === true && !measured;
-    // A person drives an interactive prompt, so its spend is recorded as not counted rather than failing their work.
-    const unenforced = unionUnenforced(step.lease.unenforced ?? [], [...added, ...(unmeasured && defined.interactive ? [{ requirement: 'budget' as const }] : [])]);
-    if (unmeasured && !defined.interactive) {
+    const unmeasured = outcome === 'success' && defined?.prompt !== undefined && (located?.scope.budgeted === true || limits?.tokens !== undefined) && !measured;
+    // A person drives an interactive prompt, so its spend is recorded as not counted rather than failing their work. So
+    // is a trial's that another limit stopped before its tool stated a total, as Codex states one only as it ends.
+    const uncounted = unmeasured && (defined.interactive === true || report.limit !== undefined);
+    const unenforced = unionUnenforced(step.lease.unenforced ?? [], [...added, ...(uncounted ? [{ requirement: 'budget' as const }] : [])]);
+    if (unmeasured && !uncounted) {
       outcome = 'failed';
-      message = `Step "${step.id}" runs under a token budget, and its report has no tokens, so the budget cannot count what it spent. Run it with a driver that reports tokens (driver.can.tokens), then retry the step.`;
+      message = limits?.tokens !== undefined
+        ? `Trial step "${step.id}" runs under its suite's trial budget, and its report has no tokens, so the budget cannot count what it spent. Run the arm's tool with a driver that reports its tokens, and start the benchmark again.`
+        : `Step "${step.id}" runs under a token budget, and its report has no tokens, so the budget cannot count what it spent. Run it with a driver that reports tokens (driver.can.tokens), then retry the step.`;
       failure = { code: 'budget_unmeasured', message };
     }
     if (outcome === 'success' && defined?.output && (!defined.interactive || report.outputs !== undefined)) {
