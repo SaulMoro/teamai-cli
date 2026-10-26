@@ -157,6 +157,37 @@ source: { platform: claude-code, sessionId: s1, fix: ${fix} }
     expect(fixture.trialRootEntries()).toEqual([]);
   }, 120_000);
 
+  // Neither test is in the starting commit, and the check needs both, so a passed trial shows check.add wrote each.
+  it('checks a trial with a test the fix brought and a test from the suite directory, in one check.add', async () => {
+    const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'], app: { 'test/other.test.js': OTHER_CASE }, team: { [REFRESH_FROM]: REFRESH_TEST }, executable: [REFRESH_FROM] });
+    fixtures.push(fixture);
+    const fix = fixture.pushProduct({ 'answer.js': 'module.exports = 42;\n', 'test/answer.test.js': "require('node:assert').strictEqual(require('../answer.js'), 42);\n" });
+    fixture.pushTeam({ 'benchmarks/fix/tasks/fix.yaml': `schemaVersion: v1alpha1
+title: Fix the answer
+prompt: Make the check pass.
+startingCommit: ${fixture.startingCommit}
+check:
+  run: 'node test/answer.test.js && ${REFRESH_TO}'
+  protect: [test]
+  add:
+    - test/answer.test.js
+    - from: check-files/expired-token/refresh.test.js
+      to: ${REFRESH_TO}
+source: { platform: claude-code, sessionId: s1, fix: ${fix} }
+` });
+    const pulled = await fixture.teamai(['pull']);
+    expect(pulled.code, said(pulled)).toBe(0);
+
+    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+
+    const done = DoneSchema.parse(envelope(started).data?.done);
+    expect(RecordSchema.parse(fixture.endRecord(done.run)).benchmark).toEqual({ tasks: [expect.objectContaining({ id: 'fix', baseline: 'valid' })], trials: [expect.objectContaining({ result: 'passed' })] });
+    expect(fixture.toolLaunches()).toHaveLength(1);
+    expect(fixture.toolLaunches()[0]?.paths).not.toContain('test/answer.test.js');
+    expect(fixture.toolLaunches()[0]?.paths).not.toContain(REFRESH_TO);
+    expect(fixture.trialRootEntries()).toEqual([]);
+  }, 120_000);
+
   it('checks with the suite file as the run started, and a later run with its edit, under another sourceHash', async () => {
     const fixture = await benchmarkFixture({
       tool: 'fixes', sandbox: true, tools: ['claude'], tasks: { fix: HIDDEN_TASK }, team: { [REFRESH_FROM]: REFRESH_TEST }, executable: [REFRESH_FROM],
