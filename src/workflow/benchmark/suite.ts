@@ -22,15 +22,23 @@ const RepoUrlSchema = z.string().url().refine((value) => {
   return ['https:', 'ssh:', 'git:'].includes(url.protocol) && url.username === '' && url.password === '';
 }, 'must be an https, ssh or git URL without credentials');
 
+/** Whether `value` is a relative path written segment by segment, so joined to a directory it stays inside it. */
+function isRelativePath(value: string): boolean {
+  return !value.includes('\\') && value.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..');
+}
+
 /**
  * A git pathspec relative to the repo; globs allowed (`test/**`). Passed to git as an argv element, never through a shell.
  * Written as git lists paths, segment by segment and with no glob escape, so a protected path is compared with a
  * submodule's as git would.
  */
 const RepoPathSchema = z.string().min(1).refine(
-  (value) => !value.startsWith(':') && !value.includes('\\') && value.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..'),
+  (value) => !value.startsWith(':') && isRelativePath(value),
   'must be a path relative to the repo, with no backslash and no ".", ".." or empty segment',
 );
+
+/** A file or directory of the suite directory, `benchmarks/<suite>/`, read as bytes by the sync. */
+const SuitePathSchema = z.string().min(1).refine(isRelativePath, 'must be a path inside the suite directory, with no backslash and no ".", ".." or empty segment');
 
 const DurationSchema = z.string({ required_error: 'timeout is required: the run\'s timeout, such as 6h' }).transform((text, ctx): number => {
   const ms = durationMs(text);
@@ -100,12 +108,19 @@ function segmentPattern(segment: string): RegExp | undefined {
   }
 }
 
+const AddedPathSchema = RepoPathSchema.refine((value) => !/[*?[]/.test(value), 'must name one file, without glob characters');
+
 const CheckFileSchema = z.object({
   run: z.string().trim().min(1, 'check.run is a command'),
   protect: z.array(RepoPathSchema.refine((value) => value.split('/').every((segment) => segmentPattern(segment) !== undefined), 'has a [ class with no closing ]'))
     .nonempty('check.protect lists every path the check reads and the agent must not supply'),
-  /** Files as `source.fix` has them, such as its test, written before the check whether or not the starting commit has them: the agent never sees them. */
-  add: z.array(RepoPathSchema.refine((value) => !/[*?[]/.test(value), 'must name one file, without glob characters')).nonempty().optional(),
+  /**
+   * Files written before the check whether or not the starting commit has them, so the agent never sees them: a path of
+   * `source.fix`, such as its test, or `{ from, to }`, a file or directory of the suite directory written at `to`.
+   */
+  add: z.array(z.union([AddedPathSchema, z.object({ from: SuitePathSchema, to: AddedPathSchema }).strict()], {
+    errorMap: (issue, ctx) => ({ message: issue.code === z.ZodIssueCode.invalid_union ? 'must be a path of source.fix, or { from, to }: a file or directory of the suite directory, and where the check reads it' : ctx.defaultError }),
+  })).nonempty().optional(),
 }).strict();
 
 /**
@@ -121,40 +136,88 @@ function pathspecMatches(spec: readonly string[], file: readonly string[]): bool
   return segmentPattern(head)?.test(name) === true && pathspecMatches(rest, below);
 }
 
-const TaskFileSchema = z.object({
-  schemaVersion: z.literal('v1alpha1'),
-  title: z.string().min(1),
-  prompt: z.string().min(1),
-  startingCommit: CommitSchema,
-  check: CheckFileSchema.optional(),
-  successCriteria: z.string().trim().min(1).optional(),
-  /** The session the task came from, and the commit that fixed it there, which `--try` checks the check passes at. */
-  source: z.object({ platform: z.string().min(1), sessionId: z.string().min(1), fix: CommitSchema.optional() }).strict().optional(),
-}).strict().transform(({ check, successCriteria, ...task }, ctx) => {
-  if (successCriteria !== undefined && !check) return { ...task, judge: { kind: 'criteria', successCriteria } satisfies TaskJudge };
-  if (!check || successCriteria !== undefined) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['check'], message: 'a task has exactly one of check and successCriteria' });
-    return z.NEVER;
-  }
-  const { add, ...rest } = check;
-  if (!add) return { ...task, judge: { kind: 'check', ...rest } satisfies TaskJudge };
-  const fix = task.source?.fix;
-  if (fix === undefined) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['check', 'add'], message: 'check.add writes its files from source.fix; add source.fix, the full commit that brought them' });
-    return z.NEVER;
-  }
-  const outside = add.findIndex((entry) => !rest.protect.some((spec) => pathspecMatches(spec.split('/'), entry.split('/'))));
-  if (outside !== -1) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['check', 'add', outside], message: `check.add "${add[outside]}" is not under check.protect, so the agent could supply it; add a protect path that covers it` });
-    return z.NEVER;
-  }
-  return { ...task, judge: { kind: 'check', ...rest, add: { commit: fix, paths: add } } satisfies TaskJudge };
-});
+/**
+ * A task file, in a suite whose directory holds `files`, keyed by their path in it. A `{ from, to }` entry of check.add
+ * names one of them, or a directory of them, whose files it writes under `to`.
+ */
+function taskFileSchema(files: ReadonlyMap<string, SuiteFile>) {
+  return z.object({
+    schemaVersion: z.literal('v1alpha1'),
+    title: z.string().min(1),
+    prompt: z.string().min(1),
+    startingCommit: CommitSchema,
+    check: CheckFileSchema.optional(),
+    successCriteria: z.string().trim().min(1).optional(),
+    /** The session the task came from, and the commit that fixed it there, which `--try` checks the check passes at. */
+    source: z.object({ platform: z.string().min(1), sessionId: z.string().min(1), fix: CommitSchema.optional() }).strict().optional(),
+  }).strict().transform(({ check, successCriteria, ...task }, ctx) => {
+    if (successCriteria !== undefined && !check) return { ...task, judge: { kind: 'criteria', successCriteria } satisfies TaskJudge };
+    if (!check || successCriteria !== undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['check'], message: 'a task has exactly one of check and successCriteria' });
+      return z.NEVER;
+    }
+    const { add = [], ...rest } = check;
+    const [firstFixed, ...otherFixed] = add.flatMap((entry) => (typeof entry === 'string' ? [entry] : []));
+    const fix = task.source?.fix;
+    if (firstFixed !== undefined && fix === undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['check', 'add'], message: 'check.add writes its files from source.fix; add source.fix, the full commit that brought them' });
+      return z.NEVER;
+    }
+    const issues: Array<{ path: Array<string | number>; message: string }> = [];
+    // Each path check.add writes, with the entry and field a diagnostic names, and for a `{ from, to }` entry its bytes.
+    const written = add.flatMap((entry, index): Array<{ at: Array<string | number>; path: string; file?: CheckFile }> => {
+      if (typeof entry === 'string') return [{ at: ['check', 'add', index], path: entry }];
+      const copied = filesAt(files, entry);
+      if (copied.length === 0) issues.push({ path: ['check', 'add', index, 'from'], message: `"${entry.from}" is no file or directory of the suite directory; a symlink is not one` });
+      return copied.map((file) => ({ at: ['check', 'add', index, 'to'], path: file.path, file }));
+    });
+    const seen = new Set<string>();
+    for (const { at, path: target } of written) {
+      if (!rest.protect.some((spec) => pathspecMatches(spec.split('/'), target.split('/')))) {
+        issues.push({ path: at, message: `check.add "${target}" is not under check.protect, so the agent could supply it; add a protect path that covers it` });
+      } else if (seen.has(target)) {
+        issues.push({ path: at, message: `check.add writes "${target}" twice; write each path once` });
+      }
+      seen.add(target);
+    }
+    if (issues.length > 0) {
+      for (const issue of issues) ctx.addIssue({ code: z.ZodIssueCode.custom, ...issue });
+      return z.NEVER;
+    }
+    const [firstFile, ...otherFiles] = written.flatMap(({ file }) => (file ? [file] : []));
+    return {
+      ...task,
+      judge: {
+        kind: 'check', ...rest,
+        ...(firstFixed !== undefined && fix !== undefined ? { add: { commit: fix, paths: [firstFixed, ...otherFixed] } } : {}),
+        ...(firstFile ? { files: [firstFile, ...otherFiles] } : {}),
+      } satisfies TaskJudge,
+    };
+  });
+}
+
+/** The files a `{ from, to }` entry writes: `from` itself at `to`, or each file under `from` below `to`, in path order. */
+function filesAt(files: ReadonlyMap<string, SuiteFile>, { from, to }: { from: string; to: string }): CheckFile[] {
+  const own = files.get(from);
+  if (own) return [{ path: to, mode: own.mode, base64: own.base64 }];
+  return [...files].filter(([at]) => at.startsWith(`${from}/`)).sort(([left], [right]) => (left < right ? -1 : 1))
+    .map(([at, file]) => ({ path: `${to}/${at.slice(from.length + 1)}`, mode: file.mode, base64: file.base64 }));
+}
+
+/** A file check.add writes from the suite directory: its path in the clone, its git file mode, and its bytes. */
+export interface CheckFile {
+  path: string;
+  mode: FileMode;
+  base64: string;
+}
+
+/** How git stores a file: executable or not. */
+export type FileMode = '100644' | '100755';
 
 /** How a task is decided. Exactly one, by construction: the file rule above becomes a union here. */
 export type TaskJudge =
-  /** `add`: the files written from `commit`, the task's fix, before the check. */
-  | { kind: 'check'; run: string; protect: [string, ...string[]]; add?: { commit: string; paths: [string, ...string[]] } }
+  /** `add`: the files written from `commit`, the task's fix, before the check. `files`: those written from the suite directory. */
+  | { kind: 'check'; run: string; protect: [string, ...string[]]; add?: { commit: string; paths: [string, ...string[]] }; files?: [CheckFile, ...CheckFile[]] }
   | { kind: 'criteria'; successCriteria: string };
 
 export interface Task {
@@ -198,6 +261,13 @@ export interface SourceFile {
   content: string;
 }
 
+/** A file of a suite directory that a check.add entry names, as the sync read it: bytes, not text. */
+export interface SuiteFile {
+  relativePath: string;
+  base64: string;
+  mode: FileMode;
+}
+
 export type SuiteParse =
   /** `diagnostics` holds the invalid task files; the suite runs without those tasks. `warnings` fail nothing. */
   | { ok: true; suite: Suite; diagnostics: WorkflowDiagnostic[]; warnings: WorkflowDiagnostic[] }
@@ -207,16 +277,21 @@ export type SuiteParse =
  * Parses one suite directory. Diagnostics read `file:line: field "...": message` like workflows, with the line of the
  * YAML node a zod issue's path names. `isAlias` says whether a model value is a team alias under the sync's selection:
  * a model name in `defaults.model` while an arm changes the tool is a warning, since a name does not resolve per tool.
- * Without it, nothing is checked against aliases.
+ * Without it, nothing is checked against aliases. `files` are the files of the suite directory its tasks' check.add
+ * entries name.
  */
-export function parseSuite(input: { suite: SourceFile; tasks: readonly SourceFile[]; isAlias?: (model: string) => boolean }): SuiteParse {
+export function parseSuite(input: { suite: SourceFile; tasks: readonly SourceFile[]; files?: readonly SuiteFile[]; isAlias?: (model: string) => boolean }): SuiteParse {
   const parsed = parseFile(input.suite, SuiteFileSchema);
   if (!parsed.ok) return parsed;
   const { value: file, document, lineCounter } = parsed;
-  const directory = path.posix.basename(path.posix.dirname(input.suite.relativePath));
+  const suiteDir = path.posix.dirname(input.suite.relativePath);
+  const directory = path.posix.basename(suiteDir);
   if (file.name !== directory) {
     return { ok: false, diagnostics: [diagnosticAt(input.suite.relativePath, lineCounter, document, ['name'], `suite "${file.name}" must be named after its directory, "${directory}"`)] };
   }
+  const TaskFileSchema = taskFileSchema(new Map((input.files ?? []).flatMap((suiteFile) => (
+    suiteFile.relativePath.startsWith(`${suiteDir}/`) ? [[suiteFile.relativePath.slice(suiteDir.length + 1), suiteFile] as const] : []
+  ))));
   const diagnostics: WorkflowDiagnostic[] = [];
   const tasks: Task[] = [];
   for (const source of [...input.tasks].sort((left, right) => left.relativePath.localeCompare(right.relativePath))) {

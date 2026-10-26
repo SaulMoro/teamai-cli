@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { formatUnknownScorer, loadCachedSuite, syncWorkflowDefinitions } from '../workflow/cache.js';
-import { parseSuite } from '../workflow/benchmark/suite.js';
+import { parseSuite, type SuiteFile } from '../workflow/benchmark/suite.js';
 
 const START = 'a'.repeat(40);
 const dirs: string[] = [];
@@ -39,12 +39,18 @@ function taskText(lines: Record<string, string> = {}): string {
   return Object.entries(fields).filter(([, value]) => value !== '').map(([key, value]) => `${key}: ${value}\n`).join('');
 }
 
-function parse(suite: string, tasks: Record<string, string> = { fix: taskText() }, isAlias = (_model: string) => true) {
+function parse(suite: string, tasks: Record<string, string> = { fix: taskText() }, isAlias = (_model: string) => true, files: readonly SuiteFile[] = []) {
   return parseSuite({
     suite: { relativePath: 'benchmarks/fix/suite.yaml', content: suite },
     tasks: Object.entries(tasks).map(([name, content]) => ({ relativePath: `benchmarks/fix/tasks/${name}.yaml`, content })),
+    files,
     isAlias,
   });
+}
+
+/** A file of the suite directory `benchmarks/fix/`, as the sync reads it. */
+function suiteFile(relativePath: string, text: string, mode: SuiteFile['mode'] = '100644'): SuiteFile {
+  return { relativePath: `benchmarks/fix/${relativePath}`, base64: Buffer.from(text).toString('base64'), mode };
 }
 
 describe('parseSuite', () => {
@@ -105,6 +111,48 @@ describe('parseSuite', () => {
     const parsed = parse(suiteText(), { fix: taskText({ check: `{ run: node test.js, protect: ${protect}, add: [${added}] }`, source: `{ platform: claude-code, sessionId: s1, fix: ${fix} }` }) });
 
     expect(parsed).toMatchObject({ ok: true, diagnostics: [], suite: { tasks: [{ judge: { kind: 'check', add: { commit: fix, paths: [added] } } }] } });
+  });
+
+  it('keeps a file of the suite directory that check.add writes at its own path, with its bytes and mode, without source.fix', () => {
+    const test = 'assert(refresh(expired) === null);\n';
+    const parsed = parse(suiteText(), { fix: taskText({ check: "{ run: node test.js, protect: ['test/**'], add: [{ from: check-files/refresh.test.js, to: test/auth/refresh.test.js }] }" }) }, undefined, [
+      suiteFile('check-files/refresh.test.js', test, '100755'),
+    ]);
+
+    expect(parsed).toMatchObject({ ok: true, diagnostics: [] });
+    expect(parsed.ok && parsed.suite.tasks[0].judge).toEqual({
+      kind: 'check', run: 'node test.js', protect: ['test/**'],
+      files: [{ path: 'test/auth/refresh.test.js', mode: '100755', base64: Buffer.from(test).toString('base64') }],
+    });
+  });
+
+  it('keeps every file under a directory of the suite directory that check.add writes, below its own path, in path order', () => {
+    const parsed = parse(suiteText(), { fix: taskText({ check: "{ run: node test.js, protect: ['test/**'], add: [{ from: check-files/auth, to: test/auth }] }" }) }, undefined, [
+      suiteFile('check-files/auth/refresh.test.js', 'refresh'),
+      suiteFile('check-files/auth/fixtures/token.json', '{}'),
+      suiteFile('check-files/other.test.js', 'other'),
+    ]);
+
+    expect(parsed.ok && parsed.suite.tasks[0].judge).toMatchObject({
+      files: [{ path: 'test/auth/fixtures/token.json', base64: Buffer.from('{}').toString('base64') }, { path: 'test/auth/refresh.test.js', base64: Buffer.from('refresh').toString('base64') }],
+    });
+  });
+
+  it.each([
+    ['a from that names no file of the suite directory', '[{ from: check-files/missing.js, to: test/missing.js }]', 'check.add.0.from', '"check-files/missing.js" is no file or directory of the suite directory; a symlink is not one'],
+    ['a from outside the suite directory', '[{ from: ../other/check-files/a.js, to: test/a.js }]', 'check.add.0.from', 'must be a path inside the suite directory, with no backslash and no ".", ".." or empty segment'],
+    ['an absolute from', '[{ from: /etc/passwd, to: test/a.js }]', 'check.add.0.from', 'must be a path inside the suite directory, with no backslash and no ".", ".." or empty segment'],
+    ['a to with ..', '[{ from: check-files/a.js, to: test/../a.js }]', 'check.add.0.to', 'must be a path relative to the repo, with no backslash and no ".", ".." or empty segment'],
+    ['a to with a glob', "[{ from: check-files/a.js, to: 'test/*.js' }]", 'check.add.0.to', 'must name one file, without glob characters'],
+    ['a to outside protect', '[{ from: check-files/a.js, to: lib/a.js }]', 'check.add.0.to', 'check.add "lib/a.js" is not under check.protect, so the agent could supply it; add a protect path that covers it'],
+    ['a directory whose files land outside protect', '[{ from: check-files, to: test }]', 'check.add.0.to', 'check.add "test/a.js" is not under check.protect, so the agent could supply it; add a protect path that covers it'],
+    ['two entries that write one path', '[{ from: check-files/a.js, to: test/unit/a.test.js }, { from: check-files/a.js, to: test/unit/a.test.js }]', 'check.add.1.to', 'check.add writes "test/unit/a.test.js" twice; write each path once'],
+    ['an entry with neither form', '[{ to: test/unit/a.test.js }]', 'check.add.0', 'must be a path of source.fix, or { from, to }: a file or directory of the suite directory, and where the check reads it'],
+  ])('reports %s at its check.add entry', (_rule, add, field, message) => {
+    const parsed = parse(suiteText(), { bad: taskText({ check: `{ run: node test.js, protect: ['test/**/*.test.js'], add: ${add} }` }), fix: taskText() }, undefined, [suiteFile('check-files/a.js', 'a')]);
+
+    expect(parsed).toMatchObject({ ok: true, suite: { tasks: [{ id: 'fix' }] } });
+    expect(parsed.diagnostics).toEqual([expect.objectContaining({ file: 'benchmarks/fix/tasks/bad.yaml', line: 5, field, message })]);
   });
 
   it('reports a suite with no valid task', () => {
