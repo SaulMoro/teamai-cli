@@ -16,6 +16,7 @@ import { isLabelShaped, isNameShaped } from '../../agent-observation.js';
 import type { PinnedScorer } from '../../scorers/pin.js';
 import type { WorkflowDefinition, WorkflowStep } from '../types.js';
 import type { Suite, Task, TaskJudge } from './suite.js';
+import type { CommittedSuite } from './trial.js';
 import { BenchmarkNameSchema, CommitSchema, TRIAL_WITHHELD_ENV, TrialLimitsSchema, TrialSelectionSchema, type Added, type PromptTerms, type TrialSelection } from './terms.js';
 
 const Sha256 = z.string().regex(/^[0-9a-f]{64}$/);
@@ -155,7 +156,7 @@ const SETTLED_END = 'settled';
  *   baselines                     inline (check tasks only); outputs { <task>: its baseline's output }
  *     <task>                      command check.run; workspace new; trial.kind baseline; output { baseline: passes | fails };
  *                                 trial.add: the files check.add writes before the check, from the fix and from the
- *                                 commit start made of the suite directory's files (`checkFiles`)
+ *                                 commit start made of the suite directory's files (`CommittedSuite`)
  *   trials                        inline; needs [baselines] and an `if` that reads it, when there are baselines
  *     r<rep>                      inline, one per repetition
  *       <task>                    inline; a check task's: if steps.baselines.outputs.<task> == 'fails'
@@ -179,12 +180,12 @@ const SETTLED_END = 'settled';
  *   that ran the prompt.
  * - No step carries `model`: a trial never goes through alias resolution. Its model is in `trial.model`.
  */
-export function compilePlan(plan: BenchmarkPlan, suite: Suite, checkFiles: ReadonlyMap<string, string>): { definition: WorkflowDefinition; scorers: Record<string, PinnedScorer> } {
+export function compilePlan(plan: BenchmarkPlan, { suite, files }: CommittedSuite): { definition: WorkflowDefinition; scorers: Record<string, PinnedScorer> } {
   const tasks = new Map(suite.tasks.map((task) => [task.id, task]));
   const baselines = suite.tasks.flatMap((task): WorkflowStep[] => (task.judge.kind === 'check'
     ? [{
       id: task.id, command: task.judge.run, workspace: 'new', output: { type: 'object', fields: { baseline: { type: 'enum', values: [...BASELINE_OUTPUTS] } } },
-      trial: { kind: 'baseline', task: task.id, startingCommit: task.startingCommit, ...addTerm(task.id, task.judge, checkFiles) },
+      trial: { kind: 'baseline', task: task.id, startingCommit: task.startingCommit, ...addTerm(task.judge, files.get(task.id)) },
     }]
     : []));
   const arms = new Map(plan.arms.map((arm) => [arm.name, arm]));
@@ -195,7 +196,7 @@ export function compilePlan(plan: BenchmarkPlan, suite: Suite, checkFiles: Reado
       if (!task) return [];
       const armSteps = ofRepetition.filter((trial) => trial.task === id).flatMap((trial): WorkflowStep[] => {
         const arm = arms.get(trial.arm);
-        return arm ? [{ id: arm.name, needs: [], workspace: 'new', workflow: { steps: trialSteps(plan, suite, trial, arm, task, checkFiles) } }] : [];
+        return arm ? [{ id: arm.name, needs: [], workspace: 'new', workflow: { steps: trialSteps(plan, suite, trial, arm, task, files.get(task.id)) } }] : [];
       });
       return [{ id, ...(task.judge.kind === 'check' ? { if: `steps.${BASELINES}.outputs.${id} == 'fails'` } : {}), workflow: { steps: armSteps } }];
     });
@@ -223,23 +224,18 @@ export function compilePlan(plan: BenchmarkPlan, suite: Suite, checkFiles: Reado
   };
 }
 
-/**
- * What check.add writes before a check of `judge`: its fix's files, then the suite directory's, from `checkFiles`, the
- * commit start made of them.
- */
-export function addedOf(judge: Extract<TaskJudge, { kind: 'check' }>, checkFiles: string | undefined): Added[] {
-  const [path, ...paths] = judge.files?.map((file) => file.path) ?? [];
-  const files: Added[] = checkFiles !== undefined && path !== undefined ? [{ commit: checkFiles, paths: [path, ...paths] }] : [];
-  return [...(judge.add ? [judge.add] : []), ...files];
+/** What check.add writes before a check of `judge`: its fix's files, then `checkFiles`, the suite directory's as committed. */
+export function addedOf(judge: Extract<TaskJudge, { kind: 'check' }>, checkFiles: Added | undefined): Added[] {
+  return [...(judge.add ? [judge.add] : []), ...(checkFiles ? [checkFiles] : [])];
 }
 
 /** A check step's `add` term, absent when check.add writes nothing. */
-function addTerm(task: string, judge: Extract<TaskJudge, { kind: 'check' }>, checkFiles: ReadonlyMap<string, string>): { add?: [Added, ...Added[]] } {
-  const [first, ...rest] = addedOf(judge, checkFiles.get(task));
+function addTerm(judge: Extract<TaskJudge, { kind: 'check' }>, checkFiles: Added | undefined): { add?: [Added, ...Added[]] } {
+  const [first, ...rest] = addedOf(judge, checkFiles);
   return first ? { add: [first, ...rest] } : {};
 }
 
-function trialSteps(plan: BenchmarkPlan, suite: Suite, trial: PlannedTrial, arm: PlannedArm, task: Task, checkFiles: ReadonlyMap<string, string>): WorkflowStep[] {
+function trialSteps(plan: BenchmarkPlan, suite: Suite, trial: PlannedTrial, arm: PlannedArm, task: Task, checkFiles: Added | undefined): WorkflowStep[] {
   const names = [...suite.scorers, ...(task.judge.kind === 'criteria' ? [correctnessScorerName(task.id)] : [])];
   const prompt: WorkflowStep = {
     id: 'prompt', prompt: task.prompt, workspace: 'continue', trial: promptTerms(plan, trial, arm, task),
@@ -251,7 +247,7 @@ function trialSteps(plan: BenchmarkPlan, suite: Suite, trial: PlannedTrial, arm:
         id: 'check', needs: ['prompt'], command: task.judge.run, workspace: 'continue',
         trial: {
           kind: 'check', task: task.id, startingCommit: task.startingCommit, arm: arm.name, repetition: trial.repetition, order: trial.order, protect: task.judge.protect,
-          ...addTerm(task.id, task.judge, checkFiles),
+          ...addTerm(task.judge, checkFiles),
         },
       }];
     case 'criteria':

@@ -47,6 +47,7 @@ import { WORKSPACE_MODES, type DriverIdentity, type RunState, type WorkflowEnvel
 import { commitWork, git, recordConfigOverlay, restoreUneditedConfig, saveConfig, untrustedGit, type Git } from '../worktree.js';
 import { baselineOutput, checkVerdict, type CheckVerdict } from './check.js';
 import { trialCopyOf, type BenchmarkPlan } from './plan.js';
+import type { CheckFile, Suite } from './suite.js';
 import { BaselineTermsSchema, CheckTermsSchema, PromptTermsSchema, TRIAL_WITHHELD_ENV, setsLimit, type Added, type PreparedTrialLease, type PromptTerms, type TrialTerms } from './terms.js';
 
 /**
@@ -317,10 +318,69 @@ async function stageJudgeEvidence(config: LocalConfig, run: RunState, { leased, 
 
 /**
  * Where start keeps the starting commits of `repo` this member's checkout lacks, such as a shallow CI checkout's, for a
- * trial's clone to fetch offline. A cache: safe to delete, filled again at the next start.
+ * trial's clone to fetch offline, and the commits it makes of the suite files a check writes, which no repo holds and
+ * nothing can fetch again. Safe to delete only while no run of `repo` is open; the next start fills it again.
  */
 export function commitCacheOf(config: LocalConfig, repo: string): string {
   return path.join(getDataHome(config), 'benchmarks', 'objects', `${createHash('sha256').update(repo).digest('hex').slice(0, 16)}.git`);
+}
+
+const CommittedSuiteSchema = z.custom<{ suite: Suite; files: ReadonlyMap<string, Added> }>((value) => typeof value === 'object' && value !== null)
+  .brand<'CommittedSuite'>();
+/**
+ * A suite whose check files are each a commit in a commit cache: `files` holds, by task, the check.add entry that writes
+ * them. Only `commitCheckFiles` makes one, so a task's check files never reach a plan without their commit.
+ */
+export type CommittedSuite = z.infer<typeof CommittedSuiteSchema>;
+
+/** Commits the check files of every task of `suite` that has them into `cache`, or names the first task that failed. */
+export async function commitCheckFiles(cache: string, suite: Suite): Promise<{ ok: true; suite: CommittedSuite } | { ok: false; task: string; failed: string }> {
+  const files = new Map<string, Added>();
+  for (const task of suite.tasks) {
+    if (task.judge.kind !== 'check' || !task.judge.files) continue;
+    const [first, ...rest] = task.judge.files;
+    const committed = await commitFiles(cache, task.judge.files);
+    if ('failed' in committed) return { ok: false, task: task.id, failed: committed.failed };
+    files.set(task.id, { commit: committed.commit, paths: [first.path, ...rest.map((file) => file.path)] });
+  }
+  return { ok: true, suite: CommittedSuiteSchema.parse({ suite, files }) };
+}
+
+/**
+ * Writes `files` into the bare repo `cache` as a commit of their own, each at its path with its mode, so a trial's check
+ * writes them as `check.add` writes a fix's: a pull during the run changes none of them. A fixed author, committer and
+ * date make the same files the same commit. A ref keeps it from gc while runs read it.
+ */
+async function commitFiles(cache: string, files: readonly CheckFile[]): Promise<{ commit: string } | { failed: string }> {
+  await fs.mkdir(cache, { recursive: true });
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-check-files-'));
+  // untrustedGit is the git that takes an env with stdin, which the index of its own needs.
+  const written = untrustedGit({
+    ...process.env, GIT_INDEX_FILE: path.join(dir, 'index'),
+    GIT_AUTHOR_NAME: 'teamai', GIT_AUTHOR_EMAIL: 'teamai@localhost', GIT_AUTHOR_DATE: '946684800 +0000',
+    GIT_COMMITTER_NAME: 'teamai', GIT_COMMITTER_EMAIL: 'teamai@localhost', GIT_COMMITTER_DATE: '946684800 +0000',
+  });
+  const failed = (step: string, stderr: string): { failed: string } => ({ failed: `git ${step} failed: ${stderr.trim()}.` });
+  try {
+    const made = await written(cache, ['init', '-q', '--bare']);
+    if (made.code !== 0) return failed('init', made.stderr);
+    const blobs = files.map((file, index) => ({ at: path.join(dir, `${index}.blob`), file }));
+    for (const { at, file } of blobs) await fs.writeFile(at, Buffer.from(file.base64, 'base64'));
+    const hashed = await written(cache, ['hash-object', '-w', '--no-filters', '--stdin-paths'], { input: blobs.map(({ at }) => at).join('\n') });
+    const objects = hashed.stdout.trim().split('\n');
+    if (hashed.code !== 0 || objects.length !== files.length) return failed('hash-object', hashed.stderr);
+    const staged = await written(cache, ['update-index', '--add', '-z', '--index-info'], { input: files.map((file, index) => `${file.mode} ${objects[index]}\t${file.path}\0`).join('') });
+    if (staged.code !== 0) return failed('update-index', staged.stderr);
+    const tree = await written(cache, ['write-tree']);
+    if (tree.code !== 0) return failed('write-tree', tree.stderr);
+    const commit = await written(cache, ['commit-tree', tree.stdout.trim(), '-m', 'teamai: check files']);
+    if (commit.code !== 0) return failed('commit-tree', commit.stderr);
+    const sha = commit.stdout.trim();
+    const kept = await written(cache, ['update-ref', `refs/benchmark/${sha}`, sha]);
+    return kept.code === 0 ? { commit: sha } : failed('update-ref', kept.stderr);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
+  }
 }
 
 /**

@@ -29,6 +29,7 @@ import YAML from 'yaml';
 import { z } from 'zod';
 import type { LocalConfig } from '../../types.js';
 import { compilePlan, freezePlan, runSourceHash } from '../../workflow/benchmark/plan.js';
+import { commitCacheOf, commitCheckFiles } from '../../workflow/benchmark/trial.js';
 import { parseSuite } from '../../workflow/benchmark/suite.js';
 import type { BenchmarkSuiteFiles } from '../../workflow/conformance-interpreter.js';
 import { createRun, error, leaseNext, reportAttempt } from '../../workflow/engine.js';
@@ -470,7 +471,9 @@ export async function startBenchmarkRun(config: LocalConfig, files: BenchmarkSui
   const { suite } = parsed;
   const [first, ...rest] = suite.arms.map((arm) => ({ name: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), source: 'team' as const, teamRevision: RUN_TEAM }));
   const plan = freezePlan({ suite, baselineTeamRevision: RUN_TEAM, selection: { additionalRoles: [], projects: [], excludedSkills: [] }, arms: [first, ...rest], scorers: {} });
-  return createRun(config, { name: suite.name, sourceHash: runSourceHash(plan), teamRevision: RUN_TEAM, origin: { source: 'team' }, ...compilePlan(plan, suite, new Map()), benchmark: plan, secrets: {} });
+  const committed = await commitCheckFiles(commitCacheOf(config, suite.repo), suite);
+  if (!committed.ok) return error('check_files_unwritable', committed.failed);
+  return createRun(config, { name: suite.name, sourceHash: runSourceHash(plan), teamRevision: RUN_TEAM, origin: { source: 'team' }, ...compilePlan(plan, committed.suite), benchmark: plan, secrets: {} });
 }
 
 const BaselineLeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string().startsWith('baselines.'), attempt: z.string(), revision: z.number(), trial: z.object({ task: z.string() }) }) }) });
