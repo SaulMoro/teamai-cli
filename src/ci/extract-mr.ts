@@ -315,7 +315,7 @@ export async function ciExtractMr(opts: CiExtractMrOptions): Promise<void> {
       try {
         const diffOutput = execFileSync(
           'git', args,
-          { cwd: businessRepo, encoding: 'utf-8', timeout: 10_000 },
+          { cwd: businessRepo, encoding: 'utf-8', timeout: 10_000, stdio: ['ignore', 'pipe', 'ignore'] },
         );
         changedFiles = diffOutput.trim().split('\n')
           .filter(f => f && /\.(ts|tsx|js|jsx|py|go|rs|java|swift|scala)$/.test(f));

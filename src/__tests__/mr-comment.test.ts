@@ -19,8 +19,8 @@ describe('parseMrUrl', () => {
   });
 
   it('parses a GitLab MR URL (self-hosted instance)', () => {
-    const result = parseMrUrl('https://git.guazi-corp.com/znkf/order-service/-/merge_requests/88');
-    expect(result).toEqual({ provider: 'gitlab', owner: 'znkf', repo: 'order-service', number: '88' });
+    const result = parseMrUrl('https://gitlab.example.com/group/project/-/merge_requests/88');
+    expect(result).toEqual({ provider: 'gitlab', owner: 'group', repo: 'project', number: '88' });
   });
 
   it('parses a GitLab MR URL (nested subgroup)', () => {

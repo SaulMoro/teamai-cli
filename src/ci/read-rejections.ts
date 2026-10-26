@@ -4,7 +4,7 @@
  *
  * - GitHub: 👎 reaction = reject, no reaction = approve (written by default)
  * - GitLab: 👎 (thumbsdown) award emoji = reject, no emoji = approve (written by default)
- * - TGit: resolve_state=1 = approve, resolve_state=0 = reject (not written by default)
+ * - TGit: emoji 8 (☝️) on the note = reject, no emoji = approve (written by default)
  */
 
 import { parseMrUrl } from './mr-comment.js';
