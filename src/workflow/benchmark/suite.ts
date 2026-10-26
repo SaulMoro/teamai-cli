@@ -90,9 +90,20 @@ function changedKeys(defaults: ArmValues, arm: Partial<ArmValues>): ArmKey[] {
   return ARM_KEYS.filter((key) => arm[key] !== undefined && arm[key] !== defaults[key]);
 }
 
+/** One segment of a glob pathspec as a regular expression, undefined when its `[` class never closes. A class stays a class, `[!a]` as `[^a]`. */
+function segmentPattern(segment: string): RegExp | undefined {
+  const pattern = segment.replace(/[.+${}()|\\]/g, (char) => `\\${char}`).replace(/\*/g, '[^/]*').replace(/\?/g, '.').replace(/\[!/g, '[^');
+  try {
+    return new RegExp(`^${pattern}$`);
+  } catch {
+    return undefined;
+  }
+}
+
 const CheckFileSchema = z.object({
   run: z.string().trim().min(1, 'check.run is a command'),
-  protect: z.array(RepoPathSchema).nonempty('check.protect lists every path the check reads and the agent must not supply'),
+  protect: z.array(RepoPathSchema.refine((value) => value.split('/').every((segment) => segmentPattern(segment) !== undefined), 'has a [ class with no closing ]'))
+    .nonempty('check.protect lists every path the check reads and the agent must not supply'),
   /** Files as `source.fix` has them, such as its test, written before the check whether or not the starting commit has them: the agent never sees them. */
   add: z.array(RepoPathSchema.refine((value) => !/[*?[]/.test(value), 'must name one file, without glob characters')).nonempty().optional(),
 }).strict();
@@ -107,9 +118,7 @@ function pathspecMatches(spec: readonly string[], file: readonly string[]): bool
   if (head === '**') return rest.length === 0 || file.some((_, at) => pathspecMatches(rest, file.slice(at)));
   const [name, ...below] = file;
   if (name === undefined) return false;
-  // A class stays a class, `[!a]` as `[^a]`.
-  const pattern = head.replace(/[.+${}()|\\]/g, (char) => `\\${char}`).replace(/\*/g, '[^/]*').replace(/\?/g, '.').replace(/\[!/g, '[^');
-  return new RegExp(`^${pattern}$`).test(name) && pathspecMatches(rest, below);
+  return segmentPattern(head)?.test(name) === true && pathspecMatches(rest, below);
 }
 
 const TaskFileSchema = z.object({
