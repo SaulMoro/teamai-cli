@@ -61,7 +61,7 @@ import type {
 import { hasAction } from './types.js';
 import type { CheckVerdict } from './benchmark/check.js';
 import { benchmarkTable, formatBenchmarkTable, type BenchmarkTable } from './benchmark/table.js';
-import { trialTool } from './benchmark/terms.js';
+import { TrialLimitSchema, trialTool, type TrialLimit } from './benchmark/terms.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 
 /**
@@ -100,6 +100,8 @@ export interface ReportInput {
   used?: Used;
   /** What the attempt's driver learned, once it ran the step, that it did not enforce. */
   unenforced?: ReportedUnenforced;
+  /** The suite limit that ended a benchmark trial's prompt, which then succeeded: its check or judge decides the trial. */
+  limit?: TrialLimit;
   /**
    * Process-only, set by benchmark/trial.ts after it prepared, ran or completed a trial step. Not in REPORT_FIELDS, so
    * no driver can send it. `verdict` is the check's, classified once (benchmark/check.ts).
@@ -1385,7 +1387,7 @@ const NEXT_PAYLOAD_FIELDS = new Set(['driver', 'running', 'canTakeLease', 'base'
 const REPORT_FIELD_SOURCES = {
   attempt: 'payload', revision: 'payload', outcome: 'payload', driver: 'payload', outputs: 'payload', exitCode: 'payload', message: 'payload',
   tool: 'payload', model: 'payload', session: 'payload', resumed: 'payload', tokens: 'payload', durationMs: 'payload', cost: 'payload',
-  failure: 'payload', changes: 'payload', read: 'payload', agent: 'payload', used: 'payload', unenforced: 'payload',
+  failure: 'payload', changes: 'payload', read: 'payload', agent: 'payload', used: 'payload', unenforced: 'payload', limit: 'payload',
   prUrl: 'changes.pr_url', trialReport: 'process',
 } as const satisfies Record<keyof ReportInput, 'payload' | 'changes.pr_url' | 'process'>;
 
@@ -1522,6 +1524,11 @@ export function parseReport(value: unknown): ParsedReport | string {
     const unenforced = ReportedUnenforcedSchema.safeParse(record.unenforced);
     if (!unenforced.success) return 'unenforced must list the requirements the driver did not enforce: max_turns';
     report.unenforced = unenforced.data;
+  }
+  if (record.limit !== undefined) {
+    const limit = TrialLimitSchema.safeParse(record.limit);
+    if (!limit.success) return 'limit must be the trial limit that stopped the tool: timeout, budget or max_turns';
+    report.limit = limit.data;
   }
   const ignored = unreadFields(record, REPORT_FIELDS);
   if (isRecord(record.changes)) {
@@ -1799,6 +1806,9 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
     const contract = plan?.contract;
     const mismatch = workspaceMismatch(report, contract) ?? resumedMismatch(step, report.resumed);
     if (mismatch) return { save: false, envelope: error('invalid_report', mismatch) };
+    if (report.limit !== undefined && defined?.trial?.kind !== 'prompt') {
+      return { save: false, envelope: error('invalid_report', `Attempt ${report.attempt} of step "${step.id}": limit is for the prompt of a benchmark trial, which its suite's trial limits stop; omit it`) };
+    }
     const added = reportedUnenforced(report.unenforced ?? [], { maxTurns: defined?.maxTurns });
     if (typeof added === 'string') return { save: false, envelope: error('invalid_report', `Attempt ${report.attempt} of step "${step.id}": ${added}`) };
     let outcome = report.outcome;
@@ -1842,6 +1852,7 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       ...(unenforced.length > 0 ? { unenforced } : {}),
       ...(step.lease.runMode ? { runMode: step.lease.runMode } : {}),
       ...(outcomes.length > 0 ? { outcomes } : {}),
+      ...(report.limit ? { limit: report.limit } : {}),
       ...(report.trialReport?.verdict ? { verdict: report.trialReport.verdict } : {}),
       installId: install.id,
     };

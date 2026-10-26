@@ -5,6 +5,7 @@ import { RunModeSchema } from '../launch-context.js';
 import { WorkOutcomeSchema } from '../outcomes.js';
 import { JudgeUsageSchema } from '../scorers/label.js';
 import { CheckVerdictSchema } from './benchmark/check.js';
+import { TrialLimitSchema } from './benchmark/terms.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 import { PrUrlSchema } from './pr-url.js';
 import { UnenforcedSchema } from './requirements.js';
@@ -97,6 +98,8 @@ const report = {
   outcomes: z.array(WorkOutcomeSchema).optional().catch(undefined),
   /** A benchmark check's verdict, classified once when teamai ran it (benchmark/check.ts). */
   verdict: CheckVerdictSchema.optional(),
+  /** The suite limit that ended a benchmark trial's prompt. */
+  limit: TrialLimitSchema.optional(),
 };
 
 export const OutcomeSchema = z.enum(['success', 'failed', 'timeout', 'skipped', 'cancelled']);

@@ -47,7 +47,7 @@ import { WORKSPACE_MODES, type DriverIdentity, type RunState, type WorkflowEnvel
 import { commitWork, git, recordConfigOverlay, restoreUneditedConfig, saveConfig, untrustedGit, type Git } from '../worktree.js';
 import { baselineOutput, checkVerdict, type CheckVerdict } from './check.js';
 import { trialCopyOf, type BenchmarkPlan } from './plan.js';
-import { BaselineTermsSchema, CheckTermsSchema, PromptTermsSchema, TRIAL_WITHHELD_ENV, type Added, type PreparedTrialLease, type PromptTerms, type TrialTerms } from './terms.js';
+import { BaselineTermsSchema, CheckTermsSchema, PromptTermsSchema, TRIAL_WITHHELD_ENV, setsLimit, type Added, type PreparedTrialLease, type PromptTerms, type TrialTerms } from './terms.js';
 
 /**
  * `<runsDir>/<run>/trials/<copy>.json`, one per trial copy, the `<arm>` step whose copy the prompt and the check share,
@@ -178,6 +178,9 @@ export const Trials = {
     }
     if (report.tool === undefined) {
       return error('invalid_report', `The report of trial step "${leased.id}" names no tool. Send tool with the tool the driver launched: ${terms.tool} for this trial.`);
+    }
+    if (report.limit !== undefined && !setsLimit(terms.limits, report.limit)) {
+      return error('invalid_report', `The report of trial step "${leased.id}" names limit ${report.limit}, which its suite's trial does not set. Send limit only for a limit in the lease's trial.limits that stopped the tool.`);
     }
     const file = receiptPath(config, runId, trialCopyOf(terms));
     const reported = await withCopy(file, COPY_WAIT, () => reportPrompt({ config, runId, report, secrets, file, terms }));

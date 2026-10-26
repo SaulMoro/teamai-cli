@@ -11,7 +11,7 @@ import type { EntryVerdict } from '../../scorers/entry.js';
 import type { StepState } from '../step-state.js';
 import type { RunState } from '../types.js';
 import { baselineStepOf, correctnessScorerName, stepOf, type BenchmarkPlan, type PlannedTask, type PlannedTrial } from './plan.js';
-import { TrialLimitsSchema } from './terms.js';
+import { TrialLimitSchema, TrialLimitsSchema } from './terms.js';
 
 export const TRIAL_RESULTS = ['passed', 'failed', 'error', 'unscored', 'not_run'] as const;
 export type TrialResult = (typeof TRIAL_RESULTS)[number];
@@ -39,6 +39,8 @@ export const BenchmarkRecordSchema = z.object({
   trials: z.array(z.object({
     task: z.string(), arm: z.string(), repetition: z.number().int(), order: z.number().int(), step: z.string(),
     result: z.enum(TRIAL_RESULTS),
+    /** The suite limit that ended the prompt; the check or judge still decided `result`. */
+    limit: TrialLimitSchema.optional(),
     /** The prompt's, as its driver measured them around the tool launch and the tool stated them. */
     durationMs: z.number().int().nonnegative().optional(),
     tokens: z.object({ input: z.number().optional(), output: z.number().optional(), cachedInput: z.number().optional() }).optional(),
@@ -90,13 +92,14 @@ function scoringCostOf(verdicts: readonly EntryVerdict[]): BenchmarkRecord['tria
 }
 
 /** What a trial's prompt reported it spent: absent for a prompt that never settled a report. */
-function usageOf(prompt: StepState | undefined): Pick<BenchmarkRecord['trials'][number], 'durationMs' | 'tokens' | 'cost'> {
+function usageOf(prompt: StepState | undefined): Pick<BenchmarkRecord['trials'][number], 'limit' | 'durationMs' | 'tokens' | 'cost'> {
   switch (prompt?.status) {
     case 'succeeded':
     case 'failed':
     case 'cancelled':
     case 'delivering':
       return {
+        ...(prompt.limit ? { limit: prompt.limit } : {}),
         ...(prompt.durationMs !== undefined ? { durationMs: prompt.durationMs } : {}),
         ...(prompt.tokens ? { tokens: prompt.tokens } : {}),
         ...(prompt.cost ? { cost: prompt.cost } : {}),

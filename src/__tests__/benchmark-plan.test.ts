@@ -113,6 +113,19 @@ describe('benchmark plan run', () => {
     expect(buildEndRecord(run, run.driver, '').benchmark?.limits).toEqual(limits);
   });
 
+  it("keeps the limit that ended a trial's prompt on its step, and records it", async () => {
+    const { config, runId } = await startFix({ trial: '{ timeout: 5m }' });
+    const lease = await leasePrompt(config, runId);
+
+    await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {}, limit: 'timeout' });
+    await cancelRun(config, runId, {});
+    const run = await readRun(config, runId);
+
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    expect(run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({ status: 'succeeded', limit: 'timeout' });
+    expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ step: 'trials.r1.t01.a01.prompt', limit: 'timeout' })]);
+  });
+
   it('refuses a trial report teamai did not complete, and accepts the one it did', async () => {
     const { config, runId } = await startFix();
     const lease = await leasePrompt(config, runId);

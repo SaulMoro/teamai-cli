@@ -48,6 +48,26 @@ export const TrialLimitsSchema = z.object({
 }).strict();
 export type TrialLimits = z.infer<typeof TrialLimitsSchema>;
 
+/** The limit a trial prompt's report names when one of its suite's limits ended the agent's turn. */
+export const TrialLimitSchema = z.enum(['timeout', 'budget', 'max_turns']);
+export type TrialLimit = z.infer<typeof TrialLimitSchema>;
+
+/** Whether `limits` sets `limit`. */
+export function setsLimit(limits: TrialLimits | undefined, limit: TrialLimit): boolean {
+  switch (limit) {
+    case 'timeout':
+      return limits?.timeoutMs !== undefined;
+    case 'budget':
+      return limits?.tokens !== undefined;
+    case 'max_turns':
+      return limits?.maxTurns !== undefined;
+    default: {
+      const unhandled: never = limit;
+      return unhandled;
+    }
+  }
+}
+
 const Shared = {
   task: BenchmarkNameSchema,
   /** Where the step's clone starts, and the commit agent configuration comes from. */

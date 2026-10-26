@@ -151,8 +151,21 @@ describe('workflow engine', () => {
     [{ durationMs: 1.5 }, 'durationMs must be a non-negative integer of milliseconds'],
     [{ cost: { amount: 1 } }, 'cost must be an amount and a unit, as the tool stated it'],
     [{ cost: { amount: -1, unit: 'USD' } }, 'cost must be an amount and a unit, as the tool stated it'],
+    [{ limit: 'turns' }, 'limit must be the trial limit that stopped the tool: timeout, budget or max_turns'],
   ])('refuses a report with %j', (fields, message) => {
     expect(parseReport({ attempt: 'a00000000', revision: 1, outcome: 'success', driver: driverA, ...fields })).toBe(message);
+  });
+
+  it("refuses a limit on a step that is not a benchmark trial's prompt, and keeps it leased", async () => {
+    const { config, runId } = await startBuild(TWO_STEPS);
+    const lease = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number() }) }) })
+      .parse(await leaseNext(config, runId, driverA)).data.lease;
+
+    const answer = await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: driverA, limit: 'timeout' });
+
+    const run = await readRun(config, runId);
+    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Attempt ${lease.attempt} of step "one": limit is for the prompt of a benchmark trial, which its suite's trial limits stop; omit it` } });
+    expect(typeof run === 'object' && run.steps.find((step) => step.id === lease.step)).toMatchObject({ status: 'leased' });
   });
 
   it('reports the payload fields a driver sent that the CLI does not read', () => {
