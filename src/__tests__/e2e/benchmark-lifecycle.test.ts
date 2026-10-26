@@ -181,4 +181,19 @@ describe('a benchmark run once it has started', () => {
     expect(fixture.toolLaunches()).toEqual([]);
     expect(fixture.status()).toBe(status);
   }, 120_000);
+
+  it("is refused by the skill driver, which launches no trial tool, and handed to the person's local resume", async () => {
+    const fixture = await fixtureOf({ tool: 'fixes', sandbox: false, suite: FIX_SUITE });
+    const runId = await started(fixture);
+
+    const resumed = await fixture.teamai(['workflow', 'resume', runId, '--driver', 'skill']);
+
+    expect(envelope(resumed).error).toEqual({
+      code: 'needs_local_driver',
+      message: `Workflow fix must run with the local driver. fix is a benchmark, whose trials run only on a driver that declares a sandbox and launches the trial tools, and this driver launches none. Add --sandbox on a machine that is one. Ask the person to run teamai workflow resume ${runId} in their own terminal.`,
+      next: null,
+    });
+    expect(RunFileSchema.parse(fixture.runFile(runId)).steps.every((step) => step.status === 'pending')).toBe(true);
+    expect(fixture.toolLaunches()).toEqual([]);
+  }, 120_000);
 });

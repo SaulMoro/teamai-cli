@@ -208,6 +208,8 @@ export function compilePlan(plan: BenchmarkPlan, suite: Suite): { definition: Wo
       schemaVersion: 'v1alpha1',
       name: suite.name,
       description: suite.description ?? `Benchmark suite ${suite.name}`,
+      // `start --benchmark` checks no agent evidence, so a resume does not either: an agent continues a run it may start.
+      invoke: 'allow',
       timeout: suite.timeoutMs,
       ...(suite.setup ? { setup: suite.setup } : {}),
       ends: { [SETTLED_END]: 'succeeded' },

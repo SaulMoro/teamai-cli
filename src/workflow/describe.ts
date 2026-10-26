@@ -2,6 +2,7 @@ import { sameEnvName } from '../resources/env-key.js';
 import { mergeRequirements, negotiate, requiredEnvKeys, type Allow, type DriverCan, type EnvFacts, type Missing, type Requirements, type Setup } from './requirements.js';
 import type { Invoke, OutputSchema, WorkflowDefinition, WorkflowSource, WorkflowStep } from './types.js';
 import { opensCopy, resolveMode, runsInCheckout } from './workspace.js';
+import { trialTool } from './benchmark/terms.js';
 
 /**
  * Why a driver cannot run a workflow to its end: a step it takes works in the workspace copy `opener` opened, and a
@@ -153,6 +154,7 @@ export function describeWorkflow(input: {
       step: path, executor, requires, prepare: false,
       interactive: step.interactive === true, hasContract, envKeys: Object.keys(step.env ?? {}), runEnvKeys, budgeted: step.prompt !== undefined && scope.budgeted,
       ...(step.maxTurns !== undefined ? { maxTurns: step.maxTurns } : {}), ...(hasContract && scope.setup ? { setup: scope.setup } : {}),
+      ...(step.trial ? { trial: { tool: trialTool(step.trial), withhold: [] } } : {}),
     }, can, allow, env);
     if (negotiation.kind === 'hold') facts.held.push({ step: path, missing: negotiation.missing, env: requires.env ?? [] });
     if (scope.copy === undefined || negotiation.kind === 'fail') return;
