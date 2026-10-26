@@ -314,7 +314,9 @@ export function createLocalToolAdapter(
         };
       }
       const fileResult = await readResultFile(input.resultPath);
-      const stated = toolStdout(launchAdapterIdOf(tool), completed.stdout);
+      const printed = toolStdout(launchAdapterIdOf(tool), completed.stdout);
+      // Only a tool stopped at a limit may end before its result: one that ended there on its own wrote none.
+      const stated = printed?.unfinished && !stopped ? null : printed;
       // A tool stopped mid-run, such as Claude before its final result, states no total: what the meter counted stands in.
       const reported = metered && !stated?.tokens ? { ...stated, tokens: metered } : stated;
       const result = combineResults(fileResult, reported) ?? (interactive ? {} : null);

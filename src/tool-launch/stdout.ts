@@ -16,6 +16,8 @@ export interface ToolReport {
   cost?: { amount: number; unit: string };
   /** Whether the run ended at the turn cap it was launched with: Claude's `error_max_turns` result. */
   reachedMaxTurns?: boolean;
+  /** Whether stdout ended before the tool's final result, so it holds only what the tool said as it started. */
+  unfinished?: boolean;
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -24,13 +26,18 @@ function finiteNumber(value: unknown): number | undefined {
 
 function claudeStdout(stdout: string): ToolReport | null {
   const events = jsonRecords(stdout);
-  const record = events.findLast((event) => event.type === 'result');
-  if (!record) return null;
-  const usage = record.usage as Record<string, unknown> | undefined;
   // The `init` event names the session's model. `modelUsage` keys every model the session billed, a side call's and a
   // subagent's included, so it cannot tell which one ran the step (#1176).
   const init = events.find((event) => event.type === 'system' && event.subtype === 'init');
   const model = typeof init?.model === 'string' ? init.model : undefined;
+  const record = events.findLast((event) => event.type === 'result');
+  if (!record) {
+    // A Claude stopped before its final result still named its model and session as it started.
+    const session = typeof init?.session_id === 'string' ? init.session_id : undefined;
+    if (model === undefined && session === undefined) return null;
+    return { unfinished: true, ...(model !== undefined ? { model } : {}), ...(session !== undefined ? { session } : {}) };
+  }
+  const usage = record.usage as Record<string, unknown> | undefined;
   let output: unknown;
   if (typeof record.result === 'string') {
     try {

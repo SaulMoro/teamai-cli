@@ -230,6 +230,29 @@ describe('local tool adapter', () => {
     expect(result).toMatchObject({ started: true, stoppedBy: 'timeout' });
   });
 
+  it('keeps the model and session of a Claude stopped before its final result, and states no tokens it did not print', async () => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-timeout-init-${Date.now()}.json`);
+    files.push(resultPath);
+    const init = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'session-1', model: 'claude-sonnet' });
+    const adapter = createLocalToolAdapter(() => workingChild([init]) as unknown as ReturnType<ToolSpawn>, () => 'claude');
+
+    const result = await adapter.run('claude', { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, timeoutMs: 20 });
+
+    expect(result).toMatchObject({ started: true, stoppedBy: 'timeout', model: 'claude-sonnet', session: 'session-1' });
+    expect(result.started && result.tokens).toBeUndefined();
+  });
+
+  it('fails a Claude that exits 0 after its init event with no final result, as one that wrote no result', async () => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-init-only-${Date.now()}.json`);
+    files.push(resultPath);
+    const init = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'session-1', model: 'claude-sonnet' });
+    const adapter = createLocalToolAdapter(() => child(`${init}\n`) as unknown as ReturnType<ToolSpawn>, () => 'claude');
+
+    const result = await adapter.run('claude', { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath });
+
+    expect(result).toMatchObject({ started: true, exitCode: 0, failure: { code: 'tool_failed', message: 'claude did not write a valid workflow result' } });
+  });
+
   it('says the budget stopped a tool that passed it, though the tool closed only after its timeout', async () => {
     const resultPath = path.join(os.tmpdir(), `teamai-workflow-budget-slow-${Date.now()}.json`);
     files.push(resultPath);
