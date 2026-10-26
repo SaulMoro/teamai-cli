@@ -54,6 +54,27 @@ const GAMEABLE = {
 
 const OTHER_CASE = "require('node:assert').ok(true);\n";
 
+const HashedRecordSchema = z.object({ benchmark: z.object({
+  tasks: z.array(z.object({ sourceHash: z.string() })),
+  trials: z.array(z.object({ result: z.string() })),
+}) });
+
+/** A check the agent never sees: check.add writes it from the suite directory, where the issue's example keeps it. */
+const REFRESH_FROM = 'benchmarks/fix/check-files/expired-token/refresh.test.js';
+const REFRESH_TO = 'test/auth/refresh.test.js';
+const REFRESH_TEST = "#!/usr/bin/env node\nrequire('node:assert').strictEqual(require('../../answer.js'), 42);\n";
+const HIDDEN_TASK = `schemaVersion: v1alpha1
+title: Fix the answer
+prompt: Make the check pass.
+startingCommit: '{{startingCommit}}'
+check:
+  run: ${REFRESH_TO}
+  protect: ['test/**']
+  add:
+    - from: check-files/expired-token/refresh.test.js
+      to: ${REFRESH_TO}
+`;
+
 const fixtures: BenchmarkFixture[] = [];
 
 afterEach(() => {
@@ -120,6 +141,42 @@ source: { platform: claude-code, sessionId: s1, fix: ${fix} }
     if (!existing) expect(fixture.toolLaunches()[0]?.paths).not.toContain('test/answer.test.js');
     expect(fixture.trialRootEntries()).toEqual([]);
   }, 120_000);
+
+  // The suite's refresh.test.js fails at the starting commit, so a valid baseline shows the baseline wrote it. It runs as
+  // an executable, so it keeps the mode it has in the team repo.
+  it.each([
+    ['fixes answer.js', 'fixes', 'passed'],
+    ['writes its own passing test where the check reads it', 'writes-a-passing-test', 'failed'],
+  ] as const)('checks a trial that %s with a test from the suite directory, which its clone never has', async (_, tool, result) => {
+    const { fixture, done, record } = await ran({ tool, tasks: { fix: HIDDEN_TASK }, team: { [REFRESH_FROM]: REFRESH_TEST }, executable: [REFRESH_FROM] });
+
+    expect(done).toMatchObject({ outcome: 'succeeded' });
+    expect(record).toEqual({ tasks: [expect.objectContaining({ id: 'fix', baseline: 'valid' })], trials: [expect.objectContaining({ result })] });
+    expect(fixture.toolLaunches()).toEqual([expect.objectContaining({ paths: expect.not.arrayContaining([REFRESH_TO]) })]);
+    expect(fixture.toolLaunches()[0]?.paths).toContain('answer.js');
+    expect(fixture.trialRootEntries()).toEqual([]);
+  }, 120_000);
+
+  it('checks with the suite file as the run started, and a later run with its edit, under another sourceHash', async () => {
+    const fixture = await benchmarkFixture({
+      tool: 'fixes', sandbox: true, tools: ['claude'], tasks: { fix: HIDDEN_TASK }, team: { [REFRESH_FROM]: REFRESH_TEST }, executable: [REFRESH_FROM],
+      firstLaunch: 'pulls-a-team-change', teamChange: { [REFRESH_FROM]: REFRESH_TEST.replace('42', '43') },
+    });
+    fixtures.push(fixture);
+    const run = async () => {
+      const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+      const done = DoneSchema.safeParse(envelope(started).data?.done);
+      if (!done.success) throw new Error(`the run did not end: ${said(started)}`);
+      return HashedRecordSchema.parse(fixture.endRecord(done.data.run)).benchmark;
+    };
+
+    const before = await run();
+    const after = await run();
+
+    expect(before.trials).toEqual([expect.objectContaining({ result: 'passed' })]);
+    expect(after.trials).toEqual([expect.objectContaining({ result: 'failed' })]);
+    expect(after.tasks[0]?.sourceHash).not.toBe(before.tasks[0]?.sourceHash);
+  }, 180_000);
 
   it('reports a task whose check passes on its starting commit invalid, and runs none of its trials', async () => {
     const { fixture, done, record } = await ran({ tool: 'fixes', app: { 'answer.js': 'module.exports = 42;\n' } });

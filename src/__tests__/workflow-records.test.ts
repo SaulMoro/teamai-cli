@@ -236,7 +236,7 @@ describe('#1083 workflow run records', () => {
       // Why the skill driver stopped judging a run, told to the agent in a judging-off event.
       'judge_runner_gone', 'no_child_agent',
       // Refusals of teamai workflow start --benchmark, before any run exists.
-      'team_revision_unpullable', 'benchmark_not_found', 'commit_unreachable',
+      'team_revision_unpullable', 'benchmark_not_found', 'commit_unreachable', 'check_files_unwritable',
       'arm_model_missing', 'arm_unpublishable',
       // Refusals of teamai workflow start --benchmark --try, which tries one task file and creates no run.
       'benchmark_invalid', 'task_try_failed',

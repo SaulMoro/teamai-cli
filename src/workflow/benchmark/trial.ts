@@ -47,7 +47,7 @@ import { WORKSPACE_MODES, type DriverIdentity, type RunState, type WorkflowEnvel
 import { commitWork, git, recordConfigOverlay, restoreUneditedConfig, saveConfig, untrustedGit, type Git } from '../worktree.js';
 import { baselineOutput, checkVerdict, type CheckVerdict } from './check.js';
 import { trialCopyOf, type BenchmarkPlan } from './plan.js';
-import { BaselineTermsSchema, CheckTermsSchema, PromptTermsSchema, TRIAL_WITHHELD_ENV, type PreparedTrialLease, type PromptTerms, type TrialTerms } from './terms.js';
+import { BaselineTermsSchema, CheckTermsSchema, PromptTermsSchema, TRIAL_WITHHELD_ENV, type Added, type PreparedTrialLease, type PromptTerms, type TrialTerms } from './terms.js';
 
 /**
  * `<runsDir>/<run>/trials/<copy>.json`, one per trial copy, the `<arm>` step whose copy the prompt and the check share,
@@ -666,7 +666,7 @@ async function checkIn(trial: Runner, lease: Pick<CheckLease, 'command' | 'envSc
  * apply as they do to a trial. The clone is removed.
  */
 export async function tryCheckAt(input: {
-  commit: string; startingCommit: string; command: string; protect?: readonly string[]; add?: { commit: string; paths: readonly string[] }; setup?: Setup;
+  commit: string; startingCommit: string; command: string; protect?: readonly string[]; add?: readonly Added[]; setup?: Setup;
   sources: readonly string[]; expiresAt: string; signal?: AbortSignal;
 }): Promise<CheckRun> {
   const { commit, startingCommit, protect, add, setup, sources, expiresAt } = input;
@@ -790,33 +790,36 @@ async function stagedEntries(git: Git, cwd: string, specs: readonly string[]): P
 }
 
 /**
- * Writes the files `add` names into `clone` as its commit, the task's fix, has them, whether or not the clone has them,
- * so the check reads the fix's test and the agent never did. Each must be a file at that commit. The commit is read from
- * the first of `sources` that has it into an index of its own, and its files are written from that source's objects, so
- * nothing the clone holds decides what is written. Then each must hold that commit's bytes, as `restoreProtected` checks
- * its own. Undefined once written.
+ * Writes the files each entry of `add` names into `clone` as its commit has them, whether or not the clone has them, so
+ * the check reads the fix's test, or the suite's, and the agent never did. Each must be a file at that commit. The
+ * commit is read from the first of `sources` that has it into an index of its own, and its files are written from that
+ * source's objects, so nothing the clone holds decides what is written. Then each must hold that commit's bytes, as
+ * `restoreProtected` checks its own. Undefined once every entry is written.
  */
 async function writeAdded({ clone, add, sources, env }: {
-  clone: string; add: { commit: string; paths: readonly string[] }; sources: readonly string[]; env: NodeJS.ProcessEnv;
+  clone: string; add: readonly Added[]; sources: readonly string[]; env: NodeJS.ProcessEnv;
 }): Promise<WorkflowFailure | undefined> {
-  const failed = (message: string): WorkflowFailure => ({ code: 'trial_prepare_failed', message: `The files check.add names could not be written into the clone in ${clone} as ${add.commit} has them: ${message}` });
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-add-'));
   const fixed = untrustedGit({ ...env, GIT_INDEX_FILE: path.join(dir, 'index') });
   try {
-    const read = await readStarting(fixed, sources, add.commit);
-    if ('stderr' in read) return failed(`git read-tree: ${read.stderr.trim()}`);
-    const listed = await stagedEntries(fixed, read.source, add.paths.map((entry) => `:(literal)${entry}`));
-    if ('stderr' in listed) return failed(`git ls-files: ${listed.stderr.trim()}`);
-    // A literal pathspec also names what is under a directory, and a submodule has no bytes to write: only files count.
-    const entries = listed.entries.filter((entry) => entry.mode !== '160000' && add.paths.includes(entry.path));
-    const missing = add.paths.find((entry) => !entries.some((staged) => staged.path === entry));
-    if (missing !== undefined) return { code: 'trial_prepare_failed', message: `check.add path ${missing} is not a file at the fix ${add.commit}. List files the fix has in check.add, or fix source.fix.` };
-    // Bytes as the commit stores them, whatever this machine's line-ending settings would write.
-    const written = await fixed(read.source, ['-c', 'core.autocrlf=false', '-c', 'core.eol=lf', `--work-tree=${clone}`, 'checkout-index', '-f', '-z', '--stdin'], { input: entries.map((entry) => `${entry.path}\0`).join('') });
-    if (written.code !== 0) return failed(`git checkout-index: ${written.stderr.trim()}`);
-    const differing: string[] = [];
-    for (const entry of entries) if (!await holds(clone, entry)) differing.push(entry.path);
-    return differing.length === 0 ? undefined : failed(`${differing.join(', ')} still differ from it after they were written.`);
+    for (const { commit, paths } of add) {
+      const failed = (message: string): WorkflowFailure => ({ code: 'trial_prepare_failed', message: `The files check.add names could not be written into the clone in ${clone} as ${commit} has them: ${message}` });
+      const read = await readStarting(fixed, sources, commit);
+      if ('stderr' in read) return failed(`git read-tree: ${read.stderr.trim()}`);
+      const listed = await stagedEntries(fixed, read.source, paths.map((entry) => `:(literal)${entry}`));
+      if ('stderr' in listed) return failed(`git ls-files: ${listed.stderr.trim()}`);
+      // A literal pathspec also names what is under a directory, and a submodule has no bytes to write: only files count.
+      const entries = listed.entries.filter((entry) => entry.mode !== '160000' && paths.includes(entry.path));
+      const missing = paths.find((entry) => !entries.some((staged) => staged.path === entry));
+      if (missing !== undefined) return { code: 'trial_prepare_failed', message: `check.add path ${missing} is not a file at the fix ${commit}. List files the fix has in check.add, or fix source.fix.` };
+      // Bytes as the commit stores them, whatever this machine's line-ending settings would write.
+      const written = await fixed(read.source, ['-c', 'core.autocrlf=false', '-c', 'core.eol=lf', `--work-tree=${clone}`, 'checkout-index', '-f', '-z', '--stdin'], { input: entries.map((entry) => `${entry.path}\0`).join('') });
+      if (written.code !== 0) return failed(`git checkout-index: ${written.stderr.trim()}`);
+      const differing: string[] = [];
+      for (const entry of entries) if (!await holds(clone, entry)) differing.push(entry.path);
+      if (differing.length > 0) return failed(`${differing.join(', ')} still differ from it after they were written.`);
+    }
+    return undefined;
   } finally {
     await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
   }

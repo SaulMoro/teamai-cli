@@ -11,15 +11,15 @@ import { pinScorers } from '../../scorers/cache.js';
 import { resolveTeamRef } from '../../team-ref.js';
 import { isAgentToolId } from '../../tools.js';
 import type { LocalConfig } from '../../types.js';
-import { loadCachedSuite, withTeamRevision } from '../cache.js';
+import { loadCachedSuite, readSuiteFiles, withTeamRevision } from '../cache.js';
 import { createRun, error } from '../engine.js';
 import { judgeUnavailable } from '../scoring.js';
 import type { DriverIdentity, RunState, WorkflowEnvelope } from '../types.js';
 import { formatDiagnostic } from '../parse.js';
-import { git } from '../worktree.js';
-import { compilePlan, freezePlan, runSourceHash, type PlannedArm } from './plan.js';
-import { parseSuite, type Arm, type Suite, type TaskJudge } from './suite.js';
-import type { TrialSelection } from './terms.js';
+import { git, untrustedGit } from '../worktree.js';
+import { addedOf, compilePlan, freezePlan, runSourceHash, type PlannedArm } from './plan.js';
+import { parseSuite, type Arm, type CheckFile, type Suite, type TaskJudge } from './suite.js';
+import type { Added, TrialSelection } from './terms.js';
 import { commitCacheOf, tryCheckAt, type CheckRun } from './trial.js';
 
 export interface BenchmarkStart {
@@ -70,8 +70,17 @@ export async function startBenchmark(config: LocalConfig, name: string, options:
   if (unpinned !== undefined) {
     return error('scorer_not_found', `Suite "${found.name}" lists scorer "${unpinned}", which has no valid scorers/${unpinned}.md for this member. Add the scorer, or remove it from ${found.relativePath}, push it, run teamai pull, and start again.`);
   }
+  const checkFiles = new Map<string, string>();
+  for (const task of found.tasks) {
+    if (task.judge.kind !== 'check' || !task.judge.files) continue;
+    const committed = await commitCheckFiles(commitCacheOf(config, found.repo), task.judge.files);
+    if ('failed' in committed) {
+      return error('check_files_unwritable', `Task "${task.id}" writes files from the suite directory before its check, and they could not be written as a commit into this machine's benchmark cache: ${committed.failed} Fix that, and start again.`);
+    }
+    checkFiles.set(task.id, committed.commit);
+  }
   const plan = freezePlan({ suite: found, baselineTeamRevision: revision, selection: selectionOf(config), arms: [first.arm, ...rest], scorers: pinned });
-  const { definition, scorers: generated } = compilePlan(plan, found);
+  const { definition, scorers: generated } = compilePlan(plan, found, checkFiles);
   const scorers = { ...pinned, ...generated };
   const criteria = found.tasks.find((task) => task.judge.kind === 'criteria');
   const needs = found.scorers.length > 0 ? `its scorers ${found.scorers.join(', ')}` : criteria ? `task "${criteria.id}" has successCriteria` : undefined;
@@ -191,6 +200,43 @@ async function firstUnreachable(checkout: string, cache: string, repo: string, c
   return undefined;
 }
 
+/**
+ * Writes `files` into the bare repo `cache` as a commit of their own, each at its path with its mode, so a trial's check
+ * writes them as `check.add` writes a fix's: a pull during the run changes none of them. A fixed author, committer and
+ * date make the same files the same commit. A ref keeps it from gc while runs read it.
+ */
+async function commitCheckFiles(cache: string, files: readonly CheckFile[]): Promise<{ commit: string } | { failed: string }> {
+  await fs.mkdir(cache, { recursive: true });
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-check-files-'));
+  // untrustedGit is the git that takes an env with stdin, which the index of its own needs.
+  const written = untrustedGit({
+    ...process.env, GIT_INDEX_FILE: path.join(dir, 'index'),
+    GIT_AUTHOR_NAME: 'teamai', GIT_AUTHOR_EMAIL: 'teamai@localhost', GIT_AUTHOR_DATE: '946684800 +0000',
+    GIT_COMMITTER_NAME: 'teamai', GIT_COMMITTER_EMAIL: 'teamai@localhost', GIT_COMMITTER_DATE: '946684800 +0000',
+  });
+  const failed = (step: string, stderr: string): { failed: string } => ({ failed: `git ${step} failed: ${stderr.trim()}.` });
+  try {
+    const made = await written(cache, ['init', '-q', '--bare']);
+    if (made.code !== 0) return failed('init', made.stderr);
+    const blobs = files.map((file, index) => ({ at: path.join(dir, `${index}.blob`), file }));
+    for (const { at, file } of blobs) await fs.writeFile(at, Buffer.from(file.base64, 'base64'));
+    const hashed = await written(cache, ['hash-object', '-w', '--no-filters', '--stdin-paths'], { input: blobs.map(({ at }) => at).join('\n') });
+    const objects = hashed.stdout.trim().split('\n');
+    if (hashed.code !== 0 || objects.length !== files.length) return failed('hash-object', hashed.stderr);
+    const staged = await written(cache, ['update-index', '--add', '-z', '--index-info'], { input: files.map((file, index) => `${file.mode} ${objects[index]}\t${file.path}\0`).join('') });
+    if (staged.code !== 0) return failed('update-index', staged.stderr);
+    const tree = await written(cache, ['write-tree']);
+    if (tree.code !== 0) return failed('write-tree', tree.stderr);
+    const commit = await written(cache, ['commit-tree', tree.stdout.trim(), '-m', 'teamai: check files']);
+    if (commit.code !== 0) return failed('commit-tree', commit.stderr);
+    const sha = commit.stdout.trim();
+    const kept = await written(cache, ['update-ref', `refs/benchmark/${sha}`, sha]);
+    return kept.code === 0 ? { commit: sha } : failed('update-ref', kept.stderr);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
+  }
+}
+
 function selectionOf(config: LocalConfig): TrialSelection {
   return {
     ...(config.primaryRole ? { primaryRole: config.primaryRole } : {}),
@@ -217,7 +263,9 @@ export async function tryBenchmarkTask(name: string, file: string, options: { ch
   if (taskText === undefined) return error('benchmark_not_found', `The task file ${file} could not be read. Pass the path of a task file, such as benchmarks/<suite>/tasks/<task>.yaml in a checkout of the team repo.`);
   if (suiteText === undefined) return error('benchmark_not_found', `${suiteFile} could not be read: --try reads the suite two directories up from the task file, as in benchmarks/<suite>/tasks/<task>.yaml.`);
   const posix = (at: string): string => at.split(path.sep).join('/');
-  const parsed = parseSuite({ suite: { relativePath: posix(suiteFile), content: suiteText }, tasks: [{ relativePath: posix(file), content: taskText }] });
+  const taskSource = { relativePath: posix(file), content: taskText };
+  const files = await readSuiteFiles(path.dirname(suiteFile), posix(path.dirname(suiteFile)), [taskSource]);
+  const parsed = parseSuite({ suite: { relativePath: posix(suiteFile), content: suiteText }, tasks: [taskSource], files });
   if (!parsed.ok) return error('benchmark_invalid', parsed.diagnostics.map(formatDiagnostic).join('\n'));
   const { suite } = parsed;
   const [task] = suite.tasks;
@@ -234,18 +282,25 @@ export async function tryBenchmarkTask(name: string, file: string, options: { ch
       const named = unreachable === startingCommit ? `starts from ${short(unreachable)}` : `names the fix ${short(unreachable)}`;
       return error('commit_unreachable', `Task "${task.id}" ${named}, which neither this checkout nor ${suite.repo} has. Push it, or fix ${unreachable === startingCommit ? 'startingCommit' : 'source.fix'}, and try again.`);
     }
-    return await tryCheck(suite, task, judge, [options.checkout, cache], options);
+    const committed = judge.files ? await commitCheckFiles(cache, judge.files) : undefined;
+    if (committed && 'failed' in committed) {
+      return error('check_files_unwritable', `Task "${task.id}" writes files from the suite directory before its check, and they could not be written as a commit into a temporary cache: ${committed.failed} Fix that, and try again.`);
+    }
+    return await tryCheck(suite, task, judge, addedOf(judge, committed?.commit), [options.checkout, cache], options);
   } finally {
     await fs.rm(cache, { recursive: true, force: true, maxRetries: 3 });
   }
 }
 
-/** --try once the task's commits are reachable from `sources`: its check at the starting commit, then at the fix. */
-async function tryCheck(suite: Suite, task: Suite['tasks'][number], judge: Extract<TaskJudge, { kind: 'check' }>, sources: readonly string[], options: { checkout: string; signal?: AbortSignal; progress: (line: string) => void }): Promise<WorkflowEnvelope> {
+/**
+ * --try once the task's commits are reachable from `sources`: its check at the starting commit, then at the fix, each
+ * with the files `add` writes.
+ */
+async function tryCheck(suite: Suite, task: Suite['tasks'][number], judge: Extract<TaskJudge, { kind: 'check' }>, add: readonly Added[], sources: readonly string[], options: { checkout: string; signal?: AbortSignal; progress: (line: string) => void }): Promise<WorkflowEnvelope> {
   const { startingCommit } = task;
   const expiresAt = new Date(Date.now() + suite.timeoutMs).toISOString();
   const at = (commit: string, protect?: readonly string[]): Promise<CheckRun> => tryCheckAt({
-    commit, startingCommit, command: judge.run, ...(protect ? { protect } : {}), ...(judge.add ? { add: judge.add } : {}), ...(suite.setup ? { setup: suite.setup } : {}),
+    commit, startingCommit, command: judge.run, ...(protect ? { protect } : {}), add, ...(suite.setup ? { setup: suite.setup } : {}),
     sources, expiresAt, ...(options.signal ? { signal: options.signal } : {}),
   });
   options.progress(`Task ${task.id}: trying the check at ${short(startingCommit)}`);
@@ -263,7 +318,7 @@ async function tryCheck(suite: Suite, task: Suite['tasks'][number], judge: Extra
   if (unusableFix !== undefined) return error('task_try_failed', unusableFix);
   if (fixed.kind === 'check' && fixed.verdict.verdict === 'failed') {
     const changed = await git(options.checkout, ['diff', '--name-only', startingCommit, fix, '--', ...judge.protect.map((entry) => `:(glob)${entry}`)]);
-    const added: readonly string[] = judge.add?.paths ?? [];
+    const added = add.flatMap((entry) => entry.paths);
     const paths = changed.code === 0 ? changed.stdout.split('\n').filter((line) => line !== '' && !added.includes(line)) : [];
     const hint = paths.length > 0 ? ` The fix changes ${paths.join(', ')}, which protect puts back as ${short(startingCommit)} has them: list a test the fix brought in check.add.` : '';
     return error('task_try_failed', `Task "${task.id}": the check fails at the fix ${short(fix)} (exit ${fixed.verdict.exitCode}), with the protected paths as ${short(startingCommit)} has them.${hint}`);

@@ -62,6 +62,22 @@ describe('benchmark suites at pull', () => {
     expect(output).toMatch(/benchmarks\/tasks\/tasks\/short-commit\.yaml:\d+: field "startingCommit": must be a full 40-character commit/);
   }, 120_000);
 
+  it('reports a check.add entry that names no file of the suite directory with its line, and start refuses the suite', async () => {
+    const fixture = await benchmarkFixture({ tool: 'does-nothing', sandbox: false });
+    fixtures.push(fixture);
+    fixture.pushTeam({
+      'benchmarks/hidden/suite.yaml': suite('hidden', { arms: '[{ name: claude }]' }),
+      'benchmarks/hidden/tasks/fix.yaml': fixTask(fixture.startingCommit).replace('  protect: [test.js]\n', "  protect: ['test/**']\n  add:\n    - from: check-files/missing.test.js\n      to: test/missing.test.js\n"),
+    });
+
+    const pulled = await fixture.teamai(['pull']);
+    const started = envelope(await fixture.teamai(['workflow', 'start', 'hidden', '--benchmark']));
+
+    expect(pulled.code, said(pulled)).toBe(0);
+    expect(`${pulled.stdout}\n${pulled.stderr}`).toContain('benchmarks/hidden/tasks/fix.yaml:9: field "check.add.0.from": "check-files/missing.test.js" is no file or directory of the suite directory; a symlink is not one');
+    expect(started.error).toMatchObject({ code: 'benchmark_not_found' });
+  }, 120_000);
+
   it('starts from the last valid version of a suite whose newest revision has no valid task', async () => {
     const fixture = await benchmarkFixture({ tool: 'does-nothing', sandbox: false });
     fixtures.push(fixture);

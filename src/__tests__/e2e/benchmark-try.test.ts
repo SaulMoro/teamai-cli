@@ -100,7 +100,7 @@ ${suiteLines}`);
     there(['push', '-q', 'origin', 'HEAD:main']);
     return there(['rev-parse', 'HEAD']);
   };
-  return { commits, home, tmp, tryTask, pushElsewhere, has: (commit: string) => spawnSync('git', ['cat-file', '-e', `${commit}^{commit}`], { cwd: work, env }).status === 0 };
+  return { commits, home, tmp, suiteDir, tryTask, pushElsewhere, has: (commit: string) => spawnSync('git', ['cat-file', '-e', `${commit}^{commit}`], { cwd: work, env }).status === 0 };
 }
 
 function task({ start, fix, run = 'node test.js', judge }: { start: string; fix?: string; run?: string; judge?: string }): string {
@@ -179,6 +179,18 @@ describe('workflow start --benchmark --try', () => {
 
     expect(result.code, said(result)).toBe(exit);
     expect(message(result)).toContain(expected(commits));
+  }, 60_000);
+
+  it('writes a test from the suite directory at both commits, as a run does', async () => {
+    const { commits, suiteDir, tryTask } = fixture();
+    fs.mkdirSync(path.join(suiteDir, 'check-files'));
+    fs.writeFileSync(path.join(suiteDir, 'check-files', 'startup.test.js'), STARTUP_TEST);
+    const add = '\n  add:\n    - from: check-files/startup.test.js\n      to: test/startup.test.js';
+
+    const result = await tryTask('hidden', task({ start: commits.podStart, fix: commits.fix, judge: `check:\n  run: node test/startup.test.js\n  protect: [test]${add}` }));
+
+    expect(result.code, said(result)).toBe(0);
+    expect(message(result)).toContain(`the check fails at ${short(commits.podStart)} and passes at the fix ${short(commits.fix)}`);
   }, 60_000);
 
   it('fetches a fix this checkout lacks by SHA from the suite repo, as a run does', async () => {

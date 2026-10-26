@@ -44,9 +44,10 @@ export const PRODUCT_URL = 'https://github.com/fixture/app.git';
  * What a fake tool does in the trial's clone: make the check pass, leave the clone as it was, or, on the fixture's first
  * launch of any fake tool, exit 1 without a change and make the check pass on every later one. The last three game a
  * check that reads them: set `skip` in check.config.js, add test/pass.setup.js, which stubs out assert, or commit that
- * helper as test/helpers/pass.setup.js into a git repository of its own. `hangs` never exits.
+ * helper as test/helpers/pass.setup.js into a git repository of its own. `writes-a-passing-test` writes an executable
+ * test/auth/refresh.test.js that always passes, and no fix. `hangs` never exits.
  */
-export type FakeTool = 'fixes' | 'does-nothing' | 'fails-first' | 'skips-the-check' | 'adds-a-helper' | 'adds-a-helper-repository' | 'hangs';
+export type FakeTool = 'fixes' | 'does-nothing' | 'fails-first' | 'skips-the-check' | 'adds-a-helper' | 'adds-a-helper-repository' | 'writes-a-passing-test' | 'hangs';
 
 /**
  * What a fake tool does on the fixture's first launch of any fake tool, before it answers: push a team commit of
@@ -171,6 +172,7 @@ const FAKE_TOOLS: Record<FakeTool, string> = {
   'fails-first': `if (first) process.exitCode = 1; else ${FIX}`,
   'skips-the-check': "fs.writeFileSync('check.config.js', 'module.exports = { skip: true };\\n');",
   'adds-a-helper': "fs.mkdirSync('test', { recursive: true }); fs.writeFileSync('test/pass.setup.js', \"require('node:assert').strictEqual = () => {};\\n\");",
+  'writes-a-passing-test': "fs.mkdirSync('test/auth', { recursive: true }); fs.writeFileSync('test/auth/refresh.test.js', '#!/bin/sh\\nexit 0\\n', { mode: 0o755 });",
   'adds-a-helper-repository': `fs.mkdirSync('test/helpers', { recursive: true });
 fs.writeFileSync('test/helpers/pass.setup.js', "require('node:assert').strictEqual = () => {};\\n");
 for (const args of [['init', '-q'], ['add', '-A'], ['-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '-qm', 'helper']]) execFileSync('git', args, { cwd: 'test/helpers' });`,
@@ -180,10 +182,11 @@ function git(cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env):
   return execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
-function seed(dir: string, files: Record<string, string>, origin: string): string {
+function seed(dir: string, files: Record<string, string>, origin: string, executable: readonly string[] = []): string {
   fs.mkdirSync(dir, { recursive: true });
   git(dir, ['init', '-q', '-b', 'main']);
   writeFiles(dir, files);
+  for (const file of executable) fs.chmodSync(path.join(dir, file), 0o755);
   git(dir, ['add', '-A']);
   git(dir, ['-c', 'user.name=Seed', '-c', 'user.email=seed@example.com', 'commit', '-qm', 'seed']);
   git(dir, ['push', '-q', origin, 'main']);
@@ -208,6 +211,8 @@ export interface BenchmarkFixtureOptions {
   tasks?: Record<string, string>;
   /** More files in the team repo, such as a skill. */
   team?: Record<string, string>;
+  /** The team repo files committed executable. */
+  executable?: string[];
   /** More files in the starting commit. */
   app?: Record<string, string>;
   firstLaunch?: FirstLaunch;
@@ -244,7 +249,7 @@ export async function benchmarkFixture(options: BenchmarkFixtureOptions): Promis
     'benchmarks/fix/suite.yaml': options.suite ?? FIX_SUITE,
     ...Object.fromEntries(Object.entries(tasks).map(([name, text]) => [`benchmarks/fix/tasks/${name}.yaml`, text.replaceAll('{{startingCommit}}', startingCommit)])),
     ...options.team,
-  }, teamOrigin);
+  }, teamOrigin, options.executable);
   const toolLog = path.join(root, 'tool.log');
   const judgeLog = path.join(root, 'judge.log');
   const probeRun = path.join(root, 'probe.run');
@@ -444,7 +449,7 @@ export async function startBenchmarkRun(config: LocalConfig, files: BenchmarkSui
   const { suite } = parsed;
   const [first, ...rest] = suite.arms.map((arm) => ({ name: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), source: 'team' as const, teamRevision: RUN_TEAM }));
   const plan = freezePlan({ suite, baselineTeamRevision: RUN_TEAM, selection: { additionalRoles: [], projects: [], excludedSkills: [] }, arms: [first, ...rest], scorers: {} });
-  return createRun(config, { name: suite.name, sourceHash: runSourceHash(plan), teamRevision: RUN_TEAM, origin: { source: 'team' }, ...compilePlan(plan, suite), benchmark: plan, secrets: {} });
+  return createRun(config, { name: suite.name, sourceHash: runSourceHash(plan), teamRevision: RUN_TEAM, origin: { source: 'team' }, ...compilePlan(plan, suite, new Map()), benchmark: plan, secrets: {} });
 }
 
 const BaselineLeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string().startsWith('baselines.'), attempt: z.string(), revision: z.number(), trial: z.object({ task: z.string() }) }) }) });

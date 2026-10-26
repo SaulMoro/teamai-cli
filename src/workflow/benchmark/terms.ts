@@ -61,14 +61,18 @@ export const PromptTermsSchema = z.object({
   selection: TrialSelectionSchema,
 }).strict();
 
-/** The files a check task's `check.add` names, written from its fix before each run of its check. */
+/**
+ * Files a check task's `check.add` writes before each run of its check, as `commit` has them: its fix, or the commit
+ * start made of the files it names in the suite directory.
+ */
 const AddedSchema = z.object({ commit: CommitSchema, paths: z.array(z.string().min(1)).nonempty() }).strict();
+export type Added = z.infer<typeof AddedSchema>;
 
 /** The arm's check, run by teamai in the prompt's clone. */
-export const CheckTermsSchema = z.object({ kind: z.literal('check'), ...Shared, ...OfArm, protect: z.array(z.string().min(1)).nonempty(), add: AddedSchema.optional() }).strict();
+export const CheckTermsSchema = z.object({ kind: z.literal('check'), ...Shared, ...OfArm, protect: z.array(z.string().min(1)).nonempty(), add: z.array(AddedSchema).nonempty().optional() }).strict();
 
 /** A check task's check, tried by teamai once on a clean clone of its starting commit before any of its trials. */
-export const BaselineTermsSchema = z.object({ kind: z.literal('baseline'), ...Shared, add: AddedSchema.optional() }).strict();
+export const BaselineTermsSchema = z.object({ kind: z.literal('baseline'), ...Shared, add: z.array(AddedSchema).nonempty().optional() }).strict();
 
 const TrialTermsSchema = z.discriminatedUnion('kind', [PromptTermsSchema, CheckTermsSchema, BaselineTermsSchema]);
 export type TrialTerms = z.infer<typeof TrialTermsSchema>;
