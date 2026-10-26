@@ -103,6 +103,7 @@ describe('parseSuite', () => {
     ['check.add without source.fix', taskText({ check: "{ run: node test.js, protect: ['test/**'], add: [test/startup.test.js] }" }), 'check.add', 'check.add writes its files from source.fix; add source.fix, the full commit that brought them'],
     ['check.add outside protect', taskText({ check: "{ run: node test.js, protect: ['test/**'], add: [lib/startup.test.js] }", source: `{ platform: claude-code, sessionId: s1, fix: ${'b'.repeat(40)} }` }), 'check.add.0', 'check.add "lib/startup.test.js" is not under check.protect, so the agent could supply it; add a protect path that covers it'],
     ['a glob in check.add', taskText({ check: "{ run: node test.js, protect: ['test/**'], add: ['test/*.js'] }", source: `{ platform: claude-code, sessionId: s1, fix: ${'b'.repeat(40)} }` }), 'check.add.0', 'must name one file, without glob characters'],
+    ['check.add paths that nest', taskText({ check: "{ run: node test.js, protect: ['test/**'], add: [test/a, test/a/b.js] }", source: `{ platform: claude-code, sessionId: s1, fix: ${'b'.repeat(40)} }` }), 'check.add.1', 'check.add writes "test/a" as a file and as the directory of "test/a/b.js"; write paths that do not nest'],
     ...['test/[', 'test/[!'].map((entry) => [
       `an unclosed class ${entry} in check.protect`, taskText({ check: `{ run: node test.js, protect: ['${entry}'], add: ['test/check.js'] }`, source: `{ platform: claude-code, sessionId: s1, fix: ${'b'.repeat(40)} }` }), 'check.protect.0', 'has a [ class with no closing ]',
     ]),
@@ -169,6 +170,7 @@ describe('parseSuite', () => {
     ['a to outside protect', '[{ from: check-files/a.js, to: lib/a.js }]', 'check.add.0.to', 'check.add "lib/a.js" is not under check.protect, so the agent could supply it; add a protect path that covers it'],
     ['a directory whose files land outside protect', '[{ from: check-files, to: test }]', 'check.add.0.to', 'check.add "test/a.js" is not under check.protect, so the agent could supply it; add a protect path that covers it'],
     ['two entries that write one path', '[{ from: check-files/a.js, to: test/unit/a.test.js }, { from: check-files/a.js, to: test/unit/a.test.js }]', 'check.add.1.to', 'check.add writes "test/unit/a.test.js" twice; write each path once'],
+    ['two entries whose paths nest', '[{ from: check-files/a.js, to: test/a.test.js/b.test.js }, { from: check-files/a.js, to: test/a.test.js }]', 'check.add.1.to', 'check.add writes "test/a.test.js" as a file and as the directory of "test/a.test.js/b.test.js"; write paths that do not nest'],
     ['an entry with neither form', '[{ to: test/unit/a.test.js }]', 'check.add.0', 'must be a path of source.fix, or { from, to }: a file or directory of the suite directory, and where the check reads it'],
   ])('reports %s at its check.add entry', (_rule, add, field, message) => {
     const parsed = parse(suiteText(), { bad: taskText({ check: `{ run: node test.js, protect: ['test/**/*.test.js'], add: ${add} }` }), fix: taskText() }, undefined, [suiteFile('check-files/a.js', 'a')]);

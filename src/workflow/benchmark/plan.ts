@@ -226,7 +226,7 @@ export function compilePlan(plan: BenchmarkPlan, { suite, files }: CommittedSuit
 
 /** What check.add writes before a check of `judge`: its fix's files, then `checkFiles`, the suite directory's as committed. */
 export function addedOf(judge: Extract<TaskJudge, { kind: 'check' }>, checkFiles: Added | undefined): Added[] {
-  return [...(judge.add ? [judge.add] : []), ...(checkFiles ? [checkFiles] : [])];
+  return [...(judge.add ? [{ kind: 'fix' as const, ...judge.add }] : []), ...(checkFiles ? [checkFiles] : [])];
 }
 
 /** A check step's `add` term, absent when check.add writes nothing. */

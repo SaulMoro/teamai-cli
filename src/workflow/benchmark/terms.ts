@@ -97,9 +97,9 @@ export const PromptTermsSchema = z.object({
 
 /**
  * Files a check task's `check.add` writes before each run of its check, as `commit` has them: its fix, or the commit
- * start made of the files it names in the suite directory.
+ * start made of the files it names in the suite directory, as `kind` says.
  */
-const AddedSchema = z.object({ commit: CommitSchema, paths: z.array(z.string().min(1)).nonempty() }).strict();
+const AddedSchema = z.object({ kind: z.enum(['fix', 'suite']), commit: CommitSchema, paths: z.array(z.string().min(1)).nonempty() }).strict();
 export type Added = z.infer<typeof AddedSchema>;
 
 /** The arm's check, run by teamai in the prompt's clone. */

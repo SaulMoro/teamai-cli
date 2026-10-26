@@ -341,7 +341,7 @@ export async function commitCheckFiles(cache: string, suite: Suite): Promise<{ o
     const [first, ...rest] = task.judge.files;
     const committed = await commitFiles(cache, task.judge.files);
     if ('failed' in committed) return { ok: false, task: task.id, failed: committed.failed };
-    files.set(task.id, { commit: committed.commit, paths: [first.path, ...rest.map((file) => file.path)] });
+    files.set(task.id, { kind: 'suite', commit: committed.commit, paths: [first.path, ...rest.map((file) => file.path)] });
   }
   return { ok: true, suite: CommittedSuiteSchema.parse({ suite, files }) };
 }
@@ -865,7 +865,7 @@ async function writeAdded({ clone, add, sources, env }: {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-add-'));
   const fixed = untrustedGit({ ...env, GIT_INDEX_FILE: path.join(dir, 'index') });
   try {
-    for (const { commit, paths } of add) {
+    for (const { kind, commit, paths } of add) {
       const failed = (message: string): WorkflowFailure => ({ code: 'trial_prepare_failed', message: `The files check.add names could not be written into the clone in ${clone} as ${commit} has them: ${message}` });
       const read = await readStarting(fixed, sources, commit);
       if ('stderr' in read) return failed(`git read-tree: ${read.stderr.trim()}`);
@@ -874,7 +874,14 @@ async function writeAdded({ clone, add, sources, env }: {
       // A literal pathspec also names what is under a directory, and a submodule has no bytes to write: only files count.
       const entries = listed.entries.filter((entry) => entry.mode !== '160000' && paths.includes(entry.path));
       const missing = paths.find((entry) => !entries.some((staged) => staged.path === entry));
-      if (missing !== undefined) return { code: 'trial_prepare_failed', message: `check.add path ${missing} is not a file at the fix ${commit}. List files the fix has in check.add, or fix source.fix.` };
+      if (missing !== undefined) {
+        return {
+          code: 'trial_prepare_failed',
+          message: kind === 'fix'
+            ? `check.add path ${missing} is not a file at the fix ${commit}. List files the fix has in check.add, or fix source.fix.`
+            : `check.add path ${missing} is not a file at ${commit}, the commit start made of the suite directory's files. Start a new run, which commits them again.`,
+        };
+      }
       // Bytes as the commit stores them, whatever this machine's line-ending settings would write.
       const written = await fixed(read.source, ['-c', 'core.autocrlf=false', '-c', 'core.eol=lf', `--work-tree=${clone}`, 'checkout-index', '-f', '-z', '--stdin'], { input: entries.map((entry) => `${entry.path}\0`).join('') });
       if (written.code !== 0) return failed(`git checkout-index: ${written.stderr.trim()}`);

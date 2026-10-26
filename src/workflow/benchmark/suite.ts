@@ -188,13 +188,26 @@ function taskFileSchema(files: ReadonlyMap<string, SuiteFile>) {
       return copied.map((file) => ({ at: ['check', 'add', index, 'to'], path: file.path, file }));
     });
     const seen = new Set<string>();
+    // Each directory of a path written so far, with the first path written under it.
+    const under = new Map<string, string>();
     for (const { at, path: target } of written) {
+      const parts = target.split('/');
+      const directories = parts.slice(1).map((_, end) => parts.slice(0, end + 1).join('/'));
       if (!rest.protect.some((spec) => pathspecMatches(spec.split('/'), target.split('/')))) {
         issues.push({ path: at, message: `check.add "${target}" is not under check.protect, so the agent could supply it; add a protect path that covers it` });
       } else if (seen.has(target)) {
         issues.push({ path: at, message: `check.add writes "${target}" twice; write each path once` });
+      } else {
+        // git keeps one of a file and a directory of the same name, and drops the other without an error.
+        const outer = directories.find((directory) => seen.has(directory));
+        const inner = under.get(target);
+        const [file, nested] = outer !== undefined ? [outer, target] : [target, inner];
+        if (outer !== undefined || inner !== undefined) {
+          issues.push({ path: at, message: `check.add writes "${file}" as a file and as the directory of "${nested}"; write paths that do not nest` });
+        }
       }
       seen.add(target);
+      for (const directory of directories) if (!under.has(directory)) under.set(directory, target);
     }
     if (issues.length > 0) {
       for (const issue of issues) ctx.addIssue({ code: z.ZodIssueCode.custom, ...issue });
