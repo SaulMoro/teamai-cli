@@ -941,7 +941,7 @@ teamai workflow next <run> --prepare --json '{"driver":{"kind":"script","machine
 对每个 trial 租约，驱动：
 
 1. 在 `cwd` 中以 `lease.prompt` 启动 `lease.trial.tool`，按原样使用 `lease.trial.model` 和 `lease.trial.effort`，从工具的环境中去掉 `lease.envScope.withhold` 里的名字，并加上 `lease.env`，即 attempt 标记，这样工具发出的 `teamai` 调用不会改变任何运行。它不在 `cwd` 中运行其他任何东西，所有 `teamai` 命令都在运行的检出目录中执行。
-2. 报告时带上 `tool`、工具报告的 `model`、`session` 和 `tokens`、只围绕工具启动测得的 `durationMs`，以及仅在工具给出时才带的 `cost`（`{"amount":0.12,"unit":"USD"}`）。缺少 `tool` 的报告、带有 `changes`、`read` 或 `exitCode`（由 teamai 从克隆中填写）的报告，或对 check 步骤的报告，都会返回 `invalid_report`。
+2. 报告时带上 `tool`、工具报告的 `model`、`session` 和 `tokens`、只围绕工具启动测得的 `durationMs`，以及仅在工具给出时才带的 `cost`（`{"amount":0.12,"unit":"USD"}`）。`lease.trial.limits` 中的某个限制停止了工具时，报告带 `outcome: "success"` 和 `limit`：`timeout`、`budget` 或 `max_turns`，teamai 在智能体留下的结果上运行 check；驱动无法让工具遵守的 `budget` 或 `max_turns` 列在 `unenforced` 中。`limit` 是租约没有设置的限制时，报告返回 `invalid_report`。缺少 `tool` 的报告、带有 `changes`、`read` 或 `exitCode`（由 teamai 从克隆中填写）的报告，或对 check 步骤的报告，都会返回 `invalid_report`。
 
 没有驱动领取的 trial 会一直等待，直到套件的 `timeout` 把它结算为 `not_run`。运行结束后，`done.benchmark` 带有结果 `table` 及其 `text`。`src/__tests__/e2e/benchmark-driver-contract.test.ts` 用这份约定检查驱动：把你的驱动加入它的 `DRIVERS`。
 

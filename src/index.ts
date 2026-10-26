@@ -845,7 +845,7 @@ workflowCmd
 workflowCmd
   .command('report <run>')
   .description('Report the outcome of a leased step. Prints a JSON envelope.')
-  .option('--json <payload>', 'attempt, revision, outcome (success, failed, or released), and driver. A benchmark trial\'s report also sends tool, the tool the driver launched, and durationMs (milliseconds around the tool launch) and cost ({"amount":0.12,"unit":"USD"}, only as the tool stated it) when known, but never changes, read or exitCode, which teamai fills.')
+  .option('--json <payload>', 'attempt, revision, outcome (success, failed, or released), and driver. A benchmark trial\'s report also sends tool, the tool the driver launched, and durationMs (milliseconds around the tool launch) and cost ({"amount":0.12,"unit":"USD"}, only as the tool stated it) when known, and limit (timeout, budget or max_turns) when a limit in its lease\'s trial.limits stopped the tool, but never changes, read or exitCode, which teamai fills.')
   .option('--driver <kind>', 'skill: report an attempt of a run the current coding session drives, as its turn printed the command')
   .option('--attempt <id>', 'With --driver skill: the attempt to report')
   .option('--model-unavailable', 'With --driver skill and --attempt: the host cannot run the model the dispatch names, so the step fails model_unavailable')

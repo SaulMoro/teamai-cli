@@ -40,6 +40,7 @@ setup:
 | `model` | `models/aliases.yaml` 里的模型别名（运行启动时按每个 arm 的工具解析），或一个模型名。 |
 | `repetitions` | 1 到 10，默认 3。 |
 | `timeout` | 必填：整个运行的超时。 |
+| `trial` | 可选：每个 trial 的 prompt 的限制。见 [trial 限制](#trial-限制)。 |
 | `setup` | 可选，即[工作流的 `setup`](workflow-advanced.md#要求和限制)。在每个全新克隆中、工具或 check 之前运行。 |
 | `scorers` | 可选，评判每个 trial 的[评分器](scorers.md)。没有有效 `scorers/<name>.md` 的名字会让 `teamai review --branch` 失败，`teamai pull` 会警告，start 会拒绝该套件。 |
 
@@ -167,6 +168,26 @@ check:
 
 prompt 之后无法运行的 check 让 trial 得到 `error`，而不是 `failed`。
 
+### trial 限制
+
+`trial` 限制每个 trial 的 prompt。达到限制会结束智能体的这一轮，teamai 随后在智能体留下的结果上运行 trial 的 check 或评判，所以用完时间的工具算作任务失败，而不是测试框架出错：
+
+```yaml
+timeout: 45m
+trial:
+  timeout: 8m
+  budget: { tokens: 300000 }
+  max_turns: 60
+```
+
+| 键 | 限制 | 在本地驱动上 |
+| --- | --- | --- |
+| `timeout` | 从工具启动起的时间。要短于套件的 `timeout`，后者仍然结束整个运行。 | 停止工具及其启动的每个进程。 |
+| `budget.tokens` | 输入加输出 token，按 [工作流预算](workflow-advanced.md#要求和限制)的方式计算。 | 在工具运行时从其输出中计数，超过预算后停止工具，所以 trial 可能多出最后一次模型调用。Codex 只在结束时给出 token：它会运行到结束，并在 `unenforced` 中列出 `budget`。不报告 token 的工具会让其 trial 以 `error` 结束，除非另一个限制先停止了它：这时该 trial 会在 `unenforced` 中列出 `budget`。 |
+| `max_turns` | 智能体轮数，按工具自己的计数。 | 传给 Claude。其他工具在 `unenforced` 中列出 `max_turns`。 |
+
+被限制停止的 trial 在记录中带 `limit`，并计入 “Stopped by a limit”。在 `unenforced` 中列出套件限制的 trial 算作偏差，所以有上限的 arm 不会被悄悄地与没有上限的 arm 比较。运行保持它启动时的限制。
+
 ## 试运行任务
 
 新任务文件加入套件之前，可以先试运行。在套件 `repo` 的检出目录中运行，团队仓库检出在旁边：
@@ -225,7 +246,7 @@ $ teamai workflow start fix-auth --benchmark --driver local --sandbox
 | --- | --- |
 | 工具 | 它能运行 `claude`、`codex` 和 `opencode`。安装 arm 用到的每个工具并登录。找不到工具的 arm，它的 trial 为 `not_run`，其他 arm 照常运行。 |
 | 超时 | 套件的 `timeout` 是整个运行的超时。setup、工具和 check 到时都会停止：它们所属的 trial 记为 `error`，仍未完成的 trial 结算为 `not_run`。让它低于 CI 任务的时限，否则任务会在打印表格之前被杀掉。 |
-| 卡住的 trial | trial 没有自己的超时。一个永不返回的工具会一直运行到套件超时，它之后的每个 trial 结算为 `not_run`。 |
+| 卡住的 trial | 没有 [`trial.timeout`](#trial-限制) 时，一个永不返回的工具会一直运行到套件超时，它之后的每个 trial 结算为 `not_run`。 |
 | 评判 | 带 `successCriteria` 的任务和套件的评分器在运行结束前评判，评判在运行了 trial 的那个安装上进行。机器无法评判时，需要评判的套件在启动时被拒绝。 |
 | 控制命令 | trial 的步骤要等每个任务的基线都结算后才存在。在此之前，对 trial 步骤执行 `teamai workflow cancel <run> <step>` 会返回 `step_not_found`。`workflow retry`、`publish` 和 `--claim` 拒绝 benchmark 运行。 |
 | 停下 | 用 `teamai workflow resume <run> --sandbox` 继续。 |
@@ -264,7 +285,7 @@ These results hold for these tasks, this run and this machine.
 
 | 表格 | 内容 |
 | --- | --- |
-| Arm | 按结果统计每个 arm 的 trial，以及被 trial 限制停止的数量。偏差是 prompt 运行时的工具、团队修订或模型与其 arm 不同的 trial，或者其 driver 无法执行某个 trial 限制的 trial。记录缺少其中某个值的 trial 为未验证。 |
+| Arm | 按结果统计每个 arm 的 trial，以及被 [trial 限制](#trial-限制)停止的数量。偏差是 prompt 运行时的工具、团队修订或模型与其 arm 不同的 trial，或者其 driver 无法执行某个 trial 限制的 trial。记录缺少其中某个值的 trial 为未验证。 |
 | 用量 | 每个 arm 的中位数和成本合计，并注明各自用了多少个 trial。token 和成本只按工具自己声明的显示，所以不声明的工具显示 `unknown (0)`。 |
 | 任务 | 每个任务在每个 arm 上的通过率。 |
 | 基线 | 没有运行的任务及原因。 |
@@ -330,7 +351,7 @@ benchmark:
 
 ```text
 teamai workflow next <run> --prepare --json '{"driver":{..., "can":{"isolation":"sandbox","trials":["claude"]}}}'
-  -> { data: { lease: { cwd, trial: { tool, model, effort }, envScope: { withhold }, env, ... } } }
+  -> { data: { lease: { cwd, trial: { tool, model, effort, limits }, envScope: { withhold }, env, ... } } }
 launch trial.tool in cwd, on the prompt, with that model and effort, without the withheld variables, with env
 teamai workflow report <run> --json '{..., "tool":"claude", "durationMs":84000, "cost":{"amount":0.31,"unit":"USD"}}'
 ```
@@ -340,6 +361,7 @@ teamai workflow report <run> --json '{..., "tool":"claude", "durationMs":84000, 
 | `driver.can` | 每次 `next` 都带：`isolation: "sandbox"`，并在 `trials` 中列出它启动的工具。 |
 | `--prepare` | teamai 创建克隆、安装团队资产并运行 setup，然后返回带 `cwd` 的租约。 |
 | `report` | `tool`、只围绕工具启动测得的 `durationMs`，以及仅在工具给出时才带的 `cost`。 |
+| 限制 | 让工具遵守 `trial.limits`。某个限制停止了工具时，报告 `outcome: "success"` 并带 `limit`：`timeout`、`budget` 或 `max_turns`；无法让工具遵守的 `budget` 或 `max_turns` 列在 `unenforced` 中。 |
 | 阻塞 | 第一次 `next --prepare` 会运行每个任务的基线，之后的调用会先运行一个 trial 的 check 再返回，所以一次调用可能要几分钟。如果你的宿主会给 CLI 调用设超时，要留出套件 setup 和 check 的时间。 |
 | 中断 | 被中断的 `next --prepare` 会让该步骤仍租给这个驱动：再次调用，teamai 会重新准备。 |
 | 评判 | 所有 trial 都结算后，`next` 返回带 `judging` 的 `wait`，直到评判完成：在运行了 trial 的那个安装上运行 `teamai score --next`。 |

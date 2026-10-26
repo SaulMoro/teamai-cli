@@ -251,7 +251,7 @@ Generated: do not edit by hand. Regenerate with
     - `--choice <id>` — With --driver skill: answer the host question with the id of one of its options, as its run prints it
     - `--ack <offer>` — With --driver skill: acknowledge that the child of a dispatch started, as its ack prints it, so later turns stop offering it
   - `teamai workflow report <run>` — Report the outcome of a leased step. Prints a JSON envelope.
-    - `--json <payload>` — attempt, revision, outcome (success, failed, or released), and driver. A benchmark trial's report also sends tool, the tool the driver launched, and durationMs (milliseconds around the tool launch) and cost ({"amount":0.12,"unit":"USD"}, only as the tool stated it) when known, but never changes, read or exitCode, which teamai fills.
+    - `--json <payload>` — attempt, revision, outcome (success, failed, or released), and driver. A benchmark trial's report also sends tool, the tool the driver launched, and durationMs (milliseconds around the tool launch) and cost ({"amount":0.12,"unit":"USD"}, only as the tool stated it) when known, and limit (timeout, budget or max_turns) when a limit in its lease's trial.limits stopped the tool, but never changes, read or exitCode, which teamai fills.
     - `--driver <kind>` — skill: report an attempt of a run the current coding session drives, as its turn printed the command
     - `--attempt <id>` — With --driver skill: the attempt to report
     - `--model-unavailable` — With --driver skill and --attempt: the host cannot run the model the dispatch names, so the step fails model_unavailable

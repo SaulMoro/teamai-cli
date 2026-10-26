@@ -40,6 +40,7 @@ setup:
 | `model` | A model alias from `models/aliases.yaml`, resolved for each arm's tool when the run starts, or a model name. |
 | `repetitions` | 1 to 10, 3 by default. |
 | `timeout` | Required: the whole run's. |
+| `trial` | Optional limits of every trial's prompt. See [Trial limits](#trial-limits). |
 | `setup` | Optional, a [workflow's `setup`](workflow-advanced.md#requirements-and-limits). Runs in every fresh clone before the tool or the check. |
 | `scorers` | Optional [scorers](scorers.md) that judge every trial. A name with no valid `scorers/<name>.md` fails `teamai review --branch`, `teamai pull` warns, and start refuses the suite. |
 
@@ -167,6 +168,26 @@ Before a task's first trial, teamai runs setup and the check once on a fresh clo
 
 After a prompt, a check that cannot run gives the trial `error`, not `failed`.
 
+### Trial limits
+
+`trial` limits every trial's prompt. Reaching a limit ends the agent's turn, and teamai runs the trial's check, or its judges, on what the agent left, so a tool that runs out of time fails the task rather than the harness:
+
+```yaml
+timeout: 45m
+trial:
+  timeout: 8m
+  budget: { tokens: 300000 }
+  max_turns: 60
+```
+
+| Key | Limits | On the local driver |
+| --- | --- | --- |
+| `timeout` | The time from the tool's launch. Shorter than the suite's `timeout`, which still ends the whole run. | Stops the tool and every process it started. |
+| `budget.tokens` | Input plus output tokens, as a [workflow budget](workflow-advanced.md#requirements-and-limits) counts them. | Counts them from the tool's output as it runs, and stops the tool once they pass the budget, so a trial can go over by its last model call. Codex states its tokens only as it ends: it runs to the end, and lists `budget` in `unenforced`. A tool that reports no tokens ends its trial `error`, unless another limit stopped it first: then its trial lists `budget` in `unenforced`. |
+| `max_turns` | Agent turns, as the tool counts them. | Passes it to Claude. Other tools list `max_turns` in `unenforced`. |
+
+A trial a limit stopped carries `limit` in the record, and counts under "Stopped by a limit". A trial that lists a suite limit in `unenforced` counts as a deviation, so a capped arm is never compared with an uncapped one silently. A run keeps the limits it started with.
+
 ## Try a task
 
 Try a new task file before it joins the suite, in a checkout of the suite's `repo`, with the team repo checked out beside it:
@@ -225,7 +246,7 @@ The local driver runs one trial at a time: fresh clone, team assets, setup, the 
 | --- | --- |
 | Tools | It runs `claude`, `codex` and `opencode`. Install and log in every tool the arms use. An arm whose tool it cannot find gets its trials `not_run`, and the other arms still run. |
 | Timeout | The suite's `timeout` is the whole run's. Setup, the tool and the check all stop at it: the trial they ran for counts as `error`, and the trials still open settle `not_run`. Keep it below your CI job's limit, or the job is killed before it prints the table. |
-| A hung trial | A trial has no timeout of its own. A tool that never returns runs until the suite's timeout, and every trial after it settles `not_run`. |
+| A hung trial | Without [`trial.timeout`](#trial-limits), a tool that never returns runs until the suite's timeout, and every trial after it settles `not_run`. |
 | Judges | A task with `successCriteria`, and the suite's scorers, are judged before the run ends, on the install that ran the trials. Start refuses a suite that needs a judge on a machine that cannot judge. |
 | Control commands | A trial's steps exist only once every task's baseline settled. Until then, `teamai workflow cancel <run> <step>` on a trial step answers `step_not_found`. `workflow retry`, `publish` and `--claim` refuse a benchmark run. |
 | Stopped | `teamai workflow resume <run> --sandbox` continues it. |
@@ -264,7 +285,7 @@ These results hold for these tasks, this run and this machine.
 
 | Table | Shows |
 | --- | --- |
-| Arms | Each arm's trials by result, and how many a trial limit stopped. A deviation is a trial whose prompt ran on another tool, team revision or model than its arm's, or without a trial limit its driver could not enforce. A trial is not verified when its record lacks one of those. |
+| Arms | Each arm's trials by result, and how many a [trial limit](#trial-limits) stopped. A deviation is a trial whose prompt ran on another tool, team revision or model than its arm's, or without a trial limit its driver could not enforce. A trial is not verified when its record lacks one of those. |
 | Usage | Each arm's medians and cost total, with how many trials each used. Tokens and cost appear only as the tool stated them, so a tool that states none shows `unknown (0)`. |
 | Tasks | Each task's pass rate on each arm. |
 | Baselines | The tasks that did not run, and why. |
@@ -330,7 +351,7 @@ Any driver runs trials through `workflow next` and `workflow report`, as [Benchm
 
 ```text
 teamai workflow next <run> --prepare --json '{"driver":{..., "can":{"isolation":"sandbox","trials":["claude"]}}}'
-  -> { data: { lease: { cwd, trial: { tool, model, effort }, envScope: { withhold }, env, ... } } }
+  -> { data: { lease: { cwd, trial: { tool, model, effort, limits }, envScope: { withhold }, env, ... } } }
 launch trial.tool in cwd, on the prompt, with that model and effort, without the withheld variables, with env
 teamai workflow report <run> --json '{..., "tool":"claude", "durationMs":84000, "cost":{"amount":0.31,"unit":"USD"}}'
 ```
@@ -340,6 +361,7 @@ teamai workflow report <run> --json '{..., "tool":"claude", "durationMs":84000, 
 | `driver.can` | On every `next`: `isolation: "sandbox"`, and in `trials` the tools it launches. |
 | `--prepare` | teamai makes the clone, installs the team assets and runs setup, then answers the lease with `cwd`. |
 | `report` | `tool`, `durationMs` measured around the tool launch, and `cost` only when the tool stated one. |
+| Limits | Hold the tool to `trial.limits`. When one stopped it, report `outcome: "success"` with `limit`: `timeout`, `budget` or `max_turns`, and list in `unenforced` a `budget` or `max_turns` you could not hold it to. |
 | Blocking | The first `next --prepare` runs every task's baseline, and a later one runs a trial's check before it answers, so a call can take minutes. Allow for the suite's setup and check time if your host times out CLI calls. |
 | Stopped | A stopped `next --prepare` leaves its step leased to the driver: call it again, and teamai prepares it again. |
 | Judges | Once every trial settled, `next` answers `wait` with `judging` until the judges are done: run `teamai score --next` on the install that ran the trials. |
