@@ -64,9 +64,9 @@ describe('benchmark results table', () => {
 
     expect(table.results).toEqual([{
       arm: 'claude', tool: 'claude', source: 'team', planned: 10, counts: { passed: 1, failed: 0, error: 0, unscored: 0, not_run: 9 },
-      deviations: 0, notVerified: 0, passRate: { passed: 1, planned: 10 },
+      stoppedByLimit: 0, deviations: 0, notVerified: 0, passRate: { passed: 1, planned: 10 },
     }]);
-    expect(formatBenchmarkTable(table)).toContain('| claude | claude | tool default (team) | 10 | 1 | 0 | 0 | 0 | 9 | 0 | 0 | 10% (1/10) |');
+    expect(formatBenchmarkTable(table)).toContain('| claude | claude | tool default (team) | 10 | 1 | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 10% (1/10) |');
   });
 
   it('gives an arm with no planned trials no pass rate', async () => {
@@ -74,8 +74,8 @@ describe('benchmark results table', () => {
 
     const table = benchmarkTable({ ...record, benchmark: { ...record.benchmark, trials: [] } });
 
-    expect(table.results).toEqual([{ arm: 'claude', tool: 'claude', source: 'team', planned: 0, counts: { passed: 0, failed: 0, error: 0, unscored: 0, not_run: 0 }, deviations: 0, notVerified: 0 }]);
-    expect(formatBenchmarkTable(table)).toContain('| claude | claude | tool default (team) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | - |');
+    expect(table.results).toEqual([{ arm: 'claude', tool: 'claude', source: 'team', planned: 0, counts: { passed: 0, failed: 0, error: 0, unscored: 0, not_run: 0 }, stoppedByLimit: 0, deviations: 0, notVerified: 0 }]);
+    expect(formatBenchmarkTable(table)).toContain('| claude | claude | tool default (team) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | - |');
   });
 
   it.each([
@@ -104,7 +104,7 @@ describe('benchmark results table', () => {
 });
 
 const OBSERVED: AgentObservation = { v: 1, tool: { name: 'claude' }, team: { revision: RUN_TEAM, localChanges: false }, teamai: '0.0.0', driver: 'external' };
-type TrialSpec = Pick<BenchmarkRecord['trials'][number], 'durationMs' | 'tokens' | 'cost'> & {
+type TrialSpec = Pick<BenchmarkRecord['trials'][number], 'limit' | 'unenforced' | 'durationMs' | 'tokens' | 'cost'> & {
   task?: string;
   arm?: string;
   result?: TrialResult;
@@ -146,7 +146,7 @@ describe('benchmark deviations', () => {
     ]));
 
     expect(table.results).toMatchObject([{ planned: 7, counts: { passed: 6, not_run: 1 }, deviations: 3, notVerified: 2, passRate: { passed: 6, planned: 7 } }]);
-    expect(formatBenchmarkTable(table)).toContain('| opus | claude | claude-opus-4-1 (team) | 7 | 6 | 0 | 0 | 0 | 1 | 3 | 2 | 86% (6/7) |');
+    expect(formatBenchmarkTable(table)).toContain('| opus | claude | claude-opus-4-1 (team) | 7 | 6 | 0 | 0 | 0 | 1 | 0 | 3 | 2 | 86% (6/7) |');
   });
 
   it("does not compare a tool's own model selector, or the tool's default model, with the model the tool reports", () => {
@@ -156,7 +156,7 @@ describe('benchmark deviations', () => {
       { arm: 'plain', agent: {} },
     ]));
 
-    expect(table.results).toMatchObject([{ arm: 'opus', deviations: 0, notVerified: 0 }, { arm: 'plain', deviations: 0, notVerified: 0 }]);
+    expect(table.results).toMatchObject([{ arm: 'opus', stoppedByLimit: 0, deviations: 0, notVerified: 0 }, { arm: 'plain', stoppedByLimit: 0, deviations: 0, notVerified: 0 }]);
     expect(formatBenchmarkTable(table)).toContain('| opus | claude | opus high (team) |');
     expect(formatBenchmarkTable(table)).toContain('| plain | claude | tool default (member) |');
   });
@@ -172,7 +172,29 @@ describe('benchmark deviations', () => {
       { arm: 'opus', agent: { model: { reported: 'anthropic/claude-opus-4-1' } } },
     ]));
 
-    expect(table.results).toMatchObject([{ arm: 'gpt', planned: 4, deviations: 1, notVerified: 0 }, { arm: 'opus', planned: 1, deviations: 0, notVerified: 0 }]);
+    expect(table.results).toMatchObject([{ arm: 'gpt', planned: 4, deviations: 1, notVerified: 0 }, { arm: 'opus', planned: 1, stoppedByLimit: 0, deviations: 0, notVerified: 0 }]);
+  });
+});
+
+describe('benchmark limits', () => {
+  it('counts the trials a suite limit stopped per arm, and a trial whose driver did not enforce a suite limit as a deviation', () => {
+    const codex = { name: 'codex', tool: 'codex', source: 'team', teamRevision: RUN_TEAM } as const;
+    const opus = { agent: { model: { reported: 'claude-opus-4-1' } } };
+    const table = benchmarkTable(recordOf([CLAUDE_ARM, codex], [
+      { limit: 'timeout', ...opus },
+      { result: 'failed', limit: 'budget', ...opus },
+      opus,
+      { arm: 'codex', limit: 'budget', unenforced: ['budget'], agent: { tool: { name: 'codex' } } },
+      { arm: 'codex', unenforced: ['max_turns'], agent: { tool: { name: 'codex' } } },
+    ]));
+
+    expect(table.results).toMatchObject([{ arm: 'opus', stoppedByLimit: 2, deviations: 0 }, { arm: 'codex', stoppedByLimit: 1, deviations: 2 }]);
+    expect(formatBenchmarkTable(table)).toContain([
+      '| Arm | Tool | Model (source) | Planned | Passed | Failed | Error | Unscored | Not run | Stopped by a limit | Deviations | Not verified | Pass rate |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| opus | claude | claude-opus-4-1 (team) | 3 | 2 | 1 | 0 | 0 | 0 | 2 | 0 | 0 | 67% (2/3) |',
+      '| codex | codex | tool default (team) | 2 | 2 | 0 | 0 | 0 | 0 | 1 | 2 | 0 | 100% (2/2) |',
+    ].join('\n'));
   });
 });
 
@@ -249,10 +271,10 @@ describe('benchmark task by arm matrix', () => {
       { task: 'lint', arms: [{ arm: 'opus', passRate: { passed: 2, planned: 3 } }, { arm: 'sonnet', passRate: { passed: 0, planned: 1 } }] },
     ]);
     expect(formatBenchmarkTable({ ...table, invalid: [{ task: 'lint', baseline: 'could_not_run' }] })).toBe([
-      '| Arm | Tool | Model (source) | Planned | Passed | Failed | Error | Unscored | Not run | Deviations | Not verified | Pass rate |',
-      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
-      '| opus | claude | claude-opus-4-1 (team) | 5 | 3 | 2 | 0 | 0 | 0 | 0 | 5 | 60% (3/5) |',
-      '| sonnet | claude | claude-sonnet-4-5 (team) | 3 | 2 | 0 | 0 | 0 | 1 | 0 | 2 | 67% (2/3) |',
+      '| Arm | Tool | Model (source) | Planned | Passed | Failed | Error | Unscored | Not run | Stopped by a limit | Deviations | Not verified | Pass rate |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| opus | claude | claude-opus-4-1 (team) | 5 | 3 | 2 | 0 | 0 | 0 | 0 | 0 | 5 | 60% (3/5) |',
+      '| sonnet | claude | claude-sonnet-4-5 (team) | 3 | 2 | 0 | 0 | 0 | 1 | 0 | 0 | 2 | 67% (2/3) |',
       '',
       '| Arm | Median tokens (input + output) | Median duration | Cost |',
       '| --- | --- | --- | --- |',

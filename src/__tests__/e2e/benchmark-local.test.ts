@@ -146,8 +146,8 @@ describe('benchmark on the local driver', () => {
     expect(launches.map((launch) => launch.tool)).toEqual(['claude', 'codex', 'claude', 'codex', 'codex', 'claude', 'codex', 'claude']);
     expect(new Set(launches.map((launch) => launch.cwd)).size).toBe(8);
     for (const launch of launches) expect(launch).toMatchObject({ ownGit: true, head: fixture.startingCommit, remotes: '' });
-    expect(done.benchmark.text).toContain('| claude | claude | tool default (team) | 4 | 3 | 0 | 1 | 0 | 0 | 0 | 0 | 75% (3/4) |');
-    expect(done.benchmark.text).toContain('| codex | codex | tool default (team) | 4 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (4/4) |');
+    expect(done.benchmark.text).toContain('| claude | claude | tool default (team) | 4 | 3 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 75% (3/4) |');
+    expect(done.benchmark.text).toContain('| codex | codex | tool default (team) | 4 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (4/4) |');
     expect(fixture.trialRootEntries()).toEqual([]);
     expect(fixture.status()).toBe(before);
   }, 120_000);
@@ -179,7 +179,7 @@ describe('benchmark on the local driver', () => {
     expect(done).toMatchObject({ outcome: 'succeeded', end: 'settled' });
     expect(occurrences(started.stderr, NO_SANDBOX)).toBe(1);
     expect(record.benchmark.trials).toEqual([expect.objectContaining({ arm: 'claude', result: 'not_run' })]);
-    expect(done.benchmark.text).toContain('| claude | claude | tool default (team) | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0% (0/1) |');
+    expect(done.benchmark.text).toContain('| claude | claude | tool default (team) | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0% (0/1) |');
     expect(fixture.toolLaunches()).toEqual([]);
   }, 120_000);
 
@@ -192,7 +192,7 @@ describe('benchmark on the local driver', () => {
 
     expect(started.code, said(started)).toBe(1);
     expect(done).toMatchObject({ outcome: 'failed', failure: { code: 'timeout' } });
-    expect(started.stderr).toContain('| claude | claude | tool default (team) | 1 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0% (0/1) |');
+    expect(started.stderr).toContain('| claude | claude | tool default (team) | 1 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0% (0/1) |');
     expect(fixture.toolLaunches().map((launch) => launch.tool)).toEqual(['claude']);
     expect(fixture.trialRootEntries()).toEqual([]);
   }, 120_000);

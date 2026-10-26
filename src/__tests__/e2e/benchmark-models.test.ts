@@ -123,8 +123,8 @@ describe.each(DRIVERS)('benchmark arm models on $name', ({ run }) => {
     ]);
     expect(record.trials.map(({ result, durationMs }) => ({ result, durationMs }))).toEqual(Array.from({ length: 3 }, () => ({ result: 'passed', durationMs: expect.any(Number) })));
     expect(record.trials.find((trial) => trial.arm === 'strong')).toMatchObject({ tokens: { input: 4, output: 2 }, cost: { amount: 0.25, unit: 'USD' } });
-    expect(text).toContain('| strong | claude | claude-strong-1 high (team) | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (1/1) |');
-    expect(text).toContain('| codex | codex | gpt-strong-1 high (team) | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (1/1) |');
+    expect(text).toContain('| strong | claude | claude-strong-1 high (team) | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (1/1) |');
+    expect(text).toContain('| codex | codex | gpt-strong-1 high (team) | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (1/1) |');
     expect(text).toMatch(/\| fast \| 6 \(1\) \| \d+\.\d s \(1\) \| 0\.25 USD \(1\) \|/);
   }, 120_000);
 });

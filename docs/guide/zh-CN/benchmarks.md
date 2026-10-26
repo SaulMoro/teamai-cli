@@ -237,11 +237,11 @@ $ teamai workflow start fix-auth --benchmark --driver local --sandbox
 运行结束时，本地驱动把结果打印到 stderr。stdout 上的 JSON 返回在 `data.done.benchmark.text` 中带同样的文本，在 `data.done.benchmark.table` 中带数字。对这个套件，再加一个 check 本来就通过的第三个任务 `old-bug`：
 
 ```text
-| Arm | Tool | Model (source) | Planned | Passed | Failed | Error | Unscored | Not run | Deviations | Not verified | Pass rate |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| claude | claude | tool default (team) | 9 | 4 | 2 | 0 | 0 | 3 | 0 | 0 | 44% (4/9) |
-| codex | codex | tool default (team) | 9 | 3 | 3 | 0 | 0 | 3 | 0 | 0 | 33% (3/9) |
-| strong | claude | claude-opus-5-5 high (team) | 9 | 6 | 0 | 0 | 0 | 3 | 0 | 0 | 67% (6/9) |
+| Arm | Tool | Model (source) | Planned | Passed | Failed | Error | Unscored | Not run | Stopped by a limit | Deviations | Not verified | Pass rate |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| claude | claude | tool default (team) | 9 | 4 | 2 | 0 | 0 | 3 | 0 | 0 | 0 | 44% (4/9) |
+| codex | codex | tool default (team) | 9 | 3 | 3 | 0 | 0 | 3 | 0 | 0 | 0 | 33% (3/9) |
+| strong | claude | claude-opus-5-5 high (team) | 9 | 6 | 0 | 0 | 0 | 3 | 0 | 0 | 0 | 67% (6/9) |
 
 | Arm | Median tokens (input + output) | Median duration | Cost |
 | --- | --- | --- | --- |
@@ -264,7 +264,7 @@ These results hold for these tasks, this run and this machine.
 
 | 表格 | 内容 |
 | --- | --- |
-| Arm | 按结果统计每个 arm 的 trial。偏差是 prompt 运行时的工具、团队修订或模型与其 arm 不同的 trial。记录缺少其中某个值的 trial 为未验证。 |
+| Arm | 按结果统计每个 arm 的 trial，以及被 trial 限制停止的数量。偏差是 prompt 运行时的工具、团队修订或模型与其 arm 不同的 trial，或者其 driver 无法执行某个 trial 限制的 trial。记录缺少其中某个值的 trial 为未验证。 |
 | 用量 | 每个 arm 的中位数和成本合计，并注明各自用了多少个 trial。token 和成本只按工具自己声明的显示，所以不声明的工具显示 `unknown (0)`。 |
 | 任务 | 每个任务在每个 arm 上的通过率。 |
 | 基线 | 没有运行的任务及原因。 |

@@ -57,8 +57,8 @@ describe.each(DRIVERS)('the benchmark trial contract, driven by $name', ({ make 
 
       expect(result.leased).toEqual(['trials.r1.fix.claude.prompt']);
       expect(result.done).toMatchObject({ outcome: 'failed', failure: { code: 'timeout' } });
-      expect(result.done?.text).toContain('| claude | claude | tool default (team) | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (1/1) |');
-      expect(result.done?.text).toContain('| codex | codex | tool default (team) | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0% (0/1) |');
+      expect(result.done?.text).toContain('| claude | claude | tool default (team) | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (1/1) |');
+      expect(result.done?.text).toContain('| codex | codex | tool default (team) | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0% (0/1) |');
       expect(result.done?.text).toContain('These results hold for these tasks, this run and this machine.');
       const record = RecordSchema.parse(fixture.endRecord(runId)).benchmark;
       // teamai ran the baseline inside next --prepare, so the driver was leased only the prompt.

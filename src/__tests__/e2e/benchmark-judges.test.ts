@@ -78,8 +78,8 @@ describe('benchmark judges on the local driver', () => {
     expect(judged.map(({ labels }) => labels.join(' ')).sort()).toEqual(['correct incorrect', 'correct incorrect', 'tidy messy', 'tidy messy']);
     expect(judged.every(({ diff, trialRoots }) => diff?.includes('+module.exports = 42;') === true && trialRoots.length === 0)).toBe(true);
     expect(done.outcome).toBe('succeeded');
-    expect(done.benchmark.text).toContain('| first | claude | tool default (team) | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (1/1) |');
-    expect(done.benchmark.text).toContain('| second | claude | m2 (team) | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (1/1) |');
+    expect(done.benchmark.text).toContain('| first | claude | tool default (team) | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (1/1) |');
+    expect(done.benchmark.text).toContain('| second | claude | m2 (team) | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (1/1) |');
     const record = RecordSchema.parse(fixture.endRecord(done.run)).benchmark;
     expect(record.scorers.map(({ name }) => name).sort()).toEqual(['quality', CORRECTNESS]);
     expect(record.trials).toEqual([
@@ -90,9 +90,9 @@ describe('benchmark judges on the local driver', () => {
   }, 120_000);
 
   it.each([
-    ['incorrect', 'failed', '| claude | claude | tool default (team) | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0% (0/1) |', { kind: 'labelled', label: 'incorrect', passed: false }],
-    ['fails', 'unscored', '| claude | claude | tool default (team) | 1 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0% (0/1) |', { kind: 'unscored', because: 'judge_failed' }],
-    ['another-label', 'unscored', '| claude | claude | tool default (team) | 1 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0% (0/1) |', { kind: 'unscored', because: 'judge_answer_invalid' }],
+    ['incorrect', 'failed', '| claude | claude | tool default (team) | 1 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0% (0/1) |', { kind: 'labelled', label: 'incorrect', passed: false }],
+    ['fails', 'unscored', '| claude | claude | tool default (team) | 1 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0% (0/1) |', { kind: 'unscored', because: 'judge_failed' }],
+    ['another-label', 'unscored', '| claude | claude | tool default (team) | 1 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0% (0/1) |', { kind: 'unscored', because: 'judge_answer_invalid' }],
   ] as const)('makes a trial whose judge answers %s %s, and ends the run without waiting for its lease to lapse', async (judge, result, row, outcome) => {
     const fixture = await judgedFixture({ judge });
 
@@ -113,7 +113,7 @@ describe('benchmark judges on the local driver', () => {
     expect(Date.now() - started).toBeLessThan(60_000);
     expect(fixture.judgeLaunches()).toHaveLength(1);
     expect(done.outcome).toBe('failed');
-    expect(done.benchmark.text).toContain('| claude | claude | tool default (team) | 1 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0% (0/1) |');
+    expect(done.benchmark.text).toContain('| claude | claude | tool default (team) | 1 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0% (0/1) |');
   }, 120_000);
 
   it('refuses to start a suite that needs a judge on a machine with no judge tool, and leaves no run', async () => {
@@ -161,6 +161,6 @@ describe('benchmark judges of an external driver', () => {
     expect(judging.done).toBeUndefined();
     expect(labelled).toMatchObject({ data: { label: { scorer: CORRECTNESS, label: 'correct', passed: true } } });
     expect(fixture.judgeLaunches()).toEqual([{ labels: ['correct', 'incorrect'], diff: expect.stringContaining('+module.exports = 42;'), trialRoots: [] }]);
-    expect(ended.done?.text).toContain('| claude | claude | tool default (team) | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (1/1) |');
+    expect(ended.done?.text).toContain('| claude | claude | tool default (team) | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (1/1) |');
   }, 120_000);
 });

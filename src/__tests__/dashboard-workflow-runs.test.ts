@@ -67,7 +67,7 @@ async function benchmarkRun({ ended }: { ended: boolean }) {
   return { config, id, state };
 }
 
-const RESULTS_HEADER = ['Arm', 'Tool', 'Model (source)', 'Planned', 'Passed', 'Failed', 'Error', 'Unscored', 'Not run', 'Deviations', 'Not verified', 'Pass rate'];
+const RESULTS_HEADER = ['Arm', 'Tool', 'Model (source)', 'Planned', 'Passed', 'Failed', 'Error', 'Unscored', 'Not run', 'Stopped by a limit', 'Deviations', 'Not verified', 'Pass rate'];
 const USAGE_HEADER = ['Arm', 'Median tokens (input + output)', 'Median duration', 'Cost'];
 const CAPTION = 'These results hold for these tasks, this run and this machine.';
 
@@ -157,7 +157,7 @@ describe('dashboard workflow runs', () => {
 
     expect(await workflowRunDetail(running.config, 'local', running.id)).not.toHaveProperty('benchmark');
     expect((await workflowRunDetail(ended.config, 'local', ended.id))?.benchmark).toEqual({
-      results: { header: RESULTS_HEADER, rows: [['claude', 'claude', 'tool default (team)', '1', '0', '0', '0', '0', '1', '0', '0', '0% (0/1)']] },
+      results: { header: RESULTS_HEADER, rows: [['claude', 'claude', 'tool default (team)', '1', '0', '0', '0', '0', '1', '0', '0', '0', '0% (0/1)']] },
       usage: { header: USAGE_HEADER, rows: [['claude', 'unknown (0)', 'unknown (0)', 'unknown (0)']] },
       matrix: { header: ['Task', 'claude'], rows: [['fix', '0% (0/1)']] },
       caption: CAPTION,
@@ -250,7 +250,7 @@ describe('dashboard workflow runs', () => {
 
       expect(rows.map((row) => row.run).sort()).toEqual([run.id, 'r0000000000000004'].sort());
       expect((await workflowRunDetail(config, 'reported', run.id))?.benchmark).toEqual({
-        results: { header: RESULTS_HEADER, rows: [['claude', 'claude', 'tool default (team)', '1', '1', '0', '0', '0', '0', '1', '0', '100% (1/1)']] },
+        results: { header: RESULTS_HEADER, rows: [['claude', 'claude', 'tool default (team)', '1', '1', '0', '0', '0', '0', '0', '1', '0', '100% (1/1)']] },
         usage: { header: USAGE_HEADER, rows: [['claude', 'unknown (0)', 'unknown (0)', 'unknown (0)']] },
         matrix: { header: ['Task', 'claude'], rows: [['fix', '100% (1/1)']] },
         caption: CAPTION,

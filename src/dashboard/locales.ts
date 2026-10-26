@@ -377,6 +377,7 @@ export const dashboardMessages: Record<string, string> = {
   "Planned": "计划数",
   "Unscored": "未评分",
   "Not run": "未运行",
+  "Stopped by a limit": "因限制停止",
   "Deviations": "偏差",
   "Not verified": "未验证",
   "Median tokens (input + output)": "Token 中位数（输入 + 输出）",

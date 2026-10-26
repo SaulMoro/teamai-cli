@@ -32,7 +32,7 @@ async function runLocally(tool: FakeTool, suite: string): Promise<{ fixture: Ben
 
 describe('trial limits on the local driver', () => {
   it('stops a tool that hangs at its trial timeout, checks what it left, and runs the next trial', async () => {
-    const { fixture, done, record } = await runLocally('hangs', limitedSuite('{ timeout: 3s }', 2));
+    const { fixture, done, record, stderr } = await runLocally('hangs', limitedSuite('{ timeout: 3s }', 2));
 
     expect(done).toMatchObject({ outcome: 'succeeded', end: 'settled' });
     expect(record.benchmark.limits).toEqual({ timeoutMs: 3000 });
@@ -40,6 +40,7 @@ describe('trial limits on the local driver', () => {
       expect.objectContaining({ order: 1, result: 'failed', limit: 'timeout' }),
       expect.objectContaining({ order: 2, result: 'failed', limit: 'timeout' }),
     ]);
+    expect(stderr).toContain('| claude | claude | tool default (team) | 2 | 0 | 2 | 0 | 0 | 0 | 2 | 0 | 0 | 0% (0/2) |');
     expect(fixture.toolLaunches()).toHaveLength(2);
     expect(fixture.trialRootEntries()).toEqual([]);
   }, 120_000);
@@ -53,7 +54,7 @@ describe('trial limits on the local driver', () => {
 
   it('caps the turns of a claude trial, and lists max_turns as unenforced on a codex trial', async () => {
     const suite = limitedSuite('{ max_turns: 3 }').replace('  - name: claude\n', '  - name: claude\n  - name: codex\n    tool: codex\n');
-    const { done, record } = await runLocally('fixes-and-runs-out-of-turns', suite);
+    const { done, record, stderr } = await runLocally('fixes-and-runs-out-of-turns', suite);
 
     expect(done).toMatchObject({ outcome: 'succeeded', end: 'settled' });
     expect(record.benchmark.trials).toEqual([
@@ -62,6 +63,8 @@ describe('trial limits on the local driver', () => {
     ]);
     expect(record.benchmark.trials[0]).not.toHaveProperty('unenforced');
     expect(record.benchmark.trials[1]).not.toHaveProperty('limit');
+    expect(stderr).toContain('| claude | claude | tool default (team) | 1 | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 100% (1/1) |');
+    expect(stderr).toContain('| codex | codex | tool default (team) | 1 | 1 | 0 | 0 | 0 | 0 | 0 | 1 | 0 | 100% (1/1) |');
   }, 120_000);
 
   it('stops a claude trial whose stdout passes its budget, and marks the budget unenforced on a codex trial that passed it', async () => {

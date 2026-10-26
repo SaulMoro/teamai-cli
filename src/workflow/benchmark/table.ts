@@ -17,7 +17,12 @@ export interface ArmResults extends Pick<RecordedArm, 'tool' | 'model' | 'effort
   arm: string;
   planned: number;
   counts: Record<TrialResult, number>;
-  /** Trials whose prompt ran as something other than the arm: another tool, team revision, or concrete model. In `planned`. */
+  /** Trials whose prompt a limit of the suite's `trial` ended; their check or judge still decided them. In `planned`. */
+  stoppedByLimit: number;
+  /**
+   * Trials whose prompt ran as something other than the arm: another tool, team revision, or concrete model, or without a
+   * limit of the suite's `trial` its driver could not enforce. In `planned`.
+   */
   deviations: number;
   /** Trials whose prompt ran, but whose record lacks a value the comparison needs, such as the model the tool reported. */
   notVerified: number;
@@ -102,11 +107,12 @@ export function benchmarkTable(record: { steps?: ReadonlyArray<Pick<RecordedStep
       const counts = { passed: count('passed'), failed: count('failed'), error: count('error'), unscored: count('unscored'), not_run: count('not_run') } satisfies Record<TrialResult, number>;
       const compared = own.flatMap((trial) => {
         const observed = ranAs(trial);
-        return observed ? [compareAgent(arm, observed)] : [];
+        return observed ? [trial.unenforced ? 'deviation' as const : compareAgent(arm, observed)] : [];
       });
       return {
         arm: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), ...(arm.effort ? { effort: arm.effort } : {}), source: arm.source,
         planned: own.length, counts,
+        stoppedByLimit: own.filter((trial) => trial.limit !== undefined).length,
         deviations: compared.filter((comparison) => comparison === 'deviation').length,
         notVerified: compared.filter((comparison) => comparison === 'not_verified').length,
         ...passRateOf(own),
@@ -132,10 +138,10 @@ export function benchmarkTable(record: { steps?: ReadonlyArray<Pick<RecordedStep
 export function benchmarkCells(table: BenchmarkTable): BenchmarkCells {
   return {
     results: {
-      header: ['Arm', 'Tool', 'Model (source)', 'Planned', ...TRIAL_RESULTS.map((result) => RESULT_COLUMNS[result]), 'Deviations', 'Not verified', 'Pass rate'],
+      header: ['Arm', 'Tool', 'Model (source)', 'Planned', ...TRIAL_RESULTS.map((result) => RESULT_COLUMNS[result]), 'Stopped by a limit', 'Deviations', 'Not verified', 'Pass rate'],
       rows: table.results.map((arm) => [
         arm.arm, arm.tool, `${arm.model ? [arm.model, ...(arm.effort ? [arm.effort] : [])].join(' ') : 'tool default'} (${arm.source})`, String(arm.planned),
-        ...TRIAL_RESULTS.map((result) => String(arm.counts[result])), String(arm.deviations), String(arm.notVerified), formatPassRate(arm.passRate),
+        ...TRIAL_RESULTS.map((result) => String(arm.counts[result])), String(arm.stoppedByLimit), String(arm.deviations), String(arm.notVerified), formatPassRate(arm.passRate),
       ]),
     },
     usage: {

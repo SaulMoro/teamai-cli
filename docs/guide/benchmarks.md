@@ -237,11 +237,11 @@ A start that cannot run refuses with a message that says what to do, and makes n
 When the run ends, the local driver prints the results on stderr. The JSON envelope on stdout carries the same text in `data.done.benchmark.text`, and the numbers in `data.done.benchmark.table`. For this suite with a third task, `old-bug`, whose check already passes:
 
 ```text
-| Arm | Tool | Model (source) | Planned | Passed | Failed | Error | Unscored | Not run | Deviations | Not verified | Pass rate |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| claude | claude | tool default (team) | 9 | 4 | 2 | 0 | 0 | 3 | 0 | 0 | 44% (4/9) |
-| codex | codex | tool default (team) | 9 | 3 | 3 | 0 | 0 | 3 | 0 | 0 | 33% (3/9) |
-| strong | claude | claude-opus-5-5 high (team) | 9 | 6 | 0 | 0 | 0 | 3 | 0 | 0 | 67% (6/9) |
+| Arm | Tool | Model (source) | Planned | Passed | Failed | Error | Unscored | Not run | Stopped by a limit | Deviations | Not verified | Pass rate |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| claude | claude | tool default (team) | 9 | 4 | 2 | 0 | 0 | 3 | 0 | 0 | 0 | 44% (4/9) |
+| codex | codex | tool default (team) | 9 | 3 | 3 | 0 | 0 | 3 | 0 | 0 | 0 | 33% (3/9) |
+| strong | claude | claude-opus-5-5 high (team) | 9 | 6 | 0 | 0 | 0 | 3 | 0 | 0 | 0 | 67% (6/9) |
 
 | Arm | Median tokens (input + output) | Median duration | Cost |
 | --- | --- | --- | --- |
@@ -264,7 +264,7 @@ These results hold for these tasks, this run and this machine.
 
 | Table | Shows |
 | --- | --- |
-| Arms | Each arm's trials by result. A deviation is a trial whose prompt ran on another tool, team revision or model than its arm's. A trial is not verified when its record lacks one of those. |
+| Arms | Each arm's trials by result, and how many a trial limit stopped. A deviation is a trial whose prompt ran on another tool, team revision or model than its arm's, or without a trial limit its driver could not enforce. A trial is not verified when its record lacks one of those. |
 | Usage | Each arm's medians and cost total, with how many trials each used. Tokens and cost appear only as the tool stated them, so a tool that states none shows `unknown (0)`. |
 | Tasks | Each task's pass rate on each arm. |
 | Baselines | The tasks that did not run, and why. |
