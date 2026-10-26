@@ -73,7 +73,7 @@ successCriteria: The error names the wrong field and still reveals nothing about
 | --- | --- |
 | `startingCommit` | The full commit of `repo` the task starts from. |
 | `check` | `run`, a command that exits 0 once the task is done, and `protect`, the paths the agent must not supply. |
-| `check.add` | Optional: files written before the check that the agent never has: a file as `source.fix` has it, such as the fix's test, or `{ from, to }`, a file or directory of the suite directory. See [Tests the fix brought](#tests-the-fix-brought) and [Tests in the suite directory](#tests-in-the-suite-directory). |
+| `check.add` | Optional: files written before the check that the agent never has: a file as `source.fix` has it, such as the fix's test, or `{ from, to }`, a file or directory of the suite directory. A directory adds every file under it except its dot entries, such as `.DS_Store`; name a dotfile in `from` to add it. See [Tests the fix brought](#tests-the-fix-brought) and [Tests in the suite directory](#tests-in-the-suite-directory). |
 | `successCriteria` | Instead of `check`: a judge decides from these. |
 | `source` | Optional: the session the task came from, `platform` and `sessionId`, and `fix`, the full commit that fixed it there, which [`--try`](#try-a-task) checks. |
 

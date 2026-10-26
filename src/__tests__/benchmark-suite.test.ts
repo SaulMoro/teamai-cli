@@ -341,6 +341,20 @@ describe('suite sync', () => {
     expect((await loadCachedSuite(config, 'fix'))?.tasks[0].judge).toMatchObject({ files: [{ path: 'test/hidden/a.test.js' }] });
   });
 
+  it('leaves out the dot entries under a directory a check.add entry names, and reads a dotfile a from names', async () => {
+    const task = taskText({ check: "{ run: node test.js, protect: ['test/**'], add: [{ from: check-files, to: test/hidden }, { from: check-files/.env.test, to: test/.env.test }] }" });
+    const config = team({
+      'benchmarks/fix/suite.yaml': suiteText(), 'benchmarks/fix/tasks/fix.yaml': task, 'benchmarks/fix/check-files/a.test.js': 'a',
+      'benchmarks/fix/check-files/.DS_Store': 'finder', 'benchmarks/fix/check-files/.env.test': 'env', 'benchmarks/fix/check-files/.cache/b.test.js': 'b',
+    });
+
+    await syncWorkflowDefinitions(config);
+
+    expect((await loadCachedSuite(config, 'fix'))?.tasks[0].judge).toMatchObject({
+      files: [{ path: 'test/hidden/a.test.js', base64: base64('a') }, { path: 'test/.env.test', base64: base64('env') }],
+    });
+  });
+
   it('keeps the last valid version of a suite with no valid task', async () => {
     const config = team(suiteAt('fix', 'fix'));
     await syncWorkflowDefinitions(config);

@@ -221,8 +221,9 @@ const SuiteCacheSchema = z.object({ suite: SourceFileSchema, tasks: z.array(Sour
 
 /**
  * The files of the suite directory `dir`, which team files name `relativeDir`, that `tasks`' check.add entries name: a
- * file, or every file under a directory, as bytes with its executable bit. Read the way workflow files are: a symlink
- * is not a file, and a path through a symlinked directory names none, so nothing outside `dir` is read.
+ * file, or every file under a directory but its dot entries, as bytes with its executable bit. Read the way workflow
+ * files are: a symlink is not a file, and a path through a symlinked directory names none, so nothing outside `dir` is
+ * read.
  */
 export async function readSuiteFiles(dir: string, relativeDir: string, tasks: readonly SourceFile[]): Promise<SuiteFile[]> {
   const root = await fs.realpath(dir).catch(() => undefined);
@@ -237,7 +238,8 @@ export async function readSuiteFiles(dir: string, relativeDir: string, tasks: re
       const bytes = await fs.readFile(full).catch(() => undefined);
       if (bytes) files.push({ relativePath: `${relativeDir}/${relative}`, base64: bytes.toString('base64'), mode: (stat.mode & 0o100) !== 0 ? '100755' : '100644' });
     } else if (stat?.isDirectory()) {
-      for (const name of await fs.readdir(full).catch((): string[] => [])) await visit(`${relative}/${name}`);
+      // Dot entries, such as .DS_Store or an editor's swap file, differ from machine to machine.
+      for (const name of await fs.readdir(full).catch((): string[] => [])) if (!name.startsWith('.')) await visit(`${relative}/${name}`);
     }
   };
   for (const from of checkFilesNamed(tasks)) await visit(from);

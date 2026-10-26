@@ -73,7 +73,7 @@ successCriteria: The error names the wrong field and still reveals nothing about
 | --- | --- |
 | `startingCommit` | 任务开始时 `repo` 的完整提交。 |
 | `check` | `run`：任务完成后以 0 退出的命令；`protect`：agent 不能提供的路径。 |
-| `check.add` | 可选：check 之前写入、agent 永远拿不到的文件：按 `source.fix` 中的样子写入的文件，例如修复的测试；或者 `{ from, to }`，套件目录中的一个文件或目录。见[修复带来的测试](#修复带来的测试)和[套件目录中的测试](#套件目录中的测试)。 |
+| `check.add` | 可选：check 之前写入、agent 永远拿不到的文件：按 `source.fix` 中的样子写入的文件，例如修复的测试；或者 `{ from, to }`，套件目录中的一个文件或目录。目录会加入其下的所有文件，但不包括以点开头的条目，例如 `.DS_Store`；要加入点文件，在 `from` 中直接指明它。见[修复带来的测试](#修复带来的测试)和[套件目录中的测试](#套件目录中的测试)。 |
 | `successCriteria` | 代替 `check`：由评判器按这些标准判定。 |
 | `source` | 可选：任务来自的会话，`platform` 和 `sessionId`，以及 `fix`，即在那里修复它的完整提交，[`--try`](#试运行任务) 会检查它。 |
 

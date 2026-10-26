@@ -225,12 +225,18 @@ function taskFileSchema(files: ReadonlyMap<string, SuiteFile>) {
   });
 }
 
-/** The files a `{ from, to }` entry writes: `from` itself at `to`, or each file under `from` below `to`, in path order. */
+/**
+ * The files a `{ from, to }` entry writes: `from` itself at `to`, or each file under `from` below `to`, in path order,
+ * but those under a dot entry, as the sync reads them.
+ */
 function filesAt(files: ReadonlyMap<string, SuiteFile>, { from, to }: { from: string; to: string }): CheckFile[] {
   const own = files.get(from);
   if (own) return [{ path: to, mode: own.mode, base64: own.base64 }];
-  return [...files].filter(([at]) => at.startsWith(`${from}/`)).sort(([left], [right]) => (left < right ? -1 : 1))
-    .map(([at, file]) => ({ path: `${to}/${at.slice(from.length + 1)}`, mode: file.mode, base64: file.base64 }));
+  return [...files].flatMap(([at, file]) => {
+    const below = at.startsWith(`${from}/`) ? at.slice(from.length + 1) : undefined;
+    return below !== undefined && !below.split('/').some((name) => name.startsWith('.')) ? [{ below, file }] : [];
+  }).sort((left, right) => (left.below < right.below ? -1 : 1))
+    .map(({ below, file }) => ({ path: `${to}/${below}`, mode: file.mode, base64: file.base64 }));
 }
 
 /** A file check.add writes from the suite directory: its path in the clone, its git file mode, and its bytes. */
