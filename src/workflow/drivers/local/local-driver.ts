@@ -634,9 +634,8 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
     ...(limits?.maxTurns !== undefined && maxTurns === undefined ? ['max_turns' as const] : []),
     ...(limits?.tokens !== undefined && budget === undefined ? ['budget' as const] : []),
   ];
-  // A tool stopped while git wrote the index leaves its lock, on which the report's commit of the clone would fail.
-  // The adapter returns once the tool's process group is gone, so nothing holds it any more.
-  if (ran?.stoppedBy === 'timeout' || ran?.stoppedBy === 'budget') await fs.rm(path.join(lease.cwd, '.git', 'index.lock'), { force: true });
+  // The adapter returns once the tool's process group is gone, so no lock git left in the clone is held any more.
+  if (ran?.stoppedBy === 'timeout' || ran?.stoppedBy === 'budget') await removeGitLocks(path.join(lease.cwd, '.git'));
   return {
     ...reported,
     ...(ran ? { durationMs } : {}),
@@ -656,6 +655,21 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
  */
 export function personAnswers(mode: RunMode): boolean {
   return mode === 'attended' && process.stdin.isTTY === true && process.stderr.isTTY === true;
+}
+
+/**
+ * Removes the locks a git process leaves when it is killed mid-write, on which the report's commit of the clone would
+ * fail: those directly under `gitDir`, such as `index.lock` and `HEAD.lock`, and those of its refs. None under
+ * `objects/` blocks the commit. The agent shaped the clone, so a `gitDir` or `refs` that is not a real directory, such
+ * as a link out of the clone, is left alone.
+ */
+async function removeGitLocks(gitDir: string): Promise<void> {
+  const isDirectory = async (at: string): Promise<boolean> => (await fs.lstat(at).catch(() => undefined))?.isDirectory() === true;
+  if (!await isDirectory(gitDir)) return;
+  const top = await fs.readdir(gitDir).catch((): string[] => []);
+  const refs = await isDirectory(path.join(gitDir, 'refs')) ? await fs.readdir(path.join(gitDir, 'refs'), { recursive: true }).catch((): string[] => []) : [];
+  const locks = [...top.map((name) => path.join(gitDir, name)), ...refs.map((name) => path.join(gitDir, 'refs', name))].filter((at) => at.endsWith('.lock'));
+  await Promise.all(locks.map((lock) => fs.rm(lock, { force: true })));
 }
 
 async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options: LocalDriverOptions): Promise<WorkflowEnvelope> {

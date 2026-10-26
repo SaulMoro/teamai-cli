@@ -45,7 +45,7 @@ describe('trial limits on the local driver', () => {
     expect(fixture.trialRootEntries()).toEqual([]);
   }, 120_000);
 
-  it('stops a tool that wrote the fix and hangs holding the git index lock, and its check passes what it left', async () => {
+  it('stops a tool that wrote the fix and hangs holding git\'s index, HEAD and branch locks, and its check passes what it left', async () => {
     const { done, record } = await runLocally('fixes-and-hangs', limitedSuite('{ timeout: 3s }'));
 
     expect(done).toMatchObject({ outcome: 'succeeded', end: 'settled' });
