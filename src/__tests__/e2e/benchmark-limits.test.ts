@@ -1,6 +1,6 @@
 /**
  * Real CLI: the limits a suite's `trial` sets on every trial's prompt, enforced by the local driver in a declared
- * sandbox. A limit ends the agent's turn, and the trial's check still decides it.
+ * sandbox, and the reports that carry them. A limit ends the agent's turn, and the trial's check still decides it.
  */
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -91,5 +91,19 @@ describe('trial limits on the local driver', () => {
     expect(done).toMatchObject({ outcome: 'failed', failure: { code: 'timeout' } });
     expect(record.benchmark.trials).toEqual([expect.objectContaining({ result: 'error' })]);
     expect(record.benchmark.trials[0]).not.toHaveProperty('limit');
+  }, 120_000);
+});
+
+describe('trial limit reports', () => {
+  it('refuses a report whose limit is none of the trial limits', async () => {
+    const fixture = await benchmarkFixture({ tool: 'does-nothing', sandbox: false, suite: limitedSuite('{ timeout: 3s }') });
+    fixtures.push(fixture);
+    const started = envelope(await fixture.teamai(['workflow', 'start', 'fix', '--benchmark']));
+
+    const reported = envelope(await fixture.teamai(['workflow', 'report', String(started.data?.run), '--json', JSON.stringify({
+      attempt: 'a00000000', revision: 1, outcome: 'success', driver: { kind: 'external', machine: 'ci', workspace: '/work' }, limit: 'turns',
+    })]));
+
+    expect(reported.error).toEqual({ code: 'invalid_report', message: 'limit must be the trial limit that stopped the tool: timeout, budget or max_turns' });
   }, 120_000);
 });

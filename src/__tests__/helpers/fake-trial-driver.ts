@@ -1,8 +1,9 @@
 /**
  * A driver that knows only the CLI JSON protocol and the trial contract: it asks `workflow next --prepare`, launches the
  * lease's tool in the lease's cwd with the lease's model and effort, without the names the lease withholds, and reports tool, model, session, tokens,
- * durationMs, and cost when the tool stated one. It runs no git, setup, check or cleanup, never runs teamai in a lease's cwd, and imports no other
- * driver: only the lease schema a TypeScript driver parses at its boundary.
+ * durationMs, and cost when the tool stated one. It stops a tool at the lease's `trial.limits` timeout and reports `limit: timeout`, and lists the
+ * budget and max_turns it does not enforce as unenforced. It runs no git, setup, check or cleanup, never runs teamai in a lease's cwd, and imports
+ * no other driver: only the lease schema a TypeScript driver parses at its boundary.
  */
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -20,6 +21,8 @@ const NextAnswerSchema = z.object({
   ]),
 });
 const ReportAnswerSchema = z.object({ data: z.object({ accepted: z.literal(true) }) });
+/** What execFile rejects with once its `timeout` killed the tool. */
+const TimedOutSchema = z.object({ killed: z.literal(true) });
 const StreamLineSchema = z.object({
   model: z.string().optional(), session_id: z.string().optional(),
   usage: z.object({ input_tokens: z.number(), output_tokens: z.number() }).optional(), total_cost_usd: z.number().optional(),
@@ -93,10 +96,16 @@ export function fakeTrialDriver(options: FakeTrialDriverOptions): DriverUnderTes
         if (tool === undefined) throw new Error(`leased a trial of ${lease.trial.tool}, which this driver does not list`);
         const env = { ...Object.fromEntries(Object.entries(options.env).filter(([key]) => !lease.envScope.withhold.includes(key))), ...lease.env };
         const started = Date.now();
-        const launched = await run(tool, ['-p', lease.prompt, ...(lease.trial.model ? ['--model', lease.trial.model] : []), ...(lease.trial.effort ? ['--effort', lease.trial.effort] : [])], { cwd: lease.cwd, env })
-          .then((result) => ({ outcome: 'success' as const, ...sessionOf(result.stdout) }), () => ({ outcome: 'failed' as const }));
+        const { limits } = lease.trial;
+        const launched = await run(tool, ['-p', lease.prompt, ...(lease.trial.model ? ['--model', lease.trial.model] : []), ...(lease.trial.effort ? ['--effort', lease.trial.effort] : [])], {
+          cwd: lease.cwd, env, ...(limits?.timeoutMs !== undefined ? { timeout: limits.timeoutMs } : {}),
+        }).then((result) => ({ outcome: 'success' as const, ...sessionOf(result.stdout) }), (error: unknown) => (
+          TimedOutSchema.safeParse(error).success ? { outcome: 'success' as const, limit: 'timeout' } : { outcome: 'failed' as const }
+        ));
+        const unenforced = [...(limits?.tokens !== undefined ? ['budget'] : []), ...(limits?.maxTurns !== undefined ? ['max_turns'] : [])];
         const report = await options.teamai(['workflow', 'report', runId, '--json', JSON.stringify({
           attempt: lease.attempt, revision: lease.revision, driver: identity, tool: lease.trial.tool, durationMs: Date.now() - started, ...launched,
+          ...(unenforced.length > 0 ? { unenforced } : {}),
         })]);
         ReportAnswerSchema.parse(lastJson(report.stdout, report.stderr));
       }

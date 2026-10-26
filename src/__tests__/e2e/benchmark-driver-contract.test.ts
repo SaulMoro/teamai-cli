@@ -5,8 +5,8 @@ import { z } from 'zod';
 import { benchmarkFixture, envelope, PRODUCT_URL, type BenchmarkFixture } from '../helpers/benchmark-fixture.js';
 import { fakeTrialDriver, type DriverUnderTest } from '../helpers/fake-trial-driver.js';
 
-/** The suite of the contract: one check task `fix`, and the arms `claude` and `codex`. */
-function twoArms(timeout: string): string {
+/** The suite of the contract: one check task `fix`, and the arms `claude` and `codex`, with `trial` when given. */
+function twoArms(timeout: string, trial?: string): string {
   return `schemaVersion: v1alpha1
 name: fix
 description: Fix the answer with two tools.
@@ -19,7 +19,7 @@ arms:
     tool: codex
 repetitions: 1
 timeout: ${timeout}
-`;
+${trial ? `trial: ${trial}\n` : ''}`;
 }
 
 const DRIVERS: Array<{ name: string; make(fixture: BenchmarkFixture): DriverUnderTest }> = [
@@ -35,7 +35,7 @@ const DRIVERS: Array<{ name: string; make(fixture: BenchmarkFixture): DriverUnde
 const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', trials: ['claude'] };
 const RecordSchema = z.object({ benchmark: z.object({
   tasks: z.array(z.object({ id: z.string(), baseline: z.string() })),
-  trials: z.array(z.object({ order: z.number(), arm: z.string(), result: z.string() })),
+  trials: z.array(z.object({ order: z.number(), arm: z.string(), result: z.string(), limit: z.string().optional() })),
 }) });
 const RunSchema = z.object({ status: z.string(), steps: z.array(z.object({ id: z.string(), status: z.string() }).passthrough()) });
 
@@ -74,6 +74,24 @@ describe.each(DRIVERS)('the benchmark trial contract, driven by $name', ({ make 
       expect(fixture.toolLaunches().map((launch) => launch.tool)).toEqual(['claude']);
       expect(fixture.trialRootEntries()).toEqual([]);
       expect(fixture.status()).toBe(status);
+    } finally {
+      fixture.remove();
+    }
+  });
+
+  it('stops the tool at the trial timeout the lease sets, and the check decides the trial its report says a limit ended', async () => {
+    const fixture = await benchmarkFixture({ tool: 'hangs', sandbox: false, suite: twoArms('15s', '{ timeout: 3s }') });
+    try {
+      const runId = await started(fixture);
+
+      const result = await make(fixture).drive({ runId, can: SANDBOX_CLAUDE, prepare: true, maxPolls: 40 });
+
+      expect(result.leased).toEqual(['trials.r1.fix.claude.prompt']);
+      expect(result.done?.text).toContain('| claude | claude | tool default (team) | 1 | 0 | 1 | 0 | 0 | 0 | 1 | 0 | 0 | 0% (0/1) |');
+      expect(RecordSchema.parse(fixture.endRecord(runId)).benchmark.trials).toEqual([
+        expect.objectContaining({ order: 1, arm: 'claude', result: 'failed', limit: 'timeout' }),
+        expect.objectContaining({ order: 2, arm: 'codex', result: 'not_run' }),
+      ]);
     } finally {
       fixture.remove();
     }
