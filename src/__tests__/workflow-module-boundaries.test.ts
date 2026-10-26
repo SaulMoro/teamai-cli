@@ -17,6 +17,7 @@ const SKILL = 'src/workflow/drivers/skill/';
 const LOCAL = 'src/workflow/drivers/local/';
 const PLACE = 'src/workflow/place/';
 const DISCOVERY = 'src/workflow/discovery/';
+const BENCHMARK = 'src/workflow/benchmark/';
 const FLAT = 'src/workflow/';
 
 /** Rule 1: what a module under `drivers/skill/` may import, besides its siblings, `zod` and `node:*`. */
@@ -63,10 +64,21 @@ const SKILL_IMPORTS: Record<string, { typeOnly?: true; names?: string[]; values?
 /** Rule 3: the modules through which code outside a folder reaches it; tests may also import the entries of their unit. */
 const ENTRIES: Array<{ folder: string; entries: Record<string, string[] | 'any'>; testEntries: string[] }> = [
   { folder: SKILL, entries: { 'skill-driver.ts': 'any', 'literals.ts': ['src/workflow/discovery/render.ts'] }, testEntries: ['skill-driver.ts', 'literals.ts'] },
-  { folder: PLACE, entries: { 'place.ts': ['src/workflow/protocol.ts', 'src/workflow/drivers/local/local-driver.ts'] }, testEntries: ['place.ts'] },
+  { folder: PLACE, entries: { 'place.ts': ['src/workflow/protocol.ts', 'src/workflow/drivers/local/local-driver.ts'], 'setup.ts': [`${BENCHMARK}trial.ts`] }, testEntries: ['place.ts'] },
   // workflow-published-runs.ts judges an offered run by the tool the local driver would launch for its prompt steps.
   { folder: LOCAL, entries: { 'local-driver.ts': ['src/workflow-commands.ts', 'src/workflow-published-runs.ts'], 'local-tool-adapter.ts': [] }, testEntries: ['local-driver.ts', 'local-tool-adapter.ts'] },
   { folder: DISCOVERY, entries: { 'workflow-skills.ts': 'any', 'generated-marker.ts': 'any' }, testEntries: ['workflow-skills.ts', 'generated-marker.ts', 'render.ts'] },
+  // Trials, a suite's start and its scenarios change state, so only the protocol, the local driver and the commands reach them.
+  {
+    folder: BENCHMARK,
+    entries: {
+      'plan.ts': 'any', 'terms.ts': 'any', 'suite.ts': 'any', 'check.ts': 'any', 'table.ts': 'any', 'result.ts': 'any',
+      'trial.ts': ['src/workflow/protocol.ts', 'src/workflow/drivers/local/local-driver.ts'],
+      'start.ts': ['src/workflow-commands.ts'],
+      'conformance.ts': ['src/workflow/conformance/run.ts'],
+    },
+    testEntries: ['plan.ts', 'terms.ts', 'suite.ts', 'check.ts', 'table.ts', 'result.ts', 'trial.ts'],
+  },
 ];
 
 /** Edges a rule would refuse that stay until the named change removes them. Each must match exactly `count` edges. */
@@ -77,6 +89,11 @@ const ALLOWED: Array<{ from: string; to: string; count: number; why: string }> =
 ];
 
 const under = (file: string, folder: string): boolean => file.startsWith(folder);
+/** Whether ENTRIES names `edge.from` among the importers of the entry `edge.to`. */
+const namedEntry = (edge: Edge): boolean => ENTRIES.some(({ folder, entries }) => {
+  const importers = under(edge.to, folder) ? entries[edge.to.slice(folder.length)] : undefined;
+  return Array.isArray(importers) && importers.includes(edge.from);
+});
 const isTest = (file: string): boolean => under(file, 'src/__tests__/');
 /** A workflow module outside the driver, place and discovery folders: the flat engine modules and the conformance suites. */
 const isFlat = (file: string): boolean => under(file, FLAT) && ![`${FLAT}drivers/`, PLACE, DISCOVERY].some((folder) => under(file, folder));
@@ -135,7 +152,7 @@ function rule4(edges: Edge[]): RuleResult {
 function rule5(edges: Edge[]): RuleResult {
   const scoped = edges.filter((edge) => isFlat(edge.from) && under(edge.to, FLAT));
   const violations = scoped.filter((edge) => under(edge.to, `${FLAT}drivers/`) || under(edge.to, DISCOVERY)
-    || (under(edge.to, PLACE) && !(edge.from === 'src/workflow/protocol.ts' && edge.to === `${PLACE}place.ts`))).map(show);
+    || (under(edge.to, PLACE) && !namedEntry(edge))).map(show);
   return { matched: scoped.length, violations };
 }
 

@@ -2,7 +2,10 @@
 
 import type { RunOrigin } from '../default-workflows.js';
 import type { RunMode } from '../launch-context.js';
+import type { EntryVerdict } from '../scorers/entry.js';
 import type { PinnedScorer } from '../scorers/pin.js';
+import type { BenchmarkPlan } from './benchmark/plan.js';
+import type { TrialTerms } from './benchmark/terms.js';
 import type { DeliveryReceipt, UnresolvedCreate } from './delivery-schema.js';
 import type { ArchivedPass, LimitsFrom, ReleasedTokens, SessionContinuation, StepState, StoppedAttempt } from './step-state.js';
 import type { Requirements, Setup, Unenforced } from './requirements.js';
@@ -95,6 +98,8 @@ export interface WorkflowStep {
   budget?: Budget;
   /** On a prompt step: the most agent turns its tool may take, for a driver that can cap them. */
   maxTurns?: number;
+  /** Generated only, never parsed from a team file: a benchmark trial step. */
+  trial?: TrialTerms;
 }
 
 /**
@@ -173,6 +178,11 @@ export interface WorkflowDefaults {
 export interface StepScorers {
   names: string[];
   batch?: boolean;
+  /**
+   * Generated only, as a team file cannot set it: every pass is judged whatever the scorers sample, the run does not end
+   * while one of its entries is open, and an entry still open when the run ends is frozen unscored.
+   */
+  required?: true;
 }
 
 /** Whether an agent session may start a workflow: on its own (`allow`), after the person's yes (`ask`), or never (`deny`). */
@@ -233,7 +243,7 @@ export interface WorkflowDiagnostic {
    * `alias_conflict`: another workflow has the same alias, or takes it as its name. The workflow is cached and starts by
    *   name; only the alias starts nothing.
    */
-  code?: 'unknown_key' | 'missing_needs' | 'false_if' | 'bad_template' | 'dotted_name' | 'undeclared_output' | 'undeclared_end' | 'bad_loop' | 'bad_session' | 'bad_workspace' | 'workflow_namespace_conflict' | 'prompt_namespace_conflict' | 'bad_delivery' | 'bad_invoke' | 'bad_alias' | 'alias_conflict';
+  code?: 'unknown_key' | 'missing_needs' | 'false_if' | 'bad_template' | 'dotted_name' | 'undeclared_output' | 'undeclared_end' | 'bad_loop' | 'bad_session' | 'bad_workspace' | 'workflow_namespace_conflict' | 'prompt_namespace_conflict' | 'benchmark_namespace_conflict' | 'bad_delivery' | 'bad_invoke' | 'bad_alias' | 'alias_conflict';
 }
 
 export type StepOutcome = 'success' | 'failed' | 'released';
@@ -286,6 +296,10 @@ export interface RunState {
   workflows?: Record<string, WorkflowDefinition>;
   /** The scorers its steps list, by name, as they were cached when it started. A name with no valid scorer then is absent. */
   scorers?: Record<string, PinnedScorer>;
+  /** The frozen benchmark plan; set only by `start --benchmark`. */
+  benchmark?: BenchmarkPlan;
+  /** How each entry of the run's required scorers stood when the run ended, frozen by `finishRun`. */
+  verdicts?: EntryVerdict[];
   /**
    * Step instances in declaration order; a sub-workflow's steps follow the step that runs it. Never changed in place:
    * adding or removing an instance assigns a new array, so an index the engine keeps per array never goes stale.

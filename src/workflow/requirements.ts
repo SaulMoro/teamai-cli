@@ -55,6 +55,15 @@ const ENFORCEMENT = {
   max_turns: 'bestEffort',
   /** Running the workflow's `setup` in each workspace the driver creates, before the step. */
   setup: 'strict',
+  /** A benchmark trial step: `can.trials` lists its tool (any tool for a step teamai runs itself). */
+  trials: 'strict',
+  /**
+   * A benchmark trial step runs only where the driver declares `can.isolation: sandbox`. Strict for trials only:
+   * ordinary steps keep best-effort isolation.
+   */
+  sandbox: 'strict',
+  /** A benchmark trial step is leased only through `next --prepare`, so teamai made its clone. Process-only. */
+  prepare: 'strict',
 } as const satisfies Record<string, 'strict' | 'bestEffort'> & Record<keyof Requirements, 'strict' | 'bestEffort'>;
 type Enforcement = typeof ENFORCEMENT;
 type KeysOf<E extends Enforcement[keyof Enforcement]> = { [K in keyof Enforcement]: Enforcement[K] extends E ? K : never }[keyof Enforcement];
@@ -74,6 +83,7 @@ type BestEffortKey = KeysOf<'bestEffort'>;
  * - `setup`: in each workspace it creates, the driver runs `lease.setup` before the step with only setup's keys, and
  *   fails the step without running it when setup exits non-zero (`setup_failed`), changes a tracked or non-ignored path
  *   (`setup_dirty`), or leaves a value of one of its keys in a file it created or changed (`setup_secret`).
+ * - `trials`: the tools whose benchmark trials the driver launches by the trial rules. Omitted: no trial.
  */
 export const CanSchema = z.object({
   hitl: z.boolean().optional(),
@@ -84,6 +94,7 @@ export const CanSchema = z.object({
   tokens: z.boolean().optional(),
   max_turns: z.boolean().optional(),
   setup: z.boolean().optional(),
+  trials: z.array(z.string().min(1)).optional(),
 });
 export type DriverCan = z.infer<typeof CanSchema>;
 
@@ -223,6 +234,10 @@ export interface Offer {
   maxTurns?: number;
   /** The workflow's setup, when the lease names a workspace the driver may create. */
   setup?: Setup;
+  /** A benchmark trial step: its tool, null for a step teamai runs itself, and the names the run's plan withholds. */
+  trial?: { tool: string | null; withhold: readonly string[] };
+  /** The caller asked `next --prepare`. */
+  prepare: boolean;
 }
 
 /** What a granted lease carries besides the step itself. */
@@ -249,18 +264,22 @@ export type Negotiation =
  * would provide it; else the step is granted, with each best-effort gap listed in `unenforced`.
  */
 export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFacts): Negotiation {
-  const guarded = [...env.declared, ...offer.runEnvKeys];
+  const guarded = [...env.declared, ...offer.runEnvKeys, ...(offer.trial?.withhold ?? [])];
   const shadowed = offer.envKeys.filter((key) => sameEnvName([...env.secrets, ...offer.runEnvKeys], key) !== undefined);
   if (shadowed.length > 0) {
     return { kind: 'fail', failure: { code: 'env_conflict', message: `Step "${offer.step}" sets env ${shadowed.join(', ')}, which a team secret or a requires.env of the run names. Rename the step's variable, or remove it from env:.` } };
   }
-  const required = offer.requires.env ?? [];
-  const setupKeys = offer.setup?.requires?.env ?? [];
+  // A trial's strip list wins over every requires.env, so a suite cannot hand a trial a credential it withholds.
+  const stripped = offer.trial?.withhold ?? [];
+  const allowed = (keys: readonly string[]): string[] => keys.filter((key) => sameEnvName(stripped, key) === undefined);
+  const required = allowed(offer.requires.env ?? []);
+  const setupKeys = allowed(offer.setup?.requires?.env ?? []);
   const covers = envCovers(can.env, offer.executor);
   const policy: Missing[] = [];
   if (allow.network === false && offer.requires.network === true) policy.push('policy.network');
   if (allow.env && [...required, ...setupKeys].some((key) => sameEnvName(allow.env ?? [], key) === undefined)) policy.push('policy.env');
   const gaps: Missing[] = policy.length > 0 ? policy : [
+    ...(offer.trial ? trialGaps(offer.trial, can, offer.prepare) : []),
     ...(offer.interactive && !can.hitl ? ['hitl' as const] : []),
     ...(offer.setup && !can.setup ? ['setup' as const] : []),
     ...((required.length > 0 && !covers.step) || (setupKeys.length > 0 && !covers.setup) ? ['env' as const] : []),
@@ -308,6 +327,16 @@ export function envAdvice(keys: readonly string[], declared: ReadonlySet<string>
     advice.push(`set ${unknown.join(', ')} in the environment, or declare ${them} in the team repo with ${adds} and give ${them} a value with ${sets}`);
   }
   return advice.join('; ');
+}
+
+/** What a trial step lacks on this driver. */
+export function trialGaps(trial: { tool: string | null }, can: Pick<DriverCan, 'trials' | 'isolation'>, prepare: boolean): Missing[] {
+  const listed = can.trials ?? [];
+  return [
+    ...((trial.tool === null ? listed.length > 0 : listed.includes(trial.tool)) ? [] : ['trials' as const]),
+    ...(can.isolation === 'sandbox' ? [] : ['sandbox' as const]),
+    ...(prepare ? [] : ['prepare' as const]),
+  ];
 }
 
 /** Why `keys`, which `who` requires, cannot be given here: the team env cannot be read, or a key has no value. */

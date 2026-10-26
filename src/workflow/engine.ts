@@ -12,7 +12,8 @@ import {
   type Expression, type ExpressionPath,
 } from './expression.js';
 import { outputMismatch } from './output.js';
-import { publishRunRecords, queueRunRecord, runRecordState } from './records.js';
+import { buildEndRecord, publishRunRecords, queueRunRecord, runRecordState } from './records.js';
+import { freezeVerdicts, isUnsettled, requiredEntries } from './scoring-entries.js';
 import {
   parseTemplate, renderStrings, renderText, stepExpressions, templatedTexts, templatePaths,
   type StepExpression, type TemplateError,
@@ -42,7 +43,10 @@ import { redactJson } from '../utils/redact.js';
 import { deliveryLockPath, generateRunId, installOwner, isRunId, readAttemptOutcomes, readRun, updateRun } from './store.js';
 import { withFileLock } from '../update.js';
 import { pinScorers } from '../scorers/cache.js';
+import { scoresDir } from '../scorers/attempts.js';
 import { isLeaseRef } from '../scorers/entry.js';
+import { removeSubjectEvidence } from '../scorers/evidence.js';
+import { JudgeUsageSchema, type JudgeUsage } from '../scorers/label.js';
 import type {
   DriverIdentity,
   OutputSchema,
@@ -55,6 +59,9 @@ import type {
   WorkflowStep,
 } from './types.js';
 import { hasAction } from './types.js';
+import type { CheckVerdict } from './benchmark/check.js';
+import { benchmarkTable, formatBenchmarkTable, type BenchmarkTable } from './benchmark/table.js';
+import { trialTool } from './benchmark/terms.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 
 /**
@@ -77,6 +84,10 @@ export interface ReportInput {
   /** The lease's `session`, echoed when the attempt continued it, by that id or in a copy, rather than starting a new one. */
   resumed?: SessionRef;
   tokens?: TokenUsage;
+  /** Milliseconds around the tool launch only, as the driver measured it. */
+  durationMs?: number;
+  /** What the tool stated the attempt cost, in its own unit. Never estimated. */
+  cost?: NonNullable<JudgeUsage['cost']>;
   failure?: WorkflowFailure;
   /** The branch this attempt committed, when it ran in a workspace. */
   changes?: { branch: string; base: string; from: string; to: string; commits: string[] };
@@ -89,6 +100,11 @@ export interface ReportInput {
   used?: Used;
   /** What the attempt's driver learned, once it ran the step, that it did not enforce. */
   unenforced?: ReportedUnenforced;
+  /**
+   * Process-only, set by benchmark/trial.ts after it prepared, ran or completed a trial step. Not in REPORT_FIELDS, so
+   * no driver can send it. `verdict` is the check's, classified once (benchmark/check.ts).
+   */
+  trialReport?: { verdict?: CheckVerdict };
 }
 
 /** A protocol rejection that retains its actionable code and message. */
@@ -165,8 +181,10 @@ export function locateStep(run: RunState, path: string): { scope: Scope; step: W
     if (!step) return undefined;
     if (index === segments.length - 1) return { scope, step };
     const instance = `${scope.prefix}${segment.id}${segment.index === undefined ? '' : `[${segment.index}]`}`;
-    const state = run.steps.find((item) => item.id === instance);
-    const child = state && childScope(run, scope, statesIn(run, scope), state, step);
+    const states = statesIn(run, scope);
+    // statesIn holds no for_each item.
+    const state = (segment.index === undefined ? states : run.steps).find((item) => item.id === instance);
+    const child = state && childScope(run, scope, states, state, step);
     if (!child) return undefined;
     scope = child;
   }
@@ -305,6 +323,7 @@ function leaseData(
     ...(definition.model !== undefined ? { model: definition.model } : {}),
     ...(rendered.defaultModel !== undefined ? { defaultModel: rendered.defaultModel } : {}),
     ...(definition.output ? { output: definition.output } : {}),
+    ...(definition.trial ? { trial: definition.trial } : {}),
     ...(plan?.contract ? { workspace: plan.contract } : {}),
     ...(plan?.session ? { session: plan.session } : {}),
     ...(definition.interactive ? { interactive: true } : {}),
@@ -382,7 +401,10 @@ function settleRun(run: RunState, now: string, { outcome, end, failure }: Workfl
   run.updatedAt = now;
 }
 
-/** Settles a run and queues its end record in the same locked operation. */
+/**
+ * Settles a run and queues its end record in the same locked operation. The entries of its required scorers freeze as
+ * they stand, in `run.verdicts`, and the evidence collected for their passes goes, so its record holds every verdict.
+ */
 export async function finishRun(
   config: LocalConfig,
   run: RunState,
@@ -392,6 +414,11 @@ export async function finishRun(
   driver?: DriverIdentity,
 ): Promise<boolean> {
   settleRun(run, now, result);
+  const verdicts = await freezeVerdicts(config, run, now);
+  if (verdicts.length > 0) {
+    run.verdicts = verdicts;
+    await removeSubjectEvidence(scoresDir(config), verdicts.map(({ step, pass }) => ({ runId: run.id, step, pass })));
+  }
   const queued = await queueRunRecord(config, run, driver, 'end', secrets);
   run.endRecordQueued = queued;
   return queued;
@@ -404,7 +431,15 @@ export function runData(run: RunState): Record<string, unknown> {
 
 function doneData(run: RunState): Record<string, unknown> {
   const prs = (run.deliveries ?? []).map((receipt) => receipt.url);
-  return { done: { run: run.id, outcome: run.status, ...(run.end !== undefined ? { end: run.end } : {}), ...(run.failure ? { failure: run.failure } : {}), ...(prs.length > 0 ? { prs } : {}) } };
+  return { done: { run: run.id, outcome: run.status, ...(run.end !== undefined ? { end: run.end } : {}), ...(run.failure ? { failure: run.failure } : {}), ...(prs.length > 0 ? { prs } : {}), ...benchmarkDone(run) } };
+}
+
+/** An ended benchmark run's results table, computed from its end record as every other reader computes it. */
+function benchmarkDone(run: RunState): { benchmark?: { table: BenchmarkTable; text: string } } {
+  const record = buildEndRecord(run, run.driver, '');
+  if (!record.benchmark) return {};
+  const table = benchmarkTable({ ...record, benchmark: record.benchmark });
+  return { benchmark: { table, text: formatBenchmarkTable(table) } };
 }
 
 /** The step ids these paths read. */
@@ -773,6 +808,12 @@ function settleScope(run: RunState, scope: Scope, now: string): Settled {
         if (advanced && 'unreadable' in advanced) return advanced;
         if (advanced && 'ready' in advanced) ready.push(...advanced.ready);
         if (advanced) continue;
+        // Starting a step changes no other step's standing, so the scan goes on. Settling one can make an earlier step
+        // ready, so the scan starts over.
+        if (state.status === 'running') {
+          changed = true;
+          continue;
+        }
       }
       changed = true;
       break;
@@ -898,31 +939,60 @@ export async function startRun(
   const undeliverable = deliveryProblem(cached.definition, tree.workflows, options.base);
   if (undeliverable) return error(undeliverable.code, undeliverable.message);
   const scorers = await pinScorers(config, listedScorers([cached.definition, ...Object.values(tree.workflows)]));
+  return createRun(config, {
+    name: cached.definition.name,
+    ...(cached.definition.inputs && isRecord(inputs) ? { inputs } : {}),
+    sourceHash: tree.sourceHash,
+    ...(tree.teamRevision ? { teamRevision: tree.teamRevision } : {}),
+    origin: DefaultWorkflows.originOf(cached),
+    definition: cached.definition,
+    workflows: tree.workflows,
+    scorers,
+    secrets,
+    ...options,
+  });
+}
+
+/**
+ * Creates a run of a definition the caller already built and checked. The run file is written only when it would keep
+ * what it was given unmasked. `secrets` are what the caller resolved for the operation.
+ */
+export async function createRun(
+  config: LocalConfig,
+  { secrets, driver, ...input }: Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'runMode' | 'definition' | 'workflows' | 'scorers' | 'benchmark' | 'base' | 'checkout'>
+    & Required<Pick<RunState, 'origin'>> & { secrets: Record<string, string>; driver?: DriverIdentity },
+): Promise<WorkflowEnvelope> {
+  const workflows = input.workflows ?? {};
+  const scorers = input.scorers ?? {};
+  // A benchmark's definition is generated from its suite's files, so a secret in it is named by the suite.
   const pinned = Object.fromEntries([
-    ...[cached.definition, ...Object.values(tree.workflows)].map((definition) => [`workflows/${definition.name}.yaml`, definition]),
+    ...(input.benchmark
+      ? [[`benchmarks/${input.benchmark.suite.name}`, { definition: input.definition, plan: input.benchmark }]]
+      : [input.definition, ...Object.values(workflows)].map((definition) => [`workflows/${definition.name}.yaml`, definition])),
     ...Object.entries(scorers).map(([scorerName, scorer]) => [`scorer ${scorerName}`, scorer]),
   ]);
-  const holdsSecret = secretMismatch(inputs, pinned, secrets);
+  const holdsSecret = secretMismatch(input.inputs, pinned, secrets);
   if (holdsSecret) return error('invalid_inputs', holdsSecret);
   const now = new Date().toISOString();
   const run: RunState = {
     schemaVersion: 'v1alpha1',
     id: generateRunId(),
-    name: cached.definition.name,
+    name: input.name,
     revision: 1,
     status: 'running',
-    ...(cached.definition.inputs ? { inputs: inputs as Record<string, unknown> } : {}),
-    sourceHash: tree.sourceHash,
-    ...(tree.teamRevision ? { teamRevision: tree.teamRevision } : {}),
-    ...(options.runMode ? { runMode: options.runMode } : {}),
-    origin: DefaultWorkflows.originOf(cached),
-    definition: cached.definition,
-    ...(Object.keys(tree.workflows).length > 0 ? { workflows: tree.workflows } : {}),
+    ...(input.inputs ? { inputs: input.inputs } : {}),
+    sourceHash: input.sourceHash,
+    ...(input.teamRevision ? { teamRevision: input.teamRevision } : {}),
+    ...(input.runMode ? { runMode: input.runMode } : {}),
+    origin: input.origin,
+    definition: input.definition,
+    ...(Object.keys(workflows).length > 0 ? { workflows } : {}),
     ...(Object.keys(scorers).length > 0 ? { scorers } : {}),
-    steps: cached.definition.steps.map((step) => ({ id: step.id, status: 'pending' })),
+    ...(input.benchmark ? { benchmark: input.benchmark } : {}),
+    steps: input.definition.steps.map((step) => ({ id: step.id, status: 'pending' })),
     settledAttempts: [],
-    ...(options.base ? { base: options.base } : {}),
-    ...(options.checkout ? { checkout: options.checkout } : {}),
+    ...(input.base ? { base: input.base } : {}),
+    ...(input.checkout ? { checkout: input.checkout } : {}),
     createdAt: now,
     updatedAt: now,
   };
@@ -941,7 +1011,7 @@ export async function startRun(
   }
   // #1083: publish the start record; a failed publication is queued locally
   // and retried on the next pull — it never fails the run itself.
-  const record = await queueRunRecord(config, run, options.driver, 'start', secrets) ? await publishRunRecords(config) : undefined;
+  const record = await queueRunRecord(config, run, driver, 'start', secrets) ? await publishRunRecords(config) : undefined;
   return ok({ run: run.id, name: run.name, status: run.status, revision: run.revision, ...(record ? { record } : {}) });
 }
 
@@ -959,6 +1029,9 @@ interface OfferContext {
   can: DriverCan;
   allow: Allow;
   facts: EnvFacts;
+  prepare: boolean;
+  /** The env keys any step of the run requires, read once per request rather than once per offered step. */
+  runEnvKeys: Set<string>;
 }
 
 /**
@@ -975,10 +1048,12 @@ function offerTerms(
     interactive: step.interactive === true,
     hasContract: plan?.contract !== undefined,
     envKeys: Object.keys(step.env ?? {}),
-    runEnvKeys: requiredEnvKeys([run.definition, ...Object.values(run.workflows ?? {})]),
+    runEnvKeys: context.runEnvKeys,
     budgeted: step.prompt !== undefined && scope.budgeted,
     ...(step.maxTurns !== undefined ? { maxTurns: step.maxTurns } : {}),
     ...(plan?.contract && scope.setup ? { setup: scope.setup } : {}),
+    ...(step.trial ? { trial: { tool: trialTool(step.trial), withhold: run.benchmark?.withhold ?? [] } } : {}),
+    prepare: context.prepare,
   }, context.can, context.allow, context.facts);
 }
 
@@ -1007,6 +1082,14 @@ export interface NextOptions {
   runMode?: RunMode;
   /** Process-only: the team env the caller resolved for this operation, so `next` does not resolve it again. */
   env?: WorkflowEnv;
+  /** Process-only, `next --prepare`: the caller prepares trial leases (benchmark/trial.ts). Without it a trial is held. */
+  prepare?: boolean;
+  /**
+   * Process-only: the caller is the run's only driver, as the local driver is. A trial step it cannot take is skipped
+   * at once, so its trial reads `not_run` and the run ends. For any other driver it stays pending until the suite's
+   * timeout.
+   */
+  alone?: boolean;
 }
 
 /**
@@ -1113,7 +1196,6 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
   await drainDeliveries(config, runId, env.secrets);
   const running = new Set(options.running);
   const can = options.can ?? {};
-  const context: OfferContext = { can, allow: config.workflows?.allow ?? {}, facts: env.facts };
   const maxParallel = config.workflows?.max_parallel;
   // The end record is queued under the run lock, so the run stores whether it
   // was in the same save. It publishes AFTER withRun releases the lock (#1126
@@ -1123,6 +1205,10 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
   let alreadySettled: RunState | undefined;
   const envelope = await withRun(config, runId, env.secrets, async (run, now) => {
     const before = JSON.stringify(run);
+    const context: OfferContext = {
+      can, allow: config.workflows?.allow ?? {}, facts: env.facts, prepare: options.prepare === true,
+      runEnvKeys: requiredEnvKeys([run.definition, ...Object.values(run.workflows ?? {})]),
+    };
     // Whatever settling changed is saved. `cancelled` is derived after settling: the attempts the driver runs that
     // are no longer its open leases.
     const answer = (data: Record<string, unknown>): { save: boolean; envelope: WorkflowEnvelope } => ({
@@ -1134,6 +1220,11 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       }),
     });
     const done = async (result: WorkflowResult): Promise<{ save: boolean; envelope: WorkflowEnvelope }> => {
+      // A run that reached its end waits for the judges its steps require; a timeout, a limit or a cancel does not.
+      const judging = result.outcome === 'succeeded' ? (await requiredEntries(config, run, now)).filter(isUnsettled).length : 0;
+      if (judging > 0) {
+        return answer({ wait: { reason: `${judging} judge entries of run ${run.id} are not settled: judge them with teamai score --next`, judging } });
+      }
       queued = await finishRun(config, run, now, result, env.secrets, driver);
       return answer(doneData(run));
     };
@@ -1177,10 +1268,10 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
         if (maxParallel !== undefined && open >= maxParallel) {
           return answer({ wait: { reason: `${open} steps are leased, as many as workflows.max_parallel allows on this machine` } });
         }
-        // A step this driver must not take is held back, and the next ready one is tried. A failed step can change
-        // what is ready, so the run settles again.
+        // A step this driver must not take is held back, and the next ready one is tried. A failed or skipped step can
+        // change what is ready, so the run settles again.
         const held: Held[] = [];
-        let failed = false;
+        let settledOne = false;
         for (const { lease: state, definition, rendered } of result.ready) {
           const located = locateStep(run, state.id);
           if (!located) return { save: false, envelope: error('run_unreadable', `Run ${run.id} has no definition for step "${state.id}"`) };
@@ -1193,17 +1284,22 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           }
           if (plan.fail) {
             failStep(state, plan.fail, run.revision);
-            failed = true;
+            settledOne = true;
             break;
           }
           const terms = offerTerms(run, state.id, located, plan, context);
+          if (terms.kind === 'hold' && options.alone && definition.trial) {
+            skip(state, run.revision);
+            settledOne = true;
+            continue;
+          }
           if (terms.kind === 'hold') {
             held.push(heldFor(state.id, terms.missing));
             continue;
           }
           if (terms.kind === 'fail') {
             failStep(state, terms.failure, run.revision);
-            failed = true;
+            settledOne = true;
             break;
           }
           if (plan.contract && options.base && !run.base) run.base = options.base;
@@ -1216,7 +1312,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           rememberCopy(run, plan, driver);
           return answer(leaseData(run, step, definition, rendered, terms.terms, plan));
         }
-        if (failed) continue;
+        if (settledOne) continue;
         return answer({ wait: { reason: held.map((item) => item.reason).join('; '), held } });
       }
       const located = locateStep(run, leased.id);
@@ -1281,11 +1377,20 @@ const DRIVER_FIELDS = new Set(['kind', 'machine', 'workspace', 'can']);
 /** The top-level payload fields `parseNextPayload` reads. */
 const NEXT_PAYLOAD_FIELDS = new Set(['driver', 'running', 'canTakeLease', 'base', 'claim', 'autoApprove', 'runMode']);
 
-/** The top-level payload fields `parseReport` reads. Keep in sync with the fields it picks. */
-const REPORT_FIELDS = new Set([
-  'attempt', 'revision', 'outcome', 'driver', 'outputs', 'exitCode', 'message', 'tool', 'model', 'session', 'resumed', 'tokens', 'failure', 'changes', 'read', 'agent', 'used',
-  'unenforced',
-]);
+/**
+ * Where `parseReport` reads each ReportInput field from: the payload field of the same name, `changes.pr_url`, or
+ * nowhere, as a field only this process sets. Typed against ReportInput, so a new field does not compile until it is
+ * placed here.
+ */
+const REPORT_FIELD_SOURCES = {
+  attempt: 'payload', revision: 'payload', outcome: 'payload', driver: 'payload', outputs: 'payload', exitCode: 'payload', message: 'payload',
+  tool: 'payload', model: 'payload', session: 'payload', resumed: 'payload', tokens: 'payload', durationMs: 'payload', cost: 'payload',
+  failure: 'payload', changes: 'payload', read: 'payload', agent: 'payload', used: 'payload', unenforced: 'payload',
+  prUrl: 'changes.pr_url', trialReport: 'process',
+} as const satisfies Record<keyof ReportInput, 'payload' | 'changes.pr_url' | 'process'>;
+
+/** The top-level payload fields `parseReport` reads. */
+const REPORT_FIELDS = new Set(Object.entries(REPORT_FIELD_SOURCES).flatMap(([field, source]) => (source === 'payload' ? [field] : [])));
 
 /**
  * The payload fields this CLI does not read: top-level names first, then `driver.<field>` names.
@@ -1369,6 +1474,15 @@ export function parseReport(value: unknown): ParsedReport | string {
       tokens[field] = tokenFields[field];
     }
     report.tokens = tokens;
+  }
+  if (record.durationMs !== undefined) {
+    if (typeof record.durationMs !== 'number' || !Number.isSafeInteger(record.durationMs) || record.durationMs < 0) return 'durationMs must be a non-negative integer of milliseconds';
+    report.durationMs = record.durationMs;
+  }
+  if (record.cost !== undefined) {
+    const cost = JudgeUsageSchema.shape.cost.safeParse(record.cost);
+    if (!cost.success || !cost.data) return 'cost must be an amount and a unit, as the tool stated it';
+    report.cost = cost.data;
   }
   if (record.failure !== undefined) {
     if (!record.failure || typeof record.failure !== 'object' || Array.isArray(record.failure)) return 'failure must be an object';
@@ -1675,6 +1789,10 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
 
     const located = locateStep(run, step.id);
     const defined = located?.step;
+    // A trial step's report comes through benchmark/trial.ts, which commits the clone and observes the agent.
+    if (defined?.trial && report.trialReport === undefined) {
+      return { save: false, envelope: error('invalid_report', `Step "${step.id}" is a benchmark trial. Report it with teamai workflow report from the run's checkout, after teamai workflow next --prepare leased it.`) };
+    }
     const plan = located && planWorkspace(run, located.scope, step, located.step, {
       driver: step.lease.driver, modes: ['read-only', 'new', 'continue'],
     }, true);
@@ -1715,6 +1833,8 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       model: report.model,
       session: report.session,
       tokens: report.tokens,
+      ...(report.durationMs !== undefined ? { durationMs: report.durationMs } : {}),
+      ...(report.cost ? { cost: report.cost } : {}),
       ...(report.changes ? { changes: report.changes } : {}),
       ...(report.read ? { read: report.read } : {}),
       agent: settleObservation(report, defined?.agent),
@@ -1722,6 +1842,7 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       ...(unenforced.length > 0 ? { unenforced } : {}),
       ...(step.lease.runMode ? { runMode: step.lease.runMode } : {}),
       ...(outcomes.length > 0 ? { outcomes } : {}),
+      ...(report.trialReport?.verdict ? { verdict: report.trialReport.verdict } : {}),
       installId: install.id,
     };
     if (outcome !== 'released') continueSession(run, report);

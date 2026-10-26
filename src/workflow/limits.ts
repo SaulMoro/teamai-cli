@@ -3,9 +3,9 @@
  * against their budgets. Both count from where the run or the workflow step recorded that its limits start.
  */
 import { isItem } from './fan-out.js';
-import { isUnder, runPasses } from './loop.js';
+import { isUnder } from './loop.js';
 import { topScope, type Scope } from './scope.js';
-import { stopAttempt, stopWhere, timeOut, type LeasedStep, type LimitsFrom, type StepState, type StoppedAttempt } from './step-state.js';
+import { passOf, settled, stopAttempt, stopWhere, timeOut, type LeasedStep, type LimitsFrom, type StepState, type StoppedAttempt } from './step-state.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 import type { WorkflowResult } from './engine.js';
 import type { RunState, WorkflowStep } from './types.js';
@@ -35,8 +35,33 @@ export function ownDeadline(run: RunState, state: StepState, step: WorkflowStep,
  * and every released attempt. Cached input is shown, not budgeted: tools report it inside or beside input differently.
  */
 export function spentTokens(run: RunState, under: (id: string) => boolean): number {
-  const used = [...runPasses(run), ...run.releasedTokens ?? []].filter((entry) => under(entry.step));
-  return used.reduce((sum, { tokens }) => sum + budgeted(tokens), 0);
+  // A step with no pass yet spent nothing, so `under` reads only the others.
+  return spentBy(run.steps.filter((state) => (settled(state) || state.passes?.length) && under(state.id)), run, under);
+}
+
+/** The tokens `states` spent, and those archived or released under `under`. A step with no pass yet is not parsed. */
+function spentBy(states: readonly StepState[], run: RunState, under: (id: string) => boolean): number {
+  let spent = 0;
+  for (const state of states) {
+    for (const pass of state.passes ?? []) spent += budgeted(pass.tokens);
+    const current = settled(state) ? passOf(state) : undefined;
+    if (current) spent += budgeted(current.tokens);
+  }
+  for (const entry of [...run.archive ?? [], ...run.releasedTokens ?? []]) if (under(entry.step)) spent += budgeted(entry.tokens);
+  return spent;
+}
+
+/**
+ * The tokens spent under instance `state`. Its instances sit right after it in the run's steps, since a workflow's and a
+ * fan-out's are inserted right after the step that runs them (`insertChildren`, `addItems`), so only they are read:
+ * every workflow step that starts counts this.
+ */
+function spentUnder(run: RunState, state: StepState): number {
+  const under = isUnder(state.id);
+  const at = run.steps.indexOf(state) + 1;
+  let end = at;
+  while (end < run.steps.length && under(run.steps[end]?.id ?? '')) end += 1;
+  return spentBy(run.steps.slice(at, end), run, under);
 }
 
 function budgeted(tokens: TokenUsage | undefined): number {
@@ -64,7 +89,7 @@ export function countLateTokens(run: RunState, stopped: StoppedAttempt, tokens: 
  */
 export function startLimits(run: RunState, state: StepState, step: WorkflowStep, now: string): { expiresAt?: string; limitsFrom: LimitsFrom } {
   const expiresAt = ownDeadline(run, state, step, now);
-  return { ...(expiresAt !== undefined ? { expiresAt } : {}), limitsFrom: { at: now, tokens: spentTokens(run, isUnder(state.id)) } };
+  return { ...(expiresAt !== undefined ? { expiresAt } : {}), limitsFrom: { at: now, tokens: spentUnder(run, state) } };
 }
 
 /** Where the limits of a workflow of the run count from: the run's, or those its running step recorded when it started. */

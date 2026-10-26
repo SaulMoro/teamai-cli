@@ -22,6 +22,7 @@ import {
 import { cancelRun, respondProvenance, respondToHitl, retryStep, type CallerProvenance, type Via } from './run-controls.js';
 import { nextJudgeLease, parseJudgeRequest, runJudgeLease, verifiedScorers } from './scoring.js';
 import { attemptDir, AttemptIdSchema, readRun, RunIdSchema, withRunLock, type AttemptId, type RunId, type RunLock } from './store.js';
+import { Trials } from './benchmark/trial.js';
 import type { DriverCan } from './requirements.js';
 import { isWorkflowError, type DriverIdentity, type RunState, type RunStatus, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure } from './types.js';
 import { deliveryProblem } from './workspace.js';
@@ -86,7 +87,7 @@ export interface WorkflowClient {
    * Asks the run what to do. With `prepare`, a lease comes with `cwd`, its place in the checkout the run started from,
    * made under the run's lock, and a prepare that fails settles the attempt `failed` with its own code.
    */
-  next(runId: string, body: unknown, options?: { prepare?: NextPrepare }): Promise<WorkflowEnvelope>;
+  next(runId: string, body: unknown, options?: { prepare?: NextPrepare; signal?: AbortSignal }): Promise<WorkflowEnvelope>;
   /** What the run file of `runId` says now, or undefined while this machine cannot read it. */
   runVersion(runId: RunId): Promise<RunVersion | undefined>;
   /** Reports an attempt. A prepared one is finished first: its `changes` or `read` come from its place. */
@@ -338,6 +339,11 @@ export type HostPlacePrepared =
 type Leased = { kind: 'leased'; lease: PlaceLease; root: string; others: AttemptId[]; mode?: RunMode };
 
 /** What every driver fails a lease of run `run` with when this teamai cannot read the place it names, as a newer one writes. */
+async function isBenchmarkRun(config: LocalConfig, run: RunId): Promise<boolean> {
+  const stored = await readRun(config, run);
+  return typeof stored === 'object' && stored.benchmark !== undefined;
+}
+
 export function unreadablePlace(run: RunId): WorkflowFailure {
   return { code: 'workspace_base', message: `Run ${run} leased a place this teamai cannot read. Update teamai.` };
 }
@@ -449,6 +455,12 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
       const run = RunIdSchema.safeParse(runId);
       const prepare = options?.prepare;
       if (prepare === undefined || !run.success) return withIgnored(await lease(), parsed.ignored);
+      // A benchmark run's trials are prepared under each trial copy's own lock, not the run's: a clone, a setup or a
+      // check holds it for minutes.
+      if (await isBenchmarkRun(config, run.data)) {
+        if (prepare !== true) return withIgnored({ error: { code: 'invalid_arguments', message: `Run ${runId} is a benchmark run, whose trial attempts teamai prepares itself, so --attempt and --adopt do not apply. Call next --prepare without them.` } }, parsed.ignored);
+        return withIgnored(await Trials.next(config, runId, driver, { ...next, env, ...(options?.signal ? { signal: options.signal } : {}) }), parsed.ignored);
+      }
       return withIgnored(await withRunLock(config, run.data, async (lock) => (prepare === true
         ? prepareLeased({ config, lock, driver, env, answer: await lease() })
         : prepareAttempt({ config, lock, driver, env, next, ...prepare })), { waitMs: 0 }), parsed.ignored);
@@ -456,7 +468,12 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
     report: async (runId, body, options) => {
       const parsed = parseReport(body);
       if (typeof parsed === 'string') return { error: { code: 'invalid_report', message: parsed } };
-      return withIgnored(await managedReport({ config, runId, report: parsed.report, secrets: env.secrets, lock: options?.lock }), parsed.ignored);
+      const run = RunIdSchema.safeParse(runId);
+      // A trial's report commits its clone and collects its judge evidence before the engine settles it.
+      const answer = run.success && await isBenchmarkRun(config, run.data)
+        ? await Trials.report(config, runId, parsed.report, env.secrets)
+        : await managedReport({ config, runId, report: parsed.report, secrets: env.secrets, lock: options?.lock });
+      return withIgnored(answer, parsed.ignored);
     },
     respond: async (runId, step, choice, { via, ...answer }) => {
       if (via.kind === 'skill') return respondToHitl(config, runId, env.secrets, { step, choice, ...answer, provenance: respondProvenance(via) });

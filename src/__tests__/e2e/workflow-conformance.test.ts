@@ -9,6 +9,30 @@ import { workflowConformanceScenarios } from '../../workflow/conformance/run.js'
 import type { RunState, WorkflowEnvelope } from '../../workflow/types.js';
 import { cliConformanceClient, envelope, runCLI } from '../helpers/cli-conformance.js';
 import { inProcessConformanceRunner, normalized, recorded, UNREACHABLE_ORIGIN } from '../helpers/in-process-conformance.js';
+import { benchmarkFixture } from '../helpers/benchmark-fixture.js';
+import type { BenchmarkScenario, DriverProfile } from '../../workflow/conformance-interpreter.js';
+import { isRunState } from '../../workflow/store.js';
+
+/** A benchmark scenario, on a member of a git team of its own: a `--self` install cannot pin the team a trial runs. */
+async function runBenchmarkScenario(scenario: BenchmarkScenario, profile: DriverProfile): Promise<void> {
+  const { suite, tasks } = scenario.benchmark;
+  const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: false, suite, tasks });
+  try {
+    await runConformanceScenario(scenario, {
+      client: cliConformanceClient(async (args) => envelope((await fixture.teamai(['workflow', ...args])).stdout)),
+      readRun: async (runId) => {
+        const run = fixture.runFile(runId);
+        if (!isRunState(run)) throw new Error(`run ${runId} is not a run file`);
+        return run;
+      },
+      readEndRecord: async (runId) => fixture.endRecord(runId),
+      advance: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
+      expect,
+    }, profile);
+  } finally {
+    fixture.remove();
+  }
+}
 
 describe.each(DRIVERS_UNDER_TEST)('workflow protocol conformance through the CLI as %s', (profile) => {
   let repo: string;
@@ -39,6 +63,10 @@ describe.each(DRIVERS_UNDER_TEST)('workflow protocol conformance through the CLI
   // A scenario that never speaks as the driver under test makes the same calls under every profile, so it runs under the first.
   for (const scenario of workflowConformanceScenarios.filter((item) => profile === DRIVERS_UNDER_TEST[0] || speaksAsDriverUnderTest(item))) {
     it(scenario.name, async () => {
+      if ('benchmark' in scenario) {
+        await runBenchmarkScenario(scenario, profile);
+        return;
+      }
       const workflows = path.join(repo, '.teamai', 'workflows');
       fs.mkdirSync(workflows, { recursive: true });
       fs.writeFileSync(path.join(workflows, `${scenario.workflowName}.yaml`), scenario.yaml);

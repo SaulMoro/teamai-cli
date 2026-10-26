@@ -205,7 +205,7 @@ describe('#1083 workflow run records', () => {
 
   it('publishes the failure code of every step failure teamai writes, and only codes it can name', () => {
     // Codes a module writes, as `code: '…'`, `error('…', …)` or `failure('…', …)`, that never become a run's failure: every module of src/workflow and src/scorers, and every other one that imports src/scorers or answers a WorkflowEnvelope.
-    const diagnostics = ['unknown_key', 'missing_needs', 'false_if', 'bad_template', 'dotted_name', 'undeclared_output', 'undeclared_end', 'bad_loop', 'bad_workspace', 'workflow_namespace_conflict', 'prompt_namespace_conflict', 'bad_delivery', 'bad_invoke', 'bad_alias', 'alias_conflict'] satisfies Array<WorkflowDiagnostic['code']>;
+    const diagnostics = ['unknown_key', 'missing_needs', 'false_if', 'bad_template', 'dotted_name', 'undeclared_output', 'undeclared_end', 'bad_loop', 'bad_workspace', 'workflow_namespace_conflict', 'prompt_namespace_conflict', 'benchmark_namespace_conflict', 'bad_delivery', 'bad_invoke', 'bad_alias', 'alias_conflict'] satisfies Array<WorkflowDiagnostic['code']>;
     const answers = ['invalid_json', 'driver_running', 'invalid_run', 'repeated_response', 'agent_in_path', 'stale_response', 'retried', 'end_reached', 'repeated_report', 'wrong_attempt', 'invalid_report', 'lease_cancelled', 'interrupted', 'run_unreadable', 'driver_stuck', 'ambiguous_run', 'busy', 'workflow_recursion', 'workflow_not_found',
       // Refusals of a run handover, answered to the command or driver that asked for it.
       'not_owner', 'unsupported_repo', 'reports_unreachable', 'reports_failed', 'run_not_found', 'run_not_published', 'run_mismatch',
@@ -235,6 +235,15 @@ describe('#1083 workflow run records', () => {
       'skill_call_failed',
       // Why the skill driver stopped judging a run, told to the agent in a judging-off event.
       'judge_runner_gone', 'no_child_agent',
+      // Refusals of teamai workflow start --benchmark, before any run exists.
+      'team_revision_unpullable', 'benchmark_not_found', 'commit_unreachable',
+      'arm_model_missing', 'arm_unpublishable',
+      // Refusals of teamai workflow start --benchmark --try, which tries one task file and creates no run.
+      'benchmark_invalid', 'task_try_failed',
+      // Refusals of teamai workflow next --prepare where the team a trial runs cannot be pinned; its trials stay for another machine.
+      'team_ref_blocked',
+      // Refusals of teamai workflow publish and a claim of a benchmark run, which stays on the machine that started it.
+      'benchmark_local',
       // Refusals of teamai score --run, answered to the member who asked for a pass to be judged.
       'scoring_unavailable', 'pass_not_found', 'scorer_not_found', 'entry_leased',
       // Refusals of teamai score --session, answered to the member who asked for a session to be judged.
@@ -456,6 +465,21 @@ describe('#1083 workflow run records', () => {
     expect(mergeRecord(again, delivered).prs).toEqual(['https://github.com/acme/app/pull/1']);
   });
 
+  it('drops the benchmark of an earlier record when the next record has none', () => {
+    const benchmark = {
+      suite: { name: 'fix', sourceHash: 'c'.repeat(64) }, repetitions: 1, baselineTeamRevision: 'b'.repeat(40),
+      tasks: [{ id: 'fix', startingCommit: 'a'.repeat(40), sourceHash: 'd'.repeat(64), baseline: 'not_run' as const }],
+      arms: [{ name: 'claude', tool: 'claude', teamRevision: 'b'.repeat(40), source: 'team' as const }],
+      scorers: [],
+      trials: [{ task: 'fix', arm: 'claude', repetition: 1, order: 1, step: 'trials.r1.fix.claude.prompt', result: 'not_run' as const }],
+    };
+    const ended = { ...buildEndRecord(runState(), driver, 'tester'), benchmark };
+    const next = buildEndRecord(runState(), driver, 'tester');
+
+    expect(mergeRecord(ended, next)).not.toHaveProperty('benchmark');
+    expect(mergeRecord(next, ended).benchmark).toEqual(benchmark);
+  });
+
   it('queues records durably and keeps them across failure', async () => {
     const { config } = testConfig();
     const record = buildStartRecord(runState({ status: 'running' }), driver, 'tester');
@@ -597,6 +621,23 @@ describe('#1083 workflow stats merge', () => {
       (YAML.parse(await reports.show([`teamai-reports:stats/${username}.yaml`])) as Record<string, unknown>).workflows;
     expect(await workflows('alice')).toEqual({ runs: 0, succeeded: 0, failed: 0, totalDurationMs: 0 });
     expect(await workflows('bob')).toEqual({ runs: 1, succeeded: 1, failed: 0, totalDurationMs: 300000 });
+  });
+
+  it('changes no total for a benchmark end, added or withdrawn from origin', async () => {
+    const { statsDeltaRecords } = await import('../workflow/records.js');
+    const benchmark = {
+      suite: { name: 'fix', sourceHash: 'h1' }, repetitions: 1, baselineTeamRevision: 'abc', scorers: [],
+      tasks: [{ id: 'fix', startingCommit: 'def', sourceHash: 'h2', baseline: 'valid' as const }], arms: [{ name: 'claude', tool: 'claude', source: 'team' as const, teamRevision: 'abc' }],
+      trials: [{ task: 'fix', arm: 'claude', repetition: 1, order: 1, step: 'trials.r1.fix.claude.prompt', result: 'passed' as const }],
+    };
+    const existing = { workflows: { runs: 1, succeeded: 1, failed: 0, totalDurationMs: 150000 } };
+    const old = { ...buildEndRecord(runState({ status: 'failed' }), driver, 'tester'), benchmark };
+    const replacement = { ...buildEndRecord(runState({ updatedAt: '2026-10-14T10:05:00.000Z' }), driver, 'tester'), benchmark };
+    const origin = new Map([[old.run, old]]);
+
+    expect(mergeWorkflowStats(existing, 'tester', [replacement]).workflows).toEqual(existing.workflows);
+    expect(statsDeltaRecords(origin, [replacement])).toEqual([replacement]);
+    expect(mergeWorkflowStats(existing, 'tester', statsDeltaRecords(origin, [replacement]), origin).workflows).toEqual(existing.workflows);
   });
 });
 

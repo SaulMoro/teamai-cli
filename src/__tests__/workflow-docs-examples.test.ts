@@ -4,10 +4,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parseDocument } from 'yaml';
+import { z } from 'zod';
 import { syncScorerDefinitions } from '../scorers/cache.js';
 import { ciRecipesOf, runCommandsOf } from './helpers/ci-recipe.js';
 import { formatScorerDiagnostic } from '../scorers/definition.js';
 import type { LocalConfig } from '../types.js';
+import { parseSuite, type SourceFile } from '../workflow/benchmark/suite.js';
 import { formatUnknownScorer, syncWorkflowDefinitions } from '../workflow/cache.js';
 import { leaseNext, reportAttempt, startRun } from '../workflow/engine.js';
 import { formatDiagnostic } from '../workflow/parse.js';
@@ -27,6 +29,7 @@ function guidePages(name: RegExp): string[] {
 
 const PAGES = guidePages(/^workflow.*\.md$/);
 const SCORER_PAGES = guidePages(/^scorers.*\.md$/);
+const BENCHMARK_PAGES = guidePages(/^benchmarks.*\.md$/);
 
 interface Example {
   label: string;
@@ -311,7 +314,7 @@ describe('workflow guide examples', () => {
     expect(JSON.parse(prompt.slice(prompt.indexOf('[')))).toEqual(shown);
   });
 
-  it.each(PAGES)('%s: every job of a GitHub Actions workflow it shows says what it runs on', (page) => {
+  it.each([...PAGES, ...BENCHMARK_PAGES])('%s: every job of a GitHub Actions workflow it shows says what it runs on', (page) => {
     const jobs = ciRecipesOf(path.join(ROOT, page)).flatMap((recipe) => Object.entries(recipe.jobs));
     expect(jobs.filter(([, job]) => !job['runs-on']).map(([name]) => `${page}: job ${name} has no runs-on`)).toEqual([]);
   });
@@ -324,7 +327,7 @@ describe('workflow guide examples', () => {
     for (const { page, commands } of recipes.slice(1)) expect(commands, page).toEqual(recipes[0]?.commands);
   });
 
-  it.each([...PAGES, ...SCORER_PAGES])('%s: every relative link to a .md file resolves', (page) => {
+  it.each([...PAGES, ...SCORER_PAGES, ...BENCHMARK_PAGES])('%s: every relative link to a .md file resolves', (page) => {
     const text = fs.readFileSync(path.join(ROOT, page), 'utf8');
     const missing = [...text.matchAll(/\]\(([^)#\s:]+\.md)(?:#[^)]*)?\)/g)]
       .map((match) => match[1]!)
@@ -351,5 +354,62 @@ describe('scorer guide examples', () => {
 
     expect(result.invalid.map(formatScorerDiagnostic)).toEqual([]);
     expect(result.cached).toHaveLength(examples.length);
+  });
+});
+
+/** Each team file a page shows: a yaml fence whose first line is `# benchmarks/<path>.yaml`. */
+function benchmarkFilesOf(page: string): SourceFile[] {
+  return examplesOf(page).flatMap(({ source }) => {
+    const relativePath = /^# (benchmarks\/\S+\.yaml)\n/.exec(source)?.[1];
+    return relativePath === undefined ? [] : [{ relativePath, content: source }];
+  });
+}
+
+/** The `npx teamai-cli` commands of the GitLab CI jobs a page shows: a yaml fence whose top-level job has a `script`. */
+function gitlabCommandsOf(page: string): string[] {
+  const JobsSchema = z.record(z.unknown()).transform((jobs) => Object.values(jobs).flatMap((job) => {
+    const script = z.object({ script: z.array(z.string()) }).safeParse(job);
+    return script.success ? [script.data.script] : [];
+  }));
+  return examplesOf(page).flatMap(({ source }) => JobsSchema.parse(parseDocument(source).toJS() ?? {}).flat());
+}
+
+const teamaiCommands = (commands: string[]): string[] => commands.filter((command) => command.startsWith('npx teamai-cli '));
+
+describe('benchmark guide examples', () => {
+  it('finds the English and Chinese benchmark pages', () => {
+    expect(BENCHMARK_PAGES).toEqual(['docs/guide/benchmarks.md', 'docs/guide/zh-CN/benchmarks.md']);
+  });
+
+  it.each(BENCHMARK_PAGES)('%s: each yaml block parses, and its suite and task files pass pull', (page) => {
+    for (const example of examplesOf(page)) expect(parseDocument(example.source).errors, example.label).toEqual([]);
+    const files = benchmarkFilesOf(page);
+    const [suite, ...others] = files.filter((file) => file.relativePath.endsWith('/suite.yaml'));
+    if (!suite || others.length > 0) throw new Error(`${page} shows ${others.length + (suite ? 1 : 0)} suite files, not one`);
+    const tasks = files.filter((file) => file !== suite);
+    expect(tasks.map((task) => path.posix.dirname(task.relativePath)), page).toEqual(tasks.map(() => `${path.posix.dirname(suite.relativePath)}/tasks`));
+
+    const parsed = parseSuite({ suite, tasks });
+
+    expect(parsed.diagnostics.map(formatDiagnostic)).toEqual([]);
+    expect(parsed.ok && parsed.warnings.map(formatDiagnostic)).toEqual([]);
+    expect(parsed.ok && parsed.suite.tasks.length).toBe(tasks.length);
+  });
+
+  it.each(BENCHMARK_PAGES)('%s: the GitLab CI job runs the teamai commands of the GitHub Actions job', (page) => {
+    const github = teamaiCommands(ciRecipesOf(path.join(ROOT, page)).flatMap(runCommandsOf));
+    expect(github.length, `${page} shows a GitHub Actions job that runs teamai`).toBeGreaterThan(0);
+    expect(teamaiCommands(gitlabCommandsOf(page))).toEqual(github);
+  });
+
+  it('shows the same files and CI commands in every language', () => {
+    const [english, ...others] = BENCHMARK_PAGES.map((page) => ({
+      page, files: benchmarkFilesOf(page), commands: ciRecipesOf(path.join(ROOT, page)).map(runCommandsOf), gitlab: gitlabCommandsOf(page),
+    }));
+    for (const other of others) {
+      expect(other.files, other.page).toEqual(english?.files);
+      expect(other.commands, other.page).toEqual(english?.commands);
+      expect(other.gitlab, other.page).toEqual(english?.gitlab);
+    }
   });
 });

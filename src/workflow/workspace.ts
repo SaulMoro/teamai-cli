@@ -161,6 +161,19 @@ interface Ancestor {
 /** What finding a step's workspace reads of a run: its definitions, and the pass of each step instance. */
 type StepTree = Pick<RunState, 'definition' | 'workflows'> & { steps: readonly { id: string; pass?: number }[] };
 
+/** For each steps array, its instances by id. A run's steps array is never changed in place (RunState.steps). */
+const instanceIndex = new WeakMap<StepTree['steps'], Map<string, StepTree['steps'][number]>>();
+
+function instanceOf(run: StepTree, id: string): StepTree['steps'][number] | undefined {
+  let index = instanceIndex.get(run.steps);
+  if (!index) {
+    index = new Map();
+    for (const state of run.steps) if (!index.has(state.id)) index.set(state.id, state);
+    instanceIndex.set(run.steps, index);
+  }
+  return index.get(id);
+}
+
 function ancestorsOf(run: StepTree, path: string): Ancestor[] {
   const definitionOf = stepDefinitions(run);
   const segments = parseStepPath(path);
@@ -171,8 +184,7 @@ function ancestorsOf(run: StepTree, path: string): Ancestor[] {
     )).join('.');
     const step = definitionOf(instance);
     if (!step) continue;
-    const state = run.steps.find((item) => item.id === instance);
-    ancestors.push({ instance, step, pass: state?.pass ?? 1 });
+    ancestors.push({ instance, step, pass: instanceOf(run, instance)?.pass ?? 1 });
   }
   return ancestors;
 }
@@ -461,7 +473,7 @@ export function planWorkspace(
     if (!handback && !modes.includes('continue')) {
       return { mode, defer: { reason: `step "${state.id}" reads workspace ${branch}, which needs continue`, needs: 'continue' } };
     }
-    const base = run.base ?? request.base;
+    const base = trialBase(definition) ?? run.base ?? request.base;
     if (!base) {
       return { mode, fail: { code: 'workspace_base', message: `step "${state.id}" needs the run's base commit` } };
     }
@@ -475,7 +487,7 @@ export function planWorkspace(
   if (!handback && !modes.includes(mode)) {
     return { mode, defer: { reason: `step "${state.id}" needs workspace ${mode}, which this driver does not provide`, needs: mode } };
   }
-  const base = run.base ?? request.base;
+  const base = trialBase(definition) ?? run.base ?? request.base;
   if (!base) {
     return { mode, fail: { code: 'workspace_base', message: `step "${state.id}" needs the run's base commit` } };
   }
@@ -503,6 +515,14 @@ export function planWorkspace(
       merge: (mode === 'continue' ? changes : rest).map((item) => ({ branch: item.branch, commit: item.to })),
     },
   };
+}
+
+/**
+ * A benchmark trial's base: its task's starting commit, whatever the run's base. It has no `ref`, and configCommit
+ * follows it, so the trial's agent configuration is the starting commit's.
+ */
+function trialBase(definition: WorkflowStep): { commit: string } | undefined {
+  return definition.trial && { commit: definition.trial.startingCommit };
 }
 
 /** Whether the steps inside `step` run in a copy it opens rather than in the one around it. */

@@ -24,6 +24,8 @@ import { findRunConfig } from './workflow/run-location.js';
 import { resolveRunMode } from './launch-context.js';
 import { memberTools } from './tool-launch/call.js';
 import { agentEvidence, isAttemptRunner, nestedCall, nestedStart, nestedWorkflowError, type Nested } from './workflow/attempt-marker.js';
+import { startBenchmark, tryBenchmarkTask } from './workflow/benchmark/start.js';
+import { headCommit } from './workflow/worktree.js';
 import type { WorkflowEnvelope, WorkflowFailure } from './workflow/types.js';
 
 /** Prints `envelope` with each of `secrets` masked, and sets the exit code from the envelope as the operation returned it. */
@@ -248,6 +250,7 @@ const NonSkillRunOptionsSchema = z.object({
 /** `judge` is false with `--no-judge`. */
 export async function workflowStart(name: string, options: {
   driver?: string; tools?: string; inputs?: string; autoApprove?: boolean; describe?: boolean; parallel?: string; confirmed?: boolean; hitl?: string; judge?: boolean;
+  benchmark?: boolean; memberAliases?: boolean; sandbox?: boolean; try?: string;
 }): Promise<void> {
   if (refusedNested(await nestedStart(process.env, process.cwd()), options.driver === 'skill')) return;
   if (options.driver === 'skill') {
@@ -259,6 +262,10 @@ export async function workflowStart(name: string, options: {
   const nonSkill = NonSkillRunOptionsSchema.safeParse(options);
   if (!nonSkill.success) {
     refuseOptions(nonSkill.error);
+    return;
+  }
+  if (options.try !== undefined) {
+    writeEnvelope(await tryTask(name, options.try, options), collectEnvSecrets());
     return;
   }
   const loaded = await readyStartConfig(name);
@@ -281,6 +288,14 @@ export async function workflowStart(name: string, options: {
     writeEnvelope({ error: unsupportedDriver(options.driver) }, secrets);
     return;
   }
+  if (options.benchmark && (options.inputs !== undefined || options.tools !== undefined)) {
+    writeEnvelope({ error: { code: 'invalid_arguments', message: 'A benchmark run takes no --inputs or --tools, since its suite sets its tasks and its arms\' tools. Start it again without them.' } }, secrets);
+    return;
+  }
+  if (options.memberAliases && !options.benchmark) {
+    writeEnvelope({ error: { code: 'invalid_arguments', message: '--member-aliases resolves the models of a benchmark\'s arms. Start a benchmark with --benchmark, or start the workflow without --member-aliases.' } }, secrets);
+    return;
+  }
   const tools = parseTools(options.tools);
   if (typeof tools === 'string') {
     writeEnvelope({ error: { code: 'invalid_tools', message: tools } }, secrets);
@@ -293,7 +308,10 @@ export async function workflowStart(name: string, options: {
   }
   const { inputs } = read;
   const caller = invokeCaller(options.confirmed);
-  const started = await inProcessClient({ config, env }).start(name, { inputs, checkout: process.cwd(), caller });
+  const base = options.benchmark ? await headCommit(process.cwd()) : undefined;
+  const started = options.benchmark
+    ? await startBenchmark(config, name, { secrets, checkout: process.cwd(), memberAliases: options.memberAliases === true, ...(base ? { base } : {}) })
+    : await inProcessClient({ config, env }).start(name, { inputs, checkout: process.cwd(), caller });
   if ('error' in started || options.driver !== 'local') {
     writeEnvelope(started, secrets);
     return;
@@ -303,8 +321,27 @@ export async function workflowStart(name: string, options: {
     writeEnvelope({ error: { code: 'run_unreadable', message: 'The new run id was missing' } }, secrets);
     return;
   }
-  log.info(`Run ${runId} started. If it stops before it ends, continue it with: teamai workflow resume ${runId}`);
-  await writeDriven(config, await runLocalDriver(config, runId, process.cwd(), { tools, toolPaths: teamConfig.toolPaths, autoApprove: options.autoApprove }), secrets);
+  log.info(`Run ${runId} started. If it stops before it ends, continue it with: teamai workflow resume ${runId}${options.sandbox ? ' --sandbox' : ''}`);
+  await writeDriven(config, await runLocalDriver(config, runId, process.cwd(), { tools, toolPaths: teamConfig.toolPaths, autoApprove: options.autoApprove, sandbox: options.sandbox }), secrets);
+}
+
+/** `workflow start --benchmark --try`: no config, so it runs on a CI runner that never ran teamai init. */
+async function tryTask(name: string, file: string, options: { driver?: string; tools?: string; inputs?: string; autoApprove?: boolean; benchmark?: boolean; memberAliases?: boolean; sandbox?: boolean }): Promise<WorkflowEnvelope> {
+  const refused = (message: string): WorkflowEnvelope => ({ error: { code: 'invalid_arguments', message } });
+  if (!options.benchmark) return refused('--try tries a benchmark task. Start it again with --benchmark.');
+  if (options.driver !== undefined && options.driver !== 'local') return { error: { code: 'unsupported_driver', message: `Driver "${options.driver}" is not available. Use --driver local.` } };
+  if (options.inputs !== undefined || options.tools !== undefined || options.memberAliases || options.autoApprove) {
+    return refused('--try runs one task\'s check, with no arms, inputs or approvals. Start it again with only --benchmark, --try, --sandbox and --driver local.');
+  }
+  if (!options.sandbox) return refused('--try runs the task\'s setup and check, which run only on a sandbox. Run it in CI or a container, and declare it with --sandbox.');
+  return tryBenchmarkTask(name, file, { checkout: process.cwd(), signal: interruptSignal(), progress: (line) => log.info(line) });
+}
+
+/** Aborts on the first SIGINT or SIGTERM, so `next --prepare` stops the setup or check it runs. A second one ends the process. */
+function interruptSignal(): AbortSignal {
+  const controller = new AbortController();
+  for (const name of ['SIGINT', 'SIGTERM'] as const) process.once(name, () => controller.abort(name));
+  return controller.signal;
 }
 
 /** Refuses `--driver <kind>` on `command`, which takes only `--driver skill`, naming the kind given. */
@@ -402,7 +439,7 @@ export async function workflowNext(runId: string, options: {
       return;
     }
   }
-  writeEnvelope(await inProcessClient({ config, env }).next(runId, payload.value, prepare ? { prepare } : undefined), secrets);
+  writeEnvelope(await inProcessClient({ config, env }).next(runId, payload.value, prepare ? { prepare, signal: interruptSignal() } : undefined), secrets);
 }
 
 export async function workflowReport(runId: string, options: { json?: string; driver?: string; attempt?: string; modelUnavailable?: boolean }): Promise<void> {
@@ -526,7 +563,7 @@ export async function workflowPublish(runId: string, options: { sessions?: boole
 }
 
 type ResumeOptions = {
-  driver?: string; tools?: string; autoApprove?: boolean; claim?: boolean; confirmed?: boolean; parallel?: string; hitl?: string; judge?: boolean; next?: boolean;
+  driver?: string; tools?: string; autoApprove?: boolean; claim?: boolean; confirmed?: boolean; parallel?: string; hitl?: string; judge?: boolean; next?: boolean; sandbox?: boolean;
 };
 
 /**
@@ -590,7 +627,7 @@ export async function workflowResume(runId: string | undefined, options: ResumeO
     const lease = stored.steps.find((step) => step.status === 'leased' && step.lease.driver.kind === 'local' && step.lease.driver.machine === local.machine);
     const cwd = lease?.status === 'leased' ? lease.lease.driver.workspace
       : stored.driver?.kind === 'local' && stored.driver.machine === local.machine ? stored.driver.workspace : process.cwd();
-    return drive(cwd, { tools, toolPaths: loaded.teamConfig.toolPaths, autoApprove: options.autoApprove });
+    return drive(cwd, { tools, toolPaths: loaded.teamConfig.toolPaths, autoApprove: options.autoApprove, sandbox: options.sandbox });
   }), secrets);
 }
 
@@ -676,7 +713,7 @@ async function takeNext(loaded: Ready, taker: Taker, options: ResumeOptions): Pr
   for (const run of candidates) {
     const taken = taker.driver === 'skill'
       ? await skillAnswer({ kind: 'resume', run: run.run, options: { ...withoutDriver(options), next: true } })
-      : { envelope: await driveOffered(loaded, run, { tools: taker.tools, autoApprove: options.autoApprove }), secrets };
+      : { envelope: await driveOffered(loaded, run, { tools: taker.tools, autoApprove: options.autoApprove, sandbox: options.sandbox }), secrets };
     if ('error' in taken.envelope && taken.envelope.error.code === 'state_moved') {
       moved += 1;
       continue;
@@ -698,12 +735,12 @@ function withoutDriver(options: ResumeOptions): Omit<ResumeOptions, 'driver' | '
 }
 
 /** Claims offered run `run` under this machine's driver lock, as `resume <run>` does, and drives it with the local driver. */
-async function driveOffered({ config, teamConfig }: Ready, run: PublishedRun, options: { tools: Record<string, string>; autoApprove?: boolean }): Promise<WorkflowEnvelope> {
+async function driveOffered({ config, teamConfig }: Ready, run: PublishedRun, options: { tools: Record<string, string>; autoApprove?: boolean; sandbox?: boolean }): Promise<WorkflowEnvelope> {
   return withDriverLock(config, run.run, async (drive) => {
     const claimed = await claimOffered(config, run.run, { checkout: process.cwd() });
     if (!claimed.ok) return { error: claimed.error };
     saidClaimed(run);
-    return drive(process.cwd(), { tools: options.tools, toolPaths: teamConfig.toolPaths, autoApprove: options.autoApprove });
+    return drive(process.cwd(), { tools: options.tools, toolPaths: teamConfig.toolPaths, autoApprove: options.autoApprove, sandbox: options.sandbox });
   });
 }
 

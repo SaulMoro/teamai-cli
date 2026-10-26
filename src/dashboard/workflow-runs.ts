@@ -16,10 +16,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { RunOriginSchema, type RunOrigin } from '../default-workflows.js';
+import { readRecordedAgent } from '../agent-observation.js';
 import { getReportsDir, usesBranchWorktree, type LocalConfig } from '../types.js';
 import { knownSecrets, resolveWorkflowEnv } from '../env-resolution.js';
 import { LabelStore, type PassScore } from '../scorers/label-store.js';
 import { WorkOutcomeSchema, type WorkOutcome } from '../outcomes.js';
+import { BenchmarkRecordSchema } from '../workflow/benchmark/result.js';
+import { benchmarkCells, benchmarkTable, type BenchmarkCells } from '../workflow/benchmark/table.js';
 import { locateStep } from '../workflow/engine.js';
 import { buildEndRecord, RECORDS_DIR, runRecordStates, type RecordState, type WorkflowRunRecord } from '../workflow/records.js';
 import { callerProvenance, respondProvenance, respondToHitl } from '../workflow/run-controls.js';
@@ -37,9 +40,9 @@ const RUN_LIMIT = 50;
  * `prs` is the delivered pull request list #1090 adds to the end record.
  */
 type ReadRecord = Pick<WorkflowRunRecord,
-  'run' | 'workflow' | 'sourceHash' | 'teamRevision' | 'origin' | 'driver' | 'status' | 'end' | 'startedAt' | 'endedAt' | 'durationMs' | 'stepCounts' | 'username'>
+  'run' | 'workflow' | 'sourceHash' | 'teamRevision' | 'origin' | 'driver' | 'status' | 'end' | 'startedAt' | 'endedAt' | 'durationMs' | 'stepCounts' | 'username' | 'benchmark'>
   & { steps?: StepEntry[]; prs?: unknown[] };
-type StepEntry = Pick<NonNullable<WorkflowRunRecord['steps']>[number], 'step' | 'pass' | 'outcome' | 'tokens'>
+type StepEntry = Pick<NonNullable<WorkflowRunRecord['steps']>[number], 'step' | 'pass' | 'outcome' | 'tokens' | 'agent'>
   & { answer?: { choice: string; channel: string }; outcomes?: unknown[] };
 
 const TokensSchema: z.ZodType<TokenUsage> = z.object({ input: z.number().optional(), output: z.number().optional(), cachedInput: z.number().optional() });
@@ -72,10 +75,13 @@ const RecordSchema: z.ZodType<ReadRecord, z.ZodTypeDef, unknown> = z.object({
     pass: z.number(),
     outcome: z.enum(['success', 'failed', 'timeout', 'cancelled']).optional(),
     tokens: TokensSchema.optional(),
+    agent: z.unknown().transform(readRecordedAgent),
     answer: z.object({ choice: z.string(), channel: z.string() }).optional(),
     outcomes: z.array(z.unknown()).optional().catch(undefined),
   })).optional(),
   prs: z.array(z.unknown()).optional().catch(undefined),
+  /** A block this version cannot read leaves the run listed, without its tables. */
+  benchmark: BenchmarkRecordSchema.optional().catch(undefined),
 });
 
 /** One run as a row of the page. */
@@ -133,7 +139,8 @@ interface StepRow {
 /** What judging a run cost, kept apart from the run's own tokens: every attempt on this machine, or the published labels. */
 type ScoringTotal = Awaited<ReturnType<typeof LabelStore.scoringTotal>>;
 
-export type RunDetail = { run: LocalRunRow | ReportedRunRow; steps: StepRow[]; scoring: ScoringTotal };
+/** `benchmark` holds an ended benchmark run's tables, as the CLI prints them. */
+export type RunDetail = { run: LocalRunRow | ReportedRunRow; steps: StepRow[]; scoring: ScoringTotal; benchmark?: BenchmarkCells };
 
 /** A run handed over on teamai-reports: offered while `offer` is set, else held by its owner, who claimed it or resumed it. `isMine`: this install owns it. */
 export type HandoffRow = PublishedRun & { isMine: boolean };
@@ -260,9 +267,15 @@ export async function listHandoffs(config: LocalConfig): Promise<HandoffRow[]> {
   return runs.map((run) => ({ ...run, isMine: run.owner.id === self.id }));
 }
 
+/** A record holds `benchmark` only once its run has ended. */
+function benchmarkOf(record: ReadRecord): Pick<RunDetail, 'benchmark'> {
+  return record.benchmark ? { benchmark: benchmarkCells(benchmarkTable({ steps: record.steps, benchmark: record.benchmark })) } : {};
+}
+
 function localDetail(run: RunState, row: LocalRunRow, scores: ReadonlyMap<string, PassScore[]> | undefined, scoring: ScoringTotal): RunDetail {
   const live = new Map(run.steps.map((state) => [`${state.id}#${state.pass ?? 1}`, state]));
-  const steps = (localRecord(run).steps ?? []).map((entry) => {
+  const record = localRecord(run);
+  const steps = (record.steps ?? []).map((entry) => {
     const state = live.get(`${entry.step}#${entry.pass}`);
     const hitl = state?.status === 'waiting' ? locateStep(run, state.id)?.step.hitl : undefined;
     const gate = hitl ? { kind: hitl.kind, options: hitl.options, required: hitl.required } : undefined;
@@ -270,7 +283,7 @@ function localDetail(run: RunState, row: LocalRunRow, scores: ReadonlyMap<string
     const answer = entry.answer ?? state?.answer;
     return stepRow({ ...entry, ...(answer ? { answer } : {}) }, state?.status ?? (entry.outcome ? STATUS_OF_OUTCOME[entry.outcome] : 'skipped'), scores, gate);
   });
-  return { run: row, steps, scoring };
+  return { run: row, steps, scoring, ...benchmarkOf(record) };
 }
 
 /** One run with a row per pass of each step, or undefined when the source holds no such run. */
@@ -302,6 +315,7 @@ export async function workflowRunDetail(config: LocalConfig, source: 'local' | '
     run: reportedRow(record),
     steps: (record.steps ?? []).map((entry) => stepRow(entry, entry.outcome ? STATUS_OF_OUTCOME[entry.outcome] : 'skipped', passes)),
     scoring,
+    ...benchmarkOf(record),
   };
 }
 

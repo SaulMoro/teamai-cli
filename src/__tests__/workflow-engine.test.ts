@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import type { LocalConfig } from '../types.js';
 import * as update from '../update.js';
 import { acquireLock, releaseLock } from '../update.js';
@@ -129,6 +130,29 @@ describe('workflow engine', () => {
       driver: driverA,
       tokens: { input: Number.NaN },
     })).toBe('tokens.input must be a finite number');
+  });
+
+  it('keeps the duration a driver measured and the cost its tool stated on the settled step', async () => {
+    const { config, runId } = await startBuild(TWO_STEPS);
+    const lease = z.object({ data: z.object({ lease: z.object({ attempt: z.string(), revision: z.number() }) }) })
+      .parse(await leaseNext(config, runId, driverA)).data.lease;
+
+    const parsed = parseReport({ attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: driverA, durationMs: 42000, cost: { amount: 0.12, unit: 'USD' } });
+    if (typeof parsed === 'string') throw new Error(parsed);
+    await reportAttempt(config, runId, parsed.report);
+
+    const run = await readRun(config, runId);
+    expect(parsed.ignored).toEqual([]);
+    expect(typeof run === 'object' && run.steps.find((step) => step.id === 'one')).toMatchObject({ durationMs: 42000, cost: { amount: 0.12, unit: 'USD' } });
+  });
+
+  it.each([
+    [{ durationMs: -1 }, 'durationMs must be a non-negative integer of milliseconds'],
+    [{ durationMs: 1.5 }, 'durationMs must be a non-negative integer of milliseconds'],
+    [{ cost: { amount: 1 } }, 'cost must be an amount and a unit, as the tool stated it'],
+    [{ cost: { amount: -1, unit: 'USD' } }, 'cost must be an amount and a unit, as the tool stated it'],
+  ])('refuses a report with %j', (fields, message) => {
+    expect(parseReport({ attempt: 'a00000000', revision: 1, outcome: 'success', driver: driverA, ...fields })).toBe(message);
   });
 
   it('reports the payload fields a driver sent that the CLI does not read', () => {

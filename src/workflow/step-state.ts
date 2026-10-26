@@ -3,6 +3,8 @@ import { AgentObservationSchema, UsedSchema } from '../agent-observation.js';
 import { DriverSchema } from '../driver-identity.js';
 import { RunModeSchema } from '../launch-context.js';
 import { WorkOutcomeSchema } from '../outcomes.js';
+import { JudgeUsageSchema } from '../scorers/label.js';
+import { CheckVerdictSchema } from './benchmark/check.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 import { PrUrlSchema } from './pr-url.js';
 import { UnenforcedSchema } from './requirements.js';
@@ -72,6 +74,10 @@ const report = {
   model: z.string().optional(),
   session: z.string().optional(),
   tokens: TokenUsageSchema.optional(),
+  /** Milliseconds around the tool launch only, as the driver measured it. */
+  durationMs: z.number().int().nonnegative().optional(),
+  /** What the tool stated the attempt cost, in its own unit. */
+  cost: JudgeUsageSchema.shape.cost,
   changes: ChangesSchema.optional(),
   read: ReadSchema.optional(),
   /**
@@ -89,6 +95,8 @@ const report = {
   runMode: RunModeSchema.optional(),
   /** What the attempt's own commands appended to its outcome file, such as a learning `contribute` recorded (#1387). */
   outcomes: z.array(WorkOutcomeSchema).optional().catch(undefined),
+  /** A benchmark check's verdict, classified once when teamai ran it (benchmark/check.ts). */
+  verdict: CheckVerdictSchema.optional(),
 };
 
 export const OutcomeSchema = z.enum(['success', 'failed', 'timeout', 'skipped', 'cancelled']);

@@ -629,7 +629,7 @@ workflows:
 ```
 
 - `allow.network: false` 会暂缓每个要求 `network: true` 的步骤。`allow.env` 会暂缓 `requires.env`（或其 setup 的 `requires.env`）中含有未列出键的步骤。`wait.held[].missing` 指出 `policy.network` 或 `policy.env`。`~/.teamai/config.yaml` 中错误的 `allow` 会让工作流命令停止运行，直到修正为止，因此拼写错误不会解除限制。
-- `sandbox: true` 表示本机会隔离它运行的内容，例如 CI 虚拟机或容器，因此本地驱动声明 `sandbox` 隔离。
+- `sandbox: true` 表示本机会隔离它运行的内容，例如 CI 虚拟机或容器，因此本地驱动声明 `sandbox` 隔离。`teamai workflow start` 和 `resume` 接受 `--sandbox`，只为当前进程声明。
 - `max_parallel` 还限制本机上所有驱动同时持有同一运行的租约数。
 
 `allow.network` 筛选步骤显式声明的网络请求。v1 的 setup 仅声明环境变量键，不会从该设置继承网络限制。如需保证 setup 和步骤都无法联网，请使用能约束每个进程的驱动和运行环境。
@@ -648,8 +648,9 @@ workflows:
 | `max_turns` | 把 `lease.maxTurns` 传给它能限制的工具，对其他工具报告 `"unenforced":["max_turns"]`。 |
 | `network` | 能禁止步骤访问网络。 |
 | `isolation` | 以此级别运行每个步骤：`none`、`worktree` 或 `sandbox`。 |
+| `trials` | 运行这些工具的 benchmark trial，例如 `["claude"]`。 |
 
-省略的键表示驱动做不到。`next` 会在 `ignored` 中列出其他键。[编程会话](workflow.md#在编程会话中运行)的 skill 驱动声明 `hitl`、所有 `workspace` 模式、`env: "commands"` 和 `setup`。它从不声明 `tokens`、`max_turns` 或 `network`，其 `isolation` 为 `none`。
+省略的键表示驱动做不到。隔离对工作流步骤是尽力而为，对 benchmark trial 步骤则不是：驱动未在 `trials` 中列出其工具、未声明 `isolation: sandbox`，或没有用 [`next --prepare`](#在自己的驱动里运行-benchmark-trial) 请求时，trial 步骤会被暂缓，`wait.held[].missing` 列出 `trials`、`sandbox` 或 `prepare`。不发送 `trials` 的驱动永远不会拿到 trial 步骤。`next` 会在 `ignored` 中列出其他键。[编程会话](workflow.md#在编程会话中运行)的 skill 驱动声明 `hitl`、所有 `workspace` 模式、`env: "commands"` 和 `setup`。它从不声明 `tokens`、`max_turns` 或 `network`，其 `isolation` 为 `none`。
 
 ### 必需的键在本机没有值
 
@@ -928,6 +929,21 @@ teamai workflow next <run> --json '{"claim":true,"driver":{"kind":"script","mach
 要准备驱动已经领取的 attempt，运行 `next <run> --prepare --attempt <attempt>`。运行不再把该 attempt 租给这个驱动时，返回 `wrong_attempt`。加上 `--adopt <dir>` 时，attempt 改在宿主创建的位置运行：该仓库的一个干净 worktree，位于租约的工作区分支上，或分离在其起点，就像 `git worktree add` 创建的那样。不符合的位置返回 `adopt_mismatch`，attempt 仍保持租约。TeamAI 在那里像在自己的 worktree 中一样 commit 和 push，但从不删除该位置。
 
 TeamAI 为准备 attempt 记录的内容只保存在本机：路径和文件指纹，不含提示词、env 值或图。
+
+## 在自己的驱动里运行 benchmark trial
+
+```text
+teamai workflow next <run> --prepare --json '{"driver":{"kind":"script","machine":"runner","workspace":"/work","can":{"workspace":["read-only","new","continue"],"isolation":"sandbox","trials":["claude"]}},"running":[]}'
+```
+
+带上 `--prepare` 时，teamai 在本机为每个 trial 创建克隆，并自己运行 setup 和任务的 check。在某个任务的任何 trial 之前，它先在起始提交的全新克隆上运行一次该任务的 check，即步骤 `baselines.<task>`：check 在那里通过或无法运行的任务不会运行 trial。这一步像 trial 步骤一样会被暂缓，但从不交给驱动。运行 trial 的 check 之前，teamai 把任务的 `check.protect` 路径恢复成起始提交中的样子。trial 以 `{"data":{"lease":{...}}}` 返回：租约不含 `workspace` 和 `setup`，带有 `cwd`，即准备好的克隆。一次调用可能要等 setup 和 check 运行完。对 benchmark 运行使用 `--attempt` 和 `--adopt` 会返回 `invalid_arguments`。在 `teamai pull --team-ref` 无法固定团队的机器上（例如团队还通过 user scope 覆盖该检出目录），它返回 `team_ref_blocked` 并说明原因，不准备任何 trial。
+
+对每个 trial 租约，驱动：
+
+1. 在 `cwd` 中以 `lease.prompt` 启动 `lease.trial.tool`，按原样使用 `lease.trial.model` 和 `lease.trial.effort`，从工具的环境中去掉 `lease.envScope.withhold` 里的名字，并加上 `lease.env`，即 attempt 标记，这样工具发出的 `teamai` 调用不会改变任何运行。它不在 `cwd` 中运行其他任何东西，所有 `teamai` 命令都在运行的检出目录中执行。
+2. 报告时带上 `tool`、工具报告的 `model`、`session` 和 `tokens`、只围绕工具启动测得的 `durationMs`，以及仅在工具给出时才带的 `cost`（`{"amount":0.12,"unit":"USD"}`）。缺少 `tool` 的报告、带有 `changes`、`read` 或 `exitCode`（由 teamai 从克隆中填写）的报告，或对 check 步骤的报告，都会返回 `invalid_report`。
+
+没有驱动领取的 trial 会一直等待，直到套件的 `timeout` 把它结算为 `not_run`。运行结束后，`done.benchmark` 带有结果 `table` 及其 `text`。`src/__tests__/e2e/benchmark-driver-contract.test.ts` 用这份约定检查驱动：把你的驱动加入它的 `DRIVERS`。
 
 ## 在自己的驱动里评审
 

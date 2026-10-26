@@ -62,6 +62,7 @@ function prepareArgs(prepare: NextPrepare | undefined): string[] {
 export function cliConformanceClient(call: (args: string[], extra?: Record<string, string>) => Promise<WorkflowEnvelope>): ConformanceClient {
   return {
     start: (name, options = {}) => call(['start', name, ...(options.driver !== undefined ? ['--driver', options.driver] : []), ...(options.confirmed ? ['--confirmed'] : [])], options.env),
+    startBenchmark: (name) => call(['start', name, '--benchmark']),
     next: (run, body, options) => call(['next', run, ...prepareArgs(options?.prepare), '--json', JSON.stringify(body)]),
     report: (run, body) => call(['report', run, '--json', JSON.stringify(body)]),
     respond: (run, step, choice, options) => call(['respond', run, step, choice, ...(options.note !== undefined ? ['--note', options.note] : []), ...(options.pass !== undefined ? ['--pass', String(options.pass)] : []), ...(options.json !== undefined ? ['--json', JSON.stringify(options.json)] : [])], options.env),

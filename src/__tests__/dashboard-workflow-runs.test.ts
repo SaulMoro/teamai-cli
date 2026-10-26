@@ -8,9 +8,12 @@ import { HttpError } from '../dashboard/http.js';
 import { getReportsDir, type LocalConfig } from '../types.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
 import { leaseNext, startRun } from '../workflow/engine.js';
+import { buildEndRecord } from '../workflow/records.js';
+import { cancelRun } from '../workflow/run-controls.js';
 import { readRun } from '../workflow/store.js';
 import type { RunState } from '../workflow/types.js';
 import { knownSecrets } from '../env-resolution.js';
+import { benchmarkRunConfig, FIX_SUITE, fixTask, startBenchmarkRun } from './helpers/benchmark-fixture.js';
 
 const roots: string[] = [];
 const driver = { kind: 'ide', machine: 'host-7f3a', workspace: '/private/work/checkout' };
@@ -46,6 +49,27 @@ async function waitingRun(hitl = 'approve: { message: "Ship {{ inputs.ticket }}?
   expect(asked).toMatchObject({ data: { hitl: { step: 'ship', pass: 1 } } });
   return { config, id, state: async () => await readRun(config, id) as RunState };
 }
+
+/** A one-task, one-arm benchmark run that no driver has taken, cancelled first when `ended`. */
+async function benchmarkRun({ ended }: { ended: boolean }) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-dashboard-benchmark-'));
+  roots.push(root);
+  const config = benchmarkRunConfig(root);
+  const started = await startBenchmarkRun(config, { name: 'fix', suite: FIX_SUITE, tasks: { fix: fixTask('{{startingCommit}}') } });
+  if ('error' in started) throw new Error(started.error.message);
+  const id = String(started.data.run);
+  if (ended) await cancelRun(config, id, {});
+  const state = async (): Promise<RunState> => {
+    const run = await readRun(config, id);
+    if (typeof run !== 'object') throw new Error(`run ${id} is ${run}`);
+    return run;
+  };
+  return { config, id, state };
+}
+
+const RESULTS_HEADER = ['Arm', 'Tool', 'Model (source)', 'Planned', 'Passed', 'Failed', 'Error', 'Unscored', 'Not run', 'Deviations', 'Not verified', 'Pass rate'];
+const USAGE_HEADER = ['Arm', 'Median tokens (input + output)', 'Median duration', 'Cost'];
+const CAPTION = 'These results hold for these tasks, this run and this machine.';
 
 async function refusal(promise: Promise<unknown>): Promise<{ status: number; message: string }> {
   const error = await promise.then(() => null, (e: unknown) => e);
@@ -127,6 +151,19 @@ describe('dashboard workflow runs', () => {
       .toEqual({ status: 400, message: expect.stringContaining('yes, no') });
   });
 
+  it("shows an ended benchmark run's results, usage and task by arm matrix, and no table while it runs", async () => {
+    const running = await benchmarkRun({ ended: false });
+    const ended = await benchmarkRun({ ended: true });
+
+    expect(await workflowRunDetail(running.config, 'local', running.id)).not.toHaveProperty('benchmark');
+    expect((await workflowRunDetail(ended.config, 'local', ended.id))?.benchmark).toEqual({
+      results: { header: RESULTS_HEADER, rows: [['claude', 'claude', 'tool default (team)', '1', '0', '0', '0', '0', '1', '0', '0', '0% (0/1)']] },
+      usage: { header: USAGE_HEADER, rows: [['claude', 'unknown (0)', 'unknown (0)', 'unknown (0)']] },
+      matrix: { header: ['Task', 'claude'], rows: [['fix', '0% (0/1)']] },
+      caption: CAPTION,
+    });
+  });
+
   describe('team-reported history', () => {
     function publish(config: LocalConfig, record: Record<string, unknown>): void {
       const dir = path.join(getReportsDir(config), 'workflows/runs');
@@ -192,6 +229,33 @@ describe('dashboard workflow runs', () => {
       const rows = await listReportedRuns(config);
       expect(rows.map((row) => row.run)).toEqual(['r0000000000000001']);
       expect(JSON.stringify(rows)).not.toMatch(/TICKET-SECRET-42|private\/work|publishedAt/);
+    });
+
+    it("shows a published benchmark record's tables as its step entries show its trials ran, and lists one whose benchmark block it cannot read without them", async () => {
+      const config = scope('http');
+      const run = await (await benchmarkRun({ ended: true })).state();
+      const ended = buildEndRecord(run, run.driver, 'alice');
+      const benchmark = ended.benchmark;
+      if (!benchmark) throw new Error('the end record has no benchmark');
+      const [trial] = benchmark.trials;
+      if (!trial) throw new Error('the plan has no trial');
+      publish(config, {
+        ...ended,
+        steps: [...(ended.steps ?? []), { step: trial.step, pass: 1, outcome: 'success', agent: { v: 1, tool: { name: 'codex' }, teamai: '0.0.0', driver: 'local' } }],
+        benchmark: { ...benchmark, trials: [{ ...trial, result: 'passed' }] },
+      });
+      publish(config, record('r0000000000000004', { benchmark: { arms: 'broken' } }));
+
+      const rows = await listReportedRuns(config);
+
+      expect(rows.map((row) => row.run).sort()).toEqual([run.id, 'r0000000000000004'].sort());
+      expect((await workflowRunDetail(config, 'reported', run.id))?.benchmark).toEqual({
+        results: { header: RESULTS_HEADER, rows: [['claude', 'claude', 'tool default (team)', '1', '1', '0', '0', '0', '0', '1', '0', '100% (1/1)']] },
+        usage: { header: USAGE_HEADER, rows: [['claude', 'unknown (0)', 'unknown (0)', 'unknown (0)']] },
+        matrix: { header: ['Task', 'claude'], rows: [['fix', '100% (1/1)']] },
+        caption: CAPTION,
+      });
+      expect(await workflowRunDetail(config, 'reported', 'r0000000000000004')).not.toHaveProperty('benchmark');
     });
 
     it('reads no run from another repository\'s reports checkout left at this scope\'s path', async () => {

@@ -48,6 +48,7 @@ describe('a protocol scenario that does not speak as the driver under test', () 
       const { client } = runner;
       const sending: ConformanceClient = {
         start: (...args) => { sent.push(['start', args]); return client.start(...args); },
+        startBenchmark: (...args) => { sent.push(['startBenchmark', args]); return client.startBenchmark(...args); },
         next: (...args) => { sent.push(['next', args]); return client.next(...args); },
         report: (...args) => { sent.push(['report', args]); return client.report(...args); },
         respond: (...args) => { sent.push(['respond', args]); return client.respond(...args); },

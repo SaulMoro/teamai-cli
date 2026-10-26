@@ -6,7 +6,9 @@ import { DriverSchema } from '../driver-identity.js';
 import { readFileSafe, writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
 import { redactJson } from '../utils/redact.js';
 import { getDataHome, type LocalConfig } from '../types.js';
+import { EntryVerdictSchema } from '../scorers/entry.js';
 import { PinnedScorerSchema } from '../scorers/pin.js';
+import { BenchmarkPlanSchema } from './benchmark/plan.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { ArchivedPassSchema, ReleasedTokensSchema, SessionContinuationSchema, StepStateSchema, StoppedAttemptSchema } from './step-state.js';
 import type { HandoffOwner } from './snapshot.js';
@@ -228,6 +230,8 @@ const RunProgressSchema = z.object({
   releasedTokens: z.array(ReleasedTokensSchema).optional(),
   stoppedAttempts: z.array(StoppedAttemptSchema).optional(),
   scorers: z.record(PinnedScorerSchema).optional(),
+  benchmark: BenchmarkPlanSchema.optional(),
+  verdicts: z.array(EntryVerdictSchema).optional(),
 });
 
 export async function readRun(config: LocalConfig, runId: string): Promise<RunState | 'missing' | 'corrupt'> {
@@ -261,8 +265,11 @@ function delay(ms: number): Promise<void> {
 /** What a locked run update found: the value its change returned, or why the change did not run. */
 export type RunUpdate<T> = { status: 'done'; value: T } | { status: 'busy' } | { status: 'corrupt' };
 
-/** The definitions a run pins as they were pulled, which the run file keeps byte for byte. */
-const PINNED: ReadonlySet<string> = new Set(['definition', 'workflows', 'scorers'] satisfies Array<keyof RunState>);
+/**
+ * The definitions a run pins as they were pulled, which the run file keeps byte for byte. A benchmark plan is the frozen
+ * measurement, so masking never rewrites it either; createRun refuses a run whose pinned values hold a secret.
+ */
+const PINNED: ReadonlySet<string> = new Set(['definition', 'workflows', 'scorers', 'benchmark'] satisfies Array<keyof RunState>);
 
 /** `run` as its file holds it: each of `secrets` masked in every field but the pinned definitions. */
 function maskedRun(run: RunState, secrets: Record<string, string>): unknown {

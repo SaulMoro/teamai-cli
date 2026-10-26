@@ -980,11 +980,17 @@ function parseSetup(node: Node | null | undefined, ctx: ParseContext): Setup | u
   return parsed.success && diagnostics.length === before ? parsed.data : undefined;
 }
 
-/** A `timeout`: a whole number of `ms`, `s`, `m`, or `h`, such as `30s` or `2h`, read as milliseconds. */
-function parseTimeout(node: Node | null | undefined, field: string, ctx: ParseContext): number | undefined {
-  const [, amount = '', unit = ''] = DURATION.exec(scalarString(node)?.trim() ?? '') ?? [];
+/** A positive whole number of `ms`, `s`, `m`, or `h`, such as `30s` or `2h`, read as milliseconds; undefined otherwise. */
+export function durationMs(text: string): number | undefined {
+  const [, amount = '', unit = ''] = DURATION.exec(text.trim()) ?? [];
   const ms = Number(amount) * (DURATION_UNITS.get(unit) ?? 0);
-  if (ms > 0 && Number.isSafeInteger(ms)) return ms;
+  return ms > 0 && Number.isSafeInteger(ms) ? ms : undefined;
+}
+
+/** A `timeout`, read with durationMs. */
+function parseTimeout(node: Node | null | undefined, field: string, ctx: ParseContext): number | undefined {
+  const ms = durationMs(scalarString(node) ?? '');
+  if (ms !== undefined) return ms;
   ctx.diagnostics.push(locate(ctx.file, ctx.lineCounter, node, field, `${field} must be a positive duration, such as 500ms, 30s, 10m, or 2h`));
   return undefined;
 }

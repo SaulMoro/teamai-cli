@@ -629,7 +629,7 @@ workflows:
 ```
 
 - `allow.network: false` holds each step that requires `network: true`. `allow.env` holds each step whose `requires.env`, or whose setup's, names a key it does not list. `wait.held[].missing` names `policy.network` or `policy.env`. A bad `allow` in `~/.teamai/config.yaml` stops workflow commands until it is fixed, so a typo never lifts a restriction.
-- `sandbox: true` says this host contains what it runs, such as a CI VM or a container, so the local driver declares `sandbox` isolation.
+- `sandbox: true` says this host contains what it runs, such as a CI VM or a container, so the local driver declares `sandbox` isolation. `teamai workflow start` and `resume` take `--sandbox` to declare it for one process.
 - `max_parallel` also caps how many leases of one run every driver on this machine holds at once.
 
 `allow.network` filters declared step requests. Setup declares only environment keys in v1 and receives no network restriction from that setting. To guarantee that setup and steps cannot reach the network, use a driver and host that enforce it for every process.
@@ -648,8 +648,9 @@ A driver other than `local` declares what it can do in `driver.can` on each `nex
 | `max_turns` | Passes `lease.maxTurns` to the tools it can cap, and reports `"unenforced":["max_turns"]` for the others. |
 | `network` | Can deny a step the network. |
 | `isolation` | Keeps every step at this level: `none`, `worktree`, or `sandbox`. |
+| `trials` | Launches the benchmark trials of these tools, such as `["claude"]`. |
 
-An omitted key means the driver cannot. `next` lists any other key in `ignored`. The skill driver of a [coding session](workflow.md#run-from-a-coding-session) declares `hitl`, every `workspace` mode, `env: "commands"`, and `setup`. It never declares `tokens`, `max_turns`, or `network`, and its `isolation` is `none`.
+An omitted key means the driver cannot. Isolation is best effort for workflow steps, but not for a benchmark trial step: it is held for a driver that does not list its tool in `trials`, does not declare `isolation: sandbox`, or does not ask with [`next --prepare`](#benchmark-trials-in-your-own-driver), and `wait.held[].missing` names `trials`, `sandbox` or `prepare`. A driver that sends no `trials` never gets a trial step. `next` lists any other key in `ignored`. The skill driver of a [coding session](workflow.md#run-from-a-coding-session) declares `hitl`, every `workspace` mode, `env: "commands"`, and `setup`. It never declares `tokens`, `max_turns`, or `network`, and its `isolation` is `none`.
 
 ### A required key with no value here
 
@@ -928,6 +929,21 @@ A driver can leave the workspace and its git to TeamAI. `next <run> --prepare --
 To prepare an attempt the driver already leased, run `next <run> --prepare --attempt <attempt>`. It answers `wrong_attempt` when the run no longer leases that attempt to the driver. With `--adopt <dir>`, the attempt runs in a place the host made: a clean worktree of this repository on the lease's workspace branch, or detached at its start, as `git worktree add` makes it. A place that does not fit answers `adopt_mismatch`, and the attempt stays leased. TeamAI commits and pushes there as in its own worktree, and never removes the place.
 
 What TeamAI records to prepare an attempt stays on this machine: paths and file fingerprints, with no prompt, env value, or graph.
+
+## Benchmark trials in your own driver
+
+```text
+teamai workflow next <run> --prepare --json '{"driver":{"kind":"script","machine":"runner","workspace":"/work","can":{"workspace":["read-only","new","continue"],"isolation":"sandbox","trials":["claude"]}},"running":[]}'
+```
+
+With `--prepare`, teamai makes each trial's clone on this machine and runs setup and the task's check itself. Before any trial of a task, it runs the task's check once on a fresh clone of the starting commit, as step `baselines.<task>`: a task whose check passes there, or cannot run, gets no trials. That step is held like a trial step, and never reaches the driver. Before a trial's check, teamai puts the task's `check.protect` paths back as the starting commit has them. A trial comes back as `{"data":{"lease":{...}}}`: the lease without `workspace` and `setup`, with `cwd`, the prepared clone. A call can take as long as setup and a check take. On a benchmark run, `--attempt` and `--adopt` answer `invalid_arguments`. On a machine where `teamai pull --team-ref` could not pin the team, such as one where the team also reaches the checkout through user scope, it answers `team_ref_blocked` with the reason and prepares no trial.
+
+For each trial lease the driver:
+
+1. Launches `lease.trial.tool` in `cwd` on `lease.prompt`, with `lease.trial.model` and `lease.trial.effort` as given, without the names in `lease.envScope.withhold` in the tool's environment, and with `lease.env`, the attempt marker, so a `teamai` call from the tool changes no run. It runs nothing else in `cwd`, and runs every `teamai` command from the run's checkout.
+2. Reports with `tool`, the `model`, `session` and `tokens` the tool reported, `durationMs` measured around the tool launch only, and `cost` (`{"amount":0.12,"unit":"USD"}`) only when the tool stated one. A report without `tool`, one with `changes`, `read` or `exitCode`, which teamai fills from the clone, or one of a check step answers `invalid_report`.
+
+A trial no driver takes stays pending until the suite's `timeout` settles it as `not_run`. Once the run ends, `done.benchmark` carries the results `table` and its `text`. `src/__tests__/e2e/benchmark-driver-contract.test.ts` checks this contract against a driver: add yours to its `DRIVERS`.
 
 ## Judge work in your own driver
 

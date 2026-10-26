@@ -26,6 +26,7 @@ import type { RunMode } from '../launch-context.js';
 import type { RunOrigin } from '../default-workflows.js';
 import { uniqueOutcomes, type WorkOutcome } from '../outcomes.js';
 import { stepDefinitions } from './scope.js';
+import { benchmarkRecord, type BenchmarkRecord } from './benchmark/result.js';
 import { snapshotPath } from './snapshot.js';
 import { installOwner, runLockPath } from './store.js';
 import { settled, visibleOutcome, type StepPass, type StepState, type VisibleOutcome } from './step-state.js';
@@ -44,6 +45,7 @@ const RECORDED_FAILURES = [
   'merge_conflict', 'base_config', 'push_failed', 'workspace_base', 'bad_session',
   ...LIMIT_FAILURES,
   'delivery_failed', 'protected_path',
+  'trial_prepare_failed',
 ] as const;
 type RecordedFailure = (typeof RECORDED_FAILURES)[number];
 
@@ -115,6 +117,8 @@ export type WorkflowRunRecord = {
   iterations?: number;
   /** The pull requests the run delivered, in the order they first appeared. Public on a public team repo; absent when it delivered none. */
   prs?: string[];
+  /** An ended benchmark run's plan and trial results; absent for a workflow run and while a benchmark runs. */
+  benchmark?: BenchmarkRecord;
   username: string;
   publishedAt: string;
 };
@@ -262,6 +266,7 @@ export function buildEndRecord(
     // bounded history length (their true count is unknowable now).
     iterations: run.settledCount ?? run.settledAttempts.length,
     ...(prs.length ? { prs } : {}),
+    ...(run.benchmark && run.status !== 'running' ? { benchmark: benchmarkRecord({ ...run, benchmark: run.benchmark }) } : {}),
   };
 }
 
@@ -280,6 +285,7 @@ export function mergeRecord(origin: WorkflowRunRecord | null, next: WorkflowRunR
   if (next.end === undefined) delete merged.end;
   if (next.failure === undefined) delete merged.failure;
   if (next.prs === undefined) delete merged.prs;
+  if (next.benchmark === undefined) delete merged.benchmark;
   return merged;
 }
 
@@ -586,7 +592,8 @@ export function mergeWorkflowStats(
   }
   let { runs = 0, succeeded = 0, failed = 0, totalDurationMs = 0 } = current;
   const fold = (record: WorkflowRunRecord, sign: 1 | -1): void => {
-    if (record.username !== username) return;
+    // A benchmark's trial results are measurements, not workflow outcomes, so it is in no workflow total.
+    if (record.username !== username || record.benchmark !== undefined) return;
     runs += sign;
     if (record.status === 'succeeded') succeeded += sign;
     if (record.status === 'failed') failed += sign;

@@ -50,7 +50,8 @@ export type HandoffError =
   | { code: 'sessions_not_archived'; message: string }
   | { code: 'origin_unavailable'; message: string }
   | { code: 'commit_missing'; branch: string; commit: string; message: string }
-  | { code: 'branch_diverged'; branch: string; expected: string; actual: string; message: string };
+  | { code: 'branch_diverged'; branch: string; expected: string; actual: string; message: string }
+  | { code: 'benchmark_local'; message: string };
 
 export type Result<T> = { ok: true; value: T } | { ok: false; error: HandoffError };
 
@@ -107,6 +108,15 @@ const REPORTS_BUSY: HandoffError = {
 
 function runBusy(runId: string): HandoffError {
   return { code: 'busy', message: `Run ${runId} is locked by another process; try again.` };
+}
+
+// A benchmark's trials run in clones and installs on the machine that started it, so its run never changes hands.
+function benchmarkUnpublishable(runId: string): HandoffError {
+  return { code: 'benchmark_local', message: `Run ${runId} is a benchmark run, which stays on the machine that started it, so it cannot be published. Its end record still reaches teamai-reports with usage reporting on.` };
+}
+
+function benchmarkUnclaimable(runId: string): HandoffError {
+  return { code: 'benchmark_local', message: `Run ${runId} is a benchmark run, which stays on the machine that started it, so it cannot be claimed. Continue it here with teamai workflow resume ${runId}, or start a new run on the other machine.` };
 }
 
 function runUnreadable(runId: string): HandoffError {
@@ -209,6 +219,7 @@ export async function publishRun(
   const stored = await readRun(config, runId);
   if (stored === 'missing') return refused({ code: 'run_not_found', message: `Run ${runId} was not found` });
   if (stored === 'corrupt') return refused(runUnreadable(runId));
+  if (stored.benchmark) return refused(benchmarkUnpublishable(runId));
   const secrets = await knownSecrets(config, env);
   const projected = projectRun(stored, secrets);
   if (!projected.ok) return projected;
@@ -570,6 +581,8 @@ export interface Definitions {
  * the run continues in.
  */
 export async function claimRun(config: LocalConfig, runId: string, options: { checkout: string }): Promise<Result<ClaimReceipt>> {
+  const stored = isRunId(runId) ? await readRun(config, runId) : 'missing';
+  if (typeof stored === 'object' && stored.benchmark) return refused(benchmarkUnclaimable(runId));
   return acquire(config, runId, await publishedRun(config, runId), { take: 'any', checkout: options.checkout });
 }
 
@@ -604,6 +617,7 @@ export async function claimedAway(config: LocalConfig, runId: string): Promise<H
 export async function resumeRun(config: LocalConfig, runId: string, options: { claim: boolean; checkout: string }): Promise<Result<ClaimReceipt | null>> {
   const stored = await readRun(config, runId);
   if (stored === 'corrupt') return refused(runUnreadable(runId));
+  if (options.claim && stored !== 'missing' && stored.benchmark) return refused(benchmarkUnclaimable(runId));
   if (stored === 'missing' || options.claim) return acquire(config, runId, await publishedRun(config, runId), { take: 'any', checkout: options.checkout });
   if (stored.publication === undefined) return ok(null);
   const origin = await publishedRun(config, runId);

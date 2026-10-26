@@ -236,6 +236,20 @@ describe('local tool adapter', () => {
     });
   });
 
+  it('adds up the cost OpenCode states on each finished step', async () => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-opencode-cost-${Date.now()}.json`);
+    files.push(resultPath);
+    const stdout = [
+      JSON.stringify({ type: 'step_finish', sessionID: 'ses_1', part: { type: 'step-finish', cost: 0.25, tokens: { input: 10, output: 2 } } }),
+      JSON.stringify({ type: 'step_finish', sessionID: 'ses_1', part: { type: 'step-finish', cost: 0.5, tokens: { input: 6, output: 1 } } }),
+    ].join('\n');
+    const adapter = createLocalToolAdapter(vi.fn(() => child(stdout)) as unknown as ToolSpawn, () => '/usr/bin/opencode');
+
+    const ran = await adapter.run('opencode', { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath });
+
+    expect(ran).toMatchObject({ session: 'ses_1', tokens: { input: 16, output: 3 }, cost: { amount: 0.75, unit: 'USD' } });
+  });
+
   it('reports tool_unavailable without spawning when the executable cannot be resolved', async () => {
     const spawnTool = vi.fn() as unknown as ToolSpawn;
     const adapter = createLocalToolAdapter(spawnTool, () => null);

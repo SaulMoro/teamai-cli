@@ -1,0 +1,292 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import type { AgentObservation } from '../agent-observation.js';
+import type { BenchmarkRecord, TrialResult } from '../workflow/benchmark/result.js';
+import { benchmarkTable, formatBenchmarkTable } from '../workflow/benchmark/table.js';
+import { leaseNext, reportAttempt } from '../workflow/engine.js';
+import { buildEndRecord, type WorkflowRunRecord } from '../workflow/records.js';
+import type { DriverCan } from '../workflow/requirements.js';
+import { cancelRun } from '../workflow/run-controls.js';
+import { readRun } from '../workflow/store.js';
+import type { LocalConfig } from '../types.js';
+import type { DriverIdentity } from '../workflow/types.js';
+import { benchmarkRunConfig, fixTask, PRODUCT_URL, RUN_START, RUN_TEAM, settleBaselines, startBenchmarkRun } from './helpers/benchmark-fixture.js';
+
+const driver: DriverIdentity = { kind: 'external', machine: 'ci', workspace: '/work' };
+const can: DriverCan = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', trials: ['claude'] };
+const LeaseSchema = z.object({ data: z.object({ lease: z.object({ attempt: z.string(), revision: z.number(), workspace: z.object({ branch: z.string() }) }) }) });
+const dirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+});
+
+/** A started run of ten repetitions of one check task `fix` on one arm. */
+async function startTen(defaults = '{ tool: claude }') {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-benchmark-table-'));
+  dirs.push(root);
+  const config = benchmarkRunConfig(root);
+  const suite = `schemaVersion: v1alpha1\nname: fix\nrepo: ${PRODUCT_URL}\ndefaults: ${defaults}\narms: [{ name: claude }]\nrepetitions: 10\ntimeout: 10m\n`;
+  const started = await startBenchmarkRun(config, { name: 'fix', suite, tasks: { fix: fixTask('{{startingCommit}}') } });
+  if ('error' in started) throw new Error(started.error.message);
+  return { config, runId: String(started.data.run) };
+}
+
+async function endRecord(config: LocalConfig, runId: string) {
+  const run = await readRun(config, runId);
+  if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+  const record = buildEndRecord(run, run.driver, '');
+  if (!record.benchmark) throw new Error('the end record has no benchmark');
+  return { ...record, benchmark: record.benchmark };
+}
+
+/** The end record of a run of ten repetitions whose first trial passed its check before the run was cancelled. */
+async function onePassedOfTen() {
+  const { config, runId } = await startTen();
+  await settleBaselines(config, runId, driver, can);
+  const prompt = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+  await reportAttempt(config, runId, {
+    attempt: prompt.attempt, revision: prompt.revision, outcome: 'success', driver, trialReport: {},
+    changes: { branch: prompt.workspace.branch, base: RUN_START, from: RUN_START, to: 'c'.repeat(40), commits: [] },
+  });
+  const check = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+  await reportAttempt(config, runId, { attempt: check.attempt, revision: check.revision, outcome: 'success', exitCode: 0, driver, trialReport: { verdict: { verdict: 'passed' } } });
+  await cancelRun(config, runId, {});
+  return endRecord(config, runId);
+}
+
+describe('benchmark results table', () => {
+  it('gives one passed trial of ten planned a pass rate of 10%', async () => {
+    const table = benchmarkTable(await onePassedOfTen());
+
+    expect(table.results).toEqual([{
+      arm: 'claude', tool: 'claude', source: 'team', planned: 10, counts: { passed: 1, failed: 0, error: 0, unscored: 0, not_run: 9 },
+      deviations: 0, notVerified: 0, passRate: { passed: 1, planned: 10 },
+    }]);
+    expect(formatBenchmarkTable(table)).toContain('| claude | claude | tool default (team) | 10 | 1 | 0 | 0 | 0 | 9 | 0 | 0 | 10% (1/10) |');
+  });
+
+  it('gives an arm with no planned trials no pass rate', async () => {
+    const record = await onePassedOfTen();
+
+    const table = benchmarkTable({ ...record, benchmark: { ...record.benchmark, trials: [] } });
+
+    expect(table.results).toEqual([{ arm: 'claude', tool: 'claude', source: 'team', planned: 0, counts: { passed: 0, failed: 0, error: 0, unscored: 0, not_run: 0 }, deviations: 0, notVerified: 0 }]);
+    expect(formatBenchmarkTable(table)).toContain('| claude | claude | tool default (team) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | - |');
+  });
+
+  it.each([
+    ['passes', 'invalid', '| fix | invalid: check passes without changes |'],
+    ['could_not_run', 'could_not_run', '| fix | check could not run |'],
+  ] as const)('lists a task whose baseline %s under the results, with no trial of it run', async (baseline, listed, row) => {
+    const { config, runId } = await startTen();
+    await settleBaselines(config, runId, driver, can, { fix: baseline });
+    await leaseNext(config, runId, driver, { can, prepare: true });
+
+    const table = benchmarkTable(await endRecord(config, runId));
+
+    expect(table.invalid).toEqual([{ task: 'fix', baseline: listed }]);
+    expect(table.results).toMatchObject([{ counts: { not_run: 10 } }]);
+    expect(formatBenchmarkTable(table)).toContain(`\n\n| Task | Baseline |\n| --- | --- |\n${row}\n\n`);
+  });
+
+  it('lists no task when every baseline failed as its task expects', async () => {
+    const record = await onePassedOfTen();
+
+    const table = benchmarkTable(record);
+
+    expect(table.invalid).toEqual([]);
+    expect(formatBenchmarkTable(table)).not.toContain('| Task | Baseline |');
+  });
+});
+
+const OBSERVED: AgentObservation = { v: 1, tool: { name: 'claude' }, team: { revision: RUN_TEAM, localChanges: false }, teamai: '0.0.0', driver: 'external' };
+type TrialSpec = Pick<BenchmarkRecord['trials'][number], 'durationMs' | 'tokens' | 'cost'> & {
+  task?: string;
+  arm?: string;
+  result?: TrialResult;
+  /** What the trial's prompt step ran as; null for a prompt that never launched its tool. */
+  agent?: Partial<Pick<AgentObservation, 'tool' | 'model' | 'team'>> | null;
+};
+
+/** An end record of valid tasks, `fix` unless a trial names another, whose trials ran as `trials` say, one repetition each. */
+function recordOf(arms: BenchmarkRecord['arms'], trials: TrialSpec[]): WorkflowRunRecord & { benchmark: BenchmarkRecord } {
+  const planned = trials.map(({ task = 'fix', arm = arms[0]?.name ?? 'claude', result = 'passed', agent: _agent, ...usage }, index) => ({
+    task, arm, repetition: index + 1, order: index + 1, step: `trials.r${index + 1}.${task}.${arm}.prompt`, result, ...usage,
+  }));
+  const tasks = [...new Set(['fix', ...planned.map(({ task }) => task)])];
+  return {
+    schemaVersion: 'v1alpha1', run: 'r', workflow: 'fix', sourceHash: 'h', phase: 'end', status: 'succeeded', startedAt: '', username: '', publishedAt: '',
+    steps: planned.map(({ step }, index) => {
+      const agent = trials[index]?.agent;
+      return { step, pass: 1, ...(agent === null ? {} : { agent: { ...OBSERVED, ...agent } }) };
+    }),
+    benchmark: {
+      suite: { name: 'fix', sourceHash: 'h' }, repetitions: trials.length, baselineTeamRevision: RUN_TEAM, scorers: [],
+      tasks: tasks.map((id) => ({ id, startingCommit: RUN_START, sourceHash: 'h', baseline: 'valid' })), arms, trials: planned,
+    },
+  };
+}
+
+const CLAUDE_ARM = { name: 'opus', tool: 'claude', model: 'claude-opus-4-1', source: 'team', teamRevision: RUN_TEAM } as const;
+
+describe('benchmark deviations', () => {
+  it('counts a trial that contradicts its arm on tool, team revision or concrete model as a deviation, and one missing a value as not verified', () => {
+    const table = benchmarkTable(recordOf([CLAUDE_ARM], [
+      { agent: { model: { reported: 'claude-opus-4-1-20250805' } } },
+      { agent: { model: { reported: 'claude-sonnet-4-5-20250929' } } },
+      { agent: {} },
+      { agent: { tool: { name: 'codex' }, model: { reported: 'claude-opus-4-1' } } },
+      { agent: { team: { revision: 'c'.repeat(40), localChanges: false }, model: { reported: 'claude-opus-4-1' } } },
+      { agent: { team: undefined, model: { reported: 'claude-opus-4-1' } } },
+      { result: 'not_run', agent: null },
+    ]));
+
+    expect(table.results).toMatchObject([{ planned: 7, counts: { passed: 6, not_run: 1 }, deviations: 3, notVerified: 2, passRate: { passed: 6, planned: 7 } }]);
+    expect(formatBenchmarkTable(table)).toContain('| opus | claude | claude-opus-4-1 (team) | 7 | 6 | 0 | 0 | 0 | 1 | 3 | 2 | 86% (6/7) |');
+  });
+
+  it("does not compare a tool's own model selector, or the tool's default model, with the model the tool reports", () => {
+    const table = benchmarkTable(recordOf([{ ...CLAUDE_ARM, model: 'opus', effort: 'high' }, { name: 'plain', tool: 'claude', source: 'member', teamRevision: RUN_TEAM }], [
+      { agent: { model: { reported: 'claude-opus-4-1-20250805' } } },
+      { arm: 'plain', agent: { model: { reported: 'claude-sonnet-4-5-20250929' } } },
+      { arm: 'plain', agent: {} },
+    ]));
+
+    expect(table.results).toMatchObject([{ arm: 'opus', deviations: 0, notVerified: 0 }, { arm: 'plain', deviations: 0, notVerified: 0 }]);
+    expect(formatBenchmarkTable(table)).toContain('| opus | claude | opus high (team) |');
+    expect(formatBenchmarkTable(table)).toContain('| plain | claude | tool default (member) |');
+  });
+
+  it('matches a provider-qualified model reported as requested, with or without its provider, and counts another provider as a deviation', () => {
+    const arm = { name: 'gpt', tool: 'opencode', model: 'openai/gpt-5.2', source: 'team', teamRevision: RUN_TEAM } as const;
+    const opencode = (reported: string) => ({ agent: { tool: { name: 'opencode' }, model: { reported } } });
+    const table = benchmarkTable(recordOf([arm, { ...CLAUDE_ARM, name: 'opus' }], [
+      opencode('openai/gpt-5.2'),
+      opencode('gpt-5.2'),
+      opencode('openai/gpt-5.2-2025-08-05'),
+      opencode('azure/gpt-5.2'),
+      { arm: 'opus', agent: { model: { reported: 'anthropic/claude-opus-4-1' } } },
+    ]));
+
+    expect(table.results).toMatchObject([{ arm: 'gpt', planned: 4, deviations: 1, notVerified: 0 }, { arm: 'opus', planned: 1, deviations: 0, notVerified: 0 }]);
+  });
+});
+
+describe('benchmark usage', () => {
+  it('gives each arm the median of the tokens and durations it knows, with how many it used', () => {
+    const table = benchmarkTable(recordOf([CLAUDE_ARM], [
+      { tokens: { input: 4, output: 2 }, durationMs: 1000 },
+      { tokens: { input: 10, output: 0 }, durationMs: 3000 },
+      { tokens: { input: 3 }, durationMs: 2000 },
+      {},
+    ]));
+
+    expect(table.usage).toMatchObject([{ arm: 'opus', tokens: { value: 8, used: 2, components: ['input', 'output'] }, durationMs: { value: 2000, used: 3 } }]);
+    expect(formatBenchmarkTable(table)).toContain('| Arm | Median tokens (input + output) | Median duration | Cost |\n| --- | --- | --- | --- |\n| opus | 8 (2) | 2.0 s (3) |');
+  });
+
+  it('adds up costs in one unit only, marks a total with an unknown part incomplete, and never counts a missing cost as zero', () => {
+    const arm = (name: string) => ({ ...CLAUDE_ARM, name });
+    const table = benchmarkTable(recordOf([arm('known'), arm('partial'), arm('mixed'), arm('none')], [
+      { arm: 'known', cost: { amount: 0.1, unit: 'USD' } },
+      { arm: 'known', cost: { amount: 0.2, unit: 'USD' } },
+      { arm: 'known', result: 'not_run', agent: null },
+      { arm: 'partial', cost: { amount: 0.25, unit: 'USD' } },
+      { arm: 'partial' },
+      { arm: 'mixed', cost: { amount: 1, unit: 'USD' } },
+      { arm: 'mixed', cost: { amount: 2, unit: 'EUR' } },
+      { arm: 'none' },
+    ]));
+
+    expect(table.usage.map(({ arm: name, cost }) => ({ name, cost }))).toEqual([
+      { name: 'known', cost: { kind: 'known', amount: expect.closeTo(0.3), unit: 'USD', used: 2 } },
+      { name: 'partial', cost: { kind: 'incomplete', amount: 0.25, unit: 'USD', used: 1, unknown: 1 } },
+      { name: 'mixed', cost: { kind: 'mixed', units: ['EUR', 'USD'] } },
+      { name: 'none', cost: { kind: 'unknown' } },
+    ]);
+    const text = formatBenchmarkTable(table);
+    expect(text).toContain('| known | unknown (0) | unknown (0) | 0.3 USD (2) |');
+    expect(text).toContain('| partial | unknown (0) | unknown (0) | 0.25 USD (1), incomplete: 1 unknown |');
+    expect(text).toContain('| mixed | unknown (0) | unknown (0) | mixed units: EUR, USD |');
+    expect(text).toContain('| none | unknown (0) | unknown (0) | unknown (0) |');
+  });
+
+  it("records each trial's duration, tokens and cost as its prompt reported them, and each arm's model as the plan resolved it", async () => {
+    const { config, runId } = await startTen('{ tool: claude, model: claude-opus-4-1 }');
+    await settleBaselines(config, runId, driver, can);
+    const prompt = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+    await reportAttempt(config, runId, {
+      attempt: prompt.attempt, revision: prompt.revision, outcome: 'failed', driver, tool: 'claude', trialReport: {},
+      tokens: { input: 4, output: 2 }, durationMs: 1500, cost: { amount: 0.25, unit: 'USD' },
+    });
+    await cancelRun(config, runId, {});
+
+    const record = await endRecord(config, runId);
+
+    expect(record.benchmark.arms).toEqual([{ name: 'claude', tool: 'claude', model: 'claude-opus-4-1', source: 'team', teamRevision: RUN_TEAM }]);
+    expect(record.benchmark.trials[0]).toMatchObject({ result: 'error', tokens: { input: 4, output: 2 }, durationMs: 1500, cost: { amount: 0.25, unit: 'USD' } });
+    expect(record.benchmark.trials[1]).not.toHaveProperty('durationMs');
+    expect(record.benchmark.trials[1]).not.toHaveProperty('cost');
+  });
+});
+
+describe('benchmark task by arm matrix', () => {
+  it("gives each task its pass rate on each arm below the usage table, then the tasks whose trials did not run, then the closing sentence", () => {
+    const arms = [CLAUDE_ARM, { ...CLAUDE_ARM, name: 'sonnet', model: 'claude-sonnet-4-5' }];
+    const table = benchmarkTable(recordOf(arms, [
+      { task: 'fix', arm: 'opus' }, { task: 'fix', arm: 'opus', result: 'failed' },
+      { task: 'fix', arm: 'sonnet' }, { task: 'fix', arm: 'sonnet' },
+      { task: 'lint', arm: 'opus' }, { task: 'lint', arm: 'opus' }, { task: 'lint', arm: 'opus', result: 'failed' },
+      { task: 'lint', arm: 'sonnet', result: 'not_run', agent: null },
+    ]));
+
+    expect(table.matrix).toEqual([
+      { task: 'fix', arms: [{ arm: 'opus', passRate: { passed: 1, planned: 2 } }, { arm: 'sonnet', passRate: { passed: 2, planned: 2 } }] },
+      { task: 'lint', arms: [{ arm: 'opus', passRate: { passed: 2, planned: 3 } }, { arm: 'sonnet', passRate: { passed: 0, planned: 1 } }] },
+    ]);
+    expect(formatBenchmarkTable({ ...table, invalid: [{ task: 'lint', baseline: 'could_not_run' }] })).toBe([
+      '| Arm | Tool | Model (source) | Planned | Passed | Failed | Error | Unscored | Not run | Deviations | Not verified | Pass rate |',
+      '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+      '| opus | claude | claude-opus-4-1 (team) | 5 | 3 | 2 | 0 | 0 | 0 | 0 | 5 | 60% (3/5) |',
+      '| sonnet | claude | claude-sonnet-4-5 (team) | 3 | 2 | 0 | 0 | 0 | 1 | 0 | 2 | 67% (2/3) |',
+      '',
+      '| Arm | Median tokens (input + output) | Median duration | Cost |',
+      '| --- | --- | --- | --- |',
+      '| opus | unknown (0) | unknown (0) | unknown (0) |',
+      '| sonnet | unknown (0) | unknown (0) | unknown (0) |',
+      '',
+      '| Task | opus | sonnet |',
+      '| --- | --- | --- |',
+      '| fix | 50% (1/2) | 100% (2/2) |',
+      '| lint | 67% (2/3) | 0% (0/1) |',
+      '',
+      '| Task | Baseline |',
+      '| --- | --- |',
+      '| lint | check could not run |',
+      '',
+      'These results hold for these tasks, this run and this machine.',
+    ].join('\n'));
+  });
+
+  it('rounds a cell as the results table rounds its row, dividing before it multiplies', () => {
+    const trials = Array.from({ length: 200 }, (_, index): TrialSpec => ({ result: index < 29 ? 'passed' : 'failed' }));
+
+    const text = formatBenchmarkTable(benchmarkTable(recordOf([CLAUDE_ARM], trials)));
+
+    expect(text).toContain('| 14% (29/200) |\n');
+    expect(text).toContain('| Task | opus |\n| --- | --- |\n| fix | 14% (29/200) |\n');
+  });
+
+  it('gives a task with no planned trial on an arm no pass rate there', async () => {
+    const record = await onePassedOfTen();
+
+    const table = benchmarkTable({ ...record, benchmark: { ...record.benchmark, trials: [] } });
+
+    expect(table.matrix).toEqual([{ task: 'fix', arms: [{ arm: 'claude' }] }]);
+    expect(formatBenchmarkTable(table)).toContain('| Task | claude |\n| --- | --- |\n| fix | - |\n');
+  });
+});

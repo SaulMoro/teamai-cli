@@ -24,6 +24,7 @@ import { worktreePath } from '../workflow/worktree.js';
 import type { DriverIdentity, WorkflowEnvelope } from '../workflow/types.js';
 import { knownSecrets } from '../env-resolution.js';
 import { getTeamSecretsPath, writeSecretStore } from '../secret-store.js';
+import { removeSubjectEvidence, subjectEvidenceDirOf } from '../scorers/evidence.js';
 
 const SECRET = 'sk-ABCDEFGH1234567890abcdefghij';
 
@@ -341,5 +342,20 @@ describe('judge evidence', () => {
     expect(prompt.length).toBeLessThan(210_000);
     expect(prompt).toContain('HEAD-MARK');
     expect(prompt).toMatch(/characters? of evidence (were )?cut/);
+  });
+});
+
+describe('subject evidence removal', () => {
+  it('also removes what a collection stopped midway left beside the evidence', async () => {
+    const scores = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-subject-evidence-'));
+    const subject = { runId: 'r0123456789abcdef', step: 'trials.r1.t.a.prompt', pass: 1 };
+    const other = subjectEvidenceDirOf(scores, { ...subject, pass: 2 });
+    const dir = subjectEvidenceDirOf(scores, subject);
+    for (const each of [dir, `${dir}.tmp-1-abcdef`, other]) fs.mkdirSync(each, { recursive: true });
+
+    await removeSubjectEvidence(scores, [subject]);
+
+    expect(fs.readdirSync(path.dirname(dir))).toEqual([path.basename(other)]);
+    fs.rmSync(scores, { recursive: true, force: true });
   });
 });

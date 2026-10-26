@@ -383,6 +383,64 @@ describe('init', () => {
     });
   });
 
+  describe.each(['git', 'http', 'self'] as const)('workflow settings (%s)', (kind) => {
+    const remote = 'https://git.woa.com/HyperAI/teamai-test.git';
+    const httpUrl = 'https://teamai.example.test';
+    const projectRoot = process.cwd();
+    const repoPath = path.join(projectRoot, '.teamai', ...(kind === 'self' ? [] : ['team-repo']));
+    const target = kind === 'http' ? { http: httpUrl } : { repo: kind === 'self' ? '.' : remote };
+
+    beforeEach(async () => {
+      const { loadTeamConfig } = await import('../config.js');
+      const { TeamaiConfigSchema } = await import('../types.js');
+      vi.mocked(loadLocalConfigForScope).mockResolvedValue(null);
+      vi.mocked(loadTeamConfig).mockResolvedValue(TeamaiConfigSchema.parse({ team: 'test', repo: remote }));
+      vi.stubEnv('TEAMAI_API_TOKEN', 'test-api-key');
+      mockGit.raw.mockResolvedValue(remote + '\n');
+      pathExistsFn = (p) => p === repoPath || p.endsWith(`${path.sep}.git`);
+    });
+
+    afterEach(async () => {
+      const { loadTeamConfig } = await import('../config.js');
+      vi.mocked(loadLocalConfigForScope).mockResolvedValue(null);
+      vi.mocked(loadTeamConfig).mockResolvedValue(null);
+      mockGit.raw.mockReset();
+      vi.unstubAllEnvs();
+    });
+
+    it('keeps the member\'s workflow settings on re-init', async () => {
+      const { saveLocalConfigForScope } = await import('../config.js');
+      const { LocalConfigSchema } = await import('../types.js');
+      const workflows = {
+        tools: { claude: 'codex' },
+        sandbox: true,
+        max_parallel: 3,
+        auto_approve: true,
+        allow: { network: false },
+      };
+      vi.mocked(loadLocalConfigForScope).mockImplementation(async (scope) => scope === 'project'
+        ? LocalConfigSchema.parse({
+          repo: {
+            localPath: repoPath,
+            remote: kind === 'http' ? httpUrl : remote,
+            ...(kind === 'http' ? { kind: 'http', url: httpUrl } : {}),
+            ...(kind === 'self' ? { kind: 'self', businessRepoRoot: projectRoot } : {}),
+          },
+          username: kind === 'http' ? 'http-consumer' : 'testuser',
+          scope: 'project',
+          projectRoot,
+          workflows,
+        })
+        : null);
+
+      await init({ ...target, scope: 'workspace', force: true, role: 'hai' });
+
+      expect(mockExit).not.toHaveBeenCalled();
+      const saved = vi.mocked(saveLocalConfigForScope).mock.calls.at(-1)?.[0];
+      expect(saved?.workflows).toEqual(workflows);
+    });
+  });
+
   describe('empty repo fallback', () => {
     it('should call initRepo when clone succeeds but directory does not exist', async () => {
       let pathExistsCallCount = 0;

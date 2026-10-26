@@ -150,7 +150,7 @@ export function describeWorkflow(input: {
     const setupEnv = hasContract ? scope.setup?.requires?.env ?? [] : [];
     facts.runs.push({ step: path, executor, env: [...new Set([...requires.env ?? [], ...setupEnv])], ...(executor === 'prompt' && step.agent !== undefined ? { agent: step.agent } : {}) });
     const negotiation = negotiate({
-      step: path, executor, requires,
+      step: path, executor, requires, prepare: false,
       interactive: step.interactive === true, hasContract, envKeys: Object.keys(step.env ?? {}), runEnvKeys, budgeted: step.prompt !== undefined && scope.budgeted,
       ...(step.maxTurns !== undefined ? { maxTurns: step.maxTurns } : {}), ...(hasContract && scope.setup ? { setup: scope.setup } : {}),
     }, can, allow, env);

@@ -7,12 +7,13 @@ export interface TokenUsage {
   cachedInput?: number;
 }
 
-/** What a tool's stdout says about its run: the result it printed, the model, the session, and the tokens it billed. */
+/** What a tool's stdout says about its run: the result it printed, the model, the session, the tokens it billed and what it said they cost. */
 export interface ToolReport {
   output?: unknown;
   model?: string;
   session?: string;
   tokens?: TokenUsage;
+  cost?: { amount: number; unit: string };
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -38,10 +39,12 @@ function claudeStdout(stdout: string): ToolReport | null {
   } else if (record.result !== undefined) {
     output = record.result;
   }
+  const cost = finiteNumber(record.total_cost_usd);
   return {
     ...(output !== undefined ? { output } : {}),
     ...(model !== undefined ? { model } : {}),
     ...(typeof record.session_id === 'string' ? { session: record.session_id } : {}),
+    ...(cost !== undefined && cost >= 0 ? { cost: { amount: cost, unit: 'USD' } } : {}),
     ...(usage ? {
       tokens: {
         ...(finiteNumber(usage.input_tokens) !== undefined ? { input: finiteNumber(usage.input_tokens) } : {}),
@@ -115,6 +118,9 @@ function absorbMetadata(record: Record<string, unknown>, found: ToolReport, dept
   if (record.type === 'turn.completed' || record.type === 'step_finish' || record.type === 'step-finish') {
     const tokens = tokenUsage(record);
     if (tokens) found.tokens = addTokens(found.tokens, tokens);
+    // OpenCode states each step's cost in USD.
+    const cost = finiteNumber(record.cost);
+    if (cost !== undefined && cost >= 0) found.cost = { amount: (found.cost?.amount ?? 0) + cost, unit: 'USD' };
   }
   if (depth >= 4) return;
   for (const key of ['item', 'part', 'properties', 'info'] as const) {
@@ -126,7 +132,7 @@ function absorbMetadata(record: Record<string, unknown>, found: ToolReport, dept
 export function readToolMetadata(stdout: string): ToolReport | null {
   const found: ToolReport = {};
   for (const record of jsonRecords(stdout)) absorbMetadata(record, found, 0);
-  if (!found.model && !found.session && !found.tokens) return null;
+  if (!found.model && !found.session && !found.tokens && !found.cost) return null;
   return found;
 }
 
