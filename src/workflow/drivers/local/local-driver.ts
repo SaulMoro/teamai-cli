@@ -517,8 +517,12 @@ const DoneTableSchema = z.object({ benchmark: z.object({ text: z.string() }) });
 
 /** A signal that aborts at `expiresAt`. A deadline further away than a timer can wait never aborts it. */
 function deadlineSignal(expiresAt: string | undefined): AbortSignal {
-  const remaining = expiresAt === undefined ? undefined : Math.max(0, Date.parse(expiresAt) - Date.now());
-  return remaining === undefined || remaining > MAX_TIMER_DELAY ? new AbortController().signal : AbortSignal.timeout(remaining);
+  return timeoutSignal(expiresAt === undefined ? undefined : Math.max(0, Date.parse(expiresAt) - Date.now()));
+}
+
+/** A signal that aborts once `ms` passed. A wait longer than a timer can wait never aborts it. */
+function timeoutSignal(ms: number | undefined): AbortSignal {
+  return ms === undefined || ms > MAX_TIMER_DELAY ? new AbortController().signal : AbortSignal.timeout(ms);
 }
 
 /**
@@ -590,7 +594,9 @@ async function driveBenchmarkRun(config: LocalConfig, lock: RunLock, cwd: string
 /**
  * One prepared prompt, launched by the trial rules: the lease's tool, never the member's --tools mapping; the lease's
  * model and effort as given, with no alias lookup; the env without every name the lease withholds; in the clone. The
- * report carries the time around the tool's run alone, and the cost only when the tool stated one.
+ * report carries the time around the tool's run alone, and the cost only when the tool stated one. A tool still running
+ * at the lease's `trial.limits` timeout is stopped with everything it started, and the prompt succeeds with that
+ * limit, so the check decides the trial on what it left.
  */
 async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, signal }: {
   driver: DriverIdentity;
@@ -600,23 +606,28 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
   env: WorkflowEnv;
   signal: AbortSignal;
 }): Promise<ReportBody> {
-  const { tool, model, effort } = lease.trial;
+  const { tool, model, effort, limits } = lease.trial;
   const reported = { attempt: lease.attempt, revision: lease.revision, driver, tool };
   if (!isLaunchTool(tool)) return { ...reported, ...failureReport({ code: 'tool_unsupported', message: `The local workflow tool "${tool}" is not supported` }) };
   const scoped = await stepEnvironment(env.values, lease.envScope);
   if (!scoped.ok) return { ...reported, ...failureReport(scoped.failure) };
   let result: LocalToolResult;
+  const timeout = timeoutSignal(limits?.timeoutMs);
   const started = performance.now();
   try {
     result = await adapter.run(tool, {
       prompt: lease.prompt, cwd: lease.cwd, resultPath: resultFile, env: { ...scoped.env, ...lease.env },
       ...(model ? { model: { name: model, ...(effort ? { effort } : {}) } } : {}),
-    }, signal);
+    }, AbortSignal.any([signal, timeout]));
   } catch {
     result = { started: false, exitCode: 1, failure: { code: 'tool_failed', message: `${tool} could not complete the trial` } };
   }
   const durationMs = Math.round(performance.now() - started);
   const ran = result.started ? result : undefined;
+  const limit = ran && timeout.aborted ? 'timeout' : undefined;
+  // A tool stopped while git wrote the index leaves its lock, on which the report's commit of the clone would fail.
+  // The adapter returns once the tool's process group is gone, so nothing holds it any more.
+  if (limit) await fs.rm(path.join(lease.cwd, '.git', 'index.lock'), { force: true });
   return {
     ...reported,
     ...(ran ? { durationMs } : {}),
@@ -624,7 +635,8 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
     ...(ran?.session ? { session: ran.session } : {}),
     ...(ran?.tokens ? { tokens: ran.tokens } : {}),
     ...(ran?.cost ? { cost: ran.cost } : {}),
-    ...(result.failure ? failureReport(result.failure) : { outcome: result.exitCode === 0 ? 'success' : 'failed' }),
+    ...(limit ? { outcome: 'success', limit }
+      : result.failure ? failureReport(result.failure) : { outcome: result.exitCode === 0 ? 'success' : 'failed' }),
   };
 }
 

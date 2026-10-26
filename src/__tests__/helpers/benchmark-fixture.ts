@@ -45,9 +45,11 @@ export const PRODUCT_URL = 'https://github.com/fixture/app.git';
  * launch of any fake tool, exit 1 without a change and make the check pass on every later one. The last three game a
  * check that reads them: set `skip` in check.config.js, add test/pass.setup.js, which stubs out assert, or commit that
  * helper as test/helpers/pass.setup.js into a git repository of its own. `writes-a-passing-test` writes an executable
- * test/auth/refresh.test.js that always passes, and no fix. `hangs` never exits.
+ * test/auth/refresh.test.js that always passes, and no fix. `hangs` never exits; `fixes-and-hangs` makes the check pass,
+ * takes git's index lock in the clone as a commit does, and never exits.
  */
-export type FakeTool = 'fixes' | 'does-nothing' | 'fails-first' | 'skips-the-check' | 'adds-a-helper' | 'adds-a-helper-repository' | 'writes-a-passing-test' | 'hangs';
+export type FakeTool = 'fixes' | 'does-nothing' | 'fails-first' | 'skips-the-check' | 'adds-a-helper' | 'adds-a-helper-repository' | 'writes-a-passing-test' | 'hangs'
+  | 'fixes-and-hangs';
 
 /**
  * What a fake tool does on the fixture's first launch of any fake tool, before it answers: push a team commit of
@@ -169,6 +171,7 @@ const FAKE_TOOLS: Record<FakeTool, string> = {
   fixes: FIX,
   'does-nothing': '',
   hangs: 'setInterval(() => {}, 60_000);',
+  'fixes-and-hangs': `${FIX} fs.writeFileSync('.git/index.lock', ''); setInterval(() => {}, 60_000);`,
   'fails-first': `if (first) process.exitCode = 1; else ${FIX}`,
   'skips-the-check': "fs.writeFileSync('check.config.js', 'module.exports = { skip: true };\\n');",
   'adds-a-helper': "fs.mkdirSync('test', { recursive: true }); fs.writeFileSync('test/pass.setup.js', \"require('node:assert').strictEqual = () => {};\\n\");",
