@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runSetup } from '../workflow/place/setup.js';
 
 const TOKEN = 'setup-token-value-1082';
@@ -24,6 +24,7 @@ function setup(dir: string, command: string): ReturnType<typeof runSetup> {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -52,6 +53,22 @@ describe('workspace setup', () => {
     expect(failure).toMatchObject({ code: 'setup_secret', message: expect.stringContaining('SETUP_TOKEN') });
     expect(failure?.message).toContain('.npmrc');
     expect(failure?.message).not.toContain(TOKEN);
+  });
+
+  it('starts no fsmonitor setup configured when it reads what setup left, so nothing sees what setup was not given', async () => {
+    const dir = workspace();
+    const seen = path.join(dir, '..', `${path.basename(dir)}-fsmonitor.env`);
+    dirs.push(seen);
+    const monitor = path.join(dir, '..', `${path.basename(dir)}-fsmonitor.sh`);
+    dirs.push(monitor);
+    fs.writeFileSync(monitor, `#!/bin/sh\nenv >> "${seen}"\nexit 1\n`, { mode: 0o755 });
+    vi.stubEnv('WITHHELD_FROM_SETUP', 'member-only');
+    const { WITHHELD_FROM_SETUP: _withheld, ...env } = process.env;
+
+    const failure = await runSetup({ command: `git config core.fsmonitor "${monitor}"`, dir, env, keys: [] });
+
+    expect(failure).toBeUndefined();
+    expect(fs.existsSync(seen)).toBe(false);
   });
 
   it('does not start setup that was stopped while it read the workspace', async () => {

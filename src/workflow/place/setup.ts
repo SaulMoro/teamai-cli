@@ -9,6 +9,7 @@ import path from 'node:path';
 import { recordGroup, stopProcess } from '../../tool-launch/process-stop.js';
 import { redact } from '../../utils/redact.js';
 import type { WorkflowFailure } from '../types.js';
+import { untrustedGit } from '../worktree.js';
 import { changedPaths, snapshotWorktree } from './worktree-snapshot.js';
 
 export interface SetupRun {
@@ -63,7 +64,9 @@ export async function runSetup({ expiresAt, signal: caller, ...run }: SetupRun):
 async function checkedSetup({ command, dir, env, keys, signal, groupDir }: Omit<SetupRun, 'expiresAt'>): Promise<WorkflowFailure | undefined> {
   const stopped: WorkflowFailure = { code: 'setup_failed', message: `Setup "${command}" was stopped, so the step did not run.` };
   if (signal?.aborted) return stopped;
-  const tracked = await snapshotWorktree(dir);
+  // Setup runs the workspace's own code, which can configure what git starts: git here starts none of it, and gets only setup's env.
+  const workspaceGit = untrustedGit(env);
+  const tracked = await snapshotWorktree(dir, workspaceGit);
   const stamps = await fileStamps(dir);
   // An abort while the workspace was read is not replayed to the listener `runCommand` adds.
   if (signal?.aborted) return stopped;
@@ -78,7 +81,7 @@ async function checkedSetup({ command, dir, env, keys, signal, groupDir }: Omit<
     const tail = redact(exit.output.trim().slice(-OUTPUT_TAIL), { envSecrets, patterns: false });
     return { code: 'setup_failed', message: `Setup "${command}" exited with code ${exit.code}, so the step did not run.${tail ? ` It printed: ${tail}` : ''} Fix setup, then retry the step.` };
   }
-  const dirty = changedPaths(tracked, await snapshotWorktree(dir));
+  const dirty = changedPaths(tracked, await snapshotWorktree(dir, workspaceGit));
   if (dirty.length > 0) {
     return { code: 'setup_dirty', message: `Setup "${command}" changed ${dirty.join(', ')}, which the step would commit, so the step did not run. Make setup write only files git ignores, then retry the step.` };
   }
