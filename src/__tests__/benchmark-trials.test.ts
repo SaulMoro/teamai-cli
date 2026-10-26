@@ -64,7 +64,7 @@ describe('Trials.report', () => {
 
     const answer = await Trials.report(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver, tool: 'claude', ...fields }, {});
 
-    expect(answer).toEqual({ error: { code: 'invalid_report', message: `The report of trial step "trials.r1.fix.claude.prompt" carries ${field}, which teamai fills itself from the clone it prepared. Send the report without ${field}.` } });
+    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Prepared trial reports fill changes/read/exitCode automatically; omit ${field}` } });
     const run = await readRun(config, runId);
     expect(typeof run === 'object' && run.steps.find((step) => step.id === lease.step)).toMatchObject({ status: 'leased', attempt: lease.attempt });
   });

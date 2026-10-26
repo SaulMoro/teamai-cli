@@ -147,6 +147,21 @@ describe('git in the clone once the tool ran there', () => {
     expect(filtered.filter((name) => WITHHELD.includes(name ?? ''))).toEqual([]);
   }, 120_000);
 
+  it('gives an fsmonitor the suite setup configured there none of the withheld names, as teamai reads what the tool starts on', async () => {
+    const suite = WITH_SETUP.replace('env > "$FIXTURE_ROOT/setup.env"', 'git config core.fsmonitor "$FIXTURE_ROOT/fsmonitor.sh"');
+    const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'], suite, tasks: { fix: TASK } });
+    fixtures.push(fixture);
+    fs.writeFileSync(path.join(fixture.root, 'fsmonitor.sh'), '#!/bin/sh\nenv >> "$FIXTURE_ROOT/fsmonitor.env"\nexit 1\n', { mode: 0o755 });
+    for (const name of WITHHELD) fixture.env[name] = `member-${name.toLowerCase()}`;
+
+    const runId = await startedRun(fixture, ['--driver', 'local']);
+
+    const monitored = path.join(fixture.root, 'fsmonitor.env');
+    const seen = fs.existsSync(monitored) ? fs.readFileSync(monitored, 'utf8').split('\n').map((line) => line.split('=')[0]) : [];
+    expect(seen.filter((name) => WITHHELD.includes(name ?? ''))).toEqual([]);
+    expect(RecordSchema.parse(fixture.endRecord(runId)).benchmark.trials).toEqual([expect.objectContaining({ result: 'passed' })]);
+  }, 120_000);
+
   it('runs no hook the agent configured as hook.<name>.command there, whatever its name', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'] });
     fixtures.push(fixture);

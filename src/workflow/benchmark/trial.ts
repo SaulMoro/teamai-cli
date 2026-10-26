@@ -29,7 +29,7 @@ import { execCommand } from '../../utils/exec.js';
 import { readJson, writeJsonAtomic } from '../../utils/fs.js';
 import { scoresDir } from '../../scorers/attempts.js';
 import { removeSubjectEvidence, subjectEvidenceDirOf } from '../../scorers/evidence.js';
-import { getDefaultBranch, resolveAnchors } from '../../utils/git.js';
+import { getDefaultBranch, HEAD_STATUS, headStateOf, resolveAnchors } from '../../utils/git.js';
 import { log } from '../../utils/logger.js';
 import { projectSlug } from '../../utils/partition.js';
 import { withFileLock } from '../../update.js';
@@ -174,8 +174,7 @@ export const Trials = {
     }
     const filled = TEAMAI_FILLS.filter((field) => report[field] !== undefined);
     if (filled.length > 0) {
-      const fields = filled.join(', ');
-      return error('invalid_report', `The report of trial step "${leased.id}" carries ${fields}, which teamai fills itself from the clone it prepared. Send the report without ${fields}.`);
+      return error('invalid_report', `Prepared trial reports fill ${TEAMAI_FILLS.join('/')} automatically; omit ${filled.join('/')}`);
     }
     if (report.tool === undefined) {
       return error('invalid_report', `The report of trial step "${leased.id}" names no tool. Send tool with the tool the driver launched: ${terms.tool} for this trial.`);
@@ -256,15 +255,13 @@ async function reportPrompt({ config, runId, report, secrets, file, terms }: {
   if (receipt?.state.kind !== 'prepared' || receipt.state.attempt !== report.attempt) {
     return error('invalid_report', `Attempt ${report.attempt} of step "${leased.id}" has no prepared trial on this machine. Ask for it with teamai workflow next --prepare, and report the lease that answers.`);
   }
-  const clone = path.join(receipt.root, 'r');
   const saved = path.join(receipt.root, 'saved');
-  // The tool ran there, so its git config and its files can start anything git starts.
   const scoped = await stepEnvironment(new Map(), { provide: [], withhold: receipt.state.withhold });
   if (!scoped.ok) return { error: scoped.failure };
-  const cloneGit = untrustedGit(scoped.env);
+  const clone = trialClone(receipt.root, scoped.env);
   // Only putting the agent files back removes `saved`, so a report sent again finds them back already.
-  const unrestored = report.outcome === 'released' || !await isDirectory(saved) ? undefined : await restoreUneditedConfig(clone, terms.startingCommit, saved, cloneGit);
-  const committed = report.outcome === 'released' || unrestored !== undefined ? undefined : await commitWork(clone, `teamai: ${leased.id}`, terms.startingCommit, cloneGit);
+  const unrestored = report.outcome === 'released' || !await isDirectory(saved) ? undefined : await restoreUneditedConfig(clone.dir, terms.startingCommit, saved, clone.git);
+  const committed = report.outcome === 'released' || unrestored !== undefined ? undefined : await commitWork(clone.dir, `teamai: ${leased.id}`, terms.startingCommit, clone.git);
   const failure: WorkflowFailure | undefined = unrestored !== undefined
     ? { code: 'workspace_base', message: `Trial step "${leased.id}" ran, but the team assets delivered into its clone could not be told apart from its edits, so nothing was committed: ${unrestored}` }
     : committed && 'error' in committed
@@ -294,7 +291,7 @@ async function reportPrompt({ config, runId, report, secrets, file, terms }: {
  * scorer the run pinned. A clone that gave no evidence leaves the directory empty, so its entries close `evidence_empty`.
  */
 async function stageJudgeEvidence(config: LocalConfig, run: RunState, { leased, report, changes, clone, env }: {
-  leased: LeasedStep; report: ReportInput; changes: RunPass['changes']; clone: string; env: NodeJS.ProcessEnv;
+  leased: LeasedStep; report: ReportInput; changes: RunPass['changes']; clone: TrialClone; env: NodeJS.ProcessEnv;
 }): Promise<string | undefined> {
   const pinned = run.scorers ?? {};
   if (!(locateStep(run, leased.id)?.step.scorers?.names ?? []).some((name) => Object.hasOwn(pinned, name))) return undefined;
@@ -306,7 +303,7 @@ async function stageJudgeEvidence(config: LocalConfig, run: RunState, { leased, 
     step: leased.id, pass: subject.pass, attempt: report.attempt, outcome: 'success', tool: report.tool, session: report.session,
     ...(changes ? { changes } : {}), ...(report.outputs !== undefined ? { outputs: report.outputs } : {}),
   };
-  const collected = await collectEvidence(config, run, subject, dir, { checkout: clone, sessionCwd: clone, untrustedEnv: env, settling })
+  const collected = await collectEvidence(config, run, subject, dir, { checkout: clone.dir, sessionCwd: clone.dir, untrustedEnv: env, settling })
     .catch((e: unknown) => {
       log.warn(`The judge evidence of trial step "${leased.id}" could not be collected, so its judges find none: ${e instanceof Error ? e.message : String(e)}`);
       return { ok: false } as const;
@@ -449,16 +446,32 @@ async function preparePrompt(trial: TrialCall, lease: PromptLease): Promise<Prep
   const receipt = { file, root };
   await writeReceipt(file, { v: 1, copy, root, state: { kind: 'preparing', attempt: lease.attempt } });
   progress(trial, lease.trial, { kind: 'preparing' });
-  const clone = path.join(root, 'r');
+  const withhold = (lease.envScope ?? NO_ENV).withhold;
+  const scoped = await stepEnvironment(new Map(), { provide: [], withhold });
+  if (!scoped.ok) return { ok: false, failure: scoped.failure, receipt };
+  const clone = trialClone(root, scoped.env);
   const cloned = await freshClone(root, lease.trial.startingCommit, trial.sources);
   if (cloned) return { ok: false, failure: cloned, receipt };
   const installed = await prepareInstall(trial, root, lease);
   if (!installed.ok) return { ok: false, failure: installed.failure, receipt };
-  const setupFailed = lease.setup ? await setupIn(trial, clone, lease.setup, lease.expiresAt) : undefined;
+  const setupFailed = lease.setup ? await setupIn(trial, clone.dir, lease.setup, lease.expiresAt) : undefined;
   if (setupFailed) return { ok: false, failure: setupFailed, receipt };
-  const observed = await observeCheckout({ config: installed.config, tool: lease.trial.tool, cwd: clone });
-  await writeReceipt(file, { v: 1, copy, root, state: { kind: 'prepared', attempt: lease.attempt, branch: lease.workspace.branch, observed, withhold: (lease.envScope ?? NO_ENV).withhold } });
-  return { ok: true, cwd: clone, receipt };
+  const status = await clone.git(clone.dir, [...HEAD_STATUS]);
+  const head = status.code === 0 ? headStateOf(status.stdout) : null;
+  const observed = await observeCheckout({ config: installed.config, tool: lease.trial.tool, cwd: clone.dir, head });
+  await writeReceipt(file, { v: 1, copy, root, state: { kind: 'prepared', attempt: lease.attempt, branch: lease.workspace.branch, observed, withhold } });
+  return { ok: true, cwd: clone.dir, receipt };
+}
+
+const TrialCloneSchema = z.object({ dir: z.string().min(1), git: z.custom<Git>((value) => typeof value === 'function') }).brand<'TrialClone'>();
+/**
+ * A prompt trial's clone, where setup and then the tool run, with the only git that runs there: `untrustedGit` with the
+ * trial's env, so nothing their files or config make git start sees what the trial withholds. Only `trialClone` makes one.
+ */
+type TrialClone = z.infer<typeof TrialCloneSchema>;
+
+function trialClone(root: string, env: NodeJS.ProcessEnv): TrialClone {
+  return TrialCloneSchema.parse({ dir: path.join(root, 'r'), git: untrustedGit(env) });
 }
 
 /**
