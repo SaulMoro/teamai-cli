@@ -1493,6 +1493,29 @@ describe('reviewBranchDir — benchmarks', () => {
     }]);
   });
 
+  it('reads the files check.add names from the suite directory on the branch, and fails a task whose from names none', async () => {
+    await fse.outputFile(path.join(repoDir, 'benchmarks', 'fix', 'suite.yaml'), [
+      'schemaVersion: v1alpha1', 'name: fix', 'repo: https://github.com/acme/app.git', 'defaults: { tool: claude }', 'arms: [{ name: claude }]', 'timeout: 1h', '',
+    ].join('\n'));
+    const task = (from: string): string[] => [
+      'schemaVersion: v1alpha1', 'title: Fix it', 'prompt: Make the test pass.', `startingCommit: ${'a'.repeat(40)}`,
+      'check:', '  run: node test.js', "  protect: ['test/**']", '  add:', `    - from: ${from}`, '      to: test/refresh.test.js', '',
+    ];
+    await fse.outputFile(path.join(repoDir, 'benchmarks', 'fix', 'tasks', 'found.yaml'), task('check-files/refresh.test.js').join('\n'));
+    await fse.outputFile(path.join(repoDir, 'benchmarks', 'fix', 'tasks', 'missing.yaml'), task('check-files/missing.test.js').join('\n'));
+    await fse.outputFile(path.join(repoDir, 'benchmarks', 'fix', 'check-files', 'refresh.test.js'), 'assert(true);\n');
+
+    const review = await reviewBranchDir(BRANCH, repoDir);
+
+    expect(review.ok).toBe(false);
+    expect(review.findings).toEqual([{
+      level: 'fail',
+      check: 'workflows',
+      path: 'benchmarks/fix/tasks/missing.yaml',
+      message: 'benchmarks/fix/tasks/missing.yaml:9: field "check.add.0.from": "check-files/missing.test.js" is no file or directory of the suite directory; a symlink is not one',
+    }]);
+  });
+
   it('fails a suite that lists a scorer the branch does not have', async () => {
     await writeScorer(repoDir, 'quality.md', VALID_SCORER);
     await fse.outputFile(path.join(repoDir, 'benchmarks', 'fix', 'suite.yaml'), [

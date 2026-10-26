@@ -306,7 +306,7 @@ export function parseSuite(input: { suite: SourceFile; tasks: readonly SourceFil
       continue;
     }
     const { title, prompt, startingCommit, judge, source: origin } = task.value;
-    tasks.push({ id, relativePath: source.relativePath, title, prompt, startingCommit, judge, ...(origin ? { source: origin } : {}), sourceHash: hashOf(source.content) });
+    tasks.push({ id, relativePath: source.relativePath, title, prompt, startingCommit, judge, ...(origin ? { source: origin } : {}), sourceHash: taskHash(source.content, judge) });
   }
   const [first, ...rest] = tasks;
   if (!first) {
@@ -340,6 +340,19 @@ export function parseSuite(input: { suite: SourceFile; tasks: readonly SourceFil
   };
 }
 
+/**
+ * The paths in the suite directory that `tasks`' check.add entries name as `from`, for the sync to read before
+ * `parseSuite`. Only paths that stay inside the directory: `parseSuite` reports the others.
+ */
+export function checkFilesNamed(tasks: readonly SourceFile[]): string[] {
+  const named = tasks.flatMap(({ content }) => {
+    const document = parseDocument(content, { uniqueKeys: true });
+    const add = z.object({ check: z.object({ add: z.array(z.unknown()) }) }).safeParse(document.errors.length > 0 ? undefined : document.toJS()).data?.check.add ?? [];
+    return add.flatMap((entry) => z.object({ from: SuitePathSchema }).safeParse(entry).data?.from ?? []);
+  });
+  return [...new Set(named)];
+}
+
 type FileParse<T> =
   | { ok: true; value: T; document: ReturnType<typeof parseDocument>; lineCounter: LineCounter }
   | { ok: false; diagnostics: [WorkflowDiagnostic, ...WorkflowDiagnostic[]] };
@@ -364,6 +377,16 @@ function diagnosticAt(file: string, lineCounter: LineCounter, document: ReturnTy
   return locate(file, lineCounter, isYamlNode(node) ? node : undefined, at.join('.') || '(root)', message);
 }
 
-function hashOf(content: string): string {
+function hashOf(content: string | Buffer): string {
   return createHash('sha256').update(content).digest('hex');
+}
+
+/**
+ * A task's `sourceHash`: the hash of its file, or with check files, of that hash and each file's path, mode and bytes
+ * hash in order, so editing one changes it. A task without them keeps the hash of its file alone.
+ */
+function taskHash(content: string, judge: TaskJudge): string {
+  const files = judge.kind === 'check' ? judge.files ?? [] : [];
+  if (files.length === 0) return hashOf(content);
+  return hashOf(JSON.stringify([hashOf(content), ...files.map((file) => [file.path, file.mode, hashOf(Buffer.from(file.base64, 'base64'))])]));
 }

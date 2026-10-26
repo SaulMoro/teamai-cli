@@ -26,7 +26,7 @@ import { formatDiagnostic, parseWorkflow, promptFileDiagnostics, stepField } fro
 import { locate, valueNode, type WorkflowFiles } from './parse-context.js';
 import type { CachedWorkflow, ResolvedWorkflow, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
 import { DefaultWorkflows } from '../default-workflows.js';
-import { parseSuite, type SourceFile, type Suite } from './benchmark/suite.js';
+import { checkFilesNamed, parseSuite, type SourceFile, type Suite, type SuiteFile } from './benchmark/suite.js';
 import { BENCHMARK_NAME } from './benchmark/terms.js';
 import { assertSafePath, assertWithinRoot } from '../utils/path-safety.js';
 import { createGit } from '../utils/git.js';
@@ -211,9 +211,38 @@ async function workflowFileNames(dir: string): Promise<string[]> {
   }
 }
 
-/** The cache stores a suite's files and parses them again on load, so a cached suite is always one this teamai reads. */
+/**
+ * The cache stores a suite's files and parses them again on load, so a cached suite is always one this teamai reads. The
+ * files its check.add entries name are bytes, so a check reads them as they were when they were cached.
+ */
 const SourceFileSchema = z.object({ relativePath: z.string(), content: z.string() });
-const SuiteCacheSchema = z.object({ suite: SourceFileSchema, tasks: z.array(SourceFileSchema), validatedAt: z.string() });
+const SuiteFileSchema = z.object({ relativePath: z.string(), base64: z.string(), mode: z.enum(['100644', '100755']) }) satisfies z.ZodType<SuiteFile>;
+const SuiteCacheSchema = z.object({ suite: SourceFileSchema, tasks: z.array(SourceFileSchema), files: z.array(SuiteFileSchema).default([]), validatedAt: z.string() });
+
+/**
+ * The files of the suite directory `dir`, which team files name `relativeDir`, that `tasks`' check.add entries name: a
+ * file, or every file under a directory, as bytes with its executable bit. Read the way workflow files are: a symlink
+ * is not a file, and a path through a symlinked directory names none, so nothing outside `dir` is read.
+ */
+export async function readSuiteFiles(dir: string, relativeDir: string, tasks: readonly SourceFile[]): Promise<SuiteFile[]> {
+  const root = await fs.realpath(dir).catch(() => undefined);
+  if (root === undefined) return [];
+  const files: SuiteFile[] = [];
+  const visit = async (relative: string): Promise<void> => {
+    const full = path.join(dir, ...relative.split('/'));
+    // realpath resolves every link on the way, so a path that is one, or goes through one, is not the path itself.
+    if (await fs.realpath(full).catch(() => undefined) !== path.join(root, ...relative.split('/'))) return;
+    const stat = await fs.lstat(full).catch(() => undefined);
+    if (stat?.isFile()) {
+      const bytes = await fs.readFile(full).catch(() => undefined);
+      if (bytes) files.push({ relativePath: `${relativeDir}/${relative}`, base64: bytes.toString('base64'), mode: (stat.mode & 0o100) !== 0 ? '100755' : '100644' });
+    } else if (stat?.isDirectory()) {
+      for (const name of await fs.readdir(full).catch((): string[] => [])) await visit(`${relative}/${name}`);
+    }
+  };
+  for (const from of checkFilesNamed(tasks)) await visit(from);
+  return files;
+}
 
 function suiteCacheDir(config: LocalConfig): string {
   const home = getDataHome(config);
@@ -268,7 +297,7 @@ async function suiteNamespaces(config: LocalConfig, everyNamespace: boolean): Pr
  * files. A namespace suite replaces the shared suite of its name; one name in two active namespaces reads neither.
  */
 async function suiteSources(config: LocalConfig, everyNamespace: boolean): Promise<{
-  sources: Array<{ suite: SourceFile; tasks: SourceFile[] }>;
+  sources: Array<{ suite: SourceFile; tasks: SourceFile[]; files: SuiteFile[] }>;
   invalid: WorkflowDiagnostic[];
 }> {
   const root = getKnowledgeDir(config);
@@ -314,7 +343,7 @@ async function suiteSources(config: LocalConfig, everyNamespace: boolean): Promi
     const key = everyNamespace ? candidate.source : candidate.name;
     byName.set(key, [...byName.get(key) ?? [], candidate]);
   }
-  const sources: Array<{ suite: SourceFile; tasks: SourceFile[] }> = [];
+  const sources: Array<{ suite: SourceFile; tasks: SourceFile[]; files: SuiteFile[] }> = [];
   for (const group of byName.values()) {
     const resolution = resolveNamespacedItems(group, namespaces.active);
     if (resolution.kind === 'conflict') {
@@ -331,8 +360,8 @@ async function suiteSources(config: LocalConfig, everyNamespace: boolean): Promi
     }
     for (const { value: suite } of resolution.items) {
       const dir = path.posix.dirname(suite.relativePath);
-      const tasks = await Promise.all((await workflowFileNames(path.join(root, dir, 'tasks'))).map((name) => read(`${dir}/tasks/${name}`)));
-      sources.push({ suite, tasks: tasks.flatMap((task) => (task ? [task] : [])) });
+      const tasks = (await Promise.all((await workflowFileNames(path.join(root, dir, 'tasks'))).map((name) => read(`${dir}/tasks/${name}`)))).flatMap((task) => (task ? [task] : []));
+      sources.push({ suite, tasks, files: await readSuiteFiles(path.join(root, dir), dir, tasks) });
     }
   }
   return { sources, invalid };

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -155,6 +156,24 @@ describe('parseSuite', () => {
     expect(parsed.diagnostics).toEqual([expect.objectContaining({ file: 'benchmarks/fix/tasks/bad.yaml', line: 5, field, message })]);
   });
 
+  it('hashes a task with check files over their paths, modes and bytes too, and a task without them over its file alone', () => {
+    const task = taskText({ check: "{ run: node test.js, protect: ['test/**'], add: [{ from: check-files/a.js, to: test/a.js }] }" });
+    const hashed = (files: SuiteFile[]): string | undefined => {
+      const parsed = parse(suiteText(), { fix: task }, undefined, files);
+      return parsed.ok ? parsed.suite.tasks[0].sourceHash : undefined;
+    };
+    const plain = parse(suiteText(), { fix: taskText() });
+
+    const kept = hashed([suiteFile('check-files/a.js', 'a')]);
+
+    expect(kept).toMatch(/^[0-9a-f]{64}$/);
+    expect(kept).not.toBe(createHash('sha256').update(task).digest('hex'));
+    expect(hashed([suiteFile('check-files/a.js', 'a')])).toBe(kept);
+    expect(hashed([suiteFile('check-files/a.js', 'b')])).not.toBe(kept);
+    expect(hashed([suiteFile('check-files/a.js', 'a', '100755')])).not.toBe(kept);
+    expect(plain.ok && plain.suite.tasks[0].sourceHash).toBe(createHash('sha256').update(taskText()).digest('hex'));
+  });
+
   it('reports a suite with no valid task', () => {
     const parsed = parse(suiteText(), { bad: taskText({ startingCommit: 'abc1234' }) });
 
@@ -253,6 +272,50 @@ describe('suite sync', () => {
       file: 'benchmarks/dev/suite.yaml',
       message: 'benchmarks/dev is a namespace; put the suite in benchmarks/dev/<suite>/',
     })]);
+  });
+
+  const HIDDEN = taskText({ check: "{ run: node test.js, protect: ['test/**'], add: [{ from: check-files, to: test/hidden }] }" });
+  const base64 = (text: string): string => Buffer.from(text).toString('base64');
+
+  it('caches the files a check.add entry names from the suite directory, with their mode, until the next sync', async () => {
+    const config = team({ 'benchmarks/fix/suite.yaml': suiteText(), 'benchmarks/fix/tasks/fix.yaml': HIDDEN, 'benchmarks/fix/check-files/a.test.js': 'a', 'benchmarks/fix/check-files/run.sh': 'run' });
+    fs.chmodSync(path.join(config.repo.localPath, 'benchmarks/fix/check-files/run.sh'), 0o755);
+
+    const result = await syncWorkflowDefinitions(config);
+    write(config.repo.localPath, { 'benchmarks/fix/check-files/a.test.js': 'edited after the sync' });
+
+    expect(result.invalid).toEqual([]);
+    expect((await loadCachedSuite(config, 'fix'))?.tasks[0].judge).toMatchObject({
+      files: [{ path: 'test/hidden/a.test.js', mode: '100644', base64: base64('a') }, { path: 'test/hidden/run.sh', mode: '100755', base64: base64('run') }],
+    });
+  });
+
+  it.each([
+    ['is a symlink to a file outside the suite directory', (suite: string, outside: string) => {
+      fs.mkdirSync(path.join(suite, 'check-files'));
+      fs.symlinkSync(path.join(outside, 'a.test.js'), path.join(suite, 'check-files/a.test.js'));
+    }],
+    ['goes through a symlinked directory', (suite: string, outside: string) => fs.symlinkSync(outside, path.join(suite, 'check-files'))],
+  ])('reads nothing for a from that %s, and reports it', async (_case, link) => {
+    const task = taskText({ check: "{ run: node test.js, protect: ['test/**'], add: [{ from: check-files/a.test.js, to: test/a.test.js }] }" });
+    const config = team({ 'benchmarks/fix/suite.yaml': suiteText(), 'benchmarks/fix/tasks/fix.yaml': task, 'outside/a.test.js': 'outside' });
+    link(path.join(config.repo.localPath, 'benchmarks/fix'), path.join(config.repo.localPath, 'outside'));
+
+    const result = await syncWorkflowDefinitions(config);
+
+    expect(result.invalid).toEqual([
+      expect.objectContaining({ file: 'benchmarks/fix/suite.yaml', message: 'suite fix has no valid task' }),
+      expect.objectContaining({ file: 'benchmarks/fix/tasks/fix.yaml', field: 'check.add.0.from', message: '"check-files/a.test.js" is no file or directory of the suite directory; a symlink is not one' }),
+    ]);
+  });
+
+  it('leaves out a symlink under a directory a check.add entry names', async () => {
+    const config = team({ 'benchmarks/fix/suite.yaml': suiteText(), 'benchmarks/fix/tasks/fix.yaml': HIDDEN, 'benchmarks/fix/check-files/a.test.js': 'a', 'outside.js': 'outside' });
+    fs.symlinkSync(path.join(config.repo.localPath, 'outside.js'), path.join(config.repo.localPath, 'benchmarks/fix/check-files/b.test.js'));
+
+    await syncWorkflowDefinitions(config);
+
+    expect((await loadCachedSuite(config, 'fix'))?.tasks[0].judge).toMatchObject({ files: [{ path: 'test/hidden/a.test.js' }] });
   });
 
   it('keeps the last valid version of a suite with no valid task', async () => {
