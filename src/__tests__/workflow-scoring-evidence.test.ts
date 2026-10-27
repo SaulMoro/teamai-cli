@@ -12,7 +12,7 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 import type { LocalConfig } from '../types.js';
-import { evidencePlan } from '../workflow/scoring-evidence.js';
+import { collectEvidence, evidencePlan } from '../workflow/scoring-evidence.js';
 import { readRun } from '../workflow/store.js';
 import { encodeCwdClaude } from '../session-flow/fs.js';
 import { AgentSession } from '../session-flow/agent-session.js';
@@ -211,6 +211,19 @@ describe('judge evidence', () => {
     expect(prompt.indexOf('Judge the work.')).toBeLessThan(prompt.indexOf('UNTRUSTED'));
     expect(prompt).toContain('helper done');
     expect(prompt).toContain('+export const run = () => { for (let i = 0; i < 3; i++)');
+  });
+
+  it('reads nothing from the checkout once the run deadline passed, and says the change is missing', async () => {
+    const { config, runId, checkout } = await scoredRun();
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error(String(run));
+    const dir = path.join(root, 'late-evidence');
+
+    await collectEvidence(config, run, { runId, step: 'write', pass: 1 }, dir, { checkout, sessionCwd: checkout, expiresAt: new Date(Date.now() - 1000).toISOString() });
+
+    expect(fs.existsSync(path.join(dir, 'diff.patch'))).toBe(false);
+    expect(fs.readdirSync(path.join(dir, 'repo'))).toEqual([]);
+    expect(json(path.join(dir, 'evidence.json'))).toMatchObject({ gaps: ['commit_missing'] });
   });
 
   it('redacts every file it writes, and leaves out a file it cannot read as text and says which', async () => {

@@ -57,11 +57,22 @@ export function evidencePlan(run: RunState, subject: RunSubject, settling?: RunP
   return { subject, kind: workflow ? 'workflow' : 'prompt', checkout: run.checkout, diff, repoAt: diff?.to ?? ranges.at(-1)?.to, passes, ranges, gaps };
 }
 
-/** The environment git gets in the checkout evidence is read from, and the settings it starts with there. */
-interface GitIn { env: NodeJS.ProcessEnv; config: readonly string[] }
+/**
+ * The environment git gets in the checkout evidence is read from, the settings it starts with there, and when it must
+ * stop: past `expiresAt`, each git is stopped and no more starts.
+ */
+interface GitIn { env: NodeJS.ProcessEnv; config: readonly string[]; expiresAt?: string | undefined }
 
-async function git(checkout: string, args: string[], { env, config }: GitIn): Promise<string> {
-  return (await exec('git', [...config, ...args], { cwd: checkout, env, encoding: 'utf8', maxBuffer: 100 * 1024 * 1024 })).stdout;
+/** The time git has left before `expiresAt`, at least 1 ms: a timeout of 0 never stops it. Throws once it passed. */
+function timeLeft({ expiresAt }: GitIn): { timeout?: number } {
+  if (expiresAt === undefined) return {};
+  const left = Date.parse(expiresAt) - Date.now();
+  if (left <= 0) throw new Error('The run deadline passed before the evidence was collected.');
+  return { timeout: Math.max(1, left) };
+}
+
+async function git(checkout: string, args: string[], gitIn: GitIn): Promise<string> {
+  return (await exec('git', [...gitIn.config, ...args], { cwd: checkout, env: gitIn.env, encoding: 'utf8', maxBuffer: 100 * 1024 * 1024, ...timeLeft(gitIn) })).stdout;
 }
 
 const utf8 = new TextDecoder('utf-8', { fatal: true });
@@ -88,7 +99,7 @@ async function exportRepo(checkout: string, gitIn: GitIn, commit: string, dir: s
     if (type !== 'blob' || !oid || !name) continue;
     const target = path.resolve(dir, name);
     if (!target.startsWith(`${dir}${path.sep}`)) throw new Error(`Unsafe tracked path: ${name}`);
-    const blob = await exec('git', [...gitIn.config, 'cat-file', 'blob', oid], { cwd: checkout, env: gitIn.env, encoding: 'buffer', maxBuffer: 100 * 1024 * 1024 });
+    const blob = await exec('git', [...gitIn.config, 'cat-file', 'blob', oid], { cwd: checkout, env: gitIn.env, encoding: 'buffer', maxBuffer: 100 * 1024 * 1024, ...timeLeft(gitIn) });
     const text = textOf(blob.stdout);
     if (text === undefined) {
       omitted.push(`repo/${name}`);
@@ -116,22 +127,22 @@ async function secretMask(config: LocalConfig): Promise<(text: string) => string
  * evidence.json, and the fenced block a prompt quotes them in, all at once through writeEvidence. `source` names the
  * checkout and the session cwd to read; without it, the run's own are read. A checkout another process controls comes
  * with `untrustedEnv`, the whole environment git gets there, and git starts with UNTRUSTED_CONFIG. A report that
- * collects the evidence before the engine settles its pass gives that pass as `settling`. A directory already filled is
- * kept.
+ * collects the evidence before the engine settles its pass gives that pass as `settling`, and its run's deadline as
+ * `expiresAt`, past which the checkout is no longer read. A directory already filled is kept.
  */
 export async function collectEvidence(
   config: LocalConfig,
   run: RunState,
   subject: RunSubject,
   dir: string,
-  source?: { checkout: string; sessionCwd: string; untrustedEnv?: NodeJS.ProcessEnv; settling?: RunPass },
+  source?: { checkout: string; sessionCwd: string; untrustedEnv?: NodeJS.ProcessEnv; settling?: RunPass; expiresAt?: string | undefined },
 ): Promise<{ ok: true } | { ok: false; code: 'evidence_empty' }> {
   // A directory an older teamai filled has no fenced block, so it is collected again.
   if (await isEvidenceReady(dir) && await fs.access(path.join(dir, FENCED)).then(() => true, () => false)) return { ok: true };
   const mask = await secretMask(config);
   const plan = evidencePlan(run, subject, source?.settling);
   const checkout = source?.checkout ?? plan.checkout;
-  const gitIn: GitIn = source?.untrustedEnv ? { env: source.untrustedEnv, config: UNTRUSTED_CONFIG } : { env: process.env, config: [] };
+  const gitIn: GitIn = { ...(source?.untrustedEnv ? { env: source.untrustedEnv, config: UNTRUSTED_CONFIG } : { env: process.env, config: [] }), expiresAt: source?.expiresAt };
   const gaps = new Set(plan.gaps);
   const sections: Array<{ title: string; body: string }> = [];
   const omitted: string[] = [];

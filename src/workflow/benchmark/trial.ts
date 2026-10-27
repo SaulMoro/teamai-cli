@@ -263,7 +263,8 @@ async function reportPrompt({ config, runId, report, secrets, file, terms }: {
   const saved = path.join(receipt.root, 'saved');
   const scoped = await stepEnvironment(new Map(), { provide: [], withhold: receipt.state.withhold });
   if (!scoped.ok) return { error: scoped.failure };
-  const clone = trialClone(receipt.root, scoped.env, leaseDeadline(run, leased));
+  const expiresAt = leaseDeadline(run, leased);
+  const clone = trialClone(receipt.root, scoped.env, expiresAt);
   // Only putting the agent files back removes `saved`, so a report sent again finds them back already.
   const unrestored = report.outcome === 'released' || !await isDirectory(saved) ? undefined : await restoreUneditedConfig(clone.dir, terms.startingCommit, saved, clone.git);
   const committed = report.outcome === 'released' || unrestored !== undefined ? undefined : await commitWork(clone.dir, `teamai: ${leased.id}`, terms.startingCommit, clone.git);
@@ -273,7 +274,7 @@ async function reportPrompt({ config, runId, report, secrets, file, terms }: {
       ? { code: 'workspace_base', message: `Trial step "${leased.id}" ran, but its work could not be committed in its clone: ${committed.error}` }
       : undefined;
   const changes = committed && !('error' in committed) ? { branch: receipt.state.branch, base: terms.startingCommit, ...committed } : undefined;
-  const evidence = report.outcome === 'success' && !failure ? await stageJudgeEvidence(config, run, { leased, report, changes, clone, env: scoped.env }) : undefined;
+  const evidence = report.outcome === 'success' && !failure ? await stageJudgeEvidence(config, run, { leased, report, changes, clone, env: scoped.env, expiresAt }) : undefined;
   // A limit goes only with a prompt that succeeded: the failure to keep its work replaces both.
   const { limit, ...unlimited } = report;
   const answer = await reportAttempt(config, runId, {
@@ -297,8 +298,8 @@ async function reportPrompt({ config, runId, report, secrets, file, terms }: {
  * reads the clone itself, which is gone by then. Answers the directory, or undefined when the prompt's step lists no
  * scorer the run pinned. A clone that gave no evidence leaves the directory empty, so its entries close `evidence_empty`.
  */
-async function stageJudgeEvidence(config: LocalConfig, run: RunState, { leased, report, changes, clone, env }: {
-  leased: LeasedStep; report: ReportInput; changes: RunPass['changes']; clone: TrialClone; env: NodeJS.ProcessEnv;
+async function stageJudgeEvidence(config: LocalConfig, run: RunState, { leased, report, changes, clone, env, expiresAt }: {
+  leased: LeasedStep; report: ReportInput; changes: RunPass['changes']; clone: TrialClone; env: NodeJS.ProcessEnv; expiresAt: string | undefined;
 }): Promise<string | undefined> {
   const pinned = run.scorers ?? {};
   if (!(locateStep(run, leased.id)?.step.scorers?.names ?? []).some((name) => Object.hasOwn(pinned, name))) return undefined;
@@ -310,7 +311,7 @@ async function stageJudgeEvidence(config: LocalConfig, run: RunState, { leased, 
     step: leased.id, pass: subject.pass, attempt: report.attempt, outcome: 'success', tool: report.tool, session: report.session,
     ...(changes ? { changes } : {}), ...(report.outputs !== undefined ? { outputs: report.outputs } : {}),
   };
-  const collected = await collectEvidence(config, run, subject, dir, { checkout: clone.dir, sessionCwd: clone.dir, untrustedEnv: env, settling })
+  const collected = await collectEvidence(config, run, subject, dir, { checkout: clone.dir, sessionCwd: clone.dir, untrustedEnv: env, settling, expiresAt })
     .catch((e: unknown) => {
       log.warn(`The judge evidence of trial step "${leased.id}" could not be collected, so its judges find none: ${e instanceof Error ? e.message : String(e)}`);
       return { ok: false } as const;
