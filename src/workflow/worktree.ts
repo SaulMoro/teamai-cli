@@ -59,7 +59,7 @@ export interface GitResult {
   stderr: string;
 }
 
-type GitOptions = { input: string } | { timeoutMs: number; env?: NodeJS.ProcessEnv };
+type GitOptions = { input: string; timeoutMs?: number } | { timeoutMs: number; env?: NodeJS.ProcessEnv };
 export type Git = (cwd: string, args: string[], options?: GitOptions) => Promise<GitResult>;
 
 // `git worktree add` writes a new worktree's entry under `.git/worktrees/` one file at a time and takes no lock, so a
@@ -71,7 +71,7 @@ const HALF_WRITTEN_WORKTREE = /[\\/]worktrees[\\/][^\\/\r\n]+[\\/]commondir\b/;
 const HALF_WRITTEN_RETRY = { forMs: 5_000, everyMs: 50 };
 
 /**
- * Runs git in `cwd`, writing `input` to its stdin, or stopping it once `timeoutMs` passed. Waits out a worktree entry
+ * Runs git in `cwd`, writing `input` to its stdin, and stopping it once `timeoutMs` passed. Waits out a worktree entry
  * another `git worktree add` in the repository is still writing.
  */
 export async function git(cwd: string, args: string[], options?: GitOptions): Promise<GitResult> {
@@ -92,13 +92,22 @@ export const UNTRUSTED_CONFIG: readonly string[] = ['-c', `core.hooksPath=${os.d
 /**
  * git in a checkout another process controls, such as a benchmark trial's clone after its tool ran: `UNTRUSTED_CONFIG`
  * first, then every hook its config names turned off, and `env` instead of this process's environment, for git and for
- * whatever its config still starts, such as a filter.
+ * whatever its config still starts, such as a filter. Past `expiresAt`, each git it started is stopped, so a filter
+ * that never returns holds its caller no longer than that.
  */
-export function untrustedGit(env: NodeJS.ProcessEnv): Git {
+export function untrustedGit(env: NodeJS.ProcessEnv, expiresAt?: string): Git {
   return async (cwd, args, options) => {
     const off = await hooksOff(cwd, env);
-    return 'error' in off ? off.error : spawnGit(cwd, [...UNTRUSTED_CONFIG, ...off.args, ...args], options, { ...env, [HOOK_OFF]: 'false' });
+    return 'error' in off ? off.error : spawnGit(cwd, [...UNTRUSTED_CONFIG, ...off.args, ...args], boundedBy(options, expiresAt), { ...env, [HOOK_OFF]: 'false' });
   };
+}
+
+/** `options` with its timeout cut to the time left before `expiresAt`, at least 1 ms: a timeout of 0 never stops git. */
+function boundedBy(options: GitOptions | undefined, expiresAt: string | undefined): GitOptions | undefined {
+  if (expiresAt === undefined) return options;
+  const left = Math.max(1, Date.parse(expiresAt) - Date.now());
+  const timeoutMs = options?.timeoutMs === undefined ? left : Math.min(options.timeoutMs, left);
+  return { ...options, timeoutMs };
 }
 
 /** What each `--config-env` that turns a configured hook off reads. */
@@ -128,7 +137,7 @@ function spawnGit(cwd: string, args: string[], options: GitOptions | undefined, 
     });
   }
   return new Promise((resolve) => {
-    const child = spawn('git', args, { cwd, env: base, windowsHide: true });
+    const child = spawn('git', args, { cwd, env: base, windowsHide: true, ...(options.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}) });
     let stdout = '';
     let stderr = '';
     let settled = false;

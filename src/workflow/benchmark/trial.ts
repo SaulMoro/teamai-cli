@@ -38,6 +38,7 @@ import { sameDriver } from '../../driver-identity.js';
 import { EnvScopeSchema, LeaseSetupSchema, trialGaps, type DriverCan, type EnvScope, type LeaseSetup, type Setup } from '../requirements.js';
 import { runSetup } from '../place/setup.js';
 import { attemptEnv } from '../attempt-marker.js';
+import { leaseDeadline } from '../limits.js';
 import { collectEvidence } from '../scoring-evidence.js';
 import { runShellCommand } from '../shell-command.js';
 import { runPasses, type RunPass } from '../loop.js';
@@ -262,7 +263,7 @@ async function reportPrompt({ config, runId, report, secrets, file, terms }: {
   const saved = path.join(receipt.root, 'saved');
   const scoped = await stepEnvironment(new Map(), { provide: [], withhold: receipt.state.withhold });
   if (!scoped.ok) return { error: scoped.failure };
-  const clone = trialClone(receipt.root, scoped.env);
+  const clone = trialClone(receipt.root, scoped.env, leaseDeadline(run, leased));
   // Only putting the agent files back removes `saved`, so a report sent again finds them back already.
   const unrestored = report.outcome === 'released' || !await isDirectory(saved) ? undefined : await restoreUneditedConfig(clone.dir, terms.startingCommit, saved, clone.git);
   const committed = report.outcome === 'released' || unrestored !== undefined ? undefined : await commitWork(clone.dir, `teamai: ${leased.id}`, terms.startingCommit, clone.git);
@@ -514,7 +515,7 @@ async function preparePrompt(trial: TrialCall, lease: PromptLease): Promise<Prep
   const withhold = (lease.envScope ?? NO_ENV).withhold;
   const scoped = await stepEnvironment(new Map(), { provide: [], withhold });
   if (!scoped.ok) return { ok: false, failure: scoped.failure, receipt };
-  const clone = trialClone(root, scoped.env);
+  const clone = trialClone(root, scoped.env, lease.expiresAt);
   const cloned = await freshClone(root, lease.trial.startingCommit, trial.sources);
   if (cloned) return { ok: false, failure: cloned, receipt };
   const installed = await prepareInstall(trial, root, lease);
@@ -531,12 +532,13 @@ async function preparePrompt(trial: TrialCall, lease: PromptLease): Promise<Prep
 const TrialCloneSchema = z.object({ dir: z.string().min(1), git: z.custom<Git>((value) => typeof value === 'function') }).brand<'TrialClone'>();
 /**
  * A prompt trial's clone, where setup and then the tool run, with the only git that runs there: `untrustedGit` with the
- * trial's env, so nothing their files or config make git start sees what the trial withholds. Only `trialClone` makes one.
+ * trial's env, so nothing their files or config make git start sees what the trial withholds, stopped at the run's
+ * `expiresAt`. Only `trialClone` makes one.
  */
 type TrialClone = z.infer<typeof TrialCloneSchema>;
 
-function trialClone(root: string, env: NodeJS.ProcessEnv): TrialClone {
-  return TrialCloneSchema.parse({ dir: path.join(root, 'r'), git: untrustedGit(env) });
+function trialClone(root: string, env: NodeJS.ProcessEnv, expiresAt: string | undefined): TrialClone {
+  return TrialCloneSchema.parse({ dir: path.join(root, 'r'), git: untrustedGit(env, expiresAt) });
 }
 
 /**
