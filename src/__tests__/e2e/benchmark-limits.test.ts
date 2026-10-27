@@ -12,6 +12,16 @@ const EndRecordSchema = z.object({ benchmark: z.object({ limits: z.record(z.numb
 
 const fixtures: BenchmarkFixture[] = [];
 
+/** Whether process `pid` still runs. */
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 afterEach(() => {
   for (const fixture of fixtures.splice(0)) fixture.remove();
 });
@@ -96,7 +106,7 @@ describe('trial limits on the local driver', () => {
     expect(stderr).toContain('| codex | codex | tool default (team) | 1 | 0 | 1 | 0 | 0 | 0 | 1 | 1 | 0 | 0% (0/1) |');
   }, 120_000);
 
-  it('stops the git that commits a trial\'s work at the run timeout when a filter the tool set never returns', async () => {
+  it('stops the git that commits a trial\'s work, and the filter it started, at the run timeout when that filter never returns', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes-behind-a-hanging-filter', sandbox: true, suite: FIX_SUITE.replace('timeout: 10m', 'timeout: 20s') });
     fixtures.push(fixture);
 
@@ -106,9 +116,11 @@ describe('trial limits on the local driver', () => {
     expect(done).toMatchObject({ outcome: 'failed', failure: { code: 'timeout' } });
     expect(EndRecordSchema.parse(fixture.endRecord(done.run)).benchmark.trials).toEqual([expect.objectContaining({ result: 'error' })]);
     expect(fixture.trialRootEntries()).toEqual([]);
+    expect(fixture.filterPids()).not.toEqual([]);
+    expect(fixture.filterPids().filter(alive)).toEqual([]);
   }, 120_000);
 
-  it('stops the git that puts a protected path back for the check at the run timeout when a filter the tool set never returns', async () => {
+  it('stops the git that puts a protected path back for the check, and the filter it started, at the run timeout when that filter never returns', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes-behind-a-hanging-smudge', sandbox: true, suite: FIX_SUITE.replace('timeout: 10m', 'timeout: 20s') });
     fixtures.push(fixture);
 
@@ -118,6 +130,8 @@ describe('trial limits on the local driver', () => {
     expect(done).toMatchObject({ outcome: 'failed', failure: { code: 'timeout' } });
     expect(EndRecordSchema.parse(fixture.endRecord(done.run)).benchmark.trials).toEqual([expect.objectContaining({ result: 'error' })]);
     expect(fixture.trialRootEntries()).toEqual([]);
+    expect(fixture.filterPids()).not.toEqual([]);
+    expect(fixture.filterPids().filter(alive)).toEqual([]);
   }, 120_000);
 
   it('ends the run at its timeout when that comes before the trial timeout, with no limit on the trial', async () => {

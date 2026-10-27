@@ -51,7 +51,7 @@ export const PRODUCT_URL = 'https://github.com/fixture/app.git';
  * the clone's index unreadable, so nothing can commit its work, and never exits. `fixes-behind-a-hanging-filter` makes the
  * check pass and exits, leaving a git clean filter on every file of the clone that never returns.
  * `fixes-behind-a-hanging-smudge` makes the check pass and exits, leaving a git smudge filter on the protected test.js
- * that never returns, in the clone's own .git/info/attributes.
+ * that never returns, in the clone's own .git/info/attributes. Each such filter logs its pid, read by `filterPids`.
  * `fixes-and-runs-out-of-turns` makes the check
  * pass, then, when launched with --max-turns, ends as Claude does at that cap: an `error_max_turns` result and exit 1.
  * `fixes-and-spends` makes the check pass and bills 140 tokens: as claude, in two messages streamed as Claude streams
@@ -130,6 +130,8 @@ export interface BenchmarkFixture {
   endRecord(run: string): unknown;
   /** Every launch of the fake tool so far. */
   toolLaunches(): ToolLaunch[];
+  /** The pid of each git filter a fake tool left, as each logged it when git started it. */
+  filterPids(): number[];
   /** Every launch of the fake judge so far. */
   judgeLaunches(): JudgeLaunch[];
   /** What is left under the trial root in TMPDIR. */
@@ -191,10 +193,10 @@ setInterval(() => {}, 60_000);`,
   'corrupts-git-and-hangs': `fs.writeFileSync('.git/index', 'not an index');
 setInterval(() => {}, 60_000);`,
   'fixes-behind-a-hanging-filter': `${FIX} fs.writeFileSync('.gitattributes', '* filter=hang\\n');
-fs.appendFileSync('.git/config', '[filter "hang"]\\n\\tclean = sleep 600\\n');`,
+fs.appendFileSync('.git/config', '[filter "hang"]\\n\\tclean = "echo $$ >> ' + filterPids + '; exec sleep 600"\\n');`,
   'fixes-behind-a-hanging-smudge': `${FIX} fs.mkdirSync('.git/info', { recursive: true });
 fs.writeFileSync('.git/info/attributes', 'test.js filter=hang\\n');
-fs.appendFileSync('.git/config', '[filter "hang"]\\n\\tsmudge = sleep 600\\n');`,
+fs.appendFileSync('.git/config', '[filter "hang"]\\n\\tsmudge = "echo $$ >> ' + filterPids + '; exec sleep 600"\\n');`,
   'fixes-and-spends': `${FIX} if (path.basename(process.argv[1]) === 'claude') {
   for (const id of ['m1', 'm2']) {
     process.stdout.write(JSON.stringify({ type: 'stream_event', event: { type: 'message_start', message: { id, usage: { input_tokens: 40, output_tokens: 1 } } } }) + '\\n');
@@ -291,6 +293,7 @@ export async function benchmarkFixture(options: BenchmarkFixtureOptions): Promis
     ...options.team,
   }, teamOrigin, options.executable);
   const toolLog = path.join(root, 'tool.log');
+  const filterPidLog = path.join(root, 'filter-pids.log');
   const judgeLog = path.join(root, 'judge.log');
   const probeRun = path.join(root, 'probe.run');
   const probeLog = path.join(root, 'probe.log');
@@ -329,6 +332,7 @@ const { execFileSync, spawnSync } = require('node:child_process');
 ${tool === 'claude' ? judgeMode(judgeLog, path.join(tmp, 'teamai-trials'), options.judge ?? 'first-label') : ''}
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 const first = !fs.existsSync(${JSON.stringify(toolLog)});
+const filterPids = ${JSON.stringify(filterPidLog)};
 const files = (dir) => fs.readdirSync(dir, { withFileTypes: true }).filter((entry) => !(dir === '.' && entry.name === '.git'))
   .flatMap((entry) => (entry.isDirectory() ? files(path.join(dir, entry.name)) : [path.join(dir, entry.name).split(path.sep).join('/')]));
 const read = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null);
@@ -429,6 +433,7 @@ process.stdout.write(JSON.stringify({ type: 'result', session_id: 'fake-session'
       const value: unknown = JSON.parse(git(root, ['--git-dir', teamOrigin, 'show', `teamai-reports:workflows/runs/${run}.json`]));
       return value;
     },
+    filterPids: () => (fs.existsSync(filterPidLog) ? fs.readFileSync(filterPidLog, 'utf8').trim().split('\n').map(Number) : []),
     toolLaunches: () => (fs.existsSync(toolLog) ? fs.readFileSync(toolLog, 'utf8').trim().split('\n').map((line) => ToolLaunchSchema.parse(JSON.parse(line))) : []),
     judgeLaunches: () => (fs.existsSync(judgeLog) ? fs.readFileSync(judgeLog, 'utf8').trim().split('\n').map((line) => JudgeLaunchSchema.parse(JSON.parse(line))) : []),
     trialRootEntries: () => (fs.existsSync(path.join(tmp, 'teamai-trials')) ? fs.readdirSync(path.join(tmp, 'teamai-trials')) : []),

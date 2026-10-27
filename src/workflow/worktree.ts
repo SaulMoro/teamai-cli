@@ -9,6 +9,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
+import { stopProcess } from '../tool-launch/process-stop.js';
 import { TeamaiConfigBaseSchema } from '../types.js';
 import { pathExists, writeJsonAtomic } from '../utils/fs.js';
 
@@ -128,8 +129,8 @@ async function hooksOff(cwd: string, env: NodeJS.ProcessEnv): Promise<{ args: st
 }
 
 /**
- * Settles a git that a signal stopped, such as at its timeout, once it exits: a filter it started outlives it holding its
- * output open, so waiting for that output to close would wait on the filter.
+ * Settles a git that a signal stopped, such as at its timeout, once it exits: a filter it started that is still exiting,
+ * or that left its tree, holds its output open, so waiting for that output to close would wait on the filter.
  */
 function settleOnSignal(child: ChildProcess): void {
   child.once('exit', (_code, signal) => {
@@ -140,32 +141,33 @@ function settleOnSignal(child: ChildProcess): void {
 }
 
 function spawnGit(cwd: string, args: string[], options: GitOptions | undefined, base: NodeJS.ProcessEnv): Promise<GitResult> {
-  if (options === undefined || !('input' in options)) {
+  if (options === undefined) {
     return new Promise((resolve) => {
-      settleOnSignal(execFile('git', args, { cwd, env: { ...base, ...options?.env }, windowsHide: true, timeout: options?.timeoutMs }, (error, stdout, stderr) => {
+      execFile('git', args, { cwd, env: base, windowsHide: true }, (error, stdout, stderr) => {
         const code = typeof error?.code === 'number' ? error.code : error ? 1 : 0;
         resolve({ code, stdout: String(stdout), stderr: String(stderr) });
-      }));
+      });
     });
   }
-  return new Promise((resolve) => {
-    const child = spawn('git', args, { cwd, env: base, windowsHide: true, ...(options.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}) });
-    settleOnSignal(child);
-    let stdout = '';
-    let stderr = '';
-    let settled = false;
-    const finish = (code: number): void => {
-      if (settled) return;
-      settled = true;
-      resolve({ code, stdout, stderr });
-    };
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => { stdout += chunk; });
-    child.stderr.on('data', (chunk: string) => { stderr += chunk; });
-    child.on('error', () => finish(1));
-    child.on('close', (code) => finish(code ?? 1));
-    child.stdin.end(options.input);
+  const child = spawn('git', args, { cwd, env: 'env' in options ? { ...base, ...options.env } : base, windowsHide: true });
+  settleOnSignal(child);
+  let stdout = '';
+  let stderr = '';
+  child.stdout.setEncoding('utf8');
+  child.stderr.setEncoding('utf8');
+  child.stdout.on('data', (chunk: string) => { stdout += chunk; });
+  child.stderr.on('data', (chunk: string) => { stderr += chunk; });
+  const exited = new Promise<number>((resolve) => {
+    child.on('error', () => resolve(1));
+    child.on('close', (code) => resolve(code ?? 1));
+  });
+  // At its timeout git stops with every process it started, such as a filter that never returns.
+  const timer = options.timeoutMs === undefined ? undefined : setTimeout(() => { void stopProcess(child, exited, false)(); }, options.timeoutMs);
+  child.stdin.on('error', () => {});
+  child.stdin.end('input' in options ? options.input : undefined);
+  return exited.then((code) => {
+    clearTimeout(timer);
+    return { code, stdout, stderr };
   });
 }
 
