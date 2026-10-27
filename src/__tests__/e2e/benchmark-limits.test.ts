@@ -108,6 +108,18 @@ describe('trial limits on the local driver', () => {
     expect(fixture.trialRootEntries()).toEqual([]);
   }, 120_000);
 
+  it('stops the git that puts a protected path back for the check at the run timeout when a filter the tool set never returns', async () => {
+    const fixture = await benchmarkFixture({ tool: 'fixes-behind-a-hanging-smudge', sandbox: true, suite: FIX_SUITE.replace('timeout: 10m', 'timeout: 20s') });
+    fixtures.push(fixture);
+
+    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+    const done = DoneSchema.parse(envelope(started).data?.done);
+
+    expect(done).toMatchObject({ outcome: 'failed', failure: { code: 'timeout' } });
+    expect(EndRecordSchema.parse(fixture.endRecord(done.run)).benchmark.trials).toEqual([expect.objectContaining({ result: 'error' })]);
+    expect(fixture.trialRootEntries()).toEqual([]);
+  }, 120_000);
+
   it('ends the run at its timeout when that comes before the trial timeout, with no limit on the trial', async () => {
     const fixture = await benchmarkFixture({ tool: 'hangs', sandbox: true, suite: limitedSuite('{ timeout: 19900ms }').replace('timeout: 10m', 'timeout: 20s') });
     fixtures.push(fixture);

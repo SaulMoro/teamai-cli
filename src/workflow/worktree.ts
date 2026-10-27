@@ -4,7 +4,7 @@
  * so a hook committed on a branch does not run.
  */
 import { createHash } from 'node:crypto';
-import { execFile, spawn } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -127,17 +127,30 @@ async function hooksOff(cwd: string, env: NodeJS.ProcessEnv): Promise<{ args: st
   return { args: [...names].map((name) => `--config-env=hook.${name}.enabled=${HOOK_OFF}`) };
 }
 
+/**
+ * Settles a git that a signal stopped, such as at its timeout, once it exits: a filter it started outlives it holding its
+ * output open, so waiting for that output to close would wait on the filter.
+ */
+function settleOnSignal(child: ChildProcess): void {
+  child.once('exit', (_code, signal) => {
+    if (signal === null) return;
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+  });
+}
+
 function spawnGit(cwd: string, args: string[], options: GitOptions | undefined, base: NodeJS.ProcessEnv): Promise<GitResult> {
   if (options === undefined || !('input' in options)) {
     return new Promise((resolve) => {
-      execFile('git', args, { cwd, env: { ...base, ...options?.env }, windowsHide: true, timeout: options?.timeoutMs }, (error, stdout, stderr) => {
+      settleOnSignal(execFile('git', args, { cwd, env: { ...base, ...options?.env }, windowsHide: true, timeout: options?.timeoutMs }, (error, stdout, stderr) => {
         const code = typeof error?.code === 'number' ? error.code : error ? 1 : 0;
         resolve({ code, stdout: String(stdout), stderr: String(stderr) });
-      });
+      }));
     });
   }
   return new Promise((resolve) => {
     const child = spawn('git', args, { cwd, env: base, windowsHide: true, ...(options.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}) });
+    settleOnSignal(child);
     let stdout = '';
     let stderr = '';
     let settled = false;

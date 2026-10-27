@@ -664,8 +664,8 @@ async function runTrialCheck(trial: TrialCall, lease: CheckLease): Promise<Workf
   // Only an accepted report of the prompt lets the engine lease its check, so a prepared clone here is that report's.
   const clone = receipt?.state.kind === 'prepared' ? path.join(receipt.root, 'r') : undefined;
   const ran = clone && await isDirectory(clone)
-    ? await checkIn(trial, lease, clone, async (env) => await restoreProtected({ clone, startingCommit: lease.trial.startingCommit, protect: lease.trial.protect, sources: trial.sources, env })
-      ?? (lease.trial.add ? await writeAdded({ clone, add: lease.trial.add, sources: trial.sources, env }) : undefined))
+    ? await checkIn(trial, lease, clone, async (env) => await restoreProtected({ clone, startingCommit: lease.trial.startingCommit, protect: lease.trial.protect, sources: trial.sources, env, expiresAt: lease.expiresAt })
+      ?? (lease.trial.add ? await writeAdded({ clone, add: lease.trial.add, sources: trial.sources, env, expiresAt: lease.expiresAt }) : undefined))
     : { kind: 'error' as const, failure: { code: 'trial_prepare_failed', message: `The clone of trial ${trialCopyOf(lease.trial)} is gone, so its check could not run.` } };
   if (trial.signal?.aborted) return interrupted(trial.runId, lease.step);
   const settled = await settle(trial, lease, ran.kind === 'check'
@@ -691,7 +691,7 @@ async function runBaseline(trial: TrialCall, lease: BaselineLease): Promise<Work
   await writeReceipt(file, { v: 1, copy: lease.step, root, state: { kind: 'preparing', attempt: lease.attempt } });
   const clone = path.join(root, 'r');
   const ran = await checkIn(trial, lease, clone, async (env) => await freshClone(root, lease.trial.startingCommit, trial.sources)
-    ?? (lease.trial.add ? await writeAdded({ clone, add: lease.trial.add, sources: trial.sources, env }) : undefined)
+    ?? (lease.trial.add ? await writeAdded({ clone, add: lease.trial.add, sources: trial.sources, env, expiresAt: lease.expiresAt }) : undefined)
     ?? (lease.setup ? await setupIn(trial, clone, lease.setup, lease.expiresAt) : undefined));
   if (trial.signal?.aborted) return interrupted(trial.runId, lease.step);
   const settled = await settle(trial, lease, ran.kind === 'check'
@@ -743,11 +743,11 @@ export async function tryCheckAt(input: {
   const root = newRoot();
   const clone = path.join(root, 'r');
   try {
-    const written = async (env: NodeJS.ProcessEnv): Promise<WorkflowFailure | undefined> => (add ? await writeAdded({ clone, add, sources, env }) : undefined);
+    const written = async (env: NodeJS.ProcessEnv): Promise<WorkflowFailure | undefined> => (add ? await writeAdded({ clone, add, sources, env, expiresAt }) : undefined);
     return await checkIn(runner, { command: input.command, envScope: { provide: [], withhold }, expiresAt }, clone, async (env) => await freshClone(root, commit, sources)
       ?? (protect ? undefined : await written(env))
       ?? (leaseSetup ? await setupIn(runner, clone, leaseSetup, expiresAt) : undefined)
-      ?? (protect ? await restoreProtected({ clone, startingCommit, protect, sources, env }) ?? await written(env) : undefined));
+      ?? (protect ? await restoreProtected({ clone, startingCommit, protect, sources, env, expiresAt }) ?? await written(env) : undefined));
   } finally {
     await fs.rm(root, { recursive: true, force: true, maxRetries: 3 });
   }
@@ -761,16 +761,16 @@ export async function tryCheckAt(input: {
  * agent never ran, into an index of its own, so no index flag, filter, replacement or object the agent left in the clone
  * decides what is put back. Then every protected file on disk must be that commit's, byte for byte, of the same kind and
  * executable bit, with nothing else there. A path that reaches into a submodule is refused: git puts none of its files
- * back. Git gets `env` and starts nothing the clone configures. Undefined once restored.
+ * back. Git gets `env`, starts nothing the clone configures, and is stopped at `expiresAt`. Undefined once restored.
  */
-export async function restoreProtected({ clone, startingCommit, protect, sources, env }: {
-  clone: string; startingCommit: string; protect: readonly string[]; sources: readonly string[]; env: NodeJS.ProcessEnv;
+export async function restoreProtected({ clone, startingCommit, protect, sources, env, expiresAt }: {
+  clone: string; startingCommit: string; protect: readonly string[]; sources: readonly string[]; env: NodeJS.ProcessEnv; expiresAt?: string | undefined;
 }): Promise<WorkflowFailure | undefined> {
   const specs = protect.map((entry) => `:(glob)${entry}`);
   const failed = (step: string, stderr: string): WorkflowFailure => ({ code: 'trial_prepare_failed', message: `The protected paths of the clone in ${clone} could not be put back as ${startingCommit} has them (git ${step}): ${stderr.trim()}` });
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-protect-'));
   // A source's own hooks stay off too: writing an index starts its post-index-change hook.
-  const starting = untrustedGit({ ...env, GIT_INDEX_FILE: path.join(dir, 'index') });
+  const starting = untrustedGit({ ...env, GIT_INDEX_FILE: path.join(dir, 'index') }, expiresAt);
   try {
     const read = await readStarting(starting, sources, startingCommit);
     if ('stderr' in read) return failed('read-tree', read.stderr);
@@ -794,7 +794,7 @@ export async function restoreProtected({ clone, startingCommit, protect, sources
       if (restored.code !== 0) return failed('checkout-index', restored.stderr);
     }
     // The clone's own index agrees, for a check that runs git.
-    const cloneGit = untrustedGit(env);
+    const cloneGit = untrustedGit(env, expiresAt);
     const dropped = await cloneGit(clone, ['rm', '--cached', '-r', '-f', '-q', '--ignore-unmatch', '--', ...specs]);
     if (dropped.code !== 0) return failed('rm', dropped.stderr);
     if (entries.length > 0) {
@@ -861,13 +861,13 @@ async function stagedEntries(git: Git, cwd: string, specs: readonly string[]): P
  * the check reads the fix's test, or the suite's, and the agent never did. Each must be a file at that commit. The
  * commit is read from the first of `sources` that has it into an index of its own, and its files are written from that
  * source's objects, so nothing the clone holds decides what is written. Then each must hold that commit's bytes, as
- * `restoreProtected` checks its own. Undefined once every entry is written.
+ * `restoreProtected` checks its own, git stopped at `expiresAt` as there. Undefined once every entry is written.
  */
-async function writeAdded({ clone, add, sources, env }: {
-  clone: string; add: readonly Added[]; sources: readonly string[]; env: NodeJS.ProcessEnv;
+async function writeAdded({ clone, add, sources, env, expiresAt }: {
+  clone: string; add: readonly Added[]; sources: readonly string[]; env: NodeJS.ProcessEnv; expiresAt?: string | undefined;
 }): Promise<WorkflowFailure | undefined> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'teamai-add-'));
-  const fixed = untrustedGit({ ...env, GIT_INDEX_FILE: path.join(dir, 'index') });
+  const fixed = untrustedGit({ ...env, GIT_INDEX_FILE: path.join(dir, 'index') }, expiresAt);
   try {
     for (const { kind, commit, paths } of add) {
       const failed = (message: string): WorkflowFailure => ({ code: 'trial_prepare_failed', message: `The files check.add names could not be written into the clone in ${clone} as ${commit} has them: ${message}` });
