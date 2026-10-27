@@ -183,7 +183,7 @@ trial:
 | 键 | 限制 | 在本地驱动上 |
 | --- | --- | --- |
 | `timeout` | 从工具启动起的时间。要短于套件的 `timeout`，后者仍然结束整个运行。 | 停止工具及其启动的每个进程。 |
-| `budget.tokens` | 输入加输出 token，按 [工作流预算](workflow-advanced.md#要求和限制)的方式计算。 | 在工具运行时从其输出中计数，超过预算后停止工具，所以 trial 可能多出最后一次模型调用。Codex 只在结束时给出 token：它会运行到结束，并在 `unenforced` 中列出 `budget`。不报告 token 的工具会让其 trial 以 `error` 结束，除非另一个限制先停止了它：这时该 trial 会在 `unenforced` 中列出 `budget`。 |
+| `budget.tokens` | 输入加输出 token，按 [工作流预算](workflow-advanced.md#要求和限制)的方式计算。 | 在工具运行时从其输出中计数，超过预算后停止工具，所以 trial 可能多出最后一次模型调用。Codex 只在结束时给出 token，CodeBuddy 的 token 不会在运行时计数：两者都会运行到结束，并在 `unenforced` 中列出 `budget`。不报告 token 的工具会让其 trial 以 `error` 结束，除非另一个限制先停止了它：这时该 trial 会在 `unenforced` 中列出 `budget`。 |
 | `max_turns` | 智能体轮数，按工具自己的计数。 | 传给 Claude。其他工具在 `unenforced` 中列出 `max_turns`。 |
 
 被限制停止的 trial 在记录中带 `limit`，并计入 “Stopped by a limit”。在 `unenforced` 中列出套件限制的 trial 算作偏差，所以有上限的 arm 不会被悄悄地与没有上限的 arm 比较。运行保持它启动时的限制。

@@ -41,7 +41,7 @@ import { abandonPlace, placeLeaseOf, placeOf, placeRoot, preparePlace, runPlaceS
 import { commandEnd, managedReport, unreadablePlace } from '../../protocol.js';
 import { memberTools, type MemberTool } from '../../../tool-launch/call.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../../tool-launch/process-stop.js';
-import { isLaunchTool, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, type LaunchTool } from '../../../tool-launch/tools.js';
+import { executableOf, isLaunchTool, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, type LaunchTool } from '../../../tool-launch/tools.js';
 import { chooseStepModel, loadDeployedAgent } from '../../step-model.js';
 import type { DriverIdentity, StepHitl, WorkflowEnvelope, WorkflowFailure } from '../../types.js';
 import { isWorkflowError, WORKSPACE_MODES } from '../../types.js';
@@ -531,7 +531,7 @@ function deadlineSignal(expiresAt: string | undefined): AbortSignal {
 async function driveBenchmarkRun(config: LocalConfig, lock: RunLock, cwd: string, options: LocalDriverOptions, plan: BenchmarkPlan): Promise<WorkflowEnvelope> {
   const runId = lock.run;
   const driver = driverIdentity('local', cwd);
-  const can = localCan({ sandbox: isSandbox(config, options), hitl: false, trials: LAUNCH_TOOLS.filter((tool) => resolveCliPath(tool) !== null) });
+  const can = localCan({ sandbox: isSandbox(config, options), hitl: false, trials: LAUNCH_TOOLS.filter((tool) => resolveCliPath(executableOf(tool)) !== null) });
   for (const line of benchmarkNotices(plan, can, await trialBlocker(config))) log.info(line);
   // A driver killed before cleanup, of this run or any other, left trial roots behind.
   await Trials.sweep(config);
@@ -610,9 +610,9 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
   if (!scoped.ok) return { ...reported, ...failureReport(scoped.failure) };
   let result: LocalToolResult;
   const family = launchAdapterIdOf(tool);
-  const maxTurns = family === 'claude' || family === 'codebuddy' ? limits?.maxTurns : undefined;
-  // Codex states its usage only as it ends, and CodeBuddy's stream is not known to state each message's final usage,
-  // so neither can be stopped at its budget.
+  // A trial is held only to the limits its tool is known to keep and report: Codex states its usage only as it ends,
+  // and CodeBuddy's turn cap and per-message usage are untried, so the rest list as unenforced.
+  const maxTurns = family === 'claude' ? limits?.maxTurns : undefined;
   const budget = family === 'claude' || family === 'opencode' ? limits?.tokens : undefined;
   const started = performance.now();
   try {
