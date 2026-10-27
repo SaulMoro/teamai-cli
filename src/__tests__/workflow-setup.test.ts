@@ -88,6 +88,15 @@ describe('workspace setup', () => {
     expect(Date.now() - startedAt).toBeLessThan(10_000);
   });
 
+  it('stops at the step deadline the git that reads what setup left when a filter setup configured never returns', async () => {
+    const dir = workspace();
+    const startedAt = Date.now();
+    const command = 'git config filter.hang.clean "sleep 600" && echo "* filter=hang" > .git/info/attributes && echo changed > tracked.txt';
+    const failure = await runSetup({ command, dir, env: process.env, keys: [], expiresAt: new Date(startedAt + 2000).toISOString() });
+    expect(failure).toMatchObject({ code: 'setup_failed', message: expect.stringContaining('timeout') });
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+  }, 20_000);
+
   it('runs setup normally when the step deadline is further away than a timer can wait', async () => {
     const dir = workspace();
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();

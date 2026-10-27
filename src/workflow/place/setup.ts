@@ -51,7 +51,7 @@ export async function runSetup({ expiresAt, signal: caller, ...run }: SetupRun):
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; stop(); }, remaining);
   try {
-    const failure = await checkedSetup({ ...run, signal: bound.signal });
+    const failure = await checkedSetup({ ...run, signal: bound.signal, expiresAt });
     return timedOut
       ? { code: 'setup_failed', message: `Setup "${run.command}" did not finish before the step's timeout, so the step did not run. Make setup faster or raise the step's timeout, then retry the step.` }
       : failure;
@@ -61,11 +61,12 @@ export async function runSetup({ expiresAt, signal: caller, ...run }: SetupRun):
   }
 }
 
-async function checkedSetup({ command, dir, env, keys, signal, groupDir }: Omit<SetupRun, 'expiresAt'>): Promise<WorkflowFailure | undefined> {
+async function checkedSetup({ command, dir, env, keys, signal, expiresAt, groupDir }: SetupRun): Promise<WorkflowFailure | undefined> {
   const stopped: WorkflowFailure = { code: 'setup_failed', message: `Setup "${command}" was stopped, so the step did not run.` };
   if (signal?.aborted) return stopped;
-  // Setup runs the workspace's own code, which can configure what git starts: git here starts none of it, and gets only setup's env.
-  const workspaceGit = untrustedGit(env);
+  // Setup runs the workspace's own code, which can configure what git starts: git here starts no hook or fsmonitor, gets
+  // only setup's env, and stops at the deadline, as a filter setup configured may never return.
+  const workspaceGit = untrustedGit(env, expiresAt);
   const tracked = await snapshotWorktree(dir, workspaceGit);
   const stamps = await fileStamps(dir);
   // An abort while the workspace was read is not replayed to the listener `runCommand` adds.
