@@ -62,9 +62,14 @@ async function worktreeMode(workspace: string, relative: string): Promise<string
 
 /** `run` is the git it runs, such as `untrustedGit` in a workspace whose config a command it did not write could change. */
 export async function snapshotWorktree(workspace: string, run: Git = git, depth = 0): Promise<WorktreeSnapshot> {
-  const status = await gitStatus(workspace, run);
-  const head = (await run(workspace, ['rev-parse', 'HEAD'])).stdout.trim();
-  const branch = (await run(workspace, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
+  // Independent reads, started together: each untrusted git first reads the hooks to turn off.
+  const [status, headRead, branchRead] = await Promise.all([
+    gitStatus(workspace, run),
+    run(workspace, ['rev-parse', 'HEAD']),
+    run(workspace, ['symbolic-ref', '--quiet', 'HEAD']),
+  ]);
+  const head = headRead.stdout.trim();
+  const branch = branchRead.stdout.trim();
   if (!status.ok) return { ok: false, files: new Map(), ...(head ? { head } : {}), branch };
   const files = new Map<string, string>();
   for (const { mark, relative } of statusEntries(status.text)) {
