@@ -28,6 +28,7 @@ export interface BenchmarkStart {
   checkout: string;
   base?: RunState['base'];
   driver?: DriverIdentity;
+  runMode?: RunState['runMode'];
   /** `--member-aliases`: resolve arm models with this member's ~/.teamai/models/aliases.yaml over the team's. */
   memberAliases: boolean;
 }
@@ -95,6 +96,7 @@ export async function startBenchmark(config: LocalConfig, name: string, options:
     checkout: options.checkout,
     ...(options.base ? { base: options.base } : {}),
     ...(options.driver ? { driver: options.driver } : {}),
+    ...(options.runMode ? { runMode: options.runMode } : {}),
   });
 }
 

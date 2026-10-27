@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { resolveRunMode } from '../../launch-context.js';
 import { benchmarkFixture, envelope, FIX_SUITE, fixTask, PRODUCT_URL, said, TEAM_URL, type BenchmarkFixture } from '../helpers/benchmark-fixture.js';
 
 interface StepTree {
@@ -19,6 +20,7 @@ const StepTreeSchema: z.ZodType<StepTree> = z.lazy(() => z.object({
 }));
 const RunFileSchema = z.object({
   teamRevision: z.string(),
+  runMode: z.string().optional(),
   benchmark: z.object({ baselineTeamRevision: z.string(), trials: z.array(z.unknown()) }).passthrough(),
   definition: z.object({ steps: z.array(StepTreeSchema) }).passthrough(),
 }).passthrough();
@@ -74,6 +76,8 @@ describe('benchmark on the local driver', () => {
 
     expect(started.code, said(started)).toBe(0);
     expect(stored.teamRevision).toBe(teamHead);
+    // The fixture's CLI inherits this process's CI and TEAMAI_MODE.
+    expect(stored.runMode).toBe(resolveRunMode(process.env));
     expect(stored.benchmark).toMatchObject({
       suite: { name: 'fix', repo: 'https://github.com/fixture/app.git' },
       baselineTeamRevision: teamHead,

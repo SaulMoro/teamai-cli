@@ -310,7 +310,7 @@ export async function workflowStart(name: string, options: {
   const caller = invokeCaller(options.confirmed);
   const base = options.benchmark ? await headCommit(process.cwd()) : undefined;
   const started = options.benchmark
-    ? await startBenchmark(config, name, { secrets, checkout: process.cwd(), memberAliases: options.memberAliases === true, ...(base ? { base } : {}) })
+    ? await startBenchmark(config, name, { secrets, checkout: process.cwd(), runMode: caller.mode, memberAliases: options.memberAliases === true, ...(base ? { base } : {}) })
     : await inProcessClient({ config, env }).start(name, { inputs, checkout: process.cwd(), caller });
   if ('error' in started || options.driver !== 'local') {
     writeEnvelope(started, secrets);
