@@ -2,6 +2,8 @@
  * Real CLI: the limits a suite's `trial` sets on every trial's prompt, enforced by the local driver in a declared
  * sandbox, and the reports that carry them. A limit ends the agent's turn, and the trial's check still decides it.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { benchmarkFixture, envelope, FIX_SUITE, said, type BenchmarkFixture, type FakeTool } from '../helpers/benchmark-fixture.js';
@@ -129,6 +131,22 @@ describe('trial limits on the local driver', () => {
 
     expect(done).toMatchObject({ outcome: 'failed', failure: { code: 'timeout' } });
     expect(EndRecordSchema.parse(fixture.endRecord(done.run)).benchmark.trials).toEqual([expect.objectContaining({ result: 'error' })]);
+    expect(fixture.trialRootEntries()).toEqual([]);
+    expect(fixture.filterPids()).not.toEqual([]);
+    expect(fixture.filterPids().filter(alive)).toEqual([]);
+  }, 120_000);
+
+  it('stops the git that checks out a trial\'s clone, and the filter it started, at the run timeout when that filter never returns', async () => {
+    const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, suite: FIX_SUITE.replace('timeout: 10m', 'timeout: 20s'), app: { '.gitattributes': '* filter=hang\n' } });
+    fixtures.push(fixture);
+    // Configured for the member's git once the fixture is made, so only the clones the run makes check out through it.
+    const pids = path.join(fixture.root, 'filter-pids.log');
+    fs.appendFileSync(path.join(fixture.home, '.gitconfig'), `[filter "hang"]\n\tsmudge = "echo $$ >> '${pids}'; exec sleep 600"\n`);
+
+    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+    const done = DoneSchema.parse(envelope(started).data?.done);
+
+    expect(done).toMatchObject({ outcome: 'failed', failure: { code: 'timeout' } });
     expect(fixture.trialRootEntries()).toEqual([]);
     expect(fixture.filterPids()).not.toEqual([]);
     expect(fixture.filterPids().filter(alive)).toEqual([]);

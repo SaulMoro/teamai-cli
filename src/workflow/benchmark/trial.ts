@@ -45,7 +45,7 @@ import { runPasses, type RunPass } from '../loop.js';
 import { settled, type LeasedStep } from '../step-state.js';
 import { readRun, runsDir } from '../store.js';
 import { WORKSPACE_MODES, type DriverIdentity, type RunState, type WorkflowEnvelope, type WorkflowFailure } from '../types.js';
-import { commitWork, git, recordConfigOverlay, restoreUneditedConfig, saveConfig, untrustedGit, type Git } from '../worktree.js';
+import { boundedGit, commitWork, recordConfigOverlay, restoreUneditedConfig, saveConfig, untrustedGit, type Git } from '../worktree.js';
 import { baselineOutput, checkVerdict, type CheckVerdict } from './check.js';
 import { trialCopyOf, type BenchmarkPlan } from './plan.js';
 import type { CheckFile, Suite } from './suite.js';
@@ -517,7 +517,7 @@ async function preparePrompt(trial: TrialCall, lease: PromptLease): Promise<Prep
   const scoped = await stepEnvironment(new Map(), { provide: [], withhold });
   if (!scoped.ok) return { ok: false, failure: scoped.failure, receipt };
   const clone = trialClone(root, scoped.env, lease.expiresAt);
-  const cloned = await freshClone(root, lease.trial.startingCommit, trial.sources);
+  const cloned = await freshClone(root, lease.trial.startingCommit, trial.sources, lease.expiresAt);
   if (cloned) return { ok: false, failure: cloned, receipt };
   const installed = await prepareInstall(trial, root, lease);
   if (!installed.ok) return { ok: false, failure: installed.failure, receipt };
@@ -545,9 +545,10 @@ function trialClone(root: string, env: NodeJS.ProcessEnv, expiresAt: string | un
 /**
  * A fresh clone with its own `.git`, no remotes and no refs, at a detached HEAD, its hooks pointed at a directory that
  * does not exist. The commit comes from the first of `sources` that has it. Every git call is an argv array: no shell
- * string.
+ * string, and stops at `expiresAt`, as a fetch or checkout may never return.
  */
-async function freshClone(root: string, startingCommit: string, sources: readonly string[]): Promise<WorkflowFailure | undefined> {
+async function freshClone(root: string, startingCommit: string, sources: readonly string[], expiresAt: string | undefined): Promise<WorkflowFailure | undefined> {
+  const git = boundedGit(expiresAt);
   await fs.mkdir(path.dirname(root), { recursive: true });
   await fs.mkdir(root);
   const clone = path.join(root, 'r');
@@ -606,8 +607,10 @@ async function prepareInstall(trial: TrialCall, root: string, lease: PromptLease
     { cwd: bare, args: ['symbolic-ref', 'HEAD', `refs/heads/${branch}`] },
     { cwd: root, args: ['clone', '-q', '--no-local', bare, team] },
   ];
+  // The run's deadline bounds the copy too, as it bounds the pull below.
+  const copy = boundedGit(lease.expiresAt);
   for (const { cwd, args } of steps) {
-    const ran = await git(cwd, args);
+    const ran = await copy(cwd, args);
     if (ran.code !== 0) return failed(`Team revision ${teamRevision} could not be copied from ${member} for the trial (git ${args[0]}): ${ran.stderr.trim()}`);
   }
   const config: LocalConfig = {
@@ -691,7 +694,7 @@ async function runBaseline(trial: TrialCall, lease: BaselineLease): Promise<Work
   const root = newRoot();
   await writeReceipt(file, { v: 1, copy: lease.step, root, state: { kind: 'preparing', attempt: lease.attempt } });
   const clone = path.join(root, 'r');
-  const ran = await checkIn(trial, lease, clone, async (env) => await freshClone(root, lease.trial.startingCommit, trial.sources)
+  const ran = await checkIn(trial, lease, clone, async (env) => await freshClone(root, lease.trial.startingCommit, trial.sources, lease.expiresAt)
     ?? (lease.trial.add ? await writeAdded({ clone, add: lease.trial.add, sources: trial.sources, env, expiresAt: lease.expiresAt }) : undefined)
     ?? (lease.setup ? await setupIn(trial, clone, lease.setup, lease.expiresAt) : undefined));
   if (trial.signal?.aborted) return interrupted(trial.runId, lease.step);
@@ -745,7 +748,7 @@ export async function tryCheckAt(input: {
   const clone = path.join(root, 'r');
   try {
     const written = async (env: NodeJS.ProcessEnv): Promise<WorkflowFailure | undefined> => (add ? await writeAdded({ clone, add, sources, env, expiresAt }) : undefined);
-    return await checkIn(runner, { command: input.command, envScope: { provide: [], withhold }, expiresAt }, clone, async (env) => await freshClone(root, commit, sources)
+    return await checkIn(runner, { command: input.command, envScope: { provide: [], withhold }, expiresAt }, clone, async (env) => await freshClone(root, commit, sources, expiresAt)
       ?? (protect ? undefined : await written(env))
       ?? (leaseSetup ? await setupIn(runner, clone, leaseSetup, expiresAt) : undefined)
       ?? (protect ? await restoreProtected({ clone, startingCommit, protect, sources, env, expiresAt }) ?? await written(env) : undefined));

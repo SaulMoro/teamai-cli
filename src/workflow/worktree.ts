@@ -84,6 +84,11 @@ export async function git(cwd: string, args: string[], options?: GitOptions): Pr
   }
 }
 
+/** `git`, stopped past `expiresAt` with every process it started, as `untrustedGit` is. */
+export function boundedGit(expiresAt: string | undefined): Git {
+  return (cwd, args, options) => git(cwd, args, boundedBy(options, expiresAt));
+}
+
 /**
  * The settings git starts with in a checkout another process controls. `-c` outranks every config file that process can
  * edit, so no hook and no fsmonitor it names runs, and an object id means that object, never a replacement it set.
