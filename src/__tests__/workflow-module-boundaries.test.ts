@@ -72,12 +72,12 @@ const ENTRIES: Array<{ folder: string; entries: Record<string, string[] | 'any'>
   {
     folder: BENCHMARK,
     entries: {
-      'plan.ts': 'any', 'terms.ts': 'any', 'suite.ts': 'any', 'check.ts': 'any', 'table.ts': 'any', 'result.ts': 'any',
+      'plan.ts': 'any', 'terms.ts': 'any', 'suite.ts': 'any', 'check.ts': 'any', 'table.ts': 'any', 'result.ts': 'any', 'history.ts': 'any',
       'trial.ts': ['src/workflow/protocol.ts', 'src/workflow/drivers/local/local-driver.ts'],
       'start.ts': ['src/workflow-commands.ts'],
       'conformance.ts': ['src/workflow/conformance/run.ts'],
     },
-    testEntries: ['plan.ts', 'terms.ts', 'suite.ts', 'check.ts', 'table.ts', 'result.ts', 'trial.ts'],
+    testEntries: ['plan.ts', 'terms.ts', 'suite.ts', 'check.ts', 'table.ts', 'result.ts', 'trial.ts', 'history.ts'],
   },
 ];
 

@@ -63,7 +63,7 @@ aside{background:var(--sidebar)}.brand svg g[stroke]{stroke:var(--logo)}.brand s
 .arm-track{position:relative;height:22px;border-radius:6px;background:var(--track)}
 .arm-fill{position:absolute;left:0;top:0;bottom:0;border-radius:6px;opacity:.88}
 .arm-ci{position:absolute;top:50%;border-top:2px solid var(--text);transform:translateY(-1px)}.arm-ci::before,.arm-ci::after{content:'';position:absolute;top:-6px;height:10px;border-left:2px solid var(--text)}.arm-ci::before{left:-1px}.arm-ci::after{right:-1px}
-.arm-value,.latest-usage{display:flex;flex-direction:column;gap:2px;font-variant-numeric:tabular-nums}.arm-value b{font-size:17px}.arm-value small,.latest-usage small{color:var(--muted);font-size:11px}
+.arm-value,.latest-usage{display:flex;flex-direction:column;gap:2px;font-variant-numeric:tabular-nums}.arm-value b{font-size:17px}.arm-value small,.latest-usage small{color:var(--muted);font-size:11px}.arm-value small.amber{color:var(--amber)}
 .chart-scroll{overflow-x:auto;padding:0 18px 6px}.chart-scroll svg{display:block;width:100%;min-width:600px;height:auto}
 .chart-scroll .grid{stroke:var(--line);stroke-dasharray:2 4}.chart-scroll text{fill:var(--muted);font-size:11px}
 .chart-scroll .series{fill:none;stroke-width:2.4;stroke-linejoin:round;stroke-linecap:round}.chart-scroll .series.earlier{stroke-dasharray:5 4;opacity:.55}

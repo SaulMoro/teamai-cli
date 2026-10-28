@@ -92,29 +92,58 @@ const RESULT_COLUMNS = { passed: 'Passed', failed: 'Failed', error: 'Error', uns
 const INVALID_REASONS = { invalid: 'invalid: check passes without changes', could_not_run: 'check could not run' } as const satisfies Record<BenchmarkTable['invalid'][number]['baseline'], string>;
 const TOKEN_COMPONENTS = ['input', 'output'] as const;
 
-export function benchmarkTable(record: { steps?: ReadonlyArray<Pick<RecordedStep, 'step' | 'agent'>>; benchmark: BenchmarkRecord }): BenchmarkTable {
-  const { arms, trials, tasks } = record.benchmark;
-  // A trial's prompt ran when its step entry holds what it ran as: teamai observes every prompt a driver reported.
-  const ranAs = (trial: RecordedTrial): AgentObservation | undefined => {
+/** What benchmarkTable reads: an end record's benchmark block, and its step entries for what each prompt ran as. */
+export interface BenchmarkTableInput {
+  steps?: ReadonlyArray<Pick<RecordedStep, 'step' | 'agent'>>;
+  benchmark: BenchmarkRecord;
+}
+
+/** A trial, and what its prompt ran as. Absent `ranAs`: its prompt did not run, as teamai observes every prompt a driver reported. */
+export interface ObservedTrial {
+  trial: RecordedTrial;
+  ranAs?: AgentObservation;
+}
+
+/** Each trial of `record`, in record order, with what its prompt ran as. */
+export function observedTrials(record: BenchmarkTableInput): ObservedTrial[] {
+  return record.benchmark.trials.map((trial) => {
     const agent = record.steps?.findLast((entry) => entry.step === trial.step)?.agent;
-    return agent && 'v' in agent ? agent : undefined;
+    return agent && 'v' in agent ? { trial, ranAs: agent } : { trial };
+  });
+}
+
+/** The usage of `trials`: medians of what their tools stated, and the cost of the trials whose prompt ran. */
+export function usageOf(trials: readonly ObservedTrial[]): Omit<ArmUsage, 'arm'> {
+  return {
+    tokens: { ...median(trials.flatMap(({ trial: { tokens } }) => (tokens?.input !== undefined && tokens.output !== undefined ? [tokens.input + tokens.output] : []))), components: TOKEN_COMPONENTS },
+    durationMs: median(trials.flatMap(({ trial: { durationMs } }) => (durationMs !== undefined ? [durationMs] : []))),
+    cost: costTotal(trials.flatMap(({ trial, ranAs }) => (ranAs ? [trial.cost] : []))),
   };
+}
+
+/** How many of `arm`'s `trials` ran as something other than the arm, and how many could not be compared with it. */
+export function deviationsOf(arm: RecordedArm, trials: readonly ObservedTrial[]): Pick<ArmResults, 'deviations' | 'notVerified'> {
+  const compared = trials.flatMap(({ trial, ranAs }) => (ranAs ? [trial.unenforced ? 'deviation' as const : compareAgent(arm, ranAs)] : []));
+  return {
+    deviations: compared.filter((comparison) => comparison === 'deviation').length,
+    notVerified: compared.filter((comparison) => comparison === 'not_verified').length,
+  };
+}
+
+export function benchmarkTable(record: BenchmarkTableInput): BenchmarkTable {
+  const { arms, trials, tasks } = record.benchmark;
+  const observed = observedTrials(record);
   return {
     invalid: tasks.flatMap(({ id, baseline }) => (baseline === 'invalid' || baseline === 'could_not_run' ? [{ task: id, baseline }] : [])),
     results: arms.map((arm) => {
       const own = trials.filter((trial) => trial.arm === arm.name);
       const count = (result: TrialResult): number => own.filter((trial) => trial.result === result).length;
       const counts = { passed: count('passed'), failed: count('failed'), error: count('error'), unscored: count('unscored'), not_run: count('not_run') } satisfies Record<TrialResult, number>;
-      const compared = own.flatMap((trial) => {
-        const observed = ranAs(trial);
-        return observed ? [trial.unenforced ? 'deviation' as const : compareAgent(arm, observed)] : [];
-      });
       return {
         arm: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), ...(arm.effort ? { effort: arm.effort } : {}), source: arm.source,
         planned: own.length, counts,
         stoppedByLimit: own.filter((trial) => trial.limit !== undefined).length,
-        deviations: compared.filter((comparison) => comparison === 'deviation').length,
-        notVerified: compared.filter((comparison) => comparison === 'not_verified').length,
+        ...deviationsOf(arm, observed.filter(({ trial }) => trial.arm === arm.name)),
         ...passRateOf(own),
       };
     }),
@@ -122,15 +151,7 @@ export function benchmarkTable(record: { steps?: ReadonlyArray<Pick<RecordedStep
       task: id,
       arms: arms.map(({ name }) => ({ arm: name, ...passRateOf(trials.filter((trial) => trial.task === id && trial.arm === name)) })),
     })),
-    usage: arms.map(({ name }) => {
-      const own = trials.filter((trial) => trial.arm === name);
-      return {
-        arm: name,
-        tokens: { ...median(own.flatMap(({ tokens }) => (tokens?.input !== undefined && tokens.output !== undefined ? [tokens.input + tokens.output] : []))), components: TOKEN_COMPONENTS },
-        durationMs: median(own.flatMap(({ durationMs }) => (durationMs !== undefined ? [durationMs] : []))),
-        cost: costTotal(own.filter((trial) => ranAs(trial) !== undefined).map(({ cost }) => cost)),
-      };
-    }),
+    usage: arms.map(({ name }) => ({ arm: name, ...usageOf(observed.filter(({ trial }) => trial.arm === name)) })),
   };
 }
 
@@ -213,7 +234,7 @@ function sameModel(requested: string, reported: string): boolean {
   return ran.id === asked.id || (ran.id.startsWith(asked.id) && /^[-@]\d{4}-?\d{2}-?\d{2}$/.test(ran.id.slice(asked.id.length)));
 }
 
-export function median(values: readonly number[]): Median {
+function median(values: readonly number[]): Median {
   const sorted = [...values].sort((left, right) => left - right);
   const lower = sorted[Math.ceil(sorted.length / 2) - 1];
   const upper = sorted[Math.floor(sorted.length / 2)];
@@ -221,7 +242,7 @@ export function median(values: readonly number[]): Median {
 }
 
 /** The total of `parts`, one per trial whose prompt ran: the cost it stated, or undefined when it stated none. */
-export function costTotal(parts: ReadonlyArray<RecordedTrial['cost']>): CostTotal {
+function costTotal(parts: ReadonlyArray<RecordedTrial['cost']>): CostTotal {
   const known = parts.flatMap((part) => (part ? [part] : []));
   const units = [...new Set(known.map(({ unit }) => unit))].sort();
   const [unit, ...others] = units;

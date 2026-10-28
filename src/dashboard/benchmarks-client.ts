@@ -24,7 +24,7 @@ const chartWidth=()=>window.innerWidth<700?440:760;
 function costText(cost){
  if(!cost||cost.kind==='unknown')return '<span class="muted">—</span>';
  if(cost.kind==='mixed')return label('Mixed units');
- const amount=Math.round(cost.amount*100)/100+' <span data-verbatim>'+e(cost.unit)+'</span>';
+ const amount=Math.round(cost.amount*10000)/10000+' <span data-verbatim>'+e(cost.unit)+'</span>';
  return cost.kind==='known'?amount:amount+' <small class="amber">'+label('incomplete')+'</small>';
 }
 function secondsText(ms){ return ms==null?'—':(ms>=60000?(Math.round(ms/6000)/10)+' min':(Math.round(ms/100)/10)+' s'); }
@@ -51,7 +51,7 @@ function benchKpis(sel){
 function armBars(sel){
  const arms=sel.arms.filter(a=>a.pooled);
  return '<section class="panel bench-panel"><div class="panelhead"><h2>'+label('Pass rate by arm')+'</h2><span class="label">'+label('Pooled over the runs of the current suite version. The line is the 95% interval: two arms whose lines overlap are not told apart by these runs.')+'</span></div><div class="arm-bars">'
-  +arms.map(a=>{const i=sel.arms.indexOf(a), rate=passOf(a.pooled); return '<div class="arm-bar" title="'+e(armTitle(a)+': '+Math.round(rate*100)+'% ('+a.pooled.passed+'/'+a.pooled.planned+'), 95% '+Math.round(a.pooled.low*100)+'–'+Math.round(a.pooled.high*100)+'%')+'"><div class="arm-label">'+armName(a,i)+'</div><div class="arm-track" role="img" aria-label="'+e(armTitle(a)+' '+Math.round(rate*100)+'%')+'"><span class="arm-fill" style="width:'+(rate*100).toFixed(1)+'%;background:'+armColor(i)+'"></span><span class="arm-ci" style="left:'+(a.pooled.low*100).toFixed(1)+'%;width:'+((a.pooled.high-a.pooled.low)*100).toFixed(1)+'%"></span></div><div class="arm-value"><b>'+pct(rate)+'</b><small>'+number(a.pooled.passed)+'/'+number(a.pooled.planned)+' · '+number(a.pooled.runs)+' '+label('runs')+'</small></div></div>';}).join('')
+  +arms.map(a=>{const i=sel.arms.indexOf(a), rate=passOf(a.pooled); return '<div class="arm-bar" title="'+e(armTitle(a)+': '+Math.round(rate*100)+'% ('+a.pooled.passed+'/'+a.pooled.planned+'), 95% '+Math.round(a.pooled.low*100)+'–'+Math.round(a.pooled.high*100)+'%')+'"><div class="arm-label">'+armName(a,i)+'</div><div class="arm-track" role="img" aria-label="'+e(armTitle(a)+' '+Math.round(rate*100)+'%')+'"><span class="arm-fill" style="width:'+(rate*100).toFixed(1)+'%;background:'+armColor(i)+'"></span><span class="arm-ci" style="left:'+(a.pooled.low*100).toFixed(1)+'%;width:'+((a.pooled.high-a.pooled.low)*100).toFixed(1)+'%"></span></div><div class="arm-value"><b>'+pct(rate)+'</b><small>'+number(a.pooled.passed)+'/'+number(a.pooled.planned)+' · '+number(a.pooled.runs)+' '+label('runs')+'</small>'+(a.pooled.deviations?'<small class="amber">'+number(a.pooled.deviations)+' '+label('deviations')+'</small>':'')+(a.pooled.notVerified?'<small class="muted">'+number(a.pooled.notVerified)+' '+label('not verified')+'</small>':'')+'</div></div>';}).join('')
   +'</div></section>';
 }
 function historyChart(sel){
@@ -75,40 +75,42 @@ function historyChart(sel){
  const legend='<div class="legend">'+sel.arms.map((a,i)=>'<span class="'+(a.isCurrent?'':'muted')+'">'+armName(a,i)+(a.isCurrent?'':' <small>'+label('earlier configuration')+'</small>')+'</span>').join('')+marks+'</div>';
  return '<section class="panel bench-panel"><div class="panelhead"><h2>'+label('Pass rate per run')+'</h2><span class="label">'+label('Each point is one run of one arm. A dashed line marks a change to the suite\\'s files: runs on either side measured different tasks.')+'</span></div><div class="chart-scroll">'+svg+'</div>'+legend+'</section>';
 }
-function usageX(a){
- const u=a.usage; if(!u)return null;
- if(benchAxis==='duration')return u.durationMs.value==null?null:u.durationMs.value/1000;
- if(benchAxis==='cost')return u.cost.kind==='known'&&u.cost.used?u.cost.amount/u.cost.used:null;
+const usedBy=n=>number(n)+' '+t('trials reported it');
+function usageX(a,axis){
+ const u=a.pooled&&a.pooled.usage; if(!u)return null;
+ if(axis==='duration')return u.durationMs.value==null?null:u.durationMs.value/1000;
+ if(axis==='cost')return u.cost.kind==='known'&&u.cost.used?u.cost.amount/u.cost.used:null;
  return u.tokens.value==null?null:u.tokens.value;
 }
-function costUnit(arms){ const units=[...new Set(arms.map(a=>a.usage&&a.usage.cost.kind==='known'?a.usage.cost.unit:null))]; return units.length===1&&units[0]?units[0]:null; }
+function usageUsed(a,axis){ const u=a.pooled.usage; return axis==='duration'?u.durationMs.used:axis==='cost'?u.cost.used:u.tokens.used; }
+function costUnit(arms){ const units=[...new Set(arms.map(a=>a.pooled&&a.pooled.usage.cost.kind==='known'?a.pooled.usage.cost.unit:null))]; return units.length===1&&units[0]?units[0]:null; }
 function scatterPanel(sel){
  const arms=sel.arms.filter(a=>a.pooled), unit=costUnit(arms);
- if(benchAxis==='cost'&&!unit)benchAxis='tokens';
+ const axis=benchAxis==='cost'&&!unit?'tokens':benchAxis;
  const axes=[['tokens',t('Tokens')],['duration',t('Duration')],['cost',t('Cost')]];
- const toggle='<div class="chips" role="group" aria-label="'+e(t('Compare with'))+'">'+axes.map(([key,name])=>'<button class="chip'+(benchAxis===key?' active':'')+'" data-bench-axis="'+key+'" aria-pressed="'+(benchAxis===key)+'"'+(key==='cost'&&!unit?' disabled title="'+e(t('Every arm needs a cost its tool stated, in one unit.'))+'"':'')+'>'+e(name)+'</button>').join('')+'</div>';
- const placed=arms.map(a=>({a,i:sel.arms.indexOf(a),vx:usageX(a),vy:passOf(a.pooled)})).filter(q=>q.vx!=null);
- const axisName=benchAxis==='duration'?t('Median duration per trial (s)'):benchAxis==='cost'?t('Cost per trial')+' ('+unit+')':t('Median tokens per trial (input + output)');
+ const toggle='<div class="chips" role="group" aria-label="'+e(t('Compare with'))+'">'+axes.map(([key,name])=>'<button class="chip'+(axis===key?' active':'')+'" data-bench-axis="'+key+'" aria-pressed="'+(axis===key)+'"'+(key==='cost'&&!unit?' disabled title="'+e(t('Every arm needs a cost its tool stated, in one unit.'))+'"':'')+'>'+e(name)+'</button>').join('')+'</div>';
+ const placed=arms.map(a=>({a,i:sel.arms.indexOf(a),vx:usageX(a,axis),vy:passOf(a.pooled)})).filter(q=>q.vx!=null);
+ const axisName=axis==='duration'?t('Median duration per trial (s)'):axis==='cost'?t('Cost per trial')+' ('+unit+')':t('Median tokens per trial (input + output)');
  if(!placed.length)return '<section class="panel bench-panel"><div class="panelhead"><h2>'+label('Pass rate against cost')+'</h2>'+toggle+'</div><div class="empty"><p>'+label('No arm reported this value.')+'</p></div></section>';
  const W=chartWidth(),H=300,pl=44,pr=20,pt=20,pb=46,pw=W-pl-pr,ph=H-pt-pb, max=Math.max(...placed.map(q=>q.vx))*1.15||1;
  const x=v=>pl+v/max*pw, y=r=>pt+(1-r)*ph;
  const sorted=[...placed].sort((p,q)=>p.vx-q.vx), frontier=[]; let best=-1; for(const q of sorted){ if(q.vy>best){frontier.push(q);best=q.vy;} }
  const ticks=[0,0.25,0.5,0.75,1].map(f=>f*max/1.15);
- const fmt=v=>benchAxis==='tokens'?(v>=1000?(Math.round(v/100)/10)+'k':String(Math.round(v))):benchAxis==='cost'?String(Math.round(v*100)/100):String(Math.round(v));
+ const fmt=v=>axis==='tokens'?(v>=1000?(Math.round(v/100)/10)+'k':String(Math.round(v))):axis==='cost'?String(Number(v.toPrecision(2))):String(Math.round(v));
  let svg='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+e(t('Pass rate against cost'))+'">'
   +[0,0.25,0.5,0.75,1].map(v=>'<line class="grid" x1="'+pl+'" x2="'+(W-pr)+'" y1="'+y(v)+'" y2="'+y(v)+'"/><text class="axis" x="'+(pl-8)+'" y="'+(y(v)+4)+'" text-anchor="end">'+Math.round(v*100)+'%</text>').join('')
   +ticks.map(v=>'<text class="axis" x="'+x(v)+'" y="'+(H-pb+18)+'" text-anchor="middle">'+e(fmt(v))+'</text>').join('')
   +'<text class="axis-name" x="'+(pl+pw/2)+'" y="'+(H-8)+'" text-anchor="middle">'+e(axisName)+'</text>'
   +'<text class="better" x="'+(pl+8)+'" y="'+(pt+14)+'">↖ '+e(t('better: higher pass rate for less'))+'</text>'
   +(frontier.length>1?'<polyline class="frontier" points="'+frontier.map(q=>x(q.vx).toFixed(1)+','+y(q.vy).toFixed(1)).join(' ')+'"/>':'')
-  +placed.map(q=>'<g><title>'+e(armTitle(q.a)+': '+Math.round(q.vy*100)+'% ('+q.a.pooled.passed+'/'+q.a.pooled.planned+'), 95% '+Math.round(q.a.pooled.low*100)+'–'+Math.round(q.a.pooled.high*100)+'% · '+fmt(q.vx))+'</title><line class="ci" x1="'+x(q.vx)+'" x2="'+x(q.vx)+'" y1="'+y(q.a.pooled.low)+'" y2="'+y(q.a.pooled.high)+'" style="stroke:'+armColor(q.i)+'"/><circle cx="'+x(q.vx)+'" cy="'+y(q.vy)+'" r="7" style="fill:'+armColor(q.i)+'"/><text class="point-label" x="'+(x(q.vx)>W*0.7?x(q.vx)-11:x(q.vx)+11)+'" y="'+(y(q.vy)+4)+'"'+(x(q.vx)>W*0.7?' text-anchor="end"':'')+'>'+e(q.a.arm)+'</text></g>').join('')
+  +placed.map(q=>'<g><title>'+e(armTitle(q.a)+': '+Math.round(q.vy*100)+'% ('+q.a.pooled.passed+'/'+q.a.pooled.planned+'), 95% '+Math.round(q.a.pooled.low*100)+'–'+Math.round(q.a.pooled.high*100)+'% · '+fmt(q.vx)+' · '+usedBy(usageUsed(q.a,axis)))+'</title><line class="ci" x1="'+x(q.vx)+'" x2="'+x(q.vx)+'" y1="'+y(q.a.pooled.low)+'" y2="'+y(q.a.pooled.high)+'" style="stroke:'+armColor(q.i)+'"/><circle cx="'+x(q.vx)+'" cy="'+y(q.vy)+'" r="7" style="fill:'+armColor(q.i)+'"/><text class="point-label" x="'+(x(q.vx)>W*0.7?x(q.vx)-11:x(q.vx)+11)+'" y="'+(y(q.vy)+4)+'"'+(x(q.vx)>W*0.7?' text-anchor="end"':'')+'>'+e(q.a.arm)+'</text></g>').join('')
   +'</svg>';
  return '<section class="panel bench-panel"><div class="panelhead"><h2>'+label('Pass rate against cost')+'</h2>'+toggle+'</div><div class="chart-scroll">'+svg+'</div><p class="scorer-hint">'+label('The dashed line joins the arms nothing beats on both: each is the cheapest way to reach its pass rate. Usage is the median over the trials whose tool reported it.')+'</p></section>';
 }
 function heatmapPanel(sel){
  const arms=sel.arms.filter(a=>a.isCurrent), runs=sel.versions[0].runs;
  return '<section class="panel sessions bench-panel"><div class="panelhead"><h2>'+label('Tasks by arm')+' <span class="count">'+number(sel.tasks.length)+'</span></h2><span class="label">'+label('Pooled over the runs of the current suite version. Find the task that separates the arms, or that no arm passes.')+'</span></div><div class="table-scroll"><table class="session-table heatmap"><thead><tr><th>'+label('TASK')+'</th>'+arms.map(a=>'<th><div class="arm-label">'+armName(a,sel.arms.indexOf(a))+'</div></th>').join('')+'<th title="'+e(t('In these runs, one arm both passed and failed this task, so a single trial of it says little.'))+'">'+label('UNSTABLE RUNS')+'</th></tr></thead><tbody>'
-  +sel.tasks.map(task=>'<tr><td><span data-verbatim>'+e(task.task)+'</span>'+''+(task.invalidRuns?' <span class="tag muted" title="'+e(t('Its check passed before any change, or could not run, so its trials did not run.'))+'">'+label('not measured in')+' '+number(task.invalidRuns)+'/'+number(runs)+'</span>':'')+'</td>'
+  +sel.tasks.map(task=>'<tr><td><span data-verbatim>'+e(task.task)+'</span>'+''+(task.unmeasuredRuns?' <span class="tag muted" title="'+e(t('Its check passed before any change or could not run, or the run ended first, so its trials did not run.'))+'">'+label('not measured in')+' '+number(task.unmeasuredRuns)+'/'+number(runs)+'</span>':'')+'</td>'
    +arms.map(a=>{const cell=task.arms.find(c=>c.key===a.key), rate=passOf(cell); return '<td class="heat" style="'+heat(rate)+'">'+rateCell(cell)+'</td>';}).join('')+'<td class="'+(task.disagreedRuns*2>=runs?'amber':'muted')+'">'+number(task.disagreedRuns)+'/'+number(runs)+'</td></tr>').join('')
   +'</tbody></table></div></section>';
 }
@@ -116,14 +118,14 @@ function taskRunsPanel(sel){
  const runs=sel.runs.filter(r=>r.sourceHash===sel.versions[0].sourceHash).reverse();
  if(runs.length<2)return '';
  return '<section class="panel sessions bench-panel"><div class="panelhead"><h2>'+label('Tasks per run')+'</h2><span class="label">'+label('Every arm together, oldest run first. A task that turns red after a team change is the one to read.')+'</span></div><div class="table-scroll"><table class="session-table heatmap task-runs"><thead><tr><th>'+label('TASK')+'</th>'+runs.map(r=>'<th title="'+e(r.run+' · '+when(r.startedAt))+'">'+e(r.startedAt.slice(5,10))+'</th>').join('')+'</tr></thead><tbody>'
-  +sel.tasks.map(task=>'<tr><td data-verbatim>'+e(task.task)+'</td>'+runs.map(r=>{const cell=task.runs.find(c=>c.run===r.run); if(!cell)return '<td class="muted">·</td>'; if(cell.baseline!=='valid'&&cell.baseline!=='not_needed')return '<td class="heat not-measured" title="'+e(t('Not measured: the check passed before any change, or could not run.'))+'">—</td>'; const rate=passOf(cell); return '<td class="heat" style="'+heat(rate)+'" title="'+e(r.run+': '+(rate==null?'—':Math.round(rate*100)+'% ('+cell.passed+'/'+cell.planned+')'))+'">'+(rate==null?'—':pct(rate))+'</td>';}).join('')+'</tr>').join('')
+  +sel.tasks.map(task=>'<tr><td data-verbatim>'+e(task.task)+'</td>'+runs.map(r=>{const cell=task.runs.find(c=>c.run===r.run); if(!cell)return '<td class="muted">·</td>'; if(cell.baseline!=='valid'&&cell.baseline!=='not_needed')return '<td class="heat not-measured" title="'+e(t('Not measured: the check passed before any change or could not run, or the run ended first.'))+'">—</td>'; const rate=passOf(cell); return '<td class="heat" style="'+heat(rate)+'" title="'+e(r.run+': '+(rate==null?'—':Math.round(rate*100)+'% ('+cell.passed+'/'+cell.planned+')'))+'">'+(rate==null?'—':pct(rate))+'</td>';}).join('')+'</tr>').join('')
   +'</tbody></table></div></section>';
 }
 function latestPanel(sel){
  const table=sel.latest.table, run=sel.runs[0];
  const parts=[['passed','Passed'],['failed','Failed'],['error','Error'],['unscored','Unscored'],['not_run','Not run']];
  return '<section class="panel bench-panel"><div class="panelhead"><h2>'+label('Last run')+' <span class="tag" data-verbatim>'+e(sel.latest.run)+'</span></h2><button class="link" data-run="'+e(sel.latest.run)+'" data-run-source="'+e(sel.latest.source)+'">'+label('Open the run')+' ↗</button></div><div class="latest">'
-  +table.results.map((r,i)=>{const usage=table.usage[i], idx=sel.arms.findIndex(a=>a.arm===r.arm&&a.isCurrent); return '<div class="latest-arm"><div class="arm-label">'+armName(sel.arms[idx]||{arm:r.arm,tool:r.tool,model:r.model,effort:r.effort},idx<0?i:idx)+'</div><div class="stack" role="img" aria-label="'+e(parts.map(([key,name])=>t(name)+' '+r.counts[key]).join(', '))+'">'+parts.map(([key,name])=>r.counts[key]?'<span class="seg '+key+'" style="flex:'+r.counts[key]+'" title="'+e(t(name)+': '+r.counts[key])+'">'+number(r.counts[key])+'</span>':'').join('')+'</div><div class="latest-usage"><b>'+rateCell(r.passRate)+'</b><small>'+number(usage.tokens.value==null?0:Math.round(usage.tokens.value))+' '+label('tokens')+' · '+secondsText(usage.durationMs.value)+' · '+costText(usage.cost)+'</small>'+(r.deviations||r.notVerified||r.stoppedByLimit?'<small>'+(r.deviations?'<span class="amber">'+number(r.deviations)+' '+label('deviations')+'</span> ':'')+(r.notVerified?'<span class="muted">'+number(r.notVerified)+' '+label('not verified')+'</span> ':'')+(r.stoppedByLimit?'<span class="muted">'+number(r.stoppedByLimit)+' '+label('stopped by a limit')+'</span>':'')+'</small>':'')+'</div></div>';}).join('')
+  +table.results.map((r,i)=>{const usage=table.usage[i], idx=sel.arms.findIndex(a=>a.arm===r.arm&&a.isCurrent); return '<div class="latest-arm"><div class="arm-label">'+armName(sel.arms[idx]||{arm:r.arm,tool:r.tool,model:r.model,effort:r.effort},idx<0?i:idx)+'</div><div class="stack" role="img" aria-label="'+e(parts.map(([key,name])=>t(name)+' '+r.counts[key]).join(', '))+'">'+parts.map(([key,name])=>r.counts[key]?'<span class="seg '+key+'" style="flex:'+r.counts[key]+'" title="'+e(t(name)+': '+r.counts[key])+'">'+number(r.counts[key])+'</span>':'').join('')+'</div><div class="latest-usage"><b>'+rateCell(r.passRate)+'</b><small><span title="'+e(usedBy(usage.tokens.used))+'">'+(usage.tokens.value==null?'—':number(Math.round(usage.tokens.value)))+' '+label('tokens')+'</span> · <span title="'+e(usedBy(usage.durationMs.used))+'">'+secondsText(usage.durationMs.value)+'</span> · <span title="'+e(usedBy(usage.cost.used||0))+'">'+costText(usage.cost)+'</span></small>'+(r.deviations||r.notVerified||r.stoppedByLimit?'<small>'+(r.deviations?'<span class="amber">'+number(r.deviations)+' '+label('deviations')+'</span> ':'')+(r.notVerified?'<span class="muted">'+number(r.notVerified)+' '+label('not verified')+'</span> ':'')+(r.stoppedByLimit?'<span class="muted">'+number(r.stoppedByLimit)+' '+label('stopped by a limit')+'</span>':'')+'</small>':'')+'</div></div>';}).join('')
   +'<div class="legend">'+parts.map(([key,name])=>'<span><i class="swatch seg '+key+'"></i>'+label(name)+'</span>').join('')+'</div>'
   +(table.invalid.length?'<p class="scorer-hint amber">'+label('Not measured in this run')+': '+table.invalid.map(x=>'<span data-verbatim>'+e(x.task)+'</span> ('+(x.baseline==='invalid'?label('check passes without changes'):label('check could not run'))+')').join(', ')+'</p>':'')
   +'</div><p class="scorer-hint">'+label('Started')+' '+e(when(run.startedAt))+(run.username?' · <span data-verbatim>'+e(run.username)+'</span>':'')+' · '+label('These results hold for these tasks, this run and this machine.')+'</p></section>';
@@ -138,7 +140,7 @@ function runsPanel(sel){
    r.source==='local'?label('This machine'):label('Team'),
    '<span title="'+e(r.sourceHash)+'" data-verbatim>'+short(r.sourceHash)+'</span>'+(current?' <span class="tag">'+label('current')+'</span>':''),
    '<span title="'+e(r.teamRevision)+'" data-verbatim>'+short(r.teamRevision)+'</span>'+(older&&older.teamRevision!==r.teamRevision?' <span class="tag amber">'+label('changed')+'</span>':''),
-   meter(passOf(r))+' '+rateCell(r)+(r.invalidTasks?'<small class="amber">'+number(r.invalidTasks)+' '+label('not measured')+'</small>':''),
+   meter(passOf(r))+' '+rateCell(r)+(r.unmeasuredTasks?'<small class="amber">'+number(r.unmeasuredTasks)+' '+label('not measured')+'</small>':''),
   ].concat(arms.map(a=>rateCell(r.arms.find(c=>c.key===a.key)))));}).join('')
   +'</tbody></table></div></section>';
 }

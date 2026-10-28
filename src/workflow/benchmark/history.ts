@@ -7,9 +7,10 @@
  * usage, the task by arm heatmap) covers the runs of the suite's current version, its `sourceHash` in the newest run.
  * Each run still shows as a point of its own.
  */
-import type { WorkflowRunRecord } from '../records.js';
 import type { Baseline, BenchmarkRecord } from './result.js';
-import { benchmarkTable, costTotal, median, type ArmUsage, type BenchmarkTable, type PassRate } from './table.js';
+import {
+  benchmarkTable, deviationsOf, observedTrials, usageOf, type ArmResults, type ArmUsage, type BenchmarkTable, type BenchmarkTableInput, type ObservedTrial, type PassRate,
+} from './table.js';
 
 /** One ended benchmark run, as its end record holds it. `source`: this machine's run file, or the team's record. */
 export interface BenchmarkRunInput {
@@ -17,8 +18,8 @@ export interface BenchmarkRunInput {
   source: 'local' | 'reported';
   username?: string;
   startedAt: string;
-  /** What each prompt ran as, which the newest run's table compares with its arm. */
-  steps?: ReadonlyArray<Pick<NonNullable<WorkflowRunRecord['steps']>[number], 'step' | 'agent'>>;
+  /** What each prompt ran as, which the run's table compares with its arm. */
+  steps?: BenchmarkTableInput['steps'];
   benchmark: BenchmarkRecord;
 }
 
@@ -50,6 +51,9 @@ export interface SuiteSummary {
 /** A pass rate with its 95% Wilson score interval, which stays inside 0–1 and honest for a handful of trials. */
 export type PooledRate = PassRate & { low: number; high: number; runs: number };
 
+/** An arm over the runs of the current version, counted as each run's own table counts it. */
+export type PooledArm = PooledRate & Pick<ArmResults, 'deviations' | 'notVerified'> & { usage: Omit<ArmUsage, 'arm'> };
+
 /**
  * One arm as a configuration: its name, tool, model and effort. An arm whose model changed between runs is two series,
  * since its runs measured two things.
@@ -63,8 +67,7 @@ export interface ArmSeries {
   /** In the newest run of the suite. */
   isCurrent: boolean;
   /** Over the runs of the current version; absent for a configuration none of them ran. */
-  pooled?: PooledRate;
-  usage?: Omit<ArmUsage, 'arm'>;
+  pooled?: PooledArm;
   /** Each run of the configuration in the window, oldest first. */
   points: RunPoint[];
 }
@@ -72,7 +75,6 @@ export interface ArmSeries {
 export interface SuiteVersion {
   sourceHash: string;
   runs: number;
-  firstRunAt: string;
   lastRunAt: string;
 }
 
@@ -85,8 +87,8 @@ export interface TaskView {
   runs: Array<{ run: string; baseline: Baseline } & Partial<PassRate>>;
   /** Runs in which one arm both passed and did not pass the task: its repetitions disagreed, so one trial says little. */
   disagreedRuns: number;
-  /** Runs whose baseline did not let the task's trials run: its check passed before any change, or could not run. */
-  invalidRuns: number;
+  /** Runs that did not measure the task: see isMeasured. */
+  unmeasuredRuns: number;
 }
 
 export interface SuiteView {
@@ -111,14 +113,14 @@ export interface RunRow extends PassRate {
   username?: string;
   sourceHash: string;
   teamRevision: string;
-  /** Tasks whose baseline did not let their trials run. */
-  invalidTasks: number;
+  /** Tasks the run did not measure: see isMeasured. */
+  unmeasuredTasks: number;
   /** Each arm of the run as a configuration, in the run's order. */
   arms: Array<{ key: string } & PassRate>;
 }
 
 export interface BenchmarkHistoryView {
-  window: { days: number; from: string; to: string };
+  window: { from: string; to: string };
   /** Newest run first. */
   suites: SuiteSummary[];
   selected?: SuiteView;
@@ -133,6 +135,14 @@ const Z = 1.96;
 
 function passRate(trials: readonly Trial[]): PassRate {
   return { passed: trials.filter(({ result }) => result === 'passed').length, planned: trials.length };
+}
+
+/**
+ * Whether a run measured a task: its baseline let the task's trials run. Otherwise its check passed before any change or
+ * could not run, or the run ended before its baseline.
+ */
+function isMeasured(baseline: Baseline): boolean {
+  return baseline === 'valid' || baseline === 'not_needed';
 }
 
 /** `left` beats `right` on pass rate, compared without division so 2/3 and 4/6 tie. */
@@ -181,32 +191,35 @@ function versionsOf(runs: readonly BenchmarkRunInput[]): SuiteVersion[] {
   for (const { startedAt, benchmark } of runs) {
     const { sourceHash } = benchmark.suite;
     const seen = versions.get(sourceHash);
-    versions.set(sourceHash, seen ? { ...seen, runs: seen.runs + 1, lastRunAt: startedAt } : { sourceHash, runs: 1, firstRunAt: startedAt, lastRunAt: startedAt });
+    versions.set(sourceHash, { sourceHash, runs: (seen?.runs ?? 0) + 1, lastRunAt: startedAt });
   }
   return [...versions.values()].sort((left, right) => right.lastRunAt.localeCompare(left.lastRunAt));
 }
 
-/** Pooled usage of `trials`; a trial whose prompt never started has no usage to give. */
-function usageOf(trials: readonly Trial[]): Omit<ArmUsage, 'arm'> {
-  return {
-    tokens: { ...median(trials.flatMap(({ tokens }) => (tokens?.input !== undefined && tokens.output !== undefined ? [tokens.input + tokens.output] : []))), components: ['input', 'output'] },
-    durationMs: median(trials.flatMap(({ durationMs }) => (durationMs !== undefined ? [durationMs] : []))),
-    cost: costTotal(trials.filter(({ result }) => result !== 'not_run').map(({ cost }) => cost)),
-  };
+/** The runs of one suite in the window, oldest first: those of its current version, and the newest. */
+interface SuiteRuns {
+  runs: readonly BenchmarkRunInput[];
+  current: readonly BenchmarkRunInput[];
+  newest: BenchmarkRunInput;
 }
 
-function armsOf(runs: readonly BenchmarkRunInput[], current: readonly BenchmarkRunInput[], newest: BenchmarkRunInput): ArmSeries[] {
-  const configs = new Map<string, { arm: Arm; points: RunPoint[]; pooledTrials: Trial[]; pooledRuns: number }>();
+function armsOf({ runs, current, newest }: SuiteRuns): ArmSeries[] {
+  const configs = new Map<string, { arm: Arm; points: RunPoint[]; pooledTrials: ObservedTrial[]; pooledRuns: number; deviations: number; notVerified: number }>();
   for (const input of runs) {
     const isPooled = current.includes(input);
+    const observed = isPooled ? observedTrials(input) : [];
     for (const arm of input.benchmark.arms) {
       const key = armKey(arm);
-      const own = input.benchmark.trials.filter((trial) => trial.arm === arm.name);
-      const config = configs.get(key) ?? { arm, points: [], pooledTrials: [], pooledRuns: 0 };
-      config.points.push({ run: input.run, startedAt: input.startedAt, ...passRate(own) });
+      const config = configs.get(key) ?? { arm, points: [], pooledTrials: [], pooledRuns: 0, deviations: 0, notVerified: 0 };
+      config.points.push({ run: input.run, startedAt: input.startedAt, ...passRate(input.benchmark.trials.filter((trial) => trial.arm === arm.name)) });
       if (isPooled) {
+        // Each run's arm is compared on its own team revision, as that run's table compares it.
+        const own = observed.filter(({ trial }) => trial.arm === arm.name);
+        const { deviations, notVerified } = deviationsOf(arm, own);
         config.pooledTrials.push(...own);
         config.pooledRuns += 1;
+        config.deviations += deviations;
+        config.notVerified += notVerified;
       }
       configs.set(key, config);
     }
@@ -220,12 +233,12 @@ function armsOf(runs: readonly BenchmarkRunInput[], current: readonly BenchmarkR
     const [leftRank, leftLast] = rank(leftKey, left.points);
     const [rightRank, rightLast] = rank(rightKey, right.points);
     return leftRank - rightRank || rightLast.localeCompare(leftLast);
-  }).map(([key, { arm, points, pooledTrials, pooledRuns }]) => {
-    const pooled = passRate(pooledTrials);
+  }).map(([key, { arm, points, pooledTrials, pooledRuns, deviations, notVerified }]) => {
+    const pooled = passRate(pooledTrials.map(({ trial }) => trial));
     return {
       key, arm: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), ...(arm.effort ? { effort: arm.effort } : {}),
       isCurrent: order.includes(key),
-      ...(pooled.planned > 0 ? { pooled: { ...pooled, ...wilson(pooled), runs: pooledRuns }, usage: usageOf(pooledTrials) } : {}),
+      ...(pooled.planned > 0 ? { pooled: { ...pooled, ...wilson(pooled), runs: pooledRuns, deviations, notVerified, usage: usageOf(pooledTrials) } } : {}),
       points,
     };
   });
@@ -236,7 +249,7 @@ function rateFields(rate: PassRate): Partial<PassRate> {
   return rate.planned > 0 ? rate : {};
 }
 
-function tasksOf(current: readonly BenchmarkRunInput[], newest: BenchmarkRunInput): TaskView[] {
+function tasksOf({ current, newest }: SuiteRuns): TaskView[] {
   return newest.benchmark.tasks.map(({ id }) => {
     const trialsIn = (input: BenchmarkRunInput) => input.benchmark.trials.filter((trial) => trial.task === id);
     const runs = current.flatMap((input) => {
@@ -255,7 +268,7 @@ function tasksOf(current: readonly BenchmarkRunInput[], newest: BenchmarkRunInpu
       })),
       runs: runs.map(({ input, baseline, trials }) => ({ run: input.run, baseline, ...rateFields(passRate(trials)) })),
       disagreedRuns,
-      invalidRuns: runs.filter(({ baseline }) => baseline === 'invalid' || baseline === 'could_not_run').length,
+      unmeasuredRuns: runs.filter(({ baseline }) => !isMeasured(baseline)).length,
     };
   });
 }
@@ -266,14 +279,14 @@ function runRow({ run, source, startedAt, username, benchmark }: BenchmarkRunInp
     sourceHash: benchmark.suite.sourceHash,
     teamRevision: benchmark.baselineTeamRevision,
     ...passRate(benchmark.trials),
-    invalidTasks: benchmark.tasks.filter(({ baseline }) => baseline === 'invalid' || baseline === 'could_not_run').length,
+    unmeasuredTasks: benchmark.tasks.filter(({ baseline }) => !isMeasured(baseline)).length,
     arms: benchmark.arms.map((arm) => ({ key: armKey(arm), ...passRate(benchmark.trials.filter((trial) => trial.arm === arm.name)) })),
   };
 }
 
 export const BenchmarkHistory = {
   of({ runs, query, now }: { runs: readonly BenchmarkRunInput[]; query: BenchmarkHistoryQuery; now: Date }): BenchmarkHistoryView {
-    const window = { days: query.windowDays, from: new Date(now.getTime() - query.windowDays * DAY_MS).toISOString(), to: now.toISOString() };
+    const window = { from: new Date(now.getTime() - query.windowDays * DAY_MS).toISOString(), to: now.toISOString() };
     const inWindow = runs.filter(({ startedAt }) => startedAt >= window.from && startedAt <= window.to)
       .sort((left, right) => left.startedAt.localeCompare(right.startedAt));
     const bySuite = new Map<string, BenchmarkRunInput[]>();
@@ -286,15 +299,15 @@ export const BenchmarkHistory = {
     const own = chosen ? bySuite.get(chosen.suite) ?? [] : [];
     const newest = own.at(-1);
     if (!chosen || !newest) return { window, suites };
-    const current = own.filter(({ benchmark }) => benchmark.suite.sourceHash === newest.benchmark.suite.sourceHash);
+    const suiteRuns = { runs: own, current: own.filter(({ benchmark }) => benchmark.suite.sourceHash === newest.benchmark.suite.sourceHash), newest };
     return {
       window,
       suites,
       selected: {
         suite: chosen.suite,
         versions: versionsOf(own),
-        arms: armsOf(own, current, newest),
-        tasks: tasksOf(current, newest),
+        arms: armsOf(suiteRuns),
+        tasks: tasksOf(suiteRuns),
         runs: own.map(runRow).toReversed(),
         latest: { run: newest.run, source: newest.source, table: benchmarkTable({ ...(newest.steps ? { steps: newest.steps } : {}), benchmark: newest.benchmark }) },
       },

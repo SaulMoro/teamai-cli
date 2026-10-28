@@ -116,6 +116,7 @@ How the numbers are counted:
 - A pass rate is passed trials over planned trials, as the run's own table prints it.
 - The pooled numbers, the task tables and the leader count only the runs of the suite's current version: the suite files of its newest run. **Pass rate per run** also draws the older runs, after a dashed `Suite changed` line.
 - An arm is its name, tool, model and effort. When one of them changed, the older runs are a separate line, marked `earlier configuration`.
+- **Pass rate by arm** also counts the arm's deviations and trials not verified over those runs, as each run's table counts them. A deviation is a trial whose prompt ran on another tool, model or team revision than its arm's.
 - The interval is a 95% Wilson score interval. Two arms whose intervals overlap are not told apart by these runs.
 - Usage is the median over the trials whose tool reported it. Cost is per trial.
 - A run on this machine that was also published shows once, from this machine.
