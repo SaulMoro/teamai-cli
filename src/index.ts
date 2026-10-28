@@ -1260,9 +1260,6 @@ program
           }
           const { runCodebuddyTeamHook } = await import('./codebuddy-team-hooks.js');
           code = await runCodebuddyTeamHook(cmdOpts.teamHookGate, cmdOpts.teamHookCommand, parsedTimeout);
-        } else {
-          const { LIVE_TEAM_HOOK_TOOLS, runLiveTeamHooksDispatcher } = await import('./team-hooks-dispatch.js');
-          if (LIVE_TEAM_HOOK_TOOLS.includes(tool)) code = await runLiveTeamHooksDispatcher(tool, event);
         }
       } catch (e) {
         process.stderr.write(`teamai: team hooks did not run: ${(e as Error).message}\n`);

@@ -204,7 +204,8 @@ export default function teamaiHooks(pi) {
   // The team's hooks for a Claude event (hooks/hooks.yaml), run by
   // \`teamai hook-dispatch <Event> --tool omp --team-hooks\` when the team has
   // one on it: {block} for a PreToolUse hook that refuses, {context} for
-  // what a SessionStart or UserPromptSubmit hook adds, else undefined. Never
+  // what a SessionStart or UserPromptSubmit hook adds, else undefined. What a
+  // hook that failed or timed out wrote on stderr goes to OMP's console. Never
   // throws: OMP blocks a tool call whose handler throws or runs too long.
   const teamHooks = async (event, ctx, payload) => {
     try {
@@ -217,8 +218,12 @@ export default function teamaiHooks(pi) {
     try {
       const stdin = JSON.stringify({ cwd: ctx.cwd, ...sessionOf(ctx), ...(payload || {}) });
       const args = ["hook-dispatch", event, "--tool", "omp", "--team-hooks"];
-      const run = $\`\${launcher} \${args} < \${new Response(stdin)}\`.quiet().nothrow().text();
-      const out = await Promise.race([run, new Promise((resolve) => { timer = setTimeout(() => resolve(""), TEAM_HOOKS_TIMEOUT_MS); })]);
+      const run = $\`\${launcher} \${args} < \${new Response(stdin)}\`.quiet().nothrow();
+      const result = await Promise.race([run, new Promise((resolve) => { timer = setTimeout(() => resolve(undefined), TEAM_HOOKS_TIMEOUT_MS); })]);
+      if (!result) return undefined;
+      const err = result.stderr ? String(result.stderr).trimEnd() : "";
+      if (err) console.error(err);
+      const out = await result.text();
       return out.trim() ? JSON.parse(out) : undefined;
     } catch {
       return undefined;
@@ -227,13 +232,13 @@ export default function teamaiHooks(pi) {
     }
   };
 
-  // What the team's SessionStart hooks added, for every turn of the session.
-  let sessionContext;
+  // What the team's SessionStart hooks added at the session's start, for its first turn.
+  let started;
 
   pi.on("session_start", async (_event, ctx) => {
     await dispatch("session-start", ctx);
     instructions = loadInstructions(ctx);
-    sessionContext = teamHooks("SessionStart", ctx);
+    started = teamHooks("SessionStart", ctx);
   });
 
   pi.on("session_stop", async (_event, ctx) => {
@@ -242,15 +247,19 @@ export default function teamaiHooks(pi) {
   });
 
   // OMP rebuilds the system prompt from its base each turn, so appending
-  // here adds the blocks to every request once, without piling up.
+  // here adds the blocks to every request once, without piling up. For the
+  // same reason the SessionStart hooks run again each turn after the first:
+  // what they print follows what a prompt hook changed (#1492).
   pi.on("before_agent_start", async (event, ctx) => {
-    // Beside the built-in dispatch, so both fit in OMP's 30 s handler limit. A run an
+    // Beside the built-in dispatch, so all fit in OMP's 30 s handler limit. A run an
     // extension starts (messageType "custom") carries no user prompt.
+    const session = started ?? teamHooks("SessionStart", ctx);
+    started = undefined;
     const team = typeof event.prompt === "string" ? teamHooks("UserPromptSubmit", ctx, { prompt: event.prompt }) : undefined;
     await dispatch("prompt-submit", ctx, { prompt: event.prompt });
     const text = await (instructions ??= loadInstructions(ctx));
     const prompt = await team;
-    const added = [text, (await sessionContext)?.context, prompt?.context].filter((part) => typeof part === "string" && part);
+    const added = [text, (await session)?.context, prompt?.context].filter((part) => typeof part === "string" && part);
     return added.length ? { systemPrompt: [...event.systemPrompt, ...added] } : undefined;
   });
 

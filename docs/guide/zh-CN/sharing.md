@@ -253,7 +253,7 @@ OpenCode、Oh My Pi、Pi、OpenClaw、Kiro 和 Hermes 没有 Claude Code 那样�
 - 只跑 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse` 和 `Stop`。其他事件上的团队 hook，pull 会警告。
 - `UserPromptSubmit` 能加上下文，但拦不下这次输入。
 - Oh My Pi 最多等 `PreToolUse` hook 25 秒，更慢的 hook 拦不下这次调用。Hermes 的 hook 最多跑 300 秒。
-- OpenClaw 和 Hermes 在会话的第一条输入时跑 `SessionStart`。
+- OpenClaw 和 Hermes 在会话的第一条输入时跑 `SessionStart`。OpenCode、Oh My Pi 和 Pi 每次请求都会重建系统提示词，所以从第二次请求起每次都再跑一遍 `SessionStart`，它的输出会跟着 `UserPromptSubmit` hook 的改动走（比如 `/ponytail lite` 设了级别，下一轮就能看到）。
 - OpenClaw 从 `openclaw.json` 的 `plugins.load.paths` 加载 teamai 的插件。如果 `plugins.allow` 没列它，pull 会警告，hook 不会运行。
 
 ```yaml

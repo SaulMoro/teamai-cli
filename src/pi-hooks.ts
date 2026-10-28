@@ -150,7 +150,8 @@ export default function teamaiHooks(pi) {
   // The team's hooks for a Claude event (hooks/hooks.yaml), run by
   // \`teamai hook-dispatch <Event> --tool pi --team-hooks\` when the team has
   // one on it: {block} for a PreToolUse hook that refuses, {context} for what
-  // a SessionStart or UserPromptSubmit hook adds, else undefined. Never
+  // a SessionStart or UserPromptSubmit hook adds, else undefined. What a hook
+  // that failed or timed out wrote on stderr goes to Pi's console. Never
   // rejects: Pi blocks a tool call whose handler throws.
   const teamHooks = (event, ctx, payload) => new Promise((resolve) => {
     try {
@@ -159,13 +160,15 @@ export default function teamaiHooks(pi) {
       const cwd = ctx.cwd;
       const child = spawn(NODE, [ENTRY, "hook-dispatch", event, "--tool", "pi", "--team-hooks"], {
         cwd,
-        stdio: ["pipe", "pipe", "ignore"],
+        stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
         shell: false,
       });
       let out = "";
+      let err = "";
       const finish = () => {
         clearTimeout(timer);
+        if (err.trim()) console.error(err.trimEnd());
         try {
           resolve(out.trim() ? JSON.parse(out) : undefined);
         } catch {
@@ -178,6 +181,7 @@ export default function teamaiHooks(pi) {
         finish();
       }, TEAM_HOOKS_TIMEOUT_MS);
       child.stdout?.on("data", (chunk) => { out += chunk; });
+      child.stderr?.on("data", (chunk) => { err += chunk; });
       child.stdin?.on("error", () => {});
       child.stdin?.end(JSON.stringify({ cwd, ...sessionOf(ctx), ...(payload || {}) }));
       child.once("close", finish);
@@ -187,13 +191,13 @@ export default function teamaiHooks(pi) {
     }
   });
 
-  // What the team's SessionStart hooks added, for every run of the session.
-  let sessionContext;
+  // What the team's SessionStart hooks added at the session's start, for its first run.
+  let started;
 
   pi.on("session_start", async (_event, ctx) => {
     await dispatch("session-start", ctx);
     instructions = loadInstructions(ctx);
-    sessionContext = teamHooks("SessionStart", ctx);
+    started = teamHooks("SessionStart", ctx);
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
@@ -202,13 +206,17 @@ export default function teamaiHooks(pi) {
   });
 
   // Pi renders the system prompt again for every run, so adding the blocks
-  // to this run's prompt reaches the model once, without piling up.
+  // to this run's prompt reaches the model once, without piling up. For the
+  // same reason the SessionStart hooks run again each run after the first:
+  // what they print follows what a prompt hook changed (#1492).
   pi.on("before_agent_start", async (event, ctx) => {
+    const session = started ?? teamHooks("SessionStart", ctx);
+    started = undefined;
     await dispatch("prompt-submit", ctx, { prompt: event.prompt });
     const text = await (instructions ??= loadInstructions(ctx));
     // A run an extension starts (messageType "custom") carries no user prompt.
     const prompt = typeof event.prompt === "string" ? await teamHooks("UserPromptSubmit", ctx, { prompt: event.prompt }) : undefined;
-    const added = [text, (await sessionContext)?.context, prompt?.context].filter((part) => typeof part === "string" && part);
+    const added = [text, (await session)?.context, prompt?.context].filter((part) => typeof part === "string" && part);
     return added.length ? { systemPrompt: [event.systemPrompt, ...added].join("\\n\\n") } : undefined;
   });
 

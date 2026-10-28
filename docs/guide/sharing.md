@@ -253,7 +253,7 @@ OpenCode, Oh My Pi, Pi, OpenClaw, Kiro, and Hermes have no Claude Code hook file
 - Only `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop` run. Pull warns about a team hook on any other event.
 - `UserPromptSubmit` adds context but cannot block the prompt.
 - Oh My Pi waits 25 seconds for a `PreToolUse` hook. A slower hook does not block the call. Hermes stops any hook after 300 seconds.
-- OpenClaw and Hermes run `SessionStart` on the session's first prompt.
+- OpenClaw and Hermes run `SessionStart` on the session's first prompt. OpenCode, Oh My Pi, and Pi build the system prompt for each request, so they run `SessionStart` again before each request after the first, so what it prints follows a change a `UserPromptSubmit` hook made (a `/ponytail lite` that sets a level shows on the next turn).
 - OpenClaw loads teamai's plugin from `plugins.load.paths` in `openclaw.json`. If `plugins.allow` leaves it out, pull warns and the hooks do not run.
 
 ```yaml

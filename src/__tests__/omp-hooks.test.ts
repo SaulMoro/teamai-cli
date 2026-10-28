@@ -315,6 +315,28 @@ describe('OMP extension: the team\'s hooks', () => {
     expect(team(dispatches)).toEqual([]);
   });
 
+  it('runs the SessionStart hooks before each turn, so a prompt hook\'s change shows on the next one (#1492)', async () => {
+    await teamHooksOn('SessionStart', 'UserPromptSubmit');
+    let level = 'full';
+    let prompts = 0;
+    const { on } = loadOmpExtension((args) => {
+      if (!args.includes('--team-hooks')) return '';
+      if (args[1] === 'UserPromptSubmit' && ++prompts === 2) level = 'lite';
+      return args[1] === 'SessionStart' ? JSON.stringify({ context: `Ponytail level: ${level}` }) : '';
+    });
+    await on.session_start({}, ctx);
+    expect(await on.before_agent_start({ prompt: 'hi', systemPrompt: ['BASE'] }, ctx)).toEqual({ systemPrompt: ['BASE', 'Ponytail level: full'] });
+    await on.before_agent_start({ prompt: '/ponytail lite', systemPrompt: ['BASE'] }, ctx);
+    expect(await on.before_agent_start({ prompt: 'go on', systemPrompt: ['BASE'] }, ctx)).toEqual({ systemPrompt: ['BASE', 'Ponytail level: lite'] });
+  });
+
+  it('shows what a team hook wrote on stderr in OMP\'s console', async () => {
+    await teamHooksOn('PostToolUse');
+    const { on, errors } = loadOmpExtension(() => '', (args) => args.includes('--team-hooks') ? 'prettier: command not found\n' : '');
+    await on.tool_result({ toolCallId: 'c1', toolName: 'write', input: { path: 'a.ts' }, content: [], isError: false }, ctx);
+    expect(errors).toEqual(['prettier: command not found']);
+  });
+
   it('runs the PostToolUse and Stop team hooks with the event\'s payload', async () => {
     await teamHooksOn('PostToolUse', 'Stop');
     const { on, dispatches } = loadOmpExtension();
@@ -361,14 +383,6 @@ describe('OMP extension: team instructions in the system prompt (#945)', () => {
     expect(await on.before_agent_start({ prompt: 'one', systemPrompt: ['BASE'] }, ctx)).toBeUndefined();
   });
 
-  it('adds the project team hooks\' output to the prompt (#1492)', async () => {
-    const { on, dispatches } = loadOmpExtension((args) => args.includes('--team-hooks') ? `team-${args[1]}\n` : '');
-    await on.session_start({}, ctx);
-    const turn = await on.before_agent_start({ prompt: 'one', systemPrompt: ['BASE'] }, ctx);
-    expect(turn).toEqual({ systemPrompt: ['BASE', 'team-session-start', 'team-prompt-submit'] });
-    expect(dispatches.filter((d) => d.args.includes('--team-hooks')).map((d) => d.args[1]))
-      .toEqual(['session-start', 'prompt-submit']);
-  });
 });
 
 // Recall attribution (#884): the extension evaluated in `vm`, with a fake host.

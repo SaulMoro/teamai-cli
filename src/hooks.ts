@@ -27,7 +27,6 @@ import {
   getDataHome,
   isGitExcludeEnabled,
   getTeamaiHome,
-  getBusinessRoot,
   isAgentExcluded,
   isSelfMode,
   managedMcpManifestKey,
@@ -40,7 +39,6 @@ import { builtinHookDefs, applyBuiltinOverride, getCodebuddyTeamHookDispatchComm
 import { encodeCodebuddyProjectGate, isCodebuddyTeamGateForProject, parseCodebuddyTeamGate, regateCodebuddyTeamHookCommand } from './codebuddy-team-hooks.js';
 import type { BuiltinHookOverride } from './builtin-hooks.js';
 import { parseTeamHooks, readBuiltinOverride, resolveTeamHooks, teamHookToDef } from './resources/hooks.js';
-import { recordAppliedTeamHooks } from './team-hook-bridges.js';
 import { entryLayout } from './namespaced-entries.js';
 import { historicalContents } from './utils/team-history.js';
 import { getUserHome } from './utils/home.js';
@@ -3281,7 +3279,7 @@ export async function reconcileHooksToAllTools(
   teamDefs: HookDef[],
   manifestPath: string,
   opts: {
-    removeAll?: boolean; builtinOverride?: BuiltinHookOverride; filterAgents?: string[]; settingsOnly?: boolean; installedBaseDir?: string; teamHookProjectRoot?: string; /** The project key OpenCode/OMP record their applied hooks under; self mode's business repo has no partition root (#1492). */ teamHookBridgeRoot?: string; teamHookChildRoots?: readonly string[]; heldTeamHookIds?: readonly string[]; scope?: Scope; builtinsOnly?: BuiltinsOnly; mainCheckout?: MainCheckoutHooks | null; teamHookHistory?: TeamHookHistory; codebuddyDualRunner?: boolean;
+    removeAll?: boolean; builtinOverride?: BuiltinHookOverride; filterAgents?: string[]; settingsOnly?: boolean; installedBaseDir?: string; teamHookProjectRoot?: string; teamHookChildRoots?: readonly string[]; heldTeamHookIds?: readonly string[]; scope?: Scope; builtinsOnly?: BuiltinsOnly; mainCheckout?: MainCheckoutHooks | null; teamHookHistory?: TeamHookHistory; codebuddyDualRunner?: boolean;
     /**
      * The active config's `toolRoots`, so the gate probes a member's recorded
      * root rather than the path's two-segment shape (see `toolGateRoot`).
@@ -3417,13 +3415,6 @@ export async function reconcileHooksToAllTools(
     if (tool === 'opencode') {
       if (opts.settingsOnly) continue;
       try {
-        if (!opts.builtinsOnly) {
-          await recordAppliedTeamHooks('opencode', defs.filter((d) => !opts.heldTeamHookIds?.includes(d.key)), {
-            scope: opts.scope ?? (opts.teamHookProjectRoot ? 'project' : 'user'),
-            projectRoot: opts.teamHookBridgeRoot ?? opts.teamHookProjectRoot,
-            removeAll: opts.removeAll,
-          });
-        }
         await reconcileBridged(tool);
         await reconcileOpencodePlugin(baseDir, opts.removeAll, opts.installedBaseDir);
       } catch (e) {
@@ -3437,13 +3428,6 @@ export async function reconcileHooksToAllTools(
     if (tool === 'omp') {
       if (opts.settingsOnly) continue;
       try {
-        if (!opts.builtinsOnly) {
-          await recordAppliedTeamHooks('omp', defs.filter((d) => !opts.heldTeamHookIds?.includes(d.key)), {
-            scope: opts.scope ?? (opts.teamHookProjectRoot ? 'project' : 'user'),
-            projectRoot: opts.teamHookBridgeRoot ?? opts.teamHookProjectRoot,
-            removeAll: opts.removeAll,
-          });
-        }
         await reconcileBridged(tool);
         await reconcileOmpExtension(opts.removeAll);
       } catch (e) {
@@ -4179,12 +4163,6 @@ export async function reconcileTeamHooksForConfig(
     filterAgents,
     teamHookProjectRoot: localConfig.scope === 'project' && !isSelfMode(localConfig)
       ? localConfig.projectRoot
-      : undefined,
-    // Self mode has no partition projectRoot, but its project install's team
-    // repo is the business repo: OpenCode/OMP need a project key to record what
-    // pull applied. This is only the bridge record, never a settings gate.
-    teamHookBridgeRoot: localConfig.scope === 'project'
-      ? (isSelfMode(localConfig) ? getBusinessRoot(localConfig) : localConfig.projectRoot)
       : undefined,
     ...(localConfig.children ? { teamHookChildRoots: localConfig.children.roots } : {}),
     ...(heldTeamHookIds ? { heldTeamHookIds } : {}),

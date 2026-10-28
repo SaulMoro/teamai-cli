@@ -142,32 +142,6 @@ describe('buildPluginSource', () => {
     expect(spawns.every(({ child }) => child.listenerCount('error') === 0)).toBe(true);
   });
 
-  it('adds a project team hook\'s output to the next request\'s system prompt (#1492)', async () => {
-    const spawn = vi.fn((_command: string, args: string[]) => {
-      const child = new EventEmitter() as any;
-      child.stdout = new EventEmitter();
-      child.stderr = new EventEmitter();
-      child.stdin = {
-        write: vi.fn(),
-        end: () => queueMicrotask(() => {
-          if (args.includes('--team-hooks')) child.stdout.emit('data', Buffer.from('TEAM-CTX'));
-          child.emit('close', 0);
-        }),
-      };
-      return child;
-    });
-    const plugin = loadPluginDefinition(src, { __childProcess: { spawn } });
-    const hooks = await plugin.server({ directory: '/work/proj' });
-    await hooks.event({ event: { type: 'session.created', properties: { sessionID: 'ses_1' } } });
-
-    const output = { system: ['BASE'] };
-    await hooks['experimental.chat.system.transform']({ sessionID: 'ses_1' }, output);
-    expect(output.system).toEqual(['BASE', 'TEAM-CTX']);
-
-    // The SessionStart context rides every request; a prompt hook\'s output once.
-    await hooks['experimental.chat.system.transform']({ sessionID: 'ses_1' }, output);
-    expect(output.system).toEqual(['BASE', 'TEAM-CTX', 'TEAM-CTX']);
-  });
 });
 
 // #884: every dispatch carries the host session, so recall attribution joins
@@ -304,6 +278,34 @@ describe('OpenCode plugin: the team\'s hooks', () => {
     if (typeof v2.cleanup === 'function') await v2.cleanup();
   });
 
+  it('runs the SessionStart hooks for each request, so a prompt hook\'s change shows on the next one (#1492)', async () => {
+    await teamHooksOn('SessionStart', 'UserPromptSubmit');
+    let level = 'full';
+    let prompts = 0;
+    const { hooks } = await loadOpencodePlugin({ directory: '/work/proj' }, (args) => {
+      if (!args.includes('--team-hooks')) return '';
+      if (args[2] === 'UserPromptSubmit' && ++prompts === 2) level = 'lite';
+      return args[2] === 'SessionStart' ? JSON.stringify({ context: `Ponytail level: ${level}` }) : '';
+    });
+    const turn = async (text: string) => {
+      await hooks['chat.message']({ sessionID: 's1' }, { parts: [{ type: 'text', text }] });
+      const output = { system: ['BASE'] };
+      await hooks['experimental.chat.system.transform']({ sessionID: 's1' }, output);
+      return output.system;
+    };
+    await hooks.event({ event: { type: 'session.created', properties: { sessionID: 's1' } } });
+    expect(await turn('hi')).toEqual(['BASE', 'Ponytail level: full']);
+    await turn('/ponytail lite');
+    expect(await turn('go on')).toEqual(['BASE', 'Ponytail level: lite']);
+  });
+
+  it('shows what a team hook wrote on stderr in OpenCode\'s console', async () => {
+    await teamHooksOn('Stop');
+    const { hooks, errors } = await loadOpencodePlugin({ directory: '/work/proj' }, () => '', (args) => args.includes('--team-hooks') ? 'teamai: team hook lint timed out after 60s\n' : '');
+    await hooks.event({ event: { type: 'session.idle', properties: { sessionID: 's1' } } });
+    expect(errors).toEqual(['teamai: team hook lint timed out after 60s']);
+  });
+
   it('runs the PostToolUse and Stop team hooks with the event\'s payload', async () => {
     await teamHooksOn('PostToolUse', 'Stop');
     const { hooks, dispatches } = await loadOpencodePlugin({ directory: '/work/proj' });
@@ -315,7 +317,6 @@ describe('OpenCode plugin: the team\'s hooks', () => {
     ]);
   });
 });
-
 
 describe('injectOpencodeHooks / removeOpencodeHooks', () => {
   let tmp: string;
@@ -486,7 +487,6 @@ describe('OpenCode plugin: hook stdout is discarded (#719 review)', () => {
   });
 });
 
-
 describe('OpenCode V2 built-in plugin', () => {
   it('dispatches lifecycle only for its location and aborts on unload', async () => {
     const host = await loadV2Plugin();
@@ -526,26 +526,6 @@ describe('OpenCode V2 built-in plugin', () => {
     expect(host.disposed.sort()).toEqual(['session.compaction', 'session.context', 'session.prompt', 'tool.execute.after', 'tool.execute.before']);
   });
 
-  it('adds project team hooks to the V2 context channel (#1492)', async () => {
-    const spawn = vi.fn((_command: string, args: string[]) => {
-      const child = new EventEmitter() as any;
-      child.stdout = new EventEmitter();
-      child.stderr = new EventEmitter();
-      child.stdin = {
-        write: vi.fn(),
-        end: () => queueMicrotask(() => {
-          if (args.includes('--team-hooks')) child.stdout.emit('data', Buffer.from('V2-CTX'));
-          child.emit('close', 0);
-        }),
-      };
-      return child;
-    });
-    const host = await loadV2Plugin(buildPluginSource(), { __childProcess: { spawn } });
-    const event = { sessionID: 'ses_v2', system: [] as Array<{ type: string; text: string }> };
-    await host.callbacks['session.context'](event);
-    expect(event.system.map((part) => part.text)).toContain('V2-CTX');
-    await host.cleanup?.();
-  });
 });
 
 // #915: on OpenCode V2 the team MCP servers reach a project through the plugin,

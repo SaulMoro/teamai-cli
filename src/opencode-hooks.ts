@@ -146,7 +146,8 @@ const TeamaiHooks = async ({ directory, worktree }) => {
   // The team's hooks for a Claude event (hooks/hooks.yaml), run by
   // \`teamai hook-dispatch <Event> --tool opencode --team-hooks\` when the team
   // has one on it: {block} for a PreToolUse hook that refuses, {context} for
-  // what a SessionStart or UserPromptSubmit hook adds, else undefined.
+  // what a SessionStart or UserPromptSubmit hook adds, else undefined. What a
+  // hook that failed or timed out wrote on stderr goes to OpenCode's console.
   const teamHooks = async (event, payload) => {
     try {
       const fs = await import('node:fs/promises');
@@ -156,11 +157,13 @@ const TeamaiHooks = async ({ directory, worktree }) => {
       return await new Promise((resolve) => {
         const child = spawn(NODE, [ENTRY, 'hook-dispatch', event, '--tool', 'opencode', '--team-hooks'], {
           windowsHide: true,
-          stdio: ['pipe', 'pipe', 'ignore'],
+          stdio: ['pipe', 'pipe', 'pipe'],
         });
         let out = '';
+        let err = '';
         const finish = () => {
           clearTimeout(timer);
+          if (err.trim()) console.error(err.trimEnd());
           try {
             resolve(out.trim() ? JSON.parse(out) : undefined);
           } catch {
@@ -173,6 +176,7 @@ const TeamaiHooks = async ({ directory, worktree }) => {
           finish();
         }, TEAM_HOOKS_TIMEOUT_MS);
         child.stdout.on('data', (chunk) => { out += chunk; });
+        child.stderr.on('data', (chunk) => { err += chunk; });
         child.once('error', () => { out = ''; finish(); });
         child.once('close', finish);
         child.stdin.end(JSON.stringify({ cwd, ...(payload || {}) }));
@@ -181,8 +185,9 @@ const TeamaiHooks = async ({ directory, worktree }) => {
       return undefined;
     }
   };
-  // What each session's SessionStart hooks added, and its last prompt's UserPromptSubmit hooks.
-  const sessionContexts = new Map();
+  // What each session's SessionStart hooks added at its start, for its first
+  // request, and what its last prompt's UserPromptSubmit hooks added.
+  const startContexts = new Map();
   const promptContexts = new Map();
 
   return {
@@ -192,8 +197,8 @@ const TeamaiHooks = async ({ directory, worktree }) => {
       const props = (event && event.properties) || {};
       const session = { session_id: nonEmpty(props.sessionID) || nonEmpty(props.info && props.info.id) };
       if (event.type === 'session.created') {
-        // The host does not wait for this event; the system prompt waits for the context.
-        sessionContexts.set(session.session_id, teamHooks('SessionStart', session));
+        // The host does not wait for this event; the first request waits for the context.
+        startContexts.set(session.session_id, teamHooks('SessionStart', session));
         await dispatch('session-start', session);
       } else if (event.type === 'session.idle') {
         await dispatch('stop', session);
@@ -209,9 +214,14 @@ const TeamaiHooks = async ({ directory, worktree }) => {
       });
       if (decision && typeof decision.block === 'string') throw new Error(decision.block);
     },
+    // OpenCode builds the system prompt for each request, so the SessionStart
+    // hooks run again for each after the first: what they print follows what
+    // a prompt hook changed (#1492).
     'experimental.chat.system.transform': async (input, output) => {
       const session = nonEmpty(input && input.sessionID);
-      const added = [(await sessionContexts.get(session))?.context, promptContexts.get(session)];
+      const started = startContexts.get(session);
+      startContexts.delete(session);
+      const added = [(await (started ?? teamHooks('SessionStart', { session_id: session })))?.context, promptContexts.get(session)];
       for (const text of added) if (typeof text === 'string' && text && output && Array.isArray(output.system)) output.system.push(text);
     },
     // A new user message maps to Claude's UserPromptSubmit. The prompt text

@@ -395,6 +395,28 @@ describe('Pi extension: the team\'s hooks', () => {
     expect(team(dispatches)).toEqual([]);
   });
 
+  it('runs the SessionStart hooks before each run, so a prompt hook\'s change shows on the next one (#1492)', async () => {
+    await teamHooksOn('SessionStart', 'UserPromptSubmit');
+    let level = 'full';
+    let prompts = 0;
+    const { on } = loadPiExtension((args) => {
+      if (!args.includes('--team-hooks')) return '';
+      if (args[1] === 'UserPromptSubmit' && ++prompts === 2) level = 'lite';
+      return args[1] === 'SessionStart' ? JSON.stringify({ context: `Ponytail level: ${level}` }) : '';
+    });
+    await on.session_start({}, ctx);
+    expect(await on.before_agent_start({ prompt: 'hi', systemPrompt: 'BASE' }, ctx)).toEqual({ systemPrompt: 'BASE\n\nPonytail level: full' });
+    await on.before_agent_start({ prompt: '/ponytail lite', systemPrompt: 'BASE' }, ctx);
+    expect(await on.before_agent_start({ prompt: 'go on', systemPrompt: 'BASE' }, ctx)).toEqual({ systemPrompt: 'BASE\n\nPonytail level: lite' });
+  });
+
+  it('shows what a team hook wrote on stderr in Pi\'s console', async () => {
+    await teamHooksOn('Stop');
+    const { on, errors } = loadPiExtension(() => '', (args) => args.includes('--team-hooks') ? 'teamai: team hook lint timed out after 60s\n' : '');
+    await on.agent_settled({}, ctx);
+    expect(errors).toEqual(['teamai: team hook lint timed out after 60s']);
+  });
+
   it('runs the PostToolUse and Stop team hooks with the event\'s payload', async () => {
     await teamHooksOn('PostToolUse', 'Stop');
     const { on, dispatches } = loadPiExtension();

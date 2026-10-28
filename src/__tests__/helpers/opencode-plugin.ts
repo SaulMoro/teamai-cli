@@ -39,11 +39,18 @@ export function loadPluginDefinition(source: string, globals: Record<string, unk
  * `child_process.spawn` records each dispatch instead of running `teamai`.
  * `dispatches` fills as the host calls the returned hooks.
  */
-function capturePlugin(source: string, globals: Record<string, unknown> = {}, stdoutFor: (args: string[]) => string = () => '') {
+function capturePlugin(
+  source: string,
+  globals: Record<string, unknown> = {},
+  stdoutFor: (args: string[]) => string = () => '',
+  stderrFor: (args: string[]) => string = () => '',
+) {
   const dispatches: PluginDispatch[] = [];
+  const errors: string[] = [];
   const spawn = (_command: string, args: string[]) => {
-    const child = new EventEmitter() as EventEmitter & { stdin: { write: (s: string) => void; end: (s?: string) => void }; stdout: EventEmitter; kill: () => void };
+    const child = new EventEmitter() as EventEmitter & { stdin: { write: (s: string) => void; end: (s?: string) => void }; stdout: EventEmitter; stderr: EventEmitter; kill: () => void };
     child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
     child.kill = () => undefined;
     let stdin = '';
     child.stdin = {
@@ -54,18 +61,25 @@ function capturePlugin(source: string, globals: Record<string, unknown> = {}, st
         void Promise.resolve().then(() => {
           const stdout = stdoutFor(args);
           if (stdout) child.stdout.emit('data', stdout);
+          const stderr = stderrFor(args);
+          if (stderr) child.stderr.emit('data', stderr);
           child.emit('close', 0);
         });
       },
     };
     return child;
   };
-  return { plugin: loadPluginDefinition(source, { __childProcess: { spawn }, ...globals }), dispatches };
+  const console = { error: (message: unknown) => { errors.push(String(message)); } };
+  return { plugin: loadPluginDefinition(source, { __childProcess: { spawn }, console, ...globals }), dispatches, errors };
 }
 
-export async function loadOpencodePlugin(ctx: { directory?: string; worktree?: string } = {}, stdoutFor?: (args: string[]) => string) {
-  const { plugin, dispatches } = capturePlugin(buildPluginSource(), {}, stdoutFor);
-  return { hooks: await plugin.server(ctx), dispatches };
+export async function loadOpencodePlugin(
+  ctx: { directory?: string; worktree?: string } = {},
+  stdoutFor?: (args: string[]) => string,
+  stderrFor?: (args: string[]) => string,
+) {
+  const { plugin, dispatches, errors } = capturePlugin(buildPluginSource(), {}, stdoutFor, stderrFor);
+  return { hooks: await plugin.server(ctx), dispatches, errors };
 }
 
 /** The part of V2's `ctx.mcp.transform` editor a plugin uses. */
