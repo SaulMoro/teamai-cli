@@ -85,18 +85,18 @@ User scope, from #1221's matrix; a fix merged since is marked `t`, with a note. 
 | JoyCode | ? | ? | ◐s | ? | ? | ? | ? | ? |
 | Qoder | ? | ? | ◐s | ✓s | ✓d | ? | ✓s<sup>9</sup> | ✓s |
 | Qoder CN | ? | ? | ◐s | ✓s | ? | ? | ✓s<sup>9</sup> | ✓t<sup>10</sup> |
-| Kiro | ? | ? | ◐d | ? | ✓d | ? | ✓d<sup>11</sup> | ? |
-| Trae | ? | ? | ? | ? | ? | ? | ✓s<sup>12</sup> | ? |
-| Trae CN | ? | ? | ? | ? | ? | ? | ✓s<sup>12</sup> | ? |
-| ZCode | ✓t | +s | ✓s | ✓s | +s | ✓t<sup>3</sup> | ✓d<sup>13</sup> | +t<sup>14</sup> |
-| Oh My Pi | ✓s | +s | ✓v | ✓t<sup>2</sup> | ✓d | ? | ✓s<sup>15</sup> | —t |
-| Pi Coding Agent | ✓s | +v | ✓v | ✓t<sup>2</sup> | ✓s | ? | ◐s<sup>16</sup> | ? |
+| Kiro | ? | ? | ◐d | ? | ✓d | ? | ✓d<sup>11</sup> | ✓t<sup>12</sup> |
+| Trae | ? | ? | ? | ? | ? | ? | ✓s<sup>13</sup> | ? |
+| Trae CN | ? | ? | ? | ? | ? | ? | ✓s<sup>13</sup> | ? |
+| ZCode | ✓t | +s | ✓s | ✓s | +s | ✓t<sup>3</sup> | ✓d<sup>14</sup> | +t<sup>15</sup> |
+| Oh My Pi | ✓s | +s | ✓v | ✓t<sup>2</sup> | ✓d | ? | ✓s<sup>16</sup> | ✓t<sup>12</sup> |
+| Pi Coding Agent | ✓s | +v | ✓v | ✓t<sup>2</sup> | ✓s | ? | ◐s<sup>17</sup> | ✓t<sup>12</sup> |
 | CodeBuddy | ? | ✓d | ✓s | ✓v | ✓d | +v | ✓t<sup>1</sup> | ✓s |
-| OpenClaw | ◐d | +d | ✓s | +s | ✓d | —t | ◐s<sup>17</sup> | ◐s |
-| Hermes | ◐s | +s | ✓v | +s | ✓s | —t | ✓s<sup>18</sup> | ✓t<sup>19</sup> |
+| OpenClaw | ◐d | +d | ✓s | +s | ✓d | —t | ◐s<sup>18</sup> | ✓t<sup>12</sup> |
+| Hermes | ◐s | +s | ✓v | +s | ✓s | —t | ✓s<sup>19</sup> | ✓t<sup>12</sup> |
 | DeepSeek Harness | ✗s | +s | ✓s | ✓t<sup>2</sup> | +s | ? | ◐s<sup>20</sup> | —t |
 | WorkBuddy | ? | ✓t | ✓t | ? | ✓t | ? | ✓t<sup>21</sup> | ? |
-| OpenCode | ? | ✓t | ✓v | ✓t<sup>2</sup> | ✓v | ? | ✓t<sup>1</sup> | ◐t |
+| OpenCode | ? | ✓t | ✓v | ✓t<sup>2</sup> | ✓v | ? | ✓t<sup>1</sup> | ✓t<sup>12</sup> |
 | Muse Code | ✓t | +v | ✓t | ✓v | ✓v | ✓t<sup>3</sup> | ✓t<sup>1</sup> | ✓t<sup>22</sup> |
 
 Notes:
@@ -112,14 +112,14 @@ Notes:
 9. Claude Code-style subagents, transcripts under <id>/subagents/ (qodercli 1.1.78); not run
 10. #1224 writes ~/.qoder-cn/settings.json; not rerun
 11. a subagent works in its own context window, without the conversation; not run
-12. the Task tool starts a fresh subagent; no session variable, so the session names its tool with --tools; not run
-13. the built-in general-purpose subagent works in its own context; not run
-14. refused until teamai writes the hooks.events shape (#1224)
-15. the task tool starts each child as a new agent session (omp 18.12.6); not run
-16. bare Pi starts no subagent, so its session answers h4 and does not judge; the subagent example extension adds one (since 0.24.0); not run
-17. sessions_spawn with isolated context, in the coding and messaging tool profiles; a tool policy can remove it; not run
-18. delegate_task starts a child agent with a fresh conversation; not run
-19. #1224 maps the events to Hermes's; not rerun
+12. runs from teamai's team-hook bridge, which can block a tool call; not rerun
+13. the Task tool starts a fresh subagent; no session variable, so the session names its tool with --tools; not run
+14. the built-in general-purpose subagent works in its own context; not run
+15. refused until teamai writes the hooks.events shape (#1224)
+16. the task tool starts each child as a new agent session (omp 18.12.6); not run
+17. bare Pi starts no subagent, so its session answers h4 and does not judge; the subagent example extension adds one (since 0.24.0); not run
+18. sessions_spawn with isolated context, in the coding and messaging tool profiles; a tool policy can remove it; not run
+19. delegate_task starts a child agent with a fresh conversation; not run
 20. the subagent tool with the fresh spawn backend, not fork; the minimal preset leaves it out; not run
 21. CodeBuddy's engine, whose session judges its skill-driven run; not run
 22. #1224 writes them to settings.json; not rerun

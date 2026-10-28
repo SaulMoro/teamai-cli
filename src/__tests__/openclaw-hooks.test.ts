@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { transformSync } from 'esbuild';
 import { parseDocument } from 'yaml';
 import {
-  applyOpenClawAgentHook, removeOpenClawAgentHook, injectOpenClawHooks, removeOpenClawHookEntry, removeOpenClawHooks, OPENCLAW_HOOK_DIR,
+  removeOpenClawAgentHook, injectOpenClawHooks, removeOpenClawHookEntry, removeOpenClawHooks, OPENCLAW_HOOK_DIR,
 } from '../openclaw-hooks.js';
 import { injectHooksToAllTools, reconcileHooksToAllTools } from '../hooks.js';
 import { openclawWorkspaceDir } from '../locate.js';
@@ -378,50 +378,21 @@ fs.appendFileSync(${JSON.stringify(logFile)}, process.argv.slice(2).join(' ') + 
   });
 });
 
-describe('applyOpenClawAgentHook', () => {
-  it.each([
-    ['SessionStart', ['command:new', 'command:reset']],
-    ['UserPromptSubmit', ['message:received']],
-  ])('subscribes a %s hook to the events OpenClaw emits for it', async (event, expected) => {
-    await applyOpenClawAgentHook({ slug: 'team-check', event, command: 'echo hi' });
-
-    // Server-pushed hooks are managed hooks, under <state dir>/hooks.
-    const { errors, data } = readHookFrontmatter(path.join(tmpDir, 'hooks', 'team-check'));
-    expect(errors).toEqual([]);
-    expect((data.metadata as { openclaw: { events: string[] } }).openclaw.events).toEqual(expected);
-  });
-
-  it('selects the hook in openclaw.json, so the teamai entry does not leave it out of the allowlist', async () => {
+describe('removeOpenClawAgentHook', () => {
+  it('removes the agent hook directory and openclaw.json entry an earlier release installed', async () => {
     const cfgPath = path.join(tmpDir, 'openclaw.json');
     await injectOpenClawHooks('openclaw');
-    await applyOpenClawAgentHook({ slug: 'team-check', event: 'SessionStart', command: 'echo hi' });
-
-    const { data } = readHookFrontmatter(path.join(tmpDir, 'hooks', 'team-check'));
-    const hookKey = (data.metadata as { openclaw: { hookKey: string } }).openclaw.hookKey;
-    expect(JSON.parse(fs.readFileSync(cfgPath, 'utf-8')).hooks.internal.entries).toEqual({
-      'teamai-status-report': { enabled: true },
-      [hookKey]: { enabled: true },
-    });
+    const dir = path.join(tmpDir, 'hooks', 'team-check');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'HOOK.md'), '---\nname: "[teamai] team-check"\n---\n');
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf-8'));
+    cfg.hooks.internal.entries['teamai-agent-team-check'] = { enabled: true };
+    fs.writeFileSync(cfgPath, JSON.stringify(cfg));
 
     await removeOpenClawAgentHook({ slug: 'team-check' });
-    expect(fs.existsSync(path.join(tmpDir, 'hooks', 'team-check'))).toBe(false);
-    expect(JSON.parse(fs.readFileSync(cfgPath, 'utf-8')).hooks.internal.entries).toEqual({
-      'teamai-status-report': { enabled: true },
-    });
-  });
 
-  it('adds no entry where OpenClaw already loads every managed hook it discovers', async () => {
-    const cfgPath = path.join(tmpDir, 'openclaw.json');
-    const cfg = { agents: { defaults: { workspace: wsDir } }, hooks: { internal: { enabled: true } } };
-    fs.writeFileSync(cfgPath, JSON.stringify(cfg));
-    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
-    try {
-      await applyOpenClawAgentHook({ slug: 'team-check', event: 'SessionStart', command: 'echo hi' });
-      expect(JSON.parse(fs.readFileSync(cfgPath, 'utf-8'))).toEqual(cfg);
-      expect(warn).not.toHaveBeenCalled();
-    } finally {
-      warn.mockRestore();
-    }
+    expect(fs.existsSync(dir)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(cfgPath, 'utf-8')).hooks.internal.entries).toEqual({ 'teamai-status-report': { enabled: true } });
   });
 });
 

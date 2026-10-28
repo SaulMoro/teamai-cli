@@ -298,11 +298,7 @@ export async function removeHermesHooks(home = toolHome('hermes')): Promise<void
   if (existed) log.success('Removed teamai Hermes hook from ' + scriptPath);
 }
 
-/**
- * The Hermes shell-hook event that fires where each agent hook event does.
- * Hermes ignores any other key under `hooks:` (#1220). It runs
- * `on_session_end` at the end of every turn, as Claude runs `Stop`.
- */
+/** The Hermes shell-hook event an earlier release registered each agent hook event under (#1220). */
 const AGENT_TO_HERMES_EVENTS: Readonly<Record<string, string>> = {
   SessionStart: 'on_session_start',
   UserPromptSubmit: 'pre_llm_call',
@@ -312,32 +308,9 @@ const AGENT_TO_HERMES_EVENTS: Readonly<Record<string, string>> = {
 };
 
 /**
- * Register a named agent hook entry in Hermes config.yaml and allowlist.
- *
- * @param def - Hook definition including a human-readable `slug` for logging.
- */
-export async function applyHermesAgentHook(def: {
-  slug: string;
-  event: string;
-  command: string;
-  matcher?: string;
-  timeout?: number;
-}): Promise<void> {
-  const event = AGENT_TO_HERMES_EVENTS[def.event];
-  if (!event) throw new Error(`Hermes has no hook event for ${def.event}`);
-  const entry: { command: string; matcher?: string; timeout?: number } = {
-    command: def.command,
-  };
-  if (def.matcher !== undefined) entry.matcher = def.matcher;
-  if (def.timeout !== undefined) entry.timeout = def.timeout;
-
-  await upsertHermesHook(event, entry);
-  await addHermesAllowlist(event, def.command);
-  log.success(`Installed Hermes agent hook [${def.slug}]`);
-}
-
-/**
- * Remove a named agent hook entry from Hermes config.yaml and allowlist.
+ * Remove the agent hook entry an earlier release registered in Hermes
+ * config.yaml and its allowlist; agent hooks now run through the team-hook
+ * entries.
  *
  * @param opts - At minimum `command` is required; providing `event` also
  *   removes the allowlist entry for that specific `(event, command)` pair.

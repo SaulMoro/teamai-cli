@@ -52,7 +52,7 @@ import {
 } from './codex-trust.js';
 import { codexDispatcherCheckouts, codexDispatcherProjects, dispatchedCodexHooks, isCodexTeamHookDispatcher, reconcileCodexDispatchers, runsFromCodexDispatcher, setCodexDispatcherHooks } from './codex-team-hooks.js';
 import type { CodexTeamHook } from './codex-team-hooks.js';
-import { channelsOf, hookFormatOf, hookSettingsFormatOf, type HookAdapterId, type HookFormat } from './tools.js';
+import { channelsOf, hookFormatOf, hookSettingsFormatOf, type HookFormat } from './tools.js';
 import { BRIDGED_TEAM_HOOK_EVENTS, bridgedTeamHookFile, isBridgedTeamHookTool } from './bridged-team-hooks.js';
 import { earlierHookAdapterDir, hookSettingsFile, installOf, locate, openclawWorkspaceDir, ownOf, workspaceHooksOf } from './locate.js';
 import { toolHome } from './tool-home.js';
@@ -2436,10 +2436,6 @@ export interface AgentHookDef {
 
 /** Which hook settings formats an agent hook is written in: a new format is refused until it is decided here. */
 const AGENT_HOOK_FORMATS: Readonly<Record<HookFormat, boolean>> = { claude: true, codex: true, cursor: false, copilot: false, zcode: false };
-/** Which hook adapters take an agent hook (local-agent.ts dispatches each): a new adapter is refused until it is decided here. */
-const AGENT_HOOK_ADAPTERS: Readonly<Record<HookAdapterId, boolean>> = {
-  'hermes-plugin': true, 'openclaw-hook': true, 'opencode-plugin': true, 'pi-extension': true, 'omp-extension': false, 'dsh-hooks': false, 'kiro-hooks': false,
-};
 
 /** Whether teamai installs an agent hook for `tool`, from its user-scope hook channel. */
 export function isAgentHookSupportedTool(tool: string): boolean {
@@ -2447,7 +2443,8 @@ export function isAgentHookSupportedTool(tool: string): boolean {
   if (typeof channel !== 'object') return false;
   switch (channel.channel) {
     case 'settings': return AGENT_HOOK_FORMATS[channel.format];
-    case 'adapter': return AGENT_HOOK_ADAPTERS[channel.adapter];
+    // Beside the team's hooks, in the file teamai's bridge runs them from.
+    case 'adapter': return isBridgedTeamHookTool(tool);
     default: {
       const unhandled: never = channel;
       return unhandled;
@@ -2591,6 +2588,36 @@ export async function removeAgentHook(
       await writeJson(expanded, settings);
       log.success(`Removed agent hook [${opts.slug}] from ${settingsPath}`);
     }
+  }
+}
+
+/**
+ * Install an agent hook for a tool whose hooks teamai's bridge runs: in its
+ * bridged file, beside the team's, so it blocks, matches and adds context as
+ * in Claude Code. Then rewire the hosts that register one entry per event.
+ */
+export async function applyBridgedAgentHook(tool: string, def: AgentHookDef): Promise<void> {
+  await applyAgentHook(bridgedTeamHookFile(tool), tool, def, { kind: 'disabled' });
+  await rewireBridgedTeamHooks(tool);
+}
+
+/** Remove an agent hook `applyBridgedAgentHook` installed. */
+export async function removeBridgedAgentHook(tool: string, slug: string): Promise<void> {
+  await removeAgentHook(bridgedTeamHookFile(tool), tool, { slug }, { kind: 'disabled' });
+  await rewireBridgedTeamHooks(tool);
+}
+
+/** Kiro, Hermes and OpenClaw register an entry for each event the bridged file has hooks on; the others read the file as they run. */
+async function rewireBridgedTeamHooks(tool: string): Promise<void> {
+  if (tool === 'kiro') {
+    const { injectKiroHooks } = await import('./kiro-hooks.js');
+    await injectKiroHooks();
+  } else if (tool === 'hermes') {
+    const { injectHermesHooks } = await import('./hermes-hooks.js');
+    await injectHermesHooks();
+  } else if (tool === 'openclaw') {
+    const { injectOpenClawHooks } = await import('./openclaw-hooks.js');
+    await injectOpenClawHooks(tool);
   }
 }
 
