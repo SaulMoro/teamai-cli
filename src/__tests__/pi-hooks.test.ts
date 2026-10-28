@@ -308,7 +308,7 @@ describe('Pi hook extension', () => {
     expect(bridged.hooks.Stop.map((e: { hooks: { command: string }[] }) => e.hooks[0].command)).toEqual([customHook.command]);
     expect(log.warn).toHaveBeenCalledTimes(1);
     expect(log.warn).toHaveBeenCalledWith(
-      'Pi supports built-in lifecycle hooks only; skipping 1 built-in hook override(s) from hooks/hooks.yaml',
+      'Pi runs teamai\'s built-in hooks as generated; skipping 1 built-in hook override(s) from hooks/hooks.yaml',
     );
   });
 

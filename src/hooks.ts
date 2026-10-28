@@ -2636,15 +2636,33 @@ export async function removeBridgedAgentHook(tool: string, slug: string): Promis
 
 /** Kiro, Hermes and OpenClaw register an entry for each event the bridged file has hooks on; the others read the file as they run. */
 async function rewireBridgedTeamHooks(tool: string): Promise<void> {
-  if (tool === 'kiro') {
-    const { injectKiroHooks } = await import('./kiro-hooks.js');
-    await injectKiroHooks();
-  } else if (tool === 'hermes') {
-    const { injectHermesHooks } = await import('./hermes-hooks.js');
-    await injectHermesHooks();
-  } else if (tool === 'openclaw') {
-    const { injectOpenClawHooks } = await import('./openclaw-hooks.js');
-    await injectOpenClawHooks(tool);
+  const channel = channelsOf(tool).hooks.user;
+  if (typeof channel !== 'object' || channel.channel !== 'adapter') return;
+  switch (channel.adapter) {
+    case 'kiro-hooks': {
+      const { injectKiroHooks } = await import('./kiro-hooks.js');
+      await injectKiroHooks();
+      return;
+    }
+    case 'hermes-plugin': {
+      const { injectHermesHooks } = await import('./hermes-hooks.js');
+      await injectHermesHooks();
+      return;
+    }
+    case 'openclaw-hook': {
+      const { injectOpenClawHooks } = await import('./openclaw-hooks.js');
+      await injectOpenClawHooks(tool);
+      return;
+    }
+    case 'opencode-plugin':
+    case 'omp-extension':
+    case 'pi-extension':
+    case 'dsh-hooks':
+      return;
+    default: {
+      const unhandled: never = channel.adapter;
+      return unhandled;
+    }
   }
 }
 
@@ -2985,15 +3003,21 @@ async function reconcileOpencodePlugin(baseDir: string, removeAll = false, insta
 
 /** Whether `tool`'s hook adapter is installed here: the gate its reconcile applies, and the bridged file follows. */
 async function isBridgedToolInstalled(tool: string, baseDir: string, installedBaseDir: string | undefined): Promise<boolean> {
-  switch (tool) {
-    case 'opencode':
+  const channel = channelsOf(tool).hooks.user;
+  if (typeof channel !== 'object' || channel.channel !== 'adapter') return false;
+  switch (channel.adapter) {
+    case 'opencode-plugin':
       return await pathExists(toolHome('opencode')) || (!!installedBaseDir && await pathExists(path.join(installedBaseDir, '.opencode')));
-    case 'omp': return await pathExists(path.join(getUserHome(), '.omp')) || await pathExists(toolHome('omp'));
-    case 'pi': return isPiInstalled(baseDir, installedBaseDir);
-    case 'kiro': return pathExists(path.join(getUserHome(), '.kiro'));
-    case 'hermes': return pathExists(toolHome('hermes'));
-    case 'openclaw': return await openclawWorkspaceDir() !== null;
-    default: return false;
+    case 'omp-extension': return await pathExists(path.join(getUserHome(), '.omp')) || await pathExists(toolHome('omp'));
+    case 'pi-extension': return isPiInstalled(baseDir, installedBaseDir);
+    case 'kiro-hooks': return pathExists(path.join(getUserHome(), '.kiro'));
+    case 'hermes-plugin': return pathExists(toolHome('hermes'));
+    case 'openclaw-hook': return await openclawWorkspaceDir() !== null;
+    case 'dsh-hooks': return false;
+    default: {
+      const unhandled: never = channel.adapter;
+      return unhandled;
+    }
   }
 }
 
@@ -3093,7 +3117,7 @@ async function reportPiSkippedBuiltinOverrides(
     + Object.keys(builtinOverride?.overrides ?? {}).length;
   if (builtinOverrideCount > 0) {
     log.warn(
-      `Pi supports built-in lifecycle hooks only; skipping ${builtinOverrideCount} built-in hook override(s) from hooks/hooks.yaml`,
+      `Pi runs teamai's built-in hooks as generated; skipping ${builtinOverrideCount} built-in hook override(s) from hooks/hooks.yaml`,
     );
   }
 }
