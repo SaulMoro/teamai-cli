@@ -136,9 +136,12 @@ function planned(task: Task): PlannedTask {
   return { id: task.id, sourceHash: task.sourceHash, startingCommit: task.startingCommit, judge: task.judge.kind };
 }
 
-/** The run's `sourceHash`: over the suite file's hash and each task file's, so editing any of them changes it. */
-export function runSourceHash(plan: BenchmarkPlan): string {
-  return createHash('sha256').update(JSON.stringify([plan.suite.sourceHash, ...plan.tasks.map((task) => [task.id, task.sourceHash])])).digest('hex');
+/**
+ * The run's `sourceHash`: over the suite file's hash and each task file's, so editing any of them changes it. A plan
+ * and a record's benchmark block give the same hash.
+ */
+export function runSourceHash({ suite, tasks }: { suite: Pick<BenchmarkPlan['suite'], 'sourceHash'>; tasks: ReadonlyArray<Pick<BenchmarkPlan['tasks'][number], 'id' | 'sourceHash'>> }): string {
+  return createHash('sha256').update(JSON.stringify([suite.sourceHash, ...tasks.map((task) => [task.id, task.sourceHash])])).digest('hex');
 }
 
 const TRIALS = 'trials';

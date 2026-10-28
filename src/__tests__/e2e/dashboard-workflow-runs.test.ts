@@ -130,8 +130,8 @@ describe('dashboard workflow runs', () => {
       selected: {
         suite: 'fix',
         arms: [{ arm: 'claude', tool: 'claude', isCurrent: true, pooled: { passed: 1, planned: 1, runs: 1 } }],
-        tasks: [{ task: 'fix', disagreedRuns: 0, invalidRuns: 0 }],
-        runs: [{ run, source: 'local', passed: 1, planned: 1, invalidTasks: 0 }],
+        tasks: [{ task: 'fix', disagreedRuns: 0, unmeasuredRuns: 0 }],
+        runs: [{ run, source: 'local', passed: 1, planned: 1, unmeasuredTasks: 0 }],
         latest: { run, source: 'local', table: { matrix: [{ task: 'fix', arms: [{ arm: 'claude', passRate: { passed: 1, planned: 1 } }] }] } },
       },
     });

@@ -4,9 +4,11 @@
  * records counts: a pass rate is passed trials over planned trials, as the run's own table prints it.
  *
  * Runs of one suite compare only while the suite's files stay the same, so what the page pools (an arm's pass rate and
- * usage, the task by arm heatmap) covers the runs of the suite's current version, its `sourceHash` in the newest run.
+ * usage, the task by arm heatmap) covers the runs of the suite's current version: the run `sourceHash` of the newest
+ * run, over its suite file and each task file.
  * Each run still shows as a point of its own.
  */
+import { runSourceHash } from './plan.js';
 import type { Baseline, BenchmarkRecord } from './result.js';
 import {
   benchmarkTable, deviationsOf, observedTrials, usageOf, type ArmResults, type ArmUsage, type BenchmarkTable, type BenchmarkTableInput, type ObservedTrial, type PassRate,
@@ -189,7 +191,7 @@ function summaryOf(suite: string, runs: readonly BenchmarkRunInput[], newest: Be
 function versionsOf(runs: readonly BenchmarkRunInput[]): SuiteVersion[] {
   const versions = new Map<string, SuiteVersion>();
   for (const { startedAt, benchmark } of runs) {
-    const { sourceHash } = benchmark.suite;
+    const sourceHash = runSourceHash(benchmark);
     const seen = versions.get(sourceHash);
     versions.set(sourceHash, { sourceHash, runs: (seen?.runs ?? 0) + 1, lastRunAt: startedAt });
   }
@@ -276,7 +278,7 @@ function tasksOf({ current, newest }: SuiteRuns): TaskView[] {
 function runRow({ run, source, startedAt, username, benchmark }: BenchmarkRunInput): RunRow {
   return {
     run, source, startedAt, ...(username ? { username } : {}),
-    sourceHash: benchmark.suite.sourceHash,
+    sourceHash: runSourceHash(benchmark),
     teamRevision: benchmark.baselineTeamRevision,
     ...passRate(benchmark.trials),
     unmeasuredTasks: benchmark.tasks.filter(({ baseline }) => !isMeasured(baseline)).length,
@@ -299,7 +301,8 @@ export const BenchmarkHistory = {
     const own = chosen ? bySuite.get(chosen.suite) ?? [] : [];
     const newest = own.at(-1);
     if (!chosen || !newest) return { window, suites };
-    const suiteRuns = { runs: own, current: own.filter(({ benchmark }) => benchmark.suite.sourceHash === newest.benchmark.suite.sourceHash), newest };
+    const version = runSourceHash(newest.benchmark);
+    const suiteRuns = { runs: own, current: own.filter(({ benchmark }) => runSourceHash(benchmark) === version), newest };
     return {
       window,
       suites,

@@ -94,7 +94,7 @@ function scatterPanel(sel){
  if(!placed.length)return '<section class="panel bench-panel"><div class="panelhead"><h2>'+label('Pass rate against cost')+'</h2>'+toggle+'</div><div class="empty"><p>'+label('No arm reported this value.')+'</p></div></section>';
  const W=chartWidth(),H=300,pl=44,pr=20,pt=20,pb=46,pw=W-pl-pr,ph=H-pt-pb, max=Math.max(...placed.map(q=>q.vx))*1.15||1;
  const x=v=>pl+v/max*pw, y=r=>pt+(1-r)*ph;
- const sorted=[...placed].sort((p,q)=>p.vx-q.vx), frontier=[]; let best=-1; for(const q of sorted){ if(q.vy>best){frontier.push(q);best=q.vy;} }
+ const sorted=[...placed].sort((p,q)=>p.vx-q.vx||q.vy-p.vy), frontier=[]; let best=-1; for(const q of sorted){ if(q.vy>best){frontier.push(q);best=q.vy;} }
  const ticks=[0,0.25,0.5,0.75,1].map(f=>f*max/1.15);
  const fmt=v=>axis==='tokens'?(v>=1000?(Math.round(v/100)/10)+'k':String(Math.round(v))):axis==='cost'?String(Number(v.toPrecision(2))):String(Math.round(v));
  let svg='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+e(t('Pass rate against cost'))+'">'

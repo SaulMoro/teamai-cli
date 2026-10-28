@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { BenchmarkHistory, type BenchmarkRunInput } from '../workflow/benchmark/history.js';
+import { runSourceHash } from '../workflow/benchmark/plan.js';
 import type { Baseline, TrialResult } from '../workflow/benchmark/result.js';
 
 const NOW = new Date('2026-10-28T12:00:00Z');
@@ -14,10 +15,12 @@ const CODEX: Arm = { name: 'codex', tool: 'codex' };
  * first. A trial of an arm in `usage` ran its prompt, on the arm's tool or on the one `ranOn` names, unless its task is
  * in `unstarted`.
  */
-function run({ id, suite = 'fix-auth', version = 'v1', startedAt, username = 'alice', source = 'reported', arms = [CLAUDE, CODEX], trials, invalid = [], notRun = [], usage = {}, ranOn = {}, unstarted = [] }: {
+function run({ id, suite = 'fix-auth', version = 'v1', taskEdit = '', startedAt, username = 'alice', source = 'reported', arms = [CLAUDE, CODEX], trials, invalid = [], notRun = [], usage = {}, ranOn = {}, unstarted = [] }: {
   id: string;
   suite?: string;
   version?: string;
+  /** Appended to each task file's hash: an edit to the task files that leaves suite.yaml as it was. */
+  taskEdit?: string;
   startedAt: string;
   username?: string;
   source?: 'local' | 'reported';
@@ -37,7 +40,7 @@ function run({ id, suite = 'fix-auth', version = 'v1', startedAt, username = 'al
     run: id, source, username, startedAt,
     benchmark: {
       suite: { name: suite, sourceHash: version }, repetitions: 1, baselineTeamRevision: `team-${id}`, scorers: [],
-      tasks: tasks.map((task) => ({ id: task, startingCommit: 'a'.repeat(40), sourceHash: `task-${task}`, baseline: baseline(task) })),
+      tasks: tasks.map((task) => ({ id: task, startingCommit: 'a'.repeat(40), sourceHash: `task-${task}${taskEdit}`, baseline: baseline(task) })),
       arms: arms.map((arm) => ({ ...arm, source: 'team', teamRevision: `team-${id}` })),
       trials: Object.entries(trials).flatMap(([task, byArm]) => Object.entries(byArm).flatMap(([arm, results]) => results.map((result, repetition) => {
         const step = `trials.r${repetition + 1}.${task}.${arm}.prompt`;
@@ -55,6 +58,8 @@ function run({ id, suite = 'fix-auth', version = 'v1', startedAt, username = 'al
     steps,
   };
 }
+
+const versionOf = (input: BenchmarkRunInput | undefined): string | undefined => input && runSourceHash(input.benchmark);
 
 describe('BenchmarkHistory', () => {
   it('lists each suite run in the window, newest run first, with its leading arm and its pass rate per run', () => {
@@ -96,9 +101,10 @@ describe('BenchmarkHistory', () => {
     const view = BenchmarkHistory.of({ runs: history, query: { windowDays: 90 }, now: NOW });
 
     expect(view.selected?.suite).toBe('fix-auth');
+    // A version is the run's sourceHash, over its suite file and each task file.
     expect(view.selected?.versions).toEqual([
-      { sourceHash: 'v2', runs: 2, lastRunAt: '2026-10-20T09:00:00Z' },
-      { sourceHash: 'v1', runs: 1, lastRunAt: '2026-10-01T09:00:00Z' },
+      { sourceHash: versionOf(history[2]), runs: 2, lastRunAt: '2026-10-20T09:00:00Z' },
+      { sourceHash: versionOf(history[0]), runs: 1, lastRunAt: '2026-10-01T09:00:00Z' },
     ]);
     const arms = view.selected?.arms ?? [];
     expect(arms.map(({ arm, model, isCurrent, pooled, points }) => ({ arm, model, isCurrent, pooled: pooled && { passed: pooled.passed, planned: pooled.planned, runs: pooled.runs }, points: points.map(({ run: id, passed, planned }) => `${id} ${passed}/${planned}`) }))).toEqual([
@@ -117,6 +123,18 @@ describe('BenchmarkHistory', () => {
       durationMs: { value: 90_000, used: 6 },
       cost: { kind: 'known', amount: 6, unit: 'USD', used: 6 },
     });
+  });
+
+  it('starts a new version when a task file changed, though suite.yaml did not', () => {
+    const runs = [
+      run({ id: 'r1', startedAt: '2026-10-10T09:00:00Z', trials: { login: { claude: ['failed'], codex: ['failed'] } } }),
+      run({ id: 'r2', startedAt: '2026-10-20T09:00:00Z', taskEdit: '-edited', trials: { login: { claude: ['passed'], codex: ['passed'] } } }),
+    ];
+
+    const selected = BenchmarkHistory.of({ runs, query: { windowDays: 90 }, now: NOW }).selected;
+
+    expect(selected?.versions.map(({ runs: count }) => count)).toEqual([1, 1]);
+    expect(selected?.arms.map(({ pooled }) => pooled && `${pooled.passed}/${pooled.planned}`)).toEqual(['1/1', '1/1']);
   });
 
   it("counts an arm's cost over the trials whose prompt ran, and its trials that ran as another tool, as the run's own table does", () => {
@@ -175,9 +193,9 @@ describe('BenchmarkHistory', () => {
     const [claude, codex, sonnet] = view.selected?.arms ?? [];
 
     expect(view.selected?.runs).toEqual([
-      { run: 'r3', source: 'local', startedAt: '2026-10-20T09:00:00Z', username: 'alice', sourceHash: 'v2', teamRevision: 'team-r3', passed: 4, planned: 6, unmeasuredTasks: 0, arms: [{ key: claude?.key, passed: 2, planned: 3 }, { key: codex?.key, passed: 2, planned: 3 }] },
-      { run: 'r2', source: 'reported', startedAt: '2026-10-10T09:00:00Z', username: 'bob', sourceHash: 'v2', teamRevision: 'team-r2', passed: 4, planned: 6, unmeasuredTasks: 0, arms: [{ key: claude?.key, passed: 3, planned: 3 }, { key: codex?.key, passed: 1, planned: 3 }] },
-      { run: 'r1', source: 'reported', startedAt: '2026-10-01T09:00:00Z', username: 'alice', sourceHash: 'v1', teamRevision: 'team-r1', passed: 0, planned: 2, unmeasuredTasks: 0, arms: [{ key: sonnet?.key, passed: 0, planned: 1 }, { key: codex?.key, passed: 0, planned: 1 }] },
+      { run: 'r3', source: 'local', startedAt: '2026-10-20T09:00:00Z', username: 'alice', sourceHash: versionOf(history[2]), teamRevision: 'team-r3', passed: 4, planned: 6, unmeasuredTasks: 0, arms: [{ key: claude?.key, passed: 2, planned: 3 }, { key: codex?.key, passed: 2, planned: 3 }] },
+      { run: 'r2', source: 'reported', startedAt: '2026-10-10T09:00:00Z', username: 'bob', sourceHash: versionOf(history[1]), teamRevision: 'team-r2', passed: 4, planned: 6, unmeasuredTasks: 0, arms: [{ key: claude?.key, passed: 3, planned: 3 }, { key: codex?.key, passed: 1, planned: 3 }] },
+      { run: 'r1', source: 'reported', startedAt: '2026-10-01T09:00:00Z', username: 'alice', sourceHash: versionOf(history[0]), teamRevision: 'team-r1', passed: 0, planned: 2, unmeasuredTasks: 0, arms: [{ key: sonnet?.key, passed: 0, planned: 1 }, { key: codex?.key, passed: 0, planned: 1 }] },
     ]);
     expect(view.selected?.latest.run).toBe('r3');
     expect(view.selected?.latest.table.matrix).toEqual([
