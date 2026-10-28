@@ -1589,6 +1589,36 @@ describe('uninstall', () => {
     expect(await fse.pathExists(bridgedTeamHookFile('opencode'))).toBe(true);
   });
 
+  it('a project uninstall of OMP takes that project\'s team hooks out of the file teamai\'s bridge runs, and keeps the agent\'s', async () => {
+    const homeDir = path.join(tmpDir, 'home');
+    const projectRoot = path.join(tmpDir, 'project');
+    const repoPath = path.join(projectRoot, '.teamai', 'team-repo');
+    await fse.ensureDir(repoPath);
+    await fse.ensureDir(path.join(homeDir, '.omp', 'agent'));
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const actualHooks = await vi.importActual<typeof import('../hooks.js')>('../hooks.js');
+    mockReconcileHooks.mockImplementation(actualHooks.reconcileHooks);
+    const { getUserManagedHooksPath } = await import('../types.js');
+    const { runBridgedTeamHooks } = await import('../bridged-team-hooks.js');
+    await actualHooks.reconcileHooksToAllTools({ omp: {} }, homeDir, [{
+      source: 'team', key: 'no-force-push', event: 'PreToolUse', matcher: 'Bash', timeout: 10,
+      command: 'grep -q -- --force && { echo "Use --force-with-lease" >&2; exit 2; } || true',
+      description: '[teamai:hook:no-force-push] Refuse a force push',
+    }], getUserManagedHooksPath(), { scope: 'project', installedBaseDir: projectRoot });
+    await actualHooks.applyBridgedAgentHook('omp', { slug: 'no-rm', event: 'PreToolUse', matcher: 'Bash', command: 'grep -q "rm -rf" && { echo "No rm -rf" >&2; exit 2; } || true' });
+    const bash = (command: string) => runBridgedTeamHooks('omp', 'PreToolUse', JSON.stringify({ cwd: projectRoot, tool_name: 'bash', tool_input: { command } }));
+    expect(JSON.parse((await bash('git push --force')).stdout)).toEqual({ block: 'Use --force-with-lease' });
+    const localConfig = makeLocalConfig(homeDir, repoPath, { scope: 'project', projectRoot, enabledAgents: ['omp'] });
+    const teamConfig = TeamaiConfigSchema.parse({ team: 't', repo: 'https://example.invalid/t.git' });
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig });
+
+    await uninstall({ force: true, agent: 'omp' });
+
+    expect((await bash('git push --force')).stdout).toBe('');
+    expect(JSON.parse((await bash('rm -rf build')).stdout)).toEqual({ block: 'No rm -rf' });
+  });
+
   it("removes the flat OMP copy of a namespaced team rule on uninstall, not a member's file of that name (#946)", async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);

@@ -672,9 +672,16 @@ async function discoverToolResources(
       }
     }
   }
-  // The team hooks teamai's bridge runs for the tool, as machine-wide as its adapter.
-  if (isBridgedTeamHookTool(tool) && await pathExists(bridgedTeamHookFile(tool))) {
-    (globalAdapters ? res.bridgedTeamHookFiles : res.keptGlobal).push(bridgedTeamHookFile(tool));
+  // The team hooks teamai's bridge runs for the tool, as machine-wide as its adapter. A project
+  // takes out the team hooks gated to it, as for ZCode, and keeps the file for the others.
+  const bridgedFile = isBridgedTeamHookTool(tool) ? bridgedTeamHookFile(tool) : null;
+  if (bridgedFile && await pathExists(bridgedFile)) {
+    const home = hookTargets.find((target) => target.teamOnly && target.fileFor?.(tool) === bridgedFile);
+    if (globalAdapters) res.bridgedTeamHookFiles.push(bridgedFile);
+    else if (home && await hasTeamaiHooks(bridgedFile, tool, home.manifestPath)) {
+      res.hookFiles.push({ path: bridgedFile, tool, manifestPath: home.manifestPath, teamOnly: true,
+        ...(home.teamHookProjectRoot ? { teamHookProjectRoot: home.teamHookProjectRoot } : {}) });
+    } else res.keptGlobal.push(bridgedFile);
   }
 
   // (b) CLAUDE.md teamai section blocks. OpenCode's instructions entry goes
@@ -1010,6 +1017,7 @@ async function buildRemovalPlan(
   // A tool that keeps its user hooks in a project (ZCode) reads them from HOME; a project removes only its gated team hooks.
   const hookPaths = hookToolPathsForConfig(teamConfig, localConfig);
   const homeHookFile = (tool: string): string | null => {
+    if (isBridgedTeamHookTool(tool)) return bridgedTeamHookFile(tool);
     const settings = channelsOf(tool).hooks.self === 'user' ? hookPaths[tool]?.settings : undefined;
     return settings ? path.join(getUserHome(), settings) : null;
   };
