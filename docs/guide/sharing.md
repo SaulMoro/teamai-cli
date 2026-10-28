@@ -232,7 +232,7 @@ hooks:
       [ -n "$f" ] && npx --no-install prettier --write "$f" >/dev/null 2>&1; true
 ```
 
-What a hook can do depends on its event:
+What a hook can do depends on its event. Every tool that runs the event does this much. Claude Code does more, such as refusing a prompt when a `UserPromptSubmit` hook exits 2:
 
 | Event | Exit 2 (reason on stderr) | Stdout |
 |-------|---------------------------|--------|

@@ -232,7 +232,7 @@ hooks:
       [ -n "$f" ] && npx --no-install prettier --write "$f" >/dev/null 2>&1; true
 ```
 
-hook 能做什么取决于事件：
+hook 能做什么取决于事件。下表是每个运行该事件的工具都做得到的；Claude Code 能做的更多，比如 `UserPromptSubmit` hook 以 exit 2 退出时会拒绝这次输入：
 
 | 事件 | exit 2（原因写到 stderr） | stdout |
 |------|---------------------------|--------|
