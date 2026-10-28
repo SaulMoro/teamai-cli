@@ -189,7 +189,8 @@ async function reconcileHermesTeamHooks(entry: string): Promise<boolean> {
       changed = await removeHermesTeamHookEntry(hermes, command) || changed;
       continue;
     }
-    const timeout = Math.min(HERMES_MAX_TIMEOUT, Math.max(...timeouts));
+    // A first turn's pre_llm_call runs SessionStart's hooks, then UserPromptSubmit's.
+    const timeout = Math.min(HERMES_MAX_TIMEOUT, timeouts.reduce((sum, seconds) => sum + seconds, 0));
     changed = await upsertHermesHook(hermes, { command, timeout }) || changed;
     changed = await addHermesAllowlist(hermes, command) || changed;
   }

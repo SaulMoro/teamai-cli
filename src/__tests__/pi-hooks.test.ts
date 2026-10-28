@@ -388,6 +388,13 @@ describe('Pi extension: the team\'s hooks', () => {
       .toEqual({ systemPrompt: 'BASE\n\nRelease freeze until Monday\n\nTicket ENG-42 is open' });
   });
 
+  it('runs no UserPromptSubmit team hook for a run an extension started without a user prompt', async () => {
+    await teamHooksOn('UserPromptSubmit');
+    const { on, dispatches } = loadPiExtension(reply({ UserPromptSubmit: { context: 'Ticket ENG-42 is open' } }));
+    expect(await on.before_agent_start({ messageType: 'custom', systemPrompt: 'BASE' }, ctx)).toBeUndefined();
+    expect(team(dispatches)).toEqual([]);
+  });
+
   it('runs the PostToolUse and Stop team hooks with the event\'s payload', async () => {
     await teamHooksOn('PostToolUse', 'Stop');
     const { on, dispatches } = loadPiExtension();

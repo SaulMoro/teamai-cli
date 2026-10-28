@@ -244,9 +244,12 @@ export default function teamaiHooks(pi) {
   // OMP rebuilds the system prompt from its base each turn, so appending
   // here adds the blocks to every request once, without piling up.
   pi.on("before_agent_start", async (event, ctx) => {
+    // Beside the built-in dispatch, so both fit in OMP's 30 s handler limit. A run an
+    // extension starts (messageType "custom") carries no user prompt.
+    const team = typeof event.prompt === "string" ? teamHooks("UserPromptSubmit", ctx, { prompt: event.prompt }) : undefined;
     await dispatch("prompt-submit", ctx, { prompt: event.prompt });
     const text = await (instructions ??= loadInstructions(ctx));
-    const prompt = await teamHooks("UserPromptSubmit", ctx, { prompt: event.prompt });
+    const prompt = await team;
     const added = [text, (await sessionContext)?.context, prompt?.context].filter((part) => typeof part === "string" && part);
     return added.length ? { systemPrompt: [...event.systemPrompt, ...added] } : undefined;
   });

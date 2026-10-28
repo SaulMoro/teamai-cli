@@ -275,7 +275,8 @@ export default {
       const first = !started.has(session);
       started.add(session);
       const start = first ? await teamHooks("SessionStart", ctx) : undefined;
-      const prompt = await teamHooks("UserPromptSubmit", ctx, { prompt: event.prompt });
+      // currentUserMessage is the member's request; prompt may hold the history OpenClaw rebuilt.
+      const prompt = await teamHooks("UserPromptSubmit", ctx, { prompt: event.currentUserMessage ?? event.prompt });
       const added = [start?.context, prompt?.context].filter((part) => typeof part === "string" && part);
       return added.length ? { prependContext: added.join("\\n\\n") } : undefined;
     }, { timeoutMs: HANDLER_TIMEOUT_MS });

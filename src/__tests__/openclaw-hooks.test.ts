@@ -599,6 +599,17 @@ if (process.argv.includes('--team-hooks') && replies[process.argv[3]]) process.s
     expect(teamCalls()[1].stdin).toEqual({ cwd: wsDir, session_id: 'main', prompt: 'deploy' });
   });
 
+  it('gives a UserPromptSubmit hook the request the member sent, not the history OpenClaw rebuilt around it', async () => {
+    teamHooksOn(['UserPromptSubmit']);
+    await injectOpenClawHooks('openclaw');
+    const { handlers } = await loadPlugin();
+    await handlers.get('before_prompt_build')?.(
+      { prompt: 'earlier: deploy\n\nnow: fix the build', currentUserMessage: 'fix the build', messages: [] },
+      { sessionKey: 'main', workspaceDir: wsDir },
+    );
+    expect(teamCalls()[0].stdin).toEqual({ cwd: wsDir, session_id: 'main', prompt: 'fix the build' });
+  });
+
   it('spawns nothing for an event the team has no hook on', async () => {
     teamHooksOn(['Stop']);
     await injectOpenClawHooks('openclaw');

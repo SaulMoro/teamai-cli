@@ -175,6 +175,13 @@ describe('Hermes: the team\'s hooks', () => {
   const hooks = () => YAML.parse(fs.readFileSync(path.join(tmpDir, 'config.yaml'), 'utf8')).hooks as Record<string, { command: string; timeout: number }[]>;
   const approvals = () => JSON.parse(fs.readFileSync(path.join(tmpDir, 'shell-hooks-allowlist.json'), 'utf8')).approvals as { event: string; command: string }[];
 
+  it('gives a first turn time for its SessionStart and UserPromptSubmit hooks, which run one after the other', async () => {
+    vi.spyOn(log, 'success').mockImplementation(() => {});
+    teamHooksOn({ SessionStart: 90, UserPromptSubmit: undefined });
+    await injectHermesHooks();
+    expect(hooks().pre_llm_call).toEqual([expect.objectContaining({ timeout: 150 })]);
+  });
+
   it('gives each Hermes event the team has hooks on one approved entry that runs them through teamai', async () => {
     vi.spyOn(log, 'success').mockImplementation(() => {});
     teamHooksOn({ PreToolUse: 400, SessionStart: undefined, Stop: 20 });

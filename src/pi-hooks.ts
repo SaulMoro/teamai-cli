@@ -206,7 +206,8 @@ export default function teamaiHooks(pi) {
   pi.on("before_agent_start", async (event, ctx) => {
     await dispatch("prompt-submit", ctx, { prompt: event.prompt });
     const text = await (instructions ??= loadInstructions(ctx));
-    const prompt = await teamHooks("UserPromptSubmit", ctx, { prompt: event.prompt });
+    // A run an extension starts (messageType "custom") carries no user prompt.
+    const prompt = typeof event.prompt === "string" ? await teamHooks("UserPromptSubmit", ctx, { prompt: event.prompt }) : undefined;
     const added = [text, (await sessionContext)?.context, prompt?.context].filter((part) => typeof part === "string" && part);
     return added.length ? { systemPrompt: [event.systemPrompt, ...added].join("\\n\\n") } : undefined;
   });
