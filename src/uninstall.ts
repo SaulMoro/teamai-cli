@@ -9,9 +9,11 @@ import {
   type CodexTrustPolicy, type MainCheckoutHooks, type SharedHooksManifest, type TeamHookHistory,
 } from './hooks.js';
 import { codexTeamHookIndexPath } from './codex-team-hooks.js';
+import { bridgedTeamHookDir, bridgedTeamHookFile, isBridgedTeamHookTool } from './bridged-team-hooks.js';
 import {
   removeOpenClawHooks,
   removeOpenClawHookEntry,
+  removeOpenClawTeamHooks,
   OPENCLAW_HOOK_DIR,
   OPENCLAW_HOOK_KEY,
   resolveOpenClawHooksDir,
@@ -124,6 +126,8 @@ interface RemovalPlan {
   piHookFiles: string[];
   /** DeepSeek Harness home mount, generated hook config, or legacy overlay, if present. */
   dshHookFile: string | null;
+  /** The team hooks teamai's bridge runs for a tool (~/.teamai/team-hooks/<tool>.json). */
+  bridgedTeamHookFiles: string[];
   /** Manifest used by the primary hook injection scope. */
   hookManifestPath: string;
   /** The team's hooks at every revision: an unrecorded entry equal to exactly one of them is teamai's (#993). */
@@ -255,6 +259,7 @@ interface ToolResources {
   kiroHookFile: string | null;
   piHookFiles: string[];
   dshHookFile: string | null;
+  bridgedTeamHookFiles: string[];
   claudeMdFiles: string[];
   /** Files an earlier release wrote this tool's instruction blocks to; no tool reads them now (#945). */
   retiredInstructionFiles: string[];
@@ -288,6 +293,7 @@ function hasToolResources(r: ToolResources): boolean {
     r.kiroHookFile !== null ||
     r.piHookFiles.length > 0 ||
     r.dshHookFile !== null ||
+    r.bridgedTeamHookFiles.length > 0 ||
     r.claudeMdFiles.length > 0 ||
     r.retiredInstructionFiles.length > 0 ||
     r.opencodeInstructions.length > 0 ||
@@ -490,7 +496,7 @@ async function discoverToolResources(
   globalAdapters = scope === 'user',
 ): Promise<ToolResources> {
   const res: ToolResources = {
-    hookFiles: [], openclawHookDirs: [], opencodePluginDirs: [], ompHookFiles: [], kiroHookFile: null, piHookFiles: [], dshHookFile: null,
+    hookFiles: [], openclawHookDirs: [], opencodePluginDirs: [], ompHookFiles: [], kiroHookFile: null, piHookFiles: [], dshHookFile: null, bridgedTeamHookFiles: [],
     claudeMdFiles: [], retiredInstructionFiles: [], opencodeInstructions: [], keptGlobal: [], skillDirs: [], keptSkillDirs: [], keptFiles: [], ruleFiles: [], keptRuleFiles: [], opencodeOwnedGlobs: [], agentFiles: [],
   };
 
@@ -666,6 +672,10 @@ async function discoverToolResources(
       }
     }
   }
+  // The team hooks teamai's bridge runs for the tool, as machine-wide as its adapter.
+  if (isBridgedTeamHookTool(tool) && await pathExists(bridgedTeamHookFile(tool))) {
+    (globalAdapters ? res.bridgedTeamHookFiles : res.keptGlobal).push(bridgedTeamHookFile(tool));
+  }
 
   // (b) CLAUDE.md teamai section blocks. OpenCode's instructions entry goes
   // only when teamai recorded adding it (buildRemovalPlan): an entry the
@@ -798,6 +808,7 @@ async function keptForProjects(): Promise<KeptForProjects> {
   const shared = [
     getUserManagedHooksPath(),
     codexTeamHookIndexPath(),
+    bridgedTeamHookDir(),
     ...await secretsFor(readers),
     ...await sourceRecordsFor(readers),
   ];
@@ -883,7 +894,7 @@ async function sourceRecordsFor(readers: ReadonlyArray<LocalConfig[] | null>): P
 
 /** Each of `homes` holding teamai's Hermes hook, plugin or config.yaml entries, with what goes from it. */
 async function hermesHooksIn(homes: readonly string[]): Promise<RemovalPlan['hermesHomes']> {
-  const { getInstructionsPluginDir, getReportScriptPath, hasHermesHooks, ownsInstructionsPlugin } = await import('./hermes-hooks.js');
+  const { getInstructionsPluginDir, getReportScriptPath, getTeamHookScriptPath, hasHermesHooks, ownsInstructionsPlugin } = await import('./hermes-hooks.js');
   const { getHermesAllowlistPath, getHermesConfigPath } = await import('./hermes-config.js');
   const found: RemovalPlan['hermesHomes'] = [];
   for (const home of homes) {
@@ -891,6 +902,7 @@ async function hermesHooksIn(homes: readonly string[]): Promise<RemovalPlan['her
     const plugin = getInstructionsPluginDir(home);
     const lines = [
       ...await pathExists(getReportScriptPath(home)) ? [getReportScriptPath(home)] : [],
+      ...await pathExists(getTeamHookScriptPath(home)) ? [getTeamHookScriptPath(home)] : [],
       ...await pathExists(plugin) && await ownsInstructionsPlugin(home) ? [`${plugin}/`] : [],
     ];
     const entries: string[] = [];
@@ -1273,6 +1285,7 @@ async function buildRemovalPlan(
     kiroHookFile: null,
     piHookFiles: [],
     dshHookFile: null,
+    bridgedTeamHookFiles: [],
     hookManifestPath: hookTargets[0].manifestPath,
     teamHookHistory: hookHistory,
     claudeMdFiles: [],
@@ -1370,6 +1383,7 @@ async function buildRemovalPlan(
     plan.openclawHookDirs.push(...res.openclawHookDirs);
     plan.opencodePluginDirs.push(...res.opencodePluginDirs);
     plan.ompHookFiles.push(...res.ompHookFiles);
+    plan.bridgedTeamHookFiles.push(...res.bridgedTeamHookFiles);
     if (res.kiroHookFile) plan.kiroHookFile = res.kiroHookFile;
     plan.piHookFiles.push(...res.piHookFiles);
     if (res.dshHookFile) plan.dshHookFile = res.dshHookFile;
@@ -1541,6 +1555,7 @@ function isPlanEmpty(plan: RemovalPlan): boolean {
     plan.openclawHookDirs.length === 0 &&
     plan.opencodePluginDirs.length === 0 &&
     plan.ompHookFiles.length === 0 &&
+    plan.bridgedTeamHookFiles.length === 0 &&
     plan.kiroHookFile === null &&
     plan.piHookFiles.length === 0 &&
     plan.dshHookFile === null &&
@@ -1626,6 +1641,10 @@ function printSummary(plan: RemovalPlan, agentFilter?: string): void {
     console.log('');
   }
   if (plan.kiroHookFile !== null) console.log(`   Kiro Hooks: ${plan.kiroHookFile}`);
+  if (plan.bridgedTeamHookFiles.length > 0) {
+    console.log(`   Team hooks teamai runs (${plan.bridgedTeamHookFiles.length} files):`);
+    for (const file of plan.bridgedTeamHookFiles) console.log(`     ${file}`);
+  }
 
   if (plan.piHookFiles.length > 0) {
     console.log(`   Pi Hooks (${plan.piHookFiles.length} files):`);
@@ -2269,6 +2288,23 @@ async function executeRemoval(
       await reconcileDshHooks([], { manifestPath: plan.hookManifestPath, removeAll: true });
     } catch (e) {
       log.warn(`Failed to remove DeepSeek Harness hooks: ${(e as Error).message}`);
+    }
+  }
+
+  // (a2e) Remove the team hooks teamai's bridge runs, and OpenClaw's plugin that runs them.
+  for (const file of plan.bridgedTeamHookFiles) {
+    try {
+      await remove(file);
+      log.success(`Removed the team hooks teamai runs from ${file}`);
+    } catch (e) {
+      log.warn(`Failed to remove ${file}: ${(e as Error).message}`);
+    }
+  }
+  if (plan.openclawHookDirs.some(({ tool }) => tool === 'openclaw')) {
+    try {
+      await removeOpenClawTeamHooks();
+    } catch (e) {
+      log.warn(`Failed to remove the teamai OpenClaw team hooks plugin: ${(e as Error).message}`);
     }
   }
 

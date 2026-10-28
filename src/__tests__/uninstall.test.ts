@@ -1566,6 +1566,29 @@ describe('uninstall', () => {
     expect(warn.mock.calls.some(([message]) => String(message).startsWith(`Kept ${flat}`))).toBe(named);
   });
 
+  it('uninstalling OMP removes the team hooks teamai\'s bridge runs for it, and leaves OpenCode\'s', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    const { injectOmpHooks } = await import('../omp-hooks.js');
+    await injectOmpHooks();
+    // OpenCode keeps its own hooks, so OMP is not the last tool and ~/.teamai stays.
+    const { injectOpencodeHooks } = await import('../opencode-hooks.js');
+    await injectOpencodeHooks(homeDir, 'user');
+    const { bridgedTeamHookFile } = await import('../bridged-team-hooks.js');
+    const hooks = { hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'true' }], description: '[teamai:hook:x] x' }] } };
+    await fse.outputJson(bridgedTeamHookFile('omp'), hooks);
+    await fse.outputJson(bridgedTeamHookFile('opencode'), hooks);
+    const localConfig = makeLocalConfig(homeDir, repoPath, { enabledAgents: ['omp', 'opencode'] });
+    const defaults = TeamaiConfigSchema.parse({ team: 't', repo: 'owner/repo' }).toolPaths;
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig({ toolPaths: { omp: defaults.omp, opencode: defaults.opencode } }) });
+
+    await uninstall({ force: true, agent: 'omp' });
+
+    expect(await fse.pathExists(bridgedTeamHookFile('omp'))).toBe(false);
+    expect(await fse.pathExists(bridgedTeamHookFile('opencode'))).toBe(true);
+  });
+
   it("removes the flat OMP copy of a namespaced team rule on uninstall, not a member's file of that name (#946)", async () => {
     const { homeDir, repoPath } = await setupFixture(tmpDir);
     vi.stubEnv('HOME', homeDir);

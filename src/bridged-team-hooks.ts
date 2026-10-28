@@ -81,9 +81,14 @@ export function isBridgedTeamHookTool(tool: string): boolean {
   return bridgeOf(tool) !== null;
 }
 
+/** The directory of the bridged tools' team-hook files. */
+export function bridgedTeamHookDir(): string {
+  return path.join(getTeamaiHomeDir(), 'team-hooks');
+}
+
 /** The Claude-shaped file that holds `tool`'s team hooks for its bridge. */
 export function bridgedTeamHookFile(tool: string): string {
-  return path.join(getTeamaiHomeDir(), 'team-hooks', `${tool}.json`);
+  return path.join(bridgedTeamHookDir(), `${tool}.json`);
 }
 
 interface TeamHookEntry {
