@@ -181,7 +181,12 @@ function decisionOf(event: string, run: HookRun, id: string): Decision {
   } catch {
     // Plain text.
   }
-  if (!json) return CONTEXT_EVENTS.has(event) ? { kind: 'context', text: run.stdout.trim() } : { kind: 'none' };
+  if (json) return jsonDecisionOf(json, id);
+  return CONTEXT_EVENTS.has(event) ? { kind: 'context', text: run.stdout.trim() } : { kind: 'none' };
+}
+
+/** The decision in a hook's JSON output: a block or deny, or additional context. */
+function jsonDecisionOf(json: JsonObject, id: string): Decision {
   const specific = asObject(json.hookSpecificOutput);
   if (json.decision === 'block' || specific?.permissionDecision === 'deny') {
     const reason = specific?.permissionDecisionReason ?? json.reason;
@@ -236,6 +241,27 @@ function render(shape: ReplyShape, decision: Decision, stderr: string): BridgeRe
   }
 }
 
+/** Run the hooks of `tool`'s file that select `event` and the host's tool, and merge what they decided. */
+async function runEvent(tool: string, event: string, host: JsonObject, bridge: Bridge): Promise<{ decision: Decision; stderr: string }> {
+  const payload = claudePayload(tool, event, host, bridge);
+  const names = [payload.tool_name, host.tool_name].filter((name): name is string => typeof name === 'string');
+  const cwd = typeof payload.cwd === 'string' && payload.cwd ? payload.cwd : undefined;
+  const hooks = (await entriesFor(tool, event))
+    .filter((entry) => !event.endsWith('ToolUse') || selects(entry.matcher, names))
+    .flatMap((entry) => (entry.hooks ?? []).flatMap(({ command, timeout }) => typeof command === 'string'
+      ? [{ id: /^\[teamai:(?:agent-)?hook:([^\]]+)\]/.exec(entry.description ?? '')?.[1] ?? 'team', command, timeout: timeout ?? 60 }]
+      : []));
+  const runs = await Promise.all(hooks.map(async (hook) => ({
+    hook, run: await runHookCommand(hook.command, { cwd, timeout: hook.timeout, stdin: JSON.stringify(payload) }),
+  })));
+  let stderr = '';
+  for (const { hook, run } of runs) {
+    if (run.timedOut) stderr += `teamai: team hook ${hook.id} timed out after ${hook.timeout}s\n`;
+    else if (run.code !== 0 && run.code !== 2) stderr += run.stderr;
+  }
+  return { decision: merge(event, runs.map(({ hook, run }) => decisionOf(event, run, hook.id))), stderr };
+}
+
 /**
  * `teamai hook-dispatch <event> --tool <tool> --team-hooks` for a bridged
  * tool: run the team hooks of `tool`'s file that select this event and tool,
@@ -258,22 +284,9 @@ export async function runBridgedTeamHooks(tool: string, event: string, raw: stri
   const decisions: Decision[] = [];
   let stderr = '';
   for (const current of events) {
-    const payload = claudePayload(tool, current, host, bridge);
-    const names = [payload.tool_name, host.tool_name].filter((name): name is string => typeof name === 'string');
-    const cwd = typeof payload.cwd === 'string' && payload.cwd ? payload.cwd : undefined;
-    const hooks = (await entriesFor(tool, current))
-      .filter((entry) => !current.endsWith('ToolUse') || selects(entry.matcher, names))
-      .flatMap((entry) => (entry.hooks ?? []).flatMap(({ command, timeout }) => typeof command === 'string'
-        ? [{ id: /^\[teamai:(?:agent-)?hook:([^\]]+)\]/.exec(entry.description ?? '')?.[1] ?? 'team', command, timeout: timeout ?? 60 }]
-        : []));
-    const runs = await Promise.all(hooks.map(async (hook) => ({
-      hook, run: await runHookCommand(hook.command, { cwd, timeout: hook.timeout, stdin: JSON.stringify(payload) }),
-    })));
-    for (const { hook, run } of runs) {
-      if (run.timedOut) stderr += `teamai: team hook ${hook.id} timed out after ${hook.timeout}s\n`;
-      else if (run.code !== 0 && run.code !== 2) stderr += run.stderr;
-    }
-    decisions.push(merge(current, runs.map(({ hook, run }) => decisionOf(current, run, hook.id))));
+    const ran = await runEvent(tool, current, host, bridge);
+    decisions.push(ran.decision);
+    stderr += ran.stderr;
   }
   const block = decisions.find((d) => d.kind === 'block');
   const texts = decisions.flatMap((d) => d.kind === 'context' ? [d.text] : []);

@@ -609,16 +609,31 @@ if (process.argv.includes('--team-hooks') && replies[process.argv[3]]) process.s
     expect(teamCalls().map((call) => call.argv[1])).toEqual(['Stop']);
   });
 
-  it('leaves a plugin allowlist alone and says the team\'s hooks do not run', async () => {
-    const cfg = { ...readCfg(), plugins: { allow: ['memory-core'] } };
-    fs.writeFileSync(cfgPath(), JSON.stringify(cfg));
+  it.each([
+    [{ allow: ['memory-core'] }, 'plugins.allow does not list teamai-team-hooks; add it'],
+    [{ enabled: false }, 'plugins are switched off (plugins.enabled: false); turn them on'],
+    [{ deny: ['teamai-team-hooks'] }, 'plugins.deny lists teamai-team-hooks; take it out'],
+    [{ entries: { 'teamai-team-hooks': { enabled: false } } }, 'plugins.entries.teamai-team-hooks.enabled is false; set it to true'],
+  ])('leaves plugins %j as the member set them, and says how to run the team\'s hooks', async (plugins, fix) => {
+    fs.writeFileSync(cfgPath(), JSON.stringify({ ...readCfg(), plugins }));
     const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
     teamHooksOn(['PreToolUse']);
 
     await injectOpenClawHooks('openclaw');
 
-    expect(readCfg().plugins).toEqual({ allow: ['memory-core'] });
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining('plugins.allow does not list teamai-team-hooks'));
+    expect(readCfg().plugins).toEqual(plugins);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining(fix));
+  });
+
+  it('leaves an openclaw.json that is not plain JSON alone, and names the path to add', async () => {
+    fs.writeFileSync(cfgPath(), '{ // JSON5\n  agents: {} }\n');
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    teamHooksOn(['PreToolUse']);
+
+    await injectOpenClawHooks('openclaw');
+
+    expect(fs.readFileSync(cfgPath(), 'utf-8')).toBe('{ // JSON5\n  agents: {} }\n');
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/team's hooks do not run\. Add .*teamai-team-hooks\.mjs to plugins\.load\.paths by hand/));
   });
 
   it('takes the plugin and its config back out once the team has no hooks for OpenClaw', async () => {

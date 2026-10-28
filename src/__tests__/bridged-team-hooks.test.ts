@@ -65,6 +65,34 @@ describe('the team hooks a bridge runs', () => {
     expect(JSON.parse(reply.stdout)).toEqual({ context: 'On-call: @ana\n\nSprint 42 ends Friday.' });
   });
 
+  it.each([
+    ['a JSON decision of block', `echo '${JSON.stringify({ decision: 'block' })}'`],
+    ['exit 2 with nothing on stderr', 'exit 2'],
+  ])('%s blocks, naming the hook when it gives no reason', async (_case, command) => {
+    install('omp', { PreToolUse: [entry(command, 'Bash', 'no-deploy')] });
+    const reply = await runBridgedTeamHooks('omp', 'PreToolUse', JSON.stringify({ cwd: project, tool_name: 'bash', tool_input: { command: 'make deploy' } }));
+    expect(JSON.parse(reply.stdout)).toEqual({ block: 'Blocked by team hook no-deploy' });
+  });
+
+  it('a hook that fails decides nothing, and its stderr reaches the host', async () => {
+    install('omp', { PreToolUse: [entry('echo "jq: command not found" >&2; exit 127', 'Bash')] });
+    const reply = await runBridgedTeamHooks('omp', 'PreToolUse', JSON.stringify({ cwd: project, tool_name: 'bash', tool_input: { command: 'ls' } }));
+    expect(reply).toEqual({ code: 0, stdout: '', stderr: 'jq: command not found\n' });
+  });
+
+  it('a payload that is not JSON still runs the event\'s hooks', async () => {
+    install('omp', { SessionStart: [entry('echo "Release freeze until Monday"')] });
+    expect(JSON.parse((await runBridgedTeamHooks('omp', 'SessionStart', 'not json')).stdout)).toEqual({ context: 'Release freeze until Monday' });
+  });
+
+  it('Hermes gives a hook the prompt it sends as a list of parts', async () => {
+    install('hermes', { UserPromptSubmit: [entry('node -e "process.stdin.on(\'data\', (d) => console.log(JSON.parse(d).prompt))"')] });
+    const reply = await runBridgedTeamHooks('hermes', 'UserPromptSubmit', JSON.stringify({
+      cwd: project, extra: { user_message: [{ type: 'text', text: 'fix the build' }, { type: 'image' }, { type: 'text', text: 'on main' }] },
+    }));
+    expect(JSON.parse(reply.stdout)).toEqual({ context: 'fix the build\non main' });
+  });
+
   it('a PostToolUse or Stop hook runs, and decides nothing for the host', async () => {
     install('pi', { Stop: [entry('touch stopped; echo "keep going" >&2; exit 2')] });
     const reply = await runBridgedTeamHooks('pi', 'Stop', JSON.stringify({ cwd: project }));
