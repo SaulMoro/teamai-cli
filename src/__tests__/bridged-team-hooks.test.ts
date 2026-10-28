@@ -37,6 +37,15 @@ describe('the team hooks a bridge runs', () => {
     expect(reply).toEqual({ code: 0, stdout: JSON.stringify({ block: 'Commit message names a ticket: add one' }), stderr: '' });
   });
 
+  it('when two PreToolUse hooks block, the first gives the reason and the other\'s stderr still reaches the host', async () => {
+    install('omp', { PreToolUse: [
+      entry('echo \'{"decision":"block","reason":"No force push"}\'', 'Bash', 'no-force-push'),
+      entry('echo "Run the tests first" >&2; exit 2', 'Bash', 'tests-first'),
+    ] });
+    const reply = await runBridgedTeamHooks('omp', 'PreToolUse', JSON.stringify({ cwd: project, tool_name: 'bash', tool_input: { command: 'git push -f' } }));
+    expect(reply).toEqual({ code: 0, stdout: JSON.stringify({ block: 'No force push' }), stderr: 'Run the tests first\n' });
+  });
+
   it('a hook on Bash leaves OMP\'s read call alone', async () => {
     install('omp', { PreToolUse: [entry('exit 2', 'Bash')] });
     const reply = await runBridgedTeamHooks('omp', 'PreToolUse', JSON.stringify({ cwd: project, tool_name: 'read', tool_input: { path: 'README.md' } }));
@@ -210,6 +219,18 @@ describe('the team hooks a bridge runs', () => {
     expect(first).toEqual({ code: 0, stdout: JSON.stringify({ context: 'Release freeze until Monday\n\nhello' }), stderr: '' });
     const later = await runBridgedTeamHooks('hermes', 'UserPromptSubmit', JSON.stringify({ hook_event_name: 'pre_llm_call', cwd: project, extra: { is_first_turn: false, user_message: 'again' } }));
     expect(JSON.parse(later.stdout)).toEqual({ context: 'again' });
+  });
+
+  it('Hermes gets exit 1 when a hook wrote on stderr, so it shows it as a warning and still reads the decision', async () => {
+    install('hermes', {
+      PreToolUse: [entry('echo "No force push" >&2; exit 2', 'Bash'), entry('echo "scanned 3 files" >&2', 'Bash')],
+      PostToolUse: [entry('echo "prettier: command not found" >&2; exit 127')],
+    });
+    const payload = JSON.stringify({ hook_event_name: 'pre_tool_call', cwd: project, tool_name: 'terminal', tool_input: { command: 'git push -f' } });
+    expect(await runBridgedTeamHooks('hermes', 'PreToolUse', payload))
+      .toEqual({ code: 1, stdout: JSON.stringify({ decision: 'block', reason: 'No force push' }), stderr: 'scanned 3 files\n' });
+    expect(await runBridgedTeamHooks('hermes', 'PostToolUse', JSON.stringify({ hook_event_name: 'post_tool_call', cwd: project, tool_name: 'write_file' })))
+      .toEqual({ code: 1, stdout: '', stderr: 'prettier: command not found\n' });
   });
 });
 

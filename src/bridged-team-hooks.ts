@@ -230,13 +230,16 @@ export interface BridgeReply {
 }
 
 function render(shape: ReplyShape, decision: Decision, stderr: string): BridgeReply {
+  // Hermes shows a hook's stderr only for a nonzero exit. It still reads stdout
+  // after exit 1, which blocks nothing on the fail-open entries teamai writes.
+  const code = shape === 'hermes' && stderr.trim() ? 1 : 0;
   switch (decision.kind) {
-    case 'none': return { code: 0, stdout: '', stderr };
+    case 'none': return { code, stdout: '', stderr };
     case 'block':
       switch (shape) {
         case 'bridge': return { code: 0, stdout: JSON.stringify({ block: decision.reason }), stderr };
         case 'kiro': return { code: 2, stdout: '', stderr: `${stderr}${decision.reason}\n` };
-        case 'hermes': return { code: 0, stdout: JSON.stringify({ decision: 'block', reason: decision.reason }), stderr };
+        case 'hermes': return { code, stdout: JSON.stringify({ decision: 'block', reason: decision.reason }), stderr };
         default: {
           const unhandled: never = shape;
           return unhandled;
@@ -246,7 +249,7 @@ function render(shape: ReplyShape, decision: Decision, stderr: string): BridgeRe
       switch (shape) {
         case 'bridge': return { code: 0, stdout: JSON.stringify({ context: decision.text }), stderr };
         case 'kiro': return { code: 0, stdout: `${decision.text}\n`, stderr };
-        case 'hermes': return { code: 0, stdout: JSON.stringify({ context: decision.text }), stderr };
+        case 'hermes': return { code, stdout: JSON.stringify({ context: decision.text }), stderr };
         default: {
           const unhandled: never = shape;
           return unhandled;
@@ -276,13 +279,14 @@ async function runEvent(tool: string, event: string, teamHooks: TeamHooks, host:
     hook, run: await runHookCommand(hook.command, { cwd, timeout: hook.timeout, stdin: JSON.stringify(payload) }),
   })));
   const decided = runs.map(({ hook, run }) => ({ hook, run, decision: decisionOf(event, run, hook.id) }));
+  const decision = merge(event, decided.map((d) => d.decision));
   let stderr = '';
-  for (const { hook, run, decision } of decided) {
-    if (run.timedOut) stderr += `teamai: team hook ${hook.id} timed out after ${hook.timeout}s\n`;
-    // A PreToolUse block made of a hook's stderr reaches the host once, as the block's reason.
-    if (!(event === 'PreToolUse' && decision.kind === 'block' && run.code === 2)) stderr += run.stderr;
+  for (const d of decided) {
+    if (d.run.timedOut) stderr += `teamai: team hook ${d.hook.id} timed out after ${d.hook.timeout}s\n`;
+    // The block made of a hook's stderr reaches the host once, as the block's reason.
+    if (!(d.decision === decision && d.run.code === 2)) stderr += d.run.stderr;
   }
-  return { decision: merge(event, decided.map(({ decision }) => decision)), stderr };
+  return { decision, stderr };
 }
 
 /**
