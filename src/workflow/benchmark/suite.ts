@@ -114,9 +114,13 @@ function changedKeys(defaults: ArmValues, arm: Partial<ArmValues>): ArmKey[] {
   return ARM_KEYS.filter((key) => arm[key] !== undefined && arm[key] !== defaults[key]);
 }
 
-/** One segment of a glob pathspec as a regular expression, undefined when its `[` class never closes. A class stays a class, `[!a]` as `[^a]`. */
+/**
+ * One segment of a glob pathspec as a regular expression, undefined when its `[` class never closes. A class stays a
+ * class, `[!a]` as `[^a]`; a `^` that opens no class is literal, as git reads it.
+ */
 function segmentPattern(segment: string): RegExp | undefined {
-  const pattern = segment.replace(/[.+${}()|\\]/g, (char) => `\\${char}`).replace(/\*/g, '[^/]*').replace(/\?/g, '.').replace(/\[!/g, '[^');
+  const pattern = segment.replace(/[.+${}()|\\]/g, (char) => `\\${char}`).replace(/(?<!\[)\^/g, '\\^')
+    .replace(/\*/g, '[^/]*').replace(/\?/g, '.').replace(/\[!/g, '[^');
   try {
     return new RegExp(`^${pattern}$`);
   } catch {
