@@ -101,6 +101,23 @@ async function entriesFor(tool: string, event: string): Promise<TeamHookEntry[]>
   return Array.isArray(entries) ? entries.filter((e): e is TeamHookEntry => !!e && typeof e === 'object') : [];
 }
 
+/**
+ * The events `tool`'s file has team hooks on, each with the longest of their
+ * timeouts (60 s when one has none): a host that takes one native entry per
+ * event (Kiro, Hermes) gets one for each, bounded by it.
+ */
+export async function bridgedTeamHookEvents(tool: string): Promise<Map<string, number>> {
+  const read = await readJsonObject(bridgedTeamHookFile(tool));
+  const hooks = read.kind === 'ok' ? asObject((read.value as { hooks?: unknown }).hooks) : null;
+  const events = new Map<string, number>();
+  for (const [event, entries] of Object.entries(hooks ?? {})) {
+    if (!Array.isArray(entries) || entries.length === 0) continue;
+    const timeouts = entries.flatMap((entry: TeamHookEntry) => (entry?.hooks ?? []).map((hook) => hook.timeout ?? 60));
+    if (timeouts.length > 0) events.set(event, Math.max(...timeouts));
+  }
+  return events;
+}
+
 /** Whether a Claude matcher selects the tool, by its Claude name or the host's own. */
 function selects(matcher: string | undefined, names: readonly string[]): boolean {
   if (!matcher || matcher === '*') return true;
