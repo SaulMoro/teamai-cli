@@ -131,6 +131,13 @@ describe('the team hooks a bridge runs', () => {
     expect([...(await bridgedTeamHookEvents('kiro')).keys()]).toEqual(['SessionStart']);
   });
 
+  it.each([['shell', 'Bash'], ['execute_bash', 'Bash'], ['read', 'Read'], ['fs_read', 'Read'], ['write', 'Write']])(
+    'a Kiro %s call is the Claude %s tool a team hook matches', async (kiroTool, claudeTool) => {
+      install('kiro', { PreToolUse: [entry('exit 2', claudeTool)] });
+      const reply = await runBridgedTeamHooks('kiro', 'PreToolUse', JSON.stringify({ cwd: project, tool_name: kiroTool, tool_input: {} }));
+      expect(reply.code).toBe(2);
+    });
+
   it('only the adapter tools run team hooks through the bridge', () => {
     expect(['opencode', 'omp', 'pi', 'openclaw', 'kiro', 'hermes'].filter(isBridgedTeamHookTool)).toHaveLength(6);
     expect(['claude', 'codex', 'cursor', 'dsh', 'joycode', 'trae', 'my-tool'].filter(isBridgedTeamHookTool)).toEqual([]);

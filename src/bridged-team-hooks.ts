@@ -59,7 +59,9 @@ const BRIDGES: Readonly<Record<HookAdapterId, Bridge | null>> = {
   'kiro-hooks': {
     reply: 'kiro',
     tools: {
-      execute_bash: 'Bash', execute_pwsh: 'Bash', read_file: 'Read', fs_write: 'Write', fs_append: 'Write',
+      // CLI V3's tool IDs, then CLI 2.x's and the IDE's.
+      shell: 'Bash', read: 'Read', write: 'Write', glob: 'Glob', grep: 'Grep',
+      execute_bash: 'Bash', execute_cmd: 'Bash', execute_pwsh: 'Bash', fs_read: 'Read', read_file: 'Read', fs_write: 'Write', fs_append: 'Write',
       str_replace: 'Edit', grep_search: 'Grep',
     },
   },
