@@ -30,7 +30,7 @@ export function loadPluginDefinition(source: string, globals: Record<string, unk
     .replaceAll("await import('node:fs/promises')", 'globalThis.__fs')
     .replaceAll("await import('node:path')", 'globalThis.__path');
   const executable = transformSync(shimmed, { format: 'cjs' }).code;
-  vm.runInNewContext(executable, { module, exports: module.exports, process: { platform: 'linux' }, AbortController, __fs: fs, __path: path, ...globals });
+  vm.runInNewContext(executable, { module, exports: module.exports, process: { platform: 'linux' }, AbortController, setTimeout, clearTimeout, __fs: fs, __path: path, ...globals });
   return module.exports.default;
 }
 
@@ -39,16 +39,23 @@ export function loadPluginDefinition(source: string, globals: Record<string, unk
  * `child_process.spawn` records each dispatch instead of running `teamai`.
  * `dispatches` fills as the host calls the returned hooks.
  */
-function capturePlugin(source: string, globals: Record<string, unknown> = {}) {
+function capturePlugin(source: string, globals: Record<string, unknown> = {}, stdoutFor: (args: string[]) => string = () => '') {
   const dispatches: PluginDispatch[] = [];
   const spawn = (_command: string, args: string[]) => {
-    const child = new EventEmitter() as EventEmitter & { stdin: { write: (s: string) => void; end: () => void } };
+    const child = new EventEmitter() as EventEmitter & { stdin: { write: (s: string) => void; end: (s?: string) => void }; stdout: EventEmitter; kill: () => void };
+    child.stdout = new EventEmitter();
+    child.kill = () => undefined;
     let stdin = '';
     child.stdin = {
       write: (s: string) => { stdin += s; },
-      end: () => {
+      end: (s?: string) => {
+        if (s) stdin += s;
         dispatches.push({ args, payload: JSON.parse(stdin) as Record<string, unknown> });
-        void Promise.resolve().then(() => child.emit('close', 0));
+        void Promise.resolve().then(() => {
+          const stdout = stdoutFor(args);
+          if (stdout) child.stdout.emit('data', stdout);
+          child.emit('close', 0);
+        });
       },
     };
     return child;
@@ -56,8 +63,8 @@ function capturePlugin(source: string, globals: Record<string, unknown> = {}) {
   return { plugin: loadPluginDefinition(source, { __childProcess: { spawn }, ...globals }), dispatches };
 }
 
-export async function loadOpencodePlugin(ctx: { directory?: string; worktree?: string } = {}) {
-  const { plugin, dispatches } = capturePlugin(buildPluginSource());
+export async function loadOpencodePlugin(ctx: { directory?: string; worktree?: string } = {}, stdoutFor?: (args: string[]) => string) {
+  const { plugin, dispatches } = capturePlugin(buildPluginSource(), {}, stdoutFor);
   return { hooks: await plugin.server(ctx), dispatches };
 }
 
@@ -70,8 +77,8 @@ interface McpEditor {
 }
 
 /** V2's public registration/stream boundaries, with abortable event delivery, for a host at `directory`. */
-export async function loadV2Plugin(source = buildPluginSource(), globals: Record<string, unknown> = {}, directory = '/work/proj') {
-  const { plugin, dispatches } = capturePlugin(source, globals);
+export async function loadV2Plugin(source = buildPluginSource(), globals: Record<string, unknown> = {}, directory = '/work/proj', stdoutFor?: (args: string[]) => string) {
+  const { plugin, dispatches } = capturePlugin(source, globals, stdoutFor);
   const callbacks: Record<string, (...args: unknown[]) => Promise<void>> = {};
   const disposed: string[] = [];
   const transforms: Array<(editor: McpEditor) => void> = [];

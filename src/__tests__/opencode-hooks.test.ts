@@ -25,6 +25,7 @@ import {
 } from '../opencode-hooks.js';
 import { reconcileHooksToAllTools } from '../hooks.js';
 import { loadOpencodePlugin, loadPluginDefinition, loadV2Plugin } from './helpers/opencode-plugin.js';
+import { bridgedTeamHookFile } from '../bridged-team-hooks.js';
 import { log } from '../utils/logger.js';
 import * as builtinHooks from '../builtin-hooks.js';
 
@@ -248,6 +249,72 @@ describe('OpenCode plugin: bridge payloads (#884)', () => {
     const pty = { env: {} as Record<string, string> };
     await hooks['shell.env']({ cwd: '/work/proj' }, pty);
     expect(pty.env).toEqual({});
+  });
+});
+
+describe('OpenCode plugin: the team\'s hooks', () => {
+  let home: string;
+  let prevHome: string | undefined;
+  beforeEach(async () => {
+    home = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-opencode-team-'));
+    prevHome = process.env.HOME;
+    process.env.HOME = home;
+  });
+  afterEach(async () => {
+    process.env.HOME = prevHome;
+    await fse.remove(home);
+  });
+  const teamHooksOn = (...events: string[]) => fse.outputJson(bridgedTeamHookFile('opencode'), {
+    hooks: Object.fromEntries(events.map((event) => [event, [{ matcher: '*', hooks: [{ type: 'command', command: 'true' }] }]])),
+  });
+  const reply = (replies: Record<string, unknown>) => (args: string[]) =>
+    args.includes('--team-hooks') && replies[args[2]] ? JSON.stringify(replies[args[2]]) : '';
+  const team = (dispatches: { args: string[]; payload: Record<string, unknown> }[]) =>
+    dispatches.filter((d) => d.args.includes('--team-hooks')).map((d) => [d.args[2], d.payload]);
+
+  it('V1: a PreToolUse team hook that refuses fails the tool call with its reason', async () => {
+    await teamHooksOn('PreToolUse');
+    const { hooks, dispatches } = await loadOpencodePlugin({ directory: '/work/proj' }, reply({ PreToolUse: { block: 'Use --force-with-lease' } }));
+    await expect(hooks['tool.execute.before']({ tool: 'bash', sessionID: 's1', callID: 'c1' }, { args: { command: 'jj push -f' } }))
+      .rejects.toThrow('Use --force-with-lease');
+    expect(team(dispatches)).toEqual([['PreToolUse', { cwd: '/work/proj', session_id: 's1', tool_name: 'bash', tool_input: { command: 'jj push -f' } }]]);
+  });
+
+  it('V2: a PreToolUse team hook that refuses fails the call before the tool runs', async () => {
+    await teamHooksOn('PreToolUse');
+    const { callbacks, cleanup } = await loadV2Plugin(undefined, {}, '/work/proj', reply({ PreToolUse: { block: 'No writes under migrations/' } }));
+    await expect(callbacks['tool.execute.before']({ tool: 'write', sessionID: 's1', id: 'c1', input: { path: 'migrations/1.sql' } }))
+      .rejects.toThrow('No writes under migrations/');
+    if (typeof cleanup === 'function') await cleanup();
+  });
+
+  it('starts no teamai process before a tool call when the team has no PreToolUse hook', async () => {
+    await teamHooksOn('Stop');
+    const { hooks, dispatches } = await loadOpencodePlugin({ directory: '/work/proj' });
+    await hooks['tool.execute.before']({ tool: 'bash', sessionID: 's1', callID: 'c1' }, { args: { command: 'ls' } });
+    expect(dispatches).toEqual([]);
+  });
+
+  it('V2: the SessionStart and UserPromptSubmit context joins the request\'s system prompt', async () => {
+    await teamHooksOn('SessionStart', 'UserPromptSubmit');
+    const v2 = await loadV2Plugin(undefined, {}, '/work/proj', reply({ SessionStart: { context: 'Release freeze until Monday' }, UserPromptSubmit: { context: 'Ticket ENG-42 is open' } }));
+    await v2.emit('session.created', { sessionID: 's1' });
+    await v2.callbacks['session.prompt']({ sessionID: 's1', prompt: { text: 'fix the build' } });
+    const event = { sessionID: 's1', system: [] as { type: string; text: string }[] };
+    await v2.callbacks['session.context'](event);
+    expect(event.system.map((part) => part.text).slice(-2)).toEqual(['Release freeze until Monday', 'Ticket ENG-42 is open']);
+    if (typeof v2.cleanup === 'function') await v2.cleanup();
+  });
+
+  it('runs the PostToolUse and Stop team hooks with the event\'s payload', async () => {
+    await teamHooksOn('PostToolUse', 'Stop');
+    const { hooks, dispatches } = await loadOpencodePlugin({ directory: '/work/proj' });
+    await hooks['tool.execute.after']({ tool: 'edit', sessionID: 's1', callID: 'c1', args: { filePath: 'a.ts' } }, { output: 'ok', metadata: {} });
+    await hooks.event({ event: { type: 'session.idle', properties: { sessionID: 's1' } } });
+    expect(team(dispatches)).toEqual([
+      ['PostToolUse', { cwd: '/work/proj', session_id: 's1', tool_name: 'edit', tool_input: { filePath: 'a.ts' }, tool_response: 'ok', tool_status: 'unknown' }],
+      ['Stop', { cwd: '/work/proj', session_id: 's1' }],
+    ]);
   });
 });
 
@@ -478,7 +545,7 @@ describe('OpenCode plugin: hook stdout is discarded (#719 review)', () => {
   });
 
   it('says so in the generated file, so a reader is not misled', () => {
-    expect(buildPluginSource()).toContain('cannot inject a hook');
+    expect(buildPluginSource()).toContain('the built-in dispatch runs for its side effects');
   });
 });
 
@@ -519,7 +586,7 @@ describe('OpenCode V2 built-in plugin', () => {
     expect(host.dispatches[3].payload).toMatchObject({ tool_response: 'denied', tool_status: 'failure' });
     expect(host.dispatches[4].payload).toMatchObject({ tool_name: 'task', session_link: { child: 'ses_child', parent: 'ses_v2' } });
     await host.cleanup?.();
-    expect(host.disposed.sort()).toEqual(['session.compaction', 'session.context', 'session.prompt', 'tool.execute.after']);
+    expect(host.disposed.sort()).toEqual(['session.compaction', 'session.context', 'session.prompt', 'tool.execute.after', 'tool.execute.before']);
   });
 
   it('adds project team hooks to the V2 context channel (#1492)', async () => {
