@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { bridgedTeamHookFile, runBridgedTeamHooks } from '../bridged-team-hooks.js';
+import { bridgedTeamHookEvents, bridgedTeamHookFile, isBridgedTeamHookTool, runBridgedTeamHooks } from '../bridged-team-hooks.js';
 import { applyBridgedAgentHook, reconcileHooksToAllTools } from '../hooks.js';
 import type { HookDef } from '../types.js';
 
@@ -34,7 +34,7 @@ describe('the team hooks a bridge runs', () => {
   it('a PreToolUse hook on Bash blocks OMP\'s bash call with the reason the hook printed', async () => {
     install('omp', { PreToolUse: [entry('echo "Commit message names a ticket: add one" >&2; exit 2', 'Bash')] });
     const reply = await runBridgedTeamHooks('omp', 'PreToolUse', JSON.stringify({ cwd: project, tool_name: 'bash', tool_input: { command: 'git commit -m wip' } }));
-    expect(JSON.parse(reply.stdout)).toEqual({ block: 'Commit message names a ticket: add one' });
+    expect(reply).toEqual({ code: 0, stdout: JSON.stringify({ block: 'Commit message names a ticket: add one' }), stderr: '' });
   });
 
   it('a hook on Bash leaves OMP\'s read call alone', async () => {
@@ -62,7 +62,7 @@ describe('the team hooks a bridge runs', () => {
     const json = JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'Sprint 42 ends Friday.' } });
     install('omp', { UserPromptSubmit: [entry('echo "On-call: @ana"', '*', 'oncall'), entry(`echo '${json}'`, '*', 'sprint')] });
     const reply = await runBridgedTeamHooks('omp', 'UserPromptSubmit', JSON.stringify({ cwd: project, prompt: 'fix the build' }));
-    expect(JSON.parse(reply.stdout)).toEqual({ context: 'On-call: @ana\n\nSprint 42 ends Friday.' });
+    expect(reply).toEqual({ code: 0, stdout: JSON.stringify({ context: 'On-call: @ana\n\nSprint 42 ends Friday.' }), stderr: '' });
   });
 
   it.each([
@@ -93,6 +93,49 @@ describe('the team hooks a bridge runs', () => {
     expect(JSON.parse(reply.stdout)).toEqual({ context: 'fix the build\non main' });
   });
 
+  it.each([undefined, '*'])('a tool hook with matcher %s runs on every tool call', async (matcher) => {
+    install('omp', { PreToolUse: [{ ...entry('exit 2'), matcher }] });
+    for (const tool of ['bash', 'read']) {
+      const reply = await runBridgedTeamHooks('omp', 'PreToolUse', JSON.stringify({ cwd: project, tool_name: tool, tool_input: {} }));
+      expect(JSON.parse(reply.stdout), tool).toEqual({ block: 'Blocked by team hook team' });
+    }
+  });
+
+  it('a hook that succeeds keeps its stderr to itself, and one without teamai\'s id is named "team"', async () => {
+    install('omp', { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo "scanned" >&2' }] }] });
+    expect(await runBridgedTeamHooks('omp', 'PreToolUse', JSON.stringify({ cwd: project, tool_name: 'bash', tool_input: {} })))
+      .toEqual({ code: 0, stdout: '', stderr: '' });
+    install('omp', { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'exit 2' }] }] });
+    expect(JSON.parse((await runBridgedTeamHooks('omp', 'PreToolUse', JSON.stringify({ cwd: project, tool_name: 'bash', tool_input: {} }))).stdout))
+      .toEqual({ block: 'Blocked by team hook team' });
+  });
+
+  it.each([
+    ['a failing hook\'s output', 'UserPromptSubmit', `echo "partial"; exit 1`],
+    ['a failing hook\'s deny', 'PreToolUse', `echo '${JSON.stringify({ decision: 'block' })}'; exit 1`],
+    ['JSON with no decision', 'SessionStart', `echo '${JSON.stringify({ continue: true })}'`],
+  ])('%s decides nothing', async (_case, event, command) => {
+    install('omp', { [event]: [entry(command, 'Bash')] });
+    const reply = await runBridgedTeamHooks('omp', event, JSON.stringify({ cwd: project, tool_name: 'bash', tool_input: {}, prompt: 'hi' }));
+    expect(reply.stdout).toBe('');
+  });
+
+  it('Hermes runs a prompt hook when the payload has no extra', async () => {
+    install('hermes', { UserPromptSubmit: [entry('echo "Sprint 42 ends Friday."')] });
+    const reply = await runBridgedTeamHooks('hermes', 'UserPromptSubmit', JSON.stringify({ cwd: project }));
+    expect(JSON.parse(reply.stdout)).toEqual({ context: 'Sprint 42 ends Friday.' });
+  });
+
+  it('the events a file has hooks on leave out an event whose entries carry no command', async () => {
+    install('kiro', { SessionStart: [entry('true')], Stop: [{ matcher: '*', hooks: [] }] });
+    expect([...(await bridgedTeamHookEvents('kiro')).keys()]).toEqual(['SessionStart']);
+  });
+
+  it('only the adapter tools run team hooks through the bridge', () => {
+    expect(['opencode', 'omp', 'pi', 'openclaw', 'kiro', 'hermes'].filter(isBridgedTeamHookTool)).toHaveLength(6);
+    expect(['claude', 'codex', 'cursor', 'dsh', 'joycode', 'trae', 'my-tool'].filter(isBridgedTeamHookTool)).toEqual([]);
+  });
+
   it('a PostToolUse or Stop hook runs, and decides nothing for the host', async () => {
     install('pi', { Stop: [entry('touch stopped; echo "keep going" >&2; exit 2')] });
     const reply = await runBridgedTeamHooks('pi', 'Stop', JSON.stringify({ cwd: project }));
@@ -121,9 +164,9 @@ describe('the team hooks a bridge runs', () => {
       UserPromptSubmit: [entry('node -e "process.stdin.on(\'data\', (d) => console.log(JSON.parse(d).prompt))"')],
     });
     const block = await runBridgedTeamHooks('hermes', 'PreToolUse', JSON.stringify({ hook_event_name: 'pre_tool_call', cwd: project, tool_name: 'terminal', tool_input: { command: 'rm -rf build' } }));
-    expect(JSON.parse(block.stdout)).toEqual({ decision: 'block', reason: 'No force push' });
+    expect(block).toEqual({ code: 0, stdout: JSON.stringify({ decision: 'block', reason: 'No force push' }), stderr: '' });
     const first = await runBridgedTeamHooks('hermes', 'UserPromptSubmit', JSON.stringify({ hook_event_name: 'pre_llm_call', cwd: project, extra: { is_first_turn: true, user_message: 'hello' } }));
-    expect(JSON.parse(first.stdout)).toEqual({ context: 'Release freeze until Monday\n\nhello' });
+    expect(first).toEqual({ code: 0, stdout: JSON.stringify({ context: 'Release freeze until Monday\n\nhello' }), stderr: '' });
     const later = await runBridgedTeamHooks('hermes', 'UserPromptSubmit', JSON.stringify({ hook_event_name: 'pre_llm_call', cwd: project, extra: { is_first_turn: false, user_message: 'again' } }));
     expect(JSON.parse(later.stdout)).toEqual({ context: 'again' });
   });
