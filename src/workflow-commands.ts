@@ -264,6 +264,10 @@ export async function workflowStart(name: string, options: {
     refuseOptions(nonSkill.error);
     return;
   }
+  if (options.benchmark && options.describe) {
+    writeEnvelope({ error: { code: 'invalid_arguments', message: '--describe shows a workflow\'s metadata and input schemas, and a benchmark takes no inputs: its suite sets its tasks and arms. Start it again without --describe.' } }, collectEnvSecrets());
+    return;
+  }
   if (options.try !== undefined) {
     writeEnvelope(await tryTask(name, options.try, options), collectEnvSecrets());
     return;
