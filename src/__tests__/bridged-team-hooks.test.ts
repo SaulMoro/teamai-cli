@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { bridgedTeamHookFile, runBridgedTeamHooks } from '../bridged-team-hooks.js';
-import { reconcileHooksToAllTools } from '../hooks.js';
+import { applyBridgedAgentHook, reconcileHooksToAllTools } from '../hooks.js';
 import type { HookDef } from '../types.js';
 
 describe('the team hooks a bridge runs', () => {
@@ -135,5 +135,16 @@ describe('pull delivers the team hooks to a bridged tool', () => {
     expect(hooks.PreToolUse.map((e: { description: string }) => e.description)).toEqual(['[teamai:hook:no-force-push] Refuse a force push']);
     expect(JSON.parse((await runBridgedTeamHooks('omp', 'PreToolUse', bash('jj push -f origin main'))).stdout)).toEqual({ block: 'Use --force-with-lease' });
     expect((await runBridgedTeamHooks('omp', 'PreToolUse', bash('jj push origin main'))).stdout).toBe('');
+  });
+
+  it('a pull keeps the agent hook the HTTP local agent installed beside the team\'s', async () => {
+    fs.mkdirSync(path.join(home, '.omp', 'agent'), { recursive: true });
+    await applyBridgedAgentHook('omp', { slug: 'no-rm', event: 'PreToolUse', matcher: 'Bash', command: 'grep -q "rm -rf" && { echo "No rm -rf" >&2; exit 2; } || true' });
+
+    await reconcileHooksToAllTools({ omp: {} }, home, [teamHook()], manifest());
+    await reconcileHooksToAllTools({ omp: {} }, home, [teamHook()], manifest());
+
+    expect(JSON.parse((await runBridgedTeamHooks('omp', 'PreToolUse', bash('rm -rf build'))).stdout)).toEqual({ block: 'No rm -rf' });
+    expect(JSON.parse((await runBridgedTeamHooks('omp', 'PreToolUse', bash('jj push -f'))).stdout)).toEqual({ block: 'Use --force-with-lease' });
   });
 });
