@@ -2640,24 +2640,27 @@ export async function removeBridgedAgentHook(tool: string, slug: string): Promis
   await rewireBridgedTeamHooks(tool);
 }
 
-/** Kiro, Hermes and OpenClaw register an entry for each event the bridged file has hooks on; the others read the file as they run. */
+/**
+ * Kiro, Hermes and OpenClaw register an entry for each event the bridged file has hooks on; the others read the file as they run.
+ * Only those entries change: teamai's own hooks there stay as they are, removed by an uninstall included.
+ */
 async function rewireBridgedTeamHooks(tool: string): Promise<void> {
   const channel = channelsOf(tool).hooks.user;
   if (typeof channel !== 'object' || channel.channel !== 'adapter') return;
   switch (channel.adapter) {
     case 'kiro-hooks': {
-      const { injectKiroHooks } = await import('./kiro-hooks.js');
-      await injectKiroHooks();
+      const { reconcileKiroTeamHooks } = await import('./kiro-hooks.js');
+      await reconcileKiroTeamHooks();
       return;
     }
     case 'hermes-plugin': {
-      const { injectHermesHooks } = await import('./hermes-hooks.js');
-      await injectHermesHooks();
+      const { refreshHermesTeamHooks } = await import('./hermes-hooks.js');
+      await refreshHermesTeamHooks();
       return;
     }
     case 'openclaw-hook': {
-      const { injectOpenClawHooks } = await import('./openclaw-hooks.js');
-      await injectOpenClawHooks(tool);
+      const { refreshOpenClawTeamHooks } = await import('./openclaw-hooks.js');
+      await refreshOpenClawTeamHooks();
       return;
     }
     case 'opencode-plugin':

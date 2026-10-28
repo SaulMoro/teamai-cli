@@ -1589,6 +1589,31 @@ describe('uninstall', () => {
     expect(await fse.pathExists(bridgedTeamHookFile('opencode'))).toBe(true);
   });
 
+  it('uninstalling Kiro with an agent hook recorded for it leaves none of teamai\'s Kiro hooks', async () => {
+    const { homeDir, repoPath } = await setupFixture(tmpDir);
+    vi.stubEnv('HOME', homeDir);
+    vi.stubEnv('SHELL', '/bin/zsh');
+    await fse.ensureDir(path.join(homeDir, '.kiro'));
+    const actualHooks = await vi.importActual<typeof import('../hooks.js')>('../hooks.js');
+    mockReconcileHooks.mockImplementation(actualHooks.reconcileHooks);
+    const { injectKiroHooks, kiroHookFile } = await import('../kiro-hooks.js');
+    await injectKiroHooks();
+    await actualHooks.applyBridgedAgentHook('kiro', { slug: 'no-rm', event: 'PreToolUse', matcher: 'Bash', command: 'exit 2' });
+    await fse.outputJson(path.join(homeDir, '.teamai', 'local-agent', 'agent-hooks.json'), {
+      'no-rm': { tool: 'kiro', event: 'PreToolUse', matcher: 'Bash', command: 'exit 2' },
+    });
+    // OpenCode keeps its own hooks, so Kiro is not the last tool and ~/.teamai stays.
+    const { injectOpencodeHooks } = await import('../opencode-hooks.js');
+    await injectOpencodeHooks(homeDir, 'user');
+    const localConfig = makeLocalConfig(homeDir, repoPath, { enabledAgents: ['kiro', 'opencode'] });
+    const defaults = TeamaiConfigSchema.parse({ team: 't', repo: 'owner/repo' }).toolPaths;
+    mockAutoDetectInit.mockResolvedValue({ localConfig, teamConfig: makeTeamConfig({ toolPaths: { kiro: defaults.kiro, opencode: defaults.opencode } }) });
+
+    await uninstall({ force: true, agent: 'kiro' });
+
+    expect(await fse.readdir(path.dirname(kiroHookFile())).catch(() => [])).toEqual([]);
+  });
+
   it('a project uninstall of OMP takes that project\'s team hooks out of the file teamai\'s bridge runs, and keeps the agent\'s', async () => {
     const homeDir = path.join(tmpDir, 'home');
     const projectRoot = path.join(tmpDir, 'project');

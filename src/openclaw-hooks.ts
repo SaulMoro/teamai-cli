@@ -180,6 +180,17 @@ export async function injectOpenClawHooks(tool = 'openclaw'): Promise<void> {
   }
 }
 
+/** Reconcile only the team hooks plugin, leaving teamai's own OpenClaw hook as it is. */
+export async function refreshOpenClawTeamHooks(): Promise<void> {
+  const entry = resolveCliEntry();
+  if (!entry) {
+    log.warn('OpenClaw: cannot resolve the teamai CLI entry; run `teamai hooks inject` from the installed CLI.');
+    return;
+  }
+  const wsDir = await openclawWorkspaceDir();
+  if (wsDir) await reconcileOpenClawTeamHooks(entry, wsDir);
+}
+
 /** The team-hook plugin's id, which OpenClaw takes from its file name. */
 const TEAM_HOOK_PLUGIN = 'teamai-team-hooks';
 

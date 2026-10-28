@@ -40,7 +40,7 @@ async function ownsKiroTeamHooks(): Promise<boolean> {
 }
 
 /** Write Kiro's team hook entries from the bridged file, or remove them when the team has none. */
-async function reconcileKiroTeamHooks(): Promise<void> {
+export async function reconcileKiroTeamHooks(): Promise<void> {
   const file = kiroTeamHookFile();
   if (await pathExists(file) && !await ownsKiroTeamHooks()) {
     throw new Error(`${file} is not owned by teamai; move it aside so Kiro gets the team's hooks.`);

@@ -197,6 +197,16 @@ async function reconcileHermesTeamHooks(entry: string): Promise<boolean> {
   return changed;
 }
 
+/** Reconcile only the team-hook entries, leaving teamai's own Hermes hook as it is. */
+export async function refreshHermesTeamHooks(): Promise<void> {
+  const entry = resolveCliEntry();
+  if (!entry) {
+    log.warn('Hermes: cannot resolve the teamai CLI entry; run `teamai hooks inject` from the installed CLI.');
+    return;
+  }
+  await reconcileHermesTeamHooks(entry);
+}
+
 async function removeHermesTeamHookEntry(event: string, command: string, home = toolHome('hermes')): Promise<boolean> {
   const registered = await hasHermesHookCommands([command], home);
   if (registered) await removeHermesHookByCommand(command, home);
