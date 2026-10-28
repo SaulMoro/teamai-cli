@@ -133,7 +133,8 @@ type UnrecordedPass = { pass: RunPass; key: PublishedKey };
  * unless this data home recorded it already.
  */
 async function unrecordedSteps(config: LocalConfig, mode: RunMode): Promise<Array<{ run: RunState; passes: UnrecordedPass[] }>> {
-  const ended = (await localRuns(config)).filter((run) => run.status !== 'running' && (run.runMode ?? 'attended') === mode);
+  // A benchmark run stays on the machine that started it, and so do its trials' sessions.
+  const ended = (await localRuns(config)).filter((run) => run.status !== 'running' && run.benchmark === undefined && (run.runMode ?? 'attended') === mode);
   if (ended.length === 0) return [];
   const install = (await installOwner(config)).id;
   const runs: Array<{ run: RunState; passes: UnrecordedPass[] }> = [];

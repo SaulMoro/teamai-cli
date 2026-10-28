@@ -123,6 +123,11 @@ describe.skipIf(!hasJq)('the GitHub Actions job in the benchmarks guide, run thr
     expect(fixture.toolLaunches().map((launch) => launch.tool)).toEqual(['claude']);
   });
 
+  it('leaves its trials\' sessions on the runner when the unattended run ends', () => {
+    const started = ran.find((step) => step.command.includes('--benchmark'));
+    expect(started?.stderr, said(ran)).not.toContain('step session');
+  });
+
   it('writes the done envelope to done.json and its results text to the job summary', () => {
     const done = DoneSchema.parse(JSON.parse(fs.readFileSync(path.join(work, 'done.json'), 'utf8'))).data.done;
     expect(done.outcome).toBe('succeeded');
