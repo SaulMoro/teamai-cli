@@ -58,8 +58,8 @@ function sessionOf(stdout: string): { model?: string; session?: string; tokens?:
   const lines = stdout.split('\n').filter((line) => line.startsWith('{')).map((line) => StreamLineSchema.safeParse(JSON.parse(line)));
   const model = lines.find((line) => line.success && line.data.model)?.data?.model;
   const session = lines.find((line) => line.success && line.data.session_id)?.data?.session_id;
-  const usage = lines.filter((line) => line.success && line.data.usage !== undefined).at(-1)?.data?.usage;
-  const cost = lines.filter((line) => line.success && line.data.total_cost_usd !== undefined).at(-1)?.data?.total_cost_usd;
+  const usage = lines.findLast((line) => line.success && line.data.usage !== undefined)?.data?.usage;
+  const cost = lines.findLast((line) => line.success && line.data.total_cost_usd !== undefined)?.data?.total_cost_usd;
   return {
     ...(model ? { model } : {}), ...(session ? { session } : {}),
     ...(usage ? { tokens: { input: usage.input_tokens, output: usage.output_tokens } } : {}),
@@ -68,7 +68,7 @@ function sessionOf(stdout: string): { model?: string; session?: string; tokens?:
 }
 
 function lastJson(stdout: string, stderr: string): unknown {
-  const line = stdout.trim().split('\n').filter((item) => item.startsWith('{')).at(-1);
+  const line = stdout.trim().split('\n').findLast((item) => item.startsWith('{'));
   if (!line) throw new Error(`no JSON envelope:\n${stdout}\n${stderr}`);
   return JSON.parse(line);
 }

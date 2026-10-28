@@ -463,7 +463,7 @@ export async function runLocalDriver(
   cwd: string,
   options: LocalDriverOptions = {},
 ): Promise<WorkflowEnvelope> {
-  return withDriverLock(config, runId, (drive) => drive(cwd, options));
+  return withDriverLock(config, runId, (driveLocked) => driveLocked(cwd, options));
 }
 
 /**

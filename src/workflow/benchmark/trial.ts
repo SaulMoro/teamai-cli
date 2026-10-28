@@ -633,15 +633,15 @@ async function prepareInstall(trial: TrialCall, root: string, lease: PromptLease
   // The run's deadline bounds the pull too, so a slow one does not hold the run past its timeout.
   const timeoutMs = lease.expiresAt === undefined ? TRIAL_PULL_TIMEOUT_MS : Math.max(0, Math.min(TRIAL_PULL_TIMEOUT_MS, Date.parse(lease.expiresAt) - Date.now()));
   const pulled = await execCommand(process.execPath, [entry, 'pull', '--team-ref', teamRevision], { cwd: clone, env, timeoutMs })
-    .catch((error: unknown) => ({ code: 1, stdout: '', stderr: error instanceof Error ? error.message : String(error) }));
+    .catch((thrown: unknown) => ({ code: 1, stdout: '', stderr: thrown instanceof Error ? thrown.message : String(thrown) }));
   if (pulled.code !== 0) {
     const tail = (pulled.stderr.trim() || pulled.stdout.trim()).slice(-500);
     return failed(`teamai pull --team-ref ${teamRevision.slice(0, 7)} exited ${pulled.code}: ${tail}`);
   }
   try {
     await removeGitHook(clone);
-  } catch (error) {
-    return failed(`The git hooks the trial's own teamai pull installed in ${clone} could not be removed: ${error instanceof Error ? error.message : String(error)}`);
+  } catch (thrown) {
+    return failed(`The git hooks the trial's own teamai pull installed in ${clone} could not be removed: ${thrown instanceof Error ? thrown.message : String(thrown)}`);
   }
   await recordConfigOverlay(clone, saved);
   return { ok: true, config };
@@ -672,12 +672,12 @@ async function runTrialCheck(trial: TrialCall, lease: CheckLease): Promise<Workf
       ?? (lease.trial.add ? await writeAdded({ clone, add: lease.trial.add, sources: trial.sources, env, expiresAt: lease.expiresAt }) : undefined))
     : { kind: 'error' as const, failure: { code: 'trial_prepare_failed', message: `The clone of trial ${trialCopyOf(lease.trial)} is gone, so its check could not run.` } };
   if (trial.signal?.aborted) return interrupted(trial.runId, lease.step);
-  const settled = await settle(trial, lease, ran.kind === 'check'
+  const answered = await settle(trial, lease, ran.kind === 'check'
     ? { ...checkSettlement(ran.verdict), trialReport: { verdict: ran.verdict } }
     : { outcome: 'failed', message: ran.failure.message, failure: ran.failure, trialReport: {} });
   progress(trial, lease.trial, ran);
-  if (receipt && !settled) await removeRoot({ file, root: receipt.root });
-  return settled;
+  if (receipt && !answered) await removeRoot({ file, root: receipt.root });
+  return answered;
 }
 
 /**
@@ -698,12 +698,12 @@ async function runBaseline(trial: TrialCall, lease: BaselineLease): Promise<Work
     ?? (lease.trial.add ? await writeAdded({ clone, add: lease.trial.add, sources: trial.sources, env, expiresAt: lease.expiresAt }) : undefined)
     ?? (lease.setup ? await setupIn(trial, clone, lease.setup, lease.expiresAt) : undefined));
   if (trial.signal?.aborted) return interrupted(trial.runId, lease.step);
-  const settled = await settle(trial, lease, ran.kind === 'check'
+  const answered = await settle(trial, lease, ran.kind === 'check'
     ? { ...baselineSettlement(ran.verdict), trialReport: { verdict: ran.verdict } }
     : { outcome: 'failed', message: ran.failure.message, failure: ran.failure, trialReport: {} });
   baselineProgress(lease.trial.task, ran);
   await removeRoot({ file, root });
-  return settled;
+  return answered;
 }
 
 /** How a check went: its verdict, or why it never ran. */

@@ -1164,16 +1164,16 @@ async function buildRemovalPlan(
   // A project uninstall leaves Copilot's shared built-ins available to other projects.
   if (localConfig.scope === 'project' && primaryHookScope.scope === 'user') {
     const file = hookToolPaths.copilot?.hooks === undefined ? undefined : ownOf(await locate(COPILOT_TOOL_ID, 'hooks', install))?.path;
-    const res = perTool.get('copilot');
-    if (file !== undefined && res) {
-      if (await pathExists(file) && await hasTeamaiHooks(file, 'copilot')) res.keptGlobal.push(file);
+    const copilot = perTool.get('copilot');
+    if (file !== undefined && copilot) {
+      if (await pathExists(file) && await hasTeamaiHooks(file, 'copilot')) copilot.keptGlobal.push(file);
     }
     // The user scope and other workspaces dispatch from the same HOME settings: their built-ins stay, this project's team hooks go.
     const otherInstalls = await installsSharingHome(getDataHome(localConfig));
-    for (const [tool, res] of perTool) {
+    for (const [tool, result] of perTool) {
       if (!otherInstalls.some((other) => !isAgentExcluded(other, tool))) continue;
-      for (const file of res.hookFiles) {
-        if (!file.teamOnly && file.manifestPath === primaryHookScope.manifestPath) file.keepBuiltins = true;
+      for (const hookFile of result.hookFiles) {
+        if (!hookFile.teamOnly && hookFile.manifestPath === primaryHookScope.manifestPath) hookFile.keepBuiltins = true;
       }
     }
   }

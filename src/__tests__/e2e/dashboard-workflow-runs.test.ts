@@ -24,9 +24,9 @@ afterEach(async () => {
 
 function cli(args: string[]): Record<string, unknown> {
   const stdout = execFileSync(process.execPath, [CLI, ...args], { cwd: repo, env: { ...process.env, FORCE_COLOR: '0' }, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  const envelope = JSON.parse(stdout.trim().split('\n').findLast((line) => line.startsWith('{')) ?? '{}') as WorkflowEnvelope;
-  if ('error' in envelope) throw new Error(envelope.error.message);
-  return envelope.data;
+  const answer = JSON.parse(stdout.trim().split('\n').findLast((line) => line.startsWith('{')) ?? '{}') as WorkflowEnvelope;
+  if ('error' in answer) throw new Error(answer.error.message);
+  return answer.data;
 }
 async function freePort(): Promise<number> {
   const server = net.createServer(); server.listen(0, '127.0.0.1'); await once(server, 'listening');

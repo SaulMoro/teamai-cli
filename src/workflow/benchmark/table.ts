@@ -96,7 +96,7 @@ export function benchmarkTable(record: { steps?: ReadonlyArray<Pick<RecordedStep
   const { arms, trials, tasks } = record.benchmark;
   // A trial's prompt ran when its step entry holds what it ran as: teamai observes every prompt a driver reported.
   const ranAs = (trial: RecordedTrial): AgentObservation | undefined => {
-    const agent = record.steps?.filter((entry) => entry.step === trial.step).at(-1)?.agent;
+    const agent = record.steps?.findLast((entry) => entry.step === trial.step)?.agent;
     return agent && 'v' in agent ? agent : undefined;
   };
   return {
@@ -188,13 +188,13 @@ function compareAgent(arm: RecordedArm, observed: AgentObservation): Comparison 
     if (recorded === undefined) return 'not_verified';
     return same(intended, recorded) ? 'match' : 'deviation';
   };
-  const comparisons = [
+  const comparisons = new Set([
     compare(arm.tool, observed.tool.name),
     compare(arm.teamRevision, observed.team?.revision),
     ...(arm.model !== undefined && !isNativeModelAlias(arm.model) ? [compare(arm.model, observed.model?.reported, sameModel)] : []),
-  ];
-  if (comparisons.includes('deviation')) return 'deviation';
-  return comparisons.includes('not_verified') ? 'not_verified' : 'match';
+  ]);
+  if (comparisons.has('deviation')) return 'deviation';
+  return comparisons.has('not_verified') ? 'not_verified' : 'match';
 }
 
 /**

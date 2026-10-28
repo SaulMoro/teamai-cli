@@ -151,7 +151,7 @@ export function said(result: CliResult): string {
 
 /** The last JSON line a command printed. */
 export function envelope(result: CliResult): Envelope {
-  const line = result.stdout.trim().split('\n').filter((item) => item.startsWith('{')).at(-1);
+  const line = result.stdout.trim().split('\n').findLast((item) => item.startsWith('{'));
   if (!line) throw new Error(`no JSON envelope:\n${said(result)}`);
   return EnvelopeSchema.parse(JSON.parse(line));
 }

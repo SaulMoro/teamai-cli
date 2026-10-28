@@ -278,8 +278,8 @@ async function tryCheck(suite: Suite, task: Suite['tasks'][number], judge: Extra
   if (unusableFix !== undefined) return error('task_try_failed', unusableFix);
   if (fixed.kind === 'check' && fixed.verdict.verdict === 'failed') {
     const changed = await git(options.checkout, ['diff', '--name-only', startingCommit, fix, '--', ...judge.protect.map((entry) => `:(glob)${entry}`)]);
-    const added = add.flatMap((entry) => entry.paths);
-    const paths = changed.code === 0 ? changed.stdout.split('\n').filter((line) => line !== '' && !added.includes(line)) : [];
+    const added = new Set(add.flatMap((entry) => entry.paths));
+    const paths = changed.code === 0 ? changed.stdout.split('\n').filter((line) => line !== '' && !added.has(line)) : [];
     const hint = paths.length > 0 ? ` The fix changes ${paths.join(', ')}, which protect puts back as ${short(startingCommit)} has them: list a test the fix brought in check.add.` : '';
     return error('task_try_failed', `Task "${task.id}": the check fails at the fix ${short(fix)} (exit ${fixed.verdict.exitCode}), with the protected paths as ${short(startingCommit)} has them.${hint}`);
   }

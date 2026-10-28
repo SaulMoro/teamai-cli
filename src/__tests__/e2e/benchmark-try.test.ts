@@ -41,13 +41,13 @@ function fixture(suiteLines = '') {
   const origin = path.join(root, 'origin.git');
   fs.writeFileSync(path.join(home, '.gitconfig'), `[user]\n\tname = member\n\temail = member@example.com\n[url "${origin}"]\n\tinsteadOf = https://github.com/fixture/app.git\n`);
   const git = (args: string[]): string => execFileSync('git', args, { cwd: work, env, encoding: 'utf8' }).trim();
-  const commit = (files: Record<string, string>, message: string): string => {
+  const commit = (files: Record<string, string>, subject: string): string => {
     for (const [file, text] of Object.entries(files)) {
       fs.mkdirSync(path.dirname(path.join(work, file)), { recursive: true });
       fs.writeFileSync(path.join(work, file), text);
     }
     git(['add', '-A']);
-    git(['commit', '-q', '--allow-empty', '-m', message]);
+    git(['commit', '-q', '--allow-empty', '-m', subject]);
     return git(['rev-parse', 'HEAD']);
   };
   git(['init', '-q']);
@@ -73,8 +73,8 @@ arms:
   - name: claude
 timeout: 5m
 ${suiteLines}`);
-  const tryTask = (name: string, task: string, flags = ['--driver', 'local', '--sandbox'], suite = 'fix'): Promise<Result> => {
-    fs.writeFileSync(path.join(suiteDir, 'tasks', `${name}.yaml`), task);
+  const tryTask = (name: string, taskText: string, flags = ['--driver', 'local', '--sandbox'], suite = 'fix'): Promise<Result> => {
+    fs.writeFileSync(path.join(suiteDir, 'tasks', `${name}.yaml`), taskText);
     return new Promise((resolve) => {
       const child = spawn(process.execPath, [CLI, 'workflow', 'start', suite, '--benchmark', '--try', `../team/benchmarks/fix/tasks/${name}.yaml`, ...flags], { cwd: work, env, stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
@@ -100,7 +100,7 @@ ${suiteLines}`);
     there(['push', '-q', 'origin', 'HEAD:main']);
     return there(['rev-parse', 'HEAD']);
   };
-  return { commits, home, tmp, suiteDir, tryTask, pushElsewhere, has: (commit: string) => spawnSync('git', ['cat-file', '-e', `${commit}^{commit}`], { cwd: work, env }).status === 0 };
+  return { commits, home, tmp, suiteDir, tryTask, pushElsewhere, has: (sha: string) => spawnSync('git', ['cat-file', '-e', `${sha}^{commit}`], { cwd: work, env }).status === 0 };
 }
 
 function task({ start, fix, run = 'node test.js', judge }: { start: string; fix?: string; run?: string; judge?: string }): string {
