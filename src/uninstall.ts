@@ -2297,14 +2297,14 @@ async function executeRemoval(
       await remove(file);
       log.success(`Removed the team hooks teamai runs from ${file}`);
     } catch (e) {
-      log.warn(`Failed to remove ${file}: ${(e as Error).message}`);
+      log.warn(`Failed to remove ${file}: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
   if (plan.openclawHookDirs.some(({ tool }) => tool === 'openclaw')) {
     try {
       await removeOpenClawTeamHooks();
     } catch (e) {
-      log.warn(`Failed to remove the teamai OpenClaw team hooks plugin: ${(e as Error).message}`);
+      log.warn(`Failed to remove the teamai OpenClaw team hooks plugin: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
 

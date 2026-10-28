@@ -368,23 +368,24 @@ async function updateOpenClawPluginConfig(file: string, action: 'load' | 'unload
   const read = await readJsonObject(cfgPath);
   if (read.kind === 'missing' && action === 'unload') return;
   if (read.kind === 'invalid') {
-    log.warn(`OpenClaw: teamai cannot read ${cfgPath} as plain JSON (${read.error}), so the team's hooks `
-      + `${action === 'load' ? 'do not run' : 'plugin is still listed there'}. `
-      + `${action === 'load' ? 'Add' : 'Remove'} ${file} ${action === 'load' ? 'to' : 'from'} plugins.load.paths by hand.`);
+    log.warn(action === 'load'
+      ? `OpenClaw: teamai cannot read ${cfgPath} as plain JSON (${read.error}), so the team's hooks do not run. Add ${file} to plugins.load.paths by hand.`
+      : `OpenClaw: teamai cannot read ${cfgPath} as plain JSON (${read.error}), so the team's hooks plugin is still listed there. Remove ${file} from plugins.load.paths by hand.`);
     return;
   }
   const config = read.kind === 'ok' ? read.value : {};
   const plugins = pluginsOf(config);
   const blocker = action === 'load' ? teamHookPluginBlocker(plugins) : null;
   if (blocker) {
-    log.warn(`OpenClaw does not load teamai's team hooks plugin, so the team's hooks do not run in OpenClaw: `
-      + `in ${cfgPath}, ${blocker}. teamai leaves that setting to you.`);
+    log.warn(`OpenClaw does not load teamai's team hooks plugin, so the team's hooks do not run in OpenClaw: in ${cfgPath}, ${blocker}. teamai leaves that setting to you.`);
     return;
   }
   const next = withTeamHookPlugin(config, file, action);
   if (JSON.stringify(next) === JSON.stringify(config)) return;
   await writeJsonAtomic(await symlinkTarget(cfgPath), next);
-  log.success(`${action === 'load' ? 'Loaded' : 'Unloaded'} the teamai OpenClaw team hooks plugin in ${cfgPath}`);
+  log.success(action === 'load'
+    ? `Loaded the teamai OpenClaw team hooks plugin in ${cfgPath}`
+    : `Unloaded the teamai OpenClaw team hooks plugin in ${cfgPath}`);
 }
 
 type OpenclawInternalHooks = {
