@@ -194,6 +194,68 @@ hooks:
 
 A hook for one project goes in `hooks/<ns>/hooks.yaml`.
 
+Four hooks a team can share. A hook reads Claude Code's JSON payload on stdin.
+
+```yaml
+hooks:
+  # Refuse a force push, and say what to run instead.
+  - id: no-force-push
+    description: Refuse git push --force
+    event: PreToolUse
+    matcher: Bash
+    command: >-
+      jq -r '.tool_input.command' | grep -Eq 'git push.* (-f|--force)( |$)'
+      && { echo 'Use git push --force-with-lease' >&2; exit 2; } || true
+
+  # Migrations that shipped are append-only.
+  - id: no-migration-edits
+    description: Keep shipped migrations unchanged
+    event: PreToolUse
+    matcher: Edit|Write
+    command: >-
+      jq -r '.tool_input.file_path // empty' | grep -q '/db/migrations/'
+      && { echo 'Add a new migration instead: make migration name=...' >&2; exit 2; } || true
+
+  # Tell every session about the release freeze.
+  - id: release-freeze
+    description: Announce the release freeze
+    event: SessionStart
+    command: echo 'Release freeze until Friday 18:00 UTC. Only hotfix/* branches merge to main.'
+
+  # Format what the agent wrote.
+  - id: format-on-write
+    description: Run Prettier on edited files
+    event: PostToolUse
+    matcher: Edit|Write
+    command: >-
+      f=$(jq -r '.tool_input.file_path // empty');
+      [ -n "$f" ] && npx --no-install prettier --write "$f" >/dev/null 2>&1; true
+```
+
+What a hook can do depends on its event:
+
+| Event | Exit 2 (reason on stderr) | Stdout |
+|-------|---------------------------|--------|
+| `PreToolUse` | Blocks the tool call | — |
+| `SessionStart`, `UserPromptSubmit` | — | Added to the agent's context |
+| `PostToolUse`, `Stop` | — | — |
+
+`teamai hooks list` shows where each team hook runs:
+
+```text
+  [no-force-push] PreToolUse [Bash]  →  jq -r '.tool_input.command' | grep -Eq 'git push.* (-f|--force)( |$)' && { echo 'Use git push --force-with-lease' >&2; exit 2; } || true  (tools: all)  from root
+      runs in: claude, omp, opencode
+      not in: cursor (no PreToolUse hook there)
+```
+
+OpenCode, Oh My Pi, Pi, OpenClaw, Kiro, and Hermes have no Claude Code hook file. Their hooks run through teamai, with Claude Code's payload and tool names (`matcher: Bash` matches OpenCode's `bash` and Hermes's `terminal`). There:
+
+- Only `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, and `Stop` run. Pull warns about a team hook on any other event.
+- `UserPromptSubmit` adds context but cannot block the prompt.
+- Oh My Pi waits 25 seconds for a `PreToolUse` hook. A slower hook does not block the call. Hermes stops any hook after 300 seconds.
+- OpenClaw and Hermes run `SessionStart` on the session's first prompt.
+- OpenClaw loads teamai's plugin from `plugins.load.paths` in `openclaw.json`. If `plugins.allow` leaves it out, pull warns and the hooks do not run.
+
 ```yaml
 sharing:
   hooks:

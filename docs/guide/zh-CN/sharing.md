@@ -194,6 +194,68 @@ hooks:
 
 只给一个项目时写到 `hooks/<ns>/hooks.yaml`。
 
+团队可以共享的四个 hook。hook 从 stdin 读到 Claude Code 的 JSON payload。
+
+```yaml
+hooks:
+  # 拒绝 force push，并告诉它改用什么。
+  - id: no-force-push
+    description: 拒绝 git push --force
+    event: PreToolUse
+    matcher: Bash
+    command: >-
+      jq -r '.tool_input.command' | grep -Eq 'git push.* (-f|--force)( |$)'
+      && { echo 'Use git push --force-with-lease' >&2; exit 2; } || true
+
+  # 已发布的 migration 只能追加。
+  - id: no-migration-edits
+    description: 不改已发布的 migration
+    event: PreToolUse
+    matcher: Edit|Write
+    command: >-
+      jq -r '.tool_input.file_path // empty' | grep -q '/db/migrations/'
+      && { echo 'Add a new migration instead: make migration name=...' >&2; exit 2; } || true
+
+  # 每个会话都知道发布冻结。
+  - id: release-freeze
+    description: 通知发布冻结
+    event: SessionStart
+    command: echo 'Release freeze until Friday 18:00 UTC. Only hotfix/* branches merge to main.'
+
+  # 格式化 agent 写的文件。
+  - id: format-on-write
+    description: 对改过的文件跑 Prettier
+    event: PostToolUse
+    matcher: Edit|Write
+    command: >-
+      f=$(jq -r '.tool_input.file_path // empty');
+      [ -n "$f" ] && npx --no-install prettier --write "$f" >/dev/null 2>&1; true
+```
+
+hook 能做什么取决于事件：
+
+| 事件 | exit 2（原因写到 stderr） | stdout |
+|------|---------------------------|--------|
+| `PreToolUse` | 拦下这次工具调用 | — |
+| `SessionStart`、`UserPromptSubmit` | — | 加进 agent 的上下文 |
+| `PostToolUse`、`Stop` | — | — |
+
+`teamai hooks list` 列出每条团队 hook 在哪些工具里运行：
+
+```text
+  [no-force-push] PreToolUse [Bash]  →  jq -r '.tool_input.command' | grep -Eq 'git push.* (-f|--force)( |$)' && { echo 'Use git push --force-with-lease' >&2; exit 2; } || true  (tools: all)  from root
+      runs in: claude, omp, opencode
+      not in: cursor (no PreToolUse hook there)
+```
+
+OpenCode、Oh My Pi、Pi、OpenClaw、Kiro 和 Hermes 没有 Claude Code 那样的 hook 文件，它们的 hook 由 teamai 来跑，payload 和工具名都按 Claude Code 的（`matcher: Bash` 能匹配 OpenCode 的 `bash` 和 Hermes 的 `terminal`）。在这些工具里：
+
+- 只跑 `SessionStart`、`UserPromptSubmit`、`PreToolUse`、`PostToolUse` 和 `Stop`。其他事件上的团队 hook，pull 会警告。
+- `UserPromptSubmit` 能加上下文，但拦不下这次输入。
+- Oh My Pi 最多等 `PreToolUse` hook 25 秒，更慢的 hook 拦不下这次调用。Hermes 的 hook 最多跑 300 秒。
+- OpenClaw 和 Hermes 在会话的第一条输入时跑 `SessionStart`。
+- OpenClaw 从 `openclaw.json` 的 `plugins.load.paths` 加载 teamai 的插件。如果 `plugins.allow` 没列它，pull 会警告，hook 不会运行。
+
 ```yaml
 sharing:
   hooks:
