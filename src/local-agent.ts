@@ -24,7 +24,7 @@ import {
 } from './utils/fs.js';
 import { RulesHandler, SkillsHandler } from './resources/index.js';
 import { isBridgedTeamHookTool } from './bridged-team-hooks.js';
-import { injectHooksToAllTools, applyAgentHook, applyBridgedAgentHook, removeAgentHook, removeBridgedAgentHook, isAgentHookSupportedTool, isAgentHookEvent, isCodexTrustGatedTool, trustCodexAgentHook, OPENCLAW_TOOLS, codexTrustPolicy, type CodexTrustPolicy } from './hooks.js';
+import { injectHooksToAllTools, applyAgentHook, applyBridgedAgentHook, hasBridgedAgentHook, removeAgentHook, removeBridgedAgentHook, isAgentHookSupportedTool, isAgentHookEvent, isCodexTrustGatedTool, trustCodexAgentHook, OPENCLAW_TOOLS, codexTrustPolicy, type CodexTrustPolicy } from './hooks.js';
 import { parseHookEvent } from './dashboard-collector.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { isInteractive } from './utils/prompt.js';
@@ -620,6 +620,24 @@ async function removeInstalledAgentHook(config: LocalAgentConfig | null, slug: s
 }
 
 /** Remove a settings-file agent hook from every file it can sit in. */
+/**
+ * Move each agent hook an earlier release wrote in a bridged tool's own format
+ * (a Hermes config entry, an OpenClaw handler, an OpenCode plugin, a Pi
+ * extension) into the tool's bridged file, where it blocks and matches as in
+ * Claude Code. The server sends no install again for a hook already in place.
+ */
+async function moveAgentHooksToBridge(config: LocalAgentConfig): Promise<void> {
+  for (const [slug, rec] of Object.entries(await loadAgentHookManifest())) {
+    if (!isBridgedTeamHookTool(rec.tool) || await hasBridgedAgentHook(rec.tool, slug)) continue;
+    try {
+      await removeInstalledAgentHook(config, slug, rec);
+      await applyBridgedAgentHook(rec.tool, { slug, event: rec.event, command: rec.command, matcher: rec.matcher, timeout: rec.timeout ?? 10 });
+    } catch (e) {
+      log.warn(`Could not move agent hook ${slug} for ${rec.tool} to teamai's hook bridge: ${e instanceof Error ? e.message : String(e)}. The next session tries again.`);
+    }
+  }
+}
+
 async function removeSettingsAgentHook(
   config: LocalAgentConfig | null,
   tool: string,
@@ -4497,6 +4515,7 @@ async function syncLocalAgent(context: LocalAgentContext): Promise<boolean> {
   // Also when the sync failed: what an install wrote is on disk either way. Also after an uninstall_teamai:
   // one that removed teamai's servers and records leaves nothing to list, and one that failed or kept the
   // shared files (another agent remains) leaves what still needs keeping out of git.
+  await moveAgentHooksToBridge(config);
   await protectWorkspaceMcpConfigs(config, context.cwd);
   await keepLocalAgentGitExclude(config, context.event?.type === 'session_start' || changedProjectCopies);
 

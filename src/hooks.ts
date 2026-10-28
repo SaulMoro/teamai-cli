@@ -2628,6 +2628,12 @@ export async function applyBridgedAgentHook(tool: string, def: AgentHookDef): Pr
   await rewireBridgedTeamHooks(tool);
 }
 
+/** Whether `tool`'s bridged file holds the agent hook `slug`. */
+export async function hasBridgedAgentHook(tool: string, slug: string): Promise<boolean> {
+  const settings = await readHookFile<ClaudeSettingsJson>(bridgedTeamHookFile(tool), {});
+  return Object.values(settings.hooks ?? {}).some((entries) => entries.some((entry) => isAgentClaudeEntry(entry, slug)));
+}
+
 /** Remove an agent hook `applyBridgedAgentHook` installed. */
 export async function removeBridgedAgentHook(tool: string, slug: string): Promise<void> {
   await removeAgentHook(bridgedTeamHookFile(tool), tool, { slug }, { kind: 'disabled' });

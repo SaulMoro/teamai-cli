@@ -2546,6 +2546,25 @@ describe('local-agent: cmds[] migration', () => {
     expect(await call('jj push --force')).toMatchObject({ code: 0, stdout: '' });
   });
 
+  it('a sync moves an agent hook an earlier release wrote in Pi\'s own format to where teamai\'s bridge runs it', async () => {
+    const { hookAdapterDir } = await import('../locate.js');
+    const legacy = path.join(hookAdapterDir('pi-extension'), 'teamai-agent-no-force-push.ts');
+    await fse.outputFile(legacy, '// [teamai] agent hook [no-force-push]\nexport default function () {}\n');
+    await fse.outputJson(path.join(tmpDir, '.teamai', 'local-agent', 'agent-hooks.json'), {
+      'no-force-push': {
+        tool: 'pi', event: 'PreToolUse', matcher: 'Bash', timeout: 10,
+        command: 'grep -q -- --force && { echo "Use --force-with-lease" >&2; exit 2; } || true',
+      },
+    });
+
+    await runResponse({ cmds: [] }, undefined, 'pi');
+
+    expect(await fse.pathExists(legacy)).toBe(false);
+    const { runBridgedTeamHooks } = await import('../bridged-team-hooks.js');
+    const blocked = await runBridgedTeamHooks('pi', 'PreToolUse', JSON.stringify({ cwd: tmpDir, tool_name: 'bash', tool_input: { command: 'git push --force' } }));
+    expect(JSON.parse(blocked.stdout)).toEqual({ block: 'Use --force-with-lease' });
+  });
+
   it('re-install same codex slug with a new command leaves no stale entry', async () => {
     const first = {
       id: 30, type: 'install_hook_rule', handle_type: 'hook', slug: 'cxr',
