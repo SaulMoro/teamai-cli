@@ -292,7 +292,7 @@ These results hold for these tasks, this run and this machine.
 
 结果不是运行的状态：所有 trial 都失败的运行仍然成功。运行只在超时或被取消时失败。
 
-只有要发布结果时才需要[使用统计上报](reporting.md)。开启时，运行的结束记录连同 `benchmark` 字段会写到团队仓库的 `teamai-reports` 分支，所以任务的 token 还需要团队仓库的推送权限。[运行记录](workflow.md#运行记录)列出记录的字段，并给出只从记录算出每个 arm 通过率的 `jq` 命令。关闭时，表格仍在返回中。
+只有要发布结果时才需要[使用统计上报](reporting.md)。开启时，运行的结束记录连同 `benchmark` 字段会写到团队仓库的 `teamai-reports` 分支，所以任务的 token 还需要团队仓库的推送权限。[运行记录](workflow.md#运行记录)列出记录的字段，并给出只从记录算出每个 arm 通过率的 `jq` 命令。关闭时，表格仍在返回中。Dashboard 的[基准测试页面](dashboard.md#基准测试benchmarks)按时间画出已发布的运行和本机的运行。
 
 ## 在 CI 中运行
 

@@ -9,7 +9,7 @@ teamai dashboard
 teamai dashboard --port 8080
 ```
 
-Open `http://localhost:3721`. The sidebar is Overview, Team Execution, Workflow Runs, Scorers, Team Context, Resources, Distribution, and Team Improvement. The numbers are from this machine.
+Open `http://localhost:3721`. The sidebar is Overview, Team Execution, Workflow Runs, Scorers, Benchmarks, Team Context, Resources, Distribution, and Team Improvement. The numbers are from this machine.
 
 ## Session sharing
 
@@ -96,6 +96,31 @@ Here the Codex judge passed two sessions the team failed, so its pass rate reads
 Labels from benchmark runs are left out. The page reads labels and recorded configuration only. It never reads or shows a judge's reasoning, a prompt, a transcript, a diff, or a session's own id.
 
 Labels from sessions and workflow runs show how the tools did on the work that came along. To compare tools, models or team assets on the same tasks, run a benchmark.
+
+## Benchmarks
+
+The Benchmarks page shows every ended [benchmark](benchmarks.md) run of the selected workspace: the runs on this machine and the run records on `teamai-reports`, over 30, 90 or 365 days. Pick a suite in **Suites**. Each question below names the panel that answers it, with what that panel showed for a team that ran `fix-auth` every week and `migrate-db` on three Claude models:
+
+| Question | Panel | What it showed |
+|---|---|---|
+| Should the team switch its auth fixes to claude? | **Leading arm** | `claude 67% · 95% 57%–75% · not separated from codex`. Codex has 56% (47%–65%). The intervals overlap, so these 7 runs do not tell the two apart. Add repetitions or tasks before you switch. |
+| Did the auth skill we merged on October 7 help? | **Pass rate per run** | A dotted line, `Team assets changed · 62432de`, marks the first run with the skill. Compare each arm's points on either side. The **Runs** table marks that run's team revision `changed`. |
+| Which model is worth paying for on `migrate-db`? | **Pass rate against cost**, on **Cost** | sonnet passes 73% for 0.31 USD a trial, opus 78% for 0.89 USD, and their intervals overlap. The dashed line joins the arms nothing beats on both pass rate and cost: haiku, sonnet, opus. |
+| Which task needs fixing, in the code or in the suite? | **Tasks by arm** | `refresh-race` has 7/7 under **Unstable runs**: in every run, some arm both passed and failed it, so one trial says little. `session-fixation` is 0% to 19% on every arm: read its check before blaming the tools. |
+| Why did the September 23 run drop to 27%? | **Tasks per run** and **Runs** | `login-copy` is a hatched cell in that run's column, and **Runs** shows `1 not measured` under its pass rate: the task's check passed without changes in that run, so its [baseline](benchmarks.md#baselines) was invalid, and its trials count as planned but not passed. **Tasks by arm** marks it `not measured in 1/7`. Open the run from **Runs** to read its trials. |
+
+**Last run** shows the newest run's trials by result for each arm, with its usage, deviations and the tasks it did not measure. **Open the run** opens its details on the Workflow Runs page.
+
+How the numbers are counted:
+
+- A pass rate is passed trials over planned trials, as the run's own table prints it.
+- The pooled numbers, the task tables and the leader count only the runs of the suite's current version: the suite files of its newest run. **Pass rate per run** also draws the older runs, after a dashed `Suite changed` line.
+- An arm is its name, tool, model and effort. When one of them changed, the older runs are a separate line, marked `earlier configuration`.
+- The interval is a 95% Wilson score interval. Two arms whose intervals overlap are not told apart by these runs.
+- Usage is the median over the trials whose tool reported it. Cost is per trial.
+- A run on this machine that was also published shows once, from this machine.
+
+The page shows what a run record publishes. It never shows a prompt, a diff, or a transcript.
 
 ## Resources
 

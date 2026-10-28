@@ -292,7 +292,7 @@ These results hold for these tasks, this run and this machine.
 
 The results are not the run's status: a run whose trials all failed still succeeds. The run fails when it times out or is cancelled.
 
-You need [usage reporting](reporting.md) only to publish the results. With it on, the run's end record, with its `benchmark` field, goes to the team repo's `teamai-reports` branch, so the job's token also needs push access to the team repo. [Run records](workflow.md#run-records) lists the record's fields and gives the `jq` command that computes each arm's pass rate from the record alone. With it off, the table is still in the envelope.
+You need [usage reporting](reporting.md) only to publish the results. With it on, the run's end record, with its `benchmark` field, goes to the team repo's `teamai-reports` branch, so the job's token also needs push access to the team repo. [Run records](workflow.md#run-records) lists the record's fields and gives the `jq` command that computes each arm's pass rate from the record alone. With it off, the table is still in the envelope. The dashboard's [Benchmarks page](dashboard.md#benchmarks) draws the published runs and this machine's over time.
 
 ## Run in CI
 
