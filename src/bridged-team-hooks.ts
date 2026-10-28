@@ -275,12 +275,14 @@ async function runEvent(tool: string, event: string, teamHooks: TeamHooks, host:
   const runs = await Promise.all(hooks.map(async (hook) => ({
     hook, run: await runHookCommand(hook.command, { cwd, timeout: hook.timeout, stdin: JSON.stringify(payload) }),
   })));
+  const decided = runs.map(({ hook, run }) => ({ hook, run, decision: decisionOf(event, run, hook.id) }));
   let stderr = '';
-  for (const { hook, run } of runs) {
-    if (run.timedOut) stderr += `teamai: team hook ${hook.id} timed out after ${hook.timeout}s\n${run.stderr}`;
-    else if (run.code !== 0 && run.code !== 2) stderr += run.stderr;
+  for (const { hook, run, decision } of decided) {
+    if (run.timedOut) stderr += `teamai: team hook ${hook.id} timed out after ${hook.timeout}s\n`;
+    // A PreToolUse block made of a hook's stderr reaches the host once, as the block's reason.
+    if (!(event === 'PreToolUse' && decision.kind === 'block' && run.code === 2)) stderr += run.stderr;
   }
-  return { decision: merge(event, runs.map(({ hook, run }) => decisionOf(event, run, hook.id))), stderr };
+  return { decision: merge(event, decided.map(({ decision }) => decision)), stderr };
 }
 
 /**

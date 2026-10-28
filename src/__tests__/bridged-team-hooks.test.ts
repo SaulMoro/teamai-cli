@@ -101,10 +101,10 @@ describe('the team hooks a bridge runs', () => {
     }
   });
 
-  it('a hook that succeeds keeps its stderr to itself, and one without teamai\'s id is named "team"', async () => {
-    install('omp', { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo "scanned" >&2' }] }] });
+  it('a hook that succeeds passes its stderr to the host, and one without teamai\'s id is named "team"', async () => {
+    install('omp', { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo "scanned 3 files" >&2' }] }] });
     expect(await runBridgedTeamHooks('omp', 'PreToolUse', JSON.stringify({ cwd: project, tool_name: 'bash', tool_input: {} })))
-      .toEqual({ code: 0, stdout: '', stderr: '' });
+      .toEqual({ code: 0, stdout: '', stderr: 'scanned 3 files\n' });
     install('omp', { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'exit 2' }] }] });
     expect(JSON.parse((await runBridgedTeamHooks('omp', 'PreToolUse', JSON.stringify({ cwd: project, tool_name: 'bash', tool_input: {} }))).stdout))
       .toEqual({ block: 'Blocked by team hook team' });
@@ -151,11 +151,17 @@ describe('the team hooks a bridge runs', () => {
     expect(reply.stderr).toContain('so no team hook runs. Delete it, then run teamai pull to write it again.');
   });
 
-  it('a PostToolUse or Stop hook runs, and decides nothing for the host', async () => {
+  it('a PostToolUse or Stop hook runs, and decides nothing for the host but shows its stderr', async () => {
     install('pi', { Stop: [entry('touch stopped; echo "keep going" >&2; exit 2')] });
     const reply = await runBridgedTeamHooks('pi', 'Stop', JSON.stringify({ cwd: project }));
     expect(fs.existsSync(path.join(project, 'stopped'))).toBe(true);
-    expect(reply).toEqual({ code: 0, stdout: '', stderr: '' });
+    expect(reply).toEqual({ code: 0, stdout: '', stderr: 'keep going\n' });
+  });
+
+  it('a UserPromptSubmit hook that refuses with exit 2 cannot block the prompt there, and its reason reaches the host', async () => {
+    install('omp', { UserPromptSubmit: [entry('echo "Say which ticket this is for" >&2; exit 2')] });
+    const reply = await runBridgedTeamHooks('omp', 'UserPromptSubmit', JSON.stringify({ cwd: project, prompt: 'fix it' }));
+    expect(reply).toEqual({ code: 0, stdout: '', stderr: 'Say which ticket this is for\n' });
   });
 
   it('a hook that outlives its timeout decides nothing, and says so on stderr', async () => {
