@@ -187,7 +187,9 @@ describe('Hermes: the team\'s hooks', () => {
     teamHooksOn({ PreToolUse: 400, SessionStart: undefined, Stop: 20 });
     await injectHermesHooks();
     const script = getTeamHookScriptPath();
-    const command = (event: string) => `${shellQuoteValue(script)} ${event}`;
+    // Hermes tokenizes the command itself, so on Windows the path is double-quoted.
+    const quoted = process.platform === 'win32' ? `"${script}"` : shellQuoteValue(script);
+    const command = (event: string) => `${quoted} ${event}`;
     expect(hooks()).toMatchObject({
       pre_tool_call: [{ command: command('PreToolUse'), timeout: 300 }],
       pre_llm_call: [{ command: command('UserPromptSubmit'), timeout: 60 }],
