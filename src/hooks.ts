@@ -3307,16 +3307,17 @@ export async function reconcileHooksToAllTools(
     if (tool === 'openclaw') {
       if (opts.settingsOnly) continue;
       try {
+        await reconcileBridged(tool);
         if (opts.removeAll) {
-          const { removeOpenClawHooks, removeOpenClawHookEntry } = await import('./openclaw-hooks.js');
+          const { removeOpenClawHooks, removeOpenClawHookEntry, removeOpenClawTeamHooks } = await import('./openclaw-hooks.js');
           const wsDir = await openclawWorkspaceDir();
           if (wsDir) await removeOpenClawHooks(path.join(wsDir, 'hooks'));
           await removeOpenClawHookEntry();
+          await removeOpenClawTeamHooks();
         } else {
           const { injectOpenClawHooks } = await import('./openclaw-hooks.js');
           await injectOpenClawHooks(tool);
         }
-        await reconcileBridged(tool);
       } catch (e) {
         log.warn(`Failed to reconcile OpenClaw hooks for ${tool}: ${(e as Error).message}`);
         opts.unwritten?.push(tool);

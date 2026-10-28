@@ -10,6 +10,8 @@ import {
 } from '../openclaw-hooks.js';
 import { injectHooksToAllTools, reconcileHooksToAllTools } from '../hooks.js';
 import { openclawWorkspaceDir } from '../locate.js';
+import { bridgedTeamHookFile } from '../bridged-team-hooks.js';
+import type { HookDef } from '../types.js';
 import { log } from '../utils/logger.js';
 import * as builtinHooks from '../builtin-hooks.js';
 import { OPENCLAW_EVENT_KEYS, openclawEvents, type OpenClawHookEvent } from './fixtures/openclaw/events.js';
@@ -492,6 +494,24 @@ describe('reconcileHooksToAllTools routes the OpenClaw family to its adapter', (
         expect(JSON.parse(fs.readFileSync(cfgPath, 'utf-8'))).toEqual(original);
     });
 
+    it('loads the team-hook plugin for a team hook OpenClaw gets, and removeAll takes it out', async () => {
+        const cfgPath = path.join(tmpDir, 'openclaw.json');
+        const manifest = path.join(tmpDir, 'managed-hooks.json');
+        const teamHook: HookDef = {
+          source: 'team', key: 'no-force-push', event: 'PreToolUse', matcher: 'Bash', command: 'true',
+          description: '[teamai:hook:no-force-push] Refuse a force push',
+        };
+        vi.spyOn(log, 'success').mockImplementation(() => {});
+
+        await reconcileHooksToAllTools(toolPaths, tmpDir, [teamHook], manifest);
+        const [plugin] = JSON.parse(fs.readFileSync(cfgPath, 'utf-8')).plugins.load.paths as string[];
+        expect(fs.readFileSync(plugin, 'utf-8')).toContain('"--team-hooks"');
+
+        await reconcileHooksToAllTools(toolPaths, tmpDir, [teamHook], manifest, { removeAll: true });
+        expect(fs.existsSync(plugin)).toBe(false);
+        expect(JSON.parse(fs.readFileSync(cfgPath, 'utf-8')).plugins).toBeUndefined();
+    });
+
     it('removeAll keeps the entry when removing it would turn on every discovered hook', async () => {
         // Master flag on with this as the only named entry: without it OpenClaw
         // would load every hook it discovers.
@@ -518,4 +538,129 @@ describe('reconcileHooksToAllTools routes the OpenClaw family to its adapter', (
         }
         expect(fs.existsSync(path.join(home, '.openclaw'))).toBe(false);
     });
+});
+
+describe('OpenClaw: the team\'s hooks', () => {
+  const savedHome = process.env.HOME;
+  const cfgPath = (): string => path.join(tmpDir, 'openclaw.json');
+  const readCfg = (): Record<string, any> => JSON.parse(fs.readFileSync(cfgPath(), 'utf-8'));
+  let logFile: string;
+
+  beforeEach(() => {
+    process.env.HOME = path.join(tmpDir, 'home');
+    vi.spyOn(log, 'success').mockImplementation(() => {});
+    // Answers as `teamai hook-dispatch <Event> --tool openclaw --team-hooks` does.
+    logFile = path.join(tmpDir, 'team-calls.log');
+    const entry = path.join(tmpDir, 'teamai.mjs');
+    fs.writeFileSync(entry, `import fs from 'node:fs';
+let input = '';
+for await (const chunk of process.stdin) input += chunk;
+fs.appendFileSync(${JSON.stringify(logFile)}, JSON.stringify({ argv: process.argv.slice(2), cwd: process.cwd(), stdin: JSON.parse(input) }) + '\\n');
+const replies = {
+  PreToolUse: { block: 'Use --force-with-lease' },
+  SessionStart: { context: 'On call this week: ana' },
+  UserPromptSubmit: { context: 'Release freeze until Friday' },
+};
+if (process.argv.includes('--team-hooks') && replies[process.argv[3]]) process.stdout.write(JSON.stringify(replies[process.argv[3]]));
+`);
+    vi.spyOn(builtinHooks, 'resolveCliEntry').mockReturnValue(entry);
+  });
+  afterEach(() => {
+    process.env.HOME = savedHome;
+    vi.restoreAllMocks();
+  });
+
+  const teamHooksOn = (events: string[]): void => {
+    const file = bridgedTeamHookFile('openclaw');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ hooks: Object.fromEntries(events.map((event) =>
+      [event, [{ matcher: '*', hooks: [{ type: 'command', command: 'true' }] }]])) }));
+  };
+  const teamCalls = (): Array<{ argv: string[]; cwd: string; stdin: Record<string, unknown> }> =>
+    fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf-8').trim().split('\n').map((line) => JSON.parse(line)) : [];
+
+  type Handler = (event: unknown, ctx: unknown) => Promise<unknown>;
+  /** Load the plugin openclaw.json points at, as the gateway does, and collect what it registers. */
+  async function loadPlugin(): Promise<{ handlers: Map<string, Handler>; options: Map<string, unknown> }> {
+    const [file] = readCfg().plugins.load.paths as string[];
+    const mod = await import(`${pathToFileURL(file).href}?${Date.now()}`) as { default: { id: string; register: (api: unknown) => void } };
+    expect(mod.default.id).toBe(path.basename(file, path.extname(file)));
+    const handlers = new Map<string, Handler>();
+    const options = new Map<string, unknown>();
+    mod.default.register({ on: (name: string, handler: Handler, opts?: unknown) => { handlers.set(name, handler); options.set(name, opts); } });
+    return { handlers, options };
+  }
+
+  it('loads a plugin that blocks the tool call a PreToolUse hook refuses, in the session\'s workspace', async () => {
+    teamHooksOn(['PreToolUse']);
+    await injectOpenClawHooks('openclaw');
+
+    const cfg = readCfg();
+    expect(cfg.plugins.entries['teamai-team-hooks']).toEqual({ enabled: true, hooks: { allowConversationAccess: true } });
+    expect(cfg.agents.defaults.workspace).toBe(wsDir);
+    const { handlers, options } = await loadPlugin();
+    // OpenClaw fails a slow before_tool_call closed at 15 s unless the plugin asks for longer.
+    expect(options.get('before_tool_call')).toEqual({ timeoutMs: 600000 });
+
+    const project = path.join(tmpDir, 'project');
+    fs.mkdirSync(project);
+    await handlers.get('before_prompt_build')?.({ prompt: 'ship it', messages: [] }, { sessionKey: 'main', workspaceDir: project });
+    const decision = await handlers.get('before_tool_call')?.(
+      { toolName: 'exec', params: { command: 'git push -f origin main' } }, { sessionKey: 'main', toolName: 'exec' });
+
+    expect(decision).toEqual({ block: true, blockReason: 'Use --force-with-lease' });
+    expect(teamCalls()).toEqual([{
+      argv: ['hook-dispatch', 'PreToolUse', '--tool', 'openclaw', '--team-hooks'],
+      cwd: fs.realpathSync(project),
+      stdin: { cwd: project, session_id: 'main', tool_name: 'exec', tool_input: { command: 'git push -f origin main' } },
+    }]);
+  });
+
+  it('adds what SessionStart hooks print to the first prompt, and UserPromptSubmit hooks to each', async () => {
+    teamHooksOn(['SessionStart', 'UserPromptSubmit']);
+    await injectOpenClawHooks('openclaw');
+    const { handlers } = await loadPlugin();
+    const prompt = (text: string) => handlers.get('before_prompt_build')?.({ prompt: text, messages: [] }, { sessionKey: 'main', workspaceDir: wsDir });
+
+    expect(await prompt('deploy')).toEqual({ prependContext: 'On call this week: ana\n\nRelease freeze until Friday' });
+    expect(await prompt('deploy again')).toEqual({ prependContext: 'Release freeze until Friday' });
+    expect(teamCalls().map((call) => call.argv[1])).toEqual(['SessionStart', 'UserPromptSubmit', 'UserPromptSubmit']);
+    expect(teamCalls()[1].stdin).toEqual({ cwd: wsDir, session_id: 'main', prompt: 'deploy' });
+  });
+
+  it('spawns nothing for an event the team has no hook on', async () => {
+    teamHooksOn(['Stop']);
+    await injectOpenClawHooks('openclaw');
+    const { handlers } = await loadPlugin();
+
+    expect(await handlers.get('before_tool_call')?.({ toolName: 'read', params: {} }, { sessionKey: 'main', toolName: 'read' })).toBeUndefined();
+    await handlers.get('agent_end')?.({ messages: [], success: true }, { sessionKey: 'main', workspaceDir: wsDir });
+    expect(teamCalls().map((call) => call.argv[1])).toEqual(['Stop']);
+  });
+
+  it('leaves a plugin allowlist alone and says the team\'s hooks do not run', async () => {
+    const cfg = { ...readCfg(), plugins: { allow: ['memory-core'] } };
+    fs.writeFileSync(cfgPath(), JSON.stringify(cfg));
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    teamHooksOn(['PreToolUse']);
+
+    await injectOpenClawHooks('openclaw');
+
+    expect(readCfg().plugins).toEqual({ allow: ['memory-core'] });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('plugins.allow does not list teamai-team-hooks'));
+  });
+
+  it('takes the plugin and its config back out once the team has no hooks for OpenClaw', async () => {
+    const original = readCfg();
+    teamHooksOn(['PreToolUse']);
+    await injectOpenClawHooks('openclaw');
+    const [file] = readCfg().plugins.load.paths as string[];
+
+    teamHooksOn([]);
+    await injectOpenClawHooks('openclaw');
+
+    expect(fs.existsSync(file)).toBe(false);
+    const { hooks: _status, ...rest } = readCfg();
+    expect(rest).toEqual(original);
+  });
 });
