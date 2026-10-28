@@ -136,6 +136,14 @@ describe('the team hooks a bridge runs', () => {
     expect(['claude', 'codex', 'cursor', 'dsh', 'joycode', 'trae', 'my-tool'].filter(isBridgedTeamHookTool)).toEqual([]);
   });
 
+  it('a hand-edited file that is not a hook file runs nothing, and says how to fix it', async () => {
+    install('omp', { PreToolUse: [entry('exit 2', 'Bash'), { matcher: 'Bash', hooks: {} }] });
+    const reply = await runBridgedTeamHooks('omp', 'PreToolUse', JSON.stringify({ cwd: project, tool_name: 'bash', tool_input: {} }));
+    expect(reply.stdout).toBe('');
+    expect(reply.stderr).toContain(`teamai: ${bridgedTeamHookFile('omp')} is not a hook file`);
+    expect(reply.stderr).toContain('so no team hook runs. Delete it, then run teamai pull to write it again.');
+  });
+
   it('a PostToolUse or Stop hook runs, and decides nothing for the host', async () => {
     install('pi', { Stop: [entry('touch stopped; echo "keep going" >&2; exit 2')] });
     const reply = await runBridgedTeamHooks('pi', 'Stop', JSON.stringify({ cwd: project }));

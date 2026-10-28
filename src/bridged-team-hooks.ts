@@ -13,10 +13,12 @@
  */
 
 import path from 'node:path';
+import { z } from 'zod';
 import { runHookCommand, type HookRun } from './hook-command.js';
 import { channelsOf, type HookAdapterId } from './tools.js';
 import { getTeamaiHomeDir } from './types.js';
 import { readJsonObject } from './utils/fs.js';
+import { log } from './utils/logger.js';
 
 /** How a host reads a bridge's answer. */
 type ReplyShape =
@@ -91,19 +93,31 @@ export function bridgedTeamHookFile(tool: string): string {
   return path.join(bridgedTeamHookDir(), `${tool}.json`);
 }
 
-interface TeamHookEntry {
-  matcher?: string;
-  hooks?: { command?: string; timeout?: number }[];
-  description?: string;
+/** The part of a Claude hook file a bridge reads. */
+const TeamHookFileSchema = z.object({
+  hooks: z.record(z.string(), z.array(z.object({
+    matcher: z.string().optional(),
+    description: z.string().optional(),
+    hooks: z.array(z.object({ command: z.string().optional(), timeout: z.number().positive().optional() })).default([]),
+  }))).default({}),
+});
+
+type TeamHooks = z.infer<typeof TeamHookFileSchema>['hooks'];
+
+/** The team hooks of `tool`'s file by event (none when it is missing), or why it is not a hook file. */
+async function readTeamHooks(tool: string): Promise<{ kind: 'ok'; hooks: TeamHooks } | { kind: 'invalid'; error: string }> {
+  const read = await readJsonObject(bridgedTeamHookFile(tool));
+  if (read.kind === 'missing') return { kind: 'ok', hooks: {} };
+  if (read.kind === 'invalid') return read;
+  const parsed = TeamHookFileSchema.safeParse(read.value);
+  return parsed.success
+    ? { kind: 'ok', hooks: parsed.data.hooks }
+    : { kind: 'invalid', error: parsed.error.issues.map((issue) => `${issue.path.join('.') || '(root)'}: ${issue.message}`).join('; ') };
 }
 
-/** The entries of `tool`'s file for `event`. */
-async function entriesFor(tool: string, event: string): Promise<TeamHookEntry[]> {
-  const read = await readJsonObject(bridgedTeamHookFile(tool));
-  if (read.kind !== 'ok') return [];
-  const hooks = (read.value as { hooks?: Record<string, unknown> }).hooks;
-  const entries = hooks && typeof hooks === 'object' ? hooks[event] : undefined;
-  return Array.isArray(entries) ? entries.filter((e): e is TeamHookEntry => !!e && typeof e === 'object') : [];
+/** What teamai says about a team-hook file that is not a hook file. */
+function invalidFileMessage(tool: string, error: string): string {
+  return `teamai: ${bridgedTeamHookFile(tool)} is not a hook file (${error}), so no team hook runs. Delete it, then run teamai pull to write it again.`;
 }
 
 /**
@@ -112,12 +126,14 @@ async function entriesFor(tool: string, event: string): Promise<TeamHookEntry[]>
  * event (Kiro, Hermes) gets one for each, bounded by it.
  */
 export async function bridgedTeamHookEvents(tool: string): Promise<Map<string, number>> {
-  const read = await readJsonObject(bridgedTeamHookFile(tool));
-  const hooks = read.kind === 'ok' ? asObject((read.value as { hooks?: unknown }).hooks) : null;
+  const read = await readTeamHooks(tool);
   const events = new Map<string, number>();
-  for (const [event, entries] of Object.entries(hooks ?? {})) {
-    if (!Array.isArray(entries) || entries.length === 0) continue;
-    const timeouts = entries.flatMap((entry: TeamHookEntry) => (entry?.hooks ?? []).map((hook) => hook.timeout ?? 60));
+  if (read.kind === 'invalid') {
+    log.warn(invalidFileMessage(tool, read.error));
+    return events;
+  }
+  for (const [event, entries] of Object.entries(read.hooks)) {
+    const timeouts = entries.flatMap((entry) => entry.hooks.map((hook) => hook.timeout ?? 60));
     if (timeouts.length > 0) events.set(event, Math.max(...timeouts));
   }
   return events;
@@ -242,13 +258,13 @@ function render(shape: ReplyShape, decision: Decision, stderr: string): BridgeRe
 }
 
 /** Run the hooks of `tool`'s file that select `event` and the host's tool, and merge what they decided. */
-async function runEvent(tool: string, event: string, host: JsonObject, bridge: Bridge): Promise<{ decision: Decision; stderr: string }> {
+async function runEvent(tool: string, event: string, teamHooks: TeamHooks, host: JsonObject, bridge: Bridge): Promise<{ decision: Decision; stderr: string }> {
   const payload = claudePayload(tool, event, host, bridge);
   const names = [payload.tool_name, host.tool_name].filter((name): name is string => typeof name === 'string');
   const cwd = typeof payload.cwd === 'string' && payload.cwd ? payload.cwd : undefined;
-  const hooks = (await entriesFor(tool, event))
+  const hooks = (teamHooks[event] ?? [])
     .filter((entry) => !event.endsWith('ToolUse') || selects(entry.matcher, names))
-    .flatMap((entry) => (entry.hooks ?? []).flatMap(({ command, timeout }) => typeof command === 'string'
+    .flatMap((entry) => entry.hooks.flatMap(({ command, timeout }) => typeof command === 'string'
       ? [{ id: /^\[teamai:(?:agent-)?hook:([^\]]+)\]/.exec(entry.description ?? '')?.[1] ?? 'team', command, timeout: timeout ?? 60 }]
       : []));
   const runs = await Promise.all(hooks.map(async (hook) => ({
@@ -272,6 +288,8 @@ async function runEvent(tool: string, event: string, host: JsonObject, bridge: B
 export async function runBridgedTeamHooks(tool: string, event: string, raw: string): Promise<BridgeReply> {
   const bridge = bridgeOf(tool);
   if (!bridge) throw new Error(`${tool} does not run team hooks through teamai's bridge`);
+  const read = await readTeamHooks(tool);
+  if (read.kind === 'invalid') return render(bridge.reply, { kind: 'none' }, `${invalidFileMessage(tool, read.error)}\n`);
   // Hermes runs SessionStart's context on the first turn's pre_llm_call: its on_session_start ignores output.
   let host: JsonObject = {};
   try {
@@ -284,12 +302,9 @@ export async function runBridgedTeamHooks(tool: string, event: string, raw: stri
   const decisions: Decision[] = [];
   let stderr = '';
   for (const current of events) {
-    const ran = await runEvent(tool, current, host, bridge);
+    const ran = await runEvent(tool, current, read.hooks, host, bridge);
     decisions.push(ran.decision);
     stderr += ran.stderr;
   }
-  const block = decisions.find((d) => d.kind === 'block');
-  const texts = decisions.flatMap((d) => d.kind === 'context' ? [d.text] : []);
-  const decision: Decision = block ?? (texts.length ? { kind: 'context', text: texts.join('\n\n') } : { kind: 'none' });
-  return render(bridge.reply, decision, stderr);
+  return render(bridge.reply, merge(event, decisions), stderr);
 }
