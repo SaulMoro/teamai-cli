@@ -726,7 +726,7 @@ export const TOOLS = {
       aiBackend: '✓d',
       votesJudge: '?',
       sessionJudge: { cell: '✓d', note: 'a subagent works in its own context window, without the conversation; not run' },
-      agentHooks: { cell: '✓t', note: 'runs from teamai\'s team-hook bridge, which can block a tool call; not rerun' },
+      agentHooks: { cell: '✓d', note: 'runs from teamai\'s team-hook bridge, which can block a tool call; Kiro\'s hook docs' },
     },
   },
   // Trae keeps user MCP servers in its app-support directory, which teamai does not write.
@@ -881,7 +881,7 @@ export const TOOLS = {
       aiBackend: '✓d',
       votesJudge: '?',
       sessionJudge: { cell: '✓s', note: 'the task tool starts each child as a new agent session (omp 18.12.6); not run' },
-      agentHooks: { cell: '✓t', note: 'runs from teamai\'s team-hook bridge, which can block a tool call; not rerun' },
+      agentHooks: { cell: '✓s', note: 'runs from teamai\'s team-hook bridge, which can block a tool call; OMP\'s extension source' },
     },
   },
   pi: {
@@ -917,7 +917,7 @@ export const TOOLS = {
       aiBackend: '✓s',
       votesJudge: '?',
       sessionJudge: { cell: '◐s', note: 'bare Pi starts no subagent, so its session answers h4 and does not judge; the subagent example extension adds one (since 0.24.0); not run' },
-      agentHooks: { cell: '✓t', note: 'runs from teamai\'s team-hook bridge, which can block a tool call; not rerun' },
+      agentHooks: { cell: '✓s', note: 'runs from teamai\'s team-hook bridge, which can block a tool call; Pi\'s extension source' },
     },
   },
   // Model switching follows the same recorded home for models.json.
@@ -1000,7 +1000,7 @@ export const TOOLS = {
       aiBackend: '✓d',
       votesJudge: '—t',
       sessionJudge: { cell: '◐s', note: 'sessions_spawn with isolated context, in the coding and messaging tool profiles; a tool policy can remove it; not run' },
-      agentHooks: { cell: '✓t', note: 'runs from teamai\'s team-hook bridge, which can block a tool call; not rerun' },
+      agentHooks: { cell: '✓s', note: 'runs from teamai\'s team-hook bridge, which can block a tool call; OpenClaw\'s plugin source' },
     },
   },
   // hermes_constants.py and hermes_cli/main.py at 68134629 (the same rules at 7e9eb8d9). Hermes reads its home in either scope.
@@ -1032,7 +1032,7 @@ export const TOOLS = {
       aiBackend: '✓s',
       votesJudge: '—t',
       sessionJudge: { cell: '✓s', note: 'delegate_task starts a child agent with a fresh conversation; not run' },
-      agentHooks: { cell: '✓t', note: 'runs from teamai\'s team-hook bridge, which can block a tool call; not rerun' },
+      agentHooks: { cell: '✓s', note: 'runs from teamai\'s team-hook bridge, which can block a tool call; Hermes\'s shell-hook source' },
     },
   },
   dsh: {
@@ -1173,7 +1173,7 @@ export const TOOLS = {
       aiBackend: '✓v',
       votesJudge: '?',
       sessionJudge: { cell: '✓t', note: '#1386 the session judges its skill-driven run; not rerun' },
-      agentHooks: { cell: '✓t', note: 'runs from teamai\'s team-hook bridge, which can block a tool call; not rerun' },
+      agentHooks: { cell: '✓v', note: 'runs from teamai\'s team-hook bridge, which can block a tool call; OpenCode 1.18.23 ran a team hook through it' },
     },
   },
   // muse-bin 1.4.11: $XDG_CONFIG_HOME/muse, else ~/.config/muse; with XDG_CONFIG_HOME set, ~/.config/muse is never read.
