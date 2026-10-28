@@ -2453,6 +2453,33 @@ export function isAgentHookSupportedTool(tool: string): boolean {
 }
 
 /**
+ * Whether `tool` runs a team hook on the Claude `event`, from what teamai
+ * writes for it: a Cursor or Copilot file has no entry for some events, and a
+ * bridge runs BRIDGED_TEAM_HOOK_EVENTS only.
+ */
+export function runsTeamHookOn(tool: string, event: string): boolean {
+  const channel = channelsOf(tool).hooks.user;
+  if (typeof channel !== 'object') return false;
+  switch (channel.channel) {
+    case 'settings':
+      switch (channel.format) {
+        case 'cursor': return Object.hasOwn(CLAUDE_TO_CURSOR_EVENTS, event);
+        case 'copilot': return Object.hasOwn(CLAUDE_TO_COPILOT_EVENTS, event);
+        case 'claude': case 'codex': case 'zcode': return true;
+        default: {
+          const unhandled: never = channel.format;
+          return unhandled;
+        }
+      }
+    case 'adapter': return !isBridgedTeamHookTool(tool) || BRIDGED_TEAM_HOOK_EVENTS.has(event);
+    default: {
+      const unhandled: never = channel;
+      return unhandled;
+    }
+  }
+}
+
+/**
  * Return true if the event is in the whitelisted agent hook event set.
  */
 export function isAgentHookEvent(event: string): boolean {
