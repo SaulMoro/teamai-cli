@@ -169,6 +169,7 @@ export default function teamaiHooks(pi) {
       const finish = () => {
         clearTimeout(timer);
         if (err.trim()) console.error(err.trimEnd());
+        err = "";
         try {
           resolve(out.trim() ? JSON.parse(out) : undefined);
         } catch {

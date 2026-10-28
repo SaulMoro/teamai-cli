@@ -238,7 +238,8 @@ const started = new Set();
 const sessionOf = (ctx) => ctx.sessionId || ctx.sessionKey;
 
 // {block} for a PreToolUse hook that refuses, {context} for what a
-// SessionStart or UserPromptSubmit hook adds, else undefined.
+// SessionStart or UserPromptSubmit hook adds, else undefined. What a hook
+// wrote on stderr goes to OpenClaw's console.
 const teamHooks = (event, ctx, payload) => new Promise((resolve) => {
   try {
     const hooks = JSON.parse(fs.readFileSync(TEAM_HOOKS_FILE, "utf8")).hooks;
@@ -247,13 +248,16 @@ const teamHooks = (event, ctx, payload) => new Promise((resolve) => {
     const cwd = ctx.workspaceDir || workspaces.get(session) || WORKSPACE;
     const child = spawn(NODE, [ENTRY, "hook-dispatch", event, "--tool", "openclaw", "--team-hooks"], {
       cwd,
-      stdio: ["pipe", "pipe", "ignore"],
+      stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
       shell: false,
     });
     let out = "";
+    let err = "";
     const finish = () => {
       clearTimeout(timer);
+      if (err.trim()) console.error(err.trimEnd());
+      err = "";
       try {
         resolve(out.trim() ? JSON.parse(out) : undefined);
       } catch {
@@ -266,6 +270,7 @@ const teamHooks = (event, ctx, payload) => new Promise((resolve) => {
       finish();
     }, TEAM_HOOKS_TIMEOUT_MS);
     child.stdout?.on("data", (chunk) => { out += chunk; });
+    child.stderr?.on("data", (chunk) => { err += chunk; });
     child.stdin?.on("error", () => {});
     child.stdin?.end(JSON.stringify({ cwd, ...(session ? { session_id: session } : {}), ...(payload || {}) }));
     child.once("close", finish);

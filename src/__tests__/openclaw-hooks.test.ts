@@ -533,6 +533,7 @@ const replies = {
   UserPromptSubmit: { context: 'Release freeze until Friday' },
 };
 if (process.argv.includes('--team-hooks') && replies[process.argv[3]]) process.stdout.write(JSON.stringify(replies[process.argv[3]]));
+if (process.argv.includes('--team-hooks') && process.argv[3] === 'Stop') process.stderr.write('teamai: team hook lint timed out after 60s\\n');
 `);
     vi.spyOn(builtinHooks, 'resolveCliEntry').mockReturnValue(entry);
   });
@@ -608,6 +609,17 @@ if (process.argv.includes('--team-hooks') && replies[process.argv[3]]) process.s
       { sessionKey: 'main', workspaceDir: wsDir },
     );
     expect(teamCalls()[0].stdin).toEqual({ cwd: wsDir, session_id: 'main', prompt: 'fix the build' });
+  });
+
+  it('shows what a team hook wrote on stderr in OpenClaw\'s console', async () => {
+    teamHooksOn(['Stop']);
+    await injectOpenClawHooks('openclaw');
+    const { handlers } = await loadPlugin();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    await handlers.get('agent_end')?.({ messages: [], success: true }, { sessionKey: 'main', workspaceDir: wsDir });
+
+    expect(error).toHaveBeenCalledWith('teamai: team hook lint timed out after 60s');
   });
 
   it('spawns nothing for an event the team has no hook on', async () => {
