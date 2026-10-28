@@ -100,7 +100,7 @@ describe('dashboard workflow runs', () => {
     expect(cli(['workflow', 'next', run, '--json', JSON.stringify({ driver })])).toMatchObject({ lease: { step: 'ship' } });
   }, 60_000);
 
-  it('shows the results, usage and task by arm matrix of an ended benchmark run, from this machine and from the team reports', async () => {
+  it('shows the results, usage and task by arm matrix of an ended benchmark run, from this machine and from the team reports, and lists it once on the Benchmarks page', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true });
     fixtures.push(fixture);
     const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
@@ -121,5 +121,19 @@ describe('dashboard workflow runs', () => {
     expect(local.benchmark?.results.rows.map((row) => [row[0], row.at(-1)])).toEqual([['claude', '100% (1/1)']]);
     expect(local.benchmark?.caption).toBe('These results hold for these tasks, this run and this machine.');
     expect(reported.benchmark).toEqual(local.benchmark);
+
+    const history = await (await fetch(`${base}/api/benchmarks?workspace=${workspace}&window=30`)).json();
+    expect(html).toContain("benchmarks: 'Benchmarks'");
+    expect(history).toMatchObject({
+      configured: true,
+      suites: [{ suite: 'fix', runs: 1, tasks: 1, arms: 1, leader: { arm: 'claude', passed: 1, planned: 1 } }],
+      selected: {
+        suite: 'fix',
+        arms: [{ arm: 'claude', tool: 'claude', isCurrent: true, pooled: { passed: 1, planned: 1, runs: 1 } }],
+        tasks: [{ task: 'fix', disagreedRuns: 0, invalidRuns: 0 }],
+        runs: [{ run, source: 'local', passed: 1, planned: 1, invalidTasks: 0 }],
+        latest: { run, source: 'local', table: { matrix: [{ task: 'fix', arms: [{ arm: 'claude', passRate: { passed: 1, planned: 1 } }] }] } },
+      },
+    });
   }, 120_000);
 });
