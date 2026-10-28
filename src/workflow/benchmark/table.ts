@@ -213,7 +213,7 @@ function sameModel(requested: string, reported: string): boolean {
   return ran.id === asked.id || (ran.id.startsWith(asked.id) && /^[-@]\d{4}-?\d{2}-?\d{2}$/.test(ran.id.slice(asked.id.length)));
 }
 
-function median(values: readonly number[]): Median {
+export function median(values: readonly number[]): Median {
   const sorted = [...values].sort((left, right) => left - right);
   const lower = sorted[Math.ceil(sorted.length / 2) - 1];
   const upper = sorted[Math.floor(sorted.length / 2)];
@@ -221,7 +221,7 @@ function median(values: readonly number[]): Median {
 }
 
 /** The total of `parts`, one per trial whose prompt ran: the cost it stated, or undefined when it stated none. */
-function costTotal(parts: ReadonlyArray<RecordedTrial['cost']>): CostTotal {
+export function costTotal(parts: ReadonlyArray<RecordedTrial['cost']>): CostTotal {
   const known = parts.flatMap((part) => (part ? [part] : []));
   const units = [...new Set(known.map(({ unit }) => unit))].sort();
   const [unit, ...others] = units;
