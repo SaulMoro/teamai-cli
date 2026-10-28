@@ -67,29 +67,40 @@ describe('benchmarkHistory', () => {
   it("reads this machine's ended benchmark runs and the team's benchmark records, this machine's copy of a run first", async () => {
     const local = await endedLocalRun();
     publish(local, { username: 'tester', result: 'passed' });
-    publish('r-bob', { username: 'bob' });
-    publish('r-review', { benchmark: false });
-    fs.writeFileSync(recordFile('r-broken'), '{"benchmark": ');
+    publish('rb0b00001', { username: 'bob' });
+    publish('rb0b00003', { benchmark: false });
+    fs.writeFileSync(recordFile('rb0b00002'), '{"benchmark": ');
 
     const view = await benchmarkHistory({ config, query: { windowDays: 365 }, now: NOW, refresh: false });
 
     expect(view.suites.map(({ suite, runs }) => ({ suite, runs }))).toEqual([{ suite: 'fix', runs: 2 }]);
     expect(view.selected?.runs.map(({ run, source, username, passed, planned }) => ({ run, source, username, passed, planned }))).toEqual([
       { run: local, source: 'local', username: 'tester', passed: 0, planned: 1 },
-      { run: 'r-bob', source: 'reported', username: 'bob', passed: 1, planned: 1 },
+      { run: 'rb0b00001', source: 'reported', username: 'bob', passed: 1, planned: 1 },
     ]);
   });
 
   it('reads a record again once it changed on disk', async () => {
-    publish('r-bob', { result: 'failed' });
+    publish('rb0b00001', { result: 'failed' });
     expect((await benchmarkHistory({ config, query: { windowDays: 365 }, now: NOW, refresh: false })).selected?.runs[0]).toMatchObject({ passed: 0 });
 
-    publish('r-bob', { result: 'passed' });
-    fs.utimesSync(recordFile('r-bob'), new Date(), new Date(Date.now() + 5000));
+    publish('rb0b00001', { result: 'passed' });
+    fs.utimesSync(recordFile('rb0b00001'), new Date(), new Date(Date.now() + 5000));
 
     expect((await benchmarkHistory({ config, query: { windowDays: 365 }, now: NOW, refresh: false })).selected?.runs[0]).toMatchObject({ passed: 1 });
-    fs.rmSync(recordFile('r-bob'));
+    fs.rmSync(recordFile('rb0b00001'));
     expect((await benchmarkHistory({ config, query: { windowDays: 365 }, now: NOW, refresh: false })).suites).toEqual([]);
+  });
+
+  // Windows has no read permission to take away, and root reads any file.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('reads a record again when it could not be read last time, though it did not change', async () => {
+    publish('rb0b00001');
+    fs.chmodSync(recordFile('rb0b00001'), 0o000);
+    expect((await benchmarkHistory({ config, query: { windowDays: 365 }, now: NOW, refresh: false })).suites).toEqual([]);
+
+    fs.chmodSync(recordFile('rb0b00001'), 0o644);
+
+    expect((await benchmarkHistory({ config, query: { windowDays: 365 }, now: NOW, refresh: false })).selected?.runs.map(({ run }) => run)).toEqual(['rb0b00001']);
   });
 });
 

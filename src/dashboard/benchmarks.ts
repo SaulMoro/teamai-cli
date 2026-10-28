@@ -12,7 +12,7 @@ import { getReportsDir, usesBranchWorktree, type LocalConfig } from '../types.js
 import { BENCHMARK_WINDOWS, BenchmarkHistory, type BenchmarkHistoryQuery, type BenchmarkHistoryView, type BenchmarkRunInput } from '../workflow/benchmark/history.js';
 import { BenchmarkRecordSchema } from '../workflow/benchmark/result.js';
 import { buildEndRecord, RECORDS_DIR } from '../workflow/records.js';
-import { readRun, runsDir } from '../workflow/store.js';
+import { isRunId, readRun, runsDir } from '../workflow/store.js';
 import { HttpError } from './http.js';
 
 const QuerySchema = z.object({
@@ -32,7 +32,7 @@ export function parseBenchmarkQuery(params: URLSearchParams): BenchmarkHistoryQu
 
 /** What a published record holds that the page reads. */
 const RecordSchema = z.object({
-  run: z.string(),
+  run: z.string().refine(isRunId),
   startedAt: z.string(),
   username: z.string().optional(),
   steps: z.array(z.object({ step: z.string(), agent: z.unknown().transform(readRecordedAgent) })).optional().catch(undefined),
@@ -74,7 +74,10 @@ async function readLocal(config: LocalConfig, file: string): Promise<BenchmarkRu
   };
 }
 
-/** The benchmark runs of the `.json` files in `dir`, each parsed only when it changed since the last read. */
+/**
+ * The benchmark runs of the `.json` files in `dir`, each parsed only when it changed since the last read. A file that
+ * could not be read, such as one another process holds open on Windows, is read again next time.
+ */
 async function readDir(dir: string, read: (file: string) => Promise<BenchmarkRunInput | undefined>): Promise<BenchmarkRunInput[]> {
   const files = (await fs.readdir(dir).catch(() => [])).filter((file) => file.endsWith('.json')).map((file) => path.join(dir, file));
   const present = new Set(files);
@@ -85,9 +88,13 @@ async function readDir(dir: string, read: (file: string) => Promise<BenchmarkRun
     const stamp = `${stat.mtimeMs}:${stat.size}`;
     const kept = reads.get(file);
     if (kept?.stamp === stamp) return kept.input;
-    const input = await read(file).catch(() => undefined);
-    reads.set(file, { stamp, input });
-    return input;
+    try {
+      const input = await read(file);
+      reads.set(file, { stamp, input });
+      return input;
+    } catch {
+      return undefined;
+    }
   }));
   return inputs.filter((input) => input !== undefined);
 }
