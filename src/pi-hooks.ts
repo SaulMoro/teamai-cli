@@ -14,9 +14,9 @@
  * `cwd` on STDIN only lets downstream handlers resolve the right project
  * context, not opt a project out. A targeted removal (scoped `uninstall` or
  * `hooks remove`) therefore deletes this one global copy outright, same as
- * the OMP adapter. The extension bridges TeamAI's built-in lifecycle events
- * only; custom team hooks declared in hooks/hooks.yaml are outside this
- * adapter's current scope. Pi profile overrides (`PI_CODING_AGENT_DIR` /
+ * the OMP adapter. The extension bridges TeamAI's built-in lifecycle events,
+ * and runs the team's hooks/hooks.yaml entries through bridged-team-hooks.ts:
+ * a PreToolUse hook can block a tool call on `tool_call`. Pi profile overrides (`PI_CODING_AGENT_DIR` /
  * `PI_CONFIG_DIR`), which relocate the agent directory, are not supported —
  * same as the OMP adapter — and the default `~/.pi/agent/` layout is used.
  */
@@ -26,6 +26,7 @@ import { generatedFileState, writeFile, writeIfChanged, ensureDir, remove } from
 import { earlierHookAdapterDir, hookAdapterDir } from './locate.js';
 import { log } from './utils/logger.js';
 import { resolveCliEntry } from './builtin-hooks.js';
+import { bridgedTeamHookFile } from './bridged-team-hooks.js';
 
 /** Filename of the TeamAI-managed Pi extension. */
 export const PI_HOOK_FILE = 'teamai-hooks.ts';
@@ -54,12 +55,17 @@ export function buildPiExtensionSource(entry = resolveCliEntry()): string {
 // point. The child process receives the same JSON payload as shell-based hooks
 // (cwd / session_id / tool_name / tool_input / prompt, and on post-tool-use the
 // tool's text output and status). Errors and timeouts are swallowed so a
-// missing teamai binary never blocks the Pi session.
+// missing teamai binary never blocks the Pi session. The team's hooks run only
+// on the events the team has one on: a PreToolUse hook can block a tool call.
 
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 
 const NODE = ${JSON.stringify(process.execPath)};
 const ENTRY = ${JSON.stringify(entry)};
+const TEAM_HOOKS_FILE = ${JSON.stringify(bridgedTeamHookFile('pi'))};
+/** Pi waits for a handler with no limit; the team hooks keep their own timeouts, this bounds the dispatch. */
+const TEAM_HOOKS_TIMEOUT_MS = 600000;
 
 /** The host session id (Pi's bash tool exports it as PI_SESSION_ID), read defensively. */
 const sessionOf = (ctx) => {
@@ -149,13 +155,58 @@ export default function teamaiHooks(pi) {
     }
   });
 
+  // The team's hooks for a Claude event (hooks/hooks.yaml), run by
+  // \`teamai hook-dispatch <Event> --tool pi --team-hooks\` when the team has
+  // one on it: {block} for a PreToolUse hook that refuses, {context} for what
+  // a SessionStart or UserPromptSubmit hook adds, else undefined. Never
+  // rejects: Pi blocks a tool call whose handler throws.
+  const teamHooks = (event, ctx, payload) => new Promise((resolve) => {
+    try {
+      const hooks = JSON.parse(fs.readFileSync(TEAM_HOOKS_FILE, "utf8")).hooks;
+      if (!hooks || !Array.isArray(hooks[event]) || hooks[event].length === 0) return resolve(undefined);
+      const cwd = ctx.cwd;
+      const child = spawn(NODE, [ENTRY, "hook-dispatch", event, "--tool", "pi", "--team-hooks"], {
+        cwd,
+        stdio: ["pipe", "pipe", "ignore"],
+        windowsHide: true,
+        shell: false,
+      });
+      let out = "";
+      const finish = () => {
+        clearTimeout(timer);
+        try {
+          resolve(out.trim() ? JSON.parse(out) : undefined);
+        } catch {
+          resolve(undefined);
+        }
+      };
+      const timer = setTimeout(() => {
+        try { child.kill(); } catch {}
+        out = "";
+        finish();
+      }, TEAM_HOOKS_TIMEOUT_MS);
+      child.stdout?.on("data", (chunk) => { out += chunk; });
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(JSON.stringify({ cwd, ...sessionOf(ctx), ...(payload || {}) }));
+      child.once("close", finish);
+      child.once("error", () => { out = ""; finish(); });
+    } catch {
+      resolve(undefined);
+    }
+  });
+
+  // What the team's SessionStart hooks added, for every run of the session.
+  let sessionContext;
+
   pi.on("session_start", async (_event, ctx) => {
     await dispatch("session-start", ctx);
     instructions = loadInstructions(ctx);
+    sessionContext = teamHooks("SessionStart", ctx);
   });
 
   pi.on("agent_settled", async (_event, ctx) => {
     await dispatch("stop", ctx);
+    await teamHooks("Stop", ctx);
   });
 
   // Pi renders the system prompt again for every run, so adding the blocks
@@ -163,7 +214,15 @@ export default function teamaiHooks(pi) {
   pi.on("before_agent_start", async (event, ctx) => {
     await dispatch("prompt-submit", ctx, { prompt: event.prompt });
     const text = await (instructions ??= loadInstructions(ctx));
-    return text ? { systemPrompt: \`\${event.systemPrompt}\\n\\n\${text}\` } : undefined;
+    const prompt = await teamHooks("UserPromptSubmit", ctx, { prompt: event.prompt });
+    const added = [text, (await sessionContext)?.context, prompt?.context].filter((part) => typeof part === "string" && part);
+    return added.length ? { systemPrompt: [event.systemPrompt, ...added].join("\\n\\n") } : undefined;
+  });
+
+  // Fires before the tool runs, unlike tool_execution_start, and a {block} result stops it.
+  pi.on("tool_call", async (event, ctx) => {
+    const decision = await teamHooks("PreToolUse", ctx, { tool_name: event.toolName, tool_input: event.input });
+    return decision && typeof decision.block === "string" ? { block: true, reason: decision.block } : undefined;
   });
 
   pi.on("tool_execution_start", async (event) => {
@@ -173,13 +232,15 @@ export default function teamaiHooks(pi) {
   // The result is what the model saw; isError is set for a failed call,
   // including a bash command that exits non-zero.
   pi.on("tool_execution_end", async (event, ctx) => {
-    await dispatch("post-tool-use", ctx, {
+    const payload = {
       tool_name: event.toolName,
       tool_input: toolInputs.get(event.toolCallId) || {},
       tool_response: textOf(event.result && event.result.content),
       tool_status: event.isError === true ? "failure" : event.isError === false ? "success" : "unknown",
-    });
+    };
     toolInputs.delete(event.toolCallId);
+    await dispatch("post-tool-use", ctx, payload);
+    await teamHooks("PostToolUse", ctx, payload);
   });
 }
 `;

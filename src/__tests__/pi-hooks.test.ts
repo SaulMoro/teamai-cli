@@ -388,6 +388,65 @@ describe('Pi hook extension', () => {
 const lifecycle = (dispatches: ExtensionDispatch[]) => dispatches.filter((d) => d.args[1] !== 'instructions');
 
 // Team instructions (#945): the extension adds hook-dispatch's context to the prompt.
+describe('Pi extension: the team\'s hooks', () => {
+  const ctx = { cwd: '/work/proj', sessionManager: { getSessionId: () => 'pi-sess' } };
+  let home: string;
+  let prevHome: string | undefined;
+  beforeEach(async () => {
+    home = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-pi-team-'));
+    prevHome = process.env.HOME;
+    process.env.HOME = home;
+  });
+  afterEach(async () => {
+    process.env.HOME = prevHome;
+    await fse.remove(home);
+  });
+  const teamHooksOn = (...events: string[]) => fse.outputJson(bridgedTeamHookFile('pi'), {
+    hooks: Object.fromEntries(events.map((event) => [event, [{ matcher: '*', hooks: [{ type: 'command', command: 'true' }] }]])),
+  });
+  const reply = (replies: Record<string, unknown>) => (args: string[]) =>
+    args.includes('--team-hooks') && replies[args[1]] ? JSON.stringify(replies[args[1]]) : '';
+  const team = (dispatches: ExtensionDispatch[]) => dispatches.filter((d) => d.args.includes('--team-hooks'));
+
+  it('blocks a tool call a PreToolUse team hook refuses, before it runs', async () => {
+    await teamHooksOn('PreToolUse');
+    const { on, dispatches } = loadPiExtension(reply({ PreToolUse: { block: 'No writes under migrations/' } }));
+    expect(await on.tool_call({ toolCallId: 'c1', toolName: 'write', input: { path: 'migrations/1.sql', content: '' } }, ctx))
+      .toEqual({ block: true, reason: 'No writes under migrations/' });
+    expect(team(dispatches)).toEqual([{
+      args: ['hook-dispatch', 'PreToolUse', '--tool', 'pi', '--team-hooks'],
+      payload: { cwd: '/work/proj', session_id: 'pi-sess', tool_name: 'write', tool_input: { path: 'migrations/1.sql', content: '' } },
+    }]);
+  });
+
+  it('starts no teamai process on a tool call when the team has no PreToolUse hook', async () => {
+    await teamHooksOn('Stop');
+    const { on, dispatches } = loadPiExtension();
+    expect(await on.tool_call({ toolCallId: 'c1', toolName: 'bash', input: { command: 'ls' } }, ctx)).toBeUndefined();
+    expect(dispatches).toEqual([]);
+  });
+
+  it('adds the SessionStart and UserPromptSubmit context to the run\'s system prompt', async () => {
+    await teamHooksOn('SessionStart', 'UserPromptSubmit');
+    const { on } = loadPiExtension(reply({ SessionStart: { context: 'Release freeze until Monday' }, UserPromptSubmit: { context: 'Ticket ENG-42 is open' } }));
+    await on.session_start({}, ctx);
+    expect(await on.before_agent_start({ prompt: 'one', systemPrompt: 'BASE' }, ctx))
+      .toEqual({ systemPrompt: 'BASE\n\nRelease freeze until Monday\n\nTicket ENG-42 is open' });
+  });
+
+  it('runs the PostToolUse and Stop team hooks with the event\'s payload', async () => {
+    await teamHooksOn('PostToolUse', 'Stop');
+    const { on, dispatches } = loadPiExtension();
+    await on.tool_execution_start({ toolCallId: 'c1', toolName: 'edit', args: { path: 'a.ts' } }, ctx);
+    await on.tool_execution_end({ toolCallId: 'c1', toolName: 'edit', result: { content: [{ type: 'text', text: 'ok' }] }, isError: false }, ctx);
+    await on.agent_settled({}, ctx);
+    expect(team(dispatches).map((d) => [d.args[1], d.payload])).toEqual([
+      ['PostToolUse', { cwd: '/work/proj', session_id: 'pi-sess', tool_name: 'edit', tool_input: { path: 'a.ts' }, tool_response: 'ok', tool_status: 'success' }],
+      ['Stop', { cwd: '/work/proj', session_id: 'pi-sess' }],
+    ]);
+  });
+});
+
 describe('Pi extension: team instructions in the system prompt (#945)', () => {
   const ctx = { cwd: '/work/proj/src', sessionManager: { getSessionId: () => 'pi-sess' } };
   const context = (text: string) => (args: string[]) => args[1] === 'instructions'

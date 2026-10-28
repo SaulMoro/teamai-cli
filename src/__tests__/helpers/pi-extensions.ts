@@ -57,7 +57,7 @@ export function loadPiExtension(stdoutFor: (args: string[]) => string = () => ''
     child.kill = () => undefined;
     return child;
   };
-  const on = register(buildPiExtensionSource(), { spawn, process: { platform: 'linux' }, setTimeout, clearTimeout });
+  const on = register(buildPiExtensionSource(), { spawn, fs, process: { platform: 'linux' }, setTimeout, clearTimeout });
   return { on, dispatches };
 }
 
