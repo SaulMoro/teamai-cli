@@ -164,6 +164,26 @@ describe('the team hooks a bridge runs', () => {
     expect(reply).toEqual({ code: 0, stdout: '', stderr: 'teamai: team hook slow-scan timed out after 0.2s\n' });
   });
 
+  it('a hook that times out keeps what it wrote on stderr after the timeout line', async () => {
+    install('omp', { PostToolUse: [{ ...entry('', 'Bash', 'slow-lint'), hooks: [{ type: 'command', command: 'echo "linting 412 files" >&2; sleep 5', timeout: 0.5 }] }] });
+    const reply = await runBridgedTeamHooks('omp', 'PostToolUse', JSON.stringify({ cwd: project, tool_name: 'bash', tool_input: {} }));
+    expect(reply.stderr).toBe('teamai: team hook slow-lint timed out after 0.5s\nlinting 412 files\n');
+  });
+
+  it('TEAMAI_HOOKS_DISABLED stops the team\'s hooks a pull applied, and leaves the agent\'s', async () => {
+    install('omp', { PreToolUse: [
+      entry('echo "Use --force-with-lease" >&2; exit 2', 'Bash', 'no-force-push'),
+      { matcher: 'Bash', hooks: [{ type: 'command', command: 'echo "No rm -rf" >&2; exit 2' }], description: '[teamai:agent-hook:no-rm]' },
+    ] });
+    process.env.TEAMAI_HOOKS_DISABLED = '1';
+    try {
+      const reply = await runBridgedTeamHooks('omp', 'PreToolUse', JSON.stringify({ cwd: project, tool_name: 'bash', tool_input: {} }));
+      expect(JSON.parse(reply.stdout)).toEqual({ block: 'No rm -rf' });
+    } finally {
+      delete process.env.TEAMAI_HOOKS_DISABLED;
+    }
+  });
+
   it('Kiro reads a block as exit 2 with the reason on stderr, and context as plain stdout', async () => {
     install('kiro', { PreToolUse: [entry('echo "Run the tests first" >&2; exit 2', 'Bash')], SessionStart: [entry('echo "Release freeze until Monday"')] });
     expect(await runBridgedTeamHooks('kiro', 'PreToolUse', JSON.stringify({ cwd: project, tool_name: 'execute_bash', tool_input: { command: 'npm publish' } })))

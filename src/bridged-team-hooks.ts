@@ -16,7 +16,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { runHookCommand, type HookRun } from './hook-command.js';
 import { channelsOf, type HookAdapterId } from './tools.js';
-import { getTeamaiHomeDir } from './types.js';
+import { areTeamHooksDisabled, getTeamaiHomeDir, TEAMAI_AGENT_HOOK_PREFIX } from './types.js';
 import { readJsonObject } from './utils/fs.js';
 import { log } from './utils/logger.js';
 
@@ -264,7 +264,10 @@ async function runEvent(tool: string, event: string, teamHooks: TeamHooks, host:
   const payload = claudePayload(tool, event, host, bridge);
   const names = [payload.tool_name, host.tool_name].filter((name): name is string => typeof name === 'string');
   const cwd = typeof payload.cwd === 'string' && payload.cwd ? payload.cwd : undefined;
+  // The kill switch stops the team's hooks a pull applied; the local agent's are not the team's.
+  const teamHooksOff = areTeamHooksDisabled();
   const hooks = (teamHooks[event] ?? [])
+    .filter((entry) => !teamHooksOff || entry.description?.startsWith(TEAMAI_AGENT_HOOK_PREFIX))
     .filter((entry) => !event.endsWith('ToolUse') || selects(entry.matcher, names))
     .flatMap((entry) => entry.hooks.flatMap(({ command, timeout }) => typeof command === 'string'
       ? [{ id: /^\[teamai:(?:agent-)?hook:([^\]]+)\]/.exec(entry.description ?? '')?.[1] ?? 'team', command, timeout: timeout ?? 60 }]
@@ -274,7 +277,7 @@ async function runEvent(tool: string, event: string, teamHooks: TeamHooks, host:
   })));
   let stderr = '';
   for (const { hook, run } of runs) {
-    if (run.timedOut) stderr += `teamai: team hook ${hook.id} timed out after ${hook.timeout}s\n`;
+    if (run.timedOut) stderr += `teamai: team hook ${hook.id} timed out after ${hook.timeout}s\n${run.stderr}`;
     else if (run.code !== 0 && run.code !== 2) stderr += run.stderr;
   }
   return { decision: merge(event, runs.map(({ hook, run }) => decisionOf(event, run, hook.id))), stderr };
