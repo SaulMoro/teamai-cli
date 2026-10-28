@@ -88,6 +88,6 @@ export function loadOmpExtension(stdoutFor: (args: string[]) => string = () => '
     };
     return { quiet: () => ({ nothrow: () => output }) };
   };
-  const on = register(buildOmpExtensionSource(), { $, Response, fs, path, Buffer });
+  const on = register(buildOmpExtensionSource(), { $, Response, fs, path, Buffer, setTimeout, clearTimeout });
   return { on, dispatches };
 }
