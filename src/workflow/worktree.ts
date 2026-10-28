@@ -103,7 +103,7 @@ export const UNTRUSTED_CONFIG: readonly string[] = ['-c', `core.hooksPath=${os.d
  */
 export function untrustedGit(env: NodeJS.ProcessEnv, expiresAt?: string): Git {
   return async (cwd, args, options) => {
-    const off = await hooksOff(cwd, env);
+    const off = await hooksOff(cwd, env, expiresAt);
     return 'error' in off ? off.error : spawnGit(cwd, [...UNTRUSTED_CONFIG, ...off.args, ...args], boundedBy(options, expiresAt), { ...env, [HOOK_OFF]: 'false' });
   };
 }
@@ -124,8 +124,9 @@ const HOOK_OFF = 'TEAMAI_GIT_HOOK_ENABLED';
  * beside the script hooks `core.hooksPath` turns off. `--config-env` reads the key up to its last `=`, which `-c` does
  * not, so a hook whose name holds one is turned off too.
  */
-async function hooksOff(cwd: string, env: NodeJS.ProcessEnv): Promise<{ args: string[] } | { error: GitResult }> {
-  const listed = await spawnGit(cwd, ['config', '--null', '--get-regexp', '^hook\\..*\\.'], undefined, env);
+async function hooksOff(cwd: string, env: NodeJS.ProcessEnv, expiresAt: string | undefined): Promise<{ args: string[] } | { error: GitResult }> {
+  // Bounded too: a config can include a file that never ends, such as a pipe no one writes.
+  const listed = await spawnGit(cwd, ['config', '--null', '--get-regexp', '^hook\\..*\\.'], boundedBy(undefined, expiresAt), env);
   // git config exits 1 when no key matches.
   if (listed.code === 1) return { args: [] };
   if (listed.code !== 0) return { error: listed };

@@ -98,6 +98,16 @@ describe('workspace setup', () => {
     expect(Date.now() - startedAt).toBeLessThan(10_000);
   }, 20_000);
 
+  // Windows has no named pipe a path in a git config can name.
+  it.skipIf(process.platform === 'win32')('stops at the step deadline the git that lists configured hooks when setup includes a config from a pipe no one writes', async () => {
+    const dir = workspace();
+    const startedAt = Date.now();
+    const command = 'mkfifo .git/hang && git config include.path hang';
+    const failure = await runSetup({ command, dir, env: process.env, keys: [], expiresAt: new Date(startedAt + 2000).toISOString() });
+    expect(failure).toMatchObject({ code: 'setup_failed' });
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+  }, 20_000);
+
   it('runs setup normally when the step deadline is further away than a timer can wait', async () => {
     const dir = workspace();
     const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
