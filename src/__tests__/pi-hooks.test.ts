@@ -54,6 +54,7 @@ import { log } from '../utils/logger.js';
 import type { HookDef } from '../types.js';
 import { loadPiExtension, type ExtensionDispatch } from './helpers/pi-extensions.js';
 import { hookAdapterDir } from '../locate.js';
+import { bridgedTeamHookFile } from '../bridged-team-hooks.js';
 
 describe('Pi hook extension', () => {
   let tmp: string;
@@ -323,7 +324,7 @@ describe('Pi hook extension', () => {
     expect(await fse.pathExists(path.join(project, '.pi', 'extensions', PI_HOOK_FILE))).toBe(false);
   });
 
-  it('skips custom team hooks and reports the built-in-only boundary', async () => {
+  it('hands custom team hooks to the bridge and reports the skipped built-in overrides', async () => {
     await fse.ensureDir(path.join(tmp, '.pi', 'agent'));
     const customHook: HookDef = {
       source: 'team',
@@ -342,11 +343,9 @@ describe('Pi hook extension', () => {
         builtinOverride: { disabled: ['Hook dispatch stop'] },
       },
     );
-    const source = await fse.readFile(path.join(tmp, '.pi', 'agent', 'extensions', PI_HOOK_FILE), 'utf8');
-    expect(source).not.toContain(customHook.command);
-    expect(log.warn).toHaveBeenCalledWith(
-      'Pi supports built-in lifecycle hooks only; skipping 1 custom team hook(s) from hooks/hooks.yaml',
-    );
+    const bridged = await fse.readJson(bridgedTeamHookFile('pi'));
+    expect(bridged.hooks.Stop.map((e: { hooks: { command: string }[] }) => e.hooks[0].command)).toEqual([customHook.command]);
+    expect(log.warn).toHaveBeenCalledTimes(1);
     expect(log.warn).toHaveBeenCalledWith(
       'Pi supports built-in lifecycle hooks only; skipping 1 built-in hook override(s) from hooks/hooks.yaml',
     );

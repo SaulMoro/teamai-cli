@@ -53,6 +53,7 @@ import {
 import { codexDispatcherCheckouts, codexDispatcherProjects, dispatchedCodexHooks, isCodexTeamHookDispatcher, reconcileCodexDispatchers, runsFromCodexDispatcher, setCodexDispatcherHooks } from './codex-team-hooks.js';
 import type { CodexTeamHook } from './codex-team-hooks.js';
 import { channelsOf, hookFormatOf, hookSettingsFormatOf, type HookAdapterId, type HookFormat } from './tools.js';
+import { BRIDGED_TEAM_HOOK_EVENTS, bridgedTeamHookFile, isBridgedTeamHookTool } from './bridged-team-hooks.js';
 import { earlierHookAdapterDir, hookSettingsFile, installOf, locate, openclawWorkspaceDir, ownOf, workspaceHooksOf } from './locate.js';
 import { toolHome } from './tool-home.js';
 
@@ -309,7 +310,8 @@ function desiredDefs(
   teamDefs: HookDef[],
   opts: { builtinOverride?: BuiltinHookOverride; teamOnly?: boolean },
 ): HookDef[] {
-  const builtins = opts.teamOnly ? [] : applyBuiltinOverride(builtinHookDefs(tool), opts.builtinOverride);
+  // A bridged tool's file holds its team hooks alone: its bridge dispatches the built-ins itself.
+  const builtins = opts.teamOnly || isBridgedTeamHookTool(tool) ? [] : applyBuiltinOverride(builtinHookDefs(tool), opts.builtinOverride);
   return [...builtins, ...teamDefsForTool(teamDefs, tool)];
 }
 
@@ -2921,14 +2923,23 @@ async function reconcileOpencodePlugin(baseDir: string, removeAll = false, insta
     await removeOpencodeHooks(home, 'user');
     return;
   }
-  const homeInstalled = await pathExists(toolHome('opencode'));
-  const projectInstalled = installedBaseDir
-    ? await pathExists(path.join(installedBaseDir, '.opencode'))
-    : false;
-  if (homeInstalled || projectInstalled) {
-    await injectOpencodeHooks(home, 'user');
-    const earlier = await earlierHookAdapterDir('opencode-plugin');
-    if (earlier) await removeOpencodePlugin(earlier);
+  if (!await isBridgedToolInstalled('opencode', baseDir, installedBaseDir)) return;
+  await injectOpencodeHooks(home, 'user');
+  const earlier = await earlierHookAdapterDir('opencode-plugin');
+  if (earlier) await removeOpencodePlugin(earlier);
+}
+
+/** Whether `tool`'s hook adapter is installed here: the gate its reconcile applies, and the bridged file follows. */
+async function isBridgedToolInstalled(tool: string, baseDir: string, installedBaseDir: string | undefined): Promise<boolean> {
+  switch (tool) {
+    case 'opencode':
+      return await pathExists(toolHome('opencode')) || (!!installedBaseDir && await pathExists(path.join(installedBaseDir, '.opencode')));
+    case 'omp': return await pathExists(path.join(getUserHome(), '.omp')) || await pathExists(toolHome('omp'));
+    case 'pi': return isPiInstalled(baseDir, installedBaseDir);
+    case 'kiro': return pathExists(path.join(getUserHome(), '.kiro'));
+    case 'hermes': return pathExists(toolHome('hermes'));
+    case 'openclaw': return await openclawWorkspaceDir() !== null;
+    default: return false;
   }
 }
 
@@ -2955,6 +2966,34 @@ async function clearEarlierHomeHooks(target: {
 }
 
 /**
+ * The team hooks `tool` would get on an event its bridge does not run, said
+ * aloud. A reconcile leaves them out; a dry run, which stops before it, repeats
+ * the report so its "Would apply" line promises no hook a tool will not run.
+ */
+function reportUnbridgedTeamHooks(tool: string, defs: HookDef[]): HookDef[] {
+  const unbridged = teamDefsForTool(defs, tool).filter((d) => !BRIDGED_TEAM_HOOK_EVENTS.has(d.event));
+  if (unbridged.length > 0) {
+    log.warn(`${tool} runs team hooks on ${[...BRIDGED_TEAM_HOOK_EVENTS].join(', ')} only; skipping `
+      + `${unbridged.map((d) => `${d.key} (${d.event})`).join(', ')} from hooks/hooks.yaml`);
+  }
+  return unbridged;
+}
+
+/**
+ * Reconcile the team hooks `tool`'s bridge runs (bridged-team-hooks.ts) in
+ * their own file, with the records and project gates of a settings file. A
+ * team hook on an event no bridge runs is reported and left out.
+ */
+async function reconcileBridgedTeamHooks(
+  tool: string,
+  defs: HookDef[],
+  opts: Pick<ReconcileHooksOptions, 'manifestPath' | 'removeAll' | 'teamHookProjectRoot' | 'teamHookChildRoots' | 'heldTeamHookIds' | 'teamHookHistory' | 'keepRecords' | 'teamOnly'>,
+): Promise<void> {
+  const unbridged = opts.removeAll ? [] : reportUnbridgedTeamHooks(tool, defs);
+  await reconcileHooks(bridgedTeamHookFile(tool), tool, defs.filter((d) => !unbridged.includes(d)), opts);
+}
+
+/**
  * Reconcile the single teamai OMP extension.
  *
  * OMP auto-loads extensions from BOTH ~/.omp/agent/extensions (user) and
@@ -2971,9 +3010,7 @@ async function reconcileOmpExtension(removeAll = false): Promise<void> {
     await removeOmpHooks();
     return;
   }
-  if (await pathExists(path.join(getUserHome(), '.omp')) || await pathExists(toolHome('omp'))) {
-    await injectOmpHooks();
-  }
+  if (await isBridgedToolInstalled('omp', getUserHome(), undefined)) await injectOmpHooks();
 }
 
 /** True when Pi looks installed at the user root, its moved agent directory, or the resolved project root. */
@@ -2983,29 +3020,21 @@ async function isPiInstalled(baseDir: string, installedBaseDir?: string): Promis
 }
 
 /**
- * Pi cannot run custom team hooks — it supports built-in lifecycle hooks only —
- * so anything the team scoped to Pi is skipped, and a real reconcile says so.
+ * Pi's extension dispatches the built-in hooks as it was generated, so the
+ * team's `builtin:` overrides are skipped there, and a real reconcile says so.
  * Extracted from the reconcile loop so a dry run, which stops before the
- * per-tool stage, prints the same report without writing anything and its
- * "Would apply" line does not promise hooks no tool will run.
+ * per-tool stage, prints the same report without writing anything.
  *
  * Only warns when Pi is actually installed: Pi is in every team's default
  * toolPaths, so without this gate teammates who never use Pi see this warning
- * on every reconcile whenever the team defines a Pi-targeted hook.
+ * on every reconcile.
  */
-async function reportPiSkippedTeamHooks(
-  defs: HookDef[],
+async function reportPiSkippedBuiltinOverrides(
   baseDir: string,
   installedBaseDir: string | undefined,
   builtinOverride: BuiltinHookOverride | undefined,
 ): Promise<void> {
   if (!await isPiInstalled(baseDir, installedBaseDir)) return;
-  const applicableTeamDefs = teamDefsForTool(defs, 'pi');
-  if (applicableTeamDefs.length > 0) {
-    log.warn(
-      `Pi supports built-in lifecycle hooks only; skipping ${applicableTeamDefs.length} custom team hook(s) from hooks/hooks.yaml`,
-    );
-  }
   const builtinOverrideCount = (builtinOverride?.disabled?.length ?? 0)
     + Object.keys(builtinOverride?.overrides ?? {}).length;
   if (builtinOverrideCount > 0) {
@@ -3215,6 +3244,22 @@ export async function reconcileHooksToAllTools(
   // limit of sharing a project scope, not a bug this pass can fix.
   const claimedSettingsFiles = new Set<string>();
   const reconciledMainTools = new Set<string>();
+  // A bridged tool keeps its user hooks in HOME, so a project install gates its team hooks there, as for ZCode.
+  // Before the adapter: Kiro's and Hermes's hook entries are written from this file.
+  const reconcileBridged = async (tool: string): Promise<void> => {
+    if (!opts.removeAll && !await isBridgedToolInstalled(tool, baseDir, opts.installedBaseDir)) return;
+    const homeHooks = opts.scope === 'project';
+    await reconcileBridgedTeamHooks(tool, defs, {
+      manifestPath: teamManifestPath,
+      removeAll: opts.removeAll,
+      teamHookProjectRoot: homeHooks ? opts.installedBaseDir ?? baseDir : opts.teamHookProjectRoot,
+      ...(homeHooks && opts.removeAll ? { teamOnly: true } : {}),
+      ...(opts.teamHookChildRoots ? { teamHookChildRoots: opts.teamHookChildRoots } : {}),
+      heldTeamHookIds: opts.heldTeamHookIds,
+      teamHookHistory: opts.teamHookHistory,
+      keepRecords: opts.keepRecordsFor?.has(tool),
+    });
+  };
   for (const [tool, paths] of Object.entries(toolPaths)) {
     if (opts.filterAgents && !opts.filterAgents.includes(tool)) continue;
     if (skipped.has(tool)) continue;
@@ -3222,6 +3267,7 @@ export async function reconcileHooksToAllTools(
       if (opts.settingsOnly) continue;
       try {
         const { injectKiroHooks, removeKiroHooks } = await import('./kiro-hooks.js');
+        await reconcileBridged(tool);
         if (opts.removeAll) await removeKiroHooks();
         else await injectKiroHooks(opts.installedBaseDir ?? baseDir);
       } catch (e) {
@@ -3237,6 +3283,7 @@ export async function reconcileHooksToAllTools(
       if (opts.settingsOnly) continue;
       try {
         const hermesRoot = toolHome('hermes');
+        await reconcileBridged(tool);
         if (opts.removeAll) {
           const { removeHermesHooks } = await import('./hermes-hooks.js');
           await removeHermesHooks();
@@ -3269,6 +3316,7 @@ export async function reconcileHooksToAllTools(
           const { injectOpenClawHooks } = await import('./openclaw-hooks.js');
           await injectOpenClawHooks(tool);
         }
+        await reconcileBridged(tool);
       } catch (e) {
         log.warn(`Failed to reconcile OpenClaw hooks for ${tool}: ${(e as Error).message}`);
         opts.unwritten?.push(tool);
@@ -3288,6 +3336,7 @@ export async function reconcileHooksToAllTools(
             removeAll: opts.removeAll,
           });
         }
+        await reconcileBridged(tool);
         await reconcileOpencodePlugin(baseDir, opts.removeAll, opts.installedBaseDir);
       } catch (e) {
         log.warn(`Failed to reconcile OpenCode hooks: ${(e as Error).message}`);
@@ -3307,6 +3356,7 @@ export async function reconcileHooksToAllTools(
             removeAll: opts.removeAll,
           });
         }
+        await reconcileBridged(tool);
         await reconcileOmpExtension(opts.removeAll);
       } catch (e) {
         log.warn(`Failed to reconcile OMP hooks: ${(e as Error).message}`);
@@ -3318,8 +3368,9 @@ export async function reconcileHooksToAllTools(
       if (opts.settingsOnly) continue;
       try {
         if (!opts.removeAll) {
-          await reportPiSkippedTeamHooks(defs, baseDir, opts.installedBaseDir, opts.builtinOverride);
+          await reportPiSkippedBuiltinOverrides(baseDir, opts.installedBaseDir, opts.builtinOverride);
         }
+        await reconcileBridged(tool);
         await reconcilePiExtension(baseDir, opts.removeAll, opts.installedBaseDir);
       } catch (e) {
         log.warn(`Failed to reconcile Pi hooks: ${(e as Error).message}`);
@@ -4004,7 +4055,13 @@ export async function reconcileTeamHooksForConfig(
   if (opts.dryRun) {
     if (!opts.removeAll) await installProjectGitHook(localConfig, { dryRun: true });
     if (!opts.removeAll && 'pi' in hookToolPaths && (!filterAgents || filterAgents.includes('pi'))) {
-      await reportPiSkippedTeamHooks(teamDefs, baseDir, localConfig.scope === 'project' ? (localConfig.projectRoot ?? baseDir) : undefined, builtin);
+      await reportPiSkippedBuiltinOverrides(baseDir, localConfig.scope === 'project' ? (localConfig.projectRoot ?? baseDir) : undefined, builtin);
+    }
+    for (const tool of Object.keys(hookToolPaths)) {
+      if (opts.removeAll || !isBridgedTeamHookTool(tool) || (filterAgents && !filterAgents.includes(tool))) continue;
+      if (await isBridgedToolInstalled(tool, baseDir, localConfig.scope === 'project' ? (localConfig.projectRoot ?? baseDir) : undefined)) {
+        reportUnbridgedTeamHooks(tool, teamDefs);
+      }
     }
     return resolved.ok ? { ok: true, defs: teamDefs } : { ok: false, builtins: builtinsOnly ?? 'with-overrides' };
   }
