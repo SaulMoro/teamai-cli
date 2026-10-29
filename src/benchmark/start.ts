@@ -78,7 +78,7 @@ export async function startBenchmark(config: LocalConfig, name: string, options:
   if (!committed.ok) {
     return error('check_files_unwritable', `Task "${committed.task}" writes files from the suite directory before its check, and they could not be written as a commit into this machine's benchmark cache: ${committed.failed} Fix that, and start again.`);
   }
-  const plan = freezePlan({ suite: found, baselineTeamRevision: revision, selection: selectionOf(config), arms: [first.arm, ...rest], scorers: pinned });
+  const plan = freezePlan({ committed: committed.suite, baselineTeamRevision: revision, selection: selectionOf(config), arms: [first.arm, ...rest], scorers: pinned });
   const { definition, scorers: generated } = compilePlan(plan, committed.suite);
   const scorers = { ...pinned, ...generated };
   const criteria = found.tasks.find((task) => task.judge.kind === 'criteria');

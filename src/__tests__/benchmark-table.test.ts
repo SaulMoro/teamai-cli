@@ -53,7 +53,7 @@ async function onePassedOfTen() {
     changes: { branch: prompt.workspace.branch, base: RUN_START, from: RUN_START, to: 'c'.repeat(40), commits: [] },
   });
   const check = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
-  await reportAttempt(config, runId, { attempt: check.attempt, revision: check.revision, outcome: 'success', exitCode: 0, driver, trialReport: { verdict: { verdict: 'passed' } } });
+  await reportAttempt(config, runId, { attempt: check.attempt, revision: check.revision, outcome: 'success', exitCode: 0, outputs: { result: 'passed' }, driver, trialReport: {} });
   await cancelRun(config, runId, {});
   return endRecord(config, runId);
 }
@@ -79,7 +79,7 @@ describe('benchmark results table', () => {
   });
 
   it.each([
-    ['passes', 'invalid', '| fix | invalid: check passes without changes |'],
+    ['passed', 'invalid', '| fix | invalid: check passes without changes |'],
     ['could_not_run', 'could_not_run', '| fix | check could not run |'],
   ] as const)('lists a task whose baseline %s under the results, with no trial of it run', async (baseline, listed, row) => {
     const { config, runId } = await startTen();
