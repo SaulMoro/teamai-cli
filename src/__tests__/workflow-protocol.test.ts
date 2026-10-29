@@ -302,6 +302,20 @@ describe('finally steps', () => {
     expect('data' in done && done.data.done).not.toHaveProperty('outputs.text');
   });
 
+  it('cancels one finally step by id as the steps of the run end, and runs the others', async () => {
+    const { config, checkout } = await fixture({ reported: REPORTED });
+    const { client, run } = await startReported(config, checkout);
+    const work = await lease(client, run);
+    await client.report(run, { attempt: work.attempt, revision: work.revision, outcome: 'success', driver });
+    expect(await client.cancel(run, 'report')).toMatchObject({ data: { cancelled: { steps: ['report'] }, run: { status: 'running', finalizing: { outcome: 'succeeded' } } } });
+    const tidy = await lease(client, run);
+    expect(tidy).toMatchObject({ step: 'tidy' });
+    await client.report(run, { attempt: tidy.attempt, revision: tidy.revision, outcome: 'success', driver, outputs: { freed: 2 } });
+    expect(await client.next(run, { driver })).toMatchObject({ data: { done: {
+      outcome: 'succeeded', outputs: { freed: 2 }, finally: [{ id: 'report', outcome: 'cancelled', failure: { code: 'cancelled' } }],
+    } } });
+  });
+
   it('ends a run at the end its steps reached, after its finally steps', async () => {
     const ended = REPORTED.replace('name: reported', 'name: ended').replace('steps:\n  - id: work\n', 'ends: { blocked: failed }\nsteps:\n  - id: work\n    end: blocked\n');
     const { config, checkout } = await fixture({ ended });
@@ -319,20 +333,22 @@ describe('finally steps', () => {
     expect(await client.next(run, { driver })).toMatchObject({ data: { done: { outcome: 'failed', end: 'blocked', outputs: { text: 'blocked' } } } });
   });
 
-  it('runs the finally steps again when a retry reopens the run and it ends again', async () => {
+  it('runs the finally steps again when a retry reopens the run, and ends it by its steps alone', async () => {
     const { config, checkout } = await fixture({ reported: REPORTED });
     const { client, run } = await startReported(config, checkout);
     const runSteps = async (outcome: 'success' | 'failed', text: string): Promise<void> => {
       const work = await lease(client, run);
       await client.report(run, { attempt: work.attempt, revision: work.revision, outcome, driver, ...(outcome === 'failed' ? { message: failure.message, failure } : {}) });
-      for (const step of ['report', 'tidy']) {
-        const held = await lease(client, run);
-        expect(held).toMatchObject({ step });
-        await client.report(run, { attempt: held.attempt, revision: held.revision, outcome: 'success', driver, outputs: step === 'report' ? { text } : { freed: 1 } });
-      }
+      const report = await lease(client, run);
+      await client.report(run, { attempt: report.attempt, revision: report.revision, outcome: 'success', driver, outputs: { text } });
+      const tidy = await lease(client, run);
+      await client.report(run, outcome === 'failed'
+        ? { attempt: tidy.attempt, revision: tidy.revision, outcome: 'failed', driver, message: failure.message, failure }
+        : { attempt: tidy.attempt, revision: tidy.revision, outcome: 'success', driver, outputs: { freed: 1 } });
     };
+    // The first pass's tidy fails too; the run that the retry reopens ends by its steps alone.
     await runSteps('failed', 'first');
-    expect(await client.next(run, { driver })).toMatchObject({ data: { done: { outcome: 'failed', outputs: { text: 'first' } } } });
+    expect(await client.next(run, { driver })).toMatchObject({ data: { done: { outcome: 'failed', outputs: { text: 'first' }, finally: [{ id: 'tidy' }] } } });
 
     expect(await client.retry(run, 'work')).toMatchObject({ data: { reopened: true } });
     await runSteps('success', 'second');
