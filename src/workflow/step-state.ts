@@ -47,7 +47,7 @@ const LeaseSessionSchema = SessionRefSchema.extend({ earlier: z.array(SessionRef
 
 const LeaseSchema: z.ZodType<StepLease> = z.object({
   attempt: z.string(), revision: z.number(), driver: DriverSchema, session: LeaseSessionSchema.optional(),
-  unenforced: z.array(UnenforcedSchema).optional(), expiresAt: z.string().optional(), runMode: RunModeSchema.optional(),
+  unenforced: z.array(UnenforcedSchema).optional(), expiresAt: z.string().optional(), leasedAt: z.string().optional(), runMode: RunModeSchema.optional(),
   limits: TurnLimitsSchema.optional(),
 });
 

@@ -1136,6 +1136,17 @@ function offerTerms(
   }, context.can, context.allow, context.facts);
 }
 
+/**
+ * The turn limits granted in `terms`, and the deadline of a lease issued at `since`. A driver that cannot end the turn
+ * gets the `on_limit: fail` lease, whose own timeout is its deadline.
+ */
+function turnTerms(
+  run: RunState, state: StepState, definition: WorkflowStep, { limits }: Pick<Terms, 'limits'>, since: string,
+): Pick<StepLease, 'expiresAt' | 'limits'> {
+  const expiresAt = ownDeadline(run, state, limits || definition.onLimit !== 'end_turn' ? definition : { ...definition, onLimit: 'fail' }, since);
+  return { ...(expiresAt !== undefined ? { expiresAt } : {}), ...(limits ? { limits } : {}) };
+}
+
 /** Why a step that names `tool` fails in a run whose only driver cannot launch it. */
 function toolUnavailable(step: string, tool: string): WorkflowFailure {
   return { code: 'tool_unavailable', message: `Step "${step}" runs on ${tool}, which the driver of this run cannot launch here. Install ${tool} where the run is driven, or remove tool from the step.` };
@@ -1401,12 +1412,10 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
             break;
           }
           if (plan.contract && options.base && !run.base) run.base = options.base;
-          const { unenforced, limits } = terms.terms;
-          // A driver that cannot end the turn gets the `on_limit: fail` lease, whose own timeout is its deadline.
-          const expiresAt = ownDeadline(run, state, limits || definition.onLimit !== 'end_turn' ? definition : { ...definition, onLimit: 'fail' }, now);
+          const { unenforced } = terms.terms;
           const step = lease(state, offering({
-            attempt: `a${randomBytes(4).toString('hex')}`, revision: run.revision, driver, ...(options.runMode ? { runMode: options.runMode } : {}),
-            ...(unenforced.length > 0 ? { unenforced } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}), ...(limits ? { limits } : {}),
+            attempt: `a${randomBytes(4).toString('hex')}`, revision: run.revision, driver, leasedAt: now, ...(options.runMode ? { runMode: options.runMode } : {}),
+            ...(unenforced.length > 0 ? { unenforced } : {}), ...turnTerms(run, state, definition, terms.terms, now),
           }, plan.session));
           rememberCopy(run, plan, driver);
           return answer(leaseData(run, step, definition, rendered, terms.terms, plan));
@@ -1440,13 +1449,18 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           continue;
         }
         const unenforced = unionUnenforced(leased.lease.unenforced ?? [], terms.terms.unenforced);
+        // The driver's `can` may have changed since, so the turn's terms are decided again, as of the first lease. A lease
+        // issued before teamai recorded when keeps its deadline.
+        const { limits: _held, expiresAt: heldUntil, ...held } = leased.lease;
+        const since = held.leasedAt;
+        const turn = since ? turnTerms(run, leased, located.step, terms.terms, since) : {
+          ...(heldUntil !== undefined ? { expiresAt: heldUntil } : {}), ...(terms.terms.limits ? { limits: terms.terms.limits } : {}),
+        };
         leased.lease = offering({
-          ...leased.lease, ...(unenforced.length > 0 ? { unenforced } : {}), ...(options.runMode ? { runMode: options.runMode } : {}),
+          ...held, ...(unenforced.length > 0 ? { unenforced } : {}), ...(options.runMode ? { runMode: options.runMode } : {}), ...turn,
         }, offered?.session);
         if (offered) rememberCopy(run, offered, driver);
-        // The limits it was leased with stand, as its deadline does.
-        const { limits: _offered, ...handedBack } = terms.terms;
-        return answer(leaseData(run, leased, located.step, rendered, { ...handedBack, ...(leased.lease.limits ? { limits: leased.lease.limits } : {}) }, offered));
+        return answer(leaseData(run, leased, located.step, rendered, terms.terms, offered));
       }
       failStep(leased, rendered, leased.lease.revision);
     }

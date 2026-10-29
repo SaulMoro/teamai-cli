@@ -281,8 +281,10 @@ export interface StepLease {
   session?: LeaseSession;
   /** The best-effort requirements the driver could not enforce, decided when the lease was issued; a hand-back only adds. */
   unenforced?: Unenforced[];
-  /** When the step's own `timeout` ends this lease, set when it is issued so a hand-back keeps it. */
+  /** When the step's own `timeout` ends this lease, counted from `leasedAt` so a hand-back does not extend it. */
   expiresAt?: string;
+  /** When the attempt was first leased. Absent on a lease issued before teamai recorded it. */
+  leasedAt?: string;
   /** The run mode the driver runs the lease in, as its `next` reported it, so the pass keeps it however it settles. */
   runMode?: RunMode;
   /** The turn limits the lease carried, for a driver that ends the turn at them. */
