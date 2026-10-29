@@ -302,6 +302,43 @@ describe('finally steps', () => {
     expect('data' in done && done.data.done).not.toHaveProperty('outputs.text');
   });
 
+  it('ends a run at the end its steps reached, after its finally steps', async () => {
+    const ended = REPORTED.replace('name: reported', 'name: ended').replace('steps:\n  - id: work\n', 'ends: { blocked: failed }\nsteps:\n  - id: work\n    end: blocked\n');
+    const { config, checkout } = await fixture({ ended });
+    const client = await protocol(config);
+    const started = await client.start('ended', { checkout, caller: { evidence: { kind: 'none' }, confirmed: false, mode: 'attended' } });
+    if (!('data' in started)) throw new Error(JSON.stringify(started));
+    const run = RunIdSchema.parse(started.data.run);
+    const work = await lease(client, run);
+    await client.report(run, { attempt: work.attempt, revision: work.revision, outcome: 'success', driver });
+    for (const step of ['report', 'tidy']) {
+      const held = await lease(client, run);
+      expect(held).toMatchObject({ step });
+      await client.report(run, { attempt: held.attempt, revision: held.revision, outcome: 'success', driver, outputs: step === 'report' ? { text: 'blocked' } : { freed: 0 } });
+    }
+    expect(await client.next(run, { driver })).toMatchObject({ data: { done: { outcome: 'failed', end: 'blocked', outputs: { text: 'blocked' } } } });
+  });
+
+  it('runs the finally steps again when a retry reopens the run and it ends again', async () => {
+    const { config, checkout } = await fixture({ reported: REPORTED });
+    const { client, run } = await startReported(config, checkout);
+    const runSteps = async (outcome: 'success' | 'failed', text: string): Promise<void> => {
+      const work = await lease(client, run);
+      await client.report(run, { attempt: work.attempt, revision: work.revision, outcome, driver, ...(outcome === 'failed' ? { message: failure.message, failure } : {}) });
+      for (const step of ['report', 'tidy']) {
+        const held = await lease(client, run);
+        expect(held).toMatchObject({ step });
+        await client.report(run, { attempt: held.attempt, revision: held.revision, outcome: 'success', driver, outputs: step === 'report' ? { text } : { freed: 1 } });
+      }
+    };
+    await runSteps('failed', 'first');
+    expect(await client.next(run, { driver })).toMatchObject({ data: { done: { outcome: 'failed', outputs: { text: 'first' } } } });
+
+    expect(await client.retry(run, 'work')).toMatchObject({ data: { reopened: true } });
+    await runSteps('success', 'second');
+    expect(await client.next(run, { driver })).toMatchObject({ data: { done: { outcome: 'succeeded', outputs: { text: 'second', freed: 1 } } } });
+  });
+
   it('runs the finally steps of a run that timed out under a deadline of their own, and ends it timed out', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     try {
