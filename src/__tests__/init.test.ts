@@ -122,6 +122,7 @@ vi.mock('../mcp-reconcile.js', async (importOriginal) => ({
 vi.mock('../local-agent.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../local-agent.js')>()),
   releaseClaudeModelConfig: vi.fn(),
+  initLocalAgentHttp: vi.fn(async () => undefined),
 }));
 vi.mock('../hooks.js', async (importOriginal) => ({
   describeUnappliedTeamHooks: (await importOriginal<typeof import('../hooks.js')>()).describeUnappliedTeamHooks,
