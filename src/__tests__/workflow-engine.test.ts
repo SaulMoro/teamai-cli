@@ -5323,6 +5323,24 @@ describe('strict requirements', () => {
     expect(named).toMatchObject({ data: { lease: { step: 'named.open', requires: { isolation: 'sandbox' }, envScope: { withhold: WITHHELD } } } });
   });
 
+  it('keeps an inner level above a strict floor, and holds the step only for the floor', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: outer
+    requires: { isolation: worktree, network: true, strict: true }
+    workflow:
+      steps:
+        - id: inner
+          requires: { isolation: sandbox, network: false }
+          command: node inner.js
+`));
+
+    const leased = await leaseNext(config, runId, driverA, { can: { isolation: 'worktree', env: true } });
+
+    expect(leased).toMatchObject({ data: { lease: { step: 'outer.inner', requires: { isolation: 'sandbox', network: false }, unenforced: [
+      { requirement: 'network', asked: false }, { requirement: 'isolation', asked: 'sandbox', provided: 'worktree' },
+    ] } } });
+    expect(leased).not.toHaveProperty('data.lease.envScope');
+  });
+
   it('refuses a start whose only driver could never take a step for its strict requirements, and creates no run', async () => {
     const { config } = testConfig();
     fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: fetch

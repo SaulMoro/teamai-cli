@@ -221,8 +221,8 @@ export function mergeRequirements(...levels: ReadonlyArray<(Requirements & Pick<
 /** `values` with each of `isolation` and `network` raised to `floor`'s, where `floor` sets it higher. */
 function raised<T extends Floor>(values: T, floor: Floor): T {
   const isolation = floor.isolation !== undefined && (values.isolation === undefined || rank(values.isolation) < rank(floor.isolation)) ? floor.isolation : values.isolation;
-  // Denying the network keeps a step further from the member's machine, so `false` is the higher value.
-  const network = floor.network === false || values.network === undefined ? floor.network ?? values.network : values.network;
+  // Denying the network keeps a step further from the member's machine, so only a floor of `false` raises a value.
+  const network = floor.network === false ? false : values.network;
   return { ...values, ...(isolation !== undefined ? { isolation } : {}), ...(network !== undefined ? { network } : {}) };
 }
 
