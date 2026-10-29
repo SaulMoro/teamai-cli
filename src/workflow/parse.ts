@@ -306,7 +306,7 @@ function parseBody(
         if (!key || !STEP_KEYS.has(key)) {
           diagnostics.push(unknownKey(file, lineCounter, pair.key ?? item, `${field}.${key ?? 'key'}`, key ?? 'key'));
         } else if (list === 'finally' && !FINALLY_STEP_KEYS.has(key)) {
-          diagnostics.push(locate(file, lineCounter, pair.key as Node, `${field}.${key}`, `a finally step runs a read-only command, so it carries only ${[...FINALLY_STEP_KEYS].join(', ')}`));
+          diagnostics.push(locate(file, lineCounter, pair.key ?? item, `${field}.${key}`, `a finally step runs a read-only command, so it carries only ${[...FINALLY_STEP_KEYS].join(', ')}`));
         }
       }
       const idPair = item.items.find((pair) => scalarString(pair.key) === 'id');
@@ -701,7 +701,6 @@ function parseInline(
   }
   return parseBody(node, `${field}.`, `${label} workflow`, ctx, inputs, itemBound, options);
 }
-
 
 function needsReach(start: string[] | undefined, target: string, steps: Map<string, WorkflowStep>): boolean {
   const seen = new Set<string>();

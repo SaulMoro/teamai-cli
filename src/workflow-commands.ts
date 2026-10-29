@@ -241,9 +241,9 @@ async function skillAnswer(raw: Parameters<typeof parseSkillCall>[0]): Promise<{
   return { envelope: await runSkillCall(call, context), secrets: loaded.secrets };
 }
 
-/** The flags of `workflow start` and `resume` without `--driver skill`. The skill driver's flags are refused, the first given in this order. */
 const TIMEOUT_MESSAGE = '--timeout must be a positive duration, such as 500ms, 30s, 10m, or 2h';
 
+/** The flags of `workflow start` and `resume` without `--driver skill`. The skill driver's flags are refused, the first given in this order. */
 const NonSkillRunOptionsSchema = z.object({
   timeout: z.string().transform((text, ctx) => durationMs(text) ?? (ctx.addIssue({ code: z.ZodIssueCode.custom, message: TIMEOUT_MESSAGE }), z.NEVER)).optional(),
   parallel: z.undefined({ invalid_type_error: '--parallel needs --driver skill' }),
