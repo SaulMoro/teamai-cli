@@ -986,6 +986,43 @@ describe('local workflow driver concurrency', () => {
     expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
   });
 
+  it.each([
+    ['in worktrees of their own', '    workspace: new\n', 2],
+    ['in the checkout they share', '', 1],
+  ] as const)('runs two headless prompts %s with max_parallel 2, at most %s at a time', async (_place, workspaceLine, most) => {
+    const { config, workspace, runId } = await parallelFixture(`schemaVersion: v1alpha1
+name: build
+description: Two prompts with no needs.
+steps:
+  - id: left
+    needs: []
+${workspaceLine}    prompt: Implement the left half.
+  - id: right
+    needs: []
+${workspaceLine}    prompt: Implement the right half.
+`, 2);
+    let running = 0;
+    let overlap = 0;
+    const together = (): boolean => running === 2;
+    const adapter: LocalToolAdapter = {
+      runInteractive: vi.fn(),
+      run: vi.fn(async () => {
+        running += 1;
+        overlap = Math.max(overlap, running);
+        // Each waits a while for the other, so two prompts that may run together do.
+        for (const deadline = Date.now() + 1000; Date.now() < deadline && !together();) await new Promise((resolve) => setTimeout(resolve, 20));
+        running -= 1;
+        return { started: true as const, exitCode: 0 };
+      }),
+    };
+
+    const done = await runLocalDriver(config, runId, workspace, { adapter, toolPaths });
+
+    expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(adapter.run).toHaveBeenCalledTimes(2);
+    expect(overlap).toBe(most);
+  });
+
   it('holds a prompt leased while a command runs, and starts it once the command has exited', async () => {
     const { config, workspace, runId } = await parallelFixture(`schemaVersion: v1alpha1
 name: build

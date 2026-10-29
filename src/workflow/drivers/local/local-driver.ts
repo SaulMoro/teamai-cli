@@ -700,14 +700,15 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
   // never runs beside its cancelled attempt.
   const dying = new Map<string, { step: string; lease: Lease; command: StagedCommand }>();
   const base = await headCommit(root);
-  // A prompt that was stopped before its tool started has nothing to report.
-  let prompt: { lease: Lease; controller: AbortController; exit: Promise<ReportBody | undefined> } | undefined;
+  // The prompts that run, by attempt. A prompt that was stopped before its tool started has nothing to report.
+  const prompts = new Map<string, { lease: Lease; controller: AbortController; exit: Promise<ReportBody | undefined> }>();
   let question: { hitl: LocalHitl; controller: AbortController; exit: Promise<{ kind: 'question'; line?: string }> } | undefined;
   // A headless prompt takes a slot as a command does, so a step in another checkout starts beside it. An interactive one has the terminal.
-  const busy = (): number => inFlight.size + dying.size + (prompt ? 1 : 0);
-  const room = (): boolean => !prompt?.lease.interactive && busy() + held.length < maxParallel && !held.some((lease) => lease.prompt !== undefined);
+  const busy = (): number => inFlight.size + dying.size + prompts.size;
+  const interactiveRuns = (): boolean => [...prompts.values()].some(({ lease }) => lease.interactive);
+  const room = (): boolean => !interactiveRuns() && busy() + held.length < maxParallel && !held.some((lease) => lease.prompt !== undefined);
   const cancel = (attempt: string): void => {
-    if (prompt?.lease.attempt === attempt) prompt.controller.abort();
+    prompts.get(attempt)?.controller.abort();
     const index = held.findIndex((lease) => lease.attempt === attempt);
     if (index !== -1) held.splice(index, 1);
     const running = inFlight.get(attempt);
@@ -734,10 +735,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
   // terminal's signals reach handles them itself. With nothing running, the signal ends teamai at once, as it would
   // without a handler.
   const onSignal = (signal: NodeJS.Signals): void => {
-    if (prompt?.lease.interactive && interactiveIgnores.includes(signal)) return;
-    if (inFlight.size === 0 && dying.size === 0 && !prompt) return exitOn(signal);
+    if (interactiveRuns() && interactiveIgnores.includes(signal)) return;
+    if (busy() === 0) return exitOn(signal);
     signalled ??= signal;
-    prompt?.controller.abort(signal);
+    for (const { controller } of prompts.values()) controller.abort(signal);
     wake();
   };
   if (maxParallel > 1) handle(STOP_SIGNALS);
@@ -758,7 +759,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
   try {
     for (;;) {
       if (signalled) return { error: { code: 'interrupted', message: `Stopped by ${signalled} after every command it started exited` } };
-      const running = [...inFlight.keys(), ...held.map((lease) => lease.attempt), ...(prompt ? [prompt.lease.attempt] : [])];
+      const running = [...inFlight.keys(), ...held.map((lease) => lease.attempt), ...prompts.keys()];
       const canTakeLease = room();
       const resolved = await resolveWorkflowEnv(config);
       const turn = { ...resolved, secrets: rememberSecrets(seen, resolved.secrets) };
@@ -771,12 +772,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
       for (const attempt of Array.isArray(next.data.cancelled) ? next.data.cancelled as string[] : []) cancel(attempt);
       if ('done' in next.data) {
         question?.controller.abort();
-        if (prompt) {
-          const lease = prompt.lease;
-          prompt.controller.abort();
-          const body = await prompt.exit;
+        for (const { controller } of prompts.values()) controller.abort();
+        for (const [attempt, { lease, exit }] of prompts) {
+          const body = await exit;
           const failed = body && await report(body, lease);
-          prompt = undefined;
+          prompts.delete(attempt);
           if (failed) return failed;
         }
         return next;
@@ -800,9 +800,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
       const placesBusy = (): Set<string> => new Set([
         ...[...inFlight.values()].map(({ lease }) => placeOf(lease, root)),
         ...[...dying.values()].map(({ lease }) => placeOf(lease, root)),
-        ...(prompt ? [placeOf(prompt.lease, root)] : []),
+        ...[...prompts.values()].map(({ lease }) => placeOf(lease, root)),
       ]);
-      for (let index = 0; !prompt?.lease.interactive && busy() < maxParallel;) {
+      for (let index = 0; !interactiveRuns() && busy() < maxParallel;) {
         const lease = held[index];
         const command = lease?.command;
         if (lease === undefined || command === undefined) break;
@@ -830,42 +830,43 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
           },
         ) });
       }
-      if (!prompt && busy() < maxParallel) {
+      // Prompts in places no other attempt holds start beside each other, in lease order, while a slot is free. An
+      // interactive one starts only once nothing else runs.
+      while (!interactiveRuns() && busy() < maxParallel) {
         const promptAt = held.findIndex((lease) => lease.prompt !== undefined
           && !placesBusy().has(placeOf(lease, root))
           && ![...dying.values()].some((stopping) => stopping.step === lease.step)
-          && (!lease.interactive || (inFlight.size === 0 && dying.size === 0)));
-        if (promptAt !== -1) {
-          const lease = held.splice(promptAt, 1)[0]!;
-          if (lease.interactive && question) {
-            question.controller.abort();
-            await question.exit;
-            question = undefined;
-          }
-          // Setup runs out of the terminal's reach, so the tool's signals are left to it only once it starts.
-          interactiveIgnores = [];
-          const ignored = lease.interactive ? commandSignalPolicy(await terminalReachesCommand()).ignored : [];
-          const controller = new AbortController();
-          if (maxParallel === 1) handle(STOP_SIGNALS);
-          prompt = { lease, controller, exit: (async () => {
-            const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal });
-            if (!startable(lease, controller.signal)) {
-              await abandonPlace({ config, lock, attempt: lease.attempt });
-              return undefined;
-            }
-            if (failure) return unstaged(lease, failure);
-            interactiveIgnores = ignored;
-            return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode);
-          })() };
+          && (!lease.interactive || busy() === 0));
+        const [lease] = promptAt === -1 ? [] : held.splice(promptAt, 1);
+        if (lease === undefined) break;
+        if (lease.interactive && question) {
+          question.controller.abort();
+          await question.exit;
+          question = undefined;
         }
+        // Setup runs out of the terminal's reach, so the tool's signals are left to it only once it starts.
+        interactiveIgnores = [];
+        const ignored = lease.interactive ? commandSignalPolicy(await terminalReachesCommand()).ignored : [];
+        const controller = new AbortController();
+        if (maxParallel === 1) handle(STOP_SIGNALS);
+        prompts.set(lease.attempt, { lease, controller, exit: (async () => {
+          const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal });
+          if (!startable(lease, controller.signal)) {
+            await abandonPlace({ config, lock, attempt: lease.attempt });
+            return undefined;
+          }
+          if (failure) return unstaged(lease, failure);
+          interactiveIgnores = ignored;
+          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode);
+        })() });
       }
-      if (canHitl && hitl && !question && !prompt?.lease.interactive) {
+      if (canHitl && hitl && !question && !interactiveRuns()) {
         const controller = new AbortController();
         question = { hitl, controller, exit: (options.question ?? askHitl)(hitl, controller.signal)
           .then((line) => ({ kind: 'question' as const, line }), () => ({ kind: 'question' as const })) };
       }
       if ('lease' in next.data && room()) continue;
-      if (inFlight.size === 0 && dying.size === 0 && !prompt && !question) {
+      if (busy() === 0 && !question) {
         const wait = isRecord(next.data.wait) ? next.data.wait : {};
         // Another process of this machine delivers a step this run waits for; it settles without this driver.
         if (Array.isArray(wait.delivering) && wait.delivering.length > 0) {
@@ -880,7 +881,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
       const exited = await Promise.race([
         ...[...inFlight.values()].map(({ lease, command }) => command.exit.then((result) => ({ kind: 'command' as const, attempt: lease.attempt, lease, result }))),
         ...[...dying].map(([attempt, { command }]) => command.stop().then(() => ({ kind: 'stopped' as const, attempt }))),
-        ...(prompt ? [prompt.exit.then((body) => ({ kind: 'prompt' as const, body }))] : []),
+        ...[...prompts].map(([attempt, { exit }]) => exit.then((body) => ({ kind: 'prompt' as const, attempt, body }))),
         ...(question ? [question.exit] : []),
         new Promise<undefined>((resolve) => {
           wake = () => resolve(undefined);
@@ -904,8 +905,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
         continue;
       }
       if (exited.kind === 'prompt') {
-        const ended = prompt;
-        prompt = undefined;
+        const ended = prompts.get(exited.attempt);
+        prompts.delete(exited.attempt);
         if (maxParallel === 1) handle([]);
         const failed = exited.body && ended && await report(exited.body, ended.lease);
         if (failed) return failed;
@@ -936,8 +937,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
     // The sweep runs even when stopping what still runs throws, so no attempt's result file keeps a secret.
     try {
       question?.controller.abort();
-      prompt?.controller.abort(signalled);
-      if (prompt) await prompt.exit;
+      for (const { controller } of prompts.values()) controller.abort(signalled);
+      await Promise.all([...prompts.values()].map(({ exit }) => exit));
       for (const attempt of inFlight.keys()) cancel(attempt);
       await Promise.all([...dying.values()].map(async ({ lease, command }) => {
         await command.stop();
