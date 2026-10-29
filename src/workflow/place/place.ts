@@ -9,12 +9,15 @@ import { gitCommonDir } from '../../utils/git.js';
 import { redactJson } from '../../utils/redact.js';
 import { attemptEnv } from '../attempt-marker.js';
 import type { LeaseWire } from '../lease-wire.js';
-import { attemptDir, AttemptIdSchema, attemptsDir, type AttemptId, type RunId, type RunLock } from '../store.js';
-import type { WorkflowFailure } from '../types.js';
+import type { ReportInput } from '../engine.js';
+import type { RunPass } from '../loop.js';
+import { stageEvidence } from '../scoring-evidence.js';
+import { attemptDir, AttemptIdSchema, attemptsDir, readRun, type AttemptId, type RunId, type RunLock } from '../store.js';
+import type { RunState, WorkflowFailure } from '../types.js';
 import type { WorkspaceContract } from '../workspace.js';
 import { clearWorktreeHooks, headCommit, markReadCopy, markSetup, removeWorktree, reopenConfigConflicts, stepCheckout, worktreePath } from '../worktree.js';
 import { adoptRefusal, takeAdopted } from './adopted.js';
-import { cloneDirOf, commitClone, markCloneReady, openClone, removeClone } from './clone.js';
+import { cloneDirOf, cloneEnv, commitClone, markCloneReady, openClone, removeClone } from './clone.js';
 import { openWorktree } from './created.js';
 import { applyOverlay, restoreOverlay, unrestoredConfig } from './overlay.js';
 import { finishReader, leaveReadCopy, readCopyFailure, stageReader } from './reader.js';
@@ -448,6 +451,38 @@ export async function finishPlace(input: { config: LocalConfig; lock: RunLock; a
   // Once the step's work is committed, the host's own hooks run again in a place it made.
   if (recorded.adopted) await clearWorktreeHooks(recorded.dir);
   return finished;
+}
+
+/**
+ * Stages, from the clone attempt `attempt` ran in, the evidence the judges of its pass read, before `report`, the
+ * report finishing the place made of it, settles the pass: the clone may be gone once it does. Answers the directory
+ * staged, which the caller removes when the pass does not settle `success`.
+ */
+export async function stagePassEvidence(input: { config: LocalConfig; lock: RunLock; attempt: AttemptId; report: ReportInput }): Promise<string | undefined> {
+  const { config, lock, attempt, report } = input;
+  if (report.outcome !== 'success') return undefined;
+  const ran = await cloneRan(config, lock.run, attempt);
+  const leased = ran && ran.run.steps.find((step) => step.status === 'leased' && step.attempt === attempt);
+  if (!ran || !leased) return undefined;
+  const pass = leased.pass ?? 1;
+  const settling: RunPass = {
+    step: leased.id, pass, attempt, outcome: 'success', tool: report.tool, session: report.session,
+    ...(report.changes ? { changes: report.changes } : {}), ...(report.outputs !== undefined ? { outputs: report.outputs } : {}),
+  };
+  return stageEvidence(config, ran.run, { runId: lock.run, step: leased.id, pass }, { ...ran.source, settling });
+}
+
+/** The clone attempt `attempt` ran in, when its place is one, the run read now, and how git reads the clone. */
+async function cloneRan(config: LocalConfig, runId: RunId, attempt: AttemptId): Promise<{ run: RunState; source: { checkout: string; untrustedEnv: NodeJS.ProcessEnv; expiresAt?: string } } | undefined> {
+  const read = await readPlaceRecord(config, runId, attempt);
+  const place = read.kind === 'found' && read.record.phase !== 'opening' ? read.record.place : undefined;
+  if (read.kind !== 'found' || place?.role !== 'clone') return undefined;
+  const [run, scoped] = await Promise.all([readRun(config, runId), cloneEnv(place.withhold)]);
+  if (typeof run !== 'object' || !scoped.ok) return undefined;
+  return {
+    run,
+    source: { checkout: read.record.dir, untrustedEnv: scoped.env, ...(place.expiresAt !== undefined ? { expiresAt: place.expiresAt } : {}) },
+  };
 }
 
 /** Why a place in `phase` has nothing to finish. */

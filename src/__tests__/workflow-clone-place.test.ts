@@ -8,12 +8,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { knownSecrets } from '../env-resolution.js';
+import { z } from 'zod';
+import { knownSecrets, resolveWorkflowEnv } from '../env-resolution.js';
 import type { LocalConfig } from '../types.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { startRun } from '../workflow/engine.js';
+import { inProcessClient } from '../workflow/protocol.js';
+import { nextJudgeLease } from '../workflow/scoring.js';
 import { readRun } from '../workflow/store.js';
+import type { DriverCan } from '../workflow/requirements.js';
+import type { DriverIdentity } from '../workflow/types.js';
 import { branchName } from '../workflow/workspace.js';
 
 _setDriverPollMs(20);
@@ -29,7 +34,7 @@ function git(args: string[], cwd: string): string {
 }
 
 /** A checkout with two commits, a team repo holding `yaml(first commit)`, and a started run of it. */
-async function fixture(yaml: (commit: string) => string): Promise<{ config: LocalConfig; workspace: string; runId: string; first: string }> {
+async function fixture(yaml: (commit: string) => string, scorers: Record<string, string> = {}): Promise<{ config: LocalConfig; workspace: string; runId: string; first: string }> {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-clone-place-')));
   dirs.push(root);
   const knowledge = path.join(root, 'knowledge');
@@ -56,6 +61,8 @@ async function fixture(yaml: (commit: string) => string): Promise<{ config: Loca
     workflows: { tools: {}, max_parallel: 1 },
   };
   fs.writeFileSync(path.join(knowledge, 'workflows', 'build.yaml'), yaml(first));
+  fs.mkdirSync(path.join(knowledge, 'scorers'));
+  for (const [name, text] of Object.entries(scorers)) fs.writeFileSync(path.join(knowledge, 'scorers', `${name}.md`), text);
   await syncWorkflowDefinitions(config);
   const started = await startRun(config, 'build', {}, { secrets: await knownSecrets(config), checkout: workspace, base: { ref: 'main', commit: git(['rev-parse', 'HEAD'], workspace) } });
   if ('error' in started) throw new Error(started.error.message);
@@ -109,4 +116,67 @@ describe('a clone place', () => {
     expect(git(['status', '--porcelain'], workspace)).toBe('');
     expect(git(['branch', '--list', 'teamai/*'], workspace)).toBe('');
   });
+
+  it('gives the judges of a prompt in a clone the work it committed there, after the clone is gone', async () => {
+    const { runId, first, evidence, patch } = await judgedAfterClone(SCORED('work'));
+
+    expect(evidence).toMatchObject({ subject: { runId, step: 'trial.work', pass: 1 }, kind: 'prompt', ranges: [{ step: 'trial.work', pass: 1, from: first }] });
+    expect(patch).toContain('+made in the clone');
+  });
+
+  it('gives the judges of the workflow step that opened a clone the work its steps committed there, after the clone is gone', async () => {
+    const { runId, first, evidence, patch } = await judgedAfterClone(SCORED('trial'));
+
+    expect(evidence).toMatchObject({ subject: { runId, step: 'trial', pass: 1 }, kind: 'workflow', ranges: [{ step: 'trial', pass: 1, from: first }, { step: 'trial.work', pass: 1, from: first }] });
+    expect(patch).toContain('+made in the clone');
+  });
 });
+
+/**
+ * Runs `yaml` through next --prepare and report, as an external driver would, with its one prompt writing a file in the
+ * clone; then the evidence the first judge lease gives, once the run ended and its clone is gone.
+ */
+async function judgedAfterClone(yaml: (commit: string) => string): Promise<{ runId: string; first: string; evidence: unknown; patch: string }> {
+  const { config, runId, first } = await fixture(yaml, { quality: SCORER });
+  const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
+  const leased = z.object({ data: z.object({ lease: z.object({ attempt: z.string(), revision: z.number(), cwd: z.string() }) }) })
+    .parse(await client.next(runId, { driver: { ...driver, can }, running: [] }, { prepare: true })).data.lease;
+  fs.writeFileSync(path.join(leased.cwd, 'made.txt'), 'made in the clone\n');
+  expect(await client.report(runId, { attempt: leased.attempt, revision: leased.revision, outcome: 'success', driver })).toMatchObject({ data: { step: { outcome: 'success' } } });
+  expect(await client.next(runId, { driver: { ...driver, can }, running: [] }, { prepare: true })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+  expect(fs.existsSync(leased.cwd)).toBe(false);
+  const judged = z.object({ data: z.object({ lease: z.object({ evidence: z.string() }) }) })
+    .parse(await nextJudgeLease(config, { driver: { kind: 't3', machine: 'm1', workspace: '/w' }, judge: { isolation: 'verified', tools: ['claude'] }, running: [] })).data.lease;
+  return {
+    runId, first,
+    evidence: JSON.parse(fs.readFileSync(path.join(judged.evidence, 'evidence.json'), 'utf8')) as unknown,
+    patch: fs.readFileSync(path.join(judged.evidence, 'diff.patch'), 'utf8'),
+  };
+}
+
+const driver: DriverIdentity = { kind: 'external', machine: 'ci', workspace: '/work' };
+const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', tools: [] };
+
+const SCORER = `---
+labels:
+  - { value: good, score: 1, description: Did the work }
+  - { value: missed, score: 0, description: Did not }
+passingScore: 0.5
+samplingRate: 100
+---
+Judge the work.
+`;
+
+/** A clone holding one prompt, with the step `scored`, the prompt or the workflow step that opens the clone, judged. */
+const SCORED = (scored: 'work' | 'trial') => (commit: string): string => `schemaVersion: v1alpha1
+name: build
+description: Judge work done in a clean clone of the first commit.
+steps:
+  - id: trial
+    workspace: { clone: { commit: ${commit}, team: { treatment: none } } }
+${scored === 'trial' ? '    scorers: [quality]\n' : ''}    workflow:
+      steps:
+        - id: work
+          workspace: continue
+          prompt: Make a file.
+${scored === 'work' ? '          scorers: [quality]\n' : ''}`;

@@ -6,6 +6,7 @@ import { AgentSession } from '../session-flow/agent-session.js';
 import { judgedTranscript } from '../session-flow/session-work.js';
 import { knownSecrets } from '../env-resolution.js';
 import type { LocalConfig } from '../types.js';
+import { log } from '../utils/logger.js';
 import { redact } from '../utils/redact.js';
 import { scoresDir } from '../scorers/attempts.js';
 import {
@@ -16,7 +17,7 @@ import { firstSettled, isUnder, passRange, passesWithin, runPasses, type RunPass
 import { stepDefinitions } from './scope.js';
 import { agentPassOf, type StepPass } from './step-state.js';
 import type { RunState } from './types.js';
-import { branchName } from './workspace.js';
+import { branchName, cloneBranchOf } from './workspace.js';
 import { stepCheckout, UNTRUSTED_CONFIG } from './worktree.js';
 
 const exec = promisify(execFile);
@@ -195,6 +196,29 @@ export async function collectEvidence(
   return content ? { ok: true } : { ok: false, code: 'evidence_empty' };
 }
 
+/**
+ * Stages the evidence the judges of `subject` read, collected from `source.checkout`, a clone that is gone once the step
+ * settles, with git getting only `source.untrustedEnv` there. A judge never reads the clone itself. A report about to
+ * settle the subject gives its pass as `settling`, and evidence of that pass an earlier report filled, maybe from
+ * another commit, is collected again. Answers the directory, or undefined when the subject's step lists no scorer the
+ * run pinned. A clone that gave no evidence leaves the directory empty, so its entries close `evidence_empty`.
+ */
+export async function stageEvidence(config: LocalConfig, run: RunState, subject: RunSubject, source: {
+  checkout: string; untrustedEnv: NodeJS.ProcessEnv; settling?: RunPass; expiresAt?: string | undefined;
+}): Promise<string | undefined> {
+  const pinned = run.scorers ?? {};
+  if (!(stepDefinitions(run)(subject.step)?.scorers?.names ?? []).some((name) => Object.hasOwn(pinned, name))) return undefined;
+  const dir = subjectEvidenceDirOf(scoresDir(config), subject);
+  if (source.settling) await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
+  const collected = await collectEvidence(config, run, subject, dir, { ...source, sessionCwd: source.checkout })
+    .catch((e: unknown) => {
+      log.warn(`The judge evidence of step "${subject.step}" could not be collected, so its judges find none: ${e instanceof Error ? e.message : String(e)}`);
+      return { ok: false } as const;
+    });
+  if (!collected.ok) await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
+  return dir;
+}
+
 /** Writes prompt.md in `dir`, which collectEvidence filled: what `rubrics` ask, then the fenced evidence. */
 async function assembleJudgePrompt(config: LocalConfig, dir: string, rubrics: Rubrics): Promise<void> {
   const mask = await secretMask(config);
@@ -203,12 +227,12 @@ async function assembleJudgePrompt(config: LocalConfig, dir: string, rubrics: Ru
 }
 
 /**
- * The evidence of `subject` in `dir`, and the prompt that judges it with `rubrics`. A benchmark trial's is the copy of
- * what was collected from its clone when its prompt was reported, and none was is `evidence_empty`: the run's checkout
- * never held its work.
+ * The evidence of `subject` in `dir`, and the prompt that judges it with `rubrics`. A step in a clone, as a benchmark
+ * trial's is, has the copy of what was staged from the clone when it settled, and none was is `evidence_empty`: the
+ * run's checkout never held its work.
  */
 export async function buildEvidence(config: LocalConfig, run: RunState, subject: RunSubject, rubrics: Rubrics, dir: string): Promise<{ ok: true } | { ok: false; code: 'evidence_empty' }> {
-  if (stepDefinitions(run)(subject.step)?.trial) {
+  if (stepDefinitions(run)(subject.step)?.trial || cloneBranchOf(run, subject.step) !== undefined) {
     const collected = subjectEvidenceDirOf(scoresDir(config), subject);
     if (!await isEvidenceReady(collected)) return { ok: false, code: 'evidence_empty' };
     if (!await isEvidenceReady(dir)) await writeEvidence(dir, (tmp) => fs.cp(collected, tmp, { recursive: true }));

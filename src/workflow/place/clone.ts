@@ -35,6 +35,8 @@ import { log } from '../../utils/logger.js';
 import { projectSlug } from '../../utils/partition.js';
 import { excludedSkillsOf, type ClonePlace, type InstalledTeam } from '../clone.js';
 import { runPasses } from '../loop.js';
+import { stepDefinitions } from '../scope.js';
+import { stageEvidence } from '../scoring-evidence.js';
 import { settled } from '../step-state.js';
 import { readRun, runsDir, type RunId } from '../store.js';
 import type { RunState, WorkflowFailure } from '../types.js';
@@ -55,6 +57,8 @@ const CloneReceiptSchema = z.object({
   v: z.literal(1),
   branch: z.string().min(1),
   root: z.string().min(1),
+  /** What git and the install in the clone run without. */
+  withhold: z.array(z.string()),
   state: z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('preparing') }).strict(),
     z.object({ kind: z.literal('installed'), ...Made }).strict(),
@@ -125,7 +129,7 @@ export async function openClone(input: { config: LocalConfig; run: RunId; checko
   }
   const root = rootOf(lease.branch);
   await removeRoot(root, file);
-  await writeJsonAtomic(file, { v: 1, branch: lease.branch, root, state: { kind: 'preparing' } } satisfies CloneReceipt);
+  await writeJsonAtomic(file, { v: 1, branch: lease.branch, root, withhold: [...lease.withhold], state: { kind: 'preparing' } } satisfies CloneReceipt);
   const cloned = await freshClone(root, lease.clone.commit, [input.checkout, ...(lease.clone.repo !== undefined ? [commitCacheOf(config, lease.clone.repo)] : [])], lease.expiresAt);
   if (cloned) return cloned;
   const { team } = lease.clone;
@@ -139,7 +143,7 @@ export async function openClone(input: { config: LocalConfig; run: RunId; checko
     ? await observeCheckout({ config: installed.config, tool, cwd: dir, head })
     : head ? { project: { commit: head.head, dirty: head.dirty } } : {};
   const made = { prepared, ...(installed ? { install: { config: LocalConfigSchema.parse(installed.config), dataHome: installed.dataHome } } : {}) };
-  await writeJsonAtomic(file, { v: 1, branch: lease.branch, root, state: { kind: 'installed', ...made } } satisfies CloneReceipt);
+  await writeJsonAtomic(file, { v: 1, branch: lease.branch, root, withhold: [...lease.withhold], state: { kind: 'installed', ...made } } satisfies CloneReceipt);
   return { dir, created: true };
 }
 
@@ -188,9 +192,14 @@ export async function commitClone(input: { dir: string; branch: string; step: st
 }
 
 /** `untrustedGit` without `withhold`: a step ran in the clone, so its config may start anything. */
-export async function cloneGit(withhold: readonly string[], expiresAt: string | undefined): Promise<Git | WorkflowFailure> {
-  const scoped = await stepEnvironment({ values: new Map(), facts: { declared: new Set(), secrets: new Set(), present: new Set() } }, { provide: [], withhold });
+async function cloneGit(withhold: readonly string[], expiresAt: string | undefined): Promise<Git | WorkflowFailure> {
+  const scoped = await cloneEnv(withhold);
   return scoped.ok ? untrustedGit(scoped.env, expiresAt) : scoped.failure;
+}
+
+/** The environment git gets in a clone: this process's, without `withhold`. */
+export function cloneEnv(withhold: readonly string[]): ReturnType<typeof stepEnvironment> {
+  return stepEnvironment({ values: new Map(), facts: { declared: new Set(), secrets: new Set(), present: new Set() } }, { provide: [], withhold });
 }
 
 /**
@@ -215,9 +224,24 @@ export async function sweepClones(config: LocalConfig, runId?: string): Promise<
       const run = await readRun(config, id);
       const inClone = (step: string): boolean => typeof run === 'object' && cloneBranchOf(run, step) === receipt.branch;
       if (typeof run === 'object' && run.status === 'running' && run.steps.some((step) => !settled(step) && inClone(step.id))) continue;
+      if (typeof run === 'object') await stageScopeEvidence(config, run, receipt, inClone);
       await removeRoot(receipt.root, file);
       if (typeof run === 'object') await removeUnjudgedEvidence(config, run, inClone);
     }
+  }
+}
+
+/**
+ * Stages the evidence the judges of each workflow step in the clone read that settled `success`, before the clone goes:
+ * such a step settles once its last step does, when no report holds the clone. Evidence already staged is kept.
+ */
+async function stageScopeEvidence(config: LocalConfig, run: RunState, receipt: CloneReceipt, inClone: (step: string) => boolean): Promise<void> {
+  const scopes = run.steps.filter((state) => state.status === 'succeeded' && inClone(state.id) && stepDefinitions(run)(state.id)?.workflow !== undefined);
+  if (scopes.length === 0) return;
+  const scoped = await cloneEnv(receipt.withhold);
+  if (!scoped.ok) return;
+  for (const scope of scopes) {
+    await stageEvidence(config, run, { runId: run.id, step: scope.id, pass: scope.pass ?? 1 }, { checkout: path.join(receipt.root, 'r'), untrustedEnv: scoped.env });
   }
 }
 
@@ -328,7 +352,7 @@ async function installTeam(input: {
   await createProjectToolRoots({ config, tools });
   const entry = resolveCliEntry();
   if (!entry) return failed('The teamai CLI that runs this workflow could not be found, so the clone\'s own teamai pull could not run.');
-  const scoped = await stepEnvironment({ values: new Map(), facts: { declared: new Set(), secrets: new Set(), present: new Set() } }, { provide: [], withhold: lease.withhold });
+  const scoped = await cloneEnv(lease.withhold);
   if (!scoped.ok) return scoped.failure;
   const env: NodeJS.ProcessEnv = { ...scoped.env, HOME: home, USERPROFILE: home };
   for (const name of TOOL_HOME_VARIABLES) delete env[name];

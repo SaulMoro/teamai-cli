@@ -1,5 +1,7 @@
 /** The workflow protocol in process: the calls behind `workflow start`, `next`, `report`, `respond`, `retry` and `cancel`, for every driver. */
+import fs from 'node:fs/promises';
 import path from 'node:path';
+import { z } from 'zod';
 import { DefaultWorkflows } from '../default-workflows.js';
 import { driverIdentity, sameDriver } from '../driver-identity.js';
 import type { WorkflowEnv } from '../env-resolution.js';
@@ -16,7 +18,8 @@ import { LeaseIdSchema, LeaseWireSchema } from './lease-wire.js';
 import { carriedRun, claimOffered, reconcileTakenCopies, resumeRun, settledSteps } from './handoff.js';
 import { leaseNext, parseNextPayload, parseReport, parseResponsePayload, reportable, reportAttempt, startRun, withIgnored, type NextOptions, type ReportInput } from './engine.js';
 import {
-  abandonPlace, adoptedPlaceOf, finishPlace, placeHeldBy, placeLeaseOf, placeOf, placeRecorded, preparePlace, releasePlace, runPlaceSetup, sweepClones, type PlaceLease, type PlacePrepared,
+  abandonPlace, adoptedPlaceOf, finishPlace, placeHeldBy, placeLeaseOf, placeOf, placeRecorded, preparePlace, releasePlace, runPlaceSetup, stagePassEvidence, sweepClones, type PlaceLease,
+  type PlacePrepared,
   type StepEnd,
 } from './place/place.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep, type CallerProvenance, type Via } from './run-controls.js';
@@ -464,7 +467,7 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
       }
       return withIgnored(await withRunLock(config, run.data, async (lock) => {
         const answer = prepare === true
-          ? await prepareLeased({ config, lock, driver, env, answer: await lease() })
+          ? await prepareLeased({ config, lock, driver, env, answer: await leaseNext(config, runId, driver, { ...next, env, prepare: true }) })
           : await prepareAttempt({ config, lock, driver, env, next, ...prepare });
         // A clone whose steps all settled is not needed any more.
         await sweepClones(config, lock.run);
@@ -560,7 +563,7 @@ async function prepareAttempt(input: {
   const run = await readRun(config, lock.run);
   if (typeof run !== 'object') return { error: { code: 'run_unreadable', message: `Run ${lock.run} cannot be read, so attempt ${attempt} was not prepared` } };
   const running = run.steps.flatMap((step) => (step.status === 'leased' && step.lease.attempt !== attempt ? [step.lease.attempt] : []));
-  const answer = await leaseNext(config, lock.run, driver, { ...next, env, running, canTakeLease: false });
+  const answer = await leaseNext(config, lock.run, driver, { ...next, env, running, canTakeLease: false, prepare: true });
   if (!('data' in answer) || answer.data.done !== undefined) return answer;
   const leased = LeaseIdSchema.safeParse(answer.data.lease);
   if (!leased.success || leased.data.attempt !== attempt) {
@@ -625,6 +628,9 @@ export async function managedReport(input: { config: LocalConfig; runId: string;
   return lock ? settle(lock) : withRunLock(config, run.data, settle, { waitMs: 0 });
 }
 
+/** What an accepted report answers of the step it settled. */
+const AcceptedSchema = z.object({ step: z.object({ outcome: z.string() }) });
+
 async function settleManaged(input: { config: LocalConfig; lock: RunLock; attempt: AttemptId; report: ReportInput; secrets: Record<string, string> }): Promise<WorkflowEnvelope> {
   const { config, lock, attempt, report, secrets } = input;
   // Checked first, so finishing the place does not commit for an attempt the run would refuse.
@@ -641,7 +647,11 @@ async function settleManaged(input: { config: LocalConfig; lock: RunLock; attemp
   const end: StepEnd = { outcome: report.outcome, ...(report.message !== undefined ? { message: report.message } : {}), ...(report.failure ? { failure: report.failure } : {}) };
   const finished = await finishPlace({ config, lock, attempt, end, secrets });
   const body = { ...report, ...finished };
+  const staged = await stagePassEvidence({ config, lock, attempt, report: body });
   const answer = await reportAttempt(config, lock.run, body, secrets);
+  const outcome = AcceptedSchema.safeParse('data' in answer ? answer.data : undefined).data?.step.outcome;
+  // No judge reads the evidence of a pass that did not succeed, and nothing else removes it.
+  if (staged !== undefined && outcome !== 'success') await fs.rm(staged, { recursive: true, force: true, maxRetries: 3 });
   if ('data' in answer && answer.data.cleanup === true) await releasePlace({ config, lock, attempt });
   return answer;
 }
