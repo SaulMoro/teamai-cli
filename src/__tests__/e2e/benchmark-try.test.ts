@@ -164,13 +164,12 @@ describe('workflow start --benchmark --try', () => {
     expect(result.stderr).not.toContain('trying the check');
   }, 60_000);
 
-  // check.add writes its files from the fix at both commits, whether or not startingCommit has them. add-missing's setup
-  // fails, so its answer shows the path was refused before setup ran.
+  // check.add writes its files from the fix at both commits, whether or not startingCommit has them.
   it.each<[string, (commits: Commits) => [string, string], string, string, number, (commits: Commits) => string]>([
     ['pod-startup', (c) => [c.podStart, c.podFix], '\n  add: [test/startup.test.js]', '', 0, (c) => `the check fails at ${short(c.podStart)} and passes at the fix ${short(c.podFix)}`],
     ['changed-test', (c) => [c.changedStart, c.changedFix], '\n  add: [test/startup.test.js]', '', 0, (c) => `the check fails at ${short(c.changedStart)} and passes at the fix ${short(c.changedFix)}`],
     ['not-added', (c) => [c.podStart, c.podFix], '', '', 1, (c) => `the check fails at the fix ${short(c.podFix)}`],
-    ['add-missing', (c) => [c.podStart, c.podFix], '\n  add: [test/missing.test.js]', 'setup:\n  command: exit 3\n', 1, (c) => `test/missing.test.js is not a file at the fix ${short(c.podFix)}`],
+    ['add-missing', (c) => [c.podStart, c.podFix], '\n  add: [test/missing.test.js]', '', 1, (c) => `test/missing.test.js is not a file at the fix ${short(c.podFix)}`],
   ])('check.add: %s', async (name, commitsOf, add, suite, exit, expected) => {
     const { commits, tryTask } = fixture(suite);
     const [start, fix] = commitsOf(commits);
@@ -188,6 +187,18 @@ describe('workflow start --benchmark --try', () => {
     const add = '\n  add:\n    - from: check-files/startup.test.js\n      to: test/startup.test.js';
 
     const result = await tryTask('hidden', task({ start: commits.podStart, fix: commits.fix, judge: `check:\n  run: node test/startup.test.js\n  protect: [test]${add}` }));
+
+    expect(result.code, said(result)).toBe(0);
+    expect(message(result)).toContain(`the check fails at ${short(commits.podStart)} and passes at the fix ${short(commits.fix)}`);
+  }, 60_000);
+
+  it('runs setup before it writes the added files at both commits, as a run does', async () => {
+    const { commits, suiteDir, tryTask } = fixture(`setup:\n  command: node -e "if (require('fs').existsSync('test/startup.test.js')) process.exit(3)"\n`);
+    fs.mkdirSync(path.join(suiteDir, 'check-files'));
+    fs.writeFileSync(path.join(suiteDir, 'check-files', 'startup.test.js'), STARTUP_TEST);
+    const add = '\n  add:\n    - from: check-files/startup.test.js\n      to: test/startup.test.js';
+
+    const result = await tryTask('setup-first', task({ start: commits.podStart, fix: commits.fix, judge: `check:\n  run: node test/startup.test.js\n  protect: [test]${add}` }));
 
     expect(result.code, said(result)).toBe(0);
     expect(message(result)).toContain(`the check fails at ${short(commits.podStart)} and passes at the fix ${short(commits.fix)}`);

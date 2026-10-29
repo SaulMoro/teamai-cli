@@ -443,10 +443,9 @@ function checkedBy(plan: BenchmarkPlan, mode: CheckStepMode, step: string): { ta
 
 /**
  * One check of a task at `commit`, as its steps run it but with no run: a fresh clone of `commit` from the first of
- * `sources` that has it, setup, then the check. Without `protect`, a baseline's: the files `add` names are written
- * before setup. With `protect`, a trial check's: after setup, `restoreProtected` puts those paths back as
- * `startingCommit` has them, then the files `add` names are written. Setup, the tool's strip list and `expiresAt`
- * apply as they do to a trial. The clone is removed.
+ * `sources` that has it, then setup. With `protect`, a trial check's, `restoreProtected` then puts those paths back as
+ * `startingCommit` has them; without it, a baseline's, nothing is put back. Then the files `add` names are written, and
+ * the check runs. Setup, the tool's strip list and `expiresAt` apply as they do to a trial. The clone is removed.
  */
 export async function tryCheckAt(input: {
   commit: string; startingCommit: string; command: string; protect?: readonly string[]; add?: readonly Added[]; setup?: Setup;
@@ -460,12 +459,11 @@ export async function tryCheckAt(input: {
   const root = scratchCloneRoot();
   const clone = path.join(root, 'r');
   try {
-    const written = async (env: NodeJS.ProcessEnv): Promise<WorkflowFailure | undefined> => (add ? await writeAdded({ clone, add, sources, env, expiresAt }) : undefined);
     return await checkIn(runner, { command: input.command, envScope: { provide: [], withhold }, expiresAt }, async (env) => {
       const failure = await freshClone(root, commit, sources, expiresAt)
-        ?? (protect ? undefined : await written(env))
         ?? (leaseSetup ? await setupIn(runner, clone, leaseSetup, expiresAt) : undefined)
-        ?? (protect ? await restoreProtected({ clone, startingCommit, protect, sources, env, expiresAt }) ?? await written(env) : undefined);
+        ?? (protect ? await restoreProtected({ clone, startingCommit, protect, sources, env, expiresAt }) : undefined)
+        ?? (add ? await writeAdded({ clone, add, sources, env, expiresAt }) : undefined);
       return failure ? { failure } : { dir: clone };
     });
   } finally {
