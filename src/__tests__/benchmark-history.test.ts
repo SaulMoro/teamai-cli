@@ -253,6 +253,24 @@ describe('BenchmarkHistory comparisons', () => {
     expect(arms.map(({ arm, team }) => ({ arm, team }))).toEqual(matrix.map(({ name, team }) => ({ arm: name, team: { kind: team?.kind } })));
   });
 
+  it('counts a comparison\'s usage over its paired trials, leaving out a run only one of the arms ran', () => {
+    const claude: Arm = { name: 'claude', tool: 'claude' }, codex: Arm = { name: 'codex', tool: 'codex' };
+    const runs = [
+      run({ id: 'r1', startedAt: '2026-10-10T09:00:00Z', arms: [claude], trials: { login: { claude: ['passed'] } }, usage: { claude: { tokens: 900, durationMs: 9000, cost: 9 } } }),
+      run({ id: 'r2', startedAt: '2026-10-20T09:00:00Z', arms: [claude, codex], trials: { login: { claude: ['passed'], codex: ['failed'] } }, usage: { claude: { tokens: 100, durationMs: 1000, cost: 1 }, codex: { tokens: 200, durationMs: 2000, cost: 2 } } }),
+    ];
+
+    const [comparison] = BenchmarkHistory.of({ runs, query: { windowDays: 90 }, now: NOW }).selected?.comparisons ?? [];
+
+    expect(comparison).toMatchObject({
+      dimension: 'tool', pairs: 1,
+      usage: {
+        from: { tokens: { value: 100 }, durationMs: { value: 1000 }, cost: { kind: 'known', amount: 1, unit: 'USD', used: 1 } },
+        to: { tokens: { value: 200 }, durationMs: { value: 2000 }, cost: { kind: 'known', amount: 2, unit: 'USD', used: 1 } },
+      },
+    });
+  });
+
   it('compares two tools on one model alias, which resolved to each tool\'s own model', () => {
     const arms: Arm[] = [
       { name: 'claude', tool: 'claude', model: 'claude-opus-5-5', alias: 'strong' },

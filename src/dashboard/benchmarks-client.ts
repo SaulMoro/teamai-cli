@@ -82,14 +82,15 @@ function historyChart(sel){
  return '<section class="panel bench-panel"><div class="panelhead"><h2>'+label('Pass rate per run')+'</h2><span class="label">'+label('Each point is one run of one arm. A dashed line marks a change to the suite\\'s files: runs on either side measured different tasks.')+'</span></div><div class="chart-scroll">'+svg+'</div>'+legend+'</section>';
 }
 const usedBy=n=>number(n)+' '+t('trials reported it');
-function usageX(a,axis){
- const u=a.pooled&&a.pooled.usage; if(!u)return null;
+function usageX(a,axis){ return a.pooled?usageAt(a.pooled.usage,axis):null; }
+function usageAt(u,axis){
  if(axis==='duration')return u.durationMs.value==null?null:u.durationMs.value/1000;
  if(axis==='cost')return u.cost.kind==='known'&&u.cost.used?u.cost.amount/u.cost.used:null;
  return u.tokens.value==null?null:u.tokens.value;
 }
 function usageUsed(a,axis){ const u=a.pooled.usage; return axis==='duration'?u.durationMs.used:axis==='cost'?u.cost.used:u.tokens.used; }
-function costUnit(arms){ const units=[...new Set(arms.map(a=>a.pooled&&a.pooled.usage.cost.kind==='known'?a.pooled.usage.cost.unit:null))]; return units.length===1&&units[0]?units[0]:null; }
+function costUnit(arms){ return usageUnit(arms.map(a=>a.pooled&&a.pooled.usage)); }
+function usageUnit(usages){ const units=[...new Set(usages.map(u=>u&&u.cost.kind==='known'?u.cost.unit:null))]; return units.length===1&&units[0]?units[0]:null; }
 function axisToggle(axis,unit){
  const axes=[['tokens',t('Tokens')],['duration',t('Duration')],['cost',t('Cost')]];
  return '<div class="chips" role="group" aria-label="'+e(t('Compare with'))+'">'+axes.map(([key,name])=>'<button class="chip'+(axis===key?' active':'')+'" data-bench-axis="'+key+'" aria-pressed="'+(axis===key)+'"'+(key==='cost'&&!unit?' disabled title="'+e(t('Every arm needs a cost its tool stated, in one unit.'))+'"':'')+'>'+e(name)+'</button>').join('')+'</div>';
@@ -189,12 +190,11 @@ function comparePanel(sel){
  return '<div class="bench-compare-head"><span class="label">'+label('Compare by')+'</span>'+chips+'</div>'+compareKpis(sel,chosen)+'<div class="bench-grid">'+forestPanel(sel,list,chosen)+arrowPanel(sel,list,chosen)+'</div>'+taskDeltaPanel(sel,chosen);
 }
 function compareKpis(sel,c){
- const from=seriesBy(sel,c.from), to=seriesBy(sel,c.to), d=c.difference;
+ const d=c.difference, sides=['from','to'];
  const up=c.tasks.filter(x=>passOf(x.to)>passOf(x.from)).length, down=c.tasks.filter(x=>passOf(x.to)<passOf(x.from)).length;
- const pooled=[from,to].filter(a=>a&&a.pooled), unit=pooled.length===2?costUnit(pooled):null;
- const perPassed=a=>{const cost=usageX(a,'cost'), rate=passOf(a.pooled); return cost!=null&&rate>0?cost/rate:null;};
- const costs=unit?[perPassed(from),perPassed(to)]:[null,null], hasCost=costs.every(v=>v!=null)&&costs[0]>0;
- const tokens=pooled.length===2?[usageX(from,'tokens'),usageX(to,'tokens')]:[null,null], hasTokens=tokens.every(v=>v!=null&&v>0);
+ const unit=usageUnit(sides.map(side=>c.usage[side]));
+ const costs=unit?sides.map(side=>c.rates[side].passed>0?c.usage[side].cost.amount/c.rates[side].passed:null):[null,null], hasCost=costs.every(v=>v!=null)&&costs[0]>0;
+ const tokens=sides.map(side=>usageAt(c.usage[side],'tokens')), hasTokens=tokens.every(v=>v!=null&&v>0);
  const change=(a,b)=>(b>=a?'+':'−')+number(Math.abs(Math.round((b/a-1)*100)))+'%';
  const third=hasCost?kpiCard(label('Cost per passed trial'),'<span class="'+(costs[1]<=costs[0]?'up':'down')+'">'+change(costs[0],costs[1])+'</span>',e(costNumber(costs[0])+' → '+costNumber(costs[1])+' '+unit))
   :kpiCard(label('Median tokens per trial'),hasTokens?change(tokens[0],tokens[1]):'—',hasTokens?number(Math.round(tokens[0]))+' → '+number(Math.round(tokens[1])):label('Not every arm reported it'));
@@ -213,10 +213,9 @@ function forestPanel(sel,list,chosen){
   +'</div></section>';
 }
 function arrowPanel(sel,list,chosen){
- const ends=list.map(c=>({c,from:seriesBy(sel,c.from),to:seriesBy(sel,c.to)})).filter(q=>q.from&&q.to&&q.from.pooled&&q.to.pooled);
- const unit=costUnit(ends.flatMap(q=>[q.from,q.to])), axis=benchAxis==='cost'&&!unit?'tokens':benchAxis;
+ const unit=usageUnit(list.flatMap(c=>[c.usage.from,c.usage.to])), axis=benchAxis==='cost'&&!unit?'tokens':benchAxis;
  const head='<div class="panelhead"><h2>'+label('Pass rate against cost, from one arm to the other')+'</h2>'+axisToggle(axis,unit)+'</div>';
- const placed=ends.map(q=>({...q,fx:usageX(q.from,axis),tx:usageX(q.to,axis),fy:passOf(q.from.pooled),ty:passOf(q.to.pooled)})).filter(q=>q.fx!=null&&q.tx!=null);
+ const placed=list.map(c=>({c,fx:usageAt(c.usage.from,axis),tx:usageAt(c.usage.to,axis),fy:passOf(c.rates.from),ty:passOf(c.rates.to)})).filter(q=>q.fx!=null&&q.tx!=null);
  if(!placed.length)return '<section class="panel bench-panel">'+head+'<div class="empty"><p>'+label('No arm reported this value.')+'</p></div></section>';
  const W=chartWidth(),H=300,pl=44,pr=20,pt=20,pb=46,pw=W-pl-pr,ph=H-pt-pb, max=Math.max(...placed.flatMap(q=>[q.fx,q.tx]))*1.15||1;
  const x=v=>pl+v/max*pw, y=r=>pt+(1-r)*ph;

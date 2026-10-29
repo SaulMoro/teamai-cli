@@ -114,6 +114,8 @@ export interface ArmComparison {
   pairs: number;
   /** Each arm's pass rate over the pairs. */
   rates: { from: PassRate; to: PassRate };
+  /** Each arm's usage over the pairs, as the run table counts it. */
+  usage: { from: Omit<ArmUsage, 'arm'>; to: Omit<ArmUsage, 'arm'> };
   /** To's pass rate minus from's, with its 95% interval for paired proportions (Newcombe), as fractions. */
   difference: { value: number; low: number; high: number };
   /** Each task's pass rate on both arms over its pairs, in the newest run's task order. */
@@ -400,13 +402,18 @@ function comparisonsOf({ current, newest }: SuiteRuns): ArmComparison[] {
       const [from, to] = ordered(left, right, dimension);
       const [fromKey, toKey] = [armKey(from), armKey(to)];
       const pairs: Array<{ task: string; from: boolean; to: boolean }> = [];
-      for (const { benchmark } of current) {
-        const named = (key: string): string | undefined => benchmark.arms.find((arm) => armKey(arm) === key)?.name;
+      const observed: { from: ObservedTrial[]; to: ObservedTrial[] } = { from: [], to: [] };
+      for (const record of current) {
+        const named = (key: string): string | undefined => record.benchmark.arms.find((arm) => armKey(arm) === key)?.name;
         const [fromName, toName] = [named(fromKey), named(toKey)];
         if (fromName === undefined || toName === undefined) continue;
-        for (const trial of benchmark.trials.filter(({ arm }) => arm === fromName)) {
-          const other = benchmark.trials.find(({ arm, task, repetition }) => arm === toName && task === trial.task && repetition === trial.repetition);
-          if (other) pairs.push({ task: trial.task, from: trial.result === 'passed', to: other.result === 'passed' });
+        const trials = observedTrials(record);
+        for (const one of trials.filter(({ trial }) => trial.arm === fromName)) {
+          const other = trials.find(({ trial: { arm, task, repetition } }) => arm === toName && task === one.trial.task && repetition === one.trial.repetition);
+          if (!other) continue;
+          pairs.push({ task: one.trial.task, from: one.trial.result === 'passed', to: other.trial.result === 'passed' });
+          observed.from.push(one);
+          observed.to.push(other);
         }
       }
       if (pairs.length === 0) continue;
@@ -415,6 +422,7 @@ function comparisonsOf({ current, newest }: SuiteRuns): ArmComparison[] {
       comparisons.push({
         dimension, from: fromKey, to: toKey, pairs: pairs.length,
         rates: { from: rate(pairs, 'from'), to: rate(pairs, 'to') },
+        usage: { from: usageOf(observed.from), to: usageOf(observed.to) },
         difference: pairedDifference({ both: count((p) => p.from && p.to), toOnly: count((p) => p.to && !p.from), fromOnly: count((p) => p.from && !p.to), neither: count((p) => !p.from && !p.to) }),
         tasks: newest.benchmark.tasks.flatMap(({ id }) => {
           const own = pairs.filter((pair) => pair.task === id);
