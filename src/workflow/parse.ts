@@ -767,6 +767,10 @@ function referenceDiagnostics({ file, lineCounter }: ParseContext, files: Workfl
     return [locate(file, lineCounter, node, `${field}.workflow`,
       `${label} runs workflow "${workflow}", which has no runnable version; fix or add workflows/${workflow}.yaml`)];
   }
+  if (child.finally) {
+    return [locate(file, lineCounter, node, `${field}.workflow`,
+      `${label} runs workflow "${workflow}", which has finally steps; only a run of that workflow runs them, so start it with teamai workflow start`)];
+  }
   if (!reference.with) return [];
   const inputs = child.inputs ?? {};
   const passed = new Set(reference.with.keys.map((key) => key.name));
