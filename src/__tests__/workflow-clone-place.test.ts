@@ -197,6 +197,32 @@ describe('a clone place', () => {
     expect(fs.readdirSync(again.cwd).sort()).toEqual(['.git', 'first.txt']);
   });
 
+  it('keeps the clone when a step that continues it is released, with the work committed there', async () => {
+    const { config, runId } = await fixture((commit) => PROMPTED(commit));
+    const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
+    const work = leaseOf(await prepared(client, runId));
+    fs.writeFileSync(path.join(work.cwd, 'made.txt'), 'M');
+    await client.report(runId, { attempt: work.attempt, revision: work.revision, outcome: 'success', driver });
+    const check = leaseOf(await prepared(client, runId));
+
+    await client.report(runId, { attempt: check.attempt, revision: check.revision, outcome: 'released', driver });
+    const again = leaseOf(await prepared(client, runId));
+
+    expect(again).toMatchObject({ step: 'trial.check', cwd: work.cwd });
+    expect(fs.readFileSync(path.join(again.cwd, 'made.txt'), 'utf8')).toBe('M');
+  });
+
+  it('turns git hooks off in a fresh clone, pointing them at a directory that does not exist', async () => {
+    const { config, runId } = await fixture((commit) => PROMPTED(commit));
+    const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
+
+    const work = leaseOf(await prepared(client, runId));
+    const hooks = git(['config', '--get', 'core.hooksPath'], work.cwd);
+
+    expect(hooks).not.toBe('');
+    expect(fs.existsSync(path.resolve(work.cwd, hooks))).toBe(false);
+  });
+
   it('fails the step whose clone is of a commit no source has, and leaves no clone', async () => {
     const { config, runId } = await fixture(() => PROMPTED('f'.repeat(40)));
     const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
