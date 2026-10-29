@@ -20,7 +20,8 @@ import { loopProblems } from './loop.js';
 import { modelValueProblem } from '../models/aliases.js';
 import type { StepModel } from './step-model.js';
 import { ClonePlaceSchema } from './clone.js';
-import { REQUIREMENT_KEYS, RequirementsSchema, SetupSchema, type Requirements, type Setup } from './requirements.js';
+import { mergeRequirements, REQUIREMENT_KEYS, RequirementsSchema, SANDBOX_WITHHELD_ENV, SetupSchema, type InEffect, type Requirements, type Setup } from './requirements.js';
+import { sameEnvName } from '../resources/env-key.js';
 
 /**
  * The first release that reads `invoke` and `alias`. An older CLI refuses either as an unknown key and drops the
@@ -213,6 +214,7 @@ export function parseWorkflow(file: string, content: string, files?: WorkflowFil
 
   // A malformed inputs header is already reported; checking reads against it would only add noise.
   const { workflow: { ends, outputs, loop, steps } } = parseBody(root, '', 'workflow', ctx, inputsPair && !inputs ? undefined : inputs ?? {}, false);
+  if (diagnostics.length === 0) withheldEnvRequired(valueNode(root, 'steps'), steps, '', mergeRequirements(defaults?.requires), ctx);
 
   if (diagnostics.length > 0 || !name || !description) return { ok: false, diagnostics };
   return {
@@ -975,6 +977,26 @@ function parseRequires(node: Node | null | undefined, field: string, ctx: ParseC
     }
   }
   return parsed.success && diagnostics.length === before ? parsed.data : undefined;
+}
+
+/**
+ * Reports each step of `steps`, parsed from `node`, whose own `requires.env` names a credential that the strict sandbox
+ * in effect there withholds anyway, inline workflows included. A named workflow's steps are checked only once a run
+ * pins it, where the strip list still wins.
+ */
+function withheldEnvRequired(node: Node | undefined, steps: readonly WorkflowStep[], at: string, outer: InEffect, ctx: ParseContext): void {
+  if (!isSeq(node)) return;
+  steps.forEach((step, index) => {
+    const item = node.items[index];
+    const field = `${at}steps[${index}]`;
+    const requires = mergeRequirements(outer, step.requires);
+    const withheld = requires.floor?.isolation === 'sandbox' ? (step.requires?.env ?? []).filter((key) => sameEnvName(SANDBOX_WITHHELD_ENV, key) !== undefined) : [];
+    if (withheld.length > 0) {
+      ctx.diagnostics.push(locate(ctx.file, ctx.lineCounter, valueNode(valueNode(item, 'requires'), 'env') ?? node, `${field}.requires.env`,
+        `${field}.requires.env names ${withheld.join(', ')}, which the strict sandbox it runs in withholds from every step. Remove ${withheld.length > 1 ? 'them' : 'it'} from requires.env, or drop strict.`));
+    }
+    if (typeof step.workflow === 'object') withheldEnvRequired(valueNode(valueNode(item, 'workflow'), 'steps'), step.workflow.steps, `${field}.workflow.`, requires, ctx);
+  });
 }
 
 /** A step's `workspace`: `read-only`, `new`, `continue`, or `{ clone: … }`; undefined when it is none of them. */

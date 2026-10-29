@@ -508,13 +508,22 @@ function rememberSecrets(seen: Record<string, string>, secrets: Record<string, s
 
 /**
  * What this driver declares on every `next`. Every key is set, so a new capability does not compile until it is decided.
- * It cannot deny a step the network, and keeps it from the member's machine only on a host the member marks `sandbox`, in config or with `--sandbox`.
- * It gives each command and tool only the env keys its lease provides, and runs setup in each workspace it creates.
- * `tools` are the tools it launches a step that names one on; `trials`, the tools whose benchmark trials the loop
- * launches by the trial rules.
+ * It runs setup in each workspace it creates. `tools` are the tools it launches a step that names one on; `trials`, the
+ * tools whose benchmark trials the loop launches by the trial rules.
  */
-function localCan({ sandbox, hitl, tools, trials }: { sandbox: boolean; hitl: boolean; tools: string[]; trials: string[] }): Required<DriverCan> {
-  return { hitl, workspace: [...WORKSPACE_MODES], network: false, isolation: sandbox ? 'sandbox' : 'none', env: true, tokens: true, max_turns: true, setup: true, tools, trials };
+function localCan({ strict, hitl, tools, trials }: { strict: StrictCan; hitl: boolean; tools: string[]; trials: string[] }): Required<DriverCan> {
+  return { hitl, workspace: [...WORKSPACE_MODES], ...strict, tokens: true, max_turns: true, setup: true, tools, trials };
+}
+
+type StrictCan = Required<Pick<DriverCan, 'network' | 'isolation' | 'env'>>;
+
+/**
+ * What this driver gives the strict requirements of a run on this machine, which a local start checks before the run
+ * exists. It cannot deny a step the network, keeps it from the member's machine only on a host the member marks
+ * `sandbox`, in config or with `--sandbox`, and gives each command and tool only the env keys its lease provides.
+ */
+export function localStrictCan(config: LocalConfig, options: Pick<LocalDriverOptions, 'sandbox'>): StrictCan {
+  return { network: false, isolation: isSandbox(config, options) ? 'sandbox' : 'none', env: true };
 }
 
 /** The tools the prompt steps of `run` name, in its definition and every workflow it pinned. */
@@ -534,7 +543,7 @@ function onPath(tool: LaunchTool): boolean {
   return resolveCliPath(executableOf(tool)) !== null;
 }
 
-function isSandbox(config: LocalConfig, options: LocalDriverOptions): boolean {
+function isSandbox(config: LocalConfig, options: Pick<LocalDriverOptions, 'sandbox'>): boolean {
   return options.sandbox === true || config.workflows?.sandbox === true;
 }
 
@@ -673,7 +682,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
   const named = typeof started === 'object' ? namedTools(started) : new Set<string>();
   const tools = LAUNCH_TOOLS.filter((tool) => named.has(tool) && onPath(tool));
   const trials = benchmark ? LAUNCH_TOOLS.filter(onPath) : [];
-  const can = localCan({ sandbox: isSandbox(config, options), hitl: canHitl, tools, trials });
+  const can = localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools, trials });
   const driver = driverIdentity('local', cwd);
   if (benchmark) for (const line of benchmarkNotices(benchmark, can, await trialBlocker(config))) log.info(line);
   // A driver killed before cleanup, of this run or any other, left clones behind.

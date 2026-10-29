@@ -1,5 +1,5 @@
 import { sameEnvName } from '../resources/env-key.js';
-import { mergeRequirements, negotiate, requiredEnvKeys, type Allow, type DriverCan, type EnvFacts, type Missing, type Requirements, type Setup } from './requirements.js';
+import { mergeRequirements, negotiate, requiredEnvKeys, type Allow, type DriverCan, type EnvFacts, type InEffect, type Missing, type Setup } from './requirements.js';
 import type { Invoke, OutputSchema, WorkflowDefinition, WorkflowSource, WorkflowStep } from './types.js';
 import { opensCopy, resolveMode, runsInCheckout } from './workspace.js';
 
@@ -101,7 +101,7 @@ interface Scope {
   prefix: string;
   /** The workflow steps around it, outermost first. */
   ancestors: WorkflowStep[];
-  requires: Requirements;
+  requires: InEffect;
   budgeted: boolean;
   setup?: Setup;
   /** The step that opened the copy its steps work in, by path. */

@@ -5262,3 +5262,84 @@ describe('token budgets', () => {
     });
   });
 });
+
+describe('strict requirements', () => {
+  const WITHHELD = ['CI_JOB_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN', 'GITLAB_TOKEN', 'GIT_ASKPASS', 'GL_TOKEN', 'SSH_ASKPASS', 'SSH_AUTH_SOCK'];
+
+  it('leases a strict sandbox step only to a sandbox that scopes env, keeping every credential from it', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: sealed
+    requires: { isolation: sandbox, strict: true }
+    command: node sealed.js
+`));
+
+    const notSandbox = await leaseNext(config, runId, driverA, { can: { isolation: 'worktree', env: true } });
+    const unscoped = await leaseNext(config, runId, driverA, { can: { isolation: 'sandbox', env: 'commands' } });
+    const leased = await leaseNext(config, runId, driverA, { can: { isolation: 'sandbox', env: true } });
+
+    expect(notSandbox).toMatchObject({ data: { wait: { held: [{ step: 'sealed', missing: ['isolation'] }] } } });
+    expect(unscoped).toMatchObject({ data: { wait: { held: [{ step: 'sealed', missing: ['env'] }] } } });
+    expect(leased).toMatchObject({ data: { lease: { step: 'sealed', requires: { isolation: 'sandbox' }, envScope: { provide: [], withhold: WITHHELD } } } });
+    expect(leased).not.toHaveProperty('data.lease.unenforced');
+  });
+
+  it('withholds nothing for a sandbox that is not strict, and grants it to any driver as unenforced', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: loose
+    requires: { isolation: sandbox }
+    command: node loose.js
+`));
+
+    const leased = await leaseNext(config, runId, driverA, { can: { env: true } });
+
+    expect(leased).toMatchObject({ data: { lease: { step: 'loose', unenforced: [{ requirement: 'isolation', asked: 'sandbox', provided: 'none' }] } } });
+    expect(leased).not.toHaveProperty('data.lease.envScope');
+  });
+
+  it('raises an inner level below a strict floor to it, through inline and named workflows', async () => {
+    const { config, runId } = await startTree({
+      build: workflow('build', `  - id: outer
+    requires: { isolation: sandbox, network: false, strict: true }
+    workflow:
+      steps:
+        - id: inner
+          requires: { isolation: worktree, network: true }
+          command: node inner.js
+  - id: named
+    needs: []
+    requires: { isolation: sandbox, strict: true }
+    workflow: lower
+`),
+      lower: workflow('lower', `  - id: open
+    command: node open.js
+`, 'defaults:\n  requires: { isolation: none }\n'),
+    }, 'build');
+    const sandbox = { isolation: 'sandbox' as const, env: true };
+
+    const held = await leaseNext(config, runId, driverA, { can: { isolation: 'worktree', env: true } });
+    const inner = await leaseNext(config, runId, driverA, { can: { ...sandbox, network: true } });
+    const named = await leaseNext(config, runId, driverA, { can: sandbox, running: [leaseIn(inner).attempt] });
+
+    expect(held).toMatchObject({ data: { wait: { held: [{ step: 'outer.inner', missing: ['isolation', 'network'] }, { step: 'named.open', missing: ['isolation'] }] } } });
+    expect(inner).toMatchObject({ data: { lease: { step: 'outer.inner', requires: { isolation: 'sandbox', network: false } } } });
+    expect(named).toMatchObject({ data: { lease: { step: 'named.open', requires: { isolation: 'sandbox' }, envScope: { withhold: WITHHELD } } } });
+  });
+
+  it('refuses a start whose only driver could never take a step for its strict requirements, and creates no run', async () => {
+    const { config } = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: fetch
+    command: node fetch.js
+  - id: offline
+    needs: [fetch]
+    requires: { network: false, strict: true }
+    command: node offline.js
+`));
+    await syncWorkflowDefinitions(config);
+    const secrets = await knownSecrets(config);
+
+    const refused = await startRun(config, 'build', {}, { secrets, alone: { isolation: 'sandbox', network: false, env: true } });
+    const started = await startRun(config, 'build', {}, { secrets, alone: { isolation: 'none', network: true, env: true } });
+
+    expect(refused).toEqual({ error: { code: 'requirement_unmet', message: 'Step "offline" strictly requires no network, which the local driver cannot deny. Run it with a driver that declares can.network.' } });
+    expect(started).toMatchObject({ data: { status: 'running' } });
+    expect(fs.readdirSync(runsDir(config))).toHaveLength(1);
+  });
+});
