@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { resolveWorkflowEnv } from '../env-resolution.js';
 import type { LocalConfig } from '../types.js';
@@ -186,3 +186,162 @@ describe('the run lock', () => {
     expect(await waiting).toBe(run);
   });
 });
+
+const REPORTED = `schemaVersion: v1alpha1
+name: reported
+description: Work, then report and tidy whatever happened.
+steps:
+  - id: work
+    command: node -e "process.exit(0)"
+finally:
+  - id: report
+    command: node -e "process.exit(0)"
+    output: { text: string }
+  - id: tidy
+    needs: []
+    command: node -e "process.exit(0)"
+    output: { freed: number }
+outputs:
+  text: steps.report.outputs.text
+  freed: steps.tidy.outputs.freed
+`;
+
+describe('finally steps', () => {
+  const other = { ...driver, machine: 'other' };
+  const failure = { code: 'command_failed', message: 'command exited with status 1' };
+
+  async function startReported(config: LocalConfig, checkout: string): Promise<{ client: WorkflowClient; run: string }> {
+    const client = await protocol(config);
+    const started = await client.start('reported', { checkout, caller: { evidence: { kind: 'none' }, confirmed: false, mode: 'attended' } });
+    if (!('data' in started)) throw new Error(JSON.stringify(started));
+    return { client, run: RunIdSchema.parse(started.data.run) };
+  }
+
+  async function lease(client: WorkflowClient, run: string, by = driver): Promise<z.infer<typeof LeaseSchema>> {
+    const next = await client.next(run, { driver: by });
+    if (!('data' in next) || !('lease' in next.data)) throw new Error(JSON.stringify(next));
+    return LeaseSchema.parse(next.data.lease);
+  }
+
+  it('keeps a run whose steps failed running while any driver runs its finally steps, then ends it failed with what they returned', async () => {
+    const { config, checkout } = await fixture({ reported: REPORTED });
+    const { client, run } = await startReported(config, checkout);
+    const work = await lease(client, run);
+    await client.report(run, { attempt: work.attempt, revision: work.revision, outcome: 'failed', driver, message: failure.message, failure });
+
+    const before = Date.now();
+    const report = await lease(client, run, other);
+    expect(report).toMatchObject({ step: 'report' });
+    const stored = await readRun(config, run);
+    if (typeof stored !== 'object') throw new Error(stored);
+    expect(stored).toMatchObject({ status: 'running', finalizing: { outcome: 'failed' } });
+    const until = Date.parse(stored.finalizing?.until ?? '');
+    expect(until - before).toBeGreaterThanOrEqual(10 * 60_000 - 1000);
+    expect(until - Date.now()).toBeLessThanOrEqual(10 * 60_000);
+
+    await client.report(run, { attempt: report.attempt, revision: report.revision, outcome: 'success', driver: other, outputs: { text: 'two steps, one failed' } });
+    const tidy = await lease(client, run, other);
+    expect(tidy).toMatchObject({ step: 'tidy' });
+    await client.report(run, { attempt: tidy.attempt, revision: tidy.revision, outcome: 'failed', driver: other, message: failure.message, failure });
+
+    expect(await client.next(run, { driver: other })).toMatchObject({ data: { done: {
+      outcome: 'failed',
+      outputs: { text: 'two steps, one failed' },
+      finally: [{ id: 'tidy', outcome: 'failed', failure }],
+    } } });
+    const done = await client.next(run, { driver: other });
+    expect('data' in done && done.data.done).not.toHaveProperty('outputs.freed');
+    expect('data' in done && done.data.done).not.toHaveProperty('failure');
+  });
+
+  it('ends a run whose steps succeeded as succeeded, though a finally step failed', async () => {
+    const { config, checkout } = await fixture({ reported: REPORTED });
+    const { client, run } = await startReported(config, checkout);
+    const work = await lease(client, run);
+    await client.report(run, { attempt: work.attempt, revision: work.revision, outcome: 'success', driver });
+    const report = await lease(client, run);
+    await client.report(run, { attempt: report.attempt, revision: report.revision, outcome: 'failed', driver, message: failure.message, failure });
+    const tidy = await lease(client, run);
+    await client.report(run, { attempt: tidy.attempt, revision: tidy.revision, outcome: 'success', driver, outputs: { freed: 3 } });
+
+    expect(await client.next(run, { driver })).toMatchObject({ data: { done: {
+      run, outcome: 'succeeded', outputs: { freed: 3 }, finally: [{ id: 'report', outcome: 'failed', failure }],
+    } } });
+  });
+
+  it('runs the finally steps of a cancelled run, which ends cancelled', async () => {
+    const { config, checkout } = await fixture({ reported: REPORTED });
+    const { client, run } = await startReported(config, checkout);
+    await lease(client, run);
+    expect(await client.cancel(run)).toMatchObject({ data: { run: { status: 'running', finalizing: { outcome: 'cancelled' } } } });
+    for (const step of ['report', 'tidy']) {
+      const held = await lease(client, run);
+      expect(held).toMatchObject({ step });
+      await client.report(run, { attempt: held.attempt, revision: held.revision, outcome: 'success', driver, outputs: step === 'report' ? { text: 'cancelled' } : { freed: 0 } });
+    }
+    const done = await client.next(run, { driver });
+    expect(done).toMatchObject({ data: { done: { outcome: 'cancelled', outputs: { text: 'cancelled', freed: 0 } } } });
+    expect('data' in done && done.data.done).not.toHaveProperty('finally');
+  });
+
+  it('ends every unfinished finally step, leased or not, when the run is cancelled while they run, and keeps its outcome', async () => {
+    const { config, checkout } = await fixture({ reported: REPORTED });
+    const { client, run } = await startReported(config, checkout);
+    const work = await lease(client, run);
+    await client.report(run, { attempt: work.attempt, revision: work.revision, outcome: 'success', driver });
+    const report = await lease(client, run);
+
+    expect(await client.cancel(run)).toMatchObject({ data: { cancelled: { steps: ['report', 'tidy'] }, run: { status: 'succeeded' } } });
+    expect(await client.report(run, { attempt: report.attempt, revision: report.revision, outcome: 'success', driver, outputs: { text: 'late' } }))
+      .toMatchObject({ error: { code: 'lease_cancelled' } });
+    const cancelled = { code: 'cancelled', message: 'Cancelled by teamai workflow cancel' };
+    const done = await client.next(run, { driver });
+    expect(done).toMatchObject({ data: { done: {
+      outcome: 'succeeded', finally: [{ id: 'report', outcome: 'cancelled', failure: cancelled }, { id: 'tidy', outcome: 'cancelled', failure: cancelled }],
+    } } });
+    expect('data' in done && done.data.done).not.toHaveProperty('outputs.text');
+  });
+
+  it('runs the finally steps of a run that timed out under a deadline of their own, and ends it timed out', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const { config, checkout } = await fixture({ reported: REPORTED.replace('steps:\n', 'timeout: 1m\nsteps:\n') });
+      const { client, run } = await startReported(config, checkout);
+      await lease(client, run);
+      vi.setSystemTime(new Date('2026-01-01T00:02:00.000Z'));
+      const report = await lease(client, run);
+      expect(report).toMatchObject({ step: 'report', expiresAt: '2026-01-01T00:12:00.000Z' });
+      await client.report(run, { attempt: report.attempt, revision: report.revision, outcome: 'success', driver, outputs: { text: 'timed out' } });
+      const tidy = await lease(client, run);
+      await client.report(run, { attempt: tidy.attempt, revision: tidy.revision, outcome: 'success', driver, outputs: { freed: 1 } });
+      expect(await client.next(run, { driver })).toMatchObject({ data: { done: {
+        outcome: 'failed', failure: { code: 'timeout' }, outputs: { text: 'timed out', freed: 1 },
+      } } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ends the finally steps still unfinished when their deadline passes, and keeps the run\'s outcome', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const { config, checkout } = await fixture({ reported: REPORTED });
+      const { client, run } = await startReported(config, checkout);
+      const work = await lease(client, run);
+      await client.report(run, { attempt: work.attempt, revision: work.revision, outcome: 'success', driver });
+      await lease(client, run);
+      vi.setSystemTime(new Date('2026-01-01T00:10:01.000Z'));
+      const done = await client.next(run, { driver });
+      expect(done).toMatchObject({ data: { done: { outcome: 'succeeded', finally: [
+        { id: 'report', outcome: 'cancelled', failure: { code: 'timeout' } },
+        { id: 'tidy', outcome: 'cancelled', failure: { code: 'timeout' } },
+      ] } } });
+      expect('data' in done && done.data.done).not.toHaveProperty('failure');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
