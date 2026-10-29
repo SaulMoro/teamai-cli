@@ -24,7 +24,7 @@ import { findRunConfig } from './workflow/run-location.js';
 import { resolveRunMode } from './launch-context.js';
 import { memberTools } from './tool-launch/call.js';
 import { agentEvidence, isAttemptRunner, nestedCall, nestedStart, nestedWorkflowError, type Nested } from './workflow/attempt-marker.js';
-import { startBenchmark, tryBenchmarkTask } from './workflow/benchmark/start.js';
+import { startBenchmark, tryBenchmarkTask } from './benchmark/start.js';
 import { headCommit } from './workflow/worktree.js';
 import type { WorkflowEnvelope, WorkflowFailure } from './workflow/types.js';
 

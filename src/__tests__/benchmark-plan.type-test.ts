@@ -1,6 +1,6 @@
 /** Checked by `tsc` only: Vitest runs `*.test.ts`. */
-import { compilePlan, type BenchmarkPlan } from '../workflow/benchmark/plan.js';
-import type { Suite } from '../workflow/benchmark/suite.js';
+import { compilePlan, type BenchmarkPlan } from '../benchmark/plan.js';
+import type { Suite } from '../benchmark/suite.js';
 
 declare const plan: BenchmarkPlan;
 declare const suite: Suite;

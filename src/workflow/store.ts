@@ -8,7 +8,7 @@ import { redactJson } from '../utils/redact.js';
 import { getDataHome, type LocalConfig } from '../types.js';
 import { EntryVerdictSchema } from '../scorers/entry.js';
 import { PinnedScorerSchema } from '../scorers/pin.js';
-import { BenchmarkPlanSchema } from './benchmark/plan.js';
+import { BenchmarkPlanSchema } from '../benchmark/plan.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { ArchivedPassSchema, ReleasedTokensSchema, SessionContinuationSchema, StepStateSchema, StoppedAttemptSchema } from './step-state.js';
 import type { HandoffOwner } from './snapshot.js';

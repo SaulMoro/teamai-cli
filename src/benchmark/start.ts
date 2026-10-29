@@ -5,19 +5,19 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { isLabelShaped, isNameShaped, observeCheckout } from '../../agent-observation.js';
-import { loadLocalConfigForScope } from '../../config.js';
-import { isModelAlias, loadModelAliases, loadTeamModelAliases, noModelCause, noModelReason, resolveModelValue, type ModelAliases, type ModelResolution, type NoModel } from '../../models/aliases.js';
-import { pinScorers } from '../../scorers/cache.js';
-import { resolveTeamRef, TeamRefError } from '../../team-ref.js';
-import { isAgentToolId } from '../../tools.js';
-import type { LocalConfig } from '../../types.js';
-import { loadCachedSuite, readSuiteFiles, withTeamRevision } from '../cache.js';
-import { createRun, error } from '../engine.js';
-import { judgeUnavailable } from '../scoring.js';
-import type { DriverIdentity, RunState, WorkflowEnvelope } from '../types.js';
-import { formatDiagnostic } from '../parse.js';
-import { git } from '../worktree.js';
+import { isLabelShaped, isNameShaped, observeCheckout } from '../agent-observation.js';
+import { loadLocalConfigForScope } from '../config.js';
+import { isModelAlias, loadModelAliases, loadTeamModelAliases, noModelCause, noModelReason, resolveModelValue, type ModelAliases, type ModelResolution, type NoModel } from '../models/aliases.js';
+import { pinScorers } from '../scorers/cache.js';
+import { resolveTeamRef, TeamRefError } from '../team-ref.js';
+import { isAgentToolId } from '../tools.js';
+import type { LocalConfig } from '../types.js';
+import { loadCachedSuite, readSuiteFiles, withTeamRevision } from '../workflow/cache.js';
+import { createRun, error } from '../workflow/engine.js';
+import { judgeUnavailable } from '../workflow/scoring.js';
+import type { DriverIdentity, RunState, WorkflowEnvelope } from '../workflow/types.js';
+import { formatDiagnostic } from '../workflow/parse.js';
+import { git } from '../workflow/worktree.js';
 import { addedOf, compilePlan, freezePlan, runSourceHash, type PlannedArm } from './plan.js';
 import { parseSuite, type Arm, type Suite, type TaskJudge } from './suite.js';
 import type { Added, ArmTeam, TrialSelection } from './terms.js';
@@ -210,7 +210,7 @@ async function armAliases(config: LocalConfig, revision: string, member: boolean
  * team remote, so another machine could not pull it.
  */
 async function pulledTeamRevision(config: LocalConfig, checkout: string): Promise<{ revision: string } | { refused: string }> {
-  const { teamDelivery } = await import('../../pull.js');
+  const { teamDelivery } = await import('../pull.js');
   const tool = (await teamDelivery(config, '')).record?.targets[0];
   if (tool === undefined) {
     return { refused: 'teamai pull set up no AI tool in this checkout, so the team revision it delivered cannot be read. Run teamai init with --agent <tool>, run teamai pull, and start again.' };

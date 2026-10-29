@@ -10,10 +10,10 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { LineCounter, parseDocument } from 'yaml';
 import { z } from 'zod';
-import { isYamlNode, locate } from '../parse-context.js';
-import { durationMs } from '../parse.js';
-import { SetupSchema, type Setup } from '../requirements.js';
-import type { WorkflowDiagnostic } from '../types.js';
+import { isYamlNode, locate } from '../workflow/parse-context.js';
+import { durationMs } from '../workflow/parse.js';
+import { SetupSchema, type Setup } from '../workflow/requirements.js';
+import type { WorkflowDiagnostic } from '../workflow/types.js';
 import { BENCHMARK_NAME, BenchmarkNameSchema, CommitSchema, type TrialLimits } from './terms.js';
 
 /** The project the tasks start from. A URL, never a local path or a URL with credentials: it travels in plan and record. */

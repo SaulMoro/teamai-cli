@@ -13,7 +13,7 @@ import { tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '../../
 import { executableOf, launchAdapterIdOf, opencodeModelArgs, type LaunchTool } from '../../../tool-launch/tools.js';
 import { budgeted } from '../../limits.js';
 import { MAX_TIMER_DELAY } from '../../shell-command.js';
-import type { TrialLimit } from '../../benchmark/terms.js';
+import type { TrialLimit } from '../../../benchmark/terms.js';
 import type { StepModel } from '../../step-model.js';
 import type { WorkflowFailure } from '../../types.js';
 import { agyGatewayEnv } from '../../../models/agy-gateway.js';

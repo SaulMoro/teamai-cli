@@ -4,9 +4,9 @@
  * `text` when the run ends. It reads the record, not the run, so it works with recording off (buildEndRecord is pure)
  * and on a published record after the suite left the cache.
  */
-import type { AgentObservation } from '../../agent-observation.js';
-import { isNativeModelAlias } from '../../models/aliases.js';
-import type { WorkflowRunRecord } from '../records.js';
+import type { AgentObservation } from '../agent-observation.js';
+import { isNativeModelAlias } from '../models/aliases.js';
+import type { WorkflowRunRecord } from '../workflow/records.js';
 import { TRIAL_RESULTS, type Baseline, type BenchmarkRecord, type TrialResult } from './result.js';
 
 type RecordedArm = BenchmarkRecord['arms'][number];

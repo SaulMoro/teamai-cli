@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { ScoreLabel } from '../scorers/label.js';
 import { LabelStore } from '../scorers/label-store.js';
 import type { LocalConfig } from '../types.js';
-import { trialsOf } from '../workflow/benchmark/plan.js';
+import { trialsOf } from '../benchmark/plan.js';
 import type { BenchmarkSuiteFiles } from '../workflow/conformance-interpreter.js';
 import { leaseNext, reconcileRun, reportAttempt } from '../workflow/engine.js';
 import { buildEndRecord } from '../workflow/records.js';

@@ -9,7 +9,7 @@ import { syncScorerDefinitions } from '../scorers/cache.js';
 import { ciRecipesOf, runCommandsOf } from './helpers/ci-recipe.js';
 import { formatScorerDiagnostic } from '../scorers/definition.js';
 import type { LocalConfig } from '../types.js';
-import { parseSuite, type SourceFile } from '../workflow/benchmark/suite.js';
+import { parseSuite, type SourceFile } from '../benchmark/suite.js';
 import { formatUnknownScorer, syncWorkflowDefinitions } from '../workflow/cache.js';
 import { leaseNext, reportAttempt, startRun } from '../workflow/engine.js';
 import { formatDiagnostic } from '../workflow/parse.js';

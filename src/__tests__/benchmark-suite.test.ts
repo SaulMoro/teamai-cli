@@ -5,7 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { formatUnknownScorer, loadCachedSuite, syncWorkflowDefinitions } from '../workflow/cache.js';
-import { parseSuite, type SuiteFile } from '../workflow/benchmark/suite.js';
+import { parseSuite, type SuiteFile } from '../benchmark/suite.js';
 
 const START = 'a'.repeat(40);
 const dirs: string[] = [];

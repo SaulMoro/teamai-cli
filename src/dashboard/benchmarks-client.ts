@@ -4,7 +4,7 @@
  * `page`, `workspaceGeneration`, `pct`, `short`, `sparkline`, `kpiCard` and `meter`. Every value from the API is escaped
  * with `e`. A run opens through the Workflow Runs dialog.
  */
-import { BENCHMARK_WINDOWS } from '../workflow/benchmark/history.js';
+import { BENCHMARK_WINDOWS } from '../benchmark/history.js';
 
 export const benchmarksClient = `
 let benchData=null, benchError='', benchLoading=false, benchHtml='', benchRequest=0, benchAxis='tokens', benchDimension='', benchComparison='', benchConfig='', benchRevision='';

@@ -21,8 +21,8 @@ import { getReportsDir, usesBranchWorktree, type LocalConfig } from '../types.js
 import { knownSecrets, resolveWorkflowEnv } from '../env-resolution.js';
 import { LabelStore, type PassScore } from '../scorers/label-store.js';
 import { WorkOutcomeSchema, type WorkOutcome } from '../outcomes.js';
-import { BenchmarkRecordSchema } from '../workflow/benchmark/result.js';
-import { benchmarkCells, benchmarkTable, type BenchmarkCells } from '../workflow/benchmark/table.js';
+import { BenchmarkRecordSchema } from '../benchmark/result.js';
+import { benchmarkCells, benchmarkTable, type BenchmarkCells } from '../benchmark/table.js';
 import { locateStep } from '../workflow/engine.js';
 import { buildEndRecord, RECORDS_DIR, runRecordStates, type RecordState, type WorkflowRunRecord } from '../workflow/records.js';
 import { callerProvenance, respondProvenance, respondToHitl } from '../workflow/run-controls.js';

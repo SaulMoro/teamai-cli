@@ -7,10 +7,10 @@
  * drops a whole record on an enum value it does not know.
  */
 import { z } from 'zod';
-import type { EntryVerdict } from '../../scorers/entry.js';
-import type { StepState } from '../step-state.js';
-import { ReportedUnenforcedSchema } from '../requirements.js';
-import type { RunState } from '../types.js';
+import type { EntryVerdict } from '../scorers/entry.js';
+import type { StepState } from '../workflow/step-state.js';
+import { ReportedUnenforcedSchema } from '../workflow/requirements.js';
+import type { RunState } from '../workflow/types.js';
 import { baselineStepOf, correctnessScorerName, stepOf, type BenchmarkPlan, type PlannedTask, type PlannedTrial } from './plan.js';
 import { ArmTeamSchema, TrialLimitSchema, TrialLimitsSchema } from './terms.js';
 

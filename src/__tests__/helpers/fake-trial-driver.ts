@@ -8,7 +8,7 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { z } from 'zod';
-import { PreparedTrialLeaseSchema } from '../../workflow/benchmark/terms.js';
+import { PreparedTrialLeaseSchema } from '../../benchmark/terms.js';
 
 const run = promisify(execFile);
 

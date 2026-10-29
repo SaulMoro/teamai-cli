@@ -2,8 +2,8 @@
  * Conformance scenarios for benchmark trials at the protocol level: which driver is leased a trial, and how a run whose
  * trials no driver took ends. What a prepared trial does on disk is the driver-contract e2e's.
  */
-import { DRIVER_PROFILES, type BenchmarkScenario, type BenchmarkSuiteFiles } from '../conformance-interpreter.js';
-import type { DriverCan } from '../requirements.js';
+import { DRIVER_PROFILES, type BenchmarkScenario, type BenchmarkSuiteFiles } from '../workflow/conformance-interpreter.js';
+import type { DriverCan } from '../workflow/requirements.js';
 
 /** One check task `fix`, one repetition, and two arms: `claude` from the defaults, and `codex`. */
 function twoArms(timeout: string): BenchmarkSuiteFiles {

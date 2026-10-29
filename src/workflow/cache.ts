@@ -26,8 +26,8 @@ import { formatDiagnostic, parseWorkflow, promptFileDiagnostics, stepField } fro
 import { locate, valueNode, type WorkflowFiles } from './parse-context.js';
 import type { CachedWorkflow, ResolvedWorkflow, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
 import { DefaultWorkflows } from '../default-workflows.js';
-import { checkFilesNamed, parseSuite, type SourceFile, type Suite, type SuiteFile } from './benchmark/suite.js';
-import { BENCHMARK_NAME } from './benchmark/terms.js';
+import { checkFilesNamed, parseSuite, type SourceFile, type Suite, type SuiteFile } from '../benchmark/suite.js';
+import { BENCHMARK_NAME } from '../benchmark/terms.js';
 import { assertSafePath, assertWithinRoot } from '../utils/path-safety.js';
 import { createGit } from '../utils/git.js';
 import {

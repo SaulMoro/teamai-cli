@@ -12,9 +12,9 @@
  */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
-import { isLabelShaped, isNameShaped } from '../../agent-observation.js';
-import type { PinnedScorer } from '../../scorers/pin.js';
-import type { WorkflowDefinition, WorkflowStep } from '../types.js';
+import { isLabelShaped, isNameShaped } from '../agent-observation.js';
+import type { PinnedScorer } from '../scorers/pin.js';
+import type { WorkflowDefinition, WorkflowStep } from '../workflow/types.js';
 import type { Suite, Task, TaskJudge } from './suite.js';
 import type { CommittedSuite } from './trial.js';
 import { ArmTeamSchema, BenchmarkNameSchema, CommitSchema, TRIAL_WITHHELD_ENV, TrialLimitsSchema, TrialSelectionSchema, type Added, type PromptTerms, type TrialSelection } from './terms.js';

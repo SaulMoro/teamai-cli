@@ -3,7 +3,7 @@ import {
 } from '../conformance-interpreter.js';
 import { AGENT_SESSION_ENV } from '../../utils/session-id.js';
 import { ATTEMPT_ENV } from '../../launch-context.js';
-import { benchmarkConformanceScenarios } from '../benchmark/conformance.js';
+import { benchmarkConformanceScenarios } from '../../benchmark/conformance.js';
 import { limitsConformanceScenarios } from '../limits-conformance.js';
 
 const TWO_STEPS = `schemaVersion: v1alpha1

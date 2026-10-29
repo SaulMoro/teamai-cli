@@ -59,9 +59,9 @@ import type {
   WorkflowStep,
 } from './types.js';
 import { hasAction } from './types.js';
-import type { CheckVerdict } from './benchmark/check.js';
-import { benchmarkTable, formatBenchmarkTable, type BenchmarkTable } from './benchmark/table.js';
-import { TrialLimitSchema, trialTool, type TrialLimit } from './benchmark/terms.js';
+import type { CheckVerdict } from '../benchmark/check.js';
+import { benchmarkTable, formatBenchmarkTable, type BenchmarkTable } from '../benchmark/table.js';
+import { TrialLimitSchema, trialTool, type TrialLimit } from '../benchmark/terms.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 
 /**

@@ -25,9 +25,9 @@ import { isRecord } from '../../expression.js';
 import { MAX_TIMER_DELAY } from '../../shell-command.js';
 import { judgeRunEntries } from '../../scoring.js';
 import { budgeted, runDeadline } from '../../limits.js';
-import type { BenchmarkPlan } from '../../benchmark/plan.js';
-import { benchmarkNotices, trialBlocker, Trials } from '../../benchmark/trial.js';
-import { PreparedTrialLeaseSchema, type PreparedTrialLease } from '../../benchmark/terms.js';
+import type { BenchmarkPlan } from '../../../benchmark/plan.js';
+import { benchmarkNotices, trialBlocker, Trials } from '../../../benchmark/trial.js';
+import { PreparedTrialLeaseSchema, type PreparedTrialLease } from '../../../benchmark/terms.js';
 import { resolveCliPath } from '../../../utils/cli-path.js';
 import { z } from 'zod';
 import {

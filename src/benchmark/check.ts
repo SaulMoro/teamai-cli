@@ -7,7 +7,7 @@
  * produces it. In trial.ts it would make records.ts -> trial.ts -> engine.ts -> records.ts.
  */
 import { z } from 'zod';
-import type { CommandExit } from '../shell-command.js';
+import type { CommandExit } from '../workflow/shell-command.js';
 import type { BASELINE_OUTPUTS } from './plan.js';
 
 /** What a check says about the repo it ran in. */

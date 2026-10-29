@@ -17,7 +17,7 @@ const SKILL = 'src/workflow/drivers/skill/';
 const LOCAL = 'src/workflow/drivers/local/';
 const PLACE = 'src/workflow/place/';
 const DISCOVERY = 'src/workflow/discovery/';
-const BENCHMARK = 'src/workflow/benchmark/';
+const BENCHMARK = 'src/benchmark/';
 const FLAT = 'src/workflow/';
 
 /** Rule 1: what a module under `drivers/skill/` may import, besides its siblings, `zod` and `node:*`. */
@@ -81,11 +81,32 @@ const ENTRIES: Array<{ folder: string; entries: Record<string, string[] | 'any'>
   },
 ];
 
+/** Why each workflow-to-benchmark edge is allowed: benchmark suites become a default workflow, and these go with that. */
+const BENCHMARK_EDGE = 'runs benchmarks inside the engine until they run as the default benchmark workflow';
+
 /** Edges a rule would refuse that stay until the named change removes them. Each must match exactly `count` edges. */
 const ALLOWED: Array<{ from: string; to: string; count: number; why: string }> = [
   { from: 'src/__tests__/workflow-setup.test.ts', to: 'src/workflow/place/setup.ts', count: 1, why: 'tests setup, the unit place.ts runs, directly' },
   { from: 'src/__tests__/workflow-local-driver.test.ts', to: 'src/workflow/place/worktree-snapshot.ts', count: 1, why: 'fails the snapshot a reader in the checkout takes' },
   { from: 'src/__tests__/workflow-skill-transitions.test.ts', to: 'src/workflow/drivers/skill/transitions.ts', count: 1, why: 'compares TRANSITIONS with the doc tables' },
+  { from: 'src/workflow/cache.ts', to: `${BENCHMARK}suite.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/cache.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/conformance/run.ts', to: `${BENCHMARK}conformance.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/describe.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/drivers/local/local-driver.ts', to: `${BENCHMARK}plan.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/drivers/local/local-driver.ts', to: `${BENCHMARK}trial.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/drivers/local/local-driver.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/drivers/local/local-tool-adapter.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/engine.ts', to: `${BENCHMARK}check.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/engine.ts', to: `${BENCHMARK}table.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/engine.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/protocol.ts', to: `${BENCHMARK}trial.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/records.ts', to: `${BENCHMARK}result.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/step-state.ts', to: `${BENCHMARK}check.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/step-state.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/store.ts', to: `${BENCHMARK}plan.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/types.ts', to: `${BENCHMARK}plan.ts`, count: 1, why: BENCHMARK_EDGE },
+  { from: 'src/workflow/types.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },
 ];
 
 const under = (file: string, folder: string): boolean => file.startsWith(folder);
@@ -156,7 +177,13 @@ function rule5(edges: Edge[]): RuleResult {
   return { matched: scoped.length, violations };
 }
 
-const RULES = { 'skill driver imports': rule1, 'nothing from the skill driver reaches the local driver': rule2, 'folders are reached through their entries': rule3, 'transitions.ts imports only types': rule4, 'flat workflow modules import no driver or discovery': rule5 };
+/** Rule 6: the engine, the protocol and the drivers never import a feature built on them, such as benchmarks. */
+function rule6(edges: Edge[]): RuleResult {
+  const scoped = edges.filter((edge) => under(edge.from, FLAT));
+  return { matched: scoped.length, violations: scoped.filter((edge) => under(edge.to, BENCHMARK)).map(show) };
+}
+
+const RULES = { 'skill driver imports': rule1, 'nothing from the skill driver reaches the local driver': rule2, 'folders are reached through their entries': rule3, 'transitions.ts imports only types': rule4, 'flat workflow modules import no driver or discovery': rule5, 'workflow modules import no benchmark module': rule6 };
 
 /** The edges that `ALLOWED` names, and the entries whose count is not what the graph holds. */
 function allowances(edges: Edge[]): { allowed: Set<Edge>; stale: string[] } {
@@ -254,6 +281,7 @@ describe('workflow module boundaries', () => {
       edge('src/__tests__/workflow-x.test.ts', `${PLACE}reader.ts`),
       edge(`${SKILL}transitions.ts`, `${SKILL}turn.ts`),
       edge('src/workflow/engine.ts', `${DISCOVERY}render.ts`),
+      edge(`${LOCAL}local-driver.ts`, `${BENCHMARK}trial.ts`),
     ];
     expect(rule1(seeded).violations).toEqual([`${SKILL}tick.ts -> src/workflow/engine.ts`, `${SKILL}tick.ts -> src/workflow/store.ts`]);
     expect(rule2(seeded).violations).toEqual([`${LOCAL}local-driver.ts`]);
@@ -263,5 +291,6 @@ describe('workflow module boundaries', () => {
     ]);
     expect(rule4(seeded).violations).toEqual([`${SKILL}transitions.ts -> ${SKILL}turn.ts`]);
     expect(rule5(seeded).violations).toEqual([`src/workflow/protocol.ts -> ${LOCAL}local-driver.ts`, `src/workflow/engine.ts -> ${DISCOVERY}render.ts`]);
+    expect(rule6(seeded).violations).toEqual([`${LOCAL}local-driver.ts -> ${BENCHMARK}trial.ts`]);
   });
 });

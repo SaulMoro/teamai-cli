@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { BenchmarkHistory, pairedDifference, type BenchmarkRunInput } from '../workflow/benchmark/history.js';
-import { runSourceHash } from '../workflow/benchmark/plan.js';
-import type { Baseline, TrialResult } from '../workflow/benchmark/result.js';
-import type { ArmTeam } from '../workflow/benchmark/terms.js';
+import { BenchmarkHistory, pairedDifference, type BenchmarkRunInput } from '../benchmark/history.js';
+import { runSourceHash } from '../benchmark/plan.js';
+import type { Baseline, TrialResult } from '../benchmark/result.js';
+import type { ArmTeam } from '../benchmark/terms.js';
 
 const NOW = new Date('2026-10-28T12:00:00Z');
 

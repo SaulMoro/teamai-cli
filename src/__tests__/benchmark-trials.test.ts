@@ -6,7 +6,7 @@ import { z } from 'zod';
 import * as envExec from '../env-exec.js';
 import { resolveWorkflowEnv } from '../env-resolution.js';
 import { getDataHome, type LocalConfig } from '../types.js';
-import { Trials } from '../workflow/benchmark/trial.js';
+import { Trials } from '../benchmark/trial.js';
 import { leaseNext, reportAttempt } from '../workflow/engine.js';
 import { runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import type { DriverCan } from '../workflow/requirements.js';
