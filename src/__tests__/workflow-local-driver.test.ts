@@ -1773,6 +1773,14 @@ model_reasoning_effort = "low"
     expect(opencode.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--model', 'anthropic/claude-sonnet']]);
   });
 
+  it('passes an exact model and effort as written, never through an alias of the same name', async () => {
+    const { argv, run } = await runOn('claude', oneStep('    model: { name: strong, effort: max }\n'));
+
+    expect(argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', '--model', 'strong', '--effort', 'max']]);
+    expect(run.steps[0]).toMatchObject({ status: 'succeeded', agent: { model: { requested: 'strong' }, effort: { requested: 'max' } } });
+    expect(run.steps[0]).not.toMatchObject({ agent: { model: { alias: expect.anything() } } });
+  });
+
   it('fails an alias without a model for the tool with model_unavailable, and does not start the tool', async () => {
     const step = await runOn('codex', oneStep('    model: strong\n'), { aliases: 'aliases:\n  strong:\n    claude: opus\n' });
     const defaults = await runOn('codex', `schemaVersion: v1alpha1

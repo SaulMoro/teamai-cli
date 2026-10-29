@@ -873,6 +873,47 @@ describe('expressions in templates', () => {
   });
 });
 
+describe('exact step model', () => {
+  it('keeps an exact model as written', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Build it.
+steps:
+  - id: plan
+    prompt: Plan it.
+    model: { name: gpt-5.1-codex, effort: high }
+  - id: review
+    needs: [plan]
+    prompt: Review it.
+    model: { name: claude-opus-4.1 }
+`);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.definition.steps.map((step) => step.model)).toEqual([{ name: 'gpt-5.1-codex', effort: 'high' }, { name: 'claude-opus-4.1' }]);
+  });
+
+  it('rejects an exact model without a name, or with a key or a value it does not take', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Build it.
+steps:
+  - id: review
+    prompt: Review it.
+    model: { effort: high }
+  - id: ship
+    needs: [review]
+    prompt: Ship it.
+    model: { name: opus, effort: very high, speed: fast }
+`);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.diagnostics.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:7: field "steps[0].model": model must be an alias or a model name, or { name, effort? } with the exact model',
+      'workflows/build.yaml:11: field "steps[1].model": model must be an alias or a model name, or { name, effort? } with the exact model',
+    ]);
+  });
+});
+
 describe('step model and defaults', () => {
   it('reports model on a command or workflow step, with the file and step', () => {
     const result = parse(`schemaVersion: v1alpha1

@@ -10,6 +10,7 @@ import type { DeliveryReceipt, UnresolvedCreate } from './delivery-schema.js';
 import type { ArchivedPass, LimitsFrom, ReleasedTokens, SessionContinuation, StepState, StoppedAttempt } from './step-state.js';
 import type { Requirements, Setup, Unenforced } from './requirements.js';
 import type { LeaseSession } from './workspace.js';
+import type { StepModel } from './step-model.js';
 
 /** The driver's lease ownership, independent of its per-request capabilities. */
 export interface DriverIdentity {
@@ -56,8 +57,11 @@ export interface WorkflowStep {
   /** The question answered before this step's action or end. */
   hitl?: StepHitl;
   agent?: string;
-  /** The model a prompt step runs on, as written: an alias from `models/aliases.yaml` or a model name. The driver resolves it. */
-  model?: string;
+  /**
+   * The model a prompt step runs on: an alias from `models/aliases.yaml` or a model name, as written, which the driver
+   * resolves; or the exact model, which every driver passes to the tool as is.
+   */
+  model?: string | StepModel;
   /** The scorers that judge this prompt or workflow step's succeeded passes. */
   scorers?: StepScorers;
   output?: OutputSchema;

@@ -61,8 +61,8 @@ export interface WorkflowDescription {
     /** Interactive prompt steps, by path: a person works in them with the agent. */
     interactive: string[];
     /**
-     * Prompt steps, by path, whose child runs a model resolved for the session's tool: the step's `model`, or the
-     * `defaults.model` in effect for a step that names no `agent`.
+     * Prompt steps, by path, whose child runs a model resolved for the session's tool: the step's `model` as written,
+     * or the `defaults.model` in effect for a step that names no `agent` or model. An exact model resolves for no tool.
      */
     modeled: string[];
     /** The most steps a run may have leased at once, at most `ceiling`. */
@@ -192,7 +192,7 @@ export function describeWorkflow(input: {
       if (!child && step.end === undefined && !runsInCheckout(step, scope.ancestors)) facts.inWorkspace.push(path);
       if (step.prompt !== undefined || step.promptFile !== undefined) facts.prompts.push(path);
       if (step.interactive) facts.interactive.push(path);
-      if ((step.prompt !== undefined || step.promptFile !== undefined) && (step.model !== undefined || (step.agent === undefined && scope.defaultModel !== undefined))) facts.modeled.push(path);
+      if ((step.prompt !== undefined || step.promptFile !== undefined) && (typeof step.model === 'string' || (step.model === undefined && step.agent === undefined && scope.defaultModel !== undefined))) facts.modeled.push(path);
       if (step.scorers && step.scorers.names.length > 0) facts.scored.push({ step: path, scorers: step.scorers.names });
       if (step.deliver === 'pr') {
         const seen = new Set<string>();

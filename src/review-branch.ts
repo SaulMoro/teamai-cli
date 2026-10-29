@@ -1383,7 +1383,8 @@ async function modelFindings(resources: ReviewResource[], readText: (p: string) 
         const own = step.model !== undefined;
         // A run takes `defaults.model` unless the step's agent sets its own; an agent the branch does not have may set one.
         const model = step.model ?? defaultModel;
-        if (model === undefined) continue;
+        // An exact model resolves through no alias.
+        if (model === undefined || typeof model !== 'string') continue;
         if (!own && step.agent !== undefined) {
           const agent = agents.find(({ resource, spec }) => spec.name === step.agent && receives(context, resource.namespace));
           if (agent === undefined || agent.spec.model !== undefined) continue;

@@ -1,6 +1,7 @@
 /** The lease `next` answers with, as `leaseData` in `engine.ts` writes it, parsed by every driver with one schema. */
 import { z } from 'zod';
 import { EnvScopeSchema, LeaseSetupSchema, RequirementsSchema } from './requirements.js';
+import { StepModelSchema } from './step-model.js';
 import { AttemptIdSchema } from './store.js';
 import { WorkspaceContractSchema, type LeaseSession } from './workspace.js';
 
@@ -18,7 +19,8 @@ export const LeaseWireSchema = LeaseIdSchema.extend({
   env: z.record(z.string()).optional(),
   prompt: z.string().optional(),
   agent: z.string().optional(),
-  model: z.string().optional(),
+  /** The step's `model`: as written, which the driver resolves, or the exact model, which it passes to the tool as is. */
+  model: z.union([z.string(), StepModelSchema]).optional(),
   /** The `defaults.model` in effect for a prompt step, as written. */
   defaultModel: z.string().optional(),
   output: z.unknown().optional(),

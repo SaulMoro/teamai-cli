@@ -17,6 +17,7 @@ import {
 import { parseHitl } from './parse-hitl.js';
 import { loopProblems } from './loop.js';
 import { modelValueProblem } from '../models/aliases.js';
+import type { StepModel } from './step-model.js';
 import { REQUIREMENT_KEYS, RequirementsSchema, SetupSchema, type Requirements, type Setup } from './requirements.js';
 
 /**
@@ -28,6 +29,7 @@ export const INVOKE_ALIAS_SINCE = '0.28.0';
 const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'inputs', 'defaults', 'ends', 'outputs', 'loop', 'timeout', 'budget', 'setup', 'steps', 'invoke', 'alias']);
 const ACTION_KEYS = Object.keys(STEP_ACTIONS);
 const STEP_KEYS = new Set(['id', 'needs', 'if', ...ACTION_KEYS, 'env', 'with', 'agent', 'model', 'output', 'end', 'loop', 'break', 'for_each', 'approve', 'choose', 'interactive', 'workspace', 'session', 'scorers', 'requires', 'timeout', 'budget', 'max_turns', 'deliver']);
+const EXACT_MODEL_KEYS: ReadonlySet<string> = new Set(['name', 'effort']);
 const STEP_LOOP_KEYS = new Set(['back_to', 'while', 'max_iterations']);
 const FOR_EACH_KEYS = new Set(['items', 'max_parallel']);
 const WORKFLOW_LOOP_KEYS = new Set(['while', 'max_iterations']);
@@ -399,7 +401,7 @@ function parseBody(
         diagnostics.push(locate(file, lineCounter, agentPair.key ?? item, `${field}.agent`, 'agent is only allowed on a prompt or prompt_file step'));
       }
       const modelPair = item.items.find((pair) => scalarString(pair.key) === 'model');
-      const model = modelPair ? parseModel(modelPair.value ?? modelPair.key, `${field}.model`, ctx) : undefined;
+      const model = modelPair ? parseStepModel(modelPair.value ?? modelPair.key, `${field}.model`, ctx) : undefined;
       if (modelPair && model !== undefined && (commandPair || workflowPair)) {
         diagnostics.push(locate(file, lineCounter, modelPair.key ?? item, `${field}.model`, 'model is only allowed on a prompt or prompt_file step'));
       }
@@ -843,6 +845,23 @@ function parseModel(node: Node | null | undefined, field: string, ctx: ParseCont
     return undefined;
   }
   return model;
+}
+
+/**
+ * A step's `model`: an alias or a model name, as `parseModel` reads it, or the exact model, `{ name, effort? }`, which
+ * the lease carries as written and no driver resolves through models/aliases.yaml.
+ */
+function parseStepModel(node: Node | null | undefined, field: string, ctx: ParseContext): string | StepModel | undefined {
+  if (!isMap(node)) return parseModel(node, field, ctx);
+  const name = scalarString(valueNode(node, 'name'));
+  const effortNode = valueNode(node, 'effort');
+  const effort = scalarString(effortNode);
+  const known = node.items.every((pair) => isScalar(pair.key) && EXACT_MODEL_KEYS.has(String(pair.key.value)));
+  if (name === undefined || !known || modelValueProblem(name) !== undefined || (effortNode !== undefined && modelValueProblem(effort) !== undefined)) {
+    ctx.diagnostics.push(locate(ctx.file, ctx.lineCounter, node, field, 'model must be an alias or a model name, or { name, effort? } with the exact model'));
+    return undefined;
+  }
+  return { name, ...(effort !== undefined ? { effort } : {}) };
 }
 
 function parseDefaults(node: Node | null | undefined, ctx: ParseContext): WorkflowDefaults | undefined {
