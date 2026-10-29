@@ -401,7 +401,7 @@ export type CheckStepMode = 'baseline' | 'trial';
  * `teamai benchmark check --baseline|--trial`: the check of the step whose attempt `env` marks, in `cwd`, the clone that
  * step's place prepared and set up. It reads what it checks from the run's plan, by the step's id: a trial's check first
  * puts the protected paths back as the starting commit has them; both then write the files check.add names, from the
- * run's checkout or the commit cache. Git and the check run with `env` without the names the plan withholds, which this
+ * run's checkout or the commit cache. Git and the check run with `env` without the names a strict sandbox withholds, which this
  * process may have set itself, until `signal` or the lease's deadline stops them, and the verdict is classified here, once. Answers its result, or why the check did not run, with one progress line either way.
  */
 export async function runCheckStep({ mode, env: given, cwd, signal }: { mode: CheckStepMode; env: NodeJS.ProcessEnv; cwd: string; signal?: AbortSignal }): Promise<{ result: CheckResult } | { failure: WorkflowFailure }> {
@@ -417,7 +417,7 @@ export async function runCheckStep({ mode, env: given, cwd, signal }: { mode: Ch
     return { failure: { code: 'invalid_arguments', message: `Step "${step.id}" of run ${run.id} is not ${mode === 'baseline' ? 'the baseline of a check task' : 'the check of a trial'} of a benchmark run, so teamai benchmark check --${mode} has nothing to check there.` } };
   }
   const { task, judge, at } = checked;
-  const env = Object.fromEntries(Object.entries(given).filter(([key]) => sameEnvName(plan.withhold, key) === undefined));
+  const env = Object.fromEntries(Object.entries(given).filter(([key]) => sameEnvName(SANDBOX_WITHHELD_ENV, key) === undefined));
   const sources = [...(run.checkout !== undefined ? [run.checkout] : []), commitCacheOf(config, plan.suite.repo)];
   const expiresAt = leaseDeadline(run, step);
   const prepared = (mode === 'trial' ? await restoreProtected({ clone: cwd, startingCommit: task.startingCommit, protect: judge.protect, sources, env, expiresAt }) : undefined)
