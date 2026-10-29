@@ -90,7 +90,7 @@ matrix:
 | `codex-pulled` | codex | pulled |
 | `codex-none` | codex | none |
 
-A matrix varies `tool`, `model` or `team`, at least one of them with two values or more, and makes 1 to 12 arms. A key it leaves out comes from `defaults`. Each arm's name joins its values for the keys that vary: a ref is used as it is, with a character other than a letter, digit, `-` or `_` written `-`, and `without: [auth-tokens]` is `without-auth-tokens`. A suite has `arms` or `matrix`, not both.
+A matrix varies `tool`, `model` or `team`, at least one of them with two values or more, and makes 2 to 12 arms. A key it leaves out comes from `defaults`. Each arm's name joins its values for the keys that vary: a ref is used as it is, with a character other than a letter, digit, `-` or `_` written `-`, and `without: [auth-tokens]` is `without-auth-tokens`. A suite has `arms` or `matrix`, not both.
 
 A task starts from a full commit of `repo` and is decided by exactly one of `check` and `successCriteria`:
 
@@ -333,7 +333,7 @@ These results hold for these tasks, this run and this machine.
 
 | Table | Shows |
 | --- | --- |
-| Arms | Each arm's trials by result, and how many a [trial limit](#trial-limits) stopped. A deviation is a trial whose prompt ran on another tool, team revision or model than its arm's, or without a trial limit its driver could not enforce. A trial is not verified when its record lacks one of those. When an arm sets `team`, a Team column shows each arm's, such as `pulled 3f9c2ab`, `next 81d0e4c`, `3f9c2ab without auth-tokens` or `none`. |
+| Arms | Each arm's trials by result, and how many a [trial limit](#trial-limits) stopped. A deviation is a trial whose prompt ran on another tool, team revision or model than its arm's, or without a trial limit its driver could not enforce. A trial is not verified when its record lacks one of those. When an arm runs on other team assets than the pulled revision, a Team column shows each arm's, such as `pulled 3f9c2ab`, `next 81d0e4c`, `3f9c2ab without auth-tokens` or `none`. |
 | Usage | Each arm's medians and cost total, with how many trials each used. Tokens and cost appear only as the tool stated them, so a tool that states none shows `unknown (0)`. |
 | Tasks | Each task's pass rate on each arm. |
 | Baselines | The tasks that did not run, and why. |

@@ -90,7 +90,7 @@ matrix:
 | `codex-pulled` | codex | pulled |
 | `codex-none` | codex | none |
 
-matrix 可以变化 `tool`、`model` 或 `team`，其中至少一个要有两个或更多值，并生成 1 到 12 个 arm。它没写的键取自 `defaults`。每个 arm 的名字由各个变化键的值拼接而成：ref 原样使用，字母、数字、`-`、`_` 以外的字符写成 `-`，`without: [auth-tokens]` 写成 `without-auth-tokens`。一个套件只能有 `arms` 或 `matrix` 之一。
+matrix 可以变化 `tool`、`model` 或 `team`，其中至少一个要有两个或更多值，并生成 2 到 12 个 arm。它没写的键取自 `defaults`。每个 arm 的名字由各个变化键的值拼接而成：ref 原样使用，字母、数字、`-`、`_` 以外的字符写成 `-`，`without: [auth-tokens]` 写成 `without-auth-tokens`。一个套件只能有 `arms` 或 `matrix` 之一。
 
 任务从 `repo` 的一个完整提交开始，并且恰好由 `check` 和 `successCriteria` 之一判定：
 
@@ -333,7 +333,7 @@ These results hold for these tasks, this run and this machine.
 
 | 表格 | 内容 |
 | --- | --- |
-| Arm | 按结果统计每个 arm 的 trial，以及被 [trial 限制](#trial-限制)停止的数量。偏差是 prompt 运行时的工具、团队修订或模型与其 arm 不同的 trial，或者其 driver 无法执行某个 trial 限制的 trial。记录缺少其中某个值的 trial 为未验证。有 arm 设置了 `team` 时，Team 列显示每个 arm 的团队资产，例如 `pulled 3f9c2ab`、`next 81d0e4c`、`3f9c2ab without auth-tokens` 或 `none`。 |
+| Arm | 按结果统计每个 arm 的 trial，以及被 [trial 限制](#trial-限制)停止的数量。偏差是 prompt 运行时的工具、团队修订或模型与其 arm 不同的 trial，或者其 driver 无法执行某个 trial 限制的 trial。记录缺少其中某个值的 trial 为未验证。有 arm 使用 pull 到的修订以外的团队资产时，Team 列显示每个 arm 的团队资产，例如 `pulled 3f9c2ab`、`next 81d0e4c`、`3f9c2ab without auth-tokens` 或 `none`。 |
 | 用量 | 每个 arm 的中位数和成本合计，并注明各自用了多少个 trial。token 和成本只按工具自己声明的显示，所以不声明的工具显示 `unknown (0)`。 |
 | 任务 | 每个任务在每个 arm 上的通过率。 |
 | 基线 | 没有运行的任务及原因。 |
