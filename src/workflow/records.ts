@@ -27,6 +27,7 @@ import type { RunOrigin } from '../default-workflows.js';
 import { uniqueOutcomes, type WorkOutcome } from '../outcomes.js';
 import { stepDefinitions } from './scope.js';
 import { benchmarkRecord, type BenchmarkRecord } from '../benchmark/result.js';
+import { isIsolated } from './workspace.js';
 import { snapshotPath } from './snapshot.js';
 import { installOwner, runLockPath } from './store.js';
 import { settled, visibleOutcome, type StepPass, type StepState, type VisibleOutcome } from './step-state.js';
@@ -119,6 +120,8 @@ export type WorkflowRunRecord = {
   prs?: string[];
   /** An ended benchmark run's plan and trial results; absent for a workflow run and while a benchmark runs. */
   benchmark?: BenchmarkRecord;
+  /** The run opens a clone, so it stays on the machine that started it, and its steps are measurements in no workflow total. */
+  isolated?: true;
   username: string;
   publishedAt: string;
 };
@@ -163,6 +166,7 @@ export function buildStartRecord(
     phase: 'start',
     ...(run.runMode ? { runMode: run.runMode } : {}),
     ...(run.origin ? { origin: run.origin } : {}),
+    ...(isIsolated(run) ? { isolated: true as const } : {}),
     // A start record may have no driver yet (a remote driver leases later);
     // the end record always carries the driver that completed the run.
     // Kind only: the workspace is a banned local path and the hostname is
@@ -266,6 +270,7 @@ export function buildEndRecord(
     // bounded history length (their true count is unknowable now).
     iterations: run.settledCount ?? run.settledAttempts.length,
     ...(prs.length ? { prs } : {}),
+    ...(isIsolated(run) ? { isolated: true as const } : {}),
     ...(run.benchmark && run.status !== 'running' ? { benchmark: benchmarkRecord({ ...run, benchmark: run.benchmark }) } : {}),
   };
 }
@@ -592,8 +597,9 @@ export function mergeWorkflowStats(
   }
   let { runs = 0, succeeded = 0, failed = 0, totalDurationMs = 0 } = current;
   const fold = (record: WorkflowRunRecord, sign: 1 | -1): void => {
-    // A benchmark's trial results are measurements, not workflow outcomes, so it is in no workflow total.
-    if (record.username !== username || record.benchmark !== undefined) return;
+    // An isolated run's steps are measurements, not workflow outcomes, so it is in no workflow total. A benchmark record
+    // published before records said isolated is one.
+    if (record.username !== username || record.isolated === true || record.benchmark !== undefined) return;
     runs += sign;
     if (record.status === 'succeeded') succeeded += sign;
     if (record.status === 'failed') failed += sign;

@@ -14,7 +14,10 @@ import type { LocalConfig } from '../types.js';
 import { syncWorkflowDefinitions } from '../workflow/cache.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { startRun } from '../workflow/engine.js';
+import { claimRun } from '../workflow/handoff.js';
 import { inProcessClient } from '../workflow/protocol.js';
+import { buildEndRecord } from '../workflow/records.js';
+import { retryStep } from '../workflow/run-controls.js';
 import { nextJudgeLease } from '../workflow/scoring.js';
 import { readRun } from '../workflow/store.js';
 import type { DriverCan } from '../workflow/requirements.js';
@@ -115,6 +118,20 @@ describe('a clone place', () => {
     expect(fs.existsSync(String((worked as { cwd: string }).cwd))).toBe(false);
     expect(git(['status', '--porcelain'], workspace)).toBe('');
     expect(git(['branch', '--list', 'teamai/*'], workspace)).toBe('');
+  });
+
+  it('isolates a run that opens a clone: it is not retried or claimed, and its record says it is isolated', async () => {
+    const { config, workspace, runId } = await fixture(CLONED);
+    await runLocalDriver(config, runId, workspace);
+
+    const retried = await retryStep(config, runId, await knownSecrets(config), 'trial.work');
+    const claimed = await claimRun(config, runId, { checkout: workspace });
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error('run missing');
+
+    expect(retried).toMatchObject({ error: { code: 'not_retryable', message: expect.stringContaining(`Run ${runId} is isolated`) } });
+    expect(claimed).toMatchObject({ ok: false, error: { code: 'isolated_run', message: expect.stringContaining(`Run ${runId} is isolated`) } });
+    expect(buildEndRecord(run, run.driver, '')).toMatchObject({ isolated: true });
   });
 
   it('gives the judges of a prompt in a clone the work it committed there, after the clone is gone', async () => {

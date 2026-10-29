@@ -242,8 +242,8 @@ describe('#1083 workflow run records', () => {
       'benchmark_invalid', 'task_try_failed',
       // Refusals of teamai workflow next --prepare where the team a trial runs cannot be pinned; its trials stay for another machine.
       'team_ref_blocked',
-      // Refusals of teamai workflow publish and a claim of a benchmark run, which stays on the machine that started it.
-      'benchmark_local',
+      // Refusals of teamai workflow publish and a claim of an isolated run, which stays on the machine that started it.
+      'isolated_run',
       // Refusals of teamai score --run, answered to the member who asked for a pass to be judged.
       'scoring_unavailable', 'pass_not_found', 'scorer_not_found', 'entry_leased',
       // Refusals of teamai score --session, answered to the member who asked for a session to be judged.

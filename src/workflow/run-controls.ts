@@ -13,6 +13,7 @@ import { publishRunRecords, removeQueuedEndRecord } from './records.js';
 import { contextOf, localId, statesIn } from './scope.js';
 import { answerHitl, cancel, cancellable, redeliver, repend, resetIteration, resetPending, settled, start, stopAttempt, stopWhere, stopped, type StepState } from './step-state.js';
 import type { DriverIdentity, RunState, WorkflowEnvelope } from './types.js';
+import { isIsolated } from './workspace.js';
 
 async function controlRun(
   config: LocalConfig,
@@ -344,8 +345,8 @@ function retryInstance(run: RunState, state: StepState, now: string): void {
 /** Retries a step and its dependency cone, retaining pass history and reopening a settled run. */
 export async function retryStep(config: LocalConfig, runId: string, secrets: Record<string, string>, step: string): Promise<WorkflowEnvelope> {
   return controlRun(config, runId, secrets, async (run, now, finish) => {
-    if (run.benchmark) {
-      return error('not_retryable', `Run ${run.id} is a benchmark run, and a trial or baseline that ran again would change results it already counted. Start a new run: teamai workflow start ${run.name} --benchmark`);
+    if (isIsolated(run)) {
+      return error('not_retryable', `Run ${run.id} is isolated: its steps work in clones of fixed commits, and a step that ran again would change what the run already measured. Start a new run: teamai workflow start ${run.name}${run.benchmark ? ' --benchmark' : ''}`);
     }
     // A run this reconcile finds ended, by its timeout or budget too, is reopened by the retry like a settled one.
     let ended = run.status !== 'running';

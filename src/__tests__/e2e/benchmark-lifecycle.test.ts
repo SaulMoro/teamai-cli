@@ -165,9 +165,9 @@ describe('a benchmark run once it has started', () => {
     expect(leased).toMatchObject({ data: { lease: { step: 'trials.r1.fix.claude.prompt' } } });
     expect(late.error).toBeUndefined();
     expect(retried.error).toMatchObject({ code: 'not_retryable', message: expect.stringContaining('teamai workflow start fix --benchmark') });
-    expect(published.error).toMatchObject({ code: 'benchmark_local' });
-    expect(claimed.error).toMatchObject({ code: 'benchmark_local' });
-    expect(nextClaimed.error).toMatchObject({ code: 'benchmark_local' });
+    expect(published.error).toMatchObject({ code: 'isolated_run' });
+    expect(claimed.error).toMatchObject({ code: 'isolated_run' });
+    expect(nextClaimed.error).toMatchObject({ code: 'isolated_run' });
     expect(after).toEqual(before);
     expect(snapshot).not.toContain(`workflows/runs/${runId}/state.json`);
     expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
