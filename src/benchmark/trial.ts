@@ -35,7 +35,7 @@ import { projectSlug } from '../utils/partition.js';
 import { withFileLock } from '../update.js';
 import { error, leaseNext, locateStep, reportAttempt, type NextOptions, type ReportInput } from '../workflow/engine.js';
 import { sameDriver } from '../driver-identity.js';
-import { EnvScopeSchema, LeaseSetupSchema, trialGaps, type DriverCan, type EnvScope, type LeaseSetup, type Setup } from '../workflow/requirements.js';
+import { EnvScopeSchema, lacksTool, LeaseSetupSchema, trialGaps, type DriverCan, type EnvScope, type LeaseSetup, type Setup } from '../workflow/requirements.js';
 import { runSetup } from '../workflow/place/setup.js';
 import { attemptEnv } from '../workflow/attempt-marker.js';
 import { leaseDeadline } from '../workflow/limits.js';
@@ -44,7 +44,8 @@ import { runShellCommand } from '../workflow/shell-command.js';
 import { runPasses, type RunPass } from '../workflow/loop.js';
 import { settled, type LeasedStep } from '../workflow/step-state.js';
 import { readRun, runsDir } from '../workflow/store.js';
-import { WORKSPACE_MODES, type DriverIdentity, type RunState, type WorkflowEnvelope, type WorkflowFailure } from '../workflow/types.js';
+import { StepModelSchema, type StepModel } from '../workflow/step-model.js';
+import { WORKSPACE_MODES, type DriverIdentity, type RunState, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../workflow/types.js';
 import { boundedGit, commitWork, recordConfigOverlay, restoreUneditedConfig, saveConfig, untrustedGit, type Git } from '../workflow/worktree.js';
 import { baselineOutput, checkVerdict, type CheckVerdict } from './check.js';
 import { trialCopyOf, type BenchmarkPlan } from './plan.js';
@@ -168,7 +169,8 @@ export const Trials = {
   async report(config: LocalConfig, runId: string, report: ReportInput, secrets: Record<string, string>): Promise<WorkflowEnvelope> {
     const run = await readRun(config, runId);
     const leased = typeof run === 'object' ? run.steps.find((step) => step.status === 'leased' && step.attempt === report.attempt) : undefined;
-    const terms = leased && typeof run === 'object' ? locateStep(run, leased.id)?.step.trial : undefined;
+    const defined = leased && typeof run === 'object' ? locateStep(run, leased.id)?.step : undefined;
+    const terms = defined?.trial;
     // An attempt that is no longer leased gets the engine's own answer: stale, cancelled, or not this run's.
     if (!leased || typeof run !== 'object' || terms === undefined) return reportAttempt(config, runId, { ...report, trialReport: {} }, secrets);
     if (terms.kind !== 'prompt') {
@@ -179,13 +181,13 @@ export const Trials = {
       return error('invalid_report', `Prepared trial reports fill ${TEAMAI_FILLS.join('/')} automatically; omit ${filled.join('/')}`);
     }
     if (report.tool === undefined) {
-      return error('invalid_report', `The report of trial step "${leased.id}" names no tool. Send tool with the tool the driver launched: ${terms.tool} for this trial.`);
+      return error('invalid_report', `The report of trial step "${leased.id}" names no tool. Send tool with the tool the driver launched: ${defined?.tool} for this trial.`);
     }
     if (report.limit !== undefined && !setsLimit(terms.limits, report.limit)) {
       return error('invalid_report', `The report of trial step "${leased.id}" names limit ${report.limit}, which its suite's trial does not set. Send limit only for a limit in the lease's trial.limits that stopped the tool.`);
     }
     const file = receiptPath(config, runId, trialCopyOf(terms));
-    const reported = await withCopy(file, COPY_WAIT, () => reportPrompt({ config, runId, report, secrets, file, terms }));
+    const reported = await withCopy(file, COPY_WAIT, () => reportPrompt({ config, runId, report, secrets, file, terms, model: defined?.model }));
     return reported.held ? reported.value : copyBusy(leased.id);
   },
 
@@ -246,8 +248,10 @@ const AcceptedSchema = z.object({ step: z.object({ outcome: z.string() }) });
  * report sent again, which finds the agent files put back and the work committed, and commits nothing twice. So a
  * report stopped at any point leaves the prompt leased with its work, or settled with all its check and judges read.
  */
-async function reportPrompt({ config, runId, report, secrets, file, terms }: {
+async function reportPrompt({ config, runId, report, secrets, file, terms, model }: {
   config: LocalConfig; runId: string; report: ReportInput; secrets: Record<string, string>; file: string; terms: PromptTerms;
+  /** The prompt step's `model`: the arm's exact model, when it sets one. */
+  model: WorkflowStep['model'];
 }): Promise<WorkflowEnvelope> {
   const run = await readRun(config, runId);
   const leased = typeof run === 'object' ? leasedStep(run, report.attempt) : undefined;
@@ -281,7 +285,7 @@ async function reportPrompt({ config, runId, report, secrets, file, terms }: {
     ...unlimited,
     ...(failure ? { outcome: 'failed', message: failure.message, failure } : limit !== undefined ? { limit } : {}),
     ...(changes ? { changes } : {}),
-    agent: trialAgent(receipt.state.observed, terms, report),
+    agent: trialAgent(receipt.state.observed, typeof model === 'object' ? model : undefined, report),
     trialReport: {},
   }, secrets);
   const outcome = AcceptedSchema.safeParse('data' in answer ? answer.data : undefined).data?.step.outcome;
@@ -397,17 +401,16 @@ export async function trialBlocker(config: LocalConfig): Promise<string | undefi
 
 /**
  * The lines the local driver prints once before its first `next`, one per reason a trial of `plan` does not run on it.
- * Each arm's reasons are `trialGaps`, the rule that holds its trials, so a printed reason and a held trial agree.
+ * The reasons are `trialGaps` and `lacksTool`, the rules that hold its trials, so a printed reason and a held trial agree.
  */
-export function benchmarkNotices(plan: BenchmarkPlan, can: Pick<DriverCan, 'trials' | 'isolation'>, blocked: string | undefined): string[] {
-  const gaps = plan.arms.map((arm) => ({ arm, missing: trialGaps({ tool: arm.tool }, can, true) }));
+export function benchmarkNotices(plan: BenchmarkPlan, can: Pick<DriverCan, 'tools' | 'trials' | 'isolation'>, blocked: string | undefined): string[] {
   return [
     ...(blocked !== undefined ? [blocked] : []),
-    ...(gaps.some(({ missing }) => missing.includes('sandbox'))
+    ...(trialGaps(can, true).includes('sandbox')
       ? ['This machine is not declared a sandbox, so benchmark trials did not run. Run benchmarks in CI or a container, and declare it with --sandbox.']
       : []),
-    ...gaps.filter(({ missing }) => missing.includes('trials'))
-      .map(({ arm }) => `Arm "${arm.name}" uses ${arm.tool}, which the local driver cannot run, so its trials did not run.`),
+    ...plan.arms.filter((arm) => lacksTool(arm.tool, can))
+      .map((arm) => `Arm "${arm.name}" uses ${arm.tool}, which the local driver cannot run, so its trials did not run.`),
   ];
 }
 
@@ -425,7 +428,7 @@ const LeaseBase = {
   workspace: z.object({ branch: z.string().min(1) }).passthrough(),
   expiresAt: z.string().optional(),
 };
-const PromptLeaseSchema = z.object({ ...LeaseBase, trial: PromptTermsSchema, prompt: z.string() }).passthrough();
+const PromptLeaseSchema = z.object({ ...LeaseBase, trial: PromptTermsSchema, prompt: z.string(), tool: z.string().min(1), model: StepModelSchema.optional() }).passthrough();
 const CheckLeaseSchema = z.object({ ...LeaseBase, trial: CheckTermsSchema, command: z.string() }).passthrough();
 const BaselineLeaseSchema = z.object({ ...LeaseBase, trial: BaselineTermsSchema, command: z.string() }).passthrough();
 type PromptLease = z.infer<typeof PromptLeaseSchema>;
@@ -496,7 +499,7 @@ async function takePrompt(trial: TrialCall, lease: PromptLease, answer: Workflow
     await removeRoot(prepared.receipt);
     return refused;
   }
-  progress(trial, lease.trial, { kind: 'ready', tool: lease.trial.tool });
+  progress(trial, lease.trial, { kind: 'ready', tool: lease.tool });
   return { data: { ...('data' in answer ? answer.data : {}), lease: driverLease(lease, prepared.cwd) } };
 }
 
@@ -528,7 +531,7 @@ async function preparePrompt(trial: TrialCall, lease: PromptLease): Promise<Prep
   const status = await clone.git(clone.dir, [...HEAD_STATUS]);
   const head = status.code === 0 ? headStateOf(status.stdout) : null;
   const observed = installed
-    ? await observeCheckout({ config: installed.config, tool: lease.trial.tool, cwd: clone.dir, head })
+    ? await observeCheckout({ config: installed.config, tool: lease.tool, cwd: clone.dir, head })
     : head ? { project: { commit: head.head, dirty: head.dirty } } : {};
   await writeReceipt(file, { v: 1, copy, root, state: { kind: 'prepared', attempt: lease.attempt, branch: lease.workspace.branch, observed, withhold } });
   return { ok: true, cwd: clone.dir, receipt };
@@ -592,7 +595,7 @@ const TRIAL_PULL_TIMEOUT_MS = 10 * 60_000;
  */
 async function prepareInstall(trial: TrialCall, root: string, lease: PromptLease, teamRevision: string): Promise<{ ok: true; config: LocalConfig } | { ok: false; failure: WorkflowFailure }> {
   const failed = (message: string): { ok: false; failure: WorkflowFailure } => ({ ok: false, failure: { code: 'trial_prepare_failed', message } });
-  const { tool, selection } = lease.trial;
+  const { tool, trial: { selection } } = lease;
   const clone = path.join(root, 'r');
   const saved = path.join(root, 'saved');
   await fs.mkdir(saved);
@@ -973,16 +976,16 @@ function interrupted(runId: string, step: string): WorkflowEnvelope {
 /**
  * The trial's `agent`: the team revision and project commit teamai observed of the clone it prepared, whatever the
  * member's checkout pulled since and whatever the driver says; of what the driver sent, only what it observed of its
- * tool. The model and effort it was asked to run are the plan's.
+ * tool. The model and effort it was asked to run are the arm's exact model.
  */
-function trialAgent(observed: ReportedAgent, terms: PromptTerms, report: ReportInput): ReportedAgent {
+function trialAgent(observed: ReportedAgent, model: StepModel | undefined, report: ReportInput): ReportedAgent {
   const sent = report.agent;
   return {
     ...(observed.team ? { team: observed.team } : {}),
     ...(observed.project ? { project: observed.project } : {}),
     ...(sent?.tool?.version ? { tool: { version: sent.tool.version } } : {}),
-    model: { ...(terms.model ? { requested: terms.model } : {}), ...(sent?.model?.reported ? { reported: sent.model.reported } : {}) },
-    effort: { ...(terms.effort ? { requested: terms.effort } : {}), ...(sent?.effort?.reported ? { reported: sent.effort.reported } : {}) },
+    model: { ...(model ? { requested: model.name } : {}), ...(sent?.model?.reported ? { reported: sent.model.reported } : {}) },
+    effort: { ...(model?.effort ? { requested: model.effort } : {}), ...(sent?.effort?.reported ? { reported: sent.effort.reported } : {}) },
   };
 }
 

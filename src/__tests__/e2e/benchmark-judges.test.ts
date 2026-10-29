@@ -149,7 +149,7 @@ describe('benchmark judges of an external driver', () => {
     const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark']);
     const runId = z.object({ run: z.string() }).parse(envelope(started).data).run;
     const driver = fakeTrialDriver({ teamai: fixture.teamai, env: fixture.env, pauseMs: 100, tools: { claude: path.join(fixture.bin, 'claude') } });
-    const can = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', trials: ['claude'] };
+    const can = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
 
     const judging = await driver.drive({ runId, can, prepare: true, maxPolls: 4 });
     const judge = { kind: 't3', machine: 'judge', workspace: fixture.work };

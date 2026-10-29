@@ -166,8 +166,8 @@ const SETTLED_END = 'settled';
  *     r<rep>                      inline, one per repetition
  *       <task>                    inline; a check task's: if steps.baselines.outputs.<task> == 'fails'
  *         <arm>                   inline, needs [], workspace new (opens the trial's copy), arms in rotated order
- *           prompt                workspace continue; trial.kind prompt; scorers { the suite's and the task's correctness
- *                                 scorer, required: true }
+ *           prompt                workspace continue; tool and exact model: the arm's; trial.kind prompt;
+ *                                 scorers { the suite's and the task's correctness scorer, required: true }
  *           check                 needs [prompt]; command check.run; workspace continue; trial.kind check (check tasks only)
  *   settled                       needs every scope above; an `if` that reads them; end: settled
  *   ends: { settled: succeeded }  timeout: suite.timeoutMs; setup: suite.setup
@@ -183,7 +183,7 @@ const SETTLED_END = 'settled';
  * - `<arm>` needs nothing, so its copy grows from no step, where an omitted `needs` would grow it from the baselines.
  * - `<arm>` opens the copy, so prompt and check share it by ancestry, and copy ownership keeps the check on the driver
  *   that ran the prompt.
- * - No step carries `model`: a trial never goes through alias resolution. Its model is in `trial.model`.
+ * - The prompt carries the arm's `tool` and its exact `model`, so a trial never goes through alias resolution.
  */
 export function compilePlan(plan: BenchmarkPlan, { suite, files }: CommittedSuite): { definition: WorkflowDefinition; scorers: Record<string, PinnedScorer> } {
   const tasks = new Map(suite.tasks.map((task) => [task.id, task]));
@@ -243,7 +243,9 @@ function addTerm(judge: Extract<TaskJudge, { kind: 'check' }>, checkFiles: Added
 function trialSteps(plan: BenchmarkPlan, suite: Suite, trial: PlannedTrial, arm: PlannedArm, task: Task, checkFiles: Added | undefined): WorkflowStep[] {
   const names = [...suite.scorers, ...(task.judge.kind === 'criteria' ? [correctnessScorerName(task.id)] : [])];
   const prompt: WorkflowStep = {
-    id: 'prompt', prompt: task.prompt, workspace: 'continue', trial: promptTerms(plan, trial, arm, task),
+    id: 'prompt', prompt: task.prompt, workspace: 'continue', tool: arm.tool,
+    ...(arm.model ? { model: { name: arm.model, ...(arm.effort ? { effort: arm.effort } : {}) } } : {}),
+    trial: promptTerms(plan, trial, arm, task),
     ...(names.length > 0 ? { scorers: { names, required: true } } : {}),
   };
   switch (task.judge.kind) {
@@ -266,8 +268,7 @@ function trialSteps(plan: BenchmarkPlan, suite: Suite, trial: PlannedTrial, arm:
 
 function promptTerms(plan: BenchmarkPlan, trial: PlannedTrial, arm: PlannedArm, task: Task): PromptTerms {
   return {
-    kind: 'prompt', task: task.id, arm: arm.name, repetition: trial.repetition, order: trial.order, tool: arm.tool,
-    ...(arm.model ? { model: arm.model } : {}), ...(arm.effort ? { effort: arm.effort } : {}),
+    kind: 'prompt', task: task.id, arm: arm.name, repetition: trial.repetition, order: trial.order,
     startingCommit: task.startingCommit, team: arm.team, selection: selectionOf(plan.selection, arm),
     ...(plan.limits ? { limits: plan.limits } : {}),
   };

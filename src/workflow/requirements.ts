@@ -57,7 +57,7 @@ const ENFORCEMENT = {
   setup: 'strict',
   /** A prompt step that names its `tool`: `can.tools` lists it. */
   tools: 'strict',
-  /** A benchmark trial step: `can.trials` lists its tool (any tool for a step teamai runs itself). */
+  /** A benchmark trial step: `can.trials` lists a tool, so the driver holds the trial's prompt to the suite's limits. */
   trials: 'strict',
   /**
    * A benchmark trial step runs only where the driver declares `can.isolation: sandbox`. Strict for trials only:
@@ -86,7 +86,8 @@ type BestEffortKey = KeysOf<'bestEffort'>;
  *   fails the step without running it when setup exits non-zero (`setup_failed`), changes a tracked or non-ignored path
  *   (`setup_dirty`), or leaves a value of one of its keys in a file it created or changed (`setup_secret`).
  * - `tools`: the tools the driver launches a prompt step on that names its `tool`. Omitted: no such step.
- * - `trials`: the tools whose benchmark trials the driver launches by the trial rules. Omitted: no trial.
+ * - `trials`: the tools whose benchmark trials the driver launches by the trial rules, holding each prompt to its
+ *   suite's limits. Any tool listed admits every trial; `tools` decides which prompts. Omitted: no trial.
  */
 export const CanSchema = z.object({
   hitl: z.boolean().optional(),
@@ -250,8 +251,8 @@ export interface Offer {
   setup?: Setup;
   /** The tool a prompt step names. */
   tool?: string;
-  /** A benchmark trial step: its tool, null for a step teamai runs itself, and the names the run's plan withholds. */
-  trial?: { tool: string | null; withhold: readonly string[] };
+  /** A benchmark trial step: the names the run's plan withholds. */
+  trial?: { withhold: readonly string[] };
   /** The caller asked `next --prepare`. */
   prepare: boolean;
 }
@@ -296,7 +297,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
   if (allow.env && [...required, ...setupKeys].some((key) => sameEnvName(allow.env ?? [], key) === undefined)) policy.push('policy.env');
   const gaps: Missing[] = policy.length > 0 ? policy : [
     ...(offer.tool !== undefined && lacksTool(offer.tool, can) ? ['tools' as const] : []),
-    ...(offer.trial ? trialGaps(offer.trial, can, offer.prepare) : []),
+    ...(offer.trial ? trialGaps(can, offer.prepare) : []),
     ...(offer.interactive && !can.hitl ? ['hitl' as const] : []),
     ...(offer.setup && !can.setup ? ['setup' as const] : []),
     ...((required.length > 0 && !covers.step) || (setupKeys.length > 0 && !covers.setup) ? ['env' as const] : []),
@@ -352,10 +353,9 @@ export function lacksTool(tool: string, can: Pick<DriverCan, 'tools'>): boolean 
 }
 
 /** What a trial step lacks on this driver. */
-export function trialGaps(trial: { tool: string | null }, can: Pick<DriverCan, 'trials' | 'isolation'>, prepare: boolean): Missing[] {
-  const listed = can.trials ?? [];
+export function trialGaps(can: Pick<DriverCan, 'trials' | 'isolation'>, prepare: boolean): Missing[] {
   return [
-    ...((trial.tool === null ? listed.length > 0 : listed.includes(trial.tool)) ? [] : ['trials' as const]),
+    ...((can.trials ?? []).length > 0 ? [] : ['trials' as const]),
     ...(can.isolation === 'sandbox' ? [] : ['sandbox' as const]),
     ...(prepare ? [] : ['prepare' as const]),
   ];

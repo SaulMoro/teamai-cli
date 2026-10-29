@@ -51,7 +51,7 @@ const RecordSchema = z.object({
   }).passthrough(),
 }).passthrough();
 const DoneSchema = z.object({ outcome: z.string(), benchmark: z.object({ text: z.string() }) }).passthrough();
-const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', trials: ['claude'] };
+const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
 const DRIVER = { kind: 'external', machine: 'lifecycle-driver', workspace: '/fake' };
 
 const fixtures: BenchmarkFixture[] = [];

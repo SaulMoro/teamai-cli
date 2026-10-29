@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { benchmarkFixture, envelope, FIX_SUITE, said, type BenchmarkFixture, type Envelope } from '../helpers/benchmark-fixture.js';
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'dist', 'index.js');
-const CAN = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', trials: ['claude'] };
+const CAN = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
 const CRITERIA_TASK = `schemaVersion: v1alpha1
 title: Fix the answer
 prompt: Make answer.js export 42.

@@ -92,7 +92,6 @@ const ALLOWED: Array<{ from: string; to: string; count: number; why: string }> =
   { from: 'src/workflow/cache.ts', to: `${BENCHMARK}suite.ts`, count: 1, why: BENCHMARK_EDGE },
   { from: 'src/workflow/cache.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },
   { from: 'src/workflow/conformance/run.ts', to: `${BENCHMARK}conformance.ts`, count: 1, why: BENCHMARK_EDGE },
-  { from: 'src/workflow/describe.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },
   { from: 'src/workflow/drivers/local/local-driver.ts', to: `${BENCHMARK}trial.ts`, count: 1, why: BENCHMARK_EDGE },
   { from: 'src/workflow/drivers/local/local-driver.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },
   { from: 'src/workflow/drivers/local/local-tool-adapter.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },

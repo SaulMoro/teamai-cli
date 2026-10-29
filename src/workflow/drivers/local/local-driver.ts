@@ -543,7 +543,7 @@ function deadlineSignal(expiresAt: string | undefined): AbortSignal {
 
 /**
  * One prepared prompt, launched by the trial rules: the lease's tool, never the member's --tools mapping; the lease's
- * model and effort as given, with no alias lookup; the env without every name the lease withholds; in the clone. The
+ * exact model as given; the env without every name the lease withholds; in the clone. The
  * report carries the time around the tool's run alone, and the cost only when the tool stated one. A tool still running
  * at the lease's `trial.limits` timeout, or once its stdout states more tokens than its budget, is stopped with
  * everything it started, and headless Claude runs with its `maxTurns`; either way the prompt succeeds with that limit,
@@ -559,7 +559,7 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
   env: WorkflowEnv;
   signal: AbortSignal;
 }): Promise<ReportBody | undefined> {
-  const { tool, model, effort, limits } = lease.trial;
+  const { tool, model, trial: { limits } } = lease;
   const reported = { attempt: lease.attempt, revision: lease.revision, driver, tool };
   if (!isLaunchTool(tool)) return { ...reported, ...failureReport({ code: 'tool_unsupported', message: `The local workflow tool "${tool}" is not supported` }) };
   const scoped = await stepEnvironment(env, lease.envScope);
@@ -575,7 +575,7 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
     tool,
     input: {
       prompt: lease.prompt, cwd: lease.cwd, resultPath: resultFile, env: { ...scoped.env, ...lease.env },
-      ...(model ? { model: { name: model, ...(effort ? { effort } : {}) } } : {}),
+      ...(model ? { model } : {}),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
       ...(budget !== undefined ? { budget } : {}),
       ...(limits?.timeoutMs !== undefined ? { timeoutMs: limits.timeoutMs } : {}),

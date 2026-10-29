@@ -17,7 +17,7 @@ import type { DriverIdentity } from '../workflow/types.js';
 import { benchmarkRunConfig, RUN_START, RUN_TEAM, settleBaselines, startBenchmarkRun } from './helpers/benchmark-fixture.js';
 
 const driver: DriverIdentity = { kind: 'external', machine: 'ci', workspace: '/work' };
-const can: DriverCan = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', trials: ['claude'] };
+const can: DriverCan = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
 const dirs: string[] = [];
 const HeldSchema = z.object({ data: z.object({ wait: z.object({ held: z.array(z.unknown()) }) }) });
 const LeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number() }) }) });
@@ -91,7 +91,8 @@ describe('benchmark plan run', () => {
     expect(next).toMatchObject({ data: { lease: {
       step: 'trials.r1.t01.a01.prompt',
       prompt: 'Make the test pass.',
-      trial: { kind: 'prompt', task: 't01', arm: 'a01', repetition: 1, order: 1, tool: 'claude', startingCommit: RUN_START, team: { kind: 'pulled', revision: RUN_TEAM } },
+      tool: 'claude',
+      trial: { kind: 'prompt', task: 't01', arm: 'a01', repetition: 1, order: 1, startingCommit: RUN_START, team: { kind: 'pulled', revision: RUN_TEAM } },
       workspace: { base: { commit: RUN_START }, configCommit: RUN_START },
     } } });
   });
@@ -294,7 +295,7 @@ describe('benchmark plan run', () => {
 
     const run = await readRun(config, runId);
     expect(next).toMatchObject({ data: { lease: { step: 'trials.r1.t01.a02.prompt' } } });
-    expect(typeof run === 'object' && run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({ status: 'skipped' });
+    expect(typeof run === 'object' && run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({ status: 'failed', failure: { code: 'tool_unavailable' } });
   });
 
   it('rotates the arms by one place per repetition', () => {

@@ -61,7 +61,7 @@ import type {
 import { hasAction } from './types.js';
 import type { CheckVerdict } from '../benchmark/check.js';
 import { benchmarkTable, formatBenchmarkTable, type BenchmarkTable } from '../benchmark/table.js';
-import { TrialLimitSchema, trialTool, type TrialLimit } from '../benchmark/terms.js';
+import { TrialLimitSchema, type TrialLimit } from '../benchmark/terms.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 
 /**
@@ -1056,7 +1056,7 @@ function offerTerms(
     ...(step.maxTurns !== undefined ? { maxTurns: step.maxTurns } : {}),
     ...(plan?.contract && scope.setup ? { setup: scope.setup } : {}),
     ...(step.tool !== undefined ? { tool: step.tool } : {}),
-    ...(step.trial ? { trial: { tool: trialTool(step.trial), withhold: run.benchmark?.withhold ?? [] } } : {}),
+    ...(step.trial ? { trial: { withhold: run.benchmark?.withhold ?? [] } } : {}),
     prepare: context.prepare,
   }, context.can, context.allow, context.facts);
 }
@@ -1095,8 +1095,8 @@ export interface NextOptions {
   prepare?: boolean;
   /**
    * Process-only: the caller is the run's only driver, as the local driver is. A step that names a tool it cannot launch
-   * fails `tool_unavailable` at once, and a trial step it cannot take is skipped, so its trial reads `not_run`. For any
-   * other driver both stay pending, a trial until the suite's timeout.
+   * fails `tool_unavailable` at once, and a trial step it cannot take for the trial gates (sandbox, prepare, trials) is
+   * skipped, so its trial reads `not_run`. For any other driver both stay pending, a trial until the suite's timeout.
    */
   alone?: boolean;
 }

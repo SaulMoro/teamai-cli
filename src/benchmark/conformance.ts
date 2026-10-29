@@ -36,7 +36,7 @@ check:
 }
 
 const external: DriverCan = { workspace: [...DRIVER_PROFILES.external.can.workspace] };
-const SANDBOX_CLAUDE: DriverCan = { ...external, isolation: 'sandbox', trials: ['claude'] };
+const SANDBOX_CLAUDE: DriverCan = { ...external, isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
 /** The baseline of task `fix`: the first step of the run, which every driver must be able to take before any trial runs. */
 const BASELINE = 'baselines.fix';
 

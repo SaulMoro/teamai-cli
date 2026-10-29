@@ -166,6 +166,7 @@ function baselineOf(run: RunState, task: PlannedTask): Baseline {
 /**
  * The result of one planned trial, first match wins:
  *   prompt never leased: absent, pending, skipped, or cancelled without an attempt  -> not_run
+ *   prompt failed tool_unavailable: the run's only driver cannot launch its tool    -> not_run
  *   prompt cancelled after its lease, or failed                                     -> error
  *   check task: the check's stored verdict: passed -> passed, failed -> failed, could_not_run -> error;
  *               no verdict (the check never ran to a verdict)                       -> error
@@ -183,6 +184,7 @@ function trialResultOf(run: RunState, plan: BenchmarkPlan, trial: PlannedTrial):
     case 'cancelled':
       return prompt.attempt === undefined ? 'not_run' : 'error';
     case 'failed':
+      return prompt.failure?.code === 'tool_unavailable' && prompt.attempt === undefined ? 'not_run' : 'error';
     case 'leased':
     case 'running':
     case 'delivering':

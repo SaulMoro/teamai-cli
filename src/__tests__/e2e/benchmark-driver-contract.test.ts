@@ -32,7 +32,7 @@ const DRIVERS: Array<{ name: string; make(fixture: BenchmarkFixture): DriverUnde
   },
 ];
 
-const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', trials: ['claude'] };
+const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
 const RecordSchema = z.object({ benchmark: z.object({
   tasks: z.array(z.object({ id: z.string(), baseline: z.string() })),
   trials: z.array(z.object({ order: z.number(), arm: z.string(), result: z.string(), limit: z.string().optional() })),

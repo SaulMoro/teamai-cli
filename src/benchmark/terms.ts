@@ -1,12 +1,13 @@
 /**
- * The trial terms a generated benchmark step carries. Zod only, so types.ts, requirements.ts, store.ts and the drivers
- * import it without a cycle.
+ * The trial terms a generated benchmark step carries. Zod and the exact model schema only, so types.ts, store.ts and
+ * the drivers import it without a cycle.
  *
  * Only a `prompt` step ever reaches a driver: teamai leases a `check` step to the driver that asked, runs it itself
  * inside `workflow next --prepare`, and leases again. Both kinds stay step markers, so `negotiate` gates them the same
  * way and teamai knows how to run what it leased.
  */
 import { z } from 'zod';
+import { StepModelSchema } from '../workflow/step-model.js';
 
 /**
  * A task or arm name. It becomes one step-path segment, one expression path field and part of a branch name, so it has
@@ -102,10 +103,6 @@ export const PromptTermsSchema = z.object({
   kind: z.literal('prompt'),
   ...Shared,
   ...OfArm,
-  tool: z.string().min(1),
-  /** A model name the plan resolved at start, never an alias. Absent: the tool's default model. */
-  model: z.string().min(1).optional(),
-  effort: z.string().min(1).optional(),
   /** The team assets the trial gets: the arm's. */
   team: ArmTeamSchema,
   selection: TrialSelectionSchema,
@@ -129,21 +126,6 @@ const TrialTermsSchema = z.discriminatedUnion('kind', [PromptTermsSchema, CheckT
 export type TrialTerms = z.infer<typeof TrialTermsSchema>;
 export type PromptTerms = z.infer<typeof PromptTermsSchema>;
 
-/** The tool `can.trials` must list for this step; null for a step teamai runs itself, which needs a non-empty list. */
-export function trialTool(terms: TrialTerms): string | null {
-  switch (terms.kind) {
-    case 'prompt':
-      return terms.tool;
-    case 'check':
-    case 'baseline':
-      return null;
-    default: {
-      const unhandled: never = terms;
-      return unhandled;
-    }
-  }
-}
-
 /**
  * What `Trials.next` answers a driver for a prompt trial, in `{ data: { lease } }`: the engine's lease without
  * `workspace` and `setup`, which teamai already applied, plus `cwd`, the prepared clone. Every TypeScript driver
@@ -156,6 +138,10 @@ export const PreparedTrialLeaseSchema = z.object({
   revision: z.number().int(),
   pass: z.number().int().positive(),
   prompt: z.string(),
+  /** The arm's tool, which the driver listed in `can.tools`. */
+  tool: z.string().min(1),
+  /** The arm's exact model, which the driver passes to the tool as is. Absent: the tool's default model. */
+  model: StepModelSchema.optional(),
   trial: PromptTermsSchema,
   /** The names the tool's environment must not hold. */
   envScope: z.object({ provide: z.array(z.string()), withhold: z.array(z.string()) }),

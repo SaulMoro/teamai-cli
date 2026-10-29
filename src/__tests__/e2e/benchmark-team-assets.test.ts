@@ -21,7 +21,7 @@ repetitions: 2
 timeout: 10m
 `;
 const SKILL = '---\nname: fixer\ndescription: Fixes the answer.\n---\nMake the answer right.\n';
-const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', trials: ['claude'] };
+const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
 const AgentSchema = z.object({
   team: z.object({ revision: z.string(), localChanges: z.boolean() }).passthrough().optional(),
   project: z.object({ commit: z.string() }).passthrough().optional(),

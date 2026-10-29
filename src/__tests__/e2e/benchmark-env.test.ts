@@ -37,7 +37,7 @@ prompt: Make answer.js export 42.
 startingCommit: '{{startingCommit}}'
 successCriteria: answer.js exports 42.
 `;
-const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', trials: ['claude'] };
+const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
 const RecordSchema = z.object({ benchmark: z.object({ trials: z.array(z.object({ result: z.string() }).passthrough()) }) });
 
 const fixtures: BenchmarkFixture[] = [];

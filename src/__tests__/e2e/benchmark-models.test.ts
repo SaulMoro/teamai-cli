@@ -92,7 +92,7 @@ const DRIVERS: Array<{ name: string; run(fixture: BenchmarkFixture): Promise<{ r
         teamai: fixture.teamai, env: fixture.env, pauseMs: 500,
         tools: { claude: path.join(fixture.bin, 'claude'), codex: path.join(fixture.bin, 'codex') },
       });
-      const result = await driver.drive({ runId, can: { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', trials: ['claude', 'codex'] }, prepare: true, maxPolls: 10 });
+      const result = await driver.drive({ runId, can: { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', tools: ['claude', 'codex'], trials: ['claude', 'codex'] }, prepare: true, maxPolls: 10 });
       if (result.done?.text === undefined) throw new Error(`the run did not end: ${JSON.stringify(result)}`);
       return { runId, text: result.done.text };
     },
