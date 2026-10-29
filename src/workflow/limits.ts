@@ -4,6 +4,7 @@
  */
 import { isItem } from './fan-out.js';
 import { isUnder } from './loop.js';
+import type { TurnLimits } from './requirements.js';
 import { topScope, type Scope } from './scope.js';
 import { passOf, settled, stopAttempt, stopWhere, timeOut, type LeasedStep, type LimitsFrom, type StepState, type StoppedAttempt } from './step-state.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
@@ -21,12 +22,13 @@ function passed(deadline: string, now: string): boolean {
 /**
  * When instance `state` of `step`, leased or started at `now`, must settle: by its own `timeout`, and when it runs a
  * workflow file, by that file's if it is shorter. A `for_each` step's `timeout` bounds the whole fan-out, so it is its
- * own instance's alone; each item runs the file, so the file's is the item's.
+ * own instance's alone; each item runs the file, so the file's is the item's. Under `on_limit: end_turn` the step's
+ * own `timeout` is no deadline: it ends a prompt's turn.
  */
 export function ownDeadline(run: RunState, state: StepState, step: WorkflowStep, now: string): string | undefined {
   const item = step.forEach !== undefined && isItem(state);
   const file = typeof step.workflow === 'string' && (!step.forEach || item) ? run.workflows?.[step.workflow]?.timeout : undefined;
-  const limits = [item ? undefined : step.timeout, file].filter((ms) => ms !== undefined);
+  const limits = [item || step.onLimit === 'end_turn' ? undefined : step.timeout, file].filter((ms) => ms !== undefined);
   return limits.length > 0 ? after(now, Math.min(...limits)) : undefined;
 }
 
@@ -146,4 +148,16 @@ export function expire(run: RunState, now: string): WorkflowResult | undefined {
     if (state.status === 'running' || state.status === 'leased') timeOut(state, failure, run.revision);
   }
   return undefined;
+}
+
+/**
+ * The limits that end the turn of prompt `step`: its own `timeout`, `max_turns` and `budget` under `on_limit: end_turn`.
+ * Undefined when nothing ends its turn.
+ */
+export function turnLimits(step: WorkflowStep): TurnLimits | undefined {
+  if (step.prompt === undefined || step.onLimit !== 'end_turn') return undefined;
+  return {
+    ...(step.timeout !== undefined ? { timeoutMs: step.timeout } : {}), ...(step.maxTurns !== undefined ? { maxTurns: step.maxTurns } : {}),
+    ...(step.budget ? { budget: { tokens: step.budget.tokens } } : {}), onLimit: 'end_turn',
+  };
 }

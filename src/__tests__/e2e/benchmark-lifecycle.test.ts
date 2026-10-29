@@ -190,7 +190,7 @@ describe('a benchmark run once it has started', () => {
 
     expect(envelope(resumed).error).toEqual({
       code: 'needs_local_driver',
-      message: `Workflow fix must run with the local driver. fix is a benchmark, whose trials run only on a driver that declares a sandbox and launches the trial tools, and this driver launches none. Add --sandbox on a machine that is one. Ask the person to run teamai workflow resume ${runId} in their own terminal.`,
+      message: `Workflow fix must run with the local driver. fix is a benchmark, whose trials run only on a driver that declares a sandbox, and this driver does not. Add --sandbox on a machine that is one. Ask the person to run teamai workflow resume ${runId} in their own terminal.`,
       next: null,
     });
     expect(RunFileSchema.parse(fixture.runFile(runId)).steps.every((step) => step.status === 'pending')).toBe(true);

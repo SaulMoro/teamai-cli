@@ -18,7 +18,7 @@ import type { DriverIdentity } from '../workflow/types.js';
 import { benchmarkRunConfig, RUN_START, RUN_TEAM, settleBaselines, startBenchmarkRun } from './helpers/benchmark-fixture.js';
 
 const driver: DriverIdentity = { kind: 'external', machine: 'ci', workspace: '/work' };
-const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
+const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', tools: ['claude'], end_turn: true };
 const dirs: string[] = [];
 const HeldSchema = z.object({ data: z.object({ wait: z.object({ held: z.array(z.unknown()) }) }) });
 const LeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number() }) }) });
@@ -61,7 +61,6 @@ async function leasePrompt(config: LocalConfig, runId: string): Promise<{ attemp
 
 describe('benchmark plan run', () => {
   it.each([
-    ['trials', { ...can, trials: [] }, true],
     ['sandbox', { ...can, isolation: 'none' as const }, true],
     ['prepare', can, false],
   ])('holds a task baseline, which runs before any trial, for a driver that lacks %s', async (missing, offered, prepare) => {
@@ -78,7 +77,7 @@ describe('benchmark plan run', () => {
     const next = await leaseNext(config, runId, driver, { can, prepare: true });
 
     expect(next).toMatchObject({ data: { lease: {
-      step: 'baselines.t01', command: 'node test.js', trial: { kind: 'baseline', task: 't01' },
+      step: 'baselines.t01', command: 'node test.js',
       workspace: { mode: 'new', base: { commit: RUN_START }, clone: { commit: RUN_START, team: { treatment: 'none' } } },
     } } });
   });
@@ -93,7 +92,6 @@ describe('benchmark plan run', () => {
       step: 'trials.r1.t01.a01.prompt',
       prompt: 'Make the test pass.',
       tool: 'claude',
-      trial: { kind: 'prompt', task: 't01', arm: 'a01', repetition: 1, order: 1 },
       workspace: { base: { commit: RUN_START }, configCommit: RUN_START, clone: { commit: RUN_START, team: { revision: RUN_TEAM, treatment: 'pulled' } } },
     } } });
   });
@@ -112,27 +110,29 @@ describe('benchmark plan run', () => {
   });
 
   it.each([
-    ['the limits its suite sets', '{ timeout: 5m, budget: { tokens: 1000 }, max_turns: 3 }', { timeoutMs: 300_000, tokens: 1000, maxTurns: 3 }],
-    ['no limits when its suite sets none', '', undefined],
-  ])('leases each trial prompt %s, and records them', async (_, trial, limits) => {
+    ['the limits its suite sets', '{ timeout: 5m, budget: { tokens: 1000 }, max_turns: 3 }',
+      { timeoutMs: 300_000, maxTurns: 3, budget: { tokens: 1000 }, onLimit: 'end_turn' }, { timeoutMs: 300_000, tokens: 1000, maxTurns: 3 }],
+    ['no limits when its suite sets none', '', undefined, undefined],
+  ])('leases each trial prompt %s, and records them', async (_, trial, leased, recorded) => {
     const { config, runId } = await startFix({ trial });
     await settleBaselines(config, runId, driver, can);
 
-    const next = LeaseSchema.extend({ data: z.object({ lease: z.object({ trial: z.record(z.unknown()) }) }) })
+    const next = LeaseSchema.extend({ data: z.object({ lease: z.object({ limits: z.unknown() }).passthrough() }) })
       .parse(await leaseNext(config, runId, driver, { can, prepare: true }));
     await cancelRun(config, runId, {});
     const run = await readRun(config, runId);
 
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
-    expect(next.data.lease.trial.limits).toEqual(limits);
-    expect(buildEndRecord(run, run.driver, '').benchmark?.limits).toEqual(limits);
+    expect(next.data.lease.limits).toEqual(leased);
+    expect(next.data.lease).not.toHaveProperty('trial');
+    expect(buildEndRecord(run, run.driver, '').benchmark?.limits).toEqual(recorded);
   });
 
   it("keeps the limit that ended a trial's prompt on its step, and records it", async () => {
     const { config, runId } = await startFix({ trial: '{ timeout: 5m }' });
     const lease = await leasePrompt(config, runId);
 
-    await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {}, limit: 'timeout' });
+    await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {}, limit: 'timeout', durationMs: 300_000 });
     await cancelRun(config, runId, {});
     const run = await readRun(config, runId);
 
@@ -145,7 +145,7 @@ describe('benchmark plan run', () => {
     const { config, runId } = await startFix({ trial: '{ budget: { tokens: 1000 }, max_turns: 3 }' });
     const lease = await leasePrompt(config, runId);
 
-    await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {}, tokens: { input: 10, output: 10 }, unenforced: ['budget', 'max_turns'] });
+    await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {}, tokens: { input: 10, output: 10 }, durationMs: 1000, unenforced: ['budget', 'max_turns'] });
     await cancelRun(config, runId, {});
     const run = await readRun(config, runId);
 
@@ -153,7 +153,8 @@ describe('benchmark plan run', () => {
     expect(run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({
       status: 'succeeded', unenforced: expect.arrayContaining([{ requirement: 'budget' }, { requirement: 'max_turns', asked: 3 }]),
     });
-    expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ unenforced: ['budget', 'max_turns'] })]);
+    // max_turns at lease, as this driver declares no can.max_turns; budget from its report.
+    expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ unenforced: ['max_turns', 'budget'] })]);
   });
 
   it('refuses a trial report that names an unenforced budget its suite does not set', async () => {
@@ -169,14 +170,14 @@ describe('benchmark plan run', () => {
     const { config, runId } = await startFix({ trial: '{ budget: { tokens: 1000 } }' });
     const lease = await leasePrompt(config, runId);
 
-    await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {} });
+    await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {}, durationMs: 1000 });
     await leaseNext(config, runId, driver, { can, prepare: true });
     const run = await readRun(config, runId);
 
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
     expect(run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({ status: 'failed', failure: {
       code: 'budget_unmeasured',
-      message: 'Trial step "trials.r1.t01.a01.prompt" runs under its suite\'s trial budget, and its report has no tokens, so the budget cannot count what it spent. Run the arm\'s tool with a driver that reports its tokens, and start the benchmark again.',
+      message: 'Step "trials.r1.t01.a01.prompt" ends its turn at a token budget, and its report has no tokens, so the budget cannot count what it spent. Run its tool with a driver that reports its tokens, then retry the step.',
     } });
     expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ result: 'error' })]);
   });
@@ -188,7 +189,7 @@ describe('benchmark plan run', () => {
     const { config, runId } = await startFix({ trial: '{ timeout: 5m, budget: { tokens: 1000 } }' });
     const lease = await leasePrompt(config, runId);
 
-    await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {}, limit: 'timeout', ...(listed ? { unenforced: listed } : {}) });
+    await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {}, limit: 'timeout', durationMs: 300_000, ...(listed ? { unenforced: listed } : {}) });
     await cancelRun(config, runId, {});
     const run = await readRun(config, runId);
 
@@ -204,7 +205,7 @@ describe('benchmark plan run', () => {
     const answer = await reportAttempt(config, runId, { ...lease, outcome: 'failed', driver, trialReport: {}, limit: 'timeout' });
     const run = await readRun(config, runId);
 
-    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Attempt ${lease.attempt} of step "trials.r1.t01.a01.prompt": limit goes with outcome success, since a limit ends the agent's turn and the trial's check or judge decides it; send outcome success, or omit limit` } });
+    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Attempt ${lease.attempt} of step "trials.r1.t01.a01.prompt": limit goes with outcome success, since a limit ends the agent's turn and the step succeeds; send outcome success, or omit limit` } });
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
     expect(run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({ status: 'leased' });
   });
@@ -326,7 +327,7 @@ describe('benchmark plan run', () => {
   it('reconciles a new run of 20 tasks, 6 arms and 10 repetitions, and answers a poll on it, in under a second each', { retry: 2 }, async () => {
     const { config, runId } = await startFix({ tasks: 20, arms: 6, repetitions: 10 });
     await settleBaselines(config, runId, driver, can);
-    const lacksTrials = { ...can, trials: [] };
+    const unsandboxed = { ...can, isolation: 'none' as const };
     const reconciled: number[] = [];
     const polled: number[] = [];
     const reconcileMs: number[] = [];
@@ -340,10 +341,10 @@ describe('benchmark plan run', () => {
       reconcileMs.push(performance.now() - started);
       reconciled.push('ready' in result ? result.ready.length : 0);
     }
-    await leaseNext(config, runId, driver, { can: lacksTrials, prepare: true });
+    await leaseNext(config, runId, driver, { can: unsandboxed, prepare: true });
     for (let round = 0; round < 3; round += 1) {
       const started = performance.now();
-      const next = await leaseNext(config, runId, driver, { can: lacksTrials, prepare: true });
+      const next = await leaseNext(config, runId, driver, { can: unsandboxed, prepare: true });
       pollMs.push(performance.now() - started);
       polled.push(HeldSchema.parse(next).data.wait.held.length);
     }

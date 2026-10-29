@@ -27,14 +27,15 @@ import { EnvScopeSchema, lacksTool, LeaseSetupSchema, trialGaps, type DriverCan,
 import { attemptEnv } from '../workflow/attempt-marker.js';
 import { runShellCommand } from '../workflow/shell-command.js';
 import { readRun, RunIdSchema, type RunLock } from '../workflow/store.js';
+import { stepDefinitions } from '../workflow/scope.js';
 import { StepModelSchema, type StepModel } from '../workflow/step-model.js';
-import { WORKSPACE_MODES, type DriverIdentity, type WorkflowEnvelope, type WorkflowFailure } from '../workflow/types.js';
+import { WORKSPACE_MODES, type DriverIdentity, type RunState, type WorkflowEnvelope, type WorkflowFailure } from '../workflow/types.js';
 import { cloneBranchOf } from '../workflow/workspace.js';
 import { untrustedGit, type Git } from '../workflow/worktree.js';
 import { baselineOutput, checkVerdict, type CheckVerdict } from './check.js';
 import type { BenchmarkPlan } from './plan.js';
 import type { CheckFile, Suite } from './suite.js';
-import { BaselineTermsSchema, CheckTermsSchema, PromptTermsSchema, TRIAL_WITHHELD_ENV, setsLimit, type Added, type PreparedTrialLease, type TrialTerms } from './terms.js';
+import { BaselineTermsSchema, CheckTermsSchema, PromptTermsSchema, TRIAL_WITHHELD_ENV, type Added, type PreparedTrialLease, type TrialTerms } from './terms.js';
 
 export interface TrialNextOptions extends NextOptions {
   /** Stops setup or a check this call runs. The step stays leased, so the next call prepares or runs it again. */
@@ -78,7 +79,7 @@ export const Trials = {
     const trial = { config, lock, driver, env, signal, sources, checkout: run.checkout, total: run.benchmark.trials.length };
     for (;;) {
       const answer = await leaseNext(config, runId, driver, { ...next, can, env, prepare: true });
-      const leased = trialLeaseOf(answer);
+      const leased = trialLeaseOf(answer, run);
       switch (leased.kind) {
         case 'none':
           return answer;
@@ -131,9 +132,6 @@ export const Trials = {
     }
     if (report.tool === undefined) {
       return error('invalid_report', `The report of trial step "${leased.id}" names no tool. Send tool with the tool the driver launched: ${defined?.tool} for this trial.`);
-    }
-    if (report.limit !== undefined && !setsLimit(terms.limits, report.limit)) {
-      return error('invalid_report', `The report of trial step "${leased.id}" names limit ${report.limit}, which its suite's trial does not set. Send limit only for a limit in the lease's trial.limits that stopped the tool.`);
     }
     const branch = cloneBranchOf(run, leased.id);
     const made = branch === undefined ? undefined : await preparedClone(config, RunIdSchema.parse(run.id), branch);
@@ -215,7 +213,7 @@ export async function trialBlocker(config: LocalConfig): Promise<string | undefi
  * The lines the local driver prints once before its first `next`, one per reason a trial of `plan` does not run on it.
  * The reasons are `trialGaps` and `lacksTool`, the rules that hold its trials, so a printed reason and a held trial agree.
  */
-export function benchmarkNotices(plan: BenchmarkPlan, can: Pick<DriverCan, 'tools' | 'trials' | 'isolation'>, blocked: string | undefined): string[] {
+export function benchmarkNotices(plan: BenchmarkPlan, can: Pick<DriverCan, 'tools' | 'isolation'>, blocked: string | undefined): string[] {
   return [
     ...(blocked !== undefined ? [blocked] : []),
     ...(trialGaps(can, true).includes('sandbox')
@@ -257,10 +255,16 @@ type TrialLease =
   /** A lease that is not a trial step: only compilePlan writes a benchmark's steps, so a newer teamai wrote this one. */
   | { kind: 'unreadable'; step: string };
 
-/** `leaseData` builds the lease as a plain record, so it is parsed here, once, into the kind teamai runs. */
-function trialLeaseOf(answer: WorkflowEnvelope): TrialLease {
-  const raw = 'data' in answer ? answer.data.lease : undefined;
-  if (raw === undefined) return { kind: 'none' };
+/**
+ * `leaseData` builds the lease as a plain record, so it is parsed here, once, into the kind teamai runs, with the trial
+ * terms its step in `run` carries.
+ */
+function trialLeaseOf(answer: WorkflowEnvelope, run: RunState): TrialLease {
+  const leased = 'data' in answer ? answer.data.lease : undefined;
+  if (leased === undefined) return { kind: 'none' };
+  const named = z.object({ step: z.string() }).passthrough().safeParse(leased);
+  if (!named.success) return { kind: 'unreadable', step: '(unknown)' };
+  const raw = { ...named.data, trial: stepDefinitions(run)(named.data.step)?.trial };
   const wire = LeaseWireSchema.safeParse(raw);
   const prompt = PromptLeaseSchema.safeParse(raw);
   if (wire.success && prompt.success) return { kind: 'prompt', lease: prompt.data, wire: wire.data };
@@ -268,8 +272,7 @@ function trialLeaseOf(answer: WorkflowEnvelope): TrialLease {
   if (wire.success && check.success) return { kind: 'check', lease: check.data, wire: wire.data };
   const baseline = BaselineLeaseSchema.safeParse(raw);
   if (wire.success && baseline.success) return { kind: 'baseline', lease: baseline.data, wire: wire.data };
-  const step = z.object({ step: z.string() }).safeParse(raw);
-  return { kind: 'unreadable', step: step.success ? step.data.step : '(unknown)' };
+  return { kind: 'unreadable', step: named.data.step };
 }
 
 /** What one call of `Trials.next` works with. */
@@ -659,9 +662,9 @@ function baselineSettlement(verdict: CheckVerdict): Pick<ReportInput, 'outcome' 
   return outputs ? { outcome: 'success', outputs } : checkSettlement(verdict);
 }
 
-/** The lease a driver sees: no `workspace`, `setup` or `command`, with `cwd`. */
+/** The lease a driver sees: no `workspace`, `setup`, `command` or trial terms, with `cwd`. */
 function driverLease(lease: PromptLease, cwd: string): PreparedTrialLease {
-  const { workspace: _workspace, setup: _setup, ...rest } = lease;
+  const { workspace: _workspace, setup: _setup, trial: _trial, ...rest } = lease;
   return { ...rest, envScope: lease.envScope ?? NO_ENV, env: attemptEnv(lease.run, lease.attempt, 'unattended'), cwd };
 }
 

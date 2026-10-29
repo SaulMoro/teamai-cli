@@ -5,10 +5,9 @@ import { RunModeSchema } from '../launch-context.js';
 import { WorkOutcomeSchema } from '../outcomes.js';
 import { JudgeUsageSchema } from '../scorers/label.js';
 import { CheckVerdictSchema } from '../benchmark/check.js';
-import { TrialLimitSchema } from '../benchmark/terms.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 import { PrUrlSchema } from './pr-url.js';
-import { UnenforcedSchema } from './requirements.js';
+import { LimitSchema, TurnLimitsSchema, UnenforcedSchema } from './requirements.js';
 import type { RunState, StepLease, WorkflowFailure } from './types.js';
 import type { WorkspaceMode } from './workspace.js';
 
@@ -49,6 +48,7 @@ const LeaseSessionSchema = SessionRefSchema.extend({ earlier: z.array(SessionRef
 const LeaseSchema: z.ZodType<StepLease> = z.object({
   attempt: z.string(), revision: z.number(), driver: DriverSchema, session: LeaseSessionSchema.optional(),
   unenforced: z.array(UnenforcedSchema).optional(), expiresAt: z.string().optional(), runMode: RunModeSchema.optional(),
+  limits: TurnLimitsSchema.optional(),
 });
 
 export const ChangesSchema = z.object({
@@ -98,8 +98,8 @@ const report = {
   outcomes: z.array(WorkOutcomeSchema).optional().catch(undefined),
   /** A benchmark check's verdict, classified once when teamai ran it (benchmark/check.ts). */
   verdict: CheckVerdictSchema.optional(),
-  /** The suite limit that ended a benchmark trial's prompt. */
-  limit: TrialLimitSchema.optional(),
+  /** The limit that ended the prompt's turn under `on_limit: end_turn`. */
+  limit: LimitSchema.optional(),
 };
 
 export const OutcomeSchema = z.enum(['success', 'failed', 'timeout', 'skipped', 'cancelled']);

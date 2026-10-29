@@ -49,8 +49,8 @@ export function neededAnswers(description: WorkflowDescription): StartAnswer[] {
 /** Why `description` must run with the local driver, or undefined when this driver runs it: its benchmark trials, or its local route. */
 export function localReason(description: WorkflowDescription): string | undefined {
   const { name, facts } = description;
-  if (facts.held.some((held) => held.missing.includes('trials'))) {
-    return `${name} is a benchmark, whose trials run only on a driver that declares a sandbox and launches the trial tools, and this driver launches none. Add --sandbox on a machine that is one.`;
+  if (facts.held.some((held) => held.missing.includes('sandbox'))) {
+    return `${name} is a benchmark, whose trials run only on a driver that declares a sandbox, and this driver does not. Add --sandbox on a machine that is one.`;
   }
   const route = facts.localRoute;
   if (!route) return undefined;

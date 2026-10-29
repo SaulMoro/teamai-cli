@@ -1213,7 +1213,7 @@ steps:
     if (result.ok) return;
     expect(result.diagnostics.map(formatDiagnostic)).toEqual(expect.arrayContaining([
       'workflows/build.yaml:4: field "budget.tokens": budget.tokens must be a positive whole number of tokens',
-      'workflows/build.yaml:8: field "steps[0].budget": step "plan" budget is only allowed on a workflow step; a workflow spends it over all its steps',
+      'workflows/build.yaml:8: field "steps[0].budget": step "plan" budget is only allowed on a workflow step, or on a prompt step with on_limit: end_turn',
     ]));
     expect(result.diagnostics).toContainEqual(expect.objectContaining({ field: 'steps[1].budget.dollars', code: 'unknown_key' }));
   });
@@ -1280,6 +1280,74 @@ steps:
     expect(result.diagnostics.map(formatDiagnostic)).toEqual(expect.arrayContaining([
       'workflows/build.yaml:7: field "steps[0].max_turns": step "plan" max_turns must be a positive whole number',
       'workflows/build.yaml:11: field "steps[1].max_turns": step "check" max_turns is only allowed on a prompt or prompt_file step',
+    ]));
+  });
+
+  it('reads on_limit on a prompt step with a limit, and a budget on that prompt', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Build it.
+steps:
+  - id: plan
+    prompt: Plan it.
+    timeout: 2m
+    budget: { tokens: 5000 }
+    on_limit: end_turn
+  - id: ship
+    needs: [plan]
+    prompt: Ship it.
+    max_turns: 3
+    on_limit: fail
+`);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.definition.steps.map((step) => step.onLimit)).toEqual(['end_turn', 'fail']);
+    expect(result.definition.steps[0]?.budget).toEqual({ tokens: 5000 });
+  });
+
+  it('reports on_limit on a step it cannot end, without a limit, with a value this version does not know, or on a for_each step, and a prompt budget without end_turn', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Build it.
+steps:
+  - id: plan
+    prompt: Plan it.
+    on_limit: end_turn
+  - id: check
+    needs: [plan]
+    command: echo check
+    timeout: 1m
+    on_limit: end_turn
+  - id: review
+    needs: [check]
+    prompt: Review it.
+    timeout: 1m
+    on_limit: stop
+  - id: ship
+    needs: [review]
+    workflow: ship
+    max_turns: 3
+    on_limit: end_turn
+  - id: tidy
+    needs: [ship]
+    prompt: Tidy it.
+    budget: { tokens: 10 }
+  - id: each
+    needs: [tidy]
+    for_each: [a, b]
+    workflow: ship
+    timeout: 1m
+    on_limit: end_turn
+`);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.diagnostics.map(formatDiagnostic)).toEqual(expect.arrayContaining([
+      'workflows/build.yaml:7: field "steps[0].on_limit": step "plan" on_limit needs a timeout, max_turns or budget to end the turn at',
+      'workflows/build.yaml:12: field "steps[1].on_limit": step "check" on_limit is only allowed on a prompt or prompt_file step',
+      'workflows/build.yaml:17: field "steps[2].on_limit": step "review" on_limit must be end_turn or fail',
+      'workflows/build.yaml:22: field "steps[3].on_limit": step "ship" on_limit is only allowed on a prompt or prompt_file step',
+      'workflows/build.yaml:26: field "steps[4].budget": step "tidy" budget is only allowed on a workflow step, or on a prompt step with on_limit: end_turn',
+      'workflows/build.yaml:32: field "steps[5].on_limit": step "each" on_limit is not allowed on a for_each step',
     ]));
   });
 

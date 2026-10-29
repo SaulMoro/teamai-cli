@@ -88,7 +88,7 @@ describe('benchmark on the local driver', () => {
       trials: [{ order: 1, repetition: 1, task: 'fix', arm: 'claude', step: 'trials.r1.fix.claude.prompt' }],
     });
     expect(leafSteps(stored.definition.steps)).toEqual(['baselines.fix', 'trials.r1.fix.claude.prompt', 'trials.r1.fix.claude.check', 'settled']);
-    expect(next).toMatchObject({ data: { wait: { held: [{ step: 'baselines.fix', missing: ['trials', 'sandbox', 'prepare'] }] } } });
+    expect(next).toMatchObject({ data: { wait: { held: [{ step: 'baselines.fix', missing: ['sandbox', 'prepare'] }] } } });
     expect(pulled.code, said(pulled)).toBe(0);
     expect(fs.readFileSync(path.join(fixture.teamClone, 'benchmarks', 'fix', 'tasks', 'fix.yaml'), 'utf8')).toContain('Change the answer.');
     expect(fixture.runFile(run)).toEqual(beforePull);

@@ -20,7 +20,7 @@ import type { DriverIdentity, WorkflowEnvelope } from '../workflow/types.js';
 import { benchmarkRunConfig, FIX_SUITE, fixTask, RUN_START, settleBaselines, startBenchmarkRun } from './helpers/benchmark-fixture.js';
 
 const driver: DriverIdentity = { kind: 'external', machine: 'ci', workspace: '/work' };
-const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
+const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', tools: ['claude'], end_turn: true };
 const LeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number(), workspace: z.object({ branch: z.string() }) }) }) });
 const dirs: string[] = [];
 
@@ -83,16 +83,6 @@ describe('Trials.report', () => {
     const answer = await Trials.report(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver });
 
     expect(answer).toEqual({ error: { code: 'invalid_report', message: 'The report of trial step "trials.r1.fix.claude.prompt" names no tool. Send tool with the tool the driver launched: claude for this trial.' } });
-  });
-
-  it('refuses a limit its suite does not set, and keeps the trial leased', async () => {
-    const { config, runId, lease } = await leasedPrompt();
-
-    const answer = await Trials.report(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver, tool: 'claude', limit: 'timeout' });
-
-    const run = await readRun(config, runId);
-    expect(answer).toEqual({ error: { code: 'invalid_report', message: 'The report of trial step "trials.r1.fix.claude.prompt" names limit timeout, which its suite\'s trial does not set. Send limit only for a limit in the lease\'s trial.limits that stopped the tool.' } });
-    expect(typeof run === 'object' && run.steps.find((step) => step.id === lease.step)).toMatchObject({ status: 'leased', attempt: lease.attempt });
   });
 
   it("refuses a driver's report of a check, which teamai runs itself", async () => {

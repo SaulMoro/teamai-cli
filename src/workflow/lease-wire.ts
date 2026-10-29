@@ -1,6 +1,6 @@
 /** The lease `next` answers with, as `leaseData` in `engine.ts` writes it, parsed by every driver with one schema. */
 import { z } from 'zod';
-import { EnvScopeSchema, LeaseSetupSchema, RequirementsSchema } from './requirements.js';
+import { EnvScopeSchema, LeaseSetupSchema, RequirementsSchema, TurnLimitsSchema } from './requirements.js';
 import { StepModelSchema } from './step-model.js';
 import { AttemptIdSchema } from './store.js';
 import { WorkspaceContractSchema, type LeaseSession } from './workspace.js';
@@ -38,6 +38,8 @@ export const LeaseWireSchema = LeaseIdSchema.extend({
   envScope: EnvScopeSchema.optional(),
   /** The most agent turns the prompt's tool may take. */
   maxTurns: z.number().optional(),
+  /** The limits that end the prompt's turn, from its tool's launch, for a driver with `can.end_turn`. */
+  limits: TurnLimitsSchema.optional(),
   /** What to run in a worktree prepare creates, before the step. */
   setup: LeaseSetupSchema.optional(),
   /** When the engine cancels the lease. */

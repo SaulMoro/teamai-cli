@@ -151,12 +151,12 @@ describe('workflow engine', () => {
     [{ durationMs: 1.5 }, 'durationMs must be a non-negative integer of milliseconds'],
     [{ cost: { amount: 1 } }, 'cost must be an amount and a unit, as the tool stated it'],
     [{ cost: { amount: -1, unit: 'USD' } }, 'cost must be an amount and a unit, as the tool stated it'],
-    [{ limit: 'turns' }, 'limit must be the trial limit that stopped the tool: timeout, budget or max_turns'],
+    [{ limit: 'turns' }, 'limit must be the lease limit that ended the turn: timeout, budget or max_turns'],
   ])('refuses a report with %j', (fields, message) => {
     expect(parseReport({ attempt: 'a00000000', revision: 1, outcome: 'success', driver: driverA, ...fields })).toBe(message);
   });
 
-  it("refuses a limit on a step that is not a benchmark trial's prompt, and keeps it leased", async () => {
+  it('refuses a limit on a step whose lease carried no limits, and keeps it leased', async () => {
     const { config, runId } = await startBuild(TWO_STEPS);
     const lease = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number() }) }) })
       .parse(await leaseNext(config, runId, driverA)).data.lease;
@@ -164,7 +164,7 @@ describe('workflow engine', () => {
     const answer = await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: driverA, limit: 'timeout' });
 
     const run = await readRun(config, runId);
-    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Attempt ${lease.attempt} of step "one": limit is for the prompt of a benchmark trial, which its suite's trial limits stop; omit it` } });
+    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Attempt ${lease.attempt} of step "one": limit is for a prompt leased with limits, which end its turn; omit it` } });
     expect(typeof run === 'object' && run.steps.find((step) => step.id === lease.step)).toMatchObject({ status: 'leased' });
   });
 
@@ -5260,5 +5260,73 @@ describe('token budgets', () => {
     expect(await leaseNext(config, runId, driverA, { can: { hitl: true } })).toMatchObject({
       data: { wait: { held: [{ step: 'after', missing: ['tokens'] }] } },
     });
+  });
+});
+
+describe('on_limit: end_turn', () => {
+  const ENDS_TURN = { tokens: true, max_turns: true, end_turn: true };
+  const KEEPS_TURN = { tokens: true, max_turns: true };
+  const LIMITED_PROMPT = graph(`  - id: work
+    prompt: Work on it.
+    timeout: 5m
+    max_turns: 3
+    budget: { tokens: 1000 }
+    on_limit: end_turn
+`);
+  const LeaseWithLimitsSchema = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number() }).passthrough() }) });
+
+  it('leases a driver that ends the turn the prompt\'s limits from tool launch, with no deadline of the step\'s own', async () => {
+    const { config, runId } = await startBuild(LIMITED_PROMPT);
+
+    const { lease } = LeaseWithLimitsSchema.parse(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).data;
+
+    expect(lease).toMatchObject({ step: 'work', limits: { timeoutMs: 300_000, maxTurns: 3, budget: { tokens: 1000 }, onLimit: 'end_turn' } });
+    expect(lease).not.toHaveProperty('expiresAt');
+    expect(lease).not.toHaveProperty('maxTurns');
+  });
+
+  it('leases a driver that cannot end the turn the on_limit: fail lease, and records on_limit as not enforced', async () => {
+    const { config, runId } = await startBuild(LIMITED_PROMPT);
+
+    const { lease } = LeaseWithLimitsSchema.parse(await leaseNext(config, runId, driverA, { can: KEEPS_TURN })).data;
+    const answer = await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: driverA, tokens: { input: 1, output: 1 } });
+
+    expect(lease).toMatchObject({ step: 'work', maxTurns: 3, expiresAt: expect.any(String), unenforced: [{ requirement: 'on_limit' }] });
+    expect(lease).not.toHaveProperty('limits');
+    expect(answer).toMatchObject({ data: { step: { id: 'work', status: 'succeeded', unenforced: [{ requirement: 'on_limit' }] } } });
+  });
+
+  it.each([
+    [{ outcome: 'success' as const, tokens: { input: 1, output: 1 } }, 'a prompt leased with limits reports durationMs, how long its tool ran, so its turn counts against them; send durationMs'],
+    [{ outcome: 'success' as const, durationMs: 1000, limit: 'max_turns' as const }, 'limit max_turns is not one of the lease\'s limits; send limit only for a limit in the lease\'s limits that ended the turn'],
+  ])('refuses a report %j of a prompt leased with limits, and keeps it leased', async (fields, message) => {
+    const { config, runId } = await startBuild(graph(`  - id: work
+    prompt: Work on it.
+    timeout: 5m
+    on_limit: end_turn
+`));
+    const lease = leaseIn(await leaseNext(config, runId, driverA, { can: ENDS_TURN }));
+
+    const answer = await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, driver: driverA, ...fields });
+
+    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Attempt ${lease.attempt} of step "work": ${message}` } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'work', status: 'leased' }] });
+  });
+
+  it('settles a prompt whose turn a limit ended succeeded with that limit, and runs what needs it', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: work
+    prompt: Work on it.
+    timeout: 5m
+    on_limit: end_turn
+  - id: after
+    needs: [work]
+    command: node after.js
+`));
+    const work = leaseIn(await leaseNext(config, runId, driverA, { can: ENDS_TURN }));
+
+    await reportAttempt(config, runId, { attempt: work.attempt, revision: work.revision, outcome: 'success', driver: driverA, durationMs: 300_000, limit: 'timeout', tokens: { input: 5, output: 5 } });
+
+    expect(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).toMatchObject({ data: { lease: { step: 'after' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'work', status: 'succeeded', limit: 'timeout', tokens: { input: 5, output: 5 } }, { id: 'after', status: 'leased' }] });
   });
 });

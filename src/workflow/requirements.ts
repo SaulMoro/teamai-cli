@@ -21,6 +21,47 @@ export const RequirementsSchema = z.object({
 });
 export type Requirements = z.infer<typeof RequirementsSchema>;
 
+/**
+ * What reaching a step's `timeout`, `max_turns` or `budget` does. `fail`, the default, fails the step. `end_turn` ends
+ * the agent's turn there, and the step succeeds with the limit it reached.
+ */
+export const ON_LIMIT = ['end_turn', 'fail'] as const;
+export type OnLimit = typeof ON_LIMIT[number];
+
+/** The limit that ended an agent's turn under `on_limit: end_turn`, as a report names it. */
+export const LimitSchema = z.enum(['timeout', 'budget', 'max_turns']);
+export type Limit = z.infer<typeof LimitSchema>;
+
+/**
+ * The lease `limits` of a prompt under `on_limit: end_turn`, for a driver with `can.end_turn`: they count from the
+ * tool's launch, and the driver stops the tool at the first it reaches and reports it as `limit`, or reports each it
+ * cannot hold the tool to in `unenforced`. An absent key is no limit.
+ */
+export const TurnLimitsSchema = z.object({
+  timeoutMs: z.number().int().positive().optional(),
+  maxTurns: z.number().int().positive().optional(),
+  /** Input plus output tokens, as a budget counts them. */
+  budget: z.object({ tokens: z.number().int().positive() }).optional(),
+  onLimit: z.literal('end_turn'),
+});
+export type TurnLimits = z.infer<typeof TurnLimitsSchema>;
+
+/** Whether `limits` sets `limit`. */
+export function setsLimit(limits: TurnLimits, limit: Limit): boolean {
+  switch (limit) {
+    case 'timeout':
+      return limits.timeoutMs !== undefined;
+    case 'budget':
+      return limits.budget !== undefined;
+    case 'max_turns':
+      return limits.maxTurns !== undefined;
+    default: {
+      const unhandled: never = limit;
+      return unhandled;
+    }
+  }
+}
+
 /** The keys `requires:` takes; pull reports any other as `unknown_key`. */
 export const REQUIREMENT_KEYS: ReadonlySet<string> = new Set(Object.keys(RequirementsSchema.shape));
 
@@ -53,12 +94,12 @@ const ENFORCEMENT = {
   budget: 'bestEffort',
   /** Capping the agent turns of a prompt step's tool. */
   max_turns: 'bestEffort',
+  /** Ending a prompt's turn at its limits under `on_limit: end_turn`, which only a driver with `can.end_turn` does. */
+  on_limit: 'bestEffort',
   /** Running the workflow's `setup` in each workspace the driver creates, before the step. */
   setup: 'strict',
   /** A prompt step that names its `tool`: `can.tools` lists it. */
   tools: 'strict',
-  /** A benchmark trial step: `can.trials` lists a tool, so the driver holds the trial's prompt to the suite's limits. */
-  trials: 'strict',
   /**
    * A benchmark trial step runs only where the driver declares `can.isolation: sandbox`. Strict for trials only:
    * ordinary steps keep best-effort isolation.
@@ -86,8 +127,9 @@ type BestEffortKey = KeysOf<'bestEffort'>;
  *   fails the step without running it when setup exits non-zero (`setup_failed`), changes a tracked or non-ignored path
  *   (`setup_dirty`), or leaves a value of one of its keys in a file it created or changed (`setup_secret`).
  * - `tools`: the tools the driver launches a prompt step on that names its `tool`. Omitted: no such step.
- * - `trials`: the tools whose benchmark trials the driver launches by the trial rules, holding each prompt to its
- *   suite's limits. Any tool listed admits every trial; `tools` decides which prompts. Omitted: no trial.
+ * - `end_turn`: the driver holds a prompt leased with `limits` to them from its tool's launch, stops the tool at the
+ *   first it reaches and reports it as `limit`, with `durationMs`. Without it, such a prompt gets the `on_limit: fail`
+ *   lease, and its pass records `on_limit` as not enforced.
  */
 export const CanSchema = z.object({
   hitl: z.boolean().optional(),
@@ -99,7 +141,7 @@ export const CanSchema = z.object({
   max_turns: z.boolean().optional(),
   setup: z.boolean().optional(),
   tools: z.array(z.string().min(1)).optional(),
-  trials: z.array(z.string().min(1)).optional(),
+  end_turn: z.boolean().optional(),
 });
 export type DriverCan = z.infer<typeof CanSchema>;
 
@@ -145,6 +187,8 @@ export const UnenforcedSchema = z.discriminatedUnion('requirement', [
    * tool its driver could not stop once it passed the budget.
    */
   z.object({ requirement: z.literal('budget') }),
+  /** A prompt under `on_limit: end_turn` leased to a driver that cannot end its turn, so it ran under `on_limit: fail`. */
+  z.object({ requirement: z.literal('on_limit') }),
 ]) satisfies z.ZodType<{ requirement: BestEffortKey }>;
 export type Unenforced = z.infer<typeof UnenforcedSchema>;
 
@@ -247,6 +291,8 @@ export interface Offer {
   budgeted: boolean;
   /** The step's `max_turns`. */
   maxTurns?: number;
+  /** The limits that end the prompt's turn, under its own `on_limit: end_turn`. */
+  endTurn?: TurnLimits;
   /** The workflow's setup, when the lease names a workspace the driver may create. */
   setup?: Setup;
   /** The tool a prompt step names. */
@@ -263,8 +309,10 @@ export interface Offer {
 export interface Terms {
   requires: Requirements;
   envScope?: EnvScope;
-  /** Only for a driver that can cap turns. */
+  /** Only for a driver that can cap turns, on a lease without `limits`. */
   maxTurns?: number;
+  /** Only for a driver that can end the turn. */
+  limits?: TurnLimits;
   setup?: LeaseSetup;
   unenforced: Unenforced[];
 }
@@ -319,13 +367,15 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
   const withhold = [...new Set(guarded)].filter((key) => sameEnvName(required, key) === undefined).sort();
   if (!covers.step && withhold.length > 0) unenforced.push({ requirement: 'withhold', keys: withhold });
   if (offer.maxTurns !== undefined && !can.max_turns) unenforced.push({ requirement: 'max_turns', asked: offer.maxTurns });
+  if (offer.endTurn && !can.end_turn) unenforced.push({ requirement: 'on_limit' });
+  const limits = offer.endTurn && can.end_turn ? { limits: offer.endTurn } : {};
   const envScope = covers.step && (required.length > 0 || withhold.length > 0) ? { envScope: { provide: required, withhold } } : {};
-  const maxTurns = offer.maxTurns !== undefined && can.max_turns ? { maxTurns: offer.maxTurns } : {};
+  const maxTurns = offer.maxTurns !== undefined && can.max_turns && !limits.limits ? { maxTurns: offer.maxTurns } : {};
   const setupWithhold = [...new Set(guarded)].filter((key) => sameEnvName(setupKeys, key) === undefined).sort();
   const setup = offer.setup && {
     setup: { command: offer.setup.command, ...(covers.setup && (setupKeys.length > 0 || setupWithhold.length > 0) ? { envScope: { provide: setupKeys, withhold: setupWithhold } } : {}) },
   };
-  return { kind: 'grant', terms: { requires: offer.requires, ...envScope, ...maxTurns, ...setup, unenforced } };
+  return { kind: 'grant', terms: { requires: offer.requires, ...envScope, ...maxTurns, ...limits, ...setup, unenforced } };
 }
 
 /**
@@ -355,9 +405,8 @@ export function lacksTool(tool: string, can: Pick<DriverCan, 'tools'>): boolean 
 }
 
 /** What a trial step lacks on this driver. */
-export function trialGaps(can: Pick<DriverCan, 'trials' | 'isolation'>, prepare: boolean): Missing[] {
+export function trialGaps(can: Pick<DriverCan, 'isolation'>, prepare: boolean): Missing[] {
   return [
-    ...((can.trials ?? []).length > 0 ? [] : ['trials' as const]),
     ...(can.isolation === 'sandbox' ? [] : ['sandbox' as const]),
     ...(prepare ? [] : ['prepare' as const]),
   ];

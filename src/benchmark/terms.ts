@@ -1,6 +1,6 @@
 /**
- * The trial terms a generated benchmark step carries. Zod and the exact model schema only, so types.ts, store.ts and
- * the drivers import it without a cycle.
+ * The trial terms a generated benchmark step carries. Zod, the exact model schema and the turn limits only, so types.ts,
+ * store.ts and the drivers import it without a cycle.
  *
  * Only a `prompt` step ever reaches a driver: teamai leases a `check` step to the driver that asked, runs it itself
  * inside `workflow next --prepare`, and leases again. Both kinds stay step markers, so `negotiate` gates them the same
@@ -8,6 +8,7 @@
  */
 import { z } from 'zod';
 import { CommitSchema } from '../workflow/clone.js';
+import { TurnLimitsSchema } from '../workflow/requirements.js';
 import { StepModelSchema } from '../workflow/step-model.js';
 
 /**
@@ -38,8 +39,9 @@ export const ArmTeamSchema = z.discriminatedUnion('kind', [
 export type ArmTeam = z.infer<typeof ArmTeamSchema>;
 
 /**
- * The limits a suite's `trial` sets on every trial's prompt; an absent key is no limit. The driver that launches the
- * tool enforces them. Reaching one ends the agent's turn, and the trial's check or judge still decides it.
+ * The limits a suite's `trial` sets on every trial's prompt, as the record keeps them; an absent key is no limit. Each
+ * prompt carries them under `on_limit: end_turn`, so reaching one ends the agent's turn, and the trial's check or judge
+ * still decides it.
  */
 export const TrialLimitsSchema = z.object({
   timeoutMs: z.number().int().positive().optional(),
@@ -49,26 +51,6 @@ export const TrialLimitsSchema = z.object({
   maxTurns: z.number().int().positive().optional(),
 }).strict();
 export type TrialLimits = z.infer<typeof TrialLimitsSchema>;
-
-/** The limit a trial prompt's report names when one of its suite's limits ended the agent's turn. */
-export const TrialLimitSchema = z.enum(['timeout', 'budget', 'max_turns']);
-export type TrialLimit = z.infer<typeof TrialLimitSchema>;
-
-/** Whether `limits` sets `limit`. */
-export function setsLimit(limits: TrialLimits | undefined, limit: TrialLimit): boolean {
-  switch (limit) {
-    case 'timeout':
-      return limits?.timeoutMs !== undefined;
-    case 'budget':
-      return limits?.tokens !== undefined;
-    case 'max_turns':
-      return limits?.maxTurns !== undefined;
-    default: {
-      const unhandled: never = limit;
-      return unhandled;
-    }
-  }
-}
 
 const OfArm = {
   arm: BenchmarkNameSchema,
@@ -82,7 +64,6 @@ export const PromptTermsSchema = z.object({
   kind: z.literal('prompt'),
   task: BenchmarkNameSchema,
   ...OfArm,
-  limits: TrialLimitsSchema.optional(),
 }).strict();
 
 /**
@@ -118,7 +99,8 @@ export const PreparedTrialLeaseSchema = z.object({
   tool: z.string().min(1),
   /** The arm's exact model, which the driver passes to the tool as is. Absent: the tool's default model. */
   model: StepModelSchema.optional(),
-  trial: PromptTermsSchema,
+  /** The suite's trial limits, for a driver with `can.end_turn`: it ends the tool's turn at them and reports `limit`. */
+  limits: TurnLimitsSchema.optional(),
   /** The names the tool's environment must not hold. */
   envScope: z.object({ provide: z.array(z.string()), withhold: z.array(z.string()) }),
   /** What the tool's environment must hold: the attempt marker, so a `teamai` call from the tool drives no run. */

@@ -503,7 +503,7 @@ export async function startBenchmarkRun(config: LocalConfig, files: BenchmarkSui
   return createRun(config, { name: suite.name, sourceHash: runSourceHash(plan), teamRevision: RUN_TEAM, origin: { source: 'team' }, ...compilePlan(plan, committed.suite), benchmark: plan, secrets: {} });
 }
 
-const BaselineLeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string().startsWith('baselines.'), attempt: z.string(), revision: z.number(), trial: z.object({ task: z.string() }) }) }) });
+const BaselineLeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string().startsWith('baselines.'), attempt: z.string(), revision: z.number() }) }) });
 
 /**
  * Settles each baseline of a run made in process as teamai settles one: by its task in `baselines`, and `fails` by
@@ -515,8 +515,8 @@ export async function settleBaselines(
   const run = await readRun(config, runId);
   const count = typeof run === 'object' ? run.benchmark?.tasks.filter((task) => task.judge === 'check').length ?? 0 : 0;
   for (let settled = 0; settled < count; settled += 1) {
-    const { attempt, revision, trial } = BaselineLeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
-    const baseline = baselines[trial.task] ?? 'fails';
+    const { attempt, revision, step } = BaselineLeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+    const baseline = baselines[step.slice('baselines.'.length)] ?? 'fails';
     await reportAttempt(config, runId, baseline === 'could_not_run'
       ? { attempt, revision, driver, outcome: 'failed', trialReport: { verdict: { verdict: 'could_not_run', cause: 'not_found' } } }
       : { attempt, revision, driver, outcome: 'success', outputs: { baseline }, trialReport: { verdict: baseline === 'passes' ? { verdict: 'passed' } : { verdict: 'failed', exitCode: 1 } } });

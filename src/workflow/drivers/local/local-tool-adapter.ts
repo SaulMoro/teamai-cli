@@ -12,8 +12,8 @@ import { stopProcess } from '../../../tool-launch/process-stop.js';
 import { tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '../../../tool-launch/stdout.js';
 import { executableOf, launchAdapterIdOf, opencodeModelArgs, type LaunchTool } from '../../../tool-launch/tools.js';
 import { budgeted } from '../../limits.js';
+import type { Limit } from '../../requirements.js';
 import { MAX_TIMER_DELAY } from '../../shell-command.js';
-import type { TrialLimit } from '../../../benchmark/terms.js';
 import type { StepModel } from '../../step-model.js';
 import type { WorkflowFailure } from '../../types.js';
 import { agyGatewayEnv } from '../../../models/agy-gateway.js';
@@ -60,7 +60,7 @@ export type LocalToolResult =
      * The limit that ended the run: the first one at which the adapter stopped the tool, its timeout or its budget, or
      * the turn cap, at which headless Claude ends itself with `error_max_turns`.
      */
-    stoppedBy?: TrialLimit;
+    stoppedBy?: Limit;
     failure?: WorkflowFailure;
   }
   | { started: false; exitCode: number; failure: WorkflowFailure };
@@ -326,7 +326,7 @@ export function createLocalToolAdapter(
       // A tool stopped mid-run, such as Claude before its final result, states no total: what the meter counted stands in.
       const reported = metered && !stated?.tokens ? { ...stated, tokens: metered } : stated;
       const result = combineResults(fileResult, reported) ?? (interactive ? {} : null);
-      const stoppedBy: TrialLimit | undefined = stopped ?? (stated?.reachedMaxTurns ? 'max_turns' : undefined);
+      const stoppedBy: Limit | undefined = stopped ?? (stated?.reachedMaxTurns ? 'max_turns' : undefined);
       const ended = stoppedBy ? { stoppedBy } : {};
       if (!result) {
         return {
