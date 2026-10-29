@@ -1138,6 +1138,62 @@ steps:
     ]);
   });
 
+  it('refuses a step under a strict sandbox that runs a workflow file whose requires.env names a credential the sandbox withholds', () => {
+    const check = parse(`schemaVersion: v1alpha1
+name: check
+description: Check it.
+defaults:
+  requires: { env: [GH_TOKEN] }
+steps:
+  - id: lint
+    command: npm run lint
+  - id: push
+    needs: [lint]
+    command: git push
+    requires: { env: [NPM_TOKEN, SSH_AUTH_SOCK] }
+`, 'workflows/check.yaml');
+    if (!check.ok) throw new Error(check.diagnostics.map(formatDiagnostic).join('\n'));
+    const files = { runnable: (name: string) => (name === 'check' ? check.definition : null), cycle: () => undefined };
+    const result = parseWorkflow(FILE, `schemaVersion: v1alpha1
+name: build
+description: Build, then check.
+steps:
+  - id: compile
+    command: npm run build
+  - id: check
+    needs: [compile]
+    workflow: check
+    requires: { isolation: sandbox, strict: true }
+`, files);
+    expect(result.ok ? [] : result.diagnostics.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:9: field "steps[1].workflow": steps[1].workflow runs workflow "check", whose defaults.requires.env names GH_TOKEN, which the strict sandbox it runs in withholds from every step. Remove it from requires.env, or drop strict.',
+      'workflows/build.yaml:9: field "steps[1].workflow": steps[1].workflow runs workflow "check", whose steps[1].requires.env names SSH_AUTH_SOCK, which the strict sandbox it runs in withholds from every step. Remove it from requires.env, or drop strict.',
+    ]);
+  });
+
+  it('accepts a step under a strict sandbox that runs workflow files calling each other', () => {
+    const named = (name: string, runs: string) => parse(`schemaVersion: v1alpha1
+name: ${name}
+description: Run ${runs}.
+steps:
+  - id: next
+    workflow: ${runs}
+`, `workflows/${name}.yaml`);
+    const ping = named('ping', 'pong');
+    const pong = named('pong', 'ping');
+    if (!ping.ok || !pong.ok) throw new Error('ping and pong must parse');
+    const files = { runnable: (name: string) => (name === 'ping' ? ping.definition : name === 'pong' ? pong.definition : null), cycle: () => undefined };
+    const result = parseWorkflow(FILE, `schemaVersion: v1alpha1
+name: build
+description: Build, then ping.
+steps:
+  - id: ping
+    workflow: ping
+    requires: { isolation: sandbox, strict: true }
+`, files);
+    expect(result.ok).toBe(true);
+  });
+
   it('accepts a credential in requires.env under a sandbox that is not strict', () => {
     const result = parse(`schemaVersion: v1alpha1
 name: build
