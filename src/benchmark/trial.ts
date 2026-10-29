@@ -3,9 +3,10 @@
  * driver's report. A driver reaches it through `Trials.next` and `Trials.report`, and never imports another driver.
  *
  * Each baseline step and each trial's `<arm>` step opens a clone place, which the place module prepares, sets up,
- * commits and sweeps as it does for any workflow. Behind `Trials.next`: each check task's baseline, the check on the
- * protected paths as the starting commit has them and its classification, and one progress line per event. Behind
- * `Trials.report`: what the trial ran as, from what teamai observed of the clone it prepared.
+ * commits and sweeps as it does for any workflow. Behind `Trials.next`: each command step of the run, a baseline or a
+ * check, run in its clone, and one progress line per prompt event. Behind `Trials.report`: what the trial ran as, from
+ * what teamai observed of the clone it prepared. `runCheckStep` is `teamai benchmark check`, the command of a baseline
+ * and a check: the files check.add writes, the protected paths as the starting commit has them, and the check's verdict.
  */
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -18,35 +19,39 @@ import { stepEnvironment } from '../env-exec.js';
 import { resolveWorkflowEnv, type WorkflowEnv } from '../env-resolution.js';
 import { teamRefBlocker } from '../team-ref.js';
 import type { LocalConfig } from '../types.js';
+import { sameEnvName } from '../resources/env-key.js';
 import { log } from '../utils/logger.js';
 import { error, leaseNext, locateStep, reportAttempt, type NextOptions, type ReportInput } from '../workflow/engine.js';
 import { LeaseWireSchema, type LeaseWire } from '../workflow/lease-wire.js';
+import { leaseDeadline } from '../workflow/limits.js';
 import { abandonPlace, commitCacheOf, freshClone, placeLeaseOf, preparedClone, preparePlace, runPlaceSetup, scratchCloneRoot } from '../workflow/place/place.js';
+import { commandEnd } from '../workflow/protocol.js';
+import { findAttemptRun } from '../workflow/run-location.js';
 import { runSetup } from '../workflow/place/setup.js';
-import { EnvScopeSchema, lacksTool, LeaseSetupSchema, trialGaps, type DriverCan, type EnvScope, type LeaseSetup, type Setup } from '../workflow/requirements.js';
+import { EnvScopeSchema, lacksTool, LeaseSetupSchema, SANDBOX_WITHHELD_ENV, type DriverCan, type EnvScope, type LeaseSetup, type Setup } from '../workflow/requirements.js';
 import { attemptEnv } from '../workflow/attempt-marker.js';
-import { runShellCommand } from '../workflow/shell-command.js';
+import { runShellCommand, type CommandExit } from '../workflow/shell-command.js';
 import { readRun, RunIdSchema, type RunLock } from '../workflow/store.js';
 import { stepDefinitions } from '../workflow/scope.js';
 import { StepModelSchema, type StepModel } from '../workflow/step-model.js';
 import { WORKSPACE_MODES, type DriverIdentity, type RunState, type WorkflowEnvelope, type WorkflowFailure } from '../workflow/types.js';
 import { cloneBranchOf } from '../workflow/workspace.js';
 import { untrustedGit, type Git } from '../workflow/worktree.js';
-import { baselineOutput, checkVerdict, type CheckVerdict } from './check.js';
-import type { BenchmarkPlan } from './plan.js';
+import { checkVerdict, type CheckResult, type CheckVerdict } from './check.js';
+import { BENCHMARK_PLAN_SCHEMA_VERSION, baselineStepOf, stepOf, type BenchmarkPlan } from './plan.js';
 import type { CheckFile, Suite } from './suite.js';
-import { BaselineTermsSchema, CheckTermsSchema, PromptTermsSchema, TRIAL_WITHHELD_ENV, type Added, type PreparedTrialLease, type TrialTerms } from './terms.js';
+import { PromptTermsSchema, type Added, type PreparedTrialLease } from './terms.js';
 
 export interface TrialNextOptions extends NextOptions {
-  /** Stops setup or a check this call runs. The step stays leased, so the next call prepares or runs it again. */
+  /** Stops setup or a command this call runs. The step stays leased, so the next call prepares or runs it again. */
   signal?: AbortSignal;
 }
 
 export const Trials = {
   /**
    * What `leaseNext` answers, holding the run's lock, except that no trial lease reaches the caller unprepared:
-   *   - a check lease, or a baseline's, is run here in its clone, settled with its verdict, and the next lease is asked
-   *     for;
+   *   - a command lease, a baseline's or a check's, is run here in its clone, settled with its exit and the outputs it
+   *     printed, and the next lease is asked for;
    *   - a prompt lease comes back with its clone prepared and set up, `{ data: { lease: { ...lease without workspace and
    *     setup, cwd } } }`, or, when preparation or setup fails, is settled failed (the trial's `error`) and the next lease
    *     is asked for;
@@ -75,8 +80,7 @@ export const Trials = {
       const answer = await leaseNext(config, runId, driver, { ...next, env, canTakeLease: false });
       return 'data' in answer && answer.data.done !== undefined ? answer : error('team_ref_blocked', blocked);
     }
-    const sources = [...(run.checkout !== undefined ? [run.checkout] : []), commitCacheOf(config, run.benchmark.suite.repo)];
-    const trial = { config, lock, driver, env, signal, sources, checkout: run.checkout, total: run.benchmark.trials.length };
+    const trial = { config, lock, driver, env, signal, checkout: run.checkout, total: run.benchmark.trials.length };
     for (;;) {
       const answer = await leaseNext(config, runId, driver, { ...next, can, env, prepare: true });
       const leased = trialLeaseOf(answer, run);
@@ -85,13 +89,8 @@ export const Trials = {
           return answer;
         case 'unreadable':
           return error('run_unreadable', `Run ${runId} leased step "${leased.step}", which is not a trial step this teamai can prepare. Update teamai.`);
-        case 'baseline': {
-          const ran = await runBaseline(trial, leased.lease, leased.wire);
-          if (ran) return ran;
-          continue;
-        }
-        case 'check': {
-          const ran = await runTrialCheck(trial, leased.lease, leased.wire);
+        case 'command': {
+          const ran = await runCommand(trial, leased.lease, leased.wire);
           if (ran) return ran;
           continue;
         }
@@ -211,14 +210,11 @@ export async function trialBlocker(config: LocalConfig): Promise<string | undefi
 
 /**
  * The lines the local driver prints once before its first `next`, one per reason a trial of `plan` does not run on it.
- * The reasons are `trialGaps` and `lacksTool`, the rules that hold its trials, so a printed reason and a held trial agree.
+ * The reason is `lacksTool`, the rule that holds its trials, so a printed reason and a held trial agree.
  */
-export function benchmarkNotices(plan: BenchmarkPlan, can: Pick<DriverCan, 'tools' | 'isolation'>, blocked: string | undefined): string[] {
+export function benchmarkNotices(plan: BenchmarkPlan, can: Pick<DriverCan, 'tools'>, blocked: string | undefined): string[] {
   return [
     ...(blocked !== undefined ? [blocked] : []),
-    ...(trialGaps(can, true).includes('sandbox')
-      ? ['This machine is not declared a sandbox, so benchmark trials did not run. Run benchmarks in CI or a container, and declare it with --sandbox.']
-      : []),
     ...plan.arms.filter((arm) => lacksTool(arm.tool, can))
       .map((arm) => `Arm "${arm.name}" uses ${arm.tool}, which the local driver cannot run, so its trials did not run.`),
   ];
@@ -239,17 +235,14 @@ const LeaseBase = {
   expiresAt: z.string().optional(),
 };
 const PromptLeaseSchema = z.object({ ...LeaseBase, trial: PromptTermsSchema, prompt: z.string(), tool: z.string().min(1), model: StepModelSchema.optional() }).passthrough();
-const CheckLeaseSchema = z.object({ ...LeaseBase, trial: CheckTermsSchema, command: z.string() }).passthrough();
-const BaselineLeaseSchema = z.object({ ...LeaseBase, trial: BaselineTermsSchema, command: z.string() }).passthrough();
+const CommandLeaseSchema = z.object({ ...LeaseBase, command: z.string() }).passthrough();
 type PromptLease = z.infer<typeof PromptLeaseSchema>;
-type CheckLease = z.infer<typeof CheckLeaseSchema>;
-type BaselineLease = z.infer<typeof BaselineLeaseSchema>;
+type CommandLease = z.infer<typeof CommandLeaseSchema>;
 
 /** `wire` is the lease as every driver reads it, which the place reads. */
 type TrialLease =
   | { kind: 'prompt'; lease: PromptLease; wire: LeaseWire }
-  | { kind: 'check'; lease: CheckLease; wire: LeaseWire }
-  | { kind: 'baseline'; lease: BaselineLease; wire: LeaseWire }
+  | { kind: 'command'; lease: CommandLease; wire: LeaseWire }
   /** The answer holds no lease. */
   | { kind: 'none' }
   /** A lease that is not a trial step: only compilePlan writes a benchmark's steps, so a newer teamai wrote this one. */
@@ -268,10 +261,8 @@ function trialLeaseOf(answer: WorkflowEnvelope, run: RunState): TrialLease {
   const wire = LeaseWireSchema.safeParse(raw);
   const prompt = PromptLeaseSchema.safeParse(raw);
   if (wire.success && prompt.success) return { kind: 'prompt', lease: prompt.data, wire: wire.data };
-  const check = CheckLeaseSchema.safeParse(raw);
-  if (wire.success && check.success) return { kind: 'check', lease: check.data, wire: wire.data };
-  const baseline = BaselineLeaseSchema.safeParse(raw);
-  if (wire.success && baseline.success) return { kind: 'baseline', lease: baseline.data, wire: wire.data };
+  const command = CommandLeaseSchema.safeParse(raw);
+  if (wire.success && command.success) return { kind: 'command', lease: command.data, wire: wire.data };
   return { kind: 'unreadable', step: named.data.step };
 }
 
@@ -282,8 +273,6 @@ interface TrialCall {
   driver: DriverIdentity;
   env: WorkflowEnv;
   signal: AbortSignal | undefined;
-  /** Where a check reads the task's commits from: the run's checkout, then the commit cache. */
-  sources: string[];
   /** The checkout the run started in, which a clone is made from. */
   checkout: string | undefined;
   /** The plan's trial count, for progress lines. */
@@ -296,7 +285,8 @@ interface TrialCall {
  * settled.
  */
 async function takePrompt(trial: TrialCall, lease: PromptLease, wire: LeaseWire, answer: WorkflowEnvelope): Promise<WorkflowEnvelope | undefined> {
-  progress(trial, lease.trial, { kind: 'preparing' });
+  const at = { ...lease.trial, total: trial.total };
+  progress(at, { kind: 'preparing' });
   const placed = await placeTrial(trial, wire);
   if (trial.signal?.aborted) {
     await abandonPlace({ config: trial.config, lock: trial.lock, attempt: wire.attempt });
@@ -304,26 +294,22 @@ async function takePrompt(trial: TrialCall, lease: PromptLease, wire: LeaseWire,
   }
   if ('failure' in placed) {
     const refused = await settle(trial, lease, { outcome: 'failed', message: placed.failure.message, failure: placed.failure, trialReport: {} });
-    progress(trial, lease.trial, { kind: 'error', failure: placed.failure });
+    progress(at, { kind: 'error', failure: placed.failure });
     return refused;
   }
-  progress(trial, lease.trial, { kind: 'ready', tool: lease.tool });
+  progress(at, { kind: 'ready', tool: lease.tool });
   return { data: { ...('data' in answer ? answer.data : {}), lease: driverLease(lease, placed.dir) } };
 }
 
-/**
- * The clone place of the trial lease `wire`, prepared and set up as any place is; `beforeSetup` runs in the clone first,
- * when the place made it. A place that could not be made or set up is given up.
- */
-async function placeTrial(trial: TrialCall, wire: LeaseWire, beforeSetup?: (dir: string) => Promise<WorkflowFailure | undefined>): Promise<{ dir: string } | { failure: WorkflowFailure }> {
+/** The clone place of the trial lease `wire`, prepared and set up as any place is. A place that could not be made or set up is given up. */
+async function placeTrial(trial: TrialCall, wire: LeaseWire): Promise<{ dir: string } | { failure: WorkflowFailure }> {
   const { config, lock } = trial;
   if (trial.checkout === undefined) {
     return { failure: { code: 'workspace_base', message: `Run ${lock.run} has no checkout recorded, so the clone of step "${wire.step}" has nothing to be made from.` } };
   }
   const prepared = await preparePlace({ config, lock, root: trial.checkout, lease: placeLeaseOf(wire) });
   if (prepared.kind !== 'prepared') return { failure: prepared.failure };
-  const failure = (beforeSetup ? await beforeSetup(prepared.dir) : undefined)
-    ?? await runPlaceSetup({ config, run: lock.run, attempt: wire.attempt, mode: 'unattended', env: trial.env, ...(trial.signal ? { signal: trial.signal } : {}) });
+  const failure = await runPlaceSetup({ config, run: lock.run, attempt: wire.attempt, mode: 'unattended', env: trial.env, ...(trial.signal ? { signal: trial.signal } : {}) });
   if (failure) {
     await abandonPlace({ config, lock, attempt: wire.attempt });
     return { failure };
@@ -340,44 +326,52 @@ async function setupIn(trial: Runner, dir: string, setup: LeaseSetup, expiresAt:
 }
 
 /**
- * The trial's check, in the clone its prompt's accepted report left, on the protected paths as the starting commit has
- * them, settled with its verdict. Answers an envelope only when the call must stop: the stop signal, or a report the
- * engine refused.
+ * A command step of the run, a baseline or a check, in the clone its lease prepares, with the lease's env and the
+ * attempt marker, bounded by the run's deadline, settled with its exit and the outputs its stdout states. Its stderr
+ * goes to this process's too, so the lines it prints reach the driver's log. Answers an envelope only when the call must stop: the
+ * stop signal, or a report the engine refused.
  */
-async function runTrialCheck(trial: TrialCall, lease: CheckLease, wire: LeaseWire): Promise<WorkflowEnvelope | undefined> {
-  const ran = await checkIn(trial, lease, async (env) => {
-    const placed = await placeTrial(trial, wire);
-    if ('failure' in placed) return placed;
-    const clone = placed.dir;
-    const failure = await restoreProtected({ clone, startingCommit: lease.trial.startingCommit, protect: lease.trial.protect, sources: trial.sources, env, expiresAt: lease.expiresAt })
-      ?? (lease.trial.add ? await writeAdded({ clone, add: lease.trial.add, sources: trial.sources, env, expiresAt: lease.expiresAt }) : undefined);
-    return failure ? { failure } : placed;
-  });
+async function runCommand(trial: TrialCall, lease: CommandLease, wire: LeaseWire): Promise<WorkflowEnvelope | undefined> {
+  const ran = await commandIn(trial, lease, wire);
   await abandonPlace({ config: trial.config, lock: trial.lock, attempt: wire.attempt });
   if (trial.signal?.aborted) return interrupted(trial.lock.run, lease.step);
-  const answered = await settle(trial, lease, ran.kind === 'check'
-    ? { ...checkSettlement(ran.verdict), trialReport: { verdict: ran.verdict } }
-    : { outcome: 'failed', message: ran.failure.message, failure: ran.failure, trialReport: {} });
-  progress(trial, lease.trial, ran);
-  return answered;
+  if ('failure' in ran) {
+    log.info(`Step ${lease.step}: could not run (${ran.failure.code}: ${ran.failure.message})`);
+    return settle(trial, lease, { outcome: 'failed', message: ran.failure.message, failure: ran.failure, trialReport: {} });
+  }
+  return settle(trial, lease, { ...commandSettlement(ran), trialReport: {} });
 }
 
-/**
- * A check task's baseline: the files check.add writes, setup, then its check, once, in the fresh clone of the starting
- * commit with no team assets its step opens, as no agent runs there. A check that ran to the end outputs whether it
- * passes or fails, which the task's trials read; one that could not run, or whose clone or setup failed, fails the step
- * with no output. Then the clone goes.
- */
-async function runBaseline(trial: TrialCall, lease: BaselineLease, wire: LeaseWire): Promise<WorkflowEnvelope | undefined> {
-  const { add } = lease.trial;
-  const ran = await checkIn(trial, lease, (env) => placeTrial(trial, wire, add ? (clone) => writeAdded({ clone, add, sources: trial.sources, env, expiresAt: lease.expiresAt }) : undefined));
-  await abandonPlace({ config: trial.config, lock: trial.lock, attempt: wire.attempt });
-  if (trial.signal?.aborted) return interrupted(trial.lock.run, lease.step);
-  const answered = await settle(trial, lease, ran.kind === 'check'
-    ? { ...baselineSettlement(ran.verdict), trialReport: { verdict: ran.verdict } }
-    : { outcome: 'failed', message: ran.failure.message, failure: ran.failure, trialReport: {} });
-  baselineProgress(lease.trial.task, ran);
-  return answered;
+/** The command of `lease` in its prepared clone, or why it never started. */
+async function commandIn(trial: TrialCall, lease: CommandLease, wire: LeaseWire): Promise<{ exit: CommandExit; output: string; errors: string } | { failure: WorkflowFailure }> {
+  const scoped = await stepEnvironment(trial.env, lease.envScope ?? NO_ENV);
+  if (!scoped.ok) return { failure: scoped.failure };
+  const placed = await placeTrial(trial, wire);
+  if ('failure' in placed) return placed;
+  return runShellCommand({
+    command: lease.command, cwd: placed.dir, env: { ...scoped.env, ...attemptEnv(lease.run, lease.attempt, 'unattended') }, stderr: 'forward',
+    ...(trial.signal ? { signal: trial.signal } : {}), ...(lease.expiresAt !== undefined ? { expiresAt: lease.expiresAt } : {}),
+  });
+}
+
+/** The settlement teamai reports for a command it ran: as any driver reports an exit, and a stop or timeout failed. */
+function commandSettlement({ exit, output, errors }: { exit: CommandExit; output: string; errors: string }): Pick<ReportInput, 'outcome' | 'exitCode' | 'failure' | 'message' | 'outputs'> {
+  switch (exit.kind) {
+    case 'exited':
+      return commandEnd({ exitCode: exit.code, stdout: output, stderr: errors });
+    case 'signal':
+      return { outcome: 'failed', message: `The command was stopped by ${exit.signal}.` };
+    case 'spawn_failed':
+      return { outcome: 'failed', message: `The command could not start: ${exit.message}` };
+    case 'timeout': {
+      const message = 'The command did not finish before the run timeout.';
+      return { outcome: 'failed', message, failure: { code: 'timeout', message } };
+    }
+    default: {
+      const unhandled: never = exit;
+      return unhandled;
+    }
+  }
 }
 
 /** How a check went: its verdict, or why it never ran. */
@@ -391,8 +385,8 @@ type Runner = { env: Pick<WorkflowEnv, 'values' | 'facts'>; signal: AbortSignal 
  * `prepare` gets that env too, which is all the agent's code gets once the check runs it. A caller tells a stopped call from its verdict by
  * its signal.
  */
-async function checkIn(trial: Runner, lease: Pick<CheckLease, 'command' | 'envScope' | 'expiresAt'>, prepare: (env: NodeJS.ProcessEnv) => Promise<{ dir: string } | { failure: WorkflowFailure }>): Promise<CheckRun> {
-  const scoped = await stepEnvironment(trial.env, lease.envScope ?? NO_ENV);
+async function checkIn(trial: Runner, lease: { command: string; envScope: EnvScope; expiresAt: string | undefined }, prepare: (env: NodeJS.ProcessEnv) => Promise<{ dir: string } | { failure: WorkflowFailure }>): Promise<CheckRun> {
+  const scoped = await stepEnvironment(trial.env, lease.envScope);
   if (!scoped.ok) return { kind: 'error', failure: scoped.failure };
   const prepared = await prepare(scoped.env);
   if ('failure' in prepared) return { kind: 'error', failure: prepared.failure };
@@ -401,6 +395,50 @@ async function checkIn(trial: Runner, lease: Pick<CheckLease, 'command' | 'envSc
     ...(trial.signal ? { signal: trial.signal } : {}), ...(lease.expiresAt !== undefined ? { expiresAt: lease.expiresAt } : {}),
   });
   return { kind: 'check', verdict: checkVerdict(exit, process.platform) };
+}
+
+/** Which check `teamai benchmark check` runs: a check task's baseline, or a trial's check. */
+export type CheckStepMode = 'baseline' | 'trial';
+
+/**
+ * `teamai benchmark check --baseline|--trial`: the check of the step whose attempt `env` marks, in `cwd`, the clone that
+ * step's place prepared and set up. It reads what it checks from the run's plan, by the step's id: a trial's check first
+ * puts the protected paths back as the starting commit has them; both then write the files check.add names, from the
+ * run's checkout or the commit cache. Git and the check run with `env` without the names a strict sandbox withholds, which this
+ * process may have set itself, until `signal` or the lease's deadline stops them, and the verdict is classified here, once. Answers its result, or why the check did not run, with one progress line either way.
+ */
+export async function runCheckStep({ mode, env: given, cwd, signal }: { mode: CheckStepMode; env: NodeJS.ProcessEnv; cwd: string; signal?: AbortSignal }): Promise<{ result: CheckResult } | { failure: WorkflowFailure }> {
+  const found = await findAttemptRun(given);
+  if ('error' in found) {
+    if (found.error.code !== 'run_unreadable') return { failure: found.error };
+    return { failure: { ...found.error, message: `${found.error.message}: its file, or the benchmark plan in it, is not in a form this teamai reads, whose plans are schemaVersion ${BENCHMARK_PLAN_SCHEMA_VERSION}. Run the benchmark with the teamai that started it, or start it again.` } };
+  }
+  const { config, run, step } = found;
+  const plan = run.benchmark;
+  const checked = plan && checkedBy(plan, mode, step.id);
+  if (!plan || !checked) {
+    return { failure: { code: 'invalid_arguments', message: `Step "${step.id}" of run ${run.id} is not ${mode === 'baseline' ? 'the baseline of a check task' : 'the check of a trial'} of a benchmark run, so teamai benchmark check --${mode} has nothing to check there.` } };
+  }
+  const { task, judge, at } = checked;
+  const env = Object.fromEntries(Object.entries(given).filter(([key]) => sameEnvName(SANDBOX_WITHHELD_ENV, key) === undefined));
+  const sources = [...(run.checkout !== undefined ? [run.checkout] : []), commitCacheOf(config, plan.suite.repo)];
+  const expiresAt = leaseDeadline(run, step);
+  const prepared = (mode === 'trial' ? await restoreProtected({ clone: cwd, startingCommit: task.startingCommit, protect: judge.protect, sources, env, expiresAt }) : undefined)
+    ?? (judge.add ? await writeAdded({ clone: cwd, add: judge.add, sources, env, expiresAt }) : undefined);
+  const ran: CheckRun = prepared
+    ? { kind: 'error', failure: prepared }
+    : { kind: 'check', verdict: checkVerdict((await runShellCommand({ command: judge.run, cwd, env, ...(signal ? { signal } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) })).exit, process.platform) };
+  if (at) progress(at, ran);
+  else baselineProgress(task.id, ran);
+  return ran.kind === 'check' ? { result: ran.verdict.verdict } : { failure: ran.failure };
+}
+
+/** The check task `step` checks in `mode`, its check, and for a trial's check, the trial as its lines name it. */
+function checkedBy(plan: BenchmarkPlan, mode: CheckStepMode, step: string): { task: BenchmarkPlan['tasks'][number]; judge: Extract<BenchmarkPlan['tasks'][number]['judge'], { kind: 'check' }>; at?: TrialAt } | undefined {
+  const trial = mode === 'trial' ? plan.trials.find((planned) => stepOf({ ...planned, kind: 'check' }) === step) : undefined;
+  const task = plan.tasks.find((planned) => (mode === 'trial' ? planned.id === trial?.task : baselineStepOf(planned.id) === step));
+  if (task?.judge.kind !== 'check') return undefined;
+  return { task, judge: task.judge, ...(trial ? { at: { ...trial, total: plan.trials.length } } : {}) };
 }
 
 /**
@@ -417,7 +455,7 @@ export async function tryCheckAt(input: {
   const { commit, startingCommit, protect, add, setup, sources, expiresAt } = input;
   const values = new Map(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
   const runner: Runner = { env: { values, facts: { declared: new Set(), secrets: new Set(), present: new Set(values.keys()) } }, signal: input.signal };
-  const withhold = [...TRIAL_WITHHELD_ENV];
+  const withhold = [...SANDBOX_WITHHELD_ENV];
   const leaseSetup = setup ? { command: setup.command, envScope: { provide: setup.requires?.env ?? [], withhold } } : undefined;
   const root = scratchCloneRoot();
   const clone = path.join(root, 'r');
@@ -611,25 +649,6 @@ async function holds(clone: string, entry: StartingEntry): Promise<boolean> {
   return createHash(entry.oid.length === 64 ? 'sha256' : 'sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex') === entry.oid;
 }
 
-/** The settlement teamai reports for a check it ran: one mapping from the verdict, never derived again later. */
-function checkSettlement(verdict: CheckVerdict): Pick<ReportInput, 'outcome' | 'exitCode' | 'failure' | 'message'> {
-  switch (verdict.verdict) {
-    case 'passed':
-      return { outcome: 'success', exitCode: 0 };
-    case 'failed':
-      return { outcome: 'failed', exitCode: verdict.exitCode, message: `check exited with code ${verdict.exitCode}` };
-    case 'could_not_run': {
-      if (verdict.cause !== 'timeout') return { outcome: 'failed', message: `The check could not run (${verdict.cause}${verdict.detail ? `: ${verdict.detail}` : ''}).` };
-      const message = 'The check did not finish before the run timeout.';
-      return { outcome: 'failed', message, failure: { code: 'timeout', message } };
-    }
-    default: {
-      const unhandled: never = verdict;
-      return unhandled;
-    }
-  }
-}
-
 /** Reports what teamai did with a lease. Answers the engine's refusal, except a cancel: the next lease call shows it. */
 async function settle(trial: TrialCall, lease: Pick<PromptLease, 'attempt' | 'revision'>, body: Omit<ReportInput, 'attempt' | 'revision' | 'driver'>): Promise<WorkflowEnvelope | undefined> {
   const answer = await reportAttempt(trial.config, trial.lock.run, { attempt: lease.attempt, revision: lease.revision, driver: trial.driver, ...body }, trial.env.secrets);
@@ -656,12 +675,6 @@ function trialAgent(observed: ReportedAgent, model: StepModel | undefined, repor
   };
 }
 
-/** A baseline's settlement: success with its output when the check ran to the end, as a trial check's otherwise. */
-function baselineSettlement(verdict: CheckVerdict): Pick<ReportInput, 'outcome' | 'exitCode' | 'failure' | 'message' | 'outputs'> {
-  const outputs = baselineOutput(verdict);
-  return outputs ? { outcome: 'success', outputs } : checkSettlement(verdict);
-}
-
 /** The lease a driver sees: no `workspace`, `setup`, `command` or trial terms, with `cwd`. */
 function driverLease(lease: PromptLease, cwd: string): PreparedTrialLease {
   const { workspace: _workspace, setup: _setup, trial: _trial, ...rest } = lease;
@@ -680,7 +693,15 @@ type ProgressEvent =
   | { kind: 'check'; verdict: CheckVerdict }
   | { kind: 'error'; failure: WorkflowFailure };
 
-function progress({ total }: TrialCall, { order, task, arm }: Extract<TrialTerms, { kind: 'prompt' | 'check' }>, event: ProgressEvent): void {
+/** A trial, as its progress lines name it: its place in the plan's trial list of `total`. */
+interface TrialAt {
+  order: number;
+  total: number;
+  task: string;
+  arm: string;
+}
+
+function progress({ order, total, task, arm }: TrialAt, event: ProgressEvent): void {
   switch (event.kind) {
     case 'preparing':
       log.info(`Trial ${order}/${total} ${task} ${arm}: preparing`);

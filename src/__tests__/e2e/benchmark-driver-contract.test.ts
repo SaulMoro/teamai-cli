@@ -115,7 +115,7 @@ describe.each(DRIVERS)('the benchmark trial contract, driven by $name', ({ make 
   });
 
   it.each([
-    ['declares nothing', {}, true, ['sandbox']],
+    ['declares nothing', {}, true, ['isolation']],
     ['provides clones but does not ask --prepare', { ...SANDBOX_CLAUDE, workspace: [...SANDBOX_CLAUDE.workspace, 'clone'] }, false, ['prepare']],
   ])('holds the task baseline, and so every trial, from a driver that %s', async (_, can, prepare, missing) => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: false, suite: twoArms('10m') });

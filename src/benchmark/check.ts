@@ -1,28 +1,23 @@
 /**
- * How a task's check ended, classified once, when the check step settles. Pure. The verdict is stored on the settled
- * step (`verdict`, step-state.ts), and result.ts maps the stored value: nothing classifies a check a second time, and
- * no result is read back from a failure code.
- *
- * Its own module because result.ts (imported by records.ts) needs the verdict and trial.ts (which imports engine.ts)
- * produces it. In trial.ts it would make records.ts -> trial.ts -> engine.ts -> records.ts.
+ * How a task's check ended, classified once, by `teamai benchmark check` (trial.ts), which prints the result as its
+ * step's output. Pure. result.ts maps the output its step stored: nothing classifies a check a second time, and no
+ * result is read back from a failure code.
  */
 import { z } from 'zod';
 import type { CommandExit } from '../workflow/shell-command.js';
-import type { BASELINE_OUTPUTS } from './plan.js';
 
 /** What a check says about the repo it ran in. */
-export const CheckVerdictSchema = z.discriminatedUnion('verdict', [
-  z.object({ verdict: z.literal('passed') }).strict(),
+export type CheckVerdict =
+  | { verdict: 'passed' }
   /** It ran to the end and failed: the check's own answer. */
-  z.object({ verdict: z.literal('failed'), exitCode: z.number().int() }).strict(),
+  | { verdict: 'failed'; exitCode: number }
   /** It says nothing about the repo: it could not start, was killed, or ran out of time. */
-  z.object({
-    verdict: z.literal('could_not_run'),
-    cause: z.enum(['not_found', 'not_executable', 'spawn_failed', 'signal', 'timeout']),
-    detail: z.string().optional(),
-  }).strict(),
-]);
-export type CheckVerdict = z.infer<typeof CheckVerdictSchema>;
+  | { verdict: 'could_not_run'; cause: 'not_found' | 'not_executable' | 'spawn_failed' | 'signal' | 'timeout'; detail?: string };
+
+/** The `result` a check step outputs: the verdict, without its detail. */
+export const CHECK_RESULTS = ['passed', 'failed', 'could_not_run'] as const satisfies ReadonlyArray<CheckVerdict['verdict']>;
+export const CheckOutputSchema = z.object({ result: z.enum(CHECK_RESULTS) });
+export type CheckResult = (typeof CHECK_RESULTS)[number];
 
 const SHELL_SIGNAL_BASE = 128;
 /** The highest signal number on Linux, whose real-time signals go up to 64; other POSIX systems stop below it. */
@@ -53,25 +48,6 @@ export function checkVerdict(exit: CommandExit, platform: NodeJS.Platform): Chec
       return { verdict: 'could_not_run', cause: 'spawn_failed', detail: exit.message };
     default: {
       const unhandled: never = exit;
-      return unhandled;
-    }
-  }
-}
-
-/**
- * A baseline's output, which its task's trials read: `fails` is what the task expects, so its trials run; `passes`
- * makes the task invalid. A check that could not run says nothing about the starting commit, and gives none.
- */
-export function baselineOutput(verdict: CheckVerdict): { baseline: (typeof BASELINE_OUTPUTS)[number] } | undefined {
-  switch (verdict.verdict) {
-    case 'passed':
-      return { baseline: 'passes' };
-    case 'failed':
-      return { baseline: 'fails' };
-    case 'could_not_run':
-      return undefined;
-    default: {
-      const unhandled: never = verdict;
       return unhandled;
     }
   }

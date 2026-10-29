@@ -18,7 +18,7 @@ import type { DriverIdentity } from '../workflow/types.js';
 import { benchmarkRunConfig, RUN_START, RUN_TEAM, settleBaselines, startBenchmarkRun } from './helpers/benchmark-fixture.js';
 
 const driver: DriverIdentity = { kind: 'external', machine: 'ci', workspace: '/work' };
-const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', tools: ['claude'], end_turn: true };
+const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, tools: ['claude'], end_turn: true };
 const dirs: string[] = [];
 const HeldSchema = z.object({ data: z.object({ wait: z.object({ held: z.array(z.unknown()) }) }) });
 const LeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number() }) }) });
@@ -61,7 +61,7 @@ async function leasePrompt(config: LocalConfig, runId: string): Promise<{ attemp
 
 describe('benchmark plan run', () => {
   it.each([
-    ['sandbox', { ...can, isolation: 'none' as const }, true],
+    ['isolation', { ...can, isolation: 'none' as const }, true],
     ['prepare', can, false],
   ])('holds a task baseline, which runs before any trial, for a driver that lacks %s', async (missing, offered, prepare) => {
     const { config, runId } = await startFix();
@@ -77,7 +77,7 @@ describe('benchmark plan run', () => {
     const next = await leaseNext(config, runId, driver, { can, prepare: true });
 
     expect(next).toMatchObject({ data: { lease: {
-      step: 'baselines.t01', command: 'node test.js',
+      step: 'baselines.t01', command: 'teamai benchmark check --baseline',
       workspace: { mode: 'new', base: { commit: RUN_START }, clone: { commit: RUN_START, team: { treatment: 'none' } } },
     } } });
   });
@@ -231,6 +231,23 @@ describe('benchmark plan run', () => {
     expect(next).toMatchObject({ data: { done: { run: runId, outcome: 'succeeded', end: 'settled' } } });
   });
 
+  it.each(['passed', 'failed'] as const)('records a trial %s as the check command step it leases after the prompt answers', async (result) => {
+    const { config, runId } = await startFix();
+    const prompt = await leasePrompt(config, runId);
+    await reportAttempt(config, runId, { ...prompt, outcome: 'success', driver, trialReport: {} });
+    const check = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number(), command: z.string() }) }) })
+      .parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+
+    await reportAttempt(config, runId, { attempt: check.attempt, revision: check.revision, outcome: 'success', exitCode: 0, outputs: { result }, driver, trialReport: {} });
+    const next = await leaseNext(config, runId, driver, { can, prepare: true });
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    expect(check).toMatchObject({ step: 'trials.r1.t01.a01.check', command: 'teamai benchmark check --trial' });
+    expect(next).toMatchObject({ data: { done: { outcome: 'succeeded', end: 'settled' } } });
+    expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ result })]);
+  });
+
   it('reads a run as corrupt when its plan holds an arm model a record could not publish', async () => {
     const { config, runId } = await startFix({ arms: 2 });
     const file = path.join(runsDir(config), `${runId}.json`);
@@ -242,7 +259,7 @@ describe('benchmark plan run', () => {
   });
 
   it.each([
-    ['passes', 'invalid'],
+    ['passed', 'invalid'],
     ['could_not_run', 'could_not_run'],
   ] as const)('runs no trial of a task whose baseline %s, and ends the run with its baseline in the record', async (baseline, recorded) => {
     const { config, runId } = await startFix({ arms: 2, repetitions: 2 });
@@ -291,7 +308,7 @@ describe('benchmark plan run', () => {
   it('settles at once every baseline and trial its only driver cannot take, so the run ends', async () => {
     const { config, runId } = await startFix({ tasks: 2, arms: 2, repetitions: 2 });
 
-    const next = await leaseNext(config, runId, driver, { can: { ...can, isolation: 'none' }, prepare: true, alone: true });
+    const next = await leaseNext(config, runId, driver, { can, prepare: false, alone: true });
 
     const run = await readRun(config, runId);
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
@@ -300,6 +317,15 @@ describe('benchmark plan run', () => {
       tasks: [{ id: 't01', baseline: 'not_run' }, { id: 't02', baseline: 'not_run' }],
       trials: Array(8).fill(expect.objectContaining({ result: 'not_run' })),
     });
+  });
+
+  it('holds every baseline and trial from its only driver when that driver is not a sandbox, rather than settling them', async () => {
+    const { config, runId } = await startFix({ tasks: 2 });
+
+    const next = await leaseNext(config, runId, driver, { can: { ...can, isolation: 'none' }, prepare: true, alone: true });
+
+    expect(next).toMatchObject({ data: { wait: { held: [{ step: 'baselines.t01', missing: ['isolation'] }, { step: 'baselines.t02', missing: ['isolation'] }] } } });
+    expect(await readRun(config, runId)).toMatchObject({ status: 'running', steps: expect.arrayContaining([expect.objectContaining({ id: 'baselines', status: 'running' })]) });
   });
 
   it('leases its only driver the trials it can take, and settles the others at once', async () => {

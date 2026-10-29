@@ -2,6 +2,9 @@
  * Real CLI on the local driver: teamai tries each task's check on its starting commit before any trial, and checks a
  * trial against the protected paths as the starting commit has them.
  */
+import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { benchmarkFixture, envelope, PRODUCT_URL, said, type BenchmarkFixture, type BenchmarkFixtureOptions } from '../helpers/benchmark-fixture.js';
@@ -254,4 +257,42 @@ source: { platform: claude-code, sessionId: s1, fix: ${fix} }
     expect(fixture.toolLaunches()).toHaveLength(1);
     expect(fixture.trialRootEntries()).toEqual([]);
   }, 120_000);
+});
+
+describe('teamai benchmark check', () => {
+  /** `teamai benchmark check <args>` in the member's checkout, as the step of attempt `marker` would run it. */
+  function check(fixture: BenchmarkFixture, args: string[], marker?: string) {
+    const env = { ...fixture.env, ...(marker !== undefined ? { TEAMAI_WORKFLOW_ATTEMPT: marker } : {}) };
+    return spawnSync(path.join(fixture.bin, 'teamai'), ['benchmark', 'check', ...args], { cwd: fixture.work, env, encoding: 'utf8' });
+  }
+
+  it('refuses to run as no step of a run', async () => {
+    const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'] });
+    fixtures.push(fixture);
+
+    const checked = check(fixture, ['--trial']);
+
+    expect(checked.status).toBe(1);
+    expect(checked.stdout).toBe('');
+    expect(checked.stderr).toContain('TEAMAI_WORKFLOW_ATTEMPT is not set to <run>/<attempt>');
+  }, 60_000);
+
+  it('refuses a run whose plan has a schemaVersion this teamai does not know', async () => {
+    const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'] });
+    fixtures.push(fixture);
+    const run = envelope(await fixture.teamai(['workflow', 'start', 'fix', '--benchmark'])).data?.run;
+    if (typeof run !== 'string') throw new Error('the run did not start');
+    const projects = path.join(fixture.home, '.teamai', 'projects');
+    const file = fs.readdirSync(projects).map((name) => path.join(projects, name, 'workflows', 'runs', `${run}.json`)).find((at) => fs.existsSync(at));
+    if (file === undefined) throw new Error(`no run file of ${run}`);
+    const stored = z.object({ benchmark: z.object({ schemaVersion: z.number() }).passthrough() }).passthrough().parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+    fs.writeFileSync(file, JSON.stringify({ ...stored, benchmark: { ...stored.benchmark, schemaVersion: 2 } }));
+
+    const checked = check(fixture, ['--baseline'], `${run}/a00000000`);
+
+    expect(checked.status).toBe(1);
+    expect(checked.stdout).toBe('');
+    expect(checked.stderr).toContain(`run_unreadable: Run ${run} could not be read`);
+    expect(checked.stderr).toContain('schemaVersion 1');
+  }, 60_000);
 });

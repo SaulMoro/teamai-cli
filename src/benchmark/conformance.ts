@@ -36,7 +36,7 @@ check:
 }
 
 const external: DriverCan = { workspace: [...DRIVER_PROFILES.external.can.workspace] };
-const SANDBOX_CLAUDE: DriverCan = { ...external, isolation: 'sandbox', tools: ['claude'] };
+const SANDBOX_CLAUDE: DriverCan = { ...external, isolation: 'sandbox', env: true, tools: ['claude'] };
 /** The baseline of task `fix`: the first step of the run, which every driver must be able to take before any trial runs. */
 const BASELINE = 'baselines.fix';
 
@@ -45,7 +45,7 @@ export const benchmarkConformanceScenarios: BenchmarkScenario[] = [
     name: 'a driver that does not declare a sandbox is held, not leased, the task baseline that runs before any trial',
     benchmark: twoArms('10m'),
     operations: [{ kind: 'next', saveAs: 'held', as: 'external', prepare: true, can: { ...external, tools: ['claude'] },
-      expect: { data: { wait: { held: [{ step: BASELINE, missing: ['sandbox'] }] } } } }],
+      expect: { data: { wait: { held: [{ step: BASELINE, missing: ['isolation'] }] } } } }],
   },
   {
     name: 'a driver that provides clones but does not ask next --prepare is held, not leased, the task baseline that runs before any trial',

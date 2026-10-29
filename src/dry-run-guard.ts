@@ -136,6 +136,7 @@ export const NO_DRY_RUN_PREVIEW: Readonly<Record<string, string>> = {
   'workflow cancel': 'cancels steps or the run',
   'workflow resume': 'runs the local driver and writes the run',
   'workflow publish': 'writes the run to teamai-reports',
+  'benchmark check': 'puts back the protected paths, writes the files check.add names and runs the check in its clone',
 };
 
 /** The refusal printed when a command has no `--dry-run` preview. */

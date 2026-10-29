@@ -16,6 +16,7 @@ import { loadCachedSuite, readSuiteFiles, withTeamRevision } from '../workflow/c
 import { createRun, error } from '../workflow/engine.js';
 import { judgeUnavailable } from '../workflow/scoring.js';
 import type { DriverIdentity, RunState, WorkflowEnvelope } from '../workflow/types.js';
+import type { DriverCan } from '../workflow/requirements.js';
 import { formatDiagnostic } from '../workflow/parse.js';
 import { git } from '../workflow/worktree.js';
 import { addedOf, compilePlan, freezePlan, runSourceHash, type PlannedArm } from './plan.js';
@@ -34,6 +35,8 @@ export interface BenchmarkStart {
   runMode?: RunState['runMode'];
   /** `--member-aliases`: resolve arm models with this member's ~/.teamai/models/aliases.yaml over the team's. */
   memberAliases: boolean;
+  /** What the local driver, the run's only driver, gives strict requirements. */
+  alone?: DriverCan;
 }
 
 /**
@@ -78,7 +81,7 @@ export async function startBenchmark(config: LocalConfig, name: string, options:
   if (!committed.ok) {
     return error('check_files_unwritable', `Task "${committed.task}" writes files from the suite directory before its check, and they could not be written as a commit into this machine's benchmark cache: ${committed.failed} Fix that, and start again.`);
   }
-  const plan = freezePlan({ suite: found, baselineTeamRevision: revision, selection: selectionOf(config), arms: [first.arm, ...rest], scorers: pinned });
+  const plan = freezePlan({ committed: committed.suite, baselineTeamRevision: revision, selection: selectionOf(config), arms: [first.arm, ...rest], scorers: pinned });
   const { definition, scorers: generated } = compilePlan(plan, committed.suite);
   const scorers = { ...pinned, ...generated };
   const criteria = found.tasks.find((task) => task.judge.kind === 'criteria');
@@ -100,6 +103,7 @@ export async function startBenchmark(config: LocalConfig, name: string, options:
     ...(options.base ? { base: options.base } : {}),
     ...(options.driver ? { driver: options.driver } : {}),
     ...(options.runMode ? { runMode: options.runMode } : {}),
+    ...(options.alone ? { alone: options.alone } : {}),
   });
 }
 

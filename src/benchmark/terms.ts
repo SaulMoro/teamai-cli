@@ -2,9 +2,9 @@
  * The trial terms a generated benchmark step carries. Zod, the exact model schema and the turn limits only, so types.ts,
  * store.ts and the drivers import it without a cycle.
  *
- * Only a `prompt` step ever reaches a driver: teamai leases a `check` step to the driver that asked, runs it itself
- * inside `workflow next --prepare`, and leases again. Both kinds stay step markers, so `negotiate` gates them the same
- * way and teamai knows how to run what it leased.
+ * Only a `prompt` step ever reaches a driver: teamai leases a check or a baseline, both command steps, to the driver that
+ * asked, runs it itself inside `workflow next --prepare`, and leases again. Every kind stays a step marker, so
+ * `negotiate` gates them the same way and withholds the same names.
  */
 import { z } from 'zod';
 import { CommitSchema } from '../workflow/clone.js';
@@ -17,14 +17,6 @@ import { StepModelSchema } from '../workflow/step-model.js';
  */
 export const BENCHMARK_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 export const BenchmarkNameSchema = z.string().regex(BENCHMARK_NAME, 'must be letters, digits, "-" or "_", with no "."');
-
-/**
- * The names a trial's setup, tool and check never see, whatever the team env or a suite declares: credentials a trial
- * could push, publish or authenticate with. Start freezes them into the plan's `withhold`, the copy every reader uses.
- */
-export const TRIAL_WITHHELD_ENV = [
-  'GITHUB_TOKEN', 'GH_TOKEN', 'GITLAB_TOKEN', 'GL_TOKEN', 'CI_JOB_TOKEN', 'SSH_AUTH_SOCK', 'GIT_ASKPASS', 'SSH_ASKPASS',
-] as const;
 
 /**
  * The team assets of an arm's trials, as start resolved the suite's `team`: the revision this checkout pulled, a ref of
@@ -70,14 +62,17 @@ export const PromptTermsSchema = z.object({
  * Files a check task's `check.add` writes before each run of its check, as `commit` has them: its fix, or the commit
  * start made of the files it names in the suite directory, as `kind` says.
  */
-const AddedSchema = z.object({ kind: z.enum(['fix', 'suite']), commit: CommitSchema, paths: z.array(z.string().min(1)).nonempty() }).strict();
+export const AddedSchema = z.object({ kind: z.enum(['fix', 'suite']), commit: CommitSchema, paths: z.array(z.string().min(1)).nonempty() }).strict();
 export type Added = z.infer<typeof AddedSchema>;
 
-/** The arm's check, run by teamai in the prompt's clone, on the protected paths as `startingCommit` has them. */
-export const CheckTermsSchema = z.object({ kind: z.literal('check'), task: BenchmarkNameSchema, startingCommit: CommitSchema, ...OfArm, protect: z.array(z.string().min(1)).nonempty(), add: z.array(AddedSchema).nonempty().optional() }).strict();
+/**
+ * The arm's check, `teamai benchmark check --trial` in the prompt's clone. A marker only: the command reads what it
+ * checks from the run's plan.
+ */
+export const CheckTermsSchema = z.object({ kind: z.literal('check') }).strict();
 
-/** A check task's check, tried by teamai once in the clean clone of its starting commit its step opens, before any of its trials. */
-export const BaselineTermsSchema = z.object({ kind: z.literal('baseline'), task: BenchmarkNameSchema, add: z.array(AddedSchema).nonempty().optional() }).strict();
+/** A check task's baseline, `teamai benchmark check --baseline` in the clean clone of its starting commit. A marker only, as a check's. */
+export const BaselineTermsSchema = z.object({ kind: z.literal('baseline') }).strict();
 
 const TrialTermsSchema = z.discriminatedUnion('kind', [PromptTermsSchema, CheckTermsSchema, BaselineTermsSchema]);
 export type TrialTerms = z.infer<typeof TrialTermsSchema>;

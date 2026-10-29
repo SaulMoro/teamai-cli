@@ -126,7 +126,7 @@ describe('a benchmark run once it has started', () => {
   }, 120_000);
 
   it("keeps the baseline team revision and each scorer's rubric hash on the record when every trial is not_run", async () => {
-    const fixture = await fixtureOf({ tool: 'fixes', sandbox: false, suite: `${FIX_SUITE}scorers: [quality]\n`, team: { 'scorers/quality.md': QUALITY } });
+    const fixture = await fixtureOf({ tool: 'fixes', sandbox: true, tools: ['codex'], suite: `${FIX_SUITE}scorers: [quality]\n`, team: { 'scorers/quality.md': QUALITY } });
     const teamHead = execFileSync('git', ['--git-dir', fixture.teamOrigin, 'rev-parse', 'main'], { encoding: 'utf8' }).trim();
 
     const ran = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
@@ -136,7 +136,7 @@ describe('a benchmark run once it has started', () => {
     expect(ran.code, said(ran)).toBe(0);
     expect(record.baselineTeamRevision).toBe(teamHead);
     expect(record.scorers).toEqual([{ name: 'quality', rubric: { sourceHash: createHash('sha256').update(QUALITY).digest('hex') } }]);
-    expect(record.tasks).toEqual([expect.objectContaining({ id: 'fix', baseline: 'not_run' })]);
+    expect(record.tasks).toEqual([expect.objectContaining({ id: 'fix', baseline: 'valid' })]);
     expect(record.trials.map((trial) => trial.result)).toEqual(['not_run']);
     expect(fixture.toolLaunches()).toEqual([]);
   }, 120_000);

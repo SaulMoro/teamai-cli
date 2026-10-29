@@ -910,6 +910,20 @@ workflowCmd
     await workflowCancel(run, step);
   });
 
+const benchmarkCmd = program
+  .command('benchmark')
+  .description('The commands of a benchmark run\'s steps. Each runs as a step of a run teamai workflow start --benchmark started, never on its own.');
+
+benchmarkCmd
+  .command('check')
+  .description('Run the check of the benchmark step this process runs as, in its clone: the files check.add names, then the task\'s check. Prints {"result":"passed"|"failed"|"could_not_run"} and exits 0 once the check ran; exits 1 when it could not set the check up. Refuses a run whose plan this teamai cannot read.')
+  .option('--baseline', 'The check of a task\'s baseline, on its starting commit')
+  .option('--trial', 'The check of a trial, after its prompt, with the protected paths put back as the starting commit has them first')
+  .action(async (cmdOpts: { baseline?: boolean; trial?: boolean }) => {
+    const { benchmarkCheck } = await import('./workflow-commands.js');
+    await benchmarkCheck(cmdOpts);
+  });
+
 program
   .command('score')
   .description('Judge workflow passes with team scorers (scorers/<name>.md). Any driver takes judge work with --next, runs its own judge on the lease prompt with the lease evidence directory as its only readable root and settles it with --lease <ref> --submit, or judges it here with --lease <ref>. --run <id> --step <path> --scorer <name> judges a pass on demand. --scorer <name> [--session <id>] judges a finished agent session here: the one --session names, or, inside a session, the one its agent session variable names; it never guesses. --team-session <name> judges a session a member pushed instead. --label <value> labels the session by hand instead of judging it. With --json, it leases that session to the driver\'s own judge instead. workflow next never hands out judge work, and a driver never lists a judge ref in workflow next running. Prints one JSON envelope; --drain prints lines.')

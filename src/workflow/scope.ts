@@ -9,7 +9,7 @@ import { parseStepPath } from './step-path.js';
 import { settled, visibleOutcome, type StepState } from './step-state.js';
 import type { TemplateContext } from './template.js';
 import type { Budget, InlineWorkflow, RunState, WorkflowDefinition, WorkflowStep } from './types.js';
-import { mergeRequirements, type Requirements, type Setup } from './requirements.js';
+import { mergeRequirements, type InEffect, type Setup } from './requirements.js';
 
 /** A workflow inside a run: the top-level one, or the sub-workflow a step runs. */
 export interface Scope {
@@ -27,7 +27,7 @@ export interface Scope {
   /** The `defaults.model` in effect: the workflow file's own, else the enclosing scope's. */
   defaultModel?: string;
   /** The requirements every step here has: the enclosing scope's, the workflow step's own, then the file's `defaults.requires`. */
-  requires: Requirements;
+  requires: InEffect;
   /** The tokens this workflow may spend: the file's budget, or the workflow step's when that is smaller. */
   budget?: number;
   /** Whether this workflow or one around it has a budget. */

@@ -13,7 +13,7 @@ import type { HandoffOwner } from './workflow/snapshot.js';
 import { getRepoIdentity } from './session-flow/sync.js';
 import { readableReportsWorktree } from './utils/reports-branch.js';
 import { callerProvenance, cancelRun, respondProvenance, respondToHitl, retryStep } from './workflow/run-controls.js';
-import { personAnswers, runLocalDriver, withDriverLock } from './workflow/drivers/local/local-driver.js';
+import { localStrictCan, personAnswers, runLocalDriver, withDriverLock } from './workflow/drivers/local/local-driver.js';
 import { driverIdentity } from './driver-identity.js';
 import { getBusinessRoot, getDataHome, usesBranchWorktree, type LocalConfig, type TeamaiConfig } from './types.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema } from './workflow/store.js';
@@ -26,6 +26,7 @@ import { resolveRunMode } from './launch-context.js';
 import { memberTools } from './tool-launch/call.js';
 import { agentEvidence, isAttemptRunner, nestedCall, nestedStart, nestedWorkflowError, type Nested } from './workflow/attempt-marker.js';
 import { startBenchmark, tryBenchmarkTask } from './benchmark/start.js';
+import { runCheckStep } from './benchmark/trial.js';
 import { headCommit } from './workflow/worktree.js';
 import type { WorkflowEnvelope, WorkflowFailure } from './workflow/types.js';
 
@@ -241,9 +242,9 @@ async function skillAnswer(raw: Parameters<typeof parseSkillCall>[0]): Promise<{
   return { envelope: await runSkillCall(call, context), secrets: loaded.secrets };
 }
 
-/** The flags of `workflow start` and `resume` without `--driver skill`. The skill driver's flags are refused, the first given in this order. */
 const TIMEOUT_MESSAGE = '--timeout must be a positive duration, such as 500ms, 30s, 10m, or 2h';
 
+/** The flags of `workflow start` and `resume` without `--driver skill`. The skill driver's flags are refused, the first given in this order. */
 const NonSkillRunOptionsSchema = z.object({
   timeout: z.string().transform((text, ctx) => durationMs(text) ?? (ctx.addIssue({ code: z.ZodIssueCode.custom, message: TIMEOUT_MESSAGE }), z.NEVER)).optional(),
   parallel: z.undefined({ invalid_type_error: '--parallel needs --driver skill' }),
@@ -326,9 +327,10 @@ export async function workflowStart(name: string, options: {
   const { inputs } = read;
   const caller = invokeCaller(options.confirmed);
   const base = options.benchmark ? await headCommit(process.cwd()) : undefined;
+  const alone = options.driver === 'local' ? { alone: localStrictCan(config, options) } : {};
   const started = options.benchmark
-    ? await startBenchmark(config, name, { secrets, checkout: process.cwd(), runMode: caller.mode, memberAliases: options.memberAliases === true, ...(base ? { base } : {}) })
-    : await inProcessClient({ config, env }).start(name, { inputs, checkout: process.cwd(), caller, ...(timeout !== undefined ? { timeout } : {}) });
+    ? await startBenchmark(config, name, { secrets, checkout: process.cwd(), runMode: caller.mode, memberAliases: options.memberAliases === true, ...(base ? { base } : {}), ...alone })
+    : await inProcessClient({ config, env }).start(name, { inputs, checkout: process.cwd(), caller, ...alone, ...(timeout !== undefined ? { timeout } : {}) });
   if ('error' in started || options.driver !== 'local') {
     writeEnvelope(started, secrets);
     return;
@@ -849,3 +851,33 @@ function table(rows: string[][]): string {
   const widths = cells[0]?.map((_, column) => Math.max(...cells.map((row) => row[column]?.length ?? 0))) ?? [];
   return cells.map((row) => row.map((cell, column) => (column === row.length - 1 ? cell : cell.padEnd(widths[column] ?? 0))).join('  ')).join('\n').concat('\n');
 }
+
+/**
+ * `teamai benchmark check --baseline|--trial`, the command of a benchmark run's baseline and trial check steps: prints
+ * `{"result":"passed"|"failed"|"could_not_run"}`, the step's output, and exits 0 once the check ran, whatever it said.
+ * Exits 1, naming why on stderr, when the check could not be set up. A stop signal stops the check first.
+ */
+export async function benchmarkCheck(options: { baseline?: boolean; trial?: boolean }): Promise<void> {
+  setStderrOnly(true);
+  if (options.baseline === options.trial) {
+    log.error('Pass exactly one of --baseline and --trial: the check of a task\'s baseline, or of a trial.');
+    process.exitCode = 1;
+    return;
+  }
+  const stop = new AbortController();
+  const onSignal = (signal: NodeJS.Signals): void => stop.abort(signal);
+  for (const signal of CHECK_STOP_SIGNALS) process.on(signal, onSignal);
+  try {
+    const checked = await runCheckStep({ mode: options.baseline ? 'baseline' : 'trial', env: process.env, cwd: process.cwd(), signal: stop.signal });
+    if ('failure' in checked) {
+      log.error(`${checked.failure.code}: ${checked.failure.message}`);
+      process.exitCode = 1;
+      return;
+    }
+    process.stdout.write(`${JSON.stringify({ result: checked.result })}\n`);
+  } finally {
+    for (const signal of CHECK_STOP_SIGNALS) process.off(signal, onSignal);
+  }
+}
+
+const CHECK_STOP_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
