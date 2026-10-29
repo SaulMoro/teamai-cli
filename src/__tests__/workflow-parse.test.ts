@@ -1477,3 +1477,131 @@ steps:
     ]);
   });
 });
+
+describe('finally', () => {
+  const problems = (content: string): string[] => {
+    const result = parse(content);
+    return result.ok ? [] : result.diagnostics.map(formatDiagnostic);
+  };
+
+  it('keeps finally steps beside the steps, and lets the outputs read them', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Build, then report.
+steps:
+  - id: compile
+    command: npm run build
+finally:
+  - id: report
+    command: node report.js
+    output: { text: string }
+  - id: notify
+    needs: [report]
+    if: steps.report.outcome == 'succeeded'
+    command: node notify.js
+    env: { TEXT: "{{ steps.report.outputs.text }}" }
+outputs:
+  text: steps.report.outputs.text
+`);
+    expect(result.ok, result.ok ? '' : result.diagnostics.map(formatDiagnostic).join('\n')).toBe(true);
+    if (!result.ok) return;
+    expect(result.definition.steps.map((step) => step.id)).toEqual(['compile']);
+    expect(result.definition.finally?.map((step) => step.id)).toEqual(['report', 'notify']);
+  });
+
+  it('refuses a finally step that does more than run a read-only command', () => {
+    expect(problems(`schemaVersion: v1alpha1
+name: build
+description: Build, then report.
+steps:
+  - id: compile
+    command: npm run build
+finally:
+  - id: review
+    prompt: Review it.
+  - id: push
+    needs: []
+    command: git push
+    workspace: new
+`)).toEqual([
+      'workflows/build.yaml:9: field "finally[0].prompt": a finally step runs a read-only command, so it carries only id, needs, if, command, env, output, timeout',
+      'workflows/build.yaml:13: field "finally[1].workspace": a finally step runs a read-only command, so it carries only id, needs, if, command, env, output, timeout',
+    ]);
+  });
+
+  it('runs finally only at the top level, with ids of its own', () => {
+    expect(problems(`schemaVersion: v1alpha1
+name: build
+description: Build, then report.
+steps:
+  - id: compile
+    command: npm run build
+  - id: inner
+    needs: [compile]
+    workflow:
+      steps:
+        - id: work
+          command: npm test
+      finally:
+        - id: tidy
+          command: rm -rf tmp
+finally:
+  - id: compile
+    command: node report.js
+`)).toEqual([
+      'workflows/build.yaml:13: field "steps[1].workflow.finally": step "inner" runs an inline workflow, which carries only steps, outputs, ends, and loop',
+      'workflows/build.yaml:17: field "finally": finally step id "compile" is also a step in steps',
+    ]);
+  });
+
+  it('refuses a step that runs a workflow file with finally steps, which only a run of that file runs', () => {
+    const report = parse(`schemaVersion: v1alpha1
+name: report
+description: Report, then tidy.
+steps:
+  - id: write
+    command: node report.js
+finally:
+  - id: tidy
+    command: rm -rf tmp
+`, 'workflows/report.yaml');
+    if (!report.ok) throw new Error(report.diagnostics.map(formatDiagnostic).join('\n'));
+    const files = { runnable: (name: string) => (name === 'report' ? report.definition : null), cycle: () => undefined };
+    const result = parseWorkflow(FILE, `schemaVersion: v1alpha1
+name: build
+description: Build, then report.
+steps:
+  - id: compile
+    command: npm run build
+  - id: report
+    needs: [compile]
+    workflow: report
+`, files);
+    expect(result.ok ? [] : result.diagnostics.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:9: field "steps[1].workflow": step "report" runs workflow "report", which has finally steps; only a run of that workflow runs them, so start it with teamai workflow start',
+    ]);
+  });
+
+  it('lets a finally step read the inputs and the finally steps it needs, never the steps', () => {
+    expect(problems(`schemaVersion: v1alpha1
+name: build
+description: Build, then report.
+inputs: { title: string }
+steps:
+  - id: compile
+    command: npm run build
+    output: { log: string }
+finally:
+  - id: report
+    command: node report.js
+    output: { text: string }
+    env: { TITLE: "{{ inputs.title }}", LOG: "{{ steps.compile.outputs.log }}" }
+  - id: notify
+    needs: [report]
+    command: node notify.js
+    env: { TEXT: "{{ steps.report.outputs.text }}" }
+`)).toEqual([
+      'workflows/build.yaml:13: field "finally[0].env.LOG": step "report" env.LOG reads steps.compile, which is not a step it needs, directly or through its needs',
+    ]);
+  });
+});

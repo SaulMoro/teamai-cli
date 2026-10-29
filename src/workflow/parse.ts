@@ -29,7 +29,7 @@ import { sameEnvName } from '../resources/env-key.js';
  */
 export const INVOKE_ALIAS_SINCE = '0.28.0';
 
-const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'inputs', 'defaults', 'ends', 'outputs', 'loop', 'timeout', 'budget', 'setup', 'steps', 'invoke', 'alias']);
+const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'inputs', 'defaults', 'ends', 'outputs', 'loop', 'timeout', 'budget', 'setup', 'steps', 'finally', 'invoke', 'alias']);
 const ACTION_KEYS = Object.keys(STEP_ACTIONS);
 const STEP_KEYS = new Set(['id', 'needs', 'if', ...ACTION_KEYS, 'env', 'with', 'agent', 'tool', 'model', 'output', 'end', 'loop', 'break', 'for_each', 'approve', 'choose', 'interactive', 'workspace', 'session', 'scorers', 'requires', 'timeout', 'budget', 'max_turns', 'deliver']);
 const EXACT_MODEL_KEYS: ReadonlySet<string> = new Set(['name', 'effort']);
@@ -38,6 +38,8 @@ const FOR_EACH_KEYS = new Set(['items', 'max_parallel']);
 const WORKFLOW_LOOP_KEYS = new Set(['while', 'max_iterations']);
 /** Keys a step without an action may carry. */
 const ACTIONLESS_KEYS = new Set(['id', 'needs', 'if', 'end', 'approve', 'choose', 'loop', 'break']);
+/** What a `finally` step may carry: it runs a command, read-only, in no workspace of its own. */
+const FINALLY_STEP_KEYS = new Set(['id', 'needs', 'if', 'command', 'env', 'output', 'timeout']);
 /** The actions as a sentence: `command, prompt, prompt_file, or workflow`. */
 const ACTION_LIST = `${ACTION_KEYS.slice(0, -1).join(', ')}, or ${ACTION_KEYS.at(-1)}`;
 const TYPE_NAMES = new Set(['string', 'number', 'boolean']);
@@ -213,7 +215,15 @@ export function parseWorkflow(file: string, content: string, files?: WorkflowFil
   const setup = setupPair ? parseSetup(setupPair.value ?? setupPair.key, ctx) : undefined;
 
   // A malformed inputs header is already reported; checking reads against it would only add noise.
-  const { workflow: { ends, outputs, loop, steps } } = parseBody(root, '', 'workflow', ctx, inputsPair && !inputs ? undefined : inputs ?? {}, false);
+  const readInputs = inputsPair && !inputs ? undefined : inputs ?? {};
+  // `finally` steps are read-only commands that run once the graph ends, whatever its outcome. They read the inputs and
+  // each other, never `steps`; the outputs may read them.
+  const finallySteps = valueNode(root, 'finally') === undefined ? undefined
+    : parseBody(root, '', 'finally', ctx, readInputs, false, { list: 'finally' }).workflow.steps;
+  const { workflow: { ends, outputs, loop, steps } } = parseBody(root, '', 'workflow', ctx, readInputs, false, { finally: finallySteps });
+  for (const step of finallySteps ?? []) {
+    if (steps.some((item) => item.id === step.id)) diagnostics.push(locate(file, lineCounter, valueNode(root, 'finally') ?? root, 'finally', `finally step id "${step.id}" is also a step in steps`));
+  }
   if (diagnostics.length === 0) withheldEnvRequired(valueNode(root, 'steps'), steps, '', mergeRequirements(defaults?.requires), ctx);
 
   if (diagnostics.length > 0 || !name || !description) return { ok: false, diagnostics };
@@ -222,9 +232,21 @@ export function parseWorkflow(file: string, content: string, files?: WorkflowFil
     definition: {
       schemaVersion: 'v1alpha1', name, description, ...(invoke ? { invoke } : {}), ...(alias ? { alias } : {}), ...(inputs ? { inputs } : {}), ...(ends ? { ends } : {}), ...(outputs ? { outputs } : {}),
       ...(loop ? { loop } : {}), ...(defaults ? { defaults } : {}), ...(timeout !== undefined ? { timeout } : {}), ...(budget ? { budget } : {}), ...(setup ? { setup } : {}), steps,
+      ...(finallySteps ? { finally: finallySteps } : {}),
     },
     promptFileLocations,
   };
+}
+
+/** How `parseBody` reads a workflow's steps. */
+interface BodyOptions {
+  /** For an inline workflow: the steps of the workflow around it, and what the step that runs it needs. */
+  parent?: { steps: WorkflowStep[]; needs?: string[] };
+  checks?: Array<() => void>;
+  /** `finally`: the top-level `finally` list alone, which has no `ends`, `outputs` or `loop` of its own. */
+  list?: 'steps' | 'finally';
+  /** The top-level `finally` steps, which the workflow's `outputs` may read too. */
+  finally?: WorkflowStep[];
 }
 
 /**
@@ -239,18 +261,18 @@ function parseBody(
   ctx: ParseContext,
   inputs: Record<string, OutputSchema> | undefined,
   itemBound: boolean,
-  parent?: { steps: WorkflowStep[]; needs?: string[] },
-  checks?: Array<() => void>,
+  { parent, checks, list = 'steps', finally: finallySteps = [] }: BodyOptions = {},
 ): { workflow: InlineWorkflow; outer: ReadSite[] } {
   const { file, lineCounter, diagnostics, promptFileLocations, files } = ctx;
-  const endsPair = root.items.find((pair) => scalarString(pair.key) === 'ends');
+  const header = (key: string): (typeof root.items)[number] | undefined => (list === 'steps' ? root.items.find((pair) => scalarString(pair.key) === key) : undefined);
+  const endsPair = header('ends');
   const ends = endsPair ? parseEnds(endsPair.value ?? endsPair.key, at, ctx) : undefined;
 
-  const outputsPair = root.items.find((pair) => scalarString(pair.key) === 'outputs');
+  const outputsPair = header('outputs');
   const outputEntries = outputsPair ? parseOutputs(outputsPair.value ?? outputsPair.key, at, ctx) : undefined;
   const outputs = outputEntries && Object.fromEntries(outputEntries.map((entry) => [entry.name, entry.source]));
 
-  const loopPair = root.items.find((pair) => scalarString(pair.key) === 'loop');
+  const loopPair = header('loop');
   const loop = loopPair ? parseLoop(loopPair.value ?? loopPair.key, `${at}loop`, label, ctx, false) : undefined;
   const loopWhile = loop?.while === undefined ? undefined : parseExpression(loop.while);
   const loopSite: ReadSite | undefined = loopWhile?.ok ? {
@@ -259,12 +281,12 @@ function parseBody(
     code: 'bad_loop',
   } : undefined;
 
-  const stepsPair = root.items.find((pair) => scalarString(pair.key) === 'steps');
+  const stepsPair = root.items.find((pair) => scalarString(pair.key) === list);
   const stepsNode = stepsPair?.value;
   const steps: WorkflowStep[] = [];
   let outer: ReadSite[] = [];
   if (!isSeq(stepsNode) || stepsNode.items.length === 0) {
-    diagnostics.push(locate(file, lineCounter, stepsNode ?? stepsPair?.key ?? root, `${at}steps`, 'steps must be a non-empty list'));
+    diagnostics.push(locate(file, lineCounter, stepsNode ?? stepsPair?.key ?? root, `${at}${list}`, `${list} must be a non-empty list`));
   } else {
     const queue = checks ?? [];
     const sessions: Array<{ id: string; from: string; node: Node; field: string }> = [];
@@ -276,7 +298,7 @@ function parseBody(
     const references: Array<{ id: string; workflow: string }> = [];
     const placed = new Map<string, { field: string; item: YAMLMap }>();
     stepsNode.items.forEach((item, index) => {
-      const field = `${at}steps[${index}]`;
+      const field = `${at}${list}[${index}]`;
       if (!isMap(item)) {
         diagnostics.push(locate(file, lineCounter, item, field, 'a step must be a mapping with exactly one action'));
         return;
@@ -285,6 +307,8 @@ function parseBody(
         const key = scalarString(pair.key);
         if (!key || !STEP_KEYS.has(key)) {
           diagnostics.push(unknownKey(file, lineCounter, pair.key ?? item, `${field}.${key ?? 'key'}`, key ?? 'key'));
+        } else if (list === 'finally' && !FINALLY_STEP_KEYS.has(key)) {
+          diagnostics.push(locate(file, lineCounter, pair.key as Node, `${field}.${key}`, `a finally step runs a read-only command, so it carries only ${[...FINALLY_STEP_KEYS].join(', ')}`));
         }
       }
       const idPair = item.items.find((pair) => scalarString(pair.key) === 'id');
@@ -340,7 +364,7 @@ function parseBody(
       // The step's templates and the inline workflow it runs render once per item, so they read item as a template.
       const bindsItem = itemBound || forEachPair !== undefined;
       const inline = isMap(workflowPair?.value)
-        ? parseInline(workflowPair.value, `${field}.workflow`, stepLabel, ctx, inputs, bindsItem, { steps, needs }, queue)
+        ? parseInline(workflowPair.value, `${field}.workflow`, stepLabel, ctx, inputs, bindsItem, { parent: { steps, needs }, checks: queue })
         : undefined;
       const approvePair = item.items.find((pair) => scalarString(pair.key) === 'approve');
       const choosePair = item.items.find((pair) => scalarString(pair.key) === 'choose');
@@ -639,7 +663,8 @@ function parseBody(
     }
     // A malformed ends header is already reported; checking steps against it would only add noise.
     if (!endsPair || ends) diagnostics.push(...endDiagnostics(ctx, ends, endsPair?.value, at, endings, graph));
-    diagnostics.push(...outputDiagnostics(ctx, outputEntries ?? [], at, seen, steps, children));
+    const readable = [...steps, ...finallySteps];
+    diagnostics.push(...outputDiagnostics(ctx, outputEntries ?? [], at, new Set(readable.map((step) => step.id)), readable, children));
   }
   return { workflow: { ...(ends ? { ends } : {}), ...(outputs ? { outputs } : {}), ...(loop ? { loop } : {}), steps }, outer };
 }
@@ -662,8 +687,7 @@ function parseInline(
   ctx: ParseContext,
   inputs: Record<string, OutputSchema> | undefined,
   itemBound: boolean,
-  parent?: { steps: WorkflowStep[]; needs?: string[] },
-  checks?: Array<() => void>,
+  options: BodyOptions,
 ): { workflow: InlineWorkflow; outer: ReadSite[] } {
   const { file, lineCounter, diagnostics } = ctx;
   for (const pair of node.items) {
@@ -677,8 +701,9 @@ function parseInline(
       diagnostics.push(locate(file, lineCounter, pair.key, `${field}.${key}`, `${label} runs an inline workflow, which carries only steps, outputs, ends, and loop`));
     }
   }
-  return parseBody(node, `${field}.`, `${label} workflow`, ctx, inputs, itemBound, parent, checks);
+  return parseBody(node, `${field}.`, `${label} workflow`, ctx, inputs, itemBound, options);
 }
+
 
 function needsReach(start: string[] | undefined, target: string, steps: Map<string, WorkflowStep>): boolean {
   const seen = new Set<string>();
@@ -743,6 +768,10 @@ function referenceDiagnostics({ file, lineCounter }: ParseContext, files: Workfl
   if (!child) {
     return [locate(file, lineCounter, node, `${field}.workflow`,
       `${label} runs workflow "${workflow}", which has no runnable version; fix or add workflows/${workflow}.yaml`)];
+  }
+  if (child.finally) {
+    return [locate(file, lineCounter, node, `${field}.workflow`,
+      `${label} runs workflow "${workflow}", which has finally steps; only a run of that workflow runs them, so start it with teamai workflow start`)];
   }
   if (!reference.with) return [];
   const inputs = child.inputs ?? {};

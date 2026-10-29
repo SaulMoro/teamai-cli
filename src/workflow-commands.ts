@@ -20,6 +20,7 @@ import { AttemptIdSchema, installOwner, readRun, RunIdSchema } from './workflow/
 import { inProcessClient, resumeRefusal, workflowNotFound, type InvokeCaller, type NextPrepare } from './workflow/protocol.js';
 import { parseInputsFlag, parseSkillCall, parseSkillResume, runSkillCall, sessionDrivesRun, skillContext } from './workflow/drivers/skill/skill-driver.js';
 import { loadCachedWorkflow, resolveStart } from './workflow/cache.js';
+import { durationMs } from './workflow/parse.js';
 import { findRunConfig } from './workflow/run-location.js';
 import { resolveRunMode } from './launch-context.js';
 import { memberTools } from './tool-launch/call.js';
@@ -241,7 +242,10 @@ async function skillAnswer(raw: Parameters<typeof parseSkillCall>[0]): Promise<{
 }
 
 /** The flags of `workflow start` and `resume` without `--driver skill`. The skill driver's flags are refused, the first given in this order. */
+const TIMEOUT_MESSAGE = '--timeout must be a positive duration, such as 500ms, 30s, 10m, or 2h';
+
 const NonSkillRunOptionsSchema = z.object({
+  timeout: z.string().transform((text, ctx) => durationMs(text) ?? (ctx.addIssue({ code: z.ZodIssueCode.custom, message: TIMEOUT_MESSAGE }), z.NEVER)).optional(),
   parallel: z.undefined({ invalid_type_error: '--parallel needs --driver skill' }),
   hitl: z.undefined({ invalid_type_error: '--hitl needs --driver skill' }),
   judge: z.boolean().optional().refine((judged) => judged !== false, '--no-judge needs --driver skill'),
@@ -250,10 +254,14 @@ const NonSkillRunOptionsSchema = z.object({
 /** `judge` is false with `--no-judge`. */
 export async function workflowStart(name: string, options: {
   driver?: string; tools?: string; inputs?: string; autoApprove?: boolean; describe?: boolean; parallel?: string; confirmed?: boolean; hitl?: string; judge?: boolean;
-  benchmark?: boolean; memberAliases?: boolean; sandbox?: boolean; try?: string;
+  benchmark?: boolean; memberAliases?: boolean; sandbox?: boolean; try?: string; timeout?: string;
 }): Promise<void> {
   if (refusedNested(await nestedStart(process.env, process.cwd()), options.driver === 'skill')) return;
   if (options.driver === 'skill') {
+    if (options.timeout !== undefined) {
+      refuseSkill({ error: { code: 'invalid_arguments', message: '--timeout needs --driver local, or no driver. Start it again without --timeout.' } });
+      return;
+    }
     const { driver: _skill, ...rest } = options;
     await workflowSkill({ kind: 'start', name, options: rest });
     return;
@@ -264,6 +272,7 @@ export async function workflowStart(name: string, options: {
     refuseOptions(nonSkill.error);
     return;
   }
+  const { timeout } = nonSkill.data;
   if (options.benchmark && options.describe) {
     writeEnvelope({ error: { code: 'invalid_arguments', message: '--describe shows a workflow\'s metadata and input schemas, and a benchmark takes no inputs: its suite sets its tasks and arms. Start it again without --describe.' } }, collectEnvSecrets());
     return;
@@ -296,6 +305,10 @@ export async function workflowStart(name: string, options: {
     writeEnvelope({ error: { code: 'invalid_arguments', message: 'A benchmark run takes no --inputs or --tools, since its suite sets its tasks and its arms\' tools. Start it again without them.' } }, secrets);
     return;
   }
+  if (options.benchmark && options.timeout !== undefined) {
+    writeEnvelope({ error: { code: 'invalid_arguments', message: 'A benchmark run takes no --timeout, since its suite sets its timeout. Start it again without it.' } }, secrets);
+    return;
+  }
   if (options.memberAliases && !options.benchmark) {
     writeEnvelope({ error: { code: 'invalid_arguments', message: '--member-aliases resolves the models of a benchmark\'s arms. Start a benchmark with --benchmark, or start the workflow without --member-aliases.' } }, secrets);
     return;
@@ -316,7 +329,7 @@ export async function workflowStart(name: string, options: {
   const alone = options.driver === 'local' ? { alone: localStrictCan(config, options) } : {};
   const started = options.benchmark
     ? await startBenchmark(config, name, { secrets, checkout: process.cwd(), runMode: caller.mode, memberAliases: options.memberAliases === true, ...(base ? { base } : {}), ...alone })
-    : await inProcessClient({ config, env }).start(name, { inputs, checkout: process.cwd(), caller, ...alone });
+    : await inProcessClient({ config, env }).start(name, { inputs, checkout: process.cwd(), caller, ...alone, ...(timeout !== undefined ? { timeout } : {}) });
   if ('error' in started || options.driver !== 'local') {
     writeEnvelope(started, secrets);
     return;
