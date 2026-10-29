@@ -204,14 +204,15 @@ export type LeaseSetup = z.infer<typeof LeaseSetupSchema>;
  * `isolation` and `network` of a strict level, or of a level's `floor`, join the floor, and a value below it is raised.
  */
 export function mergeRequirements(...levels: ReadonlyArray<(Requirements & Pick<InEffect, 'floor'>) | undefined>): InEffect {
+  const given = levels.filter((level) => level !== undefined);
   const merged: InEffect = {};
   let floor: Floor = {};
-  for (const level of levels) {
-    if (level?.network !== undefined) merged.network = level.network;
-    if (level?.isolation !== undefined) merged.isolation = level.isolation;
-    floor = raised(raised(floor, level?.floor ?? {}), level?.strict ? level : {});
+  for (const { network, isolation, strict, floor: inner = {} } of given) {
+    if (network !== undefined) merged.network = network;
+    if (isolation !== undefined) merged.isolation = isolation;
+    floor = raised(raised(floor, inner), strict ? { network, isolation } : {});
   }
-  const env = [...new Set(levels.flatMap((level) => level?.env ?? []))];
+  const env = [...new Set(given.flatMap((level) => level.env ?? []))];
   if (env.length > 0) merged.env = env;
   if (floor.isolation === undefined && floor.network === undefined) return merged;
   return { ...raised(merged, floor), floor };
