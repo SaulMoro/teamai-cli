@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -38,16 +39,16 @@ function recordFile(run: string): string {
   return path.join(getReportsDir(config), 'workflows', 'runs', `${run}.json`);
 }
 
-/** A record the team published for a run of suite `fix` by `username`, whose one trial on arm claude got `result`. */
-function publish(run: string, { username = 'bob', startedAt = YESTERDAY, result = 'passed', benchmark = true } = {}): void {
+/** A record the team published for a run of suite `fix` by `username`, whose one trial on arm claude, on team revision `team`, got `result`. */
+function publish(run: string, { username = 'bob', startedAt = YESTERDAY, result = 'passed', benchmark = true, team = 'b'.repeat(40) } = {}): void {
   fs.mkdirSync(path.dirname(recordFile(run)), { recursive: true });
   fs.writeFileSync(recordFile(run), JSON.stringify({
     schemaVersion: 'v1alpha1', run, workflow: 'fix', sourceHash: 'f'.repeat(64), phase: 'end', status: 'succeeded', startedAt, username,
     ...(benchmark ? {
       benchmark: {
-        suite: { name: 'fix', sourceHash: 's1' }, repetitions: 1, baselineTeamRevision: 'b'.repeat(40), scorers: [],
+        suite: { name: 'fix', sourceHash: 's1' }, repetitions: 1, baselineTeamRevision: team, scorers: [],
         tasks: [{ id: 'fix', startingCommit: 'a'.repeat(40), sourceHash: 't1', baseline: 'valid' }],
-        arms: [{ name: 'claude', tool: 'claude', source: 'team', teamRevision: 'b'.repeat(40) }],
+        arms: [{ name: 'claude', tool: 'claude', source: 'team', team: { kind: 'pulled', revision: team } }],
         trials: [{ task: 'fix', arm: 'claude', repetition: 1, order: 0, step: 'trials.r1.fix.claude.prompt', result }],
       },
     } : {}),
@@ -101,6 +102,55 @@ describe('benchmarkHistory', () => {
     fs.chmodSync(recordFile('rb0b00001'), 0o644);
 
     expect((await benchmarkHistory({ config, query: { windowDays: 365 }, now: NOW, refresh: false })).selected?.runs.map(({ run }) => run)).toEqual(['rb0b00001']);
+  });
+});
+
+describe('benchmarkHistory team revisions', () => {
+  /** Commits `files` to the team clone as `subject` at `date`, and returns the commit. */
+  function commitTeam(files: Record<string, string>, subject: string, date: string): string {
+    const team = config.repo.localPath;
+    const run = (args: string[]): string => execFileSync('git', args, { cwd: team, encoding: 'utf8', env: { ...process.env, GIT_COMMITTER_DATE: date, GIT_AUTHOR_DATE: date } }).trim();
+    if (!fs.existsSync(team)) {
+      fs.mkdirSync(team, { recursive: true });
+      run(['init', '-q']);
+    }
+    for (const [file, text] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(team, file)), { recursive: true });
+      fs.writeFileSync(path.join(team, file), text);
+    }
+    run(['add', '-A']);
+    run(['-c', 'user.name=Team', '-c', 'user.email=team@example.com', 'commit', '-qm', subject]);
+    return run(['rev-parse', 'HEAD']);
+  }
+
+  it('names each team revision the runs installed from the team clone, in commit order, with the asset files each changed', async () => {
+    const first = commitTeam({ 'skills/auth/SKILL.md': 'Refresh tokens.\n', 'benchmarks/fix/suite.yaml': 'v1\n' }, 'Add the auth skill', '2026-10-01T09:00:00Z');
+    const second = commitTeam({ 'skills/auth/SKILL.md': 'Refresh tokens.\nReject expired ones.\n', 'rules/testing.md': 'Run the tests.\n', 'benchmarks/fix/suite.yaml': 'v2\n' }, 'Tighten the auth skill', '2026-10-07T09:00:00Z');
+    // The newer revision ran first, so only the commit dates put them in order.
+    publish('rb0b00001', { team: second, startedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() });
+    publish('rb0b00002', { team: first, startedAt: YESTERDAY, result: 'failed' });
+
+    const view = await benchmarkHistory({ config, query: { windowDays: 365 }, now: NOW, refresh: false });
+
+    expect(view.selected?.teamChanges.revisions.map(({ revision }) => revision)).toEqual([first, second]);
+    expect(view.teamCommits).toEqual({
+      [first]: { committedAt: '2026-10-01T09:00:00.000Z', subject: 'Add the auth skill' },
+      [second]: {
+        committedAt: '2026-10-07T09:00:00.000Z', subject: 'Tighten the auth skill',
+        changes: { files: [{ path: 'rules/testing.md', added: 1, removed: 0 }, { path: 'skills/auth/SKILL.md', added: 1, removed: 0 }], more: 0 },
+      },
+    });
+  });
+
+  it('keeps a team revision the team clone lacks, unnamed and in the order its runs ran', async () => {
+    const known = commitTeam({ 'skills/auth/SKILL.md': 'Refresh tokens.\n' }, 'Add the auth skill', '2026-10-01T09:00:00Z');
+    publish('rb0b00001', { team: 'e'.repeat(40), startedAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString() });
+    publish('rb0b00002', { team: known, startedAt: YESTERDAY });
+
+    const view = await benchmarkHistory({ config, query: { windowDays: 365 }, now: NOW, refresh: false });
+
+    expect(view.selected?.teamChanges.revisions.map(({ revision }) => revision)).toEqual(['e'.repeat(40), known]);
+    expect(view.teamCommits).toEqual({ [known]: { committedAt: '2026-10-01T09:00:00.000Z', subject: 'Add the auth skill' } });
   });
 });
 

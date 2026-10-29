@@ -3,6 +3,9 @@
  * this machine's run files and the team's run records on `teamai-reports`, and only their benchmark runs: a file is
  * parsed once, and again only when its size or modification time changed, so a page of hundreds of records re-reads
  * nothing it read before. A run this machine has a file for is read from it, not from its published copy.
+ *
+ * Each team revision the selected suite's runs installed is named from this machine's team clone, with the asset files
+ * that changed since the revision before it: a commit never changes, so each is read once.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -13,6 +16,7 @@ import { BENCHMARK_WINDOWS, BenchmarkHistory, type BenchmarkHistoryQuery, type B
 import { BenchmarkRecordSchema } from '../workflow/benchmark/result.js';
 import { buildEndRecord, RECORDS_DIR } from '../workflow/records.js';
 import { isRunId, readRun, runsDir } from '../workflow/store.js';
+import { git } from '../workflow/worktree.js';
 import { HttpError } from './http.js';
 
 const QuerySchema = z.object({
@@ -99,6 +103,72 @@ async function readDir(dir: string, read: (file: string) => Promise<BenchmarkRun
   return inputs.filter((input) => input !== undefined);
 }
 
+/** A team revision as this machine's team clone has it, and the files outside benchmarks/ it changed since the one before it. */
+export interface TeamCommit {
+  committedAt: string;
+  subject: string;
+  /** Absent for the oldest revision, or when the clone lacks the one before it. At most `CHANGES_SHOWN`, in path order. */
+  changes?: { files: Array<{ path: string; added: number; removed: number }>; more: number };
+}
+
+export type BenchmarkPage = BenchmarkHistoryView & { teamCommits: Record<string, TeamCommit> };
+
+const CHANGES_SHOWN = 40;
+const GIT_TIMEOUT_MS = 10_000;
+/** By team clone and commit, or commit pair: what git said, which never changes. One the clone lacked is asked again, as a pull may bring it. */
+const commits = new Map<string, Promise<Omit<TeamCommit, 'changes'> | undefined>>();
+const diffs = new Map<string, Promise<TeamCommit['changes']>>();
+
+function commitOf(clone: string, revision: string): Promise<Omit<TeamCommit, 'changes'> | undefined> {
+  const key = `${clone}\0${revision}`;
+  const known = commits.get(key) ?? git(clone, ['log', '-1', '--format=%cI%x00%s', revision, '--'], { timeoutMs: GIT_TIMEOUT_MS }).then(({ code, stdout }) => {
+    const [committedAt, subject] = stdout.trim().split('\0');
+    return code === 0 && committedAt && subject !== undefined ? { committedAt: new Date(committedAt).toISOString(), subject } : undefined;
+  });
+  commits.set(key, known);
+  void known.then((commit) => commit ?? commits.delete(key));
+  return known;
+}
+
+function changesOf(clone: string, before: string, after: string): Promise<TeamCommit['changes']> {
+  const key = `${clone}\0${before}\0${after}`;
+  const known = diffs.get(key) ?? git(clone, ['diff', '--numstat', '--no-renames', '--relative', before, after, '--', '.', ':(exclude)benchmarks'], { timeoutMs: GIT_TIMEOUT_MS }).then(({ code, stdout }) => {
+    if (code !== 0) return undefined;
+    const files = stdout.split('\n').filter(Boolean).map((line) => {
+      const [added = '-', removed = '-', ...rest] = line.split('\t');
+      return { path: rest.join('\t'), added: Number(added) || 0, removed: Number(removed) || 0 };
+    }).sort((left, right) => left.path.localeCompare(right.path));
+    return { files: files.slice(0, CHANGES_SHOWN), more: Math.max(0, files.length - CHANGES_SHOWN) };
+  });
+  diffs.set(key, known);
+  void known.then((changes) => changes ?? diffs.delete(key));
+  return known;
+}
+
+/**
+ * `view` with its team revisions in commit order when the team clone has every one, each named and with the files it
+ * changed since the one before it.
+ */
+async function withTeamCommits(config: LocalConfig, view: BenchmarkHistoryView): Promise<BenchmarkPage> {
+  const revisions = view.selected?.teamChanges.revisions ?? [];
+  if (!view.selected || revisions.length === 0) return { ...view, teamCommits: {} };
+  const clone = config.repo.localPath;
+  const named = await Promise.all(revisions.map(async (revision) => ({ revision, commit: await commitOf(clone, revision.revision) })));
+  const ordered = named.every(({ commit }) => commit) ? named.toSorted((left, right) => (left.commit?.committedAt ?? '').localeCompare(right.commit?.committedAt ?? '')) : named;
+  const teamCommits: Record<string, TeamCommit> = {};
+  await Promise.all(ordered.map(async ({ revision, commit }, index) => {
+    const before = ordered[index - 1]?.revision.revision;
+    if (!commit) return;
+    const changes = before === undefined ? undefined : await changesOf(clone, before, revision.revision);
+    teamCommits[revision.revision] = { ...commit, ...(changes ? { changes } : {}) };
+  }));
+  return {
+    ...view,
+    selected: { ...view.selected, teamChanges: { ...view.selected.teamChanges, revisions: ordered.map(({ revision }) => revision) } },
+    teamCommits,
+  };
+}
+
 /**
  * The Benchmarks page's answer for one workspace. `refresh` refreshes the reports checkout from origin first, as every
  * reader of it.
@@ -108,7 +178,7 @@ export async function benchmarkHistory({ config, query, now = new Date(), refres
   query: BenchmarkHistoryQuery;
   now?: Date;
   refresh?: boolean;
-}): Promise<BenchmarkHistoryView> {
+}): Promise<BenchmarkPage> {
   if (usesBranchWorktree(config)) {
     const { readableReportsWorktree } = await import('../utils/reports-branch.js');
     await readableReportsWorktree(config, { dryRun: !refresh });
@@ -118,5 +188,5 @@ export async function benchmarkHistory({ config, query, now = new Date(), refres
     readDir(path.join(getReportsDir(config), RECORDS_DIR), readReported),
   ]);
   const localIds = new Set(local.map(({ run }) => run));
-  return BenchmarkHistory.of({ runs: [...local, ...reported.filter(({ run }) => !localIds.has(run))], query, now });
+  return withTeamCommits(config, BenchmarkHistory.of({ runs: [...local, ...reported.filter(({ run }) => !localIds.has(run))], query, now }));
 }
