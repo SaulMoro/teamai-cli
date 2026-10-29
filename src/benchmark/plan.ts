@@ -15,10 +15,11 @@ import { z } from 'zod';
 import { isLabelShaped, isNameShaped } from '../agent-observation.js';
 import type { PinnedScorer } from '../scorers/pin.js';
 import type { WorkflowDefinition, WorkflowStep } from '../workflow/types.js';
+import type { Requirements } from '../workflow/requirements.js';
 import type { Suite, Task, TaskJudge } from './suite.js';
 import type { CommittedSuite } from './trial.js';
 import { CommitSchema, TeamSelectionSchema, type CloneTeam, type TeamSelection } from '../workflow/clone.js';
-import { ArmTeamSchema, BenchmarkNameSchema, TRIAL_WITHHELD_ENV, TrialLimitsSchema, type Added, type ArmTeam, type PromptTerms } from './terms.js';
+import { ArmTeamSchema, BenchmarkNameSchema, TrialLimitsSchema, type Added, type ArmTeam, type PromptTerms } from './terms.js';
 
 const Sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 
@@ -65,8 +66,6 @@ export const BenchmarkPlanSchema = z.object({
   suite: z.object({ name: BenchmarkNameSchema, sourceHash: Sha256, repo: z.string().url() }).strict(),
   baselineTeamRevision: CommitSchema,
   selection: TeamSelectionSchema,
-  /** The names every trial step withholds from setup, the tool and the check. */
-  withhold: z.array(z.string()),
   repetitions: z.number().int().min(1).max(10),
   /** The suite's `trial`: the limits of every trial's prompt. */
   limits: TrialLimitsSchema.optional(),
@@ -125,7 +124,6 @@ export function freezePlan(input: {
     suite: { name: suite.name, sourceHash: suite.sourceHash, repo: suite.repo },
     baselineTeamRevision: input.baselineTeamRevision,
     selection: input.selection,
-    withhold: [...TRIAL_WITHHELD_ENV],
     repetitions: suite.repetitions,
     ...(suite.trial ? { limits: suite.trial } : {}),
     tasks: [planned(first), ...rest.map(planned)],
@@ -153,18 +151,22 @@ const BASELINES = 'baselines';
 /** What a baseline outputs when its check ran to the end: `fails` lets its task's trials run, `passes` makes it invalid. */
 export const BASELINE_OUTPUTS = ['passes', 'fails'] as const;
 
+/** What every baseline and trial step requires. */
+const SANDBOXED = { isolation: 'sandbox', strict: true } as const satisfies Requirements;
+
 /** The end the generated workflow reaches once every trial step settled, whatever the trials' results. */
 const SETTLED_END = 'settled';
 
 /**
  * The generated workflow:
  *
- *   baselines                     inline (check tasks only); outputs { <task>: its baseline's output }
+ *   baselines                     inline (check tasks only); requires a strict sandbox; outputs { <task>: its baseline's output }
  *     <task>                      command check.run; workspace: a clone of the starting commit with team none;
  *                                 trial.kind baseline; output { baseline: passes | fails };
  *                                 trial.add: the files check.add writes before the check, from the fix and from the
  *                                 commit start made of the suite directory's files (`CommittedSuite`)
- *   trials                        inline; needs [baselines] and an `if` that reads it, when there are baselines
+ *   trials                        inline; requires a strict sandbox; needs [baselines] and an `if` that reads it, when
+ *                                 there are baselines
  *     r<rep>                      inline, one per repetition
  *       <task>                    inline; a check task's: if steps.baselines.outputs.<task> == 'fails'
  *         <arm>                   inline, needs [], workspace: a clone of the starting commit with the arm's team (opens
@@ -187,6 +189,8 @@ const SETTLED_END = 'settled';
  * - `<arm>` opens the clone, so prompt and check share it by ancestry, and copy ownership keeps the check on the driver
  *   that ran the prompt.
  * - The prompt carries the arm's `tool` and its exact `model`, so a trial never goes through alias resolution.
+ * - `requires: { isolation: sandbox, strict: true }` on both scopes reaches every baseline and trial step, so each runs
+ *   only on a sandbox that keeps the member's credentials from it, and a local start without one is refused.
  */
 export function compilePlan(plan: BenchmarkPlan, { suite, files }: CommittedSuite): { definition: WorkflowDefinition; scorers: Record<string, PinnedScorer> } {
   const tasks = new Map(suite.tasks.map((task) => [task.id, task]));
@@ -216,8 +220,8 @@ export function compilePlan(plan: BenchmarkPlan, { suite, files }: CommittedSuit
   });
   const tried = baselines.length > 0;
   const scopes: WorkflowStep[] = [
-    ...(tried ? [{ id: BASELINES, workflow: { outputs: Object.fromEntries(baselines.map(({ id }) => [id, `steps.${id}.outputs.baseline`])), steps: baselines } }] : []),
-    { id: TRIALS, ...(tried ? { needs: [BASELINES], if: `steps.${BASELINES}.outcome != null` } : {}), workflow: { steps: repetitions } },
+    ...(tried ? [{ id: BASELINES, requires: SANDBOXED, workflow: { outputs: Object.fromEntries(baselines.map(({ id }) => [id, `steps.${id}.outputs.baseline`])), steps: baselines } }] : []),
+    { id: TRIALS, requires: SANDBOXED, ...(tried ? { needs: [BASELINES], if: `steps.${BASELINES}.outcome != null` } : {}), workflow: { steps: repetitions } },
   ];
   const needs = scopes.map(({ id }) => id);
   return {

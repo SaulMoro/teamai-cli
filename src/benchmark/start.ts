@@ -16,6 +16,7 @@ import { loadCachedSuite, readSuiteFiles, withTeamRevision } from '../workflow/c
 import { createRun, error } from '../workflow/engine.js';
 import { judgeUnavailable } from '../workflow/scoring.js';
 import type { DriverIdentity, RunState, WorkflowEnvelope } from '../workflow/types.js';
+import type { DriverCan } from '../workflow/requirements.js';
 import { formatDiagnostic } from '../workflow/parse.js';
 import { git } from '../workflow/worktree.js';
 import { addedOf, compilePlan, freezePlan, runSourceHash, type PlannedArm } from './plan.js';
@@ -34,6 +35,8 @@ export interface BenchmarkStart {
   runMode?: RunState['runMode'];
   /** `--member-aliases`: resolve arm models with this member's ~/.teamai/models/aliases.yaml over the team's. */
   memberAliases: boolean;
+  /** What the local driver, the run's only driver, gives strict requirements. */
+  alone?: DriverCan;
 }
 
 /**
@@ -100,6 +103,7 @@ export async function startBenchmark(config: LocalConfig, name: string, options:
     ...(options.base ? { base: options.base } : {}),
     ...(options.driver ? { driver: options.driver } : {}),
     ...(options.runMode ? { runMode: options.runMode } : {}),
+    ...(options.alone ? { alone: options.alone } : {}),
   });
 }
 

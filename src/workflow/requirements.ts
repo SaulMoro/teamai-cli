@@ -75,11 +75,6 @@ const ENFORCEMENT = {
   tools: 'strict',
   /** A benchmark trial step: `can.trials` lists a tool, so the driver holds the trial's prompt to the suite's limits. */
   trials: 'strict',
-  /**
-   * A benchmark trial step runs only where the driver declares `can.isolation: sandbox`. Strict for trials only:
-   * ordinary steps keep best-effort isolation.
-   */
-  sandbox: 'strict',
   /** A benchmark trial step, or a step in a clone, is leased only through `next --prepare`, so teamai made its clone. Process-only. */
   prepare: 'strict',
 } as const satisfies Record<string, 'strict' | 'bestEffort'> & Record<keyof Floor | 'env', 'strict' | 'bestEffort'>;
@@ -285,8 +280,8 @@ export interface Offer {
   setup?: Setup;
   /** The tool a prompt step names. */
   tool?: string;
-  /** A benchmark trial step: the names the run's plan withholds. */
-  trial?: { withhold: readonly string[] };
+  /** A benchmark trial step. */
+  trial: boolean;
   /** The lease runs in a clone, which only teamai prepares. */
   clone: boolean;
   /** The caller asked `next --prepare`. */
@@ -320,8 +315,8 @@ export type Negotiation =
 export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFacts): Negotiation {
   const { floor = {}, ...requires } = offer.requires;
   const sealed = floor.isolation === 'sandbox';
-  // A strict sandbox's strip list, and a trial's, win over every requires.env, so no step under them is handed a credential.
-  const stripped: readonly string[] = [...(sealed ? SANDBOX_WITHHELD_ENV : []), ...(offer.trial?.withhold ?? [])];
+  // A strict sandbox's strip list wins over every requires.env, so no step under it is handed a credential.
+  const stripped: readonly string[] = sealed ? SANDBOX_WITHHELD_ENV : [];
   const guarded = [...env.declared, ...offer.runEnvKeys, ...stripped];
   const shadowed = offer.envKeys.filter((key) => sameEnvName([...env.secrets, ...offer.runEnvKeys], key) !== undefined);
   if (shadowed.length > 0) {
@@ -394,11 +389,10 @@ export function lacksTool(tool: string, can: Pick<DriverCan, 'tools'>): boolean 
   return !(can.tools ?? []).includes(tool);
 }
 
-/** What a trial step lacks on this driver. */
-export function trialGaps(can: Pick<DriverCan, 'trials' | 'isolation'>, prepare: boolean): Missing[] {
+/** What a trial step lacks on this driver, besides what its requirements ask. */
+function trialGaps(can: Pick<DriverCan, 'trials'>, prepare: boolean): Missing[] {
   return [
     ...((can.trials ?? []).length > 0 ? [] : ['trials' as const]),
-    ...(can.isolation === 'sandbox' ? [] : ['sandbox' as const]),
     ...(prepare ? [] : ['prepare' as const]),
   ];
 }

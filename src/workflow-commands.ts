@@ -315,7 +315,7 @@ export async function workflowStart(name: string, options: {
   const base = options.benchmark ? await headCommit(process.cwd()) : undefined;
   const alone = options.driver === 'local' ? { alone: localStrictCan(config, options) } : {};
   const started = options.benchmark
-    ? await startBenchmark(config, name, { secrets, checkout: process.cwd(), runMode: caller.mode, memberAliases: options.memberAliases === true, ...(base ? { base } : {}) })
+    ? await startBenchmark(config, name, { secrets, checkout: process.cwd(), runMode: caller.mode, memberAliases: options.memberAliases === true, ...(base ? { base } : {}), ...alone })
     : await inProcessClient({ config, env }).start(name, { inputs, checkout: process.cwd(), caller, ...alone });
   if ('error' in started || options.driver !== 'local') {
     writeEnvelope(started, secrets);

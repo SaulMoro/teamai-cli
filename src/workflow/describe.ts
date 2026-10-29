@@ -154,7 +154,7 @@ export function describeWorkflow(input: {
       step: path, executor, requires, prepare: false, clone: false,
       interactive: step.interactive === true, hasContract, envKeys: Object.keys(step.env ?? {}), runEnvKeys, budgeted: step.prompt !== undefined && scope.budgeted,
       ...(step.maxTurns !== undefined ? { maxTurns: step.maxTurns } : {}), ...(hasContract && scope.setup ? { setup: scope.setup } : {}),
-      ...(step.tool !== undefined ? { tool: step.tool } : {}), ...(step.trial ? { trial: { withhold: [] } } : {}),
+      ...(step.tool !== undefined ? { tool: step.tool } : {}), trial: step.trial !== undefined,
     }, can, allow, env);
     if (negotiation.kind === 'hold') facts.held.push({ step: path, missing: negotiation.missing, env: requires.env ?? [] });
     if (scope.copy === undefined || negotiation.kind === 'fail') return;

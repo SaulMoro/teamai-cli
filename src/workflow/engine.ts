@@ -1061,7 +1061,7 @@ interface OfferContext {
  * every lease on a copy, and the driver runs it when it creates the copy or the copy's setup never finished.
  */
 function offerTerms(
-  run: RunState, id: string, { scope, step }: { scope: Scope; step: WorkflowStep }, plan: WorkspacePlan | undefined, context: OfferContext,
+  id: string, { scope, step }: { scope: Scope; step: WorkflowStep }, plan: WorkspacePlan | undefined, context: OfferContext,
 ): Negotiation {
   return negotiate({
     step: id,
@@ -1075,7 +1075,7 @@ function offerTerms(
     ...(step.maxTurns !== undefined ? { maxTurns: step.maxTurns } : {}),
     ...(plan?.contract && scope.setup ? { setup: scope.setup } : {}),
     ...(step.tool !== undefined ? { tool: step.tool } : {}),
-    ...(step.trial ? { trial: { withhold: run.benchmark?.withhold ?? [] } } : {}),
+    trial: step.trial !== undefined,
     clone: plan?.contract?.mode !== 'read-only' && plan?.contract?.clone !== undefined,
     prepare: context.prepare,
   }, context.can, context.allow, context.facts);
@@ -1134,8 +1134,9 @@ export interface NextOptions {
   prepare?: boolean;
   /**
    * Process-only: the caller is the run's only driver, as the local driver is. A step that names a tool it cannot launch
-   * fails `tool_unavailable` at once, and a trial step it cannot take for the trial gates (sandbox, prepare, trials) is
-   * skipped, so its trial reads `not_run`. For any other driver both stay pending, a trial until the suite's timeout.
+   * fails `tool_unavailable` at once, and a trial step it cannot take only for the trial gates (prepare, trials) is
+   * skipped, so its trial reads `not_run`. For any other driver both stay pending, a trial until the suite's timeout. A
+   * strict requirement it lacks holds a trial too, as a local start it refuses.
    */
   alone?: boolean;
 }
@@ -1335,13 +1336,13 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
             settledOne = true;
             break;
           }
-          const terms = offerTerms(run, state.id, located, plan, context);
+          const terms = offerTerms(state.id, located, plan, context);
           if (terms.kind === 'hold' && options.alone && definition.tool !== undefined && terms.missing.includes('tools')) {
             failStep(state, toolUnavailable(state.id, definition.tool), run.revision);
             settledOne = true;
             break;
           }
-          if (terms.kind === 'hold' && options.alone && definition.trial) {
+          if (terms.kind === 'hold' && options.alone && definition.trial && terms.missing.every((missing) => missing === 'trials' || missing === 'prepare')) {
             skip(state, run.revision);
             settledOne = true;
             continue;
@@ -1376,7 +1377,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           driver, modes: can.workspace, base: run.base ?? options.base,
         }, true);
         const offered = plan.fail ? undefined : plan;
-        const terms = offerTerms(run, leased.id, located, offered, context);
+        const terms = offerTerms(leased.id, located, offered, context);
         // A driver that can no longer run its lease gives it up, so the step waits for one that can instead of looping.
         // No step has run in an unused copy, so the driver gives up the copy too, and another driver may take the step,
         // unless the driver still holds another lease in it.
