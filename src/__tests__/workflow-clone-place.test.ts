@@ -163,6 +163,40 @@ describe('a clone place', () => {
     expect(fs.readdirSync(again.cwd).sort()).toEqual(['.git', 'first.txt']);
   });
 
+  it('holds a step in a clone from a driver that provides no clones', async () => {
+    const { config, runId } = await fixture((commit) => PROMPTED(commit));
+    const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
+
+    const answer = await client.next(runId, { driver: { ...driver, can: { ...can, workspace: ['read-only', 'new', 'continue'] } }, running: [] }, { prepare: true });
+
+    expect(answer).toMatchObject({ data: { wait: { held: [{ step: 'trial.work', missing: ['workspace.clone'] }] } } });
+  });
+
+  it('fails a read-only step inside a clone, as a clone has no reader place', async () => {
+    const { config, runId } = await fixture((commit) => PROMPTED(commit).replace('workspace: continue\n          prompt: Make a file.', 'workspace: read-only\n          prompt: Make a file.'));
+    const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
+
+    await prepared(client, runId);
+    const run = await readRun(config, runId);
+
+    expect(typeof run === 'object' && run.steps.find((step) => step.id === 'trial.work')).toMatchObject({ status: 'failed', failure: { code: 'workspace_base', message: expect.stringContaining('runs read-only inside a clone') } });
+  });
+
+  it('removes the clone a driver releases, and leases the step again in a fresh one', async () => {
+    const { config, runId } = await fixture((commit) => PROMPTED(commit));
+    const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
+    const first = leaseOf(await prepared(client, runId));
+    fs.writeFileSync(path.join(first.cwd, 'left.txt'), 'L');
+
+    const released = await client.report(runId, { attempt: first.attempt, revision: first.revision, outcome: 'released', driver });
+    const again = leaseOf(await prepared(client, runId));
+
+    expect(released).not.toHaveProperty('error');
+    expect(fs.existsSync(first.cwd)).toBe(false);
+    expect(again).toMatchObject({ step: 'trial.work' });
+    expect(fs.readdirSync(again.cwd).sort()).toEqual(['.git', 'first.txt']);
+  });
+
   it('fails the step whose clone is of a commit no source has, and leaves no clone', async () => {
     const { config, runId } = await fixture(() => PROMPTED('f'.repeat(40)));
     const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
