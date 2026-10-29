@@ -7,15 +7,19 @@
 import { BENCHMARK_WINDOWS } from '../workflow/benchmark/history.js';
 
 export const benchmarksClient = `
-let benchData=null, benchError='', benchLoading=false, benchHtml='', benchRequest=0, benchAxis='tokens';
+let benchData=null, benchError='', benchLoading=false, benchHtml='', benchRequest=0, benchAxis='tokens', benchDimension='', benchComparison='', benchConfig='', benchRevision='';
+const savedBenchView=read('teamai-dashboard-benchmark-view','arms');
+let benchView=['arms','compare','team'].includes(savedBenchView)?savedBenchView:'arms';
 const benchWindows=${JSON.stringify(BENCHMARK_WINDOWS.map(String))};
 const savedBenchWindow=read('teamai-dashboard-benchmark-window','90');
 let benchQuery={window:benchWindows.includes(savedBenchWindow)?savedBenchWindow:'90',suite:''};
-function resetBenchmarks(){benchData=null;benchError='';benchLoading=false;benchHtml='';benchQuery={...benchQuery,suite:''};}
+function resetSelection(){benchComparison='';benchConfig='';benchRevision='';}
+function resetBenchmarks(){benchData=null;benchError='';benchLoading=false;benchHtml='';benchQuery={...benchQuery,suite:''};resetSelection();}
 const passOf=r=>r&&r.planned?r.passed/r.planned:null;
 const rateCell=r=>r&&r.planned?pct(r.passed/r.planned)+' <small>'+number(r.passed)+'/'+number(r.planned)+'</small>':'<span class="muted">—</span>';
 const armColor=i=>'var(--arm'+(i%6+1)+')';
-const armConfig=a=>a.tool+(a.model?' · '+a.model:'')+(a.effort?' · '+a.effort:'');
+const teamText=team=>!team||team.kind==='pulled'?t('pulled team'):team.kind==='none'?t('no team assets'):team.kind==='ref'?team.ref:t('without')+' '+team.skills.join(', ');
+const armConfig=a=>a.tool+(a.model?' · '+a.model:'')+(a.effort?' · '+a.effort:'')+(a.team&&a.team.kind!=='pulled'?' · '+teamText(a.team):'');
 const armTitle=a=>a.arm+' ('+armConfig(a)+')';
 const swatch=i=>'<i class="swatch" style="background:'+armColor(i)+'"></i>';
 function armName(a,i){ return swatch(i)+'<span data-verbatim>'+e(a.arm)+'</span><small data-verbatim>'+e(armConfig(a))+'</small>'; }
@@ -56,13 +60,15 @@ function armBars(sel){
 }
 function historyChart(sel){
  const runs=[...sel.runs].reverse(), index=new Map(runs.map((r,i)=>[r.run,i]));
- const W=window.innerWidth>=1300?1100:chartWidth(),H=W<500?260:270,pl=40,pr=16,pt=40,pb=34,pw=W-pl-pr,ph=H-pt-pb;
+ const W=window.innerWidth>=1300?1100:chartWidth(),H=W<500?274:284,pl=40,pr=16,pt=54,pb=34,pw=W-pl-pr,ph=H-pt-pb;
  const x=i=>pl+(runs.length<2?pw/2:i*pw/(runs.length-1)), y=r=>pt+(1-r)*ph;
+ const toolChange=(r,i)=>i>0?Object.entries(r.toolVersions).filter(([tool,version])=>runs[i-1].toolVersions[tool]&&runs[i-1].toolVersions[tool]!==version):[];
  const every=Math.max(1,Math.ceil(runs.length/(W<500?4:8)));
  let svg='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+e(t('Pass rate per run'))+'">'
   +[0,0.25,0.5,0.75,1].map(v=>'<line class="grid" x1="'+pl+'" x2="'+(W-pr)+'" y1="'+y(v)+'" y2="'+y(v)+'"/><text class="axis" x="'+(pl-8)+'" y="'+(y(v)+4)+'" text-anchor="end">'+Math.round(v*100)+'%</text>').join('');
  const labelled=W>=500;
  runs.forEach((r,i)=>{ const mx=i>0?(x(i-1)+x(i))/2:0, flip=mx>W*0.7, anchor=flip?' text-anchor="end"':'', tx=flip?mx-4:mx+4;
+  const tools=toolChange(r,i); if(tools.length)svg+='<line class="tool-change" x1="'+mx+'" x2="'+mx+'" y1="'+(pt-42)+'" y2="'+(H-pb)+'"/>'+(labelled?'<text class="tool-label" x="'+tx+'" y="'+(pt-34)+'"'+anchor+'>'+e(t('Tool updated'))+' · '+e(tools.map(([tool,version])=>tool+' '+version).join(', '))+'</text>':'');
   if(i>0&&r.sourceHash!==runs[i-1].sourceHash)svg+='<line class="version" x1="'+mx+'" x2="'+mx+'" y1="'+(pt-28)+'" y2="'+(H-pb)+'"/>'+(labelled?'<text class="version-label" x="'+tx+'" y="'+(pt-20)+'"'+anchor+'>'+e(t('Suite changed'))+' · '+short(r.sourceHash)+'</text>':'');
   if(i>0&&r.teamRevision!==runs[i-1].teamRevision)svg+='<line class="team-change" x1="'+mx+'" x2="'+mx+'" y1="'+(pt-14)+'" y2="'+(H-pb)+'"/>'+(labelled?'<text class="team-label" x="'+tx+'" y="'+(pt-6)+'"'+anchor+'>'+e(t('Team assets changed'))+' · '+short(r.teamRevision)+'</text>':''); if(i%every===0||i===runs.length-1)svg+='<text class="axis" x="'+x(i)+'" y="'+(H-pb+18)+'" text-anchor="middle">'+e(r.startedAt.slice(5,10))+'</text>'; });
  sel.arms.forEach((a,ai)=>{
@@ -71,7 +77,7 @@ function historyChart(sel){
   svg+=pts.map(q=>'<circle class="point" cx="'+q.cx.toFixed(1)+'" cy="'+q.cy.toFixed(1)+'" r="4.5" style="fill:'+armColor(ai)+'"><title>'+e(armTitle(a)+' · '+when(q.p.startedAt)+' · '+Math.round(passOf(q.p)*100)+'% ('+q.p.passed+'/'+q.p.planned+') · '+q.p.run)+'</title></circle>').join('');
  });
  svg+='</svg>';
- const marks=(runs.some((r,i)=>i>0&&r.sourceHash!==runs[i-1].sourceHash)?'<span><i class="mark version"></i>'+label('Suite changed')+'</span>':'')+(runs.some((r,i)=>i>0&&r.teamRevision!==runs[i-1].teamRevision)?'<span><i class="mark team-change"></i>'+label('Team assets changed')+'</span>':'');
+ const marks=(runs.some((r,i)=>i>0&&r.sourceHash!==runs[i-1].sourceHash)?'<span><i class="mark version"></i>'+label('Suite changed')+'</span>':'')+(runs.some((r,i)=>i>0&&r.teamRevision!==runs[i-1].teamRevision)?'<span><i class="mark team-change"></i>'+label('Team assets changed')+'</span>':'')+(runs.some((r,i)=>toolChange(r,i).length)?'<span><i class="mark tool-change"></i>'+label('Tool updated')+'</span>':'');
  const legend='<div class="legend">'+sel.arms.map((a,i)=>'<span class="'+(a.isCurrent?'':'muted')+'">'+armName(a,i)+(a.isCurrent?'':' <small>'+label('earlier configuration')+'</small>')+'</span>').join('')+marks+'</div>';
  return '<section class="panel bench-panel"><div class="panelhead"><h2>'+label('Pass rate per run')+'</h2><span class="label">'+label('Each point is one run of one arm. A dashed line marks a change to the suite\\'s files: runs on either side measured different tasks.')+'</span></div><div class="chart-scroll">'+svg+'</div>'+legend+'</section>';
 }
@@ -84,23 +90,30 @@ function usageX(a,axis){
 }
 function usageUsed(a,axis){ const u=a.pooled.usage; return axis==='duration'?u.durationMs.used:axis==='cost'?u.cost.used:u.tokens.used; }
 function costUnit(arms){ const units=[...new Set(arms.map(a=>a.pooled&&a.pooled.usage.cost.kind==='known'?a.pooled.usage.cost.unit:null))]; return units.length===1&&units[0]?units[0]:null; }
+function axisToggle(axis,unit){
+ const axes=[['tokens',t('Tokens')],['duration',t('Duration')],['cost',t('Cost')]];
+ return '<div class="chips" role="group" aria-label="'+e(t('Compare with'))+'">'+axes.map(([key,name])=>'<button class="chip'+(axis===key?' active':'')+'" data-bench-axis="'+key+'" aria-pressed="'+(axis===key)+'"'+(key==='cost'&&!unit?' disabled title="'+e(t('Every arm needs a cost its tool stated, in one unit.'))+'"':'')+'>'+e(name)+'</button>').join('')+'</div>';
+}
+const usageFormat=axis=>v=>axis==='tokens'?(v>=1000?(Math.round(v/100)/10)+'k':String(Math.round(v))):axis==='cost'?String(Number(v.toPrecision(2))):String(Math.round(v));
+/** The pass rate grid, the usage ticks and the axis name of a chart of pass rate against usage. */
+function usageGrid({W,H,pl,pr,pb,pw,x,y,max,axis,unit}){
+ const fmt=usageFormat(axis), axisName=axis==='duration'?t('Median duration per trial (s)'):axis==='cost'?t('Cost per trial')+' ('+unit+')':t('Median tokens per trial (input + output)');
+ return [0,0.25,0.5,0.75,1].map(v=>'<line class="grid" x1="'+pl+'" x2="'+(W-pr)+'" y1="'+y(v)+'" y2="'+y(v)+'"/><text class="axis" x="'+(pl-8)+'" y="'+(y(v)+4)+'" text-anchor="end">'+Math.round(v*100)+'%</text>').join('')
+  +[0,0.25,0.5,0.75,1].map(f=>f*max/1.15).map(v=>'<text class="axis" x="'+x(v)+'" y="'+(H-pb+18)+'" text-anchor="middle">'+e(fmt(v))+'</text>').join('')
+  +'<text class="axis-name" x="'+(pl+pw/2)+'" y="'+(H-8)+'" text-anchor="middle">'+e(axisName)+'</text>';
+}
 function scatterPanel(sel){
  const arms=sel.arms.filter(a=>a.pooled), unit=costUnit(arms);
  const axis=benchAxis==='cost'&&!unit?'tokens':benchAxis;
- const axes=[['tokens',t('Tokens')],['duration',t('Duration')],['cost',t('Cost')]];
- const toggle='<div class="chips" role="group" aria-label="'+e(t('Compare with'))+'">'+axes.map(([key,name])=>'<button class="chip'+(axis===key?' active':'')+'" data-bench-axis="'+key+'" aria-pressed="'+(axis===key)+'"'+(key==='cost'&&!unit?' disabled title="'+e(t('Every arm needs a cost its tool stated, in one unit.'))+'"':'')+'>'+e(name)+'</button>').join('')+'</div>';
+ const toggle=axisToggle(axis,unit);
  const placed=arms.map(a=>({a,i:sel.arms.indexOf(a),vx:usageX(a,axis),vy:passOf(a.pooled)})).filter(q=>q.vx!=null);
- const axisName=axis==='duration'?t('Median duration per trial (s)'):axis==='cost'?t('Cost per trial')+' ('+unit+')':t('Median tokens per trial (input + output)');
  if(!placed.length)return '<section class="panel bench-panel"><div class="panelhead"><h2>'+label('Pass rate against cost')+'</h2>'+toggle+'</div><div class="empty"><p>'+label('No arm reported this value.')+'</p></div></section>';
  const W=chartWidth(),H=300,pl=44,pr=20,pt=20,pb=46,pw=W-pl-pr,ph=H-pt-pb, max=Math.max(...placed.map(q=>q.vx))*1.15||1;
  const x=v=>pl+v/max*pw, y=r=>pt+(1-r)*ph;
  const sorted=[...placed].sort((p,q)=>p.vx-q.vx||q.vy-p.vy), frontier=[]; let best=-1; for(const q of sorted){ if(q.vy>best){frontier.push(q);best=q.vy;} }
- const ticks=[0,0.25,0.5,0.75,1].map(f=>f*max/1.15);
- const fmt=v=>axis==='tokens'?(v>=1000?(Math.round(v/100)/10)+'k':String(Math.round(v))):axis==='cost'?String(Number(v.toPrecision(2))):String(Math.round(v));
+ const fmt=usageFormat(axis);
  let svg='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+e(t('Pass rate against cost'))+'">'
-  +[0,0.25,0.5,0.75,1].map(v=>'<line class="grid" x1="'+pl+'" x2="'+(W-pr)+'" y1="'+y(v)+'" y2="'+y(v)+'"/><text class="axis" x="'+(pl-8)+'" y="'+(y(v)+4)+'" text-anchor="end">'+Math.round(v*100)+'%</text>').join('')
-  +ticks.map(v=>'<text class="axis" x="'+x(v)+'" y="'+(H-pb+18)+'" text-anchor="middle">'+e(fmt(v))+'</text>').join('')
-  +'<text class="axis-name" x="'+(pl+pw/2)+'" y="'+(H-8)+'" text-anchor="middle">'+e(axisName)+'</text>'
+  +usageGrid({W,H,pl,pr,pb,pw,x,y,max,axis,unit})
   +'<text class="better" x="'+(pl+8)+'" y="'+(pt+14)+'">↖ '+e(t('better: higher pass rate for less'))+'</text>'
   +(frontier.length>1?'<polyline class="frontier" points="'+frontier.map(q=>x(q.vx).toFixed(1)+','+y(q.vy).toFixed(1)).join(' ')+'"/>':'')
   +placed.map(q=>'<g><title>'+e(armTitle(q.a)+': '+Math.round(q.vy*100)+'% ('+q.a.pooled.passed+'/'+q.a.pooled.planned+'), 95% '+Math.round(q.a.pooled.low*100)+'–'+Math.round(q.a.pooled.high*100)+'% · '+fmt(q.vx)+' · '+usedBy(usageUsed(q.a,axis)))+'</title><line class="ci" x1="'+x(q.vx)+'" x2="'+x(q.vx)+'" y1="'+y(q.a.pooled.low)+'" y2="'+y(q.a.pooled.high)+'" style="stroke:'+armColor(q.i)+'"/><circle cx="'+x(q.vx)+'" cy="'+y(q.vy)+'" r="7" style="fill:'+armColor(q.i)+'"/><text class="point-label" x="'+(x(q.vx)>W*0.7?x(q.vx)-11:x(q.vx)+11)+'" y="'+(y(q.vy)+4)+'"'+(x(q.vx)>W*0.7?' text-anchor="end"':'')+'>'+e(q.a.arm)+'</text></g>').join('')
@@ -144,6 +157,121 @@ function runsPanel(sel){
   ].concat(arms.map(a=>rateCell(r.arms.find(c=>c.key===a.key)))));}).join('')
   +'</tbody></table></div></section>';
 }
+const BENCH_VIEWS=[['arms','Arms'],['compare','Compare'],['team','Team changes']];
+const DIMENSIONS=[['team','Team assets'],['tool','Tool'],['model','Model']];
+const pp=v=>(v>0?'+':v<0?'−':'')+number(Math.abs(Math.round(v*100)))+' pp';
+const costNumber=v=>String(Number(v.toPrecision(2)));
+const seriesBy=(sel,key)=>sel.arms.find(a=>a.key===key);
+const comparisonId=c=>c.from+'>'+c.to;
+const diffClass=d=>d.low>0?'up':d.high<0?'down':'amber';
+function sideName(sel,key,dimension){
+ const a=seriesBy(sel,key); if(!a)return '?';
+ return dimension==='team'?teamText(a.team):dimension==='tool'?a.tool:a.model?a.model+(a.effort?' '+a.effort:''):t('tool default');
+}
+function facetOf(sel,c){
+ const a=seriesBy(sel,c.from); if(!a)return '';
+ return [c.dimension!=='tool'?a.tool:'',c.dimension!=='model'&&a.model?a.model+(a.effort?' '+a.effort:''):'',c.dimension!=='team'&&a.team.kind!=='pulled'?teamText(a.team):''].filter(Boolean).join(' · ');
+}
+function benchTabs(sel){
+ const counts={compare:sel.comparisons.length,team:sel.teamChanges.revisions.length};
+ return '<div class="bench-tabs" role="tablist" aria-label="'+e(t('Benchmark views'))+'">'+BENCH_VIEWS.map(([key,name])=>'<button role="tab" class="bench-tab'+(benchView===key?' active':'')+'" data-bench-view="'+key+'" aria-selected="'+(benchView===key)+'">'+label(name)+(counts[key]?' <span class="count">'+number(counts[key])+'</span>':'')+'</button>').join('')+'</div>';
+}
+function emptyView(title,text,example,after){
+ return '<section class="panel"><div class="empty bench-empty"><h2>'+label(title)+'</h2><p>'+label(text)+'</p><pre class="command" data-verbatim>'+e(example)+'</pre>'+(after?'<p class="label">'+label(after)+'</p>':'')+'</div></section>';
+}
+function comparePanel(sel){
+ if(!sel.comparisons.length)return emptyView('No two arms of this suite differ in one thing only','Compare puts two arms side by side, trial by trial, when they differ only in the team assets, the tool or the model. Cross them with a matrix, such as each tool with and without the team\\'s assets:','matrix:\\n  tool: [claude, codex]\\n  team: [pulled, none]','Each arm of a matrix differs from its neighbours in one value, so every difference here has one cause.');
+ const dims=DIMENSIONS.filter(([key])=>sel.comparisons.some(c=>c.dimension===key));
+ const dim=dims.some(([key])=>key===benchDimension)?benchDimension:dims[0][0];
+ const list=sel.comparisons.filter(c=>c.dimension===dim);
+ const chosen=list.find(c=>comparisonId(c)===benchComparison)||list[0];
+ const chips='<div class="chips" role="group" aria-label="'+e(t('Compare by'))+'">'+dims.map(([key,name])=>'<button class="chip'+(dim===key?' active':'')+'" data-bench-dimension="'+key+'" aria-pressed="'+(dim===key)+'">'+label(name)+'</button>').join('')+'</div>';
+ return '<div class="bench-compare-head"><span class="label">'+label('Compare by')+'</span>'+chips+'</div>'+compareKpis(sel,chosen)+'<div class="bench-grid">'+forestPanel(sel,list,chosen)+arrowPanel(sel,list,chosen)+'</div>'+taskDeltaPanel(sel,chosen);
+}
+function compareKpis(sel,c){
+ const from=seriesBy(sel,c.from), to=seriesBy(sel,c.to), d=c.difference;
+ const up=c.tasks.filter(x=>passOf(x.to)>passOf(x.from)).length, down=c.tasks.filter(x=>passOf(x.to)<passOf(x.from)).length;
+ const pooled=[from,to].filter(a=>a&&a.pooled), unit=pooled.length===2?costUnit(pooled):null;
+ const perPassed=a=>{const cost=usageX(a,'cost'), rate=passOf(a.pooled); return cost!=null&&rate>0?cost/rate:null;};
+ const costs=unit?[perPassed(from),perPassed(to)]:[null,null], hasCost=costs.every(v=>v!=null);
+ const tokens=pooled.length===2?[usageX(from,'tokens'),usageX(to,'tokens')]:[null,null], hasTokens=tokens.every(v=>v!=null&&v>0);
+ const change=(a,b)=>(b>=a?'+':'−')+number(Math.abs(Math.round((b/a-1)*100)))+'%';
+ const third=hasCost?kpiCard(label('Cost per passed trial'),'<span class="'+(costs[1]<=costs[0]?'up':'down')+'">'+change(costs[0],costs[1])+'</span>',e(costNumber(costs[0])+' → '+costNumber(costs[1])+' '+unit))
+  :kpiCard(label('Median tokens per trial'),hasTokens?change(tokens[0],tokens[1]):'—',hasTokens?number(Math.round(tokens[0]))+' → '+number(Math.round(tokens[1])):label('Not every arm reported it'));
+ return '<div class="kpis bench-kpis">'
+  +kpiCard('<span><span data-verbatim>'+e(sideName(sel,c.to,c.dimension))+'</span> '+label('against')+' <span data-verbatim>'+e(sideName(sel,c.from,c.dimension))+'</span></span>','<span class="'+diffClass(d)+'">'+pp(d.value)+'</span>','95% '+pp(d.low)+' '+label('to')+' '+pp(d.high)+(diffClass(d)==='amber'?' · <b class="amber">'+label('not separated')+'</b>':''))
+  +kpiCard(label('Pass rate'),pct(passOf(c.rates.from))+' → '+pct(passOf(c.rates.to)),number(c.pairs)+' '+label('paired trials'))
+  +third
+  +kpiCard(label('Tasks'),number(up)+' <span class="up">↑</span> · '+number(down)+' <span class="down">↓</span> · '+number(c.tasks.length-up-down)+' =',label('pass rate on each task, against the arm it is measured from'))
+  +'</div>';
+}
+function forestPanel(sel,list,chosen){
+ const at=v=>((v+1)/2*100).toFixed(1)+'%';
+ return '<section class="panel bench-panel"><div class="panelhead"><h2>'+label('Difference per pair of arms')+'</h2><span class="label">'+label('Two arms that differ only in this, trial by trial. The line is the 95% interval of the difference: one that crosses the middle does not tell them apart.')+'</span></div><div class="forest">'
+  +'<div class="forest-row forest-axis" aria-hidden="true"><span></span><span class="forest-scale"><small>−100</small><small>0</small><small>+100 pp</small></span><span></span></div>'
+  +list.map(c=>{const d=c.difference, active=c===chosen, cls=diffClass(d); return '<button class="forest-row'+(active?' active':'')+'" data-bench-comparison="'+e(comparisonId(c))+'" aria-pressed="'+active+'" title="'+e(pp(d.value)+', 95% '+pp(d.low)+' – '+pp(d.high))+'"><span class="forest-label"><b data-verbatim>'+e(sideName(sel,c.from,c.dimension))+' → '+e(sideName(sel,c.to,c.dimension))+'</b><small data-verbatim>'+e(facetOf(sel,c))+'</small></span><span class="forest-track"><i class="forest-zero"></i><i class="forest-ci '+cls+'" style="left:'+at(d.low)+';width:'+((d.high-d.low)/2*100).toFixed(1)+'%"></i><i class="forest-dot '+cls+'" style="left:'+at(d.value)+'"></i></span><span class="forest-value '+cls+'"><b>'+pp(d.value)+'</b><small>'+number(c.pairs)+' '+label('pairs')+'</small></span></button>';}).join('')
+  +'</div></section>';
+}
+function arrowPanel(sel,list,chosen){
+ const ends=list.map(c=>({c,from:seriesBy(sel,c.from),to:seriesBy(sel,c.to)})).filter(q=>q.from&&q.to&&q.from.pooled&&q.to.pooled);
+ const unit=costUnit(ends.flatMap(q=>[q.from,q.to])), axis=benchAxis==='cost'&&!unit?'tokens':benchAxis;
+ const head='<div class="panelhead"><h2>'+label('Pass rate against cost, from one arm to the other')+'</h2>'+axisToggle(axis,unit)+'</div>';
+ const placed=ends.map(q=>({...q,fx:usageX(q.from,axis),tx:usageX(q.to,axis),fy:passOf(q.from.pooled),ty:passOf(q.to.pooled)})).filter(q=>q.fx!=null&&q.tx!=null);
+ if(!placed.length)return '<section class="panel bench-panel">'+head+'<div class="empty"><p>'+label('No arm reported this value.')+'</p></div></section>';
+ const W=chartWidth(),H=300,pl=44,pr=20,pt=20,pb=46,pw=W-pl-pr,ph=H-pt-pb, max=Math.max(...placed.flatMap(q=>[q.fx,q.tx]))*1.15||1;
+ const x=v=>pl+v/max*pw, y=r=>pt+(1-r)*ph;
+ const svg='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+e(t('Pass rate against cost, from one arm to the other'))+'"><defs>'+[['up','green'],['down','error'],['amber','amber']].map(([cls,color])=>'<marker id="bench-arrow-'+cls+'" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" style="fill:var(--'+color+')"/></marker>').join('')+'</defs>'
+  +usageGrid({W,H,pl,pr,pb,pw,x,y,max,axis,unit})
+  +placed.map(q=>{const active=q.c===chosen, x1=x(q.fx), y1=y(q.fy), x2=x(q.tx), y2=y(q.ty), len=Math.hypot(x2-x1,y2-y1)||1, k=Math.max(0,(len-9)/len), flip=x2>W*0.7;
+   return '<g class="arrow'+(active?' active':'')+'" data-bench-comparison="'+e(comparisonId(q.c))+'"><title>'+e(sideName(sel,q.c.from,q.c.dimension)+' → '+sideName(sel,q.c.to,q.c.dimension)+' · '+facetOf(sel,q.c)+': '+Math.round(q.fy*100)+'% → '+Math.round(q.ty*100)+'%')+'</title><line class="'+diffClass(q.c.difference)+'" x1="'+x1.toFixed(1)+'" y1="'+y1.toFixed(1)+'" x2="'+(x1+(x2-x1)*k).toFixed(1)+'" y2="'+(y1+(y2-y1)*k).toFixed(1)+'" marker-end="url(#bench-arrow-'+diffClass(q.c.difference)+')"/><circle class="from" cx="'+x1.toFixed(1)+'" cy="'+y1.toFixed(1)+'" r="5"/><circle class="to" cx="'+x2.toFixed(1)+'" cy="'+y2.toFixed(1)+'" r="6"/>'+(active?'<text class="point-label" x="'+(flip?x2-10:x2+10)+'" y="'+(y2+4)+'"'+(flip?' text-anchor="end"':'')+'>'+e(facetOf(sel,q.c)||sideName(sel,q.c.to,q.c.dimension))+'</text>':'')+'</g>';}).join('')
+  +'</svg>';
+ return '<section class="panel bench-panel">'+head+'<div class="chart-scroll">'+svg+'</div><p class="scorer-hint">'+label('Hollow: the arm the difference is measured from. Filled: the other. An arrow up and to the left passes more for less.')+'</p></section>';
+}
+function taskDeltaPanel(sel,c){
+ const rows=c.tasks.map(x=>({x,f:passOf(x.from),to:passOf(x.to)}));
+ return '<section class="panel bench-panel"><div class="panelhead"><h2>'+label('Each task')+' · <span data-verbatim>'+e(sideName(sel,c.from,c.dimension))+' → '+e(sideName(sel,c.to,c.dimension))+'</span></h2><span class="label">'+label('Hollow: the arm the difference is measured from. Green where the task passed more often, red where less.')+'</span></div><div class="dumbbells">'
+  +rows.map(r=>{const lo=Math.min(r.f,r.to), hi=Math.max(r.f,r.to), cls=r.to>r.f?'up':r.to<r.f?'down':'same'; return '<div class="dumbbell"><span class="dumbbell-task" data-verbatim>'+e(r.x.task)+'</span><span class="dumbbell-track"><i class="dumbbell-line '+cls+'" style="left:'+(lo*100).toFixed(1)+'%;width:'+((hi-lo)*100).toFixed(1)+'%"></i><i class="dumbbell-from" style="left:'+(r.f*100).toFixed(1)+'%"></i><i class="dumbbell-to '+cls+'" style="left:'+(r.to*100).toFixed(1)+'%"></i></span><span class="dumbbell-value '+cls+'"><b>'+pp(r.to-r.f)+'</b><small>'+number(r.x.from.passed)+'/'+number(r.x.from.planned)+' → '+number(r.x.to.passed)+'/'+number(r.x.to.planned)+'</small></span></div>';}).join('')
+  +'<div class="dumbbell dumbbell-axis" aria-hidden="true"><span></span><span class="forest-scale"><small>0%</small><small>50%</small><small>100%</small></span><span></span></div></div></section>';
+}
+const configName=c=>c.tool+(c.model?' · '+c.model:'')+(c.effort?' · '+c.effort:'');
+function teamPanel(sel){
+ const tc=sel.teamChanges;
+ if(!tc.revisions.length)return emptyView('No tool and model ran on two team revisions yet','Team changes follows one tool and model across the team revisions it ran on, so you see what a change to the team\\'s skills, rules or agents did. Add an arm on another revision of the team repo:','arms:\\n  - name: team          # the revision you pulled\\n  - name: main\\n    team: main          # a branch, tag or commit of the team repo','Or run the suite again after each change to the team repo: each run installs the revision you pulled.');
+ const config=tc.configs.find(c=>c.key===benchConfig)||tc.configs[0];
+ const points=tc.revisions.flatMap(r=>{const c=r.configs.find(x=>x.key===config.key); return c?[{r,c}]:[];});
+ const chosen=points.find(q=>q.r.revision===benchRevision)||points[points.length-1];
+ const chips=tc.configs.length>1?'<div class="chips" role="group" aria-label="'+e(t('Tool and model'))+'">'+tc.configs.map(c=>'<button class="chip'+(c===config?' active':'')+'" data-bench-config="'+e(c.key)+'" aria-pressed="'+(c===config)+'" data-verbatim>'+e(configName(c))+'</button>').join('')+'</div>':'<span class="tag" data-verbatim>'+e(configName(config))+'</span>';
+ return '<div class="bench-compare-head"><span class="label">'+label('Tool and model')+'</span>'+chips+'</div>'+revisionChart(points,chosen)+revisionDetail(points,chosen);
+}
+const separatedFrom=(q,prev)=>prev&&(q.c.high<prev.c.low?'down':q.c.low>prev.c.high?'up':'');
+function revisionChart(points,chosen){
+ const W=window.innerWidth>=1300?1100:chartWidth(),H=300,pl=40,pr=24,pt=34,pb=64,pw=W-pl-pr,ph=H-pt-pb;
+ const inset=Math.min(90,pw/6), x=i=>pl+(points.length<2?pw/2:inset+i*(pw-2*inset)/(points.length-1)), y=r=>pt+(1-r)*ph, commits=benchData.teamCommits||{};
+ const every=Math.max(1,Math.ceil(points.length/(W<500?3:7)));
+ let svg='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+e(t('Pass rate per team revision'))+'">'
+  +[0,0.25,0.5,0.75,1].map(v=>'<line class="grid" x1="'+pl+'" x2="'+(W-pr)+'" y1="'+y(v)+'" y2="'+y(v)+'"/><text class="axis" x="'+(pl-8)+'" y="'+(y(v)+4)+'" text-anchor="end">'+Math.round(v*100)+'%</text>').join('');
+ if(points.length>1)svg+='<polyline class="series" style="stroke:var(--arm1)" points="'+points.map((q,i)=>x(i).toFixed(1)+','+y(passOf(q.c)).toFixed(1)).join(' ')+'"/>';
+ svg+=points.map((q,i)=>{const sep=separatedFrom(q,points[i-1]), commit=commits[q.r.revision], rate=passOf(q.c), active=q===chosen, cx=x(i).toFixed(1);
+  const subject=commit?(commit.subject.length>26?commit.subject.slice(0,25)+'…':commit.subject):'';
+  return '<g class="revision'+(active?' active':'')+(sep?' '+sep:'')+'" data-bench-revision="'+e(q.r.revision)+'"><title>'+e(short(q.r.revision)+(commit?' · '+commit.subject:'')+': '+Math.round(rate*100)+'% ('+q.c.passed+'/'+q.c.planned+'), 95% '+Math.round(q.c.low*100)+'–'+Math.round(q.c.high*100)+'% · '+q.c.runs+' '+t('runs'))+'</title>'
+   +'<rect class="hit" x="'+(x(i)-18).toFixed(1)+'" y="'+pt+'" width="36" height="'+(ph+pb-8)+'"/>'
+   +'<line class="ci" x1="'+cx+'" x2="'+cx+'" y1="'+y(q.c.low).toFixed(1)+'" y2="'+y(q.c.high).toFixed(1)+'"/><circle class="point" cx="'+cx+'" cy="'+y(rate).toFixed(1)+'" r="'+(active?7:5.5)+'"/>'
+   +'<text class="rate" x="'+cx+'" y="'+(y(q.c.high)-8).toFixed(1)+'" text-anchor="middle">'+Math.round(rate*100)+'%'+(sep==='down'?' ↓':sep==='up'?' ↑':'')+'</text>'
+   +(i%every===0||i===points.length-1||active?'<text class="axis" x="'+cx+'" y="'+(H-pb+18)+'" text-anchor="middle" data-verbatim>'+short(q.r.revision)+'</text>'+(subject&&W>=500?'<text class="axis-name" x="'+cx+'" y="'+(H-pb+33)+'" text-anchor="middle">'+e(subject)+'</text>':'')+'<text class="axis" x="'+cx+'" y="'+(H-pb+(W>=500?48:33))+'" text-anchor="middle">'+e((commit?commit.committedAt:q.r.firstRunAt).slice(5,10))+'</text>':'')
+   +'</g>';}).join('');
+ svg+='</svg>';
+ return '<section class="panel bench-panel"><div class="panelhead"><h2>'+label('Pass rate per team revision')+'</h2><span class="label">'+label('Each point pools the runs on one team revision, in commit order. The line is the 95% interval; ↓ or ↑ marks a revision told apart from the one before it. Click one to see what changed.')+'</span></div><div class="chart-scroll">'+svg+'</div></section>';
+}
+function revisionDetail(points,q){
+ const index=points.indexOf(q), prev=points[index-1], commit=(benchData.teamCommits||{})[q.r.revision], sep=separatedFrom(q,prev);
+ const tasks=[...new Set([...(prev?prev.c.tasks:[]),...q.c.tasks].map(x=>x.task))];
+ const heads=['TASK',prev?short(prev.r.revision):'',short(q.r.revision),'CHANGE'].filter(Boolean);
+ const rows=tasks.map(task=>{const before=prev&&prev.c.tasks.find(x=>x.task===task), after=q.c.tasks.find(x=>x.task===task), delta=before&&after?passOf(after)-passOf(before):null;
+  return cardRow('',heads.map(h=>h===heads[0]||h==='CHANGE'?t(h):h),['<span data-verbatim>'+e(task)+'</span>',...(prev?[rateCell(before)]:[]),rateCell(after),delta==null?'—':'<span class="'+(delta>0?'up':delta<0?'down':'')+'">'+pp(delta)+'</span>']);}).join('');
+ const changes=commit&&commit.changes?'<ul class="changed-files">'+commit.changes.files.map(f=>'<li><code data-verbatim>'+e(f.path)+'</code><small><span class="up">+'+number(f.added)+'</span> <span class="down">−'+number(f.removed)+'</span></small></li>').join('')+(commit.changes.more?'<li class="muted">'+label('and')+' '+number(commit.changes.more)+' '+label('more files')+'</li>':'')+(commit.changes.files.length?'':'<li class="muted">'+label('No file outside benchmarks/ changed.')+'</li>')+'</ul>'
+  :'<p class="muted">'+(prev?label('This machine\\'s team clone lacks one of the two revisions, so it cannot list what changed.'):label('The first team revision in the window.'))+'</p>';
+ return '<section class="panel bench-panel"><div class="panelhead"><h2><span data-verbatim>'+short(q.r.revision)+'</span>'+(commit?' · <span data-verbatim>'+e(commit.subject)+'</span>':'')+(prev?' <span class="label">'+label('against')+' <span data-verbatim>'+short(prev.r.revision)+'</span></span>':'')+'</h2>'+(sep?'<span class="tag '+(sep==='down'?'down':'up')+'">'+label(sep==='down'?'told apart: lower':'told apart: higher')+'</span>':'')+'</div><h3 class="caption">'+label('Team files changed')+'</h3>'+changes+'<div class="table-scroll"><table class="session-table bench-cards"><thead><tr>'+heads.map(h=>'<th'+(h===heads[0]||h==='CHANGE'?'':' data-verbatim')+'>'+(h===heads[0]||h==='CHANGE'?label(h):e(h))+'</th>').join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div></section>';
+}
 function benchmarksPage(){
  if(page==='benchmarks'&&!benchData&&!benchLoading&&!benchError)loadBenchmarks();
  if(benchError&&!benchData)return errorPanel(benchError,'benchmarks');
@@ -156,7 +284,7 @@ function benchmarksPage(){
   +'<div class="statusline"><span>'+label('Window')+': '+e(when(w.from))+' – '+e(when(w.to))+'</span><span>'+label('Runs by when they started.')+'</span></div>'
   +controls+suitesPanel(benchData)
   +(sel?'<h2 class="section-label"><span data-verbatim>'+e(sel.suite)+'</span> <span class="tag" title="'+e(sel.versions[0].sourceHash)+'">'+label('suite version')+' <span data-verbatim>'+short(sel.versions[0].sourceHash)+'</span></span>'+(sel.versions.length>1?' <span class="tag">'+number(sel.versions.length)+' '+label('versions in the window')+'</span>':'')+'</h2>'
-   +benchKpis(sel)+'<div class="bench-grid">'+armBars(sel)+scatterPanel(sel)+'</div>'+historyChart(sel)+heatmapPanel(sel)+taskRunsPanel(sel)+latestPanel(sel)+runsPanel(sel):'');
+   +benchTabs(sel)+(benchView==='compare'?comparePanel(sel):benchView==='team'?teamPanel(sel):benchKpis(sel)+'<div class="bench-grid">'+armBars(sel)+scatterPanel(sel)+'</div>'+historyChart(sel)+heatmapPanel(sel)+taskRunsPanel(sel)+latestPanel(sel)+runsPanel(sel)):'');
 }
 async function loadBenchmarks(){
  const generation=workspaceGeneration, request=++benchRequest, current=()=>generation===workspaceGeneration&&request===benchRequest; benchLoading=true;
@@ -170,11 +298,18 @@ async function loadBenchmarks(){
  }catch{if(current())benchError=t('Could not load benchmark runs.');}
  finally{if(current()){benchLoading=false;if(page==='benchmarks'){const html=benchmarksPage();if(html!==benchHtml){benchHtml=html;render();}}}}
 }
-function setBenchQuery(changes){ benchQuery={...benchQuery,...changes}; save('teamai-dashboard-benchmark-window',benchQuery.window); loadBenchmarks(); }
+function setBenchQuery(changes){ if(changes.suite!==undefined&&changes.suite!==benchQuery.suite)resetSelection(); benchQuery={...benchQuery,...changes}; save('teamai-dashboard-benchmark-window',benchQuery.window); loadBenchmarks(); }
 document.addEventListener('change',event=>{ if(event.target.id==='bench-window')setBenchQuery({window:event.target.value}); });
 document.addEventListener('click',event=>{
- const suite=event.target.closest('[data-bench-suite]'), axis=event.target.closest('[data-bench-axis]');
+ const suite=event.target.closest('[data-bench-suite]'), axis=event.target.closest('[data-bench-axis]'), view=event.target.closest('[data-bench-view]');
+ const dimension=event.target.closest('[data-bench-dimension]'), comparison=event.target.closest('[data-bench-comparison]'), config=event.target.closest('[data-bench-config]'), revision=event.target.closest('[data-bench-revision]');
+ const rerender=()=>{if(page==='benchmarks')render();};
  if(suite)setBenchQuery({suite:suite.dataset.benchSuite});
- else if(axis&&!axis.disabled){benchAxis=axis.dataset.benchAxis;if(page==='benchmarks')render();}
+ else if(axis&&!axis.disabled){benchAxis=axis.dataset.benchAxis;rerender();}
+ else if(view){benchView=view.dataset.benchView;save('teamai-dashboard-benchmark-view',benchView);rerender();}
+ else if(dimension){benchDimension=dimension.dataset.benchDimension;benchComparison='';rerender();}
+ else if(comparison){benchComparison=comparison.dataset.benchComparison;rerender();}
+ else if(config){benchConfig=config.dataset.benchConfig;benchRevision='';rerender();}
+ else if(revision){benchRevision=revision.dataset.benchRevision;rerender();}
 });
 `;
