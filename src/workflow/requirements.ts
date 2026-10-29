@@ -13,13 +13,29 @@ const EnvKeySchema = z.string().regex(ENV_KEY_RE, 'must be an environment variab
 /**
  * `requires:` on a step, and `defaults.requires` in a workflow file, which acts as if written on every step of it.
  * A step that needs a person says `interactive: true`. `env` lists team env keys by name; values never enter the run.
+ * `strict: true` makes the block's `isolation` and `network` strict, and a floor for every level inside it.
  */
 export const RequirementsSchema = z.object({
   network: z.boolean().optional(),
   isolation: IsolationSchema.optional(),
   env: z.array(EnvKeySchema).optional(),
+  strict: z.boolean().optional(),
 });
 export type Requirements = z.infer<typeof RequirementsSchema>;
+
+/** What strict levels set: the `isolation` and `network` no level inside them goes below. */
+export type Floor = Pick<Requirements, 'isolation' | 'network'>;
+
+/** The requirements in effect at a level, each at least its `floor`, which only strict levels set. */
+export type InEffect = Omit<Requirements, 'strict'> & { floor?: Floor };
+
+/**
+ * The names a strict `isolation: sandbox` keeps from every process teamai starts for the step, setup and the clone's
+ * git included: what the step could push, publish or authenticate with. They win over any `requires.env`.
+ */
+export const SANDBOX_WITHHELD_ENV = [
+  'GITHUB_TOKEN', 'GH_TOKEN', 'GITLAB_TOKEN', 'GL_TOKEN', 'CI_JOB_TOKEN', 'SSH_AUTH_SOCK', 'GIT_ASKPASS', 'SSH_ASKPASS',
+] as const;
 
 /** The keys `requires:` takes; pull reports any other as `unknown_key`. */
 export const REQUIREMENT_KEYS: ReadonlySet<string> = new Set(Object.keys(RequirementsSchema.shape));
@@ -36,8 +52,8 @@ export type Setup = z.infer<typeof SetupSchema>;
 
 /**
  * What a step needs from the driver that runs it. A strict requirement holds the step until a driver that declares it
- * asks; a best-effort one is granted anyway and recorded as not enforced. The `satisfies` makes a new requirement fail
- * the type check until it is classified.
+ * asks; a best-effort one is granted anyway and recorded as not enforced. `isolation` and `network` are strict where a
+ * `strict` level sets them. The `satisfies` makes a new requirement fail the type check until it is classified.
  */
 const ENFORCEMENT = {
   /** `interactive: true`: a person in the tool. */
@@ -59,14 +75,9 @@ const ENFORCEMENT = {
   tools: 'strict',
   /** A benchmark trial step: `can.trials` lists a tool, so the driver holds the trial's prompt to the suite's limits. */
   trials: 'strict',
-  /**
-   * A benchmark trial step runs only where the driver declares `can.isolation: sandbox`. Strict for trials only:
-   * ordinary steps keep best-effort isolation.
-   */
-  sandbox: 'strict',
   /** A benchmark trial step, or a step in a clone, is leased only through `next --prepare`, so teamai made its clone. Process-only. */
   prepare: 'strict',
-} as const satisfies Record<string, 'strict' | 'bestEffort'> & Record<keyof Requirements, 'strict' | 'bestEffort'>;
+} as const satisfies Record<string, 'strict' | 'bestEffort'> & Record<keyof Floor | 'env', 'strict' | 'bestEffort'>;
 type Enforcement = typeof ENFORCEMENT;
 type KeysOf<E extends Enforcement[keyof Enforcement]> = { [K in keyof Enforcement]: Enforcement[K] extends E ? K : never }[keyof Enforcement];
 export type StrictKey = KeysOf<'strict'>;
@@ -116,7 +127,7 @@ export const AllowSchema = z.object({
 export type Allow = z.infer<typeof AllowSchema>;
 
 /** What a held step lacks, as `wait.held[].missing` lists it: a capability, or what the member's policy allows. */
-export type Missing = StrictKey | `workspace.${WorkspaceMode}` | `policy.${keyof Allow}`;
+export type Missing = StrictKey | keyof Floor | `workspace.${WorkspaceMode}` | `policy.${keyof Allow}`;
 
 /** The failure codes a step's requirements and the run's limits set. Records carry them. */
 export const LIMIT_FAILURES = [
@@ -188,12 +199,31 @@ export type EnvScope = z.infer<typeof EnvScopeSchema>;
 export const LeaseSetupSchema = z.object({ command: z.string(), envScope: EnvScopeSchema.optional() });
 export type LeaseSetup = z.infer<typeof LeaseSetupSchema>;
 
-/** The requirements in effect at a level: each level's keys replace the earlier ones, and `env` lists add up. */
-export function mergeRequirements(...levels: ReadonlyArray<Requirements | undefined>): Requirements {
-  const merged: Requirements = Object.assign({}, ...levels.map((level) => level ?? {}));
-  const env = [...new Set(levels.flatMap((level) => level?.env ?? []))];
+/**
+ * The requirements in effect at a level: each level's keys replace the earlier ones, and `env` lists add up. The
+ * `isolation` and `network` of a strict level, or of a level's `floor`, join the floor, and a value below it is raised.
+ */
+export function mergeRequirements(...levels: ReadonlyArray<(Requirements & Pick<InEffect, 'floor'>) | undefined>): InEffect {
+  const given = levels.filter((level) => level !== undefined);
+  const merged: InEffect = {};
+  let floor: Floor = {};
+  for (const { network, isolation, strict, floor: inner = {} } of given) {
+    if (network !== undefined) merged.network = network;
+    if (isolation !== undefined) merged.isolation = isolation;
+    floor = raised(raised(floor, inner), strict ? { network, isolation } : {});
+  }
+  const env = [...new Set(given.flatMap((level) => level.env ?? []))];
   if (env.length > 0) merged.env = env;
-  return merged;
+  if (floor.isolation === undefined && floor.network === undefined) return merged;
+  return { ...raised(merged, floor), floor };
+}
+
+/** `values` with each of `isolation` and `network` raised to `floor`'s, where `floor` sets it higher. */
+function raised<T extends Floor>(values: T, floor: Floor): T {
+  const isolation = floor.isolation !== undefined && (values.isolation === undefined || rank(values.isolation) < rank(floor.isolation)) ? floor.isolation : values.isolation;
+  // Denying the network keeps a step further from the member's machine, so only a floor of `false` raises a value.
+  const network = floor.network === false ? false : values.network;
+  return { ...values, ...(isolation !== undefined ? { isolation } : {}), ...(network !== undefined ? { network } : {}) };
 }
 
 /**
@@ -235,7 +265,7 @@ function envCovers(env: DriverCan['env'], executor: Executor): { step: boolean; 
 export interface Offer {
   step: string;
   executor: Executor;
-  requires: Requirements;
+  requires: InEffect;
   interactive: boolean;
   /** The lease runs in a copy of its own, which is at least `worktree` isolation. */
   hasContract: boolean;
@@ -251,8 +281,8 @@ export interface Offer {
   setup?: Setup;
   /** The tool a prompt step names. */
   tool?: string;
-  /** A benchmark trial step: the names the run's plan withholds. */
-  trial?: { withhold: readonly string[] };
+  /** A benchmark trial step. */
+  trial: boolean;
   /** The lease runs in a clone, which only teamai prepares. */
   clone: boolean;
   /** The caller asked `next --prepare`. */
@@ -261,7 +291,8 @@ export interface Offer {
 
 /** What a granted lease carries besides the step itself. */
 export interface Terms {
-  requires: Requirements;
+  /** The values in effect, raised to their floor. */
+  requires: Omit<Requirements, 'strict'>;
   envScope?: EnvScope;
   /** Only for a driver that can cap turns. */
   maxTurns?: number;
@@ -283,26 +314,32 @@ export type Negotiation =
  * would provide it; else the step is granted, with each best-effort gap listed in `unenforced`.
  */
 export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFacts): Negotiation {
-  const guarded = [...env.declared, ...offer.runEnvKeys, ...(offer.trial?.withhold ?? [])];
+  const { floor = {}, ...requires } = offer.requires;
+  const sealed = floor.isolation === 'sandbox';
+  // A strict sandbox's strip list wins over every requires.env, so no step under it is handed a credential.
+  const stripped: readonly string[] = sealed ? SANDBOX_WITHHELD_ENV : [];
+  const guarded = [...env.declared, ...offer.runEnvKeys, ...stripped];
   const shadowed = offer.envKeys.filter((key) => sameEnvName([...env.secrets, ...offer.runEnvKeys], key) !== undefined);
   if (shadowed.length > 0) {
     return { kind: 'fail', failure: { code: 'env_conflict', message: `Step "${offer.step}" sets env ${shadowed.join(', ')}, which a team secret or a requires.env of the run names. Rename the step's variable, or remove it from env:.` } };
   }
-  // A trial's strip list wins over every requires.env, so a suite cannot hand a trial a credential it withholds.
-  const stripped = offer.trial?.withhold ?? [];
   const allowed = (keys: readonly string[]): string[] => keys.filter((key) => sameEnvName(stripped, key) === undefined);
-  const required = allowed(offer.requires.env ?? []);
+  const required = allowed(requires.env ?? []);
   const setupKeys = allowed(offer.setup?.requires?.env ?? []);
   const covers = envCovers(can.env, offer.executor);
   const policy: Missing[] = [];
-  if (allow.network === false && offer.requires.network === true) policy.push('policy.network');
+  if (allow.network === false && requires.network === true) policy.push('policy.network');
   if (allow.env && [...required, ...setupKeys].some((key) => sameEnvName(allow.env ?? [], key) === undefined)) policy.push('policy.env');
+  const provided = providedIsolation(can, offer.hasContract);
   const gaps: Missing[] = policy.length > 0 ? policy : [
     ...(offer.tool !== undefined && lacksTool(offer.tool, can) ? ['tools' as const] : []),
+    ...(floor.isolation !== undefined && rank(floor.isolation) > rank(provided) ? ['isolation' as const] : []),
+    ...(floor.network === false && !can.network ? ['network' as const] : []),
     ...(offer.trial ? trialGaps(can, offer.prepare) : offer.clone && !offer.prepare ? ['prepare' as const] : []),
     ...(offer.interactive && !can.hitl ? ['hitl' as const] : []),
     ...(offer.setup && !can.setup ? ['setup' as const] : []),
-    ...((required.length > 0 && !covers.step) || (setupKeys.length > 0 && !covers.setup) ? ['env' as const] : []),
+    // A strict sandbox keeps its strip list from every process of the step, which only a driver with `can.env: true` does.
+    ...((required.length > 0 && !covers.step) || (setupKeys.length > 0 && !covers.setup) || (sealed && can.env !== true) ? ['env' as const] : []),
     ...(offer.budgeted && !offer.interactive && !can.tokens ? ['tokens' as const] : []),
   ];
   const [first, ...rest] = gaps;
@@ -312,9 +349,8 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     if (unavailable) return { kind: 'fail', failure: unavailable };
   }
   const unenforced: Unenforced[] = [];
-  if (offer.requires.network === false && !can.network) unenforced.push({ requirement: 'network', asked: false });
-  const asked = offer.requires.isolation;
-  const provided = providedIsolation(can, offer.hasContract);
+  if (requires.network === false && !can.network) unenforced.push({ requirement: 'network', asked: false });
+  const asked = requires.isolation;
   if (asked !== undefined && asked !== 'none' && rank(asked) > rank(provided)) unenforced.push({ requirement: 'isolation', asked, provided });
   const withhold = [...new Set(guarded)].filter((key) => sameEnvName(required, key) === undefined).sort();
   if (!covers.step && withhold.length > 0) unenforced.push({ requirement: 'withhold', keys: withhold });
@@ -325,7 +361,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
   const setup = offer.setup && {
     setup: { command: offer.setup.command, ...(covers.setup && (setupKeys.length > 0 || setupWithhold.length > 0) ? { envScope: { provide: setupKeys, withhold: setupWithhold } } : {}) },
   };
-  return { kind: 'grant', terms: { requires: offer.requires, ...envScope, ...maxTurns, ...setup, unenforced } };
+  return { kind: 'grant', terms: { requires, ...envScope, ...maxTurns, ...setup, unenforced } };
 }
 
 /**
@@ -354,11 +390,10 @@ export function lacksTool(tool: string, can: Pick<DriverCan, 'tools'>): boolean 
   return !(can.tools ?? []).includes(tool);
 }
 
-/** What a trial step lacks on this driver. */
-export function trialGaps(can: Pick<DriverCan, 'trials' | 'isolation'>, prepare: boolean): Missing[] {
+/** What a trial step lacks on this driver, besides what its requirements ask. */
+function trialGaps(can: Pick<DriverCan, 'trials'>, prepare: boolean): Missing[] {
   return [
     ...((can.trials ?? []).length > 0 ? [] : ['trials' as const]),
-    ...(can.isolation === 'sandbox' ? [] : ['sandbox' as const]),
     ...(prepare ? [] : ['prepare' as const]),
   ];
 }

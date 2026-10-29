@@ -13,7 +13,7 @@ import type { HandoffOwner } from './workflow/snapshot.js';
 import { getRepoIdentity } from './session-flow/sync.js';
 import { readableReportsWorktree } from './utils/reports-branch.js';
 import { callerProvenance, cancelRun, respondProvenance, respondToHitl, retryStep } from './workflow/run-controls.js';
-import { personAnswers, runLocalDriver, withDriverLock } from './workflow/drivers/local/local-driver.js';
+import { localStrictCan, personAnswers, runLocalDriver, withDriverLock } from './workflow/drivers/local/local-driver.js';
 import { driverIdentity } from './driver-identity.js';
 import { getBusinessRoot, getDataHome, usesBranchWorktree, type LocalConfig, type TeamaiConfig } from './types.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema } from './workflow/store.js';
@@ -327,9 +327,10 @@ export async function workflowStart(name: string, options: {
   const { inputs } = read;
   const caller = invokeCaller(options.confirmed);
   const base = options.benchmark ? await headCommit(process.cwd()) : undefined;
+  const alone = options.driver === 'local' ? { alone: localStrictCan(config, options) } : {};
   const started = options.benchmark
-    ? await startBenchmark(config, name, { secrets, checkout: process.cwd(), runMode: caller.mode, memberAliases: options.memberAliases === true, ...(base ? { base } : {}) })
-    : await inProcessClient({ config, env }).start(name, { inputs, checkout: process.cwd(), caller, ...(timeout !== undefined ? { timeout } : {}) });
+    ? await startBenchmark(config, name, { secrets, checkout: process.cwd(), runMode: caller.mode, memberAliases: options.memberAliases === true, ...(base ? { base } : {}), ...alone })
+    : await inProcessClient({ config, env }).start(name, { inputs, checkout: process.cwd(), caller, ...alone, ...(timeout !== undefined ? { timeout } : {}) });
   if ('error' in started || options.driver !== 'local') {
     writeEnvelope(started, secrets);
     return;

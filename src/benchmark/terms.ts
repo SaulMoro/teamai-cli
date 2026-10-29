@@ -18,14 +18,6 @@ export const BENCHMARK_NAME = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 export const BenchmarkNameSchema = z.string().regex(BENCHMARK_NAME, 'must be letters, digits, "-" or "_", with no "."');
 
 /**
- * The names a trial's setup, tool and check never see, whatever the team env or a suite declares: credentials a trial
- * could push, publish or authenticate with. Start freezes them into the plan's `withhold`, the copy every reader uses.
- */
-export const TRIAL_WITHHELD_ENV = [
-  'GITHUB_TOKEN', 'GH_TOKEN', 'GITLAB_TOKEN', 'GL_TOKEN', 'CI_JOB_TOKEN', 'SSH_AUTH_SOCK', 'GIT_ASKPASS', 'SSH_ASKPASS',
-] as const;
-
-/**
  * The team assets of an arm's trials, as start resolved the suite's `team`: the revision this checkout pulled, a ref of
  * the team repo at the commit it named then, the pulled revision without some skills, or none.
  */

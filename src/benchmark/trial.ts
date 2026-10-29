@@ -28,7 +28,7 @@ import { abandonPlace, commitCacheOf, freshClone, placeLeaseOf, preparedClone, p
 import { commandEnd } from '../workflow/protocol.js';
 import { findAttemptRun } from '../workflow/run-location.js';
 import { runSetup } from '../workflow/place/setup.js';
-import { EnvScopeSchema, lacksTool, LeaseSetupSchema, trialGaps, type DriverCan, type EnvScope, type LeaseSetup, type Setup } from '../workflow/requirements.js';
+import { EnvScopeSchema, lacksTool, LeaseSetupSchema, SANDBOX_WITHHELD_ENV, type DriverCan, type EnvScope, type LeaseSetup, type Setup } from '../workflow/requirements.js';
 import { attemptEnv } from '../workflow/attempt-marker.js';
 import { runShellCommand, type CommandExit } from '../workflow/shell-command.js';
 import { readRun, RunIdSchema, type RunLock } from '../workflow/store.js';
@@ -39,7 +39,7 @@ import { untrustedGit, type Git } from '../workflow/worktree.js';
 import { checkVerdict, type CheckResult, type CheckVerdict } from './check.js';
 import { BENCHMARK_PLAN_SCHEMA_VERSION, baselineStepOf, stepOf, type BenchmarkPlan } from './plan.js';
 import type { CheckFile, Suite } from './suite.js';
-import { PromptTermsSchema, TRIAL_WITHHELD_ENV, setsLimit, type Added, type PreparedTrialLease } from './terms.js';
+import { PromptTermsSchema, setsLimit, type Added, type PreparedTrialLease } from './terms.js';
 
 export interface TrialNextOptions extends NextOptions {
   /** Stops setup or a command this call runs. The step stays leased, so the next call prepares or runs it again. */
@@ -212,14 +212,11 @@ export async function trialBlocker(config: LocalConfig): Promise<string | undefi
 
 /**
  * The lines the local driver prints once before its first `next`, one per reason a trial of `plan` does not run on it.
- * The reasons are `trialGaps` and `lacksTool`, the rules that hold its trials, so a printed reason and a held trial agree.
+ * The reason is `lacksTool`, the rule that holds its trials, so a printed reason and a held trial agree.
  */
-export function benchmarkNotices(plan: BenchmarkPlan, can: Pick<DriverCan, 'tools' | 'trials' | 'isolation'>, blocked: string | undefined): string[] {
+export function benchmarkNotices(plan: BenchmarkPlan, can: Pick<DriverCan, 'tools'>, blocked: string | undefined): string[] {
   return [
     ...(blocked !== undefined ? [blocked] : []),
-    ...(trialGaps(can, true).includes('sandbox')
-      ? ['This machine is not declared a sandbox, so benchmark trials did not run. Run benchmarks in CI or a container, and declare it with --sandbox.']
-      : []),
     ...plan.arms.filter((arm) => lacksTool(arm.tool, can))
       .map((arm) => `Arm "${arm.name}" uses ${arm.tool}, which the local driver cannot run, so its trials did not run.`),
   ];
@@ -455,7 +452,7 @@ export async function tryCheckAt(input: {
   const { commit, startingCommit, protect, add, setup, sources, expiresAt } = input;
   const values = new Map(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
   const runner: Runner = { env: { values, facts: { declared: new Set(), secrets: new Set(), present: new Set(values.keys()) } }, signal: input.signal };
-  const withhold = [...TRIAL_WITHHELD_ENV];
+  const withhold = [...SANDBOX_WITHHELD_ENV];
   const leaseSetup = setup ? { command: setup.command, envScope: { provide: setup.requires?.env ?? [], withhold } } : undefined;
   const root = scratchCloneRoot();
   const clone = path.join(root, 'r');

@@ -28,7 +28,7 @@ const RunFileSchema = z.object({
 const DoneSchema = z.object({ outcome: z.string(), end: z.string(), benchmark: z.object({ text: z.string() }) }).passthrough();
 const EndRecordSchema = z.object({ status: z.string(), benchmark: z.object({ trials: z.array(z.unknown()) }).passthrough() }).passthrough();
 const CAPTION = 'These results hold for these tasks, this run and this machine.';
-const NO_SANDBOX = 'This machine is not declared a sandbox, so benchmark trials did not run. Run benchmarks in CI or a container, and declare it with --sandbox.';
+const NO_SANDBOX = 'Step "baselines.fix" requires strict isolation, and the local driver here is not a sandbox. Run it in CI or a container, and declare it with --sandbox or workflows.sandbox: true.';
 const USER_SCOPE = '--team-ref pins one workspace, but this team also reaches it through user scope, where every workspace shares one copy. Remove the user-scope install, or turn off inheritUserScope, to pin a workspace.';
 
 const TWO_BY_TWO = `schemaVersion: v1alpha1
@@ -88,7 +88,7 @@ describe('benchmark on the local driver', () => {
       trials: [{ order: 1, repetition: 1, task: 'fix', arm: 'claude', step: 'trials.r1.fix.claude.prompt' }],
     });
     expect(leafSteps(stored.definition.steps)).toEqual(['baselines.fix', 'trials.r1.fix.claude.prompt', 'trials.r1.fix.claude.check', 'settled']);
-    expect(next).toMatchObject({ data: { wait: { held: [{ step: 'baselines.fix', missing: ['trials', 'sandbox', 'prepare'] }] } } });
+    expect(next).toMatchObject({ data: { wait: { held: [{ step: 'baselines.fix', missing: ['isolation', 'trials', 'prepare', 'env'] }] } } });
     expect(pulled.code, said(pulled)).toBe(0);
     expect(fs.readFileSync(path.join(fixture.teamClone, 'benchmarks', 'fix', 'tasks', 'fix.yaml'), 'utf8')).toContain('Change the answer.');
     expect(fixture.runFile(run)).toEqual(beforePull);
@@ -167,8 +167,8 @@ describe('benchmark on the local driver', () => {
 
     expect(started.code, said(started)).toBe(0);
     expect(record.benchmark.trials).toEqual([expect.objectContaining({ arm: 'claude', result: 'passed' })]);
-    expect(occurrences(started.stderr, NO_SANDBOX)).toBe(0);
-    expect(occurrences(again.stderr, NO_SANDBOX)).toBe(1);
+    expect(again.code).toBe(1);
+    expect(envelope(again).error).toEqual({ code: 'requirement_unmet', message: NO_SANDBOX });
   }, 120_000);
 
   it('no sandbox', async () => {
@@ -176,14 +176,9 @@ describe('benchmark on the local driver', () => {
     fixtures.push(fixture);
 
     const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
-    const done = DoneSchema.parse(envelope(started).data?.done);
-    const record = EndRecordSchema.parse(fixture.endRecord(String(done.run)));
 
-    expect(started.code, said(started)).toBe(0);
-    expect(done).toMatchObject({ outcome: 'succeeded', end: 'settled' });
-    expect(occurrences(started.stderr, NO_SANDBOX)).toBe(1);
-    expect(record.benchmark.trials).toEqual([expect.objectContaining({ arm: 'claude', result: 'not_run' })]);
-    expect(done.benchmark.text).toContain('| claude | claude | tool default (team) | 1 | 0 | 0 | 0 | 0 | 1 | 0 | 0 | 0 | 0% (0/1) |');
+    expect(started.code).toBe(1);
+    expect(envelope(started)).toEqual({ error: { code: 'requirement_unmet', message: NO_SANDBOX } });
     expect(fixture.toolLaunches()).toEqual([]);
   }, 120_000);
 

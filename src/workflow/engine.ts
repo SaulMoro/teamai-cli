@@ -56,10 +56,12 @@ import type {
   StepLease,
   StepOutcome,
   WorkflowEnvelope,
+  WorkflowDefinition,
   WorkflowFailure,
   WorkflowStep,
 } from './types.js';
 import { hasAction } from './types.js';
+import { describeWorkflow } from './describe.js';
 import { benchmarkTable, formatBenchmarkTable, type BenchmarkTable } from '../benchmark/table.js';
 import { TrialLimitSchema, type TrialLimit } from '../benchmark/terms.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
@@ -992,7 +994,7 @@ export async function startRun(
   config: LocalConfig,
   name: string,
   inputs: unknown,
-  { secrets, ...options }: { secrets: Record<string, string>; runMode?: RunMode; driver?: DriverIdentity; base?: RunState['base']; checkout?: string; timeout?: number },
+  { secrets, ...options }: { secrets: Record<string, string>; runMode?: RunMode; driver?: DriverIdentity; base?: RunState['base']; checkout?: string; timeout?: number; alone?: DriverCan },
 ): Promise<WorkflowEnvelope> {
   const cached = await loadCachedWorkflow(config, name);
   if (!cached) {
@@ -1021,14 +1023,17 @@ export async function startRun(
 
 /**
  * Creates a run of a definition the caller already built and checked. The run file is written only when it would keep
- * what it was given unmasked. `secrets` are what the caller resolved for the operation.
+ * what it was given unmasked. `secrets` are what the caller resolved for the operation. `alone`: what the run's only
+ * driver, the local one, gives strict requirements; a start with a step it could never take for them is refused.
  */
 export async function createRun(
   config: LocalConfig,
-  { secrets, driver, ...input }: Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'runMode' | 'definition' | 'workflows' | 'scorers' | 'benchmark' | 'base' | 'checkout' | 'timeout'>
-    & Required<Pick<RunState, 'origin'>> & { secrets: Record<string, string>; driver?: DriverIdentity },
+  { secrets, driver, alone, ...input }: Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'runMode' | 'definition' | 'workflows' | 'scorers' | 'benchmark' | 'base' | 'checkout' | 'timeout'>
+    & Required<Pick<RunState, 'origin'>> & { secrets: Record<string, string>; driver?: DriverIdentity; alone?: DriverCan },
 ): Promise<WorkflowEnvelope> {
   const workflows = input.workflows ?? {};
+  const unmet = alone && strictlyUnmet(input.definition, workflows, alone);
+  if (unmet) return error('requirement_unmet', unmet);
   const scorers = input.scorers ?? {};
   // A benchmark's definition is generated from its suite's files, so a secret in it is named by the suite.
   const pinned = Object.fromEntries([
@@ -1106,7 +1111,7 @@ interface OfferContext {
  * every lease on a copy, and the driver runs it when it creates the copy or the copy's setup never finished.
  */
 function offerTerms(
-  run: RunState, id: string, { scope, step }: { scope: Scope; step: WorkflowStep }, plan: WorkspacePlan | undefined, context: OfferContext,
+  id: string, { scope, step }: { scope: Scope; step: WorkflowStep }, plan: WorkspacePlan | undefined, context: OfferContext,
 ): Negotiation {
   return negotiate({
     step: id,
@@ -1120,10 +1125,26 @@ function offerTerms(
     ...(step.maxTurns !== undefined ? { maxTurns: step.maxTurns } : {}),
     ...(plan?.contract && scope.setup ? { setup: scope.setup } : {}),
     ...(step.tool !== undefined ? { tool: step.tool } : {}),
-    ...(step.trial ? { trial: { withhold: run.benchmark?.withhold ?? [] } } : {}),
+    trial: step.trial !== undefined,
     clone: plan?.contract?.mode !== 'read-only' && plan?.contract?.clone !== undefined,
     prepare: context.prepare,
   }, context.can, context.allow, context.facts);
+}
+
+/**
+ * Why the local driver, which gives strict requirements `can`, could never take a step of `definition`, as describe
+ * holds it: the first step it lacks a strict `isolation` or `network` for.
+ */
+function strictlyUnmet(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, can: DriverCan): string | undefined {
+  const none = new Set<string>();
+  const { facts } = describeWorkflow({ definition, source: 'team', workflows, ceiling: 1, can, allow: {}, env: { declared: none, secrets: none, present: none } });
+  for (const { step, missing } of facts.held) {
+    if (missing.includes('isolation')) {
+      return `Step "${step}" requires strict isolation, and the local driver here is not a sandbox. Run it in CI or a container, and declare it with --sandbox or workflows.sandbox: true.`;
+    }
+    if (missing.includes('network')) return `Step "${step}" strictly requires no network, which the local driver cannot deny. Run it with a driver that declares can.network.`;
+  }
+  return undefined;
 }
 
 /** Why a step that names `tool` fails in a run whose only driver cannot launch it. */
@@ -1163,8 +1184,9 @@ export interface NextOptions {
   prepare?: boolean;
   /**
    * Process-only: the caller is the run's only driver, as the local driver is. A step that names a tool it cannot launch
-   * fails `tool_unavailable` at once, and a trial step it cannot take for the trial gates (sandbox, prepare, trials) is
-   * skipped, so its trial reads `not_run`. For any other driver both stay pending, a trial until the suite's timeout.
+   * fails `tool_unavailable` at once, and a trial step it cannot take only for the trial gates (prepare, trials) is
+   * skipped, so its trial reads `not_run`. For any other driver both stay pending, a trial until the suite's timeout. A
+   * strict requirement it lacks holds a trial too, as a local start it refuses.
    */
   alone?: boolean;
 }
@@ -1370,13 +1392,13 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
             settledOne = true;
             break;
           }
-          const terms = offerTerms(run, state.id, located, plan, context);
+          const terms = offerTerms(state.id, located, plan, context);
           if (terms.kind === 'hold' && options.alone && definition.tool !== undefined && terms.missing.includes('tools')) {
             failStep(state, toolUnavailable(state.id, definition.tool), run.revision);
             settledOne = true;
             break;
           }
-          if (terms.kind === 'hold' && options.alone && definition.trial) {
+          if (terms.kind === 'hold' && options.alone && definition.trial && terms.missing.every((missing) => missing === 'trials' || missing === 'prepare')) {
             skip(state, run.revision);
             settledOne = true;
             continue;
@@ -1411,7 +1433,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           driver, modes: can.workspace, base: run.base ?? options.base,
         }, true);
         const offered = plan.fail ? undefined : plan;
-        const terms = offerTerms(run, leased.id, located, offered, context);
+        const terms = offerTerms(leased.id, located, offered, context);
         // A driver that can no longer run its lease gives it up, so the step waits for one that can instead of looping.
         // No step has run in an unused copy, so the driver gives up the copy too, and another driver may take the step,
         // unless the driver still holds another lease in it.

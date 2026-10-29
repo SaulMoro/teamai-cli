@@ -1097,6 +1097,44 @@ steps:
     expect(result.definition.steps[0]?.requires).toEqual({ network: true, isolation: 'sandbox' });
   });
 
+  it('refuses a step under a strict sandbox whose requires.env names a credential the sandbox withholds', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Build it.
+defaults:
+  requires: { isolation: sandbox, strict: true }
+steps:
+  - id: plan
+    prompt: Plan it.
+    requires: { env: [GH_TOKEN] }
+  - id: ship
+    needs: [plan]
+    workflow:
+      steps:
+        - id: push
+          command: git push
+          requires: { env: [NPM_TOKEN, SSH_AUTH_SOCK] }
+`);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.diagnostics.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:9: field "steps[0].requires.env": steps[0].requires.env names GH_TOKEN, which the strict sandbox it runs in withholds from every step. Remove it from requires.env, or drop strict.',
+      'workflows/build.yaml:16: field "steps[1].workflow.steps[0].requires.env": steps[1].workflow.steps[0].requires.env names SSH_AUTH_SOCK, which the strict sandbox it runs in withholds from every step. Remove it from requires.env, or drop strict.',
+    ]);
+  });
+
+  it('accepts a credential in requires.env under a sandbox that is not strict', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Build it.
+steps:
+  - id: plan
+    prompt: Plan it.
+    requires: { isolation: sandbox, env: [GH_TOKEN] }
+`);
+    expect(result.ok).toBe(true);
+  });
+
   it('reports a requires key this version does not know as unknown_key, a value of the wrong type, and requires on a step with no action', () => {
     const result = parse(`schemaVersion: v1alpha1
 name: build
@@ -1116,7 +1154,7 @@ ends: { shipped: succeeded }
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.diagnostics.map(formatDiagnostic)).toEqual(expect.arrayContaining([
-      'workflows/build.yaml:5: field "defaults.requires": defaults.requires must map network, isolation, env to values',
+      'workflows/build.yaml:5: field "defaults.requires": defaults.requires must map network, isolation, env, strict to values',
       'workflows/build.yaml:9: field "steps[0].requires.network": steps[0].requires.network: Expected boolean, received string',
       expect.stringContaining('field "steps[0].requires.isolation": steps[0].requires.isolation: Invalid enum value'),
       expect.stringContaining('field "steps[1].requires": step "done" has no action'),

@@ -18,7 +18,7 @@ import type { DriverIdentity } from '../workflow/types.js';
 import { benchmarkRunConfig, RUN_START, RUN_TEAM, settleBaselines, startBenchmarkRun } from './helpers/benchmark-fixture.js';
 
 const driver: DriverIdentity = { kind: 'external', machine: 'ci', workspace: '/work' };
-const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
+const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, tools: ['claude'], trials: ['claude'] };
 const dirs: string[] = [];
 const HeldSchema = z.object({ data: z.object({ wait: z.object({ held: z.array(z.unknown()) }) }) });
 const LeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number() }) }) });
@@ -62,7 +62,7 @@ async function leasePrompt(config: LocalConfig, runId: string): Promise<{ attemp
 describe('benchmark plan run', () => {
   it.each([
     ['trials', { ...can, trials: [] }, true],
-    ['sandbox', { ...can, isolation: 'none' as const }, true],
+    ['isolation', { ...can, isolation: 'none' as const }, true],
     ['prepare', can, false],
   ])('holds a task baseline, which runs before any trial, for a driver that lacks %s', async (missing, offered, prepare) => {
     const { config, runId } = await startFix();
@@ -307,7 +307,7 @@ describe('benchmark plan run', () => {
   it('settles at once every baseline and trial its only driver cannot take, so the run ends', async () => {
     const { config, runId } = await startFix({ tasks: 2, arms: 2, repetitions: 2 });
 
-    const next = await leaseNext(config, runId, driver, { can: { ...can, isolation: 'none' }, prepare: true, alone: true });
+    const next = await leaseNext(config, runId, driver, { can: { ...can, trials: [] }, prepare: true, alone: true });
 
     const run = await readRun(config, runId);
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
@@ -316,6 +316,15 @@ describe('benchmark plan run', () => {
       tasks: [{ id: 't01', baseline: 'not_run' }, { id: 't02', baseline: 'not_run' }],
       trials: Array(8).fill(expect.objectContaining({ result: 'not_run' })),
     });
+  });
+
+  it('holds every baseline and trial from its only driver when that driver is not a sandbox, rather than settling them', async () => {
+    const { config, runId } = await startFix({ tasks: 2 });
+
+    const next = await leaseNext(config, runId, driver, { can: { ...can, isolation: 'none' }, prepare: true, alone: true });
+
+    expect(next).toMatchObject({ data: { wait: { held: [{ step: 'baselines.t01', missing: ['isolation'] }, { step: 'baselines.t02', missing: ['isolation'] }] } } });
+    expect(await readRun(config, runId)).toMatchObject({ status: 'running', steps: expect.arrayContaining([expect.objectContaining({ id: 'baselines', status: 'running' })]) });
   });
 
   it('leases its only driver the trials it can take, and settles the others at once', async () => {
