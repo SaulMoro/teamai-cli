@@ -261,7 +261,7 @@ async function reportPrompt({ config, runId, report, secrets, file, terms }: {
     return error('invalid_report', `Attempt ${report.attempt} of step "${leased.id}" has no prepared trial on this machine. Ask for it with teamai workflow next --prepare, and report the lease that answers.`);
   }
   const saved = path.join(receipt.root, 'saved');
-  const scoped = await stepEnvironment(new Map(), { provide: [], withhold: receipt.state.withhold });
+  const scoped = await stepEnvironment(NO_TEAM_ENV, { provide: [], withhold: receipt.state.withhold });
   if (!scoped.ok) return { error: scoped.failure };
   const expiresAt = leaseDeadline(run, leased);
   const clone = trialClone(receipt.root, scoped.env, expiresAt);
@@ -514,7 +514,7 @@ async function preparePrompt(trial: TrialCall, lease: PromptLease): Promise<Prep
   await writeReceipt(file, { v: 1, copy, root, state: { kind: 'preparing', attempt: lease.attempt } });
   progress(trial, lease.trial, { kind: 'preparing' });
   const withhold = (lease.envScope ?? NO_ENV).withhold;
-  const scoped = await stepEnvironment(new Map(), { provide: [], withhold });
+  const scoped = await stepEnvironment(NO_TEAM_ENV, { provide: [], withhold });
   if (!scoped.ok) return { ok: false, failure: scoped.failure, receipt };
   const clone = trialClone(root, scoped.env, lease.expiresAt);
   const cloned = await freshClone(root, lease.trial.startingCommit, trial.sources, lease.expiresAt);
@@ -630,7 +630,7 @@ async function prepareInstall(trial: TrialCall, root: string, lease: PromptLease
   await createProjectToolRoots({ config, tools: [tool] });
   const entry = resolveCliEntry();
   if (!entry) return failed('The teamai CLI that runs this benchmark could not be found, so the trial\'s own teamai pull could not run.');
-  const scoped = await stepEnvironment(trial.env.values, { provide: [], withhold: lease.envScope?.withhold ?? [] });
+  const scoped = await stepEnvironment(trial.env, { provide: [], withhold: lease.envScope?.withhold ?? [] });
   if (!scoped.ok) return { ok: false, failure: scoped.failure };
   const env: NodeJS.ProcessEnv = { ...scoped.env, HOME: home, USERPROFILE: home };
   for (const name of TOOL_HOME_VARIABLES) delete env[name];
@@ -654,7 +654,7 @@ async function prepareInstall(trial: TrialCall, root: string, lease: PromptLease
 /** Setup with only its own keys, as the lease scopes them. */
 async function setupIn(trial: Runner, dir: string, setup: LeaseSetup, expiresAt: string | undefined): Promise<WorkflowFailure | undefined> {
   const scope = setup.envScope ?? NO_ENV;
-  const scoped = await stepEnvironment(trial.env.values, scope);
+  const scoped = await stepEnvironment(trial.env, scope);
   if (!scoped.ok) return scoped.failure;
   return runSetup({ command: setup.command, dir, env: scoped.env, keys: scope.provide, ...(trial.signal ? { signal: trial.signal } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}) });
 }
@@ -714,7 +714,10 @@ async function runBaseline(trial: TrialCall, lease: BaselineLease): Promise<Work
 export type CheckRun = Extract<ProgressEvent, { kind: 'check' | 'error' }>;
 
 /** What running setup or a check reads of a call: the env values it gives and the signal that stops it. */
-type Runner = { env: Pick<WorkflowEnv, 'values'>; signal: AbortSignal | undefined };
+type Runner = { env: Pick<WorkflowEnv, 'values' | 'facts'>; signal: AbortSignal | undefined };
+
+/** No team env: for a step environment that only withholds keys. */
+const NO_TEAM_ENV: Pick<WorkflowEnv, 'values' | 'facts'> = { values: new Map(), facts: { declared: new Set(), secrets: new Set(), present: new Set() } };
 
 /**
  * `prepare`, then the check command in `clone` with the lease's env, bounded by the run's deadline. `prepare` gets that
@@ -722,7 +725,7 @@ type Runner = { env: Pick<WorkflowEnv, 'values'>; signal: AbortSignal | undefine
  * its signal.
  */
 async function checkIn(trial: Runner, lease: Pick<CheckLease, 'command' | 'envScope' | 'expiresAt'>, clone: string, prepare: (env: NodeJS.ProcessEnv) => Promise<WorkflowFailure | undefined>): Promise<CheckRun> {
-  const scoped = await stepEnvironment(trial.env.values, lease.envScope ?? NO_ENV);
+  const scoped = await stepEnvironment(trial.env, lease.envScope ?? NO_ENV);
   if (!scoped.ok) return { kind: 'error', failure: scoped.failure };
   const failure = await prepare(scoped.env);
   if (failure) return { kind: 'error', failure };
@@ -745,7 +748,8 @@ export async function tryCheckAt(input: {
   sources: readonly string[]; expiresAt: string; signal?: AbortSignal;
 }): Promise<CheckRun> {
   const { commit, startingCommit, protect, add, setup, sources, expiresAt } = input;
-  const runner: Runner = { env: { values: new Map(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)) }, signal: input.signal };
+  const values = new Map(Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  const runner: Runner = { env: { values, facts: { declared: new Set(), secrets: new Set(), present: new Set(values.keys()) } }, signal: input.signal };
   const withhold = [...TRIAL_WITHHELD_ENV];
   const leaseSetup = setup ? { command: setup.command, envScope: { provide: setup.requires?.env ?? [], withhold } } : undefined;
   const root = newRoot();

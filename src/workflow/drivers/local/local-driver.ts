@@ -606,7 +606,7 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
   const { tool, model, effort, limits } = lease.trial;
   const reported = { attempt: lease.attempt, revision: lease.revision, driver, tool };
   if (!isLaunchTool(tool)) return { ...reported, ...failureReport({ code: 'tool_unsupported', message: `The local workflow tool "${tool}" is not supported` }) };
-  const scoped = await stepEnvironment(env.values, lease.envScope);
+  const scoped = await stepEnvironment(env, lease.envScope);
   if (!scoped.ok) return { ...reported, ...failureReport(scoped.failure) };
   let result: LocalToolResult;
   const family = launchAdapterIdOf(tool);
