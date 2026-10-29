@@ -157,7 +157,7 @@ When the fix brought the test that proves it, list that test file in `check.add`
 step                          test/auth/refresh.test.ts
 the agent's clone             absent
 trial check                   protect restored, then written from 9a1d4e7
-baseline at 3f2c9a7           written from 9a1d4e7 before setup: the check must fail
+baseline at 3f2c9a7           written from 9a1d4e7: the check must fail
 --try at 3f2c9a7              written from 9a1d4e7: the check must fail
 --try at 9a1d4e7              protect restored, then written from 9a1d4e7: the check must pass
 ```
