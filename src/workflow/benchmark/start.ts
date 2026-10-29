@@ -6,6 +6,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { isLabelShaped, isNameShaped, observeCheckout } from '../../agent-observation.js';
+import { loadLocalConfigForScope } from '../../config.js';
 import { isModelAlias, loadModelAliases, loadTeamModelAliases, noModelCause, noModelReason, resolveModelValue, type ModelAliases, type ModelResolution, type NoModel } from '../../models/aliases.js';
 import { pinScorers } from '../../scorers/cache.js';
 import { resolveTeamRef } from '../../team-ref.js';
@@ -19,7 +20,7 @@ import { formatDiagnostic } from '../parse.js';
 import { git } from '../worktree.js';
 import { addedOf, compilePlan, freezePlan, runSourceHash, type PlannedArm } from './plan.js';
 import { parseSuite, type Arm, type Suite, type TaskJudge } from './suite.js';
-import type { Added, TrialSelection } from './terms.js';
+import type { Added, ArmTeam, TrialSelection } from './terms.js';
 import { commitCacheOf, commitCheckFiles, tryCheckAt, type CheckRun } from './trial.js';
 
 export interface BenchmarkStart {
@@ -56,12 +57,12 @@ export async function startBenchmark(config: LocalConfig, name: string, options:
   let aliases: Promise<ModelAliases> | undefined;
   const loadAliases = (): Promise<ModelAliases> => (aliases ??= armAliases(config, revision, options.memberAliases));
   const [firstArm, ...otherArms] = found.arms;
-  const first = await resolveArm(firstArm, revision, loadAliases);
-  if (!first.ok) return error('arm_model_missing', first.message);
+  const first = await plannedArm(config, firstArm, revision, loadAliases);
+  if (!first.ok) return first.refused;
   const rest: PlannedArm[] = [];
   for (const arm of otherArms) {
-    const resolved = await resolveArm(arm, revision, loadAliases);
-    if (!resolved.ok) return error('arm_model_missing', resolved.message);
+    const resolved = await plannedArm(config, arm, revision, loadAliases);
+    if (!resolved.ok) return resolved.refused;
     rest.push(resolved.arm);
   }
   const unpublishable = [first.arm, ...rest].map(unpublishableArm).find((message) => message !== undefined);
@@ -101,6 +102,54 @@ export async function startBenchmark(config: LocalConfig, name: string, options:
 }
 
 type ArmResolution = { ok: true; arm: PlannedArm } | { ok: false; message: string };
+type Refused = { ok: false; refused: WorkflowEnvelope };
+
+/** The arm as the plan freezes it, its team assets resolved before its model, or why start refuses it. */
+async function plannedArm(config: LocalConfig, arm: Arm, pulled: string, aliases: () => Promise<ModelAliases>): Promise<{ ok: true; arm: PlannedArm } | Refused> {
+  const team = await resolveTeam(config, arm, pulled);
+  if (!team.ok) return team;
+  const resolved = await resolveArm(arm, team.team, aliases);
+  return resolved.ok ? resolved : { ok: false, refused: error('arm_model_missing', resolved.message) };
+}
+
+/**
+ * The team assets of `arm` as the plan freezes them: a ref resolved, as `pull --team-ref` resolves it, to a commit on the
+ * team remote; each skill it runs without found at the pulled revision. An arm without team assets is refused on a
+ * machine whose user-scope install delivers to its tool, since the tool would read those assets from the home.
+ */
+async function resolveTeam(config: LocalConfig, { name, tool, team }: Arm, pulled: string): Promise<{ ok: true; team: ArmTeam } | Refused> {
+  switch (team.kind) {
+    case 'pulled':
+      return { ok: true, team: { kind: 'pulled', revision: pulled } };
+    case 'none': {
+      const user = await loadLocalConfigForScope('user');
+      if (user && (user.enabledAgents === undefined || user.enabledAgents.includes(tool))) {
+        return { ok: false, refused: error('arm_team_unclean', `Arm "${name}" runs without team assets, and this machine's user-scope teamai install delivers team assets to ${tool} in your home, where its trials would read them. Start the benchmark on a machine where teamai is installed only in workspace scope.`) };
+      }
+      return { ok: true, team: { kind: 'none' } };
+    }
+    case 'ref': {
+      const commit = await resolveTeamRef(config.repo.localPath, team.ref).then((resolved) => resolved.commit, () => undefined);
+      if (commit === undefined) {
+        return { ok: false, refused: error('arm_team_unresolved', `Arm "${name}" runs on team ref "${team.ref}", which is no branch, tag or commit of this checkout's team repo. Fetch it, or fix the arm's team, push it, run teamai pull, and start again.`) };
+      }
+      return { ok: true, team: { kind: 'ref', ref: team.ref, revision: commit } };
+    }
+    case 'without': {
+      const listed = await git(config.repo.localPath, ['ls-tree', '-r', '--name-only', pulled]);
+      const skills = new Set(listed.stdout.split('\n').flatMap((file) => /(?:^|\/)skills\/([^/]+)\/SKILL\.md$/.exec(file)?.[1] ?? []));
+      const missing = team.skills.find((skill) => !skills.has(skill));
+      if (listed.code !== 0 || missing !== undefined) {
+        return { ok: false, refused: error('arm_team_unresolved', `Arm "${name}" runs without skill "${missing ?? team.skills[0]}", and the team revision this checkout pulled has no skill of that name. Fix the arm's team, push it, run teamai pull, and start again.`) };
+      }
+      return { ok: true, team: { kind: 'without', skills: team.skills, revision: pulled } };
+    }
+    default: {
+      const unhandled: never = team;
+      return unhandled;
+    }
+  }
+}
 
 /** What a member can do about an arm whose model gives its tool none. */
 const NO_MODEL_FIX = {
@@ -115,8 +164,8 @@ const NO_MODEL_FIX = {
  * written. An alias that gives the tool no model refuses the start. `source` is `member` when the member's own entry,
  * or their model switch, decided the model.
  */
-async function resolveArm({ name, tool, model }: Arm, teamRevision: string, aliases: () => Promise<ModelAliases>): Promise<ArmResolution> {
-  if (model === undefined) return { ok: true, arm: { name, tool, source: 'team', teamRevision } };
+async function resolveArm({ name, tool, model }: Arm, team: ArmTeam, aliases: () => Promise<ModelAliases>): Promise<ArmResolution> {
+  if (model === undefined) return { ok: true, arm: { name, tool, source: 'team', team } };
   const loaded = await aliases();
   const alias = isModelAlias(loaded, model);
   // An alias maps only the tools teamai knows, so it gives any other tool no model; a model name passes as written.
@@ -125,7 +174,7 @@ async function resolveArm({ name, tool, model }: Arm, teamRevision: string, alia
     return { ok: false, message: `Arm "${name}" uses ${alias ? `model alias "${model}"` : `model "${model}"`}, which ${noModelCause(resolution, tool)}. ${NO_MODEL_FIX[noModelReason(resolution)]}` };
   }
   const source = resolution.step === 'local' || resolution.step === 'switched' ? 'member' : 'team';
-  return { ok: true, arm: { name, tool, model: resolution.model, ...(resolution.effort !== undefined ? { effort: resolution.effort } : {}), source, teamRevision } };
+  return { ok: true, arm: { name, tool, model: resolution.model, ...(resolution.effort !== undefined ? { effort: resolution.effort } : {}), source, team } };
 }
 
 /**

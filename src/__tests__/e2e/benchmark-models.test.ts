@@ -117,9 +117,9 @@ describe.each(DRIVERS)('benchmark arm models on $name', ({ run }) => {
     expect(agentOf('codex')).toMatchObject({ tool: { name: 'codex' }, model: { requested: 'gpt-strong-1' }, effort: { requested: 'high' } });
     const record = RecordSchema.parse(fixture.endRecord(runId)).benchmark;
     expect(record.arms).toEqual([
-      { name: 'strong', tool: 'claude', model: 'claude-strong-1', effort: 'high', source: 'team', teamRevision: expect.any(String) },
-      { name: 'fast', tool: 'claude', model: 'claude-fast-1', source: 'team', teamRevision: expect.any(String) },
-      { name: 'codex', tool: 'codex', model: 'gpt-strong-1', effort: 'high', source: 'team', teamRevision: expect.any(String) },
+      { name: 'strong', tool: 'claude', model: 'claude-strong-1', effort: 'high', source: 'team', team: { kind: 'pulled', revision: expect.any(String) } },
+      { name: 'fast', tool: 'claude', model: 'claude-fast-1', source: 'team', team: { kind: 'pulled', revision: expect.any(String) } },
+      { name: 'codex', tool: 'codex', model: 'gpt-strong-1', effort: 'high', source: 'team', team: { kind: 'pulled', revision: expect.any(String) } },
     ]);
     expect(record.trials.map(({ result, durationMs }) => ({ result, durationMs }))).toEqual(Array.from({ length: 3 }, () => ({ result: 'passed', durationMs: expect.any(Number) })));
     expect(record.trials.find((trial) => trial.arm === 'strong')).toMatchObject({ tokens: { input: 4, output: 2 }, cost: { amount: 0.25, unit: 'USD' } });

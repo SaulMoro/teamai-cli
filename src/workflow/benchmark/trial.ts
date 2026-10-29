@@ -49,7 +49,7 @@ import { boundedGit, commitWork, recordConfigOverlay, restoreUneditedConfig, sav
 import { baselineOutput, checkVerdict, type CheckVerdict } from './check.js';
 import { trialCopyOf, type BenchmarkPlan } from './plan.js';
 import type { CheckFile, Suite } from './suite.js';
-import { BaselineTermsSchema, CheckTermsSchema, PromptTermsSchema, TRIAL_WITHHELD_ENV, setsLimit, type Added, type PreparedTrialLease, type PromptTerms, type TrialTerms } from './terms.js';
+import { BaselineTermsSchema, CheckTermsSchema, PromptTermsSchema, TRIAL_WITHHELD_ENV, setsLimit, teamRevisionOf, type Added, type PreparedTrialLease, type PromptTerms, type TrialTerms } from './terms.js';
 
 /**
  * `<runsDir>/<run>/trials/<copy>.json`, one per trial copy, the `<arm>` step whose copy the prompt and the check share,
@@ -519,13 +519,17 @@ async function preparePrompt(trial: TrialCall, lease: PromptLease): Promise<Prep
   const clone = trialClone(root, scoped.env, lease.expiresAt);
   const cloned = await freshClone(root, lease.trial.startingCommit, trial.sources, lease.expiresAt);
   if (cloned) return { ok: false, failure: cloned, receipt };
-  const installed = await prepareInstall(trial, root, lease);
-  if (!installed.ok) return { ok: false, failure: installed.failure, receipt };
+  // An arm without team assets gets no install: the clone stays as its starting commit has it.
+  const revision = teamRevisionOf(lease.trial.team);
+  const installed = revision === undefined ? undefined : await prepareInstall(trial, root, lease, revision);
+  if (installed && !installed.ok) return { ok: false, failure: installed.failure, receipt };
   const setupFailed = lease.setup ? await setupIn(trial, clone.dir, lease.setup, lease.expiresAt) : undefined;
   if (setupFailed) return { ok: false, failure: setupFailed, receipt };
   const status = await clone.git(clone.dir, [...HEAD_STATUS]);
   const head = status.code === 0 ? headStateOf(status.stdout) : null;
-  const observed = await observeCheckout({ config: installed.config, tool: lease.trial.tool, cwd: clone.dir, head });
+  const observed = installed
+    ? await observeCheckout({ config: installed.config, tool: lease.trial.tool, cwd: clone.dir, head })
+    : head ? { project: { commit: head.head, dirty: head.dirty } } : {};
   await writeReceipt(file, { v: 1, copy, root, state: { kind: 'prepared', attempt: lease.attempt, branch: lease.workspace.branch, observed, withhold } });
   return { ok: true, cwd: clone.dir, receipt };
 }
@@ -579,16 +583,16 @@ const TOOL_HOME_VARIABLES = [...new Set(Object.keys(TOOLS).filter(isToolId).flat
 const TRIAL_PULL_TIMEOUT_MS = 10 * 60_000;
 
 /**
- * The trial's own teamai install at the arm's team revision, offline, with nothing written outside `root`: a bare repo
+ * The trial's own teamai install at the arm's team revision, `teamRevision`, offline, with nothing written outside `root`: a bare repo
  * holding only that revision, fetched from the member's team clone; the trial's team clone of it; the trial's partition
  * config, written from the frozen selection with every per-machine knob off; then `teamai pull --team-ref` as a child
  * whose HOME is `<root>/h`, so the hooks, shell profiles and env registry a workspace pull writes under HOME land there.
  * The git hooks that pull writes into the clone go again, so neither teamai nor the agent's git runs teamai during the
  * trial, and the delivered files are recorded as the overlay, so they are never the agent's edits.
  */
-async function prepareInstall(trial: TrialCall, root: string, lease: PromptLease): Promise<{ ok: true; config: LocalConfig } | { ok: false; failure: WorkflowFailure }> {
+async function prepareInstall(trial: TrialCall, root: string, lease: PromptLease, teamRevision: string): Promise<{ ok: true; config: LocalConfig } | { ok: false; failure: WorkflowFailure }> {
   const failed = (message: string): { ok: false; failure: WorkflowFailure } => ({ ok: false, failure: { code: 'trial_prepare_failed', message } });
-  const { teamRevision, tool, selection } = lease.trial;
+  const { tool, selection } = lease.trial;
   const clone = path.join(root, 'r');
   const saved = path.join(root, 'saved');
   await fs.mkdir(saved);

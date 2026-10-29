@@ -13,7 +13,7 @@ type RecordedArm = BenchmarkRecord['arms'][number];
 type RecordedTrial = BenchmarkRecord['trials'][number];
 type RecordedStep = NonNullable<WorkflowRunRecord['steps']>[number];
 
-export interface ArmResults extends Pick<RecordedArm, 'tool' | 'model' | 'effort' | 'source'> {
+export interface ArmResults extends Pick<RecordedArm, 'tool' | 'model' | 'effort' | 'source' | 'team'> {
   arm: string;
   planned: number;
   counts: Record<TrialResult, number>;
@@ -140,7 +140,7 @@ export function benchmarkTable(record: BenchmarkTableInput): BenchmarkTable {
       const count = (result: TrialResult): number => own.filter((trial) => trial.result === result).length;
       const counts = { passed: count('passed'), failed: count('failed'), error: count('error'), unscored: count('unscored'), not_run: count('not_run') } satisfies Record<TrialResult, number>;
       return {
-        arm: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), ...(arm.effort ? { effort: arm.effort } : {}), source: arm.source,
+        arm: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), ...(arm.effort ? { effort: arm.effort } : {}), source: arm.source, team: arm.team,
         planned: own.length, counts,
         stoppedByLimit: own.filter((trial) => trial.limit !== undefined).length,
         ...deviationsOf(arm, observed.filter(({ trial }) => trial.arm === arm.name)),
@@ -157,11 +157,13 @@ export function benchmarkTable(record: BenchmarkTableInput): BenchmarkTable {
 
 /** The results, the usage, the task by arm matrix, then the invalid tasks. A median or a total says in parentheses how many values it used. */
 export function benchmarkCells(table: BenchmarkTable): BenchmarkCells {
+  // Every arm on the pulled revision, as most suites run: the column would repeat one commit on every row.
+  const namesTeam = table.results.some(({ team }) => team.kind !== 'pulled');
   return {
     results: {
-      header: ['Arm', 'Tool', 'Model (source)', 'Planned', ...TRIAL_RESULTS.map((result) => RESULT_COLUMNS[result]), 'Stopped by a limit', 'Deviations', 'Not verified', 'Pass rate'],
+      header: ['Arm', 'Tool', 'Model (source)', ...(namesTeam ? ['Team'] : []), 'Planned', ...TRIAL_RESULTS.map((result) => RESULT_COLUMNS[result]), 'Stopped by a limit', 'Deviations', 'Not verified', 'Pass rate'],
       rows: table.results.map((arm) => [
-        arm.arm, arm.tool, `${arm.model ? [arm.model, ...(arm.effort ? [arm.effort] : [])].join(' ') : 'tool default'} (${arm.source})`, String(arm.planned),
+        arm.arm, arm.tool, `${arm.model ? [arm.model, ...(arm.effort ? [arm.effort] : [])].join(' ') : 'tool default'} (${arm.source})`, ...(namesTeam ? [formatTeam(arm.team)] : []), String(arm.planned),
         ...TRIAL_RESULTS.map((result) => String(arm.counts[result])), String(arm.stoppedByLimit), String(arm.deviations), String(arm.notVerified), formatPassRate(arm.passRate),
       ]),
     },
@@ -192,6 +194,24 @@ function passRateOf(trials: readonly RecordedTrial[]): { passRate?: PassRate } {
   return trials.length > 0 ? { passRate: { passed: trials.filter(({ result }) => result === 'passed').length, planned: trials.length } } : {};
 }
 
+/** An arm's team assets: `pulled 62432de`, `main 1a2b3c4`, `62432de without fixer` or `none`. */
+function formatTeam(team: RecordedArm['team']): string {
+  switch (team.kind) {
+    case 'pulled':
+      return `pulled ${team.revision.slice(0, 7)}`;
+    case 'ref':
+      return `${team.ref} ${team.revision.slice(0, 7)}`;
+    case 'without':
+      return `${team.revision.slice(0, 7)} without ${team.skills.join(', ')}`;
+    case 'none':
+      return 'none';
+    default: {
+      const unhandled: never = team;
+      return unhandled;
+    }
+  }
+}
+
 /** Divides before it multiplies, as the documented `jq` command does, so both round an exact half the same way. */
 function formatPassRate(rate: PassRate | undefined): string {
   return rate ? `${Math.round((rate.passed / rate.planned) * 100)}% (${rate.passed}/${rate.planned})` : '-';
@@ -211,11 +231,26 @@ function compareAgent(arm: RecordedArm, observed: AgentObservation): Comparison 
   };
   const comparisons = new Set([
     compare(arm.tool, observed.tool.name),
-    compare(arm.teamRevision, observed.team?.revision),
+    compareTeam(arm.team, observed.team),
     ...(arm.model !== undefined && !isNativeModelAlias(arm.model) ? [compare(arm.model, observed.model?.reported, sameModel)] : []),
   ]);
   if (comparisons.has('deviation')) return 'deviation';
   return comparisons.has('not_verified') ? 'not_verified' : 'match';
+}
+
+/**
+ * Whether the prompt ran on its arm's team assets: the arm's revision, with the skills it runs without left out, or no
+ * team assets at all. A trial of a team arm whose record names no team is not verified; one of an arm without team
+ * assets that names one ran on them.
+ */
+function compareTeam(intended: RecordedArm['team'], recorded: AgentObservation['team']): Comparison {
+  if (intended.kind === 'none') return recorded === undefined ? 'match' : 'deviation';
+  if (recorded === undefined) return 'not_verified';
+  if (recorded.revision !== intended.revision) return 'deviation';
+  if (intended.kind !== 'without') return 'match';
+  if (!recorded.selection) return 'not_verified';
+  const excluded = new Set(recorded.selection.excludedSkills ?? []);
+  return intended.skills.every((skill) => excluded.has(skill)) ? 'match' : 'deviation';
 }
 
 /**

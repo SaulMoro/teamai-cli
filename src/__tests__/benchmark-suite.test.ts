@@ -74,6 +74,52 @@ describe('parseSuite', () => {
     expect(parsed.diagnostics).toEqual([expect.objectContaining({ file: 'benchmarks/fix/suite.yaml', field, message })]);
   });
 
+  it('crosses every value of each matrix key into one arm, named after the values that vary', () => {
+    const parsed = parse(suiteText({ defaults: '{ tool: claude, model: strong }', arms: '', matrix: '{ tool: [claude, codex], team: [pulled, none] }' }));
+
+    expect(parsed).toMatchObject({ ok: true, diagnostics: [] });
+    expect(parsed.ok && parsed.suite.arms).toEqual([
+      { name: 'claude-pulled', tool: 'claude', model: 'strong', team: { kind: 'pulled' } },
+      { name: 'claude-none', tool: 'claude', model: 'strong', team: { kind: 'none' } },
+      { name: 'codex-pulled', tool: 'codex', model: 'strong', team: { kind: 'pulled' } },
+      { name: 'codex-none', tool: 'codex', model: 'strong', team: { kind: 'none' } },
+    ]);
+  });
+
+  it('reads an arm\'s team as the pulled revision, none, a ref of the team repo, or the pulled revision without some skills', () => {
+    const parsed = parse(suiteText({ arms: '[{ name: team }, { name: bare, team: none }, { name: main, team: origin/main }, { name: no-auth, team: { without: [auth-refresh] } }]' }));
+
+    expect(parsed).toMatchObject({ ok: true, diagnostics: [] });
+    expect(parsed.ok && parsed.suite.arms.map(({ name, team }) => ({ name, team }))).toEqual([
+      { name: 'team', team: { kind: 'pulled' } },
+      { name: 'bare', team: { kind: 'none' } },
+      { name: 'main', team: { kind: 'ref', ref: 'origin/main' } },
+      { name: 'no-auth', team: { kind: 'without', skills: ['auth-refresh'] } },
+    ]);
+  });
+
+  it('names a matrix arm after a ref, a model or a skill list with only name characters', () => {
+    const parsed = parse(suiteText({ arms: '', matrix: '{ model: [sonnet-4.5, opus], team: [origin/main, { without: [auth, db] }] }' }));
+
+    expect(parsed.ok && parsed.suite.arms.map(({ name }) => name)).toEqual(['sonnet-4-5-origin-main', 'sonnet-4-5-without-auth-db', 'opus-origin-main', 'opus-without-auth-db']);
+  });
+
+  it.each([
+    ['a suite with both arms and matrix', suiteText({ matrix: '{ tool: [claude, codex] }' }), '(root)', 'a suite has exactly one of arms and matrix'],
+    ['a suite with neither arms nor matrix', suiteText({ arms: '' }), '(root)', 'a suite has exactly one of arms and matrix'],
+    ['a matrix that varies nothing', suiteText({ arms: '', matrix: '{ tool: [claude] }' }), 'matrix', 'the matrix varies no key; list two values or more under tool, model or team'],
+    ['a matrix of 16 arms', suiteText({ arms: '', matrix: '{ tool: [a, b, c, d], model: [e, f, g, h] }' }), 'matrix', 'the matrix makes 16 arms; a suite has 1 to 12'],
+    ['a matrix that names two arms alike', suiteText({ arms: '', matrix: '{ model: [sonnet.5, sonnet-5] }' }), 'matrix', 'the matrix names two arms "sonnet-5"; list values whose names differ'],
+    ['an arm that changes tool and team', suiteText({ arms: '[{ name: baseline }, { name: codex, tool: codex, team: none }]' }), 'arms.1', 'arm "codex" changes tool and team; an arm changes at most one of the defaults keys'],
+    ['a team ref that is not a ref name', suiteText({ arms: '[{ name: baseline }, { name: main, team: "-x" }]' }), 'arms.1.team', 'must be pulled, none, a branch, tag or commit of the team repo, or { without: [<skill>, ...] }'],
+    ['a team without no skill', suiteText({ arms: '[{ name: baseline }, { name: bare, team: { without: [] } }]' }), 'arms.1.team.without', 'lists the skills the arm runs without, at least one'],
+  ])('reports %s at its suite file', (_rule, suite, field, message) => {
+    const parsed = parse(suite);
+
+    expect(parsed.ok).toBe(false);
+    expect(parsed.diagnostics).toEqual([expect.objectContaining({ file: 'benchmarks/fix/suite.yaml', field, message })]);
+  });
+
   it('keeps the limits a suite sets for every trial', () => {
     const parsed = parse(suiteText({ timeout: '45m', trial: '{ timeout: 8m, budget: { tokens: 300000 }, max_turns: 60 }' }));
     const without = parse(suiteText());

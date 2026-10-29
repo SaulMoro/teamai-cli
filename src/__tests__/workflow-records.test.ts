@@ -237,7 +237,7 @@ describe('#1083 workflow run records', () => {
       'judge_runner_gone', 'no_child_agent',
       // Refusals of teamai workflow start --benchmark, before any run exists.
       'team_revision_unpullable', 'benchmark_not_found', 'commit_unreachable', 'check_files_unwritable',
-      'arm_model_missing', 'arm_unpublishable',
+      'arm_model_missing', 'arm_unpublishable', 'arm_team_unresolved', 'arm_team_unclean',
       // Refusals of teamai workflow start --benchmark --try, which tries one task file and creates no run.
       'benchmark_invalid', 'task_try_failed',
       // Refusals of teamai workflow next --prepare where the team a trial runs cannot be pinned; its trials stay for another machine.
@@ -469,7 +469,7 @@ describe('#1083 workflow run records', () => {
     const benchmark = {
       suite: { name: 'fix', sourceHash: 'c'.repeat(64) }, repetitions: 1, baselineTeamRevision: 'b'.repeat(40),
       tasks: [{ id: 'fix', startingCommit: 'a'.repeat(40), sourceHash: 'd'.repeat(64), baseline: 'not_run' as const }],
-      arms: [{ name: 'claude', tool: 'claude', teamRevision: 'b'.repeat(40), source: 'team' as const }],
+      arms: [{ name: 'claude', tool: 'claude', team: { kind: 'pulled' as const, revision: 'b'.repeat(40) }, source: 'team' as const }],
       scorers: [],
       trials: [{ task: 'fix', arm: 'claude', repetition: 1, order: 1, step: 'trials.r1.fix.claude.prompt', result: 'not_run' as const }],
     };
@@ -627,7 +627,7 @@ describe('#1083 workflow stats merge', () => {
     const { statsDeltaRecords } = await import('../workflow/records.js');
     const benchmark = {
       suite: { name: 'fix', sourceHash: 'h1' }, repetitions: 1, baselineTeamRevision: 'abc', scorers: [],
-      tasks: [{ id: 'fix', startingCommit: 'def', sourceHash: 'h2', baseline: 'valid' as const }], arms: [{ name: 'claude', tool: 'claude', source: 'team' as const, teamRevision: 'abc' }],
+      tasks: [{ id: 'fix', startingCommit: 'def', sourceHash: 'h2', baseline: 'valid' as const }], arms: [{ name: 'claude', tool: 'claude', source: 'team' as const, team: { kind: 'pulled' as const, revision: 'a'.repeat(40) } }],
       trials: [{ task: 'fix', arm: 'claude', repetition: 1, order: 1, step: 'trials.r1.fix.claude.prompt', result: 'passed' as const }],
     };
     const existing = { workflows: { runs: 1, succeeded: 1, failed: 0, totalDurationMs: 150000 } };

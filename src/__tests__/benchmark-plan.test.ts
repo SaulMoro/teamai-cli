@@ -91,7 +91,7 @@ describe('benchmark plan run', () => {
     expect(next).toMatchObject({ data: { lease: {
       step: 'trials.r1.t01.a01.prompt',
       prompt: 'Make the test pass.',
-      trial: { kind: 'prompt', task: 't01', arm: 'a01', repetition: 1, order: 1, tool: 'claude', startingCommit: RUN_START, teamRevision: RUN_TEAM },
+      trial: { kind: 'prompt', task: 't01', arm: 'a01', repetition: 1, order: 1, tool: 'claude', startingCommit: RUN_START, team: { kind: 'pulled', revision: RUN_TEAM } },
       workspace: { base: { commit: RUN_START }, configCommit: RUN_START },
     } } });
   });

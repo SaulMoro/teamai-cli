@@ -36,6 +36,23 @@ export const TrialSelectionSchema = z.object({
 export type TrialSelection = z.infer<typeof TrialSelectionSchema>;
 
 /**
+ * The team assets of an arm's trials, as start resolved the suite's `team`: the revision this checkout pulled, a ref of
+ * the team repo at the commit it named then, the pulled revision without some skills, or none.
+ */
+export const ArmTeamSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('pulled'), revision: CommitSchema }).strict(),
+  z.object({ kind: z.literal('ref'), ref: z.string().min(1), revision: CommitSchema }).strict(),
+  z.object({ kind: z.literal('without'), skills: z.array(z.string().min(1)).nonempty(), revision: CommitSchema }).strict(),
+  z.object({ kind: z.literal('none') }).strict(),
+]);
+export type ArmTeam = z.infer<typeof ArmTeamSchema>;
+
+/** The team commit an arm's trials install assets from; undefined for an arm without team assets. */
+export function teamRevisionOf(team: ArmTeam): string | undefined {
+  return team.kind === 'none' ? undefined : team.revision;
+}
+
+/**
  * The limits a suite's `trial` sets on every trial's prompt; an absent key is no limit. The driver that launches the
  * tool enforces them. Reaching one ends the agent's turn, and the trial's check or judge still decides it.
  */
@@ -89,8 +106,8 @@ export const PromptTermsSchema = z.object({
   /** A model name the plan resolved at start, never an alias. Absent: the tool's default model. */
   model: z.string().min(1).optional(),
   effort: z.string().min(1).optional(),
-  /** The team commit the trial's assets come from: the arm's. */
-  teamRevision: CommitSchema,
+  /** The team assets the trial gets: the arm's. */
+  team: ArmTeamSchema,
   selection: TrialSelectionSchema,
   limits: TrialLimitsSchema.optional(),
 }).strict();

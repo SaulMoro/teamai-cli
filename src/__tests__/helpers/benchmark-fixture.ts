@@ -492,7 +492,7 @@ export async function startBenchmarkRun(config: LocalConfig, files: BenchmarkSui
   });
   if (!parsed.ok) return error('benchmark_not_found', parsed.diagnostics.map((diagnostic) => diagnostic.message).join('\n'));
   const { suite } = parsed;
-  const [first, ...rest] = suite.arms.map((arm) => ({ name: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), source: 'team' as const, teamRevision: RUN_TEAM }));
+  const [first, ...rest] = suite.arms.map((arm) => ({ name: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), source: 'team' as const, team: { kind: 'pulled' as const, revision: RUN_TEAM } }));
   const plan = freezePlan({ suite, baselineTeamRevision: RUN_TEAM, selection: { additionalRoles: [], projects: [], excludedSkills: [] }, arms: [first, ...rest], scorers: {} });
   const committed = await commitCheckFiles(commitCacheOf(config, suite.repo), suite);
   if (!committed.ok) return error('check_files_unwritable', committed.failed);

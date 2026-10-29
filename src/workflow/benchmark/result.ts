@@ -12,7 +12,7 @@ import type { StepState } from '../step-state.js';
 import { ReportedUnenforcedSchema } from '../requirements.js';
 import type { RunState } from '../types.js';
 import { baselineStepOf, correctnessScorerName, stepOf, type BenchmarkPlan, type PlannedTask, type PlannedTrial } from './plan.js';
-import { TrialLimitSchema, TrialLimitsSchema } from './terms.js';
+import { ArmTeamSchema, TrialLimitSchema, TrialLimitsSchema } from './terms.js';
 
 export const TRIAL_RESULTS = ['passed', 'failed', 'error', 'unscored', 'not_run'] as const;
 export type TrialResult = (typeof TRIAL_RESULTS)[number];
@@ -35,7 +35,7 @@ export const BenchmarkRecordSchema = z.object({
   tasks: z.array(z.object({ id: z.string(), startingCommit: z.string(), sourceHash: z.string(), baseline: z.enum(BASELINES) })),
   arms: z.array(z.object({
     name: z.string(), tool: z.string(), model: z.string().optional(), effort: z.string().optional(),
-    source: z.enum(['team', 'member']), teamRevision: z.string(),
+    source: z.enum(['team', 'member']), team: ArmTeamSchema,
   })),
   trials: z.array(z.object({
     task: z.string(), arm: z.string(), repetition: z.number().int(), order: z.number().int(), step: z.string(),

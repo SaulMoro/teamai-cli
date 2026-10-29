@@ -51,13 +51,41 @@ const DurationSchema = z.string({ required_error: 'timeout is required: the run\
 });
 
 /**
- * The keys a suite's `defaults` sets and an arm may change. Arm validation reads the key list from this schema, so a new
- * key is added here and nowhere else. Not a workflow's `defaults`.
+ * The team assets an arm's trials get: the team revision this checkout pulled, none at all, a branch, tag or commit of
+ * the team repo that start resolves, or the pulled revision without some of its skills.
+ */
+export type TeamChoice =
+  | { kind: 'pulled' }
+  | { kind: 'none' }
+  | { kind: 'ref'; ref: string }
+  | { kind: 'without'; skills: [string, ...string[]] };
+
+const PULLED: TeamChoice = { kind: 'pulled' };
+const TEAM_HELP = 'must be pulled, none, a branch, tag or commit of the team repo, or { without: [<skill>, ...] }';
+/** A ref as git names one, which a plan and a record carry: no leading "-", no "..", "//" or trailing "/" or ".". */
+const TEAM_REF = /^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._/-]+(?<![/.])$/;
+
+const TeamValueSchema = z.union([
+  z.string().regex(TEAM_REF, TEAM_HELP),
+  z.object({
+    without: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'must be the name of a skill directory')).nonempty('lists the skills the arm runs without, at least one'),
+  }).strict(),
+]).transform((value): TeamChoice => {
+  if (typeof value !== 'string') return { kind: 'without', skills: value.without };
+  if (value === 'pulled') return PULLED;
+  return value === 'none' ? { kind: 'none' } : { kind: 'ref', ref: value };
+});
+
+/**
+ * The keys a suite's `defaults` sets and an arm or the matrix may change. Arm validation reads the key list from this
+ * schema, so a new key is added here and in `MatrixSchema`. Not a workflow's `defaults`.
  */
 const ArmValuesSchema = z.object({
   tool: z.string().min(1),
   /** A model alias from models/aliases.yaml, or a model name. An alias resolves per tool; a name does not. */
   model: z.string().min(1).optional(),
+  /** Absent: the team revision this checkout pulled. */
+  team: TeamValueSchema.optional(),
 }).strict();
 export type ArmValues = z.infer<typeof ArmValuesSchema>;
 type ArmKey = keyof ArmValues;
@@ -65,13 +93,23 @@ const ARM_KEYS = ArmValuesSchema.keyof().options;
 
 const ArmFileSchema = ArmValuesSchema.partial().extend({ name: BenchmarkNameSchema }).strict();
 
+/** Every value of each key crossed with every value of the others, one arm each: what the page compares one key over. */
+const MatrixSchema = z.object({
+  tool: z.array(z.string().min(1)).nonempty().optional(),
+  model: z.array(z.string().min(1)).nonempty().optional(),
+  team: z.array(TeamValueSchema).nonempty().optional(),
+}).strict() satisfies z.ZodType<Partial<Record<ArmKey, unknown>>>;
+type Matrix = z.infer<typeof MatrixSchema>;
+const MAX_MATRIX_ARMS = 12;
+
 const SuiteFileSchema = z.object({
   schemaVersion: z.literal('v1alpha1'),
   name: BenchmarkNameSchema,
   description: z.string().optional(),
   repo: RepoUrlSchema,
   defaults: ArmValuesSchema,
-  arms: z.array(ArmFileSchema).nonempty('a suite has 1 to 6 arms').max(6, 'a suite has 1 to 6 arms'),
+  arms: z.array(ArmFileSchema).nonempty('a suite has 1 to 6 arms').max(6, 'a suite has 1 to 6 arms').optional(),
+  matrix: MatrixSchema.optional(),
   repetitions: z.number().int().min(1).max(10).default(3),
   /** Required: the run's timeout. */
   timeout: DurationSchema,
@@ -91,9 +129,18 @@ const SuiteFileSchema = z.object({
   if (suite.trial?.timeoutMs !== undefined && suite.trial.timeoutMs >= suite.timeout) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['trial', 'timeout'], message: 'trial.timeout must be shorter than timeout, which bounds the whole run' });
   }
+  if ((suite.arms === undefined) === (suite.matrix === undefined)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: [], message: 'a suite has exactly one of arms and matrix' });
+    return;
+  }
+  if (suite.matrix) {
+    const problem = matrixProblem(suite.defaults, suite.matrix);
+    if (problem !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['matrix'], message: problem });
+    return;
+  }
   const seen = new Set<string>();
   let unchanged: string | undefined;
-  suite.arms.forEach((arm, index) => {
+  suite.arms?.forEach((arm, index) => {
     if (seen.has(arm.name)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['arms', index, 'name'], message: `arm "${arm.name}" is named twice; arm names are unique` });
     }
@@ -109,9 +156,59 @@ const SuiteFileSchema = z.object({
   });
 });
 
-/** The defaults keys `arm` sets to a value other than the defaults'. */
+/** The defaults keys `arm` sets to a value other than the defaults'. An absent team is the pulled revision. */
 function changedKeys(defaults: ArmValues, arm: Partial<ArmValues>): ArmKey[] {
-  return ARM_KEYS.filter((key) => arm[key] !== undefined && arm[key] !== defaults[key]);
+  const resolved = { ...defaults, team: defaults.team ?? PULLED };
+  return ARM_KEYS.filter((key) => arm[key] !== undefined && JSON.stringify(arm[key]) !== JSON.stringify(resolved[key]));
+}
+
+/** The arms `matrix` crosses over `defaults`, tool outermost, each named after the values of the keys it varies. */
+function matrixArms(defaults: ArmValues, matrix: Matrix): Arm[] {
+  const tools = matrix.tool ?? [defaults.tool];
+  const models = matrix.model ?? [defaults.model];
+  const teams = matrix.team ?? [defaults.team ?? PULLED];
+  return tools.flatMap((tool) => models.flatMap((model) => teams.map((team): Arm => {
+    const segments = [
+      ...(tools.length > 1 ? [tool] : []),
+      ...(models.length > 1 && model !== undefined ? [model] : []),
+      ...(teams.length > 1 ? [teamSegment(team)] : []),
+    ];
+    return { name: segments.map(nameSegment).join('-'), tool, ...(model !== undefined ? { model } : {}), team };
+  })));
+}
+
+function teamSegment(team: TeamChoice): string {
+  switch (team.kind) {
+    case 'pulled':
+    case 'none':
+      return team.kind;
+    case 'ref':
+      return team.ref;
+    case 'without':
+      return ['without', ...team.skills].join('-');
+    default: {
+      const unhandled: never = team;
+      return unhandled;
+    }
+  }
+}
+
+function nameSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9_-]+/g, '-');
+}
+
+/** Why `matrix` makes no usable set of arms, or undefined when it does. */
+function matrixProblem(defaults: ArmValues, matrix: Matrix): string | undefined {
+  if (!ARM_KEYS.some((key) => (matrix[key]?.length ?? 0) > 1)) return 'the matrix varies no key; list two values or more under tool, model or team';
+  const arms = matrixArms(defaults, matrix);
+  if (arms.length > MAX_MATRIX_ARMS) return `the matrix makes ${arms.length} arms; a suite has 1 to ${MAX_MATRIX_ARMS}`;
+  const names = new Set<string>();
+  for (const { name } of arms) {
+    if (!BENCHMARK_NAME.test(name)) return `the matrix names an arm "${name}", which must be letters, digits, "-" or "_"; list values that start with a letter or digit`;
+    if (names.has(name)) return `the matrix names two arms "${name}"; list values whose names differ`;
+    names.add(name);
+  }
+  return undefined;
 }
 
 /**
@@ -274,8 +371,11 @@ export interface Task {
 }
 
 /** An arm with the defaults applied. */
-export interface Arm extends ArmValues {
+export interface Arm {
   name: string;
+  tool: string;
+  model?: string;
+  team: TeamChoice;
 }
 
 export interface Suite {
@@ -353,13 +453,18 @@ export function parseSuite(input: { suite: SourceFile; tasks: readonly SourceFil
   if (!first) {
     return { ok: false, diagnostics: [{ file: input.suite.relativePath, line: 1, column: 1, field: 'tasks', message: `suite ${file.name} has no valid task` }, ...diagnostics] };
   }
-  const arm = ({ name, ...values }: z.infer<typeof ArmFileSchema>): Arm => ({ name, ...file.defaults, ...values });
-  const [firstArm, ...otherArms] = file.arms;
-  const toolArm = file.arms.find((candidate) => changedKeys(file.defaults, candidate).includes('tool'));
-  const model = file.defaults.model;
-  const warnings = model !== undefined && toolArm && input.isAlias && !input.isAlias(model)
-    ? [diagnosticAt(input.suite.relativePath, lineCounter, document, ['defaults', 'model'], `defaults.model "${model}" is a model name, not an alias in models/aliases.yaml, and arm "${toolArm.name}" changes the tool; use an alias that names a model for each tool`)]
-    : [];
+  const arm = ({ name, ...values }: z.infer<typeof ArmFileSchema>): Arm => ({ name, ...file.defaults, ...values, team: values.team ?? file.defaults.team ?? PULLED });
+  const arms = file.matrix ? matrixArms(file.defaults, file.matrix) : (file.arms ?? []).map(arm);
+  const [firstArm, ...otherArms] = arms;
+  if (!firstArm) return { ok: false, diagnostics: [{ file: input.suite.relativePath, line: 1, column: 1, field: 'arms', message: 'a suite has 1 to 6 arms' }] };
+  const toolArm = file.arms?.find((candidate) => changedKeys(file.defaults, candidate).includes('tool'));
+  const variesTool = toolArm ? `arm "${toolArm.name}" changes the tool` : (file.matrix?.tool?.length ?? 0) > 1 ? 'the matrix varies the tool' : undefined;
+  const named = (model: string | undefined): model is string => model !== undefined && variesTool !== undefined && input.isAlias !== undefined && !input.isAlias(model);
+  const nameWarning = (at: Array<string | number>, field: string, model: string): WorkflowDiagnostic => diagnosticAt(input.suite.relativePath, lineCounter, document, at, `${field} "${model}" is a model name, not an alias in models/aliases.yaml, and ${variesTool}; use an alias that names a model for each tool`);
+  const warnings = [
+    ...(named(file.defaults.model) ? [nameWarning(['defaults', 'model'], 'defaults.model', file.defaults.model)] : []),
+    ...(file.matrix?.model ?? []).flatMap((model, index) => (named(model) ? [nameWarning(['matrix', 'model', index], `matrix.model.${index}`, model)] : [])),
+  ];
   return {
     ok: true,
     suite: {
@@ -368,7 +473,7 @@ export function parseSuite(input: { suite: SourceFile; tasks: readonly SourceFil
       ...(file.description !== undefined ? { description: file.description } : {}),
       repo: file.repo,
       defaults: file.defaults,
-      arms: [arm(firstArm), ...otherArms.map(arm)],
+      arms: [firstArm, ...otherArms],
       repetitions: file.repetitions,
       timeoutMs: file.timeout,
       ...(file.trial ? { trial: file.trial } : {}),

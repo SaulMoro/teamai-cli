@@ -17,7 +17,7 @@ import type { PinnedScorer } from '../../scorers/pin.js';
 import type { WorkflowDefinition, WorkflowStep } from '../types.js';
 import type { Suite, Task, TaskJudge } from './suite.js';
 import type { CommittedSuite } from './trial.js';
-import { BenchmarkNameSchema, CommitSchema, TRIAL_WITHHELD_ENV, TrialLimitsSchema, TrialSelectionSchema, type Added, type PromptTerms, type TrialSelection } from './terms.js';
+import { ArmTeamSchema, BenchmarkNameSchema, CommitSchema, TRIAL_WITHHELD_ENV, TrialLimitsSchema, TrialSelectionSchema, type Added, type PromptTerms, type TrialSelection } from './terms.js';
 
 const Sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 
@@ -30,8 +30,8 @@ const PlannedArmSchema = z.object({
   effort: z.string().refine(isLabelShaped).optional(),
   /** Whose aliases resolved the model: the team's, or the member's with `--member-aliases`. */
   source: z.enum(['team', 'member']),
-  /** The team commit the arm's trials pull. Equal to the baseline for every arm until arms can name another. */
-  teamRevision: CommitSchema,
+  /** The team assets the arm's trials get. */
+  team: ArmTeamSchema,
 }).strict();
 export type PlannedArm = z.infer<typeof PlannedArmSchema>;
 
@@ -266,9 +266,15 @@ function promptTerms(plan: BenchmarkPlan, trial: PlannedTrial, arm: PlannedArm, 
   return {
     kind: 'prompt', task: task.id, arm: arm.name, repetition: trial.repetition, order: trial.order, tool: arm.tool,
     ...(arm.model ? { model: arm.model } : {}), ...(arm.effort ? { effort: arm.effort } : {}),
-    startingCommit: task.startingCommit, teamRevision: arm.teamRevision, selection: plan.selection,
+    startingCommit: task.startingCommit, team: arm.team, selection: selectionOf(plan.selection, arm),
     ...(plan.limits ? { limits: plan.limits } : {}),
   };
+}
+
+/** The run's asset selection, without the skills an arm runs without. */
+function selectionOf(selection: TrialSelection, arm: PlannedArm): TrialSelection {
+  if (arm.team.kind !== 'without') return selection;
+  return { ...selection, excludedSkills: [...new Set([...selection.excludedSkills, ...arm.team.skills])].sort() };
 }
 
 /**

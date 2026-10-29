@@ -63,7 +63,7 @@ describe('benchmark results table', () => {
     const table = benchmarkTable(await onePassedOfTen());
 
     expect(table.results).toEqual([{
-      arm: 'claude', tool: 'claude', source: 'team', planned: 10, counts: { passed: 1, failed: 0, error: 0, unscored: 0, not_run: 9 },
+      arm: 'claude', tool: 'claude', source: 'team', team: { kind: 'pulled', revision: RUN_TEAM }, planned: 10, counts: { passed: 1, failed: 0, error: 0, unscored: 0, not_run: 9 },
       stoppedByLimit: 0, deviations: 0, notVerified: 0, passRate: { passed: 1, planned: 10 },
     }]);
     expect(formatBenchmarkTable(table)).toContain('| claude | claude | tool default (team) | 10 | 1 | 0 | 0 | 0 | 9 | 0 | 0 | 0 | 10% (1/10) |');
@@ -74,7 +74,7 @@ describe('benchmark results table', () => {
 
     const table = benchmarkTable({ ...record, benchmark: { ...record.benchmark, trials: [] } });
 
-    expect(table.results).toEqual([{ arm: 'claude', tool: 'claude', source: 'team', planned: 0, counts: { passed: 0, failed: 0, error: 0, unscored: 0, not_run: 0 }, stoppedByLimit: 0, deviations: 0, notVerified: 0 }]);
+    expect(table.results).toEqual([{ arm: 'claude', tool: 'claude', source: 'team', team: { kind: 'pulled', revision: RUN_TEAM }, planned: 0, counts: { passed: 0, failed: 0, error: 0, unscored: 0, not_run: 0 }, stoppedByLimit: 0, deviations: 0, notVerified: 0 }]);
     expect(formatBenchmarkTable(table)).toContain('| claude | claude | tool default (team) | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | - |');
   });
 
@@ -131,7 +131,7 @@ function recordOf(arms: BenchmarkRecord['arms'], trials: TrialSpec[]): WorkflowR
   };
 }
 
-const CLAUDE_ARM = { name: 'opus', tool: 'claude', model: 'claude-opus-4-1', source: 'team', teamRevision: RUN_TEAM } as const;
+const CLAUDE_ARM = { name: 'opus', tool: 'claude', model: 'claude-opus-4-1', source: 'team', team: { kind: 'pulled', revision: RUN_TEAM } } as const;
 
 describe('benchmark deviations', () => {
   it('counts a trial that contradicts its arm on tool, team revision or concrete model as a deviation, and one missing a value as not verified', () => {
@@ -150,7 +150,7 @@ describe('benchmark deviations', () => {
   });
 
   it("does not compare a tool's own model selector, or the tool's default model, with the model the tool reports", () => {
-    const table = benchmarkTable(recordOf([{ ...CLAUDE_ARM, model: 'opus', effort: 'high' }, { name: 'plain', tool: 'claude', source: 'member', teamRevision: RUN_TEAM }], [
+    const table = benchmarkTable(recordOf([{ ...CLAUDE_ARM, model: 'opus', effort: 'high' }, { name: 'plain', tool: 'claude', source: 'member', team: { kind: 'pulled', revision: RUN_TEAM } }], [
       { agent: { model: { reported: 'claude-opus-4-1-20250805' } } },
       { arm: 'plain', agent: { model: { reported: 'claude-sonnet-4-5-20250929' } } },
       { arm: 'plain', agent: {} },
@@ -162,7 +162,7 @@ describe('benchmark deviations', () => {
   });
 
   it('matches a provider-qualified model reported as requested, with or without its provider, and counts another provider as a deviation', () => {
-    const arm = { name: 'gpt', tool: 'opencode', model: 'openai/gpt-5.2', source: 'team', teamRevision: RUN_TEAM } as const;
+    const arm = { name: 'gpt', tool: 'opencode', model: 'openai/gpt-5.2', source: 'team', team: { kind: 'pulled', revision: RUN_TEAM } } as const;
     const opencode = (reported: string) => ({ agent: { tool: { name: 'opencode' }, model: { reported } } });
     const table = benchmarkTable(recordOf([arm, { ...CLAUDE_ARM, name: 'opus' }], [
       opencode('openai/gpt-5.2'),
@@ -176,9 +176,42 @@ describe('benchmark deviations', () => {
   });
 });
 
+describe('benchmark arm team', () => {
+  const NONE = { name: 'bare', tool: 'claude', source: 'team', team: { kind: 'none' } } as const;
+  const ABLATED: BenchmarkRecord['arms'][number] = { name: 'no-fixer', tool: 'claude', source: 'team', team: { kind: 'without', skills: ['fixer'], revision: RUN_TEAM } };
+  const selection = (excludedSkills?: string[]) => ({ scope: 'project' as const, additionalRoles: [], ...(excludedSkills ? { excludedSkills } : {}) });
+
+  it('counts a trial of an arm without team assets that ran on some, and one that still got a skill its arm runs without, as deviations', () => {
+    const table = benchmarkTable(recordOf([NONE, ABLATED], [
+      { arm: 'bare', agent: { team: undefined } },
+      { arm: 'bare', agent: { team: { revision: RUN_TEAM, localChanges: false } } },
+      { arm: 'no-fixer', agent: { team: { revision: RUN_TEAM, localChanges: false, selection: selection(['fixer']) } } },
+      { arm: 'no-fixer', agent: { team: { revision: RUN_TEAM, localChanges: false, selection: selection([]) } } },
+      { arm: 'no-fixer', agent: { team: { revision: RUN_TEAM, localChanges: false } } },
+    ]));
+
+    expect(table.results).toMatchObject([{ arm: 'bare', planned: 2, deviations: 1, notVerified: 0 }, { arm: 'no-fixer', planned: 3, deviations: 1, notVerified: 1 }]);
+  });
+
+  it('names each arm\'s team assets in a Team column once an arm runs on other assets than the pulled revision', () => {
+    const main = { name: 'main', tool: 'claude', source: 'team', team: { kind: 'ref', ref: 'main', revision: 'c'.repeat(40) } } as const;
+    const pulled = { name: 'pulled', tool: 'claude', source: 'team', team: { kind: 'pulled', revision: RUN_TEAM } } as const;
+
+    const text = formatBenchmarkTable(benchmarkTable(recordOf([pulled, NONE, ABLATED, main], [{ arm: 'pulled' }, { arm: 'bare', agent: { team: undefined } }, { arm: 'no-fixer' }, { arm: 'main' }])));
+    const pulledOnly = formatBenchmarkTable(benchmarkTable(recordOf([pulled], [{ arm: 'pulled' }])));
+
+    expect(text).toContain('| Arm | Tool | Model (source) | Team | Planned |');
+    expect(text).toContain(`| pulled | claude | tool default (team) | pulled ${RUN_TEAM.slice(0, 7)} | 1 |`);
+    expect(text).toContain('| bare | claude | tool default (team) | none | 1 |');
+    expect(text).toContain(`| no-fixer | claude | tool default (team) | ${RUN_TEAM.slice(0, 7)} without fixer | 1 |`);
+    expect(text).toContain('| main | claude | tool default (team) | main ccccccc | 1 |');
+    expect(pulledOnly).toContain('| Arm | Tool | Model (source) | Planned |');
+  });
+});
+
 describe('benchmark limits', () => {
   it('counts the trials a suite limit stopped per arm, and a trial whose driver did not enforce a suite limit as a deviation', () => {
-    const codex = { name: 'codex', tool: 'codex', source: 'team', teamRevision: RUN_TEAM } as const;
+    const codex = { name: 'codex', tool: 'codex', source: 'team', team: { kind: 'pulled', revision: RUN_TEAM } } as const;
     const opus = { agent: { model: { reported: 'claude-opus-4-1' } } };
     const table = benchmarkTable(recordOf([CLAUDE_ARM, codex], [
       { limit: 'timeout', ...opus },
@@ -249,7 +282,7 @@ describe('benchmark usage', () => {
 
     const record = await endRecord(config, runId);
 
-    expect(record.benchmark.arms).toEqual([{ name: 'claude', tool: 'claude', model: 'claude-opus-4-1', source: 'team', teamRevision: RUN_TEAM }]);
+    expect(record.benchmark.arms).toEqual([{ name: 'claude', tool: 'claude', model: 'claude-opus-4-1', source: 'team', team: { kind: 'pulled', revision: RUN_TEAM } }]);
     expect(record.benchmark.trials[0]).toMatchObject({ result: 'error', tokens: { input: 4, output: 2 }, durationMs: 1500, cost: { amount: 0.25, unit: 'USD' } });
     expect(record.benchmark.trials[1]).not.toHaveProperty('durationMs');
     expect(record.benchmark.trials[1]).not.toHaveProperty('cost');

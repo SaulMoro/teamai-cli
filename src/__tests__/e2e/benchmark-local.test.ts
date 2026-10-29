@@ -84,7 +84,7 @@ describe('benchmark on the local driver', () => {
       selection: { additionalRoles: [], projects: [], excludedSkills: [] },
       repetitions: 1,
       tasks: [{ id: 'fix', startingCommit: fixture.startingCommit, judge: 'check' }],
-      arms: [{ name: 'claude', tool: 'claude', teamRevision: teamHead }],
+      arms: [{ name: 'claude', tool: 'claude', team: { kind: 'pulled', revision: teamHead } }],
       trials: [{ order: 1, repetition: 1, task: 'fix', arm: 'claude', step: 'trials.r1.fix.claude.prompt' }],
     });
     expect(leafSteps(stored.definition.steps)).toEqual(['baselines.fix', 'trials.r1.fix.claude.prompt', 'trials.r1.fix.claude.check', 'settled']);
