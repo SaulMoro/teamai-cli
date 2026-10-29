@@ -60,7 +60,6 @@ import type {
   WorkflowStep,
 } from './types.js';
 import { hasAction } from './types.js';
-import type { CheckVerdict } from '../benchmark/check.js';
 import { benchmarkTable, formatBenchmarkTable, type BenchmarkTable } from '../benchmark/table.js';
 import { TrialLimitSchema, type TrialLimit } from '../benchmark/terms.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
@@ -103,11 +102,8 @@ export interface ReportInput {
   unenforced?: ReportedUnenforced;
   /** The suite limit that ended a benchmark trial's prompt, which then succeeded: its check or judge decides the trial. */
   limit?: TrialLimit;
-  /**
-   * Process-only, set by benchmark/trial.ts after it prepared, ran or completed a trial step. Not in REPORT_FIELDS, so
-   * no driver can send it. `verdict` is the check's, classified once (benchmark/check.ts).
-   */
-  trialReport?: { verdict?: CheckVerdict };
+  /** Process-only, set by benchmark/trial.ts after it prepared, ran or completed a trial step. Not in REPORT_FIELDS, so no driver can send it. */
+  trialReport?: Record<string, never>;
 }
 
 /** A protocol rejection that retains its actionable code and message. */
@@ -1951,7 +1947,6 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       ...(step.lease.runMode ? { runMode: step.lease.runMode } : {}),
       ...(outcomes.length > 0 ? { outcomes } : {}),
       ...(report.limit ? { limit: report.limit } : {}),
-      ...(report.trialReport?.verdict ? { verdict: report.trialReport.verdict } : {}),
       installId: install.id,
     };
     if (outcome !== 'released') continueSession(run, report);

@@ -78,7 +78,7 @@ describe('benchmark plan run', () => {
     const next = await leaseNext(config, runId, driver, { can, prepare: true });
 
     expect(next).toMatchObject({ data: { lease: {
-      step: 'baselines.t01', command: 'node test.js', trial: { kind: 'baseline', task: 't01' },
+      step: 'baselines.t01', command: 'teamai benchmark check --baseline', trial: { kind: 'baseline' },
       workspace: { mode: 'new', base: { commit: RUN_START }, clone: { commit: RUN_START, team: { treatment: 'none' } } },
     } } });
   });
@@ -230,6 +230,23 @@ describe('benchmark plan run', () => {
     expect(next).toMatchObject({ data: { done: { run: runId, outcome: 'succeeded', end: 'settled' } } });
   });
 
+  it.each(['passed', 'failed'] as const)('records a trial %s as the check command step it leases after the prompt answers', async (result) => {
+    const { config, runId } = await startFix();
+    const prompt = await leasePrompt(config, runId);
+    await reportAttempt(config, runId, { ...prompt, outcome: 'success', driver, trialReport: {} });
+    const check = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number(), command: z.string() }) }) })
+      .parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+
+    await reportAttempt(config, runId, { attempt: check.attempt, revision: check.revision, outcome: 'success', exitCode: 0, outputs: { result }, driver, trialReport: {} });
+    const next = await leaseNext(config, runId, driver, { can, prepare: true });
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    expect(check).toMatchObject({ step: 'trials.r1.t01.a01.check', command: 'teamai benchmark check --trial' });
+    expect(next).toMatchObject({ data: { done: { outcome: 'succeeded', end: 'settled' } } });
+    expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ result })]);
+  });
+
   it('reads a run as corrupt when its plan holds an arm model a record could not publish', async () => {
     const { config, runId } = await startFix({ arms: 2 });
     const file = path.join(runsDir(config), `${runId}.json`);
@@ -241,7 +258,7 @@ describe('benchmark plan run', () => {
   });
 
   it.each([
-    ['passes', 'invalid'],
+    ['passed', 'invalid'],
     ['could_not_run', 'could_not_run'],
   ] as const)('runs no trial of a task whose baseline %s, and ends the run with its baseline in the record', async (baseline, recorded) => {
     const { config, runId } = await startFix({ arms: 2, repetitions: 2 });

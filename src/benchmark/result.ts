@@ -1,7 +1,7 @@
 /**
  * How a trial's steps become its result, and the record's `benchmark` block. Pure over an ended run: the step states
- * the engine keeps, with the check verdict stored on each check step, the frozen plan, and the judge verdicts the run
- * froze when it ended (`run.verdicts`). It classifies nothing: check.ts did that once, when the check settled.
+ * the engine keeps, with the result each check step output, the frozen plan, and the judge verdicts the run froze when
+ * it ended (`run.verdicts`). It classifies nothing: `teamai benchmark check` did that once, when the check ran.
  *
  * Results are never failure codes, and no value here enters record `status` or `steps[].outcome`: an older dashboard
  * drops a whole record on an enum value it does not know.
@@ -11,6 +11,7 @@ import type { EntryVerdict } from '../scorers/entry.js';
 import type { StepState } from '../workflow/step-state.js';
 import { ReportedUnenforcedSchema } from '../workflow/requirements.js';
 import type { RunState } from '../workflow/types.js';
+import { CheckOutputSchema, type CheckResult } from './check.js';
 import { baselineStepOf, correctnessScorerName, stepOf, type BenchmarkPlan, type PlannedTask, type PlannedTrial } from './plan.js';
 import { ArmTeamSchema, TrialLimitSchema, TrialLimitsSchema } from './terms.js';
 
@@ -125,17 +126,17 @@ function promptEntryOf(prompt: StepState | undefined): Pick<BenchmarkRecord['tri
 }
 
 /**
- * A task's baseline, from its stored verdict, first match wins:
+ * A task's baseline, from the result its step output, first match wins:
  *   criteria task                                   -> not_needed: it has no check to try
- *   verdict failed                                  -> valid
- *   verdict passed                                  -> invalid: the check passes without changes
- *   verdict could_not_run, or failed without one    -> could_not_run: its clone or setup failed, or the check did not run
- *   cancelled once leased, without a verdict        -> could_not_run: the run ended while it ran, such as at its timeout
- *   no verdict otherwise                            -> not_run: no driver took it before the run ended
+ *   result failed                                   -> valid
+ *   result passed                                   -> invalid: the check passes without changes
+ *   result could_not_run, or failed without one     -> could_not_run: its clone or setup failed, or the check did not run
+ *   cancelled once leased, without a result         -> could_not_run: the run ended while it ran, such as at its timeout
+ *   no result otherwise                             -> not_run: no driver took it before the run ended
  * Its trials need no rule of their own: a task whose baseline is not valid skips them, and a skipped prompt is not_run.
  */
 function baselineOf(run: RunState, task: PlannedTask): Baseline {
-  switch (task.judge) {
+  switch (task.judge.kind) {
     case 'criteria':
       return 'not_needed';
     case 'check':
@@ -146,8 +147,8 @@ function baselineOf(run: RunState, task: PlannedTask): Baseline {
     }
   }
   const state = stateOf(run, baselineStepOf(task.id));
-  const verdict = state && 'verdict' in state ? state.verdict : undefined;
-  switch (verdict?.verdict) {
+  const result = checkResultOf(state);
+  switch (result) {
     case 'failed':
       return 'valid';
     case 'passed':
@@ -157,7 +158,7 @@ function baselineOf(run: RunState, task: PlannedTask): Baseline {
     case undefined:
       return state?.status === 'failed' || (state?.status === 'cancelled' && state.attempt !== undefined) ? 'could_not_run' : 'not_run';
     default: {
-      const unhandled: never = verdict;
+      const unhandled: never = result;
       return unhandled;
     }
   }
@@ -168,8 +169,8 @@ function baselineOf(run: RunState, task: PlannedTask): Baseline {
  *   prompt never leased: absent, pending, skipped, or cancelled without an attempt  -> not_run
  *   prompt failed tool_unavailable: the run's only driver cannot launch its tool    -> not_run
  *   prompt cancelled after its lease, or failed                                     -> error
- *   check task: the check's stored verdict: passed -> passed, failed -> failed, could_not_run -> error;
- *               no verdict (the check never ran to a verdict)                       -> error
+ *   check task: the result its check output: passed -> passed, failed -> failed, could_not_run -> error;
+ *               no result (the check never ran to one)                              -> error
  *   criteria task: its correctness verdict: labelled passing -> passed, labelled not passing -> failed;
  *               unscored, or none                                                   -> unscored, never passed
  */
@@ -197,7 +198,7 @@ function trialResultOf(run: RunState, plan: BenchmarkPlan, trial: PlannedTrial):
     }
   }
   const judge = plan.tasks.find((task) => task.id === trial.task)?.judge;
-  switch (judge) {
+  switch (judge?.kind) {
     case 'check':
       return checkResult(stateOf(run, stepOf({ ...trial, kind: 'check' })));
     case 'criteria':
@@ -227,8 +228,8 @@ function criteriaResult(verdict: EntryVerdict | undefined): TrialResult {
 }
 
 function checkResult(check: StepState | undefined): TrialResult {
-  const verdict = check && 'verdict' in check ? check.verdict : undefined;
-  switch (verdict?.verdict) {
+  const result = checkResultOf(check);
+  switch (result) {
     case 'passed':
       return 'passed';
     case 'failed':
@@ -237,10 +238,16 @@ function checkResult(check: StepState | undefined): TrialResult {
     case undefined:
       return 'error';
     default: {
-      const unhandled: never = verdict;
+      const unhandled: never = result;
       return unhandled;
     }
   }
+}
+
+/** The result a check step output; undefined when it output none, as one that never ran to a verdict. */
+function checkResultOf(state: StepState | undefined): CheckResult | undefined {
+  const output = CheckOutputSchema.safeParse(state && 'outputs' in state ? state.outputs : undefined);
+  return output.success ? output.data.result : undefined;
 }
 
 function stateOf(run: RunState, step: string): StepState | undefined {

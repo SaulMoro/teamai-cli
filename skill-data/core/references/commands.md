@@ -277,6 +277,13 @@ Generated: do not edit by hand. Regenerate with
     - `--sessions` — Also put the agent sessions that the run's unsettled steps continue (session: continue or session.from) in the team session archive, scrubbed, so whoever continues the run resumes them; listed in the envelope as sessions. Without it, those steps start new sessions on another machine
   - `teamai workflow cancel <run> [step]` — Cancel a whole run, or a pending, waiting, leased, running, or delivering step and its open descendants. Invalidates leases; drivers stop tools listed in next.cancelled. Prints one JSON envelope.
 
+## benchmark
+
+- `teamai benchmark` — The commands of a benchmark run's steps. Each runs as a step of a run teamai workflow start --benchmark started, never on its own.
+  - `teamai benchmark check` — Run the check of the benchmark step this process runs as, in its clone: the files check.add names, then the task's check. Prints {"result":"passed"|"failed"|"could_not_run"} and exits 0 once the check ran; exits 1 when it could not set the check up. Refuses a run whose plan this teamai cannot read.
+    - `--baseline` — The check of a task's baseline, on its starting commit
+    - `--trial` — The check of a trial, after its prompt, with the protected paths put back as the starting commit has them first
+
 ## score
 
 - `teamai score` — Judge workflow passes with team scorers (scorers/<name>.md). Any driver takes judge work with --next, runs its own judge on the lease prompt with the lease evidence directory as its only readable root and settles it with --lease <ref> --submit, or judges it here with --lease <ref>. --run <id> --step <path> --scorer <name> judges a pass on demand. --scorer <name> [--session <id>] judges a finished agent session here: the one --session names, or, inside a session, the one its agent session variable names; it never guesses. --team-session <name> judges a session a member pushed instead. --label <value> labels the session by hand instead of judging it. With --json, it leases that session to the driver's own judge instead. workflow next never hands out judge work, and a driver never lists a judge ref in workflow next running. Prints one JSON envelope; --drain prints lines.

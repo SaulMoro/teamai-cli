@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runShellCommand } from '../workflow/shell-command.js';
 
 const dirs: string[] = [];
@@ -14,6 +14,7 @@ function workdir(): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -36,6 +37,17 @@ describe('runShellCommand', () => {
     const ran = await runShellCommand({ command: SLEEP, cwd: workdir(), env: process.env, expiresAt: new Date(startedAt + 500).toISOString() });
     expect(ran.exit).toEqual({ kind: 'timeout' });
     expect(Date.now() - startedAt).toBeLessThan(10_000);
+  });
+
+  it('keeps stdout apart from stderr it forwards to this process, and answers the end of each', async () => {
+    const written: string[] = [];
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk: string | Uint8Array) => { written.push(String(chunk)); return true; });
+
+    const ran = await runShellCommand({ command: 'echo {} && echo shell-command-error >&2', cwd: workdir(), env: process.env, stderr: 'forward' });
+
+    expect(ran.output.trim()).toBe('{}');
+    expect(ran.errors).toContain('shell-command-error');
+    expect(written.join('')).toContain('shell-command-error');
   });
 
   it('answers spawn_failed when the shell cannot start', async () => {

@@ -9,7 +9,7 @@
  *   bin/        a fake `claude` and a fake `codex` that answer the way `tool` says, and log where they ran, the model
  *               they were launched with and what they found there to tool.log, beside links to node and git. Each prints
  *               the model it was launched with as the one it ran, `fake-<tool>` without one, and a cost of 0.25 USD. PATH is bin/, /usr/bin and /bin, so a tool
- *               the fixture leaves out is not found. Launched as a judge (with --json-schema), the fake `claude` answers the
+ *               the fixture leaves out is not found; bin/teamai runs the CLI under test. Launched as a judge (with --json-schema), the fake `claude` answers the
  *               way `judge` says, at a cost of 0.1 USD, and logs to judge.log the labels it could give, the diff.patch of its
  *               evidence and what is left under the trial root then. Each launch also checks out a branch and back in its cwd under a
  *               HOME whose `.teamai/bin/teamai` writes hook.marker, so a teamai git hook there leaves the marker. Once
@@ -304,6 +304,8 @@ export async function benchmarkFixture(options: BenchmarkFixtureOptions): Promis
   fs.mkdirSync(path.join(hookHome, '.teamai', 'bin'), { recursive: true });
   fs.writeFileSync(path.join(hookHome, '.teamai', 'bin', 'teamai'), `#!/bin/sh\necho "$*" >> '${hookMarker}'\n`);
   fs.chmodSync(path.join(hookHome, '.teamai', 'bin', 'teamai'), 0o755);
+  // The check steps run `teamai benchmark check`, which resolves on PATH to the CLI under test.
+  fs.writeFileSync(path.join(bin, 'teamai'), `#!/bin/sh\nexec "${process.execPath}" "${CLI}" "$@"\n`, { mode: 0o755 });
   const firstLaunch: Record<FirstLaunch, string> = {
     'pulls-a-team-change': `if (first) {
   const team = (...args) => execFileSync('git', args, { cwd: ${JSON.stringify(teamSeed)}, encoding: 'utf8' });
@@ -497,28 +499,27 @@ export async function startBenchmarkRun(config: LocalConfig, files: BenchmarkSui
   // Every team an arm names resolves to RUN_TEAM, as start would resolve it in a team repo at that revision.
   const resolved = (team: TeamChoice): ArmTeam => (team.kind === 'none' ? team : { ...team, revision: RUN_TEAM });
   const [first, ...rest] = suite.arms.map((arm) => ({ name: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), source: 'team' as const, team: resolved(arm.team) }));
-  const plan = freezePlan({ suite, baselineTeamRevision: RUN_TEAM, selection: { additionalRoles: [], projects: [], excludedSkills: [] }, arms: [first, ...rest], scorers: {} });
   const committed = await commitCheckFiles(commitCacheOf(config, suite.repo), suite);
   if (!committed.ok) return error('check_files_unwritable', committed.failed);
+  const plan = freezePlan({ committed: committed.suite, baselineTeamRevision: RUN_TEAM, selection: { additionalRoles: [], projects: [], excludedSkills: [] }, arms: [first, ...rest], scorers: {} });
   return createRun(config, { name: suite.name, sourceHash: runSourceHash(plan), teamRevision: RUN_TEAM, origin: { source: 'team' }, ...compilePlan(plan, committed.suite), benchmark: plan, secrets: {} });
 }
 
-const BaselineLeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string().startsWith('baselines.'), attempt: z.string(), revision: z.number(), trial: z.object({ task: z.string() }) }) }) });
+const BaselineLeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string().startsWith('baselines.'), attempt: z.string(), revision: z.number() }) }) });
 
 /**
- * Settles each baseline of a run made in process as teamai settles one: by its task in `baselines`, and `fails` by
- * default, as a check that fails on its starting commit, so that task's trials run.
+ * Settles each baseline of a run made in process as `teamai benchmark check --baseline` settles one: by its task in
+ * `baselines`, with the result it outputs, and `failed` by default, as a check that fails on its starting commit, so
+ * that task's trials run.
  */
 export async function settleBaselines(
-  config: LocalConfig, runId: string, driver: DriverIdentity, can: DriverCan, baselines: Record<string, 'passes' | 'fails' | 'could_not_run'> = {},
+  config: LocalConfig, runId: string, driver: DriverIdentity, can: DriverCan, baselines: Record<string, 'passed' | 'failed' | 'could_not_run'> = {},
 ): Promise<void> {
   const run = await readRun(config, runId);
-  const count = typeof run === 'object' ? run.benchmark?.tasks.filter((task) => task.judge === 'check').length ?? 0 : 0;
+  const count = typeof run === 'object' ? run.benchmark?.tasks.filter((task) => task.judge.kind === 'check').length ?? 0 : 0;
   for (let settled = 0; settled < count; settled += 1) {
-    const { attempt, revision, trial } = BaselineLeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
-    const baseline = baselines[trial.task] ?? 'fails';
-    await reportAttempt(config, runId, baseline === 'could_not_run'
-      ? { attempt, revision, driver, outcome: 'failed', trialReport: { verdict: { verdict: 'could_not_run', cause: 'not_found' } } }
-      : { attempt, revision, driver, outcome: 'success', outputs: { baseline }, trialReport: { verdict: baseline === 'passes' ? { verdict: 'passed' } : { verdict: 'failed', exitCode: 1 } } });
+    const { attempt, revision, step } = BaselineLeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+    const result = baselines[step.slice('baselines.'.length)] ?? 'failed';
+    await reportAttempt(config, runId, { attempt, revision, driver, outcome: 'success', exitCode: 0, outputs: { result }, trialReport: {} });
   }
 }
