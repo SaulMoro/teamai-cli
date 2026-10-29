@@ -161,7 +161,7 @@ function toolLacks(config: LocalConfig, flags: Record<string, string>, members: 
     return [...byAgent].flatMap(([agent, prompts]): Lack[] => {
       const steps = `the prompt step${prompts.length > 1 ? 's' : ''} ${listOf(prompts.map((run) => run.step))}`;
       const flag = agent === undefined ? 'default' : agent;
-      const choice = launchToolFor(agent, config, flags, members);
+      const choice = launchToolFor({ agent }, config, flags, members);
       if (choice.ok) {
         return isOnPath(choice.tool) ? [] : [{ reason: `${steps} ${prompts.length > 1 ? 'run' : 'runs'} on ${choice.tool}, which is not on PATH here`, fix: `install ${choice.tool}, or pass --tools ${flag}=<tool> for one that is` }];
       }

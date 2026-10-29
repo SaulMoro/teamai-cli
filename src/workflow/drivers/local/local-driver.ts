@@ -42,7 +42,7 @@ import { memberTools, type MemberTool } from '../../../tool-launch/call.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../../tool-launch/process-stop.js';
 import { executableOf, isLaunchTool, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, type LaunchTool } from '../../../tool-launch/tools.js';
 import { chooseStepModel, loadDeployedAgent } from '../../step-model.js';
-import type { DriverIdentity, StepHitl, WorkflowEnvelope, WorkflowFailure } from '../../types.js';
+import type { DriverIdentity, RunState, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
 import { isWorkflowError, WORKSPACE_MODES } from '../../types.js';
 import type { SessionRef } from '../../workspace.js';
 import { headCommit } from '../../worktree.js';
@@ -186,15 +186,16 @@ function supportedTool(value: string): value is LaunchTool {
 }
 
 /**
- * The tool a prompt step runs on: `--tools`, then `workflows.tools`, the agent's entry before the default, with the
- * member's own AI tool between them: TEAMAI_AI_TOOL before `workflows.tools.default`, and `ai.tool`, the project's before
- * the machine's, after it. A member's tool that teamai does not launch fails the step; one that runs no workflow step
- * gives way to the next rung, which `warnings` says.
+ * The tool a prompt step runs on: the step's own `tool`, then `--tools`, then `workflows.tools`, the agent's entry before
+ * the default, with the member's own AI tool between them: TEAMAI_AI_TOOL before `workflows.tools.default`, and
+ * `ai.tool`, the project's before the machine's, after it. A member's tool that teamai does not launch fails the step;
+ * one that runs no workflow step gives way to the next rung, which `warnings` says.
  */
-function stepTool(agent: string | undefined, config: LocalConfig, flags: Record<string, string>, members: MemberTool[]): { ok: true; tool: string | undefined; warnings: string[] } | { ok: false; failure: WorkflowFailure } {
+function stepTool({ agent, tool }: Pick<WorkflowStep, 'agent' | 'tool'>, config: LocalConfig, flags: Record<string, string>, members: MemberTool[]): { ok: true; tool: string | undefined; warnings: string[] } | { ok: false; failure: WorkflowFailure } {
   const configured = config.workflows?.tools ?? {};
-  const member = ({ setting, tool }: MemberTool) => ({ source: setting, named: tool, member: true });
+  const member = ({ setting, tool: named }: MemberTool) => ({ source: setting, named, member: true });
   const rungs = [
+    { source: 'tool', named: tool, member: false },
     { source: '--tools', named: agent ? flags[agent] : undefined, member: false },
     { source: `workflows.tools.${agent}`, named: agent ? configured[agent] : undefined, member: false },
     { source: '--tools', named: flags.default, member: false },
@@ -206,7 +207,7 @@ function stepTool(agent: string | undefined, config: LocalConfig, flags: Record<
   for (const { source, named, member: isMember } of rungs) {
     if (!named) continue;
     if (isMember && !isLaunchTool(named)) {
-      if (!LAUNCH_ORDER.some((tool) => tool === named)) {
+      if (!LAUNCH_ORDER.some((launched) => launched === named)) {
         return { ok: false, failure: { code: 'tool_unsupported', message: `${source} is "${named}", which is not a tool teamai launches. Set it to one of: ${LAUNCH_TOOLS.join(', ')}.` } };
       }
       passed.push({ source, named });
@@ -218,12 +219,12 @@ function stepTool(agent: string | undefined, config: LocalConfig, flags: Record<
 }
 
 /**
- * The tool teamai launches for a prompt step of `agent` here, as {@link stepTool} picks it with `--tools` `flags`, or why
+ * The tool teamai launches for prompt step `step` here, as {@link stepTool} picks it with `--tools` `flags`, or why
  * none: no tool is configured, or the one picked is not one teamai launches, which `tool` then names. `warnings` says
  * which of the member's tools gave way, for the step that launches to log.
  */
-export function launchToolFor(agent: string | undefined, config: LocalConfig, flags: Record<string, string>, members: MemberTool[]): { ok: true; tool: LaunchTool; warnings: string[] } | { ok: false; failure: WorkflowFailure; tool?: string; warnings: string[] } {
-  const choice = stepTool(agent, config, flags, members);
+export function launchToolFor(step: Pick<WorkflowStep, 'agent' | 'tool'>, config: LocalConfig, flags: Record<string, string>, members: MemberTool[]): { ok: true; tool: LaunchTool; warnings: string[] } | { ok: false; failure: WorkflowFailure; tool?: string; warnings: string[] } {
+  const choice = stepTool(step, config, flags, members);
   if (!choice.ok) return { ...choice, warnings: [] };
   const { tool: selected, warnings } = choice;
   if (!selected) return { ok: false, failure: { code: 'tool_unconfigured', message: 'No local workflow tool is configured for this prompt step' }, warnings };
@@ -365,7 +366,7 @@ async function promptReport(
     const reported = unrestored ? { ...failure, message: `${failure.message.replace(/\.?$/, '.')} ${unrestored}` } : failure;
     return { attempt: lease.attempt, revision: lease.revision, driver, ...(tool ? { tool } : {}), ...failureReport(reported) };
   };
-  const choice = launchToolFor(lease.agent, config, options.tools ?? {}, await memberTools(config));
+  const choice = launchToolFor({ agent: lease.agent, tool: lease.tool }, config, options.tools ?? {}, await memberTools(config));
   for (const warning of choice.warnings) log.warn(warning);
   if (!choice.ok) return giveUp(choice.failure, choice.tool);
   const selected = choice.tool;
@@ -504,10 +505,28 @@ function rememberSecrets(seen: Record<string, string>, secrets: Record<string, s
  * What this driver declares on every `next`. Every key is set, so a new capability does not compile until it is decided.
  * It cannot deny a step the network, and keeps it from the member's machine only on a host the member marks `sandbox`, in config or with `--sandbox`.
  * It gives each command and tool only the env keys its lease provides, and runs setup in each workspace it creates.
- * `trials` are the tools whose benchmark trials the loop launches by the trial rules.
+ * `tools` are the tools it launches a step that names one on; `trials`, the tools whose benchmark trials the loop
+ * launches by the trial rules.
  */
-function localCan({ sandbox, hitl, trials }: { sandbox: boolean; hitl: boolean; trials: string[] }): Required<DriverCan> {
-  return { hitl, workspace: [...WORKSPACE_MODES], network: false, isolation: sandbox ? 'sandbox' : 'none', env: true, tokens: true, max_turns: true, setup: true, trials };
+function localCan({ sandbox, hitl, tools, trials }: { sandbox: boolean; hitl: boolean; tools: string[]; trials: string[] }): Required<DriverCan> {
+  return { hitl, workspace: [...WORKSPACE_MODES], network: false, isolation: sandbox ? 'sandbox' : 'none', env: true, tokens: true, max_turns: true, setup: true, tools, trials };
+}
+
+/** The tools the prompt steps of `run` name, in its definition and every workflow it pinned. */
+function namedTools(run: RunState): Set<string> {
+  const named = new Set<string>();
+  const visit = (steps: readonly WorkflowStep[]): void => {
+    for (const step of steps) {
+      if (step.tool !== undefined) named.add(step.tool);
+      if (typeof step.workflow === 'object') visit(step.workflow.steps);
+    }
+  };
+  for (const definition of [run.definition, ...Object.values(run.workflows ?? {})]) visit(definition.steps);
+  return named;
+}
+
+function onPath(tool: LaunchTool): boolean {
+  return resolveCliPath(executableOf(tool)) !== null;
 }
 
 function isSandbox(config: LocalConfig, options: LocalDriverOptions): boolean {
@@ -644,9 +663,12 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
   // Resolved once per drive, so a resume where a person attends runs attended whatever mode the run started in.
   const mode = resolveRunMode(process.env);
   const canHitl = options.hitl ?? personAnswers(mode);
-  // It launches the trials of a benchmark run by the trial rules, on the tools this machine has.
-  const trials = benchmark ? LAUNCH_TOOLS.filter((tool) => resolveCliPath(executableOf(tool)) !== null) : [];
-  const can = localCan({ sandbox: isSandbox(config, options), hitl: canHitl, trials });
+  // It launches a step that names its tool, and the trials of a benchmark run by the trial rules, on the tools this
+  // machine has. It is the run's only driver, so a step whose tool it cannot launch fails rather than waits.
+  const named = typeof started === 'object' ? namedTools(started) : new Set<string>();
+  const tools = LAUNCH_TOOLS.filter((tool) => named.has(tool) && onPath(tool));
+  const trials = benchmark ? LAUNCH_TOOLS.filter(onPath) : [];
+  const can = localCan({ sandbox: isSandbox(config, options), hitl: canHitl, tools, trials });
   const driver = driverIdentity('local', cwd);
   if (benchmark) {
     for (const line of benchmarkNotices(benchmark, can, await trialBlocker(config))) log.info(line);
@@ -752,7 +774,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
       const asked = { running, canTakeLease, can, autoApprove: options.autoApprove, runMode: mode, ...(base ? { base } : {}), env: turn };
       const next = benchmark
         ? await runHere((signal) => Trials.next(config, runId, driver, { ...asked, alone: true, signal }))
-        : await leaseNext(config, runId, driver, asked);
+        : await leaseNext(config, runId, driver, { ...asked, alone: true });
       // Trials.next tells an external driver to ask it again; this driver continues through resume.
       if (benchmark && isWorkflowError(next) && next.error.code === 'interrupted') {
         return { error: { code: 'interrupted', message: `Stopped while a trial step was prepared or checked. It stays leased: continue with teamai workflow resume ${runId}${options.sandbox ? ' --sandbox' : ''}.` } };

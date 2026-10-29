@@ -322,6 +322,7 @@ function leaseData(
     ...(rendered.env ? { env: rendered.env } : {}),
     ...(rendered.prompt !== undefined ? { prompt: rendered.prompt } : {}),
     ...(definition.agent !== undefined ? { agent: definition.agent } : {}),
+    ...(definition.tool !== undefined ? { tool: definition.tool } : {}),
     ...(definition.model !== undefined ? { model: definition.model } : {}),
     ...(rendered.defaultModel !== undefined ? { defaultModel: rendered.defaultModel } : {}),
     ...(definition.output ? { output: definition.output } : {}),
@@ -1054,9 +1055,15 @@ function offerTerms(
     budgeted: step.prompt !== undefined && scope.budgeted,
     ...(step.maxTurns !== undefined ? { maxTurns: step.maxTurns } : {}),
     ...(plan?.contract && scope.setup ? { setup: scope.setup } : {}),
+    ...(step.tool !== undefined ? { tool: step.tool } : {}),
     ...(step.trial ? { trial: { tool: trialTool(step.trial), withhold: run.benchmark?.withhold ?? [] } } : {}),
     prepare: context.prepare,
   }, context.can, context.allow, context.facts);
+}
+
+/** Why a step that names `tool` fails in a run whose only driver cannot launch it. */
+function toolUnavailable(step: string, tool: string): WorkflowFailure {
+  return { code: 'tool_unavailable', message: `Step "${step}" runs on ${tool}, which the driver of this run cannot launch here. Install ${tool} where the run is driven, or remove tool from the step.` };
 }
 
 /** What a driver tells `next` besides who it is. */
@@ -1087,9 +1094,9 @@ export interface NextOptions {
   /** Process-only, `next --prepare`: the caller prepares trial leases (benchmark/trial.ts). Without it a trial is held. */
   prepare?: boolean;
   /**
-   * Process-only: the caller is the run's only driver, as the local driver is. A trial step it cannot take is skipped
-   * at once, so its trial reads `not_run` and the run ends. For any other driver it stays pending until the suite's
-   * timeout.
+   * Process-only: the caller is the run's only driver, as the local driver is. A step that names a tool it cannot launch
+   * fails `tool_unavailable` at once, and a trial step it cannot take is skipped, so its trial reads `not_run`. For any
+   * other driver both stay pending, a trial until the suite's timeout.
    */
   alone?: boolean;
 }
@@ -1290,6 +1297,11 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
             break;
           }
           const terms = offerTerms(run, state.id, located, plan, context);
+          if (terms.kind === 'hold' && options.alone && definition.tool !== undefined && terms.missing.includes('tools')) {
+            failStep(state, toolUnavailable(state.id, definition.tool), run.revision);
+            settledOne = true;
+            break;
+          }
           if (terms.kind === 'hold' && options.alone && definition.trial) {
             skip(state, run.revision);
             settledOne = true;

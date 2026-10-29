@@ -57,6 +57,8 @@ export interface WorkflowStep {
   /** The question answered before this step's action or end. */
   hitl?: StepHitl;
   agent?: string;
+  /** The tool a prompt step runs on, as written. Only a driver that lists it in `can.tools` takes the step. */
+  tool?: string;
   /**
    * The model a prompt step runs on: an alias from `models/aliases.yaml` or a model name, as written, which the driver
    * resolves; or the exact model, which every driver passes to the tool as is.

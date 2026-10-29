@@ -201,6 +201,27 @@ describe('local workflow prompt driver', () => {
     expect(tools).toEqual([ran]);
   });
 
+  it('runs a prompt step on the tool it names, over --tools, workflows.tools and TEAMAI_AI_TOOL', async () => {
+    vi.stubEnv('TEAMAI_AI_TOOL', 'opencode');
+    onTestFinished(() => { vi.unstubAllEnvs(); });
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Review the project.
+steps:
+  - id: review
+    prompt: Review this project.
+    tool: claude
+`);
+    onTestFinished(fakeClaude(path.dirname(workspace), '2.1.301'));
+    config.workflows = { tools: { default: 'codex' } };
+    const tools: string[] = [];
+    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async (tool: string) => { tools.push(tool); return { started: true as const, exitCode: 0 }; }) };
+
+    await runLocalDriver(config, runId, workspace, { adapter, toolPaths, tools: { default: 'codex' } });
+
+    expect(tools).toEqual(['claude']);
+  });
+
   it("fails a prompt step when the project's ai.tool names a tool teamai does not launch, naming its file", async () => {
     vi.stubEnv('TEAMAI_AI_TOOL', '');
     onTestFinished(() => { vi.unstubAllEnvs(); });

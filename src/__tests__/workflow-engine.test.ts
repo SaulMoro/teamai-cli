@@ -4493,6 +4493,42 @@ describe('the model a prompt step lease carries', () => {
   });
 });
 
+describe('the tool a prompt step names', () => {
+  const REVIEW_AND_LINT = graph(`  - id: review
+    prompt: Review it.
+    tool: codex
+    model: { name: gpt-5.1-codex, effort: high }
+  - id: lint
+    needs: []
+    command: node lint.js
+`);
+
+  it('leases it only to a driver that lists the tool in can.tools, with the tool and the exact model on the lease', async () => {
+    const { config, runId } = await startBuild(REVIEW_AND_LINT);
+
+    const lint = await leaseNext(config, runId, driverA, { can: { tools: ['claude'] } });
+    const held = await leaseNext(config, runId, driverA, { can: {}, running: [leaseIn(lint).attempt] });
+    await reportAttempt(config, runId, { ...leaseIn(lint), outcome: 'success', driver: driverA });
+    const review = await leaseNext(config, runId, driverB, { can: { tools: ['codex'] } });
+
+    expect(lint).toMatchObject({ data: { lease: { step: 'lint' } } });
+    expect(held).toMatchObject({ data: { wait: { held: [{ step: 'review', missing: ['tools'] }] } } });
+    expect(review).toMatchObject({ data: { lease: { step: 'review', tool: 'codex', model: { name: 'gpt-5.1-codex', effort: 'high' } } } });
+  });
+
+  it('fails it tool_unavailable in a run its only driver drives, when that driver cannot run the tool, and runs the other steps', async () => {
+    const { config, runId } = await startBuild(REVIEW_AND_LINT);
+
+    const lint = await leaseNext(config, runId, driverA, { can: { tools: ['claude'] }, alone: true });
+
+    expect(lint).toMatchObject({ data: { lease: { step: 'lint' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'review', status: 'failed', failure: { code: 'tool_unavailable', message: 'Step "review" runs on codex, which the driver of this run cannot launch here. Install codex where the run is driven, or remove tool from the step.' } },
+      { id: 'lint', status: 'leased' },
+    ] });
+  });
+});
+
 describe('the agent a pass ran as (#1176)', () => {
   const REVIEW = workflow('build', `  - id: review
     prompt: Review the change.

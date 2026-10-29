@@ -55,6 +55,8 @@ const ENFORCEMENT = {
   max_turns: 'bestEffort',
   /** Running the workflow's `setup` in each workspace the driver creates, before the step. */
   setup: 'strict',
+  /** A prompt step that names its `tool`: `can.tools` lists it. */
+  tools: 'strict',
   /** A benchmark trial step: `can.trials` lists its tool (any tool for a step teamai runs itself). */
   trials: 'strict',
   /**
@@ -83,6 +85,7 @@ type BestEffortKey = KeysOf<'bestEffort'>;
  * - `setup`: in each workspace it creates, the driver runs `lease.setup` before the step with only setup's keys, and
  *   fails the step without running it when setup exits non-zero (`setup_failed`), changes a tracked or non-ignored path
  *   (`setup_dirty`), or leaves a value of one of its keys in a file it created or changed (`setup_secret`).
+ * - `tools`: the tools the driver launches a prompt step on that names its `tool`. Omitted: no such step.
  * - `trials`: the tools whose benchmark trials the driver launches by the trial rules. Omitted: no trial.
  */
 export const CanSchema = z.object({
@@ -94,6 +97,7 @@ export const CanSchema = z.object({
   tokens: z.boolean().optional(),
   max_turns: z.boolean().optional(),
   setup: z.boolean().optional(),
+  tools: z.array(z.string().min(1)).optional(),
   trials: z.array(z.string().min(1)).optional(),
 });
 export type DriverCan = z.infer<typeof CanSchema>;
@@ -244,6 +248,8 @@ export interface Offer {
   maxTurns?: number;
   /** The workflow's setup, when the lease names a workspace the driver may create. */
   setup?: Setup;
+  /** The tool a prompt step names. */
+  tool?: string;
   /** A benchmark trial step: its tool, null for a step teamai runs itself, and the names the run's plan withholds. */
   trial?: { tool: string | null; withhold: readonly string[] };
   /** The caller asked `next --prepare`. */
@@ -289,6 +295,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
   if (allow.network === false && offer.requires.network === true) policy.push('policy.network');
   if (allow.env && [...required, ...setupKeys].some((key) => sameEnvName(allow.env ?? [], key) === undefined)) policy.push('policy.env');
   const gaps: Missing[] = policy.length > 0 ? policy : [
+    ...(offer.tool !== undefined && lacksTool(offer.tool, can) ? ['tools' as const] : []),
     ...(offer.trial ? trialGaps(offer.trial, can, offer.prepare) : []),
     ...(offer.interactive && !can.hitl ? ['hitl' as const] : []),
     ...(offer.setup && !can.setup ? ['setup' as const] : []),
@@ -337,6 +344,11 @@ export function envAdvice(keys: readonly string[], declared: ReadonlySet<string>
     advice.push(`set ${unknown.join(', ')} in the environment, or declare ${them} in the team repo with ${adds} and give ${them} a value with ${sets}`);
   }
   return advice.join('; ');
+}
+
+/** Whether a driver that declares `can` is held from a step that names `tool`. */
+export function lacksTool(tool: string, can: Pick<DriverCan, 'tools'>): boolean {
+  return !(can.tools ?? []).includes(tool);
 }
 
 /** What a trial step lacks on this driver. */

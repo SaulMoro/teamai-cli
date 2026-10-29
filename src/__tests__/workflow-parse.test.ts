@@ -873,6 +873,46 @@ describe('expressions in templates', () => {
   });
 });
 
+describe('step tool', () => {
+  it('keeps a prompt step tool as written', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Build it.
+steps:
+  - id: plan
+    prompt: Plan it.
+    tool: codex
+  - id: review
+    needs: [plan]
+    prompt: Review it.
+`);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.definition.steps.map((step) => step.tool)).toEqual(['codex', undefined]);
+  });
+
+  it('rejects a tool off a prompt step, and a tool that is not a name', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Build it.
+steps:
+  - id: compile
+    command: npm run build
+    tool: codex
+  - id: plan
+    needs: [compile]
+    prompt: Plan it.
+    tool: "{{ inputs.tool }}"
+`);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.diagnostics.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:7: field "steps[0].tool": tool is only allowed on a prompt or prompt_file step',
+      'workflows/build.yaml:11: field "steps[1].tool": tool must be the id of a tool, such as claude or codex, written as is',
+    ]);
+  });
+});
+
 describe('exact step model', () => {
   it('keeps an exact model as written', () => {
     const result = parse(`schemaVersion: v1alpha1

@@ -28,7 +28,7 @@ export const INVOKE_ALIAS_SINCE = '0.28.0';
 
 const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'inputs', 'defaults', 'ends', 'outputs', 'loop', 'timeout', 'budget', 'setup', 'steps', 'invoke', 'alias']);
 const ACTION_KEYS = Object.keys(STEP_ACTIONS);
-const STEP_KEYS = new Set(['id', 'needs', 'if', ...ACTION_KEYS, 'env', 'with', 'agent', 'model', 'output', 'end', 'loop', 'break', 'for_each', 'approve', 'choose', 'interactive', 'workspace', 'session', 'scorers', 'requires', 'timeout', 'budget', 'max_turns', 'deliver']);
+const STEP_KEYS = new Set(['id', 'needs', 'if', ...ACTION_KEYS, 'env', 'with', 'agent', 'tool', 'model', 'output', 'end', 'loop', 'break', 'for_each', 'approve', 'choose', 'interactive', 'workspace', 'session', 'scorers', 'requires', 'timeout', 'budget', 'max_turns', 'deliver']);
 const EXACT_MODEL_KEYS: ReadonlySet<string> = new Set(['name', 'effort']);
 const STEP_LOOP_KEYS = new Set(['back_to', 'while', 'max_iterations']);
 const FOR_EACH_KEYS = new Set(['items', 'max_parallel']);
@@ -400,6 +400,13 @@ function parseBody(
       } else if (agentPair && (commandPair || workflowPair)) {
         diagnostics.push(locate(file, lineCounter, agentPair.key ?? item, `${field}.agent`, 'agent is only allowed on a prompt or prompt_file step'));
       }
+      const toolPair = item.items.find((pair) => scalarString(pair.key) === 'tool');
+      const tool = scalarString(toolPair?.value)?.trim();
+      if (toolPair && (commandPair || workflowPair)) {
+        diagnostics.push(locate(file, lineCounter, toolPair.key ?? item, `${field}.tool`, 'tool is only allowed on a prompt or prompt_file step'));
+      } else if (toolPair && (!tool || !TOKEN.test(tool))) {
+        diagnostics.push(locate(file, lineCounter, toolPair.value ?? toolPair.key ?? item, `${field}.tool`, 'tool must be the id of a tool, such as claude or codex, written as is'));
+      }
       const modelPair = item.items.find((pair) => scalarString(pair.key) === 'model');
       const model = modelPair ? parseStepModel(modelPair.value ?? modelPair.key, `${field}.model`, ctx) : undefined;
       if (modelPair && model !== undefined && (commandPair || workflowPair)) {
@@ -592,6 +599,7 @@ function parseBody(
           ...(workflow ? { workflow } : {}),
           ...(withValues ? { with: withValues } : {}),
           ...(agent ? { agent } : {}),
+          ...(tool ? { tool } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(scorers ? { scorers } : {}),
           ...(requires ? { requires } : {}),
