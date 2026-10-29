@@ -224,7 +224,7 @@ export function parseWorkflow(file: string, content: string, files?: WorkflowFil
   for (const step of finallySteps ?? []) {
     if (steps.some((item) => item.id === step.id)) diagnostics.push(locate(file, lineCounter, valueNode(root, 'finally') ?? root, 'finally', `finally step id "${step.id}" is also a step in steps`));
   }
-  if (diagnostics.length === 0) withheldEnvRequired(root, { defaults, steps }, '', {}, ctx);
+  if (diagnostics.length === 0) withheldEnvRequired(root, { defaults, steps }, '', {}, ctx, { says: '', runs: [] });
 
   if (diagnostics.length > 0 || !name || !description) return { ok: false, diagnostics };
   return {
@@ -1007,14 +1007,14 @@ function parseRequires(node: Node | null | undefined, field: string, ctx: ParseC
   return parsed.success && diagnostics.length === before ? parsed.data : undefined;
 }
 
-/** The step of this file that runs a workflow file: where that file's findings are reported. */
+/** How the walk reached a level: through the workflow files on the way, from the step of this file that runs them. */
 interface Caller {
-  node: Node | undefined;
-  field: string;
   /** How the message reaches the level, such as `steps[1].workflow runs workflow "check", whose `. */
   says: string;
   /** The workflow files on the way there, so a cycle among them ends the walk. */
   runs: readonly string[];
+  /** Where to report a level in another file: the `workflow` of the step that runs it. */
+  at?: { node: Node | undefined; field: string };
 }
 
 /**
@@ -1022,12 +1022,13 @@ interface Caller {
  * sandbox in effect there withholds anyway: its `defaults`, its steps, inline workflows, and, with `files`, the
  * workflow files its steps run, reported at the step of this file that runs them.
  */
-function withheldEnvRequired(node: Node | undefined, workflow: { defaults?: WorkflowDefaults; steps: readonly WorkflowStep[] }, at: string, outer: InEffect, ctx: ParseContext, caller?: Caller): void {
-  const report = (requires: InEffect, level: unknown, field: string, env: readonly string[] = []): void => {
-    const withheld = requires.floor?.isolation === 'sandbox' ? env.filter((key) => sameEnvName(SANDBOX_WITHHELD_ENV, key) !== undefined) : [];
+function withheldEnvRequired(node: Node | undefined, workflow: { defaults?: WorkflowDefaults; steps: readonly WorkflowStep[] }, at: string, outer: InEffect, ctx: ParseContext, caller: Caller): void {
+  const report = (requires: InEffect, level: unknown, field: string, env: readonly string[] | undefined): void => {
+    const withheld = withheldKeys(requires, env);
     if (withheld.length === 0) return;
-    ctx.diagnostics.push(locate(ctx.file, ctx.lineCounter, caller ? caller.node : valueNode(valueNode(level, 'requires'), 'env') ?? node, caller?.field ?? `${field}.requires.env`,
-      `${caller?.says ?? ''}${field}.requires.env names ${withheld.join(', ')}, which the strict sandbox it runs in withholds from every step. Remove ${withheld.length > 1 ? 'them' : 'it'} from requires.env, or drop strict.`));
+    const where = caller.at ?? { node: valueNode(valueNode(level, 'requires'), 'env') ?? node, field: `${field}.requires.env` };
+    ctx.diagnostics.push(locate(ctx.file, ctx.lineCounter, where.node, where.field,
+      `${caller.says}${field}.requires.env names ${withheld.join(', ')}, which the strict sandbox it runs in withholds from every step. Remove ${withheld.length > 1 ? 'them' : 'it'} from requires.env, or drop strict.`));
   };
   const scope = mergeRequirements(outer, workflow.defaults?.requires);
   report(scope, valueNode(node, 'defaults'), `${at}defaults`, workflow.defaults?.requires?.env);
@@ -1038,15 +1039,20 @@ function withheldEnvRequired(node: Node | undefined, workflow: { defaults?: Work
     const requires = mergeRequirements(scope, step.requires);
     report(requires, item, field, step.requires?.env);
     if (typeof step.workflow === 'object') withheldEnvRequired(valueNode(item, 'workflow'), step.workflow, `${field}.workflow.`, requires, ctx, caller);
-    if (typeof step.workflow !== 'string' || caller?.runs.includes(step.workflow)) return;
+    if (typeof step.workflow !== 'string' || caller.runs.includes(step.workflow)) return;
     const child = ctx.files?.runnable(step.workflow);
     if (child) {
       withheldEnvRequired(undefined, child, '', requires, ctx, {
-        node: caller?.node ?? valueNode(item, 'workflow'), field: caller?.field ?? `${field}.workflow`,
-        says: `${caller?.says ?? ''}${field}.workflow runs workflow "${step.workflow}", whose `, runs: [...caller?.runs ?? [], step.workflow],
+        says: `${caller.says}${field}.workflow runs workflow "${step.workflow}", whose `, runs: [...caller.runs, step.workflow],
+        at: caller.at ?? { node: valueNode(item, 'workflow'), field: `${field}.workflow` },
       });
     }
   });
+}
+
+/** The keys of a level's own `requires.env` that the strict sandbox in effect there withholds. */
+function withheldKeys(requires: InEffect, env: readonly string[] = []): string[] {
+  return requires.floor?.isolation === 'sandbox' ? env.filter((key) => sameEnvName(SANDBOX_WITHHELD_ENV, key) !== undefined) : [];
 }
 
 /** A step's `workspace`: `read-only`, `new`, `continue`, or `{ clone: … }`; undefined when it is none of them. */
