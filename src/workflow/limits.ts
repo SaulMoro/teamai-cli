@@ -109,9 +109,14 @@ export function itemsSpent(run: RunState, state: StepState): number {
   return spentTokens(run, isUnder(state.id)) - (state.status === 'running' ? state.limitsFrom?.tokens ?? 0 : 0);
 }
 
-/** The run's own deadline, from when it started or a retry reopened it. */
+/**
+ * The run's own deadline: the shorter of its workflow's `timeout` and `workflow start --timeout`, from when it started or
+ * a retry reopened it. While its `finally` steps run, the deadline they have.
+ */
 export function runDeadline(run: RunState): string | undefined {
-  return run.definition.timeout === undefined ? undefined : after(limitsFrom(run, topScope(run)).at, run.definition.timeout);
+  if (run.finalizing) return run.finalizing.until;
+  const limits = [run.definition.timeout, run.timeout].filter((ms) => ms !== undefined);
+  return limits.length === 0 ? undefined : after(limitsFrom(run, topScope(run)).at, Math.min(...limits));
 }
 
 /** When a lease ends: the first of its own deadline, that of every running step it is under, fan-out items included, and the run's. */
@@ -132,7 +137,7 @@ export function leaseDeadline(run: RunState, state: LeasedStep): string | undefi
 export function expire(run: RunState, now: string): WorkflowResult | undefined {
   const runEnds = runDeadline(run);
   if (runEnds !== undefined && passed(runEnds, now)) {
-    const failure = { code: 'timeout', message: `Run ${run.id} passed its timeout at ${runEnds}` };
+    const failure = { code: 'timeout', message: run.finalizing ? `Run ${run.id} passed the deadline of its finally steps at ${runEnds}` : `Run ${run.id} passed its timeout at ${runEnds}` };
     stopWhere(run, () => true, failure, run.revision, now);
     return { outcome: 'failed', failure, settledAt: run.revision };
   }

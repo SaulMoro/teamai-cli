@@ -44,6 +44,19 @@ export function topScope(run: RunState): Scope {
   };
 }
 
+/**
+ * The run's `finally` steps, as a workflow at the top level beside the run's own. It reads the inputs, and the run's steps
+ * besides its own, so the run's outputs read both once it settles.
+ */
+export function finallyScope(run: RunState): Scope {
+  const top = topScope(run);
+  const steps = run.definition.finally ?? [];
+  return {
+    prefix: '', definition: { steps }, inputs: run.inputs, outer: expressionSteps(top, statesIn(run, top)), loops: stepLoops(steps),
+    requires: top.requires, budgeted: false,
+  };
+}
+
 function setupOf(setup: Setup | undefined): Pick<Scope, 'setup'> {
   return setup ? { setup } : {};
 }
@@ -123,7 +136,11 @@ export function statesIn(run: RunState, scope: Scope): StepState[] {
     index = byScope(run.steps);
     scopeIndex.set(run.steps, index);
   }
-  return [...index.get(scope.prefix) ?? []];
+  const group = index.get(scope.prefix) ?? [];
+  // The run's steps and its `finally` steps share the top level, so each of the two scopes takes only its own.
+  if (scope.prefix !== '' || (!run.definition.finally && scope.definition === run.definition)) return [...group];
+  const own = new Set(scope.definition.steps.map((step) => step.id));
+  return group.filter((state) => own.has(state.id));
 }
 
 /**

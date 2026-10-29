@@ -1,7 +1,7 @@
 import type { LocalConfig } from '../types.js';
 import { agentEvidence, type AgentEvidence } from './attempt-marker.js';
 import {
-  error, finishRun, locateStep, ok, parseReads, reconcileRun, respondCommand, runData, withRun, workflowLabel,
+  enterFinalizing, error, finishRun, locateStep, ok, parseReads, reconcileRun, respondCommand, runData, withRun, workflowLabel,
   type RunReads, type WorkflowResult,
 } from './engine.js';
 import { evaluateExpression, isTruthy } from './expression.js';
@@ -28,6 +28,7 @@ async function controlRun(
     const before = JSON.stringify(run);
     checkout = run.driver?.workspace ?? checkout;
     const finish = async (result: WorkflowResult): Promise<void> => {
+      if (enterFinalizing(run, result, now)) return;
       runSettled = true;
       queued = await finishRun(config, run, now, result, secrets, run.driver);
     };
@@ -206,7 +207,7 @@ export async function cancelRun(config: LocalConfig, runId: string, secrets: Rec
       if ('unreadable' in reconciled) return error('run_unreadable', reconciled.unreadable);
       if ('outcome' in reconciled) {
         await finish(reconciled);
-        return settledRunError(run);
+        if (run.status !== 'running') return settledRunError(run);
       }
     }
     let changed: string[];
@@ -347,6 +348,10 @@ export async function retryStep(config: LocalConfig, runId: string, secrets: Rec
   return controlRun(config, runId, secrets, async (run, now, finish) => {
     if (isIsolated(run)) {
       return error('not_retryable', `Run ${run.id} is isolated: its steps work in clones of fixed commits, and a step that ran again would change what the run already measured. Start a new run: teamai workflow start ${run.name}${run.benchmark ? ' --benchmark' : ''}`);
+    }
+    if (run.finalizing) return error('not_retryable', `Run ${run.id} is running its finally steps; retry a step once the run ends`);
+    if (run.definition.finally?.some((item) => item.id === step)) {
+      return error('not_retryable', `Step "${step}" is a finally step, which runs again when the run ends again; retry a step of the run`);
     }
     // A run this reconcile finds ended, by its timeout or budget too, is reopened by the retry like a settled one.
     let ended = run.status !== 'running';
