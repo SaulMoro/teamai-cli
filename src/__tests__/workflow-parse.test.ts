@@ -1123,6 +1123,21 @@ steps:
     ]);
   });
 
+  it('refuses a strict sandbox in defaults whose requires.env names a credential the sandbox withholds', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Build it.
+defaults:
+  requires: { isolation: sandbox, strict: true, env: [GH_TOKEN] }
+steps:
+  - id: plan
+    prompt: Plan it.
+`);
+    expect(result.ok ? [] : result.diagnostics.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:5: field "defaults.requires.env": defaults.requires.env names GH_TOKEN, which the strict sandbox it runs in withholds from every step. Remove it from requires.env, or drop strict.',
+    ]);
+  });
+
   it('accepts a credential in requires.env under a sandbox that is not strict', () => {
     const result = parse(`schemaVersion: v1alpha1
 name: build
