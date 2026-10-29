@@ -39,8 +39,8 @@ function recordFile(run: string): string {
   return path.join(getReportsDir(config), 'workflows', 'runs', `${run}.json`);
 }
 
-/** A record the team published for a run of suite `fix` by `username`, whose one trial on arm claude, on team revision `team`, got `result`. */
-function publish(run: string, { username = 'bob', startedAt = YESTERDAY, result = 'passed', benchmark = true, team = 'b'.repeat(40) } = {}): void {
+/** A record the team published for a run of suite `fix` by `username`, whose one trial on each arm of `tools`, on team revision `team`, got `result`. */
+function publish(run: string, { username = 'bob', startedAt = YESTERDAY, result = 'passed', benchmark = true, team = 'b'.repeat(40), tools = ['claude'] } = {}): void {
   fs.mkdirSync(path.dirname(recordFile(run)), { recursive: true });
   fs.writeFileSync(recordFile(run), JSON.stringify({
     schemaVersion: 'v1alpha1', run, workflow: 'fix', sourceHash: 'f'.repeat(64), phase: 'end', status: 'succeeded', startedAt, username,
@@ -48,8 +48,8 @@ function publish(run: string, { username = 'bob', startedAt = YESTERDAY, result 
       benchmark: {
         suite: { name: 'fix', sourceHash: 's1' }, repetitions: 1, baselineTeamRevision: team, scorers: [],
         tasks: [{ id: 'fix', startingCommit: 'a'.repeat(40), sourceHash: 't1', baseline: 'valid' }],
-        arms: [{ name: 'claude', tool: 'claude', source: 'team', team: { kind: 'pulled', revision: team } }],
-        trials: [{ task: 'fix', arm: 'claude', repetition: 1, order: 0, step: 'trials.r1.fix.claude.prompt', result }],
+        arms: tools.map((tool) => ({ name: tool, tool, source: 'team', team: { kind: 'pulled', revision: team } })),
+        trials: tools.map((tool, order) => ({ task: 'fix', arm: tool, repetition: 1, order, step: `trials.r1.fix.${tool}.prompt`, result })),
       },
     } : {}),
   }));
@@ -135,10 +135,10 @@ describe('benchmarkHistory team revisions', () => {
     expect(view.selected?.teamChanges.revisions.map(({ revision }) => revision)).toEqual([first, second]);
     expect(view.teamCommits).toEqual({
       [first]: { committedAt: '2026-10-01T09:00:00.000Z', subject: 'Add the auth skill' },
-      [second]: {
-        committedAt: '2026-10-07T09:00:00.000Z', subject: 'Tighten the auth skill',
-        changes: { files: [{ path: 'rules/testing.md', added: 1, removed: 0 }, { path: 'skills/auth/SKILL.md', added: 1, removed: 0 }], more: 0 },
-      },
+      [second]: { committedAt: '2026-10-07T09:00:00.000Z', subject: 'Tighten the auth skill' },
+    });
+    expect(view.teamDiffs).toEqual({
+      [`${first}..${second}`]: { files: [{ path: 'rules/testing.md', added: 1, removed: 0 }, { path: 'skills/auth/SKILL.md', added: 1, removed: 0 }], more: 0 },
     });
   });
 
@@ -151,6 +151,24 @@ describe('benchmarkHistory team revisions', () => {
 
     expect(view.selected?.teamChanges.revisions.map(({ revision }) => revision)).toEqual(['e'.repeat(40), known]);
     expect(view.teamCommits).toEqual({ [known]: { committedAt: '2026-10-01T09:00:00.000Z', subject: 'Add the auth skill' } });
+    expect(view.teamDiffs).toEqual({});
+  });
+
+  it('lists what changed between the revisions each tool ran on in turn, skipping a revision only another tool ran on', async () => {
+    const a = commitTeam({ 'skills/auth/SKILL.md': 'Refresh tokens.\n' }, 'Add the auth skill', '2026-10-01T09:00:00Z');
+    const b = commitTeam({ 'rules/testing.md': 'Run the tests.\n' }, 'Add the testing rule', '2026-10-03T09:00:00Z');
+    const c = commitTeam({ 'agents/reviewer.md': 'Review.\n' }, 'Add the reviewer', '2026-10-05T09:00:00Z');
+    const daysAgo = (days: number): string => new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    publish('rb0b00001', { team: a, tools: ['claude'], startedAt: daysAgo(3) });
+    publish('rb0b00002', { team: b, tools: ['codex'], startedAt: daysAgo(2) });
+    publish('rb0b00003', { team: c, tools: ['claude', 'codex'], startedAt: YESTERDAY });
+
+    const view = await benchmarkHistory({ config, query: { windowDays: 365 }, now: NOW, refresh: false });
+
+    expect(view.teamDiffs).toEqual({
+      [`${a}..${c}`]: { files: [{ path: 'agents/reviewer.md', added: 1, removed: 0 }, { path: 'rules/testing.md', added: 1, removed: 0 }], more: 0 },
+      [`${b}..${c}`]: { files: [{ path: 'agents/reviewer.md', added: 1, removed: 0 }], more: 0 },
+    });
   });
 });
 

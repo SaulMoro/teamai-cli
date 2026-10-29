@@ -5,7 +5,7 @@
  * nothing it read before. A run this machine has a file for is read from it, not from its published copy.
  *
  * Each team revision the selected suite's runs installed is named from this machine's team clone, with the asset files
- * that changed since the revision before it: a commit never changes, so each is read once.
+ * each tool and model's revision changed since the one it ran on before: a commit never changes, so each is read once.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -103,23 +103,31 @@ async function readDir(dir: string, read: (file: string) => Promise<BenchmarkRun
   return inputs.filter((input) => input !== undefined);
 }
 
-/** A team revision as this machine's team clone has it, and the files outside benchmarks/ it changed since the one before it. */
+/** A team revision as this machine's team clone has it. */
 export interface TeamCommit {
   committedAt: string;
   subject: string;
-  /** Absent for the oldest revision, or when the clone lacks the one before it. At most `CHANGES_SHOWN`, in path order. */
-  changes?: { files: Array<{ path: string; added: number; removed: number }>; more: number };
 }
 
-export type BenchmarkPage = BenchmarkHistoryView & { teamCommits: Record<string, TeamCommit> };
+/** The files outside benchmarks/ that changed from one team revision to another: at most `CHANGES_SHOWN`, in path order. */
+export interface TeamDiff {
+  files: Array<{ path: string; added: number; removed: number }>;
+  more: number;
+}
+
+/**
+ * `teamCommits` by revision, for each the clone has. `teamDiffs` by `<before>..<after>`, for each two revisions a tool and
+ * model ran on in turn and the clone has both of.
+ */
+export type BenchmarkPage = BenchmarkHistoryView & { teamCommits: Record<string, TeamCommit>; teamDiffs: Record<string, TeamDiff> };
 
 const CHANGES_SHOWN = 40;
 const GIT_TIMEOUT_MS = 10_000;
 /** By team clone and commit, or commit pair: what git said, which never changes. One the clone lacked is asked again, as a pull may bring it. */
-const commits = new Map<string, Promise<Omit<TeamCommit, 'changes'> | undefined>>();
-const diffs = new Map<string, Promise<TeamCommit['changes']>>();
+const commits = new Map<string, Promise<TeamCommit | undefined>>();
+const diffs = new Map<string, Promise<TeamDiff | undefined>>();
 
-function commitOf(clone: string, revision: string): Promise<Omit<TeamCommit, 'changes'> | undefined> {
+function commitOf(clone: string, revision: string): Promise<TeamCommit | undefined> {
   const key = `${clone}\0${revision}`;
   const known = commits.get(key) ?? git(clone, ['log', '-1', '--format=%cI%x00%s', revision, '--'], { timeoutMs: GIT_TIMEOUT_MS }).then(({ code, stdout }) => {
     const [committedAt, subject] = stdout.trim().split('\0');
@@ -130,7 +138,7 @@ function commitOf(clone: string, revision: string): Promise<Omit<TeamCommit, 'ch
   return known;
 }
 
-function changesOf(clone: string, before: string, after: string): Promise<TeamCommit['changes']> {
+function diffOf(clone: string, before: string, after: string): Promise<TeamDiff | undefined> {
   const key = `${clone}\0${before}\0${after}`;
   const known = diffs.get(key) ?? git(clone, ['diff', '--numstat', '--no-renames', '--relative', before, after, '--', '.', ':(exclude)benchmarks'], { timeoutMs: GIT_TIMEOUT_MS }).then(({ code, stdout }) => {
     if (code !== 0) return undefined;
@@ -146,26 +154,29 @@ function changesOf(clone: string, before: string, after: string): Promise<TeamCo
 }
 
 /**
- * `view` with its team revisions in commit order when the team clone has every one, each named and with the files it
- * changed since the one before it.
+ * `view` with its team revisions in commit order when the team clone has every one, each named, and what changed between
+ * each two revisions a tool and model ran on in turn.
  */
 async function withTeamCommits(config: LocalConfig, view: BenchmarkHistoryView): Promise<BenchmarkPage> {
   const revisions = view.selected?.teamChanges.revisions ?? [];
-  if (!view.selected || revisions.length === 0) return { ...view, teamCommits: {} };
+  if (!view.selected || revisions.length === 0) return { ...view, teamCommits: {}, teamDiffs: {} };
   const clone = config.repo.localPath;
   const named = await Promise.all(revisions.map(async (revision) => ({ revision, commit: await commitOf(clone, revision.revision) })));
   const ordered = named.every(({ commit }) => commit) ? named.toSorted((left, right) => (left.commit?.committedAt ?? '').localeCompare(right.commit?.committedAt ?? '')) : named;
-  const teamCommits: Record<string, TeamCommit> = {};
-  await Promise.all(ordered.map(async ({ revision, commit }, index) => {
-    const before = ordered[index - 1]?.revision.revision;
-    if (!commit) return;
-    const changes = before === undefined ? undefined : await changesOf(clone, before, revision.revision);
-    teamCommits[revision.revision] = { ...commit, ...(changes ? { changes } : {}) };
+  const teamCommits = Object.fromEntries(ordered.flatMap(({ revision, commit }) => (commit ? [[revision.revision, commit]] : [])));
+  const pairs = new Set(view.selected.teamChanges.configs.flatMap(({ key }) => {
+    const ran = ordered.map(({ revision }) => revision).filter(({ configs }) => configs.some((one) => one.key === key)).map(({ revision }) => revision);
+    return ran.slice(1).map((after, index) => `${ran[index]}..${after}`);
+  }));
+  const diffed = await Promise.all([...pairs].map(async (pair) => {
+    const [before = '', after = ''] = pair.split('..');
+    return [pair, await diffOf(clone, before, after)] as const;
   }));
   return {
     ...view,
     selected: { ...view.selected, teamChanges: { ...view.selected.teamChanges, revisions: ordered.map(({ revision }) => revision) } },
     teamCommits,
+    teamDiffs: Object.fromEntries(diffed.flatMap(([pair, diff]) => (diff ? [[pair, diff]] : []))),
   };
 }
 

@@ -17,7 +17,7 @@ function resetSelection(){benchComparison='';benchConfig='';benchRevision='';}
 function resetBenchmarks(){benchData=null;benchError='';benchLoading=false;benchHtml='';benchQuery={...benchQuery,suite:''};resetSelection();}
 const passOf=r=>r&&r.planned?r.passed/r.planned:null;
 const rateCell=r=>r&&r.planned?pct(r.passed/r.planned)+' <small>'+number(r.passed)+'/'+number(r.planned)+'</small>':'<span class="muted">—</span>';
-const armColor=i=>'var(--arm'+(i%6+1)+')';
+const armColor=i=>'var(--arm'+(i%12+1)+')';
 const teamText=team=>!team||team.kind==='pulled'?t('pulled team'):team.kind==='none'?t('no team assets'):team.kind==='ref'?team.ref:t('without')+' '+team.skills.join(', ');
 const armConfig=a=>a.tool+(a.model?' · '+a.model:'')+(a.effort?' · '+a.effort:'')+(a.team&&a.team.kind!=='pulled'?' · '+teamText(a.team):'');
 const armTitle=a=>a.arm+' ('+armConfig(a)+')';
@@ -159,7 +159,7 @@ function runsPanel(sel){
 }
 const BENCH_VIEWS=[['arms','Arms'],['compare','Compare'],['team','Team changes']];
 const DIMENSIONS=[['team','Team assets'],['tool','Tool'],['model','Model']];
-const pp=v=>(v>0?'+':v<0?'−':'')+number(Math.abs(Math.round(v*100)))+' pp';
+const pp=v=>{const n=Math.round(v*100); return (n>0?'+':n<0?'−':'')+number(Math.abs(n))+' pp';};
 const costNumber=v=>String(Number(v.toPrecision(2)));
 const seriesBy=(sel,key)=>sel.arms.find(a=>a.key===key);
 const comparisonId=c=>c.from+'>'+c.to;
@@ -193,7 +193,7 @@ function compareKpis(sel,c){
  const up=c.tasks.filter(x=>passOf(x.to)>passOf(x.from)).length, down=c.tasks.filter(x=>passOf(x.to)<passOf(x.from)).length;
  const pooled=[from,to].filter(a=>a&&a.pooled), unit=pooled.length===2?costUnit(pooled):null;
  const perPassed=a=>{const cost=usageX(a,'cost'), rate=passOf(a.pooled); return cost!=null&&rate>0?cost/rate:null;};
- const costs=unit?[perPassed(from),perPassed(to)]:[null,null], hasCost=costs.every(v=>v!=null);
+ const costs=unit?[perPassed(from),perPassed(to)]:[null,null], hasCost=costs.every(v=>v!=null)&&costs[0]>0;
  const tokens=pooled.length===2?[usageX(from,'tokens'),usageX(to,'tokens')]:[null,null], hasTokens=tokens.every(v=>v!=null&&v>0);
  const change=(a,b)=>(b>=a?'+':'−')+number(Math.abs(Math.round((b/a-1)*100)))+'%';
  const third=hasCost?kpiCard(label('Cost per passed trial'),'<span class="'+(costs[1]<=costs[0]?'up':'down')+'">'+change(costs[0],costs[1])+'</span>',e(costNumber(costs[0])+' → '+costNumber(costs[1])+' '+unit))
@@ -268,7 +268,8 @@ function revisionDetail(points,q){
  const heads=['TASK',prev?short(prev.r.revision):'',short(q.r.revision),'CHANGE'].filter(Boolean);
  const rows=tasks.map(task=>{const before=prev&&prev.c.tasks.find(x=>x.task===task), after=q.c.tasks.find(x=>x.task===task), delta=before&&after?passOf(after)-passOf(before):null;
   return cardRow('',heads.map(h=>h===heads[0]||h==='CHANGE'?t(h):h),['<span data-verbatim>'+e(task)+'</span>',...(prev?[rateCell(before)]:[]),rateCell(after),delta==null?'—':'<span class="'+(delta>0?'up':delta<0?'down':'')+'">'+pp(delta)+'</span>']);}).join('');
- const changes=commit&&commit.changes?'<ul class="changed-files">'+commit.changes.files.map(f=>'<li><code data-verbatim>'+e(f.path)+'</code><small><span class="up">+'+number(f.added)+'</span> <span class="down">−'+number(f.removed)+'</span></small></li>').join('')+(commit.changes.more?'<li class="muted">'+label('and')+' '+number(commit.changes.more)+' '+label('more files')+'</li>':'')+(commit.changes.files.length?'':'<li class="muted">'+label('No file outside benchmarks/ changed.')+'</li>')+'</ul>'
+ const diff=prev?(benchData.teamDiffs||{})[prev.r.revision+'..'+q.r.revision]:undefined;
+ const changes=diff?'<ul class="changed-files">'+diff.files.map(f=>'<li><code data-verbatim>'+e(f.path)+'</code><small><span class="up">+'+number(f.added)+'</span> <span class="down">−'+number(f.removed)+'</span></small></li>').join('')+(diff.more?'<li class="muted">'+label('and')+' '+number(diff.more)+' '+label('more files')+'</li>':'')+(diff.files.length?'':'<li class="muted">'+label('No file outside benchmarks/ changed.')+'</li>')+'</ul>'
   :'<p class="muted">'+(prev?label('This machine\\'s team clone lacks one of the two revisions, so it cannot list what changed.'):label('The first team revision in the window.'))+'</p>';
  return '<section class="panel bench-panel"><div class="panelhead"><h2><span data-verbatim>'+short(q.r.revision)+'</span>'+(commit?' · <span data-verbatim>'+e(commit.subject)+'</span>':'')+(prev?' <span class="label">'+label('against')+' <span data-verbatim>'+short(prev.r.revision)+'</span></span>':'')+'</h2>'+(sep?'<span class="tag '+(sep==='down'?'down':'up')+'">'+label(sep==='down'?'told apart: lower':'told apart: higher')+'</span>':'')+'</div><h3 class="caption">'+label('Team files changed')+'</h3>'+changes+'<div class="table-scroll"><table class="session-table bench-cards"><thead><tr>'+heads.map(h=>'<th'+(h===heads[0]||h==='CHANGE'?'':' data-verbatim')+'>'+(h===heads[0]||h==='CHANGE'?label(h):e(h))+'</th>').join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div></section>';
 }
