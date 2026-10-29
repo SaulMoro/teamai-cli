@@ -176,10 +176,10 @@ export function spentAllowances(run: RunState, scope: Scope): string[] {
   return scope.allowances.flatMap((granted) => (allowanceLeft(run, granted).spent ? [granted.step] : []));
 }
 
-/** The smallest of `limits`, at least 1, or undefined when none is set. */
+/** The smallest of `limits`, or undefined when none is set. An allowance with nothing left leases nothing more. */
 function least(...limits: ReadonlyArray<number | undefined>): number | undefined {
   const set = limits.filter((limit) => limit !== undefined);
-  return set.length > 0 ? Math.max(1, Math.min(...set)) : undefined;
+  return set.length > 0 ? Math.min(...set) : undefined;
 }
 
 /**
