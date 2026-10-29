@@ -9,7 +9,7 @@ import { isLabelShaped, isNameShaped, observeCheckout } from '../../agent-observ
 import { loadLocalConfigForScope } from '../../config.js';
 import { isModelAlias, loadModelAliases, loadTeamModelAliases, noModelCause, noModelReason, resolveModelValue, type ModelAliases, type ModelResolution, type NoModel } from '../../models/aliases.js';
 import { pinScorers } from '../../scorers/cache.js';
-import { resolveTeamRef } from '../../team-ref.js';
+import { resolveTeamRef, TeamRefError } from '../../team-ref.js';
 import { isAgentToolId } from '../../tools.js';
 import type { LocalConfig } from '../../types.js';
 import { loadCachedSuite, readSuiteFiles, withTeamRevision } from '../cache.js';
@@ -129,18 +129,23 @@ async function resolveTeam(config: LocalConfig, { name, tool, team }: Arm, pulle
       return { ok: true, team: { kind: 'none' } };
     }
     case 'ref': {
-      const commit = await resolveTeamRef(config.repo.localPath, team.ref).then((resolved) => resolved.commit, () => undefined);
-      if (commit === undefined) {
-        return { ok: false, refused: error('arm_team_unresolved', `Arm "${name}" runs on team ref "${team.ref}", which is no branch, tag or commit of this checkout's team repo. Fetch it, or fix the arm's team, push it, run teamai pull, and start again.`) };
+      const resolved = await resolveTeamRef(config.repo.localPath, team.ref).then((ref) => ({ ok: true as const, commit: ref.commit }), (cause: unknown) => ({ ok: false as const, cause }));
+      if (resolved.ok) return { ok: true, team: { kind: 'ref', ref: team.ref, revision: resolved.commit } };
+      if (resolved.cause instanceof TeamRefError) {
+        return { ok: false, refused: error('arm_team_unresolved', `Arm "${name}" runs on team ref "${team.ref}", which is no branch, tag or commit of this checkout's team repo that holds teamai.yaml. Its branches: ${resolved.cause.branches.join(', ') || 'none'}. Fetch it, or fix the arm's team, push it, run teamai pull, and start again.`) };
       }
-      return { ok: true, team: { kind: 'ref', ref: team.ref, revision: commit } };
+      const cause = resolved.cause instanceof Error ? resolved.cause.message : String(resolved.cause);
+      return { ok: false, refused: error('arm_team_unreadable', `Arm "${name}" runs on team ref "${team.ref}", and git could not read this checkout's team repo at ${config.repo.localPath}: ${cause}. Repair the team repo, or run teamai pull, and start again.`) };
     }
     case 'without': {
       const listed = await git(config.repo.localPath, ['ls-tree', '-r', '--name-only', pulled]);
       const skills = new Set(listed.stdout.split('\n').flatMap((file) => /(?:^|\/)skills\/([^/]+)\/SKILL\.md$/.exec(file)?.[1] ?? []));
       const missing = team.skills.find((skill) => !skills.has(skill));
-      if (listed.code !== 0 || missing !== undefined) {
-        return { ok: false, refused: error('arm_team_unresolved', `Arm "${name}" runs without skill "${missing ?? team.skills[0]}", and the team revision this checkout pulled has no skill of that name. Fix the arm's team, push it, run teamai pull, and start again.`) };
+      if (listed.code !== 0) {
+        return { ok: false, refused: error('arm_team_unreadable', `Arm "${name}" runs without skill "${team.skills[0]}", and git could not list the skills of the team revision this checkout pulled at ${config.repo.localPath}: ${listed.stderr.trim()}. Repair the team repo, or run teamai pull, and start again.`) };
+      }
+      if (missing !== undefined) {
+        return { ok: false, refused: error('arm_team_unresolved', `Arm "${name}" runs without skill "${missing}", and the team revision this checkout pulled has no skill of that name. Fix the arm's team, push it, run teamai pull, and start again.`) };
       }
       return { ok: true, team: { kind: 'without', skills: team.skills, revision: pulled } };
     }
@@ -174,7 +179,7 @@ async function resolveArm({ name, tool, model }: Arm, team: ArmTeam, aliases: ()
     return { ok: false, message: `Arm "${name}" uses ${alias ? `model alias "${model}"` : `model "${model}"`}, which ${noModelCause(resolution, tool)}. ${NO_MODEL_FIX[noModelReason(resolution)]}` };
   }
   const source = resolution.step === 'local' || resolution.step === 'switched' ? 'member' : 'team';
-  return { ok: true, arm: { name, tool, model: resolution.model, ...(resolution.effort !== undefined ? { effort: resolution.effort } : {}), source, team } };
+  return { ok: true, arm: { name, tool, model: resolution.model, ...(alias ? { alias: model } : {}), ...(resolution.effort !== undefined ? { effort: resolution.effort } : {}), source, team } };
 }
 
 /**

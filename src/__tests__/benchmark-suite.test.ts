@@ -87,13 +87,13 @@ describe('parseSuite', () => {
   });
 
   it('reads an arm\'s team as the pulled revision, none, a ref of the team repo, or the pulled revision without some skills', () => {
-    const parsed = parse(suiteText({ arms: '[{ name: team }, { name: bare, team: none }, { name: main, team: origin/main }, { name: no-auth, team: { without: [auth-refresh] } }]' }));
+    const parsed = parse(suiteText({ arms: '[{ name: team }, { name: bare, team: none }, { name: main, team: main }, { name: no-auth, team: { without: [auth-refresh] } }]' }));
 
     expect(parsed).toMatchObject({ ok: true, diagnostics: [] });
     expect(parsed.ok && parsed.suite.arms.map(({ name, team }) => ({ name, team }))).toEqual([
       { name: 'team', team: { kind: 'pulled' } },
       { name: 'bare', team: { kind: 'none' } },
-      { name: 'main', team: { kind: 'ref', ref: 'origin/main' } },
+      { name: 'main', team: { kind: 'ref', ref: 'main' } },
       { name: 'no-auth', team: { kind: 'without', skills: ['auth-refresh'] } },
     ]);
   });

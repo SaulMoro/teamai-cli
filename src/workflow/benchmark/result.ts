@@ -34,7 +34,7 @@ export const BenchmarkRecordSchema = z.object({
   scorers: z.array(z.object({ name: z.string(), rubric: z.object({ sourceHash: z.string() }) })),
   tasks: z.array(z.object({ id: z.string(), startingCommit: z.string(), sourceHash: z.string(), baseline: z.enum(BASELINES) })),
   arms: z.array(z.object({
-    name: z.string(), tool: z.string(), model: z.string().optional(), effort: z.string().optional(),
+    name: z.string(), tool: z.string(), model: z.string().optional(), alias: z.string().optional(), effort: z.string().optional(),
     source: z.enum(['team', 'member']), team: ArmTeamSchema,
   })),
   trials: z.array(z.object({

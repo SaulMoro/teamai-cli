@@ -27,6 +27,8 @@ const PlannedArmSchema = z.object({
   tool: z.string().refine(isLabelShaped),
   /** The model name the arm's alias resolved to at start, or its model name as written; absent: the tool's default. */
   model: z.string().refine(isNameShaped).optional(),
+  /** The alias the suite named, when the model came from one: what arms on different tools share. */
+  alias: z.string().refine(isNameShaped).optional(),
   effort: z.string().refine(isLabelShaped).optional(),
   /** Whose aliases resolved the model: the team's, or the member's with `--member-aliases`. */
   source: z.enum(['team', 'member']),

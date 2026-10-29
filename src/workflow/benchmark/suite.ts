@@ -459,11 +459,11 @@ export function parseSuite(input: { suite: SourceFile; tasks: readonly SourceFil
   if (!firstArm) return { ok: false, diagnostics: [{ file: input.suite.relativePath, line: 1, column: 1, field: 'arms', message: 'a suite has 1 to 6 arms' }] };
   const toolArm = file.arms?.find((candidate) => changedKeys(file.defaults, candidate).includes('tool'));
   const variesTool = toolArm ? `arm "${toolArm.name}" changes the tool` : (file.matrix?.tool?.length ?? 0) > 1 ? 'the matrix varies the tool' : undefined;
-  const named = (model: string | undefined): model is string => model !== undefined && variesTool !== undefined && input.isAlias !== undefined && !input.isAlias(model);
+  const isUnaliasedAcrossTools = (model: string): boolean => variesTool !== undefined && input.isAlias !== undefined && !input.isAlias(model);
   const nameWarning = (at: Array<string | number>, field: string, model: string): WorkflowDiagnostic => diagnosticAt(input.suite.relativePath, lineCounter, document, at, `${field} "${model}" is a model name, not an alias in models/aliases.yaml, and ${variesTool}; use an alias that names a model for each tool`);
   const warnings = [
-    ...(named(file.defaults.model) ? [nameWarning(['defaults', 'model'], 'defaults.model', file.defaults.model)] : []),
-    ...(file.matrix?.model ?? []).flatMap((model, index) => (named(model) ? [nameWarning(['matrix', 'model', index], `matrix.model.${index}`, model)] : [])),
+    ...(file.defaults.model !== undefined && isUnaliasedAcrossTools(file.defaults.model) ? [nameWarning(['defaults', 'model'], 'defaults.model', file.defaults.model)] : []),
+    ...(file.matrix?.model ?? []).flatMap((model, index) => (isUnaliasedAcrossTools(model) ? [nameWarning(['matrix', 'model', index], `matrix.model.${index}`, model)] : [])),
   ];
   return {
     ok: true,

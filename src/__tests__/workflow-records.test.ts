@@ -237,7 +237,7 @@ describe('#1083 workflow run records', () => {
       'judge_runner_gone', 'no_child_agent',
       // Refusals of teamai workflow start --benchmark, before any run exists.
       'team_revision_unpullable', 'benchmark_not_found', 'commit_unreachable', 'check_files_unwritable',
-      'arm_model_missing', 'arm_unpublishable', 'arm_team_unresolved', 'arm_team_unclean',
+      'arm_model_missing', 'arm_unpublishable', 'arm_team_unresolved', 'arm_team_unreadable', 'arm_team_unclean',
       // Refusals of teamai workflow start --benchmark --try, which tries one task file and creates no run.
       'benchmark_invalid', 'task_try_failed',
       // Refusals of teamai workflow next --prepare where the team a trial runs cannot be pinned; its trials stay for another machine.

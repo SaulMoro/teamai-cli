@@ -106,7 +106,7 @@ describe('benchmark arm team', () => {
 
   it.each([
     ['a ref the team repo does not have', () => 'arms:\n  - name: now\n  - name: gone\n    team: no-such-branch\n', 'arm_team_unresolved',
-      'Arm "gone" runs on team ref "no-such-branch", which is no branch, tag or commit of this checkout\'s team repo. Fetch it, or fix the arm\'s team, push it, run teamai pull, and start again.'],
+      'Arm "gone" runs on team ref "no-such-branch", which is no branch, tag or commit of this checkout\'s team repo that holds teamai.yaml. Its branches: main. Fetch it, or fix the arm\'s team, push it, run teamai pull, and start again.'],
     ['a skill the pulled revision does not have', () => 'arms:\n  - name: now\n  - name: ablated\n    team: { without: [nope] }\n', 'arm_team_unresolved',
       'Arm "ablated" runs without skill "nope", and the team revision this checkout pulled has no skill of that name. Fix the arm\'s team, push it, run teamai pull, and start again.'],
   ])('refuses to start an arm whose team names %s, and leaves no run', async (_case, armsOf, code, message) => {

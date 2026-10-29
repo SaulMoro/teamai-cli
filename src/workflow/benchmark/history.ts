@@ -348,11 +348,16 @@ function tasksOf({ current, newest }: SuiteRuns): TaskView[] {
 }
 
 /** Which of two current arms, if exactly one, the pair differs in. */
+/** The model the suite asked of an arm: its alias, which resolves to each tool's own model, or the model and effort. */
+function requestedModel({ alias, model, effort }: Arm): [string] | [string | null, string | null] {
+  return alias !== undefined ? [alias] : [model ?? null, effort ?? null];
+}
+
 function dimensionOf(left: Arm, right: Arm): ArmDimension | undefined {
   const differs = {
     team: JSON.stringify(teamChoiceOf(left.team)) !== JSON.stringify(teamChoiceOf(right.team)),
     tool: left.tool !== right.tool,
-    model: left.model !== right.model || left.effort !== right.effort,
+    model: JSON.stringify(requestedModel(left)) !== JSON.stringify(requestedModel(right)),
   } satisfies Record<ArmDimension, boolean>;
   const [only, ...more] = ARM_DIMENSIONS.filter((dimension) => differs[dimension]);
   return more.length === 0 ? only : undefined;

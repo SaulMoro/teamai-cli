@@ -7,7 +7,7 @@ import type { ArmTeam } from '../workflow/benchmark/terms.js';
 const NOW = new Date('2026-10-28T12:00:00Z');
 
 /** `team`: the pulled revision of the run when absent. */
-type Arm = { name: string; tool: string; model?: string; team?: ArmTeam };
+type Arm = { name: string; tool: string; model?: string; alias?: string; team?: ArmTeam };
 const CLAUDE: Arm = { name: 'claude', tool: 'claude', model: 'claude-opus-5-5' };
 const CODEX: Arm = { name: 'codex', tool: 'codex' };
 
@@ -251,6 +251,23 @@ describe('BenchmarkHistory comparisons', () => {
       tasks: [{ task: 'login', from: { passed: 1, planned: 2 }, to: { passed: 2, planned: 2 } }, { task: 'logout', from: { passed: 0, planned: 1 }, to: { passed: 1, planned: 1 } }],
     });
     expect(arms.map(({ arm, team }) => ({ arm, team }))).toEqual(matrix.map(({ name, team }) => ({ arm: name, team: { kind: team?.kind } })));
+  });
+
+  it('compares two tools on one model alias, which resolved to each tool\'s own model', () => {
+    const arms: Arm[] = [
+      { name: 'claude', tool: 'claude', model: 'claude-opus-5-5', alias: 'strong' },
+      { name: 'codex', tool: 'codex', model: 'gpt-5.5-codex', alias: 'strong' },
+      { name: 'codex-fast', tool: 'codex', model: 'gpt-5.5-mini', alias: 'fast' },
+    ];
+    const runs = [run({ id: 'r1', startedAt: '2026-10-20T09:00:00Z', arms, trials: { login: { claude: ['passed'], codex: ['failed'], 'codex-fast': ['failed'] } } })];
+
+    const { comparisons = [], arms: series = [] } = BenchmarkHistory.of({ runs, query: { windowDays: 90 }, now: NOW }).selected ?? {};
+    const nameOf = (key: string): string | undefined => series.find((arm) => arm.key === key)?.arm;
+
+    expect(comparisons.map(({ dimension, from, to }) => ({ dimension, from: nameOf(from), to: nameOf(to) }))).toEqual([
+      { dimension: 'tool', from: 'claude', to: 'codex' },
+      { dimension: 'model', from: 'codex', to: 'codex-fast' },
+    ]);
   });
 
   it('gives a difference of paired trials its 95% interval, which reaches past zero only when the pairs do not tell the arms apart', () => {

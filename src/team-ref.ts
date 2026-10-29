@@ -6,7 +6,7 @@ import type { GlobalOptions, LocalConfig } from './types.js';
 export type ResolvedTeamRef = { ref: string; kind: 'branch' | 'tag' | 'commit'; commit: string };
 
 export class TeamRefError extends Error {
-  constructor(ref: string, branches: string[]) {
+  constructor(ref: string, readonly branches: string[]) {
     super(`Team ref "${ref}" is not a branch, tag or commit of the team repo that holds teamai.yaml. Branches: ${branches.join(', ')}. Push it, or check the name.`);
     this.name = 'TeamRefError';
   }
