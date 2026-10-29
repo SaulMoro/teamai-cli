@@ -406,29 +406,26 @@ async function promptReport(
   ]);
   // Only headless Claude and CodeBuddy have a turn limit; any other launch reports the cap as not enforced.
   const capsTurns = lease.maxTurns !== undefined && !lease.interactive && (launchAdapterIdOf(selected) === 'claude' || launchAdapterIdOf(selected) === 'codebuddy');
-  let result: LocalToolResult;
   const launchedAt = Date.now();
-  try {
-    if (lease.interactive) log.info(`Step "${lease.step}" opens ${selected} here for interactive work.`);
-    const run = lease.interactive ? adapter.runInteractive.bind(adapter) : adapter.run.bind(adapter);
-    result = await run(selected, {
+  if (lease.interactive) log.info(`Step "${lease.step}" opens ${selected} here for interactive work.`);
+  const { result, durationMs } = await timedLaunch({
+    launch: lease.interactive ? adapter.runInteractive.bind(adapter) : adapter.run.bind(adapter),
+    tool: selected,
+    input: {
       prompt: lease.prompt!,
       cwd,
       resultPath: resultFile,
-      env: { ...lease.processEnv ?? process.env, ...attemptEnv(lock.run, lease.attempt, mode) },
+      // The lease `env` is set over the step's environment, as a command's is.
+      env: { ...lease.processEnv ?? process.env, ...lease.env, ...attemptEnv(lock.run, lease.attempt, mode) },
       ...(launch ? { launch } : {}),
       ...(resume ? { resume: resume.id } : {}),
       ...(agent ? { agent: definitionRun(selected, lease.agent!, agent) } : {}),
       ...(chosen.model ? { model: chosen.model } : {}),
       ...(capsTurns ? { maxTurns: lease.maxTurns } : {}),
-    }, signal);
-  } catch {
-    result = {
-      started: false,
-      exitCode: 1,
-      failure: { code: 'tool_failed', message: `${selected} could not complete the workflow step` },
-    };
-  }
+    },
+    signal,
+    unfinished: `${selected} could not complete the workflow step`,
+  });
   const end: StepEnd = result.exitCode === 0 && !result.failure
     ? { outcome: 'success' }
     : { outcome: 'failed', ...(result.failure ? { message: result.failure.message, failure: result.failure } : {}) };
@@ -442,7 +439,9 @@ async function promptReport(
     ...(ran?.model ? { model: ran.model } : {}),
     ...(ran?.session ? { session: ran.session } : {}),
     ...(ran && resume ? { resumed: resume.resumed } : {}),
+    ...(ran ? { durationMs } : {}),
     ...(ran?.tokens ? { tokens: ran.tokens } : {}),
+    ...(ran?.cost ? { cost: ran.cost } : {}),
     ...(ran?.output !== undefined ? { outputs: ran.output } : {}),
     // How the definition was handed over is known only once the launch resolved its tool: OpenCode's depends on its major.
     ...(ran ? { agent: ran.applied ? { ...observed, definition: { applied: ran.applied } } : observed } : {}),
@@ -608,25 +607,24 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
   if (!isLaunchTool(tool)) return { ...reported, ...failureReport({ code: 'tool_unsupported', message: `The local workflow tool "${tool}" is not supported` }) };
   const scoped = await stepEnvironment(env, lease.envScope);
   if (!scoped.ok) return { ...reported, ...failureReport(scoped.failure) };
-  let result: LocalToolResult;
   const family = launchAdapterIdOf(tool);
   // A trial is held only to the limits its tool is known to keep and report: Codex states its usage only as it ends,
   // and CodeBuddy's turn cap and per-message usage are untried, so the rest list as unenforced.
   const maxTurns = family === 'claude' ? limits?.maxTurns : undefined;
   const budget = family === 'claude' || family === 'opencode' ? limits?.tokens : undefined;
-  const started = performance.now();
-  try {
-    result = await adapter.run(tool, {
+  const { result, durationMs } = await timedLaunch({
+    launch: adapter.run.bind(adapter),
+    tool,
+    input: {
       prompt: lease.prompt, cwd: lease.cwd, resultPath: resultFile, env: { ...scoped.env, ...lease.env },
       ...(model ? { model: { name: model, ...(effort ? { effort } : {}) } } : {}),
       ...(maxTurns !== undefined ? { maxTurns } : {}),
       ...(budget !== undefined ? { budget } : {}),
       ...(limits?.timeoutMs !== undefined ? { timeoutMs: limits.timeoutMs } : {}),
-    }, signal);
-  } catch {
-    result = { started: false, exitCode: 1, failure: { code: 'tool_failed', message: `${tool} could not complete the trial` } };
-  }
-  const durationMs = Math.round(performance.now() - started);
+    },
+    signal,
+    unfinished: `${tool} could not complete the trial`,
+  });
   const ran = result.started ? result : undefined;
   const unenforcedPassed = limits?.tokens !== undefined && budget === undefined && budgeted(ran?.tokens) > limits.tokens;
   const limit = !ran ? undefined : ran.stoppedBy ?? (unenforcedPassed ? 'budget' : undefined);
@@ -634,8 +632,6 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
     ...(limits?.maxTurns !== undefined && maxTurns === undefined ? ['max_turns' as const] : []),
     ...(limits?.tokens !== undefined && budget === undefined ? ['budget' as const] : []),
   ];
-  // The adapter returns once the tool's process group is gone, so no lock git left in the clone is held any more.
-  if (ran?.stoppedBy === 'timeout' || ran?.stoppedBy === 'budget') await removeGitLocks(path.join(lease.cwd, '.git'));
   return {
     ...reported,
     ...(ran ? { durationMs } : {}),
@@ -655,6 +651,30 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
  */
 export function personAnswers(mode: RunMode): boolean {
   return mode === 'attended' && process.stdin.isTTY === true && process.stderr.isTTY === true;
+}
+
+/**
+ * Runs a prompt's tool, timed around the tool's run alone. A launch that throws fails `tool_failed` with `unfinished`.
+ * The adapter returns once the tool's process group is gone, so when its timeout or budget stopped it, no lock git left
+ * in the checkout is held any more, and they are removed.
+ */
+async function timedLaunch({ launch, tool, input, signal, unfinished }: {
+  launch: LocalToolAdapter['run'];
+  tool: LaunchTool;
+  input: LocalToolRun;
+  signal: AbortSignal;
+  unfinished: string;
+}): Promise<{ result: LocalToolResult; durationMs: number }> {
+  const started = performance.now();
+  let result: LocalToolResult;
+  try {
+    result = await launch(tool, input, signal);
+  } catch {
+    result = { started: false, exitCode: 1, failure: { code: 'tool_failed', message: unfinished } };
+  }
+  const durationMs = Math.round(performance.now() - started);
+  if (result.started && (result.stoppedBy === 'timeout' || result.stoppedBy === 'budget')) await removeGitLocks(path.join(input.cwd, '.git'));
+  return { result, durationMs };
 }
 
 /**

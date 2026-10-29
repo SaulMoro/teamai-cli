@@ -137,6 +137,26 @@ describe('local workflow prompt driver', () => {
     });
   });
 
+  it('records how long the tool ran and the cost it stated, and neither for a tool that never started', async () => {
+    const ran = await fixture();
+    const unstarted = await fixture();
+    const adapter: LocalToolAdapter = { runInteractive: vi.fn(), run: vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      return { started: true as const, exitCode: 0, output: { ok: true }, cost: { amount: 0.25, unit: 'USD' } };
+    }) };
+
+    await runLocalDriver(ran.config, ran.runId, ran.workspace, { adapter, toolPaths });
+    await runLocalDriver(unstarted.config, unstarted.runId, unstarted.workspace, { adapter: createLocalToolAdapter(undefined, () => null), toolPaths });
+
+    const stored = await readRun(ran.config, ran.runId);
+    const step = typeof stored === 'object' && stored.steps[0]?.status === 'succeeded' ? stored.steps[0] : undefined;
+    expect(step).toMatchObject({ cost: { amount: 0.25, unit: 'USD' }, durationMs: expect.any(Number) });
+    expect(step?.durationMs).toBeGreaterThanOrEqual(50);
+    const never = await readRun(unstarted.config, unstarted.runId);
+    expect(typeof never === 'object' && never.steps[0]).toMatchObject({ status: 'failed', failure: { code: 'tool_unavailable' } });
+    expect(typeof never === 'object' && never.steps[0]).not.toHaveProperty('durationMs');
+  });
+
   it.each([
     [{}, 'attended'],
     [{ CI: '1' }, 'unattended'],
