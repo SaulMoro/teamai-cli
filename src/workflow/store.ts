@@ -10,7 +10,7 @@ import { EntryVerdictSchema } from '../scorers/entry.js';
 import { PinnedScorerSchema } from '../scorers/pin.js';
 import { BenchmarkPlanSchema } from '../benchmark/plan.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { ArchivedPassSchema, ReleasedTokensSchema, SessionContinuationSchema, StepStateSchema, StoppedAttemptSchema } from './step-state.js';
+import { ArchivedPassSchema, FailureSchema, ReleasedTokensSchema, SessionContinuationSchema, StepStateSchema, StoppedAttemptSchema } from './step-state.js';
 import type { HandoffOwner } from './snapshot.js';
 import { uniqueOutcomes, WorkOutcomeSchema, type WorkOutcome } from '../outcomes.js';
 import type { RunState, WorkflowDefinition } from './types.js';
@@ -232,6 +232,10 @@ const RunProgressSchema = z.object({
   scorers: z.record(PinnedScorerSchema).optional(),
   benchmark: BenchmarkPlanSchema.optional(),
   verdicts: z.array(EntryVerdictSchema).optional(),
+  finalizing: z.object({
+    outcome: z.enum(['succeeded', 'failed', 'cancelled']), end: z.string().optional(), failure: FailureSchema.optional(), until: z.string(),
+  }).optional(),
+  timeout: z.number().int().positive().optional(),
 });
 
 export async function readRun(config: LocalConfig, runId: string): Promise<RunState | 'missing' | 'corrupt'> {

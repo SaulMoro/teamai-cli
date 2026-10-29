@@ -27,7 +27,7 @@ import {
 import { budgetSpent, countLateTokens, expire, itemsSpent, leaseDeadline, ownDeadline, spendAllowances, spentAllowances, startLimits, turnLimits } from './limits.js';
 import { addItems, afterStanding, expandItems, isItem, itemsAfter, itemsOf, itemsSettled, startedItems } from './fan-out.js';
 import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, isUnder, loopSettled } from './loop.js';
-import { childScope, contextOf, insertChildren, localId, statesIn, stepDefinitions, topScope, type Scope } from './scope.js';
+import { childScope, contextOf, finallyScope, insertChildren, localId, statesIn, stepDefinitions, topScope, type Scope } from './scope.js';
 import { deliverableOf, deliveryProblem, deliveryTarget, planWorkspace, plannedBranch, sessionOf, workLeftUndelivered, type LeaseSession, type SessionRef, type WorkspaceContract, type WorkspacePlan } from './workspace.js';
 import {
   deliverPr, deliveryFailure, findDelivered, reportedPrMismatch, type DeliveryJob,
@@ -189,8 +189,8 @@ export function workflowLabel(scope: Scope): string {
 
 /** The scope and definition of the step instance at `path`, or undefined when the run file does not describe it. */
 export function locateStep(run: RunState, path: string): { scope: Scope; step: WorkflowStep } | undefined {
-  let scope = topScope(run);
   const segments = parseStepPath(path);
+  let scope = run.definition.finally?.some((step) => step.id === segments[0]?.id) ? finallyScope(run) : topScope(run);
   for (const [index, segment] of segments.entries()) {
     const step = scope.definition.steps.find((item) => item.id === segment.id);
     if (!step) return undefined;
@@ -409,11 +409,33 @@ function settledAtOf(step: StepState | undefined): number {
   return step && 'settledAt' in step ? step.settledAt : 0;
 }
 
+/** How long a run's `finally` steps may take, from when its steps end. */
+const FINALLY_MS = 10 * 60_000;
+
+/**
+ * Holds a run whose steps ended, by any outcome, while its `finally` steps run: its status stays `running`, and what it
+ * ended with waits in `finalizing` until they settle, by `until` at the latest. Called after the steps and any judges the
+ * run waits for settle, right before `finishRun`. False when there is nothing to run: no `finally`, or it already runs.
+ */
+export function enterFinalizing(run: RunState, { outcome, end, failure }: WorkflowResult, now: string): boolean {
+  const steps = run.definition.finally;
+  if (!steps || run.finalizing) return false;
+  const until = new Date(Date.parse(now) + FINALLY_MS).toISOString();
+  run.finalizing = { outcome, ...(end !== undefined ? { end } : {}), ...(failure ? { failure } : {}), until };
+  // A run a retry reopened ran them before; they run again.
+  const own = new Set(steps.map((step) => step.id));
+  run.steps = [...run.steps.filter((state) => !own.has(state.id)), ...steps.map((step): StepState => ({ id: step.id, status: 'pending' }))];
+  return true;
+}
+
 /** Ends the run. Every path that settles a run goes through here, so anything that reacts to a settled run hooks in here. */
-function settleRun(run: RunState, now: string, { outcome, end, failure }: WorkflowResult): void {
+function settleRun(run: RunState, now: string, result: WorkflowResult): void {
+  // A run that ran its `finally` steps ends as its steps did, whatever those did.
+  const { outcome, end, failure } = run.finalizing ?? result;
   run.status = outcome;
   if (end !== undefined) run.end = end;
   if (failure) run.failure = failure;
+  delete run.finalizing;
   run.updatedAt = now;
 }
 
@@ -442,12 +464,43 @@ export async function finishRun(
 
 /** The run summary returned by manual control operations. */
 export function runData(run: RunState): Record<string, unknown> {
-  return { id: run.id, status: run.status, revision: run.revision, ...(run.end !== undefined ? { end: run.end } : {}), ...(run.failure ? { failure: run.failure } : {}) };
+  return {
+    id: run.id, status: run.status, revision: run.revision, ...(run.end !== undefined ? { end: run.end } : {}), ...(run.failure ? { failure: run.failure } : {}),
+    ...(run.finalizing ? { finalizing: run.finalizing } : {}),
+  };
 }
 
 function doneData(run: RunState): Record<string, unknown> {
   const prs = (run.deliveries ?? []).map((receipt) => receipt.url);
-  return { done: { run: run.id, outcome: run.status, ...(run.end !== undefined ? { end: run.end } : {}), ...(run.failure ? { failure: run.failure } : {}), ...(prs.length > 0 ? { prs } : {}), ...benchmarkDone(run) } };
+  const outputs = runOutputs(run);
+  const unfinished = finallyStopped(run);
+  return { done: {
+    run: run.id, outcome: run.status, ...(run.end !== undefined ? { end: run.end } : {}), ...(run.failure ? { failure: run.failure } : {}), ...(prs.length > 0 ? { prs } : {}),
+    ...(outputs ? { outputs } : {}), ...(unfinished.length > 0 ? { finally: unfinished } : {}), ...benchmarkDone(run),
+  } };
+}
+
+/**
+ * The values a settled run returns, read from its steps and its `finally` steps as they ended. One whose step did not
+ * give it, such as a `finally` step that failed, is absent.
+ */
+function runOutputs(run: RunState): Record<string, unknown> | undefined {
+  if (!run.definition.outputs) return undefined;
+  const scope = finallyScope(run);
+  const context = contextOf(scope, statesIn(run, scope));
+  return Object.fromEntries(Object.entries(run.definition.outputs).flatMap(([name, source]) => {
+    const parsed = parseExpression(source);
+    const value = parsed.ok && parsed.expression.kind === 'path' ? resolvePath(parsed.expression.path, context) : null;
+    return value === null ? [] : [[name, value]];
+  }));
+}
+
+/** The `finally` steps that failed or were cancelled, with why. */
+function finallyStopped(run: RunState): Array<{ id: string; outcome: 'failed' | 'cancelled'; failure?: WorkflowFailure }> {
+  const own = new Set(run.definition.finally?.map((step) => step.id));
+  return run.steps.flatMap((state) => (own.has(state.id) && (state.status === 'failed' || state.status === 'cancelled')
+    ? [{ id: state.id, outcome: state.status, ...(state.failure ? { failure: state.failure } : {}) }]
+    : []));
 }
 
 /** An ended benchmark run's results table, computed from its end record as every other reader computes it. */
@@ -889,7 +942,7 @@ function settleScope(run: RunState, scope: Scope, now: string): Settled {
  * has passed apply first: the engine has no clock of its own, so a timeout takes effect on the first operation after it.
  */
 export function reconcileRun(run: RunState, now: string): Settled {
-  return expire(run, now) ?? settleScope(run, topScope(run), now);
+  return expire(run, now) ?? settleScope(run, run.finalizing ? finallyScope(run) : topScope(run), now);
 }
 
 /** Why `inputs` do not fit what the workflow declares, naming the field, or null when they fit. Every declared input is required. */
@@ -947,7 +1000,7 @@ export async function startRun(
   config: LocalConfig,
   name: string,
   inputs: unknown,
-  { secrets, ...options }: { secrets: Record<string, string>; runMode?: RunMode; driver?: DriverIdentity; base?: RunState['base']; checkout?: string },
+  { secrets, ...options }: { secrets: Record<string, string>; runMode?: RunMode; driver?: DriverIdentity; base?: RunState['base']; checkout?: string; timeout?: number },
 ): Promise<WorkflowEnvelope> {
   const cached = await loadCachedWorkflow(config, name);
   if (!cached) {
@@ -980,7 +1033,7 @@ export async function startRun(
  */
 export async function createRun(
   config: LocalConfig,
-  { secrets, driver, ...input }: Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'runMode' | 'definition' | 'workflows' | 'scorers' | 'benchmark' | 'base' | 'checkout'>
+  { secrets, driver, ...input }: Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'runMode' | 'definition' | 'workflows' | 'scorers' | 'benchmark' | 'base' | 'checkout' | 'timeout'>
     & Required<Pick<RunState, 'origin'>> & { secrets: Record<string, string>; driver?: DriverIdentity },
 ): Promise<WorkflowEnvelope> {
   const workflows = input.workflows ?? {};
@@ -1014,6 +1067,7 @@ export async function createRun(
     settledAttempts: [],
     ...(input.base ? { base: input.base } : {}),
     ...(input.checkout ? { checkout: input.checkout } : {}),
+    ...(input.timeout !== undefined ? { timeout: input.timeout } : {}),
     createdAt: now,
     updatedAt: now,
   };
@@ -1252,12 +1306,14 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           && step.lease.attempt === attempt && sameDriver(step.lease.driver, driver))),
       }),
     });
-    const done = async (result: WorkflowResult): Promise<{ save: boolean; envelope: WorkflowEnvelope }> => {
+    // Undefined once the run's `finally` steps start, so the loop hands them out.
+    const done = async (result: WorkflowResult): Promise<{ save: boolean; envelope: WorkflowEnvelope } | undefined> => {
       // A run that reached its end waits for the judges its steps require; a timeout, a limit or a cancel does not.
-      const judging = result.outcome === 'succeeded' ? (await requiredEntries(config, run, now)).filter(isUnsettled).length : 0;
+      const judging = result.outcome === 'succeeded' && !run.finalizing ? (await requiredEntries(config, run, now)).filter(isUnsettled).length : 0;
       if (judging > 0) {
         return answer({ wait: { reason: `${judging} judge entries of run ${run.id} are not settled: judge them with teamai score --next`, judging } });
       }
+      if (enterFinalizing(run, result, now)) return undefined;
       queued = await finishRun(config, run, now, result, env.secrets, driver);
       return answer(doneData(run));
     };
@@ -1282,7 +1338,11 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       // driver does not run again what they already stopped, and a lease past its timeout no longer holds the run.
       const result = reconcileRun(run, now);
       if ('unreadable' in result) return { save: false, envelope: error('run_unreadable', result.unreadable) };
-      if ('outcome' in result) return done(result);
+      if ('outcome' in result) {
+        const ended = await done(result);
+        if (ended) return ended;
+        continue;
+      }
       const other = run.steps.find((step): step is LeasedStep => step.status === 'leased' && !sameDriver(step.lease.driver, driver));
       if (other) return wait(other);
       run.driver = driver;

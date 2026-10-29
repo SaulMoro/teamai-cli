@@ -43,6 +43,11 @@ const BodySchema = z.object({
   status: z.enum(['running', 'succeeded', 'failed', 'cancelled']),
   end: z.string().optional(),
   failure: z.object({ code: z.string(), message: z.string() }).optional(),
+  finalizing: z.object({
+    outcome: z.enum(['succeeded', 'failed', 'cancelled']), end: z.string().optional(),
+    failure: z.object({ code: z.string(), message: z.string() }).optional(), until: z.string(),
+  }).optional(),
+  timeout: z.number().int().positive().optional(),
   inputs: z.record(z.unknown()).optional(),
   sourceHash: z.string(),
   definitionHash: z.string(),
@@ -213,7 +218,7 @@ type Rewrites<T, R> = { readonly [K in keyof R as R[K] extends 'rewrite' ? K : n
 
 const RUN_RULES = {
   schemaVersion: 'publish', id: 'rewrite', name: 'publish', revision: 'publish', status: 'publish', driver: 'drop',
-  end: 'publish', failure: 'rewrite', inputs: 'publish', sourceHash: 'publish', teamRevision: 'publish', runMode: 'publish', origin: 'publish',
+  end: 'publish', failure: 'rewrite', finalizing: 'rewrite', timeout: 'publish', inputs: 'publish', sourceHash: 'publish', teamRevision: 'publish', runMode: 'publish', origin: 'publish',
   definition: 'rewrite', workflows: 'rewrite', scorers: 'rewrite', benchmark: 'drop', verdicts: 'drop', steps: 'rewrite', settledAttempts: 'rewrite', settledCount: 'rewrite',
   endRecordQueued: 'drop', cancelledAttempts: 'rewrite', archive: 'rewrite', round: 'publish', base: 'publish',
   checkout: 'drop', copies: 'rewrite', deliveries: 'publish', creating: 'publish', sessionContinuations: 'publish', releasedTokens: 'publish',
@@ -280,6 +285,9 @@ const RUN_REWRITES = {
     ? { scorers: Object.fromEntries(Object.entries(run.scorers).map(([name, pin]) => [name, { sourceHash: pin.sourceHash }])) }
     : {}),
   failure: (run) => (run.failure ? { failure: handed(run.failure, FAILURE_RULES, FAILURE_REWRITES) } : {}),
+  finalizing: (run) => (run.finalizing ? {
+    finalizing: { ...run.finalizing, ...(run.finalizing.failure ? { failure: handed(run.finalizing.failure, FAILURE_RULES, FAILURE_REWRITES) } : {}) },
+  } : {}),
   steps: (run) => ({ steps: run.steps.map((step) => handed(step, STEP_RULES, STEP_REWRITES)) }),
   // settledAttempts only dedups reports on this machine; the engine counts from it when settledCount is absent.
   settledAttempts: () => ({}),

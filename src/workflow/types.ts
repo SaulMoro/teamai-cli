@@ -231,6 +231,11 @@ export interface WorkflowDefinition {
   /** Runs in each workspace a driver creates for a step of this file, or of a workflow it runs that has no setup. */
   setup?: Setup;
   steps: WorkflowStep[];
+  /**
+   * Read-only command steps that run once the run's steps end, whatever the outcome, a timeout or a cancel included.
+   * Only the run's own workflow runs them, never a workflow a step runs.
+   */
+  finally?: WorkflowStep[];
 }
 
 export interface WorkflowDiagnostic {
@@ -289,6 +294,17 @@ export interface WorkflowFailure {
   message: string;
 }
 
+/**
+ * A run whose steps ended while its `finally` steps run: the outcome, end and failure it ends with once they settle,
+ * whatever they do, and when they must settle by.
+ */
+export interface Finalizing {
+  outcome: Exclude<RunStatus, 'running'>;
+  end?: string;
+  failure?: WorkflowFailure;
+  until: string;
+}
+
 /** Durable run file. `revision` rejects stale reports; `definition` is the cached snapshot. */
 export interface RunState {
   schemaVersion: 'v1alpha1';
@@ -300,6 +316,10 @@ export interface RunState {
   driver?: DriverIdentity;
   /** The end this run reached, set when it settles. */
   end?: string;
+  /** Set while the run's `finally` steps run, from when its steps end until it settles. Its status stays `running`. */
+  finalizing?: Finalizing;
+  /** Milliseconds `workflow start --timeout` gave the run; the shorter of it and the workflow's `timeout` applies. */
+  timeout?: number;
   /** Why the run failed when no end says it, such as `loop_exhausted` on a looping top-level workflow. */
   failure?: WorkflowFailure;
   /** The validated `--inputs`, stored when the workflow declares inputs. */

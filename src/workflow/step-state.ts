@@ -562,7 +562,9 @@ export function settled(step: StepState | undefined): step is Extract<StepState,
 /**
  * Stops every open step whose path `under` matches, in sub-workflows too: a leased step is cancelled and its attempt
  * stopped at `now` (`stopAttempt`), a running workflow step is cancelled, and a pending or waiting step is skipped. Used
- * by an end or break, cancel and retry, each with its own failure. Returns the ids this walk changed.
+ * by an end or break, cancel and retry, each with its own failure. While the run's `finally` steps run, only a cancel or
+ * the deadline stops them, and one not started yet is cancelled too: it was ended, not passed over. Returns the ids this
+ * walk changed.
  */
 export function stopWhere(run: RunState, under: (id: string) => boolean, failure: WorkflowFailure, settledAt: number, now: string): string[] {
   const changed: string[] = [];
@@ -572,7 +574,8 @@ export function stopWhere(run: RunState, under: (id: string) => boolean, failure
     switch (state.status) {
       case 'pending':
       case 'waiting':
-        skip(state, settledAt);
+        if (run.finalizing) cancel(state, failure, settledAt);
+        else skip(state, settledAt);
         break;
       case 'running':
       case 'delivering':
