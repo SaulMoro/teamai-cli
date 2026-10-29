@@ -435,7 +435,7 @@ function parseBody(
       }
       const onLimitPair = item.items.find((pair) => scalarString(pair.key) === 'on_limit');
       const onLimit = onLimitPair ? parseOnLimit(onLimitPair.value ?? onLimitPair.key, {
-        field: `${field}.on_limit`, stepLabel, ends: forEachPair ? 'fan-out' : promptPair || promptFilePair ? 'prompt' : actions.length > 0 ? 'none' : undefined,
+        field: `${field}.on_limit`, stepLabel, ends: forEachPair ? 'fan-out' : promptPair || promptFilePair ? 'prompt' : workflowPair && actions.length === 1 ? 'workflow' : actions.length > 0 ? 'none' : undefined,
         limits: { timeout: stepTimeoutPair !== undefined, budget: budgetPair !== undefined, maxTurns: maxTurnsPair !== undefined },
       }, ctx) : undefined;
       const endsPromptTurn = onLimit === 'end_turn' && (promptPair !== undefined || promptFilePair !== undefined);
@@ -1041,10 +1041,10 @@ function parseTimeout(node: Node | null | undefined, field: string, ctx: ParseCo
 
 /**
  * A step's `on_limit`, or undefined when it is not one. `ends` is what the step runs: a prompt's turn ends at its
- * `timeout`, `max_turns` or `budget`.
+ * `timeout`, `max_turns` or `budget`; a workflow step's `timeout` and `budget` are the allowance its prompts spend.
  */
 function parseOnLimit(
-  node: Node | null | undefined, { field, stepLabel, ends, limits }: { field: string; stepLabel: string; ends: 'prompt' | 'fan-out' | 'none' | undefined; limits: { timeout: boolean; budget: boolean; maxTurns: boolean } },
+  node: Node | null | undefined, { field, stepLabel, ends, limits }: { field: string; stepLabel: string; ends: 'prompt' | 'workflow' | 'fan-out' | 'none' | undefined; limits: { timeout: boolean; budget: boolean; maxTurns: boolean } },
   ctx: ParseContext,
 ): OnLimit | undefined {
   const value = scalarString(node);
@@ -1059,11 +1059,13 @@ function parseOnLimit(
     case undefined:
       return onLimit;
     case 'none':
-      return problem('on_limit is only allowed on a prompt or prompt_file step');
+      return problem('on_limit is only allowed on a prompt, prompt_file or workflow step');
     case 'fan-out':
       return problem('on_limit is not allowed on a for_each step');
     case 'prompt':
       return limits.timeout || limits.budget || limits.maxTurns ? onLimit : problem('on_limit needs a timeout, max_turns or budget to end the turn at');
+    case 'workflow':
+      return limits.timeout || limits.budget ? onLimit : problem('on_limit on a workflow step needs a timeout or budget, which its prompts spend');
     default: {
       const unhandled: never = ends;
       return unhandled;

@@ -107,7 +107,8 @@ export interface WorkflowStep {
   maxTurns?: number;
   /**
    * What reaching `timeout`, `max_turns` or `budget` does. `fail`, the default, fails the step. `end_turn` ends the
-   * agent's turn: on a prompt step the limits count from tool launch and the step succeeds with the limit it reached.
+   * agent's turn: on a prompt step the limits count from tool launch and the step succeeds with the limit it reached;
+   * on a workflow step `timeout` and `budget` are an allowance its prompt turns spend.
    */
   onLimit?: OnLimit;
   /** Generated only, never parsed from a team file: a benchmark trial step. */

@@ -226,7 +226,7 @@ const STEP_RULES = {
   outputs: 'publish', end: 'publish', results: 'publish', settledAt: 'publish', exitCode: 'publish', message: 'drop',
   tool: 'publish', model: 'publish', session: 'publish', tokens: 'publish', changes: 'publish', read: 'publish',
   agent: 'publish', used: 'publish', installId: 'publish', loopFinal: 'publish', failure: 'rewrite', delivery: 'publish', unenforced: 'publish',
-  runMode: 'publish', expiresAt: 'publish', limitsFrom: 'publish', outcomes: 'publish', verdict: 'publish', limit: 'publish', durationMs: 'publish', cost: 'publish',
+  runMode: 'publish', expiresAt: 'publish', limitsFrom: 'publish', allowanceSpent: 'publish', outcomes: 'publish', verdict: 'publish', limit: 'publish', durationMs: 'publish', cost: 'publish',
 } satisfies FieldRules<StepState>;
 
 const PASS_RULES = {

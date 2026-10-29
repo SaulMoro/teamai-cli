@@ -203,7 +203,11 @@ const WaitingSchema = StepBaseSchema.extend({ status: z.literal('waiting') });
  * `expiresAt`: when the step's `timeout`, or that of the workflow file it runs, ends it. `limitsFrom`: where the budget of
  * the workflow it runs counts from. Both are set when it starts.
  */
-const RunningSchema = StepBaseSchema.extend({ status: z.literal('running'), expiresAt: z.string().optional(), limitsFrom: LimitsFromSchema.optional() });
+const RunningSchema = StepBaseSchema.extend({
+  status: z.literal('running'), expiresAt: z.string().optional(), limitsFrom: LimitsFromSchema.optional(),
+  /** Under `on_limit: end_turn`: a prompt inside reached a limit its allowance set, so the allowance is spent. */
+  allowanceSpent: z.literal(true).optional(),
+});
 /** `delivering`: the agent succeeded and its work is on its branch; dependents wait until that branch has its pull request. */
 const DeliveringSchema = StepBaseSchema.extend({ status: z.literal('delivering'), ...settledFields, delivery: DeliverySchema });
 const SucceededSchema = StepBaseSchema.extend({

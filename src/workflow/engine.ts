@@ -24,7 +24,7 @@ import {
   ReadSchema, answerHitl, fail, inProgress, lease, release, settled, skip, start, startDelivery, stopAttempt, stopWhere, stopped,
   succeed, waitForAnswer, type ItemResult, type LeasedStep, type StepRead, type StepState,
 } from './step-state.js';
-import { budgetSpent, countLateTokens, expire, itemsSpent, leaseDeadline, ownDeadline, startLimits, turnLimits } from './limits.js';
+import { budgetSpent, countLateTokens, expire, itemsSpent, leaseDeadline, ownDeadline, spendAllowances, spentAllowances, startLimits, turnLimits } from './limits.js';
 import { addItems, afterStanding, expandItems, isItem, itemsAfter, itemsOf, itemsSettled, startedItems } from './fan-out.js';
 import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, isUnder, loopSettled } from './loop.js';
 import { childScope, contextOf, insertChildren, localId, statesIn, stepDefinitions, topScope, type Scope } from './scope.js';
@@ -783,6 +783,11 @@ function settleScope(run: RunState, scope: Scope, now: string): Settled {
     stopWhere(run, (id) => id.startsWith(scope.prefix), failure, run.revision, now);
     return { outcome: 'failed', failure, settledAt: run.revision };
   }
+  // A workflow step whose allowance is spent starts nothing more: what is still pending under it is skipped, and what
+  // runs finishes its turn.
+  for (const owner of spentAllowances(run, scope)) {
+    for (const state of run.steps) if (state.status === 'pending' && isUnder(owner)(state.id)) skip(state, run.revision);
+  }
   const states = statesIn(run, scope);
   const defined = new Map(scope.definition.steps.map((item) => [item.id, item]));
   const definitionOf = (state: StepState): WorkflowStep | undefined => defined.get(localId(scope, state));
@@ -1057,7 +1062,7 @@ interface OfferContext {
 function offerTerms(
   run: RunState, id: string, { scope, step }: { scope: Scope; step: WorkflowStep }, plan: WorkspacePlan | undefined, context: OfferContext,
 ): Negotiation {
-  const endTurn = turnLimits(step);
+  const endTurn = turnLimits(run, scope, step);
   return negotiate({
     step: id,
     executor: step.command !== undefined ? 'command' : 'prompt',
@@ -1886,6 +1891,8 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       }
     }
 
+    // A turn ended at what an allowance had left spends it.
+    if (outcome === 'success' && report.limit && limits && located) spendAllowances(run, located.scope, limits, report.limit);
     rememberSettledAttempt(run, report.attempt);
     run.revision += 1;
     const settlement = {

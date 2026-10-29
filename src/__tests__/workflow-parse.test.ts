@@ -1283,7 +1283,7 @@ steps:
     ]));
   });
 
-  it('reads on_limit on a prompt step with a limit, and a budget on that prompt', () => {
+  it('reads on_limit on a prompt step with a limit, a budget on that prompt, and on_limit on a workflow step with a timeout', () => {
     const result = parse(`schemaVersion: v1alpha1
 name: build
 description: Build it.
@@ -1293,15 +1293,20 @@ steps:
     timeout: 2m
     budget: { tokens: 5000 }
     on_limit: end_turn
-  - id: ship
+  - id: check
     needs: [plan]
+    workflow: check
+    timeout: 10m
+    on_limit: end_turn
+  - id: ship
+    needs: [check]
     prompt: Ship it.
     max_turns: 3
     on_limit: fail
 `);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.definition.steps.map((step) => step.onLimit)).toEqual(['end_turn', 'fail']);
+    expect(result.definition.steps.map((step) => step.onLimit)).toEqual(['end_turn', 'end_turn', 'fail']);
     expect(result.definition.steps[0]?.budget).toEqual({ tokens: 5000 });
   });
 
@@ -1343,9 +1348,9 @@ steps:
     if (result.ok) return;
     expect(result.diagnostics.map(formatDiagnostic)).toEqual(expect.arrayContaining([
       'workflows/build.yaml:7: field "steps[0].on_limit": step "plan" on_limit needs a timeout, max_turns or budget to end the turn at',
-      'workflows/build.yaml:12: field "steps[1].on_limit": step "check" on_limit is only allowed on a prompt or prompt_file step',
+      'workflows/build.yaml:12: field "steps[1].on_limit": step "check" on_limit is only allowed on a prompt, prompt_file or workflow step',
       'workflows/build.yaml:17: field "steps[2].on_limit": step "review" on_limit must be end_turn or fail',
-      'workflows/build.yaml:22: field "steps[3].on_limit": step "ship" on_limit is only allowed on a prompt or prompt_file step',
+      'workflows/build.yaml:22: field "steps[3].on_limit": step "ship" on_limit on a workflow step needs a timeout or budget, which its prompts spend',
       'workflows/build.yaml:26: field "steps[4].budget": step "tidy" budget is only allowed on a workflow step, or on a prompt step with on_limit: end_turn',
       'workflows/build.yaml:32: field "steps[5].on_limit": step "each" on_limit is not allowed on a for_each step',
     ]));

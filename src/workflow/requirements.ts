@@ -291,7 +291,7 @@ export interface Offer {
   budgeted: boolean;
   /** The step's `max_turns`. */
   maxTurns?: number;
-  /** The limits that end the prompt's turn, under its own `on_limit: end_turn`. */
+  /** The limits that end the prompt's turn, under its own `on_limit: end_turn` or a workflow step's allowance. */
   endTurn?: TurnLimits;
   /** The workflow's setup, when the lease names a workspace the driver may create. */
   setup?: Setup;

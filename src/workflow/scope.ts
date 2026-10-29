@@ -34,13 +34,29 @@ export interface Scope {
   budgeted: boolean;
   /** The `setup` in effect: the workflow file's own, else the enclosing scope's. */
   setup?: Setup;
+  /** The workflow steps under `on_limit: end_turn` this workflow runs inside, outermost first: allowances its prompt turns spend. */
+  allowances: GrantedAllowance[];
+}
+
+/** What a workflow step under `on_limit: end_turn` grants the prompt turns inside it: its `timeout` and `budget`. */
+export interface GrantedAllowance {
+  step: string;
+  timeoutMs?: number;
+  tokens?: number;
+}
+
+/** The allowances inside the workflow `state` runs: those around it, then its own under `on_limit: end_turn`. */
+function allowancesOf(scope: Scope, state: StepState, step: WorkflowStep): Pick<Scope, 'allowances'> {
+  if (step.onLimit !== 'end_turn') return { allowances: scope.allowances };
+  const own = { step: state.id, ...(step.timeout !== undefined ? { timeoutMs: step.timeout } : {}), ...(step.budget ? { tokens: step.budget.tokens } : {}) };
+  return { allowances: [...scope.allowances, own] };
 }
 
 export function topScope(run: RunState): Scope {
   return {
     prefix: '', definition: run.definition, inputs: run.inputs, loops: stepLoops(run.definition.steps), defaultModel: run.definition.defaults?.model,
     requires: mergeRequirements(run.definition.defaults?.requires),
-    ...budgetOf(false, run.definition.budget), ...setupOf(run.definition.setup),
+    ...budgetOf(false, run.definition.budget), ...setupOf(run.definition.setup), allowances: [],
   };
 }
 
@@ -48,9 +64,12 @@ function setupOf(setup: Setup | undefined): Pick<Scope, 'setup'> {
   return setup ? { setup } : {};
 }
 
-/** A workflow step's budget, which a `for_each` step spends over all its items instead of giving each item its own. */
+/**
+ * A workflow step's budget, which a `for_each` step spends over all its items instead of giving each item its own.
+ * Under `on_limit: end_turn` it is an allowance its prompts spend, which never fails it.
+ */
 function ownBudget(step: WorkflowStep): Budget | undefined {
-  return step.forEach ? undefined : step.budget;
+  return step.forEach || step.onLimit === 'end_turn' ? undefined : step.budget;
 }
 
 function budgetOf(outer: boolean, ...budgets: ReadonlyArray<Budget | undefined>): Pick<Scope, 'budget' | 'budgeted'> {
@@ -68,7 +87,7 @@ export function childScope(run: RunState, scope: Scope, states: StepState[], sta
       prefix: `${state.id}.`, definition: step.workflow, inputs: scope.inputs, outer: expressionSteps(scope, states, state),
       loops: stepLoops(step.workflow.steps), runner: state, ...itemOf(scope, state), defaultModel: scope.defaultModel,
       requires: mergeRequirements(scope.requires, step.requires),
-      ...budgetOf(scope.budgeted || step.budget !== undefined, ownBudget(step)), ...setupOf(scope.setup),
+      ...budgetOf(scope.budgeted || step.budget !== undefined, ownBudget(step)), ...setupOf(scope.setup), ...allowancesOf(scope, state, step),
     };
   }
   const definition = step.workflow === undefined ? undefined : run.workflows?.[step.workflow];
@@ -77,6 +96,7 @@ export function childScope(run: RunState, scope: Scope, states: StepState[], sta
     defaultModel: definition.defaults?.model ?? scope.defaultModel,
     requires: mergeRequirements(scope.requires, step.requires, definition.defaults?.requires),
     ...budgetOf(scope.budgeted || step.budget !== undefined, ownBudget(step), definition.budget), ...setupOf(definition.setup ?? scope.setup),
+    ...allowancesOf(scope, state, step),
   };
 }
 
