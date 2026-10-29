@@ -35,14 +35,62 @@ setup:
 | 键 | 值 |
 | --- | --- |
 | `repo` | 任务所基于的项目：不带凭据的 https、ssh 或 git URL。 |
-| `defaults` | 其他 arm 用来对比的那个 arm：`tool`，以及可选的 `model`。它不是工作流的 `defaults`。 |
+| `defaults` | 其他 arm 用来对比的那个 arm：`tool`，以及可选的 `model` 和 `team`。它不是工作流的 `defaults`。 |
 | `arms` | 1 到 6 个。每个最多改变一个 `defaults` 键，最多只有一个什么都不改。 |
+| `matrix` | 代替 `arms`：teamai 把这些值列表交叉组合成 arm。见[用 matrix 交叉工具和团队资产](#用-matrix-交叉工具和团队资产)。 |
+| `team` | arm 运行时使用的团队资产。见[使用其他团队资产的 arm](#使用其他团队资产的-arm)。 |
 | `model` | `models/aliases.yaml` 里的模型别名（运行启动时按每个 arm 的工具解析），或一个模型名。 |
 | `repetitions` | 1 到 10，默认 3。 |
 | `timeout` | 必填：整个运行的超时。 |
 | `trial` | 可选：每个 trial 的 prompt 的限制。见 [trial 限制](#trial-限制)。 |
 | `setup` | 可选，即[工作流的 `setup`](workflow-advanced.md#要求和限制)。在每个全新克隆中、工具或 check 之前运行。 |
 | `scorers` | 可选，评判每个 trial 的[评分器](scorers.md)。没有有效 `scorers/<name>.md` 的名字会让 `teamai review --branch` 失败，`teamai pull` 会警告，start 会拒绝该套件。 |
+
+### 使用其他团队资产的 arm
+
+arm 默认使用本检出目录 pull 到的团队修订，除非它设置了 `team`。可以用它衡量团队资产带来了多少提升、合并前的某个分支，或某一个 skill：
+
+```yaml
+defaults:
+  tool: claude
+arms:
+  - name: pulled              # 你 pull 到的修订
+  - name: bare
+    team: none                # 完全不带团队资产
+  - name: next
+    team: next                # 团队仓库的 next 分支
+  - name: no-auth-tokens
+    team:
+      without: [auth-tokens]  # pull 到的修订，去掉这个 skill
+```
+
+| `team` | arm 运行时使用 |
+| --- | --- |
+| `pulled`，或不写 `team` | 本检出目录 pull 到的团队修订。 |
+| `none` | 不带团队资产。如果本机 user 范围的 teamai 安装会把资产交付给该 arm 的工具，start 会拒绝它，因为它的 trial 会读到你 home 目录里的这些资产。 |
+| 分支、tag 或提交 | 团队仓库的该修订，在运行启动时解析。分支按团队仓库里的名字写，例如 `next`，而不是 `origin/next`。 |
+| `without: [<skill>, ...]` | pull 到的修订，去掉这些 skill。每个都必须是该修订中的 skill。 |
+
+### 用 matrix 交叉工具和团队资产
+
+`matrix` 为其值的每种组合生成一个 arm，因此任意两个只差一个值的 arm 只比较这一个值。下面这个例子同时回答：团队资产对每个工具帮助多大，以及带上资产后哪个工具更好：
+
+```yaml
+defaults:
+  tool: claude
+matrix:
+  tool: [claude, codex]
+  team: [pulled, none]
+```
+
+| Arm | 工具 | 团队 |
+| --- | --- | --- |
+| `claude-pulled` | claude | pulled |
+| `claude-none` | claude | none |
+| `codex-pulled` | codex | pulled |
+| `codex-none` | codex | none |
+
+matrix 可以变化 `tool`、`model` 或 `team`，其中至少一个要有两个或更多值，并生成 1 到 12 个 arm。它没写的键取自 `defaults`。每个 arm 的名字由各个变化键的值拼接而成：ref 原样使用，字母、数字、`-`、`_` 以外的字符写成 `-`，`without: [auth-tokens]` 写成 `without-auth-tokens`。一个套件只能有 `arms` 或 `matrix` 之一。
 
 任务从 `repo` 的一个完整提交开始，并且恰好由 `check` 和 `successCriteria` 之一判定：
 
@@ -235,7 +283,7 @@ $ teamai workflow start fix-auth --benchmark --driver local --sandbox
 | trial 得到 | |
 | --- | --- |
 | 起始提交的全新克隆 | 没有远程仓库。你的检出目录从不被改动。 |
-| 团队资产和套件 | 来自本检出目录上次 pull 到的团队修订，该修订必须已推送。启动时冻结：运行期间 pull 不会改变它运行的任何内容。 |
+| 团队资产和套件 | 来自本检出目录上次 pull 到的团队修订（该修订必须已推送），或来自 arm 的 `team`。启动时冻结：运行期间 pull 不会改变它运行的任何内容。 |
 | 环境 | 去掉 `GITHUB_TOKEN`、`GH_TOKEN`、`GITLAB_TOKEN`、`GL_TOKEN`、`CI_JOB_TOKEN`、`SSH_AUTH_SOCK`、`GIT_ASKPASS` 和 `SSH_ASKPASS`。 |
 | 你的主目录 | 保持原样：teamai 去不掉其中的登录信息、MCP 服务器和插件。 |
 | 本机上的团队仓库 | 保持原样：你的团队检出目录，以及每个 trial 克隆旁边用来安装其团队资产的那份团队修订副本，都包含 `benchmarks/`，check 文件也在其中。在本机上搜索的 agent 能找到它们。 |
@@ -285,7 +333,7 @@ These results hold for these tasks, this run and this machine.
 
 | 表格 | 内容 |
 | --- | --- |
-| Arm | 按结果统计每个 arm 的 trial，以及被 [trial 限制](#trial-限制)停止的数量。偏差是 prompt 运行时的工具、团队修订或模型与其 arm 不同的 trial，或者其 driver 无法执行某个 trial 限制的 trial。记录缺少其中某个值的 trial 为未验证。 |
+| Arm | 按结果统计每个 arm 的 trial，以及被 [trial 限制](#trial-限制)停止的数量。偏差是 prompt 运行时的工具、团队修订或模型与其 arm 不同的 trial，或者其 driver 无法执行某个 trial 限制的 trial。记录缺少其中某个值的 trial 为未验证。有 arm 设置了 `team` 时，Team 列显示每个 arm 的团队资产，例如 `pulled 3f9c2ab`、`next 81d0e4c`、`3f9c2ab without auth-tokens` 或 `none`。 |
 | 用量 | 每个 arm 的中位数和成本合计，并注明各自用了多少个 trial。token 和成本只按工具自己声明的显示，所以不声明的工具显示 `unknown (0)`。 |
 | 任务 | 每个任务在每个 arm 上的通过率。 |
 | 基线 | 没有运行的任务及原因。 |

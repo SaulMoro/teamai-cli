@@ -111,13 +111,26 @@ The Benchmarks page shows every ended [benchmark](benchmarks.md) run of the sele
 
 **Last run** shows the newest run's trials by result for each arm, with its usage, deviations and the tasks it did not measure. **Open the run** opens its details on the Workflow Runs page.
 
+The panels above are the **Arms** tab. Two more tabs answer what changed between arms, and between team revisions. Here, for `onboarding-docs`, a [matrix](benchmarks.md#cross-tools-with-team-assets) of claude and codex with the pulled team assets and with none, and for `fix-auth` again:
+
+| Question | Tab and panel | What it showed |
+|---|---|---|
+| How much do our team assets help on onboarding docs? | **Compare**, by **Team assets** | `pulled team against no team assets +41 pp · 95% +16 pp to +59 pp` on claude, over 27 paired trials, and `−60%` cost per passed trial. |
+| Do they help codex as much? | **Difference per pair of arms** | codex gains +15 pp, but its interval crosses zero: these runs do not tell its two arms apart. |
+| Which task do the assets fix? | **Each task** | `oncall-runbook` goes from 1/9 to 7/9 with the assets; `first-pr-guide` barely moves. |
+| Did the auth-tokens skill help claude on `fix-auth`? | **Team changes**, on `claude · claude-opus-5-5` | 67%, 62%, 70% over three team revisions, in commit order, none told apart from the one before it. Click `67ee2ce · Add the auth-tokens skill and a security reviewer`: it changed three files, and `session-fixation` went from 1/12 to 3/12. |
+| Did a tool update move the numbers? | **Arms**, **Pass rate per run** | A dashed `Tool updated · claude 2.4.0` line marks the first run on the new version. |
+
+**Compare** lists each two arms of the suite's current version that differ only in their team assets, tool or model, and pairs their trials by run, task and repetition. **Team changes** follows one tool and model across the team revisions it ran on with the pulled assets or a ref, and names each revision from this machine's team clone, with the files outside `benchmarks/` it changed since the one before it.
+
 How the numbers are counted:
 
 - A pass rate is passed trials over planned trials, as the run's own table prints it.
 - The pooled numbers, the task tables and the leader count only the runs of the suite's current version: the suite files of its newest run. **Pass rate per run** also draws the older runs, after a dashed `Suite changed` line.
-- An arm is its name, tool, model and effort. When one of them changed, the older runs are a separate line, marked `earlier configuration`.
+- An arm is its name, tool, model, effort and team assets. When one of them changed, the older runs are a separate line, marked `earlier configuration`.
 - **Pass rate by arm** also counts the arm's deviations and trials not verified over those runs, as each run's table counts them. A deviation is a trial whose prompt ran on another tool, model or team revision than its arm's.
 - The interval is a 95% Wilson score interval. Two arms whose intervals overlap are not told apart by these runs.
+- A difference in **Compare** is over paired trials, with a 95% interval for paired proportions (Newcombe). One whose interval crosses zero is `not separated`.
 - Usage is the median over the trials whose tool reported it. Cost is per trial.
 - A run on this machine that was also published shows once, from this machine.
 

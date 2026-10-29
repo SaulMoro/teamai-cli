@@ -35,14 +35,62 @@ setup:
 | Key | Value |
 | --- | --- |
 | `repo` | The project the tasks start from: an https, ssh or git URL without credentials. |
-| `defaults` | The arm the others are compared with: `tool`, and optionally `model`. Not a workflow's `defaults`. |
+| `defaults` | The arm the others are compared with: `tool`, and optionally `model` and `team`. Not a workflow's `defaults`. |
 | `arms` | 1 to 6. Each changes at most one `defaults` key, and at most one changes none. |
+| `matrix` | Instead of `arms`: lists of values that teamai crosses into arms. See [Cross tools with team assets](#cross-tools-with-team-assets). |
+| `team` | The team assets an arm runs with. See [Arms on other team assets](#arms-on-other-team-assets). |
 | `model` | A model alias from `models/aliases.yaml`, resolved for each arm's tool when the run starts, or a model name. |
 | `repetitions` | 1 to 10, 3 by default. |
 | `timeout` | Required: the whole run's. |
 | `trial` | Optional limits of every trial's prompt. See [Trial limits](#trial-limits). |
 | `setup` | Optional, a [workflow's `setup`](workflow-advanced.md#requirements-and-limits). Runs in every fresh clone before the tool or the check. |
 | `scorers` | Optional [scorers](scorers.md) that judge every trial. A name with no valid `scorers/<name>.md` fails `teamai review --branch`, `teamai pull` warns, and start refuses the suite. |
+
+### Arms on other team assets
+
+An arm runs with the team revision this checkout pulled unless it sets `team`. Measure what the team's assets add, a branch before you merge it, or one skill:
+
+```yaml
+defaults:
+  tool: claude
+arms:
+  - name: pulled              # the revision you pulled
+  - name: bare
+    team: none                # no team assets at all
+  - name: next
+    team: next                # the team repo's branch next
+  - name: no-auth-tokens
+    team:
+      without: [auth-tokens]  # the pulled revision, without this skill
+```
+
+| `team` | The arm runs with |
+| --- | --- |
+| `pulled`, or no `team` | The team revision this checkout pulled. |
+| `none` | No team assets. Start refuses it on a machine whose user-scope teamai install delivers to the arm's tool, since its trials would read those assets in your home. |
+| A branch, tag or commit | That revision of the team repo, resolved when the run starts. Name a branch as the team repo names it, `next`, not `origin/next`. |
+| `without: [<skill>, ...]` | The pulled revision, without these skills. Each must be a skill of that revision. |
+
+### Cross tools with team assets
+
+`matrix` makes one arm for each combination of its values, so every two arms that differ in one value compare that value alone. Here, how much the team's assets help each tool, and which tool does better with them:
+
+```yaml
+defaults:
+  tool: claude
+matrix:
+  tool: [claude, codex]
+  team: [pulled, none]
+```
+
+| Arm | Tool | Team |
+| --- | --- | --- |
+| `claude-pulled` | claude | pulled |
+| `claude-none` | claude | none |
+| `codex-pulled` | codex | pulled |
+| `codex-none` | codex | none |
+
+A matrix varies `tool`, `model` or `team`, at least one of them with two values or more, and makes 1 to 12 arms. A key it leaves out comes from `defaults`. Each arm's name joins its values for the keys that vary: a ref is used as it is, with a character other than a letter, digit, `-` or `_` written `-`, and `without: [auth-tokens]` is `without-auth-tokens`. A suite has `arms` or `matrix`, not both.
 
 A task starts from a full commit of `repo` and is decided by exactly one of `check` and `successCriteria`:
 
@@ -235,7 +283,7 @@ $ teamai workflow start fix-auth --benchmark --driver local --sandbox
 | A trial gets | |
 | --- | --- |
 | A fresh clone of the starting commit | With no remotes. Your checkout is never changed. |
-| The team assets and the suite | Of the team revision this checkout last pulled, which must be pushed. Frozen at start: a pull during the run changes nothing it runs. |
+| The team assets and the suite | Of the team revision this checkout last pulled, which must be pushed, or of the arm's `team`. Frozen at start: a pull during the run changes nothing it runs. |
 | An environment | Without `GITHUB_TOKEN`, `GH_TOKEN`, `GITLAB_TOKEN`, `GL_TOKEN`, `CI_JOB_TOKEN`, `SSH_AUTH_SOCK`, `GIT_ASKPASS` and `SSH_ASKPASS`. |
 | Your home directory | As it is: teamai cannot remove its logins, MCP servers and plugins. |
 | The team repo on this machine | As it is: your team checkout, and the copy of the team revision beside each trial's clone that its team assets are installed from, hold `benchmarks/`, check files included. An agent that searches the machine can find them. |
@@ -285,7 +333,7 @@ These results hold for these tasks, this run and this machine.
 
 | Table | Shows |
 | --- | --- |
-| Arms | Each arm's trials by result, and how many a [trial limit](#trial-limits) stopped. A deviation is a trial whose prompt ran on another tool, team revision or model than its arm's, or without a trial limit its driver could not enforce. A trial is not verified when its record lacks one of those. |
+| Arms | Each arm's trials by result, and how many a [trial limit](#trial-limits) stopped. A deviation is a trial whose prompt ran on another tool, team revision or model than its arm's, or without a trial limit its driver could not enforce. A trial is not verified when its record lacks one of those. When an arm sets `team`, a Team column shows each arm's, such as `pulled 3f9c2ab`, `next 81d0e4c`, `3f9c2ab without auth-tokens` or `none`. |
 | Usage | Each arm's medians and cost total, with how many trials each used. Tokens and cost appear only as the tool stated them, so a tool that states none shows `unknown (0)`. |
 | Tasks | Each task's pass rate on each arm. |
 | Baselines | The tasks that did not run, and why. |
