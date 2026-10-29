@@ -345,3 +345,26 @@ describe('finally steps', () => {
   });
 });
 
+
+describe('the run timeout a start gives', () => {
+  it('ends the run at the shorter of the workflow timeout and the one its start gave', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      const { config, checkout } = await fixture({ check: CHECK, slow: CHECK.replace('name: check', 'name: slow\ntimeout: 1h') });
+      const client = await protocol(config);
+      const caller = { evidence: { kind: 'none' }, confirmed: false, mode: 'attended' } as const;
+      const deadlineOf = async (name: string, timeout: number): Promise<unknown> => {
+        const started = await client.start(name, { checkout, caller, timeout });
+        if (!('data' in started)) throw new Error(JSON.stringify(started));
+        const next = await client.next(RunIdSchema.parse(started.data.run), { driver });
+        return 'data' in next && 'lease' in next.data ? LeaseSchema.parse(next.data.lease).expiresAt : next;
+      };
+      expect(await deadlineOf('check', 90_000)).toBe('2026-01-01T00:01:30.000Z');
+      expect(await deadlineOf('slow', 2 * 3_600_000)).toBe('2026-01-01T01:00:00.000Z');
+      expect(await deadlineOf('slow', 60_000)).toBe('2026-01-01T00:01:00.000Z');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

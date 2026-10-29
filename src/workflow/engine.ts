@@ -996,7 +996,7 @@ export async function startRun(
   config: LocalConfig,
   name: string,
   inputs: unknown,
-  { secrets, ...options }: { secrets: Record<string, string>; runMode?: RunMode; driver?: DriverIdentity; base?: RunState['base']; checkout?: string },
+  { secrets, ...options }: { secrets: Record<string, string>; runMode?: RunMode; driver?: DriverIdentity; base?: RunState['base']; checkout?: string; timeout?: number },
 ): Promise<WorkflowEnvelope> {
   const cached = await loadCachedWorkflow(config, name);
   if (!cached) {
@@ -1029,7 +1029,7 @@ export async function startRun(
  */
 export async function createRun(
   config: LocalConfig,
-  { secrets, driver, ...input }: Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'runMode' | 'definition' | 'workflows' | 'scorers' | 'benchmark' | 'base' | 'checkout'>
+  { secrets, driver, ...input }: Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'runMode' | 'definition' | 'workflows' | 'scorers' | 'benchmark' | 'base' | 'checkout' | 'timeout'>
     & Required<Pick<RunState, 'origin'>> & { secrets: Record<string, string>; driver?: DriverIdentity },
 ): Promise<WorkflowEnvelope> {
   const workflows = input.workflows ?? {};
@@ -1063,6 +1063,7 @@ export async function createRun(
     settledAttempts: [],
     ...(input.base ? { base: input.base } : {}),
     ...(input.checkout ? { checkout: input.checkout } : {}),
+    ...(input.timeout !== undefined ? { timeout: input.timeout } : {}),
     createdAt: now,
     updatedAt: now,
   };

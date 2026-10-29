@@ -1,5 +1,6 @@
 /**
- * Real CLI: a run's `finally` steps run after its graph ends, whatever the outcome, and its `outputs` reach `done`.
+ * Real CLI: how a run ends. Its `finally` steps run after its steps end, whatever the outcome, its `outputs` reach
+ * `done`, and `workflow start --timeout` bounds it.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync, spawn } from 'node:child_process';
@@ -41,7 +42,7 @@ function envelope(stdout: string): { data?: Record<string, unknown>; error?: { c
   return JSON.parse(line) as { data?: Record<string, unknown>; error?: { code: string; message: string } };
 }
 
-describe('workflow finally CLI', () => {
+describe('how a run ends, through the CLI', () => {
   let repo: string;
   let out: string;
 
@@ -93,4 +94,36 @@ outputs:
     expect(envelope(run.stdout)).toMatchObject({ data: { done: { outcome: 'failed', outputs: { text: 'reported' } } } });
     expect(fs.readFileSync(marker, 'utf8')).toBe('ran');
   });
+
+  it('times a run out at the --timeout its start gave, and refuses a --timeout it cannot keep', async () => {
+    const workflows = path.join(repo, '.teamai', 'workflows');
+    fs.mkdirSync(workflows, { recursive: true });
+    fs.writeFileSync(path.join(workflows, 'slow.yaml'), `schemaVersion: v1alpha1
+name: slow
+description: Wait half a minute.
+timeout: 1h
+steps:
+  - id: wait
+    command: node -e "setTimeout(() => {}, 30000)"
+`);
+    const pulled = await runCLI(['pull'], repo);
+    expect(pulled.code, `${pulled.stdout}\n${pulled.stderr}`).toBe(0);
+
+    const started = Date.now();
+    const run = await runCLI(['workflow', 'start', 'slow', '--driver', 'local', '--timeout', '2s'], repo);
+    expect(run.code, `${run.stdout}\n${run.stderr}`).toBe(1);
+    expect(envelope(run.stdout)).toMatchObject({ data: { done: { outcome: 'failed', failure: { code: 'timeout' } } } });
+    expect(Date.now() - started).toBeLessThan(20_000);
+
+    const refused = await runCLI(['workflow', 'start', 'slow', '--timeout', 'soon'], repo);
+    expect(refused.code).toBe(1);
+    expect(envelope(refused.stdout)).toEqual({ error: { code: 'invalid_arguments', message: '--timeout must be a positive duration, such as 500ms, 30s, 10m, or 2h' } });
+    const skill = await runCLI(['workflow', 'start', 'slow', '--driver', 'skill', '--timeout', '2s'], repo);
+    expect(skill.code).toBe(1);
+    expect(envelope(skill.stdout)).toMatchObject({ error: { code: 'invalid_arguments', message: '--timeout needs --driver local, or no driver. Start it again without --timeout.' } });
+    const benchmark = await runCLI(['workflow', 'start', 'suite', '--benchmark', '--timeout', '2s'], repo);
+    expect(benchmark.code).toBe(1);
+    expect(envelope(benchmark.stdout)).toEqual({ error: { code: 'invalid_arguments', message: 'A benchmark run takes no --timeout, since its suite sets its timeout. Start it again without it.' } });
+  });
 });
+
