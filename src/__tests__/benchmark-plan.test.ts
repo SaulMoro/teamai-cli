@@ -9,6 +9,7 @@ import type { LocalConfig } from '../types.js';
 import { trialsOf } from '../benchmark/plan.js';
 import type { BenchmarkSuiteFiles } from '../workflow/conformance-interpreter.js';
 import { leaseNext, reconcileRun, reportAttempt } from '../workflow/engine.js';
+import { stepDefinitions } from '../workflow/scope.js';
 import { buildEndRecord } from '../workflow/records.js';
 import type { DriverCan } from '../workflow/requirements.js';
 import { cancelRun } from '../workflow/run-controls.js';
@@ -29,14 +30,14 @@ afterEach(() => {
 
 /**
  * A check suite of `tasks` tasks t01.. and `arms` arms a01.., arm i on `tools[i]`, and on claude past them; an arm after
- * the first with no tool of its own runs model m<i>, as each arm changes one of the defaults. `trial` is the suite's
- * `trial` value.
+ * the first with no tool or team (`teams[i]`) of its own runs model m<i>, as each arm changes one of the defaults.
+ * `trial` is the suite's `trial` value.
  */
-function suiteOf({ tasks = 1, arms = 1, repetitions = 1, tools = [] as string[], trial = '' } = {}): BenchmarkSuiteFiles {
+function suiteOf({ tasks = 1, arms = 1, repetitions = 1, tools = [] as string[], teams = [] as string[], trial = '' } = {}): BenchmarkSuiteFiles {
   const names = (prefix: string, count: number): string[] => Array.from({ length: count }, (_, index) => `${prefix}${String(index + 1).padStart(2, '0')}`);
   return {
     name: 'fix',
-    suite: `schemaVersion: v1alpha1\nname: fix\nrepo: https://github.com/fixture/app.git\ndefaults: { tool: claude }\narms: [${names('a', arms).map((name, index) => `{ name: ${name}${tools[index] ? `, tool: ${tools[index]}` : index > 0 ? `, model: m${index + 1}` : ''} }`).join(', ')}]\nrepetitions: ${repetitions}\ntimeout: 10m\n${trial ? `trial: ${trial}\n` : ''}`,
+    suite: `schemaVersion: v1alpha1\nname: fix\nrepo: https://github.com/fixture/app.git\ndefaults: { tool: claude }\narms: [${names('a', arms).map((name, index) => `{ name: ${name}${tools[index] ? `, tool: ${tools[index]}` : teams[index] ? `, team: ${teams[index]}` : index > 0 ? `, model: m${index + 1}` : ''} }`).join(', ')}]\nrepetitions: ${repetitions}\ntimeout: 10m\n${trial ? `trial: ${trial}\n` : ''}`,
     tasks: Object.fromEntries(names('t', tasks).map((name) => [name,
       "schemaVersion: v1alpha1\ntitle: Fix it\nprompt: Make the test pass.\nstartingCommit: '{{startingCommit}}'\ncheck: { run: node test.js, protect: [test.js] }\n"])),
   };
@@ -95,6 +96,19 @@ describe('benchmark plan run', () => {
       trial: { kind: 'prompt', task: 't01', arm: 'a01', repetition: 1, order: 1 },
       workspace: { base: { commit: RUN_START }, configCommit: RUN_START, clone: { commit: RUN_START, team: { revision: RUN_TEAM, treatment: 'pulled' } } },
     } } });
+  });
+
+  it.each([
+    ['none', { treatment: 'none' }],
+    ['{ without: [fixer] }', { revision: RUN_TEAM, selection: { additionalRoles: [], projects: [], excludedSkills: [] }, treatment: { without: ['fixer'] } }],
+    ['main', { revision: RUN_TEAM, selection: { additionalRoles: [], projects: [], excludedSkills: [] }, treatment: 'main' }],
+  ])('opens each trial of an arm with team %s in a clone with that team', async (team, expected) => {
+    const { config, runId } = await startFix({ arms: 2, teams: ['', team] });
+
+    const run = await readRun(config, runId);
+
+    const arm = typeof run === 'object' ? stepDefinitions(run)('trials.r1.t01.a02') : undefined;
+    expect(arm?.workspace).toEqual({ clone: { commit: RUN_START, repo: 'https://github.com/fixture/app.git', team: expected } });
   });
 
   it.each([

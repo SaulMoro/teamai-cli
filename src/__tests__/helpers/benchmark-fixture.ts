@@ -31,7 +31,8 @@ import type { LocalConfig } from '../../types.js';
 import { compilePlan, freezePlan, runSourceHash } from '../../benchmark/plan.js';
 import { commitCheckFiles } from '../../benchmark/trial.js';
 import { commitCacheOf } from '../../workflow/place/place.js';
-import { parseSuite } from '../../benchmark/suite.js';
+import { parseSuite, type TeamChoice } from '../../benchmark/suite.js';
+import type { ArmTeam } from '../../benchmark/terms.js';
 import type { BenchmarkSuiteFiles } from '../../workflow/conformance-interpreter.js';
 import { createRun, error, leaseNext, reportAttempt } from '../../workflow/engine.js';
 import type { DriverCan } from '../../workflow/requirements.js';
@@ -493,7 +494,9 @@ export async function startBenchmarkRun(config: LocalConfig, files: BenchmarkSui
   });
   if (!parsed.ok) return error('benchmark_not_found', parsed.diagnostics.map((diagnostic) => diagnostic.message).join('\n'));
   const { suite } = parsed;
-  const [first, ...rest] = suite.arms.map((arm) => ({ name: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), source: 'team' as const, team: { kind: 'pulled' as const, revision: RUN_TEAM } }));
+  // Every team an arm names resolves to RUN_TEAM, as start would resolve it in a team repo at that revision.
+  const resolved = (team: TeamChoice): ArmTeam => (team.kind === 'none' ? team : { ...team, revision: RUN_TEAM });
+  const [first, ...rest] = suite.arms.map((arm) => ({ name: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), source: 'team' as const, team: resolved(arm.team) }));
   const plan = freezePlan({ suite, baselineTeamRevision: RUN_TEAM, selection: { additionalRoles: [], projects: [], excludedSkills: [] }, arms: [first, ...rest], scorers: {} });
   const committed = await commitCheckFiles(commitCacheOf(config, suite.repo), suite);
   if (!committed.ok) return error('check_files_unwritable', committed.failed);

@@ -134,6 +134,61 @@ describe('a clone place', () => {
     expect(buildEndRecord(run, run.driver, '')).toMatchObject({ isolated: true });
   });
 
+  it('sets a fresh clone up before its first step, and gives the step that continues it the clone as the first left it', async () => {
+    const { config, runId } = await fixture((commit) => PROMPTED(commit, 'setup:\n  command: touch "$(git rev-parse --git-path setup-ran)"\n'));
+    const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
+
+    const work = leaseOf(await prepared(client, runId));
+    const setUp = fs.existsSync(path.join(work.cwd, '.git', 'setup-ran'));
+    fs.writeFileSync(path.join(work.cwd, 'made.txt'), 'M');
+    await client.report(runId, { attempt: work.attempt, revision: work.revision, outcome: 'success', driver });
+    const check = leaseOf(await prepared(client, runId));
+
+    expect(setUp).toBe(true);
+    expect(check).toMatchObject({ step: 'trial.check', cwd: work.cwd });
+    expect(fs.readFileSync(path.join(check.cwd, 'made.txt'), 'utf8')).toBe('M');
+  });
+
+  it('gives an attempt prepared again a fresh clone, and removes the one it had', async () => {
+    const { config, runId } = await fixture((commit) => PROMPTED(commit));
+    const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
+
+    const first = leaseOf(await prepared(client, runId));
+    fs.writeFileSync(path.join(first.cwd, 'left.txt'), 'L');
+    const again = leaseOf(await prepared(client, runId));
+
+    expect(again.attempt).toBe(first.attempt);
+    expect(again.cwd).not.toBe(first.cwd);
+    expect(fs.existsSync(first.cwd)).toBe(false);
+    expect(fs.readdirSync(again.cwd).sort()).toEqual(['.git', 'first.txt']);
+  });
+
+  it('fails the step whose clone is of a commit no source has, and leaves no clone', async () => {
+    const { config, runId } = await fixture(() => PROMPTED('f'.repeat(40)));
+    const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
+
+    const answer = await prepared(client, runId);
+    const run = await readRun(config, runId);
+
+    expect(answer).toMatchObject({ error: { code: 'clone_prepare_failed', message: expect.stringContaining('f'.repeat(40)) } });
+    expect(typeof run === 'object' && run.steps.find((step) => step.id === 'trial.work')).toMatchObject({ status: 'failed', failure: { code: 'clone_prepare_failed' } });
+    expect(fs.existsSync(path.join(config.dataHome ?? '', 'workflows', 'runs', runId, 'clones'))
+      ? fs.readdirSync(path.join(config.dataHome ?? '', 'workflows', 'runs', runId, 'clones')) : []).toEqual([]);
+  });
+
+  it('fails a step that continues work committed in a clone that is gone, rather than run it in a fresh one', async () => {
+    const { config, runId } = await fixture((commit) => PROMPTED(commit));
+    const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
+    const work = leaseOf(await prepared(client, runId));
+    fs.writeFileSync(path.join(work.cwd, 'made.txt'), 'M');
+    await client.report(runId, { attempt: work.attempt, revision: work.revision, outcome: 'success', driver });
+    fs.rmSync(path.dirname(work.cwd), { recursive: true, force: true });
+
+    const answer = await prepared(client, runId);
+
+    expect(answer).toMatchObject({ error: { code: 'workspace_base', message: expect.stringContaining('is gone, so step "trial.check" cannot continue the work committed there') } });
+  });
+
   it('gives the judges of a prompt in a clone the work it committed there, after the clone is gone', async () => {
     const { runId, first, evidence, patch } = await judgedAfterClone(SCORED('work'));
 
@@ -172,7 +227,36 @@ async function judgedAfterClone(yaml: (commit: string) => string): Promise<{ run
 }
 
 const driver: DriverIdentity = { kind: 'external', machine: 'ci', workspace: '/work' };
-const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', tools: [] };
+
+/** `next --prepare` for `driver`, as an external driver that lets teamai prepare its places asks it. */
+function prepared(client: ReturnType<typeof inProcessClient>, runId: string): ReturnType<ReturnType<typeof inProcessClient>['next']> {
+  return client.next(runId, { driver: { ...driver, can }, running: [] }, { prepare: true });
+}
+
+const LeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number(), cwd: z.string() }) }) });
+
+function leaseOf(answer: unknown): z.infer<typeof LeaseSchema>['data']['lease'] {
+  return LeaseSchema.parse(answer).data.lease;
+}
+
+/** A clone of `commit` holding two prompts, the second continuing the first; `head` goes before the steps. */
+const PROMPTED = (commit: string, head = ''): string => `schemaVersion: v1alpha1
+name: build
+description: Two prompts in a clean clone.
+${head}steps:
+  - id: trial
+    workspace: { clone: { commit: ${commit}, team: { treatment: none } } }
+    workflow:
+      steps:
+        - id: work
+          workspace: continue
+          prompt: Make a file.
+        - id: check
+          needs: [work]
+          workspace: continue
+          prompt: Check the file.
+`;
+const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', tools: [], setup: true };
 
 const SCORER = `---
 labels:
