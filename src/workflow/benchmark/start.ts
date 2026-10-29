@@ -139,7 +139,7 @@ async function resolveTeam(config: LocalConfig, { name, tool, team }: Arm, pulle
     }
     case 'without': {
       const listed = await git(config.repo.localPath, ['ls-tree', '-r', '--name-only', pulled]);
-      const skills = new Set(listed.stdout.split('\n').flatMap((file) => /(?:^|\/)skills\/([^/]+)\/SKILL\.md$/.exec(file)?.[1] ?? []));
+      const skills = new Set(listed.stdout.split('\n').flatMap((file) => /(?:^|\/)skills\/(?:[^/]+\/)*?([^/]+)\/SKILL\.md$/.exec(file)?.[1] ?? []));
       const missing = team.skills.find((skill) => !skills.has(skill));
       if (listed.code !== 0) {
         return { ok: false, refused: error('arm_team_unreadable', `Arm "${name}" runs without skill "${team.skills[0]}", and git could not list the skills of the team revision this checkout pulled at ${config.repo.localPath}: ${listed.stderr.trim()}. Repair the team repo, or run teamai pull, and start again.`) };

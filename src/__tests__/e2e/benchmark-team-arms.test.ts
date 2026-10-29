@@ -37,17 +37,17 @@ function suite(arms: string): string {
 }
 
 /**
- * A team whose first revision has skills fixer and helper, and whose next, pulled, adds skill newer and the suite whose
- * arms `armsOf` writes knowing the first revision.
+ * A team whose first revision has skills fixer and helper, and whose next, pulled, adds skill newer, the files in `more`,
+ * and the suite whose arms `armsOf` writes knowing the first revision.
  */
-async function twoRevisions(armsOf: (first: string) => string): Promise<{ fixture: BenchmarkFixture; first: string; pulled: string }> {
+async function twoRevisions(armsOf: (first: string) => string, more: Record<string, string> = {}): Promise<{ fixture: BenchmarkFixture; first: string; pulled: string }> {
   const fixture = await benchmarkFixture({
     tool: 'fixes', sandbox: true, tools: ['claude'],
     team: { 'skills/fixer/SKILL.md': SKILL('fixer'), 'skills/helper/SKILL.md': SKILL('helper') },
   });
   fixtures.push(fixture);
   const first = git(fixture.teamClone, ['rev-parse', 'HEAD']);
-  fixture.pushTeam({ 'skills/newer/SKILL.md': SKILL('newer'), 'benchmarks/fix/suite.yaml': suite(armsOf(first)) });
+  fixture.pushTeam({ 'skills/newer/SKILL.md': SKILL('newer'), 'benchmarks/fix/suite.yaml': suite(armsOf(first)), ...more });
   const pulled = await fixture.teamai(['pull']);
   expect(pulled.code, said(pulled)).toBe(0);
   return { fixture, first, pulled: git(fixture.teamClone, ['rev-parse', 'HEAD']) };
@@ -102,6 +102,17 @@ describe('benchmark arm team', () => {
       { kind: 'ref', ref: first, revision: first },
     ]);
     expect(skillsByArm(fixture, runId)).toEqual({ now: ['fixer', 'helper', 'newer'], before: ['fixer', 'helper'] });
+  }, 240_000);
+
+  it('runs an arm without a skill the team keeps under a namespace', async () => {
+    const { fixture, pulled } = await twoRevisions(() => 'arms:\n  - name: now\n  - name: ablated\n    team: { without: [nested] }\n', { 'skills/dev/nested/SKILL.md': SKILL('nested') });
+
+    const runId = await endedRun(fixture);
+
+    expect(RecordSchema.parse(fixture.endRecord(runId)).benchmark.arms.map(({ team }) => team)).toEqual([
+      { kind: 'pulled', revision: pulled },
+      { kind: 'without', skills: ['nested'], revision: pulled },
+    ]);
   }, 240_000);
 
   it.each([
