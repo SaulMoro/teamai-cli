@@ -262,7 +262,42 @@ describe('a clone place', () => {
     expect(evidence).toMatchObject({ subject: { runId, step: 'trial', pass: 1 }, kind: 'workflow', ranges: [{ step: 'trial', pass: 1, from: first }, { step: 'trial.work', pass: 1, from: first }] });
     expect(patch).toContain('+made in the clone');
   });
+
+  it('stages the evidence of a scored workflow step in a clone in the next that settles it, before its dependent is leased', async () => {
+    const { config, runId } = await fixture(SCORED_THEN_AFTER, { quality: SCORER });
+    const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
+    const work = leaseOf(await prepared(client, runId));
+    fs.writeFileSync(path.join(work.cwd, 'made.txt'), 'made in the clone\n');
+    await client.report(runId, { attempt: work.attempt, revision: work.revision, outcome: 'success', driver });
+
+    // A plain next, which sweeps no clone: the one that settles `trial` and leases `after`.
+    const after = await client.next(runId, { driver: { ...driver, can }, running: [] });
+    const judged = z.object({ data: z.object({ lease: z.object({ evidence: z.string() }) }) })
+      .parse(await nextJudgeLease(config, { driver: { kind: 't3', machine: 'm1', workspace: '/w' }, judge: { isolation: 'verified', tools: ['claude'] }, running: [] })).data.lease;
+
+    expect(after).toMatchObject({ data: { lease: { step: 'after' } } });
+    expect(fs.readFileSync(path.join(judged.evidence, 'diff.patch'), 'utf8')).toContain('+made in the clone');
+  });
 });
+
+/** A scored workflow step that opens a clone, holding one prompt, and a prompt after it outside the clone. */
+const SCORED_THEN_AFTER = (commit: string): string => `schemaVersion: v1alpha1
+name: build
+description: Judge work done in a clean clone, then go on.
+steps:
+  - id: trial
+    workspace: { clone: { commit: ${commit}, team: { treatment: none } } }
+    scorers: [quality]
+    workflow:
+      steps:
+        - id: work
+          workspace: continue
+          prompt: Make a file.
+  - id: after
+    needs: [trial]
+    workspace: read-only
+    prompt: Say it is done.
+`;
 
 /**
  * Runs `yaml` through next --prepare and report, as an external driver would, with its one prompt writing a file in the

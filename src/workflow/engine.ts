@@ -18,6 +18,7 @@ import {
   parseTemplate, renderStrings, renderText, stepExpressions, templatedTexts, templatePaths,
   type StepExpression, type TemplateError,
 } from './template.js';
+import { stageSettledEvidence } from './place/place.js';
 import { parseStepPath } from './step-path.js';
 import {
   ReadSchema, answerHitl, fail, inProgress, lease, release, settled, skip, start, startDelivery, stopAttempt, stopWhere, stopped,
@@ -128,6 +129,15 @@ export function withIgnored(envelope: WorkflowEnvelope, ignored: string[]): Work
   return { data: { ...envelope.data, ignored } };
 }
 
+function passKey(step: StepState): string {
+  return `${step.id}#${step.pass ?? 1}`;
+}
+
+/** The pass of each step of `run` that succeeded. */
+function succeededPasses(run: RunState): Set<string> {
+  return new Set(run.steps.filter((step) => step.status === 'succeeded').map(passKey));
+}
+
 /**
  * Applies one operation under the run lock and saves only when requested. `secrets`, what the run file and records
  * mask, are the ones the operation resolved before the lock, since resolving them can read the team env.
@@ -143,8 +153,12 @@ export async function withRun<T extends WorkflowEnvelope>(
     if (loaded === 'missing') return { value: error('run_not_found', `Run ${runId} was not found`) as T };
     // One timestamp per operation, so a settled run's end record and its run file agree.
     const now = new Date().toISOString();
+    const before = succeededPasses(loaded);
     const result = await mutate(loaded, now);
     if (!result.save) return { value: result.envelope };
+    // Before the save, so what the steps that settled now left in a clone is judged, not what a later step left there.
+    const succeeded = loaded.steps.filter((step) => step.status === 'succeeded' && !before.has(passKey(step))).map((step) => step.id);
+    if (succeeded.length > 0) await stageSettledEvidence(config, loaded, succeeded);
     loaded.updatedAt = now;
     return { value: result.envelope, write: loaded };
   });

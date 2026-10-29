@@ -205,8 +205,8 @@ export function cloneEnv(withhold: readonly string[]): ReturnType<typeof stepEnv
 
 /**
  * Removes the root and the receipt of every clone that no longer needs them: its run is not running, or no step that
- * runs in it is still to settle. The evidence a report staged for a pass there that did not succeed goes too, as no
- * judge reads it. `runId` limits it to one run. A receipt this teamai cannot read is kept.
+ * runs in it is still to settle. Every step there that settled had its evidence staged then. The evidence a report
+ * staged for a pass there that did not succeed goes too, as no judge reads it. `runId` limits it to one run. A receipt this teamai cannot read is kept.
  */
 export async function sweepClones(config: LocalConfig, runId?: string): Promise<void> {
   const root = runsDir(config);
@@ -225,7 +225,6 @@ export async function sweepClones(config: LocalConfig, runId?: string): Promise<
       const run = await readRun(config, id);
       const inClone = (step: string): boolean => typeof run === 'object' && cloneBranchOf(run, step) === receipt.branch;
       if (typeof run === 'object' && run.status === 'running' && run.steps.some((step) => !settled(step) && inClone(step.id))) continue;
-      if (typeof run === 'object') await stageScopeEvidence(config, run, receipt, inClone);
       await removeRoot(receipt.root, file);
       if (typeof run === 'object') await removeUnjudgedEvidence(config, run, inClone);
     }
@@ -233,16 +232,22 @@ export async function sweepClones(config: LocalConfig, runId?: string): Promise<
 }
 
 /**
- * Stages the evidence the judges of each workflow step in the clone read that settled `success`, before the clone goes:
- * such a step settles once its last step does, when no report holds the clone. Evidence already staged is kept.
+ * Stages, from its clone, the evidence the judges of each workflow step in `succeeded` read, when it runs in a clone:
+ * `succeeded` holds the steps the operation about to save `run` settled `success`. Such a step settles once its last
+ * step does, under the run lock, so its evidence exists before that save makes its judge entry or a dependent visible.
+ * A prompt's evidence is staged by its report. Evidence already staged is kept, so a later step in the clone never
+ * overwrites it.
  */
-async function stageScopeEvidence(config: LocalConfig, run: RunState, receipt: CloneReceipt, inClone: (step: string) => boolean): Promise<void> {
-  const scopes = run.steps.filter((state) => state.status === 'succeeded' && inClone(state.id) && stepDefinitions(run)(state.id)?.workflow !== undefined);
-  if (scopes.length === 0) return;
-  const scoped = await cloneEnv(receipt.withhold);
-  if (!scoped.ok) return;
-  for (const scope of scopes) {
-    await stageEvidence(config, run, { runId: run.id, step: scope.id, pass: scope.pass ?? 1 }, { checkout: path.join(receipt.root, 'r'), untrustedEnv: scoped.env });
+export async function stageSettledEvidence(config: LocalConfig, run: RunState, succeeded: readonly string[]): Promise<void> {
+  const definitionOf = stepDefinitions(run);
+  for (const step of succeeded) {
+    const branch = definitionOf(step)?.workflow !== undefined ? cloneBranchOf(run, step) : undefined;
+    const receipt = branch !== undefined ? await readReceipt(receiptPath(runsDir(config), run.id, branch)) : undefined;
+    if (!receipt) continue;
+    const scoped = await cloneEnv(receipt.withhold);
+    if (!scoped.ok) continue;
+    const state = run.steps.find((item) => item.id === step);
+    await stageEvidence(config, run, { runId: run.id, step, pass: state?.pass ?? 1 }, { checkout: path.join(receipt.root, 'r'), untrustedEnv: scoped.env });
   }
 }
 
