@@ -5386,6 +5386,63 @@ ${inner}  - id: after
     ]) });
   });
 
+  it.each([
+    ['time', { durationMs: 600_000, tokens: { input: 1, output: 1 } }],
+    ['tokens', { durationMs: 1000, tokens: { input: 80, output: 20 } }],
+  ])('skips what is left of a workflow step once a turn its driver could not end used up the allowance\'s %s', async (_spent, measured) => {
+    const { config, runId } = await startBuild(allowance('timeout: 10m\n    budget: { tokens: 100 }', `        - id: first
+          prompt: First.
+        - id: second
+          needs: [first]
+          prompt: Second.
+`));
+    const first = leaseIn(await leaseNext(config, runId, driverA, { can: KEEPS_TURN }));
+
+    await reportAttempt(config, runId, { attempt: first.attempt, revision: first.revision, outcome: 'success', driver: driverA, ...measured });
+
+    expect(await leaseNext(config, runId, driverA, { can: KEEPS_TURN })).toMatchObject({ data: { lease: { step: 'after' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([
+      expect.objectContaining({ id: 'work', status: 'succeeded' }),
+      expect.objectContaining({ id: 'work.second', status: 'skipped' }),
+    ]) });
+  });
+
+  it('skips what is left of a workflow step once an inner turn ended at the token budget its allowance set, though it counted fewer, and settles the step succeeded', async () => {
+    const { config, runId } = await startBuild(allowance('budget: { tokens: 100 }', `        - id: first
+          prompt: First.
+        - id: second
+          needs: [first]
+          prompt: Second.
+`));
+    const first = LeaseWithLimitsSchema.parse(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).data.lease;
+    expect(first).toMatchObject({ limits: { budget: { tokens: 100 }, onLimit: 'end_turn' } });
+    expect(first).not.toHaveProperty('limits.timeoutMs');
+
+    await reportAttempt(config, runId, { attempt: first.attempt, revision: first.revision, outcome: 'success', driver: driverA, durationMs: 1000, limit: 'budget', tokens: { input: 50, output: 20 } });
+
+    expect(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).toMatchObject({ data: { lease: { step: 'after' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([
+      expect.objectContaining({ id: 'work', status: 'succeeded' }),
+      expect.objectContaining({ id: 'work.second', status: 'skipped' }),
+    ]) });
+  });
+
+  it('runs the rest of a workflow step when an inner turn reached its own max_turns, which no allowance caps', async () => {
+    const { config, runId } = await startBuild(allowance('timeout: 10m', `        - id: first
+          prompt: First.
+          max_turns: 2
+          on_limit: end_turn
+        - id: second
+          needs: [first]
+          prompt: Second.
+`));
+    const first = leaseIn(await leaseNext(config, runId, driverA, { can: ENDS_TURN }));
+
+    await reportAttempt(config, runId, { attempt: first.attempt, revision: first.revision, outcome: 'success', driver: driverA, durationMs: 1000, limit: 'max_turns', tokens: { input: 1, output: 1 } });
+
+    expect(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).toMatchObject({ data: { lease: { step: 'work.second' } } });
+  });
+
   it('runs the rest of a workflow step when an inner turn reached a limit of its own, below what the allowance had left', async () => {
     const { config, runId } = await startBuild(allowance('timeout: 10m', `        - id: first
           prompt: First.
