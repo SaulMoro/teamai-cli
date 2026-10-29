@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { BenchmarkHistory, type BenchmarkRunInput } from '../workflow/benchmark/history.js';
+import { BenchmarkHistory, pairedDifference, type BenchmarkRunInput } from '../workflow/benchmark/history.js';
 import { runSourceHash } from '../workflow/benchmark/plan.js';
 import type { Baseline, TrialResult } from '../workflow/benchmark/result.js';
+import type { ArmTeam } from '../workflow/benchmark/terms.js';
 
 const NOW = new Date('2026-10-28T12:00:00Z');
 
-type Arm = { name: string; tool: string; model?: string };
+/** `team`: the pulled revision of the run when absent. */
+type Arm = { name: string; tool: string; model?: string; team?: ArmTeam };
 const CLAUDE: Arm = { name: 'claude', tool: 'claude', model: 'claude-opus-5-5' };
 const CODEX: Arm = { name: 'codex', tool: 'codex' };
 
@@ -13,9 +15,9 @@ const CODEX: Arm = { name: 'codex', tool: 'codex' };
  * An ended benchmark run of `suite`. `trials` lists each task's results on each arm, one per repetition, as
  * `{ task: { arm: [results] } }`. A task in `invalid` had an invalid baseline, one in `notRun` none, as the run ended
  * first. A trial of an arm in `usage` ran its prompt, on the arm's tool or on the one `ranOn` names, unless its task is
- * in `unstarted`.
+ * in `unstarted`, and reported the tool version `versions` names for its tool.
  */
-function run({ id, suite = 'fix-auth', version = 'v1', taskEdit = '', startedAt, username = 'alice', source = 'reported', arms = [CLAUDE, CODEX], trials, invalid = [], notRun = [], usage = {}, ranOn = {}, unstarted = [] }: {
+function run({ id, suite = 'fix-auth', version = 'v1', taskEdit = '', startedAt, username = 'alice', source = 'reported', arms = [CLAUDE, CODEX], trials, invalid = [], notRun = [], usage = {}, ranOn = {}, unstarted = [], versions = {} }: {
   id: string;
   suite?: string;
   version?: string;
@@ -31,6 +33,7 @@ function run({ id, suite = 'fix-auth', version = 'v1', taskEdit = '', startedAt,
   usage?: Record<string, { tokens: number; durationMs: number; cost?: number }>;
   ranOn?: Record<string, string>;
   unstarted?: string[];
+  versions?: Record<string, string>;
 }): BenchmarkRunInput {
   const tasks = [...Object.keys(trials), ...invalid, ...notRun];
   const baseline = (task: string): Baseline => (invalid.includes(task) ? 'invalid' : notRun.includes(task) ? 'not_run' : 'valid');
@@ -41,13 +44,15 @@ function run({ id, suite = 'fix-auth', version = 'v1', taskEdit = '', startedAt,
     benchmark: {
       suite: { name: suite, sourceHash: version }, repetitions: 1, baselineTeamRevision: `team-${id}`, scorers: [],
       tasks: tasks.map((task) => ({ id: task, startingCommit: 'a'.repeat(40), sourceHash: `task-${task}${taskEdit}`, baseline: baseline(task) })),
-      arms: arms.map((arm) => ({ ...arm, source: 'team', teamRevision: `team-${id}` })),
+      arms: arms.map(({ team, ...arm }) => ({ ...arm, source: 'team', team: team ?? { kind: 'pulled' as const, revision: `team-${id}` } })),
       trials: Object.entries(trials).flatMap(([task, byArm]) => Object.entries(byArm).flatMap(([arm, results]) => results.map((result, repetition) => {
         const step = `trials.r${repetition + 1}.${task}.${arm}.prompt`;
         const spent = unstarted.includes(task) ? undefined : usage[arm];
         const own = arms.find(({ name }) => name === arm);
         if (spent && own) {
-          steps.push({ step, agent: { v: 1, tool: { name: ranOn[arm] ?? own.tool }, ...(own.model ? { model: { reported: own.model } } : {}), team: { revision: `team-${id}`, localChanges: false }, teamai: '0.0.0', driver: 'local' } });
+          const tool = ranOn[arm] ?? own.tool;
+          const toolVersion = versions[tool];
+          steps.push({ step, agent: { v: 1, tool: { name: tool, ...(toolVersion ? { version: toolVersion } : {}) }, ...(own.model ? { model: { reported: own.model } } : {}), team: { revision: `team-${id}`, localChanges: false }, teamai: '0.0.0', driver: 'local' } });
         }
         return {
           task, arm, repetition: repetition + 1, order: order++, step, result,
@@ -193,9 +198,9 @@ describe('BenchmarkHistory', () => {
     const [claude, codex, sonnet] = view.selected?.arms ?? [];
 
     expect(view.selected?.runs).toEqual([
-      { run: 'r3', source: 'local', startedAt: '2026-10-20T09:00:00Z', username: 'alice', sourceHash: versionOf(history[2]), teamRevision: 'team-r3', passed: 4, planned: 6, unmeasuredTasks: 0, arms: [{ key: claude?.key, passed: 2, planned: 3 }, { key: codex?.key, passed: 2, planned: 3 }] },
-      { run: 'r2', source: 'reported', startedAt: '2026-10-10T09:00:00Z', username: 'bob', sourceHash: versionOf(history[1]), teamRevision: 'team-r2', passed: 4, planned: 6, unmeasuredTasks: 0, arms: [{ key: claude?.key, passed: 3, planned: 3 }, { key: codex?.key, passed: 1, planned: 3 }] },
-      { run: 'r1', source: 'reported', startedAt: '2026-10-01T09:00:00Z', username: 'alice', sourceHash: versionOf(history[0]), teamRevision: 'team-r1', passed: 0, planned: 2, unmeasuredTasks: 0, arms: [{ key: sonnet?.key, passed: 0, planned: 1 }, { key: codex?.key, passed: 0, planned: 1 }] },
+      { run: 'r3', source: 'local', startedAt: '2026-10-20T09:00:00Z', username: 'alice', sourceHash: versionOf(history[2]), teamRevision: 'team-r3', passed: 4, planned: 6, unmeasuredTasks: 0, toolVersions: {}, arms: [{ key: claude?.key, passed: 2, planned: 3 }, { key: codex?.key, passed: 2, planned: 3 }] },
+      { run: 'r2', source: 'reported', startedAt: '2026-10-10T09:00:00Z', username: 'bob', sourceHash: versionOf(history[1]), teamRevision: 'team-r2', passed: 4, planned: 6, unmeasuredTasks: 0, toolVersions: {}, arms: [{ key: claude?.key, passed: 3, planned: 3 }, { key: codex?.key, passed: 1, planned: 3 }] },
+      { run: 'r1', source: 'reported', startedAt: '2026-10-01T09:00:00Z', username: 'alice', sourceHash: versionOf(history[0]), teamRevision: 'team-r1', passed: 0, planned: 2, unmeasuredTasks: 0, toolVersions: {}, arms: [{ key: sonnet?.key, passed: 0, planned: 1 }, { key: codex?.key, passed: 0, planned: 1 }] },
     ]);
     expect(view.selected?.latest.run).toBe('r3');
     expect(view.selected?.latest.table.matrix).toEqual([
@@ -211,5 +216,82 @@ describe('BenchmarkHistory', () => {
     expect(BenchmarkHistory.of({ runs, query: { windowDays: 90, suite: 'fix-auth' }, now: NOW }).selected?.suite).toBe('fix-auth');
     expect(BenchmarkHistory.of({ runs, query: { windowDays: 30, suite: 'gone' }, now: NOW }).selected?.suite).toBe('migrate-db');
     expect(BenchmarkHistory.of({ runs: [], query: { windowDays: 30 }, now: NOW })).toEqual({ window: expect.any(Object), suites: [] });
+  });
+});
+
+describe('BenchmarkHistory comparisons', () => {
+  const REV = 'b'.repeat(40);
+  const matrix: Arm[] = [
+    { name: 'claude-pulled', tool: 'claude', team: { kind: 'pulled', revision: REV } },
+    { name: 'claude-none', tool: 'claude', team: { kind: 'none' } },
+    { name: 'codex-pulled', tool: 'codex', team: { kind: 'pulled', revision: REV } },
+    { name: 'codex-none', tool: 'codex', team: { kind: 'none' } },
+  ];
+
+  it('compares every two current arms that differ in one dimension trial by trial, measuring the team from none to the pulled revision', () => {
+    const runs = [
+      run({ id: 'r1', startedAt: '2026-10-20T09:00:00Z', arms: matrix, trials: {
+        login: { 'claude-pulled': ['passed', 'passed'], 'claude-none': ['failed', 'passed'], 'codex-pulled': ['passed', 'failed'], 'codex-none': ['failed', 'failed'] },
+        logout: { 'claude-pulled': ['passed'], 'claude-none': ['failed'], 'codex-pulled': ['failed'], 'codex-none': ['passed'] },
+      } }),
+    ];
+
+    const { comparisons = [], arms = [] } = BenchmarkHistory.of({ runs, query: { windowDays: 90 }, now: NOW }).selected ?? {};
+    const nameOf = (key: string): string | undefined => arms.find((arm) => arm.key === key)?.arm;
+
+    expect(comparisons.map(({ dimension, from, to, pairs }) => ({ dimension, from: nameOf(from), to: nameOf(to), pairs }))).toEqual([
+      { dimension: 'team', from: 'claude-none', to: 'claude-pulled', pairs: 3 },
+      { dimension: 'team', from: 'codex-none', to: 'codex-pulled', pairs: 3 },
+      { dimension: 'tool', from: 'claude-pulled', to: 'codex-pulled', pairs: 3 },
+      { dimension: 'tool', from: 'claude-none', to: 'codex-none', pairs: 3 },
+    ]);
+    expect(comparisons[0]).toMatchObject({
+      rates: { from: { passed: 1, planned: 3 }, to: { passed: 3, planned: 3 } },
+      difference: { value: expect.closeTo(2 / 3) },
+      tasks: [{ task: 'login', from: { passed: 1, planned: 2 }, to: { passed: 2, planned: 2 } }, { task: 'logout', from: { passed: 0, planned: 1 }, to: { passed: 1, planned: 1 } }],
+    });
+    expect(arms.map(({ arm, team }) => ({ arm, team }))).toEqual(matrix.map(({ name, team }) => ({ arm: name, team: { kind: team?.kind } })));
+  });
+
+  it('gives a difference of paired trials its 95% interval, which reaches past zero only when the pairs do not tell the arms apart', () => {
+    // Wilson bounds of 10/10 and 0/10 are 0.7225 and 0.2775, so the lower bound is 1 - sqrt(2) * 0.2775.
+    expect(pairedDifference({ both: 0, toOnly: 10, fromOnly: 0, neither: 0 })).toEqual({ value: 1, low: expect.closeTo(0.6075, 3), high: 1 });
+    expect(pairedDifference({ both: 0, toOnly: 0, fromOnly: 10, neither: 0 })).toEqual({ value: -1, low: -1, high: expect.closeTo(-0.6075, 3) });
+    const even = pairedDifference({ both: 5, toOnly: 2, fromOnly: 2, neither: 5 });
+    expect(even.value).toBe(0);
+    expect(even.low).toBeLessThan(0);
+    expect(even.high).toBeGreaterThan(0);
+  });
+
+  it('follows each tool and model across the team revisions its whole-team arms installed, from run to run and within one run', () => {
+    const [first, second] = ['1'.repeat(40), '2'.repeat(40)];
+    const runs = [
+      run({ id: 'r1', startedAt: '2026-10-01T09:00:00Z', arms: [{ name: 'team', tool: 'claude', team: { kind: 'pulled', revision: first } }], trials: { login: { team: ['passed', 'failed'] } } }),
+      run({ id: 'r2', startedAt: '2026-10-10T09:00:00Z', arms: [
+        { name: 'team', tool: 'claude', team: { kind: 'pulled', revision: second } },
+        { name: 'before', tool: 'claude', team: { kind: 'ref', ref: 'stable', revision: first } },
+        { name: 'bare', tool: 'claude', team: { kind: 'none' } },
+      ], trials: { login: { team: ['passed', 'passed'], before: ['failed', 'failed'], bare: ['failed', 'failed'] } } }),
+    ];
+
+    const changes = BenchmarkHistory.of({ runs, query: { windowDays: 90 }, now: NOW }).selected?.teamChanges;
+
+    expect(changes?.configs).toEqual([{ key: '["claude",null,null]', tool: 'claude' }]);
+    expect(changes?.revisions.map(({ revision, firstRunAt, configs }) => ({ revision, firstRunAt, configs: configs.map(({ runs: count, passed, planned, tasks }) => ({ runs: count, passed, planned, tasks })) }))).toEqual([
+      { revision: first, firstRunAt: '2026-10-01T09:00:00Z', configs: [{ runs: 2, passed: 1, planned: 4, tasks: [{ task: 'login', passed: 1, planned: 4 }] }] },
+      { revision: second, firstRunAt: '2026-10-10T09:00:00Z', configs: [{ runs: 1, passed: 2, planned: 2, tasks: [{ task: 'login', passed: 2, planned: 2 }] }] },
+    ]);
+  });
+
+  it('names the tool version each run reported, so the page can mark a run whose tool changed', () => {
+    const runs = [
+      run({ id: 'r1', startedAt: '2026-10-01T09:00:00Z', trials: { login: { claude: ['passed'], codex: ['passed'] } }, usage: { claude: { tokens: 1, durationMs: 1 }, codex: { tokens: 1, durationMs: 1 } }, versions: { claude: '2.1.0', codex: '0.40.0' } }),
+      run({ id: 'r2', startedAt: '2026-10-10T09:00:00Z', trials: { login: { claude: ['passed'], codex: ['passed'] } }, usage: { claude: { tokens: 1, durationMs: 1 } }, versions: { claude: '2.2.0' } }),
+    ];
+
+    expect(BenchmarkHistory.of({ runs, query: { windowDays: 90 }, now: NOW }).selected?.runs.map(({ run: id, toolVersions }) => ({ id, toolVersions }))).toEqual([
+      { id: 'r2', toolVersions: { claude: '2.2.0' } },
+      { id: 'r1', toolVersions: { claude: '2.1.0', codex: '0.40.0' } },
+    ]);
   });
 });

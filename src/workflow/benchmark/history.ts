@@ -10,6 +10,8 @@
  */
 import { runSourceHash } from './plan.js';
 import type { Baseline, BenchmarkRecord } from './result.js';
+import type { TeamChoice } from './suite.js';
+import type { ArmTeam } from './terms.js';
 import {
   benchmarkTable, deviationsOf, observedTrials, usageOf, type ArmResults, type ArmUsage, type BenchmarkTable, type BenchmarkTableInput, type ObservedTrial, type PassRate,
 } from './table.js';
@@ -57,8 +59,9 @@ export type PooledRate = PassRate & { low: number; high: number; runs: number };
 export type PooledArm = PooledRate & Pick<ArmResults, 'deviations' | 'notVerified'> & { usage: Omit<ArmUsage, 'arm'> };
 
 /**
- * One arm as a configuration: its name, tool, model and effort. An arm whose model changed between runs is two series,
- * since its runs measured two things.
+ * One arm as a configuration: its name, tool, model, effort and team choice. An arm whose model changed between runs is
+ * two series, since its runs measured two things. A pulled team that moved to another revision stays one series, as the
+ * suite asked for whatever the team pulled: the runs table marks the change.
  */
 export interface ArmSeries {
   key: string;
@@ -66,6 +69,7 @@ export interface ArmSeries {
   tool: string;
   model?: string;
   effort?: string;
+  team: TeamChoice;
   /** In the newest run of the suite. */
   isCurrent: boolean;
   /** Over the runs of the current version; absent for a configuration none of them ran. */
@@ -93,6 +97,47 @@ export interface TaskView {
   unmeasuredRuns: number;
 }
 
+/** What two arms of the current version differ in: exactly one of these, so the difference has one cause. */
+export const ARM_DIMENSIONS = ['team', 'tool', 'model'] as const;
+export type ArmDimension = (typeof ARM_DIMENSIONS)[number];
+
+/**
+ * Two current arms that differ in exactly one dimension, compared trial by trial: each pair is both arms' trial of one
+ * task and repetition in one run of the current version. `from` is the arm the difference is measured from: for the team,
+ * none before the pulled revision without some skills, before a named ref, before the pulled revision; otherwise the
+ * first in the suite's order.
+ */
+export interface ArmComparison {
+  dimension: ArmDimension;
+  from: string;
+  to: string;
+  pairs: number;
+  /** Each arm's pass rate over the pairs. */
+  rates: { from: PassRate; to: PassRate };
+  /** To's pass rate minus from's, with its 95% interval for paired proportions (Newcombe), as fractions. */
+  difference: { value: number; low: number; high: number };
+  /** Each task's pass rate on both arms over its pairs, in the newest run's task order. */
+  tasks: Array<{ task: string; from: PassRate; to: PassRate }>;
+}
+
+/** A tool, model and effort, whatever the team: one line of the team changes chart. */
+export interface TeamConfig {
+  key: string;
+  tool: string;
+  model?: string;
+  effort?: string;
+}
+
+/**
+ * One team revision the current version's runs installed, oldest run first: each configuration's pass rate on it, over
+ * the trials of arms that installed it whole, from a pulled team or a named ref.
+ */
+export interface TeamRevisionView {
+  revision: string;
+  firstRunAt: string;
+  configs: Array<{ key: string; runs: number; tasks: Array<{ task: string } & PassRate> } & PooledRate>;
+}
+
 export interface SuiteView {
   suite: string;
   /** Newest first: the first is the current version. */
@@ -105,6 +150,10 @@ export interface SuiteView {
   runs: RunRow[];
   /** The newest run's own table, as it printed it. */
   latest: { run: string; source: BenchmarkRunInput['source']; table: BenchmarkTable };
+  /** Every pair of current arms that differ in one dimension, team first. */
+  comparisons: ArmComparison[];
+  /** The team revisions of the current version, for configurations that ran on two or more. */
+  teamChanges: { configs: TeamConfig[]; revisions: TeamRevisionView[] };
 }
 
 /** One run of the suite. `teamRevision`: the team revision its trials installed team assets from. */
@@ -117,6 +166,8 @@ export interface RunRow extends PassRate {
   teamRevision: string;
   /** Tasks the run did not measure: see isMeasured. */
   unmeasuredTasks: number;
+  /** The version of each tool its prompts reported, the most reported one when they differ. */
+  toolVersions: Record<string, string>;
   /** Each arm of the run as a configuration, in the run's order. */
   arms: Array<{ key: string } & PassRate>;
 }
@@ -162,8 +213,29 @@ function wilson({ passed, planned }: PassRate): { low: number; high: number } {
   return { low: Math.max(0, center - margin), high: Math.min(1, center + margin) };
 }
 
-function armKey({ name, tool, model, effort }: Pick<Arm, 'name' | 'tool' | 'model' | 'effort'>): string {
-  return JSON.stringify([name, tool, model ?? null, effort ?? null]);
+function armKey({ name, tool, model, effort, team }: Pick<Arm, 'name' | 'tool' | 'model' | 'effort' | 'team'>): string {
+  return JSON.stringify([name, tool, model ?? null, effort ?? null, teamChoiceOf(team)]);
+}
+
+function configKey({ tool, model, effort }: Pick<Arm, 'tool' | 'model' | 'effort'>): string {
+  return JSON.stringify([tool, model ?? null, effort ?? null]);
+}
+
+/** What the suite asked of an arm's team, without the commit start resolved it to. */
+function teamChoiceOf(team: ArmTeam): TeamChoice {
+  switch (team.kind) {
+    case 'pulled':
+    case 'none':
+      return { kind: team.kind };
+    case 'ref':
+      return { kind: 'ref', ref: team.ref };
+    case 'without':
+      return { kind: 'without', skills: team.skills };
+    default: {
+      const unhandled: never = team;
+      return unhandled;
+    }
+  }
 }
 
 function leaderOf({ arms, trials }: BenchmarkRecord): SuiteSummary['leader'] {
@@ -238,7 +310,7 @@ function armsOf({ runs, current, newest }: SuiteRuns): ArmSeries[] {
   }).map(([key, { arm, points, pooledTrials, pooledRuns, deviations, notVerified }]) => {
     const pooled = passRate(pooledTrials.map(({ trial }) => trial));
     return {
-      key, arm: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), ...(arm.effort ? { effort: arm.effort } : {}),
+      key, arm: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), ...(arm.effort ? { effort: arm.effort } : {}), team: teamChoiceOf(arm.team),
       isCurrent: order.includes(key),
       ...(pooled.planned > 0 ? { pooled: { ...pooled, ...wilson(pooled), runs: pooledRuns, deviations, notVerified, usage: usageOf(pooledTrials) } } : {}),
       points,
@@ -275,13 +347,136 @@ function tasksOf({ current, newest }: SuiteRuns): TaskView[] {
   });
 }
 
-function runRow({ run, source, startedAt, username, benchmark }: BenchmarkRunInput): RunRow {
+/** Which of two current arms, if exactly one, the pair differs in. */
+function dimensionOf(left: Arm, right: Arm): ArmDimension | undefined {
+  const differs = {
+    team: JSON.stringify(teamChoiceOf(left.team)) !== JSON.stringify(teamChoiceOf(right.team)),
+    tool: left.tool !== right.tool,
+    model: left.model !== right.model || left.effort !== right.effort,
+  } satisfies Record<ArmDimension, boolean>;
+  const [only, ...more] = ARM_DIMENSIONS.filter((dimension) => differs[dimension]);
+  return more.length === 0 ? only : undefined;
+}
+
+/** For the team: none, then without some skills, then a named ref, then the pulled revision. */
+const TEAM_ORDER = { none: 0, without: 1, ref: 2, pulled: 3 } as const satisfies Record<ArmTeam['kind'], number>;
+
+/**
+ * The 95% interval of `to - from` over paired trials (Newcombe 1998, method 10): `both` passed on both arms, `toOnly`
+ * only on to, `fromOnly` only on from, `neither` on neither.
+ */
+export function pairedDifference({ both, toOnly, fromOnly, neither }: { both: number; toOnly: number; fromOnly: number; neither: number }): ArmComparison['difference'] {
+  const n = both + toOnly + fromOnly + neither;
+  const to = { passed: both + toOnly, planned: n };
+  const from = { passed: both + fromOnly, planned: n };
+  const [pTo, pFrom] = [to.passed / n, from.passed / n];
+  const [toCi, fromCi] = [wilson(to), wilson(from)];
+  const product = (both + toOnly) * (fromOnly + neither) * (both + fromOnly) * (toOnly + neither);
+  const cross = both * neither - toOnly * fromOnly;
+  // Newcombe's continuity correction of the correlation, applied when it is positive.
+  const phi = product === 0 ? 0 : (cross > 0 ? Math.max(cross - n / 2, 0) : cross) / Math.sqrt(product);
+  const value = pTo - pFrom;
+  const below = Math.sqrt(Math.max(0, (pTo - toCi.low) ** 2 - 2 * phi * (pTo - toCi.low) * (fromCi.high - pFrom) + (fromCi.high - pFrom) ** 2));
+  const above = Math.sqrt(Math.max(0, (toCi.high - pTo) ** 2 - 2 * phi * (toCi.high - pTo) * (pFrom - fromCi.low) + (pFrom - fromCi.low) ** 2));
+  return { value, low: Math.max(-1, value - below), high: Math.min(1, value + above) };
+}
+
+function comparisonsOf({ current, newest }: SuiteRuns): ArmComparison[] {
+  const arms = newest.benchmark.arms;
+  const ordered = (left: Arm, right: Arm, dimension: ArmDimension): [Arm, Arm] => {
+    if (dimension !== 'team') return [left, right];
+    return TEAM_ORDER[right.team.kind] < TEAM_ORDER[left.team.kind] ? [right, left] : [left, right];
+  };
+  const comparisons: ArmComparison[] = [];
+  arms.forEach((left, index) => {
+    for (const right of arms.slice(index + 1)) {
+      const dimension = dimensionOf(left, right);
+      if (dimension === undefined) continue;
+      const [from, to] = ordered(left, right, dimension);
+      const [fromKey, toKey] = [armKey(from), armKey(to)];
+      const pairs: Array<{ task: string; from: boolean; to: boolean }> = [];
+      for (const { benchmark } of current) {
+        const named = (key: string): string | undefined => benchmark.arms.find((arm) => armKey(arm) === key)?.name;
+        const [fromName, toName] = [named(fromKey), named(toKey)];
+        if (fromName === undefined || toName === undefined) continue;
+        for (const trial of benchmark.trials.filter(({ arm }) => arm === fromName)) {
+          const other = benchmark.trials.find(({ arm, task, repetition }) => arm === toName && task === trial.task && repetition === trial.repetition);
+          if (other) pairs.push({ task: trial.task, from: trial.result === 'passed', to: other.result === 'passed' });
+        }
+      }
+      if (pairs.length === 0) continue;
+      const count = (test: (pair: { from: boolean; to: boolean }) => boolean): number => pairs.filter(test).length;
+      const rate = (of: typeof pairs, side: 'from' | 'to'): PassRate => ({ passed: of.filter((pair) => pair[side]).length, planned: of.length });
+      comparisons.push({
+        dimension, from: fromKey, to: toKey, pairs: pairs.length,
+        rates: { from: rate(pairs, 'from'), to: rate(pairs, 'to') },
+        difference: pairedDifference({ both: count((p) => p.from && p.to), toOnly: count((p) => p.to && !p.from), fromOnly: count((p) => p.from && !p.to), neither: count((p) => !p.from && !p.to) }),
+        tasks: newest.benchmark.tasks.flatMap(({ id }) => {
+          const own = pairs.filter((pair) => pair.task === id);
+          return own.length > 0 ? [{ task: id, from: rate(own, 'from'), to: rate(own, 'to') }] : [];
+        }),
+      });
+    }
+  });
+  return comparisons.sort((left, right) => ARM_DIMENSIONS.indexOf(left.dimension) - ARM_DIMENSIONS.indexOf(right.dimension));
+}
+
+function teamChangesOf({ current }: SuiteRuns): SuiteView['teamChanges'] {
+  const configs = new Map<string, TeamConfig>();
+  const revisions = new Map<string, { firstRunAt: string; byConfig: Map<string, { runs: Set<string>; trials: Trial[] }> }>();
+  for (const { run, startedAt, benchmark } of current) {
+    for (const arm of benchmark.arms) {
+      if (arm.team.kind !== 'pulled' && arm.team.kind !== 'ref') continue;
+      const key = configKey(arm);
+      configs.set(key, { key, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), ...(arm.effort ? { effort: arm.effort } : {}) });
+      const revision = revisions.get(arm.team.revision) ?? { firstRunAt: startedAt, byConfig: new Map() };
+      const config = revision.byConfig.get(key) ?? { runs: new Set<string>(), trials: [] };
+      config.runs.add(run);
+      config.trials.push(...benchmark.trials.filter((trial) => trial.arm === arm.name));
+      revision.byConfig.set(key, config);
+      revisions.set(arm.team.revision, revision);
+    }
+  }
+  const spanning = [...configs.values()].filter(({ key }) => [...revisions.values()].filter(({ byConfig }) => byConfig.has(key)).length > 1);
+  if (spanning.length === 0) return { configs: [], revisions: [] };
+  return {
+    configs: spanning,
+    revisions: [...revisions].sort(([, left], [, right]) => left.firstRunAt.localeCompare(right.firstRunAt)).map(([revision, { firstRunAt, byConfig }]) => ({
+      revision, firstRunAt,
+      configs: spanning.flatMap(({ key }) => {
+        const config = byConfig.get(key);
+        if (!config) return [];
+        const rate = passRate(config.trials);
+        if (rate.planned === 0) return [];
+        const tasks = [...new Set(config.trials.map(({ task }) => task))].map((task) => ({ task, ...passRate(config.trials.filter((trial) => trial.task === task)) }));
+        return [{ key, runs: config.runs.size, ...rate, ...wilson(rate), tasks }];
+      }),
+    })),
+  };
+}
+
+/** The version of each tool the run's prompts reported, the most reported one when they differ. */
+function toolVersionsOf(input: BenchmarkRunInput): Record<string, string> {
+  const counts = new Map<string, Map<string, number>>();
+  for (const { ranAs } of observedTrials(input)) {
+    const { name, version } = ranAs?.tool ?? {};
+    if (name === undefined || version === undefined) continue;
+    const versions = counts.get(name) ?? new Map<string, number>();
+    versions.set(version, (versions.get(version) ?? 0) + 1);
+    counts.set(name, versions);
+  }
+  return Object.fromEntries([...counts].map(([tool, versions]) => [tool, [...versions].sort(([, left], [, right]) => right - left)[0]?.[0] ?? '']));
+}
+
+function runRow(input: BenchmarkRunInput): RunRow {
+  const { run, source, startedAt, username, benchmark } = input;
   return {
     run, source, startedAt, ...(username ? { username } : {}),
     sourceHash: runSourceHash(benchmark),
     teamRevision: benchmark.baselineTeamRevision,
     ...passRate(benchmark.trials),
     unmeasuredTasks: benchmark.tasks.filter(({ baseline }) => !isMeasured(baseline)).length,
+    toolVersions: toolVersionsOf(input),
     arms: benchmark.arms.map((arm) => ({ key: armKey(arm), ...passRate(benchmark.trials.filter((trial) => trial.arm === arm.name)) })),
   };
 }
@@ -313,6 +508,8 @@ export const BenchmarkHistory = {
         tasks: tasksOf(suiteRuns),
         runs: own.map(runRow).toReversed(),
         latest: { run: newest.run, source: newest.source, table: benchmarkTable({ ...(newest.steps ? { steps: newest.steps } : {}), benchmark: newest.benchmark }) },
+        comparisons: comparisonsOf(suiteRuns),
+        teamChanges: teamChangesOf(suiteRuns),
       },
     };
   },
