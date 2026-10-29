@@ -25,7 +25,6 @@ import { isRecord } from '../../expression.js';
 import { MAX_TIMER_DELAY } from '../../shell-command.js';
 import { judgeRunEntries } from '../../scoring.js';
 import { budgeted, runDeadline } from '../../limits.js';
-import type { BenchmarkPlan } from '../../../benchmark/plan.js';
 import { benchmarkNotices, trialBlocker, Trials } from '../../../benchmark/trial.js';
 import { PreparedTrialLeaseSchema, type PreparedTrialLease } from '../../../benchmark/terms.js';
 import { resolveCliPath } from '../../../utils/cli-path.js';
@@ -147,6 +146,8 @@ interface Lease extends LeaseWire {
   processEnv?: NodeJS.ProcessEnv;
   /** Set once the step has a directory to run in. */
   cwd?: string;
+  /** A benchmark trial's prompt, which Trials prepared in its clone, `cwd`: it launches by the trial rules. */
+  trial?: PreparedTrialLease;
 }
 
 /**
@@ -256,6 +257,13 @@ function parseLease(raw: unknown): Lease | undefined {
   if (!isRecord(raw) || !parsed.error.issues.every((issue) => issue.path[0] === 'workspace')) return undefined;
   const bare = LeaseWireSchema.safeParse({ ...raw, workspace: undefined });
   return bare.success ? { ...bare.data, unreadableWorkspace: true } : undefined;
+}
+
+/** The prompt lease of a benchmark run, which `Trials.next` prepared, as this driver runs it, or undefined when it cannot. */
+function parseTrialLease(raw: unknown): Lease | undefined {
+  const trial = PreparedTrialLeaseSchema.safeParse(raw);
+  const lease = LeaseWireSchema.safeParse(raw);
+  return trial.success && lease.success ? { ...lease.data, cwd: trial.data.cwd, trial: trial.data } : undefined;
 }
 
 /**
@@ -476,13 +484,7 @@ export async function withDriverLock(
 ): Promise<WorkflowEnvelope> {
   const run = RunIdSchema.safeParse(runId);
   if (!run.success) return { error: { code: 'invalid_run', message: 'Run id must look like r followed by 8 or 16 hex digits' } };
-  return withRunLock(config, run.data, (lock) => body((cwd, options) => drive(config, lock, cwd, options)), { waitMs: 0 });
-}
-
-/** A benchmark run goes to its own loop, every other run to driveRun. */
-async function drive(config: LocalConfig, lock: RunLock, cwd: string, options: LocalDriverOptions): Promise<WorkflowEnvelope> {
-  const run = await readRun(config, lock.run);
-  return typeof run === 'object' && run.benchmark ? driveBenchmarkRun(config, lock, cwd, options, run.benchmark) : driveRun(config, lock, cwd, options);
+  return withRunLock(config, run.data, (lock) => body((cwd, options) => driveRun(config, lock, cwd, options)), { waitMs: 0 });
 }
 
 /** Adds to `seen` each value of `secrets` it lacks, under a label of its own when its name already holds another value. */
@@ -521,78 +523,14 @@ function deadlineSignal(expiresAt: string | undefined): AbortSignal {
 }
 
 /**
- * The local benchmark loop, through the same `Trials` calls an external driver reaches with `next --prepare` and
- * `report`. Serial on purpose: one trial at a time, so a check never competes with another trial's tool. A stop signal
- * stops what runs and leaves its step leased, so `workflow resume` prepares it again. It is the run's only driver, so a
- * trial it cannot take is settled `not_run` at once, and it prints why once, before its first `next`. Once every trial
- * settled, it judges the run's judge entries itself, as long as `next` waits for them.
- */
-async function driveBenchmarkRun(config: LocalConfig, lock: RunLock, cwd: string, options: LocalDriverOptions, plan: BenchmarkPlan): Promise<WorkflowEnvelope> {
-  const runId = lock.run;
-  const driver = driverIdentity('local', cwd);
-  const can = localCan({ sandbox: isSandbox(config, options), hitl: false, trials: LAUNCH_TOOLS.filter((tool) => resolveCliPath(executableOf(tool)) !== null) });
-  for (const line of benchmarkNotices(plan, can, await trialBlocker(config))) log.info(line);
-  // A driver killed before cleanup, of this run or any other, left trial roots behind.
-  await Trials.sweep(config);
-  const adapter = options.adapter ?? createLocalToolAdapter();
-  const controller = new AbortController();
-  const onSignal = (signal: NodeJS.Signals): void => controller.abort(signal);
-  for (const name of STOP_SIGNALS) process.on(name, onSignal);
-  let env: WorkflowEnv | undefined;
-  try {
-    for (;;) {
-      env = await resolveWorkflowEnv(config);
-      const answer = await Trials.next(config, runId, driver, { can, running: [], env, signal: controller.signal, alone: true });
-      // Trials.next tells an external driver to ask it again; this driver continues through resume.
-      if (isWorkflowError(answer) && answer.error.code === 'interrupted') {
-        return { error: { code: 'interrupted', message: `Stopped while a trial step was prepared or checked. It stays leased: continue with teamai workflow resume ${runId}${options.sandbox ? ' --sandbox' : ''}.` } };
-      }
-      if (isWorkflowError(answer)) return answer;
-      if ('done' in answer.data) {
-        const done = DoneTableSchema.safeParse(answer.data.done);
-        if (done.success) process.stderr.write(`${done.data.benchmark.text}\n`);
-        return answer;
-      }
-      if (!('lease' in answer.data)) {
-        const wait = isRecord(answer.data.wait) ? answer.data.wait : {};
-        const run = await readRun(config, runId);
-        // Judging stops at the run's deadline, so the next `next` ends the run as timed out.
-        const ends = deadlineSignal(typeof run === 'object' ? runDeadline(run) : undefined);
-        const judging = typeof wait.judging === 'number' ? await judgeRunEntries(config, runId, cwd, AbortSignal.any([controller.signal, ends])) : undefined;
-        if (controller.signal.aborted) return { error: { code: 'interrupted', message: `Stopped while the judges of run ${runId} ran. Continue with teamai workflow resume ${runId}${options.sandbox ? ' --sandbox' : ''}.` } };
-        if (judging?.kind === 'settled' || judging?.kind === 'stopped') continue;
-        if (judging?.kind === 'skipped') log.info(judging.message);
-        return { error: { code: 'busy', message: typeof wait.reason === 'string' ? wait.reason : 'the next step is not available' } };
-      }
-      const lease = PreparedTrialLeaseSchema.safeParse(answer.data.lease);
-      const attempt = lease.success ? AttemptIdSchema.safeParse(lease.data.attempt) : undefined;
-      if (!lease.success || !attempt?.success) return { error: { code: 'run_unreadable', message: `Run ${runId} returned a trial lease the local driver cannot run` } };
-      const expired = deadlineSignal(lease.data.expiresAt);
-      const resultFile = attemptResultPath(config, runId, attempt.data);
-      const report = await launchTrialPrompt({ driver, lease: lease.data, resultFile, adapter, env, signal: AbortSignal.any([controller.signal, expired]) });
-      if (controller.signal.aborted) return { error: { code: 'interrupted', message: `Stopped while trial step "${lease.data.step}" ran. It stays leased: continue with teamai workflow resume ${runId}${options.sandbox ? ' --sandbox' : ''}.` } };
-      // The tool was stopped at the run's deadline: the next `next` settles the trial as timed out and removes its clone.
-      if (expired.aborted) continue;
-      await maskResultFile(resultFile, env.secrets);
-      const reported = await Trials.report(config, runId, report, env.secrets);
-      if (isWorkflowError(reported) && reported.error.code !== 'lease_cancelled') return reported;
-    }
-  } finally {
-    for (const name of STOP_SIGNALS) process.off(name, onSignal);
-    await maskAttemptFiles(config, runId, env?.secrets ?? await knownSecrets(config));
-    const reason: unknown = controller.signal.reason;
-    const stoppedBy = STOP_SIGNALS.find((name) => name === reason);
-    if (stoppedBy) exitLike({ kind: 'signaled', signal: stoppedBy });
-  }
-}
-
-/**
  * One prepared prompt, launched by the trial rules: the lease's tool, never the member's --tools mapping; the lease's
  * model and effort as given, with no alias lookup; the env without every name the lease withholds; in the clone. The
  * report carries the time around the tool's run alone, and the cost only when the tool stated one. A tool still running
  * at the lease's `trial.limits` timeout, or once its stdout states more tokens than its budget, is stopped with
  * everything it started, and headless Claude runs with its `maxTurns`; either way the prompt succeeds with that limit,
- * so the check decides the trial on what the agent left. A limit a tool cannot be held to is listed as unenforced.
+ * so the check decides the trial on what the agent left. A limit a tool cannot be held to is listed as unenforced. A tool
+ * still running at the run's deadline is stopped, and nothing is reported: the next `next` settles the trial as timed out
+ * and removes its clone.
  */
 async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, signal }: {
   driver: DriverIdentity;
@@ -601,12 +539,13 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
   adapter: LocalToolAdapter;
   env: WorkflowEnv;
   signal: AbortSignal;
-}): Promise<ReportBody> {
+}): Promise<ReportBody | undefined> {
   const { tool, model, effort, limits } = lease.trial;
   const reported = { attempt: lease.attempt, revision: lease.revision, driver, tool };
   if (!isLaunchTool(tool)) return { ...reported, ...failureReport({ code: 'tool_unsupported', message: `The local workflow tool "${tool}" is not supported` }) };
   const scoped = await stepEnvironment(env, lease.envScope);
   if (!scoped.ok) return { ...reported, ...failureReport(scoped.failure) };
+  const expired = deadlineSignal(lease.expiresAt);
   const family = launchAdapterIdOf(tool);
   // A trial is held only to the limits its tool is known to keep and report: Codex states its usage only as it ends,
   // and CodeBuddy's turn cap and per-message usage are untried, so the rest list as unenforced.
@@ -622,9 +561,10 @@ async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, sign
       ...(budget !== undefined ? { budget } : {}),
       ...(limits?.timeoutMs !== undefined ? { timeoutMs: limits.timeoutMs } : {}),
     },
-    signal,
+    signal: AbortSignal.any([signal, expired]),
     unfinished: `${tool} could not complete the trial`,
   });
+  if (expired.aborted) return undefined;
   const ran = result.started ? result : undefined;
   const unenforcedPassed = limits?.tokens !== undefined && budget === undefined && budgeted(ran?.tokens) > limits.tokens;
   const limit = !ran ? undefined : ran.stoppedBy ?? (unenforcedPassed ? 'budget' : undefined);
@@ -695,6 +635,8 @@ async function removeGitLocks(gitDir: string): Promise<void> {
 async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options: LocalDriverOptions): Promise<WorkflowEnvelope> {
   const runId = lock.run;
   const started = await readRun(config, runId);
+  // A benchmark run's leases come through Trials, which prepares each trial prompt in its clone and runs each check.
+  const benchmark = typeof started === 'object' ? started.benchmark : undefined;
   // Places go under the checkout the run started from, wherever in it the driver runs.
   const root = await placeRoot({ cwd, checkout: typeof started === 'object' ? started.checkout : undefined });
   const unreconciled = await reconcileTakenCopies(config, runId, root);
@@ -702,9 +644,15 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
   // Resolved once per drive, so a resume where a person attends runs attended whatever mode the run started in.
   const mode = resolveRunMode(process.env);
   const canHitl = options.hitl ?? personAnswers(mode);
-  // This loop stages every lease itself, so it launches no trial by the trial rules.
-  const can = localCan({ sandbox: isSandbox(config, options), hitl: canHitl, trials: [] });
+  // It launches the trials of a benchmark run by the trial rules, on the tools this machine has.
+  const trials = benchmark ? LAUNCH_TOOLS.filter((tool) => resolveCliPath(executableOf(tool)) !== null) : [];
+  const can = localCan({ sandbox: isSandbox(config, options), hitl: canHitl, trials });
   const driver = driverIdentity('local', cwd);
+  if (benchmark) {
+    for (const line of benchmarkNotices(benchmark, can, await trialBlocker(config))) log.info(line);
+    // A driver killed before cleanup, of this run or any other, left trial roots behind.
+    await Trials.sweep(config);
+  }
   const adapter = options.adapter ?? createLocalToolAdapter();
   const archive = openSessionArchive(config);
   const maxParallel = config.workflows?.max_parallel ?? 1;
@@ -737,6 +685,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
     dying.set(attempt, { step: running.lease.step, lease: running.lease, command: running.command });
     void running.command.stop();
   };
+  // Work the loop does itself between leases: the trials teamai prepares and checks, and the run's judges.
+  let working: AbortController | undefined;
   let interactiveIgnores: readonly NodeJS.Signals[] = [];
   let signalled: NodeJS.Signals | undefined;
   let wake = (): void => {};
@@ -756,10 +706,24 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
   // without a handler.
   const onSignal = (signal: NodeJS.Signals): void => {
     if (interactiveRuns() && interactiveIgnores.includes(signal)) return;
-    if (busy() === 0) return exitOn(signal);
+    if (busy() === 0 && !working) return exitOn(signal);
     signalled ??= signal;
     for (const { controller } of prompts.values()) controller.abort(signal);
+    working?.abort(signal);
     wake();
+  };
+  // Runs `work` as that work: the driver handles every stop signal meanwhile, and one stops it.
+  const runHere = async <T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    const before = handled;
+    const controller = new AbortController();
+    working = controller;
+    handle(STOP_SIGNALS);
+    try {
+      return await work(controller.signal);
+    } finally {
+      working = undefined;
+      handle(before);
+    }
   };
   if (maxParallel > 1) handle(STOP_SIGNALS);
   // The team env, resolved once per turn of the loop: the leases it hands out, their env, and what it masks agree. It
@@ -769,7 +733,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
   const report = async (body: ReportBody, lease: Lease): Promise<WorkflowEnvelope | undefined> => {
     const secrets = env?.secrets ?? await knownSecrets(config);
     await maskResultFile(attemptResultPath(config, runId, lease.attempt), secrets);
-    const answer = await managedReport({ config, runId, report: body, secrets, lock });
+    // A trial's report goes through Trials, which commits its clone and stages what its judges read.
+    const answer = lease.trial ? await Trials.report(config, runId, body, secrets) : await managedReport({ config, runId, report: body, secrets, lock });
     // Cancelled while it ran: the next `next` lists it in `cancelled`, and the run goes on without it.
     if (isWorkflowError(answer)) return answer.error.code === 'lease_cancelled' ? undefined : answer;
     reported.add(body.attempt);
@@ -784,9 +749,14 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
       const resolved = await resolveWorkflowEnv(config);
       const turn = { ...resolved, secrets: rememberSecrets(seen, resolved.secrets) };
       env = turn;
-      const next = await leaseNext(config, runId, driver, {
-        running, canTakeLease, can, autoApprove: options.autoApprove, runMode: mode, ...(base ? { base } : {}), env: turn,
-      });
+      const asked = { running, canTakeLease, can, autoApprove: options.autoApprove, runMode: mode, ...(base ? { base } : {}), env: turn };
+      const next = benchmark
+        ? await runHere((signal) => Trials.next(config, runId, driver, { ...asked, alone: true, signal }))
+        : await leaseNext(config, runId, driver, asked);
+      // Trials.next tells an external driver to ask it again; this driver continues through resume.
+      if (benchmark && isWorkflowError(next) && next.error.code === 'interrupted') {
+        return { error: { code: 'interrupted', message: `Stopped while a trial step was prepared or checked. It stays leased: continue with teamai workflow resume ${runId}${options.sandbox ? ' --sandbox' : ''}.` } };
+      }
       if (signalled) continue;
       if (isWorkflowError(next)) return next;
       for (const attempt of Array.isArray(next.data.cancelled) ? next.data.cancelled as string[] : []) cancel(attempt);
@@ -799,6 +769,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
           prompts.delete(attempt);
           if (failed) return failed;
         }
+        const table = DoneTableSchema.safeParse(next.data.done);
+        if (table.success) process.stderr.write(`${table.data.benchmark.text}\n`);
         return next;
       }
       const hitl = readHitlRequest(next.data.hitl);
@@ -810,7 +782,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
         question = undefined;
       }
       if ('lease' in next.data) {
-        const lease = nextLease;
+        const lease = benchmark ? parseTrialLease(next.data.lease) : nextLease;
         if (!lease) return { error: { code: 'run_unreadable', message: `Run ${runId} returned a lease the local driver cannot run` } };
         if (reported.has(lease.attempt)) {
           return { error: { code: 'driver_stuck', message: `Attempt ${lease.attempt} was leased again before it could be reported` } };
@@ -870,6 +842,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
         const controller = new AbortController();
         if (maxParallel === 1) handle(STOP_SIGNALS);
         prompts.set(lease.attempt, { lease, controller, exit: (async () => {
+          if (lease.trial) {
+            return launchTrialPrompt({ driver, lease: lease.trial, resultFile: attemptResultPath(config, runId, lease.attempt), adapter, env: turn, signal: controller.signal });
+          }
           const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal });
           if (!startable(lease, controller.signal)) {
             await abandonPlace({ config, lock, attempt: lease.attempt });
@@ -895,6 +870,16 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
         }
         // A wait for a call that could not take a lease says nothing about what is left; ask again with room.
         if (!canTakeLease) continue;
+        // The run waits for the judges of its required entries: this driver judges them itself, up to the run's deadline,
+        // so the next `next` ends a run out of time as timed out.
+        if (typeof wait.judging === 'number') {
+          const run = await readRun(config, runId);
+          const ends = deadlineSignal(typeof run === 'object' ? runDeadline(run) : undefined);
+          const judging = await runHere((signal) => judgeRunEntries(config, runId, cwd, AbortSignal.any([signal, ends])));
+          if (signalled) return { error: { code: 'interrupted', message: `Stopped while the judges of run ${runId} ran. Continue with teamai workflow resume ${runId}${options.sandbox ? ' --sandbox' : ''}.` } };
+          if (judging.kind === 'settled' || judging.kind === 'stopped') continue;
+          if (judging.kind === 'skipped') log.info(judging.message);
+        }
         return { error: { code: 'busy', message: typeof wait.reason === 'string' ? wait.reason : 'the next step is not available' } };
       }
       let timer: NodeJS.Timeout | undefined;
