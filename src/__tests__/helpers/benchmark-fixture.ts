@@ -29,7 +29,8 @@ import YAML from 'yaml';
 import { z } from 'zod';
 import type { LocalConfig } from '../../types.js';
 import { compilePlan, freezePlan, runSourceHash } from '../../benchmark/plan.js';
-import { commitCacheOf, commitCheckFiles } from '../../benchmark/trial.js';
+import { commitCheckFiles } from '../../benchmark/trial.js';
+import { commitCacheOf } from '../../workflow/place/place.js';
 import { parseSuite } from '../../benchmark/suite.js';
 import type { BenchmarkSuiteFiles } from '../../workflow/conformance-interpreter.js';
 import { createRun, error, leaseNext, reportAttempt } from '../../workflow/engine.js';
@@ -329,7 +330,7 @@ export async function benchmarkFixture(options: BenchmarkFixtureOptions): Promis
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync, spawnSync } = require('node:child_process');
-${tool === 'claude' ? judgeMode(judgeLog, path.join(tmp, 'teamai-trials'), options.judge ?? 'first-label') : ''}
+${tool === 'claude' ? judgeMode(judgeLog, path.join(tmp, 'teamai-clones'), options.judge ?? 'first-label') : ''}
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 const first = !fs.existsSync(${JSON.stringify(toolLog)});
 const filterPids = ${JSON.stringify(filterPidLog)};
@@ -436,7 +437,7 @@ process.stdout.write(JSON.stringify({ type: 'result', session_id: 'fake-session'
     filterPids: () => (fs.existsSync(filterPidLog) ? fs.readFileSync(filterPidLog, 'utf8').trim().split('\n').map(Number) : []),
     toolLaunches: () => (fs.existsSync(toolLog) ? fs.readFileSync(toolLog, 'utf8').trim().split('\n').map((line) => ToolLaunchSchema.parse(JSON.parse(line))) : []),
     judgeLaunches: () => (fs.existsSync(judgeLog) ? fs.readFileSync(judgeLog, 'utf8').trim().split('\n').map((line) => JudgeLaunchSchema.parse(JSON.parse(line))) : []),
-    trialRootEntries: () => (fs.existsSync(path.join(tmp, 'teamai-trials')) ? fs.readdirSync(path.join(tmp, 'teamai-trials')) : []),
+    trialRootEntries: () => (fs.existsSync(path.join(tmp, 'teamai-clones')) ? fs.readdirSync(path.join(tmp, 'teamai-clones')) : []),
     hookCalls: () => (fs.existsSync(hookMarker) ? fs.readFileSync(hookMarker, 'utf8').trim().split('\n') : []),
     probeControl: (run) => fs.writeFileSync(probeRun, run),
     probeAnswers: () => (fs.existsSync(probeLog) ? fs.readFileSync(probeLog, 'utf8').trim().split('\n').map((line) => EnvelopeSchema.parse(JSON.parse(line))) : []),

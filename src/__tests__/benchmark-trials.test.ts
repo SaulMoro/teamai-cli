@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,20 +7,27 @@ import { z } from 'zod';
 import * as envExec from '../env-exec.js';
 import { resolveWorkflowEnv } from '../env-resolution.js';
 import { getDataHome, type LocalConfig } from '../types.js';
-import { Trials } from '../benchmark/trial.js';
+import { Trials, type TrialNextOptions } from '../benchmark/trial.js';
 import { leaseNext, reportAttempt } from '../workflow/engine.js';
 import { runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import type { DriverCan } from '../workflow/requirements.js';
 import { cancelRun } from '../workflow/run-controls.js';
-import { AttemptIdSchema, readRun, runsDir } from '../workflow/store.js';
+import { AttemptIdSchema, readRun, RunIdSchema, runsDir, withRunLock } from '../workflow/store.js';
+import { sweepClones } from '../workflow/place/place.js';
 import { inProcessClient } from '../workflow/protocol.js';
-import type { DriverIdentity } from '../workflow/types.js';
+import { branchName } from '../workflow/workspace.js';
+import type { DriverIdentity, WorkflowEnvelope } from '../workflow/types.js';
 import { benchmarkRunConfig, FIX_SUITE, fixTask, RUN_START, settleBaselines, startBenchmarkRun } from './helpers/benchmark-fixture.js';
 
 const driver: DriverIdentity = { kind: 'external', machine: 'ci', workspace: '/work' };
-const can: DriverCan = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
+const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
 const LeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number(), workspace: z.object({ branch: z.string() }) }) }) });
 const dirs: string[] = [];
+
+/** `Trials.next` for `driver`, holding the run's lock, as `workflow next --prepare` and the local driver call it. */
+async function nextTrial(config: LocalConfig, runId: string, options: TrialNextOptions): Promise<WorkflowEnvelope> {
+  return withRunLock(config, RunIdSchema.parse(runId), (lock) => Trials.next(config, lock, driver, options), { waitMs: 0 });
+}
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -62,7 +70,7 @@ describe('Trials.report', () => {
   ])('refuses a trial report that carries %s, which teamai fills itself, and keeps the trial leased', async (field, fields) => {
     const { config, runId, lease } = await leasedPrompt();
 
-    const answer = await Trials.report(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver, tool: 'claude', ...fields }, {});
+    const answer = await Trials.report(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver, tool: 'claude', ...fields });
 
     expect(answer).toEqual({ error: { code: 'invalid_report', message: `Prepared trial reports fill changes/read/exitCode automatically; omit ${field}` } });
     const run = await readRun(config, runId);
@@ -72,7 +80,7 @@ describe('Trials.report', () => {
   it('refuses a trial report that names no tool', async () => {
     const { config, runId, lease } = await leasedPrompt();
 
-    const answer = await Trials.report(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver }, {});
+    const answer = await Trials.report(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver });
 
     expect(answer).toEqual({ error: { code: 'invalid_report', message: 'The report of trial step "trials.r1.fix.claude.prompt" names no tool. Send tool with the tool the driver launched: claude for this trial.' } });
   });
@@ -80,7 +88,7 @@ describe('Trials.report', () => {
   it('refuses a limit its suite does not set, and keeps the trial leased', async () => {
     const { config, runId, lease } = await leasedPrompt();
 
-    const answer = await Trials.report(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver, tool: 'claude', limit: 'timeout' }, {});
+    const answer = await Trials.report(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver, tool: 'claude', limit: 'timeout' });
 
     const run = await readRun(config, runId);
     expect(answer).toEqual({ error: { code: 'invalid_report', message: 'The report of trial step "trials.r1.fix.claude.prompt" names limit timeout, which its suite\'s trial does not set. Send limit only for a limit in the lease\'s trial.limits that stopped the tool.' } });
@@ -95,7 +103,7 @@ describe('Trials.report', () => {
     });
     const check = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
 
-    const answer = await Trials.report(config, runId, { attempt: check.attempt, revision: check.revision, outcome: 'success', driver, tool: 'claude' }, {});
+    const answer = await Trials.report(config, runId, { attempt: check.attempt, revision: check.revision, outcome: 'success', driver, tool: 'claude' });
 
     expect(check.step).toBe('trials.r1.fix.claude.check');
     expect(answer).toEqual({ error: { code: 'invalid_report', message: 'Step "trials.r1.fix.claude.check" is a benchmark check, which teamai runs itself inside teamai workflow next --prepare. Report only the prompt leases next --prepare gives this driver.' } });
@@ -121,7 +129,7 @@ describe('Trials.next where the team cannot be pinned', () => {
   it('answers team_ref_blocked and leases nothing, not even a baseline, so another machine can take the run', async () => {
     const { config, runId } = await startOnSelfTeam();
 
-    const answer = await Trials.next(config, runId, driver, { can });
+    const answer = await nextTrial(config, runId, { can });
 
     const run = await readRun(config, runId);
     expect(answer).toEqual({ error: { code: 'team_ref_blocked', message: SELF } });
@@ -131,7 +139,7 @@ describe('Trials.next where the team cannot be pinned', () => {
   it("settles every trial not_run for the run's only driver, so the run ends", async () => {
     const { config, runId } = await startOnSelfTeam();
 
-    const answer = await Trials.next(config, runId, driver, { can, alone: true });
+    const answer = await nextTrial(config, runId, { can, alone: true });
 
     expect(answer).toMatchObject({ data: { done: { outcome: 'succeeded', benchmark: { table: { results: [{ arm: 'claude', planned: 1, counts: { not_run: 1 } }] } } } } });
   });
@@ -159,9 +167,9 @@ describe('a stop while teamai prepares or checks a trial', () => {
     const stop = new AbortController();
     stop.abort('SIGTERM');
 
-    const stopped = await Trials.next(config, runId, driver, { can, signal: stop.signal });
+    const stopped = await nextTrial(config, runId, { can, signal: stop.signal });
     const held = await readRun(config, runId);
-    const again = await Trials.next(config, runId, driver, { can });
+    const again = await nextTrial(config, runId, { can });
 
     expect(stopped).toEqual({ error: { code: 'interrupted', message: `Stopped while step "baselines.fix" was prepared or checked. It stays leased to this driver: call teamai workflow next ${runId} --prepare again, and teamai prepares it from the start.` } });
     expect(typeof held === 'object' && held.steps.find((step) => step.id === 'baselines.fix')).toMatchObject({ status: 'leased' });
@@ -184,16 +192,17 @@ describe('a stop while teamai prepares or checks a trial', () => {
   });
 });
 
-describe('Trials.sweep', () => {
+describe('sweeping clones', () => {
   /**
-   * A receipt as preparation writes it before anything under its root exists, and the paths preparation made before the
-   * driver died. The receipt is the durable file a later teamai reads, so the test writes it as one.
+   * A receipt as preparing the trial's clone writes it before anything under its root exists, and the paths preparation
+   * made before the driver died. The receipt is the durable file a later teamai reads, so the test writes it as one.
    */
   function crashedTrial(config: LocalConfig, runId: string, made: readonly string[]): { receipt: string; root: string } {
-    const root = path.join(path.dirname(getDataHome(config)), 'trial-root');
-    const receipt = path.join(runsDir(config), runId, 'trials', 'trials.r1.fix.claude.json');
+    const root = path.join(path.dirname(getDataHome(config)), 'clone-root');
+    const branch = branchName(runId, 'trials.r1.fix.claude', 1);
+    const receipt = path.join(runsDir(config), runId, 'clones', `${createHash('sha256').update(branch).digest('hex').slice(0, 8)}.json`);
     fs.mkdirSync(path.dirname(receipt), { recursive: true });
-    fs.writeFileSync(receipt, JSON.stringify({ v: 1, copy: 'trials.r1.fix.claude', root, state: { kind: 'preparing', attempt: 'a1' } }));
+    fs.writeFileSync(receipt, JSON.stringify({ v: 1, branch, root, withhold: [], state: { kind: 'preparing' } }));
     for (const dir of made) fs.mkdirSync(path.join(root, dir), { recursive: true });
     return { receipt, root };
   }
@@ -204,25 +213,25 @@ describe('Trials.sweep', () => {
     ['after the team revision was copied', ['r', 'team.git']],
     ['after the trial team clone', ['r', 'team.git', 'h/.teamai/projects/p/team-repo']],
     ['after the agent files were saved', ['r', 'team.git', 'h/.teamai/projects/p/team-repo', 'saved']],
-  ])('removes exactly the root and the receipt of a trial whose driver died %s, once its run is cancelled', async (_stage, made) => {
+  ])('removes exactly the root and the receipt of a trial clone whose driver died %s, once its run is cancelled', async (_stage, made) => {
     const { config, runId } = await leasedPrompt();
     const { receipt, root } = crashedTrial(config, runId, made);
     const sibling = path.join(path.dirname(root), 'sibling');
     fs.mkdirSync(sibling);
     await cancelRun(config, runId, {});
 
-    await Trials.sweep(config);
+    await sweepClones(config);
 
     expect(fs.existsSync(root)).toBe(false);
     expect(fs.existsSync(receipt)).toBe(false);
     expect(fs.existsSync(sibling)).toBe(true);
   });
 
-  it('keeps the root of a trial whose prompt is still leased', async () => {
+  it('keeps the clone of a trial whose prompt is still leased', async () => {
     const { config, runId } = await leasedPrompt();
     const { receipt, root } = crashedTrial(config, runId, ['r']);
 
-    await Trials.sweep(config, runId);
+    await sweepClones(config, runId);
 
     expect(fs.existsSync(path.join(root, 'r'))).toBe(true);
     expect(fs.existsSync(receipt)).toBe(true);

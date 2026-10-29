@@ -17,7 +17,7 @@ import type { DriverIdentity } from '../workflow/types.js';
 import { benchmarkRunConfig, RUN_START, RUN_TEAM, settleBaselines, startBenchmarkRun } from './helpers/benchmark-fixture.js';
 
 const driver: DriverIdentity = { kind: 'external', machine: 'ci', workspace: '/work' };
-const can: DriverCan = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
+const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
 const dirs: string[] = [];
 const HeldSchema = z.object({ data: z.object({ wait: z.object({ held: z.array(z.unknown()) }) }) });
 const LeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number() }) }) });
@@ -71,18 +71,18 @@ describe('benchmark plan run', () => {
     expect(next).toEqual({ data: { wait: { reason: expect.any(String), held: [{ step: 'baselines.t01', reason: expect.any(String), missing: [missing] }] }, cancelled: [] } });
   });
 
-  it('leases a task baseline, a fresh workspace at the starting commit, before any trial', async () => {
+  it('leases a task baseline, a clone of the starting commit with no team assets, before any trial', async () => {
     const { config, runId } = await startFix();
 
     const next = await leaseNext(config, runId, driver, { can, prepare: true });
 
     expect(next).toMatchObject({ data: { lease: {
-      step: 'baselines.t01', command: 'node test.js', trial: { kind: 'baseline', task: 't01', startingCommit: RUN_START },
-      workspace: { mode: 'new', base: { commit: RUN_START } },
+      step: 'baselines.t01', command: 'node test.js', trial: { kind: 'baseline', task: 't01' },
+      workspace: { mode: 'new', base: { commit: RUN_START }, clone: { commit: RUN_START, team: { treatment: 'none' } } },
     } } });
   });
 
-  it('leases a trial prompt with its terms at the starting commit once its task baseline fails there', async () => {
+  it('leases a trial prompt in a clone of the starting commit with the arm\'s team once its task baseline fails there', async () => {
     const { config, runId } = await startFix();
     await settleBaselines(config, runId, driver, can);
 
@@ -92,8 +92,8 @@ describe('benchmark plan run', () => {
       step: 'trials.r1.t01.a01.prompt',
       prompt: 'Make the test pass.',
       tool: 'claude',
-      trial: { kind: 'prompt', task: 't01', arm: 'a01', repetition: 1, order: 1, startingCommit: RUN_START, team: { kind: 'pulled', revision: RUN_TEAM } },
-      workspace: { base: { commit: RUN_START }, configCommit: RUN_START },
+      trial: { kind: 'prompt', task: 't01', arm: 'a01', repetition: 1, order: 1 },
+      workspace: { base: { commit: RUN_START }, configCommit: RUN_START, clone: { commit: RUN_START, team: { revision: RUN_TEAM, treatment: 'pulled' } } },
     } } });
   });
 

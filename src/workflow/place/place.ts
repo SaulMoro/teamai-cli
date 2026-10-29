@@ -17,7 +17,7 @@ import type { RunState, WorkflowFailure } from '../types.js';
 import type { WorkspaceContract } from '../workspace.js';
 import { clearWorktreeHooks, headCommit, markReadCopy, markSetup, removeWorktree, reopenConfigConflicts, stepCheckout, worktreePath } from '../worktree.js';
 import { adoptRefusal, takeAdopted } from './adopted.js';
-import { cloneDirOf, cloneEnv, commitClone, markCloneReady, openClone, removeClone } from './clone.js';
+import { cloneEnv, cloneKeyOf, commitClone, markCloneReady, openClone, removeClone } from './clone.js';
 import { openWorktree } from './created.js';
 import { applyOverlay, restoreOverlay, unrestoredConfig } from './overlay.js';
 import { finishReader, leaveReadCopy, readCopyFailure, stageReader } from './reader.js';
@@ -41,7 +41,7 @@ export { commitCacheOf, freshClone, preparedClone, scratchCloneRoot, sweepClones
 /** The place key two attempts of one driver must not share: the copy of the lease's branch, its clone, else the checkout. */
 export function placeOf(lease: { cwd?: string; workspace?: WorkspaceContract }, root: string): string {
   if (lease.cwd !== undefined) return lease.cwd;
-  return lease.workspace?.mode !== 'read-only' && lease.workspace?.clone ? cloneDirOf(lease.workspace.branch) : stepCheckout(root, lease.workspace?.branch);
+  return lease.workspace?.mode !== 'read-only' && lease.workspace?.clone ? cloneKeyOf(lease.workspace.branch) : stepCheckout(root, lease.workspace?.branch);
 }
 
 /**
@@ -198,21 +198,26 @@ export async function preparePlace(input: { config: LocalConfig; lock: RunLock; 
 
 /**
  * Prepares the clone `workspace` names: the one an earlier step prepared, or a fresh one, which is set up when the lease
- * carries setup. A clone this attempt made and could not prepare is given up with it.
+ * carries setup. A clone this attempt made and could not prepare is given up with it, and one it made before it was
+ * prepared again is replaced.
  */
 async function prepareClone(input: {
   config: LocalConfig; run: RunId; root: string; lease: PlaceLease; recorded: PlaceRecord | undefined;
   workspace: Extract<WorkspaceContract, { mode: 'new' | 'continue' }> & { clone: NonNullable<Extract<WorkspaceContract, { mode: 'new' | 'continue' }>['clone']> };
 }): Promise<PlacePrepared> {
-  const { config, run, root, lease, workspace } = input;
-  const result = await recordedResult(config, input.recorded, lease.prompt);
-  if (result) return result;
-  const dir = cloneDirOf(workspace.branch);
+  const { config, run, root, lease, workspace, recorded } = input;
+  // An attempt prepared again made its clone, and what it ran there before is not this run of it: it gets a fresh one.
+  if (recorded && recorded.phase !== 'opening' && recorded.phase !== 'abandoned' && recorded.place.role === 'clone' && recorded.place.created) {
+    await removeClone(config, run, workspace.branch);
+  } else {
+    const result = await recordedResult(config, recorded, lease.prompt);
+    if (result) return result;
+  }
   const base: OpeningBase = {
     version: 1, run, attempt: lease.attempt, step: lease.step, executor: lease.executor, root,
     ...(lease.interactive ? { interactive: true as const } : {}),
   };
-  await writePlaceRecord(config, { ...base, dir, phase: 'opening' });
+  // No opening record: the clone's receipt names its root before anything under it exists, for the sweep.
   const withhold = lease.envScope?.withhold ?? [];
   const opened = await openClone({
     config, run, checkout: root,
@@ -225,10 +230,11 @@ async function prepareClone(input: {
     role: 'clone' as const, workspace, rangeFrom: workspace.start.commit, withhold,
     ...('created' in opened && opened.created ? { created: true as const } : {}), ...(lease.expiresAt !== undefined ? { expiresAt: lease.expiresAt } : {}),
   };
-  if ('code' in opened) {
+  const { dir } = opened;
+  if ('failure' in opened) {
     await removeClone(config, run, workspace.branch);
     await writePlaceRecord(config, { ...base, dir, place, phase: 'abandoned', at: new Date().toISOString() });
-    return { kind: 'failed', failure: opened };
+    return { kind: 'failed', failure: opened.failure };
   }
   if (opened.created && lease.setup) {
     const staged: PlaceRecord = { ...base, dir, place, phase: 'staged', setup: lease.setup, ...(lease.expiresAt !== undefined ? { expiresAt: lease.expiresAt } : {}) };

@@ -54,9 +54,9 @@ export const benchmarkConformanceScenarios: BenchmarkScenario[] = [
       expect: { data: { wait: { held: [{ step: BASELINE, missing: ['sandbox'] }] } } } }],
   },
   {
-    name: 'a driver that does not ask next --prepare is held, not leased, the task baseline that runs before any trial',
+    name: 'a driver that provides clones but does not ask next --prepare is held, not leased, the task baseline that runs before any trial',
     benchmark: twoArms('10m'),
-    operations: [{ kind: 'next', saveAs: 'held', as: 'external', can: SANDBOX_CLAUDE,
+    operations: [{ kind: 'next', saveAs: 'held', as: 'external', can: { ...SANDBOX_CLAUDE, workspace: [...DRIVER_PROFILES.external.can.workspace, 'clone'] },
       expect: { data: { wait: { held: [{ step: BASELINE, missing: ['prepare'] }] } } } }],
   },
   {

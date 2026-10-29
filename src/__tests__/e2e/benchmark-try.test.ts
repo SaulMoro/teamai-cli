@@ -147,7 +147,7 @@ describe('workflow start --benchmark --try', () => {
     const teamai = path.join(home, '.teamai');
     // No config, run or record: only the BASH_ENV helper every step's environment uses.
     expect(fs.existsSync(teamai) ? fs.readdirSync(teamai, { recursive: true }).filter((entry) => entry !== 'env-exec-bash-env.sh') : []).toEqual([]);
-    const trials = path.join(tmp, 'teamai-trials');
+    const trials = path.join(tmp, 'teamai-clones');
     expect(fs.existsSync(trials) ? fs.readdirSync(trials) : []).toEqual([]);
   }, 60_000);
 

@@ -675,11 +675,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
   const trials = benchmark ? LAUNCH_TOOLS.filter(onPath) : [];
   const can = localCan({ sandbox: isSandbox(config, options), hitl: canHitl, tools, trials });
   const driver = driverIdentity('local', cwd);
-  if (benchmark) {
-    for (const line of benchmarkNotices(benchmark, can, await trialBlocker(config))) log.info(line);
-    // A driver killed before cleanup, of this run or any other, left trial roots behind.
-    await Trials.sweep(config);
-  }
+  if (benchmark) for (const line of benchmarkNotices(benchmark, can, await trialBlocker(config))) log.info(line);
   // A driver killed before cleanup, of this run or any other, left clones behind.
   await sweepClones(config);
   const adapter = options.adapter ?? createLocalToolAdapter();
@@ -762,8 +758,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
   const report = async (body: ReportBody, lease: Lease): Promise<WorkflowEnvelope | undefined> => {
     const secrets = env?.secrets ?? await knownSecrets(config);
     await maskResultFile(attemptResultPath(config, runId, lease.attempt), secrets);
-    // A trial's report goes through Trials, which commits its clone and stages what its judges read.
-    const answer = lease.trial ? await Trials.report(config, runId, body, secrets) : await managedReport({ config, runId, report: body, secrets, lock });
+    // Trials completes a trial's report with what teamai observed of its clone.
+    const completed = lease.trial ? await Trials.report(config, runId, body) : { report: body };
+    const answer = 'report' in completed ? await managedReport({ config, runId, report: completed.report, secrets, lock }) : completed;
     // Cancelled while it ran: the next `next` lists it in `cancelled`, and the run goes on without it.
     if (isWorkflowError(answer)) return answer.error.code === 'lease_cancelled' ? undefined : answer;
     reported.add(body.attempt);
@@ -780,7 +777,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
       env = turn;
       const asked = { running, canTakeLease, can, autoApprove: options.autoApprove, runMode: mode, ...(base ? { base } : {}), env: turn };
       const next = benchmark
-        ? await runHere((signal) => Trials.next(config, runId, driver, { ...asked, alone: true, signal }))
+        ? await runHere((signal) => Trials.next(config, lock, driver, { ...asked, alone: true, signal }))
         : await leaseNext(config, runId, driver, { ...asked, alone: true, prepare: true });
       // Trials.next tells an external driver to ask it again; this driver continues through resume.
       if (benchmark && isWorkflowError(next) && next.error.code === 'interrupted') {

@@ -128,7 +128,7 @@ describe('a report the engine refuses', () => {
 });
 
 describe('two calls on one trial copy', () => {
-  it('prepares one clone when a second next --prepare is handed the lease the first still prepares, and answers the second busy', async () => {
+  it('prepares one clone when a second next --prepare comes while the first still prepares, and answers the second driver_running', async () => {
     const fixture = await fixtureWith({ tasks: { fix: CRITERIA_TASK } });
     const run = await started(fixture);
     const driver = byHand(fixture, run);
@@ -146,7 +146,7 @@ describe('two calls on one trial copy', () => {
     const answers = await Promise.all([first, second]);
 
     const lease = LeaseSchema.parse(answers[0]).data.lease;
-    expect(answers[1]).toMatchObject({ error: { code: 'busy' } });
+    expect(answers[1]).toMatchObject({ error: { code: 'driver_running' } });
     expect(fixture.trialRootEntries()).toEqual([path.basename(path.dirname(lease.cwd))]);
     await fixture.teamai(['workflow', 'cancel', run]);
     expect(await driver.next()).toMatchObject({ data: { done: { outcome: 'cancelled' } } });

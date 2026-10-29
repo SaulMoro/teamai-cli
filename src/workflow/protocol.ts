@@ -459,16 +459,12 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
       const run = RunIdSchema.safeParse(runId);
       const prepare = options?.prepare;
       if (prepare === undefined || !run.success) return withIgnored(await lease(), parsed.ignored);
-      // A benchmark run's trials are prepared under each trial copy's own lock, not the run's: a clone, a setup or a
-      // check holds it for minutes.
-      if (await isBenchmarkRun(config, run.data)) {
-        if (prepare !== true) return withIgnored({ error: { code: 'invalid_arguments', message: `Run ${runId} is a benchmark run, whose trial attempts teamai prepares itself, so --attempt and --adopt do not apply. Call next --prepare without them.` } }, parsed.ignored);
-        return withIgnored(await Trials.next(config, runId, driver, { ...next, env, ...(options?.signal ? { signal: options.signal } : {}) }), parsed.ignored);
-      }
+      const benchmark = await isBenchmarkRun(config, run.data);
+      if (benchmark && prepare !== true) return withIgnored({ error: { code: 'invalid_arguments', message: `Run ${runId} is a benchmark run, whose trial attempts teamai prepares itself, so --attempt and --adopt do not apply. Call next --prepare without them.` } }, parsed.ignored);
       return withIgnored(await withRunLock(config, run.data, async (lock) => {
-        const answer = prepare === true
-          ? await prepareLeased({ config, lock, driver, env, answer: await leaseNext(config, runId, driver, { ...next, env, prepare: true }) })
-          : await prepareAttempt({ config, lock, driver, env, next, ...prepare });
+        const answer = benchmark ? await Trials.next(config, lock, driver, { ...next, env, ...(options?.signal ? { signal: options.signal } : {}) })
+          : prepare === true ? await prepareLeased({ config, lock, driver, env, answer: await leaseNext(config, runId, driver, { ...next, env, prepare: true }) })
+            : await prepareAttempt({ config, lock, driver, env, next, ...prepare });
         // A clone whose steps all settled is not needed any more.
         await sweepClones(config, lock.run);
         return answer;
@@ -478,11 +474,10 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
       const parsed = parseReport(body);
       if (typeof parsed === 'string') return { error: { code: 'invalid_report', message: parsed } };
       const run = RunIdSchema.safeParse(runId);
-      // A trial's report commits its clone and collects its judge evidence before the engine settles it.
-      const answer = run.success && await isBenchmarkRun(config, run.data)
-        ? await Trials.report(config, runId, parsed.report, env.secrets)
-        : await managedReport({ config, runId, report: parsed.report, secrets: env.secrets, lock: options?.lock });
-      return withIgnored(answer, parsed.ignored);
+      // Trials completes a trial's report with what teamai observed of its clone.
+      const completed = run.success && await isBenchmarkRun(config, run.data) ? await Trials.report(config, runId, parsed.report) : { report: parsed.report };
+      if (!('report' in completed)) return withIgnored(completed, parsed.ignored);
+      return withIgnored(await managedReport({ config, runId, report: completed.report, secrets: env.secrets, lock: options?.lock }), parsed.ignored);
     },
     respond: async (runId, step, choice, { via, ...answer }) => {
       if (via.kind === 'skill') return respondToHitl(config, runId, env.secrets, { step, choice, ...answer, provenance: respondProvenance(via) });
@@ -646,7 +641,9 @@ async function settleManaged(input: { config: LocalConfig; lock: RunLock; attemp
   }
   const end: StepEnd = { outcome: report.outcome, ...(report.message !== undefined ? { message: report.message } : {}), ...(report.failure ? { failure: report.failure } : {}) };
   const finished = await finishPlace({ config, lock, attempt, end, secrets });
-  const body = { ...report, ...finished };
+  // A limit goes only with a step that succeeded: a failure to keep its work replaces both.
+  const { limit, ...unlimited } = report;
+  const body = { ...unlimited, ...finished, ...(limit !== undefined && finished.outcome === 'success' ? { limit } : {}) };
   const staged = await stagePassEvidence({ config, lock, attempt, report: body });
   const answer = await reportAttempt(config, lock.run, body, secrets);
   const outcome = AcceptedSchema.safeParse('data' in answer ? answer.data : undefined).data?.step.outcome;

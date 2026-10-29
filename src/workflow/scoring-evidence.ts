@@ -232,7 +232,7 @@ async function assembleJudgePrompt(config: LocalConfig, dir: string, rubrics: Ru
  * run's checkout never held its work.
  */
 export async function buildEvidence(config: LocalConfig, run: RunState, subject: RunSubject, rubrics: Rubrics, dir: string): Promise<{ ok: true } | { ok: false; code: 'evidence_empty' }> {
-  if (stepDefinitions(run)(subject.step)?.trial || cloneBranchOf(run, subject.step) !== undefined) {
+  if (cloneBranchOf(run, subject.step) !== undefined) {
     const collected = subjectEvidenceDirOf(scoresDir(config), subject);
     if (!await isEvidenceReady(collected)) return { ok: false, code: 'evidence_empty' };
     if (!await isEvidenceReady(dir)) await writeEvidence(dir, (tmp) => fs.cp(collected, tmp, { recursive: true }));

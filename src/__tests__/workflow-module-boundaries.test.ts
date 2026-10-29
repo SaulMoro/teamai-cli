@@ -64,7 +64,11 @@ const SKILL_IMPORTS: Record<string, { typeOnly?: true; names?: string[]; values?
 /** Rule 3: the modules through which code outside a folder reaches it; tests may also import the entries of their unit. */
 const ENTRIES: Array<{ folder: string; entries: Record<string, string[] | 'any'>; testEntries: string[] }> = [
   { folder: SKILL, entries: { 'skill-driver.ts': 'any', 'literals.ts': ['src/workflow/discovery/render.ts'] }, testEntries: ['skill-driver.ts', 'literals.ts'] },
-  { folder: PLACE, entries: { 'place.ts': ['src/workflow/protocol.ts', 'src/workflow/drivers/local/local-driver.ts'], 'setup.ts': [`${BENCHMARK}trial.ts`] }, testEntries: ['place.ts'] },
+  {
+    folder: PLACE,
+    entries: { 'place.ts': ['src/workflow/protocol.ts', 'src/workflow/drivers/local/local-driver.ts', `${BENCHMARK}trial.ts`, `${BENCHMARK}start.ts`], 'setup.ts': [`${BENCHMARK}trial.ts`] },
+    testEntries: ['place.ts'],
+  },
   // workflow-published-runs.ts judges an offered run by the tool the local driver would launch for its prompt steps.
   { folder: LOCAL, entries: { 'local-driver.ts': ['src/workflow-commands.ts', 'src/workflow-published-runs.ts'], 'local-tool-adapter.ts': [] }, testEntries: ['local-driver.ts', 'local-tool-adapter.ts'] },
   { folder: DISCOVERY, entries: { 'workflow-skills.ts': 'any', 'generated-marker.ts': 'any' }, testEntries: ['workflow-skills.ts', 'generated-marker.ts', 'render.ts'] },

@@ -497,7 +497,7 @@ export function planWorkspace(
     if (!handback && !modes.includes('continue')) {
       return { mode, defer: { reason: `step "${state.id}" reads workspace ${branch}, which needs continue`, needs: 'continue' } };
     }
-    const base = trialBase(definition) ?? run.base ?? request.base;
+    const base = run.base ?? request.base;
     if (!base) {
       return { mode, fail: { code: 'workspace_base', message: `step "${state.id}" needs the run's base commit` } };
     }
@@ -511,7 +511,7 @@ export function planWorkspace(
   if (!handback && !modes.includes(mode)) {
     return { mode, defer: { reason: `step "${state.id}" needs workspace ${mode}, which this driver does not provide`, needs: mode } };
   }
-  const base = trialBase(definition) ?? run.base ?? request.base;
+  const base = run.base ?? request.base;
   if (!base) {
     return { mode, fail: { code: 'workspace_base', message: `step "${state.id}" needs the run's base commit` } };
   }
@@ -566,14 +566,6 @@ function planClone(run: RunState, state: StepState, request: WorkspaceRequest, i
     mode, ...session,
     contract: { mode: mode === 'clone' ? 'new' : 'continue', base: { commit: clone.commit }, configCommit: clone.commit, branch, start: { commit: copy?.commit ?? clone.commit }, merge: [], clone },
   };
-}
-
-/**
- * A benchmark trial's base: its task's starting commit, whatever the run's base. It has no `ref`, and configCommit
- * follows it, so the trial's agent configuration is the starting commit's.
- */
-function trialBase(definition: WorkflowStep): { commit: string } | undefined {
-  return definition.trial && { commit: definition.trial.startingCommit };
 }
 
 /**

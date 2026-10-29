@@ -1,88 +1,40 @@
 /**
- * Trials on this machine: the one teamai module that makes a trial's workspace, runs the commands teamai owns in it,
- * completes the driver's report, and takes everything away again. A driver reaches it through `Trials.next` and
- * `Trials.report`, and never imports another driver.
+ * Trials on this machine: the one teamai module that runs the commands teamai owns in a trial's clone and completes the
+ * driver's report. A driver reaches it through `Trials.next` and `Trials.report`, and never imports another driver.
  *
- * Behind them: each check task's baseline, tried once on a fresh clone of its starting commit before its trials; a
- * fresh clone of the task's starting commit with its own `.git` and no remotes, the trial's own teamai install at the
- * arm's team revision under a HOME of its own, setup, the check on the protected paths as the starting commit has them
- * and its classification, the prompt's commit and what it ran as, the evidence its judges read, one progress line per
- * event, and a receipt per trial copy and baseline that names the root before anything under it exists, so
- * `Trials.sweep` removes what a crash left. One call at a time holds a copy (`withCopy`).
+ * Each baseline step and each trial's `<arm>` step opens a clone place, which the place module prepares, sets up,
+ * commits and sweeps as it does for any workflow. Behind `Trials.next`: each check task's baseline, the check on the
+ * protected paths as the starting commit has them and its classification, and one progress line per event. Behind
+ * `Trials.report`: what the trial ran as, from what teamai observed of the clone it prepared.
  */
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { observeCheckout, ReportedAgentSchema, type ReportedAgent } from '../agent-observation.js';
-import { resolveCliEntry } from '../builtin-hooks.js';
-import { loadLocalConfigForScope, saveLocalConfigForScope } from '../config.js';
+import type { ReportedAgent } from '../agent-observation.js';
+import { loadLocalConfigForScope } from '../config.js';
 import { stepEnvironment } from '../env-exec.js';
 import { resolveWorkflowEnv, type WorkflowEnv } from '../env-resolution.js';
-import { removeGitHook } from '../git-hook.js';
-import { createProjectToolRoots } from '../project-agent-root.js';
 import { teamRefBlocker } from '../team-ref.js';
-import { homeVariables, isToolId, TOOLS } from '../tools.js';
-import { getDataHome, type LocalConfig } from '../types.js';
-import { execCommand } from '../utils/exec.js';
-import { readJson, writeJsonAtomic } from '../utils/fs.js';
-import { scoresDir } from '../scorers/attempts.js';
-import { removeSubjectEvidence, subjectEvidenceDirOf } from '../scorers/evidence.js';
-import { getDefaultBranch, HEAD_STATUS, headStateOf, resolveAnchors } from '../utils/git.js';
+import type { LocalConfig } from '../types.js';
 import { log } from '../utils/logger.js';
-import { projectSlug } from '../utils/partition.js';
-import { withFileLock } from '../update.js';
 import { error, leaseNext, locateStep, reportAttempt, type NextOptions, type ReportInput } from '../workflow/engine.js';
-import { sameDriver } from '../driver-identity.js';
-import { EnvScopeSchema, lacksTool, LeaseSetupSchema, trialGaps, type DriverCan, type EnvScope, type LeaseSetup, type Setup } from '../workflow/requirements.js';
+import { LeaseWireSchema, type LeaseWire } from '../workflow/lease-wire.js';
+import { abandonPlace, commitCacheOf, freshClone, placeLeaseOf, preparedClone, preparePlace, runPlaceSetup, scratchCloneRoot } from '../workflow/place/place.js';
 import { runSetup } from '../workflow/place/setup.js';
+import { EnvScopeSchema, lacksTool, LeaseSetupSchema, trialGaps, type DriverCan, type EnvScope, type LeaseSetup, type Setup } from '../workflow/requirements.js';
 import { attemptEnv } from '../workflow/attempt-marker.js';
-import { leaseDeadline } from '../workflow/limits.js';
-import { collectEvidence } from '../workflow/scoring-evidence.js';
 import { runShellCommand } from '../workflow/shell-command.js';
-import { runPasses, type RunPass } from '../workflow/loop.js';
-import { settled, type LeasedStep } from '../workflow/step-state.js';
-import { readRun, runsDir } from '../workflow/store.js';
+import { readRun, RunIdSchema, type RunLock } from '../workflow/store.js';
 import { StepModelSchema, type StepModel } from '../workflow/step-model.js';
-import { WORKSPACE_MODES, type DriverIdentity, type RunState, type WorkflowEnvelope, type WorkflowFailure, type WorkflowStep } from '../workflow/types.js';
-import { boundedGit, commitWork, recordConfigOverlay, restoreUneditedConfig, saveConfig, untrustedGit, type Git } from '../workflow/worktree.js';
+import { WORKSPACE_MODES, type DriverIdentity, type WorkflowEnvelope, type WorkflowFailure } from '../workflow/types.js';
+import { cloneBranchOf } from '../workflow/workspace.js';
+import { untrustedGit, type Git } from '../workflow/worktree.js';
 import { baselineOutput, checkVerdict, type CheckVerdict } from './check.js';
-import { trialCopyOf, type BenchmarkPlan } from './plan.js';
+import type { BenchmarkPlan } from './plan.js';
 import type { CheckFile, Suite } from './suite.js';
-import { BaselineTermsSchema, CheckTermsSchema, PromptTermsSchema, TRIAL_WITHHELD_ENV, setsLimit, teamRevisionOf, type Added, type PreparedTrialLease, type PromptTerms, type TrialTerms } from './terms.js';
-
-/**
- * `<runsDir>/<run>/trials/<copy>.json`, one per trial copy, the `<arm>` step whose copy the prompt and the check share,
- * and one per baseline step, which has a clone of its own.
- * Local run state, never published, never on a lease. `root` is chosen and written before anything under it exists, so
- * cleanup after a crash at any point removes exactly what might exist. What the receipt does not say, the run does: the
- * check runs in a `prepared` clone once the engine accepted its prompt's report.
- *
- *   <os.tmpdir()>/teamai-trials/<6 hex>/      root, short on purpose: Windows paths
- *     r/                                      the clone, the lease's `cwd`
- *     h/                                      the HOME of the trial's own `teamai pull`: its partition and team clone
- *     team.git/                               a bare repo that holds only the team revision the trial pins
- *     saved/                                  the starting commit's agent files, put back where the agent left them as delivered
- */
-const TrialReceiptSchema = z.object({
-  v: z.literal(1),
-  copy: z.string().min(1),
-  root: z.string().min(1),
-  state: z.discriminatedUnion('kind', [
-    z.object({ kind: z.literal('preparing'), attempt: z.string().min(1) }).strict(),
-    /**
-     * A prompt lease handed to the driver, and once the engine accepted its report, the clone its check runs in.
-     * `branch` is the copy's, which the prompt's `changes` name. `observed` is the clone as the trial's own install
-     * delivered it: the team revision it pinned and the starting commit. `withhold` is what the lease withheld from the
-     * tool, which git and whatever it starts in the clone never get either.
-     */
-    z.object({
-      kind: z.literal('prepared'), attempt: z.string().min(1), branch: z.string().min(1), observed: ReportedAgentSchema, withhold: z.array(z.string()),
-    }).strict(),
-  ]),
-}).strict();
-type TrialReceipt = z.infer<typeof TrialReceiptSchema>;
+import { BaselineTermsSchema, CheckTermsSchema, PromptTermsSchema, TRIAL_WITHHELD_ENV, setsLimit, type Added, type PreparedTrialLease, type TrialTerms } from './terms.js';
 
 export interface TrialNextOptions extends NextOptions {
   /** Stops setup or a check this call runs. The step stays leased, so the next call prepares or runs it again. */
@@ -91,25 +43,27 @@ export interface TrialNextOptions extends NextOptions {
 
 export const Trials = {
   /**
-   * What `leaseNext` answers, except that no trial lease reaches the caller unprepared:
-   *   - a check lease, or a baseline's, is run here, settled with its verdict, and the next lease is asked for;
-   *   - a prompt lease comes back prepared, `{ data: { lease: { ...lease without workspace and setup, cwd } } }`, or,
-   *     when preparation or setup fails, is settled failed (the trial's `error`) and the next lease is asked for;
+   * What `leaseNext` answers, holding the run's lock, except that no trial lease reaches the caller unprepared:
+   *   - a check lease, or a baseline's, is run here in its clone, settled with its verdict, and the next lease is asked
+   *     for;
+   *   - a prompt lease comes back with its clone prepared and set up, `{ data: { lease: { ...lease without workspace and
+   *     setup, cwd } } }`, or, when preparation or setup fails, is settled failed (the trial's `error`) and the next lease
+   *     is asked for;
    *   - `wait`, `hitl`, `done` and errors pass through unchanged.
    * teamai makes the workspace, runs setup and applies the env of everything it runs, so it declares those for the
    * caller. A stop through `signal` leaves the step leased and answers `interrupted`. Where `trialBlocker` says this
    * machine cannot pin the team, no trial is prepared: the run's only driver (`alone`) settles them all `not_run`, and
    * any other driver gets `team_ref_blocked` until the run ends.
    */
-  async next(config: LocalConfig, runId: string, driver: DriverIdentity, options: TrialNextOptions): Promise<WorkflowEnvelope> {
+  async next(config: LocalConfig, lock: RunLock, driver: DriverIdentity, options: TrialNextOptions): Promise<WorkflowEnvelope> {
     const { signal, ...next } = options;
+    const runId = lock.run;
     const run = await readRun(config, runId);
     // The engine's own answer for a run that is missing or unreadable.
     if (typeof run !== 'object') return leaseNext(config, runId, driver, next);
     if (!run.benchmark) {
       return error('invalid_arguments', `Run ${runId} is not a benchmark run, so it has no trials to prepare.`);
     }
-    await Trials.sweep(config, runId);
     const env = next.env ?? await resolveWorkflowEnv(config);
     const can = { ...next.can, workspace: [...WORKSPACE_MODES], setup: true, env: true };
     const blocked = await trialBlocker(config);
@@ -121,32 +75,28 @@ export const Trials = {
       return 'data' in answer && answer.data.done !== undefined ? answer : error('team_ref_blocked', blocked);
     }
     const sources = [...(run.checkout !== undefined ? [run.checkout] : []), commitCacheOf(config, run.benchmark.suite.repo)];
-    const trial = { config, runId, driver, env, signal, sources, total: run.benchmark.trials.length };
+    const trial = { config, lock, driver, env, signal, sources, checkout: run.checkout, total: run.benchmark.trials.length };
     for (;;) {
       const answer = await leaseNext(config, runId, driver, { ...next, can, env, prepare: true });
       const leased = trialLeaseOf(answer);
       switch (leased.kind) {
         case 'none':
-          if ('data' in answer && answer.data.done !== undefined) await Trials.sweep(config, runId);
           return answer;
         case 'unreadable':
           return error('run_unreadable', `Run ${runId} leased step "${leased.step}", which is not a trial step this teamai can prepare. Update teamai.`);
         case 'baseline': {
-          const ran = await withCopy(receiptPath(config, runId, leased.lease.step), COPY_WAIT, () => runBaseline(trial, leased.lease));
-          if (!ran.held) return copyBusy(leased.lease.step);
-          if (ran.value) return ran.value;
+          const ran = await runBaseline(trial, leased.lease, leased.wire);
+          if (ran) return ran;
           continue;
         }
         case 'check': {
-          const ran = await withCopy(receiptPath(config, runId, trialCopyOf(leased.lease.trial)), COPY_WAIT, () => runTrialCheck(trial, leased.lease));
-          if (!ran.held) return copyBusy(leased.lease.step);
-          if (ran.value) return ran.value;
+          const ran = await runTrialCheck(trial, leased.lease, leased.wire);
+          if (ran) return ran;
           continue;
         }
         case 'prompt': {
-          const taken = await withCopy(receiptPath(config, runId, trialCopyOf(leased.lease.trial)), COPY_WAIT, () => takePrompt(trial, leased.lease, answer));
-          if (!taken.held) return copyBusy(leased.lease.step);
-          if (taken.value) return taken.value;
+          const taken = await takePrompt(trial, leased.lease, leased.wire, answer);
+          if (taken) return taken;
           continue;
         }
         default: {
@@ -158,21 +108,20 @@ export const Trials = {
   },
 
   /**
-   * The report of a prompt trial `next` prepared, completed by teamai: it puts back the agent files the agent left as
-   * delivered and commits the clone, so `changes` run from the starting commit and hold only the agent's edits. The
-   * trial's `agent` is what teamai observed of the clone it prepared, plus what the driver observed of its tool. Settles
-   * through `reportAttempt` with the stamp the engine requires on a trial report, holding the trial's copy
-   * (`reportPrompt`). Once accepted, a succeeded prompt of a check task keeps its clone for the check, and every other
-   * outcome removes it. A report of a check, or one that carries what teamai fills itself, is refused and leaves the
-   * trial leased.
+   * The report of a prompt trial `next` prepared, completed for the caller to settle through the place that finishes
+   * it, which puts back the agent files the clone's install delivered and commits the clone: the trial's `agent` is
+   * what teamai observed of the clone it prepared, plus what the driver observed of its tool, and the report carries
+   * the stamp the engine requires on a trial report. A report of an attempt no longer leased is completed as it is, so
+   * the engine answers it. A report of a check, one that carries what teamai fills itself, or one of a prompt this
+   * machine did not prepare, is refused and leaves the trial leased.
    */
-  async report(config: LocalConfig, runId: string, report: ReportInput, secrets: Record<string, string>): Promise<WorkflowEnvelope> {
+  async report(config: LocalConfig, runId: string, report: ReportInput): Promise<{ report: ReportInput } | WorkflowEnvelope> {
     const run = await readRun(config, runId);
     const leased = typeof run === 'object' ? run.steps.find((step) => step.status === 'leased' && step.attempt === report.attempt) : undefined;
     const defined = leased && typeof run === 'object' ? locateStep(run, leased.id)?.step : undefined;
     const terms = defined?.trial;
     // An attempt that is no longer leased gets the engine's own answer: stale, cancelled, or not this run's.
-    if (!leased || typeof run !== 'object' || terms === undefined) return reportAttempt(config, runId, { ...report, trialReport: {} }, secrets);
+    if (!leased || typeof run !== 'object' || terms === undefined) return { report: { ...report, trialReport: {} } };
     if (terms.kind !== 'prompt') {
       return error('invalid_report', `Step "${leased.id}" is a benchmark check, which teamai runs itself inside teamai workflow next --prepare. Report only the prompt leases next --prepare gives this driver.`);
     }
@@ -186,152 +135,15 @@ export const Trials = {
     if (report.limit !== undefined && !setsLimit(terms.limits, report.limit)) {
       return error('invalid_report', `The report of trial step "${leased.id}" names limit ${report.limit}, which its suite's trial does not set. Send limit only for a limit in the lease's trial.limits that stopped the tool.`);
     }
-    const file = receiptPath(config, runId, trialCopyOf(terms));
-    const reported = await withCopy(file, COPY_WAIT, () => reportPrompt({ config, runId, report, secrets, file, terms, model: defined?.model }));
-    return reported.held ? reported.value : copyBusy(leased.id);
-  },
-
-  /**
-   * Removes the root and the receipt of every trial copy that no longer needs them: its run is not running, or no step
-   * of its copy is still to settle. The evidence a report staged for a pass of its prompt that did not succeed goes too,
-   * as no judge reads it. `runId` limits it to one run. A receipt this teamai cannot read is kept.
-   */
-  async sweep(config: LocalConfig, runId?: string): Promise<void> {
-    const runs = runId !== undefined
-      ? [runId]
-      : (await fs.readdir(runsDir(config), { withFileTypes: true }).catch(() => [])).filter((entry) => entry.isDirectory()).map((entry) => entry.name);
-    for (const id of runs) {
-      const dir = path.join(runsDir(config), id, 'trials');
-      const files = await fs.readdir(dir).catch((): string[] => []);
-      if (files.length === 0) continue;
-      for (const name of files.filter((entry) => entry.endsWith('.json'))) {
-        const file = path.join(dir, name);
-        // A copy another call holds is in use: a later sweep sees it again.
-        await withCopy(file, COPY_NOW, async () => {
-          const receipt = await readReceipt(file);
-          if (!receipt) {
-            log.debug(`Kept trial receipt ${file}: this teamai cannot read it.`);
-            return;
-          }
-          const run = await readRun(config, id);
-          const open = typeof run === 'object' && run.status === 'running'
-            && run.steps.some((step) => (step.id === receipt.copy || step.id.startsWith(`${receipt.copy}.`)) && !settled(step));
-          if (open) return;
-          await removeRoot({ file, root: receipt.root });
-          if (typeof run === 'object') await removeUnjudgedEvidence(config, run, receipt.copy);
-        });
-      }
+    const branch = cloneBranchOf(run, leased.id);
+    const made = branch === undefined ? undefined : await preparedClone(config, RunIdSchema.parse(run.id), branch);
+    if (!made) {
+      return error('invalid_report', `Attempt ${report.attempt} of step "${leased.id}" has no prepared trial on this machine. Ask for it with teamai workflow next --prepare, and report the lease that answers.`);
     }
+    const model = typeof defined?.model === 'object' ? defined.model : undefined;
+    return { report: { ...report, agent: trialAgent(made.prepared, model, report), trialReport: {} } };
   },
 } as const;
-
-/**
- * Removes the evidence staged for each pass of `copy`'s prompt that did not succeed. A report removes it itself unless it
- * was stopped between staging the evidence and the engine's answer; then the prompt never settles from that report.
- */
-async function removeUnjudgedEvidence(config: LocalConfig, run: RunState, copy: string): Promise<void> {
-  const step = run.benchmark?.trials.find((trial) => trialCopyOf(trial) === copy)?.step;
-  if (step === undefined) return;
-  const passes = runPasses(run).filter((pass) => pass.step === step);
-  const succeeded = new Set(passes.filter((pass) => pass.outcome === 'success').map((pass) => pass.pass));
-  const staged = new Set([...passes.map((pass) => pass.pass), run.steps.find((state) => state.id === step)?.pass ?? 1]);
-  await removeSubjectEvidence(scoresDir(config), [...staged].filter((pass) => !succeeded.has(pass)).map((pass) => ({ runId: run.id, step, pass })));
-}
-
-/** What an accepted report answers of the step it settled. */
-const AcceptedSchema = z.object({ step: z.object({ outcome: z.string() }) });
-
-/**
- * A prompt trial's report, holding its copy. The engine's refusal of another revision, another driver, or an attempt no
- * longer leased comes before the clone changes. Before the engine accepts the report, all that a reader of the settled
- * prompt reads exists: the commit, and the evidence its judges read. A refusal leaves the clone and the receipt for the
- * report sent again, which finds the agent files put back and the work committed, and commits nothing twice. So a
- * report stopped at any point leaves the prompt leased with its work, or settled with all its check and judges read.
- */
-async function reportPrompt({ config, runId, report, secrets, file, terms, model }: {
-  config: LocalConfig; runId: string; report: ReportInput; secrets: Record<string, string>; file: string; terms: PromptTerms;
-  /** The prompt step's `model`: the arm's exact model, when it sets one. */
-  model: WorkflowStep['model'];
-}): Promise<WorkflowEnvelope> {
-  const run = await readRun(config, runId);
-  const leased = typeof run === 'object' ? leasedStep(run, report.attempt) : undefined;
-  const owned = typeof run === 'object' && leased !== undefined && run.cancelledAttempts?.includes(report.attempt) !== true
-    && leased.lease.revision === report.revision && sameDriver(leased.lease.driver, report.driver);
-  if (typeof run !== 'object' || !leased || !owned) {
-    return reportAttempt(config, runId, { ...report, trialReport: {} }, secrets);
-  }
-  const receipt = await readReceipt(file);
-  if (receipt?.state.kind !== 'prepared' || receipt.state.attempt !== report.attempt) {
-    return error('invalid_report', `Attempt ${report.attempt} of step "${leased.id}" has no prepared trial on this machine. Ask for it with teamai workflow next --prepare, and report the lease that answers.`);
-  }
-  const saved = path.join(receipt.root, 'saved');
-  const scoped = await stepEnvironment(NO_TEAM_ENV, { provide: [], withhold: receipt.state.withhold });
-  if (!scoped.ok) return { error: scoped.failure };
-  const expiresAt = leaseDeadline(run, leased);
-  const clone = trialClone(receipt.root, scoped.env, expiresAt);
-  // Only putting the agent files back removes `saved`, so a report sent again finds them back already.
-  const unrestored = report.outcome === 'released' || !await isDirectory(saved) ? undefined : await restoreUneditedConfig(clone.dir, terms.startingCommit, saved, clone.git);
-  const committed = report.outcome === 'released' || unrestored !== undefined ? undefined : await commitWork(clone.dir, `teamai: ${leased.id}`, terms.startingCommit, clone.git);
-  const failure: WorkflowFailure | undefined = unrestored !== undefined
-    ? { code: 'workspace_base', message: `Trial step "${leased.id}" ran, but the team assets delivered into its clone could not be told apart from its edits, so nothing was committed: ${unrestored}` }
-    : committed && 'error' in committed
-      ? { code: 'workspace_base', message: `Trial step "${leased.id}" ran, but its work could not be committed in its clone: ${committed.error}` }
-      : undefined;
-  const changes = committed && !('error' in committed) ? { branch: receipt.state.branch, base: terms.startingCommit, ...committed } : undefined;
-  const evidence = report.outcome === 'success' && !failure ? await stageJudgeEvidence(config, run, { leased, report, changes, clone, env: scoped.env, expiresAt }) : undefined;
-  // A limit goes only with a prompt that succeeded: the failure to keep its work replaces both.
-  const { limit, ...unlimited } = report;
-  const answer = await reportAttempt(config, runId, {
-    ...unlimited,
-    ...(failure ? { outcome: 'failed', message: failure.message, failure } : limit !== undefined ? { limit } : {}),
-    ...(changes ? { changes } : {}),
-    agent: trialAgent(receipt.state.observed, typeof model === 'object' ? model : undefined, report),
-    trialReport: {},
-  }, secrets);
-  const outcome = AcceptedSchema.safeParse('data' in answer ? answer.data : undefined).data?.step.outcome;
-  // No judge reads the evidence of a prompt that did not succeed, and nothing else removes it.
-  if (evidence !== undefined && outcome !== 'success') await fs.rm(evidence, { recursive: true, force: true, maxRetries: 3 });
-  const hasCheck = run.benchmark?.tasks.find((task) => task.id === terms.task)?.judge === 'check';
-  if (outcome !== undefined && (outcome !== 'success' || !hasCheck)) await removeRoot({ file, root: receipt.root });
-  return answer;
-}
-
-/**
- * The evidence the judges of a succeeded trial prompt read, collected from its clone and the session that ran there
- * before the engine settles the prompt, wherever the driver runs, with git getting only `env` there. A judge never
- * reads the clone itself, which is gone by then. Answers the directory, or undefined when the prompt's step lists no
- * scorer the run pinned. A clone that gave no evidence leaves the directory empty, so its entries close `evidence_empty`.
- */
-async function stageJudgeEvidence(config: LocalConfig, run: RunState, { leased, report, changes, clone, env, expiresAt }: {
-  leased: LeasedStep; report: ReportInput; changes: RunPass['changes']; clone: TrialClone; env: NodeJS.ProcessEnv; expiresAt: string | undefined;
-}): Promise<string | undefined> {
-  const pinned = run.scorers ?? {};
-  if (!(locateStep(run, leased.id)?.step.scorers?.names ?? []).some((name) => Object.hasOwn(pinned, name))) return undefined;
-  const subject = { runId: run.id, step: leased.id, pass: leased.pass ?? 1 };
-  const dir = subjectEvidenceDirOf(scoresDir(config), subject);
-  // A report of this pass that was refused or stopped filled it, maybe from another commit.
-  await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
-  const settling: RunPass = {
-    step: leased.id, pass: subject.pass, attempt: report.attempt, outcome: 'success', tool: report.tool, session: report.session,
-    ...(changes ? { changes } : {}), ...(report.outputs !== undefined ? { outputs: report.outputs } : {}),
-  };
-  const collected = await collectEvidence(config, run, subject, dir, { checkout: clone.dir, sessionCwd: clone.dir, untrustedEnv: env, settling, expiresAt })
-    .catch((e: unknown) => {
-      log.warn(`The judge evidence of trial step "${leased.id}" could not be collected, so its judges find none: ${e instanceof Error ? e.message : String(e)}`);
-      return { ok: false } as const;
-    });
-  if (!collected.ok) await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
-  return dir;
-}
-
-/**
- * Where start keeps the starting commits of `repo` this member's checkout lacks, such as a shallow CI checkout's, for a
- * trial's clone to fetch offline, and the commits it makes of the suite files a check writes, which no repo holds and
- * nothing can fetch again. Safe to delete only while no run of `repo` is open; the next start fills it again.
- */
-export function commitCacheOf(config: LocalConfig, repo: string): string {
-  return path.join(getDataHome(config), 'benchmarks', 'objects', `${createHash('sha256').update(repo).digest('hex').slice(0, 16)}.git`);
-}
 
 const CommittedSuiteSchema = z.custom<{ suite: Suite; files: ReadonlyMap<string, Added> }>((value) => typeof value === 'object' && value !== null)
   .brand<'CommittedSuite'>();
@@ -435,10 +247,11 @@ type PromptLease = z.infer<typeof PromptLeaseSchema>;
 type CheckLease = z.infer<typeof CheckLeaseSchema>;
 type BaselineLease = z.infer<typeof BaselineLeaseSchema>;
 
+/** `wire` is the lease as every driver reads it, which the place reads. */
 type TrialLease =
-  | { kind: 'prompt'; lease: PromptLease }
-  | { kind: 'check'; lease: CheckLease }
-  | { kind: 'baseline'; lease: BaselineLease }
+  | { kind: 'prompt'; lease: PromptLease; wire: LeaseWire }
+  | { kind: 'check'; lease: CheckLease; wire: LeaseWire }
+  | { kind: 'baseline'; lease: BaselineLease; wire: LeaseWire }
   /** The answer holds no lease. */
   | { kind: 'none' }
   /** A lease that is not a trial step: only compilePlan writes a benchmark's steps, so a newer teamai wrote this one. */
@@ -448,12 +261,13 @@ type TrialLease =
 function trialLeaseOf(answer: WorkflowEnvelope): TrialLease {
   const raw = 'data' in answer ? answer.data.lease : undefined;
   if (raw === undefined) return { kind: 'none' };
+  const wire = LeaseWireSchema.safeParse(raw);
   const prompt = PromptLeaseSchema.safeParse(raw);
-  if (prompt.success) return { kind: 'prompt', lease: prompt.data };
+  if (wire.success && prompt.success) return { kind: 'prompt', lease: prompt.data, wire: wire.data };
   const check = CheckLeaseSchema.safeParse(raw);
-  if (check.success) return { kind: 'check', lease: check.data };
+  if (wire.success && check.success) return { kind: 'check', lease: check.data, wire: wire.data };
   const baseline = BaselineLeaseSchema.safeParse(raw);
-  if (baseline.success) return { kind: 'baseline', lease: baseline.data };
+  if (wire.success && baseline.success) return { kind: 'baseline', lease: baseline.data, wire: wire.data };
   const step = z.object({ step: z.string() }).safeParse(raw);
   return { kind: 'unreadable', step: step.success ? step.data.step : '(unknown)' };
 }
@@ -461,197 +275,57 @@ function trialLeaseOf(answer: WorkflowEnvelope): TrialLease {
 /** What one call of `Trials.next` works with. */
 interface TrialCall {
   config: LocalConfig;
-  runId: string;
+  lock: RunLock;
   driver: DriverIdentity;
   env: WorkflowEnv;
   signal: AbortSignal | undefined;
-  /** Where a clone fetches the task's starting commit from: the run's checkout, then the commit cache. */
+  /** Where a check reads the task's commits from: the run's checkout, then the commit cache. */
   sources: string[];
+  /** The checkout the run started in, which a clone is made from. */
+  checkout: string | undefined;
   /** The plan's trial count, for progress lines. */
   total: number;
 }
 
-type Prepared =
-  | { ok: true; cwd: string; receipt: ReceiptFile }
-  | { ok: false; failure: WorkflowFailure; receipt: ReceiptFile };
-
-/** A receipt's file and the root it names. */
-interface ReceiptFile {
-  file: string;
-  root: string;
-}
-
 /**
- * A prompt lease, holding its copy: the driver's lease once prepared, `interrupted`, or the engine's refusal of the
- * failed preparation it settled. Undefined when the next lease is to be asked for: preparation failed and was settled,
- * or the lease ended before this call held the copy.
+ * A prompt lease: the driver's lease once its clone is prepared and set up, `interrupted`, or the engine's refusal of
+ * the failed preparation it settled. Undefined when the next lease is to be asked for: preparation failed and was
+ * settled.
  */
-async function takePrompt(trial: TrialCall, lease: PromptLease, answer: WorkflowEnvelope): Promise<WorkflowEnvelope | undefined> {
-  if (!await stillLeased(trial, lease.attempt)) return undefined;
-  const prepared = await preparePrompt(trial, lease);
+async function takePrompt(trial: TrialCall, lease: PromptLease, wire: LeaseWire, answer: WorkflowEnvelope): Promise<WorkflowEnvelope | undefined> {
+  progress(trial, lease.trial, { kind: 'preparing' });
+  const placed = await placeTrial(trial, wire);
   if (trial.signal?.aborted) {
-    await removeRoot(prepared.receipt);
-    return interrupted(trial.runId, lease.step);
+    await abandonPlace({ config: trial.config, lock: trial.lock, attempt: wire.attempt });
+    return interrupted(trial.lock.run, lease.step);
   }
-  if (!prepared.ok) {
-    const refused = await settle(trial, lease, { outcome: 'failed', message: prepared.failure.message, failure: prepared.failure, trialReport: {} });
-    progress(trial, lease.trial, { kind: 'error', failure: prepared.failure });
-    await removeRoot(prepared.receipt);
+  if ('failure' in placed) {
+    const refused = await settle(trial, lease, { outcome: 'failed', message: placed.failure.message, failure: placed.failure, trialReport: {} });
+    progress(trial, lease.trial, { kind: 'error', failure: placed.failure });
     return refused;
   }
   progress(trial, lease.trial, { kind: 'ready', tool: lease.tool });
-  return { data: { ...('data' in answer ? answer.data : {}), lease: driverLease(lease, prepared.cwd) } };
+  return { data: { ...('data' in answer ? answer.data : {}), lease: driverLease(lease, placed.dir) } };
 }
 
 /**
- * receipt (preparing), then any earlier root of this copy removed, then the fresh clone, the trial's own install, setup
- * and what the clone ran as, then receipt (prepared).
+ * The clone place of the trial lease `wire`, prepared and set up as any place is; `beforeSetup` runs in the clone first,
+ * when the place made it. A place that could not be made or set up is given up.
  */
-async function preparePrompt(trial: TrialCall, lease: PromptLease): Promise<Prepared> {
-  const copy = trialCopyOf(lease.trial);
-  const file = receiptPath(trial.config, trial.runId, copy);
-  const earlier = await readReceipt(file);
-  if (earlier) await removeRoot({ file, root: earlier.root });
-  const root = newRoot();
-  const receipt = { file, root };
-  await writeReceipt(file, { v: 1, copy, root, state: { kind: 'preparing', attempt: lease.attempt } });
-  progress(trial, lease.trial, { kind: 'preparing' });
-  const withhold = (lease.envScope ?? NO_ENV).withhold;
-  const scoped = await stepEnvironment(NO_TEAM_ENV, { provide: [], withhold });
-  if (!scoped.ok) return { ok: false, failure: scoped.failure, receipt };
-  const clone = trialClone(root, scoped.env, lease.expiresAt);
-  const cloned = await freshClone(root, lease.trial.startingCommit, trial.sources, lease.expiresAt);
-  if (cloned) return { ok: false, failure: cloned, receipt };
-  // An arm without team assets gets no install: the clone stays as its starting commit has it.
-  const revision = teamRevisionOf(lease.trial.team);
-  const installed = revision === undefined ? undefined : await prepareInstall(trial, root, lease, revision);
-  if (installed && !installed.ok) return { ok: false, failure: installed.failure, receipt };
-  const setupFailed = lease.setup ? await setupIn(trial, clone.dir, lease.setup, lease.expiresAt) : undefined;
-  if (setupFailed) return { ok: false, failure: setupFailed, receipt };
-  const status = await clone.git(clone.dir, [...HEAD_STATUS]);
-  const head = status.code === 0 ? headStateOf(status.stdout) : null;
-  const observed = installed
-    ? await observeCheckout({ config: installed.config, tool: lease.tool, cwd: clone.dir, head })
-    : head ? { project: { commit: head.head, dirty: head.dirty } } : {};
-  await writeReceipt(file, { v: 1, copy, root, state: { kind: 'prepared', attempt: lease.attempt, branch: lease.workspace.branch, observed, withhold } });
-  return { ok: true, cwd: clone.dir, receipt };
-}
-
-const TrialCloneSchema = z.object({ dir: z.string().min(1), git: z.custom<Git>((value) => typeof value === 'function') }).brand<'TrialClone'>();
-/**
- * A prompt trial's clone, where setup and then the tool run, with the only git that runs there: `untrustedGit` with the
- * trial's env, so nothing their files or config make git start sees what the trial withholds, stopped at the run's
- * `expiresAt`. Only `trialClone` makes one.
- */
-type TrialClone = z.infer<typeof TrialCloneSchema>;
-
-function trialClone(root: string, env: NodeJS.ProcessEnv, expiresAt: string | undefined): TrialClone {
-  return TrialCloneSchema.parse({ dir: path.join(root, 'r'), git: untrustedGit(env, expiresAt) });
-}
-
-/**
- * A fresh clone with its own `.git`, no remotes and no refs, at a detached HEAD, its hooks pointed at a directory that
- * does not exist. The commit comes from the first of `sources` that has it. Every git call is an argv array: no shell
- * string, and stops at `expiresAt`, as a fetch or checkout may never return.
- */
-async function freshClone(root: string, startingCommit: string, sources: readonly string[], expiresAt: string | undefined): Promise<WorkflowFailure | undefined> {
-  const git = boundedGit(expiresAt);
-  await fs.mkdir(path.dirname(root), { recursive: true });
-  await fs.mkdir(root);
-  const clone = path.join(root, 'r');
-  const made = await git(root, ['init', '-q', '--template=', clone]);
-  const configured = made.code === 0 ? await git(clone, ['config', 'core.hooksPath', path.join(root, 'no-hooks')]) : made;
-  if (configured.code !== 0) {
-    return { code: 'trial_prepare_failed', message: `The trial's clone could not be made in ${root}: ${configured.stderr.trim()}` };
+async function placeTrial(trial: TrialCall, wire: LeaseWire, beforeSetup?: (dir: string) => Promise<WorkflowFailure | undefined>): Promise<{ dir: string } | { failure: WorkflowFailure }> {
+  const { config, lock } = trial;
+  if (trial.checkout === undefined) {
+    return { failure: { code: 'workspace_base', message: `Run ${lock.run} has no checkout recorded, so the clone of step "${wire.step}" has nothing to be made from.` } };
   }
-  const said: string[] = [];
-  for (const source of sources) {
-    if (!await isDirectory(source)) continue;
-    const fetched = await git(clone, ['fetch', '-q', '--no-tags', source, startingCommit]);
-    if (fetched.code === 0) {
-      const checkedOut = await git(clone, ['checkout', '-q', '--detach', startingCommit]);
-      return checkedOut.code === 0
-        ? undefined
-        : { code: 'trial_prepare_failed', message: `The trial's clone could not check out ${startingCommit}: ${checkedOut.stderr.trim()}` };
-    }
-    said.push(`${source}: ${fetched.stderr.trim()}`);
+  const prepared = await preparePlace({ config, lock, root: trial.checkout, lease: placeLeaseOf(wire) });
+  if (prepared.kind !== 'prepared') return { failure: prepared.failure };
+  const failure = (beforeSetup ? await beforeSetup(prepared.dir) : undefined)
+    ?? await runPlaceSetup({ config, run: lock.run, attempt: wire.attempt, mode: 'unattended', env: trial.env, ...(trial.signal ? { signal: trial.signal } : {}) });
+  if (failure) {
+    await abandonPlace({ config, lock, attempt: wire.attempt });
+    return { failure };
   }
-  return { code: 'trial_prepare_failed', message: `Commit ${startingCommit} could not be fetched into the trial's clone (${said.join('; ') || 'no checkout to fetch it from'}). Fetch it into the checkout the benchmark started in, or fix the task's startingCommit, and start the benchmark again.` };
-}
-
-/** The env variables that move a tool's home away from HOME, which the trial's own pull must not follow. */
-const TOOL_HOME_VARIABLES = [...new Set(Object.keys(TOOLS).filter(isToolId).flatMap(homeVariables))];
-
-/** How long the trial's own `teamai pull` may take: it fetches only from the trial's root. */
-const TRIAL_PULL_TIMEOUT_MS = 10 * 60_000;
-
-/**
- * The trial's own teamai install at the arm's team revision, `teamRevision`, offline, with nothing written outside `root`: a bare repo
- * holding only that revision, fetched from the member's team clone; the trial's team clone of it; the trial's partition
- * config, written from the frozen selection with every per-machine knob off; then `teamai pull --team-ref` as a child
- * whose HOME is `<root>/h`, so the hooks, shell profiles and env registry a workspace pull writes under HOME land there.
- * The git hooks that pull writes into the clone go again, so neither teamai nor the agent's git runs teamai during the
- * trial, and the delivered files are recorded as the overlay, so they are never the agent's edits.
- */
-async function prepareInstall(trial: TrialCall, root: string, lease: PromptLease, teamRevision: string): Promise<{ ok: true; config: LocalConfig } | { ok: false; failure: WorkflowFailure }> {
-  const failed = (message: string): { ok: false; failure: WorkflowFailure } => ({ ok: false, failure: { code: 'trial_prepare_failed', message } });
-  const { tool, trial: { selection } } = lease;
-  const clone = path.join(root, 'r');
-  const saved = path.join(root, 'saved');
-  await fs.mkdir(saved);
-  await saveConfig(clone, saved);
-  const anchors = await resolveAnchors(clone);
-  if (!anchors) return failed(`The trial's clone ${clone} is not a git repository teamai can install into.`);
-  const home = path.join(root, 'h');
-  const partition = path.join(home, '.teamai', 'projects', projectSlug(anchors.projectAnchor));
-  const member = trial.config.repo.localPath;
-  const bare = path.join(root, 'team.git');
-  const team = path.join(partition, 'team-repo');
-  const branch = await getDefaultBranch(member);
-  const steps: Array<{ cwd: string; args: string[] }> = [
-    { cwd: root, args: ['init', '-q', '--bare', bare] },
-    { cwd: bare, args: ['fetch', '-q', '--no-tags', member, `${teamRevision}:refs/heads/${branch}`] },
-    { cwd: bare, args: ['symbolic-ref', 'HEAD', `refs/heads/${branch}`] },
-    { cwd: root, args: ['clone', '-q', '--no-local', bare, team] },
-  ];
-  // The run's deadline bounds the copy too, as it bounds the pull below.
-  const copy = boundedGit(lease.expiresAt);
-  for (const { cwd, args } of steps) {
-    const ran = await copy(cwd, args);
-    if (ran.code !== 0) return failed(`Team revision ${teamRevision} could not be copied from ${member} for the trial (git ${args[0]}): ${ran.stderr.trim()}`);
-  }
-  const config: LocalConfig = {
-    repo: { localPath: team, remote: trial.config.repo.remote, kind: 'git' },
-    username: trial.config.username, provider: 'git', scope: 'project', projectRoot: anchors.workspaceRoot, dataHome: partition,
-    ...(selection.primaryRole ? { primaryRole: selection.primaryRole } : {}),
-    additionalRoles: selection.additionalRoles, projects: selection.projects, excludedSkills: selection.excludedSkills,
-    ...(selection.subscribedTags ? { subscribedTags: selection.subscribedTags } : {}),
-    enabledAgents: [tool],
-    recallEnabled: false, contributeHintEnabled: false, mrHintEnabled: false, usageReportEnabled: false, coAuthorEnabled: false, codexTrustEnabled: false,
-  };
-  await saveLocalConfigForScope(config);
-  await createProjectToolRoots({ config, tools: [tool] });
-  const entry = resolveCliEntry();
-  if (!entry) return failed('The teamai CLI that runs this benchmark could not be found, so the trial\'s own teamai pull could not run.');
-  const scoped = await stepEnvironment(trial.env, { provide: [], withhold: lease.envScope?.withhold ?? [] });
-  if (!scoped.ok) return { ok: false, failure: scoped.failure };
-  const env: NodeJS.ProcessEnv = { ...scoped.env, HOME: home, USERPROFILE: home };
-  for (const name of TOOL_HOME_VARIABLES) delete env[name];
-  // The run's deadline bounds the pull too, so a slow one does not hold the run past its timeout.
-  const timeoutMs = lease.expiresAt === undefined ? TRIAL_PULL_TIMEOUT_MS : Math.max(0, Math.min(TRIAL_PULL_TIMEOUT_MS, Date.parse(lease.expiresAt) - Date.now()));
-  const pulled = await execCommand(process.execPath, [entry, 'pull', '--team-ref', teamRevision], { cwd: clone, env, timeoutMs })
-    .catch((thrown: unknown) => ({ code: 1, stdout: '', stderr: thrown instanceof Error ? thrown.message : String(thrown) }));
-  if (pulled.code !== 0) {
-    const tail = (pulled.stderr.trim() || pulled.stdout.trim()).slice(-500);
-    return failed(`teamai pull --team-ref ${teamRevision.slice(0, 7)} exited ${pulled.code}: ${tail}`);
-  }
-  try {
-    await removeGitHook(clone);
-  } catch (thrown) {
-    return failed(`The git hooks the trial's own teamai pull installed in ${clone} could not be removed: ${thrown instanceof Error ? thrown.message : String(thrown)}`);
-  }
-  await recordConfigOverlay(clone, saved);
-  return { ok: true, config };
+  return { dir: prepared.dir };
 }
 
 /** Setup with only its own keys, as the lease scopes them. */
@@ -663,53 +337,43 @@ async function setupIn(trial: Runner, dir: string, setup: LeaseSetup, expiresAt:
 }
 
 /**
- * The trial's check, holding its copy, in the clone its prompt's accepted report left, on the protected paths as the
- * starting commit has them, settled with its verdict. Then the root goes, unless the engine refused the settlement, so
- * the check stays leased and runs again there. Answers an envelope only when the call must stop: the stop signal, or a
- * report the engine refused.
+ * The trial's check, in the clone its prompt's accepted report left, on the protected paths as the starting commit has
+ * them, settled with its verdict. Answers an envelope only when the call must stop: the stop signal, or a report the
+ * engine refused.
  */
-async function runTrialCheck(trial: TrialCall, lease: CheckLease): Promise<WorkflowEnvelope | undefined> {
-  if (!await stillLeased(trial, lease.attempt)) return undefined;
-  const file = receiptPath(trial.config, trial.runId, trialCopyOf(lease.trial));
-  const receipt = await readReceipt(file);
-  // Only an accepted report of the prompt lets the engine lease its check, so a prepared clone here is that report's.
-  const clone = receipt?.state.kind === 'prepared' ? path.join(receipt.root, 'r') : undefined;
-  const ran = clone && await isDirectory(clone)
-    ? await checkIn(trial, lease, clone, async (env) => await restoreProtected({ clone, startingCommit: lease.trial.startingCommit, protect: lease.trial.protect, sources: trial.sources, env, expiresAt: lease.expiresAt })
-      ?? (lease.trial.add ? await writeAdded({ clone, add: lease.trial.add, sources: trial.sources, env, expiresAt: lease.expiresAt }) : undefined))
-    : { kind: 'error' as const, failure: { code: 'trial_prepare_failed', message: `The clone of trial ${trialCopyOf(lease.trial)} is gone, so its check could not run.` } };
-  if (trial.signal?.aborted) return interrupted(trial.runId, lease.step);
+async function runTrialCheck(trial: TrialCall, lease: CheckLease, wire: LeaseWire): Promise<WorkflowEnvelope | undefined> {
+  const ran = await checkIn(trial, lease, async (env) => {
+    const placed = await placeTrial(trial, wire);
+    if ('failure' in placed) return placed;
+    const clone = placed.dir;
+    const failure = await restoreProtected({ clone, startingCommit: lease.trial.startingCommit, protect: lease.trial.protect, sources: trial.sources, env, expiresAt: lease.expiresAt })
+      ?? (lease.trial.add ? await writeAdded({ clone, add: lease.trial.add, sources: trial.sources, env, expiresAt: lease.expiresAt }) : undefined);
+    return failure ? { failure } : placed;
+  });
+  await abandonPlace({ config: trial.config, lock: trial.lock, attempt: wire.attempt });
+  if (trial.signal?.aborted) return interrupted(trial.lock.run, lease.step);
   const answered = await settle(trial, lease, ran.kind === 'check'
     ? { ...checkSettlement(ran.verdict), trialReport: { verdict: ran.verdict } }
     : { outcome: 'failed', message: ran.failure.message, failure: ran.failure, trialReport: {} });
   progress(trial, lease.trial, ran);
-  if (receipt && !answered) await removeRoot({ file, root: receipt.root });
   return answered;
 }
 
 /**
- * A check task's baseline: the files check.add writes, setup, then its check, once, in a fresh clone of the starting
- * commit with no team assets, as no agent runs there. A check that ran to the end outputs whether it passes or fails,
- * which the task's trials read; one that could not run, or whose clone or setup failed, fails the step with no output.
- * Then the root goes.
+ * A check task's baseline: the files check.add writes, setup, then its check, once, in the fresh clone of the starting
+ * commit with no team assets its step opens, as no agent runs there. A check that ran to the end outputs whether it
+ * passes or fails, which the task's trials read; one that could not run, or whose clone or setup failed, fails the step
+ * with no output. Then the clone goes.
  */
-async function runBaseline(trial: TrialCall, lease: BaselineLease): Promise<WorkflowEnvelope | undefined> {
-  if (!await stillLeased(trial, lease.attempt)) return undefined;
-  const file = receiptPath(trial.config, trial.runId, lease.step);
-  const earlier = await readReceipt(file);
-  if (earlier) await removeRoot({ file, root: earlier.root });
-  const root = newRoot();
-  await writeReceipt(file, { v: 1, copy: lease.step, root, state: { kind: 'preparing', attempt: lease.attempt } });
-  const clone = path.join(root, 'r');
-  const ran = await checkIn(trial, lease, clone, async (env) => await freshClone(root, lease.trial.startingCommit, trial.sources, lease.expiresAt)
-    ?? (lease.trial.add ? await writeAdded({ clone, add: lease.trial.add, sources: trial.sources, env, expiresAt: lease.expiresAt }) : undefined)
-    ?? (lease.setup ? await setupIn(trial, clone, lease.setup, lease.expiresAt) : undefined));
-  if (trial.signal?.aborted) return interrupted(trial.runId, lease.step);
+async function runBaseline(trial: TrialCall, lease: BaselineLease, wire: LeaseWire): Promise<WorkflowEnvelope | undefined> {
+  const { add } = lease.trial;
+  const ran = await checkIn(trial, lease, (env) => placeTrial(trial, wire, add ? (clone) => writeAdded({ clone, add, sources: trial.sources, env, expiresAt: lease.expiresAt }) : undefined));
+  await abandonPlace({ config: trial.config, lock: trial.lock, attempt: wire.attempt });
+  if (trial.signal?.aborted) return interrupted(trial.lock.run, lease.step);
   const answered = await settle(trial, lease, ran.kind === 'check'
     ? { ...baselineSettlement(ran.verdict), trialReport: { verdict: ran.verdict } }
     : { outcome: 'failed', message: ran.failure.message, failure: ran.failure, trialReport: {} });
   baselineProgress(lease.trial.task, ran);
-  await removeRoot({ file, root });
   return answered;
 }
 
@@ -719,21 +383,18 @@ export type CheckRun = Extract<ProgressEvent, { kind: 'check' | 'error' }>;
 /** What running setup or a check reads of a call: the env values it gives and the signal that stops it. */
 type Runner = { env: Pick<WorkflowEnv, 'values' | 'facts'>; signal: AbortSignal | undefined };
 
-/** No team env: for a step environment that only withholds keys. */
-const NO_TEAM_ENV: Pick<WorkflowEnv, 'values' | 'facts'> = { values: new Map(), facts: { declared: new Set(), secrets: new Set(), present: new Set() } };
-
 /**
- * `prepare`, then the check command in `clone` with the lease's env, bounded by the run's deadline. `prepare` gets that
- * env too, which is all the agent's code gets once the check runs it. A caller tells a stopped call from its verdict by
+ * `prepare`, then the check command in the clone it answers, with the lease's env, bounded by the run's deadline.
+ * `prepare` gets that env too, which is all the agent's code gets once the check runs it. A caller tells a stopped call from its verdict by
  * its signal.
  */
-async function checkIn(trial: Runner, lease: Pick<CheckLease, 'command' | 'envScope' | 'expiresAt'>, clone: string, prepare: (env: NodeJS.ProcessEnv) => Promise<WorkflowFailure | undefined>): Promise<CheckRun> {
+async function checkIn(trial: Runner, lease: Pick<CheckLease, 'command' | 'envScope' | 'expiresAt'>, prepare: (env: NodeJS.ProcessEnv) => Promise<{ dir: string } | { failure: WorkflowFailure }>): Promise<CheckRun> {
   const scoped = await stepEnvironment(trial.env, lease.envScope ?? NO_ENV);
   if (!scoped.ok) return { kind: 'error', failure: scoped.failure };
-  const failure = await prepare(scoped.env);
-  if (failure) return { kind: 'error', failure };
+  const prepared = await prepare(scoped.env);
+  if ('failure' in prepared) return { kind: 'error', failure: prepared.failure };
   const { exit } = await runShellCommand({
-    command: lease.command, cwd: clone, env: scoped.env,
+    command: lease.command, cwd: prepared.dir, env: scoped.env,
     ...(trial.signal ? { signal: trial.signal } : {}), ...(lease.expiresAt !== undefined ? { expiresAt: lease.expiresAt } : {}),
   });
   return { kind: 'check', verdict: checkVerdict(exit, process.platform) };
@@ -755,14 +416,17 @@ export async function tryCheckAt(input: {
   const runner: Runner = { env: { values, facts: { declared: new Set(), secrets: new Set(), present: new Set(values.keys()) } }, signal: input.signal };
   const withhold = [...TRIAL_WITHHELD_ENV];
   const leaseSetup = setup ? { command: setup.command, envScope: { provide: setup.requires?.env ?? [], withhold } } : undefined;
-  const root = newRoot();
+  const root = scratchCloneRoot();
   const clone = path.join(root, 'r');
   try {
     const written = async (env: NodeJS.ProcessEnv): Promise<WorkflowFailure | undefined> => (add ? await writeAdded({ clone, add, sources, env, expiresAt }) : undefined);
-    return await checkIn(runner, { command: input.command, envScope: { provide: [], withhold }, expiresAt }, clone, async (env) => await freshClone(root, commit, sources, expiresAt)
-      ?? (protect ? undefined : await written(env))
-      ?? (leaseSetup ? await setupIn(runner, clone, leaseSetup, expiresAt) : undefined)
-      ?? (protect ? await restoreProtected({ clone, startingCommit, protect, sources, env, expiresAt }) ?? await written(env) : undefined));
+    return await checkIn(runner, { command: input.command, envScope: { provide: [], withhold }, expiresAt }, async (env) => {
+      const failure = await freshClone(root, commit, sources, expiresAt)
+        ?? (protect ? undefined : await written(env))
+        ?? (leaseSetup ? await setupIn(runner, clone, leaseSetup, expiresAt) : undefined)
+        ?? (protect ? await restoreProtected({ clone, startingCommit, protect, sources, env, expiresAt }) ?? await written(env) : undefined);
+      return failure ? { failure } : { dir: clone };
+    });
   } finally {
     await fs.rm(root, { recursive: true, force: true, maxRetries: 3 });
   }
@@ -965,7 +629,7 @@ function checkSettlement(verdict: CheckVerdict): Pick<ReportInput, 'outcome' | '
 
 /** Reports what teamai did with a lease. Answers the engine's refusal, except a cancel: the next lease call shows it. */
 async function settle(trial: TrialCall, lease: Pick<PromptLease, 'attempt' | 'revision'>, body: Omit<ReportInput, 'attempt' | 'revision' | 'driver'>): Promise<WorkflowEnvelope | undefined> {
-  const answer = await reportAttempt(trial.config, trial.runId, { attempt: lease.attempt, revision: lease.revision, driver: trial.driver, ...body }, trial.env.secrets);
+  const answer = await reportAttempt(trial.config, trial.lock.run, { attempt: lease.attempt, revision: lease.revision, driver: trial.driver, ...body }, trial.env.secrets);
   return 'error' in answer && answer.error.code !== 'lease_cancelled' ? answer : undefined;
 }
 
@@ -1074,61 +738,4 @@ function baselineProgress(task: string, event: CheckRun): void {
       return unhandled;
     }
   }
-}
-
-/** A root no receipt names yet, short on purpose: Windows paths. */
-function newRoot(): string {
-  return path.join(os.tmpdir(), 'teamai-trials', randomBytes(3).toString('hex'));
-}
-
-/** How long a call waits for another to let go of a trial copy before it answers busy. */
-const COPY_WAIT = { attempts: 40, delayMs: 25 };
-/** The sweep does not wait: a copy another call holds is in use. */
-const COPY_NOW = { attempts: 1, delayMs: 0 };
-
-/**
- * Runs `body` as the one call, of any process, on the trial copy or baseline whose receipt is `file`. Preparing,
- * reporting, checking and sweeping each hold it, and each checks under it that the attempt it acts for is still leased,
- * so none removes or replaces a root another call made or still uses. Never the run lock: preparation takes minutes.
- */
-function withCopy<T>(file: string, wait: { attempts: number; delayMs: number }, body: () => Promise<T>): Promise<{ held: true; value: T } | { held: false }> {
-  return withFileLock(`${file}.lock`, wait, body);
-}
-
-function copyBusy(step: string): WorkflowEnvelope {
-  return error('busy', `Another teamai call is preparing, reporting or checking trial step "${step}" on this machine. Ask again once it answers.`);
-}
-
-function leasedStep(run: RunState, attempt: string): LeasedStep | undefined {
-  return run.steps.find((step): step is LeasedStep => step.status === 'leased' && step.attempt === attempt);
-}
-
-/** Whether `attempt` is still leased, read once this call holds its copy. */
-async function stillLeased(trial: TrialCall, attempt: string): Promise<boolean> {
-  const run = await readRun(trial.config, trial.runId);
-  return typeof run === 'object' && leasedStep(run, attempt) !== undefined;
-}
-
-function receiptPath(config: LocalConfig, runId: string, copy: string): string {
-  return path.join(runsDir(config), runId, 'trials', `${copy}.json`);
-}
-
-/** The receipt in `file`; undefined when there is none, or one this teamai cannot read. */
-async function readReceipt(file: string): Promise<TrialReceipt | undefined> {
-  const parsed = TrialReceiptSchema.safeParse(await readJson(file));
-  return parsed.success ? parsed.data : undefined;
-}
-
-async function writeReceipt(file: string, receipt: TrialReceipt): Promise<void> {
-  await writeJsonAtomic(file, receipt);
-}
-
-/** The root, then the receipt that names it. rm retries a busy file, as Windows reports one still being closed. */
-async function removeRoot({ file, root }: ReceiptFile): Promise<void> {
-  await fs.rm(root, { recursive: true, force: true, maxRetries: 5 });
-  await fs.rm(file, { force: true });
-}
-
-async function isDirectory(dir: string): Promise<boolean> {
-  return (await fs.stat(dir).catch(() => undefined))?.isDirectory() === true;
 }

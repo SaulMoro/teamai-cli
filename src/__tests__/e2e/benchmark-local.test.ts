@@ -68,7 +68,7 @@ describe('benchmark on the local driver', () => {
     const answer = envelope(started);
     const run = String(answer.data?.run);
     const stored = RunFileSchema.parse(fixture.runFile(run));
-    const driver = { kind: 'ci', machine: 'ci', workspace: fixture.work, can: { workspace: ['read-only', 'new', 'continue'] } };
+    const driver = { kind: 'ci', machine: 'ci', workspace: fixture.work, can: { workspace: ['read-only', 'new', 'continue', 'clone'] } };
     const next = envelope(await fixture.teamai(['workflow', 'next', run, '--json', JSON.stringify({ driver })]));
     const beforePull = fixture.runFile(run);
     fixture.pushTeam({ 'benchmarks/fix/tasks/fix.yaml': fixTask(fixture.startingCommit, 'Change the answer.') });
@@ -117,7 +117,7 @@ describe('benchmark on the local driver', () => {
     expect(record.benchmark.trials).toMatchObject([{ task: 'fix', arm: 'claude', repetition: 1, order: 1, step: 'trials.r1.fix.claude.prompt', result }]);
     expect(more).toEqual([]);
     expect(launch).toMatchObject({ ownGit: true, head: fixture.startingCommit, remotes: '' });
-    expect(launch?.cwd.startsWith(path.join(fixture.tmp, 'teamai-trials'))).toBe(true);
+    expect(launch?.cwd.startsWith(path.join(fixture.tmp, 'teamai-clones'))).toBe(true);
     expect(fixture.trialRootEntries()).toEqual([]);
     expect(fixture.status()).toBe(before);
   }, 120_000);

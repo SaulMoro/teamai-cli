@@ -14,7 +14,8 @@ import { isYamlNode, locate } from '../workflow/parse-context.js';
 import { durationMs } from '../workflow/parse.js';
 import { SetupSchema, type Setup } from '../workflow/requirements.js';
 import type { WorkflowDiagnostic } from '../workflow/types.js';
-import { BENCHMARK_NAME, BenchmarkNameSchema, CommitSchema, type TrialLimits } from './terms.js';
+import { CommitSchema } from '../workflow/clone.js';
+import { BENCHMARK_NAME, BenchmarkNameSchema, type TrialLimits } from './terms.js';
 
 /** The project the tasks start from. A URL, never a local path or a URL with credentials: it travels in plan and record. */
 const RepoUrlSchema = z.string().url().refine((value) => {

@@ -20,8 +20,10 @@ import { formatDiagnostic } from '../workflow/parse.js';
 import { git } from '../workflow/worktree.js';
 import { addedOf, compilePlan, freezePlan, runSourceHash, type PlannedArm } from './plan.js';
 import { parseSuite, type Arm, type Suite, type TaskJudge } from './suite.js';
-import type { Added, ArmTeam, TrialSelection } from './terms.js';
-import { commitCacheOf, commitCheckFiles, tryCheckAt, type CheckRun } from './trial.js';
+import type { TeamSelection } from '../workflow/clone.js';
+import type { Added, ArmTeam } from './terms.js';
+import { commitCacheOf } from '../workflow/place/place.js';
+import { commitCheckFiles, tryCheckAt, type CheckRun } from './trial.js';
 
 export interface BenchmarkStart {
   secrets: Record<string, string>;
@@ -251,7 +253,7 @@ async function firstUnreachable(checkout: string, cache: string, repo: string, c
   return undefined;
 }
 
-function selectionOf(config: LocalConfig): TrialSelection {
+function selectionOf(config: LocalConfig): TeamSelection {
   return {
     ...(config.primaryRole ? { primaryRole: config.primaryRole } : {}),
     additionalRoles: config.additionalRoles,

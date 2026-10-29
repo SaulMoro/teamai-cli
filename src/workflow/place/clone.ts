@@ -4,13 +4,13 @@
  * place names installed by a `teamai pull` whose HOME is the clone's own. Every step that continues it runs there, and
  * its commits stay there: nothing is pushed.
  *
- *   <os.tmpdir()>/teamai-clones/<8 hex of the branch>/   root, short on purpose: Windows paths
+ *   <os.tmpdir()>/teamai-clones/<8 hex>/                 root, one per clone prepared, short on purpose: Windows paths
  *     r/                                                the clone, the place's dir
  *     h/                                                the HOME of the clone's own `teamai pull`: its partition and team clone
  *     team.git/                                         a bare repo that holds only the team revision the place pins
  *     saved/                                            the commit's agent files, put back where a step left them as delivered
  *
- * A receipt, `<runsDir>/<run>/clones/<8 hex>.json`, names the root before anything under it exists, so `sweepClones`
+ * A receipt, `<runsDir>/<run>/clones/<8 hex of the branch>.json`, names the root before anything under it exists, so `sweepClones`
  * removes exactly what a crash left, once no step that runs in the clone is still to settle.
  */
 import { createHash } from 'node:crypto';
@@ -69,18 +69,16 @@ type CloneReceipt = z.infer<typeof CloneReceiptSchema>;
 
 const CLONES = 'teamai-clones';
 
-/** The root of the clone of `branch`. The branch names its run, so no two runs share one. */
-function rootOf(branch: string): string {
-  return path.join(os.tmpdir(), CLONES, createHash('sha256').update(branch).digest('hex').slice(0, 8));
-}
-
-/** The clone of `branch`: the dir every step that runs in it gets. */
-export function cloneDirOf(branch: string): string {
-  return path.join(rootOf(branch), 'r');
+/**
+ * The key of the clone of `branch` among a driver's places: two attempts in one clone share it. Not a path: each clone
+ * prepared gets a root of its own, so a process a killed step left behind never writes into the next clone.
+ */
+export function cloneKeyOf(branch: string): string {
+  return `clone:${branch}`;
 }
 
 function receiptPath(runsRoot: string, run: string, branch: string): string {
-  return path.join(runsRoot, run, 'clones', `${path.basename(rootOf(branch))}.json`);
+  return path.join(runsRoot, run, 'clones', `${createHash('sha256').update(branch).digest('hex').slice(0, 8)}.json`);
 }
 
 async function readReceipt(file: string): Promise<CloneReceipt | undefined> {
@@ -113,28 +111,28 @@ export interface CloneLease {
 }
 
 /**
- * Opens the clone of `lease.branch`: the prepared one when its receipt says so, else a fresh one, which `created`
- * says, once any earlier root of the branch is gone. A step that continues work an earlier step committed there fails
+ * Opens the clone of `lease.branch`: the prepared one when its receipt says so, else a fresh one in a root of its own,
+ * which `created` says, once any earlier root of the branch is gone. `dir` is where the clone is, or would have been. A step that continues work an earlier step committed there fails
  * when the clone is gone, rather than run on a fresh one. `checkout` is the run's checkout, the first place a commit is
  * fetched from.
  */
-export async function openClone(input: { config: LocalConfig; run: RunId; checkout: string; lease: CloneLease }): Promise<{ dir: string; created: boolean } | WorkflowFailure> {
+export async function openClone(input: { config: LocalConfig; run: RunId; checkout: string; lease: CloneLease }): Promise<{ dir: string } & ({ created: boolean } | { failure: WorkflowFailure })> {
   const { config, run, lease } = input;
   const file = receiptPath(runsDir(config), run, lease.branch);
   const found = await readReceipt(file);
-  const dir = cloneDirOf(lease.branch);
-  if (found?.state.kind === 'ready' && await isDirectory(dir)) return { dir, created: false };
+  if (found?.state.kind === 'ready' && await isDirectory(path.join(found.root, 'r'))) return { dir: path.join(found.root, 'r'), created: false };
   if (lease.start !== lease.clone.commit) {
-    return { code: 'workspace_base', message: `The clone of ${lease.branch} is gone, so step "${lease.step}" cannot continue the work committed there.` };
+    return { dir: path.join(found?.root ?? scratchCloneRoot(), 'r'), failure: { code: 'workspace_base', message: `The clone of ${lease.branch} is gone, so step "${lease.step}" cannot continue the work committed there.` } };
   }
-  const root = rootOf(lease.branch);
-  await removeRoot(root, file);
+  if (found) await removeRoot(found.root, file);
+  const root = scratchCloneRoot();
+  const dir = path.join(root, 'r');
   await writeJsonAtomic(file, { v: 1, branch: lease.branch, root, withhold: [...lease.withhold], state: { kind: 'preparing' } } satisfies CloneReceipt);
   const cloned = await freshClone(root, lease.clone.commit, [input.checkout, ...(lease.clone.repo !== undefined ? [commitCacheOf(config, lease.clone.repo)] : [])], lease.expiresAt);
-  if (cloned) return cloned;
+  if (cloned) return { dir, failure: cloned };
   const { team } = lease.clone;
   const installed = 'revision' in team ? await installTeam({ config, root, lease, team }) : undefined;
-  if (installed && 'code' in installed) return installed;
+  if (installed && 'code' in installed) return { dir, failure: installed };
   const git = boundedGit(lease.expiresAt);
   const status = await git(dir, [...HEAD_STATUS]);
   const head = status.code === 0 ? headStateOf(status.stdout) : null;
@@ -168,7 +166,10 @@ export async function preparedClone(config: LocalConfig, run: RunId, branch: str
 
 /** Gives up the clone of `branch`: its root and receipt go, so the next step that opens it gets a fresh one. */
 export async function removeClone(config: LocalConfig, run: RunId, branch: string): Promise<void> {
-  await removeRoot(rootOf(branch), receiptPath(runsDir(config), run, branch));
+  const file = receiptPath(runsDir(config), run, branch);
+  const found = await readReceipt(file);
+  if (found) await removeRoot(found.root, file);
+  else await fs.rm(file, { force: true });
 }
 
 /**

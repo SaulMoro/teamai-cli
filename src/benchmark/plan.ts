@@ -17,7 +17,8 @@ import type { PinnedScorer } from '../scorers/pin.js';
 import type { WorkflowDefinition, WorkflowStep } from '../workflow/types.js';
 import type { Suite, Task, TaskJudge } from './suite.js';
 import type { CommittedSuite } from './trial.js';
-import { ArmTeamSchema, BenchmarkNameSchema, CommitSchema, TRIAL_WITHHELD_ENV, TrialLimitsSchema, TrialSelectionSchema, type Added, type PromptTerms, type TrialSelection } from './terms.js';
+import { CommitSchema, TeamSelectionSchema, type CloneTeam, type TeamSelection } from '../workflow/clone.js';
+import { ArmTeamSchema, BenchmarkNameSchema, TRIAL_WITHHELD_ENV, TrialLimitsSchema, type Added, type ArmTeam, type PromptTerms } from './terms.js';
 
 const Sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 
@@ -63,7 +64,7 @@ export type PlannedTrial = z.infer<typeof PlannedTrialSchema>;
 export const BenchmarkPlanSchema = z.object({
   suite: z.object({ name: BenchmarkNameSchema, sourceHash: Sha256, repo: z.string().url() }).strict(),
   baselineTeamRevision: CommitSchema,
-  selection: TrialSelectionSchema,
+  selection: TeamSelectionSchema,
   /** The names every trial step withholds from setup, the tool and the check. */
   withhold: z.array(z.string()),
   repetitions: z.number().int().min(1).max(10),
@@ -105,7 +106,7 @@ export function baselineStepOf(task: string): string {
   return `${BASELINES}.${task}`;
 }
 
-/** `trials.r<repetition>.<task>.<arm>`: the step that opens the copy a trial's prompt and check share. */
+/** `trials.r<repetition>.<task>.<arm>`: the step that opens the clone a trial's prompt and check share. */
 export function trialCopyOf({ repetition, task, arm }: { repetition: number; task: string; arm: string }): string {
   return `${TRIALS}.r${repetition}.${task}.${arm}`;
 }
@@ -113,7 +114,7 @@ export function trialCopyOf({ repetition, task, arm }: { repetition: number; tas
 export function freezePlan(input: {
   suite: Suite;
   baselineTeamRevision: string;
-  selection: TrialSelection;
+  selection: TeamSelection;
   arms: [PlannedArm, ...PlannedArm[]];
   /** The team scorers the suite lists, as start pinned them. */
   scorers: Record<string, PinnedScorer>;
@@ -159,13 +160,15 @@ const SETTLED_END = 'settled';
  * The generated workflow:
  *
  *   baselines                     inline (check tasks only); outputs { <task>: its baseline's output }
- *     <task>                      command check.run; workspace new; trial.kind baseline; output { baseline: passes | fails };
+ *     <task>                      command check.run; workspace: a clone of the starting commit with team none;
+ *                                 trial.kind baseline; output { baseline: passes | fails };
  *                                 trial.add: the files check.add writes before the check, from the fix and from the
  *                                 commit start made of the suite directory's files (`CommittedSuite`)
  *   trials                        inline; needs [baselines] and an `if` that reads it, when there are baselines
  *     r<rep>                      inline, one per repetition
  *       <task>                    inline; a check task's: if steps.baselines.outputs.<task> == 'fails'
- *         <arm>                   inline, needs [], workspace new (opens the trial's copy), arms in rotated order
+ *         <arm>                   inline, needs [], workspace: a clone of the starting commit with the arm's team (opens
+ *                                 the trial's clone), arms in rotated order
  *           prompt                workspace continue; tool and exact model: the arm's; trial.kind prompt;
  *                                 scorers { the suite's and the task's correctness scorer, required: true }
  *           check                 needs [prompt]; command check.run; workspace continue; trial.kind check (check tasks only)
@@ -181,7 +184,7 @@ const SETTLED_END = 'settled';
  * - `settled` is end-only, never leased. Its `if` reads its needs, so a stopped scope does not skip it, and its end
  *   maps to `succeeded`. Timeout, limits and cancel still end the run as they end any run.
  * - `<arm>` needs nothing, so its copy grows from no step, where an omitted `needs` would grow it from the baselines.
- * - `<arm>` opens the copy, so prompt and check share it by ancestry, and copy ownership keeps the check on the driver
+ * - `<arm>` opens the clone, so prompt and check share it by ancestry, and copy ownership keeps the check on the driver
  *   that ran the prompt.
  * - The prompt carries the arm's `tool` and its exact `model`, so a trial never goes through alias resolution.
  */
@@ -189,8 +192,9 @@ export function compilePlan(plan: BenchmarkPlan, { suite, files }: CommittedSuit
   const tasks = new Map(suite.tasks.map((task) => [task.id, task]));
   const baselines = suite.tasks.flatMap((task): WorkflowStep[] => (task.judge.kind === 'check'
     ? [{
-      id: task.id, command: task.judge.run, workspace: 'new', output: { type: 'object', fields: { baseline: { type: 'enum', values: [...BASELINE_OUTPUTS] } } },
-      trial: { kind: 'baseline', task: task.id, startingCommit: task.startingCommit, ...addTerm(task.judge, files.get(task.id)) },
+      id: task.id, command: task.judge.run, workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: { treatment: 'none' } } },
+      output: { type: 'object', fields: { baseline: { type: 'enum', values: [...BASELINE_OUTPUTS] } } },
+      trial: { kind: 'baseline', task: task.id, ...addTerm(task.judge, files.get(task.id)) },
     }]
     : []));
   const arms = new Map(plan.arms.map((arm) => [arm.name, arm]));
@@ -201,7 +205,10 @@ export function compilePlan(plan: BenchmarkPlan, { suite, files }: CommittedSuit
       if (!task) return [];
       const armSteps = ofRepetition.filter((trial) => trial.task === id).flatMap((trial): WorkflowStep[] => {
         const arm = arms.get(trial.arm);
-        return arm ? [{ id: arm.name, needs: [], workspace: 'new', workflow: { steps: trialSteps(plan, suite, trial, arm, task, files.get(task.id)) } }] : [];
+        return arm ? [{
+          id: arm.name, needs: [], workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: cloneTeamOf(arm.team, plan.selection) } },
+          workflow: { steps: trialSteps(plan, suite, trial, arm, task, files.get(task.id)) },
+        }] : [];
       });
       return [{ id, ...(task.judge.kind === 'check' ? { if: `steps.${BASELINES}.outputs.${id} == 'fails'` } : {}), workflow: { steps: armSteps } }];
     });
@@ -267,17 +274,25 @@ function trialSteps(plan: BenchmarkPlan, suite: Suite, trial: PlannedTrial, arm:
 }
 
 function promptTerms(plan: BenchmarkPlan, trial: PlannedTrial, arm: PlannedArm, task: Task): PromptTerms {
-  return {
-    kind: 'prompt', task: task.id, arm: arm.name, repetition: trial.repetition, order: trial.order,
-    startingCommit: task.startingCommit, team: arm.team, selection: selectionOf(plan.selection, arm),
-    ...(plan.limits ? { limits: plan.limits } : {}),
-  };
+  return { kind: 'prompt', task: task.id, arm: arm.name, repetition: trial.repetition, order: trial.order, ...(plan.limits ? { limits: plan.limits } : {}) };
 }
 
-/** The run's asset selection, without the skills an arm runs without. */
-function selectionOf(selection: TrialSelection, arm: PlannedArm): TrialSelection {
-  if (arm.team.kind !== 'without') return selection;
-  return { ...selection, excludedSkills: [...new Set([...selection.excludedSkills, ...arm.team.skills])].sort() };
+/** The team a trial's clone installs: the arm's, with the run's asset selection. */
+function cloneTeamOf(team: ArmTeam, selection: TeamSelection): CloneTeam {
+  switch (team.kind) {
+    case 'none':
+      return { treatment: 'none' };
+    case 'pulled':
+      return { revision: team.revision, selection, treatment: 'pulled' };
+    case 'ref':
+      return { revision: team.revision, selection, treatment: team.ref };
+    case 'without':
+      return { revision: team.revision, selection, treatment: { without: team.skills } };
+    default: {
+      const unhandled: never = team;
+      return unhandled;
+    }
+  }
 }
 
 /**
