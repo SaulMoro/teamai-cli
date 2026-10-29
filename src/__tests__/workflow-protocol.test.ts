@@ -346,6 +346,30 @@ describe('finally steps', () => {
 });
 
 
+describe('a finally step in the checkout', () => {
+  it('fails a finally step that changed the checkout, as any read-only command', async () => {
+    const { config, checkout } = await fixture({ reported: REPORTED });
+    const client = await protocol(config);
+    const started = await client.start('reported', { checkout, caller: { evidence: { kind: 'none' }, confirmed: false, mode: 'attended' } });
+    if (!('data' in started)) throw new Error(JSON.stringify(started));
+    const run = RunIdSchema.parse(started.data.run);
+    const leaseOf = async (): Promise<z.infer<typeof LeaseSchema>> => {
+      const next = await client.next(run, { driver });
+      if (!('data' in next) || !('lease' in next.data)) throw new Error(JSON.stringify(next));
+      return LeaseSchema.parse(next.data.lease);
+    };
+    const work = await leaseOf();
+    await client.report(run, { attempt: work.attempt, revision: work.revision, outcome: 'success', driver });
+    const report = await leaseOf();
+    const answer = await withRunLock(config, run, async (lock) => {
+      expect(await client.prepare(lock, report)).toEqual({ kind: 'prepared', dir: checkout });
+      fs.writeFileSync(path.join(checkout, 'README.md'), 'changed\n');
+      return client.report(run, { attempt: report.attempt, revision: report.revision, outcome: 'success', driver, outputs: { text: 'done' } }, { lock });
+    }, { waitMs: 0 });
+    expect(answer).toMatchObject({ data: { accepted: true, step: { id: 'report', status: 'failed', failure: { code: 'read_only_dirty' } } } });
+  });
+});
+
 describe('the run timeout a start gives', () => {
   it('ends the run at the shorter of the workflow timeout and the one its start gave', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
