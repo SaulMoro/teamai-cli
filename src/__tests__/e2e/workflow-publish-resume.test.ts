@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { REPORTS_LOCK_FILENAME } from '../../types.js';
 import { acquireLock, releaseLock } from '../../update.js';
 
@@ -38,6 +39,20 @@ steps:
     needs: [write]
     workspace: continue
     command: node -e "const fs=require('fs'); fs.writeFileSync('more.txt', 'M'); const hold=process.env.HOLD_AT; if (hold && fs.existsSync(hold)) { fs.writeFileSync(hold + '.held', ''); setInterval(() => {}, 1000); }"
+`;
+
+/** Checks, in a step that continues the clone, that the clone is `commit` with no remotes, then edits it. */
+const CLEAN = (commit: string): string => `schemaVersion: v1alpha1
+name: clean
+description: Edit a clean clone of the business commit.
+steps:
+  - id: trial
+    workspace: { clone: { commit: ${commit}, team: { treatment: none } } }
+    workflow:
+      steps:
+        - id: edit
+          workspace: continue
+          command: node -e "const g = (...a) => require('child_process').execFileSync('git', a).toString().trim(); if (g('rev-parse', 'HEAD') !== '${commit}' || g('remote') !== '') process.exit(1); require('fs').writeFileSync('clean.txt', 'C')"
 `;
 
 const QUICK = `schemaVersion: v1alpha1
@@ -239,13 +254,14 @@ describe('workflow publish and resume across members', () => {
     businessOrigin = path.join(sandbox, 'business.git');
     git(sandbox, ['init', '-q', '--bare', '-b', 'main', teamOrigin]);
     git(sandbox, ['init', '-q', '--bare', '-b', 'main', businessOrigin]);
+    seed(path.join(sandbox, 'seed-business'), { 'README.md': '# business\n' }, 'business repo', businessOrigin);
     seed(path.join(sandbox, 'seed-team'), {
       'teamai.yaml': `team: acme\nrepo: ${TEAM_URL}\nprovider: github\n`,
       'workflows/ship.yaml': SHIP,
       'workflows/edit.yaml': EDIT,
       'workflows/review.yaml': REVIEW,
+      'workflows/clean.yaml': CLEAN(originGit(businessOrigin, 'rev-parse', 'main')),
     }, 'team repo', teamOrigin);
-    seed(path.join(sandbox, 'seed-business'), { 'README.md': '# business\n' }, 'business repo', businessOrigin);
     // Both members join before anything is published, so nothing published reaches bob through a pull.
     await join('alice');
     await join('bob');
@@ -471,6 +487,22 @@ describe('workflow publish and resume across members', () => {
     expect(copy).toContain('Found two problems.');
     expect(copy).not.toContain(token);
   }, 180_000);
+
+  it('runs a workflow that opens a clone in a fresh clone of its commit, and refuses to publish the run, as it is isolated', async () => {
+    const before = git(workOf('alice'), ['status', '--porcelain']);
+
+    const started = await teamai('alice', ['workflow', 'start', 'clean', '--driver', 'local']);
+    expect(started.code, said(started)).toBe(0);
+    const { data } = started.envelope();
+    expect(data).toMatchObject({ done: { outcome: 'succeeded' } });
+    const run = z.object({ done: z.object({ run: z.string() }) }).parse(data).done.run;
+    const published = await teamai('alice', ['workflow', 'publish', run]);
+
+    expect(published.code, said(published)).toBe(1);
+    expect(published.envelope()).toMatchObject({ error: { code: 'isolated_run', message: expect.stringContaining(`Run ${run} is isolated`) } });
+    expect(git(workOf('alice'), ['status', '--porcelain'])).toBe(before);
+    expect(git(workOf('alice'), ['branch', '--list', `teamai/${run}/*`])).toBe('');
+  }, 120_000);
 });
 
 describe('workflow resume lists the runs a checkout can resume, and --next takes an offered one (#1390)', () => {
