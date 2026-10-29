@@ -8,6 +8,7 @@ import { itemsAfter, itemsOf } from './fan-out.js';
 import { localId, statesIn, stepDefinitions, type Scope } from './scope.js';
 import { parseStepPath } from './step-path.js';
 import { passOf, type Delivery, type StepState } from './step-state.js';
+import { ClonePlaceSchema, type ClonePlace } from './clone.js';
 import type { DriverIdentity, RunState, WorkflowDefinition, WorkflowFailure, WorkflowStep, WORKSPACE_MODES } from './types.js';
 
 export type WorkspaceMode = typeof WORKSPACE_MODES[number];
@@ -32,7 +33,8 @@ export type WorkspaceContract = {
   branch: string;
   start: { commit: string; branch?: string };
 } & (
-  | { mode: 'new' | 'continue'; merge: Array<{ branch: string; commit: string }> }
+  /** `clone`: the copy is the clone a step opened, which teamai prepares; it merges nothing and is never pushed. */
+  | { mode: 'new' | 'continue'; merge: Array<{ branch: string; commit: string }>; clone?: ClonePlace }
   | { mode: 'read-only'; merge: [] }
 );
 
@@ -44,7 +46,7 @@ const ContractFields = {
 };
 
 export const WorkspaceContractSchema = z.discriminatedUnion('mode', [
-  z.object({ ...ContractFields, mode: z.enum(['new', 'continue']), merge: z.array(z.object({ branch: z.string(), commit: z.string() })) }),
+  z.object({ ...ContractFields, mode: z.enum(['new', 'continue']), merge: z.array(z.object({ branch: z.string(), commit: z.string() })), clone: ClonePlaceSchema.optional() }),
   z.object({ ...ContractFields, mode: z.literal('read-only'), merge: z.tuple([]) }),
 ]) satisfies z.ZodType<WorkspaceContract>;
 
@@ -87,13 +89,28 @@ export function branchName(runId: string, stepPath: string, pass: number): strin
  * per item, so siblings do not share a worktree.
  */
 export function resolveMode(step: WorkflowStep, ancestors: WorkflowStep[]): WorkspaceMode {
-  if (step.workspace) return step.workspace;
+  if (step.workspace) return typeof step.workspace === 'object' ? 'clone' : step.workspace;
   if (step.command !== undefined && step.prompt === undefined && step.promptFile === undefined) return 'read-only';
   for (const ancestor of ancestors.toReversed()) {
+    if (cloneOf(ancestor)) return 'continue';
     if (ancestor.workspace !== 'new' && ancestor.workspace !== 'continue') continue;
     return ancestor.forEach ? 'new' : 'continue';
   }
   return 'read-only';
+}
+
+/** The clone `step` opens, or undefined when it opens none. */
+export function cloneOf(step: WorkflowStep): ClonePlace | undefined {
+  return typeof step.workspace === 'object' ? step.workspace.clone : undefined;
+}
+
+/**
+ * Whether a run of `definition` is isolated: a step of it, or of a workflow it runs, opens a clone. An isolated run is
+ * never published, claimed, retried or counted in member stats, and its sessions and labels stay off the team's.
+ */
+export function isIsolated(run: Pick<RunState, 'definition' | 'workflows'>): boolean {
+  const opens = (steps: readonly WorkflowStep[]): boolean => steps.some((step) => cloneOf(step) !== undefined || (typeof step.workflow === 'object' && opens(step.workflow.steps)));
+  return [run.definition, ...Object.values(run.workflows ?? {})].some((definition) => opens(definition.steps));
 }
 
 /** Whether a step runs in the member's checkout as it is: read-only, with no enclosing step that opens a copy. */
@@ -114,7 +131,7 @@ export function deliveryProblem(
   const writes = (steps: WorkflowStep[], ancestors: WorkflowStep[]): boolean => steps.some((step) => {
     const child = childOf(step);
     if (child) return writes(child.steps, [...ancestors, step]);
-    return (step.prompt !== undefined || step.promptFile !== undefined || step.workspace === 'new' || step.workspace === 'continue')
+    return (step.prompt !== undefined || step.promptFile !== undefined || (step.workspace !== undefined && step.workspace !== 'read-only'))
       && resolveMode(step, ancestors) !== 'read-only';
   });
   const visit = (steps: WorkflowStep[], ancestors: WorkflowStep[], prefix: string): WorkflowFailure | undefined => {
@@ -460,6 +477,13 @@ export function planWorkspace(
   const session = sessionResult ? { session: sessionResult } : {};
   const owner = ancestors.toReversed().find((ancestor) => opensCopy(ancestor.step));
   const modes = request.modes ?? ['read-only'];
+  const cloned = mode === 'clone' ? { clone: cloneOf(definition), instance: state.id, pass: state.pass ?? 1 }
+    : owner && cloneOf(owner.step) ? { clone: cloneOf(owner.step), instance: owner.instance, pass: owner.pass } : undefined;
+  if (cloned?.clone) return planClone(run, state, request, { ...cloned, clone: cloned.clone, mode, session, handback });
+  if (mode === 'clone') return { mode, fail: { code: 'workspace_base', message: `step "${state.id}" opens a clone this teamai cannot read` } };
+  if (ancestors.some((ancestor) => cloneOf(ancestor.step))) {
+    return { mode, fail: { code: 'workspace_base', message: `step "${state.id}" opens a copy of its own inside a clone; give it workspace: continue` } };
+  }
   if (mode === 'read-only') {
     if (!owner) return { mode, ...session };
     // A reader runs where its need left the change, or in the copy a `continue` step there would use.
@@ -518,6 +542,33 @@ export function planWorkspace(
 }
 
 /**
+ * The contract of a step in the clone `instance` opened, `instance` itself or its nearest enclosing copy: the clone's
+ * commit is its base, whatever the run's, and its agent configuration; it merges nothing, as `needs` only order steps
+ * there. It continues the clone's branch, held by the driver that opened it. A read-only step is refused: a clone has
+ * no reader place.
+ */
+function planClone(run: RunState, state: StepState, request: WorkspaceRequest, input: {
+  clone: ClonePlace; instance: string; pass: number; mode: WorkspaceMode; session: { session?: LeaseSession }; handback: boolean;
+}): WorkspacePlan {
+  const { clone, mode, session, handback } = input;
+  if (mode === 'read-only') {
+    return { mode, fail: { code: 'workspace_base', message: `step "${state.id}" runs read-only inside a clone, which has no reader place; give it workspace: continue` } };
+  }
+  const branch = branchName(run.id, input.instance, input.pass);
+  if (!handback && !(request.modes ?? []).includes('clone')) {
+    return { mode, defer: { reason: `step "${state.id}" runs in a clone, which this driver does not provide`, needs: 'clone' } };
+  }
+  const copy = run.copies?.[branch];
+  if (!handback && copy?.owner && !sameDriver(copy.owner, request.driver)) {
+    return { mode, defer: { reason: `step "${state.id}" continues a clone owned by another driver` } };
+  }
+  return {
+    mode, ...session,
+    contract: { mode: mode === 'clone' ? 'new' : 'continue', base: { commit: clone.commit }, configCommit: clone.commit, branch, start: { commit: copy?.commit ?? clone.commit }, merge: [], clone },
+  };
+}
+
+/**
  * A benchmark trial's base: its task's starting commit, whatever the run's base. It has no `ref`, and configCommit
  * follows it, so the trial's agent configuration is the starting commit's.
  */
@@ -525,9 +576,20 @@ function trialBase(definition: WorkflowStep): { commit: string } | undefined {
   return definition.trial && { commit: definition.trial.startingCommit };
 }
 
+/**
+ * The branch of the clone step instance `path` runs in: the clone it opens, else the clone of its nearest enclosing
+ * copy. Undefined when it runs in no clone.
+ */
+export function cloneBranchOf(run: StepTree & Pick<RunState, 'id'>, path: string): string | undefined {
+  const own = stepDefinitions(run)(path);
+  if (own && cloneOf(own)) return branchName(run.id, path, instanceOf(run, path)?.pass ?? 1);
+  const owner = ancestorsOf(run, path).toReversed().find((ancestor) => opensCopy(ancestor.step));
+  return owner && cloneOf(owner.step) ? branchName(run.id, owner.instance, owner.pass) : undefined;
+}
+
 /** Whether the steps inside `step` run in a copy it opens rather than in the one around it. */
 export function opensCopy(step: WorkflowStep): boolean {
-  return step.workspace === 'new' || (step.forEach !== undefined && step.workspace === 'continue');
+  return step.workspace === 'new' || cloneOf(step) !== undefined || (step.forEach !== undefined && step.workspace === 'continue');
 }
 
 /**

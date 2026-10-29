@@ -11,6 +11,7 @@ import type { ArchivedPass, LimitsFrom, ReleasedTokens, SessionContinuation, Ste
 import type { Requirements, Setup, Unenforced } from './requirements.js';
 import type { LeaseSession } from './workspace.js';
 import type { StepModel } from './step-model.js';
+import type { ClonePlace } from './clone.js';
 
 /** The driver's lease ownership, independent of its per-request capabilities. */
 export interface DriverIdentity {
@@ -86,9 +87,9 @@ export interface WorkflowStep {
   forEach?: ForEach;
   /**
    * Where the step runs. A command that omits it uses the active checkout and is read-only.
-   * A prompt that omits it continues an enclosing `new` or `continue` copy, or stays read-only.
+   * A prompt that omits it continues an enclosing `new`, `continue` or clone copy, or stays read-only.
    */
-  workspace?: typeof WORKSPACE_MODES[number];
+  workspace?: StepWorkspace;
   /** Opens a review request after the branch's work succeeds. TeamAI never merges it. */
   deliver?: 'pr';
   /** A session this step resumes. `continue` uses this step's previous pass. `from` names another step. */
@@ -146,8 +147,14 @@ export interface StepLoop {
   maxIterations: number;
 }
 
-/** Where a step runs: in the checkout as it is, in a new copy, or in the copy an enclosing step opened. */
-export const WORKSPACE_MODES = ['read-only', 'new', 'continue'] as const;
+/**
+ * Where a step runs: in the checkout as it is, in a new copy, in the copy an enclosing step opened, or in a fresh clone
+ * teamai prepares. A driver lists the ones it provides in `can.workspace`.
+ */
+export const WORKSPACE_MODES = ['read-only', 'new', 'continue', 'clone'] as const;
+
+/** A step's `workspace` as written: a mode, or the clone it opens. */
+export type StepWorkspace = Exclude<typeof WORKSPACE_MODES[number], 'clone'> | { clone: ClonePlace };
 
 /** The keys that give a step its action, as YAML writes them, each with the definition field it fills. */
 export const STEP_ACTIONS = { command: 'command', prompt: 'prompt', prompt_file: 'promptFile', workflow: 'workflow' } as const satisfies Record<string, keyof WorkflowStep>;
@@ -339,9 +346,10 @@ export interface RunState {
    * from, `after` items before other needs, so a pull request from it targets the nearest delivered branch it grew from.
    * `used` is set once a step ran in the copy: a report on a lease of it was accepted, neither `released` nor a setup
    * failure. Only a lease on an unused copy carries setup, and only an unused copy's owner gives it up when it hands its
-   * lease back. `used` is local run state only.
+   * lease back. `used` is local run state only. `kind: clone` is a clone a step opened, which teamai prepared on its
+   * owner's machine: it is never pushed.
    */
-  copies?: Record<string, { owner?: DriverIdentity; commit?: string; from?: string; used?: true }>;
+  copies?: Record<string, { owner?: DriverIdentity; commit?: string; from?: string; used?: true; kind?: 'clone' }>;
   /**
    * The pull requests delivered on this run, once each, in the order they first appeared. Append-only: a receipt says a
    * request was opened, never that it is still open, so whether a delivery reuses one is its host's lookup to say.

@@ -1,10 +1,11 @@
 import { isMap, isScalar, isSeq, LineCounter, parseDocument, type Node, type YAMLMap } from 'yaml';
+import { z } from 'zod';
 import { fieldsText, parseExpression, type ExpressionPath } from './expression.js';
 import {
   findTemplate, parseTemplate, stepExpressions, templatedTexts, templateExpressions, templateWithPaths, type StepExpression, type Template,
 } from './template.js';
 import type {
-  Budget, EndOutcome, ForEach, InlineWorkflow, OutputSchema, StepLoop, StepScorers, WorkflowDefaults, WorkflowDefinition, WorkflowDiagnostic, WorkflowLoop, WorkflowStep,
+  Budget, EndOutcome, ForEach, InlineWorkflow, OutputSchema, StepLoop, StepScorers, StepWorkspace, WorkflowDefaults, WorkflowDefinition, WorkflowDiagnostic, WorkflowLoop, WorkflowStep,
 } from './types.js';
 import { INVOKE_VALUES, STEP_ACTIONS } from './types.js';
 import {
@@ -18,6 +19,7 @@ import { parseHitl } from './parse-hitl.js';
 import { loopProblems } from './loop.js';
 import { modelValueProblem } from '../models/aliases.js';
 import type { StepModel } from './step-model.js';
+import { ClonePlaceSchema } from './clone.js';
 import { REQUIREMENT_KEYS, RequirementsSchema, SetupSchema, type Requirements, type Setup } from './requirements.js';
 
 /**
@@ -537,11 +539,10 @@ function parseBody(
         diagnostics.push(locate(file, lineCounter, outputPair.key ?? item, `${field}.output`, 'output must be a shorthand type'));
       }
       const workspacePair = item.items.find((pair) => scalarString(pair.key) === 'workspace');
-      const workspaceText = scalarString(workspacePair?.value)?.trim();
-      const workspace = workspaceText === 'read-only' || workspaceText === 'new' || workspaceText === 'continue' ? workspaceText : undefined;
+      const workspace = parseStepWorkspace(workspacePair?.value);
       if (workspacePair && !workspace) {
         diagnostics.push({
-          ...locate(file, lineCounter, workspacePair.value ?? workspacePair.key ?? item, `${field}.workspace`, `${stepLabel} workspace must be read-only, new, or continue`),
+          ...locate(file, lineCounter, workspacePair.value ?? workspacePair.key ?? item, `${field}.workspace`, `${stepLabel} workspace must be read-only, new, continue, or { clone: { commit, repo?, team } } with a full commit and team { treatment: none } or { revision, selection, treatment }`),
           code: 'bad_workspace',
         });
       }
@@ -974,6 +975,15 @@ function parseRequires(node: Node | null | undefined, field: string, ctx: ParseC
     }
   }
   return parsed.success && diagnostics.length === before ? parsed.data : undefined;
+}
+
+/** A step's `workspace`: `read-only`, `new`, `continue`, or `{ clone: … }`; undefined when it is none of them. */
+function parseStepWorkspace(node: Node | null | undefined): StepWorkspace | undefined {
+  const text = scalarString(node)?.trim();
+  if (text === 'read-only' || text === 'new' || text === 'continue') return text;
+  if (!isMap(node)) return undefined;
+  const parsed = z.object({ clone: ClonePlaceSchema }).strict().safeParse(node.toJSON());
+  return parsed.success ? parsed.data : undefined;
 }
 
 /** `setup: { command, requires: { env } }`. A key this version does not know, at either level, is `unknown_key`. */

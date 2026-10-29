@@ -16,7 +16,7 @@ import { LeaseIdSchema, LeaseWireSchema } from './lease-wire.js';
 import { carriedRun, claimOffered, reconcileTakenCopies, resumeRun, settledSteps } from './handoff.js';
 import { leaseNext, parseNextPayload, parseReport, parseResponsePayload, reportable, reportAttempt, startRun, withIgnored, type NextOptions, type ReportInput } from './engine.js';
 import {
-  abandonPlace, adoptedPlaceOf, finishPlace, placeHeldBy, placeLeaseOf, placeOf, placeRecorded, preparePlace, releasePlace, runPlaceSetup, type PlaceLease, type PlacePrepared,
+  abandonPlace, adoptedPlaceOf, finishPlace, placeHeldBy, placeLeaseOf, placeOf, placeRecorded, preparePlace, releasePlace, runPlaceSetup, sweepClones, type PlaceLease, type PlacePrepared,
   type StepEnd,
 } from './place/place.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep, type CallerProvenance, type Via } from './run-controls.js';
@@ -422,7 +422,8 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
       if (leased.kind === 'failed') return leased;
       const { lease, root } = leased;
       const { workspace } = lease;
-      if (workspace?.mode !== 'new' && workspace?.mode !== 'continue') {
+      // A clone is teamai's to make, never the host's.
+      if ((workspace?.mode !== 'new' && workspace?.mode !== 'continue') || workspace.clone !== undefined) {
         const placed = await placeLeased(config, lock, leased);
         return placed.kind === 'refused' ? { kind: 'failed', failure: placed.failure } : placed;
       }
@@ -461,9 +462,14 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
         if (prepare !== true) return withIgnored({ error: { code: 'invalid_arguments', message: `Run ${runId} is a benchmark run, whose trial attempts teamai prepares itself, so --attempt and --adopt do not apply. Call next --prepare without them.` } }, parsed.ignored);
         return withIgnored(await Trials.next(config, runId, driver, { ...next, env, ...(options?.signal ? { signal: options.signal } : {}) }), parsed.ignored);
       }
-      return withIgnored(await withRunLock(config, run.data, async (lock) => (prepare === true
-        ? prepareLeased({ config, lock, driver, env, answer: await lease() })
-        : prepareAttempt({ config, lock, driver, env, next, ...prepare })), { waitMs: 0 }), parsed.ignored);
+      return withIgnored(await withRunLock(config, run.data, async (lock) => {
+        const answer = prepare === true
+          ? await prepareLeased({ config, lock, driver, env, answer: await lease() })
+          : await prepareAttempt({ config, lock, driver, env, next, ...prepare });
+        // A clone whose steps all settled is not needed any more.
+        await sweepClones(config, lock.run);
+        return answer;
+      }, { waitMs: 0 }), parsed.ignored);
     },
     report: async (runId, body, options) => {
       const parsed = parseReport(body);

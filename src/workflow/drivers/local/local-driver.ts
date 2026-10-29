@@ -36,7 +36,7 @@ import {
   type LocalToolRun,
 } from './local-tool-adapter.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, readRun, RunIdSchema, withRunLock, type RunId, type RunLock } from '../../store.js';
-import { abandonPlace, placeLeaseOf, placeOf, placeRoot, preparePlace, runPlaceSetup, type StepEnd } from '../../place/place.js';
+import { abandonPlace, placeLeaseOf, placeOf, placeRoot, preparedClone, preparePlace, runPlaceSetup, sweepClones, type StepEnd } from '../../place/place.js';
 import { commandEnd, managedReport, unreadablePlace } from '../../protocol.js';
 import { memberTools, type MemberTool } from '../../../tool-launch/call.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../../tool-launch/process-stop.js';
@@ -370,9 +370,14 @@ async function promptReport(
   for (const warning of choice.warnings) log.warn(warning);
   if (!choice.ok) return giveUp(choice.failure, choice.tool);
   const selected = choice.tool;
-  // A worktree has its own pull record, so the tool launched there is observed and bound as that checkout.
-  const stepConfig = lease.workspace && lease.cwd ? await detectProjectConfig(lease.cwd) ?? config : config;
-  const loaded = lease.agent ? await loadDeployedAgent({ tool: selected, name: lease.agent, config: stepConfig, toolPaths: options.toolPaths }) : undefined;
+  // A worktree has its own pull record, so the tool launched there is observed and bound as that checkout. A clone has
+  // its own install, never the member's config, and none when its place installs no team.
+  const contract = lease.workspace;
+  const teamConfig = contract && contract.mode !== 'read-only' && contract.clone
+    ? (await preparedClone(config, lock.run, contract.branch))?.install
+    : contract && lease.cwd ? await detectProjectConfig(lease.cwd) ?? config : config;
+  const stepConfig = teamConfig ?? config;
+  const loaded = lease.agent && teamConfig ? await loadDeployedAgent({ tool: selected, name: lease.agent, config: teamConfig, toolPaths: options.toolPaths }) : undefined;
   const agent = loaded?.spec;
   if (lease.agent && !agent) {
     return giveUp({
@@ -397,7 +402,7 @@ async function promptReport(
     ? { model: chosen.model.name, ...(chosen.model.effort ? { effort: chosen.model.effort } : {}) }
     : {};
   const { teamDelivery } = await import('../../../pull.js');
-  const delivery = await teamDelivery(stepConfig, selected).catch(() => undefined);
+  const delivery = teamConfig ? await teamDelivery(teamConfig, selected).catch(() => undefined) : undefined;
   const delivered = delivery?.record?.delivered;
   const [observed, launch, teamSkills] = await Promise.all([
     observeLaunch({
@@ -410,7 +415,7 @@ async function promptReport(
         ? { chosen: { model: chosen.model.name, ...(chosen.model.effort ? { effort: chosen.model.effort } : {}), ...(chosen.alias ? { alias: chosen.alias } : {}) } }
         : {}),
     }),
-    workflowLaunch(stepConfig, selected),
+    teamConfig ? workflowLaunch(teamConfig, selected) : undefined,
     delivered ? deliveredTeamSkills(stepConfig, cwd, delivered).catch(() => undefined) : undefined,
   ]);
   // Only headless Claude and CodeBuddy have a turn limit; any other launch reports the cap as not enforced.
@@ -675,6 +680,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
     // A driver killed before cleanup, of this run or any other, left trial roots behind.
     await Trials.sweep(config);
   }
+  // A driver killed before cleanup, of this run or any other, left clones behind.
+  await sweepClones(config);
   const adapter = options.adapter ?? createLocalToolAdapter();
   const archive = openSessionArchive(config);
   const maxParallel = config.workflows?.max_parallel ?? 1;
@@ -774,12 +781,14 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
       const asked = { running, canTakeLease, can, autoApprove: options.autoApprove, runMode: mode, ...(base ? { base } : {}), env: turn };
       const next = benchmark
         ? await runHere((signal) => Trials.next(config, runId, driver, { ...asked, alone: true, signal }))
-        : await leaseNext(config, runId, driver, { ...asked, alone: true });
+        : await leaseNext(config, runId, driver, { ...asked, alone: true, prepare: true });
       // Trials.next tells an external driver to ask it again; this driver continues through resume.
       if (benchmark && isWorkflowError(next) && next.error.code === 'interrupted') {
         return { error: { code: 'interrupted', message: `Stopped while a trial step was prepared or checked. It stays leased: continue with teamai workflow resume ${runId}${options.sandbox ? ' --sandbox' : ''}.` } };
       }
       if (signalled) continue;
+      // A clone whose steps all settled is not needed any more.
+      await sweepClones(config, runId);
       if (isWorkflowError(next)) return next;
       for (const attempt of Array.isArray(next.data.cancelled) ? next.data.cancelled as string[] : []) cancel(attempt);
       if ('done' in next.data) {

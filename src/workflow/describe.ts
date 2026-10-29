@@ -114,7 +114,7 @@ interface Scope {
 function writes(step: WorkflowStep, ancestors: WorkflowStep[], childOf: (step: WorkflowStep) => { steps: WorkflowStep[] } | undefined): boolean {
   const child = childOf(step);
   if (child) return child.steps.some((inner) => writes(inner, [...ancestors, step], childOf));
-  return (step.prompt !== undefined || step.promptFile !== undefined || step.workspace === 'new' || step.workspace === 'continue') && resolveMode(step, ancestors) !== 'read-only';
+  return (step.prompt !== undefined || step.promptFile !== undefined || (step.workspace !== undefined && step.workspace !== 'read-only')) && resolveMode(step, ancestors) !== 'read-only';
 }
 
 /**
@@ -150,7 +150,8 @@ export function describeWorkflow(input: {
     const setupEnv = hasContract ? scope.setup?.requires?.env ?? [] : [];
     facts.runs.push({ step: path, executor, env: [...new Set([...requires.env ?? [], ...setupEnv])], ...(executor === 'prompt' && step.agent !== undefined ? { agent: step.agent } : {}) });
     const negotiation = negotiate({
-      step: path, executor, requires, prepare: false,
+      // Whether the driver calls next --prepare is not part of its can: a step in a clone is described as a driver with clone takes it.
+      step: path, executor, requires, prepare: false, clone: false,
       interactive: step.interactive === true, hasContract, envKeys: Object.keys(step.env ?? {}), runEnvKeys, budgeted: step.prompt !== undefined && scope.budgeted,
       ...(step.maxTurns !== undefined ? { maxTurns: step.maxTurns } : {}), ...(hasContract && scope.setup ? { setup: scope.setup } : {}),
       ...(step.tool !== undefined ? { tool: step.tool } : {}), ...(step.trial ? { trial: { withhold: [] } } : {}),

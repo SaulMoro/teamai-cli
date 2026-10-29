@@ -64,7 +64,7 @@ const ENFORCEMENT = {
    * ordinary steps keep best-effort isolation.
    */
   sandbox: 'strict',
-  /** A benchmark trial step is leased only through `next --prepare`, so teamai made its clone. Process-only. */
+  /** A benchmark trial step, or a step in a clone, is leased only through `next --prepare`, so teamai made its clone. Process-only. */
   prepare: 'strict',
 } as const satisfies Record<string, 'strict' | 'bestEffort'> & Record<keyof Requirements, 'strict' | 'bestEffort'>;
 type Enforcement = typeof ENFORCEMENT;
@@ -253,6 +253,8 @@ export interface Offer {
   tool?: string;
   /** A benchmark trial step: the names the run's plan withholds. */
   trial?: { withhold: readonly string[] };
+  /** The lease runs in a clone, which only teamai prepares. */
+  clone: boolean;
   /** The caller asked `next --prepare`. */
   prepare: boolean;
 }
@@ -297,7 +299,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
   if (allow.env && [...required, ...setupKeys].some((key) => sameEnvName(allow.env ?? [], key) === undefined)) policy.push('policy.env');
   const gaps: Missing[] = policy.length > 0 ? policy : [
     ...(offer.tool !== undefined && lacksTool(offer.tool, can) ? ['tools' as const] : []),
-    ...(offer.trial ? trialGaps(can, offer.prepare) : []),
+    ...(offer.trial ? trialGaps(can, offer.prepare) : offer.clone && !offer.prepare ? ['prepare' as const] : []),
     ...(offer.interactive && !can.hitl ? ['hitl' as const] : []),
     ...(offer.setup && !can.setup ? ['setup' as const] : []),
     ...((required.length > 0 && !covers.step) || (setupKeys.length > 0 && !covers.setup) ? ['env' as const] : []),

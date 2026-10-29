@@ -1385,3 +1385,57 @@ steps:
     ]);
   });
 });
+
+describe('clone place', () => {
+  const COMMIT = 'c'.repeat(40);
+  const REVISION = 'd'.repeat(40);
+
+  it('keeps a clone place as written', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Try it in clean clones.
+steps:
+  - id: bare
+    workspace: { clone: { commit: ${COMMIT}, team: { treatment: none } } }
+    workflow:
+      steps:
+        - id: work
+          prompt: Do it.
+  - id: pulled
+    needs: []
+    workspace:
+      clone:
+        commit: ${COMMIT}
+        repo: https://git.example.com/acme/app.git
+        team: { revision: ${REVISION}, selection: { additionalRoles: [], projects: [], excludedSkills: [] }, treatment: { without: [lint] } }
+    command: npm test
+`);
+    expect(result.ok, result.ok ? '' : result.diagnostics.map(formatDiagnostic).join('\n')).toBe(true);
+    if (!result.ok) return;
+    expect(result.definition.steps.map((step) => step.workspace)).toEqual([
+      { clone: { commit: COMMIT, team: { treatment: 'none' } } },
+      { clone: { commit: COMMIT, repo: 'https://git.example.com/acme/app.git', team: { revision: REVISION, selection: { additionalRoles: [], projects: [], excludedSkills: [] }, treatment: { without: ['lint'] } } } },
+    ]);
+  });
+
+  it('rejects a clone place without a full commit, or a team none with a revision', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Try it in clean clones.
+steps:
+  - id: short
+    workspace: { clone: { commit: abc123, team: { treatment: none } } }
+    command: npm test
+  - id: revised
+    needs: []
+    workspace: { clone: { commit: ${COMMIT}, team: { revision: ${REVISION}, treatment: none } } }
+    command: npm test
+`);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.diagnostics.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:6: field "steps[0].workspace": step "short" workspace must be read-only, new, continue, or { clone: { commit, repo?, team } } with a full commit and team { treatment: none } or { revision, selection, treatment }',
+      'workflows/build.yaml:10: field "steps[1].workspace": step "revised" workspace must be read-only, new, continue, or { clone: { commit, repo?, team } } with a full commit and team { treatment: none } or { revision, selection, treatment }',
+    ]);
+  });
+});

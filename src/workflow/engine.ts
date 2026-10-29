@@ -353,7 +353,7 @@ function rememberCopy(run: RunState, plan: WorkspacePlan, driver: DriverIdentity
     copy.owner ??= driver;
     if (!copy.from && !copy.commit && from && from !== branch) copy.from = from;
   }
-  else run.copies[branch] = { owner: driver, ...(from && from !== branch ? { from } : {}) };
+  else run.copies[branch] = { owner: driver, ...(from && from !== branch ? { from } : {}), ...(plan.contract?.mode !== 'read-only' && plan.contract?.clone ? { kind: 'clone' as const } : {}) };
 }
 
 /** Whether a step holds a lease in copy `branch`. */
@@ -1057,6 +1057,7 @@ function offerTerms(
     ...(plan?.contract && scope.setup ? { setup: scope.setup } : {}),
     ...(step.tool !== undefined ? { tool: step.tool } : {}),
     ...(step.trial ? { trial: { withhold: run.benchmark?.withhold ?? [] } } : {}),
+    clone: plan?.contract?.mode !== 'read-only' && plan?.contract?.clone !== undefined,
     prepare: context.prepare,
   }, context.can, context.allow, context.facts);
 }
@@ -1091,7 +1092,10 @@ export interface NextOptions {
   runMode?: RunMode;
   /** Process-only: the team env the caller resolved for this operation, so `next` does not resolve it again. */
   env?: WorkflowEnv;
-  /** Process-only, `next --prepare`: the caller prepares trial leases (benchmark/trial.ts). Without it a trial is held. */
+  /**
+   * Process-only: teamai prepares the lease's place, through `next --prepare`, the local driver, or benchmark/trial.ts
+   * for trial leases. Without it a trial, and a step in a clone, is held.
+   */
   prepare?: boolean;
   /**
    * Process-only: the caller is the run's only driver, as the local driver is. A step that names a tool it cannot launch
