@@ -27,7 +27,8 @@ const LeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string
 
 afterEach(() => {
   vi.useRealTimers();
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  // Retried: on Windows another process, such as a virus scanner, can briefly hold a file just written (EBUSY).
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 /**
@@ -323,8 +324,9 @@ describe('benchmark plan run', () => {
   });
 
   // Retried, so a busy machine's one slow round does not fail it; a regression is slow every time. A second leaves room for
-  // a CI runner several times slower than a laptop, where each takes tens of milliseconds.
-  it('reconciles a new run of 20 tasks, 6 arms and 10 repetitions in 32 lanes, and answers a poll on it, in under a second each', { retry: 2 }, async () => {
+  // a CI runner several times slower than a laptop, where each takes tens of milliseconds. The test's own timeout bounds
+  // building the 1,200-trial run, about 5 s on a laptop, not the calls it measures.
+  it('reconciles a new run of 20 tasks, 6 arms and 10 repetitions in 32 lanes, and answers a poll on it, in under a second each', { retry: 2, timeout: 60_000 }, async () => {
     const { config, runId } = await startFix({ tasks: 20, arms: 6, repetitions: 10, parallel: 32 });
     await settleBaselines(config, runId, driver, can);
     const unsandboxed = { ...can, isolation: 'none' as const };

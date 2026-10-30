@@ -21,7 +21,8 @@ const LeaseSchema = z.object({ data: z.object({ lease: z.object({ attempt: z.str
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  // Retried: on Windows another process, such as a virus scanner, can briefly hold a file just written (EBUSY).
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 /** A started run of ten repetitions of one check task `fix` on one arm. */

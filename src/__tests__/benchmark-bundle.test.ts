@@ -14,7 +14,8 @@ import { benchmarkRunConfig, frozenBenchmark, PLANNED_BENCHMARK, startBenchmarkR
 const dirs: string[] = [];
 
 afterEach(() => {
-  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  // Retried: on Windows another process, such as a virus scanner, can briefly hold a file just written (EBUSY).
+  for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 /** A suite of check tasks t01.. and claude arms a01.., the second and later on model m<i>; `trial` is its `trial` value. */
