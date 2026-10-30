@@ -295,6 +295,29 @@ ${step.includes('deliver') ? '    prompt: Ship it.\n' : '    command: echo more\
     expect(fixture.runIds()).toEqual([]);
   }, 120_000);
 
+  it('refuses before any run a workflow arm whose workflow runs a workflow another of its steps makes', async () => {
+    const made = `schemaVersion: v1alpha1
+name: fixer
+description: Make a workflow, then run it.
+inputs: { task: string }
+steps:
+  - id: make
+    command: node -e "0"
+    workspace: continue
+    output: { definition: workflow }
+  - id: run
+    needs: [make]
+    workflow: { from: make }
+`;
+    const fixture = await fixtureWith(SUITE, { fixer: made });
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+
+    expect(ran.code, said(ran)).toBe(1);
+    expect(ErrorSchema.parse(envelope(ran)).error.message).toContain('Arm "flow" runs workflow "fixer", whose step "run" runs a workflow step "make" makes');
+    expect(fixture.runIds()).toEqual([]);
+  }, 120_000);
+
   it('refuses before any run a workflow arm whose workflow takes no input task', async () => {
     const fixture = await fixtureWith(SUITE, { fixer: FIX_ONCE.replace('name: fix-once', 'name: fixer') });
 

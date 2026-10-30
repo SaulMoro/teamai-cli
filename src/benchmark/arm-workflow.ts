@@ -145,6 +145,8 @@ function unrunnableStep(steps: readonly WorkflowStep[], prefix = ''): { step: st
     if (step.workspace !== undefined && step.workspace !== 'continue') return { step: id, why: 'opens a workspace other than continue' };
     if (step.command !== undefined && step.workspace === undefined) return { step: id, why: 'runs a command in the member\'s checkout; give it workspace: continue' };
     const child = stepWorkflow(step);
+    // A trial runs the arm's workflow from the benchmark plan's output, which may run no `from` step.
+    if (child?.kind === 'from') return { step: id, why: `runs a workflow step "${child.step}" makes, which a trial cannot run` };
     const inner = child?.kind === 'inline' ? unrunnableStep(child.workflow.steps, `${id}.`) : undefined;
     if (inner) return inner;
   }
