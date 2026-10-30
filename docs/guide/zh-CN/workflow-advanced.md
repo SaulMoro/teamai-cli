@@ -652,7 +652,7 @@ steps:
 
 ## 要求和限制
 
-步骤在 `requires` 中声明它需要什么。工作流文件中的 `defaults.requires` 作用于其中每个步骤。步骤自己的键会替换这些键，`env` 列表则会合并。工作流文件还可以设置 `setup`、`timeout` 和 `budget`，prompt 步骤可以设置 `max_turns` 和 `on_limit`。
+步骤在 `requires` 中声明它需要什么。工作流文件中的 `defaults.requires` 作用于其中每个步骤。步骤自己的键会替换这些键，`env` 列表则会合并。工作流文件还可以设置 `setup`、`timeout` 和 `budget`，prompt 步骤可以设置 `max_turns`、`on_limit` 和 `permissions`。
 
 ```yaml
 schemaVersion: v1alpha1
@@ -687,6 +687,7 @@ steps:
 | `timeout` | `500ms`、`30s`、`10m` 或 `2h`，写在步骤或工作流文件上。超时的步骤被停止，结果为 `timeout`。写在 workflow 步骤上时，会停止其中每个步骤。写在工作流文件上时，运行以 `failed` 结束，失败码为 `timeout`。重试会重新开始计时。 | 不是能力。每个驱动都会在租约上拿到 `expiresAt`。 |
 | `budget` | `{ tokens: N }`，写在工作流文件、workflow 步骤或带 `on_limit: end_turn` 的 prompt 步骤上。其下每个步骤的输入和输出 token 从它开始时计入：运行从开始时算起，workflow 步骤从每次开始时算起，例如循环的下一轮。重试会重新开始计算预算。超过 `N` 时，其中未结束的步骤停止，并以 `budget_exceeded` 失败。 | 预算内的非交互 prompt 步骤等待，它没有 token 的成功报告以 `budget_unmeasured` 失败。交互式 prompt 由人操作，照常运行；它的报告没有 token 时，其 `unenforced` 列出 `budget`。 |
 | `max_turns` | 限制 prompt 步骤的智能体轮数。本地驱动只把它传给无头 Claude。 | 步骤照常运行，其 `unenforced` 列出 `max_turns`。 |
+| `permissions` | prompt 步骤上的 `unattended`：它的工具无需询问就编辑文件和运行命令。只能在严格的 `isolation: sandbox` 之下使用，可以写在步骤本身、外层步骤、`defaults`，或运行其工作流的步骤上：没有它时，启动以 `unattended_unsandboxed` 被拒绝；[步骤打印的工作流](#运行步骤打印的工作流)没有它时，该步骤以 `invalid_output` 失败。见[无人值守的 prompt](#无人值守的-prompt)。 | 步骤等待。运行唯一的驱动没有 `can.unattended` 时，该步骤以 `tool_unavailable` 失败。 |
 | `on_limit` | 在带 `timeout`、`max_turns` 或 `budget` 的 prompt 步骤上为 `end_turn`：从工具启动算起达到其中之一时，结束智能体的这一轮，而不是让步骤失败。步骤以设置了 `limit` 的状态成功并保留它的工作，所以它之后的步骤仍会运行。在带 `timeout` 或 `budget` 的 workflow 步骤上，这些是其中的 prompt 加起来可以花费的量：用完后，其未运行的步骤被跳过。`fail` 是默认值，在达到限制时让步骤失败。交还的步骤保持其第一次租约的截止时间。 | 没有 `can.end_turn` 时，步骤按 `fail` 运行，其 `unenforced` 列出 `on_limit`。 |
 
 `unenforced` 出现在租约、步骤和运行记录中。每个 `interactive: true` 步骤还需要支持 HITL 的驱动，见 [HITL](#hitl人在回路中)。
@@ -724,8 +725,33 @@ workflows:
 | `isolation` | 以此级别运行每个步骤：`none`、`worktree` 或 `sandbox`。 |
 | `tools` | 在这些工具上启动指定了 `tool` 的 prompt 步骤，例如 `["claude"]`。没有它，就不会拿到这样的步骤。 |
 | `end_turn` | 在 `lease.limits` 处结束 prompt 的这一轮，并报告它停在的 `limit` 和 `durationMs`。 |
+| `unattended` | 对租约带 `permissions: "unattended"` 的 prompt，以其工具自己的无需询问即可编辑和运行命令的模式启动它；工具没有这种模式时让步骤失败，而不是照常启动。 |
 
-省略的键表示驱动做不到。隔离是尽力而为，除非 `strict: true` 让它成为下限。`next` 会在 `ignored` 中列出其他键。[编程会话](workflow.md#在编程会话中运行)的 skill 驱动声明 `hitl`、所有 `workspace` 模式、`env: "commands"` 和 `setup`。它从不声明 `tokens`、`max_turns` 或 `network`，其 `isolation` 为 `none`。
+省略的键表示驱动做不到。隔离是尽力而为，除非 `strict: true` 让它成为下限。`next` 会在 `ignored` 中列出其他键。[编程会话](workflow.md#在编程会话中运行)的 skill 驱动声明 `hitl`、所有 `workspace` 模式、`env: "commands"` 和 `setup`。它从不声明 `tokens`、`max_turns`、`network` 或 `unattended`，其 `isolation` 为 `none`：编程会话绝不绕过使用者自己的权限。
+
+### 无人值守的 prompt
+
+以无头方式启动的工具在编辑文件或运行命令前会先询问，没有人回答时，步骤什么也做不了。`permissions: unattended` 让 prompt 的工具直接执行，所以只在可以丢弃的机器上使用：
+
+```yaml
+steps:
+  - id: work
+    prompt: Fix the failing test.
+    permissions: unattended
+    requires: { isolation: sandbox, strict: true }
+```
+
+本地驱动随后以工具自己的这种模式启动它：
+
+| 工具 | 启动参数 |
+|---|---|
+| Claude Code，以及使用其参数的工具 | `--permission-mode bypassPermissions` |
+| CodeBuddy、WorkBuddy | `--permission-mode bypassPermissions` |
+| Codex CLI，以及使用其参数的工具 | `--dangerously-bypass-approvals-and-sandbox` |
+| OpenCode | `--auto`，权限规则拒绝的操作仍然被拒绝 |
+| agy | `--dangerously-skip-permissions` |
+
+对于 teamai 不知道有这种模式的工具，步骤以 `tool_unavailable` 失败，工具绝不会在没有该模式的情况下启动。[工具支持](tool-support.md)的 `Unattended prompts` 列说明哪些工具有这种模式，以及依据。租约带 `permissions: "unattended"`，所以你自己的驱动能看到它；只有声明了 `can.unattended` 的驱动才会拿到该步骤。
 
 ### 必需的键在本机没有值
 

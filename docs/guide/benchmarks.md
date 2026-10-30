@@ -125,7 +125,7 @@ arms:
     workflow: plan-then-fix   # workflows/plan-then-fix.yaml, with inputs: { task: string }
 ```
 
-The run reads the workflow, and the workflows it runs, at the arm's team revision, through the namespaces you receive like any team workflow, and runs every prompt step in it on the arm's tool, model and effort. It refuses the arm (`arm_workflow_unrunnable`) when the workflow takes no input `task`, or when a step of it delivers, asks a person, or opens a workspace other than `continue`, and with `workflow_namespace_conflict` when two namespaces you receive both have it. The trial's check, or its judge, decides on what the workflow left in the clone. Its duration is the sum of its prompt turns, its tokens and cost the sum of its prompts'. [Trial limits](#trial-limits) `timeout` and `budget` are what its prompts may spend together; `max_turns` is not enforced, and is listed in `unenforced`.
+The run reads the workflow, and the workflows it runs, at the arm's team revision, through the namespaces you receive like any team workflow, and runs every prompt step in it on the arm's tool, model and effort, unattended as the trial's own prompt would be. It refuses the arm (`arm_workflow_unrunnable`) when the workflow takes no input `task`, or when a step of it delivers, asks a person, or opens a workspace other than `continue`, and with `workflow_namespace_conflict` when two namespaces you receive both have it. The trial's check, or its judge, decides on what the workflow left in the clone. Its duration is the sum of its prompt turns, its tokens and cost the sum of its prompts'. [Trial limits](#trial-limits) `timeout` and `budget` are what its prompts may spend together; `max_turns` is not enforced, and is listed in `unenforced`.
 
 ### Cross tools with team assets
 
@@ -328,7 +328,7 @@ $ teamai benchmark run fix-auth --sandbox
 
 `benchmark run` plans the suite first, so a suite that cannot run leaves no run. It then starts the workflow `benchmark` with the suite's `timeout` and drives it with the local driver.
 
-Each trial runs the tool headless with this machine's own settings for it, so allow the tool there to edit files and run commands without asking, for Claude in `~/.claude/settings.json`. A trial whose tool may not edit fails.
+Each trial prompt runs with [`permissions: unattended`](workflow-advanced.md#unattended-prompts), because the shipped workflow runs the trials in a strict sandbox: the tool edits files and runs commands without asking, whatever this machine's settings for it say.
 
 | Flag or setting | Effect |
 | --- | --- |
@@ -416,7 +416,7 @@ To change it, push your own `workflows/benchmark.yaml`, or `workflows/<namespace
 ℹ Running the team's workflows/ops/benchmark.yaml, which replaces teamai's benchmark workflow.
 ```
 
-Yours must take input `suite`, and input `aliases` to run with `--member-aliases`; `benchmark run` refuses it otherwise. Keep `plan`'s step id and `report` as a `finally` step. Dropping `strict: true` lets trials run without the credentials being kept from them. When two namespaces you receive both have a `benchmark.yaml`, `benchmark run` refuses with `workflow_namespace_conflict`, naming both files, and never falls back to teamai's.
+Yours must take input `suite`, and input `aliases` to run with `--member-aliases`; `benchmark run` refuses it otherwise. Keep `plan`'s step id and `report` as a `finally` step. Dropping `strict: true` lets trials run without the credentials being kept from them, and with each tool's own permission settings rather than unattended: a tool that may not edit fails its trials, and the report opens with a line that says so. When two namespaces you receive both have a `benchmark.yaml`, `benchmark run` refuses with `workflow_namespace_conflict`, naming both files, and never falls back to teamai's.
 
 ## Results
 
@@ -534,15 +534,15 @@ A benchmark run is an ordinary workflow run, so any driver runs it through `work
 
 ```text
 teamai workflow start benchmark --inputs '{"suite":"fix-auth","aliases":"team"}' --timeout 45m
-teamai workflow next <run> --prepare --json '{"driver":{..., "can":{"workspace":["read-only","new","continue","clone"],"isolation":"sandbox","env":true,"setup":true,"tools":["claude"],"end_turn":true}}}'
+teamai workflow next <run> --prepare --json '{"driver":{..., "can":{"workspace":["read-only","new","continue","clone"],"isolation":"sandbox","env":true,"setup":true,"tools":["claude"],"unattended":true,"end_turn":true}}}'
   -> a command lease (plan, check, report): run lease.command in lease.cwd, or in your checkout without one, with TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>
-  -> a prompt lease: launch lease.tool in lease.cwd on lease.prompt, with lease.model, held to lease.limits
+  -> a prompt lease: launch lease.tool in lease.cwd on lease.prompt, with lease.model, in its unattended mode for lease.permissions, held to lease.limits
 teamai workflow report <run> --json '{..., "tool":"claude", "durationMs":84000, "cost":{"amount":0.31,"unit":"USD"}}'
 ```
 
 | | |
 | --- | --- |
-| `driver.can` | On every `next`: `clone` in `workspace`, `isolation: "sandbox"`, `env: true`, `setup: true`, the arms' tools in `tools`, and `end_turn: true` when it ends a turn at the lease's limits. A trial is held for a driver that lacks one of them, and `wait.held[].missing` names it. |
+| `driver.can` | On every `next`: `clone` in `workspace`, `isolation: "sandbox"`, `env: true`, `setup: true`, the arms' tools in `tools`, `unattended: true`, and `end_turn: true` when it ends a turn at the lease's limits. A trial is held for a driver that lacks one of them, and `wait.held[].missing` names it. |
 | `--prepare` | teamai makes each clone on this machine, installs its team assets and runs setup, then answers the lease with `cwd`. |
 | Every process | Runs without the names in `lease.envScope.withhold`, with `lease.env`, and with `TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>`, so a `teamai` call from it changes no run. A command step prints its outputs as JSON on stdout; report them as `outputs`. |
 | `report` | For a prompt: `tool`, `durationMs` measured around the tool launch, and `cost` only when the tool stated one. |

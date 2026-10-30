@@ -125,7 +125,7 @@ arms:
     workflow: plan-then-fix   # workflows/plan-then-fix.yaml，带 inputs: { task: string }
 ```
 
-运行在 arm 的团队修订上读取该工作流及其运行的工作流，像任何团队工作流一样经过你接收的命名空间，并在 arm 的工具、模型和 effort 上运行其中每个 prompt 步骤。工作流没有输入 `task`，或者它的某个步骤会交付、询问某个人，或打开 `continue` 以外的工作区时，运行拒绝该 arm（`arm_workflow_unrunnable`）；你接收的两个命名空间都有该工作流时，以 `workflow_namespace_conflict` 拒绝。trial 的 check 或评判根据工作流留在克隆中的内容判定。它的时长是各个 prompt 轮次之和，token 和成本是各个 prompt 之和。[trial 限制](#trial-限制)的 `timeout` 和 `budget` 是它的 prompt 加起来可以花费的量；`max_turns` 不执行，会列在 `unenforced` 中。
+运行在 arm 的团队修订上读取该工作流及其运行的工作流，像任何团队工作流一样经过你接收的命名空间，并在 arm 的工具、模型和 effort 上运行其中每个 prompt 步骤，像 trial 自己的 prompt 一样无人值守。工作流没有输入 `task`，或者它的某个步骤会交付、询问某个人，或打开 `continue` 以外的工作区时，运行拒绝该 arm（`arm_workflow_unrunnable`）；你接收的两个命名空间都有该工作流时，以 `workflow_namespace_conflict` 拒绝。trial 的 check 或评判根据工作流留在克隆中的内容判定。它的时长是各个 prompt 轮次之和，token 和成本是各个 prompt 之和。[trial 限制](#trial-限制)的 `timeout` 和 `budget` 是它的 prompt 加起来可以花费的量；`max_turns` 不执行，会列在 `unenforced` 中。
 
 ### 用 matrix 交叉工具和团队资产
 
@@ -328,7 +328,7 @@ $ teamai benchmark run fix-auth --sandbox
 
 `benchmark run` 先规划套件，所以无法运行的套件不会留下运行。然后它用套件的 `timeout` 启动工作流 `benchmark`，并用本地驱动驱动它。
 
-每次试验都以无头方式运行工具，使用这台机器上该工具自己的设置，所以要在那里允许工具无需询问就编辑文件和运行命令，Claude 的设置在 `~/.claude/settings.json`。工具不能编辑时，试验会失败。
+每个 trial 的 prompt 都以 [`permissions: unattended`](workflow-advanced.md#无人值守的-prompt) 运行，因为 teamai 自带的工作流在严格的 sandbox 中运行 trial：无论这台机器上该工具的设置如何，工具都无需询问就编辑文件和运行命令。
 
 | 选项或配置 | 效果 |
 | --- | --- |
@@ -416,7 +416,7 @@ outputs: { text: steps.report.outputs.text, table: steps.report.outputs.table }
 ℹ Running the team's workflows/ops/benchmark.yaml, which replaces teamai's benchmark workflow.
 ```
 
-你的版本必须接受输入 `suite`，要用 `--member-aliases` 运行还必须接受输入 `aliases`；否则 `benchmark run` 会拒绝它。保留 `plan` 的步骤 id，并把 `report` 保留为 `finally` 步骤。去掉 `strict: true` 会让 trial 在不扣留凭据的情况下运行。你接收的两个命名空间都有 `benchmark.yaml` 时，`benchmark run` 以 `workflow_namespace_conflict` 拒绝，并指出两个文件，绝不退回 teamai 自带的版本。
+你的版本必须接受输入 `suite`，要用 `--member-aliases` 运行还必须接受输入 `aliases`；否则 `benchmark run` 会拒绝它。保留 `plan` 的步骤 id，并把 `report` 保留为 `finally` 步骤。去掉 `strict: true` 会让 trial 在不扣留凭据的情况下运行，并且使用各工具自己的权限设置，而不是无人值守：不能编辑的工具会让它的 trial 失败，报告的第一行会说明这一点。你接收的两个命名空间都有 `benchmark.yaml` 时，`benchmark run` 以 `workflow_namespace_conflict` 拒绝，并指出两个文件，绝不退回 teamai 自带的版本。
 
 ## 结果
 
@@ -534,15 +534,15 @@ benchmark 运行是一次普通的工作流运行，所以任何驱动都通过 
 
 ```text
 teamai workflow start benchmark --inputs '{"suite":"fix-auth","aliases":"team"}' --timeout 45m
-teamai workflow next <run> --prepare --json '{"driver":{..., "can":{"workspace":["read-only","new","continue","clone"],"isolation":"sandbox","env":true,"setup":true,"tools":["claude"],"end_turn":true}}}'
+teamai workflow next <run> --prepare --json '{"driver":{..., "can":{"workspace":["read-only","new","continue","clone"],"isolation":"sandbox","env":true,"setup":true,"tools":["claude"],"unattended":true,"end_turn":true}}}'
   -> a command lease (plan, check, report): run lease.command in lease.cwd, or in your checkout without one, with TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>
-  -> a prompt lease: launch lease.tool in lease.cwd on lease.prompt, with lease.model, held to lease.limits
+  -> a prompt lease: launch lease.tool in lease.cwd on lease.prompt, with lease.model, in its unattended mode for lease.permissions, held to lease.limits
 teamai workflow report <run> --json '{..., "tool":"claude", "durationMs":84000, "cost":{"amount":0.31,"unit":"USD"}}'
 ```
 
 | | |
 | --- | --- |
-| `driver.can` | 每次 `next` 都带：`workspace` 中的 `clone`、`isolation: "sandbox"`、`env: true`、`setup: true`、`tools` 中列出各 arm 的工具，以及在租约的限制处结束一轮时带 `end_turn: true`。驱动缺少其中任何一项时，trial 会被扣住，`wait.held[].missing` 会指明缺的是哪项。 |
+| `driver.can` | 每次 `next` 都带：`workspace` 中的 `clone`、`isolation: "sandbox"`、`env: true`、`setup: true`、`tools` 中列出各 arm 的工具、`unattended: true`，以及在租约的限制处结束一轮时带 `end_turn: true`。驱动缺少其中任何一项时，trial 会被扣住，`wait.held[].missing` 会指明缺的是哪项。 |
 | `--prepare` | teamai 在本机创建每个克隆、安装其团队资产并运行 setup，然后返回带 `cwd` 的租约。 |
 | 每个进程 | 运行时不带 `lease.envScope.withhold` 中的名字，带 `lease.env` 和 `TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>`，所以从中调用的 `teamai` 不会改变任何运行。命令步骤把它的输出以 JSON 打印到 stdout；把它们作为 `outputs` 报告。 |
 | `report` | 对 prompt：`tool`、只围绕工具启动测得的 `durationMs`，以及仅在工具给出时才带的 `cost`。 |

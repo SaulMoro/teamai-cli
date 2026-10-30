@@ -652,7 +652,7 @@ Pass the whole list, as `explain` does in `fan-build`, when the prompt needs eve
 
 ## Requirements and limits
 
-A step says what it needs in `requires`. `defaults.requires` in a workflow file applies to each step in it. A step's own keys replace those, and `env` lists add up. The workflow file can also set `setup`, `timeout`, and `budget`, and a prompt step can set `max_turns` and `on_limit`.
+A step says what it needs in `requires`. `defaults.requires` in a workflow file applies to each step in it. A step's own keys replace those, and `env` lists add up. The workflow file can also set `setup`, `timeout`, and `budget`, and a prompt step can set `max_turns`, `on_limit` and `permissions`.
 
 ```yaml
 schemaVersion: v1alpha1
@@ -687,6 +687,7 @@ steps:
 | `timeout` | `500ms`, `30s`, `10m`, or `2h`, on a step or the workflow file. A step past it is stopped and ends with outcome `timeout`. On a workflow step, it stops every step inside. On the workflow file, the run ends `failed` with `timeout`. A retry starts the timeout again. | Not a capability. Every driver gets `expiresAt` on the lease. |
 | `budget` | `{ tokens: N }` on the workflow file, a workflow step, or a prompt step with `on_limit: end_turn`. Input and output tokens of every step under it count from when it starts: the run's from its start, a workflow step's from each time it starts, such as a loop's next pass. A retry starts the budget again. Once they pass `N`, its open steps stop and it fails `budget_exceeded`. | A headless prompt under a budget waits. Its success report without tokens fails `budget_unmeasured`. An interactive prompt runs, since a person drives it; when its report has no tokens, its `unenforced` lists `budget`. |
 | `max_turns` | Caps the agent turns of a prompt step. The local driver passes it to headless Claude only. | The step runs, and its `unenforced` lists `max_turns`. |
+| `permissions` | `unattended` on a prompt step: its tool edits files and runs commands without asking. Only under a strict `isolation: sandbox`, set on the step, a step around it, `defaults`, or the step that runs its workflow: a start without one is refused `unattended_unsandboxed`, and a [workflow a step printed](#run-a-workflow-a-step-printed) without one fails that step `invalid_output`. See [Unattended prompts](#unattended-prompts). | The step waits. A run whose only driver lacks `can.unattended` fails it `tool_unavailable`. |
 | `on_limit` | `end_turn` on a prompt step with `timeout`, `max_turns` or `budget`: reaching one, counted from the tool's launch, ends the agent's turn instead of failing the step. The step succeeds with `limit` set and keeps its work, so the steps after it still run. On a workflow step with `timeout` or `budget`, those are what its prompts may spend together: once spent, its pending steps are skipped. `fail`, the default, fails the step at the limit. A step handed back keeps the deadline of its first lease. | Without `can.end_turn`, the step runs under `fail`, and its `unenforced` lists `on_limit`. |
 
 `unenforced` is on the lease, the step, and the run record. Each `interactive: true` step also needs a driver with HITL, as [HITL](#hitl-human-in-the-loop) describes.
@@ -724,8 +725,33 @@ A driver other than `local` declares what it can do in `driver.can` on each `nex
 | `isolation` | Keeps every step at this level: `none`, `worktree`, or `sandbox`. |
 | `tools` | Launches a prompt step that names its `tool` on these tools, such as `["claude"]`. Without it, no such step. |
 | `end_turn` | Ends a prompt's turn at `lease.limits` and reports the `limit` it stopped at, with `durationMs`. |
+| `unattended` | Launches a prompt leased with `permissions: "unattended"` in its tool's own mode for editing and running commands without asking, and fails the step rather than launch a tool that has none. |
 
-An omitted key means the driver cannot. Isolation is best effort, unless `strict: true` makes it a floor. `next` lists any other key in `ignored`. The skill driver of a [coding session](workflow.md#run-from-a-coding-session) declares `hitl`, every `workspace` mode, `env: "commands"`, and `setup`. It never declares `tokens`, `max_turns`, or `network`, and its `isolation` is `none`.
+An omitted key means the driver cannot. Isolation is best effort, unless `strict: true` makes it a floor. `next` lists any other key in `ignored`. The skill driver of a [coding session](workflow.md#run-from-a-coding-session) declares `hitl`, every `workspace` mode, `env: "commands"`, and `setup`. It never declares `tokens`, `max_turns`, `network`, or `unattended`, and its `isolation` is `none`: a coding session never bypasses its person's permissions.
+
+### Unattended prompts
+
+A tool started headless asks before it edits a file or runs a command, and with no one there to answer, the step does nothing. `permissions: unattended` lets the prompt's tool go ahead, so give it only where the machine is one you can throw away:
+
+```yaml
+steps:
+  - id: work
+    prompt: Fix the failing test.
+    permissions: unattended
+    requires: { isolation: sandbox, strict: true }
+```
+
+The local driver then launches the tool in its own mode for that:
+
+| Tool | Launched with |
+|---|---|
+| Claude Code, and the tools on its flags | `--permission-mode bypassPermissions` |
+| CodeBuddy, WorkBuddy | `--permission-mode bypassPermissions` |
+| Codex CLI, and the tools on its flags | `--dangerously-bypass-approvals-and-sandbox` |
+| OpenCode | `--auto`, which still keeps what a permission rule denies |
+| agy | `--dangerously-skip-permissions` |
+
+A tool teamai knows no such mode of fails the step `tool_unavailable`, and is never launched without it. The `Unattended prompts` column of [Tool support](tool-support.md) says which tools have one, and on what evidence. The lease carries `permissions: "unattended"`, so a driver of your own sees it; only one with `can.unattended` takes the step.
 
 ### A required key with no value here
 
