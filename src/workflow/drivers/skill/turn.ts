@@ -348,7 +348,7 @@ function gateAction(state: SkillState, gate: Gate): GateAction | PersonAction {
   if (gate.required) {
     return {
       kind: 'person', why: 'approval', step, pass, message,
-      say: 'Only you can answer this approval. Run one of these commands in your own terminal, or answer it in teamai dashboard.',
+      say: 'Only you can answer this approval: teamai refuses an answer sent from an agent session, so no agent answers it for you. Run one of these commands in your own terminal, or answer it in teamai dashboard.',
       run: gate.options.map((choice) => personRespondLiteral(state.invocation, state.run, { step, pass, choice })),
     };
   }

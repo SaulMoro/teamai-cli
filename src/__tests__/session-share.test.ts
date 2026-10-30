@@ -144,7 +144,7 @@ describe('the session share offer', () => {
 
     expect((await offerOf(await member({ scorers }))).publish).toEqual({
       value: true,
-      why: `${PUBLISH_WHY} Proposed because the attended publish policy (the default) is ask. You confirm it again from your own terminal or the dashboard before it runs.`,
+      why: `${PUBLISH_WHY} Proposed because the attended publish policy (the default) is ask. Keeping it true is not the approval: teamai asks you in your own terminal or the dashboard when the run reaches publish. Set it false to skip publishing.`,
     });
     expect((await offerOf(await member({ scorers, config: { sessions: { publish: { attended: 'off' } } } }))).publish).toEqual({
       value: false,

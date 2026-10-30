@@ -657,7 +657,7 @@ The agent runs describe, which proposes a `value` and a `why` for each input, fo
 |---|---|---|
 | `session` | `"7c1e5a2b-…"` | The session to share: this one. |
 | `source` | `"claude-code"` | This session's tool, as teamai session list names it. |
-| `publish` | `true` | Archive this session's transcript, scrubbed, for the team. Proposed because the attended publish policy (the default) is ask. You confirm it again from your own terminal or the dashboard before it runs. |
+| `publish` | `true` | Archive this session's transcript, scrubbed, for the team. Proposed because the attended publish policy (the default) is ask. Keeping it true is not the approval: teamai asks you in your own terminal or the dashboard when the run reaches publish. Set it false to skip publishing. |
 | `scorers` | `[]` | Scorers that judge this session now. None proposed: the attended scoring policy (the default) is off. Name any scorer to judge with it. |
 | `judge` | `"here"` | claude is installed here, so teamai's own judge scores it. |
 

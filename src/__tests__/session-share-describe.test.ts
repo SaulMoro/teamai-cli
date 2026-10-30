@@ -40,7 +40,7 @@ describe('describe of teamai-share-learnings and teamai-share-session', () => {
       { name: 'source', type: { type: 'string' }, value: 'claude-code', why: 'This session\'s tool, as teamai session list names it.' },
       {
         name: 'publish', type: { type: 'boolean' }, value: true,
-        why: 'Archive this session\'s transcript, scrubbed, for the team. Proposed because the attended publish policy (the default) is ask. You confirm it again from your own terminal or the dashboard before it runs.',
+        why: 'Archive this session\'s transcript, scrubbed, for the team. Proposed because the attended publish policy (the default) is ask. Keeping it true is not the approval: teamai asks you in your own terminal or the dashboard when the run reaches publish. Set it false to skip publishing.',
       },
       {
         name: 'scorers', type: { type: 'array', items: { type: 'string' } }, value: [],
