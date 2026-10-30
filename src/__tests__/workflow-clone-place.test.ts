@@ -19,10 +19,11 @@ import { inProcessClient } from '../workflow/protocol.js';
 import { buildEndRecord } from '../workflow/records.js';
 import { retryStep } from '../workflow/run-controls.js';
 import { nextJudgeLease } from '../workflow/scoring.js';
-import { readRun } from '../workflow/store.js';
+import { readRun, RunIdSchema } from '../workflow/store.js';
 import type { DriverCan } from '../workflow/requirements.js';
 import type { DriverIdentity } from '../workflow/types.js';
 import { branchName } from '../workflow/workspace.js';
+import { cloneHead } from '../workflow/place/place.js';
 
 _setDriverPollMs(20);
 
@@ -239,6 +240,22 @@ describe('a clone place', () => {
 
     expect(inClone.length).toBeGreaterThan(0);
     expect(inClone.filter((line) => line.includes('withheld-token'))).toEqual([]);
+  });
+
+  it.skipIf(process.platform === 'win32')('stops reading the head of a clone at its deadline when git there never returns', async () => {
+    const { config, runId } = await fixture((commit) => PROMPTED(commit));
+    const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
+    const { branch } = z.object({ data: z.object({ lease: z.object({ workspace: z.object({ branch: z.string() }) }) }) }).parse(await prepared(client, runId)).data.lease.workspace;
+    const bin = path.join(path.dirname(config.repo.localPath), 'bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\nfor arg in "$@"; do [ "$arg" = status ] && exec sleep 30; done\nexec ${JSON.stringify(execFileSync('which', ['git'], { encoding: 'utf8' }).trim())} "$@"\n`, { mode: 0o755 });
+    vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+    const started = Date.now();
+
+    const head = await cloneHead(config, RunIdSchema.parse(runId), branch, new Date(started + 500).toISOString());
+
+    expect(head).toBeNull();
+    expect(Date.now() - started).toBeLessThan(10_000);
   });
 
   it('fails the step whose clone is of a commit no source has, and leaves no clone', async () => {

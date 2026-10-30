@@ -242,12 +242,13 @@ export async function commitClone(input: { dir: string; branch: string; step: st
 
 /**
  * The head of the clone of `branch` as it is now, read by git without the names its place withholds, as its commit is:
- * setup or a step may have configured what git starts there. Null when this machine prepared none or git cannot read it.
+ * setup or a step may have configured what git starts there. Null when this machine prepared none, or git cannot read it
+ * before `expiresAt`.
  */
-export async function cloneHead(config: LocalConfig, run: RunId, branch: string): Promise<HeadState | null> {
+export async function cloneHead(config: LocalConfig, run: RunId, branch: string, expiresAt: string | undefined): Promise<HeadState | null> {
   const found = await readReceipt(receiptPath(runsDir(config), run, branch));
   if (found?.state.kind !== 'ready') return null;
-  const git = await cloneGit(found.withhold, undefined);
+  const git = await cloneGit(found.withhold, expiresAt);
   if (typeof git !== 'function') return null;
   const status = await git(path.join(found.root, 'r'), [...HEAD_STATUS]);
   return status.code === 0 ? headStateOf(status.stdout) : null;
