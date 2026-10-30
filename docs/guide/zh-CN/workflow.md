@@ -455,7 +455,7 @@ jq -r 'select((.prs // []) | index("<url>")) | .run' workflows/runs/*.json
 benchmark 运行在启动时冻结计划：运行期间修改套件并 pull，不会改变它运行的任何内容。驱动租用之前被取消的 trial 为 `not_run`，租用之后被取消的为 `error`。`workflow retry` 拒绝 benchmark 运行，因为再次运行的 trial 会改变已计入的结果，并给出启动新运行的命令。`workflow publish` 和 `--claim` 以 `benchmark_local` 拒绝它：它的 trial 需要启动它的那台机器。要只从结束记录算出每个 arm 的通过率（与表格打印的一致），在团队仓库 `teamai-reports` 分支的检出中运行：
 
 ```text
-jq -r '.benchmark as $b | $b.arms[] | .name as $arm | [$b.trials[] | select(.arm == $arm)] | (map(select(.result == "passed")) | length) as $passed | "\($arm) \($passed / length * 100 | round)% (\($passed)/\(length))"' workflows/runs/<run id>.json
+jq -r '. as $b | $b.arms[] | .name as $arm | [$b.trials[] | select(.arm == $arm)] | (map(select(.result == "passed")) | length) as $passed | "\($arm) \($passed / length * 100 | round)% (\($passed)/\(length))"' benchmarks/runs/<run id>.json
 ```
 
 结束运行的操作在锁内排队保存结束记录，在释放锁后发布。发布失败时——没有远端、reports 锁被占用、push 被拒——记录会进入当前 scope 数据目录的本地队列，在下一次 `teamai pull` 时重试。此时 `start`、`next` 的返回会带 `record: pending` 而不是 `record: published`。运行本身不受影响：一台机器在运行开始后崩溃，该运行会以"已开始未结束"的状态保持可见。
