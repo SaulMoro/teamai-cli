@@ -266,14 +266,14 @@ describe('teamai list / status resource coverage', () => {
     await syncWorkflowDefinitions(localConfig);
 
     await list('workflows', { source: 'repo' });
-    expect(lines).toEqual(['', '=== REPO WORKFLOWS ===', '  broken  (not runnable)', '  review-and-fix  (team)', '  session-close  (default)', '']);
+    expect(lines).toEqual(['', '=== REPO WORKFLOWS ===', '  benchmark  (default)', '  broken  (not runnable)', '  review-and-fix  (team)', '  session-close  (default)', '']);
 
     await fse.outputFile(path.join(repoPath, 'workflows', 'session-close.yaml'), workflow('session-close'));
     await syncWorkflowDefinitions(localConfig);
     lines.length = 0;
 
     await list('workflows', { source: 'repo' });
-    expect(lines).toEqual(['', '=== REPO WORKFLOWS ===', '  broken  (not runnable)', '  review-and-fix  (team)', '  session-close  (team)', '']);
+    expect(lines).toEqual(['', '=== REPO WORKFLOWS ===', '  benchmark  (default)', '  broken  (not runnable)', '  review-and-fix  (team)', '  session-close  (team)', '']);
   });
 
   it('status lists the scorers pull cached, next to the resource counts', async () => {
