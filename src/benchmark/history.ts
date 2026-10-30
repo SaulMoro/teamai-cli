@@ -112,7 +112,7 @@ export type ArmDimension = (typeof ARM_DIMENSIONS)[number];
 /**
  * Two current arms that differ in exactly one dimension, compared trial by trial: each pair is both arms' trial of one
  * task and repetition in one run of the current version. `from` is the arm the difference is measured from: for the team,
- * none before the pulled revision without some skills, before a named ref, before the pulled revision; otherwise the
+ * none before the pulled revision without some paths, before a named ref, before the pulled revision; otherwise the
  * first in the suite's order.
  */
 export interface ArmComparison {
@@ -240,7 +240,7 @@ function teamChoiceOf(team: ArmTeam): TeamChoice {
     case 'ref':
       return { kind: 'ref', ref: team.ref };
     case 'without':
-      return { kind: 'without', skills: team.skills };
+      return { kind: 'without', paths: team.paths };
     default: {
       const unhandled: never = team;
       return unhandled;
@@ -373,7 +373,7 @@ function dimensionOf(left: Arm, right: Arm): ArmDimension | undefined {
   return more.length === 0 ? only : undefined;
 }
 
-/** For the team: none, then without some skills, then a named ref, then the pulled revision. */
+/** For the team: none, then without some paths, then a named ref, then the pulled revision. */
 const TEAM_ORDER = { none: 0, without: 1, ref: 2, pulled: 3 } as const satisfies Record<ArmTeam['kind'], number>;
 
 /**

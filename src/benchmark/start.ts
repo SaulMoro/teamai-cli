@@ -28,6 +28,7 @@ import { pinArmWorkflow, type PinnedArmWorkflow } from './arm-workflow.js';
 import type { TeamSelection } from '../workflow/clone.js';
 import type { Added, ArmTeam, SkillChanges } from './terms.js';
 import { commitCacheOf } from '../workflow/place/place.js';
+import { leavesOut, withoutRefusal } from './team-without.js';
 import { commitCheckFiles, trialBlocker, tryCheckAt, type CheckRun, type CommittedSuite } from './trial.js';
 
 /** What planning reads besides the suite. */
@@ -176,7 +177,7 @@ async function plannedArm(config: LocalConfig, arm: Arm, pulled: string, aliases
 
 /**
  * The team assets of `arm` as the plan freezes them: a ref resolved, as `pull --team-ref` resolves it, to a commit on the
- * team remote; each skill it runs without found at the pulled revision. An arm without team assets is refused on a
+ * team remote; the paths it runs without checked at the pulled revision (`withoutRefusal`). An arm without team assets is refused on a
  * machine whose user-scope install delivers to its tool, since the tool would read those assets from the home.
  */
 async function resolveTeam(config: LocalConfig, { name, tool, team }: Arm, pulled: string): Promise<{ ok: true; team: ArmTeam } | Refused> {
@@ -200,16 +201,10 @@ async function resolveTeam(config: LocalConfig, { name, tool, team }: Arm, pulle
       return { ok: false, refused: error('arm_team_unreadable', `Arm "${name}" runs on team ref "${team.ref}", and git could not read this checkout's team repo at ${config.repo.localPath}: ${cause}. Repair the team repo, or run teamai pull, and start again.`) };
     }
     case 'without': {
-      const listed = await git(config.repo.localPath, ['ls-tree', '-r', '--name-only', pulled]);
-      const skills = new Set(listed.stdout.split('\n').flatMap((file) => /(?:^|\/)skills\/(?:[^/]+\/)*?([^/]+)\/SKILL\.md$/.exec(file)?.[1] ?? []));
-      const missing = team.skills.find((skill) => !skills.has(skill));
-      if (listed.code !== 0) {
-        return { ok: false, refused: error('arm_team_unreadable', `Arm "${name}" runs without skill "${team.skills[0]}", and git could not list the skills of the team revision this checkout pulled at ${config.repo.localPath}: ${listed.stderr.trim()}. Repair the team repo, or run teamai pull, and start again.`) };
-      }
-      if (missing !== undefined) {
-        return { ok: false, refused: error('arm_team_unresolved', `Arm "${name}" runs without skill "${missing}", and the team revision this checkout pulled has no skill of that name. Fix the arm's team, push it, run teamai pull, and start again.`) };
-      }
-      return { ok: true, team: { kind: 'without', skills: team.skills, revision: pulled } };
+      const refusal = await withoutRefusal(config, { arm: name, paths: team.paths, revision: pulled });
+      if (refusal?.code === 'arm_team_unreadable') return { ok: false, refused: error('arm_team_unreadable', refusal.message) };
+      if (refusal) return { ok: false, refused: error('arm_team_unresolved', refusal.message) };
+      return { ok: true, team: { kind: 'without', paths: team.paths, revision: pulled } };
     }
     default: {
       const unhandled: never = team;
@@ -219,35 +214,39 @@ async function resolveTeam(config: LocalConfig, { name, tool, team }: Arm, pulle
 }
 
 /**
- * The skills each arm's team assets add, remove or change against the `baseline` team revision: by directory under
- * skills/ for an arm on another ref, and the skills an arm runs without. An arm on the pulled revision, or with no team
- * assets, changes none.
+ * The skills each arm's team assets add, remove or change against the `baseline` team revision, by directory under
+ * skills/: for an arm on another ref, as git compares the two revisions; for an arm without some paths, those of the
+ * baseline it leaves out, whole or in part, namespaced ones too. An arm on the pulled revision, or with no team assets,
+ * changes none.
  */
 async function skillChangesOf(config: LocalConfig, arms: readonly PlannedArm[], { baseline, defaults }: { baseline: string; defaults: string | undefined }): Promise<{ changes: SkillChanges[] } | { refused: Refusal }> {
   const changes: SkillChanges[] = [];
+  const listing = (revision: string) => git(config.repo.localPath, ['ls-tree', '-r', '--name-only', revision]);
+  const lines = (text: string): string[] => text.split('\n').filter((file) => file !== '');
   for (const arm of arms) {
     const against = defaults === undefined || defaults === arm.name ? {} : { defaults };
+    let compared: { before: string[]; after: string[]; touched: string[] };
     if (arm.team.kind === 'without') {
-      const removed = (name: string) => ({ name, change: 'removed' as const });
-      const [first, ...rest] = arm.team.skills;
-      changes.push({ arm: arm.name, ...against, skills: [removed(first), ...rest.map(removed)] });
-      continue;
+      const { paths } = arm.team;
+      const before = await listing(baseline);
+      if (before.code !== 0) {
+        return { refused: error('arm_team_unreadable', `Arm "${arm.name}" runs without ${paths.join(', ')}, and git could not list the skills of the team revision this checkout pulled at ${config.repo.localPath}: ${before.stderr.trim()}. Repair the team repo, or run teamai pull, and start again.`) };
+      }
+      const files = lines(before.stdout);
+      compared = { before: files, after: files.filter((file) => !leavesOut(paths, file)), touched: files.filter((file) => leavesOut(paths, file)) };
+    } else {
+      if (arm.team.kind !== 'ref' || arm.team.revision === baseline) continue;
+      const [before, after, diff] = await Promise.all([listing(baseline), listing(arm.team.revision), git(config.repo.localPath, ['diff', '--name-only', '--no-renames', baseline, arm.team.revision])]);
+      const failed = [before, after, diff].find((read) => read.code !== 0);
+      if (failed) {
+        return { refused: error('arm_team_unreadable', `Arm "${arm.name}" runs on team ref "${arm.team.ref}", and git could not compare its skills with the team revision this checkout pulled at ${config.repo.localPath}: ${failed.stderr.trim()}. Repair the team repo, or run teamai pull, and start again.`) };
+      }
+      compared = { before: lines(before.stdout), after: lines(after.stdout), touched: lines(diff.stdout) };
     }
-    if (arm.team.kind !== 'ref' || arm.team.revision === baseline) continue;
-    const [before, after, diff] = await Promise.all([
-      git(config.repo.localPath, ['ls-tree', '-r', '--name-only', baseline]),
-      git(config.repo.localPath, ['ls-tree', '-r', '--name-only', arm.team.revision]),
-      git(config.repo.localPath, ['diff', '--name-only', '--no-renames', baseline, arm.team.revision]),
-    ]);
-    const failed = [before, after, diff].find((read) => read.code !== 0);
-    if (failed) {
-      return { refused: error('arm_team_unreadable', `Arm "${arm.name}" runs on team ref "${arm.team.ref}", and git could not compare its skills with the team revision this checkout pulled at ${config.repo.localPath}: ${failed.stderr.trim()}. Repair the team repo, or run teamai pull, and start again.`) };
-    }
-    const [had, has] = [skillDirectories(before.stdout), skillDirectories(after.stdout)];
-    const touched = diff.stdout.split('\n').filter((file) => file !== '');
+    const [had, has] = [skillDirectories(compared.before), skillDirectories(compared.after)];
     const skills = [...new Set([...had, ...has])].sort().flatMap((directory) => {
       const change = !had.has(directory) ? 'added' as const : !has.has(directory) ? 'removed' as const
-        : touched.some((file) => file.startsWith(`${directory}/`)) ? 'changed' as const : undefined;
+        : compared.touched.some((file) => file.startsWith(`${directory}/`)) ? 'changed' as const : undefined;
       return change ? [{ name: path.posix.basename(directory), change }] : [];
     });
     const [first, ...rest] = skills;
@@ -256,9 +255,9 @@ async function skillChangesOf(config: LocalConfig, arms: readonly PlannedArm[], 
   return { changes };
 }
 
-/** The skill directories, each the directory of a SKILL.md under skills/, among the files `listing` names, one per line. */
-function skillDirectories(listing: string): Set<string> {
-  return new Set(listing.split('\n').flatMap((file) => (/(?:^|\/)skills\/(?:[^/]+\/)*?[^/]+\/SKILL\.md$/.test(file) ? [path.posix.dirname(file)] : [])));
+/** The skill directories, each the directory of a SKILL.md under skills/, among `files`. */
+function skillDirectories(files: readonly string[]): Set<string> {
+  return new Set(files.flatMap((file) => (/(?:^|\/)skills\/(?:[^/]+\/)*?[^/]+\/SKILL\.md$/.test(file) ? [path.posix.dirname(file)] : [])));
 }
 
 /** What a member can do about an arm whose model gives its tool none. */

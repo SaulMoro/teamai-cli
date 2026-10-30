@@ -175,16 +175,15 @@ describe('benchmark deviations', () => {
 
 describe('benchmark arm team', () => {
   const NONE = { name: 'bare', tool: 'claude', source: 'team', team: { kind: 'none' } } as const;
-  const ABLATED: BenchmarkRecord['arms'][number] = { name: 'no-fixer', tool: 'claude', source: 'team', team: { kind: 'without', skills: ['fixer'], revision: RUN_TEAM } };
-  const selection = (excludedSkills?: string[]) => ({ scope: 'project' as const, additionalRoles: [], ...(excludedSkills ? { excludedSkills } : {}) });
+  const ABLATED: BenchmarkRecord['arms'][number] = { name: 'no-fixer', tool: 'claude', source: 'team', team: { kind: 'without', paths: ['rules/commits.md', 'skills/fixer'], revision: RUN_TEAM } };
 
-  it('counts a trial of an arm without team assets that ran on some, and one that still got a skill its arm runs without, as deviations', () => {
+  it('counts a trial of an arm without team assets that ran on some, and one of an arm without some paths that ran on another revision, as deviations', () => {
     const table = benchmarkTable(recordOf([NONE, ABLATED], [
       { arm: 'bare', agent: { team: undefined } },
       { arm: 'bare', agent: { team: { revision: RUN_TEAM, localChanges: false } } },
-      { arm: 'no-fixer', agent: { team: { revision: RUN_TEAM, localChanges: false, selection: selection(['fixer']) } } },
-      { arm: 'no-fixer', agent: { team: { revision: RUN_TEAM, localChanges: false, selection: selection([]) } } },
       { arm: 'no-fixer', agent: { team: { revision: RUN_TEAM, localChanges: false } } },
+      { arm: 'no-fixer', agent: { team: { revision: 'c'.repeat(40), localChanges: false } } },
+      { arm: 'no-fixer', agent: { team: undefined } },
     ]));
 
     expect(table.results).toMatchObject([{ arm: 'bare', planned: 2, deviations: 1, notVerified: 0 }, { arm: 'no-fixer', planned: 3, deviations: 1, notVerified: 1 }]);
@@ -200,7 +199,7 @@ describe('benchmark arm team', () => {
     expect(text).toContain('| Arm | Tool | Model (source) | Team | Planned |');
     expect(text).toContain(`| pulled | claude | tool default (team) | pulled ${RUN_TEAM.slice(0, 7)} | 1 |`);
     expect(text).toContain('| bare | claude | tool default (team) | none | 1 |');
-    expect(text).toContain(`| no-fixer | claude | tool default (team) | ${RUN_TEAM.slice(0, 7)} without fixer | 1 |`);
+    expect(text).toContain(`| no-fixer | claude | tool default (team) | ${RUN_TEAM.slice(0, 7)} without rules/commits.md, skills/fixer | 1 |`);
     expect(text).toContain('| main | claude | tool default (team) | main ccccccc | 1 |');
     expect(pulledOnly).toContain('| Arm | Tool | Model (source) | Planned |');
   });

@@ -84,12 +84,12 @@ export type JudgeLaunch = z.infer<typeof JudgeLaunchSchema>;
 
 /**
  * Where one launch of a fake tool ran: when it started, in ms since the epoch, which tool, the `--model` and the effort it was launched with (null without one), its cwd,
- * that cwd's own `.git`, its HEAD and its remotes, every file in it outside `.git`, and its AGENTS.md and CLAUDE.md
- * (null when missing).
+ * that cwd's own `.git`, its HEAD and its remotes, every file in it outside `.git`, its AGENTS.md and CLAUDE.md, and the
+ * team instructions pull wrote for Claude, .claude/rules/teamai-context.md (null when missing).
  */
 const ToolLaunchSchema = z.object({
   at: z.number(), tool: z.string(), model: z.string().nullable(), effort: z.string().nullable(), cwd: z.string(), ownGit: z.boolean(), head: z.string(), remotes: z.string(),
-  paths: z.array(z.string()), agentFiles: z.object({ 'AGENTS.md': z.string().nullable(), 'CLAUDE.md': z.string().nullable() }),
+  paths: z.array(z.string()), agentFiles: z.object({ 'AGENTS.md': z.string().nullable(), 'CLAUDE.md': z.string().nullable() }), teamContext: z.string().nullable(),
 });
 export type ToolLaunch = z.infer<typeof ToolLaunchSchema>;
 
@@ -432,7 +432,7 @@ spawnSync('git', ['checkout', '-q', '--detach', head], { env: hooked });
 spawnSync('git', ['branch', '-q', '-D', 'hook-probe']);
 fs.appendFileSync(${JSON.stringify(toolLog)}, JSON.stringify({
   at: Date.now(), tool: ${JSON.stringify(tool)}, model: launchedWith, effort, cwd: process.cwd(), ownGit: fs.statSync('.git').isDirectory(), head, remotes: git('remote'),
-  paths: files('.'), agentFiles: { 'AGENTS.md': read('AGENTS.md'), 'CLAUDE.md': read('CLAUDE.md') },
+  paths: files('.'), agentFiles: { 'AGENTS.md': read('AGENTS.md'), 'CLAUDE.md': read('CLAUDE.md') }, teamContext: read('.claude/rules/teamai-context.md'),
 }) + '\\n');
 ${options.printsEnv ? `fs.writeFileSync(${JSON.stringify(path.join(root, 'tool.env'))}, execFileSync('sh', ['-c', 'env'], { encoding: 'utf8' }));` : ''}
 ${options.firstLaunch ? firstLaunch[options.firstLaunch] : ''}

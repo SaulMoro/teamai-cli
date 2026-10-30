@@ -28,18 +28,14 @@ export function compareAgent(arm: Pick<BenchmarkRecord['arms'][number], 'tool' |
 }
 
 /**
- * Whether the prompt ran on its arm's team assets: the arm's revision, with the skills it runs without left out, or no
- * team assets at all. A trial of a team arm whose record names no team is not verified; one of an arm without team
- * assets that names one ran on them.
+ * Whether the prompt ran on its arm's team assets: the arm's revision, or no team assets at all. A clone without some
+ * paths pulls the commit teamai made of the arm's revision without them, and records the arm's revision. A trial of a
+ * team arm whose record names no team is not verified; one of an arm without team assets that names one ran on them.
  */
 function compareTeam(intended: BenchmarkRecord['arms'][number]['team'], recorded: AgentObservation['team']): Comparison {
   if (intended.kind === 'none') return recorded === undefined ? 'match' : 'deviation';
   if (recorded === undefined) return 'not_verified';
-  if (recorded.revision !== intended.revision) return 'deviation';
-  if (intended.kind !== 'without') return 'match';
-  if (!recorded.selection) return 'not_verified';
-  const excluded = new Set(recorded.selection.excludedSkills ?? []);
-  return intended.skills.every((skill) => excluded.has(skill)) ? 'match' : 'deviation';
+  return recorded.revision === intended.revision ? 'match' : 'deviation';
 }
 
 /**

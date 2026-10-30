@@ -223,7 +223,7 @@ function passRateOf(trials: readonly RecordedTrial[]): { passRate?: PassRate } {
   return trials.length > 0 ? { passRate: { passed: trials.filter(({ result }) => result === 'passed').length, planned: trials.length } } : {};
 }
 
-/** An arm's team assets: `pulled 62432de`, `main 1a2b3c4`, `62432de without fixer` or `none`. */
+/** An arm's team assets: `pulled 62432de`, `main 1a2b3c4`, `62432de without rules/commits.md, skills/fixer` or `none`. */
 function formatTeam(team: RecordedArm['team']): string {
   switch (team.kind) {
     case 'pulled':
@@ -231,7 +231,7 @@ function formatTeam(team: RecordedArm['team']): string {
     case 'ref':
       return `${team.ref} ${team.revision.slice(0, 7)}`;
     case 'without':
-      return `${team.revision.slice(0, 7)} without ${team.skills.join(', ')}`;
+      return `${team.revision.slice(0, 7)} without ${team.paths.join(', ')}`;
     case 'none':
       return 'none';
     default: {

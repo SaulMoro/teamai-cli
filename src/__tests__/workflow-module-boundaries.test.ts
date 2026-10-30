@@ -82,7 +82,7 @@ const ENTRIES: Array<{ folder: string; entries: Record<string, string[] | 'any'>
       'start.ts': ['src/workflow-commands.ts'],
       'report.ts': ['src/workflow-commands.ts'],
     },
-    testEntries: ['plan.ts', 'terms.ts', 'suite.ts', 'check.ts', 'table.ts', 'result.ts', 'trial.ts', 'history.ts', 'run-plan.ts', 'conformance.ts', 'suite-cache.ts', 'arm-workflow.ts'],
+    testEntries: ['plan.ts', 'terms.ts', 'suite.ts', 'check.ts', 'table.ts', 'result.ts', 'trial.ts', 'history.ts', 'run-plan.ts', 'conformance.ts', 'suite-cache.ts', 'arm-workflow.ts', 'team-without.ts'],
   },
 ];
 

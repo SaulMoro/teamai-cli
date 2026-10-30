@@ -87,22 +87,22 @@ describe('parseSuite', () => {
     ]);
   });
 
-  it('reads an arm\'s team as the pulled revision, none, a ref of the team repo, or the pulled revision without some skills', () => {
-    const parsed = parse(suiteText({ arms: '[{ name: team }, { name: bare, team: none }, { name: main, team: main }, { name: no-auth, team: { without: [auth-refresh] } }]' }));
+  it('reads an arm\'s team as the pulled revision, none, a ref of the team repo, or the pulled revision without some paths, sorted', () => {
+    const parsed = parse(suiteText({ arms: '[{ name: team }, { name: bare, team: none }, { name: main, team: main }, { name: no-auth, team: { without: [skills/release, rules/commits.md, skills/dev/deploy, CLAUDE.md] } }]' }));
 
     expect(parsed).toMatchObject({ ok: true, diagnostics: [] });
     expect(parsed.ok && parsed.suite.arms.map(({ name, team }) => ({ name, team }))).toEqual([
       { name: 'team', team: { kind: 'pulled' } },
       { name: 'bare', team: { kind: 'none' } },
       { name: 'main', team: { kind: 'ref', ref: 'main' } },
-      { name: 'no-auth', team: { kind: 'without', skills: ['auth-refresh'] } },
+      { name: 'no-auth', team: { kind: 'without', paths: ['CLAUDE.md', 'rules/commits.md', 'skills/dev/deploy', 'skills/release'] } },
     ]);
   });
 
-  it('names a matrix arm after a ref, a model or a skill list with only name characters', () => {
-    const parsed = parse(suiteText({ arms: '', matrix: '{ model: [sonnet-4.5, opus], team: [origin/main, { without: [auth, db] }] }' }));
+  it('names a matrix arm after a ref, a model or a path list with only name characters', () => {
+    const parsed = parse(suiteText({ arms: '', matrix: '{ model: [sonnet-4.5, opus], team: [origin/main, { without: [skills/auth, rules/db.md] }] }' }));
 
-    expect(parsed.ok && parsed.suite.arms.map(({ name }) => name)).toEqual(['sonnet-4-5-origin-main', 'sonnet-4-5-without-auth-db', 'opus-origin-main', 'opus-without-auth-db']);
+    expect(parsed.ok && parsed.suite.arms.map(({ name }) => name)).toEqual(['sonnet-4-5-origin-main', 'sonnet-4-5-without-rules-db-md-skills-auth', 'opus-origin-main', 'opus-without-rules-db-md-skills-auth']);
   });
 
   it.each([
@@ -112,10 +112,15 @@ describe('parseSuite', () => {
     ['a matrix of 16 arms', suiteText({ arms: '', matrix: '{ tool: [a, b, c, d], model: [e, f, g, h] }' }), 'matrix', 'the matrix makes 16 arms; a suite has 1 to 12'],
     ['a matrix that names two arms alike', suiteText({ arms: '', matrix: '{ model: [sonnet.5, sonnet-5] }' }), 'matrix', 'the matrix names two arms "sonnet-5"; list values whose names differ'],
     ['an arm that changes tool and team', suiteText({ arms: '[{ name: baseline }, { name: codex, tool: codex, team: none }]' }), 'arms.1', 'arm "codex" changes tool and team; an arm changes at most one of the defaults keys'],
-    ['a team ref that is not a ref name', suiteText({ arms: '[{ name: baseline }, { name: main, team: "-x" }]' }), 'arms.1.team', 'must be pulled, none, a branch, tag or commit of the team repo, or { without: [<skill>, ...] }'],
+    ['a team ref that is not a ref name', suiteText({ arms: '[{ name: baseline }, { name: main, team: "-x" }]' }), 'arms.1.team', 'must be pulled, none, a branch, tag or commit of the team repo, or { without: [<path>, ...] }'],
     ['more lanes than a run can wait on', suiteText({ parallel: '33' }), 'parallel', 'must be a whole number from 1 to 32'],
     ['an arm that changes tool and workflow', suiteText({ arms: '[{ name: baseline }, { name: flow, tool: codex, workflow: fixer }]' }), 'arms.1', 'arm "flow" changes tool and workflow; an arm changes at most one of the defaults keys'],
-    ['a team without no skill', suiteText({ arms: '[{ name: baseline }, { name: bare, team: { without: [] } }]' }), 'arms.1.team.without', 'lists the skills the arm runs without, at least one'],
+    ['a team without no path', suiteText({ arms: '[{ name: baseline }, { name: bare, team: { without: [] } }]' }), 'arms.1.team.without', 'lists the team repo paths the arm runs without, at least one'],
+    ['a team without one path twice', suiteText({ arms: '[{ name: baseline }, { name: bare, team: { without: [skills/a, rules/b.md, skills/a] } }]' }), 'arms.1.team.without', 'lists skills/a twice; list each path once'],
+    ...['/skills/a', 'skills/a/', 'skills/../rules', './skills/a', 'skills//a', 'skills\\\\a'].map((written): [string, string, string, string] => [
+      `a team without path ${written}`, suiteText({ arms: `[{ name: baseline }, { name: bare, team: { without: ["${written}"] } }]` }), 'arms.1.team.without.0',
+      'must be a path in the team repo as git lists it, such as skills/release or rules/commits.md: no leading or trailing "/", no backslash and no ".", ".." or empty segment',
+    ]),
   ])('reports %s at its suite file', (_rule, suite, field, message) => {
     const parsed = parse(suite);
 

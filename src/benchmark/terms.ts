@@ -1,6 +1,6 @@
 /** The names, team assets, limits and check files a benchmark plan records. Zod and the commit schema only. */
 import { z } from 'zod';
-import { CommitSchema } from '../workflow/clone.js';
+import { CommitSchema, TeamPathSchema } from '../workflow/clone.js';
 
 /**
  * A task or arm name. It becomes one step-path segment, one expression path field and part of a branch name, so it has
@@ -11,12 +11,12 @@ export const BenchmarkNameSchema = z.string().regex(BENCHMARK_NAME, 'must be let
 
 /**
  * The team assets of an arm's trials, as start resolved the suite's `team`: the revision this checkout pulled, a ref of
- * the team repo at the commit it named then, the pulled revision without some skills, or none.
+ * the team repo at the commit it named then, the pulled revision without some of its paths, sorted, or none.
  */
 export const ArmTeamSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('pulled'), revision: CommitSchema }).strict(),
   z.object({ kind: z.literal('ref'), ref: z.string().min(1), revision: CommitSchema }).strict(),
-  z.object({ kind: z.literal('without'), skills: z.array(z.string().min(1)).nonempty(), revision: CommitSchema }).strict(),
+  z.object({ kind: z.literal('without'), paths: z.array(TeamPathSchema).nonempty(), revision: CommitSchema }).strict(),
   z.object({ kind: z.literal('none') }).strict(),
 ]);
 export type ArmTeam = z.infer<typeof ArmTeamSchema>;

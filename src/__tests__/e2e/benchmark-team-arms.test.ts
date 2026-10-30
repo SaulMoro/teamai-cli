@@ -1,6 +1,6 @@
 /**
  * Real CLI: an arm's `team` decides the team assets its trials get: the revision this checkout pulled, none, another
- * revision of the team repo, or the pulled revision without some skills.
+ * revision of the team repo, or the pulled revision without some of its paths.
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -72,7 +72,7 @@ async function endedRun(fixture: BenchmarkFixture): Promise<string> {
 
 describe('benchmark arm team', () => {
   it('gives each arm of a team matrix its own team assets, and records the revision each trial ran on', async () => {
-    const { fixture, pulled } = await twoRevisions(() => 'matrix:\n  team: [pulled, none, { without: [fixer] }]\n');
+    const { fixture, pulled } = await twoRevisions(() => 'matrix:\n  team: [pulled, none, { without: [skills/fixer] }]\n');
 
     const runId = await endedRun(fixture);
 
@@ -80,13 +80,13 @@ describe('benchmark arm team', () => {
     expect(record.arms.map(({ name, team }) => ({ name, team }))).toEqual([
       { name: 'pulled', team: { kind: 'pulled', revision: pulled } },
       { name: 'none', team: { kind: 'none' } },
-      { name: 'without-fixer', team: { kind: 'without', skills: ['fixer'], revision: pulled } },
+      { name: 'without-skills-fixer', team: { kind: 'without', paths: ['skills/fixer'], revision: pulled } },
     ]);
-    expect(skillsByArm(fixture, runId)).toEqual({ 'pulled': ['fixer', 'helper', 'newer'], 'none': [], 'without-fixer': ['helper', 'newer'] });
-    expect(record.skillChanges).toEqual([{ arm: 'without-fixer', defaults: 'pulled', skills: [{ name: 'fixer', change: 'removed' }] }]);
+    expect(skillsByArm(fixture, runId)).toEqual({ 'pulled': ['fixer', 'helper', 'newer'], 'none': [], 'without-skills-fixer': ['helper', 'newer'] });
+    expect(record.skillChanges).toEqual([{ arm: 'without-skills-fixer', defaults: 'pulled', skills: [{ name: 'fixer', change: 'removed' }] }]);
     const { steps } = RunSchema.parse(fixture.runFile(runId));
     const ranOn = (arm: string): string | undefined => steps.find((step) => step.id === `trials.r1.fix.${arm}.prompt`)?.agent?.team?.revision;
-    expect([ranOn('pulled'), ranOn('none'), ranOn('without-fixer')]).toEqual([pulled, undefined, pulled]);
+    expect([ranOn('pulled'), ranOn('none'), ranOn('without-skills-fixer')]).toEqual([pulled, undefined, pulled]);
     expect(record.trials.map(({ result }) => result)).toEqual(['passed', 'passed', 'passed']);
     const bare = record.trials.find(({ arm }) => arm === 'none')?.order ?? 0;
     expect(fixture.toolLaunches()[bare - 1]?.paths.filter((file) => file.startsWith('.claude/'))).toEqual([]);
@@ -106,28 +106,51 @@ describe('benchmark arm team', () => {
     expect(skillsByArm(fixture, runId)).toEqual({ now: ['fixer', 'helper', 'newer'], before: ['fixer', 'helper'] });
   }, 240_000);
 
-  it('runs an arm without a skill the team keeps under a namespace', async () => {
-    const { fixture, pulled } = await twoRevisions(() => 'arms:\n  - name: now\n  - name: ablated\n    team: { without: [nested] }\n', { 'skills/dev/nested/SKILL.md': SKILL('nested') });
+  // With no role or project, the member receives every namespace beside the shared root.
+  it('runs an arm without a rule, an agent and a namespaced skill, and its clone gets every other team asset', async () => {
+    const fixture = await benchmarkFixture({
+      tool: 'fixes', sandbox: true, tools: ['claude'],
+      suite: suite('arms:\n  - name: now\n  - name: ablated\n    team: { without: [skills/dev/deploy, rules/commits.md, agents/reviewer.md] }\n'),
+      team: {
+        'skills/fixer/SKILL.md': SKILL('fixer'), 'skills/dev/deploy/SKILL.md': SKILL('deploy'),
+        'rules/commits.md': '---\ndescription: How we commit.\n---\nWrite small commits.\n',
+        'agents/reviewer.md': '---\nname: reviewer\ndescription: Reviews a change.\n---\nReview the change.\n',
+        'claudemd/team.md': 'Answer in English.\n',
+      },
+    });
+    fixtures.push(fixture);
+    const pulled = git(fixture.teamClone, ['rev-parse', 'HEAD']);
 
     const runId = await endedRun(fixture);
 
-    expect(RecordSchema.parse(fixture.benchmarkRecord(runId)).arms.map(({ team }) => team)).toEqual([
+    const record = RecordSchema.parse(fixture.benchmarkRecord(runId));
+    expect(record.arms.map(({ team }) => team)).toEqual([
       { kind: 'pulled', revision: pulled },
-      { kind: 'without', skills: ['nested'], revision: pulled },
+      { kind: 'without', paths: ['agents/reviewer.md', 'rules/commits.md', 'skills/dev/deploy'], revision: pulled },
     ]);
+    expect(record.skillChanges).toEqual([{ arm: 'ablated', defaults: 'now', skills: [{ name: 'deploy', change: 'removed' }] }]);
+    const orders = Object.fromEntries(record.trials.map(({ arm, order }) => [arm, order]));
+    const [now, ablated] = ['now', 'ablated'].map((arm) => fixture.toolLaunches()[(orders[arm] ?? 0) - 1]);
+    const delivered = (launch: typeof now): string[] => (launch?.paths ?? []).filter((file) => file.startsWith('.claude/') && !file.startsWith('.claude/skills/teamai')).sort();
+    expect(delivered(now).filter((file) => !delivered(ablated).includes(file))).toEqual(['.claude/agents/reviewer.md', '.claude/rules/commits.md', '.claude/skills/deploy/SKILL.md']);
+    expect(delivered(ablated).filter((file) => !delivered(now).includes(file))).toEqual([]);
+    expect(delivered(ablated)).toContain('.claude/skills/fixer/SKILL.md');
+    expect(ablated?.teamContext).toContain('Answer in English.');
+    const { steps } = RunSchema.parse(fixture.runFile(runId));
+    expect(steps.find((step) => step.id === 'trials.r1.fix.ablated.prompt')?.agent?.team?.revision).toBe(pulled);
   }, 240_000);
 
   it.each([
     ['a ref the team repo does not have', () => 'arms:\n  - name: now\n  - name: gone\n    team: no-such-branch\n', 'arm_team_unresolved',
       'Arm "gone" runs on team ref "no-such-branch", which is no branch, tag or commit of this checkout\'s team repo that holds teamai.yaml. Its branches: main. Fetch it, or fix the arm\'s team, push it, run teamai pull, and start again.'],
-    ['a skill the pulled revision does not have', () => 'arms:\n  - name: now\n  - name: ablated\n    team: { without: [nope] }\n', 'arm_team_unresolved',
-      'Arm "ablated" runs without skill "nope", and the team revision this checkout pulled has no skill of that name. Fix the arm\'s team, push it, run teamai pull, and start again.'],
+    ['a path the pulled revision does not have', () => 'arms:\n  - name: now\n  - name: ablated\n    team: { without: [skills/nope] }\n', 'arm_team_unresolved',
+      'Arm "ablated" runs without skills/nope, which team revision {pulled} does not have. Fix the arm\'s team, push it, run teamai pull, and start again.'],
   ])('refuses to start an arm whose team names %s, and leaves no run', async (_case, armsOf, code, message) => {
-    const { fixture } = await twoRevisions(armsOf);
+    const { fixture, pulled } = await twoRevisions(armsOf);
 
     const started = await fixture.teamai(['benchmark', 'run', 'fix']);
 
-    expect(ErrorSchema.parse(envelope(started))).toEqual({ error: { code, message } });
+    expect(ErrorSchema.parse(envelope(started))).toEqual({ error: { code, message: message.replace('{pulled}', pulled.slice(0, 7)) } });
     expect(fixture.runIds()).toEqual([]);
   }, 120_000);
 

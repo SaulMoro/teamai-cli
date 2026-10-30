@@ -13,7 +13,7 @@ import { isYamlNode, locate } from '../workflow/parse-context.js';
 import { durationMs } from '../workflow/parse.js';
 import { SetupSchema, type Setup } from '../workflow/requirements.js';
 import type { WorkflowDiagnostic } from '../workflow/types.js';
-import { CommitSchema } from '../workflow/clone.js';
+import { CommitSchema, TeamPathSchema } from '../workflow/clone.js';
 import { BENCHMARK_NAME, BenchmarkNameSchema, type TrialLimits } from './terms.js';
 
 /** The project the tasks start from. A URL, never a local path or a URL with credentials: it travels in plan and record. */
@@ -55,28 +55,35 @@ const DurationSchema = z.string({ required_error: 'timeout is required: the run\
 
 /**
  * The team assets an arm's trials get: the team revision this checkout pulled, none at all, a branch, tag or commit of
- * the team repo that start resolves, or the pulled revision without some of its skills.
+ * the team repo that start resolves, or the pulled revision without some of its files and directories, each a path in
+ * the team repo, sorted.
  */
 export type TeamChoice =
   | { kind: 'pulled' }
   | { kind: 'none' }
   | { kind: 'ref'; ref: string }
-  | { kind: 'without'; skills: [string, ...string[]] };
+  | { kind: 'without'; paths: [string, ...string[]] };
 
 const PULLED: TeamChoice = { kind: 'pulled' };
 /** A workflow file's name, as `workflows/<name>.yaml` names it. */
 const WorkflowNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'must be the name of a workflow, as workflows/<name>.yaml names it');
-const TEAM_HELP = 'must be pulled, none, a branch, tag or commit of the team repo, or { without: [<skill>, ...] }';
+const TEAM_HELP = 'must be pulled, none, a branch, tag or commit of the team repo, or { without: [<path>, ...] }';
 /** A ref as git names one, which a plan and a record carry: no leading "-", no "..", "//" or trailing "/" or ".". */
 const TEAM_REF = /^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._/-]+(?<![/.])$/;
 
 const TeamValueSchema = z.union([
   z.string().regex(TEAM_REF, TEAM_HELP),
   z.object({
-    without: z.array(z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'must be the name of a skill directory')).nonempty('lists the skills the arm runs without, at least one'),
+    without: z.array(TeamPathSchema).nonempty('lists the team repo paths the arm runs without, at least one').superRefine((paths, ctx) => {
+      const twice = paths.find((one, index) => paths.indexOf(one) !== index);
+      if (twice !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `lists ${twice} twice; list each path once` });
+    }),
   }).strict(),
 ]).transform((value): TeamChoice => {
-  if (typeof value !== 'string') return { kind: 'without', skills: value.without };
+  if (typeof value !== 'string') {
+    const [first, ...rest] = [...value.without].sort();
+    return { kind: 'without', paths: [first, ...rest] };
+  }
   if (value === 'pulled') return PULLED;
   return value === 'none' ? { kind: 'none' } : { kind: 'ref', ref: value };
 });
@@ -197,7 +204,7 @@ function teamSegment(team: TeamChoice): string {
     case 'ref':
       return team.ref;
     case 'without':
-      return ['without', ...team.skills].join('-');
+      return ['without', ...team.paths].join('-');
     default: {
       const unhandled: never = team;
       return unhandled;

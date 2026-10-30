@@ -370,7 +370,7 @@ describe('benchmark regression', () => {
   it('finds nothing to compare with when an arm ran another workflow or team choice before', () => {
     const before = run({ id: 'before', startedAt: at(12), arms: ONE, trials: passes(['passed', 'passed', 'passed']) });
     const withWorkflow = { ...before, benchmark: { ...before.benchmark, arms: before.benchmark.arms.map((arm) => ({ ...arm, workflow: { name: 'fixer', sourceHash: 'h' } })) } };
-    const without = run({ id: 'without', startedAt: at(12), arms: [{ ...CLAUDE, team: { kind: 'without', skills: ['fixer'], revision: 'team-without' } }], trials: passes(['passed', 'passed', 'passed']) });
+    const without = run({ id: 'without', startedAt: at(12), arms: [{ ...CLAUDE, team: { kind: 'without', paths: ['skills/fixer'], revision: 'team-without' } }], trials: passes(['passed', 'passed', 'passed']) });
 
     expect(regressionOf(current, [withWorkflow, without])).toEqual({ kind: 'no_comparable' });
   });

@@ -106,7 +106,7 @@ describe('benchmark plan run', () => {
 
   it.each([
     ['none', { treatment: 'none' }],
-    ['{ without: [fixer] }', { revision: RUN_TEAM, selection: { additionalRoles: [], projects: [], excludedSkills: [] }, treatment: { without: ['fixer'] } }],
+    ['{ without: [skills/fixer, rules/commits.md] }', { revision: RUN_TEAM, selection: { additionalRoles: [], projects: [], excludedSkills: [] }, treatment: { without: ['rules/commits.md', 'skills/fixer'] } }],
     ['main', { revision: RUN_TEAM, selection: { additionalRoles: [], projects: [], excludedSkills: [] }, treatment: 'main' }],
   ])('opens each trial of an arm with team %s in a clone with that team', async (team, expected) => {
     const { config, runId } = await startFix({ arms: 2, teams: ['', team] });

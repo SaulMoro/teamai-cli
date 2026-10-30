@@ -332,7 +332,7 @@ function cloneTeamOf(team: ArmTeam, selection: TeamSelection): CloneTeam {
     case 'ref':
       return { revision: team.revision, selection, treatment: team.ref };
     case 'without':
-      return { revision: team.revision, selection, treatment: { without: team.skills } };
+      return { revision: team.revision, selection, treatment: { without: team.paths } };
     default: {
       const unhandled: never = team;
       return unhandled;

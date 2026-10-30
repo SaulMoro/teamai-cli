@@ -18,7 +18,7 @@ function resetBenchmarks(){benchData=null;benchError='';benchLoading=false;bench
 const passOf=r=>r&&r.planned?r.passed/r.planned:null;
 const rateCell=r=>r&&r.planned?pct(r.passed/r.planned)+' <small>'+number(r.passed)+'/'+number(r.planned)+'</small>':'<span class="muted">—</span>';
 const armColor=i=>'var(--arm'+(i%12+1)+')';
-const teamText=team=>!team||team.kind==='pulled'?t('pulled team'):team.kind==='none'?t('no team assets'):team.kind==='ref'?team.ref:t('without')+' '+team.skills.join(', ');
+const teamText=team=>!team||team.kind==='pulled'?t('pulled team'):team.kind==='none'?t('no team assets'):team.kind==='ref'?team.ref:t('without')+' '+team.paths.join(', ');
 const armConfig=a=>a.tool+(a.model?' · '+a.model:'')+(a.effort?' · '+a.effort:'')+(a.team&&a.team.kind!=='pulled'?' · '+teamText(a.team):'');
 const armTitle=a=>a.arm+' ('+armConfig(a)+')';
 const swatch=i=>'<i class="swatch" style="background:'+armColor(i)+'"></i>';
