@@ -870,8 +870,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
         }
         // A wait for a call that could not take a lease says nothing about what is left; ask again with room.
         if (!canTakeLease) continue;
-        // The run waits for the judges of its `sampling: all` entries: this driver judges them itself, up to the run's deadline,
-        // so the next `next` ends a run out of time as timed out.
+        // The run waits for the judges of its `sampling: all` entries: this driver judges them itself, up to the run's
+        // deadline, so the next `next` ends a run out of time as timed out.
         if (typeof wait.judging === 'number') {
           const run = await readRun(config, runId);
           const ends = deadlineSignal(typeof run === 'object' ? runDeadline(run) : undefined);

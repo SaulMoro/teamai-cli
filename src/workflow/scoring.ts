@@ -1261,9 +1261,10 @@ export type RunJudging =
   | { kind: 'stopped' };
 
 /**
- * The local driver's judge loop: judges the open entries of `runId`'s `sampling: all` scorers with this machine's judge tools,
- * leasing only those entries, as `scoreOnDemand` judges a pass. A judge that fails is submitted failed at once, so its
- * entry settles now instead of when its lease lapses. Any other driver may still judge them with `teamai score --next`.
+ * The local driver's judge loop: judges the open entries of `runId`'s `sampling: all` scorers with this machine's judge
+ * tools, leasing only those entries, as `scoreOnDemand` judges a pass. A judge that fails is submitted failed at once, so
+ * its entry settles now instead of when its lease lapses. Any other driver may still judge them with
+ * `teamai score --next`.
  */
 export async function judgeRunEntries(config: LocalConfig, runId: string, cwd: string, signal?: AbortSignal): Promise<RunJudging> {
   const run = await readRun(config, runId);

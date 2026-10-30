@@ -1,6 +1,7 @@
 /**
  * The judge entries of a run: the passes a judge may judge, which install may judge them, and how the entries of its
- * scorers that judge every pass stand. It imports neither engine.ts nor local-driver.ts, so the engine can import it without a cycle.
+ * `sampling: all` scorers stand. It imports neither engine.ts nor local-driver.ts, so the engine can import it without a
+ * cycle.
  */
 import { AttemptStore, type AttemptRecord } from '../scorers/attempts.js';
 import { entryIdOf, entryState, type EntryState, type EntryVerdict } from '../scorers/entry.js';
@@ -84,8 +85,8 @@ export function isUnsettled(entry: VerdictEntry): boolean {
 }
 
 /**
- * Every entry this install judges of `run`'s steps whose scorers have `sampling: all`: one per pinned scorer this teamai
- * can read and pass of such a step. None for a run whose definition has no such step.
+ * Every entry this install judges of `run`'s steps whose scorers have `sampling: all`: one per pinned scorer this
+ * teamai can read and pass of such a step. None for a run whose definition has no such step.
  */
 export async function verdictEntries(config: LocalConfig, run: RunState, now: string): Promise<VerdictEntry[]> {
   if (!judgeablePasses(run).some(({ definition }) => definition.scorers?.sampling === 'all')) return [];
@@ -106,9 +107,10 @@ export async function verdictEntries(config: LocalConfig, run: RunState, now: st
 }
 
 /**
- * What `finishRun` keeps in `run.verdicts`: every entry `verdictEntries` lists as it stands when the run's steps end, so a
- * timeout, a limit and a cancel all freeze an entry still open or leased as `unscored / run_ended`. No attempt is written for it: a judge
- * failure code an older teamai does not know would make it skip that attempt file and see the entry open again.
+ * What `finishRun` keeps in `run.verdicts`: every entry `verdictEntries` lists as it stands when the run's steps end,
+ * so a timeout, a limit and a cancel all freeze an entry still open or leased as `unscored / run_ended`. No attempt is
+ * written for it: a judge failure code an older teamai does not know would make it skip that attempt file and see the
+ * entry open again.
  */
 export async function freezeVerdicts(config: LocalConfig, run: RunState, now: string): Promise<EntryVerdict[]> {
   return (await verdictEntries(config, run, now)).map((entry) => {
