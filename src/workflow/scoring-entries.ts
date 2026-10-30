@@ -73,6 +73,11 @@ export interface VerdictEntry {
   attempts: AttemptRecord[];
 }
 
+/** Whether `run`'s steps ended, which froze the verdicts of its `sampling: all` entries: it settled, or runs `finally`. */
+export function verdictsFrozen(run: RunState): boolean {
+  return run.status !== 'running' || run.finalizing !== undefined;
+}
+
 /** Whether a judge may still settle `entry`. */
 export function isUnsettled(entry: VerdictEntry): boolean {
   return entry.state.kind === 'open' || entry.state.kind === 'leased';
@@ -101,8 +106,8 @@ export async function verdictEntries(config: LocalConfig, run: RunState, now: st
 }
 
 /**
- * What `finishRun` keeps in `run.verdicts`: every entry `verdictEntries` lists as it stands when the run ends, so a timeout, a limit
- * and a cancel all freeze an entry still open or leased as `unscored / run_ended`. No attempt is written for it: a judge
+ * What `finishRun` keeps in `run.verdicts`: every entry `verdictEntries` lists as it stands when the run's steps end, so a
+ * timeout, a limit and a cancel all freeze an entry still open or leased as `unscored / run_ended`. No attempt is written for it: a judge
  * failure code an older teamai does not know would make it skip that attempt file and see the entry open again.
  */
 export async function freezeVerdicts(config: LocalConfig, run: RunState, now: string): Promise<EntryVerdict[]> {

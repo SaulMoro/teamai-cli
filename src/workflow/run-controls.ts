@@ -1,7 +1,7 @@
 import type { LocalConfig } from '../types.js';
 import { agentEvidence, type AgentEvidence } from './attempt-marker.js';
 import {
-  enterFinalizing, error, finishRun, locateStep, ok, parseReads, reconcileRun, respondCommand, runData, withRun, workflowLabel,
+  error, finishRun, locateStep, ok, parseReads, reconcileRun, respondCommand, runData, withRun, workflowLabel,
   type RunReads, type WorkflowResult,
 } from './engine.js';
 import { evaluateExpression, isTruthy } from './expression.js';
@@ -28,9 +28,10 @@ async function controlRun(
     const before = JSON.stringify(run);
     checkout = run.driver?.workspace ?? checkout;
     const finish = async (result: WorkflowResult): Promise<void> => {
-      if (enterFinalizing(run, result, now)) return;
+      const finished = await finishRun(config, run, now, result, secrets, run.driver);
+      if (finished.kind === 'finalizing') return;
       runSettled = true;
-      queued = await finishRun(config, run, now, result, secrets, run.driver);
+      queued = finished.queued;
     };
     const opEnvelope = await operation(run, now, finish);
     return { envelope: opEnvelope, save: JSON.stringify(run) !== before };

@@ -41,7 +41,7 @@ import { answerSchema, evidenceDirOf, sweepEvidence, type Rubrics } from '../sco
 import { agreedRunMode } from '../launch-context.js';
 import { sessionLabel, SessionWork, writeSessionEvidence, type JudgedSession, type NamedSession, type SessionEntry } from '../session-flow/session-work.js';
 import { buildEvidence, evidencePlan } from './scoring-evidence.js';
-import { isUnsettled, judgeablePasses, sameSubject, scoredPasses, verdictEntries } from './scoring-entries.js';
+import { isUnsettled, judgeablePasses, sameSubject, scoredPasses, verdictEntries, verdictsFrozen } from './scoring-entries.js';
 import { error, ok } from './engine.js';
 import { stepDefinitions } from './scope.js';
 import { parseStepPath } from './step-path.js';
@@ -195,10 +195,10 @@ async function scoreEntries(config: LocalConfig, now: string, teamBatch: boolean
       .sort((left, right) => left.requestedAt.localeCompare(right.requestedAt) || left.scorer.localeCompare(right.scorer))
       .flatMap((request) => entryOf(request.scorer, request.pin, request.subject, request));
     const definitionOf = stepDefinitions(run);
-    // Every pass of a step whose scorers have `sampling: all` is judged, until its run ends and freezes the verdicts.
+    // Every pass of a step whose scorers have `sampling: all` is judged, until its steps end and freeze the verdicts.
     const sampled = scoredPasses(run, install).flatMap(({ subject, scorers }) => {
       const all = definitionOf(subject.step)?.scorers?.sampling === 'all';
-      return all && run.status !== 'running' ? [] : scorers.flatMap((scorer) => {
+      return all && verdictsFrozen(run) ? [] : scorers.flatMap((scorer) => {
         const pin = run.scorers?.[scorer];
         const definition = pin && pinnedDefinition(scorer, pin);
         if (!pin || !definition || !(all || isSampled(scorer, subject, definition.samplingRate))) return [];
@@ -869,7 +869,7 @@ async function settleJudgeLease<T extends { kind: string }>(
       return settle(leased);
     }
     const { run } = leased;
-    if (run.status !== 'running' && leased.members.some(({ attempt }) => stepDefinitions(run)(attempt.subject.step)?.scorers?.sampling === 'all')) {
+    if (verdictsFrozen(run) && leased.members.some(({ attempt }) => stepDefinitions(run)(attempt.subject.step)?.scorers?.sampling === 'all')) {
       for (const { attempt } of leased.members) await AttemptStore.write(config, { ...attempt, status: 'released', settledAt: now });
       return error('entry_closed', `Run ${run.id} ended and froze this entry's verdict, so the answer was not recorded.`);
     }

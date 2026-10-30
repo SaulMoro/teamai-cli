@@ -341,7 +341,7 @@ export interface RunState {
   scorers?: Record<string, PinnedScorer>;
   /** The frozen benchmark plan; set only by `start --benchmark`. */
   benchmark?: BenchmarkPlan;
-  /** How each entry of the run's required scorers stood when the run ended, frozen by `finishRun`. */
+  /** How each entry of the run's `sampling: all` scorers stood when its steps ended, before `finally`, frozen by `finishRun`. */
   verdicts?: EntryVerdict[];
   /**
    * Step instances in declaration order; a sub-workflow's steps follow the step that runs it. Never changed in place:

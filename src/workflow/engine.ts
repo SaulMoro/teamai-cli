@@ -412,10 +412,10 @@ const FINALLY_MS = 10 * 60_000;
 
 /**
  * Holds a run whose steps ended, by any outcome, while its `finally` steps run: its status stays `running`, and what it
- * ended with waits in `finalizing` until they settle, by `until` at the latest. Called after the steps and any judges the
- * run waits for settle, right before `finishRun`. False when there is nothing to run: no `finally`, or it already runs.
+ * ended with waits in `finalizing` until they settle, by `until` at the latest. False when there is nothing to run: no
+ * `finally`, or it already runs.
  */
-export function enterFinalizing(run: RunState, { outcome, end, failure }: WorkflowResult, now: string): boolean {
+function enterFinalizing(run: RunState, { outcome, end, failure }: WorkflowResult, now: string): boolean {
   const steps = run.definition.finally;
   if (!steps || run.finalizing) return false;
   const until = new Date(Date.parse(now) + FINALLY_MS).toISOString();
@@ -437,9 +437,14 @@ function settleRun(run: RunState, now: string, result: WorkflowResult): void {
   run.updatedAt = now;
 }
 
+/** What `finishRun` did: started the run's `finally` steps, or settled it, with whether its end record was queued. */
+export type Finished = { kind: 'finalizing' } | { kind: 'settled'; queued: boolean };
+
 /**
- * Settles a run and queues its end record in the same locked operation. The entries of its required scorers freeze as
- * they stand, in `run.verdicts`, and the evidence collected for their passes goes, so its record holds every verdict.
+ * Finishes a run whose steps ended, after any judges it waits for, in one order: the entries of its `sampling: all`
+ * scorers freeze as they stand, in `run.verdicts`, and the evidence collected for their passes goes; then its `finally`
+ * steps run; then, once they settle, it settles and queues its end record in the same locked operation. So nothing a
+ * `finally` step does changes a verdict, and its record holds every verdict.
  */
 export async function finishRun(
   config: LocalConfig,
@@ -448,16 +453,21 @@ export async function finishRun(
   result: WorkflowResult,
   secrets: Record<string, string>,
   driver?: DriverIdentity,
-): Promise<boolean> {
-  settleRun(run, now, result);
-  const verdicts = await freezeVerdicts(config, run, now);
-  if (verdicts.length > 0) {
-    run.verdicts = verdicts;
-    await removeSubjectEvidence(scoresDir(config), verdicts.map(({ step, pass }) => ({ runId: run.id, step, pass })));
+): Promise<Finished> {
+  if (!run.finalizing) {
+    // The run changes now, so an entry is read as of now, as every judge read it.
+    run.updatedAt = now;
+    const verdicts = await freezeVerdicts(config, run, now);
+    if (verdicts.length > 0) {
+      run.verdicts = verdicts;
+      await removeSubjectEvidence(scoresDir(config), verdicts.map(({ step, pass }) => ({ runId: run.id, step, pass })));
+    }
   }
+  if (enterFinalizing(run, result, now)) return { kind: 'finalizing' };
+  settleRun(run, now, result);
   const queued = await queueRunRecord(config, run, driver, 'end', secrets);
   run.endRecordQueued = queued;
-  return queued;
+  return { kind: 'settled', queued };
 }
 
 /** The run summary returned by manual control operations. */
@@ -1347,8 +1357,9 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       if (judging > 0) {
         return answer({ wait: { reason: `${judging} judge entries of run ${run.id} are not settled: judge them with teamai score --next`, judging } });
       }
-      if (enterFinalizing(run, result, now)) return undefined;
-      queued = await finishRun(config, run, now, result, env.secrets, driver);
+      const finished = await finishRun(config, run, now, result, env.secrets, driver);
+      if (finished.kind === 'finalizing') return undefined;
+      queued = finished.queued;
       return answer(doneData(run));
     };
     const wait = (open = run.steps.find((step) => step.status === 'leased')): { save: boolean; envelope: WorkflowEnvelope } => {
