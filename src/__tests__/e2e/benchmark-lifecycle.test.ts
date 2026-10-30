@@ -50,7 +50,7 @@ const RecordSchema = z.object({
   trials: z.array(z.object({ arm: z.string(), step: z.string(), result: z.string() })),
 }).passthrough();
 const DoneSchema = z.object({ run: z.string(), outcome: z.string(), outputs: z.object({ text: z.string() }).passthrough() }).passthrough();
-const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, tools: ['claude'] };
+const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, tools: ['claude'], unattended: true };
 const DRIVER = { kind: 'external', machine: 'lifecycle-driver', workspace: '/fake' };
 const NO_SANDBOX = { driver: { kind: 'ci', machine: 'ci', workspace: '/fake', can: { workspace: ['read-only', 'new', 'continue', 'clone'] } } };
 

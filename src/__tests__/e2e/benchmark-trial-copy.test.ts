@@ -16,7 +16,7 @@ import { LeaseWireSchema } from '../../workflow/lease-wire.js';
 import { benchmarkFixture, envelope, FIX_SUITE, startFixBenchmark, type BenchmarkFixture, type Envelope } from '../helpers/benchmark-fixture.js';
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'dist', 'index.js');
-const CAN = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, setup: true, tools: ['claude'] };
+const CAN = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, setup: true, tools: ['claude'], unattended: true };
 const CRITERIA_TASK = `schemaVersion: v1alpha1
 title: Fix the answer
 prompt: Make answer.js export 42.

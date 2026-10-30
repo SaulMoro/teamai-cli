@@ -80,7 +80,7 @@ async function runLocally(fixture: BenchmarkFixture): Promise<{ runId: string; t
 }
 
 const EXTERNAL = { kind: 'external', machine: 'ci', workspace: '/ci' };
-const CAN = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, tools: ['claude', 'codex'] };
+const CAN = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, tools: ['claude', 'codex'], unattended: true };
 const LeaseSchema = z.object({
   attempt: z.string(), revision: z.number(), command: z.string().optional(), env: z.record(z.string()).optional(), output: z.unknown().optional(),
   cwd: z.string().optional(), envScope: z.object({ withhold: z.array(z.string()) }).passthrough().optional(),

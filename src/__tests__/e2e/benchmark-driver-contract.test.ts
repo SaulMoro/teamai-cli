@@ -31,7 +31,7 @@ timeout: ${timeout}
 ${trial ? `trial: ${trial}\n` : ''}`;
 }
 
-const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, setup: true, tools: ['claude'], end_turn: true };
+const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, setup: true, tools: ['claude'], end_turn: true, unattended: true };
 const HeldSchema = z.array(z.object({ step: z.string(), missing: z.array(z.string()) }));
 const DoneSchema = z.object({ outcome: z.string(), failure: z.object({ code: z.string() }).optional(), outputs: z.object({ text: z.string().optional() }) });
 /** A lease `next` answers: with `--prepare`, with the place it prepared for the step; else run in the driver's workspace. */

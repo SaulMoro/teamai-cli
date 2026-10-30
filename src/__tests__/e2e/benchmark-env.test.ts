@@ -42,7 +42,7 @@ prompt: Make answer.js export 42.
 startingCommit: '{{startingCommit}}'
 successCriteria: answer.js exports 42.
 `;
-const CAN = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, setup: true, tools: ['claude'] };
+const CAN = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, setup: true, tools: ['claude'], unattended: true };
 /** A lease `next --prepare` answers, with the place it prepared for the step. */
 const LeaseSchema = z.intersection(LeaseWireSchema, z.object({ cwd: z.string().min(1) }));
 type Lease = z.infer<typeof LeaseSchema>;

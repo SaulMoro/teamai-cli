@@ -145,7 +145,7 @@ describe('benchmark judges on the local driver', () => {
 
 /** A driver of another machine that provides the clones and sandbox a benchmark's steps require, and launches claude. */
 const EXTERNAL = { kind: 'external', machine: 'ci', workspace: '/work' };
-const CAN = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, setup: true, tools: ['claude'] };
+const CAN = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, setup: true, tools: ['claude'], unattended: true };
 const NextSchema = z.object({
   data: z.union([
     z.object({ lease: z.object({ attempt: z.string(), revision: z.number(), step: z.string(), command: z.string().optional(), prompt: z.string().optional(), env: z.record(z.string()).optional(), cwd: z.string() }).passthrough() }),
