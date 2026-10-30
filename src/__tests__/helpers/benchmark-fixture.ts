@@ -270,21 +270,27 @@ fs.writeFileSync('test/helpers/pass.setup.js', "require('node:assert').strictEqu
 for (const args of [['init', '-q'], ['add', '-A'], ['-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '-qm', 'helper']]) execFileSync('git', args, { cwd: 'test/helpers' });`,
 };
 
-/** The fake claude's code that leaves session fake-session, in which the Skill tool loaded `skill` when its cwd has it. */
+/**
+ * The fake claude's code that leaves session fake-session, in which the Skill tool loaded `skill` when its cwd has it. A
+ * launch whose prompt says `[no session]` leaves none, and removes the one an earlier launch in its cwd left.
+ */
 function loadsSkill(skill: string): string {
   return `{
   const project = path.join(process.env.HOME, '.claude', 'projects', process.cwd().replace(/[^a-zA-Z0-9]/g, '-'));
   fs.mkdirSync(project, { recursive: true });
-  const at = new Date(Date.now() + 1000).toISOString();
-  const base = { cwd: process.cwd(), sessionId: 'fake-session', timestamp: at };
-  const asked = { ...base, type: 'user', uuid: 'u1', parentUuid: null, message: { role: 'user', content: 'Fix it.' } };
-  const loaded = [
-    { ...base, type: 'assistant', uuid: 'u2', parentUuid: 'u1', message: { role: 'assistant', model: 'fake-claude', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Skill', input: { skill: ${JSON.stringify(skill)} } }] } },
-    { ...base, type: 'user', uuid: 'u3', parentUuid: 'u2', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'Launching skill: ${skill}' }] } },
-  ];
-  const answered = { ...base, type: 'assistant', uuid: 'u2', parentUuid: 'u1', message: { role: 'assistant', model: 'fake-claude', content: [{ type: 'text', text: 'Fixed.' }] } };
-  const has = fs.existsSync(path.join('.claude', 'skills', ${JSON.stringify(skill)}, 'SKILL.md'));
-  fs.writeFileSync(path.join(project, 'fake-session.jsonl'), [asked, ...(has ? loaded : [answered])].map((line) => JSON.stringify(line)).join('\\n') + '\\n');
+  if (process.argv.some((arg) => arg.includes('[no session]'))) fs.rmSync(path.join(project, 'fake-session.jsonl'), { force: true });
+  else {
+    const at = new Date(Date.now() + 1000).toISOString();
+    const base = { cwd: process.cwd(), sessionId: 'fake-session', timestamp: at };
+    const asked = { ...base, type: 'user', uuid: 'u1', parentUuid: null, message: { role: 'user', content: 'Fix it.' } };
+    const loaded = [
+      { ...base, type: 'assistant', uuid: 'u2', parentUuid: 'u1', message: { role: 'assistant', model: 'fake-claude', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Skill', input: { skill: ${JSON.stringify(skill)} } }] } },
+      { ...base, type: 'user', uuid: 'u3', parentUuid: 'u2', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'Launching skill: ${skill}' }] } },
+    ];
+    const answered = { ...base, type: 'assistant', uuid: 'u2', parentUuid: 'u1', message: { role: 'assistant', model: 'fake-claude', content: [{ type: 'text', text: 'Fixed.' }] } };
+    const has = fs.existsSync(path.join('.claude', 'skills', ${JSON.stringify(skill)}, 'SKILL.md'));
+    fs.writeFileSync(path.join(project, 'fake-session.jsonl'), [asked, ...(has ? loaded : [answered])].map((line) => JSON.stringify(line)).join('\\n') + '\\n');
+  }
 }`;
 }
 
@@ -338,7 +344,8 @@ export interface BenchmarkFixtureOptions {
   role?: string;
   /**
    * A skill each launch of the fake claude loads when its cwd has it in .claude/skills: each launch leaves a Claude session,
-   * as the local driver reads `used` from, in which the Skill tool loaded it or no skill. Without it, no launch leaves one.
+   * as the local driver reads `used` from, in which the Skill tool loaded it or no skill, unless its prompt says
+   * `[no session]`. Without it, no launch leaves one.
    */
   loadsSkill?: string;
 }

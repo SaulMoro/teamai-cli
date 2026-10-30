@@ -38,11 +38,27 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
-/** A team with skills fixer and helper on main, and branch bench/without-fixer without fixer, pulled by the member. */
-async function twoBranches(loadsSkill?: string): Promise<BenchmarkFixture> {
+/** A workflow of two prompts, the second of which the fake claude leaves no session for. */
+const LOOK_THEN_FIX = `schemaVersion: v1alpha1
+name: look-then-fix
+description: Look at the task, then fix it.
+inputs: { task: string }
+steps:
+  - id: look
+    prompt: "Look at this: {{ inputs.task }}"
+  - id: fix
+    needs: [look]
+    prompt: Fix it. [no session]
+`;
+
+/**
+ * A team with skills fixer and helper and workflow look-then-fix on main, and branch bench/without-fixer without fixer,
+ * pulled by the member, who runs `suite`.
+ */
+async function twoBranches(loadsSkill?: string, suite = SUITE): Promise<BenchmarkFixture> {
   const fixture = await benchmarkFixture({
-    tool: 'fixes', sandbox: true, tools: ['claude'], suite: SUITE,
-    team: { 'skills/fixer/SKILL.md': SKILL('fixer'), 'skills/helper/SKILL.md': SKILL('helper') },
+    tool: 'fixes', sandbox: true, tools: ['claude'], suite,
+    team: { 'skills/fixer/SKILL.md': SKILL('fixer'), 'skills/helper/SKILL.md': SKILL('helper'), 'workflows/look-then-fix.yaml': LOOK_THEN_FIX },
     ...(loadsSkill ? { loadsSkill } : {}),
   });
   fixtures.push(fixture);
@@ -84,5 +100,19 @@ describe('benchmark skill loads', () => {
     const done = DoneSchema.parse(envelope(ran).data?.done);
     expect(RecordSchema.parse(fixture.benchmarkRecord(done.run)).trials.map(({ used }) => used)).toEqual([undefined, undefined]);
     expect(done.outputs.text).toContain('| without-skill | fixer | removed | unknown (1) | unknown (1) |');
+  }, 240_000);
+
+  it('reads a skill as unknown, never as not loaded, on workflow arms whose prompts were only partly observed', async () => {
+    const fixture = await twoBranches('fixer', SUITE.replace('  tool: claude\n', '  tool: claude\n  workflow: look-then-fix\n'));
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+
+    expect(ran.code, said(ran)).toBe(0);
+    const done = DoneSchema.parse(envelope(ran).data?.done);
+    expect(RecordSchema.parse(fixture.benchmarkRecord(done.run)).trials.map(({ arm, used }) => ({ arm, used }))).toEqual([
+      { arm: 'with-skill', used: { fixer: 'loaded' } },
+      { arm: 'without-skill', used: { fixer: 'unknown' } },
+    ]);
+    expect(done.outputs.text).toContain('| without-skill | fixer | removed | unknown (1) | 1/1 |');
   }, 240_000);
 });
