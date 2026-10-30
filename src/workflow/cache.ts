@@ -18,9 +18,10 @@ import {
   type LocalConfig,
 } from '../types.js';
 import { LineCounter, parseDocument } from 'yaml';
+import { z } from 'zod';
 import { formatDiagnostic, parseWorkflow, promptFileDiagnostics, stepField } from './parse.js';
 import { locate, valueNode, type WorkflowFiles } from './parse-context.js';
-import { stepWorkflow, type CachedWorkflow, type ResolvedWorkflow, type WorkflowDefinition, type WorkflowDiagnostic, type WorkflowStep } from './types.js';
+import { stepWorkflow, type CachedWorkflow, type ResolvedWorkflow, type WorkflowDefinition, type WorkflowDiagnostic, type WorkflowFailure, type WorkflowStep } from './types.js';
 import { DefaultWorkflows } from '../default-workflows.js';
 import { assertSafePath, assertWithinRoot } from '../utils/path-safety.js';
 import { createGit } from '../utils/git.js';
@@ -132,8 +133,30 @@ async function readCache(config: LocalConfig, name: string): Promise<CachedWorkf
 }
 
 /**
+ * The cache entry of a name that two namespaces the member receives both define: the sync's diagnostic, kept in place
+ * of a definition, so teamai's default of that name does not stand in for the team's.
+ */
+const NamespaceConflictSchema = z.object({ conflict: z.string() });
+
+async function readConflict(config: LocalConfig, name: string): Promise<string | undefined> {
+  const raw = await readFileSafe(cachePath(config, name));
+  if (raw === null) return undefined;
+  try {
+    return NamespaceConflictSchema.safeParse(JSON.parse(raw)).data?.conflict;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Why `name` has no runnable version when the last sync found it in two namespaces the member receives. */
+export async function namespaceConflictOf(config: LocalConfig, name: string): Promise<WorkflowFailure | undefined> {
+  const conflict = await readConflict(config, name);
+  return conflict === undefined ? undefined : { code: 'workflow_namespace_conflict', message: `${conflict}. Keep it in one namespace, push it, run teamai pull, and start again.` };
+}
+
+/**
  * The last validated team definition for `name`, by name then by alias, else teamai's default of that name; null when
- * neither runs.
+ * neither runs, and when two namespaces the member receives both define it.
  */
 export async function loadCachedWorkflow(config: LocalConfig, name: string): Promise<ResolvedWorkflow | null> {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) return null;
@@ -143,7 +166,7 @@ export async function loadCachedWorkflow(config: LocalConfig, name: string): Pro
   const aliases = team.filter((entry) => entry.definition.alias === name);
   if (aliases.length === 1) return { ...aliases[0], source: 'team' };
   const shipped = DefaultWorkflows.named(name);
-  return shipped && aliases.length === 0 ? { ...shipped, source: 'default' } : null;
+  return shipped && aliases.length === 0 && await readConflict(config, name) === undefined ? { ...shipped, source: 'default' } : null;
 }
 
 /**
@@ -166,9 +189,10 @@ export async function resolveStart(config: LocalConfig, name: string): Promise<{
 export async function listCachedWorkflows(config: LocalConfig): Promise<ResolvedWorkflow[]> {
   const team = await listTeamWorkflows(config);
   const taken = new Set(team.flatMap(({ definition }) => [definition.name, ...(definition.alias ? [definition.alias] : [])]));
+  const conflicted = new Set((await Promise.all(DefaultWorkflows.all().map(async ({ definition }) => (await readConflict(config, definition.name) === undefined ? [] : [definition.name])))).flat());
   return [
     ...team.map((entry) => ({ ...entry, source: 'team' as const })),
-    ...DefaultWorkflows.all().filter(({ definition }) => !taken.has(definition.name)).map((entry) => ({ ...entry, source: 'default' as const })),
+    ...DefaultWorkflows.all().filter(({ definition }) => !taken.has(definition.name) && !conflicted.has(definition.name)).map((entry) => ({ ...entry, source: 'default' as const })),
   ].sort((left, right) => (left.definition.name < right.definition.name ? -1 : 1));
 }
 
@@ -400,7 +424,8 @@ export async function syncWorkflowDefinitions(
   }
   const settle = checkReferences(checked, kept);
 
-  const reject = ({ stem, relativePath }: Checked, diagnostics: WorkflowDiagnostic[]): void => {
+  const conflicted = new Set<string>();
+  const reject = async ({ stem, relativePath }: Checked, diagnostics: WorkflowDiagnostic[]): Promise<void> => {
     result.invalid.push(...diagnostics);
     for (const diagnostic of diagnostics) log.warn(`[workflows] ${formatDiagnostic(diagnostic)}`);
     const settled = settle(stem);
@@ -411,7 +436,12 @@ export async function syncWorkflowDefinitions(
       log.warn(`[workflows] Kept the last valid version of ${stem}; this revision was not cached`);
     } else {
       result.unrunnable.push(relativePath);
-      log.warn(DefaultWorkflows.named(stem)
+      const conflict = diagnostics.find((diagnostic) => diagnostic.code === 'workflow_namespace_conflict');
+      if (conflict) {
+        conflicted.add(stem);
+        if (!options.dryRun) await writeJsonAtomic(cachePath(config, stem), { conflict: conflict.message });
+      }
+      log.warn(DefaultWorkflows.named(stem) && !conflict
         ? `[workflows] ${relativePath} has no runnable version, so teamai's default ${stem} stays in effect`
         : `[workflows] ${relativePath} has no runnable version`);
     }
@@ -419,12 +449,12 @@ export async function syncWorkflowDefinitions(
   let wrote = 0;
   for (const file of checked) {
     if ('diagnostics' in file) {
-      reject(file, file.diagnostics);
+      await reject(file, file.diagnostics);
       continue;
     }
     const problems = settle(file.stem).revision;
     if (problems.length > 0) {
-      reject(file, problems);
+      await reject(file, problems);
       continue;
     }
     const previous = kept.get(file.stem);
@@ -442,7 +472,7 @@ export async function syncWorkflowDefinitions(
     } satisfies CachedWorkflow);
     wrote += 1;
   }
-  if (!options.dryRun) await dropUnsettled(config, new Set([...result.cached, ...result.kept]));
+  if (!options.dryRun) await dropUnsettled(config, new Set([...result.cached, ...result.kept, ...conflicted]));
   const valid = new Set(scorers.cached);
   for (const file of checked) {
     const definition = settle(file.stem).definition;

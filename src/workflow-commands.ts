@@ -20,7 +20,7 @@ import { getBusinessRoot, getDataHome, usesBranchWorktree, type LocalConfig, typ
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, runsDir } from './workflow/store.js';
 import { inProcessClient, resumeRefusal, workflowNotFound, type InvokeCaller, type NextPrepare } from './workflow/protocol.js';
 import { parseInputsFlag, parseSkillCall, parseSkillResume, runSkillCall, sessionDrivesRun, skillContext } from './workflow/drivers/skill/skill-driver.js';
-import { loadCachedWorkflow, resolveStart } from './workflow/cache.js';
+import { loadCachedWorkflow, namespaceConflictOf, resolveStart } from './workflow/cache.js';
 import { durationMs } from './workflow/parse.js';
 import { findRunConfig } from './workflow/run-location.js';
 import { resolveRunMode } from './launch-context.js';
@@ -918,7 +918,7 @@ export async function benchmarkRun(suite: string, options: { driver?: string; sa
   }
   const workflow = await loadCachedWorkflow(config, BENCHMARK_WORKFLOW);
   if (!workflow) {
-    writeEnvelope({ error: workflowNotFound(BENCHMARK_WORKFLOW) }, secrets);
+    writeEnvelope({ error: await namespaceConflictOf(config, BENCHMARK_WORKFLOW) ?? workflowNotFound(BENCHMARK_WORKFLOW) }, secrets);
     return;
   }
   if (workflow.source === 'team') {

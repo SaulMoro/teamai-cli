@@ -123,6 +123,44 @@ describe('a team benchmark workflow', () => {
     expect(fixture.benchmarkRecord(done.run)).toMatchObject({ workflow: { name: 'benchmark', origin: { source: 'team' } } });
   }, 180_000);
 
+  it('is refused by benchmark run, leaving no run, when two namespaces the member receives both define it', async () => {
+    const fixture = await benchmarkFixture({
+      tool: 'fixes', sandbox: true, role: 'ops',
+      team: {
+        'manifest/roles.yaml': 'version: 1\nroles:\n  - id: ops\n    resources:\n      knowledge: []\n      skills: []\n      workflows: [a, b]\n',
+        'workflows/a/benchmark.yaml': RELAXED, 'workflows/b/benchmark.yaml': RELAXED,
+      },
+    });
+    fixtures.push(fixture);
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+
+    expect(ran.code, said(ran)).toBe(1);
+    expect(envelope(ran).error).toEqual({
+      code: 'workflow_namespace_conflict',
+      message: 'Workflow "benchmark" is defined in multiple active namespaces (workflows/a/benchmark.yaml and workflows/b/benchmark.yaml); conflicting workflows have no runnable version. Keep it in one namespace, push it, run teamai pull, and start again.',
+    });
+    expect(fixture.runIds()).toEqual([]);
+    expect(fixture.toolLaunches()).toEqual([]);
+  }, 180_000);
+
+  it('is refused by workflow start, leaving no run, when two namespaces the member receives both define it', async () => {
+    const fixture = await benchmarkFixture({
+      tool: 'fixes', sandbox: true, role: 'ops',
+      team: {
+        'manifest/roles.yaml': 'version: 1\nroles:\n  - id: ops\n    resources:\n      knowledge: []\n      skills: []\n      workflows: [a, b]\n',
+        'workflows/a/benchmark.yaml': RELAXED, 'workflows/b/benchmark.yaml': RELAXED,
+      },
+    });
+    fixtures.push(fixture);
+
+    const started = await fixture.teamai(['workflow', 'start', 'benchmark', '--driver', 'local', '--sandbox', '--timeout', '10m', '--inputs', '{"suite":"fix","aliases":"team"}']);
+
+    expect(started.code, said(started)).toBe(1);
+    expect(envelope(started).error).toMatchObject({ code: 'workflow_namespace_conflict' });
+    expect(fixture.runIds()).toEqual([]);
+  }, 180_000);
+
   it('is refused by benchmark run, leaving no run, when it takes no input suite', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true });
     fixtures.push(fixture);

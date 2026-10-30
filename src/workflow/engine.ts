@@ -5,7 +5,7 @@ import { DriverSchema, sameDriver } from '../driver-identity.js';
 import { RunModeSchema, type RunMode } from '../launch-context.js';
 import { log } from '../utils/logger.js';
 import type { LocalConfig } from '../types.js';
-import { loadCachedWorkflow, loadWorkflowTree } from './cache.js';
+import { loadCachedWorkflow, loadWorkflowTree, namespaceConflictOf } from './cache.js';
 import { claimedAway, claimRun, publishRunEnd, reconcileTakenCopies } from './handoff.js';
 import {
   evaluateExpression, expressionPaths, isRecord, isTruthy, parseExpression, resolvePath,
@@ -979,6 +979,8 @@ export async function startRun(
 ): Promise<WorkflowEnvelope> {
   const cached = await loadCachedWorkflow(config, name);
   if (!cached) {
+    const conflict = await namespaceConflictOf(config, name);
+    if (conflict) return error(conflict.code, conflict.message);
     return error('workflow_not_found', `Workflow "${name}" has no runnable version. Check workflows/${name}.yaml and pull again.`);
   }
   const mismatch = inputsMismatch(cached.definition.name, cached.definition.inputs, inputs);
