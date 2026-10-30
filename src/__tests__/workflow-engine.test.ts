@@ -5635,4 +5635,49 @@ describe('strict requirements', () => {
     expect(started).toMatchObject({ data: { status: 'running' } });
     expect(fs.readdirSync(runsDir(config))).toHaveLength(1);
   });
+
+  it('starts an unattended prompt only under a strict sandbox: its own, an enclosing step, defaults, or the step that runs its workflow', async () => {
+    const { config } = testConfig();
+    const files = {
+      fix: workflow('fix', `  - id: work
+    prompt: Fix it.
+    permissions: unattended
+`),
+      ci: workflow('ci', `  - id: run
+    workflow: fix
+    requires: { isolation: sandbox, strict: true }
+`),
+      loose: workflow('loose', `  - id: run
+    workflow: fix
+    requires: { isolation: sandbox }
+`),
+      own: workflow('own', `  - id: work
+    prompt: Fix it.
+    permissions: unattended
+    requires: { isolation: sandbox, strict: true }
+`),
+      outer: workflow('outer', `  - id: scope
+    requires: { isolation: sandbox, strict: true }
+    workflow:
+      steps:
+        - id: work
+          prompt: Fix it.
+          permissions: unattended
+`),
+      sealed: workflow('sealed', `  - id: work
+    prompt: Fix it.
+    permissions: unattended
+`, 'defaults: { requires: { isolation: sandbox, strict: true } }\n'),
+    };
+    for (const [file, body] of Object.entries(files)) fs.writeFileSync(path.join(config.repo.localPath, 'workflows', `${file}.yaml`), body);
+    await syncWorkflowDefinitions(config);
+    const secrets = await knownSecrets(config);
+    const start = (name: string): ReturnType<typeof startRun> => startRun(config, name, {}, { secrets });
+
+    const needs = 'sets permissions: unattended, which only a strict sandbox allows. Add requires: { isolation: sandbox, strict: true } to it, to a step around it, to defaults, or to the step that runs its workflow.';
+    expect(await start('fix')).toEqual({ error: { code: 'unattended_unsandboxed', message: `Step "work" ${needs}` } });
+    expect(await start('loose')).toEqual({ error: { code: 'unattended_unsandboxed', message: `Step "run.work" ${needs}` } });
+    for (const name of ['ci', 'own', 'outer', 'sealed']) expect(await start(name)).toMatchObject({ data: { status: 'running' } });
+    expect(fs.readdirSync(runsDir(config))).toHaveLength(4);
+  });
 });

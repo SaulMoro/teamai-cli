@@ -124,6 +124,10 @@ describe('admitting a workflow output', () => {
       definition: { ...GENERATED, steps: [{ id: 'hello', workflow: 'inner.0123456789ab', requires: { isolation: 'sandbox', strict: true } }] },
       workflows: { 'inner.0123456789ab': inner([{ id: 'push', command: 'git push', requires: { env: ['GH_TOKEN'] } }]) },
     }, 'Step "plan" output definition is not a workflow this run can admit: workflows/generated.yaml:6: field "steps[0].workflow": steps[0].workflow runs workflow "inner.0123456789ab", whose steps[0].requires.env names GH_TOKEN, which the strict sandbox it runs in withholds from every step. Remove it from requires.env, or drop strict.'],
+    ['an unattended prompt that no strict sandbox covers', {
+      definition: { ...GENERATED, steps: [{ id: 'arm', workflow: 'inner.0123456789ab', requires: { isolation: 'sandbox' } }] },
+      workflows: { 'inner.0123456789ab': inner([{ id: 'work', prompt: 'Fix it.', permissions: 'unattended' }]) },
+    }, 'Step "plan" output definition is not a workflow this run can admit: step "arm.work" sets permissions: unattended, which only a strict sandbox allows. Add requires: { isolation: sandbox, strict: true } to it, to a step around it, to defaults, or to the step that runs its workflow.'],
     ['a named workflow that does not parse', {
       definition: GENERATED,
       workflows: { 'inner.0123456789ab': inner([{ id: 'work' }]) },
@@ -149,6 +153,21 @@ describe('admitting a workflow output', () => {
     expect(done).toMatchObject({ data: { done: { outcome: 'failed' } } });
     const run = await readRun(config, runId);
     expect(typeof run === 'object' && run.admitted).toBeUndefined();
+  });
+
+  it('admits an unattended prompt under the strict sandbox of the step that runs the output', async () => {
+    const config = testConfig();
+    const runId = await startPlanned(config, PLANNED.replace('workflow: { from: plan }', 'workflow: { from: plan }\n    requires: { isolation: sandbox, strict: true }'));
+    const bundle = {
+      definition: { ...GENERATED, steps: [{ id: 'arm', workflow: 'inner.0123456789ab' }] },
+      workflows: { 'inner.0123456789ab': inner([{ id: 'work', prompt: 'Fix it.', permissions: 'unattended' }]) },
+    };
+
+    const reported = await settle(config, runId, 'plan', { definition: bundle, plan: {} });
+
+    expect(reported).toMatchObject({ data: { step: { id: 'plan', status: 'succeeded' } } });
+    const run = await readRun(config, runId);
+    expect(typeof run === 'object' && run.admitted?.plan?.definition).toMatchObject({ steps: [{ id: 'arm' }] });
   });
 
   it('fails the producer whose workflow field is no object, before it is admitted', async () => {

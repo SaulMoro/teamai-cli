@@ -37,7 +37,7 @@ import { completeDelivery, deliveringStep, nextDelivery, resolveCreate, sameCrea
 import type { DeliveryKey, UnresolvedCreate } from './delivery-schema.js';
 import {
   CAN_KEYS, CanSchema, LimitSchema, ReportedUnenforcedSchema, heldFor, setsLimit, mergeRequirements, negotiate, reportedUnenforced, requiredEnvKeys, unionUnenforced,
-  type Allow, type DriverCan, type EnvFacts, type Held, type Limit, type Negotiation, type ReportedUnenforced, type Terms, type TurnLimits,
+  type Allow, type DriverCan, type EnvFacts, type Held, type InEffect, type Limit, type Negotiation, type ReportedUnenforced, type Terms, type TurnLimits,
 } from './requirements.js';
 import { knownSecrets, resolveWorkflowEnv, secretKey, type WorkflowEnv } from '../env-resolution.js';
 import { deliveryLockPath, generateRunId, installOwner, isRunId, readAttemptOutcomes, readRun, updateRun } from './store.js';
@@ -199,6 +199,17 @@ export function locateStep(run: RunState, path: string): { scope: Scope; step: W
     scope = child;
   }
   return undefined;
+}
+
+/** The requirements in effect at each `from` step that runs the workflow producer `path` outputs. */
+export function fromRequirements(run: RunState, path: string): InEffect[] {
+  const located = locateStep(run, path);
+  if (!located) return [];
+  const { scope, step: producer } = located;
+  return scope.definition.steps.flatMap((step) => {
+    const runs = stepWorkflow(step);
+    return runs?.kind === 'from' && runs.step === producer.id ? [mergeRequirements(scope.requires, step.requires)] : [];
+  });
 }
 
 /** A step's `with` holds a template that does not parse. Pull rejects one, so the run file was changed. */
@@ -1908,7 +1919,7 @@ async function admitReported(
   const state = run.steps.find((item) => item.status === 'leased' && item.lease.attempt === report.attempt);
   const field = state && workflowField(locateStep(run, state.id)?.step.output);
   if (!state || field === undefined) return undefined;
-  const admission = await admitWorkflow(config, { kind: 'output', step: state.id, field, output: report.outputs }, { secrets, ...(run.base ? { base: run.base } : {}) });
+  const admission = await admitWorkflow(config, { kind: 'output', step: state.id, field, output: report.outputs, runsUnder: fromRequirements(run, state.id) }, { secrets, ...(run.base ? { base: run.base } : {}) });
   return { attempt: report.attempt, output: report.outputs, admission };
 }
 

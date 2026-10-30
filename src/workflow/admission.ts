@@ -13,6 +13,7 @@ import { redactJson } from '../utils/redact.js';
 import { withTeamRevision, workflowsRunBy } from './cache.js';
 import { formatDiagnostic, parseWorkflow } from './parse.js';
 import type { WorkflowFiles } from './parse-context.js';
+import { mergeRequirements, type InEffect } from './requirements.js';
 import { stepWorkflow, type RunState, type WorkflowDefinition, type WorkflowFailure, type WorkflowStep } from './types.js';
 import { deliveryProblem } from './workspace.js';
 
@@ -25,11 +26,11 @@ export interface Admitted {
 
 /**
  * What is admitted: a workflow the cache holds, with every workflow it runs; or the output of step `step`, whose field
- * `field` holds a workflow bundle that a `from` step runs.
+ * `field` holds a workflow bundle that `from` steps run under the requirements `runsUnder` lists, one for each.
  */
 export type Candidate =
   | { kind: 'cached'; definition: WorkflowDefinition; workflows: Record<string, WorkflowDefinition> }
-  | { kind: 'output'; step: string; field: string; output: Record<string, unknown> };
+  | { kind: 'output'; step: string; field: string; output: Record<string, unknown>; runsUnder: readonly InEffect[] };
 
 /**
  * A workflow bundle as a step prints it: the definition, the workflows it runs by name under the keys it names them by,
@@ -62,9 +63,11 @@ export async function admitWorkflow(
     if (secret) {
       return { failure: { code: 'invalid_inputs', message: `${secret.label} holds the value of ${secret.name}, a secret on this machine, which a run never stores. Replace the value with requires.env: [${secret.name}], then pull again.` } };
     }
+    const unsandboxed = unattendedUnsandboxed(definition, workflows, {});
+    if (unsandboxed !== undefined) return { failure: { code: 'unattended_unsandboxed', message: `Step "${unsandboxed}" ${UNATTENDED_NEEDS}` } };
     return checked({ definition, workflows, scorers }, base);
   }
-  const { step, field, output } = candidate;
+  const { step, field, output, runsUnder } = candidate;
   const refuse = (why: string): { failure: WorkflowFailure } => ({
     failure: { code: 'invalid_output', message: `Step "${step}" output ${field} is not a workflow this run can admit: ${why}` },
   });
@@ -77,6 +80,9 @@ export async function admitWorkflow(
   }
   const parsed = parseBundle(bundle.data.definition, bundle.data.workflows ?? {});
   if ('failed' in parsed) return refuse(parsed.failed);
+  // A bundle no `from` step runs is checked as one with no floor, so it never brings an unattended step unchecked.
+  const unsandboxed = (runsUnder.length > 0 ? runsUnder : [{}]).map((outer) => unattendedUnsandboxed(parsed.definition, parsed.workflows, outer)).find((path) => path !== undefined);
+  if (unsandboxed !== undefined) return refuse(`step "${unsandboxed}" ${UNATTENDED_NEEDS}`);
   const listed = listedScorers([parsed.definition, ...Object.values(parsed.workflows)]);
   const { teamRevision } = bundle.data;
   const team = teamRevision === undefined ? { pins: await pinScorers(config, listed) } : await withTeamRevision(config, teamRevision, async (at) => {
@@ -162,6 +168,30 @@ function unrunnableStep(steps: readonly WorkflowStep[], prefix = ''): string | u
     if (inner) return inner;
   }
   return undefined;
+}
+
+const UNATTENDED_NEEDS = 'sets permissions: unattended, which only a strict sandbox allows. Add requires: { isolation: sandbox, strict: true } to it, to a step around it, to defaults, or to the step that runs its workflow.';
+
+/**
+ * The path of the first step of `definition`, run under `outer`, whose `permissions: unattended` no strict
+ * `isolation: sandbox` floor covers, as the engine's scopes merge requirements: the step's own, the steps around it,
+ * `defaults`, and the step that runs a workflow file by name.
+ */
+function unattendedUnsandboxed(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, outer: InEffect): string | undefined {
+  const visit = (steps: readonly WorkflowStep[], scope: InEffect, prefix: string): string | undefined => {
+    for (const step of steps) {
+      const path = `${prefix}${step.id}`;
+      const requires = mergeRequirements(scope, step.requires);
+      if (step.permissions === 'unattended' && requires.floor?.isolation !== 'sandbox') return path;
+      const child = stepWorkflow(step);
+      const named = child?.kind === 'named' ? workflows[child.name] : undefined;
+      const inner = child?.kind === 'inline' ? visit(child.workflow.steps, requires, `${path}.`)
+        : named ? visit(named.steps, mergeRequirements(requires, named.defaults?.requires), `${path}.`) : undefined;
+      if (inner !== undefined) return inner;
+    }
+    return undefined;
+  };
+  return visit(definition.steps, mergeRequirements(outer, definition.defaults?.requires), '');
 }
 
 /** The name of the first of `secrets` whose value `value` holds, as the run file would mask it. */

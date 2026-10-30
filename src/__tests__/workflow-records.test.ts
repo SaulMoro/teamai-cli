@@ -224,6 +224,8 @@ describe('#1083 workflow run records', () => {
       'no_base_branch',
       // Refusals of a local start with a step the local driver could never take for a strict requirement, before any run exists.
       'requirement_unmet',
+      // Refusals of a start with an unattended prompt step that no strict sandbox covers, before any run exists.
+      'unattended_unsandboxed',
       // Refusals of a start from an agent session that the workflow's invoke does not let start it.
       'invoke_denied',
       // Refusals of an agent's start of an invoke: ask workflow in an unattended run, where no person can agree.
