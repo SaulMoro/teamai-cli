@@ -1820,21 +1820,23 @@ describe('workflow and json outputs', () => {
     return result.ok ? [] : result.diagnostics.map(formatDiagnostic);
   };
 
-  it('keeps a workflow field and an opaque json field, which the outputs may pass whole', () => {
+  it('keeps a workflow field and an opaque json field, which the outputs may pass whole, and reads their names in a union as literals', () => {
     const result = parse(`schemaVersion: v1alpha1
 name: build
 description: Plan, then report.
 steps:
   - id: plan
     command: node plan.js
-    output: { definition: workflow, plan: json, notes: [json] }
+    output: { definition: workflow, plan: json, notes: [json], phase: "workflow | json" }
 outputs:
   plan: steps.plan.outputs.plan
 `);
     expect(result.ok, result.ok ? '' : result.diagnostics.map(formatDiagnostic).join('\n')).toBe(true);
     if (!result.ok) return;
     expect(result.definition.steps[0]?.output).toEqual({
-      type: 'object', fields: { definition: { type: 'workflow' }, plan: { type: 'json' }, notes: { type: 'array', items: { type: 'json' } } },
+      type: 'object', fields: {
+        definition: { type: 'workflow' }, plan: { type: 'json' }, notes: { type: 'array', items: { type: 'json' } }, phase: { type: 'enum', values: ['workflow', 'json'] },
+      },
     });
   });
 
@@ -1934,6 +1936,22 @@ steps:
       'workflows/build.yaml:20: field "steps[4].workflow": step "extra" workflow must be the name of a workflow in workflows/, an inline workflow, or { from: <step> }',
       'workflows/build.yaml:14: field "steps[2].workflow.from": step "unneeded" workflow.from names "plan", which is not a step it needs',
       'workflows/build.yaml:17: field "steps[3].workflow.from": step "untyped" workflow.from names "notes", whose output has no workflow field',
+    ]);
+  });
+
+  it('refuses a from on the first step, which needs no step', () => {
+    expect(problems(`schemaVersion: v1alpha1
+name: build
+description: Run a plan first.
+steps:
+  - id: trials
+    workflow: { from: plan }
+  - id: plan
+    needs: []
+    command: node plan.js
+    output: { definition: workflow }
+`)).toEqual([
+      'workflows/build.yaml:6: field "steps[0].workflow.from": step "trials" workflow.from names "plan", which is not a step it needs',
     ]);
   });
 
