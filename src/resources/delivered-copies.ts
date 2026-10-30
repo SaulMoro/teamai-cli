@@ -207,22 +207,22 @@ export async function isTeamSkillAsDelivered(previous: DeliveredHashes, dest: st
 /**
  * Whether the SKILL.md recorded in the skill directory `dest` is what pull
  * writes from a version of `<teamDir>/SKILL.md` (repo-relative) in the
- * history of `repoPath`: the team skill the copy was delivered from, even
- * after the team changed it. Tells which of several same-named team skills a
- * copy came from. False with no record, or when git cannot read the history.
- * Read-only; reads the history.
+ * history of `repoPath` up to `rev` (HEAD by default): the team skill the
+ * copy was delivered from, even after the team changed it. Tells which of
+ * several same-named team skills a copy came from. False with no record, or
+ * when git cannot read the history. Read-only; reads the history.
  */
 export async function isRecordedFromTeamSkill(
   previous: DeliveredHashes,
   dest: string,
   repoPath: string,
   teamDir: string,
-  options: { normalizeLineEndings?: boolean } = {},
+  options: { normalizeLineEndings?: boolean; rev?: string } = {},
 ): Promise<boolean> {
   const recorded = previous[path.join(dest, SKILL_MD)];
   if (recorded === undefined) return false;
   const { withSkillFrontmatter } = await import('./skills.js');
-  for (const version of await historicalVersions(repoPath, `${teamDir}/${SKILL_MD}`, { currentLifetime: true }) ?? []) {
+  for (const version of await historicalVersions(repoPath, `${teamDir}/${SKILL_MD}`, { currentLifetime: true, rev: options.rev }) ?? []) {
     const source = await readBlob(repoPath, version.blob);
     const bytes = source === null ? null : await readRenderedBlob(repoPath, version.blob, version.path) ?? source;
     if (bytes === null) continue;

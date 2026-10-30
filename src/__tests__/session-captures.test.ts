@@ -235,6 +235,24 @@ describe('session captures (#1178)', () => {
       .toEqual([{ ship: { namespaceUnknown: true, description: 'Shared release.' } }]);
   });
 
+  it('keeps identical copies unattributed when the team deletes one after the pull (#1469)', async () => {
+    const { config, project } = checkout();
+    const team = config.repo.localPath;
+    commitFile(team, 'skills/ops/ship/SKILL.md', '---\ndescription: Shared release.\n---\n');
+    const rev = commitFile(team, 'skills/web/ship/SKILL.md', '---\ndescription: Shared release.\n---\n');
+    const ship = path.join(project, '.claude', 'skills', 'ship', 'SKILL.md');
+    fs.mkdirSync(path.dirname(ship), { recursive: true });
+    fs.writeFileSync(ship, withSkillFrontmatter('---\ndescription: Shared release.\n---\n', 'ship'));
+    await recordDelivery(config, { rev, targets: ['claude'], files: [ship] });
+    git(team, 'rm', '-q', 'skills/web/ship/SKILL.md');
+    git(team, 'commit', '-qm', 'drop web ship');
+
+    await SessionCaptures.atStart(config, 'claude', start(project), {});
+
+    expect((await SessionCaptures.read(config, 'claude-code', SESSION)).map((capture) => capture.teamSkillInfo?.ship))
+      .toEqual([{ namespaceUnknown: true, description: 'Shared release.' }]);
+  });
+
   it('records the namespace of a delivered copy pull completed the frontmatter of (#1469)', async () => {
     const { config, project } = checkout();
     const team = config.repo.localPath;

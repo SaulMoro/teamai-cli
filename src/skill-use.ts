@@ -311,7 +311,7 @@ export async function deliveredTeamSkills(config: LocalConfig, cwd: string, deli
   const teamSkillInfo = await Promise.all(kept.map(async ([name, [file]]): Promise<[string, DeliveredSkillInfo]> => {
     const { data, valid } = splitFrontmatter(await readFileSafe(file) ?? '');
     return [name, {
-      ...await deliveredNamespace(repo, delivered, path.dirname(file), sources.get(name) ?? []),
+      ...await deliveredNamespace({ repo, rev, delivered, dest: path.dirname(file), dirs: sources.get(name) ?? [] }),
       ...(valid && typeof data.description === 'string' ? { description: data.description.trim() } : {}),
     }];
   }));
@@ -335,13 +335,15 @@ function teamSkillDirs(files: readonly string[]): Map<string, string[]> {
 }
 
 /**
- * The skills namespace the copy at `dest` came from, of the team directories `dirs` holding its name. A name in one
- * directory needs no read. For several, the one whose history renders to the recorded bytes, as pull tells them
- * apart; identical copies cannot be told apart, so their namespace is unknown.
+ * The skills namespace the copy at `dest` came from, of the team directories `dirs` holding its name at `rev`. A name
+ * in one directory needs no read. For several, the one whose history up to `rev` renders to the recorded bytes, as
+ * pull tells them apart; identical copies cannot be told apart, so their namespace is unknown.
  */
-async function deliveredNamespace(repo: string, delivered: DeliveredHashes, dest: string, dirs: readonly string[]): Promise<DeliveredSkillInfo> {
+async function deliveredNamespace({ repo, rev, delivered, dest, dirs }: {
+  repo: string; rev: string; delivered: DeliveredHashes; dest: string; dirs: readonly string[];
+}): Promise<DeliveredSkillInfo> {
   const matched = dirs.length === 1 ? dirs : (await Promise.all(dirs.map(async (dir) =>
-    await isRecordedFromTeamSkill(delivered, dest, repo, dir) ? [dir] : []))).flat();
+    await isRecordedFromTeamSkill(delivered, dest, repo, dir, { rev }) ? [dir] : []))).flat();
   if (matched.length !== 1) return { namespaceUnknown: true };
   const parent = path.posix.dirname(matched[0]);
   return parent === 'skills' ? {} : { namespace: path.posix.basename(parent) };
