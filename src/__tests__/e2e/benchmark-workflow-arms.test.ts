@@ -6,7 +6,7 @@
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { benchmarkFixture, envelope, PRODUCT_URL, said, type BenchmarkFixture, type BenchmarkFixtureOptions } from '../helpers/benchmark-fixture.js';
+import { benchmarkFixture, driveCommands, envelope, PRODUCT_URL, said, type BenchmarkFixture, type BenchmarkFixtureOptions } from '../helpers/benchmark-fixture.js';
 
 const SUITE = `schemaVersion: v1alpha1
 name: fix
@@ -136,6 +136,33 @@ steps:
     expect(ranOn('trials.r1.fix.flow.workflow.fix')).toMatchObject({ tool: { name: 'codex' }, team: { revision: pulled } });
     // The member installs only claude; each arm's clone still has the team skill where codex reads it.
     expect(fixture.toolLaunches().map(({ tool, paths }) => ({ tool, skill: paths.includes('.codex/skills/answer/SKILL.md') }))).toEqual([{ tool: 'codex', skill: true }, { tool: 'codex', skill: true }]);
+  }, 240_000);
+
+  it('reads a workflow arm whose tool the driver cannot run as not run, and names the arm', async () => {
+    const fixture = await fixtureWith(SUITE.replace('  tool: claude\n', '  tool: codex\n'), { fixer: FIXER, 'fix-once': FIX_ONCE }, { tools: ['claude'] });
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+
+    expect(ran.code, said(ran)).toBe(0);
+    const record = RecordSchema.parse(fixture.benchmarkRecord(fixture.runIds()[0] ?? ''));
+    expect(record.trials.map(({ arm, result }) => ({ arm, result }))).toEqual([{ arm: 'prompt', result: 'not_run' }, { arm: 'flow', result: 'not_run' }]);
+    expect(ran.stderr).toContain('Arm "flow" uses codex, which the local driver cannot run, so its trials did not run.');
+  }, 240_000);
+
+  it('reads a workflow arm cancelled while its prompt holds a lease as an error', async () => {
+    const fixture = await fixtureWith(SUITE.replace('  - name: prompt\n', ''), { fixer: FIXER, 'fix-once': FIX_ONCE }, { sandbox: false });
+    const started = envelope(await fixture.teamai(['workflow', 'start', 'teamai-benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m']));
+    const runId = String(started.data?.run);
+    const driver = { kind: 'external', machine: 'arm-driver', workspace: '/fake', can: { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, tools: ['claude'], unattended: true } };
+
+    const leased = await driveCommands(fixture, runId, { driver });
+    const cancelled = envelope(await fixture.teamai(['workflow', 'cancel', runId, 'trials.r1.fix.flow.workflow']));
+    const done = await driveCommands(fixture, runId, { driver });
+
+    expect(leased).toMatchObject({ data: { lease: { step: 'trials.r1.fix.flow.workflow.plan' } } });
+    expect(cancelled.error).toBeUndefined();
+    expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(RecordSchema.parse(fixture.benchmarkRecord(runId)).trials.map(({ arm, result }) => ({ arm, result }))).toEqual([{ arm: 'flow', result: 'error' }]);
   }, 240_000);
 
   it('refuses before any run a workflow arm whose workflow asks a person, naming the arm, the workflow and the step', async () => {

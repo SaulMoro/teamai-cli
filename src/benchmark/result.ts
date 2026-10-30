@@ -123,7 +123,7 @@ export function benchmarkRecord(run: RunState, { plan, prefix }: RunPlan): Bench
       const verdicts = verdictsOf(trial);
       const scoringCost = scoringCostOf(verdicts);
       const work = stateOf(trial.step);
-      const result = trialResultOf({ prompt: work, check: stateOf(checkStepOf(trial)), verdicts }, plan, trial);
+      const result = trialResultOf({ prompt: work, work: workStates(run, `${prefix}${trial.step}`), check: stateOf(checkStepOf(trial)), verdicts }, plan, trial);
       const arm = plan.arms.find(({ name }) => name === trial.arm);
       const entry = arm?.workflow
         ? projectionOf(promptPassesUnder(run, `${prefix}${trial.step}`), { arm, watched, unenforced: plan.limits?.maxTurns !== undefined ? ['max_turns'] : [] })
@@ -259,17 +259,38 @@ function baselineOf(state: StepState | undefined, task: PlannedTask): Baseline {
   }
 }
 
+/** The trial's work step `step`, then every step under it: a workflow arm's prompts run there, as its own step has no attempt. */
+function workStates(run: RunState, step: string): StepState[] {
+  return run.steps.filter((state) => state.id === step || state.id.startsWith(`${step}.`));
+}
+
+/** Whether no step of `work` was ever leased. */
+function unleased(work: readonly StepState[]): boolean {
+  return !work.some((state) => 'attempt' in state && state.attempt !== undefined);
+}
+
+/** Whether `work` failed tool_unavailable before any of it was leased: the run's driver could not launch its tool. */
+function unlaunched(work: readonly StepState[]): boolean {
+  return unleased(work) && work.some((state) => state.status === 'failed' && state.failure?.code === 'tool_unavailable');
+}
+
+/** `unlaunched` of the trial whose work step is `step`. */
+export function unlaunchedTrial(run: RunState, step: string): boolean {
+  return unlaunched(workStates(run, step));
+}
+
 /**
- * The result of one planned trial, first match wins:
- *   prompt never leased: absent, pending, skipped, or cancelled without an attempt  -> not_run
- *   prompt failed tool_unavailable: the run's only driver cannot launch its tool    -> not_run
- *   prompt cancelled after its lease, or failed                                     -> error
+ * The result of one planned trial, first match wins. Its work is its prompt, or a workflow arm's workflow step and the
+ * steps under it:
+ *   work never leased: absent, pending, skipped, or cancelled before any lease      -> not_run
+ *   work failed tool_unavailable before any lease: the driver cannot launch its tool -> not_run
+ *   work cancelled after a lease, or failed                                         -> error
  *   check task: the result its check output: passed -> passed, failed -> failed, could_not_run -> error;
  *               no result (the check never ran to one)                              -> error
  *   criteria task: its correctness verdict: labelled passing -> passed, labelled not passing -> failed;
  *               unscored, or none                                                   -> unscored, never passed
  */
-function trialResultOf({ prompt, check, verdicts }: { prompt: StepState | undefined; check: StepState | undefined; verdicts: readonly EntryVerdict[] }, plan: BenchmarkPlan, trial: PlannedTrial): TrialResult {
+function trialResultOf({ prompt, work, check, verdicts }: { prompt: StepState | undefined; work: readonly StepState[]; check: StepState | undefined; verdicts: readonly EntryVerdict[] }, plan: BenchmarkPlan, trial: PlannedTrial): TrialResult {
   switch (prompt?.status) {
     case undefined:
     case 'pending':
@@ -277,9 +298,9 @@ function trialResultOf({ prompt, check, verdicts }: { prompt: StepState | undefi
     case 'skipped':
       return 'not_run';
     case 'cancelled':
-      return prompt.attempt === undefined ? 'not_run' : 'error';
+      return unleased(work) ? 'not_run' : 'error';
     case 'failed':
-      return prompt.failure?.code === 'tool_unavailable' && prompt.attempt === undefined ? 'not_run' : 'error';
+      return unlaunched(work) ? 'not_run' : 'error';
     case 'leased':
     case 'running':
     case 'delivering':

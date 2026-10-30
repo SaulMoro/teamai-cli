@@ -12,7 +12,7 @@ import { findAttemptRun } from '../workflow/run-location.js';
 import { runsDir } from '../workflow/store.js';
 import type { RunState, WorkflowFailure } from '../workflow/types.js';
 import { runComparisons, type ArmComparison } from './history.js';
-import { benchmarkRecord, benchmarkRecordFile, type BenchmarkRunRecord } from './result.js';
+import { benchmarkRecord, benchmarkRecordFile, unlaunchedTrial, type BenchmarkRunRecord } from './result.js';
 import { planOfRun, trialsUnattended, type RunPlan } from './run-plan.js';
 import { benchmarkTable, formatBenchmarkTable, type BenchmarkTable } from './table.js';
 import { toolUnavailableNotice } from './trial.js';
@@ -73,6 +73,5 @@ const ASKED_NOTICE = 'Each trial ran with its tool\'s own permission settings, s
 
 /** A line for each arm with a prompt that failed `tool_unavailable` before any lease: the driver could not launch its tool. */
 function unlaunchedArms(run: RunState, { plan, prefix }: RunPlan): string[] {
-  const unlaunched = (step: string): boolean => run.steps.some((state) => state.id === `${prefix}${step}` && state.status === 'failed' && state.failure?.code === 'tool_unavailable' && state.attempt === undefined);
-  return plan.arms.filter((arm) => plan.trials.some((trial) => trial.arm === arm.name && unlaunched(trial.step))).map(toolUnavailableNotice);
+  return plan.arms.filter((arm) => plan.trials.some((trial) => trial.arm === arm.name && unlaunchedTrial(run, `${prefix}${trial.step}`))).map(toolUnavailableNotice);
 }
