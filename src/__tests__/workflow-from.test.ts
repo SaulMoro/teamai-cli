@@ -137,6 +137,15 @@ describe('admitting a workflow output', () => {
     expect(typeof run === 'object' && run.admitted).toBeUndefined();
   });
 
+  it('fails the producer whose workflow field is no object, before it is admitted', async () => {
+    const config = testConfig();
+    const runId = await startPlanned(config);
+
+    const reported = await settle(config, runId, 'plan', { definition: 'node generated.js', plan: {} });
+
+    expect(reported).toMatchObject({ data: { step: { id: 'plan', status: 'failed', failure: { code: 'invalid_output', message: 'stdout JSON does not match output: output.definition must be an object that holds a workflow definition' } } } });
+  });
+
   it('fails the producer when its output holds a secret value, naming the secret and not the value', async () => {
     const config = testConfig();
     const runId = await startPlanned(config);
