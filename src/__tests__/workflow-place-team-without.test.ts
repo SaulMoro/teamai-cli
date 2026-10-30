@@ -67,4 +67,12 @@ describe('commitWithout', () => {
     expect('commit' in first && first.commit).toMatch(/^[0-9a-f]{40}$/);
     expect(second).toEqual(first);
   });
+
+  it('names the git step that failed for a revision the repo does not hold', async () => {
+    const { source, revision } = team();
+
+    const made = await commitWithout(git, { repo: bareAt(source, revision), revision: 'f'.repeat(40), paths: ['CLAUDE.md'] });
+
+    expect(made).toEqual({ failed: expect.stringMatching(/^git ls-tree: .+/) });
+  });
 });

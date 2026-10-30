@@ -107,12 +107,12 @@ describe('benchmark arm team', () => {
   }, 240_000);
 
   // With no role or project, the member receives every namespace beside the shared root.
-  it('runs an arm without a rule, an agent and a namespaced skill, and its clone gets every other team asset', async () => {
+  it('runs an arm without a rule, an agent, a namespaced skill and a file of a shared skill, and its clone gets every other team asset', async () => {
     const fixture = await benchmarkFixture({
       tool: 'fixes', sandbox: true, tools: ['claude'],
-      suite: suite('arms:\n  - name: now\n  - name: ablated\n    team: { without: [skills/dev/deploy, rules/commits.md, agents/reviewer.md] }\n'),
+      suite: suite('arms:\n  - name: now\n  - name: ablated\n    team: { without: [skills/dev/deploy, rules/commits.md, agents/reviewer.md, skills/fixer/notes.md] }\n'),
       team: {
-        'skills/fixer/SKILL.md': SKILL('fixer'), 'skills/dev/deploy/SKILL.md': SKILL('deploy'),
+        'skills/fixer/SKILL.md': SKILL('fixer'), 'skills/fixer/notes.md': 'Fixer notes.\n', 'skills/dev/deploy/SKILL.md': SKILL('deploy'),
         'rules/commits.md': '---\ndescription: How we commit.\n---\nWrite small commits.\n',
         'agents/reviewer.md': '---\nname: reviewer\ndescription: Reviews a change.\n---\nReview the change.\n',
         'claudemd/team.md': 'Answer in English.\n',
@@ -126,13 +126,13 @@ describe('benchmark arm team', () => {
     const record = RecordSchema.parse(fixture.benchmarkRecord(runId));
     expect(record.arms.map(({ team }) => team)).toEqual([
       { kind: 'pulled', revision: pulled },
-      { kind: 'without', paths: ['agents/reviewer.md', 'rules/commits.md', 'skills/dev/deploy'], revision: pulled },
+      { kind: 'without', paths: ['agents/reviewer.md', 'rules/commits.md', 'skills/dev/deploy', 'skills/fixer/notes.md'], revision: pulled },
     ]);
-    expect(record.skillChanges).toEqual([{ arm: 'ablated', defaults: 'now', skills: [{ name: 'deploy', change: 'removed' }] }]);
+    expect(record.skillChanges).toEqual([{ arm: 'ablated', defaults: 'now', skills: [{ name: 'deploy', change: 'removed' }, { name: 'fixer', change: 'changed' }] }]);
     const orders = Object.fromEntries(record.trials.map(({ arm, order }) => [arm, order]));
     const [now, ablated] = ['now', 'ablated'].map((arm) => fixture.toolLaunches()[(orders[arm] ?? 0) - 1]);
     const delivered = (launch: typeof now): string[] => (launch?.paths ?? []).filter((file) => file.startsWith('.claude/') && !file.startsWith('.claude/skills/teamai')).sort();
-    expect(delivered(now).filter((file) => !delivered(ablated).includes(file))).toEqual(['.claude/agents/reviewer.md', '.claude/rules/commits.md', '.claude/skills/deploy/SKILL.md']);
+    expect(delivered(now).filter((file) => !delivered(ablated).includes(file))).toEqual(['.claude/agents/reviewer.md', '.claude/rules/commits.md', '.claude/skills/deploy/SKILL.md', '.claude/skills/fixer/notes.md']);
     expect(delivered(ablated).filter((file) => !delivered(now).includes(file))).toEqual([]);
     expect(delivered(ablated)).toContain('.claude/skills/fixer/SKILL.md');
     expect(ablated?.teamContext).toContain('Answer in English.');

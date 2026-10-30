@@ -180,13 +180,14 @@ describe('benchmark arm team', () => {
   it('counts a trial of an arm without team assets that ran on some, and one of an arm without some paths that ran on another revision, as deviations', () => {
     const table = benchmarkTable(recordOf([NONE, ABLATED], [
       { arm: 'bare', agent: { team: undefined } },
+      { arm: 'bare', agent: { team: undefined } },
       { arm: 'bare', agent: { team: { revision: RUN_TEAM, localChanges: false } } },
       { arm: 'no-fixer', agent: { team: { revision: RUN_TEAM, localChanges: false } } },
       { arm: 'no-fixer', agent: { team: { revision: 'c'.repeat(40), localChanges: false } } },
       { arm: 'no-fixer', agent: { team: undefined } },
     ]));
 
-    expect(table.results).toMatchObject([{ arm: 'bare', planned: 2, deviations: 1, notVerified: 0 }, { arm: 'no-fixer', planned: 3, deviations: 1, notVerified: 1 }]);
+    expect(table.results).toMatchObject([{ arm: 'bare', planned: 3, deviations: 1, notVerified: 0 }, { arm: 'no-fixer', planned: 3, deviations: 1, notVerified: 1 }]);
   });
 
   it('names each arm\'s team assets in a Team column once an arm runs on other assets than the pulled revision', () => {
