@@ -27,7 +27,7 @@ import { parseSuite, type Arm, type Suite, type TaskJudge } from './suite.js';
 import type { TeamSelection } from '../workflow/clone.js';
 import type { Added, ArmTeam } from './terms.js';
 import { commitCacheOf } from '../workflow/place/place.js';
-import { commitCheckFiles, tryCheckAt, type CheckRun, type CommittedSuite } from './trial.js';
+import { commitCheckFiles, trialBlocker, tryCheckAt, type CheckRun, type CommittedSuite } from './trial.js';
 
 export interface BenchmarkStart {
   secrets: Record<string, string>;
@@ -82,11 +82,14 @@ export interface BenchmarkPlanned {
 
 /**
  * Freezes suite `name` as `startBenchmark` does, and answers the bundle and plan of a benchmark run, with the suite's
- * timeout, which bounds the run. Fills the commit cache with every commit a trial reads.
+ * timeout, which bounds the run. Fills the commit cache with every commit a trial reads. Refused, as `team_ref_blocked`,
+ * when this machine cannot pin the team a trial runs, so no trial runs with a team it did not ask for.
  */
 export async function planBenchmark(config: LocalConfig, name: string, options: Pick<BenchmarkStart, 'checkout' | 'memberAliases'>): Promise<{ planned: BenchmarkPlanned; timeoutMs: number } | { refused: Refusal }> {
   const frozen = await freezeSuite(config, name, options);
   if (!frozen.ok) return { refused: frozen.refused };
+  const blocked = await trialBlocker(config);
+  if (blocked !== undefined) return { refused: error('team_ref_blocked', blocked) };
   const { suite, plan, committed } = frozen;
   const { definition, scorers } = compileBundle(plan, committed);
   return {
