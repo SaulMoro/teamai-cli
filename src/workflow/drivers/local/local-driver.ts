@@ -5,7 +5,7 @@ import { toolExtrasFor, type AgentSpec } from '../../../resources/agent-format.j
 import { observeLaunch, type Used } from '../../../agent-observation.js';
 import { detectProjectConfig } from '../../../config.js';
 import { driverIdentity } from '../../../driver-identity.js';
-import { commandSignalPolicy, exitLike, stepEnvironment, terminalReachesCommand } from '../../../env-exec.js';
+import { commandSignalPolicy, exitLike, stepEnvironment, terminalReachesCommand, withRunningCli } from '../../../env-exec.js';
 import { knownSecrets, resolveWorkflowEnv, type WorkflowEnv } from '../../../env-resolution.js';
 import { resolveRunMode, workflowLaunch, type RunMode } from '../../../launch-context.js';
 import type { LocalConfig, TeamaiConfig } from '../../../types.js';
@@ -292,6 +292,8 @@ async function stageLease(lease: Lease, { config, lock, root, env, mode, signal 
     const scoped = await stepEnvironment(env, lease.envScope);
     if (!scoped.ok) return scoped.failure;
     lease.processEnv = scoped.env;
+  } else {
+    lease.processEnv = withRunningCli(process.env);
   }
   // Trials prepared and set up its clone.
   if (lease.preparedIn !== undefined) return undefined;

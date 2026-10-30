@@ -34,7 +34,7 @@ const SKILL_IMPORTS: Record<string, { typeOnly?: true; names?: string[]; values?
   'src/workflow/store.ts': { names: ['takeRunLock', 'LockTaken', 'RunLock', 'attemptDir', 'attemptResultPath', 'skillStatePath', 'runsDir', 'RunIdSchema', 'RunId', 'AttemptIdSchema', 'AttemptId', 'withRunnerLock', 'runnerAlive'] },
   'src/workflow/step-model.ts': {},
   'src/env-resolution.ts': {},
-  'src/env-exec.ts': { names: ['stepEnvironment'] },
+  'src/env-exec.ts': { names: ['stepEnvironment', 'withRunningCli'] },
   'src/utils/redact.ts': {},
   'src/utils/session-id.ts': {},
   // Equal values as equal text, so a kept end is compared with the engine's latest one.
