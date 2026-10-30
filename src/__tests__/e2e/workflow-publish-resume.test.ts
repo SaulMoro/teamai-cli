@@ -123,6 +123,15 @@ steps:
     tool: codex
 `;
 
+const FOREIGN = `schemaVersion: v1alpha1
+name: foreign
+description: Write the release notes on aider.
+steps:
+  - id: notes
+    prompt: Write the release notes.
+    tool: aider
+`;
+
 const REVIEW = `schemaVersion: v1alpha1
 name: review
 description: Review the project twice in one session.
@@ -528,6 +537,7 @@ describe('workflow resume lists the runs a checkout can resume, and --next takes
       'workflows/sign.yaml': SIGN,
       'workflows/docs.yaml': DOCS,
       'workflows/pinned.yaml': PINNED,
+      'workflows/foreign.yaml': FOREIGN,
       'workflows/signed-release.yaml': SIGNED_RELEASE,
     }, 'team repo', teamOrigin);
     seed(path.join(sandbox, 'seed-business'), { 'README.md': '# business\n' }, 'business repo', businessOrigin);
@@ -677,6 +687,22 @@ describe('workflow resume lists the runs a checkout can resume, and --next takes
     expect(idle.code, said(idle)).toBe(0);
     expect(idle.stderr).toContain(`Left ${pinned} (pinned) offered: ${why}`);
     expect(publishedState(pinned)).toMatchObject({ status: 'running', offered: { at: expect.any(String) } });
+  }, 180_000);
+
+  it('leaves a run whose prompt step names a tool teamai does not launch, and says which driver can continue it', async () => {
+    const foreign = await offer('foreign');
+    const bin = path.join(homeOf('runner'), 'foreign-bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'));
+    const runner = { TEAMAI_MODE: 'unattended', PATH: [bin, '/usr/bin', '/bin'].join(path.delimiter) };
+    const claude = ['--tools', 'default=claude'];
+    const why = 'the prompt step notes has no tool teamai launches here (The local workflow tool "aider" is not supported): '
+      + 'its workflow names tool aider, which teamai does not launch here; continue it with a driver that launches aider';
+
+    const idle = await teamai('runner', ['workflow', 'resume', '--next', ...claude], { env: runner });
+    expect(idle.code, said(idle)).toBe(0);
+    expect(idle.stderr).toContain(`Left ${foreign} (foreign) offered: ${why}`);
+    expect(publishedState(foreign)).toMatchObject({ status: 'running', offered: { at: expect.any(String) } });
   }, 180_000);
 
   it('lists a run that needs a person and env with no value here as cannot run here, so no person claims it here', async () => {

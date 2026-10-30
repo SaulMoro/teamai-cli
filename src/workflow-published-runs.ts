@@ -175,7 +175,10 @@ function toolLacks(config: LocalConfig, flags: Record<string, string>, members: 
       if (choice.failure.code === 'tool_unconfigured') {
         return [{ reason: `no tool is configured here for ${steps}`, fix: `pass --tools ${flag}=<tool>, or set workflows.tools.${flag}` }];
       }
-      return [{ reason: `${steps} ${prompts.length > 1 ? 'have' : 'has'} no tool teamai launches here (${choice.failure.message.replace(/\.$/, '')})`, fix: `pass --tools ${flag}=<tool> with a tool teamai launches` }];
+      const fix = tool === undefined
+        ? `pass --tools ${flag}=<tool> with a tool teamai launches`
+        : `its workflow names tool ${tool}, which teamai does not launch here; continue it with a driver that launches ${tool}`;
+      return [{ reason: `${steps} ${prompts.length > 1 ? 'have' : 'has'} no tool teamai launches here (${choice.failure.message.replace(/\.$/, '')})`, fix }];
     });
   };
 }
