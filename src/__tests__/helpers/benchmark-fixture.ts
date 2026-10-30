@@ -337,8 +337,8 @@ export interface BenchmarkFixtureOptions {
   /** The role the member joins with, `teamai init --role`; none by default. */
   role?: string;
   /**
-   * A skill each launch of the fake claude loads, when its cwd has it in .claude/skills: it leaves a Claude session in
-   * which the Skill tool loaded it, as the local driver reads `used` from. Without it, no launch leaves a session.
+   * A skill each launch of the fake claude loads when its cwd has it in .claude/skills: each launch leaves a Claude session,
+   * as the local driver reads `used` from, in which the Skill tool loaded it or no skill. Without it, no launch leaves one.
    */
   loadsSkill?: string;
 }
