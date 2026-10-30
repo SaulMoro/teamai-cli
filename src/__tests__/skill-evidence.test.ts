@@ -52,6 +52,11 @@ describe('the skills a session is judged with (#1469)', () => {
       .toEqual({ skills: { available: [{ name: 'ship', namespaceUnknown: true, description: 'SHARED RELEASE' }], used: [] } });
   });
 
+  it('lists a skill whose description could not be read without one', () => {
+    expect(skillsEvidence([{ teamSkillInfo: { release: { namespace: 'ops' } } }], [], upper))
+      .toEqual({ skills: { available: [{ name: 'release', namespace: 'ops' }], used: [] } });
+  });
+
   it('copies the used names it is given rather than aliasing them', () => {
     const used = ['a', 'b'];
     const result = skillsEvidence([{ teamSkillInfo: {} }], used, same);

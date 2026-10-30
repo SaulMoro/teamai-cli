@@ -177,6 +177,7 @@ describe('session captures (#1178)', () => {
     const ship = path.join(project, '.claude', 'skills', 'ship', 'SKILL.md');
     fs.mkdirSync(path.dirname(ship), { recursive: true });
     fs.writeFileSync(ship, '---\ndescription: Cut a release.\n---\nship\n');
+    commitFile(config.repo.localPath, 'skills/review/ship/SKILL.md');
     const rev = commitFile(config.repo.localPath, 'skills/ops/ship/SKILL.md');
     await recordDelivery(config, { rev, targets: ['claude'], files: [skill, ship] });
 
