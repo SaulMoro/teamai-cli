@@ -70,6 +70,10 @@ export async function pinArmWorkflow(
   if (otherInputs.length > 0) {
     return refuse(`${runs}, which also requires inputs ${otherInputs.join(', ')}, and a trial passes only task. Remove them from its inputs, push it, run teamai pull, and start again.`);
   }
+  // A trial runs it by name, and only a run of a workflow runs its finally steps.
+  if (top.definition.finally) {
+    return refuse(`${runs}, which has finally steps, and a trial runs it as a step, where they would not run. Move them into its steps, push it, run teamai pull, and start again.`);
+  }
   const sources = new Map([[top.definition.name, top], ...children.flatMap(([child, cached]) => (cached ? [[child, cached] as const] : []))]);
   for (const [file, cached] of sources) {
     const refused = unrunnableStep(cached.definition.steps);

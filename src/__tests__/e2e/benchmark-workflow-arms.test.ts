@@ -257,4 +257,14 @@ ${step.includes('deliver') ? '    prompt: Ship it.\n' : '    command: echo more\
     expect(ErrorSchema.parse(envelope(ran)).error.message).toContain('Arm "flow" runs workflow "fixer", which also requires inputs context, and a trial passes only task');
     expect(fixture.runIds()).toEqual([]);
   }, 120_000);
+
+  it('refuses before any run a workflow arm whose workflow has finally steps', async () => {
+    const fixture = await fixtureWith(SUITE, { fixer: `${FIXER}finally:\n  - id: tidy\n    command: node -e "0"\n`, 'fix-once': FIX_ONCE });
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+
+    expect(ran.code, said(ran)).toBe(1);
+    expect(ErrorSchema.parse(envelope(ran)).error.message).toContain('Arm "flow" runs workflow "fixer", which has finally steps');
+    expect(fixture.runIds()).toEqual([]);
+  }, 120_000);
 });
