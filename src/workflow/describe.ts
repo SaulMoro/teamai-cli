@@ -237,11 +237,13 @@ export function describeWorkflow(input: {
     }
     return Math.max(0, ...widths.map((width) => width ?? 0));
   };
-  facts.width = Math.min(ceiling, visit(definition.steps, {
+  const top: Scope = {
     prefix: '', ancestors: [], requires: mergeRequirements(definition.defaults?.requires), budgeted: definition.budget !== undefined,
     ...(definition.setup ? { setup: definition.setup } : {}),
     ...(definition.defaults?.model !== undefined ? { defaultModel: definition.defaults.model } : {}),
-  }));
+  };
+  // The finally steps run under the same scope once the steps settled, never beside them.
+  facts.width = Math.min(ceiling, Math.max(visit(definition.steps, top), visit(definition.finally ?? [], top)));
   const route = [...copies].find(([, copy]) => copy.taken && copy.held);
   if (route?.[1].held) facts.localRoute = { opener: route[0], held: route[1].held.step, missing: route[1].held.missing };
   const { name, description, alias, invoke, inputs } = definition;
