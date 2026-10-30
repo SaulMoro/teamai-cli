@@ -428,11 +428,12 @@ describe('pull: an active namespace item replaces the root item of the same name
       vi.mocked(saveStateForScope).mockReset();
     });
 
-    /** Keep the state each pull saves, so the next one reads what teamai recorded delivering (#822). */
-    const keepState = (): void => {
+    /** Keep the state each pull saves, so the next one reads what teamai recorded delivering (#822). Returns the files on that record. */
+    const keepState = (): (() => Promise<string[]>) => {
       let state = StateSchema.parse({ lastPull: null });
       vi.mocked(loadStateForScope).mockImplementation(async () => state);
       vi.mocked(saveStateForScope).mockImplementation(async (next) => { state = next; });
+      return async () => Object.keys(state.lastPullByWorkspace?.[await checkoutKey(homeDir)]?.delivered ?? {});
     };
 
     it('replaces a root skill received through a tag with the active namespace skill, whole', async () => {
@@ -507,6 +508,23 @@ describe('pull: an active namespace item replaces the root item of the same name
 
       expect(await exists('.claude/skills/only-front')).toBe(false);
       expect(logged('info', /Removed 1 skill\(s\) no longer delivered here: only-front\.$/)).toBe(true);
+    });
+
+    it('forgets a namespace skill in the delivery record once it removes the copy on deactivation', async () => {
+      await team('skills/frontend/only-front/SKILL.md', skillMd('only-front', 'Front only'));
+      commitTeamRepo(repoPath);
+      const recorded = keepState();
+      const copy = path.join(homeDir, '.claude/skills/only-front/SKILL.md');
+
+      as(['frontend']);
+      await pull({});
+      expect(await recorded()).toContain(copy);
+
+      as(['devops']);
+      await pull({ force: true });
+
+      expect(await exists('.claude/skills/only-front')).toBe(false);
+      expect(await recorded()).not.toContain(copy);
     });
 
     // The inactive namespace copy is byte-identical to the root skill, so the

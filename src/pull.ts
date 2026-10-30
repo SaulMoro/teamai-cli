@@ -403,6 +403,7 @@ export async function cleanupInactiveNamespaceSkills(
       if (!await mayDeleteSkillCopy(localConfig, localSkillDir)) continue;
 
       await remove(localSkillDir);
+      if (ledger) forgetDelivered(ledger.hashes, localSkillDir);
       removed.add(skillName);
       log.debug(`[${installScopeName(localConfig.scope)}] Removed inactive role-scoped skill ${skillName} from ${tool}`);
     }
