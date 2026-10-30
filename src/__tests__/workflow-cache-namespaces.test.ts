@@ -4,7 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LocalConfig } from '../types.js';
-import { loadCachedWorkflow, syncWorkflowDefinitions } from '../workflow/cache.js';
+import { listCachedWorkflows, loadCachedWorkflow, namespaceConflictOf, syncWorkflowDefinitions } from '../workflow/cache.js';
 
 const dirs: string[] = [];
 
@@ -101,6 +101,32 @@ describe('workflow and prompt namespaces in cache', () => {
     expect(result.invalid.some((diagnostic) => diagnostic.code === 'workflow_namespace_conflict'))
       .toBe(true);
     expect(await loadCachedWorkflow(config, 'deploy')).toBeNull();
+  });
+
+  it('lets no default stand in for a name two namespaces define, until one of them drops it', async () => {
+    const config = testConfig();
+    const repo = config.repo.localPath;
+    const commit = initializeGit(repo);
+    const benchmark = WORKFLOW_A.replace('name: deploy', 'name: benchmark');
+    fs.mkdirSync(path.join(repo, 'workflows', 'a'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'workflows', 'a', 'benchmark.yaml'), benchmark);
+    fs.mkdirSync(path.join(repo, 'workflows', 'b'), { recursive: true });
+    fs.writeFileSync(path.join(repo, 'workflows', 'b', 'benchmark.yaml'), benchmark);
+    commit('define benchmark twice');
+
+    await syncWorkflowDefinitions(config);
+    expect(await loadCachedWorkflow(config, 'benchmark')).toBeNull();
+    expect((await listCachedWorkflows(config)).map(({ definition }) => definition.name)).not.toContain('benchmark');
+    expect(await namespaceConflictOf(config, 'benchmark')).toBe(
+      'Workflow "benchmark" is defined in multiple active namespaces (workflows/a/benchmark.yaml and workflows/b/benchmark.yaml); '
+      + 'conflicting workflows have no runnable version. Keep it in one namespace, push it, run teamai pull, and start again.',
+    );
+
+    fs.rmSync(path.join(repo, 'workflows', 'b'), { recursive: true });
+    commit('keep benchmark in one namespace');
+    await syncWorkflowDefinitions(config);
+    expect(await namespaceConflictOf(config, 'benchmark')).toBeUndefined();
+    expect(await loadCachedWorkflow(config, 'benchmark')).toMatchObject({ source: 'team', definition: { description: 'Deploy from namespace A.' } });
   });
 
   it('discovers and loads namespaced workflows from workflows/<ns>/<name>.yaml', async () => {
