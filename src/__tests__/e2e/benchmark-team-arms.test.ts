@@ -154,6 +154,28 @@ describe('benchmark arm team', () => {
     expect(fixture.runIds()).toEqual([]);
   }, 120_000);
 
+  it('refuses to start an arm without a skill the member excludes, which its clones would not get anyway, and leaves no run', async () => {
+    const fixture = await benchmarkFixture({
+      tool: 'fixes', sandbox: true, tools: ['claude'],
+      team: { 'skills/fixer/SKILL.md': SKILL('fixer') },
+    });
+    fixtures.push(fixture);
+    // Excluded before the team has it, so no pull ever delivers it.
+    const excluded = await fixture.teamai(['skill', 'exclude', 'add', 'helper']);
+    expect(excluded.code, said(excluded)).toBe(0);
+    fixture.pushTeam({ 'skills/helper/SKILL.md': SKILL('helper'), 'benchmarks/fix/suite.yaml': suite('arms:\n  - name: now\n  - name: ablated\n    team: { without: [skills/helper] }\n') });
+    const pulled = await fixture.teamai(['pull']);
+    expect(pulled.code, said(pulled)).toBe(0);
+
+    const started = await fixture.teamai(['benchmark', 'run', 'fix']);
+
+    expect(ErrorSchema.parse(envelope(started))).toEqual({ error: {
+      code: 'arm_team_unresolved',
+      message: 'Arm "ablated" runs without skills/helper, skill helper, which the member excludes, so pull leaves it out already and leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.',
+    } });
+    expect(fixture.runIds()).toEqual([]);
+  }, 120_000);
+
   it('refuses to start an arm without a path in single-repo mode, where the project commit decides the team assets, and leaves no run', async () => {
     const fixture = await benchmarkFixture({
       tool: 'fixes', sandbox: true, tools: ['claude'], selfMode: true,

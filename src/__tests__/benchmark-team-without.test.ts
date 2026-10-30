@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { withoutRefusal } from '../benchmark/team-without.js';
 import type { LocalConfig } from '../types.js';
+import type { TeamSelection } from '../workflow/clone.js';
 
 const dirs: string[] = [];
 
@@ -26,12 +27,13 @@ function git(cwd: string, ...args: string[]): string {
  * commit holds rule commits, which tag quality keeps, and rules design and dev/notes, which only tag ux would, rule review
  * shared and again in dev, claudemd file team shared and again in dev, CLAUDE.md, shared
  * skills release and lint, which tag quality brings, and solo, which no tag
- * brings, skill release again in dev, skills deploy in dev and runbook in ops, agent reviewer shared and again in dev,
+ * brings, skill release again in dev, skills deploy in dev and runbook and lint in ops, agent reviewer shared and again in dev,
  * agent planner shared only, rule style in ops, docs shared and under api and in namespace ops, and hooks shared and in
- * dev; and that commit. With `role` null, the member holds no role, so every namespace reaches them; without `tags`,
- * the team has no tags.yaml; `subscribed`, the tags the member subscribes.
+ * dev; and that commit, and the run's selection. With `role` null, the member holds no role, so every namespace reaches
+ * them; without `tags`, the team has no tags.yaml; `subscribed`, the tags the member subscribes; `excluded`, the skills
+ * the member excludes.
  */
-function team({ role = 'dev' as string | null, tags = true, subscribed = ['quality'] } = {}): { config: LocalConfig; revision: string } {
+function team({ role = 'dev' as string | null, tags = true, subscribed = ['quality'], excluded = [] as string[] } = {}): { config: LocalConfig; revision: string; selection: TeamSelection } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-team-without-'));
   dirs.push(root);
   const repo = path.join(root, 'team');
@@ -54,6 +56,7 @@ function team({ role = 'dev' as string | null, tags = true, subscribed = ['quali
     'skills/dev/release/SKILL.md': SKILL('release'),
     'skills/dev/deploy/SKILL.md': SKILL('deploy'),
     'skills/ops/runbook/SKILL.md': SKILL('runbook'),
+    'skills/ops/lint/SKILL.md': SKILL('lint'),
     'agents/reviewer.md': '---\nname: reviewer\ndescription: Reviews.\n---\nReview.\n',
     'agents/dev/reviewer.yaml': 'name: reviewer\ndescription: Reviews for dev.\nprompt: Review.\n',
     'agents/planner.md': '---\nname: planner\ndescription: Plans.\n---\nPlan.\n',
@@ -76,6 +79,7 @@ function team({ role = 'dev' as string | null, tags = true, subscribed = ['quali
       username: 'tester', scope: 'project', ...(role !== null ? { primaryRole: role } : {}), additionalRoles: [], projects: [], ...(subscribed.length > 0 ? { subscribedTags: subscribed } : {}), projectRoot: root, dataHome: path.join(root, 'data'),
     },
     revision: git(repo, 'rev-parse', 'HEAD'),
+    selection: { ...(role !== null ? { primaryRole: role } : {}), additionalRoles: [], projects: [], ...(subscribed.length > 0 ? { subscribedTags: subscribed } : {}), excludedSkills: excluded },
   };
 }
 
@@ -89,9 +93,9 @@ describe('withoutRefusal', () => {
     ['a shared hooks file, whose entries a namespace adds to rather than replaces', ['hooks/hooks.yaml']],
     ['a shared agent no namespace the member receives has a version of', ['agents/planner.md']],
   ])('lets an arm run without %s', async (_case, paths) => {
-    const { config, revision } = team();
+    const { config, revision, selection } = team();
 
-    expect(await withoutRefusal(config, { arm: 'ablated', paths, revision })).toBeUndefined();
+    expect(await withoutRefusal(config, { arm: 'ablated', paths, revision, selection })).toBeUndefined();
   });
 
   it.each([
@@ -101,6 +105,8 @@ describe('withoutRefusal', () => {
       'Arm "ablated" runs without teamai.yaml, which teamai pull reads to install the team, so no trial could run. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
     ['a skill in a namespace the member does not receive', ['skills/ops/runbook'], 'arm_team_unresolved',
       'Arm "ablated" runs without skills/ops/runbook, which is in namespace ops, and the arm\'s roles or projects don\'t receive ops, so leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
+    ['a skill in a namespace the member does not receive, named as a shared skill the member gets', ['skills/ops/lint'], 'arm_team_unresolved',
+      'Arm "ablated" runs without skills/ops/lint, which is in namespace ops, and the arm\'s roles or projects don\'t receive ops, so leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
     ['a namespace the member does not receive', ['skills/ops'], 'arm_team_unresolved',
       'Arm "ablated" runs without skills/ops, which is in namespace ops, and the arm\'s roles or projects don\'t receive ops, so leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
     ['a shared skill no tag the member subscribes delivers to its role', ['skills/solo'], 'arm_team_unresolved',
@@ -126,37 +132,51 @@ describe('withoutRefusal', () => {
     ['a page in a docs namespace a role declares and the member does not receive', ['docs/ops/guide.md'], 'arm_team_unresolved',
       'Arm "ablated" runs without docs/ops/guide.md, which is in namespace ops, and the arm\'s roles or projects don\'t receive ops, so leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
   ])('refuses an arm without %s', async (_case, paths, code, message) => {
-    const { config, revision } = team();
+    const { config, revision, selection } = team();
 
-    expect(await withoutRefusal(config, { arm: 'ablated', paths, revision })).toEqual({ code, message: message.replace('{r}', revision.slice(0, 7)) });
+    expect(await withoutRefusal(config, { arm: 'ablated', paths, revision, selection })).toEqual({ code, message: message.replace('{r}', revision.slice(0, 7)) });
   });
 
-  it('lets a member with no role or project run without a skill of any namespace, and a shared skill without its namespace versions refused', async () => {
-    const { config, revision } = team({ role: null });
+  it('lets a member with no role or project run without a skill of any namespace and a shared doc or skill', async () => {
+    const { config, revision, selection } = team({ role: null });
 
-    expect(await withoutRefusal(config, { arm: 'ablated', paths: ['docs/guide.md', 'skills/ops/runbook', 'skills/solo'], revision })).toBeUndefined();
-    expect(await withoutRefusal(config, { arm: 'ablated', paths: ['skills/release'], revision })).toEqual({
+    expect(await withoutRefusal(config, { arm: 'ablated', paths: ['docs/guide.md', 'skills/ops/runbook', 'skills/solo'], revision, selection })).toBeUndefined();
+  });
+
+  it('refuses an arm without an agent when pull delivers no agents, as two of one name reach a member with no role or project', async () => {
+    const { config, revision, selection } = team({ role: null });
+
+    expect(await withoutRefusal(config, { arm: 'ablated', paths: ['agents/planner.md'], revision, selection })).toEqual({
       code: 'arm_team_unresolved',
-      message: 'Arm "ablated" runs without skills/release, but its namespace dev delivers skills/dev/release in its place; list skills/dev/release too.',
+      message: `Arm "ablated" runs without agents/planner.md, and teamai pull delivers no agents at team revision ${revision.slice(0, 7)} with or without it: Duplicate agent "reviewer" found in active namespaces "(root)" and "dev" (agents/reviewer.md and agents/dev/reviewer.yaml). Fix that in the team repo, push it, run teamai pull, and start again.`,
+    });
+  });
+
+  it('refuses an arm without a skill the member excludes, which pull leaves out already', async () => {
+    const { config, revision, selection } = team({ excluded: ['lint'] });
+
+    expect(await withoutRefusal(config, { arm: 'ablated', paths: ['skills/lint'], revision, selection })).toEqual({
+      code: 'arm_team_unresolved',
+      message: 'Arm "ablated" runs without skills/lint, skill lint, which the member excludes, so pull leaves it out already and leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.',
     });
   });
 
   it('lets a member who subscribes no tag run without a tagged rule, which pull then delivers', async () => {
-    const { config, revision } = team({ subscribed: [] });
+    const { config, revision, selection } = team({ subscribed: [] });
 
-    expect(await withoutRefusal(config, { arm: 'ablated', paths: ['rules/design.md'], revision })).toBeUndefined();
+    expect(await withoutRefusal(config, { arm: 'ablated', paths: ['rules/design.md'], revision, selection })).toBeUndefined();
   });
 
   it('lets an arm run without a namespaced skill in a team with no tags.yaml', async () => {
-    const { config, revision } = team({ tags: false });
+    const { config, revision, selection } = team({ tags: false });
 
-    expect(await withoutRefusal(config, { arm: 'ablated', paths: ['skills/dev/deploy'], revision })).toBeUndefined();
+    expect(await withoutRefusal(config, { arm: 'ablated', paths: ['skills/dev/deploy'], revision, selection })).toBeUndefined();
   });
 
   it('refuses an arm whose revision the team repo cannot read', async () => {
-    const { config } = team();
+    const { config, selection } = team();
 
-    expect(await withoutRefusal(config, { arm: 'ablated', paths: ['CLAUDE.md'], revision: 'f'.repeat(40) })).toEqual({
+    expect(await withoutRefusal(config, { arm: 'ablated', paths: ['CLAUDE.md'], revision: 'f'.repeat(40), selection })).toEqual({
       code: 'arm_team_unreadable',
       message: expect.stringMatching(/^Arm "ablated" runs without CLAUDE\.md, and git could not list team revision fffffff at .+: .+\. Repair the team repo, or run teamai pull, and start again\.$/),
     });

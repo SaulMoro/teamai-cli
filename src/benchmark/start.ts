@@ -201,7 +201,7 @@ async function resolveTeam(config: LocalConfig, { name, tool, team }: Arm, pulle
       return { ok: false, refused: error('arm_team_unreadable', `Arm "${name}" runs on team ref "${team.ref}", and git could not read this checkout's team repo at ${config.repo.localPath}: ${cause}. Repair the team repo, or run teamai pull, and start again.`) };
     }
     case 'without': {
-      const refusal = await withoutRefusal(config, { arm: name, paths: team.paths, revision: pulled });
+      const refusal = await withoutRefusal(config, { arm: name, paths: team.paths, revision: pulled, selection: selectionOf(config) });
       if (refusal?.code === 'arm_team_unreadable') return { ok: false, refused: error('arm_team_unreadable', refusal.message) };
       if (refusal) return { ok: false, refused: error('arm_team_unresolved', refusal.message) };
       return { ok: true, team: { kind: 'without', paths: team.paths, revision: pulled } };
