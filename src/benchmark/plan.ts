@@ -274,10 +274,10 @@ type FileStep = { id: string } & Record<string, unknown>;
  * beneath it inherits that, and a team's own `benchmark` workflow may relax it; the run's own timeout bounds it.
  *
  *   baselines                     (check tasks only) outputs { <task>: its baseline's result }
- *     <task>                      command teamai benchmark check --baseline; workspace: a clone of the starting commit
+ *     <task>                      needs []; command teamai benchmark check --baseline; workspace: a clone of the starting commit
  *                                 with team none; output { result }
- *   r<rep>                        one per repetition; needs [baselines] and an `if` that reads it, when there are baselines
- *     <task>                      a check task's: if steps.baselines.outputs.<task> == 'failed'
+ *   r<rep>                        one per repetition; needs [baselines] and an `if` that reads it when there are baselines, else needs []
+ *     <task>                      needs []; a check task's: if steps.baselines.outputs.<task> == 'failed'
  *       <arm>                     needs [], workspace: a clone of the starting commit with the arm's team
  *         prompt                  workspace continue; tool, exact model, limits under on_limit: end_turn; scorers
  *         check                   needs [prompt]; command teamai benchmark check --trial; workspace continue (check tasks only)
@@ -290,7 +290,7 @@ export function compileBundle(plan: BenchmarkPlan, { suite }: CommittedSuite): {
   const arms = new Map(plan.arms.map((arm) => [arm.name, arm]));
   const checkOutput = { result: CHECK_RESULTS.join(' | ') };
   const baselines = suite.tasks.flatMap((task): FileStep[] => (task.judge.kind === 'check'
-    ? [{ id: task.id, command: 'teamai benchmark check --baseline', workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: { treatment: 'none' } } }, output: checkOutput }]
+    ? [{ id: task.id, needs: [], command: 'teamai benchmark check --baseline', workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: { treatment: 'none' } } }, output: checkOutput }]
     : []));
   const tried = baselines.length > 0;
   const promptOf = (trial: PlannedTrial, arm: PlannedArm, task: Task): FileStep => {
@@ -320,9 +320,9 @@ export function compileBundle(plan: BenchmarkPlan, { suite }: CommittedSuite): {
           workflow: { steps: [promptOf(trial, arm, task), ...check] },
         }];
       });
-      return [{ id, ...(task.judge.kind === 'check' ? { if: `steps.${BASELINES}.outputs.${id} == 'failed'` } : {}), workflow: { steps: armSteps } }];
+      return [{ id, needs: [], ...(task.judge.kind === 'check' ? { if: `steps.${BASELINES}.outputs.${id} == 'failed'` } : {}), workflow: { steps: armSteps } }];
     });
-    return { id: `r${repetition}`, ...(tried ? { needs: [BASELINES], if: `steps.${BASELINES}.outcome != null` } : {}), workflow: { steps: taskSteps } };
+    return { id: `r${repetition}`, ...(tried ? { needs: [BASELINES], if: `steps.${BASELINES}.outcome != null` } : { needs: [] }), workflow: { steps: taskSteps } };
   });
   const scopes: FileStep[] = [
     ...(tried ? [{ id: BASELINES, workflow: { outputs: Object.fromEntries(baselines.map(({ id }) => [id, `steps.${id}.outputs.result`])), steps: baselines } }] : []),
