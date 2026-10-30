@@ -62,7 +62,7 @@ export async function reportBenchmark(env: NodeJS.ProcessEnv, secrets: Record<st
   return {
     report: {
       text: pending ? `${text}\n\nrecord: pending` : text,
-      table: { ...table, pairs: runComparisons({ run: run.id, source: 'local', startedAt: run.createdAt, benchmark: record }) },
+      table: { ...table, pairs: runComparisons({ run: run.id, source: 'local', startedAt: run.createdAt, outcome: record.outcome, benchmark: record }) },
     },
   };
 }

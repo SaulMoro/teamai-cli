@@ -14,7 +14,7 @@ import { z } from 'zod';
 import { getReportsDir, usesBranchWorktree, type LocalConfig } from '../types.js';
 import { BENCHMARK_WINDOWS, BenchmarkHistory, type BenchmarkHistoryQuery, type BenchmarkHistoryView, type BenchmarkRunInput } from '../benchmark/history.js';
 import { benchmarkRecordFile, BenchmarkRunRecordSchema } from '../benchmark/result.js';
-import { BENCHMARK_RECORDS_DIR } from '../workflow/records.js';
+import { BENCHMARK_RECORDS_DIR, pendingBenchmarkRuns } from '../workflow/records.js';
 import { isRunId, runsDir } from '../workflow/store.js';
 import { git } from '../workflow/worktree.js';
 import { HttpError } from './http.js';
@@ -44,7 +44,7 @@ async function readRecord(file: string, source: BenchmarkRunInput['source']): Pr
     const parsed = BenchmarkRunRecordSchema.safeParse(JSON.parse(text));
     if (!parsed.success || !isRunId(parsed.data.run)) return undefined;
     const record = parsed.data;
-    return { run: record.run, source, startedAt: record.startedAt, ...(record.username ? { username: record.username } : {}), benchmark: record };
+    return { run: record.run, source, startedAt: record.startedAt, outcome: record.outcome, ...(record.username ? { username: record.username } : {}), benchmark: record };
   } catch {
     return undefined;
   }
@@ -79,6 +79,22 @@ async function readLocal(config: LocalConfig): Promise<BenchmarkRunInput[]> {
   const root = runsDir(config);
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
   return readFiles(root, entries.filter((entry) => entry.isDirectory() && isRunId(entry.name)).map((entry) => benchmarkRecordFile(root, entry.name)), 'local');
+}
+
+/**
+ * The team's benchmark records on `teamai-reports`, which Compare reads too, without those still pending on this
+ * machine: the reports checkout keeps a record whose push was refused. `refresh` refreshes the checkout from origin first.
+ */
+export async function publishedBenchmarkRuns(config: LocalConfig, { refresh }: { refresh: boolean }): Promise<BenchmarkRunInput[]> {
+  await refreshReports(config, refresh);
+  const [reported, pending] = await Promise.all([readReported(config), pendingBenchmarkRuns(config)]);
+  return reported.filter(({ run }) => !pending.has(run));
+}
+
+async function refreshReports(config: LocalConfig, refresh: boolean): Promise<void> {
+  if (!usesBranchWorktree(config)) return;
+  const { readableReportsWorktree } = await import('../utils/reports-branch.js');
+  await readableReportsWorktree(config, { dryRun: !refresh });
 }
 
 /** The team's benchmark records on `teamai-reports`. */
@@ -175,10 +191,7 @@ export async function benchmarkHistory({ config, query, now = new Date(), refres
   now?: Date;
   refresh?: boolean;
 }): Promise<BenchmarkPage> {
-  if (usesBranchWorktree(config)) {
-    const { readableReportsWorktree } = await import('../utils/reports-branch.js');
-    await readableReportsWorktree(config, { dryRun: !refresh });
-  }
+  await refreshReports(config, refresh);
   const [local, reported] = await Promise.all([
     readLocal(config),
     readReported(config),

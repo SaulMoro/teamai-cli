@@ -9,7 +9,7 @@
  * Each run still shows as a point of its own.
  */
 import { runSourceHash } from './plan.js';
-import type { Baseline, BenchmarkRecord } from './result.js';
+import type { Baseline, BenchmarkRecord, BenchmarkRunRecord } from './result.js';
 import type { TeamChoice } from './suite.js';
 import type { ArmTeam } from './terms.js';
 import {
@@ -22,8 +22,18 @@ export interface BenchmarkRunInput {
   source: 'local' | 'reported';
   username?: string;
   startedAt: string;
+  outcome: BenchmarkRunRecord['outcome'];
   benchmark: BenchmarkRecord;
 }
+
+/**
+ * What `teamai benchmark run --fail-on-regression` found against the newest earlier comparable run, `against`: an arm
+ * whose pass rate over the trials paired by task and repetition dropped with its whole interval below zero has `dropped`.
+ */
+export type Regression =
+  | { kind: 'no_comparable' }
+  | { kind: 'held'; against: string }
+  | { kind: 'dropped'; against: string; arms: Array<{ arm: string; pairs: number; rates: ArmComparison['rates']; difference: ArmComparison['difference'] }> };
 
 /** The windows the page offers, in days before now, by when each run started. */
 export const BENCHMARK_WINDOWS = [30, 90, 365] as const;
@@ -490,6 +500,31 @@ function runRow(input: BenchmarkRunInput): RunRow {
     toolVersions: toolVersionsOf(input),
     arms: benchmark.arms.map((arm) => ({ key: armKey(arm), ...passRate(benchmark.trials.filter((trial) => trial.arm === arm.name)) })),
   };
+}
+
+/**
+ * `current` against the newest of `earlier` that started before it, ended `succeeded`, and ran the same suite, the same
+ * tasks by source hash, and the same arms: each arm's name, tool, model, effort, workflow and team choice, never the
+ * revision a team resolved to. Each arm's trials pair by task and repetition, as Compare pairs two arms of one run.
+ */
+export function regressionOf(current: BenchmarkRunInput, earlier: readonly BenchmarkRunInput[]): Regression {
+  const taskVersions = ({ tasks }: BenchmarkRecord): string => JSON.stringify(tasks.map(({ id, sourceHash }) => [id, sourceHash]).sort());
+  const treatments = ({ arms }: BenchmarkRecord): string => JSON.stringify(arms.map((arm) => [armKey(arm), arm.workflow?.name ?? null]).sort());
+  const [against] = earlier.filter(({ run, outcome, startedAt, benchmark }) => run !== current.run && outcome === 'succeeded' && startedAt < current.startedAt
+    && benchmark.suite.name === current.benchmark.suite.name && taskVersions(benchmark) === taskVersions(current.benchmark) && treatments(benchmark) === treatments(current.benchmark))
+    .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+  if (!against) return { kind: 'no_comparable' };
+  const arms = current.benchmark.arms.flatMap(({ name }) => {
+    const pairs = current.benchmark.trials.filter(({ arm }) => arm === name).flatMap((to) => {
+      const from = against.benchmark.trials.find(({ arm, task, repetition }) => arm === name && task === to.task && repetition === to.repetition);
+      return from ? [{ from: from.result === 'passed', to: to.result === 'passed' }] : [];
+    });
+    const count = (test: (pair: { from: boolean; to: boolean }) => boolean): number => pairs.filter(test).length;
+    const difference = pairedDifference({ both: count((p) => p.from && p.to), toOnly: count((p) => p.to && !p.from), fromOnly: count((p) => p.from && !p.to), neither: count((p) => !p.from && !p.to) });
+    const rate = (side: 'from' | 'to'): PassRate => ({ passed: count((pair) => pair[side]), planned: pairs.length });
+    return pairs.length > 0 && difference.high < 0 ? [{ arm: name, pairs: pairs.length, rates: { from: rate('from'), to: rate('to') }, difference }] : [];
+  });
+  return arms.length > 0 ? { kind: 'dropped', against: against.run, arms } : { kind: 'held', against: against.run };
 }
 
 /** The paired comparisons of one run's arms, as Compare derives them over a suite's runs: never stored, always derived. */

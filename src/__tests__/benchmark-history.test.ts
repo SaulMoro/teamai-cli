@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BenchmarkHistory, pairedDifference, type BenchmarkRunInput } from '../benchmark/history.js';
+import { BenchmarkHistory, pairedDifference, regressionOf, type BenchmarkRunInput } from '../benchmark/history.js';
 import { runSourceHash } from '../benchmark/plan.js';
 import type { Baseline, TrialResult } from '../benchmark/result.js';
 import type { ArmTeam } from '../benchmark/terms.js';
@@ -39,7 +39,7 @@ function run({ id, suite = 'fix-auth', version = 'v1', taskEdit = '', startedAt,
   const baseline = (task: string): Baseline => (invalid.includes(task) ? 'invalid' : notRun.includes(task) ? 'not_run' : 'valid');
   let order = 0;
   return {
-    run: id, source, username, startedAt,
+    run: id, source, username, startedAt, outcome: 'succeeded',
     benchmark: {
       suite: { name: suite, sourceHash: version }, repetitions: 1, baselineTeamRevision: `team-${id}`, scorers: [],
       tasks: tasks.map((task) => ({ id: task, startingCommit: 'a'.repeat(40), sourceHash: `task-${task}${taskEdit}`, baseline: baseline(task) })),
@@ -326,5 +326,41 @@ describe('BenchmarkHistory comparisons', () => {
       { id: 'r2', toolVersions: { claude: '2.2.0' } },
       { id: 'r1', toolVersions: { claude: '2.1.0', codex: '0.40.0' } },
     ]);
+  });
+});
+
+describe('benchmark regression', () => {
+  const ONE = [CLAUDE];
+  const passes = (results: TrialResult[]) => ({ fix: { claude: results } });
+  const at = (day: number): string => `2026-10-${String(day).padStart(2, '0')}T09:00:00Z`;
+  const current = run({ id: 'now', startedAt: at(20), arms: ONE, trials: passes(['failed', 'failed', 'failed']) });
+
+  it('compares with the newest earlier succeeded run of the same suite, tasks and arms, whatever revision its team resolved to', () => {
+    const regression = regressionOf(current, [
+      run({ id: 'older', startedAt: at(10), arms: ONE, trials: passes(['passed', 'failed', 'failed']) }),
+      run({ id: 'newest', startedAt: at(12), arms: ONE, trials: passes(['passed', 'passed', 'passed']) }),
+      { ...run({ id: 'failed-run', startedAt: at(14), arms: ONE, trials: passes(['passed', 'passed', 'passed']) }), outcome: 'failed' },
+      run({ id: 'other-model', startedAt: at(15), arms: [{ ...CLAUDE, model: 'claude-sonnet-5-5' }], trials: passes(['passed', 'passed', 'passed']) }),
+      run({ id: 'other-task', startedAt: at(16), taskEdit: '-edited', arms: ONE, trials: passes(['passed', 'passed', 'passed']) }),
+      run({ id: 'other-suite', suite: 'other', startedAt: at(17), arms: ONE, trials: passes(['passed', 'passed', 'passed']) }),
+      run({ id: 'later', startedAt: at(25), arms: ONE, trials: passes(['passed', 'passed', 'passed']) }),
+    ]);
+
+    expect(regression).toEqual({
+      kind: 'dropped', against: 'newest',
+      arms: [{ arm: 'claude', pairs: 3, rates: { from: { passed: 3, planned: 3 }, to: { passed: 0, planned: 3 } }, difference: { value: -1, low: -1, high: expect.closeTo(-0.2, 1) } }],
+    });
+  });
+
+  it('holds when the paired drop is within chance', () => {
+    expect(regressionOf(current, [run({ id: 'before', startedAt: at(12), arms: ONE, trials: passes(['passed', 'failed', 'failed']) })])).toEqual({ kind: 'held', against: 'before' });
+  });
+
+  it('finds nothing to compare with when an arm ran another workflow or team choice before', () => {
+    const before = run({ id: 'before', startedAt: at(12), arms: ONE, trials: passes(['passed', 'passed', 'passed']) });
+    const withWorkflow = { ...before, benchmark: { ...before.benchmark, arms: before.benchmark.arms.map((arm) => ({ ...arm, workflow: { name: 'fixer', sourceHash: 'h' } })) } };
+    const without = run({ id: 'without', startedAt: at(12), arms: [{ ...CLAUDE, team: { kind: 'without', skills: ['fixer'], revision: 'team-without' } }], trials: passes(['passed', 'passed', 'passed']) });
+
+    expect(regressionOf(current, [withWorkflow, without])).toEqual({ kind: 'no_comparable' });
   });
 });

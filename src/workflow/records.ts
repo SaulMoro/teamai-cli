@@ -398,6 +398,11 @@ export async function queueBenchmarkRecord(config: LocalConfig, record: QueuedBe
   return true;
 }
 
+/** The runs whose benchmark record waits in this machine's queue: a copy in the reports checkout may not be on its origin yet. */
+export async function pendingBenchmarkRuns(config: LocalConfig): Promise<Set<string>> {
+  return new Set((await pendingBenchmarks(config)).map(({ record }) => record.run));
+}
+
 /** The queued benchmark records, each with the file that holds it. A file that does not read as one is left for its next write. */
 async function pendingBenchmarks(config: LocalConfig): Promise<Array<{ file: string; text: string; record: QueuedBenchmark }>> {
   const dir = pendingBenchmarksDir(config);

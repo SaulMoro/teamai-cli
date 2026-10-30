@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { autoDetectInit, loadTeamConfig, machineWorkflowAllowProblem } from './config.js';
@@ -16,7 +17,7 @@ import { callerProvenance, cancelRun, respondProvenance, respondToHitl, retrySte
 import { localStrictCan, personAnswers, runLocalDriver, withDriverLock } from './workflow/drivers/local/local-driver.js';
 import { driverIdentity } from './driver-identity.js';
 import { getBusinessRoot, getDataHome, usesBranchWorktree, type LocalConfig, type TeamaiConfig } from './types.js';
-import { AttemptIdSchema, installOwner, readRun, RunIdSchema } from './workflow/store.js';
+import { AttemptIdSchema, installOwner, readRun, RunIdSchema, runsDir } from './workflow/store.js';
 import { inProcessClient, resumeRefusal, workflowNotFound, type InvokeCaller, type NextPrepare } from './workflow/protocol.js';
 import { parseInputsFlag, parseSkillCall, parseSkillResume, runSkillCall, sessionDrivesRun, skillContext } from './workflow/drivers/skill/skill-driver.js';
 import { loadCachedWorkflow, resolveStart } from './workflow/cache.js';
@@ -27,6 +28,8 @@ import { memberTools } from './tool-launch/call.js';
 import { agentEvidence, isAttemptRunner, nestedCall, nestedStart, nestedWorkflowError, type Nested } from './workflow/attempt-marker.js';
 import { planBenchmark, planStep, tryBenchmarkTask } from './benchmark/start.js';
 import { reportBenchmark } from './benchmark/report.js';
+import { regressionOf, type Regression } from './benchmark/history.js';
+import { benchmarkRecordFile, BenchmarkRunRecordSchema } from './benchmark/result.js';
 import { runCheckStep } from './benchmark/trial.js';
 import type { WorkflowEnvelope, WorkflowFailure } from './workflow/types.js';
 
@@ -887,6 +890,7 @@ export async function benchmarkReport(): Promise<void> {
 }
 
 const BenchmarkDoneSchema = z.object({
+  run: z.string().optional(),
   outputs: z.object({ text: z.string() }).partial().passthrough().optional(),
   finally: z.array(z.object({ id: z.string() }).passthrough()).optional(),
 }).passthrough();
@@ -895,9 +899,10 @@ const BenchmarkDoneSchema = z.object({
  * `teamai benchmark run <suite>`: plans the suite once without a run, so a suite that cannot run leaves none, then
  * starts the workflow `benchmark`, the team's or teamai's default, with the suite as its input and the suite's timeout as
  * the run's, on the local driver unless `--driver` names another. Exits as `workflow start` does for the run's outcome,
- * and also 1 when a `finally` step, the report, failed or was cancelled. A record still pending never changes it.
+ * and also 1 when a `finally` step, the report, failed or was cancelled, or with `failOnRegression` when an arm dropped
+ * against the newest earlier comparable record on teamai-reports. A record still pending never changes it.
  */
-export async function benchmarkRun(suite: string, options: { driver?: string; sandbox?: boolean; memberAliases?: boolean }): Promise<void> {
+export async function benchmarkRun(suite: string, options: { driver?: string; sandbox?: boolean; memberAliases?: boolean; failOnRegression?: boolean }): Promise<void> {
   setStderrOnly(true);
   const loaded = await readyStartConfig(BENCHMARK_WORKFLOW);
   if (!('config' in loaded)) {
@@ -937,6 +942,39 @@ export async function benchmarkRun(suite: string, options: { driver?: string; sa
   if (ended.data.outputs?.text !== undefined) process.stderr.write(`${ended.data.outputs.text}\n`);
   // The report is a finally step: one that failed or was cancelled is listed, and the results it owed are missing.
   if ((ended.data.finally ?? []).length > 0) process.exitCode = 1;
+  if (options.failOnRegression && ended.data.run !== undefined) await failOnRegression(config, ended.data.run);
+}
+
+/**
+ * `--fail-on-regression`: run `runId`'s record, from its run directory so a record pending publication counts, against
+ * the published records Compare reads, and exit 1 when an arm dropped. A run whose report wrote no record is left to the
+ * report's own exit.
+ */
+async function failOnRegression(config: LocalConfig, runId: string): Promise<void> {
+  const text = await fs.readFile(benchmarkRecordFile(runsDir(config), runId), 'utf8').catch(() => undefined);
+  const record = text === undefined ? undefined : BenchmarkRunRecordSchema.safeParse(JSON.parse(text));
+  if (!record?.success) return;
+  const { publishedBenchmarkRuns } = await import('./dashboard/benchmarks.js');
+  const current = { run: record.data.run, source: 'local' as const, startedAt: record.data.startedAt, outcome: record.data.outcome, benchmark: record.data };
+  const regression = regressionOf(current, await publishedBenchmarkRuns(config, { refresh: true }));
+  for (const line of regressionLines(regression, record.data.suite.name)) process.stderr.write(`${line}\n`);
+  if (regression.kind === 'dropped') process.exitCode = 1;
+}
+
+function regressionLines(regression: Regression, suite: string): string[] {
+  const points = (fraction: number): number => Math.round(fraction * 100);
+  switch (regression.kind) {
+    case 'no_comparable':
+      return [`No earlier succeeded run of suite ${suite} ran the same tasks on the same arms on teamai-reports: recording is off, or nothing comparable has been published yet. --fail-on-regression has nothing to compare with.`];
+    case 'held':
+      return [`No arm's pass rate dropped by more than chance against run ${regression.against}.`];
+    case 'dropped':
+      return regression.arms.map(({ arm, pairs, rates, difference }) => `Arm "${arm}" passed ${rates.to.passed}/${pairs} paired trials, against ${rates.from.passed}/${pairs} in run ${regression.against}: a drop of ${points(-difference.value)} points, with a 95% interval of ${points(difference.low)} to ${points(difference.high)} points.`);
+    default: {
+      const unhandled: never = regression;
+      return unhandled;
+    }
+  }
 }
 
 /** `teamai benchmark try <task-file>`: whether a task's check tells its fix from no change. Needs no init and no run. */
