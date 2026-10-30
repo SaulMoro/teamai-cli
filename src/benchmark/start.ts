@@ -103,11 +103,11 @@ export async function planBenchmark(config: LocalConfig, name: string, options: 
  * checkout. Refused when the run has no deadline, or one later than the suite's timeout allows, since then the suite's
  * timeout would bound nothing: start it with `workflow start --timeout`, as `teamai benchmark run` does.
  */
-export async function planStep(name: string, env: NodeJS.ProcessEnv): Promise<{ planned: BenchmarkPlanned } | { failure: WorkflowFailure }> {
+export async function planStep(name: string, env: NodeJS.ProcessEnv, { memberAliases }: Pick<BenchmarkStart, 'memberAliases'>): Promise<{ planned: BenchmarkPlanned } | { failure: WorkflowFailure }> {
   const found = await findAttemptRun(env);
   if ('error' in found) return { failure: found.error };
   const { config, run } = found;
-  const planned = await planBenchmark(config, name, { checkout: run.checkout ?? process.cwd(), memberAliases: false });
+  const planned = await planBenchmark(config, name, { checkout: run.checkout ?? process.cwd(), memberAliases });
   if ('refused' in planned) return { failure: planned.refused.error };
   const limit = runDeadline(run) === undefined ? undefined : Math.min(...[run.definition.timeout, run.timeout].filter((ms) => ms !== undefined));
   if (limit === undefined || limit > planned.timeoutMs) {

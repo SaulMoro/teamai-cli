@@ -903,9 +903,14 @@ function writeStepOutput(answer: { failure: WorkflowFailure } | { output: unknow
 }
 
 /** `teamai benchmark plan <suite>`: the step that plans a benchmark run. */
-export async function benchmarkPlan(suite: string): Promise<void> {
+export async function benchmarkPlan(suite: string, options: { aliases?: string }): Promise<void> {
   setStderrOnly(true);
-  const planned = await planStep(suite, process.env);
+  const aliases = options.aliases ?? 'team';
+  if (aliases !== 'team' && aliases !== 'member') {
+    writeStepOutput({ failure: { code: 'invalid_arguments', message: `--aliases takes team, the team's models/aliases.yaml, or member, your ~/.teamai/models/aliases.yaml over the team's; got ${aliases}.` } });
+    return;
+  }
+  const planned = await planStep(suite, process.env, { memberAliases: aliases === 'member' });
   writeStepOutput('failure' in planned ? planned : { output: planned.planned });
 }
 
@@ -927,7 +932,7 @@ const BenchmarkDoneSchema = z.object({
  * the run's, on the local driver unless `--driver` names another. Exits as `workflow start` does for the run's outcome,
  * and also 1 when a `finally` step, the report, failed or was cancelled. A record still pending never changes it.
  */
-export async function benchmarkRun(suite: string, options: { driver?: string; sandbox?: boolean }): Promise<void> {
+export async function benchmarkRun(suite: string, options: { driver?: string; sandbox?: boolean; memberAliases?: boolean }): Promise<void> {
   setStderrOnly(true);
   const loaded = await readyStartConfig(BENCHMARK_WORKFLOW);
   if (!('config' in loaded)) {
@@ -935,7 +940,8 @@ export async function benchmarkRun(suite: string, options: { driver?: string; sa
     return;
   }
   const { config, secrets } = loaded;
-  const preflight = await planBenchmark(config, suite, { checkout: process.cwd(), memberAliases: false });
+  const memberAliases = options.memberAliases === true;
+  const preflight = await planBenchmark(config, suite, { checkout: process.cwd(), memberAliases });
   if ('refused' in preflight) {
     writeEnvelope(preflight.refused, secrets);
     return;
@@ -950,10 +956,16 @@ export async function benchmarkRun(suite: string, options: { driver?: string; sa
       writeEnvelope({ error: { code: 'invalid_inputs', message: `The team's ${workflow.relativePath} replaces teamai's benchmark workflow and takes no input suite, so teamai benchmark run cannot give it the suite. Add inputs: { suite: string } to it, or remove it to run teamai's default.` } }, secrets);
       return;
     }
+    if (memberAliases && workflow.definition.inputs?.aliases === undefined) {
+      writeEnvelope({ error: { code: 'invalid_inputs', message: `The team's ${workflow.relativePath} replaces teamai's benchmark workflow and takes no input aliases, so teamai benchmark run cannot give it --member-aliases. Add aliases: string to its inputs and pass it to teamai benchmark plan --aliases, or run without --member-aliases.` } }, secrets);
+      return;
+    }
     log.info(`Running the team's ${workflow.relativePath}, which replaces teamai's benchmark workflow.`);
   }
+  // A team workflow without input aliases plans with the team's aliases, as teamai benchmark plan does without --aliases.
+  const aliases = workflow.definition.inputs?.aliases === undefined ? {} : { aliases: memberAliases ? 'member' : 'team' };
   const done = await startWorkflow(BENCHMARK_WORKFLOW, {
-    driver: options.driver ?? 'local', inputs: JSON.stringify({ suite }), timeout: `${preflight.timeoutMs}ms`, ...(options.sandbox ? { sandbox: true } : {}),
+    driver: options.driver ?? 'local', inputs: JSON.stringify({ suite, ...aliases }), timeout: `${preflight.timeoutMs}ms`, ...(options.sandbox ? { sandbox: true } : {}),
   });
   const ended = done && 'data' in done ? BenchmarkDoneSchema.safeParse(done.data.done) : undefined;
   if (!ended?.success) return;

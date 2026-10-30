@@ -145,7 +145,7 @@ describe('a benchmark run once it has started', () => {
   it('reads a trial cancelled before its lease as not_run and after it as error, and refuses retry, publish and claim', async () => {
     const fixture = await fixtureOf({ tool: 'fixes', sandbox: false, suite: TWO_ARMS });
     const status = fixture.status();
-    const answer = envelope(await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix"}', '--timeout', '10m']));
+    const answer = envelope(await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m']));
     const runId = String(answer.data?.run);
     const driver = { ...DRIVER, can: SANDBOX_CLAUDE };
 
@@ -186,7 +186,7 @@ describe('a benchmark run once it has started', () => {
 
   it("is refused by the skill driver, which launches no trial tool, and handed to the person's local resume", async () => {
     const fixture = await fixtureOf({ tool: 'fixes', sandbox: false, suite: FIX_SUITE });
-    const answer = envelope(await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix"}', '--timeout', '10m']));
+    const answer = envelope(await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m']));
     const runId = String(answer.data?.run);
 
     const resumed = await fixture.teamai(['workflow', 'resume', runId, '--driver', 'skill']);

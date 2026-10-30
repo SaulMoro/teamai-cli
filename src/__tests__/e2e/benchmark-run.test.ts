@@ -120,6 +120,20 @@ describe('a team benchmark workflow', () => {
     expect(envelope(ran).error).toEqual({ code: 'invalid_inputs', message: 'The team\'s workflows/benchmark.yaml replaces teamai\'s benchmark workflow and takes no input suite, so teamai benchmark run cannot give it the suite. Add inputs: { suite: string } to it, or remove it to run teamai\'s default.' });
     expect(fixture.runIds()).toEqual([]);
   }, 180_000);
+
+  it('is refused by benchmark run --member-aliases, leaving no run, when it takes no input aliases', async () => {
+    const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true });
+    fixtures.push(fixture);
+    fixture.pushTeam({ 'workflows/benchmark.yaml': RELAXED });
+    const pulled = await fixture.teamai(['pull']);
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix', '--member-aliases']);
+
+    expect(pulled.code, said(pulled)).toBe(0);
+    expect(ran.code).toBe(1);
+    expect(envelope(ran).error).toEqual({ code: 'invalid_inputs', message: 'The team\'s workflows/benchmark.yaml replaces teamai\'s benchmark workflow and takes no input aliases, so teamai benchmark run cannot give it --member-aliases. Add aliases: string to its inputs and pass it to teamai benchmark plan --aliases, or run without --member-aliases.' });
+    expect(fixture.runIds()).toEqual([]);
+  }, 180_000);
 });
 
 /** A team benchmark workflow whose plan step prints a plan of a schemaVersion no teamai reads, and a bundle of `steps`. */
@@ -169,8 +183,8 @@ describe('the benchmark workflow', () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true });
     fixtures.push(fixture);
 
-    const unbounded = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix"}', '--driver', 'local']);
-    const longer = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix"}', '--driver', 'local', '--timeout', '11m']);
+    const unbounded = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--driver', 'local']);
+    const longer = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--driver', 'local', '--timeout', '11m']);
 
     expect(unbounded.code, said(unbounded)).toBe(1);
     expect(envelope(unbounded).data?.done).toMatchObject({ outcome: 'failed' });

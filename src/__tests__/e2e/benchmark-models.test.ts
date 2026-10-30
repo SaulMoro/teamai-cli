@@ -53,9 +53,6 @@ const RecordSchema = z.object({
   trials: z.array(z.object({ arm: z.string(), result: z.string(), durationMs: z.number().optional() }).passthrough()),
 }).passthrough();
 const DoneSchema = z.object({ run: z.string(), outputs: z.object({ text: z.string() }).passthrough() }).passthrough();
-/** What `workflow start --benchmark` answers when its local driver ends the run. */
-const OldDoneSchema = z.object({ done: z.object({ run: z.string(), benchmark: z.object({ text: z.string() }) }) });
-const OldRecordSchema = z.object({ benchmark: RecordSchema });
 
 const fixtures: BenchmarkFixture[] = [];
 
@@ -167,7 +164,7 @@ const DRIVERS: Array<{ name: string; run(fixture: BenchmarkFixture): Promise<{ r
   {
     name: 'an external driver',
     run: async (fixture) => {
-      const started = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix"}', '--timeout', '10m']);
+      const started = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m']);
       const runId = z.object({ run: z.string() }).parse(envelope(started).data).run;
       const done = await driveExternally(fixture, runId);
       return { runId, text: done.outputs.text };
@@ -209,16 +206,26 @@ describe('benchmark arm models at start', () => {
   it('resolves with the member\'s aliases under --member-aliases, and shows member as the source of each model they decided', async () => {
     const fixture = await modelFixture();
 
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local', '--member-aliases']);
-    const { run: runId, benchmark: { text } } = OldDoneSchema.parse(envelope(started).data).done;
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix', '--member-aliases']);
+    const { run: runId, outputs: { text } } = DoneSchema.parse(envelope(ran).data?.done);
 
     expect(fixture.toolLaunches().map(({ model }) => model)).toEqual(['claude-member-1', 'claude-fast-1', 'gpt-strong-1']);
-    expect(OldRecordSchema.parse(fixture.endRecord(runId)).benchmark.arms).toMatchObject([
+    expect(RecordSchema.parse(fixture.benchmarkRecord(runId)).arms).toMatchObject([
       { name: 'strong', model: 'claude-member-1', source: 'member' },
       { name: 'fast', model: 'claude-fast-1', source: 'team' },
       { name: 'codex', model: 'gpt-strong-1', source: 'team' },
     ]);
     expect(text).toContain('| strong | claude | claude-member-1 (member) |');
+  }, 120_000);
+
+  it('refuses a plan whose --aliases is neither team nor member, naming both', async () => {
+    const fixture = await modelFixture();
+
+    const planned = await fixture.teamai(['benchmark', 'plan', 'fix', '--aliases', 'mine']);
+
+    expect(planned.code, said(planned)).toBe(1);
+    expect(planned.stdout).toBe('');
+    expect(planned.stderr).toContain('invalid_arguments: --aliases takes team, the team\'s models/aliases.yaml, or member, your ~/.teamai/models/aliases.yaml over the team\'s; got mine.');
   }, 120_000);
 
   it('refuses to start an arm whose alias names no model for its tool, and leaves no run and no record', async () => {
@@ -245,7 +252,7 @@ describe('benchmark arm models at start', () => {
 
   it.each([
     {
-      origin: 'a member alias resolves to a credential URL', suite: SUITE, command: ['workflow', 'start', 'fix', '--benchmark', '--driver', 'local', '--member-aliases'],
+      origin: 'a member alias resolves to a credential URL', suite: SUITE, command: ['benchmark', 'run', 'fix', '--member-aliases'],
       member: 'aliases:\n  strong:\n    claude: https://member:private-password-123@models.example.test/private-model\n',
       error: 'Arm "strong" has a model that is not a plain name, such as a URL or a local path, and a benchmark record publishes it. Fix your entry in ~/.teamai/models/aliases.yaml, or start again without --member-aliases.',
     },
