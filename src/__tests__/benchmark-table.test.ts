@@ -21,7 +21,7 @@ const LeaseSchema = z.object({ data: z.object({ lease: z.object({ attempt: z.str
 const dirs: string[] = [];
 
 afterEach(() => {
-  // Retried: on Windows another process, such as a virus scanner, can briefly hold a file just written (EBUSY).
+  // Retried: on Windows a directory can stay busy for a moment after a process in it exits (EBUSY).
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
@@ -29,7 +29,9 @@ afterEach(() => {
 async function startTen(defaults = '{ tool: claude }') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-benchmark-table-'));
   dirs.push(root);
-  const config = benchmarkRunConfig(root);
+  // No publication: it runs git in the team directory, which these tests never read, and on Windows the directory
+  // stayed busy when they removed it (EBUSY).
+  const config = { ...benchmarkRunConfig(root), usageReportEnabled: false };
   const suite = `schemaVersion: v1alpha1\nname: fix\nrepo: ${PRODUCT_URL}\ndefaults: ${defaults}\narms: [{ name: claude }]\nrepetitions: 10\ntimeout: 10m\n`;
   const started = await startBenchmarkRun(config, { name: 'fix', suite, tasks: { fix: fixTask('{{startingCommit}}') } });
   if ('error' in started) throw new Error(started.error.message);
