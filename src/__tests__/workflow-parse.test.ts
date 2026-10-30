@@ -1517,6 +1517,20 @@ steps:
     ]);
   });
 
+  it('lists a generated scorer, whose name holds a colon, beside a team one', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Fix it.
+steps:
+  - id: fix
+    prompt: Fix it.
+    scorers: { names: [quality, "teamai:correctness:fix"], sampling: all }
+`);
+    expect(result.ok, result.ok ? '' : result.diagnostics.map(formatDiagnostic).join('\n')).toBe(true);
+    if (!result.ok) return;
+    expect(result.definition.steps[0]?.scorers?.names).toEqual(['quality', 'teamai:correctness:fix']);
+  });
+
   it('reports scorers on a command step, an empty or repeated list, a name that is not a token, and a bad batch', () => {
     const result = parse(`schemaVersion: v1alpha1
 name: build

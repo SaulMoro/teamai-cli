@@ -44,6 +44,8 @@ const FINALLY_STEP_KEYS = new Set(['id', 'needs', 'if', 'command', 'env', 'outpu
 const ACTION_LIST = `${ACTION_KEYS.slice(0, -1).join(', ')}, or ${ACTION_KEYS.at(-1)}`;
 const TYPE_NAMES = new Set(['string', 'number', 'boolean']);
 const TOKEN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** A scorer a step lists: a token, the name of a file in scorers/, or a scorer a run generates, whose name holds a colon. */
+const SCORER_NAME = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const DURATION = /^(\d+)(ms|s|m|h)$/;
 const DURATION_UNITS = new Map([['ms', 1], ['s', 1000], ['m', 60_000], ['h', 3_600_000]]);
@@ -1005,7 +1007,7 @@ function parseScorers(node: Node | null | undefined, field: string, ctx: ParseCo
   const names: string[] = [];
   for (const item of list.items) {
     const name = isScalar(item) ? String(item.value) : undefined;
-    if (name === undefined || !TOKEN.test(name)) {
+    if (name === undefined || !SCORER_NAME.test(name)) {
       diagnostics.push(locate(file, lineCounter, list, field, `scorer ${name === undefined ? 'names' : `"${name}"`} must be a token, the name of a file in scorers/`));
     } else if (names.includes(name)) {
       diagnostics.push(locate(file, lineCounter, list, field, `scorers lists "${name}" twice`));
