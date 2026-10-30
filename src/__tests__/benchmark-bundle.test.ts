@@ -48,26 +48,31 @@ function suiteOf({ tasks = 1, arms = 1, repetitions = 1 } = {}): BenchmarkSuiteF
 const LeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number() }) }) });
 
 /**
- * A run of the planned workflow whose plan step printed the bundle `compileBundle` makes of `files`, with its plan, or
- * with `plan` in its place. Answers the run as it stands once the plan step's report settled.
+ * A run of `body`, the planned workflow by default, whose command steps each printed the bundle `compileBundle` makes of
+ * `files` with its plan, or what `outputsOf` makes of them. Answers the run as it stands once no command step is left
+ * for a driver that can take nothing else.
  */
-async function plannedRun(files: BenchmarkSuiteFiles, replace?: (plan: BenchmarkPlan) => unknown): Promise<{ run: RunState; plan: BenchmarkPlan }> {
+async function plannedRun(files: BenchmarkSuiteFiles, { body = PLANNED, outputsOf }: {
+  body?: string; outputsOf?: (bundle: ReturnType<typeof compileBundle>, plan: BenchmarkPlan) => unknown;
+} = {}): Promise<{ run: RunState; plan: BenchmarkPlan }> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-benchmark-bundle-'));
   dirs.push(root);
   const config: LocalConfig = benchmarkRunConfig(root);
   const frozen = await frozenBenchmark(config, files);
   if (!('plan' in frozen)) throw new Error(JSON.stringify(frozen));
-  const { definition, scorers } = compileBundle(frozen.plan, frozen.committed);
+  const bundle = compileBundle(frozen.plan, frozen.committed);
   fs.mkdirSync(path.join(config.repo.localPath, 'workflows'), { recursive: true });
-  fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'planned.yaml'), PLANNED);
+  fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'planned.yaml'), body);
   await syncWorkflowDefinitions(config);
   const started = await startRun(config, 'planned', {}, { secrets: {} });
   if ('error' in started) throw new Error(started.error.message);
   const runId = String(started.data.run);
-  const { lease } = LeaseSchema.parse(await leaseNext(config, runId, driver)).data;
   // As the step prints them, JSON on its stdout, without the team revision, which this config has no team repo to pin at.
-  const outputs: unknown = JSON.parse(JSON.stringify({ definition: { definition, workflows: {}, scorers }, plan: replace ? replace(frozen.plan) : frozen.plan }));
-  await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver, outputs });
+  const outputs: unknown = JSON.parse(JSON.stringify(outputsOf ? outputsOf(bundle, frozen.plan) : { definition: { ...bundle, workflows: {} }, plan: frozen.plan }));
+  for (let leased = LeaseSchema.safeParse(await leaseNext(config, runId, driver)); leased.success; leased = LeaseSchema.safeParse(await leaseNext(config, runId, driver))) {
+    const { attempt, revision } = leased.data.data.lease;
+    await reportAttempt(config, runId, { attempt, revision, outcome: 'success', driver, outputs });
+  }
   const run = await readRun(config, runId);
   if (typeof run !== 'object') throw new Error(`run ${runId} cannot be read`);
   return { run, plan: frozen.plan };
@@ -79,18 +84,62 @@ describe('the workflow a benchmark plan prints', () => {
 
     expect(run.steps.find((step) => step.id === 'plan')).toMatchObject({ status: 'succeeded' });
     expect(planOfRun(run, 'trials.r2.t02.a01.prompt')).toEqual({ found: { plan, prefix: 'trials.' } });
+    expect(planOfRun(run)).toEqual({ found: { plan, prefix: 'trials.' } });
     expect(plan.trials.map((trial) => trial.step)).toContain('r2.t02.a02.prompt');
     for (const step of ['trials.baselines.t01', 'trials.baselines.t02', 'trials.r2.t02.a02.prompt', 'trials.r2.t02.a02.check', 'trials.settled']) {
       expect(stepDefinitions(run)(step), step).toBeDefined();
     }
+    // A task's trials run only where its check fails on the starting commit.
+    expect(stepDefinitions(run)('trials.r1.t02')?.if).toBe("steps.baselines.outputs.t02 == 'failed'");
+  });
+
+  it('runs a suite of criteria tasks with no baselines, each prompt scored by its task\'s correctness scorer', async () => {
+    const { run } = await plannedRun({
+      name: 'fix',
+      suite: 'schemaVersion: v1alpha1\nname: fix\nrepo: https://github.com/fixture/app.git\ndefaults: { tool: claude }\narms: [{ name: a01 }]\nrepetitions: 2\ntimeout: 10m\n',
+      tasks: { t01: "schemaVersion: v1alpha1\ntitle: Fix it\nprompt: Make the test pass.\nstartingCommit: '{{startingCommit}}'\nsuccessCriteria: The test passes.\n" },
+    });
+
+    expect(run.steps.find((step) => step.id === 'plan')).toMatchObject({ status: 'succeeded' });
+    expect(stepDefinitions(run)('trials.baselines')).toBeUndefined();
+    expect(stepDefinitions(run)('trials.r2.t01.a01.check')).toBeUndefined();
+    expect(stepDefinitions(run)('trials.r2.t01.a01.prompt')?.scorers).toEqual({ names: ['teamai:correctness:t01'], sampling: 'all' });
   });
 
   it('is refused by report and check once its plan is of a schemaVersion this teamai does not read', async () => {
-    const { run } = await plannedRun(suiteOf(), (plan) => ({ ...plan, schemaVersion: 2 }));
+    const { run } = await plannedRun(suiteOf(), { outputsOf: (bundle, plan) => ({ definition: { ...bundle, workflows: {} }, plan: { ...plan, schemaVersion: 2 } }) });
 
     expect(planOfRun(run, 'trials.r1.t01.a01.check')).toEqual({ failure: {
       code: 'run_unreadable',
       message: `Step "plan" of run ${run.id} printed a benchmark plan of schemaVersion 2, and this teamai reads only schemaVersion 1. Run the benchmark with the teamai that planned it, or start it again.`,
     } });
+  });
+
+  it('leaves report and check no plan to read once the run refused the workflow its plan step printed', async () => {
+    const { run } = await plannedRun(suiteOf(), { outputsOf: (_bundle, plan) => ({ definition: { definition: { schemaVersion: 'v1alpha1', name: 'fix' } }, plan }) });
+
+    expect(run.steps.find((step) => step.id === 'plan')).toMatchObject({ status: 'failed', failure: { code: 'invalid_output' } });
+    expect(planOfRun(run, 'trials.r1.t01.a01.check')).toEqual({ failure: {
+      code: 'invalid_arguments',
+      message: `Run ${run.id} runs no benchmark plan around step "trials.r1.t01.a01.check": no step of it runs the workflow a teamai benchmark plan step printed. Run teamai benchmark only as a step of the benchmark workflow.`,
+    } });
+  });
+
+  it('cannot tell report which plan to read in a run of two', async () => {
+    const twice = `${PLANNED}  - id: again
+    needs: []
+    command: teamai benchmark plan fix
+    output: { definition: workflow, plan: json }
+  - id: trials-again
+    needs: [again]
+    workflow: { from: again }
+`;
+    const { run } = await plannedRun(suiteOf(), { body: twice });
+
+    expect(planOfRun(run)).toEqual({ failure: {
+      code: 'invalid_arguments',
+      message: `Run ${run.id} runs more than one benchmark plan, in steps "trials", "trials-again", so teamai benchmark report cannot tell which one to report. Run one benchmark plan per run.`,
+    } });
+    expect(planOfRun(run, 'trials-again.r1.t01.a01.check')).toMatchObject({ found: { prefix: 'trials-again.' } });
   });
 });
