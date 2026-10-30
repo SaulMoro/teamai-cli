@@ -18,7 +18,7 @@ import type { CommittedSuite } from './trial.js';
 import type { PinnedArmWorkflow } from './arm-workflow.js';
 import { CommitSchema, TeamSelectionSchema, type CloneTeam, type TeamSelection } from '../workflow/clone.js';
 import { CHECK_RESULTS } from './check.js';
-import { AddedSchema, ArmTeamSchema, BenchmarkNameSchema, TrialLimitsSchema, type Added, type ArmTeam } from './terms.js';
+import { AddedSchema, ArmTeamSchema, BenchmarkNameSchema, SkillChangesSchema, TrialLimitsSchema, type Added, type ArmTeam, type SkillChanges } from './terms.js';
 
 const Sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 
@@ -89,6 +89,8 @@ export const BenchmarkPlanSchema = z.object({
   limits: TrialLimitsSchema.optional(),
   tasks: z.array(PlannedTaskSchema).nonempty(),
   arms: z.array(PlannedArmSchema).nonempty(),
+  /** Each arm whose team assets differ from the baseline's in skills, with those skills. */
+  skillChanges: z.array(SkillChangesSchema).optional(),
   /** Every scorer that judges a trial, the generated correctness scorers included, with the rubric hash it was pinned with. */
   scorers: z.array(z.object({ name: z.string().min(1), rubric: z.object({ sourceHash: z.string().min(1) }).strict() }).strict()),
   trials: z.array(PlannedTrialSchema),
@@ -147,6 +149,7 @@ export function freezePlan(input: {
   arms: [PlannedArm, ...PlannedArm[]];
   /** The team scorers the suite lists, as start pinned them. */
   scorers: Record<string, PinnedScorer>;
+  skillChanges?: SkillChanges[];
 }): BenchmarkPlan {
   const { suite, files } = input.committed;
   const [first, ...rest] = suite.tasks;
@@ -161,6 +164,7 @@ export function freezePlan(input: {
     ...(suite.trial ? { limits: suite.trial } : {}),
     tasks: [planned(first), ...rest.map(planned)],
     arms: input.arms,
+    ...(input.skillChanges && input.skillChanges.length > 0 ? { skillChanges: input.skillChanges } : {}),
     scorers: Object.entries({ ...input.scorers, ...correctnessScorers(suite) }).map(([name, pin]) => ({ name, rubric: { sourceHash: pin.sourceHash } })),
     trials: trialsOf(suite.tasks, input.arms, suite.repetitions, suite.parallel),
   };

@@ -23,10 +23,10 @@ import type { WorkflowEnvelope, WorkflowFailure } from '../workflow/types.js';
 import { formatDiagnostic } from '../workflow/parse.js';
 import { git } from '../workflow/worktree.js';
 import { addedOf, compileBundle, freezePlan, type BenchmarkPlan, type PlannedArm } from './plan.js';
-import { parseSuite, type Arm, type Suite, type TaskJudge } from './suite.js';
+import { defaultsArmOf, parseSuite, type Arm, type Suite, type TaskJudge } from './suite.js';
 import { pinArmWorkflow, type PinnedArmWorkflow } from './arm-workflow.js';
 import type { TeamSelection } from '../workflow/clone.js';
-import type { Added, ArmTeam } from './terms.js';
+import type { Added, ArmTeam, SkillChanges } from './terms.js';
 import { commitCacheOf } from '../workflow/place/place.js';
 import { commitCheckFiles, trialBlocker, tryCheckAt, type CheckRun, type CommittedSuite } from './trial.js';
 
@@ -145,7 +145,9 @@ async function freezeSuite(config: LocalConfig, name: string, options: Benchmark
   if (!committed.ok) {
     return refuse(error('check_files_unwritable', `Task "${committed.task}" writes files from the suite directory before its check, and they could not be written as a commit into this machine's benchmark cache: ${committed.failed} Fix that, and start again.`));
   }
-  const plan = freezePlan({ committed: committed.suite, baselineTeamRevision: revision, selection: selectionOf(config), arms, scorers: pinned });
+  const skillChanges = await skillChangesOf(config, arms, { baseline: revision, defaults: defaultsArmOf(found)?.name });
+  if ('refused' in skillChanges) return refuse(skillChanges.refused);
+  const plan = freezePlan({ committed: committed.suite, baselineTeamRevision: revision, selection: selectionOf(config), arms, scorers: pinned, skillChanges: skillChanges.changes });
   const { scorers: generated } = compileBundle(plan, committed.suite, armWorkflows);
   const criteria = found.tasks.find((task) => task.judge.kind === 'criteria');
   const needs = found.scorers.length > 0 ? `its scorers ${found.scorers.join(', ')}` : criteria ? `task "${criteria.id}" has successCriteria` : undefined;
@@ -211,6 +213,49 @@ async function resolveTeam(config: LocalConfig, { name, tool, team }: Arm, pulle
       return unhandled;
     }
   }
+}
+
+/**
+ * The skills each arm's team assets add, remove or change against the `baseline` team revision: by directory under
+ * skills/ for an arm on another ref, and the skills an arm runs without. An arm on the pulled revision, or with no team
+ * assets, changes none.
+ */
+async function skillChangesOf(config: LocalConfig, arms: readonly PlannedArm[], { baseline, defaults }: { baseline: string; defaults: string | undefined }): Promise<{ changes: SkillChanges[] } | { refused: Refusal }> {
+  const changes: SkillChanges[] = [];
+  for (const arm of arms) {
+    const against = defaults === undefined || defaults === arm.name ? {} : { defaults };
+    if (arm.team.kind === 'without') {
+      const removed = (name: string) => ({ name, change: 'removed' as const });
+      const [first, ...rest] = arm.team.skills;
+      changes.push({ arm: arm.name, ...against, skills: [removed(first), ...rest.map(removed)] });
+      continue;
+    }
+    if (arm.team.kind !== 'ref' || arm.team.revision === baseline) continue;
+    const [before, after, diff] = await Promise.all([
+      git(config.repo.localPath, ['ls-tree', '-r', '--name-only', baseline]),
+      git(config.repo.localPath, ['ls-tree', '-r', '--name-only', arm.team.revision]),
+      git(config.repo.localPath, ['diff', '--name-only', '--no-renames', baseline, arm.team.revision]),
+    ]);
+    const failed = [before, after, diff].find((read) => read.code !== 0);
+    if (failed) {
+      return { refused: error('arm_team_unreadable', `Arm "${arm.name}" runs on team ref "${arm.team.ref}", and git could not compare its skills with the team revision this checkout pulled at ${config.repo.localPath}: ${failed.stderr.trim()}. Repair the team repo, or run teamai pull, and start again.`) };
+    }
+    const [had, has] = [skillDirectories(before.stdout), skillDirectories(after.stdout)];
+    const touched = diff.stdout.split('\n').filter((file) => file !== '');
+    const skills = [...new Set([...had, ...has])].sort().flatMap((directory) => {
+      const change = !had.has(directory) ? 'added' as const : !has.has(directory) ? 'removed' as const
+        : touched.some((file) => file.startsWith(`${directory}/`)) ? 'changed' as const : undefined;
+      return change ? [{ name: path.posix.basename(directory), change }] : [];
+    });
+    const [first, ...rest] = skills;
+    if (first) changes.push({ arm: arm.name, ...against, skills: [first, ...rest] });
+  }
+  return { changes };
+}
+
+/** The skill directories, each the directory of a SKILL.md under skills/, among the files `listing` names, one per line. */
+function skillDirectories(listing: string): Set<string> {
+  return new Set(listing.split('\n').flatMap((file) => (/(?:^|\/)skills\/(?:[^/]+\/)*?[^/]+\/SKILL\.md$/.test(file) ? [path.posix.dirname(file)] : [])));
 }
 
 /** What a member can do about an arm whose model gives its tool none. */

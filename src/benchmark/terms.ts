@@ -22,6 +22,18 @@ export const ArmTeamSchema = z.discriminatedUnion('kind', [
 export type ArmTeam = z.infer<typeof ArmTeamSchema>;
 
 /**
+ * The skills whose directory differs between the team revision an arm's trials get and the run's baseline: added,
+ * removed or changed under skills/. `defaults` is the arm that changes no defaults key, whose loads the table sets beside
+ * the arm's; absent when the suite has none.
+ */
+export const SkillChangesSchema = z.object({
+  arm: BenchmarkNameSchema,
+  defaults: BenchmarkNameSchema.optional(),
+  skills: z.array(z.object({ name: z.string().min(1), change: z.enum(['added', 'removed', 'changed']) }).strict()).nonempty(),
+}).strict();
+export type SkillChanges = z.infer<typeof SkillChangesSchema>;
+
+/**
  * The limits a suite's `trial` sets on every trial's prompt, as the record keeps them; an absent key is no limit. Each
  * prompt carries them under `on_limit: end_turn`, so reaching one ends the agent's turn, and the trial's check or judge
  * still decides it.

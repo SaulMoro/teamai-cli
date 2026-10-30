@@ -6,6 +6,7 @@
 import type { AgentObservation } from '../agent-observation.js';
 import { compareAgent } from './agent-match.js';
 import { TRIAL_RESULTS, type Baseline, type BenchmarkRecord, type TrialResult } from './result.js';
+import type { SkillChanges } from './terms.js';
 
 type RecordedArm = BenchmarkRecord['arms'][number];
 type RecordedTrial = BenchmarkRecord['trials'][number];
@@ -64,6 +65,18 @@ export interface BenchmarkTable {
   matrix: Array<{ task: string; arms: Array<{ arm: string; passRate?: PassRate }> }>;
   /** The tasks whose check, tried on the starting commit, did not fail there as the task expects: none of their trials ran. */
   invalid: Array<{ task: string; baseline: Extract<Baseline, 'invalid' | 'could_not_run'> }>;
+  /**
+   * Each skill an arm's team assets change, with how many of that arm's trials, and of the defaults arm's, loaded it;
+   * record order. Absent `defaults`: the suite has no defaults arm.
+   */
+  skills: Array<{ arm: string; skill: string; change: SkillChanges['skills'][number]['change']; here: SkillLoads; defaults?: SkillLoads }>;
+}
+
+/** Of the trials whose work ran: how many were seen to load a skill, how many were seen and did not, and how many went unseen. */
+export interface SkillLoads {
+  loaded: number;
+  observed: number;
+  unknown: number;
 }
 
 /** A table as the text of its cells. */
@@ -79,6 +92,8 @@ export interface BenchmarkCells {
   matrix: TextTable;
   /** Absent when every task's baseline let its trials run. */
   invalid?: TextTable;
+  /** Absent when no arm changes a team skill. */
+  skills?: TextTable;
   caption: string;
 }
 
@@ -145,7 +160,16 @@ export function benchmarkTable(record: BenchmarkTableInput): BenchmarkTable {
       arms: arms.map(({ name }) => ({ arm: name, ...passRateOf(trials.filter((trial) => trial.task === id && trial.arm === name)) })),
     })),
     usage: arms.map(({ name }) => ({ arm: name, ...usageOf(observed.filter(({ trial }) => trial.arm === name)) })),
+    skills: (record.benchmark.skillChanges ?? []).flatMap(({ arm, defaults, skills }) => skills.map(({ name, change }) => ({
+      arm, skill: name, change, here: skillLoadsOf(trials, arm, name), ...(defaults ? { defaults: skillLoadsOf(trials, defaults, name) } : {}),
+    }))),
   };
+}
+
+/** How `arm`'s trials whose work ran loaded `skill`: a trial with no `used` went unseen. */
+function skillLoadsOf(trials: readonly RecordedTrial[], arm: string, skill: string): SkillLoads {
+  const seen = trials.filter((trial) => trial.arm === arm && trial.agent).map(({ used }) => (used ? used[skill] ?? 'not_loaded' : 'unknown'));
+  return { loaded: seen.filter((load) => load === 'loaded').length, observed: seen.filter((load) => load !== 'unknown').length, unknown: seen.filter((load) => load === 'unknown').length };
 }
 
 /** The results, the usage, the task by arm matrix, then the invalid tasks. A median or a total says in parentheses how many values it used. */
@@ -171,16 +195,28 @@ export function benchmarkCells(table: BenchmarkTable): BenchmarkCells {
       rows: table.matrix.map(({ task, arms }) => [task, ...arms.map(({ passRate }) => formatPassRate(passRate))]),
     },
     ...(table.invalid.length > 0 ? { invalid: { header: ['Task', 'Baseline'], rows: table.invalid.map(({ task, baseline }) => [task, INVALID_REASONS[baseline]]) } } : {}),
+    ...(table.skills.length > 0 ? {
+      skills: {
+        header: ['Arm', 'Skill', 'Change', 'Loaded in this arm', 'Loaded in the defaults arm'],
+        rows: table.skills.map(({ arm, skill, change, here, defaults }) => [arm, skill, change, formatSkillLoads(here), defaults ? formatSkillLoads(defaults) : '-']),
+      },
+    } : {}),
     caption: BENCHMARK_CAPTION,
   };
 }
 
 /** benchmarkCells as Markdown pipe tables, so the same text reads in a terminal and renders in a CI job summary. */
 export function formatBenchmarkTable(table: BenchmarkTable): string {
-  const { results, usage, matrix, invalid, caption } = benchmarkCells(table);
+  const { results, usage, matrix, invalid, skills, caption } = benchmarkCells(table);
   const line = (cells: readonly string[]): string => `| ${cells.join(' | ')} |`;
   const markdown = ({ header, rows }: TextTable): string => [line(header), line(header.map(() => '---')), ...rows.map(line)].join('\n');
-  return [...[results, usage, matrix, ...(invalid ? [invalid] : [])].map(markdown), caption].join('\n\n');
+  return [...[results, usage, matrix, ...(invalid ? [invalid] : []), ...(skills ? [skills] : [])].map(markdown), caption].join('\n\n');
+}
+
+/** `1/2` loaded of the trials seen, `1/2, 1 unknown` with some unseen, `unknown (3)` with none seen. */
+function formatSkillLoads({ loaded, observed, unknown }: SkillLoads): string {
+  if (observed === 0) return `unknown (${unknown})`;
+  return unknown > 0 ? `${loaded}/${observed}, ${unknown} unknown` : `${loaded}/${observed}`;
 }
 
 function passRateOf(trials: readonly RecordedTrial[]): { passRate?: PassRate } {

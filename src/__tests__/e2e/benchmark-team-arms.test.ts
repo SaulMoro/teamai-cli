@@ -17,6 +17,7 @@ const RunSchema = z.object({
 });
 const RecordSchema = z.object({
   arms: z.array(z.object({ name: z.string(), team: z.unknown() }).passthrough()),
+  skillChanges: z.unknown(),
   trials: z.array(z.object({ arm: z.string(), order: z.number(), result: z.string() }).passthrough()),
 }).passthrough();
 
@@ -82,6 +83,7 @@ describe('benchmark arm team', () => {
       { name: 'without-fixer', team: { kind: 'without', skills: ['fixer'], revision: pulled } },
     ]);
     expect(skillsByArm(fixture, runId)).toEqual({ 'pulled': ['fixer', 'helper', 'newer'], 'none': [], 'without-fixer': ['helper', 'newer'] });
+    expect(record.skillChanges).toEqual([{ arm: 'without-fixer', defaults: 'pulled', skills: [{ name: 'fixer', change: 'removed' }] }]);
     const { steps } = RunSchema.parse(fixture.runFile(runId));
     const ranOn = (arm: string): string | undefined => steps.find((step) => step.id === `trials.r1.fix.${arm}.prompt`)?.agent?.team?.revision;
     expect([ranOn('pulled'), ranOn('none'), ranOn('without-fixer')]).toEqual([pulled, undefined, pulled]);
@@ -95,10 +97,12 @@ describe('benchmark arm team', () => {
 
     const runId = await endedRun(fixture);
 
-    expect(RecordSchema.parse(fixture.benchmarkRecord(runId)).arms.map(({ team }) => team)).toEqual([
+    const record = RecordSchema.parse(fixture.benchmarkRecord(runId));
+    expect(record.arms.map(({ team }) => team)).toEqual([
       { kind: 'pulled', revision: pulled },
       { kind: 'ref', ref: first, revision: first },
     ]);
+    expect(record.skillChanges).toEqual([{ arm: 'before', defaults: 'now', skills: [{ name: 'newer', change: 'removed' }] }]);
     expect(skillsByArm(fixture, runId)).toEqual({ now: ['fixer', 'helper', 'newer'], before: ['fixer', 'helper'] });
   }, 240_000);
 

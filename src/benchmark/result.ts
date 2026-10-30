@@ -19,7 +19,7 @@ import { CheckOutputSchema, type CheckResult } from './check.js';
 import { compareAgent } from './agent-match.js';
 import { baselineStepOf, checkStepOf, correctnessScorerName, type BenchmarkPlan, type PlannedArm, type PlannedTask, type PlannedTrial } from './plan.js';
 import type { RunPlan } from './run-plan.js';
-import { ArmTeamSchema, TrialLimitsSchema } from './terms.js';
+import { ArmTeamSchema, SkillChangesSchema, TrialLimitsSchema } from './terms.js';
 
 export const TRIAL_RESULTS = ['passed', 'failed', 'error', 'unscored', 'not_run'] as const;
 export type TrialResult = (typeof TRIAL_RESULTS)[number];
@@ -50,6 +50,8 @@ export const BenchmarkRecordSchema = z.object({
     /** The team workflow the arm's trials ran on each task instead of one prompt. */
     workflow: z.object({ name: z.string(), sourceHash: z.string() }).optional(),
   })),
+  /** The team skills each arm adds, removes or changes against the baseline team revision; absent when no arm changes one. */
+  skillChanges: z.array(SkillChangesSchema).optional(),
   trials: z.array(z.object({
     task: z.string(), arm: z.string(), repetition: z.number().int(), order: z.number().int(), step: z.string(),
     result: z.enum(TRIAL_RESULTS),
@@ -107,6 +109,7 @@ export function benchmarkRecord(run: RunState, { plan, prefix }: RunPlan): Bench
     const pass = stateOf(trial.step)?.pass ?? 1;
     return (run.verdicts ?? []).filter((verdict) => verdict.step === `${prefix}${trial.step}` && verdict.pass === pass);
   };
+  const watched = [...new Set((plan.skillChanges ?? []).flatMap(({ skills }) => skills.map(({ name }) => name)))];
   return {
     suite: { name: plan.suite.name, sourceHash: plan.suite.sourceHash },
     repetitions: plan.repetitions,
@@ -115,6 +118,7 @@ export function benchmarkRecord(run: RunState, { plan, prefix }: RunPlan): Bench
     scorers: plan.scorers,
     tasks: plan.tasks.map((task) => ({ id: task.id, startingCommit: task.startingCommit, sourceHash: task.sourceHash, baseline: baselineOf(stateOf(baselineStepOf(task.id)), task) })),
     arms: plan.arms,
+    ...(plan.skillChanges ? { skillChanges: plan.skillChanges } : {}),
     trials: plan.trials.map((trial) => {
       const verdicts = verdictsOf(trial);
       const scoringCost = scoringCostOf(verdicts);
@@ -122,8 +126,8 @@ export function benchmarkRecord(run: RunState, { plan, prefix }: RunPlan): Bench
       const result = trialResultOf({ prompt: work, check: stateOf(checkStepOf(trial)), verdicts }, plan, trial);
       const arm = plan.arms.find(({ name }) => name === trial.arm);
       const entry = arm?.workflow
-        ? projectionOf(promptPassesUnder(run, `${prefix}${trial.step}`), arm, plan.limits?.maxTurns !== undefined ? ['max_turns'] : [])
-        : projectionOf(settledPass(work), arm, []);
+        ? projectionOf(promptPassesUnder(run, `${prefix}${trial.step}`), { arm, watched, unenforced: plan.limits?.maxTurns !== undefined ? ['max_turns'] : [] })
+        : projectionOf(settledPass(work), { arm, watched, unenforced: [] });
       return { ...trial, step: `${prefix}${trial.step}`, result, ...entry, ...(scoringCost ? { scoringCost } : {}) };
     }),
   };
@@ -182,9 +186,10 @@ function promptPassesUnder(run: RunState, step: string): PromptPass[] {
  * One trial's measures over the prompt passes it ran, the one-trial projection: duration, tokens and cost summed, the
  * latter two incomplete when a pass stated none; the first pass that ran as something other than `arm`, else the first
  * observed; each skill a pass loaded; the first limit that ended a turn; and the limits a driver did not enforce, with
- * `unenforced`, those no step of the trial could. Empty for a trial whose work never ran.
+ * `unenforced`, those no step of the trial could. Each `watched` skill no observed pass loaded is `unknown` when a pass went
+ * unobserved; `used` is absent when none was observed. Empty for a trial whose work never ran.
  */
-function projectionOf(passes: readonly PromptPass[], arm: PlannedArm | undefined, unenforced: readonly UnenforcedLimit[]): TrialEntry {
+function projectionOf(passes: readonly PromptPass[], { arm, watched, unenforced }: { arm: PlannedArm | undefined; watched: readonly string[]; unenforced: readonly UnenforcedLimit[] }): TrialEntry {
   const sum = (values: ReadonlyArray<number | undefined>): number | undefined => (values.some((value) => value !== undefined) ? values.reduce<number>((total, value) => total + (value ?? 0), 0) : undefined);
   const stated = passes.flatMap(({ tokens }) => (tokens ? [tokens] : []));
   const [costed] = passes.flatMap(({ cost }) => (cost ? [cost] : []));
@@ -207,8 +212,13 @@ function projectionOf(passes: readonly PromptPass[], arm: PlannedArm | undefined
     ...(tokens ? { tokens } : {}),
     ...(costed ? { cost: { amount: inUnit.reduce((total, cost) => total + cost.amount, 0), unit: costed.unit, complete: inUnit.length === passes.length } } : {}),
     ...(agent ? { agent } : {}),
-    ...(observed.length > 0 ? { used: Object.fromEntries(observed.flatMap(({ skills }) => skills).map((skill) => [skill, 'loaded' as const])) } : {}),
+    ...(observed.length > 0 ? { used: usedOf(observed.flatMap(({ skills }) => skills), observed.length < passes.length ? watched : []) } : {}),
   };
+}
+
+/** Each skill in `loaded`, and each of `unsure` not in it as `unknown`. */
+function usedOf(loaded: readonly string[], unsure: readonly string[]): NonNullable<TrialEntry['used']> {
+  return Object.fromEntries([...unsure.filter((skill) => !loaded.includes(skill)).map((skill) => [skill, 'unknown'] as const), ...loaded.map((skill) => [skill, 'loaded'] as const)]);
 }
 
 /**

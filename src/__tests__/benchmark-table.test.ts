@@ -105,7 +105,7 @@ describe('benchmark results table', () => {
 });
 
 const OBSERVED: AgentObservation = { v: 1, tool: { name: 'claude' }, team: { revision: RUN_TEAM, localChanges: false }, teamai: '0.0.0', driver: 'external' };
-type TrialSpec = Pick<BenchmarkRecord['trials'][number], 'limit' | 'unenforced' | 'durationMs' | 'tokens' | 'cost'> & {
+type TrialSpec = Pick<BenchmarkRecord['trials'][number], 'limit' | 'unenforced' | 'durationMs' | 'tokens' | 'cost' | 'used'> & {
   task?: string;
   arm?: string;
   result?: TrialResult;
@@ -203,6 +203,27 @@ describe('benchmark arm team', () => {
     expect(text).toContain(`| no-fixer | claude | tool default (team) | ${RUN_TEAM.slice(0, 7)} without fixer | 1 |`);
     expect(text).toContain('| main | claude | tool default (team) | main ccccccc | 1 |');
     expect(pulledOnly).toContain('| Arm | Tool | Model (source) | Planned |');
+  });
+
+  it("counts the trials that loaded each skill an arm changes, on that arm and on the defaults arm, keeping unseen trials apart", () => {
+    const pulled = { name: 'pulled', tool: 'claude', source: 'team', team: { kind: 'pulled', revision: RUN_TEAM } } as const;
+    const { benchmark } = recordOf([pulled, ABLATED], [
+      { arm: 'pulled', used: { fixer: 'loaded' } },
+      { arm: 'pulled', used: { fixer: 'unknown' } },
+      { arm: 'pulled' },
+      { arm: 'pulled', result: 'not_run', agent: null },
+      { arm: 'no-fixer', used: {} },
+    ]);
+    const skillChanges = [
+      { arm: 'no-fixer', defaults: 'pulled', skills: [{ name: 'fixer', change: 'removed' }] },
+      { arm: 'pulled', skills: [{ name: 'fixer', change: 'changed' }] },
+    ] as const satisfies BenchmarkRecord['skillChanges'];
+
+    const text = formatBenchmarkTable(benchmarkTable({ benchmark: { ...benchmark, skillChanges: [...skillChanges] } }));
+
+    expect(text).toContain('| Arm | Skill | Change | Loaded in this arm | Loaded in the defaults arm |');
+    expect(text).toContain('| no-fixer | fixer | removed | 0/1 | 1/1, 2 unknown |');
+    expect(text).toContain('| pulled | fixer | changed | 1/1, 2 unknown | - |');
   });
 });
 

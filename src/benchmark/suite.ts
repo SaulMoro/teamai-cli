@@ -504,6 +504,11 @@ export function parseSuite(input: { suite: SourceFile; tasks: readonly SourceFil
   };
 }
 
+/** The arm that changes no defaults key, against which the others are read; absent when every arm changes one. */
+export function defaultsArmOf({ defaults, arms }: Pick<Suite, 'defaults' | 'arms'>): Arm | undefined {
+  return arms.find((arm) => changedKeys(defaults, arm).length === 0);
+}
+
 /**
  * The paths in the suite directory that `tasks`' check.add entries name as `from`, for the sync to read before
  * `parseSuite`. Only paths that stay inside the directory: `parseSuite` reports the others.

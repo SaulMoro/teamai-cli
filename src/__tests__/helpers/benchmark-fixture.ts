@@ -270,6 +270,24 @@ fs.writeFileSync('test/helpers/pass.setup.js', "require('node:assert').strictEqu
 for (const args of [['init', '-q'], ['add', '-A'], ['-c', 'user.name=Agent', '-c', 'user.email=agent@example.com', 'commit', '-qm', 'helper']]) execFileSync('git', args, { cwd: 'test/helpers' });`,
 };
 
+/** The fake claude's code that leaves session fake-session, in which the Skill tool loaded `skill` when its cwd has it. */
+function loadsSkill(skill: string): string {
+  return `{
+  const project = path.join(process.env.HOME, '.claude', 'projects', process.cwd().replace(/[^a-zA-Z0-9]/g, '-'));
+  fs.mkdirSync(project, { recursive: true });
+  const at = new Date(Date.now() + 1000).toISOString();
+  const base = { cwd: process.cwd(), sessionId: 'fake-session', timestamp: at };
+  const asked = { ...base, type: 'user', uuid: 'u1', parentUuid: null, message: { role: 'user', content: 'Fix it.' } };
+  const loaded = [
+    { ...base, type: 'assistant', uuid: 'u2', parentUuid: 'u1', message: { role: 'assistant', model: 'fake-claude', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Skill', input: { skill: ${JSON.stringify(skill)} } }] } },
+    { ...base, type: 'user', uuid: 'u3', parentUuid: 'u2', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'Launching skill: ${skill}' }] } },
+  ];
+  const answered = { ...base, type: 'assistant', uuid: 'u2', parentUuid: 'u1', message: { role: 'assistant', model: 'fake-claude', content: [{ type: 'text', text: 'Fixed.' }] } };
+  const has = fs.existsSync(path.join('.claude', 'skills', ${JSON.stringify(skill)}, 'SKILL.md'));
+  fs.writeFileSync(path.join(project, 'fake-session.jsonl'), [asked, ...(has ? loaded : [answered])].map((line) => JSON.stringify(line)).join('\\n') + '\\n');
+}`;
+}
+
 function git(cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env): string {
   return execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
@@ -318,6 +336,11 @@ export interface BenchmarkFixtureOptions {
   maxParallel?: number;
   /** The role the member joins with, `teamai init --role`; none by default. */
   role?: string;
+  /**
+   * A skill each launch of the fake claude loads, when its cwd has it in .claude/skills: it leaves a Claude session in
+   * which the Skill tool loaded it, as the local driver reads `used` from. Without it, no launch leaves a session.
+   */
+  loadsSkill?: string;
 }
 
 export async function benchmarkFixture(options: BenchmarkFixtureOptions): Promise<BenchmarkFixture> {
@@ -406,6 +429,7 @@ fs.appendFileSync(${JSON.stringify(toolLog)}, JSON.stringify({
 }) + '\\n');
 ${options.printsEnv ? `fs.writeFileSync(${JSON.stringify(path.join(root, 'tool.env'))}, execFileSync('sh', ['-c', 'env'], { encoding: 'utf8' }));` : ''}
 ${options.firstLaunch ? firstLaunch[options.firstLaunch] : ''}
+${tool === 'claude' && options.loadsSkill !== undefined ? loadsSkill(options.loadsSkill) : ''}
 if (fs.existsSync(${JSON.stringify(probeRun)})) {
   const run = fs.readFileSync(${JSON.stringify(probeRun)}, 'utf8');
   fs.appendFileSync(${JSON.stringify(probeLog)}, spawnSync(process.execPath, [${JSON.stringify(CLI)}, 'workflow', 'cancel', run], { encoding: 'utf8' }).stdout);
