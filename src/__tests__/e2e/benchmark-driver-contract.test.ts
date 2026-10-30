@@ -32,10 +32,10 @@ const DRIVERS: Array<{ name: string; make(fixture: BenchmarkFixture): DriverUnde
   },
 ];
 
-const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
+const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', tools: ['claude'], end_turn: true };
 const RecordSchema = z.object({ benchmark: z.object({
   tasks: z.array(z.object({ id: z.string(), baseline: z.string() })),
-  trials: z.array(z.object({ order: z.number(), arm: z.string(), result: z.string(), limit: z.string().optional() })),
+  trials: z.array(z.object({ order: z.number(), arm: z.string(), result: z.string(), limit: z.string().optional(), unenforced: z.array(z.string()).optional() })),
 }) });
 const RunSchema = z.object({ status: z.string(), steps: z.array(z.object({ id: z.string(), status: z.string() }).passthrough()) });
 
@@ -97,9 +97,25 @@ describe.each(DRIVERS)('the benchmark trial contract, driven by $name', ({ make 
     }
   });
 
+  it('leases a driver that cannot end the turn the trial under on_limit: fail, and records on_limit as not enforced', async () => {
+    const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: false, suite: twoArms('15s', '{ timeout: 10s }') });
+    try {
+      const runId = await started(fixture);
+
+      const result = await make(fixture).drive({ runId, can: { ...SANDBOX_CLAUDE, end_turn: false }, prepare: true, maxPolls: 40 });
+
+      expect(result.leased).toEqual(['trials.r1.fix.claude.prompt']);
+      expect(RecordSchema.parse(fixture.endRecord(runId)).benchmark.trials).toEqual([
+        expect.objectContaining({ order: 1, arm: 'claude', result: 'passed', unenforced: ['on_limit'] }),
+        expect.objectContaining({ order: 2, arm: 'codex', result: 'not_run' }),
+      ]);
+    } finally {
+      fixture.remove();
+    }
+  });
+
   it.each([
-    ['declares nothing', {}, true, ['isolation', 'trials']],
-    ['lists no trials', { isolation: 'sandbox' }, true, ['trials']],
+    ['declares nothing', {}, true, ['isolation']],
     ['provides clones but does not ask --prepare', { ...SANDBOX_CLAUDE, workspace: [...SANDBOX_CLAUDE.workspace, 'clone'] }, false, ['prepare']],
   ])('holds the task baseline, and so every trial, from a driver that %s', async (_, can, prepare, missing) => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: false, suite: twoArms('10m') });

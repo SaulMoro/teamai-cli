@@ -3,8 +3,9 @@
  * against their budgets. Both count from where the run or the workflow step recorded that its limits start.
  */
 import { isItem } from './fan-out.js';
-import { isUnder } from './loop.js';
-import { topScope, type Scope } from './scope.js';
+import { isUnder, passesWithin, runPasses } from './loop.js';
+import type { Limit, TurnLimits } from './requirements.js';
+import { stepDefinitions, topScope, type GrantedAllowance, type Scope } from './scope.js';
 import { passOf, settled, stopAttempt, stopWhere, timeOut, type LeasedStep, type LimitsFrom, type StepState, type StoppedAttempt } from './step-state.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 import type { WorkflowResult } from './engine.js';
@@ -21,12 +22,13 @@ function passed(deadline: string, now: string): boolean {
 /**
  * When instance `state` of `step`, leased or started at `now`, must settle: by its own `timeout`, and when it runs a
  * workflow file, by that file's if it is shorter. A `for_each` step's `timeout` bounds the whole fan-out, so it is its
- * own instance's alone; each item runs the file, so the file's is the item's.
+ * own instance's alone; each item runs the file, so the file's is the item's. Under `on_limit: end_turn` the step's
+ * own `timeout` is no deadline: it ends a prompt's turn, or is the allowance a workflow step's prompts spend.
  */
 export function ownDeadline(run: RunState, state: StepState, step: WorkflowStep, now: string): string | undefined {
   const item = step.forEach !== undefined && isItem(state);
   const file = typeof step.workflow === 'string' && (!step.forEach || item) ? run.workflows?.[step.workflow]?.timeout : undefined;
-  const limits = [item ? undefined : step.timeout, file].filter((ms) => ms !== undefined);
+  const limits = [item || step.onLimit === 'end_turn' ? undefined : step.timeout, file].filter((ms) => ms !== undefined);
   return limits.length > 0 ? after(now, Math.min(...limits)) : undefined;
 }
 
@@ -151,4 +153,85 @@ export function expire(run: RunState, now: string): WorkflowResult | undefined {
     if (state.status === 'running' || state.status === 'leased') timeOut(state, failure, run.revision);
   }
   return undefined;
+}
+
+/** What an allowance has left once the prompt turns inside its step's current pass spent their measured duration and tokens. */
+export interface Allowance {
+  step: string;
+  timeoutMs?: number;
+  tokens?: number;
+  /** Nothing is left, or a turn ended at what was. */
+  spent: boolean;
+}
+
+/** What `granted` has left. Commands spend none of it. */
+function allowanceLeft(run: RunState, granted: GrantedAllowance): Allowance {
+  const state = run.steps.find((item) => item.id === granted.step);
+  if (state?.status !== 'running') return { ...granted, spent: true };
+  const definitionOf = stepDefinitions(run);
+  const turns = passesWithin(run, runPasses(run), state.id, state.pass ?? 1).filter((pass) => definitionOf(pass.step)?.prompt !== undefined);
+  const timeoutMs = granted.timeoutMs === undefined ? undefined : granted.timeoutMs - turns.reduce((sum, pass) => sum + (pass.durationMs ?? 0), 0);
+  const tokens = granted.tokens === undefined ? undefined : granted.tokens - itemsSpent(run, state);
+  const spent = state.allowanceSpent === true || (timeoutMs !== undefined && timeoutMs <= 0) || (tokens !== undefined && tokens <= 0);
+  return { step: granted.step, ...(timeoutMs !== undefined ? { timeoutMs } : {}), ...(tokens !== undefined ? { tokens } : {}), spent };
+}
+
+/** The steps whose allowances, among those workflow `scope` runs inside, are spent: nothing pending under them starts. */
+export function spentAllowances(run: RunState, scope: Scope): string[] {
+  return scope.allowances.flatMap((granted) => (allowanceLeft(run, granted).spent ? [granted.step] : []));
+}
+
+/** The smallest of `limits`, or undefined when none is set. An allowance with nothing left leases nothing more. */
+function least(...limits: ReadonlyArray<number | undefined>): number | undefined {
+  const set = limits.filter((limit) => limit !== undefined);
+  return set.length > 0 ? Math.min(...set) : undefined;
+}
+
+/**
+ * The limits that end the turn of prompt `step` in workflow `scope`: its own `timeout`, `max_turns` and `budget` under
+ * `on_limit: end_turn`, each lowered to what the allowances it is inside have left. Undefined when nothing ends its turn.
+ */
+export function turnLimits(run: RunState, scope: Scope, step: WorkflowStep): TurnLimits | undefined {
+  const own = step.onLimit === 'end_turn';
+  if (step.prompt === undefined || (!own && scope.allowances.length === 0)) return undefined;
+  const allowances = scope.allowances.map((granted) => allowanceLeft(run, granted));
+  const timeoutMs = least(own ? step.timeout : undefined, ...allowances.map((allowance) => allowance.timeoutMs));
+  const tokens = least(own ? step.budget?.tokens : undefined, ...allowances.map((allowance) => allowance.tokens));
+  const maxTurns = own ? step.maxTurns : undefined;
+  return {
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}), ...(maxTurns !== undefined ? { maxTurns } : {}),
+    ...(tokens !== undefined ? { budget: { tokens } } : {}), onLimit: 'end_turn',
+  };
+}
+
+/** What `limit` is in `limits`, and what of it `allowance` has left. */
+function limitOf(limit: Limit, limits: TurnLimits): { leased?: number; left: (allowance: Allowance) => number | undefined } {
+  switch (limit) {
+    case 'timeout':
+      return { leased: limits.timeoutMs, left: (allowance) => allowance.timeoutMs };
+    case 'budget':
+      return { leased: limits.budget?.tokens, left: (allowance) => allowance.tokens };
+    // No allowance caps turns.
+    case 'max_turns':
+      return { left: () => undefined };
+    default: {
+      const unhandled: never = limit;
+      return unhandled;
+    }
+  }
+}
+
+/**
+ * Spends the allowances, among those workflow `scope` runs inside, whose remainder set `limit` on a prompt lease that
+ * carried `limits`: a turn ended at what an allowance had left spends it, whatever it measured. A turn ended at a
+ * limit of its own below every remainder spends none.
+ */
+export function spendAllowances(run: RunState, scope: Scope, limits: TurnLimits, limit: Limit): void {
+  const { leased, left } = limitOf(limit, limits);
+  if (leased === undefined) return;
+  for (const granted of scope.allowances) {
+    const remainder = left(allowanceLeft(run, granted));
+    const state = run.steps.find((item) => item.id === granted.step);
+    if (state?.status === 'running' && remainder !== undefined && remainder <= leased) state.allowanceSpent = true;
+  }
 }

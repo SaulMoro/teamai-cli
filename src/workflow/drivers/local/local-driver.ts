@@ -19,14 +19,14 @@ import { attemptEnv } from '../../attempt-marker.js';
 import { leaseNext, type ReportInput } from '../../engine.js';
 import { reconcileTakenCopies } from '../../handoff.js';
 import { LeaseWireSchema, type LeaseWire } from '../../lease-wire.js';
-import type { DriverCan } from '../../requirements.js';
+import { setsLimit, type DriverCan } from '../../requirements.js';
 import { callerProvenance, respondProvenance, respondToHitl } from '../../run-controls.js';
 import { isRecord } from '../../expression.js';
 import { MAX_TIMER_DELAY } from '../../shell-command.js';
 import { judgeRunEntries } from '../../scoring.js';
 import { budgeted, runDeadline } from '../../limits.js';
 import { benchmarkNotices, trialBlocker, Trials } from '../../../benchmark/trial.js';
-import { PreparedTrialLeaseSchema, type PreparedTrialLease } from '../../../benchmark/terms.js';
+import { PreparedTrialLeaseSchema } from '../../../benchmark/terms.js';
 import { resolveCliPath } from '../../../utils/cli-path.js';
 import { z } from 'zod';
 import {
@@ -36,7 +36,7 @@ import {
   type LocalToolRun,
 } from './local-tool-adapter.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, readRun, RunIdSchema, withRunLock, type RunId, type RunLock } from '../../store.js';
-import { abandonPlace, placeLeaseOf, placeOf, placeRoot, preparedClone, preparePlace, runPlaceSetup, sweepClones, type StepEnd } from '../../place/place.js';
+import { abandonPlace, cloneHead, placeLeaseOf, placeOf, placeRoot, preparedClone, preparePlace, runPlaceSetup, sweepClones, type StepEnd } from '../../place/place.js';
 import { commandEnd, managedReport, unreadablePlace } from '../../protocol.js';
 import { memberTools, type MemberTool } from '../../../tool-launch/call.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../../tool-launch/process-stop.js';
@@ -44,7 +44,7 @@ import { executableOf, isLaunchTool, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterId
 import { chooseStepModel, loadDeployedAgent } from '../../step-model.js';
 import type { DriverIdentity, RunState, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
 import { isWorkflowError, WORKSPACE_MODES } from '../../types.js';
-import type { SessionRef } from '../../workspace.js';
+import { cloneBranchOf, type SessionRef } from '../../workspace.js';
 import { headCommit } from '../../worktree.js';
 
 const STOP_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGQUIT', 'SIGTERM', 'SIGHUP'];
@@ -146,8 +146,8 @@ interface Lease extends LeaseWire {
   processEnv?: NodeJS.ProcessEnv;
   /** Set once the step has a directory to run in. */
   cwd?: string;
-  /** A benchmark trial's prompt, which Trials prepared in its clone, `cwd`: it launches by the trial rules. */
-  trial?: PreparedTrialLease;
+  /** A benchmark trial's prompt, which Trials prepared and set up in the clone of this branch, `cwd`. */
+  preparedIn?: string;
 }
 
 /**
@@ -260,11 +260,16 @@ function parseLease(raw: unknown): Lease | undefined {
   return bare.success ? { ...bare.data, unreadableWorkspace: true } : undefined;
 }
 
-/** The prompt lease of a benchmark run, which `Trials.next` prepared, as this driver runs it, or undefined when it cannot. */
-function parseTrialLease(raw: unknown): Lease | undefined {
+/**
+ * The prompt lease of a benchmark run `run`, which `Trials.next` prepared in a clone, as this driver runs it, or
+ * undefined when it cannot.
+ */
+function parseTrialLease(raw: unknown, run: RunState | undefined): Lease | undefined {
   const trial = PreparedTrialLeaseSchema.safeParse(raw);
   const lease = LeaseWireSchema.safeParse(raw);
-  return trial.success && lease.success ? { ...lease.data, cwd: trial.data.cwd, trial: trial.data } : undefined;
+  if (!trial.success || !lease.success || !run) return undefined;
+  const branch = cloneBranchOf(run, trial.data.step);
+  return branch !== undefined ? { ...lease.data, cwd: trial.data.cwd, preparedIn: branch } : undefined;
 }
 
 /**
@@ -288,6 +293,8 @@ async function stageLease(lease: Lease, { config, lock, root, env, mode, signal 
     if (!scoped.ok) return scoped.failure;
     lease.processEnv = scoped.env;
   }
+  // Trials prepared and set up its clone.
+  if (lease.preparedIn !== undefined) return undefined;
   const prepared = await preparePlace({ config, lock, root, lease: placeLeaseOf(lease) });
   if (prepared.kind !== 'prepared') return prepared.failure;
   lease.cwd = prepared.dir;
@@ -373,8 +380,9 @@ async function promptReport(
   // A worktree has its own pull record, so the tool launched there is observed and bound as that checkout. A clone has
   // its own install, never the member's config, and none when its place installs no team.
   const contract = lease.workspace;
-  const teamConfig = contract && contract.mode !== 'read-only' && contract.clone
-    ? (await preparedClone(config, lock.run, contract.branch))?.install
+  const clone = contract && contract.mode !== 'read-only' && contract.clone ? contract.branch : lease.preparedIn;
+  const teamConfig = clone !== undefined
+    ? (await preparedClone(config, lock.run, clone))?.install
     : contract && lease.cwd ? await detectProjectConfig(lease.cwd) ?? config : config;
   const stepConfig = teamConfig ?? config;
   const loaded = lease.agent && teamConfig ? await loadDeployedAgent({ tool: selected, name: lease.agent, config: teamConfig, toolPaths: options.toolPaths }) : undefined;
@@ -409,6 +417,8 @@ async function promptReport(
       config: stepConfig,
       tool: selected,
       cwd,
+      // In a clone, git reads its head without the names the place withholds, which setup could have handed a hook.
+      ...(clone !== undefined ? { head: await cloneHead(config, lock.run, clone) } : {}),
       delivery: delivery ?? null,
       ...(lease.agent && loaded ? { definition: { stem: lease.agent, file: loaded.file, ...definitionModel } } : {}),
       ...(chosen.model && chosen.by !== 'definition'
@@ -419,7 +429,13 @@ async function promptReport(
     delivered ? deliveredTeamSkills(stepConfig, cwd, delivered).catch(() => undefined) : undefined,
   ]);
   // Only headless Claude and CodeBuddy have a turn limit; any other launch reports the cap as not enforced.
-  const capsTurns = lease.maxTurns !== undefined && !lease.interactive && (launchAdapterIdOf(selected) === 'claude' || launchAdapterIdOf(selected) === 'codebuddy');
+  const family = launchAdapterIdOf(selected);
+  const capsTurns = lease.maxTurns !== undefined && !lease.interactive && (family === 'claude' || family === 'codebuddy');
+  // A turn is ended only at the limits its tool is known to keep and report: Codex states its usage only as it ends, and
+  // CodeBuddy's turn cap and per-message usage are untried, so the rest list as unenforced.
+  const { limits } = lease;
+  const endsAtTurns = limits?.maxTurns !== undefined && !lease.interactive && family === 'claude' ? limits.maxTurns : undefined;
+  const budget = limits?.budget !== undefined && (family === 'claude' || family === 'opencode') ? limits.budget.tokens : undefined;
   const launchedAt = Date.now();
   if (lease.interactive) log.info(`Step "${lease.step}" opens ${selected} here for interactive work.`);
   const { result, durationMs } = await timedLaunch({
@@ -435,7 +451,9 @@ async function promptReport(
       ...(resume ? { resume: resume.id } : {}),
       ...(agent ? { agent: definitionRun(selected, lease.agent!, agent) } : {}),
       ...(chosen.model ? { model: chosen.model } : {}),
-      ...(capsTurns ? { maxTurns: lease.maxTurns } : {}),
+      ...(capsTurns ? { maxTurns: lease.maxTurns } : endsAtTurns !== undefined ? { maxTurns: endsAtTurns } : {}),
+      ...(budget !== undefined ? { budget } : {}),
+      ...(limits?.timeoutMs !== undefined ? { timeoutMs: limits.timeoutMs } : {}),
     },
     signal,
     unfinished: `${selected} could not complete the workflow step`,
@@ -445,6 +463,14 @@ async function promptReport(
     : { outcome: 'failed', ...(result.failure ? { message: result.failure.message, failure: result.failure } : {}) };
   const ran = result.started ? result : undefined;
   const used = ran?.session && teamSkills ? await usedInSession(selected, ran.session, cwd, teamSkills, launchedAt) : undefined;
+  // A tool held to no budget that stated it spent more still ended its turn there: the budget names it.
+  const passedBudget = limits?.budget !== undefined && budget === undefined && budgeted(ran?.tokens) > limits.budget.tokens;
+  const stoppedBy = ran?.stoppedBy ?? (passedBudget ? 'budget' : undefined);
+  const limit = limits && stoppedBy && setsLimit(limits, stoppedBy) ? stoppedBy : undefined;
+  const unenforced = [
+    ...((lease.maxTurns !== undefined && !capsTurns) || (limits?.maxTurns !== undefined && endsAtTurns === undefined) ? ['max_turns' as const] : []),
+    ...(limits?.budget !== undefined && budget === undefined ? ['budget' as const] : []),
+  ];
   return {
     attempt: lease.attempt,
     revision: lease.revision,
@@ -460,9 +486,10 @@ async function promptReport(
     // How the definition was handed over is known only once the launch resolved its tool: OpenCode's depends on its major.
     ...(ran ? { agent: ran.applied ? { ...observed, definition: { applied: ran.applied } } : observed } : {}),
     ...(used ? { used } : {}),
-    ...(lease.maxTurns !== undefined && !capsTurns ? { unenforced: ['max_turns' as const] } : {}),
+    ...(unenforced.length > 0 ? { unenforced } : {}),
     exitCode: result.exitCode,
-    ...(end.failure ? failureReport(end.failure) : { outcome: end.outcome, ...(end.message ? { message: end.message } : {}) }),
+    ...(limit ? { outcome: 'success', limit }
+      : end.failure ? failureReport(end.failure) : { outcome: end.outcome, ...(end.message ? { message: end.message } : {}) }),
   };
 }
 
@@ -508,11 +535,11 @@ function rememberSecrets(seen: Record<string, string>, secrets: Record<string, s
 
 /**
  * What this driver declares on every `next`. Every key is set, so a new capability does not compile until it is decided.
- * It runs setup in each workspace it creates. `tools` are the tools it launches a step that names one on; `trials`, the
- * tools whose benchmark trials the loop launches by the trial rules.
+ * It runs setup in each workspace it creates. `tools` are the tools it launches a step that names one on. It ends a
+ * prompt's turn at the limits its lease carries.
  */
-function localCan({ strict, hitl, tools, trials }: { strict: StrictCan; hitl: boolean; tools: string[]; trials: string[] }): Required<DriverCan> {
-  return { hitl, workspace: [...WORKSPACE_MODES], ...strict, tokens: true, max_turns: true, setup: true, tools, trials };
+function localCan({ strict, hitl, tools }: { strict: StrictCan; hitl: boolean; tools: string[] }): Required<DriverCan> {
+  return { hitl, workspace: [...WORKSPACE_MODES], ...strict, tokens: true, max_turns: true, setup: true, tools, end_turn: true };
 }
 
 type StrictCan = Required<Pick<DriverCan, 'network' | 'isolation' | 'env'>>;
@@ -553,69 +580,6 @@ const DoneTableSchema = z.object({ benchmark: z.object({ text: z.string() }) });
 function deadlineSignal(expiresAt: string | undefined): AbortSignal {
   const remaining = expiresAt === undefined ? undefined : Math.max(0, Date.parse(expiresAt) - Date.now());
   return remaining === undefined || remaining > MAX_TIMER_DELAY ? new AbortController().signal : AbortSignal.timeout(remaining);
-}
-
-/**
- * One prepared prompt, launched by the trial rules: the lease's tool, never the member's --tools mapping; the lease's
- * exact model as given; the env without every name the lease withholds; in the clone. The
- * report carries the time around the tool's run alone, and the cost only when the tool stated one. A tool still running
- * at the lease's `trial.limits` timeout, or once its stdout states more tokens than its budget, is stopped with
- * everything it started, and headless Claude runs with its `maxTurns`; either way the prompt succeeds with that limit,
- * so the check decides the trial on what the agent left. A limit a tool cannot be held to is listed as unenforced. A tool
- * still running at the run's deadline is stopped, and nothing is reported: the next `next` settles the trial as timed out
- * and removes its clone.
- */
-async function launchTrialPrompt({ driver, lease, resultFile, adapter, env, signal }: {
-  driver: DriverIdentity;
-  lease: PreparedTrialLease;
-  resultFile: string;
-  adapter: LocalToolAdapter;
-  env: WorkflowEnv;
-  signal: AbortSignal;
-}): Promise<ReportBody | undefined> {
-  const { tool, model, trial: { limits } } = lease;
-  const reported = { attempt: lease.attempt, revision: lease.revision, driver, tool };
-  if (!isLaunchTool(tool)) return { ...reported, ...failureReport({ code: 'tool_unsupported', message: `The local workflow tool "${tool}" is not supported` }) };
-  const scoped = await stepEnvironment(env, lease.envScope);
-  if (!scoped.ok) return { ...reported, ...failureReport(scoped.failure) };
-  const expired = deadlineSignal(lease.expiresAt);
-  const family = launchAdapterIdOf(tool);
-  // A trial is held only to the limits its tool is known to keep and report: Codex states its usage only as it ends,
-  // and CodeBuddy's turn cap and per-message usage are untried, so the rest list as unenforced.
-  const maxTurns = family === 'claude' ? limits?.maxTurns : undefined;
-  const budget = family === 'claude' || family === 'opencode' ? limits?.tokens : undefined;
-  const { result, durationMs } = await timedLaunch({
-    launch: adapter.run.bind(adapter),
-    tool,
-    input: {
-      prompt: lease.prompt, cwd: lease.cwd, resultPath: resultFile, env: { ...scoped.env, ...lease.env },
-      ...(model ? { model } : {}),
-      ...(maxTurns !== undefined ? { maxTurns } : {}),
-      ...(budget !== undefined ? { budget } : {}),
-      ...(limits?.timeoutMs !== undefined ? { timeoutMs: limits.timeoutMs } : {}),
-    },
-    signal: AbortSignal.any([signal, expired]),
-    unfinished: `${tool} could not complete the trial`,
-  });
-  if (expired.aborted) return undefined;
-  const ran = result.started ? result : undefined;
-  const unenforcedPassed = limits?.tokens !== undefined && budget === undefined && budgeted(ran?.tokens) > limits.tokens;
-  const limit = !ran ? undefined : ran.stoppedBy ?? (unenforcedPassed ? 'budget' : undefined);
-  const unenforced = [
-    ...(limits?.maxTurns !== undefined && maxTurns === undefined ? ['max_turns' as const] : []),
-    ...(limits?.tokens !== undefined && budget === undefined ? ['budget' as const] : []),
-  ];
-  return {
-    ...reported,
-    ...(ran ? { durationMs } : {}),
-    ...(ran?.model ? { model: ran.model } : {}),
-    ...(ran?.session ? { session: ran.session } : {}),
-    ...(ran?.tokens ? { tokens: ran.tokens } : {}),
-    ...(ran?.cost ? { cost: ran.cost } : {}),
-    ...(unenforced.length > 0 ? { unenforced } : {}),
-    ...(limit ? { outcome: 'success', limit }
-      : result.failure ? failureReport(result.failure) : { outcome: result.exitCode === 0 ? 'success' : 'failed' }),
-  };
 }
 
 /**
@@ -677,12 +641,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
   // Resolved once per drive, so a resume where a person attends runs attended whatever mode the run started in.
   const mode = resolveRunMode(process.env);
   const canHitl = options.hitl ?? personAnswers(mode);
-  // It launches a step that names its tool, and the trials of a benchmark run by the trial rules, on the tools this
-  // machine has. It is the run's only driver, so a step whose tool it cannot launch fails rather than waits.
+  // It launches a step that names its tool, a benchmark's trials among them, on the tools this machine has. It is the
+  // run's only driver, so a step whose tool it cannot launch fails rather than waits.
   const named = typeof started === 'object' ? namedTools(started) : new Set<string>();
   const tools = LAUNCH_TOOLS.filter((tool) => named.has(tool) && onPath(tool));
-  const trials = benchmark ? LAUNCH_TOOLS.filter(onPath) : [];
-  const can = localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools, trials });
+  const can = localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools });
   const driver = driverIdentity('local', cwd);
   if (benchmark) for (const line of benchmarkNotices(benchmark, can, await trialBlocker(config))) log.info(line);
   // A driver killed before cleanup, of this run or any other, left clones behind.
@@ -768,7 +731,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
     const secrets = env?.secrets ?? await knownSecrets(config);
     await maskResultFile(attemptResultPath(config, runId, lease.attempt), secrets);
     // Trials completes a trial's report with what teamai observed of its clone.
-    const completed = lease.trial ? await Trials.report(config, runId, body) : { report: body };
+    // teamai fills a prepared trial's exit, from the clone it commits.
+    const { exitCode: _exitCode, ...prepared } = body;
+    const completed = lease.preparedIn !== undefined ? await Trials.report(config, runId, prepared) : { report: body };
     const answer = 'report' in completed ? await managedReport({ config, runId, report: completed.report, secrets, lock }) : completed;
     // Cancelled while it ran: the next `next` lists it in `cancelled`, and the run goes on without it.
     if (isWorkflowError(answer)) return answer.error.code === 'lease_cancelled' ? undefined : answer;
@@ -819,7 +784,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
         question = undefined;
       }
       if ('lease' in next.data) {
-        const lease = benchmark ? parseTrialLease(next.data.lease) : nextLease;
+        const current = benchmark ? await readRun(config, runId) : undefined;
+        const lease = benchmark ? parseTrialLease(next.data.lease, typeof current === 'object' ? current : undefined) : nextLease;
         if (!lease) return { error: { code: 'run_unreadable', message: `Run ${runId} returned a lease the local driver cannot run` } };
         if (reported.has(lease.attempt)) {
           return { error: { code: 'driver_stuck', message: `Attempt ${lease.attempt} was leased again before it could be reported` } };
@@ -879,9 +845,6 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
         const controller = new AbortController();
         if (maxParallel === 1) handle(STOP_SIGNALS);
         prompts.set(lease.attempt, { lease, controller, exit: (async () => {
-          if (lease.trial) {
-            return launchTrialPrompt({ driver, lease: lease.trial, resultFile: attemptResultPath(config, runId, lease.attempt), adapter, env: turn, signal: controller.signal });
-          }
           const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal });
           if (!startable(lease, controller.signal)) {
             await abandonPlace({ config, lock, attempt: lease.attempt });

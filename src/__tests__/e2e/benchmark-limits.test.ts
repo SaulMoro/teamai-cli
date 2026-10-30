@@ -177,6 +177,6 @@ describe('trial limit reports', () => {
       attempt: 'a00000000', revision: 1, outcome: 'success', driver: { kind: 'external', machine: 'ci', workspace: '/work' }, limit: 'turns',
     })]));
 
-    expect(reported.error).toEqual({ code: 'invalid_report', message: 'limit must be the trial limit that stopped the tool: timeout, budget or max_turns' });
+    expect(reported.error).toEqual({ code: 'invalid_report', message: 'limit must be the lease limit that ended the turn: timeout, budget or max_turns' });
   }, 120_000);
 });

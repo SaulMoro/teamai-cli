@@ -20,7 +20,7 @@ import type { Suite, Task, TaskJudge } from './suite.js';
 import type { CommittedSuite } from './trial.js';
 import { CommitSchema, TeamSelectionSchema, type CloneTeam, type TeamSelection } from '../workflow/clone.js';
 import { CHECK_RESULTS } from './check.js';
-import { AddedSchema, ArmTeamSchema, BenchmarkNameSchema, TrialLimitsSchema, type Added, type ArmTeam, type PromptTerms } from './terms.js';
+import { AddedSchema, ArmTeamSchema, BenchmarkNameSchema, TrialLimitsSchema, type Added, type ArmTeam, type PromptTerms, type TrialLimits } from './terms.js';
 
 const Sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 
@@ -276,7 +276,8 @@ function trialSteps(plan: BenchmarkPlan, suite: Suite, trial: PlannedTrial, arm:
   const prompt: WorkflowStep = {
     id: 'prompt', prompt: task.prompt, workspace: 'continue', tool: arm.tool,
     ...(arm.model ? { model: { name: arm.model, ...(arm.effort ? { effort: arm.effort } : {}) } } : {}),
-    trial: promptTerms(plan, trial, arm, task),
+    trial: promptTerms(trial, arm, task),
+    ...turnLimitsOf(plan.limits),
     ...(names.length > 0 ? { scorers: { names, required: true } } : {}),
   };
   switch (task.judge.kind) {
@@ -291,8 +292,19 @@ function trialSteps(plan: BenchmarkPlan, suite: Suite, trial: PlannedTrial, arm:
   }
 }
 
-function promptTerms(plan: BenchmarkPlan, trial: PlannedTrial, arm: PlannedArm, task: Task): PromptTerms {
-  return { kind: 'prompt', task: task.id, arm: arm.name, repetition: trial.repetition, order: trial.order, ...(plan.limits ? { limits: plan.limits } : {}) };
+function promptTerms(trial: PlannedTrial, arm: PlannedArm, task: Task): PromptTerms {
+  return { kind: 'prompt', task: task.id, arm: arm.name, repetition: trial.repetition, order: trial.order };
+}
+
+/** A trial prompt's limits, the suite's `trial`: each ends the agent's turn, and the trial's check or judge decides it. */
+function turnLimitsOf(limits: TrialLimits | undefined): Pick<WorkflowStep, 'timeout' | 'maxTurns' | 'budget' | 'onLimit'> {
+  if (!limits) return {};
+  return {
+    ...(limits.timeoutMs !== undefined ? { timeout: limits.timeoutMs } : {}),
+    ...(limits.maxTurns !== undefined ? { maxTurns: limits.maxTurns } : {}),
+    ...(limits.tokens !== undefined ? { budget: { tokens: limits.tokens } } : {}),
+    onLimit: 'end_turn',
+  };
 }
 
 /** The team a trial's clone installs: the arm's, with the run's asset selection. */

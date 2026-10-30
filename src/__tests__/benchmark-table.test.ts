@@ -16,7 +16,7 @@ import type { DriverIdentity } from '../workflow/types.js';
 import { benchmarkRunConfig, fixTask, PRODUCT_URL, RUN_START, RUN_TEAM, settleBaselines, startBenchmarkRun } from './helpers/benchmark-fixture.js';
 
 const driver: DriverIdentity = { kind: 'external', machine: 'ci', workspace: '/work' };
-const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, tools: ['claude'], trials: ['claude'] };
+const can: DriverCan = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, tools: ['claude'], end_turn: true };
 const LeaseSchema = z.object({ data: z.object({ lease: z.object({ attempt: z.string(), revision: z.number(), workspace: z.object({ branch: z.string() }) }) }) });
 const dirs: string[] = [];
 

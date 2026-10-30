@@ -96,13 +96,13 @@ export function fakeTrialDriver(options: FakeTrialDriverOptions): DriverUnderTes
         if (tool === undefined) throw new Error(`leased a trial of ${lease.tool}, which this driver does not list`);
         const env = { ...Object.fromEntries(Object.entries(options.env).filter(([key]) => !lease.envScope.withhold.includes(key))), ...lease.env };
         const started = Date.now();
-        const { limits } = lease.trial;
+        const { limits } = lease;
         const launched = await run(tool, ['-p', lease.prompt, ...(lease.model ? ['--model', lease.model.name] : []), ...(lease.model?.effort ? ['--effort', lease.model.effort] : [])], {
           cwd: lease.cwd, env, ...(limits?.timeoutMs !== undefined ? { timeout: limits.timeoutMs } : {}),
         }).then((result) => ({ outcome: 'success' as const, ...sessionOf(result.stdout) }), (error: unknown) => (
           TimedOutSchema.safeParse(error).success ? { outcome: 'success' as const, limit: 'timeout' } : { outcome: 'failed' as const }
         ));
-        const unenforced = [...(limits?.tokens !== undefined ? ['budget'] : []), ...(limits?.maxTurns !== undefined ? ['max_turns'] : [])];
+        const unenforced = [...(limits?.budget !== undefined ? ['budget'] : []), ...(limits?.maxTurns !== undefined ? ['max_turns'] : [])];
         const report = await options.teamai(['workflow', 'report', runId, '--json', JSON.stringify({
           attempt: lease.attempt, revision: lease.revision, driver: identity, tool: lease.tool, durationMs: Date.now() - started, ...launched,
           ...(unenforced.length > 0 ? { unenforced } : {}),

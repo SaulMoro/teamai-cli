@@ -24,7 +24,7 @@ import {
   ReadSchema, answerHitl, fail, inProgress, lease, release, settled, skip, start, startDelivery, stopAttempt, stopWhere, stopped,
   succeed, waitForAnswer, type ItemResult, type LeasedStep, type StepRead, type StepState,
 } from './step-state.js';
-import { budgetSpent, countLateTokens, expire, itemsSpent, leaseDeadline, ownDeadline, startLimits } from './limits.js';
+import { budgetSpent, countLateTokens, expire, itemsSpent, leaseDeadline, ownDeadline, spendAllowances, spentAllowances, startLimits, turnLimits } from './limits.js';
 import { addItems, afterStanding, expandItems, isItem, itemsAfter, itemsOf, itemsSettled, startedItems } from './fan-out.js';
 import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, isUnder, loopSettled } from './loop.js';
 import { childScope, contextOf, finallyScope, insertChildren, localId, statesIn, stepDefinitions, topScope, type Scope } from './scope.js';
@@ -36,8 +36,8 @@ import { sanitizePrUrl, type PrUrl } from './pr-url.js';
 import { completeDelivery, deliveringStep, nextDelivery, resolveCreate, sameCreate, unresolvedCreate } from './delivery-ledger.js';
 import type { DeliveryKey, UnresolvedCreate } from './delivery-schema.js';
 import {
-  CAN_KEYS, CanSchema, ReportedUnenforcedSchema, heldFor, mergeRequirements, negotiate, reportedUnenforced, requiredEnvKeys, unionUnenforced,
-  type Allow, type DriverCan, type EnvFacts, type Held, type Negotiation, type ReportedUnenforced, type Terms,
+  CAN_KEYS, CanSchema, LimitSchema, ReportedUnenforcedSchema, heldFor, setsLimit, mergeRequirements, negotiate, reportedUnenforced, requiredEnvKeys, unionUnenforced,
+  type Allow, type DriverCan, type EnvFacts, type Held, type Limit, type Negotiation, type ReportedUnenforced, type Terms, type TurnLimits,
 } from './requirements.js';
 import { knownSecrets, resolveWorkflowEnv, secretKey, type WorkflowEnv } from '../env-resolution.js';
 import { redactJson } from '../utils/redact.js';
@@ -63,7 +63,6 @@ import type {
 import { hasAction } from './types.js';
 import { describeWorkflow } from './describe.js';
 import { benchmarkTable, formatBenchmarkTable, type BenchmarkTable } from '../benchmark/table.js';
-import { TrialLimitSchema, type TrialLimit } from '../benchmark/terms.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 
 /**
@@ -102,8 +101,8 @@ export interface ReportInput {
   used?: Used;
   /** What the attempt's driver learned, once it ran the step, that it did not enforce. */
   unenforced?: ReportedUnenforced;
-  /** The suite limit that ended a benchmark trial's prompt, which then succeeded: its check or judge decides the trial. */
-  limit?: TrialLimit;
+  /** The lease limit that ended the prompt's turn, which then succeeded. */
+  limit?: Limit;
   /** Process-only, set by benchmark/trial.ts after it prepared, ran or completed a trial step. Not in REPORT_FIELDS, so no driver can send it. */
   trialReport?: Record<string, never>;
 }
@@ -321,7 +320,7 @@ function answerWithoutHitl(config: LocalConfig, run: RunState, now: string, auto
 
 function leaseData(
   run: RunState, state: LeasedStep, definition: WorkflowStep, rendered: RenderedLease,
-  { requires, envScope, maxTurns, setup }: Omit<Terms, 'unenforced'>, plan?: WorkspacePlan,
+  { requires, envScope, maxTurns, setup }: Omit<Terms, 'unenforced' | 'limits'>, plan?: WorkspacePlan,
 ): Record<string, unknown> {
   const expiresAt = leaseDeadline(run, state);
   return { lease: {
@@ -338,7 +337,6 @@ function leaseData(
     ...(definition.model !== undefined ? { model: definition.model } : {}),
     ...(rendered.defaultModel !== undefined ? { defaultModel: rendered.defaultModel } : {}),
     ...(definition.output ? { output: definition.output } : {}),
-    ...(definition.trial ? { trial: definition.trial } : {}),
     ...(plan?.contract ? { workspace: plan.contract } : {}),
     ...(plan?.session ? { session: plan.session } : {}),
     ...(definition.interactive ? { interactive: true } : {}),
@@ -346,6 +344,7 @@ function leaseData(
     ...(Object.keys(requires).length > 0 ? { requires } : {}),
     ...(envScope ? { envScope } : {}),
     ...(maxTurns !== undefined ? { maxTurns } : {}),
+    ...(state.lease.limits ? { limits: state.lease.limits } : {}),
     ...(setup ? { setup } : {}),
     ...(state.lease.unenforced ? { unenforced: state.lease.unenforced } : {}),
     ...(expiresAt !== undefined ? { expiresAt } : {}),
@@ -835,6 +834,11 @@ function settleScope(run: RunState, scope: Scope, now: string): Settled {
     stopWhere(run, (id) => id.startsWith(scope.prefix), failure, run.revision, now);
     return { outcome: 'failed', failure, settledAt: run.revision };
   }
+  // A workflow step whose allowance is spent starts nothing more: what is still pending under it is skipped, and what
+  // runs finishes its turn.
+  for (const owner of spentAllowances(run, scope)) {
+    for (const state of run.steps) if (state.status === 'pending' && isUnder(owner)(state.id)) skip(state, run.revision);
+  }
   const states = statesIn(run, scope);
   const defined = new Map(scope.definition.steps.map((item) => [item.id, item]));
   const definitionOf = (state: StepState): WorkflowStep | undefined => defined.get(localId(scope, state));
@@ -1111,8 +1115,9 @@ interface OfferContext {
  * every lease on a copy, and the driver runs it when it creates the copy or the copy's setup never finished.
  */
 function offerTerms(
-  id: string, { scope, step }: { scope: Scope; step: WorkflowStep }, plan: WorkspacePlan | undefined, context: OfferContext,
+  run: RunState, id: string, { scope, step }: { scope: Scope; step: WorkflowStep }, plan: WorkspacePlan | undefined, context: OfferContext,
 ): Negotiation {
+  const endTurn = turnLimits(run, scope, step);
   return negotiate({
     step: id,
     executor: step.command !== undefined ? 'command' : 'prompt',
@@ -1123,12 +1128,29 @@ function offerTerms(
     runEnvKeys: context.runEnvKeys,
     budgeted: step.prompt !== undefined && scope.budgeted,
     ...(step.maxTurns !== undefined ? { maxTurns: step.maxTurns } : {}),
+    ...(endTurn ? { endTurn } : {}),
     ...(plan?.contract && scope.setup ? { setup: scope.setup } : {}),
     ...(step.tool !== undefined ? { tool: step.tool } : {}),
     trial: step.trial !== undefined,
     clone: plan?.contract?.mode !== 'read-only' && plan?.contract?.clone !== undefined,
     prepare: context.prepare,
   }, context.can, context.allow, context.facts);
+}
+
+/**
+ * The turn limits granted in `terms`, and the deadline of a lease first issued at `since`. The step's own timeout counts
+ * from `since`, so a hand-back never extends it. A driver that cannot end the turn gets the `on_limit: fail` lease,
+ * whose own timeout is its deadline. One that can gets what is left of it at `now`; with none left, the lease takes the
+ * deadline it passed, so `expire` times it out.
+ */
+function turnTerms(
+  run: RunState, state: StepState, definition: WorkflowStep, { limits }: Pick<Terms, 'limits'>, since: string, now: string,
+): Pick<StepLease, 'expiresAt' | 'limits'> {
+  const own = ownDeadline(run, state, { ...definition, onLimit: 'fail' }, since);
+  if (!limits || definition.onLimit !== 'end_turn') return { ...(own !== undefined ? { expiresAt: own } : {}), ...(limits ? { limits } : {}) };
+  if (own === undefined) return { limits };
+  const left = Date.parse(own) - Date.parse(now);
+  return left > 0 ? { limits: { ...limits, timeoutMs: Math.min(limits.timeoutMs ?? left, left) } } : { expiresAt: own, limits };
 }
 
 /**
@@ -1184,7 +1206,7 @@ export interface NextOptions {
   prepare?: boolean;
   /**
    * Process-only: the caller is the run's only driver, as the local driver is. A step that names a tool it cannot launch
-   * fails `tool_unavailable` at once, and a trial step it cannot take only for the trial gates (prepare, trials) is
+   * fails `tool_unavailable` at once, and a trial step it cannot take only for the trial gate (prepare) is
    * skipped, so its trial reads `not_run`. For any other driver both stay pending, a trial until the suite's timeout. A
    * strict requirement it lacks holds a trial too, as a local start it refuses.
    */
@@ -1392,13 +1414,13 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
             settledOne = true;
             break;
           }
-          const terms = offerTerms(state.id, located, plan, context);
+          const terms = offerTerms(run, state.id, located, plan, context);
           if (terms.kind === 'hold' && options.alone && definition.tool !== undefined && terms.missing.includes('tools')) {
             failStep(state, toolUnavailable(state.id, definition.tool), run.revision);
             settledOne = true;
             break;
           }
-          if (terms.kind === 'hold' && options.alone && definition.trial && terms.missing.every((missing) => missing === 'trials' || missing === 'prepare')) {
+          if (terms.kind === 'hold' && options.alone && definition.trial && terms.missing.every((missing) => missing === 'prepare')) {
             skip(state, run.revision);
             settledOne = true;
             continue;
@@ -1414,10 +1436,9 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           }
           if (plan.contract && options.base && !run.base) run.base = options.base;
           const { unenforced } = terms.terms;
-          const expiresAt = ownDeadline(run, state, definition, now);
           const step = lease(state, offering({
-            attempt: `a${randomBytes(4).toString('hex')}`, revision: run.revision, driver, ...(options.runMode ? { runMode: options.runMode } : {}),
-            ...(unenforced.length > 0 ? { unenforced } : {}), ...(expiresAt !== undefined ? { expiresAt } : {}),
+            attempt: `a${randomBytes(4).toString('hex')}`, revision: run.revision, driver, leasedAt: now, ...(options.runMode ? { runMode: options.runMode } : {}),
+            ...(unenforced.length > 0 ? { unenforced } : {}), ...turnTerms(run, state, definition, terms.terms, now, now),
           }, plan.session));
           rememberCopy(run, plan, driver);
           return answer(leaseData(run, step, definition, rendered, terms.terms, plan));
@@ -1433,7 +1454,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           driver, modes: can.workspace, base: run.base ?? options.base,
         }, true);
         const offered = plan.fail ? undefined : plan;
-        const terms = offerTerms(leased.id, located, offered, context);
+        const terms = offerTerms(run, leased.id, located, offered, context);
         // A driver that can no longer run its lease gives it up, so the step waits for one that can instead of looping.
         // No step has run in an unused copy, so the driver gives up the copy too, and another driver may take the step,
         // unless the driver still holds another lease in it.
@@ -1451,9 +1472,18 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           continue;
         }
         const unenforced = unionUnenforced(leased.lease.unenforced ?? [], terms.terms.unenforced);
+        // The driver's `can` may have changed since, so the turn's terms are decided again, as of the first lease. A lease
+        // issued before teamai recorded when keeps its deadline.
+        const { limits: _held, expiresAt: heldUntil, ...held } = leased.lease;
+        const since = held.leasedAt;
+        const turn = since ? turnTerms(run, leased, located.step, terms.terms, since, now) : {
+          ...(heldUntil !== undefined ? { expiresAt: heldUntil } : {}), ...(terms.terms.limits ? { limits: terms.terms.limits } : {}),
+        };
         leased.lease = offering({
-          ...leased.lease, ...(unenforced.length > 0 ? { unenforced } : {}), ...(options.runMode ? { runMode: options.runMode } : {}),
+          ...held, ...(unenforced.length > 0 ? { unenforced } : {}), ...(options.runMode ? { runMode: options.runMode } : {}), ...turn,
         }, offered?.session);
+        // A turn with none of its timeout left times out as any lease past its deadline does.
+        if (turn.expiresAt !== undefined && Date.parse(turn.expiresAt) <= Date.parse(now)) continue;
         if (offered) rememberCopy(run, offered, driver);
         return answer(leaseData(run, leased, located.step, rendered, terms.terms, offered));
       }
@@ -1634,8 +1664,8 @@ export function parseReport(value: unknown): ParsedReport | string {
     report.unenforced = unenforced.data;
   }
   if (record.limit !== undefined) {
-    const limit = TrialLimitSchema.safeParse(record.limit);
-    if (!limit.success) return 'limit must be the trial limit that stopped the tool: timeout, budget or max_turns';
+    const limit = LimitSchema.safeParse(record.limit);
+    if (!limit.success) return 'limit must be the lease limit that ended the turn: timeout, budget or max_turns';
     report.limit = limit.data;
   }
   const ignored = unreadFields(record, REPORT_FIELDS);
@@ -1879,6 +1909,22 @@ function reportedStep(run: RunState, report: ReportInput, now: string): { step: 
 }
 
 /**
+ * What is wrong with the `limit` and `durationMs` of `report`, whose lease carried `limits` or none: a limit goes with a
+ * successful turn, and only one its lease set; a successful turn under limits says how long its tool ran.
+ */
+function reportedLimitProblem(report: ReportInput, limits: TurnLimits | undefined): string | undefined {
+  if (report.limit !== undefined) {
+    if (!limits) return 'limit is for a prompt leased with limits, which end its turn; omit it';
+    if (!setsLimit(limits, report.limit)) return `limit ${report.limit} is not one of the lease's limits; send limit only for a limit in the lease's limits that ended the turn`;
+    if (report.outcome !== 'success') return "limit goes with outcome success, since a limit ends the agent's turn and the step succeeds; send outcome success, or omit limit";
+  }
+  if (limits && report.outcome === 'success' && report.durationMs === undefined) {
+    return 'a prompt leased with limits reports durationMs, how long its tool ran, so its turn counts against them; send durationMs';
+  }
+  return undefined;
+}
+
+/**
  * Whether the run of `runId` takes `report` now, by the checks `reportAttempt` makes before it reads the report: the
  * attempt is leased to its driver at its revision once the deadlines that passed apply. It saves nothing.
  */
@@ -1914,28 +1960,24 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
     const contract = plan?.contract;
     const mismatch = workspaceMismatch(report, contract) ?? resumedMismatch(step, report.resumed);
     if (mismatch) return { save: false, envelope: error('invalid_report', mismatch) };
-    if (report.limit !== undefined && defined?.trial?.kind !== 'prompt') {
-      return { save: false, envelope: error('invalid_report', `Attempt ${report.attempt} of step "${step.id}": limit is for the prompt of a benchmark trial, which its suite's trial limits stop; omit it`) };
-    }
-    if (report.limit !== undefined && report.outcome !== 'success') {
-      return { save: false, envelope: error('invalid_report', `Attempt ${report.attempt} of step "${step.id}": limit goes with outcome success, since a limit ends the agent's turn and the trial's check or judge decides it; send outcome success, or omit limit`) };
-    }
-    const limits = defined?.trial?.kind === 'prompt' ? defined.trial.limits : undefined;
-    const added = reportedUnenforced(report.unenforced ?? [], { maxTurns: defined?.maxTurns ?? limits?.maxTurns, tokens: limits?.tokens });
+    const limits = step.lease.limits;
+    const limitProblem = reportedLimitProblem(report, limits);
+    if (limitProblem) return { save: false, envelope: error('invalid_report', `Attempt ${report.attempt} of step "${step.id}": ${limitProblem}`) };
+    const added = reportedUnenforced(report.unenforced ?? [], { maxTurns: defined?.maxTurns, tokens: limits?.budget?.tokens });
     if (typeof added === 'string') return { save: false, envelope: error('invalid_report', `Attempt ${report.attempt} of step "${step.id}": ${added}`) };
     let outcome = report.outcome;
     let message = report.message;
     let failure = report.failure;
     const measured = report.tokens?.input !== undefined || report.tokens?.output !== undefined;
-    const unmeasured = outcome === 'success' && defined?.prompt !== undefined && (located?.scope.budgeted === true || limits?.tokens !== undefined) && !measured;
+    const unmeasured = outcome === 'success' && defined?.prompt !== undefined && (located?.scope.budgeted === true || limits?.budget !== undefined) && !measured;
     // A person drives an interactive prompt, so its spend is recorded as not counted rather than failing their work. So
-    // is a trial's that another limit stopped before its tool stated a total, as Codex states one only as it ends.
+    // is a turn that another limit ended before its tool stated a total, as Codex states one only as it ends.
     const uncounted = unmeasured && (defined.interactive === true || report.limit !== undefined);
     const unenforced = unionUnenforced(step.lease.unenforced ?? [], [...added, ...(uncounted ? [{ requirement: 'budget' as const }] : [])]);
     if (unmeasured && !uncounted) {
       outcome = 'failed';
-      message = limits?.tokens !== undefined
-        ? `Trial step "${step.id}" runs under its suite's trial budget, and its report has no tokens, so the budget cannot count what it spent. Run the arm's tool with a driver that reports its tokens, and start the benchmark again.`
+      message = limits?.budget !== undefined
+        ? `Step "${step.id}" ends its turn at a token budget, and its report has no tokens, so the budget cannot count what it spent. Run its tool with a driver that reports its tokens, then retry the step.`
         : `Step "${step.id}" runs under a token budget, and its report has no tokens, so the budget cannot count what it spent. Run it with a driver that reports tokens (driver.can.tokens), then retry the step.`;
       failure = { code: 'budget_unmeasured', message };
     }
@@ -1948,6 +1990,8 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
       }
     }
 
+    // A turn ended at what an allowance had left spends it.
+    if (outcome === 'success' && report.limit && limits && located) spendAllowances(run, located.scope, limits, report.limit);
     rememberSettledAttempt(run, report.attempt);
     run.revision += 1;
     const settlement = {

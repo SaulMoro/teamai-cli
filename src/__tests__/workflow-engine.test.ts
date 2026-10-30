@@ -151,12 +151,12 @@ describe('workflow engine', () => {
     [{ durationMs: 1.5 }, 'durationMs must be a non-negative integer of milliseconds'],
     [{ cost: { amount: 1 } }, 'cost must be an amount and a unit, as the tool stated it'],
     [{ cost: { amount: -1, unit: 'USD' } }, 'cost must be an amount and a unit, as the tool stated it'],
-    [{ limit: 'turns' }, 'limit must be the trial limit that stopped the tool: timeout, budget or max_turns'],
+    [{ limit: 'turns' }, 'limit must be the lease limit that ended the turn: timeout, budget or max_turns'],
   ])('refuses a report with %j', (fields, message) => {
     expect(parseReport({ attempt: 'a00000000', revision: 1, outcome: 'success', driver: driverA, ...fields })).toBe(message);
   });
 
-  it("refuses a limit on a step that is not a benchmark trial's prompt, and keeps it leased", async () => {
+  it('refuses a limit on a step whose lease carried no limits, and keeps it leased', async () => {
     const { config, runId } = await startBuild(TWO_STEPS);
     const lease = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number() }) }) })
       .parse(await leaseNext(config, runId, driverA)).data.lease;
@@ -164,7 +164,7 @@ describe('workflow engine', () => {
     const answer = await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: driverA, limit: 'timeout' });
 
     const run = await readRun(config, runId);
-    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Attempt ${lease.attempt} of step "one": limit is for the prompt of a benchmark trial, which its suite's trial limits stop; omit it` } });
+    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Attempt ${lease.attempt} of step "one": limit is for a prompt leased with limits, which end its turn; omit it` } });
     expect(typeof run === 'object' && run.steps.find((step) => step.id === lease.step)).toMatchObject({ status: 'leased' });
   });
 
@@ -5260,6 +5260,281 @@ describe('token budgets', () => {
     expect(await leaseNext(config, runId, driverA, { can: { hitl: true } })).toMatchObject({
       data: { wait: { held: [{ step: 'after', missing: ['tokens'] }] } },
     });
+  });
+});
+
+describe('on_limit: end_turn', () => {
+  const ENDS_TURN = { tokens: true, max_turns: true, end_turn: true };
+  const KEEPS_TURN = { tokens: true, max_turns: true };
+  const LIMITED_PROMPT = graph(`  - id: work
+    prompt: Work on it.
+    timeout: 5m
+    max_turns: 3
+    budget: { tokens: 1000 }
+    on_limit: end_turn
+`);
+  const LeaseWithLimitsSchema = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number() }).passthrough() }) });
+
+  it('leases a driver that ends the turn the prompt\'s limits from tool launch, with no deadline of the step\'s own', async () => {
+    const { config, runId } = await startBuild(LIMITED_PROMPT);
+
+    const { lease } = LeaseWithLimitsSchema.parse(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).data;
+
+    expect(lease).toMatchObject({ step: 'work', limits: { timeoutMs: 300_000, maxTurns: 3, budget: { tokens: 1000 }, onLimit: 'end_turn' } });
+    expect(lease).not.toHaveProperty('expiresAt');
+    expect(lease).not.toHaveProperty('maxTurns');
+  });
+
+  it('leases a driver that cannot end the turn the on_limit: fail lease, and records on_limit as not enforced', async () => {
+    const { config, runId } = await startBuild(LIMITED_PROMPT);
+
+    const { lease } = LeaseWithLimitsSchema.parse(await leaseNext(config, runId, driverA, { can: KEEPS_TURN })).data;
+    const answer = await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver: driverA, tokens: { input: 1, output: 1 } });
+
+    expect(lease).toMatchObject({ step: 'work', maxTurns: 3, expiresAt: expect.any(String), unenforced: [{ requirement: 'on_limit' }] });
+    expect(lease).not.toHaveProperty('limits');
+    expect(answer).toMatchObject({ data: { step: { id: 'work', status: 'succeeded', unenforced: [{ requirement: 'on_limit' }] } } });
+  });
+
+  describe('handed back to a driver whose can changed', () => {
+    const at = (minutes: number): string => new Date(Date.UTC(2026, 0, 1) + minutes * 60_000).toISOString();
+
+    /**
+     * Leases `work` at minute 0 to a driver that can `before`, and asks `next` again at `minute`, 1 by default, as a
+     * restarted driver that can `after`; `stored` edits the run file in between.
+     */
+    const handBack = async (before: Record<string, boolean>, after: Record<string, boolean>, { stored, minute = 1 }: { stored?: (run: RunState) => void; minute?: number } = {}) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        vi.setSystemTime(new Date(at(0)));
+        const { config, runId } = await startBuild(LIMITED_PROMPT);
+        const first = LeaseWithLimitsSchema.parse(await leaseNext(config, runId, driverA, { can: before })).data.lease;
+        if (stored) {
+          const run = await readRun(config, runId);
+          if (typeof run !== 'object') throw new Error('run missing');
+          stored(run);
+          await saveRun(config, run);
+        }
+        vi.setSystemTime(new Date(at(minute)));
+        const answer = await leaseNext(config, runId, driverA, { can: after, running: [] });
+        return { first, answer, config, runId };
+      } finally {
+        vi.useRealTimers();
+      }
+    };
+    const leaseOf = (answer: unknown) => LeaseWithLimitsSchema.parse(answer).data.lease;
+
+    it('gives the on_limit: fail lease once the driver can no longer end the turn, its deadline counted from the first lease', async () => {
+      const { first, answer } = await handBack(ENDS_TURN, KEEPS_TURN);
+      const lease = leaseOf(answer);
+
+      expect(lease).toMatchObject({ step: 'work', attempt: first.attempt, maxTurns: 3, expiresAt: at(5), unenforced: [{ requirement: 'on_limit' }] });
+      expect(lease).not.toHaveProperty('limits');
+    });
+
+    it('gives the turn limits once the driver can end the turn, its timeout what is left since the first lease, keeping on_limit recorded as not enforced', async () => {
+      const { first, answer } = await handBack(KEEPS_TURN, ENDS_TURN);
+      const lease = leaseOf(answer);
+
+      expect(lease).toMatchObject({
+        step: 'work', attempt: first.attempt, unenforced: [{ requirement: 'on_limit' }],
+        limits: { timeoutMs: 240_000, maxTurns: 3, budget: { tokens: 1000 }, onLimit: 'end_turn' },
+      });
+      expect(lease).not.toHaveProperty('expiresAt');
+      expect(lease).not.toHaveProperty('maxTurns');
+    });
+
+    it('gives a driver that ends the turn what is left of the step\'s timeout since the first lease, and the rest of its limits as they were', async () => {
+      const { first, answer } = await handBack(ENDS_TURN, ENDS_TURN, { minute: 2 });
+      const lease = leaseOf(answer);
+
+      expect(lease).toMatchObject({ step: 'work', attempt: first.attempt, limits: { timeoutMs: 180_000, maxTurns: 3, budget: { tokens: 1000 }, onLimit: 'end_turn' } });
+      expect(lease).not.toHaveProperty('expiresAt');
+    });
+
+    it.each([
+      ['a turn the driver ends, handed back', ENDS_TURN],
+      ['an on_limit: fail lease', KEEPS_TURN],
+    ])('times out %s with none of the step\'s timeout left', async (_lease, can) => {
+      const { answer, config, runId } = await handBack(can, ENDS_TURN, { minute: 6 });
+
+      expect(answer).toEqual({ data: { done: expect.objectContaining({ outcome: 'failed' }), cancelled: [] } });
+      expect(await readRun(config, runId)).toMatchObject({ steps: [
+        { id: 'work', status: 'failed', failure: { code: 'timeout', message: `Step "work" passed its timeout at ${at(5)}` } },
+      ] });
+    });
+
+    it('keeps the deadline of a lease an older teamai issued without recording when', async () => {
+      const { answer } = await handBack(KEEPS_TURN, KEEPS_TURN, { stored: (run) => {
+        for (const step of run.steps) if (step.status === 'leased') delete step.lease.leasedAt;
+      } });
+
+      expect(leaseOf(answer)).toMatchObject({ step: 'work', maxTurns: 3, expiresAt: at(5) });
+    });
+  });
+
+  it.each([
+    [{ outcome: 'success' as const, tokens: { input: 1, output: 1 } }, 'a prompt leased with limits reports durationMs, how long its tool ran, so its turn counts against them; send durationMs'],
+    [{ outcome: 'success' as const, durationMs: 1000, limit: 'max_turns' as const }, 'limit max_turns is not one of the lease\'s limits; send limit only for a limit in the lease\'s limits that ended the turn'],
+  ])('refuses a report %j of a prompt leased with limits, and keeps it leased', async (fields, message) => {
+    const { config, runId } = await startBuild(graph(`  - id: work
+    prompt: Work on it.
+    timeout: 5m
+    on_limit: end_turn
+`));
+    const lease = leaseIn(await leaseNext(config, runId, driverA, { can: ENDS_TURN }));
+
+    const answer = await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, driver: driverA, ...fields });
+
+    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Attempt ${lease.attempt} of step "work": ${message}` } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'work', status: 'leased' }] });
+  });
+
+  it('settles a prompt whose turn a limit ended succeeded with that limit, and runs what needs it', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: work
+    prompt: Work on it.
+    timeout: 5m
+    on_limit: end_turn
+  - id: after
+    needs: [work]
+    command: node after.js
+`));
+    const work = leaseIn(await leaseNext(config, runId, driverA, { can: ENDS_TURN }));
+
+    await reportAttempt(config, runId, { attempt: work.attempt, revision: work.revision, outcome: 'success', driver: driverA, durationMs: 300_000, limit: 'timeout', tokens: { input: 5, output: 5 } });
+
+    expect(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).toMatchObject({ data: { lease: { step: 'after' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'work', status: 'succeeded', limit: 'timeout', tokens: { input: 5, output: 5 } }, { id: 'after', status: 'leased' }] });
+  });
+
+  /** A workflow step under `on_limit: end_turn` running `inner`, then a command after it. */
+  const allowance = (limits: string, inner: string): string => graph(`  - id: work
+    ${limits}
+    on_limit: end_turn
+    workflow:
+      steps:
+${inner}  - id: after
+    needs: [work]
+    command: node after.js
+`);
+
+  it('leases each inner prompt what its workflow step\'s allowance has left, spends it on prompt turns only, and never fails the step over it', async () => {
+    const { config, runId } = await startBuild(allowance('timeout: 10m\n    budget: { tokens: 100 }', `        - id: first
+          prompt: First.
+        - id: build
+          needs: [first]
+          command: node build.js
+        - id: second
+          needs: [build]
+          prompt: Second.
+`));
+    const first = LeaseWithLimitsSchema.parse(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).data.lease;
+    expect(first).toMatchObject({ step: 'work.first', limits: { timeoutMs: 600_000, budget: { tokens: 100 }, onLimit: 'end_turn' } });
+    expect(first).not.toHaveProperty('expiresAt');
+    await reportAttempt(config, runId, { attempt: first.attempt, revision: first.revision, outcome: 'success', driver: driverA, durationMs: 60_000, tokens: { input: 50, output: 20 } });
+    const build = LeaseWithLimitsSchema.parse(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).data.lease;
+    expect(build).toMatchObject({ step: 'work.build' });
+    expect(build).not.toHaveProperty('limits');
+    await reportAttempt(config, runId, { attempt: build.attempt, revision: build.revision, outcome: 'success', driver: driverA, durationMs: 120_000 });
+    const second = LeaseWithLimitsSchema.parse(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).data.lease;
+    expect(second).toMatchObject({ step: 'work.second', limits: { timeoutMs: 540_000, budget: { tokens: 30 }, onLimit: 'end_turn' } });
+    await reportAttempt(config, runId, { attempt: second.attempt, revision: second.revision, outcome: 'success', driver: driverA, durationMs: 1000, tokens: { input: 40, output: 10 } });
+
+    expect(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).toMatchObject({ data: { lease: { step: 'after' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([expect.objectContaining({ id: 'work', status: 'succeeded' })]) });
+  });
+
+  it('skips what is left of a workflow step once an inner turn reached the limit its allowance set, and settles the step', async () => {
+    const { config, runId } = await startBuild(allowance('timeout: 10m', `        - id: first
+          prompt: First.
+        - id: second
+          needs: [first]
+          prompt: Second.
+`));
+    const first = leaseIn(await leaseNext(config, runId, driverA, { can: ENDS_TURN }));
+
+    await reportAttempt(config, runId, { attempt: first.attempt, revision: first.revision, outcome: 'success', driver: driverA, durationMs: 1000, limit: 'timeout', tokens: { input: 1, output: 1 } });
+
+    expect(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).toMatchObject({ data: { lease: { step: 'after' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([
+      expect.objectContaining({ id: 'work', status: 'succeeded' }),
+      expect.objectContaining({ id: 'work.first', status: 'succeeded', limit: 'timeout' }),
+      expect.objectContaining({ id: 'work.second', status: 'skipped' }),
+    ]) });
+  });
+
+  it.each([
+    ['time', { durationMs: 600_000, tokens: { input: 1, output: 1 } }],
+    ['tokens', { durationMs: 1000, tokens: { input: 80, output: 20 } }],
+  ])('skips what is left of a workflow step once a turn its driver could not end used up the allowance\'s %s', async (_spent, measured) => {
+    const { config, runId } = await startBuild(allowance('timeout: 10m\n    budget: { tokens: 100 }', `        - id: first
+          prompt: First.
+        - id: second
+          needs: [first]
+          prompt: Second.
+`));
+    const first = leaseIn(await leaseNext(config, runId, driverA, { can: KEEPS_TURN }));
+
+    await reportAttempt(config, runId, { attempt: first.attempt, revision: first.revision, outcome: 'success', driver: driverA, ...measured });
+
+    expect(await leaseNext(config, runId, driverA, { can: KEEPS_TURN })).toMatchObject({ data: { lease: { step: 'after' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([
+      expect.objectContaining({ id: 'work', status: 'succeeded' }),
+      expect.objectContaining({ id: 'work.second', status: 'skipped' }),
+    ]) });
+  });
+
+  it('skips what is left of a workflow step once an inner turn ended at the token budget its allowance set, though it counted fewer, and settles the step succeeded', async () => {
+    const { config, runId } = await startBuild(allowance('budget: { tokens: 100 }', `        - id: first
+          prompt: First.
+        - id: second
+          needs: [first]
+          prompt: Second.
+`));
+    const first = LeaseWithLimitsSchema.parse(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).data.lease;
+    expect(first).toMatchObject({ limits: { budget: { tokens: 100 }, onLimit: 'end_turn' } });
+    expect(first).not.toHaveProperty('limits.timeoutMs');
+
+    await reportAttempt(config, runId, { attempt: first.attempt, revision: first.revision, outcome: 'success', driver: driverA, durationMs: 1000, limit: 'budget', tokens: { input: 50, output: 20 } });
+
+    expect(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).toMatchObject({ data: { lease: { step: 'after' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([
+      expect.objectContaining({ id: 'work', status: 'succeeded' }),
+      expect.objectContaining({ id: 'work.second', status: 'skipped' }),
+    ]) });
+  });
+
+  it('runs the rest of a workflow step when an inner turn reached its own max_turns, which no allowance caps', async () => {
+    const { config, runId } = await startBuild(allowance('timeout: 10m', `        - id: first
+          prompt: First.
+          max_turns: 2
+          on_limit: end_turn
+        - id: second
+          needs: [first]
+          prompt: Second.
+`));
+    const first = leaseIn(await leaseNext(config, runId, driverA, { can: ENDS_TURN }));
+
+    await reportAttempt(config, runId, { attempt: first.attempt, revision: first.revision, outcome: 'success', driver: driverA, durationMs: 1000, limit: 'max_turns', tokens: { input: 1, output: 1 } });
+
+    expect(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).toMatchObject({ data: { lease: { step: 'work.second' } } });
+  });
+
+  it('runs the rest of a workflow step when an inner turn reached a limit of its own, below what the allowance had left', async () => {
+    const { config, runId } = await startBuild(allowance('timeout: 10m', `        - id: first
+          prompt: First.
+          timeout: 1m
+          on_limit: end_turn
+        - id: second
+          needs: [first]
+          prompt: Second.
+`));
+    const first = LeaseWithLimitsSchema.parse(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).data.lease;
+    expect(first).toMatchObject({ limits: { timeoutMs: 60_000 } });
+
+    await reportAttempt(config, runId, { attempt: first.attempt, revision: first.revision, outcome: 'success', driver: driverA, durationMs: 60_000, limit: 'timeout', tokens: { input: 1, output: 1 } });
+
+    expect(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).toMatchObject({ data: { lease: { step: 'work.second', limits: { timeoutMs: 540_000 } } } });
   });
 });
 

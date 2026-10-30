@@ -30,7 +30,7 @@ import { homeVariables, isToolId, TOOLS } from '../../tools.js';
 import { getDataHome, LocalConfigSchema, type LocalConfig } from '../../types.js';
 import { execCommand } from '../../utils/exec.js';
 import { readJson, writeJsonAtomic } from '../../utils/fs.js';
-import { getDefaultBranch, HEAD_STATUS, headStateOf, resolveAnchors } from '../../utils/git.js';
+import { getDefaultBranch, HEAD_STATUS, headStateOf, resolveAnchors, type HeadState } from '../../utils/git.js';
 import { log } from '../../utils/logger.js';
 import { projectSlug } from '../../utils/partition.js';
 import { excludedSkillsOf, type ClonePlace, type InstalledTeam } from '../clone.js';
@@ -190,6 +190,19 @@ export async function commitClone(input: { dir: string; branch: string; step: st
   const committed = await commitWork(dir, `teamai: ${step}`, start, git);
   if ('error' in committed) return { code: 'workspace_base', message: `Step "${step}" ran, but its work could not be committed in its clone: ${committed.error}` };
   return { changes: { branch, base, ...committed } };
+}
+
+/**
+ * The head of the clone of `branch` as it is now, read by git without the names its place withholds, as its commit is:
+ * setup or a step may have configured what git starts there. Null when this machine prepared none or git cannot read it.
+ */
+export async function cloneHead(config: LocalConfig, run: RunId, branch: string): Promise<HeadState | null> {
+  const found = await readReceipt(receiptPath(runsDir(config), run, branch));
+  if (found?.state.kind !== 'ready') return null;
+  const git = await cloneGit(found.withhold, undefined);
+  if (typeof git !== 'function') return null;
+  const status = await git(path.join(found.root, 'r'), [...HEAD_STATUS]);
+  return status.code === 0 ? headStateOf(status.stdout) : null;
 }
 
 /** `untrustedGit` without `withhold`: a step ran in the clone, so its config may start anything. */

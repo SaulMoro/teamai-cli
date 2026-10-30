@@ -4,10 +4,9 @@ import { DriverSchema } from '../driver-identity.js';
 import { RunModeSchema } from '../launch-context.js';
 import { WorkOutcomeSchema } from '../outcomes.js';
 import { JudgeUsageSchema } from '../scorers/label.js';
-import { TrialLimitSchema } from '../benchmark/terms.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 import { PrUrlSchema } from './pr-url.js';
-import { UnenforcedSchema } from './requirements.js';
+import { LimitSchema, TurnLimitsSchema, UnenforcedSchema } from './requirements.js';
 import type { RunState, StepLease, WorkflowFailure } from './types.js';
 import type { WorkspaceMode } from './workspace.js';
 
@@ -47,7 +46,8 @@ const LeaseSessionSchema = SessionRefSchema.extend({ earlier: z.array(SessionRef
 
 const LeaseSchema: z.ZodType<StepLease> = z.object({
   attempt: z.string(), revision: z.number(), driver: DriverSchema, session: LeaseSessionSchema.optional(),
-  unenforced: z.array(UnenforcedSchema).optional(), expiresAt: z.string().optional(), runMode: RunModeSchema.optional(),
+  unenforced: z.array(UnenforcedSchema).optional(), expiresAt: z.string().optional(), leasedAt: z.string().optional(), runMode: RunModeSchema.optional(),
+  limits: TurnLimitsSchema.optional(),
 });
 
 export const ChangesSchema = z.object({
@@ -95,8 +95,8 @@ const report = {
   runMode: RunModeSchema.optional(),
   /** What the attempt's own commands appended to its outcome file, such as a learning `contribute` recorded (#1387). */
   outcomes: z.array(WorkOutcomeSchema).optional().catch(undefined),
-  /** The suite limit that ended a benchmark trial's prompt. */
-  limit: TrialLimitSchema.optional(),
+  /** The limit that ended the prompt's turn under `on_limit: end_turn`. */
+  limit: LimitSchema.optional(),
 };
 
 export const OutcomeSchema = z.enum(['success', 'failed', 'timeout', 'skipped', 'cancelled']);
@@ -200,7 +200,11 @@ const WaitingSchema = StepBaseSchema.extend({ status: z.literal('waiting') });
  * `expiresAt`: when the step's `timeout`, or that of the workflow file it runs, ends it. `limitsFrom`: where the budget of
  * the workflow it runs counts from. Both are set when it starts.
  */
-const RunningSchema = StepBaseSchema.extend({ status: z.literal('running'), expiresAt: z.string().optional(), limitsFrom: LimitsFromSchema.optional() });
+const RunningSchema = StepBaseSchema.extend({
+  status: z.literal('running'), expiresAt: z.string().optional(), limitsFrom: LimitsFromSchema.optional(),
+  /** Under `on_limit: end_turn`: a prompt inside reached a limit its allowance set, so the allowance is spent. */
+  allowanceSpent: z.literal(true).optional(),
+});
 /** `delivering`: the agent succeeded and its work is on its branch; dependents wait until that branch has its pull request. */
 const DeliveringSchema = StepBaseSchema.extend({ status: z.literal('delivering'), ...settledFields, delivery: DeliverySchema });
 const SucceededSchema = StepBaseSchema.extend({

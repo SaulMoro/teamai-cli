@@ -231,7 +231,7 @@ const STEP_RULES = {
   outputs: 'publish', end: 'publish', results: 'publish', settledAt: 'publish', exitCode: 'publish', message: 'drop',
   tool: 'publish', model: 'publish', session: 'publish', tokens: 'publish', changes: 'publish', read: 'publish',
   agent: 'publish', used: 'publish', installId: 'publish', loopFinal: 'publish', failure: 'rewrite', delivery: 'publish', unenforced: 'publish',
-  runMode: 'publish', expiresAt: 'publish', limitsFrom: 'publish', outcomes: 'publish', limit: 'publish', durationMs: 'publish', cost: 'publish',
+  runMode: 'publish', expiresAt: 'publish', limitsFrom: 'publish', allowanceSpent: 'publish', outcomes: 'publish', limit: 'publish', durationMs: 'publish', cost: 'publish',
 } satisfies FieldRules<StepState>;
 
 const PASS_RULES = {
@@ -251,7 +251,7 @@ const ANSWER_RULES = {
 const FAILURE_RULES = { 'code': 'publish', message: 'rewrite' } satisfies FieldRules<WorkflowFailure>;
 
 // A lease another machine held is released when the run is handed over, so the session it offered stays here.
-const LEASE_RULES = { attempt: 'publish', revision: 'publish', driver: 'rewrite', session: 'drop', unenforced: 'drop', expiresAt: 'drop', runMode: 'drop' } satisfies FieldRules<StepLease>;
+const LEASE_RULES = { attempt: 'publish', revision: 'publish', driver: 'rewrite', session: 'drop', unenforced: 'drop', expiresAt: 'drop', leasedAt: 'drop', runMode: 'drop', limits: 'drop' } satisfies FieldRules<StepLease>;
 
 // An isolated run, the only one with a clone, is never published.
 const COPY_RULES = { owner: 'drop', commit: 'publish', from: 'publish', used: 'drop', kind: 'drop' } satisfies FieldRules<NonNullable<RunState['copies']>[string]>;

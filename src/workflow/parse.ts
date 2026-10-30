@@ -20,7 +20,7 @@ import { loopProblems } from './loop.js';
 import { modelValueProblem } from '../models/aliases.js';
 import type { StepModel } from './step-model.js';
 import { ClonePlaceSchema } from './clone.js';
-import { mergeRequirements, REQUIREMENT_KEYS, RequirementsSchema, SANDBOX_WITHHELD_ENV, SetupSchema, type InEffect, type Requirements, type Setup } from './requirements.js';
+import { mergeRequirements, ON_LIMIT, REQUIREMENT_KEYS, RequirementsSchema, SANDBOX_WITHHELD_ENV, SetupSchema, type InEffect, type OnLimit, type Requirements, type Setup } from './requirements.js';
 import { sameEnvName } from '../resources/env-key.js';
 
 /**
@@ -31,7 +31,7 @@ export const INVOKE_ALIAS_SINCE = '0.28.0';
 
 const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'inputs', 'defaults', 'ends', 'outputs', 'loop', 'timeout', 'budget', 'setup', 'steps', 'finally', 'invoke', 'alias']);
 const ACTION_KEYS = Object.keys(STEP_ACTIONS);
-const STEP_KEYS = new Set(['id', 'needs', 'if', ...ACTION_KEYS, 'env', 'with', 'agent', 'tool', 'model', 'output', 'end', 'loop', 'break', 'for_each', 'approve', 'choose', 'interactive', 'workspace', 'session', 'scorers', 'requires', 'timeout', 'budget', 'max_turns', 'deliver']);
+const STEP_KEYS = new Set(['id', 'needs', 'if', ...ACTION_KEYS, 'env', 'with', 'agent', 'tool', 'model', 'output', 'end', 'loop', 'break', 'for_each', 'approve', 'choose', 'interactive', 'workspace', 'session', 'scorers', 'requires', 'timeout', 'budget', 'max_turns', 'on_limit', 'deliver']);
 const EXACT_MODEL_KEYS: ReadonlySet<string> = new Set(['name', 'effort']);
 const STEP_LOOP_KEYS = new Set(['back_to', 'while', 'max_iterations']);
 const FOR_EACH_KEYS = new Set(['items', 'max_parallel']);
@@ -459,8 +459,14 @@ function parseBody(
       } else if (maxTurnsPair && actions.length > 0 && !promptPair && !promptFilePair) {
         diagnostics.push(locate(file, lineCounter, maxTurnsPair.key, `${field}.max_turns`, `${stepLabel} max_turns is only allowed on a prompt or prompt_file step`));
       }
-      if (budgetPair && actions.length > 0 && !workflowPair) {
-        diagnostics.push(locate(file, lineCounter, budgetPair.key, `${field}.budget`, `${stepLabel} budget is only allowed on a workflow step; a workflow spends it over all its steps`));
+      const onLimitPair = item.items.find((pair) => scalarString(pair.key) === 'on_limit');
+      const onLimit = onLimitPair ? parseOnLimit(onLimitPair.value ?? onLimitPair.key, {
+        field: `${field}.on_limit`, stepLabel, ends: forEachPair ? 'fan-out' : promptPair || promptFilePair ? 'prompt' : workflowPair && actions.length === 1 ? 'workflow' : actions.length > 0 ? 'none' : undefined,
+        limits: { timeout: stepTimeoutPair !== undefined, budget: budgetPair !== undefined, maxTurns: maxTurnsPair !== undefined },
+      }, ctx) : undefined;
+      const endsPromptTurn = onLimit === 'end_turn' && (promptPair !== undefined || promptFilePair !== undefined);
+      if (budgetPair && actions.length > 0 && !workflowPair && !endsPromptTurn) {
+        diagnostics.push(locate(file, lineCounter, budgetPair.key, `${field}.budget`, `${stepLabel} budget is only allowed on a workflow step, or on a prompt step with on_limit: end_turn`));
       }
       const envPair = item.items.find((pair) => scalarString(pair.key) === 'env');
       const env = envPair ? parseEnv(envPair.value ?? envPair.key, `${field}.env`, stepLabel, ctx) : undefined;
@@ -633,6 +639,7 @@ function parseBody(
           ...(timeout !== undefined ? { timeout } : {}),
           ...(budget ? { budget } : {}),
           ...(maxTurns !== undefined ? { maxTurns } : {}),
+          ...(onLimit ? { onLimit } : {}),
           ...(output ? { output } : {}),
           ...(end ? { end } : {}),
           ...(stepLoop ? { loop: stepLoop } : {}),
@@ -1108,6 +1115,40 @@ function parseTimeout(node: Node | null | undefined, field: string, ctx: ParseCo
   if (ms !== undefined) return ms;
   ctx.diagnostics.push(locate(ctx.file, ctx.lineCounter, node, field, `${field} must be a positive duration, such as 500ms, 30s, 10m, or 2h`));
   return undefined;
+}
+
+/**
+ * A step's `on_limit`, or undefined when it is not one. `ends` is what the step runs: a prompt's turn ends at its
+ * `timeout`, `max_turns` or `budget`; a workflow step's `timeout` and `budget` are the allowance its prompts spend.
+ */
+function parseOnLimit(
+  node: Node | null | undefined, { field, stepLabel, ends, limits }: { field: string; stepLabel: string; ends: 'prompt' | 'workflow' | 'fan-out' | 'none' | undefined; limits: { timeout: boolean; budget: boolean; maxTurns: boolean } },
+  ctx: ParseContext,
+): OnLimit | undefined {
+  const value = scalarString(node);
+  const problem = (message: string): undefined => {
+    ctx.diagnostics.push(locate(ctx.file, ctx.lineCounter, node, field, `${stepLabel} ${message}`));
+    return undefined;
+  };
+  const onLimit = ON_LIMIT.find((known) => known === value);
+  if (onLimit === undefined) return problem('on_limit must be end_turn or fail');
+  switch (ends) {
+    // A step with no action already reports every key it may not carry.
+    case undefined:
+      return onLimit;
+    case 'none':
+      return problem('on_limit is only allowed on a prompt, prompt_file or workflow step');
+    case 'fan-out':
+      return problem('on_limit is not allowed on a for_each step');
+    case 'prompt':
+      return limits.timeout || limits.budget || limits.maxTurns ? onLimit : problem('on_limit needs a timeout, max_turns or budget to end the turn at');
+    case 'workflow':
+      return limits.timeout || limits.budget ? onLimit : problem('on_limit on a workflow step needs a timeout or budget, which its prompts spend');
+    default: {
+      const unhandled: never = ends;
+      return unhandled;
+    }
+  }
 }
 
 /** A `budget`: `{ tokens: <positive whole number> }`. A key this version does not know is `unknown_key`. */

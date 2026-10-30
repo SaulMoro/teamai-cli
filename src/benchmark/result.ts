@@ -9,11 +9,11 @@
 import { z } from 'zod';
 import type { EntryVerdict } from '../scorers/entry.js';
 import type { StepState } from '../workflow/step-state.js';
-import { ReportedUnenforcedSchema } from '../workflow/requirements.js';
+import { LimitSchema } from '../workflow/requirements.js';
 import type { RunState } from '../workflow/types.js';
 import { CheckOutputSchema, type CheckResult } from './check.js';
 import { baselineStepOf, correctnessScorerName, stepOf, type BenchmarkPlan, type PlannedTask, type PlannedTrial } from './plan.js';
-import { ArmTeamSchema, TrialLimitSchema, TrialLimitsSchema } from './terms.js';
+import { ArmTeamSchema, TrialLimitsSchema } from './terms.js';
 
 export const TRIAL_RESULTS = ['passed', 'failed', 'error', 'unscored', 'not_run'] as const;
 export type TrialResult = (typeof TRIAL_RESULTS)[number];
@@ -26,6 +26,9 @@ export type Baseline = (typeof BASELINES)[number];
  * `record.benchmark`. A reader rebuilds the comparison from the record alone, after the suite left the cache. No
  * prompts, commands, credential URLs or local paths.
  */
+/** The not enforced requirements of a trial's prompt that the record keeps: those of the suite's limits. */
+const UNENFORCED_LIMITS = ['max_turns', 'budget', 'on_limit'] as const;
+
 export const BenchmarkRecordSchema = z.object({
   suite: z.object({ name: z.string(), sourceHash: z.string() }),
   repetitions: z.number().int(),
@@ -42,9 +45,12 @@ export const BenchmarkRecordSchema = z.object({
     task: z.string(), arm: z.string(), repetition: z.number().int(), order: z.number().int(), step: z.string(),
     result: z.enum(TRIAL_RESULTS),
     /** The suite limit that ended the prompt; the check or judge still decided `result`. */
-    limit: TrialLimitSchema.optional(),
-    /** The suite limits the prompt's driver reported it did not enforce, which make the trial a deviation. */
-    unenforced: ReportedUnenforcedSchema.optional(),
+    limit: LimitSchema.optional(),
+    /**
+     * The suite limits the prompt's driver did not enforce, which make the trial a deviation: `on_limit` when the driver
+     * could not end the turn at them at all.
+     */
+    unenforced: z.array(z.enum(UNENFORCED_LIMITS)).optional(),
     /** The prompt's, as its driver measured them around the tool launch and the tool stated them. */
     durationMs: z.number().int().nonnegative().optional(),
     tokens: z.object({ input: z.number().optional(), output: z.number().optional(), cachedInput: z.number().optional() }).optional(),
@@ -102,7 +108,7 @@ function promptEntryOf(prompt: StepState | undefined): Pick<BenchmarkRecord['tri
     case 'failed':
     case 'cancelled':
     case 'delivering': {
-      const unenforced = (prompt.unenforced ?? []).flatMap(({ requirement }) => (requirement === 'budget' || requirement === 'max_turns' ? [requirement] : []));
+      const unenforced = (prompt.unenforced ?? []).flatMap(({ requirement }) => UNENFORCED_LIMITS.filter((limit) => limit === requirement));
       return {
         ...(prompt.limit ? { limit: prompt.limit } : {}),
         ...(unenforced.length > 0 ? { unenforced } : {}),
