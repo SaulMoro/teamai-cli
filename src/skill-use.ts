@@ -15,21 +15,18 @@
  * slot in `~/.teamai/sessions/<sid>-skills.json`; only a first claim is
  * recorded.
  */
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { collectTeamRepoSkills } from './agent-skills.js';
 import { sanitizeSessionId } from './contribute-check.js';
-import { loadTeamConfig, resolveMemberToolRoots } from './config.js';
-import { buildRolePullContext, resolveDesiredSkills } from './resources/desired.js';
-import { parseRolesManifestContent, resolveRoleResourceNamespaces } from './roles.js';
-import { recordedUnchanged, type DeliveredHashes } from './resources/delivered-copies.js';
+import { resolveMemberToolRoots } from './config.js';
+import { isRecordedFromTeamSkill, recordedUnchanged, type DeliveredHashes } from './resources/delivered-copies.js';
 import type { SubagentsRead } from './session-flow/adapters/base.js';
 import type { ContentBlock, Message, Session } from './session-flow/ir.js';
 import { typedText } from './session-flow/title.js';
 import { isToolId, TOOLS, type PromptForm, type SkillLoad } from './tools.js';
-import { SKILL_NAME_CHARS, type DeliverySelection, type LocalConfig } from './types.js';
+import { SKILL_NAME_CHARS, type LocalConfig } from './types.js';
 import { withFileLock } from './update.js';
 import {
   appendUsageEvent,
@@ -41,9 +38,9 @@ import {
   updateKnownSkills,
 } from './usage-tracker.js';
 import { resolvePath } from './utils/agent-path.js';
-import { getFileContentAtRev, listFilesAtRev } from './utils/git.js';
+import { listFilesAtRev } from './utils/git.js';
 import { pathExists, readFileSafe, readJson, writeJson } from './utils/fs.js';
-import { parseFrontmatter } from './utils/frontmatter.js';
+import { splitFrontmatter } from './utils/frontmatter.js';
 import { getUserHome } from './utils/home.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
 import { log } from './utils/logger.js';
@@ -273,115 +270,81 @@ export function skillCandidates(event: Record<string, unknown>, tool: string): S
 }
 
 /**
- * The team skills a checkout holds as teamai delivered them, by name: each SKILL.md under a skill root seen from `cwd`
- * whose bytes are the ones `delivered` records, of a skill the team repo has. A name that also has a copy teamai did not
- * deliver, or one changed since, is left out, since which copy a tool loads is not known.
+ * What a session records of a delivered team skill (#1469): the skills namespace the team repo kept it under (none for a
+ * root skill, `namespaceUnknown` when the delivery record cannot tell which of several), and the description its
+ * frontmatter then carried (none when there is no frontmatter description that parses).
  */
-export async function deliveredTeamSkills(config: LocalConfig, cwd: string, delivered: DeliveredHashes): Promise<Record<string, string[]>> {
-  const team = await collectTeamRepoSkills(config.repo.localPath);
+export const DeliveredSkillInfoSchema = z.object({
+  namespace: z.string().optional(),
+  namespaceUnknown: z.literal(true).optional(),
+  description: z.string().optional(),
+});
+export type DeliveredSkillInfo = z.infer<typeof DeliveredSkillInfoSchema>;
+
+/**
+ * The team skills a checkout holds as teamai delivered them, by name: each SKILL.md under a skill root seen from `cwd`
+ * whose bytes are the ones `delivered` records, of a skill the team repo had at the delivered revision `rev`, so one
+ * the team deleted since still counts. `teamSkills` holds each name's files, `teamSkillInfo` what a session records of
+ * it. A name that also has a copy teamai did not deliver, or one changed since, is left out, since which copy a tool
+ * loads is not known.
+ */
+export async function deliveredTeamSkills(config: LocalConfig, cwd: string, delivered: DeliveredHashes, rev: string): Promise<{
+  teamSkills: Record<string, string[]>;
+  teamSkillInfo: Record<string, DeliveredSkillInfo>;
+}> {
+  const repo = config.repo.localPath;
+  // One listing for every name. A revision git cannot read lists nothing, so fall back to the clone's own.
+  const listed = await listFilesAtRev(repo, rev, 'skills');
+  const sources = teamSkillDirs(listed.length > 0 ? listed : await listFilesAtRev(repo, 'HEAD', 'skills'));
   const toolRoots = config.toolRoots ?? await resolveMemberToolRoots(cwd);
   const copies = new Map<string, string[]>();
   const others = new Set<string>();
   for (const root of await skillRoots({ config, toolRoots, hookCwd: cwd })) {
     for (const name of await fs.readdir(root).catch(() => [])) {
       const file = path.join(root, name, 'SKILL.md');
-      if (!team.has(name) || !await pathExists(file)) continue;
+      if (!sources.has(name) || !await pathExists(file)) continue;
       if (await recordedUnchanged(delivered, file)) copies.set(name, [...copies.get(name) ?? [], file]);
       else others.add(name);
     }
   }
-  return Object.fromEntries([...copies].filter(([name]) => !others.has(name)));
-}
-
-/** What a session records of a delivered team skill (#1469): the description it then had, and its skills namespace if any. */
-export interface DeliveredSkillInfo {
-  namespace?: string;
-  namespaceUnknown?: true;
-  description: string;
+  const kept = [...copies].filter(([name]) => !others.has(name));
+  const teamSkillInfo = await Promise.all(kept.map(async ([name, [file]]): Promise<[string, DeliveredSkillInfo]> => {
+    const { data, valid } = splitFrontmatter(await readFileSafe(file) ?? '');
+    return [name, {
+      ...await deliveredNamespace(repo, delivered, path.dirname(file), sources.get(name) ?? []),
+      ...(valid && typeof data.description === 'string' ? { description: data.description.trim() } : {}),
+    }];
+  }));
+  return { teamSkills: Object.fromEntries(kept), teamSkillInfo: Object.fromEntries(teamSkillInfo) };
 }
 
 /**
- * The team skills a checkout holds as delivered, by name, each with the description its SKILL.md then carries and the
- * skills namespace the team repo keeps it under (none for a root skill), as `deliveredTeamSkills` finds the same copies.
- * A name with a copy teamai did not deliver, or one changed since, is left out, as there too. The description is read
- * from the first delivered copy of a name; the manifest masks it later.
+ * Each team skill name's directories in a listing of the team repo's `skills/`: `skills/<name>` for a root skill and
+ * `skills/<namespace>/<name>` otherwise, as `collectTeamRepoSkills` reads the tree.
  */
-export async function deliveredTeamSkillInfo(config: LocalConfig, cwd: string, delivered: DeliveredHashes, selection?: DeliverySelection, deliveredRev?: string): Promise<Record<string, DeliveredSkillInfo>> {
-  // The member may have changed roles since the last pull; the delivered copy still belongs to the old selection.
-  const selectedConfig: LocalConfig = selection ? {
-    ...config,
-    scope: selection.scope,
-    primaryRole: selection.primaryRole,
-    additionalRoles: selection.additionalRoles,
-    projects: selection.projects,
-    subscribedTags: selection.subscribedTags,
-    excludedSkills: selection.excludedSkills,
-    inheritUserScope: selection.inheritUserScope,
-    ...(selection.rolesAssigned ? {} : { roleAssignment: undefined }),
-  } : config;
-  // Pull's resolver knows which same-name namespace won for this member.
-  // The repo-wide catalog keeps only the first namespace and can mislabel a delivered copy.
-  const teamConfig = await loadTeamConfig(config.repo.localPath);
-  const desired = teamConfig
-    ? await resolveDesiredSkills(teamConfig, selectedConfig, await buildRolePullContext(selectedConfig))
-    : null;
-  const team = desired?.kind === 'resolved'
-    ? new Map(desired.items.map((item) => [item.name, { namespace: item.namespace }] as const))
-    : await collectTeamRepoSkills(config.repo.localPath);
-  // The role manifest may have changed since the last pull. Match the delivered file's hash
-  // against skill sources at that pull's revision before trusting today's namespace selection.
-  const historical = new Map<string, Array<{ path: string; namespace?: string }>>();
-  if (deliveredRev) {
-    for (const source of await listFilesAtRev(config.repo.localPath, deliveredRev, 'skills')) {
-      const parts = source.split('/');
-      if (parts[0] !== 'skills' || parts.at(-1) !== 'SKILL.md' || (parts.length !== 3 && parts.length !== 4)) continue;
-      const name = parts[parts.length - 2];
-      historical.set(name, [...historical.get(name) ?? [], { path: source, ...(parts.length === 4 ? { namespace: parts[1] } : {}) }]);
-    }
+function teamSkillDirs(files: readonly string[]): Map<string, string[]> {
+  const dirs = new Set(files.filter((file) => path.posix.basename(file) === 'SKILL.md').map((file) => path.posix.dirname(file)));
+  const byName = new Map<string, string[]>();
+  for (const dir of dirs) {
+    const depth = dir.split('/').length;
+    if (depth !== 2 && (depth !== 3 || dirs.has(path.posix.dirname(dir)))) continue;
+    const name = path.posix.basename(dir);
+    byName.set(name, [...byName.get(name) ?? [], dir]);
   }
-  let deliveredRoleNamespaces: Set<string> | undefined;
-  if (deliveredRev && selection?.primaryRole) {
-    const content = await getFileContentAtRev(config.repo.localPath, deliveredRev, 'manifest/roles.yaml');
-    if (content) {
-      try {
-        deliveredRoleNamespaces = new Set(resolveRoleResourceNamespaces({
-          manifest: parseRolesManifestContent(content.toString('utf8')),
-          primaryRole: selection.primaryRole,
-          additionalRoles: selection.additionalRoles,
-        }).skills);
-      } catch { /* An old or unavailable manifest cannot prove the delivered namespace. */ }
-    }
-  }
-  const toolRoots = config.toolRoots ?? await resolveMemberToolRoots(cwd);
-  const found = new Map<string, DeliveredSkillInfo>();
-  const others = new Set<string>();
-  for (const root of await skillRoots({ config, toolRoots, hookCwd: cwd })) {
-    for (const name of await fs.readdir(root).catch(() => [])) {
-      const entry = team.get(name);
-      const file = path.join(root, name, 'SKILL.md');
-      if ((entry === undefined && !historical.has(name)) || !await pathExists(file)) continue;
-      if (!await recordedUnchanged(delivered, file)) { others.add(name); continue; }
-      if (found.has(name)) continue;
-      const matches = (await Promise.all((historical.get(name) ?? []).map(async (source) => {
-        const content = await getFileContentAtRev(config.repo.localPath, deliveredRev!, source.path);
-        return content && createHash('sha256').update(content).digest('hex') === delivered[file] ? source : null;
-      }))).filter((source): source is { path: string; namespace?: string } => source !== null);
-      const roleMatches = matches.length > 1 && deliveredRoleNamespaces
-        ? matches.filter((source) => source.namespace !== undefined && deliveredRoleNamespaces!.has(source.namespace)) : [];
-      // Identical historical copies cannot be attributed to a namespace when the
-      // saved selection includes both. Keep the known skill, marking only its source unknown.
-      if (matches.length > 1 && roleMatches.length !== 1) {
-        const description = String(parseFrontmatter(await readFileSafe(file) ?? '').data.description ?? '').trim();
-        found.set(name, { namespaceUnknown: true, description });
-        continue;
-      }
-      const source = matches.length === 1 ? matches[0] : roleMatches.length === 1 ? roleMatches[0] : undefined;
-      const namespace = source ? source.namespace : entry?.namespace;
-      const description = String(parseFrontmatter(await readFileSafe(file) ?? '').data.description ?? '').trim();
-      found.set(name, { ...(namespace !== undefined ? { namespace } : {}), description });
-    }
-  }
-  return Object.fromEntries([...found].filter(([name]) => !others.has(name)));
+  return byName;
+}
+
+/**
+ * The skills namespace the copy at `dest` came from, of the team directories `dirs` holding its name. A name in one
+ * directory needs no read. For several, the one whose history renders to the recorded bytes, as pull tells them
+ * apart; identical copies cannot be told apart, so their namespace is unknown.
+ */
+async function deliveredNamespace(repo: string, delivered: DeliveredHashes, dest: string, dirs: readonly string[]): Promise<DeliveredSkillInfo> {
+  const matched = dirs.length === 1 ? dirs : (await Promise.all(dirs.map(async (dir) =>
+    await isRecordedFromTeamSkill(delivered, dest, repo, dir) ? [dir] : []))).flat();
+  if (matched.length !== 1) return { namespaceUnknown: true };
+  const parent = path.posix.dirname(matched[0]);
+  return parent === 'skills' ? {} : { namespace: path.posix.basename(parent) };
 }
 
 /**

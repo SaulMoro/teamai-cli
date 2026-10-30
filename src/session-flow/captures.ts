@@ -11,7 +11,7 @@ import { AgentObservationSchema, observeCheckout, settleObservation, type AgentO
 import { getAgentVersion } from '../agent-version.js';
 import { agreedRunMode, launchedBy, resolveRunMode, RunModeSchema, type RunMode } from '../launch-context.js';
 import type { CheckoutRecord } from '../pull.js';
-import { deliveredTeamSkillInfo, deliveredTeamSkills } from '../skill-use.js';
+import { DeliveredSkillInfoSchema, deliveredTeamSkills, type DeliveredSkillInfo } from '../skill-use.js';
 import { getDataHome, type DeliverySelection, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { log } from '../utils/logger.js';
@@ -35,7 +35,7 @@ export const SessionCaptureSchema = z.object({
    * Each delivered team skill's description as its SKILL.md then carried it and its skills namespace (#1469), present
    * (if only as `{}`) once a capture read the delivery record, absent on captures written before #1469.
    */
-  teamSkillInfo: z.record(z.string(), z.object({ namespace: z.string().optional(), namespaceUnknown: z.literal(true).optional(), description: z.string() })).optional(),
+  teamSkillInfo: z.record(z.string(), DeliveredSkillInfoSchema).optional(),
 });
 export type SessionCapture = z.infer<typeof SessionCaptureSchema>;
 
@@ -77,11 +77,10 @@ async function atStart(config: LocalConfig, tool: string, payload: Record<string
     const file = payload.transcript_path;
     const { teamDelivery } = await import('../pull.js');
     const record = (await teamDelivery(config, tool, { beforeOwnPull: true }).catch(() => undefined))?.record;
-    const delivered = record?.delivered;
     const capture: SessionCapture = {
       captureId: randomUUID(), platform, sessionId, capturedAt: new Date().toISOString(), runMode: resolveRunMode(env), agent,
       ...(typeof file === 'string' && path.isAbsolute(file) ? { sessionFile: file } : {}),
-      ...(delivered ? { teamSkills: await deliveredTeamSkills(config, cwd, delivered), teamSkillInfo: await deliveredTeamSkillInfo(config, cwd, delivered, record?.selection, record?.rev) } : {}),
+      ...(record?.delivered ? await deliveredTeamSkills(config, cwd, record.delivered, record.rev) : {}),
     };
     await writeCapture(config, capture);
     return capture.captureId;
@@ -164,10 +163,10 @@ function withTeamSkills(capture: SessionCapture, pulled: Record<string, string[]
 }
 
 /** `capture` with the descriptions of the skills `pulled` added for names it does not already hold, so a later pull leaves them (#1469). */
-function withTeamSkillInfo(capture: SessionCapture, pulled: Record<string, { namespace?: string; description: string }>, observed: boolean): SessionCapture {
+function withTeamSkillInfo(capture: SessionCapture, pulled: Record<string, DeliveredSkillInfo>): SessionCapture {
   const teamSkillInfo = { ...capture.teamSkillInfo };
   for (const [name, info] of Object.entries(pulled)) if (!(name in teamSkillInfo)) teamSkillInfo[name] = info;
-  return observed || capture.teamSkillInfo !== undefined ? { ...capture, teamSkillInfo } : capture;
+  return { ...capture, teamSkillInfo };
 }
 
 /**
@@ -184,14 +183,12 @@ async function markTeamChanged(config: LocalConfig, tool: string, payload: Recor
   const record = await checkoutRecord(config, tool);
   const changed = !isDeepStrictEqual(deliveryOf(record), before);
   try {
-    const observed = record?.delivered !== undefined && typeof cwd === 'string' && typeof captureId === 'string';
-    const pulled = observed
-      ? await deliveredTeamSkills(config, cwd, record!.delivered!) : {};
-    const pulledInfo = observed
-      ? await deliveredTeamSkillInfo(config, cwd, record!.delivered!, record!.selection, record!.rev) : {};
-    if (!changed && Object.keys(pulled).length === 0 && !observed) return;
+    const pulled = record?.delivered && typeof cwd === 'string' && typeof captureId === 'string'
+      ? await deliveredTeamSkills(config, cwd, record.delivered, record.rev) : undefined;
+    if (!changed && !pulled) return;
     await rewrite(config, platform, sessionId, () => true, (capture) => ({
-      ...(capture.captureId === captureId ? withTeamSkillInfo(withTeamSkills(capture, pulled), pulledInfo, observed) : capture),
+      ...(capture.captureId === captureId && pulled
+        ? withTeamSkillInfo(withTeamSkills(capture, pulled.teamSkills), pulled.teamSkillInfo) : capture),
       ...(changed ? { teamChanged: true } : {}),
     }));
   } catch (e) {
