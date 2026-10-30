@@ -23,7 +23,8 @@ function git(cwd: string, ...args: string[]): string {
 
 /**
  * A member of role dev, which receives the dev namespaces and not the ops ones, and of tag quality, in a git team whose
- * commit holds rule commits, which tag quality keeps, and rules design and dev/notes, which only tag ux would, CLAUDE.md, shared
+ * commit holds rule commits, which tag quality keeps, and rules design and dev/notes, which only tag ux would, rule review
+ * shared and again in dev, claudemd file team shared and again in dev, CLAUDE.md, shared
  * skills release and lint, which tag quality brings, and solo, which no tag
  * brings, skill release again in dev, skills deploy in dev and runbook in ops, agent reviewer shared and again in dev,
  * agent planner shared only, rule style in ops, docs shared and under api and in namespace ops, and hooks shared and in
@@ -43,6 +44,10 @@ function team({ role = 'dev' as string | null, tags = true, subscribed = ['quali
     'rules/ops/style.md': 'Ops style.\n',
     'rules/design.md': 'Design.\n',
     'rules/dev/notes.md': 'Dev notes.\n',
+    'rules/review.md': 'Review.\n',
+    'rules/dev/review.md': 'Dev review.\n',
+    'claudemd/team.md': 'Be brief.\n',
+    'claudemd/dev/team.md': 'Be brief, dev.\n',
     'skills/release/SKILL.md': SKILL('release'),
     'skills/lint/SKILL.md': SKILL('lint'),
     'skills/solo/SKILL.md': SKILL('solo'),
@@ -104,6 +109,14 @@ describe('withoutRefusal', () => {
       'Arm "ablated" runs without skills/release, but its namespace dev delivers skills/dev/release in its place; list skills/dev/release too.'],
     ['a shared agent a namespace the member receives delivers in its place, in another format', ['agents/reviewer.md'], 'arm_team_unresolved',
       'Arm "ablated" runs without agents/reviewer.md, but its namespace dev delivers agents/dev/reviewer.yaml in its place; list agents/dev/reviewer.yaml too.'],
+    ['a shared rule a namespace the member receives delivers in its place', ['rules/review.md'], 'arm_team_unresolved',
+      'Arm "ablated" runs without rules/review.md, but its namespace dev delivers rules/dev/review.md in its place; list rules/dev/review.md too.'],
+    ['a shared claudemd file a namespace the member receives delivers in its place', ['claudemd/team.md'], 'arm_team_unresolved',
+      'Arm "ablated" runs without claudemd/team.md, but its namespace dev delivers claudemd/dev/team.md in its place; list claudemd/dev/team.md too.'],
+    ['an entry inside a shared hooks file, named after the file', ['hooks/hooks.yaml#lint'], 'arm_team_unresolved',
+      'Arm "ablated" runs without hooks/hooks.yaml#lint, which team revision {r} does not have. Fix the arm\'s team, push it, run teamai pull, and start again.'],
+    ['an entry inside a shared hooks file, as a path below the file', ['hooks/hooks.yaml/lint'], 'arm_team_unresolved',
+      'Arm "ablated" runs without hooks/hooks.yaml/lint, which team revision {r} does not have. Fix the arm\'s team, push it, run teamai pull, and start again.'],
     ['a rule tagged only with tags the member does not subscribe', ['rules/design.md'], 'arm_team_unresolved',
       'Arm "ablated" runs without rules/design.md, a rule tagged only with tags the member does not subscribe, so pull leaves it out already and leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
     ['a rule of a namespace the member receives, tagged only with tags the member does not subscribe', ['rules/dev/notes.md'], 'arm_team_unresolved',
