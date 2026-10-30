@@ -954,11 +954,12 @@ function parseDefaultScorers(node: Node | undefined, ctx: ParseContext): { batch
   return batch === undefined ? undefined : { batch };
 }
 
-/** A step's `scorers`: a list of names, or `{ names, batch }`. */
+/** A step's `scorers`: a list of names, or `{ names, batch, sampling }`. */
 function parseScorers(node: Node | null | undefined, field: string, ctx: ParseContext): StepScorers | undefined {
   const { file, lineCounter, diagnostics } = ctx;
   let list: Node | null | undefined = node;
   let batch: boolean | undefined;
+  let sampling: 'all' | undefined;
   if (isMap(node)) {
     list = undefined;
     for (const pair of node.items) {
@@ -966,6 +967,7 @@ function parseScorers(node: Node | null | undefined, field: string, ctx: ParseCo
       const key = scalarString(keyNode);
       if (key === 'names') list = valueNode(node, 'names');
       else if (key === 'batch') batch = parseBatch(valueNode(node, 'batch'), `${field}.batch`, ctx);
+      else if (key === 'sampling') sampling = parseSampling(valueNode(node, 'sampling'), `${field}.sampling`, ctx);
       else diagnostics.push(unknownKey(file, lineCounter, keyNode ?? node, `${field}.${key ?? 'key'}`, key ?? 'key'));
     }
   }
@@ -984,7 +986,13 @@ function parseScorers(node: Node | null | undefined, field: string, ctx: ParseCo
       names.push(name);
     }
   }
-  return { names, ...(batch !== undefined ? { batch } : {}) };
+  return { names, ...(batch !== undefined ? { batch } : {}), ...(sampling ? { sampling } : {}) };
+}
+
+function parseSampling(node: Node | undefined, field: string, ctx: ParseContext): 'all' | undefined {
+  if (isScalar(node) && node.value === 'all') return 'all';
+  ctx.diagnostics.push(locate(ctx.file, ctx.lineCounter, node, field, 'sampling must be all, which judges every pass; leave it out to use each scorer\'s samplingRate'));
+  return undefined;
 }
 
 /**

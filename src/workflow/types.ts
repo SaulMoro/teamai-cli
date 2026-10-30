@@ -198,10 +198,10 @@ export interface StepScorers {
   names: string[];
   batch?: boolean;
   /**
-   * Generated only, as a team file cannot set it: every pass is judged whatever the scorers sample, the run does not end
-   * while one of its entries is open, and an entry still open when the run ends is frozen unscored.
+   * `all`: every pass is judged whatever the scorers sample, the run waits for the judges before its `finally` steps,
+   * and an entry still open when its steps end is frozen unscored in `run.verdicts`.
    */
-  required?: true;
+  sampling?: 'all';
 }
 
 /** Whether an agent session may start a workflow: on its own (`allow`), after the person's yes (`ask`), or never (`deny`). */

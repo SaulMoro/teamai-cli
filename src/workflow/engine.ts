@@ -13,7 +13,7 @@ import {
 } from './expression.js';
 import { outputMismatch } from './output.js';
 import { buildEndRecord, publishRunRecords, queueRunRecord, runRecordState } from './records.js';
-import { freezeVerdicts, isUnsettled, requiredEntries } from './scoring-entries.js';
+import { freezeVerdicts, isUnsettled, verdictEntries } from './scoring-entries.js';
 import {
   parseTemplate, renderStrings, renderText, stepExpressions, templatedTexts, templatePaths,
   type StepExpression, type TemplateError,
@@ -1343,7 +1343,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     // Undefined once the run's `finally` steps start, so the loop hands them out.
     const done = async (result: WorkflowResult): Promise<{ save: boolean; envelope: WorkflowEnvelope } | undefined> => {
       // A run that reached its end waits for the judges its steps require; a timeout, a limit or a cancel does not.
-      const judging = result.outcome === 'succeeded' && !run.finalizing ? (await requiredEntries(config, run, now)).filter(isUnsettled).length : 0;
+      const judging = result.outcome === 'succeeded' && !run.finalizing ? (await verdictEntries(config, run, now)).filter(isUnsettled).length : 0;
       if (judging > 0) {
         return answer({ wait: { reason: `${judging} judge entries of run ${run.id} are not settled: judge them with teamai score --next`, judging } });
       }

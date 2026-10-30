@@ -718,13 +718,13 @@ describe('scoring entries', () => {
 });
 
 /**
- * A run of `steps` prompt steps that require scorer `quality`, as only a generated benchmark step can, each settled with
- * outputs through workflow next and report, and the run still running.
+ * A run of `steps` prompt steps whose scorer `quality` judges every pass (`sampling: all`), each settled with outputs
+ * through workflow next and report, and the run still running.
  */
-async function requiredRun(config: LocalConfig, scorerText: string, steps = 1): Promise<string> {
+async function allSampledRun(config: LocalConfig, scorerText: string, steps = 1): Promise<string> {
   const definition: WorkflowDefinition = {
     schemaVersion: 'v1alpha1', name: 'judged', description: 'Steps every pass of which is judged.',
-    steps: Array.from({ length: steps }, (_, index) => ({ id: `s${index + 1}`, prompt: 'Review the change.', ...(index > 0 ? { needs: [] } : {}), scorers: { names: ['quality'], required: true } })),
+    steps: Array.from({ length: steps }, (_, index) => ({ id: `s${index + 1}`, prompt: 'Review the change.', ...(index > 0 ? { needs: [] } : {}), scorers: { names: ['quality'], sampling: 'all' } })),
   };
   const pin = { sourceHash: createHash('sha256').update(scorerText).digest('hex'), relativePath: 'scorers/quality.md', content: scorerText };
   const runId = String(data(await createRun(config, { name: 'judged', sourceHash: 'h', origin: { source: 'team' }, definition, scorers: { quality: pin }, secrets: {} })).run);
@@ -735,10 +735,10 @@ async function requiredRun(config: LocalConfig, scorerText: string, steps = 1): 
   return runId;
 }
 
-describe('required judge work', () => {
-  it('offers every pass of a step that requires its scorer, whatever the scorer samples', async () => {
+describe('judge work of sampling: all', () => {
+  it('offers every pass of a step with sampling: all, whatever the scorer samples', async () => {
     const config = fixture(scorer(25));
-    const runId = await requiredRun(config, scorer(25), 8);
+    const runId = await allSampledRun(config, scorer(25), 8);
 
     const refs: string[] = [];
     const steps: string[] = [];
@@ -754,9 +754,9 @@ describe('required judge work', () => {
     expect((await runOf(config, runId)).status).toBe('running');
   });
 
-  it('offers no required pass once its run ended, which froze it unscored', async () => {
+  it('offers no sampling: all pass once its run ended, which froze it unscored', async () => {
     const config = fixture(scorer(100));
-    const runId = await requiredRun(config, scorer(100));
+    const runId = await allSampledRun(config, scorer(100));
 
     await cancelRun(config, runId, await knownSecrets(config));
     const answer = data(await nextJudgeLease(config, request()));
@@ -765,9 +765,9 @@ describe('required judge work', () => {
     expect((await runOf(config, runId)).verdicts).toEqual([{ scorer: 'quality', step: 's1', pass: 1, outcome: { kind: 'unscored', because: 'run_ended' } }]);
   });
 
-  it('refuses an answer for a required pass after its run ended, records no label, and releases the lease', async () => {
+  it('refuses an answer for a sampling: all pass after its run ended, records no label, and releases the lease', async () => {
     const config = fixture(scorer(100));
-    const runId = await requiredRun(config, scorer(100));
+    const runId = await allSampledRun(config, scorer(100));
     const lease = leaseOf(await nextJudgeLease(config, request()));
     await cancelRun(config, runId, await knownSecrets(config));
 

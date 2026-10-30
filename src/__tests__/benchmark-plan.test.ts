@@ -428,6 +428,31 @@ describe('benchmark run judges', () => {
     expect(buildEndRecord(ended, ended.driver, '').benchmark?.trials).toMatchObject([{ step: PROMPT, result: 'passed' }]);
   });
 
+  it("pins a generated correctness scorer per task, by its rubric's hash, and judges every pass of each trial prompt", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-benchmark-plan-'));
+    dirs.push(root);
+    const config = benchmarkRunConfig(root);
+    const t02 = (CRITERIA_SUITE.tasks.t01 ?? '').replace('The test passes.', 'Both tests pass.');
+    const started = await startBenchmarkRun(config, { ...CRITERIA_SUITE, tasks: { ...CRITERIA_SUITE.tasks, t02 } });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    for (let trial = 0; trial < 2; trial += 1) {
+      const lease = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
+      await reportAttempt(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver, tool: 'claude', trialReport: {} });
+    }
+
+    const judging = await leaseNext(config, runId, driver, { can, prepare: true });
+
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    const pins = run.scorers ?? {};
+    expect(Object.keys(pins).sort()).toEqual([CORRECTNESS, 'teamai:correctness:t02']);
+    expect(Object.values(pins).map((pin) => pin.generated)).toEqual([true, true]);
+    expect(pins[CORRECTNESS]?.sourceHash).not.toBe(pins['teamai:correctness:t02']?.sourceHash);
+    expect(stepDefinitions(run)(PROMPT)?.scorers).toEqual({ names: [CORRECTNESS], sampling: 'all' });
+    expect(judging).toEqual({ data: { wait: { reason: expect.any(String), judging: 2 }, cancelled: [] } });
+  });
+
   it('ends the run failed at its timeout while it judges, and freezes the open entry unscored', async () => {
     const { config, runId } = await judgedTrial();
     vi.useFakeTimers({ toFake: ['Date'] });

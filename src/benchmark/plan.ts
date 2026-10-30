@@ -197,7 +197,7 @@ const SETTLED_END = 'settled';
  *         <arm>                   inline, needs [], workspace: a clone of the starting commit with the arm's team (opens
  *                                 the trial's clone), arms in rotated order
  *           prompt                workspace continue; tool and exact model: the arm's; trial.kind prompt;
- *                                 scorers { the suite's and the task's correctness scorer, required: true }
+ *                                 scorers { the suite's and the task's correctness scorer, sampling: all }
  *           check                 needs [prompt]; command teamai benchmark check --trial; workspace continue;
  *                                 trial.kind check; output { result } (check tasks only)
  *   settled                       needs every scope above; an `if` that reads them; end: settled
@@ -278,7 +278,7 @@ function trialSteps(plan: BenchmarkPlan, suite: Suite, trial: PlannedTrial, arm:
     ...(arm.model ? { model: { name: arm.model, ...(arm.effort ? { effort: arm.effort } : {}) } } : {}),
     trial: promptTerms(trial, arm, task),
     ...turnLimitsOf(plan.limits),
-    ...(names.length > 0 ? { scorers: { names, required: true } } : {}),
+    ...(names.length > 0 ? { scorers: { names, sampling: 'all' } } : {}),
   };
   switch (task.judge.kind) {
     case 'check':

@@ -107,7 +107,7 @@ export function liveSessionLease(attempts: readonly AttemptRecord[], now: string
 }
 
 /**
- * An entry of a run's required scorers as it stood when the run ended, kept on the run (`run.verdicts`) so its record is
+ * An entry of a run's `sampling: all` scorers as it stood when its steps ended, kept on the run (`run.verdicts`) so its record is
  * computed from the run alone. Here rather than beside the code that freezes it: the run store parses it on load.
  */
 export const EntryVerdictSchema = z.object({

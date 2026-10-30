@@ -1,6 +1,6 @@
 /**
  * The judge entries of a run: the passes a judge may judge, which install may judge them, and how the entries of its
- * required scorers stand. It imports neither engine.ts nor local-driver.ts, so the engine can import it without a cycle.
+ * scorers that judge every pass stand. It imports neither engine.ts nor local-driver.ts, so the engine can import it without a cycle.
  */
 import { AttemptStore, type AttemptRecord } from '../scorers/attempts.js';
 import { entryIdOf, entryState, type EntryState, type EntryVerdict } from '../scorers/entry.js';
@@ -63,8 +63,8 @@ export function sameSubject(label: ScoreLabel, scorer: string, sourceHash: strin
     && label.subject.runId === subject.runId && label.subject.step === subject.step && label.subject.pass === subject.pass;
 }
 
-/** One (scorer, pass) of a step that requires its scorers, with the labels and attempts of this install that decide it. */
-export interface RequiredEntry {
+/** One (scorer, pass) of a step whose scorers judge every pass, with the labels and attempts of this install that decide it. */
+export interface VerdictEntry {
   scorer: string;
   pin: PinnedScorer;
   subject: RunSubject;
@@ -74,18 +74,18 @@ export interface RequiredEntry {
 }
 
 /** Whether a judge may still settle `entry`. */
-export function isUnsettled(entry: RequiredEntry): boolean {
+export function isUnsettled(entry: VerdictEntry): boolean {
   return entry.state.kind === 'open' || entry.state.kind === 'leased';
 }
 
 /**
- * Every entry of `run`'s required scorers this install judges: one per pinned scorer this teamai can read and pass of a
- * step that requires it. None for a run whose definition requires no scorer.
+ * Every entry this install judges of `run`'s steps whose scorers have `sampling: all`: one per pinned scorer this teamai
+ * can read and pass of such a step. None for a run whose definition has no such step.
  */
-export async function requiredEntries(config: LocalConfig, run: RunState, now: string): Promise<RequiredEntry[]> {
-  if (!judgeablePasses(run).some(({ definition }) => definition.scorers?.required)) return [];
+export async function verdictEntries(config: LocalConfig, run: RunState, now: string): Promise<VerdictEntry[]> {
+  if (!judgeablePasses(run).some(({ definition }) => definition.scorers?.sampling === 'all')) return [];
   const definitionOf = stepDefinitions(run);
-  const passes = scoredPasses(run, (await installOwner(config)).id).filter(({ subject }) => definitionOf(subject.step)?.scorers?.required);
+  const passes = scoredPasses(run, (await installOwner(config)).id).filter(({ subject }) => definitionOf(subject.step)?.scorers?.sampling === 'all');
   const labels = await LabelStore.local(config);
   const entries = passes.flatMap(({ subject, scorers }) => scorers.flatMap((scorer) => {
     const pin = run.scorers?.[scorer];
@@ -101,18 +101,18 @@ export async function requiredEntries(config: LocalConfig, run: RunState, now: s
 }
 
 /**
- * What `finishRun` keeps in `run.verdicts`: every required entry as it stands when the run ends, so a timeout, a limit
+ * What `finishRun` keeps in `run.verdicts`: every entry `verdictEntries` lists as it stands when the run ends, so a timeout, a limit
  * and a cancel all freeze an entry still open or leased as `unscored / run_ended`. No attempt is written for it: a judge
  * failure code an older teamai does not know would make it skip that attempt file and see the entry open again.
  */
 export async function freezeVerdicts(config: LocalConfig, run: RunState, now: string): Promise<EntryVerdict[]> {
-  return (await requiredEntries(config, run, now)).map((entry) => {
+  return (await verdictEntries(config, run, now)).map((entry) => {
     const scoringCost = scoringCostOf(entry);
     return { scorer: entry.scorer, step: entry.subject.step, pass: entry.subject.pass, outcome: outcomeOf(entry), ...(scoringCost ? { scoringCost } : {}) };
   });
 }
 
-function outcomeOf({ state }: RequiredEntry): EntryVerdict['outcome'] {
+function outcomeOf({ state }: VerdictEntry): EntryVerdict['outcome'] {
   switch (state.kind) {
     case 'labelled':
       return { kind: 'labelled', ...state.verdict };
@@ -135,7 +135,7 @@ function outcomeOf({ state }: RequiredEntry): EntryVerdict['outcome'] {
  * entry's attempt, so the others count as stating theirs there. Incomplete when an attempt that ran a judge stated no
  * cost, or one in another unit, or when no attempt here gave the entry its label; absent when none stated a cost.
  */
-function scoringCostOf({ state, attempts }: RequiredEntry): EntryVerdict['scoringCost'] {
+function scoringCostOf({ state, attempts }: VerdictEntry): EntryVerdict['scoringCost'] {
   const spending = attempts.filter((attempt) => attempt.batch === undefined || attempt.batch[0] === attempt.entry);
   const [first] = spending.flatMap((attempt) => attempt.usage?.cost ?? []);
   if (!first) return undefined;

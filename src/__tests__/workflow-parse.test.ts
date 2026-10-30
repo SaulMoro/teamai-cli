@@ -1548,6 +1548,34 @@ steps:
     ]);
   });
 
+  it('reads sampling: all, which judges every pass, and refuses any other sampling', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Build it.
+steps:
+  - id: plan
+    prompt: Plan it.
+    scorers: { names: [quality], sampling: all }
+`);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.definition.steps[0]?.scorers).toEqual({ names: ['quality'], sampling: 'all' });
+
+    const refused = parse(`schemaVersion: v1alpha1
+name: build
+description: Build it.
+steps:
+  - id: plan
+    prompt: Plan it.
+    scorers: { names: [quality], sampling: 50 }
+`);
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.diagnostics.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:7: field "steps[0].scorers.sampling": sampling must be all, which judges every pass; leave it out to use each scorer\'s samplingRate',
+    ]);
+  });
+
   it('reports an unknown key under scorers and defaults.scorers as unknown_key', () => {
     const result = parse(`schemaVersion: v1alpha1
 name: build
