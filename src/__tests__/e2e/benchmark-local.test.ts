@@ -207,6 +207,28 @@ describe('benchmark on the local driver', () => {
     expect(fixture.trialRootEntries()).toEqual([]);
   }, 120_000);
 
+  it('prints the table of a run cancelled during its trials, with the trial it never reached not_run, and exits 1', async () => {
+    const fixture = await benchmarkFixture({ tool: 'hangs', sandbox: true, suite: FIX_SUITE.replace('repetitions: 1', 'repetitions: 2') });
+    fixtures.push(fixture);
+
+    const running = fixture.teamai(['benchmark', 'run', 'fix']);
+    for (let polls = 0; fixture.toolLaunches().length === 0; polls += 1) {
+      if (polls > 120) throw new Error('the first trial never launched its tool');
+      await new Promise((resolve) => { setTimeout(resolve, 500); });
+    }
+    const [runId = ''] = fixture.runIds();
+    const cancelled = await fixture.teamai(['workflow', 'cancel', runId]);
+    const ran = await running;
+
+    expect(cancelled.code, said(cancelled)).toBe(0);
+    expect(ran.code, said(ran)).toBe(1);
+    expect(DoneSchema.parse(envelope(ran).data?.done)).toMatchObject({ run: runId, outcome: 'cancelled' });
+    const trials = z.array(z.object({ repetition: z.number(), result: z.string() }).passthrough()).parse(RecordSchema.parse(fixture.benchmarkRecord(runId)).trials);
+    expect(trials.find(({ repetition }) => repetition === 2)?.result).toBe('not_run');
+    expect(ran.stderr).toMatch(/\| claude \| claude \| tool default \(team\) \| 2 \| 0 \| 0 \| [01] \| 0 \| [12] \|/);
+    expect(fixture.toolLaunches()).toHaveLength(1);
+  }, 120_000);
+
   it('tool missing', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'], suite: TWO_BY_TWO });
     fixtures.push(fixture);
@@ -236,6 +258,20 @@ describe('benchmark on the local driver', () => {
     const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
 
     expect(user.code, said(user)).toBe(0);
+    expect(ran.code).toBe(1);
+    expect(envelope(ran)).toEqual({ error: { code: 'team_ref_blocked', message: USER_SCOPE } });
+    expect(fixture.runIds()).toEqual([]);
+    expect(fixture.toolLaunches()).toEqual([]);
+  }, 120_000);
+
+  it('a workspace that inherits user scope refuses before the run, with no user-scope install', async () => {
+    const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true });
+    fixtures.push(fixture);
+    const inherits = await fixture.teamai(['init', TEAM_URL, '--provider', 'git', '--agent', 'claude', '--scope', 'workspace', '--inherit-user-scope', '--force']);
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+
+    expect(inherits.code, said(inherits)).toBe(0);
     expect(ran.code).toBe(1);
     expect(envelope(ran)).toEqual({ error: { code: 'team_ref_blocked', message: USER_SCOPE } });
     expect(fixture.runIds()).toEqual([]);

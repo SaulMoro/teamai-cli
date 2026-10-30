@@ -37,6 +37,7 @@ Judge how tidy the change is.
 const CORRECTNESS = 'teamai:correctness:fix';
 
 const RecordSchema = z.object({
+  baselineTeamRevision: z.string(),
   scorers: z.array(z.object({ name: z.string(), rubric: z.object({ sourceHash: z.string() }) })),
   trials: z.array(z.object({ arm: z.string(), result: z.string() }).passthrough()),
 });
@@ -98,7 +99,11 @@ describe('benchmark judges on the local driver', () => {
 
     expect(done.outcome).toBe('succeeded');
     expect(done.outputs.text).toContain(row);
-    expect(RecordSchema.parse(fixture.benchmarkRecord(done.run)).trials).toMatchObject([{ result }]);
+    const record = RecordSchema.parse(fixture.benchmarkRecord(done.run));
+    expect(record.trials).toMatchObject([{ result }]);
+    // The record keeps the pins it judged with, whatever the judge answered.
+    expect(record.scorers).toEqual([{ name: CORRECTNESS, rubric: { sourceHash: expect.stringMatching(/^[0-9a-f]{64}$/) } }]);
+    expect(record.baselineTeamRevision).toMatch(/^[0-9a-f]{40}$/);
     expect(RunSchema.parse(fixture.runFile(done.run)).verdicts).toEqual([expect.objectContaining({ scorer: CORRECTNESS, outcome })]);
   }, 120_000);
 

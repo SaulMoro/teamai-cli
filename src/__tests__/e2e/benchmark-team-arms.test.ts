@@ -140,6 +140,24 @@ describe('benchmark arm team', () => {
     ]);
   }, 240_000);
 
+  it('runs an arm without a whole namespace directory the member receives, and its clone gets none of its skills', async () => {
+    const fixture = await benchmarkFixture({
+      tool: 'fixes', sandbox: true, tools: ['claude'],
+      suite: suite('arms:\n  - name: now\n  - name: no-dev\n    team: { without: [skills/dev] }\n'),
+      team: { 'skills/fixer/SKILL.md': SKILL('fixer'), 'skills/dev/deploy/SKILL.md': SKILL('deploy'), 'skills/dev/ship/SKILL.md': SKILL('ship') },
+    });
+    fixtures.push(fixture);
+
+    const runId = await endedRun(fixture);
+
+    const record = RecordSchema.parse(fixture.benchmarkRecord(runId));
+    expect(record.skillChanges).toEqual([{ arm: 'no-dev', defaults: 'now', skills: [{ name: 'deploy', change: 'removed' }, { name: 'ship', change: 'removed' }] }]);
+    const orders = Object.fromEntries(record.trials.map(({ arm, order }) => [arm, order]));
+    const skills = (arm: string): string[] => (fixture.toolLaunches()[(orders[arm] ?? 0) - 1]?.paths ?? [])
+      .flatMap((file) => /^\.claude\/skills\/([^/]+)\/SKILL\.md$/.exec(file)?.[1] ?? []).filter((skill) => !skill.startsWith('teamai')).sort();
+    expect({ now: skills('now'), noDev: skills('no-dev') }).toEqual({ now: ['deploy', 'fixer', 'ship'], noDev: ['fixer'] });
+  }, 240_000);
+
   // With no role or project, the member receives every namespace beside the shared root.
   it('runs an arm without a rule, an agent, a namespaced skill and a file of a shared skill, and its clone gets every other team asset', async () => {
     const fixture = await benchmarkFixture({
@@ -179,10 +197,13 @@ describe('benchmark arm team', () => {
       'Arm "gone" runs on team ref "no-such-branch", which is no branch, tag or commit of this checkout\'s team repo that holds teamai.yaml. Its branches: main. Fetch it, or fix the arm\'s team, push it, run teamai pull, and start again.'],
     ['a path the pulled revision does not have', () => 'arms:\n  - name: now\n  - name: ablated\n    team: { without: [skills/nope] }\n', 'arm_team_unresolved',
       'Arm "ablated" runs without skills/nope, which team revision {pulled} does not have. Fix the arm\'s team, push it, run teamai pull, and start again.'],
-  ])('refuses to start an arm whose team names %s, and leaves no run', async (_case, armsOf, code, message) => {
+  ])('refuses to start an arm whose team names %s, with the team remote out of reach, and leaves no run', async (_case, armsOf, code, message) => {
     const { fixture, pulled } = await twoRevisions(armsOf);
+    // With no team remote to reach, the refusal cannot come from a fetch.
+    fs.renameSync(fixture.teamOrigin, `${fixture.teamOrigin}.away`);
 
     const started = await fixture.teamai(['benchmark', 'run', 'fix']);
+    fs.renameSync(`${fixture.teamOrigin}.away`, fixture.teamOrigin);
 
     expect(ErrorSchema.parse(envelope(started))).toEqual({ error: { code, message: message.replace('{pulled}', pulled.slice(0, 7)) } });
     expect(fixture.runIds()).toEqual([]);

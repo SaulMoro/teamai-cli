@@ -46,7 +46,7 @@ const ErrorSchema = z.object({ error: z.object({ code: z.string(), message: z.st
 const RecordSchema = z.object({
   arms: z.array(z.object({ name: z.string(), tool: z.string(), workflow: z.object({ name: z.string(), sourceHash: z.string() }).optional() }).passthrough()),
   trials: z.array(z.object({
-    arm: z.string(), result: z.string(), durationMs: z.number().optional(), unenforced: z.array(z.string()).optional(),
+    arm: z.string(), result: z.string(), limit: z.string().optional(), durationMs: z.number().optional(), unenforced: z.array(z.string()).optional(),
     tokens: z.object({ input: z.number().optional(), output: z.number().optional(), complete: z.boolean() }).optional(),
     cost: z.object({ amount: z.number(), unit: z.string(), complete: z.boolean() }).optional(),
     agent: z.object({ tool: z.object({ name: z.string() }).passthrough() }).passthrough().optional(),
@@ -130,6 +130,26 @@ steps:
     expect(ErrorSchema.parse(envelope(ran)).error.message).toContain('Arm "flow" runs workflow "fixer", whose step "ship" asks a person');
     expect(fixture.runIds()).toEqual([]);
   }, 120_000);
+
+  it("skips a workflow arm's next step once its first turn spends the trial timeout, and still checks what the trial left", async () => {
+    const flowOnly = SUITE.replace('  - name: prompt\n  - name: flow\n    workflow: fixer\n', '  - name: flow\n    workflow: fixer\n')
+      .replace('timeout: 10m\n', 'timeout: 10m\ntrial: { timeout: 5s }\n');
+    const fixture = await fixtureWith(flowOnly, { fixer: FIXER, 'fix-once': FIX_ONCE }, { tool: 'hangs' });
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+
+    expect(ran.code, said(ran)).toBe(0);
+    const runId = z.object({ run: z.string() }).parse(envelope(ran).data?.done).run;
+    const { trials } = RecordSchema.parse(fixture.benchmarkRecord(runId));
+    expect(trials.map(({ arm, result, limit }) => ({ arm, result, limit }))).toEqual([{ arm: 'flow', result: 'failed', limit: 'timeout' }]);
+    expect(fixture.toolLaunches()).toHaveLength(1);
+    const { steps } = z.object({ steps: z.array(z.object({ id: z.string(), status: z.string() }).passthrough()) }).parse(fixture.runFile(runId));
+    expect(steps.filter(({ id }) => id.startsWith('trials.r1.fix.flow.')).map(({ id, status }) => ({ id, status }))).toEqual(expect.arrayContaining([
+      { id: 'trials.r1.fix.flow.workflow.plan', status: 'succeeded' },
+      { id: 'trials.r1.fix.flow.workflow.fix', status: 'skipped' },
+      { id: 'trials.r1.fix.flow.check', status: 'succeeded' },
+    ]));
+  }, 240_000);
 
   it('records max_turns as not enforced on a workflow arm, and a trial whose workflow failed as error', async () => {
     const flowFirst = SUITE.replace('  - name: prompt\n  - name: flow\n    workflow: fixer\n', '  - name: flow\n    workflow: fixer\n  - name: prompt\n')

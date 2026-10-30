@@ -168,6 +168,45 @@ describe.each(DRIVERS)('trial team assets on $name', ({ run }) => {
   }, 180_000);
 });
 
+/** Every value under a `delivered` or `gitExcludePaths` key of `value`: what pull recorded it delivered into the checkout. */
+function pullRecords(value: unknown): unknown[] {
+  if (typeof value !== 'object' || value === null) return [];
+  return Object.entries(value).flatMap(([key, inner]) => (key === 'delivered' || key === 'gitExcludePaths' ? [inner] : pullRecords(inner)));
+}
+
+/** What the member has from pull: the checkout's status, the pull record in each state file, and every file under `.claude/`. */
+function memberSide(fixture: BenchmarkFixture): { status: string; records: unknown[]; files: string[][] } {
+  const data = path.join(fixture.home, '.teamai');
+  const states = [path.join(data, 'state.json'), ...fs.readdirSync(path.join(data, 'projects')).map((project) => path.join(data, 'projects', project, 'state.json'))]
+    .filter((file) => fs.existsSync(file));
+  const files = fs.readdirSync(path.join(fixture.work, '.claude'), { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile())
+    .map((entry) => path.join(entry.parentPath, entry.name)).sort().map((file) => [path.relative(fixture.work, file), fs.readFileSync(file, 'utf8')]);
+  return { status: git(fixture.work, ['status', '--porcelain']), records: states.flatMap((file) => pullRecords(JSON.parse(fs.readFileSync(file, 'utf8')))), files };
+}
+
+describe("the member's checkout around a benchmark", () => {
+  it.each([
+    ['ends', async (fixture: BenchmarkFixture) => { await runFixBenchmark(fixture); }],
+    ['is cancelled halfway', async (fixture: BenchmarkFixture) => {
+      const runId = await startFixBenchmark(fixture);
+      const second = await drive(fixture, runId, ({ step }) => step === 'trials.r2.fix.claude.prompt');
+      expect(second?.step).toBe('trials.r2.fix.claude.prompt');
+      const cancelled = await fixture.teamai(['workflow', 'cancel', runId]);
+      expect(cancelled.code, said(cancelled)).toBe(0);
+    }],
+  ] as const)("leaves the checkout, its pull record and its delivered files as they were when a run %s", async (_, run) => {
+    const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'], suite: TWO_REPETITIONS, team: { 'skills/fixer/SKILL.md': SKILL } });
+    fixtures.push(fixture);
+    const before = memberSide(fixture);
+    expect(JSON.stringify(before.records)).toContain('fixer');
+    expect(before.files.map(([file]) => file)).toContain('.claude/skills/fixer/SKILL.md');
+
+    await run(fixture);
+
+    expect(memberSide(fixture)).toEqual(before);
+  }, 180_000);
+});
+
 describe('trial team assets', () => {
   it("commits only the agent's edits, not the team assets the trial's install delivered", async () => {
     const fixture = await benchmarkFixture({

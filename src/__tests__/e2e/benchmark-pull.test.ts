@@ -62,6 +62,58 @@ describe('benchmark suites at pull', () => {
     expect(output).toMatch(/benchmarks\/tasks\/tasks\/short-commit\.yaml:\d+: field "startingCommit": must be a full 40-character commit/);
   }, 120_000);
 
+  it('fails review --branch for each invalid suite and task with its file and line, and benchmark run refuses each after pull', async () => {
+    const fixture = await benchmarkFixture({ tool: 'does-nothing', sandbox: false });
+    fixtures.push(fixture);
+    const task = fixTask(fixture.startingCommit);
+    const adding = (add: string): string => task.replace('  protect: [test.js]\n', `  protect: ['test/**']\n  add: [${add}]\n`);
+    const one = { arms: '[{ name: claude }]' };
+    const files: Record<string, string> = {
+      'benchmarks/seven/suite.yaml': suite('seven', { arms: `[${['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((name) => `{ name: ${name}, tool: ${name} }`).join(', ')}]` }),
+      'benchmarks/seven/tasks/fix.yaml': task,
+      'benchmarks/nested/suite.yaml': suite('nested', { arms: '[{ name: now }, { name: bare, team: { without: [skills/a/notes.md, skills/a] } }]' }),
+      'benchmarks/nested/tasks/fix.yaml': task,
+      'benchmarks/unprotected/suite.yaml': suite('unprotected', one),
+      'benchmarks/unprotected/tasks/fix.yaml': adding('{ from: check-files/a.js, to: lib/a.js }'),
+      'benchmarks/unprotected/check-files/a.js': 'module.exports = 1;\n',
+      'benchmarks/dotted/suite.yaml': suite('dotted', one),
+      'benchmarks/dotted/tasks/fix.yaml': adding('{ from: check-files/a.js, to: test/../a.js }'),
+      'benchmarks/dotted/check-files/a.js': 'module.exports = 1;\n',
+      'benchmarks/outside/suite.yaml': suite('outside', one),
+      'benchmarks/outside/tasks/fix.yaml': adding('{ from: ../seven/tasks/fix.yaml, to: test/a.js }'),
+    };
+    const branch = path.join(fixture.root, 'branch');
+    execFileSync('git', ['clone', '-q', fixture.teamOrigin, branch]);
+    for (const [file, text] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(branch, file)), { recursive: true });
+      fs.writeFileSync(path.join(branch, file), text);
+    }
+    execFileSync('git', ['add', '-A'], { cwd: branch });
+    execFileSync('git', ['-c', 'user.name=Other', '-c', 'user.email=other@example.com', 'commit', '-qm', 'suites'], { cwd: branch });
+    execFileSync('git', ['push', '-q', 'origin', 'HEAD:bench/invalid'], { cwd: branch });
+    execFileSync('git', ['fetch', '-q', fixture.teamOrigin, 'bench/invalid:refs/remotes/origin/bench/invalid'], { cwd: fixture.teamClone });
+
+    const reviewed = await fixture.teamai(['review', '--branch', 'bench/invalid', '--json']);
+
+    expect(reviewed.code, said(reviewed)).toBe(1);
+    const failed = (JSON.parse(reviewed.stdout) as { findings: Array<{ level: string; path?: string; message: string }> }).findings
+      .filter(({ level }) => level === 'fail').map(({ path: file, message }) => `${file ?? ''} ${message}`);
+    for (const expected of [
+      /^benchmarks\/seven\/suite\.yaml .*:\d+: field "arms": a suite has 1 to 6 arms/,
+      /^benchmarks\/nested\/suite\.yaml .*:\d+: field "arms\.1\.team\.without": lists skills\/a\/notes\.md, which is inside skills\/a; list only skills\/a/,
+      /^benchmarks\/unprotected\/tasks\/fix\.yaml .*:\d+: field "check\.add\.0\.to": check\.add "lib\/a\.js" is not under check\.protect/,
+      /^benchmarks\/dotted\/tasks\/fix\.yaml .*:\d+: field "check\.add\.0\.to": must be a path relative to the repo/,
+      /^benchmarks\/outside\/tasks\/fix\.yaml .*:\d+: field "check\.add\.0\.from": must be a path inside the suite directory/,
+    ]) expect(failed.some((finding) => expected.test(finding)), `${String(expected)} in\n${failed.join('\n')}`).toBe(true);
+
+    fixture.pushTeam(files);
+    const pulled = await fixture.teamai(['pull']);
+    expect(pulled.code, said(pulled)).toBe(0);
+    for (const name of ['seven', 'nested', 'unprotected', 'dotted', 'outside']) {
+      expect(envelope(await fixture.teamai(['benchmark', 'run', name])).error, name).toMatchObject({ code: 'benchmark_not_found' });
+    }
+  }, 180_000);
+
   it('reports a check.add entry that names no file of the suite directory with its line, and benchmark run refuses the suite', async () => {
     const fixture = await benchmarkFixture({ tool: 'does-nothing', sandbox: false });
     fixtures.push(fixture);

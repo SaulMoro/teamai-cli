@@ -24,6 +24,7 @@ timeout: 10m
 const SKILL = (name: string): string => `---\nname: ${name}\ndescription: Helps with ${name}.\n---\nUse ${name}.\n`;
 const DoneSchema = z.object({ run: z.string(), outputs: z.object({ text: z.string() }) });
 const RecordSchema = z.object({
+  baselineTeamRevision: z.string(),
   skillChanges: z.unknown(),
   trials: z.array(z.object({ arm: z.string(), used: z.record(z.string(), z.string()).optional() }).passthrough()),
 }).passthrough();
@@ -98,7 +99,9 @@ describe('benchmark skill loads', () => {
 
     expect(ran.code, said(ran)).toBe(0);
     const done = DoneSchema.parse(envelope(ran).data?.done);
-    expect(RecordSchema.parse(fixture.benchmarkRecord(done.run)).trials.map(({ used }) => used)).toEqual([undefined, undefined]);
+    const record = RecordSchema.parse(fixture.benchmarkRecord(done.run));
+    expect(record.trials.map(({ used }) => used)).toEqual([undefined, undefined]);
+    expect(record.baselineTeamRevision).toBe(git(fixture.teamClone, 'rev-parse', 'HEAD'));
     expect(done.outputs.text).toContain('| without-skill | fixer | removed | unknown (1) | unknown (1) |');
   }, 240_000);
 

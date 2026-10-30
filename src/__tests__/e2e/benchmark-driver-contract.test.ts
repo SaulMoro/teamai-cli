@@ -173,6 +173,30 @@ describe('the benchmark workflow, driven from outside', () => {
       fixture.remove();
     }
   }, 120_000);
+  it("gives a trial of an arm on a team branch a clone with that branch's team installed, and records the branch commit", async () => {
+    const skill = (name: string): string => `---\nname: ${name}\ndescription: Helps with ${name}.\n---\nUse ${name}.\n`;
+    const suite = twoArms('60s').replace('  - name: codex\n    tool: codex\n', '  - name: before\n    team: bench/before\n');
+    const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: false, suite, team: { 'skills/fixer/SKILL.md': skill('fixer') } });
+    try {
+      const before = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fixture.teamClone, encoding: 'utf8' }).trim();
+      execFileSync('git', ['push', '-q', fixture.teamOrigin, `${before}:refs/heads/bench/before`], { cwd: fixture.teamClone });
+      fixture.pushTeam({ 'skills/newer/SKILL.md': skill('newer') });
+      const pulled = await fixture.teamai(['pull']);
+      expect(pulled.code, pulled.stderr).toBe(0);
+      const runId = await startFixBenchmark(fixture, '60s');
+
+      const result = await drive(fixture, { run: runId, can: SANDBOX_CLAUDE, prepare: true, maxPolls: 40 });
+
+      expect(result.done).toMatchObject({ outcome: 'succeeded' });
+      const prompt = RunSchema.parse(fixture.runFile(runId)).steps.find((step) => step.id === 'trials.r1.fix.before.prompt');
+      expect(prompt).toMatchObject({ status: 'succeeded', agent: { team: { revision: before } } });
+      const skills = fixture.toolLaunches().map((launch) => launch.paths.flatMap((file) => /^\.claude\/skills\/(fixer|newer)\/SKILL\.md$/.exec(file)?.[1] ?? []).sort());
+      expect(skills).toEqual([['fixer', 'newer'], ['fixer']]);
+    } finally {
+      fixture.remove();
+    }
+  }, 120_000);
+
   it('stops the tool at the trial timeout the lease sets, and the check decides the trial its report says a limit ended', async () => {
     const fixture = await benchmarkFixture({ tool: 'hangs', sandbox: false, suite: twoArms('15s', '{ timeout: 3s }') });
     try {
