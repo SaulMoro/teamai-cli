@@ -661,6 +661,8 @@ agent 运行 describe，它为调用它的会话给每个输入提议一个 `val
 | `scorers` | `[]` | Scorers that judge this session now. None proposed: the attended scoring policy (the default) is off. Name any scorer to judge with it. |
 | `judge` | `"here"` | claude is installed here, so teamai's own judge scores it. |
 
+带 `--confirmed` 启动运行的 agent 可以替本人保留 `publish: true`，teamai 无法核实本人是否选过。
+
 提议值取决于团队的[发布策略](sharing.md#会话)和[评分策略](scorers.md#已结束的会话)，以及这台机器：
 
 | 输入 | 情况 | 提议值 |

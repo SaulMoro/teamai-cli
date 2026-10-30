@@ -26,7 +26,7 @@ agent 会给你看它的提议：分享会话学到的东西（一条或多条�
 |---|---|
 | 经验 | 你，和 agent 一起完成时：说明要分享什么、每条放在哪个 namespace，或者没什么值得分享 |
 | `Share these 2 learnings with the team? [...]` | 推荐启动下由 agent 决定；选“ask me at optional approvals”时由你决定 |
-| 发布转录（已脱敏） | 你，在启动时：保留或修改 `publish`。之后不再询问 |
+| 发布转录（已脱敏） | 你，在启动时：保留或修改 `publish`。之后不再询问；带 `--confirmed` 启动的 agent 可以替你回答 |
 | 评分器 | 不再询问：按启动时你确认的评分器评审 |
 
 每个会话最多提供一次。在 `teamai-share-learnings` 无法运行的地方，提醒保持原来的文字“Consider running `/teamai share what this session taught me` …（or run `teamai skill get share`）”：teamai 启动的会话（工作流步骤或评审）、工作流 worktree、无人值守的会话、会话正在驱动一个未完成的工作流运行时，以及团队的 `workflows/teamai-share-learnings.yaml` 设置了 `invoke: deny` 时。recall 关闭时没有提醒，pull 也不写 `teamai-share-learnings` 的 skill；`/teamai-share-session` 仍可发布会话并为它评分。

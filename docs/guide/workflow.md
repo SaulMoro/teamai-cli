@@ -661,6 +661,8 @@ The agent runs describe, which proposes a `value` and a `why` for each input, fo
 | `scorers` | `[]` | Scorers that judge this session now. None proposed: the attended scoring policy (the default) is off. Name any scorer to judge with it. |
 | `judge` | `"here"` | claude is installed here, so teamai's own judge scores it. |
 
+An agent that starts the run with `--confirmed` can keep `publish: true` for you, and teamai cannot check that you chose it.
+
 The proposal follows the team's [publish policy](sharing.md#sessions) and [scoring policy](scorers.md#finished-sessions), and the machine:
 
 | Input | Situation | Proposed |
