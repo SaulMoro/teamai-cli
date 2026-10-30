@@ -333,6 +333,36 @@ describe('finally steps', () => {
     expect(await client.next(run, { driver })).toMatchObject({ data: { done: { outcome: 'failed', end: 'blocked', outputs: { text: 'blocked' } } } });
   });
 
+  it('returns an output its step gave as null, and leaves out one a skipped step did not give', async () => {
+    const nulled = `schemaVersion: v1alpha1
+name: nulled
+description: Give an output as null, and skip the step that gives another.
+steps:
+  - id: emit
+    command: node -e "process.exit(0)"
+    output: { value: json }
+  - id: skipped
+    needs: [emit]
+    if: steps.emit.outcome == 'failed'
+    command: node -e "process.exit(0)"
+    output: { other: json }
+outputs:
+  value: steps.emit.outputs.value
+  other: steps.skipped.outputs.other
+`;
+    const { config, checkout } = await fixture({ nulled });
+    const client = await protocol(config);
+    const started = await client.start('nulled', { checkout, caller: { evidence: { kind: 'none' }, confirmed: false, mode: 'attended' } });
+    if (!('data' in started)) throw new Error(JSON.stringify(started));
+    const run = RunIdSchema.parse(started.data.run);
+    const emit = await lease(client, run);
+    await client.report(run, { attempt: emit.attempt, revision: emit.revision, outcome: 'success', driver, outputs: { value: null } });
+
+    const done = await client.next(run, { driver });
+    expect(done).toMatchObject({ data: { done: { outcome: 'succeeded', outputs: { value: null } } } });
+    expect('data' in done && done.data.done).not.toHaveProperty('outputs.other');
+  });
+
   it('runs the finally steps again when a retry reopens the run, and ends it by its steps alone', async () => {
     const { config, checkout } = await fixture({ reported: REPORTED });
     const { client, run } = await startReported(config, checkout);

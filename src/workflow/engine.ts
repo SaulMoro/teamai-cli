@@ -8,7 +8,7 @@ import type { LocalConfig } from '../types.js';
 import { loadCachedWorkflow, loadWorkflowTree, namespaceConflictOf, startingAlias } from './cache.js';
 import { claimedAway, claimRun, publishRunEnd, reconcileTakenCopies } from './handoff.js';
 import {
-  evaluateExpression, expressionPaths, isRecord, isTruthy, parseExpression, resolvePath,
+  evaluateExpression, expressionPaths, isRecord, isTruthy, parseExpression, pathValue, resolvePath,
   type Expression, type ExpressionPath,
 } from './expression.js';
 import { outputMismatch } from './output.js';
@@ -507,8 +507,8 @@ function runOutputs(run: RunState): Record<string, unknown> | undefined {
   const context = contextOf(scope, statesIn(run, scope));
   return Object.fromEntries(Object.entries(run.definition.outputs).flatMap(([name, source]) => {
     const parsed = parseExpression(source);
-    const value = parsed.ok && parsed.expression.kind === 'path' ? resolvePath(parsed.expression.path, context) : null;
-    return value === null ? [] : [[name, value]];
+    const value = parsed.ok && parsed.expression.kind === 'path' ? pathValue(parsed.expression.path, context) : undefined;
+    return value === undefined ? [] : [[name, value]];
   }));
 }
 
