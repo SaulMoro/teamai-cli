@@ -82,7 +82,7 @@ describe('Trials.report', () => {
 
     const answer = await Trials.report(config, runId, { attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver });
 
-    expect(answer).toEqual({ error: { code: 'invalid_report', message: 'The report of trial step "trials.r1.fix.claude.prompt" names no tool. Send tool with the tool the driver launched: claude for this trial.' } });
+    expect(answer).toEqual({ error: { code: 'invalid_report', message: 'The report of trial step "r1.fix.claude.prompt" names no tool. Send tool with the tool the driver launched: claude for this trial.' } });
   });
 
   it("refuses a driver's report of a check, which teamai runs itself", async () => {
@@ -95,8 +95,8 @@ describe('Trials.report', () => {
 
     const answer = await Trials.report(config, runId, { attempt: check.attempt, revision: check.revision, outcome: 'success', driver, tool: 'claude' });
 
-    expect(check.step).toBe('trials.r1.fix.claude.check');
-    expect(answer).toEqual({ error: { code: 'invalid_report', message: 'Step "trials.r1.fix.claude.check" is a benchmark check, which teamai runs itself inside teamai workflow next --prepare. Report only the prompt leases next --prepare gives this driver.' } });
+    expect(check.step).toBe('r1.fix.claude.check');
+    expect(answer).toEqual({ error: { code: 'invalid_report', message: 'Step "r1.fix.claude.check" is a benchmark check, which teamai runs itself inside teamai workflow next --prepare. Report only the prompt leases next --prepare gives this driver.' } });
   });
 });
 
@@ -189,7 +189,7 @@ describe('sweeping clones', () => {
    */
   function crashedTrial(config: LocalConfig, runId: string, made: readonly string[]): { receipt: string; root: string } {
     const root = path.join(path.dirname(getDataHome(config)), 'clone-root');
-    const branch = branchName(runId, 'trials.r1.fix.claude', 1);
+    const branch = branchName(runId, 'r1.fix.claude', 1);
     const receipt = path.join(runsDir(config), runId, 'clones', `${createHash('sha256').update(branch).digest('hex').slice(0, 8)}.json`);
     fs.mkdirSync(path.dirname(receipt), { recursive: true });
     fs.writeFileSync(receipt, JSON.stringify({ v: 1, branch, root, withhold: [], state: { kind: 'preparing' } }));

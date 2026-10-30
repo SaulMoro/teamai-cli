@@ -89,7 +89,7 @@ describe('benchmark plan run', () => {
     const next = await leaseNext(config, runId, driver, { can, prepare: true });
 
     expect(next).toMatchObject({ data: { lease: {
-      step: 'trials.r1.t01.a01.prompt',
+      step: 'r1.t01.a01.prompt',
       prompt: 'Make the test pass.',
       tool: 'claude',
       workspace: { base: { commit: RUN_START }, configCommit: RUN_START, clone: { commit: RUN_START, team: { revision: RUN_TEAM, treatment: 'pulled' } } },
@@ -105,7 +105,7 @@ describe('benchmark plan run', () => {
 
     const run = await readRun(config, runId);
 
-    const arm = typeof run === 'object' ? stepDefinitions(run)('trials.r1.t01.a02') : undefined;
+    const arm = typeof run === 'object' ? stepDefinitions(run)('r1.t01.a02') : undefined;
     expect(arm?.workspace).toEqual({ clone: { commit: RUN_START, repo: 'https://github.com/fixture/app.git', team: expected } });
   });
 
@@ -137,8 +137,8 @@ describe('benchmark plan run', () => {
     const run = await readRun(config, runId);
 
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
-    expect(run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({ status: 'succeeded', limit: 'timeout' });
-    expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ step: 'trials.r1.t01.a01.prompt', limit: 'timeout' })]);
+    expect(run.steps.find((step) => step.id === 'r1.t01.a01.prompt')).toMatchObject({ status: 'succeeded', limit: 'timeout' });
+    expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ step: 'r1.t01.a01.prompt', limit: 'timeout' })]);
   });
 
   it("records the suite limits a trial's driver did not enforce", async () => {
@@ -150,7 +150,7 @@ describe('benchmark plan run', () => {
     const run = await readRun(config, runId);
 
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
-    expect(run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({
+    expect(run.steps.find((step) => step.id === 'r1.t01.a01.prompt')).toMatchObject({
       status: 'succeeded', unenforced: expect.arrayContaining([{ requirement: 'budget' }, { requirement: 'max_turns', asked: 3 }]),
     });
     // max_turns at lease, as this driver declares no can.max_turns; budget from its report.
@@ -163,7 +163,7 @@ describe('benchmark plan run', () => {
 
     const answer = await reportAttempt(config, runId, { ...lease, outcome: 'success', driver, trialReport: {}, unenforced: ['budget'] });
 
-    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Attempt ${lease.attempt} of step "trials.r1.t01.a01.prompt": unenforced names budget, which the step does not set` } });
+    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Attempt ${lease.attempt} of step "r1.t01.a01.prompt": unenforced names budget, which the step does not set` } });
   });
 
   it('fails a trial prompt under a budget whose report has no tokens, so the trial is an error', async () => {
@@ -175,9 +175,9 @@ describe('benchmark plan run', () => {
     const run = await readRun(config, runId);
 
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
-    expect(run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({ status: 'failed', failure: {
+    expect(run.steps.find((step) => step.id === 'r1.t01.a01.prompt')).toMatchObject({ status: 'failed', failure: {
       code: 'budget_unmeasured',
-      message: 'Step "trials.r1.t01.a01.prompt" ends its turn at a token budget, and its report has no tokens, so the budget cannot count what it spent. Run its tool with a driver that reports its tokens, then retry the step.',
+      message: 'Step "r1.t01.a01.prompt" ends its turn at a token budget, and its report has no tokens, so the budget cannot count what it spent. Run its tool with a driver that reports its tokens, then retry the step.',
     } });
     expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ result: 'error' })]);
   });
@@ -194,7 +194,7 @@ describe('benchmark plan run', () => {
     const run = await readRun(config, runId);
 
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
-    expect(run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({ status: 'succeeded', limit: 'timeout', unenforced: expect.arrayContaining([{ requirement: 'budget' }]) });
+    expect(run.steps.find((step) => step.id === 'r1.t01.a01.prompt')).toMatchObject({ status: 'succeeded', limit: 'timeout', unenforced: expect.arrayContaining([{ requirement: 'budget' }]) });
     expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ limit: 'timeout', unenforced: ['budget'] })]);
   });
 
@@ -205,9 +205,9 @@ describe('benchmark plan run', () => {
     const answer = await reportAttempt(config, runId, { ...lease, outcome: 'failed', driver, trialReport: {}, limit: 'timeout' });
     const run = await readRun(config, runId);
 
-    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Attempt ${lease.attempt} of step "trials.r1.t01.a01.prompt": limit goes with outcome success, since a limit ends the agent's turn and the step succeeds; send outcome success, or omit limit` } });
+    expect(answer).toEqual({ error: { code: 'invalid_report', message: `Attempt ${lease.attempt} of step "r1.t01.a01.prompt": limit goes with outcome success, since a limit ends the agent's turn and the step succeeds; send outcome success, or omit limit` } });
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
-    expect(run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({ status: 'leased' });
+    expect(run.steps.find((step) => step.id === 'r1.t01.a01.prompt')).toMatchObject({ status: 'leased' });
   });
 
   it('refuses a trial report teamai did not complete, and accepts the one it did', async () => {
@@ -243,7 +243,7 @@ describe('benchmark plan run', () => {
 
     const run = await readRun(config, runId);
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
-    expect(check).toMatchObject({ step: 'trials.r1.t01.a01.check', command: 'teamai benchmark check --trial' });
+    expect(check).toMatchObject({ step: 'r1.t01.a01.check', command: 'teamai benchmark check --trial' });
     expect(next).toMatchObject({ data: { done: { outcome: 'succeeded', end: 'settled' } } });
     expect(buildEndRecord(run, run.driver, '').benchmark?.trials).toEqual([expect.objectContaining({ result })]);
   });
@@ -297,7 +297,7 @@ describe('benchmark plan run', () => {
 
     const run = await readRun(config, runId);
     if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
-    expect(lease.step).toBe('trials.r1.t02.a01.prompt');
+    expect(lease.step).toBe('r1.t02.a01.prompt');
     expect(next).toMatchObject({ data: { done: { outcome: 'succeeded', end: 'settled' } } });
     expect(buildEndRecord(run, run.driver, '').benchmark).toMatchObject({
       tasks: [{ id: 't01', baseline: 'could_not_run' }, { id: 't02', baseline: 'valid' }],
@@ -335,8 +335,8 @@ describe('benchmark plan run', () => {
     const next = await leaseNext(config, runId, driver, { can, prepare: true, alone: true });
 
     const run = await readRun(config, runId);
-    expect(next).toMatchObject({ data: { lease: { step: 'trials.r1.t01.a02.prompt' } } });
-    expect(typeof run === 'object' && run.steps.find((step) => step.id === 'trials.r1.t01.a01.prompt')).toMatchObject({ status: 'failed', failure: { code: 'tool_unavailable' } });
+    expect(next).toMatchObject({ data: { lease: { step: 'r1.t01.a02.prompt' } } });
+    expect(typeof run === 'object' && run.steps.find((step) => step.id === 'r1.t01.a01.prompt')).toMatchObject({ status: 'failed', failure: { code: 'tool_unavailable' } });
   });
 
   it('rotates the arms by one place per repetition', () => {
@@ -390,7 +390,7 @@ const CRITERIA_SUITE: BenchmarkSuiteFiles = {
   tasks: { t01: "schemaVersion: v1alpha1\ntitle: Fix it\nprompt: Make the test pass.\nstartingCommit: '{{startingCommit}}'\nsuccessCriteria: The test passes.\n" },
 };
 const CORRECTNESS = 'teamai:correctness:t01';
-const PROMPT = 'trials.r1.t01.a01.prompt';
+const PROMPT = 'r1.t01.a01.prompt';
 
 /** A criteria run whose one trial prompt has succeeded, as Trials.report settles it. */
 async function judgedTrial(): Promise<{ config: LocalConfig; runId: string }> {

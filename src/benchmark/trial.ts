@@ -40,6 +40,7 @@ import { untrustedGit, type Git } from '../workflow/worktree.js';
 import { checkVerdict, type CheckResult, type CheckVerdict } from './check.js';
 import { BENCHMARK_PLAN_SCHEMA_VERSION, baselineStepOf, stepOf, type BenchmarkPlan } from './plan.js';
 import type { CheckFile, Suite } from './suite.js';
+import { planOfRun } from './run-plan.js';
 import { PromptTermsSchema, type Added, type PreparedTrialLease } from './terms.js';
 
 export interface TrialNextOptions extends NextOptions {
@@ -414,9 +415,11 @@ export async function runCheckStep({ mode, env: given, cwd, signal }: { mode: Ch
     return { failure: { ...found.error, message: `${found.error.message}: its file, or the benchmark plan in it, is not in a form this teamai reads, whose plans are schemaVersion ${BENCHMARK_PLAN_SCHEMA_VERSION}. Run the benchmark with the teamai that started it, or start it again.` } };
   }
   const { config, run, step } = found;
-  const plan = run.benchmark;
-  const checked = plan && checkedBy(plan, mode, step.id);
-  if (!plan || !checked) {
+  const planned = planOfRun(run, step.id);
+  if ('failure' in planned) return planned;
+  const { plan, prefix } = planned.found;
+  const checked = step.id.startsWith(prefix) ? checkedBy(plan, mode, step.id.slice(prefix.length)) : undefined;
+  if (!checked) {
     return { failure: { code: 'invalid_arguments', message: `Step "${step.id}" of run ${run.id} is not ${mode === 'baseline' ? 'the baseline of a check task' : 'the check of a trial'} of a benchmark run, so teamai benchmark check --${mode} has nothing to check there.` } };
   }
   const { task, judge, at } = checked;

@@ -43,7 +43,7 @@ import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedC
 import { executableOf, isLaunchTool, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, type LaunchTool } from '../../../tool-launch/tools.js';
 import { chooseStepModel, loadDeployedAgent } from '../../step-model.js';
 import type { DriverIdentity, RunState, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
-import { isWorkflowError, stepWorkflow, WORKSPACE_MODES } from '../../types.js';
+import { isWorkflowError, WORKSPACE_MODES } from '../../types.js';
 import { cloneBranchOf, type SessionRef } from '../../workspace.js';
 import { headCommit } from '../../worktree.js';
 
@@ -555,20 +555,6 @@ export function localStrictCan(config: LocalConfig, options: Pick<LocalDriverOpt
   return { network: false, isolation: isSandbox(config, options) ? 'sandbox' : 'none', env: true };
 }
 
-/** The tools the prompt steps of `run` name, in its definition and every workflow it pinned. */
-function namedTools(run: RunState): Set<string> {
-  const named = new Set<string>();
-  const visit = (steps: readonly WorkflowStep[]): void => {
-    for (const step of steps) {
-      if (step.tool !== undefined) named.add(step.tool);
-      const child = stepWorkflow(step);
-      if (child?.kind === 'inline') visit(child.workflow.steps);
-    }
-  };
-  for (const definition of [run.definition, ...Object.values(run.workflows ?? {}), ...Object.values(run.admitted ?? {}).map((admitted) => admitted.definition)]) visit(definition.steps);
-  return named;
-}
-
 function onPath(tool: LaunchTool): boolean {
   return resolveCliPath(executableOf(tool)) !== null;
 }
@@ -644,10 +630,10 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
   // Resolved once per drive, so a resume where a person attends runs attended whatever mode the run started in.
   const mode = resolveRunMode(process.env);
   const canHitl = options.hitl ?? personAnswers(mode);
-  // It launches a step that names its tool, a benchmark's trials among them, on the tools this machine has. It is the
-  // run's only driver, so a step whose tool it cannot launch fails rather than waits.
-  const named = typeof started === 'object' ? namedTools(started) : new Set<string>();
-  const tools = LAUNCH_TOOLS.filter((tool) => named.has(tool) && onPath(tool));
+  // It launches a step that names its tool, a benchmark's trials among them, on the tools this machine has, whatever
+  // workflow a step's output brings later. It is the run's only driver, so a step whose tool it cannot launch fails
+  // rather than waits.
+  const tools = LAUNCH_TOOLS.filter(onPath);
   const can = localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools });
   const driver = driverIdentity('local', cwd);
   if (benchmark) for (const line of benchmarkNotices(benchmark, can, await trialBlocker(config))) log.info(line);

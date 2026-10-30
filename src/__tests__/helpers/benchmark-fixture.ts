@@ -130,6 +130,10 @@ export interface BenchmarkFixture {
   status(): string;
   /** The end record of `run` on the team origin's teamai-reports branch, as JSON. */
   endRecord(run: string): unknown;
+  /** The benchmark record of `run` in its run directory, as JSON. */
+  benchmarkRecord(run: string): unknown;
+  /** The benchmark record of `run` on the team origin's teamai-reports branch, as JSON. */
+  reportedBenchmark(run: string): unknown;
   /** Every launch of the fake tool so far. */
   toolLaunches(): ToolLaunch[];
   /** The pid of each git filter a fake tool left, as each logged it when git started it. */
@@ -435,6 +439,14 @@ process.stdout.write(JSON.stringify({ type: 'result', session_id: 'fake-session'
     status: () => git(work, ['status', '--porcelain']),
     endRecord: (run) => {
       const value: unknown = JSON.parse(git(root, ['--git-dir', teamOrigin, 'show', `teamai-reports:workflows/runs/${run}.json`]));
+      return value;
+    },
+    benchmarkRecord: (run) => {
+      const value: unknown = JSON.parse(fs.readFileSync(path.join(dataHome(), 'workflows', 'runs', run, 'benchmark.json'), 'utf8'));
+      return value;
+    },
+    reportedBenchmark: (run) => {
+      const value: unknown = JSON.parse(git(root, ['--git-dir', teamOrigin, 'show', `teamai-reports:benchmarks/runs/${run}.json`]));
       return value;
     },
     filterPids: () => (fs.existsSync(filterPidLog) ? fs.readFileSync(filterPidLog, 'utf8').trim().split('\n').map(Number) : []),

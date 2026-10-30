@@ -912,7 +912,41 @@ workflowCmd
 
 const benchmarkCmd = program
   .command('benchmark')
-  .description('The commands of a benchmark run\'s steps. Each runs as a step of a run teamai workflow start --benchmark started, never on its own.');
+  .description('Run a benchmark suite, and the commands its run\'s steps run. run starts the workflow benchmark, teamai\'s default or the team\'s file of that name, whose plan, check and report steps run the other commands; try needs no run.');
+
+benchmarkCmd
+  .command('run <suite>')
+  .description('Plan benchmark suite <suite> without a run first, so a suite that cannot run leaves none, then start the workflow benchmark with --inputs {"suite":"<suite>"} and the suite\'s timeout as --timeout, and drive it. A team\'s workflows/benchmark.yaml replaces teamai\'s default, and must take input suite. Prints the run\'s done envelope and, on stderr, the results. Exits 1 when the run failed or was cancelled, or its report failed or was cancelled; a record still pending publication never changes the exit code.')
+  .option('--driver <kind>', 'The driver that runs it: local (default), or skill')
+  .option('--sandbox', 'With --driver local, declare this machine a sandbox for this process, where the trials, which need strict sandbox isolation, may run. workflows.sandbox in config declares it for every process.')
+  .action(async (suite: string, cmdOpts: { driver?: string; sandbox?: boolean }) => {
+    const { benchmarkRun } = await import('./workflow-commands.js');
+    await benchmarkRun(suite, cmdOpts);
+  });
+
+benchmarkCmd
+  .command('try <task-file>')
+  .description('Try one task file before it joins a suite, in a checkout of the suite\'s repo: setup and the check run at startingCommit, where the check must fail, and at source.fix, if set, with the protected paths as startingCommit has them, where it must pass. Reads the task file, the suite.yaml two directories up from it and the files its check.add entries name in that suite directory, needs no teamai init, and creates no run. Exits non-zero naming the commit and the cause when either goes the wrong way.')
+  .action(async (file: string) => {
+    const { benchmarkTry } = await import('./workflow-commands.js');
+    await benchmarkTry(file);
+  });
+
+benchmarkCmd
+  .command('plan <suite>')
+  .description('The first step of a benchmark run: freeze the team revision this checkout last pulled, fetch every commit a trial reads into the commit cache, and print {"definition":{"definition","workflows","scorers","teamRevision"},"plan"}, the workflow the run\'s trials step runs and the plan its check and report steps read. Refuses a run with no timeout, or a longer one than the suite\'s: start it with workflow start --timeout.')
+  .action(async (suite: string) => {
+    const { benchmarkPlan } = await import('./workflow-commands.js');
+    await benchmarkPlan(suite);
+  });
+
+benchmarkCmd
+  .command('report')
+  .description('The finally step of a benchmark run: classify the trials of the plan the run measured, write the run\'s benchmark record into its run directory and, when usage reporting allows, publish it to teamai-reports, and print {"text","table"}. The text ends with record: pending while the record waits for publication. Refuses a run whose plan this teamai cannot read.')
+  .action(async () => {
+    const { benchmarkReport } = await import('./workflow-commands.js');
+    await benchmarkReport();
+  });
 
 benchmarkCmd
   .command('check')

@@ -73,13 +73,14 @@ const ENTRIES: Array<{ folder: string; entries: Record<string, string[] | 'any'>
   // workflow-published-runs.ts judges an offered run by the tool the local driver would launch for its prompt steps.
   { folder: LOCAL, entries: { 'local-driver.ts': ['src/workflow-commands.ts', 'src/workflow-published-runs.ts'], 'local-tool-adapter.ts': [] }, testEntries: ['local-driver.ts', 'local-tool-adapter.ts'] },
   { folder: DISCOVERY, entries: { 'workflow-skills.ts': 'any', 'generated-marker.ts': 'any' }, testEntries: ['workflow-skills.ts', 'generated-marker.ts', 'render.ts'] },
-  // Trials, a suite's start and its scenarios change state, so only the protocol, the local driver and the commands reach them.
+  // Trials, a suite's start, its report and its scenarios change state, so only the protocol, the local driver and the commands reach them.
   {
     folder: BENCHMARK,
     entries: {
       'plan.ts': 'any', 'terms.ts': 'any', 'suite.ts': 'any', 'check.ts': 'any', 'table.ts': 'any', 'result.ts': 'any', 'history.ts': 'any',
       'trial.ts': ['src/workflow/protocol.ts', 'src/workflow/drivers/local/local-driver.ts', 'src/workflow-commands.ts'],
       'start.ts': ['src/workflow-commands.ts'],
+      'report.ts': ['src/workflow-commands.ts'],
       'conformance.ts': ['src/workflow/conformance/run.ts'],
     },
     testEntries: ['plan.ts', 'terms.ts', 'suite.ts', 'check.ts', 'table.ts', 'result.ts', 'trial.ts', 'history.ts'],

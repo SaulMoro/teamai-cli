@@ -233,7 +233,7 @@ const RunProgressSchema = z.object({
   benchmark: BenchmarkPlanSchema.optional(),
   verdicts: z.array(EntryVerdictSchema).optional(),
   finalizing: z.object({
-    outcome: z.enum(['succeeded', 'failed', 'cancelled']), end: z.string().optional(), failure: FailureSchema.optional(), until: z.string(),
+    outcome: z.enum(['succeeded', 'failed', 'cancelled']), end: z.string().optional(), failure: FailureSchema.optional(), since: z.string(), until: z.string(),
   }).optional(),
   timeout: z.number().int().positive().optional(),
 });

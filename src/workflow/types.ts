@@ -360,6 +360,8 @@ export interface Finalizing {
   outcome: Exclude<RunStatus, 'running'>;
   end?: string;
   failure?: WorkflowFailure;
+  /** When the run's steps ended. */
+  since: string;
   until: string;
 }
 

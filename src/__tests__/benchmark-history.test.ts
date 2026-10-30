@@ -56,7 +56,7 @@ function run({ id, suite = 'fix-auth', version = 'v1', taskEdit = '', startedAt,
         }
         return {
           task, arm, repetition: repetition + 1, order: order++, step, result,
-          ...(spent ? { tokens: { input: spent.tokens, output: 0 }, durationMs: spent.durationMs, ...(spent.cost === undefined ? {} : { cost: { amount: spent.cost, unit: 'USD' } }) } : {}),
+          ...(spent ? { tokens: { input: spent.tokens, output: 0, complete: true }, durationMs: spent.durationMs, ...(spent.cost === undefined ? {} : { cost: { amount: spent.cost, unit: 'USD', complete: true } }) } : {}),
         };
       }))),
     },

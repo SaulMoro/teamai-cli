@@ -25,7 +25,8 @@ import { findRunConfig } from './workflow/run-location.js';
 import { resolveRunMode } from './launch-context.js';
 import { memberTools } from './tool-launch/call.js';
 import { agentEvidence, isAttemptRunner, nestedCall, nestedStart, nestedWorkflowError, type Nested } from './workflow/attempt-marker.js';
-import { startBenchmark, tryBenchmarkTask } from './benchmark/start.js';
+import { planBenchmark, planStep, startBenchmark, tryBenchmarkTask } from './benchmark/start.js';
+import { reportBenchmark } from './benchmark/report.js';
 import { runCheckStep } from './benchmark/trial.js';
 import { headCommit } from './workflow/worktree.js';
 import type { WorkflowEnvelope, WorkflowFailure } from './workflow/types.js';
@@ -252,12 +253,19 @@ const NonSkillRunOptionsSchema = z.object({
   judge: z.boolean().optional().refine((judged) => judged !== false, '--no-judge needs --driver skill'),
 });
 
-/** `judge` is false with `--no-judge`. */
-export async function workflowStart(name: string, options: {
+type StartOptions = {
   driver?: string; tools?: string; inputs?: string; autoApprove?: boolean; describe?: boolean; parallel?: string; confirmed?: boolean; hitl?: string; judge?: boolean;
   benchmark?: boolean; memberAliases?: boolean; sandbox?: boolean; try?: string; timeout?: string;
-}): Promise<void> {
-  if (refusedNested(await nestedStart(process.env, process.cwd()), options.driver === 'skill')) return;
+};
+
+/** `judge` is false with `--no-judge`. */
+export async function workflowStart(name: string, options: StartOptions): Promise<void> {
+  await startWorkflow(name, options);
+}
+
+/** `workflow start`, answering what the local driver ended a run it drove with; undefined for every other answer, which it printed. */
+async function startWorkflow(name: string, options: StartOptions): Promise<WorkflowEnvelope | undefined> {
+  if (refusedNested(await nestedStart(process.env, process.cwd()), options.driver === 'skill')) return undefined;
   if (options.driver === 'skill') {
     if (options.timeout !== undefined) {
       refuseSkill({ error: { code: 'invalid_arguments', message: '--timeout needs --driver local, or no driver. Start it again without --timeout.' } });
@@ -341,7 +349,9 @@ export async function workflowStart(name: string, options: {
     return;
   }
   log.info(`Run ${runId} started. If it stops before it ends, continue it with: teamai workflow resume ${runId}${options.sandbox ? ' --sandbox' : ''}`);
-  await writeDriven(config, await runLocalDriver(config, runId, process.cwd(), { tools, toolPaths: teamConfig.toolPaths, autoApprove: options.autoApprove, sandbox: options.sandbox }), secrets);
+  const driven = await runLocalDriver(config, runId, process.cwd(), { tools, toolPaths: teamConfig.toolPaths, autoApprove: options.autoApprove, sandbox: options.sandbox });
+  await writeDriven(config, driven, secrets);
+  return driven;
 }
 
 /** `workflow start --benchmark --try`: no config, so it runs on a CI runner that never ran teamai init. */
@@ -353,7 +363,7 @@ async function tryTask(name: string, file: string, options: { driver?: string; t
     return refused('--try runs one task\'s check, with no arms, inputs or approvals. Start it again with only --benchmark, --try, --sandbox and --driver local.');
   }
   if (!options.sandbox) return refused('--try runs the task\'s setup and check, which run only on a sandbox. Run it in CI or a container, and declare it with --sandbox.');
-  return tryBenchmarkTask(name, file, { checkout: process.cwd(), signal: interruptSignal(), progress: (line) => log.info(line) });
+  return tryBenchmarkTask(file, { suite: name, checkout: process.cwd(), signal: interruptSignal(), progress: (line) => log.info(line) });
 }
 
 /** Aborts on the first SIGINT or SIGTERM, so `next --prepare` stops the setup or check it runs. A second one ends the process. */
@@ -881,3 +891,82 @@ export async function benchmarkCheck(options: { baseline?: boolean; trial?: bool
 }
 
 const CHECK_STOP_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+
+/** A benchmark verb that runs as a step: what it prints on stdout, or why it failed, on stderr with exit 1. */
+function writeStepOutput(answer: { failure: WorkflowFailure } | { output: unknown }): void {
+  if ('failure' in answer) {
+    log.error(`${answer.failure.code}: ${answer.failure.message}`);
+    process.exitCode = 1;
+    return;
+  }
+  process.stdout.write(`${JSON.stringify(answer.output)}\n`);
+}
+
+/** `teamai benchmark plan <suite>`: the step that plans a benchmark run. */
+export async function benchmarkPlan(suite: string): Promise<void> {
+  setStderrOnly(true);
+  const planned = await planStep(suite, process.env);
+  writeStepOutput('failure' in planned ? planned : { output: planned.planned });
+}
+
+/** `teamai benchmark report`: the `finally` step that reports a benchmark run. */
+export async function benchmarkReport(): Promise<void> {
+  setStderrOnly(true);
+  const reported = await reportBenchmark(process.env, collectEnvSecrets());
+  writeStepOutput('failure' in reported ? reported : { output: reported.report });
+}
+
+const BenchmarkDoneSchema = z.object({
+  outputs: z.object({ text: z.string() }).partial().passthrough().optional(),
+  finally: z.array(z.object({ id: z.string() }).passthrough()).optional(),
+}).passthrough();
+
+/**
+ * `teamai benchmark run <suite>`: plans the suite once without a run, so a suite that cannot run leaves none, then
+ * starts the workflow `benchmark`, the team's or teamai's default, with the suite as its input and the suite's timeout as
+ * the run's, on the local driver unless `--driver` names another. Exits as `workflow start` does for the run's outcome,
+ * and also 1 when a `finally` step, the report, failed or was cancelled. A record still pending never changes it.
+ */
+export async function benchmarkRun(suite: string, options: { driver?: string; sandbox?: boolean }): Promise<void> {
+  setStderrOnly(true);
+  const loaded = await readyStartConfig(BENCHMARK_WORKFLOW);
+  if (!('config' in loaded)) {
+    refuse(loaded);
+    return;
+  }
+  const { config, secrets } = loaded;
+  const preflight = await planBenchmark(config, suite, { checkout: process.cwd(), memberAliases: false });
+  if ('refused' in preflight) {
+    writeEnvelope(preflight.refused, secrets);
+    return;
+  }
+  const workflow = await loadCachedWorkflow(config, BENCHMARK_WORKFLOW);
+  if (!workflow) {
+    writeEnvelope({ error: workflowNotFound(BENCHMARK_WORKFLOW) }, secrets);
+    return;
+  }
+  if (workflow.source === 'team') {
+    if (workflow.definition.inputs?.suite === undefined) {
+      writeEnvelope({ error: { code: 'invalid_inputs', message: `The team's ${workflow.relativePath} replaces teamai's benchmark workflow and takes no input suite, so teamai benchmark run cannot give it the suite. Add inputs: { suite: string } to it, or remove it to run teamai's default.` } }, secrets);
+      return;
+    }
+    log.info(`Running the team's ${workflow.relativePath}, which replaces teamai's benchmark workflow.`);
+  }
+  const done = await startWorkflow(BENCHMARK_WORKFLOW, {
+    driver: options.driver ?? 'local', inputs: JSON.stringify({ suite }), timeout: `${preflight.timeoutMs}ms`, ...(options.sandbox ? { sandbox: true } : {}),
+  });
+  const ended = done && 'data' in done ? BenchmarkDoneSchema.safeParse(done.data.done) : undefined;
+  if (!ended?.success) return;
+  if (ended.data.outputs?.text !== undefined) process.stderr.write(`${ended.data.outputs.text}\n`);
+  // The report is a finally step: one that failed or was cancelled is listed, and the results it owed are missing.
+  if ((ended.data.finally ?? []).length > 0) process.exitCode = 1;
+}
+
+/** `teamai benchmark try <task-file>`: whether a task's check tells its fix from no change. Needs no init and no run. */
+export async function benchmarkTry(file: string): Promise<void> {
+  setStderrOnly(true);
+  writeEnvelope(await tryBenchmarkTask(file, { checkout: process.cwd(), signal: interruptSignal(), progress: (line) => log.info(line) }), collectEnvSecrets());
+}
+
+/** The workflow `teamai benchmark run` starts: teamai's default, or the team's file of the same name. */
+const BENCHMARK_WORKFLOW = 'benchmark';

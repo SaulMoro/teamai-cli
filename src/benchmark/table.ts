@@ -104,10 +104,10 @@ export interface ObservedTrial {
   ranAs?: AgentObservation;
 }
 
-/** Each trial of `record`, in record order, with what its prompt ran as. */
+/** Each trial of `record`, in record order, with what its prompt ran as: the trial's own, or its step entry's. */
 export function observedTrials(record: BenchmarkTableInput): ObservedTrial[] {
   return record.benchmark.trials.map((trial) => {
-    const agent = record.steps?.findLast((entry) => entry.step === trial.step)?.agent;
+    const agent = trial.agent ?? record.steps?.findLast((entry) => entry.step === trial.step)?.agent;
     return agent && 'v' in agent ? { trial, ranAs: agent } : { trial };
   });
 }

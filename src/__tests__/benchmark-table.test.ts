@@ -234,9 +234,9 @@ describe('benchmark limits', () => {
 describe('benchmark usage', () => {
   it('gives each arm the median of the tokens and durations it knows, with how many it used', () => {
     const table = benchmarkTable(recordOf([CLAUDE_ARM], [
-      { tokens: { input: 4, output: 2 }, durationMs: 1000 },
-      { tokens: { input: 10, output: 0 }, durationMs: 3000 },
-      { tokens: { input: 3 }, durationMs: 2000 },
+      { tokens: { input: 4, output: 2, complete: true }, durationMs: 1000 },
+      { tokens: { input: 10, output: 0, complete: true }, durationMs: 3000 },
+      { tokens: { input: 3, complete: true }, durationMs: 2000 },
       {},
     ]));
 
@@ -247,13 +247,13 @@ describe('benchmark usage', () => {
   it('adds up costs in one unit only, marks a total with an unknown part incomplete, and never counts a missing cost as zero', () => {
     const arm = (name: string) => ({ ...CLAUDE_ARM, name });
     const table = benchmarkTable(recordOf([arm('known'), arm('partial'), arm('mixed'), arm('none')], [
-      { arm: 'known', cost: { amount: 0.1, unit: 'USD' } },
-      { arm: 'known', cost: { amount: 0.2, unit: 'USD' } },
+      { arm: 'known', cost: { amount: 0.1, unit: 'USD', complete: true } },
+      { arm: 'known', cost: { amount: 0.2, unit: 'USD', complete: true } },
       { arm: 'known', result: 'not_run', agent: null },
-      { arm: 'partial', cost: { amount: 0.25, unit: 'USD' } },
+      { arm: 'partial', cost: { amount: 0.25, unit: 'USD', complete: true } },
       { arm: 'partial' },
-      { arm: 'mixed', cost: { amount: 1, unit: 'USD' } },
-      { arm: 'mixed', cost: { amount: 2, unit: 'EUR' } },
+      { arm: 'mixed', cost: { amount: 1, unit: 'USD', complete: true } },
+      { arm: 'mixed', cost: { amount: 2, unit: 'EUR', complete: true } },
       { arm: 'none' },
     ]));
 

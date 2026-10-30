@@ -45,7 +45,7 @@ const BodySchema = z.object({
   failure: z.object({ code: z.string(), message: z.string() }).optional(),
   finalizing: z.object({
     outcome: z.enum(['succeeded', 'failed', 'cancelled']), end: z.string().optional(),
-    failure: z.object({ code: z.string(), message: z.string() }).optional(), until: z.string(),
+    failure: z.object({ code: z.string(), message: z.string() }).optional(), since: z.string(), until: z.string(),
   }).optional(),
   timeout: z.number().int().positive().optional(),
   inputs: z.record(z.unknown()).optional(),

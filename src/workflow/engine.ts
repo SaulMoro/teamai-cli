@@ -419,7 +419,7 @@ function enterFinalizing(run: RunState, { outcome, end, failure }: WorkflowResul
   const steps = run.definition.finally;
   if (!steps || run.finalizing) return false;
   const until = new Date(Date.parse(now) + FINALLY_MS).toISOString();
-  run.finalizing = { outcome, ...(end !== undefined ? { end } : {}), ...(failure ? { failure } : {}), until };
+  run.finalizing = { outcome, ...(end !== undefined ? { end } : {}), ...(failure ? { failure } : {}), since: now, until };
   // A run a retry reopened ran them before; they run again.
   const own = new Set(steps.map((step) => step.id));
   run.steps = [...run.steps.filter((state) => !own.has(state.id)), ...steps.map((step): StepState => ({ id: step.id, status: 'pending' }))];

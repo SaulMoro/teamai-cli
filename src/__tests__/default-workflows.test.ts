@@ -58,13 +58,13 @@ describe('default workflows', () => {
     const shipped = await loadCachedWorkflow(config, 'session-close');
     expect(shipped).toMatchObject({ source: 'default', relativePath: 'workflows/session-close.yaml', definition: { name: 'session-close', invoke: 'ask' } });
     expect(shipped?.teamRevision).toBeUndefined();
-    expect(await sources(config)).toEqual([['build', 'team'], ['session-close', 'default']]);
+    expect(await sources(config)).toEqual([['benchmark', 'default'], ['build', 'team'], ['session-close', 'default']]);
 
     writeWorkflow(config, 'session-close', workflow('session-close'));
     await syncWorkflowDefinitions(config);
 
     expect(await loadCachedWorkflow(config, 'session-close')).toMatchObject({ source: 'team', definition: { steps: [{ command: 'node compile.js' }] } });
-    expect(await sources(config)).toEqual([['build', 'team'], ['session-close', 'team']]);
+    expect(await sources(config)).toEqual([['benchmark', 'default'], ['build', 'team'], ['session-close', 'team']]);
   });
 
   it('are never written to the workflow cache', async () => {

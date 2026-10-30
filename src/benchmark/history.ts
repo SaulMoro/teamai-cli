@@ -494,6 +494,11 @@ function runRow(input: BenchmarkRunInput): RunRow {
   };
 }
 
+/** The paired comparisons of one run's arms, as Compare derives them over a suite's runs: never stored, always derived. */
+export function runComparisons(input: BenchmarkRunInput): ArmComparison[] {
+  return comparisonsOf({ runs: [input], current: [input], newest: input });
+}
+
 export const BenchmarkHistory = {
   of({ runs, query, now }: { runs: readonly BenchmarkRunInput[]; query: BenchmarkHistoryQuery; now: Date }): BenchmarkHistoryView {
     const window = { from: new Date(now.getTime() - query.windowDays * DAY_MS).toISOString(), to: now.toISOString() };

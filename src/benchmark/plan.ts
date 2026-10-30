@@ -60,7 +60,7 @@ const PlannedTrialSchema = z.object({
   repetition: z.number().int().positive(),
   task: BenchmarkNameSchema,
   arm: BenchmarkNameSchema,
-  /** The trial's prompt step, `trials.r<repetition>.<task>.<arm>.prompt`: the record's step entry. */
+  /** The trial's prompt step, `r<repetition>.<task>.<arm>.prompt`, under the workflow that runs the trials. */
   step: z.string().min(1),
 }).strict();
 export type PlannedTrial = z.infer<typeof PlannedTrialSchema>;
@@ -108,7 +108,7 @@ export function trialsOf(tasks: readonly Pick<Task, 'id'>[], arms: readonly Pick
   return trials;
 }
 
-/** `trials.r<repetition>.<task>.<arm>.<kind>`: real nested inline-workflow scopes, so locateStep walks them. */
+/** `r<repetition>.<task>.<arm>.<kind>`: real nested inline-workflow scopes, so locateStep walks them. */
 export function stepOf({ repetition, task, arm, kind }: { repetition: number; task: string; arm: string; kind: 'prompt' | 'check' }): string {
   return `${trialCopyOf({ repetition, task, arm })}.${kind}`;
 }
@@ -118,9 +118,9 @@ export function baselineStepOf(task: string): string {
   return `${BASELINES}.${task}`;
 }
 
-/** `trials.r<repetition>.<task>.<arm>`: the step that opens the clone a trial's prompt and check share. */
+/** `r<repetition>.<task>.<arm>`: the step that opens the clone a trial's prompt and check share. */
 export function trialCopyOf({ repetition, task, arm }: { repetition: number; task: string; arm: string }): string {
-  return `${TRIALS}.r${repetition}.${task}.${arm}`;
+  return `r${repetition}.${task}.${arm}`;
 }
 
 export function freezePlan(input: {
@@ -172,7 +172,6 @@ export function runSourceHash({ suite, tasks }: { suite: Pick<BenchmarkPlan['sui
   return createHash('sha256').update(JSON.stringify([suite.sourceHash, ...tasks.map((task) => [task.id, task.sourceHash])])).digest('hex');
 }
 
-const TRIALS = 'trials';
 const BASELINES = 'baselines';
 
 /** What `teamai benchmark check` prints, the output of a baseline and a trial's check. */
@@ -190,15 +189,14 @@ const SETTLED_END = 'settled';
  *   baselines                     inline (check tasks only); requires a strict sandbox; outputs { <task>: its baseline's result }
  *     <task>                      command teamai benchmark check --baseline; workspace: a clone of the starting commit
  *                                 with team none; trial.kind baseline; output { result: passed | failed | could_not_run }
- *   trials                        inline; requires a strict sandbox; needs [baselines] and an `if` that reads it, when
- *                                 there are baselines
- *     r<rep>                      inline, one per repetition
- *       <task>                    inline; a check task's: if steps.baselines.outputs.<task> == 'failed'
- *         <arm>                   inline, needs [], workspace: a clone of the starting commit with the arm's team (opens
+ *   r<rep>                        inline, one per repetition; requires a strict sandbox; needs [baselines] and an `if`
+ *                                 that reads it, when there are baselines
+ *     <task>                      inline; a check task's: if steps.baselines.outputs.<task> == 'failed'
+ *       <arm>                     inline, needs [], workspace: a clone of the starting commit with the arm's team (opens
  *                                 the trial's clone), arms in rotated order
- *           prompt                workspace continue; tool and exact model: the arm's; trial.kind prompt;
+ *         prompt                  workspace continue; tool and exact model: the arm's; trial.kind prompt;
  *                                 scorers { the suite's and the task's correctness scorer, sampling: all }
- *           check                 needs [prompt]; command teamai benchmark check --trial; workspace continue;
+ *         check                   needs [prompt]; command teamai benchmark check --trial; workspace continue;
  *                                 trial.kind check; output { result } (check tasks only)
  *   settled                       needs every scope above; an `if` that reads them; end: settled
  *   ends: { settled: succeeded }  timeout: suite.timeoutMs; setup: suite.setup
@@ -206,7 +204,7 @@ const SETTLED_END = 'settled';
  * Why it holds, in engine terms:
  * - A trial's stopped step stops only its own `<arm>` scope. Siblings have no `needs` on each other, so a failed trial
  *   never skips another.
- * - `trials` needs `baselines`, so it starts once every baseline settled, and its `if` reads it, so a failed baseline
+ * - Each `r<rep>` needs `baselines`, so it starts once every baseline settled, and its `if` reads it, so a failed baseline
  *   does not skip it. A baseline that passes, could not run, or failed with no output, makes its task's `if` false:
  *   that task's trials are skipped, which reads `not_run`.
  * - The checks are command steps: what each checks, `teamai benchmark check` reads from the plan by its step's id.
@@ -216,7 +214,7 @@ const SETTLED_END = 'settled';
  * - `<arm>` opens the clone, so prompt and check share it by ancestry, and copy ownership keeps the check on the driver
  *   that ran the prompt.
  * - The prompt carries the arm's `tool` and its exact `model`, so a trial never goes through alias resolution.
- * - `requires: { isolation: sandbox, strict: true }` on both scopes reaches every baseline and trial step, so each runs
+ * - `requires: { isolation: sandbox, strict: true }` on every scope reaches every baseline and trial step, so each runs
  *   only on a sandbox that keeps the member's credentials from it, and a local start without one is refused.
  */
 export function compilePlan(plan: BenchmarkPlan, { suite }: CommittedSuite): { definition: WorkflowDefinition; scorers: Record<string, PinnedScorer> } {
@@ -247,7 +245,7 @@ export function compilePlan(plan: BenchmarkPlan, { suite }: CommittedSuite): { d
   const tried = baselines.length > 0;
   const scopes: WorkflowStep[] = [
     ...(tried ? [{ id: BASELINES, requires: SANDBOXED, workflow: { outputs: Object.fromEntries(baselines.map(({ id }) => [id, `steps.${id}.outputs.result`])), steps: baselines } }] : []),
-    { id: TRIALS, requires: SANDBOXED, ...(tried ? { needs: [BASELINES], if: `steps.${BASELINES}.outcome != null` } : {}), workflow: { steps: repetitions } },
+    ...repetitions.map((repetition): WorkflowStep => ({ ...repetition, requires: SANDBOXED, ...(tried ? { needs: [BASELINES], if: `steps.${BASELINES}.outcome != null` } : {}) })),
   ];
   const needs = scopes.map(({ id }) => id);
   return {
@@ -258,6 +256,84 @@ export function compilePlan(plan: BenchmarkPlan, { suite }: CommittedSuite): { d
       // `start --benchmark` checks no agent evidence, so a resume does not either: an agent continues a run it may start.
       invoke: 'allow',
       timeout: suite.timeoutMs,
+      ...(suite.setup ? { setup: suite.setup } : {}),
+      ends: { [SETTLED_END]: 'succeeded' },
+      steps: [...scopes, { id: SETTLED_END, needs, if: needs.map((id) => `steps.${id}.outcome != null`).join(' && '), end: SETTLED_END }],
+    },
+    scorers: correctnessScorers(suite),
+  };
+}
+
+/** A workflow step as a workflow file writes it, which admission parses. */
+type FileStep = { id: string } & Record<string, unknown>;
+
+/**
+ * The workflow a benchmark run's `from` step runs, as a workflow file writes it, with the generated correctness scorers
+ * its prompts list. The same graph `compilePlan` builds, without what the engine read of a benchmark run: no trial
+ * markers, no `requires`, no `timeout` or `invoke`. The step that runs it holds the strict sandbox, so every step
+ * beneath it inherits that, and a team's own `benchmark` workflow may relax it; the run's own timeout bounds it.
+ *
+ *   baselines                     (check tasks only) outputs { <task>: its baseline's result }
+ *     <task>                      command teamai benchmark check --baseline; workspace: a clone of the starting commit
+ *                                 with team none; output { result }
+ *   r<rep>                        one per repetition; needs [baselines] and an `if` that reads it, when there are baselines
+ *     <task>                      a check task's: if steps.baselines.outputs.<task> == 'failed'
+ *       <arm>                     needs [], workspace: a clone of the starting commit with the arm's team
+ *         prompt                  workspace continue; tool, exact model, limits under on_limit: end_turn; scorers
+ *         check                   needs [prompt]; command teamai benchmark check --trial; workspace continue (check tasks only)
+ *   settled                       needs every scope above; an `if` that reads them; end: settled
+ *
+ * Step ids are those `stepOf` and `baselineStepOf` name, under the step that runs the workflow.
+ */
+export function compileBundle(plan: BenchmarkPlan, { suite }: CommittedSuite): { definition: Record<string, unknown>; scorers: Record<string, PinnedScorer> } {
+  const tasks = new Map(suite.tasks.map((task) => [task.id, task]));
+  const arms = new Map(plan.arms.map((arm) => [arm.name, arm]));
+  const checkOutput = { result: CHECK_RESULTS.join(' | ') };
+  const baselines = suite.tasks.flatMap((task): FileStep[] => (task.judge.kind === 'check'
+    ? [{ id: task.id, command: 'teamai benchmark check --baseline', workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: { treatment: 'none' } } }, output: checkOutput }]
+    : []));
+  const tried = baselines.length > 0;
+  const promptOf = (trial: PlannedTrial, arm: PlannedArm, task: Task): FileStep => {
+    const names = [...suite.scorers, ...(task.judge.kind === 'criteria' ? [correctnessScorerName(task.id)] : [])];
+    const limits = plan.limits;
+    return {
+      id: 'prompt', prompt: task.prompt, workspace: 'continue', tool: arm.tool,
+      ...(arm.model ? { model: { name: arm.model, ...(arm.effort ? { effort: arm.effort } : {}) } } : {}),
+      ...(limits?.timeoutMs !== undefined ? { timeout: `${limits.timeoutMs}ms` } : {}),
+      ...(limits?.maxTurns !== undefined ? { max_turns: limits.maxTurns } : {}),
+      ...(limits?.tokens !== undefined ? { budget: { tokens: limits.tokens } } : {}),
+      ...(limits ? { on_limit: 'end_turn' } : {}),
+      ...(names.length > 0 ? { scorers: { names, sampling: 'all' } } : {}),
+    };
+  };
+  const repetitions = [...new Set(plan.trials.map((trial) => trial.repetition))].map((repetition): FileStep => {
+    const ofRepetition = plan.trials.filter((trial) => trial.repetition === repetition);
+    const taskSteps = [...new Set(ofRepetition.map((trial) => trial.task))].flatMap((id): FileStep[] => {
+      const task = tasks.get(id);
+      if (!task) return [];
+      const armSteps = ofRepetition.filter((trial) => trial.task === id).flatMap((trial): FileStep[] => {
+        const arm = arms.get(trial.arm);
+        if (!arm) return [];
+        const check = task.judge.kind === 'check' ? [{ id: 'check', needs: ['prompt'], command: 'teamai benchmark check --trial', workspace: 'continue', output: checkOutput }] : [];
+        return [{
+          id: arm.name, needs: [], workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: cloneTeamOf(arm.team, plan.selection) } },
+          workflow: { steps: [promptOf(trial, arm, task), ...check] },
+        }];
+      });
+      return [{ id, ...(task.judge.kind === 'check' ? { if: `steps.${BASELINES}.outputs.${id} == 'failed'` } : {}), workflow: { steps: armSteps } }];
+    });
+    return { id: `r${repetition}`, ...(tried ? { needs: [BASELINES], if: `steps.${BASELINES}.outcome != null` } : {}), workflow: { steps: taskSteps } };
+  });
+  const scopes: FileStep[] = [
+    ...(tried ? [{ id: BASELINES, workflow: { outputs: Object.fromEntries(baselines.map(({ id }) => [id, `steps.${id}.outputs.result`])), steps: baselines } }] : []),
+    ...repetitions,
+  ];
+  const needs = scopes.map(({ id }) => id);
+  return {
+    definition: {
+      schemaVersion: 'v1alpha1',
+      name: suite.name,
+      description: suite.description ?? `Benchmark suite ${suite.name}`,
       ...(suite.setup ? { setup: suite.setup } : {}),
       ends: { [SETTLED_END]: 'succeeded' },
       steps: [...scopes, { id: SETTLED_END, needs, if: needs.map((id) => `steps.${id}.outcome != null`).join(' && '), end: SETTLED_END }],
