@@ -980,7 +980,7 @@ export async function startRun(
   const cached = await loadCachedWorkflow(config, name);
   if (!cached) {
     const conflict = await namespaceConflictOf(config, name);
-    if (conflict) return error(conflict.code, conflict.message);
+    if (conflict) return error('workflow_namespace_conflict', conflict);
     return error('workflow_not_found', `Workflow "${name}" has no runnable version. Check workflows/${name}.yaml and pull again.`);
   }
   const mismatch = inputsMismatch(cached.definition.name, cached.definition.inputs, inputs);

@@ -21,7 +21,7 @@ import { LineCounter, parseDocument } from 'yaml';
 import { z } from 'zod';
 import { formatDiagnostic, parseWorkflow, promptFileDiagnostics, stepField } from './parse.js';
 import { locate, valueNode, type WorkflowFiles } from './parse-context.js';
-import { stepWorkflow, type CachedWorkflow, type ResolvedWorkflow, type WorkflowDefinition, type WorkflowDiagnostic, type WorkflowFailure, type WorkflowStep } from './types.js';
+import { stepWorkflow, type CachedWorkflow, type ResolvedWorkflow, type WorkflowDefinition, type WorkflowDiagnostic, type WorkflowStep } from './types.js';
 import { DefaultWorkflows } from '../default-workflows.js';
 import { assertSafePath, assertWithinRoot } from '../utils/path-safety.js';
 import { createGit } from '../utils/git.js';
@@ -148,10 +148,13 @@ async function readConflict(config: LocalConfig, name: string): Promise<string |
   }
 }
 
-/** Why `name` has no runnable version when the last sync found it in two namespaces the member receives. */
-export async function namespaceConflictOf(config: LocalConfig, name: string): Promise<WorkflowFailure | undefined> {
+/**
+ * Why `name` has no runnable version when the last sync found it in two namespaces the member receives, for a refusal
+ * with code `workflow_namespace_conflict`.
+ */
+export async function namespaceConflictOf(config: LocalConfig, name: string): Promise<string | undefined> {
   const conflict = await readConflict(config, name);
-  return conflict === undefined ? undefined : { code: 'workflow_namespace_conflict', message: `${conflict}. Keep it in one namespace, push it, run teamai pull, and start again.` };
+  return conflict === undefined ? undefined : `${conflict}. Keep it in one namespace, push it, run teamai pull, and start again.`;
 }
 
 /**

@@ -918,7 +918,8 @@ export async function benchmarkRun(suite: string, options: { driver?: string; sa
   }
   const workflow = await loadCachedWorkflow(config, BENCHMARK_WORKFLOW);
   if (!workflow) {
-    writeEnvelope({ error: await namespaceConflictOf(config, BENCHMARK_WORKFLOW) ?? workflowNotFound(BENCHMARK_WORKFLOW) }, secrets);
+    const conflict = await namespaceConflictOf(config, BENCHMARK_WORKFLOW);
+    writeEnvelope({ error: conflict === undefined ? workflowNotFound(BENCHMARK_WORKFLOW) : { code: 'workflow_namespace_conflict', message: conflict } }, secrets);
     return;
   }
   if (workflow.source === 'team') {
