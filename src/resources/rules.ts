@@ -885,6 +885,7 @@ export class RulesHandler extends ResourceHandler {
           if (await isDeliveredRender(deliveredRenders(tool), deployed, replaced, localConfig.repo.localPath, await deliveredRevs())) {
             if (await keepsTrackedCopy(deployed)) continue;
             await remove(deployed);
+            if (ledger) forgetDelivered(ledger.hashes, deployed);
             log.debug(`Removed ${localFile} from ${tool}: a namespace rule replaces it`);
           } else {
             log.warn(

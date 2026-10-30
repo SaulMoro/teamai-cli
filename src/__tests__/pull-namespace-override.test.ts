@@ -305,6 +305,29 @@ describe('pull: an active namespace item replaces the root item of the same name
 
     // Before #946 JoyCode got Cursor's render: that copy is what teamai
     // delivered, not a member edit, so it goes without a warning.
+    it('forgets the replaced root rule\'s copy in the delivery record once it withdraws it from a rule dir shared with the member', async () => {
+      const base = await loadTeamConfig(repoPath);
+      if (!base) throw new Error('no team config');
+      vi.mocked(loadTeamConfig).mockResolvedValue({
+        ...base,
+        toolPaths: { ...base.toolPaths, joycode: { skills: '.joycode/skills', rules: '.joycode/rules', agents: '.joycode/agents' } },
+      });
+      await fse.ensureDir(path.join(homeDir, '.joycode', 'rules'));
+      commitTeamRepo(repoPath);
+      const recorded = keepState();
+      const copy = path.join(homeDir, '.joycode/rules/style.mdc');
+
+      as(['devops']);
+      await pull({});
+      expect(await recorded()).toContain(copy);
+
+      as(['frontend']);
+      await pull({ force: true });
+
+      expect(await exists('.joycode/rules/style.mdc')).toBe(false);
+      expect(await recorded()).not.toContain(copy);
+    });
+
     it('withdraws a replaced root rule\'s copy still in the render an older teamai wrote for the tool (#946)', async () => {
       const base = await loadTeamConfig(repoPath);
       if (!base) throw new Error('no team config');

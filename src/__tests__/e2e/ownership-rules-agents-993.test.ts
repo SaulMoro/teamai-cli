@@ -271,6 +271,27 @@ describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', ()
     expect(recorded()).not.toContain(agent);
   });
 
+  it('removes the root rule a namespace rule of the member\'s new role replaces from CodeBuddy\'s rules, and takes it off the delivery record', () => {
+    const t = team('replaced-rule', {
+      'manifest/roles.yaml': ROLES_YAML,
+      'rules/tone.md': '# Shared tone\n',
+      'rules/frontend/tone.md': '# Front tone\n',
+    });
+    const dir = business('replaced-rule-biz');
+    init(t, dir, '--role', 'backend', '--agent', 'claude,codebuddy');
+    // CodeBuddy's rules directory is shared with the member's own rules.
+    const rootCopy = path.join(dir, '.codebuddy', 'rules', 'tone.md');
+    expect(read(rootCopy)).toContain('Shared tone');
+    expect(recorded()).toContain(rootCopy);
+
+    teamaiOk(['roles', 'set', 'frontend'], dir);
+    const pulled = teamaiOk(['pull'], dir);
+
+    expect(fs.existsSync(rootCopy), pulled.output).toBe(false);
+    expect(read(path.join(dir, '.codebuddy', 'rules', 'frontend', 'tone.md'))).toContain('Front tone');
+    expect(recorded()).not.toContain(rootCopy);
+  });
+
   it('keeps a member\'s own rule and agent at a team resource\'s path, names them, and doctor lists them', () => {
     const t = team('own-files', {
       'rules/team-rule.md': TEAM_RULE,
