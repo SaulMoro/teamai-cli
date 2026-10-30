@@ -138,13 +138,16 @@ export async function openClone(input: { config: LocalConfig; run: RunId; checko
   if (found) await removeRoot(found.root, file);
   const root = scratchCloneRoot();
   const dir = path.join(root, 'r');
+  // Every git and pull that prepares the clone runs without what the lease withholds, as its step does.
+  const scoped = await cloneEnv(lease.withhold);
+  if (!scoped.ok) return { dir, failure: scoped.failure };
   await writeJsonAtomic(file, { v: 1, branch: lease.branch, root, withhold: [...lease.withhold], state: { kind: 'preparing' } } satisfies CloneReceipt);
-  const cloned = await freshClone(root, lease.clone.commit, [input.checkout, ...(lease.clone.repo !== undefined ? [commitCacheOf(config, lease.clone.repo)] : [])], lease.expiresAt);
+  const cloned = await freshClone(root, lease.clone.commit, [input.checkout, ...(lease.clone.repo !== undefined ? [commitCacheOf(config, lease.clone.repo)] : [])], lease.expiresAt, scoped.env);
   if (cloned) return { dir, failure: cloned };
   const { team } = lease.clone;
-  const installed = 'revision' in team ? await installTeam({ config, root, lease, team }) : undefined;
+  const installed = 'revision' in team ? await installTeam({ config, root, lease, team, env: scoped.env }) : undefined;
   if (installed && 'code' in installed) return { dir, failure: installed };
-  const git = boundedGit(lease.expiresAt);
+  const git = boundedGit(lease.expiresAt, scoped.env);
   const status = await git(dir, [...HEAD_STATUS]);
   const head = status.code === 0 ? headStateOf(status.stdout) : null;
   const tool = installed ? installed.config.enabledAgents?.[0] : undefined;
@@ -305,8 +308,8 @@ async function removeUnjudgedEvidence(config: LocalConfig, run: RunState, inClon
  * does not exist. The commit comes from the first of `sources` that has it. Every git call is an argv array: no shell
  * string, and stops at `expiresAt`, as a fetch or checkout may never return.
  */
-export async function freshClone(root: string, commit: string, sources: readonly string[], expiresAt: string | undefined): Promise<WorkflowFailure | undefined> {
-  const git = boundedGit(expiresAt);
+export async function freshClone(root: string, commit: string, sources: readonly string[], expiresAt: string | undefined, env: NodeJS.ProcessEnv): Promise<WorkflowFailure | undefined> {
+  const git = boundedGit(expiresAt, env);
   await fs.mkdir(path.dirname(root), { recursive: true });
   await fs.mkdir(root);
   const clone = path.join(root, 'r');
@@ -351,7 +354,7 @@ const PULL_TIMEOUT_MS = 10 * 60_000;
  * are recorded as the overlay, so they are never a step's edits.
  */
 async function installTeam(input: {
-  config: LocalConfig; root: string; lease: CloneLease; team: InstalledTeam;
+  config: LocalConfig; root: string; lease: CloneLease; team: InstalledTeam; env: NodeJS.ProcessEnv;
 }): Promise<{ config: LocalConfig; dataHome: string; without?: Without } | WorkflowFailure> {
   const { config: member, root, lease, team } = input;
   const failed = (message: string): WorkflowFailure => ({ code: 'clone_prepare_failed', message });
@@ -370,7 +373,7 @@ async function installTeam(input: {
   const teamClone = path.join(partition, 'team-repo');
   const branch = await getDefaultBranch(source);
   // The lease's deadline bounds the copy too, as it bounds the pull below.
-  const copy = boundedGit(lease.expiresAt);
+  const copy = boundedGit(lease.expiresAt, input.env);
   const copied = async (steps: Array<{ cwd: string; args: string[] }>): Promise<WorkflowFailure | undefined> => {
     for (const { cwd, args } of steps) {
       const ran = await copy(cwd, args);
@@ -410,9 +413,7 @@ async function installTeam(input: {
   await createProjectToolRoots({ config, tools });
   const entry = resolveCliEntry();
   if (!entry) return failed('The teamai CLI that runs this workflow could not be found, so the clone\'s own teamai pull could not run.');
-  const scoped = await cloneEnv(lease.withhold);
-  if (!scoped.ok) return scoped.failure;
-  const env: NodeJS.ProcessEnv = { ...scoped.env, HOME: home, USERPROFILE: home };
+  const env: NodeJS.ProcessEnv = { ...input.env, HOME: home, USERPROFILE: home };
   for (const name of TOOL_HOME_VARIABLES) delete env[name];
   // The lease's deadline bounds the pull too, so a slow one does not hold the run past its timeout.
   const timeoutMs = lease.expiresAt === undefined ? PULL_TIMEOUT_MS : Math.max(0, Math.min(PULL_TIMEOUT_MS, Date.parse(lease.expiresAt) - Date.now()));

@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { knownSecrets, resolveWorkflowEnv } from '../env-resolution.js';
 import type { LocalConfig } from '../types.js';
@@ -29,6 +29,7 @@ _setDriverPollMs(20);
 const dirs: string[] = [];
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -221,6 +222,23 @@ describe('a clone place', () => {
 
     expect(hooks).not.toBe('');
     expect(fs.existsSync(path.resolve(work.cwd, hooks))).toBe(false);
+  });
+
+  it.skipIf(process.platform === 'win32')('starts no git in a strictly sandboxed clone with a credential the sandbox withholds', async () => {
+    const { config, runId } = await fixture((commit) => PROMPTED(commit).replace('team: { treatment: none } } }', 'team: { treatment: none } } }\n    requires: { isolation: sandbox, strict: true }'));
+    const bin = path.join(path.dirname(config.repo.localPath), 'bin');
+    const seen = path.join(path.dirname(config.repo.localPath), 'git-seen.txt');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'git'), `#!/bin/sh\necho "$(pwd) \${GH_TOKEN:-none}" >> ${JSON.stringify(seen)}\nexec ${JSON.stringify(execFileSync('which', ['git'], { encoding: 'utf8' }).trim())} "$@"\n`, { mode: 0o755 });
+    vi.stubEnv('GH_TOKEN', 'withheld-token');
+    vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+    const client = inProcessClient({ config, env: await resolveWorkflowEnv(config) });
+
+    leaseOf(await client.next(runId, { driver: { ...driver, can: { ...can, env: true } }, running: [] }, { prepare: true }));
+    const inClone = fs.readFileSync(seen, 'utf8').split('\n').filter((line) => line.includes('teamai-clones'));
+
+    expect(inClone.length).toBeGreaterThan(0);
+    expect(inClone.filter((line) => line.includes('withheld-token'))).toEqual([]);
   });
 
   it('fails the step whose clone is of a commit no source has, and leaves no clone', async () => {

@@ -75,18 +75,23 @@ const HALF_WRITTEN_RETRY = { forMs: 5_000, everyMs: 50 };
  * Runs git in `cwd`, writing `input` to its stdin, and stopping it once `timeoutMs` passed. Waits out a worktree entry
  * another `git worktree add` in the repository is still writing.
  */
-export async function git(cwd: string, args: string[], options?: GitOptions): Promise<GitResult> {
+export function git(cwd: string, args: string[], options?: GitOptions): Promise<GitResult> {
+  return gitWith(process.env, cwd, args, options);
+}
+
+/** `git` with `base` instead of this process's environment. */
+async function gitWith(base: NodeJS.ProcessEnv, cwd: string, args: string[], options: GitOptions | undefined): Promise<GitResult> {
   const deadline = Date.now() + HALF_WRITTEN_RETRY.forMs;
   for (;;) {
-    const result = await spawnGit(cwd, args, options, process.env);
+    const result = await spawnGit(cwd, args, options, base);
     if (result.code === 0 || !HALF_WRITTEN_WORKTREE.test(result.stderr) || Date.now() >= deadline) return result;
     await new Promise((resolve) => setTimeout(resolve, HALF_WRITTEN_RETRY.everyMs));
   }
 }
 
-/** `git`, stopped past `expiresAt` with every process it started, as `untrustedGit` is. */
-export function boundedGit(expiresAt: string | undefined): Git {
-  return (cwd, args, options) => git(cwd, args, boundedBy(options, expiresAt));
+/** `git`, stopped past `expiresAt` with every process it started, as `untrustedGit` is, with `env` instead of this process's environment. */
+export function boundedGit(expiresAt: string | undefined, env: NodeJS.ProcessEnv = process.env): Git {
+  return (cwd, args, options) => gitWith(env, cwd, args, boundedBy(options, expiresAt));
 }
 
 /**

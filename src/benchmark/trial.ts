@@ -212,7 +212,7 @@ export async function tryCheckAt(input: {
   const clone = path.join(root, 'r');
   try {
     return await checkIn(runner, { command: input.command, envScope: { provide: [], withhold }, expiresAt }, async (env) => {
-      const failure = await freshClone(root, commit, sources, expiresAt)
+      const failure = await freshClone(root, commit, sources, expiresAt, env)
         ?? (leaseSetup ? await setupIn(runner, clone, leaseSetup, expiresAt) : undefined)
         ?? (protect ? await restoreProtected({ clone, startingCommit, protect, sources, env, expiresAt }) : undefined)
         ?? (add ? await writeAdded({ clone, add, sources, env, expiresAt }) : undefined);
