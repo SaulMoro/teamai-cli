@@ -1,4 +1,5 @@
 import type { LocalConfig } from '../types.js';
+import { shellQuoteValue } from '../utils/shell-profile.js';
 import { agentEvidence, type AgentEvidence } from './attempt-marker.js';
 import {
   error, finishRun, locateStep, ok, parseReads, reconcileRun, respondCommand, runData, withRun, workflowLabel,
@@ -346,11 +347,13 @@ function retryInstance(run: RunState, state: StepState, now: string): void {
 
 /**
  * The command that starts a run like `run`: `teamai benchmark run <suite>` for the benchmark workflow, which plans its
- * suite and sets its timeout, else `teamai workflow start <name>`.
+ * suite and sets its timeout, else `teamai workflow start <name>` with the run's inputs.
  */
 export function restartCommand(run: RunState): string {
   const inputs = isRecord(run.inputs) ? run.inputs : {};
-  if (run.name !== 'teamai-benchmark' || typeof inputs.suite !== 'string') return `teamai workflow start ${run.name}`;
+  if (run.name !== 'teamai-benchmark' || typeof inputs.suite !== 'string') {
+    return `teamai workflow start ${run.name}${Object.keys(inputs).length > 0 ? ` --inputs ${shellQuoteValue(JSON.stringify(inputs))}` : ''}`;
+  }
   return `teamai benchmark run ${inputs.suite}${inputs.aliases === 'member' ? ' --member-aliases' : ''}`;
 }
 

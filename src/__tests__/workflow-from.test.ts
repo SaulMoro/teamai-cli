@@ -322,7 +322,7 @@ describe('a run with a from step', () => {
   it.each([
     ['teamai-benchmark', 'team', 'teamai benchmark run fix'],
     ['teamai-benchmark', 'member', 'teamai benchmark run fix --member-aliases'],
-    ['suites', 'member', 'teamai workflow start suites'],
+    ['suites', 'member', `teamai workflow start suites --inputs '{"suite":"fix","aliases":"member"}'`],
   ])('of workflow %s with aliases %s, names the command that starts it again', async (name, aliases, command) => {
     const config = testConfig();
     fs.writeFileSync(path.join(config.repo.localPath, 'workflows', `${name}.yaml`), PLANNED.replace('name: planned', `name: ${name}\ninputs: { suite: string, aliases: string }`));
