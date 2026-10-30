@@ -221,6 +221,15 @@ export function describeWorkflow(input: {
       } else if (step.command !== undefined || step.prompt !== undefined || step.promptFile !== undefined) {
         own = 1;
         offer(step, path, scope);
+      } else if (stepWorkflow(step)?.kind === 'from') {
+        // Its workflow does not exist yet, but every step of it inherits what this one requires: a driver that lacks
+        // that is held from the step itself, as from a step that runs in a copy of its own.
+        const requires = mergeRequirements(scope.requires, step.requires);
+        const negotiation = negotiate({
+          step: path, executor: 'command', requires, prepare: true, clone: false,
+          interactive: false, hasContract: true, envKeys: [], runEnvKeys, budgeted: false, trial: false,
+        }, can, allow, env);
+        if (negotiation.kind === 'hold') facts.held.push({ step: path, missing: negotiation.missing, env: requires.env ?? [] });
       }
       const level = Math.max(-1, ...(step.needs ?? []).map((need) => levels.get(need) ?? -1)) + 1;
       levels.set(step.id, level);
