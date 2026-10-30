@@ -132,12 +132,14 @@ export interface ArmComparison {
   tasks: Array<{ task: string; from: PassRate; to: PassRate }>;
 }
 
-/** A tool, model and effort, whatever the team: one line of the team changes chart. */
+/** A tool, model, effort and workflow, whatever the team: one line of the team changes chart. */
 export interface TeamConfig {
   key: string;
   tool: string;
   model?: string;
   effort?: string;
+  /** The team workflow the arm runs; absent: the trial's own prompt. */
+  workflow?: string;
 }
 
 /**
@@ -229,8 +231,8 @@ function armKey({ name, tool, model, effort, team, workflow }: Pick<Arm, 'name' 
   return JSON.stringify([name, tool, model ?? null, effort ?? null, teamChoiceOf(team), workflow?.name ?? null]);
 }
 
-function configKey({ tool, model, effort }: Pick<Arm, 'tool' | 'model' | 'effort'>): string {
-  return JSON.stringify([tool, model ?? null, effort ?? null]);
+function configKey({ tool, model, effort, workflow }: Pick<Arm, 'tool' | 'model' | 'effort' | 'workflow'>): string {
+  return JSON.stringify([tool, model ?? null, effort ?? null, workflow?.name ?? null]);
 }
 
 /** What the suite asked of an arm's team, without the commit start resolved it to. */
@@ -452,7 +454,7 @@ function teamChangesOf({ current }: SuiteRuns): SuiteView['teamChanges'] {
     for (const arm of benchmark.arms) {
       if (arm.team.kind !== 'pulled' && arm.team.kind !== 'ref') continue;
       const key = configKey(arm);
-      configs.set(key, { key, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), ...(arm.effort ? { effort: arm.effort } : {}) });
+      configs.set(key, { key, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), ...(arm.effort ? { effort: arm.effort } : {}), ...(arm.workflow ? { workflow: arm.workflow.name } : {}) });
       const revision = revisions.get(arm.team.revision) ?? { firstRunAt: startedAt, byConfig: new Map() };
       const config = revision.byConfig.get(key) ?? { runs: new Set<string>(), trials: [] };
       config.runs.add(run);

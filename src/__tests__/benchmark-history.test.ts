@@ -362,11 +362,23 @@ describe('BenchmarkHistory comparisons', () => {
 
     const changes = BenchmarkHistory.of({ runs, query: { windowDays: 90 }, now: NOW }).selected?.teamChanges;
 
-    expect(changes?.configs).toEqual([{ key: '["claude",null,null]', tool: 'claude' }]);
+    expect(changes?.configs).toEqual([{ key: '["claude",null,null,null]', tool: 'claude' }]);
     expect(changes?.revisions.map(({ revision, firstRunAt, configs }) => ({ revision, firstRunAt, configs: configs.map(({ runs: count, passed, planned, tasks }) => ({ runs: count, passed, planned, tasks })) }))).toEqual([
       { revision: first, firstRunAt: '2026-10-01T09:00:00Z', configs: [{ runs: 2, passed: 1, planned: 4, tasks: [{ task: 'login', passed: 1, planned: 4 }] }] },
       { revision: second, firstRunAt: '2026-10-10T09:00:00Z', configs: [{ runs: 1, passed: 2, planned: 2, tasks: [{ task: 'login', passed: 2, planned: 2 }] }] },
     ]);
+  });
+
+  it('follows a tool and model across team revisions only under one workflow, so a workflow change is not a team change', () => {
+    const [first, second] = ['1'.repeat(40), '2'.repeat(40)];
+    const runs = [
+      run({ id: 'r1', startedAt: '2026-10-01T09:00:00Z', arms: [{ name: 'team', tool: 'claude', team: { kind: 'pulled', revision: first } }], trials: { login: { team: ['failed'] } } }),
+      run({ id: 'r2', startedAt: '2026-10-10T09:00:00Z', arms: [{ name: 'team', tool: 'claude', workflow: { name: 'plan-then-fix', sourceHash: 'p1' }, team: { kind: 'pulled', revision: second } }], trials: { login: { team: ['passed'] } } }),
+    ];
+
+    const changes = BenchmarkHistory.of({ runs, query: { windowDays: 90 }, now: NOW }).selected?.teamChanges;
+
+    expect(changes).toEqual({ configs: [], revisions: [] });
   });
 
   it('names the tool version each run reported, so the page can mark a run whose tool changed', () => {

@@ -232,7 +232,7 @@ function taskDeltaPanel(sel,c){
   +rows.map(r=>{const lo=Math.min(r.f,r.to), hi=Math.max(r.f,r.to), cls=r.to>r.f?'up':r.to<r.f?'down':'same'; return '<div class="dumbbell"><span class="dumbbell-task" data-verbatim>'+e(r.x.task)+'</span><span class="dumbbell-track"><i class="dumbbell-line '+cls+'" style="left:'+(lo*100).toFixed(1)+'%;width:'+((hi-lo)*100).toFixed(1)+'%"></i><i class="dumbbell-from" style="left:'+(r.f*100).toFixed(1)+'%"></i><i class="dumbbell-to '+cls+'" style="left:'+(r.to*100).toFixed(1)+'%"></i></span><span class="dumbbell-value '+cls+'"><b>'+pp(r.to-r.f)+'</b><small>'+number(r.x.from.passed)+'/'+number(r.x.from.planned)+' → '+number(r.x.to.passed)+'/'+number(r.x.to.planned)+'</small></span></div>';}).join('')
   +'<div class="dumbbell dumbbell-axis" aria-hidden="true"><span></span><span class="forest-scale"><small>0%</small><small>50%</small><small>100%</small></span><span></span></div></div></section>';
 }
-const configName=c=>c.tool+(c.model?' · '+c.model:'')+(c.effort?' · '+c.effort:'');
+const configName=c=>c.tool+(c.model?' · '+c.model:'')+(c.effort?' · '+c.effort:'')+(c.workflow?' · '+c.workflow:'');
 function teamPanel(sel){
  const tc=sel.teamChanges;
  if(!tc.revisions.length)return emptyView('No tool and model ran on two team revisions yet','Team changes follows one tool and model across the team revisions it ran on, so you see what a change to the team\\'s skills, rules or agents did. Add an arm on another revision of the team repo:','arms:\\n  - name: team          # the revision you pulled\\n  - name: main\\n    team: main          # a branch, tag or commit of the team repo','Or run the suite again after each change to the team repo: each run installs the revision you pulled.');
