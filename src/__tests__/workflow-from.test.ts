@@ -119,6 +119,9 @@ describe('admitting a workflow output', () => {
         'inner.ba9876543210': { ...inner([{ id: 'back', workflow: 'inner.0123456789ab' }]), name: 'inner.ba9876543210' },
       },
     }, 'Step "plan" output definition is not a workflow this run can admit: workflows/inner.0123456789ab.yaml:6: field "steps[0].workflow": step "there" runs workflow "inner.ba9876543210" in a cycle: inner.0123456789ab -> inner.ba9876543210 -> inner.0123456789ab'],
+    ['a definition with no name', { definition: { schemaVersion: 'v1alpha1', description: 'Say hello.', steps: [{ id: 'hello', command: 'node hello.js' }] } }, 'Step "plan" output definition is not a workflow this run can admit: workflows/definition.yaml:1: field "name": name must be a non-empty token'],
+    ['a team commit that does not exist', { definition: GENERATED, teamRevision: 'deadbeefdeadbeef' },
+      expect.stringMatching(/^Step "plan" output definition is not a workflow this run can admit: its team scorers could not be read at team commit deadbeefdeadbeef: the team repo at .+ does not have it/)],
   ])('fails the producer for %s, and runs nothing it printed', async (_case, definition, message) => {
     const config = testConfig();
     const runId = await startPlanned(config);

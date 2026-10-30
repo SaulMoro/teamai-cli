@@ -721,20 +721,7 @@ function finishStep(run: RunState, state: StepState, definition: WorkflowStep, r
 
 function childOrUnreadable(run: RunState, scope: Scope, states: StepState[], state: StepState, definition: WorkflowStep): Scope | { unreadable: string } {
   return childScope(run, scope, states, state, definition)
-    ?? { unreadable: unkeptWorkflow(run, state, definition) };
-}
-
-/** Why the run cannot read the workflow step `state` runs: a file it did not pin, or a producer's output it did not admit. */
-function unkeptWorkflow(run: RunState, state: StepState, definition: WorkflowStep): string {
-  const runs = stepWorkflow(definition);
-  switch (runs?.kind) {
-    case 'from':
-      return `Run ${run.id} step "${state.id}" runs the workflow output of step "${runs.step}", which the run did not admit`;
-    case 'named':
-      return `Run ${run.id} step "${state.id}" runs workflow "${runs.name}", which the run did not keep`;
-    default:
-      return `Run ${run.id} step "${state.id}" runs no workflow the run keeps`;
-  }
+    ?? { unreadable: `Run ${run.id} step "${state.id}" runs workflow ${JSON.stringify(definition.workflow)}, which the run did not keep` };
 }
 
 function settleRunning(run: RunState, scope: Scope, states: StepState[], state: StepState, definition: WorkflowStep, now: string): Settled {
