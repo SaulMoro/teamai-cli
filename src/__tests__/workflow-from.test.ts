@@ -264,6 +264,22 @@ describe('a run with a from step', () => {
     const run = await readRun(config, runId);
     expect(typeof run === 'object' && run.admitted?.plan?.output).toEqual({ definition: { definition: GENERATED }, plan: {} });
   });
+
+  it.each([
+    ['benchmark', 'team', 'teamai benchmark run fix'],
+    ['benchmark', 'member', 'teamai benchmark run fix --member-aliases'],
+    ['suites', 'member', 'teamai workflow start suites'],
+  ])('of workflow %s with aliases %s, names the command that starts it again', async (name, aliases, command) => {
+    const config = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', `${name}.yaml`), PLANNED.replace('name: planned', `name: ${name}\ninputs: { suite: string, aliases: string }`));
+    await syncWorkflowDefinitions(config);
+    const started = await startRun(config, name, { suite: 'fix', aliases }, { secrets: await knownSecrets(config) });
+    if ('error' in started) throw new Error(started.error.message);
+    const runId = String(started.data.run);
+    await settle(config, runId, 'plan', { definition: { definition: GENERATED }, plan: {} });
+
+    expect(await retryStep(config, runId, {}, 'plan')).toEqual({ error: { code: 'not_retryable', message: `Run ${runId} is isolated: it runs only on the machine that started it, and a step that ran again would change what it already admitted or measured. Start a new run: ${command}` } });
+  });
 });
 
 describe('the team scorers a bundle lists', () => {
