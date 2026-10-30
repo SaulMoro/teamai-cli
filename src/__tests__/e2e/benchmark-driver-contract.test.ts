@@ -133,8 +133,8 @@ async function drive(fixture: BenchmarkFixture, input: { run: string; can: Recor
         ...(unenforced.length > 0 ? { unenforced } : {}),
       };
     }
-    const reported = await fixture.teamai(['workflow', 'report', input.run, '--json', JSON.stringify({ driver: identity, attempt: lease.attempt, revision: lease.revision, ...settled })]);
-    AcceptedSchema.parse(envelope(reported));
+    const reported = envelope(await fixture.teamai(['workflow', 'report', input.run, '--json', JSON.stringify({ driver: identity, attempt: lease.attempt, revision: lease.revision, ...settled })]));
+    if (!AcceptedSchema.safeParse(reported).success) throw new Error(`The report of ${lease.step} was not accepted: ${JSON.stringify(reported)}`);
   }
   return { leased, held };
 }
