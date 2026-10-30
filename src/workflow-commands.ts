@@ -25,10 +25,9 @@ import { findRunConfig } from './workflow/run-location.js';
 import { resolveRunMode } from './launch-context.js';
 import { memberTools } from './tool-launch/call.js';
 import { agentEvidence, isAttemptRunner, nestedCall, nestedStart, nestedWorkflowError, type Nested } from './workflow/attempt-marker.js';
-import { planBenchmark, planStep, startBenchmark, tryBenchmarkTask } from './benchmark/start.js';
+import { planBenchmark, planStep, tryBenchmarkTask } from './benchmark/start.js';
 import { reportBenchmark } from './benchmark/report.js';
 import { runCheckStep } from './benchmark/trial.js';
-import { headCommit } from './workflow/worktree.js';
 import type { WorkflowEnvelope, WorkflowFailure } from './workflow/types.js';
 
 /** Prints `envelope` with each of `secrets` masked, and sets the exit code from the envelope as the operation returned it. */
@@ -255,7 +254,7 @@ const NonSkillRunOptionsSchema = z.object({
 
 type StartOptions = {
   driver?: string; tools?: string; inputs?: string; autoApprove?: boolean; describe?: boolean; parallel?: string; confirmed?: boolean; hitl?: string; judge?: boolean;
-  benchmark?: boolean; memberAliases?: boolean; sandbox?: boolean; try?: string; timeout?: string;
+  sandbox?: boolean; timeout?: string;
 };
 
 /** `judge` is false with `--no-judge`. */
@@ -282,14 +281,6 @@ async function startWorkflow(name: string, options: StartOptions): Promise<Workf
     return;
   }
   const { timeout } = nonSkill.data;
-  if (options.benchmark && options.describe) {
-    writeEnvelope({ error: { code: 'invalid_arguments', message: '--describe shows a workflow\'s metadata and input schemas, and a benchmark takes no inputs: its suite sets its tasks and arms. Start it again without --describe.' } }, collectEnvSecrets());
-    return;
-  }
-  if (options.try !== undefined) {
-    writeEnvelope(await tryTask(name, options.try, options), collectEnvSecrets());
-    return;
-  }
   const loaded = await readyStartConfig(name);
   if (!('config' in loaded)) {
     refuse(loaded);
@@ -310,18 +301,6 @@ async function startWorkflow(name: string, options: StartOptions): Promise<Workf
     writeEnvelope({ error: unsupportedDriver(options.driver) }, secrets);
     return;
   }
-  if (options.benchmark && (options.inputs !== undefined || options.tools !== undefined)) {
-    writeEnvelope({ error: { code: 'invalid_arguments', message: 'A benchmark run takes no --inputs or --tools, since its suite sets its tasks and its arms\' tools. Start it again without them.' } }, secrets);
-    return;
-  }
-  if (options.benchmark && options.timeout !== undefined) {
-    writeEnvelope({ error: { code: 'invalid_arguments', message: 'A benchmark run takes no --timeout, since its suite sets its timeout. Start it again without it.' } }, secrets);
-    return;
-  }
-  if (options.memberAliases && !options.benchmark) {
-    writeEnvelope({ error: { code: 'invalid_arguments', message: '--member-aliases resolves the models of a benchmark\'s arms. Start a benchmark with --benchmark, or start the workflow without --member-aliases.' } }, secrets);
-    return;
-  }
   const tools = parseTools(options.tools);
   if (typeof tools === 'string') {
     writeEnvelope({ error: { code: 'invalid_tools', message: tools } }, secrets);
@@ -334,11 +313,8 @@ async function startWorkflow(name: string, options: StartOptions): Promise<Workf
   }
   const { inputs } = read;
   const caller = invokeCaller(options.confirmed);
-  const base = options.benchmark ? await headCommit(process.cwd()) : undefined;
   const alone = options.driver === 'local' ? { alone: localStrictCan(config, options) } : {};
-  const started = options.benchmark
-    ? await startBenchmark(config, name, { secrets, checkout: process.cwd(), runMode: caller.mode, memberAliases: options.memberAliases === true, ...(base ? { base } : {}), ...alone })
-    : await inProcessClient({ config, env }).start(name, { inputs, checkout: process.cwd(), caller, ...alone, ...(timeout !== undefined ? { timeout } : {}) });
+  const started = await inProcessClient({ config, env }).start(name, { inputs, checkout: process.cwd(), caller, ...alone, ...(timeout !== undefined ? { timeout } : {}) });
   if ('error' in started || options.driver !== 'local') {
     writeEnvelope(started, secrets);
     return;
@@ -354,19 +330,7 @@ async function startWorkflow(name: string, options: StartOptions): Promise<Workf
   return driven;
 }
 
-/** `workflow start --benchmark --try`: no config, so it runs on a CI runner that never ran teamai init. */
-async function tryTask(name: string, file: string, options: { driver?: string; tools?: string; inputs?: string; autoApprove?: boolean; benchmark?: boolean; memberAliases?: boolean; sandbox?: boolean }): Promise<WorkflowEnvelope> {
-  const refused = (message: string): WorkflowEnvelope => ({ error: { code: 'invalid_arguments', message } });
-  if (!options.benchmark) return refused('--try tries a benchmark task. Start it again with --benchmark.');
-  if (options.driver !== undefined && options.driver !== 'local') return { error: { code: 'unsupported_driver', message: `Driver "${options.driver}" is not available. Use --driver local.` } };
-  if (options.inputs !== undefined || options.tools !== undefined || options.memberAliases || options.autoApprove) {
-    return refused('--try runs one task\'s check, with no arms, inputs or approvals. Start it again with only --benchmark, --try, --sandbox and --driver local.');
-  }
-  if (!options.sandbox) return refused('--try runs the task\'s setup and check, which run only on a sandbox. Run it in CI or a container, and declare it with --sandbox.');
-  return tryBenchmarkTask(file, { suite: name, checkout: process.cwd(), signal: interruptSignal(), progress: (line) => log.info(line) });
-}
-
-/** Aborts on the first SIGINT or SIGTERM, so `next --prepare` stops the setup or check it runs. A second one ends the process. */
+/** Aborts on the first SIGINT or SIGTERM, so `teamai benchmark try` stops the setup or check it runs. A second one ends the process. */
 function interruptSignal(): AbortSignal {
   const controller = new AbortController();
   for (const name of ['SIGINT', 'SIGTERM'] as const) process.once(name, () => controller.abort(name));
@@ -468,7 +432,7 @@ export async function workflowNext(runId: string, options: {
       return;
     }
   }
-  writeEnvelope(await inProcessClient({ config, env }).next(runId, payload.value, prepare ? { prepare, signal: interruptSignal() } : undefined), secrets);
+  writeEnvelope(await inProcessClient({ config, env }).next(runId, payload.value, prepare ? { prepare } : undefined), secrets);
 }
 
 export async function workflowReport(runId: string, options: { json?: string; driver?: string; attempt?: string; modelUnavailable?: boolean }): Promise<void> {

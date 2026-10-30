@@ -1,7 +1,6 @@
 /**
- * The benchmark plan a run measures, and where its steps sit: the plan `start --benchmark` froze into `run.benchmark`,
- * whose steps sit at the top of the run, or the `plan` a `teamai benchmark plan` step printed beside the workflow a
- * `from` step runs, admitted and frozen with the run, whose steps sit under that `from` step.
+ * The benchmark plan a run measures, and where its steps sit: the `plan` a `teamai benchmark plan` step printed beside
+ * the workflow a `from` step runs, admitted and frozen with the run, whose steps sit under that `from` step.
  */
 import { z } from 'zod';
 import { stepDefinitions } from '../workflow/scope.js';
@@ -10,7 +9,7 @@ import { BENCHMARK_PLAN_SCHEMA_VERSION, BenchmarkPlanSchema, type BenchmarkPlan 
 
 export interface RunPlan {
   plan: BenchmarkPlan;
-  /** The path of the workflow that runs the plan's steps, with a trailing `.`, or `''` at the top of the run. */
+  /** The path of the workflow that runs the plan's steps, with a trailing `.`. */
   prefix: string;
 }
 
@@ -21,7 +20,6 @@ const VersionedSchema = z.object({ schemaVersion: z.unknown() }).passthrough();
  * more than one and `under` names none, or the plan is of a schemaVersion this teamai does not read.
  */
 export function planOfRun(run: RunState, under?: string): { found: RunPlan } | { failure: WorkflowFailure } {
-  if (run.benchmark) return { found: { plan: run.benchmark, prefix: '' } };
   const definitionOf = stepDefinitions(run);
   const planned = run.steps.flatMap((state) => {
     const runs = stepWorkflow(definitionOf(state.id) ?? {});

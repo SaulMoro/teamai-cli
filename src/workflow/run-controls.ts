@@ -4,7 +4,7 @@ import {
   error, finishRun, locateStep, ok, parseReads, reconcileRun, respondCommand, runData, withRun, workflowLabel,
   type RunReads, type WorkflowResult,
 } from './engine.js';
-import { evaluateExpression, isTruthy } from './expression.js';
+import { evaluateExpression, isRecord, isTruthy } from './expression.js';
 import { isItem, itemsAfter, itemsOf } from './fan-out.js';
 import { publishRunEnd } from './handoff.js';
 import { archiveUnder, isUnder } from './loop.js';
@@ -344,11 +344,21 @@ function retryInstance(run: RunState, state: StepState, now: string): void {
   repend(state);
 }
 
+/**
+ * The command that starts a run like `run`: `teamai benchmark run <suite>` for the benchmark workflow, which plans its
+ * suite and sets its timeout, else `teamai workflow start <name>`.
+ */
+function restartCommand(run: RunState): string {
+  const inputs = isRecord(run.inputs) ? run.inputs : {};
+  if (run.name !== 'benchmark' || typeof inputs.suite !== 'string') return `teamai workflow start ${run.name}`;
+  return `teamai benchmark run ${inputs.suite}${inputs.aliases === 'member' ? ' --member-aliases' : ''}`;
+}
+
 /** Retries a step and its dependency cone, retaining pass history and reopening a settled run. */
 export async function retryStep(config: LocalConfig, runId: string, secrets: Record<string, string>, step: string): Promise<WorkflowEnvelope> {
   return controlRun(config, runId, secrets, async (run, now, finish) => {
     if (isIsolated(run)) {
-      return error('not_retryable', `Run ${run.id} is isolated: it runs only on the machine that started it, and a step that ran again would change what it already admitted or measured. Start a new run: teamai workflow start ${run.name}${run.benchmark ? ' --benchmark' : ''}`);
+      return error('not_retryable', `Run ${run.id} is isolated: it runs only on the machine that started it, and a step that ran again would change what it already admitted or measured. Start a new run: ${restartCommand(run)}`);
     }
     if (run.finalizing) return error('not_retryable', `Run ${run.id} is running its finally steps; retry a step once the run ends`);
     if (run.definition.finally?.some((item) => item.id === step)) {

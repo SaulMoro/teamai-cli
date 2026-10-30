@@ -166,7 +166,7 @@ describe('a benchmark run once it has started', () => {
     expect(early.error).toBeUndefined();
     expect(leased).toMatchObject({ data: { lease: { step: 'trials.r1.fix.claude.prompt' } } });
     expect(late.error).toBeUndefined();
-    expect(retried.error).toMatchObject({ code: 'not_retryable', message: expect.stringContaining('is isolated: it runs only on the machine that started it, and a step that ran again would change what it already admitted or measured. Start a new run: teamai workflow start benchmark') });
+    expect(retried.error).toEqual({ code: 'not_retryable', message: `Run ${runId} is isolated: it runs only on the machine that started it, and a step that ran again would change what it already admitted or measured. Start a new run: teamai benchmark run fix` });
     expect(published.error).toMatchObject({ code: 'isolated_run' });
     expect(claimed.error).toMatchObject({ code: 'isolated_run' });
     expect(nextClaimed.error).toMatchObject({ code: 'isolated_run' });

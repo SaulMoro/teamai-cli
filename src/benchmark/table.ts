@@ -1,17 +1,14 @@
 /**
- * The results and usage tables and the task by arm matrix: one pure function over an end record. The `done` envelope
- * of every `next` on an ended benchmark run carries them as `benchmark: { table, text }`, and the local driver prints
- * `text` when the run ends. It reads the record, not the run, so it works with recording off (buildEndRecord is pure)
- * and on a published record after the suite left the cache.
+ * The results and usage tables and the task by arm matrix: one pure function over a benchmark record, which
+ * `teamai benchmark report` prints and the dashboard shows. It reads the record, not the run, so it works on a
+ * published record after the suite left the cache.
  */
 import type { AgentObservation } from '../agent-observation.js';
 import { isNativeModelAlias } from '../models/aliases.js';
-import type { WorkflowRunRecord } from '../workflow/records.js';
 import { TRIAL_RESULTS, type Baseline, type BenchmarkRecord, type TrialResult } from './result.js';
 
 type RecordedArm = BenchmarkRecord['arms'][number];
 type RecordedTrial = BenchmarkRecord['trials'][number];
-type RecordedStep = NonNullable<WorkflowRunRecord['steps']>[number];
 
 export interface ArmResults extends Pick<RecordedArm, 'tool' | 'model' | 'effort' | 'source' | 'team'> {
   arm: string;
@@ -92,9 +89,8 @@ const RESULT_COLUMNS = { passed: 'Passed', failed: 'Failed', error: 'Error', uns
 const INVALID_REASONS = { invalid: 'invalid: check passes without changes', could_not_run: 'check could not run' } as const satisfies Record<BenchmarkTable['invalid'][number]['baseline'], string>;
 const TOKEN_COMPONENTS = ['input', 'output'] as const;
 
-/** What benchmarkTable reads: an end record's benchmark block, and its step entries for what each prompt ran as. */
+/** What benchmarkTable reads: a benchmark record, whose trials carry what each prompt ran as. */
 export interface BenchmarkTableInput {
-  steps?: ReadonlyArray<Pick<RecordedStep, 'step' | 'agent'>>;
   benchmark: BenchmarkRecord;
 }
 
@@ -104,12 +100,9 @@ export interface ObservedTrial {
   ranAs?: AgentObservation;
 }
 
-/** Each trial of `record`, in record order, with what its prompt ran as: the trial's own, or its step entry's. */
+/** Each trial of `record`, in record order, with what its prompt ran as. */
 export function observedTrials(record: BenchmarkTableInput): ObservedTrial[] {
-  return record.benchmark.trials.map((trial) => {
-    const agent = trial.agent ?? record.steps?.findLast((entry) => entry.step === trial.step)?.agent;
-    return agent && 'v' in agent ? { trial, ranAs: agent } : { trial };
-  });
+  return record.benchmark.trials.map((trial) => (trial.agent ? { trial, ranAs: trial.agent } : { trial }));
 }
 
 /** The usage of `trials`: medians of what their tools stated, and the cost of the trials whose prompt ran. */

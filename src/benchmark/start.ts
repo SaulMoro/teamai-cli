@@ -1,6 +1,6 @@
 /**
- * `teamai workflow start <suite> --benchmark`: the shell around plan.ts. Every refusal is an error envelope before a
- * run exists, so a refused start leaves no run and no record. Each refusal says what happened and what to do.
+ * `teamai benchmark plan` and `try`: the shell around plan.ts. A suite that cannot be planned is refused before the
+ * run's trials exist, so `teamai benchmark run` leaves no run. Each refusal says what happened and what to do.
  */
 import fs from 'node:fs/promises';
 import os from 'node:os';
@@ -13,67 +13,34 @@ import type { PinnedScorer } from '../scorers/pin.js';
 import { resolveTeamRef, TeamRefError } from '../team-ref.js';
 import { isAgentToolId } from '../tools.js';
 import type { LocalConfig } from '../types.js';
-import { loadCachedSuite, readSuiteFiles, withTeamRevision } from '../workflow/cache.js';
-import { createRun, error } from '../workflow/engine.js';
+import { withTeamRevision } from '../workflow/cache.js';
+import { loadCachedSuite, readSuiteFiles } from './suite-cache.js';
+import { error } from '../workflow/engine.js';
 import { runDeadline } from '../workflow/limits.js';
 import { findAttemptRun } from '../workflow/run-location.js';
 import { judgeUnavailable } from '../workflow/scoring.js';
-import type { DriverIdentity, RunState, WorkflowEnvelope, WorkflowFailure } from '../workflow/types.js';
-import type { DriverCan } from '../workflow/requirements.js';
+import type { WorkflowEnvelope, WorkflowFailure } from '../workflow/types.js';
 import { formatDiagnostic } from '../workflow/parse.js';
 import { git } from '../workflow/worktree.js';
-import { addedOf, compileBundle, compilePlan, freezePlan, runSourceHash, type BenchmarkPlan, type PlannedArm } from './plan.js';
+import { addedOf, compileBundle, freezePlan, type BenchmarkPlan, type PlannedArm } from './plan.js';
 import { parseSuite, type Arm, type Suite, type TaskJudge } from './suite.js';
 import type { TeamSelection } from '../workflow/clone.js';
 import type { Added, ArmTeam } from './terms.js';
 import { commitCacheOf } from '../workflow/place/place.js';
 import { commitCheckFiles, trialBlocker, tryCheckAt, type CheckRun, type CommittedSuite } from './trial.js';
 
-export interface BenchmarkStart {
-  secrets: Record<string, string>;
-  /** The member's checkout: the run's `checkout`, where control commands run, and where trials fetch task commits from. */
+/** What planning reads besides the suite. */
+interface BenchmarkStart {
+  /** The member's checkout, where trials fetch task commits from. */
   checkout: string;
-  base?: RunState['base'];
-  driver?: DriverIdentity;
-  runMode?: RunState['runMode'];
-  /** `--member-aliases`: resolve arm models with this member's ~/.teamai/models/aliases.yaml over the team's. */
+  /** `--aliases member`: resolve arm models with this member's ~/.teamai/models/aliases.yaml over the team's. */
   memberAliases: boolean;
-  /** What the local driver, the run's only driver, gives strict requirements. */
-  alone?: DriverCan;
-}
-
-/**
- * Reads the last valid version of suite `name` this member pulled, under the config's selection, and creates a run of
- * its frozen plan. Trials get the team assets of the team revision this checkout last pulled, never the default-branch
- * head, and each arm the model its alias names for its tool at that revision. A suite that needs a judge, for its
- * scorers or a task judged by success criteria, starts only where a judge can run.
- */
-export async function startBenchmark(config: LocalConfig, name: string, options: BenchmarkStart): Promise<WorkflowEnvelope> {
-  const frozen = await freezeSuite(config, name, options);
-  if (!frozen.ok) return frozen.refused;
-  const { suite, plan, committed, pinned } = frozen;
-  const { definition, scorers: generated } = compilePlan(plan, committed);
-  return createRun(config, {
-    name: suite.name,
-    sourceHash: runSourceHash(plan),
-    teamRevision: plan.baselineTeamRevision,
-    origin: { source: 'team' },
-    definition,
-    scorers: { ...pinned, ...generated },
-    benchmark: plan,
-    secrets: options.secrets,
-    checkout: options.checkout,
-    ...(options.base ? { base: options.base } : {}),
-    ...(options.driver ? { driver: options.driver } : {}),
-    ...(options.runMode ? { runMode: options.runMode } : {}),
-    ...(options.alone ? { alone: options.alone } : {}),
-  });
 }
 
 /**
  * What `teamai benchmark plan` prints: the workflow bundle a benchmark run's `from` step runs, its team scorers pinned at
  * `teamRevision`, the frozen baseline, and `plan`, the measurement its `check` and `report` steps read. Each is frozen
- * as `startBenchmark` freezes it, and the suite's timeout comes with them.
+ * as `planBenchmark` freezes it, and the suite's timeout comes with them.
  */
 export interface BenchmarkPlanned {
   definition: { definition: Record<string, unknown>; workflows: Record<string, never>; scorers: Record<string, PinnedScorer>; teamRevision: string };
@@ -81,11 +48,11 @@ export interface BenchmarkPlanned {
 }
 
 /**
- * Freezes suite `name` as `startBenchmark` does, and answers the bundle and plan of a benchmark run, with the suite's
+ * Freezes suite `name`, and answers the bundle and plan of a benchmark run, with the suite's
  * timeout, which bounds the run. Fills the commit cache with every commit a trial reads. Refused, as `team_ref_blocked`,
  * when this machine cannot pin the team a trial runs, so no trial runs with a team it did not ask for.
  */
-export async function planBenchmark(config: LocalConfig, name: string, options: Pick<BenchmarkStart, 'checkout' | 'memberAliases'>): Promise<{ planned: BenchmarkPlanned; timeoutMs: number } | { refused: Refusal }> {
+export async function planBenchmark(config: LocalConfig, name: string, options: BenchmarkStart): Promise<{ planned: BenchmarkPlanned; timeoutMs: number } | { refused: Refusal }> {
   const frozen = await freezeSuite(config, name, options);
   if (!frozen.ok) return { refused: frozen.refused };
   const blocked = await trialBlocker(config);
@@ -130,7 +97,7 @@ type Frozen = { ok: true; suite: Suite; plan: BenchmarkPlan; committed: Committe
  * its team scorers pinned, its check files committed into the commit cache, and every task commit fetched into it.
  * Refused when any of them cannot be, or when the suite needs a judge this machine cannot run.
  */
-async function freezeSuite(config: LocalConfig, name: string, options: Pick<BenchmarkStart, 'checkout' | 'memberAliases'>): Promise<Frozen> {
+async function freezeSuite(config: LocalConfig, name: string, options: BenchmarkStart): Promise<Frozen> {
   const refuse = (refused: Refusal): Refused => ({ ok: false, refused });
   const pulled = await pulledTeamRevision(config, options.checkout);
   if ('refused' in pulled) return refuse(error('team_revision_unpullable', pulled.refused));
@@ -168,7 +135,7 @@ async function freezeSuite(config: LocalConfig, name: string, options: Pick<Benc
     return refuse(error('check_files_unwritable', `Task "${committed.task}" writes files from the suite directory before its check, and they could not be written as a commit into this machine's benchmark cache: ${committed.failed} Fix that, and start again.`));
   }
   const plan = freezePlan({ committed: committed.suite, baselineTeamRevision: revision, selection: selectionOf(config), arms: [first.arm, ...rest], scorers: pinned });
-  const { scorers: generated } = compilePlan(plan, committed.suite);
+  const { scorers: generated } = compileBundle(plan, committed.suite);
   const criteria = found.tasks.find((task) => task.judge.kind === 'criteria');
   const needs = found.scorers.length > 0 ? `its scorers ${found.scorers.join(', ')}` : criteria ? `task "${criteria.id}" has successCriteria` : undefined;
   const unjudged = needs === undefined ? undefined : await judgeUnavailable(config, { ...pinned, ...generated });
@@ -341,21 +308,20 @@ function selectionOf(config: LocalConfig): TeamSelection {
 }
 
 /**
- * `teamai benchmark try <task file>`, and `teamai workflow start <suite> --benchmark --try <task file>`, which also names
- * the suite the task file must be in: whether a task's check tells its fix from no change,
- * before the task reaches a suite. Reads the task file and the suite.yaml two directories up from it as written, with no
+ * `teamai benchmark try <task file>`: whether a task's check tells its fix from no change, before the task reaches a
+ * suite. Reads the task file and the suite.yaml two directories up from it as written, with no
  * install, and validates both as pull does. A check task's check must fail by its own exit at `startingCommit`, as its
  * baseline must, and with `source.fix`, pass at the fix with the protected paths as `startingCommit` has them, as a
  * trial's check would read a correct change. Each runs in a fresh clone from `checkout`, or from a cache that fetched the
  * commit by SHA from the suite repo as start does, under the suite's setup and timeout. No run, arm, trial, judge or
  * record.
  */
-export async function tryBenchmarkTask(file: string, options: { suite?: string; checkout: string; signal?: AbortSignal; progress: (line: string) => void }): Promise<WorkflowEnvelope> {
+export async function tryBenchmarkTask(file: string, options: { checkout: string; signal?: AbortSignal; progress: (line: string) => void }): Promise<WorkflowEnvelope> {
   const suiteFile = path.join(path.dirname(path.dirname(file)), 'suite.yaml');
   const read = (at: string): Promise<string | undefined> => fs.readFile(at, 'utf8').catch(() => undefined);
   const [suiteText, taskText] = [await read(suiteFile), await read(file)];
   if (taskText === undefined) return error('benchmark_not_found', `The task file ${file} could not be read. Pass the path of a task file, such as benchmarks/<suite>/tasks/<task>.yaml in a checkout of the team repo.`);
-  if (suiteText === undefined) return error('benchmark_not_found', `${suiteFile} could not be read: --try reads the suite two directories up from the task file, as in benchmarks/<suite>/tasks/<task>.yaml.`);
+  if (suiteText === undefined) return error('benchmark_not_found', `${suiteFile} could not be read: teamai benchmark try reads the suite two directories up from the task file, as in benchmarks/<suite>/tasks/<task>.yaml.`);
   const posix = (at: string): string => at.split(path.sep).join('/');
   const taskSource = { relativePath: posix(file), content: taskText };
   const files = await readSuiteFiles(path.dirname(suiteFile), posix(path.dirname(suiteFile)), [taskSource]);
@@ -363,9 +329,6 @@ export async function tryBenchmarkTask(file: string, options: { suite?: string; 
   if (!parsed.ok) return error('benchmark_invalid', parsed.diagnostics.map(formatDiagnostic).join('\n'));
   const { suite } = parsed;
   const [task] = suite.tasks;
-  if (options.suite !== undefined && suite.name !== options.suite) {
-    return error('invalid_arguments', `${posix(suiteFile)} is suite "${suite.name}", and the command names "${options.suite}". Name the suite the task belongs to: teamai workflow start ${suite.name} --benchmark --try ${file}.`);
-  }
   const { judge, startingCommit } = task;
   if (judge.kind === 'criteria') return tried(task.id, `Task "${task.id}" is judged by successCriteria, so there is no check to try. Its files are valid.`);
   const fix = task.source?.fix;

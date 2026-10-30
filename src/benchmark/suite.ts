@@ -2,9 +2,8 @@
  * Benchmark suites and their tasks, as team files: `benchmarks/<suite>/suite.yaml` and
  * `benchmarks/<suite>/tasks/<task>.yaml`. Each file is parsed once, here, into the domain types below.
  *
- * `syncWorkflowDefinitions` calls `parseSuite` in the same tree walk that syncs scorers and workflows, and returns
- * suites as `result.benchmarks` with their diagnostics in `result.invalid`. Nothing after this module validates a suite
- * again.
+ * `syncTeamDefinitions` calls `parseSuite` right after it syncs scorers and workflows, and returns suites as
+ * `result.benchmarks` with their diagnostics in `result.invalid`. Nothing after this module validates a suite again.
  */
 import { createHash } from 'node:crypto';
 import path from 'node:path';

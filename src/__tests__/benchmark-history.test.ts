@@ -37,7 +37,6 @@ function run({ id, suite = 'fix-auth', version = 'v1', taskEdit = '', startedAt,
 }): BenchmarkRunInput {
   const tasks = [...Object.keys(trials), ...invalid, ...notRun];
   const baseline = (task: string): Baseline => (invalid.includes(task) ? 'invalid' : notRun.includes(task) ? 'not_run' : 'valid');
-  const steps: NonNullable<BenchmarkRunInput['steps']>[number][] = [];
   let order = 0;
   return {
     run: id, source, username, startedAt,
@@ -49,18 +48,17 @@ function run({ id, suite = 'fix-auth', version = 'v1', taskEdit = '', startedAt,
         const step = `trials.r${repetition + 1}.${task}.${arm}.prompt`;
         const spent = unstarted.includes(task) ? undefined : usage[arm];
         const own = arms.find(({ name }) => name === arm);
-        if (spent && own) {
-          const tool = ranOn[arm] ?? own.tool;
-          const toolVersion = versions[tool];
-          steps.push({ step, agent: { v: 1, tool: { name: tool, ...(toolVersion ? { version: toolVersion } : {}) }, ...(own.model ? { model: { reported: own.model } } : {}), team: { revision: `team-${id}`, localChanges: false }, teamai: '0.0.0', driver: 'local' } });
-        }
+        const tool = ranOn[arm] ?? own?.tool;
+        const toolVersion = tool === undefined ? undefined : versions[tool];
+        const agent = spent && own && tool !== undefined
+          ? { v: 1 as const, tool: { name: tool, ...(toolVersion ? { version: toolVersion } : {}) }, ...(own.model ? { model: { reported: own.model } } : {}), team: { revision: `team-${id}`, localChanges: false }, teamai: '0.0.0', driver: 'local' }
+          : undefined;
         return {
-          task, arm, repetition: repetition + 1, order: order++, step, result,
+          task, arm, repetition: repetition + 1, order: order++, step, result, ...(agent ? { agent } : {}),
           ...(spent ? { tokens: { input: spent.tokens, output: 0, complete: true }, durationMs: spent.durationMs, ...(spent.cost === undefined ? {} : { cost: { amount: spent.cost, unit: 'USD', complete: true } }) } : {}),
         };
       }))),
     },
-    steps,
   };
 }
 

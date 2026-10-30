@@ -16,7 +16,7 @@
  * scanners (`scanTeamForPull`), the same manifest loaders, the same
  * `NAMESPACE_AXIS` mapping, the same agent parser and the same secret
  * scrubber — so a branch this command calls clean is one pull reads the same
- * way. Workflow and scorer files reuse `syncWorkflowDefinitions` with dry-run
+ * way. Workflow and scorer files reuse `syncTeamDefinitions` with dry-run
  * and an empty data home, and that check does not update this machine's
  * caches. It deliberately does not re-implement any of that.
  */
@@ -49,7 +49,8 @@ import { isIgnored, listFilesRecursive, pathExists, readFileIfExists, writeFile,
 import { getFileContentAtRev, getHeadCommit, listTreeAtRev } from './utils/git.js';
 import { isSilent, log, setSilent } from './utils/logger.js';
 import { redact } from './utils/redact.js';
-import { formatUnknownScorer, loadCachedWorkflow, loadWorkflowTree, syncWorkflowDefinitions, type UnknownScorer } from './workflow/cache.js';
+import { syncTeamDefinitions } from './benchmark/suite-cache.js';
+import { formatUnknownScorer, loadCachedWorkflow, loadWorkflowTree, type UnknownScorer } from './workflow/cache.js';
 import { formatDiagnostic, INVOKE_ALIAS_SINCE, parseWorkflow } from './workflow/parse.js';
 import { stepModelUnavailableText } from './workflow/step-model.js';
 import { stepWorkflow, type WorkflowDefinition, type WorkflowDiagnostic, type WorkflowStep } from './workflow/types.js';
@@ -1122,7 +1123,7 @@ async function workflowFindings(repoDir: string, received: readonly Received[]):
   const wasSilent = isSilent();
   setSilent(true);
   try {
-    const result = await syncWorkflowDefinitions(reviewTreeConfig(repoDir, dataHome), {
+    const result = await syncTeamDefinitions(reviewTreeConfig(repoDir, dataHome), {
       dryRun: true,
       everyNamespace: true,
       scopeLabel: 'review',
@@ -1271,7 +1272,7 @@ async function receivedDefinitions(config: LocalConfig): Promise<Received> {
   setSilent(true);
   try {
     const workflows = [];
-    const sync = await syncWorkflowDefinitions(scratch);
+    const sync = await syncTeamDefinitions(scratch);
     for (const name of sync.cached) {
       const cached = await loadCachedWorkflow(scratch, name);
       const tree = cached && await loadWorkflowTree(scratch, cached);

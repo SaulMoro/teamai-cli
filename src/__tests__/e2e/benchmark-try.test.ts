@@ -1,7 +1,6 @@
 /**
  * Real CLI: `teamai benchmark try <task file>` in a checkout of the suite's repo, reading the task file and its suite from
- * a team repo checkout beside it, under a HOME where teamai init never ran. The refusals of the older
- * `workflow start <suite> --benchmark --try <task file>`, which names its suite and needs --sandbox, stay on that command.
+ * a team repo checkout beside it, under a HOME where teamai init never ran.
  */
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -74,11 +73,11 @@ arms:
   - name: claude
 timeout: 5m
 ${suiteLines}`);
-  /** Writes task file `name` and runs `args`, by default `benchmark try` on it. */
-  const tryTask = (name: string, taskText: string, args = (file: string): string[] => ['benchmark', 'try', file]): Promise<Result> => {
+  /** Writes task file `name` and runs `benchmark try` on it. */
+  const tryTask = (name: string, taskText: string): Promise<Result> => {
     fs.writeFileSync(path.join(suiteDir, 'tasks', `${name}.yaml`), taskText);
     return new Promise((resolve) => {
-      const child = spawn(process.execPath, [CLI, ...args(`../team/benchmarks/fix/tasks/${name}.yaml`)], { cwd: work, env, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(process.execPath, [CLI, 'benchmark', 'try', `../team/benchmarks/fix/tasks/${name}.yaml`], { cwd: work, env, stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
       child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
@@ -151,19 +150,6 @@ describe('benchmark try', () => {
     expect(fs.existsSync(teamai) ? fs.readdirSync(teamai, { recursive: true }).filter((entry) => entry !== 'env-exec-bash-env.sh') : []).toEqual([]);
     const trials = path.join(tmp, 'teamai-clones');
     expect(fs.existsSync(trials) ? fs.readdirSync(trials) : []).toEqual([]);
-  }, 60_000);
-
-  it.each<[string, string[], string, string]>([
-    ['no sandbox', ['--driver', 'local'], 'fix', 'declare it with --sandbox'],
-    ['another suite named', ['--sandbox'], 'other', 'is suite "fix", and the command names "other"'],
-  ])('workflow start --benchmark --try refuses %s, and runs nothing', async (_case, flags, suite, expected) => {
-    const { commits, tryTask } = fixture();
-
-    const result = await tryTask('pod-startup', task({ start: commits.start, fix: commits.fix }), (file) => ['workflow', 'start', suite, '--benchmark', '--try', file, ...flags]);
-
-    expect(result.code, said(result)).toBe(1);
-    expect(message(result)).toContain(expected);
-    expect(result.stderr).not.toContain('trying the check');
   }, 60_000);
 
   // check.add writes its files from the fix at both commits, whether or not startingCommit has them.

@@ -27,7 +27,6 @@ import type { RunMode } from '../launch-context.js';
 import type { RunOrigin } from '../default-workflows.js';
 import { uniqueOutcomes, type WorkOutcome } from '../outcomes.js';
 import { stepDefinitions } from './scope.js';
-import { benchmarkRecord, type BenchmarkRecord } from '../benchmark/result.js';
 import { isIsolated } from './workspace.js';
 import { snapshotPath } from './snapshot.js';
 import { installOwner, runLockPath } from './store.js';
@@ -119,8 +118,6 @@ export type WorkflowRunRecord = {
   iterations?: number;
   /** The pull requests the run delivered, in the order they first appeared. Public on a public team repo; absent when it delivered none. */
   prs?: string[];
-  /** An ended benchmark run's plan and trial results; absent for a workflow run and while a benchmark runs. */
-  benchmark?: BenchmarkRecord;
   /** The run opens a clone, so it stays on the machine that started it, and its steps are measurements in no workflow total. */
   isolated?: true;
   username: string;
@@ -280,7 +277,6 @@ export function buildEndRecord(
     iterations: run.settledCount ?? run.settledAttempts.length,
     ...(prs.length ? { prs } : {}),
     ...(isIsolated(run) ? { isolated: true as const } : {}),
-    ...(run.benchmark && run.status !== 'running' ? { benchmark: benchmarkRecord(run, { plan: run.benchmark, prefix: '' }) } : {}),
   };
 }
 
@@ -299,7 +295,6 @@ export function mergeRecord(origin: WorkflowRunRecord | null, next: WorkflowRunR
   if (next.end === undefined) delete merged.end;
   if (next.failure === undefined) delete merged.failure;
   if (next.prs === undefined) delete merged.prs;
-  if (next.benchmark === undefined) delete merged.benchmark;
   return merged;
 }
 
@@ -669,9 +664,8 @@ export function mergeWorkflowStats(
   }
   let { runs = 0, succeeded = 0, failed = 0, totalDurationMs = 0 } = current;
   const fold = (record: WorkflowRunRecord, sign: 1 | -1): void => {
-    // An isolated run's steps are measurements, not workflow outcomes, so it is in no workflow total. A benchmark record
-    // published before records said isolated is one.
-    if (record.username !== username || record.isolated === true || record.benchmark !== undefined) return;
+    // An isolated run's steps are measurements, not workflow outcomes, so it is in no workflow total.
+    if (record.username !== username || record.isolated === true) return;
     runs += sign;
     if (record.status === 'succeeded') succeeded += sign;
     if (record.status === 'failed') failed += sign;

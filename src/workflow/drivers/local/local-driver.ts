@@ -25,10 +25,7 @@ import { isRecord } from '../../expression.js';
 import { MAX_TIMER_DELAY } from '../../shell-command.js';
 import { judgeRunEntries } from '../../scoring.js';
 import { budgeted, runDeadline } from '../../limits.js';
-import { benchmarkNotices, trialBlocker, Trials } from '../../../benchmark/trial.js';
-import { PreparedTrialLeaseSchema } from '../../../benchmark/terms.js';
 import { resolveCliPath } from '../../../utils/cli-path.js';
-import { z } from 'zod';
 import {
   createLocalToolAdapter,
   type LocalToolAdapter,
@@ -42,9 +39,9 @@ import { memberTools, type MemberTool } from '../../../tool-launch/call.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../../tool-launch/process-stop.js';
 import { executableOf, isLaunchTool, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, type LaunchTool } from '../../../tool-launch/tools.js';
 import { chooseStepModel, loadDeployedAgent } from '../../step-model.js';
-import type { DriverIdentity, RunState, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
+import type { DriverIdentity, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
 import { isWorkflowError, WORKSPACE_MODES } from '../../types.js';
-import { cloneBranchOf, type SessionRef } from '../../workspace.js';
+import type { SessionRef } from '../../workspace.js';
 import { headCommit } from '../../worktree.js';
 
 const STOP_SIGNALS: readonly NodeJS.Signals[] = ['SIGINT', 'SIGQUIT', 'SIGTERM', 'SIGHUP'];
@@ -146,8 +143,6 @@ interface Lease extends LeaseWire {
   processEnv?: NodeJS.ProcessEnv;
   /** Set once the step has a directory to run in. */
   cwd?: string;
-  /** A benchmark trial's prompt, which Trials prepared and set up in the clone of this branch, `cwd`. */
-  preparedIn?: string;
 }
 
 /**
@@ -261,18 +256,6 @@ function parseLease(raw: unknown): Lease | undefined {
 }
 
 /**
- * The prompt lease of a benchmark run `run`, which `Trials.next` prepared in a clone, as this driver runs it, or
- * undefined when it cannot.
- */
-function parseTrialLease(raw: unknown, run: RunState | undefined): Lease | undefined {
-  const trial = PreparedTrialLeaseSchema.safeParse(raw);
-  const lease = LeaseWireSchema.safeParse(raw);
-  if (!trial.success || !lease.success || !run) return undefined;
-  const branch = cloneBranchOf(run, trial.data.step);
-  return branch !== undefined ? { ...lease.data, cwd: trial.data.cwd, preparedIn: branch } : undefined;
-}
-
-/**
  * Gets the lease a place to run under `root`, with the team env resolved for it. `signal` stops setup, which
  * then fails, and the workspace it was preparing is removed.
  */
@@ -295,8 +278,6 @@ async function stageLease(lease: Lease, { config, lock, root, env, mode, signal 
   } else {
     lease.processEnv = withRunningCli(process.env);
   }
-  // Trials prepared and set up its clone.
-  if (lease.preparedIn !== undefined) return undefined;
   const prepared = await preparePlace({ config, lock, root, lease: placeLeaseOf(lease) });
   if (prepared.kind !== 'prepared') return prepared.failure;
   lease.cwd = prepared.dir;
@@ -382,7 +363,7 @@ async function promptReport(
   // A worktree has its own pull record, so the tool launched there is observed and bound as that checkout. A clone has
   // its own install, never the member's config, and none when its place installs no team.
   const contract = lease.workspace;
-  const clone = contract && contract.mode !== 'read-only' && contract.clone ? contract.branch : lease.preparedIn;
+  const clone = contract && contract.mode !== 'read-only' && contract.clone ? contract.branch : undefined;
   const teamConfig = clone !== undefined
     ? (await preparedClone(config, lock.run, clone))?.install
     : contract && lease.cwd ? await detectProjectConfig(lease.cwd) ?? config : config;
@@ -563,8 +544,6 @@ function isSandbox(config: LocalConfig, options: Pick<LocalDriverOptions, 'sandb
   return options.sandbox === true || config.workflows?.sandbox === true;
 }
 
-const DoneTableSchema = z.object({ benchmark: z.object({ text: z.string() }) });
-
 /** A signal that aborts at `expiresAt`. A deadline further away than a timer can wait never aborts it. */
 function deadlineSignal(expiresAt: string | undefined): AbortSignal {
   const remaining = expiresAt === undefined ? undefined : Math.max(0, Date.parse(expiresAt) - Date.now());
@@ -621,8 +600,6 @@ async function removeGitLocks(gitDir: string): Promise<void> {
 async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options: LocalDriverOptions): Promise<WorkflowEnvelope> {
   const runId = lock.run;
   const started = await readRun(config, runId);
-  // A benchmark run's leases come through Trials, which prepares each trial prompt in its clone and runs each check.
-  const benchmark = typeof started === 'object' ? started.benchmark : undefined;
   // Places go under the checkout the run started from, wherever in it the driver runs.
   const root = await placeRoot({ cwd, checkout: typeof started === 'object' ? started.checkout : undefined });
   const unreconciled = await reconcileTakenCopies(config, runId, root);
@@ -630,13 +607,12 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
   // Resolved once per drive, so a resume where a person attends runs attended whatever mode the run started in.
   const mode = resolveRunMode(process.env);
   const canHitl = options.hitl ?? personAnswers(mode);
-  // It launches a step that names its tool, a benchmark's trials among them, on the tools this machine has, whatever
+  // It launches a step that names its tool on the tools this machine has, whatever
   // workflow a step's output brings later. It is the run's only driver, so a step whose tool it cannot launch fails
   // rather than waits.
   const tools = LAUNCH_TOOLS.filter(onPath);
   const can = localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools });
   const driver = driverIdentity('local', cwd);
-  if (benchmark) for (const line of benchmarkNotices(benchmark, can, await trialBlocker(config))) log.info(line);
   // A driver killed before cleanup, of this run or any other, left clones behind.
   await sweepClones(config);
   const adapter = options.adapter ?? createLocalToolAdapter();
@@ -671,7 +647,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
     dying.set(attempt, { step: running.lease.step, lease: running.lease, command: running.command });
     void running.command.stop();
   };
-  // Work the loop does itself between leases: the trials teamai prepares and checks, and the run's judges.
+  // Work the loop does itself between leases: the run's judges.
   let working: AbortController | undefined;
   let interactiveIgnores: readonly NodeJS.Signals[] = [];
   let signalled: NodeJS.Signals | undefined;
@@ -719,11 +695,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
   const report = async (body: ReportBody, lease: Lease): Promise<WorkflowEnvelope | undefined> => {
     const secrets = env?.secrets ?? await knownSecrets(config);
     await maskResultFile(attemptResultPath(config, runId, lease.attempt), secrets);
-    // Trials completes a trial's report with what teamai observed of its clone.
-    // teamai fills a prepared trial's exit, from the clone it commits.
-    const { exitCode: _exitCode, ...prepared } = body;
-    const completed = lease.preparedIn !== undefined ? await Trials.report(config, runId, prepared) : { report: body };
-    const answer = 'report' in completed ? await managedReport({ config, runId, report: completed.report, secrets, lock }) : completed;
+    const answer = await managedReport({ config, runId, report: body, secrets, lock });
     // Cancelled while it ran: the next `next` lists it in `cancelled`, and the run goes on without it.
     if (isWorkflowError(answer)) return answer.error.code === 'lease_cancelled' ? undefined : answer;
     reported.add(body.attempt);
@@ -739,13 +711,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
       const turn = { ...resolved, secrets: rememberSecrets(seen, resolved.secrets) };
       env = turn;
       const asked = { running, canTakeLease, can, autoApprove: options.autoApprove, runMode: mode, ...(base ? { base } : {}), env: turn };
-      const next = benchmark
-        ? await runHere((signal) => Trials.next(config, lock, driver, { ...asked, alone: true, signal }))
-        : await leaseNext(config, runId, driver, { ...asked, alone: true, prepare: true });
-      // Trials.next tells an external driver to ask it again; this driver continues through resume.
-      if (benchmark && isWorkflowError(next) && next.error.code === 'interrupted') {
-        return { error: { code: 'interrupted', message: `Stopped while a trial step was prepared or checked. It stays leased: continue with teamai workflow resume ${runId}${options.sandbox ? ' --sandbox' : ''}.` } };
-      }
+      const next = await leaseNext(config, runId, driver, { ...asked, alone: true, prepare: true });
       if (signalled) continue;
       // A clone whose steps all settled is not needed any more.
       await sweepClones(config, runId);
@@ -760,8 +726,6 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
           prompts.delete(attempt);
           if (failed) return failed;
         }
-        const table = DoneTableSchema.safeParse(next.data.done);
-        if (table.success) process.stderr.write(`${table.data.benchmark.text}\n`);
         return next;
       }
       const hitl = readHitlRequest(next.data.hitl);
@@ -773,13 +737,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
         question = undefined;
       }
       if ('lease' in next.data) {
-        const current = benchmark ? await readRun(config, runId) : undefined;
-        const lease = benchmark ? parseTrialLease(next.data.lease, typeof current === 'object' ? current : undefined) : nextLease;
-        if (!lease) return { error: { code: 'run_unreadable', message: `Run ${runId} returned a lease the local driver cannot run` } };
-        if (reported.has(lease.attempt)) {
-          return { error: { code: 'driver_stuck', message: `Attempt ${lease.attempt} was leased again before it could be reported` } };
+        if (!nextLease) return { error: { code: 'run_unreadable', message: `Run ${runId} returned a lease the local driver cannot run` } };
+        if (reported.has(nextLease.attempt)) {
+          return { error: { code: 'driver_stuck', message: `Attempt ${nextLease.attempt} was leased again before it could be reported` } };
         }
-        held.push(lease);
+        held.push(nextLease);
       }
       const placesBusy = (): Set<string> => new Set([
         ...[...inFlight.values()].map(({ lease }) => placeOf(lease, root)),

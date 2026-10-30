@@ -4,7 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { LocalConfig } from '../types.js';
-import { formatUnknownScorer, loadCachedSuite, syncWorkflowDefinitions } from '../workflow/cache.js';
+import { loadCachedSuite, syncTeamDefinitions } from '../benchmark/suite-cache.js';
+import { formatUnknownScorer } from '../workflow/cache.js';
 import { parseSuite, type SuiteFile } from '../benchmark/suite.js';
 
 const START = 'a'.repeat(40);
@@ -294,8 +295,8 @@ describe('suite sync', () => {
     const dev = { ...config, primaryRole: 'dev' };
     const ops = { ...config, primaryRole: 'ops', dataHome: `${config.dataHome}-ops` };
 
-    const devSync = await syncWorkflowDefinitions(dev);
-    const opsSync = await syncWorkflowDefinitions(ops);
+    const devSync = await syncTeamDefinitions(dev);
+    const opsSync = await syncTeamDefinitions(ops);
 
     expect(devSync.benchmarks.map((suite) => suite.relativePath).sort()).toEqual(['benchmarks/dev/dev-fix/suite.yaml', 'benchmarks/fix/suite.yaml']);
     expect(opsSync.benchmarks.map((suite) => suite.relativePath)).toEqual(['benchmarks/fix/suite.yaml']);
@@ -310,8 +311,8 @@ describe('suite sync', () => {
     const dev = { ...config, primaryRole: 'dev' };
     const ops = { ...config, primaryRole: 'ops', dataHome: `${config.dataHome}-ops` };
 
-    const devSync = await syncWorkflowDefinitions(dev);
-    const opsSync = await syncWorkflowDefinitions(ops);
+    const devSync = await syncTeamDefinitions(dev);
+    const opsSync = await syncTeamDefinitions(ops);
 
     const unknown = (scorer: string) => `benchmarks/fix/suite.yaml: suite "fix" lists scorer "${scorer}", which has no valid scorers/${scorer}.md; the benchmark does not start without it`;
     expect(devSync.unknownScorers.map(formatUnknownScorer)).toEqual([unknown('missing')]);
@@ -321,7 +322,7 @@ describe('suite sync', () => {
   it('caches neither suite of one name in two active namespaces', async () => {
     const config = { ...team({ 'manifest/roles.yaml': ROLES, ...suiteAt('dev/fix', 'fix'), ...suiteAt('ops/fix', 'fix') }), primaryRole: 'dev', additionalRoles: ['ops'] };
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncTeamDefinitions(config);
 
     expect(result.benchmarks).toEqual([]);
     expect(result.invalid).toEqual([expect.objectContaining({
@@ -335,7 +336,7 @@ describe('suite sync', () => {
   it('reports a declared namespace directory that holds suite.yaml itself', async () => {
     const config = { ...team({ 'manifest/roles.yaml': ROLES, 'benchmarks/dev/suite.yaml': suiteText({ name: 'dev' }), 'benchmarks/dev/tasks/fix.yaml': taskText() }), primaryRole: 'dev' };
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncTeamDefinitions(config);
 
     expect(result.benchmarks).toEqual([]);
     expect(result.invalid).toEqual([expect.objectContaining({
@@ -351,7 +352,7 @@ describe('suite sync', () => {
     const config = team({ 'benchmarks/fix/suite.yaml': suiteText(), 'benchmarks/fix/tasks/fix.yaml': HIDDEN, 'benchmarks/fix/check-files/a.test.js': 'a', 'benchmarks/fix/check-files/run.sh': 'run' });
     fs.chmodSync(path.join(config.repo.localPath, 'benchmarks/fix/check-files/run.sh'), 0o755);
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncTeamDefinitions(config);
     write(config.repo.localPath, { 'benchmarks/fix/check-files/a.test.js': 'edited after the sync' });
 
     expect(result.invalid).toEqual([]);
@@ -371,7 +372,7 @@ describe('suite sync', () => {
     const config = team({ 'benchmarks/fix/suite.yaml': suiteText(), 'benchmarks/fix/tasks/fix.yaml': task, 'outside/a.test.js': 'outside' });
     link(path.join(config.repo.localPath, 'benchmarks/fix'), path.join(config.repo.localPath, 'outside'));
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncTeamDefinitions(config);
 
     expect(result.invalid).toEqual([
       expect.objectContaining({ file: 'benchmarks/fix/suite.yaml', message: 'suite fix has no valid task' }),
@@ -383,7 +384,7 @@ describe('suite sync', () => {
     const config = team({ 'benchmarks/fix/suite.yaml': suiteText(), 'benchmarks/fix/tasks/fix.yaml': HIDDEN, 'benchmarks/fix/check-files/a.test.js': 'a', 'outside.js': 'outside' });
     fs.symlinkSync(path.join(config.repo.localPath, 'outside.js'), path.join(config.repo.localPath, 'benchmarks/fix/check-files/b.test.js'));
 
-    await syncWorkflowDefinitions(config);
+    await syncTeamDefinitions(config);
 
     expect((await loadCachedSuite(config, 'fix'))?.tasks[0].judge).toMatchObject({ files: [{ path: 'test/hidden/a.test.js' }] });
   });
@@ -395,7 +396,7 @@ describe('suite sync', () => {
       'benchmarks/fix/check-files/.DS_Store': 'finder', 'benchmarks/fix/check-files/.env.test': 'env', 'benchmarks/fix/check-files/.cache/b.test.js': 'b',
     });
 
-    await syncWorkflowDefinitions(config);
+    await syncTeamDefinitions(config);
 
     expect((await loadCachedSuite(config, 'fix'))?.tasks[0].judge).toMatchObject({
       files: [{ path: 'test/hidden/a.test.js', base64: base64('a') }, { path: 'test/.env.test', base64: base64('env') }],
@@ -404,11 +405,11 @@ describe('suite sync', () => {
 
   it('keeps the last valid version of a suite with no valid task', async () => {
     const config = team(suiteAt('fix', 'fix'));
-    await syncWorkflowDefinitions(config);
+    await syncTeamDefinitions(config);
     const valid = await loadCachedSuite(config, 'fix');
     write(config.repo.localPath, { 'benchmarks/fix/tasks/fix.yaml': taskText({ startingCommit: 'abc1234' }) });
 
-    const result = await syncWorkflowDefinitions(config);
+    const result = await syncTeamDefinitions(config);
 
     expect(result.benchmarks).toEqual([]);
     expect(result.invalid).toContainEqual(expect.objectContaining({ file: 'benchmarks/fix/suite.yaml', message: 'suite fix has no valid task' }));

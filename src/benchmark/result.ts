@@ -1,5 +1,5 @@
 /**
- * How a trial's steps become its result, and the record's `benchmark` block. Pure over an ended run: the step states
+ * How a trial's steps become its result, and the benchmark record. Pure over an ended run: the step states
  * the engine keeps, with the result each check step output, the frozen plan, and the judge verdicts the run froze when
  * it ended (`run.verdicts`). It classifies nothing: `teamai benchmark check` did that once, when the check ran.
  *
@@ -26,13 +26,13 @@ export type TrialResult = (typeof TRIAL_RESULTS)[number];
 const BASELINES = ['valid', 'invalid', 'could_not_run', 'not_run', 'not_needed'] as const;
 export type Baseline = (typeof BASELINES)[number];
 
-/**
- * `record.benchmark`. A reader rebuilds the comparison from the record alone, after the suite left the cache. No
- * prompts, commands, credential URLs or local paths.
- */
 /** The not enforced requirements of a trial's prompt that the record keeps: those of the suite's limits. */
 const UNENFORCED_LIMITS = ['max_turns', 'budget', 'on_limit'] as const;
 
+/**
+ * A benchmark's plan and trial results. A reader rebuilds the comparison from the record alone, after the suite left the
+ * cache. No prompts, commands, credential URLs or local paths.
+ */
 export const BenchmarkRecordSchema = z.object({
   suite: z.object({ name: z.string(), sourceHash: z.string() }),
   repetitions: z.number().int(),

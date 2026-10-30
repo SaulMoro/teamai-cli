@@ -1,26 +1,23 @@
 /**
- * The frozen benchmark and the workflow it runs as. Pure, with zod and terms.ts as its only runtime imports, so
- * store.ts can parse `run.benchmark` with `BenchmarkPlanSchema` without pulling in the start shell.
+ * The frozen benchmark and the workflow it runs as. Pure, with zod and terms.ts as its only runtime imports.
  *
- * `freezePlan` turns a parsed suite and what start resolved into the `BenchmarkPlan` the run keeps in `run.benchmark`.
- * `compilePlan` turns the plan into an ordinary `WorkflowDefinition` the run keeps in `run.definition`, plus the generated
- * correctness scorers it keeps in `run.scorers`. Trials are generated steps, so limits, records, snapshot rules, scoring
- * and the dashboard read them as they read any step.
+ * `freezePlan` turns a parsed suite and what `teamai benchmark plan` resolved into the `BenchmarkPlan` that step prints.
+ * `compileBundle` turns the plan into the workflow the run's `from` step runs, plus the generated correctness scorers its
+ * prompts list. Trials are ordinary steps, so limits, records, snapshot rules, scoring and the dashboard read them as
+ * they read any step.
  *
- * The plan is the measurement (hashes, commits, arms, the ordered trial list). The definition is how it executes
+ * The plan is the measurement (hashes, commits, arms, the ordered trial list). The workflow is how it executes
  * (prompts, commands, the step graph). Neither restates the other.
  */
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { isLabelShaped, isNameShaped } from '../agent-observation.js';
 import type { PinnedScorer } from '../scorers/pin.js';
-import type { WorkflowDefinition, WorkflowStep } from '../workflow/types.js';
-import type { Requirements } from '../workflow/requirements.js';
 import type { Suite, Task, TaskJudge } from './suite.js';
 import type { CommittedSuite } from './trial.js';
 import { CommitSchema, TeamSelectionSchema, type CloneTeam, type TeamSelection } from '../workflow/clone.js';
 import { CHECK_RESULTS } from './check.js';
-import { AddedSchema, ArmTeamSchema, BenchmarkNameSchema, TrialLimitsSchema, type Added, type ArmTeam, type PromptTerms, type TrialLimits } from './terms.js';
+import { AddedSchema, ArmTeamSchema, BenchmarkNameSchema, TrialLimitsSchema, type Added, type ArmTeam } from './terms.js';
 
 const Sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 
@@ -174,103 +171,15 @@ export function runSourceHash({ suite, tasks }: { suite: Pick<BenchmarkPlan['sui
 
 const BASELINES = 'baselines';
 
-/** What `teamai benchmark check` prints, the output of a baseline and a trial's check. */
-const CHECK_OUTPUT = { type: 'object', fields: { result: { type: 'enum', values: [...CHECK_RESULTS] } } } as const satisfies WorkflowStep['output'];
-
-/** What every baseline and trial step requires. */
-const SANDBOXED = { isolation: 'sandbox', strict: true } as const satisfies Requirements;
-
 /** The end the generated workflow reaches once every trial step settled, whatever the trials' results. */
 const SETTLED_END = 'settled';
-
-/**
- * The generated workflow:
- *
- *   baselines                     inline (check tasks only); requires a strict sandbox; outputs { <task>: its baseline's result }
- *     <task>                      command teamai benchmark check --baseline; workspace: a clone of the starting commit
- *                                 with team none; trial.kind baseline; output { result: passed | failed | could_not_run }
- *   r<rep>                        inline, one per repetition; requires a strict sandbox; needs [baselines] and an `if`
- *                                 that reads it, when there are baselines
- *     <task>                      inline; a check task's: if steps.baselines.outputs.<task> == 'failed'
- *       <arm>                     inline, needs [], workspace: a clone of the starting commit with the arm's team (opens
- *                                 the trial's clone), arms in rotated order
- *         prompt                  workspace continue; tool and exact model: the arm's; trial.kind prompt;
- *                                 scorers { the suite's and the task's correctness scorer, sampling: all }
- *         check                   needs [prompt]; command teamai benchmark check --trial; workspace continue;
- *                                 trial.kind check; output { result } (check tasks only)
- *   settled                       needs every scope above; an `if` that reads them; end: settled
- *   ends: { settled: succeeded }  timeout: suite.timeoutMs; setup: suite.setup
- *
- * Why it holds, in engine terms:
- * - A trial's stopped step stops only its own `<arm>` scope. Siblings have no `needs` on each other, so a failed trial
- *   never skips another.
- * - Each `r<rep>` needs `baselines`, so it starts once every baseline settled, and its `if` reads it, so a failed baseline
- *   does not skip it. A baseline that passes, could not run, or failed with no output, makes its task's `if` false:
- *   that task's trials are skipped, which reads `not_run`.
- * - The checks are command steps: what each checks, `teamai benchmark check` reads from the plan by its step's id.
- * - `settled` is end-only, never leased. Its `if` reads its needs, so a stopped scope does not skip it, and its end
- *   maps to `succeeded`. Timeout, limits and cancel still end the run as they end any run.
- * - `<arm>` needs nothing, so its copy grows from no step, where an omitted `needs` would grow it from the baselines.
- * - `<arm>` opens the clone, so prompt and check share it by ancestry, and copy ownership keeps the check on the driver
- *   that ran the prompt.
- * - The prompt carries the arm's `tool` and its exact `model`, so a trial never goes through alias resolution.
- * - `requires: { isolation: sandbox, strict: true }` on every scope reaches every baseline and trial step, so each runs
- *   only on a sandbox that keeps the member's credentials from it, and a local start without one is refused.
- */
-export function compilePlan(plan: BenchmarkPlan, { suite }: CommittedSuite): { definition: WorkflowDefinition; scorers: Record<string, PinnedScorer> } {
-  const tasks = new Map(suite.tasks.map((task) => [task.id, task]));
-  const baselines = suite.tasks.flatMap((task): WorkflowStep[] => (task.judge.kind === 'check'
-    ? [{
-      id: task.id, command: 'teamai benchmark check --baseline', workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: { treatment: 'none' } } },
-      output: CHECK_OUTPUT, trial: { kind: 'baseline' },
-    }]
-    : []));
-  const arms = new Map(plan.arms.map((arm) => [arm.name, arm]));
-  const repetitions = [...new Set(plan.trials.map((trial) => trial.repetition))].map((repetition): WorkflowStep => {
-    const ofRepetition = plan.trials.filter((trial) => trial.repetition === repetition);
-    const taskSteps = [...new Set(ofRepetition.map((trial) => trial.task))].flatMap((id): WorkflowStep[] => {
-      const task = tasks.get(id);
-      if (!task) return [];
-      const armSteps = ofRepetition.filter((trial) => trial.task === id).flatMap((trial): WorkflowStep[] => {
-        const arm = arms.get(trial.arm);
-        return arm ? [{
-          id: arm.name, needs: [], workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: cloneTeamOf(arm.team, plan.selection) } },
-          workflow: { steps: trialSteps(plan, suite, trial, arm, task) },
-        }] : [];
-      });
-      return [{ id, ...(task.judge.kind === 'check' ? { if: `steps.${BASELINES}.outputs.${id} == 'failed'` } : {}), workflow: { steps: armSteps } }];
-    });
-    return { id: `r${repetition}`, workflow: { steps: taskSteps } };
-  });
-  const tried = baselines.length > 0;
-  const scopes: WorkflowStep[] = [
-    ...(tried ? [{ id: BASELINES, requires: SANDBOXED, workflow: { outputs: Object.fromEntries(baselines.map(({ id }) => [id, `steps.${id}.outputs.result`])), steps: baselines } }] : []),
-    ...repetitions.map((repetition): WorkflowStep => ({ ...repetition, requires: SANDBOXED, ...(tried ? { needs: [BASELINES], if: `steps.${BASELINES}.outcome != null` } : {}) })),
-  ];
-  const needs = scopes.map(({ id }) => id);
-  return {
-    definition: {
-      schemaVersion: 'v1alpha1',
-      name: suite.name,
-      description: suite.description ?? `Benchmark suite ${suite.name}`,
-      // `start --benchmark` checks no agent evidence, so a resume does not either: an agent continues a run it may start.
-      invoke: 'allow',
-      timeout: suite.timeoutMs,
-      ...(suite.setup ? { setup: suite.setup } : {}),
-      ends: { [SETTLED_END]: 'succeeded' },
-      steps: [...scopes, { id: SETTLED_END, needs, if: needs.map((id) => `steps.${id}.outcome != null`).join(' && '), end: SETTLED_END }],
-    },
-    scorers: correctnessScorers(suite),
-  };
-}
 
 /** A workflow step as a workflow file writes it, which admission parses. */
 type FileStep = { id: string } & Record<string, unknown>;
 
 /**
  * The workflow a benchmark run's `from` step runs, as a workflow file writes it, with the generated correctness scorers
- * its prompts list. The same graph `compilePlan` builds, without what the engine read of a benchmark run: no trial
- * markers, no `requires`, no `timeout` or `invoke`. The step that runs it holds the strict sandbox, so every step
+ * its prompts list. No `requires`, `timeout` or `invoke`: the step that runs it holds the strict sandbox, so every step
  * beneath it inherits that, and a team's own `benchmark` workflow may relax it; the run's own timeout bounds it.
  *
  *   baselines                     (check tasks only) outputs { <task>: its baseline's result }
@@ -345,42 +254,6 @@ export function compileBundle(plan: BenchmarkPlan, { suite }: CommittedSuite): {
 /** What check.add writes before a check of `judge`: its fix's files, then `checkFiles`, the suite directory's as committed. */
 export function addedOf(judge: Extract<TaskJudge, { kind: 'check' }>, checkFiles: Added | undefined): Added[] {
   return [...(judge.add ? [{ kind: 'fix' as const, ...judge.add }] : []), ...(checkFiles ? [checkFiles] : [])];
-}
-
-function trialSteps(plan: BenchmarkPlan, suite: Suite, trial: PlannedTrial, arm: PlannedArm, task: Task): WorkflowStep[] {
-  const names = [...suite.scorers, ...(task.judge.kind === 'criteria' ? [correctnessScorerName(task.id)] : [])];
-  const prompt: WorkflowStep = {
-    id: 'prompt', prompt: task.prompt, workspace: 'continue', tool: arm.tool,
-    ...(arm.model ? { model: { name: arm.model, ...(arm.effort ? { effort: arm.effort } : {}) } } : {}),
-    trial: promptTerms(trial, arm, task),
-    ...turnLimitsOf(plan.limits),
-    ...(names.length > 0 ? { scorers: { names, sampling: 'all' } } : {}),
-  };
-  switch (task.judge.kind) {
-    case 'check':
-      return [prompt, { id: 'check', needs: ['prompt'], command: 'teamai benchmark check --trial', workspace: 'continue', output: CHECK_OUTPUT, trial: { kind: 'check' } }];
-    case 'criteria':
-      return [prompt];
-    default: {
-      const unhandled: never = task.judge;
-      return unhandled;
-    }
-  }
-}
-
-function promptTerms(trial: PlannedTrial, arm: PlannedArm, task: Task): PromptTerms {
-  return { kind: 'prompt', task: task.id, arm: arm.name, repetition: trial.repetition, order: trial.order };
-}
-
-/** A trial prompt's limits, the suite's `trial`: each ends the agent's turn, and the trial's check or judge decides it. */
-function turnLimitsOf(limits: TrialLimits | undefined): Pick<WorkflowStep, 'timeout' | 'maxTurns' | 'budget' | 'onLimit'> {
-  if (!limits) return {};
-  return {
-    ...(limits.timeoutMs !== undefined ? { timeout: limits.timeoutMs } : {}),
-    ...(limits.maxTurns !== undefined ? { maxTurns: limits.maxTurns } : {}),
-    ...(limits.tokens !== undefined ? { budget: { tokens: limits.tokens } } : {}),
-    onLimit: 'end_turn',
-  };
 }
 
 /** The team a trial's clone installs: the arm's, with the run's asset selection. */

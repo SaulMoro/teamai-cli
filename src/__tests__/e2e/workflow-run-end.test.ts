@@ -121,9 +121,6 @@ steps:
     const skill = await runCLI(['workflow', 'start', 'slow', '--driver', 'skill', '--timeout', '2s'], repo);
     expect(skill.code).toBe(1);
     expect(envelope(skill.stdout)).toMatchObject({ error: { code: 'invalid_arguments', message: '--timeout needs --driver local, or no driver. Start it again without --timeout.' } });
-    const benchmark = await runCLI(['workflow', 'start', 'suite', '--benchmark', '--timeout', '2s'], repo);
-    expect(benchmark.code).toBe(1);
-    expect(envelope(benchmark.stdout)).toEqual({ error: { code: 'invalid_arguments', message: 'A benchmark run takes no --timeout, since its suite sets its timeout. Start it again without it.' } });
   });
 });
 

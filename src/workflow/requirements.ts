@@ -116,7 +116,7 @@ const ENFORCEMENT = {
   setup: 'strict',
   /** A prompt step that names its `tool`: `can.tools` lists it. */
   tools: 'strict',
-  /** A benchmark trial step, or a step in a clone, is leased only through `next --prepare`, so teamai made its clone. Process-only. */
+  /** A step in a clone is leased only through `next --prepare`, so teamai made its clone. Process-only. */
   prepare: 'strict',
 } as const satisfies Record<string, 'strict' | 'bestEffort'> & Record<keyof Floor | 'env', 'strict' | 'bestEffort'>;
 type Enforcement = typeof ENFORCEMENT;
@@ -327,8 +327,6 @@ export interface Offer {
   setup?: Setup;
   /** The tool a prompt step names. */
   tool?: string;
-  /** A benchmark trial step. */
-  trial: boolean;
   /** The lease runs in a clone, which only teamai prepares. */
   clone: boolean;
   /** The caller asked `next --prepare`. */
@@ -383,7 +381,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     ...(offer.tool !== undefined && lacksTool(offer.tool, can) ? ['tools' as const] : []),
     ...(floor.isolation !== undefined && rank(floor.isolation) > rank(provided) ? ['isolation' as const] : []),
     ...(floor.network === false && !can.network ? ['network' as const] : []),
-    ...((offer.trial || offer.clone) && !offer.prepare ? ['prepare' as const] : []),
+    ...(offer.clone && !offer.prepare ? ['prepare' as const] : []),
     ...(offer.interactive && !can.hitl ? ['hitl' as const] : []),
     ...(offer.setup && !can.setup ? ['setup' as const] : []),
     // A strict sandbox keeps its strip list from every process of the step, which only a driver with `can.env: true` does.

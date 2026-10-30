@@ -57,14 +57,10 @@ export function parseScorerQuery(params: URLSearchParams): ScorerQuery {
   };
 }
 
-/**
- * What a run record holds that the view reads: each pass's agent, and whether the run was isolated, which a benchmark
- * record published before records said isolated was (#1180).
- */
+/** What a run record holds that the view reads: each pass's agent, and whether the run was isolated (#1180). */
 const RecordSchema = z.object({
   steps: z.array(z.object({ step: z.string(), pass: z.number(), agent: z.unknown().optional() })).optional(),
   isolated: z.literal(true).optional(),
-  benchmark: z.unknown().optional(),
 });
 
 type RunAgents = { source: 'local' | 'reported'; isIsolated: boolean; agents: Map<string, RecordedAgent> };
@@ -93,7 +89,7 @@ async function runAgents(config: LocalConfig, runId: string, { isLocal, team }: 
     return recorded ? [[passKey(step, pass), recorded] as const] : [];
   }));
   const [local, published] = await Promise.all([isLocal ? readRun(config, runId) : undefined, team.record(runId)]);
-  const isolatedRecord = (record: PublishedRecord): boolean => record.isolated === true || record.benchmark !== undefined;
+  const isolatedRecord = (record: PublishedRecord): boolean => record.isolated === true;
   if (typeof local === 'object') {
     const record = buildEndRecord(local, local.driver, '');
     return { source: 'local', isIsolated: isolatedRecord(record) || (published !== undefined && isolatedRecord(published)), agents: read(record.steps) };

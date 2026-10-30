@@ -193,17 +193,6 @@ describe('benchmark on the local driver', () => {
     expect(fixture.toolLaunches()).toEqual([]);
   }, 120_000);
 
-  it('--describe is refused, as a benchmark takes no inputs, and starts nothing', async () => {
-    const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true });
-    fixtures.push(fixture);
-
-    const described = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--describe']);
-
-    expect(described.code, said(described)).toBe(1);
-    expect(envelope(described).error).toEqual({ code: 'invalid_arguments', message: '--describe shows a workflow\'s metadata and input schemas, and a benchmark takes no inputs: its suite sets its tasks and arms. Start it again without --describe.' });
-    expect(fixture.toolLaunches()).toEqual([]);
-  }, 120_000);
-
   it('a tool that hangs is stopped at the suite timeout', async () => {
     const fixture = await benchmarkFixture({ tool: 'hangs', sandbox: true, suite: FIX_SUITE.replace('timeout: 10m', 'timeout: 20s') });
     fixtures.push(fixture);

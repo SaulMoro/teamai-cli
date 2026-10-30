@@ -12,7 +12,7 @@ import {
   type Expression, type ExpressionPath,
 } from './expression.js';
 import { outputMismatch } from './output.js';
-import { buildEndRecord, publishRunRecords, queueRunRecord, runRecordState } from './records.js';
+import { publishRunRecords, queueRunRecord, runRecordState } from './records.js';
 import { freezeVerdicts, isUnsettled, verdictEntries } from './scoring-entries.js';
 import {
   parseTemplate, renderStrings, renderText, stepExpressions, templatedTexts, templatePaths,
@@ -62,7 +62,6 @@ import type {
 } from './types.js';
 import { hasAction, stepWorkflow } from './types.js';
 import { describeWorkflow } from './describe.js';
-import { benchmarkTable, formatBenchmarkTable, type BenchmarkTable } from '../benchmark/table.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 
 /**
@@ -103,8 +102,6 @@ export interface ReportInput {
   unenforced?: ReportedUnenforced;
   /** The lease limit that ended the prompt's turn, which then succeeded. */
   limit?: Limit;
-  /** Process-only, set by benchmark/trial.ts after it prepared, ran or completed a trial step. Not in REPORT_FIELDS, so no driver can send it. */
-  trialReport?: Record<string, never>;
 }
 
 /** A protocol rejection that retains its actionable code and message. */
@@ -484,7 +481,7 @@ function doneData(run: RunState): Record<string, unknown> {
   const unfinished = finallyStopped(run);
   return { done: {
     run: run.id, outcome: run.status, ...(run.end !== undefined ? { end: run.end } : {}), ...(run.failure ? { failure: run.failure } : {}), ...(prs.length > 0 ? { prs } : {}),
-    ...(outputs ? { outputs } : {}), ...(unfinished.length > 0 ? { finally: unfinished } : {}), ...benchmarkDone(run),
+    ...(outputs ? { outputs } : {}), ...(unfinished.length > 0 ? { finally: unfinished } : {}),
   } };
 }
 
@@ -509,14 +506,6 @@ function finallyStopped(run: RunState): Array<{ id: string; outcome: 'failed' | 
   return run.steps.flatMap((state) => (own.has(state.id) && (state.status === 'failed' || state.status === 'cancelled')
     ? [{ id: state.id, outcome: state.status, ...(state.failure ? { failure: state.failure } : {}) }]
     : []));
-}
-
-/** An ended benchmark run's results table, computed from its end record as every other reader computes it. */
-function benchmarkDone(run: RunState): { benchmark?: { table: BenchmarkTable; text: string } } {
-  const record = buildEndRecord(run, run.driver, '');
-  if (!record.benchmark) return {};
-  const table = benchmarkTable({ ...record, benchmark: record.benchmark });
-  return { benchmark: { table, text: formatBenchmarkTable(table) } };
 }
 
 /** The step ids these paths read. */
@@ -966,23 +955,14 @@ function inputsMismatch(name: string, declared: Record<string, OutputSchema> | u
 
 /**
  * Why the run file would not keep what `start` was given: masking would change an input that holds a secret value
- * without a word, and the pinned definitions are kept as pulled, unmasked. Names the input and the secret, never the
- * value. An input may share a name with an env key; only values count.
+ * without a word. Names the input and the secret, never the value. An input may share a name with an env key; only
+ * values count. Admission checked the pinned definitions.
  */
-function secretMismatch(
-  inputs: unknown,
-  pinned: Record<string, unknown>,
-  secrets: Record<string, string>,
-): string | null {
+function secretMismatch(inputs: unknown, secrets: Record<string, string>): string | null {
   for (const [input, value] of isRecord(inputs) ? Object.entries(inputs) : []) {
     const held = heldSecret(value, secrets);
     const secret = held && secretKey(held);
     if (secret) return `inputs.${input} holds the value of ${secret}, a secret on this machine, which a run never stores. Pass the step a way to read ${secret} instead, such as requires.env: [${secret}].`;
-  }
-  for (const [label, pinnedValue] of Object.entries(pinned)) {
-    const held = heldSecret(pinnedValue, secrets);
-    const secret = held && secretKey(held);
-    if (secret) return `${label} holds the value of ${secret}, a secret on this machine, which a run never stores. Replace the value with requires.env: [${secret}], then pull again.`;
   }
   return null;
 }
@@ -1026,20 +1006,14 @@ export async function startRun(
  */
 export async function createRun(
   config: LocalConfig,
-  { secrets, driver, alone, ...input }: Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'runMode' | 'definition' | 'workflows' | 'scorers' | 'benchmark' | 'base' | 'checkout' | 'timeout'>
+  { secrets, driver, alone, ...input }: Pick<RunState, 'name' | 'inputs' | 'sourceHash' | 'teamRevision' | 'runMode' | 'definition' | 'workflows' | 'scorers' | 'base' | 'checkout' | 'timeout'>
     & Required<Pick<RunState, 'origin'>> & { secrets: Record<string, string>; driver?: DriverIdentity; alone?: DriverCan },
 ): Promise<WorkflowEnvelope> {
   const workflows = input.workflows ?? {};
   const unmet = alone && strictlyUnmet(input.definition, workflows, alone);
   if (unmet) return error('requirement_unmet', unmet);
   const scorers = input.scorers ?? {};
-  // Admission checked what `startRun` pins. A benchmark's definition is generated from its suite's files, so a secret in
-  // it is named by the suite.
-  const pinned = Object.fromEntries(input.benchmark ? [
-    [`benchmarks/${input.benchmark.suite.name}`, { definition: input.definition, plan: input.benchmark }],
-    ...Object.entries(scorers).map(([scorerName, scorer]) => [`scorer ${scorerName}`, scorer]),
-  ] : []);
-  const holdsSecret = secretMismatch(input.inputs, pinned, secrets);
+  const holdsSecret = secretMismatch(input.inputs, secrets);
   if (holdsSecret) return error('invalid_inputs', holdsSecret);
   const now = new Date().toISOString();
   const run: RunState = {
@@ -1056,7 +1030,6 @@ export async function createRun(
     definition: input.definition,
     ...(Object.keys(workflows).length > 0 ? { workflows } : {}),
     ...(Object.keys(scorers).length > 0 ? { scorers } : {}),
-    ...(input.benchmark ? { benchmark: input.benchmark } : {}),
     steps: input.definition.steps.map((step) => ({ id: step.id, status: 'pending' })),
     settledAttempts: [],
     ...(input.base ? { base: input.base } : {}),
@@ -1124,7 +1097,6 @@ function offerTerms(
     ...(endTurn ? { endTurn } : {}),
     ...(plan?.contract && scope.setup ? { setup: scope.setup } : {}),
     ...(step.tool !== undefined ? { tool: step.tool } : {}),
-    trial: step.trial !== undefined,
     clone: plan?.contract?.mode !== 'read-only' && plan?.contract?.clone !== undefined,
     prepare: context.prepare,
   }, context.can, context.allow, context.facts);
@@ -1193,15 +1165,13 @@ export interface NextOptions {
   /** Process-only: the team env the caller resolved for this operation, so `next` does not resolve it again. */
   env?: WorkflowEnv;
   /**
-   * Process-only: teamai prepares the lease's place, through `next --prepare`, the local driver, or benchmark/trial.ts
-   * for trial leases. Without it a trial, and a step in a clone, is held.
+   * Process-only: teamai prepares the lease's place, through `next --prepare` or the local driver. Without it a step in a
+   * clone is held.
    */
   prepare?: boolean;
   /**
    * Process-only: the caller is the run's only driver, as the local driver is. A step that names a tool it cannot launch
-   * fails `tool_unavailable` at once, and a trial step it cannot take only for the trial gate (prepare) is
-   * skipped, so its trial reads `not_run`. For any other driver both stay pending, a trial until the suite's timeout. A
-   * strict requirement it lacks holds a trial too, as a local start it refuses.
+   * fails `tool_unavailable` at once. For any other driver it stays pending.
    */
   alone?: boolean;
 }
@@ -1414,11 +1384,6 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
             settledOne = true;
             break;
           }
-          if (terms.kind === 'hold' && options.alone && definition.trial && terms.missing.every((missing) => missing === 'prepare')) {
-            skip(state, run.revision);
-            settledOne = true;
-            continue;
-          }
           if (terms.kind === 'hold') {
             held.push(heldFor(state.id, terms.missing));
             continue;
@@ -1520,7 +1485,7 @@ const REPORT_FIELD_SOURCES = {
   attempt: 'payload', revision: 'payload', outcome: 'payload', driver: 'payload', outputs: 'payload', exitCode: 'payload', message: 'payload',
   tool: 'payload', model: 'payload', session: 'payload', resumed: 'payload', tokens: 'payload', durationMs: 'payload', cost: 'payload',
   failure: 'payload', changes: 'payload', read: 'payload', agent: 'payload', used: 'payload', unenforced: 'payload', limit: 'payload',
-  prUrl: 'changes.pr_url', trialReport: 'process',
+  prUrl: 'changes.pr_url',
 } as const satisfies Record<keyof ReportInput, 'payload' | 'changes.pr_url' | 'process'>;
 
 /** The top-level payload fields `parseReport` reads. */
@@ -1985,10 +1950,6 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
 
     const located = locateStep(run, step.id);
     const defined = located?.step;
-    // A trial step's report comes through benchmark/trial.ts, which commits the clone and observes the agent.
-    if (defined?.trial && report.trialReport === undefined) {
-      return { save: false, envelope: error('invalid_report', `Step "${step.id}" is a benchmark trial. Report it with teamai workflow report from the run's checkout, after teamai workflow next --prepare leased it.`) };
-    }
     const plan = located && planWorkspace(run, located.scope, step, located.step, {
       driver: step.lease.driver, modes: ['read-only', 'new', 'continue'],
     }, true);

@@ -26,7 +26,6 @@ import { cancelRun, respondProvenance, respondToHitl, retryStep, type CallerProv
 import { nextJudgeLease, parseJudgeRequest, runJudgeLease, verifiedScorers } from './scoring.js';
 import { stepDefinitions } from './scope.js';
 import { attemptDir, AttemptIdSchema, readRun, RunIdSchema, withRunLock, type AttemptId, type RunId, type RunLock } from './store.js';
-import { Trials } from '../benchmark/trial.js';
 import type { DriverCan } from './requirements.js';
 import { isWorkflowError, type DriverIdentity, type RunState, type RunStatus, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure } from './types.js';
 import { cloneBranchOf, deliveryProblem } from './workspace.js';
@@ -92,7 +91,7 @@ export interface WorkflowClient {
    * Asks the run what to do. With `prepare`, a lease comes with `cwd`, its place in the checkout the run started from,
    * made under the run's lock, and a prepare that fails settles the attempt `failed` with its own code.
    */
-  next(runId: string, body: unknown, options?: { prepare?: NextPrepare; signal?: AbortSignal }): Promise<WorkflowEnvelope>;
+  next(runId: string, body: unknown, options?: { prepare?: NextPrepare }): Promise<WorkflowEnvelope>;
   /** What the run file of `runId` says now, or undefined while this machine cannot read it. */
   runVersion(runId: RunId): Promise<RunVersion | undefined>;
   /** Reports an attempt. A prepared one is finished first: its `changes` or `read` come from its place. */
@@ -343,12 +342,6 @@ export type HostPlacePrepared =
 /** `mode`: the run mode the lease keeps, as its driver's `next` sent it. */
 type Leased = { kind: 'leased'; lease: PlaceLease; root: string; others: AttemptId[]; mode?: RunMode };
 
-/** What every driver fails a lease of run `run` with when this teamai cannot read the place it names, as a newer one writes. */
-async function isBenchmarkRun(config: LocalConfig, run: RunId): Promise<boolean> {
-  const stored = await readRun(config, run);
-  return typeof stored === 'object' && stored.benchmark !== undefined;
-}
-
 /**
  * `report` with what teamai knows of a prompt it prepared a clone for, whatever the driver says of it: the team revision
  * and project commit it observed of the clone, and the exact model and effort the step asked for. So the step records
@@ -491,11 +484,8 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
       const run = RunIdSchema.safeParse(runId);
       const prepare = options?.prepare;
       if (prepare === undefined || !run.success) return withIgnored(await lease(), parsed.ignored);
-      const benchmark = await isBenchmarkRun(config, run.data);
-      if (benchmark && prepare !== true) return withIgnored({ error: { code: 'invalid_arguments', message: `Run ${runId} is a benchmark run, whose trial attempts teamai prepares itself, so --attempt and --adopt do not apply. Call next --prepare without them.` } }, parsed.ignored);
       return withIgnored(await withRunLock(config, run.data, async (lock) => {
-        const answer = benchmark ? await Trials.next(config, lock, driver, { ...next, env, ...(options?.signal ? { signal: options.signal } : {}) })
-          : prepare === true ? await prepareLeased({ config, lock, driver, env, answer: await leaseNext(config, runId, driver, { ...next, env, prepare: true }) })
+        const answer = prepare === true ? await prepareLeased({ config, lock, driver, env, answer: await leaseNext(config, runId, driver, { ...next, env, prepare: true }) })
             : await prepareAttempt({ config, lock, driver, env, next, ...prepare });
         // A clone whose steps all settled is not needed any more.
         await sweepClones(config, lock.run);
@@ -506,11 +496,8 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
       const parsed = parseReport(body);
       if (typeof parsed === 'string') return { error: { code: 'invalid_report', message: parsed } };
       const run = RunIdSchema.safeParse(runId);
-      // Trials completes a trial's report with what teamai observed of its clone.
-      const completed = !run.success ? { report: parsed.report }
-        : await isBenchmarkRun(config, run.data) ? await Trials.report(config, runId, parsed.report) : { report: await withPreparedClone(config, run.data, parsed.report) };
-      if (!('report' in completed)) return withIgnored(completed, parsed.ignored);
-      return withIgnored(await managedReport({ config, runId, report: completed.report, secrets: env.secrets, lock: options?.lock }), parsed.ignored);
+      const report = run.success ? await withPreparedClone(config, run.data, parsed.report) : parsed.report;
+      return withIgnored(await managedReport({ config, runId, report, secrets: env.secrets, lock: options?.lock }), parsed.ignored);
     },
     respond: async (runId, step, choice, { via, ...answer }) => {
       if (via.kind === 'skill') return respondToHitl(config, runId, env.secrets, { step, choice, ...answer, provenance: respondProvenance(via) });

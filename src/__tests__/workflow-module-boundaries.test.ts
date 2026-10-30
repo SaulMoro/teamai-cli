@@ -73,37 +73,24 @@ const ENTRIES: Array<{ folder: string; entries: Record<string, string[] | 'any'>
   // workflow-published-runs.ts judges an offered run by the tool the local driver would launch for its prompt steps.
   { folder: LOCAL, entries: { 'local-driver.ts': ['src/workflow-commands.ts', 'src/workflow-published-runs.ts'], 'local-tool-adapter.ts': [] }, testEntries: ['local-driver.ts', 'local-tool-adapter.ts'] },
   { folder: DISCOVERY, entries: { 'workflow-skills.ts': 'any', 'generated-marker.ts': 'any' }, testEntries: ['workflow-skills.ts', 'generated-marker.ts', 'render.ts'] },
-  // Trials, a suite's start, its report and its scenarios change state, so only the protocol, the local driver and the commands reach them.
+  // A suite's checks, start and report change state, so only the commands reach them. Pull, push and their checks sync suites with the team's other definitions.
   {
     folder: BENCHMARK,
     entries: {
-      'plan.ts': 'any', 'terms.ts': 'any', 'suite.ts': 'any', 'check.ts': 'any', 'table.ts': 'any', 'result.ts': 'any', 'history.ts': 'any',
-      'trial.ts': ['src/workflow/protocol.ts', 'src/workflow/drivers/local/local-driver.ts', 'src/workflow-commands.ts'],
+      'plan.ts': 'any', 'terms.ts': 'any', 'suite.ts': 'any', 'check.ts': 'any', 'table.ts': 'any', 'result.ts': 'any', 'history.ts': 'any', 'suite-cache.ts': 'any',
+      'trial.ts': ['src/workflow-commands.ts'],
       'start.ts': ['src/workflow-commands.ts'],
       'report.ts': ['src/workflow-commands.ts'],
     },
-    testEntries: ['plan.ts', 'terms.ts', 'suite.ts', 'check.ts', 'table.ts', 'result.ts', 'trial.ts', 'history.ts', 'run-plan.ts', 'conformance.ts'],
+    testEntries: ['plan.ts', 'terms.ts', 'suite.ts', 'check.ts', 'table.ts', 'result.ts', 'trial.ts', 'history.ts', 'run-plan.ts', 'conformance.ts', 'suite-cache.ts'],
   },
 ];
-
-/** Why each workflow-to-benchmark edge is allowed: benchmark suites become a default workflow, and these go with that. */
-const BENCHMARK_EDGE = 'runs benchmarks inside the engine until they run as the default benchmark workflow';
 
 /** Edges a rule would refuse that stay until the named change removes them. Each must match exactly `count` edges. */
 const ALLOWED: Array<{ from: string; to: string; count: number; why: string }> = [
   { from: 'src/__tests__/workflow-setup.test.ts', to: 'src/workflow/place/setup.ts', count: 1, why: 'tests setup, the unit place.ts runs, directly' },
   { from: 'src/__tests__/workflow-local-driver.test.ts', to: 'src/workflow/place/worktree-snapshot.ts', count: 1, why: 'fails the snapshot a reader in the checkout takes' },
   { from: 'src/__tests__/workflow-skill-transitions.test.ts', to: 'src/workflow/drivers/skill/transitions.ts', count: 1, why: 'compares TRANSITIONS with the doc tables' },
-  { from: 'src/workflow/cache.ts', to: `${BENCHMARK}suite.ts`, count: 1, why: BENCHMARK_EDGE },
-  { from: 'src/workflow/cache.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },
-  { from: 'src/workflow/drivers/local/local-driver.ts', to: `${BENCHMARK}trial.ts`, count: 1, why: BENCHMARK_EDGE },
-  { from: 'src/workflow/drivers/local/local-driver.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },
-  { from: 'src/workflow/engine.ts', to: `${BENCHMARK}table.ts`, count: 1, why: BENCHMARK_EDGE },
-  { from: 'src/workflow/protocol.ts', to: `${BENCHMARK}trial.ts`, count: 1, why: BENCHMARK_EDGE },
-  { from: 'src/workflow/records.ts', to: `${BENCHMARK}result.ts`, count: 1, why: BENCHMARK_EDGE },
-  { from: 'src/workflow/store.ts', to: `${BENCHMARK}plan.ts`, count: 1, why: BENCHMARK_EDGE },
-  { from: 'src/workflow/types.ts', to: `${BENCHMARK}plan.ts`, count: 1, why: BENCHMARK_EDGE },
-  { from: 'src/workflow/types.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },
 ];
 
 const under = (file: string, folder: string): boolean => file.startsWith(folder);
@@ -285,6 +272,7 @@ describe('workflow module boundaries', () => {
     expect(rule3(seeded).violations).toEqual([
       `src/workflow/protocol.ts -> ${LOCAL}local-driver.ts`, `src/pull.ts -> ${SKILL}tick.ts`,
       `src/__tests__/workflow-x.test.ts -> ${PLACE}reader.ts`, `src/workflow/engine.ts -> ${DISCOVERY}render.ts`,
+      `${LOCAL}local-driver.ts -> ${BENCHMARK}trial.ts`,
     ]);
     expect(rule4(seeded).violations).toEqual([`${SKILL}transitions.ts -> ${SKILL}turn.ts`]);
     expect(rule5(seeded).violations).toEqual([`src/workflow/protocol.ts -> ${LOCAL}local-driver.ts`, `src/workflow/engine.ts -> ${DISCOVERY}render.ts`]);

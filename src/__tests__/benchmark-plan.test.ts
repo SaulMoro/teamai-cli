@@ -365,7 +365,7 @@ const CRITERIA_SUITE: BenchmarkSuiteFiles = {
 const CORRECTNESS = 'teamai:correctness:t01';
 const PROMPT = 'trials.r1.t01.a01.prompt';
 
-/** A criteria run whose one trial prompt has succeeded, as Trials.report settles it. */
+/** A criteria run whose one trial prompt has succeeded. */
 async function judgedTrial(): Promise<{ config: LocalConfig; runId: string }> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-benchmark-plan-'));
   dirs.push(root);

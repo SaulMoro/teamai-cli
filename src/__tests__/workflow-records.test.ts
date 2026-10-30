@@ -205,7 +205,7 @@ describe('#1083 workflow run records', () => {
   });
 
   it('publishes the failure code of every step failure teamai writes, and only codes it can name', () => {
-    // Codes a module writes, as `code: '…'`, `error('…', …)` or `failure('…', …)`, that never become a run's failure: every module of src/workflow and src/scorers, and every other one that imports src/scorers or answers a WorkflowEnvelope.
+    // Codes a module writes, as `code: '…'`, `error('…', …)` or `failure('…', …)`, that never become a run's failure: every module of src/workflow and src/scorers, and every other one that imports src/scorers, answers a WorkflowEnvelope or writes a WorkflowDiagnostic.
     const diagnostics = ['unknown_key', 'missing_needs', 'false_if', 'bad_template', 'dotted_name', 'undeclared_output', 'undeclared_end', 'bad_loop', 'bad_workspace', 'workflow_namespace_conflict', 'prompt_namespace_conflict', 'benchmark_namespace_conflict', 'bad_delivery', 'bad_invoke', 'bad_alias', 'alias_conflict'] satisfies Array<WorkflowDiagnostic['code']>;
     const answers = ['invalid_json', 'driver_running', 'invalid_run', 'repeated_response', 'agent_in_path', 'stale_response', 'retried', 'end_reached', 'repeated_report', 'wrong_attempt', 'invalid_report', 'lease_cancelled', 'interrupted', 'run_unreadable', 'driver_stuck', 'ambiguous_run', 'busy', 'workflow_recursion', 'workflow_not_found',
       // Refusals of a run handover, answered to the command or driver that asked for it.
@@ -238,12 +238,12 @@ describe('#1083 workflow run records', () => {
       'skill_call_failed',
       // Why the skill driver stopped judging a run, told to the agent in a judging-off event.
       'judge_runner_gone', 'no_child_agent',
-      // Refusals of teamai benchmark run and plan, and of teamai workflow start --benchmark, before any run exists.
+      // Refusals of teamai benchmark run and plan, before any run exists.
       'team_revision_unpullable', 'benchmark_not_found', 'commit_unreachable', 'check_files_unwritable',
       'arm_model_missing', 'arm_unpublishable', 'arm_team_unresolved', 'arm_team_unreadable', 'arm_team_unclean',
-      // Refusals of teamai benchmark try and teamai workflow start --benchmark --try, which try one task file and create no run.
+      // Refusals of teamai benchmark try, which tries one task file and creates no run.
       'benchmark_invalid', 'task_try_failed',
-      // Refusals of teamai workflow next --prepare where the team a trial runs cannot be pinned; its trials stay for another machine.
+      // Refusals of teamai benchmark plan where the team a trial runs cannot be pinned.
       'team_ref_blocked',
       // Refusals of teamai workflow publish and a claim of an isolated run, which stays on the machine that started it.
       'isolated_run',
@@ -257,7 +257,7 @@ describe('#1083 workflow run records', () => {
     const files = fs.readdirSync(src, { recursive: true, encoding: 'utf8' })
       .filter((file) => file.endsWith('.ts') && !file.startsWith('__tests__'))
       .map((file) => ({ file, text: fs.readFileSync(path.join(src, file), 'utf8') }))
-      .filter(({ file, text }) => /^(workflow|scorers)\//.test(file) || /from '(?:\.\.?\/)+scorers\//.test(text) || /\bWorkflowEnvelope\b/.test(text));
+      .filter(({ file, text }) => /^(workflow|scorers)\//.test(file) || /from '(?:\.\.?\/)+scorers\//.test(text) || /\bWorkflow(?:Envelope|Diagnostic)\b/.test(text));
     const written = new Set(files.flatMap(({ text }) => [
       ...[...text.matchAll(/\bcode: ('[^']+'(?:\s*\|\s*'[^']+')*)/g)].flatMap((match) => [...(match[1] ?? '').matchAll(/'([^']+)'/g)].flatMap((code) => code[1] ?? [])),
       ...[...text.matchAll(/(?<![.\w]|function )(?:error|failure)\('([^']+)'/g)].flatMap((match) => match[1] ?? []),
@@ -468,21 +468,6 @@ describe('#1083 workflow run records', () => {
     expect(mergeRecord(again, delivered).prs).toEqual(['https://github.com/acme/app/pull/1']);
   });
 
-  it('drops the benchmark of an earlier record when the next record has none', () => {
-    const benchmark = {
-      suite: { name: 'fix', sourceHash: 'c'.repeat(64) }, repetitions: 1, baselineTeamRevision: 'b'.repeat(40),
-      tasks: [{ id: 'fix', startingCommit: 'a'.repeat(40), sourceHash: 'd'.repeat(64), baseline: 'not_run' as const }],
-      arms: [{ name: 'claude', tool: 'claude', team: { kind: 'pulled' as const, revision: 'b'.repeat(40) }, source: 'team' as const }],
-      scorers: [],
-      trials: [{ task: 'fix', arm: 'claude', repetition: 1, order: 1, step: 'trials.r1.fix.claude.prompt', result: 'not_run' as const }],
-    };
-    const ended = { ...buildEndRecord(runState(), driver, 'tester'), benchmark };
-    const next = buildEndRecord(runState(), driver, 'tester');
-
-    expect(mergeRecord(ended, next)).not.toHaveProperty('benchmark');
-    expect(mergeRecord(next, ended).benchmark).toEqual(benchmark);
-  });
-
   it('queues records durably and keeps them across failure', async () => {
     const { config } = testConfig();
     const record = buildStartRecord(runState({ status: 'running' }), driver, 'tester');
@@ -641,16 +626,11 @@ describe('#1083 workflow stats merge', () => {
     expect(await reports.raw(['rev-list', '--count', 'teamai-reports', '--', 'benchmarks/runs/r1234567890abcdef.json'])).toBe('1\n');
   });
 
-  it('changes no total for a benchmark end, added or withdrawn from origin', async () => {
+  it('changes no total for an isolated run\'s end, added or withdrawn from origin', async () => {
     const { statsDeltaRecords } = await import('../workflow/records.js');
-    const benchmark = {
-      suite: { name: 'fix', sourceHash: 'h1' }, repetitions: 1, baselineTeamRevision: 'abc', scorers: [],
-      tasks: [{ id: 'fix', startingCommit: 'def', sourceHash: 'h2', baseline: 'valid' as const }], arms: [{ name: 'claude', tool: 'claude', source: 'team' as const, team: { kind: 'pulled' as const, revision: 'a'.repeat(40) } }],
-      trials: [{ task: 'fix', arm: 'claude', repetition: 1, order: 1, step: 'trials.r1.fix.claude.prompt', result: 'passed' as const }],
-    };
     const existing = { workflows: { runs: 1, succeeded: 1, failed: 0, totalDurationMs: 150000 } };
-    const old = { ...buildEndRecord(runState({ status: 'failed' }), driver, 'tester'), benchmark };
-    const replacement = { ...buildEndRecord(runState({ updatedAt: '2026-10-14T10:05:00.000Z' }), driver, 'tester'), benchmark };
+    const old = { ...buildEndRecord(runState({ status: 'failed' }), driver, 'tester'), isolated: true as const };
+    const replacement = { ...buildEndRecord(runState({ updatedAt: '2026-10-14T10:05:00.000Z' }), driver, 'tester'), isolated: true as const };
     const origin = new Map([[old.run, old]]);
 
     expect(mergeWorkflowStats(existing, 'tester', [replacement]).workflows).toEqual(existing.workflows);

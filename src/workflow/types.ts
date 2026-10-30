@@ -4,8 +4,6 @@ import type { RunOrigin } from '../default-workflows.js';
 import type { RunMode } from '../launch-context.js';
 import type { EntryVerdict } from '../scorers/entry.js';
 import type { PinnedScorer } from '../scorers/pin.js';
-import type { BenchmarkPlan } from '../benchmark/plan.js';
-import type { TrialTerms } from '../benchmark/terms.js';
 import type { DeliveryReceipt, UnresolvedCreate } from './delivery-schema.js';
 import type { ArchivedPass, LimitsFrom, ReleasedTokens, SessionContinuation, StepState, StoppedAttempt } from './step-state.js';
 import type { OnLimit, Requirements, Setup, TurnLimits, Unenforced } from './requirements.js';
@@ -119,8 +117,6 @@ export interface WorkflowStep {
    * on a workflow step `timeout` and `budget` are an allowance its prompt turns spend.
    */
   onLimit?: OnLimit;
-  /** Generated only, never parsed from a team file: a benchmark trial step. */
-  trial?: TrialTerms;
 }
 
 /**
@@ -402,8 +398,6 @@ export interface RunState {
    * and frozen for the run's life. The named workflows and generated scorers each brought are in `workflows` and `scorers`.
    */
   admitted?: Record<string, AdmittedWorkflow>;
-  /** The frozen benchmark plan; set only by `start --benchmark`. */
-  benchmark?: BenchmarkPlan;
   /** How each entry of the run's `sampling: all` scorers stood when its steps ended, before `finally`, frozen by `finishRun`. */
   verdicts?: EntryVerdict[];
   /**

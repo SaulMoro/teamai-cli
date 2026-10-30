@@ -13,7 +13,7 @@ import type { Baseline, BenchmarkRecord } from './result.js';
 import type { TeamChoice } from './suite.js';
 import type { ArmTeam } from './terms.js';
 import {
-  benchmarkTable, deviationsOf, observedTrials, usageOf, type ArmResults, type ArmUsage, type BenchmarkTable, type BenchmarkTableInput, type ObservedTrial, type PassRate,
+  benchmarkTable, deviationsOf, observedTrials, usageOf, type ArmResults, type ArmUsage, type BenchmarkTable, type ObservedTrial, type PassRate,
 } from './table.js';
 
 /** One ended benchmark run, as its end record holds it. `source`: this machine's run file, or the team's record. */
@@ -22,8 +22,6 @@ export interface BenchmarkRunInput {
   source: 'local' | 'reported';
   username?: string;
   startedAt: string;
-  /** What each prompt ran as, which the run's table compares with its arm. */
-  steps?: BenchmarkTableInput['steps'];
   benchmark: BenchmarkRecord;
 }
 
@@ -525,7 +523,7 @@ export const BenchmarkHistory = {
         arms: armsOf(suiteRuns),
         tasks: tasksOf(suiteRuns),
         runs: own.map(runRow).toReversed(),
-        latest: { run: newest.run, source: newest.source, table: benchmarkTable({ ...(newest.steps ? { steps: newest.steps } : {}), benchmark: newest.benchmark }) },
+        latest: { run: newest.run, source: newest.source, table: benchmarkTable(newest) },
         comparisons: comparisonsOf(suiteRuns),
         teamChanges: teamChangesOf(suiteRuns),
       },
