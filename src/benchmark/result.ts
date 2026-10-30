@@ -6,8 +6,10 @@
  * Results are never failure codes, and no value here enters record `status` or `steps[].outcome`: an older dashboard
  * drops a whole record on an enum value it does not know.
  */
+import path from 'node:path';
 import { z } from 'zod';
 import { AgentObservationSchema } from '../agent-observation.js';
+import { RunOriginSchema } from '../default-workflows.js';
 import type { EntryVerdict } from '../scorers/entry.js';
 import type { StepState } from '../workflow/step-state.js';
 import { LimitSchema } from '../workflow/requirements.js';
@@ -68,6 +70,27 @@ export const BenchmarkRecordSchema = z.object({
   })),
 });
 export type BenchmarkRecord = z.infer<typeof BenchmarkRecordSchema>;
+
+/** A benchmark run's record: its plan's trials, classified, with the run they ran in. No prompt, command, URL or path. */
+export const BenchmarkRunRecordSchema = BenchmarkRecordSchema.extend({
+  schemaVersion: z.literal(1),
+  run: z.string().min(1),
+  /** How the run's steps ended, before its `finally` steps ran. */
+  outcome: z.enum(['succeeded', 'failed', 'cancelled']),
+  teamaiVersion: z.string().min(1),
+  startedAt: z.string(),
+  /** When the run's steps ended. */
+  finishedAt: z.string(),
+  username: z.string().optional(),
+  /** The workflow the run ran: the team's `benchmark`, or teamai's default, by the hash of its bytes. */
+  workflow: z.object({ name: z.string(), origin: RunOriginSchema, sourceHash: z.string() }),
+});
+export type BenchmarkRunRecord = z.infer<typeof BenchmarkRunRecordSchema>;
+
+/** `runs/<run>/benchmark.json`: where a run's benchmark record is kept on this machine. */
+export function benchmarkRecordFile(runsRoot: string, run: string): string {
+  return path.join(runsRoot, run, 'benchmark.json');
+}
 
 /**
  * The block buildEndRecord adds for a benchmark run that has ended. Pure, so the `done` envelope and a run with

@@ -29,6 +29,7 @@ import YAML from 'yaml';
 import { z } from 'zod';
 import type { LocalConfig } from '../../types.js';
 import { compilePlan, freezePlan, runSourceHash, type BenchmarkPlan } from '../../benchmark/plan.js';
+import type { BenchmarkRunRecord, TrialResult } from '../../benchmark/result.js';
 import { commitCheckFiles, type CommittedSuite } from '../../benchmark/trial.js';
 import { commitCacheOf } from '../../workflow/place/place.js';
 import { parseSuite, type TeamChoice } from '../../benchmark/suite.js';
@@ -562,6 +563,23 @@ export async function startBenchmarkRun(config: LocalConfig, files: BenchmarkSui
   if (!('plan' in frozen)) return frozen;
   const { plan, committed } = frozen;
   return createRun(config, { name: committed.suite.name, sourceHash: runSourceHash(plan), teamRevision: RUN_TEAM, origin: { source: 'team' }, ...compilePlan(plan, committed), benchmark: plan, secrets: {} });
+}
+
+/**
+ * The benchmark record of run `run` of suite `fix`, as `teamai benchmark report` writes it: one trial of task `fix` on
+ * each arm of `tools`, each on team revision `team`, every one `result`.
+ */
+export function fixRecord(run: string, { startedAt, username, result = 'passed', team = RUN_TEAM, tools = ['claude'] }: {
+  startedAt: string; username?: string; result?: TrialResult; team?: string; tools?: string[];
+}): BenchmarkRunRecord {
+  return {
+    schemaVersion: 1, run, outcome: 'succeeded', teamaiVersion: '0.0.0', startedAt, finishedAt: startedAt, ...(username ? { username } : {}),
+    workflow: { name: 'benchmark', origin: { source: 'team' }, sourceHash: 'f'.repeat(64) },
+    suite: { name: 'fix', sourceHash: 's1' }, repetitions: 1, baselineTeamRevision: team, scorers: [],
+    tasks: [{ id: 'fix', startingCommit: RUN_START, sourceHash: 't1', baseline: 'valid' }],
+    arms: tools.map((tool) => ({ name: tool, tool, source: 'team', team: { kind: 'pulled', revision: team } })),
+    trials: tools.map((tool, index) => ({ task: 'fix', arm: tool, repetition: 1, order: index + 1, step: `trials.r1.fix.${tool}.prompt`, result })),
+  };
 }
 
 const BaselineLeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string().startsWith('baselines.'), attempt: z.string(), revision: z.number() }) }) });

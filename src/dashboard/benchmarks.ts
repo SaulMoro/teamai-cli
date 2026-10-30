@@ -1,8 +1,9 @@
 /**
  * The dashboard's Benchmarks page (#1180): the ended benchmark runs of a workspace, through `BenchmarkHistory`. It reads
- * this machine's run files and the team's run records on `teamai-reports`, and only their benchmark runs: a file is
- * parsed once, and again only when its size or modification time changed, so a page of hundreds of records re-reads
- * nothing it read before. A run this machine has a file for is read from it, not from its published copy.
+ * the benchmark record `teamai benchmark report` wrote into each run directory of this machine, and the team's on
+ * `teamai-reports`: a file is parsed once, and again only when its size or modification time changed, so a page of
+ * hundreds of records re-reads nothing it read before. A run this machine has a record for is read from it, not from
+ * its published copy.
  *
  * Each team revision the selected suite's runs installed is named from this machine's team clone, with the asset files
  * each tool and model's revision changed since the one it ran on before: a commit never changes, so each is read once.
@@ -10,12 +11,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
-import { readRecordedAgent } from '../agent-observation.js';
 import { getReportsDir, usesBranchWorktree, type LocalConfig } from '../types.js';
 import { BENCHMARK_WINDOWS, BenchmarkHistory, type BenchmarkHistoryQuery, type BenchmarkHistoryView, type BenchmarkRunInput } from '../benchmark/history.js';
-import { BenchmarkRecordSchema } from '../benchmark/result.js';
-import { buildEndRecord, RECORDS_DIR } from '../workflow/records.js';
-import { isRunId, readRun, runsDir } from '../workflow/store.js';
+import { benchmarkRecordFile, BenchmarkRunRecordSchema } from '../benchmark/result.js';
+import { BENCHMARK_RECORDS_DIR } from '../workflow/records.js';
+import { isRunId, runsDir } from '../workflow/store.js';
 import { git } from '../workflow/worktree.js';
 import { HttpError } from './http.js';
 
@@ -34,58 +34,29 @@ export function parseBenchmarkQuery(params: URLSearchParams): BenchmarkHistoryQu
   return { windowDays: parsed.data.window ?? 90, ...(parsed.data.suite ? { suite: parsed.data.suite } : {}) };
 }
 
-/** What a published record holds that the page reads. */
-const RecordSchema = z.object({
-  run: z.string().refine(isRunId),
-  startedAt: z.string(),
-  username: z.string().optional(),
-  steps: z.array(z.object({ step: z.string(), agent: z.unknown().transform(readRecordedAgent) })).optional().catch(undefined),
-  benchmark: BenchmarkRecordSchema,
-});
-
-/** A file read, by path: what it held at the size and modification time `stamp` names. Undefined: not a benchmark run. */
+/** A file read, by path: what it held at the size and modification time `stamp` names. Undefined: not a benchmark record. */
 const reads = new Map<string, { stamp: string; input: BenchmarkRunInput | undefined }>();
 
-/** Every record names its benchmark block with this key; a file without it is skipped before it is parsed. */
-const BENCHMARK_KEY = '"benchmark"';
-
-async function readReported(file: string): Promise<BenchmarkRunInput | undefined> {
+/** The benchmark record in `file`, as `teamai benchmark report` writes it on this machine and publishes it. Throws when `file` cannot be read. */
+async function readRecord(file: string, source: BenchmarkRunInput['source']): Promise<BenchmarkRunInput | undefined> {
   const text = await fs.readFile(file, 'utf8');
-  if (!text.includes(BENCHMARK_KEY)) return undefined;
   try {
-    const parsed = RecordSchema.safeParse(JSON.parse(text));
-    if (!parsed.success) return undefined;
-    const { run, startedAt, username, steps, benchmark } = parsed.data;
-    return {
-      run, source: 'reported', startedAt, ...(username ? { username } : {}), benchmark,
-      ...(steps ? { steps: steps.map(({ step, agent }) => ({ step, ...(agent ? { agent } : {}) })) } : {}),
-    };
+    const parsed = BenchmarkRunRecordSchema.safeParse(JSON.parse(text));
+    if (!parsed.success || !isRunId(parsed.data.run)) return undefined;
+    const record = parsed.data;
+    return { run: record.run, source, startedAt: record.startedAt, ...(record.username ? { username: record.username } : {}), benchmark: record };
   } catch {
     return undefined;
   }
 }
 
-/** An ended benchmark run of this machine, as the record it publishes. */
-async function readLocal(config: LocalConfig, file: string): Promise<BenchmarkRunInput | undefined> {
-  if (!(await fs.readFile(file, 'utf8')).includes(BENCHMARK_KEY)) return undefined;
-  const run = await readRun(config, path.basename(file, '.json'));
-  if (typeof run !== 'object' || run.status === 'running' || run.benchmark === undefined) return undefined;
-  const record = buildEndRecord(run, run.driver, config.username ?? '');
-  if (!record.benchmark) return undefined;
-  return {
-    run: run.id, source: 'local', startedAt: record.startedAt, ...(config.username ? { username: config.username } : {}), benchmark: record.benchmark,
-    ...(record.steps ? { steps: record.steps } : {}),
-  };
-}
-
 /**
- * The benchmark runs of the `.json` files in `dir`, each parsed only when it changed since the last read. A file that
+ * The benchmark runs of `files`, all under `dir`, each parsed only when it changed since the last read. A file that
  * could not be read, such as one another process holds open on Windows, is read again next time.
  */
-async function readDir(dir: string, read: (file: string) => Promise<BenchmarkRunInput | undefined>): Promise<BenchmarkRunInput[]> {
-  const files = (await fs.readdir(dir).catch(() => [])).filter((file) => file.endsWith('.json')).map((file) => path.join(dir, file));
+async function readFiles(dir: string, files: readonly string[], source: BenchmarkRunInput['source']): Promise<BenchmarkRunInput[]> {
   const present = new Set(files);
-  for (const file of reads.keys()) if (path.dirname(file) === dir && !present.has(file)) reads.delete(file);
+  for (const file of reads.keys()) if (file.startsWith(`${dir}${path.sep}`) && !present.has(file)) reads.delete(file);
   const inputs = await Promise.all(files.map(async (file) => {
     const stat = await fs.stat(file).catch(() => undefined);
     if (!stat) return undefined;
@@ -93,7 +64,7 @@ async function readDir(dir: string, read: (file: string) => Promise<BenchmarkRun
     const kept = reads.get(file);
     if (kept?.stamp === stamp) return kept.input;
     try {
-      const input = await read(file);
+      const input = await readRecord(file, source);
       reads.set(file, { stamp, input });
       return input;
     } catch {
@@ -101,6 +72,20 @@ async function readDir(dir: string, read: (file: string) => Promise<BenchmarkRun
     }
   }));
   return inputs.filter((input) => input !== undefined);
+}
+
+/** This machine's benchmark records, one in the directory of each run that reported. */
+async function readLocal(config: LocalConfig): Promise<BenchmarkRunInput[]> {
+  const root = runsDir(config);
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+  return readFiles(root, entries.filter((entry) => entry.isDirectory() && isRunId(entry.name)).map((entry) => benchmarkRecordFile(root, entry.name)), 'local');
+}
+
+/** The team's benchmark records on `teamai-reports`. */
+async function readReported(config: LocalConfig): Promise<BenchmarkRunInput[]> {
+  const dir = path.join(getReportsDir(config), BENCHMARK_RECORDS_DIR);
+  const files = (await fs.readdir(dir).catch(() => [])).filter((file) => file.endsWith('.json')).map((file) => path.join(dir, file));
+  return readFiles(dir, files, 'reported');
 }
 
 /** A team revision as this machine's team clone has it. */
@@ -195,8 +180,8 @@ export async function benchmarkHistory({ config, query, now = new Date(), refres
     await readableReportsWorktree(config, { dryRun: !refresh });
   }
   const [local, reported] = await Promise.all([
-    readDir(runsDir(config), (file) => readLocal(config, file)),
-    readDir(path.join(getReportsDir(config), RECORDS_DIR), readReported),
+    readLocal(config),
+    readReported(config),
   ]);
   const localIds = new Set(local.map(({ run }) => run));
   return withTeamCommits(config, BenchmarkHistory.of({ runs: [...local, ...reported.filter(({ run }) => !localIds.has(run))], query, now }));

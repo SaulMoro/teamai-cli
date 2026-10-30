@@ -14,8 +14,9 @@ vi.mock('../utils/reports-branch.js', async (importOriginal) => {
 import { benchmarkHistory, parseBenchmarkQuery } from '../dashboard/benchmarks.js';
 import { HttpError } from '../dashboard/http.js';
 import { getReportsDir, type LocalConfig } from '../types.js';
-import { cancelRun } from '../workflow/run-controls.js';
-import { benchmarkRunConfig, FIX_SUITE, fixTask, startBenchmarkRun } from './helpers/benchmark-fixture.js';
+import type { TrialResult } from '../benchmark/result.js';
+import { runsDir } from '../workflow/store.js';
+import { benchmarkRunConfig, fixRecord } from './helpers/benchmark-fixture.js';
 
 // A run this machine starts is dated by the clock, so the window ends just after it.
 const NOW = new Date(Date.now() + 60_000);
@@ -36,37 +37,32 @@ afterEach(() => {
 });
 
 function recordFile(run: string): string {
-  return path.join(getReportsDir(config), 'workflows', 'runs', `${run}.json`);
+  return path.join(getReportsDir(config), 'benchmarks', 'runs', `${run}.json`);
 }
 
-/** A record the team published for a run of suite `fix` by `username`, whose one trial on each arm of `tools`, on team revision `team`, got `result`. */
-function publish(run: string, { username = 'bob', startedAt = YESTERDAY, result = 'passed', benchmark = true, team = 'b'.repeat(40), tools = ['claude'] } = {}): void {
-  fs.mkdirSync(path.dirname(recordFile(run)), { recursive: true });
-  fs.writeFileSync(recordFile(run), JSON.stringify({
-    schemaVersion: 'v1alpha1', run, workflow: 'fix', sourceHash: 'f'.repeat(64), phase: 'end', status: 'succeeded', startedAt, username,
-    ...(benchmark ? {
-      benchmark: {
-        suite: { name: 'fix', sourceHash: 's1' }, repetitions: 1, baselineTeamRevision: team, scorers: [],
-        tasks: [{ id: 'fix', startingCommit: 'a'.repeat(40), sourceHash: 't1', baseline: 'valid' }],
-        arms: tools.map((tool) => ({ name: tool, tool, source: 'team', team: { kind: 'pulled', revision: team } })),
-        trials: tools.map((tool, order) => ({ task: 'fix', arm: tool, repetition: 1, order, step: `trials.r1.fix.${tool}.prompt`, result })),
-      },
-    } : {}),
-  }));
+/**
+ * The benchmark record the team published for a run of suite `fix` by `username`, whose one trial on each arm of
+ * `tools`, on team revision `team`, got `result`. Without `benchmark`, the run's workflow record instead.
+ */
+function publish(run: string, { username = 'bob', startedAt = YESTERDAY, result = 'passed' as TrialResult, benchmark = true, team = 'b'.repeat(40), tools = ['claude'] } = {}): void {
+  const file = benchmark ? recordFile(run) : path.join(getReportsDir(config), 'workflows', 'runs', `${run}.json`);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(benchmark
+    ? fixRecord(run, { username, startedAt, result, team, tools })
+    : { schemaVersion: 'v1alpha1', run, workflow: 'fix', sourceHash: 'f'.repeat(64), phase: 'end', status: 'succeeded', startedAt, username, isolated: true }));
 }
 
-/** A benchmark run this machine started and cancelled, so it ended with its one trial not run. */
-async function endedLocalRun(): Promise<string> {
-  const started = await startBenchmarkRun(config, { name: 'fix', suite: FIX_SUITE, tasks: { fix: fixTask('{{startingCommit}}') } });
-  if ('error' in started) throw new Error(started.error.message);
-  const runId = String(started.data.run);
-  await cancelRun(config, runId, {});
-  return runId;
+/** A benchmark run this machine reported, whose one trial did not run: its record in its run directory. */
+function reportedLocally(run: string): void {
+  const file = path.join(runsDir(config), run, 'benchmark.json');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(fixRecord(run, { username: 'tester', startedAt: new Date().toISOString(), result: 'not_run' })));
 }
 
 describe('benchmarkHistory', () => {
   it("reads this machine's ended benchmark runs and the team's benchmark records, this machine's copy of a run first", async () => {
-    const local = await endedLocalRun();
+    const local = 'r10ca1000';
+    reportedLocally(local);
     publish(local, { username: 'tester', result: 'passed' });
     publish('rb0b00001', { username: 'bob' });
     publish('rb0b00003', { benchmark: false });

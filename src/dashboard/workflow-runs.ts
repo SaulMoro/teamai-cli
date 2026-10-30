@@ -21,13 +21,13 @@ import { getReportsDir, usesBranchWorktree, type LocalConfig } from '../types.js
 import { knownSecrets, resolveWorkflowEnv } from '../env-resolution.js';
 import { LabelStore, type PassScore } from '../scorers/label-store.js';
 import { WorkOutcomeSchema, type WorkOutcome } from '../outcomes.js';
-import { BenchmarkRecordSchema } from '../benchmark/result.js';
+import { benchmarkRecordFile, BenchmarkRunRecordSchema } from '../benchmark/result.js';
 import { benchmarkCells, benchmarkTable, type BenchmarkCells } from '../benchmark/table.js';
 import { locateStep } from '../workflow/engine.js';
-import { buildEndRecord, RECORDS_DIR, runRecordStates, type RecordState, type WorkflowRunRecord } from '../workflow/records.js';
+import { benchmarkRecordPath, buildEndRecord, RECORDS_DIR, runRecordStates, type RecordState, type WorkflowRunRecord } from '../workflow/records.js';
 import { callerProvenance, respondProvenance, respondToHitl } from '../workflow/run-controls.js';
 import { PublishedRuns, type PublishedRun, type Taker } from '../workflow-published-runs.js';
-import { installOwner, isRunId, readRun, readRuns } from '../workflow/store.js';
+import { installOwner, isRunId, readRun, readRuns, runsDir } from '../workflow/store.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 import type { StepHitl, RunState } from '../workflow/types.js';
 import { HttpError } from './http.js';
@@ -40,7 +40,7 @@ const RUN_LIMIT = 50;
  * `prs` is the delivered pull request list #1090 adds to the end record.
  */
 type ReadRecord = Pick<WorkflowRunRecord,
-  'run' | 'workflow' | 'sourceHash' | 'teamRevision' | 'origin' | 'driver' | 'status' | 'end' | 'startedAt' | 'endedAt' | 'durationMs' | 'stepCounts' | 'username' | 'benchmark'>
+  'run' | 'workflow' | 'sourceHash' | 'teamRevision' | 'origin' | 'driver' | 'status' | 'end' | 'startedAt' | 'endedAt' | 'durationMs' | 'stepCounts' | 'username'>
   & { steps?: StepEntry[]; prs?: unknown[] };
 type StepEntry = Pick<NonNullable<WorkflowRunRecord['steps']>[number], 'step' | 'pass' | 'outcome' | 'tokens' | 'agent'>
   & { answer?: { choice: string; channel: string }; outcomes?: unknown[] };
@@ -80,8 +80,6 @@ const RecordSchema: z.ZodType<ReadRecord, z.ZodTypeDef, unknown> = z.object({
     outcomes: z.array(z.unknown()).optional().catch(undefined),
   })).optional(),
   prs: z.array(z.unknown()).optional().catch(undefined),
-  /** A block this version cannot read leaves the run listed, without its tables. */
-  benchmark: BenchmarkRecordSchema.optional().catch(undefined),
 });
 
 /** One run as a row of the page. */
@@ -267,12 +265,20 @@ export async function listHandoffs(config: LocalConfig): Promise<HandoffRow[]> {
   return runs.map((run) => ({ ...run, isMine: run.owner.id === self.id }));
 }
 
-/** A record holds `benchmark` only once its run has ended. */
-function benchmarkOf(record: ReadRecord): Pick<RunDetail, 'benchmark'> {
-  return record.benchmark ? { benchmark: benchmarkCells(benchmarkTable({ steps: record.steps, benchmark: record.benchmark })) } : {};
+/**
+ * The tables of the benchmark record in `file`, which a run has once its `teamai benchmark report` wrote it. A record
+ * this version cannot read leaves the run shown, without its tables.
+ */
+async function benchmarkOf(file: string): Promise<Pick<RunDetail, 'benchmark'>> {
+  try {
+    const parsed = BenchmarkRunRecordSchema.safeParse(JSON.parse(await fs.readFile(file, 'utf8')));
+    return parsed.success ? { benchmark: benchmarkCells(benchmarkTable({ benchmark: parsed.data })) } : {};
+  } catch {
+    return {};
+  }
 }
 
-function localDetail(run: RunState, row: LocalRunRow, scores: ReadonlyMap<string, PassScore[]> | undefined, scoring: ScoringTotal): RunDetail {
+function localDetail(run: RunState, row: LocalRunRow, scores: ReadonlyMap<string, PassScore[]> | undefined, scoring: ScoringTotal): Omit<RunDetail, 'benchmark'> {
   const live = new Map(run.steps.map((state) => [`${state.id}#${state.pass ?? 1}`, state]));
   const record = localRecord(run);
   const steps = (record.steps ?? []).map((entry) => {
@@ -283,7 +289,7 @@ function localDetail(run: RunState, row: LocalRunRow, scores: ReadonlyMap<string
     const answer = entry.answer ?? state?.answer;
     return stepRow({ ...entry, ...(answer ? { answer } : {}) }, state?.status ?? (entry.outcome ? STATUS_OF_OUTCOME[entry.outcome] : 'skipped'), scores, gate);
   });
-  return { run: row, steps, scoring, ...benchmarkOf(record) };
+  return { run: row, steps, scoring };
 }
 
 /** One run with a row per pass of each step, or undefined when the source holds no such run. */
@@ -292,12 +298,13 @@ export async function workflowRunDetail(config: LocalConfig, source: 'local' | '
   if (source === 'local') {
     const run = await readRun(config, runId);
     if (typeof run !== 'object') return undefined;
-    const [records, scores, scoring] = await Promise.all([
+    const [records, scores, scoring, benchmark] = await Promise.all([
       runRecordStates(config, run.status === 'running' ? [] : [run]),
       LabelStore.ofRuns(config, [runId], { published: false }),
       LabelStore.scoringTotal(config, runId, 'local'),
+      benchmarkOf(benchmarkRecordFile(runsDir(config), runId)),
     ]);
-    return localDetail(run, localRow(run, records), scores.get(runId), scoring);
+    return { ...localDetail(run, localRow(run, records), scores.get(runId), scoring), ...benchmark };
   }
   if (usesBranchWorktree(config)) {
     // The history refreshes the checkout; a detail only checks it is this repository's.
@@ -306,16 +313,17 @@ export async function workflowRunDetail(config: LocalConfig, source: 'local' | '
   }
   const record = await readRecord(path.join(getReportsDir(config), RECORDS_DIR, `${runId}.json`));
   if (!record) return undefined;
-  const [scores, scoring] = await Promise.all([
+  const [scores, scoring, benchmark] = await Promise.all([
     LabelStore.ofRuns(config, [runId], { published: true }),
     LabelStore.scoringTotal(config, runId, 'published'),
+    benchmarkOf(path.join(getReportsDir(config), benchmarkRecordPath(runId))),
   ]);
   const passes = scores.get(runId);
   return {
     run: reportedRow(record),
     steps: (record.steps ?? []).map((entry) => stepRow(entry, entry.outcome ? STATUS_OF_OUTCOME[entry.outcome] : 'skipped', passes)),
     scoring,
-    ...benchmarkOf(record),
+    ...benchmark,
   };
 }
 

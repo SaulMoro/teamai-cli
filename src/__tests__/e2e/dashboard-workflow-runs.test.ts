@@ -103,7 +103,7 @@ describe('dashboard workflow runs', () => {
   it('shows the results, usage and task by arm matrix of an ended benchmark run, from this machine and from the team reports, and lists it once on the Benchmarks page', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true });
     fixtures.push(fixture);
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+    const started = await fixture.teamai(['benchmark', 'run', 'fix']);
     expect(started.code, said(started)).toBe(0);
     const { run } = z.object({ run: z.string() }).parse(envelope(started).data?.done);
 

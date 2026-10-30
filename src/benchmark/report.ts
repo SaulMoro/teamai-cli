@@ -6,39 +6,16 @@
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { z } from 'zod';
-import { RunOriginSchema } from '../default-workflows.js';
 import { getCurrentVersion } from '../package-info.js';
 import { publishPendingRecords, queueBenchmarkRecord } from '../workflow/records.js';
 import { findAttemptRun } from '../workflow/run-location.js';
 import { runsDir } from '../workflow/store.js';
 import type { RunState, WorkflowFailure } from '../workflow/types.js';
 import { runComparisons, type ArmComparison } from './history.js';
-import { benchmarkRecord, BenchmarkRecordSchema } from './result.js';
+import { benchmarkRecord, benchmarkRecordFile, type BenchmarkRunRecord } from './result.js';
 import { planOfRun, type RunPlan } from './run-plan.js';
 import { benchmarkTable, formatBenchmarkTable, type BenchmarkTable } from './table.js';
 import { toolUnavailableNotice } from './trial.js';
-
-/** A benchmark run's record: its plan's trials, classified, with the run they ran in. No prompt, command, URL or path. */
-export const BenchmarkRunRecordSchema = BenchmarkRecordSchema.extend({
-  schemaVersion: z.literal(1),
-  run: z.string().min(1),
-  /** How the run's steps ended, before its `finally` steps ran. */
-  outcome: z.enum(['succeeded', 'failed', 'cancelled']),
-  teamaiVersion: z.string().min(1),
-  startedAt: z.string(),
-  /** When the run's steps ended. */
-  finishedAt: z.string(),
-  username: z.string().optional(),
-  /** The workflow the run ran: the team's `benchmark`, or teamai's default, by the hash of its bytes. */
-  workflow: z.object({ name: z.string(), origin: RunOriginSchema, sourceHash: z.string() }),
-});
-export type BenchmarkRunRecord = z.infer<typeof BenchmarkRunRecordSchema>;
-
-/** `runs/<run>/benchmark.json`: where a run's benchmark record is kept on this machine. */
-export function benchmarkRecordFile(runsRoot: string, run: string): string {
-  return path.join(runsRoot, run, 'benchmark.json');
-}
 
 /**
  * What `report` prints: the results as text, after a line for each arm whose tool the run's driver could not launch, and
