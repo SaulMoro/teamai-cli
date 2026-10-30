@@ -112,6 +112,11 @@ export interface WorkflowStep {
   /** On a prompt step: the most agent turns its tool may take, for a driver that can cap them. */
   maxTurns?: number;
   /**
+   * On a prompt step: `unattended` lets its tool edit and run commands without asking. Valid only under a strict
+   * `isolation: sandbox` floor, and leased only to a driver with `can.unattended`.
+   */
+  permissions?: 'unattended';
+  /**
    * What reaching `timeout`, `max_turns` or `budget` does. `fail`, the default, fails the step. `end_turn` ends the
    * agent's turn: on a prompt step the limits count from tool launch and the step succeeds with the limit it reached;
    * on a workflow step `timeout` and `budget` are an allowance its prompt turns spend.

@@ -31,7 +31,7 @@ export const INVOKE_ALIAS_SINCE = '0.28.0';
 
 const HEADER_KEYS = new Set(['schemaVersion', 'name', 'description', 'inputs', 'defaults', 'ends', 'outputs', 'loop', 'timeout', 'budget', 'setup', 'steps', 'finally', 'invoke', 'alias']);
 const ACTION_KEYS = Object.keys(STEP_ACTIONS);
-const STEP_KEYS = new Set(['id', 'needs', 'if', ...ACTION_KEYS, 'env', 'with', 'agent', 'tool', 'model', 'output', 'end', 'loop', 'break', 'for_each', 'approve', 'choose', 'interactive', 'workspace', 'session', 'scorers', 'requires', 'timeout', 'budget', 'max_turns', 'on_limit', 'deliver']);
+const STEP_KEYS = new Set(['id', 'needs', 'if', ...ACTION_KEYS, 'env', 'with', 'agent', 'tool', 'model', 'output', 'end', 'loop', 'break', 'for_each', 'approve', 'choose', 'interactive', 'workspace', 'session', 'scorers', 'requires', 'timeout', 'budget', 'max_turns', 'on_limit', 'permissions', 'deliver']);
 const EXACT_MODEL_KEYS: ReadonlySet<string> = new Set(['name', 'effort']);
 const STEP_LOOP_KEYS = new Set(['back_to', 'while', 'max_iterations']);
 const FOR_EACH_KEYS = new Set(['items', 'max_parallel']);
@@ -497,6 +497,13 @@ function parseBody(
       } else if (maxTurnsPair && actions.length > 0 && !promptPair && !promptFilePair) {
         diagnostics.push(locate(file, lineCounter, maxTurnsPair.key, `${field}.max_turns`, `${stepLabel} max_turns is only allowed on a prompt or prompt_file step`));
       }
+      const permissionsPair = item.items.find((pair) => scalarString(pair.key) === 'permissions');
+      const permissions = scalarString(permissionsPair?.value) === 'unattended' ? 'unattended' as const : undefined;
+      if (permissionsPair && permissions === undefined) {
+        diagnostics.push(locate(file, lineCounter, permissionsPair.value ?? permissionsPair.key, `${field}.permissions`, `${stepLabel} permissions must be unattended, which lets the tool edit and run commands without asking`));
+      } else if (permissionsPair && !promptPair && !promptFilePair) {
+        diagnostics.push(locate(file, lineCounter, permissionsPair.key, `${field}.permissions`, `${stepLabel} permissions is only allowed on a prompt or prompt_file step`));
+      }
       const onLimitPair = item.items.find((pair) => scalarString(pair.key) === 'on_limit');
       const onLimit = onLimitPair ? parseOnLimit(onLimitPair.value ?? onLimitPair.key, {
         field: `${field}.on_limit`, stepLabel, ends: forEachPair ? 'fan-out' : promptPair || promptFilePair ? 'prompt' : workflowPair && actions.length === 1 ? 'workflow' : actions.length > 0 ? 'none' : undefined,
@@ -681,6 +688,7 @@ function parseBody(
           ...(timeout !== undefined ? { timeout } : {}),
           ...(budget ? { budget } : {}),
           ...(maxTurns !== undefined ? { maxTurns } : {}),
+          ...(permissions ? { permissions } : {}),
           ...(onLimit ? { onLimit } : {}),
           ...(output ? { output } : {}),
           ...(end ? { end } : {}),

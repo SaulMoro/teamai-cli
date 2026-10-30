@@ -1393,6 +1393,36 @@ steps:
     ]));
   });
 
+  it('reads permissions: unattended on a prompt step, and reports another value or the key on another step', () => {
+    const ok = parse(`schemaVersion: v1alpha1
+name: build
+description: Build it.
+steps:
+  - id: plan
+    prompt: Plan it.
+    permissions: unattended
+`);
+    expect(ok.ok && ok.definition.steps[0]?.permissions).toBe('unattended');
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Build it.
+steps:
+  - id: plan
+    prompt: Plan it.
+    permissions: ask
+  - id: check
+    needs: [plan]
+    command: echo check
+    permissions: unattended
+`);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.diagnostics.map(formatDiagnostic)).toEqual(expect.arrayContaining([
+      'workflows/build.yaml:7: field "steps[0].permissions": step "plan" permissions must be unattended, which lets the tool edit and run commands without asking',
+      'workflows/build.yaml:11: field "steps[1].permissions": step "check" permissions is only allowed on a prompt or prompt_file step',
+    ]));
+  });
+
   it('reads on_limit on a prompt step with a limit, a budget on that prompt, and on_limit on a workflow step with a timeout', () => {
     const result = parse(`schemaVersion: v1alpha1
 name: build
