@@ -1884,3 +1884,79 @@ steps:
     ]);
   });
 });
+
+describe('workflow: { from }', () => {
+  const problems = (content: string): string[] => {
+    const result = parse(content);
+    return result.ok ? [] : result.diagnostics.map(formatDiagnostic);
+  };
+
+  it('runs the workflow output of a step it needs', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Plan, then run the plan.
+steps:
+  - id: plan
+    command: node plan.js
+    output: { definition: workflow, plan: json }
+  - id: trials
+    needs: [plan]
+    workflow: { from: plan }
+`);
+    expect(result.ok, result.ok ? '' : result.diagnostics.map(formatDiagnostic).join('\n')).toBe(true);
+    if (!result.ok) return;
+    const trials = result.definition.steps[1];
+    expect(trials && stepWorkflow(trials)).toEqual({ kind: 'from', step: 'plan' });
+  });
+
+  it('refuses a from that names no step it needs, or one without a workflow output, or with other keys', () => {
+    expect(problems(`schemaVersion: v1alpha1
+name: build
+description: Plan, then run the plan.
+steps:
+  - id: plan
+    command: node plan.js
+    output: { definition: workflow }
+  - id: notes
+    needs: []
+    command: node notes.js
+    output: { text: string }
+  - id: unneeded
+    needs: [notes]
+    workflow: { from: plan }
+  - id: untyped
+    needs: [notes]
+    workflow: { from: notes }
+  - id: extra
+    needs: [plan]
+    workflow: { from: plan, steps: [] }
+`)).toEqual([
+      'workflows/build.yaml:20: field "steps[4].workflow": step "extra" workflow must be the name of a workflow in workflows/, an inline workflow, or { from: <step> }',
+      'workflows/build.yaml:14: field "steps[2].workflow.from": step "unneeded" workflow.from names "plan", which is not a step it needs',
+      'workflows/build.yaml:17: field "steps[3].workflow.from": step "untyped" workflow.from names "notes", whose output has no workflow field',
+    ]);
+  });
+
+  it('refuses a workflow output on a step that can run more than once', () => {
+    expect(problems(`schemaVersion: v1alpha1
+name: build
+description: Plan in a loop and per item.
+steps:
+  - id: plan
+    command: node plan.js
+    output: { definition: workflow }
+  - id: check
+    needs: [plan]
+    command: node check.js
+    loop: { back_to: plan, max_iterations: 2 }
+  - id: each
+    needs: []
+    for_each: "[]"
+    command: node plan.js
+    output: { definition: workflow }
+`)).toEqual([
+      'workflows/build.yaml:7: field "steps[0].output": step "plan" outputs a workflow, so it runs once; it may not repeat in a loop or run per item of a for_each',
+      'workflows/build.yaml:16: field "steps[2].output": step "each" outputs a workflow, so it runs once; it may not repeat in a loop or run per item of a for_each',
+    ]);
+  });
+});

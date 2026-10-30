@@ -16,7 +16,7 @@ import {
   conditionDiagnostics, endDiagnostics, expressionSite, readDiagnostics, readScope, splitReads, type ConditionNode, type Ending, type ReadSite,
 } from './reads.js';
 import { parseHitl } from './parse-hitl.js';
-import { loopProblems } from './loop.js';
+import { loopProblems, stepLoops } from './loop.js';
 import { modelValueProblem } from '../models/aliases.js';
 import type { StepModel } from './step-model.js';
 import { ClonePlaceSchema } from './clone.js';
@@ -123,7 +123,7 @@ function parseOutput(node: Node, field: string, ctx: ParseContext, place: Output
       return undefined;
     }
     const fields: Record<string, OutputSchema> = {};
-    let workflowField: string | undefined;
+    let bundleField: string | undefined;
     for (const pair of node.items) {
       const keyNode = isYamlNode(pair.key) ? pair.key : undefined;
       const fieldValueNode = isYamlNode(pair.value) ? pair.value : undefined;
@@ -137,11 +137,11 @@ function parseOutput(node: Node, field: string, ctx: ParseContext, place: Output
         continue;
       }
       const child = parseOutput(fieldValueNode, `${field}.${key}`, ctx, place === 'output' ? 'field' : inner);
-      if (child?.type === 'workflow' && workflowField !== undefined) {
-        diagnostics.push(locate(file, lineCounter, fieldValueNode, `${field}.${key}`, `a step output has at most one workflow field; "${workflowField}" is one already`));
+      if (child?.type === 'workflow' && bundleField !== undefined) {
+        diagnostics.push(locate(file, lineCounter, fieldValueNode, `${field}.${key}`, `a step output has at most one workflow field; "${bundleField}" is one already`));
         continue;
       }
-      if (child?.type === 'workflow') workflowField = key;
+      if (child?.type === 'workflow') bundleField = key;
       if (child) fields[key] = child;
     }
     return Object.keys(fields).length === node.items.length ? { type: 'object', fields } : undefined;
@@ -317,6 +317,8 @@ function parseBody(
   } else {
     const queue = checks ?? [];
     const sessions: Array<{ id: string; from: string; node: Node; field: string }> = [];
+    const fromSites: FromSite[] = [];
+    const producers: Producer[] = [];
     const seen = new Set<string>();
     const graph: GraphNode[] = [];
     const conditions: ConditionNode[] = [];
@@ -390,9 +392,18 @@ function parseBody(
       const forEachPair = item.items.find((pair) => scalarString(pair.key) === 'for_each');
       // The step's templates and the inline workflow it runs render once per item, so they read item as a template.
       const bindsItem = itemBound || forEachPair !== undefined;
-      const inline = isMap(workflowPair?.value)
-        ? parseInline(workflowPair.value, `${field}.workflow`, stepLabel, ctx, inputs, bindsItem, { parent: { steps, needs }, checks: queue })
+      const workflowMap = isMap(workflowPair?.value) ? workflowPair.value : undefined;
+      const workflowFromPair = workflowMap?.items.find((pair) => scalarString(pair.key) === 'from');
+      const fromStep = scalarString(workflowFromPair?.value)?.trim();
+      const runsFrom = workflowMap?.items.length === 1 && fromStep !== undefined && TOKEN.test(fromStep) ? { from: fromStep } : undefined;
+      const inline = workflowMap && !workflowFromPair
+        ? parseInline(workflowMap, `${field}.workflow`, stepLabel, ctx, inputs, bindsItem, { parent: { steps, needs }, checks: queue })
         : undefined;
+      if (workflowFromPair && !runsFrom) {
+        diagnostics.push(locate(file, lineCounter, workflowMap, `${field}.workflow`, `${stepLabel} workflow must be the name of a workflow in workflows/, an inline workflow, or { from: <step> }`));
+      } else if (runsFrom && id) {
+        fromSites.push({ id, from: runsFrom.from, needs, node: (workflowFromPair?.value ?? workflowMap) as Node, field: `${field}.workflow.from` });
+      }
       const approvePair = item.items.find((pair) => scalarString(pair.key) === 'approve');
       const choosePair = item.items.find((pair) => scalarString(pair.key) === 'choose');
       const approval = approvePair ? parseHitl('approve', approvePair.value, `${field}.approve`, ctx) : undefined;
@@ -426,7 +437,7 @@ function parseBody(
       if (actions.length > 1 || (actions.length === 0 && !endPair && !approvePair && !choosePair)) {
         diagnostics.push(locate(file, lineCounter, item, field, actions.length > 1 ? `a step has exactly one action: ${ACTION_LIST}` : `a step has exactly one action: ${ACTION_LIST}; or no action with end, approve, or choose`));
       }
-      if (workflowPair && !inline && (!workflow || !TOKEN.test(workflow))) {
+      if (workflowPair && !inline && !workflowFromPair && (!workflow || !TOKEN.test(workflow))) {
         diagnostics.push(locate(file, lineCounter, workflowPair.value ?? workflowPair.key ?? item, `${field}.workflow`, `${stepLabel} workflow must be the name of a workflow in workflows/`));
       }
       if (commandPair && (command === undefined || command.trim() === '')) {
@@ -594,6 +605,9 @@ function parseBody(
         diagnostics.push(locate(file, lineCounter, outputPair.key as Node, `${field}.output`, `${stepLabel} output is not allowed on a workflow step; declare outputs in the workflow it runs`));
       } else if (outputPair?.value) {
         output = parseOutput(outputPair.value, `${field}.output`, ctx, 'output');
+        if (output && workflowField(output) !== undefined && id) {
+          producers.push({ id, node: outputPair.value, field: `${field}.output`, repeats: bindsItem || loop !== undefined });
+        }
       } else if (outputPair) {
         diagnostics.push(locate(file, lineCounter, outputPair.key ?? item, `${field}.output`, 'output must be a shorthand type'));
       }
@@ -656,6 +670,7 @@ function parseBody(
           ...(prompt ? { prompt } : {}),
           ...(promptFile ? { promptFile } : {}),
           ...(inline ? { workflow: inline.workflow } : {}),
+          ...(runsFrom ? { workflow: runsFrom } : {}),
           ...(workflow ? { workflow } : {}),
           ...(withValues ? { with: withValues } : {}),
           ...(agent ? { agent } : {}),
@@ -679,6 +694,7 @@ function parseBody(
       }
     });
     queue.push(() => diagnostics.push(...sessionProblems(file, lineCounter, steps, parent, sessions)));
+    queue.push(() => diagnostics.push(...fromProblems(ctx, steps, fromSites, producers)));
     if (!checks) for (const check of queue) check();
     diagnostics.push(...graphDiagnostics(ctx, graph, seen));
     diagnostics.push(...conditionDiagnostics(ctx, conditions, reads));
@@ -778,6 +794,56 @@ function sessionProblems(
     }
     const reached = own ? needsReach(local.get(site.id)?.needs, site.from, local) : needsReach(parent?.needs, site.from, enclosing);
     if (!reached) reject(`step "${site.id}" session.from names "${site.from}", which is not a step it needs, directly or through its needs`);
+  }
+  return problems;
+}
+
+/** A step that runs `workflow: { from }`, with what it needs as written. */
+interface FromSite {
+  id: string;
+  from: string;
+  needs: string[] | undefined;
+  node: Node;
+  field: string;
+}
+
+/** A step whose output has a workflow field, and whether it runs per item or in a workflow loop. */
+interface Producer {
+  id: string;
+  node: Node;
+  field: string;
+  repeats: boolean;
+}
+
+/** The field of `output` that holds a workflow, or undefined when it has none. */
+export function workflowField(output: OutputSchema | undefined): string | undefined {
+  if (output?.type !== 'object') return undefined;
+  return Object.entries(output.fields).find(([, schema]) => schema.type === 'workflow')?.[0];
+}
+
+/**
+ * A `from` step runs the workflow output of a step it needs directly. A step with a workflow output runs once: the run
+ * admits its workflow when it reports and never replaces it, so it may not run per item or in a loop.
+ */
+function fromProblems({ file, lineCounter }: ParseContext, steps: WorkflowStep[], sites: FromSite[], producers: Producer[]): WorkflowDiagnostic[] {
+  const local = new Map(steps.map((step) => [step.id, step]));
+  const loops = stepLoops(steps);
+  const problems: WorkflowDiagnostic[] = [];
+  for (const site of sites) {
+    if (!site.needs?.includes(site.from)) {
+      problems.push(locate(file, lineCounter, site.node, site.field, `step "${site.id}" workflow.from names "${site.from}", which is not a step it needs`));
+      continue;
+    }
+    const producer = local.get(site.from);
+    // A producer that is not a step, or that has a problem of its own, is reported already.
+    if (producer && workflowField(producer.output) === undefined) {
+      problems.push(locate(file, lineCounter, site.node, site.field, `step "${site.id}" workflow.from names "${site.from}", whose output has no workflow field`));
+    }
+  }
+  for (const producer of producers) {
+    if (producer.repeats || [...loops.ranges.values()].some((range) => range.has(producer.id))) {
+      problems.push(locate(file, lineCounter, producer.node, producer.field, `step "${producer.id}" outputs a workflow, so it runs once; it may not repeat in a loop or run per item of a for_each`));
+    }
   }
   return problems;
 }
