@@ -83,6 +83,8 @@ export const BenchmarkPlanSchema = z.object({
   baselineTeamRevision: CommitSchema,
   selection: TeamSelectionSchema,
   repetitions: z.number().int().min(1).max(10),
+  /** The lanes the trials run in, each one trial at a time; absent: one. A trial's step is under `lane<n>` with more than one. */
+  parallel: z.number().int().positive().optional(),
   /** The suite's `trial`: the limits of every trial's prompt. */
   limits: TrialLimitsSchema.optional(),
   tasks: z.array(PlannedTaskSchema).nonempty(),
@@ -97,14 +99,15 @@ export type BenchmarkPlan = z.infer<typeof BenchmarkPlanSchema>;
  * One trial per task x arm x repetition, ordered by repetition, then task in file-name order, then arm, with the arms
  * of repetition r rotated by r - 1 (A B C, B C A, C A B). The order is not a dependency: trials never need each other.
  */
-export function trialsOf(tasks: readonly Pick<Task, 'id'>[], arms: readonly Pick<PlannedArm, 'name' | 'workflow'>[], repetitions: number): PlannedTrial[] {
+export function trialsOf(tasks: readonly Pick<Task, 'id'>[], arms: readonly Pick<PlannedArm, 'name' | 'workflow'>[], repetitions: number, parallel = 1): PlannedTrial[] {
   const trials: PlannedTrial[] = [];
   for (let repetition = 1; repetition <= repetitions; repetition += 1) {
     const shift = (repetition - 1) % arms.length;
     const rotated = [...arms.slice(shift), ...arms.slice(0, shift)];
     for (const task of tasks) {
       for (const arm of rotated) {
-        trials.push({ order: trials.length + 1, repetition, task: task.id, arm: arm.name, step: stepOf({ repetition, task: task.id, arm: arm.name, kind: workKind(arm) }) });
+        const lane = parallel > 1 ? `${laneOf((trials.length % parallel) + 1)}.` : '';
+        trials.push({ order: trials.length + 1, repetition, task: task.id, arm: arm.name, step: `${lane}${stepOf({ repetition, task: task.id, arm: arm.name, kind: workKind(arm) })}` });
       }
     }
   }
@@ -117,8 +120,13 @@ function workKind(arm: Pick<PlannedArm, 'workflow'>): 'prompt' | 'workflow' {
 }
 
 /** `r<repetition>.<task>.<arm>.<kind>`: real nested inline-workflow scopes, so locateStep walks them. */
-export function stepOf({ repetition, task, arm, kind }: { repetition: number; task: string; arm: string; kind: 'prompt' | 'workflow' | 'check' }): string {
+function stepOf({ repetition, task, arm, kind }: { repetition: number; task: string; arm: string; kind: 'prompt' | 'workflow' }): string {
   return `${trialCopyOf({ repetition, task, arm })}.${kind}`;
+}
+
+/** The check step of a check task's trial: beside its work step, in the clone they share. */
+export function checkStepOf({ step }: Pick<PlannedTrial, 'step'>): string {
+  return `${step.slice(0, step.lastIndexOf('.'))}.check`;
 }
 
 /** `baselines.<task>`: the step that tries a check task's check on its clean starting commit. */
@@ -127,7 +135,7 @@ export function baselineStepOf(task: string): string {
 }
 
 /** `r<repetition>.<task>.<arm>`: the step that opens the clone a trial's prompt and check share. */
-export function trialCopyOf({ repetition, task, arm }: { repetition: number; task: string; arm: string }): string {
+function trialCopyOf({ repetition, task, arm }: { repetition: number; task: string; arm: string }): string {
   return `r${repetition}.${task}.${arm}`;
 }
 
@@ -149,11 +157,12 @@ export function freezePlan(input: {
     baselineTeamRevision: input.baselineTeamRevision,
     selection: input.selection,
     repetitions: suite.repetitions,
+    ...(suite.parallel > 1 ? { parallel: suite.parallel } : {}),
     ...(suite.trial ? { limits: suite.trial } : {}),
     tasks: [planned(first), ...rest.map(planned)],
     arms: input.arms,
     scorers: Object.entries({ ...input.scorers, ...correctnessScorers(suite) }).map(([name, pin]) => ({ name, rubric: { sourceHash: pin.sourceHash } })),
-    trials: trialsOf(suite.tasks, input.arms, suite.repetitions),
+    trials: trialsOf(suite.tasks, input.arms, suite.repetitions, suite.parallel),
   };
 }
 
@@ -194,16 +203,21 @@ type FileStep = { id: string } & Record<string, unknown>;
  * beneath it inherits that, and a team's own `benchmark` workflow may relax it; the run's own timeout bounds it.
  *
  *   baselines                     (check tasks only) outputs { <task>: its baseline's result }
- *     <task>                      needs []; command teamai benchmark check --baseline; workspace: a clone of the starting commit
- *                                 with team none; output { result }
- *   r<rep>                        one per repetition; needs [baselines] and an `if` that reads it when there are baselines, else needs []
- *     <task>                      needs []; a check task's: if steps.baselines.outputs.<task> == 'failed'
- *       <arm>                     needs [], workspace: a clone of the starting commit with the arm's team
+ *     <task>                      needs the baseline `parallel` before it; command teamai benchmark check --baseline; workspace:
+ *                                 a clone of the starting commit with team none; output { result }
+ *   r<rep>                        one per repetition; the first needs [baselines] and an `if` that reads it when there are
+ *                                 baselines, else needs []; each later one needs the one before it
+ *     <task>                      needs the task before it
+ *       <arm>                     needs the arm before it; a check task's: if steps.baselines.outputs.<task> == 'failed';
+ *                                 workspace: a clone of the starting commit with the arm's team
  *         prompt                  workspace continue; tool, exact model, limits under on_limit: end_turn; scorers
  *         | workflow              for an arm that runs one: its pinned copy, with { task }; workspace continue; the limits
  *                                 but max_turns as its allowance under on_limit: end_turn; scorers
  *         check                   needs [the one above]; command teamai benchmark check --trial; workspace continue (check tasks only)
  *   settled                       needs every scope above; an `if` that reads them; end: settled
+ *
+ * With `parallel` above 1, the repetitions sit in `lane<n>` scopes, one per lane, each needing [baselines] as the first
+ * repetition does, and each holding its share of the trials in plan order, the trial of order o in lane ((o - 1) mod n) + 1.
  *
  * Step ids are those `stepOf` and `baselineStepOf` name, under the step that runs the workflow.
  */
@@ -213,9 +227,9 @@ export function compileBundle(plan: BenchmarkPlan, { suite }: CommittedSuite, ar
   const tasks = new Map(suite.tasks.map((task) => [task.id, task]));
   const arms = new Map(plan.arms.map((arm) => [arm.name, arm]));
   const checkOutput = { result: CHECK_RESULTS.join(' | ') };
-  const baselines = suite.tasks.flatMap((task): FileStep[] => (task.judge.kind === 'check'
-    ? [{ id: task.id, needs: [], command: 'teamai benchmark check --baseline', workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: { treatment: 'none' } } }, output: checkOutput }]
-    : []));
+  const baselines = chained(suite.tasks.flatMap((task): FileStep[] => (task.judge.kind === 'check'
+    ? [{ id: task.id, command: 'teamai benchmark check --baseline', workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: { treatment: 'none' } } }, output: checkOutput }]
+    : [])), plan.parallel ?? 1);
   const tried = baselines.length > 0;
   const workOf = (arm: PlannedArm, task: Task): FileStep => {
     const names = [...suite.scorers, ...(task.judge.kind === 'criteria' ? [correctnessScorerName(task.id)] : [])];
@@ -235,25 +249,33 @@ export function compileBundle(plan: BenchmarkPlan, { suite }: CommittedSuite, ar
       ...(names.length > 0 ? { scorers: { names, sampling: 'all' } } : {}),
     };
   };
-  const repetitions = [...new Set(plan.trials.map((trial) => trial.repetition))].map((repetition): FileStep => {
-    const ofRepetition = plan.trials.filter((trial) => trial.repetition === repetition);
-    const taskSteps = [...new Set(ofRepetition.map((trial) => trial.task))].flatMap((id): FileStep[] => {
-      const task = tasks.get(id);
-      if (!task) return [];
-      const armSteps = ofRepetition.filter((trial) => trial.task === id).flatMap((trial): FileStep[] => {
-        const arm = arms.get(trial.arm);
-        if (!arm) return [];
-        const work = workOf(arm, task);
-        const check = task.judge.kind === 'check' ? [{ id: 'check', needs: [work.id], command: 'teamai benchmark check --trial', workspace: 'continue', output: checkOutput }] : [];
-        return [{
-          id: arm.name, needs: [], workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: cloneTeamOf(arm.team, plan.selection) } },
-          workflow: { steps: [work, ...check] },
-        }];
-      });
-      return [{ id, needs: [], ...(task.judge.kind === 'check' ? { if: `steps.${BASELINES}.outputs.${id} == 'failed'` } : {}), workflow: { steps: armSteps } }];
-    });
-    return { id: `r${repetition}`, ...(tried ? { needs: [BASELINES], if: `steps.${BASELINES}.outcome != null` } : { needs: [] }), workflow: { steps: taskSteps } };
-  });
+  const trialOf = (trial: PlannedTrial): FileStep[] => {
+    const task = tasks.get(trial.task);
+    const arm = arms.get(trial.arm);
+    if (!task || !arm) return [];
+    const work = workOf(arm, task);
+    const check = task.judge.kind === 'check' ? [{ id: 'check', needs: [work.id], command: 'teamai benchmark check --trial', workspace: 'continue', output: checkOutput }] : [];
+    return [{
+      id: arm.name, ...(task.judge.kind === 'check' ? { if: `steps.${BASELINES}.outputs.${task.id} == 'failed'` } : {}),
+      workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: cloneTeamOf(arm.team, plan.selection) } },
+      workflow: { steps: [work, ...check] },
+    }];
+  };
+  // A lane's trials, in plan order, nested by repetition and task, each step after the one before it. A trial, not its
+  // task, reads the baseline, so a task whose baseline skips its trials still settles, and the next one in the lane runs.
+  const laneSteps = (trials: readonly PlannedTrial[]): FileStep[] => chained([...new Set(trials.map((trial) => trial.repetition))].map((repetition): FileStep => {
+    const ofRepetition = trials.filter((trial) => trial.repetition === repetition);
+    const taskSteps = [...new Set(ofRepetition.map((trial) => trial.task))].map((id): FileStep => ({
+      id, workflow: { steps: chained(ofRepetition.filter((trial) => trial.task === id).flatMap(trialOf)) },
+    }));
+    return { id: `r${repetition}`, workflow: { steps: chained(taskSteps) } };
+  }));
+  const parallel = plan.parallel ?? 1;
+  const afterBaselines = tried ? { needs: [BASELINES], if: `steps.${BASELINES}.outcome != null` } : { needs: [] };
+  const [firstStep, ...laterSteps] = parallel > 1 ? [] : laneSteps(plan.trials);
+  const repetitions: FileStep[] = parallel > 1
+    ? Array.from({ length: parallel }, (_, index) => ({ id: laneOf(index + 1), ...afterBaselines, workflow: { steps: laneSteps(plan.trials.filter((trial) => trial.step.startsWith(`${laneOf(index + 1)}.`))) } }))
+    : [...(firstStep ? [{ ...firstStep, ...afterBaselines }] : []), ...laterSteps];
   const scopes: FileStep[] = [
     ...(tried ? [{ id: BASELINES, workflow: { outputs: Object.fromEntries(baselines.map(({ id }) => [id, `steps.${id}.outputs.result`])), steps: baselines } }] : []),
     ...repetitions,
@@ -271,6 +293,24 @@ export function compileBundle(plan: BenchmarkPlan, { suite }: CommittedSuite, ar
     workflows: Object.fromEntries([...armWorkflows.values()].flatMap(({ files }) => Object.entries(files))),
     scorers: correctnessScorers(suite),
   };
+}
+
+/**
+ * `steps` in lanes of `lanes`: each needs the step `lanes` before it, whatever that one's outcome, so a lane runs one step
+ * at a time; the first of each lane needs nothing.
+ */
+function chained(steps: readonly FileStep[], lanes = 1): FileStep[] {
+  return steps.map((step, index) => {
+    const before = steps[index - lanes];
+    if (!before) return { ...step, needs: [] };
+    const ran = `steps.${before.id}.outcome != null`;
+    return { ...step, needs: [before.id], if: typeof step.if === 'string' ? `${ran} && ${step.if}` : ran };
+  });
+}
+
+/** `lane<n>`: the scope of the trials a suite with `parallel` above 1 runs in lane n. */
+function laneOf(lane: number): string {
+  return `lane${lane}`;
 }
 
 /** What check.add writes before a check of `judge`: its fix's files, then `checkFiles`, the suite directory's as committed. */

@@ -25,7 +25,7 @@ import { runShellCommand } from '../workflow/shell-command.js';
 import type { WorkflowFailure } from '../workflow/types.js';
 import { untrustedGit, type Git } from '../workflow/worktree.js';
 import { checkVerdict, type CheckResult, type CheckVerdict } from './check.js';
-import { BENCHMARK_PLAN_SCHEMA_VERSION, baselineStepOf, stepOf, type BenchmarkPlan, type PlannedArm } from './plan.js';
+import { BENCHMARK_PLAN_SCHEMA_VERSION, baselineStepOf, checkStepOf, type BenchmarkPlan, type PlannedArm } from './plan.js';
 import type { CheckFile, Suite } from './suite.js';
 import { planOfRun } from './run-plan.js';
 import type { Added } from './terms.js';
@@ -174,7 +174,7 @@ export async function runCheckStep({ mode, env: given, cwd, signal }: { mode: Ch
 
 /** The check task `step` checks in `mode`, its check, and for a trial's check, the trial as its lines name it. */
 function checkedBy(plan: BenchmarkPlan, mode: CheckStepMode, step: string): { task: BenchmarkPlan['tasks'][number]; judge: Extract<BenchmarkPlan['tasks'][number]['judge'], { kind: 'check' }>; at?: TrialAt } | undefined {
-  const trial = mode === 'trial' ? plan.trials.find((planned) => stepOf({ ...planned, kind: 'check' }) === step) : undefined;
+  const trial = mode === 'trial' ? plan.trials.find((planned) => checkStepOf(planned) === step) : undefined;
   const task = plan.tasks.find((planned) => (mode === 'trial' ? planned.id === trial?.task : baselineStepOf(planned.id) === step));
   if (task?.judge.kind !== 'check') return undefined;
   return { task, judge: task.judge, ...(trial ? { at: { ...trial, total: plan.trials.length } } : {}) };

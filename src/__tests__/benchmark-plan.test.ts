@@ -34,11 +34,11 @@ afterEach(() => {
  * the first with no tool or team (`teams[i]`) of its own runs model m<i>, as each arm changes one of the defaults.
  * `trial` is the suite's `trial` value.
  */
-function suiteOf({ tasks = 1, arms = 1, repetitions = 1, tools = [] as string[], teams = [] as string[], trial = '' } = {}): BenchmarkSuiteFiles {
+function suiteOf({ tasks = 1, arms = 1, repetitions = 1, tools = [] as string[], teams = [] as string[], trial = '', parallel = 1 } = {}): BenchmarkSuiteFiles {
   const names = (prefix: string, count: number): string[] => Array.from({ length: count }, (_, index) => `${prefix}${String(index + 1).padStart(2, '0')}`);
   return {
     name: 'fix',
-    suite: `schemaVersion: v1alpha1\nname: fix\nrepo: https://github.com/fixture/app.git\ndefaults: { tool: claude }\narms: [${names('a', arms).map((name, index) => `{ name: ${name}${tools[index] ? `, tool: ${tools[index]}` : teams[index] ? `, team: ${teams[index]}` : index > 0 ? `, model: m${index + 1}` : ''} }`).join(', ')}]\nrepetitions: ${repetitions}\ntimeout: 10m\n${trial ? `trial: ${trial}\n` : ''}`,
+    suite: `schemaVersion: v1alpha1\nname: fix\nrepo: https://github.com/fixture/app.git\ndefaults: { tool: claude }\narms: [${names('a', arms).map((name, index) => `{ name: ${name}${tools[index] ? `, tool: ${tools[index]}` : teams[index] ? `, team: ${teams[index]}` : index > 0 ? `, model: m${index + 1}` : ''} }`).join(', ')}]\nrepetitions: ${repetitions}\nparallel: ${parallel}\ntimeout: 10m\n${trial ? `trial: ${trial}\n` : ''}`,
     tasks: Object.fromEntries(names('t', tasks).map((name) => [name,
       "schemaVersion: v1alpha1\ntitle: Fix it\nprompt: Make the test pass.\nstartingCommit: '{{startingCommit}}'\ncheck: { run: node test.js, protect: [test.js] }\n"])),
   };
@@ -293,7 +293,7 @@ describe('benchmark plan run', () => {
   });
 
   it('holds every baseline and trial from its only driver when that driver is not a sandbox, rather than settling them', async () => {
-    const { config, runId } = await startFix({ tasks: 2 });
+    const { config, runId } = await startFix({ tasks: 2, parallel: 2 });
 
     const next = await leaseNext(config, runId, driver, { can: { ...can, isolation: 'none' }, prepare: true, alone: true });
 
@@ -323,8 +323,8 @@ describe('benchmark plan run', () => {
 
   // Retried, so a busy machine's one slow round does not fail it; a regression is slow every time. A second leaves room for
   // a CI runner several times slower than a laptop, where each takes tens of milliseconds.
-  it('reconciles a new run of 20 tasks, 6 arms and 10 repetitions, and answers a poll on it, in under a second each', { retry: 2 }, async () => {
-    const { config, runId } = await startFix({ tasks: 20, arms: 6, repetitions: 10 });
+  it('reconciles a new run of 20 tasks, 6 arms and 10 repetitions in 32 lanes, and answers a poll on it, in under a second each', { retry: 2 }, async () => {
+    const { config, runId } = await startFix({ tasks: 20, arms: 6, repetitions: 10, parallel: 32 });
     await settleBaselines(config, runId, driver, can);
     const unsandboxed = { ...can, isolation: 'none' as const };
     const reconciled: number[] = [];
@@ -348,8 +348,9 @@ describe('benchmark plan run', () => {
       polled.push(HeldSchema.parse(next).data.wait.held.length);
     }
 
-    expect(reconciled).toEqual([1200, 1200, 1200]);
-    expect(polled).toEqual([1200, 1200, 1200]);
+    // The first trial of each lane is ready; the other 1168 wait on the one before them.
+    expect(reconciled).toEqual([32, 32, 32]);
+    expect(polled).toEqual([32, 32, 32]);
     // The fastest of three is the least noisy estimate of what one call costs.
     expect(Math.min(...reconcileMs)).toBeLessThan(1000);
     expect(Math.min(...pollMs)).toBeLessThan(1000);

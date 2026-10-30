@@ -17,7 +17,7 @@ import { LimitSchema } from '../workflow/requirements.js';
 import type { RunState } from '../workflow/types.js';
 import { CheckOutputSchema, type CheckResult } from './check.js';
 import { compareAgent } from './agent-match.js';
-import { baselineStepOf, correctnessScorerName, stepOf, type BenchmarkPlan, type PlannedArm, type PlannedTask, type PlannedTrial } from './plan.js';
+import { baselineStepOf, checkStepOf, correctnessScorerName, type BenchmarkPlan, type PlannedArm, type PlannedTask, type PlannedTrial } from './plan.js';
 import type { RunPlan } from './run-plan.js';
 import { ArmTeamSchema, TrialLimitsSchema } from './terms.js';
 
@@ -119,7 +119,7 @@ export function benchmarkRecord(run: RunState, { plan, prefix }: RunPlan): Bench
       const verdicts = verdictsOf(trial);
       const scoringCost = scoringCostOf(verdicts);
       const work = stateOf(trial.step);
-      const result = trialResultOf({ prompt: work, check: stateOf(stepOf({ ...trial, kind: 'check' })), verdicts }, plan, trial);
+      const result = trialResultOf({ prompt: work, check: stateOf(checkStepOf(trial)), verdicts }, plan, trial);
       const arm = plan.arms.find(({ name }) => name === trial.arm);
       const entry = arm?.workflow
         ? projectionOf(promptPassesUnder(run, `${prefix}${trial.step}`), arm, plan.limits?.maxTurns !== undefined ? ['max_turns'] : [])

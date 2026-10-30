@@ -59,13 +59,14 @@ export const PRODUCT_URL = 'https://github.com/fixture/app.git';
  * that never returns, in the clone's own .git/info/attributes. Each such filter logs its pid, read by `filterPids`.
  * `fixes-and-runs-out-of-turns` makes the check
  * pass, then, when launched with --max-turns, ends as Claude does at that cap: an `error_max_turns` result and exit 1.
+ * `fixes-slowly` makes the check pass and exits after three seconds.
  * `fixes-and-spends` makes the check pass and bills 140 tokens: as claude, in two messages streamed as Claude streams
  * them with partial messages, and then works on with no result; as codex, in the one turn.completed Codex prints as it
  * ends.
  */
 export type FakeTool = 'fixes' | 'does-nothing' | 'fails-first' | 'skips-the-check' | 'adds-a-helper' | 'adds-a-helper-repository' | 'writes-a-passing-test' | 'hangs'
   | 'fixes-and-hangs' | 'corrupts-git-and-hangs' | 'fixes-behind-a-hanging-filter' | 'fixes-behind-a-hanging-smudge' | 'fixes-and-runs-out-of-turns'
-  | 'fixes-and-spends';
+  | 'fixes-and-spends' | 'fixes-slowly';
 
 /**
  * What a fake tool does on the fixture's first launch of any fake tool, before it answers: push a team commit of
@@ -82,12 +83,12 @@ const JudgeLaunchSchema = z.object({ labels: z.array(z.string()), diff: z.string
 export type JudgeLaunch = z.infer<typeof JudgeLaunchSchema>;
 
 /**
- * Where one launch of a fake tool ran: which tool, the `--model` and the effort it was launched with (null without one), its cwd,
+ * Where one launch of a fake tool ran: when it started, in ms since the epoch, which tool, the `--model` and the effort it was launched with (null without one), its cwd,
  * that cwd's own `.git`, its HEAD and its remotes, every file in it outside `.git`, and its AGENTS.md and CLAUDE.md
  * (null when missing).
  */
 const ToolLaunchSchema = z.object({
-  tool: z.string(), model: z.string().nullable(), effort: z.string().nullable(), cwd: z.string(), ownGit: z.boolean(), head: z.string(), remotes: z.string(),
+  at: z.number(), tool: z.string(), model: z.string().nullable(), effort: z.string().nullable(), cwd: z.string(), ownGit: z.boolean(), head: z.string(), remotes: z.string(),
   paths: z.array(z.string()), agentFiles: z.object({ 'AGENTS.md': z.string().nullable(), 'CLAUDE.md': z.string().nullable() }),
 });
 export type ToolLaunch = z.infer<typeof ToolLaunchSchema>;
@@ -230,6 +231,7 @@ check:
 const FIX = "fs.writeFileSync('answer.js', 'module.exports = 42;\\n');";
 const FAKE_TOOLS: Record<FakeTool, string> = {
   fixes: FIX,
+  'fixes-slowly': `${FIX} Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000);`,
   'does-nothing': '',
   hangs: 'setInterval(() => {}, 60_000);',
   'fixes-and-hangs': `${FIX} const ref = fs.readFileSync('.git/HEAD', 'utf8').match(/^ref: (.+)$/m);
@@ -312,6 +314,8 @@ export interface BenchmarkFixtureOptions {
   printsEnv?: boolean;
   /** How the fake `claude` judges; `first-label` by default. */
   judge?: FakeJudge;
+  /** The member's `workflows.max_parallel`; unset by default, which the local driver reads as 1. */
+  maxParallel?: number;
 }
 
 export async function benchmarkFixture(options: BenchmarkFixtureOptions): Promise<BenchmarkFixture> {
@@ -395,7 +399,7 @@ spawnSync('git', ['checkout', '-q', '-b', 'hook-probe'], { env: hooked });
 spawnSync('git', ['checkout', '-q', '--detach', head], { env: hooked });
 spawnSync('git', ['branch', '-q', '-D', 'hook-probe']);
 fs.appendFileSync(${JSON.stringify(toolLog)}, JSON.stringify({
-  tool: ${JSON.stringify(tool)}, model: launchedWith, effort, cwd: process.cwd(), ownGit: fs.statSync('.git').isDirectory(), head, remotes: git('remote'),
+  at: Date.now(), tool: ${JSON.stringify(tool)}, model: launchedWith, effort, cwd: process.cwd(), ownGit: fs.statSync('.git').isDirectory(), head, remotes: git('remote'),
   paths: files('.'), agentFiles: { 'AGENTS.md': read('AGENTS.md'), 'CLAUDE.md': read('CLAUDE.md') },
 }) + '\\n');
 ${options.printsEnv ? `fs.writeFileSync(${JSON.stringify(path.join(root, 'tool.env'))}, execFileSync('sh', ['-c', 'env'], { encoding: 'utf8' }));` : ''}
@@ -449,7 +453,7 @@ process.stdout.write(JSON.stringify({ type: 'result', session_id: 'fake-session'
   const configPath = path.join(dataHome(), 'config.yaml');
   const config: unknown = YAML.parse(fs.readFileSync(configPath, 'utf8'));
   const parsed = z.object({ repo: z.object({ localPath: z.string() }).passthrough(), workflows: z.record(z.unknown()).optional() }).passthrough().parse(config);
-  fs.writeFileSync(configPath, YAML.stringify({ ...parsed, workflows: { ...parsed.workflows, sandbox: options.sandbox } }));
+  fs.writeFileSync(configPath, YAML.stringify({ ...parsed, workflows: { ...parsed.workflows, sandbox: options.sandbox, ...(options.maxParallel !== undefined ? { max_parallel: options.maxParallel } : {}) } }));
 
   return {
     root, home, work, bin, env, teamOrigin, productOrigin, tmp, teamClone: parsed.repo.localPath, startingCommit, teamai,

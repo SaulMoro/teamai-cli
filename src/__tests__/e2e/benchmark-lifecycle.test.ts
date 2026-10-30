@@ -143,17 +143,18 @@ describe('a benchmark run once it has started', () => {
   }, 120_000);
 
   it('reads a trial cancelled before its lease as not_run and after it as error, and refuses retry, publish and claim', async () => {
-    const fixture = await fixtureOf({ tool: 'fixes', sandbox: false, suite: TWO_ARMS });
+    // Two lanes, so the codex trial is in the run, still unleased, while the claude trial runs.
+    const fixture = await fixtureOf({ tool: 'fixes', sandbox: false, suite: TWO_ARMS.replace('repetitions: 1\n', 'repetitions: 1\nparallel: 2\n') });
     const status = fixture.status();
     const answer = envelope(await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m']));
     const runId = String(answer.data?.run);
     const driver = { ...DRIVER, can: SANDBOX_CLAUDE };
 
     const leased = await driveCommands(fixture, runId, { driver });
-    const early = envelope(await fixture.teamai(['workflow', 'cancel', runId, 'trials.r1.fix.codex.prompt']));
-    const late = envelope(await fixture.teamai(['workflow', 'cancel', runId, 'trials.r1.fix.claude.prompt']));
+    const early = envelope(await fixture.teamai(['workflow', 'cancel', runId, 'trials.lane2.r1.fix.codex.prompt']));
+    const late = envelope(await fixture.teamai(['workflow', 'cancel', runId, 'trials.lane1.r1.fix.claude.prompt']));
     const before = fixture.runFile(runId);
-    const retried = envelope(await fixture.teamai(['workflow', 'retry', runId, 'trials.r1.fix.claude.prompt']));
+    const retried = envelope(await fixture.teamai(['workflow', 'retry', runId, 'trials.lane1.r1.fix.claude.prompt']));
     const published = envelope(await fixture.teamai(['workflow', 'publish', runId]));
     const claimed = envelope(await fixture.teamai(['workflow', 'resume', runId, '--claim']));
     const nextClaimed = envelope(await fixture.teamai(['workflow', 'next', runId, '--json', JSON.stringify({ driver, running: [], claim: true })]));
@@ -164,7 +165,7 @@ describe('a benchmark run once it has started', () => {
     const snapshot = execFileSync('git', ['--git-dir', fixture.teamOrigin, 'ls-tree', '-r', '--name-only', 'teamai-reports'], { encoding: 'utf8' });
 
     expect(early.error).toBeUndefined();
-    expect(leased).toMatchObject({ data: { lease: { step: 'trials.r1.fix.claude.prompt' } } });
+    expect(leased).toMatchObject({ data: { lease: { step: 'trials.lane1.r1.fix.claude.prompt' } } });
     expect(late.error).toBeUndefined();
     expect(retried.error).toEqual({ code: 'not_retryable', message: `Run ${runId} is isolated: it runs only on the machine that started it, and a step that ran again would change what it already admitted or measured. Start a new run: teamai benchmark run fix` });
     expect(published.error).toMatchObject({ code: 'isolated_run' });
@@ -173,9 +174,9 @@ describe('a benchmark run once it has started', () => {
     expect(after).toEqual(before);
     expect(snapshot).not.toContain(`workflows/runs/${runId}/state.json`);
     expect(done).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
-    expect(run.steps.find((step) => step.id === 'trials.r1.fix.codex.prompt')).toMatchObject({ status: 'cancelled', failure: { code: 'cancelled' } });
-    expect(run.steps.find((step) => step.id === 'trials.r1.fix.codex.prompt')).not.toHaveProperty('attempt');
-    expect(run.steps.find((step) => step.id === 'trials.r1.fix.claude.prompt')).toMatchObject({ status: 'cancelled', attempt: expect.any(String), failure: { code: 'cancelled' } });
+    expect(run.steps.find((step) => step.id === 'trials.lane2.r1.fix.codex.prompt')).toMatchObject({ status: 'cancelled', failure: { code: 'cancelled' } });
+    expect(run.steps.find((step) => step.id === 'trials.lane2.r1.fix.codex.prompt')).not.toHaveProperty('attempt');
+    expect(run.steps.find((step) => step.id === 'trials.lane1.r1.fix.claude.prompt')).toMatchObject({ status: 'cancelled', attempt: expect.any(String), failure: { code: 'cancelled' } });
     expect(record.trials).toEqual([
       expect.objectContaining({ arm: 'claude', result: 'error' }),
       expect.objectContaining({ arm: 'codex', result: 'not_run' }),

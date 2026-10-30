@@ -53,8 +53,10 @@ describe('the workflow a benchmark plan prints', () => {
     for (const step of ['trials.baselines.t01', 'trials.baselines.t02', 'trials.r2.t02.a02.prompt', 'trials.r2.t02.a02.check', 'trials.settled']) {
       expect(stepDefinitions(run)(step), step).toBeDefined();
     }
-    // A task's trials run only where its check fails on the starting commit.
-    expect(stepDefinitions(run)('trials.r1.t02')?.if).toBe("steps.baselines.outputs.t02 == 'failed'");
+    // A task's trials run only where its check fails on the starting commit, one after another.
+    expect(stepDefinitions(run)('trials.r1.t02.a01')?.if).toBe("steps.baselines.outputs.t02 == 'failed'");
+    expect(stepDefinitions(run)('trials.r1.t02.a02')).toMatchObject({ needs: ['a01'], if: "steps.a01.outcome != null && steps.baselines.outputs.t02 == 'failed'" });
+    expect(stepDefinitions(run)('trials.r1.t02')?.needs).toEqual(['t01']);
   });
 
   it("limits each trial prompt's turn by the suite's trial limits, ended rather than failed at one", async () => {

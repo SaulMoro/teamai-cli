@@ -113,6 +113,8 @@ describe('parseSuite', () => {
     ['a matrix that names two arms alike', suiteText({ arms: '', matrix: '{ model: [sonnet.5, sonnet-5] }' }), 'matrix', 'the matrix names two arms "sonnet-5"; list values whose names differ'],
     ['an arm that changes tool and team', suiteText({ arms: '[{ name: baseline }, { name: codex, tool: codex, team: none }]' }), 'arms.1', 'arm "codex" changes tool and team; an arm changes at most one of the defaults keys'],
     ['a team ref that is not a ref name', suiteText({ arms: '[{ name: baseline }, { name: main, team: "-x" }]' }), 'arms.1.team', 'must be pulled, none, a branch, tag or commit of the team repo, or { without: [<skill>, ...] }'],
+    ['more lanes than a run can wait on', suiteText({ parallel: '33' }), 'parallel', 'must be a whole number from 1 to 32'],
+    ['an arm that changes tool and workflow', suiteText({ arms: '[{ name: baseline }, { name: flow, tool: codex, workflow: fixer }]' }), 'arms.1', 'arm "flow" changes tool and workflow; an arm changes at most one of the defaults keys'],
     ['a team without no skill', suiteText({ arms: '[{ name: baseline }, { name: bare, team: { without: [] } }]' }), 'arms.1.team.without', 'lists the skills the arm runs without, at least one'],
   ])('reports %s at its suite file', (_rule, suite, field, message) => {
     const parsed = parse(suite);

@@ -42,6 +42,9 @@ const SuitePathSchema = z.string().min(1).refine(isRelativePath, 'must be a path
 
 const TOKENS = 'must be a positive whole number of tokens';
 const WHOLE = 'must be a positive whole number';
+/** The run's last step waits on every lane, in one expression, which nests at most 100 levels. */
+const MAX_LANES = 32;
+const LANES = `must be a whole number from 1 to ${MAX_LANES}`;
 
 const DurationSchema = z.string({ required_error: 'timeout is required: the run\'s timeout, such as 6h' }).transform((text, ctx): number => {
   const ms = durationMs(text);
@@ -116,6 +119,8 @@ const SuiteFileSchema = z.object({
   arms: z.array(ArmFileSchema).nonempty('a suite has 1 to 6 arms').max(6, 'a suite has 1 to 6 arms').optional(),
   matrix: MatrixSchema.optional(),
   repetitions: z.number().int().min(1).max(10).default(3),
+  /** The lanes the baselines and trials run in, one at a time each. */
+  parallel: z.number().int(LANES).min(1, LANES).max(MAX_LANES, LANES).default(1),
   /** Required: the run's timeout. */
   timeout: DurationSchema,
   /** The limits of every trial's prompt. */
@@ -395,6 +400,8 @@ export interface Suite {
   defaults: ArmValues;
   arms: [Arm, ...Arm[]];
   repetitions: number;
+  /** The lanes the baselines and trials run in; 1 runs one at a time. */
+  parallel: number;
   timeoutMs: number;
   /** Absent: no trial has a limit of its own. */
   trial?: TrialLimits;
@@ -484,6 +491,7 @@ export function parseSuite(input: { suite: SourceFile; tasks: readonly SourceFil
       defaults: file.defaults,
       arms: [firstArm, ...otherArms],
       repetitions: file.repetitions,
+      parallel: file.parallel,
       timeoutMs: file.timeout,
       ...(file.trial ? { trial: file.trial } : {}),
       ...(file.setup ? { setup: file.setup } : {}),
