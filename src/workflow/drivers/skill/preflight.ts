@@ -194,6 +194,8 @@ function typeOf(schema: OutputSchema): string {
     case 'number':
     case 'boolean':
     case 'object':
+    case 'json':
+    case 'workflow':
       return schema.type;
     case 'enum':
       return `one of ${schema.values.join(', ')}`;

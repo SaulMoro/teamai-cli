@@ -26,7 +26,14 @@ export type OutputSchema =
   | { type: 'boolean' }
   | { type: 'enum'; values: string[] }
   | { type: 'object'; fields: Record<string, OutputSchema> }
-  | { type: 'array'; items: OutputSchema };
+  | { type: 'array'; items: OutputSchema }
+  /** Any JSON value, which no expression reads into; a workflow's `outputs` may pass it whole. Step outputs only. */
+  | { type: 'json' }
+  /**
+   * A workflow bundle, `{ definition, workflows?, scorers?, teamRevision? }`, admitted when its step reports, which a
+   * `from` step runs. Only one field of a step's object output may have it.
+   */
+  | { type: 'workflow' };
 
 /** A HITL request that must settle before its step can act or reach an end. */
 export interface StepHitl {

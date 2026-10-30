@@ -66,8 +66,17 @@ function dottedName(file: string, lineCounter: LineCounter, node: Node | null | 
   return { ...locate(file, lineCounter, node, field, `${name} cannot contain "."; a path reads "." as a separator`), code: 'dotted_name' };
 }
 
-function parseOutput(node: Node, field: string, ctx: ParseContext): OutputSchema | undefined {
+/**
+ * Where a type shorthand sits: in `inputs`; as a step's whole `output`; as a field of that output's object; or deeper.
+ * Only a step output may be `json`, and only a field of its object a `workflow`.
+ */
+type OutputPlace = 'input' | 'output' | 'field' | 'nested';
+
+const WORKFLOW_PLACE = 'a workflow is only a field of a step output, such as output: { definition: workflow }';
+
+function parseOutput(node: Node, field: string, ctx: ParseContext, place: OutputPlace): OutputSchema | undefined {
   const { file, lineCounter, diagnostics } = ctx;
+  const inner: OutputPlace = place === 'input' ? 'input' : 'nested';
   if (isScalar(node)) {
     if (typeof node.value !== 'string') {
       diagnostics.push(locate(file, lineCounter, node, field, 'output shorthand must be string, number, boolean, a literal union, an object, or an array'));
@@ -76,6 +85,16 @@ function parseOutput(node: Node, field: string, ctx: ParseContext): OutputSchema
     const parts = node.value.split('|').map((part) => part.trim()).filter((part) => part.length > 0);
     if (parts.length === 1 && TYPE_NAMES.has(parts[0])) {
       return { type: parts[0] as 'string' | 'number' | 'boolean' };
+    }
+    if (parts.length === 1 && parts[0] === 'json') {
+      if (place !== 'input') return { type: 'json' };
+      diagnostics.push(locate(file, lineCounter, node, field, 'an input cannot be json; only a step output can'));
+      return undefined;
+    }
+    if (parts.length === 1 && parts[0] === 'workflow') {
+      if (place === 'field') return { type: 'workflow' };
+      diagnostics.push(locate(file, lineCounter, node, field, place === 'input' ? 'an input cannot be a workflow; only a field of a step output can' : WORKFLOW_PLACE));
+      return undefined;
     }
     if (parts.length >= 2 && parts.every((part) => TOKEN.test(part) && !TYPE_NAMES.has(part))) {
       return { type: 'enum', values: parts };
@@ -93,7 +112,7 @@ function parseOutput(node: Node, field: string, ctx: ParseContext): OutputSchema
       diagnostics.push(locate(file, lineCounter, node, field, 'an array shorthand has exactly one item type'));
       return undefined;
     }
-    const items = parseOutput(item, `${field}[]`, ctx);
+    const items = parseOutput(item, `${field}[]`, ctx, inner);
     return items ? { type: 'array', items } : undefined;
   }
   if (isMap(node)) {
@@ -102,6 +121,7 @@ function parseOutput(node: Node, field: string, ctx: ParseContext): OutputSchema
       return undefined;
     }
     const fields: Record<string, OutputSchema> = {};
+    let workflowField: string | undefined;
     for (const pair of node.items) {
       const keyNode = isYamlNode(pair.key) ? pair.key : undefined;
       const fieldValueNode = isYamlNode(pair.value) ? pair.value : undefined;
@@ -114,7 +134,12 @@ function parseOutput(node: Node, field: string, ctx: ParseContext): OutputSchema
         diagnostics.push(locate(file, lineCounter, keyNode ?? node, field, 'output field names must be tokens'));
         continue;
       }
-      const child = parseOutput(fieldValueNode, `${field}.${key}`, ctx);
+      const child = parseOutput(fieldValueNode, `${field}.${key}`, ctx, place === 'output' ? 'field' : inner);
+      if (child?.type === 'workflow' && workflowField !== undefined) {
+        diagnostics.push(locate(file, lineCounter, fieldValueNode, `${field}.${key}`, `a step output has at most one workflow field; "${workflowField}" is one already`));
+        continue;
+      }
+      if (child?.type === 'workflow') workflowField = key;
       if (child) fields[key] = child;
     }
     return Object.keys(fields).length === node.items.length ? { type: 'object', fields } : undefined;
@@ -201,7 +226,7 @@ export function parseWorkflow(file: string, content: string, files?: WorkflowFil
   if (inputsPair && !isMap(inputsPair.value)) {
     diagnostics.push(locate(file, lineCounter, inputsPair.value ?? inputsPair.key ?? root, 'inputs', 'inputs must map each input name to a type'));
   } else if (inputsPair) {
-    const schema = parseOutput(inputsPair.value as Node, 'inputs', ctx);
+    const schema = parseOutput(inputsPair.value as Node, 'inputs', ctx, 'input');
     if (schema?.type === 'object') inputs = schema.fields;
   }
 
@@ -566,7 +591,7 @@ function parseBody(
       if (outputPair && workflowPair) {
         diagnostics.push(locate(file, lineCounter, outputPair.key as Node, `${field}.output`, `${stepLabel} output is not allowed on a workflow step; declare outputs in the workflow it runs`));
       } else if (outputPair?.value) {
-        output = parseOutput(outputPair.value, `${field}.output`, ctx);
+        output = parseOutput(outputPair.value, `${field}.output`, ctx, 'output');
       } else if (outputPair) {
         diagnostics.push(locate(file, lineCounter, outputPair.key ?? item, `${field}.output`, 'output must be a shorthand type'));
       }

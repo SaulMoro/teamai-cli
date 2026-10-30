@@ -1799,3 +1799,74 @@ finally:
     ]);
   });
 });
+
+describe('workflow and json outputs', () => {
+  const problems = (content: string): string[] => {
+    const result = parse(content);
+    return result.ok ? [] : result.diagnostics.map(formatDiagnostic);
+  };
+
+  it('keeps a workflow field and an opaque json field, which the outputs may pass whole', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Plan, then report.
+steps:
+  - id: plan
+    command: node plan.js
+    output: { definition: workflow, plan: json, notes: [json] }
+outputs:
+  plan: steps.plan.outputs.plan
+`);
+    expect(result.ok, result.ok ? '' : result.diagnostics.map(formatDiagnostic).join('\n')).toBe(true);
+    if (!result.ok) return;
+    expect(result.definition.steps[0]?.output).toEqual({
+      type: 'object', fields: { definition: { type: 'workflow' }, plan: { type: 'json' }, notes: { type: 'array', items: { type: 'json' } } },
+    });
+  });
+
+  it('refuses a read into a json or workflow field', () => {
+    expect(problems(`schemaVersion: v1alpha1
+name: build
+description: Plan, then act.
+steps:
+  - id: plan
+    command: node plan.js
+    output: { definition: workflow, plan: json }
+  - id: act
+    needs: [plan]
+    if: steps.plan.outputs.plan.ready == true
+    command: node act.js
+    env: { NAME: "{{ steps.plan.outputs.definition.definition }}" }
+`)).toEqual([
+      'workflows/build.yaml:12: field "steps[1].env.NAME": step "act" env.NAME reads steps.plan.outputs.definition.definition, which is not in the output step "plan" declares',
+      'workflows/build.yaml:10: field "steps[1].if": step "act" if reads steps.plan.outputs.plan.ready, which is not in the output step "plan" declares',
+    ]);
+  });
+
+  it('takes a workflow only as one field of a step output, and neither type as an input', () => {
+    expect(problems(`schemaVersion: v1alpha1
+name: build
+description: Plan.
+inputs: { suite: json, bundle: workflow }
+steps:
+  - id: whole
+    command: node plan.js
+    output: workflow
+  - id: nested
+    needs: []
+    command: node plan.js
+    output: { group: { definition: workflow }, list: [workflow] }
+  - id: twice
+    needs: []
+    command: node plan.js
+    output: { first: workflow, second: workflow }
+`)).toEqual([
+      'workflows/build.yaml:4: field "inputs.suite": an input cannot be json; only a step output can',
+      'workflows/build.yaml:4: field "inputs.bundle": an input cannot be a workflow; only a field of a step output can',
+      'workflows/build.yaml:8: field "steps[0].output": a workflow is only a field of a step output, such as output: { definition: workflow }',
+      'workflows/build.yaml:12: field "steps[1].output.group.definition": a workflow is only a field of a step output, such as output: { definition: workflow }',
+      'workflows/build.yaml:12: field "steps[1].output.list[]": a workflow is only a field of a step output, such as output: { definition: workflow }',
+      'workflows/build.yaml:16: field "steps[2].output.second": a step output has at most one workflow field; "first" is one already',
+    ]);
+  });
+});
