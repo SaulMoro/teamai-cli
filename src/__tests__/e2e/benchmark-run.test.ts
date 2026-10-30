@@ -107,6 +107,22 @@ describe('a team benchmark workflow', () => {
     expect(fixture.benchmarkRecord(done.run)).toMatchObject({ workflow: { name: 'benchmark', origin: { source: 'team' } } });
   }, 180_000);
 
+  it('replaces the shipped one from the namespace the member\'s role receives, and benchmark run names its file', async () => {
+    const fixture = await benchmarkFixture({
+      tool: 'fixes', sandbox: false, role: 'ops',
+      team: { 'manifest/roles.yaml': 'version: 1\nroles:\n  - id: ops\n    resources:\n      knowledge: []\n      skills: []\n      workflows: [ops]\n', 'workflows/ops/benchmark.yaml': RELAXED },
+    });
+    fixtures.push(fixture);
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+    const done = DoneSchema.parse(envelope(ran).data?.done);
+
+    expect(ran.code, said(ran)).toBe(0);
+    expect(ran.stderr).toContain('Running the team\'s workflows/ops/benchmark.yaml, which replaces teamai\'s benchmark workflow.');
+    expect(done.outputs.text).toContain('100% (1/1)');
+    expect(fixture.benchmarkRecord(done.run)).toMatchObject({ workflow: { name: 'benchmark', origin: { source: 'team' } } });
+  }, 180_000);
+
   it('is refused by benchmark run, leaving no run, when it takes no input suite', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true });
     fixtures.push(fixture);
