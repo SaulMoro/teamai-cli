@@ -117,6 +117,7 @@ describe('parseSuite', () => {
     ['an arm that changes tool and workflow', suiteText({ arms: '[{ name: baseline }, { name: flow, tool: codex, workflow: fixer }]' }), 'arms.1', 'arm "flow" changes tool and workflow; an arm changes at most one of the defaults keys'],
     ['a team without no path', suiteText({ arms: '[{ name: baseline }, { name: bare, team: { without: [] } }]' }), 'arms.1.team.without', 'lists the team repo paths the arm runs without, at least one'],
     ['a team without one path twice', suiteText({ arms: '[{ name: baseline }, { name: bare, team: { without: [skills/a, rules/b.md, skills/a] } }]' }), 'arms.1.team.without', 'lists skills/a twice; list each path once'],
+    ['a team without a path inside another it lists', suiteText({ arms: '[{ name: baseline }, { name: bare, team: { without: [skills/a/notes.md, rules/b.md, skills/a] } }]' }), 'arms.1.team.without', 'lists skills/a/notes.md, which is inside skills/a; list only skills/a'],
     ...['/skills/a', 'skills/a/', 'skills/../rules', './skills/a', 'skills//a', 'skills\\\\a'].map((written): [string, string, string, string] => [
       `a team without path ${written}`, suiteText({ arms: `[{ name: baseline }, { name: bare, team: { without: ["${written}"] } }]` }), 'arms.1.team.without.0',
       'must be a path in the team repo as git lists it, such as skills/release or rules/commits.md: no leading or trailing "/", no backslash and no ".", ".." or empty segment',

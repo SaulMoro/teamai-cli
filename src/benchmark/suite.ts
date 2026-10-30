@@ -77,6 +77,8 @@ const TeamValueSchema = z.union([
     without: z.array(TeamPathSchema).nonempty('lists the team repo paths the arm runs without, at least one').superRefine((paths, ctx) => {
       const twice = paths.find((one, index) => paths.indexOf(one) !== index);
       if (twice !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `lists ${twice} twice; list each path once` });
+      const [nested] = paths.flatMap((inner) => paths.filter((outer) => inner.startsWith(`${outer}/`)).map((outer) => ({ inner, outer })));
+      if (nested !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, message: `lists ${nested.inner}, which is inside ${nested.outer}; list only ${nested.outer}` });
     }),
   }).strict(),
 ]).transform((value): TeamChoice => {
