@@ -235,6 +235,15 @@ describe('parseSuite', () => {
     expect(parsed.diagnostics).toEqual([expect.objectContaining({ file: 'benchmarks/fix/tasks/bad.yaml', line: 5, field, message })]);
   });
 
+  it.each(['test/[[:digit:]].js', 'test/[![:alpha:]]x.js'])("reports protect %s, whose named class git reads and a check would not, at its file", (protect) => {
+    const parsed = parse(suiteText(), { bad: taskText({ check: `{ run: node test.js, protect: ['${protect}'] }` }), fix: taskText() });
+
+    expect(parsed).toMatchObject({ ok: true, suite: { tasks: [{ id: 'fix' }] } });
+    expect(parsed.diagnostics).toEqual([expect.objectContaining({
+      file: 'benchmarks/fix/tasks/bad.yaml', field: 'check.protect.0', message: 'has a named class such as [:digit:], which a check cannot read; list its characters, such as [0-9]',
+    })]);
+  });
+
   it('hashes a task with check files over their paths, modes and bytes too, and a task without them over its file alone', () => {
     const task = taskText({ check: "{ run: node test.js, protect: ['test/**'], add: [{ from: check-files/a.js, to: test/a.js }] }" });
     const hashed = (files: SuiteFile[]): string | undefined => {

@@ -248,7 +248,8 @@ function segmentPattern(segment: string): RegExp | undefined {
 
 const AddedPathSchema = RepoPathSchema.refine((value) => !/[*?[]/.test(value), 'must name one file, without glob characters');
 
-const ProtectedPathSchema = RepoPathSchema.refine((value) => value.split('/').every((segment) => segmentPattern(segment) !== undefined), 'has a [ class with no closing ]');
+const ProtectedPathSchema = RepoPathSchema.refine((value) => value.split('/').every((segment) => segmentPattern(segment) !== undefined), 'has a [ class with no closing ]')
+  .refine((value) => !/\[:[a-z]+:\]/.test(value), 'has a named class such as [:digit:], which a check cannot read; list its characters, such as [0-9]');
 
 const CheckFileSchema = z.object({
   run: z.string().trim().min(1, 'check.run is a command'),
