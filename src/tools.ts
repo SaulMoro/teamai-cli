@@ -362,7 +362,7 @@ export const TOOLS = {
     features: {
       env: '✓t',
       workflows: '✓v',
-      unattended: '✓d',
+      unattended: '✓v',
       recall: '✓v',
       stats: '✓v',
       aiBackend: '✓v',

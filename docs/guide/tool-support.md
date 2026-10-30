@@ -76,7 +76,7 @@ User scope, from #1221's matrix; a fix merged since is marked `t`, with a note. 
 
 | Tool | Env | Workflows (local driver) | Unattended prompts | Recall | Stats | AI backend | Votes judge | Session judge | HTTP agent hooks |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Claude Code | ✓t | ✓v | ✓d | ✓v | ✓v | ✓v | ✓v | ✓t<sup>1</sup> | ✓v |
+| Claude Code | ✓t | ✓v | ✓v | ✓v | ✓v | ✓v | ✓v | ✓t<sup>1</sup> | ✓v |
 | Codex CLI | ✓t | ✓t | ✓d | ✓v | ✓t<sup>2</sup> | ✓v | ✓t<sup>3</sup> | ✓t<sup>1</sup> | ✓t<sup>4</sup> |
 | Codex CLI Internal | ? | ✓t | ✓t | ? | ? | ✓t | ? | ? | ? |
 | Claude Code Internal | ? | ✓t | ✓t | ? | ? | ✓t | ? | ? | ? |

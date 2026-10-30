@@ -224,8 +224,8 @@ function readPlainReply({ stdout }: CallOutput): CallReading {
 export const LAUNCH_ADAPTERS = {
   claude: {
     call: { evidence: 'verified', prompt: 'stdin', args: () => ['-p', '--output-format', 'json'], read: readClaudeResult },
-    // `claude --help` of 2.1.312.
-    step: { evidence: 'verified', unattended: { args: ['--permission-mode', 'bypassPermissions'], evidence: 'docs' } },
+    // Claude Code 2.1.312 ran a strict-sandbox benchmark trial in this mode (2026-10-30, `teamai benchmark run --sandbox`).
+    step: { evidence: 'verified', unattended: { args: ['--permission-mode', 'bypassPermissions'], evidence: 'verified' } },
     judge: {
       evidence: 'verified',
       env: ['CLAUDE_CONFIG_DIR', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY'],
