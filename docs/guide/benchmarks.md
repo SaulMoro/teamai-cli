@@ -328,6 +328,8 @@ $ teamai benchmark run fix-auth --sandbox
 
 `benchmark run` plans the suite first, so a suite that cannot run leaves no run. It then starts the workflow `benchmark` with the suite's `timeout` and drives it with the local driver.
 
+Each trial runs the tool headless with this machine's own settings for it, so allow the tool there to edit files and run commands without asking, for Claude in `~/.claude/settings.json`. A trial whose tool may not edit fails.
+
 | Flag or setting | Effect |
 | --- | --- |
 | `--sandbox` | Declares this machine a sandbox for this process. Only on a machine you can throw away. |

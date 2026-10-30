@@ -328,6 +328,8 @@ $ teamai benchmark run fix-auth --sandbox
 
 `benchmark run` 先规划套件，所以无法运行的套件不会留下运行。然后它用套件的 `timeout` 启动工作流 `benchmark`，并用本地驱动驱动它。
 
+每次试验都以无头方式运行工具，使用这台机器上该工具自己的设置，所以要在那里允许工具无需询问就编辑文件和运行命令，Claude 的设置在 `~/.claude/settings.json`。工具不能编辑时，试验会失败。
+
 | 选项或配置 | 效果 |
 | --- | --- |
 | `--sandbox` | 只为当前这个进程把本机声明为 sandbox。只在可以丢弃的机器上使用。 |
