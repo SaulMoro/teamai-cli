@@ -775,7 +775,7 @@ describe('judge work of sampling: all', () => {
     const late = await submitJudgeLease(config, lease.ref, { driver: judgeDriver, outcome: 'success', answer: { label: 'good', reasoning: 'r' } });
 
     const [entry = '', attempt = ''] = lease.ref.split('/');
-    expect(late).toEqual({ error: { code: 'entry_closed', message: `Run ${runId} ended and froze this entry's verdict, so the answer was not recorded.` } });
+    expect(late).toEqual({ error: { code: 'entry_closed', message: `Run ${runId} froze this entry's verdict when its steps ended, so the answer was not recorded.` } });
     expect(await LabelStore.local(config)).toEqual([]);
     expect(await AttemptStore.get(config, entry, attempt)).toMatchObject({ status: 'released' });
   });
@@ -826,7 +826,7 @@ describe('verdicts and finally steps', () => {
 
     const late = await submitJudgeLease(config, lease.ref, { driver: judgeDriver, outcome: 'success', answer: { label: 'good', reasoning: 'r' } });
 
-    expect(late).toEqual({ error: { code: 'entry_closed', message: `Run ${runId} ended and froze this entry's verdict, so the answer was not recorded.` } });
+    expect(late).toEqual({ error: { code: 'entry_closed', message: `Run ${runId} froze this entry's verdict when its steps ended, so the answer was not recorded.` } });
     expect(await LabelStore.local(config)).toEqual([]);
   });
 });

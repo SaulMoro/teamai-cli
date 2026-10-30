@@ -871,7 +871,7 @@ async function settleJudgeLease<T extends { kind: string }>(
     const { run } = leased;
     if (verdictsFrozen(run) && leased.members.some(({ attempt }) => stepDefinitions(run)(attempt.subject.step)?.scorers?.sampling === 'all')) {
       for (const { attempt } of leased.members) await AttemptStore.write(config, { ...attempt, status: 'released', settledAt: now });
-      return error('entry_closed', `Run ${run.id} ended and froze this entry's verdict, so the answer was not recorded.`);
+      return error('entry_closed', `Run ${run.id} froze this entry's verdict when its steps ended, so the answer was not recorded.`);
     }
     for (const { attempt } of leased.members) {
       const requestedAt = (await AttemptStore.request(config, attempt.entry))?.requestedAt;
