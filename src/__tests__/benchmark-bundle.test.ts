@@ -34,12 +34,12 @@ steps:
     workflow: { from: plan }
 `;
 
-/** A suite of check tasks t01.. and claude arms a01.., the second and later on model m<i>. */
-function suiteOf({ tasks = 1, arms = 1, repetitions = 1 } = {}): BenchmarkSuiteFiles {
+/** A suite of check tasks t01.. and claude arms a01.., the second and later on model m<i>; `trial` is its `trial` value. */
+function suiteOf({ tasks = 1, arms = 1, repetitions = 1, trial = '' } = {}): BenchmarkSuiteFiles {
   const names = (prefix: string, count: number): string[] => Array.from({ length: count }, (_, index) => `${prefix}${String(index + 1).padStart(2, '0')}`);
   return {
     name: 'fix',
-    suite: `schemaVersion: v1alpha1\nname: fix\nrepo: https://github.com/fixture/app.git\ndefaults: { tool: claude }\narms: [${names('a', arms).map((name, index) => `{ name: ${name}${index > 0 ? `, model: m${index + 1}` : ''} }`).join(', ')}]\nrepetitions: ${repetitions}\ntimeout: 10m\n`,
+    suite: `schemaVersion: v1alpha1\nname: fix\nrepo: https://github.com/fixture/app.git\ndefaults: { tool: claude }\narms: [${names('a', arms).map((name, index) => `{ name: ${name}${index > 0 ? `, model: m${index + 1}` : ''} }`).join(', ')}]\nrepetitions: ${repetitions}\ntimeout: 10m\n${trial ? `trial: ${trial}\n` : ''}`,
     tasks: Object.fromEntries(names('t', tasks).map((name) => [name,
       "schemaVersion: v1alpha1\ntitle: Fix it\nprompt: Make the test pass.\nstartingCommit: '{{startingCommit}}'\ncheck: { run: node test.js, protect: [test.js] }\n"])),
   };
@@ -93,6 +93,14 @@ describe('the workflow a benchmark plan prints', () => {
     expect(stepDefinitions(run)('trials.r1.t02')?.if).toBe("steps.baselines.outputs.t02 == 'failed'");
   });
 
+  it("limits each trial prompt's turn by the suite's trial limits, ended rather than failed at one", async () => {
+    const { run } = await plannedRun(suiteOf({ arms: 2, trial: '{ timeout: 5m, budget: { tokens: 1000 }, max_turns: 3 }' }));
+
+    expect(stepDefinitions(run)('trials.r1.t01.a02.prompt')).toMatchObject({
+      tool: 'claude', model: { name: 'm2' }, timeout: 300_000, maxTurns: 3, budget: { tokens: 1000 }, onLimit: 'end_turn',
+    });
+  });
+
   it('runs a suite of criteria tasks with no baselines, each prompt scored by its task\'s correctness scorer', async () => {
     const { run } = await plannedRun({
       name: 'fix',
@@ -112,6 +120,15 @@ describe('the workflow a benchmark plan prints', () => {
     expect(planOfRun(run, 'trials.r1.t01.a01.check')).toEqual({ failure: {
       code: 'run_unreadable',
       message: `Step "plan" of run ${run.id} printed a benchmark plan of schemaVersion 2, and this teamai reads only schemaVersion 1. Run the benchmark with the teamai that planned it, or start it again.`,
+    } });
+  });
+
+  it('is refused by report and check once its plan is of schemaVersion 1 but not its shape', async () => {
+    const { run } = await plannedRun(suiteOf(), { outputsOf: (bundle) => ({ definition: { ...bundle, workflows: {} }, plan: { schemaVersion: 1 } }) });
+
+    expect(planOfRun(run, 'trials.r1.t01.a01.check')).toMatchObject({ failure: {
+      code: 'run_unreadable',
+      message: expect.stringMatching(new RegExp(`^Step "plan" of run ${run.id} printed a benchmark plan this teamai cannot read: .*arms: Required.*\\. Update teamai, or start the benchmark again\\.$`)),
     } });
   });
 
