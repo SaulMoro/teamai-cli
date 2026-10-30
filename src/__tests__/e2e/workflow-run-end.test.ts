@@ -118,9 +118,6 @@ steps:
     const refused = await runCLI(['workflow', 'start', 'slow', '--timeout', 'soon'], repo);
     expect(refused.code).toBe(1);
     expect(envelope(refused.stdout)).toEqual({ error: { code: 'invalid_arguments', message: '--timeout must be a positive duration, such as 500ms, 30s, 10m, or 2h' } });
-    const skill = await runCLI(['workflow', 'start', 'slow', '--driver', 'skill', '--timeout', '2s'], repo);
-    expect(skill.code).toBe(1);
-    expect(envelope(skill.stdout)).toMatchObject({ error: { code: 'invalid_arguments', message: '--timeout needs --driver local, or no driver. Start it again without --timeout.' } });
   });
 });
 

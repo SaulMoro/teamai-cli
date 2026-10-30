@@ -266,12 +266,13 @@ export async function workflowStart(name: string, options: StartOptions): Promis
 async function startWorkflow(name: string, options: StartOptions): Promise<WorkflowEnvelope | undefined> {
   if (refusedNested(await nestedStart(process.env, process.cwd()), options.driver === 'skill')) return undefined;
   if (options.driver === 'skill') {
-    if (options.timeout !== undefined) {
-      refuseSkill({ error: { code: 'invalid_arguments', message: '--timeout needs --driver local, or no driver. Start it again without --timeout.' } });
+    const { driver: _skill, timeout, ...rest } = options;
+    const timeoutMs = timeout === undefined ? undefined : durationMs(timeout);
+    if (timeout !== undefined && timeoutMs === undefined) {
+      refuseSkill({ error: { code: 'invalid_arguments', message: TIMEOUT_MESSAGE } });
       return;
     }
-    const { driver: _skill, ...rest } = options;
-    await workflowSkill({ kind: 'start', name, options: rest });
+    await workflowSkill({ kind: 'start', name, options: rest, ...(timeoutMs !== undefined ? { timeoutMs } : {}) });
     return;
   }
   setStderrOnly(true);
