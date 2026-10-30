@@ -2,16 +2,12 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { z } from 'zod';
 import { loadLocalConfigForScope } from '../config.js';
 import { syncScorerDefinitions, type SyncScorerOptions, type SyncScorerResult } from '../scorers/cache.js';
 import { log } from '../utils/logger.js';
 import { pathExists, readFileSafe, remove, writeJsonAtomic } from '../utils/fs.js';
 import { isSafeNamespaceSegment } from '../manifest-schema.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
-import { loadProjectsManifest } from '../projects.js';
-import { loadRolesManifestIfPresent } from '../roles.js';
-import { isModelAlias, loadTeamModelAliases } from '../models/aliases.js';
 import { resolveNamespacedItems, type NamespaceCandidate } from '../namespace-resolver.js';
 import {
   getBusinessRoot,
