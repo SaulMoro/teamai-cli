@@ -590,11 +590,15 @@ if (process.argv.includes('--json-schema')) {
 export const RUN_START = 'a'.repeat(40);
 export const RUN_TEAM = 'b'.repeat(40);
 
-/** A member of a git team, as a trial needs, with nothing on disk but what a run writes under `root`. */
+/**
+ * A member of a git team, as a trial needs, with nothing on disk but what a run writes under `root`. It publishes no
+ * records: its remote is a real URL, so publishing would reach the network, where a credential helper can outlive the
+ * test and, on Windows, keep `root` from being removed.
+ */
 export function benchmarkRunConfig(root: string): LocalConfig {
   return {
     repo: { localPath: path.join(root, 'team'), remote: TEAM_URL, kind: 'git' },
-    username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data'),
+    username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data'), usageReportEnabled: false,
   };
 }
 

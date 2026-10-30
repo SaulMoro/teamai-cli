@@ -81,9 +81,11 @@ describe('benchmarkHistory', () => {
   it("leaves out a record the reports checkout keeps while this machine's queue still holds it, as its push was refused", async () => {
     publish('rb0b00001', { username: 'bob' });
     publish('r10ca1001', { username: 'tester' });
-    expect(await queueBenchmarkRecord(config, fixRecord('r10ca1001', { username: 'tester', startedAt: YESTERDAY }), {})).toBe(true);
+    // A member who reports usage, so the record is queued; nothing here publishes it.
+    const reporting = { ...config, usageReportEnabled: true };
+    expect(await queueBenchmarkRecord(reporting, fixRecord('r10ca1001', { username: 'tester', startedAt: YESTERDAY }), {})).toBe(true);
 
-    const view = await benchmarkHistory({ config, query: { windowDays: 365 }, now: NOW, refresh: false });
+    const view = await benchmarkHistory({ config: reporting, query: { windowDays: 365 }, now: NOW, refresh: false });
 
     expect(view.selected?.runs.map(({ run }) => run)).toEqual(['rb0b00001']);
   });

@@ -30,9 +30,7 @@ afterEach(() => {
 async function startTen(defaults = '{ tool: claude }') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-benchmark-table-'));
   dirs.push(root);
-  // No publication: it runs git in the team directory, which these tests never read, and on Windows the directory
-  // stayed busy when they removed it (EBUSY).
-  const config = { ...benchmarkRunConfig(root), usageReportEnabled: false };
+  const config = benchmarkRunConfig(root);
   const suite = `schemaVersion: v1alpha1\nname: fix\nrepo: ${PRODUCT_URL}\ndefaults: ${defaults}\narms: [{ name: claude }]\nrepetitions: 10\ntimeout: 10m\n`;
   const started = await startBenchmarkRun(config, { name: 'fix', suite, tasks: { fix: fixTask('{{startingCommit}}') } });
   if ('error' in started) throw new Error(started.error.message);
