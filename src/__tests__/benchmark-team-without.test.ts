@@ -23,23 +23,26 @@ function git(cwd: string, ...args: string[]): string {
 
 /**
  * A member of role dev, which receives the dev namespaces and not the ops ones, and of tag quality, in a git team whose
- * commit holds a rule, CLAUDE.md, shared skills release and lint, which tag quality brings, and solo, which no tag
+ * commit holds rule commits, which tag quality keeps, and rules design and dev/notes, which only tag ux would, CLAUDE.md, shared
+ * skills release and lint, which tag quality brings, and solo, which no tag
  * brings, skill release again in dev, skills deploy in dev and runbook in ops, agent reviewer shared and again in dev,
  * agent planner shared only, rule style in ops, docs shared and under api and in namespace ops, and hooks shared and in
  * dev; and that commit. With `role` null, the member holds no role, so every namespace reaches them; without `tags`,
- * the team has no tags.yaml.
+ * the team has no tags.yaml; `subscribed`, the tags the member subscribes.
  */
-function team({ role = 'dev' as string | null, tags = true } = {}): { config: LocalConfig; revision: string } {
+function team({ role = 'dev' as string | null, tags = true, subscribed = ['quality'] } = {}): { config: LocalConfig; revision: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-team-without-'));
   dirs.push(root);
   const repo = path.join(root, 'team');
   const files = {
     'teamai.yaml': 'team: acme\nrepo: https://github.com/acme/team.git\nprovider: git\n',
     'manifest/roles.yaml': ROLES,
-    ...(tags ? { 'tags.yaml': 'skills:\n  lint: [quality]\n  release: [quality]\n' } : {}),
+    ...(tags ? { 'tags.yaml': 'skills:\n  lint: [quality]\n  release: [quality]\nrules:\n  commits: [quality]\n  design: [ux]\n  dev/notes: [ux]\n' } : {}),
     'CLAUDE.md': 'Be kind.\n',
     'rules/commits.md': 'Small commits.\n',
     'rules/ops/style.md': 'Ops style.\n',
+    'rules/design.md': 'Design.\n',
+    'rules/dev/notes.md': 'Dev notes.\n',
     'skills/release/SKILL.md': SKILL('release'),
     'skills/lint/SKILL.md': SKILL('lint'),
     'skills/solo/SKILL.md': SKILL('solo'),
@@ -65,7 +68,7 @@ function team({ role = 'dev' as string | null, tags = true } = {}): { config: Lo
   return {
     config: {
       repo: { localPath: repo, remote: 'https://github.com/acme/team.git', kind: 'git' },
-      username: 'tester', scope: 'project', ...(role !== null ? { primaryRole: role } : {}), additionalRoles: [], projects: [], subscribedTags: ['quality'], projectRoot: root, dataHome: path.join(root, 'data'),
+      username: 'tester', scope: 'project', ...(role !== null ? { primaryRole: role } : {}), additionalRoles: [], projects: [], ...(subscribed.length > 0 ? { subscribedTags: subscribed } : {}), projectRoot: root, dataHome: path.join(root, 'data'),
     },
     revision: git(repo, 'rev-parse', 'HEAD'),
   };
@@ -101,6 +104,10 @@ describe('withoutRefusal', () => {
       'Arm "ablated" runs without skills/release, but its namespace dev delivers skills/dev/release in its place; list skills/dev/release too.'],
     ['a shared agent a namespace the member receives delivers in its place, in another format', ['agents/reviewer.md'], 'arm_team_unresolved',
       'Arm "ablated" runs without agents/reviewer.md, but its namespace dev delivers agents/dev/reviewer.yaml in its place; list agents/dev/reviewer.yaml too.'],
+    ['a rule tagged only with tags the member does not subscribe', ['rules/design.md'], 'arm_team_unresolved',
+      'Arm "ablated" runs without rules/design.md, a rule tagged only with tags the member does not subscribe, so pull leaves it out already and leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
+    ['a rule of a namespace the member receives, tagged only with tags the member does not subscribe', ['rules/dev/notes.md'], 'arm_team_unresolved',
+      'Arm "ablated" runs without rules/dev/notes.md, a rule tagged only with tags the member does not subscribe, so pull leaves it out already and leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
     ['a rule in a namespace the member does not receive', ['rules/ops/style.md'], 'arm_team_unresolved',
       'Arm "ablated" runs without rules/ops/style.md, which is in namespace ops, and the arm\'s roles or projects don\'t receive ops, so leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
     ['a page in a docs namespace a role declares and the member does not receive', ['docs/ops/guide.md'], 'arm_team_unresolved',
@@ -119,6 +126,12 @@ describe('withoutRefusal', () => {
       code: 'arm_team_unresolved',
       message: 'Arm "ablated" runs without skills/release, but its namespace dev delivers skills/dev/release in its place; list skills/dev/release too.',
     });
+  });
+
+  it('lets a member who subscribes no tag run without a tagged rule, which pull then delivers', async () => {
+    const { config, revision } = team({ subscribed: [] });
+
+    expect(await withoutRefusal(config, { arm: 'ablated', paths: ['rules/design.md'], revision })).toBeUndefined();
   });
 
   it('lets an arm run without a namespaced skill in a team with no tags.yaml', async () => {

@@ -25,7 +25,8 @@ const REMOVE = 'Remove it from the arm\'s team, push it, run teamai pull, and st
 /**
  * Why plan refuses arm `arm` that runs without `paths` at team commit `revision`, for the member `config` names, or
  * undefined when its trials can run without them. Refused: a path the revision does not have; teamai.yaml, which the
- * clone's pull reads; a path in a namespace the member's roles and projects do not receive; a shared skill they receive
+ * clone's pull reads; a path in a namespace the member's roles and projects do not receive; a rule the tags the member
+ * subscribes leave out; a shared skill they receive
  * no subscribed tag of, as roles and projects deliver shared skills only through tags; and a shared path that a
  * namespace they receive would still deliver in its place, unless the arm runs without that one too.
  */
@@ -46,8 +47,9 @@ export async function withoutRefusal(config: LocalConfig, { arm, paths, revision
   const read = await withTeamRevision(config, revision, async (at) => {
     const tags = await loadTagsConfig(at.repo.localPath);
     const subscribed = new Set(at.subscribedTags ?? []);
-    const tagged = new Set(Object.entries(tags?.skills ?? {}).flatMap(([skill, skillTags]) => (skillTags.some((tag) => subscribed.has(tag)) ? [skill] : [])));
-    return { received: await resolveResourceNamespaces(at), tagged };
+    const named = (items: Record<string, string[]> | undefined, brought: boolean): Set<string> => new Set(Object.entries(items ?? {}).flatMap(([name, itemTags]) => (itemTags.some((tag) => subscribed.has(tag)) === brought ? [name] : [])));
+    // With no subscription, the tag channel leaves no rule out.
+    return { received: await resolveResourceNamespaces(at), tagged: named(tags?.skills, true), tagSkipped: subscribed.size > 0 ? named(tags?.rules, false) : new Set<string>() };
   });
   if ('failed' in read) {
     return { code: 'arm_team_unreadable', message: `Arm "${arm}" runs without ${paths.join(', ')}, and the namespaces its roles and projects receive at team revision ${short} could not be read: ${read.failed}. Repair the team repo, or run teamai pull, and start again.` };
@@ -72,10 +74,11 @@ function rootOf(type: PlaceableType): string {
 /**
  * Why leaving out `path` would change nothing the member gets, by the namespace it is in, a shared skill no tag brings
  * the member, or the namespace item that replaces it, or undefined. A path under no type's root, or a whole root, is in
- * no namespace. `tagged`: the shared skills a tag the member subscribes brings.
+ * no namespace. `tagged`: the shared skills a tag the member subscribes brings; `tagSkipped`: the rules, by name, the
+ * tags the member subscribes leave out.
  */
-function namespaceProblem(input: { arm: string; path: string; paths: readonly string[]; files: readonly string[]; received: Received; tagged: ReadonlySet<string> }): string | undefined {
-  const { arm, path, paths, files, received, tagged } = input;
+function namespaceProblem(input: { arm: string; path: string; paths: readonly string[]; files: readonly string[]; received: Received; tagged: ReadonlySet<string>; tagSkipped: ReadonlySet<string> }): string | undefined {
+  const { arm, path, paths, files, received, tagged, tagSkipped } = input;
   const type = PLACEABLE_TYPES.find((one) => path.startsWith(`${rootOf(one)}/`));
   if (type === undefined) return undefined;
   const root = rootOf(type);
@@ -84,10 +87,14 @@ function namespaceProblem(input: { arm: string; path: string; paths: readonly st
   const isDirectory = (dir: string): boolean => files.some((file) => file.startsWith(`${dir}/`));
   const isNamespace = (segment: string): boolean => namespaceSegment({ type, segment, files, received, isDirectory });
   const active = received === null ? undefined : received.activeNamespaces[NAMESPACE_AXIS[type]] ?? [];
-  if (isNamespace(first)) {
-    return active === undefined || active.includes(first) ? undefined
-      : `Arm "${arm}" runs without ${path}, which is in namespace ${first}, and the arm's roles or projects don't receive ${first}, so leaving it out changes nothing. ${REMOVE}`;
+  const namespaced = isNamespace(first);
+  if (namespaced && active !== undefined && !active.includes(first)) {
+    return `Arm "${arm}" runs without ${path}, which is in namespace ${first}, and the arm's roles or projects don't receive ${first}, so leaving it out changes nothing. ${REMOVE}`;
   }
+  if (type === 'rules' && tagSkipped.has(item.replace(/\.md$/, ''))) {
+    return `Arm "${arm}" runs without ${path}, a rule tagged only with tags the member does not subscribe, so pull leaves it out already and leaving it out changes nothing. ${REMOVE}`;
+  }
+  if (namespaced) return undefined;
   if (type === 'skills' && active !== undefined && !tagged.has(first)) {
     return `Arm "${arm}" runs without ${path}, a shared skill, which the arm's roles or projects receive only through a subscribed tag, and none brings it, so leaving it out changes nothing. ${REMOVE}`;
   }
