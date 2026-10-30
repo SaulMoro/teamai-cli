@@ -176,7 +176,7 @@ describe('benchmark arm team', () => {
     expect(fixture.runIds()).toEqual([]);
   }, 120_000);
 
-  it('refuses to start an arm without a path in single-repo mode, where the project commit decides the team assets, and leaves no run', async () => {
+  it('refuses to start a benchmark in single-repo mode, where the project commit decides the team assets, and leaves no run', async () => {
     const fixture = await benchmarkFixture({
       tool: 'fixes', sandbox: true, tools: ['claude'], selfMode: true,
       suite: suite('arms:\n  - name: now\n  - name: ablated\n    team: { without: [skills/fixer] }\n'),
@@ -187,7 +187,7 @@ describe('benchmark arm team', () => {
     const started = await fixture.teamai(['benchmark', 'run', 'fix']);
 
     expect(ErrorSchema.parse(envelope(started))).toEqual({
-      error: { code: 'team_ref_blocked', message: "--team-ref does not apply in single-repo mode: the project's own commit decides which team assets it has." },
+      error: { code: 'team_ref_blocked', message: "Benchmarks do not run in single-repo mode: the project's own commit decides which team assets a checkout has, so no arm can run on a team revision of its own. Start the benchmark from a checkout whose team has a team repo of its own." },
     });
     expect(fixture.runIds()).toEqual([]);
     expect(fixture.toolLaunches()).toEqual([]);

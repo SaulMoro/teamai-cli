@@ -13,7 +13,7 @@ import { loadLocalConfigForScope } from '../config.js';
 import { stepEnvironment } from '../env-exec.js';
 import type { WorkflowEnv } from '../env-resolution.js';
 import { teamRefBlocker } from '../team-ref.js';
-import type { LocalConfig } from '../types.js';
+import { isSelfMode, type LocalConfig } from '../types.js';
 import { sameEnvName } from '../resources/env-key.js';
 import { log } from '../utils/logger.js';
 import { leaseDeadline } from '../workflow/limits.js';
@@ -89,10 +89,14 @@ async function commitFiles(cache: string, files: readonly CheckFile[]): Promise<
 }
 
 /**
- * Why this machine cannot pin the team a trial runs, or undefined: the team also reaches the trial through user scope,
- * or it is single-repo or served over HTTP. The check `teamai pull --team-ref` makes, with its message.
+ * Why this machine cannot pin the team a trial runs, or undefined: the team is single-repo, also reaches the trial
+ * through user scope, or is served over HTTP. The check `teamai pull --team-ref` makes, with its message, but for
+ * single-repo mode, where no other setting of this machine would let a benchmark run.
  */
 export async function trialBlocker(config: LocalConfig): Promise<string | undefined> {
+  if (isSelfMode(config)) {
+    return "Benchmarks do not run in single-repo mode: the project's own commit decides which team assets a checkout has, so no arm can run on a team revision of its own. Start the benchmark from a checkout whose team has a team repo of its own.";
+  }
   return teamRefBlocker(config, await loadLocalConfigForScope('user', undefined, { dryRun: true }))?.message;
 }
 
