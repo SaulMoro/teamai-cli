@@ -18,17 +18,18 @@ import { LeaseIdSchema, LeaseWireSchema } from './lease-wire.js';
 import { carriedRun, claimOffered, reconcileTakenCopies, resumeRun, settledSteps } from './handoff.js';
 import { leaseNext, parseNextPayload, parseReport, parseResponsePayload, reportable, reportAttempt, startRun, withIgnored, type NextOptions, type ReportInput } from './engine.js';
 import {
-  abandonPlace, adoptedPlaceOf, finishPlace, placeHeldBy, placeLeaseOf, placeOf, placeRecorded, preparePlace, releasePlace, runPlaceSetup, stagePassEvidence, sweepClones, type PlaceLease,
+  abandonPlace, adoptedPlaceOf, finishPlace, placeHeldBy, placeLeaseOf, placeOf, placeRecorded, preparedClone, preparePlace, releasePlace, runPlaceSetup, stagePassEvidence, sweepClones, type PlaceLease,
   type PlacePrepared,
   type StepEnd,
 } from './place/place.js';
 import { cancelRun, respondProvenance, respondToHitl, retryStep, type CallerProvenance, type Via } from './run-controls.js';
 import { nextJudgeLease, parseJudgeRequest, runJudgeLease, verifiedScorers } from './scoring.js';
+import { stepDefinitions } from './scope.js';
 import { attemptDir, AttemptIdSchema, readRun, RunIdSchema, withRunLock, type AttemptId, type RunId, type RunLock } from './store.js';
 import { Trials } from '../benchmark/trial.js';
 import type { DriverCan } from './requirements.js';
 import { isWorkflowError, type DriverIdentity, type RunState, type RunStatus, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowFailure } from './types.js';
-import { deliveryProblem } from './workspace.js';
+import { cloneBranchOf, deliveryProblem } from './workspace.js';
 import { headCommit } from './worktree.js';
 
 /**
@@ -348,6 +349,33 @@ async function isBenchmarkRun(config: LocalConfig, run: RunId): Promise<boolean>
   return typeof stored === 'object' && stored.benchmark !== undefined;
 }
 
+/**
+ * `report` with what teamai knows of a prompt it prepared a clone for, whatever the driver says of it: the team revision
+ * and project commit it observed of the clone, and the exact model and effort the step asked for. So the step records
+ * what its tool ran on. Unchanged when the report names no tool, or the attempt runs in no clone this machine prepared.
+ */
+async function withPreparedClone(config: LocalConfig, runId: RunId, report: ReportInput): Promise<ReportInput> {
+  if (report.tool === undefined && report.agent?.tool?.name === undefined) return report;
+  const run = await readRun(config, runId);
+  if (typeof run !== 'object') return report;
+  const leased = run.steps.find((step) => step.status === 'leased' && step.attempt === report.attempt);
+  const branch = leased ? cloneBranchOf(run, leased.id) : undefined;
+  const made = branch === undefined ? undefined : await preparedClone(config, runId, branch);
+  if (!leased || !made) return report;
+  const { team, project } = made.prepared;
+  const asked = stepDefinitions(run)(leased.id)?.model;
+  const model = typeof asked === 'object' ? asked : undefined;
+  const sent = report.agent;
+  return {
+    ...report,
+    agent: {
+      ...sent, ...(team ? { team } : {}), ...(project ? { project } : {}),
+      ...(model ? { model: { ...sent?.model, requested: model.name } } : {}),
+      ...(model?.effort ? { effort: { ...sent?.effort, requested: model.effort } } : {}),
+    },
+  };
+}
+
 export function unreadablePlace(run: RunId): WorkflowFailure {
   return { code: 'workspace_base', message: `Run ${run} leased a place this teamai cannot read. Update teamai.` };
 }
@@ -479,7 +507,8 @@ export function inProcessClient({ config, env }: { config: LocalConfig; env: Wor
       if (typeof parsed === 'string') return { error: { code: 'invalid_report', message: parsed } };
       const run = RunIdSchema.safeParse(runId);
       // Trials completes a trial's report with what teamai observed of its clone.
-      const completed = run.success && await isBenchmarkRun(config, run.data) ? await Trials.report(config, runId, parsed.report) : { report: parsed.report };
+      const completed = !run.success ? { report: parsed.report }
+        : await isBenchmarkRun(config, run.data) ? await Trials.report(config, runId, parsed.report) : { report: await withPreparedClone(config, run.data, parsed.report) };
       if (!('report' in completed)) return withIgnored(completed, parsed.ignored);
       return withIgnored(await managedReport({ config, runId, report: completed.report, secrets: env.secrets, lock: options?.lock }), parsed.ignored);
     },
