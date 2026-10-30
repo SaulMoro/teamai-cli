@@ -55,7 +55,7 @@ function listOf(items: readonly string[]): string {
 function publishProposal(policy: SessionPolicies['attended']): Proposal<boolean> {
   switch (policy.policy) {
     case 'ask':
-      return { value: true, why: `${PUBLISH_WHY} Proposed because the attended publish policy (${SessionPolicy.setBy(policy.source)}) is ask. Keeping it true is not the approval: teamai asks you in your own terminal or the dashboard when the run reaches publish. Set it false to skip publishing.` };
+      return { value: true, why: `${PUBLISH_WHY} Proposed because the attended publish policy (${SessionPolicy.setBy(policy.source)}) is ask. It publishes once the run starts, with no other approval. Set it false to skip publishing.` };
     case 'off':
       return { value: false, why: `${PUBLISH_WHY} Not proposed: the attended publish policy (${SessionPolicy.setBy(policy.source)}) is off.` };
     case 'auto':
