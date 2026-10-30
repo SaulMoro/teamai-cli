@@ -271,9 +271,10 @@ export type RunUpdate<T> = { status: 'done'; value: T } | { status: 'busy' } | {
 
 /**
  * The definitions a run pins as they were pulled, which the run file keeps byte for byte. A benchmark plan is the frozen
- * measurement, so masking never rewrites it either; createRun refuses a run whose pinned values hold a secret.
+ * measurement, and an admitted workflow output is frozen with the run, so masking never rewrites either; admission and
+ * createRun refuse what holds a secret.
  */
-const PINNED: ReadonlySet<string> = new Set(['definition', 'workflows', 'scorers', 'benchmark'] satisfies Array<keyof RunState>);
+const PINNED: ReadonlySet<string> = new Set(['definition', 'workflows', 'scorers', 'admitted', 'benchmark'] satisfies Array<keyof RunState>);
 
 /** `run` as its file holds it: each of `secrets` masked in every field but the pinned definitions. */
 function maskedRun(run: RunState, secrets: Record<string, string>): unknown {

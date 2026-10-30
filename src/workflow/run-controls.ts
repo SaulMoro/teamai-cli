@@ -348,7 +348,7 @@ function retryInstance(run: RunState, state: StepState, now: string): void {
 export async function retryStep(config: LocalConfig, runId: string, secrets: Record<string, string>, step: string): Promise<WorkflowEnvelope> {
   return controlRun(config, runId, secrets, async (run, now, finish) => {
     if (isIsolated(run)) {
-      return error('not_retryable', `Run ${run.id} is isolated: its steps work in clones of fixed commits, and a step that ran again would change what the run already measured. Start a new run: teamai workflow start ${run.name}${run.benchmark ? ' --benchmark' : ''}`);
+      return error('not_retryable', `Run ${run.id} is isolated: it runs only on the machine that started it, and a step that ran again would change what it already admitted or measured. Start a new run: teamai workflow start ${run.name}${run.benchmark ? ' --benchmark' : ''}`);
     }
     if (run.finalizing) return error('not_retryable', `Run ${run.id} is running its finally steps; retry a step once the run ends`);
     if (run.definition.finally?.some((item) => item.id === step)) {

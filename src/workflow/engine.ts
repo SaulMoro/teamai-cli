@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { parseReportedAgent, parseReportedUsed, settleObservation, type ReportedAgent, type Used } from '../agent-observation.js';
 import { DefaultWorkflows } from '../default-workflows.js';
 import { DriverSchema, sameDriver } from '../driver-identity.js';
@@ -42,7 +42,8 @@ import {
 import { knownSecrets, resolveWorkflowEnv, secretKey, type WorkflowEnv } from '../env-resolution.js';
 import { deliveryLockPath, generateRunId, installOwner, isRunId, readAttemptOutcomes, readRun, updateRun } from './store.js';
 import { withFileLock } from '../update.js';
-import { admitWorkflow, heldSecret } from './admission.js';
+import { admitWorkflow, heldSecret, type Admitted } from './admission.js';
+import { workflowField } from './parse.js';
 import { scoresDir } from '../scorers/attempts.js';
 import { isLeaseRef } from '../scorers/entry.js';
 import { removeSubjectEvidence } from '../scorers/evidence.js';
@@ -1940,6 +1941,45 @@ export async function reportable(config: LocalConfig, runId: string, report: Rep
 }
 
 /** `secrets`: what the run file masks, when the caller already resolved them for this operation. */
+/**
+ * The admission of the workflow output `report` gives its step, when the step's output has a workflow field and the
+ * report succeeds with outputs. Read from the run as it stands before the report takes its lock.
+ */
+async function admitReported(
+  config: LocalConfig, runId: string, report: ReportInput, secrets: Record<string, string>,
+): Promise<{ attempt: string; admission: Awaited<ReturnType<typeof admitWorkflow>> } | undefined> {
+  if (report.outcome !== 'success' || !isRecord(report.outputs)) return undefined;
+  const run = await readRun(config, runId);
+  if (typeof run !== 'object') return undefined;
+  const state = run.steps.find((item) => item.status === 'leased' && item.lease.attempt === report.attempt);
+  const field = state && workflowField(locateStep(run, state.id)?.step.output);
+  if (!state || field === undefined) return undefined;
+  const admission = await admitWorkflow(config, { kind: 'output', step: state.id, field, output: report.outputs }, { secrets, ...(run.base ? { base: run.base } : {}) });
+  return { attempt: report.attempt, admission };
+}
+
+/**
+ * Freezes the output of producer `path` with `run`: the whole output, hashed and never rewritten, and the workflow its
+ * `field` defines, which a `from` step runs. The workflows it runs by name and its scorers join the run's. Why not, when
+ * the producer already gave the run a workflow, or a name it brings is the run's already for something else.
+ */
+function admitInto(run: RunState, path: string, field: string, output: unknown, admitted: Admitted): WorkflowFailure | undefined {
+  if (!isRecord(output)) return { code: 'invalid_output', message: `Step "${path}" output must be an object that holds ${field}` };
+  if (run.admitted?.[path]) {
+    return { code: 'invalid_output', message: `Step "${path}" already gave this run a workflow, which the run keeps; a step with a workflow output runs once.` };
+  }
+  const taken = (mine: Record<string, unknown> | undefined, theirs: Record<string, unknown>): string | undefined => Object.keys(theirs)
+    .find((key) => mine !== undefined && Object.hasOwn(mine, key) && JSON.stringify(mine[key]) !== JSON.stringify(theirs[key]));
+  const name = taken(run.workflows, admitted.workflows) ?? taken(run.scorers, admitted.scorers);
+  if (name !== undefined) {
+    return { code: 'invalid_output', message: `Step "${path}" output ${field} brings "${name}", which this run already holds with other content; name each workflow and generated scorer by its content.` };
+  }
+  run.admitted = { ...run.admitted, [path]: { output, hash: createHash('sha256').update(JSON.stringify(output)).digest('hex'), field, definition: admitted.definition } };
+  if (Object.keys(admitted.workflows).length > 0) run.workflows = { ...run.workflows, ...admitted.workflows };
+  if (Object.keys(admitted.scorers).length > 0) run.scorers = { ...run.scorers, ...admitted.scorers };
+  return undefined;
+}
+
 export async function reportAttempt(config: LocalConfig, runId: string, report: ReportInput, secrets?: Record<string, string>): Promise<WorkflowEnvelope> {
   if (isLeaseRef(report.attempt)) {
     return error('judge_lease', `Attempt ${report.attempt} is a judge lease, which workflow report does not settle. Submit its answer with: teamai score --lease ${report.attempt} --submit --stdin`);
@@ -1949,7 +1989,10 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
   const unmatched = reported?.url ? await reportedPrUnmatched(config, runId, report, reported.url) : undefined;
   // Read here for every driver: the attempt has ended, so nothing appends to it any more.
   const outcomes = await readAttemptOutcomes(config, runId, report.attempt);
-  return withRun(config, runId, secrets ?? await knownSecrets(config), async (run, now) => {
+  const known = secrets ?? await knownSecrets(config);
+  // Admission may read a team commit, so it runs before the run lock is taken.
+  const admission = await admitReported(config, runId, report, known);
+  return withRun(config, runId, known, async (run, now) => {
     const checked = reportedStep(run, report, now);
     if ('refused' in checked) return checked.refused;
     const { step } = checked;
@@ -1993,6 +2036,18 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
         outcome = 'failed';
         message = `stdout JSON does not match output: ${outputProblem}`;
         failure = { code: 'invalid_output', message };
+      }
+    }
+
+    const field = workflowField(defined?.output);
+    if (outcome === 'success' && field !== undefined) {
+      const refused = admission?.attempt === report.attempt
+        ? 'failure' in admission.admission ? admission.admission.failure : admitInto(run, step.id, field, report.outputs, admission.admission.admitted)
+        : { code: 'invalid_output', message: `Step "${step.id}" output ${field} changed while it was admitted; report it again.` };
+      if (refused) {
+        outcome = 'failed';
+        message = refused.message;
+        failure = refused;
       }
     }
 

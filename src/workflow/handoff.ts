@@ -112,11 +112,11 @@ function runBusy(runId: string): HandoffError {
 
 // A benchmark's trials run in clones and installs on the machine that started it, so its run never changes hands.
 function isolatedUnpublishable(runId: string): HandoffError {
-  return { code: 'isolated_run', message: `Run ${runId} is isolated: its steps work in clones on the machine that started it, so it cannot be published. Its end record still reaches teamai-reports with usage reporting on.` };
+  return { code: 'isolated_run', message: `Run ${runId} is isolated: it runs only on the machine that started it, so it cannot be published. Its end record still reaches teamai-reports with usage reporting on.` };
 }
 
 function isolatedUnclaimable(runId: string): HandoffError {
-  return { code: 'isolated_run', message: `Run ${runId} is isolated: its steps work in clones on the machine that started it, so it cannot be claimed. Continue it here with teamai workflow resume ${runId}, or start a new run on the other machine.` };
+  return { code: 'isolated_run', message: `Run ${runId} is isolated: it runs only on the machine that started it, so it cannot be claimed. Continue it here with teamai workflow resume ${runId}, or start a new run on the other machine.` };
 }
 
 function runUnreadable(runId: string): HandoffError {
