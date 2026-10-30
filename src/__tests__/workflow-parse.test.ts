@@ -1576,6 +1576,27 @@ steps:
     ]);
   });
 
+  it('reports a long form without names, and a name that is not a scalar', () => {
+    const result = parse(`schemaVersion: v1alpha1
+name: build
+description: Build it.
+steps:
+  - id: plan
+    prompt: Plan it.
+    scorers: { sampling: all }
+  - id: review
+    needs: [plan]
+    prompt: Review it.
+    scorers: [[quality]]
+`);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.diagnostics.map(formatDiagnostic)).toEqual([
+      'workflows/build.yaml:7: field "steps[0].scorers": scorers must list scorer names, as [name, …] or { names: [name, …], batch: true }',
+      'workflows/build.yaml:11: field "steps[1].scorers": scorer names must be a token, the name of a file in scorers/',
+    ]);
+  });
+
   it('reports an unknown key under scorers and defaults.scorers as unknown_key', () => {
     const result = parse(`schemaVersion: v1alpha1
 name: build
