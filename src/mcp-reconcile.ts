@@ -24,6 +24,7 @@ import {
 } from './types.js';
 import YAML from 'yaml';
 import { parse as parseToml } from 'smol-toml';
+import { withoutTomlBom } from './utils/toml.js';
 import {
   supportsTransport,
   supportsEnvExpansion,
@@ -811,24 +812,48 @@ async function removeCreatedMcpFile(file: string): Promise<void> {
 // ─── Codex TOML target I/O ───────────────────────────────────
 
 /**
+ * The part of a matched block teamai owns: from its header through its last line
+ * that is neither blank nor a comment. A comment after that last key line sits
+ * between the block and the next table but was not written by `renderCodexBlock`,
+ * so it belongs to the member and splicing must leave it in place. A comment
+ * between the block's own keys stays inside this extent and goes with the block.
+ */
+function ownedCodexBlock(text: string): string {
+  let end = 0;
+  let offset = 0;
+  for (const line of text.split('\n')) {
+    offset += line.length + 1;
+    const trimmed = line.trim();
+    if (trimmed === '' || trimmed.startsWith('#')) continue;
+    end = Math.min(offset, text.length);
+  }
+  return text.slice(0, end);
+}
+
+/**
  * Replace or delete a `[mcp_servers.<name>]` block by text surgery, leaving the
  * rest of config.toml byte-identical (comments included). A written block
  * always ends in a blank line, appended or replaced, so splicing the same
  * block again changes nothing.
  */
 export function spliceCodexBlock(source: string, name: string, block: string | null): string {
+  const bom = source.startsWith('\uFEFF') ? '\uFEFF' : '';
+  source = withoutTomlBom(source);
   const re = codexBlockRe(name);
   const match = source.match(re);
   const padded = block === null ? null : block.endsWith('\n') ? block + '\n' : block + '\n\n';
 
-  if (match) {
-    if (padded === null) return source.replace(re, '');
-    return source.replace(re, padded);
+  if (match && match.index !== undefined) {
+    const owned = ownedCodexBlock(match[0]);
+    const before = source.slice(0, match.index);
+    const after = source.slice(match.index + owned.length).replace(/^(?:\r?\n)+/, '');
+    if (padded === null) return bom + before + after;
+    return bom + before + padded + after;
   }
 
-  if (padded === null) return source;
+  if (padded === null) return bom + source;
   const sep = source.length === 0 || source.endsWith('\n\n') ? '' : source.endsWith('\n') ? '\n' : '\n\n';
-  return source + sep + padded;
+  return bom + source + sep + padded;
 }
 
 /**
@@ -863,12 +888,13 @@ function codexHeaderStart(name: string): string {
  * table.
  */
 export function codexBlockIn(source: string, name: string): string | null {
-  const match = source.match(codexBlockRe(name));
-  return match === null ? null : match[0].trimEnd() + '\n';
+  const match = withoutTomlBom(source).match(codexBlockRe(name));
+  return match === null ? null : ownedCodexBlock(match[0]).trimEnd() + '\n';
 }
 
 /** Extract the names of all `[mcp_servers.X]` tables present in a config.toml. */
 export function codexServerNames(source: string): string[] {
+  source = withoutTomlBom(source);
   const names = new Set<string>();
   const header = codexHeaderStart(String.raw`(?:([A-Za-z0-9_-]+)|"([A-Za-z0-9_-]+)"|'([A-Za-z0-9_-]+)')`);
   for (const m of source.matchAll(new RegExp(String.raw`^\[${header}\]\s*(?:#.*)?$`, 'gm'))) names.add(m[1] ?? m[2] ?? m[3]);
@@ -3540,7 +3566,7 @@ async function readCodexConfig(file: string): Promise<string | null | undefined>
   try {
     const source = await readFileIfExists(file);
     // Codex accepts a leading BOM; keep it in the original text for writes.
-    if (source !== null) parseToml(source.replace(/^\uFEFF/, ''));
+    if (source !== null) parseToml(withoutTomlBom(source));
     return source;
   } catch {
     return undefined;

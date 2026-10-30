@@ -4363,6 +4363,17 @@ servers:
 });
 
 describe('spliceCodexBlock', () => {
+  it('replaces the first MCP block in a BOM-prefixed config without adding a duplicate', () => {
+    const src = '\uFEFF[mcp_servers.a]\ncommand = "old"\n';
+
+    const out = spliceCodexBlock(src, 'a', '[mcp_servers.a]\ncommand = "new"\n');
+
+    expect(out.startsWith('\uFEFF')).toBe(true);
+    expect(out).toContain('command = "new"');
+    expect(out).not.toContain('command = "old"');
+    expect([...out.matchAll(/\[mcp_servers\.a\]/g)]).toHaveLength(1);
+  });
+
   it('replaces a block and its nested env sub-table, leaving neighbours intact', () => {
     const src = [
       '# header comment',
@@ -4401,6 +4412,42 @@ describe('spliceCodexBlock', () => {
     const src = `${before}[mcp_servers.a]\ncommand = "x"\n\n${after}`;
 
     expect(spliceCodexBlock(src, 'a', null)).toBe(before + after);
+  });
+
+  it('keeps a member comment that follows the block when deleting it', () => {
+    const src = '[mcp_servers.a]\ncommand = "x"\n\n# note: keep this\n[projects."/y"]\ntrust_level = "trusted"\n';
+    const out = spliceCodexBlock(src, 'a', null);
+    expect(out).not.toContain('mcp_servers.a');
+    expect(out).toContain('# note: keep this');
+    expect(out).toContain('[projects."/y"]');
+  });
+
+  it('keeps a member comment that follows the block when replacing it', () => {
+    const src =
+      '[mcp_servers.a]\ncommand = "old"\n\n# note: keep this\n[projects."/y"]\ntrust_level = "trusted"\n';
+    const out = spliceCodexBlock(src, 'a', '[mcp_servers.a]\ncommand = "new"\n');
+    expect(out).toContain('command = "new"');
+    expect(out).not.toContain('command = "old"');
+    expect(out).toContain('# note: keep this');
+    expect(out).toContain('[projects."/y"]');
+    expect(spliceCodexBlock(out, 'a', '[mcp_servers.a]\ncommand = "new"\n')).toBe(out);
+  });
+
+  it('drops CRLF blank lines when deleting a block before a member comment', () => {
+    const src =
+      '[mcp_servers.a]\r\ncommand = "x"\r\n\r\n# note: keep this\r\n[projects."/y"]\r\ntrust_level = "trusted"\r\n';
+    expect(spliceCodexBlock(src, 'a', null)).toBe(
+      '# note: keep this\r\n[projects."/y"]\r\ntrust_level = "trusted"\r\n',
+    );
+  });
+
+  it('removes a comment between the block own keys with the block', () => {
+    const src =
+      '[mcp_servers.a]\ncommand = "x"\n# why this command\nargs = ["--flag"]\n\n[projects."/y"]\ntrust_level = "trusted"\n';
+    const out = spliceCodexBlock(src, 'a', null);
+    expect(out).not.toContain('mcp_servers.a');
+    expect(out).not.toContain('why this command');
+    expect(out).toContain('[projects."/y"]');
   });
 
   // Regression: the end-of-input branch was originally written as \z, which JS
