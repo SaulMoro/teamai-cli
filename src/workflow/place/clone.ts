@@ -33,7 +33,8 @@ import { readJson, writeJsonAtomic } from '../../utils/fs.js';
 import { getDefaultBranch, HEAD_STATUS, headStateOf, resolveAnchors, type HeadState } from '../../utils/git.js';
 import { log } from '../../utils/logger.js';
 import { projectSlug } from '../../utils/partition.js';
-import { excludedSkillsOf, type ClonePlace, type InstalledTeam } from '../clone.js';
+import type { TeamDelivery } from '../../pull.js';
+import { CommitSchema, type ClonePlace, type InstalledTeam } from '../clone.js';
 import { runPasses } from '../loop.js';
 import { stepDefinitions } from '../scope.js';
 import { stageEvidence } from '../scoring-evidence.js';
@@ -41,15 +42,24 @@ import { settled } from '../step-state.js';
 import { readRun, runsDir, type RunId } from '../store.js';
 import type { RunState, WorkflowFailure } from '../types.js';
 import { cloneBranchOf } from '../workspace.js';
+import { commitWithout } from './team-without.js';
 import { boundedGit, commitWork, recordConfigOverlay, restoreUneditedConfig, saveConfig, untrustedGit, type Git } from '../worktree.js';
 
 /**
+ * The commit a clone's install pulled for a treatment without some paths, which teamai made of `revision` without them.
+ * The clone ran on `revision`, so its observations name that.
+ */
+const WithoutSchema = z.object({ commit: CommitSchema, revision: CommitSchema }).strict();
+type Without = z.infer<typeof WithoutSchema>;
+
+/**
  * What teamai made of the clone: `prepared`, what it observed there once the clone and its install were done, the team
- * revision the install pinned and the commit; `install`, that install's config, absent when the place installs no team.
+ * revision the install pinned and the commit; `install`, that install's config, absent when the place installs no team,
+ * and the commit it pulled for a treatment without some paths.
  */
 const Made = {
   prepared: ReportedAgentSchema,
-  install: z.object({ config: LocalConfigSchema, dataHome: z.string().min(1) }).strict().optional(),
+  install: z.object({ config: LocalConfigSchema, dataHome: z.string().min(1), without: WithoutSchema.optional() }).strict().optional(),
 };
 
 /** `installed`: the clone and its install are done, and setup is not; `ready`: setup is done too. */
@@ -138,9 +148,9 @@ export async function openClone(input: { config: LocalConfig; run: RunId; checko
   const head = status.code === 0 ? headStateOf(status.stdout) : null;
   const tool = installed ? installed.config.enabledAgents?.[0] : undefined;
   const prepared = installed && tool !== undefined
-    ? await observeCheckout({ config: installed.config, tool, cwd: dir, head })
+    ? await observeCheckout({ config: installed.config, tool, cwd: dir, head, delivery: await cloneDelivery({ install: installed.config, without: installed.without }, tool) ?? null })
     : head ? { project: { commit: head.head, dirty: head.dirty } } : {};
-  const made = { prepared, ...(installed ? { install: { config: LocalConfigSchema.parse(installed.config), dataHome: installed.dataHome } } : {}) };
+  const made = { prepared, ...(installed ? { install: { config: LocalConfigSchema.parse(installed.config), dataHome: installed.dataHome, ...(installed.without ? { without: installed.without } : {}) } } : {}) };
   await writeJsonAtomic(file, { v: 1, branch: lease.branch, root, withhold: [...lease.withhold], state: { kind: 'installed', ...made } } satisfies CloneReceipt);
   return { dir, created: true };
 }
@@ -155,13 +165,24 @@ export async function markCloneReady(config: LocalConfig, run: RunId, branch: st
 
 /**
  * The clone of `branch` as teamai prepared it: what it observed there, and the config of the clone's own install,
- * absent when the place installs no team. Undefined when this machine prepared none.
+ * absent when the place installs no team, with the commit it pulled for a treatment without some paths. Undefined when
+ * this machine prepared none.
  */
-export async function preparedClone(config: LocalConfig, run: RunId, branch: string): Promise<{ prepared: ReportedAgent; install?: LocalConfig } | undefined> {
+export async function preparedClone(config: LocalConfig, run: RunId, branch: string): Promise<{ prepared: ReportedAgent; install?: LocalConfig; without?: Without } | undefined> {
   const found = await readReceipt(receiptPath(runsDir(config), run, branch));
   if (found?.state.kind !== 'ready') return undefined;
   const { prepared, install } = found.state;
-  return { prepared, ...(install ? { install: { ...install.config, dataHome: install.dataHome } } : {}) };
+  return { prepared, ...(install ? { install: { ...install.config, dataHome: install.dataHome }, ...(install.without ? { without: install.without } : {}) } : {}) };
+}
+
+/**
+ * What the clone's own install delivered for `tool`, as a step's observation reads it, or undefined when it cannot be
+ * read. An install without some paths pulled a commit teamai made of its revision, so the delivery names that revision.
+ */
+export async function cloneDelivery({ install, without }: { install: LocalConfig; without?: Without }, tool: string): Promise<TeamDelivery | undefined> {
+  const { teamDelivery } = await import('../../pull.js');
+  const delivery = await teamDelivery(install, tool).catch(() => undefined);
+  return delivery?.complete && without && delivery.commit === without.commit ? { ...delivery, commit: without.revision } : delivery;
 }
 
 /** Gives up the clone of `branch`: its root and receipt go, so the next step that opens it gets a fresh one. */
@@ -321,7 +342,8 @@ const PULL_TIMEOUT_MS = 10 * 60_000;
 
 /**
  * The clone's own teamai install at `team.revision`, offline, with nothing written outside `root`: a bare repo holding
- * only that revision, fetched from the member's team clone; the clone's team clone of it; its partition config, written
+ * only that revision, fetched from the member's team clone, and for a treatment without some paths, the commit
+ * `commitWithout` makes of it there, on its branch; the clone's team clone of it; its partition config, written
  * from the place's selection with every per-machine knob off; then `teamai pull --team-ref` as a child whose HOME is
  * `<root>/h`, so the hooks, shell profiles and env registry a workspace pull writes under HOME land there. The git hooks
  * that pull writes into the clone go again, so neither teamai nor a step's git runs teamai there, and the delivered files
@@ -329,7 +351,7 @@ const PULL_TIMEOUT_MS = 10 * 60_000;
  */
 async function installTeam(input: {
   config: LocalConfig; root: string; lease: CloneLease; team: InstalledTeam;
-}): Promise<{ config: LocalConfig; dataHome: string } | WorkflowFailure> {
+}): Promise<{ config: LocalConfig; dataHome: string; without?: Without } | WorkflowFailure> {
   const { config: member, root, lease, team } = input;
   const failed = (message: string): WorkflowFailure => ({ code: 'clone_prepare_failed', message });
   const { revision, selection } = team;
@@ -346,23 +368,39 @@ async function installTeam(input: {
   const bare = path.join(root, 'team.git');
   const teamClone = path.join(partition, 'team-repo');
   const branch = await getDefaultBranch(source);
-  const steps: Array<{ cwd: string; args: string[] }> = [
-    { cwd: root, args: ['init', '-q', '--bare', bare] },
-    { cwd: bare, args: ['fetch', '-q', '--no-tags', source, `${revision}:refs/heads/${branch}`] },
-    { cwd: bare, args: ['symbolic-ref', 'HEAD', `refs/heads/${branch}`] },
-    { cwd: root, args: ['clone', '-q', '--no-local', bare, teamClone] },
-  ];
   // The lease's deadline bounds the copy too, as it bounds the pull below.
   const copy = boundedGit(lease.expiresAt);
-  for (const { cwd, args } of steps) {
-    const ran = await copy(cwd, args);
-    if (ran.code !== 0) return failed(`Team revision ${revision} could not be copied from ${source} for the clone (git ${args[0]}): ${ran.stderr.trim()}`);
+  const copied = async (steps: Array<{ cwd: string; args: string[] }>): Promise<WorkflowFailure | undefined> => {
+    for (const { cwd, args } of steps) {
+      const ran = await copy(cwd, args);
+      if (ran.code !== 0) return failed(`Team revision ${revision} could not be copied from ${source} for the clone (git ${args[0]}): ${ran.stderr.trim()}`);
+    }
+    return undefined;
+  };
+  const fetched = await copied([
+    { cwd: root, args: ['init', '-q', '--bare', bare] },
+    { cwd: bare, args: ['fetch', '-q', '--no-tags', source, `${revision}:refs/heads/${branch}`] },
+  ]);
+  if (fetched) return fetched;
+  let without: Without | undefined;
+  if (typeof team.treatment === 'object') {
+    const paths = team.treatment.without;
+    const made = await commitWithout(copy, { repo: bare, revision, paths });
+    if ('failed' in made) return failed(`Team revision ${revision} without ${paths.join(', ')} could not be made for the clone (${made.failed}).`);
+    without = { commit: made.commit, revision };
   }
+  const cloned = await copied([
+    ...(without ? [{ cwd: bare, args: ['update-ref', `refs/heads/${branch}`, without.commit] }] : []),
+    { cwd: bare, args: ['symbolic-ref', 'HEAD', `refs/heads/${branch}`] },
+    { cwd: root, args: ['clone', '-q', '--no-local', bare, teamClone] },
+  ]);
+  if (cloned) return cloned;
+  const pulling = without?.commit ?? revision;
   const config: LocalConfig = {
     repo: { localPath: teamClone, remote: member.repo.remote, kind: 'git' },
     username: member.username, provider: 'git', scope: 'project', projectRoot: anchors.workspaceRoot, dataHome: partition,
     ...(selection.primaryRole ? { primaryRole: selection.primaryRole } : {}),
-    additionalRoles: selection.additionalRoles, projects: selection.projects, excludedSkills: excludedSkillsOf(team),
+    additionalRoles: selection.additionalRoles, projects: selection.projects, excludedSkills: selection.excludedSkills,
     ...(selection.subscribedTags ? { subscribedTags: selection.subscribedTags } : {}),
     enabledAgents: tools,
     recallEnabled: false, contributeHintEnabled: false, mrHintEnabled: false, usageReportEnabled: false, coAuthorEnabled: false, codexTrustEnabled: false,
@@ -377,11 +415,11 @@ async function installTeam(input: {
   for (const name of TOOL_HOME_VARIABLES) delete env[name];
   // The lease's deadline bounds the pull too, so a slow one does not hold the run past its timeout.
   const timeoutMs = lease.expiresAt === undefined ? PULL_TIMEOUT_MS : Math.max(0, Math.min(PULL_TIMEOUT_MS, Date.parse(lease.expiresAt) - Date.now()));
-  const pulled = await execCommand(process.execPath, [entry, 'pull', '--team-ref', revision], { cwd: clone, env, timeoutMs })
+  const pulled = await execCommand(process.execPath, [entry, 'pull', '--team-ref', pulling], { cwd: clone, env, timeoutMs })
     .catch((thrown: unknown) => ({ code: 1, stdout: '', stderr: thrown instanceof Error ? thrown.message : String(thrown) }));
   if (pulled.code !== 0) {
     const tail = (pulled.stderr.trim() || pulled.stdout.trim()).slice(-500);
-    return failed(`teamai pull --team-ref ${revision.slice(0, 7)} exited ${pulled.code}: ${tail}`);
+    return failed(`teamai pull --team-ref ${pulling.slice(0, 7)} exited ${pulled.code}: ${tail}`);
   }
   try {
     await removeGitHook(clone);
@@ -389,7 +427,7 @@ async function installTeam(input: {
     return failed(`The git hooks the clone's own teamai pull installed in ${clone} could not be removed: ${thrown instanceof Error ? thrown.message : String(thrown)}`);
   }
   await recordConfigOverlay(clone, saved);
-  return { config, dataHome: partition };
+  return { config, dataHome: partition, ...(without ? { without } : {}) };
 }
 
 /** The root, then the receipt that names it. rm retries a busy file, as Windows reports one still being closed. */

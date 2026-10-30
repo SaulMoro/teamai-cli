@@ -18,12 +18,22 @@ export const TeamSelectionSchema = z.object({
 export type TeamSelection = z.infer<typeof TeamSelectionSchema>;
 
 /**
+ * A file or directory of the team repo, written as git lists it: relative, with no leading or trailing "/", no
+ * backslash and no ".", ".." or empty segment.
+ */
+export const TeamPathSchema = z.string().refine(
+  (value) => !value.includes('\\') && value.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..'),
+  'must be a path in the team repo as git lists it, such as skills/release or rules/commits.md: no leading or trailing "/", no backslash and no ".", ".." or empty segment',
+);
+
+/**
  * Which team assets the clone gets at `revision`: the revision as pulled, the revision a ref named (the ref is only its
- * name), or the revision without some skills. `none` installs nothing.
+ * name), or the revision without some of its files and directories, each a path in the team repo. `none` installs
+ * nothing.
  */
 const TreatmentSchema = z.union([
   z.literal('pulled'),
-  z.object({ without: z.array(z.string().min(1)).nonempty() }).strict(),
+  z.object({ without: z.array(TeamPathSchema).nonempty() }).strict(),
   z.string().min(1).refine((ref) => ref !== 'none', 'none takes no revision or selection'),
 ]);
 
@@ -45,9 +55,3 @@ export const ClonePlaceSchema = z.object({
   team: CloneTeamSchema,
 }).strict();
 export type ClonePlace = z.infer<typeof ClonePlaceSchema>;
-
-/** The skills the install leaves out: the selection's own, and those the treatment runs without. */
-export function excludedSkillsOf(team: InstalledTeam): string[] {
-  const without = typeof team.treatment === 'object' ? team.treatment.without : [];
-  return [...new Set([...team.selection.excludedSkills, ...without])].sort();
-}

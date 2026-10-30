@@ -33,7 +33,7 @@ import {
   type LocalToolRun,
 } from './local-tool-adapter.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, readRun, RunIdSchema, withRunLock, type RunId, type RunLock } from '../../store.js';
-import { abandonPlace, cloneHead, placeLeaseOf, placeOf, placeRoot, preparedClone, preparePlace, runPlaceSetup, sweepClones, type StepEnd } from '../../place/place.js';
+import { abandonPlace, cloneDelivery, cloneHead, placeLeaseOf, placeOf, placeRoot, preparedClone, preparePlace, runPlaceSetup, sweepClones, type StepEnd } from '../../place/place.js';
 import { commandEnd, managedReport, unreadablePlace } from '../../protocol.js';
 import { memberTools, type MemberTool } from '../../../tool-launch/call.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../../tool-launch/process-stop.js';
@@ -364,8 +364,9 @@ async function promptReport(
   // its own install, never the member's config, and none when its place installs no team.
   const contract = lease.workspace;
   const clone = contract && contract.mode !== 'read-only' && contract.clone ? contract.branch : undefined;
+  const prepared = clone !== undefined ? await preparedClone(config, lock.run, clone) : undefined;
   const teamConfig = clone !== undefined
-    ? (await preparedClone(config, lock.run, clone))?.install
+    ? prepared?.install
     : contract && lease.cwd ? await detectProjectConfig(lease.cwd) ?? config : config;
   const stepConfig = teamConfig ?? config;
   const loaded = lease.agent && teamConfig ? await loadDeployedAgent({ tool: selected, name: lease.agent, config: teamConfig, toolPaths: options.toolPaths }) : undefined;
@@ -393,7 +394,9 @@ async function promptReport(
     ? { model: chosen.model.name, ...(chosen.model.effort ? { effort: chosen.model.effort } : {}) }
     : {};
   const { teamDelivery } = await import('../../../pull.js');
-  const delivery = teamConfig ? await teamDelivery(teamConfig, selected).catch(() => undefined) : undefined;
+  const delivery = prepared?.install
+    ? await cloneDelivery({ install: prepared.install, without: prepared.without }, selected)
+    : teamConfig ? await teamDelivery(teamConfig, selected).catch(() => undefined) : undefined;
   const delivered = delivery?.record?.delivered;
   const [observed, launch, teamSkills] = await Promise.all([
     observeLaunch({

@@ -68,7 +68,7 @@ const ENTRIES: Array<{ folder: string; entries: Record<string, string[] | 'any'>
     folder: PLACE,
     // engine.ts stages, before it saves a run, the evidence a step that settled there left in its clone.
     entries: { 'place.ts': ['src/workflow/engine.ts', 'src/workflow/protocol.ts', 'src/workflow/drivers/local/local-driver.ts', `${BENCHMARK}trial.ts`, `${BENCHMARK}start.ts`], 'setup.ts': [`${BENCHMARK}trial.ts`] },
-    testEntries: ['place.ts'],
+    testEntries: ['place.ts', 'team-without.ts'],
   },
   // workflow-published-runs.ts judges an offered run by the tool the local driver would launch for its prompt steps.
   { folder: LOCAL, entries: { 'local-driver.ts': ['src/workflow-commands.ts', 'src/workflow-published-runs.ts'], 'local-tool-adapter.ts': [] }, testEntries: ['local-driver.ts', 'local-tool-adapter.ts'] },
