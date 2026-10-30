@@ -88,6 +88,20 @@ describe('workflow: { from }', () => {
     expect(run.admitted?.plan).toMatchObject({ output, field: 'definition', definition: { name: 'generated', steps: [{ id: 'hello', command: 'node hello.js' }] } });
     expect(run.admitted?.plan?.hash).toMatch(/^[0-9a-f]{64}$/);
   });
+
+  it('admits a bundle whose producer reuses one object in two steps', async () => {
+    const config = testConfig();
+    const runId = await startPlanned(config);
+    const env = { GREETING: 'hello' };
+    const definition = { ...GENERATED, steps: [{ id: 'one', command: 'node hello.js', env }, { id: 'two', needs: ['one'], command: 'node hello.js', env }] };
+
+    const reported = await settle(config, runId, 'plan', { definition: { definition }, plan: {} });
+
+    expect(reported).not.toHaveProperty('error');
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error(`run ${run}`);
+    expect(run.admitted?.plan?.definition).toMatchObject({ steps: [{ id: 'one', env }, { id: 'two', env }] });
+  });
 });
 
 describe('admitting a workflow output', () => {

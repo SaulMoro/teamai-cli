@@ -111,7 +111,7 @@ function pinnedSecret(pinned: Record<string, unknown>, secrets: Record<string, s
 function parseBundle(
   definition: Record<string, unknown>, workflows: Record<string, Record<string, unknown>>,
 ): { definition: WorkflowDefinition; workflows: Record<string, WorkflowDefinition> } | { failed: string } {
-  const sources = new Map<string, string>(Object.entries(workflows).map(([key, value]) => [key, stringify(value)]));
+  const sources = new Map<string, string>(Object.entries(workflows).map(([key, value]) => [key, stringify(value, { aliasDuplicateObjects: false })]));
   const name = typeof definition.name === 'string' ? definition.name : 'definition';
   // Each file alone first, so the check of a step that runs one by name has the definition it runs.
   const alone = new Map([...sources].flatMap(([key, content]) => {
@@ -141,7 +141,7 @@ function parseBundle(
     const unrunnable = unrunnableStep(parsed.definition.steps);
     return unrunnable ? `workflows/${key}.yaml: ${unrunnable}` : parsed.definition;
   };
-  const top = parse(name, stringify(definition));
+  const top = parse(name, stringify(definition, { aliasDuplicateObjects: false }));
   if (typeof top === 'string') return { failed: top };
   const parsed: Record<string, WorkflowDefinition> = {};
   for (const [key, content] of sources) {
