@@ -114,6 +114,15 @@ steps:
     prompt: Write the release notes.
 `;
 
+const PINNED = `schemaVersion: v1alpha1
+name: pinned
+description: Write the release notes on codex.
+steps:
+  - id: notes
+    prompt: Write the release notes.
+    tool: codex
+`;
+
 const REVIEW = `schemaVersion: v1alpha1
 name: review
 description: Review the project twice in one session.
@@ -518,6 +527,7 @@ describe('workflow resume lists the runs a checkout can resume, and --next takes
       'workflows/release.yaml': RELEASE,
       'workflows/sign.yaml': SIGN,
       'workflows/docs.yaml': DOCS,
+      'workflows/pinned.yaml': PINNED,
       'workflows/signed-release.yaml': SIGNED_RELEASE,
     }, 'team repo', teamOrigin);
     seed(path.join(sandbox, 'seed-business'), { 'README.md': '# business\n' }, 'business repo', businessOrigin);
@@ -646,6 +656,27 @@ describe('workflow resume lists the runs a checkout can resume, and --next takes
     expect(taken.code, said(taken)).toBe(0);
     expect(taken.stderr).toContain(`Claimed ${docs} (docs) from alice`);
     expect(taken.envelope()).toMatchObject({ data: { done: { run: docs, outcome: 'succeeded' } } });
+  }, 180_000);
+
+  it('leaves a run whose prompt step names a tool not on PATH, whatever --tools gives, and lists why', async () => {
+    const pinned = await offer('pinned');
+    const bin = path.join(homeOf('runner'), 'pinned-bin');
+    fs.mkdirSync(bin, { recursive: true });
+    fs.symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'));
+    const runner = { TEAMAI_MODE: 'unattended', PATH: [bin, '/usr/bin', '/bin'].join(path.delimiter) };
+    const claude = ['--tools', 'default=claude'];
+    const why = 'the prompt step notes runs on codex, which is not on PATH here: install codex';
+
+    const listed = await teamai('runner', ['workflow', 'resume', ...claude], { env: runner });
+    expect(listed.code, said(listed)).toBe(0);
+    expect(rowsOf(listed)).toEqual(expect.arrayContaining([
+      expect.stringMatching(new RegExp(`^${pinned} +pinned +cannot run here +${OWNER('alice')} +offered on teamai-reports, ${why}; then teamai workflow resume --next$`)),
+    ]));
+
+    const idle = await teamai('runner', ['workflow', 'resume', '--next', ...claude], { env: runner });
+    expect(idle.code, said(idle)).toBe(0);
+    expect(idle.stderr).toContain(`Left ${pinned} (pinned) offered: ${why}`);
+    expect(publishedState(pinned)).toMatchObject({ status: 'running', offered: { at: expect.any(String) } });
   }, 180_000);
 
   it('lists a run that needs a person and env with no value here as cannot run here, so no person claims it here', async () => {

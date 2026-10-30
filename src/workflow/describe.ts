@@ -88,9 +88,9 @@ export interface WorkflowDescription {
     budgets: Array<{ step?: string; tokens: number }>;
     /**
      * Each step that runs a command or a prompt, by path, with what the machine that runs it needs: the `requires.env`
-     * keys of the step and its setup, and the agent of a prompt step, whose tool the driver picks.
+     * keys of the step and its setup, and the agent and `tool` of a prompt step, from which the driver picks its tool.
      */
-    runs: Array<{ step: string; executor: 'command' | 'prompt'; env: string[]; agent?: string }>;
+    runs: Array<{ step: string; executor: 'command' | 'prompt'; env: string[]; agent?: string; tool?: string }>;
     /** Steps the describing driver is held from, by path, with what it lacks, and the `requires.env` keys they need. */
     held: Array<{ step: string; missing: Missing[]; env: string[] }>;
     localRoute?: LocalRoute;
@@ -150,7 +150,7 @@ export function describeWorkflow(input: {
     const requires = mergeRequirements(scope.requires, step.requires);
     const executor = step.command !== undefined ? 'command' : 'prompt';
     const setupEnv = hasContract ? scope.setup?.requires?.env ?? [] : [];
-    facts.runs.push({ step: path, executor, env: [...new Set([...requires.env ?? [], ...setupEnv])], ...(executor === 'prompt' && step.agent !== undefined ? { agent: step.agent } : {}) });
+    facts.runs.push({ step: path, executor, env: [...new Set([...requires.env ?? [], ...setupEnv])], ...(executor === 'prompt' && step.agent !== undefined ? { agent: step.agent } : {}), ...(executor === 'prompt' && step.tool !== undefined ? { tool: step.tool } : {}) });
     const negotiation = negotiate({
       // Whether the driver calls next --prepare is not part of its can: a step in a clone is described as a driver with clone takes it.
       step: path, executor, requires, prepare: false, clone: false,
