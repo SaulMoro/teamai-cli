@@ -3,14 +3,14 @@
  * comparison after the suite is gone, and no control command measures a trial twice or moves the run to another machine.
  * A run is the workflow benchmark, which `teamai benchmark run` starts, or `workflow start benchmark` for another driver.
  */
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { benchmarkFixture, envelope, FIX_SUITE, fixTask, PRODUCT_URL, said, type BenchmarkFixture, type Envelope } from '../helpers/benchmark-fixture.js';
+import { benchmarkFixture, driveCommands, envelope, FIX_SUITE, fixTask, PRODUCT_URL, said, startFixBenchmark, type BenchmarkFixture } from '../helpers/benchmark-fixture.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
@@ -50,9 +50,6 @@ const RecordSchema = z.object({
   trials: z.array(z.object({ arm: z.string(), step: z.string(), result: z.string() })),
 }).passthrough();
 const DoneSchema = z.object({ run: z.string(), outcome: z.string(), outputs: z.object({ text: z.string() }).passthrough() }).passthrough();
-const LeaseSchema = z.object({
-  step: z.string(), attempt: z.string(), revision: z.number(), command: z.string().optional(), env: z.record(z.string()).optional(), cwd: z.string().optional(),
-}).passthrough();
 const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, tools: ['claude'] };
 const DRIVER = { kind: 'external', machine: 'lifecycle-driver', workspace: '/fake' };
 const NO_SANDBOX = { driver: { kind: 'ci', machine: 'ci', workspace: '/fake', can: { workspace: ['read-only', 'new', 'continue', 'clone'] } } };
@@ -69,31 +66,11 @@ async function fixtureOf(options: Parameters<typeof benchmarkFixture>[0]): Promi
   return fixture;
 }
 
-/**
- * Answers `next --prepare` for the driver `payload` names until it gets something other than a command lease, running
- * each command lease as an external driver does: in the lease's cwd, as its attempt, reporting its stdout as outputs.
- */
-async function driveCommands(fixture: BenchmarkFixture, run: string, payload: { driver: Record<string, unknown> }): Promise<Envelope> {
-  for (;;) {
-    const answer = envelope(await fixture.teamai(['workflow', 'next', run, '--prepare', '--json', JSON.stringify({ ...payload, running: [] })]));
-    const lease = LeaseSchema.safeParse(answer.data?.lease);
-    if (!lease.success || lease.data.command === undefined) return answer;
-    const { attempt, revision, command, env, cwd } = lease.data;
-    const ran = spawnSync('sh', ['-c', command], { cwd: cwd ?? fixture.work, env: { ...fixture.env, ...env, TEAMAI_WORKFLOW_ATTEMPT: `${run}/${attempt}` }, encoding: 'utf8' });
-    const outputs: unknown = ran.status === 0 ? JSON.parse(ran.stdout) : undefined;
-    const reported = envelope(await fixture.teamai(['workflow', 'report', run, '--json', JSON.stringify({
-      attempt, revision, outcome: ran.status === 0 ? 'success' : 'failed', driver: payload.driver, ...(outputs === undefined ? {} : { outputs }),
-    })]));
-    if (reported.error) throw new Error(`report of ${lease.data.step} refused: ${JSON.stringify(reported)}`);
-  }
-}
-
 /** Starts the workflow benchmark for suite fix with no driver, and runs its plan step as a driver that is no sandbox, so the run waits at its trials. */
 async function started(fixture: BenchmarkFixture): Promise<string> {
-  const answer = envelope(await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix"}', '--timeout', '10m']));
-  if (typeof answer.data?.run !== 'string') throw new Error(`no run: ${JSON.stringify(answer)}`);
-  await driveCommands(fixture, answer.data.run, NO_SANDBOX);
-  return answer.data.run;
+  const run = await startFixBenchmark(fixture);
+  await driveCommands(fixture, run, NO_SANDBOX);
+  return run;
 }
 
 /** The one `jq` command a guide page gives for a benchmark record on teamai-reports. */

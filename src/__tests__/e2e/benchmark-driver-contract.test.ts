@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { LeaseWireSchema } from '../../workflow/lease-wire.js';
 import type { EnvScope } from '../../workflow/requirements.js';
-import { benchmarkFixture, envelope, PRODUCT_URL, said, type BenchmarkFixture } from '../helpers/benchmark-fixture.js';
+import { benchmarkFixture, envelope, PRODUCT_URL, startFixBenchmark, type BenchmarkFixture } from '../helpers/benchmark-fixture.js';
 
 /** The suite of the contract: one check task `fix`, and the arms `claude` and `codex`, with `trial` when given. */
 function twoArms(timeout: string, trial?: string): string {
@@ -139,14 +139,6 @@ async function drive(fixture: BenchmarkFixture, input: { run: string; can: Recor
   return { leased, held };
 }
 
-/** Starts the benchmark workflow on suite `fix` for an external driver, bounded by the suite's `timeout`. */
-async function started(fixture: BenchmarkFixture, timeout: string): Promise<string> {
-  const answer = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix"}', '--timeout', timeout]);
-  const run = envelope(answer).data?.run;
-  if (typeof run !== 'string') throw new Error(`no run: ${said(answer)}`);
-  return run;
-}
-
 const EVERY_STEP = ['plan', 'trials.baselines.fix', 'trials.r1.fix.claude.prompt', 'trials.r1.fix.claude.check', 'report'];
 
 describe('the benchmark workflow, driven from outside', () => {
@@ -155,7 +147,7 @@ describe('the benchmark workflow, driven from outside', () => {
     try {
       const status = fixture.status();
       const baseline = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fixture.teamClone, encoding: 'utf8' }).trim();
-      const runId = await started(fixture, '15s');
+      const runId = await startFixBenchmark(fixture, '15s');
 
       const result = await drive(fixture, { run: runId, can: SANDBOX_CLAUDE, prepare: true, maxPolls: 40 });
 
@@ -184,7 +176,7 @@ describe('the benchmark workflow, driven from outside', () => {
   it('stops the tool at the trial timeout the lease sets, and the check decides the trial its report says a limit ended', async () => {
     const fixture = await benchmarkFixture({ tool: 'hangs', sandbox: false, suite: twoArms('15s', '{ timeout: 3s }') });
     try {
-      const runId = await started(fixture, '15s');
+      const runId = await startFixBenchmark(fixture, '15s');
 
       const result = await drive(fixture, { run: runId, can: SANDBOX_CLAUDE, prepare: true, maxPolls: 40 });
 
@@ -202,7 +194,7 @@ describe('the benchmark workflow, driven from outside', () => {
   it('leases a driver that cannot end the turn the trial under on_limit: fail, and records on_limit as not enforced', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: false, suite: twoArms('15s', '{ timeout: 10s }') });
     try {
-      const runId = await started(fixture, '15s');
+      const runId = await startFixBenchmark(fixture, '15s');
 
       const result = await drive(fixture, { run: runId, can: { ...SANDBOX_CLAUDE, end_turn: false }, prepare: true, maxPolls: 40 });
 
@@ -222,7 +214,7 @@ describe('the benchmark workflow, driven from outside', () => {
   ])('runs the plan, then holds the task baseline, and so every trial, from a driver that %s', async (_, can, prepare, missing) => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: false, suite: twoArms('10m') });
     try {
-      const runId = await started(fixture, '10m');
+      const runId = await startFixBenchmark(fixture, '10m');
 
       const result = await drive(fixture, { run: runId, can, prepare, maxPolls: 2 });
 
@@ -238,7 +230,7 @@ describe('the benchmark workflow, driven from outside', () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: false, suite: twoArms('10m') });
     try {
       const status = fixture.status();
-      const runId = await started(fixture, '10m');
+      const runId = await startFixBenchmark(fixture, '10m');
       fixture.probeControl(runId);
 
       const result = await drive(fixture, { run: runId, can: SANDBOX_CLAUDE, prepare: true, maxPolls: 4 });

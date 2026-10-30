@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { LeaseWireSchema } from '../../workflow/lease-wire.js';
 import type { EnvScope } from '../../workflow/requirements.js';
-import { benchmarkFixture, envelope, PRODUCT_URL, said, type BenchmarkFixture, type Envelope } from '../helpers/benchmark-fixture.js';
+import { benchmarkFixture, envelope, PRODUCT_URL, runFixBenchmark, startFixBenchmark, type BenchmarkFixture, type Envelope } from '../helpers/benchmark-fixture.js';
 
 const WITHHELD = ['GITHUB_TOKEN', 'GH_TOKEN', 'GITLAB_TOKEN', 'GL_TOKEN', 'CI_JOB_TOKEN', 'SSH_AUTH_SOCK', 'GIT_ASKPASS', 'SSH_ASKPASS'];
 const WITH_SETUP = `schemaVersion: v1alpha1
@@ -58,22 +58,6 @@ const fixtures: BenchmarkFixture[] = [];
 afterEach(() => {
   for (const fixture of fixtures.splice(0)) fixture.remove();
 });
-
-/** Starts the benchmark workflow on suite `fix`, bounded by the suite's timeout, for an external driver. */
-async function started(fixture: BenchmarkFixture): Promise<string> {
-  const answer = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix"}', '--timeout', '10m']);
-  const run = envelope(answer).data?.run;
-  if (typeof run !== 'string') throw new Error(`no run: ${said(answer)}`);
-  return run;
-}
-
-/** Runs suite `fix` on the local driver, and answers its run. */
-async function ranLocally(fixture: BenchmarkFixture): Promise<string> {
-  const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
-  const run = z.object({ run: z.string() }).safeParse(envelope(ran).data?.done).data?.run;
-  if (run === undefined) throw new Error(`no run: ${said(ran)}`);
-  return run;
-}
 
 /** A driver of `run` from outside, as `identity`, that runs the command leases and setups it is given itself. */
 function fromOutside(fixture: BenchmarkFixture, run: string, identity = { kind: 'external', machine: 'by-hand', workspace: fixture.work }) {
@@ -132,11 +116,11 @@ function fromOutside(fixture: BenchmarkFixture, run: string, identity = { kind: 
 }
 
 const DRIVERS: Array<{ name: string; run(fixture: BenchmarkFixture): Promise<string> }> = [
-  { name: 'the local driver', run: ranLocally },
+  { name: 'the local driver', run: runFixBenchmark },
   {
     name: 'a driver from outside',
     run: async (fixture) => {
-      const run = await started(fixture);
+      const run = await startFixBenchmark(fixture);
       const driver = fromOutside(fixture, run);
       await driver.launchTool(await driver.prompt());
       await driver.finish();
@@ -197,7 +181,7 @@ describe('git in the clone once the tool ran there', () => {
     fixtures.push(fixture);
     for (const name of WITHHELD) fixture.env[name] = `member-${name.toLowerCase()}`;
     fixture.env.BENCHMARK_VISIBLE = 'seen';
-    const runId = await started(fixture);
+    const runId = await startFixBenchmark(fixture);
     const driver = fromOutside(fixture, runId);
     const lease = await driver.prompt();
     const hooks = path.join(fixture.root, 'agent-hooks');
@@ -229,7 +213,7 @@ describe('git in the clone once the tool ran there', () => {
     fs.writeFileSync(path.join(fixture.root, 'fsmonitor.sh'), '#!/bin/sh\nenv >> "$FIXTURE_ROOT/fsmonitor.env"\nexit 1\n', { mode: 0o755 });
     for (const name of WITHHELD) fixture.env[name] = `member-${name.toLowerCase()}`;
 
-    const runId = await ranLocally(fixture);
+    const runId = await runFixBenchmark(fixture);
 
     const monitored = path.join(fixture.root, 'fsmonitor.env');
     const seen = fs.existsSync(monitored) ? fs.readFileSync(monitored, 'utf8').split('\n').map((line) => line.split('=')[0]) : [];
@@ -240,7 +224,7 @@ describe('git in the clone once the tool ran there', () => {
   it('runs no hook the agent configured as hook.<name>.command there, whatever its name', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'] });
     fixtures.push(fixture);
-    const runId = await started(fixture);
+    const runId = await startFixBenchmark(fixture);
     const driver = fromOutside(fixture, runId);
     const lease = await driver.prompt();
     const agentGit = (args: string[]) => execFileSync('git', args, { cwd: lease.cwd, env: fixture.env });
@@ -262,7 +246,7 @@ describe('git in the clone once the tool ran there', () => {
   it('shows the judge what the agent changed from the starting commit itself, when the agent replaced that commit with git replace', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'], tasks: { fix: CRITERIA_TASK } });
     fixtures.push(fixture);
-    const runId = await started(fixture);
+    const runId = await startFixBenchmark(fixture);
     const driver = fromOutside(fixture, runId);
     const lease = await driver.prompt();
     const agentGit = (args: string[]) => execFileSync('git', args, { cwd: lease.cwd, env: fixture.env });

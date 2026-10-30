@@ -20,7 +20,7 @@
  *
  * `startBenchmarkRun` makes a run in process instead, for tests that call the engine without the CLI.
  */
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -160,6 +160,45 @@ export function envelope(result: CliResult): Envelope {
   const line = result.stdout.trim().split('\n').findLast((item) => item.startsWith('{'));
   if (!line) throw new Error(`no JSON envelope:\n${said(result)}`);
   return EnvelopeSchema.parse(JSON.parse(line));
+}
+
+/** Starts the benchmark workflow on suite `fix` for an external driver, bounded by `timeout`, and answers its run. */
+export async function startFixBenchmark(fixture: BenchmarkFixture, timeout = '10m'): Promise<string> {
+  const answer = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix"}', '--timeout', timeout]);
+  const run = envelope(answer).data?.run;
+  if (typeof run !== 'string') throw new Error(`no run: ${said(answer)}`);
+  return run;
+}
+
+/** Runs suite `fix` with `teamai benchmark run` on the local driver, and answers its run, whatever its outcome. */
+export async function runFixBenchmark(fixture: BenchmarkFixture): Promise<string> {
+  const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+  const run = z.object({ run: z.string() }).safeParse(envelope(ran).data?.done).data?.run;
+  if (run === undefined) throw new Error(`no run: ${said(ran)}`);
+  return run;
+}
+
+const CommandLeaseSchema = z.object({
+  step: z.string(), attempt: z.string(), revision: z.number(), command: z.string().optional(), env: z.record(z.string()).optional(), cwd: z.string().optional(),
+}).passthrough();
+
+/**
+ * Answers `next --prepare` for the driver `payload` names until it gets something other than a command lease, running
+ * each command lease as an external driver does: in the lease's cwd, as its attempt, reporting its stdout as outputs.
+ */
+export async function driveCommands(fixture: BenchmarkFixture, run: string, payload: { driver: Record<string, unknown> }): Promise<Envelope> {
+  for (;;) {
+    const answer = envelope(await fixture.teamai(['workflow', 'next', run, '--prepare', '--json', JSON.stringify({ ...payload, running: [] })]));
+    const lease = CommandLeaseSchema.safeParse(answer.data?.lease);
+    if (!lease.success || lease.data.command === undefined) return answer;
+    const { attempt, revision, command, env, cwd } = lease.data;
+    const ran = spawnSync('sh', ['-c', command], { cwd: cwd ?? fixture.work, env: { ...fixture.env, ...env, TEAMAI_WORKFLOW_ATTEMPT: `${run}/${attempt}` }, encoding: 'utf8' });
+    const outputs: unknown = ran.status === 0 ? JSON.parse(ran.stdout) : undefined;
+    const reported = envelope(await fixture.teamai(['workflow', 'report', run, '--json', JSON.stringify({
+      attempt, revision, outcome: ran.status === 0 ? 'success' : 'failed', driver: payload.driver, ...(outputs === undefined ? {} : { outputs }),
+    })]));
+    if (reported.error) throw new Error(`report of ${lease.data.step} refused: ${JSON.stringify(reported)}`);
+  }
 }
 
 export const FIX_SUITE = `schemaVersion: v1alpha1

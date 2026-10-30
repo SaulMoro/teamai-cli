@@ -13,7 +13,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { LeaseWireSchema } from '../../workflow/lease-wire.js';
-import { benchmarkFixture, envelope, FIX_SUITE, said, type BenchmarkFixture, type Envelope } from '../helpers/benchmark-fixture.js';
+import { benchmarkFixture, envelope, FIX_SUITE, startFixBenchmark, type BenchmarkFixture, type Envelope } from '../helpers/benchmark-fixture.js';
 
 const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'dist', 'index.js');
 const CAN = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, setup: true, tools: ['claude'] };
@@ -100,14 +100,6 @@ function byHand(fixture: BenchmarkFixture, run: string, identity = { kind: 'exte
   };
 }
 
-/** Starts the benchmark workflow on suite `fix`, bounded by the suite's timeout, for an external driver. */
-async function started(fixture: BenchmarkFixture): Promise<string> {
-  const answer = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix"}', '--timeout', '10m']);
-  const run = envelope(answer).data?.run;
-  if (typeof run !== 'string') throw new Error(`no run: ${said(answer)}`);
-  return run;
-}
-
 async function until(condition: () => boolean, what: string): Promise<void> {
   for (let tries = 0; tries < 400; tries += 1) {
     if (condition()) return;
@@ -150,7 +142,7 @@ describe('a report the engine refuses', () => {
     ['another driver', 'wrong_driver', () => ({ driver: { kind: 'external', machine: 'another', workspace: '/another' } })],
   ])('with %s leaves the clone and its uncommitted work as they were, so the corrected report counts it', async (_, code, refused) => {
     const fixture = await fixtureWith();
-    const run = await started(fixture);
+    const run = await startFixBenchmark(fixture);
     const driver = byHand(fixture, run);
     const lease = await driver.prompt();
     fs.writeFileSync(path.join(lease.cwd, 'answer.js'), 'module.exports = 42;\n');
@@ -173,7 +165,7 @@ describe('a report the engine refuses', () => {
 describe('two calls on one trial copy', () => {
   it('prepares one clone when a second next --prepare comes while the first still prepares, and answers the second driver_running', async () => {
     const fixture = await fixtureWith({ tasks: { fix: CRITERIA_TASK } });
-    const run = await started(fixture);
+    const run = await startFixBenchmark(fixture);
     const driver = byHand(fixture, run);
     const plan = LeasedSchema.parse(await driver.next()).data.lease;
     const planned = await driver.command(plan);
@@ -203,7 +195,7 @@ describe('two calls on one trial copy', () => {
 
   it("gives score --next nothing to judge while the trial's report still collects its evidence, so the judge reads all of it", async () => {
     const fixture = await fixtureWith({ tasks: { fix: CRITERIA_TASK } });
-    const run = await started(fixture);
+    const run = await startFixBenchmark(fixture);
     const driver = byHand(fixture, run);
     const lease = await driver.prompt();
     fs.writeFileSync(path.join(lease.cwd, 'answer.js'), 'module.exports = 42;\n');
@@ -230,7 +222,7 @@ describe('two calls on one trial copy', () => {
 
   it('takes the report again after one was killed while it collected the evidence, and runs the check on the clone it kept', async () => {
     const fixture = await fixtureWith({ suite: `${FIX_SUITE}scorers: [quality]\n`, team: { 'scorers/quality.md': QUALITY } });
-    const run = await started(fixture);
+    const run = await startFixBenchmark(fixture);
     const driver = byHand(fixture, run);
     const lease = await driver.prompt();
     fs.writeFileSync(path.join(lease.cwd, 'answer.js'), 'module.exports = 42;\n');
@@ -258,7 +250,7 @@ describe('two calls on one trial copy', () => {
 
   it('removes the evidence a killed report staged once the run ends without accepting that report', async () => {
     const fixture = await fixtureWith({ tasks: { fix: CRITERIA_TASK } });
-    const run = await started(fixture);
+    const run = await startFixBenchmark(fixture);
     const driver = byHand(fixture, run);
     const lease = await driver.prompt();
     fs.writeFileSync(path.join(lease.cwd, 'answer.js'), 'module.exports = 42;\n');

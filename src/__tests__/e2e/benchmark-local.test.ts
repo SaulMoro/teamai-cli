@@ -2,13 +2,13 @@
  * Real CLI: a one-task, one-arm check suite, run by `teamai benchmark run` in a member's checkout on the local driver in
  * a declared sandbox, or started as the workflow `benchmark` for another driver.
  */
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { resolveRunMode } from '../../launch-context.js';
-import { benchmarkFixture, envelope, FIX_SUITE, fixTask, PRODUCT_URL, said, TEAM_URL, type BenchmarkFixture, type Envelope } from '../helpers/benchmark-fixture.js';
+import { benchmarkFixture, driveCommands, envelope, FIX_SUITE, fixTask, PRODUCT_URL, said, TEAM_URL, type BenchmarkFixture } from '../helpers/benchmark-fixture.js';
 
 interface StepTree {
   id: string;
@@ -30,9 +30,6 @@ const RunFileSchema = z.object({
       definition: z.object({ steps: z.array(StepTreeSchema) }).passthrough(),
     }),
   }).optional(),
-}).passthrough();
-const LeaseSchema = z.object({
-  step: z.string(), attempt: z.string(), revision: z.number(), command: z.string().optional(), env: z.record(z.string()).optional(), cwd: z.string().optional(),
 }).passthrough();
 
 const DoneSchema = z.object({ run: z.string(), outcome: z.string(), outputs: z.object({ text: z.string() }).passthrough() }).passthrough();
@@ -67,25 +64,6 @@ function occurrences(text: string, line: string): number {
 
 function leafSteps(steps: StepTree[], prefix = ''): string[] {
   return steps.flatMap((step) => (step.workflow ? leafSteps(step.workflow.steps, `${prefix}${step.id}.`) : [`${prefix}${step.id}`]));
-}
-
-/**
- * Answers `next --prepare` for the driver `payload` names until it gets something other than a command lease, running
- * each command lease as an external driver does: in the lease's cwd, as its attempt, reporting its stdout as outputs.
- */
-async function driveCommands(fixture: BenchmarkFixture, run: string, payload: { driver: Record<string, unknown> }): Promise<Envelope> {
-  for (;;) {
-    const answer = envelope(await fixture.teamai(['workflow', 'next', run, '--prepare', '--json', JSON.stringify({ ...payload, running: [] })]));
-    const lease = LeaseSchema.safeParse(answer.data?.lease);
-    if (!lease.success || lease.data.command === undefined) return answer;
-    const { attempt, revision, command, env, cwd } = lease.data;
-    const ran = spawnSync('sh', ['-c', command], { cwd: cwd ?? fixture.work, env: { ...fixture.env, ...env, TEAMAI_WORKFLOW_ATTEMPT: `${run}/${attempt}` }, encoding: 'utf8' });
-    const outputs: unknown = ran.status === 0 ? JSON.parse(ran.stdout) : undefined;
-    const reported = envelope(await fixture.teamai(['workflow', 'report', run, '--json', JSON.stringify({
-      attempt, revision, outcome: ran.status === 0 ? 'success' : 'failed', driver: payload.driver, ...(outputs === undefined ? {} : { outputs }),
-    })]));
-    if (reported.error) throw new Error(`report of ${lease.data.step} refused: ${JSON.stringify(reported)}`);
-  }
 }
 
 describe('benchmark on the local driver', () => {

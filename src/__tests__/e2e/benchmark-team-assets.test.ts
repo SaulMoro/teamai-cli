@@ -8,7 +8,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { benchmarkFixture, envelope, fixTask, PRODUCT_URL, said, type BenchmarkFixture } from '../helpers/benchmark-fixture.js';
+import { benchmarkFixture, envelope, fixTask, PRODUCT_URL, runFixBenchmark, said, startFixBenchmark, type BenchmarkFixture } from '../helpers/benchmark-fixture.js';
 
 const TWO_REPETITIONS = `schemaVersion: v1alpha1
 name: fix
@@ -46,22 +46,6 @@ afterEach(() => {
 
 function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): string {
   return execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-}
-
-/** Runs suite fix with `teamai benchmark run` on the local driver, and answers its run, whatever its outcome. */
-async function benchmarkRun(fixture: BenchmarkFixture): Promise<string> {
-  const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
-  const run = z.object({ run: z.string() }).safeParse(envelope(ran).data?.done).data?.run;
-  if (run === undefined) throw new Error(`no run: ${said(ran)}`);
-  return run;
-}
-
-/** Starts workflow benchmark on suite fix for an external driver to drive, and answers its run. */
-async function startedForDriver(fixture: BenchmarkFixture): Promise<string> {
-  const started = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix"}', '--timeout', '10m']);
-  const run = z.object({ run: z.string() }).safeParse(envelope(started).data).data?.run;
-  if (run === undefined) throw new Error(`no run: ${said(started)}`);
-  return run;
 }
 
 const EXTERNAL = { kind: 'external', machine: 'ci', workspace: '/ci' };
@@ -138,11 +122,11 @@ async function drive(fixture: BenchmarkFixture, runId: string, until: (lease: z.
 }
 
 const DRIVERS: Array<{ name: string; run(fixture: BenchmarkFixture): Promise<string> }> = [
-  { name: 'the local driver', run: benchmarkRun },
+  { name: 'the local driver', run: runFixBenchmark },
   {
     name: 'an external driver',
     run: async (fixture) => {
-      const runId = await startedForDriver(fixture);
+      const runId = await startFixBenchmark(fixture);
       await drive(fixture, runId);
       return runId;
     },
@@ -192,7 +176,7 @@ describe('trial team assets', () => {
     });
     fixtures.push(fixture);
 
-    const runId = await benchmarkRun(fixture);
+    const runId = await runFixBenchmark(fixture);
 
     expect(fixture.toolLaunches()[0]?.paths).toContain('.claude/skills/fixer/SKILL.md');
     expect(RunSchema.parse(fixture.runFile(runId)).steps.find((step) => step.id === 'trials.r1.fix.claude.check')).toMatchObject({ status: 'succeeded' });
@@ -204,7 +188,7 @@ describe('trial team assets', () => {
     const baseline = git(fixture.teamClone, ['rev-parse', 'HEAD']);
     fs.renameSync(fixture.teamOrigin, `${fixture.teamOrigin}.gone`);
 
-    const runId = await benchmarkRun(fixture);
+    const runId = await runFixBenchmark(fixture);
 
     const stored = RunSchema.parse(fixture.runFile(runId));
     expect(stored.steps.find((step) => step.id === 'trials.r1.fix.claude.prompt')?.agent).toMatchObject({ team: { revision: baseline } });
@@ -236,7 +220,7 @@ describe('trial team assets', () => {
   it('prepares a handed-back prompt again in a fresh clone, and removes the first', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'] });
     fixtures.push(fixture);
-    const runId = await startedForDriver(fixture);
+    const runId = await startFixBenchmark(fixture);
     const prompt = async (): Promise<{ attempt: string; cwd: string }> => {
       const lease = await drive(fixture, runId, (leased) => leased.prompt !== undefined);
       return z.object({ attempt: z.string(), cwd: z.string() }).parse(lease);
@@ -259,7 +243,7 @@ describe('trial team assets', () => {
     const pulled = await fixture.teamai(['pull']);
     expect(pulled.code, said(pulled)).toBe(0);
 
-    const runId = await startedForDriver(fixture);
+    const runId = await startFixBenchmark(fixture);
     const planned = await nextFor(fixture, runId);
     if (!('lease' in planned) || planned.lease.step !== 'plan' || planned.lease.command === undefined) throw new Error(`no plan lease: ${JSON.stringify(planned)}`);
     await runCommand(fixture, runId, { ...planned.lease, command: planned.lease.command });
