@@ -348,6 +348,11 @@ export interface BenchmarkFixtureOptions {
    * `[no session]`. Without it, no launch leaves one.
    */
   loadsSkill?: string;
+  /**
+   * Self mode: the team files sit under .teamai/ of the project repo, committed after the starting commit, and the
+   * member runs `teamai init .` there. No team repo of its own is seeded.
+   */
+  selfMode?: boolean;
 }
 
 export async function benchmarkFixture(options: BenchmarkFixtureOptions): Promise<BenchmarkFixture> {
@@ -370,12 +375,20 @@ export async function benchmarkFixture(options: BenchmarkFixtureOptions): Promis
   }, productOrigin);
   const teamSeed = path.join(root, 'seed-team');
   const tasks = options.tasks ?? { fix: fixTask('{{startingCommit}}') };
-  seed(teamSeed, {
-    'teamai.yaml': `team: acme\nrepo: ${TEAM_URL}\nprovider: git\n`,
+  const teamFiles = {
+    'teamai.yaml': options.selfMode ? `team: app\nrepo: ${PRODUCT_URL}\nprovider: git\nmode: self\n` : `team: acme\nrepo: ${TEAM_URL}\nprovider: git\n`,
     'benchmarks/fix/suite.yaml': options.suite ?? FIX_SUITE,
     ...Object.fromEntries(Object.entries(tasks).map(([name, text]) => [`benchmarks/fix/tasks/${name}.yaml`, text.replaceAll('{{startingCommit}}', startingCommit)])),
     ...options.team,
-  }, teamOrigin, options.executable);
+  };
+  if (options.selfMode) {
+    writeFiles(productSeed, Object.fromEntries(Object.entries(teamFiles).map(([file, text]) => [`.teamai/${file}`, text])));
+    git(productSeed, ['add', '-A']);
+    git(productSeed, ['-c', 'user.name=Seed', '-c', 'user.email=seed@example.com', 'commit', '-qm', 'team']);
+    git(productSeed, ['push', '-q', productOrigin, 'main']);
+  } else {
+    seed(teamSeed, teamFiles, teamOrigin, options.executable);
+  }
   const toolLog = path.join(root, 'tool.log');
   const filterPidLog = path.join(root, 'filter-pids.log');
   const judgeLog = path.join(root, 'judge.log');
@@ -460,21 +473,26 @@ process.stdout.write(JSON.stringify({ type: 'result', session_id: 'fake-session'
     GIT_TERMINAL_PROMPT: '0', FORCE_COLOR: '0', FIXTURE_ROOT: root,
   };
   for (const name of ['XDG_CONFIG_HOME', 'CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'GITHUB_TOKEN', 'GH_TOKEN']) delete env[name];
-  const teamai = (args: string[]): Promise<CliResult> => new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], { cwd: work, env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const teamai = (args: string[], runEnv: NodeJS.ProcessEnv = env): Promise<CliResult> => new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLI, ...args], { cwd: work, env: runEnv, stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
     child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
     child.on('close', (code) => resolve({ code, stdout, stderr }));
   });
-  const ok = async (args: string[]): Promise<void> => {
-    const result = await teamai(args);
+  const ok = async (args: string[], runEnv: NodeJS.ProcessEnv = env): Promise<void> => {
+    const result = await teamai(args, runEnv);
     if (result.code !== 0) throw new Error(`teamai ${args.join(' ')} failed:\n${said(result)}`);
   };
 
   git(root, ['clone', '-q', PRODUCT_URL, work], env);
-  await ok(['init', TEAM_URL, '--provider', 'git', '--agent', 'claude', '--scope', 'workspace', '--force', ...(options.role ? ['--role', options.role] : [])]);
+  // init . reads the team URL from origin, which git would rewrite to its file:// stand-in.
+  const initEnv = options.selfMode ? { ...env, GIT_CONFIG_GLOBAL: path.join(root, 'plain.gitconfig') } : env;
+  if (options.selfMode) fs.writeFileSync(path.join(root, 'plain.gitconfig'), '[user]\n\tname = member\n\temail = member@example.com\n');
+  await ok(['init', options.selfMode ? '.' : TEAM_URL, '--provider', 'git', '--agent', 'claude', '--scope', 'workspace', '--force', ...(options.role ? ['--role', options.role] : [])], initEnv);
+  // init . commits the knowledge skeleton; a member pushes it, so another machine can pull the revision.
+  if (options.selfMode) git(work, ['push', '-q', 'origin', 'HEAD:main'], env);
   await ok(['pull']);
   const dataHome = (): string => {
     const projects = path.join(home, '.teamai', 'projects');
