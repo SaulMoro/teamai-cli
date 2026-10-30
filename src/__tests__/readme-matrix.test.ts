@@ -4,13 +4,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ALL_MODEL_AGENTS } from '../models/profile.js';
 import { runsTeamHookOn } from '../hooks.js';
+import { isLaunchTool } from '../tool-launch/tools.js';
 import { isToolId, TOOLS, type Support } from '../tools.js';
 import { DEFAULT_TOOL_PATHS, type ToolId } from '../types.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const READMES = fs.readdirSync(ROOT).filter((file) => /^README(\..+)?\.md$/.test(file)).sort();
 
-const COLUMNS = ['skills', 'rules', 'culture', 'agents', 'hooks', 'mcp', 'workflows', 'env', 'models', 'context', 'usage', 'sessions', 'scorers'] as const;
+const COLUMNS = ['skills', 'rules', 'culture', 'agents', 'hooks', 'mcp', 'workflows', 'env', 'models', 'context', 'usage', 'sessions', 'scorers', 'benchmarks'] as const;
 type Column = (typeof COLUMNS)[number];
 
 /** The README's row label for each tool it lists. */
@@ -71,5 +72,7 @@ describe('README agent matrix', () => {
     const sessionJudge = decided(d.features.sessionJudge) === '✓';
     // Without a session reader, a tool whose session judges its skill-driven runs scores only those (✓³).
     expect(cell(row, 'scorers')).toBe(Array.isArray(d.sessions) ? '✓' : sessionJudge ? '✓³' : '—');
+    // A benchmark arm runs on a tool the local driver launches.
+    expect(cell(row, 'benchmarks')).toBe(isLaunchTool(tool) ? '✓' : '—');
   });
 });
