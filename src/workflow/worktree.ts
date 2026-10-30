@@ -525,6 +525,18 @@ export async function saveConfig(dir: string, saved: string): Promise<void> {
   }
 }
 
+/** Puts the agent configuration `from` holds in place of `dir`'s, path by path. */
+export async function replaceConfig(dir: string, from: string): Promise<void> {
+  for (const relative of AGENT_PATHS) {
+    await fs.rm(path.join(dir, relative), { recursive: true, force: true });
+    try {
+      await copyEntry(path.join(from, relative), path.join(dir, relative));
+    } catch {
+      // `from` does not have this path.
+    }
+  }
+}
+
 /** Records the agent files present after team delivery, so that delivery is not a step edit. */
 export async function recordConfigOverlay(dir: string, saved: string): Promise<void> {
   await fs.writeFile(path.join(saved, '_overlay.json'), JSON.stringify(await fileManifest(dir)));

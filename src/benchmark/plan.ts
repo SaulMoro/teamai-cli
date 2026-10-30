@@ -265,7 +265,8 @@ export function compileBundle(
     const check = task.judge.kind === 'check' ? [{ id: 'check', needs: [work.id], command: 'teamai benchmark check --trial', workspace: 'continue', output: checkOutput }] : [];
     return [{
       id: arm.name, ...(task.judge.kind === 'check' ? { if: `steps.${BASELINES}.outputs.${task.id} == 'failed'` } : {}),
-      workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: cloneTeamOf(arm.team, plan.selection) } },
+      // The arm's tool, not the first step's: a workflow arm may open its clone with a command.
+      workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: cloneTeamOf(arm.team, { ...plan.selection, enabledAgents: [arm.tool] }) } },
       workflow: { steps: [work, ...check] },
     }];
   };

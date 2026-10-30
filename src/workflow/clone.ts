@@ -14,6 +14,8 @@ export const TeamSelectionSchema = z.object({
   projects: z.array(z.string()),
   subscribedTags: z.array(z.string()).optional(),
   excludedSkills: z.array(z.string()),
+  /** The tools the install delivers to; absent: the tool of the step that opens the clone, else the member's enabled agents. */
+  enabledAgents: z.array(z.string().min(1)).nonempty().optional(),
 }).strict();
 export type TeamSelection = z.infer<typeof TeamSelectionSchema>;
 

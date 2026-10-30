@@ -3,6 +3,7 @@
  * workflows it runs at the arm's team revision, runs every prompt of them on the arm's tool and model, and the record
  * measures the trial over all of its prompt turns.
  */
+import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { benchmarkFixture, envelope, PRODUCT_URL, said, type BenchmarkFixture, type BenchmarkFixtureOptions } from '../helpers/benchmark-fixture.js';
@@ -52,6 +53,8 @@ const RecordSchema = z.object({
     agent: z.object({ tool: z.object({ name: z.string() }).passthrough() }).passthrough().optional(),
   }).passthrough()),
 }).passthrough();
+
+const AgentStepsSchema = z.object({ steps: z.array(z.object({ id: z.string(), agent: z.unknown().optional() }).passthrough()) });
 
 const fixtures: BenchmarkFixture[] = [];
 
@@ -106,6 +109,33 @@ describe('benchmark arm workflow', () => {
     expect([prompt?.head, plan?.head]).toEqual([fixture.startingCommit, fixture.startingCommit]);
     expect(fix?.cwd).toBe(plan?.cwd);
     expect(plan?.cwd).not.toBe(prompt?.cwd);
+  }, 240_000);
+
+  it('installs the team for the arm\'s tool in its clone when its workflow starts with a command', async () => {
+    const commandFirst = `schemaVersion: v1alpha1
+name: fixer
+description: Look, then fix.
+inputs: { task: string }
+steps:
+  - id: look
+    command: node -e "0"
+    workspace: continue
+  - id: fix
+    needs: [look]
+    prompt: "{{ inputs.task }}"
+`;
+    const fixture = await fixtureWith(SUITE.replace('  tool: claude\n', '  tool: codex\n'), { fixer: commandFirst }, {
+      tools: ['claude', 'codex'], team: { 'skills/answer/SKILL.md': '---\nname: answer\ndescription: Helps answer.\n---\nUse answer.\n' },
+    });
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+
+    expect(ran.code, said(ran)).toBe(0);
+    const pulled = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fixture.teamClone, encoding: 'utf8' }).trim();
+    const ranOn = (id: string): unknown => AgentStepsSchema.parse(fixture.runFile(fixture.runIds()[0] ?? '')).steps.find((step) => step.id === id)?.agent;
+    expect(ranOn('trials.r1.fix.flow.workflow.fix')).toMatchObject({ tool: { name: 'codex' }, team: { revision: pulled } });
+    // The member installs only claude; each arm's clone still has the team skill where codex reads it.
+    expect(fixture.toolLaunches().map(({ tool, paths }) => ({ tool, skill: paths.includes('.codex/skills/answer/SKILL.md') }))).toEqual([{ tool: 'codex', skill: true }, { tool: 'codex', skill: true }]);
   }, 240_000);
 
   it('refuses before any run a workflow arm whose workflow asks a person, naming the arm, the workflow and the step', async () => {

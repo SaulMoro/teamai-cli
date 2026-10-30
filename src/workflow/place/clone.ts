@@ -44,7 +44,7 @@ import { readRun, runsDir, type RunId } from '../store.js';
 import type { RunState, WorkflowFailure } from '../types.js';
 import { cloneBranchOf } from '../workspace.js';
 import { commitWithout } from './team-without.js';
-import { boundedGit, commitWork, recordConfigOverlay, restoreUneditedConfig, saveConfig, untrustedGit, type Git } from '../worktree.js';
+import { boundedGit, commitWork, recordConfigOverlay, replaceConfig, restoreUneditedConfig, saveConfig, untrustedGit, type Git } from '../worktree.js';
 
 /**
  * The commit a clone's install pulled for a treatment without some paths, which teamai made of `revision` without them.
@@ -131,7 +131,10 @@ export async function openClone(input: { config: LocalConfig; run: RunId; checko
   const { config, run, lease } = input;
   const file = receiptPath(runsDir(config), run, lease.branch);
   const found = await readReceipt(file);
-  if (found?.state.kind === 'ready' && await isDirectory(path.join(found.root, 'r'))) return { dir: path.join(found.root, 'r'), created: false };
+  if (found?.state.kind === 'ready' && await isDirectory(path.join(found.root, 'r'))) {
+    await redeliver(found.root);
+    return { dir: path.join(found.root, 'r'), created: false };
+  }
   if (lease.start !== lease.clone.commit) {
     return { dir: path.join(found?.root ?? scratchCloneRoot(), 'r'), failure: { code: 'workspace_base', message: `The clone of ${lease.branch} is gone, so step "${lease.step}" cannot continue the work committed there.` } };
   }
@@ -157,6 +160,26 @@ export async function openClone(input: { config: LocalConfig; run: RunId; checko
   const made = { prepared, ...(installed ? { install: { config: LocalConfigSchema.parse(installed.config), dataHome: installed.dataHome, ...(installed.without ? { without: installed.without } : {}) } } : {}) };
   await writeJsonAtomic(file, { v: 1, branch: lease.branch, root, withhold: [...lease.withhold], state: { kind: 'installed', ...made } } satisfies CloneReceipt);
   return { dir, created: true };
+}
+
+/**
+ * Puts back, for a later step in the clone, the team assets its install delivered, which the last step's commit took
+ * out with the clone's other agent files, and records them as the overlay again, so they are not that step's edits.
+ * A clone that installs no team kept no copy of them; one whose overlay is still on has its `saved`.
+ */
+async function redeliver(root: string): Promise<void> {
+  const clone = path.join(root, 'r');
+  const saved = path.join(root, 'saved');
+  const delivered = path.join(root, DELIVERED);
+  if (!await isDirectory(delivered) || await isDirectory(saved)) return;
+  // Renamed into place once the overlay is recorded, so `saved` is never half written.
+  const partial = `${saved}.partial`;
+  await fs.rm(partial, { recursive: true, force: true });
+  await fs.mkdir(partial);
+  await saveConfig(clone, partial);
+  await replaceConfig(clone, delivered);
+  await recordConfigOverlay(clone, partial);
+  await fs.rename(partial, saved);
 }
 
 /** Records the clone of `branch` set up, so a later step continues it instead of making another. */
@@ -338,6 +361,9 @@ export function scratchCloneRoot(): string {
   return path.join(os.tmpdir(), CLONES, createHash('sha256').update(`${process.pid}:${Date.now()}:${Math.random()}`).digest('hex').slice(0, 8));
 }
 
+/** The directory of a clone's root holding the agent files its install delivered. */
+const DELIVERED = 'delivered';
+
 /** The env variables that move a tool's home away from HOME, which the clone's own pull must not follow. */
 const TOOL_HOME_VARIABLES = [...new Set(Object.keys(TOOLS).filter(isToolId).flatMap(homeVariables))];
 
@@ -359,7 +385,7 @@ async function installTeam(input: {
   const { config: member, root, lease, team } = input;
   const failed = (message: string): WorkflowFailure => ({ code: 'clone_prepare_failed', message });
   const { revision, selection } = team;
-  const tools = lease.tool !== undefined ? [lease.tool] : member.enabledAgents ?? [];
+  const tools = selection.enabledAgents ?? (lease.tool !== undefined ? [lease.tool] : member.enabledAgents ?? []);
   const clone = path.join(root, 'r');
   const saved = path.join(root, 'saved');
   await fs.mkdir(saved);
@@ -429,6 +455,9 @@ async function installTeam(input: {
     return failed(`The git hooks the clone's own teamai pull installed in ${clone} could not be removed: ${thrown instanceof Error ? thrown.message : String(thrown)}`);
   }
   await recordConfigOverlay(clone, saved);
+  // What a later step in the clone gets again, as its first step's commit takes the delivery out.
+  await fs.mkdir(path.join(root, DELIVERED));
+  await saveConfig(clone, path.join(root, DELIVERED));
   return { config, dataHome: partition, ...(without ? { without } : {}) };
 }
 
