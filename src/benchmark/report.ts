@@ -12,11 +12,12 @@ import { getCurrentVersion } from '../package-info.js';
 import { publishPendingRecords, queueBenchmarkRecord } from '../workflow/records.js';
 import { findAttemptRun } from '../workflow/run-location.js';
 import { runsDir } from '../workflow/store.js';
-import type { WorkflowFailure } from '../workflow/types.js';
+import type { RunState, WorkflowFailure } from '../workflow/types.js';
 import { runComparisons, type ArmComparison } from './history.js';
 import { benchmarkRecord, BenchmarkRecordSchema } from './result.js';
-import { planOfRun } from './run-plan.js';
+import { planOfRun, type RunPlan } from './run-plan.js';
 import { benchmarkTable, formatBenchmarkTable, type BenchmarkTable } from './table.js';
+import { toolUnavailableNotice } from './trial.js';
 
 /** A benchmark run's record: its plan's trials, classified, with the run they ran in. No prompt, command, URL or path. */
 export const BenchmarkRunRecordSchema = BenchmarkRecordSchema.extend({
@@ -39,7 +40,10 @@ export function benchmarkRecordFile(runsRoot: string, run: string): string {
   return path.join(runsRoot, run, 'benchmark.json');
 }
 
-/** What `report` prints: the results as text, which ends with `record: pending` while the record waits, and as a table. */
+/**
+ * What `report` prints: the results as text, after a line for each arm whose tool the run's driver could not launch, and
+ * ending with `record: pending` while the record waits; and as a table.
+ */
 export interface BenchmarkReport {
   text: string;
   table: BenchmarkTable & { pairs: ArmComparison[] };
@@ -77,11 +81,17 @@ export async function reportBenchmark(env: NodeJS.ProcessEnv, secrets: Record<st
   const queued = await queueBenchmarkRecord(config, record, secrets);
   const pending = queued && (await publishPendingRecords(config, { run: run.id }).catch(() => ({ state: 'pending' as const }))).state === 'pending';
   const table = benchmarkTable({ benchmark: record });
-  const text = formatBenchmarkTable(table);
+  const text = [...unlaunchedArms(run, planned.found), formatBenchmarkTable(table)].join('\n\n');
   return {
     report: {
       text: pending ? `${text}\n\nrecord: pending` : text,
       table: { ...table, pairs: runComparisons({ run: run.id, source: 'local', startedAt: run.createdAt, benchmark: record }) },
     },
   };
+}
+
+/** A line for each arm with a prompt that failed `tool_unavailable` before any lease: the driver could not launch its tool. */
+function unlaunchedArms(run: RunState, { plan, prefix }: RunPlan): string[] {
+  const unlaunched = (step: string): boolean => run.steps.some((state) => state.id === `${prefix}${step}` && state.status === 'failed' && state.failure?.code === 'tool_unavailable' && state.attempt === undefined);
+  return plan.arms.filter((arm) => plan.trials.some((trial) => trial.arm === arm.name && unlaunched(trial.step))).map(toolUnavailableNotice);
 }

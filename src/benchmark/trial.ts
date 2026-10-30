@@ -38,7 +38,7 @@ import { WORKSPACE_MODES, type DriverIdentity, type RunState, type WorkflowEnvel
 import { cloneBranchOf } from '../workflow/workspace.js';
 import { untrustedGit, type Git } from '../workflow/worktree.js';
 import { checkVerdict, type CheckResult, type CheckVerdict } from './check.js';
-import { BENCHMARK_PLAN_SCHEMA_VERSION, baselineStepOf, stepOf, type BenchmarkPlan } from './plan.js';
+import { BENCHMARK_PLAN_SCHEMA_VERSION, baselineStepOf, stepOf, type BenchmarkPlan, type PlannedArm } from './plan.js';
 import type { CheckFile, Suite } from './suite.js';
 import { planOfRun } from './run-plan.js';
 import { PromptTermsSchema, type Added, type PreparedTrialLease } from './terms.js';
@@ -216,9 +216,13 @@ export async function trialBlocker(config: LocalConfig): Promise<string | undefi
 export function benchmarkNotices(plan: BenchmarkPlan, can: Pick<DriverCan, 'tools'>, blocked: string | undefined): string[] {
   return [
     ...(blocked !== undefined ? [blocked] : []),
-    ...plan.arms.filter((arm) => lacksTool(arm.tool, can))
-      .map((arm) => `Arm "${arm.name}" uses ${arm.tool}, which the local driver cannot run, so its trials did not run.`),
+    ...plan.arms.filter((arm) => lacksTool(arm.tool, can)).map(toolUnavailableNotice),
   ];
+}
+
+/** The line that says why the trials of `arm` did not run: the local driver cannot launch its tool. */
+export function toolUnavailableNotice(arm: Pick<PlannedArm, 'name' | 'tool'>): string {
+  return `Arm "${arm.name}" uses ${arm.tool}, which the local driver cannot run, so its trials did not run.`;
 }
 
 /** What a trial report never carries: teamai commits the clone and fills them. */
