@@ -154,18 +154,14 @@ describe('benchmark arm team', () => {
     expect(fixture.runIds()).toEqual([]);
   }, 120_000);
 
-  it('refuses to start an arm without a skill the member excludes, which its clones would not get anyway, and leaves no run', async () => {
-    const fixture = await benchmarkFixture({
-      tool: 'fixes', sandbox: true, tools: ['claude'],
-      team: { 'skills/fixer/SKILL.md': SKILL('fixer') },
-    });
-    fixtures.push(fixture);
-    // Excluded before the team has it, so no pull ever delivers it.
-    const excluded = await fixture.teamai(['skill', 'exclude', 'add', 'helper']);
-    expect(excluded.code, said(excluded)).toBe(0);
-    fixture.pushTeam({ 'skills/helper/SKILL.md': SKILL('helper'), 'benchmarks/fix/suite.yaml': suite('arms:\n  - name: now\n  - name: ablated\n    team: { without: [skills/helper] }\n') });
-    const pulled = await fixture.teamai(['pull']);
-    expect(pulled.code, said(pulled)).toBe(0);
+  it('refuses to start an arm without a delivered skill the member then excludes, which its clones would not get anyway, and leaves no run', async () => {
+    // Pull has delivered skill helper before the member excludes it.
+    const { fixture } = await twoRevisions(() => 'arms:\n  - name: now\n  - name: ablated\n    team: { without: [skills/helper] }\n');
+    expect(fs.existsSync(path.join(fixture.work, '.claude', 'skills', 'helper', 'SKILL.md'))).toBe(true);
+    for (const args of [['skill', 'exclude', 'add', 'helper'], ['pull']]) {
+      const ran = await fixture.teamai(args);
+      expect(ran.code, said(ran)).toBe(0);
+    }
 
     const started = await fixture.teamai(['benchmark', 'run', 'fix']);
 
