@@ -156,11 +156,11 @@ function isOnPath(tool: LaunchTool): boolean {
  */
 function toolLacks(config: LocalConfig, flags: Record<string, string>, members: MemberTool[]): ToolLacks {
   return (runs) => {
-    const byChoice = new Map<string, { agent?: string; tool?: string; prompts: StepRun[] }>();
+    const byChoice = new Map<string, { agent: string | undefined; tool: string | undefined; prompts: StepRun[] }>();
     for (const run of runs) {
       if (run.executor !== 'prompt') continue;
       const key = JSON.stringify([run.agent, run.tool]);
-      const group = byChoice.get(key) ?? { ...(run.agent !== undefined ? { agent: run.agent } : {}), ...(run.tool !== undefined ? { tool: run.tool } : {}), prompts: [] };
+      const group = byChoice.get(key) ?? { agent: run.agent, tool: run.tool, prompts: [] };
       byChoice.set(key, { ...group, prompts: [...group.prompts, run] });
     }
     return [...byChoice.values()].flatMap(({ agent, tool, prompts }): Lack[] => {
