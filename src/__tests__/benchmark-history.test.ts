@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BenchmarkHistory, pairedDifference, regressionOf, type BenchmarkRunInput } from '../benchmark/history.js';
+import { BenchmarkHistory, pairedDifference, regressionOf, runComparisons, type BenchmarkRunInput } from '../benchmark/history.js';
 import { runSourceHash } from '../benchmark/plan.js';
 import type { Baseline, TrialResult } from '../benchmark/result.js';
 import type { ArmTeam } from '../benchmark/terms.js';
@@ -249,6 +249,22 @@ describe('BenchmarkHistory comparisons', () => {
       tasks: [{ task: 'login', from: { passed: 1, planned: 2 }, to: { passed: 2, planned: 2 } }, { task: 'logout', from: { passed: 0, planned: 1 }, to: { passed: 1, planned: 1 } }],
     });
     expect(arms.map(({ arm, team }) => ({ arm, team }))).toEqual(matrix.map(({ name, team }) => ({ arm: name, team: { kind: team?.kind } })));
+  });
+
+  it("pairs two arms that differ only in team over every trial, an error counted as not passed, in a run's pairs as in its history", () => {
+    const a: Arm = { name: 'a', tool: 'claude' }, b: Arm = { name: 'b', tool: 'claude', team: { kind: 'none' } };
+    const input = run({ id: 'r1', startedAt: '2026-10-20T09:00:00Z', arms: [a, b], trials: {
+      one: { a: ['passed', 'passed', 'passed'], b: ['passed', 'error', 'passed'] },
+      two: { a: ['passed', 'passed', 'passed'], b: ['passed', 'passed', 'passed'] },
+    } });
+
+    const fromRun = runComparisons(input);
+    const fromHistory = BenchmarkHistory.of({ runs: [input], query: { windowDays: 90 }, now: NOW }).selected?.comparisons ?? [];
+
+    for (const comparisons of [fromRun, fromHistory]) {
+      expect(comparisons).toHaveLength(1);
+      expect(comparisons[0]).toMatchObject({ dimension: 'team', pairs: 6, rates: { from: { passed: 5, planned: 6 }, to: { passed: 6, planned: 6 } } });
+    }
   });
 
   it('counts a comparison\'s usage over its paired trials, leaving out a run only one of the arms ran', () => {

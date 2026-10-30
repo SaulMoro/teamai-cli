@@ -3,6 +3,7 @@
  * revision of the team repo, or the pulled revision without some of its paths.
  */
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -39,10 +40,12 @@ function suite(arms: string): string {
  * A team whose first revision has skills fixer and helper, and whose next, pulled, adds skill newer, the files in `more`,
  * and the suite whose arms `armsOf` writes knowing the first revision.
  */
-async function twoRevisions(armsOf: (first: string) => string, more: Record<string, string> = {}): Promise<{ fixture: BenchmarkFixture; first: string; pulled: string }> {
+async function twoRevisions(
+  armsOf: (first: string) => string, more: Record<string, string> = {}, { firstMore = {}, tools = ['claude'] }: { firstMore?: Record<string, string>; tools?: Array<'claude' | 'codex'> } = {},
+): Promise<{ fixture: BenchmarkFixture; first: string; pulled: string }> {
   const fixture = await benchmarkFixture({
-    tool: 'fixes', sandbox: true, tools: ['claude'],
-    team: { 'skills/fixer/SKILL.md': SKILL('fixer'), 'skills/helper/SKILL.md': SKILL('helper') },
+    tool: 'fixes', sandbox: true, tools,
+    team: { 'skills/fixer/SKILL.md': SKILL('fixer'), 'skills/helper/SKILL.md': SKILL('helper'), ...firstMore },
   });
   fixtures.push(fixture);
   const first = git(fixture.teamClone, ['rev-parse', 'HEAD']);
@@ -104,6 +107,37 @@ describe('benchmark arm team', () => {
     ]);
     expect(record.skillChanges).toEqual([{ arm: 'before', defaults: 'now', skills: [{ name: 'newer', change: 'removed' }] }]);
     expect(skillsByArm(fixture, runId)).toEqual({ now: ['fixer', 'helper', 'newer'], before: ['fixer', 'helper'] });
+  }, 240_000);
+
+  it("runs an arm on a team branch with the tool, models and scorers frozen at the pulled revision, whatever the branch's own say", async () => {
+    const aliases = (version: string): string => `aliases:\n  strong:\n    claude: claude-${version}\n    codex: gpt-${version}\n`;
+    const quality = (rubric: string): string => `---\nlabels:\n  - { value: tidy, score: 1, description: Small and clear }\n  - { value: messy, score: 0, description: Not }\npassingScore: 1\nsamplingRate: 0\n---\n${rubric}\n`;
+    const { fixture, first } = await twoRevisions(
+      () => '  model: strong\narms:\n  - name: now\n  - name: codex\n    tool: codex\n  - name: before\n    team: bench/before\nscorers: [quality]\n',
+      { 'models/aliases.yaml': aliases('new'), 'scorers/quality.md': quality('Judge how tidy the change is.') },
+      { firstMore: { 'models/aliases.yaml': aliases('old'), 'scorers/quality.md': quality('Judge anything.') }, tools: ['claude', 'codex'] },
+    );
+    git(fixture.teamClone, ['push', '-q', fixture.teamOrigin, `${first}:refs/heads/bench/before`]);
+    const pulled = await fixture.teamai(['pull']);
+    expect(pulled.code, said(pulled)).toBe(0);
+
+    const runId = await endedRun(fixture);
+
+    const record = z.object({ scorers: z.array(z.object({ name: z.string(), rubric: z.object({ sourceHash: z.string() }) })) }).passthrough().parse(fixture.benchmarkRecord(runId));
+    const pulledRubric = createHash('sha256').update(quality('Judge how tidy the change is.')).digest('hex');
+    expect(record.scorers).toEqual([{ name: 'quality', rubric: { sourceHash: pulledRubric } }]);
+    const { steps } = z.object({
+      steps: z.array(z.object({ id: z.string(), agent: z.object({ tool: z.object({ name: z.string() }), model: z.object({ requested: z.string() }).partial().optional(), team: z.object({ revision: z.string() }).passthrough().optional() }).passthrough().optional() }).passthrough()),
+    }).parse(fixture.runFile(runId));
+    const ranAs = (arm: string): unknown => {
+      const agent = steps.find((step) => step.id === `trials.r1.fix.${arm}.prompt`)?.agent;
+      return { tool: agent?.tool.name, model: agent?.model?.requested, team: agent?.team?.revision === first ? 'first' : 'pulled' };
+    };
+    expect(['now', 'codex', 'before'].map(ranAs)).toEqual([
+      { tool: 'claude', model: 'claude-new', team: 'pulled' },
+      { tool: 'codex', model: 'gpt-new', team: 'pulled' },
+      { tool: 'claude', model: 'claude-new', team: 'first' },
+    ]);
   }, 240_000);
 
   // With no role or project, the member receives every namespace beside the shared root.

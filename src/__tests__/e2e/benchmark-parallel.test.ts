@@ -24,9 +24,9 @@ afterEach(() => {
   for (const fixture of fixtures.splice(0)) fixture.remove();
 });
 
-/** Runs the suite on a member whose local driver runs two leases at once, and answers when each trial's tool started. */
-async function launchTimes(parallel: string): Promise<number[]> {
-  const fixture = await benchmarkFixture({ tool: 'fixes-slowly', sandbox: true, tools: ['claude'], suite: suite(parallel), maxParallel: 2 });
+/** Runs the suite on a member whose local driver runs `maxParallel` leases at once, and answers when each trial's tool started. */
+async function launchTimes(parallel: string, { maxParallel }: { maxParallel?: number } = { maxParallel: 2 }): Promise<number[]> {
+  const fixture = await benchmarkFixture({ tool: 'fixes-slowly', sandbox: true, tools: ['claude'], suite: suite(parallel), maxParallel });
   fixtures.push(fixture);
   const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
   expect(ran.code, said(ran)).toBe(0);
@@ -47,5 +47,11 @@ describe('benchmark parallel lanes', () => {
     const [first = 0, second = 0] = await launchTimes('parallel: 2\n');
 
     expect(second - first).toBeLessThan(3000);
+  }, 240_000);
+
+  it('runs one trial at a time with parallel: 2 when max_parallel is unset', async () => {
+    const [first = 0, second = 0] = await launchTimes('parallel: 2\n', {});
+
+    expect(second - first).toBeGreaterThanOrEqual(3000);
   }, 240_000);
 });

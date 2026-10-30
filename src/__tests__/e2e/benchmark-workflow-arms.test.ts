@@ -75,8 +75,8 @@ async function fixtureWith(suite: string, workflows: Record<string, string>, { t
 }
 
 describe('benchmark arm workflow', () => {
-  it('runs the arm\'s workflow and its sub-workflow on the arm\'s tool in the trial clone, and measures every prompt turn', async () => {
-    const fixture = await fixtureWith(SUITE, { fixer: FIXER, 'fix-once': FIX_ONCE });
+  it('runs the arm\'s workflow and its sub-workflow on the arm\'s tool and model in the trial clone, and measures every prompt turn', async () => {
+    const fixture = await fixtureWith(SUITE.replace('  tool: claude\n', '  tool: claude\n  model: claude-flow-1\n'), { fixer: FIXER, 'fix-once': FIX_ONCE });
 
     const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
 
@@ -98,6 +98,11 @@ describe('benchmark arm workflow', () => {
     // The prompt arm's one launch, then the flow arm's two, all on claude: the flow's second continues its first's clone.
     const [prompt, plan, fix] = fixture.toolLaunches();
     expect([prompt, plan, fix].map((launch) => launch?.tool)).toEqual(['claude', 'claude', 'claude']);
+    expect([prompt, plan, fix].map((launch) => launch?.model)).toEqual(['claude-flow-1', 'claude-flow-1', 'claude-flow-1']);
+    const turns = z.object({ steps: z.array(z.object({ id: z.string(), tool: z.string().optional(), durationMs: z.number().optional() }).passthrough()) })
+      .parse(fixture.runFile(runId)).steps.filter(({ id, tool }) => id.startsWith('trials.r1.fix.flow.') && tool !== undefined);
+    expect(turns).toHaveLength(2);
+    expect(flow?.durationMs).toBe(turns.reduce((total, { durationMs = 0 }) => total + durationMs, 0));
     expect([prompt?.head, plan?.head]).toEqual([fixture.startingCommit, fixture.startingCommit]);
     expect(fix?.cwd).toBe(plan?.cwd);
     expect(plan?.cwd).not.toBe(prompt?.cwd);
