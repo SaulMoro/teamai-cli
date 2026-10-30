@@ -193,8 +193,8 @@ export type ConformanceClient = Pick<WorkflowClient, 'next' | 'report' | 'retry'
   start: (name: string, options?: { driver?: StartDriver; confirmed?: boolean; env?: Record<string, string>; checkout?: string }) => Promise<WorkflowEnvelope>;
   respond: (runId: string, step: string, choice: string, options: { note?: string; pass?: number; json?: unknown; env?: Record<string, string> }) => Promise<WorkflowEnvelope>;
   /**
-   * Starts the benchmark suite the runner made from the scenario's files, as `teamai workflow start <suite> --benchmark`
-   * does. Every runner implements it, so no runner skips the trial scenarios.
+   * Starts a benchmark run of the suite the runner made from the scenario's files, and runs its plan step, so its trials
+   * wait for a driver. Every runner implements it, so no runner skips the trial scenarios.
    */
   startBenchmark: (suite: string) => Promise<WorkflowEnvelope>;
 };

@@ -2,37 +2,20 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { z } from 'zod';
-import { compileBundle, type BenchmarkPlan } from '../benchmark/plan.js';
+import type { BenchmarkPlan } from '../benchmark/plan.js';
 import { planOfRun } from '../benchmark/run-plan.js';
 import type { LocalConfig } from '../types.js';
-import { syncWorkflowDefinitions } from '../workflow/cache.js';
 import type { BenchmarkSuiteFiles } from '../workflow/conformance-interpreter.js';
-import { leaseNext, reportAttempt, startRun } from '../workflow/engine.js';
 import { stepDefinitions } from '../workflow/scope.js';
 import { readRun } from '../workflow/store.js';
-import type { DriverIdentity, RunState } from '../workflow/types.js';
-import { benchmarkRunConfig, frozenBenchmark } from './helpers/benchmark-fixture.js';
+import type { RunState } from '../workflow/types.js';
+import { benchmarkRunConfig, frozenBenchmark, PLANNED_BENCHMARK, startBenchmarkRun } from './helpers/benchmark-fixture.js';
 
-const driver: DriverIdentity = { kind: 'local', machine: 'a', workspace: '/work' };
 const dirs: string[] = [];
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
-
-/** The shipped benchmark workflow's plan and trials steps, without its report. */
-const PLANNED = `schemaVersion: v1alpha1
-name: planned
-description: Plan a benchmark, then run it.
-steps:
-  - id: plan
-    command: teamai benchmark plan fix
-    output: { definition: workflow, plan: json }
-  - id: trials
-    needs: [plan]
-    workflow: { from: plan }
-`;
 
 /** A suite of check tasks t01.. and claude arms a01.., the second and later on model m<i>; `trial` is its `trial` value. */
 function suiteOf({ tasks = 1, arms = 1, repetitions = 1, trial = '' } = {}): BenchmarkSuiteFiles {
@@ -45,36 +28,17 @@ function suiteOf({ tasks = 1, arms = 1, repetitions = 1, trial = '' } = {}): Ben
   };
 }
 
-const LeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number() }) }) });
-
-/**
- * A run of `body`, the planned workflow by default, whose command steps each printed the bundle `compileBundle` makes of
- * `files` with its plan, or what `outputsOf` makes of them. Answers the run as it stands once no command step is left
- * for a driver that can take nothing else.
- */
-async function plannedRun(files: BenchmarkSuiteFiles, { body = PLANNED, outputsOf }: {
-  body?: string; outputsOf?: (bundle: ReturnType<typeof compileBundle>, plan: BenchmarkPlan) => unknown;
-} = {}): Promise<{ run: RunState; plan: BenchmarkPlan }> {
+/** A run of `body`, made as `startBenchmarkRun` makes it, as it stands once its plan steps printed, and the plan they froze. */
+async function plannedRun(files: BenchmarkSuiteFiles, options: Parameters<typeof startBenchmarkRun>[2] = {}): Promise<{ run: RunState; plan: BenchmarkPlan }> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-benchmark-bundle-'));
   dirs.push(root);
   const config: LocalConfig = benchmarkRunConfig(root);
   const frozen = await frozenBenchmark(config, files);
   if (!('plan' in frozen)) throw new Error(JSON.stringify(frozen));
-  const bundle = compileBundle(frozen.plan, frozen.committed);
-  fs.mkdirSync(path.join(config.repo.localPath, 'workflows'), { recursive: true });
-  fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'planned.yaml'), body);
-  await syncWorkflowDefinitions(config);
-  const started = await startRun(config, 'planned', {}, { secrets: {} });
+  const started = await startBenchmarkRun(config, files, options);
   if ('error' in started) throw new Error(started.error.message);
-  const runId = String(started.data.run);
-  // As the step prints them, JSON on its stdout, without the team revision, which this config has no team repo to pin at.
-  const outputs: unknown = JSON.parse(JSON.stringify(outputsOf ? outputsOf(bundle, frozen.plan) : { definition: { ...bundle, workflows: {} }, plan: frozen.plan }));
-  for (let leased = LeaseSchema.safeParse(await leaseNext(config, runId, driver)); leased.success; leased = LeaseSchema.safeParse(await leaseNext(config, runId, driver))) {
-    const { attempt, revision } = leased.data.data.lease;
-    await reportAttempt(config, runId, { attempt, revision, outcome: 'success', driver, outputs });
-  }
-  const run = await readRun(config, runId);
-  if (typeof run !== 'object') throw new Error(`run ${runId} cannot be read`);
+  const run = await readRun(config, String(started.data.run));
+  if (typeof run !== 'object') throw new Error(`run ${String(started.data.run)} cannot be read`);
   return { run, plan: frozen.plan };
 }
 
@@ -132,6 +96,17 @@ describe('the workflow a benchmark plan prints', () => {
     } });
   });
 
+  it('is refused by report and check once its plan holds an arm model a record could not publish', async () => {
+    const { run } = await plannedRun(suiteOf(), { outputsOf: (bundle, plan) => ({
+      definition: { ...bundle, workflows: {} }, plan: { ...plan, arms: plan.arms.map((arm) => ({ ...arm, model: 'https://user:secret@models.example/m2' })) },
+    }) });
+
+    expect(planOfRun(run, 'trials.r1.t01.a01.check')).toMatchObject({ failure: {
+      code: 'run_unreadable',
+      message: expect.stringMatching(new RegExp(`^Step "plan" of run ${run.id} printed a benchmark plan this teamai cannot read: .*arms\\.0\\.model`)),
+    } });
+  });
+
   it('leaves report and check no plan to read once the run refused the workflow its plan step printed', async () => {
     const { run } = await plannedRun(suiteOf(), { outputsOf: (_bundle, plan) => ({ definition: { definition: { schemaVersion: 'v1alpha1', name: 'fix' } }, plan }) });
 
@@ -143,7 +118,7 @@ describe('the workflow a benchmark plan prints', () => {
   });
 
   it('cannot tell report which plan to read in a run of two', async () => {
-    const twice = `${PLANNED}  - id: again
+    const twice = `${PLANNED_BENCHMARK}  - id: again
     needs: []
     command: teamai benchmark plan fix
     output: { definition: workflow, plan: json }

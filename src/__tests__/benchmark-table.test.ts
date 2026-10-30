@@ -4,10 +4,10 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import type { AgentObservation } from '../agent-observation.js';
-import type { BenchmarkRecord, TrialResult } from '../benchmark/result.js';
+import { benchmarkRecord, type BenchmarkRecord, type TrialResult } from '../benchmark/result.js';
+import { planOfRun } from '../benchmark/run-plan.js';
 import { benchmarkTable, formatBenchmarkTable } from '../benchmark/table.js';
 import { leaseNext, reportAttempt } from '../workflow/engine.js';
-import { buildEndRecord, type WorkflowRunRecord } from '../workflow/records.js';
 import type { DriverCan } from '../workflow/requirements.js';
 import { cancelRun } from '../workflow/run-controls.js';
 import { readRun } from '../workflow/store.js';
@@ -35,12 +35,13 @@ async function startTen(defaults = '{ tool: claude }') {
   return { config, runId: String(started.data.run) };
 }
 
-async function endRecord(config: LocalConfig, runId: string) {
+/** The benchmark record the run's report would write, from the plan its plan step printed. */
+async function endRecord(config: LocalConfig, runId: string): Promise<{ benchmark: BenchmarkRecord }> {
   const run = await readRun(config, runId);
   if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
-  const record = buildEndRecord(run, run.driver, '');
-  if (!record.benchmark) throw new Error('the end record has no benchmark');
-  return { ...record, benchmark: record.benchmark };
+  const planned = planOfRun(run);
+  if ('failure' in planned) throw new Error(planned.failure.message);
+  return { benchmark: benchmarkRecord(run, planned.found) };
 }
 
 /** The end record of a run of ten repetitions whose first trial passed its check before the run was cancelled. */
@@ -49,11 +50,11 @@ async function onePassedOfTen() {
   await settleBaselines(config, runId, driver, can);
   const prompt = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
   await reportAttempt(config, runId, {
-    attempt: prompt.attempt, revision: prompt.revision, outcome: 'success', driver, trialReport: {},
+    attempt: prompt.attempt, revision: prompt.revision, outcome: 'success', driver,
     changes: { branch: prompt.workspace.branch, base: RUN_START, from: RUN_START, to: 'c'.repeat(40), commits: [] },
   });
   const check = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
-  await reportAttempt(config, runId, { attempt: check.attempt, revision: check.revision, outcome: 'success', exitCode: 0, outputs: { result: 'passed' }, driver, trialReport: {} });
+  await reportAttempt(config, runId, { attempt: check.attempt, revision: check.revision, outcome: 'success', exitCode: 0, outputs: { result: 'passed' }, driver });
   await cancelRun(config, runId, {});
   return endRecord(config, runId);
 }
@@ -112,18 +113,14 @@ type TrialSpec = Pick<BenchmarkRecord['trials'][number], 'limit' | 'unenforced' 
   agent?: Partial<Pick<AgentObservation, 'tool' | 'model' | 'team'>> | null;
 };
 
-/** An end record of valid tasks, `fix` unless a trial names another, whose trials ran as `trials` say, one repetition each. */
-function recordOf(arms: BenchmarkRecord['arms'], trials: TrialSpec[]): WorkflowRunRecord & { benchmark: BenchmarkRecord } {
-  const planned = trials.map(({ task = 'fix', arm = arms[0]?.name ?? 'claude', result = 'passed', agent: _agent, ...usage }, index) => ({
+/** A benchmark record of valid tasks, `fix` unless a trial names another, whose trials ran as `trials` say, one repetition each. */
+function recordOf(arms: BenchmarkRecord['arms'], trials: TrialSpec[]): { benchmark: BenchmarkRecord } {
+  const planned = trials.map(({ task = 'fix', arm = arms[0]?.name ?? 'claude', result = 'passed', agent, ...usage }, index) => ({
     task, arm, repetition: index + 1, order: index + 1, step: `trials.r${index + 1}.${task}.${arm}.prompt`, result, ...usage,
+    ...(agent === null ? {} : { agent: { ...OBSERVED, ...agent } }),
   }));
   const tasks = [...new Set(['fix', ...planned.map(({ task }) => task)])];
   return {
-    schemaVersion: 'v1alpha1', run: 'r', workflow: 'fix', sourceHash: 'h', phase: 'end', status: 'succeeded', startedAt: '', username: '', publishedAt: '',
-    steps: planned.map(({ step }, index) => {
-      const agent = trials[index]?.agent;
-      return { step, pass: 1, ...(agent === null ? {} : { agent: { ...OBSERVED, ...agent } }) };
-    }),
     benchmark: {
       suite: { name: 'fix', sourceHash: 'h' }, repetitions: trials.length, baselineTeamRevision: RUN_TEAM, scorers: [],
       tasks: tasks.map((id) => ({ id, startingCommit: RUN_START, sourceHash: 'h', baseline: 'valid' })), arms, trials: planned,
@@ -275,7 +272,7 @@ describe('benchmark usage', () => {
     await settleBaselines(config, runId, driver, can);
     const prompt = LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
     await reportAttempt(config, runId, {
-      attempt: prompt.attempt, revision: prompt.revision, outcome: 'failed', driver, tool: 'claude', trialReport: {},
+      attempt: prompt.attempt, revision: prompt.revision, outcome: 'failed', driver, tool: 'claude',
       tokens: { input: 4, output: 2 }, durationMs: 1500, cost: { amount: 0.25, unit: 'USD' },
     });
     await cancelRun(config, runId, {});

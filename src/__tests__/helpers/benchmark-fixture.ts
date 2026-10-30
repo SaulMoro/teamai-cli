@@ -28,14 +28,16 @@ import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { z } from 'zod';
 import type { LocalConfig } from '../../types.js';
-import { compilePlan, freezePlan, runSourceHash, type BenchmarkPlan } from '../../benchmark/plan.js';
+import { compileBundle, freezePlan, type BenchmarkPlan } from '../../benchmark/plan.js';
 import type { BenchmarkRunRecord, TrialResult } from '../../benchmark/result.js';
+import { planOfRun } from '../../benchmark/run-plan.js';
 import { commitCheckFiles, type CommittedSuite } from '../../benchmark/trial.js';
 import { commitCacheOf } from '../../workflow/place/place.js';
 import { parseSuite, type TeamChoice } from '../../benchmark/suite.js';
 import type { ArmTeam } from '../../benchmark/terms.js';
 import type { BenchmarkSuiteFiles } from '../../workflow/conformance-interpreter.js';
-import { createRun, error, leaseNext, reportAttempt } from '../../workflow/engine.js';
+import { syncWorkflowDefinitions } from '../../workflow/cache.js';
+import { error, leaseNext, reportAttempt, startRun } from '../../workflow/engine.js';
 import type { DriverCan } from '../../workflow/requirements.js';
 import { readRun } from '../../workflow/store.js';
 import type { DriverIdentity, WorkflowEnvelope } from '../../workflow/types.js';
@@ -557,12 +559,47 @@ export async function frozenBenchmark(config: LocalConfig, files: BenchmarkSuite
   return { plan, committed: committed.suite };
 }
 
-/** A run of the suite in `files`, made in process as startBenchmark makes it, from its plan as `frozenBenchmark` freezes it. */
-export async function startBenchmarkRun(config: LocalConfig, files: BenchmarkSuiteFiles): Promise<WorkflowEnvelope> {
+/** The shipped benchmark workflow's plan and trials steps, without its report, which no process here can run. */
+export const PLANNED_BENCHMARK = `schemaVersion: v1alpha1
+name: planned
+description: Plan a benchmark, then run it.
+steps:
+  - id: plan
+    command: teamai benchmark plan fix
+    output: { definition: workflow, plan: json }
+  - id: trials
+    needs: [plan]
+    workflow: { from: plan }
+    requires: { isolation: sandbox, strict: true }
+`;
+
+const PlanLeaseSchema = z.object({ data: z.object({ lease: z.object({ attempt: z.string(), revision: z.number(), command: z.string() }) }) });
+const PLANNER: DriverIdentity = { kind: 'local', machine: 'planner', workspace: '/plan' };
+
+/**
+ * A run of `body`, the planned benchmark workflow by default, bounded by the suite's timeout, made in process: each
+ * command step a driver that opens no clone can take printed the bundle `compileBundle` makes of the suite in `files`,
+ * frozen as `frozenBenchmark` freezes it, with its plan, or what `outputsOf` makes of them. The trials wait for a driver.
+ */
+export async function startBenchmarkRun(config: LocalConfig, files: BenchmarkSuiteFiles, { body = PLANNED_BENCHMARK, outputsOf }: {
+  body?: string; outputsOf?: (bundle: ReturnType<typeof compileBundle>, plan: BenchmarkPlan) => unknown;
+} = {}): Promise<WorkflowEnvelope> {
   const frozen = await frozenBenchmark(config, files);
   if (!('plan' in frozen)) return frozen;
-  const { plan, committed } = frozen;
-  return createRun(config, { name: committed.suite.name, sourceHash: runSourceHash(plan), teamRevision: RUN_TEAM, origin: { source: 'team' }, ...compilePlan(plan, committed), benchmark: plan, secrets: {} });
+  const bundle = compileBundle(frozen.plan, frozen.committed);
+  fs.mkdirSync(path.join(config.repo.localPath, 'workflows'), { recursive: true });
+  fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'planned.yaml'), body);
+  await syncWorkflowDefinitions(config);
+  const started = await startRun(config, 'planned', {}, { secrets: {}, timeout: frozen.committed.suite.timeoutMs });
+  if ('error' in started) return started;
+  const runId = String(started.data.run);
+  // As the step prints them, JSON on its stdout, without the team revision, which this config has no team repo to pin at.
+  const outputs: unknown = JSON.parse(JSON.stringify(outputsOf ? outputsOf(bundle, frozen.plan) : { definition: { ...bundle, workflows: {} }, plan: frozen.plan }));
+  for (let leased = PlanLeaseSchema.safeParse(await leaseNext(config, runId, PLANNER)); leased.success; leased = PlanLeaseSchema.safeParse(await leaseNext(config, runId, PLANNER))) {
+    const { attempt, revision } = leased.data.data.lease;
+    await reportAttempt(config, runId, { attempt, revision, outcome: 'success', driver: PLANNER, outputs });
+  }
+  return started;
 }
 
 /**
@@ -582,7 +619,7 @@ export function fixRecord(run: string, { startedAt, username, result = 'passed',
   };
 }
 
-const BaselineLeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string().startsWith('baselines.'), attempt: z.string(), revision: z.number() }) }) });
+const BaselineLeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string().startsWith('trials.baselines.'), attempt: z.string(), revision: z.number() }) }) });
 
 /**
  * Settles each baseline of a run made in process as `teamai benchmark check --baseline` settles one: by its task in
@@ -593,10 +630,11 @@ export async function settleBaselines(
   config: LocalConfig, runId: string, driver: DriverIdentity, can: DriverCan, baselines: Record<string, 'passed' | 'failed' | 'could_not_run'> = {},
 ): Promise<void> {
   const run = await readRun(config, runId);
-  const count = typeof run === 'object' ? run.benchmark?.tasks.filter((task) => task.judge.kind === 'check').length ?? 0 : 0;
+  const planned = typeof run === 'object' ? planOfRun(run) : undefined;
+  const count = planned && 'found' in planned ? planned.found.plan.tasks.filter((task) => task.judge.kind === 'check').length : 0;
   for (let settled = 0; settled < count; settled += 1) {
     const { attempt, revision, step } = BaselineLeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true })).data.lease;
-    const result = baselines[step.slice('baselines.'.length)] ?? 'failed';
-    await reportAttempt(config, runId, { attempt, revision, driver, outcome: 'success', exitCode: 0, outputs: { result }, trialReport: {} });
+    const result = baselines[step.slice('trials.baselines.'.length)] ?? 'failed';
+    await reportAttempt(config, runId, { attempt, revision, driver, outcome: 'success', exitCode: 0, outputs: { result } });
   }
 }

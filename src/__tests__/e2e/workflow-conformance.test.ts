@@ -5,21 +5,35 @@ import path from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { resolveProjectDataHome } from '../../config.js';
 import { DRIVERS_UNDER_TEST, runConformanceScenario, speaksAsDriverUnderTest } from '../../workflow/conformance-interpreter.js';
+import { benchmarkConformanceScenarios } from '../../benchmark/conformance.js';
 import { workflowConformanceScenarios } from '../../workflow/conformance/run.js';
 import type { RunState, WorkflowEnvelope } from '../../workflow/types.js';
 import { cliConformanceClient, envelope, runCLI } from '../helpers/cli-conformance.js';
 import { inProcessConformanceRunner, normalized, recorded, UNREACHABLE_ORIGIN } from '../helpers/in-process-conformance.js';
-import { benchmarkFixture } from '../helpers/benchmark-fixture.js';
+import { benchmarkFixture, driveCommands, startFixBenchmark } from '../helpers/benchmark-fixture.js';
 import type { BenchmarkScenario, DriverProfile } from '../../workflow/conformance-interpreter.js';
 import { isRunState } from '../../workflow/store.js';
 
-/** A benchmark scenario, on a member of a git team of its own: a `--self` install cannot pin the team a trial runs. */
+/** Every protocol scenario: the engine's, and the benchmark trials' over it. */
+const SCENARIOS = [...workflowConformanceScenarios, ...benchmarkConformanceScenarios];
+
+/** The driver that runs a benchmark run's plan step: it opens no clone, so it takes nothing else. */
+const PLANNER = { kind: 'local', machine: 'planner', workspace: '/plan', can: { workspace: ['read-only', 'new', 'continue'], env: true } };
+
+/**
+ * A benchmark scenario, on a member of a git team of its own: a `--self` install cannot pin the team a trial runs. The
+ * run is the benchmark workflow on suite `fix`, whose plan step a driver that takes nothing else ran.
+ */
 async function runBenchmarkScenario(scenario: BenchmarkScenario, profile: DriverProfile): Promise<void> {
   const { suite, tasks } = scenario.benchmark;
   const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: false, suite, tasks });
   try {
     await runConformanceScenario(scenario, {
-      client: cliConformanceClient(async (args) => envelope((await fixture.teamai(['workflow', ...args])).stdout)),
+      client: cliConformanceClient(async (args) => envelope((await fixture.teamai(['workflow', ...args])).stdout), async () => {
+        const run = await startFixBenchmark(fixture);
+        await driveCommands(fixture, run, { driver: PLANNER });
+        return { data: { run } };
+      }),
       readRun: async (runId) => {
         const run = fixture.runFile(runId);
         if (!isRunState(run)) throw new Error(`run ${runId} is not a run file`);
@@ -61,7 +75,7 @@ describe.each(DRIVERS_UNDER_TEST)('workflow protocol conformance through the CLI
   });
 
   // A scenario that never speaks as the driver under test makes the same calls under every profile, so it runs under the first.
-  for (const scenario of workflowConformanceScenarios.filter((item) => profile === DRIVERS_UNDER_TEST[0] || speaksAsDriverUnderTest(item))) {
+  for (const scenario of SCENARIOS.filter((item) => profile === DRIVERS_UNDER_TEST[0] || speaksAsDriverUnderTest(item))) {
     it(scenario.name, async () => {
       if ('benchmark' in scenario) {
         await runBenchmarkScenario(scenario, profile);

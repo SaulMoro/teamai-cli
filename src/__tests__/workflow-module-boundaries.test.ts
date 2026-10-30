@@ -81,9 +81,8 @@ const ENTRIES: Array<{ folder: string; entries: Record<string, string[] | 'any'>
       'trial.ts': ['src/workflow/protocol.ts', 'src/workflow/drivers/local/local-driver.ts', 'src/workflow-commands.ts'],
       'start.ts': ['src/workflow-commands.ts'],
       'report.ts': ['src/workflow-commands.ts'],
-      'conformance.ts': ['src/workflow/conformance/run.ts'],
     },
-    testEntries: ['plan.ts', 'terms.ts', 'suite.ts', 'check.ts', 'table.ts', 'result.ts', 'trial.ts', 'history.ts', 'run-plan.ts'],
+    testEntries: ['plan.ts', 'terms.ts', 'suite.ts', 'check.ts', 'table.ts', 'result.ts', 'trial.ts', 'history.ts', 'run-plan.ts', 'conformance.ts'],
   },
 ];
 
@@ -97,7 +96,6 @@ const ALLOWED: Array<{ from: string; to: string; count: number; why: string }> =
   { from: 'src/__tests__/workflow-skill-transitions.test.ts', to: 'src/workflow/drivers/skill/transitions.ts', count: 1, why: 'compares TRANSITIONS with the doc tables' },
   { from: 'src/workflow/cache.ts', to: `${BENCHMARK}suite.ts`, count: 1, why: BENCHMARK_EDGE },
   { from: 'src/workflow/cache.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },
-  { from: 'src/workflow/conformance/run.ts', to: `${BENCHMARK}conformance.ts`, count: 1, why: BENCHMARK_EDGE },
   { from: 'src/workflow/drivers/local/local-driver.ts', to: `${BENCHMARK}trial.ts`, count: 1, why: BENCHMARK_EDGE },
   { from: 'src/workflow/drivers/local/local-driver.ts', to: `${BENCHMARK}terms.ts`, count: 1, why: BENCHMARK_EDGE },
   { from: 'src/workflow/engine.ts', to: `${BENCHMARK}table.ts`, count: 1, why: BENCHMARK_EDGE },
