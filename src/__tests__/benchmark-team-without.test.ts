@@ -25,15 +25,15 @@ function git(cwd: string, ...args: string[]): string {
 /**
  * A member of role dev, which receives the dev namespaces and not the ops ones, and of tag quality, in a git team whose
  * commit holds rule commits, which tag quality keeps, and rules design and dev/notes, which only tag ux would, rule review
- * shared and again in dev, claudemd file team shared and again in dev, CLAUDE.md, shared
+ * shared and again in dev, a text file in rules, claudemd file team shared and again in dev and in ops, a text file in claudemd, agent runner in ops, CLAUDE.md, shared
  * skills release and lint, which tag quality brings, and solo, which no tag
- * brings, skill release again in dev, skills deploy in dev and runbook and lint in ops, agent reviewer shared and again in dev,
+ * brings, skill release again in dev and in ops, skill deploy in dev, skills runbook and lint in ops, a README in dev and in lint, agent reviewer shared and again in dev,
  * agent planner shared only, rule style in ops, docs shared and under api and in namespace ops, and hooks shared and in
  * dev; and that commit, and the run's selection. With `role` null, the member holds no role, so every namespace reaches
- * them; without `tags`, the team has no tags.yaml; `subscribed`, the tags the member subscribes; `excluded`, the skills
- * the member excludes.
+ * them; `additional`, the member's other roles; without `tags`, the team has no tags.yaml; `subscribed`, the tags the
+ * member subscribes; `excluded`, the skills the member excludes.
  */
-function team({ role = 'dev' as string | null, tags = true, subscribed = ['quality'], excluded = [] as string[] } = {}): { config: LocalConfig; revision: string; selection: TeamSelection } {
+function team({ role = 'dev' as string | null, additional = [] as string[], tags = true, subscribed = ['quality'], excluded = [] as string[] } = {}): { config: LocalConfig; revision: string; selection: TeamSelection } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-team-without-'));
   dirs.push(root);
   const repo = path.join(root, 'team');
@@ -52,11 +52,18 @@ function team({ role = 'dev' as string | null, tags = true, subscribed = ['quali
     'claudemd/dev/team.md': 'Be brief, dev.\n',
     'skills/release/SKILL.md': SKILL('release'),
     'skills/lint/SKILL.md': SKILL('lint'),
+    'skills/lint/README.md': 'How to lint.\n',
     'skills/solo/SKILL.md': SKILL('solo'),
     'skills/dev/release/SKILL.md': SKILL('release'),
     'skills/dev/deploy/SKILL.md': SKILL('deploy'),
     'skills/ops/runbook/SKILL.md': SKILL('runbook'),
     'skills/ops/lint/SKILL.md': SKILL('lint'),
+    'skills/ops/release/SKILL.md': SKILL('release'),
+    'skills/dev/README.md': 'The dev skills.\n',
+    'rules/notes.txt': 'Not a rule.\n',
+    'agents/ops/runner.md': '---\nname: runner\ndescription: Runs.\n---\nRun.\n',
+    'claudemd/ops/team.md': 'Be brief, ops.\n',
+    'claudemd/notes.txt': 'Not team instructions.\n',
     'agents/reviewer.md': '---\nname: reviewer\ndescription: Reviews.\n---\nReview.\n',
     'agents/dev/reviewer.yaml': 'name: reviewer\ndescription: Reviews for dev.\nprompt: Review.\n',
     'agents/planner.md': '---\nname: planner\ndescription: Plans.\n---\nPlan.\n',
@@ -76,10 +83,10 @@ function team({ role = 'dev' as string | null, tags = true, subscribed = ['quali
   return {
     config: {
       repo: { localPath: repo, remote: 'https://github.com/acme/team.git', kind: 'git' },
-      username: 'tester', scope: 'project', ...(role !== null ? { primaryRole: role } : {}), additionalRoles: [], projects: [], ...(subscribed.length > 0 ? { subscribedTags: subscribed } : {}), projectRoot: root, dataHome: path.join(root, 'data'),
+      username: 'tester', scope: 'project', ...(role !== null ? { primaryRole: role } : {}), additionalRoles: additional, projects: [], ...(subscribed.length > 0 ? { subscribedTags: subscribed } : {}), projectRoot: root, dataHome: path.join(root, 'data'),
     },
     revision: git(repo, 'rev-parse', 'HEAD'),
-    selection: { ...(role !== null ? { primaryRole: role } : {}), additionalRoles: [], projects: [], ...(subscribed.length > 0 ? { subscribedTags: subscribed } : {}), excludedSkills: excluded },
+    selection: { ...(role !== null ? { primaryRole: role } : {}), additionalRoles: additional, projects: [], ...(subscribed.length > 0 ? { subscribedTags: subscribed } : {}), excludedSkills: excluded },
   };
 }
 
@@ -89,6 +96,7 @@ describe('withoutRefusal', () => {
     ['a shared skill with the version its namespace delivers in its place', ['skills/dev/release', 'skills/release']],
     ['a shared skill with the whole namespace that delivers it in its place', ['skills/dev', 'skills/release']],
     ['a file inside a skill', ['skills/lint/SKILL.md']],
+    ['a file inside a skill the member gets, which it then gets without that file', ['skills/lint/README.md']],
     ['a page in a docs directory no role or project declares', ['docs/api/guide.md']],
     ['a shared hooks file, whose entries a namespace adds to rather than replaces', ['hooks/hooks.yaml']],
     ['a shared agent no namespace the member receives has a version of', ['agents/planner.md']],
@@ -127,6 +135,16 @@ describe('withoutRefusal', () => {
       'Arm "ablated" runs without rules/design.md, a rule tagged only with tags the member does not subscribe, so pull leaves it out already and leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
     ['a rule of a namespace the member receives, tagged only with tags the member does not subscribe', ['rules/dev/notes.md'], 'arm_team_unresolved',
       'Arm "ablated" runs without rules/dev/notes.md, a rule tagged only with tags the member does not subscribe, so pull leaves it out already and leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
+    ['a rule namespace the member does not receive', ['rules/ops'], 'arm_team_unresolved',
+      'Arm "ablated" runs without rules/ops, which is in namespace ops, and the arm\'s roles or projects don\'t receive ops, so leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
+    ['an agent in a namespace the member does not receive', ['agents/ops/runner.md'], 'arm_team_unresolved',
+      'Arm "ablated" runs without agents/ops/runner.md, which is in namespace ops, and the arm\'s roles or projects don\'t receive ops, so leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
+    ['a claudemd file in a namespace the member does not receive', ['claudemd/ops/team.md'], 'arm_team_unresolved',
+      'Arm "ablated" runs without claudemd/ops/team.md, which is in namespace ops, and the arm\'s roles or projects don\'t receive ops, so leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
+    ['a file in a skill namespace that is no skill', ['skills/dev/README.md'], 'arm_team_unresolved',
+      'Arm "ablated" runs without skills/dev/README.md, and teamai pull delivers the same team assets at team revision {r} with or without it, so leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
+    ['a file in rules that is no rule', ['rules/notes.txt'], 'arm_team_unresolved',
+      'Arm "ablated" runs without rules/notes.txt, and teamai pull delivers the same team assets at team revision {r} with or without it, so leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
     ['a rule in a namespace the member does not receive', ['rules/ops/style.md'], 'arm_team_unresolved',
       'Arm "ablated" runs without rules/ops/style.md, which is in namespace ops, and the arm\'s roles or projects don\'t receive ops, so leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
     ['a page in a docs namespace a role declares and the member does not receive', ['docs/ops/guide.md'], 'arm_team_unresolved',
@@ -143,12 +161,34 @@ describe('withoutRefusal', () => {
     expect(await withoutRefusal(config, { arm: 'ablated', paths: ['docs/guide.md', 'skills/ops/runbook', 'skills/solo'], revision, selection })).toBeUndefined();
   });
 
+  it.each([
+    ['a skill the member excludes', { excluded: ['solo'] }, ['skills/solo'],
+      'Arm "ablated" runs without skills/solo, skill solo, which the member excludes, so pull leaves it out already and leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
+    ['a rule tagged only with tags the member does not subscribe', {}, ['rules/design.md'],
+      'Arm "ablated" runs without rules/design.md, a rule tagged only with tags the member does not subscribe, so pull leaves it out already and leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
+    ['a file in claudemd that pull does not read', {}, ['claudemd/notes.txt'],
+      'Arm "ablated" runs without claudemd/notes.txt, and teamai pull delivers the same team assets at team revision {r} with or without it, so leaving it out changes nothing. Remove it from the arm\'s team, push it, run teamai pull, and start again.'],
+  ])('refuses a member with no role or project an arm without %s', async (_case, options, paths, message) => {
+    const { config, revision, selection } = team({ role: null, ...options });
+
+    expect(await withoutRefusal(config, { arm: 'ablated', paths, revision, selection })).toEqual({ code: 'arm_team_unresolved', message: message.replace('{r}', revision.slice(0, 7)) });
+  });
+
   it('refuses an arm without an agent when pull delivers no agents, as two of one name reach a member with no role or project', async () => {
     const { config, revision, selection } = team({ role: null });
 
     expect(await withoutRefusal(config, { arm: 'ablated', paths: ['agents/planner.md'], revision, selection })).toEqual({
       code: 'arm_team_unresolved',
       message: `Arm "ablated" runs without agents/planner.md, and teamai pull delivers no agents at team revision ${revision.slice(0, 7)} with or without it: Duplicate agent "reviewer" found in active namespaces "(root)" and "dev" (agents/reviewer.md and agents/dev/reviewer.yaml). Fix that in the team repo, push it, run teamai pull, and start again.`,
+    });
+  });
+
+  it('refuses an arm without a skill when pull delivers no skills, as two of one name reach the member from two namespaces', async () => {
+    const { config, revision, selection } = team({ additional: ['ops'] });
+
+    expect(await withoutRefusal(config, { arm: 'ablated', paths: ['skills/solo'], revision, selection })).toEqual({
+      code: 'arm_team_unresolved',
+      message: `Arm "ablated" runs without skills/solo, and teamai pull delivers no skills at team revision ${revision.slice(0, 7)} with or without it: Duplicate skill "release" found in active namespaces "dev" and "ops" (skills/dev/release and skills/ops/release). Fix that in the team repo, push it, run teamai pull, and start again.`,
     });
   });
 
