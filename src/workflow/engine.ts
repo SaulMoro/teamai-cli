@@ -28,7 +28,7 @@ import { budgetSpent, countLateTokens, expire, itemsSpent, leaseDeadline, ownDea
 import { addItems, afterStanding, expandItems, isItem, itemsAfter, itemsOf, itemsSettled, startedItems } from './fan-out.js';
 import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, isUnder, loopSettled } from './loop.js';
 import { childScope, contextOf, finallyScope, insertChildren, localId, statesIn, stepDefinitions, topScope, type Scope } from './scope.js';
-import { deliverableOf, deliveryProblem, deliveryTarget, planWorkspace, plannedBranch, sessionOf, workLeftUndelivered, type LeaseSession, type SessionRef, type WorkspaceContract, type WorkspacePlan } from './workspace.js';
+import { deliverableOf, deliveryTarget, planWorkspace, plannedBranch, sessionOf, workLeftUndelivered, type LeaseSession, type SessionRef, type WorkspaceContract, type WorkspacePlan } from './workspace.js';
 import {
   deliverPr, deliveryFailure, findDelivered, reportedPrMismatch, type DeliveryJob,
 } from './pr-delivery.js';
@@ -40,10 +40,9 @@ import {
   type Allow, type DriverCan, type EnvFacts, type Held, type Limit, type Negotiation, type ReportedUnenforced, type Terms, type TurnLimits,
 } from './requirements.js';
 import { knownSecrets, resolveWorkflowEnv, secretKey, type WorkflowEnv } from '../env-resolution.js';
-import { redactJson } from '../utils/redact.js';
 import { deliveryLockPath, generateRunId, installOwner, isRunId, readAttemptOutcomes, readRun, updateRun } from './store.js';
 import { withFileLock } from '../update.js';
-import { pinScorers } from '../scorers/cache.js';
+import { admitWorkflow, heldSecret } from './admission.js';
 import { scoresDir } from '../scorers/attempts.js';
 import { isLeaseRef } from '../scorers/entry.js';
 import { removeSubjectEvidence } from '../scorers/evidence.js';
@@ -977,12 +976,6 @@ function inputsMismatch(name: string, declared: Record<string, OutputSchema> | u
   return extra === undefined ? null : `inputs.${extra} is not an input workflow "${name}" declares`;
 }
 
-/** The name of the first of `secrets` whose value `value` holds, as the run file would mask it. */
-function heldSecret(value: unknown, secrets: Record<string, string>): string | undefined {
-  const text = JSON.stringify(value);
-  return Object.entries(secrets).find(([name, secret]) => JSON.stringify(redactJson(value, { [name]: secret })) !== text)?.[0];
-}
-
 /**
  * Why the run file would not keep what `start` was given: masking would change an input that holds a secret value
  * without a word, and the pinned definitions are kept as pulled, unmasked. Names the input and the secret, never the
@@ -1006,14 +999,6 @@ function secretMismatch(
   return null;
 }
 
-/** Every scorer name a step of `definitions` lists, inline workflows included. */
-function listedScorers(definitions: ReadonlyArray<{ steps: WorkflowStep[] }>): string[] {
-  return definitions.flatMap((definition) => definition.steps.flatMap((step) => {
-    const child = stepWorkflow(step);
-    return [...step.scorers?.names ?? [], ...(child?.kind === 'inline' ? listedScorers([child.workflow]) : [])];
-  }));
-}
-
 /**
  * Creates a run. `inputs` are checked against the declared inputs before the run file exists. `secrets` are what the
  * caller resolved for the operation.
@@ -1032,18 +1017,15 @@ export async function startRun(
   if (mismatch) return error('invalid_inputs', mismatch);
   const tree = await loadWorkflowTree(config, cached);
   if ('failed' in tree) return error(tree.failed.code, tree.failed.message);
-  const undeliverable = deliveryProblem(cached.definition, tree.workflows, options.base);
-  if (undeliverable) return error(undeliverable.code, undeliverable.message);
-  const scorers = await pinScorers(config, listedScorers([cached.definition, ...Object.values(tree.workflows)]));
+  const admission = await admitWorkflow(config, { kind: 'cached', definition: cached.definition, workflows: tree.workflows }, { secrets, ...(options.base ? { base: options.base } : {}) });
+  if ('failure' in admission) return error(admission.failure.code, admission.failure.message);
   return createRun(config, {
     name: cached.definition.name,
     ...(cached.definition.inputs && isRecord(inputs) ? { inputs } : {}),
     sourceHash: tree.sourceHash,
     ...(tree.teamRevision ? { teamRevision: tree.teamRevision } : {}),
     origin: DefaultWorkflows.originOf(cached),
-    definition: cached.definition,
-    workflows: tree.workflows,
-    scorers,
+    ...admission.admitted,
     secrets,
     ...options,
   });
@@ -1063,13 +1045,12 @@ export async function createRun(
   const unmet = alone && strictlyUnmet(input.definition, workflows, alone);
   if (unmet) return error('requirement_unmet', unmet);
   const scorers = input.scorers ?? {};
-  // A benchmark's definition is generated from its suite's files, so a secret in it is named by the suite.
-  const pinned = Object.fromEntries([
-    ...(input.benchmark
-      ? [[`benchmarks/${input.benchmark.suite.name}`, { definition: input.definition, plan: input.benchmark }]]
-      : [input.definition, ...Object.values(workflows)].map((definition) => [`workflows/${definition.name}.yaml`, definition])),
+  // Admission checked what `startRun` pins. A benchmark's definition is generated from its suite's files, so a secret in
+  // it is named by the suite.
+  const pinned = Object.fromEntries(input.benchmark ? [
+    [`benchmarks/${input.benchmark.suite.name}`, { definition: input.definition, plan: input.benchmark }],
     ...Object.entries(scorers).map(([scorerName, scorer]) => [`scorer ${scorerName}`, scorer]),
-  ]);
+  ] : []);
   const holdsSecret = secretMismatch(input.inputs, pinned, secrets);
   if (holdsSecret) return error('invalid_inputs', holdsSecret);
   const now = new Date().toISOString();
