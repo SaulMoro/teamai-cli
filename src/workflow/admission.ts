@@ -72,8 +72,8 @@ export async function admitWorkflow(
   if (secret) return refuse(`the output holds the value of ${secret.name}, a secret on this machine, which a run never stores. Print requires.env: [${secret.name}] in its place.`);
   const bundle = BundleSchema.safeParse(output[field]);
   if (!bundle.success) {
-    const [issue] = bundle.error.issues;
-    return refuse(`${issue?.path.length ? `${issue.path.join('.')}: ` : ''}${issue?.message ?? 'it does not match'}; a bundle is { definition, workflows?, scorers?, teamRevision? }`);
+    const issues = bundle.error.issues.map((issue) => `${issue.path.length > 0 ? `${issue.path.join('.')}: ` : ''}${issue.message}`);
+    return refuse(`${issues.join('; ')}; a bundle is { definition, workflows?, scorers?, teamRevision? }`);
   }
   const parsed = parseBundle(bundle.data.definition, bundle.data.workflows ?? {});
   if ('failed' in parsed) return refuse(parsed.failed);

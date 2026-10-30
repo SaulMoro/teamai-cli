@@ -96,6 +96,8 @@ describe('admitting a workflow output', () => {
   it.each([
     ['a value that is no bundle', { definition: 'generated' },
       'Step "plan" output definition is not a workflow this run can admit: definition: Expected object, received string; a bundle is { definition, workflows?, scorers?, teamRevision? }'],
+    ['a bundle with a key it does not define', { definition: GENERATED, trials: 3 },
+      'Step "plan" output definition is not a workflow this run can admit: Unrecognized key(s) in object: \'trials\'; a bundle is { definition, workflows?, scorers?, teamRevision? }'],
     ['a definition that does not parse', { definition: { ...GENERATED, steps: [{ id: 'hello' }] } },
       'Step "plan" output definition is not a workflow this run can admit: workflows/generated.yaml:5: field "steps[0]": a step has exactly one action: command, prompt, prompt_file, or workflow; or no action with end, approve, or choose'],
     ['a from step of its own', { definition: { ...GENERATED, steps: [{ id: 'make', command: 'node make.js', output: { definition: 'workflow' } }, { id: 'run', needs: ['make'], workflow: { from: 'make' } }] } },
