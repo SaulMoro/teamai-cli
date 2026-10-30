@@ -18,6 +18,7 @@ import {
   mergeWorkflowStats,
   pendingRecords,
   publishPendingRecords,
+  queueBenchmarkRecord,
   recordPath,
   type WorkflowRunRecord,
 } from '../workflow/records.js';
@@ -623,6 +624,21 @@ describe('#1083 workflow stats merge', () => {
       (YAML.parse(await reports.show([`teamai-reports:stats/${username}.yaml`])) as Record<string, unknown>).workflows;
     expect(await workflows('alice')).toEqual({ runs: 0, succeeded: 0, failed: 0, totalDurationMs: 0 });
     expect(await workflows('bob')).toEqual({ runs: 1, succeeded: 1, failed: 0, totalDurationMs: 300000 });
+  });
+
+  it('publishes a benchmark record at its run\'s key, once however often it is queued, and folds it into no stats', async () => {
+    const { config, origin } = await reportsRemote('bob');
+    const record = { schemaVersion: 1, run: 'r1234567890abcdef', outcome: 'succeeded', trials: [] };
+    expect(await queueBenchmarkRecord(config, record, {})).toBe(true);
+    expect(await publishPendingRecords(config)).toEqual({ state: 'published' });
+    expect(await queueBenchmarkRecord(config, record, {})).toBe(true);
+
+    expect(await publishPendingRecords(config, { run: record.run })).toEqual({ state: 'published' });
+
+    const reports = simpleGit(origin);
+    expect(JSON.parse(await reports.show(['teamai-reports:benchmarks/runs/r1234567890abcdef.json']))).toEqual(record);
+    expect(await reports.raw(['ls-tree', '-r', '--name-only', 'teamai-reports'])).not.toContain('stats/');
+    expect(await reports.raw(['rev-list', '--count', 'teamai-reports', '--', 'benchmarks/runs/r1234567890abcdef.json'])).toBe('1\n');
   });
 
   it('changes no total for a benchmark end, added or withdrawn from origin', async () => {
