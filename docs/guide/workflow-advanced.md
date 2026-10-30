@@ -704,7 +704,7 @@ workflows:
 ```
 
 - `allow.network: false` holds each step that requires `network: true`. `allow.env` holds each step whose `requires.env`, or whose setup's, names a key it does not list. `wait.held[].missing` names `policy.network` or `policy.env`. A bad `allow` in `~/.teamai/config.yaml` stops workflow commands until it is fixed, so a typo never lifts a restriction.
-- `sandbox: true` says this host contains what it runs, such as a CI VM or a container, so the local driver declares `sandbox` isolation. `teamai workflow start` and `resume` take `--sandbox` to declare it for one process.
+- `sandbox: true` says this host contains what it runs, such as a CI VM or a container, so the local driver declares `sandbox` isolation. A step with [`permissions: unattended`](#unattended-prompts) then runs its tool without asking, in whatever workspace the step uses, your own checkout included. `teamai workflow start` and `resume` take `--sandbox` to declare it for one process.
 - `max_parallel` also caps how many leases of one run every driver on this machine holds at once.
 
 `allow.network` filters declared step requests. Setup declares only environment keys in v1 and receives no network restriction from that setting. To guarantee that setup and steps cannot reach the network, use a driver and host that enforce it for every process.

@@ -704,7 +704,7 @@ workflows:
 ```
 
 - `allow.network: false` 会暂缓每个要求 `network: true` 的步骤。`allow.env` 会暂缓 `requires.env`（或其 setup 的 `requires.env`）中含有未列出键的步骤。`wait.held[].missing` 指出 `policy.network` 或 `policy.env`。`~/.teamai/config.yaml` 中错误的 `allow` 会让工作流命令停止运行，直到修正为止，因此拼写错误不会解除限制。
-- `sandbox: true` 表示本机会隔离它运行的内容，例如 CI 虚拟机或容器，因此本地驱动声明 `sandbox` 隔离。`teamai workflow start` 和 `resume` 接受 `--sandbox`，只为当前进程声明。
+- `sandbox: true` 表示本机会隔离它运行的内容，例如 CI 虚拟机或容器，因此本地驱动声明 `sandbox` 隔离。此时设置 [`permissions: unattended`](#无人值守的-prompt) 的步骤运行其工具时不再询问，无论该步骤使用哪个工作区，包括你自己的 checkout。`teamai workflow start` 和 `resume` 接受 `--sandbox`，只为当前进程声明。
 - `max_parallel` 还限制本机上所有驱动同时持有同一运行的租约数。
 
 `allow.network` 筛选步骤显式声明的网络请求。v1 的 setup 仅声明环境变量键，不会从该设置继承网络限制。如需保证 setup 和步骤都无法联网，请使用能约束每个进程的驱动和运行环境。
