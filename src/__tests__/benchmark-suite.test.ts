@@ -108,7 +108,7 @@ describe('parseSuite', () => {
   it.each([
     ['a suite with both arms and matrix', suiteText({ matrix: '{ tool: [claude, codex] }' }), '(root)', 'a suite has exactly one of arms and matrix'],
     ['a suite with neither arms nor matrix', suiteText({ arms: '' }), '(root)', 'a suite has exactly one of arms and matrix'],
-    ['a matrix that varies nothing', suiteText({ arms: '', matrix: '{ tool: [claude] }' }), 'matrix', 'the matrix varies no key; list two values or more under tool, model or team'],
+    ['a matrix that varies nothing', suiteText({ arms: '', matrix: '{ tool: [claude] }' }), 'matrix', 'the matrix varies no key; list two values or more under tool, model, team or workflow'],
     ['a matrix of 16 arms', suiteText({ arms: '', matrix: '{ tool: [a, b, c, d], model: [e, f, g, h] }' }), 'matrix', 'the matrix makes 16 arms; a suite has 1 to 12'],
     ['a matrix that names two arms alike', suiteText({ arms: '', matrix: '{ model: [sonnet.5, sonnet-5] }' }), 'matrix', 'the matrix names two arms "sonnet-5"; list values whose names differ'],
     ['an arm that changes tool and team', suiteText({ arms: '[{ name: baseline }, { name: codex, tool: codex, team: none }]' }), 'arms.1', 'arm "codex" changes tool and team; an arm changes at most one of the defaults keys'],

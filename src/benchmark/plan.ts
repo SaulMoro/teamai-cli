@@ -15,6 +15,7 @@ import { isLabelShaped, isNameShaped } from '../agent-observation.js';
 import type { PinnedScorer } from '../scorers/pin.js';
 import type { Suite, Task, TaskJudge } from './suite.js';
 import type { CommittedSuite } from './trial.js';
+import type { PinnedArmWorkflow } from './arm-workflow.js';
 import { CommitSchema, TeamSelectionSchema, type CloneTeam, type TeamSelection } from '../workflow/clone.js';
 import { CHECK_RESULTS } from './check.js';
 import { AddedSchema, ArmTeamSchema, BenchmarkNameSchema, TrialLimitsSchema, type Added, type ArmTeam } from './terms.js';
@@ -34,6 +35,8 @@ const PlannedArmSchema = z.object({
   source: z.enum(['team', 'member']),
   /** The team assets the arm's trials get. */
   team: ArmTeamSchema,
+  /** The team workflow the arm's trials run on each task instead of one prompt, by the hash of its sources and theirs. */
+  workflow: z.object({ name: z.string().min(1), sourceHash: Sha256 }).strict().optional(),
 }).strict();
 export type PlannedArm = z.infer<typeof PlannedArmSchema>;
 
@@ -57,7 +60,10 @@ const PlannedTrialSchema = z.object({
   repetition: z.number().int().positive(),
   task: BenchmarkNameSchema,
   arm: BenchmarkNameSchema,
-  /** The trial's prompt step, `r<repetition>.<task>.<arm>.prompt`, under the workflow that runs the trials. */
+  /**
+   * The trial's work step under the workflow that runs the trials: `r<repetition>.<task>.<arm>.prompt`, or
+   * `r<repetition>.<task>.<arm>.workflow` for an arm that runs a workflow.
+   */
   step: z.string().min(1),
 }).strict();
 export type PlannedTrial = z.infer<typeof PlannedTrialSchema>;
@@ -91,22 +97,27 @@ export type BenchmarkPlan = z.infer<typeof BenchmarkPlanSchema>;
  * One trial per task x arm x repetition, ordered by repetition, then task in file-name order, then arm, with the arms
  * of repetition r rotated by r - 1 (A B C, B C A, C A B). The order is not a dependency: trials never need each other.
  */
-export function trialsOf(tasks: readonly Pick<Task, 'id'>[], arms: readonly Pick<PlannedArm, 'name'>[], repetitions: number): PlannedTrial[] {
+export function trialsOf(tasks: readonly Pick<Task, 'id'>[], arms: readonly Pick<PlannedArm, 'name' | 'workflow'>[], repetitions: number): PlannedTrial[] {
   const trials: PlannedTrial[] = [];
   for (let repetition = 1; repetition <= repetitions; repetition += 1) {
     const shift = (repetition - 1) % arms.length;
     const rotated = [...arms.slice(shift), ...arms.slice(0, shift)];
     for (const task of tasks) {
       for (const arm of rotated) {
-        trials.push({ order: trials.length + 1, repetition, task: task.id, arm: arm.name, step: stepOf({ repetition, task: task.id, arm: arm.name, kind: 'prompt' }) });
+        trials.push({ order: trials.length + 1, repetition, task: task.id, arm: arm.name, step: stepOf({ repetition, task: task.id, arm: arm.name, kind: workKind(arm) }) });
       }
     }
   }
   return trials;
 }
 
+/** The step a trial of `arm` works the task in: one prompt, or the arm's workflow. */
+function workKind(arm: Pick<PlannedArm, 'workflow'>): 'prompt' | 'workflow' {
+  return arm.workflow ? 'workflow' : 'prompt';
+}
+
 /** `r<repetition>.<task>.<arm>.<kind>`: real nested inline-workflow scopes, so locateStep walks them. */
-export function stepOf({ repetition, task, arm, kind }: { repetition: number; task: string; arm: string; kind: 'prompt' | 'check' }): string {
+export function stepOf({ repetition, task, arm, kind }: { repetition: number; task: string; arm: string; kind: 'prompt' | 'workflow' | 'check' }): string {
   return `${trialCopyOf({ repetition, task, arm })}.${kind}`;
 }
 
@@ -189,12 +200,16 @@ type FileStep = { id: string } & Record<string, unknown>;
  *     <task>                      needs []; a check task's: if steps.baselines.outputs.<task> == 'failed'
  *       <arm>                     needs [], workspace: a clone of the starting commit with the arm's team
  *         prompt                  workspace continue; tool, exact model, limits under on_limit: end_turn; scorers
- *         check                   needs [prompt]; command teamai benchmark check --trial; workspace continue (check tasks only)
+ *         | workflow              for an arm that runs one: its pinned copy, with { task }; workspace continue; the limits
+ *                                 but max_turns as its allowance under on_limit: end_turn; scorers
+ *         check                   needs [the one above]; command teamai benchmark check --trial; workspace continue (check tasks only)
  *   settled                       needs every scope above; an `if` that reads them; end: settled
  *
  * Step ids are those `stepOf` and `baselineStepOf` name, under the step that runs the workflow.
  */
-export function compileBundle(plan: BenchmarkPlan, { suite }: CommittedSuite): { definition: Record<string, unknown>; scorers: Record<string, PinnedScorer> } {
+export function compileBundle(plan: BenchmarkPlan, { suite }: CommittedSuite, armWorkflows: ReadonlyMap<string, PinnedArmWorkflow> = new Map()): {
+  definition: Record<string, unknown>; workflows: Record<string, Record<string, unknown>>; scorers: Record<string, PinnedScorer>;
+} {
   const tasks = new Map(suite.tasks.map((task) => [task.id, task]));
   const arms = new Map(plan.arms.map((arm) => [arm.name, arm]));
   const checkOutput = { result: CHECK_RESULTS.join(' | ') };
@@ -202,16 +217,21 @@ export function compileBundle(plan: BenchmarkPlan, { suite }: CommittedSuite): {
     ? [{ id: task.id, needs: [], command: 'teamai benchmark check --baseline', workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: { treatment: 'none' } } }, output: checkOutput }]
     : []));
   const tried = baselines.length > 0;
-  const promptOf = (trial: PlannedTrial, arm: PlannedArm, task: Task): FileStep => {
+  const workOf = (arm: PlannedArm, task: Task): FileStep => {
     const names = [...suite.scorers, ...(task.judge.kind === 'criteria' ? [correctnessScorerName(task.id)] : [])];
     const limits = plan.limits;
+    const pinned = armWorkflows.get(arm.name);
+    // A workflow step's timeout and budget are an allowance its prompts spend; no allowance caps turns.
+    const ends = { ...limits, ...(pinned ? { maxTurns: undefined } : {}) };
     return {
-      id: 'prompt', prompt: task.prompt, workspace: 'continue', tool: arm.tool,
-      ...(arm.model ? { model: { name: arm.model, ...(arm.effort ? { effort: arm.effort } : {}) } } : {}),
-      ...(limits?.timeoutMs !== undefined ? { timeout: `${limits.timeoutMs}ms` } : {}),
-      ...(limits?.maxTurns !== undefined ? { max_turns: limits.maxTurns } : {}),
-      ...(limits?.tokens !== undefined ? { budget: { tokens: limits.tokens } } : {}),
-      ...(limits ? { on_limit: 'end_turn' } : {}),
+      ...(pinned
+        ? { id: 'workflow', workflow: pinned.key, with: { task: task.prompt } }
+        : { id: 'prompt', prompt: task.prompt, tool: arm.tool, ...(arm.model ? { model: { name: arm.model, ...(arm.effort ? { effort: arm.effort } : {}) } } : {}) }),
+      workspace: 'continue',
+      ...(ends.timeoutMs !== undefined ? { timeout: `${ends.timeoutMs}ms` } : {}),
+      ...(ends.maxTurns !== undefined ? { max_turns: ends.maxTurns } : {}),
+      ...(ends.tokens !== undefined ? { budget: { tokens: ends.tokens } } : {}),
+      ...(ends.timeoutMs !== undefined || ends.maxTurns !== undefined || ends.tokens !== undefined ? { on_limit: 'end_turn' } : {}),
       ...(names.length > 0 ? { scorers: { names, sampling: 'all' } } : {}),
     };
   };
@@ -223,10 +243,11 @@ export function compileBundle(plan: BenchmarkPlan, { suite }: CommittedSuite): {
       const armSteps = ofRepetition.filter((trial) => trial.task === id).flatMap((trial): FileStep[] => {
         const arm = arms.get(trial.arm);
         if (!arm) return [];
-        const check = task.judge.kind === 'check' ? [{ id: 'check', needs: ['prompt'], command: 'teamai benchmark check --trial', workspace: 'continue', output: checkOutput }] : [];
+        const work = workOf(arm, task);
+        const check = task.judge.kind === 'check' ? [{ id: 'check', needs: [work.id], command: 'teamai benchmark check --trial', workspace: 'continue', output: checkOutput }] : [];
         return [{
           id: arm.name, needs: [], workspace: { clone: { commit: task.startingCommit, repo: suite.repo, team: cloneTeamOf(arm.team, plan.selection) } },
-          workflow: { steps: [promptOf(trial, arm, task), ...check] },
+          workflow: { steps: [work, ...check] },
         }];
       });
       return [{ id, needs: [], ...(task.judge.kind === 'check' ? { if: `steps.${BASELINES}.outputs.${id} == 'failed'` } : {}), workflow: { steps: armSteps } }];
@@ -247,6 +268,7 @@ export function compileBundle(plan: BenchmarkPlan, { suite }: CommittedSuite): {
       ends: { [SETTLED_END]: 'succeeded' },
       steps: [...scopes, { id: SETTLED_END, needs, if: needs.map((id) => `steps.${id}.outcome != null`).join(' && '), end: SETTLED_END }],
     },
+    workflows: Object.fromEntries([...armWorkflows.values()].flatMap(({ files }) => Object.entries(files))),
     scorers: correctnessScorers(suite),
   };
 }

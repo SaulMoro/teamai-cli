@@ -61,6 +61,8 @@ export type TeamChoice =
   | { kind: 'without'; skills: [string, ...string[]] };
 
 const PULLED: TeamChoice = { kind: 'pulled' };
+/** A workflow file's name, as `workflows/<name>.yaml` names it. */
+const WorkflowNameSchema = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'must be the name of a workflow, as workflows/<name>.yaml names it');
 const TEAM_HELP = 'must be pulled, none, a branch, tag or commit of the team repo, or { without: [<skill>, ...] }';
 /** A ref as git names one, which a plan and a record carry: no leading "-", no "..", "//" or trailing "/" or ".". */
 const TEAM_REF = /^(?!-)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._/-]+(?<![/.])$/;
@@ -86,6 +88,8 @@ const ArmValuesSchema = z.object({
   model: z.string().min(1).optional(),
   /** Absent: the team revision this checkout pulled. */
   team: TeamValueSchema.optional(),
+  /** A team workflow each trial runs on the task, as its input `task`, instead of one prompt. Absent: one prompt. */
+  workflow: WorkflowNameSchema.optional(),
 }).strict();
 export type ArmValues = z.infer<typeof ArmValuesSchema>;
 type ArmKey = keyof ArmValues;
@@ -98,6 +102,7 @@ const MatrixSchema = z.object({
   tool: z.array(z.string().min(1)).nonempty().optional(),
   model: z.array(z.string().min(1)).nonempty().optional(),
   team: z.array(TeamValueSchema).nonempty().optional(),
+  workflow: z.array(WorkflowNameSchema).nonempty().optional(),
 }).strict() satisfies z.ZodType<Partial<Record<ArmKey, unknown>>>;
 type Matrix = z.infer<typeof MatrixSchema>;
 const MAX_MATRIX_ARMS = 12;
@@ -167,14 +172,16 @@ function matrixArms(defaults: ArmValues, matrix: Matrix): Arm[] {
   const tools = matrix.tool ?? [defaults.tool];
   const models = matrix.model ?? [defaults.model];
   const teams = matrix.team ?? [defaults.team ?? PULLED];
-  return tools.flatMap((tool) => models.flatMap((model) => teams.map((team): Arm => {
+  const workflows = matrix.workflow ?? [defaults.workflow];
+  return tools.flatMap((tool) => models.flatMap((model) => teams.flatMap((team) => workflows.map((workflow): Arm => {
     const segments = [
       ...(tools.length > 1 ? [tool] : []),
       ...(models.length > 1 && model !== undefined ? [model] : []),
       ...(teams.length > 1 ? [teamSegment(team)] : []),
+      ...(workflows.length > 1 && workflow !== undefined ? [workflow] : []),
     ];
-    return { name: segments.map(nameSegment).join('-'), tool, ...(model !== undefined ? { model } : {}), team };
-  })));
+    return { name: segments.map(nameSegment).join('-'), tool, ...(model !== undefined ? { model } : {}), team, ...(workflow !== undefined ? { workflow } : {}) };
+  }))));
 }
 
 function teamSegment(team: TeamChoice): string {
@@ -199,7 +206,7 @@ function nameSegment(value: string): string {
 
 /** Why `matrix` makes no usable set of arms, or undefined when it does. */
 function matrixProblem(defaults: ArmValues, matrix: Matrix): string | undefined {
-  if (!ARM_KEYS.some((key) => (matrix[key]?.length ?? 0) > 1)) return 'the matrix varies no key; list two values or more under tool, model or team';
+  if (!ARM_KEYS.some((key) => (matrix[key]?.length ?? 0) > 1)) return 'the matrix varies no key; list two values or more under tool, model, team or workflow';
   const arms = matrixArms(defaults, matrix);
   if (arms.length > MAX_MATRIX_ARMS) return `the matrix makes ${arms.length} arms; a suite has 1 to ${MAX_MATRIX_ARMS}`;
   const names = new Set<string>();
@@ -376,6 +383,8 @@ export interface Arm {
   tool: string;
   model?: string;
   team: TeamChoice;
+  /** The team workflow its trials run on each task; absent: one prompt. */
+  workflow?: string;
 }
 
 export interface Suite {

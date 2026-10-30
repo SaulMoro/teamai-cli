@@ -4,7 +4,7 @@
  * published record after the suite left the cache.
  */
 import type { AgentObservation } from '../agent-observation.js';
-import { isNativeModelAlias } from '../models/aliases.js';
+import { compareAgent } from './agent-match.js';
 import { TRIAL_RESULTS, type Baseline, type BenchmarkRecord, type TrialResult } from './result.js';
 
 type RecordedArm = BenchmarkRecord['arms'][number];
@@ -208,58 +208,6 @@ function formatTeam(team: RecordedArm['team']): string {
 /** Divides before it multiplies, as the documented `jq` command does, so both round an exact half the same way. */
 function formatPassRate(rate: PassRate | undefined): string {
   return rate ? `${Math.round((rate.passed / rate.planned) * 100)}% (${rate.passed}/${rate.planned})` : '-';
-}
-
-type Comparison = 'match' | 'deviation' | 'not_verified';
-
-/**
- * How a trial's prompt ran against its arm, on the values that can be compared: the tool, the team revision, and the
- * model when the arm names a concrete model id. A value the record lacks is not verified; a deviation outweighs it. A
- * tool's own model selector such as `opus`, or the tool's default model, is not compared with the model id it reports.
- */
-function compareAgent(arm: RecordedArm, observed: AgentObservation): Comparison {
-  const compare = (intended: string, recorded: string | undefined, same = (left: string, right: string): boolean => left === right): Comparison => {
-    if (recorded === undefined) return 'not_verified';
-    return same(intended, recorded) ? 'match' : 'deviation';
-  };
-  const comparisons = new Set([
-    compare(arm.tool, observed.tool.name),
-    compareTeam(arm.team, observed.team),
-    ...(arm.model !== undefined && !isNativeModelAlias(arm.model) ? [compare(arm.model, observed.model?.reported, sameModel)] : []),
-  ]);
-  if (comparisons.has('deviation')) return 'deviation';
-  return comparisons.has('not_verified') ? 'not_verified' : 'match';
-}
-
-/**
- * Whether the prompt ran on its arm's team assets: the arm's revision, with the skills it runs without left out, or no
- * team assets at all. A trial of a team arm whose record names no team is not verified; one of an arm without team
- * assets that names one ran on them.
- */
-function compareTeam(intended: RecordedArm['team'], recorded: AgentObservation['team']): Comparison {
-  if (intended.kind === 'none') return recorded === undefined ? 'match' : 'deviation';
-  if (recorded === undefined) return 'not_verified';
-  if (recorded.revision !== intended.revision) return 'deviation';
-  if (intended.kind !== 'without') return 'match';
-  if (!recorded.selection) return 'not_verified';
-  const excluded = new Set(recorded.selection.excludedSkills ?? []);
-  return intended.skills.every((skill) => excluded.has(skill)) ? 'match' : 'deviation';
-}
-
-/**
- * A reported model id is the requested one, also with a provider in front of either or a release date after: `a/m`,
- * `m-20250805`, `m@2025-08-05`. Two ids that both name a provider name the same one.
- */
-function sameModel(requested: string, reported: string): boolean {
-  if (requested === reported) return true;
-  const split = (model: string): { provider?: string; id: string } => {
-    const slash = model.lastIndexOf('/');
-    return slash < 0 ? { id: model } : { provider: model.slice(0, slash), id: model.slice(slash + 1) };
-  };
-  const asked = split(requested);
-  const ran = split(reported);
-  if (asked.provider !== undefined && ran.provider !== undefined && asked.provider !== ran.provider) return false;
-  return ran.id === asked.id || (ran.id.startsWith(asked.id) && /^[-@]\d{4}-?\d{2}-?\d{2}$/.test(ran.id.slice(asked.id.length)));
 }
 
 function median(values: readonly number[]): Median {

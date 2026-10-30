@@ -11,11 +11,13 @@ import { z } from 'zod';
 import { AgentObservationSchema } from '../agent-observation.js';
 import { RunOriginSchema } from '../default-workflows.js';
 import type { EntryVerdict } from '../scorers/entry.js';
-import type { StepState } from '../workflow/step-state.js';
+import type { StepPass, StepState } from '../workflow/step-state.js';
+import { stepDefinitions } from '../workflow/scope.js';
 import { LimitSchema } from '../workflow/requirements.js';
 import type { RunState } from '../workflow/types.js';
 import { CheckOutputSchema, type CheckResult } from './check.js';
-import { baselineStepOf, correctnessScorerName, stepOf, type BenchmarkPlan, type PlannedTask, type PlannedTrial } from './plan.js';
+import { compareAgent } from './agent-match.js';
+import { baselineStepOf, correctnessScorerName, stepOf, type BenchmarkPlan, type PlannedArm, type PlannedTask, type PlannedTrial } from './plan.js';
 import type { RunPlan } from './run-plan.js';
 import { ArmTeamSchema, TrialLimitsSchema } from './terms.js';
 
@@ -28,6 +30,7 @@ export type Baseline = (typeof BASELINES)[number];
 
 /** The not enforced requirements of a trial's prompt that the record keeps: those of the suite's limits. */
 const UNENFORCED_LIMITS = ['max_turns', 'budget', 'on_limit'] as const;
+type UnenforcedLimit = (typeof UNENFORCED_LIMITS)[number];
 
 /**
  * A benchmark's plan and trial results. A reader rebuilds the comparison from the record alone, after the suite left the
@@ -44,6 +47,8 @@ export const BenchmarkRecordSchema = z.object({
   arms: z.array(z.object({
     name: z.string(), tool: z.string(), model: z.string().optional(), alias: z.string().optional(), effort: z.string().optional(),
     source: z.enum(['team', 'member']), team: ArmTeamSchema,
+    /** The team workflow the arm's trials ran on each task instead of one prompt. */
+    workflow: z.object({ name: z.string(), sourceHash: z.string() }).optional(),
   })),
   trials: z.array(z.object({
     task: z.string(), arm: z.string(), repetition: z.number().int(), order: z.number().int(), step: z.string(),
@@ -113,9 +118,13 @@ export function benchmarkRecord(run: RunState, { plan, prefix }: RunPlan): Bench
     trials: plan.trials.map((trial) => {
       const verdicts = verdictsOf(trial);
       const scoringCost = scoringCostOf(verdicts);
-      const prompt = stateOf(trial.step);
-      const result = trialResultOf({ prompt, check: stateOf(stepOf({ ...trial, kind: 'check' })), verdicts }, plan, trial);
-      return { ...trial, step: `${prefix}${trial.step}`, result, ...promptEntryOf(prompt), ...(scoringCost ? { scoringCost } : {}) };
+      const work = stateOf(trial.step);
+      const result = trialResultOf({ prompt: work, check: stateOf(stepOf({ ...trial, kind: 'check' })), verdicts }, plan, trial);
+      const arm = plan.arms.find(({ name }) => name === trial.arm);
+      const entry = arm?.workflow
+        ? projectionOf(promptPassesUnder(run, `${prefix}${trial.step}`), arm, plan.limits?.maxTurns !== undefined ? ['max_turns'] : [])
+        : projectionOf(settledPass(work), arm, []);
+      return { ...trial, step: `${prefix}${trial.step}`, result, ...entry, ...(scoringCost ? { scoringCost } : {}) };
     }),
   };
 }
@@ -132,36 +141,74 @@ function scoringCostOf(verdicts: readonly EntryVerdict[]): BenchmarkRecord['tria
   };
 }
 
-/** What a trial's prompt reported it spent, and the limits that ended or did not hold it: absent for a prompt that never settled a report. */
-function promptEntryOf(prompt: StepState | undefined): Pick<BenchmarkRecord['trials'][number], 'limit' | 'unenforced' | 'durationMs' | 'tokens' | 'cost' | 'agent' | 'used'> {
-  switch (prompt?.status) {
+/** What one prompt pass reported, as a step keeps it. */
+type PromptPass = Pick<StepPass, 'limit' | 'unenforced' | 'durationMs' | 'tokens' | 'cost' | 'agent' | 'used'>;
+type TrialEntry = Pick<BenchmarkRecord['trials'][number], 'limit' | 'unenforced' | 'durationMs' | 'tokens' | 'cost' | 'agent' | 'used'>;
+
+/** What `state` reported of its current pass, or nothing when that pass settled no report. */
+function settledPass(state: StepState | undefined): PromptPass[] {
+  switch (state?.status) {
     case 'succeeded':
     case 'failed':
     case 'cancelled':
-    case 'delivering': {
-      const unenforced = (prompt.unenforced ?? []).flatMap(({ requirement }) => UNENFORCED_LIMITS.filter((limit) => limit === requirement));
-      return {
-        ...(prompt.limit ? { limit: prompt.limit } : {}),
-        ...(unenforced.length > 0 ? { unenforced } : {}),
-        ...(prompt.durationMs !== undefined ? { durationMs: prompt.durationMs } : {}),
-        ...(prompt.tokens ? { tokens: { ...prompt.tokens, complete: true } } : {}),
-        ...(prompt.cost ? { cost: { ...prompt.cost, complete: true } } : {}),
-        ...(prompt.agent ? { agent: prompt.agent } : {}),
-        ...(prompt.used ? { used: Object.fromEntries(prompt.used.skills.map((skill) => [skill, 'loaded' as const])) } : {}),
-      };
-    }
+    case 'delivering':
+      return [state];
     case undefined:
     case 'pending':
     case 'waiting':
     case 'leased':
     case 'running':
     case 'skipped':
-      return {};
+      return [];
     default: {
-      const unhandled: never = prompt;
+      const unhandled: never = state;
       return unhandled;
     }
   }
+}
+
+/** Every launched pass of a prompt step under workflow step `step`: earlier passes a loop kept or archived, and the current one. */
+function promptPassesUnder(run: RunState, step: string): PromptPass[] {
+  const definitionOf = stepDefinitions(run);
+  const isPromptUnder = (id: string): boolean => id.startsWith(`${step}.`) && definitionOf(id)?.prompt !== undefined;
+  const launched = (pass: StepPass): boolean => pass.attempt !== undefined;
+  return [
+    ...(run.archive ?? []).filter((pass) => isPromptUnder(pass.step) && launched(pass)),
+    ...run.steps.flatMap((state) => (isPromptUnder(state.id) ? [...(state.passes ?? []).filter(launched), ...settledPass(state)] : [])),
+  ];
+}
+
+/**
+ * One trial's measures over the prompt passes it ran, the one-trial projection: duration, tokens and cost summed, the
+ * latter two incomplete when a pass stated none; the first pass that ran as something other than `arm`, else the first
+ * observed; each skill a pass loaded; the first limit that ended a turn; and the limits a driver did not enforce, with
+ * `unenforced`, those no step of the trial could. Empty for a trial whose work never ran.
+ */
+function projectionOf(passes: readonly PromptPass[], arm: PlannedArm | undefined, unenforced: readonly UnenforcedLimit[]): TrialEntry {
+  const sum = (values: ReadonlyArray<number | undefined>): number | undefined => (values.some((value) => value !== undefined) ? values.reduce<number>((total, value) => total + (value ?? 0), 0) : undefined);
+  const stated = passes.flatMap(({ tokens }) => (tokens ? [tokens] : []));
+  const [costed] = passes.flatMap(({ cost }) => (cost ? [cost] : []));
+  const inUnit = passes.flatMap(({ cost }) => (cost && cost.unit === costed?.unit ? [cost] : []));
+  const agents = passes.flatMap(({ agent }) => (agent ? [agent] : []));
+  const agent = (arm ? agents.find((observed) => compareAgent(arm, observed) === 'deviation') : undefined) ?? agents[0];
+  const observed = passes.flatMap(({ used }) => (used ? [used] : []));
+  const limit = passes.find((pass) => pass.limit !== undefined)?.limit;
+  const notEnforced = [...new Set([...unenforced, ...passes.flatMap((pass) => (pass.unenforced ?? []).flatMap(({ requirement }) => UNENFORCED_LIMITS.filter((known) => known === requirement)))])];
+  const durationMs = sum(passes.map((pass) => pass.durationMs));
+  const [input, output, cachedInput] = (['input', 'output', 'cachedInput'] as const).map((field) => sum(stated.map((one) => one[field])));
+  const tokens = stated.length > 0 ? {
+    ...(input !== undefined ? { input } : {}), ...(output !== undefined ? { output } : {}), ...(cachedInput !== undefined ? { cachedInput } : {}),
+    complete: stated.length === passes.length,
+  } : undefined;
+  return {
+    ...(limit ? { limit } : {}),
+    ...(notEnforced.length > 0 ? { unenforced: notEnforced } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+    ...(tokens ? { tokens } : {}),
+    ...(costed ? { cost: { amount: inUnit.reduce((total, cost) => total + cost.amount, 0), unit: costed.unit, complete: inUnit.length === passes.length } } : {}),
+    ...(agent ? { agent } : {}),
+    ...(observed.length > 0 ? { used: Object.fromEntries(observed.flatMap(({ skills }) => skills).map((skill) => [skill, 'loaded' as const])) } : {}),
+  };
 }
 
 /**

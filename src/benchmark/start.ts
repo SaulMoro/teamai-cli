@@ -24,6 +24,7 @@ import { formatDiagnostic } from '../workflow/parse.js';
 import { git } from '../workflow/worktree.js';
 import { addedOf, compileBundle, freezePlan, type BenchmarkPlan, type PlannedArm } from './plan.js';
 import { parseSuite, type Arm, type Suite, type TaskJudge } from './suite.js';
+import { pinArmWorkflow, type PinnedArmWorkflow } from './arm-workflow.js';
 import type { TeamSelection } from '../workflow/clone.js';
 import type { Added, ArmTeam } from './terms.js';
 import { commitCacheOf } from '../workflow/place/place.js';
@@ -43,7 +44,7 @@ interface BenchmarkStart {
  * as `planBenchmark` freezes it, and the suite's timeout comes with them.
  */
 export interface BenchmarkPlanned {
-  definition: { definition: Record<string, unknown>; workflows: Record<string, never>; scorers: Record<string, PinnedScorer>; teamRevision: string };
+  definition: { definition: Record<string, unknown>; workflows: Record<string, Record<string, unknown>>; scorers: Record<string, PinnedScorer>; teamRevision: string };
   plan: BenchmarkPlan;
 }
 
@@ -57,10 +58,10 @@ export async function planBenchmark(config: LocalConfig, name: string, options: 
   if (!frozen.ok) return { refused: frozen.refused };
   const blocked = await trialBlocker(config);
   if (blocked !== undefined) return { refused: error('team_ref_blocked', blocked) };
-  const { suite, plan, committed } = frozen;
-  const { definition, scorers } = compileBundle(plan, committed);
+  const { suite, plan, committed, armWorkflows } = frozen;
+  const { definition, workflows, scorers } = compileBundle(plan, committed, armWorkflows);
   return {
-    planned: { definition: { definition, workflows: {}, scorers, teamRevision: plan.baselineTeamRevision }, plan },
+    planned: { definition: { definition, workflows, scorers, teamRevision: plan.baselineTeamRevision }, plan },
     timeoutMs: suite.timeoutMs,
   };
 }
@@ -90,7 +91,7 @@ function durationText(ms: number): string {
   return unit ? `${ms / unit[1]}${unit[0]}` : `${ms}ms`;
 }
 
-type Frozen = { ok: true; suite: Suite; plan: BenchmarkPlan; committed: CommittedSuite; pinned: Record<string, PinnedScorer> } | Refused;
+type Frozen = { ok: true; suite: Suite; plan: BenchmarkPlan; committed: CommittedSuite; pinned: Record<string, PinnedScorer>; armWorkflows: Map<string, PinnedArmWorkflow> } | Refused;
 
 /**
  * Suite `name` as the plan freezes it, at the team revision this checkout last pulled: its arms' team assets and models,
@@ -125,6 +126,16 @@ async function freezeSuite(config: LocalConfig, name: string, options: Benchmark
   }
   const unpublishable = [first.arm, ...rest].map(unpublishableArm).find((message) => message !== undefined);
   if (unpublishable !== undefined) return refuse(error('arm_unpublishable', unpublishable));
+  const armWorkflows = new Map<string, PinnedArmWorkflow>();
+  const arms: [PlannedArm, ...PlannedArm[]] = [first.arm, ...rest];
+  for (const [index, arm] of arms.entries()) {
+    const workflow = found.arms[index]?.workflow;
+    if (workflow === undefined) continue;
+    const pinnedWorkflow = await pinArmWorkflow(config, { arm, name: workflow, revision: arm.team.kind === 'none' ? revision : arm.team.revision });
+    if (!pinnedWorkflow.ok) return refuse(error('arm_workflow_unrunnable', pinnedWorkflow.message));
+    armWorkflows.set(arm.name, pinnedWorkflow.pinned);
+    arms[index] = { ...arm, workflow: { name: workflow, sourceHash: pinnedWorkflow.pinned.sourceHash } };
+  }
   const pinned = await pinScorers(config, found.scorers);
   const unpinned = found.scorers.find((scorer) => !Object.hasOwn(pinned, scorer));
   if (unpinned !== undefined) {
@@ -134,15 +145,15 @@ async function freezeSuite(config: LocalConfig, name: string, options: Benchmark
   if (!committed.ok) {
     return refuse(error('check_files_unwritable', `Task "${committed.task}" writes files from the suite directory before its check, and they could not be written as a commit into this machine's benchmark cache: ${committed.failed} Fix that, and start again.`));
   }
-  const plan = freezePlan({ committed: committed.suite, baselineTeamRevision: revision, selection: selectionOf(config), arms: [first.arm, ...rest], scorers: pinned });
-  const { scorers: generated } = compileBundle(plan, committed.suite);
+  const plan = freezePlan({ committed: committed.suite, baselineTeamRevision: revision, selection: selectionOf(config), arms, scorers: pinned });
+  const { scorers: generated } = compileBundle(plan, committed.suite, armWorkflows);
   const criteria = found.tasks.find((task) => task.judge.kind === 'criteria');
   const needs = found.scorers.length > 0 ? `its scorers ${found.scorers.join(', ')}` : criteria ? `task "${criteria.id}" has successCriteria` : undefined;
   const unjudged = needs === undefined ? undefined : await judgeUnavailable(config, { ...pinned, ...generated });
   if (unjudged !== undefined) {
     return refuse(error('scoring_unavailable', `This suite needs a judge (${needs}), and this machine cannot judge: ${unjudged} Fix it, or start the benchmark where a judge tool is installed.`));
   }
-  return { ok: true, suite: found, plan, committed: committed.suite, pinned };
+  return { ok: true, suite: found, plan, committed: committed.suite, pinned, armWorkflows };
 }
 
 type ArmResolution = { ok: true; arm: PlannedArm } | { ok: false; message: string };
