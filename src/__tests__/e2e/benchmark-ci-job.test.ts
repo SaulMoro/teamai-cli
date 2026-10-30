@@ -31,7 +31,7 @@ const JobSchema = z.object({
   env: z.record(z.string()).default({}),
   steps: z.array(z.object({ uses: z.string().optional(), run: z.string().optional(), if: z.string().optional() })),
 });
-const DoneSchema = z.object({ data: z.object({ done: z.object({ outcome: z.string(), benchmark: z.object({ text: z.string() }) }) }) });
+const DoneSchema = z.object({ data: z.object({ done: z.object({ outcome: z.string(), outputs: z.object({ text: z.string() }) }) }) });
 
 interface Ran {
   command: string;
@@ -78,7 +78,7 @@ describe.skipIf(!hasJq)('the GitHub Actions job in the benchmarks guide, run thr
   beforeAll(async () => {
     fixture = await benchmarkFixture({ tool: 'fixes', sandbox: false, tools: ['claude'] });
     const job = guideJob();
-    const suite = /workflow start (\S+) --benchmark/.exec(job.steps.map((step) => step.run ?? '').join('\n'))?.[1];
+    const suite = /teamai-cli benchmark run (\S+)/.exec(job.steps.map((step) => step.run ?? '').join('\n'))?.[1];
     if (!suite) throw new Error('the job starts no benchmark');
     fixture.pushTeam({
       [`benchmarks/${suite}/suite.yaml`]: FIX_SUITE.replace('name: fix', `name: ${suite}`),
@@ -124,15 +124,15 @@ describe.skipIf(!hasJq)('the GitHub Actions job in the benchmarks guide, run thr
   });
 
   it('leaves its trials\' sessions on the runner when the unattended run ends', () => {
-    const started = ran.find((step) => step.command.includes('--benchmark'));
+    const started = ran.find((step) => step.command.includes('benchmark run'));
     expect(started?.stderr, said(ran)).not.toContain('step session');
   });
 
   it('writes the done envelope to done.json and its results text to the job summary', () => {
     const done = DoneSchema.parse(JSON.parse(fs.readFileSync(path.join(work, 'done.json'), 'utf8'))).data.done;
     expect(done.outcome).toBe('succeeded');
-    expect(done.benchmark.text).toContain('100% (1/1)');
-    expect(fs.readFileSync(summary, 'utf8')).toBe(`${done.benchmark.text}\n`);
+    expect(done.outputs.text).toContain('100% (1/1)');
+    expect(fs.readFileSync(summary, 'utf8')).toBe(`${done.outputs.text}\n`);
   });
 });
 
@@ -155,7 +155,7 @@ describe('a runner whose init set up no AI tool', () => {
     };
 
     const ran = [teamai(['init', TEAM_REPO, '--provider', 'git', '--scope', 'workspace', '--force']), teamai(['pull'])];
-    const started = teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local', '--sandbox']);
+    const started = teamai(['benchmark', 'run', 'fix', '--sandbox']);
 
     expect(ran.map((step) => step.status), said(ran)).toEqual([0, 0]);
     expect(JSON.parse(started.stdout), said([started])).toEqual({ error: {

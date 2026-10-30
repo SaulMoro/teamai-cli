@@ -364,9 +364,9 @@ jobs:
       - run: npm install -g @anthropic-ai/claude-code
       - run: npx teamai-cli init "$TEAM_REPO" --scope workspace --agent claude
       - run: npx teamai-cli pull
-      - run: npx teamai-cli workflow start fix-auth --benchmark --driver local --sandbox > done.json
+      - run: npx teamai-cli benchmark run fix-auth --sandbox > done.json
       - if: always()
-        run: jq -r '.data.done.benchmark.text // empty' done.json >> "$GITHUB_STEP_SUMMARY"
+        run: jq -r '.data.done.outputs.text // empty' done.json >> "$GITHUB_STEP_SUMMARY"
 ```
 
 - `TEAM_TOKEN` 读取团队仓库，并在使用统计上报开启时推送到团队仓库。
@@ -385,7 +385,7 @@ benchmark:
     - npm install -g @anthropic-ai/claude-code
     - npx teamai-cli init "$TEAM_REPO" --scope workspace --agent claude
     - npx teamai-cli pull
-    - npx teamai-cli workflow start fix-auth --benchmark --driver local --sandbox > done.json
+    - npx teamai-cli benchmark run fix-auth --sandbox > done.json
   artifacts:
     when: always
     paths: [done.json]
