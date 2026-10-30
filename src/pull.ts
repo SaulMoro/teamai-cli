@@ -2352,6 +2352,7 @@ async function pullForScope(
         if (await keepsTrackedCopy(skillDir)) continue;
         if (!await mayDeleteSkillCopy(localConfig, skillDir)) continue;
         await remove(skillDir);
+        forgetDelivered(ledger.hashes, skillDir);
         if (excludedSkills.has(dir)) {
           log.debug(`Removed excluded skill ${dir} from ${tool}`);
         } else {

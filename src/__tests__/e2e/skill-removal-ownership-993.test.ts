@@ -18,6 +18,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -31,6 +32,9 @@ const GIT_ENV = {
 };
 
 interface Run { code: number | null; output: string }
+
+/** The checkout records of a state.json: the files each says teamai delivered. */
+const RecordsSchema = z.object({ lastPullByWorkspace: z.record(z.object({ delivered: z.record(z.string()).optional() })).optional() });
 
 let sandbox: string;
 /** Keeps a retried case off the directories its first attempt left. */
@@ -70,6 +74,7 @@ const notTeamais = (dir: string, command: string): string =>
 /** One member's machine: a HOME with Claude Code and Codex installed, a team remote, and a business repo. */
 interface Machine {
   dir: string;
+  home: string;
   run(args: string[]): Run;
   ok(args: string[]): Run;
 }
@@ -114,7 +119,7 @@ function machine(base: string, files: Record<string, string>, businessFiles: Rec
   };
   ok(['init', url, '--provider', 'git', '--agent', 'claude,codex', '--scope', 'project', '--force']);
   ok(['pull']);
-  return { dir: realDir, run: teamai, ok };
+  return { dir: realDir, home, run: teamai, ok };
 }
 
 describe('teamai deletes only its own skill directories (#993)', () => {
@@ -138,6 +143,28 @@ describe('teamai deletes only its own skill directories (#993)', () => {
     const pulled = m.ok(['pull', '--force']);
     expect(fs.existsSync(path.join(m.dir, '.claude', 'skills', 'old-ns', 'fe-skill')), pulled.output).toBe(false);
     expect(read(path.join(m.dir, '.claude', 'skills', 'my-ns', 'fe-skill', 'SKILL.md'))).toBe(MY_SKILL);
+  });
+
+  it('pull removes a delivered skill the member then excludes, and takes its copies off the delivery record', () => {
+    const m = machine('excluded', TEAM, {});
+    // Each file the checkout's delivery record names, relative to the checkout.
+    const recorded = (): string[] => {
+      const projects = path.join(m.home, '.teamai', 'projects');
+      return fs.readdirSync(projects).flatMap((partition) => {
+        const file = path.join(projects, partition, 'state.json');
+        if (!fs.existsSync(file)) return [];
+        const { lastPullByWorkspace } = RecordsSchema.parse(JSON.parse(read(file)));
+        return Object.values(lastPullByWorkspace ?? {}).flatMap((record) => Object.keys(record.delivered ?? {}));
+      }).map((file) => path.relative(m.dir, file)).sort();
+    };
+    expect(recorded().filter((file) => file.includes('fe-skill'))).not.toEqual([]);
+
+    m.ok(['skill', 'exclude', 'add', 'fe-skill']);
+    const pulled = m.ok(['pull']);
+
+    expect(fs.existsSync(path.join(m.dir, '.claude', 'skills', 'fe-skill')), pulled.output).toBe(false);
+    expect(recorded().filter((file) => file.includes('fe-skill'))).toEqual([]);
+    expect(recorded()).toContain(path.join('.claude', 'skills', 'other-skill', 'SKILL.md'));
   });
 
   it('teamai remove deletes teamai\'s copies of the skill and keeps the member\'s own, naming it', () => {
