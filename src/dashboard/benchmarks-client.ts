@@ -159,7 +159,7 @@ function runsPanel(sel){
   +'</tbody></table></div></section>';
 }
 const BENCH_VIEWS=[['arms','Arms'],['compare','Compare'],['team','Team changes']];
-const DIMENSIONS=[['team','Team assets'],['tool','Tool'],['model','Model']];
+const DIMENSIONS=[['team','Team assets'],['tool','Tool'],['model','Model'],['workflow','Workflow']];
 const pp=v=>{const n=Math.round(v*100); return (n>0?'+':n<0?'−':'')+number(Math.abs(n))+' pp';};
 const costNumber=v=>String(Number(v.toPrecision(2)));
 const seriesBy=(sel,key)=>sel.arms.find(a=>a.key===key);
@@ -167,11 +167,11 @@ const comparisonId=c=>c.from+'>'+c.to;
 const diffClass=d=>d.low>0?'up':d.high<0?'down':'amber';
 function sideName(sel,key,dimension){
  const a=seriesBy(sel,key); if(!a)return '?';
- return dimension==='team'?teamText(a.team):dimension==='tool'?a.tool:a.model?a.model+(a.effort?' '+a.effort:''):t('tool default');
+ return dimension==='team'?teamText(a.team):dimension==='tool'?a.tool:dimension==='workflow'?(a.workflow||t('one prompt')):a.model?a.model+(a.effort?' '+a.effort:''):t('tool default');
 }
 function facetOf(sel,c){
  const a=seriesBy(sel,c.from); if(!a)return '';
- return [c.dimension!=='tool'?a.tool:'',c.dimension!=='model'&&a.model?a.model+(a.effort?' '+a.effort:''):'',c.dimension!=='team'&&a.team.kind!=='pulled'?teamText(a.team):''].filter(Boolean).join(' · ');
+ return [c.dimension!=='tool'?a.tool:'',c.dimension!=='model'&&a.model?a.model+(a.effort?' '+a.effort:''):'',c.dimension!=='team'&&a.team.kind!=='pulled'?teamText(a.team):'',c.dimension!=='workflow'&&a.workflow?a.workflow:''].filter(Boolean).join(' · ');
 }
 function benchTabs(sel){
  const counts={compare:sel.comparisons.length,team:sel.teamChanges.revisions.length};

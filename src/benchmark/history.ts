@@ -78,6 +78,8 @@ export interface ArmSeries {
   model?: string;
   effort?: string;
   team: TeamChoice;
+  /** The team workflow the arm's trials ran instead of one prompt. */
+  workflow?: string;
   /** In the newest run of the suite. */
   isCurrent: boolean;
   /** Over the runs of the current version; absent for a configuration none of them ran. */
@@ -106,7 +108,7 @@ export interface TaskView {
 }
 
 /** What two arms of the current version differ in: exactly one of these, so the difference has one cause. */
-export const ARM_DIMENSIONS = ['team', 'tool', 'model'] as const;
+export const ARM_DIMENSIONS = ['team', 'tool', 'model', 'workflow'] as const;
 export type ArmDimension = (typeof ARM_DIMENSIONS)[number];
 
 /**
@@ -320,7 +322,7 @@ function armsOf({ runs, current, newest }: SuiteRuns): ArmSeries[] {
   }).map(([key, { arm, points, pooledTrials, pooledRuns, deviations, notVerified }]) => {
     const pooled = passRate(pooledTrials.map(({ trial }) => trial));
     return {
-      key, arm: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), ...(arm.effort ? { effort: arm.effort } : {}), team: teamChoiceOf(arm.team),
+      key, arm: arm.name, tool: arm.tool, ...(arm.model ? { model: arm.model } : {}), ...(arm.effort ? { effort: arm.effort } : {}), team: teamChoiceOf(arm.team), ...(arm.workflow ? { workflow: arm.workflow.name } : {}),
       isCurrent: order.includes(key),
       ...(pooled.planned > 0 ? { pooled: { ...pooled, ...wilson(pooled), runs: pooledRuns, deviations, notVerified, usage: usageOf(pooledTrials) } } : {}),
       points,
@@ -368,6 +370,7 @@ function dimensionOf(left: Arm, right: Arm): ArmDimension | undefined {
     team: JSON.stringify(teamChoiceOf(left.team)) !== JSON.stringify(teamChoiceOf(right.team)),
     tool: left.tool !== right.tool,
     model: JSON.stringify(requestedModel(left)) !== JSON.stringify(requestedModel(right)),
+    workflow: (left.workflow?.name ?? null) !== (right.workflow?.name ?? null),
   } satisfies Record<ArmDimension, boolean>;
   const [only, ...more] = ARM_DIMENSIONS.filter((dimension) => differs[dimension]);
   return more.length === 0 ? only : undefined;

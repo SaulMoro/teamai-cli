@@ -558,6 +558,8 @@ export const dashboardMessages: Record<string, string> = {
   "After means the team revision contains the commit, checked in this machine's team clone. A label on a revision this clone does not have is not recorded.": "“之后”表示团队修订包含该提交，由本机的团队克隆检查。修订不在本机克隆中的标签记为未记录。",
   "Could not load scorer results.": "无法加载评分结果。",
   "Tool": "工具",
+  "Workflow": "工作流",
+  "one prompt": "单个提示词",
   "Model": "模型",
   "Agent definition": "智能体定义",
   "Role": "角色",

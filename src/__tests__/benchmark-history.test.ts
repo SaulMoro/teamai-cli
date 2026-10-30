@@ -7,7 +7,7 @@ import type { ArmTeam } from '../benchmark/terms.js';
 const NOW = new Date('2026-10-28T12:00:00Z');
 
 /** `team`: the pulled revision of the run when absent. */
-type Arm = { name: string; tool: string; model?: string; alias?: string; team?: ArmTeam };
+type Arm = { name: string; tool: string; model?: string; alias?: string; team?: ArmTeam; workflow?: { name: string; sourceHash: string } };
 const CLAUDE: Arm = { name: 'claude', tool: 'claude', model: 'claude-opus-5-5' };
 const CODEX: Arm = { name: 'codex', tool: 'codex' };
 
@@ -283,6 +283,27 @@ describe('BenchmarkHistory comparisons', () => {
     expect(comparisons.map(({ dimension, from, to }) => ({ dimension, from: nameOf(from), to: nameOf(to) }))).toEqual([
       { dimension: 'tool', from: 'claude', to: 'codex' },
       { dimension: 'model', from: 'codex', to: 'codex-fast' },
+    ]);
+  });
+
+  it('compares two arms that differ only in the workflow they run, and never reads a tool and workflow difference as the tool', () => {
+    const planned = { name: 'plan-then-fix', sourceHash: 'w1' };
+    const arms: Arm[] = [
+      { name: 'prompt', tool: 'claude' },
+      { name: 'planned', tool: 'claude', workflow: planned },
+      { name: 'codex-planned', tool: 'codex', workflow: planned },
+    ];
+    const runs = [run({ id: 'r1', startedAt: '2026-10-20T09:00:00Z', arms, trials: { login: { prompt: ['failed'], planned: ['passed'], 'codex-planned': ['failed'] } } })];
+
+    const { comparisons = [], arms: series = [] } = BenchmarkHistory.of({ runs, query: { windowDays: 90 }, now: NOW }).selected ?? {};
+    const nameOf = (key: string): string | undefined => series.find((arm) => arm.key === key)?.arm;
+
+    expect(comparisons.map(({ dimension, from, to }) => ({ dimension, from: nameOf(from), to: nameOf(to) }))).toEqual([
+      { dimension: 'tool', from: 'planned', to: 'codex-planned' },
+      { dimension: 'workflow', from: 'prompt', to: 'planned' },
+    ]);
+    expect(series.map(({ arm, workflow }) => ({ arm, workflow }))).toEqual([
+      { arm: 'prompt', workflow: undefined }, { arm: 'planned', workflow: 'plan-then-fix' }, { arm: 'codex-planned', workflow: 'plan-then-fix' },
     ]);
   });
 
