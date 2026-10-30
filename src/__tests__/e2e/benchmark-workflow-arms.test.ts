@@ -59,10 +59,15 @@ afterEach(() => {
   for (const fixture of fixtures.splice(0)) fixture.remove();
 });
 
-async function fixtureWith(suite: string, workflows: Record<string, string>, more: Partial<BenchmarkFixtureOptions> = {}): Promise<BenchmarkFixture> {
+/** manifest/roles.yaml: each role receiving the workflow namespaces listed. */
+function rolesReceiving(roles: Record<string, string[]>): string {
+  return ['version: 1', 'roles:', ...Object.entries(roles).flatMap(([id, namespaces]) => [`  - id: ${id}`, '    resources:', '      knowledge: []', '      skills: []', `      workflows: [${namespaces.join(', ')}]`]), ''].join('\n');
+}
+
+async function fixtureWith(suite: string, workflows: Record<string, string>, { team, ...more }: Partial<BenchmarkFixtureOptions> = {}): Promise<BenchmarkFixture> {
   const fixture = await benchmarkFixture({
     tool: 'fixes', sandbox: true, tools: ['claude'], suite,
-    team: Object.fromEntries(Object.entries(workflows).map(([name, text]) => [`workflows/${name}.yaml`, text])),
+    team: { ...Object.fromEntries(Object.entries(workflows).map(([name, text]) => [`workflows/${name}.yaml`, text])), ...team },
     ...more,
   });
   fixtures.push(fixture);
@@ -176,6 +181,35 @@ ${step.includes('deliver') ? '    prompt: Ship it.\n' : '    command: echo more\
 
     expect(ran.code, said(ran)).toBe(1);
     expect(ErrorSchema.parse(envelope(ran)).error.message).toContain(`Arm "flow" runs workflow "fixer", whose step "more" ${why}.`);
+    expect(fixture.runIds()).toEqual([]);
+  }, 120_000);
+
+  it('runs a workflow arm\'s workflow and sub-workflow from the namespace the member\'s role receives', async () => {
+    const fixture = await fixtureWith(SUITE, {
+      'ops/fixer': FIXER, 'ops/fix-once': FIX_ONCE,
+      // Another role's fixer, which this member must not run: it takes no task.
+      'other/fixer': FIX_ONCE.replace('name: fix-once', 'name: fixer'),
+    }, { role: 'ops', team: { 'manifest/roles.yaml': rolesReceiving({ ops: ['ops'], other: ['other'] }) } });
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+
+    expect(ran.code, said(ran)).toBe(0);
+    const runId = z.object({ run: z.string() }).parse(envelope(ran).data?.done).run;
+    const { trials } = RecordSchema.parse(fixture.benchmarkRecord(runId));
+    expect(trials.map(({ arm, result }) => ({ arm, result }))).toEqual([{ arm: 'prompt', result: 'passed' }, { arm: 'flow', result: 'passed' }]);
+  }, 240_000);
+
+  it('refuses before any run a workflow arm whose workflow two namespaces of the member\'s role define', async () => {
+    const fixture = await fixtureWith(SUITE, { 'ops/fixer': FIXER, 'devops/fixer': FIXER, 'fix-once': FIX_ONCE }, {
+      role: 'ops', team: { 'manifest/roles.yaml': rolesReceiving({ ops: ['ops', 'devops'] }) },
+    });
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+
+    expect(ran.code, said(ran)).toBe(1);
+    const { error } = ErrorSchema.parse(envelope(ran));
+    expect(error.code).toBe('workflow_namespace_conflict');
+    expect(error.message).toMatch(/^Arm "flow" runs workflow "fixer", which this member receives from more than one namespace: .*workflows\/(dev)?ops\/fixer\.yaml and workflows\/(dev)?ops\/fixer\.yaml/);
     expect(fixture.runIds()).toEqual([]);
   }, 120_000);
 

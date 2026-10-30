@@ -316,6 +316,8 @@ export interface BenchmarkFixtureOptions {
   judge?: FakeJudge;
   /** The member's `workflows.max_parallel`; unset by default, which the local driver reads as 1. */
   maxParallel?: number;
+  /** The role the member joins with, `teamai init --role`; none by default. */
+  role?: string;
 }
 
 export async function benchmarkFixture(options: BenchmarkFixtureOptions): Promise<BenchmarkFixture> {
@@ -441,7 +443,7 @@ process.stdout.write(JSON.stringify({ type: 'result', session_id: 'fake-session'
   };
 
   git(root, ['clone', '-q', PRODUCT_URL, work], env);
-  await ok(['init', TEAM_URL, '--provider', 'git', '--agent', 'claude', '--scope', 'workspace', '--force']);
+  await ok(['init', TEAM_URL, '--provider', 'git', '--agent', 'claude', '--scope', 'workspace', '--force', ...(options.role ? ['--role', options.role] : [])]);
   await ok(['pull']);
   const dataHome = (): string => {
     const projects = path.join(home, '.teamai', 'projects');

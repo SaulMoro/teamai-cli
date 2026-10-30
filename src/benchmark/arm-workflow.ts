@@ -5,10 +5,13 @@
  * so two arms that run one workflow on different tools get two copies, and a copy runs the keys of its sub-workflows.
  */
 import { createHash } from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { parse } from 'yaml';
 import { z } from 'zod';
-import type { LocalConfig } from '../types.js';
-import { loadCachedWorkflow, loadWorkflowTree, syncWorkflowDefinitions, withTeamRevision } from '../workflow/cache.js';
+import { getKnowledgeDir, type LocalConfig } from '../types.js';
+import { loadCachedWorkflow, loadWorkflowTree, syncWorkflowDefinitions, withTeamRevision, workflowsRunBy, type SyncWorkflowResult } from '../workflow/cache.js';
+import { parseWorkflow } from '../workflow/parse.js';
 import { stepWorkflow, type InlineWorkflow, type WorkflowStep } from '../workflow/types.js';
 import type { PlannedArm } from './plan.js';
 
@@ -26,15 +29,26 @@ export interface PinnedArmWorkflow {
 const FileSchema = z.object({ steps: z.array(z.record(z.unknown())) }).passthrough();
 type FileStep = Record<string, unknown>;
 
+/** Why plan refuses an arm's workflow: the member receives two versions of a workflow it runs, or a trial cannot run it. */
+type Refusal = { ok: false; code: 'workflow_namespace_conflict' | 'arm_workflow_unrunnable'; message: string };
+
 /**
- * Workflow `name` of `arm` at team commit `revision`, pinned with its copies; or why a trial could not run it: it has
- * no runnable version there, takes no input `task`, or a step of it, or of a workflow it runs, delivers, asks a person,
- * or works outside the trial's clone.
+ * Workflow `name` of `arm` at team commit `revision`, pinned with its copies; or why a trial could not run it. The
+ * workflow and every workflow it runs by name resolve as any team workflow does for this member, through the namespaces
+ * the member receives. Refused when two of those namespaces define one of them, when it has no runnable version there,
+ * takes no input `task`, or a step of it, or of a workflow it runs, delivers, asks a person, or works outside the
+ * trial's clone.
  */
-export async function pinArmWorkflow(config: LocalConfig, { arm, name, revision }: { arm: PlannedArm; name: string; revision: string }): Promise<{ ok: true; pinned: PinnedArmWorkflow } | { ok: false; message: string }> {
+export async function pinArmWorkflow(config: LocalConfig, { arm, name, revision }: { arm: PlannedArm; name: string; revision: string }): Promise<{ ok: true; pinned: PinnedArmWorkflow } | Refusal> {
   const runs = `Arm "${arm.name}" runs workflow "${name}"`;
+  const refuse = (message: string, code: Refusal['code'] = 'arm_workflow_unrunnable'): Refusal => ({ ok: false, code, message });
   const read = await withTeamRevision(config, revision, async (at) => {
-    await syncWorkflowDefinitions(at, { scopeLabel: `team commit ${revision.slice(0, 7)}` });
+    const synced = await syncWorkflowDefinitions(at, { scopeLabel: `team commit ${revision.slice(0, 7)}` });
+    const conflicted = await namespaceConflict(at, name, synced);
+    if (conflicted) {
+      const through = conflicted.workflow === name ? '' : `, which runs workflow "${conflicted.workflow}"`;
+      return { conflict: `${runs}${through}, which this member receives from more than one namespace: ${conflicted.message}` };
+    }
     const top = await loadCachedWorkflow(at, name);
     if (!top) return { missing: `${runs}, which has no runnable version at team commit ${revision.slice(0, 7)}` };
     const tree = await loadWorkflowTree(at, top);
@@ -42,24 +56,25 @@ export async function pinArmWorkflow(config: LocalConfig, { arm, name, revision 
     const children = await Promise.all(Object.keys(tree.workflows).map(async (child) => [child, await loadCachedWorkflow(at, child)] as const));
     return { top, tree, children };
   });
-  if ('failed' in read) return { ok: false, message: `${runs}, and team commit ${revision.slice(0, 7)} could not be read: ${read.failed}. Repair the team repo, or run teamai pull, and start again.` };
-  if ('missing' in read) return { ok: false, message: `${read.missing}. Fix the arm's workflow, push it, run teamai pull, and start again.` };
+  if ('failed' in read) return refuse(`${runs}, and team commit ${revision.slice(0, 7)} could not be read: ${read.failed}. Repair the team repo, or run teamai pull, and start again.`);
+  if ('conflict' in read) return refuse(`${read.conflict}. Keep it in one namespace, push it, run teamai pull, and start again.`, 'workflow_namespace_conflict');
+  if ('missing' in read) return refuse(`${read.missing}. Fix the arm's workflow, push it, run teamai pull, and start again.`);
   const { top, tree, children } = read;
   if (top.definition.inputs?.task?.type !== 'string') {
-    return { ok: false, message: `${runs}, which takes no input task, the task's prompt each trial passes it. Add inputs: { task: string } to it, push it, run teamai pull, and start again.` };
+    return refuse(`${runs}, which takes no input task, the task's prompt each trial passes it. Add inputs: { task: string } to it, push it, run teamai pull, and start again.`);
   }
   const sources = new Map([[top.definition.name, top], ...children.flatMap(([child, cached]) => (cached ? [[child, cached] as const] : []))]);
   for (const [file, cached] of sources) {
     const refused = unrunnableStep(cached.definition.steps);
     if (refused !== undefined) {
       const holder = file === top.definition.name ? '' : `, which runs workflow "${file}"`;
-      return { ok: false, message: `${runs}${holder}, whose step "${refused.step}" ${refused.why}. A trial runs unattended in its own clone: change the workflow, push it, run teamai pull, and start again.` };
+      return refuse(`${runs}${holder}, whose step "${refused.step}" ${refused.why}. A trial runs unattended in its own clone: change the workflow, push it, run teamai pull, and start again.`);
     }
   }
   const raws = new Map<string, { raw: z.infer<typeof FileSchema>; parsed: readonly WorkflowStep[] }>();
   for (const [file, cached] of sources) {
     const raw = FileSchema.safeParse(cached.content === undefined ? undefined : parse(cached.content));
-    if (!raw.success) return { ok: false, message: `${runs}, and this member's cache holds no source of workflows/${file}.yaml to copy. Run teamai pull, and start again.` };
+    if (!raw.success) return refuse(`${runs}, and this member's cache holds no source of workflows/${file}.yaml to copy. Run teamai pull, and start again.`);
     raws.set(file, { raw: raw.data, parsed: cached.definition.steps });
   }
   const files: Record<string, Record<string, unknown>> = {};
@@ -78,6 +93,28 @@ export async function pinArmWorkflow(config: LocalConfig, { arm, name, revision 
     return key;
   };
   return { ok: true, pinned: { name, sourceHash: tree.sourceHash, key: keyOf(top.definition.name), files } };
+}
+
+/**
+ * The first workflow `name` runs, itself included, that has no runnable version because two namespaces the member
+ * receives define it, with the diagnostic the sync gave it. Walked through the versions `config`'s cache holds, and
+ * through the files the sync left unrunnable, `synced.unrunnable`, since a workflow that runs a conflicting one is one.
+ */
+async function namespaceConflict(config: LocalConfig, name: string, synced: Pick<SyncWorkflowResult, 'invalid' | 'unrunnable'>, seen = new Set<string>()): Promise<{ workflow: string; message: string } | undefined> {
+  if (seen.has(name)) return undefined;
+  seen.add(name);
+  const conflict = synced.invalid.find((diagnostic) => diagnostic.code === 'workflow_namespace_conflict' && path.posix.basename(diagnostic.file, '.yaml') === name);
+  if (conflict) return { workflow: name, message: conflict.message };
+  const cached = await loadCachedWorkflow(config, name);
+  const unrunnable = cached ? undefined : synced.unrunnable.find((file) => path.posix.basename(file, '.yaml') === name);
+  const content = unrunnable === undefined ? undefined : await fs.readFile(path.join(getKnowledgeDir(config), unrunnable), 'utf8').catch(() => undefined);
+  const parsed = content === undefined ? undefined : parseWorkflow(unrunnable ?? '', content);
+  const definition = cached?.definition ?? (parsed?.ok ? parsed.definition : undefined);
+  for (const { workflow } of definition ? workflowsRunBy(definition) : []) {
+    const found = await namespaceConflict(config, workflow, synced, seen);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 /** The first step of `steps`, inline workflows included, that a trial cannot run, and why. */

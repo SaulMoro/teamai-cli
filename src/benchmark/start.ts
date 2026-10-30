@@ -132,7 +132,7 @@ async function freezeSuite(config: LocalConfig, name: string, options: Benchmark
     const workflow = found.arms[index]?.workflow;
     if (workflow === undefined) continue;
     const pinnedWorkflow = await pinArmWorkflow(config, { arm, name: workflow, revision: arm.team.kind === 'none' ? revision : arm.team.revision });
-    if (!pinnedWorkflow.ok) return refuse(error('arm_workflow_unrunnable', pinnedWorkflow.message));
+    if (!pinnedWorkflow.ok) return refuse(error(pinnedWorkflow.code, pinnedWorkflow.message));
     armWorkflows.set(arm.name, pinnedWorkflow.pinned);
     arms[index] = { ...arm, workflow: { name: workflow, sourceHash: pinnedWorkflow.pinned.sourceHash } };
   }
