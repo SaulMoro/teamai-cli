@@ -5300,10 +5300,10 @@ describe('on_limit: end_turn', () => {
     const at = (minutes: number): string => new Date(Date.UTC(2026, 0, 1) + minutes * 60_000).toISOString();
 
     /**
-     * Leases `work` at minute 0 to a driver that can `before`, and hands it back at minute 1 to one that can `after`;
-     * `stored` edits the run file in between.
+     * Leases `work` at minute 0 to a driver that can `before`, and asks `next` again at `minute`, 1 by default, as a
+     * restarted driver that can `after`; `stored` edits the run file in between.
      */
-    const handBack = async (before: Record<string, boolean>, after: Record<string, boolean>, stored?: (run: RunState) => void) => {
+    const handBack = async (before: Record<string, boolean>, after: Record<string, boolean>, { stored, minute = 1 }: { stored?: (run: RunState) => void; minute?: number } = {}) => {
       vi.useFakeTimers({ toFake: ['Date'] });
       try {
         vi.setSystemTime(new Date(at(0)));
@@ -5315,38 +5315,61 @@ describe('on_limit: end_turn', () => {
           stored(run);
           await saveRun(config, run);
         }
-        vi.setSystemTime(new Date(at(1)));
-        const { lease } = LeaseWithLimitsSchema.parse(await leaseNext(config, runId, driverA, { can: after, running: [] })).data;
-        return { first, lease };
+        vi.setSystemTime(new Date(at(minute)));
+        const answer = await leaseNext(config, runId, driverA, { can: after, running: [] });
+        return { first, answer, config, runId };
       } finally {
         vi.useRealTimers();
       }
     };
+    const leaseOf = (answer: unknown) => LeaseWithLimitsSchema.parse(answer).data.lease;
 
     it('gives the on_limit: fail lease once the driver can no longer end the turn, its deadline counted from the first lease', async () => {
-      const { first, lease } = await handBack(ENDS_TURN, KEEPS_TURN);
+      const { first, answer } = await handBack(ENDS_TURN, KEEPS_TURN);
+      const lease = leaseOf(answer);
 
       expect(lease).toMatchObject({ step: 'work', attempt: first.attempt, maxTurns: 3, expiresAt: at(5), unenforced: [{ requirement: 'on_limit' }] });
       expect(lease).not.toHaveProperty('limits');
     });
 
-    it('gives the turn limits once the driver can end the turn, keeping on_limit recorded as not enforced', async () => {
-      const { first, lease } = await handBack(KEEPS_TURN, ENDS_TURN);
+    it('gives the turn limits once the driver can end the turn, its timeout what is left since the first lease, keeping on_limit recorded as not enforced', async () => {
+      const { first, answer } = await handBack(KEEPS_TURN, ENDS_TURN);
+      const lease = leaseOf(answer);
 
       expect(lease).toMatchObject({
         step: 'work', attempt: first.attempt, unenforced: [{ requirement: 'on_limit' }],
-        limits: { timeoutMs: 300_000, maxTurns: 3, budget: { tokens: 1000 }, onLimit: 'end_turn' },
+        limits: { timeoutMs: 240_000, maxTurns: 3, budget: { tokens: 1000 }, onLimit: 'end_turn' },
       });
       expect(lease).not.toHaveProperty('expiresAt');
       expect(lease).not.toHaveProperty('maxTurns');
     });
 
-    it('keeps the deadline of a lease an older teamai issued without recording when', async () => {
-      const { lease } = await handBack(KEEPS_TURN, KEEPS_TURN, (run) => {
-        for (const step of run.steps) if (step.status === 'leased') delete step.lease.leasedAt;
-      });
+    it('gives a driver that ends the turn what is left of the step\'s timeout since the first lease, and the rest of its limits as they were', async () => {
+      const { first, answer } = await handBack(ENDS_TURN, ENDS_TURN, { minute: 2 });
+      const lease = leaseOf(answer);
 
-      expect(lease).toMatchObject({ step: 'work', maxTurns: 3, expiresAt: at(5) });
+      expect(lease).toMatchObject({ step: 'work', attempt: first.attempt, limits: { timeoutMs: 180_000, maxTurns: 3, budget: { tokens: 1000 }, onLimit: 'end_turn' } });
+      expect(lease).not.toHaveProperty('expiresAt');
+    });
+
+    it.each([
+      ['a turn the driver ends, handed back', ENDS_TURN],
+      ['an on_limit: fail lease', KEEPS_TURN],
+    ])('times out %s with none of the step\'s timeout left', async (_lease, can) => {
+      const { answer, config, runId } = await handBack(can, ENDS_TURN, { minute: 6 });
+
+      expect(answer).toEqual({ data: { done: expect.objectContaining({ outcome: 'failed' }), cancelled: [] } });
+      expect(await readRun(config, runId)).toMatchObject({ steps: [
+        { id: 'work', status: 'failed', failure: { code: 'timeout', message: `Step "work" passed its timeout at ${at(5)}` } },
+      ] });
+    });
+
+    it('keeps the deadline of a lease an older teamai issued without recording when', async () => {
+      const { answer } = await handBack(KEEPS_TURN, KEEPS_TURN, { stored: (run) => {
+        for (const step of run.steps) if (step.status === 'leased') delete step.lease.leasedAt;
+      } });
+
+      expect(leaseOf(answer)).toMatchObject({ step: 'work', maxTurns: 3, expiresAt: at(5) });
     });
   });
 

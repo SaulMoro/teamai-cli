@@ -320,7 +320,7 @@ function answerWithoutHitl(config: LocalConfig, run: RunState, now: string, auto
 
 function leaseData(
   run: RunState, state: LeasedStep, definition: WorkflowStep, rendered: RenderedLease,
-  { requires, envScope, maxTurns, limits, setup }: Omit<Terms, 'unenforced'>, plan?: WorkspacePlan,
+  { requires, envScope, maxTurns, setup }: Omit<Terms, 'unenforced' | 'limits'>, plan?: WorkspacePlan,
 ): Record<string, unknown> {
   const expiresAt = leaseDeadline(run, state);
   return { lease: {
@@ -344,7 +344,7 @@ function leaseData(
     ...(Object.keys(requires).length > 0 ? { requires } : {}),
     ...(envScope ? { envScope } : {}),
     ...(maxTurns !== undefined ? { maxTurns } : {}),
-    ...(limits ? { limits } : {}),
+    ...(state.lease.limits ? { limits: state.lease.limits } : {}),
     ...(setup ? { setup } : {}),
     ...(state.lease.unenforced ? { unenforced: state.lease.unenforced } : {}),
     ...(expiresAt !== undefined ? { expiresAt } : {}),
@@ -1138,14 +1138,19 @@ function offerTerms(
 }
 
 /**
- * The turn limits granted in `terms`, and the deadline of a lease issued at `since`. A driver that cannot end the turn
- * gets the `on_limit: fail` lease, whose own timeout is its deadline.
+ * The turn limits granted in `terms`, and the deadline of a lease first issued at `since`. The step's own timeout counts
+ * from `since`, so a hand-back never extends it. A driver that cannot end the turn gets the `on_limit: fail` lease,
+ * whose own timeout is its deadline. One that can gets what is left of it at `now`; with none left, the lease takes the
+ * deadline it passed, so `expire` times it out.
  */
 function turnTerms(
-  run: RunState, state: StepState, definition: WorkflowStep, { limits }: Pick<Terms, 'limits'>, since: string,
+  run: RunState, state: StepState, definition: WorkflowStep, { limits }: Pick<Terms, 'limits'>, since: string, now: string,
 ): Pick<StepLease, 'expiresAt' | 'limits'> {
-  const expiresAt = ownDeadline(run, state, limits || definition.onLimit !== 'end_turn' ? definition : { ...definition, onLimit: 'fail' }, since);
-  return { ...(expiresAt !== undefined ? { expiresAt } : {}), ...(limits ? { limits } : {}) };
+  const own = ownDeadline(run, state, { ...definition, onLimit: 'fail' }, since);
+  if (!limits || definition.onLimit !== 'end_turn') return { ...(own !== undefined ? { expiresAt: own } : {}), ...(limits ? { limits } : {}) };
+  if (own === undefined) return { limits };
+  const left = Date.parse(own) - Date.parse(now);
+  return left > 0 ? { limits: { ...limits, timeoutMs: Math.min(limits.timeoutMs ?? left, left) } } : { expiresAt: own, limits };
 }
 
 /**
@@ -1433,7 +1438,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           const { unenforced } = terms.terms;
           const step = lease(state, offering({
             attempt: `a${randomBytes(4).toString('hex')}`, revision: run.revision, driver, leasedAt: now, ...(options.runMode ? { runMode: options.runMode } : {}),
-            ...(unenforced.length > 0 ? { unenforced } : {}), ...turnTerms(run, state, definition, terms.terms, now),
+            ...(unenforced.length > 0 ? { unenforced } : {}), ...turnTerms(run, state, definition, terms.terms, now, now),
           }, plan.session));
           rememberCopy(run, plan, driver);
           return answer(leaseData(run, step, definition, rendered, terms.terms, plan));
@@ -1471,12 +1476,14 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
         // issued before teamai recorded when keeps its deadline.
         const { limits: _held, expiresAt: heldUntil, ...held } = leased.lease;
         const since = held.leasedAt;
-        const turn = since ? turnTerms(run, leased, located.step, terms.terms, since) : {
+        const turn = since ? turnTerms(run, leased, located.step, terms.terms, since, now) : {
           ...(heldUntil !== undefined ? { expiresAt: heldUntil } : {}), ...(terms.terms.limits ? { limits: terms.terms.limits } : {}),
         };
         leased.lease = offering({
           ...held, ...(unenforced.length > 0 ? { unenforced } : {}), ...(options.runMode ? { runMode: options.runMode } : {}), ...turn,
         }, offered?.session);
+        // A turn with none of its timeout left times out as any lease past its deadline does.
+        if (turn.expiresAt !== undefined && Date.parse(turn.expiresAt) <= Date.parse(now)) continue;
         if (offered) rememberCopy(run, offered, driver);
         return answer(leaseData(run, leased, located.step, rendered, terms.terms, offered));
       }
