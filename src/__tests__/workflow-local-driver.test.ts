@@ -2239,6 +2239,30 @@ steps:
     expect(fs.existsSync(driverLockPath(config, absent))).toBe(false);
   });
 
+  it('launches a prompt with permissions: unattended in its tool\'s unattended mode, and any other prompt without it', async () => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Fix it in a sandbox.
+defaults: { requires: { isolation: sandbox, strict: true } }
+steps:
+  - id: fix
+    prompt: Fix it.
+    permissions: unattended
+  - id: explain
+    needs: [fix]
+    prompt: Explain it.
+`);
+    config.workflows = { tools: { default: 'claude' }, sandbox: true };
+    const inputs: LocalToolRun[] = [];
+    const ran = vi.fn(async (_tool: string, input: LocalToolRun) => {
+      inputs.push(input);
+      return { started: true as const, exitCode: 0 };
+    });
+
+    expect(await runLocalDriver(config, runId, workspace, { hitl: false, adapter: { run: ran, runInteractive: ran } })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(inputs.map((input) => [input.prompt, input.unattended])).toEqual([['Fix it.', true], ['Explain it.', undefined]]);
+  });
+
   it.each([
     [false, [{ requirement: 'network', asked: false }, { requirement: 'isolation', asked: 'sandbox', provided: 'none' }]],
     [true, [{ requirement: 'network', asked: false }]],

@@ -440,6 +440,7 @@ async function promptReport(
       ...(capsTurns ? { maxTurns: lease.maxTurns } : endsAtTurns !== undefined ? { maxTurns: endsAtTurns } : {}),
       ...(budget !== undefined ? { budget } : {}),
       ...(limits?.timeoutMs !== undefined ? { timeoutMs: limits.timeoutMs } : {}),
+      ...(lease.permissions === 'unattended' ? { unattended: true as const } : {}),
     },
     signal,
     unfinished: `${selected} could not complete the workflow step`,

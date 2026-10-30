@@ -169,6 +169,34 @@ describe('local tool adapter', () => {
     expect(result).toMatchObject({ output: { ok: true }, model: 'gemini-3.8-flash-high', session: 'conv-2', tokens: { input: 15000, output: 40, cachedInput: 9000 } });
   });
 
+  // Each flag as the tool's own --help or docs name its mode for editing and running commands without asking.
+  it.each([
+    ['claude', ['--permission-mode', 'bypassPermissions']],
+    ['claude-internal', ['--permission-mode', 'bypassPermissions']],
+    ['codebuddy', ['--permission-mode', 'bypassPermissions']],
+    ['workbuddy', ['--permission-mode', 'bypassPermissions']],
+    ['codex', ['--dangerously-bypass-approvals-and-sandbox']],
+    ['opencode', ['--auto']],
+    ['agy', ['--dangerously-skip-permissions']],
+  ] as const)('launches %s unattended with %j, headless and interactive, and never without asking for it', async (tool, flags) => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-unattended-${tool}-${Date.now()}.json`);
+    files.push(resultPath);
+    const spawnTool = vi.fn(() => child('')) as unknown as ToolSpawn;
+    const adapter = createLocalToolAdapter(spawnTool, () => `/bin/${tool}`);
+    const input = { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, resume: 'session-1' };
+
+    await adapter.run(tool, { ...input, unattended: true });
+    await adapter.runInteractive(tool, { ...input, unattended: true });
+    await adapter.run(tool, input);
+
+    const [headless, interactive, asked] = vi.mocked(spawnTool).mock.calls.map((call) => call[1]);
+    for (const args of [headless, interactive]) {
+      const at = args?.indexOf(flags[0]) ?? -1;
+      expect(args?.slice(at, at + flags.length)).toEqual([...flags]);
+    }
+    expect(asked).not.toContain(flags[0]);
+  });
+
   it('passes maxTurns to headless Claude as --max-turns', async () => {
     const resultPath = path.join(os.tmpdir(), `teamai-workflow-turns-${Date.now()}.json`);
     files.push(resultPath);

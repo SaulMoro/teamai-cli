@@ -10,7 +10,8 @@ import { writeJsonAtomic } from '../../../utils/fs.js';
 import { log } from '../../../utils/logger.js';
 import { stopProcess } from '../../../tool-launch/process-stop.js';
 import { tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '../../../tool-launch/stdout.js';
-import { executableOf, launchAdapterIdOf, opencodeModelArgs, type LaunchTool } from '../../../tool-launch/tools.js';
+import type { LaunchAdapter } from '../../../tool-launch/adapters.js';
+import { executableOf, launchAdapterIdOf, launchAdapterOf, opencodeModelArgs, type LaunchTool } from '../../../tool-launch/tools.js';
 import { budgeted } from '../../limits.js';
 import type { Limit } from '../../requirements.js';
 import { MAX_TIMER_DELAY } from '../../shell-command.js';
@@ -38,6 +39,8 @@ export interface LocalToolRun {
   budget?: number;
   /** How long the tool may run from its spawn before it is stopped. */
   timeoutMs?: number;
+  /** Launch the tool in its own mode for editing and running commands without asking (`permissions: unattended`). */
+  unattended?: true;
 }
 
 /**
@@ -87,8 +90,17 @@ function promptHandoff(tool: LaunchTool, input: LocalToolRun, opencodeMajor: num
   return family === 'codex' || (family === 'opencode' && opencodeMajor < 2 && input.agent?.settings?.['mode'] === 'subagent');
 }
 
+/** The arguments that launch `tool` unattended, or `'none'` when teamai knows no such mode of it. */
+function unattendedArgs(tool: LaunchTool): readonly string[] | 'none' {
+  const adapter: LaunchAdapter = launchAdapterOf(tool);
+  const unattended = adapter.step?.unattended ?? 'none';
+  return unattended === 'none' ? 'none' : unattended.args;
+}
+
 function invocation(tool: LaunchTool, input: LocalToolRun, opencodeMajor: number, interactive: boolean): string[] {
   const family = launchAdapterIdOf(tool);
+  const modeArgs = input.unattended ? unattendedArgs(tool) : [];
+  const unattended = modeArgs === 'none' ? [] : modeArgs;
   const viaPrompt = promptHandoff(tool, input, opencodeMajor);
   const agentPrompt = input.agent?.instructions
     ? `${input.agent.instructions}\n\n${input.prompt}`
@@ -101,28 +113,28 @@ function invocation(tool: LaunchTool, input: LocalToolRun, opencodeMajor: number
   const turns = input.maxTurns !== undefined ? ['--max-turns', String(input.maxTurns)] : [];
   switch (family) {
     case 'claude':
-      if (interactive) return [...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume, prompt];
+      if (interactive) return [...unattended, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume, prompt];
       // Only partial messages state each message's final usage as it ends, which the budget meter counts.
-      return ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...(input.budget !== undefined ? ['--include-partial-messages'] : []), ...turns, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume];
+      return ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...(input.budget !== undefined ? ['--include-partial-messages'] : []), ...unattended, ...turns, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume];
     case 'codebuddy':
       // Claude's flags, with no --effort.
-      if (interactive) return [...agent, ...model, ...resume, prompt];
-      return ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...turns, ...agent, ...model, ...resume];
+      if (interactive) return [...unattended, ...agent, ...model, ...resume, prompt];
+      return ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...unattended, ...turns, ...agent, ...model, ...resume];
     case 'codex': {
-      if (interactive) return [...(input.resume ? ['resume', input.resume] : []), ...model, ...(effort ? ['-c', `model_reasoning_effort=${effort}`] : []), prompt];
+      if (interactive) return [...(input.resume ? ['resume', input.resume] : []), ...unattended, ...model, ...(effort ? ['-c', `model_reasoning_effort=${effort}`] : []), prompt];
       const codexModel = input.model?.name ?? input.agent?.model;
       const codexResume = input.resume ? ['resume', input.resume] : [];
-      return ['exec', ...codexResume, '--json', ...(codexModel ? ['--model', codexModel] : []), ...(effort ? ['-c', `model_reasoning_effort=${effort}`] : []), prompt];
+      return ['exec', ...codexResume, '--json', ...unattended, ...(codexModel ? ['--model', codexModel] : []), ...(effort ? ['-c', `model_reasoning_effort=${effort}`] : []), prompt];
     }
     case 'opencode':
-      if (interactive) return [...agent, ...model, '--prompt', prompt];
-      return ['run', '--format', 'json', prompt, ...agent, ...opencodeModelArgs(input.model, opencodeMajor)];
+      if (interactive) return [...unattended, ...agent, ...model, '--prompt', prompt];
+      return ['run', '--format', 'json', ...unattended, prompt, ...agent, ...opencodeModelArgs(input.model, opencodeMajor)];
     case 'agy': {
       const conversation = input.resume ? ['--conversation', input.resume] : [];
       const agyEffort = effort ? ['--effort', effort] : [];
-      if (interactive) return [...agent, ...model, ...agyEffort, ...conversation, '--prompt-interactive', prompt];
+      if (interactive) return [...unattended, ...agent, ...model, ...agyEffort, ...conversation, '--prompt-interactive', prompt];
       // `--print=` keeps the prompt attached: a bare `-p` takes its next argument as the prompt, even a flag.
-      return ['--output-format=stream-json', ...agent, ...model, ...agyEffort, ...conversation, `--print=${prompt}`];
+      return ['--output-format=stream-json', ...unattended, ...agent, ...model, ...agyEffort, ...conversation, `--print=${prompt}`];
     }
     default: {
       const unhandled: never = family;
@@ -193,6 +205,13 @@ export function createLocalToolAdapter(
           started: false,
           exitCode: 1,
           failure: { code: 'tool_unavailable', message: `The ${tool} executable is not available on PATH` },
+        };
+      }
+      if (input.unattended && unattendedArgs(tool) === 'none') {
+        return {
+          started: false,
+          exitCode: 1,
+          failure: { code: 'tool_unavailable', message: `The step sets permissions: unattended, and ${tool} has no unattended mode teamai knows. Run the step on a tool that has one, or remove permissions from the step.` },
         };
       }
       const opencode = launchAdapterIdOf(tool) === 'opencode';
