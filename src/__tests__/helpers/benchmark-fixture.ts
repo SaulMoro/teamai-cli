@@ -28,8 +28,8 @@ import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { z } from 'zod';
 import type { LocalConfig } from '../../types.js';
-import { compilePlan, freezePlan, runSourceHash } from '../../benchmark/plan.js';
-import { commitCheckFiles } from '../../benchmark/trial.js';
+import { compilePlan, freezePlan, runSourceHash, type BenchmarkPlan } from '../../benchmark/plan.js';
+import { commitCheckFiles, type CommittedSuite } from '../../benchmark/trial.js';
 import { commitCacheOf } from '../../workflow/place/place.js';
 import { parseSuite, type TeamChoice } from '../../benchmark/suite.js';
 import type { ArmTeam } from '../../benchmark/terms.js';
@@ -534,11 +534,11 @@ export function benchmarkRunConfig(root: string): LocalConfig {
 }
 
 /**
- * A run of the suite in `files`, made in process as startBenchmark makes it, at team commit RUN_TEAM and with RUN_START
- * for `{{startingCommit}}`, without the install startBenchmark reads the suite and the team revision from. An arm's model
- * is planned as written: no aliases resolve it.
+ * The plan of the suite in `files`, frozen in process as startBenchmark freezes it, at team commit RUN_TEAM and with
+ * RUN_START for `{{startingCommit}}`, without the install startBenchmark reads the suite and the team revision from. An
+ * arm's model is planned as written: no aliases resolve it.
  */
-export async function startBenchmarkRun(config: LocalConfig, files: BenchmarkSuiteFiles): Promise<WorkflowEnvelope> {
+export async function frozenBenchmark(config: LocalConfig, files: BenchmarkSuiteFiles): Promise<{ plan: BenchmarkPlan; committed: CommittedSuite } | WorkflowEnvelope> {
   const parsed = parseSuite({
     suite: { relativePath: `benchmarks/${files.name}/suite.yaml`, content: files.suite },
     tasks: Object.entries(files.tasks).map(([name, content]) => ({
@@ -553,7 +553,15 @@ export async function startBenchmarkRun(config: LocalConfig, files: BenchmarkSui
   const committed = await commitCheckFiles(commitCacheOf(config, suite.repo), suite);
   if (!committed.ok) return error('check_files_unwritable', committed.failed);
   const plan = freezePlan({ committed: committed.suite, baselineTeamRevision: RUN_TEAM, selection: { additionalRoles: [], projects: [], excludedSkills: [] }, arms: [first, ...rest], scorers: {} });
-  return createRun(config, { name: suite.name, sourceHash: runSourceHash(plan), teamRevision: RUN_TEAM, origin: { source: 'team' }, ...compilePlan(plan, committed.suite), benchmark: plan, secrets: {} });
+  return { plan, committed: committed.suite };
+}
+
+/** A run of the suite in `files`, made in process as startBenchmark makes it, from its plan as `frozenBenchmark` freezes it. */
+export async function startBenchmarkRun(config: LocalConfig, files: BenchmarkSuiteFiles): Promise<WorkflowEnvelope> {
+  const frozen = await frozenBenchmark(config, files);
+  if (!('plan' in frozen)) return frozen;
+  const { plan, committed } = frozen;
+  return createRun(config, { name: committed.suite.name, sourceHash: runSourceHash(plan), teamRevision: RUN_TEAM, origin: { source: 'team' }, ...compilePlan(plan, committed), benchmark: plan, secrets: {} });
 }
 
 const BaselineLeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string().startsWith('baselines.'), attempt: z.string(), revision: z.number() }) }) });
