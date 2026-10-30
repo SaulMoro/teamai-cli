@@ -21,6 +21,8 @@ export const LeaseWireSchema = LeaseIdSchema.extend({
   agent: z.string().optional(),
   /** The tool the prompt step names, which this driver listed in `can.tools`. */
   tool: z.string().optional(),
+  /** `unattended`: launch the prompt's tool in its mode for editing and running commands without asking (`can.unattended`). */
+  permissions: z.literal('unattended').optional(),
   /** The step's `model`: as written, which the driver resolves, or the exact model, which it passes to the tool as is. */
   model: z.union([z.string(), StepModelSchema]).optional(),
   /** The `defaults.model` in effect for a prompt step, as written. */

@@ -522,10 +522,11 @@ function rememberSecrets(seen: Record<string, string>, secrets: Record<string, s
 /**
  * What this driver declares on every `next`. Every key is set, so a new capability does not compile until it is decided.
  * It runs setup in each workspace it creates. `tools` are the tools it launches a step that names one on. It ends a
- * prompt's turn at the limits its lease carries.
+ * prompt's turn at the limits its lease carries. It runs an unattended prompt in its tool's unattended mode, and fails
+ * one whose tool has none.
  */
 function localCan({ strict, hitl, tools }: { strict: StrictCan; hitl: boolean; tools: string[] }): Required<DriverCan> {
-  return { hitl, workspace: [...WORKSPACE_MODES], ...strict, tokens: true, max_turns: true, setup: true, tools, end_turn: true };
+  return { hitl, workspace: [...WORKSPACE_MODES], ...strict, tokens: true, max_turns: true, setup: true, tools, end_turn: true, unattended: true };
 }
 
 type StrictCan = Required<Pick<DriverCan, 'network' | 'isolation' | 'env'>>;

@@ -342,6 +342,7 @@ function leaseData(
     ...(rendered.prompt !== undefined ? { prompt: rendered.prompt } : {}),
     ...(definition.agent !== undefined ? { agent: definition.agent } : {}),
     ...(definition.tool !== undefined ? { tool: definition.tool } : {}),
+    ...(definition.permissions !== undefined ? { permissions: definition.permissions } : {}),
     ...(definition.model !== undefined ? { model: definition.model } : {}),
     ...(rendered.defaultModel !== undefined ? { defaultModel: rendered.defaultModel } : {}),
     ...(definition.output ? { output: definition.output } : {}),
@@ -1110,6 +1111,7 @@ function offerTerms(
     ...(endTurn ? { endTurn } : {}),
     ...(plan?.contract && scope.setup ? { setup: scope.setup } : {}),
     ...(step.tool !== undefined ? { tool: step.tool } : {}),
+    unattended: step.permissions === 'unattended',
     clone: plan?.contract?.mode !== 'read-only' && plan?.contract?.clone !== undefined,
     prepare: context.prepare,
   }, context.can, context.allow, context.facts);
@@ -1150,6 +1152,12 @@ function strictlyUnmet(definition: WorkflowDefinition, workflows: Record<string,
 /** Why a step that names `tool` fails in a run whose only driver cannot launch it. */
 function toolUnavailable(step: string, tool: string): WorkflowFailure {
   return { code: 'tool_unavailable', message: `Step "${step}" runs on ${tool}, which the driver of this run cannot launch here. Install ${tool} where the run is driven, or remove tool from the step.` };
+}
+
+/** Why a step with `permissions: unattended` fails in a run whose only driver cannot run it unattended. */
+function unattendedUnavailable(step: string, tool: string | undefined): WorkflowFailure {
+  const on = tool === undefined ? '' : ` on ${tool}`;
+  return { code: 'tool_unavailable', message: `Step "${step}" sets permissions: unattended${on}, which the driver of this run cannot run unattended. Run it with a driver that declares can.unattended, or remove permissions from the step.` };
 }
 
 /** What a driver tells `next` besides who it is. */
@@ -1394,6 +1402,11 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           const terms = offerTerms(run, state.id, located, plan, context);
           if (terms.kind === 'hold' && options.alone && definition.tool !== undefined && terms.missing.includes('tools')) {
             failStep(state, toolUnavailable(state.id, definition.tool), run.revision);
+            settledOne = true;
+            break;
+          }
+          if (terms.kind === 'hold' && options.alone && terms.missing.includes('unattended')) {
+            failStep(state, unattendedUnavailable(state.id, definition.tool), run.revision);
             settledOne = true;
             break;
           }

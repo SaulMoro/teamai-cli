@@ -116,6 +116,8 @@ const ENFORCEMENT = {
   setup: 'strict',
   /** A prompt step that names its `tool`: `can.tools` lists it. */
   tools: 'strict',
+  /** A prompt step with `permissions: unattended`: the driver launches its tool in that tool's unattended mode. */
+  unattended: 'strict',
   /** A step in a clone is leased only through `next --prepare`, so teamai made its clone. Process-only. */
   prepare: 'strict',
 } as const satisfies Record<string, 'strict' | 'bestEffort'> & Record<keyof Floor | 'env', 'strict' | 'bestEffort'>;
@@ -141,6 +143,8 @@ type BestEffortKey = KeysOf<'bestEffort'>;
  * - `end_turn`: the driver holds a prompt leased with `limits` to them from its tool's launch, stops the tool at the
  *   first it reaches and reports it as `limit`, with `durationMs`. Without it, such a prompt gets the `on_limit: fail`
  *   lease, and its pass records `on_limit` as not enforced.
+ * - `unattended`: the driver launches a prompt leased with `permissions: 'unattended'` in its tool's own mode for
+ *   editing and running commands without asking, and fails the step rather than launch a tool that has none.
  */
 export const CanSchema = z.object({
   hitl: z.boolean().optional(),
@@ -153,6 +157,7 @@ export const CanSchema = z.object({
   setup: z.boolean().optional(),
   tools: z.array(z.string().min(1)).optional(),
   end_turn: z.boolean().optional(),
+  unattended: z.boolean().optional(),
 });
 export type DriverCan = z.infer<typeof CanSchema>;
 
@@ -327,6 +332,8 @@ export interface Offer {
   setup?: Setup;
   /** The tool a prompt step names. */
   tool?: string;
+  /** A prompt step with `permissions: unattended`. */
+  unattended: boolean;
   /** The lease runs in a clone, which only teamai prepares. */
   clone: boolean;
   /** The caller asked `next --prepare`. */
@@ -379,6 +386,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
   const provided = providedIsolation(can, offer.hasContract);
   const gaps: Missing[] = policy.length > 0 ? policy : [
     ...(offer.tool !== undefined && lacksTool(offer.tool, can) ? ['tools' as const] : []),
+    ...(offer.unattended && !can.unattended ? ['unattended' as const] : []),
     ...(floor.isolation !== undefined && rank(floor.isolation) > rank(provided) ? ['isolation' as const] : []),
     ...(floor.network === false && !can.network ? ['network' as const] : []),
     ...(offer.clone && !offer.prepare ? ['prepare' as const] : []),

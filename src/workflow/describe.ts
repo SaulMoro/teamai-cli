@@ -157,6 +157,7 @@ export function describeWorkflow(input: {
       interactive: step.interactive === true, hasContract, envKeys: Object.keys(step.env ?? {}), runEnvKeys, budgeted: step.prompt !== undefined && scope.budgeted,
       ...(step.maxTurns !== undefined ? { maxTurns: step.maxTurns } : {}), ...(hasContract && scope.setup ? { setup: scope.setup } : {}),
       ...(step.tool !== undefined ? { tool: step.tool } : {}),
+      unattended: step.permissions === 'unattended',
     }, can, allow, env);
     if (negotiation.kind === 'hold') facts.held.push({ step: path, missing: negotiation.missing, env: requires.env ?? [] });
     if (scope.copy === undefined || negotiation.kind === 'fail') return;
@@ -227,7 +228,7 @@ export function describeWorkflow(input: {
         const requires = mergeRequirements(scope.requires, step.requires);
         const negotiation = negotiate({
           step: path, executor: 'command', requires, prepare: true, clone: false,
-          interactive: false, hasContract: true, envKeys: [], runEnvKeys, budgeted: false,
+          interactive: false, hasContract: true, envKeys: [], runEnvKeys, budgeted: false, unattended: false,
         }, can, allow, env);
         if (negotiation.kind === 'hold') facts.held.push({ step: path, missing: negotiation.missing, env: requires.env ?? [] });
       }

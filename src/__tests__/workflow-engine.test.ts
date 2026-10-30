@@ -12,7 +12,7 @@ import { leaseNext, parseNextPayload, parseReport, reportAttempt, resumableSessi
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { getCurrentVersion } from '../package-info.js';
 import { outputMismatch } from '../workflow/output.js';
-import { CAN_KEYS } from '../workflow/requirements.js';
+import { CAN_KEYS, type DriverCan } from '../workflow/requirements.js';
 import { pendingRecords, type WorkflowRunRecord } from '../workflow/records.js';
 import { cancelRun, retryStep } from '../workflow/run-controls.js';
 import { getTeamSecretsPath, writeSecretStore } from '../secret-store.js';
@@ -4524,6 +4524,45 @@ describe('the tool a prompt step names', () => {
     expect(lint).toMatchObject({ data: { lease: { step: 'lint' } } });
     expect(await readRun(config, runId)).toMatchObject({ steps: [
       { id: 'review', status: 'failed', failure: { code: 'tool_unavailable', message: 'Step "review" runs on codex, which the driver of this run cannot launch here. Install codex where the run is driven, or remove tool from the step.' } },
+      { id: 'lint', status: 'leased' },
+    ] });
+  });
+});
+
+describe('a prompt step with permissions: unattended', () => {
+  const FIX_AND_LINT = graph(`  - id: fix
+    prompt: Fix it.
+    tool: claude
+    permissions: unattended
+    requires: { isolation: sandbox, strict: true }
+  - id: lint
+    needs: []
+    command: node lint.js
+`);
+  const sandbox: DriverCan = { isolation: 'sandbox', env: true, tools: ['claude'] };
+
+  it('leases it only to a driver with can.unattended, and the lease says so', async () => {
+    const { config, runId } = await startBuild(FIX_AND_LINT);
+
+    const lint = await leaseNext(config, runId, driverA, { can: sandbox });
+    const held = await leaseNext(config, runId, driverA, { can: sandbox, running: [leaseIn(lint).attempt] });
+    await reportAttempt(config, runId, { ...leaseIn(lint), outcome: 'success', driver: driverA });
+    const fix = await leaseNext(config, runId, driverB, { can: { ...sandbox, unattended: true } });
+
+    expect(lint).toMatchObject({ data: { lease: { step: 'lint' } } });
+    expect(lint).not.toHaveProperty('data.lease.permissions');
+    expect(held).toMatchObject({ data: { wait: { held: [{ step: 'fix', missing: ['unattended'] }] } } });
+    expect(fix).toMatchObject({ data: { lease: { step: 'fix', tool: 'claude', permissions: 'unattended' } } });
+  });
+
+  it('fails it tool_unavailable in a run whose only driver cannot run it unattended, and runs the other steps', async () => {
+    const { config, runId } = await startBuild(FIX_AND_LINT);
+
+    const lint = await leaseNext(config, runId, driverA, { can: sandbox, alone: true });
+
+    expect(lint).toMatchObject({ data: { lease: { step: 'lint' } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'fix', status: 'failed', failure: { code: 'tool_unavailable', message: 'Step "fix" sets permissions: unattended on claude, which the driver of this run cannot run unattended. Run it with a driver that declares can.unattended, or remove permissions from the step.' } },
       { id: 'lint', status: 'leased' },
     ] });
   });
