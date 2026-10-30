@@ -734,6 +734,9 @@ An omitted key means the driver cannot. Isolation is best effort, unless `strict
 A tool started headless asks before it edits a file or runs a command, and with no one there to answer, the step does nothing. `permissions: unattended` lets the prompt's tool go ahead, so give it only where the machine is one you can throw away:
 
 ```yaml
+schemaVersion: v1alpha1
+name: unattended-fix
+description: Fix a failing test on a disposable machine.
 steps:
   - id: work
     prompt: Fix the failing test.

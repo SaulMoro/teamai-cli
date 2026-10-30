@@ -734,6 +734,9 @@ workflows:
 以无头方式启动的工具在编辑文件或运行命令前会先询问，没有人回答时，步骤什么也做不了。`permissions: unattended` 让 prompt 的工具直接执行，所以只在可以丢弃的机器上使用：
 
 ```yaml
+schemaVersion: v1alpha1
+name: unattended-fix
+description: Fix a failing test on a disposable machine.
 steps:
   - id: work
     prompt: Fix the failing test.
