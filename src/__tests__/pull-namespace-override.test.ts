@@ -150,7 +150,17 @@ describe('pull: an active namespace item replaces the root item of the same name
   afterEach(async () => {
     vi.unstubAllEnvs();
     await fse.remove(tmpDir);
+    vi.mocked(loadStateForScope).mockReset().mockResolvedValue({ lastPull: null } as never);
+    vi.mocked(saveStateForScope).mockReset();
   });
+
+  /** Keep the state each pull saves, so the next one reads what teamai recorded delivering (#822). Returns the files on that record. */
+  const keepState = (): (() => Promise<string[]>) => {
+    let state = StateSchema.parse({ lastPull: null });
+    vi.mocked(loadStateForScope).mockImplementation(async () => state);
+    vi.mocked(saveStateForScope).mockImplementation(async (next) => { state = next; });
+    return async () => Object.keys(state.lastPullByWorkspace?.[await checkoutKey(homeDir)]?.delivered ?? {});
+  };
 
   describe('agents', () => {
     it('delivers the namespace agent in place of the root one, and the root one again once it deactivates', async () => {
@@ -165,6 +175,22 @@ describe('pull: an active namespace item replaces the root item of the same name
       as(['devops']);
       await pull({});
       expect(await read('.claude/agents/reviewer.md')).toContain('Review for everyone.');
+    });
+
+    it('forgets the copy of a namespace agent in the delivery record once it removes it on deactivation', async () => {
+      await team('agents/frontend/vr-reviewer.yaml', 'name: vr-reviewer\ndescription: Front\ninstructions: Compare screenshots.\n');
+      commitTeamRepo(repoPath);
+      const recorded = keepState();
+      const copy = path.join(homeDir, '.claude/agents/vr-reviewer.md');
+
+      await pull({});
+      expect(await recorded()).toContain(copy);
+
+      as(['devops']);
+      await pull({ force: true });
+
+      expect(await exists('.claude/agents/vr-reviewer.md')).toBe(false);
+      expect(await recorded()).not.toContain(copy);
     });
 
     it('stops only agents when two active namespaces define one stem', async () => {
@@ -422,19 +448,6 @@ describe('pull: an active namespace item replaces the root item of the same name
       await team('skills/frontend/review/front-only.md', 'front-only notes\n');
       await team('skills/lonely/SKILL.md', skillMd('lonely', 'Untagged root skill'));
     });
-
-    afterEach(() => {
-      vi.mocked(loadStateForScope).mockReset().mockResolvedValue({ lastPull: null } as never);
-      vi.mocked(saveStateForScope).mockReset();
-    });
-
-    /** Keep the state each pull saves, so the next one reads what teamai recorded delivering (#822). Returns the files on that record. */
-    const keepState = (): (() => Promise<string[]>) => {
-      let state = StateSchema.parse({ lastPull: null });
-      vi.mocked(loadStateForScope).mockImplementation(async () => state);
-      vi.mocked(saveStateForScope).mockImplementation(async (next) => { state = next; });
-      return async () => Object.keys(state.lastPullByWorkspace?.[await checkoutKey(homeDir)]?.delivered ?? {});
-    };
 
     it('replaces a root skill received through a tag with the active namespace skill, whole', async () => {
       // The member's own file below is told apart by the record; without one, it would make the directory theirs (#993).

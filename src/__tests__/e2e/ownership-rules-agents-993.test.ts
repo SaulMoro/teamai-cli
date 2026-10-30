@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..', '..', '..');
@@ -148,12 +149,26 @@ function giveGitNewInode(dir: string): void {
   fs.rmSync(path.join(dir, '.git.old'), { recursive: true, force: true });
 }
 
-/** Drop the checkout record of `file`, as for a copy an older CLI wrote: only the team history can prove it teamai's. */
-function forgetRecord(file: string): void {
+/** Every state.json under HOME's .teamai. */
+function stateFiles(): string[] {
   const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true }).flatMap((e) =>
     e.isDirectory() ? walk(path.join(d, e.name)) : e.name === 'state.json' ? [path.join(d, e.name)] : []);
+  return walk(path.join(home, '.teamai'));
+}
+
+/** The checkout records of a state.json: the files each says teamai delivered. */
+const RecordsSchema = z.object({ lastPullByWorkspace: z.record(z.object({ delivered: z.record(z.string()).optional() })).optional() });
+
+/** Each file a checkout record under HOME says teamai delivered. */
+function recorded(): string[] {
+  return stateFiles().flatMap((file) => Object.values(RecordsSchema.parse(JSON.parse(read(file))).lastPullByWorkspace ?? {})
+    .flatMap((record) => Object.keys(record.delivered ?? {})));
+}
+
+/** Drop the checkout record of `file`, as for a copy an older CLI wrote: only the team history can prove it teamai's. */
+function forgetRecord(file: string): void {
   let found = false;
-  for (const stateFile of walk(path.join(home, '.teamai'))) {
+  for (const stateFile of stateFiles()) {
     const state = JSON.parse(read(stateFile)) as { lastPullByWorkspace?: Record<string, { delivered?: Record<string, string> }> };
     for (const record of Object.values(state.lastPullByWorkspace ?? {})) {
       if (record.delivered?.[file] === undefined) continue;
@@ -236,6 +251,24 @@ describe('ownership of unrecorded rule and agent files (#993 bugs 2 and 12)', ()
       `Kept ${feRule}: teamai no longer delivers frontend/fe-rule here, but you changed this copy. Delete it when you no longer need it.`,
     );
     expect(read(beRule)).toBe(BE_RULE);
+  });
+
+  it('removes the agent of a namespace the member\'s role stops receiving, and takes it off the delivery record', () => {
+    const t = team('revoked-agent', {
+      'manifest/roles.yaml': 'version: 1\nroles:\n  - id: frontend\n    resources:\n      knowledge: []\n      skills: []\n      agents: [frontend]\n  - id: backend\n    resources:\n      knowledge: []\n      skills: []\n      agents: [backend]\n',
+      'agents/frontend/fe-agent.yaml': agentYaml('fe-agent', 'Review the front end.'),
+    });
+    const dir = business('revoked-agent-biz');
+    init(t, dir, '--role', 'frontend');
+    const agent = path.join(dir, '.claude', 'agents', 'fe-agent.md');
+    expect(read(agent)).toContain('Review the front end.');
+    expect(recorded()).toContain(agent);
+
+    teamaiOk(['roles', 'set', 'backend'], dir);
+    const pulled = teamaiOk(['pull'], dir);
+
+    expect(fs.existsSync(agent), pulled.output).toBe(false);
+    expect(recorded()).not.toContain(agent);
   });
 
   it('keeps a member\'s own rule and agent at a team resource\'s path, names them, and doctor lists them', () => {

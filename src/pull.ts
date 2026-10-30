@@ -2300,6 +2300,7 @@ async function pullForScope(
         freshConfig,
         localConfig,
         roleContext.activeNamespaces.agents,
+        ledger,
       );
     }
   }

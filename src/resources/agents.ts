@@ -1045,6 +1045,7 @@ export class AgentsHandler extends ResourceHandler {
     teamConfig: TeamaiConfig,
     localConfig: LocalConfig,
     activeNamespaces: string[],
+    ledger?: DeliveryLedger,
   ): Promise<void> {
     const items = await this.scanTeamForPull(teamConfig, localConfig);
     // The same selection `pull` delivers with, records and overrides included:
@@ -1099,6 +1100,7 @@ export class AgentsHandler extends ResourceHandler {
         }
         if (await keepsTrackedCopy(deployed)) continue;
         await remove(deployed);
+        if (ledger) forgetDelivered(ledger.hashes, deployed);
         log.debug(`[${installScopeName(localConfig.scope)}] Removed inactive role-scoped agent ${item.name} from ${tool}`);
       }
     }
