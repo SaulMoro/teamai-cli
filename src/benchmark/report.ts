@@ -13,13 +13,14 @@ import { runsDir } from '../workflow/store.js';
 import type { RunState, WorkflowFailure } from '../workflow/types.js';
 import { runComparisons, type ArmComparison } from './history.js';
 import { benchmarkRecord, benchmarkRecordFile, type BenchmarkRunRecord } from './result.js';
-import { planOfRun, type RunPlan } from './run-plan.js';
+import { planOfRun, trialsUnattended, type RunPlan } from './run-plan.js';
 import { benchmarkTable, formatBenchmarkTable, type BenchmarkTable } from './table.js';
 import { toolUnavailableNotice } from './trial.js';
 
 /**
- * What `report` prints: the results as text, after a line for each arm whose tool the run's driver could not launch, and
- * ending with `record: pending` while the record waits; and as a table.
+ * What `report` prints: the results as text, after a line when the trials ran with their tools' own permission settings
+ * and a line for each arm whose tool the run's driver could not launch, and ending with `record: pending` while the
+ * record waits; and as a table.
  */
 export interface BenchmarkReport {
   text: string;
@@ -58,7 +59,8 @@ export async function reportBenchmark(env: NodeJS.ProcessEnv, secrets: Record<st
   const queued = await queueBenchmarkRecord(config, record, secrets);
   const pending = queued && (await publishPendingRecords(config, { run: run.id }).catch(() => ({ state: 'pending' as const }))).state === 'pending';
   const table = benchmarkTable({ benchmark: record });
-  const text = [...unlaunchedArms(run, planned.found), formatBenchmarkTable(table)].join('\n\n');
+  const asked = trialsUnattended(run, planned.found.producer) ? [] : [ASKED_NOTICE];
+  const text = [...asked, ...unlaunchedArms(run, planned.found), formatBenchmarkTable(table)].join('\n\n');
   return {
     report: {
       text: pending ? `${text}\n\nrecord: pending` : text,
@@ -66,6 +68,8 @@ export async function reportBenchmark(env: NodeJS.ProcessEnv, secrets: Record<st
     },
   };
 }
+
+const ASKED_NOTICE = 'Each trial ran with its tool\'s own permission settings, since the step that runs the plan is not a strict sandbox: a tool that may not edit failed its trials. To run them with permissions: unattended, keep requires: { isolation: sandbox, strict: true } on that step.';
 
 /** A line for each arm with a prompt that failed `tool_unavailable` before any lease: the driver could not launch its tool. */
 function unlaunchedArms(run: RunState, { plan, prefix }: RunPlan): string[] {

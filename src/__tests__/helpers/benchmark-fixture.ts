@@ -60,13 +60,16 @@ export const PRODUCT_URL = 'https://github.com/fixture/app.git';
  * `fixes-and-runs-out-of-turns` makes the check
  * pass, then, when launched with --max-turns, ends as Claude does at that cap: an `error_max_turns` result and exit 1.
  * `fixes-slowly` makes the check pass and exits after three seconds.
+ * `fixes-when-unattended` makes the check pass only when launched in its tool's unattended mode, as Claude
+ * (`--permission-mode bypassPermissions`) or Codex (`--dangerously-bypass-approvals-and-sandbox`); otherwise it is
+ * refused the edit, as a real tool on a machine whose settings grant none, and exits 0 having changed nothing.
  * `fixes-and-spends` makes the check pass and bills 140 tokens: as claude, in two messages streamed as Claude streams
  * them with partial messages, and then works on with no result; as codex, in the one turn.completed Codex prints as it
  * ends.
  */
 export type FakeTool = 'fixes' | 'does-nothing' | 'fails-first' | 'skips-the-check' | 'adds-a-helper' | 'adds-a-helper-repository' | 'writes-a-passing-test' | 'hangs'
   | 'fixes-and-hangs' | 'corrupts-git-and-hangs' | 'fixes-behind-a-hanging-filter' | 'fixes-behind-a-hanging-smudge' | 'fixes-and-runs-out-of-turns'
-  | 'fixes-and-spends' | 'fixes-slowly';
+  | 'fixes-and-spends' | 'fixes-slowly' | 'fixes-when-unattended';
 
 /**
  * What a fake tool does on the fixture's first launch of any fake tool, before it answers: push a team commit of
@@ -232,6 +235,10 @@ const FIX = "fs.writeFileSync('answer.js', 'module.exports = 42;\\n');";
 const FAKE_TOOLS: Record<FakeTool, string> = {
   fixes: FIX,
   'fixes-slowly': `${FIX} Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 3000);`,
+  'fixes-when-unattended': `const mode = path.basename(process.argv[1]) === 'claude' ? ['--permission-mode', 'bypassPermissions'] : ['--dangerously-bypass-approvals-and-sandbox'];
+const at = process.argv.indexOf(mode[0]);
+if (at !== -1 && mode.every((flag, index) => process.argv[at + index] === flag)) { ${FIX} }
+else process.stderr.write('Permission to write answer.js was not granted.\\n');`,
   'does-nothing': '',
   hangs: 'setInterval(() => {}, 60_000);',
   'fixes-and-hangs': `${FIX} const ref = fs.readFileSync('.git/HEAD', 'utf8').match(/^ref: (.+)$/m);
@@ -634,14 +641,15 @@ const PLANNER: DriverIdentity = { kind: 'local', machine: 'planner', workspace: 
 /**
  * A run of `body`, the planned benchmark workflow by default, bounded by the suite's timeout, made in process: each
  * command step a driver that opens no clone can take printed the bundle `compileBundle` makes of the suite in `files`,
+ * its prompts `unattended` when asked,
  * frozen as `frozenBenchmark` freezes it, with its plan, or what `outputsOf` makes of them. The trials wait for a driver.
  */
-export async function startBenchmarkRun(config: LocalConfig, files: BenchmarkSuiteFiles, { body = PLANNED_BENCHMARK, outputsOf }: {
-  body?: string; outputsOf?: (bundle: ReturnType<typeof compileBundle>, plan: BenchmarkPlan) => unknown;
+export async function startBenchmarkRun(config: LocalConfig, files: BenchmarkSuiteFiles, { body = PLANNED_BENCHMARK, outputsOf, unattended = false }: {
+  body?: string; outputsOf?: (bundle: ReturnType<typeof compileBundle>, plan: BenchmarkPlan) => unknown; unattended?: boolean;
 } = {}): Promise<WorkflowEnvelope> {
   const frozen = await frozenBenchmark(config, files);
   if (!('plan' in frozen)) return frozen;
-  const bundle = compileBundle(frozen.plan, frozen.committed);
+  const bundle = compileBundle(frozen.plan, frozen.committed, { unattended });
   fs.mkdirSync(path.join(config.repo.localPath, 'workflows'), { recursive: true });
   fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'planned.yaml'), body);
   await syncWorkflowDefinitions(config);

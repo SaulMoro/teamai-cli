@@ -3,6 +3,7 @@
  * the workflow a `from` step runs, admitted and frozen with the run, whose steps sit under that `from` step.
  */
 import { z } from 'zod';
+import { fromRequirements } from '../workflow/engine.js';
 import { stepDefinitions } from '../workflow/scope.js';
 import { stepWorkflow, type RunState, type WorkflowFailure } from '../workflow/types.js';
 import { BENCHMARK_PLAN_SCHEMA_VERSION, BenchmarkPlanSchema, type BenchmarkPlan } from './plan.js';
@@ -11,6 +12,17 @@ export interface RunPlan {
   plan: BenchmarkPlan;
   /** The path of the workflow that runs the plan's steps, with a trailing `.`. */
   prefix: string;
+  /** The path of the step that printed the plan. */
+  producer: string;
+}
+
+/**
+ * Whether the trials of the plan step `producer` prints run their prompts `permissions: unattended`: every step that runs
+ * the plan is a strict sandbox. Otherwise each trial runs with its tool's own permission settings.
+ */
+export function trialsUnattended(run: RunState, producer: string): boolean {
+  const runners = fromRequirements(run, producer);
+  return runners.length > 0 && runners.every((requires) => requires.floor?.isolation === 'sandbox');
 }
 
 const VersionedSchema = z.object({ schemaVersion: z.unknown() }).passthrough();
@@ -44,5 +56,5 @@ export function planOfRun(run: RunState, under?: string): { found: RunPlan } | {
   if (!plan.success) {
     return { failure: { code: 'run_unreadable', message: `Step "${only.producer}" of run ${run.id} printed a benchmark plan this teamai cannot read: ${plan.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`).join('; ')}. Update teamai, or start the benchmark again.` } };
   }
-  return { found: { plan: plan.data, prefix: `${only.step}.` } };
+  return { found: { plan: plan.data, prefix: `${only.step}.`, producer: only.producer } };
 }

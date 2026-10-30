@@ -47,8 +47,8 @@ describe('the workflow a benchmark plan prints', () => {
     const { run, plan } = await plannedRun(suiteOf({ tasks: 2, arms: 2, repetitions: 2 }));
 
     expect(run.steps.find((step) => step.id === 'plan')).toMatchObject({ status: 'succeeded' });
-    expect(planOfRun(run, 'trials.r2.t02.a01.prompt')).toEqual({ found: { plan, prefix: 'trials.' } });
-    expect(planOfRun(run)).toEqual({ found: { plan, prefix: 'trials.' } });
+    expect(planOfRun(run, 'trials.r2.t02.a01.prompt')).toEqual({ found: { plan, prefix: 'trials.', producer: 'plan' } });
+    expect(planOfRun(run)).toEqual({ found: { plan, prefix: 'trials.', producer: 'plan' } });
     expect(plan.trials.map((trial) => trial.step)).toContain('r2.t02.a02.prompt');
     for (const step of ['trials.baselines.t01', 'trials.baselines.t02', 'trials.r2.t02.a02.prompt', 'trials.r2.t02.a02.check', 'trials.settled']) {
       expect(stepDefinitions(run)(step), step).toBeDefined();
@@ -65,6 +65,15 @@ describe('the workflow a benchmark plan prints', () => {
     expect(stepDefinitions(run)('trials.r1.t01.a02.prompt')).toMatchObject({
       tool: 'claude', model: { name: 'm2' }, timeout: 300_000, maxTurns: 3, budget: { tokens: 1000 }, onLimit: 'end_turn',
     });
+  });
+
+  it('runs each trial prompt unattended when the plan says the step that runs it is a strict sandbox, and else as written', async () => {
+    const { run } = await plannedRun(suiteOf({ arms: 2 }), { unattended: true });
+    const { run: asWritten } = await plannedRun(suiteOf({ arms: 2 }));
+
+    for (const step of ['trials.r1.t01.a01.prompt', 'trials.r1.t01.a02.prompt']) expect(stepDefinitions(run)(step)?.permissions, step).toBe('unattended');
+    expect(stepDefinitions(run)('trials.r1.t01.a01.check')).not.toHaveProperty('permissions');
+    expect(stepDefinitions(asWritten)('trials.r1.t01.a01.prompt')).not.toHaveProperty('permissions');
   });
 
   it('runs a suite of criteria tasks with no baselines, each prompt scored by its task\'s correctness scorer', async () => {

@@ -67,9 +67,22 @@ describe('pinArmWorkflow', () => {
   it('finds an arm workflow and its sub-workflow in a namespace the member receives', async () => {
     const { config, revision } = teamAt(['ops'], { 'workflows/ops/fixer.yaml': FIXER, 'workflows/ops/fix-once.yaml': FIX_ONCE });
 
-    const pinned = await pinArmWorkflow(config, { arm: ARM, name: 'fixer', revision });
+    const pinned = await pinArmWorkflow(config, { arm: ARM, name: 'fixer', revision, unattended: false });
 
     expect(pinned.ok && Object.keys(pinned.pinned.files).map((key) => key.replace(/\.[0-9a-f]{12}$/, '')).sort()).toEqual(['fix-once', 'fixer']);
+  });
+
+  it('copies the prompts of an arm workflow and its sub-workflow unattended only when the trials may run unattended', async () => {
+    const files = { 'workflows/ops/fixer.yaml': FIXER, 'workflows/ops/fix-once.yaml': FIX_ONCE.replace('prompt: Fix it.', 'prompt: Fix it.\n    permissions: unattended') };
+    const prompts = async (unattended: boolean): Promise<unknown[]> => {
+      const { config, revision } = teamAt(['ops'], files);
+      const pinned = await pinArmWorkflow(config, { arm: ARM, name: 'fixer', revision, unattended });
+      if (!pinned.ok) throw new Error(pinned.message);
+      return Object.entries(pinned.pinned.files).filter(([key]) => key.startsWith('fix-once.')).flatMap(([, file]) => (Array.isArray(file.steps) ? file.steps : []));
+    };
+
+    expect(await prompts(true)).toEqual([{ id: 'fix', prompt: 'Fix it.', tool: 'claude', permissions: 'unattended' }]);
+    expect(await prompts(false)).toEqual([{ id: 'fix', prompt: 'Fix it.', tool: 'claude' }]);
   });
 
   it('refuses an arm workflow that two namespaces the member receives define', async () => {
@@ -77,7 +90,7 @@ describe('pinArmWorkflow', () => {
       'workflows/ops/fixer.yaml': FIXER, 'workflows/devops/fixer.yaml': FIXER, 'workflows/fix-once.yaml': FIX_ONCE,
     });
 
-    const pinned = await pinArmWorkflow(config, { arm: ARM, name: 'fixer', revision });
+    const pinned = await pinArmWorkflow(config, { arm: ARM, name: 'fixer', revision, unattended: false });
 
     expect(pinned).toMatchObject({ ok: false, code: 'workflow_namespace_conflict', message: expect.stringMatching(/^Arm "flow" runs workflow "fixer", which /) });
     expect(!pinned.ok && pinned.message).toContain('workflows/ops/fixer.yaml');
@@ -89,7 +102,7 @@ describe('pinArmWorkflow', () => {
       'workflows/fixer.yaml': FIXER, 'workflows/ops/fix-once.yaml': FIX_ONCE, 'workflows/devops/fix-once.yaml': FIX_ONCE,
     });
 
-    const pinned = await pinArmWorkflow(config, { arm: ARM, name: 'fixer', revision });
+    const pinned = await pinArmWorkflow(config, { arm: ARM, name: 'fixer', revision, unattended: false });
 
     expect(pinned).toMatchObject({ ok: false, code: 'workflow_namespace_conflict', message: expect.stringMatching(/^Arm "flow" runs workflow "fixer", which runs workflow "fix-once", which /) });
     expect(!pinned.ok && pinned.message).toContain('workflows/devops/fix-once.yaml');

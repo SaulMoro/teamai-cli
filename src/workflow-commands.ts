@@ -911,7 +911,8 @@ export async function benchmarkRun(suite: string, options: { driver?: string; sa
   }
   const { config, secrets } = loaded;
   const memberAliases = options.memberAliases === true;
-  const preflight = await planBenchmark(config, suite, { checkout: process.cwd(), memberAliases });
+  // The plan step decides unattended trials from the step that runs its plan; refusals do not depend on it.
+  const preflight = await planBenchmark(config, suite, { checkout: process.cwd(), memberAliases, unattended: false });
   if ('refused' in preflight) {
     writeEnvelope(preflight.refused, secrets);
     return;

@@ -37,6 +37,18 @@ describe('teamai benchmark run', () => {
     expect(fixture.reportedBenchmark(done.run)).toEqual(fixture.benchmarkRecord(done.run));
   }, 180_000);
 
+  it('runs each trial prompt in its tool\'s unattended mode, so a tool the machine grants no edits still fixes the task', async () => {
+    const fixture = await benchmarkFixture({ tool: 'fixes-when-unattended', sandbox: true });
+    fixtures.push(fixture);
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+    const done = DoneSchema.parse(envelope(ran).data?.done);
+
+    expect(ran.code, said(ran)).toBe(0);
+    expect(done.outputs.text).toContain('100% (1/1)');
+    expect(done.outputs.text).not.toContain('own permission settings');
+  }, 180_000);
+
   it('shows record: pending when teamai-reports refuses the record, and exits 0', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true });
     fixtures.push(fixture);
@@ -105,6 +117,21 @@ describe('a team benchmark workflow', () => {
     expect(ran.stderr).toContain('Running the team\'s workflows/benchmark.yaml, which replaces teamai\'s benchmark workflow.');
     expect(done.outputs.text).toContain('100% (1/1)');
     expect(fixture.benchmarkRecord(done.run)).toMatchObject({ workflow: { name: 'benchmark', origin: { source: 'team' } } });
+  }, 180_000);
+
+  it('runs its trials with the tool\'s own permission settings when it drops the strict sandbox, and says so', async () => {
+    const fixture = await benchmarkFixture({ tool: 'fixes-when-unattended', sandbox: true });
+    fixtures.push(fixture);
+    fixture.pushTeam({ 'workflows/benchmark.yaml': RELAXED });
+    const pulled = await fixture.teamai(['pull']);
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+    const done = DoneSchema.parse(envelope(ran).data?.done);
+
+    expect(pulled.code, said(pulled)).toBe(0);
+    expect(ran.code, said(ran)).toBe(0);
+    expect(done.outputs.text.startsWith('Each trial ran with its tool\'s own permission settings, since the step that runs the plan is not a strict sandbox: a tool that may not edit failed its trials. To run them with permissions: unattended, keep requires: { isolation: sandbox, strict: true } on that step.\n\n')).toBe(true);
+    expect(done.outputs.text).toContain('0% (0/1)');
   }, 180_000);
 
   it('replaces the shipped one from the namespace the member\'s role receives, and benchmark run names its file', async () => {

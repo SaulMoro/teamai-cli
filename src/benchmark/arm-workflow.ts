@@ -39,7 +39,9 @@ type Refusal = { ok: false; code: 'workflow_namespace_conflict' | 'arm_workflow_
  * takes no input `task`, or a step of it, or of a workflow it runs, delivers, asks a person, or works outside the
  * trial's clone.
  */
-export async function pinArmWorkflow(config: LocalConfig, { arm, name, revision }: { arm: PlannedArm; name: string; revision: string }): Promise<{ ok: true; pinned: PinnedArmWorkflow } | Refusal> {
+export async function pinArmWorkflow(
+  config: LocalConfig, { arm, name, revision, unattended }: { arm: PlannedArm; name: string; revision: string; unattended: boolean },
+): Promise<{ ok: true; pinned: PinnedArmWorkflow } | Refusal> {
   const runs = `Arm "${arm.name}" runs workflow "${name}"`;
   const refuse = (message: string, code: Refusal['code'] = 'arm_workflow_unrunnable'): Refusal => ({ ok: false, code, message });
   const read = await withTeamRevision(config, revision, async (at) => {
@@ -86,7 +88,7 @@ export async function pinArmWorkflow(config: LocalConfig, { arm, name, revision 
     if (known !== undefined || !source) return known ?? file;
     const { name: _name, defaults, ...header } = source.raw;
     const { model: _model, ...keptDefaults } = z.record(z.unknown()).catch({}).parse(defaults ?? {});
-    const body = { ...header, ...(Object.keys(keptDefaults).length > 0 ? { defaults: keptDefaults } : {}), steps: copySteps(source.raw.steps, source.parsed, arm, keyOf) };
+    const body = { ...header, ...(Object.keys(keptDefaults).length > 0 ? { defaults: keptDefaults } : {}), steps: copySteps(source.raw.steps, source.parsed, { arm, unattended }, keyOf) };
     const key = `${file}.${createHash('sha256').update(JSON.stringify(body)).digest('hex').slice(0, 12)}`;
     files[key] = { ...body, name: key };
     keys.set(file, key);
@@ -132,27 +134,38 @@ function unrunnableStep(steps: readonly WorkflowStep[], prefix = ''): { step: st
   return undefined;
 }
 
+/** What every prompt of an arm's workflow copy runs as: the arm's tool, model and effort, and unattended in a strict sandbox. */
+interface CopiedPrompt {
+  arm: PlannedArm;
+  unattended: boolean;
+}
+
 /**
- * `raw`, the steps as the file writes them, with every prompt on the arm's tool, model and effort and its prompt file's
- * text inline, and every workflow it runs by name run by its copy's key. `parsed` are the same steps as the cache holds
- * them, in the same order.
+ * `raw`, the steps as the file writes them, with every prompt run as `prompts` says and its prompt file's text inline,
+ * and every workflow it runs by name run by its copy's key. `parsed` are the same steps as the cache holds them, in the
+ * same order.
  */
-function copySteps(raw: readonly FileStep[], parsed: readonly WorkflowStep[], arm: PlannedArm, keyOf: (file: string) => string): FileStep[] {
+function copySteps(raw: readonly FileStep[], parsed: readonly WorkflowStep[], prompts: CopiedPrompt, keyOf: (file: string) => string): FileStep[] {
+  const { arm, unattended } = prompts;
   return raw.map((step, index) => {
     const definition = parsed[index];
     if (!definition) return step;
     if (definition.prompt !== undefined) {
       const { prompt_file: _file, model: _model, ...rest } = step;
-      return { ...rest, prompt: definition.prompt, tool: arm.tool, ...(arm.model ? { model: { name: arm.model, ...(arm.effort ? { effort: arm.effort } : {}) } } : {}) };
+      const { permissions: _permissions, ...written } = rest;
+      return {
+        ...written, prompt: definition.prompt, tool: arm.tool, ...(arm.model ? { model: { name: arm.model, ...(arm.effort ? { effort: arm.effort } : {}) } } : {}),
+        ...(unattended ? { permissions: 'unattended' } : {}),
+      };
     }
     const child = stepWorkflow(definition);
     if (child?.kind === 'named') return { ...step, workflow: keyOf(child.name) };
-    if (child?.kind === 'inline') return { ...step, workflow: copyInline(step.workflow, child.workflow, arm, keyOf) };
+    if (child?.kind === 'inline') return { ...step, workflow: copyInline(step.workflow, child.workflow, prompts, keyOf) };
     return step;
   });
 }
 
-function copyInline(raw: unknown, parsed: InlineWorkflow, arm: PlannedArm, keyOf: (file: string) => string): unknown {
+function copyInline(raw: unknown, parsed: InlineWorkflow, prompts: CopiedPrompt, keyOf: (file: string) => string): unknown {
   const file = FileSchema.safeParse(raw);
-  return file.success ? { ...file.data, steps: copySteps(file.data.steps, parsed.steps, arm, keyOf) } : raw;
+  return file.success ? { ...file.data, steps: copySteps(file.data.steps, parsed.steps, prompts, keyOf) } : raw;
 }

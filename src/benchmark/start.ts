@@ -30,6 +30,7 @@ import type { Added, ArmTeam, SkillChanges } from './terms.js';
 import { commitCacheOf } from '../workflow/place/place.js';
 import { leavesOut, withoutRefusal } from './team-without.js';
 import { commitCheckFiles, trialBlocker, tryCheckAt, type CheckRun, type CommittedSuite } from './trial.js';
+import { trialsUnattended } from './run-plan.js';
 
 /** What planning reads besides the suite. */
 interface BenchmarkStart {
@@ -37,6 +38,8 @@ interface BenchmarkStart {
   checkout: string;
   /** `--aliases member`: resolve arm models with this member's ~/.teamai/models/aliases.yaml over the team's. */
   memberAliases: boolean;
+  /** Every step that runs the plan is a strict sandbox, so each trial prompt runs `permissions: unattended`. */
+  unattended: boolean;
 }
 
 /**
@@ -61,7 +64,7 @@ export async function planBenchmark(config: LocalConfig, name: string, options: 
   const frozen = await freezeSuite(config, name, options);
   if (!frozen.ok) return { refused: frozen.refused };
   const { suite, plan, committed, armWorkflows } = frozen;
-  const { definition, workflows, scorers } = compileBundle(plan, committed, armWorkflows);
+  const { definition, workflows, scorers } = compileBundle(plan, committed, { armWorkflows, unattended: options.unattended });
   return {
     planned: { definition: { definition, workflows, scorers, teamRevision: plan.baselineTeamRevision }, plan },
     timeoutMs: suite.timeoutMs,
@@ -71,13 +74,14 @@ export async function planBenchmark(config: LocalConfig, name: string, options: 
 /**
  * `teamai benchmark plan <suite>`, as a step of the run whose attempt `env` marks: the suite planned from the run's
  * checkout. Refused when the run has no deadline, or one later than the suite's timeout allows, since then the suite's
- * timeout would bound nothing: start it with `workflow start --timeout`, as `teamai benchmark run` does.
+ * timeout would bound nothing: start it with `workflow start --timeout`, as `teamai benchmark run` does. Its trial
+ * prompts run unattended only when every step that runs the plan is a strict sandbox (`trialsUnattended`).
  */
 export async function planStep(name: string, env: NodeJS.ProcessEnv, { memberAliases }: Pick<BenchmarkStart, 'memberAliases'>): Promise<{ planned: BenchmarkPlanned } | { failure: WorkflowFailure }> {
   const found = await findAttemptRun(env);
   if ('error' in found) return { failure: found.error };
-  const { config, run } = found;
-  const planned = await planBenchmark(config, name, { checkout: run.checkout ?? process.cwd(), memberAliases });
+  const { config, run, step } = found;
+  const planned = await planBenchmark(config, name, { checkout: run.checkout ?? process.cwd(), memberAliases, unattended: trialsUnattended(run, step.id) });
   if ('refused' in planned) return { failure: planned.refused.error };
   const limit = runDeadline(run) === undefined ? undefined : Math.min(...[run.definition.timeout, run.timeout].filter((ms) => ms !== undefined));
   if (limit === undefined || limit > planned.timeoutMs) {
@@ -133,7 +137,7 @@ async function freezeSuite(config: LocalConfig, name: string, options: Benchmark
   for (const [index, arm] of arms.entries()) {
     const workflow = found.arms[index]?.workflow;
     if (workflow === undefined) continue;
-    const pinnedWorkflow = await pinArmWorkflow(config, { arm, name: workflow, revision: arm.team.kind === 'none' ? revision : arm.team.revision });
+    const pinnedWorkflow = await pinArmWorkflow(config, { arm, name: workflow, revision: arm.team.kind === 'none' ? revision : arm.team.revision, unattended: options.unattended });
     if (!pinnedWorkflow.ok) {
       const { code, message } = pinnedWorkflow;
       return refuse(code === 'workflow_namespace_conflict' ? error('workflow_namespace_conflict', message) : error('arm_workflow_unrunnable', message));
@@ -153,7 +157,7 @@ async function freezeSuite(config: LocalConfig, name: string, options: Benchmark
   const skillChanges = await skillChangesOf(config, arms, { baseline: revision, defaults: defaultsArmOf(found)?.name });
   if ('refused' in skillChanges) return refuse(skillChanges.refused);
   const plan = freezePlan({ committed: committed.suite, baselineTeamRevision: revision, selection: selectionOf(config), arms, scorers: pinned, skillChanges: skillChanges.changes });
-  const { scorers: generated } = compileBundle(plan, committed.suite, armWorkflows);
+  const { scorers: generated } = compileBundle(plan, committed.suite, { armWorkflows, unattended: options.unattended });
   const criteria = found.tasks.find((task) => task.judge.kind === 'criteria');
   const needs = found.scorers.length > 0 ? `its scorers ${found.scorers.join(', ')}` : criteria ? `task "${criteria.id}" has successCriteria` : undefined;
   const unjudged = needs === undefined ? undefined : await judgeUnavailable(config, { ...pinned, ...generated });

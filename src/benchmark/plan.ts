@@ -214,7 +214,8 @@ type FileStep = { id: string } & Record<string, unknown>;
  *     <task>                      needs the task before it
  *       <arm>                     needs the arm before it; a check task's: if steps.baselines.outputs.<task> == 'failed';
  *                                 workspace: a clone of the starting commit with the arm's team
- *         prompt                  workspace continue; tool, exact model, limits under on_limit: end_turn; scorers
+ *         prompt                  workspace continue; tool, exact model, limits under on_limit: end_turn; scorers;
+ *                                 permissions: unattended when `unattended`
  *         | workflow              for an arm that runs one: its pinned copy, with { task }; workspace continue; the limits
  *                                 but max_turns as its allowance under on_limit: end_turn; scorers
  *         check                   needs [the one above]; command teamai benchmark check --trial; workspace continue (check tasks only)
@@ -223,9 +224,12 @@ type FileStep = { id: string } & Record<string, unknown>;
  * With `parallel` above 1, the repetitions sit in `lane<n>` scopes, one per lane, each needing [baselines] as the first
  * repetition does, and each holding its share of the trials in plan order, the trial of order o in lane ((o - 1) mod n) + 1.
  *
- * Step ids are those `stepOf` and `baselineStepOf` name, under the step that runs the workflow.
+ * Step ids are those `stepOf` and `baselineStepOf` name, under the step that runs the workflow. `unattended`: the step
+ * that runs it is a strict sandbox, so its prompts may run unattended; an arm's workflow copies say so of their own.
  */
-export function compileBundle(plan: BenchmarkPlan, { suite }: CommittedSuite, armWorkflows: ReadonlyMap<string, PinnedArmWorkflow> = new Map()): {
+export function compileBundle(
+  plan: BenchmarkPlan, { suite }: CommittedSuite, { armWorkflows = new Map(), unattended }: { armWorkflows?: ReadonlyMap<string, PinnedArmWorkflow>; unattended: boolean },
+): {
   definition: Record<string, unknown>; workflows: Record<string, Record<string, unknown>>; scorers: Record<string, PinnedScorer>;
 } {
   const tasks = new Map(suite.tasks.map((task) => [task.id, task]));
@@ -244,7 +248,7 @@ export function compileBundle(plan: BenchmarkPlan, { suite }: CommittedSuite, ar
     return {
       ...(pinned
         ? { id: 'workflow', workflow: pinned.key, with: { task: task.prompt } }
-        : { id: 'prompt', prompt: task.prompt, tool: arm.tool, ...(arm.model ? { model: { name: arm.model, ...(arm.effort ? { effort: arm.effort } : {}) } } : {}) }),
+        : { id: 'prompt', prompt: task.prompt, tool: arm.tool, ...(arm.model ? { model: { name: arm.model, ...(arm.effort ? { effort: arm.effort } : {}) } } : {}), ...(unattended ? { permissions: 'unattended' } : {}) }),
       workspace: 'continue',
       ...(ends.timeoutMs !== undefined ? { timeout: `${ends.timeoutMs}ms` } : {}),
       ...(ends.maxTurns !== undefined ? { max_turns: ends.maxTurns } : {}),
