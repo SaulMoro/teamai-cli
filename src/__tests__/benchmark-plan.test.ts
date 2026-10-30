@@ -7,6 +7,7 @@ import type { ScoreLabel } from '../scorers/label.js';
 import { LabelStore } from '../scorers/label-store.js';
 import type { LocalConfig } from '../types.js';
 import { trialsOf } from '../benchmark/plan.js';
+import { planBenchmark } from '../benchmark/start.js';
 import { benchmarkRecord, type BenchmarkRecord } from '../benchmark/result.js';
 import { planOfRun } from '../benchmark/run-plan.js';
 import type { BenchmarkSuiteFiles } from '../workflow/conformance-interpreter.js';
@@ -439,5 +440,17 @@ describe('benchmark run judges', () => {
     expect(next).toMatchObject({ data: { done: { outcome: 'failed', failure: { code: 'timeout' } } } });
     expect(run.verdicts).toEqual([{ scorer: CORRECTNESS, step: PROMPT, pass: 1, outcome: { kind: 'unscored', because: 'run_ended' } }]);
     expect(recordOf(run).trials).toMatchObject([{ step: PROMPT, result: 'unscored' }]);
+  });
+});
+
+describe('benchmark plan on a machine that cannot pin the team a trial gets', () => {
+  it('refuses a team served over HTTP in benchmark words, before it reads the suite', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-benchmark-http-'));
+    dirs.push(root);
+    const config: LocalConfig = { ...benchmarkRunConfig(root), repo: { localPath: path.join(root, 'team'), remote: 'https://teamai.example.com/acme', kind: 'http' } };
+
+    const planned = await planBenchmark(config, 'fix', { checkout: root, memberAliases: false });
+
+    expect(planned).toEqual({ refused: { error: { code: 'team_ref_blocked', message: 'A benchmark installs each trial\'s team assets from a commit of the team repo, and this team is served over HTTP, which has no commits to install from. Run the benchmark from a workspace whose team is a git repo.' } } });
   });
 });

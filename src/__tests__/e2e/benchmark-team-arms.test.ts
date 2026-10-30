@@ -194,7 +194,9 @@ describe('benchmark arm team', () => {
     const projects = path.join(fixture.home, '.teamai', 'projects');
     const workspace = fs.readdirSync(projects).map((name) => path.join(projects, name, 'config.yaml')).find((file) => fs.existsSync(file));
     if (workspace === undefined) throw new Error('no workspace config');
-    fs.writeFileSync(path.join(fixture.home, '.teamai', 'config.yaml'), fs.readFileSync(workspace, 'utf8').replace(/^scope: .*$/m, 'scope: user').replace(/^(projectRoot|dataHome): .*\n/gm, ''));
+    // Another team's user-scope install: one of this team would refuse every arm first, as the team could not be pinned.
+    fs.writeFileSync(path.join(fixture.home, '.teamai', 'config.yaml'), fs.readFileSync(workspace, 'utf8').replace(/^scope: .*$/m, 'scope: user').replace(/^(projectRoot|dataHome): .*\n/gm, '')
+      .replace(/^(\s+remote: ).*$/m, '$1https://example.com/acme/other-team.git'));
 
     const started = await fixture.teamai(['benchmark', 'run', 'fix']);
 

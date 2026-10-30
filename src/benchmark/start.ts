@@ -55,10 +55,11 @@ export interface BenchmarkPlanned {
  * when this machine cannot pin the team a trial runs, so no trial runs with a team it did not ask for.
  */
 export async function planBenchmark(config: LocalConfig, name: string, options: BenchmarkStart): Promise<{ planned: BenchmarkPlanned; timeoutMs: number } | { refused: Refusal }> {
-  const frozen = await freezeSuite(config, name, options);
-  if (!frozen.ok) return { refused: frozen.refused };
+  // First: no suite, arm or commit read later changes that this machine cannot pin the team a trial gets.
   const blocked = await trialBlocker(config);
   if (blocked !== undefined) return { refused: error('team_ref_blocked', blocked) };
+  const frozen = await freezeSuite(config, name, options);
+  if (!frozen.ok) return { refused: frozen.refused };
   const { suite, plan, committed, armWorkflows } = frozen;
   const { definition, workflows, scorers } = compileBundle(plan, committed, armWorkflows);
   return {

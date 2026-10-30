@@ -12,7 +12,7 @@ import { z } from 'zod';
 import { loadLocalConfigForScope } from '../config.js';
 import { stepEnvironment } from '../env-exec.js';
 import type { WorkflowEnv } from '../env-resolution.js';
-import { teamRefBlocker } from '../team-ref.js';
+import { teamRefBlocker, type TeamRefBlock } from '../team-ref.js';
 import { isSelfMode, type LocalConfig } from '../types.js';
 import { sameEnvName } from '../resources/env-key.js';
 import { log } from '../utils/logger.js';
@@ -88,16 +88,25 @@ async function commitFiles(cache: string, files: readonly CheckFile[]): Promise<
   }
 }
 
+const SELF_MODE = "Benchmarks do not run in single-repo mode: the project's own commit decides which team assets a checkout has, so no arm can run on a team revision of its own. Start the benchmark from a checkout whose team has a team repo of its own.";
+
+/** Why a benchmark cannot run here, for each reason `teamai pull --team-ref` cannot pin a workspace. */
+const BLOCKED: Record<TeamRefBlock, string> = {
+  no_workspace: 'A benchmark gives each trial the team revision it plans, and that needs a teamai workspace here. Run teamai init --scope workspace here, run teamai pull, and run the benchmark again.',
+  user_scope: 'A benchmark gives each trial the team revision it plans, but this team also reaches this checkout through user scope, where every workspace shares one copy, so a trial could read team assets that revision does not have. Remove the user-scope install, or turn off inheritUserScope in this workspace, and run the benchmark again.',
+  self: SELF_MODE,
+  http: "A benchmark installs each trial's team assets from a commit of the team repo, and this team is served over HTTP, which has no commits to install from. Run the benchmark from a workspace whose team is a git repo.",
+};
+
 /**
  * Why this machine cannot pin the team a trial runs, or undefined: the team is single-repo, also reaches the trial
- * through user scope, or is served over HTTP. The check `teamai pull --team-ref` makes, with its message, but for
- * single-repo mode, where no other setting of this machine would let a benchmark run.
+ * through user scope, or is served over HTTP. The check `teamai pull --team-ref` makes, in a benchmark's words, and
+ * single-repo mode first, where no other setting of this machine would let a benchmark run.
  */
 export async function trialBlocker(config: LocalConfig): Promise<string | undefined> {
-  if (isSelfMode(config)) {
-    return "Benchmarks do not run in single-repo mode: the project's own commit decides which team assets a checkout has, so no arm can run on a team revision of its own. Start the benchmark from a checkout whose team has a team repo of its own.";
-  }
-  return teamRefBlocker(config, await loadLocalConfigForScope('user', undefined, { dryRun: true }))?.message;
+  if (isSelfMode(config)) return SELF_MODE;
+  const blocked = teamRefBlocker(config, await loadLocalConfigForScope('user', undefined, { dryRun: true }));
+  return blocked ? BLOCKED[blocked.block] : undefined;
 }
 
 /** The line that says why the trials of `arm` did not run: the local driver cannot launch its tool. */
