@@ -1,14 +1,14 @@
 /**
- * Real CLI: a one-task, one-arm check suite, started with `workflow start --benchmark` in a member's checkout, and run
- * on the local driver in a declared sandbox.
+ * Real CLI: a one-task, one-arm check suite, run by `teamai benchmark run` in a member's checkout on the local driver in
+ * a declared sandbox, or started as the workflow `benchmark` for another driver.
  */
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { resolveRunMode } from '../../launch-context.js';
-import { benchmarkFixture, envelope, FIX_SUITE, fixTask, PRODUCT_URL, said, TEAM_URL, type BenchmarkFixture } from '../helpers/benchmark-fixture.js';
+import { benchmarkFixture, envelope, FIX_SUITE, fixTask, PRODUCT_URL, said, TEAM_URL, type BenchmarkFixture, type Envelope } from '../helpers/benchmark-fixture.js';
 
 interface StepTree {
   id: string;
@@ -19,16 +19,27 @@ const StepTreeSchema: z.ZodType<StepTree> = z.lazy(() => z.object({
   workflow: z.object({ steps: z.array(StepTreeSchema) }).optional(),
 }));
 const RunFileSchema = z.object({
-  teamRevision: z.string(),
   runMode: z.string().optional(),
-  benchmark: z.object({ baselineTeamRevision: z.string(), trials: z.array(z.unknown()) }).passthrough(),
-  definition: z.object({ steps: z.array(StepTreeSchema) }).passthrough(),
+  steps: z.array(z.object({ id: z.string(), end: z.string().optional() }).passthrough()),
+  admitted: z.object({
+    plan: z.object({
+      output: z.object({
+        definition: z.object({ teamRevision: z.string() }).passthrough(),
+        plan: z.object({ baselineTeamRevision: z.string(), trials: z.array(z.unknown()) }).passthrough(),
+      }),
+      definition: z.object({ steps: z.array(StepTreeSchema) }).passthrough(),
+    }),
+  }).optional(),
+}).passthrough();
+const LeaseSchema = z.object({
+  step: z.string(), attempt: z.string(), revision: z.number(), command: z.string().optional(), env: z.record(z.string()).optional(), cwd: z.string().optional(),
 }).passthrough();
 
-const DoneSchema = z.object({ outcome: z.string(), end: z.string(), benchmark: z.object({ text: z.string() }) }).passthrough();
-const EndRecordSchema = z.object({ status: z.string(), benchmark: z.object({ trials: z.array(z.unknown()) }).passthrough() }).passthrough();
+const DoneSchema = z.object({ run: z.string(), outcome: z.string(), outputs: z.object({ text: z.string() }).passthrough() }).passthrough();
+const RecordSchema = z.object({ trials: z.array(z.unknown()) }).passthrough();
+const EndRecordSchema = z.object({ workflow: z.string(), status: z.string(), isolated: z.boolean().optional() }).passthrough();
 const CAPTION = 'These results hold for these tasks, this run and this machine.';
-const NO_SANDBOX = 'Step "baselines.fix" requires strict isolation, and the local driver here is not a sandbox. Run it in CI or a container, and declare it with --sandbox or workflows.sandbox: true.';
+const NO_SANDBOX = 'Step "trials" requires strict isolation, and the local driver here is not a sandbox. Run it in CI or a container, and declare it with --sandbox or workflows.sandbox: true.';
 const USER_SCOPE = '--team-ref pins one workspace, but this team also reaches it through user scope, where every workspace shares one copy. Remove the user-scope install, or turn off inheritUserScope, to pin a workspace.';
 
 const TWO_BY_TWO = `schemaVersion: v1alpha1
@@ -58,37 +69,55 @@ function leafSteps(steps: StepTree[], prefix = ''): string[] {
   return steps.flatMap((step) => (step.workflow ? leafSteps(step.workflow.steps, `${prefix}${step.id}.`) : [`${prefix}${step.id}`]));
 }
 
+/**
+ * Answers `next --prepare` for the driver `payload` names until it gets something other than a command lease, running
+ * each command lease as an external driver does: in the lease's cwd, as its attempt, reporting its stdout as outputs.
+ */
+async function driveCommands(fixture: BenchmarkFixture, run: string, payload: { driver: Record<string, unknown> }): Promise<Envelope> {
+  for (;;) {
+    const answer = envelope(await fixture.teamai(['workflow', 'next', run, '--prepare', '--json', JSON.stringify({ ...payload, running: [] })]));
+    const lease = LeaseSchema.safeParse(answer.data?.lease);
+    if (!lease.success || lease.data.command === undefined) return answer;
+    const { attempt, revision, command, env, cwd } = lease.data;
+    const ran = spawnSync('sh', ['-c', command], { cwd: cwd ?? fixture.work, env: { ...fixture.env, ...env, TEAMAI_WORKFLOW_ATTEMPT: `${run}/${attempt}` }, encoding: 'utf8' });
+    const outputs: unknown = ran.status === 0 ? JSON.parse(ran.stdout) : undefined;
+    const reported = envelope(await fixture.teamai(['workflow', 'report', run, '--json', JSON.stringify({
+      attempt, revision, outcome: ran.status === 0 ? 'success' : 'failed', driver: payload.driver, ...(outputs === undefined ? {} : { outputs }),
+    })]));
+    if (reported.error) throw new Error(`report of ${lease.data.step} refused: ${JSON.stringify(reported)}`);
+  }
+}
+
 describe('benchmark on the local driver', () => {
-  it('start stores the plan', async () => {
+  it('the plan step stores the plan, and a driver without a sandbox is held from the trials', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true });
     fixtures.push(fixture);
     const teamHead = execFileSync('git', ['--git-dir', fixture.teamOrigin, 'rev-parse', 'main'], { encoding: 'utf8' }).trim();
 
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark']);
-    const answer = envelope(started);
-    const run = String(answer.data?.run);
-    const stored = RunFileSchema.parse(fixture.runFile(run));
+    const started = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix"}', '--timeout', '10m']);
+    const run = String(envelope(started).data?.run);
     const driver = { kind: 'ci', machine: 'ci', workspace: fixture.work, can: { workspace: ['read-only', 'new', 'continue', 'clone'] } };
-    const next = envelope(await fixture.teamai(['workflow', 'next', run, '--json', JSON.stringify({ driver })]));
+    const next = await driveCommands(fixture, run, { driver });
+    const stored = RunFileSchema.parse(fixture.runFile(run));
     const beforePull = fixture.runFile(run);
     fixture.pushTeam({ 'benchmarks/fix/tasks/fix.yaml': fixTask(fixture.startingCommit, 'Change the answer.') });
     const pulled = await fixture.teamai(['pull']);
 
     expect(started.code, said(started)).toBe(0);
-    expect(stored.teamRevision).toBe(teamHead);
+    expect(stored.admitted?.plan.output.definition.teamRevision).toBe(teamHead);
     // The fixture's CLI inherits this process's CI and TEAMAI_MODE.
     expect(stored.runMode).toBe(resolveRunMode(process.env));
-    expect(stored.benchmark).toMatchObject({
+    expect(stored.admitted?.plan.output.plan).toMatchObject({
       suite: { name: 'fix', repo: 'https://github.com/fixture/app.git' },
       baselineTeamRevision: teamHead,
       selection: { additionalRoles: [], projects: [], excludedSkills: [] },
       repetitions: 1,
       tasks: [{ id: 'fix', startingCommit: fixture.startingCommit, judge: { kind: 'check', run: 'node test.js', protect: ['test.js'] } }],
       arms: [{ name: 'claude', tool: 'claude', team: { kind: 'pulled', revision: teamHead } }],
-      trials: [{ order: 1, repetition: 1, task: 'fix', arm: 'claude', step: 'trials.r1.fix.claude.prompt' }],
+      trials: [{ order: 1, repetition: 1, task: 'fix', arm: 'claude', step: 'r1.fix.claude.prompt' }],
     });
-    expect(leafSteps(stored.definition.steps)).toEqual(['baselines.fix', 'trials.r1.fix.claude.prompt', 'trials.r1.fix.claude.check', 'settled']);
-    expect(next).toMatchObject({ data: { wait: { held: [{ step: 'baselines.fix', missing: ['isolation', 'prepare', 'env'] }] } } });
+    expect(leafSteps(stored.admitted?.plan.definition.steps ?? [])).toEqual(['baselines.fix', 'r1.fix.claude.prompt', 'r1.fix.claude.check', 'settled']);
+    expect(next).toMatchObject({ data: { wait: { held: [{ step: 'trials.baselines.fix', missing: ['isolation', 'env'] }] } } });
     expect(pulled.code, said(pulled)).toBe(0);
     expect(fs.readFileSync(path.join(fixture.teamClone, 'benchmarks', 'fix', 'tasks', 'fix.yaml'), 'utf8')).toContain('Change the answer.');
     expect(fixture.runFile(run)).toEqual(beforePull);
@@ -102,19 +131,21 @@ describe('benchmark on the local driver', () => {
     fixtures.push(fixture);
     const before = fixture.status();
 
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
-    const answer = envelope(started);
-    const done = DoneSchema.parse(answer.data?.done);
-    const record = EndRecordSchema.parse(fixture.endRecord(String(done.run)));
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+    const done = DoneSchema.parse(envelope(ran).data?.done);
+    const record = RecordSchema.parse(fixture.benchmarkRecord(done.run));
+    const end = EndRecordSchema.parse(fixture.endRecord(done.run));
     const [launch, ...more] = fixture.toolLaunches();
 
-    expect(started.code, said(started)).toBe(0);
-    expect(done).toMatchObject({ outcome: 'succeeded', end: 'settled' });
-    expect(done.benchmark.text).toContain(passRate);
-    expect(done.benchmark.text).toContain(CAPTION);
-    expect(started.stderr).toContain(done.benchmark.text);
-    expect(record.status).toBe('succeeded');
-    expect(record.benchmark.trials).toMatchObject([{ task: 'fix', arm: 'claude', repetition: 1, order: 1, step: 'trials.r1.fix.claude.prompt', result }]);
+    expect(ran.code, said(ran)).toBe(0);
+    expect(done.outcome).toBe('succeeded');
+    expect(RunFileSchema.parse(fixture.runFile(done.run)).steps.find((step) => step.id === 'trials')).toMatchObject({ end: 'settled' });
+    expect(done.outputs.text).toContain(passRate);
+    expect(done.outputs.text).toContain(CAPTION);
+    expect(ran.stderr).toContain(done.outputs.text);
+    expect(end).toMatchObject({ workflow: 'benchmark', status: 'succeeded', isolated: true });
+    expect(end).not.toHaveProperty('benchmark');
+    expect(record.trials).toMatchObject([{ task: 'fix', arm: 'claude', repetition: 1, order: 1, step: 'trials.r1.fix.claude.prompt', result }]);
     expect(more).toEqual([]);
     expect(launch).toMatchObject({ ownGit: true, head: fixture.startingCommit, remotes: '' });
     expect(launch?.cwd.startsWith(path.join(fixture.tmp, 'teamai-clones'))).toBe(true);
@@ -130,14 +161,14 @@ describe('benchmark on the local driver', () => {
     fixtures.push(fixture);
     const before = fixture.status();
 
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
-    const done = DoneSchema.parse(envelope(started).data?.done);
-    const record = EndRecordSchema.parse(fixture.endRecord(String(done.run)));
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+    const done = DoneSchema.parse(envelope(ran).data?.done);
+    const record = RecordSchema.parse(fixture.benchmarkRecord(done.run));
     const launches = fixture.toolLaunches();
 
-    expect(started.code, said(started)).toBe(0);
-    expect(done).toMatchObject({ outcome: 'succeeded', end: 'settled' });
-    expect(record.benchmark.trials).toMatchObject([
+    expect(ran.code, said(ran)).toBe(0);
+    expect(done.outcome).toBe('succeeded');
+    expect(record.trials).toMatchObject([
       { order: 1, repetition: 1, task: 'one', arm: 'claude', step: 'trials.r1.one.claude.prompt', result: 'error' },
       { order: 2, repetition: 1, task: 'one', arm: 'codex', step: 'trials.r1.one.codex.prompt', result: 'passed' },
       { order: 3, repetition: 1, task: 'two', arm: 'claude', step: 'trials.r1.two.claude.prompt', result: 'passed' },
@@ -150,8 +181,8 @@ describe('benchmark on the local driver', () => {
     expect(launches.map((launch) => launch.tool)).toEqual(['claude', 'codex', 'claude', 'codex', 'codex', 'claude', 'codex', 'claude']);
     expect(new Set(launches.map((launch) => launch.cwd)).size).toBe(8);
     for (const launch of launches) expect(launch).toMatchObject({ ownGit: true, head: fixture.startingCommit, remotes: '' });
-    expect(done.benchmark.text).toContain('| claude | claude | tool default (team) | 4 | 3 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 75% (3/4) |');
-    expect(done.benchmark.text).toContain('| codex | codex | tool default (team) | 4 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (4/4) |');
+    expect(done.outputs.text).toContain('| claude | claude | tool default (team) | 4 | 3 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 75% (3/4) |');
+    expect(done.outputs.text).toContain('| codex | codex | tool default (team) | 4 | 4 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 100% (4/4) |');
     expect(fixture.trialRootEntries()).toEqual([]);
     expect(fixture.status()).toBe(before);
   }, 120_000);
@@ -160,25 +191,27 @@ describe('benchmark on the local driver', () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: false });
     fixtures.push(fixture);
 
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local', '--sandbox']);
-    const done = DoneSchema.parse(envelope(started).data?.done);
-    const record = EndRecordSchema.parse(fixture.endRecord(String(done.run)));
-    const again = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix', '--sandbox']);
+    const done = DoneSchema.parse(envelope(ran).data?.done);
+    const record = RecordSchema.parse(fixture.benchmarkRecord(done.run));
+    const again = await fixture.teamai(['benchmark', 'run', 'fix']);
 
-    expect(started.code, said(started)).toBe(0);
-    expect(record.benchmark.trials).toEqual([expect.objectContaining({ arm: 'claude', result: 'passed' })]);
+    expect(ran.code, said(ran)).toBe(0);
+    expect(record.trials).toEqual([expect.objectContaining({ arm: 'claude', result: 'passed' })]);
     expect(again.code).toBe(1);
     expect(envelope(again).error).toEqual({ code: 'requirement_unmet', message: NO_SANDBOX });
+    expect(fixture.runIds()).toEqual([done.run]);
   }, 120_000);
 
   it('no sandbox', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: false });
     fixtures.push(fixture);
 
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
 
-    expect(started.code).toBe(1);
-    expect(envelope(started)).toEqual({ error: { code: 'requirement_unmet', message: NO_SANDBOX } });
+    expect(ran.code).toBe(1);
+    expect(envelope(ran)).toEqual({ error: { code: 'requirement_unmet', message: NO_SANDBOX } });
+    expect(fixture.runIds()).toEqual([]);
     expect(fixture.toolLaunches()).toEqual([]);
   }, 120_000);
 
@@ -197,12 +230,12 @@ describe('benchmark on the local driver', () => {
     const fixture = await benchmarkFixture({ tool: 'hangs', sandbox: true, suite: FIX_SUITE.replace('timeout: 10m', 'timeout: 20s') });
     fixtures.push(fixture);
 
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
-    const done = envelope(started).data?.done;
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+    const done = envelope(ran).data?.done;
 
-    expect(started.code, said(started)).toBe(1);
+    expect(ran.code, said(ran)).toBe(1);
     expect(done).toMatchObject({ outcome: 'failed', failure: { code: 'timeout' } });
-    expect(started.stderr).toContain('| claude | claude | tool default (team) | 1 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0% (0/1) |');
+    expect(ran.stderr).toContain('| claude | claude | tool default (team) | 1 | 0 | 0 | 1 | 0 | 0 | 0 | 0 | 0 | 0% (0/1) |');
     expect(fixture.toolLaunches().map((launch) => launch.tool)).toEqual(['claude']);
     expect(fixture.trialRootEntries()).toEqual([]);
   }, 120_000);
@@ -211,15 +244,15 @@ describe('benchmark on the local driver', () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'], suite: TWO_BY_TWO });
     fixtures.push(fixture);
 
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
-    const done = DoneSchema.parse(envelope(started).data?.done);
-    const record = EndRecordSchema.parse(fixture.endRecord(String(done.run)));
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+    const done = DoneSchema.parse(envelope(ran).data?.done);
+    const record = RecordSchema.parse(fixture.benchmarkRecord(done.run));
 
-    expect(started.code, said(started)).toBe(0);
-    expect(done).toMatchObject({ outcome: 'succeeded', end: 'settled' });
-    expect(occurrences(started.stderr, 'Arm "codex" uses codex, which the local driver cannot run, so its trials did not run.')).toBe(1);
-    expect(started.stderr).not.toContain(NO_SANDBOX);
-    expect(record.benchmark.trials).toEqual([
+    expect(ran.code, said(ran)).toBe(0);
+    expect(done.outcome).toBe('succeeded');
+    expect(occurrences(ran.stderr, 'Arm "codex" uses codex, which the local driver cannot run, so its trials did not run.')).toBe(1);
+    expect(ran.stderr).not.toContain(NO_SANDBOX);
+    expect(record.trials).toEqual([
       expect.objectContaining({ order: 1, arm: 'claude', result: 'passed' }),
       expect.objectContaining({ order: 2, arm: 'codex', result: 'not_run' }),
       expect.objectContaining({ order: 3, arm: 'codex', result: 'not_run' }),
@@ -228,20 +261,17 @@ describe('benchmark on the local driver', () => {
     expect(fixture.toolLaunches().map((launch) => launch.tool)).toEqual(['claude', 'claude']);
   }, 120_000);
 
-  it('user scope reaches the team', async () => {
+  it('user scope reaches the team, so it refuses before the run', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true });
     fixtures.push(fixture);
     const user = await fixture.teamai(['init', TEAM_URL, '--provider', 'git', '--agent', 'claude', '--scope', 'user', '--force']);
 
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
-    const done = DoneSchema.parse(envelope(started).data?.done);
-    const record = EndRecordSchema.parse(fixture.endRecord(String(done.run)));
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
 
     expect(user.code, said(user)).toBe(0);
-    expect(started.code, said(started)).toBe(0);
-    expect(done).toMatchObject({ outcome: 'succeeded', end: 'settled' });
-    expect(occurrences(started.stderr, USER_SCOPE)).toBe(1);
-    expect(record.benchmark.trials).toEqual([expect.objectContaining({ arm: 'claude', result: 'not_run' })]);
+    expect(ran.code).toBe(1);
+    expect(envelope(ran)).toEqual({ error: { code: 'team_ref_blocked', message: USER_SCOPE } });
+    expect(fixture.runIds()).toEqual([]);
     expect(fixture.toolLaunches()).toEqual([]);
   }, 120_000);
 });

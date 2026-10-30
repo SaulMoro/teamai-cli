@@ -16,11 +16,9 @@ const RunSchema = z.object({
   steps: z.array(z.object({ id: z.string(), agent: z.object({ team: z.object({ revision: z.string() }).passthrough().optional() }).passthrough().optional() }).passthrough()),
 });
 const RecordSchema = z.object({
-  benchmark: z.object({
-    arms: z.array(z.object({ name: z.string(), team: z.unknown() }).passthrough()),
-    trials: z.array(z.object({ arm: z.string(), order: z.number(), result: z.string() }).passthrough()),
-  }).passthrough(),
-});
+  arms: z.array(z.object({ name: z.string(), team: z.unknown() }).passthrough()),
+  trials: z.array(z.object({ arm: z.string(), order: z.number(), result: z.string() }).passthrough()),
+}).passthrough();
 
 const fixtures: BenchmarkFixture[] = [];
 
@@ -55,7 +53,7 @@ async function twoRevisions(armsOf: (first: string) => string, more: Record<stri
 
 /** The team skills each arm's trial saw in its clone, by arm, from the launches in trial order; teamai's own skills left out. */
 function skillsByArm(fixture: BenchmarkFixture, runId: string): Record<string, string[]> {
-  const { trials } = RecordSchema.parse(fixture.endRecord(runId)).benchmark;
+  const { trials } = RecordSchema.parse(fixture.benchmarkRecord(runId));
   const arms = [...trials].sort((left, right) => left.order - right.order).map(({ arm }) => arm);
   return Object.fromEntries(fixture.toolLaunches().map((launch, index) => [
     arms[index],
@@ -64,10 +62,10 @@ function skillsByArm(fixture: BenchmarkFixture, runId: string): Record<string, s
 }
 
 async function endedRun(fixture: BenchmarkFixture): Promise<string> {
-  const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
-  expect(started.code, said(started)).toBe(0);
-  const [runId] = fixture.runIds();
-  if (runId === undefined) throw new Error(`no run: ${said(started)}`);
+  const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+  expect(ran.code, said(ran)).toBe(0);
+  const runId = z.object({ run: z.string() }).safeParse(envelope(ran).data?.done).data?.run;
+  if (runId === undefined) throw new Error(`no run: ${said(ran)}`);
   return runId;
 }
 
@@ -77,8 +75,8 @@ describe('benchmark arm team', () => {
 
     const runId = await endedRun(fixture);
 
-    const record = RecordSchema.parse(fixture.endRecord(runId));
-    expect(record.benchmark.arms.map(({ name, team }) => ({ name, team }))).toEqual([
+    const record = RecordSchema.parse(fixture.benchmarkRecord(runId));
+    expect(record.arms.map(({ name, team }) => ({ name, team }))).toEqual([
       { name: 'pulled', team: { kind: 'pulled', revision: pulled } },
       { name: 'none', team: { kind: 'none' } },
       { name: 'without-fixer', team: { kind: 'without', skills: ['fixer'], revision: pulled } },
@@ -87,8 +85,8 @@ describe('benchmark arm team', () => {
     const { steps } = RunSchema.parse(fixture.runFile(runId));
     const ranOn = (arm: string): string | undefined => steps.find((step) => step.id === `trials.r1.fix.${arm}.prompt`)?.agent?.team?.revision;
     expect([ranOn('pulled'), ranOn('none'), ranOn('without-fixer')]).toEqual([pulled, undefined, pulled]);
-    expect(record.benchmark.trials.map(({ result }) => result)).toEqual(['passed', 'passed', 'passed']);
-    const bare = record.benchmark.trials.find(({ arm }) => arm === 'none')?.order ?? 0;
+    expect(record.trials.map(({ result }) => result)).toEqual(['passed', 'passed', 'passed']);
+    const bare = record.trials.find(({ arm }) => arm === 'none')?.order ?? 0;
     expect(fixture.toolLaunches()[bare - 1]?.paths.filter((file) => file.startsWith('.claude/'))).toEqual([]);
   }, 240_000);
 
@@ -97,7 +95,7 @@ describe('benchmark arm team', () => {
 
     const runId = await endedRun(fixture);
 
-    expect(RecordSchema.parse(fixture.endRecord(runId)).benchmark.arms.map(({ team }) => team)).toEqual([
+    expect(RecordSchema.parse(fixture.benchmarkRecord(runId)).arms.map(({ team }) => team)).toEqual([
       { kind: 'pulled', revision: pulled },
       { kind: 'ref', ref: first, revision: first },
     ]);
@@ -109,7 +107,7 @@ describe('benchmark arm team', () => {
 
     const runId = await endedRun(fixture);
 
-    expect(RecordSchema.parse(fixture.endRecord(runId)).benchmark.arms.map(({ team }) => team)).toEqual([
+    expect(RecordSchema.parse(fixture.benchmarkRecord(runId)).arms.map(({ team }) => team)).toEqual([
       { kind: 'pulled', revision: pulled },
       { kind: 'without', skills: ['nested'], revision: pulled },
     ]);
@@ -123,7 +121,7 @@ describe('benchmark arm team', () => {
   ])('refuses to start an arm whose team names %s, and leaves no run', async (_case, armsOf, code, message) => {
     const { fixture } = await twoRevisions(armsOf);
 
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+    const started = await fixture.teamai(['benchmark', 'run', 'fix']);
 
     expect(ErrorSchema.parse(envelope(started))).toEqual({ error: { code, message } });
     expect(fixture.runIds()).toEqual([]);
@@ -136,7 +134,7 @@ describe('benchmark arm team', () => {
     if (workspace === undefined) throw new Error('no workspace config');
     fs.writeFileSync(path.join(fixture.home, '.teamai', 'config.yaml'), fs.readFileSync(workspace, 'utf8').replace(/^scope: .*$/m, 'scope: user').replace(/^(projectRoot|dataHome): .*\n/gm, ''));
 
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+    const started = await fixture.teamai(['benchmark', 'run', 'fix']);
 
     expect(ErrorSchema.parse(envelope(started))).toEqual({ error: {
       code: 'arm_team_unclean',

@@ -2,13 +2,13 @@
  * Real CLI: every trial runs with the team assets of the run's frozen team revision, delivered into its own clone by its
  * own install, whatever the member's checkout pulls during the run, and nothing of that install reaches the member.
  */
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { benchmarkFixture, envelope, fixTask, PRODUCT_URL, said, type BenchmarkFixture } from '../helpers/benchmark-fixture.js';
-import { fakeTrialDriver } from '../helpers/fake-trial-driver.js';
 
 const TWO_REPETITIONS = `schemaVersion: v1alpha1
 name: fix
@@ -21,7 +21,7 @@ repetitions: 2
 timeout: 10m
 `;
 const SKILL = '---\nname: fixer\ndescription: Fixes the answer.\n---\nMake the answer right.\n';
-const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', tools: ['claude'], trials: ['claude'] };
+const SANDBOX_CLAUDE = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, tools: ['claude'] };
 const AgentSchema = z.object({
   team: z.object({ revision: z.string(), localChanges: z.boolean() }).passthrough().optional(),
   project: z.object({ commit: z.string() }).passthrough().optional(),
@@ -48,22 +48,102 @@ function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): string {
   return execFileSync('git', args, { cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
-async function startedRun(fixture: BenchmarkFixture, args: string[] = []): Promise<string> {
-  const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', ...args]);
-  const answer = envelope(started);
-  const run = answer.data?.run ?? z.object({ run: z.string() }).safeParse(answer.data?.done).data?.run;
-  if (typeof run !== 'string') throw new Error(`no run: ${said(started)}`);
+/** Runs suite fix with `teamai benchmark run` on the local driver, and answers its run, whatever its outcome. */
+async function benchmarkRun(fixture: BenchmarkFixture): Promise<string> {
+  const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+  const run = z.object({ run: z.string() }).safeParse(envelope(ran).data?.done).data?.run;
+  if (run === undefined) throw new Error(`no run: ${said(ran)}`);
   return run;
 }
 
+/** Starts workflow benchmark on suite fix for an external driver to drive, and answers its run. */
+async function startedForDriver(fixture: BenchmarkFixture): Promise<string> {
+  const started = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix"}', '--timeout', '10m']);
+  const run = z.object({ run: z.string() }).safeParse(envelope(started).data).data?.run;
+  if (run === undefined) throw new Error(`no run: ${said(started)}`);
+  return run;
+}
+
+const EXTERNAL = { kind: 'external', machine: 'ci', workspace: '/ci' };
+const LeaseSchema = z.object({
+  step: z.string(), attempt: z.string(), revision: z.number(), command: z.string().optional(), prompt: z.string().optional(),
+  env: z.record(z.string()).optional(), envScope: z.object({ withhold: z.array(z.string()) }).passthrough().optional(), output: z.unknown().optional(), cwd: z.string().optional(),
+}).passthrough();
+const NextSchema = z.union([
+  z.object({ lease: LeaseSchema }),
+  z.object({ wait: z.object({}).passthrough() }),
+  z.object({ done: z.object({ outcome: z.string() }).passthrough() }),
+]);
+const PromptLeaseSchema = z.object({
+  attempt: z.string(), revision: z.number(), prompt: z.string(), tool: z.string(), cwd: z.string(), envScope: z.object({ withhold: z.array(z.string()) }),
+});
+const ExitSchema = z.object({ code: z.number(), stdout: z.string().optional() });
+
+/** Asks run `runId` for work as an external driver that can run claude trials in a sandbox, with places it prepares. */
+async function nextFor(fixture: BenchmarkFixture, runId: string): Promise<z.infer<typeof NextSchema>> {
+  const next = await fixture.teamai(['workflow', 'next', runId, '--prepare', '--json', JSON.stringify({ driver: { ...EXTERNAL, can: SANDBOX_CLAUDE }, running: [] })]);
+  return NextSchema.parse(envelope(next).data);
+}
+
+async function report(fixture: BenchmarkFixture, runId: string, body: Record<string, unknown>): Promise<void> {
+  const reported = await fixture.teamai(['workflow', 'report', runId, '--json', JSON.stringify({ driver: EXTERNAL, ...body })]);
+  if (envelope(reported).data?.accepted !== true) throw new Error(`report refused: ${said(reported)}`);
+}
+
+/** `env` without the names a lease withholds, with the values it gives. */
+function withheld(env: NodeJS.ProcessEnv, withhold: readonly string[], given: Record<string, string>): NodeJS.ProcessEnv {
+  return { ...Object.fromEntries(Object.entries(env).filter(([key]) => !withhold.includes(key))), ...given };
+}
+
+/**
+ * Runs a command lease in its place with the attempt marker every driver gives a step's processes, and reports its exit
+ * and, for a step with output, its stdout JSON.
+ */
+async function runCommand(fixture: BenchmarkFixture, runId: string, lease: z.infer<typeof LeaseSchema> & { command: string }): Promise<void> {
+  const ran = await promisify(execFile)('sh', ['-c', lease.command], { cwd: lease.cwd ?? fixture.work, env: withheld(fixture.env, lease.envScope?.withhold ?? [], { ...lease.env, TEAMAI_WORKFLOW_ATTEMPT: `${runId}/${lease.attempt}` }) })
+    .then(({ stdout }) => ({ code: 0, stdout }), (failed: unknown) => ExitSchema.parse(failed));
+  const outputs: unknown = ran.code === 0 && lease.output !== undefined && ran.stdout !== undefined ? JSON.parse(ran.stdout) : undefined;
+  await report(fixture, runId, {
+    attempt: lease.attempt, revision: lease.revision, outcome: ran.code === 0 ? 'success' : 'failed', exitCode: ran.code, ...(outputs !== undefined ? { outputs } : {}),
+  });
+}
+
+/** Launches a prompt lease's tool in its prepared clone, without the names it withholds and with the attempt marker, and reports it. */
+async function runPrompt(fixture: BenchmarkFixture, runId: string, leased: unknown): Promise<void> {
+  const lease = PromptLeaseSchema.parse(leased);
+  const env = withheld(fixture.env, lease.envScope.withhold, { TEAMAI_WORKFLOW_ATTEMPT: `${runId}/${lease.attempt}` });
+  const started = Date.now();
+  const launched = await promisify(execFile)(path.join(fixture.bin, lease.tool), ['-p', lease.prompt], { cwd: lease.cwd, env }).then(() => 'success', () => 'failed');
+  await report(fixture, runId, { attempt: lease.attempt, revision: lease.revision, tool: lease.tool, durationMs: Date.now() - started, outcome: launched });
+}
+
+/**
+ * Drives run `runId` as an external driver until it is done: it runs the plan, the checks and the report as the command
+ * leases they are, and the prompts on the fake tools. Stops at the first lease `until` takes, and answers it.
+ */
+async function drive(fixture: BenchmarkFixture, runId: string, until: (lease: z.infer<typeof LeaseSchema>) => boolean = () => false): Promise<z.infer<typeof LeaseSchema> | undefined> {
+  for (let polls = 0; polls < 40; polls += 1) {
+    const answer = await nextFor(fixture, runId);
+    if ('done' in answer) return undefined;
+    if ('wait' in answer) {
+      await new Promise((resolve) => { setTimeout(resolve, 500); });
+      continue;
+    }
+    const { lease } = answer;
+    if (until(lease)) return lease;
+    if (lease.command !== undefined) await runCommand(fixture, runId, { ...lease, command: lease.command });
+    else await runPrompt(fixture, runId, lease);
+  }
+  throw new Error(`run ${runId} did not end`);
+}
+
 const DRIVERS: Array<{ name: string; run(fixture: BenchmarkFixture): Promise<string> }> = [
-  { name: 'the local driver', run: (fixture) => startedRun(fixture, ['--driver', 'local']) },
+  { name: 'the local driver', run: benchmarkRun },
   {
-    name: 'a fake external driver',
+    name: 'an external driver',
     run: async (fixture) => {
-      const runId = await startedRun(fixture);
-      const driver = fakeTrialDriver({ teamai: fixture.teamai, env: fixture.env, pauseMs: 500, tools: { claude: path.join(fixture.bin, 'claude') } });
-      await driver.drive({ runId, can: SANDBOX_CLAUDE, prepare: true, maxPolls: 10 });
+      const runId = await startedForDriver(fixture);
+      await drive(fixture, runId);
       return runId;
     },
   },
@@ -112,7 +192,7 @@ describe('trial team assets', () => {
     });
     fixtures.push(fixture);
 
-    const runId = await startedRun(fixture, ['--driver', 'local']);
+    const runId = await benchmarkRun(fixture);
 
     expect(fixture.toolLaunches()[0]?.paths).toContain('.claude/skills/fixer/SKILL.md');
     expect(RunSchema.parse(fixture.runFile(runId)).steps.find((step) => step.id === 'trials.r1.fix.claude.check')).toMatchObject({ status: 'succeeded' });
@@ -124,7 +204,7 @@ describe('trial team assets', () => {
     const baseline = git(fixture.teamClone, ['rev-parse', 'HEAD']);
     fs.renameSync(fixture.teamOrigin, `${fixture.teamOrigin}.gone`);
 
-    const runId = await startedRun(fixture, ['--driver', 'local']);
+    const runId = await benchmarkRun(fixture);
 
     const stored = RunSchema.parse(fixture.runFile(runId));
     expect(stored.steps.find((step) => step.id === 'trials.r1.fix.claude.prompt')?.agent).toMatchObject({ team: { revision: baseline } });
@@ -136,7 +216,7 @@ describe('trial team assets', () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'], firstLaunch: 'kills-its-driver' });
     fixtures.push(fixture);
 
-    const killed = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+    const killed = await fixture.teamai(['benchmark', 'run', 'fix']);
     const [runId] = fixture.runIds();
     if (runId === undefined) throw new Error(`no run: ${said(killed)}`);
     const resumed = await fixture.teamai(['workflow', 'resume', runId]);
@@ -156,16 +236,14 @@ describe('trial team assets', () => {
   it('prepares a handed-back prompt again in a fresh clone, and removes the first', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'] });
     fixtures.push(fixture);
-    const runId = await startedRun(fixture);
-    const next = async (): Promise<{ attempt: string; cwd: string }> => {
-      const answer = envelope(await fixture.teamai(['workflow', 'next', runId, '--prepare', '--json', JSON.stringify({
-        driver: { kind: 'external', machine: 'ci', workspace: '/ci', can: SANDBOX_CLAUDE }, running: [],
-      })]));
-      return z.object({ lease: z.object({ attempt: z.string(), cwd: z.string() }) }).parse(answer.data).lease;
+    const runId = await startedForDriver(fixture);
+    const prompt = async (): Promise<{ attempt: string; cwd: string }> => {
+      const lease = await drive(fixture, runId, (leased) => leased.prompt !== undefined);
+      return z.object({ attempt: z.string(), cwd: z.string() }).parse(lease);
     };
 
-    const first = await next();
-    const again = await next();
+    const first = await prompt();
+    const again = await prompt();
 
     expect(again.attempt).toBe(first.attempt);
     expect(again.cwd).not.toBe(first.cwd);
@@ -173,7 +251,7 @@ describe('trial team assets', () => {
     expect(fs.existsSync(path.dirname(first.cwd))).toBe(false);
   }, 120_000);
 
-  it('fetches a starting commit the checkout lacks from the suite repo at start, and a trial clones it offline', async () => {
+  it('fetches a starting commit the checkout lacks from the suite repo at plan, and a trial clones it offline', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'] });
     fixtures.push(fixture);
     const later = fixture.pushProduct({ 'README.md': '# app, later\n' });
@@ -181,7 +259,10 @@ describe('trial team assets', () => {
     const pulled = await fixture.teamai(['pull']);
     expect(pulled.code, said(pulled)).toBe(0);
 
-    const runId = await startedRun(fixture);
+    const runId = await startedForDriver(fixture);
+    const planned = await nextFor(fixture, runId);
+    if (!('lease' in planned) || planned.lease.step !== 'plan' || planned.lease.command === undefined) throw new Error(`no plan lease: ${JSON.stringify(planned)}`);
+    await runCommand(fixture, runId, { ...planned.lease, command: planned.lease.command });
     fs.renameSync(fixture.productOrigin, `${fixture.productOrigin}.gone`);
     const resumed = await fixture.teamai(['workflow', 'resume', runId]);
 
@@ -206,7 +287,7 @@ describe('trial team assets', () => {
     fixtures.push(fixture);
     await change(fixture);
 
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+    const started = await fixture.teamai(['benchmark', 'run', 'fix']);
 
     expect(ErrorSchema.parse(envelope(started))).toEqual({ error: { code: 'team_revision_unpullable', message: UNPULLABLE } });
     expect(fixture.runIds()).toEqual([]);
@@ -218,7 +299,7 @@ describe('trial team assets', () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'], tasks: { fix: fixTask(missing) } });
     fixtures.push(fixture);
 
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+    const started = await fixture.teamai(['benchmark', 'run', 'fix']);
 
     expect(ErrorSchema.parse(envelope(started))).toEqual({ error: {
       code: 'commit_unreachable',

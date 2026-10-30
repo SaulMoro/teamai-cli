@@ -9,11 +9,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { benchmarkFixture, envelope, PRODUCT_URL, said, type BenchmarkFixture, type BenchmarkFixtureOptions } from '../helpers/benchmark-fixture.js';
 
-const DoneSchema = z.object({ run: z.string(), outcome: z.string(), benchmark: z.object({ text: z.string() }) }).passthrough();
-const RecordSchema = z.object({ benchmark: z.object({
+const DoneSchema = z.object({ run: z.string(), outcome: z.string(), outputs: z.object({ text: z.string() }) }).passthrough();
+const RecordSchema = z.object({
   tasks: z.array(z.object({ id: z.string(), baseline: z.string() })),
   trials: z.array(z.object({ result: z.string() })),
-}) });
+});
 
 function suite({ timeout = '10m', setup }: { timeout?: string; setup?: string } = {}): string {
   return `schemaVersion: v1alpha1
@@ -57,10 +57,10 @@ const GAMEABLE = {
 
 const OTHER_CASE = "require('node:assert').ok(true);\n";
 
-const HashedRecordSchema = z.object({ benchmark: z.object({
+const HashedRecordSchema = z.object({
   tasks: z.array(z.object({ sourceHash: z.string() })),
   trials: z.array(z.object({ result: z.string() })),
-}) });
+});
 
 /** A check the agent never sees: check.add writes it from the suite directory, where the issue's example keeps it. */
 const REFRESH_FROM = 'benchmarks/fix/check-files/expired-token/refresh.test.js';
@@ -88,10 +88,10 @@ async function ran(options: Omit<BenchmarkFixtureOptions, 'sandbox'>) {
   const fixture = await benchmarkFixture({ ...options, sandbox: true, tools: ['claude'] });
   fixtures.push(fixture);
   const before = fixture.status();
-  const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+  const started = await fixture.teamai(['benchmark', 'run', 'fix']);
   const done = DoneSchema.safeParse(envelope(started).data?.done);
   if (!done.success) throw new Error(`the run did not end: ${said(started)}`);
-  return { fixture, before, done: done.data, record: RecordSchema.parse(fixture.endRecord(done.data.run)).benchmark };
+  return { fixture, before, done: done.data, record: RecordSchema.parse(fixture.benchmarkRecord(done.data.run)) };
 }
 
 describe('benchmark checks on the local driver', () => {
@@ -135,11 +135,11 @@ source: { platform: claude-code, sessionId: s1, fix: ${fix} }
     const pulled = await fixture.teamai(['pull']);
     expect(pulled.code, said(pulled)).toBe(0);
 
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+    const started = await fixture.teamai(['benchmark', 'run', 'fix']);
 
     const done = DoneSchema.parse(envelope(started).data?.done);
     expect(done).toMatchObject({ outcome: 'succeeded' });
-    expect(RecordSchema.parse(fixture.endRecord(done.run)).benchmark).toEqual({ tasks: [expect.objectContaining({ id: 'fix', baseline: 'valid' })], trials: [expect.objectContaining({ result })] });
+    expect(RecordSchema.parse(fixture.benchmarkRecord(done.run))).toEqual({ tasks: [expect.objectContaining({ id: 'fix', baseline: 'valid' })], trials: [expect.objectContaining({ result })] });
     expect(fixture.toolLaunches().map((launch) => launch.paths)).toEqual([expect.arrayContaining(['test/other.test.js'])]);
     if (!existing) expect(fixture.toolLaunches()[0]?.paths).not.toContain('test/answer.test.js');
     expect(fixture.trialRootEntries()).toEqual([]);
@@ -181,10 +181,10 @@ source: { platform: claude-code, sessionId: s1, fix: ${fix} }
     const pulled = await fixture.teamai(['pull']);
     expect(pulled.code, said(pulled)).toBe(0);
 
-    const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+    const started = await fixture.teamai(['benchmark', 'run', 'fix']);
 
     const done = DoneSchema.parse(envelope(started).data?.done);
-    expect(RecordSchema.parse(fixture.endRecord(done.run)).benchmark).toEqual({ tasks: [expect.objectContaining({ id: 'fix', baseline: 'valid' })], trials: [expect.objectContaining({ result: 'passed' })] });
+    expect(RecordSchema.parse(fixture.benchmarkRecord(done.run))).toEqual({ tasks: [expect.objectContaining({ id: 'fix', baseline: 'valid' })], trials: [expect.objectContaining({ result: 'passed' })] });
     expect(fixture.toolLaunches()).toHaveLength(1);
     expect(fixture.toolLaunches()[0]?.paths).not.toContain('test/answer.test.js');
     expect(fixture.toolLaunches()[0]?.paths).not.toContain(REFRESH_TO);
@@ -198,10 +198,10 @@ source: { platform: claude-code, sessionId: s1, fix: ${fix} }
     });
     fixtures.push(fixture);
     const run = async () => {
-      const started = await fixture.teamai(['workflow', 'start', 'fix', '--benchmark', '--driver', 'local']);
+      const started = await fixture.teamai(['benchmark', 'run', 'fix']);
       const done = DoneSchema.safeParse(envelope(started).data?.done);
       if (!done.success) throw new Error(`the run did not end: ${said(started)}`);
-      return HashedRecordSchema.parse(fixture.endRecord(done.data.run)).benchmark;
+      return HashedRecordSchema.parse(fixture.benchmarkRecord(done.data.run));
     };
 
     const before = await run();
@@ -216,7 +216,7 @@ source: { platform: claude-code, sessionId: s1, fix: ${fix} }
     const { fixture, done, record } = await ran({ tool: 'fixes', app: { 'answer.js': 'module.exports = 42;\n' } });
 
     expect(done).toMatchObject({ outcome: 'succeeded' });
-    expect(done.benchmark.text).toContain('| Task | Baseline |\n| --- | --- |\n| fix | invalid: check passes without changes |');
+    expect(done.outputs.text).toContain('| Task | Baseline |\n| --- | --- |\n| fix | invalid: check passes without changes |');
     expect(record).toEqual({ tasks: [expect.objectContaining({ baseline: 'invalid' })], trials: [expect.objectContaining({ result: 'not_run' })] });
     expect(fixture.toolLaunches()).toEqual([]);
     expect(fixture.trialRootEntries()).toEqual([]);
@@ -231,7 +231,7 @@ source: { platform: claude-code, sessionId: s1, fix: ${fix} }
   ])('reports that the check could not run for a baseline %s, and runs none of its trials', async (_, options) => {
     const { fixture, done, record } = await ran({ tool: 'fixes', ...options });
 
-    expect(done.benchmark.text).toContain('| fix | check could not run |');
+    expect(done.outputs.text).toContain('| fix | check could not run |');
     expect(record).toEqual({ tasks: [expect.objectContaining({ baseline: 'could_not_run' })], trials: [expect.objectContaining({ result: 'not_run' })] });
     expect(fixture.toolLaunches()).toEqual([]);
     expect(fixture.trialRootEntries()).toEqual([]);
@@ -260,10 +260,31 @@ source: { platform: claude-code, sessionId: s1, fix: ${fix} }
 });
 
 describe('teamai benchmark check', () => {
-  /** `teamai benchmark check <args>` in the member's checkout, as the step of attempt `marker` would run it. */
-  function check(fixture: BenchmarkFixture, args: string[], marker?: string) {
+  /** `teamai benchmark check <args>` in `cwd`, the member's checkout by default, as the step of attempt `marker` would run it. */
+  function check(fixture: BenchmarkFixture, args: string[], marker?: string, cwd = fixture.work) {
     const env = { ...fixture.env, ...(marker !== undefined ? { TEAMAI_WORKFLOW_ATTEMPT: marker } : {}) };
-    return spawnSync(path.join(fixture.bin, 'teamai'), ['benchmark', 'check', ...args], { cwd: fixture.work, env, encoding: 'utf8' });
+    return spawnSync(path.join(fixture.bin, 'teamai'), ['benchmark', 'check', ...args], { cwd, env, encoding: 'utf8' });
+  }
+
+  /** A driver of another machine that provides the clones and sandbox a benchmark's steps require. */
+  const driver = { kind: 'external', machine: 'ci', workspace: '/work' };
+  const can = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, setup: true, tools: ['claude'] };
+  const LeaseSchema = z.object({ attempt: z.string(), revision: z.number(), step: z.string(), command: z.string().optional(), env: z.record(z.string()).optional(), cwd: z.string() }).passthrough();
+  const NextSchema = z.object({ data: z.object({ lease: LeaseSchema }).passthrough() });
+  const StoredPlanSchema = z.object({
+    admitted: z.object({ plan: z.object({ output: z.object({ plan: z.object({ schemaVersion: z.number() }).passthrough() }).passthrough() }).passthrough() }).passthrough(),
+  }).passthrough();
+
+  /** Runs and reports the plan step of benchmark run `run` as `driver`, and answers the lease `next --prepare` gives next. */
+  async function leaseAfterPlan(fixture: BenchmarkFixture, run: string): Promise<z.infer<typeof LeaseSchema>> {
+    const next = async () => NextSchema.parse(envelope(await fixture.teamai(['workflow', 'next', run, '--prepare', '--json', JSON.stringify({ driver: { ...driver, can }, running: [] })]))).data.lease;
+    const plan = await next();
+    if (plan.step !== 'plan' || plan.command === undefined) throw new Error(`leased ${plan.step} before the plan`);
+    const planned = spawnSync('/bin/sh', ['-c', plan.command], { cwd: plan.cwd, env: { ...fixture.env, ...plan.env, TEAMAI_WORKFLOW_ATTEMPT: `${run}/${plan.attempt}` }, encoding: 'utf8' });
+    const outputs: unknown = JSON.parse(planned.stdout);
+    const reported = await fixture.teamai(['workflow', 'report', run, '--json', JSON.stringify({ attempt: plan.attempt, revision: plan.revision, driver, outcome: 'success', outputs })]);
+    if (reported.code !== 0) throw new Error(`the plan step was not reported: ${said(reported)}`);
+    return next();
   }
 
   it('refuses to run as no step of a run', async () => {
@@ -280,19 +301,21 @@ describe('teamai benchmark check', () => {
   it('refuses a run whose plan has a schemaVersion this teamai does not know', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'] });
     fixtures.push(fixture);
-    const run = envelope(await fixture.teamai(['workflow', 'start', 'fix', '--benchmark'])).data?.run;
+    const run = envelope(await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix"}', '--timeout', '10m'])).data?.run;
     if (typeof run !== 'string') throw new Error('the run did not start');
+    const baseline = await leaseAfterPlan(fixture, run);
     const projects = path.join(fixture.home, '.teamai', 'projects');
     const file = fs.readdirSync(projects).map((name) => path.join(projects, name, 'workflows', 'runs', `${run}.json`)).find((at) => fs.existsSync(at));
     if (file === undefined) throw new Error(`no run file of ${run}`);
-    const stored = z.object({ benchmark: z.object({ schemaVersion: z.number() }).passthrough() }).passthrough().parse(JSON.parse(fs.readFileSync(file, 'utf8')));
-    fs.writeFileSync(file, JSON.stringify({ ...stored, benchmark: { ...stored.benchmark, schemaVersion: 2 } }));
+    const stored = StoredPlanSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+    const { plan } = stored.admitted;
+    fs.writeFileSync(file, JSON.stringify({ ...stored, admitted: { ...stored.admitted, plan: { ...plan, output: { ...plan.output, plan: { ...plan.output.plan, schemaVersion: 2 } } } } }));
 
-    const checked = check(fixture, ['--baseline'], `${run}/a00000000`);
+    const checked = check(fixture, ['--baseline'], `${run}/${baseline.attempt}`, baseline.cwd);
 
+    expect(baseline.step).toBe('trials.baselines.fix');
     expect(checked.status).toBe(1);
     expect(checked.stdout).toBe('');
-    expect(checked.stderr).toContain(`run_unreadable: Run ${run} could not be read`);
-    expect(checked.stderr).toContain('schemaVersion 1');
+    expect(checked.stderr).toContain(`run_unreadable: Step "plan" of run ${run} printed a benchmark plan of schemaVersion 2, and this teamai reads only schemaVersion 1.`);
   }, 60_000);
 });

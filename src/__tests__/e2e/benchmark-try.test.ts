@@ -1,6 +1,7 @@
 /**
- * Real CLI: `workflow start <suite> --benchmark --try <task file>` in a checkout of the suite's repo, reading the task
- * file and its suite from a team repo checkout beside it, under a HOME where teamai init never ran.
+ * Real CLI: `teamai benchmark try <task file>` in a checkout of the suite's repo, reading the task file and its suite from
+ * a team repo checkout beside it, under a HOME where teamai init never ran. The refusals of the older
+ * `workflow start <suite> --benchmark --try <task file>`, which names its suite and needs --sandbox, stay on that command.
  */
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -73,10 +74,11 @@ arms:
   - name: claude
 timeout: 5m
 ${suiteLines}`);
-  const tryTask = (name: string, taskText: string, flags = ['--driver', 'local', '--sandbox'], suite = 'fix'): Promise<Result> => {
+  /** Writes task file `name` and runs `args`, by default `benchmark try` on it. */
+  const tryTask = (name: string, taskText: string, args = (file: string): string[] => ['benchmark', 'try', file]): Promise<Result> => {
     fs.writeFileSync(path.join(suiteDir, 'tasks', `${name}.yaml`), taskText);
     return new Promise((resolve) => {
-      const child = spawn(process.execPath, [CLI, 'workflow', 'start', suite, '--benchmark', '--try', `../team/benchmarks/fix/tasks/${name}.yaml`, ...flags], { cwd: work, env, stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(process.execPath, [CLI, ...args(`../team/benchmarks/fix/tasks/${name}.yaml`)], { cwd: work, env, stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
       child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
@@ -126,7 +128,7 @@ function message(result: Result): string {
 type Commits = ReturnType<typeof fixture>['commits'];
 const short = (commit: string): string => commit.slice(0, 7);
 
-describe('workflow start --benchmark --try', () => {
+describe('benchmark try', () => {
   // #1402's table: the task, then the suite's extra lines, the exit, and what the answer says.
   it.each<[string, (commits: Commits) => string, string, number, (commits: Commits) => string]>([
     ['pod-startup', (c) => task({ start: c.start, fix: c.fix }), '', 0, (c) => `the check fails at ${short(c.start)} and passes at the fix ${short(c.fix)}`],
@@ -154,10 +156,10 @@ describe('workflow start --benchmark --try', () => {
   it.each<[string, string[], string, string]>([
     ['no sandbox', ['--driver', 'local'], 'fix', 'declare it with --sandbox'],
     ['another suite named', ['--sandbox'], 'other', 'is suite "fix", and the command names "other"'],
-  ])('refuses %s, and runs nothing', async (_case, flags, suite, expected) => {
+  ])('workflow start --benchmark --try refuses %s, and runs nothing', async (_case, flags, suite, expected) => {
     const { commits, tryTask } = fixture();
 
-    const result = await tryTask('pod-startup', task({ start: commits.start, fix: commits.fix }), flags, suite);
+    const result = await tryTask('pod-startup', task({ start: commits.start, fix: commits.fix }), (file) => ['workflow', 'start', suite, '--benchmark', '--try', file, ...flags]);
 
     expect(result.code, said(result)).toBe(1);
     expect(message(result)).toContain(expected);

@@ -1,6 +1,6 @@
 /**
  * Real CLI: pull validates the team's benchmark suites per file and caches only the suites a member's namespaces
- * reach, and push --role places a new suite in the role's namespace.
+ * reach, and push --role places a new suite in the role's namespace. teamai benchmark run starts only a suite pull kept.
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -62,7 +62,7 @@ describe('benchmark suites at pull', () => {
     expect(output).toMatch(/benchmarks\/tasks\/tasks\/short-commit\.yaml:\d+: field "startingCommit": must be a full 40-character commit/);
   }, 120_000);
 
-  it('reports a check.add entry that names no file of the suite directory with its line, and start refuses the suite', async () => {
+  it('reports a check.add entry that names no file of the suite directory with its line, and benchmark run refuses the suite', async () => {
     const fixture = await benchmarkFixture({ tool: 'does-nothing', sandbox: false });
     fixtures.push(fixture);
     fixture.pushTeam({
@@ -71,14 +71,14 @@ describe('benchmark suites at pull', () => {
     });
 
     const pulled = await fixture.teamai(['pull']);
-    const started = envelope(await fixture.teamai(['workflow', 'start', 'hidden', '--benchmark']));
+    const started = envelope(await fixture.teamai(['benchmark', 'run', 'hidden']));
 
     expect(pulled.code, said(pulled)).toBe(0);
     expect(`${pulled.stdout}\n${pulled.stderr}`).toContain('benchmarks/hidden/tasks/fix.yaml:9: field "check.add.0.from": "check-files/missing.test.js" is no file or directory of the suite directory; a symlink is not one');
     expect(started.error).toMatchObject({ code: 'benchmark_not_found' });
   }, 120_000);
 
-  it('reports a trial.timeout not shorter than the suite timeout with its line, and start refuses the suite', async () => {
+  it('reports a trial.timeout not shorter than the suite timeout with its line, and benchmark run refuses the suite', async () => {
     const fixture = await benchmarkFixture({ tool: 'does-nothing', sandbox: false });
     fixtures.push(fixture);
     fixture.pushTeam({
@@ -87,14 +87,14 @@ describe('benchmark suites at pull', () => {
     });
 
     const pulled = await fixture.teamai(['pull']);
-    const started = envelope(await fixture.teamai(['workflow', 'start', 'capped', '--benchmark']));
+    const started = envelope(await fixture.teamai(['benchmark', 'run', 'capped']));
 
     expect(pulled.code, said(pulled)).toBe(0);
     expect(`${pulled.stdout}\n${pulled.stderr}`).toContain('benchmarks/capped/suite.yaml:8: field "trial.timeout": trial.timeout must be shorter than timeout, which bounds the whole run');
     expect(started.error).toMatchObject({ code: 'benchmark_not_found' });
   }, 120_000);
 
-  it('starts from the last valid version of a suite whose newest revision has no valid task', async () => {
+  it('runs the last valid version of a suite whose newest revision has no valid task', async () => {
     const fixture = await benchmarkFixture({ tool: 'does-nothing', sandbox: false });
     fixtures.push(fixture);
     fixture.pushTeam({
@@ -104,10 +104,10 @@ describe('benchmark suites at pull', () => {
     expect((await fixture.teamai(['pull'])).code).toBe(0);
     fixture.pushTeam({ 'benchmarks/kept/tasks/fix.yaml': fixTask('abc1234') });
     const pulled = await fixture.teamai(['pull']);
-    const started = envelope(await fixture.teamai(['workflow', 'start', 'kept', '--benchmark']));
+    const started = envelope(await fixture.teamai(['benchmark', 'run', 'kept', '--sandbox']));
 
     expect(pulled.stdout + pulled.stderr, said(pulled)).toContain('Kept the last valid version of kept');
-    expect(started.data?.run, JSON.stringify(started)).toEqual(expect.any(String));
+    expect(started.data?.done, JSON.stringify(started)).toMatchObject({ run: expect.any(String), outcome: 'succeeded' });
   }, 120_000);
 
   it('caches a role\'s suite only for members with the role, and push --role places a suite there', async () => {
@@ -121,10 +121,10 @@ describe('benchmark suites at pull', () => {
     expect((await fixture.teamai(['pull'])).code).toBe(0);
     const opsSet = await fixture.teamai(['roles', 'set', 'ops']);
     expect((await fixture.teamai(['pull'])).code).toBe(0);
-    const otherRole = envelope(await fixture.teamai(['workflow', 'start', 'dev-fix', '--benchmark']));
+    const otherRole = envelope(await fixture.teamai(['benchmark', 'run', 'dev-fix', '--sandbox']));
     const roleSet = await fixture.teamai(['roles', 'set', 'dev']);
     const pulled = await fixture.teamai(['pull']);
-    const withRole = envelope(await fixture.teamai(['workflow', 'start', 'dev-fix', '--benchmark']));
+    const withRole = envelope(await fixture.teamai(['benchmark', 'run', 'dev-fix', '--sandbox']));
     for (const [file, text] of Object.entries({
       'benchmarks/placed/suite.yaml': suite('placed', { arms: '[{ name: claude }]' }),
       'benchmarks/placed/tasks/fix.yaml': fixTask(fixture.startingCommit),
@@ -140,7 +140,7 @@ describe('benchmark suites at pull', () => {
     expect(otherRole.error).toMatchObject({ code: 'benchmark_not_found' });
     expect(roleSet.code, said(roleSet)).toBe(0);
     expect(pulled.code, said(pulled)).toBe(0);
-    expect(withRole.data?.run, JSON.stringify(withRole)).toEqual(expect.any(String));
+    expect(withRole.data?.done, JSON.stringify(withRole)).toMatchObject({ run: expect.any(String), outcome: 'succeeded' });
     // Provider git pushes the branch and opens no pull request, which push reports as a failure.
     expect(pushed.stdout + pushed.stderr, said(pushed)).toContain('Pushed branch teamai/push/');
     expect(branches.flatMap((branch) => git(['diff', '--name-only', 'main', branch]).split('\n').filter(Boolean)).sort())
