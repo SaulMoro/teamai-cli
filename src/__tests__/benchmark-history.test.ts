@@ -267,6 +267,22 @@ describe('BenchmarkHistory comparisons', () => {
     }
   });
 
+  it("keeps an arm whose workflow changed apart from its earlier runs, under the workflow it runs now", () => {
+    const planFirst: Arm = { name: 'flow', tool: 'claude', workflow: { name: 'plan-then-fix', sourceHash: 'p1' } };
+    const direct: Arm = { name: 'flow', tool: 'claude', workflow: { name: 'direct-fix', sourceHash: 'd1' } };
+    const runs = [
+      run({ id: 'r1', startedAt: '2026-10-20T09:00:00Z', arms: [planFirst], trials: { login: { flow: ['failed'] } } }),
+      run({ id: 'r2', startedAt: '2026-10-21T09:00:00Z', arms: [direct], trials: { login: { flow: ['passed'] } } }),
+    ];
+
+    const arms = BenchmarkHistory.of({ runs, query: { windowDays: 90 }, now: NOW }).selected?.arms ?? [];
+
+    expect(arms.map(({ workflow, isCurrent, points }) => ({ workflow, isCurrent, runs: points.map(({ run: id }) => id) }))).toEqual([
+      { workflow: 'direct-fix', isCurrent: true, runs: ['r2'] },
+      { workflow: 'plan-then-fix', isCurrent: false, runs: ['r1'] },
+    ]);
+  });
+
   it('counts a comparison\'s usage over its paired trials, leaving out a run only one of the arms ran', () => {
     const claude: Arm = { name: 'claude', tool: 'claude' }, codex: Arm = { name: 'codex', tool: 'codex' };
     const runs = [

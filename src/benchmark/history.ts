@@ -225,8 +225,8 @@ function wilson({ passed, planned }: PassRate): { low: number; high: number } {
   return { low: Math.max(0, center - margin), high: Math.min(1, center + margin) };
 }
 
-function armKey({ name, tool, model, effort, team }: Pick<Arm, 'name' | 'tool' | 'model' | 'effort' | 'team'>): string {
-  return JSON.stringify([name, tool, model ?? null, effort ?? null, teamChoiceOf(team)]);
+function armKey({ name, tool, model, effort, team, workflow }: Pick<Arm, 'name' | 'tool' | 'model' | 'effort' | 'team' | 'workflow'>): string {
+  return JSON.stringify([name, tool, model ?? null, effort ?? null, teamChoiceOf(team), workflow?.name ?? null]);
 }
 
 function configKey({ tool, model, effort }: Pick<Arm, 'tool' | 'model' | 'effort'>): string {
@@ -512,7 +512,7 @@ function runRow(input: BenchmarkRunInput): RunRow {
  */
 export function regressionOf(current: BenchmarkRunInput, earlier: readonly BenchmarkRunInput[]): Regression {
   const taskVersions = ({ tasks }: BenchmarkRecord): string => JSON.stringify(tasks.map(({ id, sourceHash }) => [id, sourceHash]).sort());
-  const treatments = ({ arms }: BenchmarkRecord): string => JSON.stringify(arms.map((arm) => [armKey(arm), arm.workflow?.name ?? null]).sort());
+  const treatments = ({ arms }: BenchmarkRecord): string => JSON.stringify(arms.map(armKey).sort());
   const [against] = earlier.filter(({ run, outcome, startedAt, benchmark }) => run !== current.run && outcome === 'succeeded' && startedAt < current.startedAt
     && benchmark.suite.name === current.benchmark.suite.name && taskVersions(benchmark) === taskVersions(current.benchmark) && treatments(benchmark) === treatments(current.benchmark))
     .sort((left, right) => right.startedAt.localeCompare(left.startedAt));
