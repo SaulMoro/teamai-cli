@@ -9,7 +9,7 @@ import { localId, statesIn, stepDefinitions, type Scope } from './scope.js';
 import { parseStepPath } from './step-path.js';
 import { passOf, type Delivery, type StepState } from './step-state.js';
 import { ClonePlaceSchema, type ClonePlace } from './clone.js';
-import type { DriverIdentity, RunState, WorkflowDefinition, WorkflowFailure, WorkflowStep, WORKSPACE_MODES } from './types.js';
+import { stepWorkflow, workflowRunBy, type DriverIdentity, type RunState, type WorkflowDefinition, type WorkflowFailure, type WorkflowStep, type WORKSPACE_MODES } from './types.js';
 
 export type WorkspaceMode = typeof WORKSPACE_MODES[number];
 
@@ -109,7 +109,11 @@ export function cloneOf(step: WorkflowStep): ClonePlace | undefined {
  * never published, claimed, retried or counted in member stats, and its sessions and labels stay off the team's.
  */
 export function isIsolated(run: Pick<RunState, 'definition' | 'workflows'>): boolean {
-  const opens = (steps: readonly WorkflowStep[]): boolean => steps.some((step) => cloneOf(step) !== undefined || (typeof step.workflow === 'object' && opens(step.workflow.steps)));
+  // What a `from` step runs is admitted only when its producer reports, after the run started, so it may open one.
+  const opens = (steps: readonly WorkflowStep[]): boolean => steps.some((step) => {
+    const child = stepWorkflow(step);
+    return cloneOf(step) !== undefined || child?.kind === 'from' || (child?.kind === 'inline' && opens(child.workflow.steps));
+  });
   return [run.definition, ...Object.values(run.workflows ?? {})].some((definition) => opens(definition.steps));
 }
 
@@ -127,7 +131,7 @@ export function deliveryProblem(
   definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, base: RunState['base'],
 ): WorkflowFailure | undefined {
   let delivering: string | undefined;
-  const childOf = (step: WorkflowStep) => (typeof step.workflow === 'string' ? workflows[step.workflow] : step.workflow);
+  const childOf = (step: WorkflowStep) => workflowRunBy({ workflows }, step, '');
   const writes = (steps: WorkflowStep[], ancestors: WorkflowStep[]): boolean => steps.some((step) => {
     const child = childOf(step);
     if (child) return writes(child.steps, [...ancestors, step]);

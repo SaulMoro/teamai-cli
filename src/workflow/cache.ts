@@ -24,7 +24,7 @@ import {
 import { LineCounter, parseDocument } from 'yaml';
 import { formatDiagnostic, parseWorkflow, promptFileDiagnostics, stepField } from './parse.js';
 import { locate, valueNode, type WorkflowFiles } from './parse-context.js';
-import type { CachedWorkflow, ResolvedWorkflow, WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './types.js';
+import { stepWorkflow, type CachedWorkflow, type ResolvedWorkflow, type WorkflowDefinition, type WorkflowDiagnostic, type WorkflowStep } from './types.js';
 import { DefaultWorkflows } from '../default-workflows.js';
 import { checkFilesNamed, parseSuite, type SourceFile, type Suite, type SuiteFile } from '../benchmark/suite.js';
 import { BENCHMARK_NAME } from '../benchmark/terms.js';
@@ -76,10 +76,13 @@ export function formatUnknownScorer(unknown: UnknownScorer): string {
 
 /** The scorers a definition's steps list, including inside its inline workflows, with each step's path. */
 function scorersListedBy(definition: { steps: WorkflowStep[] }, prefix = ''): Array<{ step: string; scorer: string }> {
-  return definition.steps.flatMap((step) => [
-    ...(step.scorers?.names ?? []).map((scorer) => ({ step: `${prefix}${step.id}`, scorer })),
-    ...(typeof step.workflow === 'object' ? scorersListedBy(step.workflow, `${prefix}${step.id}.`) : []),
-  ]);
+  return definition.steps.flatMap((step) => {
+    const child = stepWorkflow(step);
+    return [
+      ...(step.scorers?.names ?? []).map((scorer) => ({ step: `${prefix}${step.id}`, scorer })),
+      ...(child?.kind === 'inline' ? scorersListedBy(child.workflow, `${prefix}${step.id}.`) : []),
+    ];
+  });
 }
 
 /** One version of a file, as its reference checks read it: this revision, or the copy the cache keeps. */
@@ -716,8 +719,11 @@ function dropsKeptVersion(diagnostics: WorkflowDiagnostic[]): boolean {
  * Every walk across files, at pull and at start, follows references through here.
  */
 export function workflowsRunBy(definition: { steps: WorkflowStep[] }, prefix = ''): Array<{ step: string; workflow: string }> {
-  return definition.steps.flatMap((step) => (typeof step.workflow === 'object' ? workflowsRunBy(step.workflow, `${prefix}${step.id}.`)
-    : step.workflow === undefined ? [] : [{ step: `${prefix}${step.id}`, workflow: step.workflow }]));
+  return definition.steps.flatMap((step) => {
+    const child = stepWorkflow(step);
+    if (child?.kind === 'inline') return workflowsRunBy(child.workflow, `${prefix}${step.id}.`);
+    return child?.kind === 'named' ? [{ step: `${prefix}${step.id}`, workflow: child.name }] : [];
+  });
 }
 
 /** The workflows a cached workflow runs, by name, and one hash over its sources and theirs. */
@@ -890,7 +896,8 @@ function checkReferences(checked: Checked[], kept: Map<string, CachedWorkflow | 
     const parsed = parseWorkflow(version.relativePath, version.content, files);
     const diagnostics = parsed.ok ? [] : parsed.diagnostics;
     const promptFiles = (steps: WorkflowStep[], trail: number[]): void => steps.forEach((step, index) => {
-      if (typeof step.workflow === 'object') promptFiles(step.workflow.steps, [...trail, index]);
+      const child = stepWorkflow(step);
+      if (child?.kind === 'inline') promptFiles(child.workflow.steps, [...trail, index]);
       if (step.promptFile === undefined || step.prompt === undefined) return;
       const at = version.promptFileLocations[stepField([...trail, index])] ?? { line: 1, column: 1 };
       diagnostics.push(...promptFileDiagnostics(version.relativePath, version.definition, [...trail, index], step.prompt, at, files));
@@ -958,8 +965,9 @@ async function resolvePromptFiles(
     const steps = [...given];
     for (const [index, step] of given.entries()) {
       const field = stepField([...trail, index]);
-      if (typeof step.workflow === 'object') {
-        steps[index] = { ...step, workflow: { ...step.workflow, steps: await resolveSteps(step.workflow.steps, [...trail, index]) } };
+      const child = stepWorkflow(step);
+      if (child?.kind === 'inline') {
+        steps[index] = { ...step, workflow: { ...child.workflow, steps: await resolveSteps(child.workflow.steps, [...trail, index]) } };
         continue;
       }
       if (!step.promptFile) continue;

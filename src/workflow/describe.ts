@@ -1,6 +1,6 @@
 import { sameEnvName } from '../resources/env-key.js';
 import { mergeRequirements, negotiate, requiredEnvKeys, type Allow, type DriverCan, type EnvFacts, type InEffect, type Missing, type Setup } from './requirements.js';
-import type { Invoke, OutputSchema, WorkflowDefinition, WorkflowSource, WorkflowStep } from './types.js';
+import { stepWorkflow, workflowRunBy, type Invoke, type OutputSchema, type WorkflowDefinition, type WorkflowSource, type WorkflowStep } from './types.js';
 import { opensCopy, resolveMode, runsInCheckout } from './workspace.js';
 
 /**
@@ -39,7 +39,8 @@ function guardsOf(step: WorkflowStep, steps: WorkflowStep[], prefix: string): Ga
   if (step.command !== undefined) return { kind: 'command', line: commandLine(step.command) };
   if (step.interactive) return { kind: 'interactive' };
   if (step.prompt !== undefined || step.promptFile !== undefined) return { kind: 'prompt' };
-  if (step.workflow !== undefined) return { kind: 'workflow', ...(typeof step.workflow === 'string' ? { name: step.workflow } : {}) };
+  const child = stepWorkflow(step);
+  if (child) return { kind: 'workflow', ...(child.kind === 'named' ? { name: child.name } : {}) };
   if (step.end !== undefined) return { kind: 'end', end: step.end, ...(prefix !== '' ? { workflow: prefix.slice(0, -1) } : {}) };
   return { kind: 'none', waiting: steps.filter((other) => other.needs?.includes(step.id)).map((other) => `${prefix}${other.id}`) };
 }
@@ -141,7 +142,8 @@ export function describeWorkflow(input: {
   };
   /** By the step that opened each copy: whether the driver takes a step in it, and the first step in it the driver is held from. */
   const copies = new Map<string, { taken: boolean; held?: { step: string; missing: LocalRoute['missing'] } }>();
-  const childOf = (step: WorkflowStep): { steps: WorkflowStep[] } | undefined => (typeof step.workflow === 'string' ? workflows[step.workflow] : step.workflow);
+  // Before a run, a `from` step's workflow does not exist yet.
+  const childOf = (step: WorkflowStep): { steps: WorkflowStep[] } | undefined => workflowRunBy({ workflows }, step, '');
   /** As the engine's `offerTerms` asks `negotiate`, so describe holds exactly what `next` would hold. */
   const offer = (step: WorkflowStep, path: string, scope: Scope): void => {
     const hasContract = !runsInCheckout(step, scope.ancestors);
@@ -202,7 +204,8 @@ export function describeWorkflow(input: {
       }
       let own = 0;
       if (child) {
-        const named = typeof step.workflow === 'string' ? workflows[step.workflow] : undefined;
+        const runs = stepWorkflow(step);
+        const named = runs?.kind === 'named' ? workflows[runs.name] : undefined;
         const setup = named?.setup ?? scope.setup;
         const defaultModel = named?.defaults?.model ?? scope.defaultModel;
         const limits = [step.forEach ? undefined : step.budget, named?.budget].flatMap((budget) => (budget ? [budget.tokens] : []));

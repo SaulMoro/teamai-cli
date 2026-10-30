@@ -52,7 +52,7 @@ import { redact } from './utils/redact.js';
 import { formatUnknownScorer, loadCachedWorkflow, loadWorkflowTree, syncWorkflowDefinitions, type UnknownScorer } from './workflow/cache.js';
 import { formatDiagnostic, INVOKE_ALIAS_SINCE, parseWorkflow } from './workflow/parse.js';
 import { stepModelUnavailableText } from './workflow/step-model.js';
-import type { WorkflowDefinition, WorkflowDiagnostic, WorkflowStep } from './workflow/types.js';
+import { stepWorkflow, type WorkflowDefinition, type WorkflowDiagnostic, type WorkflowStep } from './workflow/types.js';
 import { formatScorerDiagnostic } from './scorers/definition.js';
 import { scorerModelUnavailableText } from './scorers/judge-model.js';
 import { loadCachedScorer, SCORING_FILE, syncScorerDefinitions, type CachedScorer } from './scorers/cache.js';
@@ -1238,13 +1238,16 @@ function promptSteps(
 ): Array<{ path: string; step: WorkflowStep; defaultModel: string | undefined }> {
   return definition.steps.flatMap((step) => {
     const stepPath = `${prefix}${step.id}`;
-    if (typeof step.workflow === 'object') return promptSteps(step.workflow, workflows, defaultModel, `${stepPath}.`, inherited);
-    if (step.workflow !== undefined) {
-      const runs: WorkflowDefinition | undefined = workflows[step.workflow];
+    const child = stepWorkflow(step);
+    if (child?.kind === 'inline') return promptSteps(child.workflow, workflows, defaultModel, `${stepPath}.`, inherited);
+    if (child?.kind === 'named') {
+      const runs: WorkflowDefinition | undefined = workflows[child.name];
       return runs && runs.defaults?.model === undefined && defaultModel !== undefined
         ? promptSteps(runs, workflows, defaultModel, `${stepPath}.`, true)
         : [];
     }
+    // What a `from` step runs exists only once its run admits it.
+    if (child?.kind === 'from') return [];
     if (step.prompt === undefined && step.promptFile === undefined) return [];
     return inherited && step.model !== undefined ? [] : [{ path: stepPath, step, defaultModel }];
   });

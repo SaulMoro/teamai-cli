@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ENV_KEY_RE, sameEnvName } from '../resources/env-key.js';
-import { WORKSPACE_MODES, type WorkflowDefaults, type WorkflowFailure, type WorkflowStep } from './types.js';
+import { stepWorkflow, WORKSPACE_MODES, type WorkflowDefaults, type WorkflowFailure, type WorkflowStep } from './types.js';
 import type { WorkspaceMode } from './workspace.js';
 
 /** How far a driver keeps a step from the member's machine, weakest first. A workspace contract is at least `worktree`. */
@@ -475,7 +475,8 @@ export function requiredEnvKeys(definitions: ReadonlyArray<{ defaults?: Workflow
   const visit = (steps: readonly WorkflowStep[]): void => {
     for (const step of steps) {
       for (const key of step.requires?.env ?? []) keys.add(key);
-      if (typeof step.workflow === 'object') visit(step.workflow.steps);
+      const child = stepWorkflow(step);
+      if (child?.kind === 'inline') visit(child.workflow.steps);
     }
   };
   for (const definition of definitions) {

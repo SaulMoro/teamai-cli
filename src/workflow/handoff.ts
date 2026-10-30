@@ -22,7 +22,7 @@ import {
 } from './snapshot.js';
 import { takeOver, type UnleasedStep } from './step-state.js';
 import { installOwner, isRunId, readRun, updateRun } from './store.js';
-import type { RunState, RunStatus, WorkflowDefinition, WorkflowFailure, WorkflowSource, WorkflowStep } from './types.js';
+import { workflowRunBy, type RunState, type RunStatus, type WorkflowDefinition, type WorkflowFailure, type WorkflowSource, type WorkflowStep } from './types.js';
 import { branchName, isIsolated, stepMode, type LeaseSession, type SessionRef } from './workspace.js';
 import { fetchMissingCommits, git, reconcileCopy } from './worktree.js';
 
@@ -660,7 +660,8 @@ export function settledSteps({ steps, definition, workflows = {} }: { steps: Rea
  * can run again.
  */
 function settledForGood({ definition, workflows }: Definitions, byId: ReadonlyMap<string, { status: string; loopFinal?: boolean }>) {
-  const workflowOf = (step: WorkflowStep) => (typeof step.workflow === 'object' ? step.workflow : step.workflow === undefined ? undefined : workflows[step.workflow]);
+  // A run with a `from` step is isolated, so it never comes here.
+  const workflowOf = (step: WorkflowStep) => workflowRunBy({ workflows }, step, '');
   const prefixes = (id: string) => id.split('.').map((_, at, segments) => segments.slice(0, at + 1).join('.'));
   /** Each workflow on the way to instance `id`: its definition, the instance that runs it ('' at the top), and the step of it `id` is in. */
   const levels = (id: string) => {

@@ -46,7 +46,7 @@ import { error, ok } from './engine.js';
 import { stepDefinitions } from './scope.js';
 import { parseStepPath } from './step-path.js';
 import { installOwner, isRunId, readRun, runsDir } from './store.js';
-import type { InlineWorkflow, RunState, WorkflowDefinition, WorkflowEnvelope, WorkflowStep } from './types.js';
+import { isWorkflowFile, workflowRunBy, type InlineWorkflow, type RunState, type WorkflowDefinition, type WorkflowEnvelope, type WorkflowStep } from './types.js';
 
 
 /** What a driver says when it asks for judge work. */
@@ -154,15 +154,14 @@ async function recentRuns(config: LocalConfig, now: string, kept: ReadonlySet<st
 function workflowBatch(run: RunState, step: string): boolean | undefined {
   let workflow: WorkflowDefinition | InlineWorkflow | undefined = run.definition;
   let batch = run.definition.defaults?.scorers?.batch;
-  for (const { id } of parseStepPath(step).slice(0, -1)) {
+  let prefix = '';
+  for (const segment of step.split('.').slice(0, -1)) {
+    const id = parseStepPath(segment)[0]?.id ?? segment;
     const parent: WorkflowStep | undefined = workflow?.steps.find((candidate) => candidate.id === id);
-    if (typeof parent?.workflow === 'string') {
-      const named: WorkflowDefinition | undefined = run.workflows?.[parent.workflow];
-      batch = named?.defaults?.scorers?.batch ?? batch;
-      workflow = named;
-    } else {
-      workflow = parent?.workflow;
-    }
+    workflow = parent && workflowRunBy(run, parent, prefix);
+    // A workflow file, named or admitted, sets its own; an inline workflow keeps the one around it.
+    if (workflow && isWorkflowFile(workflow)) batch = workflow.defaults?.scorers?.batch ?? batch;
+    prefix = `${prefix}${segment}.`;
   }
   return batch;
 }

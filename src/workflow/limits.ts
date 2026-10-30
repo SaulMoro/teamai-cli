@@ -9,7 +9,7 @@ import { stepDefinitions, topScope, type GrantedAllowance, type Scope } from './
 import { passOf, settled, stopAttempt, stopWhere, timeOut, type LeasedStep, type LimitsFrom, type StepState, type StoppedAttempt } from './step-state.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 import type { WorkflowResult } from './engine.js';
-import type { RunState, WorkflowStep } from './types.js';
+import { isWorkflowFile, workflowRunBy, type RunState, type WorkflowStep } from './types.js';
 
 function after(from: string, ms: number): string {
   return new Date(Date.parse(from) + ms).toISOString();
@@ -27,7 +27,8 @@ function passed(deadline: string, now: string): boolean {
  */
 export function ownDeadline(run: RunState, state: StepState, step: WorkflowStep, now: string): string | undefined {
   const item = step.forEach !== undefined && isItem(state);
-  const file = typeof step.workflow === 'string' && (!step.forEach || item) ? run.workflows?.[step.workflow]?.timeout : undefined;
+  const runs = !step.forEach || item ? workflowRunBy(run, step, state.id.slice(0, state.id.lastIndexOf('.') + 1)) : undefined;
+  const file = runs && isWorkflowFile(runs) ? runs.timeout : undefined;
   const limits = [item || step.onLimit === 'end_turn' ? undefined : step.timeout, file].filter((ms) => ms !== undefined);
   return limits.length > 0 ? after(now, Math.min(...limits)) : undefined;
 }

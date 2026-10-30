@@ -71,10 +71,11 @@ export interface WorkflowStep {
   /** Variables a command step receives, as written; `{{ inputs.… }}` and `{{ steps.… }}` render when the step is leased. */
   env?: Record<string, string>;
   /**
-   * The workflow this step runs: a name, which the cache keeps and `start` snapshots into the run,
-   * or an inline workflow, kept in place.
+   * The workflow this step runs, as written: a name, which the cache keeps and `start` snapshots into the run; an inline
+   * workflow, kept in place; or `{ from }`, the workflow output of a step it needs, admitted when that step reports.
+   * Read it through {@link stepWorkflow}.
    */
-  workflow?: string | InlineWorkflow;
+  workflow?: string | InlineWorkflow | WorkflowFrom;
   /** Values for the inputs of the workflow this step runs, as written; every string inside follows the template rules. */
   with?: Record<string, unknown>;
   /** Name in `ends` this step finishes the workflow with when it succeeds. A step with no action only ends the workflow and is never leased. */
@@ -171,6 +172,54 @@ export function hasAction(step: WorkflowStep): boolean {
 }
 
 export type EndOutcome = 'succeeded' | 'failed';
+
+/** `workflow: { from: <step> }`: the step runs the `workflow` output of step `from`, which it needs. */
+export interface WorkflowFrom {
+  from: string;
+}
+
+/** What a step's `workflow` names: a workflow file, an inline workflow, or the workflow output of a step it needs. */
+export type StepWorkflow =
+  | { kind: 'named'; name: string }
+  | { kind: 'inline'; workflow: InlineWorkflow }
+  | { kind: 'from'; step: string };
+
+/** The workflow `step` runs, as its `workflow` names it, or undefined for a step that runs none. Every reader of `workflow` goes through here. */
+export function stepWorkflow({ workflow }: Pick<WorkflowStep, 'workflow'>): StepWorkflow | undefined {
+  if (workflow === undefined) return undefined;
+  if (typeof workflow === 'string') return { kind: 'named', name: workflow };
+  return 'from' in workflow ? { kind: 'from', step: workflow.from } : { kind: 'inline', workflow };
+}
+
+/** Whether `workflow` is a workflow file, named or admitted, rather than an inline workflow, which has no name. */
+export function isWorkflowFile(workflow: WorkflowDefinition | InlineWorkflow): workflow is WorkflowDefinition {
+  return 'name' in workflow;
+}
+
+/**
+ * The workflow `step` runs in `run`, where `prefix` is the path of the workflow the step is in (`''` at the top): an
+ * inline one as written, a file as the run pinned it, or the workflow its `from` step's output was admitted as.
+ * Undefined when the run holds none of those.
+ */
+export function workflowRunBy(
+  run: Pick<RunState, 'workflows' | 'admitted'>, step: Pick<WorkflowStep, 'workflow'>, prefix: string,
+): WorkflowDefinition | InlineWorkflow | undefined {
+  const runs = stepWorkflow(step);
+  switch (runs?.kind) {
+    case undefined:
+      return undefined;
+    case 'named':
+      return run.workflows?.[runs.name];
+    case 'inline':
+      return runs.workflow;
+    case 'from':
+      return run.admitted?.[`${prefix}${runs.step}`]?.definition;
+    default: {
+      const unhandled: never = runs;
+      return unhandled;
+    }
+  }
+}
 
 /**
  * A workflow written inside a step. It has no inputs of its own: its steps read the enclosing workflow's inputs
@@ -339,6 +388,11 @@ export interface RunState {
   workflows?: Record<string, WorkflowDefinition>;
   /** The scorers its steps list, by name, as they were cached when it started. A name with no valid scorer then is absent. */
   scorers?: Record<string, PinnedScorer>;
+  /**
+   * The `workflow` outputs of the steps a `from` step runs, by the path of the producing step, admitted when it reported
+   * and frozen for the run's life. The named workflows and generated scorers each brought are in `workflows` and `scorers`.
+   */
+  admitted?: Record<string, AdmittedWorkflow>;
   /** The frozen benchmark plan; set only by `start --benchmark`. */
   benchmark?: BenchmarkPlan;
   /** How each entry of the run's `sampling: all` scorers stood when its steps ended, before `finally`, frozen by `finishRun`. */
@@ -404,6 +458,17 @@ export interface RunState {
    */
   limitsFrom?: LimitsFrom;
   updatedAt: string;
+}
+
+/**
+ * A producer's output as admission accepted it: the whole output its report gave, never rewritten, with a hash over it;
+ * the output field that held the workflow; and the workflow that field defines, which a `from` step runs.
+ */
+export interface AdmittedWorkflow {
+  output: Record<string, unknown>;
+  hash: string;
+  field: string;
+  definition: WorkflowDefinition;
 }
 
 /** What this machine knows of the run's snapshot on `teamai-reports`. */

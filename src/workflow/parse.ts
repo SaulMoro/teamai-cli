@@ -7,7 +7,7 @@ import {
 import type {
   Budget, EndOutcome, ForEach, InlineWorkflow, OutputSchema, StepLoop, StepScorers, StepWorkspace, WorkflowDefaults, WorkflowDefinition, WorkflowDiagnostic, WorkflowLoop, WorkflowStep,
 } from './types.js';
-import { INVOKE_VALUES, STEP_ACTIONS } from './types.js';
+import { INVOKE_VALUES, STEP_ACTIONS, stepWorkflow } from './types.js';
 import {
   isYamlNode, locate, position, scalarString, unknownKey, valueNode, unavailableField, undeclaredField, undeclaredOutput,
   type Child, type GraphNode, type ParseContext, type WorkflowFiles,
@@ -657,7 +657,7 @@ function parseBody(
     diagnostics.push(...conditionDiagnostics(ctx, conditions, reads));
     const needsById = new Map(graph.map((step) => [step.id, step.needs]));
     // An inline workflow that is reported has no step here, so reads of it are not checked.
-    const children = childrenOf([...references, ...steps.filter((step) => typeof step.workflow === 'object')], files);
+    const children = childrenOf([...references, ...steps.filter((step) => stepWorkflow(step)?.kind === 'inline')], files);
     // A malformed inputs header is already reported; checking reads against it would only add noise.
     // An inline workflow's reads of steps that are not its own are checked by the workflow around it.
     const split = splitReads(reads, at === '' ? undefined : seen);
@@ -794,15 +794,17 @@ function referenceDiagnostics({ file, lineCounter }: ParseContext, files: Workfl
  * The workflow each step runs: an inline one as written, a file as a sync knows it.
  * A step whose reference is reported has none, so its reads are not checked.
  */
-function childrenOf(steps: Array<{ id: string; workflow?: string | InlineWorkflow }>, files: WorkflowFiles | undefined): Map<string, Child> {
+function childrenOf(steps: Array<Pick<WorkflowStep, 'id' | 'workflow'>>, files: WorkflowFiles | undefined): Map<string, Child> {
   const children = new Map<string, Child>();
-  for (const { id, workflow } of steps) {
-    if (typeof workflow === 'object') {
-      children.set(id, { label: `the inline workflow of step "${id}"`, outputs: workflow.outputs, ends: workflow.ends });
+  for (const step of steps) {
+    const { id } = step;
+    const runs = stepWorkflow(step);
+    if (runs?.kind === 'inline') {
+      children.set(id, { label: `the inline workflow of step "${id}"`, outputs: runs.workflow.outputs, ends: runs.workflow.ends });
       continue;
     }
-    if (!files || workflow === undefined || files.cycle(workflow)) continue;
-    const child = files.runnable(workflow);
+    if (!files || runs?.kind !== 'named' || files.cycle(runs.name)) continue;
+    const child = files.runnable(runs.name);
     if (child) children.set(id, { label: `workflow "${child.name}"`, outputs: child.outputs, ends: child.ends });
   }
   return children;
@@ -1053,12 +1055,13 @@ function withheldEnvRequired(node: Node | undefined, workflow: { defaults?: Work
     const field = `${at}steps[${index}]`;
     const requires = mergeRequirements(scope, step.requires);
     report(requires, item, field, step.requires?.env);
-    if (typeof step.workflow === 'object') withheldEnvRequired(valueNode(item, 'workflow'), step.workflow, `${field}.workflow.`, requires, ctx, caller);
-    if (typeof step.workflow !== 'string' || caller.runs.includes(step.workflow)) return;
-    const child = ctx.files?.runnable(step.workflow);
+    const runs = stepWorkflow(step);
+    if (runs?.kind === 'inline') withheldEnvRequired(valueNode(item, 'workflow'), runs.workflow, `${field}.workflow.`, requires, ctx, caller);
+    if (runs?.kind !== 'named' || caller.runs.includes(runs.name)) return;
+    const child = ctx.files?.runnable(runs.name);
     if (child) {
       withheldEnvRequired(undefined, child, '', requires, ctx, {
-        says: `${caller.says}${field}.workflow runs workflow "${step.workflow}", whose `, runs: [...caller.runs, step.workflow],
+        says: `${caller.says}${field}.workflow runs workflow "${runs.name}", whose `, runs: [...caller.runs, runs.name],
         at: caller.at ?? { node: valueNode(item, 'workflow'), field: `${field}.workflow` },
       });
     }
@@ -1371,9 +1374,10 @@ export function promptFileDiagnostics(
   const runners: WorkflowStep[] = [];
   for (const index of trail.slice(0, -1)) {
     const runner = levels[levels.length - 1]?.[index];
-    if (typeof runner?.workflow !== 'object') return [];
+    const runs = runner && stepWorkflow(runner);
+    if (runs?.kind !== 'inline') return [];
     runners.push(runner);
-    levels.push(runner.workflow.steps);
+    levels.push(runs.workflow.steps);
   }
   const step = levels[levels.length - 1]?.[trail[trail.length - 1] ?? -1];
   if (!step) return [];

@@ -43,7 +43,7 @@ import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedC
 import { executableOf, isLaunchTool, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, type LaunchTool } from '../../../tool-launch/tools.js';
 import { chooseStepModel, loadDeployedAgent } from '../../step-model.js';
 import type { DriverIdentity, RunState, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
-import { isWorkflowError, WORKSPACE_MODES } from '../../types.js';
+import { isWorkflowError, stepWorkflow, WORKSPACE_MODES } from '../../types.js';
 import { cloneBranchOf, type SessionRef } from '../../workspace.js';
 import { headCommit } from '../../worktree.js';
 
@@ -559,10 +559,11 @@ function namedTools(run: RunState): Set<string> {
   const visit = (steps: readonly WorkflowStep[]): void => {
     for (const step of steps) {
       if (step.tool !== undefined) named.add(step.tool);
-      if (typeof step.workflow === 'object') visit(step.workflow.steps);
+      const child = stepWorkflow(step);
+      if (child?.kind === 'inline') visit(child.workflow.steps);
     }
   };
-  for (const definition of [run.definition, ...Object.values(run.workflows ?? {})]) visit(definition.steps);
+  for (const definition of [run.definition, ...Object.values(run.workflows ?? {}), ...Object.values(run.admitted ?? {}).map((admitted) => admitted.definition)]) visit(definition.steps);
   return named;
 }
 

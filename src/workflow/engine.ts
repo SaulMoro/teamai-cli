@@ -60,7 +60,7 @@ import type {
   WorkflowFailure,
   WorkflowStep,
 } from './types.js';
-import { hasAction } from './types.js';
+import { hasAction, stepWorkflow } from './types.js';
 import { describeWorkflow } from './describe.js';
 import { benchmarkTable, formatBenchmarkTable, type BenchmarkTable } from '../benchmark/table.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
@@ -543,9 +543,10 @@ function readsOf(step: WorkflowStep, item: boolean): Set<string> {
     }),
   ];
   const ids = stepsRead(paths);
-  if (typeof step.workflow === 'object') {
-    const own = new Set(step.workflow.steps.map((childStep) => childStep.id));
-    for (const inner of step.workflow.steps) for (const id of readsOf(inner, bindsItem)) if (!own.has(id)) ids.add(id);
+  const child = stepWorkflow(step);
+  if (child?.kind === 'inline') {
+    const own = new Set(child.workflow.steps.map((childStep) => childStep.id));
+    for (const inner of child.workflow.steps) for (const id of readsOf(inner, bindsItem)) if (!own.has(id)) ids.add(id);
   }
   ids.delete(step.id);
   return ids;
@@ -720,7 +721,20 @@ function finishStep(run: RunState, state: StepState, definition: WorkflowStep, r
 
 function childOrUnreadable(run: RunState, scope: Scope, states: StepState[], state: StepState, definition: WorkflowStep): Scope | { unreadable: string } {
   return childScope(run, scope, states, state, definition)
-    ?? { unreadable: `Run ${run.id} step "${state.id}" runs workflow "${definition.workflow}", which the run did not keep` };
+    ?? { unreadable: unkeptWorkflow(run, state, definition) };
+}
+
+/** Why the run cannot read the workflow step `state` runs: a file it did not pin, or a producer's output it did not admit. */
+function unkeptWorkflow(run: RunState, state: StepState, definition: WorkflowStep): string {
+  const runs = stepWorkflow(definition);
+  switch (runs?.kind) {
+    case 'from':
+      return `Run ${run.id} step "${state.id}" runs the workflow output of step "${runs.step}", which the run did not admit`;
+    case 'named':
+      return `Run ${run.id} step "${state.id}" runs workflow "${runs.name}", which the run did not keep`;
+    default:
+      return `Run ${run.id} step "${state.id}" runs no workflow the run keeps`;
+  }
 }
 
 function settleRunning(run: RunState, scope: Scope, states: StepState[], state: StepState, definition: WorkflowStep, now: string): Settled {
@@ -994,10 +1008,10 @@ function secretMismatch(
 
 /** Every scorer name a step of `definitions` lists, inline workflows included. */
 function listedScorers(definitions: ReadonlyArray<{ steps: WorkflowStep[] }>): string[] {
-  return definitions.flatMap((definition) => definition.steps.flatMap((step) => [
-    ...step.scorers?.names ?? [],
-    ...(typeof step.workflow === 'object' ? listedScorers([step.workflow]) : []),
-  ]));
+  return definitions.flatMap((definition) => definition.steps.flatMap((step) => {
+    const child = stepWorkflow(step);
+    return [...step.scorers?.names ?? [], ...(child?.kind === 'inline' ? listedScorers([child.workflow]) : [])];
+  }));
 }
 
 /**

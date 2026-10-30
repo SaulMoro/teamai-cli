@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { stepWorkflow } from '../workflow/types.js';
 import { formatDiagnostic, parseWorkflow } from '../workflow/parse.js';
 
 const FILE = 'workflows/build.yaml';
@@ -625,8 +626,8 @@ steps:
     if (!result.ok) return;
     expect(result.definition.loop).toEqual({ while: "steps.probe.outputs.status != 'ready' && inputs.target != ''", maxIterations: 5 });
     expect(result.definition.steps[1]?.break).toBe("steps.probe.outputs.status == 'gone'");
-    const retry = result.definition.steps[2]?.workflow;
-    expect(typeof retry === 'object' ? retry.loop : undefined).toEqual({ maxIterations: 2 });
+    const retry = result.definition.steps[2] && stepWorkflow(result.definition.steps[2]);
+    expect(retry?.kind === 'inline' ? retry.workflow.loop : undefined).toEqual({ maxIterations: 2 });
   });
 
   it('rejects a break inside the range of a step loop', () => {
