@@ -267,4 +267,14 @@ ${step.includes('deliver') ? '    prompt: Ship it.\n' : '    command: echo more\
     expect(ErrorSchema.parse(envelope(ran)).error.message).toContain('Arm "flow" runs workflow "fixer", which has finally steps');
     expect(fixture.runIds()).toEqual([]);
   }, 120_000);
+
+  it('refuses before any run a workflow arm with no model whose workflow runs an agent', async () => {
+    const fixture = await fixtureWith(SUITE, { fixer: FIXER.replace('    tool: codex\n', '    tool: codex\n    agent: planner\n'), 'fix-once': FIX_ONCE });
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+
+    expect(ran.code, said(ran)).toBe(1);
+    expect(ErrorSchema.parse(envelope(ran)).error.message).toContain('Arm "flow" runs workflow "fixer", whose step "plan" runs agent "planner", and the arm sets no model');
+    expect(fixture.runIds()).toEqual([]);
+  }, 120_000);
 });

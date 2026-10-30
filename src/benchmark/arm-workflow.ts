@@ -82,6 +82,14 @@ export async function pinArmWorkflow(
       return refuse(`${runs}${holder}, whose step "${refused.step}" ${refused.why}. A trial runs unattended in its own clone: change the workflow, push it, run teamai pull, and start again.`);
     }
   }
+  // With no model, the arm runs on its tool's default, which the model an agent's definition sets would replace.
+  for (const [file, cached] of arm.model === undefined ? sources : []) {
+    const found = agentPrompt(cached.definition.steps);
+    if (found !== undefined) {
+      const holder = file === top.definition.name ? '' : `, which runs workflow "${file}"`;
+      return refuse(`${runs}${holder}, whose step "${found.step}" runs agent "${found.agent}", and the arm sets no model, so the agent's own model could replace the tool's default it compares. Set model on the arm, and start again.`);
+    }
+  }
   const raws = new Map<string, { raw: z.infer<typeof FileSchema>; parsed: readonly WorkflowStep[] }>();
   for (const [file, cached] of sources) {
     const raw = FileSchema.safeParse(cached.content === undefined ? undefined : parse(cached.content));
@@ -138,6 +146,18 @@ function unrunnableStep(steps: readonly WorkflowStep[], prefix = ''): { step: st
     if (step.command !== undefined && step.workspace === undefined) return { step: id, why: 'runs a command in the member\'s checkout; give it workspace: continue' };
     const child = stepWorkflow(step);
     const inner = child?.kind === 'inline' ? unrunnableStep(child.workflow.steps, `${id}.`) : undefined;
+    if (inner) return inner;
+  }
+  return undefined;
+}
+
+/** The first prompt step of `steps`, inline workflows included, that runs an agent, and the agent. */
+function agentPrompt(steps: readonly WorkflowStep[], prefix = ''): { step: string; agent: string } | undefined {
+  for (const step of steps) {
+    const id = `${prefix}${step.id}`;
+    if (step.prompt !== undefined && step.agent !== undefined) return { step: id, agent: step.agent };
+    const child = stepWorkflow(step);
+    const inner = child?.kind === 'inline' ? agentPrompt(child.workflow.steps, `${id}.`) : undefined;
     if (inner) return inner;
   }
   return undefined;
