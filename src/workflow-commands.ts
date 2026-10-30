@@ -13,7 +13,8 @@ import { safeText } from './session-flow/session-cmd-shared.js';
 import type { HandoffOwner } from './workflow/snapshot.js';
 import { getRepoIdentity } from './session-flow/sync.js';
 import { readableReportsWorktree } from './utils/reports-branch.js';
-import { callerProvenance, cancelRun, respondProvenance, respondToHitl, retryStep } from './workflow/run-controls.js';
+import { callerProvenance, cancelRun, respondProvenance, respondToHitl, restartCommand, retryStep } from './workflow/run-controls.js';
+import { isIsolated } from './workflow/workspace.js';
 import { localStrictCan, personAnswers, runLocalDriver, withDriverLock } from './workflow/drivers/local/local-driver.js';
 import { driverIdentity } from './driver-identity.js';
 import { getBusinessRoot, getDataHome, usesBranchWorktree, type LocalConfig, type TeamaiConfig } from './types.js';
@@ -79,14 +80,17 @@ async function explainFailedSteps(config: LocalConfig, done: unknown, secrets: R
   const run = await readRun(config, runId);
   if (typeof run === 'string') return;
   const failedIds = run.steps.filter((step) => step.status === 'failed').map((step) => step.id);
+  const isolated = isIsolated(run);
   // A fan-out or workflow step fails, with no failure of its own, when a step under it fails: name that step instead.
   const failedUnder = (id: string): boolean => failedIds.some((other) => other.startsWith(`${id}.`) || other.startsWith(`${id}[`));
   for (const step of run.steps) {
     if (step.status !== 'failed' || (!step.failure && failedUnder(step.id))) continue;
     const why = step.failure ? ` with ${step.failure.code}: ${step.failure.message}` : step.message ? `: ${step.message}` : '';
     log.error(redact(`Step "${step.id}" failed${why}`, { envSecrets: secrets, patterns: false }));
-    log.info(`Retry it with ${retryCommand(runId, step.id)}, then continue the run with teamai workflow resume ${runId}`);
+    if (!isolated) log.info(`Retry it with ${retryCommand(runId, step.id)}, then continue the run with teamai workflow resume ${runId}`);
   }
+  // An isolated run refuses a retry: what it admitted or measured would change.
+  if (isolated) log.info(`Run ${runId} is isolated, so its steps do not run again. Start a new run: ${restartCommand(run)}`);
 }
 
 /**
