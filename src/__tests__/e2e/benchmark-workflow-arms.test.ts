@@ -43,6 +43,20 @@ steps:
     prompt: Fix it.
 `;
 
+/** Runs a command before its prompt, so a trial leases the command before it finds whether its tool can run. */
+const COMMAND_FIRST = `schemaVersion: v1alpha1
+name: fixer
+description: Look, then fix.
+inputs: { task: string }
+steps:
+  - id: look
+    command: node -e "0"
+    workspace: continue
+  - id: fix
+    needs: [look]
+    prompt: "{{ inputs.task }}"
+`;
+
 const ErrorSchema = z.object({ error: z.object({ code: z.string(), message: z.string() }) });
 const RecordSchema = z.object({
   arms: z.array(z.object({ name: z.string(), tool: z.string(), workflow: z.object({ name: z.string(), sourceHash: z.string() }).optional() }).passthrough()),
@@ -112,19 +126,7 @@ describe('benchmark arm workflow', () => {
   }, 240_000);
 
   it('installs the team for the arm\'s tool in its clone when its workflow starts with a command', async () => {
-    const commandFirst = `schemaVersion: v1alpha1
-name: fixer
-description: Look, then fix.
-inputs: { task: string }
-steps:
-  - id: look
-    command: node -e "0"
-    workspace: continue
-  - id: fix
-    needs: [look]
-    prompt: "{{ inputs.task }}"
-`;
-    const fixture = await fixtureWith(SUITE.replace('  tool: claude\n', '  tool: codex\n'), { fixer: commandFirst }, {
+    const fixture = await fixtureWith(SUITE.replace('  tool: claude\n', '  tool: codex\n'), { fixer: COMMAND_FIRST }, {
       tools: ['claude', 'codex'], team: { 'skills/answer/SKILL.md': '---\nname: answer\ndescription: Helps answer.\n---\nUse answer.\n' },
     });
 
@@ -140,6 +142,17 @@ steps:
 
   it('reads a workflow arm whose tool the driver cannot run as not run, and names the arm', async () => {
     const fixture = await fixtureWith(SUITE.replace('  tool: claude\n', '  tool: codex\n'), { fixer: FIXER, 'fix-once': FIX_ONCE }, { tools: ['claude'] });
+
+    const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
+
+    expect(ran.code, said(ran)).toBe(0);
+    const record = RecordSchema.parse(fixture.benchmarkRecord(fixture.runIds()[0] ?? ''));
+    expect(record.trials.map(({ arm, result }) => ({ arm, result }))).toEqual([{ arm: 'prompt', result: 'not_run' }, { arm: 'flow', result: 'not_run' }]);
+    expect(ran.stderr).toContain('Arm "flow" uses codex, which the local driver cannot run, so its trials did not run.');
+  }, 240_000);
+
+  it('reads a workflow arm whose tool the driver cannot run as not run when its workflow starts with a command', async () => {
+    const fixture = await fixtureWith(SUITE.replace('  tool: claude\n', '  tool: codex\n'), { fixer: COMMAND_FIRST }, { tools: ['claude'] });
 
     const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
 

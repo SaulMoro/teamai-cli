@@ -259,24 +259,39 @@ function baselineOf(state: StepState | undefined, task: PlannedTask): Baseline {
   }
 }
 
-/** A trial's work: its work step and every step under it, where a workflow arm's prompts run, and the passes a loop archived of them. */
-type TrialWork = { states: StepState[]; archived: ArchivedPass[] };
+/**
+ * A trial's work: its work step and every step under it, where a workflow arm's prompts run, the passes a loop archived
+ * of them, and which of them prompt a tool.
+ */
+type TrialWork = { states: StepState[]; archived: ArchivedPass[]; isPrompt: (id: string) => boolean };
 
-/** The trial's work of work step `step`: a workflow arm's own step has no attempt, so its prompts' attempts count. */
+/** The trial's work of work step `step`: a workflow arm's own step has no attempt, so its children's attempts count. */
 function workOf(run: RunState, step: string): TrialWork {
   const isWork = (id: string): boolean => id === step || id.startsWith(`${step}.`);
-  return { states: run.steps.filter((state) => isWork(state.id)), archived: (run.archive ?? []).filter((pass) => isWork(pass.step)) };
+  const definitionOf = stepDefinitions(run);
+  return {
+    states: run.steps.filter((state) => isWork(state.id)),
+    archived: (run.archive ?? []).filter((pass) => isWork(pass.step)),
+    isPrompt: (id) => definitionOf(id)?.prompt !== undefined,
+  };
 }
 
-/** Whether no step of `work` was ever leased: no current attempt, and none on a pass a loop kept or archived. */
-function unleased({ states, archived }: TrialWork): boolean {
+/**
+ * Whether no step of `work` that `counted` keeps was ever leased: no current attempt, and none on a pass a loop kept
+ * or archived.
+ */
+function unleased({ states, archived }: TrialWork, counted: (id: string) => boolean = () => true): boolean {
   const leased = (pass: StepPass): boolean => pass.attempt !== undefined;
-  return !states.some((state) => ('attempt' in state && state.attempt !== undefined) || (state.passes ?? []).some(leased)) && !archived.some(leased);
+  return !states.some((state) => counted(state.id) && (('attempt' in state && state.attempt !== undefined) || (state.passes ?? []).some(leased)))
+    && !archived.some((pass) => counted(pass.step) && leased(pass));
 }
 
-/** Whether `work` failed tool_unavailable before any of it was leased: the run's driver could not launch its tool. */
+/**
+ * Whether `work` failed tool_unavailable before any of its prompts was leased: the run's driver could not launch its
+ * tool. A command a workflow arm runs first may have been leased.
+ */
 function unlaunched(work: TrialWork): boolean {
-  return unleased(work) && work.states.some((state) => state.status === 'failed' && state.failure?.code === 'tool_unavailable');
+  return unleased(work, work.isPrompt) && work.states.some((state) => state.status === 'failed' && state.failure?.code === 'tool_unavailable');
 }
 
 /** `unlaunched` of the trial whose work step is `step`. */
@@ -288,7 +303,8 @@ export function unlaunchedTrial(run: RunState, step: string): boolean {
  * The result of one planned trial, first match wins. Its work is its prompt, or a workflow arm's workflow step and the
  * steps under it:
  *   work never leased: absent, pending, skipped, or cancelled before any lease      -> not_run
- *   work failed tool_unavailable before any lease: the driver cannot launch its tool -> not_run
+ *   work failed tool_unavailable before any prompt's lease: the driver cannot launch
+ *               its tool, though a command a workflow arm runs first may have run     -> not_run
  *   work cancelled after a lease, or failed                                         -> error
  *   check task: the result its check output: passed -> passed, failed -> failed, could_not_run -> error;
  *               no result (the check never ran to one)                              -> error
