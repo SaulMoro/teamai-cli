@@ -108,6 +108,17 @@ describe('admitting a workflow output', () => {
       definition: { ...GENERATED, steps: [{ id: 'hello', workflow: 'inner.0123456789ab', requires: { isolation: 'sandbox', strict: true } }] },
       workflows: { 'inner.0123456789ab': inner([{ id: 'push', command: 'git push', requires: { env: ['GH_TOKEN'] } }]) },
     }, 'Step "plan" output definition is not a workflow this run can admit: workflows/generated.yaml:6: field "steps[0].workflow": steps[0].workflow runs workflow "inner.0123456789ab", whose steps[0].requires.env names GH_TOKEN, which the strict sandbox it runs in withholds from every step. Remove it from requires.env, or drop strict.'],
+    ['a named workflow that does not parse', {
+      definition: GENERATED,
+      workflows: { 'inner.0123456789ab': inner([{ id: 'work' }]) },
+    }, 'Step "plan" output definition is not a workflow this run can admit: workflows/inner.0123456789ab.yaml:5: field "steps[0]": a step has exactly one action: command, prompt, prompt_file, or workflow; or no action with end, approve, or choose'],
+    ['named workflows that run each other', {
+      definition: { ...GENERATED, steps: [{ id: 'hello', workflow: 'inner.0123456789ab' }] },
+      workflows: {
+        'inner.0123456789ab': inner([{ id: 'there', workflow: 'inner.ba9876543210' }]),
+        'inner.ba9876543210': { ...inner([{ id: 'back', workflow: 'inner.0123456789ab' }]), name: 'inner.ba9876543210' },
+      },
+    }, 'Step "plan" output definition is not a workflow this run can admit: workflows/inner.0123456789ab.yaml:6: field "steps[0].workflow": step "there" runs workflow "inner.ba9876543210" in a cycle: inner.0123456789ab -> inner.ba9876543210 -> inner.0123456789ab'],
   ])('fails the producer for %s, and runs nothing it printed', async (_case, definition, message) => {
     const config = testConfig();
     const runId = await startPlanned(config);
@@ -156,6 +167,60 @@ describe('admitting a workflow output', () => {
     if (typeof run !== 'object') throw new Error(`run ${run}`);
     expect(Object.keys(run.workflows ?? {})).toEqual(['inner.0123456789ab']);
     expect(run.scorers).toEqual({ 'teamai:correctness:fix': pin });
+  });
+});
+
+describe('a producer the run already holds', () => {
+  const team = (config: LocalConfig, name: string, body: string) => fs.writeFileSync(path.join(config.repo.localPath, 'workflows', `${name}.yaml`), body);
+
+  it('fails when its bundle brings a workflow under a name the run holds with other content', async () => {
+    const config = testConfig();
+    team(config, 'inner.0123456789ab', `schemaVersion: v1alpha1
+name: inner.0123456789ab
+description: The team's inner.
+steps:
+  - id: work
+    command: node team-work.js
+`);
+    const runId = await startPlanned(config, `${PLANNED.replace('outputs:', `  - id: arm
+    needs: [trials]
+    workflow: inner.0123456789ab
+outputs:`)}`);
+    const workflows = { 'inner.0123456789ab': { schemaVersion: 'v1alpha1', name: 'inner.0123456789ab', description: 'Inner.', steps: [{ id: 'work', command: 'node work.js' }] } };
+
+    const reported = await settle(config, runId, 'plan', { definition: { definition: GENERATED, workflows }, plan: {} });
+
+    expect(reported).toMatchObject({ data: { step: { status: 'failed', failure: { code: 'invalid_output',
+      message: 'Step "plan" output definition brings "inner.0123456789ab", which this run already holds with other content; name each workflow and generated scorer by its content.' } } } });
+    const run = await readRun(config, runId);
+    expect(typeof run === 'object' && run.workflows?.['inner.0123456789ab']?.steps).toEqual([{ id: 'work', command: 'node team-work.js' }]);
+  });
+
+  it('fails when it runs again in a loop of the workflow that runs it, and keeps the workflow it gave first', async () => {
+    const config = testConfig();
+    team(config, 'produce', PLANNED.replace('name: planned', 'name: produce').replace(/outputs:[\s\S]*$/, ''));
+    const runId = await startPlanned(config, `schemaVersion: v1alpha1
+name: planned
+description: Produce, then produce again.
+steps:
+  - id: round
+    workflow: produce
+  - id: check
+    needs: [round]
+    command: node check.js
+    loop: { back_to: round, max_iterations: 2 }
+`);
+    const first = { definition: { definition: GENERATED }, plan: { round: 1 } };
+    await settle(config, runId, 'round.plan', first);
+    await settle(config, runId, 'round.trials.hello');
+    await settle(config, runId, 'check');
+
+    const reported = await settle(config, runId, 'round.plan', { definition: { definition: GENERATED }, plan: { round: 2 } });
+
+    expect(reported).toMatchObject({ data: { step: { status: 'failed', failure: { code: 'invalid_output',
+      message: 'Step "round.plan" already gave this run a workflow, which the run keeps; a step with a workflow output runs once.' } } } });
+    const run = await readRun(config, runId);
+    expect(typeof run === 'object' && run.admitted?.['round.plan']?.output).toEqual(first);
   });
 });
 

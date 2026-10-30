@@ -1947,7 +1947,7 @@ export async function reportable(config: LocalConfig, runId: string, report: Rep
  */
 async function admitReported(
   config: LocalConfig, runId: string, report: ReportInput, secrets: Record<string, string>,
-): Promise<{ attempt: string; admission: Awaited<ReturnType<typeof admitWorkflow>> } | undefined> {
+): Promise<{ attempt: string; output: Record<string, unknown>; admission: Awaited<ReturnType<typeof admitWorkflow>> } | undefined> {
   if (report.outcome !== 'success' || !isRecord(report.outputs)) return undefined;
   const run = await readRun(config, runId);
   if (typeof run !== 'object') return undefined;
@@ -1955,7 +1955,7 @@ async function admitReported(
   const field = state && workflowField(locateStep(run, state.id)?.step.output);
   if (!state || field === undefined) return undefined;
   const admission = await admitWorkflow(config, { kind: 'output', step: state.id, field, output: report.outputs }, { secrets, ...(run.base ? { base: run.base } : {}) });
-  return { attempt: report.attempt, admission };
+  return { attempt: report.attempt, output: report.outputs, admission };
 }
 
 /**
@@ -1963,8 +1963,7 @@ async function admitReported(
  * `field` defines, which a `from` step runs. The workflows it runs by name and its scorers join the run's. Why not, when
  * the producer already gave the run a workflow, or a name it brings is the run's already for something else.
  */
-function admitInto(run: RunState, path: string, field: string, output: unknown, admitted: Admitted): WorkflowFailure | undefined {
-  if (!isRecord(output)) return { code: 'invalid_output', message: `Step "${path}" output must be an object that holds ${field}` };
+function admitInto(run: RunState, path: string, field: string, output: Record<string, unknown>, admitted: Admitted): WorkflowFailure | undefined {
   if (run.admitted?.[path]) {
     return { code: 'invalid_output', message: `Step "${path}" already gave this run a workflow, which the run keeps; a step with a workflow output runs once.` };
   }
@@ -2042,7 +2041,7 @@ export async function reportAttempt(config: LocalConfig, runId: string, report: 
     const field = workflowField(defined?.output);
     if (outcome === 'success' && field !== undefined) {
       const refused = admission?.attempt === report.attempt
-        ? 'failure' in admission.admission ? admission.admission.failure : admitInto(run, step.id, field, report.outputs, admission.admission.admitted)
+        ? 'failure' in admission.admission ? admission.admission.failure : admitInto(run, step.id, field, admission.output, admission.admission.admitted)
         : { code: 'invalid_output', message: `Step "${step.id}" output ${field} changed while it was admitted; report it again.` };
       if (refused) {
         outcome = 'failed';
