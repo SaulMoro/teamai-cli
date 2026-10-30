@@ -65,6 +65,11 @@ export async function pinArmWorkflow(
   if (top.definition.inputs?.task?.type !== 'string') {
     return refuse(`${runs}, which takes no input task, the task's prompt each trial passes it. Add inputs: { task: string } to it, push it, run teamai pull, and start again.`);
   }
+  // Every input is required, and a trial passes only task.
+  const otherInputs = Object.keys(top.definition.inputs).filter((input) => input !== 'task');
+  if (otherInputs.length > 0) {
+    return refuse(`${runs}, which also requires inputs ${otherInputs.join(', ')}, and a trial passes only task. Remove them from its inputs, push it, run teamai pull, and start again.`);
+  }
   const sources = new Map([[top.definition.name, top], ...children.flatMap(([child, cached]) => (cached ? [[child, cached] as const] : []))]);
   for (const [file, cached] of sources) {
     const refused = unrunnableStep(cached.definition.steps);
