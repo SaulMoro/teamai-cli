@@ -348,7 +348,18 @@ describe('benchmark regression', () => {
 
     expect(regression).toEqual({
       kind: 'dropped', against: 'newest',
-      arms: [{ arm: 'claude', pairs: 3, rates: { from: { passed: 3, planned: 3 }, to: { passed: 0, planned: 3 } }, difference: { value: -1, low: -1, high: expect.closeTo(-0.2, 1) } }],
+      arms: [{ arm: 'claude', pairs: 3, rates: { from: { passed: 3, planned: 3 }, to: { passed: 0, planned: 3 } }, difference: { value: -1, low: -1, high: expect.closeTo(-0.206, 3) } }],
+    });
+  });
+
+  it('pairs each trial with the earlier trial of its task and repetition', () => {
+    // By repetition: the first only now, the next seven only before, two both times, the last three neither time.
+    const now = run({ id: 'now', startedAt: at(20), arms: ONE, trials: passes(['passed', ...Array<TrialResult>(7).fill('failed'), 'passed', 'passed', 'failed', 'failed', 'failed']) });
+    const before = run({ id: 'before', startedAt: at(12), arms: ONE, trials: passes(['failed', ...Array<TrialResult>(7).fill('passed'), 'passed', 'passed', 'failed', 'failed', 'failed']) });
+
+    expect(regressionOf(now, [before])).toEqual({
+      kind: 'dropped', against: 'before',
+      arms: [{ arm: 'claude', pairs: 13, rates: { from: { passed: 9, planned: 13 }, to: { passed: 3, planned: 13 } }, difference: pairedDifference({ both: 2, toOnly: 1, fromOnly: 7, neither: 3 }) }],
     });
   });
 

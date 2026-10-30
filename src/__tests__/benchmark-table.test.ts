@@ -207,23 +207,26 @@ describe('benchmark arm team', () => {
 
   it("counts the trials that loaded each skill an arm changes, on that arm and on the defaults arm, keeping unseen trials apart", () => {
     const pulled = { name: 'pulled', tool: 'claude', source: 'team', team: { kind: 'pulled', revision: RUN_TEAM } } as const;
-    const { benchmark } = recordOf([pulled, ABLATED], [
+    const main = { name: 'main', tool: 'claude', source: 'team', team: { kind: 'ref', ref: 'main', revision: 'c'.repeat(40) } } as const;
+    const { benchmark } = recordOf([pulled, ABLATED, main], [
       { arm: 'pulled', used: { fixer: 'loaded' } },
       { arm: 'pulled', used: { fixer: 'unknown' } },
       { arm: 'pulled' },
       { arm: 'pulled', result: 'not_run', agent: null },
       { arm: 'no-fixer', used: {} },
+      { arm: 'no-fixer' },
+      { arm: 'main', used: { fixer: 'loaded' } },
     ]);
     const skillChanges = [
       { arm: 'no-fixer', defaults: 'pulled', skills: [{ name: 'fixer', change: 'removed' }] },
-      { arm: 'pulled', skills: [{ name: 'fixer', change: 'changed' }] },
+      { arm: 'main', skills: [{ name: 'fixer', change: 'changed' }] },
     ] as const satisfies BenchmarkRecord['skillChanges'];
 
     const text = formatBenchmarkTable(benchmarkTable({ benchmark: { ...benchmark, skillChanges: [...skillChanges] } }));
 
     expect(text).toContain('| Arm | Skill | Change | Loaded in this arm | Loaded in the defaults arm |');
-    expect(text).toContain('| no-fixer | fixer | removed | 0/1 | 1/1, 2 unknown |');
-    expect(text).toContain('| pulled | fixer | changed | 1/1, 2 unknown | - |');
+    expect(text).toContain('| no-fixer | fixer | removed | 0/1, 1 unknown | 1/1, 2 unknown |');
+    expect(text).toContain('| main | fixer | changed | 1/1 | - |');
   });
 });
 
