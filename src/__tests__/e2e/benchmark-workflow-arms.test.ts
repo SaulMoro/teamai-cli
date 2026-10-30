@@ -305,6 +305,7 @@ ${step.includes('deliver') ? '    prompt: Ship it.\n' : '    command: echo more\
 
     expect(ran.code, said(ran)).toBe(1);
     expect(ErrorSchema.parse(envelope(ran)).error.message).toContain('Arm "flow" runs workflow "fixer", whose step "plan" runs agent "planner", and the arm sets no model');
+    expect(ErrorSchema.parse(envelope(ran)).error.message).toContain("Set model in the suite's defaults, which the arm inherits");
     expect(fixture.runIds()).toEqual([]);
   }, 120_000);
 });

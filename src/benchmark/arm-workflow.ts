@@ -87,7 +87,7 @@ export async function pinArmWorkflow(
     const found = agentPrompt(cached.definition.steps);
     if (found !== undefined) {
       const holder = file === top.definition.name ? '' : `, which runs workflow "${file}"`;
-      return refuse(`${runs}${holder}, whose step "${found.step}" runs agent "${found.agent}", and the arm sets no model, so the agent's own model could replace the tool's default it compares. Set model on the arm, and start again.`);
+      return refuse(`${runs}${holder}, whose step "${found.step}" runs agent "${found.agent}", and the arm sets no model, so the agent's own model could replace the tool's default it compares. Set model in the suite's defaults, which the arm inherits, and start again.`);
     }
   }
   const raws = new Map<string, { raw: z.infer<typeof FileSchema>; parsed: readonly WorkflowStep[] }>();
