@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import type { LocalConfig } from '../types.js';
 import { knownSecrets } from '../env-resolution.js';
@@ -16,6 +16,7 @@ const dirs: string[] = [];
 const driver: DriverIdentity = { kind: 'local', machine: 'a', workspace: '/work' };
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -168,6 +169,23 @@ describe('admitting a workflow output', () => {
     expect(reported).toMatchObject({ data: { step: { id: 'plan', status: 'succeeded' } } });
     const run = await readRun(config, runId);
     expect(typeof run === 'object' && run.admitted?.plan?.definition).toMatchObject({ steps: [{ id: 'arm' }] });
+  });
+
+  it('withholds from each step of the admitted workflow a key only another of its steps requires', async () => {
+    vi.stubEnv('ONLY_ONE', 'one-value');
+    const config = testConfig();
+    const runId = await startPlanned(config);
+    const definition = { ...GENERATED, steps: [{ id: 'one', command: 'node one.js', requires: { env: ['ONLY_ONE'] } }, { id: 'two', needs: ['one'], command: 'node two.js' }] };
+    await settle(config, runId, 'plan', { definition: { definition }, plan: {} });
+    const can = { workspace: ['read-only' as const], env: true };
+    const EnvLeaseSchema = z.object({ data: z.object({ lease: z.object({ step: z.string(), attempt: z.string(), revision: z.number(), envScope: z.object({ provide: z.array(z.string()), withhold: z.array(z.string()) }) }) }) });
+
+    const one = EnvLeaseSchema.parse(await leaseNext(config, runId, driver, { can })).data.lease;
+    await reportAttempt(config, runId, { attempt: one.attempt, revision: one.revision, outcome: 'success', driver });
+    const two = EnvLeaseSchema.parse(await leaseNext(config, runId, driver, { can })).data.lease;
+
+    expect({ step: one.step, provide: one.envScope.provide }).toEqual({ step: 'trials.one', provide: ['ONLY_ONE'] });
+    expect({ step: two.step, provide: two.envScope.provide, withholds: two.envScope.withhold.includes('ONLY_ONE') }).toEqual({ step: 'trials.two', provide: [], withholds: true });
   });
 
   it('fails the producer whose workflow field is no object, before it is admitted', async () => {

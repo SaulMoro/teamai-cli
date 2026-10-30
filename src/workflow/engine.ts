@@ -1314,7 +1314,8 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
     const before = JSON.stringify(run);
     const context: OfferContext = {
       can, allow: config.workflows?.allow ?? {}, facts: env.facts, prepare: options.prepare === true,
-      runEnvKeys: requiredEnvKeys([run.definition, ...Object.values(run.workflows ?? {})]),
+      // Admitted workflows too: their own steps' keys are withheld from the steps that do not require them.
+      runEnvKeys: requiredEnvKeys([run.definition, ...Object.values(run.workflows ?? {}), ...Object.values(run.admitted ?? {}).map(({ definition }) => definition)]),
     };
     // Whatever settling changed is saved. `cancelled` is derived after settling: the attempts the driver runs that
     // are no longer its open leases.
