@@ -92,7 +92,7 @@ $ teamai score --lease s5d1e07c2a9b4a/a91c0d7e0 --json '{"driver":{"kind":"local
 {"data":{"label":{"scorer":"review-quality","label":"good","score":1,"passed":true,…},"published":true}}
 ```
 
-`samplingRate` 决定评判哪些成功的执行轮次，在每台机器上结果相同。`workflow next` 从不分发评审任务。`--lease <ref>` 在本机用租约选定的工具、以[受限配置](#隔离)评判，并像任意 driver 的答案一样结算租约。评审失败时租约保持打开。[基准测试](benchmarks.md)是例外：它的评分器评判每个成功的 trial，运行会等它们完成后才结束，本地驱动会立即结算失败的评审。
+`samplingRate` 决定评判哪些成功的执行轮次，在每台机器上结果相同。`workflow next` 从不分发评审任务。`--lease <ref>` 在本机用租约选定的工具、以[受限配置](#隔离)评判，并像任意 driver 的答案一样结算租约。评审失败时租约保持打开。`scorers` 设置了 `sampling: all` 的步骤是例外：它的评分器评判每个成功的执行轮次，运行会等它们完成后才运行 `finally` 步骤并结束，在此期间 `workflow next` 返回带 `judging`（仍未结算的评判条目）的 `wait`。本地驱动自己评判它们，并立即结算失败的评审；其他驱动的轮次在运行它们的安装上用 `teamai score --next` 评判。[基准测试](benchmarks.md)就是这样评判它的 trial。
 
 标签记录 `used.skills`，即该轮次或其子 agent 加载过的团队技能。判定方式与[会话](#为会话评分)相同，依据该轮次开始时检出目录中由 teamai 交付并未经修改的技能。`workflow:` 步骤的标签列出其子轮次记录的全部技能。若子轮次都未记录，标签没有 `used`。
 
@@ -319,7 +319,7 @@ Session judging: attended auto, set by scorers/scoring.yaml sessions; unattended
 
 | 评判对象 | 由谁决定 |
 |---|---|
-| 工作流步骤的 pass | 步骤的 `scorers`，按每个评分器的 `samplingRate` 抽样。与 `sessions` 无关。 |
+| 工作流步骤的 pass | 步骤的 `scorers`，按每个评分器的 `samplingRate` 抽样，或在 `sampling: all` 下评判每个 pass。与 `sessions` 无关。 |
 | 已捕获的会话：你的会话，或 `CI`、`TEAMAI_MODE` 任务中不是由 teamai 启动的会话 | 该会话运行模式对应的 `sessions`，由每个设置了 `sessions: true` 的评分器按其 `samplingRate` 抽样评判。 |
 | teamai 启动的会话，例如工作流步骤或评审 | 不评判。它不写捕获记录，它的步骤按 pass 评判。 |
 | teamai 读不到会话的工具（例如 Pi）的会话 | 不评判。对发布或评判策略不是 `off` 的每种模式，`teamai doctor` 会列出团队启用的每个这类工具。按默认值，两种模式都会列出。 |
