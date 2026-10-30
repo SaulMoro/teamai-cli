@@ -35,6 +35,7 @@ import { log } from '../../utils/logger.js';
 import { projectSlug } from '../../utils/partition.js';
 import type { TeamDelivery } from '../../pull.js';
 import { CommitSchema, type ClonePlace, type InstalledTeam } from '../clone.js';
+import { runDeadline } from '../limits.js';
 import { runPasses } from '../loop.js';
 import { stepDefinitions } from '../scope.js';
 import { stageEvidence } from '../scoring-evidence.js';
@@ -270,7 +271,7 @@ export async function sweepClones(config: LocalConfig, runId?: string): Promise<
  * `succeeded` holds the steps the operation about to save `run` settled `success`. Such a step settles once its last
  * step does, under the run lock, so its evidence exists before that save makes its judge entry or a dependent visible.
  * A prompt's evidence is staged by its report. Evidence already staged is kept, so a later step in the clone never
- * overwrites it.
+ * overwrites it. Reading the clone stops at the run's deadline, so a large checkout never holds the run lock past it.
  */
 export async function stageSettledEvidence(config: LocalConfig, run: RunState, succeeded: readonly string[]): Promise<void> {
   const definitionOf = stepDefinitions(run);
@@ -281,7 +282,7 @@ export async function stageSettledEvidence(config: LocalConfig, run: RunState, s
     const scoped = await cloneEnv(receipt.withhold);
     if (!scoped.ok) continue;
     const state = run.steps.find((item) => item.id === step);
-    await stageEvidence(config, run, { runId: run.id, step, pass: state?.pass ?? 1 }, { checkout: path.join(receipt.root, 'r'), untrustedEnv: scoped.env });
+    await stageEvidence(config, run, { runId: run.id, step, pass: state?.pass ?? 1 }, { checkout: path.join(receipt.root, 'r'), untrustedEnv: scoped.env, expiresAt: runDeadline(run) });
   }
 }
 
