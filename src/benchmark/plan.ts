@@ -221,7 +221,7 @@ type FileStep = { id: string } & Record<string, unknown>;
  *         check                   needs [the one above]; command teamai benchmark check --trial; workspace continue (check tasks only)
  *   settled                       needs every scope above; an `if` that reads them; end: settled
  *
- * With `parallel` above 1, the repetitions sit in `lane<n>` scopes, one per lane, each needing [baselines] as the first
+ * With `parallel` above 1, the repetitions sit in `lane<n>` scopes, one per lane a trial is in, each needing [baselines] as the first
  * repetition does, and each holding its share of the trials in plan order, the trial of order o in lane ((o - 1) mod n) + 1.
  *
  * Step ids are those `stepOf` and `baselineStepOf` name, under the step that runs the workflow. `unattended`: the step
@@ -282,7 +282,11 @@ export function compileBundle(
   const afterBaselines = tried ? { needs: [BASELINES], if: `steps.${BASELINES}.outcome != null` } : { needs: [] };
   const [firstStep, ...laterSteps] = parallel > 1 ? [] : laneSteps(plan.trials);
   const repetitions: FileStep[] = parallel > 1
-    ? Array.from({ length: parallel }, (_, index) => ({ id: laneOf(index + 1), ...afterBaselines, workflow: { steps: laneSteps(plan.trials.filter((trial) => trial.step.startsWith(`${laneOf(index + 1)}.`))) } }))
+    // Only the lanes a trial is in: a suite may allow more than it has trials, and a workflow has no empty step list.
+    ? Array.from({ length: parallel }, (_, index) => laneOf(index + 1)).flatMap((lane) => {
+      const trials = plan.trials.filter((trial) => trial.step.startsWith(`${lane}.`));
+      return trials.length > 0 ? [{ id: lane, ...afterBaselines, workflow: { steps: laneSteps(trials) } }] : [];
+    })
     : [...(firstStep ? [{ ...firstStep, ...afterBaselines }] : []), ...laterSteps];
   const scopes: FileStep[] = [
     ...(tried ? [{ id: BASELINES, workflow: { outputs: Object.fromEntries(baselines.map(({ id }) => [id, `steps.${id}.outputs.result`])), steps: baselines } }] : []),

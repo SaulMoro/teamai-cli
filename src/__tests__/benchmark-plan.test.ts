@@ -303,6 +303,15 @@ describe('benchmark plan run', () => {
     expect(await readRun(config, runId)).toMatchObject({ status: 'running', steps: expect.arrayContaining([expect.objectContaining({ id: 'trials.baselines', status: 'running' })]) });
   });
 
+  it('runs a suite that allows more lanes than it has trials, its one trial in the first lane', async () => {
+    const { config, runId } = await startFix({ parallel: 2 });
+    await settleBaselines(config, runId, driver, can);
+
+    const next = await leaseNext(config, runId, driver, { can, prepare: true });
+
+    expect(next).toMatchObject({ data: { lease: { step: 'trials.lane1.r1.t01.a01.prompt' } } });
+  });
+
   it('leases its only driver the trials it can take, and settles the others at once', async () => {
     const { config, runId } = await startFix({ arms: 2, tools: ['codex'] });
     await settleBaselines(config, runId, driver, can);
