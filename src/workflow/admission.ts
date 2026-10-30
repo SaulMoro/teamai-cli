@@ -90,6 +90,9 @@ export async function admitWorkflow(
     return { pins: await pinScorers(at, listed) };
   });
   if ('failed' in team) return refuse(`its team scorers could not be read at team commit ${teamRevision}: ${team.failed}`);
+  // The output was checked, not the team scorers it names, which the run stores as they are.
+  const pinnedTeamSecret = pinnedSecret(Object.fromEntries(Object.entries(team.pins).map(([scorerName, scorer]) => [`scorer ${scorerName}`, scorer])), secrets);
+  if (pinnedTeamSecret) return refuse(`${pinnedTeamSecret.label} holds the value of ${pinnedTeamSecret.name}, a secret on this machine, which a run never stores. Take the value out of that team scorer, then pull again.`);
   return checked({ ...parsed, scorers: { ...team.pins, ...bundle.data.scorers } }, base);
 }
 

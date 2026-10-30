@@ -213,6 +213,23 @@ describe('admitting a workflow output', () => {
     expect(JSON.stringify(reported)).not.toContain('sekrit-value-123');
   });
 
+  it('fails the producer when a team scorer its output lists holds a secret value, and stores no copy of it', async () => {
+    const config = testConfig();
+    fs.mkdirSync(path.join(config.repo.localPath, 'scorers'));
+    fs.writeFileSync(path.join(config.repo.localPath, 'scorers', 'quality.md'), '---\nlabels:\n  - { value: ok, score: 1, description: Fine. }\n  - { value: bad, score: 0, description: Not. }\npassingScore: 1\n---\nCompare with sekrit-value-123.\n');
+    const runId = await startPlanned(config);
+    const secrets = { DEPLOY_TOKEN: 'sekrit-value-123' };
+    const { lease } = LeaseSchema.parse(await leaseNext(config, runId, driver)).data;
+
+    const reported = await reportAttempt(config, runId, {
+      attempt: lease.attempt, revision: lease.revision, outcome: 'success', driver,
+      outputs: { definition: { definition: { ...GENERATED, steps: [{ id: 'hello', prompt: 'Say hello.', scorers: { names: ['quality'] } }] } }, plan: {} },
+    }, secrets);
+
+    expect(reported).toMatchObject({ data: { step: { status: 'failed', failure: { code: 'invalid_output', message: expect.stringContaining('scorer quality holds the value of DEPLOY_TOKEN') } } } });
+    expect(JSON.stringify(await readRun(config, runId))).not.toContain('sekrit-value-123');
+  });
+
   it('runs a named workflow the bundle brings, and pins its generated scorers under their names', async () => {
     const config = testConfig();
     const runId = await startPlanned(config);
