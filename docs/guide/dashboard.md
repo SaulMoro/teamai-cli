@@ -121,7 +121,7 @@ The panels above are the **Arms** tab. Two more tabs answer what changed between
 | Did the auth-tokens skill help claude on `fix-auth`? | **Team changes**, on `claude · claude-opus-5-5` | 67%, 62%, 70% over three team revisions, in commit order, none told apart from the one before it. Click `67ee2ce · Add the auth-tokens skill and a security reviewer`: it changed three files, and `session-fixation` went from 1/12 to 3/12. |
 | Did a tool update move the numbers? | **Arms**, **Pass rate per run** | A dashed `Tool updated · claude 2.4.0` line marks the first run on the new version. |
 
-**Compare** lists each two arms of the suite's current version that differ only in their team assets, tool or model, and pairs their trials by run, task and repetition. **Team changes** follows one tool and model across the team revisions it ran on with the pulled assets or a ref, and names each revision from this machine's team clone, with the files outside `benchmarks/` it changed since the one before it.
+**Compare** lists each two arms of the suite's current version that differ only in their team assets, tool, model or workflow, and pairs their trials by run, task and repetition. **Team changes** follows one tool and model across the team revisions it ran on with the pulled assets or a ref, and names each revision from this machine's team clone, with the files outside `benchmarks/` it changed since the one before it.
 
 How the numbers are counted:
 
