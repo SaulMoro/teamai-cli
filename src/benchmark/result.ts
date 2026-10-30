@@ -11,7 +11,7 @@ import { z } from 'zod';
 import { AgentObservationSchema } from '../agent-observation.js';
 import { RunOriginSchema } from '../default-workflows.js';
 import type { EntryVerdict } from '../scorers/entry.js';
-import type { StepPass, StepState } from '../workflow/step-state.js';
+import type { ArchivedPass, StepPass, StepState } from '../workflow/step-state.js';
 import { stepDefinitions } from '../workflow/scope.js';
 import { LimitSchema } from '../workflow/requirements.js';
 import type { RunState } from '../workflow/types.js';
@@ -123,7 +123,7 @@ export function benchmarkRecord(run: RunState, { plan, prefix }: RunPlan): Bench
       const verdicts = verdictsOf(trial);
       const scoringCost = scoringCostOf(verdicts);
       const work = stateOf(trial.step);
-      const result = trialResultOf({ prompt: work, work: workStates(run, `${prefix}${trial.step}`), check: stateOf(checkStepOf(trial)), verdicts }, plan, trial);
+      const result = trialResultOf({ prompt: work, work: workOf(run, `${prefix}${trial.step}`), check: stateOf(checkStepOf(trial)), verdicts }, plan, trial);
       const arm = plan.arms.find(({ name }) => name === trial.arm);
       const entry = arm?.workflow
         ? projectionOf(promptPassesUnder(run, `${prefix}${trial.step}`), { arm, watched, unenforced: plan.limits?.maxTurns !== undefined ? ['max_turns'] : [] })
@@ -259,24 +259,29 @@ function baselineOf(state: StepState | undefined, task: PlannedTask): Baseline {
   }
 }
 
-/** The trial's work step `step`, then every step under it: a workflow arm's prompts run there, as its own step has no attempt. */
-function workStates(run: RunState, step: string): StepState[] {
-  return run.steps.filter((state) => state.id === step || state.id.startsWith(`${step}.`));
+/** A trial's work: its work step and every step under it, where a workflow arm's prompts run, and the passes a loop archived of them. */
+type TrialWork = { states: StepState[]; archived: ArchivedPass[] };
+
+/** The trial's work of work step `step`: a workflow arm's own step has no attempt, so its prompts' attempts count. */
+function workOf(run: RunState, step: string): TrialWork {
+  const isWork = (id: string): boolean => id === step || id.startsWith(`${step}.`);
+  return { states: run.steps.filter((state) => isWork(state.id)), archived: (run.archive ?? []).filter((pass) => isWork(pass.step)) };
 }
 
-/** Whether no step of `work` was ever leased. */
-function unleased(work: readonly StepState[]): boolean {
-  return !work.some((state) => 'attempt' in state && state.attempt !== undefined);
+/** Whether no step of `work` was ever leased: no current attempt, and none on a pass a loop kept or archived. */
+function unleased({ states, archived }: TrialWork): boolean {
+  const leased = (pass: StepPass): boolean => pass.attempt !== undefined;
+  return !states.some((state) => ('attempt' in state && state.attempt !== undefined) || (state.passes ?? []).some(leased)) && !archived.some(leased);
 }
 
 /** Whether `work` failed tool_unavailable before any of it was leased: the run's driver could not launch its tool. */
-function unlaunched(work: readonly StepState[]): boolean {
-  return unleased(work) && work.some((state) => state.status === 'failed' && state.failure?.code === 'tool_unavailable');
+function unlaunched(work: TrialWork): boolean {
+  return unleased(work) && work.states.some((state) => state.status === 'failed' && state.failure?.code === 'tool_unavailable');
 }
 
 /** `unlaunched` of the trial whose work step is `step`. */
 export function unlaunchedTrial(run: RunState, step: string): boolean {
-  return unlaunched(workStates(run, step));
+  return unlaunched(workOf(run, step));
 }
 
 /**
@@ -290,7 +295,7 @@ export function unlaunchedTrial(run: RunState, step: string): boolean {
  *   criteria task: its correctness verdict: labelled passing -> passed, labelled not passing -> failed;
  *               unscored, or none                                                   -> unscored, never passed
  */
-function trialResultOf({ prompt, work, check, verdicts }: { prompt: StepState | undefined; work: readonly StepState[]; check: StepState | undefined; verdicts: readonly EntryVerdict[] }, plan: BenchmarkPlan, trial: PlannedTrial): TrialResult {
+function trialResultOf({ prompt, work, check, verdicts }: { prompt: StepState | undefined; work: TrialWork; check: StepState | undefined; verdicts: readonly EntryVerdict[] }, plan: BenchmarkPlan, trial: PlannedTrial): TrialResult {
   switch (prompt?.status) {
     case undefined:
     case 'pending':

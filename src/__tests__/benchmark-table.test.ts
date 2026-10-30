@@ -12,7 +12,8 @@ import type { DriverCan } from '../workflow/requirements.js';
 import { cancelRun } from '../workflow/run-controls.js';
 import { readRun } from '../workflow/store.js';
 import type { LocalConfig } from '../types.js';
-import type { DriverIdentity } from '../workflow/types.js';
+import type { DriverIdentity, RunState } from '../workflow/types.js';
+import type { StepState } from '../workflow/step-state.js';
 import { benchmarkRunConfig, fixTask, PRODUCT_URL, RUN_START, RUN_TEAM, settleBaselines, startBenchmarkRun } from './helpers/benchmark-fixture.js';
 
 const driver: DriverIdentity = { kind: 'external', machine: 'ci', workspace: '/work' };
@@ -310,6 +311,29 @@ describe('benchmark usage', () => {
     expect(record.benchmark.trials[0]).toMatchObject({ result: 'error', tokens: { input: 4, output: 2 }, durationMs: 1500, cost: { amount: 0.25, unit: 'USD' } });
     expect(record.benchmark.trials[1]).not.toHaveProperty('durationMs');
     expect(record.benchmark.trials[1]).not.toHaveProperty('cost');
+  });
+});
+
+describe('a trial cancelled before its next lease', () => {
+  it.each([
+    ['a loop keeps', (run: RunState, step: StepState) => Object.assign(step, { passes: [{ pass: 1, attempt: 'earlier', outcome: 'success' }] })],
+    ['a loop archived', (run: RunState, step: StepState) => Object.assign(run, { archive: [{ step: `${step.id}.inner`, pass: 1, attempt: 'archived', outcome: 'success' }] })],
+  ])('reads as an error when an earlier pass of its work was leased, as %s it', async (_, earlier) => {
+    const { config, runId } = await startTen();
+    await settleBaselines(config, runId, driver, can);
+    LeaseSchema.parse(await leaseNext(config, runId, driver, { can, prepare: true }));
+    await cancelRun(config, runId, {});
+    const run = await readRun(config, runId);
+    if (typeof run !== 'object') throw new Error(`run ${runId} is ${run}`);
+    const planned = planOfRun(run);
+    if ('failure' in planned) throw new Error(planned.failure.message);
+    const step = run.steps.find((state) => state.id === 'trials.r1.fix.claude.prompt');
+    if (step?.status !== 'cancelled') throw new Error(`trial step is ${step?.status}`);
+    // The loop's next pass: no current attempt, the earlier one kept by `passes` or `archive`.
+    delete step.attempt;
+    earlier(run, step);
+
+    expect(benchmarkRecord(run, planned.found).trials[0]?.result).toBe('error');
   });
 });
 
