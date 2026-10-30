@@ -15,6 +15,7 @@ import { benchmarkHistory, parseBenchmarkQuery } from '../dashboard/benchmarks.j
 import { HttpError } from '../dashboard/http.js';
 import { getReportsDir, type LocalConfig } from '../types.js';
 import type { TrialResult } from '../benchmark/result.js';
+import { queueBenchmarkRecord } from '../workflow/records.js';
 import { runsDir } from '../workflow/store.js';
 import { benchmarkRunConfig, fixRecord } from './helpers/benchmark-fixture.js';
 
@@ -75,6 +76,16 @@ describe('benchmarkHistory', () => {
       { run: local, source: 'local', username: 'tester', passed: 0, planned: 1 },
       { run: 'rb0b00001', source: 'reported', username: 'bob', passed: 1, planned: 1 },
     ]);
+  });
+
+  it("leaves out a record the reports checkout keeps while this machine's queue still holds it, as its push was refused", async () => {
+    publish('rb0b00001', { username: 'bob' });
+    publish('r10ca1001', { username: 'tester' });
+    expect(await queueBenchmarkRecord(config, fixRecord('r10ca1001', { username: 'tester', startedAt: YESTERDAY }), {})).toBe(true);
+
+    const view = await benchmarkHistory({ config, query: { windowDays: 365 }, now: NOW, refresh: false });
+
+    expect(view.selected?.runs.map(({ run }) => run)).toEqual(['rb0b00001']);
   });
 
   it('reads a record again once it changed on disk', async () => {

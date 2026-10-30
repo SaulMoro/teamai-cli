@@ -82,8 +82,9 @@ async function readLocal(config: LocalConfig): Promise<BenchmarkRunInput[]> {
 }
 
 /**
- * The team's benchmark records on `teamai-reports`, which Compare reads too, without those still pending on this
- * machine: the reports checkout keeps a record whose push was refused. `refresh` refreshes the checkout from origin first.
+ * The team's benchmark records on `teamai-reports`, which Compare and `--fail-on-regression` read, without those still
+ * pending on this machine: the reports checkout keeps a record whose push was refused. `refresh` refreshes the checkout
+ * from origin first.
  */
 export async function publishedBenchmarkRuns(config: LocalConfig, { refresh }: { refresh: boolean }): Promise<BenchmarkRunInput[]> {
   await refreshReports(config, refresh);
@@ -191,10 +192,9 @@ export async function benchmarkHistory({ config, query, now = new Date(), refres
   now?: Date;
   refresh?: boolean;
 }): Promise<BenchmarkPage> {
-  await refreshReports(config, refresh);
   const [local, reported] = await Promise.all([
     readLocal(config),
-    readReported(config),
+    publishedBenchmarkRuns(config, { refresh }),
   ]);
   const localIds = new Set(local.map(({ run }) => run));
   return withTeamCommits(config, BenchmarkHistory.of({ runs: [...local, ...reported.filter(({ run }) => !localIds.has(run))], query, now }));
