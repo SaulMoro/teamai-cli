@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import path from 'node:path';
 
 // ── Mocks ────────────────────────────────────────────────
@@ -17,7 +17,7 @@ const mockGit = {
 };
 
 vi.mock('simple-git', () => ({
-  default: () => mockGit,
+  simpleGit: () => mockGit,
 }));
 
 vi.mock('yaml', () => ({
@@ -1087,7 +1087,7 @@ describe('init', () => {
 
     describe('project-scope tool picker', () => {
       let originalIsTTY: boolean | undefined;
-      let logSpy: ReturnType<typeof vi.spyOn>;
+      let logSpy: MockInstance<typeof console.log>;
 
       beforeEach(() => {
         originalIsTTY = process.stdin.isTTY;

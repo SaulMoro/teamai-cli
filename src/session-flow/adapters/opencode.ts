@@ -149,7 +149,7 @@ const ToolPart = z.object({
   name: z.string(),
   state: z.object({
     status: z.string(),
-    input: z.record(z.unknown()).default({}),
+    input: z.record(z.string(), z.unknown()).default({}),
     content: z.array(z.object({ type: z.string(), text: z.string().optional() })).default([]),
     error: z.unknown().optional(),
   }),

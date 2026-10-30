@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -20,7 +20,7 @@ import { reviewCmd } from '../review-cmd.js';
 const CJK = /[\u3000-\u303f\u4e00-\u9fff\uff00-\uffef]/;
 
 let tmpDir: string;
-let consoleSpy: ReturnType<typeof vi.spyOn>;
+let consoleSpy: MockInstance<typeof console.log>;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-review-'));

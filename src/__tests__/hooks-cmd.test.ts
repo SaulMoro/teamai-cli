@@ -792,7 +792,7 @@ describe('hooksList', () => {
             'SessionStart  →  teamai hook-dispatch session-start --tool <tool>',
             'UserPromptSubmit  →  teamai hook-dispatch prompt-submit --tool <tool>',
         ]);
-        // JoyCode has no hook surface; Kiro V3 has a standalone SessionStart hook.
+        // JoyCode is not configured in this fixture; Kiro V3 has a standalone SessionStart hook.
         expect(builtinBlock(builtin, 'joycode')).toBeUndefined();
         expect(builtinBlock(builtin, 'kiro')).toEqual([
             'SessionStart  →  teamai hook-dispatch session-start --tool <tool>',

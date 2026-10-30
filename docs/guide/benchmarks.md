@@ -8,7 +8,7 @@ teamai benchmark run fix-auth --sandbox
 
 A benchmark suite compares tools or models on your team's own tasks. One run gives every task to every arm, a few times each, checks each result, and prints a table. Trials run only on a machine declared a sandbox, such as a CI runner or a container.
 
-A benchmark run is a run of the workflow `benchmark`, which teamai ships and a team can replace. See [The benchmark workflow](#the-benchmark-workflow).
+A benchmark run is a run of the workflow `teamai-benchmark`, which teamai ships and a team can replace. See [The benchmark workflow](#the-benchmark-workflow).
 
 ## Write a suite
 
@@ -326,7 +326,7 @@ $ teamai benchmark run fix-auth --sandbox
 ℹ Run r38302f8e6a18c377 started. If it stops before it ends, continue it with: teamai workflow resume r38302f8e6a18c377 --sandbox
 ```
 
-`benchmark run` plans the suite first, so a suite that cannot run leaves no run. It then starts the workflow `benchmark` with the suite's `timeout` and drives it with the local driver.
+`benchmark run` plans the suite first, so a suite that cannot run leaves no run. It then starts the workflow `teamai-benchmark` with the suite's `timeout` and drives it with the local driver.
 
 Each trial prompt runs with [`permissions: unattended`](workflow-advanced.md#unattended-prompts), because the shipped workflow runs the trials in a strict sandbox: the tool edits files and runs commands without asking, whatever this machine's settings for it say.
 
@@ -377,12 +377,12 @@ Baselines and trials run in up to `parallel` lanes, one after another in each la
 
 ## The benchmark workflow
 
-`benchmark run` starts the workflow `benchmark`. teamai ships this one:
+`benchmark run` starts the workflow `teamai-benchmark`. teamai ships this one:
 
 ```yaml
-# workflows/benchmark.yaml, shipped in the npm package
+# workflows/teamai-benchmark.yaml, shipped in the npm package
 schemaVersion: v1alpha1
-name: benchmark
+name: teamai-benchmark
 description: Run a benchmark suite. Every arm works the same tasks in fresh clones, judged by checks it never sees.
 invoke: deny
 inputs: { suite: string, aliases: string }
@@ -410,13 +410,13 @@ outputs: { text: steps.report.outputs.text, table: steps.report.outputs.table }
 
 `trials` runs what `plan` printed: see [Run a workflow a step printed](workflow-advanced.md#run-a-workflow-a-step-printed). `report` runs after the trials whatever happened to them, as [finally steps](workflow-advanced.md#finally-steps) do. `benchmark run --member-aliases` passes `aliases` as `member`, else as `team`.
 
-To change it, push your own `workflows/benchmark.yaml`, or `workflows/<namespace>/benchmark.yaml` for members of one role or project. It replaces teamai's for whoever receives it, as any [default workflow](workflow.md#override-a-default) does, and `benchmark run` says so:
+To change it, push your own `workflows/teamai-benchmark.yaml`, or `workflows/<namespace>/teamai-benchmark.yaml` for members of one role or project. It replaces teamai's for whoever receives it, as any [default workflow](workflow.md#override-a-default) does, and `benchmark run` says so:
 
 ```text
-ℹ Running the team's workflows/ops/benchmark.yaml, which replaces teamai's benchmark workflow.
+ℹ Running the team's workflows/ops/teamai-benchmark.yaml, which replaces teamai's benchmark workflow.
 ```
 
-Yours must take input `suite`, and input `aliases` to run with `--member-aliases`; `benchmark run` refuses it otherwise. Keep `plan`'s step id and `report` as a `finally` step. Dropping `strict: true` lets trials run without the credentials being kept from them, and with each tool's own permission settings rather than unattended: a tool that may not edit fails its trials, and the report opens with a line that says so. When two namespaces you receive both have a `benchmark.yaml`, `benchmark run` refuses with `workflow_namespace_conflict`, naming both files, and never falls back to teamai's.
+Yours must take input `suite`, and input `aliases` to run with `--member-aliases`; `benchmark run` refuses it otherwise. Keep `plan`'s step id and `report` as a `finally` step. Dropping `strict: true` lets trials run without the credentials being kept from them, and with each tool's own permission settings rather than unattended: a tool that may not edit fails its trials, and the report opens with a line that says so. When two namespaces you receive both have a `teamai-benchmark.yaml`, `benchmark run` refuses with `workflow_namespace_conflict`, naming both files, and never falls back to teamai's.
 
 ## Results
 
@@ -533,7 +533,7 @@ Set `TEAM_REPO`, `GITLAB_TOKEN` (reads the team repo) and `ANTHROPIC_API_KEY` as
 A benchmark run is an ordinary workflow run, so any driver runs it through `workflow next --prepare` and `workflow report`, as [Clone workspaces in your own driver](workflow-advanced.md#clone-workspaces-in-your-own-driver) describes:
 
 ```text
-teamai workflow start benchmark --inputs '{"suite":"fix-auth","aliases":"team"}' --timeout 45m
+teamai workflow start teamai-benchmark --inputs '{"suite":"fix-auth","aliases":"team"}' --timeout 45m
 teamai workflow next <run> --prepare --json '{"driver":{..., "can":{"workspace":["read-only","new","continue","clone"],"isolation":"sandbox","env":true,"setup":true,"tools":["claude"],"unattended":true,"end_turn":true}}}'
   -> a command lease (plan, check, report): run lease.command in lease.cwd, or in your checkout without one, with TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>
   -> a prompt lease: launch lease.tool in lease.cwd on lease.prompt, with lease.model, in its unattended mode for lease.permissions, held to lease.limits
@@ -547,5 +547,5 @@ teamai workflow report <run> --json '{..., "tool":"claude", "durationMs":84000, 
 | Every process | Runs without the names in `lease.envScope.withhold`, with `lease.env`, and with `TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>`, so a `teamai` call from it changes no run. A command step prints its outputs as JSON on stdout; report them as `outputs`. |
 | `report` | For a prompt: `tool`, `durationMs` measured around the tool launch, and `cost` only when the tool stated one. |
 | Limits | Hold the tool to `lease.limits`. When one stopped it, report `outcome: "success"` with `limit`: `timeout`, `budget` or `max_turns`, and list in `unenforced` a `budget` or `max_turns` you could not hold it to. |
-| Timeout | `benchmark run` passes the suite's `timeout` as `--timeout`; a direct `workflow start benchmark` must pass it too, or `plan` fails. |
+| Timeout | `benchmark run` passes the suite's `timeout` as `--timeout`; a direct `workflow start teamai-benchmark` must pass it too, or `plan` fails. |
 | Judges | While the suite's scorers still judge, `next` answers `wait` with `judging`: run `teamai score --next` on the install that ran the trials. |

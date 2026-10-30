@@ -28,7 +28,7 @@ const EXPRESSIONS: Record<string, string> = {
 
 const JobSchema = z.object({
   'runs-on': z.string(),
-  env: z.record(z.string()).default({}),
+  env: z.record(z.string(), z.string()).default({}),
   steps: z.array(z.object({ uses: z.string().optional(), run: z.string().optional(), if: z.string().optional() })),
 });
 const DoneSchema = z.object({ data: z.object({ done: z.object({ outcome: z.string(), outputs: z.object({ text: z.string() }) }) }) });
@@ -46,7 +46,7 @@ function guideJob(): z.infer<typeof JobSchema> {
   const workflows = [...text.matchAll(/^```yaml\n([\s\S]*?)^```/gm)]
     .map((match): unknown => parseDocument(match[1] ?? '').toJS())
     .filter((value) => !!value && typeof value === 'object' && 'jobs' in value)
-    .map((value) => z.object({ jobs: z.record(z.unknown()) }).parse(value));
+    .map((value) => z.object({ jobs: z.record(z.string(), z.unknown()) }).parse(value));
   const [workflow, ...others] = workflows;
   if (!workflow || others.length > 0) throw new Error(`${GUIDE} shows ${workflows.length} GitHub Actions workflows, not one`);
   const [job, ...jobs] = Object.values(workflow.jobs);

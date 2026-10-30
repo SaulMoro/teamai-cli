@@ -11,7 +11,7 @@ import { log } from '../utils/logger.js';
 let root = '';
 afterEach(async () => { vi.unstubAllEnvs(); if (root) await fs.rm(root, { recursive: true, force: true }); root = ''; });
 
-const Invocation = z.object({ args: z.array(z.string()), env: z.record(z.string()), stdin: z.string(), promptFile: z.string().nullable() });
+const Invocation = z.object({ args: z.array(z.string()), env: z.record(z.string(), z.string()), stdin: z.string(), promptFile: z.string().nullable() });
 
 /**
  * A fake tool on disk: it records how it was launched, with the file after `--prompt-file`, prints `stdout` and

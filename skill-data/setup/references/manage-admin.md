@@ -203,8 +203,13 @@ agent name in two namespaces one member has active is an error naming both
 files; two namespace rules or claudemd files of one name are both delivered.
 A replacement must be usable to replace anything: a skill directory needs its
 `SKILL.md` (pull names one without it), and while an agent file does not parse
-the root agent stays installed. `teamai doctor` lists each replacement as a note. Teams without roles or
-projects are unaffected.
+the root agent stays installed. `teamai doctor` lists each replacement as a note.
+
+A member with no role or project (on a team without `manifest/projects.yaml`)
+gets every skill namespace, so nothing replaces anything: the root skill wins
+over a namespace skill of its name, then the namespace that sorts first, and
+`pull` names each copy it skipped and the role that would deliver it
+(`docs/guide/distribution.md`, "One skill name in the root and in namespaces").
 
 Docs have no override. A top-level `docs/<ns>/` that any role or project lists
 under `resources.docs` reaches only members with that namespace active; a
@@ -331,10 +336,10 @@ has no session-start hook, they run `teamai pull` manually.
 Turning a tricky fix into team knowledge is **automatic** once recall is on for
 the team (`sharing.recall.enabled: true` in `teamai.yaml`, then `teamai push`; it is
 off by default, and `teamai recall enable` turns it on for one machine only): at the end of a session
-worth sharing, TeamAI prompts the member and offers the `session-close` workflow:
+worth sharing, TeamAI prompts the member and offers the `teamai-share-learnings` workflow:
 its learning step runs the `share` skill (`teamai skill get share`) to summarize the
-session, and its contribute step runs `teamai contribute`. A team file
-`workflows/session-close.yaml` replaces teamai's default. Nobody has to invoke it by hand. (A member whose teamai config
+session, and its contribute step runs `teamai contribute` for each learning. A team file
+`workflows/teamai-share-learnings.yaml` replaces teamai's default. Nobody has to invoke it by hand. (A member whose teamai config
 cannot be loaded gets no prompt; `teamai skill get share` names the file and the error.)
 
 Teams that work in English set `language: en` in `teamai.yaml` and `teamai push`.

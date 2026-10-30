@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
@@ -147,7 +147,7 @@ describe('listMembers', () => {
   let tmpDir: string;
   let cloneDir: string;
   let reportsDir: string;
-  let consoleSpy: ReturnType<typeof vi.spyOn>;
+  let consoleSpy: MockInstance<typeof console.log>;
 
   async function writeReportsMember(filename: string, data: string | Record<string, unknown>): Promise<void> {
     const body = typeof data === 'string' ? data : YAML.stringify(data);

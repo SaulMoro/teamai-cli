@@ -640,6 +640,8 @@ describe('workflow resume lists the runs a checkout can resume, and --next takes
     fs.mkdirSync(bin, { recursive: true });
     fs.symlinkSync(execFileSync('which', ['git'], { encoding: 'utf8' }).trim(), path.join(bin, 'git'));
     const runner = { TEAMAI_MODE: 'unattended', PATH: [bin, '/usr/bin', '/bin'].join(path.delimiter) };
+    const loginPath = `export PATH='${runner.PATH.replace(/'/g, "'\\''")}'\n`;
+    for (const profile of ['.bash_profile', '.zprofile']) fs.writeFileSync(path.join(homeOf('runner'), profile), loginPath);
     const claude = ['--tools', 'default=claude'];
 
     const listed = await teamai('runner', ['workflow', 'resume', ...claude], { env: runner });

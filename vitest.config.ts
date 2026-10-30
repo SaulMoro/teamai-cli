@@ -2,8 +2,9 @@ import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
+    clearMocks: true,
     globalSetup: ['src/__tests__/helpers/assert-safe-tmpdir.ts'],
-    include: ['src/__tests__/**/*.test.ts'],
+    include: ['src/__tests__/**/*.test.ts', 'oxlint-plugin-teamai/**/*.test.ts'],
     exclude: ['src/__tests__/e2e/**', 'src/__tests__/*-e2e.test.ts'],
     // Applied before setupFiles: clear-agent-session-env.ts must remove each,
     // which workflow-test-env.test.ts checks.
@@ -25,6 +26,8 @@ export default defineConfig({
     hookTimeout: 15000,
     coverage: {
       provider: 'v8',
+      include: ['src/**/*.ts'],
+      exclude: ['src/__tests__/**'],
       reporter: ['cobertura', 'text'],
       reportsDirectory: 'coverage',
     },

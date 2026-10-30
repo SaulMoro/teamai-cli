@@ -16,7 +16,7 @@ export const BenchmarkNameSchema = z.string().regex(BENCHMARK_NAME, 'must be let
 export const ArmTeamSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('pulled'), revision: CommitSchema }).strict(),
   z.object({ kind: z.literal('ref'), ref: z.string().min(1), revision: CommitSchema }).strict(),
-  z.object({ kind: z.literal('without'), paths: z.array(TeamPathSchema).nonempty(), revision: CommitSchema }).strict(),
+  z.object({ kind: z.literal('without'), paths: z.tuple([TeamPathSchema], TeamPathSchema), revision: CommitSchema }).strict(),
   z.object({ kind: z.literal('none') }).strict(),
 ]);
 export type ArmTeam = z.infer<typeof ArmTeamSchema>;

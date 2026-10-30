@@ -163,7 +163,7 @@ describe('workflow HITL', () => {
 
   it('parses capabilities separately from driver identity and reports unknown names', () => {
     expect(parseNextPayload({ driver: { ...driver, can: { hitl: true, unknown: 'secret' } }, other: 1 })).toEqual({ request: { driver, can: { hitl: true } }, ignored: ['other', 'driver.can.unknown'] });
-    expect(parseNextPayload({ driver: { ...driver, can: { hitl: 'yes' } } })).toBe('driver.can.hitl: Expected boolean, received string');
+    expect(parseNextPayload({ driver: { ...driver, can: { hitl: 'yes' } } })).toMatch(/^driver\.can\.hitl: .*boolean.*string$/);
     expect(parseNextPayload({ driver: { ...driver, can: { workspace: ['new', 'elsewhere'] } } })).toMatch(/^driver\.can\.workspace\.1: /);
   });
 

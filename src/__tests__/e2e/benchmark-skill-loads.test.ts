@@ -25,7 +25,7 @@ const SKILL = (name: string): string => `---\nname: ${name}\ndescription: Helps 
 const DoneSchema = z.object({ run: z.string(), outputs: z.object({ text: z.string() }) });
 const RecordSchema = z.object({
   skillChanges: z.unknown(),
-  trials: z.array(z.object({ arm: z.string(), used: z.record(z.string()).optional() }).passthrough()),
+  trials: z.array(z.object({ arm: z.string(), used: z.record(z.string(), z.string()).optional() }).passthrough()),
 }).passthrough();
 
 const fixtures: BenchmarkFixture[] = [];

@@ -4,7 +4,7 @@ import { z } from 'zod';
 
 const ROOT = path.join(import.meta.dirname, '../..');
 const SEEDED = ['CLAUDE_CODE_SESSION_ID', 'TEAMAI_WORKFLOW_ATTEMPT', 'TEAMAI_MODE', 'CI'];
-const ConfigSchema = z.object({ default: z.object({ test: z.object({ env: z.record(z.string()) }) }) });
+const ConfigSchema = z.object({ default: z.object({ test: z.object({ env: z.record(z.string(), z.string()) }) }) });
 
 describe('the test environment', () => {
   it.each(['vitest.config.ts', 'vitest.e2e.config.ts'])('%s seeds an agent session, a workflow attempt and a run mode for the scrub to remove', async (file) => {

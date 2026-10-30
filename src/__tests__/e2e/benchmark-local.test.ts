@@ -1,6 +1,6 @@
 /**
  * Real CLI: a one-task, one-arm check suite, run by `teamai benchmark run` in a member's checkout on the local driver in
- * a declared sandbox, or started as the workflow `benchmark` for another driver.
+ * a declared sandbox, or started as the workflow `teamai-benchmark` for another driver.
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -72,7 +72,7 @@ describe('benchmark on the local driver', () => {
     fixtures.push(fixture);
     const teamHead = execFileSync('git', ['--git-dir', fixture.teamOrigin, 'rev-parse', 'main'], { encoding: 'utf8' }).trim();
 
-    const started = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m']);
+    const started = await fixture.teamai(['workflow', 'start', 'teamai-benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m']);
     const run = String(envelope(started).data?.run);
     const driver = { kind: 'ci', machine: 'ci', workspace: fixture.work, can: { workspace: ['read-only', 'new', 'continue', 'clone'] } };
     const next = await driveCommands(fixture, run, { driver });
@@ -121,7 +121,7 @@ describe('benchmark on the local driver', () => {
     expect(done.outputs.text).toContain(passRate);
     expect(done.outputs.text).toContain(CAPTION);
     expect(ran.stderr).toContain(done.outputs.text);
-    expect(end).toMatchObject({ workflow: 'benchmark', status: 'succeeded', isolated: true });
+    expect(end).toMatchObject({ workflow: 'teamai-benchmark', status: 'succeeded', isolated: true });
     expect(end).not.toHaveProperty('benchmark');
     expect(record.trials).toMatchObject([{ task: 'fix', arm: 'claude', repetition: 1, order: 1, step: 'trials.r1.fix.claude.prompt', result }]);
     expect(more).toEqual([]);

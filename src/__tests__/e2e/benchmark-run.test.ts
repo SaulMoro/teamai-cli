@@ -1,5 +1,5 @@
 /**
- * Real CLI: `teamai benchmark run` starts the workflow `benchmark`, teamai's default or the team's file of that name,
+ * Real CLI: `teamai benchmark run` starts the workflow `teamai-benchmark`, teamai's default or the team's file of that name,
  * which plans the suite, runs its trials in fresh clones from the plan, and reports them in a finally step.
  */
 import fs from 'node:fs';
@@ -14,7 +14,7 @@ afterEach(() => {
   for (const fixture of fixtures.splice(0)) fixture.remove();
 });
 
-const DoneSchema = z.object({ run: z.string(), outcome: z.string(), outputs: z.object({ text: z.string(), table: z.unknown() }) }).passthrough();
+const DoneSchema = z.object({ run: z.string(), outcome: z.string(), outputs: z.object({ text: z.string(), table: z.unknown().optional() }) }).passthrough();
 const RecordSchema = z.object({ run: z.string(), outcome: z.string(), workflow: z.object({ name: z.string(), origin: z.object({ source: z.string() }) }).passthrough(), trials: z.array(z.unknown()) }).passthrough();
 
 describe('teamai benchmark run', () => {
@@ -31,7 +31,7 @@ describe('teamai benchmark run', () => {
     expect(done.outputs.text).toContain('100% (1/1)');
     expect(ran.stderr).toContain(done.outputs.text);
     expect(kept).toMatchObject({
-      run: done.run, outcome: 'succeeded', workflow: { name: 'benchmark', origin: { source: 'default' } },
+      run: done.run, outcome: 'succeeded', workflow: { name: 'teamai-benchmark', origin: { source: 'default' } },
       trials: [{ task: 'fix', arm: 'claude', step: 'trials.r1.fix.claude.prompt', result: 'passed' }],
     });
     expect(fixture.reportedBenchmark(done.run)).toEqual(fixture.benchmarkRecord(done.run));
@@ -83,7 +83,7 @@ describe('teamai benchmark run', () => {
 
 /** The shipped workflow without its strict sandbox, as a team may write it. */
 const RELAXED = `schemaVersion: v1alpha1
-name: benchmark
+name: teamai-benchmark
 description: Run a benchmark suite on any machine.
 invoke: deny
 inputs: { suite: string }
@@ -106,7 +106,7 @@ describe('a team benchmark workflow', () => {
   it('replaces the shipped one, and benchmark run names it', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: false });
     fixtures.push(fixture);
-    fixture.pushTeam({ 'workflows/benchmark.yaml': RELAXED });
+    fixture.pushTeam({ 'workflows/teamai-benchmark.yaml': RELAXED });
     const pulled = await fixture.teamai(['pull']);
 
     const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
@@ -114,15 +114,15 @@ describe('a team benchmark workflow', () => {
 
     expect(pulled.code, said(pulled)).toBe(0);
     expect(ran.code, said(ran)).toBe(0);
-    expect(ran.stderr).toContain('Running the team\'s workflows/benchmark.yaml, which replaces teamai\'s benchmark workflow.');
+    expect(ran.stderr).toContain('Running the team\'s workflows/teamai-benchmark.yaml, which replaces teamai\'s benchmark workflow.');
     expect(done.outputs.text).toContain('100% (1/1)');
-    expect(fixture.benchmarkRecord(done.run)).toMatchObject({ workflow: { name: 'benchmark', origin: { source: 'team' } } });
+    expect(fixture.benchmarkRecord(done.run)).toMatchObject({ workflow: { name: 'teamai-benchmark', origin: { source: 'team' } } });
   }, 180_000);
 
   it('runs its trials with the tool\'s own permission settings when it drops the strict sandbox, and says so', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes-when-unattended', sandbox: true });
     fixtures.push(fixture);
-    fixture.pushTeam({ 'workflows/benchmark.yaml': RELAXED });
+    fixture.pushTeam({ 'workflows/teamai-benchmark.yaml': RELAXED });
     const pulled = await fixture.teamai(['pull']);
 
     const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
@@ -137,7 +137,7 @@ describe('a team benchmark workflow', () => {
   it('replaces the shipped one from the namespace the member\'s role receives, and benchmark run names its file', async () => {
     const fixture = await benchmarkFixture({
       tool: 'fixes', sandbox: false, role: 'ops',
-      team: { 'manifest/roles.yaml': 'version: 1\nroles:\n  - id: ops\n    resources:\n      knowledge: []\n      skills: []\n      workflows: [ops]\n', 'workflows/ops/benchmark.yaml': RELAXED },
+      team: { 'manifest/roles.yaml': 'version: 1\nroles:\n  - id: ops\n    resources:\n      knowledge: []\n      skills: []\n      workflows: [ops]\n', 'workflows/ops/teamai-benchmark.yaml': RELAXED },
     });
     fixtures.push(fixture);
 
@@ -145,9 +145,9 @@ describe('a team benchmark workflow', () => {
     const done = DoneSchema.parse(envelope(ran).data?.done);
 
     expect(ran.code, said(ran)).toBe(0);
-    expect(ran.stderr).toContain('Running the team\'s workflows/ops/benchmark.yaml, which replaces teamai\'s benchmark workflow.');
+    expect(ran.stderr).toContain('Running the team\'s workflows/ops/teamai-benchmark.yaml, which replaces teamai\'s benchmark workflow.');
     expect(done.outputs.text).toContain('100% (1/1)');
-    expect(fixture.benchmarkRecord(done.run)).toMatchObject({ workflow: { name: 'benchmark', origin: { source: 'team' } } });
+    expect(fixture.benchmarkRecord(done.run)).toMatchObject({ workflow: { name: 'teamai-benchmark', origin: { source: 'team' } } });
   }, 180_000);
 
   it('is refused by benchmark run, leaving no run, when two namespaces the member receives both define it', async () => {
@@ -155,7 +155,7 @@ describe('a team benchmark workflow', () => {
       tool: 'fixes', sandbox: true, role: 'ops',
       team: {
         'manifest/roles.yaml': 'version: 1\nroles:\n  - id: ops\n    resources:\n      knowledge: []\n      skills: []\n      workflows: [a, b]\n',
-        'workflows/a/benchmark.yaml': RELAXED, 'workflows/b/benchmark.yaml': RELAXED,
+        'workflows/a/teamai-benchmark.yaml': RELAXED, 'workflows/b/teamai-benchmark.yaml': RELAXED,
       },
     });
     fixtures.push(fixture);
@@ -165,7 +165,7 @@ describe('a team benchmark workflow', () => {
     expect(ran.code, said(ran)).toBe(1);
     expect(envelope(ran).error).toEqual({
       code: 'workflow_namespace_conflict',
-      message: 'Workflow "benchmark" is defined in multiple active namespaces (workflows/a/benchmark.yaml and workflows/b/benchmark.yaml); conflicting workflows have no runnable version. Keep it in one namespace, push it, run teamai pull, and start again.',
+      message: 'Workflow "teamai-benchmark" is defined in multiple active namespaces (workflows/a/teamai-benchmark.yaml and workflows/b/teamai-benchmark.yaml); conflicting workflows have no runnable version. Keep it in one namespace, push it, run teamai pull, and start again.',
     });
     expect(fixture.runIds()).toEqual([]);
     expect(fixture.toolLaunches()).toEqual([]);
@@ -176,12 +176,12 @@ describe('a team benchmark workflow', () => {
       tool: 'fixes', sandbox: true, role: 'ops',
       team: {
         'manifest/roles.yaml': 'version: 1\nroles:\n  - id: ops\n    resources:\n      knowledge: []\n      skills: []\n      workflows: [a, b]\n',
-        'workflows/a/benchmark.yaml': RELAXED, 'workflows/b/benchmark.yaml': RELAXED,
+        'workflows/a/teamai-benchmark.yaml': RELAXED, 'workflows/b/teamai-benchmark.yaml': RELAXED,
       },
     });
     fixtures.push(fixture);
 
-    const started = await fixture.teamai(['workflow', 'start', 'benchmark', '--driver', 'local', '--sandbox', '--timeout', '10m', '--inputs', '{"suite":"fix","aliases":"team"}']);
+    const started = await fixture.teamai(['workflow', 'start', 'teamai-benchmark', '--driver', 'local', '--sandbox', '--timeout', '10m', '--inputs', '{"suite":"fix","aliases":"team"}']);
 
     expect(started.code, said(started)).toBe(1);
     expect(envelope(started).error).toMatchObject({ code: 'workflow_namespace_conflict' });
@@ -191,28 +191,28 @@ describe('a team benchmark workflow', () => {
   it('is refused by benchmark run, leaving no run, when it takes no input suite', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true });
     fixtures.push(fixture);
-    fixture.pushTeam({ 'workflows/benchmark.yaml': RELAXED.replace('inputs: { suite: string }', 'inputs: { name: string }').replaceAll('inputs.suite', 'inputs.name') });
+    fixture.pushTeam({ 'workflows/teamai-benchmark.yaml': RELAXED.replace('inputs: { suite: string }', 'inputs: { name: string }').replaceAll('inputs.suite', 'inputs.name') });
     const pulled = await fixture.teamai(['pull']);
 
     const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
 
     expect(pulled.code, said(pulled)).toBe(0);
     expect(ran.code).toBe(1);
-    expect(envelope(ran).error).toEqual({ code: 'invalid_inputs', message: 'The team\'s workflows/benchmark.yaml replaces teamai\'s benchmark workflow and takes no input suite, so teamai benchmark run cannot give it the suite. Add inputs: { suite: string } to it, or remove it to run teamai\'s default.' });
+    expect(envelope(ran).error).toEqual({ code: 'invalid_inputs', message: 'The team\'s workflows/teamai-benchmark.yaml replaces teamai\'s benchmark workflow and takes no input suite, so teamai benchmark run cannot give it the suite. Add inputs: { suite: string } to it, or remove it to run teamai\'s default.' });
     expect(fixture.runIds()).toEqual([]);
   }, 180_000);
 
   it('is refused by benchmark run --member-aliases, leaving no run, when it takes no input aliases', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true });
     fixtures.push(fixture);
-    fixture.pushTeam({ 'workflows/benchmark.yaml': RELAXED });
+    fixture.pushTeam({ 'workflows/teamai-benchmark.yaml': RELAXED });
     const pulled = await fixture.teamai(['pull']);
 
     const ran = await fixture.teamai(['benchmark', 'run', 'fix', '--member-aliases']);
 
     expect(pulled.code, said(pulled)).toBe(0);
     expect(ran.code).toBe(1);
-    expect(envelope(ran).error).toEqual({ code: 'invalid_inputs', message: 'The team\'s workflows/benchmark.yaml replaces teamai\'s benchmark workflow and takes no input aliases, so teamai benchmark run cannot give it --member-aliases. Add aliases: string to its inputs and pass it to teamai benchmark plan --aliases, or run without --member-aliases.' });
+    expect(envelope(ran).error).toEqual({ code: 'invalid_inputs', message: 'The team\'s workflows/teamai-benchmark.yaml replaces teamai\'s benchmark workflow and takes no input aliases, so teamai benchmark run cannot give it --member-aliases. Add aliases: string to its inputs and pass it to teamai benchmark plan --aliases, or run without --member-aliases.' });
     expect(fixture.runIds()).toEqual([]);
   }, 180_000);
 });
@@ -230,7 +230,7 @@ describe('a plan of an unknown schemaVersion', () => {
   it('fails the report, and benchmark run exits 1 though the run succeeded', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: false });
     fixtures.push(fixture);
-    fixture.pushTeam({ 'workflows/benchmark.yaml': futurePlan([{ id: 'noop', command: 'node -e 0' }]) });
+    fixture.pushTeam({ 'workflows/teamai-benchmark.yaml': futurePlan([{ id: 'noop', command: 'node -e 0' }]) });
     const pulled = await fixture.teamai(['pull']);
 
     const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
@@ -246,7 +246,7 @@ describe('a plan of an unknown schemaVersion', () => {
   it('fails a benchmark check', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: false });
     fixtures.push(fixture);
-    fixture.pushTeam({ 'workflows/benchmark.yaml': futurePlan([{ id: 'check', command: 'teamai benchmark check --trial' }]) });
+    fixture.pushTeam({ 'workflows/teamai-benchmark.yaml': futurePlan([{ id: 'check', command: 'teamai benchmark check --trial' }]) });
     const pulled = await fixture.teamai(['pull']);
 
     const ran = await fixture.teamai(['benchmark', 'run', 'fix']);
@@ -264,12 +264,12 @@ describe('the benchmark workflow', () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true });
     fixtures.push(fixture);
 
-    const unbounded = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--driver', 'local']);
-    const longer = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--driver', 'local', '--timeout', '11m']);
+    const unbounded = await fixture.teamai(['workflow', 'start', 'teamai-benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--driver', 'local']);
+    const longer = await fixture.teamai(['workflow', 'start', 'teamai-benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--driver', 'local', '--timeout', '11m']);
 
     expect(unbounded.code, said(unbounded)).toBe(1);
     expect(envelope(unbounded).data?.done).toMatchObject({ outcome: 'failed' });
-    expect(unbounded.stderr).toContain('has no timeout, and suite "fix" allows 10m. Start it with teamai workflow start benchmark --timeout 10m, or with teamai benchmark run fix, which sets it.');
+    expect(unbounded.stderr).toContain('has no timeout, and suite "fix" allows 10m. Start it with teamai workflow start teamai-benchmark --timeout 10m, or with teamai benchmark run fix, which sets it.');
     expect(longer.code, said(longer)).toBe(1);
     expect(longer.stderr).toContain('may take 11m, and suite "fix" allows 10m.');
     expect(fixture.toolLaunches()).toEqual([]);

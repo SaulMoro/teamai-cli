@@ -103,7 +103,7 @@ describe('the workflow a benchmark plan prints', () => {
 
     expect(planOfRun(run, 'trials.r1.t01.a01.check')).toMatchObject({ failure: {
       code: 'run_unreadable',
-      message: expect.stringMatching(new RegExp(`^Step "plan" of run ${run.id} printed a benchmark plan this teamai cannot read: .*arms: Required.*\\. Update teamai, or start the benchmark again\\.$`)),
+      message: expect.stringMatching(new RegExp(`^Step "plan" of run ${run.id} printed a benchmark plan this teamai cannot read: .*arms: Invalid input: expected array, received undefined.*\\. Update teamai, or start the benchmark again\\.$`)),
     } });
   });
 

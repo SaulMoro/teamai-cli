@@ -172,7 +172,7 @@ const nowVisible = (rel: string): string => `${rel} now holds entries teamai doe
 beforeAll(() => {
   if (!fs.existsSync(CLI)) throw new Error(`CLI binary not found at ${CLI}. Run "npm run build" first.`);
   sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-only-e2e-')));
-  fakeCodexDir = installFakeCodex();
+  fakeCodexDir = installFakeCodex({ version: '9999.0.0' });
 });
 
 afterAll(() => {

@@ -354,7 +354,7 @@ teamai mcp inject
 teamai mcp remove
 ```
 
-`mcp inject` 和 `mcp remove` 遇到无法读取或解析的工具配置时返回退出码 1，`--dry-run` 也一样。其他工具仍可能更新；命令会列出这些变更，并报告操作未完成。修复警告中指出的配置后，重新运行该命令。无法读取的配置及其归属记录会保留，供重试使用。
+`mcp inject` 和 `mcp remove` 遇到无法读取或解析的工具配置时返回退出码 1，`--dry-run` 也一样，包括 Codex 的 `config.toml` 存在 TOML 语法错误的情况；文件开头的 UTF-8 BOM 可以正常处理。其他工具仍可能更新；命令会列出这些变更，并报告操作未完成。修复警告中指出的配置后，重新运行该命令。无法读取的配置及其归属记录会保留，供重试使用。`uninstall` 同样保留归属记录并返回退出码 1，直到配置修复后重试。
 
 Muse 调整 JSON 对象的键顺序不会被视为个人修改。移除时会核对记录的内容（包括嵌套对象），仍会保留实际修改过命令、参数或环境变量的 server。旧记录如果没有内容指纹，需要团队 Git 历史中与原 hash 匹配的定义作为依据；无法证明时会保留 server 并提示。
 
@@ -419,7 +419,7 @@ sessions:
   publish: { attended: ask, unattended: auto }
 ```
 
-有人值守的 `ask` 会在摩擦提醒提供 [`session-close`](workflow.md#session-close) 时提议发布，成员要确认两次：启动时一次，转录发出前再在自己的终端或仪表盘确认一次。除此之外，成员的会话只会通过 `teamai session push` 等命令归档。无人值守的 `ask` 等同于 `off`，因为没有人在场确认。有人值守的 `auto` 在会话六小时没有任何活动后归档它，由评判已结束会话的后台任务完成。发布总会脱敏。HTTP 团队没有会话归档，因此在那里 `sessions.publish` 等同于 `off`，`teamai doctor` 会说明这一点。
+有人值守的 `ask` 会在摩擦提醒提供 [`teamai-share-learnings`](workflow.md#teamai-share-learnings-和-teamai-share-session) 时提议发布，成员要确认两次：启动时一次，转录发出前再在自己的终端或仪表盘确认一次。除此之外，成员的会话只会通过 `teamai session push` 等命令归档。无人值守的 `ask` 等同于 `off`，因为没有人在场确认。有人值守的 `auto` 在会话六小时没有任何活动后归档它，由评判已结束会话的后台任务完成。发布总会脱敏。HTTP 团队没有会话归档，因此在那里 `sessions.publish` 等同于 `off`，`teamai doctor` 会说明这一点。
 
 成员的 `config.yaml` 优先，按模式分别生效。它没有写的模式沿用 `teamai.yaml`：
 

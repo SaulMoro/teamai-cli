@@ -64,9 +64,9 @@ export const NAMESPACE_RULE = "resource namespace must be a single path segment 
  * message quotes the value (JSON-escaped, so a control character shows): the
  * issue path names the entry, but an admin fixing it looks for the text.
  */
-export const NamespaceSegmentSchema = z.string().min(1).refine(isSafeNamespaceSegment, (value) => ({
-  message: `${NAMESPACE_RULE}; got ${JSON.stringify(value)}`,
-}));
+export const NamespaceSegmentSchema = z.string().min(1).refine(isSafeNamespaceSegment, {
+  error: (issue) => `${NAMESPACE_RULE}; got ${JSON.stringify(issue.input)}`,
+});
 
 /**
  * The `resources:` types an admin declares by hand (#707): `roles add` and
@@ -104,9 +104,7 @@ export const RESERVED_DOCS_DIR = 'team-codebase';
 
 const DocsNamespaceList = z.array(NamespaceSegmentSchema.refine(
   (value) => caseFoldKey(value) !== RESERVED_DOCS_DIR,
-  (value) => ({
-    message: `"${value}" cannot be a docs namespace: docs/${RESERVED_DOCS_DIR}/ is reserved for the legacy codebase output. Pick another name and move its directory`,
-  }),
+  { error: (issue) => `"${String(issue.input)}" cannot be a docs namespace: docs/${RESERVED_DOCS_DIR}/ is reserved for the legacy codebase output. Pick another name and move its directory` },
 )).optional();
 
 /** Spread into the roles and projects `resources:` schemas. */
@@ -179,7 +177,7 @@ export function fallbackNamespaceError(ids: string[], source: string): string | 
  * it do: one line naming the offending entry. A raw ZodError reaches the CLI as
  * an object dump, which tells an admin nothing about which line to edit.
  */
-export function parseManifest<S extends z.ZodTypeAny>(schema: S, raw: unknown, kind: ManifestKind): z.infer<S> {
+export function parseManifest<S extends z.ZodType>(schema: S, raw: unknown, kind: ManifestKind): z.infer<S> {
   const parsed = schema.safeParse(raw);
   if (parsed.success) return parsed.data;
 

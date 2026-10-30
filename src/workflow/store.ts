@@ -228,7 +228,7 @@ const RunProgressSchema = z.object({
   sessionContinuations: z.array(SessionContinuationSchema).optional(),
   releasedTokens: z.array(ReleasedTokensSchema).optional(),
   stoppedAttempts: z.array(StoppedAttemptSchema).optional(),
-  scorers: z.record(PinnedScorerSchema).optional(),
+  scorers: z.record(z.string(), PinnedScorerSchema).optional(),
   verdicts: z.array(EntryVerdictSchema).optional(),
   finalizing: z.object({
     outcome: z.enum(['succeeded', 'failed', 'cancelled']), end: z.string().optional(), failure: FailureSchema.optional(), since: z.string(), until: z.string(),

@@ -39,7 +39,7 @@ export type Candidate =
 const BundleSchema = z.object({
   definition: z.record(z.string(), z.unknown()),
   workflows: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
-  scorers: z.record(z.string().regex(/:/, 'a generated scorer name holds a colon, such as teamai:correctness:<task>'), PinnedScorerSchema.extend({ generated: z.literal(true) })).optional(),
+  scorers: z.record(z.string().regex(/:/), PinnedScorerSchema.extend({ generated: z.literal(true) }), { error: (issue) => issue.code === 'invalid_key' ? 'a generated scorer name holds a colon, such as teamai:correctness:<task>' : undefined }).optional(),
   teamRevision: z.string().min(1).optional(),
 }).strict();
 

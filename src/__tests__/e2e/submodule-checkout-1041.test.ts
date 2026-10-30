@@ -70,7 +70,7 @@ function fixture(name: string, oldGit = false) {
 
 beforeAll(() => {
   sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-1041-e2e-')));
-  fakeBin = installFakeCodex();
+  fakeBin = installFakeCodex({ version: '9999.0.0' });
 });
 afterAll(async () => {
   await waitForDetachedChildren();

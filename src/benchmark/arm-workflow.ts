@@ -26,7 +26,7 @@ export interface PinnedArmWorkflow {
   files: Record<string, Record<string, unknown>>;
 }
 
-const FileSchema = z.object({ steps: z.array(z.record(z.unknown())) }).passthrough();
+const FileSchema = z.object({ steps: z.array(z.record(z.string(), z.unknown())) }).passthrough();
 type FileStep = Record<string, unknown>;
 
 /** Why plan refuses an arm's workflow: the member receives two versions of a workflow it runs, or a trial cannot run it. */
@@ -87,7 +87,7 @@ export async function pinArmWorkflow(
     const source = raws.get(file);
     if (known !== undefined || !source) return known ?? file;
     const { name: _name, defaults, ...header } = source.raw;
-    const { model: _model, ...keptDefaults } = z.record(z.unknown()).catch({}).parse(defaults ?? {});
+    const { model: _model, ...keptDefaults } = z.record(z.string(), z.unknown()).catch({}).parse(defaults ?? {});
     const body = { ...header, ...(Object.keys(keptDefaults).length > 0 ? { defaults: keptDefaults } : {}), steps: copySteps(source.raw.steps, source.parsed, { arm, unattended }, keyOf) };
     const key = `${file}.${createHash('sha256').update(JSON.stringify(body)).digest('hex').slice(0, 12)}`;
     files[key] = { ...body, name: key };

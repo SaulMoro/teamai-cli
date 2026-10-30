@@ -32,7 +32,7 @@ type Profile = 'local' | 'session' | 'external' | 'remote';
 type Member = 'alice' | 'bob';
 
 const EnvelopeSchema = z.object({
-  data: z.record(z.unknown()).optional(),
+  data: z.record(z.string(), z.unknown()).optional(),
   error: z.object({ code: z.string(), message: z.string() }).passthrough().optional(),
 });
 type Envelope = z.infer<typeof EnvelopeSchema>;

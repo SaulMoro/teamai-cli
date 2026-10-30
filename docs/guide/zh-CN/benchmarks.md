@@ -8,7 +8,7 @@ teamai benchmark run fix-auth --sandbox
 
 benchmark 套件用团队自己的任务比较工具或模型。一次运行把每个任务交给每个 arm 各做几次，检查每个结果，然后打印表格。trial 只在声明为 sandbox 的机器上运行，例如 CI runner 或容器。
 
-一次 benchmark 运行就是工作流 `benchmark` 的一次运行，这个工作流由 teamai 提供，团队可以替换它。见 [benchmark 工作流](#benchmark-工作流)。
+一次 benchmark 运行就是工作流 `teamai-benchmark` 的一次运行，这个工作流由 teamai 提供，团队可以替换它。见 [benchmark 工作流](#benchmark-工作流)。
 
 ## 编写套件
 
@@ -326,7 +326,7 @@ $ teamai benchmark run fix-auth --sandbox
 ℹ Run r38302f8e6a18c377 started. If it stops before it ends, continue it with: teamai workflow resume r38302f8e6a18c377 --sandbox
 ```
 
-`benchmark run` 先规划套件，所以无法运行的套件不会留下运行。然后它用套件的 `timeout` 启动工作流 `benchmark`，并用本地驱动驱动它。
+`benchmark run` 先规划套件，所以无法运行的套件不会留下运行。然后它用套件的 `timeout` 启动工作流 `teamai-benchmark`，并用本地驱动驱动它。
 
 每个 trial 的 prompt 都以 [`permissions: unattended`](workflow-advanced.md#无人值守的-prompt) 运行，因为 teamai 自带的工作流在严格的 sandbox 中运行 trial：无论这台机器上该工具的设置如何，工具都无需询问就编辑文件和运行命令。
 
@@ -377,12 +377,12 @@ parallel: 4
 
 ## benchmark 工作流
 
-`benchmark run` 启动工作流 `benchmark`。teamai 提供的是这个：
+`benchmark run` 启动工作流 `teamai-benchmark`。teamai 提供的是这个：
 
 ```yaml
-# workflows/benchmark.yaml，随 npm 包发布
+# workflows/teamai-benchmark.yaml，随 npm 包发布
 schemaVersion: v1alpha1
-name: benchmark
+name: teamai-benchmark
 description: Run a benchmark suite. Every arm works the same tasks in fresh clones, judged by checks it never sees.
 invoke: deny
 inputs: { suite: string, aliases: string }
@@ -410,13 +410,13 @@ outputs: { text: steps.report.outputs.text, table: steps.report.outputs.table }
 
 `trials` 运行 `plan` 打印的内容：见[运行步骤打印的工作流](workflow-advanced.md#运行步骤打印的工作流)。`report` 在 trial 之后运行，无论它们发生了什么，就像 [finally 步骤](workflow-advanced.md#finally-步骤)那样。`benchmark run --member-aliases` 把 `aliases` 传为 `member`，否则传为 `team`。
 
-要修改它，推送你自己的 `workflows/benchmark.yaml`，或者为某个角色或项目的成员推送 `workflows/<namespace>/benchmark.yaml`。它会为接收它的人替换 teamai 的版本，就像任何[默认工作流](workflow.md#覆盖默认工作流)一样，`benchmark run` 会说明这一点：
+要修改它，推送你自己的 `workflows/teamai-benchmark.yaml`，或者为某个角色或项目的成员推送 `workflows/<namespace>/teamai-benchmark.yaml`。它会为接收它的人替换 teamai 的版本，就像任何[默认工作流](workflow.md#覆盖默认工作流)一样，`benchmark run` 会说明这一点：
 
 ```text
-ℹ Running the team's workflows/ops/benchmark.yaml, which replaces teamai's benchmark workflow.
+ℹ Running the team's workflows/ops/teamai-benchmark.yaml, which replaces teamai's benchmark workflow.
 ```
 
-你的版本必须接受输入 `suite`，要用 `--member-aliases` 运行还必须接受输入 `aliases`；否则 `benchmark run` 会拒绝它。保留 `plan` 的步骤 id，并把 `report` 保留为 `finally` 步骤。去掉 `strict: true` 会让 trial 在不扣留凭据的情况下运行，并且使用各工具自己的权限设置，而不是无人值守：不能编辑的工具会让它的 trial 失败，报告的第一行会说明这一点。你接收的两个命名空间都有 `benchmark.yaml` 时，`benchmark run` 以 `workflow_namespace_conflict` 拒绝，并指出两个文件，绝不退回 teamai 自带的版本。
+你的版本必须接受输入 `suite`，要用 `--member-aliases` 运行还必须接受输入 `aliases`；否则 `benchmark run` 会拒绝它。保留 `plan` 的步骤 id，并把 `report` 保留为 `finally` 步骤。去掉 `strict: true` 会让 trial 在不扣留凭据的情况下运行，并且使用各工具自己的权限设置，而不是无人值守：不能编辑的工具会让它的 trial 失败，报告的第一行会说明这一点。你接收的两个命名空间都有 `teamai-benchmark.yaml` 时，`benchmark run` 以 `workflow_namespace_conflict` 拒绝，并指出两个文件，绝不退回 teamai 自带的版本。
 
 ## 结果
 
@@ -533,7 +533,7 @@ benchmark:
 benchmark 运行是一次普通的工作流运行，所以任何驱动都通过 `workflow next --prepare` 和 `workflow report` 运行它，见[在自己的驱动里使用克隆工作区](workflow-advanced.md#在自己的驱动里使用克隆工作区)：
 
 ```text
-teamai workflow start benchmark --inputs '{"suite":"fix-auth","aliases":"team"}' --timeout 45m
+teamai workflow start teamai-benchmark --inputs '{"suite":"fix-auth","aliases":"team"}' --timeout 45m
 teamai workflow next <run> --prepare --json '{"driver":{..., "can":{"workspace":["read-only","new","continue","clone"],"isolation":"sandbox","env":true,"setup":true,"tools":["claude"],"unattended":true,"end_turn":true}}}'
   -> a command lease (plan, check, report): run lease.command in lease.cwd, or in your checkout without one, with TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>
   -> a prompt lease: launch lease.tool in lease.cwd on lease.prompt, with lease.model, in its unattended mode for lease.permissions, held to lease.limits
@@ -547,5 +547,5 @@ teamai workflow report <run> --json '{..., "tool":"claude", "durationMs":84000, 
 | 每个进程 | 运行时不带 `lease.envScope.withhold` 中的名字，带 `lease.env` 和 `TEAMAI_WORKFLOW_ATTEMPT=<run>/<attempt>`，所以从中调用的 `teamai` 不会改变任何运行。命令步骤把它的输出以 JSON 打印到 stdout；把它们作为 `outputs` 报告。 |
 | `report` | 对 prompt：`tool`、只围绕工具启动测得的 `durationMs`，以及仅在工具给出时才带的 `cost`。 |
 | 限制 | 让工具遵守 `lease.limits`。某个限制停止了工具时，报告 `outcome: "success"` 并带 `limit`：`timeout`、`budget` 或 `max_turns`；无法让工具遵守的 `budget` 或 `max_turns` 列在 `unenforced` 中。 |
-| 超时 | `benchmark run` 把套件的 `timeout` 作为 `--timeout` 传入；直接执行 `workflow start benchmark` 时也必须传入它，否则 `plan` 会失败。 |
+| 超时 | `benchmark run` 把套件的 `timeout` 作为 `--timeout` 传入；直接执行 `workflow start teamai-benchmark` 时也必须传入它，否则 `plan` 会失败。 |
 | 评判 | 套件的评分器仍在评判时，`next` 返回带 `judging` 的 `wait`：在运行了 trial 的那个安装上运行 `teamai score --next`。 |

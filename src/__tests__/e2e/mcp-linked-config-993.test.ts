@@ -150,7 +150,7 @@ describe('an MCP config that is a symlink (#993)', () => {
     home = path.join(sandbox, 'home');
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
     fs.mkdirSync(path.join(home, '.codex'), { recursive: true });
-    fakeCodexDir = installFakeCodex();
+    fakeCodexDir = installFakeCodex({ version: '9999.0.0' });
   });
 
   afterAll(async () => {

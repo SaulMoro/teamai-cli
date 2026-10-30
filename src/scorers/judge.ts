@@ -18,7 +18,7 @@ import { JudgeAnswerSchema, type JudgeAnswer } from './batch.js';
 import type { ScoreLabel, Isolation, JudgeAccess, JudgeUsage } from './label.js';
 import { agyGatewayEnv } from '../models/agy-gateway.js';
 
-const RecordSchema = z.record(z.unknown());
+const RecordSchema = z.record(z.string(), z.unknown());
 const JUDGE_TIMEOUT_MS = 10 * 60_000;
 const COMMON_ENV = ['PATH', 'HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'SystemRoot', 'WINDIR', 'TMPDIR', 'TMP', 'TEMP', 'LANG', 'LC_ALL', 'TERM', 'USER', 'LOGNAME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY', 'SSL_CERT_FILE', 'NODE_EXTRA_CA_CERTS'];
 const CODEX_DISABLED = ['hooks', 'plugins', 'apps', 'browser_use', 'computer_use', 'multi_agent', 'multi_agent_v2'];
@@ -113,7 +113,7 @@ async function optionalFile(file: string): Promise<string | undefined> {
 async function claudeSettings(tool: JudgeTool, env: NodeJS.ProcessEnv, tmp: string): Promise<string> {
   const file = path.join(env.CLAUDE_CONFIG_DIR || toolHome(tool), 'settings.json');
   const text = await optionalFile(file);
-  const settings = text ? z.object({ env: z.record(z.string()).optional(), model: z.string().optional() }).parse(JSON.parse(text)) : {};
+  const settings = text ? z.object({ env: z.record(z.string(), z.string()).optional(), model: z.string().optional() }).parse(JSON.parse(text)) : {};
   const allowed = Object.fromEntries(Object.entries(settings.env ?? {}).filter(([key]) => judgeProfile(tool).env.includes(key)));
   const target = path.join(tmp, 'claude-settings.json');
   await fs.writeFile(target, JSON.stringify({ env: allowed, ...(settings.model ? { model: settings.model } : {}) }));
@@ -130,7 +130,7 @@ function credentialEnv(key: string): string | undefined {
 async function codexSettings(tool: JudgeTool, env: NodeJS.ProcessEnv) {
   const text = await optionalFile(path.join(env.CODEX_HOME || toolHome(tool), 'config.toml'));
   if (!text) return { args: [], model: undefined };
-  const config = z.object({ model: z.string().optional(), model_provider: z.string().optional(), model_providers: z.record(z.object({ name: z.string().optional(), base_url: z.string().optional(), wire_api: z.string().optional(), env_key: z.string().optional(), experimental_bearer_token: z.string().optional() })).optional() }).parse(parseToml(text));
+  const config = z.object({ model: z.string().optional(), model_provider: z.string().optional(), model_providers: z.record(z.string(), z.object({ name: z.string().optional(), base_url: z.string().optional(), wire_api: z.string().optional(), env_key: z.string().optional(), experimental_bearer_token: z.string().optional() })).optional() }).parse(parseToml(text));
   const model = config.model ? ['-c', `model=${JSON.stringify(config.model)}`] : [];
   const provider = config.model_provider && config.model_providers?.[config.model_provider];
   if (!provider) return { args: model, model: config.model };
@@ -149,8 +149,8 @@ async function codexSettings(tool: JudgeTool, env: NodeJS.ProcessEnv) {
 async function openCodeSettings(env: NodeJS.ProcessEnv, tmp: string): Promise<string | undefined> {
   const file = process.env.OPENCODE_CONFIG || path.join(toolHome('opencode'), 'opencode.json');
   const text = await optionalFile(file);
-  const provider = z.object({ npm: z.enum(['@ai-sdk/openai-compatible', '@ai-sdk/openai', '@ai-sdk/anthropic']).optional(), name: z.string().optional(), options: z.object({ baseURL: z.string().optional(), apiKey: z.string().optional() }).optional(), models: z.record(z.object({ name: z.string().optional() })).optional() });
-  const settings = text ? z.object({ model: z.string().optional(), provider: z.record(provider.nullable()).optional() }).parse(JSON.parse(text)) : {};
+  const provider = z.object({ npm: z.enum(['@ai-sdk/openai-compatible', '@ai-sdk/openai', '@ai-sdk/anthropic']).optional(), name: z.string().optional(), options: z.object({ baseURL: z.string().optional(), apiKey: z.string().optional() }).optional(), models: z.record(z.string(), z.object({ name: z.string().optional() })).optional() });
+  const settings = text ? z.object({ model: z.string().optional(), provider: z.record(z.string(), provider.nullable()).optional() }).parse(JSON.parse(text)) : {};
   for (const entry of Object.values(settings.provider ?? {})) {
     const key = entry?.options?.apiKey?.match(/^\{env:([A-Za-z_][A-Za-z0-9_]*)\}$/)?.[1];
     if (key && entry?.options) {

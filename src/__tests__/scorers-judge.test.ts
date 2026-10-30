@@ -39,7 +39,7 @@ console.log(JSON.stringify({type:'result',structured_output:{label:'good',reason
 });\n`, { mode: 0o755 });
   const result = await runLocalJudge({ tool: 'claude', evidence, schema: { type: 'object' } }, { resolveTool: () => executable });
   expect(result).toMatchObject({ ok: true, answer: { label: 'good' }, judge: { tool: 'claude', model: { reported: 'reported-model' }, access: 'read', isolation: version === '2.1.308 (Claude Code)' ? 'verified' : 'best-effort', usage: { inputTokens: 3, outputTokens: 2, cost: { amount: 0.01, unit: 'USD' } } } });
-  const invocation = z.object({ args: z.array(z.string()), env: z.record(z.string()), stdin: z.string(), settings: z.object({ env: z.record(z.string()) }) }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
+  const invocation = z.object({ args: z.array(z.string()), env: z.record(z.string(), z.string()), stdin: z.string(), settings: z.object({ env: z.record(z.string(), z.string()) }) }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
   expect(invocation.args).toEqual(expect.arrayContaining(['--restricted', '--tools=Read,Grep,Glob', '--strict-mcp-config', '--no-session-persistence', '--permission-prompts', 'none', '--append-system-prompt-file']));
   expect(invocation.args.join(' ')).not.toContain('UNTRUSTED-PROMPT-SECRET');
   expect(invocation.stdin).toContain('rubric');
@@ -74,7 +74,7 @@ console.log(JSON.stringify({type:'turn.completed',usage:{input_tokens:7,output_t
 });\n`, { mode: 0o755 });
   const result = await runLocalJudge({ tool: 'codex', evidence, schema: { type: 'object' } }, { resolveTool: () => executable });
   expect(result).toMatchObject({ ok: true, answer: { label: 'good', reasoning: 'final answer' }, judge: { tool: 'codex', model: { requested: 'gateway-model' }, access: 'read', isolation: version === 'codex-cli 0.163.0' ? 'verified' : 'best-effort', usage: { inputTokens: 7, outputTokens: 4 } } });
-  const invocation = z.object({ args: z.array(z.string()), env: z.record(z.string()), stdin: z.string(), cwd: z.string(), homeFiles: z.array(z.string()), config: z.string() }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
+  const invocation = z.object({ args: z.array(z.string()), env: z.record(z.string(), z.string()), stdin: z.string(), cwd: z.string(), homeFiles: z.array(z.string()), config: z.string() }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
   const real = await fs.realpath(evidence);
   expect(invocation.cwd).toBe(real);
   expect(invocation.args.slice(0, 3)).toEqual(['-a', 'never', 'exec']);
@@ -179,7 +179,7 @@ console.log(JSON.stringify({type:'text',sessionID:'ses_judge',part:{text:JSON.st
 console.log(JSON.stringify({type:'step_finish',part:{modelID:'reported-open-model',tokens:{input:4,output:3}}}));
 });\n`, { mode: 0o755 });
   expect(await runLocalJudge({ tool: 'opencode', evidence, schema: {} }, { resolveTool: () => executable })).toMatchObject({ ok: true, judge: { tool: 'opencode', model: { reported: 'reported-open-model' }, access: 'read', isolation: 'verified' } });
-  const invocation = z.object({ args: z.array(z.string()), env: z.record(z.string()), stdin: z.string(), config: z.object({ permission: z.record(z.string()), plugin: z.array(z.unknown()), mcp: z.record(z.unknown()) }), cwd: z.string() }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
+  const invocation = z.object({ args: z.array(z.string()), env: z.record(z.string(), z.string()), stdin: z.string(), config: z.object({ permission: z.record(z.string(), z.string()), plugin: z.array(z.unknown()), mcp: z.record(z.string(), z.unknown()) }), cwd: z.string() }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
   expect(invocation.args).toEqual(['run', '--standalone', '--format', 'json']);
   expect(invocation.config).toMatchObject({ permission: { '*': 'deny', external_directory: 'deny', bash: 'deny', edit: 'deny', webfetch: 'deny' }, plugin: [], mcp: {} });
   expect(invocation.stdin).toContain('OPENCODE-INLINE-PROMPT');
@@ -245,7 +245,7 @@ it('runs CodeBuddy with its Claude-like flags, the prompt on stdin, at best-effo
   const result = await runLocalJudge({ tool: 'codebuddy', evidence, schema: { type: 'object' } }, { resolveTool: () => executable });
 
   expect(result).toMatchObject({ ok: true, answer: { label: 'good' }, judge: { tool: 'codebuddy', access: 'full', isolation: 'best-effort', usage: { inputTokens: 5, outputTokens: 2, cost: { amount: 0.02, unit: 'USD' } } } });
-  const invocation = z.object({ args: z.array(z.string()), env: z.record(z.string()), stdin: z.string(), cwd: z.string() }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
+  const invocation = z.object({ args: z.array(z.string()), env: z.record(z.string(), z.string()), stdin: z.string(), cwd: z.string() }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
   expect(invocation.args.slice(0, 1)).toEqual(['-p']);
   for (const [flag, value] of [['--tools', 'Read,Grep,Glob'], ['--setting-sources', ''], ['--permission-mode', 'dontAsk'], ['--output-format', 'json'], ['--json-schema', '{"type":"object"}']]) {
     expect(invocation.args[invocation.args.indexOf(flag) + 1]).toBe(value);
@@ -274,7 +274,7 @@ it('runs pi with only its read tools, no context files, extensions, skills or sa
   const result = await runLocalJudge({ tool: 'pi', evidence, schema: { type: 'object' } }, { resolveTool: () => executable });
 
   expect(result).toMatchObject({ ok: true, answer: { label: 'good' }, judge: { tool: 'pi', access: 'full', isolation: 'best-effort', usage: { inputTokens: 9, outputTokens: 4 } } });
-  const invocation = z.object({ args: z.array(z.string()), env: z.record(z.string()), stdin: z.string(), cwd: z.string() }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
+  const invocation = z.object({ args: z.array(z.string()), env: z.record(z.string(), z.string()), stdin: z.string(), cwd: z.string() }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
   expect(invocation.args.slice(0, 3)).toEqual(['-p', '--mode', 'json']);
   expect(invocation.args[invocation.args.indexOf('--tools') + 1]).toBe('read,grep,find,ls');
   expect(invocation.args).toEqual(expect.arrayContaining(['--no-context-files', '--no-extensions', '--no-skills', '--no-session']));
@@ -312,7 +312,7 @@ it('runs agy in plan mode with its sandbox on, the prompt as a stream-json user 
   const result = await runLocalJudge({ tool: 'agy', evidence, schema: { type: 'object' }, model: { name: 'gemini-3.8-flash-low' } }, { resolveTool: () => executable });
 
   expect(result).toMatchObject({ ok: true, answer: { label: 'good' }, judge: { tool: 'agy', access: 'read', isolation: 'best-effort', usage: { inputTokens: 30180, outputTokens: 139 } } });
-  const invocation = z.object({ args: z.array(z.string()), env: z.record(z.string()), stdin: z.string(), cwd: z.string() }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
+  const invocation = z.object({ args: z.array(z.string()), env: z.record(z.string(), z.string()), stdin: z.string(), cwd: z.string() }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
   expect(invocation.args).toEqual(['--input-format=stream-json', '--output-format=stream-json', '--print=', '--mode', 'plan', '--sandbox', '--model', 'gemini-3.8-flash-low']);
   expect(JSON.parse(invocation.stdin)).toMatchObject({ event: 'user', message: { role: 'user', content: expect.stringContaining('AGY-INLINE-PROMPT') } });
   expect(invocation.cwd).toBe(await fs.realpath(evidence));
@@ -367,7 +367,7 @@ it("judges with agy on the gateway a model switch gave it, over the member's own
 
   expect(await runLocalJudge({ tool: 'agy', evidence, schema: { type: 'object' } }, { resolveTool: () => executable })).toMatchObject({ ok: true });
 
-  const invocation = z.object({ env: z.record(z.string()) }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
+  const invocation = z.object({ env: z.record(z.string(), z.string()) }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
   expect(invocation.env).toMatchObject({ GEMINI_API_KEY: 'gateway-key', GOOGLE_GEMINI_BASE_URL: 'https://gateway.example.test' });
 });
 
@@ -385,7 +385,7 @@ it('runs Cursor in ask mode with its sandbox on, the prompt on stdin, at best-ef
 
   expect(result).toMatchObject({ ok: true, answer: { label: 'good' }, judge: { tool: 'cursor', access: 'full', isolation: 'best-effort' } });
   expect(resolved).toEqual(['cursor-agent']);
-  const invocation = z.object({ args: z.array(z.string()), env: z.record(z.string()), stdin: z.string() }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
+  const invocation = z.object({ args: z.array(z.string()), env: z.record(z.string(), z.string()), stdin: z.string() }).parse(JSON.parse(await fs.readFile(record, 'utf8')));
   expect(invocation.args.slice(0, 1)).toEqual(['-p']);
   for (const [flag, value] of [['--output-format', 'json'], ['--mode', 'ask'], ['--sandbox', 'enabled']]) {
     expect(invocation.args[invocation.args.indexOf(flag) + 1]).toBe(value);

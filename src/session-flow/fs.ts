@@ -125,7 +125,7 @@ export function decodeCwdGeneric(encoded: string): string {
 // Streaming JSONL read/write
 // ---------------------------------------------------------------------------
 
-const JsonlRecord = z.record(z.unknown());
+const JsonlRecord = z.record(z.string(), z.unknown());
 
 export function* readJsonl(filePath: string): Generator<Record<string, unknown>> {
   let pending: string | undefined;

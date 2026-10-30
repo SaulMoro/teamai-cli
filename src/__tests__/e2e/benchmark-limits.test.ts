@@ -11,7 +11,7 @@ import { benchmarkFixture, envelope, FIX_SUITE, said, type BenchmarkFixture, typ
 
 const DoneSchema = z.object({ run: z.string(), outcome: z.string() }).passthrough();
 const TrialSchema = z.object({ order: z.number(), result: z.string(), limit: z.string().optional(), unenforced: z.array(z.string()).optional() }).passthrough();
-const RecordSchema = z.object({ limits: z.record(z.number()).optional(), trials: z.array(TrialSchema) }).passthrough();
+const RecordSchema = z.object({ limits: z.record(z.string(), z.number()).optional(), trials: z.array(TrialSchema) }).passthrough();
 const StepsSchema = z.object({ steps: z.array(z.object({ id: z.string(), end: z.string().optional() }).passthrough()) }).passthrough();
 
 const fixtures: BenchmarkFixture[] = [];
@@ -183,7 +183,7 @@ describe('trial limits on the local driver', () => {
 /** A driver of another machine: it declares what a benchmark's steps require, and asks for prepared places. */
 const EXTERNAL = { kind: 'external', machine: 'ci', workspace: '/work' };
 const CAN = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, setup: true, tools: ['claude'], end_turn: true, unattended: true };
-const LeaseSchema = z.object({ attempt: z.string(), revision: z.number(), step: z.string(), command: z.string().optional(), env: z.record(z.string()).optional(), cwd: z.string(), limits: z.record(z.unknown()).optional() }).passthrough();
+const LeaseSchema = z.object({ attempt: z.string(), revision: z.number(), step: z.string(), command: z.string().optional(), env: z.record(z.string(), z.string()).optional(), cwd: z.string(), limits: z.record(z.string(), z.unknown()).optional() }).passthrough();
 const NextSchema = z.object({ data: z.object({ lease: LeaseSchema.optional() }).passthrough() });
 
 /**
@@ -209,7 +209,7 @@ describe('trial limit reports', () => {
   it('refuses a report whose limit is none of the trial limits', async () => {
     const fixture = await benchmarkFixture({ tool: 'does-nothing', sandbox: false, suite: limitedSuite('{ timeout: 3s }') });
     fixtures.push(fixture);
-    const started = envelope(await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m']));
+    const started = envelope(await fixture.teamai(['workflow', 'start', 'teamai-benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m']));
     const run = String(started.data?.run);
     const lease = await leaseFirstPrompt(fixture, run);
     const report = (limit: string) => ['workflow', 'report', run, '--json', JSON.stringify({

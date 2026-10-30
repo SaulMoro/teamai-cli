@@ -52,6 +52,13 @@ describe('parseScorer', () => {
     expect(parsed.ok && parsed.definition).toMatchObject({ samplingRate: 100, model: 'fast', isolation: 'verified' });
   });
 
+  it('reports an invalid label list once while preserving other diagnostics', () => {
+    expect(problems('scorers/q.md', scorerWith('labels: x\npassingScore: nope\n'))).toEqual([
+      `scorers/q.md: labels ${COUNT}`,
+      'scorers/q.md: passingScore must be a number',
+    ]);
+  });
+
   it.each([
     ['no frontmatter', 'Just a prompt.\n', 'scorers/q.md: a scorer starts with YAML frontmatter between --- lines'],
     ['an empty prompt', scorerWith(`${LABELS}passingScore: 1\n`, '\n'), 'scorers/q.md: the prompt after the frontmatter is empty'],

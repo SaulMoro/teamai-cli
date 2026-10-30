@@ -17,7 +17,7 @@ const TEAM_URL = 'https://github.com/acme/team.git';
 const SESSION = '7c1e0000-0000-4000-8000-000000000001';
 const PHRASE = 'Only-the-session-said-this-wombat';
 
-const EnvelopeSchema = z.object({ data: z.record(z.unknown()).optional(), error: z.object({ code: z.string(), message: z.string() }).optional() });
+const EnvelopeSchema = z.object({ data: z.record(z.string(), z.unknown()).optional(), error: z.object({ code: z.string(), message: z.string() }).optional() });
 
 function runCLI(args: string[], cwd: string, env: NodeJS.ProcessEnv, input = ''): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
@@ -105,6 +105,23 @@ console.log(JSON.stringify({ type: 'result', structured_output: { label, reasoni
 
   afterAll(() => {
     if (root) fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('reports malformed scorer labels once and explains an empty judge tool list', async () => {
+    fs.mkdirSync(path.join(app, 'scorers'), { recursive: true });
+    fs.writeFileSync(path.join(app, 'scorers', 'invalid-labels.md'), '---\nlabels: x\npassingScore: 0.5\n---\nJudge the session.\n');
+    const scorer = await runCLI(['score', '--session', SESSION, '--source', 'claude-code', '--scorer', 'scorers/invalid-labels.md'], app, env);
+    expect(scorer.code).toBe(1);
+    expect(envelope(scorer.stdout).error).toEqual({
+      code: 'scorer_invalid', message: 'scorers/invalid-labels.md: labels must list 2 to 20 labels: at least one that passes and one that fails',
+    });
+    const judge = await runCLI(['score', '--next', '--stdin'], app, env, JSON.stringify({
+      driver: { kind: 't3', machine: 'm1', workspace: app, can: { judge: { isolation: 'verified', tools: [] } } },
+    }));
+    expect(judge.code).toBe(1);
+    expect(envelope(judge.stdout).error).toEqual({
+      code: 'invalid_json', message: 'driver.can.judge.tools: Array must contain at least 1 element(s)',
+    });
   });
 
   it('judges a session by id and from inside it, keeps the label here, and never guesses the session', async () => {

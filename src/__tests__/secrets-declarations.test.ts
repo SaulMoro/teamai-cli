@@ -88,9 +88,9 @@ describe('team secret declarations', () => {
   it.each([
     ['not YAML', 'secrets: [\n', 'env/secrets.yaml is not valid YAML'],
     ['no secrets: key', 'secret:\n  - { key: A }\n', 'env/secrets.yaml declares no secrets: it has no top-level `secrets:` key, only `secret`'],
-    ['an entry without a key', 'secrets:\n  - { description: x }\n', 'env/secrets.yaml does not match the secrets.yaml schema: secrets.0.key: Required'],
+    ['an entry without a key', 'secrets:\n  - { description: x }\n', 'env/secrets.yaml does not match the secrets.yaml schema: secrets.0.key: Invalid input: expected string, received undefined'],
     ['a key that is no variable name', 'secrets:\n  - { key: MY-TOKEN }\n', 'secrets.0.key: must be a shell variable name'],
-    ['secrets: not a list', 'secrets: GITHUB_TOKEN\n', 'env/secrets.yaml does not match the secrets.yaml schema: secrets: Expected array'],
+    ['secrets: not a list', 'secrets: GITHUB_TOKEN\n', 'env/secrets.yaml does not match the secrets.yaml schema: secrets: Invalid input: expected array, received string'],
   ])('fails, in secret wording, on %s', async (_label, content, reason) => {
     await write('env/secrets.yaml', content);
 

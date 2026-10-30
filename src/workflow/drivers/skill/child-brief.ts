@@ -10,7 +10,7 @@ import type { Literal } from './literals.js';
 
 /** `attempts/<a>/result.json`, as the child writes it: what the step produced, or why it could not. */
 const ChildResultSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('output'), output: z.unknown() }),
+  z.object({ kind: z.literal('output'), output: z.unknown().optional() }),
   z.object({ kind: z.literal('failure'), failure: z.object({ code: z.string().min(1), message: z.string() }) }),
 ]);
 export type ChildResult = z.infer<typeof ChildResultSchema>;
@@ -89,7 +89,7 @@ export async function readChildResult(input: { config: LocalConfig; run: RunId; 
   if (raw === null) {
     return { kind: 'failure', failure: { code: 'tool_failed', message: `The child of attempt ${input.attempt} wrote no ${file}, so the step has no result.` } };
   }
-  let parsed: z.SafeParseReturnType<unknown, ChildResult>;
+  let parsed: z.ZodSafeParseResult<ChildResult>;
   try {
     parsed = ChildResultSchema.safeParse(JSON.parse(raw));
   } catch (error) {

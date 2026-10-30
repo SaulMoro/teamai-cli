@@ -89,7 +89,7 @@ export const BenchmarkRunRecordSchema = BenchmarkRecordSchema.extend({
   /** When the run's steps ended. */
   finishedAt: z.string(),
   username: z.string().optional(),
-  /** The workflow the run ran: the team's `benchmark`, or teamai's default, by the hash of its bytes. */
+  /** The workflow the run ran: the team's `teamai-benchmark`, or teamai's default, by the hash of its bytes. */
   workflow: z.object({ name: z.string(), origin: RunOriginSchema, sourceHash: z.string() }),
 });
 export type BenchmarkRunRecord = z.infer<typeof BenchmarkRunRecordSchema>;

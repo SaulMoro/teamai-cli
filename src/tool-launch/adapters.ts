@@ -177,7 +177,7 @@ function readPiJson({ stdout }: CallOutput): CallReading {
   return { ok: true, text, ...(Object.keys(tokens).length > 0 ? { tokens } : {}) };
 }
 
-const MuseRecord = z.object({ payload_type: z.string(), payload: z.record(z.unknown()) });
+const MuseRecord = z.object({ payload_type: z.string(), payload: z.record(z.string(), z.unknown()) });
 const MuseTerminal = z.object({ terminal: z.string(), text: z.string().nullable().optional(), reason: z.string().nullable().optional() });
 const MuseUsage = z.object({ models: z.array(z.object({ input_tokens: z.number(), cached_tokens: z.number(), output_tokens: z.number() }).partial()) });
 

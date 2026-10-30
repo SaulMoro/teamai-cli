@@ -8,7 +8,7 @@ import { z } from 'zod';
 import { resolveCliEntry } from '../../../builtin-hooks.js';
 import type { WorkflowEnv } from '../../../env-resolution.js';
 import { resolveRunMode, type RunMode } from '../../../launch-context.js';
-import { SessionClose } from '../../../session-close.js';
+import { SessionShare } from '../../../session-share.js';
 import type { CommandExit } from '../../../tool-launch/process-stop.js';
 import { isToolId, TOOLS } from '../../../tools.js';
 import type { LocalConfig, TeamaiConfig, ToolId } from '../../../types.js';
@@ -176,7 +176,7 @@ const SessionToolSchema = z.string().transform((tools, ctx) => {
 const RunOptionsSchema = z.object({
   parallel: z.string().regex(/^[1-9][0-9]*$/, '--parallel takes a whole number of steps, 1 or more').transform(Number).optional(),
   judge: z.boolean().optional(),
-  hitl: z.enum(['person', 'recommend'], { errorMap: () => ({ message: '--hitl takes person or recommend, as the describe reply offered' }) }).optional(),
+  hitl: z.enum(['person', 'recommend'], { error: '--hitl takes person or recommend, as the describe reply offered' }).optional(),
   autoApprove: z.boolean().optional(),
   tools: SessionToolSchema.optional(),
 });
@@ -196,7 +196,7 @@ const NextOptionsSchema = z.object({
   wait: z.boolean().optional(),
   takeover: z.boolean().optional(),
   confirmed: z.boolean().optional(),
-  choice: z.enum(HOST_CHOICES, { errorMap: () => ({ message: `--choice takes the id of a host question option: ${HOST_CHOICES.join(', ')}` }) }).optional(),
+  choice: z.enum(HOST_CHOICES, { error: `--choice takes the id of a host question option: ${HOST_CHOICES.join(', ')}` }).optional(),
   ack: z.string().transform((offer, ctx) => {
     const attempt = AttemptIdSchema.safeParse(OFFER.exec(offer)?.[1]);
     if (attempt.success) return attempt.data;
@@ -205,8 +205,8 @@ const NextOptionsSchema = z.object({
   }).optional(),
   attempt: AttemptIdSchema.optional(),
   adopt: z.string().min(1, '--adopt takes the directory the host made').optional(),
-  json: z.undefined({ invalid_type_error: '--driver skill takes no --json: the skill driver composes every request itself' }),
-  prepare: z.undefined({ invalid_type_error: '--prepare is for --json drivers' }),
+  json: z.undefined({ error: '--driver skill takes no --json: the skill driver composes every request itself' }).optional(),
+  prepare: z.undefined({ error: '--prepare is for --json drivers' }).optional(),
 }).refine((options) => (options.attempt === undefined) === (options.adopt === undefined), {
   message: '--driver skill takes --attempt and --adopt together, as the adopt of a place action prints them',
 }).refine((options) => [options.wait, options.takeover, options.choice, options.ack, options.adopt].filter((given) => given !== undefined && given !== false).length <= 1, {
@@ -215,14 +215,14 @@ const NextOptionsSchema = z.object({
   message: 'next takes --confirmed only with --takeover, as a confirm_needed answer prints it',
 });
 const RespondOptionsSchema = z.object({
-  pass: z.string({ required_error: '--driver skill needs --pass, as the choose action printed it' }).regex(/^[1-9][0-9]*$/, '--pass takes the pass the choose action printed').transform(Number),
-  note: z.undefined({ invalid_type_error: '--driver skill takes no --note' }),
-  json: z.undefined({ invalid_type_error: '--driver skill takes no --json: the skill driver composes every request itself' }),
+  pass: z.string({ error: (issue) => issue.input === undefined ? '--driver skill needs --pass, as the choose action printed it' : undefined }).regex(/^[1-9][0-9]*$/, '--pass takes the pass the choose action printed').transform(Number),
+  note: z.undefined({ error: '--driver skill takes no --note' }).optional(),
+  json: z.undefined({ error: '--driver skill takes no --json: the skill driver composes every request itself' }).optional(),
 });
 const ReportOptionsSchema = z.object({
   attempt: AttemptIdSchema,
   modelUnavailable: z.boolean().optional(),
-  json: z.undefined({ invalid_type_error: '--driver skill takes no --json: the skill driver composes every report itself' }),
+  json: z.undefined({ error: '--driver skill takes no --json: the skill driver composes every report itself' }).optional(),
 });
 
 /** The JSON object `workflow start --inputs` carries, with either driver. */
@@ -392,7 +392,7 @@ async function start(call: Extract<SkillCall, { kind: 'describe' | 'start' }>, c
       mode: context.mode, ...(attended !== undefined ? { attended } : {}), needsTool: needsTool(description, { tool: context.tool, judged: true }),
     });
     context.trace?.(row);
-    const proposed = await SessionClose.proposals(context.config, description, { session: context.session, tool: call.tool ?? context.tool });
+    const proposed = await SessionShare.proposals(context.config, description, { session: context.session, tool: call.tool ?? context.tool });
     return { data: { describe: { workflow: description, judging, ask: askFor(verdict, description, context.invocation, judging, { local: localPromptTool(context), session: call.tool }, proposed) } } };
   }
   const check = checkStartAnswers({ description, answers: call.answers, inputs: call.inputs, ceiling, tool: context.tool });

@@ -76,7 +76,7 @@ import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import { allowsSkillDirectory, CODEX_TOOL, describeOutsideSkillLink, describeSkillDirectoryBlock, findSkillDirectoryBlock, skillOrigin } from './resources/skills.js';
 import { describeKeptDir, describeMembersDirLeft, isLink, keepsTrackedCopy, ownsSkillDir, teamaiSkillFiles } from './resources/delivered-copies.js';
 import { generatedSkillAt } from './workflow/discovery/generated-marker.js';
-import { WORKFLOW_SKILL_PREFIX } from './workflow/discovery/workflow-skills.js';
+import { mayBeGeneratedSkill } from './workflow/discovery/workflow-skills.js';
 import { clearInstructionFile, resolveInstructionTargets } from './instruction-targets.js';
 import {
   pathExists,
@@ -724,7 +724,7 @@ async function discoverToolResources(
         for (const dir of dirs) {
           const skillDir = path.join(skillsDir, dir);
           // A skill pull generated from a workflow has no team name, only its marker; `ownsSkill` keeps an edited one.
-          const isGenerated = dir.startsWith(WORKFLOW_SKILL_PREFIX) && (await generatedSkillAt(skillDir)).kind === 'ours';
+          const isGenerated = mayBeGeneratedSkill(dir) && (await generatedSkillAt(skillDir)).kind === 'ours';
           if (!isGenerated && !teamSkillNames.has(dir)) continue;
           // Delivery's rule: a root linked out of the checkout is not deleted through.
           if (!await allowsSkillDirectory(rootBase, skillDir, { keepSkillLink: true })) {
@@ -2105,16 +2105,17 @@ async function keepsCredentialLine(plan: RemovalPlan, line: string, excludeFile:
  * path field of its `scopedToolPaths`, and `.agents/skills` for Codex) from
  * every checkout's list, unless another tool still in use shares the root,
  * then sync the `delivered` blocks with what is left. `keepExisting` (an
- * incomplete uninstall) keeps a path still on disk.
+ * incomplete uninstall) keeps a path still on disk. A copy uninstall deleted
+ * under those roots leaves the delivery record too (#1577), in either scope.
  */
-async function dropToolGitExcludePaths(
+async function forgetUninstalledToolPaths(
   localConfig: LocalConfig,
   teamConfig: TeamaiConfig,
   tool: string,
   options: { keepExisting?: boolean } = {},
 ): Promise<void> {
-  const projectRoot = localConfig.projectRoot;
-  if (localConfig.scope !== 'project' || !projectRoot) return;
+  const scopeRoot = localConfig.scope === 'project' ? localConfig.projectRoot : getUserHome();
+  if (!scopeRoot) return;
   const toolPaths = scopedToolPaths(teamConfig, localConfig);
   const pathsOf = (id: string): string[] => {
     const paths = toolPaths[id] ?? {};
@@ -2128,7 +2129,7 @@ async function dropToolGitExcludePaths(
     id === tool || isAgentExcluded(localConfig, id) ? [] : [...pathsOf(id), ...codexShared(id)]);
   const state = await loadStateForScope(localConfig);
   const records = state.lastPullByWorkspace ?? {};
-  const checkouts = [...new Set([await realpath(projectRoot).catch(() => projectRoot), ...Object.values(records).flatMap(({ root }) => root ? [root] : [])])];
+  const checkouts = [...new Set([await realpath(scopeRoot).catch(() => scopeRoot), ...Object.values(records).flatMap(({ root }) => root ? [root] : [])])];
   const inside = (rels: string[]) => {
     const dirs = checkouts.flatMap((checkout) => rels.map((rel) => path.join(checkout, rel)));
     return (file: string): boolean => dirs.some((dir) => file === dir || file.startsWith(`${dir}${path.sep}`));
@@ -2137,7 +2138,12 @@ async function dropToolGitExcludePaths(
   const underOther = inside(others);
   let changed = false;
   for (const record of Object.values(records)) {
-    if (!record.gitExcludePaths) continue;
+    for (const file of Object.keys(record.delivered ?? {})) {
+      if (!underTool(file) || underOther(file) || await pathExists(file)) continue;
+      delete record.delivered?.[file];
+      changed = true;
+    }
+    if (localConfig.scope !== 'project' || !record.gitExcludePaths) continue;
     const kept: Record<string, string[]> = {};
     for (const [writer, files] of Object.entries(record.gitExcludePaths)) {
       const left: string[] = [];
@@ -2150,7 +2156,7 @@ async function dropToolGitExcludePaths(
     record.gitExcludePaths = kept;
   }
   if (changed) await saveStateForScope(state, localConfig);
-  await syncDeliveredGitExclude(localConfig, createDeliveryRecorder());
+  if (localConfig.scope === 'project') await syncDeliveredGitExclude(localConfig, createDeliveryRecorder());
 }
 
 /** The partition's sync lock, as pull and push take it; null when the scope has none (HTTP). */
@@ -2761,7 +2767,7 @@ async function removeConfirmed(
 ): Promise<void> {
   if (exclusionOnly) {
     // Exclusion is a config write even when there are no local files to delete.
-    await dropToolGitExcludePaths(localConfig, teamConfig, agentKey!);
+    await forgetUninstalledToolPaths(localConfig, teamConfig, agentKey!);
     await excludeUninstalledAgent(localConfig, agentKey!);
     const dispatchLeft = agentKey === 'codex' ? await stopCodexDispatch(teamConfig, localConfig) : null;
     if (dispatchLeft) {
@@ -2896,7 +2902,7 @@ async function removeConfirmed(
   const incomplete = pendingOpencode.length > 0 || hooksLeft.length > 0 || blocksLeft.length > 0 || filesLeft.length > 0;
 
   // The tool's files are gone: its lines go from every checkout's list (#915).
-  if (!plan.includeShared && agentKey) await dropToolGitExcludePaths(localConfig, teamConfig, agentKey, { keepExisting: incomplete });
+  if (!plan.includeShared && agentKey) await forgetUninstalledToolPaths(localConfig, teamConfig, agentKey, { keepExisting: incomplete });
 
   // The OpenCode entries uninstall removed are no longer teamai's to track;
   // one still listed (the write failed) stays recorded for the next try.
@@ -2929,7 +2935,7 @@ async function removeConfirmed(
 
   if (incomplete) {
     const files = [...pendingOpencode.map((ref) => ref.config), ...hooksLeft.map((hook) => hook.what), ...blocksLeft, ...filesLeft];
-    log.warn(`Uninstall incomplete: kept ${plan.teamaiHome} and the ownership records so removal can be retried. Repair permissions or JSON in ${files.join(', ')}, then run the same uninstall command again.`);
+    log.warn(`Uninstall incomplete: kept ${plan.teamaiHome} and the ownership records so removal can be retried. Repair permissions, JSON or TOML in ${files.join(', ')}, then run the same uninstall command again.`);
     process.exitCode = 1;
   } else {
     log.success('teamai uninstalled');

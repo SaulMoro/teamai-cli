@@ -367,7 +367,7 @@ function benchmarkFilesOf(page: string): SourceFile[] {
 
 /** The `npx teamai-cli` commands of the GitLab CI jobs a page shows: a yaml fence whose top-level job has a `script`. */
 function gitlabCommandsOf(page: string): string[] {
-  const JobsSchema = z.record(z.unknown()).transform((jobs) => Object.values(jobs).flatMap((job) => {
+  const JobsSchema = z.record(z.string(), z.unknown()).transform((jobs) => Object.values(jobs).flatMap((job) => {
     const script = z.object({ script: z.array(z.string()) }).safeParse(job);
     return script.success ? [script.data.script] : [];
   }));

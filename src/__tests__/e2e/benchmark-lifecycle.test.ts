@@ -1,7 +1,7 @@
 /**
  * Real CLI: what a benchmark run keeps once it has started. Its plan does not follow the suite, its record holds the
  * comparison after the suite is gone, and no control command measures a trial twice or moves the run to another machine.
- * A run is the workflow benchmark, which `teamai benchmark run` starts, or `workflow start benchmark` for another driver.
+ * A run is the workflow benchmark, which `teamai benchmark run` starts, or `workflow start teamai-benchmark` for another driver.
  */
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -66,7 +66,7 @@ async function fixtureOf(options: Parameters<typeof benchmarkFixture>[0]): Promi
   return fixture;
 }
 
-/** Starts the workflow benchmark for suite fix with no driver, and runs its plan step as a driver that is no sandbox, so the run waits at its trials. */
+/** Starts the workflow teamai-benchmark for suite fix with no driver, and runs its plan step as a driver that is no sandbox, so the run waits at its trials. */
 async function started(fixture: BenchmarkFixture): Promise<string> {
   const run = await startFixBenchmark(fixture);
   await driveCommands(fixture, run, NO_SANDBOX);
@@ -146,7 +146,7 @@ describe('a benchmark run once it has started', () => {
     // Two lanes, so the codex trial is in the run, still unleased, while the claude trial runs.
     const fixture = await fixtureOf({ tool: 'fixes', sandbox: false, suite: TWO_ARMS.replace('repetitions: 1\n', 'repetitions: 1\nparallel: 2\n') });
     const status = fixture.status();
-    const answer = envelope(await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m']));
+    const answer = envelope(await fixture.teamai(['workflow', 'start', 'teamai-benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m']));
     const runId = String(answer.data?.run);
     const driver = { ...DRIVER, can: SANDBOX_CLAUDE };
 
@@ -187,14 +187,14 @@ describe('a benchmark run once it has started', () => {
 
   it("is refused by the skill driver, which launches no trial tool, and handed to the person's local resume", async () => {
     const fixture = await fixtureOf({ tool: 'fixes', sandbox: false, suite: FIX_SUITE });
-    const answer = envelope(await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m']));
+    const answer = envelope(await fixture.teamai(['workflow', 'start', 'teamai-benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m']));
     const runId = String(answer.data?.run);
 
     const resumed = await fixture.teamai(['workflow', 'resume', runId, '--driver', 'skill']);
 
     expect(envelope(resumed).error).toEqual({
       code: 'invoke_denied',
-      message: `Workflow "benchmark" has invoke: deny, so no coding agent continues it, with any driver, and this command uses --driver skill, which only a coding agent drives. The person can continue it from their own terminal with teamai workflow resume ${runId}. To let agents continue it, the team sets invoke: allow, or invoke: ask for a resume after the person agrees, in workflows/benchmark.yaml.`,
+      message: `Workflow "teamai-benchmark" has invoke: deny, so no coding agent continues it, with any driver, and this command uses --driver skill, which only a coding agent drives. The person can continue it from their own terminal with teamai workflow resume ${runId}. To let agents continue it, the team sets invoke: allow, or invoke: ask for a resume after the person agrees, in workflows/teamai-benchmark.yaml.`,
       next: null,
     });
     expect(RunFileSchema.parse(fixture.runFile(runId)).steps.every((step) => step.status === 'pending')).toBe(true);

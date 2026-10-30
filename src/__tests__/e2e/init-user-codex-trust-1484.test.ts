@@ -33,7 +33,7 @@ let fakeCodexDir: string;
 beforeAll(() => {
   if (!fs.existsSync(CLI)) throw new Error(`CLI binary not found at ${CLI}. Run "npm run build" first.`);
   sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-init-user-codex-trust-')));
-  fakeCodexDir = installFakeCodex({ dir: path.join(sandbox, 'bin') });
+  fakeCodexDir = installFakeCodex({ dir: path.join(sandbox, 'bin'), version: '9999.0.0' });
   const seed = path.join(sandbox, 'team-seed');
   fs.mkdirSync(seed);
   fs.writeFileSync(path.join(seed, 'teamai.yaml'), `team: trust\nrepo: ${TEAM_URL}\nprovider: git\nreviewers: []\n`);

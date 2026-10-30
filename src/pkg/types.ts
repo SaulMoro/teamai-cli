@@ -121,7 +121,7 @@ export const PackageLockSchema = z.object({
   /** Machine-wide declarations, or the complete declaration in project scope. */
   declarationHash: z.string().optional(),
   /** User-scope local npm declarations must be acknowledged once per cwd. */
-  projectDeclarationHashes: z.record(z.string()).optional(),
+  projectDeclarationHashes: z.record(z.string(), z.string()).optional(),
   packages: z.object({
     npm: z.array(NpmLockEntrySchema).optional(),
     claude: z.object({

@@ -104,7 +104,7 @@ export const OutcomeSchema = z.enum(['success', 'failed', 'timeout', 'skipped', 
 export type VisibleOutcome = z.infer<typeof OutcomeSchema>;
 
 const ResultsSchema = z.array(z.object({
-  item: z.unknown(),
+  item: z.unknown().optional(),
   outcome: OutcomeSchema,
   outputs: z.unknown().optional(),
   branch: z.string().optional(),
@@ -167,7 +167,7 @@ const StepBaseSchema = z.object({
   answer: AnswerSchema.optional(),
   item: z.unknown().optional(),
   /** The values `with` passed to the workflow this step runs, kept when that workflow declares inputs. */
-  inputs: z.record(z.unknown()).optional(),
+  inputs: z.record(z.string(), z.unknown()).optional(),
   iteration: z.number().int().optional(),
   round: z.number().int().optional(),
 });

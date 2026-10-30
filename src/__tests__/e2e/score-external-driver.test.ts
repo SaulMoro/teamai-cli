@@ -18,7 +18,7 @@ const TEAM_URL = 'https://github.com/acme/team.git';
 const OTHER_URL = 'https://github.com/acme/other.git';
 const PHRASE = 'Only-the-judge-wrote-this-quokka';
 
-const EnvelopeSchema = z.object({ data: z.record(z.unknown()).optional(), error: z.object({ code: z.string(), message: z.string() }).optional() });
+const EnvelopeSchema = z.object({ data: z.record(z.string(), z.unknown()).optional(), error: z.object({ code: z.string(), message: z.string() }).optional() });
 const JudgeLeaseSchema = z.object({ ref: z.string(), evidence: z.string(), prompt: z.string(), submit: z.string() }).passthrough();
 
 function runCLI(args: string[], cwd: string, env: NodeJS.ProcessEnv, input = ''): Promise<{ code: number | null; stdout: string; stderr: string }> {

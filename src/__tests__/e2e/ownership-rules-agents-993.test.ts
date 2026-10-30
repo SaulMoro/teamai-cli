@@ -157,7 +157,7 @@ function stateFiles(): string[] {
 }
 
 /** The checkout records of a state.json: the files each says teamai delivered. */
-const RecordsSchema = z.object({ lastPullByWorkspace: z.record(z.object({ delivered: z.record(z.string()).optional() })).optional() });
+const RecordsSchema = z.object({ lastPullByWorkspace: z.record(z.string(), z.object({ delivered: z.record(z.string(), z.string()).optional() })).optional() });
 
 /** Each file a checkout record under HOME says teamai delivered. */
 function recorded(): string[] {

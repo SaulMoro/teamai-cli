@@ -2,7 +2,7 @@
  * Real-git coverage for independent clones writing reports to teamai-reports.
  * No mocks of the units under test.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -515,7 +515,7 @@ describe('git-kind reports: refresh before reading (#557)', () => {
 });
 
 describe('git-kind reports: inherited member root (#735)', () => {
-  let consoleSpy: ReturnType<typeof vi.spyOn>;
+  let consoleSpy: MockInstance<typeof console.log>;
 
   beforeEach(() => {
     consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});

@@ -30,7 +30,7 @@ export const SessionCaptureSchema = z.object({
   /** The session's file as its hook named it, so a sweep can tell when the session is gone. */
   sessionFile: z.string().optional(),
   /** The team skills the checkout held as teamai delivered them when the session started and after its own pull (`deliveredTeamSkills`). */
-  teamSkills: z.record(z.array(z.string())).optional(),
+  teamSkills: z.record(z.string(), z.array(z.string())).optional(),
 });
 export type SessionCapture = z.infer<typeof SessionCaptureSchema>;
 

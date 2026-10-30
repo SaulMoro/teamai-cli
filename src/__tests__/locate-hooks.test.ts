@@ -93,11 +93,35 @@ const ROWS: readonly (FilesRow | OtherRow)[] = [
     source: `${SELF}: whether repo hooks wait for folder trust is not traced`,
   }),
   settings('qoder', 'user', '~/.qoder/settings.json', '~/.qoder'),
+  settings('qoder', 'user', '/qoder/settings.json', '/qoder', {
+    env: { QODER_CONFIG_DIR: '/qoder' }, reads: [{ at: '/qoder/settings.json', when: 'always', key: HOOK_LIST }], source: 'QODER_CONFIG_DIR moves Qoder user hooks',
+  }),
+  settings('qoder', 'user', '/qoder-cli/.qoder/settings.json', '/qoder-cli/.qoder', {
+    env: { QODER_CLI_HOME: '/qoder-cli' }, reads: [{ at: '/qoder-cli/.qoder/settings.json', when: 'always', key: HOOK_LIST }], source: 'QODER_CLI_HOME supplies the parent of Qoder user hooks',
+  }),
+  settings('qoder', 'project', '/qoder/settings.json', '/qoder', {
+    env: { QODER_CONFIG_DIR: '/qoder' }, reads: [{ at: '/qoder/settings.json', when: 'always', key: HOOK_LIST }], source: 'QODER_CONFIG_DIR moves the project install user hook file',
+  }),
+  settings('qoder', 'project', '/qoder-cli/.qoder/settings.json', '/qoder-cli/.qoder', {
+    env: { QODER_CLI_HOME: '/qoder-cli' }, reads: [{ at: '/qoder-cli/.qoder/settings.json', when: 'always', key: HOOK_LIST }], source: 'QODER_CLI_HOME moves the project install user hook file',
+  }),
   selfSettings('qoder', '<root>/.qoder/settings.json', '~/.qoder', 'cwdOnly', {
     broken: { 'project-subdir': { reason: 'cwd-only', issue: '#1221' } },
     source: `${SELF}: <cwd>/.qoder/settings.json, shared with Qoder CN`,
   }),
   settings('qoder-cn', 'user', '~/.qoder-cn/settings.json', '~/.qoder-cn'),
+  settings('qoder-cn', 'user', '/qodercn/settings.json', '/qodercn', {
+    env: { QODERCN_CONFIG_DIR: '/qodercn' }, reads: [{ at: '/qodercn/settings.json', when: 'always', key: HOOK_LIST }], source: 'QODERCN_CONFIG_DIR moves Qoder CN user hooks',
+  }),
+  settings('qoder-cn', 'user', '/qodercn-cli/.qoder-cn/settings.json', '/qodercn-cli/.qoder-cn', {
+    env: { QODERCN_CLI_HOME: '/qodercn-cli' }, reads: [{ at: '/qodercn-cli/.qoder-cn/settings.json', when: 'always', key: HOOK_LIST }], source: 'QODERCN_CLI_HOME supplies the parent of Qoder CN user hooks',
+  }),
+  settings('qoder-cn', 'project', '/qodercn/settings.json', '/qodercn', {
+    env: { QODERCN_CONFIG_DIR: '/qodercn' }, reads: [{ at: '/qodercn/settings.json', when: 'always', key: HOOK_LIST }], source: 'QODERCN_CONFIG_DIR moves the project install user hook file',
+  }),
+  settings('qoder-cn', 'project', '/qodercn-cli/.qoder-cn/settings.json', '/qodercn-cli/.qoder-cn', {
+    env: { QODERCN_CLI_HOME: '/qodercn-cli' }, reads: [{ at: '/qodercn-cli/.qoder-cn/settings.json', when: 'always', key: HOOK_LIST }], source: 'QODERCN_CLI_HOME supplies the parent of the Qoder CN project install user hook file',
+  }),
   selfSettings('qoder-cn', '<root>/.qoder/settings.json', '~/.qoder-cn', 'cwdOnly', {
     broken: { 'project-subdir': { reason: 'cwd-only', issue: '#1221' } },
     source: `${SELF}: Qoder CN's project hooks are Qoder's <cwd>/.qoder/settings.json`,
@@ -235,7 +259,8 @@ const ROWS: readonly (FilesRow | OtherRow)[] = [
     writes: [{ at: '~/.my-tool/settings.json', key: HOOK_LIST }], reads: 'unknown',
     source: 'a custom tool takes Claude-shaped hooks in its configured settings file, as it always has',
   },
-  { tool: 'joycode', scope: 'user', channel: 'none', existingDirs: [], installed: { probe: '~/.joycode', met: false }, source: 'JoyCode 3.8.71 source: no lifecycle hooks (—s)' },
+  settings('joycode', 'user', '~/.joycode/hooks.json', '~/.joycode', { source: 'JoyCode Desktop 0.6.0 bundle and lifecycle component: ~/.joycode/hooks.json takes Claude-shaped hooks (source)' }),
+  selfSettings('joycode', '<root>/.joycode/hooks.json', '<root>/.joycode', 'workspaceUnder', { source: 'JoyCode Desktop 0.6.0 lifecycle component: <project>/.joycode/hooks.json (source)' }),
   adapter('kiro', 'user', '~/.kiro/hooks', '~/.kiro', { source: 'Kiro CLI V3 docs: hook files in ~/.kiro/hooks load for every agent (#1341)' }),
   { tool: 'trae', scope: 'user', channel: 'unknown', existingDirs: [], installed: { probe: '~/.trae', met: false }, source: 'issue #1221 matrix: Trae hooks ?t' },
 ];

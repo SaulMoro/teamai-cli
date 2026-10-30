@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fse from 'fs-extra';
 import os from 'node:os';
 import path from 'node:path';
@@ -73,7 +73,61 @@ describe('resolveDesiredSkills', () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await fse.remove(tempDir);
+  });
+
+  /** Make the filesystem list every directory in the given order (#1577). */
+  function listDirectories(order: 'ascending' | 'descending'): void {
+    const readdir = fse.readdir.bind(fse);
+    vi.spyOn(fse, 'readdir').mockImplementation((async (dir: string, options?: unknown) => {
+      const entries = (await readdir(dir, options as { withFileTypes: true })) as unknown as { name: string }[];
+      const sorted = [...entries].sort((a, b) => a.name.localeCompare(b.name));
+      return order === 'ascending' ? sorted : sorted.toReversed();
+    }) as unknown as typeof fse.readdir);
+  }
+
+  describe.each(['ascending', 'descending'] as const)('without a role, with directories listed %s (#1577)', (order) => {
+    it('delivers the shared skill over a namespace skill of the same name', async () => {
+      await writeSkill('', 'release');
+      await writeSkill('dev', 'release');
+      listDirectories(order);
+
+      const { items } = resolved(await resolveDesiredSkills(teamConfig, localConfig, null));
+
+      expect(items.filter((item) => item.name === 'release').map((item) => item.relativePath)).toEqual(['skills/release']);
+    });
+
+    it('names the namespace copy it skipped and the copy kept instead', async () => {
+      await writeSkill('', 'release');
+      await writeSkill('dev', 'release');
+      listDirectories(order);
+
+      const { shadowed } = resolved(await resolveDesiredSkills(teamConfig, localConfig, null));
+
+      expect(shadowed).toEqual([{ name: 'release', namespace: 'dev', skipped: 'skills/dev/release', kept: 'skills/release', receivingRoles: [] }]);
+    });
+
+    it('keeps the namespace that sorts first when no shared copy has the name', async () => {
+      await writeSkill('ops', 'oncall');
+      await writeSkill('dev', 'oncall');
+      listDirectories(order);
+
+      const { items, shadowed } = resolved(await resolveDesiredSkills(teamConfig, localConfig, null));
+
+      expect(items.filter((item) => item.name === 'oncall').map((item) => item.relativePath)).toEqual(['skills/dev/oncall']);
+      expect(shadowed).toEqual([{ name: 'oncall', namespace: 'ops', skipped: 'skills/ops/oncall', kept: 'skills/dev/oncall', receivingRoles: [] }]);
+    });
+
+    it('orders by namespace name, so dev wins over dev-prod', async () => {
+      await writeSkill('dev-prod', 'release');
+      await writeSkill('dev', 'release');
+      listDirectories(order);
+
+      const { items } = resolved(await resolveDesiredSkills(teamConfig, localConfig, null));
+
+      expect(items.filter((item) => item.name === 'release').map((item) => item.relativePath)).toEqual(['skills/dev/release']);
+    });
   });
 
   it('takes the union of the active role namespaces and the subscribed tags', async () => {
@@ -82,6 +136,67 @@ describe('resolveDesiredSkills', () => {
     const { items } = resolved(await resolveDesiredSkills(teamConfig, localConfig, rolesOver(['common'])));
 
     expect(items.map((i) => i.name).sort()).toEqual(['frontend-skill', 'shared-skill']);
+  });
+
+  it('names the roles that would deliver a skipped copy, from the roles manifest', async () => {
+    await writeSkill('', 'release');
+    await writeSkill('dev', 'release');
+    await fse.ensureDir(path.join(repoPath, 'manifest'));
+    await fse.writeFile(path.join(repoPath, 'manifest', 'roles.yaml'), [
+      'version: 1',
+      'roles:',
+      '  - id: backend',
+      '    resources: { knowledge: [backend], skills: [backend, dev] }',
+      '  - id: platform',
+      '    resources: { knowledge: [], skills: [dev] }',
+      '  - id: design',
+      '    resources: { knowledge: [], skills: [frontend] }',
+      '',
+    ].join('\n'));
+
+    const { shadowed } = resolved(await resolveDesiredSkills(teamConfig, localConfig, null));
+
+    expect(shadowed).toEqual([{ name: 'release', namespace: 'dev', skipped: 'skills/dev/release', kept: 'skills/release', receivingRoles: ['backend', 'platform'] }]);
+  });
+
+  it('names no role that receives a second namespace with the same skill name, since that role cannot deliver either copy', async () => {
+    await writeSkill('ops', 'release');
+    await writeSkill('dev', 'release');
+    await fse.ensureDir(path.join(repoPath, 'manifest'));
+    await fse.writeFile(path.join(repoPath, 'manifest', 'roles.yaml'), [
+      'version: 1',
+      'roles:',
+      '  - id: fullstack',
+      '    resources: { knowledge: [], skills: [dev, ops] }',
+      '  - id: sre',
+      '    resources: { knowledge: [], skills: [ops] }',
+      '',
+    ].join('\n'));
+
+    const { shadowed } = resolved(await resolveDesiredSkills(teamConfig, localConfig, null));
+
+    expect(shadowed).toEqual([{ name: 'release', namespace: 'ops', skipped: 'skills/ops/release', kept: 'skills/dev/release', receivingRoles: ['sre'] }]);
+  });
+
+  it('with a role that receives the namespace, delivers its copy over the shared one (#707)', async () => {
+    await writeSkill('', 'release');
+    await writeSkill('dev', 'release');
+
+    const { items, shadowed } = resolved(await resolveDesiredSkills(teamConfig, localConfig, rolesOver(['dev'])));
+
+    expect(items.filter((item) => item.name === 'release').map((item) => item.relativePath)).toEqual(['skills/dev/release']);
+    expect(shadowed).toEqual([]);
+  });
+
+  it('reports no skipped copy for a skill name the member excludes', async () => {
+    await writeSkill('', 'release');
+    await writeSkill('dev', 'release');
+    localConfig.excludedSkills = ['release'];
+
+    const { items, shadowed } = resolved(await resolveDesiredSkills(teamConfig, localConfig, null));
+
+    expect(items.map((item) => item.name)).not.toContain('release');
+    expect(shadowed).toEqual([]);
   });
 
   it('drops excluded skills from the union', async () => {

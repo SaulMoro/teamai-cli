@@ -2616,7 +2616,7 @@ describe('local-agent: cmds[] migration', () => {
       await removeLocalAgentHttp();
       expect(process.exitCode).toBe(1);
       expect(await loadLocalAgentConfig()).toBeNull();
-      const fetch = vi.spyOn(globalThis, 'fetch');
+      const fetch = vi.spyOn(globalThis, 'fetch').mockClear();
       await reportAndSyncFromHook({ cwd: tmpDir, hook_event_name: 'SessionStart' }, 'codebuddy');
       expect(fetch).not.toHaveBeenCalled();
       expect(await fse.readFile(settingsPath, 'utf8')).toBe(broken);

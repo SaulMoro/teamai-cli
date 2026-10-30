@@ -143,8 +143,11 @@ beforeEach(() => {
   for (const dir of [
     ['.claude', 'projects'],
     ['.claude-internal', 'projects'],
+    ['.qoder', 'projects'],
+    ['.qoder-cn', 'projects'],
     ['.codebuddy', 'projects'],
     ['.codex', 'sessions'],
+    ['.joycode', 'sessions'],
     ['.cursor', 'projects'],
     ['.local', 'share', 'opencode'],
     ['.workbuddy', 'projects'],

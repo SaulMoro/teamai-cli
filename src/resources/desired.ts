@@ -13,7 +13,7 @@ import {
 } from '../namespace-resolver.js';
 import { placedResourcePath } from '../push-namespaces.js';
 import { resolveResourceNamespaces } from '../resource-namespaces.js';
-import type { ResourceNamespaces } from '../roles.js';
+import { loadRolesManifestIfPresent, type ResourceNamespaces } from '../roles.js';
 import type { LocalConfig, ResourceItem, TeamaiConfig } from '../types.js';
 import { dirContentEqual, fileContentEqual, listDirs, listFiles, pathExists, readFileSafe } from '../utils/fs.js';
 import type { BuildIndexOptions, IndexedSkills } from '../utils/search-index.js';
@@ -239,7 +239,56 @@ export type DesiredSkills = Extract<DesiredItems, { kind: 'resolved' }> & {
    * for a scope without children.
    */
   readonly memberSources: ReadonlyMap<string, readonly string[]>;
+  /** Without a role, the same-name copies left out for the one delivered (#1577). */
+  readonly shadowed: readonly ShadowedSkill[];
 };
+
+/** A same-name skill pull left out without a role, and the copy it delivers instead (#1577). */
+export interface ShadowedSkill {
+  readonly name: string;
+  /** The namespace of the copy left out. */
+  readonly namespace: string;
+  /** Team-repo path of the copy left out, e.g. `skills/dev/release`. */
+  readonly skipped: string;
+  /** Team-repo path of the copy delivered under that name, e.g. `skills/release`. */
+  readonly kept: string;
+  /** Roles in `manifest/roles.yaml` whose skills include that namespace and no other holding the name: setting one delivers the copy. */
+  readonly receivingRoles: readonly string[];
+}
+
+/**
+ * Without a role, one skill of each name, the same on every machine (#1577):
+ * the shared root copy first, then namespaces in name order, whatever order
+ * the filesystem lists them in.
+ */
+async function sharedFirst(repoPath: string, items: readonly ResourceItem[]): Promise<{ items: ResourceItem[]; shadowed: ShadowedSkill[] }> {
+  const byCodePoint = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+  // By namespace name, not path: `skills/dev-prod/` sorts before `skills/dev/`.
+  const ordered = [...items].sort((a, b) => Number(a.namespace !== undefined) - Number(b.namespace !== undefined)
+    || byCodePoint(a.namespace ?? '', b.namespace ?? '') || byCodePoint(a.relativePath, b.relativePath));
+  const kept = new Map<string, ResourceItem>();
+  const skipped: { item: ResourceItem & { namespace: string }; kept: ResourceItem }[] = [];
+  for (const item of ordered) {
+    const winner = kept.get(item.name);
+    if (!winner) kept.set(item.name, item);
+    // Root copies sort first and one name has one root copy, so a skipped copy is namespaced.
+    else if (item.namespace !== undefined) skipped.push({ item: { ...item, namespace: item.namespace }, kept: winner });
+  }
+  // A member with no role reaches here only when the manifest is absent or parsed.
+  const roles = skipped.length > 0 ? (await loadRolesManifestIfPresent(repoPath))?.roles ?? [] : [];
+  // A role that receives two namespaces holding the name delivers neither copy (#707).
+  const namespacesOf = (name: string): string[] => items.flatMap((other) => (other.name === name && other.namespace ? [other.namespace] : []));
+  const shadowed = skipped.map(({ item, kept: winner }) => ({
+    name: item.name,
+    namespace: item.namespace,
+    skipped: item.relativePath,
+    kept: winner.relativePath,
+    receivingRoles: roles
+      .filter(({ resources: { skills } }) => namespacesOf(item.name).every((namespace) => skills.includes(namespace) === (namespace === item.namespace)))
+      .map((role) => role.id),
+  }));
+  return { items: [...kept.values()], shadowed };
+}
 
 /**
  * Resolve the skills this member should have: role namespaces ∪ subscribed
@@ -265,12 +314,13 @@ export async function resolveDesiredSkills(
   const excludedSkills = new Set(localConfig.excludedSkills ?? []);
 
   let directoryItems: ResourceItem[];
+  let shadowed: ShadowedSkill[] = [];
   if (roleContext) {
     const scanned = await scanRoleAwareSkills(localConfig, roleContext.activeNamespaces);
     if (scanned.kind === 'conflict') return scanned;
     directoryItems = scanned.items;
   } else {
-    directoryItems = await withSkillMd(await handler.scanTeamForPull(teamConfig, localConfig));
+    ({ items: directoryItems, shadowed } = await sharedFirst(localConfig.repo.localPath, await withSkillMd(await handler.scanTeamForPull(teamConfig, localConfig))));
   }
 
   const teamItems = await withSkillMd(await handler.scanTeamForPull(teamConfig, localConfig));
@@ -317,7 +367,11 @@ export async function resolveDesiredSkills(
     })
     : [];
 
-  return { kind: 'resolved', items, overrides, teamItems, skippedByTags, held: [], memberSources: new Map() };
+  // An excluded name is not delivered in any copy, so no copy of it was skipped for another.
+  return {
+    kind: 'resolved', items, overrides, teamItems, skippedByTags, held: [], memberSources: new Map(),
+    shadowed: shadowed.filter((skill) => !excludedSkills.has(skill.name)),
+  };
 }
 
 /**
@@ -372,6 +426,7 @@ async function resolveWorkspaceSkills(
   }
   const delivered = items.filter((item) => !excluded.has(item.name));
   const sources = new Set(delivered.map((item) => item.relativePath));
+  const deliveredNames = new Map(delivered.map((item) => [item.name, item.relativePath]));
   const overrides = [...new Map(resolved.flatMap((desired) => desired.overrides)
     .filter((override) => sources.has(override.source))
     .map((override) => [override.source, override] as const)).values()];
@@ -384,6 +439,12 @@ async function resolveWorkspaceSkills(
     // A held name the workspace excludes is not kept: cleanup decides its copy.
     held: held.map((item) => item.name).filter((name) => !excluded.has(name)),
     memberSources,
+    // A copy one member skips is not skipped when another member delivers it,
+    // and a name the workspace holds back delivers no copy in its place.
+    shadowed: [...new Map(resolved.flatMap((desired) => desired.shadowed).flatMap((skill) => {
+      const kept = deliveredNames.get(skill.name);
+      return kept && !sources.has(skill.skipped) ? [[skill.skipped, { ...skill, kept }] as const] : [];
+    })).values()],
   };
 }
 

@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import YAML from 'yaml';
 import { expect, it } from 'vitest';
 const CLI = fileURLToPath(new URL('../../../dist/index.js', import.meta.url));
-it.each(['node-22', 'nodejs'])('doctor accepts a live launcher installed through %s and inspected through another CLI entry', name => {
+it.for(['node-22', 'nodejs'])('doctor accepts a live launcher installed through %s and inspected through another CLI entry', { timeout: 60000 }, (name, { skip }) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-readiness-cli-'));
   try {
     const home = path.join(root, 'home');
@@ -29,6 +29,9 @@ it.each(['node-22', 'nodejs'])('doctor accepts a live launcher installed through
     const cli = (entry: string, ...args: string[]) => spawnSync(process.execPath, [entry, ...args], { cwd: project, env, encoding: 'utf8', timeout: 30000 });
     const runtime = path.join(root, process.platform === 'win32' ? `${name}.exe` : name);
     fs.copyFileSync(process.execPath, runtime);
+    // A Homebrew-style runtime loads libnode beside its real path, so a copy may not start.
+    const probe = spawnSync(runtime, ['--version'], { env, encoding: 'utf8', timeout: 30000 });
+    if (probe.status !== 0) skip('Copied Node runtime cannot start on this host');
     const installed = spawnSync(runtime, [first, 'hooks', 'inject'], { cwd: project, env, encoding: 'utf8', timeout: 30000 });
     expect(installed.status, installed.stdout + installed.stderr).toBe(0);
     const file = path.join(home, '.pi/agent/extensions/teamai-hooks.ts');
@@ -58,4 +61,4 @@ it.each(['node-22', 'nodejs'])('doctor accepts a live launcher installed through
     fs.rmdirSync(first);
     expect(ready()).toBe(false);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
-}, 60000);
+});

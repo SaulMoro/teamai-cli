@@ -250,8 +250,8 @@ const TIMEOUT_MESSAGE = '--timeout must be a positive duration, such as 500ms, 3
 /** The flags of `workflow start` and `resume` without `--driver skill`. The skill driver's flags are refused, the first given in this order. */
 const NonSkillRunOptionsSchema = z.object({
   timeout: z.string().transform((text, ctx) => durationMs(text) ?? (ctx.addIssue({ code: z.ZodIssueCode.custom, message: TIMEOUT_MESSAGE }), z.NEVER)).optional(),
-  parallel: z.undefined({ invalid_type_error: '--parallel needs --driver skill' }),
-  hitl: z.undefined({ invalid_type_error: '--hitl needs --driver skill' }),
+  parallel: z.undefined({ error: '--parallel needs --driver skill' }).optional(),
+  hitl: z.undefined({ error: '--hitl needs --driver skill' }).optional(),
   judge: z.boolean().optional().refine((judged) => judged !== false, '--no-judge needs --driver skill'),
 });
 
@@ -342,8 +342,8 @@ function interruptSignal(): AbortSignal {
 }
 
 /** Refuses `--driver <kind>` on `command`, which takes only `--driver skill`, naming the kind given. */
-function refusedDriverFlag(command: 'next' | 'report'): z.ZodUndefined {
-  return z.undefined({ errorMap: (_issue, ctx) => ({ message: `${command} takes --driver skill, not --driver ${String(ctx.data)}` }) });
+function refusedDriverFlag(command: 'next' | 'report'): z.ZodOptional<z.ZodUndefined> {
+  return z.undefined({ error: (issue) => `${command} takes --driver skill, not --driver ${String(issue.input)}` }).optional();
 }
 
 /**
@@ -356,8 +356,8 @@ const JsonNextOptionsSchema = z.object({
   wait: z.boolean().optional().refine((given) => !given, '--wait needs --driver skill'),
   takeover: z.boolean().optional().refine((given) => !given, '--takeover needs --driver skill'),
   confirmed: z.boolean().optional().refine((given) => !given, '--confirmed on next needs --driver skill --takeover'),
-  choice: z.undefined({ invalid_type_error: '--choice needs --driver skill' }),
-  ack: z.undefined({ invalid_type_error: '--ack needs --driver skill' }),
+  choice: z.undefined({ error: '--choice needs --driver skill' }).optional(),
+  ack: z.undefined({ error: '--ack needs --driver skill' }).optional(),
   json: z.string().optional(),
   prepare: z.boolean().optional(),
   attempt: z.string().optional(),
@@ -379,7 +379,7 @@ const JsonNextOptionsSchema = z.object({
 /** The flags of `workflow report` for a driver that sends `--json`. The skill driver's flags are refused. */
 const JsonReportOptionsSchema = z.object({
   driver: refusedDriverFlag('report'),
-  attempt: z.undefined({ invalid_type_error: '--attempt needs --driver skill' }),
+  attempt: z.undefined({ error: '--attempt needs --driver skill' }).optional(),
   modelUnavailable: z.boolean().optional().refine((given) => !given, '--model-unavailable needs --driver skill'),
   json: z.string().optional(),
 });
@@ -897,7 +897,7 @@ const BenchmarkDoneSchema = z.object({
 
 /**
  * `teamai benchmark run <suite>`: plans the suite once without a run, so a suite that cannot run leaves none, then
- * starts the workflow `benchmark`, the team's or teamai's default, with the suite as its input and the suite's timeout as
+ * starts the workflow `teamai-benchmark`, the team's or teamai's default, with the suite as its input and the suite's timeout as
  * the run's, on the local driver unless `--driver` names another. Exits as `workflow start` does for the run's outcome,
  * and also 1 when a `finally` step, the report, failed or was cancelled, or with `failOnRegression` when an arm dropped
  * against the newest earlier comparable record on teamai-reports. A record still pending never changes it.
@@ -986,4 +986,4 @@ export async function benchmarkTry(file: string): Promise<void> {
 }
 
 /** The workflow `teamai benchmark run` starts: teamai's default, or the team's file of the same name. */
-const BENCHMARK_WORKFLOW = 'benchmark';
+const BENCHMARK_WORKFLOW = 'teamai-benchmark';

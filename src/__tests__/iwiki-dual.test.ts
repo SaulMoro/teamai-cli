@@ -12,16 +12,18 @@ vi.mock('../tool-launch/call.js', () => ({
 }));
 
 vi.mock('../utils/iwiki-client.js', () => ({
-    IWikiClient: vi.fn().mockImplementation(() => ({
-        fetchAllPages: vi.fn().mockResolvedValue([
-            { docid: '123', title: 'Test Page' },
-        ]),
-        getDocument: vi.fn().mockResolvedValue({
-            docid: '123',
-            title: 'Test Page',
-            content: '这是测试内容，包含一些 API 接口和术语。',
-        }),
-    })),
+    IWikiClient: vi.fn().mockImplementation(function () {
+        return {
+            fetchAllPages: vi.fn().mockResolvedValue([
+                { docid: '123', title: 'Test Page' },
+            ]),
+            getDocument: vi.fn().mockResolvedValue({
+                docid: '123',
+                title: 'Test Page',
+                content: '这是测试内容，包含一些 API 接口和术语。',
+            }),
+        };
+    }),
 }));
 
 vi.mock('../review-store.js', async (importOriginal) => {

@@ -1,5 +1,6 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "jsPlugins": ["./oxlint-plugin-teamai/index.js"],
   "categories": {
     "suspicious": "warn",
     "perf": "warn"
@@ -32,7 +33,7 @@
     "typescript/no-unnecessary-type-assertion": "off",
     "typescript/no-unnecessary-type-conversion": "off",
     "typescript/consistent-return": "off",
-    "typescript/no-unnecessary-boolean-literal-compare": "off",
+    "typescript/no-unnecessary-boolean-literal-compare": "warn",
     "typescript/no-unnecessary-template-expression": "off",
     "typescript/no-unnecessary-type-arguments": "off",
     "typescript/no-unnecessary-type-parameters": "off",
@@ -49,7 +50,9 @@
     // `_resetState`).
     "no-underscore-dangle": "off",
     // Micro-optimization, not worth the churn.
-    "oxc/no-map-spread": "off"
+    "oxc/no-map-spread": "off",
+    // Pull deletes a delivered copy and its record entry together (#1577).
+    "teamai/remove-delivered": "error"
   },
   "overrides": [
     {

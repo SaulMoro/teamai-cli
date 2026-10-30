@@ -3,6 +3,7 @@ import { once } from 'node:events';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { buildSync } from 'esbuild';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GIT_AT_START_PAYLOAD_KEY } from '../dashboard-collector.js';
 import { CAPTURE_PAYLOAD_KEY, SessionCaptures } from '../session-flow/captures.js';
@@ -11,16 +12,16 @@ import type { LocalConfig } from '../types.js';
 import { log } from '../utils/logger.js';
 import { commitFile, fakeClaude, git, initRepo, recordDelivery } from './helpers/delivered-checkout.js';
 
-const cleanups: Array<() => void> = [];
+const cleanups: Array<() => void | Promise<void>> = [];
 beforeEach(() => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-captures-home-'));
   vi.stubEnv('HOME', home);
   vi.stubEnv('USERPROFILE', home);
   cleanups.push(() => fs.rmSync(home, { recursive: true, force: true }));
 });
-afterEach(() => {
+afterEach(async () => {
   vi.unstubAllEnvs();
-  for (const cleanup of cleanups.splice(0)) cleanup();
+  for (const cleanup of cleanups.splice(0).toReversed()) await cleanup();
 });
 
 const SESSION = '7c1e0000-0000-4000-8000-0000000000c1';
@@ -59,18 +60,23 @@ fs.writeFileSync = (file, ...rest) => { hold(file); return writeSync(file, ...re
 const write = fs.promises.writeFile;
 fs.promises.writeFile = async (file, ...rest) => { hold(file); return write(file, ...rest); };
 `);
-  const script = path.join(root, 'writer.mts');
+  const script = path.join(root, 'writer.ts');
   fs.writeFileSync(script, `import { SessionCaptures } from ${JSON.stringify(path.resolve('src/session-flow/captures.ts'))};
-await SessionCaptures.addToolVersion(${JSON.stringify(config)}, 'claude', ${JSON.stringify(payload)});
+SessionCaptures.addToolVersion(${JSON.stringify(config)}, 'claude', ${JSON.stringify(payload)}).catch((error) => { console.error(error); process.exitCode = 1; });
 `);
-  const child = spawn(process.execPath, [path.resolve('node_modules/vite-node/vite-node.mjs'), script], {
+  // Match the shipped bundle layout: package-info resolves ../package.json.
+  fs.copyFileSync(path.resolve('package.json'), path.join(root, 'package.json'));
+  const compiled = path.join(root, 'dist', 'writer.mjs');
+  buildSync({ entryPoints: [script], outfile: compiled, bundle: true, platform: 'node', format: 'esm', banner: { js: "import { createRequire as fixtureCreateRequire } from 'node:module'; const require = fixtureCreateRequire(import.meta.url);" } });
+  const child = spawn(process.execPath, [compiled], {
     env: { ...process.env, NODE_OPTIONS: `--require ${preload}` }, stdio: 'inherit',
   });
-  return { stalled, go, exited: once(child, 'exit') };
-}
-
-async function until(file: string): Promise<void> {
-  while (!fs.existsSync(file)) await new Promise((resolve) => setTimeout(resolve, 10));
+  const exited = once(child, 'exit');
+  cleanups.push(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    await exited;
+  });
+  return { stalled, go, exited };
 }
 
 const start = (project: string, extra: Record<string, unknown> = {}): Record<string, unknown> =>
@@ -365,7 +371,7 @@ describe('session captures (#1178)', () => {
     const captureId = await SessionCaptures.atStart(config, 'claude', start(project), {});
     cleanups.push(fakeClaude(project, '2.1.308'));
     const writer = stalledVersionWriter(path.dirname(project), config, { ...start(project), [CAPTURE_PAYLOAD_KEY]: captureId });
-    await until(writer.stalled);
+    await expect.poll(() => fs.existsSync(writer.stalled), { timeout: 10_000 }).toBe(true);
 
     const before = await SessionCaptures.checkoutDelivery(config, 'claude');
     await recordDelivery(config, { rev: commitFile(config.repo.localPath, 'skills/other/SKILL.md'), targets: ['claude'], files: [skill] });

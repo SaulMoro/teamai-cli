@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -24,7 +24,7 @@ import type { DashboardEvent } from '../types.js';
 
 let tmpDir: string;
 let originalHome: string;
-let consoleLog: ReturnType<typeof vi.spyOn>;
+let consoleLog: MockInstance<typeof console.log>;
 let workspace: string;
 
 /**

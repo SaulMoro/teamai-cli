@@ -20,9 +20,9 @@ Generated: do not edit by hand. Regenerate with `npx vitest run tool-support -u`
 | TCodex | `~/.tcodex` | written; reads ? | in the blocks file (Codex AGENTS.md) | written; reads ? | written; reads ? | `~/.tcodex/hooks.json` t | ? | tcodex |
 | Cursor | `~/.cursor` | written; reads ? | `~/.cursor/rules` v from a session under ~ | `~/.cursor/rules` v from a session under ~ | `~/.cursor/agents` s | `~/.cursor/hooks.json` s | `~/.cursor/mcp.json` s | cursor |
 | Copilot | `~/.copilot` `$COPILOT_HOME` | `~/.copilot/skills` v | `~/.copilot/instructions` v | `~/.copilot/copilot-instructions.md` v | `~/.copilot/agents` s | `~/.copilot/hooks/teamai.json` s | `~/.copilot/mcp-config.json` v | — |
-| JoyCode | `~/.joycode` | written; reads ? | in the blocks file (JoyCode rules.txt) | `~/.joycode/rules.txt` s | written; reads ? | — | — | ? |
-| Qoder | `~/.qoder` | written; reads ? | `~/.qoder/rules` v | `~/.qoder/rules` s | `~/.qoder/agents` s | `~/.qoder/settings.json` s | `~/.qoder/settings.json` s | — |
-| Qoder CN | `~/.qoder-cn` | written; reads ? | `~/.qoder-cn/rules` v | `~/.qoder-cn/rules` t | `~/.qoder-cn/agents` s | `~/.qoder-cn/settings.json` s | `~/.qoder-cn/settings.json` s | — |
+| JoyCode | `~/.joycode` | written; reads ? | in the blocks file (JoyCode rules.txt) | `~/.joycode/rules.txt` s | written; reads ? | `~/.joycode/hooks.json` s | — | joycode |
+| Qoder | `~/.qoder` `$QODER_CONFIG_DIR` `$QODER_CLI_HOME/.qoder` | written; reads ? | `~/.qoder/rules` v | `~/.qoder/rules` s | `~/.qoder/agents` s | `~/.qoder/settings.json` s | `~/.qoder/settings.json` s | qoder |
+| Qoder CN | `~/.qoder-cn` `$QODERCN_CONFIG_DIR` `$QODERCN_CLI_HOME/.qoder-cn` | written; reads ? | `~/.qoder-cn/rules` v | `~/.qoder-cn/rules` t | `~/.qoder-cn/agents` s | `~/.qoder-cn/settings.json` s | `~/.qoder-cn/settings.json` s | qoder-cn |
 | Kiro | `~/.kiro` | written; reads ? | `~/.kiro/steering` d | `~/.kiro/steering` d | `~/.kiro/agents` d | kiro-hooks d | `~/.kiro/settings/mcp.json` d | — |
 | Trae | `~/.trae` | written; reads ? | written; reads ? | `~/.trae/user_rules` d | ? | ? | — | — |
 | Trae CN | `~/.trae-cn` | written; reads ? | written; reads ? | `~/.trae-cn/user_rules` d | `~/.trae-cn/agents` d | ? | — | — |
@@ -52,7 +52,7 @@ Paths are relative to the project root. `cwd only`: the tool reads it only from 
 | TCodex | written; reads ? | session hook t | session hook t | written; reads ? | written; reads ? | ? |
 | Cursor | written; reads ? | `.cursor/rules` v | `.cursor/rules` v | `.cursor/agents` v | `.cursor/hooks.json` s | `.cursor/mcp.json` s |
 | Copilot | `.github/skills` v | `.github/instructions` v | `.github/copilot-instructions.md` v<br>`.github/instructions` v | `.github/agents` s | `.github/hooks/teamai.json` s | `.github/mcp.json` v |
-| JoyCode | written; reads ? | `.joycode/rules` v | — | written; reads ? | — | — |
+| JoyCode | written; reads ? | `.joycode/rules` v | — | written; reads ? | `.joycode/hooks.json` s | — |
 | Qoder | written; reads ? | `.qoder/rules` v | `.qoder/rules` s | `.qoder/agents` s | `.qoder/settings.json` s cwd only | `.qoder/settings.json` s |
 | Qoder CN | written; reads ? | `.qoder/rules` v | `.qoder/rules` t | `.qoder/agents` t | `.qoder/settings.json` s cwd only | `.qoder/settings.json` t |
 | Kiro | written; reads ? | `.kiro/steering` d | `.kiro/steering` d | `.kiro/agents` d | user hooks | `.kiro/settings/mcp.json` d |
@@ -84,7 +84,7 @@ User scope, from #1221's matrix; a fix merged since is marked `t`, with a note. 
 | TCodex | ? | ✓t | ✓t | ? | ? | ✓t | ? | ? | ? |
 | Cursor | ? | +s<sup>5</sup> | ? | ✗v<sup>6</sup> | ✓v<sup>7</sup> | ✓d | +s | ✓t<sup>1</sup> | +t<sup>8</sup> |
 | Copilot | ? | +s | ? | ✓v | ✓t<sup>2</sup> | ✓d | ? | ✓t<sup>1</sup> | —t |
-| JoyCode | ? | ? | ? | ◐s | ? | ? | ? | ? | ? |
+| JoyCode | ? | ? | ? | ◐s | ✓t<sup>2</sup> | ? | ? | ✓t<sup>1</sup> | ? |
 | Qoder | ? | ? | ? | ◐s | ✓s | ✓d | ? | ✓s<sup>9</sup> | ✓s |
 | Qoder CN | ? | ? | ? | ◐s | ✓s | ? | ? | ✓s<sup>9</sup> | ✓t<sup>10</sup> |
 | Kiro | ? | ? | ? | ◐d | ? | ✓d | ? | ✓d<sup>11</sup> | ✓d<sup>12</sup> |

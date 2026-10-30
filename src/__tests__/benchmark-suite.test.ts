@@ -142,7 +142,7 @@ describe('parseSuite', () => {
     ['a trial timeout longer than the suite\'s', suiteText({ timeout: '45m', trial: '{ timeout: 1h }' }), 'trial.timeout', 'trial.timeout must be shorter than timeout, which bounds the whole run'],
     ['a trial budget of no tokens', suiteText({ trial: '{ budget: { tokens: 0 } }' }), 'trial.budget.tokens', 'must be a positive whole number of tokens'],
     ['a fractional max_turns', suiteText({ trial: '{ max_turns: 1.5 }' }), 'trial.max_turns', 'must be a positive whole number'],
-    ['a trial key the suite does not know', suiteText({ trial: '{ turns: 3 }' }), 'trial', "Unrecognized key(s) in object: 'turns'"],
+    ['a trial key the suite does not know', suiteText({ trial: '{ turns: 3 }' }), 'trial', 'Unrecognized key: "turns"'],
   ])('reports %s at its suite file', (_rule, suite, field, message) => {
     const parsed = parse(suite);
 

@@ -15,9 +15,17 @@ vi.mock('../tool-launch/call.js', async (importOriginal) => ({
   }),
 }));
 
-import { callTool, callToolParallel } from '../tool-launch/call.js';
+vi.mock('../config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../config.js')>()),
+  autoDetectInit: vi.fn(),
+}));
+
+import { CallError, callTool, callToolParallel } from '../tool-launch/call.js';
 import { codebaseCmd } from '../codebase-cmd.js';
 import { runHiddenDeepEnrich } from '../deep-enrich.js';
+import { autoDetectInit } from '../config.js';
+import { LocalConfigSchema, TeamaiConfigSchema } from '../types.js';
+import { createGit } from '../utils/git.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -52,6 +60,7 @@ function createEnrichFixture(project = 'faketest'): string {
 afterEach(() => {
   process.exitCode = undefined;
   vi.restoreAllMocks();
+  vi.resetAllMocks();
   for (const directory of temporaryDirectories.splice(0)) {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -100,6 +109,201 @@ describe('codebase deep-enrich', () => {
     expect(fs.readFileSync(path.join(docsDir, 'graph-g1-relations.md'), 'utf8').length).toBeGreaterThan(0);
     expect(fs.existsSync(path.join(docsDir, 'Auth.md'))).toBe(false);
     expect(fs.existsSync(path.join(docsDir, 'architecture.md'))).toBe(false);
+  });
+
+  it('writes G6 as confidence-labelled knowledge graph triples with a multi-hop index', async () => {
+    const root = createEnrichFixture();
+    const evidenceDir = path.join(root, 'teamwiki', 'evidence', 'code', 'faketest');
+    const manifestPath = path.join(evidenceDir, '_manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { edges: unknown[] };
+    manifest.edges = [
+      { from: 'Api', to: 'Service', relation: 'CALLS', protocol: 'HTTP', confidence: 'EXTRACTED', weight: 0.9 },
+      { from: 'Service', to: 'Store', relation: 'WRITES', confidence: 'INFERRED', weight: 0.75 },
+      { from: 'Worker', to: 'Queue', relation: 'PUBLISHES', confidence: 'AMBIGUOUS' },
+    ];
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await codebaseCmd({ deepEnrich: true, project: 'faketest', output: root, json: true });
+
+    const docsDir = path.join(evidenceDir, 'docs');
+    const g6 = fs.readFileSync(path.join(docsDir, 'graph-g6-triples.md'), 'utf8');
+    expect(g6).toContain('# faketest — Knowledge Graph Triples');
+    expect(g6).toContain('## Ontology definition');
+    expect(g6).toContain('## Explicit triples');
+    expect(g6).toContain('| Api | CALLS | Service | HTTP | EXTRACTED | 0.90 |');
+    expect(g6).toContain('| Service | WRITES | Store | — | INFERRED | 0.75 |');
+    expect(g6).toContain('| Worker | PUBLISHES | Queue | — | AMBIGUOUS | 0.30 |');
+    expect(g6).toContain('Api → (CALLS) → Service → (WRITES) → Store');
+    expect(g6).toContain('## Reverse reachability index');
+    expect(g6).not.toContain('3-hop BFS');
+
+    const readme = fs.readFileSync(path.join(docsDir, 'README.md'), 'utf8');
+    expect(readme).toContain('[graph-g6-triples.md](./graph-g6-triples.md)');
+  });
+
+  it('preserves transitive paths, reverse reachability, and renderable graph reports', async () => {
+    const root = createEnrichFixture();
+    const evidenceDir = path.join(root, 'teamwiki', 'evidence', 'code', 'faketest');
+    const manifestPath = path.join(evidenceDir, '_manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { edges: unknown[] };
+    manifest.edges = [
+      { from: 'Api', to: 'Service', relation: 'CALLS', confidence: 'EXTRACTED', weight: 0.9 },
+      { from: 'Service', to: 'Store', relation: 'WRITES', confidence: 'INFERRED', weight: 0.8 },
+      { from: 'Api', to: 'Store', relation: 'READS', confidence: 'EXTRACTED', weight: 0.7 },
+    ];
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    const docsDir = path.join(evidenceDir, 'docs');
+    fs.mkdirSync(docsDir, { recursive: true });
+    fs.writeFileSync(path.join(docsDir, 'graph-g6-multihop.md'), 'stale G6 output');
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await codebaseCmd({ deepEnrich: true, project: 'faketest', output: root, json: true });
+
+    const g6 = fs.readFileSync(path.join(docsDir, 'graph-g6-triples.md'), 'utf8');
+    expect(g6).toContain('Api → (CALLS) → Service → (WRITES) → Store');
+    expect(g6).toContain('| Store | 2 | Service, Api | Service → (WRITES) → Store; Api → (CALLS) → Service → (WRITES) → Store |');
+    expect(g6).not.toContain('No indirect dependency path was extracted');
+    expect(g6).toContain('| EXTRACTED | 0.90 |');
+    expect(fs.existsSync(path.join(docsDir, 'graph-g6-multihop.md'))).toBe(false);
+
+    for (const file of ['graph-g4-errors.md', 'graph-g7-risks.md', 'graph-g8-config.md', 'graph-g9-constraints.md', 'graph-coverage.md']) {
+      const content = fs.readFileSync(path.join(docsDir, file), 'utf8');
+      expect(content).not.toContain('\\n');
+      expect(content).toContain('\n');
+    }
+    const k3 = fs.readFileSync(path.join(evidenceDir, '_review', 'k3-consistency-check.md'), 'utf8');
+    expect(k3).toContain('Contradiction comparison: deferred');
+    expect(k3).not.toContain('Contradictions: 0 detected');
+  });
+
+  it('labels G2 call-chain steps but not the dependency-paths intro', async () => {
+    const root = createEnrichFixture();
+    const evidenceDir = path.join(root, 'teamwiki', 'evidence', 'code', 'faketest');
+    fs.writeFileSync(path.join(evidenceDir, 'dependency-paths.md'), [
+      '---',
+      'title: faketest dependency paths',
+      'domain: code-knowledge',
+      '---',
+      '',
+      '# Dependency Paths',
+      '',
+      'Static import dependency paths (not runtime call traces).',
+      '',
+      '1 dependency path(s) traced from entry points (max depth 4).',
+      '',
+      '## POST /orders',
+      '',
+      '- [entry] `createOrder` ← src/api.ts:10',
+      '    - [service] `placeOrder` ← src/service.ts:20',
+      '',
+    ].join('\n'));
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await codebaseCmd({ deepEnrich: true, project: 'faketest', output: root, json: true });
+
+    const g2 = fs.readFileSync(path.join(evidenceDir, 'docs', 'graph-g2-dataflow.md'), 'utf8');
+    expect(g2).toContain('## POST /orders');
+    // Each step stays a Markdown list item, with the label after the marker.
+    expect(g2).toMatch(/^- \[EXTRACTED\] \[entry\] `createOrder` ← src\/api\.ts:10$/m);
+    expect(g2).toMatch(/^- \[EXTRACTED\] \[service\] `placeOrder` ← src\/service\.ts:20$/m);
+    expect(g2).not.toContain('[EXTRACTED] Static import');
+    expect(g2).not.toContain('[EXTRACTED] 1 dependency path(s)');
+    expect(g2).not.toContain('## Dependency Paths');
+  });
+
+  it('writes every graph doc table with a header delimiter row', async () => {
+    const withEvidence = createEnrichFixture();
+    const withEvidenceDir = path.join(withEvidence, 'teamwiki', 'evidence', 'code', 'faketest');
+    fs.writeFileSync(path.join(withEvidenceDir, 'dependency-paths.md'), [
+      '## POST /orders',
+      '',
+      '- [entry] `createOrder` ← src/api.ts:10',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(withEvidenceDir, 'interfaces.md'), [
+      '| Component | Type | Count | Confidence | Patterns |',
+      '|-----------|------|-------|------------|----------|',
+      '| Auth | http | 1 | EXTRACTED | `GET /login` |',
+      '',
+    ].join('\n'));
+    const withoutEdges = createEnrichFixture();
+    const withoutEdgesDir = path.join(withoutEdges, 'teamwiki', 'evidence', 'code', 'faketest');
+    const manifestPath = path.join(withoutEdgesDir, '_manifest.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(manifestPath, 'utf8')), edges: [] }));
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await codebaseCmd({ deepEnrich: true, project: 'faketest', output: withEvidence, json: true });
+    await codebaseCmd({ deepEnrich: true, project: 'faketest', output: withoutEdges, json: true });
+
+    // A Markdown table renders only when its second row is the delimiter row.
+    const tablesWithoutDelimiter: string[] = [];
+    for (const docsDir of [path.join(withEvidenceDir, 'docs'), path.join(withoutEdgesDir, 'docs')]) {
+      for (const file of fs.readdirSync(docsDir).filter(name => name.startsWith('graph-'))) {
+        const docLines = fs.readFileSync(path.join(docsDir, file), 'utf8').split('\n');
+        docLines.forEach((line, index) => {
+          const startsTable = line.startsWith('|') && !docLines[index - 1]?.startsWith('|');
+          if (startsTable && !/^\|(\s*:?-+:?\s*\|)+$/.test(docLines[index + 1] ?? '')) {
+            tablesWithoutDelimiter.push(`${file}: ${line}`);
+          }
+        });
+      }
+    }
+    expect(tablesWithoutDelimiter).toEqual([]);
+  });
+
+  it('stops the component phase after the first batch finds no AI tool on PATH', async () => {
+    const root = createEnrichFixture();
+    const manifestPath = path.join(root, 'teamwiki', 'evidence', 'code', 'faketest', '_manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const slugs = Array.from({ length: 12 }, (_, index) => `Comp${index}`);
+    manifest.components = slugs.map(slug => ({ ...manifest.components[0], slug, title: slug, docPath: `evidence/code/faketest/${slug}.md` }));
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    const noTool = new CallError('no_tool', 'No AI tool teamai launches is on PATH.');
+    vi.mocked(callToolParallel).mockRejectedValue(noTool);
+    vi.mocked(callTool).mockRejectedValue(noTool);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await codebaseCmd({ deepEnrich: true, project: 'faketest', output: root, json: true });
+
+    // Each lookup spawns a PATH probe per launcher, so a miss is not retried per component or batch.
+    expect(callToolParallel).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(callTool).mock.calls.filter(([prompt]) => slugs.some(slug => prompt.includes(`模块: ${slug}\n`)))).toEqual([]);
+    const report = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+    expect(report.missingComponents).toEqual(slugs);
+  });
+
+  it('bounds reverse reachability output for a layered DAG', async () => {
+    const root = createEnrichFixture();
+    const evidenceDir = path.join(root, 'teamwiki', 'evidence', 'code', 'faketest');
+    const manifestPath = path.join(evidenceDir, '_manifest.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as { edges: unknown[] };
+    const layers = [['Root']];
+    for (let layer = 1; layer <= 18; layer++) {
+      layers.push([`L${layer}A`, `L${layer}B`]);
+    }
+    const edges: Array<{ from: string; to: string; relation: string }> = [];
+    for (let layer = 1; layer < layers.length; layer++) {
+      for (const from of layers[layer - 1]) {
+        for (const to of layers[layer]) {
+          edges.push({ from, to, relation: 'DEPENDS_ON' });
+        }
+      }
+    }
+    expect(layers.flat()).toHaveLength(37);
+    expect(edges).toHaveLength(70);
+    manifest.edges = edges;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await codebaseCmd({ deepEnrich: true, project: 'faketest', output: root, json: true });
+
+    const g6 = fs.readFileSync(path.join(evidenceDir, 'docs', 'graph-g6-triples.md'), 'utf8');
+    expect(g6.length).toBeLessThan(60_000);
+    const lastRow = g6.split('\n').find(line => line.startsWith('| L18A |'));
+    expect(lastRow).toMatch(/^\| L18A \| 35 \| L17A, L17B, L16A, L16B, .*, L2A, L2B, … \(\+3 more\) \| /);
+    expect(lastRow).toContain('; L14B → (DEPENDS_ON) → L15A → (DEPENDS_ON) → L16A → (DEPENDS_ON) → L17A → (DEPENDS_ON) → L18A; … 8 of 35 routes shown |');
+    expect(lastRow).not.toContain('Root');
   });
 
   it.skipIf(process.platform === 'win32')('does not overwrite a file outside the teamwiki through a docs symlink', async () => {
@@ -385,5 +589,82 @@ describe('codebase deep-enrich', () => {
 
     expect(process.exitCode).toBe(1);
     expect(log.mock.calls.flat().join('\n')).toMatch(/outside|traversal/i);
+  });
+});
+
+function writeDeepEnrichManifest(evidenceDir: string, project: string): void {
+  fs.mkdirSync(evidenceDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(evidenceDir, '_manifest.json'),
+    JSON.stringify({
+      schemaVersion: 'team-wiki.codebase-output-manifest.v2',
+      project,
+      generatedAt: '2026-01-01T00:00:00Z',
+      components: [
+        {
+          slug: 'Auth',
+          docPath: `evidence/code/${project}/Auth.md`,
+          title: 'Auth',
+          category: 'component',
+          confidence: 'INFERRED',
+          responsibilities: ['Authenticate users'],
+          entrypoints: [],
+        },
+      ],
+      edges: [],
+    }, null, 2),
+  );
+}
+
+/** Team clone of a bare remote with extracted evidence, as after `teamai import`. */
+async function createTeamDeepEnrichFixture(project = 'auth'): Promise<{ clone: string; remote: string }> {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-deep-enrich-team-'));
+  temporaryDirectories.push(root);
+  const remote = path.join(root, 'remote.git');
+  const clone = path.join(root, 'clone');
+  await createGit(root).raw(['init', '--bare', '-b', 'main', remote]);
+  await createGit(root).clone(remote, clone);
+  const git = createGit(clone);
+  await git.addConfig('user.name', 'Test');
+  await git.addConfig('user.email', 'test@example.com');
+  fs.mkdirSync(path.join(clone, 'teamwiki'), { recursive: true });
+  fs.writeFileSync(path.join(clone, 'teamwiki', 'router.md'), '# Router\n');
+  fs.writeFileSync(path.join(clone, 'teamwiki', 'index.md'), '# Index\n');
+  writeDeepEnrichManifest(path.join(clone, 'teamwiki', 'evidence', 'code', project), project);
+  fs.writeFileSync(path.join(clone, 'teamai.yaml'), 'team: test\n');
+  await git.add('.');
+  await git.commit('team');
+  await git.push(['-u', 'origin', 'main']);
+  vi.mocked(autoDetectInit).mockResolvedValue({
+    localConfig: LocalConfigSchema.parse({ repo: { localPath: clone, remote }, username: 'member', scope: 'user' }),
+    teamConfig: TeamaiConfigSchema.parse({ team: 'test', repo: remote }),
+  });
+  return { clone, remote };
+}
+
+describe('codebase deep-enrich in a team repo', () => {
+  it('publishes generated docs and leaves the clone clean', async () => {
+    const { clone, remote } = await createTeamDeepEnrichFixture();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    await codebaseCmd({ deepEnrich: true, project: 'auth' });
+
+    expect(process.exitCode).toBe(1);
+    expect((await createGit(clone).status()).isClean()).toBe(true);
+    expect(log.mock.calls.flat().join('\n')).toContain(`Pushed to team knowledge repo (${remote})`);
+    for (const name of ['graph-g1-relations.md', 'graph-g2-dataflow.md', 'graph-g3-interfaces.md']) {
+      expect(await createGit(remote).raw(['cat-file', '-e', `main:teamwiki/evidence/code/auth/docs/${name}`])).toBe('');
+    }
+  });
+
+  it('does not publish when previewing with --dry-run', async () => {
+    const { clone, remote } = await createTeamDeepEnrichFixture();
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const head = await createGit(remote).raw(['rev-parse', 'main']);
+
+    await codebaseCmd({ deepEnrich: true, project: 'auth', dryRun: true });
+
+    expect(await createGit(remote).raw(['rev-parse', 'main'])).toBe(head);
+    expect((await createGit(clone).status()).isClean()).toBe(true);
   });
 });

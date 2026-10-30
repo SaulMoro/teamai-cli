@@ -137,7 +137,7 @@ export function rawOutputPath(config: LocalConfig, attempt: string): string {
 const LOCK_ATTEMPTS = 40;
 const LOCK_WAIT_MS = 25;
 
-async function readRecord<T>(file: string, schema: z.ZodType<T, z.ZodTypeDef, unknown>): Promise<T | undefined> {
+async function readRecord<T>(file: string, schema: z.ZodType<T>): Promise<T | undefined> {
   const raw = await readFileSafe(file);
   if (raw === null) return undefined;
   try {

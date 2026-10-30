@@ -126,7 +126,7 @@ describe('benchmark plan run', () => {
     const { config, runId } = await startFix({ trial });
     await settleBaselines(config, runId, driver, can);
 
-    const next = LeaseSchema.extend({ data: z.object({ lease: z.object({ limits: z.unknown() }).passthrough() }) })
+    const next = LeaseSchema.extend({ data: z.object({ lease: z.object({ limits: z.unknown().optional() }).passthrough() }) })
       .parse(await leaseNext(config, runId, driver, { can, prepare: true }));
     await cancelRun(config, runId, {});
     const run = await readRun(config, runId);

@@ -354,7 +354,7 @@ teamai mcp inject
 teamai mcp remove
 ```
 
-`mcp inject` and `mcp remove` exit with code 1 when a tool's config cannot be read or parsed, including with `--dry-run`. Other tools may still be updated; the command lists those changes and reports that the operation is incomplete. Fix the config named in the warning, then rerun the command. The unreadable config and its ownership records are kept for the retry.
+`mcp inject` and `mcp remove` exit with code 1 when a tool's config cannot be read or parsed, including with `--dry-run`. This includes invalid TOML in Codex's `config.toml`; a leading UTF-8 BOM is accepted. Other tools may still be updated; the command lists those changes and reports that the operation is incomplete. Fix the config named in the warning, then rerun the command. The unreadable config and its ownership records are kept for the retry. `uninstall` also preserves the records and exits 1 until the config is repaired.
 
 Muse reordering JSON object keys does not make a managed server a personal edit. Removal compares its recorded content, including nested objects, while preserving real command, argument or environment changes. Older records without that content fingerprint need a matching original definition in team Git history; if that proof is unavailable, removal keeps the server and warns.
 
@@ -419,7 +419,7 @@ sessions:
   publish: { attended: ask, unattended: auto }
 ```
 
-Attended `ask` proposes publishing when the friction reminder offers [`session-close`](workflow.md#session-close), and the person confirms it twice: at the start, and again from their own terminal or the dashboard before the transcript goes out. Otherwise a person's sessions are archived only by a command such as `teamai session push`. Unattended `ask` acts as `off`, since nobody is there to confirm. Attended `auto` archives a session once nothing has happened in it for six hours, in the background pass that judges finished sessions. Publishing always scrubs. An HTTP team keeps no session archive, so there `sessions.publish` acts as `off`, and `teamai doctor` says so.
+Attended `ask` proposes publishing when the friction reminder offers [`teamai-share-learnings`](workflow.md#teamai-share-learnings-and-teamai-share-session), and the person confirms it twice: at the start, and again from their own terminal or the dashboard before the transcript goes out. Otherwise a person's sessions are archived only by a command such as `teamai session push`. Unattended `ask` acts as `off`, since nobody is there to confirm. Attended `auto` archives a session once nothing has happened in it for six hours, in the background pass that judges finished sessions. Publishing always scrubs. An HTTP team keeps no session archive, so there `sessions.publish` acts as `off`, and `teamai doctor` says so.
 
 A member's `config.yaml` wins, one mode at a time. A mode it does not name falls through to `teamai.yaml`:
 

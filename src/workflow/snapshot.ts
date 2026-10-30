@@ -29,7 +29,7 @@ const ReportedCommitsSchema = z.object({
 const StepCommitsSchema = ReportedCommitsSchema.extend({ passes: z.array(ReportedCommitsSchema).optional() });
 
 /** `schema`, with the commits a step or pass reports parsed as commit ids; the local run file accepts any string there. */
-function withCommitIds<T extends z.ZodTypeAny>(schema: T): z.ZodEffects<T> {
+function withCommitIds<T extends z.ZodType>(schema: T): T {
   return schema.superRefine((value, ctx) => {
     const reported = StepCommitsSchema.safeParse(value);
     if (!reported.success) for (const issue of reported.error.issues) ctx.addIssue({ code: z.ZodIssueCode.custom, path: issue.path, message: issue.message });
@@ -39,6 +39,7 @@ function withCommitIds<T extends z.ZodTypeAny>(schema: T): z.ZodEffects<T> {
 const BodySchema = z.object({
   schemaVersion: z.literal('v1alpha1'),
   name: z.string(),
+  alias: z.string().optional(),
   revision: z.number().int(),
   status: z.enum(['running', 'succeeded', 'failed', 'cancelled']),
   end: z.string().optional(),
@@ -48,7 +49,7 @@ const BodySchema = z.object({
     failure: z.object({ code: z.string(), message: z.string() }).optional(), since: z.string(), until: z.string(),
   }).optional(),
   timeout: z.number().int().positive().optional(),
-  inputs: z.record(z.unknown()).optional(),
+  inputs: z.record(z.string(), z.unknown()).optional(),
   sourceHash: z.string(),
   definitionHash: z.string(),
   teamRevision: CommitIdSchema.optional(),
@@ -60,14 +61,14 @@ const BodySchema = z.object({
   round: z.number().int().optional(),
   base: z.object({ ref: z.string().optional(), commit: CommitIdSchema }).optional(),
   /** The run's workspaces by branch, with the commit each was last reported at. Which driver holds one stays local. */
-  copies: z.record(z.object({ commit: CommitIdSchema.optional(), from: z.string().optional() })),
+  copies: z.record(z.string(), z.object({ commit: CommitIdSchema.optional(), from: z.string().optional() })),
   deliveries: z.array(DeliveryReceiptSchema).optional(),
   /** The requests a claimer looks up before anything opens another: the machine that handed the run over may have opened them. */
   creating: z.array(UnresolvedCreateSchema).optional(),
   sessionContinuations: z.array(SessionContinuationSchema).optional(),
   releasedTokens: z.array(ReleasedTokensSchema).optional(),
   /** The scorers the run pinned, by hash only: the machine that claims the run uses its own copy when the hash matches. */
-  scorers: z.record(z.object({ sourceHash: z.string() })).optional(),
+  scorers: z.record(z.string(), z.object({ sourceHash: z.string() })).optional(),
   createdAt: z.string(),
   limitsFrom: LimitsFromSchema.optional(),
   updatedAt: z.string(),
@@ -195,8 +196,8 @@ function droppedField(input: unknown, output: unknown, at: Array<string | number
   return undefined;
 }
 
-function fieldPath(at: ReadonlyArray<string | number>): string {
-  return at.map((part, index) => (typeof part === 'number' ? `[${part}]` : index === 0 ? part : `.${part}`)).join('') || 'snapshot';
+function fieldPath(at: ReadonlyArray<PropertyKey>): string {
+  return at.map((part, index) => (typeof part === 'number' ? `[${part}]` : index === 0 ? String(part) : `.${String(part)}`)).join('') || 'snapshot';
 }
 
 /** Replaces every failure message: it is free text from a tool or the engine, and no expression reads it. */
@@ -217,7 +218,7 @@ type FieldRules<T> = { readonly [K in KeysOfUnion<T>]-?: 'publish' | 'drop' | 'r
 type Rewrites<T, R> = { readonly [K in keyof R as R[K] extends 'rewrite' ? K : never]: (value: T) => Record<string, unknown> };
 
 const RUN_RULES = {
-  schemaVersion: 'publish', id: 'rewrite', name: 'publish', revision: 'publish', status: 'publish', driver: 'drop',
+  schemaVersion: 'publish', id: 'rewrite', name: 'publish', alias: 'publish', revision: 'publish', status: 'publish', driver: 'drop',
   end: 'publish', failure: 'rewrite', finalizing: 'rewrite', timeout: 'publish', inputs: 'publish', sourceHash: 'publish', teamRevision: 'publish', runMode: 'publish', origin: 'publish',
   definition: 'rewrite', workflows: 'rewrite', scorers: 'rewrite', admitted: 'drop', verdicts: 'drop', steps: 'rewrite', settledAttempts: 'rewrite', settledCount: 'rewrite',
   endRecordQueued: 'drop', cancelledAttempts: 'rewrite', archive: 'rewrite', round: 'publish', base: 'publish',

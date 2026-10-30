@@ -13,7 +13,7 @@ vi.mock('../config.js', async (importOriginal) => ({
 
 describe('env listing command options (#1432)', () => {
   let tmpDir: string;
-  let output: ReturnType<typeof vi.spyOn>;
+  let output: MockInstance<typeof console.log>;
   let warnings: MockInstance<typeof process.stderr.write>;
 
   beforeEach(async () => {

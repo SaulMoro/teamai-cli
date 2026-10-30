@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 
 vi.mock('../utils/logger.js', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: vi.fn() },
@@ -26,7 +26,7 @@ import { askSelection } from '../utils/prompt.js';
 import { detectHomeInstalledAgents } from '../known-agents.js';
 
 describe('promptForSelfModeAgents — interactive Auto option', () => {
-  let logSpy: ReturnType<typeof vi.spyOn>;
+  let logSpy: MockInstance<typeof console.log>;
   let originalIsTTY: boolean | undefined;
 
   beforeEach(() => {

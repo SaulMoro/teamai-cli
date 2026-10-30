@@ -350,7 +350,7 @@ function retryInstance(run: RunState, state: StepState, now: string): void {
  */
 function restartCommand(run: RunState): string {
   const inputs = isRecord(run.inputs) ? run.inputs : {};
-  if (run.name !== 'benchmark' || typeof inputs.suite !== 'string') return `teamai workflow start ${run.name}`;
+  if (run.name !== 'teamai-benchmark' || typeof inputs.suite !== 'string') return `teamai workflow start ${run.name}`;
   return `teamai benchmark run ${inputs.suite}${inputs.aliases === 'member' ? ' --member-aliases' : ''}`;
 }
 

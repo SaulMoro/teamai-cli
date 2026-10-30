@@ -1,5 +1,5 @@
 schemaVersion: v1alpha1
-name: benchmark
+name: teamai-benchmark
 description: Run a benchmark suite. Every arm works the same tasks in fresh clones, judged by checks it never sees.
 invoke: deny
 inputs: { suite: string, aliases: string }

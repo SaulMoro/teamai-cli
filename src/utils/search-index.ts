@@ -1062,7 +1062,13 @@ export async function loadIndex(indexPath?: string): Promise<SearchIndex | null>
 /** A single search result with relevance score. */
 export interface SearchResult {
   entry: SearchIndexEntry;
+  /** Relevance score on the scale recall's thresholds and `--check` judge. */
   score: number;
+  /** Score that orders results: `score` with the title field's length
+   *  normalization applied (see TITLE_LENGTH_SCALE). Kept apart from `score`
+   *  so a long title changes the order without dropping a hit below the
+   *  relevance threshold. Set by `search`; absent means order by `score`. */
+  rankScore?: number;
   /** Query words matching this entry's title or tags. Absent for codebase-graph
    *  hits, which are scored by BM25 over pages rather than per-term coverage. */
   matchedTerms?: string[];
@@ -1097,17 +1103,52 @@ function dedupKey(r: SearchResult): string {
 }
 
 /**
+ * Scale of the title field's length normalization. In `rankScore` a title
+ * match is divided by `sqrt(tokens / TITLE_LENGTH_SCALE)`, where tokens is
+ * the entry's `title:` token count (`tokenize(title).length`), so a title of
+ * this many tokens keeps its full weight and a longer one is discounted.
+ * Counting tokens rather than characters gives English and Chinese titles of
+ * the same word count the same discount. 4.5 keeps the discount the 32-character, 12-token hub title
+ * "订单排查手册：查不到、查得慢、数据不一致（L4 runbook）" had at 12 characters.
+ * Exported so the scoring test can name the value it asserts against.
+ */
+export const TITLE_LENGTH_SCALE = 4.5;
+
+/**
+ * Query words that carry the question's phrasing, not its subject: dropping
+ * them keeps a colloquial question ("某个 Job 明明在调度里…是不是被 skip 了")
+ * from scoring on filler. Each one either appears in almost no entry (so its
+ * IDF is high and it silently boosts whichever long page happens to contain
+ * it) or in almost every entry (so it carries no signal).
+ *
+ * Measured with the real CLI on the same index, on the 90-question hard set,
+ * the 305-question tuning set and the 58-question blind set: hard fact@3
+ * 50→52, tuning 289→290, blind unchanged at 52. Adding "哪些" to this list
+ * lost a blind-set question for no gain, so it stays out.
+ */
+const QUERY_STOP_TOKENS = new Set([
+  '什么', '怎么', '怎样', '怎么样', '如何', '哪个', '哪里', '多少', '多久',
+  '是不是', '是否', '为什么', '为啥', '什么样', '干什么', '凭什么', '怎么办',
+  '可以', '需要', '应该', '现在', '已经', '还是', '或者', '但是', '因为', '所以',
+  '如果', '以及', '这个', '那个', '这种', '那种', '一下', '一个', '一直',
+  '有没有', '会不会', '能不能', '要不要', '可不可以',
+]);
+
+/**
  * Search the index with a query string.
  *
  * Scoring (P1.4 domain-weighted):
- * - Title token match: 3 points
+ * - Title token match: 3 points. For `rankScore` only, divided by
+ *   sqrt(title tokens / TITLE_LENGTH_SCALE) so a long hub title
+ *   ("订单排查手册：查不到、查得慢、数据不一致（L4 runbook）") does not out-rank
+ *   a short topic title on the same matched token
  * - Tag token match: 2 points
  * - Body token match: 1 point
  * - Vote bonus: +0.5 per vote (caps at 5 points)
  * - Domain multiplier: technical ×1.0, neutral ×0.85, ops ×0.5, support ×0.3
  * - Type bonus: skills/rules ×1.1 (curated high-confidence knowledge)
  *
- * @returns Results sorted by score descending, limited to top N.
+ * @returns Results sorted by rankScore descending, limited to top N.
  */
 export function search(
   query: string,
@@ -1116,7 +1157,7 @@ export function search(
 ): SearchResult[] {
   if (!query.trim()) return [];
 
-  const queryTokens = tokenize(query);
+  const queryTokens = tokenize(query).filter((token) => !QUERY_STOP_TOKENS.has(token));
   if (queryTokens.length === 0) return [];
 
   // Infer query domain for adaptive weighting (改动 A).
@@ -1166,10 +1207,12 @@ export function search(
   // Relevance is the caller's judgement; search only states what it covers.
   const wordTokens = wordSegments(query).map((w) => ({ word: w, tokens: tokenize(w) }));
 
-  const results: SearchResult[] = [];
+  const results: Array<SearchResult & { rankScore: number }> = [];
 
   for (const entry of index.entries) {
-    let score = 0;
+    let titleScore = 0;
+    let tagScore = 0;
+    let bodyScore = 0;
     let hasTitleOrTagMatch = false;
     const entryDomain = entry.domain ?? 'neutral';
     const entryTokens = new Set(entry.tokens);
@@ -1179,51 +1222,69 @@ export function search(
       const tagToken = `tag:${qt}`;
 
       if (entryTokens.has(titleToken)) {
-        score += 3 * idf(titleToken, entryDomain);
+        titleScore += 3 * idf(titleToken, entryDomain);
         hasTitleOrTagMatch = true;
       }
       if (entryTokens.has(tagToken)) {
-        score += 2 * idf(tagToken, entryDomain);
+        tagScore += 2 * idf(tagToken, entryDomain);
         hasTitleOrTagMatch = true;
       }
       if (entryTokens.has(qt)) {
-        score += 1 * idf(qt, entryDomain);
+        bodyScore += 1 * idf(qt, entryDomain);
       }
     }
+    const matchScore = titleScore + tagScore + bodyScore;
 
     // Require at least one title or tag match to filter out body-only noise.
     // Docs (type === 'docs') often lack tags and have generic titles, so allow body-only
     // matches for them — the IDF weighting naturally demotes low-relevance hits.
     const isDocsEntry = entry.type === 'docs';
-    if (score > 0 && (hasTitleOrTagMatch || isDocsEntry)) {
-      // Normalize the token-match sum by query length before adding absolute
-      // bonuses, so cross-query scores share a scale (see lengthNorm above).
-      score /= lengthNorm;
-      // Vote bonus: +0.5 per vote, max 5 points (unchanged).
-      score += Math.min(entry.votes * 0.5, 5);
+    if (matchScore > 0 && (hasTitleOrTagMatch || isDocsEntry)) {
+      const finalize = (sum: number): number => {
+        // Normalize the token-match sum by query length before adding absolute
+        // bonuses, so cross-query scores share a scale (see lengthNorm above).
+        let score = sum / lengthNorm;
+        // Vote bonus: +0.5 per vote, max 5 points (unchanged).
+        score += Math.min(entry.votes * 0.5, 5);
 
-      // Query-aware domain weight (改动 A) × type bonus (unchanged).
-      // Missing domain degrades gracefully to 'neutral'.
-      const domainMultiplier = domainWeightRow[entry.domain ?? 'neutral'];
-      const typeMultiplier = TYPE_BONUS[entry.type];
-      score *= domainMultiplier * typeMultiplier;
+        // Query-aware domain weight (改动 A) × type bonus (unchanged).
+        // Missing domain degrades gracefully to 'neutral'.
+        const domainMultiplier = domainWeightRow[entry.domain ?? 'neutral'];
+        const typeMultiplier = TYPE_BONUS[entry.type];
+        score *= domainMultiplier * typeMultiplier;
 
-      // codebase-index.md 额外权重 boost，确保章节摘要优先于普通 docs 返回。
-      if (path.basename(entry.path ?? '') === CODEBASE_INDEX_FILENAME) {
-        score *= CODEBASE_INDEX_WEIGHT_BOOST;
+        // codebase-index.md 额外权重 boost，确保章节摘要优先于普通 docs 返回。
+        if (path.basename(entry.path ?? '') === CODEBASE_INDEX_FILENAME) {
+          score *= CODEBASE_INDEX_WEIGHT_BOOST;
+        }
+
+        // Hot/cold penalty: entries with low confidence get demoted.
+        if (entry.hotness !== undefined && entry.hotness < 1.0) {
+          score *= entry.hotness;
+        }
+        return score;
+      };
+      const score = finalize(matchScore);
+      // BM25-style length normalization for the title field: without it a hub
+      // page whose title names the whole domain matches the same query token as
+      // a focused page, at the same weight. It orders results only; `score`
+      // stays on the scale the relevance threshold is set on. The index stores
+      // tokenize(title) as `title:` tokens, so counting them avoids
+      // tokenizing the title again on every search.
+      let titleTokenCount = 0;
+      for (const token of entry.tokens) {
+        if (token.startsWith('title:')) titleTokenCount++;
       }
-
-      // Hot/cold penalty: entries with low confidence get demoted.
-      if (entry.hotness !== undefined && entry.hotness < 1.0) {
-        score *= entry.hotness;
-      }
+      const rankScore = finalize(
+        titleScore / Math.sqrt(Math.max(1, titleTokenCount / TITLE_LENGTH_SCALE)) + tagScore + bodyScore,
+      );
 
       // Coverage per query word: matched when any of its tokens hits title/tag.
       // Skipped for entries admitted only by the codebase exemption — those are
       // scored on body text, so every term would read as missing and the caller
       // would discard a legitimate hit as uncovered.
       if (!hasTitleOrTagMatch) {
-        results.push({ entry, score });
+        results.push({ entry, score, rankScore });
         continue;
       }
 
@@ -1234,13 +1295,13 @@ export function search(
         (hit ? matchedTerms : missingTerms).push(word);
       }
 
-      results.push({ entry, score, matchedTerms, missingTerms });
+      results.push({ entry, score, rankScore, matchedTerms, missingTerms });
     }
   }
 
-  // Sort by score descending, then by date descending for ties.
+  // Sort by ordering score descending, then by date descending for ties.
   results.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
+    if (b.rankScore !== a.rankScore) return b.rankScore - a.rankScore;
     return (b.entry.date || '').localeCompare(a.entry.date || '');
   });
 

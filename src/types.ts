@@ -64,7 +64,11 @@ export const ToolPathsSchema = z.object({
 
 // ─── Scope ──────────────────────────────────────────────
 
-export const ScopeEnum = z.enum(['user', 'project']);
+const unknownScopeError = (issue: { input?: unknown }) => typeof issue.input === 'string'
+  ? `scope "${issue.input}" is not one this teamai knows; a newer teamai may have written it. Run \`teamai update\``
+  : undefined;
+
+export const ScopeEnum = z.enum(['user', 'project'], { error: unknownScopeError });
 export type Scope = z.infer<typeof ScopeEnum>;
 
 /**
@@ -74,7 +78,7 @@ export type Scope = z.infer<typeof ScopeEnum>;
  * so code compares against one value; the serializer writes `workspace`.
  */
 export const InstallScopeSchema = z
-  .enum(['user', 'workspace', 'project'])
+  .enum(['user', 'workspace', 'project'], { error: unknownScopeError })
   .transform((scope): Scope => (scope === 'workspace' ? 'project' : scope));
 
 /** The value of a `--scope` option. Every command that takes one reads it here. */
@@ -95,14 +99,14 @@ export const SharingConfigSchema = z.object({
   skills: z.object({}).default({}),
   rules: z.object({
     enforced: z.array(z.string()).default([]),
-  }).default({}),
+  }).prefault({}),
   docs: z.object({
     localDir: z.string().default('~/.teamai/docs'),
-  }).default({}),
+  }).prefault({}),
   env: z.object({
     injectShellProfile: z.boolean().default(true),
     shellProfilePath: z.string().optional(),
-  }).default({}),
+  }).prefault({}),
   // Optional (not .default) so existing TeamaiConfig literals stay valid; use
   // getHooksSharing() for the defaulted view.
   hooks: z.object({
@@ -493,12 +497,10 @@ export const DEFAULT_TOOL_PATHS = {
     },
   },
   // JoyCode: skills, rules (.mdc), and subagents are synced to .joycode/.
-  // JoyCode currently does not provide a lifecycle hooks system or startup
-  // adapter, so it intentionally has no `settings` path. Hook reconciliation
-  // skips JoyCode cleanly without generating ghost files; users must sync
-  // manually via `teamai pull`. In user scope it reads no rules directory:
+  // JoyCode reads Claude-shaped lifecycle hooks from .joycode/hooks.json in
+  // the home and in a project. In user scope it reads no rules directory:
   // its team rules are a block in ~/.joycode/rules.txt (#946).
-  joycode: { skills: '.joycode/skills', rules: '.joycode/rules', agents: '.joycode/agents', userScope: { rules: null } },
+  joycode: { skills: '.joycode/skills', rules: '.joycode/rules', settings: '.joycode/hooks.json', agents: '.joycode/agents', userScope: { rules: null } },
   qoder: {
     skills: '.qoder/skills',
     rules: '.qoder/rules',
@@ -732,7 +734,7 @@ export const TeamaiConfigBaseSchema = z.object({
   publicSkills: z.array(z.string()).optional(),
   /** External team repos to pull skills from. Managed by team admin. */
   sources: z.array(SourceConfigSchema).optional(),
-  sharing: SharingConfigSchema.default({}),
+  sharing: SharingConfigSchema.prefault({}),
   /** Team-level default: whether `teamai update` auto-installs upgrades. Users
    * can override via `updatePolicy` in local config. Undefined = team has no
    * opinion (preserves legacy behavior). */
@@ -2368,15 +2370,15 @@ export interface ContributeState {
    */
   pendingHint?: string;
   /**
-   * What the reminder offered with the session-close workflow (#1388), set in the write that sets `hinted`: whether to
+   * What the reminder offered with the teamai-share-learnings workflow (#1388), set in the write that sets `hinted`: whether to
    * publish the session, and the scorers to judge it with. Absent when the reminder named no workflow.
    */
-  offered?: SessionCloseOffered;
+  offered?: SessionShareOffered;
 }
 
-/** What the friction reminder offers a session with the session-close workflow, as the session's state keeps it. */
-export const SessionCloseOfferedSchema = z.object({ publish: z.boolean(), scorers: z.array(z.string()) });
-export type SessionCloseOffered = z.infer<typeof SessionCloseOfferedSchema>;
+/** What the friction reminder offers a session with the teamai-share-learnings workflow, as the session's state keeps it. */
+export const SessionShareOfferedSchema = z.object({ publish: z.boolean(), scorers: z.array(z.string()) });
+export type SessionShareOffered = z.infer<typeof SessionShareOfferedSchema>;
 
 /**
  * Layer 1 (fast-path) threshold: if toolCount < this, skip reading events.jsonl.

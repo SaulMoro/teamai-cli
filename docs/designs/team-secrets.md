@@ -239,7 +239,7 @@ Team env variables in this scope: API_URL. Team secrets in this scope: GITHUB_TO
 
 - The line lists each variable and each declared secret with its `description`, so the description should say which tool or server uses the key. It carries no value and no state. The sentence about secret values is there only when the scope declares secrets.
 - No line when the scope delivers neither, or in a directory without teamai. While a part can't be resolved, the line names the variables its last pull wrote and no secret.
-- Hosts that run SessionStart but discard its output (Hermes, Pi, OpenCode, OpenClaw), and JoyCode, which has no hooks, get the same rule from the teamai core skill.
+- Hosts that run SessionStart but discard its output (Hermes, Pi, OpenCode, OpenClaw) get the same rule from the teamai core skill.
 - The skills say an agent never asks for a secret value in chat, never passes one through `--stdin`, never reads the value files and never prints a secret (`teamai env exec -- env` included). On a missing secret it asks the member to run `teamai env set KEY` in their own terminal. Declaring a secret with `env add --secret` takes no value, so an agent can run it.
 
 ## Rotation

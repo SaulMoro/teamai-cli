@@ -1,17 +1,16 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, type Mock } from 'vitest';
 
 // ── Test doubles ────────────────────────────────────────
 
-/** Minimal handler interface for testing. */
-interface TestHandler {
-  name: string;
-  execute: ReturnType<typeof vi.fn>;
-}
+/** Handler mock retains the dispatcher's execute contract. */
+type TestHandler = HookHandler & {
+  execute: Mock<HookHandler['execute']>;
+};
 
 function createHandler(name: string, output?: string): TestHandler {
   return {
     name,
-    execute: vi.fn().mockResolvedValue(output ?? null),
+    execute: vi.fn<HookHandler['execute']>().mockResolvedValue(output ?? null),
   };
 }
 
@@ -19,6 +18,7 @@ function createHandler(name: string, output?: string): TestHandler {
 
 import {
   createDispatcher,
+  type HookHandler,
 } from '../hook-dispatch.js';
 
 // ── Tests ───────────────────────────────────────────────

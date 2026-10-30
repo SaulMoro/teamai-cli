@@ -434,7 +434,7 @@ async function expectEnd(scenario: ConformanceScenario, runner: ConformanceRunne
 }
 
 const PreparedCommandSchema = z.object({
-  attempt: z.string(), revision: z.number(), step: z.string(), command: z.string(), cwd: z.string(), env: z.record(z.string()).optional(),
+  attempt: z.string(), revision: z.number(), step: z.string(), command: z.string(), cwd: z.string(), env: z.record(z.string(), z.string()).optional(),
 });
 
 /** The codes a `next --prepare` answers once it settled the attempt it could not prepare `failed`. */

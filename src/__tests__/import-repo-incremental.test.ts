@@ -96,6 +96,7 @@ describe('importFromRepo — incremental mode', () => {
 
     afterEach(async () => {
         vi.restoreAllMocks();
+        vi.clearAllMocks();
         delete process.env.TEAMAI_CACHE_DIR;
         await fs.remove(workdir);
     });

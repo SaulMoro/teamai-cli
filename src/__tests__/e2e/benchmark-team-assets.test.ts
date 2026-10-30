@@ -51,7 +51,7 @@ function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): string {
 const EXTERNAL = { kind: 'external', machine: 'ci', workspace: '/ci' };
 const LeaseSchema = z.object({
   step: z.string(), attempt: z.string(), revision: z.number(), command: z.string().optional(), prompt: z.string().optional(),
-  env: z.record(z.string()).optional(), envScope: z.object({ withhold: z.array(z.string()) }).passthrough().optional(), output: z.unknown().optional(), cwd: z.string().optional(),
+  env: z.record(z.string(), z.string()).optional(), envScope: z.object({ withhold: z.array(z.string()) }).passthrough().optional(), output: z.unknown().optional(), cwd: z.string().optional(),
 }).passthrough();
 const NextSchema = z.union([
   z.object({ lease: LeaseSchema }),

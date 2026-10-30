@@ -1227,8 +1227,8 @@ ends: { shipped: succeeded }
     if (result.ok) return;
     expect(result.diagnostics.map(formatDiagnostic)).toEqual(expect.arrayContaining([
       'workflows/build.yaml:5: field "defaults.requires": defaults.requires must map network, isolation, env, strict to values',
-      'workflows/build.yaml:9: field "steps[0].requires.network": steps[0].requires.network: Expected boolean, received string',
-      expect.stringContaining('field "steps[0].requires.isolation": steps[0].requires.isolation: Invalid enum value'),
+      expect.stringMatching(/^workflows\/build\.yaml:9: field "steps\[0\]\.requires\.network": steps\[0\]\.requires\.network: .*boolean.*string$/),
+      expect.stringMatching(/field "steps\[0\]\.requires\.isolation": steps\[0\]\.requires\.isolation: .*"none".*"worktree".*"sandbox"/),
       expect.stringContaining('field "steps[1].requires": step "done" has no action'),
     ]));
     expect(result.diagnostics).toContainEqual(expect.objectContaining({ field: 'steps[0].requires.gpu', code: 'unknown_key' }));

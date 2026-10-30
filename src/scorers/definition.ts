@@ -14,8 +14,8 @@ export function isScorerFile(value: string): boolean {
   return value.includes('/') || value.endsWith('.md');
 }
 
-const text = (message: string) => z.string({ required_error: message, invalid_type_error: message }).refine((value) => value.trim() !== '', message);
-const number = (message: string) => z.number({ required_error: message, invalid_type_error: message }).finite(message);
+const text = (message: string) => z.string({ error: message }).refine((value) => value.trim() !== '', message);
+const number = (message: string) => z.number({ error: message }).finite(message);
 
 const LabelSchema = z.object({
   value: text('must be a non-empty string'),
@@ -26,16 +26,16 @@ const LabelSchema = z.object({
 const LABEL_COUNT = 'must list 2 to 20 labels: at least one that passes and one that fails';
 
 const FrontmatterSchema = z.object({
-  labels: z.array(LabelSchema, { required_error: LABEL_COUNT, invalid_type_error: LABEL_COUNT }).min(2, LABEL_COUNT).max(20, LABEL_COUNT),
+  labels: z.array(LabelSchema, { error: LABEL_COUNT }).min(2, LABEL_COUNT).max(20, LABEL_COUNT),
   passingScore: number('must be a number'),
   samplingRate: number('must be a number from 0 to 100').min(0, 'must be a number from 0 to 100').max(100, 'must be a number from 0 to 100').default(25),
-  model: z.string({ invalid_type_error: 'must be a non-empty string without spaces' }).superRefine((model, ctx) => {
+  model: z.string({ error: 'must be a non-empty string without spaces' }).superRefine((model, ctx) => {
     const problem = modelValueProblem(model);
     if (problem !== undefined) ctx.addIssue({ code: z.ZodIssueCode.custom, message: problem });
   }).optional(),
-  isolation: z.enum(['verified', 'best-effort'], { errorMap: () => ({ message: 'must be verified or best-effort' }) }).optional(),
+  isolation: z.enum(['verified', 'best-effort'], { error: 'must be verified or best-effort' }).optional(),
   /** `true`: this scorer judges a member's finished agent sessions too, in the background where the member turns that on. */
-  sessions: z.boolean({ invalid_type_error: 'must be true or false' }).optional(),
+  sessions: z.boolean({ error: 'must be true or false' }).optional(),
 }).strict().superRefine((scorer, ctx) => {
   const seen = new Set<string>();
   scorer.labels.forEach((label, index) => {
@@ -72,8 +72,8 @@ export function formatScorerDiagnostic(diagnostic: ScorerDiagnostic): string {
 }
 
 /** `labels[0].score`, as a scorer author writes the field. */
-function fieldOf(at: ReadonlyArray<string | number>): string {
-  return at.map((part, index) => (typeof part === 'number' ? `[${part}]` : index === 0 ? part : `.${part}`)).join('');
+function fieldOf(at: ReadonlyArray<PropertyKey>): string {
+  return at.map((part, index) => (typeof part === 'number' ? `[${part}]` : index === 0 ? String(part) : `.${String(part)}`)).join('');
 }
 
 function issueMessages(issue: z.ZodIssue): string[] {
@@ -93,7 +93,7 @@ export function parseScorer(relativePath: string, content: string): ParsedScorer
   if (raw === '') return fail('a scorer starts with YAML frontmatter between --- lines');
   if (!valid) return fail('the frontmatter must be a YAML mapping');
   const parsed = FrontmatterSchema.safeParse(data);
-  const problems = parsed.success ? [] : parsed.error.issues.flatMap(issueMessages);
+  const problems = parsed.success ? [] : [...new Set(parsed.error.issues.flatMap(issueMessages))];
   if (body.trim() === '') problems.push('the prompt after the frontmatter is empty');
   if (!parsed.success || problems.length > 0) return fail(...problems);
   return { ok: true, definition: { name, ...parsed.data, prompt: body } };

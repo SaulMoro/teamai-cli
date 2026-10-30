@@ -87,7 +87,7 @@ function baselinePath(config: LocalConfig): string {
 
 /** The scope's baseline, or none before its first report on this release (or when the file is not readable). */
 async function readBaseline(config: LocalConfig): Promise<Record<string, Entry> | undefined> {
-  const parsed = z.record(EntrySchema).safeParse(await readJson<unknown>(baselinePath(config)));
+  const parsed = z.record(z.string(), EntrySchema).safeParse(await readJson<unknown>(baselinePath(config)));
   return parsed.success ? parsed.data : undefined;
 }
 
@@ -195,7 +195,7 @@ function prCachePath(config: LocalConfig): string {
 }
 
 async function readPrCache(config: LocalConfig): Promise<Record<string, PrLookup>> {
-  const parsed = z.record(PrLookupSchema).safeParse(await readJson<unknown>(prCachePath(config)));
+  const parsed = z.record(z.string(), PrLookupSchema).safeParse(await readJson<unknown>(prCachePath(config)));
   return parsed.success ? parsed.data : {};
 }
 

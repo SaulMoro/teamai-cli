@@ -204,7 +204,7 @@ type FileStep = { id: string } & Record<string, unknown>;
 /**
  * The workflow a benchmark run's `from` step runs, as a workflow file writes it, with the generated correctness scorers
  * its prompts list. No `requires`, `timeout` or `invoke`: the step that runs it holds the strict sandbox, so every step
- * beneath it inherits that, and a team's own `benchmark` workflow may relax it; the run's own timeout bounds it.
+ * beneath it inherits that, and a team's own `teamai-benchmark` workflow may relax it; the run's own timeout bounds it.
  *
  *   baselines                     (check tasks only) outputs { <task>: its baseline's result }
  *     <task>                      needs the baseline `parallel` before it; command teamai benchmark check --baseline; workspace:

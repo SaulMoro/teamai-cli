@@ -9,7 +9,7 @@ import { attemptDir, type AttemptId, type RunId } from '../../store.js';
 import { readLease } from './engine-replies.js';
 import type { ReadLease } from './transitions.js';
 
-const JobSchema = z.object({ lease: z.unknown() });
+const JobSchema = z.object({ lease: z.unknown().optional() });
 /** What a runner runs: its attempt's lease, masked, as the engine sent it (`raw`) and as this driver reads it. */
 export interface Job {
   raw: unknown;

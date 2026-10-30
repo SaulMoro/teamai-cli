@@ -31,7 +31,7 @@ samplingRate: 0
 Judge whether the session fixed the bug the member asked about.
 `;
 
-const EnvelopeSchema = z.object({ data: z.record(z.unknown()).optional(), error: z.object({ code: z.string(), message: z.string() }).optional() });
+const EnvelopeSchema = z.object({ data: z.record(z.string(), z.unknown()).optional(), error: z.object({ code: z.string(), message: z.string() }).optional() });
 const LabelSchema = z.object({ subject: z.object({ platform: z.string(), sessionId: z.string() }), judge: z.object({ kind: z.string() }), label: z.string() }).passthrough();
 
 function runCLI(args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<{ code: number | null; stdout: string; stderr: string }> {

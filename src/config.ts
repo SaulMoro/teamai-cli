@@ -1148,8 +1148,8 @@ function isUserTeamaiDir(dataHomeDir: string, projectRoot: string): boolean {
 function describeConfigError(e: unknown): string {
   if (e instanceof ZodError) {
     return e.issues.map((issue) => {
-      if (issue.code === 'invalid_enum_value' && issue.path.join('.') === 'scope') {
-        return `scope "${String(issue.received)}" is not one this teamai knows; a newer teamai may have written it. Run \`teamai update\``;
+      if (issue.code === 'invalid_value' && issue.path.join('.') === 'scope' && issue.message.startsWith('scope "')) {
+        return issue.message;
       }
       return `${issue.path.join('.') || '(root)'}: ${issue.message}`;
     }).join('; ');

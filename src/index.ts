@@ -909,11 +909,11 @@ workflowCmd
 
 const benchmarkCmd = program
   .command('benchmark')
-  .description('Run a benchmark suite, and the commands its run\'s steps run. run starts the workflow benchmark, teamai\'s default or the team\'s file of that name, whose plan, check and report steps run the other commands; try needs no run.');
+  .description('Run a benchmark suite, and the commands its run\'s steps run. run starts the workflow teamai-benchmark, teamai\'s default or the team\'s file of that name, whose plan, check and report steps run the other commands; try needs no run.');
 
 benchmarkCmd
   .command('run <suite>')
-  .description('Plan benchmark suite <suite> without a run first, so a suite that cannot run leaves none, then start the workflow benchmark with --inputs {"suite":"<suite>","aliases":"team"} ("member" with --member-aliases) and the suite\'s timeout as --timeout, and drive it. A team\'s workflows/benchmark.yaml replaces teamai\'s default, and must take input suite; it gets aliases only when it declares that input. Prints the run\'s done envelope and, on stderr, the results. Exits 1 when the run failed or was cancelled, or its report failed or was cancelled; a record still pending publication never changes the exit code.')
+  .description('Plan benchmark suite <suite> without a run first, so a suite that cannot run leaves none, then start the workflow teamai-benchmark with --inputs {"suite":"<suite>","aliases":"team"} ("member" with --member-aliases) and the suite\'s timeout as --timeout, and drive it. A team\'s workflows/teamai-benchmark.yaml replaces teamai\'s default, and must take input suite; it gets aliases only when it declares that input. Prints the run\'s done envelope and, on stderr, the results. Exits 1 when the run failed or was cancelled, or its report failed or was cancelled; a record still pending publication never changes the exit code.')
   .option('--driver <kind>', 'The driver that runs it: local (default), or skill')
   .option('--sandbox', 'With --driver local, declare this machine a sandbox for this process, where the trials, which need strict sandbox isolation, may run. workflows.sandbox in config declares it for every process.')
   .option('--member-aliases', 'Resolve each arm\'s model alias with your own ~/.teamai/models/aliases.yaml over the team\'s models/aliases.yaml, which alone resolves them otherwise: starts the workflow with input aliases member instead of team. The results table and the record show member as the source of a model your file decided.')

@@ -11,7 +11,7 @@ import { providerForRemote } from '../providers/registry.js';
 import type { GitProvider, PullRequestLookup, PullRequestRef } from '../providers/types.js';
 import { fakeGh, resolveGh } from './helpers/fake-gh.js';
 
-const ref: PullRequestRef = { repo: 'acme/app', source: 'teamai/run/work/p1', target: 'main', timeoutMs: 1000 };
+const ref: PullRequestRef = { repo: 'acme/app', source: 'teamai/run/work/p1', target: 'main', timeoutMs: 3000 };
 const pull = (head: string, repo = 'acme/app', number = 7) => ({
   state: 'open', html_url: `https://github.com/acme/app/pull/${number}`, head: { ref: head, repo: { full_name: repo } }, base: { ref: 'main', repo: { full_name: 'acme/app' } },
 });
@@ -80,18 +80,21 @@ setInterval(() => {}, 1000);
 `, { mode: 0o755 });
     resolveGh(launcher);
     let deadline: ReturnType<typeof setTimeout> | undefined;
-    const answer = lookup().findOpen({ ...ref, timeoutMs: 300 }).then(() => 'found', () => 'failed');
+    // macOS may take over 300 ms to start a newly written executable.
+    const timeoutMs = 3000;
+    let holder: number | undefined;
+    const answer = lookup().findOpen({ ...ref, timeoutMs }).then(() => 'found', () => 'failed');
     try {
-      await vi.waitFor(() => expect(fs.existsSync(pidFile)).toBe(true));
+      await expect.poll(() => fs.existsSync(pidFile), { timeout: 2500 }).toBe(true);
+      holder = Number(fs.readFileSync(pidFile, 'utf8'));
       const result = await Promise.race([
         answer,
-        new Promise<string>((resolve) => { deadline = setTimeout(() => resolve('still waiting for the pipe'), 1000); }),
+        new Promise<string>((resolve) => { deadline = setTimeout(() => resolve('still waiting for the pipe'), timeoutMs + 1000); }),
       ]);
       expect(result).toBe('failed');
     } finally {
       clearTimeout(deadline);
-      const pid = Number(fs.readFileSync(pidFile, 'utf8'));
-      process.kill(pid, 'SIGKILL');
+      if (holder !== undefined) process.kill(holder, 'SIGKILL');
       await answer;
     }
   });

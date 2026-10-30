@@ -23,6 +23,10 @@ export type SkillLoad =
 /** One way a machine moves a tool's home. */
 export type HomeMove =
   | { readonly kind: 'env'; readonly name: string; readonly evidence: Evidence }
+  /** Qoder: `QODER_CONFIG_DIR`, or `.qoder` inside `QODER_CLI_HOME`. */
+  | { readonly kind: 'qoder-home'; readonly evidence: Evidence }
+  /** Qoder CN: `QODERCN_CONFIG_DIR`, or `.qoder-cn` inside `QODERCN_CLI_HOME`. */
+  | { readonly kind: 'qoder-cn-home'; readonly evidence: Evidence }
   /** `$XDG_CONFIG_HOME/<child>`. */
   | { readonly kind: 'xdg'; readonly child: string; readonly evidence: Evidence }
   /**
@@ -611,7 +615,7 @@ export const TOOLS = {
   },
   joycode: {
     home: { dir: '.joycode' },
-    skillLoad: 'unknown',
+    skillLoad: { calls: [] },
     skills: UNKNOWN_READS,
     rules: {
       user: { channel: 'inline', label: 'JoyCode rules.txt' },
@@ -624,23 +628,24 @@ export const TOOLS = {
     // JoyCode loads an agent only through its `.joycode/agent.json` index, which teamai does not write.
     agents: { user: { reads: 'unknown' }, project: { reads: 'unknown' } },
     mcp: NONE,
-    hooks: { user: 'none', self: 'none' },
-    sessions: 'unknown',
+    // ~/.joycode/hooks.json and <project>/.joycode/hooks.json take Claude-shaped hooks (command type, timeout in seconds).
+    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.joycode/hooks.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', reads: [{ base: 'project', path: '.joycode/hooks.json', when: 'workspaceUnder', evidence: 'source' }] } },
+    sessions: ['joycode'],
     launch: 'none',
     features: {
       env: '?',
       workflows: '?',
       unattended: '?',
       recall: '◐s',
-      stats: '?',
+      stats: { cell: '✓t', note: 'A1 (#1245) records its skill loads; not rerun' },
       aiBackend: '?',
       votesJudge: '?',
-      sessionJudge: '?',
+      sessionJudge: { cell: '✓t', note: '#1386 the session judges its skill-driven run; not rerun' },
       agentHooks: '?',
     },
   },
   qoder: {
-    home: { dir: '.qoder' },
+    home: { dir: '.qoder', moves: { by: [{ kind: 'qoder-home', evidence: 'source' }] } },
     skillLoad: { calls: [{ name: 'Skill', evidence: 'source' }] },
     skills: UNKNOWN_READS,
     installedBy: 'home-edition',
@@ -661,8 +666,8 @@ export const TOOLS = {
       project: { format: 'claude', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'workspaceUnder', evidence: 'source' }] },
     },
     hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.qoder/settings.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'cwdOnly', evidence: 'source' }] } },
-    // Qoder CLI 1.1.78: <id>.jsonl under ~/.qoder/projects/<cwd>, moved by QODER_CONFIG_DIR.
-    sessions: 'none',
+    // Qoder CLI 1.1.78: <id>.jsonl under <QODER_CONFIG_DIR or QODER_CLI_HOME/.qoder or ~/.qoder>/projects/<cwd>.
+    sessions: ['qoder'],
     launch: 'qoder',
     features: {
       env: '?',
@@ -677,7 +682,7 @@ export const TOOLS = {
     },
   },
   'qoder-cn': {
-    home: { dir: '.qoder-cn' },
+    home: { dir: '.qoder-cn', moves: { by: [{ kind: 'qoder-cn-home', evidence: 'source' }] } },
     skillLoad: { calls: [{ name: 'Skill', evidence: 'source' }] },
     skills: UNKNOWN_READS,
     installedBy: 'home-edition',
@@ -698,8 +703,8 @@ export const TOOLS = {
       project: { format: 'claude', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'workspaceUnder', evidence: 'assumed' }] },
     },
     hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.qoder-cn/settings.json', evidence: 'source' }] }, self: { channel: 'settings', format: 'claude', reads: [{ base: 'project', path: '.qoder/settings.json', when: 'cwdOnly', evidence: 'source' }] } },
-    // Qoder CN: the same layout under ~/.qoder-cn, moved by the QODERCN_ variables.
-    sessions: 'none',
+    // Qoder CN: the same layout under ~/.qoder-cn, moved by QODERCN_CONFIG_DIR.
+    sessions: ['qoder-cn'],
     launch: 'none',
     features: {
       env: '?',
@@ -1322,6 +1327,10 @@ export function homeVariables(tool: ToolId): readonly string[] {
     switch (move.kind) {
       case 'env':
         return [move.name];
+      case 'qoder-home':
+        return ['QODER_CONFIG_DIR', 'QODER_CLI_HOME'];
+      case 'qoder-cn-home':
+        return ['QODERCN_CONFIG_DIR', 'QODERCN_CLI_HOME'];
       case 'xdg':
         return ['XDG_CONFIG_HOME'];
       case 'openclaw-state':

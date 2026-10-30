@@ -40,7 +40,7 @@ const RecordSchema = z.object({
   scorers: z.array(z.object({ name: z.string(), rubric: z.object({ sourceHash: z.string() }) })),
   trials: z.array(z.object({ arm: z.string(), result: z.string() }).passthrough()),
 });
-const RunSchema = z.object({ status: z.string(), verdicts: z.array(z.object({ scorer: z.string(), step: z.string(), outcome: z.record(z.unknown()) }).passthrough()) });
+const RunSchema = z.object({ status: z.string(), verdicts: z.array(z.object({ scorer: z.string(), step: z.string(), outcome: z.record(z.string(), z.unknown()) }).passthrough()) });
 const DoneSchema = z.object({ done: z.object({ run: z.string(), outcome: z.string(), outputs: z.object({ text: z.string() }) }) });
 
 const fixtures: BenchmarkFixture[] = [];
@@ -148,8 +148,8 @@ const EXTERNAL = { kind: 'external', machine: 'ci', workspace: '/work' };
 const CAN = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, setup: true, tools: ['claude'], unattended: true };
 const NextSchema = z.object({
   data: z.union([
-    z.object({ lease: z.object({ attempt: z.string(), revision: z.number(), step: z.string(), command: z.string().optional(), prompt: z.string().optional(), env: z.record(z.string()).optional(), cwd: z.string() }).passthrough() }),
-    z.object({ wait: z.record(z.unknown()) }),
+    z.object({ lease: z.object({ attempt: z.string(), revision: z.number(), step: z.string(), command: z.string().optional(), prompt: z.string().optional(), env: z.record(z.string(), z.string()).optional(), cwd: z.string() }).passthrough() }),
+    z.object({ wait: z.record(z.string(), z.unknown()) }),
     z.object({ done: z.object({ outcome: z.string(), outputs: z.object({ text: z.string() }).partial().optional() }).passthrough() }),
   ]),
 });
@@ -191,7 +191,7 @@ async function drive(fixture: BenchmarkFixture, run: string, polls: number) {
 describe('benchmark judges of an external driver', () => {
   it("judges a trial from the evidence collected at the driver's report, with teamai score, and only then ends the run", async () => {
     const fixture = await judgedFixture();
-    const started = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m']);
+    const started = await fixture.teamai(['workflow', 'start', 'teamai-benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m']);
     const runId = z.object({ run: z.string() }).parse(envelope(started).data).run;
 
     const judging = await drive(fixture, runId, 5);

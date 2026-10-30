@@ -544,7 +544,7 @@ describe('pull role-aware sync and cleanup', () => {
     await fse.writeFile(path.join(homeDir, '.claude/skills', 'pm-skill', 'SKILL.md'), '# PM');
     await fse.ensureDir(path.join(repoPath, 'skills', 'pm', 'pm-skill'));
     await fse.writeFile(path.join(repoPath, 'skills', 'pm', 'pm-skill', 'SKILL.md'), '# PM');
-    const teamConfig = vi.mocked(loadTeamConfig).mock.results.at(-1)?.value;
+    const teamConfig = (await loadTeamConfig(repoPath))!;
     const localConfig = {
       repo: { localPath: repoPath, remote: 'https://git.woa.com/test/repo.git' },
       username: 'testuser',
@@ -573,7 +573,7 @@ describe('pull role-aware sync and cleanup', () => {
     await fse.writeFile(path.join(homeDir, '.claude/skills', 'pm-skill', 'unpublished.py'), 'print("wip")');
     await fse.ensureDir(path.join(repoPath, 'skills', 'pm', 'pm-skill'));
     await fse.writeFile(path.join(repoPath, 'skills', 'pm', 'pm-skill', 'SKILL.md'), '# PM');
-    const teamConfig = vi.mocked(loadTeamConfig).mock.results.at(-1)?.value;
+    const teamConfig = (await loadTeamConfig(repoPath))!;
     const localConfig = {
       repo: { localPath: repoPath, remote: 'https://git.woa.com/test/repo.git' },
       username: 'testuser', updatePolicy: 'auto' as const,
@@ -595,7 +595,7 @@ describe('pull role-aware sync and cleanup', () => {
   it('KEEPS a stale skill when its team-repo source is gone (cannot verify → no delete)', async () => {
     await fse.ensureDir(path.join(homeDir, '.claude/skills', 'orphan-skill'));
     await fse.writeFile(path.join(homeDir, '.claude/skills', 'orphan-skill', 'SKILL.md'), '# orphan');
-    const teamConfig = vi.mocked(loadTeamConfig).mock.results.at(-1)?.value;
+    const teamConfig = (await loadTeamConfig(repoPath))!;
     const localConfig = {
       repo: { localPath: repoPath, remote: 'https://git.woa.com/test/repo.git' },
       username: 'testuser', updatePolicy: 'auto' as const,
@@ -622,7 +622,7 @@ describe('pull role-aware sync and cleanup', () => {
     await fse.writeFile(path.join(homeDir, '.claude/skills', 'vcs-skill', '.git', 'HEAD'), 'ref: refs/heads/main\n');
     await fse.ensureDir(path.join(repoPath, 'skills', 'pm', 'vcs-skill'));
     await fse.writeFile(path.join(repoPath, 'skills', 'pm', 'vcs-skill', 'SKILL.md'), '# VCS');
-    const teamConfig = vi.mocked(loadTeamConfig).mock.results.at(-1)?.value;
+    const teamConfig = (await loadTeamConfig(repoPath))!;
     const localConfig = {
       repo: { localPath: repoPath, remote: 'https://git.woa.com/test/repo.git' },
       username: 'testuser', updatePolicy: 'auto' as const,
@@ -654,7 +654,7 @@ describe('pull role-aware sync and cleanup', () => {
     await fse.ensureDir(path.join(src, 'scripts'));
     await fse.writeFile(path.join(src, 'SKILL.md'), '# Nested');
     await fse.writeFile(path.join(src, 'scripts', 'runner.py'), 'print("run")');
-    const teamConfig = vi.mocked(loadTeamConfig).mock.results.at(-1)?.value;
+    const teamConfig = (await loadTeamConfig(repoPath))!;
     const localConfig = {
       repo: { localPath: repoPath, remote: 'https://git.woa.com/test/repo.git' },
       username: 'testuser', updatePolicy: 'auto' as const,

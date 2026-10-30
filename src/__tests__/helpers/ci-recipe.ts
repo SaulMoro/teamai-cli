@@ -3,10 +3,10 @@ import { parseDocument } from 'yaml';
 import { z } from 'zod';
 
 const RecipeSchema = z.object({
-  jobs: z.record(z.object({
+  jobs: z.record(z.string(), z.object({
     'runs-on': z.string().optional(),
-    env: z.record(z.string()).optional(),
-    steps: z.array(z.object({ uses: z.string().optional(), with: z.record(z.unknown()).optional(), run: z.string().optional() })),
+    env: z.record(z.string(), z.string()).optional(),
+    steps: z.array(z.object({ uses: z.string().optional(), with: z.record(z.string(), z.unknown()).optional(), run: z.string().optional() })),
   })),
 });
 export type CiRecipe = z.infer<typeof RecipeSchema>;

@@ -151,7 +151,7 @@ export const CanSchema = z.object({
   workspace: z.array(z.enum(WORKSPACE_MODES)).optional(),
   network: z.boolean().optional(),
   isolation: IsolationSchema.optional(),
-  env: z.union([z.boolean(), z.literal('commands')], { errorMap: () => ({ message: "Expected true, false or 'commands'" }) }).optional(),
+  env: z.union([z.boolean(), z.literal('commands')], { error: "Expected true, false or 'commands'" }).optional(),
   tokens: z.boolean().optional(),
   max_turns: z.boolean().optional(),
   setup: z.boolean().optional(),

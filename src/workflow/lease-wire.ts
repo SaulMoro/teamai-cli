@@ -16,7 +16,7 @@ export const LeaseWireSchema = LeaseIdSchema.extend({
   /** The step path, such as `check.classify` inside a sub-workflow. */
   step: z.string(),
   command: z.string().optional(),
-  env: z.record(z.string()).optional(),
+  env: z.record(z.string(), z.string()).optional(),
   prompt: z.string().optional(),
   agent: z.string().optional(),
   /** The tool the prompt step names, which this driver listed in `can.tools`. */

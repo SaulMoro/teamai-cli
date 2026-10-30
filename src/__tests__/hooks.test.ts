@@ -416,16 +416,16 @@ describe('hooks', () => {
       process.env.HOME = '/test-home';
 
       try {
-        await injectHooksToAllTools({ joycode: { settings: '.joycode/settings.json' }, trae: { settings: '.trae/settings.json' } });
-        await reconcileHooksToAllTools({ joycode: { settings: '.joycode/settings.json' } }, '/test-home', [], '/test-home/.teamai/managed-hooks.json', {});
+        await injectHooksToAllTools({ trae: { settings: '.trae/settings.json' } });
+        await reconcileHooksToAllTools({ trae: { settings: '.trae/settings.json' } }, '/test-home', [], '/test-home/.teamai/managed-hooks.json', {});
 
         expect(Object.keys(mockFiles)).toEqual([]);
 
         // Removal still clears what an earlier release wrote there.
-        await injectHooks(path.join('/test-home', '.joycode/settings.json'), 'claude');
-        await reconcileHooksToAllTools({ joycode: { settings: '.joycode/settings.json' } }, '/test-home', [], '/test-home/.teamai/managed-hooks.json', { removeAll: true });
+        await injectHooks(path.join('/test-home', '.trae/settings.json'), 'claude');
+        await reconcileHooksToAllTools({ trae: { settings: '.trae/settings.json' } }, '/test-home', [], '/test-home/.teamai/managed-hooks.json', { removeAll: true });
 
-        expect(JSON.stringify(mockFiles[path.join('/test-home', '.joycode/settings.json')])).not.toContain('teamai hook-dispatch');
+        expect(JSON.stringify(mockFiles[path.join('/test-home', '.trae/settings.json')])).not.toContain('teamai hook-dispatch');
       } finally {
         process.env.HOME = originalHome;
       }

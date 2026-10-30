@@ -33,7 +33,7 @@ describe('hooks inject --dry-run (real CLI)', () => {
     if (!fs.existsSync(cli)) throw new Error(`CLI binary not found at ${cli}. Run "npm run build" first.`);
     sandbox = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-hooks-preview-'));
     home = path.join(sandbox, 'home');
-    fakeBin = installFakeCodex();
+    fakeBin = installFakeCodex({ version: '9999.0.0' });
     const teamRepo = path.join(home, '.teamai', 'team-repo');
     fs.mkdirSync(path.join(teamRepo, 'hooks'), { recursive: true });
     fs.mkdirSync(path.join(home, '.claude'), { recursive: true });

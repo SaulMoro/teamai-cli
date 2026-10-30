@@ -149,7 +149,7 @@ describe('requireInit: missing config versus unreadable config', () => {
     vi.mocked(log.error).mockClear();
 
     await expect(requireInit()).rejects.toThrow('the error is printed above');
-    expect(vi.mocked(log.error)).toHaveBeenCalledWith(expect.stringMatching(/username: Expected string, received number/));
+    expect(vi.mocked(log.error)).toHaveBeenCalledWith(expect.stringMatching(/username: Invalid input: expected string, received number/));
     expect(vi.mocked(log.error).mock.calls.flat().join('')).not.toContain('\n');
   });
 });
@@ -237,7 +237,7 @@ describe('findUnreadableProjectConfig', () => {
 
     const problem = await findUnreadableProjectConfig(dir);
     expect(problem).toContain(configPath);
-    expect(problem).toMatch(/repo: Expected object, received number/);
+    expect(problem).toMatch(/repo: Invalid input: expected object, received number/);
     expect(problem).not.toContain('\n');
   });
 

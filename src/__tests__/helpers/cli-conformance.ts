@@ -31,7 +31,7 @@ export function runCLI(
 }
 
 const EnvelopeSchema: z.ZodType<WorkflowEnvelope> = z.union([
-  z.object({ data: z.record(z.unknown()) }),
+  z.object({ data: z.record(z.string(), z.unknown()) }),
   z.object({ error: z.object({ code: z.string(), message: z.string() }).passthrough() }),
 ]);
 

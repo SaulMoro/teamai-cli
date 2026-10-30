@@ -48,7 +48,7 @@ export const GitAnswers = {
 /** The newest answers of each kind that stay on disk. */
 const KEPT_PER_KIND = 64;
 
-const Kept = z.record(z.string(), z.record(z.string(), z.object({ stamp: z.string(), answer: z.unknown() })));
+const Kept = z.record(z.string(), z.record(z.string(), z.object({ stamp: z.string(), answer: z.unknown().optional() })));
 type Kept = z.infer<typeof Kept>;
 
 let keptFileAt: { tmp: string; file: Promise<string | null> } | undefined;

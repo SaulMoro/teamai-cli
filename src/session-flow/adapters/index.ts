@@ -24,6 +24,8 @@ export const ADAPTER_REGISTRY: Record<string, AdapterFactory> = {
   // Base platforms
   'claude-code': (toolRoots) => new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', toolRoots)),
   codex: (toolRoots) => new CodexAdapter('codex', sessionStoreDir('codex', toolRoots)),
+  qoder: (toolRoots) => new ClaudeCodeAdapter('qoder', sessionStoreDir('qoder', toolRoots)),
+  'qoder-cn': (toolRoots) => new ClaudeCodeAdapter('qoder-cn', sessionStoreDir('qoder-cn', toolRoots)),
   // CodeBuddy has two independent stores, split into two platforms:
   //   codebuddy     = CLI (<CodeBuddy home>/projects/...)
   //   codebuddy-ide = IDE GUI (CodeBuddyExtension/.../history)
@@ -38,6 +40,7 @@ export const ADAPTER_REGISTRY: Record<string, AdapterFactory> = {
   tclaude: (toolRoots) => new ClaudeCodeAdapter('tclaude', sessionStoreDir('tclaude', toolRoots)),
   'codex-internal': (toolRoots) => new CodexAdapter('codex-internal', sessionStoreDir('codex-internal', toolRoots)),
   tcodex: (toolRoots) => new CodexAdapter('tcodex', sessionStoreDir('tcodex', toolRoots)),
+  joycode: (toolRoots) => new CodexAdapter('joycode', sessionStoreDir('joycode', toolRoots)),
 } satisfies Record<SessionPlatform, AdapterFactory>;
 
 export function getAdapter(platform: string, toolRoots?: LocalConfig['toolRoots']): AgentAdapter {

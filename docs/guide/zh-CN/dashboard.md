@@ -15,7 +15,7 @@ teamai dashboard --port 8080
 
 总览页的**会话共享**面板针对当前工作区，说明在每种[运行模式](workflow.md#有人值守与无人值守的运行)下会话是否发布到 `teamai-reports`、是否评分，以及原因：
 
-- 每种模式的发布和评分策略，以及它来自哪项设置，如 `the default` 或 `teamai.yaml sessions.publish.unattended`。有人值守的 `ask` 显示“摩擦提醒提供 session-close 时提议”（见 [session-close](workflow.md#session-close)）；无人值守的 `ask` 显示“等同于 off：无人在场确认”。
+- 每种模式的发布和评分策略，以及它来自哪项设置，如 `the default` 或 `teamai.yaml sessions.publish.unattended`。有人值守的 `ask` 显示“摩擦提醒提供 teamai-share-learnings 时提议”（见 [teamai-share-learnings](workflow.md#teamai-share-learnings-和-teamai-share-session)）；无人值守的 `ask` 显示“等同于 off：无人在场确认”。
 - 本机在每种模式下捕获的会话：活跃、等待 drain、保留在本机、等待归档、已归档。文件已不存在的会话不计入。另有已结束运行中等待归档的步骤会话。
 - 正在等待的内容，以及要运行的 drain。drain 只结束并发布与其运行模式相同的会话，因此在有人值守的机器上，面板会为无人值守会话给出 `TEAMAI_MODE=unattended teamai score --drain`，在 Windows 上则是 `$env:TEAMAI_MODE='unattended'; teamai score --drain`。
 - 归档位置、`daily_limit` 及其来自哪项设置、评判会话的评分器、teamai 不读取其会话的已启用工具，以及 `teamai doctor` 报告的设置问题。
@@ -37,7 +37,7 @@ teamai dashboard --port 8080
 
 ## 工作流运行（Workflow Runs）
 
-工作流运行页为当前工作区列出三部分。**本机运行**是这台机器上的运行文件，实时读取：状态、已租用的步骤、等待回答的 HITL 请求，以及已结束运行的记录是否已送达团队。**团队上报历史**是 `teamai-reports` 分支上所有成员的运行记录。每行显示工作流、驱动、状态、命名结局、时长、token、所运行的定义以及交付的拉取请求。定义对团队工作流显示 `团队 <修订>`（没有已推送提交包含它时显示“无团队修订”），对 `session-close` 这样的[默认工作流](workflow.md#默认工作流)显示 `teamai 默认 <版本>`，两种情况下面都显示源哈希。
+工作流运行页为当前工作区列出三部分。**本机运行**是这台机器上的运行文件，实时读取：状态、已租用的步骤、等待回答的 HITL 请求，以及已结束运行的记录是否已送达团队。**团队上报历史**是 `teamai-reports` 分支上所有成员的运行记录。每行显示工作流（有别名时显示别名，名称在下方）、驱动、状态、命名结局、时长、token、所运行的定义以及产出：交付的拉取请求和分享的经验，例如一次 `teamai-share-learnings` 运行贡献的两条经验。定义对团队工作流显示 `团队 <修订>`（没有已推送提交包含它时显示“无团队修订”），对 `teamai-share-session` 这样的[默认工作流](workflow.md#默认工作流)显示 `teamai 默认 <版本>`，两种情况下面都显示源哈希。
 
 **交接的运行**是有人[发布](workflow.md#在另一台机器上继续运行)的运行中的运行，每个都附带接手它的命令：
 
@@ -140,6 +140,17 @@ partial 未通过     alice   good 通过  codex / gpt-5.1-codex            10/2
 
 资源页列出团队仓库里的每条规则在当前工作区的情况：名称、命名空间、描述，以及 `pull` 是否会把它交付到这里。根规则人人都收到；命名空间规则跟随活跃的知识命名空间；同名根规则被活跃命名空间规则取代时会标注「已取代」；被标签订阅排除的规则也会标注。
 
+技能也按同样方式列出。因为已交付同名副本而未交付的技能，会写明交付的是哪一份，以及哪些角色能交付它，和 [`pull` 的提示](distribution.md#根目录和命名空间里有同名技能)一致：
+
+```text
+oncall   sre   未交付
+               已改为交付同名技能
+               改为交付： skills/ops/oncall
+               设置以下任一角色即可获得此副本： sre    选择角色 →
+```
+
+宽度小于 1100 px 时，每个技能显示为一张卡片。
+
 ## 人工干预指标（Human Intervention）
 
 每个会话计三种次数：中途打断（`interrupt`）、拒绝工具调用（`toolReject`）、结束后马上用「不对 / 重来 / wrong」这类词纠正（`correction`）。
@@ -181,7 +192,7 @@ teamai session save --push --force
 
 `teamai session` 在工具之间迁移完整会话，或归档到团队仓库。`session save` 仍是脱敏摘要。
 
-平台：`claude-code`、`codex`、`codebuddy`、`codebuddy-ide`、`cursor`、`workbuddy`、`opencode`（通过 2.0 及以上版本的 `opencode` CLI；作为目标时，目标工作区必须已存在）和 `agy`（Antigravity CLI 和 Antigravity 2.0，分别从 `~/.gemini/antigravity-cli` 和 `~/.gemini/antigravity` 读取对话；Antigravity IDE 不记录对话的工作区，所以不列出它的会话；只能作为来源，因为 agy 只从 teamai 无法写入的存储恢复对话；读取需要 `sqlite3` CLI）。`teamai session platforms` 查看本机已安装的。 CodeBuddy CLI 和 WorkBuddy 的项目目录名超过 255 个 UTF-8 字节时，使用工具原生的 180 字节前缀和 hash，长工作区路径也能列出、读取和迁移会话。在 Windows 上，`cursor` 和 `workbuddy` 不能作为 migrate 或 resume 的目标：它们要等 `sqlite3` CLI 登记后才会列出会话，所以 TeamAI 直接拒绝，而不是写一份它们永远不显示的副本。
+平台：`claude-code`、`codex`、`qoder`、`qoder-cn`、`codebuddy`、`codebuddy-ide`、`cursor`、`workbuddy`、`opencode`（通过 2.0 及以上版本的 `opencode` CLI；作为目标时，目标工作区必须已存在）和 `agy`（Antigravity CLI 和 Antigravity 2.0，分别从 `~/.gemini/antigravity-cli` 和 `~/.gemini/antigravity` 读取对话；Antigravity IDE 不记录对话的工作区，所以不列出它的会话；只能作为来源，因为 agy 只从 teamai 无法写入的存储恢复对话；读取需要 `sqlite3` CLI）。`teamai session platforms` 查看本机已安装的。 CodeBuddy CLI 和 WorkBuddy 的项目目录名超过 255 个 UTF-8 字节时，使用工具原生的 180 字节前缀和 hash，长工作区路径也能列出、读取和迁移会话。在 Windows 上，`cursor` 和 `workbuddy` 不能作为 migrate 或 resume 的目标：它们要等 `sqlite3` CLI 登记后才会列出会话，所以 TeamAI 直接拒绝，而不是写一份它们永远不显示的副本。
 
 ```bash
 teamai session migrate <sessionId> -s codebuddy-ide -t claude-code

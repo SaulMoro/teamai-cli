@@ -75,7 +75,7 @@ This is the #1 onboarding issue. In order:
    then retry removal.
    If you initialized workspace scope but expected machine-wide resources, re-run
    with `--scope user`.
-5. **Tool has no hook surface** (e.g. Gemini CLI, JoyCode): there is no auto-sync;
+5. **Tool has no hook surface** (e.g. Gemini CLI): there is no auto-sync;
    run `teamai pull` manually each time.
 6. **Claude Code or Codex reads a different directory** (`CLAUDE_CONFIG_DIR` or
    `CODEX_HOME` is set). `teamai doctor` reports `Claude Code root matches
@@ -288,6 +288,13 @@ Different AI hosts handle the hooks that TeamAI injects differently. When this
 conversation runs in one of these, proactively walk the user through the extra
 step — do not assume auto-sync just works.
 
+### JoyCode Desktop
+
+Review and trust each TeamAI hook in **Settings > Hooks** before it can run.
+Until the hooks are trusted and enabled, run `teamai pull` at the start of each
+session.
+
+
 ### Codex
 
 Codex runs a non-managed hook only once it is **trusted**. `teamai init`, `pull`
@@ -354,7 +361,7 @@ The agy CLI, Antigravity 2.0 and Antigravity IDE read hooks only from `~/.gemini
 
 ### Tools without a writable hook surface
 
-Gemini CLI, JoyCode, and similar tools have no TeamAI-writable hook surface —
+Gemini CLI and similar tools have no TeamAI-writable hook surface —
 there is no auto-sync. Tell the user to run `teamai pull` manually at the start of
 each session.
 
@@ -372,10 +379,10 @@ session's runs, recalled docs and adopted docs. Per agent:
   `teamai-recall` subagent runs are credited when the main agent opens the doc.
   On OMP the subagent's recall needs the main session's file on disk, so a
   `--no-session` run credits only the main agent's own recalls.
-- **Cursor, Copilot CLI, ZCode, Pi**: only a recall the main agent runs
+- **Cursor, Copilot CLI, ZCode, Pi, JoyCode**: only a recall the main agent runs
   itself. A subagent's recall is not linked to the main session, and Pi has no
   TeamAI subagent.
-- **OpenClaw, Hermes, Kiro, JoyCode, Trae**: no PostToolUse hook, so recalls never
+- **OpenClaw, Hermes, Kiro, Trae**: no PostToolUse hook, so recalls never
   vote.
 - **Antigravity**: its PostToolUse carries no tool output, so a recall never
   reaches the recall log and never votes.

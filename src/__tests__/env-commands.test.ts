@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fse from 'fs-extra';
@@ -60,7 +60,7 @@ describe('env-commands', () => {
   let repoPath: string;
   let teamConfig: TeamaiConfig;
   let localConfig: LocalConfig;
-  let consoleSpy: ReturnType<typeof vi.spyOn>;
+  let consoleSpy: MockInstance<typeof console.log>;
 
   beforeEach(async () => {
     tmpDir = await fse.mkdtemp(path.join(os.tmpdir(), 'teamai-env-cmd-test-'));

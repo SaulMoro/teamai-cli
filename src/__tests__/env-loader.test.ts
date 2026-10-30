@@ -57,6 +57,7 @@ describe('team env by directory (#1018)', () => {
   afterEach(async () => {
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
+    vi.clearAllMocks();
     await fse.remove(tmpDir);
   });
 

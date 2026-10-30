@@ -103,7 +103,7 @@ export interface CliResult {
 }
 
 const EnvelopeSchema = z.object({
-  data: z.record(z.unknown()).optional(),
+  data: z.record(z.string(), z.unknown()).optional(),
   error: z.object({ code: z.string(), message: z.string() }).passthrough().optional(),
 });
 export type Envelope = z.infer<typeof EnvelopeSchema>;
@@ -171,7 +171,7 @@ export function envelope(result: CliResult): Envelope {
 
 /** Starts the benchmark workflow on suite `fix` for an external driver, bounded by `timeout`, and answers its run. */
 export async function startFixBenchmark(fixture: BenchmarkFixture, timeout = '10m'): Promise<string> {
-  const answer = await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', timeout]);
+  const answer = await fixture.teamai(['workflow', 'start', 'teamai-benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', timeout]);
   const run = envelope(answer).data?.run;
   if (typeof run !== 'string') throw new Error(`no run: ${said(answer)}`);
   return run;
@@ -186,7 +186,7 @@ export async function runFixBenchmark(fixture: BenchmarkFixture): Promise<string
 }
 
 const CommandLeaseSchema = z.object({
-  step: z.string(), attempt: z.string(), revision: z.number(), command: z.string().optional(), env: z.record(z.string()).optional(), cwd: z.string().optional(),
+  step: z.string(), attempt: z.string(), revision: z.number(), command: z.string().optional(), env: z.record(z.string(), z.string()).optional(), cwd: z.string().optional(),
 }).passthrough();
 
 /**
@@ -510,7 +510,7 @@ process.stdout.write(JSON.stringify({ type: 'result', session_id: 'fake-session'
   };
   const configPath = path.join(dataHome(), 'config.yaml');
   const config: unknown = YAML.parse(fs.readFileSync(configPath, 'utf8'));
-  const parsed = z.object({ repo: z.object({ localPath: z.string() }).passthrough(), workflows: z.record(z.unknown()).optional() }).passthrough().parse(config);
+  const parsed = z.object({ repo: z.object({ localPath: z.string() }).passthrough(), workflows: z.record(z.string(), z.unknown()).optional() }).passthrough().parse(config);
   fs.writeFileSync(configPath, YAML.stringify({ ...parsed, workflows: { ...parsed.workflows, sandbox: options.sandbox, ...(options.maxParallel !== undefined ? { max_parallel: options.maxParallel } : {}) } }));
 
   return {
@@ -674,7 +674,7 @@ export function fixRecord(run: string, { startedAt, username, result = 'passed',
 }): BenchmarkRunRecord {
   return {
     schemaVersion: 1, run, outcome: 'succeeded', teamaiVersion: '0.0.0', startedAt, finishedAt: startedAt, ...(username ? { username } : {}),
-    workflow: { name: 'benchmark', origin: { source: 'team' }, sourceHash: 'f'.repeat(64) },
+    workflow: { name: 'teamai-benchmark', origin: { source: 'team' }, sourceHash: 'f'.repeat(64) },
     suite: { name: 'fix', sourceHash: 's1' }, repetitions: 1, baselineTeamRevision: team, scorers: [],
     tasks: [{ id: 'fix', startingCommit: RUN_START, sourceHash: 't1', baseline: 'valid' }],
     arms: tools.map((tool) => ({ name: tool, tool, source: 'team', team: { kind: 'pulled', revision: team } })),

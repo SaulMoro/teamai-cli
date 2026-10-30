@@ -23,6 +23,7 @@ import { installOwner, readRun, updateRun } from '../workflow/store.js';
 import type { StepState } from '../workflow/step-state.js';
 import type { DriverIdentity, RunState, WorkflowDefinition, WorkflowEnvelope } from '../workflow/types.js';
 import { knownSecrets } from '../env-resolution.js';
+import * as cliPaths from '../utils/cli-path.js';
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -53,6 +54,10 @@ steps:
 function fixture(scorerText: string, overrides: Partial<LocalConfig> = {}): LocalConfig {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-workflow-scoring-'));
   dirs.push(root);
+  vi.spyOn(cliPaths, 'resolveCliPath').mockImplementation((cmd) => {
+    const executable = path.join(root, 'bin', cmd);
+    return fs.existsSync(executable) ? executable : null;
+  });
   const knowledge = path.join(root, 'knowledge');
   fs.mkdirSync(path.join(knowledge, 'workflows'), { recursive: true });
   fs.mkdirSync(path.join(knowledge, 'scorers'), { recursive: true });
@@ -234,6 +239,12 @@ console.log(JSON.stringify({ type: 'result', structured_output: { label: 'great'
     const run = await runOf(config, runId);
     expect(Object.keys(run.scorers ?? {})).toEqual(['quality']);
     expect(run.steps[0]).toMatchObject({ installId: (await installOwner(config)).id });
+  });
+
+  it('explains that a judge needs at least one tool', () => {
+    expect(parseJudgeRequest({ driver: { ...judgeDriver, can: { judge: { isolation: 'verified', tools: [] } } } })).toBe(
+      'driver.can.judge.tools: Array must contain at least 1 element(s)',
+    );
   });
 
   it('records the access the driver declares for its judge, full when it declares none', async () => {
@@ -977,7 +988,7 @@ steps:
     if (team) fs.writeFileSync(path.join(config.repo.localPath, 'scorers', 'scoring.yaml'), team);
     return config;
   }
-  const BatchLeaseSchema = LeaseSchema.extend({ scorers: z.array(z.string()), batched: z.literal(true), answer: z.object({ schema: z.record(z.unknown()) }) });
+  const BatchLeaseSchema = LeaseSchema.extend({ scorers: z.array(z.string()), batched: z.literal(true), answer: z.object({ schema: z.record(z.string(), z.unknown()) }) });
   const labelsOf = (config: LocalConfig): unknown[] =>
     fs.readFileSync(path.join(config.dataHome ?? '', 'scores', 'labels.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as unknown);
   const both = { quality: { label: 'good', reasoning: 'Found the defect.' }, tests: { label: 'thin', reasoning: 'No test for it.' } };
@@ -1312,7 +1323,7 @@ process.stdin.resume(); process.stdin.on('end', () => console.log(JSON.stringify
     const runId = await settledRun(config);
     const lease = leaseOf(await nextJudgeLease(config, request()));
     const file = path.join(config.dataHome ?? '', 'workflows', 'runs', `${runId}.json`);
-    const run = z.object({ scorers: z.record(z.object({ sourceHash: z.string(), content: z.string() })) }).passthrough().parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+    const run = z.object({ scorers: z.record(z.string(), z.object({ sourceHash: z.string(), content: z.string() })) }).passthrough().parse(JSON.parse(fs.readFileSync(file, 'utf8')));
     const content = scorer(100).replace('value: good', 'value: excellent');
     fs.writeFileSync(file, JSON.stringify({ ...run, scorers: { quality: { sourceHash: 'f'.repeat(64), content } } }));
 

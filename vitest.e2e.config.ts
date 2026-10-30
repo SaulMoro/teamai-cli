@@ -29,7 +29,6 @@ export default defineConfig({
     // Build before the runner: rebuilding inside a test would delete dist
     // while another file's CLI subprocess is using it.
     fileParallelism: true,
-    minWorkers: 1,
     // GitHub's runner has 4 vCPUs: 4 workers halve the job against 2.
     maxWorkers: 4,
     // Retry once: flaky tests recover, real bugs stay failed.

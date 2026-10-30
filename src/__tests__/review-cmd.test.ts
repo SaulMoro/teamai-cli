@@ -2,7 +2,7 @@
 import os from 'node:os';
 import path from 'node:path';
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import fs from 'fs-extra';
 
 // ─── Mocks ──────────────────────────────────────────────
@@ -58,7 +58,7 @@ function makeItem(overrides: Partial<PendingReviewItem> = {}): PendingReviewItem
 describe('review-cmd', () => {
     let cwd: string;
     let originalCwd: string;
-    let consoleSpy: ReturnType<typeof vi.spyOn>;
+    let consoleSpy: MockInstance<typeof console.log>;
 
     beforeEach(async () => {
         cwd = await makeWorkdir();

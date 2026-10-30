@@ -340,7 +340,7 @@ describe('skill driver', () => {
     if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
     const { run } = started.data.turn;
     const file = skillStatePath(harness.config, run);
-    const state = z.object({ options: z.record(z.unknown()) }).passthrough().parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+    const state = z.object({ options: z.record(z.string(), z.unknown()) }).passthrough().parse(JSON.parse(fs.readFileSync(file, 'utf8')));
     const { mode: _mode, ...options } = state.options;
     fs.writeFileSync(file, JSON.stringify({ ...state, options }));
     harness.hold(false);
@@ -355,7 +355,7 @@ describe('skill driver', () => {
     if (!('data' in started) || !('turn' in started.data)) throw new Error(JSON.stringify(started));
     const { run } = started.data.turn;
     const file = skillStatePath(harness.config, run);
-    const state = z.object({ orchestrator: z.record(z.unknown()) }).passthrough().parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+    const state = z.object({ orchestrator: z.record(z.string(), z.unknown()) }).passthrough().parse(JSON.parse(fs.readFileSync(file, 'utf8')));
     fs.writeFileSync(file, JSON.stringify({ ...state, orchestrator: { ...state.orchestrator, tool: 'newer-tool' } }));
     harness.hold(false);
     expect(await harness.call({ kind: 'next', run, wait: false })).toMatchObject({ data: { turn: { run } } });

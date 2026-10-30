@@ -269,7 +269,7 @@ describe('teamai benchmark check', () => {
   /** A driver of another machine that provides the clones and sandbox a benchmark's steps require. */
   const driver = { kind: 'external', machine: 'ci', workspace: '/work' };
   const can = { workspace: ['read-only', 'new', 'continue', 'clone'], isolation: 'sandbox', env: true, setup: true, tools: ['claude'] };
-  const LeaseSchema = z.object({ attempt: z.string(), revision: z.number(), step: z.string(), command: z.string().optional(), env: z.record(z.string()).optional(), cwd: z.string() }).passthrough();
+  const LeaseSchema = z.object({ attempt: z.string(), revision: z.number(), step: z.string(), command: z.string().optional(), env: z.record(z.string(), z.string()).optional(), cwd: z.string() }).passthrough();
   const NextSchema = z.object({ data: z.object({ lease: LeaseSchema }).passthrough() });
   const StoredPlanSchema = z.object({
     admitted: z.object({ plan: z.object({ output: z.object({ plan: z.object({ schemaVersion: z.number() }).passthrough() }).passthrough() }).passthrough() }).passthrough(),
@@ -301,7 +301,7 @@ describe('teamai benchmark check', () => {
   it('refuses a run whose plan has a schemaVersion this teamai does not know', async () => {
     const fixture = await benchmarkFixture({ tool: 'fixes', sandbox: true, tools: ['claude'] });
     fixtures.push(fixture);
-    const run = envelope(await fixture.teamai(['workflow', 'start', 'benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m'])).data?.run;
+    const run = envelope(await fixture.teamai(['workflow', 'start', 'teamai-benchmark', '--inputs', '{"suite":"fix","aliases":"team"}', '--timeout', '10m'])).data?.run;
     if (typeof run !== 'string') throw new Error('the run did not start');
     const baseline = await leaseAfterPlan(fixture, run);
     const projects = path.join(fixture.home, '.teamai', 'projects');

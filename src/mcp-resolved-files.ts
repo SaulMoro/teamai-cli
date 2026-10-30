@@ -54,7 +54,7 @@ export interface McpFileObservation {
 
 // Fields a later teamai adds are carried through a rewrite.
 const FileSchema = z.object({ tools: z.array(z.string()), unverified: z.array(z.string()).optional() }).passthrough();
-const SidecarSchema = z.object({ version: z.literal(1), files: z.record(z.unknown()) }).passthrough();
+const SidecarSchema = z.object({ version: z.literal(1), files: z.record(z.string(), z.unknown()) }).passthrough();
 
 type Sidecar = z.infer<typeof SidecarSchema> & { files: Record<string, z.infer<typeof FileSchema>> };
 

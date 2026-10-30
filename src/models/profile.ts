@@ -153,7 +153,7 @@ const StoredModelInputSchema = z.object({
   value: z.string().optional(),
   env: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).optional(),
 }).strict();
-const StoredModelInputsSchema = z.record(z.object({ API_KEY: StoredModelInputSchema.optional() }).strict());
+const StoredModelInputsSchema = z.record(z.string(), z.object({ API_KEY: StoredModelInputSchema.optional() }).strict());
 
 export interface ResolvedModelRoute {
   base_url: string;

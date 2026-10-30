@@ -46,7 +46,7 @@ const WHOLE = 'must be a positive whole number';
 const MAX_LANES = 32;
 const LANES = `must be a whole number from 1 to ${MAX_LANES}`;
 
-const DurationSchema = z.string({ required_error: 'timeout is required: the run\'s timeout, such as 6h' }).transform((text, ctx): number => {
+const DurationSchema = z.string({ error: (issue) => issue.input === undefined ? 'timeout is required: the run\'s timeout, such as 6h' : undefined }).transform((text, ctx): number => {
   const ms = durationMs(text);
   if (ms !== undefined) return ms;
   ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'must be a positive duration, such as 30m or 6h' });
@@ -248,16 +248,18 @@ function segmentPattern(segment: string): RegExp | undefined {
 
 const AddedPathSchema = RepoPathSchema.refine((value) => !/[*?[]/.test(value), 'must name one file, without glob characters');
 
+const ProtectedPathSchema = RepoPathSchema.refine((value) => value.split('/').every((segment) => segmentPattern(segment) !== undefined), 'has a [ class with no closing ]');
+
 const CheckFileSchema = z.object({
   run: z.string().trim().min(1, 'check.run is a command'),
-  protect: z.array(RepoPathSchema.refine((value) => value.split('/').every((segment) => segmentPattern(segment) !== undefined), 'has a [ class with no closing ]'))
-    .nonempty('check.protect lists every path the check reads and the agent must not supply'),
+  protect: z.array(ProtectedPathSchema).nonempty('check.protect lists every path the check reads and the agent must not supply')
+    .pipe(z.tuple([ProtectedPathSchema], ProtectedPathSchema)),
   /**
    * Files written before the check whether or not the starting commit has them, so the agent never sees them: a path of
    * `source.fix`, such as its test, or `{ from, to }`, a file or directory of the suite directory written at `to`.
    */
   add: z.array(z.union([AddedPathSchema, z.object({ from: SuitePathSchema, to: AddedPathSchema }).strict()], {
-    errorMap: (issue, ctx) => ({ message: issue.code === z.ZodIssueCode.invalid_union ? 'must be a path of source.fix, or { from, to }: a file or directory of the suite directory, and where the check reads it' : ctx.defaultError }),
+    error: 'must be a path of source.fix, or { from, to }: a file or directory of the suite directory, and where the check reads it',
   })).nonempty().optional(),
 }).strict();
 
@@ -535,7 +537,7 @@ type FileParse<T> =
   | { ok: true; value: T; document: ReturnType<typeof parseDocument>; lineCounter: LineCounter }
   | { ok: false; diagnostics: [WorkflowDiagnostic, ...WorkflowDiagnostic[]] };
 
-function parseFile<T>({ relativePath, content }: SourceFile, schema: z.ZodType<T, z.ZodTypeDef, unknown>): FileParse<T> {
+function parseFile<T>({ relativePath, content }: SourceFile, schema: z.ZodType<T>): FileParse<T> {
   const lineCounter = new LineCounter();
   const document = parseDocument(content, { lineCounter, uniqueKeys: true });
   const errors = document.errors.map((error): WorkflowDiagnostic => {
@@ -545,7 +547,7 @@ function parseFile<T>({ relativePath, content }: SourceFile, schema: z.ZodType<T
   const value: unknown = errors.length > 0 ? undefined : document.toJS();
   const result = errors.length > 0 ? undefined : schema.safeParse(value);
   if (result?.success) return { ok: true, value: result.data, document, lineCounter };
-  const diagnostics = result ? result.error.issues.map((issue) => diagnosticAt(relativePath, lineCounter, document, issue.path, issue.message)) : errors;
+  const diagnostics = result ? result.error.issues.map((issue) => diagnosticAt(relativePath, lineCounter, document, issue.path.filter((part) => typeof part !== 'symbol'), issue.message)) : errors;
   const [first, ...rest] = diagnostics;
   return { ok: false, diagnostics: [first ?? { file: relativePath, line: 1, column: 1, field: '(root)', message: 'file is empty' }, ...rest] };
 }

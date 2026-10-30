@@ -560,7 +560,7 @@ function deadlineSignal(expiresAt: string | undefined): AbortSignal {
  * terminal. A terminal alone is not a person: an unattended run under a pseudo-terminal asks nobody.
  */
 export function personAnswers(mode: RunMode): boolean {
-  return mode === 'attended' && process.stdin.isTTY === true && process.stderr.isTTY === true;
+  return mode === 'attended' && Boolean(process.stdin.isTTY) && Boolean(process.stderr.isTTY);
 }
 
 /**

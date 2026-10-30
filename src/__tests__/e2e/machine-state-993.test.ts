@@ -143,7 +143,7 @@ describe('no machine state in the working tree (#993 bug 4)', () => {
     sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-machine-state-e2e-')));
     home = path.join(sandbox, 'home');
     for (const tool of ['.claude', '.codex', '.copilot']) fs.mkdirSync(path.join(home, tool), { recursive: true });
-    fakeCodexDir = installFakeCodex();
+    fakeCodexDir = installFakeCodex({ version: '9999.0.0' });
     // An `npm` that succeeds without touching the network.
     stubBin = path.join(sandbox, 'stub-bin');
     writeFile(path.join(stubBin, 'npm'), '#!/bin/sh\nexit 0\n');

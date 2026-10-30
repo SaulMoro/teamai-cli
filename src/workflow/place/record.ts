@@ -18,7 +18,7 @@ const WriterRoleSchema = z.object({
   role: z.literal('writer'),
   workspace: WorkspaceContractSchema,
   rangeFrom: z.string().optional(),
-  conflicts: z.record(z.string()),
+  conflicts: z.record(z.string(), z.string()),
   conflictNote: z.string().optional(),
 });
 
