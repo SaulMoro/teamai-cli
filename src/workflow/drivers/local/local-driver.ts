@@ -39,8 +39,8 @@ import { memberTools, type MemberTool } from '../../../tool-launch/call.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../../tool-launch/process-stop.js';
 import { executableOf, isLaunchTool, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, type LaunchTool } from '../../../tool-launch/tools.js';
 import { chooseStepModel, loadDeployedAgent } from '../../step-model.js';
-import type { DriverIdentity, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
-import { isWorkflowError, WORKSPACE_MODES } from '../../types.js';
+import type { DriverIdentity, RunState, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
+import { isWorkflowError, stepWorkflow, WORKSPACE_MODES } from '../../types.js';
 import type { SessionRef } from '../../workspace.js';
 import { headCommit } from '../../worktree.js';
 
@@ -544,6 +544,20 @@ function onPath(tool: LaunchTool): boolean {
   return resolveCliPath(executableOf(tool)) !== null;
 }
 
+/**
+ * The tools a step of `run` names, or undefined when a `from` step may bring a workflow that names any. Looking a tool
+ * up can start login shells, so the driver looks up only these.
+ */
+function namedTools(run: Pick<RunState, 'definition' | 'workflows'>): Set<string> | undefined {
+  const named = new Set<string>();
+  const known = (steps: readonly WorkflowStep[]): boolean => steps.every((step) => {
+    if (step.tool !== undefined) named.add(step.tool);
+    const child = stepWorkflow(step);
+    return child?.kind !== 'from' && (child?.kind !== 'inline' || known(child.workflow.steps));
+  });
+  return [run.definition, ...Object.values(run.workflows ?? {})].every((definition) => known(definition.steps)) ? named : undefined;
+}
+
 function isSandbox(config: LocalConfig, options: Pick<LocalDriverOptions, 'sandbox'>): boolean {
   return options.sandbox === true || config.workflows?.sandbox === true;
 }
@@ -611,10 +625,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, options
   // Resolved once per drive, so a resume where a person attends runs attended whatever mode the run started in.
   const mode = resolveRunMode(process.env);
   const canHitl = options.hitl ?? personAnswers(mode);
-  // It launches a step that names its tool on the tools this machine has, whatever
-  // workflow a step's output brings later. It is the run's only driver, so a step whose tool it cannot launch fails
+  // It launches a step that names its tool on the tools this machine has: those the run's steps name, or every one when a
+  // step's output may bring a workflow later. It is the run's only driver, so a step whose tool it cannot launch fails
   // rather than waits.
-  const tools = LAUNCH_TOOLS.filter(onPath);
+  const named = typeof started === 'object' ? namedTools(started) : undefined;
+  const tools = LAUNCH_TOOLS.filter((tool) => (named === undefined || named.has(tool)) && onPath(tool));
   const can = localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools });
   const driver = driverIdentity('local', cwd);
   // A driver killed before cleanup, of this run or any other, left clones behind.

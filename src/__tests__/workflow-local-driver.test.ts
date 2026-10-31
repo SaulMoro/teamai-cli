@@ -2374,6 +2374,34 @@ steps:
     expect(Object.values(resolved.secrets)).toContain(resolved.values.get('DEPLOY_TOKEN'));
   });
 
+  it.each([
+    { looks: 'for no tool when no step names one', tool: '', probed: [] },
+    { looks: 'for codex alone when a step names it', tool: '\n    tool: codex', probed: ['codex'] },
+  ])('looks $looks', async ({ tool, probed }) => {
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Name a tool or not.
+steps:
+  - id: build
+    command: "true"
+  - id: review
+    needs: [build]
+    if: steps.build.outcome == 'failed'
+    prompt: Review.${tool}
+`);
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-lookups-'));
+    dirs.push(bin);
+    const lookups = path.join(bin, 'lookups.log');
+    for (const name of ['which', 'bash', 'zsh']) {
+      fs.writeFileSync(path.join(bin, name), `#!/bin/sh\nfor last; do :; done\necho "$last" >> '${lookups}'\nexit 1\n`, { mode: 0o755 });
+    }
+    vi.stubEnv('PATH', `${bin}${path.delimiter}${process.env.PATH ?? ''}`);
+    expect(await runLocalDriver(config, runId, workspace, { hitl: false })).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    vi.unstubAllEnvs();
+    const looked = fs.existsSync(lookups) ? fs.readFileSync(lookups, 'utf8').split('\n').filter(Boolean) : [];
+    expect([...new Set(looked)]).toEqual(probed);
+  });
+
   function keptResult(config: LocalConfig, runId: string): string {
     const attempts = path.join(getDataHome(config), 'workflows', 'runs', runId, 'attempts');
     return fs.readdirSync(attempts).map((attempt) => fs.readFileSync(path.join(attempts, attempt, 'result.json'), 'utf8')).join('\n');
