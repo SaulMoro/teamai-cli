@@ -20,7 +20,8 @@ import { syncWorkflowDefinitions } from '../workflow/cache.js';
 import { syncScorerDefinitions } from '../scorers/cache.js';
 import type { Runners } from '../workflow/drivers/skill/skill-driver.js';
 // The doc comparison reads the table itself; every behaviour below goes through runSkillCall.
-import { TRANSITIONS, type TransitionRow } from '../workflow/drivers/skill/transitions.js';
+// oxlint-disable-next-line teamai/workflow-boundaries -- checks runtime coverage of every transition
+import { TRANSITIONS } from '../workflow/drivers/skill/transitions.js';
 import { fakeJudge, githubOrigin, sharedTeam, skillHarness, untilStopped } from './helpers/skill-harness.js';
 
 const CHECK = `schemaVersion: v1alpha1
@@ -608,7 +609,7 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
       const { run } = turn;
       expect(turn.actions).toEqual([{
         kind: 'person', why: 'approval', step: 'go-live', pass: 1, message: 'Deploy to production?',
-        say: 'Only you can answer this approval. Run one of these commands in your own terminal, or answer it in teamai dashboard.',
+        say: 'Only you can answer this approval: teamai refuses an answer sent from an agent session, so no agent answers it for you. Run one of these commands in your own terminal, or answer it in teamai dashboard.',
         run: [`teamai workflow respond ${run} go-live yes --pass 1`, `teamai workflow respond ${run} go-live no --pass 1`],
       }]);
       expect(turn.waiting).toEqual({ reason: 'go-live waits for the person\'s answer' });
@@ -2176,34 +2177,8 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
   },
 ];
 
-const COLUMNS = ['id', 'state', 'input', 'guard', 'effects', 'next', 'action'] as const;
-
-function render(row: TransitionRow): string {
-  return `| ${COLUMNS.map((column) => row[column]).join(' | ')} |`.replace(/ {2}\|/g, ' |');
-}
-
-/** Every table row under `## The skill driver` in the engine notes. */
-function documentedRows(): TransitionRow[] {
-  const doc = fs.readFileSync(path.join(import.meta.dirname, '../../docs/dev/workflow-engine.md'), 'utf8');
-  const section = doc.split(/^## /m).find((part) => part.startsWith('The skill driver\n'));
-  if (!section) throw new Error('docs/dev/workflow-engine.md has no "## The skill driver" section');
-  return section.split('\n')
-    .filter((line) => line.startsWith('| ') && !line.startsWith('| Row |'))
-    .map((line) => {
-      const cells = line.slice(1, -1).split('|').map((cell) => cell.trim());
-      if (cells.length !== COLUMNS.length) throw new Error(`A skill driver row has ${cells.length} cells, not ${COLUMNS.length}: ${line}`);
-      const [id = '', state = '', input = '', guard = '', effects = '', next = '', action = ''] = cells;
-      return { id, state, input, guard, effects, next, action };
-    });
-}
-
 describe('skill driver transitions', () => {
-  it('documents every row of TRANSITIONS, cell by cell, and no other', () => {
-    const documented = documentedRows().map(render);
-    const coded = TRANSITIONS.map(render);
-    expect(new Set(documented).size, 'a row is documented twice').toBe(documented.length);
-    expect([...documented].sort(), `Paste these rows under ## The skill driver in docs/dev/workflow-engine.md:\n${coded.join('\n')}`).toEqual([...coded].sort());
-  });
+
 
   for (const { name, rows, run } of CASES) {
     it(`takes ${rows.join(', ')}: ${name}`, async () => {

@@ -998,8 +998,10 @@ export async function startRun(
   const mismatch = inputsMismatch(cached.definition.name, cached.definition.inputs, inputs);
   if (mismatch) return error('invalid_inputs', mismatch);
   const tree = await loadWorkflowTree(config, cached);
+  // oxlint-disable-next-line teamai/workflow-failure-codes -- forwards a code from a classified workflow or scorer producer
   if ('failed' in tree) return error(tree.failed.code, tree.failed.message);
   const admission = await admitWorkflow(config, { kind: 'cached', definition: cached.definition, workflows: tree.workflows }, { secrets, ...(options.base ? { base: options.base } : {}) });
+  // oxlint-disable-next-line teamai/workflow-failure-codes -- forwards a code from a classified workflow or scorer producer
   if ('failure' in admission) return error(admission.failure.code, admission.failure.message);
   return createRun(config, {
     name: cached.definition.name,
