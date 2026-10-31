@@ -105,8 +105,42 @@ Your PR also gets an informational `Code Erosion` report (SlopCodeBench verbosit
 ## Testing Guidelines
 
 - Unit tests go in `src/__tests__/`. Mirror the source file name (`init.ts` → `init.test.ts`).
+- Import boundaries, banned APIs, and required helper calls belong in `oxlint-plugin-teamai`, tested through `ruleHarness`. Do not scan source with `fs` or `web-tree-sitter` in unit tests or repeat helper wiring in per-command E2E files.
 - Mock external I/O (git, fetch, child_process) at the module boundary.
 - Avoid relying on real network access unless guarded by an env variable (like `TEAMAI_TEST_TOKEN`).
+
+What `npm run lint` reports, and the fix:
+
+| You wrote | `npm run lint` says | Fix |
+|---|---|---|
+| `path.join(process.env.HOME ?? '', '.teamai')` in `src/sync-cache.ts` | `teamai(home-env): Read the user home through getUserHome() in src/utils/home.ts so USERPROFILE and platform fallbacks remain supported.` | `path.join(getUserHome(), '.teamai')` |
+| `execFileSync('gh', ['pr', 'merge', String(pr), '--auto'])` in `src/providers/github/` | `teamai(no-provider-merge): Providers and workflow delivery must not merge, accept or enable auto-merge on pull requests.` | Leave merging to a maintainer; providers only find and create requests. |
+| `import { startRun } from '../../engine.js'` in `src/workflow/drivers/skill/report.ts` | `teamai(workflow-boundaries): Workflow module boundary forbids src/workflow/drivers/skill/report.ts -> src/workflow/engine.ts.` | Import from `protocol.ts`, which the skill driver may use. |
+
+A line that has to break a rule says why, and `--report-unused-disable-directives` fails the comment once the line no longer needs it (from `src/viz.ts`):
+
+```ts
+// oxlint-disable-next-line teamai/learnings-root -- an explicit --repo path, with no config to resolve
+learningsDir: path.join(root, 'learnings'),
+```
+
+For example, `teamai/remove-delivered` enforces the helper at pull call sites while `delivered-copies.test.ts` checks deletion and ledger behavior. A change covered by that enabled rule and helper test needs:
+
+```bash
+npm run lint
+npx vitest run src/__tests__/delivered-copies.test.ts
+```
+
+It does not need a new E2E file for every command. Keep E2Es for real CLI behavior such as persisted state, providers, hooks, and worktree isolation.
+
+Documentation generators and Markdown checks live in `scripts/`. Check mode runs in `npm run lint`. After changing CLI help or `src/tools.ts`, regenerate the command reference and both tool-support pages:
+
+```bash
+node scripts/check-docs.mjs --write
+node scripts/check-docs.mjs
+```
+
+For example, an invented `teamai skill gett core` in a served skill fails check mode as an unknown subcommand. Fix the skill text rather than regenerating away that failure. The command's check/write tests live in `scripts/check-docs.test.ts`.
 
 Iterate on the affected E2E files; run the full suite when changing the E2E runner, shared fixtures, or test isolation:
 
@@ -116,7 +150,7 @@ npm run test:e2e -- <test-file> [-t "<test-name>"]   # add --maxWorkers=2 on con
 
 The runner first rejects `TMPDIR` (or `TMP` / `TEMP` on Windows) inside any Git checkout, including a linked worktree or a symlink into one. Set all three to a directory outside your checkouts before testing. This prevents fixtures without their own `.git` from delivering files into the contributor's repository.
 
-Workers share the prepared `dist/` and OpenCode binary: never rebuild or reinstall them inside a test. Cases needing remote credentials skip without them ([CI E2E setup](../docs/dev/ci-e2e-setup.md)). PRs changing runtime behavior (not docs- or tests-only) include one real-CLI verification, such as a focused E2E run, with its command and result.
+Workers share the prepared `dist/` and OpenCode binary: never rebuild or reinstall them inside a test. Cases needing remote credentials skip without them ([CI E2E setup](../docs/dev/ci-e2e-setup.md)). PRs changing runtime behavior (not docs-, tests- or lint-rule-only) include one real-CLI verification, such as a focused E2E run, with its command and result.
 
 ### When a test fails only on CI
 
