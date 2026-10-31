@@ -397,7 +397,6 @@ async function promptReport(
   const delivery = prepared?.install
     ? await cloneDelivery({ install: prepared.install, without: prepared.without }, selected)
     : teamConfig ? await teamDelivery(teamConfig, selected).catch(() => undefined) : undefined;
-  const delivered = delivery?.record?.delivered;
   const [observed, launch, teamSkills] = await Promise.all([
     observeLaunch({
       config: stepConfig,
@@ -412,7 +411,7 @@ async function promptReport(
         : {}),
     }),
     teamConfig ? workflowLaunch(teamConfig, selected) : undefined,
-    delivered ? deliveredTeamSkills(stepConfig, cwd, delivered).catch(() => undefined) : undefined,
+    delivery?.record?.delivered ? deliveredTeamSkills(stepConfig, cwd, delivery.record.delivered, delivery.record.rev).then((found) => found.teamSkills, () => undefined) : undefined,
   ]);
   // Only headless Claude and CodeBuddy have a turn limit; any other launch reports the cap as not enforced.
   const family = launchAdapterIdOf(selected);

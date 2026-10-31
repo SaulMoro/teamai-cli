@@ -149,7 +149,7 @@ $ teamai score --scorer review-quality          # 在 agent 会话内：为该�
 $ teamai score --session 7c1e… --source codex --scorer review-quality --push
 ```
 
-在会话外运行时，传入 `--session <id>`。评分从不猜测会话。`--source` 使用 `teamai session migrate --source` 的平台名。`CLAUDE_CODE_SESSION_ID` 等 agent 会话环境变量或会话的捕获记录只指向一个平台时，可以省略。评审者读取脱敏后的会话及其子 agent 的记录，不应用抽样。
+在会话外运行时，传入 `--session <id>`。评分从不猜测会话。`--source` 使用 `teamai session migrate --source` 的平台名。`CLAUDE_CODE_SESSION_ID` 等 agent 会话环境变量或会话的捕获记录只指向一个平台时，可以省略。评审者读取脱敏后的会话及其子 agent 的记录，不应用抽样。它的 `evidence.json` 列出 `skills`：`available` 是捕获记录显示 teamai 交付的团队 skill，每项带 skills `namespace`（两个相同副本无法区分时为 `namespaceUnknown`）和 `description`（frontmatter 无法解析时省略）；以及 `used`。旧版本捕获的会话改为带 `skills_unknown` gap。
 
 评审者最多读取会话的 200,000 个字符。会话评分器指定更便宜的[模型别名](#选择评审者的模型)，长会话的评审成本也会更低。
 

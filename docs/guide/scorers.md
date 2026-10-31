@@ -149,7 +149,7 @@ $ teamai score --scorer review-quality          # inside an agent session: score
 $ teamai score --session 7c1e… --source codex --scorer review-quality --push
 ```
 
-Outside a session, pass `--session <id>`. Scoring never guesses the session. `--source` takes the platform names of `teamai session migrate --source`. Leave it out when an agent session variable such as `CLAUDE_CODE_SESSION_ID`, or the session's captures, name one platform. The judge reads the redacted session with its subagents' transcripts, and sampling does not apply.
+Outside a session, pass `--session <id>`. Scoring never guesses the session. `--source` takes the platform names of `teamai session migrate --source`. Leave it out when an agent session variable such as `CLAUDE_CODE_SESSION_ID`, or the session's captures, name one platform. The judge reads the redacted session with its subagents' transcripts, and sampling does not apply. Its `evidence.json` lists `skills`: `available`, the team skills the captures show teamai delivered, each with its skills `namespace` (`namespaceUnknown` when two identical copies cannot be told apart) and its `description` (left out when the frontmatter does not parse), and `used`. A session captured by an older release has the `skills_unknown` gap instead.
 
 The judge reads at most 200,000 characters of a session. A session scorer that names a cheaper [model alias](#choose-the-judges-model) keeps a long session cheap to judge.
 

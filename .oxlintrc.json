@@ -27,8 +27,8 @@
     "typescript/unbound-method": "off",
     // Enabling the suspicious/perf categories below also reaches the
     // type-aware typescript/* rules in those categories. Type-aware linting
-    // beyond no-floating-promises/no-misused-promises is #863's separate,
-    // not-yet-merged scope, not this PR's — keep it off here.
+    // beyond no-floating-promises/no-misused-promises remains a separate
+    // follow-up under #836; #863 already enabled the two promise rules.
     "typescript/no-unsafe-type-assertion": "off",
     "typescript/no-unnecessary-type-assertion": "off",
     "typescript/no-unnecessary-type-conversion": "off",
@@ -52,7 +52,9 @@
     // Micro-optimization, not worth the churn.
     "oxc/no-map-spread": "off",
     // Pull deletes a delivered copy and its record entry together (#1577).
-    "teamai/remove-delivered": "error"
+    "teamai/remove-delivered": "error",
+    // getUserHome owns the HOME / USERPROFILE fallback that keeps Windows paths safe.
+    "teamai/home-env": "error"
   },
   "overrides": [
     {

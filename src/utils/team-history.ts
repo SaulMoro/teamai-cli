@@ -29,19 +29,19 @@ export interface HistoricalVersion {
 
 /**
  * Every distinct version each file under `pathspec` (a file or a directory,
- * repo-relative, `/`-separated) held in the history of HEAD in `repoPath`,
+ * repo-relative, `/`-separated) held in the history of `rev` (HEAD by default) in `repoPath`,
  * newest first, merges included and renames not followed. Empty when the path
  * never existed; null when git cannot read the history (not a repository, no
  * commits, a git error).
  */
 export async function historicalVersions(
-  repoPath: string, pathspec: string, options: { currentLifetime?: boolean } = {},
+  repoPath: string, pathspec: string, options: { currentLifetime?: boolean; rev?: string } = {},
 ): Promise<HistoricalVersion[] | null> {
   let out: string;
   try {
     out = await createGit(repoPath).raw([
       'log', ...(options.currentLifetime ? ['--first-parent'] : ['-m']),
-      '-z', '--raw', '--no-renames', '--no-abbrev', '--format=', 'HEAD', '--', pathspec,
+      '-z', '--raw', '--no-renames', '--no-abbrev', '--format=', options.rev ?? 'HEAD', '--', pathspec,
     ]);
   } catch (e) {
     log.debug(`Could not read the history of ${pathspec} in ${repoPath}: ${e instanceof Error ? e.message : String(e)}`);

@@ -9,6 +9,7 @@ import { GIT_AT_START_PAYLOAD_KEY } from '../dashboard-collector.js';
 import { CAPTURE_PAYLOAD_KEY, SessionCaptures } from '../session-flow/captures.js';
 import { saveScopeSelection } from '../scope-selection.js';
 import type { LocalConfig } from '../types.js';
+import { withSkillFrontmatter } from '../resources/skills.js';
 import { log } from '../utils/logger.js';
 import { commitFile, fakeClaude, git, initRepo, recordDelivery } from './helpers/delivered-checkout.js';
 
@@ -166,7 +167,127 @@ describe('session captures (#1178)', () => {
         fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
       }),
       teamSkills: { review: [skill] },
+      teamSkillInfo: { review: {} },
     }]);
+  });
+
+  it('records each delivered team skill\'s description and skills namespace, and a root skill without one (#1469)', async () => {
+    const { config, project, skill } = checkout();
+    fs.writeFileSync(skill, '---\ndescription: Review a PR.\n---\nreview\n');
+    const ship = path.join(project, '.claude', 'skills', 'ship', 'SKILL.md');
+    fs.mkdirSync(path.dirname(ship), { recursive: true });
+    fs.writeFileSync(ship, '---\ndescription: Cut a release.\n---\nship\n');
+    commitFile(config.repo.localPath, 'skills/review/ship/SKILL.md');
+    const rev = commitFile(config.repo.localPath, 'skills/ops/ship/SKILL.md');
+    await recordDelivery(config, { rev, targets: ['claude'], files: [skill, ship] });
+
+    await SessionCaptures.atStart(config, 'claude', start(project), {});
+
+    expect((await SessionCaptures.read(config, 'claude-code', SESSION)).map((capture) => capture.teamSkillInfo))
+      .toEqual([{ review: { description: 'Review a PR.' }, ship: { namespace: 'ops', description: 'Cut a release.' } }]);
+  });
+
+  it('records the namespace actually delivered when two namespaces have the same skill name (#1469)', async () => {
+    const { config, project } = checkout();
+    const team = config.repo.localPath;
+    commitFile(team, 'skills/ops/ship/SKILL.md', '---\ndescription: Ops release.\n---\n');
+    commitFile(team, 'skills/web/ship/SKILL.md', '---\ndescription: Web release.\n---\n');
+    commitFile(team, 'teamai.yaml', 'team: fixture\nrepo: local\n');
+    const rev = commitFile(team, 'manifest/roles.yaml', 'version: 1\nroles:\n  - id: web\n    resources: { knowledge: [], skills: [web] }\n  - id: ops\n    resources: { knowledge: [], skills: [ops] }\n');
+    const ship = path.join(project, '.claude', 'skills', 'ship', 'SKILL.md');
+    fs.mkdirSync(path.dirname(ship), { recursive: true });
+    fs.writeFileSync(ship, withSkillFrontmatter('---\ndescription: Web release.\n---\n', 'ship'));
+    const member = { ...config, primaryRole: 'web' };
+    await recordDelivery(member, { rev, targets: ['claude'], files: [ship] });
+
+    await SessionCaptures.atStart(member, 'claude', start(project), {});
+
+    const switched = { ...member, primaryRole: 'ops' };
+    await SessionCaptures.atStart(switched, 'claude', start(project, { source: 'resume' }), {});
+    commitFile(team, 'manifest/roles.yaml', 'version: 1\nroles:\n  - id: web\n    resources: { knowledge: [], skills: [ops] }\n  - id: ops\n    resources: { knowledge: [], skills: [ops] }\n');
+    await SessionCaptures.atStart(member, 'claude', start(project, { source: 'resume' }), {});
+
+    expect((await SessionCaptures.read(member, 'claude-code', SESSION)).map((capture) => capture.teamSkillInfo))
+      .toEqual([
+        { ship: { namespace: 'web', description: 'Web release.' } },
+        { ship: { namespace: 'web', description: 'Web release.' } },
+        { ship: { namespace: 'web', description: 'Web release.' } },
+      ]);
+  });
+
+  it('does not relabel identical copies when the delivery record cannot distinguish them (#1469)', async () => {
+    const { config, project } = checkout();
+    const team = config.repo.localPath;
+    commitFile(team, 'skills/ops/ship/SKILL.md', '---\ndescription: Shared release.\n---\n');
+    commitFile(team, 'skills/web/ship/SKILL.md', '---\ndescription: Shared release.\n---\n');
+    commitFile(team, 'teamai.yaml', 'team: fixture\nrepo: local\n');
+    const rev = commitFile(team, 'manifest/roles.yaml', 'version: 1\nroles:\n  - id: web\n    resources: { knowledge: [], skills: [web] }\n  - id: ops\n    resources: { knowledge: [], skills: [ops] }\n');
+    const ship = path.join(project, '.claude', 'skills', 'ship', 'SKILL.md');
+    fs.mkdirSync(path.dirname(ship), { recursive: true });
+    fs.writeFileSync(ship, '---\ndescription: Shared release.\n---\n');
+    const member = { ...config, primaryRole: 'web', additionalRoles: ['ops'] };
+    await recordDelivery(member, { rev, targets: ['claude'], files: [ship] });
+    commitFile(team, 'manifest/roles.yaml', 'version: 1\nroles:\n  - id: web\n    resources: { knowledge: [], skills: [ops] }\n  - id: ops\n    resources: { knowledge: [], skills: [ops] }\n');
+
+    await SessionCaptures.atStart(member, 'claude', start(project), {});
+
+    expect((await SessionCaptures.read(member, 'claude-code', SESSION)).map((capture) => capture.teamSkillInfo))
+      .toEqual([{ ship: { namespaceUnknown: true, description: 'Shared release.' } }]);
+  });
+
+  it('keeps identical copies unattributed when the team deletes one after the pull (#1469)', async () => {
+    const { config, project } = checkout();
+    const team = config.repo.localPath;
+    commitFile(team, 'skills/ops/ship/SKILL.md', '---\ndescription: Shared release.\n---\n');
+    const rev = commitFile(team, 'skills/web/ship/SKILL.md', '---\ndescription: Shared release.\n---\n');
+    const ship = path.join(project, '.claude', 'skills', 'ship', 'SKILL.md');
+    fs.mkdirSync(path.dirname(ship), { recursive: true });
+    fs.writeFileSync(ship, withSkillFrontmatter('---\ndescription: Shared release.\n---\n', 'ship'));
+    await recordDelivery(config, { rev, targets: ['claude'], files: [ship] });
+    git(team, 'rm', '-q', 'skills/web/ship/SKILL.md');
+    git(team, 'commit', '-qm', 'drop web ship');
+
+    await SessionCaptures.atStart(config, 'claude', start(project), {});
+
+    expect((await SessionCaptures.read(config, 'claude-code', SESSION)).map((capture) => capture.teamSkillInfo?.ship))
+      .toEqual([{ namespaceUnknown: true, description: 'Shared release.' }]);
+  });
+
+  it('records the namespace of a delivered copy pull completed the frontmatter of (#1469)', async () => {
+    const { config, project } = checkout();
+    const team = config.repo.localPath;
+    commitFile(team, 'skills/ops/ship/SKILL.md', '---\ndescription: Ops release.\n---\nops\n');
+    const rev = commitFile(team, 'skills/web/ship/SKILL.md', '---\ndescription: Web release.\n---\nweb\n');
+    const ship = path.join(project, '.claude', 'skills', 'ship', 'SKILL.md');
+    fs.mkdirSync(path.dirname(ship), { recursive: true });
+    fs.writeFileSync(ship, withSkillFrontmatter('---\ndescription: Web release.\n---\nweb\n', 'ship'));
+    await recordDelivery(config, { rev, targets: ['claude'], files: [ship] });
+
+    await SessionCaptures.atStart(config, 'claude', start(project), {});
+
+    expect((await SessionCaptures.read(config, 'claude-code', SESSION)).map((capture) => capture.teamSkillInfo?.ship))
+      .toEqual([{ namespace: 'web', description: 'Web release.' }]);
+  });
+
+  it('records a delivered skill the team deleted after the pull, so the session can still be credited with it (#1469)', async () => {
+    const { config, project, rev, skill } = checkout();
+    await recordDelivery(config, { rev, targets: ['claude'], files: [skill] });
+    git(config.repo.localPath, 'rm', '-q', 'skills/review/SKILL.md');
+    git(config.repo.localPath, 'commit', '-qm', 'drop review');
+
+    await SessionCaptures.atStart(config, 'claude', start(project), {});
+
+    expect((await SessionCaptures.read(config, 'claude-code', SESSION)).map((capture) => capture.teamSkills)).toEqual([{ review: [skill] }]);
+  });
+
+  it('records no description when the delivered frontmatter does not parse, rather than an empty one (#1469)', async () => {
+    const { config, project, rev, skill } = checkout();
+    fs.writeFileSync(skill, '---\ndescription: Cut an npm release: bump, tag.\n---\nreview\n');
+    await recordDelivery(config, { rev, targets: ['claude'], files: [skill] });
+
+    await SessionCaptures.atStart(config, 'claude', start(project), {});
+
+    expect((await SessionCaptures.read(config, 'claude-code', SESSION)).map((capture) => capture.teamSkillInfo)).toEqual([{ review: {} }]);
   });
 
   it('writes a second capture when the session resumes, and none for a compaction', async () => {
@@ -247,6 +368,17 @@ describe('session captures (#1178)', () => {
     await recordDelivery(config, { rev: commitFile(config.repo.localPath, 'skills/other/SKILL.md'), targets: ['claude'], files: [skill] });
     await SessionCaptures.markTeamChanged(config, 'claude', start(project), before);
     expect((await SessionCaptures.read(config, 'claude-code', SESSION)).map((capture) => capture.teamChanged)).toEqual([true, true]);
+  });
+
+  it('records an empty skills inventory after the session own pull delivered none (#1469)', async () => {
+    const { config, project, rev } = checkout();
+    const captureId = await SessionCaptures.atStart(config, 'claude', start(project), {});
+    const before = await SessionCaptures.checkoutDelivery(config, 'claude');
+    await recordDelivery(config, { rev, targets: ['claude'], files: [] });
+
+    await SessionCaptures.markTeamChanged(config, 'claude', { ...start(project), [CAPTURE_PAYLOAD_KEY]: captureId }, before);
+
+    expect((await SessionCaptures.read(config, 'claude-code', SESSION)).map((capture) => capture.teamSkillInfo)).toEqual([{}]);
   });
 
   it('adds the team skills the session\'s own pull delivered to its captures, and keeps the ones it started with', async () => {

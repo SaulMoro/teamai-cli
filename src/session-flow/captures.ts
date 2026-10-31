@@ -11,7 +11,7 @@ import { AgentObservationSchema, observeCheckout, settleObservation, type AgentO
 import { getAgentVersion } from '../agent-version.js';
 import { agreedRunMode, launchedBy, resolveRunMode, RunModeSchema, type RunMode } from '../launch-context.js';
 import type { CheckoutRecord } from '../pull.js';
-import { deliveredTeamSkills } from '../skill-use.js';
+import { DeliveredSkillInfoSchema, deliveredTeamSkills, type DeliveredSkillInfo } from '../skill-use.js';
 import { getDataHome, type DeliverySelection, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { log } from '../utils/logger.js';
@@ -31,6 +31,11 @@ export const SessionCaptureSchema = z.object({
   sessionFile: z.string().optional(),
   /** The team skills the checkout held as teamai delivered them when the session started and after its own pull (`deliveredTeamSkills`). */
   teamSkills: z.record(z.string(), z.array(z.string())).optional(),
+  /**
+   * Each delivered team skill's description as its SKILL.md then carried it and its skills namespace (#1469), present
+   * (if only as `{}`) once a capture read the delivery record, absent on captures written before #1469.
+   */
+  teamSkillInfo: z.record(z.string(), DeliveredSkillInfoSchema).optional(),
 });
 export type SessionCapture = z.infer<typeof SessionCaptureSchema>;
 
@@ -71,11 +76,11 @@ async function atStart(config: LocalConfig, tool: string, payload: Record<string
     if (!agent) return undefined;
     const file = payload.transcript_path;
     const { teamDelivery } = await import('../pull.js');
-    const delivered = (await teamDelivery(config, tool, { beforeOwnPull: true }).catch(() => undefined))?.record?.delivered;
+    const record = (await teamDelivery(config, tool, { beforeOwnPull: true }).catch(() => undefined))?.record;
     const capture: SessionCapture = {
       captureId: randomUUID(), platform, sessionId, capturedAt: new Date().toISOString(), runMode: resolveRunMode(env), agent,
       ...(typeof file === 'string' && path.isAbsolute(file) ? { sessionFile: file } : {}),
-      ...(delivered ? { teamSkills: await deliveredTeamSkills(config, cwd, delivered) } : {}),
+      ...(record?.delivered ? await deliveredTeamSkills(config, cwd, record.delivered, record.rev) : {}),
     };
     await writeCapture(config, capture);
     return capture.captureId;
@@ -157,6 +162,13 @@ function withTeamSkills(capture: SessionCapture, pulled: Record<string, string[]
   return Object.keys(teamSkills).length > 0 ? { ...capture, teamSkills } : capture;
 }
 
+/** `capture` with the descriptions of the skills `pulled` added for names it does not already hold, so a later pull leaves them (#1469). */
+function withTeamSkillInfo(capture: SessionCapture, pulled: Record<string, DeliveredSkillInfo>): SessionCapture {
+  const teamSkillInfo = { ...capture.teamSkillInfo };
+  for (const [name, info] of Object.entries(pulled)) if (!(name in teamSkillInfo)) teamSkillInfo[name] = info;
+  return { ...capture, teamSkillInfo };
+}
+
 /**
  * After the session's own pull: adds the team skills the checkout then holds as delivered to the capture this start or
  * resume wrote, since the session may load those too from then on, also when that pull restored one at the same
@@ -172,10 +184,11 @@ async function markTeamChanged(config: LocalConfig, tool: string, payload: Recor
   const changed = !isDeepStrictEqual(deliveryOf(record), before);
   try {
     const pulled = record?.delivered && typeof cwd === 'string' && typeof captureId === 'string'
-      ? await deliveredTeamSkills(config, cwd, record.delivered) : {};
-    if (!changed && Object.keys(pulled).length === 0) return;
+      ? await deliveredTeamSkills(config, cwd, record.delivered, record.rev) : undefined;
+    if (!changed && !pulled) return;
     await rewrite(config, platform, sessionId, () => true, (capture) => ({
-      ...(capture.captureId === captureId ? withTeamSkills(capture, pulled) : capture),
+      ...(capture.captureId === captureId && pulled
+        ? withTeamSkillInfo(withTeamSkills(capture, pulled.teamSkills), pulled.teamSkillInfo) : capture),
       ...(changed ? { teamChanged: true } : {}),
     }));
   } catch (e) {
