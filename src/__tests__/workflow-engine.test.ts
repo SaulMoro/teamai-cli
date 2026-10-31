@@ -5483,6 +5483,21 @@ ${inner}  - id: after
     expect(await readRun(config, runId)).toMatchObject({ steps: expect.arrayContaining([expect.objectContaining({ id: 'work', status: 'succeeded' })]) });
   });
 
+  it('leases one inner prompt at a time, so the next is leased what the one before it left of the allowance', async () => {
+    const { config, runId } = await startBuild(allowance('budget: { tokens: 100 }', `        - id: first
+          prompt: First.
+        - id: second
+          needs: []
+          prompt: Second.
+`));
+    const first = LeaseWithLimitsSchema.parse(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).data.lease;
+    expect(await leaseNext(config, runId, driverA, { can: ENDS_TURN, running: [first.attempt] })).toMatchObject({ data: { wait: {} } });
+    await reportAttempt(config, runId, { attempt: first.attempt, revision: first.revision, outcome: 'success', driver: driverA, durationMs: 1000, tokens: { input: 50, output: 10 } });
+
+    const second = LeaseWithLimitsSchema.parse(await leaseNext(config, runId, driverA, { can: ENDS_TURN })).data.lease;
+    expect(second).toMatchObject({ step: 'work.second', limits: { budget: { tokens: 40 } } });
+  });
+
   it('skips what is left of a workflow step once an inner turn reached the limit its allowance set, and settles the step', async () => {
     const { config, runId } = await startBuild(allowance('timeout: 10m', `        - id: first
           prompt: First.

@@ -182,6 +182,16 @@ export function spentAllowances(run: RunState, scope: Scope): string[] {
   return scope.allowances.flatMap((granted) => (allowanceLeft(run, granted).spent ? [granted.step] : []));
 }
 
+/**
+ * The step whose allowance, among those workflow `scope` runs inside, a leased prompt turn is spending, or undefined.
+ * Another prompt under it waits, so it is leased what that turn left rather than what was left before it.
+ */
+export function allowanceInUse(run: RunState, scope: Scope): string | undefined {
+  const definitionOf = stepDefinitions(run);
+  return scope.allowances.find((granted) => run.steps.some((state) => state.status === 'leased'
+    && isUnder(granted.step)(state.id) && definitionOf(state.id)?.prompt !== undefined))?.step;
+}
+
 /** The smallest of `limits`, or undefined when none is set. An allowance with nothing left leases nothing more. */
 function least(...limits: ReadonlyArray<number | undefined>): number | undefined {
   const set = limits.filter((limit) => limit !== undefined);

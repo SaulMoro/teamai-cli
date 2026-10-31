@@ -24,7 +24,7 @@ import {
   ReadSchema, answerHitl, fail, inProgress, lease, release, settled, skip, start, startDelivery, stopAttempt, stopWhere, stopped,
   succeed, waitForAnswer, type ItemResult, type LeasedStep, type StepRead, type StepState,
 } from './step-state.js';
-import { budgetSpent, countLateTokens, expire, itemsSpent, leaseDeadline, ownDeadline, spendAllowances, spentAllowances, startLimits, turnLimits } from './limits.js';
+import { allowanceInUse, budgetSpent, countLateTokens, expire, itemsSpent, leaseDeadline, ownDeadline, spendAllowances, spentAllowances, startLimits, turnLimits } from './limits.js';
 import { addItems, afterStanding, expandItems, isItem, itemsAfter, itemsOf, itemsSettled, startedItems } from './fan-out.js';
 import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, isUnder, loopSettled } from './loop.js';
 import { childScope, contextOf, finallyScope, insertChildren, localId, statesIn, stepDefinitions, topScope, type Scope } from './scope.js';
@@ -1390,6 +1390,11 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
         for (const { lease: state, definition, rendered } of result.ready) {
           const located = locateStep(run, state.id);
           if (!located) return { save: false, envelope: error('run_unreadable', `Run ${run.id} has no definition for step "${state.id}"`) };
+          const spending = definition.prompt === undefined ? undefined : allowanceInUse(run, located.scope);
+          if (spending !== undefined) {
+            held.push({ step: state.id, reason: `step "${state.id}" waits for the prompt turn spending the allowance of step "${spending}"`, missing: [] });
+            continue;
+          }
           const plan = planWorkspace(run, located.scope, state, definition, {
             driver, modes: can.workspace, base: run.base ?? options.base,
           });

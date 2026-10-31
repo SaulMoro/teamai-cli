@@ -688,7 +688,7 @@ steps:
 | `budget` | `{ tokens: N }`，写在工作流文件、workflow 步骤或带 `on_limit: end_turn` 的 prompt 步骤上。其下每个步骤的输入和输出 token 从它开始时计入：运行从开始时算起，workflow 步骤从每次开始时算起，例如循环的下一轮。重试会重新开始计算预算。超过 `N` 时，其中未结束的步骤停止，并以 `budget_exceeded` 失败。 | 预算内的非交互 prompt 步骤等待，它没有 token 的成功报告以 `budget_unmeasured` 失败。交互式 prompt 由人操作，照常运行；它的报告没有 token 时，其 `unenforced` 列出 `budget`。 |
 | `max_turns` | 限制 prompt 步骤的智能体轮数。本地驱动只把它传给无头 Claude。 | 步骤照常运行，其 `unenforced` 列出 `max_turns`。 |
 | `permissions` | prompt 步骤上的 `unattended`：它的工具无需询问就编辑文件和运行命令。只能在严格的 `isolation: sandbox` 之下使用，可以写在步骤本身、外层步骤、`defaults`，或运行其工作流的步骤上：没有它时，启动以 `unattended_unsandboxed` 被拒绝；[步骤打印的工作流](#运行步骤打印的工作流)没有它时，该步骤以 `invalid_output` 失败。见[无人值守的 prompt](#无人值守的-prompt)。 | 步骤等待。运行唯一的驱动没有 `can.unattended` 时，该步骤以 `tool_unavailable` 失败。 |
-| `on_limit` | 在带 `timeout`、`max_turns` 或 `budget` 的 prompt 步骤上为 `end_turn`：从工具启动算起达到其中之一时，结束智能体的这一轮，而不是让步骤失败。步骤以设置了 `limit` 的状态成功并保留它的工作，所以它之后的步骤仍会运行。在带 `timeout` 或 `budget` 的 workflow 步骤上，这些是其中的 prompt 加起来可以花费的量：用完后，其未运行的步骤被跳过。`fail` 是默认值，在达到限制时让步骤失败。交还的步骤保持其第一次租约的截止时间。 | 没有 `can.end_turn` 时，步骤按 `fail` 运行，其 `unenforced` 列出 `on_limit`。 |
+| `on_limit` | 在带 `timeout`、`max_turns` 或 `budget` 的 prompt 步骤上为 `end_turn`：从工具启动算起达到其中之一时，结束智能体的这一轮，而不是让步骤失败。步骤以设置了 `limit` 的状态成功并保留它的工作，所以它之后的步骤仍会运行。在带 `timeout` 或 `budget` 的 workflow 步骤上，这些是其中的 prompt 加起来可以花费的量，每次只运行一个 prompt：用完后，其未运行的步骤被跳过。`fail` 是默认值，在达到限制时让步骤失败。交还的步骤保持其第一次租约的截止时间。 | 没有 `can.end_turn` 时，步骤按 `fail` 运行，其 `unenforced` 列出 `on_limit`。 |
 
 `unenforced` 出现在租约、步骤和运行记录中。每个 `interactive: true` 步骤还需要支持 HITL 的驱动，见 [HITL](#hitl人在回路中)。
 
