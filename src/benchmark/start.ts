@@ -190,7 +190,7 @@ async function resolveTeam(config: LocalConfig, { name, tool, team }: Arm, pulle
     case 'pulled':
       return { ok: true, team: { kind: 'pulled', revision: pulled } };
     case 'none': {
-      const user = await loadLocalConfigForScope('user');
+      const user = await loadLocalConfigForScope('user', undefined, { dryRun: true, suppressMigrationNotice: true });
       if (user && (user.enabledAgents === undefined || user.enabledAgents.includes(tool))) {
         return { ok: false, refused: error('arm_team_unclean', `Arm "${name}" runs without team assets, and this machine's user-scope teamai install delivers team assets to ${tool} in your home, where its trials would read them. Start the benchmark on a machine where teamai is installed only in workspace scope.`) };
       }

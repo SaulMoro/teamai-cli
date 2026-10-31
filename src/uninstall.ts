@@ -856,7 +856,7 @@ function printKeptForProjects({ projects, paths }: KeptForProjects): void {
 async function installsSharingHome(dataHome: string): Promise<LocalConfig[]> {
   const { projectsRootDir, readAnchorFile } = await import('./utils/partition.js');
   const installs: LocalConfig[] = [];
-  const user = await loadLocalConfig();
+  const user = await loadLocalConfig({ dryRun: true, suppressMigrationNotice: true });
   if (user) installs.push(user);
   for (const dir of await listDirs(projectsRootDir())) {
     const partition = path.join(projectsRootDir(), dir);
