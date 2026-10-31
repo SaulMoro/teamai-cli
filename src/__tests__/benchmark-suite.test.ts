@@ -185,6 +185,7 @@ describe('parseSuite', () => {
     ['a directory', '[test]', 'test/unit/startup.test.js'],
     ['the path itself', '[test/startup.test.js]', 'test/startup.test.js'],
     ['a path with a literal ^', "['test/^check.js']", 'test/^check.js'],
+    ['a class with a literal *', "['test/[ab*].js']", 'test/a.js'],
   ])('keeps the files check.add writes from the fix, under %s in protect', (_case, protect, added) => {
     const fix = 'b'.repeat(40);
     const parsed = parse(suiteText(), { fix: taskText({ check: `{ run: node test.js, protect: ${protect}, add: [${added}] }`, source: `{ platform: claude-code, sessionId: s1, fix: ${fix} }` }) });
