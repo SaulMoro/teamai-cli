@@ -27,7 +27,7 @@ import { attemptDir, driverLockPath, readRun, RunIdSchema } from '../workflow/st
 import * as worktreeSnapshot from '../workflow/place/worktree-snapshot.js';
 import type { DriverIdentity } from '../workflow/types.js';
 import { commitFile, fakeClaude, git, recordDelivery } from './helpers/delivered-checkout.js';
-import { knownSecrets } from '../env-resolution.js';
+import { knownSecrets, resolveWorkflowEnv } from '../env-resolution.js';
 import { recordGroup } from '../tool-launch/process-stop.js';
 
 _setDriverPollMs(20);
@@ -2357,6 +2357,21 @@ steps:
     const runFile = JSON.stringify(await readRun(config, runId));
     expect(runFile).toContain('deploying with <REDACTED:DEPLOY_TOKEN');
     expect(runFile).not.toContain('old-deploy-secret-value');
+  });
+
+  it('masks the value it gives a step when the value changes while the team env resolves', async () => {
+    const { config } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Print a secret.
+steps:
+  - id: deploy
+    command: echo "$DEPLOY_TOKEN"
+`);
+    const env: NodeJS.ProcessEnv = { DEPLOY_TOKEN: 'old-deploy-secret-value' };
+    const resolving = resolveWorkflowEnv(config, env);
+    env.DEPLOY_TOKEN = 'new-deploy-secret-value';
+    const resolved = await resolving;
+    expect(Object.values(resolved.secrets)).toContain(resolved.values.get('DEPLOY_TOKEN'));
   });
 
   function keptResult(config: LocalConfig, runId: string): string {
