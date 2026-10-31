@@ -6,7 +6,6 @@ inputs: { session: string, source: string, publish: boolean, scorers: [string], 
 steps:
   - id: publish
     if: inputs.publish
-    approve: { message: "Publish this session, scrubbed, to the team?", required: true }
     command: teamai session push --scrub --session "$SESSION" --source "$SOURCE"
     env: { SESSION: "{{ inputs.session }}", SOURCE: "{{ inputs.source }}" }
   - id: score

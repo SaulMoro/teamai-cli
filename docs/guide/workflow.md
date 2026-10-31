@@ -643,7 +643,7 @@ learning         interactive: the session's agent runs `teamai skill get share` 
 └─ approve       when there is one learning or more. Optional approval: Share these N learnings with the team? [each title, file and namespace]
    └─ contribute once per learning → teamai contribute --file … --title … --namespace … --session-id <session>
 share-session    runs teamai-share-session with the same inputs:
-  publish        on publish: true only. Required approval: only the person answers
+  publish        on publish: true only
                  → teamai session push --scrub --session <session> --source <source>
   score          on judge: here only, once per scorer → teamai score --session <session> --scorer <scorer>
   score-driver   on judge: driver only, once per scorer → the session's agent judges the lease, best-effort
@@ -657,9 +657,11 @@ The agent runs describe, which proposes a `value` and a `why` for each input, fo
 |---|---|---|
 | `session` | `"7c1e5a2b-…"` | The session to share: this one. |
 | `source` | `"claude-code"` | This session's tool, as teamai session list names it. |
-| `publish` | `true` | Archive this session's transcript, scrubbed, for the team. Proposed because the attended publish policy (the default) is ask. You confirm it again from your own terminal or the dashboard before it runs. |
+| `publish` | `true` | Archive this session's transcript, scrubbed, for the team. Proposed because the attended publish policy (the default) is ask. It publishes once the run starts, with no other approval. Set it false to skip publishing. |
 | `scorers` | `[]` | Scorers that judge this session now. None proposed: the attended scoring policy (the default) is off. Name any scorer to judge with it. |
 | `judge` | `"here"` | claude is installed here, so teamai's own judge scores it. |
+
+An agent that starts the run with `--confirmed` can keep `publish: true` for you, and teamai cannot check that you chose it.
 
 The proposal follows the team's [publish policy](sharing.md#sessions) and [scoring policy](scorers.md#finished-sessions), and the machine:
 
@@ -686,12 +688,12 @@ agent   learning   → two learnings the person picked:
                      "kubectl rollout status hides the failing init container"   (shared root)
         approve    → answers yes (recommended start)
         contribute[0], contribute[1] → two files on teamai-learnings, both outcomes of session 7c1e…
-        share-session.publish → "Only you can answer this approval"; the person clicks yes in teamai dashboard
+        share-session.publish → publishes, as the person kept publish: true at the start
                    → session pushed, scrubbed, to teamai-reports. Run succeeded.
 
 # Nothing worth sharing, only archive the transcript
 person  nothing to share, just archive it
-agent   starts teamai-share-session {…,"publish":true,"scorers":[]}  → publish asks the person; no learning step at all
+agent   starts teamai-share-session {…,"publish":true,"scorers":[]}  → publishes; no learning step at all
 
 # A Cursor-only machine, with a scorer sampling did not pick
 person  score this session with style
@@ -710,7 +712,6 @@ Who answers each approval:
 | Approval | Answered by |
 |---|---|
 | `approve` (optional) | the agent under the recommended start (`--hitl recommend`); the person with "ask me at optional approvals" (`--hitl person`); yes with "answer optional approvals automatically" (`--auto-approve`) |
-| `share-session.publish` (required) | only the person: `teamai workflow respond <run> share-session.publish yes --pass 1` in their own terminal, or yes in `teamai dashboard`. An answer from the agent's session is refused with `agent_in_path` |
 
 An unattended session is never offered either default, and describe refuses them there: `invoke: ask` needs a person.
 

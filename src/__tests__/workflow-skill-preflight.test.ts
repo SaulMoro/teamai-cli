@@ -430,13 +430,16 @@ describe('skill driver preflight of optional gates', () => {
     ].join('\n') } } } } });
   });
 
-  it('names the approval teamai-share-learnings asks before it shares the learnings, and the one its teamai-share-session step asks', async () => {
-    expect(await questionOf({}, 'teamai-share-learnings')).toMatchObject({ data: { describe: { ask: { kind: 'ask', question: { text: expect.stringContaining([
-      '- Only you can answer the approval at share-session.publish, from your own terminal or teamai dashboard.',
+  it('names the approval teamai-share-learnings asks before it shares the learnings, and no approval of its teamai-share-session step', async () => {
+    expect(await questionOf({}, 'teamai-share-learnings')).toMatchObject({ data: { describe: { ask: { kind: 'ask', question: { text: [
+      '- teamai-share-learnings needs the inputs session (string), source (string), publish (boolean), scorers (list of string) and judge (one of here, driver).',
+      '- It can run up to 3 steps at once.',
+      '- learning is interactive: you work in it here, with this session\'s agent.',
       '- Optional approval at approve: no action; contribute waits for it.',
       approvalsAnswer,
       '- The team asks that you agree before it starts.',
-    ].join('\n')) } } } } });
+      'Start it, and if so, how should it run?',
+    ].join('\n') } } } } });
   });
 });
 

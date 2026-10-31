@@ -608,7 +608,7 @@ const CASES: Array<{ name: string; rows: string[]; run: () => Promise<string[]> 
       const { run } = turn;
       expect(turn.actions).toEqual([{
         kind: 'person', why: 'approval', step: 'go-live', pass: 1, message: 'Deploy to production?',
-        say: 'Only you can answer this approval. Run one of these commands in your own terminal, or answer it in teamai dashboard.',
+        say: 'Only you can answer this approval: teamai refuses an answer sent from an agent session, so no agent answers it for you. Run one of these commands in your own terminal, or answer it in teamai dashboard.',
         run: [`teamai workflow respond ${run} go-live yes --pass 1`, `teamai workflow respond ${run} go-live no --pass 1`],
       }]);
       expect(turn.waiting).toEqual({ reason: 'go-live waits for the person\'s answer' });

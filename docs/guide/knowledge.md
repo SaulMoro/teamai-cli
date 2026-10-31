@@ -26,7 +26,7 @@ The agent shows you what it proposes: share what the session taught, one learnin
 |---|---|
 | The learnings | You, while you work them with the agent: say what to share, each under which namespace, or that nothing is worth sharing |
 | `Share these 2 learnings with the team? [...]` | The agent under the recommended start, or you when you pick "ask me at optional approvals" |
-| `Publish this session, scrubbed, to the team?` | Only you, in your own terminal or `teamai dashboard` |
+| Publishing the transcript, scrubbed | You, at the start: keep or change `publish`. Nobody asks again. An agent that starts the run with `--confirmed` can answer for you |
 | Scorers | Nobody asks again: they judge the scorers you confirmed at the start |
 
 Each session is offered this at most once. The reminder keeps its old text, "Consider running `/teamai share what this session taught me` … (or run `teamai skill get share`)", where `teamai-share-learnings` cannot run: in a session teamai launched (a workflow step or a judge), in a workflow worktree, in an unattended session, while the session drives a workflow run that is not done, and when the team's `workflows/teamai-share-learnings.yaml` sets `invoke: deny`. While recall is off there is no reminder, and pull writes no `teamai-share-learnings` skill; `/teamai-share-session` still publishes and scores the session.

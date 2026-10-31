@@ -97,10 +97,10 @@ describe('a teamai-share-learnings run', () => {
     expect(shared.outcome).toBe('succeeded');
   });
 
-  it('publishes only after the person approves it, a required approval', async () => {
+  it('publishes on the publish the person kept at the start, without asking again', async () => {
     const shared = await shareLearnings({ publish: true }, SKIP);
 
-    expect(shared.asked).toEqual(['share-session.publish (required)']);
+    expect(shared.asked).toEqual([]);
     expect(shared.ran).toContain(`share-session.publish: teamai session push --scrub --session "$SESSION" --source "$SOURCE"`);
     expect(shared.outcome).toBe('succeeded');
   });

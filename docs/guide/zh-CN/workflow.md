@@ -643,7 +643,7 @@ learning         interactive：会话的 agent 和本人一起运行 `teamai ski
 └─ approve       有一条或更多经验时运行。可选审批：Share these N learnings with the team? [每条的标题、文件和命名空间]
    └─ contribute 每条经验一次 → teamai contribute --file … --title … --namespace … --session-id <session>
 share-session    用相同输入运行 teamai-share-session：
-  publish        只在 publish: true 时运行。必需审批：只有本人能回答
+  publish        只在 publish: true 时运行
                  → teamai session push --scrub --session <session> --source <source>
   score          只在 judge: here 时运行，每个评分器一次 → teamai score --session <session> --scorer <scorer>
   score-driver   只在 judge: driver 时运行，每个评分器一次 → 会话的 agent 领取评审租约，best-effort 评审
@@ -657,9 +657,11 @@ agent 运行 describe，它为调用它的会话给每个输入提议一个 `val
 |---|---|---|
 | `session` | `"7c1e5a2b-…"` | The session to share: this one. |
 | `source` | `"claude-code"` | This session's tool, as teamai session list names it. |
-| `publish` | `true` | Archive this session's transcript, scrubbed, for the team. Proposed because the attended publish policy (the default) is ask. You confirm it again from your own terminal or the dashboard before it runs. |
+| `publish` | `true` | Archive this session's transcript, scrubbed, for the team. Proposed because the attended publish policy (the default) is ask. It publishes once the run starts, with no other approval. Set it false to skip publishing. |
 | `scorers` | `[]` | Scorers that judge this session now. None proposed: the attended scoring policy (the default) is off. Name any scorer to judge with it. |
 | `judge` | `"here"` | claude is installed here, so teamai's own judge scores it. |
+
+带 `--confirmed` 启动运行的 agent 可以替本人保留 `publish: true`，teamai 无法核实本人是否选过。
 
 提议值取决于团队的[发布策略](sharing.md#会话)和[评分策略](scorers.md#已结束的会话)，以及这台机器：
 
@@ -686,12 +688,12 @@ agent   learning   → two learnings the person picked:
                      "kubectl rollout status hides the failing init container"   (shared root)
         approve    → answers yes (recommended start)
         contribute[0], contribute[1] → two files on teamai-learnings, both outcomes of session 7c1e…
-        share-session.publish → "Only you can answer this approval"; the person clicks yes in teamai dashboard
+        share-session.publish → publishes, as the person kept publish: true at the start
                    → session pushed, scrubbed, to teamai-reports. Run succeeded.
 
 # 没什么可分享，只归档转录
 person  nothing to share, just archive it
-agent   starts teamai-share-session {…,"publish":true,"scorers":[]}  → publish asks the person; no learning step at all
+agent   starts teamai-share-session {…,"publish":true,"scorers":[]}  → publishes; no learning step at all
 
 # 机器上只有 Cursor，加一个抽样没选中的评分器
 person  score this session with style
@@ -710,7 +712,6 @@ agent   proposes teamai-share-session: publish and score, no learnings
 | 审批 | 由谁回答 |
 |---|---|
 | `approve`（可选） | 推荐启动（`--hitl recommend`）下由 agent 回答；选“ask me at optional approvals”（`--hitl person`）时由本人回答；选“answer optional approvals automatically”（`--auto-approve`）时回答 yes |
-| `share-session.publish`（必需） | 只有本人：在自己的终端运行 `teamai workflow respond <run> share-session.publish yes --pass 1`，或在 `teamai dashboard` 中点 yes。来自 agent 会话的回答以 `agent_in_path` 拒绝 |
 
 无人值守的会话从不提供这两个默认工作流，无人值守的 describe 也会拒绝它们：`invoke: ask` 需要有人在场。
 
