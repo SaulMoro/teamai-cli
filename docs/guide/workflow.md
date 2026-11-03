@@ -258,6 +258,30 @@ Inside a workspace an enclosing step opened, a read-only step runs in that works
 
 The step sees the agent files from the commit the run started at: `AGENTS.md`, `CLAUDE.md`, `.agents`, `.githooks`, every tool's project directory such as `.claude` or `.tclaude`, the project MCP files `.mcp.json` and `opencode.json`, and Copilot's agent paths under `.github`. A hook an earlier step committed does not run in a later step. The team's skills, rules, agents and MCP are then delivered into the worktree, as they are for any new worktree of this checkout. Those delivered files are not part of the step's commit. A file the step itself edits is committed.
 
+teamai commits and pushes each step's work itself, with git hooks turned off, on every driver, `--driver local` included. A step cannot plant a hook that then runs on your machine, and your own `pre-commit` and `pre-push` hooks do not run on these commits either. A check that lived in a hook is skipped:
+
+```text
+$ teamai workflow start fix-date --driver local
+ℹ Run r7c1d2e3f4a5b6c7d started. If it stops before it ends, continue it with: teamai workflow resume r7c1d2e3f4a5b6c7d --driver local
+{"data":{"done":{"run":"r7c1d2e3f4a5b6c7d","outcome":"succeeded","record":"published"},"cancelled":[]}}
+```
+
+No `husky - pre-commit` line appears, and the branch is pushed even when `npm run lint` would fail. Run the check as a step, so the run fails where the hook would have stopped the commit, or keep it in CI:
+
+```yaml
+schemaVersion: v1alpha1
+name: fix-date
+description: Fix the date parser, then lint the fix.
+steps:
+  - id: fix
+    workspace: new
+    prompt: Fix the date parser.
+  - id: lint
+    needs: [fix]
+    workspace: new        # starts from the fix branch
+    command: npm ci && npm run lint
+```
+
 When the checkout has an `origin` and the step made commits, the driver pushes that branch, also when the step failed. A later attempt that adds no commit still pushes when this branch has commits `origin` does not have. That includes a first push that never landed, and an origin that has no branches yet. A failed push fails a step that succeeded with `push_failed` and keeps the worktree. A step that failed keeps its own failure, and its message adds that the push failed. With no `origin`, or when `origin` already has that commit, the run still succeeds and reports the branch.
 
 `session: continue` resumes this step's previous pass with the same tool. `session: { from: <step> }` resumes a step this one needs. A different tool resumes a copy of the session. OpenCode gets the copy but always starts fresh, because it has no flag to resume a session. A step resumes a session as the last step that continued it left it, whichever tool or machine that step ran on. A step that started a new session, such as an OpenCode step, does not change what later steps resume.
