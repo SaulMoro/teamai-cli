@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isJsonObject, type JsonObject } from '@teamai/tool-core/json';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -13,21 +14,7 @@ import type { RunMode } from './launch-context.js';
 import type { OutcomeKind, SessionUsage, WorkOutcome } from './outcomes.js';
 import { AllowSchema } from './workflow/requirements.js';
 
-/** Any value JSON (or YAML read as JSON) can hold: what arbitrary parsed input is before a domain schema narrows it. */
-export const JsonValueSchema = z.json();
-
-export type JsonValue = z.infer<typeof JsonValueSchema>;
-
-/** A JSON object: a document, or a mapping inside one. */
-export type JsonObject = { [key: string]: JsonValue };
-
-/** A JSON object, parsed: a copy that leaves out `__proto__` keys, so check a file that is written back without it. */
-export const JsonObjectSchema = z.record(z.string(), JsonValueSchema) satisfies z.ZodType<JsonObject>;
-
-/** Whether a JSON value is an object, not an array, a primitive or null: JSON and YAML parse every object as an Object instance. */
-export function isJsonObject(value: JsonValue | undefined): value is JsonObject {
-  return value instanceof Object && !Array.isArray(value);
-}
+export { isJsonObject, JsonObjectSchema, JsonValueSchema, type JsonObject, type JsonValue } from '@teamai/tool-core/json';
 
 const COPILOT_USER_MCP_CONFIG = 'mcp-config.json';
 const COPILOT_PROJECT_MCP_CONFIG = '.github/mcp.json';
