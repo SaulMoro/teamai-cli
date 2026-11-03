@@ -3,28 +3,6 @@ import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import { answered, failed, jsonLines, readClaudeResult, readPlainReply, reportedTokens, type CallOutput, type CallReading, type LaunchAdapter } from '@teamai/tool-core/launch';
 import { agyRun, readToolMetadata } from '@teamai/tool-core/stdout';
 
-const CodexError = z.union([
-  z.object({ type: z.literal('error'), message: z.string() }),
-  z.object({ type: z.literal('turn.failed'), error: z.object({ message: z.string() }) }),
-]);
-
-/** Codex writes its last message to the `-o` file, and prints its events, the turn's usage included, as JSON lines. */
-function readCodexExec({ stdout, lastMessage }: CallOutput): CallReading {
-  const text = lastMessage?.trim();
-
-  if (!text) {
-    const error = jsonLines(stdout).flatMap((line) => {
-      const parsed = CodexError.safeParse(line);
-
-      return parsed.success ? [parsed.data] : [];
-    }).at(-1);
-
-    return failed(error?.type === 'error' ? error.message : error?.error.message);
-  }
-
-  return answered(text, readToolMetadata(stdout)?.tokens);
-}
-
 const OpenCodeEvent = z.union([
   z.object({ type: z.literal('text'), part: z.object({ text: z.string() }) }),
   z.object({ type: z.literal('error'), error: z.object({ message: z.string() }) }),
@@ -150,12 +128,7 @@ function readAgyStream({ stdout }: CallOutput): CallReading {
 // oxlint-disable-next-line teamai/tool-facts -- keyed by launch adapter id, which this table defines; a tool picks one with TOOLS.launch
 export const LAUNCH_ADAPTERS = {
   claude: BUILT_IN_TOOLS.claude.launch.claude,
-  codex: {
-    call: { evidence: 'verified', prompt: 'stdin', args: ({ lastMessageFile }) => ['exec', '--json', '--skip-git-repo-check', '-o', lastMessageFile, '-'], read: readCodexExec },
-    // `codex exec --help` of codex-cli 0.165.0: "Intended solely for running in environments that are externally sandboxed".
-    step: { evidence: 'verified', unattended: { args: ['--dangerously-bypass-approvals-and-sandbox'], evidence: 'docs' } },
-    confined: { evidence: 'verified', env: ['CODEX_HOME', 'OPENAI_API_KEY', 'OPENAI_BASE_URL'], homeEnv: 'CODEX_HOME', verified: /^codex-cli 0\.163\.0$/, access: 'read' },
-  },
+  codex: BUILT_IN_TOOLS.codex.launch.codex,
   opencode: {
     call: { evidence: 'verified', prompt: 'stdin', args: () => ['run', '--format', 'json'], read: readOpenCodeRun },
     // `opencode run --help` of 2.1.2 and opencode.ai/docs/permissions: approves every request a rule does not deny.
