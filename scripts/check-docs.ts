@@ -25,7 +25,10 @@ const generated = [
 for (const output of generated) {
   const file = path.join(root, output.file);
 
-  if (write) fs.writeFileSync(file, output.content);
+  if (write) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, output.content);
+  }
   else if (!fs.existsSync(file) || fs.readFileSync(file, 'utf8') !== output.content) {
     console.error(`Generated documentation is stale: ${output.file}. Run node scripts/check-docs.mjs --write.`);
     process.exitCode = 1;
