@@ -9,6 +9,10 @@ const workspace = {
   'packages/tool-core/package.json': JSON.stringify({ name: '@teamai/tool-core', private: true }),
   'packages/tool-core/src/definition.ts': 'export const definition = 1;',
   'packages/runtime-sandbox/package.json': JSON.stringify({ name: '@teamai/runtime-sandbox', private: true }),
+  'packages/tool-claude/package.json': JSON.stringify({ name: '@teamai/tool-claude', private: true }),
+  'packages/tool-codex/package.json': JSON.stringify({ name: '@teamai/tool-codex', private: true }),
+  'packages/tool-definitions/package.json': JSON.stringify({ name: '@teamai/tool-definitions', private: true }),
+  'packages/tool-testing/package.json': JSON.stringify({ name: '@teamai/tool-testing', private: true }),
   'src/locate.ts': 'export const locate = 1;',
   'scripts/check-docs.mjs': 'export const check = 1;',
 };
@@ -55,6 +59,26 @@ rule.invalid('rejects a file in a package that is not private', `export const de
 rule.invalid('rejects a file in a packages/ folder with no package.json', `export const definition = 1;`, (output) => {
   expect(output).toContain('packages/tool-orphan/package.json');
 }, inWorkspace('packages/tool-orphan/src/index.ts'));
+
+rule.invalid('rejects a family importing another family', `import { family } from '@teamai/tool-codex';`, (output) => {
+  expect(output).toContain('Only @teamai/tool-definitions imports a tool family');
+  expect(output).toContain('packages/tool-claude/src/index.ts -> @teamai/tool-codex');
+}, inWorkspace('packages/tool-claude/src/index.ts'));
+
+rule.invalid('rejects src/ importing a family', `import { family } from '@teamai/tool-claude';`, undefined, inWorkspace('src/tools.ts'));
+
+rule.invalid('rejects a unit test mocking a family', `vi.mock('@teamai/tool-claude');`, undefined, inWorkspace('src/__tests__/tools.test.ts'));
+
+rule.invalid('rejects tool-core importing a family', `import { family } from '@teamai/tool-claude';`, undefined, inWorkspace('packages/tool-core/src/registry.ts'));
+
+rule.invalid('rejects production code importing the test kit', `import { describeFamily } from '@teamai/tool-testing/conformance';`, (output) => {
+  expect(output).toContain('@teamai/tool-testing is test-only');
+}, inWorkspace('packages/tool-claude/src/index.ts'));
+
+rule.valid('allows tool-definitions importing every family', `import { family as claude } from '@teamai/tool-claude';
+import { family as codex } from '@teamai/tool-codex';`, inWorkspace('packages/tool-definitions/src/registry.ts'));
+
+rule.valid('allows a family test importing the test kit', `import { describeFamily } from '@teamai/tool-testing/conformance';`, inWorkspace('packages/tool-claude/src/conformance.test.ts'));
 
 rule.valid('allows a package importing its own files', `import { definition } from './definition.js';`, inWorkspace('packages/tool-core/src/sessions.ts'));
 
