@@ -957,12 +957,20 @@ export async function workflowRetry(runId: string, step: string): Promise<void> 
  */
 export async function workflowCancel(runId: string, step?: string): Promise<void> {
   await workflowControl(runId, async (config, secrets) => {
-    const cancelled = await cancelRun(config, runId, secrets, step);
+    const run = RunIdSchema.safeParse(runId);
 
-    if ('error' in cancelled) return cancelled;
-    await takeRunLock(config, RunIdSchema.parse(runId), (lock) => stopCancelledAttempts(config, lock), { waitMs: 0 });
+    if (!run.success) return cancelRun(config, runId, secrets, step);
 
-    return cancelled;
+    // Cancelled under the run's lock, no driver of the run starts between the cancel and the stop.
+    const taken = await takeRunLock(config, run.data, async (lock) => {
+      const cancelled = await cancelRun(config, runId, secrets, step);
+
+      if (!('error' in cancelled)) await stopCancelledAttempts(config, lock);
+
+      return cancelled;
+    }, { waitMs: 0 });
+
+    return taken.kind === 'held' ? taken.value : cancelRun(config, runId, secrets, step);
   });
 }
 

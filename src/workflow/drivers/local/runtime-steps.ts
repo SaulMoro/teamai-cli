@@ -4,10 +4,9 @@ import type { RunMode } from '../../../launch-context.js';
 import type { CommandExit } from '../../../tool-launch/process-stop.js';
 import { attemptEnv } from '../../attempt-marker.js';
 import type { LeaseWire } from '../../lease-wire.js';
-import { attemptHoldingSession, attemptToolHome, type AttemptRun } from '../../runtimes/attempt.js';
+import type { AttemptRun } from '../../runtimes/attempt.js';
 import type { PlaceView } from '../../runtimes/step-runtime.js';
 import { attemptResultPath, type AttemptId, type RunId } from '../../store.js';
-import type { SessionRef } from '../../workspace.js';
 import type { WorkflowFailure } from '../../types.js';
 import { git } from '../../worktree.js';
 import type { LocalConfig } from '../../../types.js';
@@ -187,22 +186,3 @@ export function runtimeLauncher(run: AttemptRun, { view, toolHome, unset }: { vi
   };
 }
 
-/**
- * The session a prompt on a step runtime resumes: the first of `sessions` (the lease's, then each earlier one it
- * continued) that an earlier attempt of run `run` kept in its tool home for `tool`. That home is copied into the home of
- * `attempt`, where the tool resumes it. Undefined when no earlier attempt holds one, and the tool starts a new session.
- */
-export async function seedToolHome({ config, run, attempt, tool, sessions }: { config: LocalConfig; run: RunId; attempt: AttemptId; tool: string; sessions: SessionRef[] }): Promise<SessionRef | undefined> {
-  for (const session of sessions.filter((candidate) => candidate.tool === tool)) {
-    const holding = await attemptHoldingSession(config, run, session);
-
-    if (holding === undefined) continue;
-
-    // A home this attempt already has, from before a restart, keeps what its tool wrote there.
-    if (holding.attempt !== attempt) await fs.cp(holding.home, attemptToolHome(config, run, attempt, tool), { recursive: true, force: false });
-
-    return session;
-  }
-
-  return undefined;
-}
