@@ -13,11 +13,13 @@ afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: 
 // when the machine is idle, and up to 16 s while the full suite keeps every core busy. A case gets 30 s per run.
 const RUN_MS = 30_000;
 vi.setConfig({ testTimeout: RUN_MS });
+/** The shipped tool ids check-docs generates for teamai/tool-facts. */
+const TOOL_IDS = 'oxlint-plugin-teamai/tool-ids.generated.json';
 
 function checkout(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-docs-command-'));
   dirs.push(root);
-  for (const name of ['docs', 'skill-data', 'skills', ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
+  for (const name of ['docs', 'skill-data', 'skills', TOOL_IDS, ...fs.readdirSync(ROOT).filter((file) => /^README.*\.md$/.test(file))]) {
     fs.cpSync(path.join(ROOT, name), path.join(root, name), { recursive: true });
   }
   return root;
@@ -114,13 +116,13 @@ it.each([
   expect(checked.output).toContain(diagnostic);
 });
 
-it('write changes only its three generated files', () => {
+it('write changes only its generated files', () => {
   const root = checkout();
   const files = fs.readdirSync(root, { recursive: true, encoding: 'utf8' })
     .filter((file) => fs.statSync(path.join(root, file)).isFile());
   const before = new Map(files.map((file) => [file, fs.readFileSync(path.join(root, file), 'utf8')]));
   expect(run(root, '--write').status).toBe(0);
-  const generated = new Set(['skill-data/core/references/commands.md', 'docs/guide/tool-support.md', 'docs/guide/zh-CN/tool-support.md']);
+  const generated = new Set(['skill-data/core/references/commands.md', 'docs/guide/tool-support.md', 'docs/guide/zh-CN/tool-support.md', TOOL_IDS]);
   for (const file of files.filter((name) => !generated.has(name.split(path.sep).join('/')))) {
     expect(fs.readFileSync(path.join(root, file), 'utf8'), file).toBe(before.get(file));
   }
