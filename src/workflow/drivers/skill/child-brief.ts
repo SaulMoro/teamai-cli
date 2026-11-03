@@ -10,7 +10,7 @@ import { attemptDir, attemptResultPath, type AttemptId, type RunId } from '../..
 import type { OutputSchema } from '../../types.js';
 import type { Literal } from './literals.js';
 
-/** `attempts/<a>/result.json`, as the child writes it: what the step produced, or why it could not. */
+/** `attempts/<a>/out/result.json`, as the child writes it: what the step produced, or why it could not. */
 const ChildResultSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('output'), output: z.unknown().optional() }),
   z.object({ kind: z.literal('failure'), failure: z.object({ code: z.string().min(1), message: z.string() }) }),
@@ -85,6 +85,8 @@ export async function writeChildBrief(input: {
 
   const file = path.join(attemptDir(config, run, attempt), 'brief.md');
   await fs.mkdir(path.dirname(file), { recursive: true });
+  // The child writes its result there and may not create a directory first.
+  await fs.mkdir(path.dirname(attemptResultPath(config, run, attempt)), { recursive: true });
   await writeFileAtomic(file, redact(brief, { envSecrets: secrets, patterns: false }));
 
   return file;
