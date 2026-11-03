@@ -20,6 +20,8 @@ import {
   getDataHome,
   MemberSettingsSchema,
   MemberWorkflowSettingsSchema,
+  DriverTuningSchema,
+  type DriverTuning,
   WorkflowToolSchema,
   type MemberSettings,
   type MemberWorkflowSettings,
@@ -409,6 +411,23 @@ function readMachineWorkflowSettings(raw: RawMapping, configPath: string): Membe
     warnOnce(`Ignoring workflows.tools in ${configPath}: expected an object.`);
   }
 
+  const drivers = OptionalMappingSchema.parse(workflow.drivers);
+
+  if (drivers) {
+    const accepted: Record<string, DriverTuning> = {};
+
+    for (const [name, value] of Object.entries(drivers)) {
+      const parsed = DriverTuningSchema.safeParse(value);
+
+      if (parsed.success) accepted[name] = parsed.data;
+      else warnOnce(`Ignoring workflows.drivers.${name} in ${configPath}: ${describeConfigError(parsed.error)}.`);
+    }
+
+    if (Object.keys(accepted).length > 0) settings.drivers = accepted;
+  } else if (Object.prototype.hasOwnProperty.call(workflow, 'drivers')) {
+    warnOnce(`Ignoring workflows.drivers in ${configPath}: expected an object.`);
+  }
+
   const allow = OptionalMappingSchema.parse(workflow.allow);
 
   if (allow) {
@@ -430,6 +449,26 @@ function readMachineWorkflowSettings(raw: RawMapping, configPath: string): Membe
   }
 
   return Object.keys(settings).length > 0 ? MemberWorkflowSettingsSchema.parse(settings) : undefined;
+}
+
+/**
+ * `workflows.drivers` of the machine file under the workspace's, merged by driver, then by runtime, then by option key,
+ * so a member who tunes one option of one runtime keeps every other option the machine file sets.
+ */
+function mergeDriverTuning(machine: Record<string, DriverTuning> | undefined, local: Record<string, DriverTuning> | undefined): Record<string, DriverTuning> | undefined {
+  if (!machine && !local) return undefined;
+  const merged: Record<string, DriverTuning> = {};
+
+  for (const name of new Set([...Object.keys(machine ?? {}), ...Object.keys(local ?? {})])) {
+    const below = machine?.[name]?.runtimes ?? {};
+    const above = local?.[name]?.runtimes ?? {};
+    const runtimes: DriverTuning['runtimes'] = {};
+
+    for (const use of new Set([...Object.keys(below), ...Object.keys(above)])) runtimes[use] = { ...below[use], ...above[use] };
+    merged[name] = { runtimes };
+  }
+
+  return merged;
 }
 
 /** Read valid member settings from a machine file, whether or not it is a user-scope install. */
@@ -517,6 +556,7 @@ function applyMachineSettings(config: LocalConfig, machine: MemberSettings): Loc
         ...local.workflows,
         tools: { ...machine.workflows?.tools, ...local.workflows?.tools },
         allow: { ...machine.workflows?.allow, ...local.workflows?.allow },
+        drivers: mergeDriverTuning(machine.workflows?.drivers, local.workflows?.drivers),
       }
     : undefined;
 
