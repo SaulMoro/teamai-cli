@@ -1523,12 +1523,75 @@ teamai 按下面的顺序查找 `<name>.yaml`，使用找到的第一个：
 
 没有名为 `x` 的定义时，`--driver x` 运行 `teamai-x`，所以 `--driver claude` 和 `--driver teamai-claude` 都运行自带的 `teamai-claude`。`local`、`skill` 和 `fleet` 不能用作定义名。
 
-这个版本里，一个定义只列出一个运行时。`use: local` 按 `--driver local` 的方式运行步骤。其他名字都是外部程序，按下面的顺序查找：
+一个定义列出一个或多个运行时。teamai 按列出的顺序把每个步骤交给它们，第一个能接下的运行时运行它：
+
+```yaml
+# drivers/sandboxed.yaml
+schemaVersion: v1alpha1
+name: sandboxed
+tool: claude
+runtimes:
+  - use: sbx              # 接下它能接的每个步骤
+    options:
+      max_parallel: 2
+  - use: local            # 接下其余的，例如交互步骤或必须回答的审批
+```
+
+没有任何单个运行时能接下的步骤会失败为 `requirement_unmet`，消息列出每个运行时缺什么：
+
+```text
+Step "review" needs what no single runtime of driver "sandboxed" offers: runtime sbx lacks tools; runtime local lacks isolation. Give one runtime of the definition all of it, or change what the step requires.
+```
+
+步骤要求严格隔离、而定义里没有运行时提供时，`workflow start` 会直接拒绝，不会创建运行。每个运行时都因为这台机器的原因暂缓的步骤（例如你的 `workflows.allow` 不允许的网络）保持待运行。没有其他步骤在运行时，运行以 `busy` 停下并给出原因，仪表盘的运行详情会写明是哪个运行时暂缓了它、为什么。
+
+`use: local` 按 `--driver local` 的方式运行步骤。其他名字都是外部程序，按下面的顺序查找：
 
 ```text
 ~/.teamai/runtimes/<name>/runtime          你自己的
 runtimes/<name>/runtime                    团队仓库，或 runtimes/<namespace>/<name>/runtime
-teamai-runtime-<name>                      在 PATH 上
+teamai-runtime-<name>                      先找 teamai 包里自带的，再找 PATH
+```
+
+teamai 自带这些定义：
+
+| 定义 | 运行时 |
+| --- | --- |
+| `teamai-claude`、`teamai-codex`、`teamai-opencode` | `local`，提示步骤用对应的工具 |
+| `teamai-t3` | `t3`（`environment: local`、`max_parallel: 4`），然后 `local` |
+
+### 运行时选项
+
+运行时在 `init` 时自己检查 `options`，不接受的键会在任何步骤运行前失败为 `bad_option`。有两个键属于 teamai，运行时看不到：
+
+| 键 | 含义 |
+| --- | --- |
+| `max_parallel` | 这个运行时上同时最多有这么多次尝试。它没有空位时，步骤交给下一个运行时。`workflows.max_parallel` 仍然限制整个运行。 |
+| `credentials` | `{ codex: login }`：步骤里的 Codex 使用 teamai 单独保存的登录，见下文。 |
+
+不改定义也能在你的机器上调整它的选项，写在 `~/.teamai/config.yaml` 或工作区自己的 `config.yaml` 里。键逐个覆盖定义里的值，工作区的优先：
+
+```yaml
+workflows:
+  drivers:
+    teamai-t3:
+      runtimes:
+        t3:
+          max_parallel: 2
+```
+
+### 步骤运行时的 Codex 登录
+
+Codex 拒绝重复使用的刷新令牌，所以你自己登录的副本一旦在步骤里刷新，你的其他 Codex 会话就会被登出。`credentials: { codex: login }` 改用 teamai 单独保存的登录。先创建一次：
+
+```sh
+CODEX_HOME=~/.teamai/logins/codex codex login
+```
+
+teamai 把这个 `auth.json` 复制到这次尝试的工具主目录，步骤结束后再把刷新过的文件写回去，而且只写回同一个账号的。整台机器上同一时间只有一次尝试持有这个登录。其他尝试会等待，并说明在等谁：
+
+```text
+ℹ Step "review" waits for the codex login teamai keeps, which attempt a339da600 of run r9a395746ec65dbd7 holds. It goes on once that attempt ends; teamai workflow cancel r9a395746ec65dbd7 releases it.
 ```
 
 团队运行时是队友推送的代码，所以只有在这台机器上有人接受过的修订才会运行。它目录下任何文件的改动都会产生新的修订。有人值守的运行在第一次启动前会询问：
@@ -1566,7 +1629,7 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 ← {"type":"init","ok":true,"can":{"workspace":["read-only","new","continue"],"tools":["claude"],"env":true,"unattended":true}}
 → {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","view":{…},"credentials":{}}
 ← {"op":"op-5e0d11cb4777","event":"accepted","handle":"toy-r…-a…"}
-← {"op":"op-5e0d11cb4777","event":"ready"}
+← {"op":"op-5e0d11cb4777","event":"ready","display":{"label":"toy-r…-a…","url":"https://toy.example.test/places/r…-a…","fields":{"place":"toy-r…-a…"}}}
 → {"type":"exec","op":"op-83bfffde9ce3","handle":"toy-r…-a…","argv":["/bin/sh","-c","npm test"],"env":{…},"unset":[],"cwd":"/repo"}
 ← {"op":"op-83bfffde9ce3","event":"accepted"}
 ← {"op":"op-83bfffde9ce3","event":"output","stream":"stdout","data":"ok\n"}
@@ -1575,6 +1638,8 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 
 其他请求是 `cancel`、`collect`、`reattach` 和 `close`。在 `close` 之前，运行时对重复的 `op` 给出同样的结果。它保存 exec 打印的内容和退出方式，这样重启后的 teamai 可以用 `reattach` 读取。运行时不接受的选项会让 `init` 失败为 `bad_option`，并给出那个键。
 
+`ready` 以及 `reattach` 的 `alive` 回复可以带上 `display`，它是可选的：`label` 最多 80 个字符，`url`（`https:`、`http:` 或应用自己的协议，例如 `t3:`），以及最多 8 个字符串 `fields`。仪表盘的运行详情会把它显示在步骤下面。不要在里面放密钥或你主目录下的路径。teamai 无法显示的 display 会被丢弃并记录原因，步骤照常运行。
+
 | 错误 | 下一步 |
 | --- | --- |
 | `driver_not_found` | 添加 `drivers/<name>.yaml` 并运行 `teamai pull`，或者添加 `~/.teamai/drivers/<name>.yaml` |
@@ -1582,7 +1647,10 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 | `driver_namespace_conflict`、`runtime_namespace_conflict` | 只在一个命名空间里保留这个名字，推送，然后运行 `teamai pull` |
 | `runtime_not_found` | 把运行时安装到上面的某个位置 |
 | `runtime_not_accepted` | 有人值守地运行一次这个命令，审查并接受这个修订 |
-| `bad_option` | 修正定义里的选项 |
+| `bad_option` | 修正定义里的选项，或你配置里 `workflows.drivers` 下的选项 |
+| `requirement_unmet` | 让定义里的某一个运行时提供步骤要求的全部内容，或修改步骤 |
+| `login_missing` | 运行 `CODEX_HOME=~/.teamai/logins/codex codex login`，然后重试这个步骤 |
+| `login_not_written_back` | 如果 Codex 刷新过令牌，用同一条命令重新登录，然后重试这个步骤 |
 | `runtime_failed`、`runtime_interrupted` | 重试这个步骤：`teamai workflow retry <run> <step>` |
 
 ## 在自己的驱动里使用工作区
