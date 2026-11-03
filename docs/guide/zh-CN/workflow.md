@@ -4,6 +4,8 @@
 
 工作流是团队仓库里的 `workflows/<name>.yaml`。它运行命令步骤和提示词步骤，每个步骤在它依赖的步骤之后运行。没有 workspace 的命令是只读的；[工作区](#工作区)说明步骤如何在自己的分支上改代码。[高级工作流](workflow-advanced.md) 介绍并行步骤、循环、`for_each`、到达结局时仍在运行的步骤会怎样，以及完整的表达式语言。
 
+要让每个步骤在团队镜像的容器里运行，见 [Sandbox 运行时](runtime-sandbox.md)。
+
 ```yaml
 schemaVersion: v1alpha1
 name: build
