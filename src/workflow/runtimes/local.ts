@@ -87,7 +87,7 @@ export function localStepRuntime(can: DriverCan = {}): StepRuntime {
     async init({ options }) {
       const [key] = Object.keys(options);
 
-      return key === undefined ? { ok: true, can } : { ok: false, failure: { code: 'bad_option', key, message: `The local runtime takes no options, and was given "${key}".` } };
+      return key === undefined ? { ok: true, can, launchesAgents: false } : { ok: false, failure: { code: 'bad_option', key, message: `The local runtime takes no options, and was given "${key}".` } };
     },
 
     async open(request, onAccepted) {
@@ -100,6 +100,10 @@ export function localStepRuntime(can: DriverCan = {}): StepRuntime {
     },
 
     exec,
+
+    async prompt() {
+      return { kind: 'failed', failure: { code: 'prompt_unsupported', message: 'The local runtime launches a prompt\'s tool as an exec of its argv, never through prompt.' } };
+    },
 
     async cancel(op) {
       const live = running.get(op);

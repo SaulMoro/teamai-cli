@@ -76,7 +76,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
 
     return {
       name: 'fake',
-      init: async () => ({ ok: true, can: {} }),
+      init: async () => ({ ok: true, can: {}, launchesAgents: false }),
       open: async (_request, onAccepted) => {
         await onAccepted('h1');
 
@@ -87,6 +87,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
 
         return new Promise<ExecEnd>(() => {});
       },
+      prompt: async () => ({ kind: 'failed', failure: { code: 'prompt_unsupported', message: 'execs only' } }),
       cancel: async () => {},
       collect: async () => ({ ok: true }),
       reattach: async () => (seen[Math.min(asked++, seen.length - 1)] ?? (() => ({ kind: 'gone' })))(op),

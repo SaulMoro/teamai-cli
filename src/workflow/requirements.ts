@@ -180,6 +180,8 @@ export const ConfinedOfferSchema = z.object({
  */
 export const CanSchema = z.object({
   hitl: z.boolean().optional(),
+  /** `false`: the driver runs no command, so command steps and steps with setup go to another driver. Absent: it does. */
+  exec: z.boolean().optional(),
   workspace: z.array(z.enum(WORKSPACE_MODES)).optional(),
   network: z.boolean().optional(),
   isolation: IsolationSchema.optional(),
