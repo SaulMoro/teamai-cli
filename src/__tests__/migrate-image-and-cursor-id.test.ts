@@ -22,7 +22,7 @@ vi.mock('node:os', async (importOriginal) => {
 
 import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import { sessionStoreDir } from '../locate.js';
-import { CursorAdapter } from '../session-flow/adapters/cursor.js';
+import { getAdapter } from '../session-flow/adapters/index.js';
 import type { Session } from '@teamai/tool-core/sessions/ir';
 
 function mkSession(imageFilePath: string): Session {
@@ -103,7 +103,7 @@ describe('migrating an image that only has a local filePath', () => {
 describe('cursor composerId derivation', () => {
   it('gives one id to the two spellings of one workspace', async () => {
     fs.mkdirSync(path.join(mocks.home, '.cursor', 'projects'), { recursive: true });
-    const adapter = new CursorAdapter();
+    const adapter = getAdapter('cursor');
     const real = path.join(fs.realpathSync(os.tmpdir()), 'teamai-cursor-cwd');
     fs.mkdirSync(real, { recursive: true });
     // /tmp is a symlink to /private/tmp on macOS: the unresolved spelling is

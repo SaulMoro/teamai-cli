@@ -179,7 +179,6 @@ import type { Session } from '@teamai/tool-core/sessions/ir';
 import { ToolUnavailableError, type SessionReadRef } from '@teamai/tool-core/sessions/base';
 import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import { sessionStoreDir } from '../locate.js';
-import { CursorAdapter } from '../session-flow/adapters/cursor.js';
 import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 
@@ -1680,7 +1679,7 @@ describe('adapters: native cwd recovery from JSONL records', () => {
       }) + '\n',
     );
 
-    const session = await new CursorAdapter().readSession({ sessionId: SID });
+    const session = await BUILT_IN_TOOLS.cursor.platforms.cursor.adapter(sessionStoreDir('cursor', undefined)).readSession({ sessionId: SID });
     expect(session.cwd).toBe(NATIVE);
   });
 });

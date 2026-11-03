@@ -1,5 +1,5 @@
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
-import { readClaudeResult, type LaunchAdapter } from '@teamai/tool-core/launch';
+import type { LaunchAdapter } from '@teamai/tool-core/launch';
 
 /** How teamai launches each family of tools headless. A tool picks its adapter with the `launch` facet in `TOOLS`. */
 // oxlint-disable-next-line teamai/tool-facts -- keyed by launch adapter id, which this table defines; a tool picks one with TOOLS.launch
@@ -9,12 +9,7 @@ export const LAUNCH_ADAPTERS = {
   opencode: BUILT_IN_TOOLS.opencode.launch.opencode,
   codebuddy: BUILT_IN_TOOLS.codebuddy.launch.codebuddy,
   openclaw: BUILT_IN_TOOLS.openclaw.launch.openclaw,
-  cursor: {
-    executable: 'cursor-agent',
-    // Ask mode answers without editing.
-    call: { evidence: 'docs', prompt: 'stdin', args: () => ['-p', '--output-format', 'json', '--mode', 'ask', '--trust'], read: readClaudeResult },
-    confined: { evidence: 'docs', env: ['CURSOR_API_KEY', 'CURSOR_CONFIG_DIR', 'CURSOR_DATA_DIR'], access: 'full' },
-  },
+  cursor: BUILT_IN_TOOLS.cursor.launch.cursor,
   copilot: BUILT_IN_TOOLS.copilot.launch.copilot,
   pi: BUILT_IN_TOOLS.pi.launch.pi,
   omp: BUILT_IN_TOOLS.pi.launch.omp,
