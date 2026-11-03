@@ -37,7 +37,8 @@ export function loginCommand(tool: LoginTool): string {
   return `${HOME_VARIABLES[tool]}=${loginHome(tool)} ${tool} login`;
 }
 
-function lockFile(tool: LoginTool): string {
+/** The file whose presence says an attempt holds `tool`'s login. */
+export function loginLockFile(tool: LoginTool): string {
   return path.join(path.dirname(loginHome(tool)), `${tool}.lock`);
 }
 
@@ -54,7 +55,7 @@ export type LoginLock = z.infer<typeof LoginLockSchema>;
 /** The attempt that holds `tool`'s login, or undefined when none does. */
 export async function loginHolder(tool: LoginTool): Promise<LoginLock | undefined> {
   try {
-    return LoginLockSchema.parse(JSON.parse(await fs.readFile(lockFile(tool), 'utf8')));
+    return LoginLockSchema.parse(JSON.parse(await fs.readFile(loginLockFile(tool), 'utf8')));
   } catch {
     return undefined;
   }
@@ -62,7 +63,7 @@ export async function loginHolder(tool: LoginTool): Promise<LoginLock | undefine
 
 /** Writes `lock` to a file of its own, then links or renames it into place, so a reader never sees half of it. */
 async function placeLock(tool: LoginTool, lock: LoginLock, { replace }: { replace: boolean }): Promise<boolean> {
-  const file = lockFile(tool);
+  const file = loginLockFile(tool);
   await fs.mkdir(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
   await fs.writeFile(temporary, JSON.stringify(lock), { mode: 0o600 });
@@ -170,7 +171,7 @@ export async function holdLogin({ tool, run, attempt, toolHome, signal, onWait }
 export async function releaseLogin(tool: LoginTool, { run, attempt }: { run: string; attempt: string }): Promise<void> {
   const holder = await loginHolder(tool);
 
-  if (holder?.run === run && holder.attempt === attempt) await fs.rm(lockFile(tool), { force: true });
+  if (holder?.run === run && holder.attempt === attempt) await fs.rm(loginLockFile(tool), { force: true });
 }
 
 /**
@@ -184,7 +185,7 @@ export async function releaseEndedLogins(run: string, open: ReadonlySet<string>)
     const holder = await loginHolder(tool);
 
     if (holder?.run !== run || open.has(holder.attempt)) continue;
-    await fs.rm(lockFile(tool), { force: true });
+    await fs.rm(loginLockFile(tool), { force: true });
     released.push({ tool, attempt: holder.attempt });
   }
 

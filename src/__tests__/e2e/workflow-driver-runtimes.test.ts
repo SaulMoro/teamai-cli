@@ -402,6 +402,7 @@ const file = path.join(home, 'auth.json');
 const login = JSON.parse(fs.readFileSync(file, 'utf8'));
 const span = (edge) => process.env.FAKE_TOOL_SPANS && fs.appendFileSync(process.env.FAKE_TOOL_SPANS, JSON.stringify({ attempt: process.env.TEAMAI_WORKFLOW_ATTEMPT, edge }) + '\\n');
 span('start');
+if (process.env.FAKE_CODEX_PID) fs.writeFileSync(process.env.FAKE_CODEX_PID, String(process.pid));
 fs.appendFileSync(process.env.LAUNCHES, JSON.stringify({ home, account: login.tokens.account_id, refresh: login.tokens.refresh_token }) + '\\n');
 if (process.env.FAKE_TOOL_HOLD_MS) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_TOOL_HOLD_MS));
 const next = 'r' + (Number(login.tokens.refresh_token.slice(1)) + 1);
@@ -433,14 +434,36 @@ span('end');
     };
 
     /** Starts `args` in the background, and resolves once its stderr holds `text`, or rejects after a while. */
-    const startWatching = (args: string[], extra: NodeJS.ProcessEnv): { stderr: () => string; ended: Promise<Ran> } => {
+    const startWatching = (args: string[], extra: NodeJS.ProcessEnv): { stderr: () => string; ended: Promise<Ran>; kill: () => void } => {
       const child = spawn(process.execPath, [CLI, ...args], { cwd: repo, env: { ...process.env, ...env(extra), FORCE_COLOR: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
       let stdout = '';
       let stderr = '';
       child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
       child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
       const ended = new Promise<Ran>((resolve) => child.on('close', (code, signal) => resolve({ code, signal, stdout, stderr })));
-      return { stderr: () => stderr, ended };
+      return { stderr: () => stderr, ended, kill: () => child.kill('SIGKILL') };
+    };
+
+    const pidAlive = (pid: number): boolean => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const lockFile = (): string => path.join(os.homedir(), '.teamai', 'logins', 'codex.lock');
+
+    /** Starts a run whose fake Codex holds the login until stopped, and resolves with its run id and Codex's pid once Codex runs. */
+    const holdingRun = async (definition: string): Promise<{ run: string; pid: number; watched: ReturnType<typeof startWatching> }> => {
+      const pidFile = path.join(sandbox, `${definition}.pid`);
+      fs.rmSync(pidFile, { force: true });
+      const watched = startWatching(['workflow', 'start', 'oneprompt', '--driver', definition], { FAKE_TOOL_HOLD_MS: '120000', FAKE_CODEX_PID: pidFile });
+      await waitFor(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8') !== '', 'Codex to start');
+      const run = /Run (r[0-9a-f]+) started/.exec(watched.stderr())?.[1] ?? '';
+      expect(run).not.toBe('');
+      return { run, pid: Number(fs.readFileSync(pidFile, 'utf8')), watched };
     };
 
     const waitFor = async (check: () => boolean, what: string): Promise<void> => {
@@ -528,6 +551,58 @@ span('end');
       // The killed attempt ran once, wrote r2 back on resume, and the waiting one started from it.
       expect(codexLaunches().map((launch) => launch.refresh)).toEqual(['r1', 'r2']);
       expect(dedicatedTokens().refresh_token).toBe('r3');
+    });
+
+    it('stops the tool and closes the place of an attempt whose driver was killed when teamai workflow cancel stops its run, then releases the login', async () => {
+      loginDefinition('codexorphan', state);
+      const { run, pid, watched } = await holdingRun('codexorphan');
+      watched.kill();
+      await watched.ended;
+      // The tool outlives its driver: only its runtime can stop it.
+      expect(pidAlive(pid)).toBe(true);
+
+      const cancelled = await runCLI(['workflow', 'cancel', run], repo, env());
+
+      expect(envelope(cancelled), cancelled.stderr).toMatchObject({ data: { run: { status: 'cancelled' } } });
+      expect(pidAlive(pid)).toBe(false);
+      const [review] = readRunState(run).steps;
+      expect(runtimeRecord(run, attemptOf(review))).toMatchObject({ runtime: 'toy', phase: 'closed' });
+      expect(cancelled.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attemptOf(review)} of run ${run} held.`);
+      expect(fs.existsSync(lockFile())).toBe(false);
+    });
+
+    it('keeps the login held when teamai workflow cancel cannot reach the runtime of an attempt whose driver was killed, and says how to free it', async () => {
+      loginDefinition('codexunreachable', state);
+      const { run, pid, watched } = await holdingRun('codexunreachable');
+      watched.kill();
+      await watched.ended;
+      fs.rmSync(path.join(repo, '.teamai', 'drivers', 'codexunreachable.yaml'));
+
+      try {
+        const cancelled = await runCLI(['workflow', 'cancel', run], repo, env());
+
+        expect(envelope(cancelled), cancelled.stderr).toMatchObject({ data: { run: { status: 'cancelled' } } });
+        const attempt = attemptOf(readRunState(run).steps[0]);
+        expect(cancelled.stderr).toContain(`Could not stop attempt ${attempt} of run ${run} on step runtime "toy" of driver "codexunreachable"`);
+        expect(cancelled.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}, whose tool may still run. Stop that tool on its step runtime, then delete ${lockFile()}.`);
+        expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
+      } finally {
+        process.kill(pid, 'SIGKILL');
+        fs.rmSync(lockFile(), { force: true });
+      }
+    });
+
+    it('leaves the login to a driver that still runs when teamai workflow cancel stops its run, which releases it once its tool stopped', async () => {
+      loginDefinition('codexlive', state);
+      const { run, pid, watched } = await holdingRun('codexlive');
+
+      const cancelled = await runCLI(['workflow', 'cancel', run], repo, env());
+
+      expect(cancelled.stderr).not.toContain('Released the codex login');
+      const driven = await watched.ended;
+      expect(envelope(driven), driven.stderr).toMatchObject({ data: { done: { outcome: 'cancelled' } } });
+      expect(pidAlive(pid)).toBe(false);
+      expect(fs.existsSync(lockFile())).toBe(false);
     });
 
     it('releases the login when teamai workflow cancel stops the run whose killed attempt held it', async () => {

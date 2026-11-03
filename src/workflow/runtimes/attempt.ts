@@ -132,6 +132,11 @@ export interface AttemptRun {
   collect(): Promise<WorkflowFailure | undefined>;
   /** Closes the handle once the attempt's report is recorded, so a teamai killed before that still reattaches. */
   close(): Promise<void>;
+  /**
+   * Stops the exec a killed teamai left running, then closes the place, for a run cancelled without a live driver.
+   * Answers false, and leaves the place open, when the exec still runs after the wait.
+   */
+  stop(): Promise<boolean>;
 }
 
 /** How long a restarted teamai waits for an exec it found running to stop. */
@@ -160,16 +165,21 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
     if (now && display) await save({ ...now, display });
   };
 
-  /** Stops an exec a teamai before this one left running, and waits until the runtime no longer reports it running. */
-  const stopLeftRunning = async (handle: string, op: z.infer<typeof OpIdSchema>): Promise<void> => {
+  /**
+   * Stops an exec a teamai before this one left running, and waits until the runtime no longer reports it running.
+   * Answers false when it still runs after the wait.
+   */
+  const stopLeftRunning = async (handle: string, op: z.infer<typeof OpIdSchema>): Promise<boolean> => {
     await runtime.cancel(op);
 
     for (const deadline = Date.now() + STOP_WAIT_MS; Date.now() < deadline;) {
       const seen = await runtime.reattach(handle);
 
-      if (seen.kind !== 'alive' || seen.ops.find((state) => state.op === op)?.state !== 'running') return;
+      if (seen.kind !== 'alive' || seen.ops.find((state) => state.op === op)?.state !== 'running') return true;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+
+    return false;
   };
 
   return {
@@ -273,6 +283,19 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       if (!before || handle === undefined || before.phase === 'closed') return;
       await runtime.close(handle);
       await save({ ...before, phase: 'closed' });
+    },
+
+    async stop() {
+      const before = await current();
+      const handle = before?.open.handle;
+
+      if (!before || handle === undefined || before.phase === 'closed') return true;
+
+      if (before.exec && !await stopLeftRunning(handle, before.exec.op)) return false;
+      await runtime.close(handle);
+      await save({ ...before, phase: 'closed' });
+
+      return true;
     },
   };
 }
