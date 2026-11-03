@@ -152,7 +152,7 @@ npx vitest run src/__tests__/delivered-copies.test.ts
 
 It does not need a new E2E file for every command. Keep E2Es for real CLI behavior such as persisted state, providers, hooks, and worktree isolation.
 
-Documentation generators and Markdown checks live in `scripts/`. Check mode runs in `npm run lint`. After changing CLI help or `src/tools.ts`, regenerate the command reference and both tool-support pages:
+Documentation generators and Markdown checks live in `scripts/`. Check mode runs in `npm run lint`. After changing CLI help or `src/tools.ts`, regenerate the command reference, both tool-support pages and the tool ids `teamai/tool-facts` reads (`oxlint-plugin-teamai/tool-ids.generated.json`):
 
 ```bash
 node scripts/check-docs.mjs --write

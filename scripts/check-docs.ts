@@ -4,6 +4,7 @@ import { loadCommandTable } from './command-table.js';
 import path from 'node:path';
 import { TOOL_SUPPORT_PAGES, renderToolSupportPage } from './tool-support.js';
 import { COMMANDS_REFERENCE_PATH, renderCommandsReference } from './commands-reference.js';
+import { TOOL_ORDER } from '../src/tool-registry.js';
 
 const root = process.cwd();
 const args = process.argv.slice(2);
@@ -17,6 +18,8 @@ const generated = [
   { file: COMMANDS_REFERENCE_PATH, content: renderCommandsReference(program) },
   { file: TOOL_SUPPORT_PAGES.en, content: renderToolSupportPage('en') },
   { file: TOOL_SUPPORT_PAGES['zh-CN'], content: renderToolSupportPage('zh-CN') },
+  // The shipped tool ids, which teamai/tool-facts reads: the lint plugin is plain JavaScript and cannot import the registry.
+  { file: 'oxlint-plugin-teamai/tool-ids.generated.json', content: `${JSON.stringify(TOOL_ORDER, null, 2)}\n` },
 ];
 
 for (const output of generated) {
