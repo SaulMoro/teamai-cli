@@ -11,8 +11,8 @@ type ShippedIds = DescriptorIds & { readonly tool: ToolId; readonly launch: Laun
 export type ShippedDescriptor = ToolDescriptor<ShippedIds>;
 
 /**
- * Every built-in tool. Adding a tool starts here: `TOOLS` then needs its entry, and the type
- * check lists every other table that must decide it. Custom tools in a team's `toolPaths` stay plain strings.
+ * Every built-in tool. Adding a tool starts here and in its family package (`packages/tool-<family>/`): `TOOLS` then
+ * needs its `BUILT_IN_TOOLS` reference, and the type check lists every other table that must decide it. Custom tools in a team's `toolPaths` stay plain strings.
  */
 export const TOOL_IDS = [
   'claude',

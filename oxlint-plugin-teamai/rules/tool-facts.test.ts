@@ -15,7 +15,7 @@ const rule = ruleHarness('teamai/tool-facts', { filename: 'src/hooks.ts' });
 
 describe('teamai/tool-facts', () => {
   rule.invalid('reports a partial set of tools', `const SUBAGENT_STOP_TOOLS = new Set(['claude', 'codebuddy']);`, (output) => {
-    expect(output).toContain('TOOLS');
+    expect(output).toContain('packages/tool-<family>/');
   }, { files });
 
   rule.invalid('reports a list typed against ToolId', `const LIST = ['claude', 'codex'] as const satisfies readonly ToolId[];`, undefined, { files });

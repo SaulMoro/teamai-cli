@@ -15,8 +15,8 @@ const TABLES = new Map([
 const FAMILIES = new Map([['@teamai/tool-definitions', 'BUILT_IN_TOOLS']]);
 
 /**
- * The tables built from the families until the last family moves: each holds the rows of the tools not yet moved,
- * and reaches the moved ones through BUILT_IN_TOOLS.
+ * The tables that list every tool in its user-visible order, each row a BUILT_IN_TOOLS reference. They stay in src/
+ * while sessionStoreDir (src/locate.ts) and the readers in NOT_YET_MOVED do.
  */
 const FAMILY_MERGES = new Set(scopedFiles(['src/agent-version.ts', 'src/session-flow/adapters/platform-facts.ts', 'src/token-usage/index.ts']));
 
