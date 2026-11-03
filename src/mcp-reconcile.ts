@@ -51,8 +51,8 @@ import { readEnvBackup } from './resources/env.js';
 import { isEnvShMarker } from './env-sh-exports.js';
 import { memberEnvironmentWithoutScope } from './member-env.js';
 import { cleanupOf, installOf, locate, ownOf, writable, type EntryPlace, type Install } from './locate.js';
-import { TOOLS, type McpProject } from './tools.js';
-import { channelsOf, isToolId, mcpFormatOf, mcpSyntaxOf, hasDefaultHomeLeftovers } from './tool-registry.js';
+import { type McpProject } from './tools.js';
+import { channelsOf, isToolId, mcpFormatOf, mcpSyntaxOf, hasDefaultHomeLeftovers, TOOL_ORDER } from './tool-registry.js';
 import { realHost, type Host } from './tool-home.js';
 import { KNOWN_AGENTS } from './known-agents.js';
 import { entryLayout, reportEntryResolution, resolveEntriesFor } from './namespaced-entries.js';
@@ -513,7 +513,7 @@ export async function mcpRelocated(teamConfig: TeamaiConfig, localConfig: LocalC
 async function mcpFileReaders(writer: string, file: string, install: Install, host: Host): Promise<string[]> {
   const readers: string[] = [];
 
-  for (const reader of Object.keys(TOOLS)) {
+  for (const reader of TOOL_ORDER) {
     const { project } = channelsOf(reader).mcp;
 
     if (project === 'none' || project === 'unknown' || project.writtenBy !== writer || install.toolPaths[reader] === undefined) continue;
@@ -1464,7 +1464,7 @@ async function localMcpKeyOf(localConfig: LocalConfig): Promise<(key: string) =>
   if (localConfig.scope !== 'project' || !localConfig.projectRoot) return () => false;
   const keys = new Set<string>();
 
-  for (const tool of Object.keys(TOOLS)) {
+  for (const tool of TOOL_ORDER) {
     const scope = localMcpScopeOf(tool);
 
     if (scope === undefined) continue;

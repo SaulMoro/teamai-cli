@@ -46,8 +46,8 @@ import { SessionOutcomeEventSchema, uniqueOutcomes, type SessionOutcomeEvent, ty
 import { readCopilotShutdown } from './token-usage/formats/copilot-shutdown.js';
 import { isTokenFormatId, readTokenUsage, type TokenRequest } from './token-usage/index.js';
 import { priceTokens } from './token-usage/pricing.js';
-import { TOOLS, type ToolDescriptor } from './tools.js';
-import { isToolId } from './tool-registry.js';
+import { type ToolDescriptor } from './tools.js';
+import { isToolId, descriptorOf } from './tool-registry.js';
 import { HookStdinSchema, type HookStdin } from './hook-dispatch.js';
 
 // ─── Event collection data flow ─────────────────────────
@@ -217,7 +217,7 @@ const isPriced = (record: LocalRequestRecord): record is PricedRequestRecord => 
 function tokenSourceOf(tool: string): ToolDescriptor['tokens'] {
   const id = tool.toLowerCase();
 
-  return isToolId(id) ? TOOLS[id].tokens : 'claude-jsonl';
+  return isToolId(id) ? descriptorOf(id).tokens : 'claude-jsonl';
 }
 
 /** A request's catalog cost with its cache reads billed as input, less its catalog cost. */

@@ -3,8 +3,8 @@ import path from 'node:path';
 import YAML from 'yaml';
 import { z } from 'zod';
 import type { JsonValue, LocalConfig, TeamaiConfig } from './types.js';
-import { TOOL_IDS, TOOLS, type ToolDescriptor, type ToolId } from './tools.js';
-import { hookSyntaxOf } from './tool-registry.js';
+import { descriptorOf, hookSyntaxOf } from './tool-registry.js';
+import { TOOL_IDS, type ToolDescriptor, type ToolId } from './tools.js';
 import { JsonValueSchema, isAgentExcluded, recordedToolRootDir, resolveAutoCompactTokens } from './types.js';
 import { toolHome } from './tool-home.js';
 import { withFileLock } from './update.js';
@@ -140,7 +140,7 @@ async function resolveTargets(localConfig: LocalConfig): Promise<Target[]> {
   const targets: Target[] = [];
 
   for (const tool of TOOL_IDS) {
-    const kind = TOOLS[tool].autoCompact;
+    const kind = descriptorOf(tool).autoCompact;
 
     if (kind === 'none' || isAgentExcluded(localConfig, tool)) continue;
     // A root the member recorded at init (CODEX_HOME, CLAUDE_CONFIG_DIR) wins,

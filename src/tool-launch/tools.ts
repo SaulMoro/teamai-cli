@@ -1,9 +1,12 @@
-import { TOOLS } from '../tools.js';
+import { descriptorOf, type DescriptorOf } from '../tool-registry.js';
 import type { ToolId } from '../tools.js';
-import { LAUNCH_ADAPTERS, type ConfinedLaunch, type LaunchAdapter, type LaunchAdapterId, type StepLaunch } from './adapters.js';
+import { LAUNCH_ADAPTERS, type ConfinedLaunch, type LaunchAdapter, type StepLaunch } from './adapters.js';
 
 /** The tools whose `launch` facet names an adapter. */
-export type LaunchedToolId = { [T in ToolId]: (typeof TOOLS)[T]['launch'] extends 'none' ? never : T }[ToolId];
+export type LaunchedToolId = { [T in ToolId]: DescriptorOf<T>['launch'] extends 'none' ? never : T }[ToolId];
+
+/** The adapter teamai launches `tool` headless with (`LAUNCH_ADAPTERS`). */
+export type LaunchAdapterOf<T extends LaunchedToolId> = (typeof LAUNCH_ADAPTERS)[DescriptorOf<T>['launch']];
 
 /**
  * Every tool teamai launches, in the order an AI call takes the first one on PATH. Each list of tools that can run a
@@ -17,11 +20,11 @@ export const LAUNCH_ORDER = ['claude', 'claude-internal', 'tclaude', 'codex', 'c
 export type LaunchOrderTool = (typeof LAUNCH_ORDER)[number];
 
 /** The adapter whose flags and output `tool` shares, from its `launch` facet. */
-export function launchAdapterIdOf<T extends LaunchOrderTool>(tool: T): (typeof TOOLS)[T]['launch'] {
-  return TOOLS[tool].launch;
+export function launchAdapterIdOf<T extends LaunchedToolId>(tool: T): DescriptorOf<T>['launch'] {
+  return descriptorOf(tool).launch;
 }
 
-export function launchAdapterOf(tool: LaunchOrderTool): (typeof LAUNCH_ADAPTERS)[LaunchAdapterId] {
+export function launchAdapterOf<T extends LaunchedToolId>(tool: T): LaunchAdapterOf<T> {
   return LAUNCH_ADAPTERS[launchAdapterIdOf(tool)];
 }
 
@@ -35,7 +38,7 @@ export function executableOf(tool: LaunchOrderTool): string {
 type Profile = 'step' | 'confined';
 
 /** The tools whose adapter builds `P`. */
-export type ToolWith<P extends Profile> = { [T in LaunchOrderTool]: (typeof LAUNCH_ADAPTERS)[(typeof TOOLS)[T]['launch']] extends { readonly [K in P]: StepLaunch | ConfinedLaunch } ? T : never }[LaunchOrderTool];
+export type ToolWith<P extends Profile> = { [T in LaunchOrderTool]: LaunchAdapterOf<T> extends { readonly [K in P]: StepLaunch | ConfinedLaunch } ? T : never }[LaunchOrderTool];
 
 function toolsWith<P extends Profile>(profile: P): readonly ToolWith<P>[] {
   return LAUNCH_ORDER.filter((tool): tool is ToolWith<P> => profile in launchAdapterOf(tool));

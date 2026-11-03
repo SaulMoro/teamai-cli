@@ -1,6 +1,6 @@
 import { KNOWN_AGENTS } from '../src/known-agents.js';
-import { TOOLS, type CodebuddyConfigFile, type Evidence, type FirstExistingRead, type HomeMove, type HomeRead, type ProjectRead, type RunTime, type Support, type ToolDescriptor, type ToolFeatures, type ToolId } from '../src/tools.js';
-import { isToolId } from '../src/tool-registry.js';
+import { type CodebuddyConfigFile, type Evidence, type FirstExistingRead, type HomeMove, type HomeRead, type ProjectRead, type RunTime, type Support, type ToolDescriptor, type ToolFeatures, type ToolId } from '../src/tools.js';
+import { isToolId, descriptorOf } from '../src/tool-registry.js';
 import { DEFAULT_TOOL_PATHS } from '../src/types.js';
 
 // ─── Generated support page ──────────────────────────────
@@ -163,7 +163,7 @@ function agentsRead(d: ToolDescriptor, scope: 'user' | 'project'): string {
   if (value === 'unknown') return '?';
   const result = reads(value.reads);
 
-  return d === TOOLS.joycode ? `${result}<br>indexed by \`agent.json\`` : result;
+  return d === descriptorOf('joycode') ? `${result}<br>indexed by \`agent.json\`` : result;
 }
 
 function userRow(tool: ToolId, d: ToolDescriptor): string[] {
@@ -208,7 +208,7 @@ function featureCell(support: Support, notes: string[]): string {
 export function renderToolSupportPage(lang: ToolSupportLang): string {
   const text = TEXT[lang];
   const c = text.columns;
-  const tools = Object.keys(DEFAULT_TOOL_PATHS).filter(isToolId).map((tool): [ToolId, ToolDescriptor] => [tool, TOOLS[tool]]);
+  const tools = Object.keys(DEFAULT_TOOL_PATHS).filter(isToolId).map((tool): [ToolId, ToolDescriptor] => [tool, descriptorOf(tool)]);
   const notes: string[] = [];
   const featureRows = tools.map(([tool, d]) => [name(tool), ...FEATURE_KEYS.map((key) => featureCell(d.features[key], notes))]);
 

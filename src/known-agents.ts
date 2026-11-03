@@ -10,8 +10,7 @@ import {
   toolGateRoot,
   detectToolRoot,
 } from './types.js';
-import { TOOLS } from './tools.js';
-import { isToolId } from './tool-registry.js';
+import { isToolId, descriptorOf } from './tool-registry.js';
 import { installOf, isInstalledFor, locate, ownOf } from './locate.js';
 import type { LocalConfig, TeamaiConfig, Scope } from './types.js';
 import type { ToolId } from './tools.js';
@@ -344,7 +343,7 @@ export async function detectHomeInstalledAgents(
     if (!skillsPath) continue;
     // The tool's own dir, e.g. ".claude" or ".config/muse" — never a shared
     // parent like ".config" that exists on most machines.
-    const rootSegment = isToolId(id) ? TOOLS[id].home.dir : path.posix.dirname(skillsPath);
+    const rootSegment = isToolId(id) ? descriptorOf(id).home.dir : path.posix.dirname(skillsPath);
     // A Claude Code relocated with CLAUDE_CONFIG_DIR (or a Codex with
     // CODEX_HOME) may have no default root at all; the developer still uses
     // it. This runs before any config exists, so the variable is the only signal.

@@ -54,3 +54,6 @@ export const ids = Object.keys(TOOLS);`, { filename: 'src/tools.test.ts' });
 
 rule.valid('allows a TOOLS of another module', `import { TOOLS } from './benchmark/tools.js';
 export const ids = Object.keys(TOOLS);`);
+
+rule.valid('allows the registry\'s launch half to read the launch adapter table', `import { LAUNCH_ADAPTERS } from './adapters.js';
+export const claude = LAUNCH_ADAPTERS.claude;`, { filename: 'src/tool-launch/tools.ts' });
