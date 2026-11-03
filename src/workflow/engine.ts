@@ -2016,7 +2016,10 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
       // follows workflows.auto_approve.
       if (can.hitl && options.autoApprove === true && answerOptionalGates(run, now)) continue;
 
-      if (options.canTakeLease !== false && !can.hitl && answerWithoutHitl(run, now, { autoApprove: isAutoApproved, handoff })) continue;
+      // A gate waits for another runtime of the run's only driver that can ask, as the local driver offers each in turn.
+      const asksElsewhere = options.alone?.offers.some((offer) => offer.can.hitl === true) === true;
+
+      if (options.canTakeLease !== false && !can.hitl && !asksElsewhere && answerWithoutHitl(run, now, { autoApprove: isAutoApproved, handoff })) continue;
 
       if (options.canTakeLease !== false && byAgent && handoff?.kind === 'unoffered' && failForPerson(run, handoff.reason)) continue;
       // An open lease the driver does not list is handed back before another lease is issued, as a restarted driver expects.
