@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef } from '@teamai/tool-core/sessions/base';
 import { toolArgumentsFrom, type ContentBlock, type Message, type Session } from '@teamai/tool-core/sessions/ir';
 import { resolveRealCwd } from '@teamai/tool-core/sessions/fs';
-import { JsonValueSchema } from '../../types.js';
+import { JsonValueSchema } from '@teamai/tool-core/json';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

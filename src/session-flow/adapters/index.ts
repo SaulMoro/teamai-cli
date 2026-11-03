@@ -10,7 +10,6 @@ import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 import { CursorAdapter } from './cursor.js';
 import { OpencodeAdapter } from './opencode.js';
 import { AgyAdapter, agyStoreRoots } from './agy.js';
-import { MuseAdapter } from './muse.js';
 import type { SessionPlatform } from './platform-facts.js';
 import { sessionStoreDir } from '../../locate.js';
 
@@ -39,7 +38,7 @@ export const ADAPTER_REGISTRY: AdapterRegistry = {
   agy: (toolRoots) => new AgyAdapter(agyStoreRoots(sessionStoreDir('agy', toolRoots))),
   pi: (toolRoots) => BUILT_IN_TOOLS.pi.platforms.pi.adapter(sessionStoreDir('pi', toolRoots)),
   omp: (toolRoots) => BUILT_IN_TOOLS.pi.platforms.omp.adapter(sessionStoreDir('omp', toolRoots)),
-  muse: (toolRoots) => new MuseAdapter(sessionStoreDir('muse', toolRoots)),
+  muse: (toolRoots) => BUILT_IN_TOOLS.muse.platforms.muse.adapter(sessionStoreDir('muse', toolRoots)),
   hermes: (toolRoots) => BUILT_IN_TOOLS.hermes.platforms.hermes.adapter(sessionStoreDir('hermes', toolRoots)),
   // TeamAI variants (different path prefixes, identical format)
   'claude-internal': (toolRoots) => BUILT_IN_TOOLS.claude.platforms['claude-internal'].adapter(sessionStoreDir('claude-internal', toolRoots)),
@@ -90,5 +89,3 @@ export { CursorAdapter } from './cursor.js';
 export { OpencodeAdapter } from './opencode.js';
 
 export { AgyAdapter } from './agy.js';
-
-export { MuseAdapter } from './muse.js';

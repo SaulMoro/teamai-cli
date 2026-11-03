@@ -3,8 +3,7 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { addTokenUsage, emptyTokenUsage } from '@teamai/tool-core/tokens';
-import { pathExists } from '../../utils/fs.js';
-import { getUserHome } from '../../utils/home.js';
+import { getUserHome } from '@teamai/tool-core/home';
 import type { TokenReading, TokenRequest, TokenSource } from '@teamai/tool-core/tokens';
 import { forEachJsonLine } from '@teamai/tool-core/tokens';
 
@@ -28,7 +27,7 @@ async function findSessionLog(sessionId: string): Promise<string | null> {
       for (const day of await subdirs(month)) {
         const file = path.join(day, sessionId, 'session.jsonl');
 
-        if (await pathExists(file)) return file;
+        if (await fs.promises.access(file).then(() => true, () => false)) return file;
       }
     }
   }

@@ -23,6 +23,10 @@ export interface RecordedCall {
 export interface RecordedUsage {
   readonly text: string;
   readonly tokens: TokenUsage;
+  /** For a format that finds the transcript by session id: where the tool keeps it under `store`. */
+  place?(store: string, sessionId: string): string;
+  /** The variable that points such a format at `store`. */
+  readonly storeEnv?: string;
 }
 
 /** What a tool printed for `--version`, recorded, and the version teamai reads from it; or why none is recorded. */
@@ -255,11 +259,15 @@ export function describeFamily(name: string, family: ToolFamily, recordings: Fam
         const dir = scratch('tokens');
 
         try {
-          const transcriptPath = path.join(dir, `${SESSION_ID}.jsonl`);
+          const transcriptPath = usage.place?.(dir, SESSION_ID) ?? path.join(dir, `${SESSION_ID}.jsonl`);
 
+          fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
           fs.writeFileSync(transcriptPath, usage.text);
+
+          if (usage.storeEnv !== undefined) vi.stubEnv(usage.storeEnv, dir);
           expect((await format({ transcriptPath, sessionId: SESSION_ID, settled: true })).tokens).toEqual(usage.tokens);
         } finally {
+          vi.unstubAllEnvs();
           fs.rmSync(dir, { recursive: true, force: true });
         }
       });
