@@ -1,5 +1,6 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -315,6 +316,36 @@ Judge the review.
     expect(toyOpens()).toBe(1);
     expect(fs.existsSync(stray)).toBe(false);
     fs.rmSync(path.join(bin, 'teamai-runtime-shiptoy'));
+  });
+
+  it('runs the member\'s own credential helper on the host push, never one the step planted in the checkout\'s config', async () => {
+    // An origin that asks for credentials, so the push runs every credential helper git knows.
+    const server = http.createServer((_request, response) => { response.writeHead(401, { 'WWW-Authenticate': 'Basic realm="team"' }); response.end(); });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const port = typeof address === 'object' && address !== null ? address.port : 0;
+    const planted = path.join(sandbox, 'planted-helper-ran');
+    const member = path.join(sandbox, 'member-helper-ran');
+    const gitconfig = path.join(os.homedir(), '.gitconfig');
+    const gitconfigBefore = fs.existsSync(gitconfig) ? fs.readFileSync(gitconfig, 'utf8') : undefined;
+    fs.appendFileSync(gitconfig, `[credential]\n\thelper = "!f() { touch '${member}'; }; f"\n`);
+    writeFlow('plantcred', `  - id: build
+    workspace: new
+    command: git config extensions.worktreeConfig true && git config --worktree credential.helper "!f() { touch '${planted}'; }; f" && git config --worktree remote.origin.pushurl http://127.0.0.1:${port}/team/workflow.git && echo change > planted.txt`);
+    const pulled = await runCLI(['pull'], repo);
+    expect(pulled.code).toBe(0);
+
+    try {
+      const ran = await runCLI(['workflow', 'start', 'plantcred', '--driver', 'local'], repo, env({ GIT_TERMINAL_PROMPT: '0' }));
+
+      // The push was refused for want of credentials, after the member's helper was asked.
+      expect(fs.existsSync(member), ran.stderr).toBe(true);
+      expect(fs.existsSync(planted)).toBe(false);
+    } finally {
+      server.close();
+      if (gitconfigBefore === undefined) fs.rmSync(gitconfig, { force: true });
+      else fs.writeFileSync(gitconfig, gitconfigBefore);
+    }
   });
 
   describe('with credentials: { codex: login }', () => {
