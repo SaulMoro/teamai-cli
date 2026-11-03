@@ -61,7 +61,7 @@ vi.mock('../utils/git-discovery.js', () => ({
   repositoryStamp: vi.fn(async () => null),
 }));
 
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),
