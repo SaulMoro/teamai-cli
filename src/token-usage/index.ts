@@ -7,14 +7,13 @@
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { TokenReading, TokenSource } from '@teamai/tool-core/tokens';
 import { readAgyTranscript } from './formats/agy-transcript.js';
-import { readMuseSession } from './formats/muse-session.js';
 import { readOpencodeDb } from './formats/opencode-db.js';
 
 const FORMATS = {
   'claude-jsonl': BUILT_IN_TOOLS.claude.tokens['claude-jsonl'],
   'codex-rollout': BUILT_IN_TOOLS.codex.tokens['codex-rollout'],
   codebuddy: BUILT_IN_TOOLS.codebuddy.tokens.codebuddy,
-  'muse-session': readMuseSession,
+  'muse-session': BUILT_IN_TOOLS.muse.tokens['muse-session'],
   'agy-transcript': readAgyTranscript,
   'pi-session': BUILT_IN_TOOLS.pi.tokens['pi-session'],
   'opencode-db': readOpencodeDb,

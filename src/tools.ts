@@ -118,68 +118,7 @@ export const TOOLS = {
       agentHooks: { cell: '+t', note: 'teamai refuses agent hooks in the Cursor hook format' },
     },
   },
-  copilot: {
-    home: { dir: '.copilot', moves: { by: [{ kind: 'env', name: 'COPILOT_HOME', evidence: 'verified' }] } },
-    skillLoad: { calls: [{ name: 'skill', evidence: 'verified' }] },
-    skills: {
-      user: [{ base: 'home', path: '.copilot/skills', evidence: 'verified' }],
-      project: [{ base: 'project', path: '.github/skills', when: 'workspaceUnder', evidence: 'verified' }],
-    },
-    rules: {
-      user: { channel: 'dir', format: 'copilot-instructions', reads: [{ base: 'home', path: '.copilot/instructions', evidence: 'verified' }] },
-      project: { channel: 'dir', format: 'copilot-instructions', reads: [{ base: 'project', path: '.github/instructions', when: 'workspaceUnder', evidence: 'verified' }] },
-    },
-    blocks: {
-      user: { channel: 'file', file: { in: 'claudemd' }, reads: [{ base: 'home', path: '.copilot/copilot-instructions.md', evidence: 'verified' }] },
-      // Copilot inlines a `.github/instructions` file in every request only for the `applyTo: "**"` glob (#915).
-      project: {
-        channel: 'file', file: { in: 'claudemd' },
-        gitExcluded: { in: 'rules-dir', name: 'teamai-context.instructions.md', owned: true, header: 'apply-to-all' },
-        reads: [
-          { base: 'project', path: '.github/copilot-instructions.md', when: 'workspaceUnder', evidence: 'verified' },
-          { base: 'project', path: '.github/instructions', when: 'workspaceUnder', evidence: 'verified' },
-        ],
-      },
-    },
-    agents: {
-      user: { reads: [{ base: 'home', path: '.copilot/agents', evidence: 'source' }] },
-      project: { reads: [{ base: 'project', path: '.github/agents', when: 'workspaceUnder', evidence: 'source' }] },
-    },
-    mcp: {
-      user: { format: 'copilot', reads: [{ base: 'home', path: '.copilot/mcp-config.json', evidence: 'verified' }] },
-      project: { judgedTeamaiOnly: true, format: 'copilot', reads: [{ base: 'project', path: '.github/mcp.json', when: 'workspaceUnder', evidence: 'verified' }], readGates: ['copilot-folder-trust'] },
-    },
-    hooks: {
-      user: { channel: 'settings', format: 'copilot', reads: [{ base: 'home', path: '.copilot/hooks/teamai.json', evidence: 'source' }] },
-      // Copilot 1.0.105 runs repo hooks only in a trusted folder (verified with `copilot -p`).
-      self: { channel: 'settings', format: 'copilot', reads: [{ base: 'project', path: '.github/hooks/teamai.json', when: 'workspaceUnder', evidence: 'source' }], readGates: ['copilot-folder-trust'] },
-      workspace: { channel: 'settings', format: 'copilot', reads: [{ base: 'project', path: '.github/hooks/teamai.json', when: 'workspaceUnder', evidence: 'source' }], readGates: ['copilot-folder-trust'] },
-      subagentStop: false,
-      stopReply: true,
-      shell: 'system',
-      teamHooks: 'home',
-    },
-    sessions: 'none',
-    launch: 'copilot',
-    autoCompact: 'none',
-    skillAllowedTools: false,
-    searchEvidence: true,
-    projectFromHome: false,
-    legacyAgentMd: false,
-    tokens: 'copilot-shutdown',
-    features: {
-      env: '?',
-      workflows: '+s',
-      unattended: '?',
-      recall: '✓v',
-      stats: { cell: '✓t', note: 'A1 (#1245) records its skill loads; not rerun' },
-      tokens: { cell: '✓t', note: 'one request per model from the session.shutdown totals, priced without long-prompt rates; not run' },
-      aiBackend: '✓d',
-      votesJudge: '?',
-      sessionJudge: { cell: '✓t', note: '#1386 the session judges its skill-driven run; not rerun' },
-      agentHooks: '—t',
-    },
-  },
+  copilot: BUILT_IN_TOOLS.copilot.tools.copilot,
   joycode: BUILT_IN_TOOLS.joycode.tools.joycode,
   qoder: BUILT_IN_TOOLS.qoder.tools.qoder,
   'qoder-cn': BUILT_IN_TOOLS.qoder.tools['qoder-cn'],
@@ -267,60 +206,7 @@ export const TOOLS = {
       agentHooks: { cell: '✓v', note: 'runs from teamai\'s team-hook bridge, which can block a tool call; OpenCode 1.18.23 ran a team hook through it' },
     },
   },
-  // muse-bin 1.4.11: $XDG_CONFIG_HOME/muse, else ~/.config/muse; with XDG_CONFIG_HOME set, ~/.config/muse is never read.
-  muse: {
-    home: { dir: '.config/muse', moves: { by: [{ kind: 'xdg', child: 'muse', evidence: 'source' }], defaultHomeLeftovers: true } },
-    installedBy: 'home',
-    skillLoad: { calls: [{ name: 'read_skill', evidence: 'verified' }] },
-    skills: {
-      user: [
-        { base: 'home', path: '.config/muse/skills', evidence: 'verified' },
-        { base: 'home', path: '.agents/skills', evidence: 'verified' },
-        { base: 'home', path: '.claude/skills', evidence: 'verified' },
-      ],
-      project: [{ base: 'project', path: '.agents/skills', when: 'workspaceUnder', evidence: 'verified' }],
-      readGates: ['muse-workspace-trust'],
-    },
-    rules: {
-      user: { channel: 'inline', label: 'Muse Code AGENTS.md' },
-      project: { channel: 'session-hook', probe: 'muse-session-start', evidence: 'verified' },
-    },
-    blocks: {
-      user: { channel: 'file', file: { in: 'home', path: '.config/muse/AGENTS.md' }, reads: [{ base: 'home', path: '.config/muse/AGENTS.md', evidence: 'verified' }] },
-      project: { channel: 'session-hook', probe: 'muse-session-start', evidence: 'verified' },
-    },
-    agents: {
-      user: { reads: [{ base: 'home', path: '.config/muse/agents', evidence: 'source' }] },
-      project: { reads: 'unknown' },
-    },
-    mcp: {
-      user: { format: 'muse', reads: [{ base: 'home', path: '.config/muse/settings.json', evidence: 'source' }] },
-      project: { judgedTeamaiOnly: true, format: 'muse', writtenBy: 'claude', reads: [{ base: 'project', path: '.mcp.json', when: 'workspaceUnder', evidence: 'source' }], readGates: ['muse-workspace-trust'] },
-    },
-    // Muse takes Codex's hook shape: it drops a group carrying any key but `matcher` and `hooks`, so Claude's described groups never reach it.
-    hooks: { user: { channel: 'settings', format: 'codex', reads: [{ base: 'home', path: '.config/muse/settings.json', evidence: 'verified' }] }, self: { channel: 'settings', format: 'codex', reads: [{ base: 'project', path: '.muse/hooks.json', when: 'workspaceUnder', evidence: 'verified' }], readGates: ['muse-workspace-trust'] }, subagentStop: false, stopReply: false, shell: 'system', teamHooks: 'home' },
-    // muse-bin 1.4.14: sessions under $XDG_DATA_HOME/muse/sessions, ~/.local/share when unset.
-    sessions: ['muse'],
-    launch: 'muse',
-    autoCompact: 'none',
-    skillAllowedTools: false,
-    searchEvidence: true,
-    projectFromHome: false,
-    legacyAgentMd: false,
-    tokens: 'muse-session',
-    features: {
-      env: '✓t',
-      workflows: '+v',
-      unattended: '?',
-      recall: '✓t',
-      stats: '✓v',
-      tokens: '✓t',
-      aiBackend: '✓v',
-      votesJudge: { cell: '✓t', note: '#1374 judges the reply in its Stop payload; not rerun' },
-      sessionJudge: { cell: '✓t', note: '#1386 the session judges its skill-driven run; not rerun' },
-      agentHooks: { cell: '✓t', note: '#1224 writes them to settings.json; not rerun' },
-    },
-  },
+  muse: BUILT_IN_TOOLS.muse.tools.muse,
   // agy 1.4.8 runs: ~/.gemini/config holds the user customizations, <root>/.agents a project's.
   agy: {
     home: { dir: '.gemini/config' },
