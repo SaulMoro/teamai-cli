@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { z } from 'zod';
+import { JsonObjectSchema, JsonValueSchema } from '@teamai/tool-core/json';
 
 /**
  * A stand-in `opencode` (V2) for the session commands teamai runs: `--version`,
@@ -114,23 +116,34 @@ export function installFakeOpencode(): string {
   const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-fake-opencode-')));
   const script = path.join(dir, 'fake-opencode.cjs');
   fs.writeFileSync(script, CLI);
+
   const node = JSON.stringify(process.execPath);
   fs.writeFileSync(path.join(dir, 'opencode'), `#!/bin/sh\nexec ${node} ${JSON.stringify(script)} "$@"\n`);
   fs.chmodSync(path.join(dir, 'opencode'), 0o755);
   fs.writeFileSync(path.join(dir, 'opencode.cmd'), `@"${process.execPath}" "${script}" %*\r\n`);
+
   return dir;
 }
 
+const OpencodeExportSchema = z.object({
+  info: z.object({
+    id: z.string(),
+    title: z.string(),
+    time: z.object({ created: z.number(), updated: z.number() }).catchall(JsonValueSchema),
+    location: z.object({ directory: z.string() }).catchall(JsonValueSchema),
+  }).catchall(JsonValueSchema),
+  messages: z.array(JsonObjectSchema),
+});
+
+/** An OpenCode session as `opencode session export` prints it. */
+export type OpencodeExport = z.infer<typeof OpencodeExportSchema>;
+
 /** The export a real OpenCode 2.0.29 printed for a session that read a file, ran `ls`, and got an image. */
 export function opencodeExportFixture(): OpencodeExport {
-  const file = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'opencode', 'export-tool-calls.json');
-  return JSON.parse(fs.readFileSync(file, 'utf8')) as OpencodeExport;
-}
+  const file = fileURLToPath(new URL('./fixtures/opencode/export-tool-calls.json', import.meta.url));
 
-export type OpencodeExport = {
-  info: { id: string; title: string; time: { created: number; updated: number }; location: { directory: string } } & Record<string, unknown>;
-  messages: Array<Record<string, unknown>>;
-};
+  return OpencodeExportSchema.parse(JSON.parse(fs.readFileSync(file, 'utf8')));
+}
 
 /** Plant a session the fake lists and exports. `raw` replaces the export file's content. */
 export function plantOpencodeSession(dataHome: string, session: OpencodeExport, raw?: string): void {

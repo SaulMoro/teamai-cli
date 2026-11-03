@@ -53,7 +53,13 @@ export type TokenSpeed = 'standard' | 'fast' | 'flex';
  * session id for stores looked up by id. `settled`: the tool is done writing,
  * so a format that waits for usage written just after Stop reads once.
  */
-export type TokenSource = { transcriptPath?: string; sessionId: string; settled?: boolean };
+export type TokenSource = {
+  transcriptPath?: string;
+  sessionId: string;
+  settled?: boolean;
+  /** The platform's session store, for a format that reads the store rather than one transcript, as OpenCode's database. */
+  storeDir?: string;
+};
 
 /** One model request. */
 export type TokenRequest = {

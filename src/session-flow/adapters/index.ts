@@ -8,7 +8,6 @@ import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { LocalConfig } from '../../types.js';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 import { CursorAdapter } from './cursor.js';
-import { OpencodeAdapter } from './opencode.js';
 import { AgyAdapter, agyStoreRoots } from './agy.js';
 import type { SessionPlatform } from './platform-facts.js';
 import { sessionStoreDir } from '../../locate.js';
@@ -34,7 +33,7 @@ export const ADAPTER_REGISTRY: AdapterRegistry = {
   'codebuddy-ide': () => BUILT_IN_TOOLS.codebuddy.platforms['codebuddy-ide'].adapter(),
   workbuddy: (toolRoots) => BUILT_IN_TOOLS.codebuddy.platforms.workbuddy.adapter(sessionStoreDir('workbuddy', toolRoots)),
   cursor: (toolRoots) => new CursorAdapter('cursor', sessionStoreDir('cursor', toolRoots)),
-  opencode: (toolRoots) => new OpencodeAdapter(sessionStoreDir('opencode', toolRoots)),
+  opencode: (toolRoots) => BUILT_IN_TOOLS.opencode.platforms.opencode.adapter(sessionStoreDir('opencode', toolRoots)),
   agy: (toolRoots) => new AgyAdapter(agyStoreRoots(sessionStoreDir('agy', toolRoots))),
   pi: (toolRoots) => BUILT_IN_TOOLS.pi.platforms.pi.adapter(sessionStoreDir('pi', toolRoots)),
   omp: (toolRoots) => BUILT_IN_TOOLS.pi.platforms.omp.adapter(sessionStoreDir('omp', toolRoots)),
@@ -85,7 +84,5 @@ export { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 export { CodexAdapter } from '@teamai/tool-core/formats/codex';
 
 export { CursorAdapter } from './cursor.js';
-
-export { OpencodeAdapter } from './opencode.js';
 
 export { AgyAdapter } from './agy.js';

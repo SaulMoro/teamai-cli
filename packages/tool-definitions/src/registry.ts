@@ -13,6 +13,7 @@ import { family as hermes } from '@teamai/tool-hermes';
 import { family as dsh } from '@teamai/tool-dsh';
 import { family as muse } from '@teamai/tool-muse';
 import { family as copilot } from '@teamai/tool-copilot';
+import { family as opencode } from '@teamai/tool-opencode';
 
 /** Every built-in tool family. The app reads tools only through these, never by importing a family. */
-export const BUILT_IN_TOOLS = { claude, codex, qoder, joycode, pi, codebuddy, kiro, trae, zcode, openclaw, hermes, dsh, muse, copilot } as const satisfies Readonly<Record<string, ToolFamily>>;
+export const BUILT_IN_TOOLS = { claude, codex, qoder, joycode, pi, codebuddy, kiro, trae, zcode, openclaw, hermes, dsh, muse, copilot, opencode } as const satisfies Readonly<Record<string, ToolFamily>>;

@@ -1,28 +1,6 @@
-import { z } from 'zod';
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
-import { answered, failed, jsonLines, readClaudeResult, type CallOutput, type CallReading, type LaunchAdapter } from '@teamai/tool-core/launch';
-import { agyRun, readToolMetadata } from '@teamai/tool-core/stdout';
-
-const OpenCodeEvent = z.union([
-  z.object({ type: z.literal('text'), part: z.object({ text: z.string() }) }),
-  z.object({ type: z.literal('error'), error: z.object({ message: z.string() }) }),
-]);
-
-/** OpenCode prints the answer as `text` parts and an error as an `error` event; `step_finish` carries the tokens. */
-function readOpenCodeRun({ stdout }: CallOutput): CallReading {
-  const events = jsonLines(stdout).flatMap((line) => {
-    const parsed = OpenCodeEvent.safeParse(line);
-
-    return parsed.success ? [parsed.data] : [];
-  });
-
-  const error = events.flatMap((event) => event.type === 'error' ? [event.error.message] : []).at(-1);
-  const text = events.flatMap((event) => event.type === 'text' ? [event.part.text] : []).join('\n').trim();
-
-  if (error !== undefined || !text) return failed(error);
-
-  return answered(text, readToolMetadata(stdout)?.tokens);
-}
+import { answered, failed, readClaudeResult, type CallOutput, type CallReading, type LaunchAdapter } from '@teamai/tool-core/launch';
+import { agyRun } from '@teamai/tool-core/stdout';
 
 /** agy's stream-json output ends with a `result` event: the response on SUCCESS, else the error, and the turn's usage. */
 function readAgyStream({ stdout }: CallOutput): CallReading {
@@ -41,12 +19,7 @@ function readAgyStream({ stdout }: CallOutput): CallReading {
 export const LAUNCH_ADAPTERS = {
   claude: BUILT_IN_TOOLS.claude.launch.claude,
   codex: BUILT_IN_TOOLS.codex.launch.codex,
-  opencode: {
-    call: { evidence: 'verified', prompt: 'stdin', args: () => ['run', '--format', 'json'], read: readOpenCodeRun },
-    // `opencode run --help` of 2.1.2 and opencode.ai/docs/permissions: approves every request a rule does not deny.
-    step: { evidence: 'verified', unattended: { args: ['--auto'], evidence: 'docs' } },
-    confined: { evidence: 'verified', env: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'OPENCODE_API_KEY'], verified: /^opencode v2\.1\.2$/, access: 'read' },
-  },
+  opencode: BUILT_IN_TOOLS.opencode.launch.opencode,
   codebuddy: BUILT_IN_TOOLS.codebuddy.launch.codebuddy,
   openclaw: BUILT_IN_TOOLS.openclaw.launch.openclaw,
   cursor: {

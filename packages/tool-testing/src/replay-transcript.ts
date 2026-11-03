@@ -18,8 +18,11 @@ export type RecordedTranscript = {
   readonly userText: string;
   /** The id the tool gives a session, when it is not a UUID. */
   readonly sessionId?: string;
-  /** For a platform that locates its own store: the variable that points it at `store` instead. */
-  readonly storeEnv?: string;
+  /**
+   * The environment the platform reads the replayed `store` through: the variable that points a platform which locates
+   * its own store there, or a stand-in CLI for one that keeps its sessions behind its CLI.
+   */
+  env?(store: string): Readonly<Record<string, string>>;
 } & (
   | {
     readonly text: string;
