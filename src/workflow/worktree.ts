@@ -120,7 +120,12 @@ export function untrustedGit(env: NodeJS.ProcessEnv, expiresAt?: string): Git {
   return async (cwd, args, options) => {
     const off = await hooksOff(cwd, env, expiresAt);
 
-    return 'error' in off ? off.error : spawnGit(cwd, [...UNTRUSTED_CONFIG, ...off.args, ...args], boundedBy(options, expiresAt), { ...env, [HOOK_OFF]: 'false' });
+    if ('error' in off) return off.error;
+    const helpers = await credentialHelpersOff(cwd, env, expiresAt);
+
+    if ('error' in helpers) return helpers.error;
+
+    return spawnGit(cwd, [...UNTRUSTED_CONFIG, ...off.args, ...helpers.args, ...args], boundedBy(options, expiresAt), { ...env, ...helpers.env, [HOOK_OFF]: 'false' });
   };
 }
 
@@ -152,6 +157,53 @@ async function hooksOff(cwd: string, env: NodeJS.ProcessEnv, expiresAt: string |
   const names = new Set(listed.stdout.split('\0').flatMap((entry) => /^hook\.(.+)\.[^.]+$/.exec(entry.split('\n')[0] ?? '')?.[1] ?? []));
 
   return { args: [...names].map((name) => `--config-env=hook.${name}.enabled=${HOOK_OFF}`) };
+}
+
+/** The config scopes a step cannot write: the member's own files, and what this process sets for git. */
+const TRUSTED_SCOPES = new Set(['system', 'global', 'command']);
+
+/** What each `--config-env` that sets a credential helper key reads: one variable per value, numbered. */
+const HELPER_VALUE = 'TEAMAI_GIT_CREDENTIAL_HELPER_';
+
+/**
+ * The options that keep a credential helper the checkout's own config names (`credential.helper` and
+ * `credential.<url>.helper` in its local or worktree file, which a step could write) from running, while every helper
+ * the member's system and global config name still runs, in their order: each such key is reset, then given again
+ * the member's own values. A push that needs credentials then asks the member's helpers only.
+ */
+async function credentialHelpersOff(cwd: string, env: NodeJS.ProcessEnv, expiresAt: string | undefined): Promise<{ args: string[]; env: Record<string, string> } | { error: GitResult }> {
+  const listed = await spawnGit(cwd, ['config', '--null', '--show-scope', '--get-regexp', '^credential\\..*helper$'], boundedBy(undefined, expiresAt), env);
+
+  if (listed.code === 1) return { args: [], env: {} };
+
+  if (listed.code !== 0) return { error: listed };
+  // --show-scope --null writes each entry as scope NUL key LF value NUL.
+  const fields = listed.stdout.split('\0');
+  const byKey = new Map<string, Array<{ trusted: boolean; value: string }>>();
+
+  for (let at = 0; at + 1 < fields.length; at += 2) {
+    const scope = fields[at] ?? '';
+    const entry = fields[at + 1] ?? '';
+    const newline = entry.indexOf('\n');
+    const key = newline === -1 ? entry : entry.slice(0, newline);
+    const value = newline === -1 ? '' : entry.slice(newline + 1);
+    byKey.set(key, [...byKey.get(key) ?? [], { trusted: TRUSTED_SCOPES.has(scope), value }]);
+  }
+
+  const args: string[] = [];
+  const values: Record<string, string> = {};
+
+  for (const [key, entries] of byKey) {
+    if (entries.every((entry) => entry.trusted)) continue;
+
+    for (const value of ['', ...entries.filter((entry) => entry.trusted).map((entry) => entry.value)]) {
+      const name = `${HELPER_VALUE}${Object.keys(values).length}`;
+      values[name] = value;
+      args.push(`--config-env=${key}=${name}`);
+    }
+  }
+
+  return { args, env: values };
 }
 
 /**
