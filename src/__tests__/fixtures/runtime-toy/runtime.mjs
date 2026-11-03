@@ -2,15 +2,21 @@
 // The toy step runtime: protocol 1 over JSON lines on stdio. It runs each exec on the host, in a process group of its
 // own, and keeps handles and outcomes in the `state` option's directory, so a toy started again answers a repeated
 // operation and a reattach from them. `die_at` kills the process that spawned it, once per state directory, right after
-// it recorded that point and before it replies: `open-accepted` or `exec-exited`. It reads each request with the
-// protocol's own schema, so a request teamai writes that the protocol does not have is answered with an error.
+// it recorded that point and before it replies: `open-accepted`, `exec-exited` or `prompt-finished`. It reads each
+// request with the protocol's own schema, so a request teamai writes that the protocol does not have is answered with
+// an error.
+//
+// With `agent`, it is a runtime that launches agents its own way, as T3 or Paseo: it offers `prompt` and no `exec`, and
+// its agent works `hold_ms` (from when the prompt was first sent, across a restart of the toy) and until the file
+// `release` names exists, then writes `output` to the lease's result file and finishes with a session and `usage`, or
+// ends with `fail`.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 
-const OPTIONS = new Set(['state', 'die_at', 'can', 'display']);
+const OPTIONS = new Set(['state', 'die_at', 'can', 'display', 'agent']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -93,7 +99,15 @@ function init(request) {
 
   options = request.options;
   fs.mkdirSync(options.state, { recursive: true });
-  send({ type: 'init', ok: true, can: { ...DEFAULT_CAN, ...options.can } });
+
+  if (options.agent === undefined) {
+    send({ type: 'init', ok: true, can: { ...DEFAULT_CAN, ...options.can } });
+
+    return;
+  }
+
+  // An agent the toy launches works in the place on the host: it takes no command, so it runs no setup either.
+  send({ type: 'init', ok: true, prompt: true, can: { ...DEFAULT_CAN, exec: false, setup: false, tokens: false, end_turn: false, ...options.can } });
 }
 
 function open(request) {
@@ -117,6 +131,12 @@ function replay(op, record) {
 }
 
 function exec(request) {
+  if (options.agent !== undefined) {
+    send({ op: request.op, event: 'failed', failure: { code: 'exec_unsupported', message: 'The toy launches agents its own way and runs no command (can.exec: false).' } });
+
+    return;
+  }
+
   const record = readJson(opPath(request.op), undefined);
 
   if (record?.outcome) {
@@ -155,10 +175,87 @@ function exec(request) {
   });
 }
 
+/** The prompts this toy waits on, by operation: the timer that finishes each. */
+const working = new Map();
+
+/** What the agent of a prompt record ended with, once it worked `hold_ms` since the prompt was first sent. */
+function agentOutcome(record) {
+  if (record.outcome) return record.outcome;
+
+  if (fs.existsSync(file('cancel', record.op))) return { state: 'cancelled' };
+
+  if (Date.now() < record.startedAt + (options.agent.hold_ms ?? 0)) return undefined;
+
+  if (options.agent.release !== undefined && !fs.existsSync(options.agent.release)) return undefined;
+
+  if (options.agent.fail) return { state: 'failed', failure: options.agent.fail };
+  const result = { output: options.agent.output ?? {} };
+  fs.mkdirSync(path.dirname(record.lease.result), { recursive: true });
+  fs.writeFileSync(record.lease.result, JSON.stringify(result));
+  const usage = options.agent.usage === undefined ? {} : { usage: options.agent.usage };
+
+  return { state: 'finished', session: { tool: record.lease.tool, id: record.lease.resume ?? `toy-session-${record.op.slice(3)}` }, result, ...usage };
+}
+
+function promptEnded(op, outcome) {
+  const { state, ...rest } = outcome;
+
+  return { op, event: state, ...rest };
+}
+
+/** Records how the prompt's agent ended and says so, or waits for it. */
+function settlePrompt(op) {
+  const record = readJson(opPath(op), undefined);
+  const outcome = agentOutcome(record);
+
+  if (outcome === undefined) {
+    working.set(op, setTimeout(() => settlePrompt(op), Math.max(record.startedAt + (options.agent.hold_ms ?? 0) - Date.now(), 25)));
+
+    return;
+  }
+
+  working.delete(op);
+  writeJson(opPath(op), { ...record, outcome });
+
+  if (outcome.state === 'finished' && dieAt('prompt-finished')) return;
+  send(promptEnded(op, outcome));
+  exitWhenIdle();
+}
+
+function prompt(request) {
+  const record = readJson(opPath(request.op), undefined);
+
+  if (options.agent === undefined) {
+    send({ op: request.op, event: 'failed', failure: { code: 'prompt_unsupported', message: 'The toy runs a prompt\'s tool as an exec; start it with the agent option to take prompts.' } });
+
+    return;
+  }
+
+  send({ op: request.op, event: 'accepted' });
+
+  if (working.has(request.op)) return;
+
+  // The first prompt of this id starts the agent; a repeated one reconnects to it, or reads how it ended.
+  if (!record) writeJson(opPath(request.op), { kind: 'prompt', op: request.op, handle: request.handle, lease: request.lease, startedAt: Date.now() });
+  settlePrompt(request.op);
+}
+
 function cancel(request) {
   const record = readJson(opPath(request.op), undefined);
 
   if (!record || record.outcome) return;
+
+  if (record.kind === 'prompt') {
+    fs.mkdirSync(file('cancel'), { recursive: true });
+    fs.writeFileSync(file('cancel', request.op), '');
+    clearTimeout(working.get(request.op));
+
+    // A prompt this toy waits on ends now; one a toy before it sent ends when teamai sends it again.
+    if (working.has(request.op)) settlePrompt(request.op);
+
+    return;
+  }
+
   fs.mkdirSync(file('cancel'), { recursive: true });
   fs.writeFileSync(file('cancel', request.op), '');
 
@@ -182,7 +279,7 @@ function opsOf(handle) {
   try { names = fs.readdirSync(file('ops')); } catch { names = []; }
 
   return names.filter((name) => name.endsWith('.json')).map((name) => ({ op: name.slice(0, -5), record: readJson(file('ops', name), undefined) }))
-    .filter(({ record }) => record?.kind === 'exec' && record.handle === handle);
+    .filter(({ record }) => (record?.kind === 'exec' || record?.kind === 'prompt') && record.handle === handle);
 }
 
 function known(handle) {
@@ -197,6 +294,12 @@ function reattach(request) {
   }
 
   const ops = opsOf(request.handle).map(({ op, record }) => {
+    if (record.kind === 'prompt') {
+      const { state, ...rest } = agentOutcome(record) ?? { state: 'running' };
+
+      return { op, state, ...rest };
+    }
+
     if (record.outcome?.state === 'exited') return { op, state: 'exited', code: record.outcome.code, stdout: record.outcome.stdout };
 
     if (record.outcome?.state === 'cancelled') return { op, state: 'cancelled' };
@@ -224,10 +327,10 @@ let ended = false;
 
 /** The toy outlives its stdin while an exec runs, so an exec that finishes while teamai is down is still recorded. */
 function exitWhenIdle() {
-  if (ended && running.size === 0) process.exit(0);
+  if (ended && running.size === 0 && working.size === 0) process.exit(0);
 }
 
-const HANDLERS = { init, open, exec, cancel, collect: (request) => send({ event: 'collected', handle: request.handle }), reattach, close };
+const HANDLERS = { init, open, exec, prompt, cancel, collect: (request) => send({ event: 'collected', handle: request.handle }), reattach, close };
 
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (line.trim() === '') return;

@@ -4,7 +4,7 @@ import crossSpawn from 'cross-spawn';
 import { log } from '../../utils/logger.js';
 import { RUNTIME_PROTOCOL, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { parseRuntimeLine, type HandleEvent, type OpEvent, type Shown } from './protocol.js';
-import type { ExecEnd, Initialized, Opened, Reattached, StepRuntime } from './step-runtime.js';
+import type { ExecEnd, Initialized, Opened, PromptEnd, Reattached, StepRuntime } from './step-runtime.js';
 
 /** How long `dispose` waits for a runtime to exit once its stdin ends; one that runs on is left to finish its own work. */
 const DISPOSE_WAIT_MS = 2000;
@@ -63,7 +63,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
     const { message } = parsed;
 
     if ('type' in message) {
-      onInit?.(message.ok ? { ok: true, can: message.can } : { ok: false, failure: message.error });
+      onInit?.(message.ok ? { ok: true, can: message.can, launchesAgents: message.prompt === true } : { ok: false, failure: message.error });
       onInit = undefined;
 
       return;
@@ -211,6 +211,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
 
               return;
             case 'ready':
+            case 'finished':
               return;
             default: {
               const unhandled: never = event;
@@ -221,6 +222,62 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
         });
 
         send({ type: 'exec', ...request });
+      });
+    },
+
+    prompt(request, events) {
+      if (dead) return Promise.resolve<PromptEnd>({ kind: 'failed', failure: dead });
+
+      return new Promise<PromptEnd>((resolve) => {
+        const settle = (end: PromptEnd): void => {
+          ops.delete(request.op);
+          resolve(end);
+        };
+
+        ops.set(request.op, (event) => {
+          if (isFailure(event)) {
+            settle({ kind: 'failed', failure: event });
+
+            return;
+          }
+
+          switch (event.event) {
+            case 'accepted':
+              events.onAccepted?.();
+
+              return;
+            case 'finished': {
+              const end: PromptEnd = { kind: 'finished', session: event.session, result: event.result };
+
+              if (event.usage) end.usage = event.usage;
+              settle(end);
+
+              return;
+            }
+
+            case 'cancelled':
+              settle({ kind: 'cancelled' });
+
+              return;
+            case 'failed':
+              settle({ kind: 'failed', failure: event.failure });
+
+              return;
+            case 'ready':
+            case 'output':
+            case 'exited':
+              die(`it answered prompt ${request.op} with ${event.event}, which a prompt does not have`);
+
+              return;
+            default: {
+              const unhandled: never = event;
+
+              return unhandled;
+            }
+          }
+        });
+
+        send({ type: 'prompt', ...request });
       });
     },
 
