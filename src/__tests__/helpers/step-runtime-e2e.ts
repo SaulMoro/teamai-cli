@@ -81,7 +81,10 @@ fs.mkdirSync(project, { recursive: true });
 fs.appendFileSync(file, JSON.stringify(${sessions.record}) + '\\n');
 fs.appendFileSync(process.env.LAUNCHES, JSON.stringify({ home, resumed, sessionFoundBefore: before, secret: process.env.STEP_RUNTIME_SECRET ?? null }) + '\\n');
 if (process.env.FAKE_TOOL_SPANS) fs.appendFileSync(process.env.FAKE_TOOL_SPANS, JSON.stringify({ attempt: process.env.TEAMAI_WORKFLOW_ATTEMPT, at: Date.now(), edge: 'start' }) + '\\n');
-if (process.env.FAKE_TOOL_HOLD_MS) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_TOOL_HOLD_MS));
+// It holds FAKE_TOOL_HOLD_MS, or, with FAKE_TOOL_BARRIER, until that many launches started, at most FAKE_TOOL_HOLD_MS.
+const until = Date.now() + Number(process.env.FAKE_TOOL_HOLD_MS ?? 0);
+const started = () => fs.readFileSync(process.env.FAKE_TOOL_SPANS, 'utf8').split('\\n').filter((line) => line.includes('"start"')).length;
+while (Date.now() < until && !(process.env.FAKE_TOOL_BARRIER && started() >= Number(process.env.FAKE_TOOL_BARRIER))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
 if (process.env.FAKE_TOOL_SPANS) fs.appendFileSync(process.env.FAKE_TOOL_SPANS, JSON.stringify({ attempt: process.env.TEAMAI_WORKFLOW_ATTEMPT, at: Date.now(), edge: 'end' }) + '\\n');
 fs.mkdirSync(path.dirname(process.env.TEAMAI_WORKFLOW_RESULT), { recursive: true });
 fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ output: { ok: true } }));

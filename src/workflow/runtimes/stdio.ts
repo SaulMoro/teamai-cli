@@ -2,11 +2,18 @@ import type { ChildProcess } from 'node:child_process';
 import readline from 'node:readline';
 import crossSpawn from 'cross-spawn';
 import { log } from '../../utils/logger.js';
-import { parseRuntimeLine, RUNTIME_PROTOCOL, type HandleEvent, type OpEvent, type RuntimeRequest } from './protocol.js';
+import { parseRuntimeLine, RUNTIME_PROTOCOL, type HandleEvent, type OpEvent, type RuntimeRequest, type Shown } from './protocol.js';
 import type { ExecEnd, Initialized, Opened, Reattached, RuntimeFailure, StepRuntime } from './step-runtime.js';
 
 /** How long `dispose` waits for a runtime to exit once its stdin ends; one that runs on is left to finish its own work. */
 const DISPOSE_WAIT_MS = 2000;
+
+/** The display a runtime gave, if the run's details show it; one they do not show is named in a warning. */
+function displayOf(name: string, shown: Shown) {
+  if (shown.kind === 'dropped') log.warn(`Step runtime "${name}" gave a display the run's details do not show: ${shown.reason}.`);
+
+  return shown.kind === 'shown' ? { display: shown.display } : {};
+}
 
 type HandleWaiter = { events: ReadonlySet<HandleEvent['event']>; settle: (event: HandleEvent | RuntimeFailure) => void };
 
@@ -157,7 +164,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
 
           const settled: Opened = event.event === 'failed' ? { kind: 'failed', failure: event.failure }
             : handle === undefined ? { kind: 'failed', failure: { code: 'runtime_protocol', message: `Step runtime "${name}" reported open ${request.op} ready before it accepted it.` } }
-              : { kind: 'ready', handle };
+              : { kind: 'ready', handle, ...displayOf(name, event.display) };
 
           void persisted.then(() => resolve(settled));
         });
@@ -233,7 +240,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
 
       if (isFailure(reply)) return { kind: 'failed', failure: reply } satisfies Reattached;
 
-      return reply.event === 'alive' ? { kind: 'alive', ops: reply.ops } : { kind: 'gone' };
+      return reply.event === 'alive' ? { kind: 'alive', ops: reply.ops, ...displayOf(name, reply.display) } : { kind: 'gone' };
     },
 
     async close(handle) {
