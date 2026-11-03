@@ -24,7 +24,7 @@ import {
   listIdeHistoryRoots,
   readIdeConversation,
 } from '@teamai/tool-core/formats/ide-history';
-import { CodeBuddyIdeAdapter } from '../session-flow/adapters/codebuddy-ide.js';
+import { CodeBuddyIdeAdapter } from './codebuddy-ide-adapter.js';
 
 /**
  * CodeBuddy IDE 适配器测试。

@@ -7,9 +7,6 @@
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { LocalConfig } from '../../types.js';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
-import { CodeBuddyAdapter } from './codebuddy.js';
-import { CodeBuddyIdeAdapter } from './codebuddy-ide.js';
-import { WorkBuddyAdapter } from './workbuddy.js';
 import { CursorAdapter } from './cursor.js';
 import { OpencodeAdapter } from './opencode.js';
 import { AgyAdapter, agyStoreRoots } from './agy.js';
@@ -35,9 +32,9 @@ export const ADAPTER_REGISTRY: AdapterRegistry = {
   // CodeBuddy has two independent stores, split into two platforms:
   //   codebuddy     = CLI (<CodeBuddy home>/projects/...)
   //   codebuddy-ide = IDE GUI (CodeBuddyExtension/.../history)
-  codebuddy: (toolRoots) => new CodeBuddyAdapter(sessionStoreDir('codebuddy', toolRoots)),
-  'codebuddy-ide': () => new CodeBuddyIdeAdapter(),
-  workbuddy: (toolRoots) => new WorkBuddyAdapter(sessionStoreDir('workbuddy', toolRoots)),
+  codebuddy: (toolRoots) => BUILT_IN_TOOLS.codebuddy.platforms.codebuddy.adapter(sessionStoreDir('codebuddy', toolRoots)),
+  'codebuddy-ide': () => BUILT_IN_TOOLS.codebuddy.platforms['codebuddy-ide'].adapter(),
+  workbuddy: (toolRoots) => BUILT_IN_TOOLS.codebuddy.platforms.workbuddy.adapter(sessionStoreDir('workbuddy', toolRoots)),
   cursor: (toolRoots) => new CursorAdapter('cursor', sessionStoreDir('cursor', toolRoots)),
   opencode: (toolRoots) => new OpencodeAdapter(sessionStoreDir('opencode', toolRoots)),
   agy: (toolRoots) => new AgyAdapter(agyStoreRoots(sessionStoreDir('agy', toolRoots))),
@@ -88,12 +85,6 @@ export { AgentAdapter, type SessionMeta } from '@teamai/tool-core/sessions/base'
 export { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 
 export { CodexAdapter } from '@teamai/tool-core/formats/codex';
-
-export { CodeBuddyAdapter } from './codebuddy.js';
-
-export { CodeBuddyIdeAdapter } from './codebuddy-ide.js';
-
-export { WorkBuddyAdapter } from './workbuddy.js';
 
 export { CursorAdapter } from './cursor.js';
 

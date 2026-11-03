@@ -4,7 +4,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import { sessionStoreDir } from '../locate.js';
-import { WorkBuddyAdapter } from '../session-flow/adapters/workbuddy.js';
+import { getAdapter } from '../session-flow/adapters/index.js';
 import { scrubSession } from '../session-flow/scrub.js';
 import { cleanTitleText, fallbackTitle, isInjectedText, titleFromCandidates } from '@teamai/tool-core/sessions/title';
 
@@ -55,7 +55,7 @@ describe('a WorkBuddy session title', () => {
     const file = path.join(dir, `${sessionId}.jsonl`);
     fs.writeFileSync(file, `${JSON.stringify({ type: 'ai-title', aiTitle: `${'Deploy the staging build '.repeat(3)}now with token ${token}` })}\n`);
     try {
-      const { session } = scrubSession(await new WorkBuddyAdapter().readSession({ sessionId, filePath: file }));
+      const { session } = scrubSession(await getAdapter('workbuddy').readSession({ sessionId, filePath: file }));
 
       expect(session.title).not.toContain(token.slice(0, 8));
     } finally {
@@ -70,7 +70,7 @@ describe('a WorkBuddy session title', () => {
     const start = `${'Load the warehouse '.repeat(4)}from `;
     fs.writeFileSync(file, `${JSON.stringify({ type: 'ai-title', aiTitle: `${start}mysql-prod-7Hq2xVb9Lk tonight` })}\n`);
     try {
-      const { session } = scrubSession(await new WorkBuddyAdapter().readSession({ sessionId, filePath: file }), { secrets: { WAREHOUSE_DSN: 'mysql-prod-7Hq2xVb9Lk' } });
+      const { session } = scrubSession(await getAdapter('workbuddy').readSession({ sessionId, filePath: file }), { secrets: { WAREHOUSE_DSN: 'mysql-prod-7Hq2xVb9Lk' } });
 
       expect(session.title).toBe(`${start}<REDACTED:WAREHOUSE`);
     } finally {

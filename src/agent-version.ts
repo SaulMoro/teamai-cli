@@ -24,39 +24,6 @@ async function detectCursorVersion(): Promise<string> {
   return raw.split('\n')[0]?.trim() ?? '';
 }
 
-async function detectCodebuddyCliVersion(): Promise<string> {
-  return execVersion('codebuddy');
-}
-
-const CODEBUDDY_IDE_PATHS = [
-  '/Applications/CodeBuddy.app',
-  '/Applications/CodeBuddy CN.app',
-];
-
-async function detectCodebuddyIdeVersion(): Promise<string> {
-  for (const appPath of CODEBUDDY_IDE_PATHS) {
-    const ver = await readPlistVersion(appPath);
-
-    if (ver) return ver;
-  }
-
-  return '';
-}
-
-const WORKBUDDY_APP_PATHS = [
-  '/Applications/WorkBuddy.app',
-];
-
-async function detectWorkbuddyVersion(): Promise<string> {
-  for (const appPath of WORKBUDDY_APP_PATHS) {
-    const ver = await readPlistVersion(appPath);
-
-    if (ver) return ver;
-  }
-
-  return '';
-}
-
 async function detectHermesVersion(): Promise<string> {
   const raw = await execVersion('hermes');
   // hermes --version may output "(2026.8.7)\nProject: ..." — extract from parens or leading digits.
@@ -93,13 +60,13 @@ const DETECTORS: Record<ToolId, VersionDetector | null> = {
   zcode: null,
   omp: null,
   pi: BUILT_IN_TOOLS.pi.detect.pi,
-  codebuddy: detectCodebuddyCliVersion,
+  codebuddy: BUILT_IN_TOOLS.codebuddy.detect.codebuddy,
   openclaw: detectOpenclawVersion,
   hermes: detectHermesVersion,
   // DeepSeek Harness: `dsh --version` prints e.g. "0.1.1" (optionally with a
   // leading "v" or trailing commit info). Extract leading semver-ish digits.
   dsh: detectDshVersion,
-  workbuddy: detectWorkbuddyVersion,
+  workbuddy: BUILT_IN_TOOLS.codebuddy.detect.workbuddy,
   opencode: null,
   muse: detectMuseVersion,
   agy: detectAgyVersion,
@@ -107,7 +74,7 @@ const DETECTORS: Record<ToolId, VersionDetector | null> = {
 
 /** The detector for `agentType`: a tool's, or the CodeBuddy IDE's (`codebuddy-ide`). */
 function detectorOf(agentType: string): VersionDetector | null {
-  if (agentType === 'codebuddy-ide') return detectCodebuddyIdeVersion;
+  if (agentType === 'codebuddy-ide') return BUILT_IN_TOOLS.codebuddy.detect['codebuddy-ide'];
 
   return isToolId(agentType) ? DETECTORS[agentType] : null;
 }

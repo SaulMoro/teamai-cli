@@ -2,8 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 
-import { log } from '../../utils/logger.js';
-import { type JsonValue, JsonObjectSchema } from '../../types.js';
+import { log } from '@teamai/tool-core/log';
+import { type JsonValue, JsonObjectSchema } from '@teamai/tool-core/json';
 import { addTokenUsage, emptyTokenUsage, INTERVENTION_SCAN_MAX_BYTES, type TokenUsage } from '@teamai/tool-core/tokens';
 import type { TokenReading, TokenRequest, TokenSource } from '@teamai/tool-core/tokens';
 import { forEachJsonLine } from '@teamai/tool-core/tokens';
