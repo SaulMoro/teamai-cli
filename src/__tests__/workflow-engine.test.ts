@@ -5822,6 +5822,27 @@ describe('strict requirements', () => {
     expect(leased).not.toHaveProperty('data.lease.envScope');
   });
 
+  it('starts a run whose strict steps each have a runtime of the only driver, though every runtime holds one of them back', async () => {
+    const { config } = testConfig();
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: boxed
+    requires: { isolation: sandbox, strict: true }
+    command: node boxed.js
+  - id: offline
+    needs: [boxed]
+    requires: { network: false, strict: true }
+    command: node offline.js
+`));
+    await syncScorersThenWorkflows(config);
+    const secrets = await knownSecrets(config);
+
+    const started = await startRun(config, 'build', {}, { secrets, alone: { driver: 'split', offers: [
+      { runtime: 'box', can: { isolation: 'sandbox', network: false, env: true } },
+      { runtime: 'air', can: { isolation: 'none', network: true, env: true } },
+    ] } });
+
+    expect(started).toMatchObject({ data: { status: 'running' } });
+  });
+
   it('refuses a start whose only driver could never take a step for its strict requirements, and creates no run', async () => {
     const { config } = testConfig();
     fs.writeFileSync(path.join(config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: fetch
