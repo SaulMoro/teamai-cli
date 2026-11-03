@@ -20,7 +20,8 @@ vi.mock('node:os', async (importOriginal) => {
   return patched;
 });
 
-import { ClaudeCodeAdapter } from '../session-flow/adapters/claude-code.js';
+import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
+import { sessionStoreDir } from '../locate.js';
 import { CursorAdapter } from '../session-flow/adapters/cursor.js';
 import type { Session } from '@teamai/tool-core/sessions/ir';
 
@@ -74,7 +75,7 @@ describe('migrating an image that only has a local filePath', () => {
     const expected = fs.readFileSync(pic).toString('base64');
 
     fs.mkdirSync(path.join(mocks.home, '.claude', 'projects'), { recursive: true });
-    const target = new ClaudeCodeAdapter();
+    const target = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
     const cwd = path.join(mocks.home, 'work');
 
     const id = await target.writeSession(mkSession(pic), cwd);
@@ -91,7 +92,7 @@ describe('migrating an image that only has a local filePath', () => {
     const session = mkSession(pic);
     session.metadata = { untrusted: true };
 
-    const target = new ClaudeCodeAdapter();
+    const target = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
     const cwd = path.join(mocks.home, 'work');
     const id = await target.writeSession(session, cwd);
     const text = fs.readFileSync(await findWritten(target, cwd, id), 'utf-8');

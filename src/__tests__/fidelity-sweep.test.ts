@@ -23,7 +23,8 @@ vi.mock('node:os', async (importOriginal) => {
   return patched;
 });
 
-import { ClaudeCodeAdapter } from '../session-flow/adapters/claude-code.js';
+import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
+import { sessionStoreDir } from '../locate.js';
 import { CodeBuddyAdapter } from '../session-flow/adapters/codebuddy.js';
 import { CodeBuddyIdeAdapter } from '../session-flow/adapters/codebuddy-ide.js';
 import { CodexAdapter } from '../session-flow/adapters/codex.js';
@@ -301,7 +302,7 @@ function ideHistoryRoot(): string {
 function makeAdapter(platform: string): AgentAdapter {
   switch (platform) {
     case 'claude-code':
-      return new ClaudeCodeAdapter('claude-code');
+      return new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
     case 'codebuddy':
       return new CodeBuddyAdapter();
     case 'codebuddy-ide':
@@ -408,7 +409,7 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
         // 孤儿节点：parentUuid 指向不存在记录
         rec('orphan', 'ghost-uuid', 'ORPHAN-Q'),
       ];
-      const adapter = new ClaudeCodeAdapter('claude-code');
+      const adapter = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
       // 直接写入编码目录（必须复用适配器编码逻辑：macOS /var → /private/var realpath）
       const dir = path.join(tmpHome, '.claude', 'projects', encodeCwdClaude(cwd));
       fs.mkdirSync(dir, { recursive: true });
@@ -480,7 +481,7 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
       // F2: 空 content 消息被多平台写入端静默丢弃（score 按 block 计，看不见消息级丢失）
       const fixtureEmpty = buildFixture();
       const cursor = new CursorAdapter();
-      const claude = new ClaudeCodeAdapter('claude-code');
+      const claude = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
       const fidEmpty = fidelityFromSession(fixtureEmpty, 'cursor');
       audit.push({ case: 'F2 fixture(empty msg) fidelity→cursor', score: Number(fidEmpty.score.toFixed(4)), note: '空消息 0 block，不扣分；但 cursor.writeSession 会静默丢弃该消息' });
 
@@ -537,7 +538,7 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
       };
 
       const mem0 = process.memoryUsage();
-      const claude = new ClaudeCodeAdapter('claude-code');
+      const claude = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
       let t0 = Date.now();
       const claudeSid = await claude.writeSession(session, cwd);
       const claudeWriteMs = Date.now() - t0;

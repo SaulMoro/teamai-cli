@@ -177,7 +177,8 @@ import { registerSessionFlowCommands } from '../session-flow/session-cmd.js';
 import { SyncManager, defaultSyncMeta } from '../session-flow/sync.js';
 import type { Session } from '@teamai/tool-core/sessions/ir';
 import { ToolUnavailableError, type SessionReadRef } from '@teamai/tool-core/sessions/base';
-import { ClaudeCodeAdapter } from '../session-flow/adapters/claude-code.js';
+import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
+import { sessionStoreDir } from '../locate.js';
 import { CodeBuddyAdapter } from '../session-flow/adapters/codebuddy.js';
 import { CursorAdapter } from '../session-flow/adapters/cursor.js';
 import { CodexAdapter } from '../session-flow/adapters/codex.js';
@@ -675,7 +676,7 @@ describe('session push --all', () => {
         }) + '\n',
       );
     }
-    mocks.adaptersByPlatform['claude-code'] = new ClaudeCodeAdapter();
+    mocks.adaptersByPlatform['claude-code'] = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
     mocks.remotes['/proj/alpha'] = 'https://github.com/org/alpha.git';
     mocks.remotes['/proj/beta'] = 'https://gitlab.com/team/beta.git';
 
@@ -1339,7 +1340,7 @@ describe('session migrate --json', () => {
     const projDir = path.join(mocks.home, '.claude', 'projects', '-run-dir');
     fs.mkdirSync(projDir, { recursive: true });
     fs.writeFileSync(path.join(projDir, `${sid}.jsonl`), '{"truncated\nnot json either\n');
-    mocks.adaptersByPlatform['claude-code'] = new ClaudeCodeAdapter();
+    mocks.adaptersByPlatform['claude-code'] = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
 
     await runSession('migrate', sid, '-s', 'claude-code', '-t', 'tgtplat', '--cwd', '/run/dir', '--json');
 
@@ -1424,7 +1425,7 @@ describe('session resume of a session already restored', () => {
     const indexPath = path.join(repoRoot, 'sessions', 'repos', encodeRepoIdentity('github.com/org/alpha'), '_index.json');
     const name = (JSON.parse(fs.readFileSync(indexPath, 'utf-8')) as { sessions: Array<{ sessionName: string }> })
       .sessions[0].sessionName;
-    mocks.adaptersByPlatform['claude-code'] = new ClaudeCodeAdapter();
+    mocks.adaptersByPlatform['claude-code'] = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
     const resume = () => runSession('resume', name, '--platform', 'claude-code', '--repo-root', repoRoot, '--cwd', ws);
 
     await resume();
@@ -1467,7 +1468,7 @@ describe('session resume of a restore whose write failed', () => {
     const indexPath = path.join(repoRoot, 'sessions', 'repos', encodeRepoIdentity('github.com/org/alpha'), '_index.json');
     const name = (JSON.parse(fs.readFileSync(indexPath, 'utf-8')) as { sessions: Array<{ sessionName: string }> })
       .sessions[0].sessionName;
-    mocks.adaptersByPlatform['claude-code'] = new ClaudeCodeAdapter();
+    mocks.adaptersByPlatform['claude-code'] = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
     const projects = path.join(mocks.home, '.claude', 'projects');
     const transcripts = () =>
       fs.existsSync(projects) ? (fs.readdirSync(projects, { recursive: true }) as string[]).filter((f) => f.endsWith('.jsonl')) : [];
@@ -1612,7 +1613,7 @@ describe('claude-code readSession: message order', () => {
     ];
     fs.writeFileSync(path.join(projDir, `${SID}.jsonl`), lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
 
-    const session = await new ClaudeCodeAdapter().readSession({ sessionId: SID });
+    const session = await new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined)).readSession({ sessionId: SID });
     const order = session.messages.map((m) => (m.content[0] as { text: string }).text);
     expect(order).toEqual(['Q1', 'A1', 'Q2', 'A2', 'Q3', 'A3']);
   });
@@ -1640,7 +1641,7 @@ describe('adapters: native cwd recovery from JSONL records', () => {
       }) + '\n',
     );
 
-    const session = await new ClaudeCodeAdapter().readSession({ sessionId: SID });
+    const session = await new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined)).readSession({ sessionId: SID });
     expect(session.cwd).toBe(NATIVE);
   });
 
