@@ -4,7 +4,7 @@ import path from 'node:path';
 import fse from 'fs-extra';
 
 // Mock logger before any imports that use it.
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 
