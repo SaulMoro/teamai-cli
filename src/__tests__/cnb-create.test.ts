@@ -15,7 +15,7 @@ vi.mock('cross-spawn', () => ({
 }));
 
 const resolveCliPathMock = vi.fn<(...args: unknown[]) => string | null>(() => RESOLVED_CNB);
-vi.mock('../utils/cli-path.js', () => ({
+vi.mock('@teamai/tool-core/cli-path', () => ({
   resolveCliPath: (...args: unknown[]) => resolveCliPathMock(...args),
 }));
 

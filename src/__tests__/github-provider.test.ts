@@ -9,7 +9,7 @@ vi.mock('node:child_process', () => ({
 // gh-cli resolves the CLI through utils/cli-path.js. Tests used to fake "gh not
 // installed" by making execSync('which gh') throw; the seam is now the resolver,
 // so drive that instead (default: not installed, see beforeEach blocks).
-vi.mock('../utils/cli-path.js', () => ({
+vi.mock('@teamai/tool-core/cli-path', () => ({
   resolveCliPath: vi.fn(),
 }));
 
