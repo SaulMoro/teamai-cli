@@ -27,11 +27,10 @@ import { tmpdir } from 'node:os';
 import { z } from 'zod';
 import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '@teamai/tool-core/sessions/base';
 import { imagePlaceholderText, ToolArgumentsSchema, type ContentBlock, type ImageBlock, type Message, type Session, type ToolArguments } from '@teamai/tool-core/sessions/ir';
-import { JsonValueSchema } from '../../types.js';
+import { JsonValueSchema } from '@teamai/tool-core/json';
 import { resolveRealCwd } from '@teamai/tool-core/sessions/fs';
-import { sessionStoreDir } from '../../locate.js';
 import { deriveOpencodeMessageIds, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
-import { execCommand, probeBinary, type ExecResult } from '../../utils/exec.js';
+import { execCommand, probeBinary, type ExecResult } from '@teamai/tool-core/exec';
 
 const OPENCODE_TO_IR_TOOL: ReadonlyMap<string, string> = new Map([
   ['read', 'read_file'],
@@ -446,7 +445,7 @@ export class OpencodeAdapter extends AgentAdapter {
   static readonly platform = 'opencode';
 
   /** @param storageRoot OpenCode's data directory (`sessionStoreDir`): `$XDG_DATA_HOME/opencode`, `~/.local/share/opencode` by default. */
-  constructor(private readonly storageRoot = sessionStoreDir('opencode', undefined)) {
+  constructor(private readonly storageRoot: string) {
     super();
   }
 

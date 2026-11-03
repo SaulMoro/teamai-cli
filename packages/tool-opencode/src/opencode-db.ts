@@ -2,12 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 
-import { sessionStoreDir } from '../../locate.js';
 import { isSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
 import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
 import { addTokenUsage, emptyTokenUsage } from '@teamai/tool-core/tokens';
-import { execCommand } from '../../utils/exec.js';
-import { log } from '../../utils/logger.js';
+import { execCommand } from '@teamai/tool-core/exec';
+import { log } from '@teamai/tool-core/log';
 import type { TokenReading, TokenRequest, TokenSource } from '@teamai/tool-core/tokens';
 
 const Count = z.number().finite().nonnegative().catch(0).default(0);
@@ -32,14 +31,16 @@ const Role = z.object({ role: z.string() }).catch({ role: '' });
 
 /**
  * OpenCode's assistant messages for `sessionId`, from `opencode.db` in its
- * data directory. OpenCode 2 writes them to `session_message` and older
+ * data directory (`storeDir`). OpenCode 2 writes them to `session_message` and older
  * versions to `message`; a message in both is read once. Reasoning tokens
  * are billed as output, and the cost OpenCode reports is kept when above zero.
  */
 export async function readOpencodeDb(source: TokenSource): Promise<TokenReading> {
   let tokens = emptyTokenUsage();
   const requests: TokenRequest[] = [];
-  const db = path.join(sessionStoreDir('opencode', undefined), 'opencode.db');
+
+  if (source.storeDir === undefined) throw new Error('opencode-db reads OpenCode\'s data directory: pass it as storeDir.');
+  const db = path.join(source.storeDir, 'opencode.db');
 
   // A safe id is a single path segment of letters, digits, `-` and `_`, so it cannot break out of the quotes.
   if (!isSafeSessionFileId(source.sessionId) || !fs.existsSync(db)) return { tokens, requests };

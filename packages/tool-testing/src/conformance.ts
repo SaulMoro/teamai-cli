@@ -25,8 +25,8 @@ export interface RecordedUsage {
   readonly tokens: TokenUsage;
   /** For a format that finds the transcript by session id: where the tool keeps it under `store`. */
   place?(store: string, sessionId: string): string;
-  /** The variable that points such a format at `store`. */
-  readonly storeEnv?: string;
+  /** The environment that points such a format at `store`. */
+  env?(store: string): Readonly<Record<string, string>>;
 }
 
 /** What a tool printed for `--version`, recorded, and the version teamai reads from it; or why none is recorded. */
@@ -38,8 +38,8 @@ export interface FamilyRecordings {
   readonly calls: Readonly<Record<string, RecordedCall>>;
   /** By session platform id: one for every platform of the family, or why none can be recorded. */
   readonly transcripts: Readonly<Record<string, RecordedTranscript | { readonly unrecorded: string }>>;
-  /** By token format id: one for every format a tool of the family names. */
-  readonly tokens: Readonly<Record<string, RecordedUsage>>;
+  /** By token format id: one for every format a tool of the family names, or why none can be recorded. */
+  readonly tokens: Readonly<Record<string, RecordedUsage | { readonly unrecorded: string }>>;
   /** By the tool or platform id a detector is keyed by: one for every detector of the family. */
   readonly versions: Readonly<Record<string, RecordedVersion>>;
 }
@@ -126,18 +126,19 @@ function describeLaunch(id: string, profile: LaunchAdapter, call: RecordedCall):
 }
 
 /**
- * The adapter on a fresh store, outside any tool home, with the recorded transcript replayed into it under `cwd`. A
- * platform that locates its own store is pointed at the fresh one through the transcript's `storeEnv`.
+ * The adapter on a fresh store, outside any tool home, with the recorded transcript replayed into it under `cwd`, and the
+ * environment the recording names for it.
  */
 function replayed(platform: SessionPlatformDefinition, transcript: RecordedTranscript, cwd: string) {
   const store = scratch('store');
 
   replayTranscript(transcript, { store, cwd, sessionId: sessionIdOf(transcript) });
 
+  for (const [variable, value] of Object.entries(transcript.env?.(store) ?? {})) vi.stubEnv(variable, value);
+
   if (!locatesOwnStore(platform)) return { store, adapter: platform.adapter(store) };
 
-  if (transcript.storeEnv === undefined) throw new Error('A platform that locates its own store needs a recording with storeEnv, the variable that points it at the replayed store.');
-  vi.stubEnv(transcript.storeEnv, store);
+  if (transcript.env === undefined) throw new Error('A platform that locates its own store needs a recording whose env points it at the replayed store.');
   const adapter: AgentAdapter = platform.adapter();
 
   return { store, adapter };
@@ -254,8 +255,14 @@ export function describeFamily(name: string, family: ToolFamily, recordings: Fam
     }
 
     for (const [id, format] of Object.entries(family.tokens)) {
+      const usage = recorded(recordings.tokens, id, 'usage');
+
+      if ('unrecorded' in usage) {
+        it.skip(`token format ${id} reads the recorded usage: ${usage.unrecorded}`, () => undefined);
+        continue;
+      }
+
       it(`token format ${id} reads the recorded usage`, async () => {
-        const usage = recorded(recordings.tokens, id, 'usage');
         const dir = scratch('tokens');
 
         try {
@@ -264,8 +271,9 @@ export function describeFamily(name: string, family: ToolFamily, recordings: Fam
           fs.mkdirSync(path.dirname(transcriptPath), { recursive: true });
           fs.writeFileSync(transcriptPath, usage.text);
 
-          if (usage.storeEnv !== undefined) vi.stubEnv(usage.storeEnv, dir);
-          expect((await format({ transcriptPath, sessionId: SESSION_ID, settled: true })).tokens).toEqual(usage.tokens);
+          for (const [variable, value] of Object.entries(usage.env?.(dir) ?? {})) vi.stubEnv(variable, value);
+
+          expect((await format({ transcriptPath, sessionId: SESSION_ID, settled: true, storeDir: dir })).tokens).toEqual(usage.tokens);
         } finally {
           vi.unstubAllEnvs();
           fs.rmSync(dir, { recursive: true, force: true });

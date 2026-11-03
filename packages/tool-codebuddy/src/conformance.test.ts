@@ -30,7 +30,7 @@ const workbuddyTranscript = {
  */
 const codebuddyIdeTranscript = {
   sessionId: '7c9e66797425440d944be07fc1f90ae7',
-  storeEnv: 'TEAMAI_CODEBUDDY_IDE_DATA',
+  env: (store: string) => ({ TEAMAI_CODEBUDDY_IDE_DATA: store }),
   files: ({ store, cwd, sessionId }: ReplayTarget) => {
     const workspace = path.join(store, 'ext-a', 'CodeBuddyIDE', 'ext-a', 'history', hashWorkspace(cwd) ?? 'unhashable');
     const conversation = path.join(workspace, sessionId);

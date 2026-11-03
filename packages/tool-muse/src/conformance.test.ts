@@ -24,7 +24,7 @@ describeFamily('tool-muse', family, {
     'muse-session': {
       text: fixture('muse-session.jsonl'),
       place: (store, sessionId) => path.join(store, 'muse', 'sessions', '2026', '10', '30', sessionId, 'session.jsonl'),
-      storeEnv: 'XDG_DATA_HOME',
+      env: (store) => ({ XDG_DATA_HOME: store }),
       tokens: { input: 2000, output: 600, cacheRead: 10000, cacheCreation: 0 },
     },
   },
