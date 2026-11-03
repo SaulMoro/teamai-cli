@@ -105,9 +105,13 @@ export function placeRecordPath(config: LocalConfig, run: RunId, attempt: Attemp
   return path.join(attemptDir(config, run, attempt), 'place.json');
 }
 
-/** `attempts/<a>/result.json`: what a prompt step's tool or child agent, or a command step's driver, wrote the step produced. */
+/**
+ * `attempts/<a>/out/result.json`: what a prompt step's tool or child agent, or a command step's driver, wrote the step
+ * produced. It has a directory of its own, which a step runtime gets read-write, because the attempt directory beside
+ * it holds the place record and the saved overlay.
+ */
 export function attemptResultPath(config: LocalConfig, run: RunId, attempt: AttemptId): string {
-  return path.join(attemptDir(config, run, attempt), 'result.json');
+  return path.join(attemptDir(config, run, attempt), 'out', 'result.json');
 }
 
 /**
