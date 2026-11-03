@@ -11,41 +11,21 @@ const TABLES = new Map([
   ['src/session-flow/adapters/index.ts', 'ADAPTER_REGISTRY'],
 ]);
 
-const [REGISTRY] = scopedFiles(['src/tool-registry.ts', ...TABLES.keys()]);
+/** The registry: tool ids and descriptors, and the launch half beside LAUNCH_ADAPTERS, kept apart so the registry imports no adapter. */
+const REGISTRY = new Set(scopedFiles(['src/tool-registry.ts', 'src/tool-launch/tools.ts']));
+
+scopedFiles([...TABLES.keys()]);
 
 /**
  * Readers that still import a raw table. A new reader goes through the registry instead; this list only shrinks,
  * and an entry that no longer reads a table fails until it is removed.
  */
 const NOT_YET_MOVED = new Set([
-  'scripts/doc-checks/readme-matrix.ts',
-  'scripts/tool-support.ts',
-  'src/autocompact-reconcile.ts',
-  'src/bundled-runtime.ts',
-  'src/dashboard-collector.ts',
-  'src/hooks.ts',
-  'src/init.ts',
-  'src/instruction-targets.ts',
-  'src/known-agents.ts',
+  // sessionStoreDir and adapterFor change in the connected-drivers engine; these move after it lands.
   'src/locate.ts',
-  'src/mcp-reconcile.ts',
-  'src/resources/agents.ts',
-  'src/scorers/judge.ts',
   'src/session-flow/agent-session.ts',
   'src/session-flow/index.ts',
-  'src/skill-use.ts',
-  'src/source.ts',
-  'src/tool-home-record.ts',
-  'src/tool-home.ts',
-  'src/tool-launch/tools.ts',
-  'src/uninstall.ts',
-  'src/utils/tool-call.ts',
-  'src/utils/tool-names.ts',
-  'src/workflow/discovery/render.ts',
-  'src/workflow/drivers/skill/preflight.ts',
-  'src/workflow/drivers/skill/skill-driver.ts',
-  'src/workflow/place/clone.ts',
-]);
+])
 
 export default defineRule({
   meta: {
@@ -58,7 +38,7 @@ export default defineRule({
 
     if (!/^(src|scripts)\//.test(from) || from.startsWith('src/__tests__/') || /\.test\.[cm]?[jt]sx?$/.test(from)) return {};
 
-    if (from === REGISTRY || TABLES.has(from)) return {};
+    if (REGISTRY.has(from) || TABLES.has(from)) return {};
     const root = file.slice(0, file.length - from.length);
     let reads = false;
 
