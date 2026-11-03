@@ -24,8 +24,8 @@ vi.mock('node:os', async (importOriginal) => {
 
 // An older TeamAI wrote copies under other ids. Writing through the same adapters under such an
 // id plants the copy it left behind.
-vi.mock('../session-flow/ids.js', async (importOriginal) => {
-  const actual = (await importOriginal()) as typeof import('../session-flow/ids.js');
+vi.mock('@teamai/tool-core/sessions/ids', async (importOriginal) => {
+  const actual = (await importOriginal()) as typeof import('@teamai/tool-core/sessions/ids');
   return {
     ...actual,
     deriveTargetSessionId: (target: Parameters<typeof actual.deriveTargetSessionId>[0]) =>
@@ -35,8 +35,8 @@ vi.mock('../session-flow/ids.js', async (importOriginal) => {
 
 import { AgentSession, noAdapter } from '../session-flow/agent-session.js';
 import { getAdapter } from '../session-flow/adapters/index.js';
-import type { AgentAdapter } from '../session-flow/adapters/base.js';
-import type { Session } from '../session-flow/ir.js';
+import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
+import type { Session } from '@teamai/tool-core/sessions/ir';
 import { installFakeOpencode, setFakeOpencodeExportError, setFakeOpencodeVersion } from './helpers/fake-opencode.js';
 import { WRITABLE } from './helpers/writable-platforms.js';
 

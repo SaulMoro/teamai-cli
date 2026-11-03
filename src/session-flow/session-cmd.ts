@@ -33,7 +33,7 @@ import {
 } from './agent-session.js';
 import { SyncManager, getGitAuthor, defaultSyncMeta, withSessionPublicationLock, type IndexEntry } from './sync.js';
 import { SessionSearchEngine, type LoadedSession } from './search.js';
-import { isSafeSessionFileId } from './ids.js';
+import { isSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
 import { isInteractive } from '../utils/prompt.js';
 import { updateReports } from '../utils/reports-branch.js';
 import { knownSecrets } from '../env-resolution.js';

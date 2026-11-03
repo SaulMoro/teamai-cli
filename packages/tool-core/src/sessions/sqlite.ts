@@ -11,8 +11,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { WIN_EXEC_EXTENSIONS } from '../utils/cli-path.js';
-import { execCommand } from '../utils/exec.js';
+import { WIN_EXEC_EXTENSIONS } from '../cli-path.js';
+import { execCommand } from '../exec.js';
 
 /** Locate the sqlite3 CLI: PATH first, then well-known install locations off Windows.
  *  On Windows a PATH entry holds `sqlite3.exe`, so the name carries the extension.

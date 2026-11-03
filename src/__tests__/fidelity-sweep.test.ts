@@ -31,9 +31,9 @@ import { CursorAdapter } from '../session-flow/adapters/cursor.js';
 import { WorkBuddyAdapter } from '../session-flow/adapters/workbuddy.js';
 import * as crypto from 'node:crypto';
 import { degradeThinkingBlocks, fidelityFromSession } from '../session-flow/migrate.js';
-import type { Session, Message } from '../session-flow/ir.js';
-import type { AgentAdapter } from '../session-flow/adapters/base.js';
-import { encodeCwdClaude } from '../session-flow/fs.js';
+import type { Session, Message } from '@teamai/tool-core/sessions/ir';
+import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
+import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { getUserDataBase } from '../session-flow/ide-history.js';
 
 // ---------------------------------------------------------------------------

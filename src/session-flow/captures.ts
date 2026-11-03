@@ -16,8 +16,8 @@ import { getDataHome, type DeliverySelection, type LocalConfig } from '../types.
 import { acquireLock, releaseLock } from '../update.js';
 import { log } from '../utils/logger.js';
 import { AgentSession } from './agent-session.js';
-import { OptionalString } from './fs.js';
-import type { Session } from './ir.js';
+import { OptionalString } from '@teamai/tool-core/sessions/fs';
+import type { Session } from '@teamai/tool-core/sessions/ir';
 import type { HookStdin } from '../hook-dispatch.js';
 
 export const SessionCaptureSchema = z.object({

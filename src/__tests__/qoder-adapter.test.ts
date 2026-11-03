@@ -22,7 +22,7 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 import { ADAPTER_REGISTRY } from '../session-flow/adapters/index.js';
-import { encodeCwdClaude } from '../session-flow/fs.js';
+import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { AgentSession } from '../session-flow/agent-session.js';
 
 const SID = 'c0ffee00-0000-4000-8000-00000000d0de';

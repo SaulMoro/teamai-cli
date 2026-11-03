@@ -21,7 +21,9 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { sessionPlatformFacts } from './adapters/platform-facts.js';
+
+/** How a platform shapes a session id: a UUIDv7, an OpenCode `ses_` id, or a Hermes id. */
+export type SessionIdFormat = 'uuid' | 'opencode' | 'hermes';
 
 /**
  * Derive the id to write a session under in `targetPlatform` at `targetCwd`.
@@ -37,6 +39,8 @@ import { sessionPlatformFacts } from './adapters/platform-facts.js';
 export function deriveTargetSessionId(
   target: {
     targetPlatform: string;
+    /** How the target platform shapes a session id (`SessionPlatformFacts.idFormat`). */
+    idFormat: SessionIdFormat;
     targetCwd: string;
     sourceSessionId: string;
     /** The source session's creation time (ISO 8601). Only an OpenCode id carries it. */
@@ -56,7 +60,7 @@ export function deriveTargetSessionId(
 
   const key = `teamai:${targetPlatform}:${canonicalWorkspace(targetCwd, paths)}:${sourceSessionId}`;
 
-  if (sessionPlatformFacts(targetPlatform)?.idFormat === 'opencode') {
+  if (target.idFormat === 'opencode') {
     const time =
       OPENCODE_SESSION_TIME.exec(sourceSessionId)?.[1] ?? opencodeTime(opencodeClock(createdMs(target.sourceCreatedAt)), 'descending');
 
@@ -132,13 +136,15 @@ export function legacyTargetSessionIds(target: {
   sourcePlatform: string;
   targetPlatform: string;
   sourceSessionId: string;
+  /** Whether an older TeamAI derived the target platform's ids without the workspace (`SessionPlatformFacts.legacyIdWithoutWorkspace`). */
+  legacyIdWithoutWorkspace: boolean;
 }): string[] {
   const { sourcePlatform, targetPlatform, sourceSessionId } = target;
   const ids: string[] = [];
 
   if (sourcePlatform !== targetPlatform && UUID_RE.test(sourceSessionId)) ids.push(sourceSessionId);
 
-  if (sessionPlatformFacts(targetPlatform)?.legacyIdWithoutWorkspace) ids.push(uuidV7FromKey(`teamai:${targetPlatform}:${sourceSessionId}`));
+  if (target.legacyIdWithoutWorkspace) ids.push(uuidV7FromKey(`teamai:${targetPlatform}:${sourceSessionId}`));
 
   return ids;
 }

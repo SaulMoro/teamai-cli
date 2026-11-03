@@ -141,7 +141,7 @@ vi.mock('../session-flow/sync.js', async (importOriginal) => {
     private busy<T>(): import('../session-flow/sync.js').ArchiveWriteResult<T> | undefined {
       return mocks.heldArchiveLock ? { status: 'busy', lockPath: mocks.heldArchiveLock } : undefined;
     }
-    override saveSession(session: import('../session-flow/ir.js').Session, meta: import('../session-flow/sync.js').SessionSyncMeta) {
+    override saveSession(session: import('@teamai/tool-core/sessions/ir').Session, meta: import('../session-flow/sync.js').SessionSyncMeta) {
       const busy = this.busy<string>();
       return busy ? Promise.resolve(busy) : super.saveSession(session, meta);
     }
@@ -175,8 +175,8 @@ vi.mock('../session-flow/agent-session.js', async (importOriginal) => {
 
 import { registerSessionFlowCommands } from '../session-flow/session-cmd.js';
 import { SyncManager, defaultSyncMeta } from '../session-flow/sync.js';
-import type { Session } from '../session-flow/ir.js';
-import { ToolUnavailableError, type SessionReadRef } from '../session-flow/adapters/base.js';
+import type { Session } from '@teamai/tool-core/sessions/ir';
+import { ToolUnavailableError, type SessionReadRef } from '@teamai/tool-core/sessions/base';
 import { ClaudeCodeAdapter } from '../session-flow/adapters/claude-code.js';
 import { CodeBuddyAdapter } from '../session-flow/adapters/codebuddy.js';
 import { CursorAdapter } from '../session-flow/adapters/cursor.js';

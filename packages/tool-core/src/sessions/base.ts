@@ -5,7 +5,7 @@
  * and implements a shared list/read/write/delete interface so migration logic stays decoupled from a specific platform.
  */
 
-import type { Session } from '../ir.js';
+import type { Session } from './ir.js';
 
 export interface SessionMeta {
   sessionId: string;

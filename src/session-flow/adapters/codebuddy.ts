@@ -24,12 +24,12 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { AgentAdapter, type SessionMeta, type SessionReadRef, type SubagentsRead } from './base.js';
+import { AgentAdapter, type SessionMeta, type SessionReadRef, type SubagentsRead } from '@teamai/tool-core/sessions/base';
 import { z } from 'zod';
-import type { Session, SessionMetadata, Message, ContentBlock, ThinkingBlock, ToolArguments, ToolCallBlock, ToolResultBlock } from '../ir.js';
-import { imagePlaceholderText, toolArgumentsFrom } from '../ir.js';
+import type { Session, SessionMetadata, Message, ContentBlock, ThinkingBlock, ToolArguments, ToolCallBlock, ToolResultBlock } from '@teamai/tool-core/sessions/ir';
+import { imagePlaceholderText, toolArgumentsFrom } from '@teamai/tool-core/sessions/ir';
 import { JsonValueSchema } from '../../types.js';
-import { assertSafeSessionFileId, deriveTargetSessionId } from '../ids.js';
+import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
 import {
   encodeCwdCodeBuddy,
   decodeCwdGeneric,
@@ -43,10 +43,10 @@ import {
   coercedText,
   OptionalString,
   TextOrBlocksSchema,
-} from '../fs.js';
+} from '@teamai/tool-core/sessions/fs';
 import { sessionStoreDir } from '../../locate.js';
-import { cutTitle, isInjectedText, fallbackTitle, titleFromCandidates } from '../title.js';
-import type { JsonlRecord } from '../../utils/jsonl-store.js';
+import { cutTitle, isInjectedText, fallbackTitle, titleFromCandidates } from '@teamai/tool-core/sessions/title';
+import type { JsonlRecord } from '@teamai/tool-core/json';
 
 // ---------------------------------------------------------------------------
 // Tool-name normalization map
@@ -650,6 +650,7 @@ export class CodeBuddyAdapter extends AgentAdapter {
 
     const sessionId = deriveTargetSessionId({
       targetPlatform: this.platform,
+      idFormat: 'uuid',
       targetCwd: cwd,
       sourceSessionId: session.sessionId,
     });

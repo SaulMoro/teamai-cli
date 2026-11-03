@@ -12,9 +12,8 @@
  */
 
 import { z } from 'zod';
-import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '../types.js';
+import { JsonValueSchema, type JsonValue, JsonObjectSchema, parseJson } from '../json.js';
 import { coercedText, OptionalString } from './fs.js';
-import { parseJson } from '../utils/json.js';
 
 // ---------------------------------------------------------------------------
 // Content blocks (ContentBlock)

@@ -17,7 +17,7 @@ vi.mock('node:os', async (importOriginal) => {
 });
 
 import { ClaudeCodeAdapter } from '../session-flow/adapters/claude-code.js';
-import { encodeCwdClaude } from '../session-flow/fs.js';
+import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 
 const SID = 'c0ffee00-0000-4000-8000-000000000001';
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]).toString('base64');

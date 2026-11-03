@@ -36,7 +36,7 @@ const { loadLocalConfig } = await import('../config.js');
 const { SESSION_RUN_PAYLOAD_KEY, sessionRun } = await import('../launch-context.js');
 const { syncScorerDefinitions } = await import('../scorers/cache.js');
 const { Drain } = await import('../score-drain.js');
-const { encodeCwdClaude } = await import('../session-flow/fs.js');
+const { encodeCwdClaude } = await import('@teamai/tool-core/sessions/fs');
 const { AGENT_SESSION_ENV } = await import('../utils/session-id.js');
 const { FinishedSessions } = await import('../session-flow/finished-sessions.js');
 
