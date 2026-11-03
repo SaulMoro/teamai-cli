@@ -25,7 +25,7 @@ import { acquireLock, releaseLock } from './update.js';
 import { redactWithEnv } from './utils/redact.js';
 import { aggregateSessionMetrics } from './dashboard-collector.js';
 import { repoKeys, repoLabel } from './utils/repo-attribution.js';
-import { emptyTokenUsage } from './types.js';
+import { emptyTokenUsage } from '@teamai/tool-core/tokens';
 import type { DashboardEvent, SessionMetrics } from './types.js';
 import type { HeadState } from './utils/git.js';
 

@@ -15,6 +15,7 @@
     "./redact": "./src/redact.ts",
     "./registry": "./src/registry.ts",
     "./sessions/*": "./src/sessions/*.ts",
-    "./stdout": "./src/stdout.ts"
+    "./stdout": "./src/stdout.ts",
+    "./tokens": "./src/tokens.ts"
   }
 }

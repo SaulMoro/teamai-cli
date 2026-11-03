@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { TokenSnapshotScope, TokenUsage } from '@teamai/tool-core/tokens';
 import { isJsonObject, type JsonObject } from '@teamai/tool-core/json';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -2117,48 +2118,6 @@ export interface UserInterventionStats {
 //
 
 /**
- * Token usage breakdown for a session/user. Claude Code and CodeBuddy usage is
- * summed per request. Codex uses a thread-level cumulative snapshot when available;
- * legacy rollout-scoped snapshots are summed once per transcript. All fields are
- * cumulative token counts; tools without token records leave these at zero.
- */
-export interface TokenUsage {
-  /** Sum of usage.input_tokens. */
-  input: number;
-  /** Sum of usage.output_tokens. */
-  output: number;
-  /** Sum of usage.cache_read_input_tokens. */
-  cacheRead: number;
-  /** Sum of usage.cache_creation_input_tokens. */
-  cacheCreation: number;
-}
-
-/** Scope of a cumulative token snapshot captured from an agent transcript. */
-export type TokenSnapshotScope = 'session' | 'transcript';
-
-/** A fresh zeroed TokenUsage. */
-export function emptyTokenUsage(): TokenUsage {
-  return { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
-}
-
-/** Grand total of all token buckets (input + output + cache read + cache creation). */
-export function totalTokens(t: TokenUsage | undefined): number {
-  if (!t) return 0;
-
-  return t.input + t.output + t.cacheRead + t.cacheCreation;
-}
-
-/** Add two TokenUsage values field-by-field (does not mutate inputs). */
-export function addTokenUsage(a: TokenUsage | undefined, b: TokenUsage | undefined): TokenUsage {
-  return {
-    input: (a?.input ?? 0) + (b?.input ?? 0),
-    output: (a?.output ?? 0) + (b?.output ?? 0),
-    cacheRead: (a?.cacheRead ?? 0) + (b?.cacheRead ?? 0),
-    cacheCreation: (a?.cacheCreation ?? 0) + (b?.cacheCreation ?? 0),
-  };
-}
-
-/**
  * Per-session rolled-up metrics, derived from the dashboard event log.
  * Used by both the live dashboard (rebuildSessions) and the team-stats reporter.
  */
@@ -2412,8 +2371,6 @@ export const CORRECTION_KEYWORDS = [
   '違う', 'ちがう', 'そうじゃな', 'そうではな', 'やり直', 'やりなおし', '間違って', '間違え', '勝手に', '戻して',
 ];
 
-/** Max bytes to scan from a transcript when counting interventions (guards huge files). */
-export const INTERVENTION_SCAN_MAX_BYTES = 50 * 1024 * 1024;
 
 /** Marker that prefixes a user-interrupt entry in the Claude Code transcript. */
 export const TRANSCRIPT_INTERRUPT_PREFIX = '[Request interrupted by user';

@@ -13,38 +13,15 @@ import { isProcessAlive, resolveMonitorPid } from './pid-monitor.js';
 import { normalizeToolName } from './utils/tool-names.js';
 import { redactWithEnv } from './utils/redact.js';
 import { acquireLock, releaseLock } from './update.js';
-import {
-  DASHBOARD_COMPACTION_THRESHOLD,
-  DASHBOARD_IDLE_TIMEOUT_MS,
-  DASHBOARD_STALE_TIMEOUT_MS,
-  DASHBOARD_STOPPED_DISPLAY_MS,
-  CORRECTION_WINDOW_MS,
-  CORRECTION_KEYWORDS,
-  INTERVENTION_SCAN_MAX_BYTES,
-  TRANSCRIPT_INTERRUPT_PREFIX,
-  TRANSCRIPT_SYSTEM_PREFIXES,
-  stripInjectedPrompt,
-  TRANSCRIPT_REJECT_MARKERS,
-  COPILOT_TOOL_ID,
-  getDataHome,
-  emptyTokenUsage,
-  addTokenUsage,
-  totalTokens,
-  type DashboardEvent,
-  type DashboardEventType,
-  type DashboardSession,
-  type TokenUsage,
-  type SessionMetrics,
-  type RequestCostMetrics,
-  type LocalConfig,
-  type JsonValue,
-} from './types.js';
+import { DASHBOARD_COMPACTION_THRESHOLD, DASHBOARD_IDLE_TIMEOUT_MS, DASHBOARD_STALE_TIMEOUT_MS, DASHBOARD_STOPPED_DISPLAY_MS, CORRECTION_WINDOW_MS, CORRECTION_KEYWORDS, TRANSCRIPT_INTERRUPT_PREFIX, TRANSCRIPT_SYSTEM_PREFIXES, stripInjectedPrompt, TRANSCRIPT_REJECT_MARKERS, COPILOT_TOOL_ID, getDataHome, type DashboardEvent, type DashboardEventType, type DashboardSession, type SessionMetrics, type RequestCostMetrics, type LocalConfig, type JsonValue } from './types.js';
+import { INTERVENTION_SCAN_MAX_BYTES, emptyTokenUsage, addTokenUsage, totalTokens, type TokenUsage } from '@teamai/tool-core/tokens';
 import { getUserHome } from './utils/home.js';
 import type { HeadState } from './utils/git.js';
 import type { SessionRun } from './launch-context.js';
 import { SessionOutcomeEventSchema, uniqueOutcomes, type SessionOutcomeEvent, type WorkOutcome } from './outcomes.js';
 import { readCopilotShutdown } from './token-usage/formats/copilot-shutdown.js';
-import { isTokenFormatId, readTokenUsage, type TokenRequest } from './token-usage/index.js';
+import { isTokenFormatId, readTokenUsage } from './token-usage/index.js';
+import { type TokenRequest } from '@teamai/tool-core/tokens';
 import { priceTokens } from './token-usage/pricing.js';
 import { isToolId, descriptorOf } from './tool-registry.js';
 import { HookStdinSchema, type HookStdin } from './hook-dispatch.js';

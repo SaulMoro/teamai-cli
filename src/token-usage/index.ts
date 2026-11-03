@@ -4,7 +4,7 @@
  * entry (`tokens`); `readTokenUsage` reads a session in that format, and
  * `priceTokens` (./pricing.ts) prices its requests.
  */
-import type { TokenSnapshotScope, TokenUsage } from '../types.js';
+import type { TokenReading, TokenSource } from '@teamai/tool-core/tokens';
 import { readAgyTranscript } from './formats/agy-transcript.js';
 import { readClaudeJsonl } from './formats/claude-jsonl.js';
 import { readCodebuddy } from './formats/codebuddy.js';
@@ -12,43 +12,6 @@ import { readCodexRollout } from './formats/codex-rollout.js';
 import { readMuseSession } from './formats/muse-session.js';
 import { readOpencodeDb } from './formats/opencode-db.js';
 import { readPiSession } from './formats/pi-session.js';
-import type { TokenSpeed } from './pricing.js';
-
-export type { TokenSpeed } from './pricing.js';
-
-/**
- * Where a session's usage is: the transcript its Stop hook names, and the
- * session id for stores looked up by id. `settled`: the tool is done writing,
- * so a format that waits for usage written just after Stop reads once.
- */
-export type TokenSource = { transcriptPath?: string; sessionId: string; settled?: boolean };
-
-/** One model request. */
-export type TokenRequest = {
-  /** Unique within its transcript, so repeated lines and later reads count the request once. */
-  key: string;
-  /** ISO time of the request; empty when the tool records none. */
-  timestamp: string;
-  /** Empty when the tool records none, so no price applies. */
-  model: string;
-  tokens: TokenUsage;
-  /** The part of `tokens.cacheCreation` written to a one-hour cache, which costs more than a five-minute one. */
-  cacheCreation1h?: number;
-  speed: TokenSpeed;
-  /** The totals of several calls, as Copilot writes per model: priced without long-prompt rates. */
-  combinesCalls?: true;
-  /** What the tool says the request cost, in micro-dollars. */
-  reportedCostMicros?: number;
-};
-
-export type TokenReading = {
-  /** The session's tokens so far. */
-  tokens: TokenUsage;
-  /** For a tool that writes cumulative totals: whether they cover the session or this transcript file. */
-  scope?: TokenSnapshotScope;
-  /** The session's requests, each priced by its model when it names one. */
-  requests: TokenRequest[];
-};
 
 const FORMATS = {
   'claude-jsonl': readClaudeJsonl,
