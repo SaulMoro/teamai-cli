@@ -1,0 +1,36 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { build } from 'esbuild';
+
+const PACKAGE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'packages', 'runtime-sandbox', 'src');
+
+/**
+ * teamai-runtime-sandbox built as it ships, on a fake `docker` (packages/runtime-sandbox/src/testing/fake-engine.mjs)
+ * whose containers run on the host. `command` and `args` start it with its journal under `state`; `options` choose
+ * the fake engine's one image.
+ */
+export async function sandboxOnFakeDocker(): Promise<{ command: string; args: (state: string) => string[]; options: { provider: 'docker'; image: string } }> {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-sandbox-runtime-')));
+  const executable = path.join(dir, 'teamai-runtime-sandbox.mjs');
+
+  await build({
+    entryPoints: [path.join(PACKAGE, 'main.ts')], outfile: executable, bundle: true, platform: 'node', format: 'esm', target: 'node20', logLevel: 'error',
+    banner: { js: "import { createRequire as __teamaiCreateRequire } from 'node:module';\nconst require = __teamaiCreateRequire(import.meta.url);" },
+  });
+
+  const bin = path.join(dir, 'bin');
+  fs.mkdirSync(bin);
+  fs.writeFileSync(path.join(bin, 'docker'), `#!/bin/sh\nexec "${process.execPath}" "${path.join(PACKAGE, 'testing', 'fake-engine.mjs')}" "$@"\n`, { mode: 0o755 });
+  const image = 'scenario/agent:1';
+
+  return {
+    command: '/usr/bin/env',
+    args: (state) => [
+      `PATH=${bin}${path.delimiter}/usr/bin${path.delimiter}/bin`, `HOME=${path.join(state, 'home')}`, `FAKE_ENGINE_STATE=${path.join(state, 'engine')}`,
+      `FAKE_ENGINE_IMAGES=${JSON.stringify({ [image]: bin })}`, process.execPath, executable,
+    ],
+    options: { provider: 'docker', image },
+  };
+}
