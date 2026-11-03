@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { JsonValueSchema, type JsonValue } from '../types.js';
 import type { ConfinedAccess } from './confined-level.js';
-import type { Evidence } from '../tools.js';
+import type { Evidence } from '@teamai/tool-core/definition';
 import { agyRun, readToolMetadata, type TokenUsage } from './stdout.js';
 
 /** What a headless call printed: its answer, or the error the tool reported, when it reported one. */

@@ -4,7 +4,8 @@ import { installedBuiltinHookDefs } from '../builtin-hooks.js';
 import { KNOWN_AGENTS, SELF_MODE_AGENT_CHOICES } from '../known-agents.js';
 import { ModelAgentSchema, type ModelAgent } from '../models/profile.js';
 import { EXTRAS_BASE_TOOL, type ToolName } from '../resources/agent-format.js';
-import { TOOLS, type Support, type ToolDescriptor } from '../tools.js';
+import { TOOLS, type ShippedDescriptor } from '../tools.js';
+import { type Support } from '@teamai/tool-core/definition';
 import { AGENT_TOOLS, isToolId } from '../tool-registry.js';
 import { DEFAULT_TOOL_PATHS, scopedToolPaths, TeamaiConfigSchema } from '../types.js';
 import type { ToolId } from '../tools.js';
@@ -107,7 +108,7 @@ describe('TOOLS skillLoad', () => {
       ...TOOLS,
       // @ts-expect-error a tool whose skill loading nobody has observed says 'unknown'
       pi: { home: { dir: '.pi' } },
-    } satisfies Record<ToolId, ToolDescriptor>;
+    } satisfies Record<ToolId, ShippedDescriptor>;
     expect(tools.pi.home.dir).toBe('.pi');
   });
 });

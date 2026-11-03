@@ -11,7 +11,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { MCP_SERVER_KEY } from './resources/mcp-format.js';
 import { SESSION_PLATFORM_FACTS, type SessionPlatform, type StoredSessionPlatform } from './session-flow/adapters/platform-facts.js';
-import { TOOLS, type Activation, type BlocksFile, type BlocksHeader, type ChannelProbe, type FirstExistingRead, type HomeRead, type HookAdapter, type HookAdapterId, type HookFormat, type HookSettings, type McpProject, type McpUser, type ProjectRead, type ReadGateKind, type RunTime, type SkillReads, type RunTimeVia, type ToolId } from './tools.js';
+import { TOOLS, type ToolId } from './tools.js';
+import { type Activation, type BlocksFile, type BlocksHeader, type ChannelProbe, type FirstExistingRead, type HomeRead, type HookAdapter, type HookAdapterId, type HookFormat, type HookSettings, type McpProject, type McpUser, type ProjectRead, type ReadGateKind, type RunTime, type SkillReads, type RunTimeVia } from '@teamai/tool-core/definition';
 import { channelsOf, installGateOf, isToolId, hasDefaultHomeLeftovers } from './tool-registry.js';
 import {
   CURSOR_CONFIG_TOOL_ID, CURSOR_DATA_TOOL_ID,
@@ -1116,7 +1117,7 @@ function mcpKeyOf(channel: Pick<McpUser, 'format' | 'key'>): readonly [string, .
 }
 
 async function mcpFileOf(
-  channel: McpUser | McpProject, scope: Scope, roots: Roots, host: Host,
+  channel: McpUser | McpProject<ToolId>, scope: Scope, roots: Roots, host: Host,
 ): Promise<{ readonly file: string | null; readonly lookup: McpLookup | null }> {
   const configured = roots.configured(scope === 'user' ? 'mcp' : 'mcpProject');
 
@@ -1276,7 +1277,7 @@ async function mcpGatesOf(tool: string, gates: readonly Gate[], own: EntryPlace 
 }
 
 async function mcpFilesOf(
-  channel: McpUser | McpProject, earlierFiles: readonly string[] | undefined, scope: Scope, roots: Roots, host: Host,
+  channel: McpUser | McpProject<ToolId>, earlierFiles: readonly string[] | undefined, scope: Scope, roots: Roots, host: Host,
 ): Promise<{
   readonly key: readonly [string, ...string[]];
   readonly tree: EntryPlace | null;
