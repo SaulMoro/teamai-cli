@@ -12,7 +12,7 @@ vi.mock('@teamai/tool-core/log', () => ({
 const failCheckIgnore = vi.hoisted(() => ({ on: false }));
 const failLsFiles = vi.hoisted(() => ({ on: false }));
 const failVerboseCheckIgnore = vi.hoisted(() => ({ on: false }));
-vi.mock('../utils/exec.js', async (importOriginal) => {
+vi.mock('@teamai/tool-core/exec', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../utils/exec.js')>();
   return {
     ...actual,

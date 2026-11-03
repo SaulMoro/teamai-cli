@@ -5,7 +5,7 @@ import path from 'node:path';
 
 // Isolate getUserHome() so the bundled-runtime lookups see a per-test home.
 const homeState = vi.hoisted(() => ({ home: '' }));
-vi.mock('../utils/home.js', () => ({
+vi.mock('@teamai/tool-core/home', () => ({
   getUserHome: () => homeState.home,
 }));
 
