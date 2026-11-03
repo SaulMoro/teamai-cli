@@ -8,7 +8,7 @@ import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { LocalConfig } from '../../types.js';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
-import { CodexAdapter } from './codex.js';
+import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import { CodeBuddyAdapter } from './codebuddy.js';
 import { CodeBuddyIdeAdapter } from './codebuddy-ide.js';
 import { WorkBuddyAdapter } from './workbuddy.js';
@@ -90,7 +90,7 @@ export { AgentAdapter, type SessionMeta } from '@teamai/tool-core/sessions/base'
 
 export { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 
-export { CodexAdapter } from './codex.js';
+export { CodexAdapter } from '@teamai/tool-core/formats/codex';
 
 export { CodeBuddyAdapter } from './codebuddy.js';
 

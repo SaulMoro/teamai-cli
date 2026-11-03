@@ -20,7 +20,7 @@ vi.mock('@teamai/tool-core/sessions/sqlite', async (importOriginal) => {
   };
 });
 
-import { CodexAdapter } from '../session-flow/adapters/codex.js';
+import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
 import type { Session } from '@teamai/tool-core/sessions/ir';
 

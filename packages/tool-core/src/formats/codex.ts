@@ -40,17 +40,17 @@ import * as path from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import crossSpawn from 'cross-spawn';
 import { z } from 'zod';
-import { AgentAdapter, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '@teamai/tool-core/sessions/base';
-import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ThinkingBlock, ToolArguments, ToolCallBlock, ToolResultBlock } from '@teamai/tool-core/sessions/ir';
-import { imagePlaceholderText, toolArgumentsFrom } from '@teamai/tool-core/sessions/ir';
-import { JsonValueSchema, type JsonValue } from '../../types.js';
-import { typedTitle, visibleUserText } from '@teamai/tool-core/sessions/title';
-import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
-import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
-import { log } from '../../utils/logger.js';
-import { execCommand, probeBinary } from '../../utils/exec.js';
-import { isOnPath } from '../../utils/lookpath.js';
-import { desktopCodexBinaries } from '../../codex-desktop.js';
+import { AgentAdapter, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '../sessions/base.js';
+import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ThinkingBlock, ToolArguments, ToolCallBlock, ToolResultBlock } from '../sessions/ir.js';
+import { imagePlaceholderText, toolArgumentsFrom } from '../sessions/ir.js';
+import { JsonValueSchema, type JsonValue } from '../json.js';
+import { typedTitle, visibleUserText } from '../sessions/title.js';
+import { assertSafeSessionFileId, deriveTargetSessionId } from '../sessions/ids.js';
+import { findSqlite3 } from '../sessions/sqlite.js';
+import { log } from '../log.js';
+import { execCommand, probeBinary } from '../exec.js';
+import { isOnPath } from '../lookpath.js';
+import { desktopCodexBinaries } from './codex-desktop.js';
 import {
   resolveRealCwd,
   readJsonl,
@@ -62,9 +62,8 @@ import {
   coercedText,
   OptionalString,
   TextOrBlocksSchema,
-} from '@teamai/tool-core/sessions/fs';
-import { sessionStoreDir } from '../../locate.js';
-import type { JsonlRecord } from '@teamai/tool-core/json';
+} from '../sessions/fs.js';
+import type { JsonlRecord } from '../json.js';
 
 // ---------------------------------------------------------------------------
 // Tool-name normalization map
@@ -349,13 +348,13 @@ export class CodexAdapter extends AgentAdapter {
   private readonly storageRoot: string;
 
   /**
-   * @param platform Platform id (default 'codex'; variants may pass 'codex-internal' / 'tcodex')
-   * @param storageRoot Storage root (default ~/.codex/sessions; variants pass ~/.codex-internal/sessions and similar)
+   * @param platform The session platform this store is: 'codex', a variant such as 'tcodex', or 'joycode'
+   * @param storageRoot The platform's session store (`sessionStoreDir`), such as ~/.codex/sessions
    */
-  constructor(platform = 'codex', storageRoot?: string) {
+  constructor(platform: string, storageRoot: string) {
     super();
     this.platform = platform;
-    this.storageRoot = storageRoot ?? sessionStoreDir('codex', undefined);
+    this.storageRoot = storageRoot;
   }
 
   /**
