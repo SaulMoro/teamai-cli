@@ -6,7 +6,7 @@ import fse from 'fs-extra';
 import { parse } from 'smol-toml';
 import { execFileSync } from 'node:child_process';
 
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),

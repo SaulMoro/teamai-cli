@@ -11,7 +11,7 @@ vi.mock('../tool-launch/call.js', () => ({
     callTool: vi.fn(),
 }));
 
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
     log: {
         info: vi.fn(),
         warn: vi.fn(),

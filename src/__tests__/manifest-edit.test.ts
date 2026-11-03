@@ -15,7 +15,7 @@ vi.mock('../utils/git.js', async (importOriginal) => ({
 
 const logMocks = vi.hoisted(() => ({ info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }));
 const spin = vi.hoisted(() => ({ succeed: vi.fn(), warn: vi.fn() }));
-vi.mock('../utils/logger.js', () => ({ log: logMocks, spinner: vi.fn(() => ({ start: () => spin })) }));
+vi.mock('@teamai/tool-core/log', () => ({ log: logMocks, spinner: vi.fn(() => ({ start: () => spin })) }));
 
 import { runManifestEdit } from '../manifest-edit.js';
 import type { LocalConfig } from '../types.js';

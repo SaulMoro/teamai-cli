@@ -22,7 +22,7 @@ vi.mock('../utils/git.js', async (importOriginal) => ({
   generateBranchName: vi.fn().mockReturnValue('teamai/push/test/20260305-120000'),
 }));
 
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),

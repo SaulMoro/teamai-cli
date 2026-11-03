@@ -37,7 +37,7 @@ vi.mock('../read-only.js', () => ({
   assertNotReadOnly: vi.fn(),
 }));
 
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: {
     info: vi.fn(),
     success: vi.fn(),

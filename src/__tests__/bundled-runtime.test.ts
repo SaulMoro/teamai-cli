@@ -10,7 +10,7 @@ vi.mock('../utils/home.js', () => ({
 }));
 
 // Mock the logger so the module's debug traces do not reach the real log file.
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
 }));
 

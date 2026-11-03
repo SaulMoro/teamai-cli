@@ -31,7 +31,7 @@ const handler = {
   removeItem: vi.fn().mockResolvedValue(['agents/fe/vr.yaml', 'agents/be/vr.yaml']),
 };
 vi.mock('../resources/index.js', () => ({ getHandler: () => handler }));
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
   spinner: vi.fn(() => ({ start: vi.fn().mockReturnThis(), succeed: vi.fn(), fail: vi.fn() })),
 }));
