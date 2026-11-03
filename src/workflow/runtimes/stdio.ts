@@ -2,8 +2,9 @@ import type { ChildProcess } from 'node:child_process';
 import readline from 'node:readline';
 import crossSpawn from 'cross-spawn';
 import { log } from '../../utils/logger.js';
-import { parseRuntimeLine, RUNTIME_PROTOCOL, type HandleEvent, type OpEvent, type RuntimeRequest, type Shown } from './protocol.js';
-import type { ExecEnd, Initialized, Opened, Reattached, RuntimeFailure, StepRuntime } from './step-runtime.js';
+import { RUNTIME_PROTOCOL, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
+import { parseRuntimeLine, type HandleEvent, type OpEvent, type Shown } from './protocol.js';
+import type { ExecEnd, Initialized, Opened, Reattached, StepRuntime } from './step-runtime.js';
 
 /** How long `dispose` waits for a runtime to exit once its stdin ends; one that runs on is left to finish its own work. */
 const DISPOSE_WAIT_MS = 2000;
