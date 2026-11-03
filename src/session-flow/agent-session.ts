@@ -15,7 +15,7 @@ import path from 'node:path';
 import { resolveMemberToolRoots } from '../config.js';
 import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
-import { ADAPTER_REGISTRY, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
+import { getAdapter, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
 import { isSessionPlatform, sessionPlatformFacts } from './adapters/platform-facts.js';
 import { sessionPlatformOwner, sessionPlatformsOf } from '../tool-registry.js';
 import { ToolUnavailableError, type AgentAdapter, type SessionMeta, type SubagentsRead } from '@teamai/tool-core/sessions/base';
@@ -210,7 +210,7 @@ export function toolRootsLookup(): ToolRootsLookup {
 }
 
 function adapterFor(platform: string, use: 'read' | 'write', toolRoots: ToolRoots): AgentAdapter | AgentSessionFailure {
-  return noAdapter(platform, use) ?? ADAPTER_REGISTRY[platform](toolRoots);
+  return noAdapter(platform, use) ?? getAdapter(platform, toolRoots);
 }
 
 const messageOf = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));

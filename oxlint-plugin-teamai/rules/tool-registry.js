@@ -30,9 +30,8 @@ scopedFiles([...TABLES.keys()]);
  * and an entry that no longer reads a table fails until it is removed.
  */
 const NOT_YET_MOVED = new Set([
-  // sessionStoreDir and adapterFor change in the connected-drivers engine; these move after it lands.
+  // They read a table until sessionStoreDir (src/locate.ts) moves into tool-core, after the connected-drivers engine lands.
   'src/locate.ts',
-  'src/session-flow/agent-session.ts',
   'src/session-flow/index.ts',
 ])
 
