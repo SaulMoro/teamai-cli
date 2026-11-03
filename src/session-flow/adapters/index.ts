@@ -32,7 +32,7 @@ export interface AdapterRegistry {
 export const ADAPTER_REGISTRY: AdapterRegistry = {
   // Base platforms
   'claude-code': (toolRoots) => BUILT_IN_TOOLS.claude.platforms['claude-code'].adapter(sessionStoreDir('claude-code', toolRoots)),
-  codex: (toolRoots) => new CodexAdapter('codex', sessionStoreDir('codex', toolRoots)),
+  codex: (toolRoots) => BUILT_IN_TOOLS.codex.platforms.codex.adapter(sessionStoreDir('codex', toolRoots)),
   qoder: (toolRoots) => new ClaudeCodeAdapter('qoder', sessionStoreDir('qoder', toolRoots)),
   'qoder-cn': (toolRoots) => new ClaudeCodeAdapter('qoder-cn', sessionStoreDir('qoder-cn', toolRoots)),
   // CodeBuddy has two independent stores, split into two platforms:
@@ -51,8 +51,8 @@ export const ADAPTER_REGISTRY: AdapterRegistry = {
   // TeamAI variants (different path prefixes, identical format)
   'claude-internal': (toolRoots) => BUILT_IN_TOOLS.claude.platforms['claude-internal'].adapter(sessionStoreDir('claude-internal', toolRoots)),
   tclaude: (toolRoots) => BUILT_IN_TOOLS.claude.platforms.tclaude.adapter(sessionStoreDir('tclaude', toolRoots)),
-  'codex-internal': (toolRoots) => new CodexAdapter('codex-internal', sessionStoreDir('codex-internal', toolRoots)),
-  tcodex: (toolRoots) => new CodexAdapter('tcodex', sessionStoreDir('tcodex', toolRoots)),
+  'codex-internal': (toolRoots) => BUILT_IN_TOOLS.codex.platforms['codex-internal'].adapter(sessionStoreDir('codex-internal', toolRoots)),
+  tcodex: (toolRoots) => BUILT_IN_TOOLS.codex.platforms.tcodex.adapter(sessionStoreDir('tcodex', toolRoots)),
   joycode: (toolRoots) => new CodexAdapter('joycode', sessionStoreDir('joycode', toolRoots)),
 } satisfies Record<SessionPlatform, AdapterFactory>;
 
