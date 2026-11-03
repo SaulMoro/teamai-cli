@@ -22,12 +22,13 @@ import { localStrictCan, personAnswers, runLocalDriver, STOP_SIGNALS, withDriver
 import { driveRun, unsupportedDriver } from './workflow-drive.js';
 import { awaitsLine, awaitsOf, driveByDefault, leftOpenLine, type DefaultDrive } from './default-driver.js';
 import { LOCAL_DRIVER, parseDriver, type Driver } from './workflow/driver-name.js';
-import { disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
-import { releaseEndedLogins } from './workflow/runtimes/login.js';
+import { disposeDriver, LOGIN_TOOLS, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
+import { loginHolder, loginLockFile, releaseEndedLogins } from './workflow/runtimes/login.js';
+import { attemptRun, readAttemptRuntime } from './workflow/runtimes/attempt.js';
 import type { SoleDriver } from './workflow/engine.js';
 import { driverIdentity } from './driver-identity.js';
 import { getBusinessRoot, getDataHome, usesBranchWorktree, type JsonValue, type LocalConfig, type TeamaiConfig } from './types.js';
-import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type RunId } from './workflow/store.js';
+import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type RunId, takeRunLock, type AttemptId } from './workflow/store.js';
 import { commandExitMessage, inProcessClient, isRefusal, resumeRefusal, startAsCli, workflowNotFound, type InvokeCaller, type NextPrepare, type StartedRun } from './workflow/protocol.js';
 import { parseInputsFlag, parseSkillCall, parseSkillResume, runSkillCall, sessionDrivesRun, skillContext } from './workflow/drivers/skill/skill-driver.js';
 import { loadCachedWorkflow, namespaceConflictOf, resolveStart } from './workflow/cache.js';
@@ -1256,26 +1257,78 @@ export async function workflowRetry(runId: string, step: string): Promise<void> 
   });
 }
 
-/** Cancels a run or step through the shared control operation. */
+/**
+ * Cancels a run or step through the shared control operation. With no live driver of the run on this machine, it also
+ * stops what the cancelled attempts left running on their step runtimes, then releases the logins they held. A live
+ * driver keeps the run's lock and does both itself.
+ */
 export async function workflowCancel(runId: string, step?: string): Promise<void> {
   await workflowControl(runId, async (config, secrets) => {
     const cancelled = await cancelRun(config, runId, secrets, step);
 
-    if (!('error' in cancelled)) await releaseCancelledLogins(config, runId);
+    if ('error' in cancelled) return cancelled;
+    const run = RunIdSchema.parse(runId);
+    await takeRunLock(config, run, () => stopCancelledAttempts(config, run), { waitMs: 0 });
 
     return cancelled;
   });
 }
 
 /**
- * Releases the step runtime logins that attempts of run `runId` held and no longer run, once a cancel stopped them: a
- * driver killed meanwhile left its attempt's login held, and nothing else would release it.
+ * Stops and closes, on its step runtime, each cancelled attempt of run `run` a killed driver left open, then releases
+ * the logins of the attempts that no longer run. An attempt it could not stop keeps its login, so no second copy of it
+ * runs while its tool may.
  */
-async function releaseCancelledLogins(config: LocalConfig, runId: string): Promise<void> {
-  const run = await readRun(config, runId);
-  const open = new Set(run === 'missing' || run === 'corrupt' ? [] : run.steps.flatMap((state) => (state.status === 'leased' ? [state.lease.attempt] : [])));
+async function stopCancelledAttempts(config: LocalConfig, run: RunId): Promise<void> {
+  const state = await readRun(config, run);
 
-  for (const { tool, attempt } of await releaseEndedLogins(runId, open)) log.info(`Released the ${tool} login teamai keeps, which attempt ${attempt} of run ${runId} held.`);
+  if (state === 'missing' || state === 'corrupt') return;
+  const stillRunning = new Set<string>();
+
+  for (const attempt of state.cancelledAttempts ?? []) {
+    if (!await stopAttemptRuntime(config, run, AttemptIdSchema.parse(attempt))) stillRunning.add(attempt);
+  }
+
+  const open = new Set([...stillRunning, ...state.steps.flatMap((step) => (step.status === 'leased' ? [step.lease.attempt] : []))]);
+
+  for (const { tool, attempt } of await releaseEndedLogins(run, open)) log.info(`Released the ${tool} login teamai keeps, which attempt ${attempt} of run ${run} held.`);
+
+  for (const tool of LOGIN_TOOLS) {
+    const holder = await loginHolder(tool);
+
+    if (holder?.run === run && stillRunning.has(holder.attempt)) {
+      log.warn(`The ${tool} login teamai keeps stays held by attempt ${holder.attempt} of run ${run}, whose tool may still run. Stop that tool on its step runtime, then delete ${loginLockFile(tool)}.`);
+    }
+  }
+}
+
+/** Stops attempt `attempt` on the step runtime its record names, or says why it could not and answers false. */
+async function stopAttemptRuntime(config: LocalConfig, run: RunId, attempt: AttemptId): Promise<boolean> {
+  const record = await readAttemptRuntime(config, run, attempt);
+
+  if (!record || record.phase === 'closed') return true;
+
+  const cannot = (why: string): false => {
+    log.warn(`Could not stop attempt ${attempt} of run ${run} on step runtime "${record.runtime}" of driver "${record.driver}": ${why}`);
+
+    return false;
+  };
+
+  const opened = await openDriver(config, record.driver, { personal: true, mode: resolveRunMode(process.env), canAsk: false });
+
+  if (!opened.ok) return cannot(opened.failure.message);
+
+  try {
+    const entry = opened.opened.runtimes.find((one) => one.kind === 'external' && one.use === record.runtime);
+
+    if (entry?.kind !== 'external') return cannot(`driver "${record.driver}" no longer uses that runtime.`);
+
+    return await attemptRun({ config, run, attempt, runtime: entry.runtime, driver: record.driver }).stop() || cannot('its exec still runs after teamai asked the runtime to cancel it.');
+  } catch (error) {
+    return cannot(error instanceof Error ? error.message : String(error));
+  } finally {
+    await disposeDriver(opened.opened);
+  }
 }
 
 /** Publishes a run to teamai-reports, with the sessions its unsettled steps continue when asked. */
