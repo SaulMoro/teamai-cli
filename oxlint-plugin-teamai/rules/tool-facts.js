@@ -19,7 +19,7 @@ const FAMILY_LIST = /^(?:Readonly<)?Record<\s*string\s*,\s*ToolFamily\s*>>?$/;
 
 const DEFINITIONS_PACKAGE = 'packages/tool-definitions/src/';
 
-const MESSAGE = 'Per-tool facts live in a tool family\'s descriptors (packages/tool-<family>/, or TOOLS in src/tools.ts for a tool not yet moved), read through src/tool-registry.ts. Derive this from a descriptor field, '
+const MESSAGE = 'Per-tool facts live in a tool family\'s descriptors (packages/tool-<family>/), read through src/tool-registry.ts. Derive this from a descriptor field, '
   + 'or key the table by every tool (Record<ToolId, ...>), so a new tool fails the type check until it is decided here.';
 
 /** The shipped tool ids, generated from the tool registry by `node scripts/check-docs.mjs --write`. */
