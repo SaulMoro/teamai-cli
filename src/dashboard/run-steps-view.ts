@@ -15,6 +15,7 @@ const HARNESS_CHANGED: Record<HarnessChange['part'], string> = {
  * stands on it and outcomes. Each cell names its column, so a drawer narrower than the table shows each pass as a card.
  * The dashboard client embeds it after `judgingView`, and so supplies `e`, `t`, `label`, `number`, `runStatus`,
  * `outcomesHtml`, `agentHarness`, `harnessRole` and `passJudgingHtml`.
+ * A pass whose attempt ran on a step runtime shows the runtime, its handle and how far the attempt got under the step.
  */
 export const runStepsView = `
 const RUN_STEP_HEADS=['STEP','PASS','STATUS','TOKENS','ANSWER','SCORES','OUTCOMES'];
@@ -27,9 +28,12 @@ function changedValue(part,value) {
 function harnessChanged(changes) {
  return changes?.length?'<ul class="harness-changed">'+changes.map(c=>'<li><b>'+label(HARNESS_CHANGED[c.part])+':</b> '+changedValue(c.part,c.from)+' → '+changedValue(c.part,c.to)+'</li>').join('')+'</ul>':'';
 }
+function runtimeLine(r) {
+ return r?'<div class="runtime-line"><b>'+label('Runtime')+':</b> <span data-verbatim>'+e(r.name)+'</span> · <span title="'+e(r.handle||'')+'" data-verbatim>'+(r.handle?e(r.handle):label('no handle yet'))+'</span> · '+label(r.phase)+'</div>':'';
+}
 function runStepsTable(steps, run) {
  return '<div class="table-scroll card-table"><table class="run-steps"><thead><tr>'+RUN_STEP_HEADS.map(x=>'<th>'+label(x)+'</th>').join('')+'</tr></thead><tbody>'
-  +steps.map(s=>'<tr>'+['<span data-verbatim>'+e(s.step)+'</span>'+agentHarness(s.harness)+harnessChanged(s.harnessChanges),number(s.pass),runStatus(s.status)+(s.message?'<small data-verbatim>'+e(s.message)+'</small>':''),s.tokens?number((s.tokens.input||0)+(s.tokens.output||0)):'—',s.answer?'<span data-verbatim>'+e(s.answer.choice)+'</span><small data-verbatim>'+e(s.answer.channel)+'</small>':'—',passJudgingHtml(s,run),outcomesHtml(s.outcomes)].map((cell,i)=>'<td data-label="'+label(RUN_STEP_HEADS[i])+'">'+cell+'</td>').join('')+'</tr>').join('')
+  +steps.map(s=>'<tr>'+['<span data-verbatim>'+e(s.step)+'</span>'+agentHarness(s.harness)+harnessChanged(s.harnessChanges)+runtimeLine(s.runtime),number(s.pass),runStatus(s.status)+(s.message?'<small data-verbatim>'+e(s.message)+'</small>':''),s.tokens?number((s.tokens.input||0)+(s.tokens.output||0)):'—',s.answer?'<span data-verbatim>'+e(s.answer.choice)+'</span><small data-verbatim>'+e(s.answer.channel)+'</small>':'—',passJudgingHtml(s,run),outcomesHtml(s.outcomes)].map((cell,i)=>'<td data-label="'+label(RUN_STEP_HEADS[i])+'">'+cell+'</td>').join('')+'</tr>').join('')
   +'</tbody></table></div>';
 }
 `;
