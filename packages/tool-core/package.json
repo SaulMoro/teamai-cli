@@ -9,9 +9,11 @@
     "./exec": "./src/exec.ts",
     "./home": "./src/home.ts",
     "./json": "./src/json.ts",
+    "./launch": "./src/launch.ts",
     "./log": "./src/log.ts",
     "./lookpath": "./src/lookpath.ts",
     "./redact": "./src/redact.ts",
-    "./registry": "./src/registry.ts"
+    "./registry": "./src/registry.ts",
+    "./stdout": "./src/stdout.ts"
   }
 }
