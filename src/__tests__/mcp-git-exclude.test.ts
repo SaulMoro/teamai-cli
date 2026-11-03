@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), success: vi.fn(), warn: vi.fn(), dim: vi.fn() },
 }));
 

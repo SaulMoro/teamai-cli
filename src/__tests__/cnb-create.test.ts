@@ -20,7 +20,7 @@ vi.mock('../utils/cli-path.js', () => ({
 }));
 
 // Stub the logger so importing the provider module has no side effects.
-vi.mock('../utils/logger.js', () => ({
+vi.mock('@teamai/tool-core/log', () => ({
   log: { info: vi.fn(), success: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), dim: vi.fn() },
   spinner: () => ({
     start: vi.fn().mockReturnThis(),
