@@ -24,29 +24,6 @@ function readOpenCodeRun({ stdout }: CallOutput): CallReading {
   return answered(text, readToolMetadata(stdout)?.tokens);
 }
 
-const OpenClawEnvelope = z.object({
-  ok: z.boolean(),
-  final: z.string().optional(),
-  usage: z.object({ input: z.number().optional(), output: z.number().optional() }).optional(),
-  error: z.object({ message: z.string() }).optional(),
-});
-
-/** `openclaw agent exec --json` prints one envelope: `final` is the answer, `usage` the tokens, `error` the failure. */
-function readOpenClawExec({ stdout }: CallOutput): CallReading {
-  let candidate: unknown;
-
-  try { candidate = JSON.parse(stdout.trim()); } catch { candidate = jsonLines(stdout).at(-1); }
-
-  const parsed = OpenClawEnvelope.safeParse(candidate);
-
-  if (!parsed.success) return { ok: false };
-  const { ok, final, usage, error } = parsed.data;
-
-  if (!ok || !final?.trim()) return failed(error?.message);
-
-  return answered(final.trim(), reportedTokens({ input: usage?.input, output: usage?.output }));
-}
-
 const MuseRecord = z.object({ payload_type: z.string(), payload: z.record(z.string(), z.unknown()) });
 const MuseTerminal = z.object({ terminal: z.string(), text: z.string().nullable().optional(), reason: z.string().nullable().optional() });
 const MuseUsage = z.object({ models: z.array(z.object({ input_tokens: z.number(), cached_tokens: z.number(), output_tokens: z.number() }).partial()) });
@@ -105,11 +82,7 @@ export const LAUNCH_ADAPTERS = {
     confined: { evidence: 'verified', env: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'OPENCODE_API_KEY'], verified: /^opencode v2\.1\.2$/, access: 'read' },
   },
   codebuddy: BUILT_IN_TOOLS.codebuddy.launch.codebuddy,
-  // One embedded turn with ephemeral state, so no call leaves a session in the member's conversations (#1308):
-  // after calls on OpenClaw 2026.8.1 (the first with `agent exec`) and 2026.10.9, `openclaw sessions --all-agents --json` counts 0.
-  openclaw: {
-    call: { evidence: 'verified', prompt: 'stdin', args: () => ['agent', 'exec', '--json', '--message-file', '-'], read: readOpenClawExec },
-  },
+  openclaw: BUILT_IN_TOOLS.openclaw.launch.openclaw,
   cursor: {
     executable: 'cursor-agent',
     // Ask mode answers without editing.
@@ -127,13 +100,8 @@ export const LAUNCH_ADAPTERS = {
     call: { evidence: 'verified', prompt: 'file', args: ({ promptFile }) => ['exec', '--json', '--no-session-log', '--prompt-file', promptFile], read: readMuseExec },
   },
   qoder: BUILT_IN_TOOLS.qoder.launch.qoder,
-  kiro: {
-    executable: 'kiro-cli',
-    call: { evidence: 'docs', prompt: 'argv', args: ({ prompt }) => ['chat', '--no-interactive', prompt], read: readPlainReply },
-  },
-  hermes: {
-    call: { evidence: 'source', prompt: 'argv', args: ({ prompt }) => ['-z', prompt], read: readPlainReply },
-  },
+  kiro: BUILT_IN_TOOLS.kiro.launch.kiro,
+  hermes: BUILT_IN_TOOLS.hermes.launch.hermes,
   // agy reads stdin only as stream-json user events. `--print=` is print mode with the prompt left to them; a bare
   // `-p` would take the next flag as its prompt.
   agy: {

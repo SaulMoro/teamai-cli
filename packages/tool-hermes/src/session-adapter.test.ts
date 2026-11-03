@@ -29,7 +29,7 @@ vi.mock('@teamai/tool-core/exec', () => ({
   },
 }));
 
-import { HermesAdapter } from '../session-flow/adapters/hermes.js';
+import { HermesAdapter } from './session-adapter.js';
 import { ToolUnavailableError } from '@teamai/tool-core/sessions/base';
 
 const roots: string[] = [];
