@@ -1,8 +1,9 @@
 import { makeToolRegistry } from '@teamai/tool-core/registry';
-import type { McpFormat } from './resources/mcp-format.js';
-import type { RuleFormatId } from './resources/rule-format.js';
+import type { McpFormat } from '@teamai/tool-core/definition';
+import type { RuleFormatId } from '@teamai/tool-core/definition';
 import type { SessionPlatform } from './session-flow/adapters/platform-facts.js';
-import { TOOLS, type AgentToolId, type HookFormat, type InstallGate, type RunTimeVia, type ToolDescriptor, type ToolId } from './tools.js';
+import { TOOLS, type AgentToolId, type ToolId, type ShippedDescriptor } from './tools.js';
+import { type HookFormat, type InstallGate, type RunTimeVia } from '@teamai/tool-core/definition';
 
 /**
  * The one reader of the tool tables (`TOOLS`): every lookup of a tool id goes through here, so a new kind of
@@ -22,14 +23,14 @@ export const isToolId: (value: string) => value is ToolId = REGISTRY.isToolId;
 
 /** Whether releases before #1221 wrote `tool`'s hooks and MCP servers under its default home when the home moved (`Home.moves.defaultHomeLeftovers`). */
 export function hasDefaultHomeLeftovers(tool: ToolId): boolean {
-  const { home }: ToolDescriptor = descriptorOf(tool);
+  const { home }: ShippedDescriptor = descriptorOf(tool);
 
   return home.moves?.defaultHomeLeftovers === true;
 }
 
 /** The env variables that move `tool`'s home (`Home.moves.by`): a tool's own, and `XDG_CONFIG_HOME` for an XDG home. `LOCALAPPDATA` is not one: it is where Windows keeps a home that did not move. */
 export function homeVariables(tool: ToolId): readonly string[] {
-  const { home }: ToolDescriptor = descriptorOf(tool);
+  const { home }: ShippedDescriptor = descriptorOf(tool);
 
   return (home.moves?.by ?? []).flatMap((move): string[] => {
     switch (move.kind) {
@@ -56,17 +57,17 @@ export function homeVariables(tool: ToolId): readonly string[] {
   });
 }
 
-/** Whether where `tool` takes skills follows each session's inputs (`ToolDescriptor.skillsFollowSession`). */
+/** Whether where `tool` takes skills follows each session's inputs (`ShippedDescriptor.skillsFollowSession`). */
 export function skillsFollowSession(tool: string): boolean {
   if (!isToolId(tool)) return false;
-  const descriptor: ToolDescriptor = descriptorOf(tool);
+  const descriptor: ShippedDescriptor = descriptorOf(tool);
 
   return descriptor.skillsFollowSession === true;
 }
 
 /** What says `tool` is installed beyond its configured paths, if anything (`InstallGate`). */
 export function installGateOf(tool: ToolId): InstallGate | undefined {
-  const descriptor: ToolDescriptor = descriptorOf(tool);
+  const descriptor: ShippedDescriptor = descriptorOf(tool);
 
   return descriptor.installedBy;
 }
@@ -91,10 +92,10 @@ const CUSTOM_TOOL = {
     shell: 'system',
     teamHooks: 'home',
   },
-} as const satisfies Pick<ToolDescriptor, 'rules' | 'blocks' | 'agents' | 'mcp' | 'hooks'>;
+} as const satisfies Pick<ShippedDescriptor, 'rules' | 'blocks' | 'agents' | 'mcp' | 'hooks'>;
 
 /** The channels of `tool`: its descriptor's, or `CUSTOM_TOOL`'s for a custom tool id. */
-export function channelsOf(tool: string): Pick<ToolDescriptor, 'rules' | 'blocks' | 'agents' | 'mcp' | 'hooks'> {
+export function channelsOf(tool: string): Pick<ShippedDescriptor, 'rules' | 'blocks' | 'agents' | 'mcp' | 'hooks'> {
   return isToolId(tool) ? descriptorOf(tool) : CUSTOM_TOOL;
 }
 
@@ -113,7 +114,7 @@ export function selfLocalSettingsOf(tool: string): string | null {
 /** Whether teamai renders agents for `tool` in either scope (`AgentToolId`). */
 export function isAgentToolId(tool: string): tool is AgentToolId {
   if (!isToolId(tool)) return false;
-  const { agents }: ToolDescriptor = descriptorOf(tool);
+  const { agents }: ShippedDescriptor = descriptorOf(tool);
 
   return [agents.user, agents.project].some((channel) => channel !== 'none' && channel !== 'unknown');
 }

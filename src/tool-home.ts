@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { type HomeMove, type ToolDescriptor, type ToolId } from './tools.js';
+import { type ToolId, type ShippedDescriptor } from './tools.js';
+import { type HomeMove } from '@teamai/tool-core/definition';
 import { homeVariables, descriptorOf, TOOL_ORDER } from './tool-registry.js';
 import { pathExists, readFileSafe, readJsonObject, writeJsonAtomic, type JsonObjectRead } from './utils/fs.js';
 import { getUserHome, normalizeHomePath, usesInstallHome } from './utils/home.js';
@@ -259,7 +260,7 @@ export function movedToolHome(tool: ToolId, host: Host = realHost()): string | n
 }
 
 function followsActiveProfile(tool: ToolId): boolean {
-  const { home }: ToolDescriptor = descriptorOf(tool);
+  const { home }: ShippedDescriptor = descriptorOf(tool);
 
   return home.moves?.by.some((move) => move.kind === 'hermes-home') ?? false;
 }

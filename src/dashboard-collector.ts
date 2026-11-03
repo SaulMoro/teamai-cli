@@ -46,9 +46,9 @@ import { SessionOutcomeEventSchema, uniqueOutcomes, type SessionOutcomeEvent, ty
 import { readCopilotShutdown } from './token-usage/formats/copilot-shutdown.js';
 import { isTokenFormatId, readTokenUsage, type TokenRequest } from './token-usage/index.js';
 import { priceTokens } from './token-usage/pricing.js';
-import { type ToolDescriptor } from './tools.js';
 import { isToolId, descriptorOf } from './tool-registry.js';
 import { HookStdinSchema, type HookStdin } from './hook-dispatch.js';
+import type { ShippedDescriptor } from './tools.js';
 
 // ─── Event collection data flow ─────────────────────────
 //
@@ -214,7 +214,7 @@ const isPriced = (record: LocalRequestRecord): record is PricedRequestRecord => 
  * A tool TOOLS does not list is read as a Claude transcript, as every Stop
  * transcript was before tools named their format.
  */
-function tokenSourceOf(tool: string): ToolDescriptor['tokens'] {
+function tokenSourceOf(tool: string): ShippedDescriptor['tokens'] {
   const id = tool.toLowerCase();
 
   return isToolId(id) ? descriptorOf(id).tokens : 'claude-jsonl';

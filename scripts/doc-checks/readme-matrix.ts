@@ -6,7 +6,8 @@ import path from 'node:path';
 import { ALL_MODEL_AGENTS } from '../../src/models/profile.js';
 import { runsTeamHookOn } from '../../src/hooks.js';
 import { isLaunchTool } from '../../src/tool-launch/tools.js';
-import { type Support, type ToolId } from '../../src/tools.js';
+import { type ToolId } from '../../src/tools.js';
+import { type Support } from '@teamai/tool-core/definition';
 import { isToolId, descriptorOf } from '../../src/tool-registry.js';
 import { DEFAULT_TOOL_PATHS } from '../../src/types.js';
 

@@ -26,20 +26,8 @@ import { parseYaml } from './utils/yaml.js';
 import { z } from 'zod';
 import { parse as parseToml } from 'smol-toml';
 import { withoutTomlBom } from './utils/toml.js';
-import {
-  supportsTransport,
-  supportsEnvExpansion,
-  renderJsonEntry,
-  renderCodexBlock,
-  resolvePlaceholders,
-  referencedVars,
-  entryHash,
-  museEntryHash,
-  MCP_SERVER_KEY,
-  sameServerKey,
-  UntypedStdioEntrySchema,
-  type McpFormat,
-} from './resources/mcp-format.js';
+import { supportsTransport, supportsEnvExpansion, renderJsonEntry, renderCodexBlock, resolvePlaceholders, referencedVars, entryHash, museEntryHash, MCP_SERVER_KEY, sameServerKey, UntypedStdioEntrySchema } from './resources/mcp-format.js';
+import { type McpFormat } from '@teamai/tool-core/definition';
 import { mcpEntryReader, parseTeamMcpServers, teamMcpToDef } from './resources/mcp.js';
 import { historicalContents } from './utils/team-history.js';
 import { describeMembersFile, keepsTrackedCopy } from './resources/delivered-copies.js';
@@ -51,7 +39,7 @@ import { readEnvBackup } from './resources/env.js';
 import { isEnvShMarker } from './env-sh-exports.js';
 import { memberEnvironmentWithoutScope } from './member-env.js';
 import { cleanupOf, installOf, locate, ownOf, writable, type EntryPlace, type Install } from './locate.js';
-import { type McpProject } from './tools.js';
+import { type McpProject } from '@teamai/tool-core/definition';
 import { channelsOf, isToolId, mcpFormatOf, hasDefaultHomeLeftovers, TOOL_ORDER } from './tool-registry.js';
 import { realHost, type Host } from './tool-home.js';
 import { KNOWN_AGENTS } from './known-agents.js';

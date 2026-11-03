@@ -4,7 +4,7 @@ import YAML from 'yaml';
 import { z } from 'zod';
 import type { JsonValue, LocalConfig, TeamaiConfig } from './types.js';
 import { descriptorOf } from './tool-registry.js';
-import { TOOL_IDS, type ToolDescriptor, type ToolId } from './tools.js';
+import { TOOL_IDS, type ToolId, type ShippedDescriptor } from './tools.js';
 import { JsonValueSchema, isAgentExcluded, recordedToolRootDir, resolveAutoCompactTokens } from './types.js';
 import { toolHome } from './tool-home.js';
 import { withFileLock } from './update.js';
@@ -49,7 +49,7 @@ import { getUserHome } from './utils/home.js';
 //  teamai removes its value if the file still holds exactly that. A record is
 //  kept while its tool is excluded or missing, so the value stays teamai's.
 
-type Kind = Exclude<ToolDescriptor['autoCompact'], 'none'>;
+type Kind = Exclude<ShippedDescriptor['autoCompact'], 'none'>;
 
 /** The file under the tool's home that holds the threshold, per settings format. */
 const FILE_OF: Record<Kind, string> = { claude: 'settings.json', buddy: 'settings.json', codex: 'config.toml', dsh: 'cordis.patch.yml' };
