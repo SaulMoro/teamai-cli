@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,7 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { parse, stringify } from 'yaml';
 import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
-import { attemptOf, CLAUDE_SESSIONS, envelope, fakeTool, ROOT, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
+import { attemptOf, CLAUDE_SESSIONS, CLI, envelope, fakeTool, ROOT, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
 import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
 
 // A driver definition that lists several runtimes: each `next` offers one runtime's `can`, in definition order, and a
@@ -315,5 +315,167 @@ Judge the review.
     expect(toyOpens()).toBe(1);
     expect(fs.existsSync(stray)).toBe(false);
     fs.rmSync(path.join(bin, 'teamai-runtime-shiptoy'));
+  });
+
+  describe('with credentials: { codex: login }', () => {
+    const dedicated = (): string => path.join(os.homedir(), '.teamai', 'logins', 'codex', 'auth.json');
+    const auth = (account: string, refresh: string): string => JSON.stringify({ OPENAI_API_KEY: null, tokens: { account_id: account, refresh_token: refresh, access_token: 'access', id_token: 'id' }, last_refresh: '2026-11-01T00:00:00Z' });
+    const dedicatedTokens = (): { account_id: string; refresh_token: string } => (JSON.parse(fs.readFileSync(dedicated(), 'utf8')) as { tokens: { account_id: string; refresh_token: string } }).tokens;
+    const codexLaunches = (): Array<{ home: string; account: string; refresh: string }> => fs.readFileSync(launches, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { home: string; account: string; refresh: string });
+
+    // A fake Codex: it reads the login in its home, records whose it is, holds, then refreshes it, as Codex does, for
+    // the same account or for FAKE_CODEX_ACCOUNT's.
+    const fakeCodex = `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+if (args.includes('--version')) { process.stdout.write('codex-cli 0.130.0\\n'); process.exit(0); }
+const home = process.env.CODEX_HOME || path.join(require('node:os').homedir(), '.codex');
+const file = path.join(home, 'auth.json');
+const login = JSON.parse(fs.readFileSync(file, 'utf8'));
+const span = (edge) => process.env.FAKE_TOOL_SPANS && fs.appendFileSync(process.env.FAKE_TOOL_SPANS, JSON.stringify({ attempt: process.env.TEAMAI_WORKFLOW_ATTEMPT, edge }) + '\\n');
+span('start');
+fs.appendFileSync(process.env.LAUNCHES, JSON.stringify({ home, account: login.tokens.account_id, refresh: login.tokens.refresh_token }) + '\\n');
+if (process.env.FAKE_TOOL_HOLD_MS) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_TOOL_HOLD_MS));
+const next = 'r' + (Number(login.tokens.refresh_token.slice(1)) + 1);
+fs.writeFileSync(file, JSON.stringify({ ...login, tokens: { ...login.tokens, account_id: process.env.FAKE_CODEX_ACCOUNT || login.tokens.account_id, refresh_token: next } }));
+fs.mkdirSync(path.dirname(process.env.TEAMAI_WORKFLOW_RESULT), { recursive: true });
+fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ output: { ok: true } }));
+const thread = 'th-' + path.basename(process.env.TEAMAI_WORKFLOW_ATTEMPT);
+process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: thread }) + '\\n');
+process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 4, output_tokens: 2 } }) + '\\n');
+span('end');
+`;
+
+    beforeEach(() => {
+      fs.writeFileSync(path.join(bin, 'codex'), fakeCodex, { mode: 0o755 });
+      fs.mkdirSync(path.dirname(dedicated()), { recursive: true });
+      fs.writeFileSync(dedicated(), auth('acct-1', 'r1'), { mode: 0o600 });
+      fs.chmodSync(dedicated(), 0o600);
+      // The member's daily Codex login, which no step may ever see.
+      fs.mkdirSync(path.join(os.homedir(), '.codex'), { recursive: true });
+      fs.writeFileSync(path.join(os.homedir(), '.codex', 'auth.json'), auth('acct-daily', 'r900'));
+    });
+
+    afterAll(() => {
+      fs.rmSync(path.join(bin, 'codex'), { force: true });
+    });
+
+    const loginDefinition = (name: string, toyState: string, extra: Record<string, unknown> = {}): void => {
+      writeDefinition(name, [{ use: 'toy', options: { state: toyState, credentials: { codex: 'login' }, ...extra } }], { tool: 'codex' });
+    };
+
+    /** Starts `args` in the background, and resolves once its stderr holds `text`, or rejects after a while. */
+    const startWatching = (args: string[], extra: NodeJS.ProcessEnv): { stderr: () => string; ended: Promise<Ran> } => {
+      const child = spawn(process.execPath, [CLI, ...args], { cwd: repo, env: { ...process.env, ...env(extra), FORCE_COLOR: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      const ended = new Promise<Ran>((resolve) => child.on('close', (code, signal) => resolve({ code, signal, stdout, stderr })));
+      return { stderr: () => stderr, ended };
+    };
+
+    const waitFor = async (check: () => boolean, what: string): Promise<void> => {
+      for (const deadline = Date.now() + 30_000; Date.now() < deadline;) {
+        if (check()) return;
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      throw new Error(`timed out waiting for ${what}`);
+    };
+
+    it('copies the dedicated login into the attempt\'s tool home, never the member\'s own, and writes the refreshed one back', async () => {
+      loginDefinition('codexlogin', state);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'codexlogin'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const runId = runOf(ran);
+      const [review] = readRunState(runId).steps;
+      expect(codexLaunches()).toEqual([{ home: path.join(attemptDir(runId, attemptOf(review)), 'tool-home', 'codex'), account: 'acct-1', refresh: 'r1' }]);
+      // Written back by compare-and-replace, keeping the dedicated file's permissions.
+      expect(dedicatedTokens()).toMatchObject({ account_id: 'acct-1', refresh_token: 'r2' });
+      expect(fs.statSync(dedicated()).mode & 0o777).toBe(0o600);
+      expect(JSON.parse(fs.readFileSync(path.join(os.homedir(), '.codex', 'auth.json'), 'utf8'))).toMatchObject({ tokens: { account_id: 'acct-daily', refresh_token: 'r900' } });
+    });
+
+    it('keeps the dedicated login when the step left one for another account, and fails the step with login_not_written_back', async () => {
+      loginDefinition('codexother', state);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'codexother'], repo, env({ FAKE_CODEX_ACCOUNT: 'acct-2' }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+      const [review] = readRunState(runOf(ran)).steps;
+      expect(review).toMatchObject({ status: 'failed', failure: { code: 'login_not_written_back', message: expect.stringContaining('another account') } });
+      expect(review && 'failure' in review ? review.failure?.message : '').toContain(`CODEX_HOME=${path.dirname(dedicated())} codex login`);
+      expect(dedicatedTokens()).toMatchObject({ account_id: 'acct-1', refresh_token: 'r1' });
+    });
+
+    it('runs two parallel attempts on the login one after the other', async () => {
+      loginDefinition('codexpair', state);
+      setMemberWorkflows({ max_parallel: 2 });
+      const spans = path.join(sandbox, 'spans-login.jsonl');
+      fs.rmSync(spans, { force: true });
+      writeFlow('codexpair', `  - id: left
+    workspace: new
+    prompt: Review the left half.
+    output:
+      ok: boolean
+  - id: right
+    needs: []
+    workspace: new
+    prompt: Review the right half.
+    output:
+      ok: boolean`);
+      const pulled = await runCLI(['pull'], repo);
+      expect(pulled.code).toBe(0);
+
+      const ran = await runCLI(['workflow', 'start', 'codexpair', '--driver', 'codexpair'], repo, env({ FAKE_TOOL_SPANS: spans, FAKE_TOOL_HOLD_MS: '1000' }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const edges = fs.readFileSync(spans, 'utf8').trim().split('\n').map((line) => (JSON.parse(line) as { edge: string }).edge);
+      expect(edges).toEqual(['start', 'end', 'start', 'end']);
+      // The second used the login the first wrote back.
+      expect(codexLaunches().map((launch) => launch.refresh)).toEqual(['r1', 'r2']);
+      expect(dedicatedTokens().refresh_token).toBe('r3');
+    });
+
+    it('keeps the login held by an attempt whose driver was killed, so another run waits naming it until that attempt is resumed and written back', async () => {
+      loginDefinition('codexdies', state, { die_at: 'exec-exited' });
+      // Written before any run, so no read-only step sees the repository change under it.
+      loginDefinition('codexwaits', fs.mkdtempSync(path.join(sandbox, 'toy-state-')));
+      const killed = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'codexdies'], repo, env());
+      expect(killed.signal, killed.stderr).toBe('SIGKILL');
+      const holder = /Run (r[0-9a-f]+) started/.exec(killed.stderr)?.[1] ?? '';
+      expect(holder).not.toBe('');
+
+      const waiting = startWatching(['workflow', 'start', 'oneprompt', '--driver', 'codexwaits'], {});
+      await waitFor(() => waiting.stderr().includes(`login teamai keeps, which attempt`) && waiting.stderr().includes(`of run ${holder} holds`), 'the second run to name the holder');
+      // It has not launched: only the killed attempt used the login.
+      expect(codexLaunches()).toHaveLength(1);
+
+      const resumed = await runCLI(['workflow', 'resume', holder, '--driver', 'codexdies'], repo, env());
+      expect(envelope(resumed), resumed.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const second = await waiting.ended;
+      expect(envelope(second), second.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      // The killed attempt ran once, wrote r2 back on resume, and the waiting one started from it.
+      expect(codexLaunches().map((launch) => launch.refresh)).toEqual(['r1', 'r2']);
+      expect(dedicatedTokens().refresh_token).toBe('r3');
+    });
+
+    it('releases the login when teamai workflow cancel stops the run whose killed attempt held it', async () => {
+      loginDefinition('codexcancel', state, { die_at: 'exec-exited' });
+      loginDefinition('codexafter', fs.mkdtempSync(path.join(sandbox, 'toy-state-')));
+      const killed = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'codexcancel'], repo, env());
+      expect(killed.signal, killed.stderr).toBe('SIGKILL');
+      const holder = /Run (r[0-9a-f]+) started/.exec(killed.stderr)?.[1] ?? '';
+
+      const cancelled = await runCLI(['workflow', 'cancel', holder], repo, env());
+      expect(cancelled.stderr).toContain(`Released the codex login teamai keeps, which attempt`);
+
+      const after = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'codexafter'], repo, env());
+      expect(envelope(after), after.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      expect(after.stderr).not.toContain('waits for the codex login');
+    });
   });
 });
