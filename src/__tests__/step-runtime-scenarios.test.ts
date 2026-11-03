@@ -39,11 +39,11 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-async function until(check: () => boolean, ms = 5000): Promise<boolean> {
+async function until(check: () => boolean | Promise<boolean>, ms = 5000): Promise<boolean> {
   const deadline = Date.now() + ms;
 
   while (Date.now() < deadline) {
-    if (check()) return true;
+    if (await check()) return true;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 
@@ -214,6 +214,13 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     expect(await second.reattach(opened.handle)).toEqual({ kind: 'alive', ops: [{ op: request.op, state: 'running' }] });
     await second.cancel(request.op);
     expect(await until(() => !pidAlive(shell))).toBe(true);
-    expect(await second.reattach(opened.handle)).toEqual({ kind: 'alive', ops: [{ op: request.op, state: 'cancelled' }] });
+    // The operation ends cancelled once no process of it is left, which the runtime may record after the shell is gone.
+    let settled: unknown;
+    expect(await until(async () => {
+      const reattached = await second.reattach(opened.handle);
+      settled = reattached;
+      return reattached.kind !== 'alive' || reattached.ops.some((op) => op.state !== 'running');
+    })).toBe(true);
+    expect(settled).toEqual({ kind: 'alive', ops: [{ op: request.op, state: 'cancelled' }] });
   });
 });
