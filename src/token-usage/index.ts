@@ -7,14 +7,14 @@
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { TokenReading, TokenSource } from '@teamai/tool-core/tokens';
 import { sessionStoreDir } from '../locate.js';
-import { readAgyTranscript } from './formats/agy-transcript.js';
 
 const FORMATS = {
   'claude-jsonl': BUILT_IN_TOOLS.claude.tokens['claude-jsonl'],
   'codex-rollout': BUILT_IN_TOOLS.codex.tokens['codex-rollout'],
   codebuddy: BUILT_IN_TOOLS.codebuddy.tokens.codebuddy,
   'muse-session': BUILT_IN_TOOLS.muse.tokens['muse-session'],
-  'agy-transcript': readAgyTranscript,
+  // agy keeps usage in its store's conversation logs, so the format reads the member's store.
+  'agy-transcript': (source) => BUILT_IN_TOOLS.agy.tokens['agy-transcript']({ ...source, storeDir: sessionStoreDir('agy', undefined) }),
   'pi-session': BUILT_IN_TOOLS.pi.tokens['pi-session'],
   // OpenCode keeps usage in its database, so the format reads the member's store.
   'opencode-db': (source) => BUILT_IN_TOOLS.opencode.tokens['opencode-db']({ ...source, storeDir: sessionStoreDir('opencode', undefined) }),

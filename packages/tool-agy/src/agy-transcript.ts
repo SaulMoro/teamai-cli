@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { emptyTokenUsage } from '@teamai/tool-core/tokens';
 import type { TokenReading, TokenSource } from '@teamai/tool-core/tokens';
 import { forEachJsonLine } from '@teamai/tool-core/tokens';
+import { agyStoreRoots } from './session-adapter.js';
 
 const SESSION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -22,7 +23,7 @@ const PlannerStep = z.object({
 /**
  * An Antigravity session's tokens from the PLANNER_RESPONSE steps of
  * `<store>/brain/<id>/.system_generated/logs/transcript.jsonl`, in the CLI's
- * store, else the app's. The transcript names no model, so it has tokens and
+ * store (`storeDir`), else the app's beside it. The transcript names no model, so it has tokens and
  * no requests. agy 1.4.8 writes its counts as strings and counts cache reads
  * inside `input_tokens`; agy 1.4.10 and the app write numbers and do not.
  */
@@ -30,10 +31,10 @@ export async function readAgyTranscript(source: TokenSource): Promise<TokenReadi
   const tokens = emptyTokenUsage();
 
   if (!SESSION_UUID_RE.test(source.sessionId)) return { tokens, requests: [] };
-  const { sessionStoreDir } = await import('../../locate.js');
-  const { agyStoreRoots } = await import('../../session-flow/adapters/agy.js');
 
-  for (const store of agyStoreRoots(sessionStoreDir('agy', undefined))) {
+  if (source.storeDir === undefined) throw new Error('agy-transcript reads agy\'s store: pass it as storeDir.');
+
+  for (const store of agyStoreRoots(source.storeDir)) {
     const steps: Array<z.infer<typeof PlannerStep> & { inclusive: boolean }> = [];
     await forEachJsonLine(path.join(store, 'brain', source.sessionId, '.system_generated', 'logs', 'transcript.jsonl'), ['"PLANNER_RESPONSE"'], (entry) => {
       const step = PlannerStep.safeParse(entry);
