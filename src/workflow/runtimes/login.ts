@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 import { getTeamaiHomeDir } from '../../types.js';
+import { errnoCode } from '../../utils/fs.js';
+import { AttemptIdSchema, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import { LOGIN_TOOLS as LOGIN_TOOL_IDS, type LoginTool } from './sources.js';
 
@@ -44,21 +46,36 @@ export function loginLockFile(tool: LoginTool): string {
 
 /** Who holds a login, and the hash of the file it copied into its tool home once it did. */
 export const LoginLockSchema = z.object({
-  run: z.string(),
-  attempt: z.string(),
+  run: RunIdSchema,
+  attempt: AttemptIdSchema,
   takenAt: z.string(),
   copied: z.string().optional(),
 });
 
 export type LoginLock = z.infer<typeof LoginLockSchema>;
 
-/** The attempt that holds `tool`'s login, or undefined when none does. */
-export async function loginHolder(tool: LoginTool): Promise<LoginLock | undefined> {
+/** What `tool`'s lock file says: no attempt holds the login, this one does, or the file is not a lock teamai can read. */
+async function readLock(tool: LoginTool): Promise<{ kind: 'free' } | { kind: 'held'; lock: LoginLock } | { kind: 'unreadable' }> {
+  let body: string;
+
   try {
-    return LoginLockSchema.parse(JSON.parse(await fs.readFile(loginLockFile(tool), 'utf8')));
-  } catch {
-    return undefined;
+    body = await fs.readFile(loginLockFile(tool), 'utf8');
+  } catch (error) {
+    return errnoCode(error) === 'ENOENT' ? { kind: 'free' } : { kind: 'unreadable' };
   }
+
+  try {
+    return { kind: 'held', lock: LoginLockSchema.parse(JSON.parse(body)) };
+  } catch {
+    return { kind: 'unreadable' };
+  }
+}
+
+/** The attempt that holds `tool`'s login, or undefined when none does or its lock cannot be read. */
+export async function loginHolder(tool: LoginTool): Promise<LoginLock | undefined> {
+  const read = await readLock(tool);
+
+  return read.kind === 'held' ? read.lock : undefined;
 }
 
 /** Writes `lock` to a file of its own, then links or renames it into place, so a reader never sees half of it. */
@@ -110,7 +127,7 @@ export function loginWaitFile(attemptDirectory: string): string {
 export const LoginWaitSchema = z.object({ tool: z.enum(LOGIN_TOOL_IDS), holder: z.object({ run: z.string(), attempt: z.string() }) });
 
 /** What an attempt waiting for a login shows while it waits. */
-export type LoginWait = { tool: LoginTool; holder: Pick<LoginLock, 'run' | 'attempt'> };
+export type LoginWait = z.infer<typeof LoginWaitSchema>;
 
 /**
  * Takes `tool`'s login for attempt `attempt` of run `run` and copies its file into `toolHome`, waiting while another
@@ -119,8 +136,8 @@ export type LoginWait = { tool: LoginTool; holder: Pick<LoginLock, 'run' | 'atte
  */
 export async function holdLogin({ tool, run, attempt, toolHome, signal, onWait }: {
   tool: LoginTool;
-  run: string;
-  attempt: string;
+  run: RunId;
+  attempt: AttemptId;
   toolHome: string;
   signal: AbortSignal;
   onWait: (wait: LoginWait | undefined) => Promise<void>;
@@ -129,7 +146,16 @@ export async function holdLogin({ tool, run, attempt, toolHome, signal, onWait }
   let told: string | undefined;
 
   for (;;) {
-    const holder = await loginHolder(tool);
+    const read = await readLock(tool);
+
+    // teamai never replaces a lock it cannot read: it may be another version's, held by an attempt that still runs.
+    if (read.kind === 'unreadable') {
+      if (told !== undefined) await onWait(undefined);
+
+      return { ok: false, failure: { code: 'login_held', message: `teamai cannot read the ${tool} login lock ${loginLockFile(tool)}, so it cannot tell which attempt holds the login. If no step uses that login now, delete ${loginLockFile(tool)}, then retry the step.` } };
+    }
+
+    const holder = read.kind === 'held' ? read.lock : undefined;
     const mine = holder?.run === run && holder.attempt === attempt;
 
     if (!holder || mine) {
@@ -168,7 +194,7 @@ export async function holdLogin({ tool, run, attempt, toolHome, signal, onWait }
 }
 
 /** Releases `tool`'s login if attempt `attempt` of run `run` holds it. */
-export async function releaseLogin(tool: LoginTool, { run, attempt }: { run: string; attempt: string }): Promise<void> {
+export async function releaseLogin(tool: LoginTool, { run, attempt }: { run: RunId; attempt: AttemptId }): Promise<void> {
   const holder = await loginHolder(tool);
 
   if (holder?.run === run && holder.attempt === attempt) await fs.rm(loginLockFile(tool), { force: true });
@@ -178,8 +204,8 @@ export async function releaseLogin(tool: LoginTool, { run, attempt }: { run: str
  * Releases each login an attempt of run `run` holds that is no longer one of its `open` attempts, as `teamai workflow
  * cancel` does once it stopped them. Says which it released.
  */
-export async function releaseEndedLogins(run: string, open: ReadonlySet<string>): Promise<Array<{ tool: LoginTool; attempt: string }>> {
-  const released: Array<{ tool: LoginTool; attempt: string }> = [];
+export async function releaseEndedLogins(run: RunId, open: ReadonlySet<string>): Promise<Array<{ tool: LoginTool; attempt: AttemptId }>> {
+  const released: Array<{ tool: LoginTool; attempt: AttemptId }> = [];
 
   for (const tool of LOGIN_TOOL_IDS) {
     const holder = await loginHolder(tool);
@@ -198,7 +224,7 @@ export async function releaseEndedLogins(run: string, open: ReadonlySet<string>)
  * a login made meanwhile stays. It keeps the dedicated file's permissions. A file the tool did not change writes
  * nothing. Otherwise it keeps the dedicated file and says why, `login_not_written_back`.
  */
-export async function writeLoginBack({ tool, run, attempt, toolHome, collected }: { tool: LoginTool; run: string; attempt: string; toolHome: string; collected: boolean }): Promise<WorkflowFailure | undefined> {
+export async function writeLoginBack({ tool, run, attempt, toolHome, collected }: { tool: LoginTool; run: RunId; attempt: AttemptId; toolHome: string; collected: boolean }): Promise<WorkflowFailure | undefined> {
   const target = path.join(loginHome(tool), LOGIN_FILES[tool]);
   const holder = await loginHolder(tool);
 
