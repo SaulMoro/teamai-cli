@@ -4683,7 +4683,7 @@ describe('the tool a prompt step names', () => {
   it('fails it tool_unavailable in a run its only driver drives, when that driver cannot run the tool, and runs the other steps', async () => {
     const { config, runId } = await startBuild(REVIEW_AND_LINT);
 
-    const lint = await leaseNext(config, runId, driverA, { can: { tools: ['claude'] }, alone: true });
+    const lint = await leaseNext(config, runId, driverA, { can: { tools: ['claude'] }, alone: { driver: 'local', offers: [{ runtime: 'local', can: { tools: ['claude'] } }] } });
 
     expect(lint).toMatchObject({ data: { lease: { step: 'lint' } } });
     expect(await readRun(config, runId)).toMatchObject({ steps: [
@@ -4722,7 +4722,7 @@ describe('a prompt step with permissions: unattended', () => {
   it('fails it tool_unavailable in a run whose only driver cannot run it unattended, and runs the other steps', async () => {
     const { config, runId } = await startBuild(FIX_AND_LINT);
 
-    const lint = await leaseNext(config, runId, driverA, { can: sandbox, alone: true });
+    const lint = await leaseNext(config, runId, driverA, { can: sandbox, alone: { driver: 'local', offers: [{ runtime: 'local', can: sandbox }] } });
 
     expect(lint).toMatchObject({ data: { lease: { step: 'lint' } } });
     expect(await readRun(config, runId)).toMatchObject({ steps: [
@@ -5958,8 +5958,8 @@ describe('strict requirements', () => {
     await syncScorersThenWorkflows(config);
     const secrets = await knownSecrets(config);
 
-    const refused = await startRun(config, 'build', {}, { secrets, alone: { isolation: 'sandbox', network: false, env: true } });
-    const started = await startRun(config, 'build', {}, { secrets, alone: { isolation: 'none', network: true, env: true } });
+    const refused = await startRun(config, 'build', {}, { secrets, alone: { driver: 'local', offers: [{ runtime: 'local', can: { isolation: 'sandbox', network: false, env: true } }] } });
+    const started = await startRun(config, 'build', {}, { secrets, alone: { driver: 'local', offers: [{ runtime: 'local', can: { isolation: 'none', network: true, env: true } }] } });
 
     expect(refused).toEqual({ error: { code: 'requirement_unmet', message: 'Step "offline" strictly requires no network, which the local driver cannot deny. Run it with a driver that declares can.network.' } });
     expect(started).toMatchObject({ data: { status: 'running' } });

@@ -22,8 +22,8 @@ import { localStrictCan, personAnswers, runLocalDriver, STOP_SIGNALS, withDriver
 import { driveRun, unsupportedDriver } from './workflow-drive.js';
 import { awaitsLine, awaitsOf, driveByDefault, leftOpenLine, type DefaultDrive } from './default-driver.js';
 import { LOCAL_DRIVER, parseDriver, type Driver } from './workflow/driver-name.js';
-import { openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
-import type { DriverCan } from './workflow/requirements.js';
+import { disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
+import type { SoleDriver } from './workflow/engine.js';
 import { driverIdentity } from './driver-identity.js';
 import { getBusinessRoot, getDataHome, usesBranchWorktree, type JsonValue, type LocalConfig, type TeamaiConfig } from './types.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, type RunId } from './workflow/store.js';
@@ -634,7 +634,7 @@ async function startDriven(input: {
   const { config, name, inputs, tools, timeout, options, opened, toolPaths, env, secrets, shortcut } = input;
   const drives = options.driver === 'local' || opened !== undefined;
   const caller = invokeCaller(options.confirmed);
-  const alone = opened?.kind === 'runtime' ? strictCanOf(opened.can) : drives ? localStrictCan(config, options) : undefined;
+  const alone = drives ? soleDriver(opened, localStrictCan(config, options)) : undefined;
   const { byDefault } = shortcut;
   const awaits = byDefault && awaitsOf(byDefault);
   const start = { inputs, checkout: process.cwd(), alone, timeout, awaits };
@@ -904,22 +904,34 @@ async function openNamedDriver(config: LocalConfig, name: string | undefined, { 
 }
 
 async function closeDriver(opened: OpenedDriver | undefined): Promise<void> {
-  if (opened?.kind === 'runtime') await opened.runtime.dispose();
+  if (opened) await disposeDriver(opened);
 }
 
-/** What the local loop runs an opened definition with: its default tool under `--tools`, and its step runtime. */
-function definedDrive(opened: OpenedDriver | undefined, tools: Record<string, string>): Pick<LocalDriverOptions, 'tools' | 'runtime'> {
+/** What the local loop runs an opened definition with: its default tool under `--tools`, and its runtimes. */
+function definedDrive(opened: OpenedDriver | undefined, tools: Record<string, string>): Pick<LocalDriverOptions, 'tools' | 'runtimes'> {
   const tool = opened?.driver.definition.tool;
-  const drive: Pick<LocalDriverOptions, 'tools' | 'runtime'> = { tools: tool === undefined ? tools : { default: tool, ...tools } };
+  const drive: Pick<LocalDriverOptions, 'tools' | 'runtimes'> = { tools: tool === undefined ? tools : { default: tool, ...tools } };
 
-  if (opened?.kind === 'runtime') drive.runtime = { driver: opened.driver.name, runtime: opened.runtime, can: opened.can };
+  if (opened) drive.runtimes = { driver: opened.driver.name, runtimes: opened.runtimes };
 
   return drive;
 }
 
-/** The strict requirements a step runtime meets, as a start checks them before the run exists. Unsaid is not met. */
-function strictCanOf(can: DriverCan): ReturnType<typeof localStrictCan> {
-  return { network: can.network ?? false, isolation: can.isolation ?? 'none', env: can.env ?? false };
+/**
+ * The run's only driver as a start checks its strict requirements before the run exists: `local` alone, or each runtime
+ * of the definition `opened`, local giving what `localStrict` says and an external one what it offered. Unsaid is not met.
+ */
+function soleDriver(opened: OpenedDriver | undefined, localStrict: ReturnType<typeof localStrictCan>): SoleDriver {
+  if (!opened) return { driver: 'local', offers: [{ runtime: 'local', can: localStrict }] };
+
+  const offer = (entry: OpenedDriver['runtimes'][number]): SoleDriver['offers'][number] => ({
+    runtime: entry.use,
+    can: entry.kind === 'local' ? localStrict : { network: entry.can.network ?? false, isolation: entry.can.isolation ?? 'none', env: entry.can.env ?? false },
+  });
+
+  const [first, ...rest] = opened.runtimes;
+
+  return { driver: opened.driver.name, offers: [offer(first), ...rest.map(offer)] };
 }
 
 /** Aborts on the first SIGINT or SIGTERM, so `teamai benchmark try` stops the setup or check it runs. A second one ends the process. */

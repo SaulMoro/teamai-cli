@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { TokenSnapshotScope, TokenUsage } from '@teamai/tool-core/tokens';
-import { isJsonObject, type JsonObject } from '@teamai/tool-core/json';
+import { isJsonObject, JsonValueSchema, type JsonObject } from '@teamai/tool-core/json';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -869,6 +869,11 @@ export const WorkflowToolSchema = z.string().min(1);
  * separate from install metadata: a workspace/self config overlays them at
  * runtime, but never persists the machine value into its own file.
  */
+/** One `workflows.drivers` entry: options per runtime of that definition, which the runtime validates at `init`. */
+export const DriverTuningSchema = z.object({ runtimes: z.record(z.string(), z.record(z.string(), JsonValueSchema)) }).strict();
+
+export type DriverTuning = z.infer<typeof DriverTuningSchema>;
+
 export const MemberWorkflowSettingsSchema = z.object({
   tools: z.record(z.string(), WorkflowToolSchema).default({}),
   /** How many command steps the local driver runs at once. Unset means 1. */
@@ -883,6 +888,11 @@ export const MemberWorkflowSettingsSchema = z.object({
   retention: z.unknown().optional(),
   /** The driver `teamai score`, `teamai score --drain` and the finished-sessions hook start their runs for. Kept as written; `driveByDefault` reads it. */
   driver: z.unknown().optional(),
+  /**
+   * The member's options for the runtimes of a driver definition, by its canonical name and each runtime's `use`, over
+   * those the definition gives, key by key: `{ sandboxed: { runtimes: { sandbox: { max_parallel: 2 } } } }`.
+   */
+  drivers: z.record(z.string(), DriverTuningSchema).optional(),
 });
 
 export type MemberWorkflowSettings = z.infer<typeof MemberWorkflowSettingsSchema>;

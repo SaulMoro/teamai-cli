@@ -1,0 +1,290 @@
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { parse, stringify } from 'yaml';
+import { resolveProjectDataHome } from '../../config.js';
+import type { RunState } from '../../workflow/types.js';
+import { attemptOf, CLAUDE_SESSIONS, envelope, fakeTool, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
+import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
+
+// A driver definition that lists several runtimes: each `next` offers one runtime's `can`, in definition order, and a
+// step goes to the first that can take it. The toy runtime is the member's own here, and `local` runs on the host.
+
+describe('a driver definition with several runtimes', () => {
+  let sandbox: string;
+  let repo: string;
+  let bin: string;
+  let launches: string;
+  let dataHome: string;
+  let state: string;
+  const memberConfig = (): string => path.join(os.homedir(), '.teamai', 'config.yaml');
+  let memberConfigBefore: string | undefined;
+
+  const env = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({ PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, LAUNCHES: launches, ...extra });
+
+  /** A team definition `name` whose runtimes are `runtimes`, as YAML gives them. */
+  const writeDefinition = (name: string, runtimes: Array<{ use: string; options?: Record<string, unknown> }>, { tool = 'claude', dir = path.join(repo, '.teamai', 'drivers') } = {}): void => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, `${name}.yaml`), stringify({ schemaVersion: 'v1alpha1', name, tool, runtimes }));
+  };
+
+  const writeFlow = (name: string, steps: string): void => {
+    fs.writeFileSync(path.join(repo, '.teamai', 'workflows', `${name}.yaml`), `schemaVersion: v1alpha1\nname: ${name}\ndescription: ${name}\nsteps:\n${steps}\n`);
+  };
+
+  /** Sets `workflows` keys in the member's own config, over what `init` wrote there. */
+  const setMemberWorkflows = (workflows: Record<string, unknown>): void => {
+    const current = (fs.existsSync(memberConfig()) ? parse(fs.readFileSync(memberConfig(), 'utf8')) : {}) as Record<string, unknown> | null;
+    const base = current ?? {};
+    const before = (base.workflows ?? {}) as Record<string, unknown>;
+    fs.writeFileSync(memberConfig(), stringify({ ...base, workflows: { ...before, ...workflows } }));
+  };
+
+  const readRunState = (runId: string): RunState => JSON.parse(fs.readFileSync(path.join(dataHome, 'workflows', 'runs', `${runId}.json`), 'utf8')) as RunState;
+  const attemptDir = (runId: string, attempt: string): string => path.join(dataHome, 'workflows', 'runs', runId, 'attempts', attempt);
+  const runtimeRecord = (runId: string, attempt: string): Record<string, unknown> | undefined => {
+    const file = path.join(attemptDir(runId, attempt), 'runtime.json');
+    return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown> : undefined;
+  };
+
+  const toyOpens = (): number => (fs.existsSync(path.join(state, 'ops'))
+    ? fs.readdirSync(path.join(state, 'ops')).filter((name) => (JSON.parse(fs.readFileSync(path.join(state, 'ops', name), 'utf8')) as { kind: string }).kind === 'open').length
+    : 0);
+
+  const runOf = (ran: Ran): string => {
+    const done = envelope(ran);
+    const run = 'data' in done && typeof done.data.done === 'object' && done.data.done !== null && 'run' in done.data.done ? done.data.done.run : undefined;
+    if (typeof run !== 'string') throw new Error(`no run in the envelope:\n${ran.stdout}\n${ran.stderr}`);
+    return run;
+  };
+
+  beforeAll(async () => {
+    sandbox = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-driver-runtimes-e2e-')));
+    repo = path.join(sandbox, 'repo');
+    bin = path.join(sandbox, 'fake-bin');
+    launches = path.join(sandbox, 'launches.jsonl');
+    fs.mkdirSync(repo);
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(repo, 'README.md'), '# fixture\n');
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    execFileSync('git', ['add', 'README.md'], { cwd: repo });
+    execFileSync('git', ['commit', '-qm', 'initial'], { cwd: repo });
+    execFileSync('git', ['remote', 'add', 'origin', 'http://127.0.0.1:9/team/workflow.git'], { cwd: repo });
+    const initialized = await runCLI(['init', '--self', '--agent', 'claude', '--force'], repo);
+    expect(initialized.code, `${initialized.stdout}\n${initialized.stderr}`).toBe(0);
+    const origin = path.join(sandbox, 'origin.git');
+    execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+    execFileSync('git', ['remote', 'set-url', 'origin', origin], { cwd: repo });
+    execFileSync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: repo });
+    fs.writeFileSync(path.join(bin, 'claude'), fakeTool({ tool: 'claude', version: '2.1.0 (Claude Code)', homeVariable: 'CLAUDE_CONFIG_DIR', sessions: CLAUDE_SESSIONS }), { mode: 0o755 });
+    const runtimeDir = path.join(os.homedir(), '.teamai', 'runtimes', 'toy');
+    fs.mkdirSync(runtimeDir, { recursive: true });
+    fs.copyFileSync(TOY_RUNTIME, path.join(runtimeDir, 'runtime'));
+    fs.chmodSync(path.join(runtimeDir, 'runtime'), 0o755);
+    fs.mkdirSync(path.join(repo, '.teamai', 'workflows'), { recursive: true });
+    writeFlow('mixed', `  - id: build
+    workspace: new
+    command: node -e "process.stdout.write(JSON.stringify({built:true}))"
+    output:
+      built: boolean
+  - id: review
+    needs: [build]
+    tool: claude
+    prompt: Review the repository without changing it.
+    output:
+      ok: boolean`);
+    writeFlow('sandboxed', `  - id: review
+    tool: claude
+    prompt: Review the repository in a sandbox.
+    requires: { isolation: sandbox, strict: true }
+    output:
+      ok: boolean`);
+    writeFlow('pair', `  - id: left
+    workspace: new
+    prompt: Review the left half.
+    output:
+      ok: boolean
+  - id: right
+    needs: []
+    workspace: new
+    prompt: Review the right half.
+    output:
+      ok: boolean`);
+    writeFlow('oneprompt', `  - id: review
+    prompt: Review the repository without changing it.
+    output:
+      ok: boolean`);
+    fs.mkdirSync(path.join(repo, '.teamai', 'scorers'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.teamai', 'scorers', 'quality.md'), `---
+labels:
+  - { value: good, score: 1, description: Finds the real defects }
+  - { value: missed, score: 0, description: Misses a real defect }
+passingScore: 0.5
+samplingRate: 0
+---
+Judge the review.
+`);
+    const pulled = await runCLI(['pull'], repo);
+    expect(pulled.code, `${pulled.stdout}\n${pulled.stderr}`).toBe(0);
+    dataHome = await resolveProjectDataHome(repo);
+    memberConfigBefore = fs.existsSync(memberConfig()) ? fs.readFileSync(memberConfig(), 'utf8') : undefined;
+  });
+
+  beforeEach(() => {
+    state = fs.mkdtempSync(path.join(sandbox, 'toy-state-'));
+    fs.rmSync(launches, { force: true });
+    if (memberConfigBefore === undefined) fs.rmSync(memberConfig(), { force: true });
+    else fs.writeFileSync(memberConfig(), memberConfigBefore);
+  });
+
+  afterAll(() => {
+    if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
+  });
+
+  it('runs a command step and a prompt step the first runtime cannot take on local, in the same run', async () => {
+    // The toy offers no tool and only read-only places: the command needs a new worktree, the prompt a tool.
+    writeDefinition('toyfirst', [{ use: 'toy', options: { state, can: { tools: [], workspace: ['read-only'] } } }, { use: 'local' }]);
+
+    const ran = await runCLI(['workflow', 'start', 'mixed', '--driver', 'toyfirst'], repo, env());
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const runId = runOf(ran);
+    const stored = readRunState(runId);
+    expect(stored.steps.map((step) => [step.id, step.status])).toEqual([['build', 'succeeded'], ['review', 'succeeded']]);
+    // Neither ran on the toy: it opened no place, and no attempt has a step runtime's record.
+    expect(toyOpens()).toBe(0);
+    for (const step of stored.steps) expect(runtimeRecord(runId, attemptOf(step))).toBeUndefined();
+    // The prompt ran on the host, in the member's own Claude home.
+    const launched = fs.readFileSync(launches, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { home: string });
+    expect(launched).toEqual([expect.objectContaining({ home: path.join(os.homedir(), '.claude') })]);
+  });
+
+  it('fails a step whose requirements no single runtime meets, naming each runtime and what it lacks', async () => {
+    // The toy is a sandbox with no tool; local has the tool and no sandbox.
+    writeDefinition('splitd', [{ use: 'toy', options: { state, can: { isolation: 'sandbox', tools: [] } } }, { use: 'local' }]);
+
+    const ran = await runCLI(['workflow', 'start', 'sandboxed', '--driver', 'splitd'], repo, env());
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    const [review] = readRunState(runOf(ran)).steps;
+    expect(review).toMatchObject({ id: 'review', status: 'failed', failure: { code: 'requirement_unmet' } });
+    const message = review && 'failure' in review ? review.failure?.message : '';
+    expect(message).toContain('driver "splitd"');
+    expect(message).toContain('runtime toy lacks tools');
+    expect(message).toContain('runtime local lacks isolation');
+    expect(toyOpens()).toBe(0);
+  });
+
+  it('refuses at start a strict sandbox step that no runtime of the definition is, naming the driver and its runtimes', async () => {
+    writeDefinition('nosandbox', [{ use: 'toy', options: { state } }, { use: 'local' }]);
+    const runs = (): string[] => (fs.existsSync(path.join(dataHome, 'workflows', 'runs')) ? fs.readdirSync(path.join(dataHome, 'workflows', 'runs')) : []);
+    const before = runs();
+
+    const ran = await runCLI(['workflow', 'start', 'sandboxed', '--driver', 'nosandbox'], repo, env());
+
+    expect(envelope(ran)).toMatchObject({ error: { code: 'requirement_unmet' } });
+    const refused = envelope(ran);
+    const message = 'error' in refused ? refused.error.message : '';
+    expect(message).toContain('Step "review" requires strict isolation');
+    expect(message).toContain('driver "nosandbox"');
+    expect(message).toContain('toy, local');
+    // No run was created.
+    expect(runs()).toEqual(before);
+  });
+
+  it('refuses a bad option of any runtime before a step runs, naming the key', async () => {
+    writeDefinition('badparallel', [{ use: 'toy', options: { state, max_parallel: 'two' } }, { use: 'local' }]);
+    const engineKey = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'badparallel'], repo, env());
+    expect(envelope(engineKey)).toMatchObject({ error: { code: 'bad_option', message: expect.stringContaining('"max_parallel"') } });
+
+    writeDefinition('badsecond', [{ use: 'local' }, { use: 'toy', options: { state, imgae: 'x' } }]);
+    const runtimeKey = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'badsecond'], repo, env());
+    expect(envelope(runtimeKey)).toMatchObject({ error: { code: 'bad_option', message: expect.stringContaining('"imgae"') } });
+
+    writeDefinition('badlogin', [{ use: 'toy', options: { state, credentials: { codex: 'logn' } } }]);
+    const credential = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'badlogin'], repo, env());
+    expect(envelope(credential)).toMatchObject({ error: { code: 'bad_option', message: expect.stringContaining('"credentials.codex"') } });
+    // No step ran: the fake tool was never launched.
+    expect(fs.existsSync(launches)).toBe(false);
+  });
+
+  it('runs a team definition over the shipped one of its name, with the member\'s option over the team\'s', async () => {
+    const teamState = path.join(sandbox, 'team-state');
+    // The team replaces the shipped teamai-claude, which runs on local, with the toy.
+    writeDefinition('teamai-claude', [{ use: 'toy', options: { state: teamState } }]);
+    setMemberWorkflows({ drivers: { 'teamai-claude': { runtimes: { toy: { state } } } } });
+
+    const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'claude'], repo, env());
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const runId = runOf(ran);
+    const [review] = readRunState(runId).steps;
+    expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ runtime: 'toy', driver: 'teamai-claude' });
+    expect(toyOpens()).toBe(1);
+    expect(fs.existsSync(teamState)).toBe(false);
+    fs.rmSync(path.join(repo, '.teamai', 'drivers', 'teamai-claude.yaml'));
+  });
+
+  it('resolves the shipped teamai-t3, teamai-claude, teamai-codex and teamai-opencode, by either name', async () => {
+    const t3 = envelope(await runCLI(['workflow', 'start', 'oneprompt', '--driver', 't3'], repo, env()));
+    // The definition resolved: what is missing is the t3 runtime itself.
+    expect(t3).toMatchObject({ error: { code: 'runtime_not_found', message: expect.stringContaining('Driver "teamai-t3" uses runtime "t3"') } });
+
+    const claude = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'teamai-claude'], repo, env());
+    expect(envelope(claude), claude.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+
+    // Stand-ins for Codex and OpenCode, ahead of any real one, note each launch and fail the step.
+    for (const tool of ['codex', 'opencode']) {
+      fs.writeFileSync(path.join(bin, tool), `#!/bin/sh\nif [ "$1" = --version ]; then echo 1.0.0; exit 0; fi\necho ${tool} >> "$LAUNCHES"\nexit 3\n`, { mode: 0o755 });
+    }
+    for (const tool of ['codex', 'opencode']) {
+      fs.rmSync(launches, { force: true });
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', tool], repo, env());
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+      const [review] = readRunState(runOf(ran)).steps;
+      expect(review).toMatchObject({ status: 'failed', tool });
+      expect(fs.readFileSync(launches, 'utf8').trim()).toBe(tool);
+    }
+    for (const tool of ['codex', 'opencode']) fs.rmSync(path.join(bin, tool));
+  });
+
+  it('gives two parallel attempts of one run their own tool homes, and finds both transcripts once both are collected', async () => {
+    writeDefinition('toyonly', [{ use: 'toy', options: { state } }]);
+    setMemberWorkflows({ max_parallel: 2 });
+    const spans = path.join(sandbox, 'spans-homes.jsonl');
+
+    const ran = await runCLI(['workflow', 'start', 'pair', '--driver', 'toyonly'], repo, env({ FAKE_TOOL_SPANS: spans, FAKE_TOOL_HOLD_MS: '1500' }));
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const runId = runOf(ran);
+    const steps = readRunState(runId).steps;
+    const homes = steps.map((step) => path.join(attemptDir(runId, attemptOf(step)), 'tool-home', 'claude'));
+    const launched = fs.readFileSync(launches, 'utf8').trim().split('\n').map((line) => (JSON.parse(line) as { home: string }).home);
+    expect(launched.sort()).toEqual([...homes].sort());
+    // They overlapped: each started before the other ended.
+    const edges = fs.readFileSync(spans, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { edge: string });
+    expect(edges.map((edge) => edge.edge)).toEqual(['start', 'start', 'end', 'end']);
+    for (const step of steps) {
+      expect(step).toMatchObject({ status: 'succeeded', session: `sess-${attemptOf(step)}` });
+      const scored = await runCLI(['score', '--run', runId, '--step', step.id, '--scorer', 'quality'], repo, env());
+      expect(scored.stdout + scored.stderr).not.toContain('evidence_missing');
+    }
+  });
+
+  it('caps a runtime at its own max_parallel, and offers the next runtime the step it has no room for', async () => {
+    writeDefinition('toyone', [{ use: 'toy', options: { state, max_parallel: 1 } }, { use: 'local' }]);
+    setMemberWorkflows({ max_parallel: 2 });
+    const spans = path.join(sandbox, 'spans-cap.jsonl');
+
+    const ran = await runCLI(['workflow', 'start', 'pair', '--driver', 'toyone'], repo, env({ FAKE_TOOL_SPANS: spans, FAKE_TOOL_HOLD_MS: '1500' }));
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const runId = runOf(ran);
+    const ranOn = readRunState(runId).steps.map((step) => (runtimeRecord(runId, attemptOf(step))?.runtime as string | undefined) ?? 'local');
+    expect(ranOn.sort()).toEqual(['local', 'toy']);
+    const edges = fs.readFileSync(spans, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { edge: string });
+    expect(edges.map((edge) => edge.edge)).toEqual(['start', 'start', 'end', 'end']);
+  });
+});

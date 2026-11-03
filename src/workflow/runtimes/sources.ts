@@ -10,8 +10,10 @@ import { writeJsonAtomic } from '../../utils/fs.js';
 import type { DriverCan } from '../requirements.js';
 import type { WorkflowFailure } from '../types.js';
 import { personalDir, resolveDriver, teamItem, type ResolvedDriver } from './definitions.js';
+import { localStepRuntime } from './local.js';
 import { stdioStepRuntime } from './stdio.js';
-import type { StepRuntime } from './step-runtime.js';
+import type { RuntimeOptions, StepRuntime } from './step-runtime.js';
+import type { LaunchTool } from '../../tool-launch/tools.js';
 
 // ─── Where a step runtime comes from ─────────────────────
 //
@@ -151,53 +153,137 @@ export async function acceptRuntime(source: RuntimeSource, { mode, canAsk, ask =
   };
 }
 
-/**
- * A driver definition ready to drive: the local loop as it always ran, or the loop on a step runtime that took the
- * definition's options and said what it can. The caller disposes the runtime once the drive ends.
- */
-export type OpenedDriver =
-  | { kind: 'local'; driver: ResolvedDriver }
-  | { kind: 'runtime'; driver: ResolvedDriver; runtime: StepRuntime; can: DriverCan };
+/** The tools whose login a runtime option may bring from a home dedicated to teamai, `<tool>: login`. */
+export const LOGIN_TOOLS = ['codex'] as const satisfies readonly LaunchTool[];
+
+export type LoginTool = (typeof LOGIN_TOOLS)[number];
 
 /**
- * Opens the definition `--driver <name>` names in `config`: resolves it (`personal: false` skips the member's own),
- * finds its runtime, refuses a team runtime no one accepted here, then starts it and passes it the definition's options.
+ * What teamai itself reads of a runtime entry's options; every other key goes to the runtime at `init`, which
+ * validates it. `max_parallel` caps the runtime's own open attempts; `credentials` names the file logins it brings.
  */
-export async function openDriver(config: LocalConfig, name: string, { personal, mode, canAsk }: { personal: boolean; mode: RunMode; canAsk: boolean }): Promise<{ ok: true; opened: OpenedDriver } | { ok: false; failure: WorkflowFailure }> {
-  const resolved = await resolveDriver(config, name, { personal });
+const EngineOptionsSchema = z.object({
+  max_parallel: z.number().int().min(1, 'max_parallel is a whole number of attempts, 1 or more').optional(),
+  credentials: z.partialRecord(z.enum(LOGIN_TOOLS), z.literal('login')).optional(),
+});
 
-  if (!resolved.ok) return resolved;
-  const { driver } = resolved;
-  const [entry] = driver.definition.runtimes;
+export interface EngineOptions {
+  maxParallel?: number;
+  logins: LoginTool[];
+}
 
-  if (!entry) return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${driver.file} lists no runtime. Add one under runtimes and start again.` } };
-  const located = await locateRuntime(driver, entry.use);
+/** Splits `options` into what teamai reads and what the runtime gets, or names the first key teamai refuses. */
+export function engineOptions(options: RuntimeOptions): { ok: true; engine: EngineOptions; runtime: RuntimeOptions } | { ok: false; key: string; message: string } {
+  const parsed = EngineOptionsSchema.safeParse(options);
+
+  if (!parsed.success) {
+    const [issue] = parsed.error.issues;
+    const key = issue?.path.join('.') || 'credentials';
+    const message = key.startsWith('credentials') ? `credentials take ${LOGIN_TOOLS.map((known) => `${known}: login`).join(', ')}, the login teamai keeps for that tool` : issue?.message ?? 'not valid';
+
+    return { ok: false, key, message };
+  }
+
+  const { max_parallel: maxParallel, credentials, ...runtime } = { ...options, ...parsed.data };
+  const engine: EngineOptions = { logins: LOGIN_TOOLS.filter((tool) => credentials?.[tool] === 'login') };
+
+  if (maxParallel !== undefined) engine.maxParallel = maxParallel;
+
+  return { ok: true, engine, runtime };
+}
+
+/** One runtime of an opened definition: `local` in teamai's process, or an external one that took its options. */
+export type OpenedRuntime =
+  | { kind: 'local'; use: 'local'; engine: EngineOptions }
+  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; engine: EngineOptions };
+
+/** A driver definition ready to drive: each of its runtimes, in definition order. The caller disposes them once the drive ends. */
+export interface OpenedDriver {
+  driver: ResolvedDriver;
+  runtimes: [OpenedRuntime, ...OpenedRuntime[]];
+}
+
+/** Ends the connection to each external runtime of `opened`. */
+export async function disposeDriver(opened: OpenedDriver): Promise<void> {
+  await Promise.all(opened.runtimes.map((entry) => (entry.kind === 'external' ? entry.runtime.dispose() : undefined)));
+}
+
+/**
+ * The options the definition gives runtime `use`, with the member's `workflows.drivers.<driver>.runtimes.<use>` from
+ * user and workspace config over them, key by key.
+ */
+function entryOptions(driver: ResolvedDriver, use: string, given: RuntimeOptions | undefined): RuntimeOptions {
+  return { ...given, ...driver.config.workflows?.drivers?.[driver.name]?.runtimes?.[use] };
+}
+
+function badOption(driver: ResolvedDriver, use: string, key: string, message: string): WorkflowFailure {
+  return { code: 'bad_option', message: `Runtime "${use}" of driver definition ${driver.file} refused option "${key}": ${message}. Fix the option and start again.` };
+}
+
+/** Opens one runtime of `driver`: finds it, refuses a team runtime no one accepted here, starts it and passes its options. */
+async function openRuntime(driver: ResolvedDriver, use: string, options: RuntimeOptions, { mode, canAsk }: { mode: RunMode; canAsk: boolean }): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
+  const split = engineOptions(options);
+
+  if (!split.ok) return { ok: false, failure: badOption(driver, use, split.key, split.message) };
+  const located = await locateRuntime(driver, use);
 
   if (!located.ok) return located;
   const { source } = located;
 
   if (source.kind === 'builtin') {
-    const [key] = Object.keys(entry.options ?? {});
+    const checked = await localStepRuntime().init({ options: split.runtime, mode });
 
-    if (key !== undefined) return { ok: false, failure: { code: 'bad_option', message: `Driver definition ${driver.file} passes option "${key}" to runtime local, which takes none. Remove it and start again.` } };
+    if (!checked.ok) return { ok: false, failure: badOption(driver, use, checked.failure.key ?? '?', checked.failure.message) };
 
-    return { ok: true, opened: { kind: 'local', driver } };
+    if (split.engine.logins.length > 0) return { ok: false, failure: badOption(driver, use, 'credentials', 'local runs each tool in the member\'s own home, so it brings no login') };
+
+    return { ok: true, opened: { kind: 'local', use: 'local', engine: split.engine } };
   }
 
   const accepted = await acceptRuntime(source, { mode, canAsk });
 
   if (!accepted.ok) return accepted;
   const runtime = stdioStepRuntime({ name: source.name, command: source.executable });
-  const ready = await runtime.init({ options: entry.options ?? {}, mode });
+  const ready = await runtime.init({ options: split.runtime, mode });
 
-  if (ready.ok) return { ok: true, opened: { kind: 'runtime', driver, runtime, can: ready.can } };
+  if (ready.ok) return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, engine: split.engine } };
   await runtime.dispose();
   const { failure } = ready;
 
   return {
     ok: false,
     failure: failure.code === 'bad_option'
-      ? { code: 'bad_option', message: `Runtime "${source.name}" of driver definition ${driver.file} refused option "${failure.key ?? '?'}": ${failure.message}. Fix the option and start again.` }
+      ? badOption(driver, use, failure.key ?? '?', failure.message)
       : { code: 'runtime_failed', message: `Runtime "${source.name}" of driver "${driver.name}" did not start: ${failure.message}` },
   };
+}
+
+/**
+ * Opens the definition `--driver <name>` names in `config`: resolves it (`personal: false` skips the member's own),
+ * then opens each of its runtimes in order, so a bad option of any fails before a step runs.
+ */
+export async function openDriver(config: LocalConfig, name: string, { personal, mode, canAsk }: { personal: boolean; mode: RunMode; canAsk: boolean }): Promise<{ ok: true; opened: OpenedDriver } | { ok: false; failure: WorkflowFailure }> {
+  const resolved = await resolveDriver(config, name, { personal });
+
+  if (!resolved.ok) return resolved;
+  const { driver } = resolved;
+  const opened: OpenedRuntime[] = [];
+
+  for (const entry of driver.definition.runtimes) {
+    const one = await openRuntime(driver, entry.use, entryOptions(driver, entry.use, entry.options), { mode, canAsk });
+
+    if (!one.ok) {
+      await Promise.all(opened.map((done) => (done.kind === 'external' ? done.runtime.dispose() : undefined)));
+
+      return one;
+    }
+
+    opened.push(one.opened);
+  }
+
+  const [first, ...rest] = opened;
+
+  if (!first) return { ok: false, failure: { code: 'driver_invalid', message: `Driver definition ${driver.file} lists no runtime. Add one under runtimes and start again.` } };
+
+  return { ok: true, opened: { driver, runtimes: [first, ...rest] } };
 }

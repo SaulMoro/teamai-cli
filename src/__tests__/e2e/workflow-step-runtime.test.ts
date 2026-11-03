@@ -2,91 +2,12 @@ import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { resolveProjectDataHome } from '../../config.js';
-import type { StepState } from '../../workflow/step-state.js';
-import type { RunState, WorkflowEnvelope } from '../../workflow/types.js';
+import type { RunState } from '../../workflow/types.js';
 import { hasPython, TYPED_TERMINAL } from '../helpers/in-terminal.js';
 import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
-
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const CLI = path.join(ROOT, 'dist', 'index.js');
-
-interface Ran {
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  stdout: string;
-  stderr: string;
-}
-
-function runCLI(args: string[], cwd: string, extraEnv: NodeJS.ProcessEnv = {}): Promise<Ran> {
-  return new Promise((resolve) => {
-    const child = spawn(process.execPath, [CLI, ...args], { cwd, env: { ...process.env, ...extraEnv, FORCE_COLOR: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
-    child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.on('close', (code, signal) => resolve({ code, signal, stdout, stderr }));
-  });
-}
-
-function attemptOf(step: StepState | undefined): string {
-  const attempt = step && 'attempt' in step ? step.attempt : undefined;
-  if (typeof attempt !== 'string') throw new Error(`step ${step?.id ?? '?'} has no attempt`);
-  return attempt;
-}
-
-function envelope(ran: Ran): WorkflowEnvelope {
-  const line = ran.stdout.trim().split('\n').findLast((item) => item.startsWith('{'));
-  if (!line) throw new Error(`no JSON envelope in stdout:\n${ran.stdout}\n${ran.stderr}`);
-  return JSON.parse(line) as WorkflowEnvelope;
-}
-
-/** How a tool lays out a session in its store, as source the fake runs: the project directory of `process.cwd()`, and one record. */
-interface SessionLayout { readonly project: string; readonly record: string }
-
-const CLAUDE_SESSIONS: SessionLayout = {
-  project: "process.cwd().replace(/[^A-Za-z0-9]/g, '-')",
-  record: "{ type: 'user', sessionId: session, cwd: process.cwd(), timestamp: new Date().toISOString(), message: { role: 'user', content: 'step' } }",
-};
-// CodeBuddy 2.173.0's encodeCwd for a short POSIX path, and its message record.
-const CODEBUDDY_SESSIONS: SessionLayout = {
-  project: "process.cwd().replace(/[/:]/g, '-').replace(/^-+|-+$/g, '').replace(/-+/g, '-')",
-  record: "{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'step' }], timestamp: Date.now() }",
-};
-
-// A fake Claude Code or CodeBuddy: it writes its result, records how it was launched, keeps its session in the home its
-// variable names, laid out as the tool does, and on --resume continues that session.
-const fakeTool = ({ tool, version, homeVariable, sessions }: { tool: string; version: string; homeVariable: string; sessions: SessionLayout }): string => `#!/usr/bin/env node
-const fs = require('node:fs');
-const path = require('node:path');
-const args = process.argv.slice(2);
-if (args.includes('--version')) {
-  process.stdout.write('${version}\\n');
-  process.exit(0);
-}
-if (process.env.TEAMAI_WORKFLOW_RESULT === undefined) {
-  // A judge: it reads the prompt on stdin and answers with a label.
-  process.stdin.resume();
-  process.stdin.on('end', () => process.stdout.write(JSON.stringify({ type: 'result', structured_output: { label: 'good', reasoning: 'read it' } }) + '\\n'));
-  return;
-}
-const at = args.indexOf('--resume');
-const resumed = at === -1 ? undefined : args[at + 1];
-const session = resumed ?? 'sess-' + path.basename(process.env.TEAMAI_WORKFLOW_ATTEMPT);
-const home = process.env.${homeVariable};
-const project = path.join(home, 'projects', ${sessions.project});
-const file = path.join(project, session + '.jsonl');
-const before = fs.existsSync(file);
-fs.mkdirSync(project, { recursive: true });
-fs.appendFileSync(file, JSON.stringify(${sessions.record}) + '\\n');
-fs.appendFileSync(process.env.LAUNCHES, JSON.stringify({ home, resumed, sessionFoundBefore: before, secret: process.env.STEP_RUNTIME_SECRET ?? null }) + '\\n');
-fs.mkdirSync(path.dirname(process.env.TEAMAI_WORKFLOW_RESULT), { recursive: true });
-fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ output: { ok: true } }));
-process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', model: 'fake-${tool}', session_id: session }) + '\\n');
-process.stdout.write(JSON.stringify({ type: 'result', session_id: session, usage: { input_tokens: 4, output_tokens: 2 } }) + '\\n');
-`;
+import { attemptOf, CLAUDE_SESSIONS, CLI, CODEBUDDY_SESSIONS, envelope, fakeTool, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
 
 describe('workflow steps on a step runtime a driver definition chooses', () => {
   let sandbox: string;

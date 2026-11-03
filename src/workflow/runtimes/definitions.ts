@@ -39,8 +39,8 @@ export const DriverDefinitionSchema = z.object({
   description: z.string().optional(),
   /** The tool a prompt step runs on when neither it nor `--tools` names one. */
   tool: z.string().min(1).optional(),
-  // One runtime per definition until runtimes are offered in turn.
-  runtimes: z.array(RuntimeEntrySchema).length(1, 'A driver definition lists exactly one runtime in this version of teamai'),
+  /** The runtimes the run's steps go to, offered in this order: a step goes to the first that can take it. */
+  runtimes: z.array(RuntimeEntrySchema).min(1, 'A driver definition lists at least one runtime'),
 }).strict();
 
 export type DriverDefinition = z.infer<typeof DriverDefinitionSchema>;

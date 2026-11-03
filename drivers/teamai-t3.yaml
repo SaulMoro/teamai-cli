@@ -1,0 +1,9 @@
+schemaVersion: v1alpha1
+name: teamai-t3
+description: Run each prompt step as a child of the T3 Code thread that started the run, in a worktree teamai prepares, and every other step on this machine.
+runtimes:
+  - use: t3
+    options:
+      environment: local
+      max_parallel: 4
+  - use: local
