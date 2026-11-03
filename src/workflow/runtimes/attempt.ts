@@ -9,7 +9,7 @@ import type { LocalConfig } from '../../types.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import { attemptDir, AttemptIdSchema, attemptsDir, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
-import { newOpId, OpIdSchema, type ExecEnd, type ExecEvents, type PlaceView, type StepRuntime } from './step-runtime.js';
+import { newOpId, OpIdSchema, RuntimeDisplaySchema, type ExecEnd, type ExecEvents, type PlaceView, type RuntimeDisplay, type StepRuntime } from './step-runtime.js';
 
 // ─── An attempt on a step runtime ────────────────────────
 //
@@ -42,6 +42,8 @@ export const AttemptRuntimeRecordSchema = z.object({
   exec: z.object({ op: OpIdSchema }).optional(),
   /** The attempt's tool home, for a prompt: the tool and its directory. */
   toolHome: z.object({ tool: z.string(), dir: z.string() }).optional(),
+  /** What the runtime last showed of the place, at `ready` or at a reattach, for the run's details. */
+  display: RuntimeDisplaySchema.optional(),
 });
 
 export type AttemptRuntimeRecord = z.infer<typeof AttemptRuntimeRecordSchema>;
@@ -151,6 +153,13 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
 
   const current = async (): Promise<AttemptRuntimeRecord | undefined> => (record ??= await readAttemptRuntime(config, run, attempt));
 
+  /** Keeps what the runtime showed now; one that showed nothing keeps what it showed before. */
+  const shown = async (display: RuntimeDisplay | undefined): Promise<void> => {
+    const now = await current();
+
+    if (now && display) await save({ ...now, display });
+  };
+
   /** Stops an exec a teamai before this one left running, and waits until the runtime no longer reports it running. */
   const stopLeftRunning = async (handle: string, op: z.infer<typeof OpIdSchema>): Promise<void> => {
     await runtime.cancel(op);
@@ -181,6 +190,8 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       if (before?.exec) opening.exec = before.exec;
 
       if (toolHome) opening.toolHome = toolHome;
+
+      if (before?.display) opening.display = before.display;
       await save(opening);
 
       const opened = await runtime.open({ op, run, attempt, view, credentials: {} }, async (handle) => {
@@ -189,7 +200,10 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
         if (now) await save({ ...now, open: { op, handle }, phase: now.phase === 'opening' ? 'ready' : now.phase });
       });
 
-      return opened.kind === 'ready' ? { ok: true, handle: opened.handle } : { ok: false, failure: runtimeFailure(runtime.name, `could not open attempt ${attempt}: ${opened.failure.message}`) };
+      if (opened.kind !== 'ready') return { ok: false, failure: runtimeFailure(runtime.name, `could not open attempt ${attempt}: ${opened.failure.message}`) };
+      await shown(opened.display);
+
+      return { ok: true, handle: opened.handle };
     },
 
     async exec(request, events) {
@@ -205,6 +219,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
         if (found.kind === 'failed') return { kind: 'failed', failure: found.failure };
 
         if (found.kind === 'gone') return { kind: 'failed', failure: { code: 'runtime_gone', message: `The runtime no longer knows the place of attempt ${attempt}.` } };
+        await shown(found.display);
         const state = found.ops.find((retained) => retained.op === sent.op);
 
         // The runtime accepted it before the restart.

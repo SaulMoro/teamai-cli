@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import os from 'node:os';
 import { z } from 'zod';
 import type { RunMode } from '../../launch-context.js';
 import type { JsonValue } from '../../types.js';
@@ -64,7 +65,29 @@ export interface ExecRequest {
   cwd: string;
 }
 
-export type Opened = { kind: 'ready'; handle: string } | { kind: 'failed'; failure: RuntimeFailure };
+/** A scheme a display link may use: the web, or an app's own (`t3:`, `vscode:`), never one that runs or reads in the page. */
+const DISPLAY_LINK = /^(?!(?:javascript|data|file|vbscript|blob):)[a-z][a-z0-9+.-]*:\/\/\S+$/i;
+
+function inHome(text: string): boolean {
+  const home = os.homedir();
+
+  return home !== '' && home !== '/' && text.includes(home);
+}
+
+/**
+ * What a runtime shows of an attempt's place in the run's details: a label, a link to open it, and up to 8 facts. A
+ * runtime never puts a secret or a path in the member's home in it; one that names such a path is not shown.
+ */
+export const RuntimeDisplaySchema = z.object({
+  label: z.string().min(1).max(80),
+  url: z.string().max(2048).regex(DISPLAY_LINK, 'A display url is http(s) or an app scheme').optional(),
+  fields: z.record(z.string().min(1).max(40), z.string().max(200))
+    .refine((fields) => Object.keys(fields).length <= 8, 'A display holds at most 8 fields').optional(),
+}).strict().refine((display) => !inHome(JSON.stringify(display)), 'A display names no path in the member\'s home');
+
+export type RuntimeDisplay = z.infer<typeof RuntimeDisplaySchema>;
+
+export type Opened = { kind: 'ready'; handle: string; display?: RuntimeDisplay } | { kind: 'failed'; failure: RuntimeFailure };
 
 /** How an exec ended. `exited` carries the complete stdout, so a reattach rebuilds what a live run read. */
 export type ExecEnd = { kind: 'exited'; code: number; stdout: string } | { kind: 'cancelled' } | { kind: 'failed'; failure: RuntimeFailure };
@@ -80,7 +103,7 @@ export const OpStateSchema = z.discriminatedUnion('state', [
 export type OpState = z.infer<typeof OpStateSchema>;
 
 /** A reattach: the handle is gone, alive with what the runtime retains, or the runtime could not be asked. */
-export type Reattached = { kind: 'gone' } | { kind: 'alive'; ops: OpState[] } | { kind: 'failed'; failure: RuntimeFailure };
+export type Reattached = { kind: 'gone' } | { kind: 'alive'; ops: OpState[]; display?: RuntimeDisplay } | { kind: 'failed'; failure: RuntimeFailure };
 
 export interface ExecEvents {
   onAccepted?: () => void;
