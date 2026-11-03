@@ -5,7 +5,7 @@ import { getsRulesFromExtension } from './resources/rule-format.js';
 import { pathExists, readFileSafe, readJsonObject, remove, writeFile } from './utils/fs.js';
 import { getUserHome } from './utils/home.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
-import { type BlocksHeader, type ChannelProbe, type RunTime } from './tools.js';
+import { type BlocksHeader, type ChannelProbe, type RunTime } from '@teamai/tool-core/definition';
 import { channelsOf, TOOL_ORDER } from './tool-registry.js';
 import { hookAdapterDir, installOf, locate, ownOf, writable, type FilePlace, type Gate, type Install } from './locate.js';
 import {

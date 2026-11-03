@@ -1,5 +1,6 @@
 import { KNOWN_AGENTS } from '../src/known-agents.js';
-import { type CodebuddyConfigFile, type Evidence, type FirstExistingRead, type HomeMove, type HomeRead, type ProjectRead, type RunTime, type Support, type ToolDescriptor, type ToolFeatures, type ToolId } from '../src/tools.js';
+import { type ToolId, type ShippedDescriptor } from '../src/tools.js';
+import { type CodebuddyConfigFile, type Evidence, type FirstExistingRead, type HomeMove, type HomeRead, type ProjectRead, type RunTime, type Support, type ToolFeatures } from '@teamai/tool-core/definition';
 import { isToolId, descriptorOf } from '../src/tool-registry.js';
 import { DEFAULT_TOOL_PATHS } from '../src/types.js';
 
@@ -137,7 +138,7 @@ function homeMove(move: HomeMove, dir: string): string {
   }
 }
 
-function home(descriptor: ToolDescriptor): string {
+function home(descriptor: ShippedDescriptor): string {
   const { dir, moves } = descriptor.home;
 
   return [`\`~/${moves?.root ?? dir}\``, ...(moves?.by.map((move) => homeMove(move, dir)) ?? [])].join(' ');
@@ -155,7 +156,7 @@ function table(header: readonly string[], rows: readonly (readonly string[])[]):
   return [row(header), row(header.map(() => '---')), ...rows.map(row)];
 }
 
-function agentsRead(d: ToolDescriptor, scope: 'user' | 'project'): string {
+function agentsRead(d: ShippedDescriptor, scope: 'user' | 'project'): string {
   const value = d.agents[scope];
 
   if (value === 'none') return '—';
@@ -166,7 +167,7 @@ function agentsRead(d: ToolDescriptor, scope: 'user' | 'project'): string {
   return d === descriptorOf('joycode') ? `${result}<br>indexed by \`agent.json\`` : result;
 }
 
-function userRow(tool: ToolId, d: ToolDescriptor): string[] {
+function userRow(tool: ToolId, d: ShippedDescriptor): string[] {
   const { hooks } = d;
 
   return [
@@ -182,7 +183,7 @@ function userRow(tool: ToolId, d: ToolDescriptor): string[] {
   ];
 }
 
-function projectRow(tool: ToolId, d: ToolDescriptor): string[] {
+function projectRow(tool: ToolId, d: ShippedDescriptor): string[] {
   const { hooks } = d;
 
   return [
@@ -208,7 +209,7 @@ function featureCell(support: Support, notes: string[]): string {
 export function renderToolSupportPage(lang: ToolSupportLang): string {
   const text = TEXT[lang];
   const c = text.columns;
-  const tools = Object.keys(DEFAULT_TOOL_PATHS).filter(isToolId).map((tool): [ToolId, ToolDescriptor] => [tool, descriptorOf(tool)]);
+  const tools = Object.keys(DEFAULT_TOOL_PATHS).filter(isToolId).map((tool): [ToolId, ShippedDescriptor] => [tool, descriptorOf(tool)]);
   const notes: string[] = [];
   const featureRows = tools.map(([tool, d]) => [name(tool), ...FEATURE_KEYS.map((key) => featureCell(d.features[key], notes))]);
 
