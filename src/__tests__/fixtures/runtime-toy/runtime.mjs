@@ -194,7 +194,10 @@ function reattach(request) {
 
     if (record.outcome?.state === 'cancelled') return { op, state: 'cancelled' };
 
-    return running.has(op) || groupAlive(record.pgid) ? { op, state: 'running' } : { op, state: 'failed', failure: { code: 'runtime_lost', message: `The toy lost exec ${op}.` } };
+    if (running.has(op) || groupAlive(record.pgid)) return { op, state: 'running' };
+
+    // A cancelled exec whose processes are gone has ended cancelled, though its outcome may not be written yet.
+    return fs.existsSync(file('cancel', op)) ? { op, state: 'cancelled' } : { op, state: 'failed', failure: { code: 'runtime_lost', message: `The toy lost exec ${op}.` } };
   });
 
   send({ event: 'alive', handle: request.handle, ops });
