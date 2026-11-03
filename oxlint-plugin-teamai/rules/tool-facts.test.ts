@@ -74,6 +74,36 @@ const SHELLS = { workbuddy: 'bundled', codebuddy: 'bundled' } as const;
     files: { ...files, 'packages/tool-claude/package.json': JSON.stringify({ name: '@teamai/tool-claude', private: true }) },
   });
 
+  const family = { ...files, 'packages/tool-claude/package.json': JSON.stringify({ name: '@teamai/tool-claude', private: true }) };
+
+  rule.valid('allows the descriptors a family declares', `
+export const tools = { claude: { launch: 'claude' }, tclaude: { launch: 'claude' } } as const satisfies Record<string, ToolDescriptor>;
+`, { filename: 'packages/tool-claude/src/definitions.ts', files: family });
+
+  rule.valid('allows the session platforms a family declares', `
+export const platforms = { tclaude: TCLAUDE, 'claude-internal': INTERNAL } as const satisfies Record<string, SessionPlatformDefinition>;
+`, { filename: 'packages/tool-claude/src/sessions.ts', files: family });
+
+  rule.valid('allows the launch profiles a family declares', `
+export const launch = { pi: PI, omp: OMP } as const satisfies Record<string, LaunchAdapter>;
+`, { filename: 'packages/tool-pi/src/launch.ts', files: { ...files, 'packages/tool-pi/package.json': JSON.stringify({ name: '@teamai/tool-pi', private: true }) } });
+
+  rule.valid('allows the families tool-definitions lists', `
+export const BUILT_IN_TOOLS = { claude, codex } as const satisfies Readonly<Record<string, ToolFamily>>;
+`, { filename: 'packages/tool-definitions/src/registry.ts', files: { ...files, 'packages/tool-definitions/package.json': JSON.stringify({ name: '@teamai/tool-definitions', private: true }) } });
+
+  rule.invalid('reports descriptors declared outside a family package', `
+export const tools = { claude: { launch: 'claude' }, tclaude: { launch: 'claude' } } as const satisfies Record<string, ToolDescriptor>;
+`, undefined, { files });
+
+  rule.invalid('reports another table keyed by tools in a family package', `
+export const COMMANDS = { claude: 'claude', tclaude: 'tclaude' } as const satisfies Record<string, string>;
+`, undefined, { filename: 'packages/tool-claude/src/commands.ts', files: family });
+
+  rule.invalid('reports a family list outside tool-definitions', `
+export const FAMILIES = { claude, codex } as const satisfies Readonly<Record<string, ToolFamily>>;
+`, undefined, { files });
+
   rule.invalid('fails when the generated tool ids are missing, instead of checking nothing', `export const ok = 1;`, (output) => {
     expect(output).toContain('oxlint-plugin-teamai/tool-ids.generated.json');
     expect(output).toContain('node scripts/check-docs.mjs --write');

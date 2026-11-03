@@ -412,3 +412,12 @@ export type ToolDescriptor<TIds extends DescriptorIds = DescriptorIds> = {
   /** Data only: nothing reads it but the support page (`scripts/tool-support.ts`). */
   readonly features: ToolFeatures;
 };
+
+/** A skills channel whose reads are unknown in both scopes. */
+export const UNKNOWN_READS = { user: 'unknown', project: 'unknown' } as const;
+
+/** A channel the tool has in neither scope. */
+export const NONE = { user: 'none', project: 'none' } as const;
+
+/** A channel whose existence is unknown in both scopes. */
+export const UNKNOWN = { user: 'unknown', project: 'unknown' } as const;

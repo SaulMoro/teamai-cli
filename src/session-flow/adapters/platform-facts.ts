@@ -1,76 +1,12 @@
+import type { SessionPlatformFacts } from '@teamai/tool-core/sessions/platform';
+import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { ToolId } from '../../tools.js';
-
-/**
- * Where a platform keeps its sessions on a machine, resolved by `sessionStoreDir` (locate.ts).
- * - `tool-home`: `<dir>` in `home`'s root: the member's recorded `toolRoots[root]` (`root`
- *   defaults to `home`), else that tool's home, which a recorded or env move relocates. `home` is
- *   the tool whose `sessions` lists the platform (session-platform-facts.test.ts).
- * - `xdg-data`: `$XDG_DATA_HOME/<child>`, else `~/.local/share/<child>`.
- * - `ide-history`: the CodeBuddy IDE's own data directories (`listIdeHistoryRoots`).
- */
-export type SessionStore =
-  | { readonly in: 'tool-home'; readonly home: ToolId; readonly dir: string; readonly root?: string }
-  | { readonly in: 'xdg-data'; readonly child: string }
-  | { readonly in: 'ide-history' };
-
-/**
- * Session storage and migration facts, declared once beside the adapter registry.
- * `tool`: only on a platform no `TOOLS` entry lists in its `sessions`, the tool id its sessions
- * are credited to (session-platform-facts.test.ts).
- */
-export interface SessionPlatformFacts {
-  tool?: string;
-  store: SessionStore;
-  /** The command that continues a session of this platform in its CLI. */
-  resume: (sessionId: string) => string;
-  thinking: boolean;
-  images: boolean;
-  nativeTools: ReadonlySet<string>;
-  legacyIdWithoutWorkspace: boolean;
-  sqliteRegistrationOnWindows: boolean;
-  idFormat: 'uuid' | 'opencode' | 'hermes';
-  /** The tool resumes only from a store TeamAI cannot write, so its sessions are read and never written. */
-  readOnly?: true;
-}
 
 // oxlint-disable-next-line teamai/tool-facts -- keyed by session platform, which this table defines; a tool lists its own in TOOLS.sessions
 export const SESSION_PLATFORM_FACTS = {
-  'claude-code': {
-    store: { in: 'tool-home', home: 'claude', dir: 'projects' },
-    resume: (id) => `claude --resume ${id}`,
-    thinking: true, images: true,
-    nativeTools: new Set([
-      'read_file', 'write_file', 'edit_file', 'multi_edit', 'bash', 'glob', 'grep',
-      'web_search', 'web_fetch', 'task', 'todo_write', 'notebook_edit', 'lsp',
-    ]),
-    legacyIdWithoutWorkspace: true,
-    sqliteRegistrationOnWindows: false,
-    idFormat: 'uuid',
-  },
-  'claude-internal': {
-    store: { in: 'tool-home', home: 'claude-internal', dir: 'projects' },
-    resume: (id) => `claude-internal --resume ${id}`,
-    thinking: true, images: true,
-    nativeTools: new Set([
-      'read_file', 'write_file', 'edit_file', 'multi_edit', 'bash', 'glob', 'grep',
-      'web_search', 'web_fetch', 'task', 'todo_write', 'notebook_edit', 'lsp',
-    ]),
-    legacyIdWithoutWorkspace: true,
-    sqliteRegistrationOnWindows: false,
-    idFormat: 'uuid',
-  },
-  'tclaude': {
-    store: { in: 'tool-home', home: 'tclaude', dir: 'projects' },
-    resume: (id) => `tclaude --resume ${id}`,
-    thinking: true, images: true,
-    nativeTools: new Set([
-      'read_file', 'write_file', 'edit_file', 'multi_edit', 'bash', 'glob', 'grep',
-      'web_search', 'web_fetch', 'task', 'todo_write', 'notebook_edit', 'lsp',
-    ]),
-    legacyIdWithoutWorkspace: true,
-    sqliteRegistrationOnWindows: false,
-    idFormat: 'uuid',
-  },
+  'claude-code': BUILT_IN_TOOLS.claude.platforms['claude-code'],
+  'claude-internal': BUILT_IN_TOOLS.claude.platforms['claude-internal'],
+  tclaude: BUILT_IN_TOOLS.claude.platforms.tclaude,
   'codex': {
     store: { in: 'tool-home', home: 'codex', dir: 'sessions' },
     resume: (id) => `codex resume ${id}`,
@@ -255,7 +191,7 @@ export const SESSION_PLATFORM_FACTS = {
     idFormat: 'hermes',
     readOnly: true,
   },
-} satisfies Record<string, SessionPlatformFacts>;
+} satisfies Record<string, SessionPlatformFacts<ToolId>>;
 
 /** A platform teamai has a session adapter for. */
 export type SessionPlatform = keyof typeof SESSION_PLATFORM_FACTS;

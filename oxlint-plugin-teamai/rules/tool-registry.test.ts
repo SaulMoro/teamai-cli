@@ -34,6 +34,14 @@ export const known = isToolId('claude');`, (output) => {
   expect(output).toContain('remove it from NOT_YET_MOVED');
 }, { filename: 'src/session-flow/agent-session.ts' });
 
+rule.invalid('rejects reading the families directly', `import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
+export const claude = BUILT_IN_TOOLS.claude.tools.claude;`, (output) => {
+  expect(output).toContain('BUILT_IN_TOOLS from @teamai/tool-definitions');
+});
+
+rule.valid('allows a table built from the families to read them', `import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
+export const TOOLS = { claude: BUILT_IN_TOOLS.claude.tools.claude };`, { filename: 'src/tools.ts' });
+
 rule.valid('allows the registry', `import { TOOLS } from './tools.js';
 export const ids = Object.keys(TOOLS);`, { filename: 'src/tool-registry.ts' });
 
