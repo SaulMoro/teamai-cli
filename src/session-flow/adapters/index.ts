@@ -7,7 +7,6 @@
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { LocalConfig } from '../../types.js';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
-import { CursorAdapter } from './cursor.js';
 import type { SessionPlatform } from './platform-facts.js';
 import { sessionStoreDir } from '../../locate.js';
 
@@ -31,7 +30,7 @@ export const ADAPTER_REGISTRY: AdapterRegistry = {
   codebuddy: (toolRoots) => BUILT_IN_TOOLS.codebuddy.platforms.codebuddy.adapter(sessionStoreDir('codebuddy', toolRoots)),
   'codebuddy-ide': () => BUILT_IN_TOOLS.codebuddy.platforms['codebuddy-ide'].adapter(),
   workbuddy: (toolRoots) => BUILT_IN_TOOLS.codebuddy.platforms.workbuddy.adapter(sessionStoreDir('workbuddy', toolRoots)),
-  cursor: (toolRoots) => new CursorAdapter('cursor', sessionStoreDir('cursor', toolRoots)),
+  cursor: (toolRoots) => BUILT_IN_TOOLS.cursor.platforms.cursor.adapter(sessionStoreDir('cursor', toolRoots)),
   opencode: (toolRoots) => BUILT_IN_TOOLS.opencode.platforms.opencode.adapter(sessionStoreDir('opencode', toolRoots)),
   agy: (toolRoots) => BUILT_IN_TOOLS.agy.platforms.agy.adapter(sessionStoreDir('agy', toolRoots)),
   pi: (toolRoots) => BUILT_IN_TOOLS.pi.platforms.pi.adapter(sessionStoreDir('pi', toolRoots)),
@@ -81,6 +80,4 @@ export { AgentAdapter, type SessionMeta } from '@teamai/tool-core/sessions/base'
 export { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 
 export { CodexAdapter } from '@teamai/tool-core/formats/codex';
-
-export { CursorAdapter } from './cursor.js';
 

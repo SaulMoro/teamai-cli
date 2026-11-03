@@ -9,20 +9,13 @@
 
 import { log } from './utils/logger.js';
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
-import { execVersion, readPlistVersion, type VersionDetector } from '@teamai/tool-core/detect';
+import { readPlistVersion, type VersionDetector } from '@teamai/tool-core/detect';
 import { type ToolId } from './tools.js';
 import { isToolId } from './tool-registry.js';
 
 const VERSION_CACHE = new Map<string, string>();
 
 // ─── Per-agent detection ────────────────────────────────
-
-async function detectCursorVersion(): Promise<string> {
-  // cursor --version outputs multiple lines; version is on the first line
-  const raw = await execVersion('cursor');
-
-  return raw.split('\n')[0]?.trim() ?? '';
-}
 
 // ─── Registry ───────────────────────────────────────────
 
@@ -34,7 +27,7 @@ const DETECTORS: Record<ToolId, VersionDetector | null> = {
   'claude-internal': null,
   tclaude: null,
   tcodex: null,
-  cursor: detectCursorVersion,
+  cursor: BUILT_IN_TOOLS.cursor.detect.cursor,
   copilot: null,
   joycode: null,
   qoder: null,

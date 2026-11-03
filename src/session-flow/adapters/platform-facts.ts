@@ -16,19 +16,7 @@ export const SESSION_PLATFORM_FACTS = {
   codebuddy: BUILT_IN_TOOLS.codebuddy.platforms.codebuddy,
   'codebuddy-ide': BUILT_IN_TOOLS.codebuddy.platforms['codebuddy-ide'],
   workbuddy: BUILT_IN_TOOLS.codebuddy.platforms.workbuddy,
-  'cursor': {
-    // The Cursor CLI's transcripts move with CURSOR_DATA_DIR, recorded under its own root (RELOCATABLE_TOOLS).
-    store: { in: 'tool-home', home: 'cursor', dir: 'projects', root: 'cursor-data' },
-    resume: (id) => `cursor --resume ${id}`,
-    thinking: false, images: false,
-    nativeTools: new Set([
-      'read_file', 'write_file', 'edit_file', 'bash', 'grep', 'glob', 'delete_file',
-      'web_fetch', 'web_search', 'semantic_search',
-    ]),
-    legacyIdWithoutWorkspace: false,
-    sqliteRegistrationOnWindows: true,
-    idFormat: 'uuid',
-  },
+  cursor: BUILT_IN_TOOLS.cursor.platforms.cursor,
   opencode: BUILT_IN_TOOLS.opencode.platforms.opencode,
   agy: BUILT_IN_TOOLS.agy.platforms.agy,
   pi: BUILT_IN_TOOLS.pi.platforms.pi,
