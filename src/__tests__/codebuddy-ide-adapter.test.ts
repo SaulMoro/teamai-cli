@@ -23,7 +23,7 @@ import {
   getUserDataBase,
   listIdeHistoryRoots,
   readIdeConversation,
-} from '../session-flow/ide-history.js';
+} from '@teamai/tool-core/formats/ide-history';
 import { CodeBuddyIdeAdapter } from '../session-flow/adapters/codebuddy-ide.js';
 
 /**

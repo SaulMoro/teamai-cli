@@ -3104,7 +3104,7 @@ export function detectToolRoot(tool: string, env: NodeJS.ProcessEnv = process.en
  * `CURSOR_CONFIG_DIR`, else `$XDG_CONFIG_HOME/cursor`, else `~/.cursor`. Only
  * the variable can be recorded in `toolRoots` — `XDG_CONFIG_HOME` names a parent
  * directory, and `~/.config` itself is refused as a root — so the fallback is
- * read here, where the write happens, exactly as `session-flow/ide-history.ts`
+ * read here, where the write happens, exactly as `@teamai/tool-core/formats/ide-history`
  * reads it for the Cursor IDE.
  */
 export function cursorConfigDir(toolRoots?: Record<string, string>): string {
