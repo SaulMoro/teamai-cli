@@ -2,10 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
 
-import { type JsonValue } from '../../types.js';
-import { addTokenUsage, emptyTokenUsage, type TokenUsage } from '@teamai/tool-core/tokens';
-import type { TokenReading, TokenRequest, TokenSource } from '@teamai/tool-core/tokens';
-import { forEachJsonLine } from '@teamai/tool-core/tokens';
+import type { JsonValue } from '../json.js';
+import { addTokenUsage, emptyTokenUsage, forEachJsonLine, type TokenReading, type TokenRequest, type TokenSource, type TokenUsage } from '../tokens.js';
 
 /** Claude Code writes this model for local placeholders that never reached the API. */
 const SYNTHETIC_MODEL = '<synthetic>';

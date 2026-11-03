@@ -22,10 +22,10 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
-import { AgentAdapter, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '@teamai/tool-core/sessions/base';
-import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ThinkingBlock, ToolArguments } from '@teamai/tool-core/sessions/ir';
-import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
-import { imagePlaceholderText } from '@teamai/tool-core/sessions/ir';
+import { AgentAdapter, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '../sessions/base.js';
+import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ThinkingBlock, ToolArguments } from '../sessions/ir.js';
+import { assertSafeSessionFileId, deriveTargetSessionId } from '../sessions/ids.js';
+import { imagePlaceholderText } from '../sessions/ir.js';
 import {
   encodeCwdClaude,
   bestEffortDecodeCwdClaude,
@@ -40,16 +40,13 @@ import {
   mayReadLocalImageFile,
   coercedText,
   OptionalString,
-} from '@teamai/tool-core/sessions/fs';
-import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '../../types.js';
-import { sessionStoreDir } from '../../locate.js';
+} from '../sessions/fs.js';
+import { JsonValueSchema, type JsonValue, JsonObjectSchema, parseJson, type JsonlRecord } from '../json.js';
 import {
   cleanTitleText,
   fallbackTitle,
   titleFromCandidates,
-} from '@teamai/tool-core/sessions/title';
-import type { JsonlRecord } from '@teamai/tool-core/json';
-import { parseJson } from '../../utils/json.js';
+} from '../sessions/title.js';
 
 // ---------------------------------------------------------------------------
 // Tool-name normalization map
@@ -460,13 +457,13 @@ export class ClaudeCodeAdapter extends AgentAdapter {
   private readonly storageRoot: string;
 
   /**
-   * @param platform Platform id (default 'claude-code'; variants may pass 'claude-internal' / 'tclaude')
-   * @param storageRoot Storage root (default ~/.claude/projects; variants pass ~/.claude-internal/projects and similar)
+   * @param platform The session platform this store is: 'claude-code', a variant such as 'tclaude', or 'qoder'
+   * @param storageRoot The platform's session store (`sessionStoreDir`), such as ~/.claude/projects
    */
-  constructor(platform = 'claude-code', storageRoot?: string) {
+  constructor(platform: string, storageRoot: string) {
     super();
     this.platform = platform;
-    this.storageRoot = storageRoot ?? sessionStoreDir('claude-code', undefined);
+    this.storageRoot = storageRoot;
   }
 
   isReady(): boolean {

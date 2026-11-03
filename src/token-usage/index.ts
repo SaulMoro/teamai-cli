@@ -6,7 +6,7 @@
  */
 import type { TokenReading, TokenSource } from '@teamai/tool-core/tokens';
 import { readAgyTranscript } from './formats/agy-transcript.js';
-import { readClaudeJsonl } from './formats/claude-jsonl.js';
+import { readClaudeJsonl } from '@teamai/tool-core/formats/claude-jsonl';
 import { readCodebuddy } from './formats/codebuddy.js';
 import { readCodexRollout } from './formats/codex-rollout.js';
 import { readMuseSession } from './formats/muse-session.js';
