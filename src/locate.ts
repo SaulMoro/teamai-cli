@@ -1477,26 +1477,37 @@ async function adapterHooksOf(tool: string, channel: HookAdapter, install: Insta
 const PiSessionDirSchema = z.object({ sessionDir: z.string() });
 
 /**
+ * The home a session store is looked up in: the member's, following the tool roots they `recorded`, or one `tool-home`
+ * a step runtime gave an attempt (`attemptToolHome`), which the tool's home variable pointed at.
+ */
+export type SessionStoreRoot =
+  | { kind: 'recorded'; toolRoots: Readonly<Record<string, string>> | undefined }
+  | { kind: 'tool-home'; dir: string };
+
+/**
  * Where `platform`'s sessions sit on `host`. A `tool-home` store follows the member's recorded
  * root first, then its tool's home, as that tool's other files do. A recorded root is checked
  * against `host.home`, the home `teamai init` accepted it under. A default store sits under
- * `host.profileHome`, where the tools write it.
+ * `host.profileHome`, where the tools write it. With a `tool-home` root, the store is its own
+ * directory inside that home, whatever the host env says.
  */
 export function sessionStoreDir(
   platform: StoredSessionPlatform,
-  toolRoots: Readonly<Record<string, string>> | undefined,
+  root: SessionStoreRoot,
   host: Host = realHost(),
 ): string {
+  const { store } = SESSION_PLATFORM_FACTS[platform];
+  const p = host.path;
+
+  if (root.kind === 'tool-home') return p.join(root.dir, store.in === 'tool-home' ? store.dir : store.child);
+
   if ((platform === 'pi' || platform === 'omp') && host.env.PI_CODING_AGENT_SESSION_DIR) {
     return absoluteOn(host.env.PI_CODING_AGENT_SESSION_DIR, host);
   }
 
-  const { store } = SESSION_PLATFORM_FACTS[platform];
-  const p = host.path;
-
   switch (store.in) {
     case 'tool-home': {
-      const dir = recordedToolRootDir('root' in store ? store.root : store.home, toolRoots, host)
+      const dir = recordedToolRootDir('root' in store ? store.root : store.home, root.toolRoots, host)
         ?? toolHome(store.home, { ...host, home: host.profileHome });
 
       if (platform === 'pi') {
@@ -1529,7 +1540,7 @@ async function locateSessions(tool: string, install: Install, host: Host): Promi
   if (!(sessions instanceof Object)) return { channel: sessions, retired: [], gates: [] };
   const [platform] = sessions;
   const { toolRoots } = install.scope === 'user' ? install : await userViewOf(install, host);
-  const own: DirPlace = { kind: 'dir', path: sessionStoreDir(platform, toolRoots, host) };
+  const own: DirPlace = { kind: 'dir', path: sessionStoreDir(platform, { kind: 'recorded', toolRoots }, host) };
 
   return { channel: 'files', own, platform, reads: [{ path: own.path, when: 'always' }], readGates: [], retired: [], gates: [] };
 }

@@ -9,13 +9,16 @@ import type { LocalConfig } from '../../types.js';
 import path from 'node:path';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 import type { StoredPlatformDefinition } from '@teamai/tool-core/sessions/platform';
-import { isStoredSessionPlatform, SESSION_PLATFORM_FACTS, type SessionPlatform } from './platform-facts.js';
-import { sessionStoreDir } from '../../locate.js';
+import { isSessionPlatform, isStoredSessionPlatform, SESSION_PLATFORM_FACTS, type SessionPlatform } from './platform-facts.js';
+import { sessionStoreDir, type SessionStoreRoot } from '../../locate.js';
 import { instanceHomeDir } from '../../tool-instances.js';
 import { instanceNames, instancePlatform } from '../../tool-registry.js';
 
-/** Builds a platform's adapter on its store, which follows the member's recorded `toolRoots` (`sessionStoreDir`). */
-export type AdapterFactory = (toolRoots?: LocalConfig['toolRoots']) => AgentAdapter;
+/**
+ * Builds a platform's adapter on its session store directory, which the caller resolved (`storeDirOf`). A platform
+ * whose adapter finds its own store, such as the CodeBuddy IDE's history, ignores it.
+ */
+export type AdapterFactory = (storeDir: string) => AgentAdapter;
 
 /** Platform id → adapter factory. Open to any id so a test can register a stand-in platform. */
 export interface AdapterRegistry {
@@ -24,53 +27,53 @@ export interface AdapterRegistry {
 
 export const ADAPTER_REGISTRY: AdapterRegistry = {
   // Base platforms
-  'claude-code': (toolRoots) => BUILT_IN_TOOLS.claude.platforms['claude-code'].adapter(sessionStoreDir('claude-code', toolRoots)),
-  codex: (toolRoots) => BUILT_IN_TOOLS.codex.platforms.codex.adapter(sessionStoreDir('codex', toolRoots)),
-  qoder: (toolRoots) => BUILT_IN_TOOLS.qoder.platforms.qoder.adapter(sessionStoreDir('qoder', toolRoots)),
-  'qoder-cn': (toolRoots) => BUILT_IN_TOOLS.qoder.platforms['qoder-cn'].adapter(sessionStoreDir('qoder-cn', toolRoots)),
+  'claude-code': (storeDir) => BUILT_IN_TOOLS.claude.platforms['claude-code'].adapter(storeDir),
+  codex: (storeDir) => BUILT_IN_TOOLS.codex.platforms.codex.adapter(storeDir),
+  qoder: (storeDir) => BUILT_IN_TOOLS.qoder.platforms.qoder.adapter(storeDir),
+  'qoder-cn': (storeDir) => BUILT_IN_TOOLS.qoder.platforms['qoder-cn'].adapter(storeDir),
   // CodeBuddy has two independent stores, split into two platforms:
   //   codebuddy     = CLI (<CodeBuddy home>/projects/...)
   //   codebuddy-ide = IDE GUI (CodeBuddyExtension/.../history)
-  codebuddy: (toolRoots) => BUILT_IN_TOOLS.codebuddy.platforms.codebuddy.adapter(sessionStoreDir('codebuddy', toolRoots)),
+  codebuddy: (storeDir) => BUILT_IN_TOOLS.codebuddy.platforms.codebuddy.adapter(storeDir),
   'codebuddy-ide': () => BUILT_IN_TOOLS.codebuddy.platforms['codebuddy-ide'].adapter(),
-  workbuddy: (toolRoots) => BUILT_IN_TOOLS.codebuddy.platforms.workbuddy.adapter(sessionStoreDir('workbuddy', toolRoots)),
-  cursor: (toolRoots) => BUILT_IN_TOOLS.cursor.platforms.cursor.adapter(sessionStoreDir('cursor', toolRoots)),
-  opencode: (toolRoots) => BUILT_IN_TOOLS.opencode.platforms.opencode.adapter(sessionStoreDir('opencode', toolRoots)),
-  agy: (toolRoots) => BUILT_IN_TOOLS.agy.platforms.agy.adapter(sessionStoreDir('agy', toolRoots)),
-  pi: (toolRoots) => BUILT_IN_TOOLS.pi.platforms.pi.adapter(sessionStoreDir('pi', toolRoots)),
-  omp: (toolRoots) => BUILT_IN_TOOLS.pi.platforms.omp.adapter(sessionStoreDir('omp', toolRoots)),
-  muse: (toolRoots) => BUILT_IN_TOOLS.muse.platforms.muse.adapter(sessionStoreDir('muse', toolRoots)),
-  hermes: (toolRoots) => BUILT_IN_TOOLS.hermes.platforms.hermes.adapter(sessionStoreDir('hermes', toolRoots)),
+  workbuddy: (storeDir) => BUILT_IN_TOOLS.codebuddy.platforms.workbuddy.adapter(storeDir),
+  cursor: (storeDir) => BUILT_IN_TOOLS.cursor.platforms.cursor.adapter(storeDir),
+  opencode: (storeDir) => BUILT_IN_TOOLS.opencode.platforms.opencode.adapter(storeDir),
+  agy: (storeDir) => BUILT_IN_TOOLS.agy.platforms.agy.adapter(storeDir),
+  pi: (storeDir) => BUILT_IN_TOOLS.pi.platforms.pi.adapter(storeDir),
+  omp: (storeDir) => BUILT_IN_TOOLS.pi.platforms.omp.adapter(storeDir),
+  muse: (storeDir) => BUILT_IN_TOOLS.muse.platforms.muse.adapter(storeDir),
+  hermes: (storeDir) => BUILT_IN_TOOLS.hermes.platforms.hermes.adapter(storeDir),
   // TeamAI variants (different path prefixes, identical format)
-  'claude-internal': (toolRoots) => BUILT_IN_TOOLS.claude.platforms['claude-internal'].adapter(sessionStoreDir('claude-internal', toolRoots)),
-  tclaude: (toolRoots) => BUILT_IN_TOOLS.claude.platforms.tclaude.adapter(sessionStoreDir('tclaude', toolRoots)),
-  'codex-internal': (toolRoots) => BUILT_IN_TOOLS.codex.platforms['codex-internal'].adapter(sessionStoreDir('codex-internal', toolRoots)),
-  tcodex: (toolRoots) => BUILT_IN_TOOLS.codex.platforms.tcodex.adapter(sessionStoreDir('tcodex', toolRoots)),
-  joycode: (toolRoots) => BUILT_IN_TOOLS.joycode.platforms.joycode.adapter(sessionStoreDir('joycode', toolRoots)),
+  'claude-internal': (storeDir) => BUILT_IN_TOOLS.claude.platforms['claude-internal'].adapter(storeDir),
+  tclaude: (storeDir) => BUILT_IN_TOOLS.claude.platforms.tclaude.adapter(storeDir),
+  'codex-internal': (storeDir) => BUILT_IN_TOOLS.codex.platforms['codex-internal'].adapter(storeDir),
+  tcodex: (storeDir) => BUILT_IN_TOOLS.codex.platforms.tcodex.adapter(storeDir),
+  joycode: (storeDir) => BUILT_IN_TOOLS.joycode.platforms.joycode.adapter(storeDir),
 } satisfies Record<SessionPlatform, AdapterFactory>;
 
 /**
- * The factory of an instance's own platform: the adapter of the shipped platform whose format its sessions keep, under
- * the instance's id, on that platform's store in the instance's home.
+ * An instance's own platform: the definition of the shipped platform whose format its sessions keep, and the
+ * instance's home. Absent when the instance keeps no sessions teamai reads.
  */
-function instanceFactory(platform: string): AdapterFactory | undefined {
+function instanceStore(platform: string) {
   const hosted = instancePlatform(platform);
 
   if (!hosted || !isStoredSessionPlatform(hosted.platform)) return undefined;
-  const shipped = hosted.platform;
-  const definition: StoredPlatformDefinition = SESSION_PLATFORM_FACTS[shipped];
-
+  const definition: StoredPlatformDefinition = SESSION_PLATFORM_FACTS[hosted.platform];
   const { home } = hosted.instance;
 
   if (definition.store.in !== 'tool-home' || definition.adapterAs === undefined || home === undefined) return undefined;
-  const { store, adapterAs } = definition;
 
-  return () => adapterAs(platform, path.join(instanceHomeDir(home), store.dir));
+  return { dir: definition.store.dir, adapterAs: definition.adapterAs, home };
 }
 
-/** The factory of `platform`: a shipped platform's, or an instance's own. */
+/** The factory of `platform`: a shipped platform's, or an instance's own, in its shipped platform's format. */
 function factoryOf(platform: string): AdapterFactory | undefined {
-  return Object.hasOwn(ADAPTER_REGISTRY, platform) ? ADAPTER_REGISTRY[platform] : instanceFactory(platform);
+  if (Object.hasOwn(ADAPTER_REGISTRY, platform)) return ADAPTER_REGISTRY[platform];
+  const store = instanceStore(platform);
+
+  return store && ((storeDir) => store.adapterAs(platform, storeDir));
 }
 
 /** The platforms of the instances this process knows that keep sessions of their own: each one's name. */
@@ -78,14 +81,38 @@ function instancePlatforms(): string[] {
   return instanceNames().filter((name) => instancePlatform(name) !== undefined);
 }
 
-export function getAdapter(platform: string, toolRoots?: LocalConfig['toolRoots']): AgentAdapter {
+/**
+ * The store directory `platform`'s adapter is built on from `root`: the member's recorded tool roots, or a tool home an
+ * attempt ran in. An instance's store sits in the instance's home, or in the tool home it ran in. Empty for a platform
+ * whose adapter finds its own store, or that teamai has no facts for.
+ */
+export function storeDirOf(platform: string, root: SessionStoreRoot): string {
+  if (isSessionPlatform(platform)) return isStoredSessionPlatform(platform) ? sessionStoreDir(platform, root) : '';
+  const store = instanceStore(platform);
+
+  if (!store) return '';
+
+  return path.join(root.kind === 'tool-home' ? root.dir : instanceHomeDir(store.home), store.dir);
+}
+
+/** `platform`'s adapter on `storeDir`, a store directory the caller already resolved (`storeDirOf`). */
+export function adapterAt({ platform, storeDir }: { platform: string; storeDir: string }): AgentAdapter {
   const factory = factoryOf(platform);
 
   if (!factory) {
     throw new Error(`Unsupported platform: ${platform}. Registered: ${listAvailablePlatforms().join(', ')}`);
   }
 
-  return factory(toolRoots);
+  return factory(storeDir);
+}
+
+/** `platform`'s adapter on the store `root` resolves to. */
+export function adapterOn(platform: string, root: SessionStoreRoot): AgentAdapter {
+  return adapterAt({ platform, storeDir: storeDirOf(platform, root) });
+}
+
+export function getAdapter(platform: string, toolRoots?: LocalConfig['toolRoots']): AgentAdapter {
+  return adapterOn(platform, { kind: 'recorded', toolRoots });
 }
 
 export function listAvailablePlatforms(): string[] {
@@ -101,7 +128,7 @@ export function listInstalledPlatforms(toolRoots?: LocalConfig['toolRoots'], pro
     if (!factory) continue;
 
     try {
-      const adapter = factory(toolRoots);
+      const adapter = factory(storeDirOf(platform, { kind: 'recorded', toolRoots }));
 
       if (adapter.isReady(projectPath)) installed.push(platform);
     } catch {
