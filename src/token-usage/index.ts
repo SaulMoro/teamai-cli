@@ -10,7 +10,6 @@ import { readAgyTranscript } from './formats/agy-transcript.js';
 import { readCodebuddy } from './formats/codebuddy.js';
 import { readMuseSession } from './formats/muse-session.js';
 import { readOpencodeDb } from './formats/opencode-db.js';
-import { readPiSession } from './formats/pi-session.js';
 
 const FORMATS = {
   'claude-jsonl': BUILT_IN_TOOLS.claude.tokens['claude-jsonl'],
@@ -18,7 +17,7 @@ const FORMATS = {
   codebuddy: readCodebuddy,
   'muse-session': readMuseSession,
   'agy-transcript': readAgyTranscript,
-  'pi-session': readPiSession,
+  'pi-session': BUILT_IN_TOOLS.pi.tokens['pi-session'],
   'opencode-db': readOpencodeDb,
 } satisfies Record<string, (source: TokenSource) => Promise<TokenReading>>;
 
