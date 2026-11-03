@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { AgyAdapter } from '../session-flow/adapters/agy.js';
+import { AgyAdapter } from './session-adapter.js';
 
 const HAS_SQLITE3 = process.platform !== 'win32' && spawnSync('sqlite3', ['-version']).status === 0;
 const FIXTURES = path.join(import.meta.dirname, 'fixtures', 'agy');
