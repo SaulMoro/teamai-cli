@@ -22,10 +22,10 @@ import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
-import { AgentAdapter, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from './base.js';
-import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ThinkingBlock, ToolArguments } from '../ir.js';
-import { assertSafeSessionFileId, deriveTargetSessionId } from '../ids.js';
-import { imagePlaceholderText } from '../ir.js';
+import { AgentAdapter, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '@teamai/tool-core/sessions/base';
+import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ThinkingBlock, ToolArguments } from '@teamai/tool-core/sessions/ir';
+import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
+import { imagePlaceholderText } from '@teamai/tool-core/sessions/ir';
 import {
   encodeCwdClaude,
   bestEffortDecodeCwdClaude,
@@ -40,15 +40,15 @@ import {
   mayReadLocalImageFile,
   coercedText,
   OptionalString,
-} from '../fs.js';
+} from '@teamai/tool-core/sessions/fs';
 import { JsonValueSchema, type JsonValue, JsonObjectSchema } from '../../types.js';
 import { sessionStoreDir } from '../../locate.js';
 import {
   cleanTitleText,
   fallbackTitle,
   titleFromCandidates,
-} from '../title.js';
-import type { JsonlRecord } from '../../utils/jsonl-store.js';
+} from '@teamai/tool-core/sessions/title';
+import type { JsonlRecord } from '@teamai/tool-core/json';
 import { parseJson } from '../../utils/json.js';
 
 // ---------------------------------------------------------------------------
@@ -915,6 +915,7 @@ export class ClaudeCodeAdapter extends AgentAdapter {
 
     const sessionId = deriveTargetSessionId({
       targetPlatform: this.platform,
+      idFormat: 'uuid',
       targetCwd: cwd,
       sourceSessionId: session.sessionId,
     });

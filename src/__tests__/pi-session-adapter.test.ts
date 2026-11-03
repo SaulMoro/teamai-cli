@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { PiAdapter } from '../session-flow/adapters/pi.js';
-import { ToolUnavailableError } from '../session-flow/adapters/base.js';
+import { ToolUnavailableError } from '@teamai/tool-core/sessions/base';
 import { ADAPTER_REGISTRY, getAdapter, listInstalledPlatforms } from '../session-flow/adapters/index.js';
 
 const roots: string[] = [];

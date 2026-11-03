@@ -22,7 +22,7 @@ vi.mock('node:os', async (importOriginal) => {
 
 import { ClaudeCodeAdapter } from '../session-flow/adapters/claude-code.js';
 import { CursorAdapter } from '../session-flow/adapters/cursor.js';
-import type { Session } from '../session-flow/ir.js';
+import type { Session } from '@teamai/tool-core/sessions/ir';
 
 function mkSession(imageFilePath: string): Session {
   return {

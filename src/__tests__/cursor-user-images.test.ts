@@ -20,7 +20,7 @@ vi.mock('node:os', async (importOriginal) => {
 
 import { CursorAdapter } from '../session-flow/adapters/cursor.js';
 import { fidelityFromSession } from '../session-flow/migrate.js';
-import type { Session } from '../session-flow/ir.js';
+import type { Session } from '@teamai/tool-core/sessions/ir';
 
 // 4 base64 chars -> 3 bytes -> rounds to 0KB.
 const PLACEHOLDER = '[image: pic.png, 0KB]';

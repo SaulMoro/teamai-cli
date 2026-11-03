@@ -22,9 +22,9 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { z } from 'zod';
 import type { JsonValue } from '../types.js';
-import { OptionalString } from './fs.js';
-import type { ToolArguments } from './ir.js';
-import { findSqlite3 } from './sqlite.js';
+import { OptionalString } from '@teamai/tool-core/sessions/fs';
+import type { ToolArguments } from '@teamai/tool-core/sessions/ir';
+import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
 
 // ---------------------------------------------------------------------------
 // Paths and helpers

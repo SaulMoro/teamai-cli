@@ -3,8 +3,8 @@ import path from 'node:path';
 import { z } from 'zod';
 
 import { sessionStoreDir } from '../../locate.js';
-import { isSafeSessionFileId } from '../../session-flow/ids.js';
-import { findSqlite3 } from '../../session-flow/sqlite.js';
+import { isSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
+import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
 import { addTokenUsage, emptyTokenUsage } from '../../types.js';
 import { execCommand } from '../../utils/exec.js';
 import { log } from '../../utils/logger.js';

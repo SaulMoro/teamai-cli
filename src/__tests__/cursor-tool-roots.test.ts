@@ -37,7 +37,7 @@ import {
 } from '../types.js';
 import type { LocalConfig, State, TeamaiConfig } from '../types.js';
 import { reconcileCoAuthorForConfig } from '../coauthor-reconcile.js';
-import { encodeCwdGeneric } from '../session-flow/fs.js';
+import { encodeCwdGeneric } from '@teamai/tool-core/sessions/fs';
 import { sessionStoreDir } from '../locate.js';
 import { getAdapter } from '../session-flow/adapters/index.js';
 import { getCursorStateRoot } from '../session-flow/cursor-store.js';

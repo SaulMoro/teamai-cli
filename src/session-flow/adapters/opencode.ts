@@ -25,12 +25,12 @@ import * as path from 'node:path';
 import crossSpawn from 'cross-spawn';
 import { tmpdir } from 'node:os';
 import { z } from 'zod';
-import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from './base.js';
-import { imagePlaceholderText, ToolArgumentsSchema, type ContentBlock, type ImageBlock, type Message, type Session, type ToolArguments } from '../ir.js';
+import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '@teamai/tool-core/sessions/base';
+import { imagePlaceholderText, ToolArgumentsSchema, type ContentBlock, type ImageBlock, type Message, type Session, type ToolArguments } from '@teamai/tool-core/sessions/ir';
 import { JsonValueSchema } from '../../types.js';
-import { resolveRealCwd } from '../fs.js';
+import { resolveRealCwd } from '@teamai/tool-core/sessions/fs';
 import { sessionStoreDir } from '../../locate.js';
-import { deriveOpencodeMessageIds, deriveTargetSessionId } from '../ids.js';
+import { deriveOpencodeMessageIds, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
 import { execCommand, probeBinary, type ExecResult } from '../../utils/exec.js';
 
 const OPENCODE_TO_IR_TOOL: ReadonlyMap<string, string> = new Map([
@@ -579,6 +579,7 @@ export class OpencodeAdapter extends AgentAdapter {
 
     const sessionId = deriveTargetSessionId({
       targetPlatform: this.platform,
+      idFormat: 'opencode',
       targetCwd: cwd,
       sourceSessionId: session.sessionId,
       sourceCreatedAt: session.createdAt,

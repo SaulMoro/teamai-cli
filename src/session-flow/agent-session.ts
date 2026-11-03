@@ -18,9 +18,9 @@ import { acquireLock, releaseLock } from '../update.js';
 import { ADAPTER_REGISTRY, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
 import { isSessionPlatform, sessionPlatformFacts } from './adapters/platform-facts.js';
 import { sessionPlatformOwner, sessionPlatformsOf } from '../tool-registry.js';
-import { ToolUnavailableError, type AgentAdapter, type SessionMeta, type SubagentsRead } from './adapters/base.js';
-import { imagePlaceholderText, type ContentBlock, type Message, type Session } from './ir.js';
-import { deriveTargetSessionId, legacyTargetSessionIds } from './ids.js';
+import { ToolUnavailableError, type AgentAdapter, type SessionMeta, type SubagentsRead } from '@teamai/tool-core/sessions/base';
+import { imagePlaceholderText, type ContentBlock, type Message, type Session } from '@teamai/tool-core/sessions/ir';
+import { deriveTargetSessionId, legacyTargetSessionIds } from '@teamai/tool-core/sessions/ids';
 import { degradeThinkingBlocks, fidelityFromSession, type FidelityReport } from './migrate.js';
 import { scrubSession } from './scrub.js';
 import { publishedPathRoots } from './sync.js';
@@ -82,7 +82,7 @@ export type AgentSessionFindOptions = {
   subagents?: boolean;
 };
 
-export type { Subagent, SubagentsRead } from './adapters/base.js';
+export type { Subagent, SubagentsRead } from '@teamai/tool-core/sessions/base';
 
 export type AgentSessionFound =
   | {
@@ -259,7 +259,9 @@ async function existingCopyId(
 
   if (derived) return derived;
 
-  for (const id of legacyTargetSessionIds(copyInfo)) {
+  const legacyIdWithoutWorkspace = sessionPlatformFacts(copyInfo.targetPlatform)?.legacyIdWithoutWorkspace === true;
+
+  for (const id of legacyTargetSessionIds({ ...copyInfo, legacyIdWithoutWorkspace })) {
     const found = await target.existingSessionId(id, copyInfo.cwd);
 
     if (found) return found;
@@ -307,6 +309,7 @@ export async function writeCopyOnce(
   try {
     targetId = deriveTargetSessionId({
       targetPlatform,
+      idFormat: sessionPlatformFacts(targetPlatform)?.idFormat ?? 'uuid',
       targetCwd: cwd,
       sourceSessionId: session.sessionId,
       sourceCreatedAt: session.createdAt,

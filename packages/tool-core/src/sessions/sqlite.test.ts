@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { snapshotSqlite } from '../session-flow/sqlite.js';
+import { snapshotSqlite } from './sqlite.js';
 
 const HAS_SQLITE3 = process.platform !== 'win32' && spawnSync('sqlite3', ['-version']).status === 0;
 const dirs: string[] = [];

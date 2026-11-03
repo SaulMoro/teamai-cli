@@ -3,12 +3,12 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef } from './base.js';
+import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef } from '@teamai/tool-core/sessions/base';
 import { z } from 'zod';
-import { ToolArgumentsSchema, type ContentBlock, type Message, type Session, type ThinkingBlock } from '../ir.js';
-import { fallbackTitle } from '../title.js';
-import { isSafeSessionFileId } from '../ids.js';
-import { OptionalString, TextOrBlocksSchema } from '../fs.js';
+import { ToolArgumentsSchema, type ContentBlock, type Message, type Session, type ThinkingBlock } from '@teamai/tool-core/sessions/ir';
+import { fallbackTitle } from '@teamai/tool-core/sessions/title';
+import { isSafeSessionFileId } from '@teamai/tool-core/sessions/ids';
+import { OptionalString, TextOrBlocksSchema } from '@teamai/tool-core/sessions/fs';
 import { JsonValueSchema } from '../../types.js';
 
 /** A time as ISO 8601, from epoch milliseconds or a date string; anything that is not a time reads as absent. */

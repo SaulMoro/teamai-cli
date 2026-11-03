@@ -3,7 +3,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MuseAdapter } from '../session-flow/adapters/muse.js';
-import { ToolUnavailableError } from '../session-flow/adapters/base.js';
+import { ToolUnavailableError } from '@teamai/tool-core/sessions/base';
 
 const roots: string[] = [];
 

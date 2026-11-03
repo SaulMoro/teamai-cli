@@ -21,7 +21,8 @@
 import path from 'node:path';
 import { z } from 'zod';
 
-import { appendJsonlBatch, readJsonl, type JsonlRecord } from './utils/jsonl-store.js';
+import { appendJsonlBatch, readJsonl } from './utils/jsonl-store.js';
+import { type JsonlRecord } from '@teamai/tool-core/json';
 import { getDataHome, getTeamaiHomeDir } from './types.js';
 import type { KnowledgeType, LocalConfig } from './types.js';
 import type { AssetRelationType } from './asset-relations.js';
