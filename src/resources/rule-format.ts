@@ -19,7 +19,7 @@
  * (`TOOLS[tool].rules`, tools.ts), which says which tools take it.
  */
 
-import { ruleFormatIdOf, runTimeRulesOf } from '../tools.js';
+import { ruleFormatIdOf, runTimeRulesOf } from '../tool-registry.js';
 import type { Scope } from '../types.js';
 import { AGY_RULE_FORMAT } from './agy-rule.js';
 import { CODEBUDDY_RULE_FORMAT } from './codebuddy-rule.js';

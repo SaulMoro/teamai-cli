@@ -15,7 +15,8 @@ import {
   type GitExcludeReport,
   type GitExcludeWrite,
 } from './git-exclude.js';
-import { selfLocalSettingsOf, TOOL_IDS } from './tools.js';
+import { TOOL_IDS } from './tools.js';
+import { selfLocalSettingsOf } from './tool-registry.js';
 import { getDataHome, isUnmigratedDataHome, type LocalConfig } from './types.js';
 import { pathExists } from './utils/fs.js';
 import { log } from './utils/logger.js';

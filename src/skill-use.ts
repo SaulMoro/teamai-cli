@@ -25,7 +25,8 @@ import { isRecordedFromTeamSkill, recordedUnchanged, type DeliveredHashes } from
 import type { SubagentsRead } from './session-flow/adapters/base.js';
 import type { ContentBlock, Message, Session } from './session-flow/ir.js';
 import { typedText } from './session-flow/title.js';
-import { isToolId, TOOLS, type PromptForm, type SkillLoad } from './tools.js';
+import { TOOLS, type PromptForm, type SkillLoad } from './tools.js';
+import { isToolId } from './tool-registry.js';
 import { SKILL_NAME_CHARS, type LocalConfig } from './types.js';
 import { withFileLock } from './update.js';
 import {

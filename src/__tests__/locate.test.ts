@@ -3,7 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { nextToolHomes } from '../tool-home-record.js';
 import { cleanupOf, installOf, ownOf, unreadWrites, writable, writesOf, type EntryPlace, type FilePlace, type FilesChannel, type Read } from '../locate.js';
 import { envToolHome, movedToolHome, toolHome, type Host } from '../tool-home.js';
-import { isToolId, TOOLS } from '../tools.js';
+import { TOOLS } from '../tools.js';
+import { isToolId } from '../tool-registry.js';
 import { samePlaces } from '../resources/places.js';
 import type { ToolId } from '../tools.js';
 

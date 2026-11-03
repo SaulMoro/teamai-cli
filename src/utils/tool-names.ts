@@ -1,4 +1,5 @@
-import { channelsOf, TOOL_IDS, TOOLS, type ToolId } from '../tools.js';
+import { TOOL_IDS, TOOLS, type ToolId } from '../tools.js';
+import { channelsOf } from '../tool-registry.js';
 
 // -*- coding: utf-8 -*-
 /**
