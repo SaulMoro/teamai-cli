@@ -1,6 +1,7 @@
 import { descriptorOf, type DescriptorOf } from '../tool-registry.js';
 import type { ToolId } from '../tools.js';
-import { LAUNCH_ADAPTERS, type ConfinedLaunch, type LaunchAdapter, type StepLaunch } from './adapters.js';
+import { LAUNCH_ADAPTERS } from './adapters.js';
+import type { ConfinedLaunch, LaunchAdapter, StepLaunch } from '@teamai/tool-core/launch';
 
 /** The tools whose `launch` facet names an adapter. */
 export type LaunchedToolId = { [T in ToolId]: DescriptorOf<T>['launch'] extends 'none' ? never : T }[ToolId];

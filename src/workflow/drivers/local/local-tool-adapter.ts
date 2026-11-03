@@ -11,7 +11,7 @@ import { log } from '../../../utils/logger.js';
 import type { toolExtrasFor } from '../../../resources/agent-format.js';
 import { stopProcess } from '../../../tool-launch/process-stop.js';
 import { tokenMeter, toolStdout, type TokenUsage, type ToolReport } from '../../../tool-launch/stdout.js';
-import type { LaunchAdapter } from '../../../tool-launch/adapters.js';
+import type { LaunchAdapter } from '@teamai/tool-core/launch';
 import { executableOf, launchAdapterIdOf, launchAdapterOf, opencodeModelArgs, type LaunchTool } from '../../../tool-launch/tools.js';
 import { AttemptResult } from '../../attempt-result.js';
 import { budgeted } from '../../limits.js';
