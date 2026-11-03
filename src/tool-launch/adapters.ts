@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
-import { answered, failed, jsonLines, readClaudeResult, readPlainReply, reportedTokens, type CallOutput, type CallReading, type LaunchAdapter } from '@teamai/tool-core/launch';
+import { answered, failed, jsonLines, readClaudeResult, type CallOutput, type CallReading, type LaunchAdapter } from '@teamai/tool-core/launch';
 import { agyRun, readToolMetadata } from '@teamai/tool-core/stdout';
 
 const OpenCodeEvent = z.union([
@@ -22,40 +22,6 @@ function readOpenCodeRun({ stdout }: CallOutput): CallReading {
   if (error !== undefined || !text) return failed(error);
 
   return answered(text, readToolMetadata(stdout)?.tokens);
-}
-
-const MuseRecord = z.object({ payload_type: z.string(), payload: z.record(z.string(), z.unknown()) });
-const MuseTerminal = z.object({ terminal: z.string(), text: z.string().nullable().optional(), reason: z.string().nullable().optional() });
-const MuseUsage = z.object({ models: z.array(z.object({ input_tokens: z.number(), cached_tokens: z.number(), output_tokens: z.number() }).partial()) });
-
-/** `muse exec --json` prints one record per event: the run's terminal record carries the answer, `run.usage` the tokens. */
-function readMuseExec({ stdout }: CallOutput): CallReading {
-  const records = jsonLines(stdout).flatMap((line) => {
-    const parsed = MuseRecord.safeParse(line);
-
-    return parsed.success ? [parsed.data] : [];
-  });
-
-  const terminal = records.flatMap((record) => {
-    const parsed = record.payload_type.startsWith('run.terminal.') ? MuseTerminal.safeParse(record.payload) : undefined;
-
-    return parsed?.success ? [parsed.data] : [];
-  }).at(-1);
-
-  if (!terminal) return { ok: false };
-  const text = terminal.text?.trim();
-
-  if (terminal.terminal !== 'completed' || !text) return failed(terminal.reason || undefined);
-
-  const models = records.flatMap((record) => {
-    const parsed = record.payload_type === 'run.usage' ? MuseUsage.safeParse(record.payload) : undefined;
-
-    return parsed?.success ? parsed.data.models : [];
-  });
-
-  const sum = (key: 'input_tokens' | 'cached_tokens' | 'output_tokens') => models.some((model) => model[key] !== undefined) ? models.reduce((total, model) => total + (model[key] ?? 0), 0) : undefined;
-
-  return answered(text, reportedTokens({ input: sum('input_tokens'), output: sum('output_tokens'), cachedInput: sum('cached_tokens') }));
 }
 
 /** agy's stream-json output ends with a `result` event: the response on SUCCESS, else the error, and the turn's usage. */
@@ -89,16 +55,10 @@ export const LAUNCH_ADAPTERS = {
     call: { evidence: 'docs', prompt: 'stdin', args: () => ['-p', '--output-format', 'json', '--mode', 'ask', '--trust'], read: readClaudeResult },
     confined: { evidence: 'docs', env: ['CURSOR_API_KEY', 'CURSOR_CONFIG_DIR', 'CURSOR_DATA_DIR'], access: 'full' },
   },
-  // `-s` prints only the reply. Copilot 0.0.x has no JSON output to read tokens from.
-  copilot: {
-    call: { evidence: 'docs', prompt: 'argv', args: ({ prompt }) => ['-p', prompt, '-s'], read: readPlainReply },
-  },
+  copilot: BUILT_IN_TOOLS.copilot.launch.copilot,
   pi: BUILT_IN_TOOLS.pi.launch.pi,
   omp: BUILT_IN_TOOLS.pi.launch.omp,
-  // muse reads no prompt from stdin: `--prompt-file` takes a regular file only.
-  muse: {
-    call: { evidence: 'verified', prompt: 'file', args: ({ promptFile }) => ['exec', '--json', '--no-session-log', '--prompt-file', promptFile], read: readMuseExec },
-  },
+  muse: BUILT_IN_TOOLS.muse.launch.muse,
   qoder: BUILT_IN_TOOLS.qoder.launch.qoder,
   kiro: BUILT_IN_TOOLS.kiro.launch.kiro,
   hermes: BUILT_IN_TOOLS.hermes.launch.hermes,

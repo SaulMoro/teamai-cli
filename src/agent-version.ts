@@ -51,7 +51,7 @@ const DETECTORS: Record<ToolId, VersionDetector | null> = {
   dsh: BUILT_IN_TOOLS.dsh.detect.dsh,
   workbuddy: BUILT_IN_TOOLS.codebuddy.detect.workbuddy,
   opencode: null,
-  muse: detectMuseVersion,
+  muse: BUILT_IN_TOOLS.muse.detect.muse,
   agy: detectAgyVersion,
 };
 
@@ -60,13 +60,6 @@ function detectorOf(agentType: string): VersionDetector | null {
   if (agentType === 'codebuddy-ide') return BUILT_IN_TOOLS.codebuddy.detect['codebuddy-ide'];
 
   return isToolId(agentType) ? DETECTORS[agentType] : null;
-}
-
-async function detectMuseVersion(): Promise<string> {
-  // "Muse Code 1.4.6 (1.4.6-R6000.1)" → "1.4.6"
-  const raw = await execVersion('muse');
-
-  return raw.match(/\d+\.\d+\.\d+/)?.[0] ?? '';
 }
 
 async function detectAgyVersion(): Promise<string> {
