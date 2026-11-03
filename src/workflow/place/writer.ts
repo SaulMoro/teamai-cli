@@ -4,7 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { WorkflowFailure } from '../types.js';
 import type { StepChanges } from '../workspace.js';
-import { commitWork, git, mergeBranch, offBranch, pushIfOrigin } from '../worktree.js';
+import { commitWork, git, mergeBranch, offBranch, pushIfOrigin, untrustedGit } from '../worktree.js';
 import { restoreOverlay, unrestoredConfig } from './overlay.js';
 
 /**
@@ -145,6 +145,7 @@ async function unresolvedConflicts(dir: string, before: Record<string, string>):
 
 /**
  * Commits a writer's copy `dir` and pushes it, whether or not the step failed, so the commits it reports are on origin.
+ * Its git runs with `untrustedGit`: a hook, fsmonitor or replacement the step planted in the copy's config never runs.
  * A failed push fails a step that succeeded with `push_failed`. A step that already `failed` keeps its own failure and
  * gets `unpushed`, the sentence its message adds.
  */
@@ -161,18 +162,19 @@ export async function finishWriter(input: {
   const unrestored = await restoreOverlay({ dir, configCommit: workspace.configCommit, saved });
 
   if (unrestored) return { failure: { code: 'workspace_base', message: `Step "${step}" ran, but nothing was committed or pushed. ${unrestoredConfig(unrestored, dir)}` } };
+  const hookSafe = untrustedGit(process.env);
   // A commit on whatever HEAD the step left would be reported and pushed as the leased branch, which would lack it.
-  const on = await offBranch(dir, workspace.branch);
+  const on = await offBranch(dir, workspace.branch, hookSafe);
 
   if (on) return { failure: { code: 'workspace_base', message: `Step "${step}" left workspace ${dir} ${on}, not on branch ${workspace.branch}, so nothing was committed or pushed. Check out ${workspace.branch} in ${dir} with the changes to keep, then retry the step.` } };
   const open = await unresolvedConflicts(dir, conflicts);
 
   if (open.length > 0) return { failure: { code: 'merge_conflict', message: `Unresolved merge conflict: ${open.join(', ')}` } };
-  const committed = await commitWork(dir, `teamai: ${step}`, rangeFrom);
+  const committed = await commitWork(dir, `teamai: ${step}`, rangeFrom, hookSafe);
 
   if ('error' in committed) return { failure: { code: 'push_failed', message: committed.error } };
   await clearRememberedConflicts(dir);
-  const pushed = await pushIfOrigin(dir, workspace.branch, committed.commits);
+  const pushed = await pushIfOrigin(dir, workspace.branch, committed.commits, hookSafe);
   const changes = { branch: workspace.branch, base: workspace.base.commit, from: committed.from, to: committed.to, commits: committed.commits };
 
   if (!(pushed instanceof Object)) return { changes };

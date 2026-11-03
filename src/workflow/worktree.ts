@@ -323,13 +323,16 @@ export async function markSetup(dir: string, state: 'unfinished' | 'finished'): 
   else await fs.rm(marker, { force: true });
 }
 
-/** Where HEAD is, such as `on refs/heads/other` or `detached at <commit>`, when it is not on `branch`. Undefined when it is. */
-export async function offBranch(dir: string, branch: string): Promise<string | undefined> {
-  const head = (await git(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
+/**
+ * Where HEAD is, such as `on refs/heads/other` or `detached at <commit>`, when it is not on `branch`. Undefined when it
+ * is. `runGit` runs each git call.
+ */
+export async function offBranch(dir: string, branch: string, runGit: Git = git): Promise<string | undefined> {
+  const head = (await runGit(dir, ['symbolic-ref', '--quiet', 'HEAD'])).stdout.trim();
 
   if (head === `refs/heads/${branch}`) return undefined;
 
-  return head ? `on ${head}` : `detached at ${(await git(dir, ['rev-parse', 'HEAD'])).stdout.trim()}`;
+  return head ? `on ${head}` : `detached at ${(await runGit(dir, ['rev-parse', 'HEAD'])).stdout.trim()}`;
 }
 
 /**
@@ -893,15 +896,15 @@ export async function commitWork(
  * Pushes when `origin` exists and the branch is ahead of the copy `origin` has.
  * A retry that adds no commit still pushes when an earlier attempt left commits unpublished,
  * including a first push that never created the remote branch.
- * No origin is not a failure.
+ * No origin is not a failure. `runGit` runs each git call.
  */
-export async function pushIfOrigin(dir: string, branch: string, commits: string[]): Promise<'pushed' | 'no-origin' | 'unchanged' | { error: string }> {
-  const origin = await git(dir, ['remote', 'get-url', 'origin']);
+export async function pushIfOrigin(dir: string, branch: string, commits: string[], runGit: Git = git): Promise<'pushed' | 'no-origin' | 'unchanged' | { error: string }> {
+  const origin = await runGit(dir, ['remote', 'get-url', 'origin']);
 
   if (origin.code !== 0) return commits.length === 0 ? 'unchanged' : 'no-origin';
 
-  if (commits.length === 0 && !await branchNeedsPush(dir, branch)) return 'unchanged';
-  const pushed = await git(dir, ['push', '-u', 'origin', `${branch}:${branch}`]);
+  if (commits.length === 0 && !await branchNeedsPush(dir, branch, runGit)) return 'unchanged';
+  const pushed = await runGit(dir, ['push', '-u', 'origin', `${branch}:${branch}`]);
 
   return pushed.code === 0 ? 'pushed' : { error: (pushed.stderr || pushed.stdout).trim() || 'git push failed' };
 }
@@ -912,31 +915,31 @@ export async function pushIfOrigin(dir: string, branch: string, commits: string[
  * With no tracking refs at all, push when the tip is not already on another local branch:
  * a first push that never landed leaves commits only on this branch.
  */
-async function branchNeedsPush(dir: string, branch: string): Promise<boolean> {
-  const local = await git(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
+async function branchNeedsPush(dir: string, branch: string, runGit: Git): Promise<boolean> {
+  const local = await runGit(dir, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
 
   if (local.code !== 0) return false;
   const tip = local.stdout.trim();
   const remote = `refs/remotes/origin/${branch}`;
-  const known = await git(dir, ['rev-parse', '--verify', '--quiet', remote]);
+  const known = await runGit(dir, ['rev-parse', '--verify', '--quiet', remote]);
 
   if (known.code === 0) {
-    const contained = await git(dir, ['merge-base', '--is-ancestor', tip, remote]);
+    const contained = await runGit(dir, ['merge-base', '--is-ancestor', tip, remote]);
 
     return contained.code !== 0;
   }
 
-  const listed = await git(dir, ['for-each-ref', '--format=%(refname)', 'refs/remotes/origin']);
+  const listed = await runGit(dir, ['for-each-ref', '--format=%(refname)', 'refs/remotes/origin']);
 
-  if (listed.stdout.trim() === '') return tipIsOnlyOn(dir, branch, tip);
-  const published = await git(dir, ['branch', '-r', '--contains', tip]);
+  if (listed.stdout.trim() === '') return tipIsOnlyOn(dir, branch, tip, runGit);
+  const published = await runGit(dir, ['branch', '-r', '--contains', tip]);
 
   return published.code === 0 && published.stdout.trim() === '';
 }
 
 /** True when no other local branch already contains this tip. */
-async function tipIsOnlyOn(dir: string, branch: string, tip: string): Promise<boolean> {
-  const holders = await git(dir, ['branch', '--no-color', '--contains', tip]);
+async function tipIsOnlyOn(dir: string, branch: string, tip: string, runGit: Git): Promise<boolean> {
+  const holders = await runGit(dir, ['branch', '--no-color', '--contains', tip]);
 
   if (holders.code !== 0) return true;
   const names = holders.stdout.split('\n').map((line) => line.trim().replace(/^[*+] /, '')).filter((name) => name !== '');
