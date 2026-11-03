@@ -13,7 +13,6 @@ import { WorkBuddyAdapter } from './workbuddy.js';
 import { CursorAdapter } from './cursor.js';
 import { OpencodeAdapter } from './opencode.js';
 import { AgyAdapter, agyStoreRoots } from './agy.js';
-import { PiAdapter } from './pi.js';
 import { MuseAdapter } from './muse.js';
 import { HermesAdapter } from './hermes.js';
 import type { SessionPlatform } from './platform-facts.js';
@@ -42,8 +41,8 @@ export const ADAPTER_REGISTRY: AdapterRegistry = {
   cursor: (toolRoots) => new CursorAdapter('cursor', sessionStoreDir('cursor', toolRoots)),
   opencode: (toolRoots) => new OpencodeAdapter(sessionStoreDir('opencode', toolRoots)),
   agy: (toolRoots) => new AgyAdapter(agyStoreRoots(sessionStoreDir('agy', toolRoots))),
-  pi: (toolRoots) => new PiAdapter('pi', sessionStoreDir('pi', toolRoots), !process.env.PI_CODING_AGENT_SESSION_DIR),
-  omp: (toolRoots) => new PiAdapter('omp', sessionStoreDir('omp', toolRoots)),
+  pi: (toolRoots) => BUILT_IN_TOOLS.pi.platforms.pi.adapter(sessionStoreDir('pi', toolRoots)),
+  omp: (toolRoots) => BUILT_IN_TOOLS.pi.platforms.omp.adapter(sessionStoreDir('omp', toolRoots)),
   muse: (toolRoots) => new MuseAdapter(sessionStoreDir('muse', toolRoots)),
   hermes: (toolRoots) => new HermesAdapter(sessionStoreDir('hermes', toolRoots)),
   // TeamAI variants (different path prefixes, identical format)
@@ -101,8 +100,6 @@ export { CursorAdapter } from './cursor.js';
 export { OpencodeAdapter } from './opencode.js';
 
 export { AgyAdapter } from './agy.js';
-
-export { PiAdapter } from './pi.js';
 
 export { MuseAdapter } from './muse.js';
 

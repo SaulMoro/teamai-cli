@@ -92,7 +92,7 @@ const DETECTORS: Record<ToolId, VersionDetector | null> = {
   'trae-cn': null,
   zcode: null,
   omp: null,
-  pi: detectPiVersion,
+  pi: BUILT_IN_TOOLS.pi.detect.pi,
   codebuddy: detectCodebuddyCliVersion,
   openclaw: detectOpenclawVersion,
   hermes: detectHermesVersion,
@@ -110,13 +110,6 @@ function detectorOf(agentType: string): VersionDetector | null {
   if (agentType === 'codebuddy-ide') return detectCodebuddyIdeVersion;
 
   return isToolId(agentType) ? DETECTORS[agentType] : null;
-}
-
-async function detectPiVersion(): Promise<string> {
-  // Pi Coding Agent: "1.4.0"
-  const raw = await execVersion('pi');
-
-  return raw.match(/\d+\.\d+\.\d+/)?.[0] ?? '';
 }
 
 async function detectDshVersion(): Promise<string> {
