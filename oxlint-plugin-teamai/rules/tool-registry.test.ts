@@ -32,7 +32,10 @@ export const ids = Object.keys(TOOLS);`, undefined, { filename: 'scripts/new-pag
 rule.invalid('rejects a reader not yet moved once it no longer reads a table', `import { isToolId } from '../tool-registry.js';
 export const known = isToolId('claude');`, (output) => {
   expect(output).toContain('remove it from NOT_YET_MOVED');
-}, { filename: 'src/session-flow/agent-session.ts' });
+}, { filename: 'src/session-flow/index.ts' });
+
+rule.invalid('rejects the session adapter registry in agent-session, which looks adapters up through getAdapter', `import { ADAPTER_REGISTRY } from './adapters/index.js';
+export const adapter = ADAPTER_REGISTRY.codex;`, undefined, { filename: 'src/session-flow/agent-session.ts' });
 
 rule.invalid('rejects reading the families directly', `import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 export const claude = BUILT_IN_TOOLS.claude.tools.claude;`, (output) => {
@@ -46,7 +49,7 @@ rule.valid('allows the registry', `import { TOOLS } from './tools.js';
 export const ids = Object.keys(TOOLS);`, { filename: 'src/tool-registry.ts' });
 
 rule.valid('allows a reader not yet moved', `import { ADAPTER_REGISTRY } from './adapters/index.js';
-export const adapter = ADAPTER_REGISTRY.codex;`, { filename: 'src/session-flow/agent-session.ts' });
+export const adapter = ADAPTER_REGISTRY.codex;`, { filename: 'src/session-flow/index.ts' });
 
 rule.valid('allows types and lookups from the tables\' modules', `import type { ToolId, ToolDescriptor } from './tools.js';
 import { descriptorOf, isToolId } from './tool-registry.js';
