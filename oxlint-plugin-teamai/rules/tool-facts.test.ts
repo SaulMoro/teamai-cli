@@ -88,6 +88,10 @@ export const platforms = { tclaude: TCLAUDE, 'claude-internal': INTERNAL } as co
 export const launch = { pi: PI, omp: OMP } as const satisfies Record<string, LaunchAdapter>;
 `, { filename: 'packages/tool-pi/src/launch.ts', files: { ...files, 'packages/tool-pi/package.json': JSON.stringify({ name: '@teamai/tool-pi', private: true }) } });
 
+  rule.valid('allows the version detectors a family declares', `
+export const detect = { codebuddy: CLI, workbuddy: () => app('/Applications/WorkBuddy.app') } as const satisfies Record<string, VersionDetector>;
+`, { filename: 'packages/tool-codebuddy/src/detect.ts', files: { ...files, 'packages/tool-codebuddy/package.json': JSON.stringify({ name: '@teamai/tool-codebuddy', private: true }) } });
+
   rule.valid('allows the families tool-definitions lists', `
 export const BUILT_IN_TOOLS = { claude, codex } as const satisfies Readonly<Record<string, ToolFamily>>;
 `, { filename: 'packages/tool-definitions/src/registry.ts', files: { ...files, 'packages/tool-definitions/package.json': JSON.stringify({ name: '@teamai/tool-definitions', private: true }) } });

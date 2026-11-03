@@ -13,44 +13,9 @@ export const SESSION_PLATFORM_FACTS = {
   qoder: BUILT_IN_TOOLS.qoder.platforms.qoder,
   'qoder-cn': BUILT_IN_TOOLS.qoder.platforms['qoder-cn'],
   joycode: BUILT_IN_TOOLS.joycode.platforms.joycode,
-  'codebuddy': {
-    // CodeBuddy 2.176.0 bundle: getHomeProjectsDir() is <CODEBUDDY_CONFIG_DIR or ~/.codebuddy>/projects.
-    store: { in: 'tool-home', home: 'codebuddy', dir: 'projects' },
-    resume: (id) => `codebuddy --resume ${id}`,
-    thinking: true, images: false,
-    nativeTools: new Set([
-      'read_file', 'write_file', 'edit_file', 'bash', 'grep', 'glob', 'task', 'todo_write',
-    ]),
-    legacyIdWithoutWorkspace: true,
-    sqliteRegistrationOnWindows: false,
-    idFormat: 'uuid',
-  },
-  'codebuddy-ide': {
-    tool: 'codebuddy-ide',
-    store: { in: 'ide-history' },
-    resume: (id) => `codebuddy-ide --resume ${id}`,
-    thinking: true, images: true,
-    nativeTools: new Set([
-      'read_file', 'write_file', 'write_to_file', 'edit_file', 'replace_in_file', 'delete_file',
-      'bash', 'execute_command', 'grep', 'search_content', 'glob', 'list_dir', 'codebase_search',
-      'web_search', 'web_fetch', 'preview_url', 'lsp', 'task', 'todo_write', 'use_skill',
-      'update_memory', 'image_gen',
-    ]),
-    legacyIdWithoutWorkspace: false,
-    sqliteRegistrationOnWindows: false,
-    idFormat: 'uuid',
-  },
-  'workbuddy': {
-    store: { in: 'tool-home', home: 'workbuddy', dir: 'projects' },
-    resume: (id) => `workbuddy --resume ${id}`,
-    thinking: true, images: false,
-    nativeTools: new Set([
-      'read_file', 'write_file', 'edit_file', 'bash', 'grep', 'glob', 'task', 'todo_write',
-    ]),
-    legacyIdWithoutWorkspace: false,
-    sqliteRegistrationOnWindows: true,
-    idFormat: 'uuid',
-  },
+  codebuddy: BUILT_IN_TOOLS.codebuddy.platforms.codebuddy,
+  'codebuddy-ide': BUILT_IN_TOOLS.codebuddy.platforms['codebuddy-ide'],
+  workbuddy: BUILT_IN_TOOLS.codebuddy.platforms.workbuddy,
   'cursor': {
     // The Cursor CLI's transcripts move with CURSOR_DATA_DIR, recorded under its own root (RELOCATABLE_TOOLS).
     store: { in: 'tool-home', home: 'cursor', dir: 'projects', root: 'cursor-data' },

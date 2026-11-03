@@ -25,11 +25,9 @@ vi.mock('node:os', async (importOriginal) => {
 
 import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import { sessionStoreDir } from '../locate.js';
-import { CodeBuddyAdapter } from '../session-flow/adapters/codebuddy.js';
-import { CodeBuddyIdeAdapter } from '../session-flow/adapters/codebuddy-ide.js';
+import { getAdapter } from '../session-flow/adapters/index.js';
 import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import { CursorAdapter } from '../session-flow/adapters/cursor.js';
-import { WorkBuddyAdapter } from '../session-flow/adapters/workbuddy.js';
 import * as crypto from 'node:crypto';
 import { degradeThinkingBlocks, fidelityFromSession } from '../session-flow/migrate.js';
 import type { Session, Message } from '@teamai/tool-core/sessions/ir';
@@ -304,15 +302,15 @@ function makeAdapter(platform: string): AgentAdapter {
     case 'claude-code':
       return new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
     case 'codebuddy':
-      return new CodeBuddyAdapter();
+      return getAdapter('codebuddy');
     case 'codebuddy-ide':
-      return new CodeBuddyIdeAdapter();
+      return getAdapter('codebuddy-ide');
     case 'codex':
       return new CodexAdapter('codex', sessionStoreDir('codex', undefined));
     case 'cursor':
       return new CursorAdapter();
     case 'workbuddy':
-      return new WorkBuddyAdapter();
+      return getAdapter('workbuddy');
     default:
       throw new Error(`unknown platform ${platform}`);
   }
@@ -457,7 +455,7 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
         });
 
       // F1: IDE 侧图片块（IR 无对应类型）被静默丢弃 → score 仍 1.0
-      const ide = new CodeBuddyIdeAdapter();
+      const ide = getAdapter('codebuddy-ide');
       const cwd = newWorkspace('f1-proj');
       const root = ideHistoryRoot();
       const convId = 'f1111111111111111111111111111111';

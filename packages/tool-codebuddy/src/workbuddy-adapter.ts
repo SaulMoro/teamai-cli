@@ -27,7 +27,7 @@ import { AgentAdapter, type SessionMeta, type SessionReadRef } from '@teamai/too
 import { z } from 'zod';
 import type { Session, SessionMetadata, Message, ContentBlock, ThinkingBlock, ToolArguments, ToolCallBlock, ToolResultBlock } from '@teamai/tool-core/sessions/ir';
 import { imagePlaceholderText, MessageMetadataSchema, toolArgumentsFrom } from '@teamai/tool-core/sessions/ir';
-import { CbContentItemSchema, cbRecords, type CbFunctionCallProviderData, type CbRecord, type CbWrittenLine } from './codebuddy.js';
+import { CbContentItemSchema, cbRecords, type CbFunctionCallProviderData, type CbRecord, type CbWrittenLine } from './codebuddy-adapter.js';
 import {
   encodeCwdCodeBuddy,
   decodeCwdGeneric,
@@ -39,11 +39,10 @@ import {
   removeDirRecursive,
   OptionalString,
 } from '@teamai/tool-core/sessions/fs';
-import { sessionStoreDir } from '../../locate.js';
 import { cleanTitleText, cutTitle, fallbackTitle, isInjectedText, titleFromCandidates, titleFromUserText } from '@teamai/tool-core/sessions/title';
 import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
-import { registerWorkBuddySession, unregisterWorkBuddySession } from '../workbuddy-store.js';
-import { log } from '../../utils/logger.js';
+import { registerWorkBuddySession, unregisterWorkBuddySession } from './workbuddy-store.js';
+import { log } from '@teamai/tool-core/log';
 
 // ---------------------------------------------------------------------------
 // Tool-name normalization map
@@ -197,7 +196,7 @@ export class WorkBuddyAdapter extends AgentAdapter {
   private readonly storageRoot: string;
 
   /** @param storageRoot The session store (the registry passes the member's, `sessionStoreDir`). */
-  constructor(storageRoot = sessionStoreDir('workbuddy', undefined)) {
+  constructor(storageRoot: string) {
     super();
     this.storageRoot = storageRoot;
   }
