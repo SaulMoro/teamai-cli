@@ -31,8 +31,11 @@ import {
   type LocalToolRun,
 } from './local-tool-adapter.js';
 import { placeView, runtimeCommand, runtimeLauncher, runtimeStepEnv, seedToolHome, type StartedCommand } from './runtime-steps.js';
-import { attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
-import type { StepRuntime } from '../../runtimes/step-runtime.js';
+import { attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
+import { localStepRuntime } from '../../runtimes/local.js';
+import type { EngineOptions, OpenedDriver } from '../../runtimes/sources.js';
+import { newOpId, type StepRuntime } from '../../runtimes/step-runtime.js';
+import type { SoleDriver } from '../../engine.js';
 import { storeDirOf } from '../../../session-flow/adapters/index.js';
 import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, readRun, RunIdSchema, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import { abandonPlace, cloneDelivery, cloneHead, placeLeaseOf, placeOf, placeRoot, preparedClone, preparePlace, cloneRoleProblem, roleNotDeliveredFailure, runPlaceSetup, sweepClones, worktreeRoleProblem, type StepEnd } from '../../place/place.js';
@@ -187,16 +190,28 @@ export interface LocalDriverOptions {
   resolveTool?: (executable: string) => string | null;
   /** Called with the runs each report the engine took answers its settled passes started, which the caller drives. */
   started?: (runs: readonly StartedRun[]) => void;
-  /** The step runtime a driver definition chose, and what it offered at `init`. Without it, steps run here as they always did. */
-  runtime?: DriverRuntime;
+  /** The runtimes of the driver definition `--driver` names, in its order. Without it, the loop has one: `local`. */
+  runtimes?: DriverRuntimes;
 }
 
-/** A driver definition's step runtime, as the loop runs every step on it. */
-export interface DriverRuntime {
+/** A driver definition's runtimes, which the loop offers in turn: each step goes to the first that can take it. */
+export interface DriverRuntimes {
   /** The definition's canonical name, recorded with each attempt. */
   driver: string;
+  runtimes: OpenedDriver['runtimes'];
+}
+
+/**
+ * One runtime the loop offers: `local`, which launches on this machine as the loop always did, or an external one,
+ * whose steps go through an `AttemptRun`. Each is reached through the `StepRuntime` interface for its offer and the
+ * lifecycle of its attempts' places.
+ */
+interface RuntimeSlot {
+  kind: 'local' | 'external';
+  use: string;
   runtime: StepRuntime;
   can: DriverCan;
+  engine: EngineOptions;
 }
 
 /** A lease as this driver runs it: what the engine sent, and what staging it adds. A step staged after `expiresAt` does not start. */
@@ -924,36 +939,85 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // rather than waits.
   const named = isStarted ? namedTools(started) : undefined;
   const tools = [...LAUNCH_TOOLS, ...instanceNames().filter((name) => !isToolId(name))].filter((tool) => (named === undefined || named.has(tool)) && onPath(tool));
-  const onRuntime = options.runtime;
+  const defined: DriverRuntimes = options.runtimes ?? { driver: 'local', runtimes: [{ kind: 'local', use: 'local', engine: { logins: [] } }] };
   const lookup = options.resolveTool ? { resolveTool: options.resolveTool } : {};
-  const confined = !onRuntime && isStarted && mayConfine(started) ? await confinedOffers(lookup) : [];
+  const confined = isStarted && mayConfine(started) ? await confinedOffers(lookup) : [];
+  const local = localStepRuntime(localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools, confined }));
+  const localReady = await local.init({ options: {}, mode });
 
-  // On a step runtime the loop declares what the runtime offered, and launches only the tools it can give a home. It
-  // offers no step confined to a directory: protocol 1 has no way to confine one.
-  const can = onRuntime
-    ? { ...onRuntime.can, tools: (onRuntime.can.tools ?? []).filter(isExecRuntimeTool), confined: [] }
-    : localCan({ strict: localStrictCan(config, options), hitl: canHitl, tools, confined });
+  if (!localReady.ok) return { error: { code: 'runtime_failed', message: localReady.failure.message } };
 
+  // An external runtime is offered with what it said it can, and launches only the tools it can give a home. It is
+  // offered no step confined to a directory: protocol 1 has no way to confine one.
+  const toSlot = (entry: OpenedDriver['runtimes'][number]): RuntimeSlot => (entry.kind === 'local'
+    ? { kind: 'local', use: 'local', runtime: local, can: localReady.can, engine: entry.engine }
+    : { kind: 'external', use: entry.use, runtime: entry.runtime, can: { ...entry.can, tools: (entry.can.tools ?? []).filter(isExecRuntimeTool), confined: [] }, engine: entry.engine });
+
+  const [firstSlot, ...otherSlots] = defined.runtimes.map(toSlot);
+  const slots: [RuntimeSlot, ...RuntimeSlot[]] = [firstSlot ?? toSlot({ kind: 'local', use: 'local', engine: { logins: [] } }), ...otherSlots];
+  const sole: SoleDriver = { driver: defined.driver, offers: [{ runtime: slots[0].use, can: slots[0].can }, ...otherSlots.map((slot) => ({ runtime: slot.use, can: slot.can }))] };
   const driver = driverIdentity('local', cwd);
-  // The attempts that run on the step runtime, until their report is recorded or their place abandoned.
+  // The runtime each open attempt runs on, and the handle of its place, until its report is recorded or its place abandoned.
+  const slotOf = new Map<string, RuntimeSlot>();
   const attemptRuns = new Map<string, AttemptRun>();
+  const localHandles = new Map<string, string>();
 
   const runOf = (lease: Lease): AttemptRun | undefined => {
-    if (!onRuntime) return undefined;
+    const slot = slotOf.get(lease.attempt);
+
+    if (slot?.kind !== 'external') return undefined;
     const known = attemptRuns.get(lease.attempt);
 
     if (known) return known;
-    const created = attemptRun({ config, run: runId, attempt: lease.attempt, runtime: onRuntime.runtime, driver: onRuntime.driver });
+    const created = attemptRun({ config, run: runId, attempt: lease.attempt, runtime: slot.runtime, driver: defined.driver });
     attemptRuns.set(lease.attempt, created);
 
     return created;
   };
 
+  /** Binds a lease to the runtime it was offered on. A `local` attempt's place is opened at once: it is the host's. */
+  const bind = async (lease: Lease, slot: RuntimeSlot): Promise<void> => {
+    slotOf.set(lease.attempt, slot);
+
+    if (slot.kind !== 'local') return;
+    const view = { worktree: lease.cwd ?? root, readonly: [], result: path.dirname(attemptResultPath(config, runId, lease.attempt)), toolHome: {} };
+    const opened = await slot.runtime.open({ op: newOpId(), run: runId, attempt: lease.attempt, view, credentials: {} }, async () => {});
+
+    if (opened.kind === 'ready') localHandles.set(lease.attempt, opened.handle);
+  };
+
   const closeRun = async (attempt: string): Promise<void> => {
     const closing = attemptRuns.get(attempt);
+    const handle = localHandles.get(attempt);
     attemptRuns.delete(attempt);
+    localHandles.delete(attempt);
+    slotOf.delete(attempt);
     await closing?.close();
+
+    if (handle !== undefined) await local.close(handle);
   };
+
+  /** Whether `slot` may open another attempt under its own `max_parallel`. */
+  const slotHasRoom = (slot: RuntimeSlot): boolean => slot.engine.maxParallel === undefined
+    || [...slotOf.values()].filter((bound) => bound === slot).length < slot.engine.maxParallel;
+
+  // A restarted loop hands each attempt it left open back to the runtime it ran on, one at a time: an external one by
+  // the runtime its record names, any other to local, or, without a local runtime, to the definition's first.
+  const reconnecting: Array<{ attempt: string; slot: RuntimeSlot }> = [];
+
+  if (isStarted) {
+    for (const step of started.steps) {
+      if (step.status !== 'leased') continue;
+      const attempt = AttemptIdSchema.safeParse(step.lease.attempt);
+      const record = attempt.success ? await readAttemptRuntime(config, runId, attempt.data) : undefined;
+
+      const slot = (record && slots.find((candidate) => candidate.kind === 'external' && candidate.use === record.runtime))
+        ?? (record ? slots.find((candidate) => candidate.kind === 'external') : undefined)
+        ?? slots.find((candidate) => candidate.kind === 'local') ?? slots[0];
+
+      reconnecting.push({ attempt: step.lease.attempt, slot });
+    }
+  }
 
   const abandon = async (attempt: AttemptId): Promise<void> => {
     await abandonPlace({ config, lock, attempt });
@@ -1090,7 +1154,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   let env: WorkflowEnv | undefined;
   const seen: Record<string, string> = {};
   // Nobody answers here, so the driver offers the run to a person; once it could not, the steps only a person can take fail.
-  let handoff: PersonHandoff | undefined = canHitl ? undefined : { kind: 'offers' };
+  // A run goes to a person only when no runtime of the driver asks one.
+  let handoff: PersonHandoff | undefined = slots.some((slot) => slot.can.hitl === true) ? undefined : { kind: 'offers' };
 
   const report = async (body: ReportBody, lease: Lease): Promise<WorkflowEnvelope | undefined> => {
     const secrets = env?.secrets ?? await knownSecrets(config);
@@ -1124,7 +1189,33 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       const resolved = await resolveWorkflowEnv(config);
       const turn = { ...resolved, secrets: rememberSecrets(seen, resolved.secrets) };
       env = turn;
-      const next = await leaseNext(config, runId, driver, { running, canTakeLease, can, autoApprove: options.autoApprove, runMode: mode, handoff, base, env: turn, alone: true, prepare: true });
+
+      const ask = (slot: RuntimeSlot, take: boolean, listed: string[]): Promise<WorkflowEnvelope> => leaseNext(config, runId, driver, {
+        running: listed, canTakeLease: take, can: slot.can, autoApprove: options.autoApprove, runMode: mode, handoff, base, env: turn, alone: sole, prepare: true,
+      });
+
+      // Each runtime with room is offered in turn, in definition order, until one takes a lease: a wait is final only
+      // once every one was offered. An attempt left open by a loop before this one goes back to its own runtime first.
+      const offered = await (async (): Promise<{ next: WorkflowEnvelope; slot: RuntimeSlot }> => {
+        for (let reconnect = reconnecting.shift(); reconnect; reconnect = reconnecting.shift()) {
+          const next = await ask(reconnect.slot, false, [...running, ...reconnecting.map((other) => other.attempt)]);
+
+          if (isWorkflowError(next) || !('wait' in next.data)) return { next, slot: reconnect.slot };
+        }
+
+        const withRoom = canTakeLease ? slots.filter(slotHasRoom) : [];
+        let last: { next: WorkflowEnvelope; slot: RuntimeSlot } | undefined;
+
+        for (const slot of withRoom) {
+          last = { next: await ask(slot, true, running), slot };
+
+          if (isWorkflowError(last.next) || !('wait' in last.next.data)) return last;
+        }
+
+        return last ?? { next: await ask(slots[0], false, running), slot: slots[0] };
+      })();
+
+      const { next } = offered;
 
       if (signalled || isStoppedByPerson) continue;
       // A clone whose steps all settled is not needed any more.
@@ -1172,7 +1263,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         }
 
         // A confined step runs in its directory, never in a checkout another attempt holds.
-        held.push(nextLease.confined ? { ...nextLease, cwd: nextLease.confined.dir } : nextLease);
+        const taken = nextLease.confined ? { ...nextLease, cwd: nextLease.confined.dir } : nextLease;
+        await bind(taken, offered.slot);
+        held.push(taken);
       }
 
       const placesBusy = (): Set<string> => new Set([
