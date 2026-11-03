@@ -1,0 +1,208 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import type { RunMode } from '../../../launch-context.js';
+import type { CommandExit } from '../../../tool-launch/process-stop.js';
+import { attemptEnv } from '../../attempt-marker.js';
+import type { LeaseWire } from '../../lease-wire.js';
+import { attemptHoldingSession, attemptToolHome, type AttemptRun } from '../../runtimes/attempt.js';
+import type { PlaceView } from '../../runtimes/step-runtime.js';
+import { attemptResultPath, type AttemptId, type RunId } from '../../store.js';
+import type { SessionRef } from '../../workspace.js';
+import type { WorkflowFailure } from '../../types.js';
+import { git } from '../../worktree.js';
+import type { LocalConfig } from '../../../types.js';
+import type { ToolClosed, ToolLauncher } from './local-tool-adapter.js';
+
+// ─── The local loop's steps on a step runtime ────────────
+//
+//  teamai prepares the place on the host and finishes it there (finishWriter, with hook-safe git). What runs in
+//  between goes through the attempt's runtime: a command step as one `exec` of the shell, a prompt step as one `exec`
+//  of the argv the local tool adapter builds. Work is collected back before teamai reads the result or commits.
+//
+
+/** The most stderr a command step's failure message keeps, as the local loop's own commands do. */
+const STDERR_KEPT = 64 * 1024;
+
+/**
+ * What attempt `attempt` gives its runtime: the worktree `cwd` read-write at its host path, its git paths read-only
+ * (the common git directory, the worktree's admin directory, which holds `config.worktree`, and the `.git` pointer),
+ * the result directory read-write, and the tool home under the variable its tool reads.
+ */
+export async function placeView(config: LocalConfig, run: RunId, attempt: AttemptId, cwd: string, toolHome?: { variable: string; dir: string }): Promise<PlaceView> {
+  const listed = await git(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir', '--git-dir']);
+  const gitDirs = listed.code === 0 ? listed.stdout.split('\n').map((line) => line.trim()).filter((line) => line !== '') : [];
+  const pointer = path.join(cwd, '.git');
+  const readonly = [...new Set([...gitDirs, ...(await fs.lstat(pointer).then(() => [pointer], () => []))])];
+  const result = path.dirname(attemptResultPath(config, run, attempt));
+  await fs.mkdir(result, { recursive: true });
+  const view: PlaceView = { worktree: cwd, readonly, result, toolHome: {} };
+
+  if (toolHome) view.toolHome[toolHome.variable] = toolHome.dir;
+
+  return view;
+}
+
+/** The argv a command step runs as: its command in the shell, as the local loop runs one. */
+export function shellArgv(command: string): string[] {
+  return process.platform === 'win32' ? ['cmd.exe', '/d', '/s', '/c', command] : ['/bin/sh', '-c', command];
+}
+
+/** The names a step's process gets over its runtime's environment, and those it goes without. */
+export interface StepEnv {
+  env: Record<string, string>;
+  unset: string[];
+}
+
+/**
+ * The names a step's process gets over the runtime's own environment: each key the lease provides, with its value
+ * here, the lease's `env`, and the attempt's marker. Never this process's environment: `unset` lists the names the
+ * lease withholds, which the runtime removes from its own.
+ */
+export function runtimeStepEnv(lease: Pick<LeaseWire, 'envScope' | 'env' | 'attempt'>, scoped: NodeJS.ProcessEnv, { config, run, mode }: { config: LocalConfig; run: RunId; mode: RunMode }): StepEnv {
+  const env: Record<string, string> = {};
+
+  for (const key of lease.envScope?.provide ?? []) {
+    const value = scoped[key];
+
+    if (value !== undefined) env[key] = value;
+  }
+
+  Object.assign(env, lease.env, attemptEnv(config, run, lease.attempt, mode));
+
+  return { env, unset: [...lease.envScope?.withhold ?? []] };
+}
+
+function stringEnv(env: NodeJS.ProcessEnv): Record<string, string> {
+  return Object.fromEntries(Object.entries(env).flatMap(([key, value]) => (value === undefined ? [] : [[key, value]])));
+}
+
+/** A started command: one here, or one on a step runtime, which may end with a failure instead of an exit. */
+export interface StartedCommand {
+  exit: Promise<CommandExit | WorkflowFailure>;
+  /** Stops it and what it started, then settles with how it ended once they are gone. */
+  stop: () => Promise<CommandExit | WorkflowFailure>;
+}
+
+/**
+ * A command step on the attempt's runtime, as the loop stages and stops one: open, one exec of the shell, collect.
+ * A runtime failure, or an exec a restart found running and stopped, ends it with a failure instead of an exit.
+ */
+export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<PlaceView>; command: string; env: Record<string, string>; unset: string[] }): StartedCommand {
+  const { run, command, env, unset } = input;
+
+  const exit = (async (): Promise<CommandExit | WorkflowFailure> => {
+    const view = await input.view();
+    const opened = await run.open(view);
+
+    if (!opened.ok) return opened.failure;
+    let stderr = '';
+    let output = '';
+
+    const end = await run.exec({ argv: shellArgv(command), env, unset, cwd: view.worktree }, {
+      onOutput: (stream, data) => {
+        output += data;
+
+        if (stream === 'stderr') stderr = `${stderr}${data}`.slice(-STDERR_KEPT);
+      },
+    });
+
+    const uncollected = await run.collect();
+
+    switch (end.kind) {
+      case 'exited':
+        return uncollected ?? { exitCode: end.code, stdout: end.stdout, stderr, output: output || end.stdout };
+      case 'cancelled':
+        return { exitCode: 130, stdout: '', stderr, output };
+      case 'interrupted':
+        return interrupted();
+      case 'failed':
+        return { code: 'runtime_failed', message: `The step runtime could not run the command: ${end.failure.message}` };
+      default: {
+        const unhandled: never = end;
+
+        return unhandled;
+      }
+    }
+  })();
+
+  return { exit, stop: async () => {
+    await run.cancel();
+
+    return exit;
+  } };
+}
+
+function interrupted(): WorkflowFailure {
+  return {
+    code: 'runtime_interrupted',
+    message: 'teamai restarted while the step ran on its runtime, so the step was stopped: its limits cannot be kept across the gap. Its work is kept; retry the step to go on from it.',
+  };
+}
+
+/**
+ * The launcher that runs a prompt's tool through the attempt's runtime: it opens the place with the tool home, execs
+ * the tool's argv with `env` (names over the runtime's own) and without `unset`, and collects before the adapter reads
+ * the result file. A stop is the runtime's `cancel`.
+ */
+export function runtimeLauncher(run: AttemptRun, { view, toolHome, unset }: { view: PlaceView; toolHome: { tool: string; dir: string }; unset: string[] }): ToolLauncher {
+  return ({ executable, args, cwd, env, onStdout }) => {
+    let accepted = false;
+    let stdout = '';
+
+    const closed = (async (): Promise<ToolClosed> => {
+      const opened = await run.open(view, toolHome);
+
+      if (!opened.ok) return { failure: opened.failure };
+
+      const end = await run.exec({ argv: [executable, ...args], env: stringEnv(env), unset, cwd }, {
+        onAccepted: () => { accepted = true; },
+        onOutput: (stream, data) => {
+          if (stream !== 'stdout') return;
+          stdout += data;
+          onStdout(data);
+        },
+      });
+
+      const uncollected = await run.collect();
+
+      switch (end.kind) {
+        case 'exited':
+          return uncollected ? { failure: uncollected } : { exitCode: end.code, stdout: end.stdout };
+        case 'cancelled':
+          // A stop at a limit reads what the tool printed until then.
+          return { exitCode: 143, stdout };
+        case 'interrupted':
+          return { failure: interrupted() };
+        case 'failed':
+          return { failure: { code: 'runtime_failed', message: `The step runtime could not run ${executable}: ${end.failure.message}` } };
+        default: {
+          const unhandled: never = end;
+
+          return unhandled;
+        }
+      }
+    })();
+
+    return { closed, started: () => accepted, stop: () => run.cancel() };
+  };
+}
+
+/**
+ * The session a prompt on a step runtime resumes: the first of `sessions` (the lease's, then each earlier one it
+ * continued) that an earlier attempt of run `run` kept in its tool home for `tool`. That home is copied into the home of
+ * `attempt`, where the tool resumes it. Undefined when no earlier attempt holds one, and the tool starts a new session.
+ */
+export async function seedToolHome({ config, run, attempt, tool, sessions }: { config: LocalConfig; run: RunId; attempt: AttemptId; tool: string; sessions: SessionRef[] }): Promise<SessionRef | undefined> {
+  for (const session of sessions.filter((candidate) => candidate.tool === tool)) {
+    const holding = await attemptHoldingSession(config, run, session);
+
+    if (holding === undefined) continue;
+
+    // A home this attempt already has, from before a restart, keeps what its tool wrote there.
+    if (holding.attempt !== attempt) await fs.cp(holding.home, attemptToolHome(config, run, attempt, tool), { recursive: true, force: false });
+
+    return session;
+  }
+
+  return undefined;
+}

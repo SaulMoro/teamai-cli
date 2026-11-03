@@ -115,7 +115,7 @@ async function ofPass(current: LocalConfig | undefined, named: NamedPass): Promi
   if (!chosen.ok) return chosen;
   const { step, pass } = chosen;
   const subject = { runId: run.id, step, pass };
-  const missing = await missingEvidence(run, subject);
+  const missing = await missingEvidence(config, run, subject);
 
   if (missing.length > 0) {
     return refused('evidence_missing', `Pass ${pass} of step ${step} in run ${run.id} cannot be scored: no longer on this machine: ${missing.join('; ')}. Restore what is missing, or score another pass. No label was written.`);
