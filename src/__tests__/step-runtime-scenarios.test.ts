@@ -11,6 +11,7 @@ import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import type { OpState, RuntimeDisplay, RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
 import { newOpId, type ExecEnd, type ExecRequest, type OpenRequest, type PromptRequest, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import type { JsonValue } from '../types.js';
+import { sandboxOnFakeDocker } from './helpers/sandbox-runtime.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 
 /**
@@ -27,6 +28,8 @@ interface Subject {
   display?: RuntimeDisplay;
 }
 
+const sandbox = await sandboxOnFakeDocker();
+
 const SUBJECTS: Subject[] = [
   {
     name: 'toy over stdio',
@@ -35,6 +38,13 @@ const SUBJECTS: Subject[] = [
     retains: true,
   },
   { name: 'local', start: () => localStepRuntime(), options: () => ({}), retains: false },
+  {
+    name: 'sandbox on a fake docker',
+    start: (state) => stdioStepRuntime({ name: 'sandbox', command: sandbox.command, args: sandbox.args(state) }),
+    options: () => sandbox.options,
+    retains: true,
+    display: { label: 'teamai-r0123abcd-a0123abcd (docker)', fields: { container: 'teamai-r0123abcd-a0123abcd', image: 'scenario/agent:1' } },
+  },
 ];
 
 function pidAlive(pid: number): boolean {
