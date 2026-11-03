@@ -1491,6 +1491,100 @@ teamai workflow next <run> --json '{"claim":true,"driver":{"kind":"script","mach
 
 和所有认领一样，这个认领会撤下运行的待接手状态。对已被另一个安装实例认领的运行，不带 `claim` 的 `next` 在本机的 `teamai-reports` 检出显示这次认领后（`teamai pull` 或 `workflow resume` 之后）返回 `not_owner`，而不是从本机过时的副本租出步骤。认领在 `next` 租出任何步骤之前执行，并在 `driver.workspace` 的 origin 上检查仍在运行的运行的分支。随后它像 `resume` 一样，把每个本地分支移到运行记录的提交，无法移动时返回 `branch_diverged`。本安装实例已经拥有的运行保持原样，但不再留给运行器接手。认领被拒绝时，作为 `next` 的错误信封返回。从 agent 会话发出时，认领像 `resume` 一样遵循运行的 `invoke`：payload 无法带上本人的同意，所以 `ask` 运行返回 `confirm_needed`，本人同意后，会话用 `teamai workflow resume <run> --claim --confirmed` 继续它。遇到 `state_moved` 时，再发送一次认领。非布尔值返回 `invalid_json`，消息为 `claim must be a boolean`。运行可能被其他机器继续的驱动，要在 `changes` 和 `read` 中上报完整的提交 id。`publish` 遇到其他形式的提交值时以 `snapshot_unsupported` 拒绝，并写明字段。
 
+## 驱动定义和步骤运行时
+
+驱动定义是一个 YAML 文件，`workflow start` 和 `workflow resume` 用 `--driver <name>` 选中它。它指定运行每个步骤的步骤运行时，也可以指定提示步骤使用的工具。步骤运行时是一个程序：它为一次尝试打开一个位置，在那里运行命令或工具，再把工作带回来。它和工具自带的运行时（例如 WorkBuddy 解包的 Node）不是一回事。
+
+```yaml
+# 团队仓库里的 drivers/toy.yaml
+schemaVersion: v1alpha1
+name: toy
+description: Run steps on the team's toy runtime.
+tool: claude            # 步骤或 --tools 没有指定其他工具时，提示步骤在 Claude Code 上运行
+runtimes:
+  - use: toy            # 团队仓库里的 runtimes/toy/runtime
+    options:
+      state: /var/tmp/toy-state
+```
+
+```sh
+teamai workflow start review --driver toy
+teamai workflow resume r1a2b3c4d --driver toy
+```
+
+teamai 按下面的顺序查找 `<name>.yaml`，使用找到的第一个：
+
+| 位置 | 说明 |
+| --- | --- |
+| `~/.teamai/drivers/` | 只属于你自己。`resume --next` 从不读取它。 |
+| 团队仓库的 `drivers/` 和 `drivers/<namespace>/` | 两个生效的命名空间定义同一个名字时，失败为 `driver_namespace_conflict`。 |
+| 用户作用域的团队仓库 | 只在项目里启动时查找。 |
+| teamai 自带的定义 | 每个都命名为 `teamai-<name>`。 |
+
+没有名为 `x` 的定义时，`--driver x` 运行 `teamai-x`，所以 `--driver claude` 和 `--driver teamai-claude` 都运行自带的 `teamai-claude`。`local`、`skill` 和 `fleet` 不能用作定义名。
+
+这个版本里，一个定义只列出一个运行时。`use: local` 按 `--driver local` 的方式运行步骤。其他名字都是外部程序，按下面的顺序查找：
+
+```text
+~/.teamai/runtimes/<name>/runtime          你自己的
+runtimes/<name>/runtime                    团队仓库，或 runtimes/<namespace>/<name>/runtime
+teamai-runtime-<name>                      在 PATH 上
+```
+
+团队运行时是队友推送的代码，所以只有在这台机器上有人接受过的修订才会运行。它目录下任何文件的改动都会产生新的修订。有人值守的运行在第一次启动前会询问：
+
+```text
+Step runtime "toy" comes from the team repo (runtimes/toy) at revision 3f9c0a1b2d4e, which you have not accepted on this machine. It runs as you, with your files. Review /home/me/team/runtimes/toy (runtime) before you accept it.
+Run it? [y/N]
+```
+
+无人值守的运行不会询问。它失败为 `runtime_not_accepted`，什么也不启动。要接受这个修订，在终端里运行一次同样的命令。接受过的修订保存在 `~/.teamai/trust/runtimes.json`。
+
+每次尝试在运行时上得到：
+
+- 工作树，在主机上的原路径可读写。git 目录和 `.git` 指针只读。teamai 在主机上提交和推送，并关闭钩子、fsmonitor 和引用替换。
+- `attempts/<attempt>/out/`，可读写。结果文件是 `out/result.json`。
+- 提示步骤有自己的工具主目录：`attempts/<attempt>/tool-home/<tool>`，通过 `CLAUDE_CONFIG_DIR`、`CODEX_HOME` 或 `CODEBUDDY_CONFIG_DIR` 设置。提示步骤只在 Claude Code、Codex 或 CodeBuddy 上运行，并且只以无头方式运行，不能交互。评分、发布和之后续接这个会话的轮次都从这个目录读取会话。之后的轮次从它的副本开始。
+- 租约提供的环境变量键、租约的 `env` 和这次尝试的标记。租约扣留的键会从运行时的环境里移除。
+
+teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attempt>/runtime.json`。teamai 被杀掉后，`workflow resume` 会再次发送同样的 id：
+
+| 被杀掉的时机 | 继续运行时 |
+| --- | --- |
+| 运行时接受 `open` 之后 | 同一个句柄，不会打开第二个位置 |
+| 一次 exec 结束之后 | 从运行时保存的内容读取它的输出、会话和用量，工具不会再次运行 |
+| exec 运行期间 | 它被停止，步骤失败为 `runtime_interrupted`，工作会保留 |
+
+`workflow cancel` 会停止正在运行的 exec 和它启动的所有进程。
+
+### 编写步骤运行时
+
+运行时从 stdin 每行读取一个 JSON 请求，在 stdout 上用 JSON 行回答，协议版本 `1`。`src/__tests__/fixtures/runtime-toy/runtime.mjs` 是一个完整的例子，它在主机上运行步骤。
+
+```text
+→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"}}
+← {"type":"init","ok":true,"can":{"workspace":["read-only","new","continue"],"tools":["claude"],"env":true,"unattended":true}}
+→ {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","view":{…},"credentials":{}}
+← {"op":"op-5e0d11cb4777","event":"accepted","handle":"toy-r…-a…"}
+← {"op":"op-5e0d11cb4777","event":"ready"}
+→ {"type":"exec","op":"op-83bfffde9ce3","handle":"toy-r…-a…","argv":["/bin/sh","-c","npm test"],"env":{…},"unset":[],"cwd":"/repo"}
+← {"op":"op-83bfffde9ce3","event":"accepted"}
+← {"op":"op-83bfffde9ce3","event":"output","stream":"stdout","data":"ok\n"}
+← {"op":"op-83bfffde9ce3","event":"exited","code":0,"stdout":"ok\n"}
+```
+
+其他请求是 `cancel`、`collect`、`reattach` 和 `close`。在 `close` 之前，运行时对重复的 `op` 给出同样的结果。它保存 exec 打印的内容和退出方式，这样重启后的 teamai 可以用 `reattach` 读取。运行时不接受的选项会让 `init` 失败为 `bad_option`，并给出那个键。
+
+| 错误 | 下一步 |
+| --- | --- |
+| `driver_not_found` | 添加 `drivers/<name>.yaml` 并运行 `teamai pull`，或者添加 `~/.teamai/drivers/<name>.yaml` |
+| `driver_invalid` | 修正消息里指出的文件 |
+| `driver_namespace_conflict`、`runtime_namespace_conflict` | 只在一个命名空间里保留这个名字，推送，然后运行 `teamai pull` |
+| `runtime_not_found` | 把运行时安装到上面的某个位置 |
+| `runtime_not_accepted` | 有人值守地运行一次这个命令，审查并接受这个修订 |
+| `bad_option` | 修正定义里的选项 |
+| `runtime_failed`、`runtime_interrupted` | 重试这个步骤：`teamai workflow retry <run> <step>` |
+
 ## 在自己的驱动里使用工作区
 
 `local` 以外领取工作区租约的驱动，要把运行的提交放在其他驱动或其他机器能找到的地方。每个驱动都遵守两条规则：
