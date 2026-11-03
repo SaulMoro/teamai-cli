@@ -31,7 +31,9 @@ import { ownRunSweptAt, resolveRetention, type ResolvedRetention } from '../work
 import { loadTeamConfig } from '../config.js';
 import { callerProvenance, respondProvenance, respondToHitl } from '../workflow/run-controls.js';
 import { PublishedRuns, type PublishedRun, type Taker } from '../workflow-published-runs.js';
-import { installOwner, isRunId, readRun, readRuns, runsDir } from '../workflow/store.js';
+import { readAttemptRuntime, type AttemptRuntimeRecord } from '../workflow/runtimes/attempt.js';
+import { runPasses } from '../workflow/loop.js';
+import { AttemptIdSchema, installOwner, isRunId, readRun, readRuns, RunIdSchema, runsDir } from '../workflow/store.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 import type { StepHitl, RunState } from '../workflow/types.js';
 import { HttpError, type JsonBody } from './http.js';
@@ -159,6 +161,8 @@ interface StepRow {
   harness?: AgentHarness;
   /** What changed in `harness` since the previous pass of the step that recorded one, when anything did. */
   harnessChanges?: HarnessChange[];
+  /** The step runtime the pass's attempt ran on, on this machine: its name, the handle it gave, and how far the attempt got. */
+  runtime?: { name: string; driver: string; handle?: string; phase: AttemptRuntimeRecord['phase'] };
 }
 
 type KeptRunBranches = Extract<SettledBranches, { state: 'kept' }> & { retention: ResolvedRetention; eligibleAt?: string };
@@ -448,7 +452,31 @@ async function localRunDetail(config: LocalConfig, runId: string): Promise<RunDe
     branchesOf(config, run),
   ]);
 
-  return { ...localDetail(run, localRow(run, records), judging?.passes ?? new Map(), await RunJudging.total(config, runId, judging)), ...benchmark, ...branches };
+  const detail = localDetail(run, localRow(run, records), judging?.passes ?? new Map(), await RunJudging.total(config, runId, judging));
+
+  return { ...detail, steps: await withRuntimes(config, run, detail.steps), ...benchmark, ...branches };
+}
+
+/** `steps` of local run `run`, each with the step runtime its attempt ran on, when it ran on one. */
+async function withRuntimes(config: LocalConfig, run: RunState, steps: StepRow[]): Promise<StepRow[]> {
+  const runId = RunIdSchema.safeParse(run.id);
+
+  if (!runId.success) return steps;
+  const attempts = new Map(runPasses(run).flatMap((pass) => (pass.attempt === undefined ? [] : [[`${pass.step}#${pass.pass}`, pass.attempt] as const])));
+
+  for (const state of run.steps) if (state.status === 'leased') attempts.set(`${state.id}#${state.pass ?? 1}`, state.attempt);
+
+  return Promise.all(steps.map(async (row) => {
+    const attempt = AttemptIdSchema.safeParse(attempts.get(`${row.step}#${row.pass}`));
+    const record = attempt.success ? await readAttemptRuntime(config, runId.data, attempt.data) : undefined;
+
+    if (!record) return row;
+    const runtime: NonNullable<StepRow['runtime']> = { name: record.runtime, driver: record.driver, phase: record.phase };
+
+    if (record.open.handle !== undefined) runtime.handle = record.open.handle;
+
+    return { ...row, runtime };
+  }));
 }
 
 /** One run with a row per pass of each step, or undefined when the source holds no such run. */
