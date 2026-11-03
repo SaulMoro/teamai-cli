@@ -2,11 +2,13 @@
 // The toy step runtime: protocol 1 over JSON lines on stdio. It runs each exec on the host, in a process group of its
 // own, and keeps handles and outcomes in the `state` option's directory, so a toy started again answers a repeated
 // operation and a reattach from them. `die_at` kills the process that spawned it, once per state directory, right after
-// it recorded that point and before it replies: `open-accepted` or `exec-exited`.
+// it recorded that point and before it replies: `open-accepted` or `exec-exited`. It reads each request with the
+// protocol's own schema, so a request teamai writes that the protocol does not have is answered with an error.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
+import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 
 const OPTIONS = new Set(['state', 'die_at', 'can', 'display']);
 
@@ -229,14 +231,16 @@ const HANDLERS = { init, open, exec, cancel, collect: (request) => send({ event:
 
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (line.trim() === '') return;
-  const request = JSON.parse(line);
-  const handler = HANDLERS[request.type];
+  const parsed = RuntimeRequestSchema.safeParse(JSON.parse(line));
 
-  if (!handler) {
-    send({ event: 'error', message: `The toy runtime does not know request "${request.type}".` });
+  if (!parsed.success) {
+    send({ event: 'error', message: `The toy runtime does not know request ${line.slice(0, 200)}: ${parsed.error.issues[0]?.message}` });
 
     return;
   }
+
+  const request = parsed.data;
+  const handler = HANDLERS[request.type];
 
   if (request.type !== 'init' && !options) {
     send({ event: 'error', message: 'Send init first.' });

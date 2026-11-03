@@ -13,7 +13,8 @@ import { shippedRuntimeFile } from '../../default-drivers.js';
 import { personalDir, resolveDriver, teamItem, type ResolvedDriver } from './definitions.js';
 import { localStepRuntime } from './local.js';
 import { stdioStepRuntime } from './stdio.js';
-import type { RuntimeOptions, StepRuntime } from './step-runtime.js';
+import type { RuntimeOptions } from '@teamai/runtime-protocol';
+import type { StepRuntime } from './step-runtime.js';
 import type { LaunchTool } from '../../tool-launch/tools.js';
 
 // ─── Where a step runtime comes from ─────────────────────

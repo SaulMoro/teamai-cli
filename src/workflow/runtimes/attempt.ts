@@ -11,7 +11,8 @@ import { attemptDir, AttemptIdSchema, attemptsDir, RunIdSchema, type AttemptId, 
 import type { WorkflowFailure } from '../types.js';
 import type { SessionRef } from '../workspace.js';
 import { loginFileOf } from './login.js';
-import { newOpId, OpIdSchema, RuntimeDisplaySchema, type ExecEnd, type ExecEvents, type PlaceView, type RuntimeDisplay, type StepRuntime } from './step-runtime.js';
+import { OpIdSchema, RuntimeDisplaySchema, type PlaceView, type RuntimeDisplay } from '@teamai/runtime-protocol';
+import { newOpId, type ExecEnd, type ExecEvents, type StepRuntime } from './step-runtime.js';
 
 // ─── An attempt on a step runtime ────────────────────────
 //
