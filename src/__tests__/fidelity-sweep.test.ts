@@ -27,7 +27,6 @@ import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import { sessionStoreDir } from '../locate.js';
 import { getAdapter } from '../session-flow/adapters/index.js';
 import { CodexAdapter } from '@teamai/tool-core/formats/codex';
-import { CursorAdapter } from '../session-flow/adapters/cursor.js';
 import * as crypto from 'node:crypto';
 import { degradeThinkingBlocks, fidelityFromSession } from '../session-flow/migrate.js';
 import type { Session, Message } from '@teamai/tool-core/sessions/ir';
@@ -308,7 +307,7 @@ function makeAdapter(platform: string): AgentAdapter {
     case 'codex':
       return new CodexAdapter('codex', sessionStoreDir('codex', undefined));
     case 'cursor':
-      return new CursorAdapter();
+      return getAdapter('cursor');
     case 'workbuddy':
       return getAdapter('workbuddy');
     default:
@@ -478,7 +477,7 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
 
       // F2: 空 content 消息被多平台写入端静默丢弃（score 按 block 计，看不见消息级丢失）
       const fixtureEmpty = buildFixture();
-      const cursor = new CursorAdapter();
+      const cursor = getAdapter('cursor');
       const claude = new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', undefined));
       const fidEmpty = fidelityFromSession(fixtureEmpty, 'cursor');
       audit.push({ case: 'F2 fixture(empty msg) fidelity→cursor', score: Number(fidEmpty.score.toFixed(4)), note: '空消息 0 block，不扣分；但 cursor.writeSession 会静默丢弃该消息' });

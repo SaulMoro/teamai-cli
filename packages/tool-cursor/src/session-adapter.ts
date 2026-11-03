@@ -26,7 +26,7 @@ import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadR
 import { z } from 'zod';
 import type { Session, Message, ContentBlock, ToolArguments } from '@teamai/tool-core/sessions/ir';
 import { imagePlaceholderText, ToolArgumentsSchema } from '@teamai/tool-core/sessions/ir';
-import { JsonValueSchema, type JsonValue } from '../../types.js';
+import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import {
   encodeCwdGeneric,
   decodeCwdGeneric,
@@ -40,11 +40,10 @@ import {
   OptionalString,
   TextOrBlocksSchema,
 } from '@teamai/tool-core/sessions/fs';
-import { sessionStoreDir } from '../../locate.js';
 import { cleanTitleText, fallbackTitle, titleFromCandidates, titleFromUserText, isRenderableText, visibleUserText } from '@teamai/tool-core/sessions/title';
-import { cursorComposerExists, registerCursorComposer, unregisterCursorComposer, type CursorComposerMessage, type CursorComposerTool } from '../cursor-store.js';
+import { cursorComposerExists, registerCursorComposer, unregisterCursorComposer, type CursorComposerMessage, type CursorComposerTool } from './cursor-store.js';
 import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
-import { log } from '../../utils/logger.js';
+import { log } from '@teamai/tool-core/log';
 import type { JsonlRecord } from '@teamai/tool-core/json';
 
 // ---------------------------------------------------------------------------
@@ -164,14 +163,13 @@ export class CursorAdapter extends AgentAdapter {
   private readonly storageRoot: string;
 
   /**
-   * @param platform Platform id (default 'cursor')
-   * @param storageRoot Transcript store (default ~/.cursor/projects; the adapter registry passes
-   *   the member's recorded CURSOR_DATA_DIR root when there is one)
+   * @param platform The session platform this store is: 'cursor'
+   * @param storageRoot The platform's transcript store (`sessionStoreDir`), such as ~/.cursor/projects
    */
-  constructor(platform = 'cursor', storageRoot?: string) {
+  constructor(platform: string, storageRoot: string) {
     super();
     this.platform = platform;
-    this.storageRoot = storageRoot ?? sessionStoreDir('cursor', undefined);
+    this.storageRoot = storageRoot;
   }
 
   isReady(): boolean {
