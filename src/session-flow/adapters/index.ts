@@ -6,7 +6,7 @@
 
 import type { LocalConfig } from '../../types.js';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
-import { ClaudeCodeAdapter } from './claude-code.js';
+import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import { CodexAdapter } from './codex.js';
 import { CodeBuddyAdapter } from './codebuddy.js';
 import { CodeBuddyIdeAdapter } from './codebuddy-ide.js';
@@ -87,7 +87,7 @@ export function listInstalledPlatforms(toolRoots?: LocalConfig['toolRoots'], pro
 
 export { AgentAdapter, type SessionMeta } from '@teamai/tool-core/sessions/base';
 
-export { ClaudeCodeAdapter } from './claude-code.js';
+export { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 
 export { CodexAdapter } from './codex.js';
 
