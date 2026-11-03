@@ -734,7 +734,7 @@ steps:
     vi.unstubAllEnvs();
     const attempts = path.join(getDataHome(config), 'workflows', 'runs', runId, 'attempts');
     const [attempt] = fs.readdirSync(attempts);
-    const kept = fs.readFileSync(path.join(attempts, attempt ?? '', 'result.json'), 'utf8');
+    const kept = fs.readFileSync(path.join(attempts, attempt ?? '', 'out', 'result.json'), 'utf8');
     expect(kept).toContain('<REDACTED:DEPLOY_TOKEN>');
     expect(kept).not.toContain('deploy-secret-value-1082');
   });
@@ -824,7 +824,7 @@ steps:
 
   function keptResult(config: LocalConfig, runId: string): string {
     const attempts = path.join(getDataHome(config), 'workflows', 'runs', runId, 'attempts');
-    return fs.readdirSync(attempts).map((attempt) => fs.readFileSync(path.join(attempts, attempt, 'result.json'), 'utf8')).join('\n');
+    return fs.readdirSync(attempts).map((attempt) => fs.readFileSync(path.join(attempts, attempt, 'out', 'result.json'), 'utf8')).join('\n');
   }
 
   it('masks a result file that is not valid JSON', async () => {
