@@ -24,21 +24,6 @@ async function detectCursorVersion(): Promise<string> {
   return raw.split('\n')[0]?.trim() ?? '';
 }
 
-async function detectHermesVersion(): Promise<string> {
-  const raw = await execVersion('hermes');
-  // hermes --version may output "(2026.8.7)\nProject: ..." — extract from parens or leading digits.
-  const match = raw.match(/^\(?(\d+(?:\.\d+)*)\)?/);
-
-  return match?.[1] ?? '';
-}
-
-async function detectOpenclawVersion(): Promise<string> {
-  const raw = await execVersion('openclaw');
-  const match = raw.match(/^([\d.]+)/);
-
-  return match?.[1] ?? '';
-}
-
 // ─── Registry ───────────────────────────────────────────
 
 /** How teamai reads each tool's version, or null when it reads none. */
@@ -61,11 +46,9 @@ const DETECTORS: Record<ToolId, VersionDetector | null> = {
   omp: null,
   pi: BUILT_IN_TOOLS.pi.detect.pi,
   codebuddy: BUILT_IN_TOOLS.codebuddy.detect.codebuddy,
-  openclaw: detectOpenclawVersion,
-  hermes: detectHermesVersion,
-  // DeepSeek Harness: `dsh --version` prints e.g. "0.1.1" (optionally with a
-  // leading "v" or trailing commit info). Extract leading semver-ish digits.
-  dsh: detectDshVersion,
+  openclaw: BUILT_IN_TOOLS.openclaw.detect.openclaw,
+  hermes: BUILT_IN_TOOLS.hermes.detect.hermes,
+  dsh: BUILT_IN_TOOLS.dsh.detect.dsh,
   workbuddy: BUILT_IN_TOOLS.codebuddy.detect.workbuddy,
   opencode: null,
   muse: detectMuseVersion,
@@ -77,13 +60,6 @@ function detectorOf(agentType: string): VersionDetector | null {
   if (agentType === 'codebuddy-ide') return BUILT_IN_TOOLS.codebuddy.detect['codebuddy-ide'];
 
   return isToolId(agentType) ? DETECTORS[agentType] : null;
-}
-
-async function detectDshVersion(): Promise<string> {
-  const raw = await execVersion('dsh');
-  const match = raw.match(/v?(\d+(?:\.\d+)*)/);
-
-  return match?.[1] ?? '';
 }
 
 async function detectMuseVersion(): Promise<string> {

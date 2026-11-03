@@ -32,8 +32,8 @@ export type RecordedVersion = { readonly command: string; readonly stdout: strin
 export interface FamilyRecordings {
   /** By launch profile id: one for every profile a tool of the family names. */
   readonly calls: Readonly<Record<string, RecordedCall>>;
-  /** By session platform id: one for every platform of the family. */
-  readonly transcripts: Readonly<Record<string, RecordedTranscript>>;
+  /** By session platform id: one for every platform of the family, or why none can be recorded. */
+  readonly transcripts: Readonly<Record<string, RecordedTranscript | { readonly unrecorded: string }>>;
   /** By token format id: one for every format a tool of the family names. */
   readonly tokens: Readonly<Record<string, RecordedUsage>>;
   /** By the tool or platform id a detector is keyed by: one for every detector of the family. */
@@ -216,7 +216,12 @@ export function describeFamily(name: string, family: ToolFamily, recordings: Fam
 
     for (const [id, profile] of Object.entries(family.launch)) describeLaunch(id, profile, recorded(recordings.calls, id, 'call'));
 
-    for (const [id, platform] of Object.entries(family.platforms)) describePlatform(id, platform, recorded(recordings.transcripts, id, 'transcript'));
+    for (const [id, platform] of Object.entries(family.platforms)) {
+      const transcript = recorded(recordings.transcripts, id, 'transcript');
+
+      if ('unrecorded' in transcript) it.skip(`session platform ${id} reads a replayed transcript: ${transcript.unrecorded}`, () => undefined);
+      else describePlatform(id, platform, transcript);
+    }
 
     for (const [id, detector] of Object.entries(family.detect)) {
       const recording = recorded(recordings.versions, id, 'version');

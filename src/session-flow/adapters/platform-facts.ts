@@ -67,19 +67,7 @@ export const SESSION_PLATFORM_FACTS = {
     idFormat: 'uuid',
     readOnly: true,
   },
-  hermes: {
-    // Hermes Agent stores every profile's sessions in <Hermes home>/state.db; source identifies the surface.
-    store: { in: 'tool-home', home: 'hermes', dir: '.' },
-    resume: (id) => `hermes -c ${id}`,
-    thinking: true, images: false,
-    nativeTools: new Set([
-      'terminal', 'read_file', 'write_file', 'patch', 'search_files', 'delegate_task',
-    ]),
-    legacyIdWithoutWorkspace: false,
-    sqliteRegistrationOnWindows: false,
-    idFormat: 'hermes',
-    readOnly: true,
-  },
+  hermes: BUILT_IN_TOOLS.hermes.platforms.hermes,
 } satisfies Record<string, SessionPlatformFacts<ToolId>>;
 
 /** A platform teamai has a session adapter for. */

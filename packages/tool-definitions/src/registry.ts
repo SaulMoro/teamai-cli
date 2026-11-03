@@ -5,6 +5,12 @@ import { family as qoder } from '@teamai/tool-qoder';
 import { family as joycode } from '@teamai/tool-joycode';
 import { family as pi } from '@teamai/tool-pi';
 import { family as codebuddy } from '@teamai/tool-codebuddy';
+import { family as kiro } from '@teamai/tool-kiro';
+import { family as trae } from '@teamai/tool-trae';
+import { family as zcode } from '@teamai/tool-zcode';
+import { family as openclaw } from '@teamai/tool-openclaw';
+import { family as hermes } from '@teamai/tool-hermes';
+import { family as dsh } from '@teamai/tool-dsh';
 
 /** Every built-in tool family. The app reads tools only through these, never by importing a family. */
-export const BUILT_IN_TOOLS = { claude, codex, qoder, joycode, pi, codebuddy } as const satisfies Readonly<Record<string, ToolFamily>>;
+export const BUILT_IN_TOOLS = { claude, codex, qoder, joycode, pi, codebuddy, kiro, trae, zcode, openclaw, hermes, dsh } as const satisfies Readonly<Record<string, ToolFamily>>;
