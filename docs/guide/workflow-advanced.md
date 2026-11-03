@@ -1272,12 +1272,75 @@ teamai looks for `<name>.yaml` in this order and uses the first it finds:
 
 `--driver x` runs `teamai-x` when no definition is named `x`, so `--driver claude` and `--driver teamai-claude` both run the shipped `teamai-claude`. `local`, `skill` and `fleet` are not definition names.
 
-A definition lists exactly one runtime in this version. `use: local` runs steps the way `--driver local` does. Any other name is an external program, found in this order:
+A definition lists one runtime or more. teamai offers each step to them in the order listed, and the first that can take it runs it:
+
+```yaml
+# drivers/sandboxed.yaml
+schemaVersion: v1alpha1
+name: sandboxed
+tool: claude
+runtimes:
+  - use: sbx              # takes every step it can
+    options:
+      max_parallel: 2
+  - use: local            # takes the rest, such as an interactive step or a required approval
+```
+
+A step that no single runtime can take fails `requirement_unmet`, naming what each one lacks:
+
+```text
+Step "review" needs what no single runtime of driver "sandboxed" offers: runtime sbx lacks tools; runtime local lacks isolation. Give one runtime of the definition all of it, or change what the step requires.
+```
+
+A step that requires strict isolation no runtime of the definition gives is refused at `workflow start`, before the run exists. A step every runtime holds back for a reason of this machine, such as a network your `workflows.allow` refuses, stays pending. Once nothing else runs, the run stops `busy` with that reason, and the dashboard's run details say which runtime held it back and why.
+
+`use: local` runs steps the way `--driver local` does. Any other name is an external program, found in this order:
 
 ```text
 ~/.teamai/runtimes/<name>/runtime          yours
 runtimes/<name>/runtime                    team repo, or runtimes/<namespace>/<name>/runtime
-teamai-runtime-<name>                      on PATH
+teamai-runtime-<name>                      shipped in teamai's package, then on PATH
+```
+
+teamai ships these definitions:
+
+| Definition | Runtimes |
+| --- | --- |
+| `teamai-claude`, `teamai-codex`, `teamai-opencode` | `local`, with prompt steps on that tool |
+| `teamai-t3` | `t3` (`environment: local`, `max_parallel: 4`), then `local` |
+
+### Runtime options
+
+A runtime checks its own `options` at `init`, and a key it does not take fails `bad_option` before any step runs. Two keys are teamai's, and the runtime never sees them:
+
+| Key | Meaning |
+| --- | --- |
+| `max_parallel` | At most this many attempts on this runtime at once. A step it has no room for goes to the next runtime. `workflows.max_parallel` still caps the run. |
+| `credentials` | `{ codex: login }`: the step's Codex uses the login teamai keeps, below. |
+
+Change a definition's options on your machine without editing it, in `~/.teamai/config.yaml` or a workspace's own `config.yaml`. Keys merge one by one over the definition's, and the workspace's win:
+
+```yaml
+workflows:
+  drivers:
+    teamai-t3:
+      runtimes:
+        t3:
+          max_parallel: 2
+```
+
+### A Codex login for step runtimes
+
+Codex rejects a refresh token used twice, so a copy of your own login that refreshes in a step would log out your other Codex sessions. `credentials: { codex: login }` uses a login teamai keeps apart instead. Create it once:
+
+```sh
+CODEX_HOME=~/.teamai/logins/codex codex login
+```
+
+teamai copies that `auth.json` into the attempt's tool home, and once the step ends it writes the refreshed file back, for the same account only. One attempt on the machine holds the login at a time. Another one waits, and says for whom:
+
+```text
+ℹ Step "review" waits for the codex login teamai keeps, which attempt a339da600 of run r9a395746ec65dbd7 holds. It goes on once that attempt ends; teamai workflow cancel r9a395746ec65dbd7 releases it.
 ```
 
 A team runtime is code a teammate pushed, so it runs only at a revision someone accepted on this machine. Any change to a file under its directory makes a new revision. An attended run asks before the first spawn:
@@ -1315,7 +1378,7 @@ A runtime reads one JSON request per line on stdin and answers with JSON lines o
 ← {"type":"init","ok":true,"can":{"workspace":["read-only","new","continue"],"tools":["claude"],"env":true,"unattended":true}}
 → {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","view":{…},"credentials":{}}
 ← {"op":"op-5e0d11cb4777","event":"accepted","handle":"toy-r…-a…"}
-← {"op":"op-5e0d11cb4777","event":"ready"}
+← {"op":"op-5e0d11cb4777","event":"ready","display":{"label":"toy-r…-a…","url":"https://toy.example.test/places/r…-a…","fields":{"place":"toy-r…-a…"}}}
 → {"type":"exec","op":"op-83bfffde9ce3","handle":"toy-r…-a…","argv":["/bin/sh","-c","npm test"],"env":{…},"unset":[],"cwd":"/repo"}
 ← {"op":"op-83bfffde9ce3","event":"accepted"}
 ← {"op":"op-83bfffde9ce3","event":"output","stream":"stdout","data":"ok\n"}
@@ -1324,6 +1387,8 @@ A runtime reads one JSON request per line on stdin and answers with JSON lines o
 
 The other requests are `cancel`, `collect`, `reattach` and `close`. A runtime answers a repeated `op` with the same result until `close`. It keeps what an exec printed and how it exited, so a restarted teamai can read them with `reattach`. An option it does not take fails `init` with `bad_option` and the key.
 
+`display`, on `ready` and on the `alive` reply to `reattach`, is optional: a `label` of at most 80 characters, a `url` (`https:`, `http:` or an app's own scheme such as `t3:`), and at most 8 string `fields`. The run's details in the dashboard show it under the step. Put no secret and no path in your home in it. teamai drops a display it cannot show, logs why, and runs the step as usual.
+
 | Error | Next step |
 | --- | --- |
 | `driver_not_found` | Add `drivers/<name>.yaml` and run `teamai pull`, or add `~/.teamai/drivers/<name>.yaml` |
@@ -1331,7 +1396,10 @@ The other requests are `cancel`, `collect`, `reattach` and `close`. A runtime an
 | `driver_namespace_conflict`, `runtime_namespace_conflict` | Keep the name in one namespace, push it, and run `teamai pull` |
 | `runtime_not_found` | Install the runtime in one of the places above |
 | `runtime_not_accepted` | Run the command once attended to review and accept the revision |
-| `bad_option` | Fix the option in the definition |
+| `bad_option` | Fix the option in the definition, or under `workflows.drivers` in your config |
+| `requirement_unmet` | Give one runtime of the definition everything the step requires, or change the step |
+| `login_missing` | Run `CODEX_HOME=~/.teamai/logins/codex codex login`, then retry the step |
+| `login_not_written_back` | Log in again with that command if Codex refreshed its token, then retry the step |
 | `runtime_failed`, `runtime_interrupted` | Retry the step: `teamai workflow retry <run> <step>` |
 
 ## Workspaces in your own driver
