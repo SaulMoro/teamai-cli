@@ -6,6 +6,7 @@
   "exports": {
     "./cli-path": "./src/cli-path.ts",
     "./definition": "./src/definition.ts",
+    "./detect": "./src/detect.ts",
     "./exec": "./src/exec.ts",
     "./family": "./src/family.ts",
     "./formats/*": "./src/formats/*.ts",

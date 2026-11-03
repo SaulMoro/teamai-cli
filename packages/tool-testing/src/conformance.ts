@@ -2,12 +2,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ToolFamily } from '@teamai/tool-core/family';
 import { ACCESS_LEVELS, type CallInput, type LaunchAdapter } from '@teamai/tool-core/launch';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 import { locatesOwnStore, type SessionPlatformDefinition } from '@teamai/tool-core/sessions/platform';
 import type { TokenUsage } from '@teamai/tool-core/tokens';
+import { fakeCli } from './fake-cli.js';
 import { replayTranscript, type RecordedTranscript } from './replay-transcript.js';
 
 export type { RecordedTranscript } from './replay-transcript.js';
@@ -24,6 +25,9 @@ export interface RecordedUsage {
   readonly tokens: TokenUsage;
 }
 
+/** What a tool printed for `--version`, recorded, and the version teamai reads from it; or why none is recorded. */
+export type RecordedVersion = { readonly command: string; readonly stdout: string; readonly version: string } | { readonly unrecorded: string };
+
 /** The recordings a family's conformance run reads, each keyed by the id of the row it exercises. */
 export interface FamilyRecordings {
   /** By launch profile id: one for every profile a tool of the family names. */
@@ -32,6 +36,8 @@ export interface FamilyRecordings {
   readonly transcripts: Readonly<Record<string, RecordedTranscript>>;
   /** By token format id: one for every format a tool of the family names. */
   readonly tokens: Readonly<Record<string, RecordedUsage>>;
+  /** By the tool or platform id a detector is keyed by: one for every detector of the family. */
+  readonly versions: Readonly<Record<string, RecordedVersion>>;
 }
 
 /** The text of a recording beside a family's test, such as `new URL('./fixtures/x.json', import.meta.url)`. */
@@ -198,6 +204,32 @@ export function describeFamily(name: string, family: ToolFamily, recordings: Fam
     for (const [id, profile] of Object.entries(family.launch)) describeLaunch(id, profile, recorded(recordings.calls, id, 'call'));
 
     for (const [id, platform] of Object.entries(family.platforms)) describePlatform(id, platform, recorded(recordings.transcripts, id, 'transcript'));
+
+    for (const [id, detector] of Object.entries(family.detect)) {
+      const recording = recorded(recordings.versions, id, 'version');
+
+      it(`detects the version of ${id} only for a tool or platform of the family`, () => {
+        expect([...Object.keys(family.tools), ...Object.keys(family.platforms)]).toContain(id);
+      });
+
+      if ('unrecorded' in recording) {
+        it.skip(`reads the version of ${id}: ${recording.unrecorded}`, () => undefined);
+        continue;
+      }
+
+      it(`reads the version of ${id} from a recorded --version`, async () => {
+        const dir = fakeCli(recording.command, { stdout: recording.stdout });
+
+        vi.stubEnv('PATH', `${dir}${path.delimiter}${process.env.PATH ?? ''}`);
+
+        try {
+          expect(await detector()).toBe(recording.version);
+        } finally {
+          vi.unstubAllEnvs();
+          fs.rmSync(dir, { recursive: true, force: true });
+        }
+      });
+    }
 
     for (const [id, format] of Object.entries(family.tokens)) {
       it(`token format ${id} reads the recorded usage`, async () => {
