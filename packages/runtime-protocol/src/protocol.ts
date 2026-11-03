@@ -1,4 +1,5 @@
 import { getUserHome } from '@teamai/tool-core/home';
+import type { TokenUsage } from '@teamai/tool-core/stdout';
 import { z } from 'zod';
 
 // ─── Runtime protocol 1 ──────────────────────────────────
@@ -9,7 +10,7 @@ import { z } from 'zod';
 //  same terminal outcome until `close`. Both sides parse with the schemas below.
 //
 //    > {"type":"init","protocol":1,"mode":"unattended","options":{...}}
-//    < {"type":"init","ok":true,"can":{...}}
+//    < {"type":"init","ok":true,"can":{...},"prompt":true}           prompt: it launches agents its own way
 //    > {"type":"open","op":"op-7f2a…","run":"r…","attempt":"a…","view":{...},"credentials":{}}
 //    < {"op":"op-7f2a…","event":"accepted","handle":"toy-r…-a…"}
 //    < {"op":"op-7f2a…","event":"ready","display":{"label":"…","url":"…","fields":{…}}}       display optional
@@ -17,6 +18,9 @@ import { z } from 'zod';
 //    < {"op":"op-8b10…","event":"accepted"}
 //    < {"op":"op-8b10…","event":"output","stream":"stdout","data":"…"}
 //    < {"op":"op-8b10…","event":"exited","code":0,"stdout":"…complete stdout…"}
+//    > {"type":"prompt","op":"op-91c4…","handle":"…","lease":{...},"env":{...},"unset":[...],"cwd":"…"}
+//    < {"op":"op-91c4…","event":"accepted"}
+//    < {"op":"op-91c4…","event":"finished","session":{"tool":"claude","id":"…"},"result":{"output":{…}},"usage":{…}}
 //    > {"type":"collect","handle":"…"}              < {"event":"collected","handle":"…"}
 //    > {"type":"reattach","handle":"…"}             < {"event":"alive","handle":"…","ops":[...]} or {"event":"gone",…}
 //    > {"type":"close","handle":"…"}                < {"event":"closed","handle":"…"}
@@ -28,7 +32,7 @@ export const RUNTIME_PROTOCOL = 1;
 /** Whether a person is there for the run: `attended` where one launched it, `unattended` in CI or a cloud agent. */
 export const RUNTIME_MODES = ['attended', 'unattended'] as const;
 
-/** An operation id: what teamai persists before it sends an `open` or an `exec`. */
+/** An operation id: what teamai persists before it sends an `open`, an `exec` or a `prompt`. */
 export const OpIdSchema = z.string().regex(/^op-[0-9a-f]{8,32}$/, 'An operation id looks like op- followed by hex digits').brand<'OpId'>();
 
 export type OpId = z.infer<typeof OpIdSchema>;
@@ -84,6 +88,45 @@ export const RuntimeDisplaySchema = z.object({
 
 export type RuntimeDisplay = z.infer<typeof RuntimeDisplaySchema>;
 
+/** A tool's session: the tool that keeps it, and its id there, which a later pass resumes and scoring reads. */
+export const PromptSessionSchema = z.object({ tool: z.string().min(1), id: z.string().min(1) });
+
+/** The tokens a prompt billed, as far as the runtime knows them. */
+export const PromptUsageSchema = z.object({
+  input: z.number().nonnegative().optional(),
+  output: z.number().nonnegative().optional(),
+  cachedInput: z.number().nonnegative().optional(),
+}).strict() satisfies z.ZodType<TokenUsage>;
+
+/** The workflow result the agent wrote to the lease's `result` file: its output, or a failure with a code and a message. */
+export const PromptResultSchema = z.object({ output: z.unknown().optional(), failure: z.object({ code: z.string(), message: z.string() }).optional() });
+
+export type PromptResult = z.infer<typeof PromptResultSchema>;
+
+/**
+ * One prompt step as a runtime that launches agents its own way runs it. `prompt` is teamai's whole prompt, the
+ * instruction to write `result` included, and the agent definition's instructions when the step names one.
+ */
+export const PromptLeaseSchema = z.object({
+  step: z.string().min(1),
+  tool: z.string().min(1),
+  /** The exact model and effort to launch on; the tool's own default when absent. */
+  model: z.object({ name: z.string().min(1), effort: z.string().min(1).optional() }).optional(),
+  prompt: z.string(),
+  /** The file the agent writes the workflow result to, in the place's result directory. */
+  result: z.string().min(1),
+  /** A session of the same tool to continue. */
+  resume: z.string().min(1).optional(),
+  /** `unattended`: the tool's mode for editing and running commands without asking; never granted otherwise. */
+  permissions: z.enum(['approval-required', 'unattended']),
+  /** A person works in the step: the runtime gives them the agent, and the step ends once they are done. */
+  interactive: z.boolean(),
+  /** The most agent turns the tool may take, when the runtime's offer says it caps them (`can.max_turns`). */
+  maxTurns: z.number().int().positive().optional(),
+});
+
+export type PromptLease = z.infer<typeof PromptLeaseSchema>;
+
 const InitRequestSchema = z.object({ type: z.literal('init'), protocol: z.literal(RUNTIME_PROTOCOL), mode: z.enum(RUNTIME_MODES), options: RuntimeOptionsSchema });
 
 export const OpenRequestSchema = z.object({
@@ -92,7 +135,7 @@ export const OpenRequestSchema = z.object({
   run: z.string(),
   attempt: z.string(),
   view: PlaceViewSchema,
-  /** The credentials of this attempt: names and values, never set when the place is created, only per `exec`. */
+  /** The credentials of this attempt: names and values, never set when the place is created, only per operation. */
   credentials: EnvSchema,
 });
 
@@ -108,21 +151,37 @@ export const ExecRequestSchema = z.object({
   cwd: z.string(),
 });
 
+/** A prompt for a runtime that launches agents its own way; `env` and `unset` scope the agent's environment as an exec's. */
+export const PromptRequestSchema = z.object({
+  type: z.literal('prompt'),
+  op: OpIdSchema,
+  handle: RuntimeHandleSchema,
+  lease: PromptLeaseSchema,
+  env: EnvSchema,
+  unset: z.array(z.string()),
+  cwd: z.string(),
+});
+
 /** A request teamai writes to a runtime's stdin. */
 export const RuntimeRequestSchema = z.discriminatedUnion('type', [
   InitRequestSchema,
   OpenRequestSchema,
   ExecRequestSchema,
+  PromptRequestSchema,
   z.object({ type: z.literal('cancel'), op: OpIdSchema }),
   z.object({ type: z.enum(['collect', 'reattach', 'close']), handle: RuntimeHandleSchema }),
 ]);
 
 export type RuntimeRequest = z.infer<typeof RuntimeRequestSchema>;
 
+/** The fields of a finished prompt: the tool's session, the result the agent wrote, and the tokens it billed. */
+const FinishedShape = { session: PromptSessionSchema, result: PromptResultSchema, usage: PromptUsageSchema.optional() };
+
 /** What a runtime retains of one operation of a handle, which `reattach` reports. */
 export const OpStateSchema = z.discriminatedUnion('state', [
   z.object({ op: OpIdSchema, state: z.literal('running') }),
   z.object({ op: OpIdSchema, state: z.literal('exited'), code: z.number().int(), stdout: z.string() }),
+  z.object({ op: OpIdSchema, state: z.literal('finished'), ...FinishedShape }),
   z.object({ op: OpIdSchema, state: z.literal('cancelled') }),
   z.object({ op: OpIdSchema, state: z.literal('failed'), failure: RuntimeFailureSchema }),
 ]);
@@ -135,9 +194,13 @@ export type OpState = z.infer<typeof OpStateSchema>;
  * so a runtime that gets it wrong loses only its display, and reads `can` as its own driver offer.
  */
 export function runtimeMessageSchemas<TDisplay extends z.ZodType, TCan extends z.ZodType>({ display, can }: { display: TDisplay; can: TCan }) {
-  /** A reply to `init`: the runtime's offer, or why it cannot run with the options it was given. */
+  /**
+   * A reply to `init`: the runtime's offer, or why it cannot run with the options it was given. `prompt: true` says it
+   * launches agents its own way, so teamai sends it each prompt step as a `prompt`, never as an `exec` of the tool.
+   * With `can.exec: false` it runs no command: command steps, and steps with setup, go to the next runtime.
+   */
   const InitReply = z.discriminatedUnion('ok', [
-    z.object({ type: z.literal('init'), ok: z.literal(true), can }),
+    z.object({ type: z.literal('init'), ok: z.literal(true), can, prompt: z.boolean().optional() }),
     z.object({ type: z.literal('init'), ok: z.literal(false), error: RuntimeFailureSchema }),
   ]);
 
@@ -147,6 +210,7 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType, TCan extends z
     z.object({ op: OpIdSchema, event: z.literal('failed'), failure: RuntimeFailureSchema }),
     z.object({ op: OpIdSchema, event: z.literal('output'), stream: z.enum(['stdout', 'stderr']), data: z.string() }),
     z.object({ op: OpIdSchema, event: z.literal('exited'), code: z.number().int(), stdout: z.string() }),
+    z.object({ op: OpIdSchema, event: z.literal('finished'), ...FinishedShape }),
     z.object({ op: OpIdSchema, event: z.literal('cancelled') }),
   ]);
 

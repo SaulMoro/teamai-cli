@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import type { RuntimeOptions } from '@teamai/runtime-protocol';
-import { newOpId, type ExecEnd, type ExecRequest, type OpenRequest, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
+import { newOpId, type ExecEnd, type ExecRequest, type OpenRequest, type PromptRequest, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import type { JsonValue } from '../types.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 
@@ -224,6 +224,156 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
       return reattached.kind !== 'alive' || reattached.ops.some((op) => op.state !== 'running');
     })).toBe(true);
     expect(settled).toEqual({ kind: 'alive', ops: [{ op: request.op, state: 'cancelled' }] });
+  });
+});
+
+/**
+ * The scenario suite of a runtime that launches agents its own way (T3, Paseo): it offers `prompt` and no `exec`, and
+ * each prompt step reaches it as one `prompt` that ends finished, failed or cancelled. `agent` sets how the subject's
+ * agent behaves: how long it works, the output it writes, or the failure it ends with.
+ */
+interface PromptSubject {
+  name: string;
+  start(state: string): StepRuntime;
+  options(state: string, agent: JsonValue): RuntimeOptions;
+}
+
+const PROMPT_SUBJECTS: PromptSubject[] = [
+  {
+    name: 'toy over stdio, prompt only',
+    start: () => stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] }),
+    options: (state, agent) => ({ state, agent }),
+  },
+];
+
+describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) => {
+  let dir: string;
+  let worktree: string;
+  let state: string;
+  const started: StepRuntime[] = [];
+
+  const start = async (agent: JsonValue = {}): Promise<StepRuntime> => {
+    const runtime = subject.start(state);
+    started.push(runtime);
+    const ready = await runtime.init({ options: subject.options(state, agent), mode: 'unattended' });
+    expect(ready).toMatchObject({ ok: true, launchesAgents: true, can: { exec: false } });
+
+    return runtime;
+  };
+
+  const opened = async (runtime: StepRuntime): Promise<string> => {
+    const place = await runtime.open({
+      op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
+      view: { worktree, readonly: [], result: path.join(dir, 'out'), toolHome: {} },
+    }, async () => {});
+
+    if (place.kind !== 'ready') throw new Error(`not opened: ${JSON.stringify(place)}`);
+
+    return place.handle;
+  };
+
+  const promptRequest = (handle: string, op = newOpId()): PromptRequest => ({
+    op, handle, env: { STEP_VALUE: 'from-teamai' }, unset: [], cwd: worktree,
+    lease: {
+      step: 'review', tool: 'claude', model: { name: 'claude-opus-5-5' }, permissions: 'approval-required', interactive: false,
+      prompt: `Review the change.\n\nWrite the workflow result as JSON to ${path.join(dir, 'out', 'result.json')}.`, result: path.join(dir, 'out', 'result.json'),
+    },
+  });
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-step-prompt-'));
+    worktree = path.join(dir, 'worktree');
+    state = path.join(dir, 'state');
+    fs.mkdirSync(worktree);
+    fs.mkdirSync(path.join(dir, 'out'));
+  });
+
+  afterEach(async () => {
+    await Promise.all(started.splice(0).map((runtime) => runtime.dispose()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('accepts a prompt, then ends finished with the tool\'s session, the result the agent wrote and its usage', async () => {
+    const runtime = await start({ output: { verdict: 'approve' }, usage: { input: 1200, output: 300 } });
+    const handle = await opened(runtime);
+    const request = promptRequest(handle);
+    let accepted = false;
+
+    const end = await runtime.prompt(request, { onAccepted: () => { accepted = true; } });
+
+    expect(accepted).toBe(true);
+    expect(end).toEqual({ kind: 'finished', session: { tool: 'claude', id: expect.any(String) }, result: { output: { verdict: 'approve' } }, usage: { input: 1200, output: 300 } });
+    expect(JSON.parse(fs.readFileSync(request.lease.result, 'utf8'))).toEqual({ output: { verdict: 'approve' } });
+  });
+
+  it('answers a repeated prompt id with the same outcome', async () => {
+    const runtime = await start({ output: { verdict: 'approve' } });
+    const request = promptRequest(await opened(runtime));
+    const first = await runtime.prompt(request, {});
+
+    expect(first.kind).toBe('finished');
+    expect(await runtime.prompt(request, {})).toEqual(first);
+  });
+
+  it('ends failed when the agent cannot finish the step, naming why', async () => {
+    const runtime = await start({ fail: { code: 'model_unavailable', message: 'The daemon has no model claude-opus-5-5.' } });
+
+    expect(await runtime.prompt(promptRequest(await opened(runtime)), {})).toEqual({ kind: 'failed', failure: { code: 'model_unavailable', message: 'The daemon has no model claude-opus-5-5.' } });
+  });
+
+  it('cancels a running prompt', async () => {
+    const runtime = await start({ hold_ms: 60_000 });
+    const handle = await opened(runtime);
+    const request = promptRequest(handle);
+    let accepted = false;
+    const ending = runtime.prompt(request, { onAccepted: () => { accepted = true; } });
+    expect(await until(() => accepted)).toBe(true);
+
+    await runtime.cancel(request.op);
+
+    expect(await ending).toEqual({ kind: 'cancelled' });
+    expect(await runtime.reattach(handle)).toEqual({ kind: 'alive', ops: [{ op: request.op, state: 'cancelled' }] });
+  });
+
+  it('runs no command: an exec fails, naming the runtime\'s offer', async () => {
+    const runtime = await start();
+    const end = await runtime.exec({ op: newOpId(), handle: await opened(runtime), argv: ['/bin/sh', '-c', 'touch ran'], env: {}, unset: [], cwd: worktree }, {});
+
+    expect(end).toMatchObject({ kind: 'failed', failure: { code: 'exec_unsupported' } });
+    expect(fs.existsSync(path.join(worktree, 'ran'))).toBe(false);
+  });
+
+  it('reattaches after its own restart with a finished prompt, and a repeated prompt reads the same outcome', async () => {
+    const first = await start({ output: { verdict: 'approve' }, usage: { input: 10 } });
+    const handle = await opened(first);
+    const request = promptRequest(handle);
+    const finished = await first.prompt(request, {});
+    expect(finished.kind).toBe('finished');
+    if (finished.kind !== 'finished') return;
+    await first.dispose();
+    const second = await start({ output: { verdict: 'approve' }, usage: { input: 10 } });
+
+    expect(await second.reattach(handle)).toEqual({ kind: 'alive', ops: [{ op: request.op, state: 'finished', session: finished.session, result: finished.result, usage: finished.usage }] });
+    expect(await second.prompt(request, {})).toEqual(finished);
+  });
+
+  it('reconnects to a prompt its own restart left running: reattach reads it running, and the repeated prompt ends finished', async () => {
+    // The agent works until the test releases it, so it is still running when the runtime restarts.
+    const release = path.join(dir, 'release');
+    const agent = { release, output: { verdict: 'approve' } };
+    const first = await start(agent);
+    const handle = await opened(first);
+    const request = promptRequest(handle);
+    let accepted = false;
+    void first.prompt(request, { onAccepted: () => { accepted = true; } });
+    expect(await until(() => accepted)).toBe(true);
+    await first.dispose();
+    const second = await start(agent);
+
+    expect(await second.reattach(handle)).toEqual({ kind: 'alive', ops: [{ op: request.op, state: 'running' }] });
+    const reconnected = second.prompt(request, {});
+    fs.writeFileSync(release, '');
+    expect(await reconnected).toMatchObject({ kind: 'finished', result: { output: { verdict: 'approve' } } });
   });
 });
 

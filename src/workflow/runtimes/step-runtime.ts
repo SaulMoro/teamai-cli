@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { OpIdSchema, type ExecRequestSchema, type OpenRequestSchema, type OpId, type OpState, type RuntimeDisplay, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { OpIdSchema, type ExecRequestSchema, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type PromptResult, type PromptUsageSchema, type RuntimeDisplay, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import type { RunMode } from '../../launch-context.js';
 import type { DriverCan } from '../requirements.js';
@@ -26,10 +26,19 @@ export type OpenRequest = Omit<z.infer<typeof OpenRequestSchema>, 'type'>;
 /** An exec as the local loop sends it; the protocol's request without its type. */
 export type ExecRequest = Omit<z.infer<typeof ExecRequestSchema>, 'type'>;
 
+/** A prompt as the local loop sends it to a runtime that launches agents its own way. */
+export type PromptRequest = Omit<z.infer<typeof PromptRequestSchema>, 'type'>;
+
 export type Opened = { kind: 'ready'; handle: string; display?: RuntimeDisplay } | { kind: 'failed'; failure: RuntimeFailure };
 
 /** How an exec ended. `exited` carries the complete stdout, so a reattach rebuilds what a live run read. */
 export type ExecEnd = { kind: 'exited'; code: number; stdout: string } | { kind: 'cancelled' } | { kind: 'failed'; failure: RuntimeFailure };
+
+/** How a prompt ended: finished with the tool's session, the result the agent wrote and its usage, cancelled, or failed. */
+export type PromptEnd =
+  | { kind: 'finished'; session: { tool: string; id: string }; result: PromptResult; usage?: z.infer<typeof PromptUsageSchema> }
+  | { kind: 'cancelled' }
+  | { kind: 'failed'; failure: RuntimeFailure };
 
 /** A reattach: the handle is gone, alive with what the runtime retains, or the runtime could not be asked. */
 export type Reattached = { kind: 'gone' } | { kind: 'alive'; ops: OpState[]; display?: RuntimeDisplay } | { kind: 'failed'; failure: RuntimeFailure };
@@ -39,7 +48,8 @@ export interface ExecEvents {
   onOutput?: (stream: 'stdout' | 'stderr', data: string) => void;
 }
 
-export type Initialized = { ok: true; can: DriverCan } | { ok: false; failure: RuntimeFailure };
+/** A runtime's offer: what it can, and whether it launches agents its own way, so prompt steps reach it as `prompt`. */
+export type Initialized = { ok: true; can: DriverCan; launchesAgents: boolean } | { ok: false; failure: RuntimeFailure };
 
 /** One step runtime, as the local loop calls it. Expected failures are values; a runtime that dies fails what it had in flight. */
 export interface StepRuntime {
@@ -50,7 +60,9 @@ export interface StepRuntime {
   /** Opens the attempt's place. `onAccepted` runs with the handle before `open` settles, so teamai persists it. */
   open(request: OpenRequest, onAccepted: (handle: string) => Promise<void>): Promise<Opened>;
   exec(request: ExecRequest, events: ExecEvents): Promise<ExecEnd>;
-  /** Stops operation `op` and every process it started. Its `exec` then ends `cancelled`. */
+  /** Runs a prompt step on a runtime that launches agents its own way; any other answers it failed. */
+  prompt(request: PromptRequest, events: { onAccepted?: () => void }): Promise<PromptEnd>;
+  /** Stops operation `op` and every process it started. Its `exec` or `prompt` then ends `cancelled`. */
   cancel(op: OpId): Promise<void>;
   /** Brings the place's work back to the host, deletions included, never committed; after success and after failure. */
   collect(handle: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
