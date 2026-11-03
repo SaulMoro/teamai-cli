@@ -27,7 +27,7 @@ import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import { sessionStoreDir } from '../locate.js';
 import { CodeBuddyAdapter } from '../session-flow/adapters/codebuddy.js';
 import { CodeBuddyIdeAdapter } from '../session-flow/adapters/codebuddy-ide.js';
-import { CodexAdapter } from '../session-flow/adapters/codex.js';
+import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import { CursorAdapter } from '../session-flow/adapters/cursor.js';
 import { WorkBuddyAdapter } from '../session-flow/adapters/workbuddy.js';
 import * as crypto from 'node:crypto';
@@ -308,7 +308,7 @@ function makeAdapter(platform: string): AgentAdapter {
     case 'codebuddy-ide':
       return new CodeBuddyIdeAdapter();
     case 'codex':
-      return new CodexAdapter('codex');
+      return new CodexAdapter('codex', sessionStoreDir('codex', undefined));
     case 'cursor':
       return new CursorAdapter();
     case 'workbuddy':
@@ -548,7 +548,7 @@ describe('fidelity sweep (QA, writes report to /tmp/session-fidelity-report.json
       const back = (await claude.readSession({ sessionId: claudeSid, projectPath: cwd })) as Session;
       const claudeReadMs = Date.now() - t0;
 
-      const codex = new CodexAdapter('codex');
+      const codex = new CodexAdapter('codex', sessionStoreDir('codex', undefined));
       t0 = Date.now();
       // Every write derives its id, so read back by the id the write returned.
       const stressSid = (await codex.writeSession(session, cwd)) as string;

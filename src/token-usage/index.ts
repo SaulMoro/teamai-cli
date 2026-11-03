@@ -8,7 +8,7 @@ import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { TokenReading, TokenSource } from '@teamai/tool-core/tokens';
 import { readAgyTranscript } from './formats/agy-transcript.js';
 import { readCodebuddy } from './formats/codebuddy.js';
-import { readCodexRollout } from './formats/codex-rollout.js';
+import { readCodexRollout } from '@teamai/tool-core/formats/codex-rollout';
 import { readMuseSession } from './formats/muse-session.js';
 import { readOpencodeDb } from './formats/opencode-db.js';
 import { readPiSession } from './formats/pi-session.js';

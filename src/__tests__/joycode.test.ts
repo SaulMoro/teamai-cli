@@ -9,7 +9,7 @@ import { AGENT_TOOLS, channelsOf, homeVariables, sessionPlatformsOf } from '../t
 import { AgentsHandler, updateJoycodeAgentIndex } from '../resources/agents.js';
 import { builtinHookDefs } from '../builtin-hooks.js';
 import { getAdapter } from '../session-flow/adapters/index.js';
-import { CodexAdapter } from '../session-flow/adapters/codex.js';
+import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import { SESSION_PLATFORM_FACTS } from '../session-flow/adapters/platform-facts.js';
 import { AgentSession } from '../session-flow/agent-session.js';
 
