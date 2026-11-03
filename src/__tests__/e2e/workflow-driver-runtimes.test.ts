@@ -113,6 +113,12 @@ describe('a driver definition with several runtimes', () => {
     prompt: Review the right half.
     output:
       ok: boolean`);
+    writeFlow('online', `  - id: fetch
+    tool: claude
+    prompt: Fetch the release notes.
+    requires: { network: true }
+    output:
+      ok: boolean`);
     writeFlow('oneprompt', `  - id: review
     prompt: Review the repository without changing it.
     output:
@@ -195,6 +201,36 @@ Judge the review.
     expect(runs()).toEqual(before);
   });
 
+  it('keeps what the runtime shows of the place in the attempt\'s record, for the run\'s details', async () => {
+    const display = { label: 'toy place', url: 'https://runtimes.example.test/place/1', fields: { place: 'toy-1', image: 'warm:3f9c' } };
+    writeDefinition('shown', [{ use: 'toy', options: { state, display } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'shown'], repo, env());
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const runId = runOf(ran);
+    const [review] = readRunState(runId).steps;
+    expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ runtime: 'toy', phase: 'closed', display });
+  });
+
+  it('records why each runtime holds a step back, which the run\'s details show once the driver stops', async () => {
+    setMemberWorkflows({ allow: { network: false } });
+    writeDefinition('both', [{ use: 'toy', options: { state } }, { use: 'local' }]);
+    const runsDir = path.join(dataHome, 'workflows', 'runs');
+    const before = new Set(fs.existsSync(runsDir) ? fs.readdirSync(runsDir) : []);
+
+    const ran = await runCLI(['workflow', 'start', 'online', '--driver', 'both'], repo, env());
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ error: { code: 'busy' } });
+    const [runId] = fs.readdirSync(runsDir).filter((name) => !before.has(name) && name.endsWith('.json')).map((name) => name.slice(0, -'.json'.length));
+    const reason = 'step "fetch" needs network, which workflows.allow in local config does not allow on this machine';
+    expect(JSON.parse(fs.readFileSync(path.join(runsDir, String(runId), 'held.json'), 'utf8'))).toEqual({
+      driver: 'both',
+      runtimes: [{ runtime: 'toy', held: [{ step: 'fetch', reason }] }, { runtime: 'local', held: [{ step: 'fetch', reason }] }],
+    });
+    expect(toyOpens()).toBe(0);
+  });
+
   it('refuses a bad option of any runtime before a step runs, naming the key', async () => {
     writeDefinition('badparallel', [{ use: 'toy', options: { state, max_parallel: 'two' } }, { use: 'local' }]);
     const engineKey = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'badparallel'], repo, env());
@@ -256,7 +292,7 @@ Judge the review.
     setMemberWorkflows({ max_parallel: 2 });
     const spans = path.join(sandbox, 'spans-homes.jsonl');
 
-    const ran = await runCLI(['workflow', 'start', 'pair', '--driver', 'toyonly'], repo, env({ FAKE_TOOL_SPANS: spans, FAKE_TOOL_HOLD_MS: '1500' }));
+    const ran = await runCLI(['workflow', 'start', 'pair', '--driver', 'toyonly'], repo, env({ FAKE_TOOL_SPANS: spans, FAKE_TOOL_BARRIER: '2', FAKE_TOOL_HOLD_MS: '15000' }));
 
     expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     const runId = runOf(ran);
@@ -279,7 +315,7 @@ Judge the review.
     setMemberWorkflows({ max_parallel: 2 });
     const spans = path.join(sandbox, 'spans-cap.jsonl');
 
-    const ran = await runCLI(['workflow', 'start', 'pair', '--driver', 'toyone'], repo, env({ FAKE_TOOL_SPANS: spans, FAKE_TOOL_HOLD_MS: '1500' }));
+    const ran = await runCLI(['workflow', 'start', 'pair', '--driver', 'toyone'], repo, env({ FAKE_TOOL_SPANS: spans, FAKE_TOOL_BARRIER: '2', FAKE_TOOL_HOLD_MS: '15000' }));
 
     expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     const runId = runOf(ran);

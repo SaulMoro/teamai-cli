@@ -34,6 +34,7 @@ import {
 import { placeView, runtimeCommand, runtimeLauncher, runtimeStepEnv, seedToolHome, type StartedCommand } from './runtime-steps.js';
 import { attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
 import { localStepRuntime } from '../../runtimes/local.js';
+import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { holdLogin, loginWaitFile, releaseLogin, writeLoginBack } from '../../runtimes/login.js';
 import type { EngineOptions, LoginTool, OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type StepRuntime } from '../../runtimes/step-runtime.js';
@@ -1250,12 +1251,17 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
         const withRoom = canTakeLease ? slots.filter(slotHasRoom) : [];
         let last: { next: WorkflowEnvelope; slot: RuntimeSlot } | undefined;
+        const holds: HeldSteps['runtimes'] = [];
 
         for (const slot of withRoom) {
           last = { next: await ask(slot, true, running), slot };
 
           if (isWorkflowError(last.next) || !('wait' in last.next.data)) return last;
+          holds.push({ runtime: slot.use, held: (WaitReplySchema.parse(last.next.data.wait).held ?? []).map(({ step, reason }) => ({ step, reason })) });
         }
+
+        // Every runtime with room was offered and held its steps back: the run's details say why.
+        if (last) await writeHeldSteps(config, runId, { driver: sole.driver, runtimes: holds });
 
         return last ?? { next: await ask(slots[0], false, running), slot: slots[0] };
       })();
@@ -1271,6 +1277,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       const cancelled = z.array(z.string()).safeParse(next.data.cancelled);
 
       for (const attempt of cancelled.success ? cancelled.data : []) cancel(attempt);
+
+      // A step taken, or the run ended: nothing is held back any more.
+      if (!('wait' in next.data)) await writeHeldSteps(config, runId, { driver: sole.driver, runtimes: [] });
 
       if ('done' in next.data) {
         question?.controller.abort();

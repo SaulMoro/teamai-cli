@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { CanSchema } from '../requirements.js';
 import type { RunMode } from '../../launch-context.js';
-import { OpIdSchema, OpStateSchema, RuntimeFailureSchema, RuntimeHandleSchema, type ExecRequest, type OpenRequest, type OpId, type RuntimeOptions } from './step-runtime.js';
+import { OpIdSchema, OpStateSchema, RuntimeDisplaySchema, RuntimeFailureSchema, RuntimeHandleSchema, type ExecRequest, type OpenRequest, type OpId, type RuntimeDisplay, type RuntimeOptions } from './step-runtime.js';
 
 // ─── Runtime protocol 1 ──────────────────────────────────
 //
@@ -13,7 +13,7 @@ import { OpIdSchema, OpStateSchema, RuntimeFailureSchema, RuntimeHandleSchema, t
 //    < {"type":"init","ok":true,"can":{...}}
 //    > {"type":"open","op":"op-7f2a…","run":"r…","attempt":"a…","view":{...},"credentials":{}}
 //    < {"op":"op-7f2a…","event":"accepted","handle":"toy-r…-a…"}
-//    < {"op":"op-7f2a…","event":"ready"}
+//    < {"op":"op-7f2a…","event":"ready","display":{"label":"…","url":"…","fields":{…}}}       display optional
 //    > {"type":"exec","op":"op-8b10…","handle":"…","argv":[...],"env":{...},"unset":[...],"cwd":"…"}
 //    < {"op":"op-8b10…","event":"accepted"}
 //    < {"op":"op-8b10…","event":"output","stream":"stdout","data":"…"}
@@ -39,9 +39,20 @@ const InitReplySchema = z.discriminatedUnion('ok', [
   z.object({ type: z.literal('init'), ok: z.literal(false), error: RuntimeFailureSchema }),
 ]);
 
+/** What a runtime showed of a place: nothing, a display, or one the run's details do not show, and why. */
+export type Shown = { kind: 'none' } | { kind: 'shown'; display: RuntimeDisplay } | { kind: 'dropped'; reason: string };
+
+/** A display is read apart from its event, so a runtime that gets it wrong loses only its display. */
+const ShownSchema = z.unknown().optional().transform((raw): Shown => {
+  if (raw === undefined) return { kind: 'none' };
+  const parsed = RuntimeDisplaySchema.safeParse(raw);
+
+  return parsed.success ? { kind: 'shown', display: parsed.data } : { kind: 'dropped', reason: parsed.error.issues[0]?.message ?? 'it does not parse' };
+});
+
 const OpEventSchema = z.discriminatedUnion('event', [
   z.object({ op: OpIdSchema, event: z.literal('accepted'), handle: RuntimeHandleSchema.optional() }),
-  z.object({ op: OpIdSchema, event: z.literal('ready') }),
+  z.object({ op: OpIdSchema, event: z.literal('ready'), display: ShownSchema }),
   z.object({ op: OpIdSchema, event: z.literal('failed'), failure: RuntimeFailureSchema }),
   z.object({ op: OpIdSchema, event: z.literal('output'), stream: z.enum(['stdout', 'stderr']), data: z.string() }),
   z.object({ op: OpIdSchema, event: z.literal('exited'), code: z.number().int(), stdout: z.string() }),
@@ -53,7 +64,7 @@ export type OpEvent = z.infer<typeof OpEventSchema>;
 const HandleEventSchema = z.discriminatedUnion('event', [
   z.object({ event: z.literal('collected'), handle: RuntimeHandleSchema }),
   z.object({ event: z.literal('collect_failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema }),
-  z.object({ event: z.literal('alive'), handle: RuntimeHandleSchema, ops: z.array(OpStateSchema) }),
+  z.object({ event: z.literal('alive'), handle: RuntimeHandleSchema, ops: z.array(OpStateSchema), display: ShownSchema }),
   z.object({ event: z.literal('gone'), handle: RuntimeHandleSchema }),
   z.object({ event: z.literal('closed'), handle: RuntimeHandleSchema }),
 ]);

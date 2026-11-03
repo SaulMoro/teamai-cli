@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 
-const OPTIONS = new Set(['state', 'die_at', 'can']);
+const OPTIONS = new Set(['state', 'die_at', 'can', 'display']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -69,6 +69,11 @@ function stopGroup(pgid) {
   setTimeout(() => { try { process.kill(-pgid, 'SIGKILL'); } catch { /* gone */ } }, 2000).unref();
 }
 
+// `display` is sent as given, valid or not, so a test reads what teamai keeps of it.
+function shown() {
+  return options.display === undefined ? {} : { display: options.display };
+}
+
 function init(request) {
   const unknown = Object.keys(request.options ?? {}).find((key) => !OPTIONS.has(key));
 
@@ -99,7 +104,7 @@ function open(request) {
 
   if (dieAt('open-accepted')) return;
   send({ op: request.op, event: 'accepted', handle });
-  send({ op: request.op, event: 'ready' });
+  send({ op: request.op, event: 'ready', ...shown() });
 }
 
 function replay(op, record) {
@@ -200,7 +205,7 @@ function reattach(request) {
     return fs.existsSync(file('cancel', op)) ? { op, state: 'cancelled' } : { op, state: 'failed', failure: { code: 'runtime_lost', message: `The toy lost exec ${op}.` } };
   });
 
-  send({ event: 'alive', handle: request.handle, ops });
+  send({ event: 'alive', handle: request.handle, ops, ...shown() });
 }
 
 function close(request) {

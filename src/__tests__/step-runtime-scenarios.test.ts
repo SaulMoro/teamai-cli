@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import { newOpId, type ExecEnd, type ExecRequest, type OpenRequest, type RuntimeOptions, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
+import type { JsonValue } from '../types.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 
 /**
@@ -222,5 +223,52 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
       return reattached.kind !== 'alive' || reattached.ops.some((op) => op.state !== 'running');
     })).toBe(true);
     expect(settled).toEqual({ kind: 'alive', ops: [{ op: request.op, state: 'cancelled' }] });
+  });
+});
+
+describe('a runtime\'s display over stdio', () => {
+  let dir: string;
+  const started: StepRuntime[] = [];
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-step-display-'));
+    fs.mkdirSync(path.join(dir, 'worktree'));
+  });
+
+  afterEach(async () => {
+    await Promise.all(started.splice(0).map((runtime) => runtime.dispose()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const openWith = async (display: JsonValue) => {
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    started.push(runtime);
+    expect(await runtime.init({ options: { state: path.join(dir, 'state'), display }, mode: 'unattended' })).toMatchObject({ ok: true });
+    const opened = await runtime.open({
+      op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
+      view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), toolHome: {} },
+    }, async () => {});
+
+    return { runtime, opened };
+  };
+
+  it('carries the display a runtime gives when it opens and when it is reattached', async () => {
+    const display = { label: 'teamai-r7-a1 (sbx)', url: 't3://thread/7', fields: { sandbox: 'teamai-r7-a1', image: 'teamai-warm:3f9c' } };
+    const { runtime, opened } = await openWith(display);
+
+    expect(opened).toEqual({ kind: 'ready', handle: 'toy-r0123abcd-a0123abcd', display });
+    expect(await runtime.reattach('toy-r0123abcd-a0123abcd')).toEqual({ kind: 'alive', ops: [], display });
+  });
+
+  it.each([
+    ['a label over 80 characters', { label: 'x'.repeat(81) }],
+    ['a script link', { label: 'sandbox', url: 'javascript:alert(1)' }],
+    ['more than 8 fields', { label: 'sandbox', fields: Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`f${i}`, 'v'])) }],
+    ['a field that is not a string', { label: 'sandbox', fields: { cpus: 4 } }],
+    ['a path in the member\'s home', { label: 'sandbox', fields: { dir: path.join(os.homedir(), 'work') } }],
+  ])('opens without a display that has %s', async (_, display) => {
+    const { opened } = await openWith(display);
+
+    expect(opened).toEqual({ kind: 'ready', handle: 'toy-r0123abcd-a0123abcd' });
   });
 });
