@@ -43,14 +43,27 @@ function envelope(ran: Ran): WorkflowEnvelope {
   return JSON.parse(line) as WorkflowEnvelope;
 }
 
-// A fake claude: it writes its result, records how it was launched, keeps its session in $CLAUDE_CONFIG_DIR as Claude
-// Code does, and on --resume continues that session.
-const FAKE_CLAUDE = `#!/usr/bin/env node
+/** How a tool lays out a session in its store, as source the fake runs: the project directory of `process.cwd()`, and one record. */
+interface SessionLayout { readonly project: string; readonly record: string }
+
+const CLAUDE_SESSIONS: SessionLayout = {
+  project: "process.cwd().replace(/[^A-Za-z0-9]/g, '-')",
+  record: "{ type: 'user', sessionId: session, cwd: process.cwd(), timestamp: new Date().toISOString(), message: { role: 'user', content: 'step' } }",
+};
+// CodeBuddy 2.173.0's encodeCwd for a short POSIX path, and its message record.
+const CODEBUDDY_SESSIONS: SessionLayout = {
+  project: "process.cwd().replace(/[/:]/g, '-').replace(/^-+|-+$/g, '').replace(/-+/g, '-')",
+  record: "{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'step' }], timestamp: Date.now() }",
+};
+
+// A fake Claude Code or CodeBuddy: it writes its result, records how it was launched, keeps its session in the home its
+// variable names, laid out as the tool does, and on --resume continues that session.
+const fakeTool = ({ tool, version, homeVariable, sessions }: { tool: string; version: string; homeVariable: string; sessions: SessionLayout }): string => `#!/usr/bin/env node
 const fs = require('node:fs');
 const path = require('node:path');
 const args = process.argv.slice(2);
 if (args.includes('--version')) {
-  process.stdout.write('2.1.0 (Claude Code)\\n');
+  process.stdout.write('${version}\\n');
   process.exit(0);
 }
 if (process.env.TEAMAI_WORKFLOW_RESULT === undefined) {
@@ -62,16 +75,16 @@ if (process.env.TEAMAI_WORKFLOW_RESULT === undefined) {
 const at = args.indexOf('--resume');
 const resumed = at === -1 ? undefined : args[at + 1];
 const session = resumed ?? 'sess-' + path.basename(process.env.TEAMAI_WORKFLOW_ATTEMPT);
-const home = process.env.CLAUDE_CONFIG_DIR;
-const project = path.join(home, 'projects', process.cwd().replace(/[^A-Za-z0-9]/g, '-'));
+const home = process.env.${homeVariable};
+const project = path.join(home, 'projects', ${sessions.project});
 const file = path.join(project, session + '.jsonl');
 const before = fs.existsSync(file);
 fs.mkdirSync(project, { recursive: true });
-fs.appendFileSync(file, JSON.stringify({ type: 'user', sessionId: session, cwd: process.cwd(), timestamp: new Date().toISOString(), message: { role: 'user', content: 'step' } }) + '\\n');
+fs.appendFileSync(file, JSON.stringify(${sessions.record}) + '\\n');
 fs.appendFileSync(process.env.LAUNCHES, JSON.stringify({ home, resumed, sessionFoundBefore: before, secret: process.env.STEP_RUNTIME_SECRET ?? null }) + '\\n');
 fs.mkdirSync(path.dirname(process.env.TEAMAI_WORKFLOW_RESULT), { recursive: true });
 fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ output: { ok: true } }));
-process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', model: 'fake-claude', session_id: session }) + '\\n');
+process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', model: 'fake-${tool}', session_id: session }) + '\\n');
 process.stdout.write(JSON.stringify({ type: 'result', session_id: session, usage: { input_tokens: 4, output_tokens: 2 } }) + '\\n');
 `;
 
@@ -109,6 +122,15 @@ describe('workflow steps on a step runtime a driver definition chooses', () => {
     return id;
   };
 
+  /** The id of the run `ran` finished, which must have succeeded. */
+  const succeededRun = (ran: Ran): string => {
+    const done = envelope(ran);
+    expect(done, ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const run = 'data' in done && typeof done.data.done === 'object' && done.data.done !== null && 'run' in done.data.done ? done.data.done.run : undefined;
+    if (typeof run !== 'string') throw new Error(`no run in the envelope:\n${ran.stdout}`);
+    return run;
+  };
+
   /** The open operations the toy with state `state` recorded: one per attempt it opened, however often it was asked. */
   const toyOpens = (state: string): Array<{ handle: string }> => fs.readdirSync(path.join(state, 'ops'))
     .map((name) => JSON.parse(fs.readFileSync(path.join(state, 'ops', name), 'utf8')) as { kind: string; handle: string })
@@ -136,8 +158,10 @@ describe('workflow steps on a step runtime a driver definition chooses', () => {
     execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
     execFileSync('git', ['remote', 'set-url', 'origin', origin], { cwd: repo });
     execFileSync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: repo });
-    fs.writeFileSync(path.join(bin, 'claude'), FAKE_CLAUDE);
+    fs.writeFileSync(path.join(bin, 'claude'), fakeTool({ tool: 'claude', version: '2.1.0 (Claude Code)', homeVariable: 'CLAUDE_CONFIG_DIR', sessions: CLAUDE_SESSIONS }));
     fs.chmodSync(path.join(bin, 'claude'), 0o755);
+    fs.writeFileSync(path.join(bin, 'codebuddy'), fakeTool({ tool: 'codebuddy', version: '2.179.1', homeVariable: 'CODEBUDDY_CONFIG_DIR', sessions: CODEBUDDY_SESSIONS }));
+    fs.chmodSync(path.join(bin, 'codebuddy'), 0o755);
     // The toy is the member's own runtime here, which runs without acceptance.
     const runtimeDir = path.join(os.homedir(), '.teamai', 'runtimes', 'toy');
     fs.mkdirSync(runtimeDir, { recursive: true });
@@ -173,6 +197,12 @@ steps:
       built: boolean`,
       oneprompt: `  - id: review
     prompt: Review the repository without changing it.
+    output:
+      ok: boolean`,
+      buddyprompt: `  - id: review
+    tool: codebuddy
+    prompt: Review the repository without changing it.
+    scorers: [quality]
     output:
       ok: boolean`,
       failwork: `  - id: build
@@ -212,10 +242,7 @@ Judge the review.
 
     const ran = await runCLI(['workflow', 'start', 'toyflow', '--driver', 'toyd'], repo, env());
 
-    const done = envelope(ran);
-    expect(done, ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
-    if ('error' in done) throw new Error(done.error.message);
-    const runId = String((done.data.done as { run: string }).run);
+    const runId = succeededRun(ran);
     const stored = readRunState(runId);
     expect(stored.steps.map((step) => [step.id, step.status])).toEqual([['prepare', 'succeeded'], ['review', 'succeeded'], ['followup', 'succeeded']]);
     expect(stored.steps[0]).toMatchObject({ outputs: { ready: true } });
@@ -238,6 +265,23 @@ Judge the review.
     expect(fs.existsSync(path.join(attemptsOf(runId), reviewAttempt, 'out', 'result.json'))).toBe(true);
 
     // Scoring reads the review's session from its attempt's tool home: the member's own store has none.
+    const scored = await runCLI(['score', '--run', runId, '--step', 'review', '--scorer', 'quality'], repo, env());
+    expect(envelope(scored), scored.stderr).toMatchObject({ data: { label: { scorer: 'quality', label: 'good' } } });
+  });
+
+  it('runs a CodeBuddy prompt step on the toy runtime with CODEBUDDY_CONFIG_DIR set to its attempt\'s tool home', async () => {
+    writeDefinition('toybuddy', { state: path.join(sandbox, 'toy-state-buddy') });
+    fs.rmSync(launches, { force: true });
+
+    const ran = await runCLI(['workflow', 'start', 'buddyprompt', '--driver', 'toybuddy'], repo, env());
+
+    const runId = succeededRun(ran);
+    const [review] = readRunState(runId).steps;
+    expect(review).toMatchObject({ tool: 'codebuddy', session: `sess-${attemptOf(review)}`, outputs: { ok: true } });
+    const launched = fs.readFileSync(launches, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { home: string });
+    expect(launched).toEqual([{ home: path.join(attemptsOf(runId), attemptOf(review), 'tool-home', 'codebuddy'), sessionFoundBefore: false, secret: null }]);
+
+    // Scoring reads the step's session from its attempt's CodeBuddy home: the member's own store has none.
     const scored = await runCLI(['score', '--run', runId, '--step', 'review', '--scorer', 'quality'], repo, env());
     expect(envelope(scored), scored.stderr).toMatchObject({ data: { label: { scorer: 'quality', label: 'good' } } });
   });
