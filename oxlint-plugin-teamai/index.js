@@ -19,6 +19,7 @@ import suppressionReason from './rules/suppression-reason.js';
 import yamlParse from './rules/yaml-parse.js';
 import packageBoundaries from './rules/package-boundaries.js';
 import toolRegistry from './rules/tool-registry.js';
+import mockSource from './rules/mock-source.js';
 
 // The anti-slop rules are vendored TypeScript. oxlint imports plugins with plain
 // Node, and `npm run lint` runs on Node 20 in CI, which can't import TypeScript:
@@ -48,6 +49,7 @@ export default definePlugin({
     'yaml-parse': yamlParse,
     'package-boundaries': packageBoundaries,
     'tool-registry': toolRegistry,
+    'mock-source': mockSource,
     ...antiSlopRules,
   },
 });
