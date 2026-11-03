@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import { newOpId, type ExecEnd, type ExecRequest, type OpenRequest, type RuntimeOptions, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
@@ -270,5 +270,17 @@ describe('a runtime\'s display over stdio', () => {
     const { opened } = await openWith(display);
 
     expect(opened).toEqual({ kind: 'ready', handle: 'toy-r0123abcd-a0123abcd' });
+  });
+
+  it('opens without a display that names a path in a Windows home', async () => {
+    vi.stubEnv('HOME', 'C:\\Users\\me');
+
+    try {
+      const { opened } = await openWith({ label: 'sandbox', fields: { dir: 'C:\\Users\\me\\work' } });
+
+      expect(opened).toEqual({ kind: 'ready', handle: 'toy-r0123abcd-a0123abcd' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });
