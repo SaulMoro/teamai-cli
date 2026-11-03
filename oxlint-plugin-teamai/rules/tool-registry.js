@@ -18,7 +18,7 @@ const FAMILIES = new Map([['@teamai/tool-definitions', 'BUILT_IN_TOOLS']]);
  * The tables built from the families until the last family moves: each holds the rows of the tools not yet moved,
  * and reaches the moved ones through BUILT_IN_TOOLS.
  */
-const FAMILY_MERGES = new Set(scopedFiles(['src/session-flow/adapters/platform-facts.ts', 'src/token-usage/index.ts']));
+const FAMILY_MERGES = new Set(scopedFiles(['src/agent-version.ts', 'src/session-flow/adapters/platform-facts.ts', 'src/token-usage/index.ts']));
 
 /** The registry: tool ids and descriptors, and the launch half beside LAUNCH_ADAPTERS, kept apart so the registry imports no adapter. */
 const REGISTRY = new Set(scopedFiles(['src/tool-registry.ts', 'src/tool-launch/tools.ts']));

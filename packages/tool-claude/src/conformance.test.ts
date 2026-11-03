@@ -26,4 +26,5 @@ describeFamily('tool-claude', family, {
   tokens: {
     'claude-jsonl': { text: fixture('claude-code-transcript.jsonl'), tokens: { input: 2500, output: 65, cacheRead: 17200, cacheCreation: 300 } },
   },
+  versions: { claude: { command: 'claude', stdout: '2.1.199 (Claude Code)', version: '2.1.199' } },
 });

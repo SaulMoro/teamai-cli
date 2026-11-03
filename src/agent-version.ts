@@ -7,46 +7,15 @@
  *  - Fallback: return '' when detection fails (best-effort, never throws).
  */
 
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
 import { log } from './utils/logger.js';
-import { probeBinary } from './utils/exec.js';
+import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
+import { execVersion, readPlistVersion, type VersionDetector } from '@teamai/tool-core/detect';
 import { type ToolId } from './tools.js';
 import { isToolId } from './tool-registry.js';
 
 const VERSION_CACHE = new Map<string, string>();
 
-// Launch through cross-spawn (probeBinary): on Windows npm installs these CLIs
-// as `<name>.cmd` shims, which the native execFile cannot find or start.
-async function execVersion(bin: string, args: string[] = ['--version']): Promise<string> {
-  return probeBinary(bin, args);
-}
-
-async function readPlistVersion(appPath: string): Promise<string> {
-  const plistPath = path.join(appPath, 'Contents', 'Info.plist');
-
-  try {
-    const content = await readFile(plistPath, 'utf-8');
-
-    const match = content.match(
-      /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/,
-    );
-
-    return match?.[1] ?? '';
-  } catch {
-    return '';
-  }
-}
-
 // ─── Per-agent detection ────────────────────────────────
-
-async function detectClaudeVersion(): Promise<string> {
-  const raw = await execVersion('claude');
-  // "2.1.199 (Claude Code)" → "2.1.199"
-  const match = raw.match(/^([\d.]+)/);
-
-  return match?.[1] ?? raw;
-}
 
 async function detectCursorVersion(): Promise<string> {
   // cursor --version outputs multiple lines; version is on the first line
@@ -105,11 +74,9 @@ async function detectOpenclawVersion(): Promise<string> {
 
 // ─── Registry ───────────────────────────────────────────
 
-type VersionDetector = () => Promise<string>;
-
 /** How teamai reads each tool's version, or null when it reads none. */
 const DETECTORS: Record<ToolId, VersionDetector | null> = {
-  claude: detectClaudeVersion,
+  claude: BUILT_IN_TOOLS.claude.detect.claude,
   codex: null,
   'codex-internal': null,
   'claude-internal': null,

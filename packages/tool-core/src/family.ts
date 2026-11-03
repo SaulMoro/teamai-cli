@@ -1,4 +1,5 @@
 import type { ToolDescriptor } from './definition.js';
+import type { VersionDetector } from './detect.js';
 import type { LaunchAdapter } from './launch.js';
 import type { SessionPlatformDefinition } from './sessions/platform.js';
 import type { TokenFormat } from './tokens.js';
@@ -14,4 +15,6 @@ export interface ToolFamily {
   readonly launch: Readonly<Record<string, LaunchAdapter>>;
   readonly platforms: Readonly<Record<string, SessionPlatformDefinition>>;
   readonly tokens: Readonly<Record<string, TokenFormat>>;
+  /** How teamai reads a tool's version, by tool id or platform id; a tool with none reads no version. */
+  readonly detect: Readonly<Record<string, VersionDetector>>;
 }
