@@ -52,7 +52,7 @@ const DETECTORS: Record<ToolId, VersionDetector | null> = {
   workbuddy: BUILT_IN_TOOLS.codebuddy.detect.workbuddy,
   opencode: null,
   muse: BUILT_IN_TOOLS.muse.detect.muse,
-  agy: detectAgyVersion,
+  agy: BUILT_IN_TOOLS.agy.detect.agy,
 };
 
 /** The detector for `agentType`: a tool's, or the CodeBuddy IDE's (`codebuddy-ide`). */
@@ -60,13 +60,6 @@ function detectorOf(agentType: string): VersionDetector | null {
   if (agentType === 'codebuddy-ide') return BUILT_IN_TOOLS.codebuddy.detect['codebuddy-ide'];
 
   return isToolId(agentType) ? DETECTORS[agentType] : null;
-}
-
-async function detectAgyVersion(): Promise<string> {
-  // Antigravity CLI: "1.4.10"
-  const raw = await execVersion('agy');
-
-  return raw.match(/\d+\.\d+\.\d+/)?.[0] ?? '';
 }
 
 /**
