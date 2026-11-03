@@ -35,7 +35,7 @@ import { degradeThinkingBlocks, fidelityFromSession } from '../session-flow/migr
 import type { Session, Message } from '@teamai/tool-core/sessions/ir';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
-import { getUserDataBase } from '../session-flow/ide-history.js';
+import { getUserDataBase } from '@teamai/tool-core/formats/ide-history';
 
 // ---------------------------------------------------------------------------
 // 报告容器
