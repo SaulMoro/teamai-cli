@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import { answered, failed, jsonLines, readClaudeResult, readPlainReply, reportedTokens, type CallOutput, type CallReading, type LaunchAdapter } from '@teamai/tool-core/launch';
 import { agyRun, readToolMetadata } from '@teamai/tool-core/stdout';
 
@@ -148,18 +149,7 @@ function readAgyStream({ stdout }: CallOutput): CallReading {
 /** How teamai launches each family of tools headless. A tool picks its adapter with the `launch` facet in `TOOLS`. */
 // oxlint-disable-next-line teamai/tool-facts -- keyed by launch adapter id, which this table defines; a tool picks one with TOOLS.launch
 export const LAUNCH_ADAPTERS = {
-  claude: {
-    call: { evidence: 'verified', prompt: 'stdin', args: () => ['-p', '--output-format', 'json'], read: readClaudeResult },
-    // Claude Code 2.1.312 ran a strict-sandbox benchmark trial in this mode (2026-10-30, `teamai benchmark run --sandbox`).
-    step: { evidence: 'verified', unattended: { args: ['--permission-mode', 'bypassPermissions'], evidence: 'verified' } },
-    confined: {
-      evidence: 'verified',
-      env: ['CLAUDE_CONFIG_DIR', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY'],
-      homeEnv: 'CLAUDE_CONFIG_DIR',
-      verified: /^2\.1\.308 \(Claude Code\)$/,
-      access: 'read',
-    },
-  },
+  claude: BUILT_IN_TOOLS.claude.launch.claude,
   codex: {
     call: { evidence: 'verified', prompt: 'stdin', args: ({ lastMessageFile }) => ['exec', '--json', '--skip-git-repo-check', '-o', lastMessageFile, '-'], read: readCodexExec },
     // `codex exec --help` of codex-cli 0.165.0: "Intended solely for running in environments that are externally sandboxed".

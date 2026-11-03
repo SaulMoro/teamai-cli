@@ -7,6 +7,7 @@
     "./cli-path": "./src/cli-path.ts",
     "./definition": "./src/definition.ts",
     "./exec": "./src/exec.ts",
+    "./family": "./src/family.ts",
     "./formats/*": "./src/formats/*.ts",
     "./home": "./src/home.ts",
     "./json": "./src/json.ts",

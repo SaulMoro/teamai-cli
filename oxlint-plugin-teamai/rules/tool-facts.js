@@ -8,7 +8,18 @@ import { inProductionSource, lintedPath, sourcePath, stringLiteralValue, workspa
 /** The descriptor, the one place a per-tool fact is written. */
 const DESCRIPTOR = 'src/tools.ts';
 
-const MESSAGE = 'Per-tool facts live in TOOLS (src/tools.ts), read through src/tool-registry.ts. Derive this from a descriptor field, '
+/** A family package (`packages/tool-<family>/src/`): not the contract, the test kit or the list of families. */
+const FAMILY_PACKAGE = /^packages\/tool-(?!(?:core|testing|definitions)\/)[^/]+\/src\//;
+
+/** The contract tables a family declares its tools in: their descriptors, session platforms and launch profiles. */
+const FAMILY_TABLE = /^(?:Readonly<)?Record<\s*string\s*,\s*(?:ToolDescriptor|SessionPlatformDefinition|LaunchAdapter)\s*>>?$/;
+
+/** The one list of every family (`BUILT_IN_TOOLS`), whose keys are family names that share tool names. */
+const FAMILY_LIST = /^(?:Readonly<)?Record<\s*string\s*,\s*ToolFamily\s*>>?$/;
+
+const DEFINITIONS_PACKAGE = 'packages/tool-definitions/src/';
+
+const MESSAGE = 'Per-tool facts live in a tool family\'s descriptors (packages/tool-<family>/, or TOOLS in src/tools.ts for a tool not yet moved), read through src/tool-registry.ts. Derive this from a descriptor field, '
   + 'or key the table by every tool (Record<ToolId, ...>), so a new tool fails the type check until it is decided here.';
 
 /** The shipped tool ids, generated from the tool registry by `node scripts/check-docs.mjs --write`. */
@@ -73,6 +84,19 @@ function isExhaustive(types) {
   return types.some((type) => /^(?:Readonly<)?Record<\s*(?!string\s*,)/.test(type.trim()));
 }
 
+/**
+ * Whether the table is where its tools' facts are declared: a family's contract table in its own package, or the
+ * list of families in tool-definitions.
+ * @param {string} relative
+ * @param {readonly string[]} types
+ * @returns {boolean}
+ */
+function declaresFamily(relative, types) {
+  const pattern = FAMILY_PACKAGE.test(relative) ? FAMILY_TABLE : relative.startsWith(DEFINITIONS_PACKAGE) ? FAMILY_LIST : null;
+
+  return pattern !== null && types.some((type) => pattern.test(type.trim()));
+}
+
 export default defineRule({
   meta: { type: 'problem', docs: { description: 'Keep per-tool facts in the TOOLS descriptor.' } },
   create(context) {
@@ -80,7 +104,9 @@ export default defineRule({
     const file = lintedPath(context);
     const root = workspaceRoot(path.posix.dirname(file)) ?? file.slice(0, file.length - sourcePath(context).length - 1);
 
-    if (path.posix.relative(root, file) === DESCRIPTOR) return {};
+    const relative = path.posix.relative(root, file);
+
+    if (relative === DESCRIPTOR) return {};
     const ids = toolIdsAt(root);
 
     if (ids === undefined) return { Program: (node) => context.report({ node, message: MISSING }) };
@@ -105,7 +131,8 @@ export default defineRule({
         if (keyed.length < 2) return;
         const types = tableTypes(node, context);
 
-        if (types !== null && !isExhaustive(types)) context.report({ node, message: MESSAGE });
+        if (types === null || isExhaustive(types) || declaresFamily(relative, types)) return;
+        context.report({ node, message: MESSAGE });
       },
     };
   },

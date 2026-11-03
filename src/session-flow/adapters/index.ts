@@ -4,6 +4,7 @@
  * Register every platform adapter in ADAPTER_REGISTRY for the migration engine.
  */
 
+import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { LocalConfig } from '../../types.js';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
 import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
@@ -30,7 +31,7 @@ export interface AdapterRegistry {
 
 export const ADAPTER_REGISTRY: AdapterRegistry = {
   // Base platforms
-  'claude-code': (toolRoots) => new ClaudeCodeAdapter('claude-code', sessionStoreDir('claude-code', toolRoots)),
+  'claude-code': (toolRoots) => BUILT_IN_TOOLS.claude.platforms['claude-code'].adapter(sessionStoreDir('claude-code', toolRoots)),
   codex: (toolRoots) => new CodexAdapter('codex', sessionStoreDir('codex', toolRoots)),
   qoder: (toolRoots) => new ClaudeCodeAdapter('qoder', sessionStoreDir('qoder', toolRoots)),
   'qoder-cn': (toolRoots) => new ClaudeCodeAdapter('qoder-cn', sessionStoreDir('qoder-cn', toolRoots)),
@@ -48,8 +49,8 @@ export const ADAPTER_REGISTRY: AdapterRegistry = {
   muse: (toolRoots) => new MuseAdapter(sessionStoreDir('muse', toolRoots)),
   hermes: (toolRoots) => new HermesAdapter(sessionStoreDir('hermes', toolRoots)),
   // TeamAI variants (different path prefixes, identical format)
-  'claude-internal': (toolRoots) => new ClaudeCodeAdapter('claude-internal', sessionStoreDir('claude-internal', toolRoots)),
-  tclaude: (toolRoots) => new ClaudeCodeAdapter('tclaude', sessionStoreDir('tclaude', toolRoots)),
+  'claude-internal': (toolRoots) => BUILT_IN_TOOLS.claude.platforms['claude-internal'].adapter(sessionStoreDir('claude-internal', toolRoots)),
+  tclaude: (toolRoots) => BUILT_IN_TOOLS.claude.platforms.tclaude.adapter(sessionStoreDir('tclaude', toolRoots)),
   'codex-internal': (toolRoots) => new CodexAdapter('codex-internal', sessionStoreDir('codex-internal', toolRoots)),
   tcodex: (toolRoots) => new CodexAdapter('tcodex', sessionStoreDir('tcodex', toolRoots)),
   joycode: (toolRoots) => new CodexAdapter('joycode', sessionStoreDir('joycode', toolRoots)),

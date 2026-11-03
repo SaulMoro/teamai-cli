@@ -82,6 +82,9 @@ export type TokenReading = {
   requests: TokenRequest[];
 };
 
+/** Reads a session's token usage in one transcript format. A source that is missing or unreadable reads as no usage. */
+export type TokenFormat = (source: TokenSource) => Promise<TokenReading>;
+
 /** Max bytes to scan from a transcript when counting interventions (guards huge files). */
 export const INTERVENTION_SCAN_MAX_BYTES = 50 * 1024 * 1024;
 
