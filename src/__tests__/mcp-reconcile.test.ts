@@ -65,7 +65,7 @@ import { TeamaiConfigSchema, type TeamaiConfig, type LocalConfig } from '../type
 import { readWorkspaceChildren } from '../workspace-children.js';
 import { projectDataHome } from '../utils/partition.js';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
-import { installFakeOpencode } from './helpers/fake-opencode.js';
+import { installFakeOpencode } from '@teamai/tool-testing/fake-opencode';
 import { buildPluginSource, OPENCODE_HOOK_FILE, resolveOpencodePluginDir } from '../opencode-hooks.js';
 import YAML from 'yaml';
 

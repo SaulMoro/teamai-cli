@@ -29,17 +29,7 @@ export const SESSION_PLATFORM_FACTS = {
     sqliteRegistrationOnWindows: true,
     idFormat: 'uuid',
   },
-  'opencode': {
-    store: { in: 'xdg-data', child: 'opencode' },
-    resume: (id) => `opencode --session ${id}`,
-    thinking: true, images: true,
-    nativeTools: new Set([
-      'read_file', 'write_file', 'edit_file', 'bash', 'glob', 'grep', 'task', 'todo_write', 'web_fetch', 'web_search',
-    ]),
-    legacyIdWithoutWorkspace: false,
-    sqliteRegistrationOnWindows: false,
-    idFormat: 'opencode',
-  },
+  opencode: BUILT_IN_TOOLS.opencode.platforms.opencode,
   'agy': {
     // agy 1.4.8 keeps its conversations beside its config root: ~/.gemini/antigravity-cli.
     store: { in: 'tool-home', home: 'agy', dir: '../antigravity-cli' },

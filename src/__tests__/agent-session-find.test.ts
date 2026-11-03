@@ -41,7 +41,7 @@ import {
   plantOpencodeSession,
   setFakeOpencodeExportError,
   setFakeOpencodeVersion,
-} from './helpers/fake-opencode.js';
+} from '@teamai/tool-testing/fake-opencode';
 import { WRITABLE } from './helpers/writable-platforms.js';
 
 const SECRET = 'sk-ABCDEFGH1234567890abcdefghij';

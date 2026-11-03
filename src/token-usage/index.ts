@@ -6,8 +6,8 @@
  */
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { TokenReading, TokenSource } from '@teamai/tool-core/tokens';
+import { sessionStoreDir } from '../locate.js';
 import { readAgyTranscript } from './formats/agy-transcript.js';
-import { readOpencodeDb } from './formats/opencode-db.js';
 
 const FORMATS = {
   'claude-jsonl': BUILT_IN_TOOLS.claude.tokens['claude-jsonl'],
@@ -16,7 +16,8 @@ const FORMATS = {
   'muse-session': BUILT_IN_TOOLS.muse.tokens['muse-session'],
   'agy-transcript': readAgyTranscript,
   'pi-session': BUILT_IN_TOOLS.pi.tokens['pi-session'],
-  'opencode-db': readOpencodeDb,
+  // OpenCode keeps usage in its database, so the format reads the member's store.
+  'opencode-db': (source) => BUILT_IN_TOOLS.opencode.tokens['opencode-db']({ ...source, storeDir: sessionStoreDir('opencode', undefined) }),
 } satisfies Record<string, (source: TokenSource) => Promise<TokenReading>>;
 
 /** A transcript format teamai reads token usage from. */
