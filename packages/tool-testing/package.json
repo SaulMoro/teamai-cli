@@ -1,0 +1,10 @@
+{
+  "name": "@teamai/tool-testing",
+  "private": true,
+  "type": "module",
+  "description": "The conformance suite every tool family runs, and the helpers it replays recordings with; test-only, never bundled.",
+  "exports": {
+    "./conformance": "./src/conformance.ts",
+    "./replay-transcript": "./src/replay-transcript.ts"
+  }
+}

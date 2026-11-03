@@ -11,6 +11,15 @@ const TABLES = new Map([
   ['src/session-flow/adapters/index.ts', 'ADAPTER_REGISTRY'],
 ]);
 
+/** The families every built-in tool comes from, by the package that lists them. */
+const FAMILIES = new Map([['@teamai/tool-definitions', 'BUILT_IN_TOOLS']]);
+
+/**
+ * The tables built from the families until the last family moves: each holds the rows of the tools not yet moved,
+ * and reaches the moved ones through BUILT_IN_TOOLS.
+ */
+const FAMILY_MERGES = new Set(scopedFiles(['src/session-flow/adapters/platform-facts.ts', 'src/token-usage/index.ts']));
+
 /** The registry: tool ids and descriptors, and the launch half beside LAUNCH_ADAPTERS, kept apart so the registry imports no adapter. */
 const REGISTRY = new Set(scopedFiles(['src/tool-registry.ts', 'src/tool-launch/tools.ts']));
 
@@ -38,15 +47,14 @@ export default defineRule({
 
     if (!/^(src|scripts)\//.test(from) || from.startsWith('src/__tests__/') || /\.test\.[cm]?[jt]sx?$/.test(from)) return {};
 
-    if (REGISTRY.has(from) || TABLES.has(from)) return {};
+    if (REGISTRY.has(from) || TABLES.has(from) || FAMILY_MERGES.has(from)) return {};
     const root = file.slice(0, file.length - from.length);
     let reads = false;
 
     return {
       ...importVisitors(({ node, specifier, names }) => {
-        if (!specifier.startsWith('.')) return;
-        const owner = `${path.posix.relative(root, path.posix.resolve(path.posix.dirname(file), specifier)).replace(/\.[cm]?js$/, '')}.ts`;
-        const table = TABLES.get(owner);
+        const owner = specifier.startsWith('.') ? `${path.posix.relative(root, path.posix.resolve(path.posix.dirname(file), specifier)).replace(/\.[cm]?js$/, '')}.ts` : specifier;
+        const table = TABLES.get(owner) ?? FAMILIES.get(owner);
 
         if (table === undefined || !names.some((name) => name === table || name === '*')) return;
         reads = true;

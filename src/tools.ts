@@ -1,14 +1,11 @@
-import type { DescriptorIds, ToolDescriptor } from '@teamai/tool-core/definition';
+import { NONE, UNKNOWN, UNKNOWN_READS, type DescriptorIds, type ToolDescriptor } from '@teamai/tool-core/definition';
+import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { StoredSessionPlatform } from './session-flow/adapters/platform-facts.js';
 import type { TokenFormatId } from './token-usage/index.js';
 import type { LaunchAdapterId } from './tool-launch/adapters.js';
 
 /** What a shipped tool's descriptor names: only built-in tools, and rows the app's launch, session and token tables declare. */
 type ShippedIds = DescriptorIds & { readonly tool: ToolId; readonly launch: LaunchAdapterId; readonly platform: StoredSessionPlatform; readonly tokens: TokenFormatId };
-
-const UNKNOWN_READS = { user: 'unknown', project: 'unknown' } as const;
-const NONE = { user: 'none', project: 'none' } as const;
-const UNKNOWN = { user: 'unknown', project: 'unknown' } as const;
 
 /** A built-in tool's descriptor: each id it names resolves to a row teamai has. */
 export type ShippedDescriptor = ToolDescriptor<ShippedIds>;
@@ -62,66 +59,7 @@ export type ToolId = (typeof TOOL_IDS)[number];
  * - assumed: teamai's own code or the issue matrix only
  */
 export const TOOLS = {
-  claude: {
-    home: { dir: '.claude' },
-    skillLoad: { calls: [{ name: 'Skill', evidence: 'verified' }] },
-    skills: { user: [{ base: 'home', path: '.claude/skills', evidence: 'docs' }], project: 'unknown' },
-    rules: {
-      user: { channel: 'dir', format: 'verbatim', reads: [{ base: 'home', path: '.claude/rules', evidence: 'verified' }] },
-      project: { channel: 'dir', format: 'verbatim', reads: [{ base: 'project', path: '.claude/rules', when: 'workspaceUnder', evidence: 'verified' }] },
-    },
-    blocks: {
-      user: { channel: 'file', file: { in: 'claudemd' }, reads: [{ base: 'home', path: '.claude/CLAUDE.md', evidence: 'verified' }] },
-      // CLAUDE.local.md would stop Claude's native AGENTS.md load (#945).
-      project: {
-        channel: 'file', file: { in: 'rules-dir', name: 'teamai-context.md', owned: true },
-        reads: [{ base: 'project', path: '.claude/rules', when: 'workspaceUnder', evidence: 'verified' }],
-      },
-      retired: { project: ['.claude/CLAUDE.md'] },
-    },
-    agents: {
-      user: { reads: [{ base: 'home', path: '.claude/agents', evidence: 'verified' }] },
-      project: { reads: [{ base: 'project', path: '.claude/agents', when: 'workspaceUnder', evidence: 'verified' }] },
-    },
-    mcp: {
-      user: { format: 'claude', reads: [{ base: 'home', path: '.claude.json', evidence: 'verified' }] },
-      project: {
-        judgedTeamaiOnly: false,
-        format: 'claude', localScope: { file: 'user-mcp-file', key: 'git-common-root' },
-        reads: [{ base: 'project', path: '.mcp.json', when: 'workspaceUnder', evidence: 'verified' }],
-        // Claude Code 2.1.316: an interactive session starts a .mcp.json server only once it is approved.
-        readGates: ['claude-mcp-approval'],
-      },
-    },
-    hooks: {
-      user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.claude/settings.json', evidence: 'verified' }], readGates: ['claude-hooks-enabled'] },
-      self: { channel: 'settings', format: 'claude', reads: [{ base: 'project', path: '.claude/settings.json', when: 'workspaceUnder', evidence: 'verified' }, { base: 'project', path: '.claude/settings.local.json', when: 'workspaceUnder', evidence: 'verified' }], readGates: ['claude-hooks-enabled'] },
-      subagentStop: true,
-      stopReply: true,
-      shell: 'system',
-      teamHooks: 'main-checkout',
-    },
-    sessions: ['claude-code'],
-    launch: 'claude',
-    autoCompact: 'claude',
-    skillAllowedTools: true,
-    searchEvidence: true,
-    projectFromHome: false,
-    legacyAgentMd: true,
-    tokens: 'claude-jsonl',
-    features: {
-      env: '✓t',
-      workflows: '✓v',
-      unattended: '✓v',
-      recall: '✓v',
-      stats: '✓v',
-      tokens: '✓v',
-      aiBackend: '✓v',
-      votesJudge: '✓v',
-      sessionJudge: { cell: '✓t', note: '#1386 the session judges its skill-driven run; not rerun' },
-      agentHooks: '✓v',
-    },
-  },
+  claude: BUILT_IN_TOOLS.claude.tools.claude,
   codex: {
     home: { dir: '.codex' },
     skillLoad: { calls: [], promptForm: '$name' },
@@ -203,69 +141,8 @@ export const TOOLS = {
       agentHooks: '?',
     },
   },
-  'claude-internal': {
-    home: { dir: '.claude-internal' },
-    skillLoad: { calls: [{ name: 'Skill', evidence: 'assumed' }] },
-    skills: UNKNOWN_READS,
-    rules: { user: { channel: 'dir', format: 'verbatim', reads: 'unknown' }, project: { channel: 'dir', format: 'verbatim', reads: 'unknown' } },
-    blocks: { user: { channel: 'file', file: { in: 'claudemd' }, reads: 'unknown' }, project: { channel: 'file', file: { in: 'claudemd' }, reads: 'unknown' } },
-    agents: { user: { reads: 'unknown' }, project: { reads: 'unknown' } },
-    mcp: UNKNOWN,
-    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.claude-internal/settings.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'claude', reads: 'unknown' }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home' },
-    sessions: ['claude-internal'],
-    launch: 'claude',
-    autoCompact: 'claude',
-    skillAllowedTools: false,
-    searchEvidence: true,
-    projectFromHome: false,
-    legacyAgentMd: true,
-    tokens: 'claude-jsonl',
-    features: {
-      env: '?',
-      workflows: '✓t',
-      unattended: '✓t',
-      recall: '?',
-      stats: '?',
-      tokens: '✓t',
-      aiBackend: '✓t',
-      votesJudge: '?',
-      sessionJudge: '?',
-      agentHooks: '?',
-    },
-  },
-  tclaude: {
-    home: { dir: '.tclaude' },
-    skillLoad: { calls: [{ name: 'Skill', evidence: 'assumed' }] },
-    skills: UNKNOWN_READS,
-    rules: { user: { channel: 'dir', format: 'verbatim', reads: 'unknown' }, project: { channel: 'dir', format: 'verbatim', reads: 'unknown' } },
-    blocks: { user: { channel: 'file', file: { in: 'claudemd' }, reads: 'unknown' }, project: { channel: 'file', file: { in: 'claudemd' }, reads: 'unknown' } },
-    agents: { user: { reads: 'unknown' }, project: { reads: 'unknown' } },
-    mcp: {
-      user: { format: 'claude', reads: 'unknown' },
-      project: { judgedTeamaiOnly: false, format: 'claude', writtenBy: 'claude', reads: [{ base: 'project', path: '.mcp.json', when: 'workspaceUnder', evidence: 'assumed' }] },
-    },
-    hooks: { user: { channel: 'settings', format: 'claude', reads: [{ base: 'home', path: '.tclaude/settings.json', evidence: 'assumed' }] }, self: { channel: 'settings', format: 'claude', reads: 'unknown' }, subagentStop: true, stopReply: true, shell: 'system', teamHooks: 'home' },
-    sessions: ['tclaude'],
-    launch: 'claude',
-    autoCompact: 'claude',
-    skillAllowedTools: false,
-    searchEvidence: true,
-    projectFromHome: false,
-    legacyAgentMd: true,
-    tokens: 'claude-jsonl',
-    features: {
-      env: '?',
-      workflows: '✓t',
-      unattended: '✓t',
-      recall: '?',
-      stats: '?',
-      tokens: '✓t',
-      aiBackend: '✓t',
-      votesJudge: '?',
-      sessionJudge: '?',
-      agentHooks: '?',
-    },
-  },
+  'claude-internal': BUILT_IN_TOOLS.claude.tools['claude-internal'],
+  tclaude: BUILT_IN_TOOLS.claude.tools.tclaude,
   tcodex: {
     home: { dir: '.tcodex' },
     skillLoad: { calls: [], promptForm: '$name' },
