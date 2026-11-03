@@ -19,11 +19,11 @@
  */
 
 import { z } from 'zod';
-import type { Session, Message, ContentBlock, MessageMetadata, ToolArguments } from './ir.js';
+import type { Session, Message, ContentBlock, MessageMetadata, ToolArguments } from '@teamai/tool-core/sessions/ir';
 import { collectEnvSecrets, redact, redactJson } from '../utils/redact.js';
-import { imagePlaceholderText, ToolArgumentsSchema } from './ir.js';
+import { imagePlaceholderText, ToolArgumentsSchema } from '@teamai/tool-core/sessions/ir';
 import { JsonValueSchema } from '../types.js';
-import { maskCutSecret } from './title.js';
+import { maskCutSecret } from '@teamai/tool-core/sessions/title';
 import { mapStrings } from '../utils/json.js';
 
 export interface ScrubResult {

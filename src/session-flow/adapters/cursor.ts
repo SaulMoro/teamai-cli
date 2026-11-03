@@ -22,10 +22,10 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef } from './base.js';
+import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef } from '@teamai/tool-core/sessions/base';
 import { z } from 'zod';
-import type { Session, Message, ContentBlock, ToolArguments } from '../ir.js';
-import { imagePlaceholderText, ToolArgumentsSchema } from '../ir.js';
+import type { Session, Message, ContentBlock, ToolArguments } from '@teamai/tool-core/sessions/ir';
+import { imagePlaceholderText, ToolArgumentsSchema } from '@teamai/tool-core/sessions/ir';
 import { JsonValueSchema, type JsonValue } from '../../types.js';
 import {
   encodeCwdGeneric,
@@ -39,13 +39,13 @@ import {
   coercedText,
   OptionalString,
   TextOrBlocksSchema,
-} from '../fs.js';
+} from '@teamai/tool-core/sessions/fs';
 import { sessionStoreDir } from '../../locate.js';
-import { cleanTitleText, fallbackTitle, titleFromCandidates, titleFromUserText, isRenderableText, visibleUserText } from '../title.js';
+import { cleanTitleText, fallbackTitle, titleFromCandidates, titleFromUserText, isRenderableText, visibleUserText } from '@teamai/tool-core/sessions/title';
 import { cursorComposerExists, registerCursorComposer, unregisterCursorComposer, type CursorComposerMessage, type CursorComposerTool } from '../cursor-store.js';
-import { assertSafeSessionFileId, deriveTargetSessionId } from '../ids.js';
+import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
 import { log } from '../../utils/logger.js';
-import type { JsonlRecord } from '../../utils/jsonl-store.js';
+import type { JsonlRecord } from '@teamai/tool-core/json';
 
 // ---------------------------------------------------------------------------
 // Tool-name normalization map
@@ -508,6 +508,7 @@ export class CursorAdapter extends AgentAdapter {
 
     const sessionId = deriveTargetSessionId({
       targetPlatform: this.platform,
+      idFormat: 'uuid',
       targetCwd: cwd,
       sourceSessionId: session.sessionId,
     });

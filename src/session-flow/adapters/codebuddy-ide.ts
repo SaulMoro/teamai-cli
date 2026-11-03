@@ -19,9 +19,9 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { AgentAdapter, type SessionMeta, type SessionReadRef } from './base.js';
+import { AgentAdapter, type SessionMeta, type SessionReadRef } from '@teamai/tool-core/sessions/base';
 import { z } from 'zod';
-import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ToolResultBlock } from '../ir.js';
+import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ToolResultBlock } from '@teamai/tool-core/sessions/ir';
 import { JsonValueSchema } from '../../types.js';
 import {
   findIdeHistoryDirs,
@@ -37,8 +37,8 @@ import {
   type IdeConversationEntry,
   type IdeMessageParsed,
 } from '../ide-history.js';
-import { cutTitle, isInjectedText, titleFromCandidates } from '../title.js';
-import { deriveTargetSessionId } from '../ids.js';
+import { cutTitle, isInjectedText, titleFromCandidates } from '@teamai/tool-core/sessions/title';
+import { deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -461,6 +461,7 @@ export class CodeBuddyIdeAdapter extends AgentAdapter {
 
     const writeId = deriveTargetSessionId({
       targetPlatform: this.platform,
+      idFormat: 'uuid',
       targetCwd: cwd,
       sourceSessionId: session.sessionId,
     });

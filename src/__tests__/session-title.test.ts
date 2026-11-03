@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { ClaudeCodeAdapter } from '../session-flow/adapters/claude-code.js';
 import { WorkBuddyAdapter } from '../session-flow/adapters/workbuddy.js';
 import { scrubSession } from '../session-flow/scrub.js';
-import { cleanTitleText, fallbackTitle, isInjectedText, titleFromCandidates } from '../session-flow/title.js';
+import { cleanTitleText, fallbackTitle, isInjectedText, titleFromCandidates } from '@teamai/tool-core/sessions/title';
 
 describe('session title cleaning', () => {
   it('detects platform-injected message heads', () => {

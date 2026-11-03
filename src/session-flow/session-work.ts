@@ -29,9 +29,9 @@ import { readWorkspaceChildren } from '../workspace-children.js';
 import { mapStrings } from '../utils/json.js';
 import { redact } from '../utils/redact.js';
 import { AgentSession, sessionKey } from './agent-session.js';
-import type { SubagentsRead } from './adapters/base.js';
+import type { SubagentsRead } from '@teamai/tool-core/sessions/base';
 import { SessionCaptures, type CapturedSession, type SessionCapture } from './captures.js';
-import type { Session } from './ir.js';
+import type { Session } from '@teamai/tool-core/sessions/ir';
 
 /** `value` with `mask` applied to each string in it, object keys included. */
 function maskedArguments(value: JsonValue, mask: (text: string) => string): JsonValue {

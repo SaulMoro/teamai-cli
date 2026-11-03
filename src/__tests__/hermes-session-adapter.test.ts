@@ -11,11 +11,11 @@ const mocks = vi.hoisted(() => ({
   messages: [] as unknown[],
 }));
 
-vi.mock('../session-flow/sqlite.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../session-flow/sqlite.js')>(),
+vi.mock('@teamai/tool-core/sessions/sqlite', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@teamai/tool-core/sessions/sqlite')>(),
   findSqlite3: () => mocks.sqlite3 || null,
 }));
-vi.mock('../utils/exec.js', () => ({
+vi.mock('@teamai/tool-core/exec', () => ({
   execCommand: async (_command: string, args: string[]) => {
     mocks.commands.push(args);
     if (args[1]?.startsWith('.backup ')) return { code: 0, stdout: '', stderr: '', signal: null };
@@ -30,7 +30,7 @@ vi.mock('../utils/exec.js', () => ({
 }));
 
 import { HermesAdapter } from '../session-flow/adapters/hermes.js';
-import { ToolUnavailableError } from '../session-flow/adapters/base.js';
+import { ToolUnavailableError } from '@teamai/tool-core/sessions/base';
 
 const roots: string[] = [];
 

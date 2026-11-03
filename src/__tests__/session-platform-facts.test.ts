@@ -5,7 +5,7 @@ import { AgentSession, noAdapter } from '../session-flow/agent-session.js';
 import { TOOLS } from '../tools.js';
 import { sessionPlatformsOf } from '../tool-registry.js';
 import { fidelityFromSession } from '../session-flow/migrate.js';
-import type { Session } from '../session-flow/ir.js';
+import type { Session } from '@teamai/tool-core/sessions/ir';
 
 describe('session platform facts (#1140)', () => {
   it('every registered adapter supplies the facts used by its readers and copies', () => {

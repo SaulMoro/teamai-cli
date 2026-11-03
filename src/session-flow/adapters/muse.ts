@@ -2,9 +2,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { z } from 'zod';
-import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef } from './base.js';
-import { toolArgumentsFrom, type ContentBlock, type Message, type Session } from '../ir.js';
-import { resolveRealCwd } from '../fs.js';
+import { AgentAdapter, ToolUnavailableError, type SessionMeta, type SessionReadRef } from '@teamai/tool-core/sessions/base';
+import { toolArgumentsFrom, type ContentBlock, type Message, type Session } from '@teamai/tool-core/sessions/ir';
+import { resolveRealCwd } from '@teamai/tool-core/sessions/fs';
 import { JsonValueSchema } from '../../types.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

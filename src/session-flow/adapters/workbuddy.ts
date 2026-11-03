@@ -23,10 +23,10 @@
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { AgentAdapter, type SessionMeta, type SessionReadRef } from './base.js';
+import { AgentAdapter, type SessionMeta, type SessionReadRef } from '@teamai/tool-core/sessions/base';
 import { z } from 'zod';
-import type { Session, SessionMetadata, Message, ContentBlock, ThinkingBlock, ToolArguments, ToolCallBlock, ToolResultBlock } from '../ir.js';
-import { imagePlaceholderText, MessageMetadataSchema, toolArgumentsFrom } from '../ir.js';
+import type { Session, SessionMetadata, Message, ContentBlock, ThinkingBlock, ToolArguments, ToolCallBlock, ToolResultBlock } from '@teamai/tool-core/sessions/ir';
+import { imagePlaceholderText, MessageMetadataSchema, toolArgumentsFrom } from '@teamai/tool-core/sessions/ir';
 import { CbContentItemSchema, cbRecords, type CbFunctionCallProviderData, type CbRecord, type CbWrittenLine } from './codebuddy.js';
 import {
   encodeCwdCodeBuddy,
@@ -38,10 +38,10 @@ import {
   dirExists,
   removeDirRecursive,
   OptionalString,
-} from '../fs.js';
+} from '@teamai/tool-core/sessions/fs';
 import { sessionStoreDir } from '../../locate.js';
-import { cleanTitleText, cutTitle, fallbackTitle, isInjectedText, titleFromCandidates, titleFromUserText } from '../title.js';
-import { assertSafeSessionFileId, deriveTargetSessionId } from '../ids.js';
+import { cleanTitleText, cutTitle, fallbackTitle, isInjectedText, titleFromCandidates, titleFromUserText } from '@teamai/tool-core/sessions/title';
+import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
 import { registerWorkBuddySession, unregisterWorkBuddySession } from '../workbuddy-store.js';
 import { log } from '../../utils/logger.js';
 
@@ -555,6 +555,7 @@ export class WorkBuddyAdapter extends AgentAdapter {
 
     const sessionId = deriveTargetSessionId({
       targetPlatform: this.platform,
+      idFormat: 'uuid',
       targetCwd: cwd,
       sourceSessionId: session.sessionId,
     });

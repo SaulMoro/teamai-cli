@@ -22,7 +22,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { findSqlite3 } from './sqlite.js';
+import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
 
 /** WorkBuddy's database, in the data root that holds its session store (`<root>/projects`). */
 function workBuddyDbPath(store: string): string {

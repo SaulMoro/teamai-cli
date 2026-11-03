@@ -11,9 +11,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { z } from 'zod';
-import { JsonValueSchema, JsonObjectSchema } from '../types.js';
+import { JsonValueSchema, JsonObjectSchema, type JsonlRecord } from '../json.js';
 import type { Session } from './ir.js';
-import type { JsonlRecord } from '../utils/jsonl-store.js';
 
 // ---------------------------------------------------------------------------
 // cwd encode/decode

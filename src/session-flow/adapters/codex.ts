@@ -40,13 +40,13 @@ import * as path from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import crossSpawn from 'cross-spawn';
 import { z } from 'zod';
-import { AgentAdapter, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from './base.js';
-import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ThinkingBlock, ToolArguments, ToolCallBlock, ToolResultBlock } from '../ir.js';
-import { imagePlaceholderText, toolArgumentsFrom } from '../ir.js';
+import { AgentAdapter, type SessionMeta, type SessionReadRef, type Subagent, type SubagentsRead } from '@teamai/tool-core/sessions/base';
+import type { Session, SessionMetadata, Message, ContentBlock, ImageBlock, ThinkingBlock, ToolArguments, ToolCallBlock, ToolResultBlock } from '@teamai/tool-core/sessions/ir';
+import { imagePlaceholderText, toolArgumentsFrom } from '@teamai/tool-core/sessions/ir';
 import { JsonValueSchema, type JsonValue } from '../../types.js';
-import { typedTitle, visibleUserText } from '../title.js';
-import { assertSafeSessionFileId, deriveTargetSessionId } from '../ids.js';
-import { findSqlite3 } from '../sqlite.js';
+import { typedTitle, visibleUserText } from '@teamai/tool-core/sessions/title';
+import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
+import { findSqlite3 } from '@teamai/tool-core/sessions/sqlite';
 import { log } from '../../utils/logger.js';
 import { execCommand, probeBinary } from '../../utils/exec.js';
 import { isOnPath } from '../../utils/lookpath.js';
@@ -62,9 +62,9 @@ import {
   coercedText,
   OptionalString,
   TextOrBlocksSchema,
-} from '../fs.js';
+} from '@teamai/tool-core/sessions/fs';
 import { sessionStoreDir } from '../../locate.js';
-import type { JsonlRecord } from '../../utils/jsonl-store.js';
+import type { JsonlRecord } from '@teamai/tool-core/json';
 
 // ---------------------------------------------------------------------------
 // Tool-name normalization map
@@ -882,6 +882,7 @@ export class CodexAdapter extends AgentAdapter {
 
     const sessionId = deriveTargetSessionId({
       targetPlatform: this.platform,
+      idFormat: 'uuid',
       targetCwd: cwd,
       sourceSessionId: session.sessionId,
     });
