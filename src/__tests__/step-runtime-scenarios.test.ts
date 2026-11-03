@@ -4,7 +4,8 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
-import { newOpId, type ExecEnd, type ExecRequest, type OpenRequest, type RuntimeOptions, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
+import type { RuntimeOptions } from '@teamai/runtime-protocol';
+import { newOpId, type ExecEnd, type ExecRequest, type OpenRequest, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import type { JsonValue } from '../types.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 

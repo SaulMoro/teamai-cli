@@ -5,7 +5,7 @@ import type { CommandExit } from '../../../tool-launch/process-stop.js';
 import { attemptEnv } from '../../attempt-marker.js';
 import type { LeaseWire } from '../../lease-wire.js';
 import type { AttemptRun } from '../../runtimes/attempt.js';
-import type { PlaceView } from '../../runtimes/step-runtime.js';
+import type { PlaceView } from '@teamai/runtime-protocol';
 import { attemptResultPath, type AttemptId, type RunId } from '../../store.js';
 import type { WorkflowFailure } from '../../types.js';
 import { git } from '../../worktree.js';

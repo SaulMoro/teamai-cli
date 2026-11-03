@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LocalConfig } from '../types.js';
 import { attemptRun, attemptToolHome, seedToolHome } from '../workflow/runtimes/attempt.js';
 import { holdLogin, loginHolder, writeLoginBack } from '../workflow/runtimes/login.js';
-import { newOpId, OpIdSchema, type ExecEnd, type Reattached, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
+import { OpIdSchema } from '@teamai/runtime-protocol';
+import { newOpId, type ExecEnd, type Reattached, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import { attemptDir, AttemptIdSchema, RunIdSchema } from '../workflow/store.js';
 
 const RUN = RunIdSchema.parse('r0123abcd');

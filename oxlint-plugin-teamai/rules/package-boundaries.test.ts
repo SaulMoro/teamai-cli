@@ -9,6 +9,7 @@ const workspace = {
   'packages/tool-core/package.json': JSON.stringify({ name: '@teamai/tool-core', private: true }),
   'packages/tool-core/src/definition.ts': 'export const definition = 1;',
   'packages/runtime-sandbox/package.json': JSON.stringify({ name: '@teamai/runtime-sandbox', private: true }),
+  'packages/runtime-protocol/package.json': JSON.stringify({ name: '@teamai/runtime-protocol', private: true }),
   'packages/tool-claude/package.json': JSON.stringify({ name: '@teamai/tool-claude', private: true }),
   'packages/tool-codex/package.json': JSON.stringify({ name: '@teamai/tool-codex', private: true }),
   'packages/tool-definitions/package.json': JSON.stringify({ name: '@teamai/tool-definitions', private: true }),
@@ -83,6 +84,20 @@ rule.valid('allows a family test importing the test kit', `import { describeFami
 rule.valid('allows a package importing its own files', `import { definition } from './definition.js';`, inWorkspace('packages/tool-core/src/sessions.ts'));
 
 rule.valid('allows a package importing another package by name', `import { definition } from '@teamai/tool-core/definition';`, inWorkspace('packages/runtime-sandbox/src/index.ts'));
+
+rule.valid('allows src/ importing the runtime protocol', `import { RuntimeRequestSchema } from '@teamai/runtime-protocol';`, inWorkspace('src/workflow/runtimes/stdio.ts'));
+
+rule.valid('allows a runtime package importing the runtime protocol', `import { RuntimeRequestSchema } from '@teamai/runtime-protocol';`, inWorkspace('packages/runtime-sandbox/src/main.ts'));
+
+rule.invalid('still rejects src/ importing a runtime package beside the protocol', `import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
+import { runtime } from '@teamai/runtime-sandbox';`, (output) => {
+  expect(output).toContain('src/workflow/runtimes/stdio.ts -> @teamai/runtime-sandbox');
+  expect(output).not.toContain('-> @teamai/runtime-protocol');
+}, inWorkspace('src/workflow/runtimes/stdio.ts'));
+
+rule.invalid('rejects src/ importing a runtime package whose name only starts like the protocol', `import { runtime } from '@teamai/runtime-protocol-next';`, undefined, inWorkspace('src/workflow/engine.ts', {
+  'packages/runtime-protocol-next/package.json': JSON.stringify({ name: '@teamai/runtime-protocol-next', private: true }),
+}));
 
 rule.valid('allows src/ importing a package that is not a runtime', `import { definition } from '@teamai/tool-core/definition';`, inWorkspace('src/tools.ts'));
 

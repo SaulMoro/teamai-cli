@@ -41,6 +41,9 @@ const DEFINITIONS = 'tool-definitions';
 /** The conformance kit families test with. */
 const TEST_KIT = 'tool-testing';
 
+/** The runtime protocol, which teamai and every runtime parse with: the one runtime package src/ imports. */
+const RUNTIME_PROTOCOL = 'runtime-protocol';
+
 /**
  * The `packages/<folder>` a path relative to the workspace root sits in, if any.
  * @param {string} relative
@@ -92,8 +95,8 @@ export default defineRule({
         for (const [name, folder] of packagesByName(root)) {
           if (specifier !== name && !specifier.startsWith(`${name}/`)) continue;
 
-          if (inApp && folder.startsWith('runtime-')) {
-            context.report({ node, message: `src/ never imports a runtime package: teamai reaches a runtime only through its executable over stdio. ${from} -> ${specifier}.` });
+          if (inApp && folder.startsWith('runtime-') && folder !== RUNTIME_PROTOCOL) {
+            context.report({ node, message: `src/ never imports a runtime package: teamai reaches a runtime only through its executable over stdio, and reads its lines with @teamai/runtime-protocol. ${from} -> ${specifier}.` });
           }
 
           if (FAMILY.test(folder) && own !== DEFINITIONS && own !== folder) {

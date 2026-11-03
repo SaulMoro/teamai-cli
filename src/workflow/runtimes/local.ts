@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process';
 import { stopProcess } from '../../tool-launch/process-stop.js';
 import type { DriverCan } from '../requirements.js';
-import type { ExecEnd, OpId, OpState, StepRuntime } from './step-runtime.js';
+import type { OpId, OpState } from '@teamai/runtime-protocol';
+import type { ExecEnd, StepRuntime } from './step-runtime.js';
 
 /**
  * The `local` step runtime, in teamai's process: the place is the worktree as it is on the host, and each `exec` runs
