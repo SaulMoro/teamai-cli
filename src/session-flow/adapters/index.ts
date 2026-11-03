@@ -7,8 +7,6 @@
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { LocalConfig } from '../../types.js';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
-import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
-import { CodexAdapter } from '@teamai/tool-core/formats/codex';
 import { CodeBuddyAdapter } from './codebuddy.js';
 import { CodeBuddyIdeAdapter } from './codebuddy-ide.js';
 import { WorkBuddyAdapter } from './workbuddy.js';
@@ -33,8 +31,8 @@ export const ADAPTER_REGISTRY: AdapterRegistry = {
   // Base platforms
   'claude-code': (toolRoots) => BUILT_IN_TOOLS.claude.platforms['claude-code'].adapter(sessionStoreDir('claude-code', toolRoots)),
   codex: (toolRoots) => BUILT_IN_TOOLS.codex.platforms.codex.adapter(sessionStoreDir('codex', toolRoots)),
-  qoder: (toolRoots) => new ClaudeCodeAdapter('qoder', sessionStoreDir('qoder', toolRoots)),
-  'qoder-cn': (toolRoots) => new ClaudeCodeAdapter('qoder-cn', sessionStoreDir('qoder-cn', toolRoots)),
+  qoder: (toolRoots) => BUILT_IN_TOOLS.qoder.platforms.qoder.adapter(sessionStoreDir('qoder', toolRoots)),
+  'qoder-cn': (toolRoots) => BUILT_IN_TOOLS.qoder.platforms['qoder-cn'].adapter(sessionStoreDir('qoder-cn', toolRoots)),
   // CodeBuddy has two independent stores, split into two platforms:
   //   codebuddy     = CLI (<CodeBuddy home>/projects/...)
   //   codebuddy-ide = IDE GUI (CodeBuddyExtension/.../history)
@@ -53,7 +51,7 @@ export const ADAPTER_REGISTRY: AdapterRegistry = {
   tclaude: (toolRoots) => BUILT_IN_TOOLS.claude.platforms.tclaude.adapter(sessionStoreDir('tclaude', toolRoots)),
   'codex-internal': (toolRoots) => BUILT_IN_TOOLS.codex.platforms['codex-internal'].adapter(sessionStoreDir('codex-internal', toolRoots)),
   tcodex: (toolRoots) => BUILT_IN_TOOLS.codex.platforms.tcodex.adapter(sessionStoreDir('tcodex', toolRoots)),
-  joycode: (toolRoots) => new CodexAdapter('joycode', sessionStoreDir('joycode', toolRoots)),
+  joycode: (toolRoots) => BUILT_IN_TOOLS.joycode.platforms.joycode.adapter(sessionStoreDir('joycode', toolRoots)),
 } satisfies Record<SessionPlatform, AdapterFactory>;
 
 export function getAdapter(platform: string, toolRoots?: LocalConfig['toolRoots']): AgentAdapter {
