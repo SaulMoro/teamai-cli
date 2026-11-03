@@ -8,7 +8,7 @@ import type { LocalConfig } from '../types.js';
 import * as update from '../update.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { log } from '../utils/logger.js';
-import { leaseNext, parseNextPayload, parseReport, reportable, reportAttempt, resumableSessions, SETTLED_ATTEMPTS_LIMIT, startRun, type ReportInput } from '../workflow/engine.js';
+import { leaseNext, parseNextPayload, parseReport, reportable, reportAttempt, resumableSessions, SETTLED_ATTEMPTS_LIMIT, startRun, type ReportInput, type SoleDriver } from '../workflow/engine.js';
 import { _setDriverPollMs, runLocalDriver } from '../workflow/drivers/local/local-driver.js';
 import { getCurrentVersion } from '../package-info.js';
 import { expectedOutput, outputMismatch, OutputSchemaSchema } from '../workflow/output.js';
@@ -6009,5 +6009,37 @@ describe('strict requirements', () => {
     expect(await start('loose')).toEqual({ error: { code: 'unattended_unsandboxed', message: `Step "run.work" ${needs}` } });
     for (const name of ['ci', 'own', 'outer', 'sealed']) expect(await start(name)).toMatchObject({ data: { status: 'running' } });
     expect(fs.readdirSync(runsDir(config))).toHaveLength(4);
+  });
+});
+
+describe('a required HITL request in a run whose only driver has several runtimes', () => {
+  const GATED = `schemaVersion: v1alpha1
+name: build
+description: Ship once a person approves.
+steps:
+  - id: ship
+    approve: { message: Ship it?, required: true }
+    command: node ship.js
+`;
+  const alone = { driver: 'showcase', offers: [{ runtime: 'toy', can: { hitl: false } }, { runtime: 'local', can: { hitl: true } }] } satisfies SoleDriver;
+
+  it('waits while a runtime that cannot ask is offered, and is asked once the runtime that can is offered', async () => {
+    const { config, runId } = await startBuild(GATED);
+
+    const onToy = await leaseNext(config, runId, driverA, { can: { hitl: false }, alone });
+    const onLocal = await leaseNext(config, runId, driverA, { can: { hitl: true }, alone });
+
+    expect(onToy).toMatchObject({ data: { wait: {} } });
+    expect(onLocal).toMatchObject({ data: { hitl: { step: 'ship', pass: 1 } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'ship', status: 'waiting' }] });
+  });
+
+  it('still fails it hitl_required when no runtime of the driver can ask', async () => {
+    const { config, runId } = await startBuild(GATED);
+    const none = { driver: 'showcase', offers: [{ runtime: 'toy', can: { hitl: false } }, { runtime: 'local', can: { hitl: false } }] } satisfies SoleDriver;
+
+    await leaseNext(config, runId, driverA, { can: { hitl: false }, alone: none });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'ship', status: 'failed', failure: { code: 'hitl_required' } }] });
   });
 });
