@@ -48,7 +48,8 @@ const SKILL_IMPORTS = {
   'src/builtin-hooks.ts': { names: ['resolveCliEntry'] },
   // The tools (`ToolId`) a session may name with `--tools default=<tool>`, which of them a child's model resolves for, and the
   // skill-data root the host question's reference is under.
-  'src/tools.ts': { names: ['isToolId', 'TOOLS', 'isAgentToolId', 'ToolId'] },
+  'src/tools.ts': { names: ['TOOLS', 'ToolId'] },
+  'src/tool-registry.ts': { names: ['isToolId', 'isAgentToolId'] },
   'src/skill-content.ts': { names: ['packagedSkillRoots'] },
   // The confined tools of this machine, what each can do there, and the level the session's tool reaches here.
   'src/tool-launch/confined.ts': { names: ['isConfinedTool', 'confinedAccess', 'confinedToolLevel'] },

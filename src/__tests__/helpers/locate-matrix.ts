@@ -10,7 +10,8 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { locate, unreadWrites, writesOf, type Install, type Location, type Place, type Resource, type Retired } from '../../locate.js';
-import { isToolId, TOOLS, type BlocksHeader, type ChannelProbe, type HomeMove, type ReadGateKind, type RunTimeVia, type ToolDescriptor } from '../../tools.js';
+import { TOOLS, type BlocksHeader, type ChannelProbe, type HomeMove, type ReadGateKind, type RunTimeVia, type ToolDescriptor } from '../../tools.js';
+import { isToolId } from '../../tool-registry.js';
 import type { Host } from '../../tool-home.js';
 import { DEFAULT_TOOL_PATHS, type TeamaiConfig } from '../../types.js';
 import type { ToolId } from '../../tools.js';

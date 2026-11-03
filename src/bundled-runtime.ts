@@ -10,7 +10,8 @@ import { execFileSync } from 'node:child_process';
 import { getUserHome } from './utils/home.js';
 import { isOnPath, pathDirs } from './utils/lookpath.js';
 import { log } from './utils/logger.js';
-import { isToolId, TOOLS, type ToolId } from './tools.js';
+import { TOOLS, type ToolId } from './tools.js';
+import { isToolId } from './tool-registry.js';
 
 /**
  * WorkBuddy 5.6.2 and 5.7.6 (`VENDOR_ASSETS` in main/index.js) unpack each

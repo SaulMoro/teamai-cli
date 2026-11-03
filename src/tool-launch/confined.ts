@@ -12,7 +12,7 @@ import { observedEffort, observedModel, type ObservedEffort, type ObservedModel 
 import { LAUNCHED_BY_ENV, resolveRunMode, RUN_MODE_ENV } from '../launch-context.js';
 import { opencodeMajorVersion } from '../opencode-hooks.js';
 import { movedToolHome, realHost, toolHome } from '../tool-home.js';
-import { isToolId, mcpSyntaxOf } from '../tools.js';
+import { isToolId, mcpSyntaxOf } from '../tool-registry.js';
 import { parseJsonAs } from '../utils/json.js';
 import { resolveCliPath } from '../utils/cli-path.js';
 import { execCommand, probeBinary } from '../utils/exec.js';

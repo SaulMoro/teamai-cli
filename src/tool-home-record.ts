@@ -1,5 +1,6 @@
 import { withFileLock } from './update.js';
-import { homeVariables, isToolId, TOOLS } from './tools.js';
+import { TOOLS } from './tools.js';
+import { homeVariables, isToolId } from './tool-registry.js';
 import { envToolHome, realHost, type EnvToolHome, recordedHomes, reloadToolHomes, rememberToolHome, saveToolHomes, toolHomesPath, type Host } from './tool-home.js';
 import type { ToolId } from './tools.js';
 import { log } from './utils/logger.js';

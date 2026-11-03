@@ -5,7 +5,8 @@ import { getsRulesFromExtension } from './resources/rule-format.js';
 import { pathExists, readFileSafe, readJsonObject, remove, writeFile } from './utils/fs.js';
 import { getUserHome } from './utils/home.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
-import { channelsOf, TOOLS, type BlocksHeader, type ChannelProbe, type RunTime } from './tools.js';
+import { TOOLS, type BlocksHeader, type ChannelProbe, type RunTime } from './tools.js';
+import { channelsOf } from './tool-registry.js';
 import { hookAdapterDir, installOf, locate, ownOf, writable, type FilePlace, type Gate, type Install } from './locate.js';
 import {
   opencodeContextReference, opencodeV1ClaudeFile, readOpencodeInstructionList, reconcileOpencodeInstructions,

@@ -11,12 +11,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { MCP_SERVER_KEY } from './resources/mcp-format.js';
 import { SESSION_PLATFORM_FACTS, type SessionPlatform, type StoredSessionPlatform } from './session-flow/adapters/platform-facts.js';
-import {
-  channelsOf, installGateOf, isToolId, hasDefaultHomeLeftovers, TOOLS,
-  type Activation, type BlocksFile, type BlocksHeader, type ChannelProbe, type FirstExistingRead, type HomeRead, type HookAdapter,
-  type HookAdapterId, type HookFormat, type HookSettings, type McpProject, type McpUser, type ProjectRead, type ReadGateKind, type RunTime, type SkillReads,
-  type RunTimeVia, type ToolId,
-} from './tools.js';
+import { TOOLS, type Activation, type BlocksFile, type BlocksHeader, type ChannelProbe, type FirstExistingRead, type HomeRead, type HookAdapter, type HookAdapterId, type HookFormat, type HookSettings, type McpProject, type McpUser, type ProjectRead, type ReadGateKind, type RunTime, type SkillReads, type RunTimeVia, type ToolId } from './tools.js';
+import { channelsOf, installGateOf, isToolId, hasDefaultHomeLeftovers } from './tool-registry.js';
 import {
   CURSOR_CONFIG_TOOL_ID, CURSOR_DATA_TOOL_ID,
   DEFAULT_TOOL_PATHS, isAgentExcluded, isGitExcludeEnabled, isSelfMode, recordedToolRootDir, resolveBaseDir, scopedToolPaths, toolGateRoot,

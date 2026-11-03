@@ -1,7 +1,8 @@
 /** The skill `teamai pull` generates for a workflow an agent may start: it routes to the guide and names the workflow. */
 import { generatedStartPatterns } from '../drivers/skill/literals.js';
 import { markerLines, signGenerated } from './generated-marker.js';
-import { isToolId, TOOLS } from '../../tools.js';
+import { TOOLS } from '../../tools.js';
+import { isToolId } from '../../tool-registry.js';
 import type { WorkflowSource } from '../types.js';
 
 export interface AdvertisedWorkflow {

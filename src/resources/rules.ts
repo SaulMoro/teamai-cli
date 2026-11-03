@@ -43,7 +43,7 @@ import {
 import { injectClaudeMdSection, removeClaudeMdSection } from '../utils/claudemd.js';
 import { toolHome } from '../tool-home.js';
 import { cleanupOf, installOf, locate, openclawWorkspaceDir, ownOf, userViewOf, writable, type Gate, type Install, type Location } from '../locate.js';
-import { channelsOf } from '../tools.js';
+import { channelsOf } from '../tool-registry.js';
 
 /** The copies earlier pulls left in one of `LEGACY_RULE_DIRS` (`RulesHandler.legacyRuleCopies`). */
 export interface LegacyRuleCopies {

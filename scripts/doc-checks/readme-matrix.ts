@@ -6,7 +6,8 @@ import path from 'node:path';
 import { ALL_MODEL_AGENTS } from '../../src/models/profile.js';
 import { runsTeamHookOn } from '../../src/hooks.js';
 import { isLaunchTool } from '../../src/tool-launch/tools.js';
-import { isToolId, TOOLS, type Support, type ToolId } from '../../src/tools.js';
+import { TOOLS, type Support, type ToolId } from '../../src/tools.js';
+import { isToolId } from '../../src/tool-registry.js';
 import { DEFAULT_TOOL_PATHS } from '../../src/types.js';
 
 const ROOT = process.cwd();

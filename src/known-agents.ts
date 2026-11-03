@@ -10,7 +10,8 @@ import {
   toolGateRoot,
   detectToolRoot,
 } from './types.js';
-import { isToolId, TOOLS } from './tools.js';
+import { TOOLS } from './tools.js';
+import { isToolId } from './tool-registry.js';
 import { installOf, isInstalledFor, locate, ownOf } from './locate.js';
 import type { LocalConfig, TeamaiConfig, Scope } from './types.js';
 import type { ToolId } from './tools.js';

@@ -23,7 +23,8 @@ import { classifyShellCommand } from './shell-command.js';
 import { normalizeToolName } from './tool-names.js';
 import { z } from 'zod';
 import { HookPayloadSchema, type HookPayload } from '../types.js';
-import { isToolId, TOOLS } from '../tools.js';
+import { TOOLS } from '../tools.js';
+import { isToolId } from '../tool-registry.js';
 
 /** What a call did: `read`/`search`/`list` whether a tool or a shell command did it; `shell` for any other shell call. */
 export type ToolCategory = 'read' | 'shell' | 'search' | 'list' | 'unknown';
