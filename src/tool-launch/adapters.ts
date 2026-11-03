@@ -104,13 +104,7 @@ export const LAUNCH_ADAPTERS = {
     step: { evidence: 'verified', unattended: { args: ['--auto'], evidence: 'docs' } },
     confined: { evidence: 'verified', env: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'GEMINI_API_KEY', 'OPENROUTER_API_KEY', 'OPENCODE_API_KEY'], verified: /^opencode v2\.1\.2$/, access: 'read' },
   },
-  codebuddy: {
-    call: { evidence: 'docs', prompt: 'stdin', args: () => ['-p', '--output-format', 'json'], read: readClaudeResult },
-    // Claude's flags and stream, without --effort. Its unattended mode is codebuddy.ai/docs/cli/permission-modes.
-    step: { evidence: 'docs', unattended: { args: ['--permission-mode', 'bypassPermissions'], evidence: 'docs' } },
-    // CodeBuddy lists about 70 tools whatever `--tools` says.
-    confined: { evidence: 'docs', env: ['CODEBUDDY_API_KEY', 'CODEBUDDY_AUTH_TOKEN', 'CODEBUDDY_CONFIG_DIR'], homeEnv: 'CODEBUDDY_CONFIG_DIR', access: 'full' },
-  },
+  codebuddy: BUILT_IN_TOOLS.codebuddy.launch.codebuddy,
   // One embedded turn with ephemeral state, so no call leaves a session in the member's conversations (#1308):
   // after calls on OpenClaw 2026.8.1 (the first with `agent exec`) and 2026.10.9, `openclaw sessions --all-agents --json` counts 0.
   openclaw: {

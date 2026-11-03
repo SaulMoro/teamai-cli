@@ -179,9 +179,9 @@ import type { Session } from '@teamai/tool-core/sessions/ir';
 import { ToolUnavailableError, type SessionReadRef } from '@teamai/tool-core/sessions/base';
 import { ClaudeCodeAdapter } from '@teamai/tool-core/formats/claude-code';
 import { sessionStoreDir } from '../locate.js';
-import { CodeBuddyAdapter } from '../session-flow/adapters/codebuddy.js';
 import { CursorAdapter } from '../session-flow/adapters/cursor.js';
 import { CodexAdapter } from '@teamai/tool-core/formats/codex';
+import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 
 let repoRoot: string;
 /** console.log + process.stdout.write 的合并捕获（ask 的提示走 stdout.write） */
@@ -1662,7 +1662,7 @@ describe('adapters: native cwd recovery from JSONL records', () => {
       }) + '\n',
     );
 
-    const session = await new CodeBuddyAdapter().readSession({ sessionId: SID });
+    const session = await BUILT_IN_TOOLS.codebuddy.platforms.codebuddy.adapter(sessionStoreDir('codebuddy', undefined)).readSession({ sessionId: SID });
     expect(session.cwd).toBe(NATIVE);
   });
 

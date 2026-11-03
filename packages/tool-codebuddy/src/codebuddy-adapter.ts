@@ -28,7 +28,7 @@ import { AgentAdapter, type SessionMeta, type SessionReadRef, type SubagentsRead
 import { z } from 'zod';
 import type { Session, SessionMetadata, Message, ContentBlock, ThinkingBlock, ToolArguments, ToolCallBlock, ToolResultBlock } from '@teamai/tool-core/sessions/ir';
 import { imagePlaceholderText, toolArgumentsFrom } from '@teamai/tool-core/sessions/ir';
-import { JsonValueSchema } from '../../types.js';
+import { JsonValueSchema } from '@teamai/tool-core/json';
 import { assertSafeSessionFileId, deriveTargetSessionId } from '@teamai/tool-core/sessions/ids';
 import {
   encodeCwdCodeBuddy,
@@ -44,7 +44,6 @@ import {
   OptionalString,
   TextOrBlocksSchema,
 } from '@teamai/tool-core/sessions/fs';
-import { sessionStoreDir } from '../../locate.js';
 import { cutTitle, isInjectedText, fallbackTitle, titleFromCandidates } from '@teamai/tool-core/sessions/title';
 import type { JsonlRecord } from '@teamai/tool-core/json';
 
@@ -251,7 +250,7 @@ export class CodeBuddyAdapter extends AgentAdapter {
   private readonly storageRoot: string;
 
   /** @param storageRoot The session store (the registry passes the member's, `sessionStoreDir`). */
-  constructor(storageRoot = sessionStoreDir('codebuddy', undefined)) {
+  constructor(storageRoot: string) {
     super();
     this.storageRoot = storageRoot;
   }

@@ -11,7 +11,7 @@ import type { TokenUsage } from '@teamai/tool-core/tokens';
 import { fakeCli } from './fake-cli.js';
 import { replayTranscript, type RecordedTranscript } from './replay-transcript.js';
 
-export type { RecordedTranscript } from './replay-transcript.js';
+export type { RecordedTranscript, ReplayTarget } from './replay-transcript.js';
 
 /** What a launch profile's tool printed for one call, recorded, and what teamai reads from it. */
 export interface RecordedCall {
@@ -47,6 +47,8 @@ export function fixtureText(url: URL): string {
 
 const PROMPT = 'Reply with the name of the test runner.';
 const SESSION_ID = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
+
+const sessionIdOf = (transcript: RecordedTranscript): string => transcript.sessionId ?? SESSION_ID;
 
 function recorded<T>(table: Readonly<Record<string, T>>, id: string, kind: string): T {
   const found = table[id];
@@ -119,18 +121,27 @@ function describeLaunch(id: string, profile: LaunchAdapter, call: RecordedCall):
   });
 }
 
-/** The adapter on a fresh store, outside any tool home, with the recorded transcript replayed into it under `cwd`. */
+/**
+ * The adapter on a fresh store, outside any tool home, with the recorded transcript replayed into it under `cwd`. A
+ * platform that locates its own store is pointed at the fresh one through the transcript's `storeEnv`.
+ */
 function replayed(platform: SessionPlatformDefinition, transcript: RecordedTranscript, cwd: string) {
   const store = scratch('store');
 
-  replayTranscript(transcript, { store, cwd, sessionId: SESSION_ID });
-  const adapter: AgentAdapter = locatesOwnStore(platform) ? platform.adapter() : platform.adapter(store);
+  replayTranscript(transcript, { store, cwd, sessionId: sessionIdOf(transcript) });
+
+  if (!locatesOwnStore(platform)) return { store, adapter: platform.adapter(store) };
+
+  if (transcript.storeEnv === undefined) throw new Error('A platform that locates its own store needs a recording with storeEnv, the variable that points it at the replayed store.');
+  vi.stubEnv(transcript.storeEnv, store);
+  const adapter: AgentAdapter = platform.adapter();
 
   return { store, adapter };
 }
 
 function describePlatform(id: string, platform: SessionPlatformDefinition, transcript: RecordedTranscript): void {
   describe(`session platform ${id}`, () => {
+    const sessionId = sessionIdOf(transcript);
     const made: string[] = [];
 
     const dir = (label: string): string => {
@@ -142,6 +153,8 @@ function describePlatform(id: string, platform: SessionPlatformDefinition, trans
     };
 
     afterEach(() => {
+      vi.unstubAllEnvs();
+
       for (const created of made.splice(0)) fs.rmSync(created, { recursive: true, force: true });
     });
 
@@ -151,9 +164,9 @@ function describePlatform(id: string, platform: SessionPlatformDefinition, trans
 
       made.push(store);
       expect(adapter.platform).toBe(id);
-      expect((await adapter.listConversations(cwd)).map((meta) => meta.sessionId)).toContain(SESSION_ID);
-      expect(await adapter.existingSessionId(SESSION_ID, cwd)).toBe(SESSION_ID);
-      const session = await adapter.readSession({ sessionId: SESSION_ID, projectPath: cwd });
+      expect((await adapter.listConversations(cwd)).map((meta) => meta.sessionId)).toContain(sessionId);
+      expect(await adapter.existingSessionId(sessionId, cwd)).toBe(sessionId);
+      const session = await adapter.readSession({ sessionId, projectPath: cwd });
 
       expect(session.platform).toBe(id);
       expect(session.messages.flatMap((message) => message.content).flatMap((block) => (block.type === 'text' ? [block.text] : []))).toContain(transcript.userText);
@@ -167,10 +180,10 @@ function describePlatform(id: string, platform: SessionPlatformDefinition, trans
       const { store, adapter } = replayed(platform, transcript, cwd);
 
       made.push(store);
-      const session = await adapter.readSession({ sessionId: SESSION_ID, projectPath: cwd });
+      const session = await adapter.readSession({ sessionId, projectPath: cwd });
       const written = await adapter.writeSession(session, target);
 
-      expect(written).not.toBe(SESSION_ID);
+      expect(written).not.toBe(sessionId);
       const back = await adapter.readSession({ sessionId: written, projectPath: target });
 
       expect(back.messages.length).toBe(session.messages.length);
