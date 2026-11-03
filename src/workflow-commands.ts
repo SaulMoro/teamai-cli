@@ -23,6 +23,7 @@ import { driveRun, unsupportedDriver } from './workflow-drive.js';
 import { awaitsLine, awaitsOf, driveByDefault, leftOpenLine, type DefaultDrive } from './default-driver.js';
 import { LOCAL_DRIVER, parseDriver, type Driver } from './workflow/driver-name.js';
 import { disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
+import { releaseEndedLogins } from './workflow/runtimes/login.js';
 import type { SoleDriver } from './workflow/engine.js';
 import { driverIdentity } from './driver-identity.js';
 import { getBusinessRoot, getDataHome, usesBranchWorktree, type JsonValue, type LocalConfig, type TeamaiConfig } from './types.js';
@@ -1257,7 +1258,24 @@ export async function workflowRetry(runId: string, step: string): Promise<void> 
 
 /** Cancels a run or step through the shared control operation. */
 export async function workflowCancel(runId: string, step?: string): Promise<void> {
-  await workflowControl(runId, (config, secrets) => cancelRun(config, runId, secrets, step));
+  await workflowControl(runId, async (config, secrets) => {
+    const cancelled = await cancelRun(config, runId, secrets, step);
+
+    if (!('error' in cancelled)) await releaseCancelledLogins(config, runId);
+
+    return cancelled;
+  });
+}
+
+/**
+ * Releases the step runtime logins that attempts of run `runId` held and no longer run, once a cancel stopped them: a
+ * driver killed meanwhile left its attempt's login held, and nothing else would release it.
+ */
+async function releaseCancelledLogins(config: LocalConfig, runId: string): Promise<void> {
+  const run = await readRun(config, runId);
+  const open = new Set(run === 'missing' || run === 'corrupt' ? [] : run.steps.flatMap((state) => (state.status === 'leased' ? [state.lease.attempt] : [])));
+
+  for (const { tool, attempt } of await releaseEndedLogins(runId, open)) log.info(`Released the ${tool} login teamai keeps, which attempt ${attempt} of run ${runId} held.`);
 }
 
 /** Publishes a run to teamai-reports, with the sessions its unsettled steps continue when asked. */

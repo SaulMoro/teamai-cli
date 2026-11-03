@@ -10,6 +10,7 @@ import { commandSignalPolicy, exitLike, stepEnvironment, terminalReachesCommand,
 import { knownSecrets, resolveWorkflowEnv, type WorkflowEnv } from '../../../env-resolution.js';
 import { resolveRunMode, workflowLaunch, type RunMode } from '../../../launch-context.js';
 import type { LocalConfig, TeamaiConfig } from '../../../types.js';
+import { writeJsonAtomic } from '../../../utils/fs.js';
 import { log, PROGRESS_STREAMS_ENV, streamOfLine, withoutStreamMarks } from '../../../utils/logger.js';
 import { redact } from '@teamai/shared/redact';
 import { AgentSession, type AgentSessionRef } from '../../../session-flow/agent-session.js';
@@ -33,7 +34,8 @@ import {
 import { placeView, runtimeCommand, runtimeLauncher, runtimeStepEnv, seedToolHome, type StartedCommand } from './runtime-steps.js';
 import { attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
 import { localStepRuntime } from '../../runtimes/local.js';
-import type { EngineOptions, OpenedDriver } from '../../runtimes/sources.js';
+import { holdLogin, loginWaitFile, releaseLogin, writeLoginBack } from '../../runtimes/login.js';
+import type { EngineOptions, LoginTool, OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type StepRuntime } from '../../runtimes/step-runtime.js';
 import type { SoleDriver } from '../../engine.js';
 import { storeDirOf } from '../../../session-flow/adapters/index.js';
@@ -492,7 +494,7 @@ async function promptReport(
   staged: LaunchChoice | undefined,
   secrets: Record<string, string>,
   askPerson: AskPerson | undefined,
-  onRuntime: AttemptRun | undefined,
+  onRuntime: { run: AttemptRun; logins: readonly LoginTool[] } | undefined,
 ): Promise<ReportBody> {
   const giveUp = async (failure: WorkflowFailure, tool?: string): Promise<ReportBody> => {
     const unrestored = await abandonPlace({ config, lock, attempt: lease.attempt });
@@ -602,6 +604,27 @@ async function promptReport(
     resume = await resumeSession(archive, lease, target, cwd);
   }
 
+  // A login the runtime brings is held by this attempt alone, on the whole machine, from before the place opens until
+  // it is written back: another attempt waits for it here, naming the attempt that holds it.
+  const login = toolHome ? onRuntime?.logins.find((tool) => tool === selected) : undefined;
+
+  if (login && toolHome) {
+    const waitFile = loginWaitFile(attemptDir(config, lock.run, lease.attempt));
+
+    const held = await holdLogin({
+      tool: login, run: lock.run, attempt: lease.attempt, toolHome: toolHome.dir, signal,
+      onWait: async (wait) => {
+        if (!wait) return fs.rm(waitFile, { force: true });
+        log.info(`Step "${lease.step}" waits for the ${wait.tool} login teamai keeps, which attempt ${wait.holder.attempt} of run ${wait.holder.run} holds. It goes on once that attempt ends; teamai workflow cancel ${wait.holder.run} releases it.`);
+        await writeJsonAtomic(waitFile, wait);
+      },
+    });
+
+    await fs.rm(waitFile, { force: true });
+
+    if (!held.ok) return giveUp(held.failure, selected);
+  }
+
   const launchModel = (model: StepModel): LaunchModel => {
     const named: LaunchModel = { model: model.name };
 
@@ -663,7 +686,7 @@ async function promptReport(
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = { ...scoped.env, [toolHome.variable]: toolHome.dir };
     const view = await placeView(config, lock.run, lease.attempt, cwd, toolHome);
-    launcher = toolAdapter(runtimeLauncher(onRuntime, { view, toolHome: { tool: toolHome.tool, dir: toolHome.dir }, unset: scoped.unset }), (command) => command, (command) => command);
+    launcher = toolAdapter(runtimeLauncher(onRuntime.run, { view, toolHome: { tool: toolHome.tool, dir: toolHome.dir }, unset: scoped.unset }), (command) => command, (command) => command);
   }
 
   if (launch) input.launch = launch;
@@ -698,6 +721,21 @@ async function promptReport(
   if (end.outcome === 'failed' && result.failure) {
     end.message = result.failure.message;
     end.failure = result.failure;
+  }
+
+  if (login && toolHome) {
+    // A runtime that failed may not have brought the tool home back, so what is there says nothing of the login.
+    const collected = !(result.failure?.code.startsWith('runtime_') === true && result.failure.code !== 'runtime_interrupted');
+    const notBack = await writeLoginBack({ tool: login, run: lock.run, attempt: lease.attempt, toolHome: toolHome.dir, collected });
+    await releaseLogin(login, { run: lock.run, attempt: lease.attempt });
+
+    if (notBack && end.outcome === 'success') {
+      end.outcome = 'failed';
+      end.message = notBack.message;
+      end.failure = notBack;
+    } else if (notBack) {
+      log.warn(notBack.message);
+    }
   }
 
   const ran = result.started ? result : undefined;
@@ -1040,12 +1078,16 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const closeRun = async (attempt: string): Promise<void> => {
     const closing = attemptRuns.get(attempt);
     const handle = localHandles.get(attempt);
+    // A closed attempt holds no login, whatever stopped it before its write-back.
+    const logins = slotOf.get(attempt)?.engine.logins ?? [];
     attemptRuns.delete(attempt);
     localHandles.delete(attempt);
     slotOf.delete(attempt);
     await closing?.close();
 
     if (handle !== undefined) await local.close(handle);
+
+    for (const tool of logins) await releaseLogin(tool, { run: runId, attempt });
   };
 
   /** Whether `slot` may open another attempt under its own `max_parallel`. */
@@ -1477,7 +1519,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           if (failure) return unstaged(lease, failure);
           interactiveIgnores = ignored;
 
-          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, turn.secrets, askPerson, runOf(lease));
+          const stepRun = runOf(lease);
+
+          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, turn.secrets, askPerson, stepRun && { run: stepRun, logins: slotOf.get(lease.attempt)?.engine.logins ?? [] });
         })() });
       }
 
