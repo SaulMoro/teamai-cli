@@ -11,7 +11,8 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { log } from './utils/logger.js';
 import { probeBinary } from './utils/exec.js';
-import { isToolId, type ToolId } from './tools.js';
+import { type ToolId } from './tools.js';
+import { isToolId } from './tool-registry.js';
 
 const VERSION_CACHE = new Map<string, string>();
 

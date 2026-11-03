@@ -13,7 +13,7 @@ import {
 import { AgentsHandler } from '../resources/agents.js';
 import { commitTeamRepo } from './helpers/team-repo-history.js';
 import { TeamaiConfigSchema, type LocalConfig, type TeamaiConfig } from '../types.js';
-import { AGENT_TOOLS } from '../tools.js';
+import { AGENT_TOOLS } from '../tool-registry.js';
 
 vi.mock('../utils/logger.js', () => ({
   log: {

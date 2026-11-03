@@ -73,7 +73,8 @@ import {
 } from './builtin-skills.js';
 import { cleanupOf, hookAdapterDirIn, hookSettingsFile, installOf, isInstalledFor, locate, openclawWorkspaceDir, ownOf, SHARED_AGENT_SKILLS_PATH, workspaceHooksOf, writesOf, type Location } from './locate.js';
 import { toolHome, toolHomesAcrossProfiles } from './tool-home.js';
-import { channelsOf, hookFormatOf, isToolId, TOOLS } from './tools.js';
+import { TOOLS } from './tools.js';
+import { channelsOf, hookFormatOf, isToolId } from './tool-registry.js';
 import { CODEX_TOOL_IDS } from './utils/tool-names.js';
 import { allowsSkillDirectory, CODEX_TOOL, describeOutsideSkillLink, describeSkillDirectoryBlock, findSkillDirectoryBlock, skillOrigin } from './resources/skills.js';
 import { describeKeptDir, describeMembersDirLeft, isLink, keepsTrackedCopy, ownsSkillDir, teamaiSkillFiles } from './resources/delivered-copies.js';

@@ -25,7 +25,8 @@ import { loadTeamConfig, refreshRoleAssignment, saveLocalConfigForScope } from '
 import { stepEnvironment } from '../../env-exec.js';
 import { removeGitHook } from '../../git-hook.js';
 import { createProjectToolRoots } from '../../project-agent-root.js';
-import { homeVariables, isToolId, TOOLS } from '../../tools.js';
+import { TOOLS } from '../../tools.js';
+import { homeVariables, isToolId } from '../../tool-registry.js';
 import { roleDeclaration } from '../../roles.js';
 import { getDataHome, LocalConfigSchema, type LocalConfig } from '../../types.js';
 import { execCommand } from '../../utils/exec.js';

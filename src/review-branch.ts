@@ -47,7 +47,7 @@ import { listRepoFilesRecursive } from './resources/repo-resource.js';
 import { isNamespaceDir, resolveResourceNamespaces } from './resource-namespaces.js';
 import { loadRoleAssignmentsIfPresent } from './role-assignments.js';
 import { listRoleIds, loadRolesManifestIfPresent, type RolesManifest } from './roles.js';
-import { AGENT_TOOLS } from './tools.js';
+import { AGENT_TOOLS } from './tool-registry.js';
 import { LocalConfigSchema, type GlobalOptions, type LocalConfig, type ResourceItem, type TeamaiConfig } from './types.js';
 import { splitFrontmatter, type FrontmatterValue } from './utils/frontmatter.js';
 import { isIgnored, listFilesRecursive, pathExists, readFileIfExists, writeFile, ensureDir } from './utils/fs.js';

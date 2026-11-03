@@ -5,7 +5,7 @@ import fse from 'fs-extra';
 import { KNOWN_AGENTS } from '../known-agents.js';
 import { ruleFileExtensionForTool, usesMdcRules } from '../resources/rule-format.js';
 import { scopedToolPaths, TeamaiConfigSchema, type LocalConfig } from '../types.js';
-import { AGENT_TOOLS, channelsOf, homeVariables, sessionPlatformsOf } from '../tools.js';
+import { AGENT_TOOLS, channelsOf, homeVariables, sessionPlatformsOf } from '../tool-registry.js';
 import { AgentsHandler, updateJoycodeAgentIndex } from '../resources/agents.js';
 import { builtinHookDefs } from '../builtin-hooks.js';
 import { getAdapter } from '../session-flow/adapters/index.js';

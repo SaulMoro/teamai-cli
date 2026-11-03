@@ -41,7 +41,7 @@ import type { AgentSpec, ToolName, ParseResult } from '../resources/agent-format
 import { AgentsHandler } from '../resources/agents.js';
 import type { AgentResourceItem } from '../resources/agents.js';
 import type { TeamaiConfig, LocalConfig } from '../types.js';
-import { AGENT_TOOLS } from '../tools.js';
+import { AGENT_TOOLS } from '../tool-registry.js';
 
 // ─── Test helpers ─────────────────────────────────────────────────────────────
 

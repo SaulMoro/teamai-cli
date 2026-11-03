@@ -12,7 +12,7 @@ vi.mock('../utils/logger.js', () => ({
 
 import { buildMcpReadFileChecks, mcpTransportNotes } from '../doctor-delivery.js';
 import type { DoctorContext } from '../doctor.js';
-import { mcpFormatOf } from '../tools.js';
+import { mcpFormatOf } from '../tool-registry.js';
 import { log } from '../utils/logger.js';
 import { judgeTeamaiOnlyMcpConfigs, reconcileMcpForConfig, resolveMcpTargets, shadowedMcpRecords } from '../mcp-reconcile.js';
 import { entryHash, renderCodexBlock, renderJsonEntry } from '../resources/mcp-format.js';

@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
-import { homeVariables, isToolId, TOOLS, type HomeMove, type ToolDescriptor, type ToolId } from './tools.js';
+import { TOOLS, type HomeMove, type ToolDescriptor, type ToolId } from './tools.js';
+import { homeVariables, isToolId } from './tool-registry.js';
 import { pathExists, readFileSafe, readJsonObject, writeJsonAtomic, type JsonObjectRead } from './utils/fs.js';
 import { getUserHome, normalizeHomePath, usesInstallHome } from './utils/home.js';
 

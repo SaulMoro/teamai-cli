@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import { z } from 'zod';
 import { DriverSchema } from '../../../driver-identity.js';
 import { RunModeSchema } from '../../../launch-context.js';
-import { isToolId } from '../../../tools.js';
+import { isToolId } from '../../../tool-registry.js';
 import type { LocalConfig } from '../../../types.js';
 import type { ToolId } from '../../../tools.js';
 import { readFileSafe, writeJsonAtomic } from '../../../utils/fs.js';

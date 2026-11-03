@@ -46,7 +46,8 @@ import { SessionOutcomeEventSchema, uniqueOutcomes, type SessionOutcomeEvent, ty
 import { readCopilotShutdown } from './token-usage/formats/copilot-shutdown.js';
 import { isTokenFormatId, readTokenUsage, type TokenRequest } from './token-usage/index.js';
 import { priceTokens } from './token-usage/pricing.js';
-import { isToolId, TOOLS, type ToolDescriptor } from './tools.js';
+import { TOOLS, type ToolDescriptor } from './tools.js';
+import { isToolId } from './tool-registry.js';
 import { HookStdinSchema, type HookStdin } from './hook-dispatch.js';
 
 // ─── Event collection data flow ─────────────────────────

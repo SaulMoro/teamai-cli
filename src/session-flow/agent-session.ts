@@ -17,7 +17,7 @@ import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { ADAPTER_REGISTRY, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
 import { isSessionPlatform, sessionPlatformFacts } from './adapters/platform-facts.js';
-import { sessionPlatformOwner, sessionPlatformsOf } from '../tools.js';
+import { sessionPlatformOwner, sessionPlatformsOf } from '../tool-registry.js';
 import { ToolUnavailableError, type AgentAdapter, type SessionMeta, type SubagentsRead } from './adapters/base.js';
 import { imagePlaceholderText, type ContentBlock, type Message, type Session } from './ir.js';
 import { deriveTargetSessionId, legacyTargetSessionIds } from './ids.js';

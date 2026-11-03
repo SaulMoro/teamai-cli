@@ -4,7 +4,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { spawnSync } from 'node:child_process';
 import semver from 'semver';
 import { z } from 'zod';
-import { isToolId } from './tools.js';
+import { isToolId } from './tool-registry.js';
 import { existingSharedInstructionDirs, shadowedSharedInstructionFiles } from './shared-instruction-source.js';
 import { expandHome, listFilesRecursive, pathExists, readFileSafe, readJsonObject } from './utils/fs.js';
 import {
