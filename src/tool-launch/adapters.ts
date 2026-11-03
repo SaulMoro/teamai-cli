@@ -174,10 +174,7 @@ export const LAUNCH_ADAPTERS = {
   muse: {
     call: { evidence: 'verified', prompt: 'file', args: ({ promptFile }) => ['exec', '--json', '--no-session-log', '--prompt-file', promptFile], read: readMuseExec },
   },
-  qoder: {
-    executable: 'qodercli',
-    call: { evidence: 'docs', prompt: 'argv', args: ({ prompt }) => ['-p', prompt], read: readPlainReply },
-  },
+  qoder: BUILT_IN_TOOLS.qoder.launch.qoder,
   kiro: {
     executable: 'kiro-cli',
     call: { evidence: 'docs', prompt: 'argv', args: ({ prompt }) => ['chat', '--no-interactive', prompt], read: readPlainReply },
