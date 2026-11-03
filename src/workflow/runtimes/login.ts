@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
@@ -28,6 +28,13 @@ const HOME_VARIABLES = { codex: 'CODEX_HOME' } as const satisfies Record<LoginTo
 
 /** How a waiting attempt checks the lock again. */
 const WAIT_POLL_MS = 500;
+
+/** The file of a `tool` home that holds its login, which only `holdLogin` puts in a tool home, or undefined for a tool teamai keeps no login of. */
+export function loginFileOf(tool: string): string | undefined {
+  const login = LOGIN_TOOL_IDS.find((one) => one === tool);
+
+  return login && LOGIN_FILES[login];
+}
 
 /** The home teamai keeps `tool`'s login in, which the member fills once with the tool's own login command. */
 export function loginHome(tool: LoginTool): string {
@@ -82,8 +89,9 @@ export async function loginHolder(tool: LoginTool): Promise<LoginLock | undefine
 async function placeLock(tool: LoginTool, lock: LoginLock, { replace }: { replace: boolean }): Promise<boolean> {
   const file = loginLockFile(tool);
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
-  await fs.writeFile(temporary, JSON.stringify(lock), { mode: 0o600 });
+  // Its own name per call: two attempts of one process that ask at once never link each other's identity.
+  const temporary = `${file}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
+  await fs.writeFile(temporary, JSON.stringify(lock), { mode: 0o600, flag: 'wx' });
 
   try {
     if (replace) await fs.rename(temporary, file);
@@ -242,6 +250,9 @@ export async function writeLoginBack({ tool, run, attempt, toolHome, collected }
 
   if (sha256(written) === holder.copied) return undefined;
   const current = await readRegular(target);
+
+  // Written back already, by a driver killed before it released the lock.
+  if (current !== undefined && sha256(current) === sha256(written)) return undefined;
 
   if (current === undefined || sha256(current) !== holder.copied) return kept('the login there changed while the step ran');
   const account = accountOf(written);

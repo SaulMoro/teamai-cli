@@ -9,6 +9,8 @@ import type { LocalConfig } from '../../types.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import { attemptDir, AttemptIdSchema, attemptsDir, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
+import type { SessionRef } from '../workspace.js';
+import { loginFileOf } from './login.js';
 import { newOpId, OpIdSchema, RuntimeDisplaySchema, type ExecEnd, type ExecEvents, type PlaceView, type RuntimeDisplay, type StepRuntime } from './step-runtime.js';
 
 // ─── An attempt on a step runtime ────────────────────────
@@ -109,6 +111,30 @@ export async function attemptHoldingSession(config: LocalConfig, run: string, se
   return undefined;
 }
 
+/**
+ * The session a prompt on a step runtime resumes: the first of `sessions` (the lease's, then each earlier one it
+ * continued) that an earlier attempt of run `run` kept in its tool home for `tool`. That home is copied into the home of
+ * `attempt`, where the tool resumes it. Undefined when no earlier attempt holds one, and the tool starts a new session.
+ */
+export async function seedToolHome({ config, run, attempt, tool, sessions }: { config: LocalConfig; run: RunId; attempt: AttemptId; tool: string; sessions: SessionRef[] }): Promise<SessionRef | undefined> {
+  for (const session of sessions.filter((candidate) => candidate.tool === tool)) {
+    const holding = await attemptHoldingSession(config, run, session);
+
+    if (holding === undefined) continue;
+
+    // A home this attempt already has, from before a restart, keeps what its tool wrote there. The login stays behind:
+    // only the lock that holds it may copy it, so a step on a runtime that holds no login never gets one.
+    const login = loginFileOf(tool);
+    const kept = login === undefined ? undefined : path.join(holding.home, login);
+
+    if (holding.attempt !== attempt) await fs.cp(holding.home, attemptToolHome(config, run, attempt, tool), { recursive: true, force: false, filter: (source) => source !== kept });
+
+    return session;
+  }
+
+  return undefined;
+}
+
 /** The variable `tool`'s session store follows, set to its home in the attempt, or undefined for a tool no exec runtime runs. */
 export function toolHomeVariable(tool: string): string | undefined {
   return isExecRuntimeTool(tool) ? homeEnvOf(tool) : undefined;
@@ -167,13 +193,15 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
 
   /**
    * Stops an exec a teamai before this one left running, and waits until the runtime no longer reports it running.
-   * Answers false when it still runs after the wait.
+   * Answers false when it still runs after the wait, or the runtime can no longer be asked.
    */
   const stopLeftRunning = async (handle: string, op: z.infer<typeof OpIdSchema>): Promise<boolean> => {
     await runtime.cancel(op);
 
     for (const deadline = Date.now() + STOP_WAIT_MS; Date.now() < deadline;) {
       const seen = await runtime.reattach(handle);
+
+      if (seen.kind === 'failed') return false;
 
       if (seen.kind !== 'alive' || seen.ops.find((state) => state.op === op)?.state !== 'running') return true;
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -242,9 +270,9 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
         if (state?.state === 'failed') return { kind: 'failed', failure: state.failure };
 
         if (state?.state === 'running') {
-          await stopLeftRunning(handle, sent.op);
+          if (await stopLeftRunning(handle, sent.op)) return { kind: 'interrupted' };
 
-          return { kind: 'interrupted' };
+          return { kind: 'failed', failure: { code: 'runtime_failed', message: `Step runtime "${runtime.name}" did not show the exec of attempt ${attempt} that a teamai before this one left running as stopped, after teamai asked it to cancel that exec. Stop it on the runtime, then retry the step.` } };
         }
 
         // The request never reached the runtime: it is sent now, under the id that was persisted for it.
