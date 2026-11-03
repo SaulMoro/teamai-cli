@@ -9,6 +9,7 @@ import { resolveCliPath } from '../../utils/cli-path.js';
 import { writeJsonAtomic } from '../../utils/fs.js';
 import type { DriverCan } from '../requirements.js';
 import type { WorkflowFailure } from '../types.js';
+import { shippedRuntimeFile } from '../../default-drivers.js';
 import { personalDir, resolveDriver, teamItem, type ResolvedDriver } from './definitions.js';
 import { localStepRuntime } from './local.js';
 import { stdioStepRuntime } from './stdio.js';
@@ -19,7 +20,8 @@ import type { LaunchTool } from '../../tool-launch/tools.js';
 //
 //  `local` is built in. Any other runtime is an external program, found first in the member's own
 //  ~/.teamai/runtimes/<name>/, then in the team repo's runtimes/<name>/ (and runtimes/<namespace>/<name>/ for each
-//  active namespace), then as `teamai-runtime-<name>` on PATH. A runtime directory holds an executable named `runtime`.
+//  active namespace), then among the runtimes teamai ships (the `teamai-runtime-<name>` entries of its package's
+//  `bin`, found in its own package directory), then as `teamai-runtime-<name>` on PATH. A runtime directory holds an executable named `runtime`.
 //  A team runtime is code a teammate pushed, so before its first spawn at a revision a person accepts that revision:
 //  an attended run asks, and an unattended one refuses.
 //
@@ -30,6 +32,8 @@ export const RUNTIME_ENTRY = 'runtime';
 export type RuntimeSource =
   | { kind: 'builtin'; name: 'local' }
   | { kind: 'personal' | 'path'; name: string; executable: string }
+  /** A runtime teamai ships, as a built file of its package that the Node running teamai runs. */
+  | { kind: 'shipped'; name: string; file: string }
   | { kind: 'team'; name: string; executable: string; dir: string; relative: string };
 
 async function isFile(at: string): Promise<boolean> {
@@ -58,6 +62,9 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
     return { ok: true, source: { kind: 'team', name: use, executable: path.join(team.at, RUNTIME_ENTRY), dir: team.at, relative: path.relative(getKnowledgeDir(driver.config), team.at) } };
   }
 
+  const shipped = shippedRuntimeFile(use);
+
+  if (shipped) return { ok: true, source: { kind: 'shipped', name: use, file: shipped } };
   const onPath = resolveCliPath(`teamai-runtime-${use}`);
 
   if (onPath) return { ok: true, source: { kind: 'path', name: use, executable: onPath } };
@@ -66,7 +73,7 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
     ok: false,
     failure: {
       code: 'runtime_not_found',
-      message: `Driver "${driver.name}" uses runtime "${use}", and none is installed: no ~/.teamai/runtimes/${use}/${RUNTIME_ENTRY}, no runtimes/${use}/${RUNTIME_ENTRY} in the team repo, and no teamai-runtime-${use} on PATH.`,
+      message: `Driver "${driver.name}" uses runtime "${use}", and none is installed: no ~/.teamai/runtimes/${use}/${RUNTIME_ENTRY}, no runtimes/${use}/${RUNTIME_ENTRY} in the team repo, none that teamai ships, and no teamai-runtime-${use} on PATH.`,
     },
   };
 }
@@ -243,7 +250,11 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   const accepted = await acceptRuntime(source, { mode, canAsk });
 
   if (!accepted.ok) return accepted;
-  const runtime = stdioStepRuntime({ name: source.name, command: source.executable });
+
+  const runtime = source.kind === 'shipped'
+    ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.file] })
+    : stdioStepRuntime({ name: source.name, command: source.executable });
+
   const ready = await runtime.init({ options: split.runtime, mode });
 
   if (ready.ok) return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, engine: split.engine } };

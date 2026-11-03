@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -6,7 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { parse, stringify } from 'yaml';
 import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
-import { attemptOf, CLAUDE_SESSIONS, envelope, fakeTool, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
+import { attemptOf, CLAUDE_SESSIONS, envelope, fakeTool, ROOT, runCLI, type Ran } from '../helpers/step-runtime-e2e.js';
 import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
 
 // A driver definition that lists several runtimes: each `next` offers one runtime's `can`, in definition order, and a
@@ -286,5 +286,34 @@ Judge the review.
     expect(ranOn.sort()).toEqual(['local', 'toy']);
     const edges = fs.readFileSync(spans, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { edge: string });
     expect(edges.map((edge) => edge.edge)).toEqual(['start', 'start', 'end', 'end']);
+  });
+
+  it('runs a shipped runtime from the packed package, found in teamai\'s package directory before a same-named executable on PATH', async () => {
+    // The package as npm packs it, with one more runtime entry, as a first-party runtime adds its own.
+    const packs = path.join(sandbox, 'packs');
+    fs.mkdirSync(packs, { recursive: true });
+    const packed = execFileSync('npm', ['pack', '--ignore-scripts', '--silent', '--pack-destination', packs], { cwd: ROOT, encoding: 'utf8' }).trim().split('\n').at(-1) ?? '';
+    execFileSync('tar', ['-xzf', path.join(packs, packed), '-C', packs]);
+    const pkg = path.join(packs, 'package');
+    fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(pkg, 'node_modules'));
+    const manifest = JSON.parse(fs.readFileSync(path.join(pkg, 'package.json'), 'utf8')) as { bin: Record<string, string> };
+    manifest.bin['teamai-runtime-shiptoy'] = 'dist/runtime-shiptoy.js';
+    fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify(manifest, null, 2));
+    fs.copyFileSync(TOY_RUNTIME, path.join(pkg, 'dist', 'runtime-shiptoy.js'));
+    // A stray executable of the same name on PATH, which must never run.
+    const stray = path.join(sandbox, 'stray-ran');
+    fs.writeFileSync(path.join(bin, 'teamai-runtime-shiptoy'), `#!/bin/sh\ntouch "${stray}"\nexit 1\n`, { mode: 0o755 });
+    writeDefinition('shipd', [{ use: 'shiptoy', options: { state } }]);
+
+    const ran = spawnSync(process.execPath, [path.join(pkg, 'dist', 'index.js'), 'workflow', 'start', 'oneprompt', '--driver', 'shipd'], { cwd: repo, env: { ...process.env, ...env(), FORCE_COLOR: '0' }, encoding: 'utf8' });
+
+    const done = envelope({ code: ran.status, signal: null, stdout: ran.stdout, stderr: ran.stderr });
+    expect(done, ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const runId = runOf({ code: ran.status, signal: null, stdout: ran.stdout, stderr: ran.stderr });
+    const [review] = readRunState(runId).steps;
+    expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ runtime: 'shiptoy', driver: 'shipd', phase: 'closed' });
+    expect(toyOpens()).toBe(1);
+    expect(fs.existsSync(stray)).toBe(false);
+    fs.rmSync(path.join(bin, 'teamai-runtime-shiptoy'));
   });
 });
