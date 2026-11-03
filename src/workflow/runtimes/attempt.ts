@@ -133,10 +133,10 @@ export interface AttemptRun {
   /** Closes the handle once the attempt's report is recorded, so a teamai killed before that still reattaches. */
   close(): Promise<void>;
   /**
-   * Stops the exec a killed teamai left running, then closes the place, for a run cancelled without a live driver.
-   * Answers false, and leaves the place open, when the exec still runs after the wait.
+   * Stops the exec a killed teamai left running, for a run cancelled without a live driver, and waits until the runtime
+   * no longer reports it running. Answers false when it still runs after the wait.
    */
-  stop(): Promise<boolean>;
+  stopLeftExec(): Promise<boolean>;
 }
 
 /** How long a restarted teamai waits for an exec it found running to stop. */
@@ -285,17 +285,11 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       await save({ ...before, phase: 'closed' });
     },
 
-    async stop() {
+    async stopLeftExec() {
       const before = await current();
       const handle = before?.open.handle;
 
-      if (!before || handle === undefined || before.phase === 'closed') return true;
-
-      if (before.exec && !await stopLeftRunning(handle, before.exec.op)) return false;
-      await runtime.close(handle);
-      await save({ ...before, phase: 'closed' });
-
-      return true;
+      return !before?.exec || handle === undefined || await stopLeftRunning(handle, before.exec.op);
     },
   };
 }
