@@ -1600,7 +1600,7 @@ teamai copies that `auth.json` into the attempt's tool home, and once the step e
 ℹ Step "review" waits for the codex login teamai keeps, which attempt a339da600 of run r9a395746ec65dbd7 holds. It goes on once that attempt ends; teamai workflow cancel r9a395746ec65dbd7 releases it.
 ```
 
-When the holder's driver was killed, `teamai workflow cancel` of its run first stops the tool on the step runtime, then releases the login. A runtime it cannot reach keeps the login held, and the command says which lock file to delete once the tool stopped.
+When the holder's driver was killed, `teamai workflow cancel` of its run first stops the tool on the step runtime and writes the login back, then releases it. A runtime it cannot reach keeps the login held, and the command says which lock file to delete once the tool stopped.
 
 A team runtime is code a teammate pushed, so it runs only at a revision someone accepted on this machine. Any change to a file under its directory makes a new revision. An attended run asks before the first spawn:
 

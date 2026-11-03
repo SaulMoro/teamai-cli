@@ -404,9 +404,11 @@ const span = (edge) => process.env.FAKE_TOOL_SPANS && fs.appendFileSync(process.
 span('start');
 if (process.env.FAKE_CODEX_PID) fs.writeFileSync(process.env.FAKE_CODEX_PID, String(process.pid));
 fs.appendFileSync(process.env.LAUNCHES, JSON.stringify({ home, account: login.tokens.account_id, refresh: login.tokens.refresh_token }) + '\\n');
-if (process.env.FAKE_TOOL_HOLD_MS) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_TOOL_HOLD_MS));
 const next = 'r' + (Number(login.tokens.refresh_token.slice(1)) + 1);
-fs.writeFileSync(file, JSON.stringify({ ...login, tokens: { ...login.tokens, account_id: process.env.FAKE_CODEX_ACCOUNT || login.tokens.account_id, refresh_token: next } }));
+const refresh = () => fs.writeFileSync(file, JSON.stringify({ ...login, tokens: { ...login.tokens, account_id: process.env.FAKE_CODEX_ACCOUNT || login.tokens.account_id, refresh_token: next } }));
+if (process.env.FAKE_CODEX_REFRESH_FIRST) refresh();
+if (process.env.FAKE_TOOL_HOLD_MS) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(process.env.FAKE_TOOL_HOLD_MS));
+refresh();
 fs.mkdirSync(path.dirname(process.env.TEAMAI_WORKFLOW_RESULT), { recursive: true });
 fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ output: { ok: true } }));
 const thread = 'th-' + path.basename(process.env.TEAMAI_WORKFLOW_ATTEMPT);
@@ -455,11 +457,11 @@ span('end');
 
     const lockFile = (): string => path.join(os.homedir(), '.teamai', 'logins', 'codex.lock');
 
-    /** Starts a run whose fake Codex holds the login until stopped, and resolves with its run id and Codex's pid once Codex runs. */
+    /** Starts a run whose fake Codex refreshes the login, then holds it until stopped, and resolves with its run id and Codex's pid once Codex runs. */
     const holdingRun = async (definition: string): Promise<{ run: string; pid: number; watched: ReturnType<typeof startWatching> }> => {
       const pidFile = path.join(sandbox, `${definition}.pid`);
       fs.rmSync(pidFile, { force: true });
-      const watched = startWatching(['workflow', 'start', 'oneprompt', '--driver', definition], { FAKE_TOOL_HOLD_MS: '120000', FAKE_CODEX_PID: pidFile });
+      const watched = startWatching(['workflow', 'start', 'oneprompt', '--driver', definition], { FAKE_TOOL_HOLD_MS: '120000', FAKE_CODEX_PID: pidFile, FAKE_CODEX_REFRESH_FIRST: '1' });
       await waitFor(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8') !== '', 'Codex to start');
       const run = /Run (r[0-9a-f]+) started/.exec(watched.stderr())?.[1] ?? '';
       expect(run).not.toBe('');
@@ -488,6 +490,24 @@ span('end');
       expect(fs.statSync(dedicated()).mode & 0o777).toBe(0o600);
       expect(JSON.parse(fs.readFileSync(path.join(os.homedir(), '.codex', 'auth.json'), 'utf8'))).toMatchObject({ tokens: { account_id: 'acct-daily', refresh_token: 'r900' } });
     });
+
+    it('fails the step, naming the lock to delete, when the login lock is not one teamai can read', async () => {
+      loginDefinition('codexbadlock', state);
+      fs.mkdirSync(path.dirname(lockFile()), { recursive: true });
+      fs.writeFileSync(lockFile(), 'not a lock');
+
+      try {
+        const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'codexbadlock'], repo, env());
+
+        expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+        const [review] = readRunState(runOf(ran)).steps;
+        expect(review).toMatchObject({ failure: { code: 'login_held', message: `teamai cannot read the codex login lock ${lockFile()}, so it cannot tell which attempt holds the login. If no step uses that login now, delete ${lockFile()}, then retry the step.` } });
+        expect(fs.readFileSync(lockFile(), 'utf8')).toBe('not a lock');
+        expect(fs.existsSync(launches) ? codexLaunches() : []).toEqual([]);
+      } finally {
+        fs.rmSync(lockFile(), { force: true });
+      }
+    }, 60_000);
 
     it('keeps the dedicated login when the step left one for another account, and fails the step with login_not_written_back', async () => {
       loginDefinition('codexother', state);
@@ -553,7 +573,7 @@ span('end');
       expect(dedicatedTokens().refresh_token).toBe('r3');
     });
 
-    it('stops the tool and closes the place of an attempt whose driver was killed when teamai workflow cancel stops its run, then releases the login', async () => {
+    it('stops the tool and closes the place of an attempt whose driver was killed when teamai workflow cancel stops its run, then writes the login back and releases it', async () => {
       loginDefinition('codexorphan', state);
       const { run, pid, watched } = await holdingRun('codexorphan');
       watched.kill();
@@ -569,6 +589,8 @@ span('end');
       expect(runtimeRecord(run, attemptOf(review))).toMatchObject({ runtime: 'toy', phase: 'closed' });
       expect(cancelled.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attemptOf(review)} of run ${run} held.`);
       expect(fs.existsSync(lockFile())).toBe(false);
+      // Codex refreshed the login before it was stopped: the dedicated home keeps the token Codex now holds.
+      expect(dedicatedTokens()).toMatchObject({ account_id: 'acct-1', refresh_token: 'r2' });
     });
 
     it('keeps the login held when teamai workflow cancel cannot reach the runtime of an attempt whose driver was killed, and says how to free it', async () => {

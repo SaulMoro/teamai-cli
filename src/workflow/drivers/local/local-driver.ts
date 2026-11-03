@@ -1076,7 +1076,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     if (opened.kind === 'ready') localHandles.set(lease.attempt, opened.handle);
   };
 
-  const closeRun = async (attempt: string): Promise<void> => {
+  const closeRun = async (attempt: AttemptId): Promise<void> => {
     const closing = attemptRuns.get(attempt);
     const handle = localHandles.get(attempt);
     // A closed attempt holds no login, whatever stopped it before its write-back.
@@ -1272,7 +1272,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     // Cancelled while it ran: the next `next` lists it in `cancelled`, and the run goes on without it.
     if (isWorkflowError(answer) && answer.error.code !== 'lease_cancelled') return answer;
     // Its handle is closed only once the report is recorded, so a teamai killed before then reattaches to it.
-    await closeRun(body.attempt);
+    await closeRun(lease.attempt);
 
     if (isWorkflowError(answer)) return undefined;
     reported.add(body.attempt);

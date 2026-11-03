@@ -1594,7 +1594,7 @@ teamai 把这个 `auth.json` 复制到这次尝试的工具主目录，步骤结
 ℹ Step "review" waits for the codex login teamai keeps, which attempt a339da600 of run r9a395746ec65dbd7 holds. It goes on once that attempt ends; teamai workflow cancel r9a395746ec65dbd7 releases it.
 ```
 
-如果持有者的驱动已被杀掉，对它的运行执行 `teamai workflow cancel` 会先在步骤运行时上停止工具，再释放登录。联系不上运行时，登录就继续被持有，命令会说明工具停止后要删除哪个锁文件。
+如果持有者的驱动已被杀掉，对它的运行执行 `teamai workflow cancel` 会先在步骤运行时上停止工具并写回登录，再释放它。联系不上运行时，登录就继续被持有，命令会说明工具停止后要删除哪个锁文件。
 
 团队运行时是队友推送的代码，所以只有在这台机器上有人接受过的修订才会运行。它目录下任何文件的改动都会产生新的修订。有人值守的运行在第一次启动前会询问：
 
