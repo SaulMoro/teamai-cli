@@ -1738,18 +1738,18 @@ function isPlainLocal(sole: SoleDriver): boolean {
   return sole.driver === 'local' && sole.offers.length === 1;
 }
 
-/** The first strict key a runtime offering `can` lacks for a step of `definition`, by step, as describe holds it. */
-function strictlyHeld(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, can: DriverCan): { step: string; key: 'isolation' | 'network' } | undefined {
+/** Each step of `definition` a runtime offering `can` holds back for a strict key, with the first key it lacks, as describe holds it. */
+function strictlyHeld(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, can: DriverCan): Map<string, 'isolation' | 'network'> {
   const none = new Set<string>();
   const { facts } = describeWorkflow({ definition, source: 'team', workflows, ceiling: 1, can, allow: {}, env: { declared: none, secrets: none, present: none } });
+  const held = new Map<string, 'isolation' | 'network'>();
 
   for (const { step, missing } of facts.held) {
-    if (missing.includes('isolation')) return { step, key: 'isolation' };
-
-    if (missing.includes('network')) return { step, key: 'network' };
+    if (missing.includes('isolation')) held.set(step, 'isolation');
+    else if (missing.includes('network')) held.set(step, 'network');
   }
 
-  return undefined;
+  return held;
 }
 
 /** What `can` gets of step `state` confined to the directory `rendered` names; undefined for a step not confined. */
@@ -1770,10 +1770,11 @@ async function confinedFor(
  * of its runtimes lacks it. A step one runtime can take for them is judged at `next`.
  */
 function strictlyUnmet(definition: WorkflowDefinition, workflows: Record<string, WorkflowDefinition>, sole: SoleDriver): string | undefined {
-  const held = sole.offers.map((offer) => strictlyHeld(definition, workflows, offer.can));
-  const [first] = held;
+  const [mine, ...others] = sole.offers.map((offer) => strictlyHeld(definition, workflows, offer.can));
+  const step = [...mine].find(([id]) => others.every((held) => held.has(id)));
 
-  if (!first || held.some((one) => one === undefined)) return undefined;
+  if (!step) return undefined;
+  const first = { step: step[0], key: step[1] };
 
   if (isPlainLocal(sole)) {
     return first.key === 'isolation'
