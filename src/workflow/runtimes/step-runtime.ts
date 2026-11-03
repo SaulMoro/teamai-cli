@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import os from 'node:os';
+import { getUserHome } from '../../utils/home.js';
 import { z } from 'zod';
 import type { RunMode } from '../../launch-context.js';
 import type { JsonValue } from '../../types.js';
@@ -68,10 +68,11 @@ export interface ExecRequest {
 /** A scheme a display link may use: the web, or an app's own (`t3:`, `vscode:`), never one that runs or reads in the page. */
 const DISPLAY_LINK = /^(?!(?:javascript|data|file|vbscript|blob):)[a-z][a-z0-9+.-]*:\/\/\S+$/i;
 
+/** Whether a text of a display names a path in the member's home. */
 function inHome(text: string): boolean {
-  const home = os.homedir();
+  const home = getUserHome();
 
-  return home !== '' && home !== '/' && text.includes(home);
+  return home !== '/' && text.includes(home);
 }
 
 /**
@@ -83,7 +84,7 @@ export const RuntimeDisplaySchema = z.object({
   url: z.string().max(2048).regex(DISPLAY_LINK, 'A display url is http(s) or an app scheme').optional(),
   fields: z.record(z.string().min(1).max(40), z.string().max(200))
     .refine((fields) => Object.keys(fields).length <= 8, 'A display holds at most 8 fields').optional(),
-}).strict().refine((display) => !inHome(JSON.stringify(display)), 'A display names no path in the member\'s home');
+}).strict().refine((display) => ![display.label, display.url ?? '', ...Object.entries(display.fields ?? {}).flat()].some(inHome), 'A display names no path in the member\'s home');
 
 export type RuntimeDisplay = z.infer<typeof RuntimeDisplaySchema>;
 
