@@ -1240,6 +1240,100 @@ teamai workflow next <run> --json '{"claim":true,"driver":{"kind":"script","mach
 
 The claim takes the run's offer away, as every claim does. A `next` without `claim` on a run another install claimed answers `not_owner` once this machine's `teamai-reports` checkout shows that claim (after `teamai pull` or `workflow resume`), instead of leasing from the stale copy here. The claim runs before `next` leases anything, and checks a running run's branches on the origin of `driver.workspace`. It then brings each local branch to the commit the run recorded, as `resume` does, and answers `branch_diverged` when it cannot. A run this install already owns stays as it is, but no longer offered. A claim refusal comes back as the `next` error envelope. From an agent session, the claim follows the run's `invoke` as `resume` does: a payload cannot carry the person's yes, so an `ask` run answers `confirm_needed`, and once the person agrees the session continues it with `teamai workflow resume <run> --claim --confirmed`. On `state_moved`, send the claim again. A value other than a boolean answers `invalid_json` with `claim must be a boolean`. A driver whose runs another machine may continue reports full commit ids in `changes` and `read`. `publish` refuses a run with any other commit value as `snapshot_unsupported`, naming the field.
 
+## Driver definitions and step runtimes
+
+A driver definition is a YAML file that `--driver <name>` selects on `workflow start` and `workflow resume`. It names the step runtime that runs each step and, optionally, the tool prompt steps use. A step runtime is a program that opens a place for an attempt, runs its command or tool there, and brings the work back. It is a different thing from a tool's bundled runtime, such as the Node that WorkBuddy unpacks.
+
+```yaml
+# drivers/toy.yaml in the team repo
+schemaVersion: v1alpha1
+name: toy
+description: Run steps on the team's toy runtime.
+tool: claude            # prompt steps run on Claude Code unless the step or --tools names another tool
+runtimes:
+  - use: toy            # runtimes/toy/runtime in the team repo
+    options:
+      state: /var/tmp/toy-state
+```
+
+```sh
+teamai workflow start review --driver toy
+teamai workflow resume r1a2b3c4d --driver toy
+```
+
+teamai looks for `<name>.yaml` in this order and uses the first it finds:
+
+| Where | Notes |
+| --- | --- |
+| `~/.teamai/drivers/` | Yours alone. `resume --next` never reads it. |
+| `drivers/` in the team repo, and `drivers/<namespace>/` | A name two active namespaces define fails `driver_namespace_conflict`. |
+| The user scope's team repo | Only when you start in a project. |
+| Definitions teamai ships | Each one is named `teamai-<name>`. |
+
+`--driver x` runs `teamai-x` when no definition is named `x`, so `--driver claude` and `--driver teamai-claude` both run the shipped `teamai-claude`. `local`, `skill` and `fleet` are not definition names.
+
+A definition lists exactly one runtime in this version. `use: local` runs steps the way `--driver local` does. Any other name is an external program, found in this order:
+
+```text
+~/.teamai/runtimes/<name>/runtime          yours
+runtimes/<name>/runtime                    team repo, or runtimes/<namespace>/<name>/runtime
+teamai-runtime-<name>                      on PATH
+```
+
+A team runtime is code a teammate pushed, so it runs only at a revision someone accepted on this machine. Any change to a file under its directory makes a new revision. An attended run asks before the first spawn:
+
+```text
+Step runtime "toy" comes from the team repo (runtimes/toy) at revision 3f9c0a1b2d4e, which you have not accepted on this machine. It runs as you, with your files. Review /home/me/team/runtimes/toy (runtime) before you accept it.
+Run it? [y/N]
+```
+
+An unattended run does not ask. It fails `runtime_not_accepted` and starts nothing. To accept the revision, run the same command once in a terminal. Accepted revisions are kept in `~/.teamai/trust/runtimes.json`.
+
+What each attempt gets on its runtime:
+
+- The worktree, read-write at its path on the host. The git directories and the `.git` pointer are read-only. teamai commits and pushes on the host with hooks, fsmonitor and ref replacement turned off.
+- `attempts/<attempt>/out/`, read-write. The result file is `out/result.json`.
+- For a prompt, a tool home of its own: `attempts/<attempt>/tool-home/<tool>`, set through `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `CODEBUDDY_CONFIG_DIR`. Prompt steps run on Claude Code, Codex or CodeBuddy only. They run headless, never interactive. Scoring, publishing and a later pass that resumes the session read it from that home. The later pass starts from a copy of it.
+- The env keys its lease provides, the lease's `env`, and the attempt's marker. Keys the lease withholds are removed from the runtime's environment.
+
+teamai writes each operation id to `attempts/<attempt>/runtime.json` before it sends the operation. When teamai is killed, `workflow resume` sends the same ids again:
+
+| Killed | On resume |
+| --- | --- |
+| After the runtime accepted `open` | The same handle; no second place |
+| After an exec finished | Its output, session and usage, read from what the runtime kept; the tool does not run again |
+| While an exec ran | It is stopped and the step fails `runtime_interrupted`; its work is kept |
+
+`workflow cancel` stops the running exec and every process it started.
+
+### Write a step runtime
+
+A runtime reads one JSON request per line on stdin and answers with JSON lines on stdout, protocol `1`. `src/__tests__/fixtures/runtime-toy/runtime.mjs` is a complete one that runs steps on the host.
+
+```text
+→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"}}
+← {"type":"init","ok":true,"can":{"workspace":["read-only","new","continue"],"tools":["claude"],"env":true,"unattended":true}}
+→ {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","view":{…},"credentials":{}}
+← {"op":"op-5e0d11cb4777","event":"accepted","handle":"toy-r…-a…"}
+← {"op":"op-5e0d11cb4777","event":"ready"}
+→ {"type":"exec","op":"op-83bfffde9ce3","handle":"toy-r…-a…","argv":["/bin/sh","-c","npm test"],"env":{…},"unset":[],"cwd":"/repo"}
+← {"op":"op-83bfffde9ce3","event":"accepted"}
+← {"op":"op-83bfffde9ce3","event":"output","stream":"stdout","data":"ok\n"}
+← {"op":"op-83bfffde9ce3","event":"exited","code":0,"stdout":"ok\n"}
+```
+
+The other requests are `cancel`, `collect`, `reattach` and `close`. A runtime answers a repeated `op` with the same result until `close`. It keeps what an exec printed and how it exited, so a restarted teamai can read them with `reattach`. An option it does not take fails `init` with `bad_option` and the key.
+
+| Error | Next step |
+| --- | --- |
+| `driver_not_found` | Add `drivers/<name>.yaml` and run `teamai pull`, or add `~/.teamai/drivers/<name>.yaml` |
+| `driver_invalid` | Fix the file the message names |
+| `driver_namespace_conflict`, `runtime_namespace_conflict` | Keep the name in one namespace, push it, and run `teamai pull` |
+| `runtime_not_found` | Install the runtime in one of the places above |
+| `runtime_not_accepted` | Run the command once attended to review and accept the revision |
+| `bad_option` | Fix the option in the definition |
+| `runtime_failed`, `runtime_interrupted` | Retry the step: `teamai workflow retry <run> <step>` |
+
 ## Workspaces in your own driver
 
 A driver other than `local` that takes workspace leases keeps the run's commits where another driver or another machine can find them. Every driver follows two rules:
