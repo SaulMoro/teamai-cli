@@ -224,7 +224,7 @@ Judge the review.
 
     expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
     expect(readRunState(runOf(ran)).steps).toMatchObject([{ id: 'review', status: 'failed', failure: {
-      code: 'tool_unavailable', message: 'Step "review" runs on claude, which the driver of this run cannot launch here. Install claude where the run is driven, or remove tool from the step.',
+      code: 'tool_unavailable', message: 'Step "review" names no tool and runs on claude, which the driver of this run cannot launch here. Install claude where the run is driven, or pick a tool it launches with --tools default=<tool>.',
     } }]);
     expect(toyOpens()).toBe(0);
   });
