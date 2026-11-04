@@ -398,6 +398,12 @@ Paseo did not cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f: Agen
 
 A runtime killed mid-step cannot archive; the step fails `runtime_lost`, and its workspace stays in Paseo until you archive it (`paseo workspace archive <id>`).
 
+A runtime that starts again while the daemon is down still answers for the attempt from what it recorded, and refuses to close it until it reaches the daemon:
+
+```text
+teamai-runtime-paseo reaches no Paseo daemon, so it cannot stop the agents of wks_6fb33a5b94531f79/a04485788 or archive its workspace. Start the daemon with `paseo start`, then close the attempt again.
+```
+
 ## Errors at start
 
 | Code | When |
