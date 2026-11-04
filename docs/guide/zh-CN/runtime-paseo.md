@@ -185,13 +185,29 @@ runtimes:
 
 ## 工具、模型和模式
 
-守护进程提供 `claude`、`codex`、`opencode` 时，运行时就提供它们。智能体以该工具在 Paseo 中的默认模式启动，从不使用绕过权限的模式。评判以一个在编辑或运行任何东西前先询问的模式启动：
+只要工具的可执行文件在守护进程的 `PATH` 上，Paseo 就称它可用，不论是否已登录。运行时只在 Paseo 表明工具能在那里运行时才提供它；否则，使用该工具的步骤交给下一个运行时。智能体以该工具在 Paseo 中的默认模式启动，从不使用绕过权限的模式。评判以一个在编辑或运行任何东西前先询问的模式启动：
 
-| 工具 | 步骤模式 | 评判模式 |
-| --- | --- | --- |
-| `claude` | `default`（执行未允许的操作前先询问） | `default` |
-| `codex` | `auto` | 无：Codex 的每种模式都不经询问就写入 |
-| `opencode` | `build` | `plan` |
+| 工具 | 何时提供 | 步骤模式 | 评判模式 |
+| --- | --- | --- | --- |
+| `claude` | 守护进程主机上的 `claude auth status` 显示 `"loggedIn": true`：账号登录或 API key 均可 | `default`（执行未允许的操作前先询问） | `default` |
+| `codex` | 从不：Paseo 不报告 Codex 是否已登录 | `auto` | 无：Codex 的每种模式都不经询问就写入 |
+| `opencode` | Paseo 为它列出了模型：OpenCode 连上了模型提供方，包括它的免费模型 | `build` | `plan` |
+
+守护进程一个工具都运行不了时，运行在任何步骤之前停止，消息说明要在守护进程主机上做什么：
+
+```text
+$ teamai workflow start fix-add --driver paseo-only
+{"error":{"code":"runtime_failed","message":"Runtime \"paseo\" of driver \"paseo-only\" did not start: The Paseo daemon at ws://127.0.0.1:6767/ws runs no tool teamai-runtime-paseo can use. claude: signed out; run `claude auth login` on the daemon's host. codex: Paseo does not report whether it is signed in, so its steps run on the next runtime of the definition."}}
+```
+
+想自己检查某个工具，就问守护进程，看 `Auth` 这一行：
+
+```text
+$ paseo provider diagnostic claude | grep -A2 Auth
+  Auth: {
+  "loggedIn": true,
+  "authMethod": "oauth_token",
+```
 
 步骤的 `model` 必须是守护进程提供的模型，`effort` 必须是该模型支持的。不写 `model` 时，智能体使用守护进程的默认模型。守护进程没有的模型会在任何智能体启动前失败：
 
@@ -270,5 +286,5 @@ Paseo did not archive workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476
 | `client_version` | 找到的 Paseo 客户端早于 0.14.0。升级 Paseo，或把 `PASEO_CLIENT_PATH` 指向更新的 `@getpaseo/client` 包。 |
 | `daemon_unreachable` | `url` 上没有守护进程应答。用 `paseo start` 启动它。 |
 | `daemon_version` | 守护进程早于 0.14.0。升级 Paseo 并重启它。 |
-| `tool_unavailable` | 守护进程在默认模式下没有 `claude`、`codex`、`opencode` 中的任何一个。守护进程没有步骤所需工具时，该步骤交给下一个运行时。 |
+| `tool_unavailable` | 守护进程 `claude` 和 `opencode` 都运行不了：要么没装、要么未登录、要么缺少默认模式。Codex 从不使用。消息逐个列出已安装的工具及其修复方法；一个都没装时，消息让你安装一个。守护进程运行不了步骤所需工具时，该步骤交给下一个运行时。 |
 | `bad_option` | `url` 以外的选项。 |
