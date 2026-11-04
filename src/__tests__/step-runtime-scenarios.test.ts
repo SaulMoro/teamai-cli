@@ -12,6 +12,7 @@ import type { OpState, RuntimeDisplay, RuntimeFailure, RuntimeOptions } from '@t
 import { newOpId, type ExecEnd, type ExecRequest, type OpenRequest, type PromptRequest, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import type { JsonValue } from '../types.js';
 import { sandboxOnFake } from './helpers/sandbox-runtime.js';
+import { t3OnFakeServer } from './helpers/t3-runtime.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 
 /**
@@ -279,11 +280,29 @@ interface PromptSubject {
   failure?(failure: RuntimeFailure): RuntimeFailure;
 }
 
+const T3 = await t3OnFakeServer();
+
 const PROMPT_SUBJECTS: PromptSubject[] = [
   {
     name: 'toy over stdio, prompt only',
     start: () => stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] }),
     options: (state, agent) => ({ state, agent }),
+  },
+  {
+    name: 't3 over stdio, on a fake T3 Code server',
+    start: (state) => {
+      const runtime = stdioStepRuntime({ name: 't3', command: T3.command, args: T3.args(state) });
+
+      return { ...runtime, init: async (input) => { await T3.ready(state); return runtime.init(input); } };
+    },
+    options: (state, agent) => T3.options(state, agent),
+    display: {
+      label: 'review · teamai r0123abcd', url: expect.stringMatching(/^t3-thread:\/\/v2\/env-fake-1\/mcp:launch:[0-9a-f]+$/),
+      fields: { thread: expect.stringMatching(/^mcp:launch:[0-9a-f]+$/), model: 'claude-opus-5-5', environment: 'fake-laptop' },
+    },
+    // T3 reports no usage, and a thread whose run fails names T3's status, not the agent's own failure.
+    reportsUsage: false,
+    failure: () => ({ code: 'tool_failed', message: expect.stringContaining('ended failed before the step was done.') }),
   },
 ];
 
