@@ -854,8 +854,8 @@ Judge the review.
 
   it('resolves the shipped teamai-t3, teamai-claude, teamai-codex and teamai-opencode, by either name', async () => {
     const t3 = envelope(await runCLI(['workflow', 'start', 'oneprompt', '--driver', 't3'], repo, env()));
-    // The definition resolved: what is missing is the t3 runtime itself.
-    expect(t3).toMatchObject({ error: { code: 'runtime_not_found', message: expect.stringContaining('Driver "teamai-t3" uses runtime "t3"') } });
+    // The definition and its shipped t3 runtime resolved: what is missing is a T3 Code server on this machine.
+    expect(t3).toMatchObject({ error: { code: 'runtime_failed', message: expect.stringContaining('Runtime "t3" of driver "teamai-t3" did not start (t3_unavailable): T3 Code is not running on this machine.') } });
 
     const claude = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'teamai-claude'], repo, env());
     expect(envelope(claude), claude.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
