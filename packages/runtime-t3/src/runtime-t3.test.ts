@@ -135,6 +135,22 @@ describe('teamai-runtime-t3', () => {
       expect(await disabled.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { key: 'instance', message: expect.stringContaining('Provider instance is disabled.') } });
     });
 
+    it.each(['full-access', 'yolo'])('refuses `runtime_mode: %s`, which would not tighten a step thread\'s mode', async (runtimeMode) => {
+      signIn(t3);
+      const runtime = start();
+
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', runtime_mode: runtimeMode } });
+
+      expect(await runtime.next((line) => line['type'] === 'init')).toEqual({
+        type: 'init', ok: false,
+        error: {
+          code: 'bad_option', key: 'runtime_mode',
+          message: `runtime_mode "${runtimeMode}" is not one runtime t3 takes. A step thread runs in auto, T3's Auto mode; runtime_mode only tightens it, to auto-accept-edits or approval-required. Remove it, or set one of those two.`,
+        },
+      });
+      expect(t3.calls()).toEqual([]);
+    });
+
     it('names an option it does not take', async () => {
       signIn(t3);
       const runtime = start();
@@ -152,9 +168,9 @@ describe('teamai-runtime-t3', () => {
     const RUN = 'r7f3a91c2';
 
     /** A runtime past init and open on the attempt's worktree, and its handle. */
-    const opened = async (mode: 'attended' | 'unattended' = 'attended', env: Record<string, string> = {}): Promise<{ runtime: Connection; handle: string }> => {
+    const opened = async (mode: 'attended' | 'unattended' = 'attended', env: Record<string, string> = {}, options: Line = {}): Promise<{ runtime: Connection; handle: string }> => {
       const runtime = start(env);
-      runtime.send({ type: 'init', protocol: 1, mode, options: { environment: 'local' } });
+      runtime.send({ type: 'init', protocol: 1, mode, options: { environment: 'local', ...options } });
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
       runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), toolHome: {} } });
       const accepted = await runtime.next((line) => line['op'] === OPEN && line['event'] === 'accepted');
@@ -221,12 +237,21 @@ describe('teamai-runtime-t3', () => {
       const [thread] = t3.threads();
       expect(thread).toMatchObject({
         title: `review · teamai ${RUN}`, worktreePath: worktree, projectId: 'project-1', provider: 'claudeAgent', model: 'claude-opus-5-5',
-        runtimeMode: 'approval-required', status: 'completed', settled: true,
+        runtimeMode: 'auto', status: 'completed', settled: true,
       });
       expect(thread?.message).toMatch(new RegExp(`^This thread runs step "review" of teamai workflow run ${RUN} \\(attempt a1b2c3d4\\)\\. It was started from the T3 thread t3-thread://v2/env-fake-1/thread-parent-1\\.`));
       expect(thread?.message).toContain(`Write the workflow result as JSON to ${result}.`);
       expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args).toMatchObject({ clientRequestId: op, workspaceStrategy: { type: 'existing_worktree', worktreePath: worktree } });
       expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args).not.toHaveProperty('delegatedFrom');
+    });
+
+    it.each(['auto-accept-edits', 'approval-required'])('runs every thread in %s when `runtime_mode` tightens it', async (runtimeMode) => {
+      const { runtime, handle } = await opened('attended', {}, { runtime_mode: runtimeMode });
+
+      runtime.send(prompt(handle, 'op-0000001a'));
+
+      expect(await ended(runtime, 'op-0000001a')).toMatchObject({ event: 'finished' });
+      expect(t3.threads()[0]?.runtimeMode).toBe(runtimeMode);
     });
 
     it('started outside a T3 thread, names no thread it was started from', async () => {
@@ -307,7 +332,7 @@ describe('teamai-runtime-t3', () => {
       runtime.send(prompt(handle, 'op-00000014'));
 
       expect(await ended(runtime, 'op-00000014')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining('asked for an approval, and nobody is there to give it in an unattended run.') } });
-      expect(t3.threads()[0]).toMatchObject({ runtimeMode: 'approval-required', status: 'interrupted' });
+      expect(t3.threads()[0]).toMatchObject({ runtimeMode: 'auto', status: 'interrupted' });
     });
 
     it('refuses a lease in unattended permissions, which its offer never takes, and launches nothing', async () => {

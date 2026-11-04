@@ -42,14 +42,23 @@ const WaitedSchema = z.object({ threadId: z.string(), status: z.enum(THREAD_STAT
 
 export type Waited = z.infer<typeof WaitedSchema>;
 
+/**
+ * The T3 modes a step thread may run in, loosest first. `auto` is T3's Auto mode: the provider's own review approves
+ * routine actions and asks the person about the rest (a provider without such a review asks about everything).
+ * `approval-required` is Supervised: every command and edit waits for the person.
+ */
+export const STEP_MODES = ['auto', 'auto-accept-edits', 'approval-required'] as const;
+
+export type StepMode = (typeof STEP_MODES)[number];
+
 export interface Launch {
   title: string;
   message: string;
   projectId: string;
   worktreePath: string;
   modelSelection: { instanceId: string; model: string; options?: Array<{ id: string; value: string }> };
-  /** Never inherited: the mode a lease allows, whatever the member's grant would let T3 use. */
-  runtimeMode: 'approval-required';
+  /** Never inherited: set from the runtime's options, whatever the caller's mode or the member's grant would let T3 use. */
+  runtimeMode: StepMode;
   /** T3 answers a repeated id with the thread it launched for it, and starts no second run. */
   clientRequestId: string;
 }
