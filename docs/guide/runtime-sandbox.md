@@ -167,6 +167,10 @@ teamai-rabebd844f8554e81-a6ee9e5b2-proxy   bridge,teamai-rabebd844f8554e81-a6ee9
 **A judge signs in with an API key.** A judge container has no tool home, so a `codex: login` never reaches it. Give the sandbox an env credential its judge tool reads: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` for Claude, `OPENAI_API_KEY` or `CODEX_API_KEY` for Codex. The steps' token from the quick start judges too. A judge also gets the model variables its tool reads, such as `ANTHROPIC_MODEL`, when the entry names them, but never your proxy or CA file: its one way out is the filter. Through a gateway, the filter lets through its base URL in place of the public API, over `https` or plain `http`:
 
 ```yaml
+# drivers/gateway.yaml: Claude steps, a Codex judge through your gateway
+schemaVersion: v1alpha1
+name: gateway
+tool: claude
 runtimes:
   - use: sandbox
     options:
@@ -298,6 +302,10 @@ export ANTHROPIC_BASE_URL=http://host.docker.internal:4000
 **sbx offers no judge.** A confined judge must reach its model provider only, and an sbx sandbox reaches every host your sbx policy allows: a balanced policy allows package registries and code hosts, through which a judge could send what it reads. A per-sandbox rule can only deny hosts it names, and policy profiles come from your organization's sbx governance, so teamai has no way to narrow one sandbox to one host. List `local`, or a `docker` sandbox, after the sbx one to take the judge:
 
 ```yaml
+# drivers/sbx-judged.yaml: steps in sbx, judges in a docker sandbox
+schemaVersion: v1alpha1
+name: sbx-judged
+tool: claude
 runtimes:
   - use: sandbox
     options: { provider: sbx, agent: claude, credentials: { CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN } }
