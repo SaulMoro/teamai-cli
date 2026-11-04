@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { createInterface } from 'node:readline/promises';
 import { z } from 'zod';
 import { INSTANCE_KEYS, type ToolInstance, type ToolInstanceHome } from '@teamai/tool-core/instance';
 import { isSafeNamespaceSegment } from './manifest-schema.js';
@@ -308,17 +307,6 @@ async function readTrust(): Promise<z.infer<typeof TrustFileSchema>> {
   }
 }
 
-/** Asks the person at this terminal; anything but yes declines. */
-async function askAtTerminal(question: string): Promise<boolean> {
-  const terminal = createInterface({ input: process.stdin, output: process.stderr });
-
-  try {
-    return /^y(es)?$/i.test((await terminal.question(question)).trim());
-  } finally {
-    terminal.close();
-  }
-}
-
 /** Why a team instance's command did not run. */
 export interface UnacceptedCommand {
   readonly ok: false;
@@ -328,12 +316,13 @@ export interface UnacceptedCommand {
 
 /**
  * Whether `instance`'s command may run here. Only a team instance that sets one needs it: a person must have accepted
- * its file's content on this machine. `canAsk`, a person at this terminal in an attended run, asks and records a yes;
- * otherwise an unaccepted content is refused, naming what to run.
+ * its file's content on this machine. `ask`, given when a person at a terminal answers, puts the question to them and
+ * returns the line they typed, or nothing once the run stopped asking; a yes is recorded, and anything else declines.
+ * With no one to ask, an unaccepted content is refused, naming what to run.
  */
 export async function acceptToolCommand(
   instance: ResolvedToolInstance,
-  { canAsk, ask = askAtTerminal }: { canAsk: boolean; ask?: (question: string) => Promise<boolean> },
+  { ask }: { ask: ((question: string) => Promise<string | undefined>) | undefined },
 ): Promise<{ ok: true } | UnacceptedCommand> {
   if (instance.source !== 'team' || instance.command === undefined) return { ok: true };
   const trust = await readTrust();
@@ -341,11 +330,11 @@ export async function acceptToolCommand(
   if (trust.accepted.some((entry) => entry.name === instance.name && entry.revision === instance.revision)) return { ok: true };
   const short = instance.revision.slice(0, 12);
 
-  if (canAsk) {
+  if (ask) {
     const question = `Tool "${instance.name}" comes from the team repo (${instance.file}, content ${short}), which you have not accepted on this machine. `
       + `It runs ${instance.command} as you, with your files, in place of ${instance.extends}. Review the file before you accept it.\nRun it? [y/N] `;
 
-    if (await ask(question)) {
+    if (/^y(es)?$/i.test((await ask(question))?.trim() ?? '')) {
       await writeJsonAtomic(trustFile(), { accepted: [...trust.accepted.filter((entry) => entry.name !== instance.name), { name: instance.name, revision: instance.revision, acceptedAt: new Date().toISOString() }] });
 
       return { ok: true };
