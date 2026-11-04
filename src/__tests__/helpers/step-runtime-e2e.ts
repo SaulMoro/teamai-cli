@@ -86,6 +86,13 @@ const until = Date.now() + Number(process.env.FAKE_TOOL_HOLD_MS ?? 0);
 const started = () => fs.readFileSync(process.env.FAKE_TOOL_SPANS, 'utf8').split('\\n').filter((line) => line.includes('"start"')).length;
 while (Date.now() < until && !(process.env.FAKE_TOOL_BARRIER && started() >= Number(process.env.FAKE_TOOL_BARRIER))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
 if (process.env.FAKE_TOOL_SPANS) fs.appendFileSync(process.env.FAKE_TOOL_SPANS, JSON.stringify({ attempt: process.env.TEAMAI_WORKFLOW_ATTEMPT, at: Date.now(), edge: 'end' }) + '\\n');
+// With FAKE_TOOL_ERROR, it fails as a tool the provider refused does: an error result and status 1, with the value of the
+// variable FAKE_TOOL_ERROR_ECHO names, as a tool that prints its token would.
+if (process.env.FAKE_TOOL_ERROR) {
+  const echoed = process.env.FAKE_TOOL_ERROR_ECHO ? ' ' + process.env[process.env.FAKE_TOOL_ERROR_ECHO] : '';
+  process.stdout.write(JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: process.env.FAKE_TOOL_ERROR + echoed, session_id: session }) + '\\n');
+  process.exit(1);
+}
 fs.mkdirSync(path.dirname(process.env.TEAMAI_WORKFLOW_RESULT), { recursive: true });
 fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ output: { ok: true } }));
 process.stdout.write(JSON.stringify({ type: 'system', subtype: 'init', model: 'fake-${tool}', session_id: session }) + '\\n');
