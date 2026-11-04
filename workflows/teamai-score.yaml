@@ -28,7 +28,8 @@ steps:
     continue_on_failure: true
     workflow:
       # written: the version of each label write stored; null when it did not succeed, so the labels were not stored.
-      outputs: { labels: steps.label.outputs.labels, written: steps.write.outputs.labels }
+      # judged: how the judge ended, so a group whose judge was cancelled is said as cancelled, not as a failed step.
+      outputs: { labels: steps.label.outputs.labels, written: steps.write.outputs.labels, judged: steps.judge.outcome }
       steps:
         - id: evidence
           command: teamai score evidence --subject "$SUBJECT" --scorers "$GROUP"

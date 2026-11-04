@@ -248,6 +248,14 @@ describe('PassScoring.said', () => {
     });
   });
 
+  it('says each scorer of a group whose judge was cancelled was cancelled, not that a score step failed', () => {
+    const cancelled = [{ item: { scorers: 'quality,depth' }, outcome: 'cancelled', outputs: { labels: null, written: null, judged: 'cancelled' } }];
+
+    expect(PassScoring.said('run:r1:review:1', run, done(cancelled))).toEqual({
+      kind: 'scored', line: `run:r1:review:1: quality cancelled, depth cancelled (teamai-score run ${run}).`,
+    });
+  });
+
   it('says it cannot read a done whose labels are not the shape teamai-score gives, rather than that no scorer sampled it', () => {
     const renamed = [{ item: {}, outcome: 'success', outputs: { labels: [{ scorer: 'quality', verdict: 'good' }] } }];
 
