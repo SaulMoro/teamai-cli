@@ -1,8 +1,13 @@
 import { defineRule } from '@oxlint/plugins';
-import { inProductionSource, isOneOf, stringLiteralValue } from '../utils.js';
+import { inProductionSource, isOneOf, lintedPath, stringLiteralValue } from '../utils.js';
 
 const LAUNCH_CONTEXT = 'Import RUN_MODE_ENV, LAUNCHED_BY_ENV or ATTEMPT_ENV from launch-context.ts instead of repeating launch variable names.';
 const RUNTIME_PROTOCOL = 'Import RUN_DIR_ENV from @teamai/runtime-protocol instead of repeating launch variable names.';
+const RUNTIME_PACKAGE = 'A runtime package spells no TEAMAI_ variable: import the name from @teamai/runtime-protocol, and export it there first if it is new.';
+
+/** A step runtime's own package: any but the protocol's, which owns the names runtimes may read. */
+const RUNTIME_SOURCE = /\/packages\/runtime-(?!protocol\/)[^/]+\/src\//;
+const TEAMAI_VARIABLE = /^TEAMAI_[A-Z0-9_]+$/;
 
 /** Each launch variable, with the one file that spells it and what the others import instead. */
 const OWNERS = new Map([
@@ -13,15 +18,18 @@ const OWNERS = new Map([
 ]);
 
 export default defineRule({
-  meta: { type: 'problem', docs: { description: 'Keep launch environment variable spellings in the module that owns each.' } },
+  meta: { type: 'problem', docs: { description: 'Keep launch environment variable spellings in the module that owns each, and out of runtime packages.' } },
   create(context) {
     if (!inProductionSource(context)) return {};
+    // A runtime package fails closed: it reads every teamai variable through the protocol, so a new one is caught too.
+    const inRuntime = RUNTIME_SOURCE.test(lintedPath(context));
 
     /** @param {import('@oxlint/plugins').ESTree.Node} node @param {string} value */
     const check = (node, value) => {
       const owner = OWNERS.get(value);
 
-      if (owner && !isOneOf(context, [owner.file])) context.report({ node, message: owner.message });
+      if (inRuntime && TEAMAI_VARIABLE.test(value)) context.report({ node, message: RUNTIME_PACKAGE });
+      else if (owner && !isOneOf(context, [owner.file])) context.report({ node, message: owner.message });
     };
 
     return {
