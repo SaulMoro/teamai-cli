@@ -6,7 +6,7 @@ import readline from 'node:readline';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
-import type { OpState, RuntimeDisplay, RuntimeOptions } from '@teamai/runtime-protocol';
+import type { OpState, RuntimeDisplay, RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
 import { newOpId, type ExecEnd, type ExecRequest, type OpenRequest, type PromptRequest, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import type { JsonValue } from '../types.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
@@ -253,6 +253,10 @@ interface PromptSubject {
   options(state: string, agent: JsonValue): RuntimeOptions;
   /** The display the runtime gives for the suite's attempt when it is reattached, if it gives one. */
   display?: RuntimeDisplay;
+  /** Whether a finished prompt carries the tokens the agent billed; absent: it does. */
+  reportsUsage?: false;
+  /** The failure a prompt ends with when its agent fails with `failure`; absent: that failure as it is. */
+  failure?(failure: RuntimeFailure): RuntimeFailure;
 }
 
 const PROMPT_SUBJECTS: PromptSubject[] = [
@@ -320,7 +324,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     const end = await runtime.prompt(request, { onAccepted: () => { accepted = true; } });
 
     expect(accepted).toBe(true);
-    expect(end).toEqual({ kind: 'finished', session: { tool: 'claude', id: expect.any(String) }, result: { output: { verdict: 'approve' } }, usage: { input: 1200, output: 300 } });
+    expect(end).toEqual({ kind: 'finished', session: { tool: 'claude', id: expect.any(String) }, result: { output: { verdict: 'approve' } }, ...(subject.reportsUsage !== false && { usage: { input: 1200, output: 300 } }) });
     expect(JSON.parse(fs.readFileSync(request.lease.result, 'utf8'))).toEqual({ output: { verdict: 'approve' } });
   });
 
@@ -334,9 +338,10 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
   });
 
   it('ends failed when the agent cannot finish the step, naming why', async () => {
-    const runtime = await start({ fail: { code: 'model_unavailable', message: 'The daemon has no model claude-opus-5-5.' } });
+    const failure = { code: 'model_unavailable', message: 'The daemon has no model claude-opus-5-5.' };
+    const runtime = await start({ fail: failure });
 
-    expect(await runtime.prompt(promptRequest(await opened(runtime)), {})).toEqual({ kind: 'failed', failure: { code: 'model_unavailable', message: 'The daemon has no model claude-opus-5-5.' } });
+    expect(await runtime.prompt(promptRequest(await opened(runtime)), {})).toEqual({ kind: 'failed', failure: subject.failure?.(failure) ?? failure });
   });
 
   it('cancels a running prompt', async () => {
