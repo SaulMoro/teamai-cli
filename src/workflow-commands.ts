@@ -20,7 +20,7 @@ import { callerProvenance, cancelRun, respondProvenance, respondToHitl, restartC
 import { isIsolated, runCopyToMerge } from './workflow/workspace.js';
 import { localStrictCan, personAnswers, runLocalDriver, withDriverLock, type LocalDriverOptions } from './workflow/drivers/local/local-driver.js';
 import { definedDrive, driveRun, unsupportedDriver } from './workflow-drive.js';
-import { awaitsLine, awaitsOf, leftOpenLine, type DefaultDrive } from './default-driver.js';
+import { awaitsLine, awaitsOf, drivesHere, leftOpenLine, type DefaultDrive } from './default-driver.js';
 import { LOCAL_DRIVER, parseDriver, type Driver } from './workflow/driver-name.js';
 import { disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
 import { stopCancelledAttempts } from './workflow/runtimes/cancelled.js';
@@ -606,11 +606,20 @@ async function openNamedDriver(config: LocalConfig, name: string | undefined, { 
   return openDriver(config, name, { personal, mode: resolveRunMode(process.env), canAsk, purpose: 'run' });
 }
 
-/** The driver definition run `runId` was last driven with on this install, which `workflow resume` reopens. */
-async function recordedDriver(config: LocalConfig, runId: RunId): Promise<string | undefined> {
+/**
+ * The driver `workflow resume` without `--driver` drives run `runId` on: the definition it was last driven with on this
+ * install, else the driver it awaits when this machine drives that one, else none, for local.
+ */
+async function resumedDriver(config: LocalConfig, runId: RunId): Promise<string | undefined> {
   const stored = await readRun(config, runId);
 
-  return stored === 'missing' || stored === 'corrupt' ? undefined : stored.driveOptions?.driver;
+  if (stored === 'missing' || stored === 'corrupt') return undefined;
+  const recorded = stored.driveOptions?.driver;
+
+  if (recorded !== undefined) return recorded;
+  const awaited = stored.awaits?.driver;
+
+  return awaited !== undefined && await drivesHere(config, awaited) ? awaited : undefined;
 }
 
 async function closeDriver(opened: OpenedDriver | undefined): Promise<void> {
@@ -1083,7 +1092,7 @@ export async function workflowResume(runId: string | undefined, options: ResumeO
   }
 
   // Without --driver, the run resumes on the definition it was last driven with here, which may no longer resolve.
-  const defined = await openNamedDriver(loaded.config, options.driver ?? await recordedDriver(loaded.config, run.data), { personal: true });
+  const defined = await openNamedDriver(loaded.config, options.driver ?? await resumedDriver(loaded.config, run.data), { personal: true });
 
   if (!defined.ok) {
     writeEnvelope({ error: defined.failure }, secrets);
