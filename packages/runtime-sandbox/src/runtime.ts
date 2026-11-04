@@ -294,9 +294,15 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       return;
     }
 
-    const chosen = can.confined?.some((offer) => offer.tools.includes(lease.tool))
-      ? judgeOf(lease.tool, request.credentials)
-      : { ok: false as const, failure: { code: 'tool_unavailable', message: `The sandbox's image offers no ${lease.tool} judge: it judges on ${can.confined?.flatMap((offer) => offer.tools).join(', ') || 'no tool'}.` } };
+    const { judges } = provider;
+
+    if (!judges || !can.confined?.some((offer) => offer.tools.includes(lease.tool))) {
+      write({ op, event: 'failed', failure: { code: 'tool_unavailable', message: `The sandbox offers no ${lease.tool} judge: it judges on ${can.confined?.flatMap((offer) => offer.tools).join(', ') || 'no tool'}.` } });
+
+      return;
+    }
+
+    const chosen = judgeOf(lease.tool, request.credentials);
 
     if (!chosen.ok) {
       write({ op, event: 'failed', failure: chosen.failure });
@@ -318,7 +324,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       write(terminal(op, outcome));
     };
 
-    const created = await provider.createJudge(place, { dir: confined.dir, hosts: judge.hosts });
+    const created = await judges.create(place, { dir: confined.dir, hosts: judge.hosts });
 
     if (!created.ok) {
       settle(journal.isCancelled(op) ? { state: 'cancelled' } : { state: 'failed', failure: created.failure });
@@ -411,7 +417,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     const place = journal.place(handle);
     const id = place && await sandboxOf(place, provider);
     const destroyed = id === undefined ? { ok: true as const } : await provider.destroy(id);
-    const removed = destroyed.ok && place?.confined ? await provider.releaseJudge(place) : destroyed;
+    const removed = destroyed.ok && place?.confined && provider.judges ? await provider.judges.release(place) : destroyed;
 
     if (!removed.ok) {
       // The journal keeps the place, so a later close or reattach of this handle still finds the sandbox.
