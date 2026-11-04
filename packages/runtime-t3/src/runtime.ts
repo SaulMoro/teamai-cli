@@ -419,6 +419,7 @@ export function serve(options: ServeOptions): Promise<void> {
         ? `T3 Code stopped its run, but the work it delegated had not settled ${STOP_WAIT_MS / 1_000} s later`
         : `T3 Code acknowledged the stop, but its run was still ${waited.status} ${STOP_WAIT_MS / 1_000} s later`;
     } catch (error) {
+      if (error instanceof T3Error && error.threadGone) return undefined;
       why = error instanceof Error ? error.message : String(error);
     }
 
@@ -945,8 +946,10 @@ export function serve(options: ServeOptions): Promise<void> {
         await s.t3.settle(thread.threadId);
         outcome = 'settled';
       } catch (error) {
-        process.stderr.write(`teamai could not settle the T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}"), so it stays in T3 Code's active threads: ${error instanceof Error ? error.message : String(error)}\n`);
-        outcome = 'failed';
+        // A thread T3 no longer has is in nobody's active threads.
+        outcome = error instanceof T3Error && error.threadGone ? 'settled' : 'failed';
+
+        if (outcome === 'failed') process.stderr.write(`teamai could not settle the T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}"), so it stays in T3 Code's active threads: ${error instanceof Error ? error.message : String(error)}\n`);
       }
 
       const now = place(handle);

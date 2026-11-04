@@ -679,6 +679,21 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]?.status).toBe('running');
     });
 
+    // T3 answers a stop of a thread the person deleted thread_not_found: nothing of it runs any more.
+    it('counts a thread the person deleted in T3 as stopped and settled, so close finishes', async () => {
+      t3.config({ agent: { waits: true }, interruptFails: true });
+      const { runtime, handle } = await opened('unattended');
+      runtime.send(prompt(handle, 'op-00000050'));
+      expect(await ended(runtime, 'op-00000050')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed' } });
+      t3.config({ interruptFails: false });
+      t3.deleteThread(z.string().parse(t3.threads()[0]?.threadId));
+
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'closed', handle });
+      expect(runtime.stderr()).not.toContain('could not settle');
+    });
+
     it('fails a step whose agent asks for an approval in an unattended run, and stops its thread', async () => {
       t3.config({ agent: { waits: true } });
       const { runtime, handle } = await opened('unattended');
