@@ -52,6 +52,8 @@ export default defineConfig({
   entry: {
     index: 'src/bin.ts',
     cli: 'src/index.ts',
+    // The T3 Code step runtime's own executable.
+    'runtime-t3': 'packages/runtime-t3/src/main.ts',
   },
   format: ['esm'],
   target: 'node20',
