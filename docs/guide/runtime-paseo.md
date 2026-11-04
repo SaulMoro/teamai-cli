@@ -173,7 +173,7 @@ runtimes:
   - use: paseo
 ```
 
-Here a Codex judge labelled a Codex pass:
+Here a Codex judge labelled a Codex pass, scored on demand once its session was back in `~/.codex/sessions/` (see below):
 
 ```text
 $ teamai score --run ra429df3ad473c7b3 --scorer review-quality --driver paseo-codex
@@ -199,6 +199,14 @@ A Codex step's pass is left unlabelled in the same way, whoever the daemon runs 
 
 ```text
 evidence_missing: Pass 1 of step fix in run ra429df3ad473c7b3 cannot be scored: no longer on this machine: codex session 01a1a731-9053-7cf2-9884-68058745044a of fix#1. Restore what is missing, or score another pass.
+```
+
+To score the pass, put the session back where teamai reads it, then judge it on demand:
+
+```sh
+mkdir -p ~/.codex/sessions/2026/11/04
+cp ~/.codex/archived_sessions/rollout-*-01a1a731-9053-7cf2-9884-68058745044a.jsonl ~/.codex/sessions/2026/11/04/
+teamai score --run ra429df3ad473c7b3 --scorer review-quality --driver paseo-codex
 ```
 
 ## Options

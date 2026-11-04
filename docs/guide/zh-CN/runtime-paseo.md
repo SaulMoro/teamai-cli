@@ -173,7 +173,7 @@ runtimes:
   - use: paseo
 ```
 
-下面是 Codex 评判为一轮 Codex 步骤打标签：
+下面是 Codex 评判为一轮 Codex 步骤打标签；它的会话放回 `~/.codex/sessions/` 之后，按需评分（见下文）：
 
 ```text
 $ teamai score --run ra429df3ad473c7b3 --scorer review-quality --driver paseo-codex
@@ -199,6 +199,14 @@ evidence_missing: Pass 1 of step fix in run r080799f10648b1ed cannot be scored: 
 
 ```text
 evidence_missing: Pass 1 of step fix in run ra429df3ad473c7b3 cannot be scored: no longer on this machine: codex session 01a1a731-9053-7cf2-9884-68058745044a of fix#1. Restore what is missing, or score another pass.
+```
+
+要为这一轮评分，先把会话放回 teamai 读取的位置，再按需评判：
+
+```sh
+mkdir -p ~/.codex/sessions/2026/11/04
+cp ~/.codex/archived_sessions/rollout-*-01a1a731-9053-7cf2-9884-68058745044a.jsonl ~/.codex/sessions/2026/11/04/
+teamai score --run ra429df3ad473c7b3 --scorer review-quality --driver paseo-codex
 ```
 
 ## 选项
