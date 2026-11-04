@@ -1298,6 +1298,25 @@ Step "review" needs what no single runtime of driver "sandboxed" offers: runtime
 
 步骤要求严格隔离、而定义里没有运行时提供时，`workflow start` 会直接拒绝，不会创建运行。每个运行时都因为这台机器的原因暂缓的步骤（例如你的 `workflows.allow` 不允许的网络）保持待运行。这期间，等你回答的审批或选择仍会照常提问。没有其他步骤在运行、也没有等待回答的问题时，运行以 `busy` 停下并给出原因，仪表盘的运行详情会写明是哪个运行时暂缓了它、为什么。
 
+每个定义都在本机留一个位置，给留在这里的步骤：它的 `local` 条目；没有列出时，teamai 在最后加一个 `host` 条目。`host` 用 teamai、git 和 shell 运行命令，不需要智能体 CLI，也从不接提示步骤。这个位置接下：
+
+- 命令步骤和 setup，前提是定义里没有运行时运行命令（`"exec": false`）；
+- teamai 自己的工作流 `teamai-score`、`teamai-share-session`、`teamai-finished-sessions` 和 `teamai-benchmark` 的命令步骤，它们在本机规划、检查和写入标签；
+- 带 `deliver: publish` 的步骤，它从这里推送到数据分支。
+
+其他运行时都不接这些步骤。定义里有运行时运行命令时，你自己的命令步骤交给它，而不是 `local`。所以只由外部运行时组成的定义，在没有智能体 CLI 的机器上也能运行并评判每个工作流：
+
+```yaml
+# drivers/sandbox-only.yaml
+schemaVersion: v1alpha1
+name: sandbox-only
+tool: claude
+runtimes:
+  - use: sandbox          # 提示步骤和你的命令步骤；teamai 自己的步骤在 host 条目上运行
+```
+
+打分 pass 的评判在[回答限定提示的运行时](#回答限定提示的运行时)上运行，没有时用本机的工具。teamai 自己的工作流换个名字复制后，不会留在本机。
+
 `use: local` 按 `--driver local` 的方式运行步骤。其他名字都是外部程序，按下面的顺序查找：
 
 ```text
@@ -1464,6 +1483,8 @@ exec 或提示运行期间退出的运行时，出于同样的原因会让它失
 
 `ready`、exec 或 prompt 的 `accepted`，以及 `reattach` 的 `alive` 回复可以带上 `display`，它是可选的：`label` 最多 80 个字符，`url`（`https:`、`http:` 或应用自己的协议，例如 `t3:`），以及最多 8 个字符串 `fields`。仪表盘的运行详情会把它显示在步骤下面。不要在里面放密钥或你主目录下的路径。teamai 无法显示的 display 会被丢弃并记录原因，步骤照常运行。显示的是最近给出的那个，所以只为 prompt 创建智能体的运行时，在 `ready` 时显示位置，再随 prompt 的 `accepted` 显示智能体。
 
+`open` 的 `view` 列出地点按与本机相同的绝对路径拿到的路径：可读写的工作树、只读的 git 路径、attempt 的结果目录和工具主目录，以及可读写的 `runDir`，即运行的临时目录，所以 `$TEAMAI_RUN_DIR` 在那里和在本机一样可用。
+
 #### 自己启动智能体的运行时
 
 T3 Code 或 Paseo 这类运行时从一个提示启动智能体，在它结束时得到会话，而不是运行工具的命令行。它在 `init` 时用 `"prompt": true` 说明这一点。如果 `can` 里还有 `"exec": false`，它就不接受命令，所以命令步骤和带 `setup` 的步骤会交给定义中的下一个运行时。带 `"exec": false` 却没有 `"prompt": true` 的运行时运行不了任何步骤，teamai 在启动时拒绝它：
@@ -1505,6 +1526,19 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 | `maxTurns` | 智能体的轮数上限，在你的 `can.max_turns` 提供时才有 |
 
 无法完成的提示以 `failed` 结束。希望步骤原样记录的原因，用 `model_unavailable`、`tool_unavailable`、`agent_unavailable` 或 `tool_failed`；其他代码 teamai 都记录为 `runtime_failed`，并在消息中带上你的代码和消息。收到 `cancel` 后，它以 `cancelled` 结束。`reattach` 把结束的提示报告为 `{"op":"…","state":"finished","session":{…},"result":{…},"usage":{…}}`，仍在运行的报告为 `running`；用同一个 `op` 再次发送 `prompt` 会重新连上它的智能体，不会再启动一个。步骤的 `timeout` 由 teamai 自己用 `cancel` 执行。`budget` 在提示结束后按 `usage` 检查。玩具运行时的 `agent` 选项就是这样运行的。
+
+#### 回答限定提示的运行时
+
+能让智能体只读一个目录、别的都读不到的运行时，在 `init` 时用 `"confinedPrompt": true` 说明，并在 `can.confined` 里列出它限定运行的工具、级别和权限。没有 `confinedPrompt` 时，teamai 会从它的提供里去掉 `can.confined`，所以[限定在一个目录里的步骤](workflow.md#限定在一个目录里的提示步骤)（例如打分 pass 的评判）永远不会交给它。这种步骤的 `open` 没有 `view`，它的 `prompt` 带 `confined`：
+
+```text
+← {"type":"init","ok":true,"prompt":true,"confinedPrompt":true,"can":{"exec":false,"tools":["claude"],"confined":[{"level":"best-effort","access":"read","tools":["claude"]}]}}
+→ {"type":"open","op":"op-6d2e0b91c4a7","run":"r7a1…","attempt":"a9c4…","credentials":{}}
+→ {"type":"prompt","op":"op-a3d5c18e02f9","handle":"…","cwd":"/…/runs/r7a1…/evidence","lease":{…},"confined":{"dir":"/…/runs/r7a1…/evidence","level":"best-effort","access":"read","schema":{…}},…}
+← {"op":"op-a3d5c18e02f9","event":"finished","session":{…},"result":{"output":{…}},"confined":{"level":"best-effort","access":"read"}}
+```
+
+智能体只读 `dir`，读不到宿主上的其他内容。`finished` 说明运行时实际保持的级别和权限，不能高于它真正执行的。没有 `confined` 的 `finished` 让步骤失败为 `runtime_failed`，级别低于 `dir` 要求的失败为 `confined_failed`，回复不是 JSON 值的失败为 `confined_reply_invalid`。toy 运行时的 `judge` 选项按这种方式回答。
 
 | 错误 | 下一步 |
 | --- | --- |
