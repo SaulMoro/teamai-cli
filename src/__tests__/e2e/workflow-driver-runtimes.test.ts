@@ -257,6 +257,16 @@ Judge the review.
     expect(runs()).toEqual(before);
   });
 
+  it('refuses an agent\'s start that invoke denies before it opens any runtime of the definition', async () => {
+    writeDefinition('toyonly', [{ use: 'toy', options: { state } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyonly'], repo, env({ CLAUDE_CODE_SESSION_ID: 'agent-session-1' }));
+
+    expect(envelope(ran)).toMatchObject({ error: { code: 'invoke_denied' } });
+    // The toy notes every init it answers; none means no runtime process was started, so none signed in.
+    expect(fs.existsSync(path.join(state, 'credentials.jsonl'))).toBe(false);
+  });
+
   it('keeps what the runtime shows of the place in the attempt\'s record, for the run\'s details', async () => {
     const display = { label: 'toy place', url: 'https://runtimes.example.test/place/1', fields: { place: 'toy-1', image: 'warm:3f9c' } };
     writeDefinition('shown', [{ use: 'toy', options: { state, display } }]);

@@ -28,7 +28,7 @@ import type { SoleDriver } from './workflow/engine.js';
 import { driverIdentity } from './driver-identity.js';
 import { getBusinessRoot, getDataHome, usesBranchWorktree, type JsonValue, type LocalConfig, type TeamaiConfig } from './types.js';
 import { AttemptIdSchema, installOwner, readRun, RunIdSchema, takeRunLock, type RunId } from './workflow/store.js';
-import { inProcessClient, isRefusal, resumeRefusal, workflowNotFound, type InvokeCaller, type NextPrepare, type StartedRun } from './workflow/protocol.js';
+import { inProcessClient, invokeRefusal, isRefusal, resumeRefusal, workflowNotFound, type InvokeCaller, type NextPrepare, type StartedRun } from './workflow/protocol.js';
 import { parseInputsFlag, parseSkillCall, parseSkillResume, runSkillCall, sessionDrivesRun, skillContext } from './workflow/drivers/skill/skill-driver.js';
 import { loadCachedWorkflow, namespaceConflictOf, resolveStart } from './workflow/cache.js';
 import { durationMs } from './workflow/parse.js';
@@ -514,6 +514,15 @@ export async function startWorkflow(name: string, options: StartOptions, shortcu
   }
 
   const { inputs } = read;
+  // A start the workflow's invoke refuses ends before any runtime of the definition opens, so none signs in.
+  const refused = invokeRefusal((await loadCachedWorkflow(config, name))?.definition, invokeCaller(options.confirmed), { kind: 'start', instead: shortcut.instead });
+
+  if (refused) {
+    writeEnvelope({ error: refused }, secrets);
+
+    return;
+  }
+
   const defined = await openNamedDriver(config, options.driver, { personal: true });
 
   if (!defined.ok) {
