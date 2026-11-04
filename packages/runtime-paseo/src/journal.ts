@@ -47,6 +47,8 @@ const AgentCreateSchema = z.object({
   title: z.string(),
   prompt: z.string(),
   labels: z.record(z.string(), z.string()),
+  /** The agent's environment: only the run directory's name, since Paseo keeps it in plain text. */
+  env: z.record(z.string(), z.string()).optional(),
   config: z.object({
     provider: z.string(),
     modeId: z.string(),
