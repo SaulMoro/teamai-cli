@@ -1817,22 +1817,22 @@ function beyondSoleDriver(
 
   if (lackedByAll.includes('unattended')) return unattendedUnavailable(step, tool);
 
-  if (lackedByAll.includes('exec')) {
-    const runtimes = sole.offers.map((offer) => offer.runtime).join(', ');
-
-    return {
-      code: 'requirement_unmet',
-      message: `Step "${step}" runs a command, and no runtime of driver "${sole.driver}" runs commands (${runtimes}). Add one that does, such as local, to the definition.`,
-    };
-  }
-
   if (sole.offers.length === 1 || lackedByAll.length > 0) return undefined;
-  const lacks = sole.offers.map((offer, index) => `runtime ${offer.runtime} lacks ${helds[index]?.join(', ') ?? 'nothing'}`).join('; ');
+  const lacks = sole.offers.map((offer, index) => `runtime ${offer.runtime} lacks ${helds[index]?.map(lackedKey).join(', ') ?? 'nothing'}`).join('; ');
 
   return {
     code: 'requirement_unmet',
     message: `Step "${step}" needs what no single runtime of driver "${sole.driver}" offers: ${lacks}. Give one runtime of the definition all of it, or change what the step requires.`,
   };
+}
+
+/** A key a runtime lacks, said so that a member can act on it: the keys the local loop sets say why it set them. */
+function lackedKey(key: Missing): string {
+  if (key === 'host') return 'host (the step stays on this machine)';
+
+  if (key === 'prompt') return 'prompt (this entry runs only commands)';
+
+  return key === 'commands' ? 'commands (another runtime of the definition runs them)' : key;
 }
 
 /** Why a step that names `tool` fails in a run whose only driver cannot launch it. */

@@ -208,7 +208,7 @@ Judge the review.
 
     expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
     const [build] = readRunState(runOf(ran)).steps;
-    expect(build).toMatchObject({ id: 'build', status: 'failed', failure: { code: 'requirement_unmet', message: expect.stringContaining('runtime local lacks commands') } });
+    expect(build).toMatchObject({ id: 'build', status: 'failed', failure: { code: 'requirement_unmet', message: expect.stringContaining('runtime local lacks commands (another runtime of the definition runs them)') } });
     expect(toyOpens()).toBe(0);
     expect(fs.existsSync(launches)).toBe(false);
   });
@@ -520,6 +520,20 @@ Judge the review.
       expect(envelope(ended), ended.stderr).toMatchObject({ data: { done: { outcome: 'cancelled' } } });
       expect(endings()).toEqual([[sends()[0]?.op, 'cancelled']]);
     });
+  });
+
+  it('refuses a runtime named host, the name of the command slot teamai adds to every definition, before a step runs', async () => {
+    const hostDir = path.join(os.homedir(), '.teamai', 'runtimes', 'host');
+    fs.mkdirSync(hostDir, { recursive: true });
+    fs.copyFileSync(TOY_RUNTIME, path.join(hostDir, 'runtime'));
+    fs.chmodSync(path.join(hostDir, 'runtime'), 0o755);
+    writeDefinition('ownhost', [{ use: 'host', options: { state } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'ownhost'], repo, env());
+
+    expect(envelope(ran)).toMatchObject({ error: { code: 'runtime_not_found', message: expect.stringContaining('Driver "ownhost" uses runtime "host"') } });
+    expect(toyOpens()).toBe(0);
+    expect(fs.existsSync(launches)).toBe(false);
   });
 
   it('refuses a bad option of any runtime before a step runs, naming the key', async () => {

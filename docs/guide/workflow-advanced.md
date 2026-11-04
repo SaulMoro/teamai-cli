@@ -1555,7 +1555,7 @@ Step "review" needs what no single runtime of driver "sandboxed" offers: runtime
 
 A step that requires strict isolation no runtime of the definition gives is refused at `workflow start`, before the run exists. A step every runtime holds back for a reason of this machine, such as a network your `workflows.allow` refuses, stays pending. An approval or choice waiting for you is still asked meanwhile. Once nothing else runs or waits for an answer, the run stops `busy` with that reason, and the dashboard's run details say which runtime held it back and why.
 
-Every definition keeps a slot on this machine for the steps that stay here: its `local` entry, or, when it lists none, a `host` entry teamai adds last. `host` runs commands with teamai, git and the shell, needs no agent CLI, and never takes a prompt step. The slot takes:
+Every definition keeps a slot on this machine for the steps that stay here: its `local` entry, or, when it lists none, a `host` entry teamai adds last, so no runtime of yours may be named `host`. `host` runs commands with teamai, git and the shell, needs no agent CLI, and never takes a prompt step. The slot takes:
 
 - command and setup steps, when no runtime of the definition runs commands (`"exec": false`);
 - the command steps of teamai's own workflows `teamai-score`, `teamai-share-session`, `teamai-finished-sessions` and `teamai-benchmark`, which plan, check and write labels on this machine;
@@ -1572,7 +1572,7 @@ runtimes:
   - use: sandbox          # prompts and your command steps; teamai's own steps run on the host entry
 ```
 
-A scored pass's judge runs on a runtime that [answers confined prompts](#a-runtime-that-answers-confined-prompts), else on this machine's tools. A copy of teamai's own workflows under another name is not kept on this machine.
+A scored pass's judge runs on a runtime that [answers confined prompts](#a-runtime-that-answers-confined-prompts), else, when the definition lists `local`, on this machine's tools; with neither, the run stops `confined_pending`. A copy of teamai's own workflows under another name is not kept on this machine.
 
 `use: local` runs steps the way `--driver local` does. Any other name is an external program, found in this order:
 

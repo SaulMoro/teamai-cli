@@ -1511,7 +1511,7 @@ runtimes:
 ```sh
 teamai workflow start review --driver toy
 teamai workflow resume r1a2b3c4d                 # 在 toy 上继续，即这台机器上次驱动这个运行时用的定义
-teamai workflow resume r1a2b3c4d --driver local  # back to plain local; the run remembers that too
+teamai workflow resume r1a2b3c4d --driver local  # 回到普通的 local；运行也会记住这一点
 ```
 
 teamai 按下面的顺序查找 `<name>.yaml`，使用找到的第一个：
@@ -1549,7 +1549,7 @@ Step "review" needs what no single runtime of driver "sandboxed" offers: runtime
 
 步骤要求严格隔离、而定义里没有运行时提供时，`workflow start` 会直接拒绝，不会创建运行。每个运行时都因为这台机器的原因暂缓的步骤（例如你的 `workflows.allow` 不允许的网络）保持待运行。这期间，等你回答的审批或选择仍会照常提问。没有其他步骤在运行、也没有等待回答的问题时，运行以 `busy` 停下并给出原因，仪表盘的运行详情会写明是哪个运行时暂缓了它、为什么。
 
-每个定义都在本机留一个位置，给留在这里的步骤：它的 `local` 条目；没有列出时，teamai 在最后加一个 `host` 条目。`host` 用 teamai、git 和 shell 运行命令，不需要智能体 CLI，也从不接提示步骤。这个位置接下：
+每个定义都在本机留一个位置，给留在这里的步骤：它的 `local` 条目；没有列出时，teamai 在最后加一个 `host` 条目，所以你的运行时不能叫 `host`。`host` 用 teamai、git 和 shell 运行命令，不需要智能体 CLI，也从不接提示步骤。这个位置接下：
 
 - 命令步骤和 setup，前提是定义里没有运行时运行命令（`"exec": false`）；
 - teamai 自己的工作流 `teamai-score`、`teamai-share-session`、`teamai-finished-sessions` 和 `teamai-benchmark` 的命令步骤，它们在本机规划、检查和写入标签；
@@ -1566,7 +1566,7 @@ runtimes:
   - use: sandbox          # 提示步骤和你的命令步骤；teamai 自己的步骤在 host 条目上运行
 ```
 
-打分 pass 的评判在[回答限定提示的运行时](#回答限定提示的运行时)上运行，没有时用本机的工具。teamai 自己的工作流换个名字复制后，不会留在本机。
+打分 pass 的评判在[回答限定提示的运行时](#回答限定提示的运行时)上运行；没有这种运行时而定义列出了 `local` 时，用本机的工具；两者都没有时，运行以 `confined_pending` 停下。teamai 自己的工作流换个名字复制后，不会留在本机。
 
 `use: local` 按 `--driver local` 的方式运行步骤。其他名字都是外部程序，按下面的顺序查找：
 

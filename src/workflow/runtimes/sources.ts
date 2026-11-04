@@ -49,6 +49,10 @@ export async function locateRuntime(driver: ResolvedDriver, use: string): Promis
     return { ok: false, failure: { code: 'runtime_not_found', message: `Driver "${driver.name}" uses runtime "${use}", which this version of teamai does not run from a definition. Use local, or a runtime of your own or of the team.` } };
   }
 
+  if (use === 'host') {
+    return { ok: false, failure: { code: 'runtime_not_found', message: `Driver "${driver.name}" uses runtime "host", the name teamai gives the command slot it adds to every definition. Name the runtime otherwise, or use local.` } };
+  }
+
   const personal = path.join(personalDir('runtimes'), use, RUNTIME_ENTRY);
 
   if (await isFile(personal)) return { ok: true, source: { kind: 'personal', name: use, executable: personal } };
