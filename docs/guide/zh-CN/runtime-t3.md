@@ -217,7 +217,7 @@ T3 评审的[隔离级别](scorers.md#隔离)是 **best-effort**：
 {"error":{"code":"runtime_failed","message":"Runtime \"t3\" of driver \"teamai-t3\" did not start (login_required): teamai has no valid T3 Code sign-in for http://127.0.0.1:3773, and an unattended run cannot ask for one. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again."}}
 ```
 
-无人值守运行的线程仍以 Auto 或你的 `runtime_mode` 运行。agent 仍然请求审批的步骤会被停止，并以 `tool_failed` 失败，消息里写明线程。交互式步骤只在有人值守运行中运行。
+无人值守运行的线程仍以 Auto 或你的 `runtime_mode` 运行。agent 仍然请求审批的步骤会被停止，并以 `tool_failed` 失败，消息里写明线程。如果 T3 没有停止这个线程，消息会说明这一点，teamai 会保留步骤的位置，直到之后的关闭能停止它。交互式步骤只在有人值守运行中运行。
 
 ## 重启、取消和重试
 

@@ -19,6 +19,11 @@ const ThreadSchema = z.object({
   launchedAt: z.number(),
   /** A judge's: the read-only copy of its directory, in the thread's own scratch folder, which close removes. */
   copy: z.string().optional(),
+  /**
+   * The op ended while T3 may still run the thread: teamai could not stop it, or lost track of it. close stops it first,
+   * and keeps the place, and a judge's copy, while T3 will not; nothing settles it before then.
+   */
+  mayStillRun: z.boolean().optional(),
   /** How asking T3 to settle the thread went, once the runtime asked; it asks once. */
   settlement: z.enum(['settled', 'failed']).optional(),
 });
