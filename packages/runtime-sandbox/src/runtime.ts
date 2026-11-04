@@ -157,7 +157,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
   };
 
   /** The place's sandbox: the id the journal kept, or the one its labels find when a runtime died before keeping it. */
-  const sandboxOf = async (place: PlaceRecord, provider: Provider): Promise<string | undefined> => place.id ?? provider.find(place);
+  const sandboxOf = async (place: PlaceRecord, provider: Provider): ReturnType<Provider['find']> => (place.id === undefined ? provider.find(place) : { ok: true, id: place.id });
 
   const open = async ({ op, run, attempt, view, credentials }: OpenRequest, provider: Provider): Promise<void> => {
     if (!RUN_ID.test(run) || !ATTEMPT_ID.test(attempt)) {
@@ -195,7 +195,14 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     journal.savePlace(handle, key);
     write({ op, event: 'accepted', handle });
     const found = await provider.find(key);
-    const created = found === undefined ? await provider.create(key, view) : { ok: true as const, id: found };
+
+    if (!found.ok) {
+      write({ op, event: 'failed', failure: found.failure });
+
+      return;
+    }
+
+    const created = found.id === undefined ? await provider.create(key, view) : { ok: true as const, id: found.id };
 
     if (!created.ok) {
       write({ op, event: 'failed', failure: created.failure });
@@ -267,7 +274,6 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     // Claimed before the first await, so the same id sent again meanwhile is answered by this run.
     claim(op);
     const place = journal.place(handle);
-    const id = place && await sandboxOf(place, provider);
 
     if (place?.confined) {
       finish(op, handle, { state: 'failed', failure: { code: 'bad_request', message: `Handle ${handle} is a judge's place, which runs only its confined prompt, never an exec.` } });
@@ -275,7 +281,17 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       return;
     }
 
-    if (!place || id === undefined) {
+    const found = place && await sandboxOf(place, provider);
+
+    if (found?.ok === false) {
+      finish(op, handle, { state: 'failed', failure: found.failure });
+
+      return;
+    }
+
+    const id = found?.id;
+
+    if (id === undefined) {
       finish(op, handle, { state: 'failed', failure: { code: 'runtime_gone', message: `No sandbox is open under handle ${handle}.` } });
 
       return;
@@ -409,11 +425,11 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     if (!record || record.outcome) return;
     journal.cancel(op);
     const place = journal.place(record.handle);
-    const id = place && await sandboxOf(place, provider);
+    const found = place ? await sandboxOf(place, provider) : { ok: true as const, id: undefined };
 
     // A judge's container is removed, so an exec still on its way to the engine has nothing to start in; a step's
-    // restarts, ready for the step's next exec.
-    const stopped = id === undefined ? { ok: true as const } : place?.confined ? await provider.destroy(id) : await provider.stop(id);
+    // restarts, ready for the step's next exec. One the engine cannot look up is not stopped.
+    const stopped = !found.ok ? found : found.id === undefined ? { ok: true as const } : place?.confined ? await provider.destroy(found.id) : await provider.stop(found.id);
 
     // An exec whose runtime process is gone ends here: no process of this runtime reports it. It is cancelled only
     // once the engine stopped it; one the engine could not stop may still run, and ends failed with why.
@@ -432,14 +448,19 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
 
   const reattach = async (handle: string, provider: Provider): Promise<void> => {
     const place = journal.place(handle);
-
     // A judge's place has no sandbox until its prompt, and keeps its prompt's outcome after.
-    if (!place || (!place.confined && (await provider.find(place)) === undefined)) {
+    const found = place === undefined || place.confined ? undefined : await provider.find(place);
+
+    // Gone only once the engine said the sandbox is: one it cannot look for stays this attempt's, for a close to
+    // remove once it answers again. reattach has no failure reply, so why goes to teamai's log.
+    if (place === undefined || (found?.ok === true && found.id === undefined)) {
       journal.forget(handle);
       write({ event: 'gone', handle });
 
       return;
     }
+
+    if (found?.ok === false) write({ event: 'error', message: found.failure.message });
 
     write({ event: 'alive', handle, ops: journal.opsOf(handle).map(({ op, record }) => stateOf({ op, ...record })), display: provider.display(place) });
   };
@@ -457,8 +478,8 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       return [run.ended];
     });
 
-    const id = place && await sandboxOf(place, provider);
-    const destroyed = id === undefined ? { ok: true as const } : await provider.destroy(id);
+    const found = place ? await sandboxOf(place, provider) : { ok: true as const, id: undefined };
+    const destroyed = !found.ok ? found : found.id === undefined ? { ok: true as const } : await provider.destroy(found.id);
     const removed = destroyed.ok && place?.confined && provider.judges ? await provider.judges.release(place) : destroyed;
 
     if (!removed.ok) {

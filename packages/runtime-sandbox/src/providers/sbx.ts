@@ -58,8 +58,11 @@ export function sbxProvider({ agent, env }: { agent: string; env: NodeJS.Process
   const find: Provider['find'] = async (key) => {
     const ran = await cli(['ls', '--json']);
     const name = sandboxName(key);
+    const names = ran.kind === 'ran' && ran.code === 0 ? namesListed(ran.stdout) : undefined;
 
-    return ran.kind === 'ran' && ran.code === 0 && namesListed(ran.stdout)?.includes(name) ? name : undefined;
+    if (names !== undefined) return { ok: true, id: names.includes(name) ? name : undefined };
+
+    return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not list its sandboxes: ${messageOf(ran) || 'it printed no list'}. Sandbox ${name} stays this attempt's until sbx answers again (\`sbx daemon start\`); to remove it now, run \`sbx rm --force ${name}\`.` } };
   };
 
   const remove = async (name: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
@@ -122,7 +125,9 @@ export function sbxProvider({ agent, env }: { agent: string; env: NodeJS.Process
       if (created.kind === 'ran' && created.code === 0) return { ok: true, id: name };
 
       // Another open of the same attempt created it first: that sandbox is this attempt's.
-      if ((await find(key)) !== undefined) return { ok: true, id: name };
+      const raced = await find(key);
+
+      if (raced.ok && raced.id !== undefined) return { ok: true, id: name };
 
       return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not create the sandbox for attempt ${key.attempt} from agent ${agent}: ${messageOf(created)}` } };
     },
