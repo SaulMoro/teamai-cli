@@ -41,11 +41,11 @@ export type Lost = { kind: 'lost'; failure: RuntimeFailure };
 export type ExecEnd = { kind: 'exited'; code: number; stdout: string } | { kind: 'cancelled' } | { kind: 'failed'; failure: RuntimeFailure } | Lost;
 
 /**
- * How a prompt ended: finished with the tool's session, the result the agent wrote, its usage and, for a confined
- * prompt, what the runtime kept; cancelled; or failed.
+ * How a prompt ended: finished with the tool's session, the result the agent wrote, its usage, whether it continued the
+ * session the lease asked to resume and, for a confined prompt, what the runtime kept; cancelled; or failed.
  */
 export type PromptEnd =
-  | { kind: 'finished'; session: z.infer<typeof PromptSessionSchema>; result: PromptResult; usage?: z.infer<typeof PromptUsageSchema>; confined?: ConfinedKept }
+  | { kind: 'finished'; session: z.infer<typeof PromptSessionSchema>; result: PromptResult; usage?: z.infer<typeof PromptUsageSchema>; confined?: ConfinedKept; resumed?: true }
   | { kind: 'cancelled' }
   | { kind: 'failed'; failure: RuntimeFailure }
   | Lost;

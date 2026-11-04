@@ -73,6 +73,8 @@ export type LocalToolResult =
      * the turn cap, at which headless Claude ends itself with `error_max_turns`.
      */
     stoppedBy?: Limit;
+    /** The run was asked to resume a session, and its runtime started a new one instead. */
+    startedFresh?: true;
     failure?: WorkflowFailure;
   }
   | { started: false; exitCode: number; failure: WorkflowFailure };

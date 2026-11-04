@@ -10,7 +10,9 @@
 // its agent works `hold_ms` (from when the prompt was first sent, across a restart of the toy) and until the file
 // `release` names exists, then writes `output` (or the whole `result`) to the lease's result file and finishes with a
 // session and `usage`, or ends with `fail`. It appends each prompt it is sent, and how each ended, to `prompts.jsonl` in its state, which
-// `close` keeps.
+// `close` keeps. It continues the session a prompt's lease names and says so in `finished`, unless `resumes: false`; with
+// `transcript`, its agent keeps each session in the member's Claude store, as an agent T3 or Paseo starts on this
+// machine does.
 //
 // With `judge`, it also answers confined prompts, best effort: its init says so and offers `can.confined` at `level`
 // (`best-effort` unless given) with `access` (`read`) for `tools` (`claude`). It answers each one at once with `reply`
@@ -19,6 +21,7 @@
 // the PATH of each exec.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
@@ -246,7 +249,17 @@ function agentOutcome(record) {
   fs.writeFileSync(record.lease.result, JSON.stringify(result));
   const usage = options.agent.usage === undefined ? {} : { usage: options.agent.usage };
 
-  return { state: 'finished', session: { tool: record.lease.tool, id: record.lease.resume ?? `toy-session-${record.op.slice(3)}` }, result, ...usage };
+  const resumes = record.lease.resume !== undefined && options.agent.resumes !== false;
+  const session = { tool: record.lease.tool, id: resumes ? record.lease.resume : `toy-session-${record.op.slice(3)}` };
+
+  if (options.agent.transcript) {
+    const project = path.join(os.homedir(), '.claude', 'projects', record.cwd.replace(/[^A-Za-z0-9]/g, '-'));
+    fs.mkdirSync(project, { recursive: true });
+    const line = { type: 'user', sessionId: session.id, cwd: record.cwd, timestamp: new Date().toISOString(), message: { role: 'user', content: 'step' } };
+    fs.appendFileSync(path.join(project, `${session.id}.jsonl`), `${JSON.stringify(line)}\n`);
+  }
+
+  return { state: 'finished', session, result, ...usage, ...(resumes && { resumed: true }) };
 }
 
 function promptEnded(op, outcome) {
@@ -334,7 +347,7 @@ function prompt(request) {
   // The names of its env, never a value, and which of them the team provides.
   fs.appendFileSync(file('prompts.jsonl'), `${JSON.stringify({ op: request.op, sent: request.lease, env: Object.keys(request.env).sort(), provided: request.provided })}\n`);
 
-  if (!record) writeJson(opPath(request.op), { kind: 'prompt', op: request.op, handle: request.handle, lease: request.lease, startedAt: Date.now() });
+  if (!record) writeJson(opPath(request.op), { kind: 'prompt', op: request.op, handle: request.handle, lease: request.lease, cwd: request.cwd, startedAt: Date.now() });
   settlePrompt(request.op);
 }
 
