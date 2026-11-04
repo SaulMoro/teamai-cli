@@ -27,8 +27,13 @@ const DEFAULT_CAN = {
 let options;
 const running = new Map();
 
+// When teamai is gone, a line it would have read goes nowhere: an exec still running keeps going and records its end.
+let stdoutOpen = true;
+
+process.stdout.on('error', () => { stdoutOpen = false; });
+
 function send(message) {
-  process.stdout.write(`${JSON.stringify(message)}\n`);
+  if (stdoutOpen) process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
 function file(...parts) {
