@@ -134,6 +134,11 @@ steps:
     command: git config extensions.worktreeConfig true && git config --worktree core.hooksPath "$PLANTED_HOOKS" && echo change > planted.txt`,
       sleeper: `  - id: wait
     command: sleep 60 & echo $! > "$CHILD_PID"; wait`,
+      scored: `  - id: review
+    prompt: Review the repository without changing it.
+    scorers: [always]
+    output:
+      ok: boolean`,
     };
     for (const [name, steps] of Object.entries(flows)) {
       fs.writeFileSync(path.join(workflows, `${name}.yaml`), `schemaVersion: v1alpha1\nname: ${name}\ndescription: ${name}\nsteps:\n${steps}\n`);
@@ -145,6 +150,16 @@ labels:
   - { value: missed, score: 0, description: Misses a real defect }
 passingScore: 0.5
 samplingRate: 0
+---
+Judge the review.
+`);
+    // Judged on every pass, so the pass's own drive starts its teamai-score run.
+    fs.writeFileSync(path.join(repo, '.teamai', 'scorers', 'always.md'), `---
+labels:
+  - { value: good, score: 1, description: Finds the real defects }
+  - { value: missed, score: 0, description: Misses a real defect }
+passingScore: 0.5
+samplingRate: 100
 ---
 Judge the review.
 `);
@@ -256,6 +271,46 @@ Judge the review.
     const resumed = await runCLI(['workflow', 'resume', runId], repo, env());
 
     expect(envelope(resumed)).toMatchObject({ error: { code: 'driver_not_found', message: expect.stringContaining('toygone') } });
+  });
+
+  describe('a definition whose only runtime is the toy, on a host with no agent CLI', () => {
+    /** PATH for teamai with no agent CLI: teamai, node and git only, and the system's own directories. */
+    let hostPath: string;
+
+    const judgeOffer = [{ level: 'best-effort', access: 'read', tools: ['claude'] }];
+
+    type ToyPrompt = { op: string; sent?: { step: string }; confined?: { dir: string; level: string; access: string }; sees?: string[] };
+
+    const toyPrompts = (state: string): ToyPrompt[] => (fs.existsSync(path.join(state, 'prompts.jsonl'))
+      ? fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as ToyPrompt)
+      : []);
+
+    const toyOpenViews = (state: string): unknown[] => fs.readdirSync(path.join(state, 'ops'))
+      .map((name) => JSON.parse(fs.readFileSync(path.join(state, 'ops', name), 'utf8')) as { kind: string; view?: unknown })
+      .filter((op) => op.kind === 'open').map((op) => op.view);
+
+    beforeAll(() => {
+      const hostBin = path.join(sandbox, 'host-bin');
+      fs.mkdirSync(hostBin);
+      fs.symlinkSync(process.execPath, path.join(hostBin, 'node'));
+      for (const tool of ['git', 'teamai']) fs.symlinkSync(execFileSync('which', [tool], { encoding: 'utf8' }).trim(), path.join(hostBin, tool));
+      hostPath = [hostBin, '/usr/bin', '/bin'].join(path.delimiter);
+    });
+
+    it('never leases the judge to a toy that offers can.confined without saying it answers confined prompts', async () => {
+      const state = path.join(sandbox, 'toy-state-nojudge');
+      fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'toynojudge.yaml'), [
+        'schemaVersion: v1alpha1', 'name: toynojudge', 'tool: claude', 'runtimes:', '  - use: toy', '    options:',
+        `      state: ${JSON.stringify(state)}`, `      path: ${JSON.stringify(bin)}`, `      can: { confined: ${JSON.stringify(judgeOffer)} }`, '',
+      ].join('\n'));
+
+      const ran = await runCLI(['workflow', 'start', 'scored', '--driver', 'toynojudge'], repo, { PATH: hostPath, LAUNCHES: launches });
+
+      succeededRun(ran);
+      expect(ran.stderr).toMatch(/is not labelled yet \(confined_pending\)/);
+      expect(toyPrompts(state).filter((line) => line.confined !== undefined)).toEqual([]);
+      expect(toyOpenViews(state)).not.toContain(null);
+    });
   });
 
   it('reports the output, session and usage of an exec that finished while teamai was killed, without running it again', async () => {

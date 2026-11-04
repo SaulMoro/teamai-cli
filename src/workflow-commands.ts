@@ -130,8 +130,8 @@ function localWorkspace(run: RunState): string {
 
 /**
  * Drives run `runId` with the local driver through `drive`, then drives each teamai-score run its reports answered its
- * settled passes started, so their labels are written when `workflow start` or `resume` returns, attended or not; the
- * scored run's own steps and `finally` never wait for them.
+ * settled passes started, on the same driver definition, so their labels are written when `workflow start` or `resume`
+ * returns, attended or not; the scored run's own steps and `finally` never wait for them.
  */
 async function withPassScoring(
   { config, env }: { config: LocalConfig; env: WorkflowEnv },
@@ -150,7 +150,7 @@ async function withPassScoring(
     const subject = Subject.format({ kind: 'run', subject: { runId, step, pass } });
     const stored = await readRun(config, run);
     const cwd = stored === 'missing' || stored === 'corrupt' ? process.cwd() : localWorkspace(stored);
-    const said = PassScoring.said(subject, run, await runLocalDriver(config, run, cwd, { tools: options.tools, toolPaths: options.toolPaths, sandbox: options.sandbox }));
+    const said = PassScoring.said(subject, run, await runLocalDriver(config, run, cwd, { tools: options.tools, toolPaths: options.toolPaths, sandbox: options.sandbox, runtimes: options.runtimes }));
 
     if (said.kind === 'pending') log.warn(said.line);
     else log.info(said.line);
