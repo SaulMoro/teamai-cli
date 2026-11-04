@@ -125,11 +125,13 @@ ${fields}`;
 
   /** The prompt every tool receives for `text`, with the result instruction the adapter adds. */
   const prompt = (text: string) => expect.stringMatching(new RegExp(`^${text.replaceAll('.', '\\.')}\\n\\nWrite the workflow result as JSON to .+result\\.json\\. Use this shape`, 's'));
+  /** Claude's allow rule for the result file, and only it. */
+  const resultGrant = expect.stringMatching(/^--allowedTools=Edit\(\/.+\/out\/result\.json\)$/);
 
   it('launches claude with --model and --effort of the alias for claude', async () => {
     const { argv, run } = await runOn('claude', oneStep('    model: strong\n'));
 
-    expect(argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', '--model', 'opus', '--effort', 'high']]);
+    expect(argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--model', 'opus', '--effort', 'high']]);
     expect(run.steps[0]).toMatchObject({
       status: 'succeeded',
       model: 'claude-opus-4-1-20250805',
@@ -157,7 +159,7 @@ Follow the review checklist.
 `;
     const claude = await runOn('claude', oneStep('    agent: reviewer\n    model: strong\n'), { agents: { reviewer } });
 
-    expect(claude.argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', '--agent', 'reviewer', '--model', 'opus', '--effort', 'high']]);
+    expect(claude.argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--agent', 'reviewer', '--model', 'opus', '--effort', 'high']]);
     expect(fs.readFileSync(path.join(claude.workspace, '.claude', 'agents', 'reviewer.md'), 'utf8')).toBe(reviewer);
     expect(claude.run.steps[0]).toMatchObject({
       status: 'succeeded',
@@ -180,14 +182,14 @@ model_reasoning_effort = "low"
     const claude = await runOn('claude', oneStep('    model: claude-opus-4.1\n'));
     const opencode = await runOn('opencode', oneStep('    model: anthropic/claude-sonnet\n'));
 
-    expect(claude.argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', '--model', 'claude-opus-4.1']]);
+    expect(claude.argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--model', 'claude-opus-4.1']]);
     expect(opencode.argv).toEqual([['run', '--format', 'json', prompt('Review this project.'), '--model', 'anthropic/claude-sonnet']]);
   });
 
   it('passes an exact model and effort as written, never through an alias of the same name', async () => {
     const { argv, run } = await runOn('claude', oneStep('    model: { name: strong, effort: max }\n'));
 
-    expect(argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', '--model', 'strong', '--effort', 'max']]);
+    expect(argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--model', 'strong', '--effort', 'max']]);
     expect(run.steps[0]).toMatchObject({ status: 'succeeded', agent: { model: { requested: 'strong' }, effort: { requested: 'max' } } });
     expect(run.steps[0]).not.toMatchObject({ agent: { model: { alias: expect.anything() } } });
   });
@@ -266,7 +268,7 @@ model = "gpt-5.4"
 ` } });
     const opencode = await runOn('opencode', oneStep(''));
 
-    expect(claude.argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', '--agent', 'reviewer']]);
+    expect(claude.argv).toEqual([['-p', prompt('Review this project.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--agent', 'reviewer']]);
     expect(codex.argv).toEqual([['exec', '--json', '--model', 'gpt-5.4', prompt('Follow the review checklist.\n\nReview this project.')]]);
     expect(opencode.argv).toEqual([['run', '--format', 'json', prompt('Review this project.')]]);
   });
@@ -298,10 +300,10 @@ steps:
     } });
 
     expect(argv).toEqual([
-      ['-p', prompt('Plan it.'), '--output-format', 'stream-json', '--verbose', '--model', 'haiku'],
-      ['-p', prompt('Help with it.'), '--output-format', 'stream-json', '--verbose', '--agent', 'helper', '--model', 'haiku'],
-      ['-p', prompt('Review it.'), '--output-format', 'stream-json', '--verbose', '--agent', 'reviewer'],
-      ['-p', prompt('Summarize it.'), '--output-format', 'stream-json', '--verbose', '--model', 'opus', '--effort', 'high'],
+      ['-p', prompt('Plan it.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--model', 'haiku'],
+      ['-p', prompt('Help with it.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--agent', 'helper', '--model', 'haiku'],
+      ['-p', prompt('Review it.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--agent', 'reviewer'],
+      ['-p', prompt('Summarize it.'), '--output-format', 'stream-json', '--verbose', resultGrant, '--model', 'opus', '--effort', 'high'],
     ]);
   });
 

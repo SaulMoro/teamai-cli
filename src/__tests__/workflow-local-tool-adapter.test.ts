@@ -265,6 +265,24 @@ describe('local tool adapter', () => {
     expect(spawnTool).toHaveBeenCalledWith('claude', expect.arrayContaining(['-p', '--max-turns', '3']), expect.anything());
   });
 
+  // Claude's default mode asks before every write, so an attended step asked for this one and an unattended one failed.
+  it.each([['headless', false], ['interactive', true]] as const)('lets %s Claude write the result file, and only it, without asking', async (_, interactive) => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-grant-${String(interactive)}-${Date.now()}.json`);
+    files.push(resultPath);
+    const spawnTool = vi.fn(() => child(interactive ? '' : claudeStream('claude-sonnet', { result: JSON.stringify({ ok: true }) }))) as unknown as ToolSpawn;
+    const adapter = createLocalToolAdapter(spawnTool, () => 'claude');
+    const input = { prompt: 'Plan.', cwd: os.tmpdir(), resultPath, secrets: {} };
+
+    await (interactive ? adapter.runInteractive('claude', input) : adapter.run('claude', input));
+
+    const args = vi.mocked(spawnTool).mock.calls[0]?.[1] ?? [];
+    // One argument: the flag is variadic, so a separate value would take the interactive prompt after it as a rule too.
+    expect(args).toContain(`--allowedTools=Edit(/${resultPath})`);
+    expect(interactive ? args.at(-1) : args[args.indexOf('-p') + 1]).toContain('Plan.');
+    expect(args).not.toContain('--permission-mode');
+    expect(args).not.toContain('--dangerously-skip-permissions');
+  });
+
   it.each([
     ['stopped at its --max-turns cap', 'error_max_turns', 1, true],
     ['ran to the end', 'success', 0, undefined],
