@@ -44,11 +44,15 @@ export type ScoredLabel = z.infer<typeof ScoredLabelSchema>;
 
 /**
  * A teamai-score run's `done` outputs as `workflows/teamai-score.yaml` declares them: the labels of each group, by its
- * `score` results, and the versions its write stored, null when that write did not succeed. A run that planned no
- * group, and a group that broke before `label`, give none.
+ * `score` results, null when the group's steps failed before it labelled, and the versions its write stored, null when
+ * that write did not succeed. A run that planned no group gives none; so does a group with no outputs.
  */
 const ScoreRunOutputsSchema = z.object({
-  labels: z.array(z.object({ outputs: z.object({ labels: z.array(ScoredLabelSchema).default([]), written: z.array(z.string()).nullish() }).default({ labels: [] }) })).default([]),
+  labels: z.array(z.object({
+    /** The group plan gave the item: its scorers joined by `,`. Read only for a group that failed; any other shape is none. */
+    item: z.object({ scorers: z.string().optional() }).optional().catch(undefined),
+    outputs: z.object({ labels: z.array(ScoredLabelSchema).nullish(), written: z.array(z.string()).nullish() }).default({}),
+  })).default([]),
 }).default({ labels: [] });
 
 /** A label, or a wait for CI, of a group whose write stored nothing is neither. */
@@ -69,7 +73,13 @@ function labelsOf(outputs: Record<string, JsonValue> | undefined): ScoredLabels 
     return { ok: false, reason: issue === undefined ? 'invalid' : `outputs.${issue.path.join('.')}: ${issue.message}` };
   }
 
-  return { ok: true, labels: parsed.data.labels.flatMap(({ outputs: group }) => group.labels.map((entry) => (NEEDS_WRITE.has(entry.code) && !group.written ? { ...entry, ...UNWRITTEN } : entry))) };
+  return {
+    ok: true,
+    labels: parsed.data.labels.flatMap(({ item, outputs: group }) => (group.labels === null
+      // Its steps failed before it labelled, as an evidence step that found no session does: each scorer got no label.
+      ? (item?.scorers ?? '').split(',').filter((scorer) => scorer !== '').map((scorer) => ({ scorer, ...UNWRITTEN }))
+      : (group.labels ?? []).map((entry) => (NEEDS_WRITE.has(entry.code) && !group.written ? { ...entry, ...UNWRITTEN } : entry)))),
+  };
 }
 
 const DoneSchema = z.object({ done: z.object({ outcome: z.string(), outputs: z.record(z.string(), z.json()).optional() }) });
