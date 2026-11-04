@@ -51,6 +51,8 @@ const BehaviourSchema = z.object({
   reply: z.string().default('Done.'),
   /** A failure the agent writes to the result file instead. */
   failure: z.object({ code: z.string(), message: z.string() }).optional(),
+  /** The result file the agent writes, as it is, instead of one built from `output` or `failure`. */
+  result: z.unknown().optional(),
   /** How long the agent works. */
   hold_ms: z.number().int().nonnegative().default(0),
   /** The agent works until this file exists. */
@@ -203,9 +205,9 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
       // A real agent reads where to write its result in teamai's prompt.
       const result = /Write the workflow result as JSON to (.+?)\.(?:\s|$)/.exec(agent.prompt)?.[1];
 
-      if (result && (does.output !== undefined || does.failure)) {
+      if (result && (does.result !== undefined || does.output !== undefined || does.failure)) {
         fs.mkdirSync(path.dirname(result), { recursive: true });
-        fs.writeFileSync(result, JSON.stringify(does.failure ? { failure: does.failure } : { output: does.output }));
+        fs.writeFileSync(result, JSON.stringify(does.result ?? (does.failure ? { failure: does.failure } : { output: does.output })));
       }
 
       Object.assign(agent, { status: 'idle', sessionId: does.no_session ? null : `fake-session-${agent.id}` });
