@@ -162,6 +162,12 @@ teamai fix · rd573bcff8eef4e10             claude/claude-opus-5-5  closed  /rep
 
 `confined.json` 要求 `verified` 的受限步骤从不交给 Paseo，因为 Paseo 提供的是 `best-effort`。Codex 从不在 Paseo 上评判，因为 Codex 的每种模式都会不经询问就写入。评判的位置在其智能体启动前，在运行详情里显示为 `Paseo confined prompt, best-effort`。
 
+评分从守护进程的智能体写入会话的地方读取步骤的会话：守护进程所属用户的工具主目录。请让守护进程以运行 teamai 的成员身份、在同一台机器上运行。守护进程以其他用户或其他 `HOME` 运行时，这一轮不会被打标签，评分运行的 `evidence` 步骤会说明原因：
+
+```text
+evidence_missing: Pass 1 of step fix in run r080799f10648b1ed cannot be scored: no longer on this machine: claude-code session 346fd0be-1a5a-474b-aedf-24c305d5c1a6 of fix#1. Restore what is missing, or score another pass.
+```
+
 ## 选项
 
 | 键 | 默认值 | 含义 |

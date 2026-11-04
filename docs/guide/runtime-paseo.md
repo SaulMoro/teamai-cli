@@ -162,6 +162,12 @@ The judge runs at `best-effort`, never `verified`:
 
 A confined step whose `confined.json` asks for `verified` never goes to Paseo, whose offer is `best-effort`. Codex never judges on Paseo, since every Codex mode writes without asking. The judge's place shows in the run's details as `Paseo confined prompt, best-effort` until its agent starts.
 
+Scoring reads the step's session where the daemon's agent wrote it: in the tool home of the user the daemon runs as. Run the daemon as the member who runs teamai, on the same machine. A daemon under another user, or another `HOME`, leaves the pass unlabelled, and the score run's `evidence` step says why:
+
+```text
+evidence_missing: Pass 1 of step fix in run r080799f10648b1ed cannot be scored: no longer on this machine: claude-code session 346fd0be-1a5a-474b-aedf-24c305d5c1a6 of fix#1. Restore what is missing, or score another pass.
+```
+
 ## Options
 
 | Key | Default | Meaning |
