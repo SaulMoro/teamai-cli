@@ -7,7 +7,7 @@ This repository's own lint rules. `npm run lint` loads them through `jsPlugins` 
 | `teamai/home-env` | HOME reads outside `src/utils/home.ts`. |
 | `teamai/learnings-root` | Manual learnings-root joins outside their owner. |
 | `teamai/configured-tool-paths` | Manual configured skill, rules, and instruction-file joins outside `src/locate.ts`. |
-| `teamai/launch-env` | Launch environment literals outside `src/launch-context.ts`. |
+| `teamai/launch-env` | A launch variable spelled outside its owner (`src/launch-context.ts`, or `@teamai/runtime-protocol` for `TEAMAI_RUN_DIR`), and any `TEAMAI_` variable spelled in a runtime package. |
 | `teamai/workflow-boundaries` | Workflow entry-point violations and transitive skill-to-local dependencies. |
 | `teamai/no-provider-merge` | Merge operations in providers and delivery, and forbidden delivery/snapshot dependencies. |
 | `teamai/windows-tests` | POSIX constructs in the current `WINDOWS_TESTS` selection. |
