@@ -73,13 +73,21 @@ function labelsOf(outputs: Record<string, JsonValue> | undefined): ScoredLabels 
     return { ok: false, reason: issue === undefined ? 'invalid' : `outputs.${issue.path.join('.')}: ${issue.message}` };
   }
 
-  return {
-    ok: true,
-    labels: parsed.data.labels.flatMap(({ item, outputs: group }) => (group.labels === null
-      // Its steps failed before it labelled, as an evidence step that found no session does: each scorer got no label.
-      ? (item?.scorers ?? '').split(',').filter((scorer) => scorer !== '').map((scorer) => ({ scorer, ...UNWRITTEN }))
-      : (group.labels ?? []).map((entry) => (NEEDS_WRITE.has(entry.code) && !group.written ? { ...entry, ...UNWRITTEN } : entry)))),
-  };
+  const labels: ScoredLabel[] = [];
+
+  for (const [index, { item, outputs: group }] of parsed.data.labels.entries()) {
+    if (group.labels !== null) {
+      labels.push(...(group.labels ?? []).map((entry) => (NEEDS_WRITE.has(entry.code) && !group.written ? { ...entry, ...UNWRITTEN } : entry)));
+      continue;
+    }
+
+    // Its steps failed before it labelled, as an evidence step that found no session does: each scorer got no label.
+    // A group that names no scorers would lose them silently, so the outputs are not ones this teamai reads.
+    if (item?.scorers === undefined) return { ok: false, reason: `outputs.labels.${index}.item.scorers: a group that labelled nothing names no scorers` };
+    labels.push(...item.scorers.split(',').filter((scorer) => scorer !== '').map((scorer) => ({ scorer, ...UNWRITTEN })));
+  }
+
+  return { ok: true, labels };
 }
 
 const DoneSchema = z.object({ done: z.object({ outcome: z.string(), outputs: z.record(z.string(), z.json()).optional() }) });
