@@ -223,7 +223,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
     // A handle per attempt: two attempts on one worktree share its workspace, and keep their own prompts.
     const handle = `${workspace.id}/${request.attempt}`;
-    journal.savePlace(handle, { run: request.run, attempt: request.attempt, workspace: { id: workspace.id, name: workspace.name }, cwd: workspace.directory });
+    journal.savePlace(handle, { run: request.run, attempt: request.attempt, workspace: { id: workspace.id, name: workspace.name }, cwd: workspace.directory, runDir: request.view.runDir });
     write({ op: request.op, event: 'accepted', handle });
     const display = displayOf(handle, live);
     write({ op: request.op, event: 'ready', ...(display && { display }) });
@@ -256,10 +256,10 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       labels: { 'teamai-attempt': `${place.run}/${place.attempt}` },
       config: {
         provider: `${tool}/${model.id}`, modeId: DEFAULT_MODES[tool], ...(effort && { thinkingOptionId: effort }),
-        // Claude's default mode asks before any write, so the result file, and only it, is allowed, as teamai's own launch
-        // does on a POSIX host; the mode stays as it is. The SDK Paseo runs Claude with sends the prompt on stdin, so the
-        // rule is one value.
-        ...(tool === 'claude' && { options: { allowedTools: [`Edit(/${lease.result})`] } }),
+        // Claude's default mode asks before any write, so the result file, as teamai's own launch allows it on a POSIX
+        // host, and the run's scratch directory, which the place gives read-write at its own path, are allowed, and only
+        // they; the mode stays as it is.
+        ...(tool === 'claude' && { options: { allowedTools: [`Edit(/${lease.result})`, `Edit(/${place.runDir}/**)`] } }),
       },
     };
   }
