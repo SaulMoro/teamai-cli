@@ -270,6 +270,17 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()).toEqual([]);
     });
 
+    it('leaves the thread active when the agent writes a result saying the step failed', async () => {
+      const failure = { code: 'tests_failed', message: 'npm test fails in src/cart.test.ts.' };
+      t3.config({ agent: { failure } });
+      const { runtime, handle } = await opened();
+
+      runtime.send(prompt(handle, 'op-0000001d'));
+
+      expect(await ended(runtime, 'op-0000001d')).toMatchObject({ event: 'finished', result: { failure } });
+      expect(t3.threads()[0]).toMatchObject({ status: 'completed', settled: false });
+    });
+
     it('started outside a T3 thread, names no thread it was started from', async () => {
       const { runtime, handle } = await opened();
 
