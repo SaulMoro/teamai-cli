@@ -6132,4 +6132,23 @@ describe('an interactive step in a run whose only driver has several runtimes, n
     expect(onLocal).toMatchObject({ data: { wait: { held: [{ step: 'review', missing: ['hitl'] }] } } });
     expect(onToy).toMatchObject({ data: { wait: { held: [{ step: 'review', missing: ['workspace.new', 'hitl'] }] } } });
   });
+
+  it('fails it tool_unavailable, before a person is asked, when no runtime launches its tool and one of them lacks its workspace', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: review
+    workspace: new
+    interactive: true
+    tool: codex
+    prompt: Review the repository with a person.
+`));
+    const bare: DriverCan = { workspace: [], tools: [], hitl: false };
+    const toolless = { driver: 'toolgap', offers: [{ runtime: 'local', can: local }, { runtime: 'toy', can: bare }] } satisfies SoleDriver;
+
+    const onToy = await leaseNext(config, runId, driverA, { can: bare, alone: toolless, base });
+    await leaseNext(config, runId, driverA, { can: local, alone: toolless, base });
+
+    expect(onToy).toMatchObject({ data: { wait: { held: [{ step: 'review', missing: ['workspace.new', 'tools', 'hitl'] }] } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'review', status: 'failed', failure: { code: 'tool_unavailable', message: 'Step "review" runs on codex, which the driver of this run cannot launch here. Install codex where the run is driven, or remove tool from the step.' } },
+    ] });
+  });
 });
