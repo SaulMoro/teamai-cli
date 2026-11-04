@@ -63,8 +63,8 @@ async function play(threadId) {
   if (readThread(threadId).status !== 'running') return;
 
   if (agent.waits) {
-    // The agent asks for an approval nobody gives.
-    update(threadId, () => ({ status: 'waiting' }));
+    // The agent asks for an approval nobody gives. T3 keeps such a run `running`, with the request pending.
+    update(threadId, () => ({ pendingRequestCount: 1 }));
 
     return;
   }
@@ -148,6 +148,13 @@ const TOOLS = {
     const settled = TERMINAL.has(thread.status);
 
     return ok({ threadId: args.threadId, runId, status: thread.status, timedOut: !settled, ...(settled && { resultRun: { runId, status: thread.status } }) });
+  },
+  t3_thread_read: (args) => {
+    const thread = readThread(args.threadId);
+
+    if (!thread) return fail(`No thread ${args.threadId}.`);
+
+    return ok({ thread: { threadId: thread.threadId, status: thread.status, pendingRequestCount: thread.pendingRequestCount ?? 0, settled: thread.settled }, items: [], hasMore: false });
   },
   t3_thread_interrupt: (args) => {
     const thread = readThread(args.threadId);
