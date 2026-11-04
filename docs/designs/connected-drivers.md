@@ -37,17 +37,17 @@ teamai core imports no sandbox, T3 or Paseo code. The core holds the primitives 
 
 ## Runtime protocol
 
-JSON lines over stdio, `protocol: 1`, validated with zod on teamai's side. An operation is accepted first and finishes later, so a runtime can run work that outlives one request.
+JSON lines over stdio, `protocol: 1`, validated with zod on both sides: `@teamai/runtime-protocol` (`packages/runtime-protocol`) holds the request and reply schemas teamai and every first-party runtime parse with, the one runtime package `src/` imports. An operation is accepted first and finishes later, so a runtime can run work that outlives one request.
 
 | Primitive | Request | Reply and events |
 |---|---|---|
-| `init` | options | the options validated by the runtime (a bad key fails before any step); its offer as a `can` (`CanSchema`, `src/workflow/requirements.ts:163`), including `tools` it can run |
+| `init` | options | the options validated by the runtime (a bad key fails before any step); its offer as a `can` (`CanSchema`, `src/workflow/requirements.ts:163`), including `tools` it can run, and `exec: false` when it runs no command, so command steps and setup go to the next runtime (D3); `prompt: true` when it launches agents its own way |
 | `open` | operation id, run and attempt ids, place view, credentials for this attempt; for a composed runtime, the outer's handle | `accepted` with a handle; then `ready`, or `failed`. A second `open` for the same run and attempt returns the same handle |
 | `exec` | operation id, handle, argv, env, cwd | `accepted`; `output` events tagged `stdout` or `stderr`; then `exited` with the exit code and the complete stdout, or `cancelled` |
-| `prompt` | operation id, handle, lease (tool, model, prompt, session to resume, limits) | for runtimes that launch an agent their own way (T3): `accepted`; then `finished` with the tool's session id, the result JSON and usage, or `failed` |
+| `prompt` | operation id, handle, lease (step, tool, model, the whole prompt with its result instruction, the result file, session to resume, permissions, interactive, turn cap), env, unset, cwd | for a runtime whose `init` said `prompt: true` (T3, Paseo): `accepted`; then `finished` with the tool's session, the result JSON the agent wrote and usage, or `failed`, or `cancelled` after a `cancel`. teamai writes the result to the attempt's result file and keeps the step's timeout with `cancel` |
 | `collect` | handle | the working tree written back into the place, deletions included, never committed, with the result directory and the attempt's tool home; after success and after failure |
 | `cancel` | operation id | `accepted`; the operation ends `cancelled` once no process of it still writes the place |
-| `reattach` | handle | `gone`, or `alive` with each operation's state, including a terminal outcome teamai has not yet recorded |
+| `reattach` | handle | `gone`, or `alive` with each operation's state, including a terminal outcome teamai has not yet recorded: an exec's exit and stdout, a prompt's `finished` session, result and usage |
 | `close` | handle | `closed`; the runtime may drop the handle's retained outcomes |
 
 Recovery rests on two rules. teamai persists the operation id before it sends a request, and a runtime returns the same acceptance and the same terminal outcome for a repeated id until `close`. So a teamai that dies between a runtime's reply and its own write loses nothing: it repeats the request or `reattach`es and reads the outcome. A finished `exec`'s retained outcome carries its complete stdout, so teamai rebuilds the same session, usage and stop reason it would have read live. An `exec` still running when teamai restarts is cancelled and its attempt reported failed with its work kept, because the budget teamai meters from live output cannot be enforced across the gap; a `prompt` reconnects.
