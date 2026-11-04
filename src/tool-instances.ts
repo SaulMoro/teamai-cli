@@ -71,7 +71,7 @@ function sha256(text: string): string {
 }
 
 /** Parses the instance `text` of `file`, which is named after it, or says why teamai does not use it. */
-export function parseToolInstance(file: string, text: string, source: InstanceSource, location = file): { ok: true; instance: ResolvedToolInstance } | RefusedInstance {
+function parseToolInstance({ file, text, source, location }: { file: string; text: string; source: InstanceSource; location: string }): { ok: true; instance: ResolvedToolInstance } | RefusedInstance {
   let raw: unknown;
 
   try {
@@ -139,7 +139,7 @@ async function readInstances(files: readonly string[], source: InstanceSource, l
   const read = await Promise.all(files.map(async (file) => {
     const text = await readText(file);
 
-    return text === undefined ? undefined : parseToolInstance(file, text, source, locationOf(file));
+    return text === undefined ? undefined : parseToolInstance({ file, text, source, location: locationOf(file) });
   }));
 
   return read.flatMap((parsed) => {
