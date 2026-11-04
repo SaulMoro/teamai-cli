@@ -257,6 +257,16 @@ Judge the review.
     expect(runs()).toEqual(before);
   });
 
+  it('keeps the code a runtime fails an open with in the step\'s failure', async () => {
+    writeDefinition('toybadopen', [{ use: 'toy', options: { state, open_fails: { code: 'bad_option', message: 'Option "image" names acme/agent:9, which this machine cannot pull' } } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'mixed', '--driver', 'toybadopen'], repo, env());
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    const [build] = readRunState(runOf(ran)).steps;
+    expect(build).toMatchObject({ id: 'build', status: 'failed', failure: { code: 'runtime_failed', message: expect.stringContaining('(bad_option): Option "image" names acme/agent:9') } });
+  });
+
   it('refuses an agent\'s start that invoke denies before it opens any runtime of the definition', async () => {
     writeDefinition('toyonly', [{ use: 'toy', options: { state } }]);
 
@@ -289,7 +299,7 @@ Judge the review.
     const attempt = attemptOf(readRunState(runId).steps[0]);
     const handle = `toy-${runId}-${attempt}`;
     expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'collected', closeFailed: { code: 'close_failed', message: `The toy keeps place ${handle}: close_fails is set.` } });
-    expect(ran.stderr).toContain(`Step runtime "toy" could not close the place of attempt ${attempt}, so what ran there may still run: The toy keeps place ${handle}: close_fails is set.`);
+    expect(ran.stderr).toContain(`Step runtime "toy" could not close the place of attempt ${attempt}, so what ran there may still run (close_failed): The toy keeps place ${handle}: close_fails is set.`);
   });
 
   it('records why each runtime holds a step back, which the run\'s details show once the driver stops', async () => {

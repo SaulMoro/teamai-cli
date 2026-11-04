@@ -131,7 +131,7 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
       case 'interrupted':
         return interrupted();
       case 'failed':
-        return { code: 'runtime_failed', message: `The step runtime could not run the command: ${end.failure.message}` };
+        return { code: 'runtime_failed', message: `The step runtime could not run the command (${end.failure.code}): ${end.failure.message}` };
       case 'lost':
         return lost('the command', end.failure);
       default: {
@@ -151,7 +151,7 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
 
 /** A step whose runtime stopped answering while it ran: what it started may still run there. */
 function lost(what: string, failure: RuntimeFailure): WorkflowFailure {
-  return { code: 'runtime_lost', message: `The step runtime stopped answering while it ran ${what}, which may still run there: ${failure.message}` };
+  return { code: 'runtime_lost', message: `The step runtime stopped answering while it ran ${what}, which may still run there (${failure.code}): ${failure.message}` };
 }
 
 function interrupted(): WorkflowFailure {
@@ -198,7 +198,7 @@ export function runtimeLauncher(run: AttemptRun, { view, toolHome, unset, creden
         case 'interrupted':
           return { failure: interrupted() };
         case 'failed':
-          return { failure: { code: 'runtime_failed', message: `The step runtime could not run ${executable}: ${end.failure.message}` } };
+          return { failure: { code: 'runtime_failed', message: `The step runtime could not run ${executable} (${end.failure.code}): ${end.failure.message}` } };
         case 'lost':
           return { failure: lost(executable, end.failure) };
         default: {
