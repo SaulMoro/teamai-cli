@@ -20,12 +20,14 @@ const ThreadSchema = z.object({
   /** A judge's: the read-only copy of its directory, in the thread's own scratch folder, which close removes. */
   copy: z.string().optional(),
   /**
-   * The op ended while T3 may still run the thread: teamai could not stop it, or lost track of it. close stops it first,
-   * and keeps the place, and a judge's copy, while T3 will not; nothing settles it before then.
+   * The runtime saw the thread's run, and the work it delegated, settle, or a stop it asked for take effect. Until then
+   * the thread is the runtime's to stop, whatever ended its op and whichever runtime process launched it: close stops it
+   * first, and keeps the place, and a judge's copy, while T3 will not; nothing settles it before then.
    */
-  mayStillRun: z.boolean().optional(),
-  /** How asking T3 to settle the thread went, once the runtime asked; it asks once. */
-  settlement: z.enum(['settled', 'failed']).optional(),
+  ended: z.object({
+    /** How asking T3 to settle the thread went, once the runtime asked; it asks once. */
+    settlement: z.enum(['settled', 'failed']).optional(),
+  }).optional(),
 });
 
 export type ThreadRecord = z.infer<typeof ThreadSchema>;

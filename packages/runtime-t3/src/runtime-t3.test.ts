@@ -779,6 +779,61 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
     });
 
+    // A thread the journal holds stays the runtime's to stop until it saw that thread stop, whatever ended its op and
+    // whichever runtime process launched it.
+    describe('when a prompt resumed after a restart is refused while its thread still runs', () => {
+      /** A step thread left running by a runtime that exited, and a second runtime, set up by `before`, that it is resent to. */
+      const resumed = async (op: string, before: () => void): Promise<{ runtime: Connection; handle: string }> => {
+        t3.config({ agent: { hold: true, output: {} } });
+        const first = await opened();
+        first.runtime.send(prompt(first.handle, op));
+        await first.runtime.next((line) => line['op'] === op && line['event'] === 'accepted');
+        await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+        await first.runtime.close();
+        before();
+
+        const runtime = start();
+        runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+        runtime.send(prompt(first.handle, op));
+
+        return { runtime, handle: first.handle };
+      };
+
+      it('keeps the thread when T3 no longer offers the model: collect leaves it, and close stops it first', async () => {
+        const { runtime, handle } = await resumed('op-00000045', () => t3.config({ providers: [{ ...CLAUDE, models: [{ id: 'claude-sonnet-5-5' }] }, CODEX] }));
+
+        expect(await ended(runtime, 'op-00000045')).toMatchObject({ event: 'failed', failure: { code: 'model_unavailable' } });
+        runtime.send({ type: 'collect', handle });
+        expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'collected', handle });
+        expect(t3.threads()[0]).toMatchObject({ status: 'running', settled: false });
+
+        t3.config({ interruptFails: true });
+        runtime.send({ type: 'close', handle });
+        expect(await runtime.next((line) => line['handle'] === handle)).toMatchObject({ event: 'close_failed', failure: { code: 'thread_still_runs' } });
+        runtime.send({ type: 'reattach', handle });
+        expect(await runtime.next((line) => line['handle'] === handle)).toMatchObject({ event: 'alive', ops: [{ op: 'op-00000045', state: 'failed' }] });
+
+        t3.config({ interruptFails: false });
+        runtime.send({ type: 'close', handle });
+
+        expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'closed', handle });
+        expect(t3.threads()).toHaveLength(1);
+        expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+      });
+
+      it('keeps the thread when T3 refuses the repeated launch that looks it up, and close stops it', async () => {
+        const { runtime, handle } = await resumed('op-00000046', () => t3.config({ launchFails: true }));
+
+        expect(await ended(runtime, 'op-00000046')).toMatchObject({ event: 'failed', failure: { code: 't3_launch_failed', message: expect.stringContaining('T3 Code cannot launch threads now.') } });
+        runtime.send({ type: 'close', handle });
+
+        expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'closed', handle });
+        expect(t3.calls().filter((call) => call.tool === 't3_thread_interrupt')).toHaveLength(1);
+        expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+      });
+    });
+
     it('answers a repeated prompt that ended with the same outcome, before and after its own restart', async () => {
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-00000018'));
