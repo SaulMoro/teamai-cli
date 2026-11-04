@@ -182,7 +182,7 @@ $ teamai workflow start readme-test-section --driver t3only
 `write` 和上文一样作为项目里的线程运行。teamai 自己的评分命令（evidence、label、write）在这台机器上运行，不需要 agent。评审作为第二个线程 `score[0].judge · teamai rdecc208adbba4b79` 运行，出现在 T3 的 **No project** 下：
 
 - 它是一个独立的新线程，在一个新的 scratch 文件夹（`~/.t3/scratch/…`）里。teamai 把评审要读的证据（会话记录、diff、`evidence.json`）复制进这个文件夹，并把副本设为只读。
-- 它的第一条消息要求它只读这个文件夹，给出回复的 JSON Schema，并把 teamai 提示词里的每个路径都指向副本。
+- 它的第一条消息要求它只读这个文件夹，给出回复的 JSON Schema，并把 teamai 提示词里每处提到证据目录的地方都指向副本。
 - 它的最后一条消息就是回复：`{"answer":{"label":"good","reasoning":"The step asked for a \"## Test\" section … diff.patch adds exactly that …"}}`。
 - 它和步骤线程一样以 Auto 运行，或者以你收紧的 `runtime_mode` 运行。读到回复后 teamai 会把线程标为已处理（settle），并在评审的位置关闭时删除副本。
 
