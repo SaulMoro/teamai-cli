@@ -34,7 +34,13 @@ const AgentCreateSchema = z.object({
   title: z.string(),
   prompt: z.string(),
   labels: z.record(z.string(), z.string()),
-  config: z.object({ provider: z.string(), modeId: z.string(), thinkingOptionId: z.string().optional() }),
+  config: z.object({
+    provider: z.string(),
+    modeId: z.string(),
+    thinkingOptionId: z.string().optional(),
+    /** The provider's own launch options: for Claude, the tools it may use without asking. */
+    options: z.object({ allowedTools: z.array(z.string()) }).optional(),
+  }),
 });
 
 export type AgentCreate = z.infer<typeof AgentCreateSchema>;
@@ -89,6 +95,13 @@ export function journal(root: string) {
   const cancelFile = (op: OpId): string => path.join(root, 'ops', `${op}.cancel`);
   const names = (dir: string): string[] => (fs.existsSync(dir) ? fs.readdirSync(dir).sort() : []);
 
+  const places = (): Array<{ handle: string; place: Place }> => names(path.join(root, 'places')).flatMap((name) => {
+    const handle = decodeURIComponent(name.replace(/\.json$/, ''));
+    const place = read(placeFile(handle), PlaceSchema);
+
+    return place ? [{ handle, place }] : [];
+  });
+
   const promptsOf = (handle: string): Array<{ op: OpId; record: PromptRecord }> => names(path.join(root, 'ops')).flatMap((name) => {
     const op = OpIdSchema.safeParse(name.replace(/\.json$/, ''));
     const record = name.endsWith('.json') && op.success ? read(promptFile(op.data), PromptRecordSchema) : undefined;
@@ -100,16 +113,9 @@ export function journal(root: string) {
     place: (handle: string): Place | undefined => read(placeFile(handle), PlaceSchema),
     savePlace: (handle: string, place: Place): void => write(placeFile(handle), place),
     /** The handle already opened for an attempt, so a repeated open opens no second place. */
-    handleOf({ run, attempt }: { run: string; attempt: string }): string | undefined {
-      for (const name of names(path.join(root, 'places'))) {
-        const handle = decodeURIComponent(name.replace(/\.json$/, ''));
-        const place = read(placeFile(handle), PlaceSchema);
-
-        if (place?.run === run && place.attempt === attempt) return handle;
-      }
-
-      return undefined;
-    },
+    handleOf: ({ run, attempt }: { run: string; attempt: string }): string | undefined => places().find(({ place }) => place.run === run && place.attempt === attempt)?.handle,
+    /** The handles open on a Paseo workspace, which the last of them archives when it closes. */
+    handlesIn: (workspaceId: string): string[] => places().filter(({ place }) => place.workspace.id === workspaceId).map(({ handle }) => handle),
     prompt: (op: OpId): PromptRecord | undefined => read(promptFile(op), PromptRecordSchema),
     savePrompt: (op: OpId, record: PromptRecord): void => write(promptFile(op), record),
     promptsOf,

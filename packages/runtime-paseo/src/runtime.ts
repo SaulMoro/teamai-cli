@@ -121,6 +121,13 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     }
   };
 
+  /** What the run's details show of a prompt's agent: its title, a link that opens it in Paseo, and where it runs. */
+  const agentDisplay = (record: AgentPrompt, workspace: string, live: Daemon): RuntimeDisplay => ({
+    label: record.create.title.slice(0, 80),
+    url: live.link(record.create.agentId),
+    fields: { agent: record.create.agentId, workspace, model: record.create.config.provider },
+  });
+
   /** What the run's details show of a handle: the latest agent it runs, or the workspace before it runs one. */
   const displayOf = (handle: string, live: Daemon): RuntimeDisplay | undefined => {
     const place = journal.place(handle);
@@ -130,11 +137,13 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
     if (!latest) return { label: `Paseo workspace ${place.workspace.name}`.slice(0, 80), fields: { workspace: place.workspace.id, daemon: `Paseo ${live.version}` } };
 
-    return {
-      label: latest.create.title.slice(0, 80),
-      url: live.link(latest.create.agentId),
-      fields: { agent: latest.create.agentId, workspace: place.workspace.id, model: latest.create.config.provider },
-    };
+    return agentDisplay(latest, place.workspace.id, live);
+  };
+
+  /** Accepts a prompt whose agent exists, showing that agent. */
+  const accept = (op: OpId, record: AgentPrompt, live: Daemon): void => {
+    const place = journal.place(record.handle);
+    write({ op, event: 'accepted', ...(place && { display: agentDisplay(record, place.workspace.id, live) }) });
   };
 
   async function init(request: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> {
@@ -236,7 +245,13 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       title: `teamai ${lease.step} · ${place.run}`,
       prompt: lease.prompt,
       labels: { 'teamai-attempt': `${place.run}/${place.attempt}` },
-      config: { provider: `${tool}/${model.id}`, modeId: DEFAULT_MODES[tool], ...(effort && { thinkingOptionId: effort }) },
+      config: {
+        provider: `${tool}/${model.id}`, modeId: DEFAULT_MODES[tool], ...(effort && { thinkingOptionId: effort }),
+        // Claude's default mode asks before any write, so the result file, and only it, is allowed, as teamai's own launch
+        // does on a POSIX host; the mode stays as it is. The SDK Paseo runs Claude with sends the prompt on stdin, so the
+        // rule is one value.
+        ...(tool === 'claude' && { options: { allowedTools: [`Edit(/${lease.result})`] } }),
+      },
     };
   }
 
@@ -251,11 +266,16 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       return;
     }
 
-    if (known) {
-      write({ op, event: 'accepted' });
+    if (known?.outcome || (known && waiting.has(op))) {
+      accept(op, known, live);
 
       if (known.outcome) send(op, known.outcome);
-      else if (!waiting.has(op)) await follow(live, op, known);
+
+      return;
+    }
+
+    if (known) {
+      await follow(live, op, known);
 
       return;
     }
@@ -287,7 +307,6 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
     const record: AgentPrompt = { kind: 'agent', handle: request.handle, tool, result: request.lease.result, cwd: place.cwd, create };
     journal.savePrompt(op, record);
-    write({ op, event: 'accepted' });
     await follow(live, op, record);
   }
 
@@ -312,6 +331,8 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
       return;
     }
+
+    accept(op, record, live);
 
     // A cancel that came before the agent existed, or to a runtime since killed, is sent now that it does.
     if (journal.isCancelled(op)) {
@@ -413,6 +434,27 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     following?.stop();
   }
 
+  /** Ends an attempt's place: the last attempt on a Paseo workspace archives it, which stops what still runs there. */
+  async function closePlace(live: Daemon, handle: string): Promise<void> {
+    const place = journal.place(handle);
+
+    if (place && journal.handlesIn(place.workspace.id).every((other) => other === handle)) {
+      try {
+        await live.archive(place.workspace.id);
+      } catch (error) {
+        write({
+          event: 'close_failed', handle,
+          failure: { code: 'close_failed', message: `Paseo did not archive workspace ${place.workspace.name} (${place.workspace.id}): ${error instanceof Error ? error.message : String(error)}. Its agents may still run; archive it in the Paseo app.` },
+        });
+
+        return;
+      }
+    }
+
+    journal.forget(handle);
+    write({ event: 'closed', handle });
+  }
+
   async function answer(request: RuntimeRequest): Promise<void> {
     if (request.type === 'init') {
       await init(request);
@@ -465,8 +507,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       }
 
       case 'close':
-        journal.forget(request.handle);
-        write({ event: 'closed', handle: request.handle });
+        await closePlace(live, request.handle);
 
         return;
       default: {

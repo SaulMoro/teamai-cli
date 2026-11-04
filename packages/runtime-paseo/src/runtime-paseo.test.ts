@@ -23,7 +23,7 @@ const ATTEMPT = 'a0123abcd';
 
 const behave = (behaviour: Behaviour): void => fs.writeFileSync(path.join(daemonState, 'behaviour.json'), JSON.stringify(behaviour));
 
-/** The agent creates and cancels the daemon received, as they crossed the wire. */
+/** The agent creates and cancels, and the workspace archives, the daemon received, as they crossed the wire. */
 const received = (): Array<Record<string, unknown> & { type: string }> => {
   const file = path.join(daemonState, 'requests.jsonl');
 
@@ -108,6 +108,8 @@ describe('teamai-runtime-paseo', () => {
       config: { provider: 'claude', model: 'claude-opus-5-5', modeId: 'default', cwd: worktree, title: `teamai review · ${RUN}` },
       labels: { 'teamai-attempt': `${RUN}/${ATTEMPT}` },
     });
+    // Claude's default mode asks before any write: the result file, and only it, is allowed, as teamai's own launch does.
+    expect(create).toMatchObject({ config: { providerOptions: { allowedTools: [`Edit(/${path.join(dir, 'out', 'result.json')})`] } } });
     // No env crosses: Paseo keeps a create's env in plain text.
     expect(create).not.toHaveProperty('env');
   });
@@ -148,6 +150,7 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool } });
     const [create] = received();
     expect(create).toMatchObject({ config: { provider: tool, model, modeId } });
+    expect(create).not.toHaveProperty('config.providerOptions');
   });
 
   it('cancels a running prompt: the agent is cancelled, and the prompt ends cancelled though Paseo reports the agent idle', async () => {
@@ -296,7 +299,7 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', result: { output: { ok: true } } });
   });
 
-  it('shows the workspace when it opens, and the agent with a link to it in Paseo once a prompt runs', async () => {
+  it('shows the workspace when it opens, and the agent with a link to it in Paseo once the prompt is accepted', async () => {
     behave({ output: { ok: true } });
     const runtime = start();
     await ready(runtime);
@@ -305,13 +308,65 @@ describe('teamai-runtime-paseo', () => {
 
     expect(await runtime.next(isOp('op-0000000a', 'ready'))).toEqual({ op: 'op-0000000a', event: 'ready', display: { label: 'Paseo workspace worktree', fields: { workspace, daemon: 'Paseo 0.14.0' } } });
     runtime.send(promptRequest(handle, 'op-0000000b'));
+    const accepted = await runtime.next(isOp('op-0000000b', 'accepted'));
     await runtime.next(isEnd('op-0000000b'));
     const agentId = String(received()[0]?.agentId);
-    runtime.send({ type: 'reattach', handle });
+    const agent = { label: `teamai review · ${RUN}`, url: `paseo://h/srv_fake0001/agent/${agentId}`, fields: { agent: agentId, workspace, model: 'claude/claude-opus-5-5' } };
 
-    expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({
-      display: { label: `teamai review · ${RUN}`, url: `paseo://h/srv_fake0001/agent/${agentId}`, fields: { agent: agentId, workspace, model: 'claude/claude-opus-5-5' } },
+    expect(accepted).toEqual({ op: 'op-0000000b', event: 'accepted', display: agent });
+    runtime.send({ type: 'reattach', handle });
+    expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ display: agent });
+  });
+
+  it('archives the Paseo workspace when teamai closes the attempt, and keeps nothing of it', async () => {
+    behave({ output: { ok: true } });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await runtime.next(isEnd('op-0000000b'));
+
+    runtime.send({ type: 'close', handle });
+
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: handle.split('/')[0] }]);
+    runtime.send({ type: 'reattach', handle });
+    expect(await runtime.next((line) => 'event' in line && line.event === 'gone')).toEqual({ event: 'gone', handle });
+  });
+
+  it('answers close_failed when Paseo will not archive the workspace, and keeps the attempt to close again', async () => {
+    behave({ output: { ok: true }, refuse_archive: 'Workspace is busy' });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    const workspace = handle.split('/')[0];
+
+    runtime.send({ type: 'close', handle });
+
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({
+      event: 'close_failed', handle,
+      failure: { code: 'close_failed', message: `Paseo did not archive workspace worktree (${String(workspace)}): Workspace is busy. Its agents may still run; archive it in the Paseo app.` },
     });
+    runtime.send({ type: 'reattach', handle });
+    expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ event: 'alive', handle });
+  });
+
+  it('archives a workspace two attempts share only when the last of them closes', async () => {
+    const runtime = start();
+    await ready(runtime);
+    const first = await opened(runtime);
+    runtime.send({ type: 'open', op: 'op-0000000c', run: RUN, attempt: 'a4567cdef', credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'run'), toolHome: {} } });
+    const accepted = await runtime.next(isOp('op-0000000c', 'accepted'));
+    const second = 'handle' in accepted ? accepted.handle : undefined;
+    const archives = (): unknown[] => received().filter((request) => request.type === 'archive_workspace_request');
+
+    expect(second?.split('/')[0]).toBe(first.split('/')[0]);
+    runtime.send({ type: 'close', handle: first });
+    expect(await runtime.next((line) => 'event' in line && line.event === 'closed')).toEqual({ event: 'closed', handle: first });
+    expect(archives()).toEqual([]);
+    runtime.send({ type: 'close', handle: String(second) });
+    expect(await runtime.next((line) => 'event' in line && line.event === 'closed')).toEqual({ event: 'closed', handle: second });
+    expect(archives()).toMatchObject([{ workspaceId: first.split('/')[0] }]);
   });
 
   it.each([
