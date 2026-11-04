@@ -1514,7 +1514,7 @@ exec 或提示运行期间退出的运行时，出于同样的原因会让它失
 → {"type":"cancel","op":"op-83bfffde9ce3"}
 ```
 
-无法停止某个操作时，让它以 `cancel_failed` 结束为 `failed`，消息里说明怎么处理，并在 `reattach` 时继续报告这个状态。teamai 随后不会取回这个位置，也不会关闭它。之后对同一个操作的 `cancel` 会再试一次停止。不要为此使用别的代码：任何其他 `failed`，即使紧跟在 `cancel` 之后，teamai 都当作这个操作已经结束，会取回并关闭这个位置：
+无法停止某个操作时，让它以 `cancel_failed` 结束为 `failed`，消息里说明怎么处理，并在 `reattach` 时继续报告这个状态。teamai 随后不会取回这个位置，也不会关闭它。之后对同一个操作的 `cancel` 会再试一次停止：从读到它的那一刻起，在 `reattach` 时把这个操作报告为 `running`，直到这次停止被确认或再次失败，因为 teamai 会把接下来拿到的状态当作这次 cancel 的结果。不要为此使用别的代码：任何其他 `failed`，即使紧跟在 `cancel` 之后，teamai 都当作这个操作已经结束，会取回并关闭这个位置：
 
 ```text
 ← {"op":"op-83bfffde9ce3","event":"failed","failure":{"code":"cancel_failed","message":"docker could not stop container teamai-r7-a1: the daemon is not running. Start Docker, then run teamai workflow cancel r7 again."}}

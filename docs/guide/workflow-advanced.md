@@ -1514,7 +1514,7 @@ teamai opens your runtime in `recover` mode whenever it must stop an attempt, as
 → {"type":"cancel","op":"op-83bfffde9ce3"}
 ```
 
-When you cannot stop an operation, end it `failed` with `cancel_failed` and a message that says what to do, and keep reporting that state on `reattach`. teamai then does not bring the place back or close it. A later `cancel` of the same operation tries the stop again. Use no other code for this: teamai reads any other `failed`, even one that follows a `cancel`, as the operation's end, and brings the place back and closes it:
+When you cannot stop an operation, end it `failed` with `cancel_failed` and a message that says what to do, and keep reporting that state on `reattach`. teamai then does not bring the place back or close it. A later `cancel` of the same operation tries the stop again: from the moment you read it, report the operation `running` on `reattach` until that stop is confirmed or fails again, since teamai reads the state it gets next as that cancel's outcome. Use no other code for this: teamai reads any other `failed`, even one that follows a `cancel`, as the operation's end, and brings the place back and closes it:
 
 ```text
 ← {"op":"op-83bfffde9ce3","event":"failed","failure":{"code":"cancel_failed","message":"docker could not stop container teamai-r7-a1: the daemon is not running. Start Docker, then run teamai workflow cancel r7 again."}}

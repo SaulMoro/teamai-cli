@@ -85,8 +85,10 @@ const CredentialsSchema = EnvSchema.default({});
 
 /**
  * The one code of a stop a runtime could not confirm: a `cancel` it could not carry out ends the operation `failed` with
- * it, and `reattach` keeps reporting that until a later `cancel` stops the operation. teamai takes an operation as still
- * running while it reports `running`, or `failed` with this code; any other `failed` is the operation's end.
+ * it, and `reattach` keeps reporting that until a later `cancel` replaces it: from the moment the runtime reads that
+ * `cancel`, `reattach` reports the operation `running` until the new stop is confirmed or fails again, so teamai never
+ * reads the old failure as the new cancel's outcome. teamai takes an operation as still running while it reports
+ * `running`, or `failed` with this code; any other `failed` is the operation's end.
  */
 export const CANCEL_FAILED = 'cancel_failed';
 
