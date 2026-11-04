@@ -68,10 +68,12 @@ export interface ServeOptions {
   startedFrom?: string;
 }
 
-/** A prompt this process follows: the thread once launched, and whether teamai cancelled it. */
+/** A prompt this process follows: the thread once launched, whether teamai cancelled it, and the stop under way. */
 interface Running {
   cancelled: boolean;
   thread?: string;
+  /** Answers why T3 did not stop the thread, or nothing once it stopped. The op ends cancelled only on a stop. */
+  stopping?: Promise<string | undefined>;
 }
 
 interface Session {
@@ -369,7 +371,14 @@ export function serve(options: ServeOptions): Promise<void> {
         continue;
       }
 
-      if (state?.cancelled) return { op: request.op, state: 'cancelled' };
+      const stopping = state?.stopping;
+
+      if (stopping) {
+        if (await stopping === undefined) return { op: request.op, state: 'cancelled' };
+
+        // T3 did not stop it, so the thread still runs: it is followed, and journaled running, as before.
+        if (state.stopping === stopping) delete state.stopping;
+      }
 
       if (!TERMINAL.has(waited.status)) {
         // T3 keeps a run that asks for an approval running, with the request pending; nobody answers it unattended.
@@ -539,7 +548,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
     accept(thread);
 
-    if (state.cancelled) await whyNotStopped(s.t3, thread.threadId);
+    if (state.cancelled) state.stopping = whyNotStopped(s.t3, thread.threadId);
 
     try {
       end(await follow(s, request, thread));
@@ -576,7 +585,10 @@ export function serve(options: ServeOptions): Promise<void> {
 
     state.cancelled = true;
 
-    if (state.thread && session) await whyNotStopped(session.t3, state.thread);
+    if (state.thread && session) {
+      state.stopping = whyNotStopped(session.t3, state.thread);
+      await state.stopping;
+    }
   };
 
   /** Ends the place. A thread still running there is stopped first; one T3 will not stop keeps the place, and close fails. */
@@ -591,12 +603,12 @@ export function serve(options: ServeOptions): Promise<void> {
 
     for (const { op, thread } of left) {
       const live = running.get(op);
+      const stopping = session && whyNotStopped(session.t3, thread.threadId);
 
-      if (live) live.cancelled = true;
-      const why = session && await whyNotStopped(session.t3, thread.threadId);
+      if (live && stopping) live.stopping = stopping;
+      const why = await stopping;
 
       if (why !== undefined) {
-        if (live) live.cancelled = false;
         write({
           event: 'close_failed', handle, failure: {
             code: 'thread_still_runs',
