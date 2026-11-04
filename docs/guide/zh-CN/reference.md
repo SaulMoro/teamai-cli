@@ -279,7 +279,7 @@ Tool "acme-claude" comes from the team repo (…/tools/acme-claude.yaml, content
 Run it? [y/N]
 ```
 
-你输入的一行只回答这个问题。同一终端上正在等待的审批或选择，会在你回答后重新询问。`teamai workflow cancel` 会让这个问题不经回答直接结束，命令不会运行。
+你输入的一行只回答这个问题。同一终端上正在等待的审批或选择，会在你回答后重新询问。`teamai workflow cancel` 会让这个问题不经回答直接结束，命令不会运行。按 Ctrl-C 会停止运行而不作回答，`teamai workflow resume` 会再问一次。
 
 无人值守的运行（`TEAMAI_MODE=unattended`、CI、没有终端）会以 `tool_not_accepted` 拒绝，直到有人在终端里接受一次。接受结果按文件内容记在 `~/.teamai/trust/tools.json`：不改这个文件的提交不会再问，改了文件会再问。只设 `home` 或 `paths` 的实例运行内置命令，不需要接受。
 
@@ -297,7 +297,23 @@ paths: { skills: .claude/team-skills, rules: .claude/rules }
 
 **自己的版本。** `~/.teamai/tools/<name>.yaml` 放你自己的实例。teamai 只读这个目录，从不写入。这里的实例会替换团队同名实例（只对你生效），不需要接受；`workflow resume --next` 会忽略它，因为接手的是队友的运行，用团队的工具。
 
-**实例从哪里来。** `tools/<name>.yaml`，以及 `tools/<namespace>/<name>.yaml`（替换根目录的同名实例）。两个 namespace 定义同一个名字，或两个团队仓库对同一个名字定义不同，算冲突：两个都不用，并给出提示。文件里出现 `command`、`home`、`paths` 以外的键，或 `command` 是 `./scripts/acme-claude` 这样的路径，都会被拒绝，并指出问题：路径上的程序可以在文件不变的情况下被改掉，接受就管不到它。
+它的 `command` 同样是 PATH 上的一个命令名。要运行你自己编译的版本，把它所在的目录加到 PATH，再写可执行文件的名字：
+
+```yaml
+# ~/.teamai/tools/acme-claude.yaml
+schemaVersion: v1alpha1
+name: acme-claude
+extends: claude
+command: acme-claude-dev           # 在 ~/src/acme-claude/bin 里找到；写成 ~/src/acme-claude/bin/acme-claude-dev 会被拒绝
+home: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }
+```
+
+```bash
+export PATH="$HOME/src/acme-claude/bin:$PATH"     # 写在 ~/.zshrc 或 ~/.bashrc 里
+teamai workflow start review --tools default=acme-claude
+```
+
+**实例从哪里来。** `tools/<name>.yaml`，以及 `tools/<namespace>/<name>.yaml`（替换根目录的同名实例）。两个 namespace 定义同一个名字，或两个团队仓库对同一个名字定义不同，算冲突：两个都不用，并给出提示。文件里出现 `command`、`home`、`paths` 以外的键，或 `command` 是 `./scripts/acme-claude` 这样的路径、含有 `:`、`*` 或 `?`，都会被拒绝，并指出问题：路径上的程序可以在文件不变的情况下被改掉，接受就管不到它。teamai 只在 PATH 的目录里查找 `command`，Windows 上也一样，所以检出目录里的同名文件不会代替它运行。
 
 ```text
 Tool instance …/tools/acme-claude.yaml is not valid: it sets sessions, and an instance sets only command, home and paths. …
