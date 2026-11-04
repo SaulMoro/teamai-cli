@@ -26,7 +26,7 @@ export const DEFAULT_MODES: Readonly<Record<PaseoTool, string>> = { claude: 'def
  * The Paseo mode a tool answers a confined prompt in: one that reads without asking and asks before it edits or runs
  * anything, which ends the prompt. Each mode Paseo lists for Codex writes the workspace without asking, and Paseo
  * refuses any other, so Codex answers in `auto`, which asks before anything its sandbox does not allow, with its
- * sandbox set read-only (`CONFINED_CODEX_OPTIONS`).
+ * sandbox set read-only (`CONFINED_OPTIONS`).
  */
 export const CONFINED_MODES: Readonly<Record<PaseoTool, string>> = { claude: 'default', codex: 'auto', opencode: 'plan' };
 
