@@ -592,4 +592,18 @@ describe('teamai-runtime-paseo', () => {
     runtime.send(promptRequest(handle, 'op-0000000c'));
     expect(await runtime.next(isEnd('op-0000000c'))).toEqual({ op: 'op-0000000c', event: 'failed', failure: { code: 'tool_failed', message: 'claude did not write a valid workflow result' } });
   });
+
+  it('fails a step whose agent wrote its result but has no session in Paseo, saying so rather than blaming the result', async () => {
+    behave({ output: { verdict: 'approve' }, no_session: true });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual({
+      op: 'op-0000000b', event: 'failed',
+      failure: { code: 'tool_failed', message: 'Paseo reported no session for the claude agent, so teamai cannot record or score its pass. Run `teamai workflow retry` to run it again.' },
+    });
+  });
 });
