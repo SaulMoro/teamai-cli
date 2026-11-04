@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { PaseoAgent, PaseoApi } from '@getpaseo/client';
 import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import type { WebSocketFactory } from '@getpaseo/client/internal/daemon-client-transport-types';
@@ -184,6 +185,13 @@ export async function connect(url: string, paseo: PaseoClient): Promise<Daemon |
         const resolved = /^\s*Resolved path: (.+)$/m.exec((await api.providers.diagnostic('codex')).diagnostic)?.[1]?.trim();
 
         if (resolved === undefined || resolved === 'not found') return 'Paseo reports no path for it; run `paseo provider diagnostic codex` on the daemon\'s host to see why';
+
+        // The daemon names what teamai runs as the member, so it runs only an absolute path to a codex: a relative one would
+        // resolve on teamai's PATH, not the daemon's.
+        if (!path.isAbsolute(resolved) || path.basename(resolved) !== 'codex') {
+          return `Paseo resolves it to "${resolved}", which is not an absolute path to a codex; run \`paseo provider diagnostic codex\` on the daemon's host to see why`;
+        }
+
         let status: Awaited<ReturnType<typeof execCommand>>;
 
         try {
