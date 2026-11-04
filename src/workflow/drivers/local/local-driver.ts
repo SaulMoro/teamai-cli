@@ -927,7 +927,12 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const askPerson: AskPerson | undefined = personAnswers(mode) ? async (text, signal) => {
     stepAsks += 1;
     const before = stepTurns;
-    const stopped = new Promise<void>((resolve) => { signal.addEventListener('abort', () => resolve(), { once: true }); });
+
+    // A listener added to an aborted signal never fires, and a step may be stopped before it asks.
+    const stopped = new Promise<void>((resolve) => {
+      if (signal.aborted) resolve();
+      else signal.addEventListener('abort', () => resolve(), { once: true });
+    });
 
     const turn = (async () => {
       await Promise.race([before, stopped]);
