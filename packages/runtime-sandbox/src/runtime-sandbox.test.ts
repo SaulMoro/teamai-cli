@@ -342,6 +342,24 @@ describe('a prompt attempt in a container', () => {
     expect(engine.containers()).toEqual([]);
   });
 
+  it('stops an exec still running when teamai closes its place, ends it as cancelled, then answers closed', async () => {
+    engine.stopLag(1_000);
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    const op = newOp();
+    connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'touch started; sleep 30'] });
+    await connection.next((message) => message.op === op && message.event === 'accepted');
+    await vi.waitFor(() => { expect(fs.existsSync(path.join(at.worktree, 'started'))).toBe(true); }, { timeout: 10_000 });
+
+    connection.send({ type: 'close', handle: HANDLE });
+
+    expect(await connection.next((message) => (message.op === op && message.event !== 'output') || message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ op, event: 'cancelled' });
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(engine.containers()).toEqual([]);
+  });
+
   it('collects with the work already at its host path, and close removes the container', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });

@@ -10,7 +10,9 @@
 //   FAKE_ENGINE_STATE   its state directory; a file `down` there makes it answer as a stopped daemon, a file
 //                       `rm-fails` makes `rm` fail as a daemon that cannot remove the container, a file `no-policy`
 //                       makes sbx answer as one whose network policy was never initialized, and a file
-//                       `secrets/<service>` is an sbx secret its proxy holds
+//                       `secrets/<service>` is an sbx secret its proxy holds; a file `stop-lag` holding a number of
+//                       milliseconds makes an `exec` whose process was stopped end that much later, as a real exec
+//                       client notices its container stopped only after the stop command returns
 //   FAKE_ENGINE_IMAGES  JSON: image (or sbx agent) name -> the directory its tools are in (the image's PATH)
 //   FAKE_ENGINE_NAME    docker, podman or sbx, which it answers as
 //   FAKE_ENGINE_LOG     optional: where argv lines go
@@ -116,7 +118,8 @@ function runProcess(container, argv, cwd, env, stdin) {
   child.on('error', (error) => fail(`OCI runtime exec failed: ${error.message}: executable file not found in $PATH`, 127));
   child.on('close', (code, signal) => {
     fs.rmSync(path.join(execs, String(child.pid)), { force: true });
-    process.exit(signal ? 128 + (signal === 'SIGKILL' ? 9 : 15) : code ?? 1);
+    const lag = signal && fs.existsSync(path.join(state, 'stop-lag')) ? Number(fs.readFileSync(path.join(state, 'stop-lag'), 'utf8')) : 0;
+    setTimeout(() => process.exit(signal ? 128 + (signal === 'SIGKILL' ? 9 : 15) : code ?? 1), lag);
   });
 
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {});
