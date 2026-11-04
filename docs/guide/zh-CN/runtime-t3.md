@@ -81,7 +81,7 @@ Write the workflow result as JSON to ~/.teamai/projects/…/attempts/a96c8bc03/o
 {"data":{"done":{"run":"r928e2fc23ab9bd62","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```
 
-步骤的结果收集完成后，teamai 会把线程标记为已处理（settle），它就离开你的活动线程列表。步骤失败的线程会留在活动列表里，让你看到它。
+步骤运行时，`teamai dashboard` 的运行详情会链接它的线程（`t3-thread://…`），并显示线程 id 和模型。步骤的结果收集完成后，teamai 会把线程标记为已处理（settle），它就离开你的活动线程列表。步骤失败的线程会留在活动列表里，让你看到它。
 
 ## 步骤线程会问你多少
 
@@ -90,8 +90,10 @@ Write the workflow result as JSON to ~/.teamai/projects/…/attempts/a96c8bc03/o
 | 模式 | 你在线程里看到什么 |
 | --- | --- |
 | Auto（默认） | 提供方自己的审查会批准常规操作，比如读文件、在 worktree 里编辑和普通命令；其余的会问你。没有自动审查的提供方什么都会问，和 Supervised 一样。 |
-| Auto-accept edits | 文件编辑直接通过，每条命令都等你批准。 |
-| Supervised | 每条命令和每次编辑都等你批准，包括写结果文件，因为它在 worktree 之外。 |
+| Auto-accept edits | worktree 内的编辑直接通过。每条命令都等你批准，写结果文件也是。 |
+| Supervised | 每条命令和每次编辑都等你批准，包括写结果文件。 |
+
+在你的机器上，teamai 允许 Claude 不经询问写入步骤的结果文件。T3 线程得不到这样的授权，因为 T3 没有办法传递它。结果文件在 worktree 之外，所以在 Auto-accept edits 和 Supervised 下，线程会为写入它询问一次（"Path is outside allowed working directories"）。批准这次写入，步骤就会结束。
 
 同一个 README 评审在 Auto 下什么都没问。在 Supervised 下问了两次，一次是创建结果目录，一次是写结果文件，步骤用了 9 分钟，因为请求一直在等人批准。
 
@@ -172,12 +174,13 @@ teamai workflow cancel r70d31098c8884803
 | `… is not a project in T3 Code <machine>.` | 这个检出不是 T3 项目。 | 在 T3 Code 里添加它（Add project），或运行 `t3 project add <path>`。 |
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` 指向 T3 没有的实例，或一个已禁用的实例。 | 在 T3 Code 的 Settings → Providers 里添加或启用它，或者删掉 `instance`。 |
 | `… ended without writing the result file …` | agent 结束了，但没有写结果。 | 用消息里的链接打开线程，然后运行 `teamai workflow retry <run> <step>`。 |
+| 运行详情里的 `Not closed: thread_still_runs …` | teamai 关闭步骤的位置时，它的线程仍在运行，而 T3 没有停止这个线程。 | 用链接打开线程，用它的 Stop 按钮停止它。 |
 | `… kept no session for …` | 工具没有为这个 worktree 保存会话记录，所以步骤无法评分。 | 检查实例是否使用工具的默认目录（`~/.claude`、`~/.codex`）。 |
 
 ## 目前还不支持
 
 - 步骤的线程是独立的线程，不是启动运行的那个线程的子线程。T3 只为在另一个已链接环境上创建的线程保留父线程链接。
-- 运行详情会显示 T3 上步骤的项目和环境；线程的链接只有在重启后重新连接时才显示。
+- 它不接受 `credentials`。线程的工具在 T3 Code 的环境中、用 T3 Code 自己的登录运行，所以 teamai 会在任何步骤运行之前拒绝为这个运行时配置的 `NAME: env:VAR` 或 `<tool>: login`（`t3 does not offer can.env, so it cannot keep a credential to the processes it is for`）。
 - 带 `session: continue` 或 `session.from` 的步骤会开始一段新的对话，和 OpenCode 一样：T3 无法在已有会话上启动线程。
 - 它支持 `workspace: new` 和 `continue`。只读的提示词步骤，或带 `env` 或 `setup` 的步骤，会交给 `local`。
 - T3 不报告 token 用量，所以这里无法检查以 token 计的 `budget`，也无法限制 `max_turns`。
