@@ -1462,6 +1462,32 @@ span('end');
       }
     });
 
+    it('releases the login on a second cancel whose runtime confirms the stop only a while after it reads the cancel', async () => {
+      loginDefinition('codexslowstop', state);
+      const { run, pid, watched } = await holdingRun('codexslowstop');
+      watched.kill();
+      await watched.ended;
+      loginDefinition('codexslowstop', state, { cancel_fails: cannotStop(run) });
+
+      try {
+        const refused = await runCLI(['workflow', 'cancel', run], repo, env());
+        expect(refused.stderr).toContain(cannotStop(run).message);
+
+        loginDefinition('codexslowstop', state, { stop_ms: 1500 });
+        const again = await runCLI(['workflow', 'cancel', run], repo, env());
+
+        const attempt = attemptOf(readRunState(run).steps[0]);
+        expect(again.stderr).not.toContain('Could not stop attempt');
+        expect(again.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attempt} of run ${run} held.`);
+        expect(pidAlive(pid)).toBe(false);
+        expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed' });
+        expect(fs.existsSync(lockFile())).toBe(false);
+      } finally {
+        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        fs.rmSync(lockFile(), { force: true });
+      }
+    });
+
     it('says so, and keeps the login, when a runtime that cannot start does not open in recover mode either', async () => {
       loginDefinition('codexnorecover', state);
       const { run, pid, watched } = await holdingRun('codexnorecover');
