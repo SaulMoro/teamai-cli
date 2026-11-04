@@ -4691,7 +4691,7 @@ describe('the tool a driver picks for a prompt step that names none', () => {
     await leaseNext(config, runId, driverA, { can: { tools: ['claude'] }, alone, toolFor: toCodex });
 
     expect(await readRun(config, runId)).toMatchObject({ steps: [
-      { id: 'review', status: 'failed', failure: { code: 'tool_unavailable', message: 'Step "review" runs on codex, which the driver of this run cannot launch here. Install codex where the run is driven, or remove tool from the step.' } },
+      { id: 'review', status: 'failed', failure: { code: 'tool_unavailable', message: 'Step "review" names no tool and runs on codex, which the driver of this run cannot launch here. Install codex where the run is driven, or pick a tool it launches with --tools default=<tool>.' } },
     ] });
   });
 
