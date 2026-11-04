@@ -5,7 +5,7 @@ import path from 'node:path';
 import { RuntimeMessageSchema } from '@teamai/runtime-protocol';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { bundleRuntime, CLAUDE, connect, credentialsFile, fakeBrowser, fakeT3, signIn, type Connection, type FakeT3, type Line } from './testing/harness.js';
+import { bundleRuntime, CLAUDE, CODEX, connect, credentialsFile, fakeBrowser, fakeT3, signIn, type Connection, type FakeT3, type Line } from './testing/harness.js';
 
 // teamai-runtime-t3 through its stdio entry, against a fake T3 Code server (testing/fake-t3.mjs).
 
@@ -138,6 +138,17 @@ describe('teamai-runtime-t3', () => {
       const disabled = start();
       disabled.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', instance: 'claude-off' } });
       expect(await disabled.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { key: 'instance', message: expect.stringMatching(/cannot run now: Provider instance is disabled\. Enable it in T3 Code under Settings → Providers$/) } });
+    });
+
+    // T3 Code 0.1.8 lists a signed-out Claude or Codex with these constraints, so neither is offered to run or to judge.
+    it('offers no tool whose provider T3 reports as signed out', async () => {
+      signIn(t3);
+      t3.config({ providers: [{ ...CLAUDE, constraints: ['Claude Code is not authenticated. Run `claude auth login` and try again.', 'Provider is not authenticated.'] }, CODEX] });
+      const runtime = start();
+
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+
+      expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, can: { tools: ['codex'], confined: [{ tools: ['codex'] }] } });
     });
 
     // teamai quotes a keyed option failure inside a sentence of its own and ends it, so these messages bring no full stop.
