@@ -877,6 +877,15 @@ async function throwTeamConfigMissingOrInvalid(repoPath: string): Promise<never>
   throw new Error(`The team config at ${teamConfigPath} could not be read: ${why}. Fix it in the team repo, or ask a team admin to.`);
 }
 
+/** The team config (teamai.yaml) in `repoPath`, or null when the team has none; one that cannot be used throws, naming it. */
+export async function loadTeamConfigIfPresent(repoPath: string): Promise<TeamaiConfig | null> {
+  const teamConfig = await loadTeamConfig(repoPath);
+
+  if (teamConfig || !(await pathExists(path.join(repoPath, 'teamai.yaml')))) return teamConfig;
+
+  return throwTeamConfigMissingOrInvalid(repoPath);
+}
+
 // ─── Scope-aware config loading ─────────────────────────
 
 /**
