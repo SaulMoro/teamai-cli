@@ -835,11 +835,24 @@ export function serve(options: ServeOptions): Promise<void> {
     const known = place(handle);
     const s = session;
 
-    if (known && s) {
+    if (known) {
       for (const state of Object.values(known.ops)) {
         const thread = known.threads[state.op];
 
         if (!thread || (state.state !== 'running' && !thread.mayStillRun)) continue;
+
+        // init could not reach T3 Code, so nothing here can stop the thread or tell that it ended.
+        if (!s) {
+          write({
+            event: 'close_failed', handle, failure: {
+              code: 't3_unavailable',
+              message: `The T3 thread "${thread.title}" (${thread.threadId}) may still run, and teamai could not reach T3 Code to stop it. Open T3 Code, then run teamai workflow cancel ${known.run} again.`,
+            },
+          });
+
+          return;
+        }
+
         const stopping = whyNotStopped(s.t3, thread.threadId);
         const live = running.get(state.op);
 
@@ -860,7 +873,7 @@ export function serve(options: ServeOptions): Promise<void> {
         if (thread.mayStillRun) markMayStillRun(handle, state.op, false);
       }
 
-      // Every thread of the place has ended now.
+      // Every thread of the place has ended now. With no connection, the ended ones stay unsettled.
       await settleEnded(handle, () => true);
     }
 
@@ -897,17 +910,18 @@ export function serve(options: ServeOptions): Promise<void> {
 
         return;
       case 'reattach': {
+        // The journal alone answers: only a place it no longer holds is gone, whether or not T3 Code can be reached.
         const known = place(request.handle);
 
-        if (!known || !session) {
+        if (!known) {
           write({ event: 'gone', handle: request.handle });
 
           return;
         }
 
-        const threads = Object.values(known.threads).sort((a, b) => b.launchedAt - a.launchedAt);
-        const latest = threads[0];
-        write({ event: 'alive', handle: request.handle, ops: Object.values(known.ops), display: latest ? threadDisplay(latest, session.environment) : placeDisplay(known, session.environment) });
+        const latest = Object.values(known.threads).sort((a, b) => b.launchedAt - a.launchedAt)[0];
+        const display = session && (latest ? threadDisplay(latest, session.environment) : placeDisplay(known, session.environment));
+        write({ event: 'alive', handle: request.handle, ops: Object.values(known.ops), ...(display && { display }) });
 
         return;
       }
