@@ -395,6 +395,67 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
   });
 });
 
+/**
+ * A confined prompt: a judge with one directory as its only readable root, in a place opened without a view of the
+ * host. A runtime offers `can.confined` only when its `init` says it answers such prompts; teamai drops the offer
+ * otherwise, so a step confined to a directory never reaches it.
+ */
+describe('a runtime that answers confined prompts, over stdio', () => {
+  let dir: string;
+  let evidence: string;
+  let state: string;
+  const started: StepRuntime[] = [];
+  const offer = [{ level: 'best-effort' as const, access: 'read' as const, tools: ['claude'] }];
+
+  const start = (): StepRuntime => {
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    started.push(runtime);
+
+    return runtime;
+  };
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-step-confined-'));
+    evidence = path.join(dir, 'evidence');
+    state = path.join(dir, 'state');
+    fs.mkdirSync(path.join(evidence, 'nested'), { recursive: true });
+    fs.writeFileSync(path.join(evidence, 'transcript.jsonl'), '{}\n');
+    fs.writeFileSync(path.join(evidence, 'nested', 'diff.patch'), '');
+  });
+
+  afterEach(async () => {
+    await Promise.all(started.splice(0).map((runtime) => runtime.dispose()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('drops can.confined from an offer whose init does not say it answers confined prompts', async () => {
+    const ready = await start().init({ options: { state, can: { confined: offer } }, mode: 'unattended' });
+
+    expect(ready).toMatchObject({ ok: true });
+    expect(ready.ok && ready.can.confined).toBeUndefined();
+  });
+
+  it('answers a confined prompt in a place opened with no view, reading only its directory, and reports the level it kept', async () => {
+    const runtime = start();
+    const ready = await runtime.init({ options: { state, judge: { reply: { answer: { label: 'good' } } } }, mode: 'unattended' });
+    expect(ready).toMatchObject({ ok: true, can: { confined: offer } });
+    const place = await runtime.open({ op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {} }, async () => {});
+
+    if (place.kind !== 'ready') throw new Error(`not opened: ${JSON.stringify(place)}`);
+    const schema = { type: 'object', properties: { answer: { type: 'object' } }, required: ['answer'] };
+
+    const end = await runtime.prompt({
+      op: newOpId(), handle: place.handle, env: {}, unset: [], credentials: {}, cwd: evidence,
+      lease: { step: 'judge', tool: 'claude', prompt: 'Judge the work.', result: path.join(dir, 'out', 'result.json'), permissions: 'approval-required', interactive: false },
+      confined: { dir: evidence, level: 'best-effort', access: 'read', schema },
+    }, {});
+
+    expect(end).toMatchObject({ kind: 'finished', result: { output: { answer: { label: 'good' } } }, confined: { level: 'best-effort', access: 'read' } });
+    const sent = fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { sees?: string[]; confined?: unknown });
+    expect(sent[0]).toMatchObject({ sees: ['nested/diff.patch', 'transcript.jsonl'], confined: { dir: evidence, level: 'best-effort', access: 'read', schema } });
+  });
+});
+
 describe('a runtime\'s display over stdio', () => {
   let dir: string;
   const started: StepRuntime[] = [];

@@ -2,7 +2,7 @@ import type { ChildProcess } from 'node:child_process';
 import readline from 'node:readline';
 import crossSpawn from 'cross-spawn';
 import { log } from '../../utils/logger.js';
-import { RUNTIME_PROTOCOL, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
+import { RUNTIME_PROTOCOL, type Can, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { parseRuntimeLine, type HandleEvent, type OpEvent, type Shown } from './protocol.js';
 import type { ExecEnd, Initialized, Opened, PromptEnd, Reattached, StepRuntime } from './step-runtime.js';
 
@@ -17,6 +17,14 @@ function displayOf(name: string, shown: Shown) {
 }
 
 type HandleWaiter = { events: ReadonlySet<HandleEvent['event']>; settle: (event: HandleEvent | RuntimeFailure) => void };
+
+/** A runtime's offer as teamai takes it: `can.confined` only from a runtime that says it answers confined prompts. */
+function offered(can: Can, answersConfined: boolean): Can {
+  if (answersConfined) return can;
+  const { confined: _dropped, ...rest } = can;
+
+  return rest;
+}
 
 /**
  * The client of an external step runtime: `command` spawned with `args`, speaking runtime protocol 1 over its stdio.
@@ -64,7 +72,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
     const { message } = parsed;
 
     if ('type' in message) {
-      onInit?.(message.ok ? { ok: true, can: message.can, launchesAgents: message.prompt === true } : { ok: false, failure: message.error });
+      onInit?.(message.ok ? { ok: true, can: offered(message.can, message.confinedPrompt === true), launchesAgents: message.prompt === true } : { ok: false, failure: message.error });
       onInit = undefined;
 
       return;
@@ -254,6 +262,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
               const end: PromptEnd = { kind: 'finished', session: event.session, result: event.result };
 
               if (event.usage) end.usage = event.usage;
+
+              if (event.confined) end.confined = event.confined;
               settle(end);
 
               return;

@@ -157,10 +157,11 @@ export type AttemptExecEnd = ExecEnd | { kind: 'interrupted' };
  */
 export interface AttemptRun {
   /**
-   * Opens the place. `toolHome` is the tool home a prompt's tool keeps its session in, recorded for every later lookup;
-   * `credentials` are the values its tool gets, sent and never recorded.
+   * Opens the place, with what of the host it gets, or with nothing for a confined prompt's place. `toolHome` is the
+   * tool home a prompt's tool keeps its session in, recorded for every later lookup; `credentials` are the values its
+   * tool gets, sent and never recorded.
    */
-  open(view: PlaceView, place?: { toolHome?: { tool: string; dir: string }; credentials?: Record<string, string> }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
+  open(view: PlaceView | undefined, place?: { toolHome?: { tool: string; dir: string }; credentials?: Record<string, string> }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
   exec(request: Omit<ExecRequest, 'op' | 'handle'>, events: ExecEvents): Promise<AttemptExecEnd>;
   /**
    * Sends the prompt step to a runtime that launches agents its own way. Built again after a restart, it reads the
@@ -273,7 +274,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       if (before?.closeFailed) opening.closeFailed = before.closeFailed;
       await save(opening);
 
-      const opened = await runtime.open({ op, run, attempt, view, credentials }, async (handle) => {
+      const opened = await runtime.open({ op, run, attempt, credentials, ...(view && { view }) }, async (handle) => {
         const now = await current();
 
         if (now) await save({ ...now, open: { op, handle }, phase: now.phase === 'opening' ? 'ready' : now.phase });
@@ -355,6 +356,8 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
           const end: PromptEnd = { kind: 'finished', session: state.session, result: state.result };
 
           if (state.usage) end.usage = state.usage;
+
+          if (state.confined) end.confined = state.confined;
 
           return end;
         }

@@ -12,6 +12,7 @@ import { z } from 'zod';
 //
 //    > {"type":"init","protocol":1,"mode":"unattended","options":{...}}
 //    < {"type":"init","ok":true,"can":{...},"prompt":true}           prompt: it launches agents its own way
+//                                                                    confinedPrompt: it answers confined prompts, so it may offer can.confined
 //    > {"type":"open","op":"op-7f2a…","run":"r…","attempt":"a…","view":{...},"credentials":{}}
 //    < {"op":"op-7f2a…","event":"accepted","handle":"toy-r…-a…"}
 //    < {"op":"op-7f2a…","event":"ready","display":{"label":"…","url":"…","fields":{…}}}       display optional
@@ -22,6 +23,9 @@ import { z } from 'zod';
 //    > {"type":"prompt","op":"op-91c4…","handle":"…","lease":{...},"env":{...},"unset":[...],"credentials":{...},"cwd":"…"}
 //    < {"op":"op-91c4…","event":"accepted","display":{"label":"…","url":"…"}}      display optional: once the agent exists
 //    < {"op":"op-91c4…","event":"finished","session":{"tool":"claude","id":"…"},"result":{"output":{…}},"usage":{…}}
+//    > {"type":"open",…,"credentials":{}}                                      no view: the place of a confined prompt
+//    > {"type":"prompt",…,"confined":{"dir":"…","level":"verified","access":"read","schema":{…}}}
+//    < {"op":"op-a3d5…","event":"finished",…,"result":{"output":{…}},"confined":{"level":"verified","access":"read"}}
 //    > {"type":"collect","handle":"…"}              < {"event":"collected","handle":"…"}
 //    > {"type":"reattach","handle":"…"}             < {"event":"alive","handle":"…","ops":[...]} or {"event":"gone",…}
 //    > {"type":"close","handle":"…"}                < {"event":"closed","handle":"…"} or {"event":"close_failed","handle":"…","failure":{…}}
@@ -216,7 +220,8 @@ export const OpenRequestSchema = z.object({
   op: OpIdSchema,
   run: z.string(),
   attempt: z.string(),
-  view: PlaceViewSchema,
+  /** What of the host the place gets. Absent for a confined prompt's place, which gets only the prompt's `confined.dir`. */
+  view: PlaceViewSchema.optional(),
   /**
    * The credentials of this attempt's tool, as each of its execs and prompts also carries them: never set when the
    * place is created, only per operation. A command step's place gets none.
@@ -238,7 +243,25 @@ export const ExecRequestSchema = z.object({
   cwd: z.string(),
 });
 
-/** A prompt for a runtime that launches agents its own way; `env` and `unset` scope the agent's environment as an exec's. */
+/**
+ * A prompt confined to `dir`, for a runtime whose `init` says it answers confined prompts: its agent reads `dir`, read
+ * only, and nothing else of the host, at `level` or above, with what its offer for the tool said it can do there
+ * (`access`). `schema` is the JSON Schema the reply matches, when the step names one. The reply is the result's
+ * `output`, and `finished` says the level and access the runtime kept, never more than it enforced.
+ */
+export const ConfinedPromptSchema = z.object({
+  dir: z.string().min(1),
+  level: ConfinedLevelSchema,
+  access: z.enum(ACCESS_LEVELS),
+  schema: z.json().optional(),
+});
+
+export type ConfinedPrompt = z.infer<typeof ConfinedPromptSchema>;
+
+/**
+ * A prompt for a runtime that launches agents its own way, or a confined prompt; `env` and `unset` scope the agent's
+ * environment as an exec's.
+ */
 export const PromptRequestSchema = z.object({
   type: z.literal('prompt'),
   op: OpIdSchema,
@@ -249,6 +272,7 @@ export const PromptRequestSchema = z.object({
   /** The credentials the agent gets over its environment. */
   credentials: CredentialsSchema,
   cwd: z.string(),
+  confined: ConfinedPromptSchema.optional(),
 });
 
 /** A request teamai writes to a runtime's stdin. */
@@ -269,8 +293,19 @@ export type RuntimeRequest = z.infer<typeof RuntimeRequestSchema>;
  */
 export const PROMPT_FAILURE_CODES = ['model_unavailable', 'tool_unavailable', 'agent_unavailable', 'tool_failed'] as const;
 
+/** What a runtime kept of a confined prompt: the level it enforced, and what the agent could do in the directory. */
+export const ConfinedKeptSchema = z.object({ level: ConfinedLevelSchema, access: z.enum(ACCESS_LEVELS) });
+
+export type ConfinedKept = z.infer<typeof ConfinedKeptSchema>;
+
 /** The fields of a finished prompt: the tool's session, the result the agent wrote, and the tokens it billed. */
-const finishedPrompt = { session: PromptSessionSchema, result: PromptResultSchema, usage: PromptUsageSchema.optional() };
+const finishedPrompt = {
+  session: PromptSessionSchema,
+  result: PromptResultSchema,
+  usage: PromptUsageSchema.optional(),
+  /** A confined prompt's: the level and access the runtime kept. */
+  confined: ConfinedKeptSchema.optional(),
+};
 
 /** What a runtime retains of one operation of a handle, which `reattach` reports. */
 export const OpStateSchema = z.discriminatedUnion('state', [
@@ -293,9 +328,10 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
    * A reply to `init`: the runtime's offer, or why it cannot run with the options it was given. `prompt: true` says it
    * launches agents its own way, so teamai sends it each prompt step as a `prompt`, never as an `exec` of the tool.
    * With `can.exec: false` it runs no command: command steps, and steps with setup, go to the next runtime.
+   * `confinedPrompt: true` says it answers a `prompt` with `confined`; without it, teamai drops `can.confined`.
    */
   const InitReply = z.discriminatedUnion('ok', [
-    z.object({ type: z.literal('init'), ok: z.literal(true), can: CanSchema, prompt: z.boolean().optional() }),
+    z.object({ type: z.literal('init'), ok: z.literal(true), can: CanSchema, prompt: z.boolean().optional(), confinedPrompt: z.boolean().optional() }),
     z.object({ type: z.literal('init'), ok: z.literal(false), error: RuntimeFailureSchema }),
   ]);
 

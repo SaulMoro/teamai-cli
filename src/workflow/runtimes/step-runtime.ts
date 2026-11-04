@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { OpIdSchema, type ExecRequestSchema, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type PromptResult, type PromptSessionSchema, type PromptUsageSchema, type RuntimeDisplay, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { OpIdSchema, type ConfinedKept, type ExecRequestSchema, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type PromptResult, type PromptSessionSchema, type PromptUsageSchema, type RuntimeDisplay, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import type { RunMode } from '../../launch-context.js';
 import type { DriverCan } from '../requirements.js';
@@ -40,9 +40,12 @@ export type Lost = { kind: 'lost'; failure: RuntimeFailure };
 /** How an exec ended. `exited` carries the complete stdout, so a reattach rebuilds what a live run read. */
 export type ExecEnd = { kind: 'exited'; code: number; stdout: string } | { kind: 'cancelled' } | { kind: 'failed'; failure: RuntimeFailure } | Lost;
 
-/** How a prompt ended: finished with the tool's session, the result the agent wrote and its usage, cancelled, or failed. */
+/**
+ * How a prompt ended: finished with the tool's session, the result the agent wrote, its usage and, for a confined
+ * prompt, what the runtime kept; cancelled; or failed.
+ */
 export type PromptEnd =
-  | { kind: 'finished'; session: z.infer<typeof PromptSessionSchema>; result: PromptResult; usage?: z.infer<typeof PromptUsageSchema> }
+  | { kind: 'finished'; session: z.infer<typeof PromptSessionSchema>; result: PromptResult; usage?: z.infer<typeof PromptUsageSchema>; confined?: ConfinedKept }
   | { kind: 'cancelled' }
   | { kind: 'failed'; failure: RuntimeFailure }
   | Lost;
