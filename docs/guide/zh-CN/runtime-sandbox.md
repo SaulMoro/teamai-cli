@@ -372,7 +372,7 @@ teamai workflow retry r7c41d09e2b6a5f13 review      # 从被停止的那一轮�
 | `credential_missing` | 凭据对应的变量在 teamai 运行的地方没有设置，或者评判没有拿到它的工具会读取的环境变量凭据 | 执行 `claude setup-token`，再导出 `CLAUDE_CODE_OAUTH_TOKEN`；评判的情况，把信息里点名的密钥加到 `credentials` |
 | `confined_pending` | 驱动定义里没有运行时提供评判用的工具：镜像缺少 `node` 或那个工具，驱动定义没给它密钥，Docker 早于 26.0.0，或者 provider 是 `podman` 或 `sbx` | 把 `node` 和工具装进镜像、在 `credentials` 里加上工具的密钥、升级 Docker，或者在驱动定义里列上 `local` |
 | `bad_option` | `options` 里有键或值写错了（`sbx` 缺少 `agent`），或者 `ANTHROPIC_BASE_URL` 这类凭据指向容器到不了的 `localhost` 或 `127.0.0.1` | 修正驱动定义并推送；base URL 在 Docker Desktop 上改用 `host.docker.internal` |
-| `sandbox_failed` | 无法创建这次尝试的容器或沙箱 | 查看步骤失败里给出的信息；`docker ps -a --filter label=teamai.run=<run>` 或 `sbx ls` 会列出剩下的 |
+| `sandbox_failed` | 无法创建、查找或停止这次尝试的容器或沙箱，例如运行中途退出了 Docker Desktop。查找或停止失败的容器仍算作这次尝试的，不会当作已经不存在。 | 查看步骤失败里给出的信息。先重新启动引擎，再删除剩下的：`docker ps -a --filter label=teamai.run=<run>` 或 `sbx ls` 会列出它，信息里给出了要执行的 `docker rm --force` 或 `sbx rm --force` 命令 |
 | 运行详情里的 **未关闭**（Not closed） | 无法删除这次尝试的容器或沙箱，里面运行的东西可能还在运行。运行本身照常结束。 | 按信息里给出的命令执行 `docker rm --force <container>` 或 `sbx rm --force <sandbox>` |
 | `runtime_interrupted` | 步骤运行时 teamai 重启了 | `teamai workflow retry <run> <step>` |
 

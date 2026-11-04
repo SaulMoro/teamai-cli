@@ -386,6 +386,44 @@ describe('a prompt attempt in a container', () => {
     expect(engine.containers()).toEqual([]);
   });
 
+  // teamai's order after a driver died: cancel the exec, reattach until it no longer runs, collect, close.
+  it.each<{ options: Message; remove: string }>([
+    { options: { provider: 'docker', image: IMAGE }, remove: 'docker rm --force' },
+    { options: { provider: 'sbx', agent: 'claude' }, remove: 'sbx rm --force' },
+  ])("keeps a dead runtime's $options.provider sandbox through a reattach the engine cannot answer, and removes it at close", async ({ options, remove }) => {
+    engine.image('claude', { claude: CLAUDE });
+    const first = start();
+    await init(first, options);
+    const at = place();
+    await openPlace(first, at);
+    const op = newOp();
+    first.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'touch started; sleep 30'] });
+    await first.next((message) => message.op === op && message.event === 'accepted');
+    await vi.waitFor(() => { expect(fs.existsSync(path.join(at.worktree, 'started'))).toBe(true); }, { timeout: 10_000 });
+    first.child.kill('SIGKILL');
+    await first.end();
+    const second = start();
+    await init(second, options);
+    engine.daemon(false);
+
+    second.send({ type: 'cancel', op });
+    await second.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 30_000);
+    second.send({ type: 'reattach', handle: HANDLE });
+
+    // Not gone: the engine could not say whether the sandbox exists, so the place is still this attempt's.
+    expect(await second.next((message) => message.event === 'alive' || message.event === 'gone', 30_000)).toMatchObject({
+      event: 'alive', handle: HANDLE, ops: [{ op, state: 'failed', failure: { message: expect.stringContaining(remove) } }],
+    });
+    expect(second.messages).toContainEqual({ event: 'error', message: expect.stringContaining(remove) });
+    second.send({ type: 'collect', handle: HANDLE });
+    await second.next((message) => message.event === 'collected' || message.event === 'collect_failed');
+    engine.daemon(true);
+    second.send({ type: 'close', handle: HANDLE });
+
+    expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(engine.containers()).toEqual([]);
+  });
+
   it("answers an exec and a close it cannot read the journal for with their own failure, so teamai never waits on them", async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });
