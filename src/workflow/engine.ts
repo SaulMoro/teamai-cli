@@ -45,7 +45,7 @@ import { sanitizePrUrl, type PrUrl } from './pr-url.js';
 import { completeDelivery, deliveringStep, nextDelivery, resolveCreate, sameCreate, unresolvedCreate } from './delivery-ledger.js';
 import type { DeliveryKey, UnresolvedCreate } from './delivery-schema.js';
 import {
-  CAN_KEYS, HOST_PINNED_WORKFLOWS, LimitSchema, ReportedUnenforcedSchema, heldFor, setsLimit, mergeRequirements, negotiate, reportedUnenforced, requiredEnvKeys, unionUnenforced,
+  CAN_KEYS, HOST_PINNED_WORKFLOWS, LimitSchema, ReportedUnenforcedSchema, heldFor, setsLimit, mergeRequirements, negotiate, personGap, reportedUnenforced, requiredEnvKeys, unionUnenforced,
   type Allow, type DriverCan, type EnvFacts, type Held, type InEffect, type Limit, type Missing, type Negotiation, type ReportedUnenforced, type Terms, type TurnLimits,
 } from './requirements.js';
 import { knownSecrets, resolveWorkflowEnv, secretKey, type WorkflowEnv } from '../env-resolution.js';
@@ -2102,9 +2102,13 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
               break;
             }
 
-            // A driver that cannot give the step its role is told so too, as it would be held for it once it had the place.
+            // A driver that cannot give the step its role, or ask the person it needs, is told so too, as it would be held
+            // for it once it had the place.
             const roleGap = stepRole.kind === 'role' && !can.role ? ['role' as const] : [];
-            held.push({ step: state.id, reason: plan.defer.reason, missing: [...plan.defer.needs ? [`workspace.${plan.defer.needs}` as const] : [], ...roleGap] });
+            held.push({
+              step: state.id, reason: plan.defer.reason,
+              missing: [...plan.defer.needs ? [`workspace.${plan.defer.needs}` as const] : [], ...roleGap, ...personGap(definition.interactive === true, context.can)],
+            });
             continue;
           }
 
@@ -2145,7 +2149,8 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
 
               if (planned.fail) return undefined;
 
-              if (planned.defer) return planned.defer.needs ? [`workspace.${planned.defer.needs}`] : undefined;
+              // A step held for its place on every runtime still goes to a person when none of them can ask one.
+              if (planned.defer) return planned.defer.needs ? [`workspace.${planned.defer.needs}`, ...personGap(definition.interactive === true, offered)] : undefined;
               const judged = offerTerms(run, state.id, located, planned, { ...context, can: offered });
 
               return judged.kind === 'hold' ? judged.missing : judged.kind === 'grant' ? [] : undefined;
