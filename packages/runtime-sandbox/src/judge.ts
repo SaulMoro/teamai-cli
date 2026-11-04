@@ -1,9 +1,7 @@
-import fs from 'node:fs';
-import path from 'node:path';
 import { z } from 'zod';
 import { jsonLines, reportedTokens, type ConfinedAccess } from '@teamai/tool-core/launch';
 import type { TokenUsage } from '@teamai/tool-core/stdout';
-import type { ConfinedPrompt, PromptLease, PromptResult, RuntimeFailure } from '@teamai/runtime-protocol';
+import type { ConfinedOffer, ConfinedPrompt, PromptLease, PromptResult, RuntimeFailure } from '@teamai/runtime-protocol';
 
 // ─── A judge: one confined prompt, in a container of its own ───
 //
@@ -14,14 +12,19 @@ import type { ConfinedPrompt, PromptLease, PromptResult, RuntimeFailure } from '
 //    claude  -p --tools Read,Grep,Glob --output-format json --json-schema <schema> --append-system-prompt <prompt> <ask>
 //    codex   exec --json --ephemeral --output-schema <file> <ask>        the container is its sandbox, so access is full
 //
-//  A `<tool>: login` stays on this machine: a judge container has no tool home, so a judge brings an API key instead.
-//  A judge gets only the credentials its own tool reads, and its filter lets through only the provider it signs in to:
-//  the public API, or the base URL its credentials name in place of it.
+//  A `<tool>: login` stays on this machine: a judge container has no tool home, so a judge brings an API key instead,
+//  and `init` offers a judge only on the tools whose keys the definition names (`offersSignedIn`). A judge gets only
+//  the credentials its own tool reads, and its filter lets through only the provider it signs in to: the public API, or
+//  the base URL its credentials name in place of it. The evidence is mounted at EVIDENCE_DIR, and the prompt names it
+//  there, so no mount point, working directory or prompt path tells the judge the member's home, username or project.
 //
 
 /** The user turn: the prompt itself goes in as Claude's system prompt, or ahead of this for Codex. */
 // A judge told only what it must not do may not even list its evidence, and labels a good pass on nothing.
 const ASK = 'List, search and read the files in this directory, and answer from them alone. Change nothing. Return only the requested JSON answer.';
+
+/** Where a judge's container sees the evidence directory, whatever its path on the host. */
+export const EVIDENCE_DIR = '/evidence';
 
 /** Where the judge's own files go inside its container, never in `dir`. */
 const JUDGE_FILES = '"$HOME/.teamai-judge"';
@@ -40,7 +43,7 @@ export type JudgeReading = { ok: true; session: string; result: PromptResult; us
 interface JudgeTool {
   /** What the tool can do in the container beyond answering. */
   access: ConfinedAccess;
-  /** The env credentials it signs in with; a judge with none of them is refused. */
+  /** The env credentials it signs in with, of those teamai gives a confined prompt on it; a judge with none of them is refused. */
   credentials: readonly string[];
   /** The model provider's `host:port`, and the variable that points the tool at another one. */
   endpoint: string;
@@ -123,22 +126,23 @@ const JUDGE_TOOLS = {
   },
   codex: {
     access: 'full',
-    credentials: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
+    // teamai gives a confined codex OPENAI_API_KEY, never CODEX_API_KEY, which its confined profile does not read.
+    credentials: ['OPENAI_API_KEY'],
     endpoint: 'api.openai.com:443',
     baseUrlEnv: 'OPENAI_BASE_URL',
     // A fresh Codex home signs in with CODEX_API_KEY, and reads no OPENAI_API_KEY.
-    signIn: (own) => (own.CODEX_API_KEY === undefined && own.OPENAI_API_KEY !== undefined ? { ...own, CODEX_API_KEY: own.OPENAI_API_KEY } : own),
+    signIn: (own) => (own.OPENAI_API_KEY === undefined ? own : { ...own, CODEX_API_KEY: own.OPENAI_API_KEY }),
     launch: (lease, confined) => ({
       // The schema reaches Codex as a file, written in the container's own home, never in `dir`. Codex takes a base URL
       // from its config, not its env, so the wrapper passes it from the container's env and it stays off every argv.
       argv: [
         '/bin/sh', '-c',
-        `mkdir -p ${JUDGE_FILES} && printf '%s' "$TEAMAI_JUDGE_SCHEMA" > ${JUDGE_FILES}/schema.json && if [ -n "\${OPENAI_BASE_URL-}" ]; then set -- -c "openai_base_url=\\"$OPENAI_BASE_URL\\"" "$@"; fi && exec codex exec --json --ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --output-schema ${JUDGE_FILES}/schema.json "$@"`,
+        `mkdir -p ${JUDGE_FILES} && printf '%s' "$JUDGE_SCHEMA" > ${JUDGE_FILES}/schema.json && if [ -n "\${OPENAI_BASE_URL-}" ]; then set -- -c "openai_base_url=\\"$OPENAI_BASE_URL\\"" "$@"; fi && exec codex exec --json --ephemeral --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox --output-schema ${JUDGE_FILES}/schema.json "$@"`,
         'codex',
         ...(lease.model ? ['--model', lease.model.name] : []), ...(lease.model?.effort ? ['-c', `model_reasoning_effort=${JSON.stringify(lease.model.effort)}`] : []),
         `${lease.prompt}\n\n${ASK}`,
       ],
-      env: { TEAMAI_JUDGE_SCHEMA: JSON.stringify(confined.schema ?? { type: 'object' }) },
+      env: { JUDGE_SCHEMA: JSON.stringify(confined.schema ?? { type: 'object' }) },
     }),
     read(stdout) {
       const lines = linesOf(stdout, CodexLine);
@@ -193,49 +197,32 @@ export function judgeTool(tool: string): JudgeTool | undefined {
   return Object.entries(JUDGE_TOOLS).find(([name]) => name === tool)?.[1];
 }
 
-/** Whether `spelled` is a path on this host whose real path is `dir`. */
-function resolvesTo(spelled: string, dir: string): boolean {
-  try {
-    return fs.realpathSync(spelled) === dir;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * The other spellings `prompt` gives `dir`: absolute paths that resolve to it on the host, such as macOS's /var/… for
- * /private/var/…. teamai confines to the real path, and the prompt keeps the step's spelling, so the judge's
- * container mounts the directory at each of them too. A spelling ends in `dir`'s own name and starts at a `/` before
- * it on the same line, so one with spaces is found whole; each is normalized, so `dir/` is `dir`.
- */
-export function spellingsOf(prompt: string, dir: string): string[] {
-  const leaf = path.basename(dir);
-  const spellings = new Set<string>();
-
-  for (const line of prompt.split('\n')) {
-    for (let at = line.indexOf(leaf); at !== -1; at = line.indexOf(leaf, at + 1)) {
-      // The longest that resolves is the path as written: /var/… inside /private/var/… resolves too.
-      let written: string | undefined;
-
-      for (let from = line.lastIndexOf('/', at); from !== -1; from = from === 0 ? -1 : line.lastIndexOf('/', from - 1)) {
-        const spelled = path.resolve(line.slice(from, at + leaf.length));
-
-        if (resolvesTo(spelled, dir)) written = spelled;
-      }
-
-      if (written !== undefined && written !== dir) spellings.add(written);
-    }
-  }
-
-  return [...spellings];
-}
-
 function urlOf(text: string): URL | undefined {
   try {
     return new URL(text);
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The offers a judge can take with the env credentials a definition names (`init.credentials.env`): each tool that
+ * signs in with one of them. A login never reaches a judge container, so a login-only tool is left to a later runtime.
+ */
+export function offersSignedIn(offers: ConfinedOffer[], names: readonly string[]): ConfinedOffer[] {
+  return offers.flatMap((offer) => {
+    const tools = offer.tools.filter((tool) => judgeTool(tool)?.credentials.some((name) => names.includes(name)) === true);
+
+    return tools.length > 0 ? [{ ...offer, tools }] : [];
+  });
+}
+
+/**
+ * `prompt` with every mention of the evidence directory's host path replaced by where the judge sees it. A mention
+ * ends the path, so a sibling such as `<dir>-old` or `<dir>.bak` keeps its host path.
+ */
+export function inEvidenceDir(prompt: string, dir: string): string {
+  return prompt.replace(new RegExp(`${dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-]|\\.[\\w-])`, 'g'), EVIDENCE_DIR);
 }
 
 /** A judge ready to start: its tool's launch, the hosts its filter lets through, and the credentials it gets. */
@@ -252,7 +239,7 @@ export function judgeOf(tool: string, credentials: Record<string, string>): { ok
   if (launch === undefined) return { ok: false, failure: { code: 'tool_unavailable', message: `The sandbox runtime judges on ${Object.keys(JUDGE_TOOLS).join(' or ')}, not ${tool}.` } };
 
   if (!launch.credentials.some((name) => credentials[name] !== undefined)) {
-    return { ok: false, failure: { code: 'credential_missing', message: `A ${tool} judge in the sandbox signs in with ${launch.credentials.join(' or ')}, and the definition gives it none. Add one to the sandbox entry's credentials, for example ${launch.credentials[0]}: env:${launch.credentials[0]}. A ${tool}: login stays on this machine and never reaches a judge container.` } };
+    return { ok: false, failure: { code: 'credential_missing', message: `A ${tool} judge in the sandbox signs in with ${launch.credentials.join(' or ')}, and the definition gives it none. Add one to the sandbox entry's credentials, for example ${launch.credentials[0]}: env:${launch.credentials[0]}. A login stays on this machine and never reaches a judge container.` } };
   }
 
   const own = Object.fromEntries(Object.entries(credentials).filter(([name]) => launch.credentials.includes(name) || name === launch.baseUrlEnv));
@@ -271,7 +258,7 @@ export function judgeOf(tool: string, credentials: Record<string, string>): { ok
 /** Why a judge that brings no credential at all is refused when its place opens. */
 export const NO_JUDGE_CREDENTIAL: RuntimeFailure = {
   code: 'credential_missing',
-  message: 'A judge in the sandbox signs in only with env credentials, and the definition gives the sandbox none: a codex: login or claude: login stays on this machine and never reaches a judge container. Add an API key to the sandbox entry\'s credentials, for example ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY for Claude or OPENAI_API_KEY: env:OPENAI_API_KEY for Codex, and start again.',
+  message: 'A judge in the sandbox signs in only with env credentials, and the definition gives the sandbox none: a codex: login stays on this machine and never reaches a judge container. Add an API key to the sandbox entry\'s credentials, for example ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY for Claude or OPENAI_API_KEY: env:OPENAI_API_KEY for Codex, and start again.',
 };
 
 /**

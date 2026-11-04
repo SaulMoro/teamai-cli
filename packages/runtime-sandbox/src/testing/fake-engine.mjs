@@ -3,7 +3,8 @@
 // directory instead of a daemon. A container's processes run on the host, in a process group of their own, with only
 // the environment a real container would give them: the image's PATH, the `--env` of `run`, and each `-e NAME` of
 // `exec` taken from this process's own environment. An `exec` whose working directory no mount covers fails as it
-// would in a container. Every argv is appended to FAKE_ENGINE_LOG as one JSON line; no environment value is written.
+// would in a container; one that a mount covers runs in that mount's host directory. Every argv is appended to
+// FAKE_ENGINE_LOG as one JSON line; no environment value is written.
 //
 //   FAKE_ENGINE_STATE   its state directory; a file `down` there makes it answer as a stopped daemon, and a file
 //                       `rm-fails` makes `rm` fail as a daemon that cannot remove the container
@@ -212,14 +213,16 @@ switch (command) {
 
     if (!container.running) fail(`Error response from daemon: container ${container.id} is not running`);
     const cwd = one(found, '-w') ?? '/';
+    // The process runs on the host, so it starts in the host directory mounted where the container's cwd is.
+    const mount = container.mounts.filter(({ target }) => cwd === target || cwd.startsWith(`${target}/`)).sort((a, b) => b.target.length - a.target.length)[0];
 
-    if (!container.mounts.some(({ target }) => cwd === target || cwd.startsWith(`${target}/`))) fail(`OCI runtime exec failed: chdir to cwd ("${cwd}") set in config.json failed: no such file or directory`, 126);
+    if (!mount) fail(`OCI runtime exec failed: chdir to cwd ("${cwd}") set in config.json failed: no such file or directory`, 126);
     const home = path.join(containers, container.id, 'home');
     fs.mkdirSync(home, { recursive: true });
     const env = { PATH: imagePath(container.image), ...container.env, HOME: home };
 
     for (const name of all(found, '-e')) if (process.env[name] !== undefined) env[name] = process.env[name];
-    runProcess(container, argv, cwd, env, one(found, '-i'));
+    runProcess(container, argv, mount.source + cwd.slice(mount.target.length), env, one(found, '-i'));
     break;
   }
 
