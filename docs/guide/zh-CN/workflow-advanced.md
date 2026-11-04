@@ -1412,7 +1412,7 @@ teamai 在运行开始或继续时读取每个变量一次。未设置的变量�
 | 发给自己启动智能体的运行时的 prompt | 定义里的其他运行时 |
 | | 步骤扣留的名字，例如严格沙箱里的代码托管令牌 |
 | | 任何文件：运行的记录、`runtime.json`、日志。工具打印出的值在 teamai 保存的内容里会被遮盖 |
-| 这个运行时上的评审，只限它的工具读取的名字：Claude 评审得到 `ANTHROPIC_API_KEY` | 评审，任何其他名字：Claude 评审永远得不到 `OPENAI_API_KEY` |
+| 这个运行时上的评审，只限它的工具在本机受限运行时读取的名字：Claude 评审得到 `ANTHROPIC_API_KEY` 和 `ANTHROPIC_BASE_URL`，任何评审都得到 `HTTPS_PROXY`、`HTTP_PROXY`、`NO_PROXY`、`SSL_CERT_FILE` 和 `NODE_EXTRA_CA_CERTS` | 评审，任何其他名字：Claude 评审永远得不到 `OPENAI_API_KEY` |
 
 只有提供 `can.env` 的运行时接受凭据，因为只有它决定每个进程的环境。`local` 不接受：你的步骤本来就在你的环境里运行。两种情况都会在启动时被拒绝为 `bad_option`。
 

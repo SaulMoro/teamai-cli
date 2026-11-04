@@ -1412,7 +1412,7 @@ Where the values go:
 | A prompt sent to a runtime that launches agents its own way | Another runtime of the definition |
 | | A name the step withholds, such as a forge token in a strict sandbox |
 | | Any file: the run's records, `runtime.json`, logs. A value the tool prints is masked in what teamai keeps |
-| A judge on that runtime, for the names its tool reads: `ANTHROPIC_API_KEY` for a Claude judge | A judge, for any other name: a Claude judge never gets `OPENAI_API_KEY` |
+| A judge on that runtime, for the names a confined run of its tool reads here: `ANTHROPIC_API_KEY` and `ANTHROPIC_BASE_URL` for a Claude judge, and for any judge `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`, `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS` | A judge, for any other name: a Claude judge never gets `OPENAI_API_KEY` |
 
 Only a runtime that offers `can.env` takes credentials, since it alone decides each process's environment. `local` takes none: your steps already run in your environment. Both are refused with `bad_option` at start.
 

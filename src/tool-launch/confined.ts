@@ -55,11 +55,12 @@ function profileOf(tool: ConfinedTool): ConfinedLaunch {
 }
 
 /**
- * The variables `tool`'s confined profile reads beyond the common ones, such as its API key: what of a runtime's
- * credentials a confined prompt on it gets. None for a tool with no confined profile.
+ * The variables a confined run of `tool` gets: the common ones, proxies included, and those its profile reads, such as
+ * its API key and gateway. Of a runtime's credentials, a confined prompt on it gets these. None for a tool with no
+ * confined profile.
  */
 export function confinedEnvNames(tool: string): readonly string[] {
-  return isConfinedTool(tool) ? profileOf(tool).env : [];
+  return isConfinedTool(tool) ? [...COMMON_ENV, ...profileOf(tool).env] : [];
 }
 
 /** What `tool`, run confined, can do beyond answering, by its adapter's profile. */
@@ -169,10 +170,10 @@ function memberEnv(): NodeJS.ProcessEnv {
 
 function confinedEnv(tool: ConfinedTool): NodeJS.ProcessEnv {
   const restored = memberEnv();
-  const { env: toolEnv, homeEnv: variable } = profileOf(tool);
+  const { homeEnv: variable } = profileOf(tool);
   const moved = variable !== undefined && restored[variable] === undefined && isToolId(tool) ? movedToolHome(tool, realHost({ env: restored })) : null;
 
-  const env: NodeJS.ProcessEnv = Object.fromEntries([...COMMON_ENV, ...toolEnv].flatMap((key) => restored[key] === undefined ? [] : [[key, restored[key]]]));
+  const env: NodeJS.ProcessEnv = Object.fromEntries(confinedEnvNames(tool).flatMap((key) => restored[key] === undefined ? [] : [[key, restored[key]]]));
 
   if (variable !== undefined && moved !== null) env[variable] = moved;
 
