@@ -1532,6 +1532,12 @@ teamai then sends each prompt step as one `prompt`. `lease.prompt` is the whole 
 | `interactive` | `true` when a person works in the step; only a runtime with `can.hitl` gets one |
 | `maxTurns` | The agent's turn cap, when your `can.max_turns` offers one |
 
+`env` holds the attempt's markers, such as `TEAMAI_WORKFLOW_ATTEMPT` and `TEAMAI_RUN_DIR`, and the values of the keys the step `requires.env`. `provided` names those keys. A runtime whose tool keeps env in plain text, such as an agent config it saves, drops them and keeps the markers:
+
+```text
+→ {"type":"prompt",…,"env":{"TEAMAI_WORKFLOW_ATTEMPT":"r7a1…/a3f0…","TEAMAI_RUN_DIR":"/home/al/.teamai/projects/acme-web-3f9c/workflows/runs/r7a1…/scratch","NPM_TOKEN":"npm_…"},"provided":["NPM_TOKEN"],…}
+```
+
 A prompt that cannot finish ends `failed`. Use `model_unavailable`, `tool_unavailable`, `agent_unavailable` or `tool_failed` for what the step should record as is; teamai records any other code as `runtime_failed`, with your code and message in its message. After `cancel`, it ends `cancelled`. `reattach` reports a finished prompt as `{"op":"…","state":"finished","session":{…},"result":{…},"usage":{…}}`, and one still running as `running`; a repeated `prompt` with the same `op` reconnects to its agent and starts no other. teamai keeps the step's `timeout` itself, with `cancel`. It checks a `budget` against `usage` once the prompt ends. The toy runtime's `agent` option runs it this way.
 
 #### A runtime that answers confined prompts

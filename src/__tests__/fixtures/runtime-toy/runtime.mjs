@@ -331,7 +331,8 @@ function prompt(request) {
   if (working.has(request.op)) return;
 
   // The first prompt of this id starts the agent; a repeated one reconnects to it, or reads how it ended.
-  fs.appendFileSync(file('prompts.jsonl'), `${JSON.stringify({ op: request.op, sent: request.lease })}\n`);
+  // The names of its env, never a value, and which of them the team provides.
+  fs.appendFileSync(file('prompts.jsonl'), `${JSON.stringify({ op: request.op, sent: request.lease, env: Object.keys(request.env).sort(), provided: request.provided })}\n`);
 
   if (!record) writeJson(opPath(request.op), { kind: 'prompt', op: request.op, handle: request.handle, lease: request.lease, startedAt: Date.now() });
   settlePrompt(request.op);
