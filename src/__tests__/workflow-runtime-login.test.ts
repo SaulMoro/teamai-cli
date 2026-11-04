@@ -153,6 +153,44 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     expect(await resumePrompt(runtime)).toMatchObject({ kind: 'lost', failure: { code: 'cancel_failed', message: expect.stringContaining(cannotStop.message) } });
   });
 
+  it('ends its wait for the stop 15 s after the cancel, even when a reattach sent just before then answers late', async () => {
+    const base = runtimeSeeing([running]);
+    let op = '';
+    let slowFrom = Number.POSITIVE_INFINITY;
+    let askedToCancel: () => void = () => {};
+    let letCancel: () => void = () => {};
+    const cancelAsked = new Promise<void>((resolve) => { askedToCancel = resolve; });
+    const cancelLet = new Promise<void>((resolve) => { letCancel = resolve; });
+    // Its reattach answers at once until just before the 15 s, then takes as long as a runtime may take to answer one.
+    const runtime: StepRuntime = {
+      ...base,
+      exec: (request, events) => {
+        op = request.op;
+
+        return base.exec(request, events);
+      },
+      cancel: async () => {
+        askedToCancel();
+        await cancelLet;
+      },
+      reattach: async () => (Date.now() < slowFrom ? running(op) : new Promise<Reattached>((resolve) => setTimeout(() => resolve(running(op)), 15_000))),
+    };
+    await leftRunning(runtime);
+    const stopped = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).stopLeftOperation();
+    await cancelAsked;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+
+    try {
+      slowFrom = Date.now() + 14_900;
+      letCancel();
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(await Promise.race([stopped, 'still waiting'])).toEqual({ code: 'runtime_unanswered', message: `Step runtime "fake" still reported operation ${op} of attempt ${FIRST} running 15 s after teamai asked it to cancel it.` });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('is not taken as stopped when its runtime cannot be asked after the cancel', async () => {
     const runtime = runtimeSeeing([unreachable]);
     await leftRunning(runtime);
