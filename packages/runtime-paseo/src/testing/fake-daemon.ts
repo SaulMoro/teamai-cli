@@ -18,7 +18,7 @@ import { z } from 'zod';
 //    agents.json         its agents, workspaces and create receipts, which a restart reads again; an agent that was
 //                        running when it stopped comes back `closed`, as Paseo marks it
 //    behaviour.json      how its next agents behave (`Behaviour`), and which version and models it offers
-//    requests.jsonl      every agent create and cancel it received, for a test to read what crossed
+//    requests.jsonl      every agent create, cancel and workspace archive it received, for a test to read what crossed
 //    answers/<agent>     a person answered the agent's permission request in the app
 //
 //  An agent finds the result file the way a real one does, in teamai's prompt, and writes its output there.
@@ -49,6 +49,8 @@ const BehaviourSchema = z.object({
   refuse_cancel: z.string().optional(),
   /** How long the daemon takes to answer a refused cancel. */
   refuse_cancel_ms: z.number().int().nonnegative().default(0),
+  /** The daemon refuses to archive a workspace with this error. */
+  refuse_archive: z.string().optional(),
 });
 
 export type Behaviour = z.input<typeof BehaviourSchema>;
@@ -417,6 +419,21 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
         }
 
         reply({ type: 'cancel_agent_response', payload: { requestId: message.requestId ?? '', agentId: message.agentId, agent: agent ? snapshot(agent) : null, error: agent ? null : `Agent not found: ${message.agentId}` } });
+
+        return;
+      }
+
+      case 'archive_workspace_request': {
+        record(message);
+        const refused = behaviour().refuse_archive;
+
+        // Paseo deletes only worktrees it created, so archiving teamai's leaves the directory in place.
+        if (!refused) {
+          for (const [cwd, id] of Object.entries(kept.workspaces)) if (id === message.workspaceId) delete kept.workspaces[cwd];
+          save();
+        }
+
+        reply({ type: 'archive_workspace_response', payload: { requestId: message.requestId, workspaceId: message.workspaceId, archivedAt: refused ? null : now(), error: refused ?? null } });
 
         return;
       }

@@ -69,6 +69,8 @@ export interface Daemon {
   /** Waits until the agent's turn ends or needs a person. */
   wait(agentId: string): Promise<WaitEnd>;
   cancel(agentId: string): Promise<void>;
+  /** Archives a workspace, which stops its agents; Paseo deletes only worktrees it created, so teamai's stays. */
+  archive(workspaceId: string): Promise<void>;
   link(agentId: string): string;
   close(): Promise<void>;
 }
@@ -175,6 +177,12 @@ export async function connect(url: string): Promise<Daemon | RuntimeFailure> {
     },
     wait: (agentId) => client.waitForFinish(agentId, 0),
     cancel: (agentId) => client.cancelAgent(agentId),
+    async archive(workspaceId) {
+      // Paseo answers a refused archive with its error rather than throwing it.
+      const { error } = await api.workspaces.archive(workspaceId);
+
+      if (error) throw new Error(error);
+    },
     link: (agentId) => buildAgentDeepLink({ serverId, agentId }),
     async close() {
       await api.dispose().catch(() => {});
