@@ -193,7 +193,7 @@ The step's `model` must be one the daemon offers, and its `effort` one that mode
 ✖ Step "classify" failed with model_unavailable: The Paseo daemon at ws://127.0.0.1:6767/ws has no claude model claude-opus-0-1. It offers: claude-opus-5-5, claude-opus-5, claude-fable-5-1, claude-fable-5, claude-opus-4-8[1m], claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-sonnet-5[1m], claude-opus-4-7[1m], claude-opus-4-7, claude-opus-4-6[1m], claude-opus-4-6, claude-sonnet-4-6[1m], claude-sonnet-4-6, claude-haiku-5-5, claude-haiku-4-5.
 ```
 
-The agent gets the step's prompt. Paseo reports no full token counts, so a step under a token budget runs on the next runtime.
+The agent gets the step's prompt. A later pass of the step starts a new agent: it does not continue the earlier pass's session. Paseo reports no full token counts, so a step under a token budget runs on the next runtime.
 
 ## Credentials
 
