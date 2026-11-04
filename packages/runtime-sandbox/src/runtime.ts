@@ -431,17 +431,26 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     // restarts, ready for the step's next exec. One the engine cannot look up is not stopped.
     const stopped = !found.ok ? found : found.id === undefined ? { ok: true as const } : place?.confined ? await provider.destroy(found.id) : await provider.stop(found.id);
 
-    // An exec whose runtime process is gone ends here: no process of this runtime reports it. It is cancelled only
-    // once the engine stopped it; one the engine could not stop may still run, and ends failed with why.
-    if (running.has(op) || alive(record.runner)) return;
-
+    // One the engine could not stop may still run: it ends failed now, with why, wherever it runs, and its place stays
+    // this attempt's for close to remove. When it ends after all, that end is not a second outcome (finish).
     if (!stopped.ok) {
       const outcome: Outcome = { state: 'failed', failure: stopped.failure };
+
+      if (running.has(op)) {
+        finish(op, record.handle, outcome);
+
+        return;
+      }
+
+      if (journal.exec(op)?.outcome !== undefined) return;
       journal.saveExec(op, { handle: record.handle, runner: record.runner, outcome });
       write(terminal(op, outcome));
 
       return;
     }
+
+    // A stopped exec a live runtime process runs ends cancelled there; one whose process is gone ends here.
+    if (running.has(op) || alive(record.runner)) return;
 
     write(terminal(op, settleOrphan({ op, ...record })));
   };
