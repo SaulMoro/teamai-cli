@@ -5,6 +5,7 @@
 //
 //   FAKE_T3_STATE/config.json   written by the test: { token, environment, projects, providers, agent }
 //                               agent: { output, fail, hold, release, waits, noSession, reply }; read again on every call
+//                               organizeFails: T3 refuses t3_thread_organize
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
 //   FAKE_T3_STATE/threads/      one JSON file per thread
 //   T3CODE_HOME/userdata/server-runtime.json   written once listening: { origin }, as T3 writes it
@@ -147,6 +148,8 @@ const ok = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value) }
 // As T3 answers a launch: its web UI's link to the thread, not the t3-thread:// form its thread lists carry.
 const link = (threadId) => `http://127.0.0.1:${httpServer.address().port}/${config().environment.environmentId}/${encodeURIComponent(threadId)}`;
 
+let sequence = 2_900_000;
+
 const TOOLS = {
   t3_environment_read: () => ok(config().environment),
   orchestrator_capabilities: () => ok({ providers: config().providers }),
@@ -232,11 +235,15 @@ const TOOLS = {
 
     return ok({ threadId: args.threadId, runId: `run:${args.threadId}:1`, status: 'interrupt_requested' });
   },
+  // As T3 answers it: the sequence number of the event it recorded.
   t3_thread_organize: (args) => {
     if (!readThread(args.threadId)) return fail(`No thread ${args.threadId}.`);
-    update(args.threadId, () => ({ settled: args.action === 'settle' }));
 
-    return ok({ threadId: args.threadId, action: args.action });
+    if (config().organizeFails) return fail(`Thread ${args.threadId} cannot be organized now.`);
+    update(args.threadId, () => ({ settled: args.action === 'settle' }));
+    sequence += 1;
+
+    return ok({ sequence });
   },
 };
 
