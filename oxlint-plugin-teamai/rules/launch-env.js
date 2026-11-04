@@ -41,17 +41,13 @@ export default defineRule({
       TemplateLiteral(node) {
         if (node.expressions.length === 0) check(node, node.quasis[0]?.value.raw ?? '');
       },
+      // A name read off any object, not only process.env: a request's env or a copy of it spells the name as well.
       MemberExpression(node) {
-        if (
-          !node.computed &&
-          node.object.type === 'MemberExpression' &&
-          !node.object.computed &&
-          node.object.object.type === 'Identifier' &&
-          node.object.object.name === 'process' &&
-          node.object.property.type === 'Identifier' &&
-          node.object.property.name === 'env' &&
-          node.property.type === 'Identifier'
-        ) check(node.property, node.property.name);
+        if (!node.computed && node.property.type === 'Identifier') check(node.property, node.property.name);
+      },
+      // An env built or taken apart by key, such as `{ TEAMAI_MODE: mode }` or `const { TEAMAI_MODE } = env`.
+      Property(node) {
+        if (!node.computed && node.key.type === 'Identifier') check(node.key, node.key.name);
       },
     };
   },
