@@ -23,6 +23,8 @@ const PlaceSchema = z.object({
   workspace: z.object({ id: z.string(), name: z.string() }),
   /** The worktree the workspace adopted. */
   cwd: z.string(),
+  /** The run's scratch directory, which the place's agents write at its own path. */
+  runDir: z.string(),
 });
 
 export type Place = z.infer<typeof PlaceSchema>;

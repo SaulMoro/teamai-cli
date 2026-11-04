@@ -108,8 +108,9 @@ describe('teamai-runtime-paseo', () => {
       config: { provider: 'claude', model: 'claude-opus-5-5', modeId: 'default', cwd: worktree, title: `teamai review · ${RUN}` },
       labels: { 'teamai-attempt': `${RUN}/${ATTEMPT}` },
     });
-    // Claude's default mode asks before any write: the result file, and only it, is allowed, as teamai's own launch does.
-    expect(create).toMatchObject({ config: { providerOptions: { allowedTools: [`Edit(/${path.join(dir, 'out', 'result.json')})`] } } });
+    // Claude's default mode asks before any write: the result file and the run's scratch directory, and only they, are
+    // allowed, as teamai's own launch allows the result file.
+    expect(create).toMatchObject({ config: { providerOptions: { allowedTools: [`Edit(/${path.join(dir, 'out', 'result.json')})`, `Edit(/${path.join(dir, 'run')}/**)`] } } });
     // No env crosses: Paseo keeps a create's env in plain text.
     expect(create).not.toHaveProperty('env');
   });
