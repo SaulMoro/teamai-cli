@@ -436,7 +436,7 @@ async function startFinishedSessions(config: LocalConfig): Promise<void> {
         return;
       case 'started':
         if (decided.kind === 'drive') await spawnDetachedResume(started.run, { driver: decided.driver, cwd: started.cwd, env: withoutAgentEvidence(process.env) });
-        else if (awaits) log.debug(`hook-dispatch: ${awaitsLine(started.run, awaits.driver)}`);
+        else if (awaits) log.debug(`hook-dispatch: ${await awaitsLine(config, started.run, awaits.driver)}`);
 
         return;
       default: {
