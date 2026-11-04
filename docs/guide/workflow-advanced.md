@@ -1529,7 +1529,7 @@ teamai looks for `<name>.yaml` in this order and uses the first it finds:
 | The user scope's team repo | Only when you start in a project. |
 | Definitions teamai ships | Each one is named `teamai-<name>`. |
 
-`--driver x` runs `teamai-x` when no definition is named `x`, so `--driver claude` and `--driver teamai-claude` both run the shipped `teamai-claude`. `local`, `skill` and `fleet` are not definition names.
+`--driver x` runs `teamai-x` when no definition is named `x`, so `--driver claude` and `--driver teamai-claude` both run the shipped `teamai-claude`. `local`, `none`, `skill` and `fleet` are not definition names: a file `drivers/none.yaml` is refused with `driver_invalid`.
 
 A definition lists one runtime or more. teamai offers each step to them in the order listed, and the first that can take it runs it:
 

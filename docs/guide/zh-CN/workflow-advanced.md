@@ -1523,7 +1523,7 @@ teamai 按下面的顺序查找 `<name>.yaml`，使用找到的第一个：
 | 用户作用域的团队仓库 | 只在项目里启动时查找。 |
 | teamai 自带的定义 | 每个都命名为 `teamai-<name>`。 |
 
-没有名为 `x` 的定义时，`--driver x` 运行 `teamai-x`，所以 `--driver claude` 和 `--driver teamai-claude` 都运行自带的 `teamai-claude`。`local`、`skill` 和 `fleet` 不能用作定义名。
+没有名为 `x` 的定义时，`--driver x` 运行 `teamai-x`，所以 `--driver claude` 和 `--driver teamai-claude` 都运行自带的 `teamai-claude`。`local`、`none`、`skill` 和 `fleet` 不能用作定义名：`drivers/none.yaml` 这样的文件会以 `driver_invalid` 被拒绝。
 
 一个定义列出一个或多个运行时。teamai 按列出的顺序把每个步骤交给它们，第一个能接下的运行时运行它：
 
