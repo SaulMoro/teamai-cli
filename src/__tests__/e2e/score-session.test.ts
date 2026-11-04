@@ -440,11 +440,13 @@ console.log(JSON.stringify({ type: 'result', structured_output: given?.propertie
     const sent = fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8').trim().split('\n').map((text) => JSON.parse(text) as { sent?: { prompt: string }; confined?: { level: string; dir: string } });
     expect(sent).toEqual([expect.objectContaining({ confined: expect.objectContaining({ level: 'best-effort' }) })]);
     // The prompt names the evidence directory exactly as confined.dir does, so a runtime that mounts it elsewhere can rewrite it.
+    // Both use the run's one spelling, its real path, never the linked one this process was given.
     const [judged] = sent;
     const dir = String(judged?.confined?.dir);
-    expect(dir.startsWith(linkedHome)).toBe(true);
+    const realHome = fs.realpathSync(home);
+    expect(dir.startsWith(realHome)).toBe(true);
     expect(judged?.sent?.prompt).toContain(dir);
-    expect(judged?.sent?.prompt).not.toContain(path.join(fs.realpathSync(home), path.relative(linkedHome, dir)));
+    expect(judged?.sent?.prompt).not.toContain(path.join(linkedHome, path.relative(realHome, dir)));
   });
 
   it('runs teamai-share-learnings\' command steps on the host, its own and those of the teamai-share-session it runs, beside a runtime that runs commands', async () => {
