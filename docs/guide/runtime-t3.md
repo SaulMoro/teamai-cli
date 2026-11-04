@@ -182,7 +182,7 @@ $ teamai workflow start readme-test-section --driver t3only
 `write` runs as a thread in the project, as above. teamai's own scoring commands (evidence, label, write) run on this machine and need no agent. The judge runs as a second thread, `score[0].judge · teamai rdecc208adbba4b79`, under **No project** in T3:
 
 - It is a new thread of its own, in a new scratch folder (`~/.t3/scratch/…`). teamai fills that folder with a copy of the evidence the judge reads (the transcript, the diff, `evidence.json`), and makes the copy read-only.
-- Its first message tells it to read only that folder, gives the JSON Schema of the reply, and points every path in teamai's prompt at the copy.
+- Its first message tells it to read only that folder, gives the JSON Schema of the reply, and points each mention of the evidence directory in teamai's prompt at the copy.
 - Its last message is the reply: `{"answer":{"label":"good","reasoning":"The step asked for a \"## Test\" section … diff.patch adds exactly that …"}}`.
 - It runs in Auto, or your tighter `runtime_mode`, like a step thread. Once the reply is read teamai settles the thread, and removes the copy when the judge's place closes.
 
