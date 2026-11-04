@@ -52,6 +52,7 @@ export default defineConfig({
   entry: {
     index: 'src/bin.ts',
     cli: 'src/index.ts',
+    'runtime-paseo': 'packages/runtime-paseo/src/main.ts',
   },
   format: ['esm'],
   target: 'node20',
