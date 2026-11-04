@@ -19,3 +19,9 @@ rule.invalid('rejects any teamai variable a runtime package spells, listed or no
 rule.invalid('rejects reading any teamai variable in a runtime package', 'const kept = process.env.TEAMAI_NEXT_THING;', undefined, unlisted);
 rule.valid('allows a runtime package to import what the protocol names', `import { RUN_DIR_ENV } from '@teamai/runtime-protocol';\nconst dir = process.env[RUN_DIR_ENV];`, unlisted);
 rule.valid('allows a runtime package\'s tests to spell a teamai variable', `const name = 'TEAMAI_WORKFLOW_RESULT';`, { filename: 'packages/runtime-unlisted/src/runtime.test.ts' });
+rule.invalid('rejects a launch variable read from an env other than process.env', 'const mode = request.env.TEAMAI_MODE;');
+rule.invalid('rejects a launch variable read from a plain env object', 'const attempt = env.TEAMAI_WORKFLOW_ATTEMPT;');
+rule.invalid('rejects a launch variable as an object key', 'const env = { TEAMAI_MODE: mode };');
+rule.invalid('rejects destructuring a launch variable', 'const { TEAMAI_LAUNCHED_BY: launcher } = env;');
+rule.invalid('rejects any teamai variable a runtime package reads from its request', 'const kept = request.env.TEAMAI_NEXT_THING;', undefined, unlisted);
+rule.valid('allows an unrelated property of an env object', 'const home = request.env.HOME;');
