@@ -67,7 +67,7 @@ The first run opens T3's sign-in page in your browser. Approve teamai there with
 
 ```text
 This thread runs step "review" of teamai workflow run r928e2fc23ab9bd62 (attempt a96c8bc03). It was started from
-the T3 thread t3-thread://v2/88e28b29-…/thread-… . Work only in this worktree. Do not run teamai workflow commands:
+the T3 thread <t3-thread://v2/88e28b29-…/thread-…>. Work only in this worktree. Do not run teamai workflow commands:
 teamai commits, pushes and reports the step itself.
 
 Read README.md. Count its markdown sections …
@@ -81,7 +81,22 @@ In this run Claude read the README, ran `grep -c '^#' README.md`, made the resul
 {"data":{"done":{"run":"r928e2fc23ab9bd62","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```
 
-While the step runs, the run's details in `teamai dashboard` link its thread (`t3-thread://…`), with the thread id and the model. Once the step's result is collected, teamai settles the thread, so it leaves your list of active threads. A thread whose step failed stays active, so you see it.
+While the step runs, the run's details in `teamai dashboard` link its thread, with the thread id and the model. The link opens the thread in the T3 Code desktop app, from the dashboard or from a terminal:
+
+```sh
+open 't3code://threads/88e28b29-…/mcp%3Alaunch%3A3891149…'
+```
+
+Once a step ends, teamai settles its thread. The thread leaves your list of active threads for T3's collapsed **Settled** group, and the link still opens it:
+
+| The step | Its thread |
+| --- | --- |
+| succeeded, failed, or reported a failure in its result | settled once teamai collects the step |
+| was cancelled (`teamai workflow cancel`) | stopped, then settled |
+| still runs, or is an interactive step waiting for you | stays active |
+| ended while T3 still runs the thread (T3 did not stop it) | stays active, so you can stop it |
+
+teamai settles only the threads it launched. If T3 refuses to settle one, the step still counts and the thread stays active.
 
 ## How much a step thread asks you
 
@@ -184,7 +199,7 @@ $ teamai workflow start readme-test-section --driver t3only
 - It is a new thread of its own, in a new scratch folder (`~/.t3/scratch/…`). teamai fills that folder with a copy of the evidence the judge reads (the transcript, the diff, `evidence.json`), and makes the copy read-only.
 - Its first message tells it to read only that folder, gives the JSON Schema of the reply, and points each mention of the evidence directory in teamai's prompt at the copy.
 - Its last message is the reply: `{"answer":{"label":"good","reasoning":"The step asked for a \"## Test\" section … diff.patch adds exactly that …"}}`.
-- It runs in Auto, or your tighter `runtime_mode`, like a step thread. Once the reply is read teamai settles the thread, and removes the copy when the judge's place closes.
+- It runs in Auto, or your tighter `runtime_mode`, like a step thread. When the judge's place closes, teamai settles the thread and removes the copy.
 
 A T3 judge runs at **best-effort** [isolation](scorers.md#isolation):
 
@@ -206,7 +221,7 @@ An unattended run's threads still run in Auto, or your `runtime_mode`. A step wh
 
 ## Restart, cancel and retry
 
-The step's thread lives in T3, not in teamai's process. If the driver dies, `teamai workflow resume <run> --driver t3` reconnects to the same thread instead of starting another one. `teamai workflow cancel <run>` stops the thread as its Stop button does. The thread ends interrupted, stays in your list of active threads, and any request it was waiting on is withdrawn.
+The step's thread lives in T3, not in teamai's process. If the driver dies, `teamai workflow resume <run> --driver t3` reconnects to the same thread instead of starting another one. `teamai workflow cancel <run>` stops the thread as its Stop button does. The thread ends interrupted, any request it was waiting on is withdrawn, and teamai settles it.
 
 ```sh
 teamai workflow resume r928e2fc23ab9bd62 --driver t3
