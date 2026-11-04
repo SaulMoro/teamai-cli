@@ -28,7 +28,7 @@ interface Subject {
   display?: RuntimeDisplay;
 }
 
-const [sandbox, sbx] = await Promise.all([sandboxOnFake('docker'), sandboxOnFake('sbx')]);
+const [docker, sbx] = await Promise.all([sandboxOnFake('docker'), sandboxOnFake('sbx')]);
 
 const SUBJECTS: Subject[] = [
   {
@@ -40,8 +40,8 @@ const SUBJECTS: Subject[] = [
   { name: 'local', start: () => localStepRuntime(), options: () => ({}), retains: false },
   {
     name: 'sandbox on a fake docker',
-    start: (state) => stdioStepRuntime({ name: 'sandbox', command: sandbox.command, args: sandbox.args(state) }),
-    options: () => sandbox.options,
+    start: (state) => stdioStepRuntime({ name: 'sandbox', command: docker.command, args: docker.args(state) }),
+    options: () => docker.options,
     retains: true,
     display: { label: 'teamai-r0123abcd-a0123abcd (docker)', fields: { container: 'teamai-r0123abcd-a0123abcd', image: 'scenario/agent:1' } },
   },

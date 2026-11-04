@@ -866,6 +866,14 @@ describe('an attempt in an sbx sandbox', () => {
     expect(engine.containers()).toEqual([]);
   });
 
+  it('fails init, naming the command, when it cannot remove the scratch sandbox it probed a kit in', async () => {
+    engine.image('./kits/review', { claude: CLAUDE });
+    engine.failRemove(true);
+    const reply = await init(start(), { provider: 'sbx', agent: './kits/review' });
+
+    expect(reply).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable', message: expect.stringMatching(/sbx rm --force teamai-tools-[0-9a-f]{8}/) } });
+  });
+
   it('stops the step on cancel and keeps the sandbox for the next exec; close removes it, and reattach then says gone', async () => {
     const connection = start();
     await init(connection, { provider: 'sbx', agent: 'claude' });

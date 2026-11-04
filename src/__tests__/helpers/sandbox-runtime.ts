@@ -23,14 +23,15 @@ export async function sandboxOnFake(provider: 'docker' | 'sbx'): Promise<{ comma
   const bin = path.join(dir, 'bin');
   fs.mkdirSync(bin);
   fs.writeFileSync(path.join(bin, provider), `#!/bin/sh\nFAKE_ENGINE_NAME=${provider} exec "${process.execPath}" "${path.join(PACKAGE, 'testing', 'fake-engine.mjs')}" "$@"\n`, { mode: 0o755 });
-  const image = provider === 'docker' ? 'scenario/agent:1' : 'claude';
+  // The fake docker's image, or the fake sbx's agent template: either holds the tools in `bin`.
+  const template = provider === 'docker' ? 'scenario/agent:1' : 'claude';
 
   return {
     command: '/usr/bin/env',
     args: (state) => [
       `PATH=${bin}${path.delimiter}/usr/bin${path.delimiter}/bin`, `HOME=${path.join(state, 'home')}`, `FAKE_ENGINE_STATE=${path.join(state, 'engine')}`,
-      `FAKE_ENGINE_IMAGES=${JSON.stringify({ [image]: bin })}`, process.execPath, executable,
+      `FAKE_ENGINE_IMAGES=${JSON.stringify({ [template]: bin })}`, process.execPath, executable,
     ],
-    options: provider === 'docker' ? { provider, image } : { provider, agent: image },
+    options: provider === 'docker' ? { provider, image: template } : { provider, agent: template },
   };
 }
