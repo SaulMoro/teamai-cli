@@ -90,6 +90,8 @@ function settledStatus(waited: Waited): Waited['status'] | undefined {
 export interface Connected {
   ok: true;
   t3: T3;
+  /** Which sign-in the connection uses, as `signInOf` names it. */
+  signIn: string;
 }
 
 export interface ServeOptions {
@@ -118,6 +120,8 @@ interface Session {
   instances: Map<ToolId, Provider>;
   /** The mode every step thread launches in. */
   stepMode: StepMode;
+  /** Which sign-in this runtime's calls go out under. */
+  signIn: string;
 }
 
 type PromptRequest = Extract<RuntimeRequest, { type: 'prompt' }>;
@@ -360,6 +364,19 @@ export function serve(options: ServeOptions): Promise<void> {
     message: `Runtime t3 cannot read its record of ${handle}, ${read.file} (${read.why.replace(/\.$/, '')}), so it cannot tell which T3 threads it launched there, and it keeps the place. Stop that run's threads in T3 Code (their titles end with "teamai" and the run id), then delete the file and cancel the run again.`,
   });
 
+  /**
+   * What a lost launch answers once the member signed in again: T3 finds a launch only under the sign-in that sent it,
+   * so nothing here can find or stop its thread, and the place stays until the person did.
+   */
+  const launchUnconfirmed = (known: PlaceRecord, launch: LaunchRecord): RuntimeFailure => {
+    const where = known.kind === 'worktree' ? `in the T3 project "${known.projectTitle}"` : 'under No project in T3 Code';
+
+    return {
+      code: 'launch_unconfirmed',
+      message: `teamai launched the T3 thread "${launch.title}" ${where} under an earlier T3 Code sign-in, and T3 Code never answered, so it may still run. T3 Code finds that launch only under the sign-in that sent it, so teamai cannot find or stop it. In T3 Code, stop "${launch.title}" with its Stop button if it runs, then delete ${journal.file(known.handle)} and run teamai workflow cancel ${known.run} again.`,
+    };
+  };
+
   const fail = (op: OpId, failure: RuntimeFailure): void => write({ op, event: 'failed', failure });
 
   /** The terminal event of an operation that ended; a running one has none yet. */
@@ -445,7 +462,7 @@ export function serve(options: ServeOptions): Promise<void> {
         return;
       }
 
-      session = { t3: connected.t3, mode: request.mode, environment, instances: instances.instances, stepMode: parsed.data.runtime_mode ?? 'auto' };
+      session = { t3: connected.t3, mode: request.mode, environment, instances: instances.instances, stepMode: parsed.data.runtime_mode ?? 'auto', signIn: connected.signIn };
       const tools = [...instances.instances.keys()];
       write({
         type: 'init', ok: true, prompt: true, confinedPrompt: true,
@@ -536,16 +553,24 @@ export function serve(options: ServeOptions): Promise<void> {
   };
 
   /**
-   * Launches a judge's thread idle in a scratch folder, fills the folder with a read-only copy of its directory, then
-   * briefs it. The copy is journaled before it is made, so close removes it whatever happens next. A thread that already
-   * ran, after a restart, was copied and briefed then.
+   * Launches a judge's thread idle in a scratch folder, unless the journal holds it (`known`), fills the folder with a
+   * read-only copy of its directory, then briefs it. The copy is journaled before it is made, so close removes it
+   * whatever happens next. A thread that already ran, after a restart, was copied and briefed then.
    */
-  const launchJudge = async (s: Session, request: PromptRequest, confined: ConfinedPrompt, opened: PlaceRecord, journalThread: (threadId: string, copy: string) => ThreadRecord, thread: NewThread): Promise<ThreadRecord> => {
-    const { threadId } = await s.t3.launchScratch(thread);
+  const launchJudge = async ({ s, request, confined, opened, journalThread, thread, known }: {
+    s: Session;
+    request: PromptRequest;
+    confined: ConfinedPrompt;
+    opened: PlaceRecord;
+    journalThread: (threadId: string, copy: string) => ThreadRecord;
+    thread: NewThread;
+    known: ThreadRecord | undefined;
+  }): Promise<ThreadRecord> => {
+    const threadId = known?.threadId ?? (await s.t3.launchScratch(thread)).threadId;
     const shell = await s.t3.thread(threadId);
 
     if (shell.worktreePath === null) throw new Error(`T3 Code gave the thread ${threadId} no folder.`);
-    const launched = journalThread(threadId, shell.worktreePath);
+    const launched = known ?? journalThread(threadId, shell.worktreePath);
 
     if (shell.runCount === 0) {
       try {
@@ -736,18 +761,27 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
+    let thread = opened.threads[request.op];
+    const pending = opened.launches[request.op];
+
+    // Launching again under this sign-in would start the step a second time, beside the thread T3 may run.
+    if (!thread && pending && pending.signIn !== s.signIn) {
+      refuse({ op: request.op, state: 'failed', failure: launchUnconfirmed(opened, pending) });
+
+      return;
+    }
+
     const state: Running = { cancelled: false };
     running.set(request.op, state);
-    let thread = opened.threads[request.op];
 
     try {
       const title = `${lease.step} · teamai ${opened.run}`;
-      const launchedAt = thread?.launchedAt ?? opened.launches[request.op]?.launchedAt ?? Date.now();
+      const launchedAt = thread?.launchedAt ?? pending?.launchedAt ?? Date.now();
       const newThread: NewThread = { title, modelSelection: selection.selection, runtimeMode: s.stepMode, clientRequestId: request.op };
 
       // T3 may launch the thread and still fail to answer, so the launch is journaled before it is sent.
       if (!thread) {
-        const launch: LaunchRecord = { title, modelSelection: selection.selection, runtimeMode: s.stepMode, tool: lease.tool, launchedAt, ...(work.kind === 'step' && { worktreePath: request.cwd }) };
+        const launch: LaunchRecord = { title, modelSelection: selection.selection, runtimeMode: s.stepMode, tool: lease.tool, launchedAt, signIn: s.signIn, ...(work.kind === 'step' && { worktreePath: request.cwd }) };
         const now = place(request.handle) ?? opened;
         journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, launches: { ...now.launches, [request.op]: launch } });
       }
@@ -763,10 +797,12 @@ export function serve(options: ServeOptions): Promise<void> {
         return launched;
       };
 
-      // A repeated launch with the same clientRequestId is T3's lookup of the thread it launched for this op.
+      // A thread the journal holds is reconnected to by its id: T3 answers a repeated launch with it only under the
+      // sign-in that sent the launch, and would start the step again under another.
+      if (thread) state.thread = thread.threadId;
       thread = work.kind === 'judge'
-        ? await launchJudge(s, request, work.confined, opened, journalThread, newThread)
-        : journalThread(await launchStep(s, request, work.place, newThread), undefined);
+        ? await launchJudge({ s, request, confined: work.confined, opened, journalThread, thread: newThread, known: thread })
+        : thread ?? journalThread(await launchStep(s, request, work.place, newThread), undefined);
     } catch (error) {
       // T3 caps a thread's mode at the access the member approved teamai with, and says so with this code.
       const tooNarrow = error instanceof T3Error && error.refusal?.code === 'runtime_mode_escalation_denied' ? error.refusal.message : undefined;
@@ -800,9 +836,11 @@ export function serve(options: ServeOptions): Promise<void> {
   /**
    * Finds the thread of a launch T3 never answered by repeating it with the same clientRequestId and no message: T3
    * answers a launch it accepted with that thread and starts nothing more, and launches an idle thread otherwise. A
-   * launch a new launch's check refuses launched nothing. Answers the place as journaled then; throws otherwise.
+   * launch a new launch's check refuses launched nothing. Answers the place as journaled then, or why a launch another
+   * sign-in sent cannot be looked up; throws while T3 does not say.
    */
-  const resolveLaunch = async (s: Session, known: PlaceRecord, op: OpId, launch: LaunchRecord): Promise<PlaceRecord> => {
+  const resolveLaunch = async (s: Session, known: PlaceRecord, op: OpId, launch: LaunchRecord): Promise<{ ok: true; place: PlaceRecord } | { ok: false; failure: RuntimeFailure }> => {
+    if (launch.signIn !== s.signIn) return { ok: false, failure: launchUnconfirmed(known, launch) };
     const newThread: NewThread = { title: launch.title, modelSelection: launch.modelSelection, runtimeMode: launch.runtimeMode, clientRequestId: op };
     let threadId: string | undefined;
 
@@ -822,7 +860,7 @@ export function serve(options: ServeOptions): Promise<void> {
     const resolved: PlaceRecord = { ...now, launches, ...(thread && { threads: { ...now.threads, [op]: thread } }) };
     journal.write(resolved);
 
-    return resolved;
+    return { ok: true, place: resolved };
   };
 
   const cancel = async (op: OpId): Promise<void> => {
@@ -838,12 +876,27 @@ export function serve(options: ServeOptions): Promise<void> {
         const s = session;
         const launch = known.launches[op];
 
-        try {
-          if (launch) known = await resolveLaunch(s, known, op, launch);
-        } catch (error) {
-          process.stderr.write(`Could not look up the T3 thread launched for ${op}: ${error instanceof Error ? error.message : String(error)}\n`);
+        if (launch) {
+          let resolved: Awaited<ReturnType<typeof resolveLaunch>>;
 
-          return;
+          try {
+            resolved = await resolveLaunch(s, known, op, launch);
+          } catch (error) {
+            process.stderr.write(`Could not look up the T3 thread launched for ${op}: ${error instanceof Error ? error.message : String(error)}\n`);
+
+            return;
+          }
+
+          // The launch stays journaled, so close keeps the place and says the same.
+          if (!resolved.ok) {
+            const failed: OpState = { op, state: 'failed', failure: resolved.failure };
+            record(known.handle, failed, { threadEnded: false });
+            answerEnded(op, failed);
+
+            return;
+          }
+
+          known = resolved.place;
         }
 
         const left = known.threads[op];
@@ -925,11 +978,16 @@ export function serve(options: ServeOptions): Promise<void> {
         // init could not reach T3 Code, so nothing here can find the thread.
         if (!s) return failClose({ code: 't3_unavailable', message: `${lookUp}, and teamai could not reach T3 Code to look for it. Open T3 Code, then run teamai workflow cancel ${known.run} again.` });
 
+        let resolved: Awaited<ReturnType<typeof resolveLaunch>>;
+
         try {
-          known = await resolveLaunch(s, known, op, launch);
+          resolved = await resolveLaunch(s, known, op, launch);
         } catch (error) {
           return failClose({ code: 't3_unavailable', message: `${lookUp}, and T3 Code did not say whether it launched it when teamai looked: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. Run teamai workflow cancel ${known.run} again once T3 Code answers.` });
         }
+
+        if (!resolved.ok) return failClose(resolved.failure);
+        known = resolved.place;
       }
 
       for (const { op } of Object.values(known.ops)) {
