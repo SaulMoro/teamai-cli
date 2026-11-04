@@ -5,12 +5,13 @@ import readline from 'node:readline';
 import { promisify } from 'node:util';
 import {
   PromptResultSchema, RUNTIME_PROTOCOL, RuntimeRequestSchema, type RUNTIME_MODES,
-  type OpId, type OpState, type PromptLease, type PromptResult, type RuntimeDisplay, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
+  type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptLease, type PromptResult, type RuntimeDisplay, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
+import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import { z } from 'zod';
 import type { Journal, PlaceRecord, ThreadRecord } from './journal.js';
 import { DRIVER_NAMES, DRIVERS, driverOf, sessionSince, toolOf, type ToolId } from './sessions.js';
-import { STEP_MODE_LABELS, T3Error, type Environment, type Launch, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
+import { STEP_MODE_LABELS, T3Error, type Environment, type Launch, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
 
 // ─── teamai-runtime-t3 ───
 //
@@ -18,13 +19,18 @@ import { STEP_MODE_LABELS, T3Error, type Environment, type Launch, type StepMode
 //  where the person can watch it, steer it or stop it. It runs no command: command steps and setup go to the next
 //  runtime of the driver definition (`local` in teamai-t3).
 //
-//    init     connect to the environment, signing in when attended; offer the tools its provider instances run
-//    open     the checkout must be a T3 project; the place is that project and the attempt's worktree
+//    init     connect to the environment, signing in when attended; offer the tools its provider instances run, and
+//             to judge with them best effort (a confined prompt)
+//    open     the checkout must be a T3 project; the place is that project and the attempt's worktree. With no view,
+//             the place of a confined prompt, which needs no project
 //    prompt   t3_thread_launch (existing_worktree, auto or a tighter runtime_mode, clientRequestId = op), then t3_thread_wait
 //             until the run and the work it delegated settle; the result file and the tool's transcript end it,
 //             and the thread is settled
+//             confined: an idle scratch thread, its folder filled with a read-only copy of `dir`, then briefed to read
+//             only that; its last message is the reply
 //    cancel   stop the thread                     reattach  the ops and the thread, from the journal
 //    collect  nothing to copy: the worktree, the result and the transcript are already on this machine
+//    close    stop what still runs, and remove a judge's copy
 //
 
 /** The options a driver definition gives `t3`. teamai strips `max_parallel` and `credentials` before `init`. */
@@ -50,6 +56,12 @@ const WAIT_MS = { attended: 25_000, unattended: 5_000 } as const;
 
 /** How often an interactive step's thread is checked once it is idle without a result: the person may still be in it. */
 const IDLE_POLL_MS = 2_000;
+
+/**
+ * What a judge's thread keeps of its directory, which `finished` reports: best effort, since only the brief and the
+ * copy's file modes keep the agent there, and read, since the copy is read-only.
+ */
+const JUDGE_KEPT: ConfinedKept = { level: 'best-effort', access: 'read' };
 
 const TERMINAL: ReadonlySet<Waited['status']> = new Set(['completed', 'interrupted', 'failed', 'cancelled', 'rolled_back']);
 
@@ -84,6 +96,18 @@ interface Session {
   instances: Map<ToolId, Provider>;
   /** The mode every step thread launches in. */
   stepMode: StepMode;
+}
+
+type PromptRequest = Extract<RuntimeRequest, { type: 'prompt' }>;
+
+/** What a prompt runs: a step on its attempt's worktree, or a judge confined to its directory. */
+type Work = { kind: 'step'; place: PlaceRecord & { kind: 'worktree' } } | { kind: 'judge'; confined: ConfinedPrompt };
+
+/** What `request` runs in `opened`: teamai opens a confined prompt's place with no view, and sends it nothing else. */
+function workOf(request: PromptRequest, opened: PlaceRecord): Work | undefined {
+  if (opened.kind === 'worktree') return request.confined ? undefined : { kind: 'step', place: opened };
+
+  return request.confined ? { kind: 'judge', confined: request.confined } : undefined;
 }
 
 const execFileAsync = promisify(execFile);
@@ -160,6 +184,8 @@ function threadDisplay(thread: ThreadRecord, environment: string): RuntimeDispla
 
 /** What the run's details show of a place before a thread runs in it. */
 function placeDisplay(place: PlaceRecord, environment: Environment): RuntimeDisplay {
+  if (place.kind === 'confined') return { label: 'T3 · judge', fields: { environment: environment.label } };
+
   return { label: `T3 · ${place.projectTitle}`.slice(0, 80), fields: { environment: environment.label, project: place.projectTitle } };
 }
 
@@ -175,6 +201,57 @@ function firstMessage(place: PlaceRecord, lease: PromptLease, startedFrom: strin
     + ` Work only in this worktree. Do not run teamai workflow commands: teamai commits, pushes and reports the step itself.${interactive}\n\n${lease.prompt}`;
 }
 
+/**
+ * A judge's first message: what it judges, that its folder is all it may read, and the reply's shape, then teamai's
+ * prompt with each mention of the directory pointed at the copy.
+ */
+function judgeMessage(place: PlaceRecord, lease: PromptLease, confined: ConfinedPrompt, copy: string): string {
+  const replySchema = confined.schema === undefined ? '' : ` It matches this JSON Schema: ${JSON.stringify(confined.schema)}`;
+
+  return `This thread judges step "${lease.step}" of teamai workflow run ${place.run} (attempt ${place.attempt}). Its folder, ${copy}, is a read-only copy of the evidence.`
+    + ' Read only the files in it: do not read, run or change anything outside it, and change nothing in it. Do not run teamai commands.'
+    + ` Reply with the JSON value the prompt asks for and no other text.${replySchema}\n\n${lease.prompt.replaceAll(confined.dir, copy)}`;
+}
+
+/** Sets the mode of every directory and file under `root`, `root` included; a symlink is left alone. */
+function chmodTree(root: string, modes: { dir: number; file: number }): void {
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const at = path.join(root, entry.name);
+
+    if (entry.isDirectory()) chmodTree(at, modes);
+    else if (entry.isFile()) fs.chmodSync(at, modes.file);
+  }
+
+  fs.chmodSync(root, modes.dir);
+}
+
+const READ_ONLY = { dir: 0o555, file: 0o444 };
+
+const WRITABLE = { dir: 0o755, file: 0o644 };
+
+/**
+ * Fills `copy`, the judge thread's folder, with what `dir` holds, then makes it read-only. Whatever an earlier attempt
+ * left there goes first. A symlink would reach outside `dir`, so none is copied.
+ */
+function copyReadOnly(dir: string, copy: string): void {
+  chmodTree(copy, WRITABLE);
+
+  for (const name of fs.readdirSync(copy)) fs.rmSync(path.join(copy, name), { recursive: true, force: true });
+  fs.cpSync(dir, copy, { recursive: true, filter: (source) => !fs.lstatSync(source).isSymbolicLink() });
+  chmodTree(copy, READ_ONLY);
+}
+
+/** The JSON value a judge replied with, in a fenced block or bare, or undefined when it is none. */
+function replyValue(text: string): JsonValue | undefined {
+  try {
+    const parsed = JsonValueSchema.safeParse(JSON.parse(text.trim().replace(/^```(?:json)?\s*|\s*```$/g, '')));
+
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
@@ -186,15 +263,15 @@ function readResult(file: string): { ok: true; result: PromptResult } | { ok: fa
   try {
     text = fs.readFileSync(file, 'utf8');
   } catch {
-    return { ok: false, why: 'ended without writing the result file' };
+    return { ok: false, why: `ended without writing the result file ${file}` };
   }
 
   try {
     const parsed = PromptResultSchema.safeParse(JSON.parse(text));
 
-    return parsed.success ? { ok: true, result: parsed.data } : { ok: false, why: 'wrote a result file that is not a workflow result' };
+    return parsed.success ? { ok: true, result: parsed.data } : { ok: false, why: `wrote a result file that is not a workflow result ${file}` };
   } catch {
-    return { ok: false, why: 'wrote a result file that is not JSON' };
+    return { ok: false, why: `wrote a result file that is not JSON ${file}` };
   }
 }
 
@@ -224,7 +301,7 @@ export function serve(options: ServeOptions): Promise<void> {
       case 'running':
         return;
       case 'finished':
-        return write({ op, event: 'finished', session: state.session, result: state.result, ...(state.usage && { usage: state.usage }) });
+        return write({ op, event: 'finished', session: state.session, result: state.result, ...(state.usage && { usage: state.usage }), ...(state.confined && { confined: state.confined }) });
       case 'cancelled':
         return write({ op, event: 'cancelled' });
       case 'failed':
@@ -289,11 +366,12 @@ export function serve(options: ServeOptions): Promise<void> {
       }
 
       session = { t3: connected.t3, mode: request.mode, environment, instances: instances.instances, stepMode: parsed.data.runtime_mode ?? 'auto' };
+      const tools = [...instances.instances.keys()];
       write({
-        type: 'init', ok: true, prompt: true,
+        type: 'init', ok: true, prompt: true, confinedPrompt: true,
         can: {
           exec: false, setup: false, env: false, hitl: request.mode === 'attended', tokens: false, unattended: false, max_turns: false,
-          workspace: ['new', 'continue'], tools: [...instances.instances.keys()],
+          workspace: ['new', 'continue'], tools, ...(tools.length > 0 && { confined: [{ ...JUDGE_KEPT, tools }] }),
         },
       });
     } catch (error) {
@@ -322,8 +400,11 @@ export function serve(options: ServeOptions): Promise<void> {
 
     const view = request.view;
 
+    // A confined prompt's place: its thread runs in a scratch folder of its own, in no project.
     if (!view) {
-      fail(request.op, { code: 'runtime_protocol', message: 'open came without a view, the place of a confined prompt, which runtime t3 does not answer.' });
+      const confined: PlaceRecord = { kind: 'confined', handle, run: request.run, attempt: request.attempt, ops: {}, threads: {} };
+      journal.write(confined);
+      write({ op: request.op, event: 'ready', display: placeDisplay(confined, session.environment) });
 
       return;
     }
@@ -347,13 +428,48 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    const opened: PlaceRecord = { handle, run: request.run, attempt: request.attempt, projectId: project.id, projectTitle: project.title, ops: {}, threads: {} };
+    const opened: PlaceRecord = { kind: 'worktree', handle, run: request.run, attempt: request.attempt, projectId: project.id, projectTitle: project.title, ops: {}, threads: {} };
     journal.write(opened);
     write({ op: request.op, event: 'ready', display: placeDisplay(opened, session.environment) });
   };
 
+  /** A judge's result: its last message, as the JSON value it replied with. */
+  const judged = async (s: Session, thread: ThreadRecord): Promise<{ ok: true; result: PromptResult } | { ok: false; why: string }> => {
+    const reply = await s.t3.lastReply(thread.threadId);
+    const output = reply === undefined ? undefined : replyValue(reply);
+
+    return output === undefined ? { ok: false, why: 'replied with no JSON value' } : { ok: true, result: { output } };
+  };
+
+  /** Launches a step's thread on the attempt's worktree with its first message, and returns its id. */
+  const launchStep = async (s: Session, request: PromptRequest, opened: PlaceRecord & { kind: 'worktree' }, thread: NewThread): Promise<string> => {
+    const message = firstMessage(opened, request.lease, options.startedFrom && threadLink(s.environment, options.startedFrom));
+
+    return (await s.t3.launch({ ...thread, message, projectId: opened.projectId, worktreePath: request.cwd })).threadId;
+  };
+
+  /**
+   * Launches a judge's thread idle in a scratch folder, fills the folder with a read-only copy of its directory, then
+   * briefs it. The copy is journaled before it is made, so close removes it whatever happens next. A thread that already
+   * ran, after a restart, was copied and briefed then.
+   */
+  const launchJudge = async (s: Session, request: PromptRequest, confined: ConfinedPrompt, opened: PlaceRecord, journalThread: (threadId: string, copy: string) => ThreadRecord, thread: NewThread): Promise<ThreadRecord> => {
+    const { threadId } = await s.t3.launchScratch(thread);
+    const shell = await s.t3.thread(threadId);
+
+    if (shell.worktreePath === null) throw new Error(`T3 Code gave the thread ${threadId} no folder.`);
+    const launched = journalThread(threadId, shell.worktreePath);
+
+    if (shell.runCount === 0) {
+      copyReadOnly(confined.dir, shell.worktreePath);
+      await s.t3.send(threadId, judgeMessage(opened, request.lease, confined, shell.worktreePath), `${request.op}:brief`);
+    }
+
+    return launched;
+  };
+
   /** Waits for the thread until the step is done, stopped or failed, and returns how it ended. */
-  const follow = async (s: Session, request: Extract<RuntimeRequest, { type: 'prompt' }>, thread: ThreadRecord): Promise<OpState> => {
+  const follow = async (s: Session, request: PromptRequest, thread: ThreadRecord): Promise<OpState> => {
     const state = running.get(request.op);
     const where = `The T3 thread ${thread.link} ("${thread.title}")`;
     let errors = 0;
@@ -382,7 +498,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
       if (!TERMINAL.has(waited.status)) {
         // T3 keeps a run that asks for an approval running, with the request pending; nobody answers it unattended.
-        if (s.mode === 'unattended' && (waited.status === 'waiting' || await s.t3.pendingRequests(thread.threadId) > 0)) {
+        if (s.mode === 'unattended' && (waited.status === 'waiting' || (await s.t3.thread(thread.threadId)).pendingRequestCount > 0)) {
           await whyNotStopped(s.t3, thread.threadId);
 
           return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} asked for an approval, and nobody is there to give it in an unattended run.` } };
@@ -402,13 +518,14 @@ export function serve(options: ServeOptions): Promise<void> {
         continue;
       }
 
-      const written = readResult(request.lease.result);
+      const written = request.confined ? await judged(s, thread) : readResult(request.lease.result);
 
-      if (!written.ok) return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} ${written.why} ${request.lease.result}.` } };
+      if (!written.ok) return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} ${written.why}.` } };
+      const cwd = thread.copy ?? request.cwd;
       const driver = driverOf(thread.tool);
-      const id = driver && await sessionSince(driver, request.cwd, thread.launchedAt);
+      const id = driver && await sessionSince(driver, cwd, thread.launchedAt);
 
-      if (!id) return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${request.cwd}, so the step cannot be scored or resumed.` } };
+      if (!id) return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${cwd}, so the step cannot be scored or resumed.` } };
 
       // A settled thread leaves the person's list of active threads; one whose step failed, waits or holds stays.
       if (!written.result.failure) {
@@ -419,11 +536,11 @@ export function serve(options: ServeOptions): Promise<void> {
         }
       }
 
-      return { op: request.op, state: 'finished', session: { tool: thread.tool, id }, result: written.result };
+      return { op: request.op, state: 'finished', session: { tool: thread.tool, id }, result: written.result, ...(request.confined && { confined: JUDGE_KEPT }) };
     }
   };
 
-  const prompt = async (request: Extract<RuntimeRequest, { type: 'prompt' }>): Promise<void> => {
+  const prompt = async (request: PromptRequest): Promise<void> => {
     handleOf.set(request.op, request.handle);
     const opened = place(request.handle);
     const ended = opened?.ops[request.op];
@@ -512,6 +629,14 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
+    const work = workOf(request, opened);
+
+    if (!work) {
+      refuse({ op: request.op, state: 'failed', failure: { code: 'runtime_protocol', message: opened.kind === 'confined' ? `${request.handle} is a confined prompt's place, and this prompt is not confined.` : `A confined prompt came to ${request.handle}, which was opened with a view.` } });
+
+      return;
+    }
+
     const state: Running = { cancelled: false };
     running.set(request.op, state);
     let thread = opened.threads[request.op];
@@ -519,17 +644,22 @@ export function serve(options: ServeOptions): Promise<void> {
     try {
       const title = `${lease.step} · teamai ${opened.run}`;
       const launchedAt = thread?.launchedAt ?? Date.now();
+      const newThread: NewThread = { title, modelSelection: selection.selection, runtimeMode: s.stepMode, clientRequestId: request.op };
+
+      /** Journals the op running on `threadId`, with the judge's copy once its folder is known. */
+      const journalThread = (threadId: string, copy: string | undefined): ThreadRecord => {
+        const launched: ThreadRecord = { threadId, title, link: threadLink(s.environment, threadId), model: selection.selection.model, tool: lease.tool, launchedAt, ...(copy && { copy }) };
+        const now = place(request.handle) ?? opened;
+        journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, threads: { ...now.threads, [request.op]: launched } });
+        state.thread = threadId;
+
+        return launched;
+      };
 
       // A repeated launch with the same clientRequestId is T3's lookup of the thread it launched for this op.
-      const launched = await s.t3.launch({
-        title, message: firstMessage(opened, lease, options.startedFrom && threadLink(s.environment, options.startedFrom)), projectId: opened.projectId, worktreePath: request.cwd,
-        modelSelection: selection.selection, runtimeMode: s.stepMode, clientRequestId: request.op,
-      });
-
-      thread = { threadId: launched.threadId, title, link: threadLink(s.environment, launched.threadId), model: selection.selection.model, tool: lease.tool, launchedAt };
-      state.thread = thread.threadId;
-      const now = place(request.handle) ?? opened;
-      journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, threads: { ...now.threads, [request.op]: thread } });
+      thread = work.kind === 'judge'
+        ? await launchJudge(s, request, work.confined, opened, journalThread, newThread)
+        : journalThread(await launchStep(s, request, work.place, newThread), undefined);
     } catch (error) {
       // T3 caps a thread's mode at the access the member approved teamai with, and says so with this code.
       const tooNarrow = error instanceof T3Error && error.refusal?.code === 'runtime_mode_escalation_denied' ? error.refusal.message : undefined;
@@ -617,6 +747,14 @@ export function serve(options: ServeOptions): Promise<void> {
         });
 
         return;
+      }
+    }
+
+    // A judge's copy is the thread's scratch folder, so the thread loses its folder with it.
+    for (const thread of Object.values(known?.threads ?? {})) {
+      if (thread.copy && fs.existsSync(thread.copy)) {
+        chmodTree(thread.copy, WRITABLE);
+        fs.rmSync(thread.copy, { recursive: true, force: true });
       }
     }
 

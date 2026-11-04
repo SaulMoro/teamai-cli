@@ -45,6 +45,8 @@ describe('teamai-runtime-t3', () => {
   afterEach(async () => {
     await Promise.all(connections.splice(0).map((runtime) => runtime.close()));
     await t3.stop();
+    // A judge's copy left unclosed is read-only.
+    execFileSync('chmod', ['-R', 'u+w', dir]);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -58,8 +60,11 @@ describe('teamai-runtime-t3', () => {
 
       expect(RuntimeMessageSchema.safeParse(reply).success).toBe(true);
       expect(reply).toEqual({
-        type: 'init', ok: true, prompt: true,
-        can: { exec: false, setup: false, env: false, hitl: true, tokens: false, unattended: false, max_turns: false, workspace: ['new', 'continue'], tools: ['claude', 'codex'] },
+        type: 'init', ok: true, prompt: true, confinedPrompt: true,
+        can: {
+          exec: false, setup: false, env: false, hitl: true, tokens: false, unattended: false, max_turns: false, workspace: ['new', 'continue'], tools: ['claude', 'codex'],
+          confined: [{ level: 'best-effort', access: 'read', tools: ['claude', 'codex'] }],
+        },
       });
     });
 
@@ -552,6 +557,131 @@ describe('teamai-runtime-t3', () => {
 
       expect(await ended(runtime, 'op-00000016')).toMatchObject({ event: 'failed', failure: { code: 'exec_unsupported' } });
       expect(fs.existsSync(path.join(worktree, 'ran'))).toBe(false);
+    });
+  });
+
+  describe('a confined prompt (a judge)', () => {
+    const RUN = 'r5c0de123';
+    const OPEN = 'op-000000a0';
+    const REPLY = { label: 'pass', reasoning: 'The diff adds the test the rubric asks for.' };
+    let evidence: string;
+
+    /** A runtime past init and an open with no view, as teamai opens a confined prompt's place, and its handle. */
+    const opened = async (options: Line = {}): Promise<{ runtime: Connection; handle: string }> => {
+      const runtime = start();
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', ...options } });
+      expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, confinedPrompt: true });
+      runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a9e8d7c6', credentials: {} });
+      const accepted = await runtime.next((line) => line['op'] === OPEN && line['event'] === 'accepted');
+      expect(await runtime.next((line) => line['op'] === OPEN && line['event'] !== 'accepted')).toMatchObject({ event: 'ready' });
+
+      return { runtime, handle: z.string().parse(accepted['handle']) };
+    };
+
+    // As teamai-score's judge step renders it: it names the evidence directory and the schema in it by their paths.
+    const judge = (handle: string, op: string) => ({
+      type: 'prompt', op, handle, env: {}, unset: [], credentials: {}, cwd: evidence,
+      lease: {
+        step: 'judge', tool: 'claude', model: { name: 'claude-sonnet-5-5' }, permissions: 'approval-required', interactive: false, result: path.join(dir, 'attempt', 'result.json'),
+        prompt: `Judge one piece of work against a scorer's rubric. Read only the files under ${evidence}:\nthe transcript, the diff, and evidence.json.\n\nReply with JSON that matches the schema in ${path.join(evidence, 'schema.json')}, and nothing else.`,
+      },
+      confined: { dir: evidence, level: 'best-effort', access: 'read', schema: { type: 'object', required: ['label'] } },
+    });
+
+    const ended = (runtime: Connection, op: string): Promise<Line> => runtime.next((line) => line['op'] === op && line['event'] !== 'accepted', 20_000);
+
+    beforeEach(() => {
+      signIn(t3);
+      evidence = path.join(dir, 'run', 'score', 'evidence');
+      fs.mkdirSync(path.join(evidence, 'session'), { recursive: true });
+      fs.writeFileSync(path.join(evidence, 'evidence.json'), JSON.stringify({ skills: ['review'] }));
+      fs.writeFileSync(path.join(evidence, 'diff.patch'), '+it("adds the cart test", () => {});\n');
+      fs.writeFileSync(path.join(evidence, 'schema.json'), JSON.stringify({ type: 'object' }));
+      fs.writeFileSync(path.join(evidence, 'session', 'transcript.jsonl'), '{"type":"user"}\n');
+      t3.config({ agent: { reply: `\`\`\`json\n${JSON.stringify(REPLY)}\n\`\`\`` } });
+    });
+
+    it('judges in a fresh thread of its own on a read-only copy of the directory, and reports best-effort read access', async () => {
+      const { runtime, handle } = await opened();
+      const op = 'op-000000a1';
+
+      runtime.send(judge(handle, op));
+
+      const end = await ended(runtime, op);
+      expect(RuntimeMessageSchema.safeParse(end).success).toBe(true);
+      expect(end).toEqual({
+        op, event: 'finished', session: { tool: 'claude', id: expect.stringMatching(/^[0-9a-f-]{36}$/) }, result: { output: REPLY },
+        confined: { level: 'best-effort', access: 'read' },
+      });
+
+      const [thread] = t3.threads();
+      const launch = t3.calls().find((call) => call.tool === 't3_thread_launch')?.args;
+      expect(launch).toMatchObject({ scratch: true, title: `judge · teamai ${RUN}`, runtimeMode: 'auto', clientRequestId: op, modelSelection: { instanceId: 'claudeAgent', model: 'claude-sonnet-5-5' } });
+      expect(launch).not.toHaveProperty('projectId');
+      expect(launch).not.toHaveProperty('message');
+      const copy = z.string().parse(thread?.worktreePath);
+      expect(copy).not.toBe(evidence);
+      expect(thread).toMatchObject({ sees: ['diff.patch', 'evidence.json', 'schema.json', 'session/transcript.jsonl'], couldWrite: false, status: 'completed', settled: true });
+      expect(thread?.message).toContain(`Read only the files under ${copy}:`);
+      expect(thread?.message).toContain(`the schema in ${path.join(copy, 'schema.json')}`);
+      expect(thread?.message).not.toContain(evidence);
+      expect(thread?.message).toContain(JSON.stringify({ type: 'object', required: ['label'] }));
+    });
+
+    it('runs the judge\'s thread in the tighter `runtime_mode`', async () => {
+      const { runtime, handle } = await opened({ runtime_mode: 'approval-required' });
+
+      runtime.send(judge(handle, 'op-000000a2'));
+
+      expect(await ended(runtime, 'op-000000a2')).toMatchObject({ event: 'finished' });
+      expect(t3.threads()[0]?.runtimeMode).toBe('approval-required');
+    });
+
+    it('removes the copy when teamai closes the judge\'s place', async () => {
+      const { runtime, handle } = await opened();
+      runtime.send(judge(handle, 'op-000000a3'));
+      expect(await ended(runtime, 'op-000000a3')).toMatchObject({ event: 'finished' });
+      const copy = z.string().parse(t3.threads()[0]?.worktreePath);
+      expect(fs.existsSync(copy)).toBe(true);
+
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => line['event'] === 'closed')).toEqual({ event: 'closed', handle });
+      expect(fs.existsSync(copy)).toBe(false);
+      expect(fs.readdirSync(evidence).sort()).toEqual(['diff.patch', 'evidence.json', 'schema.json', 'session']);
+    });
+
+    it('fails a judge whose reply is not JSON, and leaves its thread active for the person', async () => {
+      t3.config({ agent: { reply: 'I think it passes.' } });
+      const { runtime, handle } = await opened();
+
+      runtime.send(judge(handle, 'op-000000a4'));
+
+      expect(await ended(runtime, 'op-000000a4')).toEqual({
+        op: 'op-000000a4', event: 'failed',
+        failure: { code: 'tool_failed', message: expect.stringMatching(/^The T3 thread t3-thread:\/\/v2\/env-fake-1\/mcp:launch:\w+ \("judge · teamai r5c0de123"\) replied with no JSON value\.$/) },
+      });
+      expect(t3.threads()[0]?.settled).toBe(false);
+    });
+
+    it('reconnects to the same judge after its own restart, and copies and briefs it only once', async () => {
+      const release = path.join(dir, 'release');
+      t3.config({ agent: { release, reply: JSON.stringify(REPLY) } });
+      const first = await opened();
+      first.runtime.send(judge(first.handle, 'op-000000a5'));
+      await first.runtime.next((line) => line['op'] === 'op-000000a5' && line['event'] === 'accepted');
+      await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+      await first.runtime.close();
+
+      const second = start();
+      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      await second.next((line) => line['type'] === 'init');
+      second.send(judge(first.handle, 'op-000000a5'));
+      fs.writeFileSync(release, '');
+
+      expect(await ended(second, 'op-000000a5')).toMatchObject({ event: 'finished', result: { output: REPLY }, confined: { level: 'best-effort', access: 'read' } });
+      expect(t3.threads()).toHaveLength(1);
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_send')).toHaveLength(1);
     });
   });
 });
