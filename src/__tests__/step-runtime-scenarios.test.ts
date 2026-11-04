@@ -627,6 +627,40 @@ describe('a runtime that cannot close a place, over stdio', () => {
     expect(await runtime.reattach(handle)).toMatchObject({ kind: 'alive' });
   });
 
+  it('ends an exec it is waiting on as lost with runtime_unanswered when the runtime writes an error that names no request', async () => {
+    const { runtime, handle } = await opened({ answer: { exec: 'error' } });
+    const op = newOpId();
+
+    expect(await runtime.exec({ op, handle, argv: [process.execPath, '-e', ''], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {})).toEqual({
+      kind: 'lost',
+      failure: { code: 'runtime_unanswered', message: `Step runtime "toy" did not answer exec ${op}: it wrote an error that names no request (The toy cannot answer exec of ${handle}: answer.exec is set.).` },
+    });
+  });
+
+  it('ends a prompt, and fails an open, the runtime does not accept within 15 s, as runtime_unanswered', async () => {
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    started.push(runtime);
+    expect(await runtime.init({ options: { state: path.join(dir, 'state'), agent: {}, answer: { open: 'silent', prompt: 'silent' } }, mode: 'unattended' })).toMatchObject({ ok: true });
+    const handle = 'toy-r0123abcd-a0123abcd';
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    try {
+      const promptOp = newOpId();
+      const openOp = newOpId();
+      const prompted = runtime.prompt({
+        op: promptOp, handle, env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree'),
+        lease: { step: 'review', tool: 'claude', prompt: 'p', result: path.join(dir, 'out', 'result.json'), permissions: 'unattended', interactive: false },
+      }, {});
+      const reopened = runtime.open({ op: openOp, run: 'r0123abcd', attempt: 'a0123abcd', credentials: {} }, async () => {});
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(await Promise.race([prompted, 'still waiting'])).toEqual({ kind: 'lost', failure: { code: 'runtime_unanswered', message: `Step runtime "toy" did not accept prompt ${promptOp} within 15 s.` } });
+      expect(await Promise.race([reopened, 'still waiting'])).toEqual({ kind: 'failed', failure: { code: 'runtime_unanswered', message: `Step runtime "toy" did not accept open ${openOp} within 15 s.` } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('fails an init the runtime does not answer within 15 s as runtime_unanswered', async () => {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(runtime);

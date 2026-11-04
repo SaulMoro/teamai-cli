@@ -35,8 +35,11 @@ import { z } from 'zod';
 //
 //  A `reattach`, `collect` or `close` the runtime cannot answer gets the failure reply for its handle,
 //  {"event":"failed","handle":"…","failure":{…}}; one for an operation gets that operation's `failed`. An
-//  {"event":"error"} names no request, so teamai fails every `init`, `reattach`, `collect` and `close` still waiting with
-//  `runtime_unanswered`, as it does an `init`, a `reattach` or a `close` with no reply within 15 s.
+//  {"event":"error"} names no request, so teamai fails every request still waiting with `runtime_unanswered`: an
+//  `open` fails, and an `exec` or `prompt` ends `lost`, since what it started may still run. So does an `init`, a
+//  `reattach` or a `close` with no reply within 15 s, and an `open`, `exec` or `prompt` with no answer within 15 s, so a
+//  runtime accepts one before any slow work. A `cancel` has no answer of its own: its outcome is the operation's end,
+//  which `reattach` shows.
 //
 //  To stop what it ran, teamai opens a runtime in `recover` mode, and opens it for new work only when it refuses that mode:
 //    > {"type":"init","protocol":1,"mode":"recover","options":{...}}
