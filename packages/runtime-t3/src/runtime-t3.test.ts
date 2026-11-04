@@ -386,6 +386,28 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()).toHaveLength(1);
     });
 
+    it('stops the thread a runtime before it left running when teamai cancels that prompt first thing after a restart', async () => {
+      t3.config({ agent: { release: path.join(dir, 'release'), output: { verdict: 'approve' } } });
+      const first = await opened();
+      first.runtime.send(prompt(first.handle, 'op-0000001c'));
+      await first.runtime.next((line) => line['op'] === 'op-0000001c' && line['event'] === 'accepted');
+      await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+      await first.runtime.close();
+
+      // As `teamai workflow cancel` does for a run whose driver died: cancel, then reattach until the op no longer runs.
+      const second = start();
+      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      await second.next((line) => line['type'] === 'init');
+      second.send({ type: 'cancel', op: 'op-0000001c' });
+
+      await expect.poll(async () => {
+        second.send({ type: 'reattach', handle: first.handle });
+
+        return (await second.next((line) => line['event'] === 'alive'))['ops'];
+      }).toEqual([{ op: 'op-0000001c', state: 'cancelled' }]);
+      expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: false });
+    });
+
     it('answers a repeated prompt that ended with the same outcome, before and after its own restart', async () => {
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-00000018'));
