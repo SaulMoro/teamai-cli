@@ -30,6 +30,13 @@ const received = (): Array<Record<string, unknown> & { type: string }> => {
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [];
 };
 
+/** The agents a cancel or an archive stopped, as they stopped running. */
+const stopped = (): unknown[] => {
+  const file = path.join(daemonState, 'stopped.jsonl');
+
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [];
+};
+
 const start = (env?: Record<string, string | undefined>): Runtime => {
   const runtime = startRuntime(path.join(dir, 'home'), env);
   runtimes.push(runtime);
@@ -496,6 +503,48 @@ describe('teamai-runtime-paseo', () => {
     expect(accepted).toEqual({ op: 'op-0000000b', event: 'accepted', display: agent });
     runtime.send({ type: 'reattach', handle });
     expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ display: agent });
+  });
+
+  it('ends a cancelled prompt only once its agent stopped running, though Paseo answers the cancel before', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, stop_lag_ms: 1_500 });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+    expect(stopped()).toEqual([{ agentId: String(received()[0]?.agentId), status: 'idle' }]);
+  });
+
+  it('fails a cancel whose agent still runs well after Paseo answered it, and says to stop it in the app', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, stop_lag_ms: 60_000 });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual({
+      op: 'op-0000000b', event: 'failed',
+      failure: { code: 'cancel_failed', message: `Paseo cancelled the claude agent ${String(received()[0]?.agentId)}, but it still ran 10 s later. It may still change the worktree; stop it in the Paseo app.` },
+    });
+  }, 30_000);
+
+  it('says the attempt closed only once the agents of its archived workspace stopped running', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, stop_lag_ms: 1_500 });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+
+    runtime.send({ type: 'close', handle });
+
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle });
+    expect(stopped()).toEqual([{ agentId: String(received()[0]?.agentId), status: 'closed' }]);
   });
 
   it('archives the Paseo workspace when teamai closes the attempt, and keeps nothing of it', async () => {

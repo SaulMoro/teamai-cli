@@ -361,6 +361,12 @@ paseo permit allow 7c483fce --all
 teamai workflow cancel r144a3913136e7b62
 ```
 
+Paseo 可能在智能体的这一轮结束之前就答复取消，所以只有当 Paseo 报告智能体不再运行时，步骤才以 `cancelled` 结束。10 秒后仍在运行的智能体会让步骤以 `cancel_failed` 失败：
+
+```text
+Paseo cancelled the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f, but it still ran 10 s later. It may still change the worktree; stop it in the Paseo app.
+```
+
 智能体工作时 teamai 被杀掉，智能体会继续运行。`resume` 重新连上同一个智能体，不会再启动第二个：
 
 ```sh
@@ -383,6 +389,12 @@ teamai 关闭这次尝试时，运行时会归档它的 Paseo 工作区，这会
 
 ```text
 Paseo did not archive workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476e (wks_6fb33a5b94531f79): <Paseo's error>. Its agents may still run; archive it in the Paseo app.
+```
+
+只有当 Paseo 报告这次尝试的每个智能体都不再运行时，这个位置才算关闭。归档 10 秒后仍在运行的智能体会让它保持打开：
+
+```text
+Paseo archived workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476e (wks_6fb33a5b94531f79), but agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f still ran 10 s later. It may still change the worktree; stop it in the Paseo app.
 ```
 
 运行时在步骤中途被杀掉就无法归档；步骤以 `runtime_lost` 失败，它的工作区会留在 Paseo 里，直到你归档它（`paseo workspace archive <id>`）。
