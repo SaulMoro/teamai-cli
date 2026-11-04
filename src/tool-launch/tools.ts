@@ -76,11 +76,6 @@ export function launchTargetOf(name: string): LaunchTarget | undefined {
   return resolved.instance ? { name, tool: resolved.base, instance: resolved.instance } : { name, tool: resolved.base };
 }
 
-/** The command that starts `target`: its instance's own, or its tool's. */
-export function launchCommandOf(target: LaunchTarget): string {
-  return target.instance?.command ?? executableOf(target.tool);
-}
-
 /** Where the command that starts `target` is installed, or null. An instance's comes from a config file, so only PATH counts. */
 export function launchExecutableOf(target: LaunchTarget): string | null {
   const command = target.instance?.command;
