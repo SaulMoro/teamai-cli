@@ -332,7 +332,6 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       return;
     }
 
-    // The agent gets the run directory's name and no other: Paseo keeps a create's env in plain text.
     const create = await createFor(live, request, tool, {
       place, modeId: DEFAULT_MODES[tool], prompt: lease.prompt, env: { [RUN_DIR_ENV]: place.runDir },
       // Claude's default mode asks before any write, so the result file, as teamai's own launch allows it on a POSIX
