@@ -121,7 +121,7 @@ const ENFORCEMENT = {
   exec: 'strict',
   /** Running the workflow's `setup` in each workspace the driver creates, before the step. */
   setup: 'strict',
-  /** A prompt step that names its `tool`: `can.tools` lists it. */
+  /** A prompt step: `can.tools` lists the tool it names, or the one the driver picks for it. */
   tools: 'strict',
   /** A prompt step with `permissions: unattended`: the driver launches its tool in that tool's unattended mode. */
   unattended: 'strict',
@@ -364,7 +364,7 @@ export interface Offer {
   endTurn?: TurnLimits;
   /** The workflow's setup, when the lease names a workspace the driver may create. */
   setup?: Setup;
-  /** The tool a prompt step names. */
+  /** The tool a prompt step runs on: the one it names, or the one the driver picks for it. */
   tool?: string;
   /** A prompt step with `permissions: unattended`. */
   unattended: boolean;
@@ -514,7 +514,7 @@ export function envAdvice(keys: readonly string[], declared: ReadonlySet<string>
   return advice.join('; ');
 }
 
-/** Whether a driver that declares `can` is held from a step that names `tool`. */
+/** Whether a driver that declares `can` is held from a step that runs on `tool`. */
 export function lacksTool(tool: string, can: Pick<DriverCan, 'tools'>): boolean {
   return !(can.tools ?? []).includes(tool);
 }

@@ -412,6 +412,43 @@ model = "gpt-5.4"
     });
   });
 
+  it('launches a step after a from step on the tool its agent maps to, as it did before teamai checked that tool', async () => {
+    const definition = { schemaVersion: 'v1alpha1', name: 'generated', description: 'Say hello.', steps: [{ id: 'hello', command: 'true' }] };
+    const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Run what plan brings, then review.
+steps:
+  - id: plan
+    command: printf '%s' '${JSON.stringify({ definition: { definition }, plan: {} })}'
+    output: { definition: workflow, plan: json }
+  - id: work
+    needs: [plan]
+    workflow: { from: plan }
+  - id: review
+    needs: [work]
+    prompt: Review this project.
+    agent: reviewer
+    output:
+      ok: boolean
+`);
+    config.workflows = { tools: { reviewer: 'codex-internal' } };
+    const agents = path.join(workspace, '.codex-internal/agents');
+    fs.mkdirSync(agents, { recursive: true });
+    fs.writeFileSync(path.join(agents, 'reviewer.toml'), 'name = "reviewer"\ndescription = "Reviews changes."\ndeveloper_instructions = "Review the change."\n');
+    const adapter: LocalToolAdapter = {
+      runInteractive: vi.fn(),
+      run: vi.fn(async () => ({ started: true as const, exitCode: 0, output: { ok: true } })),
+    };
+
+    const ran = await runLocalDriver(config, runId, workspace, {
+      adapter,
+      toolPaths: { ...toolPaths, 'codex-internal': { agents: '.codex-internal/agents' } } as TeamaiConfig['toolPaths'],
+    });
+
+    expect(ran).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(adapter.run).toHaveBeenCalledWith('codex-internal', expect.anything(), expect.any(AbortSignal));
+  });
+
   it('loads a user-scope OpenCode agent from the home XDG_CONFIG_HOME moves', async () => {
     const { config, workspace, runId } = await fixture('reviewer');
     const xdg = path.join(path.dirname(workspace), 'xdg');
