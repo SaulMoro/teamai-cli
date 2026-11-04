@@ -14,8 +14,9 @@ import type { ConfinedOffer, ConfinedPrompt, PromptLease, PromptResult, RuntimeF
 //
 //  A `<tool>: login` stays on this machine: a judge container has no tool home, so a judge brings an API key instead,
 //  and `init` offers a judge only on the tools whose keys the definition names (`offersSignedIn`). A judge gets only
-//  the credentials its own tool reads, and its filter lets through only the provider it signs in to: the public API, or
-//  the base URL its credentials name in place of it. The evidence is mounted at EVIDENCE_DIR, and the prompt names it
+//  the names a confined run of its own tool reads (its keys, base URL and model choices), never this machine's proxies or
+//  paths, and its filter lets through only the provider it signs in to: the public API, or the base URL its credentials
+//  name in place of it. The evidence is mounted at EVIDENCE_DIR, and the prompt names it
 //  there, so no mount point, working directory or prompt path tells the judge the member's home, username or project.
 //
 
@@ -48,6 +49,8 @@ interface JudgeTool {
   /** The model provider's `host:port`, and the variable that points the tool at another one. */
   endpoint: string;
   baseUrlEnv: string;
+  /** The other names of its confined profile it reads as given, such as the model it picks. */
+  settings: readonly string[];
   /** The credentials as the tool reads them: its own of those given, under the names it signs in with. */
   signIn(own: Record<string, string>): Record<string, string>;
   launch(lease: PromptLease, confined: ConfinedPrompt): JudgeLaunch;
@@ -101,6 +104,7 @@ const JUDGE_TOOLS = {
     credentials: ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'],
     endpoint: 'api.anthropic.com:443',
     baseUrlEnv: 'ANTHROPIC_BASE_URL',
+    settings: ['ANTHROPIC_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL', 'ANTHROPIC_DEFAULT_HAIKU_MODEL', 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY'],
     signIn: (own) => own,
     launch: (lease, confined) => ({
       argv: [
@@ -126,12 +130,12 @@ const JUDGE_TOOLS = {
   },
   codex: {
     access: 'full',
-    // teamai gives a confined codex OPENAI_API_KEY, never CODEX_API_KEY, which its confined profile does not read.
-    credentials: ['OPENAI_API_KEY'],
+    credentials: ['OPENAI_API_KEY', 'CODEX_API_KEY'],
     endpoint: 'api.openai.com:443',
     baseUrlEnv: 'OPENAI_BASE_URL',
+    settings: [],
     // A fresh Codex home signs in with CODEX_API_KEY, and reads no OPENAI_API_KEY.
-    signIn: (own) => (own.OPENAI_API_KEY === undefined ? own : { ...own, CODEX_API_KEY: own.OPENAI_API_KEY }),
+    signIn: (own) => (own.CODEX_API_KEY !== undefined || own.OPENAI_API_KEY === undefined ? own : { ...own, CODEX_API_KEY: own.OPENAI_API_KEY }),
     launch: (lease, confined) => ({
       // The schema reaches Codex as a file, written in the container's own home, never in `dir`. Codex takes a base URL
       // from its config, not its env, so the wrapper passes it from the container's env and it stays off every argv.
@@ -242,7 +246,7 @@ export function judgeOf(tool: string, credentials: Record<string, string>): { ok
     return { ok: false, failure: { code: 'credential_missing', message: `A ${tool} judge in the sandbox signs in with ${launch.credentials.join(' or ')}, and the definition gives it none. Add one to the sandbox entry's credentials, for example ${launch.credentials[0]}: env:${launch.credentials[0]}. A login stays on this machine and never reaches a judge container.` } };
   }
 
-  const own = Object.fromEntries(Object.entries(credentials).filter(([name]) => launch.credentials.includes(name) || name === launch.baseUrlEnv));
+  const own = Object.fromEntries(Object.entries(credentials).filter(([name]) => [...launch.credentials, launch.baseUrlEnv, ...launch.settings].includes(name)));
   const base = own[launch.baseUrlEnv];
 
   if (base === undefined) return { ok: true, judge: { tool: launch, hosts: [launch.endpoint], credentials: launch.signIn(own) } };
