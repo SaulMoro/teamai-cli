@@ -173,20 +173,21 @@ runtimes:
   - use: paseo
 ```
 
-下面是 Codex 评判为一轮 Codex 步骤打标签；它的会话放回 `~/.codex/sessions/` 之后，按需评分（见下文）：
+下面是 Codex 评判在产生这一轮的同一次运行中为它打标签：
 
 ```text
-$ teamai score --run ra429df3ad473c7b3 --scorer review-quality --driver paseo-codex
-ℹ review-quality: partial (score 0.5, did not pass). Reasoning: ~/.teamai/scores/reasoning/43ce17b3….md
-$ paseo logs 4c7942c --filter tools
+$ teamai workflow start fix-add --driver paseo-codex
+ℹ run:r0cec7811f0b8ad80:fix:1: review-quality good (teamai-score run r6f8bb28e533b1c3b).
+$ paseo logs 94f534b --filter tools
 [Shell] ls -la
-[Shell] rg --files -uu
-[Shell] cat diff.patch evidence.json transcripts/fix#1.md
-[Shell] cat repo/package.json repo/math.js repo/math.test.js answer.schema.json
+[Shell] ls -la transcripts
+[Shell] cat 'transcripts/fix#1.md'
+[Shell] cat 'diff.patch'
+[Shell] cat 'evidence.json'
 ```
 
 ```json
-{ "id": "score[0].judge", "outcome": "success", "outputs": { "answer": { "label": "partial", "reasoning": "math.js now returns a + b, but package.json sets \"type\": \"module\", so math.test.js cannot use require and will fail before its assertion runs…" } }, "confined": { "tool": "codex", "isolation": "best-effort", "access": "read" } }
+{ "id": "score[0].judge", "outcome": "success", "outputs": { "answer": { "label": "good", "reasoning": "The diff changes add to return a + b and adds a node:test assertion that add(2, 3) equals 5. The session shows no commands were run, as requested; the test was added but not executed." } }, "confined": { "tool": "codex", "isolation": "best-effort", "access": "read" } }
 ```
 
 评分从守护进程的智能体写入会话的地方读取步骤的会话：守护进程所属用户的工具主目录。请让守护进程以运行 teamai 的成员身份、在同一台机器上运行。守护进程以其他用户或其他 `HOME` 运行时，这一轮不会被打标签，评分运行的 `evidence` 步骤会说明原因：
@@ -195,18 +196,10 @@ $ paseo logs 4c7942c --filter tools
 evidence_missing: Pass 1 of step fix in run r080799f10648b1ed cannot be scored: no longer on this machine: claude-code session 346fd0be-1a5a-474b-aedf-24c305d5c1a6 of fix#1. Restore what is missing, or score another pass.
 ```
 
-不论守护进程以谁的身份运行，Codex 步骤的一轮也会这样不被打标签。teamai 关闭尝试时，Paseo 归档该智能体，Codex 把它的会话移到 `~/.codex/archived_sessions/`。teamai 只从 `~/.codex/sessions/` 读取 Codex 会话，所以评分运行会说：
+Codex 步骤的一轮也以同样方式评分。teamai 从 `teamai init` 时记录的 Codex 根目录（当时的 `$CODEX_HOME`，或 `~/.codex`）读取 Codex 会话，包括已归档的会话：teamai 关闭尝试时，Paseo 归档该智能体，Codex 把它的会话移到该根目录下的 `archived_sessions/`，teamai 仍能在那里找到它。所以请用 `teamai init` 时的 `CODEX_HOME` 启动守护进程。守护进程的 Codex 写入其他根目录时，这一轮不会被打标签：
 
 ```text
 evidence_missing: Pass 1 of step fix in run ra429df3ad473c7b3 cannot be scored: no longer on this machine: codex session 01a1a731-9053-7cf2-9884-68058745044a of fix#1. Restore what is missing, or score another pass.
-```
-
-要为这一轮评分，先把会话放回 teamai 读取的位置，再按需评判：
-
-```sh
-mkdir -p ~/.codex/sessions/2026/11/04
-cp ~/.codex/archived_sessions/rollout-*-01a1a731-9053-7cf2-9884-68058745044a.jsonl ~/.codex/sessions/2026/11/04/
-teamai score --run ra429df3ad473c7b3 --scorer review-quality --driver paseo-codex
 ```
 
 ## 选项
