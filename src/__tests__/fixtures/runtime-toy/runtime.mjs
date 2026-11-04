@@ -30,7 +30,8 @@
 // state, unless `recover: false` makes it answer that mode as a runtime before it did. With `cancel_fails`, a cancel of
 // an exec or prompt still running stops nothing and ends it failed with that failure, which reattach keeps reporting
 // until a later cancel stops it. With `stop_ms`, a stop completes that long after the cancel, and the operation is
-// reported running until then.
+// reported running until then. With `stray`, an exec it accepts also starts a process that shares the toy's stdout and
+// stderr and outlives it, which writes its pid to `stray.pid` in the state; the toy then writes a line that is not JSON.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -38,7 +39,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 
-const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'stop_ms']);
+const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'stop_ms', 'stray']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -252,6 +253,14 @@ function exec(request) {
   running.set(request.op, child);
   writeJson(opPath(request.op), { kind: 'exec', handle: request.handle, pgid: child.pid });
   send({ op: request.op, event: 'accepted' });
+
+  // A tool that outlives the toy and holds its output open, then a line teamai cannot read.
+  if (options.stray) {
+    const stray = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: ['ignore', 'inherit', 'inherit'] });
+    fs.writeFileSync(file('stray.pid'), String(stray.pid));
+    stray.unref();
+    process.stdout.write('not json\n');
+  }
 
   // The toy itself stops while the exec runs on, as a runtime that crashes leaves its processes behind.
   if (options.exit_at === 'exec-accepted') {
