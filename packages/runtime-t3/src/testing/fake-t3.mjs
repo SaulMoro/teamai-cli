@@ -8,6 +8,7 @@
 //                               result: the result file's JSON exactly, in place of { output, failure }
 //                               organizeFails: T3 refuses t3_thread_organize; stopLagMs: a stop ends the run this long after T3 acknowledged it
 //                               delegatesPending: the run's delegated work has not settled; resultRunStatus: the run that answered then
+//                               launchFails: T3 refuses every launch, a repeated one too
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
 //   FAKE_T3_STATE/threads/      one JSON file per thread
 //   T3CODE_HOME/userdata/server-runtime.json   written once listening: { origin }, as T3 writes it
@@ -153,38 +154,45 @@ const link = (threadId) => `http://127.0.0.1:${httpServer.address().port}/${conf
 
 let sequence = 2_900_000;
 
+/** A launch as T3 answers it: the thread a repeated clientRequestId launched before, or a new one. */
+function launch(args) {
+  const threadId = `mcp:launch:${createHash('sha256').update(args.clientRequestId ?? randomUUID()).digest('hex')}`;
+  const existing = readThread(threadId);
+
+  if (existing) return ok({ threadId, link: link(threadId), status: existing.status });
+  const provider = config().providers.find((one) => one.providerInstanceId === args.modelSelection?.instanceId);
+
+  if (!provider) return fail(`No provider instance ${args.modelSelection?.instanceId}.`);
+  const access = config().access;
+
+  if (access && MODES.indexOf(args.runtimeMode) < MODES.indexOf(access)) {
+    return fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'runtime_mode_escalation_denied', message: `Child runtime mode ${args.runtimeMode} is broader than parent mode ${access}.` }));
+  }
+
+  // A scratch thread gets a new, empty folder of its own.
+  const scratch = args.scratch === true ? path.join(T3_HOME, 'scratch', threadId.slice(-8)) : undefined;
+
+  if (scratch) fs.mkdirSync(scratch, { recursive: true });
+  const idle = args.message === undefined;
+
+  writeThread({
+    threadId, title: args.title, message: args.message, worktreePath: scratch ?? args.workspaceStrategy?.worktreePath, projectId: scratch ? 'scratch-project' : args.projectId,
+    provider: provider.driverKind, model: args.modelSelection?.model, runtimeMode: args.runtimeMode, status: idle ? 'idle' : 'starting', settled: false, runCount: idle ? 0 : 1,
+  });
+
+  if (!idle) void play(threadId);
+
+  return ok({ threadId, link: link(threadId), status: idle ? null : 'starting' });
+}
+
 const TOOLS = {
   t3_environment_read: () => ok(config().environment),
   orchestrator_capabilities: () => ok({ providers: config().providers }),
   t3_project_list: () => ok({ projects: config().projects, nextCursor: null }),
-  t3_thread_launch: (args) => {
-    const threadId = `mcp:launch:${createHash('sha256').update(args.clientRequestId ?? randomUUID()).digest('hex')}`;
-    const existing = readThread(threadId);
+  t3_thread_launch: async (args) => {
+    if (config().launchFails) return fail('T3 Code cannot launch threads now.');
 
-    if (existing) return ok({ threadId, link: link(threadId), status: existing.status });
-    const provider = config().providers.find((one) => one.providerInstanceId === args.modelSelection?.instanceId);
-
-    if (!provider) return fail(`No provider instance ${args.modelSelection?.instanceId}.`);
-    const access = config().access;
-
-    if (access && MODES.indexOf(args.runtimeMode) < MODES.indexOf(access)) {
-      return fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'runtime_mode_escalation_denied', message: `Child runtime mode ${args.runtimeMode} is broader than parent mode ${access}.` }));
-    }
-
-    // A scratch thread gets a new, empty folder of its own.
-    const scratch = args.scratch === true ? path.join(T3_HOME, 'scratch', threadId.slice(-8)) : undefined;
-
-    if (scratch) fs.mkdirSync(scratch, { recursive: true });
-    const idle = args.message === undefined;
-
-    writeThread({
-      threadId, title: args.title, message: args.message, worktreePath: scratch ?? args.workspaceStrategy?.worktreePath, projectId: scratch ? 'scratch-project' : args.projectId,
-      provider: provider.driverKind, model: args.modelSelection?.model, runtimeMode: args.runtimeMode, status: idle ? 'idle' : 'starting', settled: false, runCount: idle ? 0 : 1,
-    });
-
-    if (!idle) void play(threadId);
-
-    return ok({ threadId, link: link(threadId), status: idle ? null : 'starting' });
+    return launch(args);
   },
   // As T3 answers a wait until delegated work settled: the run's own status, timed out until that work settled too,
   // and then the run that answered. A thread with no run yet answers idle at once.
@@ -236,7 +244,8 @@ const TOOLS = {
 
     if (!thread) return fail(`No thread ${args.threadId}.`);
 
-    if (TERMINAL.has(thread.status)) return ok({ threadId: args.threadId, runId: null, status: 'no_active_run' });
+    // An idle thread has no run to stop either.
+    if (TERMINAL.has(thread.status) || thread.status === 'idle') return ok({ threadId: args.threadId, runId: null, status: 'no_active_run' });
 
     if (config().interruptFails) return fail(`Thread ${args.threadId} has a run T3 cannot interrupt now.`);
     const lag = config().stopLagMs;

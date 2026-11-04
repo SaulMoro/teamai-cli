@@ -30,8 +30,10 @@ import { STEP_MODE_LABELS, T3Error, type Environment, type Launch, type NewThrea
 //    cancel   stop the thread                     reattach  the ops and the thread, from the journal
 //    collect  nothing to copy: the worktree, the result and the transcript are already on this machine. Settle the
 //             thread of each op that ended, once T3 holds no run of it, so it leaves the person's active threads
-//    close    stop what still runs, settle what collect did not (a judge's place is never collected), and remove a
-//             judge's copy
+//    close    stop each thread the runtime has not seen stop, whichever process launched it, settle what collect did
+//             not (a judge's place is never collected), and remove a judge's copy
+//
+//  A thread the journal holds stays the runtime's to stop until it saw that thread stop: no failure path forgets it.
 //
 
 /** The options a driver definition gives `t3`. teamai strips `max_parallel` and `credentials` before `init`. */
@@ -325,18 +327,20 @@ export function serve(options: ServeOptions): Promise<void> {
 
   const place = (handle: string): PlaceRecord | undefined => journal.read(handle);
 
-  const record = (handle: string, op: OpId, state: OpState): void => {
-    const now = place(handle);
+  /** `known` with the thread of `op` ended: the runtime saw it stop. */
+  const endedIn = (known: PlaceRecord, op: OpId): PlaceRecord => {
+    const thread = known.threads[op];
 
-    if (now) journal.write({ ...now, ops: { ...now.ops, [op]: state } });
+    return thread && !thread.ended ? { ...known, threads: { ...known.threads, [op]: { ...thread, ended: {} } } } : known;
   };
 
-  /** Marks whether T3 may still run the thread of `op`, whose op ended: close stops such a thread first. */
-  const markMayStillRun = (handle: string, op: OpId, mayStillRun: boolean): void => {
+  /** Journals how an op ended, and, when the runtime saw it stop, that its thread ended, in one write. */
+  const record = (handle: string, state: OpState, { threadEnded }: { threadEnded: boolean }): void => {
     const now = place(handle);
-    const thread = now?.threads[op];
 
-    if (now && thread) journal.write({ ...now, threads: { ...now.threads, [op]: { ...thread, mayStillRun } } });
+    if (!now) return;
+    const withOp = { ...now, ops: { ...now.ops, [state.op]: state } };
+    journal.write(threadEnded ? endedIn(withOp, state.op) : withOp);
   };
 
   const fail = (op: OpId, failure: RuntimeFailure): void => write({ op, event: 'failed', failure });
@@ -532,10 +536,14 @@ export function serve(options: ServeOptions): Promise<void> {
     return launched;
   };
 
-  /** Waits for the thread until the step is done, stopped or failed, and returns how it ended. */
-  const follow = async (s: Session, request: PromptRequest, thread: ThreadRecord): Promise<OpState> => {
+  /**
+   * Waits for the thread until the step is done, stopped or failed, and returns how it ended, and whether the runtime
+   * saw the thread stop on the way: only then does the thread end with the op.
+   */
+  const follow = async (s: Session, request: PromptRequest, thread: ThreadRecord): Promise<{ state: OpState; threadEnded: boolean }> => {
     const state = running.get(request.op);
     const where = `The T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}")`;
+    const stopped = (ended: OpState) => ({ state: ended, threadEnded: true });
     let errors = 0;
 
     for (;;) {
@@ -546,11 +554,7 @@ export function serve(options: ServeOptions): Promise<void> {
         errors = 0;
       } catch (error) {
         // T3 restarting, or a dropped connection: the thread keeps running, so ask again a few times.
-        if (++errors > 5) {
-          markMayStillRun(request.handle, request.op, true);
-
-          return { op: request.op, state: 'failed', failure: { code: 't3_unavailable', message: `${where} could not be followed: ${error instanceof Error ? error.message : String(error)}` } };
-        }
+        if (++errors > 5) return { state: { op: request.op, state: 'failed', failure: { code: 't3_unavailable', message: `${where} could not be followed: ${error instanceof Error ? error.message : String(error)}` } }, threadEnded: false };
 
         await sleep(1_000 * errors);
         continue;
@@ -559,7 +563,7 @@ export function serve(options: ServeOptions): Promise<void> {
       const stopping = state?.stopping;
 
       if (stopping) {
-        if (await stopping === undefined) return { op: request.op, state: 'cancelled' };
+        if (await stopping === undefined) return stopped({ op: request.op, state: 'cancelled' });
 
         // T3 did not stop it, so the thread still runs: it is followed, and journaled running, as before.
         if (state.stopping === stopping) delete state.stopping;
@@ -574,10 +578,9 @@ export function serve(options: ServeOptions): Promise<void> {
           const why = await whyNotStopped(s.t3, thread.threadId);
           const asked = `${where} asked for an approval, and nobody is there to give it in an unattended run.`;
 
-          if (why === undefined) return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: asked } };
-          markMayStillRun(request.handle, request.op, true);
+          if (why === undefined) return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: asked } });
 
-          return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${asked} It still runs, and T3 Code did not stop it: ${why.replace(/\.$/, '')}. Stop it in T3 Code with its Stop button.` } };
+          return { state: { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${asked} It still runs, and T3 Code did not stop it: ${why.replace(/\.$/, '')}. Stop it in T3 Code with its Stop button.` } }, threadEnded: false };
         }
 
         // A wait that came back before its time on a run still going (waiting for the person, or idle) is asked again later.
@@ -585,7 +588,8 @@ export function serve(options: ServeOptions): Promise<void> {
         continue;
       }
 
-      if (ended !== 'completed') return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} ended ${ended} before the step was done.` } };
+      // From here on, the thread's run and the work it delegated settled.
+      if (ended !== 'completed') return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} ended ${ended} before the step was done.` } });
 
       // An interactive step ends once the person said it is done and the agent wrote the result; until then the
       // thread idles between their turns.
@@ -596,14 +600,14 @@ export function serve(options: ServeOptions): Promise<void> {
 
       const written = request.confined ? await judged(s, thread) : readResult(request.lease.result);
 
-      if (!written.ok) return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} ${written.why}.` } };
+      if (!written.ok) return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} ${written.why}.` } });
       const cwd = thread.copy ?? request.cwd;
       const driver = driverOf(thread.tool);
       const id = driver && await sessionSince(driver, cwd, thread.launchedAt);
 
-      if (!id) return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${cwd}, so the step cannot be scored or resumed.` } };
+      if (!id) return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${cwd}, so the step cannot be scored or resumed.` } });
 
-      return { op: request.op, state: 'finished', session: { tool: thread.tool, id }, result: written.result, ...(request.confined && { confined: JUDGE_KEPT }) };
+      return stopped({ op: request.op, state: 'finished', session: { tool: thread.tool, id }, result: written.result, ...(request.confined && { confined: JUDGE_KEPT }) });
     }
   };
 
@@ -639,13 +643,16 @@ export function serve(options: ServeOptions): Promise<void> {
 
     const s = session;
 
-    const end = (state: OpState): void => {
+    const end = (state: OpState, threadEnded = false): void => {
       running.delete(request.op);
-      record(request.handle, request.op, state);
+      record(request.handle, state, { threadEnded });
       answerEnded(request.op, state);
     };
 
-    /** Ends an op that launches no thread. */
+    /**
+     * Ends an op this process launched no thread for. A thread the journal holds for it, which another process may have
+     * launched, stays the runtime's to stop.
+     */
     const refuse = (state: OpState): void => {
       accept(undefined);
       end(state);
@@ -730,9 +737,6 @@ export function serve(options: ServeOptions): Promise<void> {
     } catch (error) {
       // T3 caps a thread's mode at the access the member approved teamai with, and says so with this code.
       const tooNarrow = error instanceof T3Error && error.refusal?.code === 'runtime_mode_escalation_denied' ? error.refusal.message : undefined;
-
-      // A judge's brief may have reached T3, and started a run, before the call failed.
-      if (state.thread !== undefined && !(error instanceof JudgeCopyFailed)) markMayStillRun(request.handle, request.op, true);
       refuse({
         op: request.op, state: 'failed', failure: error instanceof JudgeCopyFailed
           ? { code: 'judge_copy_failed', message: error.message }
@@ -752,10 +756,10 @@ export function serve(options: ServeOptions): Promise<void> {
     if (state.cancelled) state.stopping = whyNotStopped(s.t3, thread.threadId);
 
     try {
-      end(await follow(s, request, thread));
+      const followed = await follow(s, request, thread);
+      end(followed.state, followed.threadEnded);
     } catch (error) {
       // The thread may still run in T3, where the person finds it by the link.
-      markMayStillRun(request.handle, request.op, true);
       end({ op: request.op, state: 'failed', failure: { code: 't3_unavailable', message: `Lost track of the T3 thread ${threadLink(s.environment, thread.threadId)}: ${error instanceof Error ? error.message : String(error)}` } });
     }
   };
@@ -771,7 +775,7 @@ export function serve(options: ServeOptions): Promise<void> {
       // A runtime before this one launched the thread and died; teamai cancels before it reattaches.
       if (known && left && known.ops[op]?.state === 'running' && session) {
         if (await whyNotStopped(session.t3, left.threadId) !== undefined) return;
-        record(known.handle, op, { op, state: 'cancelled' });
+        record(known.handle, { op, state: 'cancelled' }, { threadEnded: true });
         answerEnded(op, { op, state: 'cancelled' });
 
         return;
@@ -794,21 +798,18 @@ export function serve(options: ServeOptions): Promise<void> {
   };
 
   /**
-   * Settles each thread of `handle` whose op state `ended` accepts and that T3 holds no run of, once: a thread still
-   * running, or still waiting for the person in an interactive step, stays. A settle T3 refuses is said once on stderr
-   * and fails nothing.
+   * Settles each thread of `handle` that ended and that T3 holds no run of, once: a thread the runtime has not seen
+   * stop, or one the person started again, stays. A settle T3 refuses is said once on stderr and fails nothing.
    */
-  const settleEnded = async (handle: string, ended: (state: OpState | undefined) => boolean): Promise<void> => {
+  const settleEnded = async (handle: string): Promise<void> => {
     const known = place(handle);
 
     if (!known || !session) return;
     const s = session;
 
     for (const [op, thread] of Object.entries(known.threads)) {
-      const state = known.ops[op];
-
-      if (thread.settlement || thread.mayStillRun || !ended(state)) continue;
-      let outcome: NonNullable<ThreadRecord['settlement']>;
+      if (!thread.ended || thread.ended.settlement) continue;
+      let outcome: NonNullable<NonNullable<ThreadRecord['ended']>['settlement']>;
 
       try {
         const { status } = await s.t3.thread(thread.threadId);
@@ -823,58 +824,47 @@ export function serve(options: ServeOptions): Promise<void> {
 
       const now = place(handle);
 
-      if (now?.threads[op]) journal.write({ ...now, threads: { ...now.threads, [op]: { ...now.threads[op], settlement: outcome } } });
+      if (now?.threads[op]) journal.write({ ...now, threads: { ...now.threads, [op]: { ...now.threads[op], ended: { settlement: outcome } } } });
     }
   };
 
   /**
-   * Ends the place. A thread still running there, or one whose op ended while T3 may still run it, is stopped first;
-   * one T3 will not stop keeps the place, and a judge's copy, and close fails.
+   * Ends the place. Each thread the runtime has not seen stop is stopped first; while one cannot be, the place stays,
+   * with a judge's copy, and close fails.
    */
   const close = async (handle: string): Promise<void> => {
     const known = place(handle);
     const s = session;
+    const failClose = (failure: RuntimeFailure): void => write({ event: 'close_failed', handle, failure });
 
     if (known) {
-      for (const state of Object.values(known.ops)) {
-        const thread = known.threads[state.op];
+      for (const { op } of Object.values(known.ops)) {
+        const thread = known.threads[op];
 
-        if (!thread || (state.state !== 'running' && !thread.mayStillRun)) continue;
+        if (!thread || thread.ended) continue;
 
         // init could not reach T3 Code, so nothing here can stop the thread or tell that it ended.
-        if (!s) {
-          write({
-            event: 'close_failed', handle, failure: {
-              code: 't3_unavailable',
-              message: `The T3 thread "${thread.title}" (${thread.threadId}) may still run, and teamai could not reach T3 Code to stop it. Open T3 Code, then run teamai workflow cancel ${known.run} again.`,
-            },
-          });
-
-          return;
-        }
-
+        if (!s) return failClose({ code: 't3_unavailable', message: `The T3 thread "${thread.title}" (${thread.threadId}) may still run, and teamai could not reach T3 Code to stop it. Open T3 Code, then run teamai workflow cancel ${known.run} again.` });
         const stopping = whyNotStopped(s.t3, thread.threadId);
-        const live = running.get(state.op);
+        const live = running.get(op);
 
         if (live) live.stopping = stopping;
         const why = await stopping;
 
         if (why !== undefined) {
-          write({
-            event: 'close_failed', handle, failure: {
-              code: 'thread_still_runs',
-              message: `The T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}") still runs, and T3 Code did not stop it: ${why.replace(/\.$/, '')}. Stop it in T3 Code with its Stop button.`,
-            },
+          return failClose({
+            code: 'thread_still_runs',
+            message: `The T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}") still runs, and T3 Code did not stop it: ${why.replace(/\.$/, '')}. Stop it in T3 Code with its Stop button.`,
           });
-
-          return;
         }
 
-        if (thread.mayStillRun) markMayStillRun(handle, state.op, false);
+        const now = place(handle);
+
+        if (now) journal.write(endedIn(now, op));
       }
 
-      // Every thread of the place has ended now. With no connection, the ended ones stay unsettled.
-      await settleEnded(handle, () => true);
+      // Every thread of the place has ended now. With no connection, they stay unsettled.
+      await settleEnded(handle);
     }
 
     // A judge's copy is the thread's scratch folder, so the thread loses its folder with it.
@@ -905,10 +895,11 @@ export function serve(options: ServeOptions): Promise<void> {
       case 'cancel':
         return cancel(request.op);
       case 'collect':
-        await settleEnded(request.handle, (state) => state !== undefined && state.state !== 'running');
+        await settleEnded(request.handle);
         write({ event: 'collected', handle: request.handle });
 
         return;
+
       case 'reattach': {
         // The journal alone answers: only a place it no longer holds is gone, whether or not T3 Code can be reached.
         const known = place(request.handle);
