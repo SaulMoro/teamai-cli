@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
+import { isBareCommandName } from '@teamai/tool-core/cli-path';
 import { INSTANCE_KEYS, type ToolInstance, type ToolInstanceHome } from '@teamai/tool-core/instance';
 import { isSafeNamespaceSegment } from './manifest-schema.js';
 import { resolveNamespacedItems, type NamespaceCandidate } from './namespace-resolver.js';
@@ -50,7 +51,7 @@ const InstanceFileSchema = z.object({
   name: z.string().regex(NAME, 'A tool name starts with a lowercase letter or digit and holds only lowercase letters, digits, dots, dashes and underscores'),
   extends: z.string().refine(isToolId, { error: (issue) => `${String(issue.input)} is not a tool teamai ships. Extend one of: ${TOOL_ORDER.join(', ')}` }),
   // A path is refused: what runs there, maybe in the step's own checkout, is not the file a person accepted.
-  command: z.string().regex(/^[^\s/\\]+$/, 'command is the name of one executable on PATH, with no path, spaces or arguments, such as acme-claude').optional(),
+  command: z.string().refine(isBareCommandName, 'command is the name of one executable on PATH, with no path, spaces or arguments, such as acme-claude').optional(),
   home: z.object({ dir: HomeDir, env: z.string().regex(ENV_NAME, 'home.env is the name of an environment variable').optional() }).strict().optional(),
   paths: ToolPathsSchema.optional(),
 });

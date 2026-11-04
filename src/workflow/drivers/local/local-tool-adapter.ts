@@ -6,7 +6,7 @@ import crossSpawn from 'cross-spawn';
 import { z } from 'zod';
 import { launchEnv, type Launch } from '../../../launch-context.js';
 import { opencodeMajorVersion } from '../../../opencode-hooks.js';
-import { resolveCliPath } from '../../../utils/cli-path.js';
+import { resolveCliPath, resolvePathCommand } from '../../../utils/cli-path.js';
 import { log } from '../../../utils/logger.js';
 import type { toolExtrasFor } from '../../../resources/agent-format.js';
 import { stopProcess } from '../../../tool-launch/process-stop.js';
@@ -223,12 +223,14 @@ function combineResults(fileResult: ResultFile | null, reported: ToolReport | nu
 export function createLocalToolAdapter(
   spawnTool: ToolSpawn = crossSpawn,
   resolveTool: ToolResolve = resolveCliPath,
+  // A tool instance's command comes from a config file, so only the PATH directories may hold it.
+  resolveInstanceCommand: ToolResolve = resolvePathCommand,
 ): LocalToolAdapter {
   const launch =
     async (tool: LaunchTool, input: LocalToolRun, signal: AbortSignal | undefined, interactive: boolean): Promise<LocalToolResult> => {
       await fs.mkdir(path.dirname(input.resultPath), { recursive: true });
       const command = input.command ?? executableOf(tool);
-      const executable = resolveTool(command);
+      const executable = input.command === undefined ? resolveTool(command) : resolveInstanceCommand(command);
 
       if (!executable) {
         return {
