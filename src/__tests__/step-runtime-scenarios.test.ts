@@ -13,6 +13,7 @@ import { newOpId, type ExecEnd, type ExecRequest, type OpenRequest, type PromptR
 import type { JsonValue } from '../types.js';
 import { sandboxOnFake } from './helpers/sandbox-runtime.js';
 import { t3OnFakeServer } from './helpers/t3-runtime.js';
+import { paseoOnFakeDaemon } from './helpers/paseo-runtime.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 
 /**
@@ -281,6 +282,7 @@ interface PromptSubject {
 }
 
 const T3 = await t3OnFakeServer();
+const paseo = await paseoOnFakeDaemon();
 
 const PROMPT_SUBJECTS: PromptSubject[] = [
   {
@@ -303,6 +305,20 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
     // T3 reports no usage, and a thread whose run fails names T3's status, not the agent's own failure.
     reportsUsage: false,
     failure: () => ({ code: 'tool_failed', message: expect.stringContaining('ended failed before the step was done.') }),
+  },
+  {
+    name: 'paseo over stdio, on a fake Paseo daemon',
+    start: (state) => stdioStepRuntime({ name: 'paseo', command: '/usr/bin/env', args: paseo.args(state) }),
+    // The toy's agent, as the fake daemon's: a model it cannot run is one the daemon does not offer.
+    options: (_, agent) => {
+      const { fail, usage: _usage, ...behaviour } = typeof agent === 'object' && agent !== null && !Array.isArray(agent) ? agent : {};
+      paseo.behave({ ...behaviour, ...(fail !== undefined && { models: { claude: ['claude-sonnet-5-5'] } }) });
+
+      return { url: paseo.url };
+    },
+    display: expect.objectContaining({ label: 'teamai review · r0123abcd', url: expect.stringMatching(/^paseo:\/\/h\/srv_fake0001\/agent\//) }),
+    reportsUsage: false,
+    failure: (failure) => ({ ...failure, message: `The Paseo daemon at ${paseo.url} has no claude model claude-opus-5-5. It offers: claude-sonnet-5-5.` }),
   },
 ];
 
