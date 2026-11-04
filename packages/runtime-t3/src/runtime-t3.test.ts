@@ -310,6 +310,17 @@ describe('teamai-runtime-t3', () => {
       expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args['modelSelection']).toEqual({ instanceId: 'codex', model: 'gpt-6.1-sol', options: [{ id: 'reasoningEffort', value: 'high' }] });
     });
 
+    // A T3 thread always starts a session of its own, so teamai must not link it to the one the step asked to resume.
+    it('says nothing of resuming when the lease asks to resume a session, since the thread started a new one', async () => {
+      const { runtime, handle } = await opened();
+
+      runtime.send(prompt(handle, 'op-0000001b', { resume: '0b7e4a52-6f3c-4d1e-9a2b-5c8d7e6f1a30' }));
+
+      const end = await ended(runtime, 'op-0000001b');
+      expect(end).toMatchObject({ event: 'finished', session: { tool: 'claude' } });
+      expect(end).not.toHaveProperty('resumed');
+    });
+
     it('fails model_unavailable for a model or an effort the instance does not run, and launches nothing', async () => {
       const { runtime, handle } = await opened();
 
