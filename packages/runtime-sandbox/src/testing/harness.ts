@@ -43,6 +43,8 @@ export interface FakeEngine {
   daemon(up: boolean): void;
   /** Makes `rm` fail, as a daemon that cannot remove a container, or work again. */
   failRemove(shouldFail: boolean): void;
+  /** Makes an exec whose process a stop or remove killed end `ms` after the command that killed it returned. */
+  stopLag(ms: number): void;
   /** Stores or removes an sbx secret for `service`, which sbx's proxy injects; a sandbox sees only its placeholder. */
   secret(service: string, isSet: boolean): void;
   /** Makes sbx answer as one whose global network policy was initialized, or never was. */
@@ -80,6 +82,9 @@ export function fakeEngine(dir: string): FakeEngine {
     daemon(up) {
       if (up) fs.rmSync(path.join(state, 'down'), { force: true });
       else fs.writeFileSync(path.join(state, 'down'), '');
+    },
+    stopLag(ms) {
+      fs.writeFileSync(path.join(state, 'stop-lag'), String(ms));
     },
     failRemove(shouldFail) {
       if (shouldFail) fs.writeFileSync(path.join(state, 'rm-fails'), '');

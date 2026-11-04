@@ -108,7 +108,19 @@ function terminal(op: OpId, outcome: Outcome): RuntimeMessage {
 
 export function serve({ input, write, journal, provider: providerFor }: RuntimeDeps): void {
   let ready: Ready | undefined;
-  const running = new Set<OpId>();
+  /** The ops this process runs, each with what resolves once its end is written. */
+  const running = new Map<OpId, { ended: Promise<void>; end: () => void }>();
+
+  const claim = (op: OpId): void => {
+    let end = (): void => {};
+    const ended = new Promise<void>((resolve) => { end = resolve; });
+    running.set(op, { ended, end });
+  };
+
+  const release = (op: OpId): void => {
+    running.get(op)?.end();
+    running.delete(op);
+  };
 
   /** The outcome of an exec no live runtime process will finish: cancelled when teamai cancelled it, otherwise lost. */
   const settleOrphan = ({ op, handle, runner }: Journaled): Outcome => {
@@ -235,19 +247,19 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     if (replayed) return replayed;
 
     // Claimed before the first await, so the same id sent again meanwhile is answered by this run.
-    running.add(op);
+    claim(op);
     const place = journal.place(handle);
     const id = place && await sandboxOf(place, provider);
 
     if (place?.confined) {
-      running.delete(op);
+      release(op);
       write({ op, event: 'failed', failure: { code: 'bad_request', message: `Handle ${handle} is a judge's place, which runs only its confined prompt, never an exec.` } });
 
       return;
     }
 
     if (!place || id === undefined) {
-      running.delete(op);
+      release(op);
       write({ op, event: 'failed', failure: { code: 'runtime_gone', message: `No sandbox is open under handle ${handle}.` } });
 
       return;
@@ -269,7 +281,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     // repeated id is answered with it masked.
     const kept: Outcome = outcome.state === 'exited' ? { ...outcome, stdout: redact(stdout, { envSecrets: request.credentials, patterns: false }) } : outcome;
     journal.saveExec(op, { handle, runner: process.pid, outcome: kept });
-    running.delete(op);
+    release(op);
     write(terminal(op, outcome));
   };
 
@@ -311,7 +323,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     }
 
     // Claimed before the first await, as an exec is.
-    running.add(op);
+    claim(op);
     journal.saveExec(op, { handle, runner: process.pid });
     write({ op, event: 'accepted' });
     const { judge } = chosen;
@@ -320,7 +332,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       // The journal never holds a credential the tool echoed into its reply.
       const kept: Outcome = outcome.state === 'finished' ? { ...outcome, result: PromptResultSchema.parse(JSON.parse(redact(JSON.stringify(outcome.result), { envSecrets: request.credentials, patterns: false }))) } : outcome;
       journal.saveExec(op, { handle, runner: process.pid, outcome: kept });
-      running.delete(op);
+      release(op);
       write(terminal(op, outcome));
     };
 
@@ -415,6 +427,17 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
 
   const close = async (handle: string, provider: Provider): Promise<void> => {
     const place = journal.place(handle);
+
+    // What still runs there is stopped with the sandbox, and ends as cancelled before the place is answered closed.
+    const stopping = journal.opsOf(handle).flatMap(({ op }) => {
+      const run = running.get(op);
+
+      if (run === undefined) return [];
+      journal.cancel(op);
+
+      return [run.ended];
+    });
+
     const id = place && await sandboxOf(place, provider);
     const destroyed = id === undefined ? { ok: true as const } : await provider.destroy(id);
     const removed = destroyed.ok && place?.confined && provider.judges ? await provider.judges.release(place) : destroyed;
@@ -426,6 +449,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       return;
     }
 
+    await Promise.all(stopping);
     journal.forget(handle);
     write({ event: 'closed', handle });
   };
