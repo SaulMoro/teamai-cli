@@ -10,7 +10,7 @@ import {
 import { z } from 'zod';
 import type { Journal, PlaceRecord, ThreadRecord } from './journal.js';
 import { DRIVER_NAMES, DRIVERS, driverOf, sessionSince, toolOf, type ToolId } from './sessions.js';
-import { type Environment, type Launch, type Project, type Provider, type T3, type Waited } from './t3.js';
+import { type Environment, type Launch, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
 
 // ─── teamai-runtime-t3 ───
 //
@@ -20,7 +20,7 @@ import { type Environment, type Launch, type Project, type Provider, type T3, ty
 //
 //    init     connect to the environment, signing in when attended; offer the tools its provider instances run
 //    open     the checkout must be a T3 project; the place is that project and the attempt's worktree
-//    prompt   t3_thread_launch (existing_worktree, approval-required, clientRequestId = op), then t3_thread_wait
+//    prompt   t3_thread_launch (existing_worktree, auto or a tighter runtime_mode, clientRequestId = op), then t3_thread_wait
 //             until the run and the work it delegated settle; the result file and the tool's transcript end it,
 //             and the thread is settled
 //    cancel   stop the thread                     reattach  the ops and the thread, from the journal
@@ -33,6 +33,8 @@ const OptionsSchema = z.object({
   environment: z.literal('local'),
   /** A T3 provider instance to run every prompt on, by its id in T3 Settings → Providers; the tool's default one otherwise. */
   instance: z.string().min(1).optional(),
+  /** Tightens the mode every step thread runs in, from `auto`; nothing widens it. */
+  runtime_mode: z.enum(['auto-accept-edits', 'approval-required']).optional(),
 }).strict();
 
 /** The option names an effort maps to in T3's model options, by provider. */
@@ -76,6 +78,8 @@ interface Session {
   environment: Environment;
   /** The provider instance each offered tool runs on. */
   instances: Map<ToolId, Provider>;
+  /** The mode every step thread launches in. */
+  stepMode: StepMode;
 }
 
 const execFileAsync = promisify(execFile);
@@ -226,7 +230,12 @@ export function serve(options: ServeOptions): Promise<void> {
     if (!parsed.success) {
       const issue = parsed.error.issues[0];
       const key = issue?.code === 'unrecognized_keys' ? issue.keys[0] : issue?.path[0]?.toString();
-      write({ type: 'init', ok: false, error: { code: 'bad_option', message: `Runtime t3 takes { environment: local, instance? }: ${issue?.message ?? 'bad options'}.`, ...(key && { key }) } });
+
+      const message = key === 'runtime_mode'
+        ? `runtime_mode ${JSON.stringify(request.options['runtime_mode'])} is not one runtime t3 takes. A step thread runs in auto, T3's Auto mode; runtime_mode only tightens it, to auto-accept-edits or approval-required. Remove it, or set one of those two.`
+        : `Runtime t3 takes { environment: local, instance?, runtime_mode? }: ${issue?.message ?? 'bad options'}.`;
+
+      write({ type: 'init', ok: false, error: { code: 'bad_option', message, ...(key && { key }) } });
 
       return;
     }
@@ -249,7 +258,7 @@ export function serve(options: ServeOptions): Promise<void> {
         return;
       }
 
-      session = { t3: connected.t3, mode: request.mode, environment, instances: instances.instances };
+      session = { t3: connected.t3, mode: request.mode, environment, instances: instances.instances, stepMode: parsed.data.runtime_mode ?? 'auto' };
       write({
         type: 'init', ok: true, prompt: true,
         can: {
@@ -445,7 +454,7 @@ export function serve(options: ServeOptions): Promise<void> {
       // A repeated launch with the same clientRequestId is T3's lookup of the thread it launched for this op.
       const launched = await s.t3.launch({
         title, message: firstMessage(opened, lease, options.startedFrom && threadLink(s.environment, options.startedFrom, undefined)), projectId: opened.projectId, worktreePath: request.cwd,
-        modelSelection: selection.selection, runtimeMode: 'approval-required', clientRequestId: request.op,
+        modelSelection: selection.selection, runtimeMode: s.stepMode, clientRequestId: request.op,
       });
 
       thread = { threadId: launched.threadId, title, link: threadLink(s.environment, launched.threadId, launched.link), model: selection.selection.model, tool: lease.tool, launchedAt };
