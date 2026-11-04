@@ -901,8 +901,27 @@ Judge the review.
       expect(holding(path.join(dataHome, 'workflows'), VALUE)).toEqual([]);
     });
 
+    it('masks each entry\'s credential value when a definition lists one runtime twice under the same credential name', async () => {
+      const OTHER = 'toy-token-other-91c4';
+      writeDefinition('tokentwice', [
+        { use: 'toy', options: { state, credentials: { TOY_TEAM: 'env:MEMBER_TOY_TEAM' }, agent: { echo: 'TOY_TEAM' } } },
+        { use: 'toy', options: { state, credentials: { TOY_TEAM: 'env:MEMBER_TOY_OTHER' }, agent: { echo: 'TOY_TEAM' } } },
+      ]);
+      writeFlow('echoedtwice', `  - id: review
+    prompt: Review the repository without changing it.
+    output:
+      echoed: string`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+
+      const ran = await runCLI(['workflow', 'start', 'echoedtwice', '--driver', 'tokentwice'], repo, env({ MEMBER_TOY_TEAM: VALUE, MEMBER_TOY_OTHER: OTHER }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      expect(holding(path.join(dataHome, 'workflows'), VALUE)).toEqual([]);
+      expect(holding(path.join(dataHome, 'workflows'), OTHER)).toEqual([]);
+    });
+
     it.each([
-      ['local, which runs each step in the member\'s own environment', [{ use: 'local', options: { credentials: { TOY_TOKEN: 'env:MEMBER_TOY_TOKEN' } } }], 'local runs each step in the member\'s own environment, so it brings no credential'],
+      ['local, which runs each step in the member\'s own environment',[{ use: 'local', options: { credentials: { TOY_TOKEN: 'env:MEMBER_TOY_TOKEN' } } }], 'local runs each step in the member\'s own environment, so it brings no credential'],
       ['a runtime that does not offer can.env', [{ use: 'toy', options: { state: 'STATE', can: { env: false }, credentials: { TOY_TOKEN: 'env:MEMBER_TOY_TOKEN' } } }], 'toy does not offer can.env, so it cannot keep a credential to the processes it is for'],
     ])('refuses an env credential at start on %s', async (_, runtimes, why) => {
       writeDefinition('tokenrefused', runtimes.map((entry) => ({ ...entry, options: JSON.parse(JSON.stringify(entry.options).replace('"STATE"', JSON.stringify(state))) as Record<string, unknown> })));
