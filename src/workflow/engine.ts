@@ -1816,7 +1816,7 @@ function strictlyUnmet(definition: WorkflowDefinition, workflows: Record<string,
  */
 function beyondSoleDriver(
   sole: SoleDriver,
-  { step, tool, missing, missingOn }: { step: string; tool: string | undefined; missing: readonly Missing[]; missingOn: (can: DriverCan) => readonly Missing[] | undefined },
+  { step, tool, isNamed, missing, missingOn }: { step: string; tool: string | undefined; isNamed: boolean; missing: readonly Missing[]; missingOn: (can: DriverCan) => readonly Missing[] | undefined },
 ): WorkflowFailure | undefined {
   const others = sole.offers.length === 1 ? [missing] : sole.offers.map((offer) => missingOn(offer.can));
 
@@ -1827,7 +1827,7 @@ function beyondSoleDriver(
   if (helds.some((held) => held.some((key) => key.startsWith('policy.')))) return undefined;
   const lackedByAll = missing.filter((key) => helds.every((held) => held.includes(key)));
 
-  if (lackedByAll.includes('tools') && tool !== undefined) return toolUnavailable(step, tool);
+  if (lackedByAll.includes('tools') && tool !== undefined) return toolUnavailable(step, tool, isNamed);
 
   if (lackedByAll.includes('unattended')) return unattendedUnavailable(step, tool);
 
@@ -1849,9 +1849,11 @@ function lackedKey(key: Missing): string {
   return key === 'commands' ? 'commands (another runtime of the definition runs them)' : key;
 }
 
-/** Why a step that runs on `tool` fails in a run whose only driver cannot launch it. */
-function toolUnavailable(step: string, tool: string): WorkflowFailure {
-  return { code: 'tool_unavailable', message: `Step "${step}" runs on ${tool}, which the driver of this run cannot launch here. Install ${tool} where the run is driven, or remove tool from the step.` };
+/** Why a step that runs on `tool`, which it names (`isNamed`) or was picked for it, fails in a run whose only driver cannot launch it. */
+function toolUnavailable(step: string, tool: string, isNamed: boolean): WorkflowFailure {
+  return isNamed
+    ? { code: 'tool_unavailable', message: `Step "${step}" runs on ${tool}, which the driver of this run cannot launch here. Install ${tool} where the run is driven, or remove tool from the step.` }
+    : { code: 'tool_unavailable', message: `Step "${step}" names no tool and runs on ${tool}, which the driver of this run cannot launch here. Install ${tool} where the run is driven, or pick a tool it launches with --tools default=<tool>.` };
 }
 
 /** Why a step with `permissions: unattended` fails in a run whose only driver cannot run it unattended. */
@@ -2290,7 +2292,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
               return judged.kind === 'hold' ? judged.missing : judged.kind === 'grant' ? [] : undefined;
             };
 
-            const beyond = beyondSoleDriver(options.alone, { step: state.id, tool: promptTool(definition, context.toolFor), missing: terms.missing, missingOn });
+            const beyond = beyondSoleDriver(options.alone, { step: state.id, tool: promptTool(definition, context.toolFor), isNamed: definition.tool !== undefined, missing: terms.missing, missingOn });
 
             if (beyond) {
               failStep(state, beyond, run.revision);
