@@ -1,4 +1,5 @@
 import { getUserHome } from '@teamai/tool-core/home';
+import { ACCESS_LEVELS, CONFINED_LEVELS } from '@teamai/tool-core/launch';
 import type { TokenUsage } from '@teamai/tool-core/stdout';
 import { z } from 'zod';
 
@@ -143,6 +144,71 @@ export const PromptLeaseSchema = z.object({
 
 export type PromptLease = z.infer<typeof PromptLeaseSchema>;
 
+/** How far a driver keeps a step from the member's machine, weakest first. A workspace contract is at least `worktree`. */
+export const ISOLATION_LEVELS = ['none', 'worktree', 'sandbox'] as const;
+
+/**
+ * Where a step runs: in the checkout as it is, in a new copy, in the copy an enclosing step opened, in a fresh clone
+ * teamai prepares, or in a fresh clone of the team repo. A driver lists the ones it provides in `can.workspace`.
+ */
+export const WORKSPACE_MODES = ['read-only', 'new', 'continue', 'clone', 'team'] as const;
+
+/** The level a confined step runs at, which its `confined.json` sets: `verified` or `best-effort`. */
+export const ConfinedLevelSchema = z.enum(CONFINED_LEVELS);
+
+/** One offer of `can.confined`: tools a driver runs confined at `level`, which can do `access` there. */
+export const ConfinedOfferSchema = z.object({
+  level: ConfinedLevelSchema,
+  access: z.enum(ACCESS_LEVELS).optional(),
+  tools: z.array(z.string().min(1)).min(1),
+});
+
+/**
+ * `driver.can`: what the driver declares it can do on this request. An omitted key means "not offered". The engine
+ * never stores it. Parsed by `parseNextPayload`; the local driver builds every key.
+ * - `network`: the driver can deny a step the network.
+ * - `isolation`: the level the driver keeps every step it runs at.
+ * - `env`: the driver resolves `envScope.provide` itself, removes `envScope.withhold`, and keeps the values from
+ *   whatever runs the step. `true` covers every step; `'commands'` only command steps and setup, which run in the
+ *   driver's own processes, so a prompt step that requires env is held. A driver whose executor is the agent leaves it out.
+ * - `tokens`: every success report of a headless prompt step carries the tokens it spent.
+ * - `max_turns`: the driver passes `maxTurns` to the tools it can cap, and reports `unenforced: ['max_turns']` for the others.
+ * - `setup`: in each workspace it creates, the driver runs `lease.setup` before the step with only setup's keys, and
+ *   fails the step without running it when setup exits non-zero (`setup_failed`), changes a tracked or non-ignored path
+ *   (`setup_dirty`), or leaves a value of one of its keys in a file it created or changed (`setup_secret`).
+ * - `tools`: the tools the driver launches a prompt step on that names its `tool`. Omitted: no such step.
+ * - `end_turn`: the driver holds a prompt leased with `limits` to them from its tool's launch, stops the tool at the
+ *   first it reaches and reports it as `limit`, with `durationMs`. Without it, such a prompt gets the `on_limit: fail`
+ *   lease, and its pass records `on_limit` as not enforced.
+ * - `unattended`: the driver launches a prompt leased with `permissions: 'unattended'` in its tool's own mode for
+ *   editing and running commands without asking, and fails the step rather than launch a tool that has none.
+ * - `role`: the driver runs a step leased with `role` with what teamai delivered into its prepared copy for that role,
+ *   and starts nothing that delivers the member's own assets there instead.
+ * - `confined`: the tools the driver runs a prompt on with one directory as its only readable root, each offer at the
+ *   level it reaches, with what those tools can do there. An offer without `access` counts as `full`.
+ */
+export const CanSchema = z.object({
+  hitl: z.boolean().optional(),
+  /** `false`: the driver runs no command, so command steps and steps with setup go to another driver. Absent: it does. */
+  exec: z.boolean().optional(),
+  workspace: z.array(z.enum(WORKSPACE_MODES)).optional(),
+  network: z.boolean().optional(),
+  isolation: z.enum(ISOLATION_LEVELS).optional(),
+  env: z.union([z.boolean(), z.literal('commands')], { error: "Expected true, false or 'commands'" }).optional(),
+  tokens: z.boolean().optional(),
+  max_turns: z.boolean().optional(),
+  setup: z.boolean().optional(),
+  tools: z.array(z.string().min(1)).optional(),
+  end_turn: z.boolean().optional(),
+  unattended: z.boolean().optional(),
+  role: z.boolean().optional(),
+  confined: z.array(z.lazy(() => ConfinedOfferSchema)).optional(),
+});
+
+export type Can = z.infer<typeof CanSchema>;
+
+export type ConfinedOffer = z.infer<typeof ConfinedOfferSchema>;
+
 const InitRequestSchema = z.object({ type: z.literal('init'), protocol: z.literal(RUNTIME_PROTOCOL), mode: z.enum(RUNTIME_MODES), options: RuntimeOptionsSchema });
 
 export const OpenRequestSchema = z.object({
@@ -222,14 +288,14 @@ export type OpState = z.infer<typeof OpStateSchema>;
  * given. A runtime checks what it writes against `RuntimeMessageSchema`; teamai reads a display apart from its event,
  * so a runtime that gets it wrong loses only its display, and reads `can` as its own driver offer.
  */
-export function runtimeMessageSchemas<TDisplay extends z.ZodType, TCan extends z.ZodType>({ display, can }: { display: TDisplay; can: TCan }) {
+export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: { display: TDisplay }) {
   /**
    * A reply to `init`: the runtime's offer, or why it cannot run with the options it was given. `prompt: true` says it
    * launches agents its own way, so teamai sends it each prompt step as a `prompt`, never as an `exec` of the tool.
    * With `can.exec: false` it runs no command: command steps, and steps with setup, go to the next runtime.
    */
   const InitReply = z.discriminatedUnion('ok', [
-    z.object({ type: z.literal('init'), ok: z.literal(true), can, prompt: z.boolean().optional() }),
+    z.object({ type: z.literal('init'), ok: z.literal(true), can: CanSchema, prompt: z.boolean().optional() }),
     z.object({ type: z.literal('init'), ok: z.literal(false), error: RuntimeFailureSchema }),
   ]);
 
@@ -258,6 +324,6 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType, TCan extends z
 }
 
 /** What a runtime may write, display and offer included: a check for its own output. */
-export const RuntimeMessageSchema = runtimeMessageSchemas({ display: RuntimeDisplaySchema.optional(), can: z.record(z.string(), z.unknown()) }).Message;
+export const RuntimeMessageSchema = runtimeMessageSchemas({ display: RuntimeDisplaySchema.optional() }).Message;
 
 export type RuntimeMessage = z.infer<typeof RuntimeMessageSchema>;

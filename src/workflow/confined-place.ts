@@ -10,7 +10,8 @@ import { isAgentToolId } from '../tool-registry.js';
 import type { LocalConfig } from '../types.js';
 import { errnoCode } from '../utils/fs.js';
 import type { ConfinedLease } from './lease-wire.js';
-import { ConfinedLevelSchema, type DriverCan, type Held } from './requirements.js';
+import { ConfinedLevelSchema } from '@teamai/runtime-protocol';
+import type { DriverCan, Held } from './requirements.js';
 import { chooseStepModel, type StepModel } from './step-model.js';
 import type { WorkflowFailure } from './types.js';
 

@@ -54,7 +54,8 @@ import { runConfinedStep } from '../../confined-step.js';
 import { runAnswerStep } from './answer-step.js';
 import { chooseStepModel, loadDeployedAgent, type StepModel } from '../../step-model.js';
 import type { DriveOptions, DriverIdentity, RunState, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
-import { isWorkflowError, stepWorkflow, WORKSPACE_MODES } from '../../types.js';
+import { isWorkflowError, stepWorkflow } from '../../types.js';
+import { WORKSPACE_MODES } from '@teamai/runtime-protocol';
 import { confinedOf, contractClone, type SessionRef } from '../../workspace.js';
 import { git, headCommit } from '../../worktree.js';
 
