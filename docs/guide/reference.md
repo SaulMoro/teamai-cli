@@ -313,7 +313,7 @@ export PATH="$HOME/src/acme-claude/bin:$PATH"     # in ~/.zshrc or ~/.bashrc
 teamai workflow start review --tools default=acme-claude
 ```
 
-**Where instances come from.** `tools/<name>.yaml`, and `tools/<namespace>/<name>.yaml`, which replaces the root one. Two namespaces that define one name, or two team repos that define it differently, are a conflict: teamai uses neither and says so. A file is refused, naming the problem, when it sets anything but `command`, `home` and `paths`, or when `command` is a path such as `./scripts/acme-claude`, or holds `:`, `*` or `?`: the program at a path can change without the file changing, so acceptance would not cover it. teamai looks `command` up in the PATH directories alone, on Windows too, so a file of that name in the checkout never runs in its place.
+**Where instances come from.** `tools/<name>.yaml`, and `tools/<namespace>/<name>.yaml`, which replaces the root one. Two namespaces that define one name, or two team repos that define it differently, are a conflict: teamai uses neither and says so. A file is refused, naming the problem, when it sets anything but `command`, `home` and `paths`, or when `command` is a path such as `./scripts/acme-claude`, or holds `:`, `*` or `?`: the program at a path can change without the file changing, so acceptance would not cover it. teamai looks `command` up in the PATH directories alone, on Windows too, not in the checkout, so a file of that name in the checkout does not run in its place unless the member's PATH holds `.` or an empty entry.
 
 ```text
 Tool instance …/tools/acme-claude.yaml is not valid: it sets sessions, and an instance sets only command, home and paths. …

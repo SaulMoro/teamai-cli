@@ -313,7 +313,7 @@ export PATH="$HOME/src/acme-claude/bin:$PATH"     # 写在 ~/.zshrc 或 ~/.bashr
 teamai workflow start review --tools default=acme-claude
 ```
 
-**实例从哪里来。** `tools/<name>.yaml`，以及 `tools/<namespace>/<name>.yaml`（替换根目录的同名实例）。两个 namespace 定义同一个名字，或两个团队仓库对同一个名字定义不同，算冲突：两个都不用，并给出提示。文件里出现 `command`、`home`、`paths` 以外的键，或 `command` 是 `./scripts/acme-claude` 这样的路径、含有 `:`、`*` 或 `?`，都会被拒绝，并指出问题：路径上的程序可以在文件不变的情况下被改掉，接受就管不到它。teamai 只在 PATH 的目录里查找 `command`，Windows 上也一样，所以检出目录里的同名文件不会代替它运行。
+**实例从哪里来。** `tools/<name>.yaml`，以及 `tools/<namespace>/<name>.yaml`（替换根目录的同名实例）。两个 namespace 定义同一个名字，或两个团队仓库对同一个名字定义不同，算冲突：两个都不用，并给出提示。文件里出现 `command`、`home`、`paths` 以外的键，或 `command` 是 `./scripts/acme-claude` 这样的路径、含有 `:`、`*` 或 `?`，都会被拒绝，并指出问题：路径上的程序可以在文件不变的情况下被改掉，接受就管不到它。teamai 只在 PATH 的目录里查找 `command`，Windows 上也一样，不在检出目录里查找，所以除非成员的 PATH 含有 `.` 或空条目，检出目录里的同名文件不会代替它运行。
 
 ```text
 Tool instance …/tools/acme-claude.yaml is not valid: it sets sessions, and an instance sets only command, home and paths. …
