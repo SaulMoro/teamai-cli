@@ -147,6 +147,11 @@ steps:
     prompt: Design the change with me.
     output:
       ok: boolean`);
+    writeFlow('person', `  - id: review
+    workspace: new
+    interactive: true
+    tool: claude
+    prompt: Review the repository with a person.`);
     writeFlow('capped', `  - id: review
     tool: codex
     max_turns: 3
@@ -267,6 +272,17 @@ Judge the review.
     expect(message).toContain('runtime toy lacks tools');
     expect(message).toContain('runtime local lacks isolation');
     expect(toyOpens()).toBe(0);
+  });
+
+  it('hands an interactive step to a person, unattended, when no runtime can ask and one of them lacks its workspace', async () => {
+    writeDefinition('personless', [{ use: 'local' }, { use: 'toy', options: { state, can: { workspace: [] } } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'person', '--driver', 'personless'], repo, env({ TEAMAI_MODE: 'unattended' }));
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { handoff: { steps: ['review'] } } });
+    expect(ran.code).toBe(0);
+    expect(toyOpens()).toBe(0);
+    expect(fs.existsSync(launches)).toBe(false);
   });
 
   it('refuses at start a strict sandbox step that no runtime of the definition is, naming the driver and its runtimes', async () => {

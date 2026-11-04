@@ -401,6 +401,11 @@ export type Negotiation =
   /** No driver can run the step on this machine as it is written or as its env stands. */
   | { kind: 'fail'; failure: WorkflowFailure };
 
+/** What an interactive step lacks on a driver that cannot ask a person, also where a plan defers before `negotiate`. */
+export function personGap(interactive: boolean, can: Pick<DriverCan, 'hitl'>): Missing[] {
+  return interactive && !can.hitl ? ['hitl'] : [];
+}
+
 /**
  * Decides whether this driver may take the step, and on what terms. Pure: the engine calls it at both places it hands
  * out a lease. In order: an `env:` key that shadows a team secret or a required key fails; what the member's policy refuses
@@ -438,7 +443,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     // Only teamai delivers a role into a copy: one a driver makes itself gets the member's assets.
     ...((offer.clone || offer.role !== undefined) && !offer.prepare ? ['prepare' as const] : []),
     ...(offer.role !== undefined && !can.role ? ['role' as const] : []),
-    ...(offer.interactive && !can.hitl ? ['hitl' as const] : []),
+    ...personGap(offer.interactive, can),
     ...(offer.executor === 'command' && can.exec === false ? ['exec' as const] : []),
     ...(offer.pinned && can.remote ? ['host' as const] : []),
     ...(offer.executor === 'prompt' && can.prompt === false ? ['prompt' as const] : []),
