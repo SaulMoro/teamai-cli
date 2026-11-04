@@ -214,7 +214,10 @@ export function runtimePrompter(run: AttemptRun, { view, step, unset }: { view: 
     if (input.resume) lease.resume = input.resume;
 
     if (input.maxTurns !== undefined) lease.maxTurns = input.maxTurns;
-    const env = stringEnv({ ...input.env, ...(input.launch ? launchEnv(input.launch) : {}), TEAMAI_WORKFLOW_RESULT: input.resultPath });
+    const env = stringEnv(input.env ?? {});
+
+    if (input.launch) Object.assign(env, launchEnv(input.launch));
+    env.TEAMAI_WORKFLOW_RESULT = input.resultPath;
     let accepted = false;
     let timedOut = false;
     const stop = (): void => { void run.cancel(); };
