@@ -42,7 +42,7 @@ const SbxOptionsSchema = z.strictObject({
   agent: z.string({ error: NAME_AN_AGENT }).min(1, NAME_AN_AGENT).refine((agent) => agent !== 'shell', NAME_AN_AGENT),
 });
 
-const SCHEMAS = { sbx: SbxOptionsSchema, docker: ContainerOptionsSchema, podman: ContainerOptionsSchema };
+const SCHEMAS = { sbx: SbxOptionsSchema, docker: ContainerOptionsSchema, podman: ContainerOptionsSchema } satisfies Record<(typeof PROVIDERS)[number], z.ZodObject>;
 
 export type SandboxOptions = z.infer<typeof ContainerOptionsSchema> | z.infer<typeof SbxOptionsSchema>;
 

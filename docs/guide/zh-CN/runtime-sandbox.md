@@ -249,6 +249,7 @@ runtimes:
     options:
       provider: sbx
       agent: codex                       # 不需要 credentials：sbx 的代理替 Codex 登录
+  - use: local                           # 负责评分步骤的评判：sbx 不提供评判
 ```
 
 用 Codex 时，每个成员在 sbx 里保存一次自己的登录。它留在你机器上 sbx 的代理里，由代理加到 Codex 的请求上，所以不会有 `auth.json` 写进这次尝试的工具主目录：
@@ -284,7 +285,7 @@ teamai-rb2152f12cb75a939-aca6809de   claude   ● running           /home/me/acm
 
 - 工作树是沙箱的工作区。git 目录、结果目录、运行目录和工具主目录是额外的工作区，都在主机上的路径，git 的那些是只读的（`/home/me/acme/app/.git:ro`）。sbx 自己不会顺着链接工作树的 `.git` 找到主检出，所以由 teamai 列出这些路径。`git status` 能用，`git commit` 会失败。
 - 步骤以 sbx 的 `agent` 用户运行。它写到你磁盘上的文件仍然归你所有。
-- 每次 `sbx exec` 都用 `-e NAME` 拿到步骤的变量名，命令行里从不出现值。严格步骤要扣下的变量，比如 sbx 为它的代理设置的 `GH_TOKEN`，会在步骤进程里被取消设置。
+- 每次 `sbx exec` 都用 `-e NAME` 拿到步骤的变量名，命令行里从不出现值。严格步骤要扣下的变量，比如 sbx 为它的代理设置的 `GH_TOKEN`，会在步骤进程里被取消设置。步骤自己的 `HOME`、`XDG_*`、`SBX_*` 或 `DOCKER_*` 不会传进去：sbx CLI 自己读取它们，沙箱保留它自己的。
 - 取消或到达限制时执行 `sbx stop`，下一次 exec 会重新启动沙箱。尝试结束时 teamai 执行 `sbx rm --force`。sbx 也会自己停掉空闲的沙箱，这没有问题。
 
 **你机器上的网关**通过 `host.docker.internal` 访问，sbx 的代理会把它转到 `localhost`。放行一次它的端口：
