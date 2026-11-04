@@ -21,9 +21,22 @@ import { z } from 'zod';
 //  The client's own dependencies, @getpaseo/protocol and ws, resolve from the client's directory, as its code does.
 //
 
-const INSTALL = 'Install Paseo (npm install -g @getpaseo/cli) so `paseo` is on PATH, or set PASEO_CLIENT_PATH to the directory of its @getpaseo/client package.';
+/** The oldest Paseo this runtime runs against, its client and its daemon alike: the version it is tested against. */
+export const OLDEST_PASEO = '0.14.0';
 
-/** What this runtime uses of the installed client. Typed by the version it is tested against; the daemon's version is checked at connect. */
+/** Whether `version` is `floor` or later, comparing major, minor and patch. */
+export function atLeast(version: string, floor: string): boolean {
+  const parts = (text: string): number[] => text.split(/[.-]/).slice(0, 3).map(Number);
+  const [have, need] = [parts(version), parts(floor)];
+
+  for (let index = 0; index < 3; index += 1) {
+    if ((have[index] ?? 0) !== (need[index] ?? 0)) return (have[index] ?? 0) > (need[index] ?? 0);
+  }
+
+  return true;
+}
+
+/** What this runtime uses of the installed client. Typed by the version it is tested against, the oldest it loads. */
 export interface PaseoClient {
   createPaseoApi: typeof createPaseoApi;
   DaemonClient: typeof DaemonClient;
@@ -31,52 +44,83 @@ export interface PaseoClient {
   WebSocket: typeof WebSocket;
 }
 
-const ManifestSchema = z.object({ name: z.string() });
+const ManifestSchema = z.object({ name: z.string(), version: z.string().optional() });
 
-/** Whether `dir` holds the package named `name`. */
-function isPackage(dir: string, name: string): boolean {
+/** The package.json of the package in `dir`, or undefined when it holds none that parses. */
+function manifestOf(dir: string): z.infer<typeof ManifestSchema> | undefined {
   try {
-    return ManifestSchema.safeParse(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))).data?.name === name;
+    return ManifestSchema.safeParse(JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))).data;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
 /** The nearest directory at or above `start` that holds the package named `name`. */
 function packageDir(start: string, name: string): string | undefined {
   for (let at = start; ; at = path.dirname(at)) {
-    if (isPackage(at, name)) return at;
+    if (manifestOf(at)?.name === name) return at;
 
     if (path.dirname(at) === at) return undefined;
   }
 }
 
-/** The directory of the client package, or why none was found, as the end of a sentence that starts "found no Paseo client". */
-function clientDir(env: NodeJS.ProcessEnv): { dir: string } | { missing: string } {
-  const given = env.PASEO_CLIENT_PATH;
+/** The directory of the client package of the `paseo` on PATH, or undefined when that install holds none. */
+function clientBeside(cli: string): string | undefined {
+  const cliDir = packageDir(path.dirname(fs.realpathSync(cli)), '@getpaseo/cli');
 
-  if (given) {
-    const dir = path.resolve(given);
-
-    return isPackage(dir, '@getpaseo/client') ? { dir } : { missing: ` in ${given}, which PASEO_CLIENT_PATH names` };
-  }
-
-  const cli = findOnPath('paseo', { pathEnv: env.PATH });
-
-  if (!cli) return { missing: ': it found no `paseo` on PATH' };
-  const real = fs.realpathSync(cli);
-  const cliDir = packageDir(path.dirname(real), '@getpaseo/cli');
-
-  if (!cliDir) return { missing: ` for ${real}, which is not inside the @getpaseo/cli package` };
+  if (!cliDir) return undefined;
 
   try {
-    const entry = createRequire(path.join(cliDir, 'package.json')).resolve('@getpaseo/client');
-    const dir = packageDir(path.dirname(entry), '@getpaseo/client');
-
-    return dir ? { dir } : { missing: ` beside ${real}` };
+    return packageDir(path.dirname(createRequire(path.join(cliDir, 'package.json')).resolve('@getpaseo/client')), '@getpaseo/client');
   } catch {
-    return { missing: ` beside ${real}` };
+    return undefined;
   }
+}
+
+/** The directory of the client package and its version, or why none can be used. */
+function findClient(env: NodeJS.ProcessEnv): { dir: string; version: string } | RuntimeFailure {
+  const given = env.PASEO_CLIENT_PATH;
+  let dir: string | undefined;
+
+  if (given) {
+    dir = path.resolve(given);
+
+    if (manifestOf(dir)?.name !== '@getpaseo/client') {
+      return {
+        code: 'client_missing',
+        message: `teamai-runtime-paseo found no Paseo client in ${given}, which PASEO_CLIENT_PATH names. Install Paseo (npm install -g @getpaseo/cli) so \`paseo\` is on PATH, or set PASEO_CLIENT_PATH to the directory of its @getpaseo/client package.`,
+      };
+    }
+  } else {
+    const cli = findOnPath('paseo', { pathEnv: env.PATH });
+
+    if (!cli) {
+      return {
+        code: 'client_missing',
+        message: 'teamai-runtime-paseo found no `paseo` on PATH to load the Paseo client from. Install Paseo (npm install -g @getpaseo/cli) so `paseo` is on PATH, or set PASEO_CLIENT_PATH to the directory of its @getpaseo/client package.',
+      };
+    }
+
+    dir = clientBeside(cli);
+
+    if (!dir) {
+      return {
+        code: 'client_missing',
+        message: `teamai-runtime-paseo found no Paseo client in the Paseo install ${cli} links to. Reinstall Paseo (npm install -g @getpaseo/cli), or set PASEO_CLIENT_PATH to the directory of its @getpaseo/client package.`,
+      };
+    }
+  }
+
+  const version = manifestOf(dir)?.version ?? 'unknown';
+
+  if (!atLeast(version, OLDEST_PASEO)) {
+    return {
+      code: 'client_version',
+      message: `The Paseo client in ${dir} is version ${version}; teamai-runtime-paseo needs Paseo ${OLDEST_PASEO} or later. Update Paseo, or set PASEO_CLIENT_PATH to a newer @getpaseo/client package.`,
+    };
+  }
+
+  return { dir, version };
 }
 
 /** A module export this runtime calls or constructs. */
@@ -90,16 +134,16 @@ async function loadExport<TExport extends object>(from: string, specifier: strin
 
   if (!parsed.success) throw new Error(`${specifier} exports no function ${name}`);
 
-  // SAFETY: the export is a function of the installed client, the version the member runs; its signature is typed by
-  // the version this runtime is tested against, and connect refuses a daemon older than that.
+  // SAFETY: the export is a function of the installed client, which findClient checked is OLDEST_PASEO or later, the
+  // version whose types it has here.
   return parsed.data[name] as TExport;
 }
 
 /** Loads the installed Paseo client, or says what is missing and how to install it. */
 export async function loadClient(env: NodeJS.ProcessEnv): Promise<PaseoClient | RuntimeFailure> {
-  const found = clientDir(env);
+  const found = findClient(env);
 
-  if ('missing' in found) return { code: 'client_missing', message: `teamai-runtime-paseo found no Paseo client${found.missing}. ${INSTALL}` };
+  if ('code' in found) return found;
 
   try {
     const [api, daemon, link, socket] = await Promise.all([
@@ -113,7 +157,7 @@ export async function loadClient(env: NodeJS.ProcessEnv): Promise<PaseoClient | 
   } catch (error) {
     return {
       code: 'client_missing',
-      message: `teamai-runtime-paseo could not load the Paseo client in ${found.dir}: ${error instanceof Error ? error.message : String(error)}. Update Paseo, or set PASEO_CLIENT_PATH to the directory of a working @getpaseo/client package.`,
+      message: `teamai-runtime-paseo could not load the Paseo client ${found.version} in ${found.dir}: ${error instanceof Error ? error.message : String(error)}. Reinstall Paseo, or set PASEO_CLIENT_PATH to the directory of a working @getpaseo/client package.`,
     };
   }
 }
