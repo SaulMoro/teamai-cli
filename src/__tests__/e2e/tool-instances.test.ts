@@ -239,6 +239,25 @@ describe.skipIf(process.platform === 'win32')('tool instances through the CLI', 
     expect(launches()).toEqual(['acme-claude']);
   }, 120_000);
 
+  it.skipIf(!hasPython)('stops asking to accept a command once the run is cancelled, and the driver ends', async () => {
+    clearLaunches();
+    forgetAcceptances();
+    const terminal = inTerminal(['workflow', 'start', 'review', '--driver', 'local', '--tools', 'default=acme-claude']);
+
+    try {
+      expect(await waitFor(() => terminal.printed().includes('Run it? [y/N]'), 30_000), terminal.printed()).toBe(true);
+      const run = /Run (\S+) started/.exec(terminal.printed())?.[1];
+      expect(run, terminal.printed()).toBeDefined();
+      const cancelled = await runCLI(['workflow', 'cancel', String(run)]);
+      expect(cancelled.code, `${cancelled.stdout}\n${cancelled.stderr}`).toBe(0);
+
+      expect(await endedWithin(terminal, 15_000), terminal.printed()).not.toBe('still running');
+    } finally {
+      terminal.stop();
+    }
+    expect(launches()).toEqual([]);
+  });
+
   it('finds the instance\'s session in its own home, credits it to the instance, and scores and migrates it as the instance\'s', async () => {
     // A member's own copy of the team file runs with no acceptance, which the terminal case covers.
     const own = path.join(home, '.teamai', 'tools', 'acme-claude.yaml');
