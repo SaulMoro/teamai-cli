@@ -45,6 +45,8 @@ const LaunchSchema = z.object({
   launchedAt: z.number(),
   /** A step's: the worktree its thread runs on. A judge's thread runs in a scratch folder of T3's own. */
   worktreePath: z.string().optional(),
+  /** Which T3 Code sign-in sent it: T3 answers a repeat with the thread it launched only under that same sign-in. */
+  signIn: z.string(),
 });
 
 export type LaunchRecord = z.infer<typeof LaunchSchema>;
@@ -78,6 +80,8 @@ export interface Journal {
   placeOf(op: string): PlaceRecord | undefined;
   write(place: PlaceRecord): void;
   remove(handle: string): void;
+  /** The file that holds the place's record, which the person deletes once they stopped what it may still run. */
+  file(handle: string): string;
 }
 
 export function journal(dir: string): Journal {
@@ -124,5 +128,6 @@ export function journal(dir: string): Journal {
       fs.renameSync(temp, file(place.handle));
     },
     remove: (handle) => fs.rmSync(file(handle), { force: true }),
+    file,
   };
 }
