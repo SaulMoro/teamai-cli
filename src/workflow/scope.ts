@@ -18,6 +18,8 @@ export interface Scope {
   /** What every step path inside it starts with: '' at the top, `<workflow step path>.` inside a sub-workflow. */
   prefix: string;
   definition: WorkflowDefinition | InlineWorkflow;
+  /** The name of the workflow file its steps belong to: its own, or for an inline workflow the enclosing file's. */
+  workflow: string;
   inputs: RunState['inputs'] | undefined;
   /** For an inline workflow: the enclosing workflows' steps, by id, which its own steps hide. */
   outer?: Record<string, ExpressionStep>;
@@ -61,7 +63,7 @@ function allowancesOf(scope: Scope, state: StepState, step: WorkflowStep): Pick<
 
 export function topScope(run: RunState): Scope {
   return {
-    runId: run.id, prefix: '', definition: run.definition, inputs: run.inputs, loops: stepLoops(run.definition.steps), defaultModel: run.definition.defaults?.model,
+    runId: run.id, prefix: '', definition: run.definition, workflow: run.definition.name, inputs: run.inputs, loops: stepLoops(run.definition.steps), defaultModel: run.definition.defaults?.model,
     requires: mergeRequirements(run.definition.defaults?.requires),
     ...budgetOf(false, run.definition.budget), ...setupOf(run.definition.setup), allowances: [],
   };
@@ -76,7 +78,7 @@ export function finallyScope(run: RunState): Scope {
   const steps = run.definition.finally ?? [];
 
   return {
-    runId: run.id, prefix: '', definition: { steps }, inputs: run.inputs, outer: expressionSteps(top, statesIn(run, top)), loops: stepLoops(steps),
+    runId: run.id, prefix: '', definition: { steps }, workflow: top.workflow, inputs: run.inputs, outer: expressionSteps(top, statesIn(run, top)), loops: stepLoops(steps),
     requires: top.requires, budgeted: false, allowances: [],
   };
 }
@@ -108,7 +110,7 @@ export function childScope(run: RunState, scope: Scope, states: StepState[], sta
 
   if (runs?.kind === 'inline') {
     return {
-      runId: scope.runId, prefix: `${state.id}.`, definition: runs.workflow, inputs: scope.inputs, outer: expressionSteps(scope, states, state),
+      runId: scope.runId, prefix: `${state.id}.`, definition: runs.workflow, workflow: scope.workflow, inputs: scope.inputs, outer: expressionSteps(scope, states, state),
       loops: stepLoops(runs.workflow.steps), runner: state, ...itemOf(scope, state), defaultModel: scope.defaultModel,
       requires: mergeRequirements(scope.requires, step.requires),
       ...budgetOf(scope.budgeted || step.budget !== undefined, ownBudget(step)), ...setupOf(scope.setup), ...allowancesOf(scope, state, step),
@@ -118,7 +120,7 @@ export function childScope(run: RunState, scope: Scope, states: StepState[], sta
   const definition = workflowRunBy(run, step, scope.prefix);
 
   return definition && isWorkflowFile(definition) ? {
-    runId: scope.runId, prefix: `${state.id}.`, definition, inputs: state.inputs, loops: stepLoops(definition.steps), runner: state,
+    runId: scope.runId, prefix: `${state.id}.`, definition, workflow: definition.name, inputs: state.inputs, loops: stepLoops(definition.steps), runner: state,
     defaultModel: definition.defaults?.model ?? scope.defaultModel,
     requires: mergeRequirements(scope.requires, step.requires, definition.defaults?.requires),
     ...budgetOf(scope.budgeted || step.budget !== undefined, ownBudget(step), definition.budget), ...setupOf(definition.setup ?? scope.setup),
