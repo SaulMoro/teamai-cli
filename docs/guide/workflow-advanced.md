@@ -1538,8 +1538,10 @@ schemaVersion: v1alpha1
 name: sandboxed
 tool: claude
 runtimes:
-  - use: sbx              # takes every step it can
+  - use: sandbox          # takes every step it can
     options:
+      provider: docker
+      image: ghcr.io/acme/agent:1
       max_parallel: 2
   - use: local            # takes the rest, such as an interactive step or a required approval
 ```
@@ -1547,7 +1549,7 @@ runtimes:
 A step that no single runtime can take fails `requirement_unmet`, naming what each one lacks:
 
 ```text
-Step "review" needs what no single runtime of driver "sandboxed" offers: runtime sbx lacks tools; runtime local lacks isolation. Give one runtime of the definition all of it, or change what the step requires.
+Step "review" needs what no single runtime of driver "sandboxed" offers: runtime sandbox lacks tools; runtime local lacks isolation. Give one runtime of the definition all of it, or change what the step requires.
 ```
 
 A step that requires strict isolation no runtime of the definition gives is refused at `workflow start`, before the run exists. A step every runtime holds back for a reason of this machine, such as a network your `workflows.allow` refuses, stays pending. An approval or choice waiting for you is still asked meanwhile. Once nothing else runs or waits for an answer, the run stops `busy` with that reason, and the dashboard's run details say which runtime held it back and why.
