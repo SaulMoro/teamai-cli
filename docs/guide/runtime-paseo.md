@@ -4,7 +4,7 @@
 
 `teamai-runtime-paseo` runs each prompt step as an agent of a [Paseo](https://github.com/getpaseo/paseo) daemon, in a Paseo workspace on teamai's worktree for the step. You watch the agent and answer its permission prompts in the Paseo app. teamai still reads the result, commits, delivers, scores, and recovers the step.
 
-It runs prompt steps only. Commands, `setup`, and steps that need `permissions: unattended` or a `role` go to the next runtime in the definition, or to this machine. It also judges a scored pass, best-effort: see [Judge a scored pass](#judge-a-scored-pass).
+It runs prompt steps only. Commands and `setup` go to the next runtime in the definition, or to this machine. A prompt step that needs `permissions: unattended` or a `role` goes to the next runtime that can run it. It also judges a scored pass, best-effort: see [Judge a scored pass](#judge-a-scored-pass).
 
 ## Quick start
 
@@ -155,7 +155,7 @@ The judge runs at `best-effort`, never `verified`:
 | What | Enforced |
 | --- | --- |
 | A fresh agent whose cwd is the evidence directory, briefed to read only it | yes |
-| No edit and no command: the judge's mode asks first, and any request for permission ends the judge, attended or not | yes |
+| No edit, and no command the tool's own rules do not allow: the judge's mode asks first, and any request for permission ends the judge, attended or not | yes |
 | Its answer is its last message, parsed as JSON; it writes nothing | yes |
 | No read outside the directory | no: nothing stops the agent reading a file elsewhere |
 | No network | no |
@@ -193,7 +193,7 @@ The step's `model` must be one the daemon offers, and its `effort` one that mode
 ✖ Step "classify" failed with model_unavailable: The Paseo daemon at ws://127.0.0.1:6767/ws has no claude model claude-opus-0-1. It offers: claude-opus-5-5, claude-opus-5, claude-fable-5-1, claude-fable-5, claude-opus-4-8[1m], claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-sonnet-5[1m], claude-opus-4-7[1m], claude-opus-4-7, claude-opus-4-6[1m], claude-opus-4-6, claude-sonnet-4-6[1m], claude-sonnet-4-6, claude-haiku-5-5, claude-haiku-4-5.
 ```
 
-The agent gets the step's prompt, and of the run's environment only `TEAMAI_RUN_DIR`. Paseo reports no full token counts, so a step under a token budget runs on the next runtime.
+The agent gets the step's prompt. Paseo reports no full token counts, so a step under a token budget runs on the next runtime.
 
 ## Credentials
 

@@ -4,7 +4,7 @@
 
 `teamai-runtime-paseo` 把每个提示词步骤作为 [Paseo](https://github.com/getpaseo/paseo) 守护进程的智能体运行，放在一个 Paseo 工作区里，该工作区就是 teamai 为这个步骤准备的 worktree。你在 Paseo 应用里查看智能体、回答它的权限请求。读取结果、提交、交付、评分和恢复仍由 teamai 负责。
 
-它只运行提示词步骤。命令、`setup`，以及需要 `permissions: unattended` 或 `role` 的步骤，交给定义里的下一个运行时，或留在本机。它也以 best-effort 评判被评分的轮次，见[评判被评分的轮次](#评判被评分的轮次)。
+它只运行提示词步骤。命令和 `setup` 交给定义里的下一个运行时，或留在本机。需要 `permissions: unattended` 或 `role` 的提示词步骤，交给下一个能运行它的运行时。它也以 best-effort 评判被评分的轮次，见[评判被评分的轮次](#评判被评分的轮次)。
 
 ## 快速开始
 
@@ -155,7 +155,7 @@ teamai fix · rd573bcff8eef4e10             claude/claude-opus-5-5  closed  /rep
 | 内容 | 是否强制 |
 | --- | --- |
 | 一个全新的智能体，cwd 是证据目录，并被告知只读这个目录 | 是 |
-| 不编辑、不运行命令：评判所用模式会先询问，而任何权限请求都会结束评判，无论有无人值守 | 是 |
+| 不编辑，也不运行工具自身规则未允许的命令：评判所用模式会先询问，而任何权限请求都会结束评判，无论有无人值守 | 是 |
 | 它的回答是最后一条消息，按 JSON 解析；它什么都不写 | 是 |
 | 不读目录之外的文件 | 否：没有什么能阻止智能体读取别处的文件 |
 | 不访问网络 | 否 |
@@ -193,7 +193,7 @@ runtimes:
 ✖ Step "classify" failed with model_unavailable: The Paseo daemon at ws://127.0.0.1:6767/ws has no claude model claude-opus-0-1. It offers: claude-opus-5-5, claude-opus-5, claude-fable-5-1, claude-fable-5, claude-opus-4-8[1m], claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-sonnet-5[1m], claude-opus-4-7[1m], claude-opus-4-7, claude-opus-4-6[1m], claude-opus-4-6, claude-sonnet-4-6[1m], claude-sonnet-4-6, claude-haiku-5-5, claude-haiku-4-5.
 ```
 
-智能体拿到步骤的提示词，运行的环境变量里只拿到 `TEAMAI_RUN_DIR`。Paseo 不报告完整的 token 数，所以有 token 预算的步骤交给下一个运行时。
+智能体拿到步骤的提示词。Paseo 不报告完整的 token 数，所以有 token 预算的步骤交给下一个运行时。
 
 ## 凭据
 
