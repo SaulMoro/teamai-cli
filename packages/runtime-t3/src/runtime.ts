@@ -321,6 +321,14 @@ export function serve(options: ServeOptions): Promise<void> {
     if (now) journal.write({ ...now, ops: { ...now.ops, [op]: state } });
   };
 
+  /** Marks whether T3 may still run the thread of `op`, whose op ended: close stops such a thread first. */
+  const markMayStillRun = (handle: string, op: OpId, mayStillRun: boolean): void => {
+    const now = place(handle);
+    const thread = now?.threads[op];
+
+    if (now && thread) journal.write({ ...now, threads: { ...now.threads, [op]: { ...thread, mayStillRun } } });
+  };
+
   const fail = (op: OpId, failure: RuntimeFailure): void => write({ op, event: 'failed', failure });
 
   /** The terminal event of an operation that ended; a running one has none yet. */
@@ -526,7 +534,12 @@ export function serve(options: ServeOptions): Promise<void> {
         errors = 0;
       } catch (error) {
         // T3 restarting, or a dropped connection: the thread keeps running, so ask again a few times.
-        if (++errors > 5) return { op: request.op, state: 'failed', failure: { code: 't3_unavailable', message: `${where} could not be followed: ${error instanceof Error ? error.message : String(error)}` } };
+        if (++errors > 5) {
+          markMayStillRun(request.handle, request.op, true);
+
+          return { op: request.op, state: 'failed', failure: { code: 't3_unavailable', message: `${where} could not be followed: ${error instanceof Error ? error.message : String(error)}` } };
+        }
+
         await sleep(1_000 * errors);
         continue;
       }
@@ -543,9 +556,13 @@ export function serve(options: ServeOptions): Promise<void> {
       if (!TERMINAL.has(waited.status)) {
         // T3 keeps a run that asks for an approval running, with the request pending; nobody answers it unattended.
         if (s.mode === 'unattended' && (waited.status === 'waiting' || (await s.t3.thread(thread.threadId)).pendingRequestCount > 0)) {
-          await whyNotStopped(s.t3, thread.threadId);
+          const why = await whyNotStopped(s.t3, thread.threadId);
+          const asked = `${where} asked for an approval, and nobody is there to give it in an unattended run.`;
 
-          return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} asked for an approval, and nobody is there to give it in an unattended run.` } };
+          if (why === undefined) return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: asked } };
+          markMayStillRun(request.handle, request.op, true);
+
+          return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${asked} It still runs, and T3 Code did not stop it: ${why.replace(/\.$/, '')}. Stop it in T3 Code with its Stop button.` } };
         }
 
         // A wait that came back before its time on a run still going (waiting for the person, or idle) is asked again later.
@@ -699,6 +716,8 @@ export function serve(options: ServeOptions): Promise<void> {
       // T3 caps a thread's mode at the access the member approved teamai with, and says so with this code.
       const tooNarrow = error instanceof T3Error && error.refusal?.code === 'runtime_mode_escalation_denied' ? error.refusal.message : undefined;
 
+      // A judge's brief may have reached T3, and started a run, before the call failed.
+      if (state.thread !== undefined && !(error instanceof JudgeCopyFailed)) markMayStillRun(request.handle, request.op, true);
       refuse({
         op: request.op, state: 'failed', failure: error instanceof JudgeCopyFailed
           ? { code: 'judge_copy_failed', message: error.message }
@@ -721,6 +740,7 @@ export function serve(options: ServeOptions): Promise<void> {
       end(await follow(s, request, thread));
     } catch (error) {
       // The thread may still run in T3, where the person finds it by the link.
+      markMayStillRun(request.handle, request.op, true);
       end({ op: request.op, state: 'failed', failure: { code: 't3_unavailable', message: `Lost track of the T3 thread ${threadLink(s.environment, thread.threadId)}: ${error instanceof Error ? error.message : String(error)}` } });
     }
   };
@@ -772,7 +792,7 @@ export function serve(options: ServeOptions): Promise<void> {
     for (const [op, thread] of Object.entries(known.threads)) {
       const state = known.ops[op];
 
-      if (thread.settlement || !ended(state)) continue;
+      if (thread.settlement || thread.mayStillRun || !ended(state)) continue;
       let outcome: NonNullable<ThreadRecord['settlement']>;
 
       try {
@@ -792,7 +812,10 @@ export function serve(options: ServeOptions): Promise<void> {
     }
   };
 
-  /** Ends the place. A thread still running there is stopped first; one T3 will not stop keeps the place, and close fails. */
+  /**
+   * Ends the place. A thread still running there, or one whose op ended while T3 may still run it, is stopped first;
+   * one T3 will not stop keeps the place, and a judge's copy, and close fails.
+   */
   const close = async (handle: string): Promise<void> => {
     const known = place(handle);
     const s = session;
@@ -801,7 +824,7 @@ export function serve(options: ServeOptions): Promise<void> {
       for (const state of Object.values(known.ops)) {
         const thread = known.threads[state.op];
 
-        if (state.state !== 'running' || !thread) continue;
+        if (!thread || (state.state !== 'running' && !thread.mayStillRun)) continue;
         const stopping = whyNotStopped(s.t3, thread.threadId);
         const live = running.get(state.op);
 
@@ -818,6 +841,8 @@ export function serve(options: ServeOptions): Promise<void> {
 
           return;
         }
+
+        if (thread.mayStillRun) markMayStillRun(handle, state.op, false);
       }
 
       // Every thread of the place has ended now.

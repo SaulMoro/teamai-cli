@@ -361,16 +361,34 @@ describe('teamai-runtime-t3', () => {
       expect(t3.calls().filter((call) => call.tool === 't3_thread_organize')).toEqual([]);
     });
 
-    it('never settles the thread of a step that ended while T3 still runs it', async () => {
-      t3.config({ agent: { waits: true }, interruptFails: true });
+    // The step fails at once, but its thread is still teamai's to stop: close keeps the place until T3 stops it.
+    it.each([
+      { stop: 'refuses', config: { interruptFails: true } },
+      { stop: 'acknowledges but the run does not end', config: { stopLagMs: 60_000, waitCapMs: 50 } },
+    ])('never settles or drops the thread of a step that ended while T3 still runs it, when T3 $stop the stop', async ({ config }) => {
+      t3.config({ agent: { waits: true }, ...config });
       const { runtime, handle } = await opened('unattended');
       runtime.send(prompt(handle, 'op-00000035'));
-      expect(await ended(runtime, 'op-00000035')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed' } });
+      expect(await ended(runtime, 'op-00000035')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining('Stop it in T3 Code with its Stop button.') } });
 
       runtime.send({ type: 'collect', handle });
 
       expect(await runtime.next((line) => line['event'] === 'collected')).toEqual({ event: 'collected', handle });
       expect(t3.threads()[0]).toMatchObject({ status: 'running', settled: false });
+
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => line['handle'] === handle && line['event'] !== 'collected')).toMatchObject({ event: 'close_failed', handle, failure: { code: 'thread_still_runs' } });
+      runtime.send({ type: 'reattach', handle });
+      expect(await runtime.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-00000035', state: 'failed' }] });
+      expect(t3.threads()[0]).toMatchObject({ status: 'running', settled: false });
+
+      // T3 stops it now: close stops it, settles it and drops the place.
+      t3.config({ interruptFails: false, stopLagMs: 0 });
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => line['handle'] === handle && line['event'] === 'closed')).toEqual({ event: 'closed', handle });
+      expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
     });
 
     it('settles only the threads it launched', async () => {
@@ -717,9 +735,9 @@ describe('teamai-runtime-t3', () => {
     let evidence: string;
 
     /** A runtime past init and an open with no view, as teamai opens a confined prompt's place, and its handle. */
-    const opened = async (options: Line = {}): Promise<{ runtime: Connection; handle: string }> => {
+    const opened = async (options: Line = {}, mode: 'attended' | 'unattended' = 'attended'): Promise<{ runtime: Connection; handle: string }> => {
       const runtime = start();
-      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', ...options } });
+      runtime.send({ type: 'init', protocol: 1, mode, options: { environment: 'local', ...options } });
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true, confinedPrompt: true });
       runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a9e8d7c6', credentials: {} });
       const accepted = await runtime.next((line) => line['op'] === OPEN && line['event'] === 'accepted');
@@ -823,6 +841,26 @@ describe('teamai-runtime-t3', () => {
       expect(fs.existsSync(copy)).toBe(false);
       expect(t3.threads()[0]?.settled).toBe(true);
       expect(fs.readdirSync(evidence).sort()).toEqual(['diff.patch', 'evidence.json', 'schema.json', 'session']);
+    });
+
+    it('keeps the judge\'s copy, its thread\'s folder, while T3 still runs a judge that failed, and removes it once close stopped the thread', async () => {
+      t3.config({ agent: { waits: true }, interruptFails: true });
+      const { runtime, handle } = await opened({}, 'unattended');
+      runtime.send(judge(handle, 'op-000000a8'));
+      expect(await ended(runtime, 'op-000000a8')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed' } });
+      const copy = z.string().parse(t3.threads()[0]?.worktreePath);
+
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => line['handle'] === handle)).toMatchObject({ event: 'close_failed', failure: { code: 'thread_still_runs' } });
+      expect(fs.existsSync(copy)).toBe(true);
+
+      t3.config({ interruptFails: false });
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'closed', handle });
+      expect(fs.existsSync(copy)).toBe(false);
+      expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
     });
 
     it('fails a judge whose reply is not JSON, naming its thread by its link', async () => {
