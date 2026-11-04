@@ -8,6 +8,7 @@ import type { AttemptRun } from '../../runtimes/attempt.js';
 import { PROMPT_FAILURE_CODES, type PlaceView, type PromptLease, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { launchEnv } from '../../../launch-context.js';
 import { writeJsonAtomic } from '../../../utils/fs.js';
+import { MAX_TIMER_DELAY } from '../../shell-command.js';
 import { attemptResultPath, type AttemptId, type RunId } from '../../store.js';
 import type { WorkflowFailure } from '../../types.js';
 import { git } from '../../worktree.js';
@@ -222,7 +223,7 @@ export function runtimePrompter(run: AttemptRun, { view, step, unset }: { view: 
     let timedOut = false;
     const stop = (): void => { void run.cancel(); };
 
-    const timer = input.timeoutMs === undefined ? undefined : setTimeout(() => {
+    const timer = input.timeoutMs === undefined || input.timeoutMs > MAX_TIMER_DELAY ? undefined : setTimeout(() => {
       timedOut = true;
       stop();
     }, input.timeoutMs);

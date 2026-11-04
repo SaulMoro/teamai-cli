@@ -1633,7 +1633,7 @@ teamai writes each operation id to `attempts/<attempt>/runtime.json` before it s
 
 ### Write a step runtime
 
-A runtime reads one JSON request per line on stdin and answers with JSON lines on stdout, protocol `1`. `src/__tests__/fixtures/runtime-toy/runtime.mjs` is a complete one that runs steps on the host.
+A runtime reads one JSON request per line on stdin and answers with JSON lines on stdout, protocol `1`. `src/__tests__/fixtures/runtime-toy/runtime.mjs` is a complete one that runs steps on the host. It imports `@teamai/runtime-protocol`, so the tests bundle it into one file before they run it (`src/__tests__/helpers/toy-runtime.ts`).
 
 ```text
 → {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"}}
