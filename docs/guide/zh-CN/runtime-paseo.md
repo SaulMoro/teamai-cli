@@ -4,15 +4,23 @@
 
 `teamai-runtime-paseo` 把每个提示词步骤作为 [Paseo](https://github.com/getpaseo/paseo) 守护进程的智能体运行，放在一个 Paseo 工作区里，该工作区就是 teamai 为这个步骤准备的 worktree。你在 Paseo 应用里查看智能体、回答它的权限请求。读取结果、提交、交付、评分和恢复仍由 teamai 负责。
 
-它只运行提示词步骤。命令、`setup`，以及需要 `permissions: unattended` 或 `role` 的步骤，交给定义里的下一个运行时。
+它只运行提示词步骤。命令、`setup`，以及需要 `permissions: unattended` 或 `role` 的步骤，交给定义里的下一个运行时，或留在本机。它也以 best-effort 评判被评分的轮次，见[评判被评分的轮次](#评判被评分的轮次)。
 
 ## 快速开始
 
-在运行工作流的机器上启动 Paseo 守护进程（0.14.0 或更高版本）：
+Paseo 是前置条件：teamai 不附带它的任何代码。在运行工作流的机器上安装 Paseo（0.14.0 或更高版本），并启动它的守护进程：
 
 ```sh
+npm install -g @getpaseo/cli
 paseo start
 paseo status    # listen: 127.0.0.1:6767
+```
+
+运行时启动时从这次安装加载 Paseo 的客户端：它顺着 `PATH` 上的 `paseo` 找到其所在的包，所以客户端始终与你的守护进程一致。teamai 运行时的 `PATH` 里没有 `paseo` 时，自己指定客户端。安装在单独前缀下时：
+
+```sh
+npm install -g --prefix ~/.paseo-cli @getpaseo/cli
+export PASEO_CLIENT_PATH=~/.paseo-cli/lib/node_modules/@getpaseo/cli/node_modules/@getpaseo/client
 ```
 
 在团队仓库或 `~/.teamai/drivers/` 里添加一个定义，把提示词步骤交给 Paseo，其余步骤留在本机：
@@ -86,6 +94,74 @@ Cwd       /repo/.teamai/workflow-worktrees/teamai-r0769801107010602-classify-p1-
 { "id": "classify", "outcome": "success", "outputs": { "has_title": true }, "tool": "claude", "session": "35ab4949-21d9-40df-9444-652e96607b7b" }
 ```
 
+## 评判被评分的轮次
+
+带 `scorers` 的步骤由 `teamai-score` 工作流评判：它的记账命令在本机运行，评判则是一个受限提示词，只读一个证据目录，别的都不读。Paseo 回答这个提示词，所以只有 `paseo` 的定义在没有任何智能体 CLI 的机器上也能运行并评判被评分的步骤：
+
+```yaml
+# drivers/paseo-only.yaml
+schemaVersion: v1alpha1
+name: paseo-only
+tool: claude
+runtimes:
+  - use: paseo
+```
+
+该步骤由 [`review-quality`](scorers.md) 评判，每个轮次都评判：
+
+```yaml
+# workflows/fix-add.yaml
+schemaVersion: v1alpha1
+name: fix-add
+description: Fix add in math.js, and judge the change.
+steps:
+  - id: fix
+    workspace: new
+    prompt: |
+      add in math.js returns a - b. Make it return a + b, and add math.test.js that checks add(2, 3) is 5 with node:test.
+      Edit the files only, and run no command.
+    scorers: { names: [review-quality], sampling: all }
+    output:
+      fixed: boolean
+```
+
+```text
+$ command -v claude codex opencode
+$ teamai workflow start fix-add --driver paseo-only
+ℹ Run rd573bcff8eef4e10 started. If it stops before it ends, continue it with: teamai workflow resume rd573bcff8eef4e10
+ℹ run:rd573bcff8eef4e10:fix:1: review-quality good (teamai-score run re02e01c9b0e36c69).
+{"data":{"done":{"run":"rd573bcff8eef4e10","outcome":"succeeded","record":"published"},"cancelled":[]}}
+```
+
+在这次有人值守的运行里，fix 智能体在两次编辑前各询问一次，用 `paseo permit allow <agent> --all` 回答。评判什么都没问：它只用 `Read` 读了那个目录。
+
+两个智能体都在 Paseo 里运行。评判智能体的 cwd 是 teamai 写好的证据目录：
+
+```text
+$ paseo ls --all
+NAME                                       PROVIDER                STATUS  CWD
+teamai score[0].judge · re02e01c9b0e36c69  claude/claude-opus-5-5  closed  ~/.teamai/projects/…/runs/re02e01c9b0e36c69/scratch/a47d92bbe
+teamai fix · rd573bcff8eef4e10             claude/claude-opus-5-5  closed  /repo/.teamai/workflow-worktrees/teamai-rd573bcff8eef4e10-fix-p1-a04485788cc1
+```
+
+评判步骤记录运行时保持的级别：
+
+```json
+{ "id": "score[0].judge", "outcome": "success", "outputs": { "answer": { "label": "good", "reasoning": "The step asked for two things: change add in math.js from a - b to a + b, and add math.test.js that uses node:test to check add(2, 3) is 5… The diff does both…" } }, "confined": { "tool": "claude", "isolation": "best-effort", "access": "read" } }
+```
+
+评判以 `best-effort` 运行，从不是 `verified`：
+
+| 内容 | 是否强制 |
+| --- | --- |
+| 一个全新的智能体，cwd 是证据目录，并被告知只读这个目录 | 是 |
+| 不编辑、不运行命令：评判所用模式会先询问，而任何权限请求都会结束评判，无论有无人值守 | 是 |
+| 它的回答是最后一条消息，按 JSON 解析；它什么都不写 | 是 |
+| 不读目录之外的文件 | 否：没有什么能阻止智能体读取别处的文件 |
+| 不访问网络 | 否 |
+
+`confined.json` 要求 `verified` 的受限步骤从不交给 Paseo，因为 Paseo 提供的是 `best-effort`。Codex 从不在 Paseo 上评判，因为 Codex 的每种模式都会不经询问就写入。评判的位置在其智能体启动前，在运行详情里显示为 `Paseo confined prompt, best-effort`。
+
 ## 选项
 
 | 键 | 默认值 | 含义 |
@@ -103,13 +179,13 @@ runtimes:
 
 ## 工具、模型和模式
 
-守护进程提供 `claude`、`codex`、`opencode` 时，运行时就提供它们。智能体以该工具在 Paseo 中的默认模式启动，从不使用绕过权限的模式：
+守护进程提供 `claude`、`codex`、`opencode` 时，运行时就提供它们。智能体以该工具在 Paseo 中的默认模式启动，从不使用绕过权限的模式。评判以一个在编辑或运行任何东西前先询问的模式启动：
 
-| 工具 | 模式 |
-| --- | --- |
-| `claude` | `default`（执行未允许的操作前先询问） |
-| `codex` | `auto` |
-| `opencode` | `build` |
+| 工具 | 步骤模式 | 评判模式 |
+| --- | --- | --- |
+| `claude` | `default`（执行未允许的操作前先询问） | `default` |
+| `codex` | `auto` | 无：Codex 的每种模式都不经询问就写入 |
+| `opencode` | `build` | `plan` |
 
 步骤的 `model` 必须是守护进程提供的模型，`effort` 必须是该模型支持的。不写 `model` 时，智能体使用守护进程的默认模型。守护进程没有的模型会在任何智能体启动前失败：
 
@@ -117,7 +193,7 @@ runtimes:
 ✖ Step "classify" failed with model_unavailable: The Paseo daemon at ws://127.0.0.1:6767/ws has no claude model claude-opus-0-1. It offers: claude-opus-5-5, claude-opus-5, claude-fable-5-1, claude-fable-5, claude-opus-4-8[1m], claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-sonnet-5[1m], claude-opus-4-7[1m], claude-opus-4-7, claude-opus-4-6[1m], claude-opus-4-6, claude-sonnet-4-6[1m], claude-sonnet-4-6, claude-haiku-5-5, claude-haiku-4-5.
 ```
 
-智能体只拿到步骤的提示词，拿不到运行的任何环境变量。Paseo 不报告完整的 token 数，所以有 token 预算的步骤交给下一个运行时。
+智能体拿到步骤的提示词，运行的环境变量里只拿到 `TEAMAI_RUN_DIR`。Paseo 不报告完整的 token 数，所以有 token 预算的步骤交给下一个运行时。
 
 ## 凭据
 
@@ -131,7 +207,7 @@ Paseo 以明文把智能体的环境变量存在它的 home 下，所以这个�
 
 ## 权限
 
-Claude 智能体可以不经询问写 teamai 的结果文件，且只能写这一个文件：运行时为它允许 `Edit(/<结果文件>)`，模式仍是 `default`。Codex 和 OpenCode 没有这项授权。
+Claude 智能体可以不经询问写两样东西：teamai 的结果文件，以及运行的临时目录，即运行的命令中 `$TEAMAI_RUN_DIR` 所指的目录。运行时允许 `Edit(/<结果文件>)` 和 `Edit(/<运行目录>/**)`，模式仍是 `default`。Codex 和 OpenCode 没有这项授权。步骤的环境变量里，智能体只拿到 `TEAMAI_RUN_DIR`，所以提示词写明 `$TEAMAI_RUN_DIR` 所指目录中的某个文件时，它的效果与在本机相同。
 
 有人值守的运行里，其他权限请求在 Paseo 应用里等你回答，也可以在命令行回答：
 
@@ -184,6 +260,7 @@ Paseo did not archive workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476
 
 | 代码 | 何时出现 |
 | --- | --- |
+| `client_missing` | 找不到 Paseo 客户端：`PATH` 上没有 `paseo`，或 `PASEO_CLIENT_PATH` 指向的不是 `@getpaseo/client` 包。安装 Paseo，或设置 `PASEO_CLIENT_PATH`。 |
 | `daemon_unreachable` | `url` 上没有守护进程应答。用 `paseo start` 启动它。 |
 | `daemon_version` | 守护进程早于 0.14.0。升级 Paseo 并重启它。 |
 | `tool_unavailable` | 守护进程在默认模式下没有 `claude`、`codex`、`opencode` 中的任何一个。守护进程没有步骤所需工具时，该步骤交给下一个运行时。 |
