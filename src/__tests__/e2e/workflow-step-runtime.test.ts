@@ -354,6 +354,8 @@ Judge the review.
       const judge = readRunState(scoring).steps.find((step) => step.id.endsWith('.judge'));
       expect(judge).toMatchObject({ status: 'succeeded', confined: { tool: 'claude' } });
       const noted = fs.readFileSync(path.join(state, 'credentials.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { type: string; handle: string; names: string[] });
+      // The toy knew at init the names it was given, so it could offer only the judges it can sign in.
+      expect(noted.filter((line) => line.type === 'init')).toContainEqual({ type: 'init', names: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], logins: [] });
       // A claude judge reads ANTHROPIC_API_KEY, never OPENAI_API_KEY: its place and its prompt get claude's alone.
       expect(noted.filter((line) => line.handle === `toy-${scoring}-${attemptOf(judge)}`).map(({ type, names }) => ({ type, names })))
         .toEqual([{ type: 'open', names: ['ANTHROPIC_API_KEY'] }, { type: 'prompt', names: ['ANTHROPIC_API_KEY'] }]);
