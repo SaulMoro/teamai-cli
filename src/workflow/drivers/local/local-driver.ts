@@ -31,7 +31,7 @@ import {
   type LocalToolResult,
   type LocalToolRun,
 } from './local-tool-adapter.js';
-import { placeView, runtimeCommand, runtimeLauncher, runtimeStepEnv, type StartedCommand } from './runtime-steps.js';
+import { placeView, runtimeCommand, runtimeLauncher, runtimePrompter, runtimeStepEnv, type StartedCommand } from './runtime-steps.js';
 import { attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, seedToolHome, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
 import { localStepRuntime } from '../../runtimes/local.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
@@ -214,6 +214,8 @@ interface RuntimeSlot {
   use: string;
   runtime: StepRuntime;
   can: DriverCan;
+  /** Its prompt steps go as `prompt`, never as an exec of the tool's argv. */
+  launchesAgents: boolean;
   engine: EngineOptions;
 }
 
@@ -463,7 +465,7 @@ async function promptReport(
   staged: LaunchChoice | undefined,
   secrets: Record<string, string>,
   askPerson: AskPerson | undefined,
-  onRuntime: { run: AttemptRun; logins: readonly LoginTool[] } | undefined,
+  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean } | undefined,
 ): Promise<ReportBody> {
   const giveUp = async (failure: WorkflowFailure, tool?: string): Promise<ReportBody> => {
     const unrestored = await abandonPlace({ config, lock, attempt: lease.attempt });
@@ -546,21 +548,23 @@ async function promptReport(
 
   const cwd = lease.cwd ?? driver.workspace;
   const resultFile = attemptResultPath(config, lock.run, lease.attempt);
-  // On a step runtime the tool keeps its session in a home of the attempt's, under the variable it reads.
-  const variable = onRuntime ? toolHomeVariable(selected) : undefined;
+  // On a step runtime that execs the tool, it keeps its session in a home of the attempt's, under the variable it reads.
+  // A runtime that launches agents its own way gives the tool its own home, where the member's sessions are found.
+  const execs = onRuntime && !onRuntime.launchesAgents ? onRuntime : undefined;
+  const variable = execs ? toolHomeVariable(selected) : undefined;
 
-  if (onRuntime && (variable === undefined || !isExecRuntimeTool(selected))) {
+  if (execs && (variable === undefined || !isExecRuntimeTool(selected))) {
     return giveUp({
       code: 'tool_unsupported',
       message: `A step runtime runs prompt steps on ${EXEC_RUNTIME_TOOLS.join(', ')}, and step "${lease.step}" runs on ${selected}. Name one of them with the step's tool or --tools, or run the step with --driver local.`,
     }, selected);
   }
 
-  if (onRuntime && lease.interactive) {
+  if (execs && lease.interactive) {
     return giveUp({ code: 'tool_unsupported', message: `Step "${lease.step}" is interactive, and a step runtime runs only headless prompts. Run the step with --driver local.` }, selected);
   }
 
-  const toolHome = onRuntime && variable !== undefined ? { tool: selected, variable, dir: attemptToolHome(config, lock.run, lease.attempt, selected) } : undefined;
+  const toolHome = execs && variable !== undefined ? { tool: selected, variable, dir: attemptToolHome(config, lock.run, lease.attempt, selected) } : undefined;
   const storeDir = toolHome ? storeDirOf(AgentSession.platformForTool(selected) ?? '', { kind: 'tool-home', dir: toolHome.dir }) : undefined;
   let resume: { id: string; resumed: SessionRef } | undefined;
 
@@ -575,7 +579,7 @@ async function promptReport(
 
   // A login the runtime brings is held by this attempt alone, on the whole machine, from before the place opens until
   // it is written back: another attempt waits for it here, naming the attempt that holds it.
-  const login = toolHome ? onRuntime?.logins.find((tool) => tool === selected) : undefined;
+  const login = toolHome ? execs?.logins.find((tool) => tool === selected) : undefined;
 
   if (login && toolHome) {
     const waitFile = loginWaitFile(attemptDir(config, lock.run, lease.attempt));
@@ -632,10 +636,11 @@ async function promptReport(
   // CodeBuddy's turn cap and per-message usage are untried, so the rest list as unenforced.
   const { limits } = lease;
   const endsAtTurns = limits?.maxTurns !== undefined && !lease.interactive && family === 'claude' ? limits.maxTurns : undefined;
-  const budget = limits?.budget !== undefined && (family === 'claude' || family === 'opencode') ? limits.budget.tokens : undefined;
+  // A runtime that launches agents its own way states usage only once the prompt ends, so the budget is checked then.
+  const budget = limits?.budget !== undefined && !onRuntime?.launchesAgents && (family === 'claude' || family === 'opencode') ? limits.budget.tokens : undefined;
   const launchedAt = Date.now();
 
-  if (lease.interactive) log.info(`Step "${lease.step}" opens ${launched} here for interactive work.`);
+  if (lease.interactive && !onRuntime) log.info(`Step "${lease.step}" opens ${launched} here for interactive work.`);
 
   const input: LocalToolRun = {
     prompt: lease.prompt!,
@@ -651,7 +656,11 @@ async function promptReport(
   let launcher = adapter;
 
   // On a step runtime the tool gets only the names its lease provides, over the runtime's own, and its home.
-  if (onRuntime && toolHome) {
+  if (onRuntime?.launchesAgents) {
+    const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
+    input.env = scoped.env;
+    launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd), step: lease.step, unset: scoped.unset });
+  } else if (onRuntime && toolHome) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = { ...scoped.env, [toolHome.variable]: toolHome.dir };
     const view = await placeView(config, lock.run, lease.attempt, cwd, toolHome);
@@ -986,11 +995,15 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
   if (!localReady.ok) return { error: { code: 'runtime_failed', message: localReady.failure.message } };
 
-  // An external runtime is offered with what it said it can, and launches only the tools it can give a home. It is
-  // offered no step confined to a directory: protocol 1 has no way to confine one.
+  // An external runtime is offered with what it said it can. One that execs the tool launches only the tools it can give
+  // a home; one that launches agents its own way gives each its own. It is offered no step confined to a directory:
+  // protocol 1 has no way to confine one.
   const toSlot = (entry: OpenedDriver['runtimes'][number]): RuntimeSlot => (entry.kind === 'local'
-    ? { kind: 'local', use: 'local', runtime: local, can: localReady.can, engine: entry.engine }
-    : { kind: 'external', use: entry.use, runtime: entry.runtime, can: { ...entry.can, tools: (entry.can.tools ?? []).filter(isExecRuntimeTool), confined: [] }, engine: entry.engine });
+    ? { kind: 'local', use: 'local', runtime: local, can: localReady.can, launchesAgents: false, engine: entry.engine }
+    : {
+      kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine,
+      can: { ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter(isExecRuntimeTool), confined: [] },
+    });
 
   const [firstSlot, ...otherSlots] = defined.runtimes.map(toSlot);
   const slots: [RuntimeSlot, ...RuntimeSlot[]] = [firstSlot ?? toSlot({ kind: 'local', use: 'local', engine: { logins: [] } }), ...otherSlots];
@@ -1388,7 +1401,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
         // Setup runs out of the terminal's reach, so the tool's signals are left to it only once it starts.
         interactiveIgnores = [];
-        const ignored = lease.interactive ? commandSignalPolicy(await terminalReachesCommand()).ignored : [];
+        // An interactive step on a runtime that launches agents its own way is not in this terminal.
+        const ignored = lease.interactive && slotOf.get(lease.attempt)?.kind !== 'external' ? commandSignalPolicy(await terminalReachesCommand()).ignored : [];
         const controller = new AbortController();
 
         if (maxParallel === 1) handle(STOP_SIGNALS);
@@ -1424,7 +1438,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
           const stepRun = runOf(lease);
 
-          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, turn.secrets, askPerson, stepRun && { run: stepRun, logins: slotOf.get(lease.attempt)?.engine.logins ?? [] });
+          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, turn.secrets, askPerson, stepRun && { run: stepRun, logins: slotOf.get(lease.attempt)?.engine.logins ?? [], launchesAgents: slotOf.get(lease.attempt)?.launchesAgents === true });
         })() });
       }
 

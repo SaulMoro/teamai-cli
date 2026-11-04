@@ -174,6 +174,12 @@ export const RuntimeRequestSchema = z.discriminatedUnion('type', [
 
 export type RuntimeRequest = z.infer<typeof RuntimeRequestSchema>;
 
+/**
+ * The codes a failed prompt may carry that teamai records on the step as they are: the tool or model the lease names
+ * is not there, or the tool failed. teamai records any other code as `runtime_failed`, naming it in the message.
+ */
+export const PROMPT_FAILURE_CODES = ['model_unavailable', 'tool_unavailable', 'agent_unavailable', 'tool_failed'] as const;
+
 /** The fields of a finished prompt: the tool's session, the result the agent wrote, and the tokens it billed. */
 const FinishedShape = { session: PromptSessionSchema, result: PromptResultSchema, usage: PromptUsageSchema.optional() };
 

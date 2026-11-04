@@ -123,6 +123,19 @@ describe('a driver definition with several runtimes', () => {
     prompt: Review the repository without changing it.
     output:
       ok: boolean`);
+    fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'setupflow.yaml'), `schemaVersion: v1alpha1
+name: setupflow
+description: setupflow
+setup:
+  command: "true"
+steps:
+  - id: review
+    workspace: new
+    tool: claude
+    prompt: Review the change in a fresh worktree.
+    output:
+      ok: boolean
+`);
     fs.mkdirSync(path.join(repo, '.teamai', 'scorers'), { recursive: true });
     fs.writeFileSync(path.join(repo, '.teamai', 'scorers', 'quality.md'), `---
 labels:
@@ -229,6 +242,141 @@ Judge the review.
       runtimes: [{ runtime: 'toy', held: [{ step: 'fetch', reason }] }, { runtime: 'local', held: [{ step: 'fetch', reason }] }],
     });
     expect(toyOpens()).toBe(0);
+  });
+
+  describe('a runtime that launches agents its own way', () => {
+    const runIds = (): Set<string> => new Set((fs.existsSync(path.join(dataHome, 'workflows', 'runs')) ? fs.readdirSync(path.join(dataHome, 'workflows', 'runs')) : []).filter((name) => name.endsWith('.json')).map((name) => name.slice(0, -'.json'.length)));
+
+    type PromptLine = { op: string; sent?: { step: string; tool: string; prompt: string; result: string; permissions: string }; ended?: string };
+
+    /** What the toy logged of the prompts it was sent: each send, and how each ended. */
+    const promptLog = (): PromptLine[] => (fs.existsSync(path.join(state, 'prompts.jsonl'))
+      ? fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as PromptLine)
+      : []);
+
+    const sends = (): PromptLine[] => promptLog().filter((line) => line.sent !== undefined);
+
+    const endings = (): Array<[string, string | undefined]> => promptLog().filter((line) => line.ended !== undefined).map((line) => [line.op, line.ended]);
+
+    const startKilled = async (args: string[]): Promise<{ child: ReturnType<typeof spawn>; ended: Promise<Ran> }> => {
+      const child = spawn(process.execPath, [CLI, ...args], { cwd: repo, env: { ...process.env, ...env(), FORCE_COLOR: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout?.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+      child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      const ended = new Promise<Ran>((resolve) => child.on('close', (code, signal) => resolve({ code, signal, stdout, stderr })));
+      return { child, ended };
+    };
+
+    const until = async (check: () => boolean, ms = 30_000): Promise<void> => {
+      for (const deadline = Date.now() + ms; !check() && Date.now() < deadline;) await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(check()).toBe(true);
+    };
+
+    it('sends a prompt step as one prompt, reports its session, output and usage, and runs the command step on the next runtime', async () => {
+      writeDefinition('agentd', [{ use: 'toy', options: { state, agent: { output: { ok: true }, usage: { input: 40, output: 12 } } } }, { use: 'local' }]);
+
+      const ran = await runCLI(['workflow', 'start', 'mixed', '--driver', 'agentd'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const runId = runOf(ran);
+      const [build, review] = readRunState(runId).steps;
+      // The command ran on local: the toy runs none, so it has no record of it.
+      expect(build).toMatchObject({ id: 'build', status: 'succeeded', outputs: { built: true } });
+      expect(runtimeRecord(runId, attemptOf(build))).toBeUndefined();
+      // The prompt went to the toy as a prompt, with teamai's result instruction; no tool was launched here.
+      const [sent] = sends();
+      expect(sends()).toHaveLength(1);
+      expect(sent?.sent).toMatchObject({ step: 'review', tool: 'claude', permissions: 'approval-required', result: path.join(attemptDir(runId, attemptOf(review)), 'out', 'result.json') });
+      expect(sent?.sent?.prompt).toContain('Review the repository without changing it.');
+      expect(sent?.sent?.prompt).toContain(`Write the workflow result as JSON to ${sent?.sent?.result}`);
+      expect(review).toMatchObject({ id: 'review', status: 'succeeded', tool: 'claude', session: `toy-session-${sent?.op.slice(3)}`, outputs: { ok: true }, tokens: { input: 40, output: 12 } });
+      expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ runtime: 'toy', phase: 'closed', prompt: { op: sent?.op } });
+      expect(fs.existsSync(launches)).toBe(false);
+    });
+
+    it('runs a prompt step with setup on the next runtime, since setup is a command, even when the first claims setup', async () => {
+      writeDefinition('agentsetup', [{ use: 'toy', options: { state, can: { setup: true }, agent: { output: { ok: true } } } }, { use: 'local' }]);
+
+      const ran = await runCLI(['workflow', 'start', 'setupflow', '--driver', 'agentsetup'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const [review] = readRunState(runOf(ran)).steps;
+      expect(review).toMatchObject({ id: 'review', status: 'succeeded', outputs: { ok: true } });
+      // The toy was sent nothing; the fake Claude ran the prompt on local.
+      expect(sends()).toEqual([]);
+      expect(fs.readFileSync(launches, 'utf8').trim().split('\n')).toHaveLength(1);
+    });
+
+    it('fails a command step when the definition\'s only runtime runs no command, naming what it lacks', async () => {
+      writeDefinition('agentonly', [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'mixed', '--driver', 'agentonly'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+      const [build] = readRunState(runOf(ran)).steps;
+      expect(build).toMatchObject({ id: 'build', status: 'failed', failure: { code: 'requirement_unmet', message: 'Step "build" runs a command, and no runtime of driver "agentonly" runs commands (toy). Add one that does, such as local, to the definition.' } });
+      expect(toyOpens()).toBe(0);
+    });
+
+    it('reports the session, output and usage of a prompt that finished while teamai was killed, without sending a new one', async () => {
+      writeDefinition('agentdie', [{ use: 'toy', options: { state, die_at: 'prompt-finished', agent: { output: { ok: true }, usage: { input: 7 } } } }]);
+
+      const before = runIds();
+      const killed = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'agentdie'], repo, env());
+      expect(killed.signal, killed.stderr).toBe('SIGKILL');
+      const [sent] = sends();
+      expect(endings()).toEqual([[sent?.op, 'finished']]);
+      const [runId] = [...runIds()].filter((id) => !before.has(id));
+
+      const resumed = await runCLI(['workflow', 'resume', String(runId), '--driver', 'agentdie'], repo, env());
+
+      expect(envelope(resumed), resumed.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const [review] = readRunState(String(runId)).steps;
+      expect(review).toMatchObject({ status: 'succeeded', session: `toy-session-${sent?.op.slice(3)}`, outputs: { ok: true }, tokens: { input: 7 } });
+      // The resumed teamai read the outcome the toy kept: it sent no prompt again.
+      expect(sends().map((line) => line.op)).toEqual([sent?.op]);
+    });
+
+    it('reconnects to a prompt still running when teamai was killed, and reports it once its agent finishes', async () => {
+      const release = path.join(state, 'release');
+      writeDefinition('agentwait', [{ use: 'toy', options: { state, agent: { release, output: { ok: true } } } }]);
+      const before = runIds();
+      const first = await startKilled(['workflow', 'start', 'oneprompt', '--driver', 'agentwait']);
+      await until(() => sends().length === 1);
+      first.child.kill('SIGKILL');
+      expect((await first.ended).signal).toBe('SIGKILL');
+      const [runId] = [...runIds()].filter((id) => !before.has(id));
+      const [sent] = sends();
+
+      const resumed = await startKilled(['workflow', 'resume', String(runId), '--driver', 'agentwait']);
+      // The resumed teamai sends the same operation again, which reconnects to the agent instead of starting one.
+      await until(() => sends().length === 2);
+      fs.writeFileSync(release, '');
+      const ended = await resumed.ended;
+
+      expect(envelope(ended), ended.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const [review] = readRunState(String(runId)).steps;
+      expect(review).toMatchObject({ status: 'succeeded', session: `toy-session-${sent?.op.slice(3)}`, outputs: { ok: true } });
+      expect(sends().map((line) => line.op)).toEqual([sent?.op, sent?.op]);
+      expect(endings()).toEqual([[sent?.op, 'finished']]);
+    });
+
+    it('cancels a running prompt when teamai workflow cancel stops its run', async () => {
+      const release = path.join(state, 'release');
+      writeDefinition('agentcancel', [{ use: 'toy', options: { state, agent: { release, output: { ok: true } } } }]);
+      const before = runIds();
+      const running = await startKilled(['workflow', 'start', 'oneprompt', '--driver', 'agentcancel']);
+      await until(() => sends().length === 1);
+      const [runId] = [...runIds()].filter((id) => !before.has(id));
+
+      const cancelled = await runCLI(['workflow', 'cancel', String(runId)], repo, env());
+      expect(cancelled.code, cancelled.stderr).toBe(0);
+
+      const ended = await running.ended;
+      expect(envelope(ended), ended.stderr).toMatchObject({ data: { done: { outcome: 'cancelled' } } });
+      expect(endings()).toEqual([[sends()[0]?.op, 'cancelled']]);
+    });
   });
 
   it('refuses a bad option of any runtime before a step runs, naming the key', async () => {

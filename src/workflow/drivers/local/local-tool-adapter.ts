@@ -95,6 +95,19 @@ function resultInstruction(input: LocalToolRun, prompt: string): string {
     + 'Leave failure out unless the step failed; then add "failure":{"code":"...","message":"..."}.';
 }
 
+/** The step's prompt after the agent definition's instructions, for a launch that hands the definition over in the prompt. */
+function withInstructions(input: LocalToolRun): string {
+  return input.agent?.instructions ? `${input.agent.instructions}\n\n${input.prompt}` : input.prompt;
+}
+
+/**
+ * The whole prompt a runtime that launches agents its own way gets: the agent definition's instructions, which it has
+ * no flag to pass, the step's prompt, and the instruction to write the result file.
+ */
+export function agentPrompt(input: LocalToolRun): string {
+  return resultInstruction(input, withInstructions(input));
+}
+
 /** Codex, and OpenCode 1 for a subagent, which `opencode run --agent` does not start, get the definition's instructions in the prompt. */
 function promptHandoff(tool: LaunchTool, input: LocalToolRun, opencodeMajor: number): boolean {
   const family = launchAdapterIdOf(tool);
@@ -117,11 +130,7 @@ export function invocation(tool: LaunchTool, input: LocalToolRun, opencodeMajor:
   const unattended = modeArgs === 'none' ? [] : modeArgs;
   const viaPrompt = promptHandoff(tool, input, opencodeMajor);
 
-  const agentPrompt = input.agent?.instructions
-    ? `${input.agent.instructions}\n\n${input.prompt}`
-    : input.prompt;
-
-  const prompt = resultInstruction(input, viaPrompt ? agentPrompt : input.prompt);
+  const prompt = resultInstruction(input, viaPrompt ? withInstructions(input) : input.prompt);
   const agent = input.agent && !viaPrompt ? ['--agent', input.agent.name] : [];
   const model = input.model ? ['--model', input.model.name] : [];
   const effort = input.model?.effort;

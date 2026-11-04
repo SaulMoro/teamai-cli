@@ -203,7 +203,8 @@ export function engineOptions(options: RuntimeOptions): { ok: true; engine: Engi
 /** One runtime of an opened definition: `local` in teamai's process, or an external one that took its options. */
 export type OpenedRuntime =
   | { kind: 'local'; use: 'local'; engine: EngineOptions }
-  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; engine: EngineOptions };
+  /** `launchesAgents`: prompt steps reach it as `prompt`, and it gives each tool its own home. */
+  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions };
 
 /** A driver definition ready to drive: each of its runtimes, in definition order. The caller disposes them once the drive ends. */
 export interface OpenedDriver {
@@ -258,7 +259,13 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
 
   const ready = await runtime.init({ options: split.runtime, mode });
 
-  if (ready.ok) return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, engine: split.engine } };
+  if (ready.ok && ready.launchesAgents && split.engine.logins.length > 0) {
+    await runtime.dispose();
+
+    return { ok: false, failure: badOption(driver, use, 'credentials', `${use} launches agents its own way, in each tool's own home, so it brings no login`) };
+  }
+
+  if (ready.ok) return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine: split.engine } };
   await runtime.dispose();
   const { failure } = ready;
 
