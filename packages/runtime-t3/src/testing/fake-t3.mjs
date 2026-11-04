@@ -113,7 +113,9 @@ function writeTranscript(thread) {
 const MODES = ['full-access', 'auto', 'auto-accept-edits', 'approval-required'];
 const fail = (message) => ({ isError: true, content: [{ type: 'text', text: message }] });
 const ok = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value });
-const link = (threadId) => `t3-thread://v2/${config().environment.environmentId}/${threadId}`;
+
+// As T3 answers a launch: its web UI's link to the thread, not the t3-thread:// form its thread lists carry.
+const link = (threadId) => `http://127.0.0.1:${httpServer.address().port}/${config().environment.environmentId}/${encodeURIComponent(threadId)}`;
 
 const TOOLS = {
   t3_environment_read: () => ok(config().environment),
