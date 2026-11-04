@@ -9,7 +9,8 @@
 // With `agent`, it is a runtime that launches agents its own way, as T3 or Paseo: it offers `prompt` and no `exec`, and
 // its agent works `hold_ms` (from when the prompt was first sent, across a restart of the toy) and until the file
 // `release` names exists, then writes `output` to the lease's result file and finishes with a session and `usage`, or
-// ends with `fail`.
+// ends with `fail`. It appends each prompt it is sent, and how each ended, to `prompts.jsonl` in its state, which
+// `close` keeps.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -215,6 +216,8 @@ function settlePrompt(op) {
   }
 
   working.delete(op);
+
+  if (!record.outcome) fs.appendFileSync(file('prompts.jsonl'), `${JSON.stringify({ op, ended: outcome.state })}\n`);
   writeJson(opPath(op), { ...record, outcome });
 
   if (outcome.state === 'finished' && dieAt('prompt-finished')) return;
@@ -236,6 +239,8 @@ function prompt(request) {
   if (working.has(request.op)) return;
 
   // The first prompt of this id starts the agent; a repeated one reconnects to it, or reads how it ended.
+  fs.appendFileSync(file('prompts.jsonl'), `${JSON.stringify({ op: request.op, sent: request.lease })}\n`);
+
   if (!record) writeJson(opPath(request.op), { kind: 'prompt', op: request.op, handle: request.handle, lease: request.lease, startedAt: Date.now() });
   settlePrompt(request.op);
 }

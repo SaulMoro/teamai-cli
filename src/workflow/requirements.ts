@@ -120,6 +120,8 @@ const ENFORCEMENT = {
   max_turns: 'bestEffort',
   /** Ending a prompt's turn at its limits under `on_limit: end_turn`, which only a driver with `can.end_turn` does. */
   on_limit: 'bestEffort',
+  /** A command step: the driver runs commands (`can.exec` is not false). Setup is a command too. */
+  exec: 'strict',
   /** Running the workflow's `setup` in each workspace the driver creates, before the step. */
   setup: 'strict',
   /** A prompt step that names its `tool`: `can.tools` lists it. */
@@ -464,7 +466,9 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     ...((offer.clone || offer.role !== undefined) && !offer.prepare ? ['prepare' as const] : []),
     ...(offer.role !== undefined && !can.role ? ['role' as const] : []),
     ...(offer.interactive && !can.hitl ? ['hitl' as const] : []),
-    ...(offer.setup && !can.setup ? ['setup' as const] : []),
+    ...(offer.executor === 'command' && can.exec === false ? ['exec' as const] : []),
+    // Setup runs as a command, so a driver that runs none runs no setup either, whatever it says of setup.
+    ...(offer.setup && (!can.setup || can.exec === false) ? ['setup' as const] : []),
     // A strict sandbox keeps its strip list from every process of the step, which only a driver with `can.env: true` does.
     ...((required.length > 0 && !covers.step) || (setupKeys.length > 0 && !covers.setup) || (sealed && can.env !== true) ? ['env' as const] : []),
     ...(offer.budgeted && !offer.interactive && !can.tokens ? ['tokens' as const] : []),
