@@ -74,6 +74,12 @@ Mode      default
 Cwd       /repo/.teamai/workflow-worktrees/teamai-r0769801107010602-classify-p1-4e57d9b3cff1
 ```
 
+智能体工作时，仪表盘的运行详情会显示它，并附带在 Paseo 中打开它的链接：
+
+```json
+{ "label": "teamai classify · r7f54a1690b9ae0ce", "url": "paseo://h/srv_vL5abcnfKUWY/agent/5f95baae-9117-42b7-9e3d-47891dd3e84d", "fields": { "agent": "5f95baae-9117-42b7-9e3d-47891dd3e84d", "workspace": "wks_f55e98406bad64bd", "model": "claude/claude-sonnet-5-5" } }
+```
+
 步骤记录里有它的输出和 Claude 的会话 id：
 
 ```json
@@ -113,21 +119,31 @@ runtimes:
 
 智能体只拿到步骤的提示词，拿不到运行的任何环境变量。Paseo 不报告完整的 token 数，所以有 token 预算的步骤交给下一个运行时。
 
+## 凭据
+
+Paseo 以明文把智能体的环境变量存在它的 home 下，所以这个运行时不接受 `credentials`，给它凭据的定义会被 teamai 拒绝：
+
+```text
+{"error":{"code":"bad_option","message":"Runtime \"paseo\" of driver definition ~/.teamai/drivers/paseo.yaml refused option \"credentials\": paseo does not offer can.env, so it cannot keep a credential to the processes it is for. Fix the option and start again."}}
+```
+
+删掉这一项，改为在守护进程所在的机器上给工具它需要的东西：在那里登录该工具，或者把变量设在守护进程启动时的环境里，然后 `paseo restart`。智能体拿到的是守护进程的环境。
+
 ## 权限
 
-Claude 的 `default` 模式在写 teamai 的结果文件（位于 worktree 之外）前会询问，所以每个 Claude 步骤至少询问一次。
+Claude 智能体可以不经询问写 teamai 的结果文件，且只能写这一个文件：运行时为它允许 `Edit(/<结果文件>)`，模式仍是 `default`。Codex 和 OpenCode 没有这项授权。
 
-有人值守的运行里，权限请求在 Paseo 应用里等你回答，也可以在命令行回答：
+有人值守的运行里，其他权限请求在 Paseo 应用里等你回答，也可以在命令行回答：
 
 ```sh
 paseo permit ls
 paseo permit allow 7c483fce --all
 ```
 
-无人值守的运行（`TEAMAI_MODE=unattended` 或 `CI`）里没人能回答，所以步骤失败，智能体停止：
+无人值守的运行（`TEAMAI_MODE=unattended` 或 `CI`）里没人能回答，所以步骤失败，智能体停止。下面是一个提示词步骤 `count`，它让智能体运行 `ls -1 | wc -l`：
 
 ```text
-✖ Step "classify" failed with tool_failed: The claude agent asked for permission (Write) in Paseo mode default, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.
+✖ Step "count" failed with tool_failed: The claude agent asked for permission (Bash) in Paseo mode default, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.
 ```
 
 ## 取消、崩溃和重启
@@ -156,7 +172,13 @@ teamai workflow retry r3ad62eacc3c191eb classify
 teamai workflow resume r3ad62eacc3c191eb --driver paseo
 ```
 
-归档 Paseo 工作区（`paseo workspace archive <id>`）不会删除 teamai 的 worktree 和分支。
+teamai 关闭这次尝试时，运行时会归档它的 Paseo 工作区，这会停止那里仍在运行的一切。Paseo 只删除它自己创建的 worktree，所以 teamai 的 worktree 和分支会保留。Paseo 拒绝归档时，运行详情会说明这个位置没有关闭，以及原因：
+
+```text
+Paseo did not archive workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476e (wks_6fb33a5b94531f79): <Paseo's error>. Its agents may still run; archive it in the Paseo app.
+```
+
+运行时在步骤中途被杀掉就无法归档；步骤以 `runtime_lost` 失败，它的工作区会留在 Paseo 里，直到你归档它（`paseo workspace archive <id>`）。
 
 ## 启动时的错误
 
