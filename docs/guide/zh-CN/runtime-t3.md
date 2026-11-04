@@ -180,7 +180,7 @@ teamai workflow cancel r70d31098c8884803
 ## 目前还不支持
 
 - 步骤的线程是独立的线程，不是启动运行的那个线程的子线程。T3 只为在另一个已链接环境上创建的线程保留父线程链接。
-- 它不接受 `credentials`。线程的工具在 T3 Code 的环境中、用 T3 Code 自己的登录运行，所以 teamai 会在任何步骤运行之前拒绝为这个运行时配置的 `NAME: env:VAR` 或 `<tool>: login`（`t3 does not offer can.env, so it cannot keep a credential to the processes it is for`）。
+- 它不接受 `credentials`。线程的工具在 T3 Code 的环境中、用 T3 Code 自己的登录运行，所以 teamai 会在任何步骤运行之前拒绝为这个运行时配置的凭据：`NAME: env:VAR` 的提示是 `t3 does not offer can.env, so it cannot keep a credential to the processes it is for`，`<tool>: login` 的提示是 `t3 launches agents its own way, in each tool's own home, so it brings no login`。
 - 带 `session: continue` 或 `session.from` 的步骤会开始一段新的对话，和 OpenCode 一样：T3 无法在已有会话上启动线程。
 - 它支持 `workspace: new` 和 `continue`。只读的提示词步骤，或带 `env` 或 `setup` 的步骤，会交给 `local`。
 - T3 不报告 token 用量，所以这里无法检查以 token 计的 `budget`，也无法限制 `max_turns`。
