@@ -3,13 +3,17 @@ import fs from 'node:fs';
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import {
-  PromptResultSchema, RuntimeRequestSchema, type OpId, type OpState, type PromptResult, type RuntimeDisplay, type RuntimeFailure,
-  type RuntimeMessage, type RuntimeRequest,
+  PromptResultSchema, RuntimeRequestSchema, type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
+  type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import { loadClient } from './client.js';
-import { connect, DEFAULT_MODES, isPaseoTool, type Daemon, type PaseoTool } from './daemon.js';
+import { CONFINED_MODES, connect, DEFAULT_MODES, isPaseoTool, type Daemon, type PaseoTool } from './daemon.js';
 import type { AgentCreate, AgentPrompt, Journal, Place } from './journal.js';
+
+type WorktreePlace = Extract<Place, { kind: 'worktree' }>;
+
+type ConfinedPlace = Extract<Place, { kind: 'confined' }>;
 
 // ─── teamai-runtime-paseo ────────────────────────────────
 //
@@ -23,6 +27,9 @@ import type { AgentCreate, AgentPrompt, Journal, Place } from './journal.js';
 //              app (attended) or the step fails naming the mode (unattended), closed without a result → the daemon
 //              restarted, and the attempt fails with its work kept
 //    cancel    recorded first, then the agent is cancelled: Paseo reports a cancelled agent as idle
+//    confined  a judge: a fresh agent whose cwd is the prompt's directory, briefed to read only it, in a mode that asks
+//              before it edits or runs anything; any request for permission ends it. Its answer is its last message,
+//              reported best-effort: nothing stops a read outside the directory
 //
 
 const OptionsSchema = z.object({
@@ -41,6 +48,32 @@ export function agentIdOf(op: OpId): string {
   const hex = createHash('sha256').update(`teamai-runtime-paseo/${op}`).digest('hex');
 
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-${((Number.parseInt(hex[16] ?? '0', 16) & 0x3) | 0x8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
+}
+
+/** What this runtime keeps of a confined prompt: its agent is briefed to read only the directory, and cannot write without asking. */
+const CONFINED_KEPT: ConfinedKept = { level: 'best-effort', access: 'read' };
+
+/** The prompt a confined prompt's agent gets: the brief that confines it, the step's prompt, and the shape of its answer. */
+function confinedBrief(confined: ConfinedPrompt, prompt: string): string {
+  const matching = confined.schema === undefined ? '' : ` that matches this JSON Schema: ${JSON.stringify(confined.schema)}`;
+
+  return `Answer from the files in ${confined.dir} alone. List and read them with your file tools, such as Glob, Grep and Read. Change no file and run no shell command: asking for a permission ends this run.\n\n${prompt}\n\nReply with only the JSON answer${matching}, and no other text.`;
+}
+
+/** A confined prompt's answer: the JSON value its agent replied with. */
+const ReplySchema = z.json();
+
+/** The JSON value a confined prompt's agent replied with, in a code fence or not, or undefined when it replied with none. */
+function parseReply(text: string | null): z.infer<typeof ReplySchema> | undefined {
+  if (!text) return undefined;
+
+  try {
+    const parsed = ReplySchema.safeParse(JSON.parse(text.trim().replace(/^```(?:json)?\s*|\s*```$/g, '')));
+
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** The result the agent wrote, or undefined when it wrote none teamai can read. */
@@ -77,7 +110,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
   const send = (op: OpId, outcome: OpState): void => {
     switch (outcome.state) {
       case 'finished':
-        write({ op, event: 'finished', session: outcome.session, result: outcome.result, ...(outcome.usage && { usage: outcome.usage }) });
+        write({ op, event: 'finished', session: outcome.session, result: outcome.result, ...(outcome.usage && { usage: outcome.usage }), ...(outcome.confined && { confined: outcome.confined }) });
 
         return;
       case 'cancelled':
@@ -123,10 +156,10 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
   };
 
   /** What the run's details show of a prompt's agent: its title, a link that opens it in Paseo, and where it runs. */
-  const agentDisplay = (record: AgentPrompt, workspace: string, live: Daemon): RuntimeDisplay => ({
+  const agentDisplay = (record: AgentPrompt, workspace: string | undefined, live: Daemon): RuntimeDisplay => ({
     label: record.create.title.slice(0, 80),
     url: live.link(record.create.agentId),
-    fields: { agent: record.create.agentId, workspace, model: record.create.config.provider },
+    fields: { agent: record.create.agentId, ...(workspace && { workspace }), model: record.create.config.provider },
   });
 
   /** What the run's details show of a handle: the latest agent it runs, or the workspace before it runs one. */
@@ -136,15 +169,17 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     if (!place) return undefined;
     const latest = journal.promptsOf(handle).flatMap(({ record }) => (record.kind === 'agent' ? [record] : [])).at(-1);
 
-    if (!latest) return { label: `Paseo workspace ${place.workspace.name}`.slice(0, 80), fields: { workspace: place.workspace.id, daemon: `Paseo ${live.version}` } };
+    if (latest) return agentDisplay(latest, place.workspace?.id, live);
 
-    return agentDisplay(latest, place.workspace.id, live);
+    if (place.kind === 'confined') return { label: 'Paseo confined prompt, best-effort', fields: { daemon: `Paseo ${live.version}` } };
+
+    return { label: `Paseo workspace ${place.workspace.name}`.slice(0, 80), fields: { workspace: place.workspace.id, daemon: `Paseo ${live.version}` } };
   };
 
   /** Accepts a prompt whose agent exists, showing that agent. */
   const accept = (op: OpId, record: AgentPrompt, live: Daemon): void => {
     const place = journal.place(record.handle);
-    write({ op, event: 'accepted', ...(place && { display: agentDisplay(record, place.workspace.id, live) }) });
+    write({ op, event: 'accepted', ...(place && { display: agentDisplay(record, place.workspace?.id, live) }) });
   };
 
   async function init(request: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> {
@@ -185,11 +220,22 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
     daemon = connected;
     mode = request.mode;
+
+    const judges = tools.flatMap(({ tool, modes }) => {
+      const confinedMode = CONFINED_MODES[tool];
+
+      return confinedMode !== undefined && modes.includes(confinedMode) ? [tool] : [];
+    });
+
     write({
       type: 'init', ok: true, prompt: true,
-      // tokens: Paseo reports a turn's usage without the tokens written to the prompt cache, so a budget would undercount.
-      // unattended: a step that may run without asking never starts here, so no mode that bypasses approval is ever used.
-      can: { exec: false, setup: false, hitl: false, unattended: false, env: false, tokens: false, max_turns: false, workspace: ['new', 'continue'], tools },
+      ...(judges.length > 0 && { confinedPrompt: true }),
+      can: {
+        // tokens: Paseo reports a turn's usage without the tokens written to the prompt cache, so a budget would undercount.
+        // unattended: a step that may run without asking never starts here, so no mode that bypasses approval is ever used.
+        exec: false, setup: false, hitl: false, unattended: false, env: false, tokens: false, max_turns: false, workspace: ['new', 'continue'], tools: tools.map(({ tool }) => tool),
+        ...(judges.length > 0 && { confined: [{ ...CONFINED_KEPT, tools: judges }] }),
+      },
     });
   }
 
@@ -204,9 +250,13 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       return;
     }
 
-    // Only a confined prompt's place comes without a view, and this runtime answers no confined prompt.
+    // A confined prompt's place comes without a view: its workspace adopts the prompt's directory once the prompt comes.
     if (!request.view) {
-      fail(request.op, { code: 'view_missing', message: 'teamai-runtime-paseo opens a place only on a worktree: it answers no confined prompt.' });
+      const handle = `confined/${request.run}/${request.attempt}`;
+      journal.savePlace(handle, { kind: 'confined', run: request.run, attempt: request.attempt });
+      write({ op: request.op, event: 'accepted', handle });
+      const display = displayOf(handle, live);
+      write({ op: request.op, event: 'ready', ...(display && { display }) });
 
       return;
     }
@@ -223,14 +273,20 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
     // A handle per attempt: two attempts on one worktree share its workspace, and keep their own prompts.
     const handle = `${workspace.id}/${request.attempt}`;
-    journal.savePlace(handle, { run: request.run, attempt: request.attempt, workspace: { id: workspace.id, name: workspace.name }, cwd: workspace.directory, runDir: request.view.runDir });
+    journal.savePlace(handle, { kind: 'worktree', run: request.run, attempt: request.attempt, workspace: { id: workspace.id, name: workspace.name }, cwd: workspace.directory, runDir: request.view.runDir });
     write({ op: request.op, event: 'accepted', handle });
     const display = displayOf(handle, live);
     write({ op: request.op, event: 'ready', ...(display && { display }) });
   }
 
-  /** The create a new prompt sends, or the failure that keeps it from being sent. */
-  async function createFor(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, tool: PaseoTool, place: Place): Promise<AgentCreate | RuntimeFailure> {
+  /** The create a new prompt sends, in `launch`'s mode with its prompt and options, or the failure that keeps it from being sent. */
+  async function createFor(
+    live: Daemon,
+    request: Extract<RuntimeRequest, { type: 'prompt' }>,
+    tool: PaseoTool,
+    launch: { place: Place; modeId: string; prompt: string; options?: AgentCreate['config']['options'] },
+  ): Promise<AgentCreate | RuntimeFailure> {
+    const { place } = launch;
     const { lease } = request;
     const models = await live.models(tool);
     const offered = models.map((candidate) => candidate.id).join(', ') || 'none';
@@ -252,16 +308,95 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       agentId: agentIdOf(request.op),
       idempotencyKey: request.op,
       title: `teamai ${lease.step} · ${place.run}`,
-      prompt: lease.prompt,
+      prompt: launch.prompt,
       labels: { 'teamai-attempt': `${place.run}/${place.attempt}` },
-      config: {
-        provider: `${tool}/${model.id}`, modeId: DEFAULT_MODES[tool], ...(effort && { thinkingOptionId: effort }),
-        // Claude's default mode asks before any write, so the result file, as teamai's own launch allows it on a POSIX
-        // host, and the run's scratch directory, which the place gives read-write at its own path, are allowed, and only
-        // they; the mode stays as it is.
-        ...(tool === 'claude' && { options: { allowedTools: [`Edit(/${lease.result})`, `Edit(/${place.runDir}/**)`] } }),
-      },
+      config: { provider: `${tool}/${model.id}`, modeId: launch.modeId, ...(effort && { thinkingOptionId: effort }), ...(launch.options && { options: launch.options }) },
     };
+  }
+
+  /** Records a prompt refused before any agent was created, so a repeated id ends the same, and says why. */
+  const refuse = (op: OpId, handle: string, failure: RuntimeFailure): void => {
+    journal.savePrompt(op, { kind: 'refused', handle, outcome: { op, state: 'failed', failure } });
+    fail(op, failure);
+  };
+
+  /** A workflow prompt step: an agent in the worktree, in the tool's default mode, that writes teamai's result file. */
+  async function work(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, place: WorktreePlace): Promise<void> {
+    const { op, lease } = request;
+    const { tool } = lease;
+
+    if (!isPaseoTool(tool)) {
+      fail(op, { code: 'tool_unavailable', message: `teamai-runtime-paseo runs claude, codex and opencode, not ${tool}.` });
+
+      return;
+    }
+
+    const create = await createFor(live, request, tool, {
+      place, modeId: DEFAULT_MODES[tool], prompt: lease.prompt,
+      // Claude's default mode asks before any write, so the result file, as teamai's own launch allows it on a POSIX
+      // host, and the run's scratch directory, which the place gives read-write at its own path, are allowed, and only
+      // they; the mode stays as it is.
+      ...(tool === 'claude' && { options: { allowedTools: [`Edit(/${lease.result})`, `Edit(/${place.runDir}/**)`] } }),
+    });
+
+    if ('code' in create) {
+      refuse(op, request.handle, create);
+
+      return;
+    }
+
+    const record: AgentPrompt = { kind: 'agent', handle: request.handle, tool, answer: { kind: 'result-file', file: lease.result }, cwd: place.cwd, create };
+    journal.savePrompt(op, record);
+    await follow(live, op, record);
+  }
+
+  /** A confined prompt: a fresh agent whose cwd is its directory, briefed to read only it, that answers in its last message. */
+  async function judge(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>, confined: ConfinedPrompt, place: ConfinedPlace): Promise<void> {
+    const { op, lease } = request;
+
+    if (confined.level !== CONFINED_KEPT.level) {
+      refuse(op, request.handle, {
+        code: 'confined_level',
+        message: `teamai-runtime-paseo keeps a confined prompt best-effort: its agent is briefed to read only ${confined.dir}, and nothing stops it reading elsewhere. It does not run one at ${confined.level}.`,
+      });
+
+      return;
+    }
+
+    const { tool } = lease;
+    const modeId = isPaseoTool(tool) ? CONFINED_MODES[tool] : undefined;
+
+    if (!isPaseoTool(tool) || modeId === undefined) {
+      refuse(op, request.handle, { code: 'tool_unavailable', message: `teamai-runtime-paseo runs a confined prompt on ${Object.entries(CONFINED_MODES).flatMap(([judging, confinedMode]) => (confinedMode === undefined ? [] : [judging])).join(' and ')}, not ${tool}.` });
+
+      return;
+    }
+
+    let workspace = place.workspace && { ...place.workspace, directory: confined.dir };
+
+    if (!workspace) {
+      try {
+        workspace = await live.workspace(confined.dir);
+      } catch (error) {
+        refuse(op, request.handle, { code: 'workspace_failed', message: `Paseo could not open the confined prompt's directory as a workspace: ${error instanceof Error ? error.message : String(error)}` });
+
+        return;
+      }
+
+      journal.savePlace(request.handle, { ...place, workspace: { id: workspace.id, name: workspace.name } });
+    }
+
+    const create = await createFor(live, request, tool, { place, modeId, prompt: confinedBrief(confined, lease.prompt) });
+
+    if ('code' in create) {
+      refuse(op, request.handle, create);
+
+      return;
+    }
+
+    const record: AgentPrompt = { kind: 'agent', handle: request.handle, tool, answer: { kind: 'reply', kept: CONFINED_KEPT }, cwd: workspace.directory, create };
+    journal.savePrompt(op, record);
+    await follow(live, op, record);
   }
 
   async function prompt(live: Daemon, request: Extract<RuntimeRequest, { type: 'prompt' }>): Promise<void> {
@@ -290,33 +425,26 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     }
 
     const place = journal.place(request.handle);
+    const { confined } = request;
 
-    if (!place) {
-      fail(op, { code: 'unknown_handle', message: `teamai-runtime-paseo has no place ${request.handle}; open the attempt first.` });
-
-      return;
-    }
-
-    const { tool } = request.lease;
-
-    if (!isPaseoTool(tool)) {
-      fail(op, { code: 'tool_unavailable', message: `teamai-runtime-paseo runs claude, codex and opencode, not ${tool}.` });
+    if (confined && place?.kind === 'confined') {
+      await judge(live, request, confined, place);
 
       return;
     }
 
-    const create = await createFor(live, request, tool, place);
-
-    if ('code' in create) {
-      journal.savePrompt(op, { kind: 'refused', handle: request.handle, outcome: { op, state: 'failed', failure: create } });
-      fail(op, create);
+    if (!confined && place?.kind === 'worktree') {
+      await work(live, request, place);
 
       return;
     }
 
-    const record: AgentPrompt = { kind: 'agent', handle: request.handle, tool, result: request.lease.result, cwd: place.cwd, create };
-    journal.savePrompt(op, record);
-    await follow(live, op, record);
+    fail(op, {
+      code: 'unknown_handle',
+      message: confined
+        ? `teamai-runtime-paseo has no confined prompt's place ${request.handle}; open the attempt with no view first.`
+        : `teamai-runtime-paseo has no worktree place ${request.handle}; open the attempt on its worktree first.`,
+    });
   }
 
   /** Makes sure the prompt's agent exists, then waits for it to end, and settles the prompt. */
@@ -372,14 +500,28 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
         case 'timeout':
           continue;
         case 'permission': {
+          const asked = end.final?.pendingPermissions[0];
+          const modeId = create.config.modeId;
+
+          if (record.answer.kind === 'reply') {
+            const refused = await cancelAgent(live, record);
+            settle(op, {
+              op, state: 'failed',
+              failure: {
+                code: 'tool_failed',
+                message: `The ${record.tool} agent asked for permission${asked ? ` (${asked.title ?? asked.name})` : ''} in Paseo mode ${modeId}. A confined prompt only reads its directory, so it ends rather than ask.${refused ? ` ${refused.message}` : ''}`,
+              },
+            });
+
+            return;
+          }
+
           if (mode === 'attended') {
             // A person answers it in the Paseo app; the turn goes on once they do.
             await Promise.race([delay(PERMISSION_POLL_MS), stopped]);
             continue;
           }
 
-          const asked = end.final?.pendingPermissions[0];
-          const modeId = create.config.modeId;
           const refused = await cancelAgent(live, record);
           settle(op, {
             op, state: 'failed',
@@ -397,8 +539,32 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
           return;
         case 'idle': {
-          const result = readResult(record.result);
           const session = end.final?.runtimeInfo?.sessionId;
+
+          if (record.answer.kind === 'reply') {
+            const output = parseReply(end.lastMessage);
+
+            if (end.final?.status === 'closed' && output === undefined) {
+              settle(op, {
+                op, state: 'failed',
+                failure: { code: 'daemon_restarted', message: `The Paseo daemon at ${live.url} stopped while the ${record.tool} agent answered the confined prompt, before it replied. Run \`teamai workflow retry\` to ask again.` },
+              });
+
+              return;
+            }
+
+            if (output === undefined || !session) {
+              settle(op, { op, state: 'failed', failure: { code: 'tool_failed', message: `The ${record.tool} agent replied with no JSON value.` } });
+
+              return;
+            }
+
+            settle(op, { op, state: 'finished', session: { tool: record.tool, id: session }, result: { output }, confined: record.answer.kept });
+
+            return;
+          }
+
+          const result = readResult(record.answer.file);
 
           if (end.final?.status === 'closed' && !result) {
             settle(op, {
@@ -447,7 +613,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
   async function closePlace(live: Daemon, handle: string): Promise<void> {
     const place = journal.place(handle);
 
-    if (place && journal.handlesIn(place.workspace.id).every((other) => other === handle)) {
+    if (place?.workspace && journal.handlesIn(place.workspace.id).every((other) => other === handle)) {
       try {
         await live.archive(place.workspace.id);
       } catch (error) {
