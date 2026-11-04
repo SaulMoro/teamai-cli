@@ -9,6 +9,11 @@ import type { ExecEnd, Initialized, Opened, PromptEnd, Reattached, StepRuntime }
 /** How long `dispose` waits for a runtime to exit once its stdin ends; one that runs on is left to finish its own work. */
 const DISPOSE_WAIT_MS = 2000;
 
+/** How long teamai waits for a runtime's reply to a `reattach` or a `close` before it fails that request `runtime_unanswered`. */
+const ANSWER_WITHIN_MS = 15_000;
+
+type HandleRequest = Extract<RuntimeRequest, { handle: string; type: 'collect' | 'reattach' | 'close' }>;
+
 /** The display a runtime gave, if the run's details show it; one they do not show is named in a warning. */
 function displayOf(name: string, shown: Shown) {
   if (shown.kind === 'dropped') log.warn(`Step runtime "${name}" gave a display the run's details do not show: ${shown.reason}.`);
@@ -16,7 +21,7 @@ function displayOf(name: string, shown: Shown) {
   return shown.kind === 'shown' ? { display: shown.display } : {};
 }
 
-type HandleWaiter = { events: ReadonlySet<HandleEvent['event']>; settle: (event: HandleEvent | RuntimeFailure) => void };
+type HandleWaiter = { request: HandleRequest; events: ReadonlySet<HandleEvent['event']>; settle: (event: HandleEvent | RuntimeFailure) => void };
 
 /** A runtime's offer as teamai takes it: `can.confined` only from a runtime that says it answers confined prompts. */
 function offered(can: Can, answersConfined: boolean): Can {
@@ -30,7 +35,9 @@ function offered(can: Can, answersConfined: boolean): Can {
  * The client of an external step runtime: `command` spawned with `args`, speaking runtime protocol 1 over its stdio.
  * The process starts at `init`. Once it exits, or writes a line the protocol does not have, no request reaches it
  * again: an exec or prompt in flight ends `lost`, since what it started may outlive the runtime, and every other
- * request fails with `runtime_exited`.
+ * request fails with `runtime_exited`. A `reattach`, `collect` or `close` ends with its own reply, or with the failure
+ * reply for its handle; `init` and those requests fail `runtime_unanswered` when the runtime writes an error that names
+ * no request, and a `reattach` or `close` does when it gets no reply within 15 s.
  */
 export function stdioStepRuntime({ name, command, args = [], cwd }: { name: string; command: string; args?: string[]; cwd?: string }): StepRuntime {
   let child: ChildProcess | undefined;
@@ -53,6 +60,16 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
     for (const waiters of handles.values()) for (const waiter of waiters) waiter.settle(dead);
     handles.clear();
     child?.kill('SIGKILL');
+  };
+
+  /** Fails `init` and every handle request still waiting, as the runtime left them unanswered: `why` says how. */
+  const unanswered = (why: string): void => {
+    onInit?.({ ok: false, failure: { code: 'runtime_unanswered', message: `Step runtime "${name}" did not answer init: ${why}.` } });
+    onInit = undefined;
+    const waiting = [...handles.values()].flat();
+    handles.clear();
+
+    for (const { request, settle } of waiting) settle({ code: 'runtime_unanswered', message: `Step runtime "${name}" did not answer ${request.type} of ${request.handle}: ${why}.` });
   };
 
   const send = (request: RuntimeRequest): void => {
@@ -79,7 +96,8 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
     }
 
     if (message.event === 'error') {
-      log.warn(`Step runtime "${name}" answered: ${message.message}`);
+      if (onInit === undefined && handles.size === 0) log.warn(`Step runtime "${name}" answered: ${message.message}`);
+      else unanswered(`it wrote an error that names no request (${message.message})`);
 
       return;
     }
@@ -95,15 +113,45 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
 
     if (at === -1) return;
     const [waiter] = waiters.splice(at, 1);
-    waiter?.settle(message);
+
+    if (waiters.length === 0) handles.delete(message.handle);
+    waiter?.settle(message.event === 'failed' ? message.failure : message);
   };
 
-  const askHandle = (request: Extract<RuntimeRequest, { handle: string; type: 'collect' | 'reattach' | 'close' }>, events: HandleEvent['event'][]): Promise<HandleEvent | RuntimeFailure> => {
+  /** Sends a handle request and waits for one of `events` for its handle, or for the failure reply to it. */
+  const askHandle = (request: HandleRequest, events: HandleEvent['event'][]): Promise<HandleEvent | RuntimeFailure> => {
     if (dead) return Promise.resolve(dead);
 
-    return new Promise((settle) => {
+    return new Promise((resolve) => {
       const waiters = handles.get(request.handle) ?? [];
-      waiters.push({ events: new Set(events), settle });
+      let timer: NodeJS.Timeout | undefined;
+
+      const waiter: HandleWaiter = {
+        request,
+        events: new Set([...events, 'failed']),
+        settle: (answer) => {
+          clearTimeout(timer);
+          resolve(answer);
+        },
+      };
+
+      // A collect brings the place's work back, which takes as long as that work is large: only its own reply or the
+      // runtime's end settles it.
+      if (request.type !== 'collect') {
+        timer = setTimeout(() => {
+          const left = handles.get(request.handle) ?? [];
+          const at = left.indexOf(waiter);
+
+          if (at === -1) return;
+          left.splice(at, 1);
+
+          if (left.length === 0) handles.delete(request.handle);
+          waiter.settle({ code: 'runtime_unanswered', message: `Step runtime "${name}" did not answer ${request.type} of ${request.handle} within ${ANSWER_WITHIN_MS / 1000} s.` });
+        }, ANSWER_WITHIN_MS);
+        timer.unref();
+      }
+
+      waiters.push(waiter);
       handles.set(request.handle, waiters);
       send(request);
     });

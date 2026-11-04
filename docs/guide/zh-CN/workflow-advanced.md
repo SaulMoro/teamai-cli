@@ -1740,6 +1740,19 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 
 exec 或提示运行期间退出的运行时，出于同样的原因会让它失败为 `runtime_lost`。
 
+每个请求都要回答，包括你做不到的请求。无法回答的 `reattach`、`collect` 或 `close`（例如读不了自己的日志，或连不上提供方）要给出这个句柄的失败回复。这时不要回答 `gone`：位置可能还在。
+
+```text
+→ {"type":"reattach","handle":"teamai-r7-a1"}
+← {"event":"failed","handle":"teamai-r7-a1","failure":{"code":"journal_unreadable","message":"/var/lib/acme-runtime/r7.json is not valid JSON. Fix or remove it, then run teamai workflow cancel r7 again."}}
+```
+
+`{"event":"error"}` 这一行不指向任何请求，所以 teamai 会让所有仍在等待你的运行时的 `init`、`reattach`、`collect` 和 `close` 失败为 `runtime_unanswered`。15 秒内没有收到回复的 `reattach` 或 `close` 也一样。这次尝试保留它的位置、记录和登录：
+
+```text
+Step runtime "acme" could not close the place of attempt a1, so what ran there may still run (runtime_unanswered): Step runtime "acme" did not answer close of teamai-r7-a1 within 15 s.
+```
+
 每个请求和回复都在 teamai 仓库的 `packages/runtime-protocol` 中定义为 zod schema：teamai 发送的内容用 `RuntimeRequestSchema`，运行时写出的内容用 `RuntimeMessageSchema`。
 
 `ready`、exec 或 prompt 的 `accepted`，以及 `reattach` 的 `alive` 回复可以带上 `display`，它是可选的：`label` 最多 80 个字符，`url`（`https:`、`http:` 或应用自己的协议，例如 `t3:`），以及最多 8 个字符串 `fields`。仪表盘的运行详情会把它显示在步骤下面。不要在里面放密钥或你主目录下的路径。teamai 无法显示的 display 会被丢弃并记录原因，步骤照常运行。显示的是最近给出的那个，所以只为 prompt 创建智能体的运行时，在 `ready` 时显示位置，再随 prompt 的 `accepted` 显示智能体。
