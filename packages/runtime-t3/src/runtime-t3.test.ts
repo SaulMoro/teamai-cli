@@ -323,6 +323,27 @@ describe('teamai-runtime-t3', () => {
       expect(t3.calls().filter((call) => call.tool === 't3_thread_organize').map((call) => call.args)).toEqual([{ threadId: t3.threads()[0]?.threadId, action: 'settle' }]);
     });
 
+    // After a restart, cancel ends the op once T3 acknowledged the stop, which may come before the run ended.
+    it('settles the thread of a step cancelled after a restart, once its run ends after T3 acknowledged the stop', async () => {
+      t3.config({ agent: { hold: true, output: {} } });
+      const first = await opened();
+      first.runtime.send(prompt(first.handle, 'op-00000036'));
+      await first.runtime.next((line) => line['op'] === 'op-00000036' && line['event'] === 'accepted');
+      await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+      await first.runtime.close();
+      t3.config({ stopLagMs: 1_000 });
+
+      const second = start();
+      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      await second.next((line) => line['type'] === 'init');
+      second.send({ type: 'cancel', op: 'op-00000036' });
+      expect(await second.next((line) => line['op'] === 'op-00000036')).toEqual({ op: 'op-00000036', event: 'cancelled' });
+      second.send({ type: 'collect', handle: first.handle });
+
+      expect(await second.next((line) => line['event'] === 'collected')).toEqual({ event: 'collected', handle: first.handle });
+      expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+    });
+
     it('never settles a thread that still runs, or an interactive step\'s thread that waits for the person', async () => {
       t3.config({ agent: {} });
       const { runtime, handle } = await opened();
