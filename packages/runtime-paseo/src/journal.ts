@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { OpIdSchema, OpStateSchema, type OpId } from '@teamai/runtime-protocol';
+import { ConfinedKeptSchema, OpIdSchema, OpStateSchema, type OpId } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 
 // ─── The journal ─────────────────────────────────────────
 //
 //  What this runtime keeps across its own restarts, in a directory on the host:
 //
-//    places/<handle>.json   the attempt a handle opened, and the Paseo workspace that adopted its worktree
+//    places/<handle>.json   the attempt a handle opened, and the Paseo workspace that adopted its worktree, or, for a
+//                           confined prompt's place, the prompt's directory
 //    ops/<op>.json          a prompt: its handle, the agent create it sends, and once it ended, its outcome
 //    ops/<op>.cancel        teamai cancelled it, written before the agent is cancelled: Paseo reports a cancelled
 //                           agent as idle, so only this file tells a cancel from a finish
@@ -17,15 +18,25 @@ import { z } from 'zod';
 //  temporary path and renamed into place. `close` removes a handle's files.
 //
 
-const PlaceSchema = z.object({
-  run: z.string(),
-  attempt: z.string(),
-  workspace: z.object({ id: z.string(), name: z.string() }),
-  /** The worktree the workspace adopted. */
-  cwd: z.string(),
-  /** The run's scratch directory, which the place's agents write at its own path. */
-  runDir: z.string(),
-});
+const WorkspaceSchema = z.object({ id: z.string(), name: z.string() });
+
+/**
+ * An attempt's place: a worktree a Paseo workspace adopted, or a confined prompt's, opened with no view of the host,
+ * whose workspace adopts the prompt's directory once the prompt comes.
+ */
+const PlaceSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('worktree'),
+    run: z.string(),
+    attempt: z.string(),
+    workspace: WorkspaceSchema,
+    /** The worktree the workspace adopted. */
+    cwd: z.string(),
+    /** The run's scratch directory, which the place's agents write at its own path. */
+    runDir: z.string(),
+  }),
+  z.object({ kind: z.literal('confined'), run: z.string(), attempt: z.string(), workspace: WorkspaceSchema.optional() }),
+]);
 
 export type Place = z.infer<typeof PlaceSchema>;
 
@@ -57,9 +68,15 @@ const PromptRecordSchema = z.discriminatedUnion('kind', [
     kind: z.literal('agent'),
     handle: z.string(),
     tool: z.string(),
-    /** The file the agent writes the workflow result to. */
-    result: z.string(),
-    /** The worktree the agent works in. */
+    /**
+     * Where the answer comes from: the workflow result file the agent writes, or, for a confined prompt, its last
+     * message, reported with the level and access the runtime kept.
+     */
+    answer: z.discriminatedUnion('kind', [
+      z.object({ kind: z.literal('result-file'), file: z.string() }),
+      z.object({ kind: z.literal('reply'), kept: ConfinedKeptSchema }),
+    ]),
+    /** The directory the agent works in: the worktree, or a confined prompt's directory. */
     cwd: z.string(),
     create: AgentCreateSchema,
     outcome: OpStateSchema.optional(),
@@ -117,7 +134,7 @@ export function journal(root: string) {
     /** The handle already opened for an attempt, so a repeated open opens no second place. */
     handleOf: ({ run, attempt }: { run: string; attempt: string }): string | undefined => places().find(({ place }) => place.run === run && place.attempt === attempt)?.handle,
     /** The handles open on a Paseo workspace, which the last of them archives when it closes. */
-    handlesIn: (workspaceId: string): string[] => places().filter(({ place }) => place.workspace.id === workspaceId).map(({ handle }) => handle),
+    handlesIn: (workspaceId: string): string[] => places().filter(({ place }) => place.workspace?.id === workspaceId).map(({ handle }) => handle),
     prompt: (op: OpId): PromptRecord | undefined => read(promptFile(op), PromptRecordSchema),
     savePrompt: (op: OpId, record: PromptRecord): void => write(promptFile(op), record),
     promptsOf,

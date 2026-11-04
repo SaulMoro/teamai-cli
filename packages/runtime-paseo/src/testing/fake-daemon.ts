@@ -33,6 +33,8 @@ const BehaviourSchema = z.object({
   models: z.record(z.string(), z.array(z.string())).default({ claude: ['claude-opus-5-5', 'claude-sonnet-5-5'], codex: ['gpt-6.1-sol'], opencode: ['opencode/beam-free'] }),
   /** The output the agent writes to the result file; none written when absent. */
   output: z.unknown().optional(),
+  /** The agent's last message, which a confined prompt's answer is. */
+  reply: z.string().default('Done.'),
   /** A failure the agent writes to the result file instead. */
   failure: z.object({ code: z.string(), message: z.string() }).optional(),
   /** How long the agent works. */
@@ -387,7 +389,7 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
         const answer = (): boolean => {
           if (agent.status === 'running' && !agent.permission) return false;
           const status = agent.permission ? 'permission' : agent.status === 'error' ? 'error' : 'idle';
-          reply({ type: 'wait_for_finish_response', payload: { requestId: message.requestId, status, final: snapshot(agent), error: agent.lastError ?? null, lastMessage: status === 'idle' ? 'Done.' : null } });
+          reply({ type: 'wait_for_finish_response', payload: { requestId: message.requestId, status, final: snapshot(agent), error: agent.lastError ?? null, lastMessage: status === 'idle' ? agent.behaviour.reply : null } });
 
           return true;
         };

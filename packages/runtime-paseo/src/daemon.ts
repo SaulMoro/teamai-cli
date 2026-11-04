@@ -24,6 +24,12 @@ const NEEDED_FEATURES = ['creationLifecycle', 'agentRequestReceipts'] as const;
  */
 export const DEFAULT_MODES: Readonly<Record<PaseoTool, string>> = { claude: 'default', codex: 'auto', opencode: 'build' };
 
+/**
+ * The Paseo mode a tool answers a confined prompt in: one that reads without asking and asks before it edits or runs
+ * anything, which ends the prompt. Codex has none: each of its Paseo modes writes the workspace without asking.
+ */
+export const CONFINED_MODES: Readonly<Record<PaseoTool, string | undefined>> = { claude: 'default', codex: undefined, opencode: 'plan' };
+
 /** The tools this runtime runs as Paseo agents: Paseo's providers that are teamai tools of the same name. */
 export type PaseoTool = 'claude' | 'codex' | 'opencode';
 
@@ -58,8 +64,8 @@ export interface Daemon {
   url: string;
   serverId: string;
   version: string;
-  /** The tools whose provider the daemon has, with the mode a step starts in. */
-  tools(): Promise<PaseoTool[]>;
+  /** The tools whose provider the daemon has with the mode a step starts in, and the modes each has. */
+  tools(): Promise<Array<{ tool: PaseoTool; modes: string[] }>>;
   models(tool: PaseoTool): Promise<Model[]>;
   /** Adopts a directory as a Paseo workspace; Paseo answers the same workspace for the same directory. */
   workspace(cwd: string): Promise<{ id: string; name: string; directory: string }>;
@@ -149,9 +155,9 @@ export async function connect(url: string, paseo: PaseoClient): Promise<Daemon |
 
       // A provider whose default mode is gone would start in some other mode: it is not offered.
       const offered = await Promise.all(available.map(async (tool) => {
-        const { modes = [] } = await api.providers.listModes(tool);
+        const modes = (await api.providers.listModes(tool)).modes?.map((mode) => mode.id) ?? [];
 
-        return modes.some((mode) => mode.id === DEFAULT_MODES[tool]) ? [tool] : [];
+        return modes.includes(DEFAULT_MODES[tool]) ? [{ tool, modes }] : [];
       }));
 
       return offered.flat();
