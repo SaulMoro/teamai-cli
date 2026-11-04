@@ -62,6 +62,11 @@ function confinedBrief(confined: ConfinedPrompt, prompt: string): string {
   return `Answer from the files in ${confined.dir} alone. List and read them with your file tools, such as Glob, Grep and Read. Change no file and run no shell command: asking for a permission ends this run.\n\n${prompt}\n\n${reply}`;
 }
 
+/** The failure of an agent that ended with no session in Paseo: teamai records and scores a pass by its session. */
+const noSession = (tool: string): RuntimeFailure => ({
+  code: 'tool_failed', message: `Paseo reported no session for the ${tool} agent, so teamai cannot record or score its pass. Run \`teamai workflow retry\` to run it again.`,
+});
+
 /** A confined prompt's answer: the JSON value its agent replied with. */
 const ReplySchema = z.json();
 
@@ -556,8 +561,14 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
               return;
             }
 
-            if (output === undefined || !session) {
+            if (output === undefined) {
               settle(op, { op, state: 'failed', failure: { code: 'tool_failed', message: `The ${record.tool} agent replied with no JSON value.` } });
+
+              return;
+            }
+
+            if (!session) {
+              settle(op, { op, state: 'failed', failure: noSession(record.tool) });
 
               return;
             }
@@ -578,8 +589,14 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
             return;
           }
 
-          if (!result || !session) {
+          if (!result) {
             settle(op, { op, state: 'failed', failure: { code: 'tool_failed', message: `${record.tool} did not write a valid workflow result` } });
+
+            return;
+          }
+
+          if (!session) {
+            settle(op, { op, state: 'failed', failure: noSession(record.tool) });
 
             return;
           }

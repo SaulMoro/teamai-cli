@@ -45,6 +45,8 @@ const BehaviourSchema = z.object({
   touch: z.string().optional(),
   /** The agent asks for permission to run a command first, and waits for an answer. */
   ask_permission: z.boolean().default(false),
+  /** The provider reports no session id once the agent is done. */
+  no_session: z.boolean().default(false),
   /** The provider fails the agent with this error. */
   error: z.string().optional(),
   /** The daemon refuses a cancel with this error, and the agent goes on. */
@@ -192,7 +194,7 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
         fs.writeFileSync(result, JSON.stringify(does.failure ? { failure: does.failure } : { output: does.output }));
       }
 
-      Object.assign(agent, { status: 'idle', sessionId: `fake-session-${agent.id}` });
+      Object.assign(agent, { status: 'idle', sessionId: does.no_session ? null : `fake-session-${agent.id}` });
     }
 
     changed(agent);
