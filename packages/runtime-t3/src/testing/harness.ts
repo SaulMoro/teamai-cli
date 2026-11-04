@@ -82,6 +82,8 @@ export interface FakeT3Config {
   delegatesPending?: boolean;
   /** The status of the run that answered once delegated work settled, such as one a task's delivery started; the thread's own otherwise. */
   resultRunStatus?: string;
+  /** T3 refuses every launch, a repeated one too. */
+  launchFails?: boolean;
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });

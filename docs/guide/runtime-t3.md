@@ -94,7 +94,7 @@ Once a step ends, teamai settles its thread. The thread leaves your list of acti
 | succeeded, failed, or reported a failure in its result | settled once teamai collects the step |
 | was cancelled (`teamai workflow cancel`) | stopped, then settled |
 | still runs, or is an interactive step waiting for you | stays active |
-| ended while T3 still runs the thread (T3 did not stop it) | stays active, so you can stop it |
+| ended before teamai saw its thread stop (T3 did not stop it, or teamai lost track of it) | stays active, so you can stop it; closing the step's place stops it first |
 
 teamai settles only the threads it launched. If T3 refuses to settle one, the step still counts and the thread stays active.
 
