@@ -362,6 +362,19 @@ Judge the review.
     expect(fs.existsSync(launches)).toBe(false);
   });
 
+  it('runs a step whose default tool is an instance on the next runtime when the first offers only the tool it extends', async () => {
+    ownInstance('claude-work');
+    writeDefinition('toyinstance', [{ use: 'toy', options: { state, can: { tools: ['claude'] } } }, { use: 'local' }]);
+
+    const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyinstance', '--tools', 'default=claude-work'], repo, env());
+
+    const runId = runOf(ran);
+    const [review] = readRunState(runId).steps;
+    expect(review, ran.stderr).toMatchObject({ status: 'succeeded' });
+    expect(runtimeRecord(runId, attemptOf(review))).toBeUndefined();
+    expect(toyOpens()).toBe(0);
+  });
+
   it('refuses an agent\'s start that invoke denies before it opens any runtime of the definition', async () => {
     writeDefinition('toyonly', [{ use: 'toy', options: { state } }]);
 
