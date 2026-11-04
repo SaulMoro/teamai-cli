@@ -135,3 +135,22 @@ export function resolveCliPath(
 ): string | null {
   return platform === 'win32' ? whereOnWindows(cmd) : whichOnPosix(cmd);
 }
+
+/**
+ * Whether `cmd` names one executable and nothing else: no path or space, and none of the `:`, `*` and `?` that
+ * Windows `where` reads as a place to search or a wildcard.
+ */
+export function isBareCommandName(cmd: string): boolean {
+  return /^[^\s/\\:*?]+$/.test(cmd);
+}
+
+/**
+ * Resolves a command a config file names, such as a team tool instance's, in the PATH directories alone, so a file
+ * in the project checkout never stands in for it. `where <cmd>` searches the current directory before PATH;
+ * `where $PATH:<cmd>` searches PATH only. A name that is not bare resolves to nothing.
+ */
+export function resolvePathCommand(cmd: string, platform: NodeJS.Platform = process.platform): string | null {
+  if (!isBareCommandName(cmd)) return null;
+
+  return platform === 'win32' ? whereOnWindows(`$PATH:${cmd}`) : whichOnPosix(cmd);
+}

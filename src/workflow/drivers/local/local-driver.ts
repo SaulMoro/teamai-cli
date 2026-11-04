@@ -23,7 +23,6 @@ import { setsLimit, type DriverCan, type Missing } from '../../requirements.js';
 import { callerProvenance, respondProvenance, respondToHitl, type ResponseInput } from '../../run-controls.js';
 import { isRecord } from '../../expression.js';
 import { budgeted } from '../../limits.js';
-import { resolveCliPath } from '../../../utils/cli-path.js';
 import {
   createLocalToolAdapter,
   type LocalToolAdapter,
@@ -37,7 +36,7 @@ import { memberTools, type MemberTool } from '../../../tool-launch/call.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../../tool-launch/process-stop.js';
 import { acceptToolCommand } from '../../../tool-instances.js';
 import { instanceNames, isToolId } from '../../../tool-registry.js';
-import { launchCommandOf, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, launchTargetOf, type LaunchTarget, type LaunchTool } from '../../../tool-launch/tools.js';
+import { launchExecutableOf, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, launchTargetOf, type LaunchTarget, type LaunchTool } from '../../../tool-launch/tools.js';
 import { confinedOffers, type ConfinedOffer } from '../../../tool-launch/confined.js';
 import { AttemptResult } from '../../attempt-result.js';
 import { runConfinedStep } from '../../confined-step.js';
@@ -713,7 +712,7 @@ export function localStrictCan(config: LocalConfig, options: Pick<LocalDriverOpt
 function onPath(name: string): boolean {
   const target = launchTargetOf(name);
 
-  return target !== undefined && resolveCliPath(launchCommandOf(target)) !== null;
+  return target !== undefined && launchExecutableOf(target) !== null;
 }
 
 /**

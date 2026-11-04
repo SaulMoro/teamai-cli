@@ -14,8 +14,7 @@ import { describeWorkflow, type WorkflowDescription } from './workflow/describe.
 import { canFor, ceilingOf, isLeft, listOf, localReason, personClauses } from './workflow/drivers/skill/skill-driver.js';
 import { launchToolFor } from './workflow/drivers/local/local-driver.js';
 import { memberTools, type MemberTool } from './tool-launch/call.js';
-import { launchCommandOf, type LaunchTarget } from './tool-launch/tools.js';
-import { resolveCliPath } from './utils/cli-path.js';
+import { launchCommandOf, launchExecutableOf, type LaunchTarget } from './tool-launch/tools.js';
 import { sameEnvName } from './resources/env-key.js';
 import { envAdvice, type EnvFacts } from './workflow/requirements.js';
 import { personSteps, type PersonStep } from './workflow/engine.js';
@@ -202,7 +201,7 @@ function isOnPath(target: LaunchTarget): boolean {
   const known = pathLookups.get(command);
 
   if (known && Date.now() - known.at < PATH_LOOKUP_MS) return known.isFound;
-  const isFound = resolveCliPath(command) !== null;
+  const isFound = launchExecutableOf(target) !== null;
   pathLookups.set(command, { isFound, at: Date.now() });
 
   return isFound;

@@ -1,3 +1,4 @@
+import { resolveCliPath, resolvePathCommand } from '@teamai/tool-core/cli-path';
 import { descriptorOf, toolOf, type DescriptorOf } from '../tool-registry.js';
 import type { ResolvedToolInstance } from '../tool-instances.js';
 import type { ToolId } from '../tools.js';
@@ -78,6 +79,13 @@ export function launchTargetOf(name: string): LaunchTarget | undefined {
 /** The command that starts `target`: its instance's own, or its tool's. */
 export function launchCommandOf(target: LaunchTarget): string {
   return target.instance?.command ?? executableOf(target.tool);
+}
+
+/** Where the command that starts `target` is installed, or null. An instance's comes from a config file, so only PATH counts. */
+export function launchExecutableOf(target: LaunchTarget): string | null {
+  const command = target.instance?.command;
+
+  return command === undefined ? resolveCliPath(executableOf(target.tool)) : resolvePathCommand(command);
 }
 
 /** The tools that run confined to one directory, in `LAUNCH_ORDER`. */
