@@ -7,7 +7,7 @@ import { isToolId } from '../../../tool-registry.js';
 import type { LocalConfig } from '../../../types.js';
 import type { ToolId } from '../../../tools.js';
 import { readFileSafe, writeJsonAtomic } from '../../../utils/fs.js';
-import { redactJson } from '../../../utils/redact.js';
+import { redactJson } from '@teamai/shared/redact';
 import type { HostPlaceRequest, RunVersion } from '../../protocol.js';
 import { ConfinedRunReportSchema, FailureSchema, TokenUsageSchema } from '../../step-state.js';
 import { AttemptIdSchema, RunIdSchema, skillStatePath, type RunId, type RunLock } from '../../store.js';

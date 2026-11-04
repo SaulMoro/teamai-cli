@@ -22,7 +22,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ensureDir, writeFileAtomic } from './utils/fs.js';
 import { acquireLock, releaseLock } from './update.js';
-import { redactWithEnv } from './utils/redact.js';
+import { redactWithEnv } from '@teamai/shared/redact';
 import { aggregateSessionMetrics } from './dashboard-collector.js';
 import { repoKeys, repoLabel } from './utils/repo-attribution.js';
 import { emptyTokenUsage } from '@teamai/tool-core/tokens';

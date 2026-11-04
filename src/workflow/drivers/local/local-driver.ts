@@ -11,7 +11,7 @@ import { knownSecrets, resolveWorkflowEnv, type WorkflowEnv } from '../../../env
 import { resolveRunMode, workflowLaunch, type RunMode } from '../../../launch-context.js';
 import type { LocalConfig, TeamaiConfig } from '../../../types.js';
 import { log, PROGRESS_STREAMS_ENV, streamOfLine, withoutStreamMarks } from '../../../utils/logger.js';
-import { redact } from '../../../utils/redact.js';
+import { redact } from '@teamai/shared/redact';
 import { AgentSession } from '../../../session-flow/agent-session.js';
 import { openSessionArchive, type SessionArchive } from '../../../session-flow/archive.js';
 import { deliveredTeamSkills, usedSkills } from '../../../skill-use.js';

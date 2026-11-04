@@ -9,7 +9,7 @@ import { readEvents, aggregateSessionMetrics, scanTranscriptStop, hookScopeDir }
 import { readRecallQuality } from './recall-quality.js';
 import { deriveSessionId } from './utils/session-id.js';
 import { resolveHookCwd } from './utils/hook-cwd.js';
-import { redactWithEnv } from './utils/redact.js';
+import { redactWithEnv } from '@teamai/shared/redact';
 import type { ContributeState, DashboardEvent, SessionShareOffered, SessionFriction } from './types.js';
 import {
   CONTRIBUTE_SMART_THRESHOLD,
