@@ -133,7 +133,7 @@ const ENFORCEMENT = {
   confined: 'strict',
   /** A confined step whose model a tool of those offers resolves. */
   model: 'strict',
-  /** A command step of a workflow `HOST_PINNED_WORKFLOWS` names: a driver on this host (`can.remote` is not set). */
+  /** A step pinned to this host (`Offer.pinned`): a driver here (`can.remote` is not set). */
   host: 'strict',
   /** A prompt step: the driver takes prompts (`can.prompt` is not false). */
   prompt: 'strict',
@@ -372,7 +372,10 @@ export interface Offer {
   clone: boolean;
   /** The caller asked `next --prepare`. */
   prepare: boolean;
-  /** A command step of a workflow `HOST_PINNED_WORKFLOWS` names. Absent: not pinned. */
+  /**
+   * The step runs only on this host: a command step of a workflow `HOST_PINNED_WORKFLOWS` names, or a step that
+   * publishes to a teamai data branch. Absent: not pinned.
+   */
   pinned?: boolean;
   /** The team role the step's copy runs with: its clone's, or the step's own in a worktree copy. */
   role?: string;
