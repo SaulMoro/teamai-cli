@@ -756,8 +756,8 @@ export function serve(options: ServeOptions): Promise<void> {
     const s = session;
 
     for (const [op, thread] of Object.entries(known.threads)) {
-      if (thread.settle || !ended(known.ops[op])) continue;
-      let outcome: NonNullable<ThreadRecord['settle']>;
+      if (thread.settlement || !ended(known.ops[op])) continue;
+      let outcome: NonNullable<ThreadRecord['settlement']>;
 
       try {
         const { status } = await s.t3.thread(thread.threadId);
@@ -772,7 +772,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
       const now = place(handle);
 
-      if (now?.threads[op]) journal.write({ ...now, threads: { ...now.threads, [op]: { ...now.threads[op], settle: outcome } } });
+      if (now?.threads[op]) journal.write({ ...now, threads: { ...now.threads, [op]: { ...now.threads[op], settlement: outcome } } });
     }
   };
 
