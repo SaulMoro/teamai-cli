@@ -337,6 +337,28 @@ Judge the review.
       expect(judged?.sees?.every((name) => !name.startsWith('..'))).toBe(true);
     });
 
+    it('sends the judge only the credentials its tool reads, of those the definition declares', async () => {
+      const state = path.join(sandbox, 'toy-state-judgecreds');
+      fs.mkdirSync(path.join(repo, '.teamai', 'drivers'), { recursive: true });
+      fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'toyjudgecreds.yaml'), [
+        'schemaVersion: v1alpha1', 'name: toyjudgecreds', 'tool: claude', 'runtimes:', '  - use: toy', '    options:',
+        `      state: ${JSON.stringify(state)}`, `      path: ${JSON.stringify(bin)}`,
+        '      credentials: { ANTHROPIC_API_KEY: "env:MEMBER_ANTHROPIC_KEY", OPENAI_API_KEY: "env:MEMBER_OPENAI_KEY" }',
+        '      judge: { reply: { answer: { label: good, reasoning: "read it" } } }', '',
+      ].join('\n'));
+
+      const ran = await runCLI(['workflow', 'start', 'scored', '--driver', 'toyjudgecreds'], repo, { PATH: hostPath, LAUNCHES: launches, MEMBER_ANTHROPIC_KEY: 'anthropic-test-key', MEMBER_OPENAI_KEY: 'openai-test-key' });
+
+      succeededRun(ran);
+      const scoring = String(/teamai-score run (r[0-9a-f]+)/.exec(ran.stderr)?.[1]);
+      const judge = readRunState(scoring).steps.find((step) => step.id.endsWith('.judge'));
+      expect(judge).toMatchObject({ status: 'succeeded', confined: { tool: 'claude' } });
+      const noted = fs.readFileSync(path.join(state, 'credentials.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { type: string; handle: string; names: string[] });
+      // A claude judge reads ANTHROPIC_API_KEY, never OPENAI_API_KEY: its place and its prompt get claude's alone.
+      expect(noted.filter((line) => line.handle === `toy-${scoring}-${attemptOf(judge)}`).map(({ type, names }) => ({ type, names })))
+        .toEqual([{ type: 'open', names: ['ANTHROPIC_API_KEY'] }, { type: 'prompt', names: ['ANTHROPIC_API_KEY'] }]);
+    });
+
     it('never leases the judge to a toy that offers can.confined without saying it answers confined prompts', async () => {
       const state = path.join(sandbox, 'toy-state-nojudge');
       fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'toynojudge.yaml'), [

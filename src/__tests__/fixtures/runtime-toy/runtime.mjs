@@ -289,6 +289,7 @@ function judgePrompt(request) {
 
   let record = readJson(opPath(request.op), undefined);
   send({ op: request.op, event: 'accepted' });
+  noteCredentials(request, request.handle);
 
   if (!record) {
     fs.appendFileSync(file('prompts.jsonl'), `${JSON.stringify({ op: request.op, sent: request.lease, confined: request.confined, sees: filesUnder(request.confined.dir) })}\n`);
