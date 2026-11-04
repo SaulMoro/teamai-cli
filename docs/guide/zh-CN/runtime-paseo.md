@@ -267,6 +267,7 @@ Paseo did not archive workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476
 | 代码 | 何时出现 |
 | --- | --- |
 | `client_missing` | 找不到 Paseo 客户端：`PATH` 上没有 `paseo`，或 `PASEO_CLIENT_PATH` 指向的不是 `@getpaseo/client` 包。安装 Paseo，或设置 `PASEO_CLIENT_PATH`。 |
+| `client_version` | 找到的 Paseo 客户端早于 0.14.0。升级 Paseo，或把 `PASEO_CLIENT_PATH` 指向更新的 `@getpaseo/client` 包。 |
 | `daemon_unreachable` | `url` 上没有守护进程应答。用 `paseo start` 启动它。 |
 | `daemon_version` | 守护进程早于 0.14.0。升级 Paseo 并重启它。 |
 | `tool_unavailable` | 守护进程在默认模式下没有 `claude`、`codex`、`opencode` 中的任何一个。守护进程没有步骤所需工具时，该步骤交给下一个运行时。 |
