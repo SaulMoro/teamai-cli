@@ -1568,7 +1568,7 @@ teamai 自带这些定义：
 | 键 | 含义 |
 | --- | --- |
 | `max_parallel` | 这个运行时上同时最多有这么多次尝试。它没有空位时，步骤交给下一个运行时。`workflows.max_parallel` 仍然限制整个运行。 |
-| `credentials` | `{ codex: login }`：步骤里的 Codex 使用 teamai 单独保存的登录，见下文。 |
+| `credentials` | `codex: login`：步骤里的 Codex 使用 teamai 单独保存的登录，见下文。`NAME: env:VARIABLE`：步骤的工具得到 `NAME`，值在运行开始时从你的 `VARIABLE` 读取，见下文。 |
 
 不改定义也能在你的机器上调整它的选项，写在 `~/.teamai/config.yaml` 或工作区自己的 `config.yaml` 里。键逐个覆盖定义里的值，工作区的优先：
 
@@ -1604,6 +1604,46 @@ Codex 运行期间运行时自己停止，或之后无法关闭位置时，登�
 ⚠ The codex login teamai keeps stays held by attempt a339da600 of run r9a395746ec65dbd7, whose tool may still run. Stop that tool on its step runtime, then delete /home/me/.teamai/logins/codex.lock.
 ```
 
+### 来自你环境的凭据
+
+容器里的工具读不到保存在钥匙串里的登录。改为从你的环境给它一个令牌：`NAME: env:VARIABLE` 为步骤的工具设置 `NAME`，值取自你的 `VARIABLE`。
+
+```yaml
+# drivers/containers.yaml
+runtimes:
+  - use: sandbox
+    options:
+      provider: docker
+      image: ghcr.io/acme/agent:1
+      credentials:
+        CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN   # 来自 `claude setup-token`
+        NPM_TOKEN: env:ACME_NPM_TOKEN                          # 私有仓库，在你 shell 里用另一个名字
+  - use: local
+```
+
+```sh
+export CLAUDE_CODE_OAUTH_TOKEN=$(cat ~/.config/acme/claude-token)
+export ACME_NPM_TOKEN=$(security find-generic-password -s acme-npm -w)
+teamai workflow start review --driver containers
+```
+
+teamai 在运行开始或继续时读取每个变量一次。未设置的变量会在任何步骤运行前让启动停止：
+
+```text
+{"error":{"code":"credential_missing","message":"Runtime \"sandbox\" of driver definition drivers/containers.yaml declares credential CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN, and CLAUDE_CODE_OAUTH_TOKEN is not set in your environment. Set CLAUDE_CODE_OAUTH_TOKEN, then start again."}}
+```
+
+这些值去哪里：
+
+| 会得到 | 永远得不到 |
+| --- | --- |
+| 这个运行时上提示步骤的工具 | 命令步骤，或 setup |
+| 发给自己启动智能体的运行时的 prompt | 定义里的其他运行时 |
+| | 步骤扣留的名字，例如严格沙箱里的代码托管令牌 |
+| | 任何文件：运行的记录、`runtime.json`、日志。工具打印出的值在 teamai 保存的内容里会被遮盖 |
+
+只有提供 `can.env` 的运行时接受凭据，因为只有它决定每个进程的环境。`local` 不接受：你的步骤本来就在你的环境里运行。两种情况都会在启动时被拒绝为 `bad_option`。
+
 团队运行时是队友推送的代码，所以只有在这台机器上有人接受过的修订才会运行。它目录下任何文件的改动都会产生新的修订。有人值守的运行在第一次启动前会询问：
 
 ```text
@@ -1619,6 +1659,7 @@ Run it? [y/N]
 - `attempts/<attempt>/out/`，可读写。结果文件是 `out/result.json`。
 - 提示步骤有自己的工具主目录：`attempts/<attempt>/tool-home/<tool>`，通过 `CLAUDE_CONFIG_DIR`、`CODEX_HOME` 或 `CODEBUDDY_CONFIG_DIR` 设置。提示步骤只在 Claude Code、Codex 或 CodeBuddy 上运行，并且只以无头方式运行，不能交互。评分、发布和之后续接这个会话的轮次都从这个目录读取会话。之后的轮次从它的副本开始。[自己启动智能体的运行时](#自己启动智能体的运行时)没有工具主目录：它的工具把会话保存在 `local` 保存的位置。
 - 租约提供的环境变量键、租约的 `env` 和这次尝试的标记。租约扣留的键会从运行时的环境里移除。
+- 提示步骤得到它的运行时声明的[凭据](#来自你环境的凭据)。命令步骤得不到。
 
 teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attempt>/runtime.json`。teamai 被杀掉后，`workflow resume` 会再次发送同样的 id：
 
@@ -1642,11 +1683,19 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 → {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","view":{…},"credentials":{}}
 ← {"op":"op-5e0d11cb4777","event":"accepted","handle":"toy-r…-a…"}
 ← {"op":"op-5e0d11cb4777","event":"ready","display":{"label":"toy-r…-a…","url":"https://toy.example.test/places/r…-a…","fields":{"place":"toy-r…-a…"}}}
-→ {"type":"exec","op":"op-83bfffde9ce3","handle":"toy-r…-a…","argv":["/bin/sh","-c","npm test"],"env":{…},"unset":[],"cwd":"/repo"}
+→ {"type":"exec","op":"op-83bfffde9ce3","handle":"toy-r…-a…","argv":["/bin/sh","-c","npm test"],"env":{…},"unset":[],"credentials":{},"cwd":"/repo"}
 ← {"op":"op-83bfffde9ce3","event":"accepted"}
 ← {"op":"op-83bfffde9ce3","event":"output","stream":"stdout","data":"ok\n"}
 ← {"op":"op-83bfffde9ce3","event":"exited","code":0,"stdout":"ok\n"}
 ```
+
+`max_parallel` 和 `credentials` 由 teamai 自己使用：它在 `init` 之前把它们从选项里去掉，所以你的运行时永远看不到它们，也不应检查它们。凭据的值改为随请求发送：在 `open` 上，以及在每个需要它们的 `exec` 或 `prompt` 上。提示的工具 exec 会得到它们，命令步骤的 exec 得到 `{}`：
+
+```text
+→ {"type":"exec","op":"op-2a7c90e14b3d","handle":"toy-r…-a…","argv":["claude","-p","…"],"env":{"CLAUDE_CONFIG_DIR":"/repo/.teamai/…/tool-home/claude",…},"unset":["GITHUB_TOKEN"],"credentials":{"CLAUDE_CODE_OAUTH_TOKEN":"sk-ant-oat01-…"},"cwd":"/repo"}
+```
+
+只把它们设置到进程的环境里，永远不要写到磁盘或日志里。重启后的 teamai 会随它重新发送的操作再次发送它们，所以你的运行时什么都不用保存。
 
 其他请求是 `cancel`、`collect`、`reattach` 和 `close`。在 `close` 之前，运行时对重复的 `op` 给出同样的结果。它保存 exec 打印的内容和退出方式，这样重启后的 teamai 可以用 `reattach` 读取。运行时不接受的选项会让 `init` 失败为 `bad_option`，并给出那个键。
 
@@ -1712,6 +1761,7 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 | `driver_namespace_conflict`、`runtime_namespace_conflict` | 只在一个命名空间里保留这个名字，推送，然后运行 `teamai pull` |
 | `runtime_not_found` | 把运行时安装到上面的某个位置 |
 | `runtime_not_accepted` | 有人值守地运行一次这个命令，审查并接受这个修订 |
+| `credential_missing` | 设置消息里给出的变量，然后再次启动或继续 |
 | `bad_option` | 修正定义里的选项，或你配置里 `workflows.drivers` 下的选项 |
 | `requirement_unmet` | 让定义里的某一个运行时提供步骤要求的全部内容，或修改步骤 |
 | `login_missing` | 运行 `CODEX_HOME=~/.teamai/logins/codex codex login`，然后重试这个步骤 |

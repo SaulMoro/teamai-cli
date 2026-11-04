@@ -166,13 +166,27 @@ export const LOGIN_TOOLS = ['codex'] as const satisfies readonly LaunchTool[];
 
 export type LoginTool = (typeof LOGIN_TOOLS)[number];
 
+/** An environment variable's name, as a credential's name and the variable it is read from are written. */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** How a credential's value is given: `env:<VARIABLE>`, read from the member's environment at start. */
+const FROM_ENV = z.templateLiteral(['env:', z.string().regex(ENV_NAME)]);
+
+const CREDENTIALS_TAKE = `credentials take ${LOGIN_TOOLS.map((known) => `${known}: login`).join(', ')}, the login teamai keeps for that tool, or NAME: env:VARIABLE, a value read from your environment`;
+
+/** One credential entry: a login teamai keeps for a tool, or a value the member's environment gives under a name. */
+const CredentialSchema = z.union([
+  z.tuple([z.enum(LOGIN_TOOLS), z.literal('login')]).transform(([tool]) => ({ kind: 'login' as const, tool })),
+  z.tuple([z.string().regex(ENV_NAME), FROM_ENV]).transform(([name, from]) => ({ kind: 'env' as const, name, variable: from.slice('env:'.length) })),
+]);
+
 /**
  * What teamai itself reads of a runtime entry's options; every other key goes to the runtime at `init`, which
- * validates it. `max_parallel` caps the runtime's own open attempts; `credentials` names the file logins it brings.
+ * validates it. `max_parallel` caps the runtime's own open attempts; `credentials` names the logins and the values it brings.
  */
 const EngineOptionsSchema = z.object({
   max_parallel: z.number().int().min(1, 'max_parallel is a whole number of attempts, 1 or more').optional(),
-  credentials: z.partialRecord(z.enum(LOGIN_TOOLS), z.literal('login')).optional(),
+  credentials: z.record(z.string(), z.string()).optional(),
 });
 
 export interface EngineOptions {
@@ -180,31 +194,79 @@ export interface EngineOptions {
   logins: LoginTool[];
 }
 
-/** Splits `options` into what teamai reads and what the runtime gets, or names the first key teamai refuses. */
-export function engineOptions(options: RuntimeOptions): { ok: true; engine: EngineOptions; runtime: RuntimeOptions } | { ok: false; key: string; message: string } {
+/** A runtime's credential values, labelled for masking: each is masked as a team secret is, whatever its name looks like. */
+export function credentialSecrets(use: string, values: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(values).map(([name, value]) => [`${name} (credential of ${use})`, value]));
+}
+
+/** A credential a runtime entry declares from the member's environment: the name its processes get, and the variable it is read from. */
+export interface EnvCredential {
+  name: string;
+  variable: string;
+}
+
+/**
+ * Splits `options` into what teamai reads and what the runtime gets, or names the first key teamai refuses. Engine
+ * keys never reach the runtime: they are stripped before `init`.
+ */
+export function engineOptions(options: RuntimeOptions): { ok: true; engine: EngineOptions; credentials: EnvCredential[]; runtime: RuntimeOptions } | { ok: false; key: string; message: string } {
   const parsed = EngineOptionsSchema.safeParse(options);
 
   if (!parsed.success) {
     const [issue] = parsed.error.issues;
     const key = issue?.path.join('.') || 'credentials';
-    const message = key.startsWith('credentials') ? `credentials take ${LOGIN_TOOLS.map((known) => `${known}: login`).join(', ')}, the login teamai keeps for that tool` : issue?.message ?? 'not valid';
 
-    return { ok: false, key, message };
+    return { ok: false, key, message: key.startsWith('credentials') ? CREDENTIALS_TAKE : issue?.message ?? 'not valid' };
   }
 
   const { max_parallel: maxParallel, credentials, ...runtime } = { ...options, ...parsed.data };
-  const engine: EngineOptions = { logins: LOGIN_TOOLS.filter((tool) => credentials?.[tool] === 'login') };
+  const entries: Array<z.output<typeof CredentialSchema>> = [];
+
+  for (const entry of Object.entries(credentials ?? {})) {
+    const credential = CredentialSchema.safeParse(entry);
+
+    if (!credential.success) return { ok: false, key: `credentials.${entry[0]}`, message: CREDENTIALS_TAKE };
+    entries.push(credential.data);
+  }
+
+  const engine: EngineOptions = { logins: entries.flatMap((entry) => (entry.kind === 'login' ? [entry.tool] : [])) };
 
   if (maxParallel !== undefined) engine.maxParallel = maxParallel;
 
-  return { ok: true, engine, runtime };
+  return { ok: true, engine, credentials: entries.flatMap((entry) => (entry.kind === 'env' ? [{ name: entry.name, variable: entry.variable }] : [])), runtime };
+}
+
+/**
+ * The values of `credentials`, read from `env` once, at start, and held in memory only: never written to a record, a
+ * log or runtime.json. Fails naming the first variable that is unset.
+ */
+function credentialValues(driver: ResolvedDriver, use: string, credentials: EnvCredential[], env: NodeJS.ProcessEnv): { ok: true; values: Record<string, string> } | { ok: false; failure: WorkflowFailure } {
+  const values: Record<string, string> = {};
+
+  for (const { name, variable } of credentials) {
+    const value = env[variable];
+
+    if (value === undefined || value === '') {
+      return {
+        ok: false,
+        failure: { code: 'credential_missing', message: `Runtime "${use}" of driver definition ${driver.file} declares credential ${name}: env:${variable}, and ${variable} is not set in your environment. Set ${variable}, then start again.` },
+      };
+    }
+
+    values[name] = value;
+  }
+
+  return { ok: true, values };
 }
 
 /** One runtime of an opened definition: `local` in teamai's process, or an external one that took its options. */
 export type OpenedRuntime =
   | { kind: 'local'; use: 'local'; engine: EngineOptions }
-  /** `launchesAgents`: prompt steps reach it as `prompt`, and it gives each tool its own home. */
-  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions };
+  /**
+   * `launchesAgents`: prompt steps reach it as `prompt`, and it gives each tool its own home. `credentials`: the values
+   * of the credentials it declares from the member's environment, by name, in memory only.
+   */
+  | { kind: 'external'; use: string; runtime: StepRuntime; can: DriverCan; launchesAgents: boolean; engine: EngineOptions; credentials: Record<string, string> };
 
 /** A driver definition ready to drive: each of its runtimes, in definition order. The caller disposes them once the drive ends. */
 export interface OpenedDriver {
@@ -229,8 +291,14 @@ function badOption(driver: ResolvedDriver, use: string, key: string, message: st
   return { code: 'bad_option', message: `Runtime "${use}" of driver definition ${driver.file} refused option "${key}": ${message}. Fix the option and start again.` };
 }
 
+/**
+ * Why a definition is opened: `run` runs steps, so the values of its `env:` credentials are read and fail it when unset;
+ * `stop` only stops and closes attempts, which bring no credential, so a cancel works in a shell without them.
+ */
+export type DriverPurpose = 'run' | 'stop';
+
 /** Opens one runtime of `driver`: finds it, refuses a team runtime no one accepted here, starts it and passes its options. */
-async function openRuntime(driver: ResolvedDriver, use: string, options: RuntimeOptions, { mode, canAsk }: { mode: RunMode; canAsk: boolean }): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
+async function openRuntime(driver: ResolvedDriver, use: string, options: RuntimeOptions, { mode, canAsk, purpose }: { mode: RunMode; canAsk: boolean; purpose: DriverPurpose }): Promise<{ ok: true; opened: OpenedRuntime } | { ok: false; failure: WorkflowFailure }> {
   const split = engineOptions(options);
 
   if (!split.ok) return { ok: false, failure: badOption(driver, use, split.key, split.message) };
@@ -246,9 +314,14 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
 
     if (split.engine.logins.length > 0) return { ok: false, failure: badOption(driver, use, 'credentials', 'local runs each tool in the member\'s own home, so it brings no login') };
 
+    if (split.credentials.length > 0) return { ok: false, failure: badOption(driver, use, 'credentials', 'local runs each step in the member\'s own environment, so it brings no credential') };
+
     return { ok: true, opened: { kind: 'local', use: 'local', engine: split.engine } };
   }
 
+  const values = purpose === 'run' ? credentialValues(driver, use, split.credentials, process.env) : { ok: true as const, values: {} };
+
+  if (!values.ok) return values;
   const accepted = await acceptRuntime(source, { mode, canAsk });
 
   if (!accepted.ok) return accepted;
@@ -265,6 +338,13 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     return { ok: false, failure: badOption(driver, use, 'credentials', `${use} launches agents its own way, in each tool's own home, so it brings no login`) };
   }
 
+  // A credential is a value of the environment: only a runtime that controls its processes' environment keeps it to them.
+  if (ready.ok && split.credentials.length > 0 && ready.can.env !== true) {
+    await runtime.dispose();
+
+    return { ok: false, failure: badOption(driver, use, 'credentials', `${use} does not offer can.env, so it cannot keep a credential to the processes it is for`) };
+  }
+
   if (ready.ok && !ready.launchesAgents && ready.can.exec === false) {
     await runtime.dispose();
 
@@ -274,7 +354,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     };
   }
 
-  if (ready.ok) return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine: split.engine } };
+  if (ready.ok) return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine: split.engine, credentials: values.values } };
   await runtime.dispose();
   const { failure } = ready;
 
@@ -290,7 +370,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
  * Opens the definition `--driver <name>` names in `config`: resolves it (`personal: false` skips the member's own),
  * then opens each of its runtimes in order, so a bad option of any fails before a step runs.
  */
-export async function openDriver(config: LocalConfig, name: string, { personal, mode, canAsk }: { personal: boolean; mode: RunMode; canAsk: boolean }): Promise<{ ok: true; opened: OpenedDriver } | { ok: false; failure: WorkflowFailure }> {
+export async function openDriver(config: LocalConfig, name: string, { personal, mode, canAsk, purpose }: { personal: boolean; mode: RunMode; canAsk: boolean; purpose: DriverPurpose }): Promise<{ ok: true; opened: OpenedDriver } | { ok: false; failure: WorkflowFailure }> {
   const resolved = await resolveDriver(config, name, { personal });
 
   if (!resolved.ok) return resolved;
@@ -298,7 +378,7 @@ export async function openDriver(config: LocalConfig, name: string, { personal, 
   const opened: OpenedRuntime[] = [];
 
   for (const entry of driver.definition.runtimes) {
-    const one = await openRuntime(driver, entry.use, entryOptions(driver, entry.use, entry.options), { mode, canAsk });
+    const one = await openRuntime(driver, entry.use, entryOptions(driver, entry.use, entry.options), { mode, canAsk, purpose });
 
     if (!one.ok) {
       await Promise.all(opened.map((done) => (done.kind === 'external' ? done.runtime.dispose() : undefined)));

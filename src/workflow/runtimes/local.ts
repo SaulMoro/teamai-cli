@@ -52,7 +52,7 @@ export function localStepRuntime(can: DriverCan = {}): StepRuntime {
       return live.end;
     }
 
-    const env: NodeJS.ProcessEnv = { ...process.env, ...request.env };
+    const env: NodeJS.ProcessEnv = { ...process.env, ...request.env, ...request.credentials };
 
     for (const name of request.unset) delete env[name];
     const [command = '', ...args] = request.argv;

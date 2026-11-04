@@ -83,8 +83,11 @@ function stopGroup(pgid) {
   setTimeout(() => { try { process.kill(-pgid, 'SIGKILL'); } catch { /* gone */ } }, 2000).unref();
 }
 
+// It appends the names, never the values, of the credentials each open, exec and prompt brings to `credentials.jsonl`
+// in its state, and sets an exec's over its process environment.
 // `exit_at: 'exec-accepted'` makes the toy itself exit right after it accepted an exec, which keeps running. With
-// `close_fails`, it answers every `close` with `close_failed`.
+// `close_fails`, it answers every `close` with `close_failed`; set to a credential's name, its failure echoes the value
+// the place's open brought, so a test reads what teamai keeps of it.
 // `display` is sent as given, valid or not, so a test reads what teamai keeps of it.
 function shown() {
   return options.display === undefined ? {} : { display: options.display };
@@ -118,6 +121,14 @@ function init(request) {
   send({ type: 'init', ok: true, prompt: true, can: { ...DEFAULT_CAN, exec: false, setup: false, tokens: false, end_turn: false, ...options.can } });
 }
 
+/** Notes which credentials a request brought, by name only: a value is never written. */
+function noteCredentials(request, handle) {
+  fs.appendFileSync(file('credentials.jsonl'), `${JSON.stringify({ type: request.type, op: request.op, handle, names: Object.keys(request.credentials ?? {}).sort() })}\n`);
+}
+
+/** The credentials each place's open brought, by handle, in memory only. */
+const openCredentials = new Map();
+
 function open(request) {
   const handles = readJson(file('handles.json'), {});
   const key = `${request.run}/${request.attempt}`;
@@ -125,6 +136,8 @@ function open(request) {
   handles[key] = handle;
   writeJson(file('handles.json'), handles);
   writeJson(opPath(request.op), { kind: 'open', handle });
+  noteCredentials(request, handle);
+  openCredentials.set(handle, request.credentials ?? {});
 
   if (dieAt('open-accepted')) return;
   send({ op: request.op, event: 'accepted', handle });
@@ -159,7 +172,8 @@ function exec(request) {
     return;
   }
 
-  const env = { ...process.env, ...request.env };
+  noteCredentials(request, request.handle);
+  const env = { ...process.env, ...request.env, ...request.credentials };
 
   for (const name of request.unset ?? []) delete env[name];
   const [command, ...args] = request.argv;
@@ -193,6 +207,9 @@ function exec(request) {
 /** The prompts this toy waits on, by operation: the timer that finishes each. */
 const working = new Map();
 
+/** The credentials each prompt brought, by operation, in memory only. */
+const promptCredentials = new Map();
+
 /** What the agent of a prompt record ended with, once it worked `hold_ms` since the prompt was first sent. */
 function agentOutcome(record) {
   if (record.outcome) return record.outcome;
@@ -204,7 +221,9 @@ function agentOutcome(record) {
   if (options.agent.release !== undefined && !fs.existsSync(options.agent.release)) return undefined;
 
   if (options.agent.fail) return { state: 'failed', failure: options.agent.fail };
-  const result = options.agent.result ?? { output: options.agent.output ?? {} };
+  // `echo` names a credential whose value the agent writes into its output, as an agent that prints its token would.
+  const echoed = options.agent.echo === undefined ? undefined : { echoed: promptCredentials.get(record.op)?.[options.agent.echo] ?? null };
+  const result = options.agent.result ?? { output: echoed ?? options.agent.output ?? {} };
   fs.mkdirSync(path.dirname(record.lease.result), { recursive: true });
   fs.writeFileSync(record.lease.result, JSON.stringify(result));
   const usage = options.agent.usage === undefined ? {} : { usage: options.agent.usage };
@@ -249,6 +268,8 @@ function prompt(request) {
   }
 
   send({ op: request.op, event: 'accepted' });
+  noteCredentials(request, request.handle);
+  promptCredentials.set(request.op, request.credentials);
 
   if (working.has(request.op)) return;
 
@@ -334,7 +355,8 @@ function reattach(request) {
 
 function close(request) {
   if (options.close_fails) {
-    send({ event: 'close_failed', handle: request.handle, failure: { code: 'close_failed', message: `The toy keeps place ${request.handle}: close_fails is set.` } });
+    const echoed = typeof options.close_fails === 'string' ? ` It holds ${openCredentials.get(request.handle)?.[options.close_fails] ?? 'nothing'}.` : '';
+    send({ event: 'close_failed', handle: request.handle, failure: { code: 'close_failed', message: `The toy keeps place ${request.handle}: close_fails is set.${echoed}` } });
 
     return;
   }

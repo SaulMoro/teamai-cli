@@ -61,7 +61,7 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
     const controller = new AbortController();
     const { run, cancels } = promptOnlyRun({ duringOpen: () => controller.abort() });
 
-    const ran = await runtimePrompter(run, { view, step: 'review', unset: [] }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), secrets: {} }, controller.signal);
+    const ran = await runtimePrompter(run, { view, step: 'review', unset: [], credentials: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), secrets: {} }, controller.signal);
 
     expect(ran).toMatchObject({ exitCode: 143, failure: { code: 'tool_failed' } });
     expect(cancels()).toBe(1);
@@ -70,7 +70,7 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
   it('stops at its timeout when the timeout passes before the prompt is sent', async () => {
     const { run, cancels } = promptOnlyRun({ beforeSend: () => new Promise((resolve) => setTimeout(resolve, 50)) });
 
-    const ran = await runtimePrompter(run, { view, step: 'review', unset: [] }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), timeoutMs: 1, secrets: {} }, undefined);
+    const ran = await runtimePrompter(run, { view, step: 'review', unset: [], credentials: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), timeoutMs: 1, secrets: {} }, undefined);
 
     expect(ran).toMatchObject({ exitCode: 143, stoppedBy: 'timeout' });
     expect(cancels()).toBe(1);

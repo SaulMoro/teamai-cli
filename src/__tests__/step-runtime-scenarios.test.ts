@@ -77,7 +77,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     view: { worktree, readonly: [], result: path.join(dir, 'out'), toolHome: {} },
   });
 
-  const execRequest = (handle: string, argv: string[], op = newOpId()): ExecRequest => ({ op, handle, argv, env: { STEP_VALUE: 'from-teamai' }, unset: [], cwd: worktree });
+  const execRequest = (handle: string, argv: string[], op = newOpId()): ExecRequest => ({ op, handle, argv, env: { STEP_VALUE: 'from-teamai' }, unset: [], credentials: {}, cwd: worktree });
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-step-runtime-'));
@@ -128,6 +128,16 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     expect(accepted).toBe(true);
     expect(end).toEqual({ kind: 'exited', code: 3, stdout: 'from-teamai\n' });
     expect(output.join('')).toBe('from-teamai\n');
+  });
+
+  it('sets the credentials an exec brings over its process\'s environment', async () => {
+    const runtime = await start();
+    const opened = await runtime.open(openRequest(), async () => {});
+    if (opened.kind !== 'ready') throw new Error('not opened');
+
+    const end = await runtime.exec({ ...execRequest(opened.handle, [process.execPath, '-e', 'process.stdout.write(String(process.env.SCENARIO_TOKEN))']), credentials: { SCENARIO_TOKEN: 'scenario-value' } }, {});
+
+    expect(end).toEqual({ kind: 'exited', code: 0, stdout: 'scenario-value' });
   });
 
   it('keeps names the exec unsets out of its process', async () => {
@@ -281,7 +291,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
   };
 
   const promptRequest = (handle: string, op = newOpId()): PromptRequest => ({
-    op, handle, env: { STEP_VALUE: 'from-teamai' }, unset: [], cwd: worktree,
+    op, handle, env: { STEP_VALUE: 'from-teamai' }, unset: [], credentials: {}, cwd: worktree,
     lease: {
       step: 'review', tool: 'claude', model: { name: 'claude-opus-5-5' }, permissions: 'approval-required', interactive: false,
       prompt: `Review the change.\n\nWrite the workflow result as JSON to ${path.join(dir, 'out', 'result.json')}.`, result: path.join(dir, 'out', 'result.json'),
@@ -345,7 +355,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
 
   it('runs no command: an exec fails, naming the runtime\'s offer', async () => {
     const runtime = await start();
-    const end = await runtime.exec({ op: newOpId(), handle: await opened(runtime), argv: ['/bin/sh', '-c', 'touch ran'], env: {}, unset: [], cwd: worktree }, {});
+    const end = await runtime.exec({ op: newOpId(), handle: await opened(runtime), argv: ['/bin/sh', '-c', 'touch ran'], env: {}, unset: [], credentials: {}, cwd: worktree }, {});
 
     expect(end).toMatchObject({ kind: 'failed', failure: { code: 'exec_unsupported' } });
     expect(fs.existsSync(path.join(worktree, 'ran'))).toBe(false);
@@ -480,7 +490,7 @@ describe('a runtime that cannot close a place, over stdio', () => {
 
   it('fails a close once the runtime has stopped, instead of answering it closed', async () => {
     const { runtime, handle } = await opened({ exit_at: 'exec-accepted' });
-    expect(await runtime.exec({ op: newOpId(), handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 200)'], env: {}, unset: [], cwd: path.join(dir, 'worktree') }, {}))
+    expect(await runtime.exec({ op: newOpId(), handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 200)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {}))
       .toMatchObject({ kind: 'lost', failure: { code: 'runtime_exited' } });
 
     expect(await runtime.close(handle)).toMatchObject({ ok: false, failure: { code: 'runtime_exited' } });
