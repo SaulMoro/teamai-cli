@@ -34,7 +34,7 @@ import { abandonPlace, cloneDelivery, cloneHead, placeLeaseOf, placeOf, placeRoo
 import { commandEnd, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
 import { memberTools, type MemberTool } from '../../../tool-launch/call.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../../tool-launch/process-stop.js';
-import { executableOf, isLaunchTool, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, type LaunchTool } from '../../../tool-launch/tools.js';
+import { executableOf, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, launchTargetOf, type LaunchTarget, type LaunchTool } from '../../../tool-launch/tools.js';
 import { confinedOffers, type ConfinedOffer } from '../../../tool-launch/confined.js';
 import { AttemptResult } from '../../attempt-result.js';
 import { runConfinedStep } from '../../confined-step.js';
@@ -191,10 +191,6 @@ async function maskAttemptFiles(config: LocalConfig, run: RunId, secrets: Record
   await Promise.all(attempts.map((attempt) => AttemptResult.mask(attemptResultPath(config, run, attempt), secrets)));
 }
 
-function supportedTool(value: string): value is LaunchTool {
-  return isLaunchTool(value);
-}
-
 /**
  * The tool a prompt step runs on: the step's own `tool`, then `--tools`, then `workflows.tools`, the agent's entry before
  * the default, with the member's own AI tool between them: TEAMAI_AI_TOOL before `workflows.tools.default`, and
@@ -220,7 +216,7 @@ function stepTool({ agent, tool }: Pick<WorkflowStep, 'agent' | 'tool'>, config:
   for (const { source, named, member: isMember } of rungs) {
     if (!named) continue;
 
-    if (isMember && !isLaunchTool(named)) {
+    if (isMember && !launchTargetOf(named)) {
       if (!LAUNCH_ORDER.some((launched) => launched === named)) {
         return { ok: false, failure: { code: 'tool_unsupported', message: `${source} is "${named}", which is not a tool teamai launches. Set it to one of: ${LAUNCH_TOOLS.join(', ')}.` } };
       }
@@ -236,7 +232,7 @@ function stepTool({ agent, tool }: Pick<WorkflowStep, 'agent' | 'tool'>, config:
 }
 
 /** The tool a prompt step launches here, with the warnings its pick logs, or why it launches none. */
-type LaunchChoice = { ok: true; tool: LaunchTool; warnings: string[] } | { ok: false; failure: WorkflowFailure; tool?: string; warnings: string[] };
+type LaunchChoice = { ok: true; tool: LaunchTool; target: LaunchTarget; warnings: string[] } | { ok: false; failure: WorkflowFailure; tool?: string; warnings: string[] };
 
 /**
  * The tool teamai launches for prompt step `step` here, as {@link stepTool} picks it with `--tools` `flags`, or why
@@ -251,9 +247,11 @@ export function launchToolFor(step: Pick<WorkflowStep, 'agent' | 'tool'>, config
 
   if (!selected) return { ok: false, failure: { code: 'tool_unconfigured', message: 'No local workflow tool is configured for this prompt step' }, warnings };
 
-  if (!supportedTool(selected)) return { ok: false, failure: { code: 'tool_unsupported', message: `The local workflow tool "${selected}" is not supported` }, tool: selected, warnings };
+  const target = launchTargetOf(selected);
 
-  return { ok: true, tool: selected, warnings };
+  if (!target) return { ok: false, failure: { code: 'tool_unsupported', message: `The local workflow tool "${selected}" is not supported` }, tool: selected, warnings };
+
+  return { ok: true, tool: target.tool, target, warnings };
 }
 
 function ignoredCodexSettings(agent: AgentSpec): string[] {
@@ -339,21 +337,23 @@ async function stageLease(lease: Lease, { config, lock, root, env, mode, signal,
  * continued, newest first. Each is tried on this machine, then as a copy in this tool, then as a copy of the one the team
  * session archive holds. OpenCode has no flag to resume one, so its step starts a new session.
  */
-async function resumeSession(archive: SessionArchive, lease: Lease, tool: LaunchTool, cwd: string): Promise<{ id: string; resumed: SessionRef } | undefined> {
-  const to = AgentSession.platformForTool(tool);
+async function resumeSession(archive: SessionArchive, lease: Lease, target: LaunchTarget, cwd: string): Promise<{ id: string; resumed: SessionRef } | undefined> {
+  const to = AgentSession.platformForTool(target.name);
 
   if (!lease.session || !to) return undefined;
-  const resumes = launchAdapterIdOf(tool) !== 'opencode';
+  const resumes = launchAdapterIdOf(target.tool) !== 'opencode';
   const misses: string[] = [];
 
   for (const session of [lease.session, ...(lease.session.earlier ?? [])]) {
-    if (!supportedTool(session.tool)) continue;
+    const earlier = launchTargetOf(session.tool);
+
+    if (!earlier) continue;
     const from = AgentSession.platformForTool(session.tool);
 
     if (!from) continue;
     const resumed = { tool: session.tool, id: session.id };
 
-    if (launchAdapterIdOf(session.tool) === launchAdapterIdOf(tool) && resumes) {
+    if (launchAdapterIdOf(earlier.tool) === launchAdapterIdOf(target.tool) && resumes) {
       const found = await AgentSession.find({ platform: from, sessionId: session.id }, { scrub: false });
 
       if (found.status === 'done') return { id: session.id, resumed };
@@ -371,7 +371,7 @@ async function resumeSession(archive: SessionArchive, lease: Lease, tool: Launch
     misses.push(restored.reason);
   }
 
-  if (misses.length > 0) log.warn(`Step "${lease.step}" starts a new ${tool} session: ${misses.join(' ')}`);
+  if (misses.length > 0) log.warn(`Step "${lease.step}" starts a new ${target.name} session: ${misses.join(' ')}`);
 
   return undefined;
 }
@@ -388,7 +388,7 @@ async function commandReport(config: LocalConfig, lock: RunLock, driver: DriverI
  * checkout held as delivered at launch. A load before it, by a pass whose session this one resumes, is that pass's.
  * Undefined when the session cannot be read.
  */
-async function usedInSession(tool: LaunchTool, sessionId: string, cwd: string, teamSkills: Record<string, string[]>, launchedAt: number): Promise<Used | undefined> {
+async function usedInSession(tool: string, sessionId: string, cwd: string, teamSkills: Record<string, string[]>, launchedAt: number): Promise<Used | undefined> {
   const platform = AgentSession.platformForTool(tool);
 
   if (!platform) return undefined;
@@ -431,6 +431,9 @@ async function promptReport(
 
   if (!choice.ok) return giveUp(choice.failure, choice.tool);
   const selected = choice.tool;
+  // The name the step runs its tool by, an instance's own: its report, delivery and sessions are credited to it.
+  const { target } = choice;
+  const launched = target.name;
   // A worktree has its own pull record, so the tool launched there is observed and bound as that checkout. A clone has
   // its own install, never the member's config, and none when its place installs no team.
   const contract = lease.workspace;
@@ -443,13 +446,13 @@ async function promptReport(
 
     const refused = clone !== undefined
       ? prepared?.install
-        ? await cloneRoleProblem({ install: prepared.install, step, role, tools: [selected] })
+        ? await cloneRoleProblem({ install: prepared.install, step, role, tools: [launched] })
         : roleNotDeliveredFailure({ role, step, notDelivered: { copy: 'clone', gap: { kind: 'no_install' } } })
       : lease.cwd !== undefined
-        ? await worktreeRoleProblem({ dir: lease.cwd, step, role, tools: [selected] })
+        ? await worktreeRoleProblem({ dir: lease.cwd, step, role, tools: [launched] })
         : roleNotDeliveredFailure({ role, step, notDelivered: { copy: 'none' } });
 
-    if (refused !== undefined) return giveUp(refused, selected);
+    if (refused !== undefined) return giveUp(refused, launched);
   }
 
   const teamConfig = clone !== undefined
@@ -463,15 +466,15 @@ async function promptReport(
   if (lease.agent && !agent) {
     return giveUp({
       code: 'agent_unavailable',
-      message: `Agent "${lease.agent}" is not available for ${selected}. Run teamai pull and try again.`,
-    }, selected);
+      message: `Agent "${lease.agent}" is not available for ${launched}. Run teamai pull and try again.`,
+    }, launched);
   }
 
   const chosen = await chooseStepModel({
     step: lease.step, tool: selected, model: lease.model, defaultModel: lease.defaultModel, agent: agent ?? undefined, config: stepConfig,
   });
 
-  if (!chosen.ok) return giveUp(chosen.failure, selected);
+  if (!chosen.ok) return giveUp(chosen.failure, launched);
 
   if (agent && launchAdapterIdOf(selected) === 'codex') {
     const ignored = ignoredCodexSettings(agent);
@@ -483,7 +486,7 @@ async function promptReport(
 
   const cwd = lease.cwd ?? driver.workspace;
   const resultFile = attemptResultPath(config, lock.run, lease.attempt);
-  const resume = await resumeSession(archive, lease, selected, cwd);
+  const resume = await resumeSession(archive, lease, target, cwd);
 
   const launchModel = (model: StepModel): LaunchModel => {
     const named: LaunchModel = { model: model.name };
@@ -498,10 +501,10 @@ async function promptReport(
   const { teamDelivery } = await import('../../../pull.js');
 
   const delivery = prepared?.install
-    ? await cloneDelivery({ install: prepared.install, without: prepared.without }, selected)
-    : teamConfig ? await teamDelivery(teamConfig, selected).catch(() => undefined) : undefined;
+    ? await cloneDelivery({ install: prepared.install, without: prepared.without }, launched)
+    : teamConfig ? await teamDelivery(teamConfig, launched).catch(() => undefined) : undefined;
 
-  const observing: ToolLaunch = { config: stepConfig, tool: selected, cwd, delivery: delivery ?? null };
+  const observing: ToolLaunch = { config: stepConfig, tool: launched, cwd, delivery: delivery ?? null };
 
   // In a clone, git reads its head without the names the place withholds, which setup could have handed a hook.
   if (clone !== undefined) observing.head = await cloneHead(config, lock.run, clone, { withhold: lease.envScope?.withhold ?? [], expiresAt: lease.expiresAt });
@@ -512,7 +515,7 @@ async function promptReport(
 
   const [observed, launch, teamSkills] = await Promise.all([
     observeLaunch(observing),
-    teamConfig ? workflowLaunch(teamConfig, selected) : undefined,
+    teamConfig ? workflowLaunch(teamConfig, launched) : undefined,
     delivery?.record?.delivered ? deliveredTeamSkills(stepConfig, cwd, delivery.record.delivered, delivery.record.rev).then((found) => found.teamSkills, () => undefined) : undefined,
   ]);
 
@@ -526,7 +529,7 @@ async function promptReport(
   const budget = limits?.budget !== undefined && (family === 'claude' || family === 'opencode') ? limits.budget.tokens : undefined;
   const launchedAt = Date.now();
 
-  if (lease.interactive) log.info(`Step "${lease.step}" opens ${selected} here for interactive work.`);
+  if (lease.interactive) log.info(`Step "${lease.step}" opens ${launched} here for interactive work.`);
 
   const input: LocalToolRun = {
     prompt: lease.prompt!,
@@ -556,12 +559,14 @@ async function promptReport(
 
   if (lease.permissions === 'unattended') input.unattended = true;
 
+  if (target.instance?.command) input.command = target.instance.command;
+
   const { result, durationMs } = await timedLaunch({
     launch: lease.interactive ? adapter.runInteractive.bind(adapter) : adapter.run.bind(adapter),
     tool: selected,
     input,
     signal,
-    unfinished: `${selected} could not complete the workflow step`,
+    unfinished: `${launched} could not complete the workflow step`,
   });
 
   const end: StepEnd = { outcome: result.exitCode === 0 && !result.failure ? 'success' : 'failed' };
@@ -572,7 +577,7 @@ async function promptReport(
   }
 
   const ran = result.started ? result : undefined;
-  const used = ran?.session && teamSkills ? await usedInSession(selected, ran.session, cwd, teamSkills, launchedAt) : undefined;
+  const used = ran?.session && teamSkills ? await usedInSession(launched, ran.session, cwd, teamSkills, launchedAt) : undefined;
   // A tool held to no budget that stated it spent more still ended its turn there: the budget names it.
   const passedBudget = limits?.budget !== undefined && budget === undefined && budgeted(ran?.tokens) > limits.budget.tokens;
   const stoppedBy = ran?.stoppedBy ?? (passedBudget ? 'budget' : undefined);
@@ -583,7 +588,7 @@ async function promptReport(
     ...(limits?.budget !== undefined && budget === undefined ? ['budget' as const] : []),
   ];
 
-  const body: ReportBody = { attempt: lease.attempt, revision: lease.revision, driver, tool: selected, outcome: end.outcome };
+  const body: ReportBody = { attempt: lease.attempt, revision: lease.revision, driver, tool: launched, outcome: end.outcome };
 
   if (ran?.model) body.model = ran.model;
 
@@ -1087,7 +1092,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
           // A role copy is checked and delivered for the tool the step launches, so another tool the member enables does not refuse it.
           const launch = lease.role !== undefined ? launchToolFor({ agent: lease.agent, tool: lease.tool }, config, options.tools ?? {}, await memberTools(config)) : undefined;
-          const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, launches: launch?.ok ? launch.tool : undefined });
+          const failure = await stageLease(lease, { config, lock, root, env: turn, mode, signal: controller.signal, launches: launch?.ok ? launch.target.name : undefined });
 
           if (!startable(lease, controller.signal)) {
             await abandonPlace({ config, lock, attempt: lease.attempt });

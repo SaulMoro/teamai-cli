@@ -36,6 +36,7 @@ import { listRoleIds, loadRolesManifest, RolesManifestNotFoundError } from './ro
 import { loadRoleAssignmentsIfPresent, resolveAssignedRoles, ROLE_ASSIGNMENTS_FILE } from './role-assignments.js';
 import { warnOnce } from './utils/warn-once.js';
 import { AllowSchema } from './workflow/requirements.js';
+import { withToolInstances } from './tool-instances.js';
 
 /**
  * Loads that serve a --dry-run write nothing: the legacy role migration, the
@@ -294,7 +295,7 @@ export async function loadTeamConfig(repoPath: string): Promise<TeamaiConfig | n
   try {
     const raw = parseYaml(content);
 
-    return TeamaiConfigSchema.parse(raw);
+    return await withToolInstances(repoPath, TeamaiConfigSchema.parse(raw));
   } catch (e) {
     log.error(`Invalid teamai.yaml: ${describeConfigError(e)}`);
 

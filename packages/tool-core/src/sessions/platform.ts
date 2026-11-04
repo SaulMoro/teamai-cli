@@ -38,6 +38,11 @@ export interface SessionPlatformFacts<TTool extends string = string> {
 export type StoredPlatformDefinition<TTool extends string = string> = SessionPlatformFacts<TTool> & {
   readonly store: Exclude<SessionStore<TTool>, { readonly in: 'ide-history' }>;
   adapter(storeDir: string): AgentAdapter;
+  /**
+   * The adapter of an instance's own platform `platform`, in this platform's format, on the instance's store. Absent
+   * when this format's sessions cannot carry another platform id: an instance of the tool then keeps no sessions teamai reads.
+   */
+  adapterAs?(platform: string, storeDir: string): AgentAdapter;
 };
 
 /** A platform whose adapter finds its own store: the CodeBuddy IDE's history. */

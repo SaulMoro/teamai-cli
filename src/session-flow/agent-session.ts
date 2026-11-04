@@ -16,8 +16,8 @@ import { resolveMemberToolRoots } from '../config.js';
 import { getTeamaiHomeDir, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
 import { getAdapter, listAvailablePlatforms, listInstalledPlatforms } from './adapters/index.js';
-import { isSessionPlatform, sessionPlatformFacts } from './adapters/platform-facts.js';
-import { sessionPlatformOwner, sessionPlatformsOf } from '../tool-registry.js';
+import { isSessionPlatform, sessionPlatformFacts as shippedPlatformFacts } from './adapters/platform-facts.js';
+import { instancePlatform, sessionPlatformOwner, sessionPlatformsOf } from '../tool-registry.js';
 import { ToolUnavailableError, type AgentAdapter, type SessionMeta, type SubagentsRead } from '@teamai/tool-core/sessions/base';
 import { imagePlaceholderText, type ContentBlock, type Message, type Session } from '@teamai/tool-core/sessions/ir';
 import { deriveTargetSessionId, legacyTargetSessionIds } from '@teamai/tool-core/sessions/ids';
@@ -183,6 +183,13 @@ export function noAdapter(
 }
 
 type ToolRoots = LocalConfig['toolRoots'];
+
+/** The facts of `platform`: a shipped platform's, or for an instance's own, those of the platform whose format it keeps. */
+function sessionPlatformFacts(platform: string): ReturnType<typeof shippedPlatformFacts> {
+  const hosted = instancePlatform(platform);
+
+  return shippedPlatformFacts(platform) ?? (hosted ? shippedPlatformFacts(hosted.platform) : undefined);
+}
 
 /**
  * The member's recorded tool roots as seen from `cwd`: a relocated Claude Code or Codex keeps its

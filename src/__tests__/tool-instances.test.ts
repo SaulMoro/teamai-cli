@@ -1,0 +1,154 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+/**
+ * Tool instances as `loadTeamConfig` reads them: a team's in tools/ of its repo, a member's in ~/.teamai/tools/, and
+ * every lookup of a tool name seeing them. Each test loads the modules afresh, since the instances a process read
+ * are the ones it keeps.
+ */
+
+let root: string;
+let home: string;
+
+beforeEach(() => {
+  root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-instances-')));
+  home = path.join(root, 'home');
+  fs.mkdirSync(home);
+  vi.stubEnv('HOME', home);
+  vi.stubEnv('USERPROFILE', home);
+  vi.resetModules();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+function teamRepo(files: Record<string, string>): string {
+  const repo = path.join(root, 'repo');
+  fs.mkdirSync(repo, { recursive: true });
+  fs.writeFileSync(path.join(repo, 'teamai.yaml'), 'team: acme\nrepo: acme/team\n');
+
+  for (const [file, text] of Object.entries(files)) {
+    fs.mkdirSync(path.dirname(path.join(repo, file)), { recursive: true });
+    fs.writeFileSync(path.join(repo, file), text);
+  }
+
+  return repo;
+}
+
+function personal(name: string, text: string): void {
+  const dir = path.join(home, '.teamai', 'tools');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${name}.yaml`), text);
+}
+
+const ACME_CLAUDE = `schemaVersion: v1alpha1
+name: acme-claude
+extends: claude
+command: acme-claude
+home: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }
+`;
+
+async function load(repo: string) {
+  const { loadTeamConfig } = await import('../config.js');
+  const registry = await import('../tool-registry.js');
+  const { log } = await import('@teamai/tool-core/log');
+  const errors = vi.spyOn(log, 'error').mockImplementation(() => undefined);
+  const config = await loadTeamConfig(repo);
+
+  return { config, registry, errors: errors.mock.calls.map(([message]) => String(message)) };
+}
+
+describe('team tool instances', () => {
+  it('reads a team instance as a tool of its own over the tool it extends, with that tool\'s paths moved to its home', async () => {
+    const { config, registry } = await load(teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE }));
+
+    expect(registry.toolOf('acme-claude')).toMatchObject({ name: 'acme-claude', base: 'claude', instance: { command: 'acme-claude', source: 'team' } });
+    expect(registry.channelsOf('acme-claude')).toEqual(registry.channelsOf('claude'));
+    expect(registry.sessionPlatformsOf('acme-claude')).toEqual(['acme-claude']);
+    expect(config?.toolPaths['acme-claude']).toEqual({
+      skills: '.acme-claude/skills', rules: '.acme-claude/rules', settings: '.acme-claude/settings.json', claudemd: '.acme-claude/CLAUDE.md',
+      agents: '.acme-claude/agents', mcp: '.acme-claude/.claude.json', mcpProject: '.mcp.json',
+    });
+    expect(config?.toolPaths.claude?.skills).toBe('.claude/skills');
+  });
+
+  it('gives an instance the paths it sets, whole', async () => {
+    const { config } = await load(teamRepo({ 'tools/acme-claude.yaml': `${ACME_CLAUDE}paths: { skills: .acme/skills }\n` }));
+
+    expect(config?.toolPaths['acme-claude']).toEqual({ skills: '.acme/skills' });
+  });
+
+  it('lets a team instance named like a shipped tool replace that tool\'s paths, as a toolPaths entry does', async () => {
+    const { config, registry } = await load(teamRepo({ 'tools/claude.yaml': 'schemaVersion: v1alpha1\nname: claude\nextends: claude\npaths: { skills: .claude/team-skills }\n' }));
+
+    expect(config?.toolPaths.claude).toEqual({ skills: '.claude/team-skills' });
+    expect(registry.sessionPlatformsOf('claude')).toEqual(['claude-code']);
+  });
+
+  it.each([
+    ['a format key', 'sessions: pi\n', /sets sessions, and an instance sets only command, home and paths/],
+    ['another key', 'launch: { args: [-p] }\n', /sets launch, and an instance sets only command, home and paths/],
+    ['an unknown tool', '', /extends: nope is not a tool teamai ships/],
+  ])('refuses an instance that sets %s, naming it, and uses none of it', async (_, extra, message) => {
+    const text = _ === 'an unknown tool' ? ACME_CLAUDE.replace('extends: claude', 'extends: nope') : `${ACME_CLAUDE}${extra}`;
+    const { config, registry, errors } = await load(teamRepo({ 'tools/acme-claude.yaml': text }));
+
+    expect(errors).toEqual([expect.stringMatching(message)]);
+    expect(errors[0]).toContain(path.join('tools', 'acme-claude.yaml'));
+    expect(registry.toolOf('acme-claude')).toBeUndefined();
+    expect(config?.toolPaths['acme-claude']).toBeUndefined();
+  });
+
+  it('refuses an instance not named after its file, or named like another shipped tool', async () => {
+    const { errors, registry } = await load(teamRepo({
+      'tools/acme.yaml': ACME_CLAUDE,
+      'tools/codex.yaml': 'schemaVersion: v1alpha1\nname: codex\nextends: claude\n',
+    }));
+
+    expect(errors).toEqual([
+      expect.stringContaining('its name is "acme-claude", and an instance is named after its file, "acme"'),
+      expect.stringContaining('"codex" is a tool teamai ships, and an instance named like one adjusts it, so it extends codex'),
+    ]);
+    expect(registry.toolOf('codex')).toEqual({ name: 'codex', base: 'codex' });
+  });
+
+  it('uses neither of two namespaces that define one name, and names both files', async () => {
+    const { errors, registry } = await load(teamRepo({ 'tools/web/acme-claude.yaml': ACME_CLAUDE, 'tools/mobile/acme-claude.yaml': ACME_CLAUDE }));
+
+    expect(errors).toEqual([expect.stringMatching(/"acme-claude" is defined twice in the team repo \(tools\/mobile\/acme-claude\.yaml and tools\/web\/acme-claude\.yaml\)/)]);
+    expect(registry.toolOf('acme-claude')).toBeUndefined();
+  });
+
+  it('lets a namespace instance replace the root one of the same name', async () => {
+    const { registry } = await load(teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE, 'tools/web/acme-claude.yaml': ACME_CLAUDE.replace('command: acme-claude', 'command: acme-claude-web') }));
+
+    expect(registry.toolOf('acme-claude')?.instance?.command).toBe('acme-claude-web');
+  });
+});
+
+describe('personal tool instances', () => {
+  it('lets a member\'s own instance replace the team\'s of the same name', async () => {
+    personal('acme-claude', ACME_CLAUDE.replace('command: acme-claude', 'command: my-acme-build'));
+    const { registry, config } = await load(teamRepo({ 'tools/acme-claude.yaml': `${ACME_CLAUDE}paths: { skills: .acme/skills }\n` }));
+
+    expect(registry.toolOf('acme-claude')?.instance).toMatchObject({ command: 'my-acme-build', source: 'personal' });
+    expect(config?.toolPaths['acme-claude']?.skills).toBe('.acme-claude/skills');
+  });
+
+  it('leaves the member\'s own instances out once the process ignores them, and the team\'s take their place', async () => {
+    personal('acme-claude', ACME_CLAUDE.replace('command: acme-claude', 'command: my-acme-build'));
+    personal('mine', 'schemaVersion: v1alpha1\nname: mine\nextends: codex\n');
+    const repo = teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE });
+    const { ignorePersonalToolInstances } = await import('../tool-instances.js');
+    ignorePersonalToolInstances();
+    const { registry, config } = await load(repo);
+
+    expect(registry.toolOf('acme-claude')?.instance).toMatchObject({ command: 'acme-claude', source: 'team' });
+    expect(registry.toolOf('mine')).toBeUndefined();
+    expect(config?.toolPaths.mine).toBeUndefined();
+  });
+});
