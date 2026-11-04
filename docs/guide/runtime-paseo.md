@@ -74,6 +74,12 @@ Mode      default
 Cwd       /repo/.teamai/workflow-worktrees/teamai-r0769801107010602-classify-p1-4e57d9b3cff1
 ```
 
+While the agent works, the run's details in the dashboard show it, with a link that opens it in Paseo:
+
+```json
+{ "label": "teamai classify · r7f54a1690b9ae0ce", "url": "paseo://h/srv_vL5abcnfKUWY/agent/5f95baae-9117-42b7-9e3d-47891dd3e84d", "fields": { "agent": "5f95baae-9117-42b7-9e3d-47891dd3e84d", "workspace": "wks_f55e98406bad64bd", "model": "claude/claude-sonnet-5-5" } }
+```
+
 The step's record has its output and Claude's session id:
 
 ```json
@@ -113,21 +119,31 @@ The step's `model` must be one the daemon offers, and its `effort` one that mode
 
 The agent gets the step's prompt and no environment from the run. Paseo reports no full token counts, so a step under a token budget runs on the next runtime.
 
+## Credentials
+
+Paseo keeps an agent's environment in plain text under its home, so this runtime takes no `credentials`, and teamai refuses a definition that gives it one:
+
+```text
+{"error":{"code":"bad_option","message":"Runtime \"paseo\" of driver definition ~/.teamai/drivers/paseo.yaml refused option \"credentials\": paseo does not offer can.env, so it cannot keep a credential to the processes it is for. Fix the option and start again."}}
+```
+
+Remove the entry, and give the tool what it needs on the daemon's host instead: sign in to it there, or set the variable in the environment the daemon starts with, then `paseo restart`. An agent gets the daemon's environment.
+
 ## Permissions
 
-Claude's `default` mode asks before it writes teamai's result file, which sits outside the worktree, so each Claude step asks at least once.
+A Claude agent may write teamai's result file, and only that file, without asking: the runtime allows `Edit(/<result file>)` for it, and the mode stays `default`. Codex and OpenCode get no such grant.
 
-In an attended run, a permission prompt waits for you in the Paseo app, or on the command line:
+In an attended run, any other permission prompt waits for you in the Paseo app, or on the command line:
 
 ```sh
 paseo permit ls
 paseo permit allow 7c483fce --all
 ```
 
-In an unattended run (`TEAMAI_MODE=unattended` or `CI`), nobody can answer, so the step fails and the agent stops:
+In an unattended run (`TEAMAI_MODE=unattended` or `CI`), nobody can answer, so the step fails and the agent stops. Here a prompt step `count` asked its agent to run `ls -1 | wc -l`:
 
 ```text
-✖ Step "classify" failed with tool_failed: The claude agent asked for permission (Write) in Paseo mode default, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.
+✖ Step "count" failed with tool_failed: The claude agent asked for permission (Bash) in Paseo mode default, which asks before it runs what it does not allow, and an unattended run has nobody to answer. Run the workflow attended to answer it in the Paseo app, or run this step on a runtime that offers unattended.
 ```
 
 ## Cancel, crash and restart
@@ -156,7 +172,13 @@ teamai workflow retry r3ad62eacc3c191eb classify
 teamai workflow resume r3ad62eacc3c191eb --driver paseo
 ```
 
-Archiving the Paseo workspace (`paseo workspace archive <id>`) leaves teamai's worktree and branch in place.
+When teamai closes the attempt, the runtime archives its Paseo workspace, which stops anything still running there. Paseo deletes only worktrees it created, so teamai's worktree and branch stay. If Paseo refuses, the run's details say the place was not closed, and why:
+
+```text
+Paseo did not archive workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476e (wks_6fb33a5b94531f79): <Paseo's error>. Its agents may still run; archive it in the Paseo app.
+```
+
+A runtime killed mid-step cannot archive; the step fails `runtime_lost`, and its workspace stays in Paseo until you archive it (`paseo workspace archive <id>`).
 
 ## Errors at start
 
