@@ -1,6 +1,6 @@
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
-import { redact } from '@teamai/shared/redact';
+import { redact, redactJson } from '@teamai/shared/redact';
 import { PromptResultSchema, RuntimeRequestSchema, type Can, type ExecRequestSchema, type InitCredentials, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type RuntimeFailure, type RuntimeMessage, type RuntimeOptions, type RuntimeRequest } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import type { ExecRecord, Journal, Outcome, PlaceRecord } from './journal.js';
@@ -120,6 +120,24 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
   const release = (op: OpId): void => {
     running.get(op)?.end();
     running.delete(op);
+  };
+
+  /**
+   * Ends `op`, which this process claimed: keeps `kept` (its outcome as the journal holds it), then writes `outcome`.
+   * Only an op's first end counts, so an exec that ends after its cancel already failed it writes nothing more, and an
+   * op ends even when keeping it throws. An op another process failed, or one `close` forgot, is not kept again.
+   */
+  const finish = (op: OpId, handle: string, outcome: Outcome, kept: Outcome = outcome): void => {
+    if (!running.has(op)) return;
+
+    try {
+      const record = journal.exec(op);
+
+      if (record !== undefined && record.outcome === undefined) journal.saveExec(op, { handle, runner: process.pid, outcome: kept });
+    } finally {
+      release(op);
+      write(terminal(op, outcome));
+    }
   };
 
   /** The outcome of an exec no live runtime process will finish: cancelled when teamai cancelled it, otherwise lost. */
@@ -252,15 +270,13 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     const id = place && await sandboxOf(place, provider);
 
     if (place?.confined) {
-      release(op);
-      write({ op, event: 'failed', failure: { code: 'bad_request', message: `Handle ${handle} is a judge's place, which runs only its confined prompt, never an exec.` } });
+      finish(op, handle, { state: 'failed', failure: { code: 'bad_request', message: `Handle ${handle} is a judge's place, which runs only its confined prompt, never an exec.` } });
 
       return;
     }
 
     if (!place || id === undefined) {
-      release(op);
-      write({ op, event: 'failed', failure: { code: 'runtime_gone', message: `No sandbox is open under handle ${handle}.` } });
+      finish(op, handle, { state: 'failed', failure: { code: 'runtime_gone', message: `No sandbox is open under handle ${handle}.` } });
 
       return;
     }
@@ -279,10 +295,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     const outcome: Outcome = journal.isCancelled(op) ? { state: 'cancelled' } : end.kind === 'failed' ? { state: 'failed', failure: end.failure } : { state: 'exited', code: end.code, stdout };
     // teamai gets the complete stdout and masks it itself; the journal never holds a credential the tool printed, so a
     // repeated id is answered with it masked.
-    const kept: Outcome = outcome.state === 'exited' ? { ...outcome, stdout: redact(stdout, { envSecrets: request.credentials, patterns: false }) } : outcome;
-    journal.saveExec(op, { handle, runner: process.pid, outcome: kept });
-    release(op);
-    write(terminal(op, outcome));
+    finish(op, handle, outcome, outcome.state === 'exited' ? { ...outcome, stdout: redact(stdout, { envSecrets: request.credentials, patterns: false }) } : outcome);
   };
 
   /** Runs a judge: its tool in a sandbox of its own that sees only the prompt's directory, read-only. */
@@ -328,13 +341,9 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     write({ op, event: 'accepted' });
     const { judge } = chosen;
 
-    const settle = (outcome: Outcome): void => {
-      // The journal never holds a credential the tool echoed into its reply.
-      const kept: Outcome = outcome.state === 'finished' ? { ...outcome, result: PromptResultSchema.parse(JSON.parse(redact(JSON.stringify(outcome.result), { envSecrets: request.credentials, patterns: false }))) } : outcome;
-      journal.saveExec(op, { handle, runner: process.pid, outcome: kept });
-      release(op);
-      write(terminal(op, outcome));
-    };
+    // The journal never holds a credential the tool echoed into its reply. Only its strings are masked: a setting such
+    // as `1` leaves a reply's numbers as they are.
+    const settle = (outcome: Outcome): void => finish(op, handle, outcome, outcome.state === 'finished' ? { ...outcome, result: PromptResultSchema.parse(redactJson(outcome.result, request.credentials)) } : outcome);
 
     const created = await judges.create(place, { dir: confined.dir, hosts: judge.hosts });
 
@@ -535,7 +544,15 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     try {
       await dispatch(request);
     } catch (error) {
-      write({ event: 'error', message: `The sandbox runtime failed on a ${request.type} request: ${error instanceof Error ? error.message : String(error)}` });
+      const message = `The sandbox runtime failed on a ${request.type} request: ${error instanceof Error ? error.message : String(error)}`;
+      write({ event: 'error', message });
+      const failure = { code: 'runtime_failed', message };
+
+      // teamai waits for the answer to each of these: it gets this failure, never silence. An exec or a prompt this
+      // process claimed ends failed; a close keeps the journal's place, so a later close still finds the sandbox.
+      if (request.type === 'exec' || request.type === 'prompt') finish(request.op, request.handle, { state: 'failed', failure });
+      else if (request.type === 'open') write({ op: request.op, event: 'failed', failure });
+      else if (request.type === 'close') write({ event: 'close_failed', handle: request.handle, failure });
     }
   };
 

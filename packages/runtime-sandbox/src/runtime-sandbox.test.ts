@@ -386,6 +386,23 @@ describe('a prompt attempt in a container', () => {
     expect(engine.containers()).toEqual([]);
   });
 
+  it("answers an exec and a close it cannot read the journal for with their own failure, so teamai never waits on them", async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    const record = journalFiles().find((file) => file.includes(`${path.sep}places${path.sep}`)) ?? '';
+    fs.writeFileSync(record, '{"run":');
+    const op = newOp();
+    connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'echo ran'] });
+
+    expect(await connection.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'runtime_failed', message: expect.stringContaining('JSON') } });
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 5_000)).toMatchObject({ event: 'close_failed', handle: HANDLE, failure: { code: 'runtime_failed' } });
+    // Nothing is taken as absent: the container stays for a close once the journal is mended.
+    expect(engine.containers()).toEqual([HANDLE]);
+  });
+
   it('collects with the work already at its host path, and close removes the container', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });
@@ -449,14 +466,14 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     return first.event === 'failed' ? first : connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000);
   }
 
-  async function judge(connection: Connection, { tool = 'claude', credentials, op = newOp(), lease = {} }: { tool?: string; credentials: Record<string, string>; op?: string; lease?: Message }): Promise<Message> {
+  async function judge(connection: Connection, { tool = 'claude', credentials, op = newOp(), lease = {}, ms = 30_000 }: { tool?: string; credentials: Record<string, string>; op?: string; lease?: Message; ms?: number }): Promise<Message> {
     connection.send({
       type: 'prompt', op, handle: HANDLE, env: {}, unset: [], credentials, cwd: evidence,
       lease: { step: 'review', tool, prompt: 'Judge the work in this directory.', result: path.join(dir, 'attempts', ATTEMPT, 'out', 'result.json'), permissions: 'approval-required', interactive: false, ...lease },
       confined: { dir: evidence, level: 'verified', access: 'read', schema: SCHEMA },
     });
 
-    return connection.next((message) => message.op === op && ['finished', 'failed', 'cancelled'].includes(String(message.event)), 30_000);
+    return connection.next((message) => message.op === op && ['finished', 'failed', 'cancelled'].includes(String(message.event)), ms);
   }
 
   const reasoning = (end: Message): { sees: string[]; names: string[]; given: string[]; argv?: string[]; schema?: string } => {
@@ -752,6 +769,19 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     expect(await ended).toEqual({ op, event: 'cancelled' });
     // The judge's container is gone, so an exec still on its way to the engine has nothing to start in.
     expect(engine.containers()).toEqual([`${HANDLE}-proxy`]);
+  });
+
+  it('keeps a numeric score when a setting the judge is given is a number, and its place still closes', async () => {
+    engine.image(IMAGE, { node: '', claude: `if (process.argv.includes('--version')) { console.log('2.1.0 (Claude Code)'); process.exit(0); }
+console.log(JSON.stringify({ type: 'result', is_error: false, session_id: 'claude-session-1', result: '', structured_output: { answer: { label: 'good', score: 1, passed: true } } }));` });
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const credentials = { ANTHROPIC_API_KEY: 'judge-key-1', CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1' };
+    await openJudge(connection, credentials);
+
+    expect(await judge(connection, { credentials, ms: 10_000 })).toMatchObject({ event: 'finished', result: { output: { answer: { label: 'good', score: 1, passed: true } } } });
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed')).toEqual({ event: 'closed', handle: HANDLE });
   });
 
   it("gives a judge only its own tool's credentials", async () => {
