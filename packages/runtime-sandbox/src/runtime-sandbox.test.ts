@@ -441,6 +441,40 @@ describe('a prompt attempt in a container', () => {
     expect(journalFiles().filter((file) => file.includes(op))).toEqual([]);
   });
 
+  it('answers a runtime restarted while the engine is down, whose init failed, from its own record, and keeps the sandbox to close later', async () => {
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(first, at);
+    const op = newOp();
+    first.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'touch started; sleep 30'] });
+    await first.next((message) => message.op === op && message.event === 'accepted');
+    await vi.waitFor(() => { expect(fs.existsSync(path.join(at.worktree, 'started'))).toBe(true); }, { timeout: 10_000 });
+    first.child.kill('SIGKILL');
+    await first.end();
+    engine.daemon(false);
+    const second = start();
+
+    expect(await init(second, { provider: 'docker', image: IMAGE })).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable' } });
+    second.send({ type: 'cancel', op });
+    expect(await second.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'sandbox_unavailable' } });
+    second.send({ type: 'reattach', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'alive' || message.event === 'gone', 5_000)).toMatchObject({ event: 'alive', handle: HANDLE, ops: [{ op, state: 'failed' }] });
+    second.send({ type: 'reattach', handle: 'teamai-r0123abcd-a99999999' });
+    expect(await second.next((message) => message.handle === 'teamai-r0123abcd-a99999999', 5_000)).toEqual({ event: 'gone', handle: 'teamai-r0123abcd-a99999999' });
+    second.send({ type: 'collect', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'collected' || message.event === 'collect_failed', 5_000)).toEqual({ event: 'collected', handle: HANDLE });
+    second.send({ type: 'close', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 5_000)).toMatchObject({ event: 'close_failed', handle: HANDLE, failure: { code: 'sandbox_unavailable', message: expect.stringContaining("stays this attempt's") } });
+
+    engine.daemon(true);
+    const third = start();
+    await init(third, { provider: 'docker', image: IMAGE });
+    third.send({ type: 'close', handle: HANDLE });
+    expect(await third.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(engine.containers()).toEqual([]);
+  });
+
   // teamai's order after a driver died: cancel the exec, reattach until it no longer runs, collect, close.
   it.each<{ options: Message; remove: string }>([
     { options: { provider: 'docker', image: IMAGE }, remove: 'docker rm --force' },
@@ -492,8 +526,11 @@ describe('a prompt attempt in a container', () => {
     expect(await connection.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'runtime_failed', message: expect.stringContaining('JSON') } });
     connection.send({ type: 'close', handle: HANDLE });
     expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 5_000)).toMatchObject({ event: 'close_failed', handle: HANDLE, failure: { code: 'runtime_failed' } });
-    // Nothing is taken as absent: the container stays for a close once the journal is mended.
+    connection.send({ type: 'reattach', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'alive' || message.event === 'gone', 5_000)).toEqual({ event: 'alive', handle: HANDLE, ops: [] });
+    // Nothing is taken as absent: the container and its record stay for a close once the journal is mended.
     expect(engine.containers()).toEqual([HANDLE]);
+    expect(fs.existsSync(record)).toBe(true);
   });
 
   it('collects with the work already at its host path, and close removes the container', async () => {
