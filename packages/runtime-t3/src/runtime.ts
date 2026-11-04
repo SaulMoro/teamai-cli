@@ -108,11 +108,11 @@ function instancesOf(providers: Provider[], instance: string | undefined): { ok:
     const named = providers.find((provider) => provider.providerInstanceId === instance);
     const tool = named && toolOf(named.driverKind);
 
-    if (!named) return { ok: false, failure: { code: 'bad_option', key: 'instance', message: `T3 Code has no provider instance "${instance}". Add it in T3 Code under Settings → Providers, or remove \`instance\` to use the tool's default one. Instances here: ${providers.map((provider) => provider.providerInstanceId).join(', ') || 'none'}.` } };
+    if (!named) return { ok: false, failure: { code: 'bad_option', key: 'instance', message: `T3 Code has no provider instance "${instance}". Add it in T3 Code under Settings → Providers, or remove \`instance\` to use the tool's default one. Instances here: ${providers.map((provider) => provider.providerInstanceId).join(', ') || 'none'}` } };
 
-    if (!tool) return { ok: false, failure: { code: 'bad_option', key: 'instance', message: `T3 Code provider instance "${instance}" runs ${named.driverKind}, which this runtime does not run. It runs Claude and Codex instances.` } };
+    if (!tool) return { ok: false, failure: { code: 'bad_option', key: 'instance', message: `T3 Code provider instance "${instance}" runs ${named.driverKind}, which this runtime does not run. It runs Claude and Codex instances` } };
 
-    if ((named.constraints ?? []).length > 0) return { ok: false, failure: { code: 'bad_option', key: 'instance', message: `T3 Code provider instance "${instance}" cannot run now: ${(named.constraints ?? []).join(' ')} Enable it in T3 Code under Settings → Providers.` } };
+    if ((named.constraints ?? []).length > 0) return { ok: false, failure: { code: 'bad_option', key: 'instance', message: `T3 Code provider instance "${instance}" cannot run now: ${(named.constraints ?? []).join(' ')} Enable it in T3 Code under Settings → Providers` } };
     tools.set(tool, named);
 
     return { ok: true, instances: tools };
@@ -224,6 +224,7 @@ export function serve(options: ServeOptions): Promise<void> {
     else if (state.state === 'exited') write({ op, event: 'exited', code: state.code, stdout: state.stdout });
   };
 
+  // teamai quotes a keyed option failure (`key` set) inside a sentence of its own and ends it, so it brings no full stop.
   const init = async (request: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> => {
     const parsed = OptionsSchema.safeParse(request.options);
 
@@ -232,8 +233,8 @@ export function serve(options: ServeOptions): Promise<void> {
       const key = issue?.code === 'unrecognized_keys' ? issue.keys[0] : issue?.path[0]?.toString();
 
       const message = key === 'runtime_mode'
-        ? `runtime_mode ${JSON.stringify(request.options['runtime_mode'])} is not one runtime t3 takes. A step thread runs in auto, T3's Auto mode; runtime_mode only tightens it, to auto-accept-edits or approval-required. Remove it, or set one of those two.`
-        : `Runtime t3 takes { environment: local, instance?, runtime_mode? }: ${issue?.message ?? 'bad options'}.`;
+        ? `runtime_mode ${JSON.stringify(request.options['runtime_mode'])} is not one runtime t3 takes. A step thread runs in auto, T3's Auto mode; runtime_mode only tightens it, to auto-accept-edits or approval-required. Remove it, or set one of those two`
+        : `Runtime t3 takes { environment: local, instance?, runtime_mode? }: ${issue?.message ?? 'bad options'}`;
 
       write({ type: 'init', ok: false, error: { code: 'bad_option', message, ...(key && { key }) } });
 
