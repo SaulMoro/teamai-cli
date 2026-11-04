@@ -14,7 +14,7 @@ import { describeWorkflow, type WorkflowDescription } from './workflow/describe.
 import { canFor, ceilingOf, isLeft, listOf, localReason, personClauses } from './workflow/drivers/skill/skill-driver.js';
 import { launchToolFor } from './workflow/drivers/local/local-driver.js';
 import { memberTools, type MemberTool } from './tool-launch/member-tools.js';
-import { launchCommandOf, launchExecutableOf, type LaunchTarget } from './tool-launch/tools.js';
+import { launchExecutableOf, type LaunchTarget } from './tool-launch/tools.js';
 import { sameEnvName } from './resources/env-key.js';
 import { envAdvice, type EnvFacts } from './workflow/requirements.js';
 import { personSteps, type PersonStep } from './workflow/engine.js';
@@ -195,14 +195,16 @@ type ToolLacks = (runs: readonly StepRun[]) => Lack[];
 const PATH_LOOKUP_MS = 60_000;
 const pathLookups = new Map<string, { isFound: boolean; at: number }>();
 
-/** Whether the command that starts `target` is on PATH here, as the launcher would find it, looked up at most once a minute. */
+/**
+ * Whether the command that starts `target` is on PATH here, as the launcher would find it, looked up at most once a
+ * minute. Keyed by name: an instance and a shipped tool with one command are looked up differently.
+ */
 function isOnPath(target: LaunchTarget): boolean {
-  const command = launchCommandOf(target);
-  const known = pathLookups.get(command);
+  const known = pathLookups.get(target.name);
 
   if (known && Date.now() - known.at < PATH_LOOKUP_MS) return known.isFound;
   const isFound = launchExecutableOf(target) !== null;
-  pathLookups.set(command, { isFound, at: Date.now() });
+  pathLookups.set(target.name, { isFound, at: Date.now() });
 
   return isFound;
 }
