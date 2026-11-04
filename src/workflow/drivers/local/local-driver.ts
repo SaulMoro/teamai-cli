@@ -36,7 +36,7 @@ import { attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, rea
 import { localStepRuntime } from '../../runtimes/local.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
 import { holdLogin, loginHolder, loginLockFile, loginWaitFile, releaseLogin, writeLoginBack } from '../../runtimes/login.js';
-import type { EngineOptions, LoginTool, OpenedDriver } from '../../runtimes/sources.js';
+import { credentialSecrets, type EngineOptions, type LoginTool, type OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type StepRuntime } from '../../runtimes/step-runtime.js';
 import type { SoleDriver } from '../../engine.js';
 import { storeDirOf } from '../../../session-flow/adapters/index.js';
@@ -217,6 +217,8 @@ interface RuntimeSlot {
   /** Its prompt steps go as `prompt`, never as an exec of the tool's argv. */
   launchesAgents: boolean;
   engine: EngineOptions;
+  /** The values of the credentials the runtime declares, which only its prompts' tools get. */
+  credentials: Record<string, string>;
 }
 
 /** A lease as this driver runs it: what the engine sent, and what staging it adds. A step staged after `expiresAt` does not start. */
@@ -465,7 +467,7 @@ async function promptReport(
   staged: LaunchChoice | undefined,
   secrets: Record<string, string>,
   askPerson: AskPerson | undefined,
-  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean } | undefined,
+  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string> } | undefined,
 ): Promise<ReportBody> {
   const giveUp = async (failure: WorkflowFailure, tool?: string): Promise<ReportBody> => {
     const unrestored = await abandonPlace({ config, lock, attempt: lease.attempt });
@@ -661,12 +663,12 @@ async function promptReport(
   if (onRuntime?.launchesAgents) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = scoped.env;
-    launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd), step: lease.step, unset: scoped.unset });
+    launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd), step: lease.step, unset: scoped.unset, credentials: onRuntime.credentials });
   } else if (onRuntime && toolHome) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = { ...scoped.env, [toolHome.variable]: toolHome.dir };
     const view = await placeView(config, lock.run, lease.attempt, cwd, toolHome);
-    launcher = toolAdapter(runtimeLauncher(onRuntime.run, { view, toolHome: { tool: toolHome.tool, dir: toolHome.dir }, unset: scoped.unset }), (command) => command, (command) => command);
+    launcher = toolAdapter(runtimeLauncher(onRuntime.run, { view, toolHome: { tool: toolHome.tool, dir: toolHome.dir }, unset: scoped.unset, credentials: onRuntime.credentials }), (command) => command, (command) => command);
   }
 
   if (launch) input.launch = launch;
@@ -1003,9 +1005,9 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // a home; one that launches agents its own way gives each its own. It is offered no step confined to a directory:
   // protocol 1 has no way to confine one.
   const toSlot = (entry: OpenedDriver['runtimes'][number]): RuntimeSlot => (entry.kind === 'local'
-    ? { kind: 'local', use: 'local', runtime: local, can: localReady.can, launchesAgents: false, engine: entry.engine }
+    ? { kind: 'local', use: 'local', runtime: local, can: localReady.can, launchesAgents: false, engine: entry.engine, credentials: {} }
     : {
-      kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine,
+      kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials,
       can: { ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter(isExecRuntimeTool), confined: [] },
     });
 
@@ -1231,8 +1233,12 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // A run goes to a person only when no runtime of the driver asks one.
   let handoff: PersonHandoff | undefined = slots.some((slot) => slot.can.hitl === true) ? undefined : { kind: 'offers' };
 
+  // A runtime's credential values are masked like the team's secrets, whatever their names look like.
+  const maskedCredentials = Object.fromEntries(slots.flatMap((slot) => Object.entries(credentialSecrets(slot.use, slot.credentials))));
+  const maskedValues = async (): Promise<Record<string, string>> => ({ ...env?.secrets ?? await knownSecrets(config), ...maskedCredentials });
+
   const report = async (body: ReportBody, lease: Lease): Promise<WorkflowEnvelope | undefined> => {
-    const secrets = env?.secrets ?? await knownSecrets(config);
+    const secrets = await maskedValues();
     await AttemptResult.mask(attemptResultPath(config, runId, lease.attempt), secrets);
     const answer = await managedReport({ config, runId, report: body, secrets, lock });
 
@@ -1456,7 +1462,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
           const stepRun = runOf(lease);
 
-          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, turn.secrets, askPerson, stepRun && { run: stepRun, logins: slotOf.get(lease.attempt)?.engine.logins ?? [], launchesAgents: slotOf.get(lease.attempt)?.launchesAgents === true });
+          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, { ...turn.secrets, ...maskedCredentials }, askPerson, stepRun && { run: stepRun, logins: slotOf.get(lease.attempt)?.engine.logins ?? [], launchesAgents: slotOf.get(lease.attempt)?.launchesAgents === true, credentials: slotOf.get(lease.attempt)?.credentials ?? {} });
         })() });
       }
 
@@ -1607,7 +1613,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         await abandon(lease.attempt);
       }));
     } finally {
-      await maskAttemptFiles(config, runId, env?.secrets ?? await knownSecrets(config));
+      await maskAttemptFiles(config, runId, await maskedValues());
     }
 
     await archive.close();

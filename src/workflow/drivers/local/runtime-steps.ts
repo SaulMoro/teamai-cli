@@ -75,6 +75,11 @@ export function runtimeStepEnv(lease: Pick<LeaseWire, 'envScope' | 'env' | 'atte
   return { env, unset: [...lease.envScope?.withhold ?? []] };
 }
 
+/** The credentials a prompt's tool gets: those its runtime declares, less any name the step withholds. */
+function toolCredentials(credentials: Record<string, string>, unset: readonly string[]): Record<string, string> {
+  return Object.fromEntries(Object.entries(credentials).filter(([name]) => !unset.includes(name)));
+}
+
 function stringEnv(env: NodeJS.ProcessEnv): Record<string, string> {
   return Object.fromEntries(Object.entries(env).flatMap(([key, value]) => (value === undefined ? [] : [[key, value]])));
 }
@@ -101,7 +106,8 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
     let stderr = '';
     let output = '';
 
-    const end = await run.exec({ argv: shellArgv(command), env, unset, cwd: view.worktree }, {
+    // A command runs no tool, so it gets none of the runtime's credentials.
+    const end = await run.exec({ argv: shellArgv(command), env, unset, credentials: {}, cwd: view.worktree }, {
       onOutput: (stream, data) => {
         output += data;
 
@@ -151,20 +157,22 @@ function interrupted(): WorkflowFailure {
 
 /**
  * The launcher that runs a prompt's tool through the attempt's runtime: it opens the place with the tool home, execs
- * the tool's argv with `env` (names over the runtime's own) and without `unset`, and collects before the adapter reads
- * the result file. A stop is the runtime's `cancel`.
+ * the tool's argv with `env` (names over the runtime's own), the runtime's `credentials`, and without `unset`, and
+ * collects before the adapter reads the result file. A stop is the runtime's `cancel`.
  */
-export function runtimeLauncher(run: AttemptRun, { view, toolHome, unset }: { view: PlaceView; toolHome: { tool: string; dir: string }; unset: string[] }): ToolLauncher {
+export function runtimeLauncher(run: AttemptRun, { view, toolHome, unset, credentials }: { view: PlaceView; toolHome: { tool: string; dir: string }; unset: string[]; credentials: Record<string, string> }): ToolLauncher {
+  const given = toolCredentials(credentials, unset);
+
   return ({ executable, args, cwd, env, onStdout }) => {
     let accepted = false;
     let stdout = '';
 
     const closed = (async (): Promise<ToolClosed> => {
-      const opened = await run.open(view, toolHome);
+      const opened = await run.open(view, { toolHome, credentials: given });
 
       if (!opened.ok) return { failure: opened.failure };
 
-      const end = await run.exec({ argv: [executable, ...args], env: stringEnv(env), unset, cwd }, {
+      const end = await run.exec({ argv: [executable, ...args], env: stringEnv(env), unset, credentials: given, cwd }, {
         onAccepted: () => { accepted = true; },
         onOutput: (stream, data) => {
           if (stream !== 'stdout') return;
@@ -212,9 +220,11 @@ function promptFailure(failure: RuntimeFailure): WorkflowFailure {
  * prompt's result is written to the result file, as a tool writes it, and its session and usage are the step's. teamai
  * keeps the step's timeout and a driver abort as a `cancel`; a budget is checked against the usage once it finishes.
  */
-export function runtimePrompter(run: AttemptRun, { view, step, unset }: { view: PlaceView; step: string; unset: string[] }): LocalToolAdapter {
+export function runtimePrompter(run: AttemptRun, { view, step, unset, credentials }: { view: PlaceView; step: string; unset: string[]; credentials: Record<string, string> }): LocalToolAdapter {
+  const given = toolCredentials(credentials, unset);
+
   const launch = async (tool: string, input: LocalToolRun, signal: AbortSignal | undefined, interactive: boolean): Promise<LocalToolResult> => {
-    const opened = await run.open(view);
+    const opened = await run.open(view, { credentials: given });
 
     if (!opened.ok) return { started: false, exitCode: 1, failure: opened.failure };
     const lease: PromptLease = { step, tool, prompt: agentPrompt(input), result: input.resultPath, permissions: input.unattended ? 'unattended' : 'approval-required', interactive };
@@ -247,7 +257,7 @@ export function runtimePrompter(run: AttemptRun, { view, step, unset }: { view: 
 
     if (signal?.aborted) stop();
 
-    const end = await run.prompt({ lease, env, unset, cwd: input.cwd }, {
+    const end = await run.prompt({ lease, env, unset, credentials: given, cwd: input.cwd }, {
       onAccepted: () => {
         accepted = true;
 
