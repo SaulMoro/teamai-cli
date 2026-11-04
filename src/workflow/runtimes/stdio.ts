@@ -9,7 +9,10 @@ import type { ExecEnd, Initialized, Opened, PromptEnd, Reattached, StepRuntime }
 /** How long `dispose` waits for a runtime to exit once its stdin ends; one that runs on is left to finish its own work. */
 const DISPOSE_WAIT_MS = 2000;
 
-/** How long teamai waits for a runtime's reply to an `init`, a `reattach` or a `close` before it fails that request `runtime_unanswered`. */
+/**
+ * How long teamai waits for a runtime's reply to an `init`, a `reattach` or a `close`, and for the first answer to an
+ * `open`, an `exec` or a `prompt`, before it fails that request `runtime_unanswered`.
+ */
 const ANSWER_WITHIN_MS = 15_000;
 
 type HandleRequest = Extract<RuntimeRequest, { handle: string; type: 'collect' | 'reattach' | 'close' }>;
@@ -22,6 +25,9 @@ function displayOf(name: string, shown: Shown) {
 }
 
 type HandleWaiter = { request: HandleRequest; events: ReadonlySet<HandleEvent['event']>; settle: (event: HandleEvent | RuntimeFailure) => void };
+
+/** What waits on one operation: the request that started it, and what reads each of its events or its failure. */
+type OpWaiter = { type: 'open' | 'exec' | 'prompt'; on: (event: OpEvent | RuntimeFailure) => void };
 
 /** A runtime's offer as teamai takes it: `can.confined` only from a runtime that says it answers confined prompts. */
 function offered(can: Can, answersConfined: boolean): Can {
@@ -36,8 +42,9 @@ function offered(can: Can, answersConfined: boolean): Can {
  * The process starts at `init`. Once it exits, or writes a line the protocol does not have, no request reaches it
  * again: an exec or prompt in flight ends `lost`, since what it started may outlive the runtime, and every other
  * request fails with `runtime_exited`. A `reattach`, `collect` or `close` ends with its own reply, or with the failure
- * reply for its handle; `init` and those requests fail `runtime_unanswered` when the runtime writes an error that names
- * no request, and an `init`, a `reattach` or a `close` does when it gets no reply within 15 s.
+ * reply for its handle. Every request still waiting fails `runtime_unanswered` when the runtime writes an error that
+ * names no request (an exec or prompt ending `lost`), and so does an `init`, a `reattach` or a `close` with no reply
+ * within 15 s, and an `open`, `exec` or `prompt` with no answer within 15 s. A `cancel` gets no answer of its own.
  */
 export function stdioStepRuntime({ name, command, args = [], cwd }: { name: string; command: string; args?: string[]; cwd?: string }): StepRuntime {
   let child: ChildProcess | undefined;
@@ -45,7 +52,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
   let stderrTail = '';
   let exited: Promise<void> = Promise.resolve();
   let onInit: ((reply: Initialized) => void) | undefined;
-  const ops = new Map<string, (event: OpEvent | RuntimeFailure) => void>();
+  const ops = new Map<string, OpWaiter>();
   const handles = new Map<string, HandleWaiter[]>();
 
   const die = (reason: string): void => {
@@ -54,7 +61,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
     dead = { code: 'runtime_exited', message: `Step runtime "${name}" stopped: ${reason}.${tail ? ` It wrote: ${tail}` : ''}` };
     onInit?.({ ok: false, failure: dead });
 
-    for (const listener of ops.values()) listener(dead);
+    for (const waiter of ops.values()) waiter.on(dead);
     ops.clear();
 
     for (const waiters of handles.values()) for (const waiter of waiters) waiter.settle(dead);
@@ -62,14 +69,36 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
     child?.kill('SIGKILL');
   };
 
-  /** Fails `init` and every handle request still waiting, as the runtime left them unanswered: `why` says how. */
+  /** Fails every request still waiting, as the runtime left them unanswered: `why` says how. */
   const unanswered = (why: string): void => {
     onInit?.({ ok: false, failure: { code: 'runtime_unanswered', message: `Step runtime "${name}" did not answer init: ${why}.` } });
     onInit = undefined;
     const waiting = [...handles.values()].flat();
     handles.clear();
+    const inFlight = [...ops];
+    ops.clear();
 
     for (const { request, settle } of waiting) settle({ code: 'runtime_unanswered', message: `Step runtime "${name}" did not answer ${request.type} of ${request.handle}: ${why}.` });
+
+    for (const [op, { type, on }] of inFlight) on({ code: 'runtime_unanswered', message: `Step runtime "${name}" did not answer ${type} ${op}: ${why}.` });
+  };
+
+  /**
+   * Waits on operation `op`, which a `type` request starts: `on` reads each of its events, or why it got none. One with
+   * no answer within 15 s gets `runtime_unanswered`, since a runtime that never accepts it may still have started it.
+   */
+  const listen = (type: OpWaiter['type'], op: string, on: OpWaiter['on']): void => {
+    const waiter: OpWaiter = { type, on: (event) => {
+      clearTimeout(timer);
+      on(event);
+    } };
+
+    const timer = setTimeout(() => {
+      if (ops.get(op) === waiter) waiter.on({ code: 'runtime_unanswered', message: `Step runtime "${name}" did not accept ${type} ${op} within ${ANSWER_WITHIN_MS / 1000} s.` });
+    }, ANSWER_WITHIN_MS);
+
+    timer.unref();
+    ops.set(op, waiter);
   };
 
   const send = (request: RuntimeRequest): void => {
@@ -96,14 +125,14 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
     }
 
     if (message.event === 'error') {
-      if (onInit === undefined && handles.size === 0) log.warn(`Step runtime "${name}" answered: ${message.message}`);
+      if (onInit === undefined && handles.size === 0 && ops.size === 0) log.warn(`Step runtime "${name}" answered: ${message.message}`);
       else unanswered(`it wrote an error that names no request (${message.message})`);
 
       return;
     }
 
     if ('op' in message) {
-      ops.get(message.op)?.(message);
+      ops.get(message.op)?.on(message);
 
       return;
     }
@@ -208,7 +237,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
         let persisted: Promise<void> = Promise.resolve();
         let handle: string | undefined;
 
-        ops.set(request.op, (event) => {
+        listen('open', request.op, (event) => {
           if (isFailure(event)) {
             ops.delete(request.op);
             resolve({ kind: 'failed', failure: event });
@@ -248,7 +277,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
       if (dead) return Promise.resolve<ExecEnd>({ kind: 'failed', failure: dead });
 
       return new Promise<ExecEnd>((resolve) => {
-        ops.set(request.op, (event) => {
+        listen('exec', request.op, (event) => {
           if (isFailure(event)) {
             ops.delete(request.op);
             resolve({ kind: 'lost', failure: event });
@@ -307,7 +336,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
           resolve(end);
         };
 
-        ops.set(request.op, (event) => {
+        listen('prompt', request.op, (event) => {
           if (isFailure(event)) {
             settle({ kind: 'lost', failure: event });
 
