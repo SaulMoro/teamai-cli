@@ -625,6 +625,126 @@ Judge the review.
     }
   });
 
+  describe('with an env credential', () => {
+    const VALUE = 'toy-token-value-7f3a';
+    type Noted = { type: string; op: string; handle: string; names: string[] };
+    const noted = (): Noted[] => (fs.existsSync(path.join(state, 'credentials.jsonl'))
+      ? fs.readFileSync(path.join(state, 'credentials.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as Noted)
+      : []);
+    const credentialDefinition = (name: string, extra: Record<string, unknown> = {}): void => {
+      writeDefinition(name, [{ use: 'toy', options: { state, credentials: { TOY_TOKEN: 'env:MEMBER_TOY_TOKEN' }, ...extra } }]);
+    };
+
+    /** Every file under `dir` whose bytes hold `text`. */
+    const holding = (dir: string, text: string): string[] => (fs.existsSync(dir)
+      ? fs.readdirSync(dir, { recursive: true, encoding: 'utf8' }).map((name) => path.join(dir, name)).filter((at) => fs.statSync(at).isFile() && fs.readFileSync(at).includes(text))
+      : []);
+
+    it('fails at start, naming the variable, when an env credential is unset', async () => {
+      credentialDefinition('tokenunset');
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'tokenunset'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ error: { code: 'credential_missing' } });
+      expect(envelope(ran)).toMatchObject({ error: { message: expect.stringContaining('MEMBER_TOY_TOKEN') } });
+      expect(toyOpens()).toBe(0);
+    });
+
+    it('sends an env credential to the tool\'s exec and the place it opens, never to a command step, and writes its value nowhere', async () => {
+      credentialDefinition('tokened');
+
+      const ran = await runCLI(['workflow', 'start', 'mixed', '--driver', 'tokened'], repo, env({ MEMBER_TOY_TOKEN: VALUE }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const runId = runOf(ran);
+      const [build, review] = readRunState(runId).steps;
+      const of = (step: typeof build) => noted().filter((line) => line.handle === `toy-${runId}-${attemptOf(step)}`).map(({ type, names }) => ({ type, names }));
+      expect(of(build)).toEqual([{ type: 'open', names: [] }, { type: 'exec', names: [] }]);
+      expect(of(review)).toEqual([{ type: 'open', names: ['TOY_TOKEN'] }, { type: 'exec', names: ['TOY_TOKEN'] }]);
+      expect([...holding(path.join(dataHome, 'workflows'), VALUE), ...holding(state, VALUE)]).toEqual([]);
+      expect(`${ran.stdout}${ran.stderr}`).not.toContain(VALUE);
+    });
+
+    it('masks an env credential in the failure of a place its runtime could not close', async () => {
+      writeDefinition('tokenunclosed', [{ use: 'toy', options: { state, credentials: { TOY_TEAM: 'env:MEMBER_TOY_TEAM' }, close_fails: 'TOY_TEAM' } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'tokenunclosed'], repo, env({ MEMBER_TOY_TEAM: VALUE }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const runId = runOf(ran);
+      const attempt = attemptOf(readRunState(runId).steps[0]);
+      expect(runtimeRecord(runId, attempt)).toMatchObject({ closeFailed: { message: expect.stringContaining('It holds <REDACTED:TOY_TEAM (credential of toy)>.') } });
+      expect(holding(path.join(dataHome, 'workflows'), VALUE)).toEqual([]);
+      expect(`${ran.stdout}${ran.stderr}`).not.toContain(VALUE);
+    });
+
+    it('sends an env credential with each prompt, and again when a restarted teamai reconnects to it', async () => {
+      const release = path.join(state, 'release');
+      credentialDefinition('tokenagent', { agent: { release, output: { ok: true } } });
+      const prompts = (): Noted[] => noted().filter((line) => line.type === 'prompt');
+      const startBackground = (args: string[]) => spawn(process.execPath, [CLI, ...args], { cwd: repo, env: { ...process.env, ...env({ MEMBER_TOY_TOKEN: VALUE }), FORCE_COLOR: '0' }, stdio: 'ignore' });
+      const waitUntil = async (check: () => boolean): Promise<void> => {
+        for (const deadline = Date.now() + 30_000; !check() && Date.now() < deadline;) await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(check()).toBe(true);
+      };
+      const first = startBackground(['workflow', 'start', 'oneprompt', '--driver', 'tokenagent']);
+      await waitUntil(() => prompts().length === 1);
+      const exited = new Promise((resolve) => first.on('close', resolve));
+      first.kill('SIGKILL');
+      await exited;
+      const runId = /^toy-(r[0-9a-f]+)-/.exec(prompts()[0]?.handle ?? '')?.[1] ?? '';
+
+      const resumed = runCLI(['workflow', 'resume', runId, '--driver', 'tokenagent'], repo, env({ MEMBER_TOY_TOKEN: VALUE }));
+      await waitUntil(() => prompts().length === 2);
+      fs.writeFileSync(release, '');
+      const ended = await resumed;
+
+      expect(envelope(ended), ended.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const [sent, again] = prompts();
+      expect(again?.op).toBe(sent?.op);
+      expect(prompts().map((line) => line.names)).toEqual([['TOY_TOKEN'], ['TOY_TOKEN']]);
+      expect(holding(path.join(dataHome, 'workflows'), VALUE)).toEqual([]);
+    });
+
+    it('refuses a credential written as a value instead of read from the environment, naming its key', async () => {
+      writeDefinition('tokenliteral', [{ use: 'toy', options: { state, credentials: { TOY_TOKEN: 'toy-token-written-down' } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'tokenliteral'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ error: { code: 'bad_option', message: expect.stringContaining('refused option "credentials.TOY_TOKEN": credentials take codex: login, the login teamai keeps for that tool, or NAME: env:VARIABLE, a value read from your environment') } });
+      expect(toyOpens()).toBe(0);
+    });
+
+    it('masks a credential\'s value that the agent wrote into its output, whatever its name looks like', async () => {
+      // A name nothing takes for a secret, unlike TOY_TOKEN, which teamai masks by its name already.
+      writeDefinition('tokenecho', [{ use: 'toy', options: { state, credentials: { TOY_TEAM: 'env:MEMBER_TOY_TEAM' }, agent: { echo: 'TOY_TEAM' } } }]);
+      writeFlow('echoed', `  - id: review
+    prompt: Review the repository without changing it.
+    output:
+      echoed: string`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+
+      const ran = await runCLI(['workflow', 'start', 'echoed', '--driver', 'tokenecho'], repo, env({ MEMBER_TOY_TEAM: VALUE }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const [review] = readRunState(runOf(ran)).steps;
+      expect(review).toMatchObject({ status: 'succeeded', outputs: { echoed: expect.not.stringContaining(VALUE) } });
+      expect(holding(path.join(dataHome, 'workflows'), VALUE)).toEqual([]);
+    });
+
+    it.each([
+      ['local, which runs each step in the member\'s own environment', [{ use: 'local', options: { credentials: { TOY_TOKEN: 'env:MEMBER_TOY_TOKEN' } } }], 'local runs each step in the member\'s own environment, so it brings no credential'],
+      ['a runtime that does not offer can.env', [{ use: 'toy', options: { state: 'STATE', can: { env: false }, credentials: { TOY_TOKEN: 'env:MEMBER_TOY_TOKEN' } } }], 'toy does not offer can.env, so it cannot keep a credential to the processes it is for'],
+    ])('refuses an env credential at start on %s', async (_, runtimes, why) => {
+      writeDefinition('tokenrefused', runtimes.map((entry) => ({ ...entry, options: JSON.parse(JSON.stringify(entry.options).replace('"STATE"', JSON.stringify(state))) as Record<string, unknown> })));
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'tokenrefused'], repo, env({ MEMBER_TOY_TOKEN: VALUE }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ error: { code: 'bad_option', message: expect.stringContaining(`refused option "credentials": ${why}`) } });
+      expect(toyOpens()).toBe(0);
+    });
+  });
+
   describe('with credentials: { codex: login }', () => {
     const dedicated = (): string => path.join(os.homedir(), '.teamai', 'logins', 'codex', 'auth.json');
     const auth = (account: string, refresh: string): string => JSON.stringify({ OPENAI_API_KEY: null, tokens: { account_id: account, refresh_token: refresh, access_token: 'access', id_token: 'id' }, last_refresh: '2026-11-01T00:00:00Z' });
@@ -699,10 +819,10 @@ span('end');
     const lockFile = (): string => path.join(os.homedir(), '.teamai', 'logins', 'codex.lock');
 
     /** Starts a run whose fake Codex refreshes the login, then holds it until stopped, and resolves with its run id and Codex's pid once Codex runs. */
-    const holdingRun = async (definition: string): Promise<{ run: string; pid: number; watched: ReturnType<typeof startWatching> }> => {
+    const holdingRun = async (definition: string, extra: NodeJS.ProcessEnv = {}): Promise<{ run: string; pid: number; watched: ReturnType<typeof startWatching> }> => {
       const pidFile = path.join(sandbox, `${definition}.pid`);
       fs.rmSync(pidFile, { force: true });
-      const watched = startWatching(['workflow', 'start', 'oneprompt', '--driver', definition], { FAKE_TOOL_HOLD_MS: '120000', FAKE_CODEX_PID: pidFile, FAKE_CODEX_REFRESH_FIRST: '1' });
+      const watched = startWatching(['workflow', 'start', 'oneprompt', '--driver', definition], { FAKE_TOOL_HOLD_MS: '120000', FAKE_CODEX_PID: pidFile, FAKE_CODEX_REFRESH_FIRST: '1', ...extra });
       await waitFor(() => fs.existsSync(pidFile) && fs.readFileSync(pidFile, 'utf8') !== '', 'Codex to start');
       const run = /Run (r[0-9a-f]+) started/.exec(watched.stderr())?.[1] ?? '';
       expect(run).not.toBe('');
@@ -832,6 +952,22 @@ span('end');
       expect(fs.existsSync(lockFile())).toBe(false);
       // Codex refreshed the login before it was stopped: the dedicated home keeps the token Codex now holds.
       expect(dedicatedTokens()).toMatchObject({ account_id: 'acct-1', refresh_token: 'r2' });
+    });
+
+    it('stops the attempt of a killed driver when teamai workflow cancel runs in a shell without the env credential its runtime declares', async () => {
+      loginDefinition('codexenvorphan', state, { credentials: { codex: 'login', TOY_TEAM: 'env:MEMBER_TOY_TEAM' } });
+      const { run, pid, watched } = await holdingRun('codexenvorphan', { MEMBER_TOY_TEAM: 'member-team-value' });
+      watched.kill();
+      await watched.ended;
+
+      // A cancel stops and closes, and sends no credential, so it needs none of their values.
+      const cancelled = await runCLI(['workflow', 'cancel', run], repo, env());
+
+      expect(envelope(cancelled), cancelled.stderr).toMatchObject({ data: { run: { status: 'cancelled' } } });
+      expect(cancelled.stderr).not.toContain('MEMBER_TOY_TEAM');
+      expect(pidAlive(pid)).toBe(false);
+      expect(runtimeRecord(run, attemptOf(readRunState(run).steps[0]))).toMatchObject({ runtime: 'toy', phase: 'closed' });
+      expect(fs.existsSync(lockFile())).toBe(false);
     });
 
     it('keeps the login held when teamai workflow cancel cannot reach the runtime of an attempt whose driver was killed, and says how to free it', async () => {

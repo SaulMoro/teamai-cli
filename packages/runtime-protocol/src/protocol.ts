@@ -14,17 +14,21 @@ import { z } from 'zod';
 //    > {"type":"open","op":"op-7f2a…","run":"r…","attempt":"a…","view":{...},"credentials":{}}
 //    < {"op":"op-7f2a…","event":"accepted","handle":"toy-r…-a…"}
 //    < {"op":"op-7f2a…","event":"ready","display":{"label":"…","url":"…","fields":{…}}}       display optional
-//    > {"type":"exec","op":"op-8b10…","handle":"…","argv":[...],"env":{...},"unset":[...],"cwd":"…"}
+//    > {"type":"exec","op":"op-8b10…","handle":"…","argv":[...],"env":{...},"unset":[...],"credentials":{...},"cwd":"…"}
 //    < {"op":"op-8b10…","event":"accepted"}
 //    < {"op":"op-8b10…","event":"output","stream":"stdout","data":"…"}
 //    < {"op":"op-8b10…","event":"exited","code":0,"stdout":"…complete stdout…"}
-//    > {"type":"prompt","op":"op-91c4…","handle":"…","lease":{...},"env":{...},"unset":[...],"cwd":"…"}
+//    > {"type":"prompt","op":"op-91c4…","handle":"…","lease":{...},"env":{...},"unset":[...],"credentials":{...},"cwd":"…"}
 //    < {"op":"op-91c4…","event":"accepted"}
 //    < {"op":"op-91c4…","event":"finished","session":{"tool":"claude","id":"…"},"result":{"output":{…}},"usage":{…}}
 //    > {"type":"collect","handle":"…"}              < {"event":"collected","handle":"…"}
 //    > {"type":"reattach","handle":"…"}             < {"event":"alive","handle":"…","ops":[...]} or {"event":"gone",…}
 //    > {"type":"close","handle":"…"}                < {"event":"closed","handle":"…"} or {"event":"close_failed","handle":"…","failure":{…}}
 //    > {"type":"cancel","op":"op-8b10…"}            the operation then ends {"op":"op-8b10…","event":"cancelled"}
+//
+//  `max_parallel` and `credentials` in a driver definition's options are teamai's: it strips them before `init`, so a
+//  runtime never sees or validates them. The credential values travel only in requests, in memory: on `open` for the
+//  attempt, and on each `exec` and `prompt` that gets them, so a runtime that restarted holds none and needs none.
 //
 
 export const RUNTIME_PROTOCOL = 1;
@@ -41,6 +45,14 @@ export type OpId = z.infer<typeof OpIdSchema>;
 export const RuntimeHandleSchema = z.string().min(1).max(256);
 
 const EnvSchema = z.record(z.string(), z.string());
+
+/**
+ * The credentials an operation gets, by name, with their values: what the definition declares for the runtime, sent
+ * only to the processes that need them (a prompt's tool, never a command step), less any name the step withholds. A
+ * runtime sets them over the process's environment, and never writes their values to disk or to a log. Absent from a
+ * teamai before protocol 1 carried them, which a runtime reads as none.
+ */
+const CredentialsSchema = EnvSchema.default({});
 
 /** A runtime's options, as a driver definition gives them; the runtime validates them at `init`. */
 export const RuntimeOptionsSchema = z.record(z.string(), z.json());
@@ -135,7 +147,10 @@ export const OpenRequestSchema = z.object({
   run: z.string(),
   attempt: z.string(),
   view: PlaceViewSchema,
-  /** The credentials of this attempt: names and values, never set when the place is created, only per operation. */
+  /**
+   * The credentials of this attempt's tool, as each of its execs and prompts also carries them: never set when the
+   * place is created, only per operation. A command step's place gets none.
+   */
   credentials: EnvSchema,
 });
 
@@ -148,6 +163,8 @@ export const ExecRequestSchema = z.object({
   env: EnvSchema,
   /** The names the process must not inherit from the runtime's own environment, such as the forge variables a strict step withholds. */
   unset: z.array(z.string()),
+  /** The credentials this process gets over its environment: a prompt's tool gets the attempt's, a command none. */
+  credentials: CredentialsSchema,
   cwd: z.string(),
 });
 
@@ -159,6 +176,8 @@ export const PromptRequestSchema = z.object({
   lease: PromptLeaseSchema,
   env: EnvSchema,
   unset: z.array(z.string()),
+  /** The credentials the agent gets over its environment. */
+  credentials: CredentialsSchema,
   cwd: z.string(),
 });
 

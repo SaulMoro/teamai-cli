@@ -100,7 +100,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
   const leftRunning = async (runtime: StepRuntime): Promise<void> => {
     const before = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
     expect(await before.open({ worktree: root, readonly: [], result: path.join(root, 'out'), toolHome: {} })).toMatchObject({ ok: true });
-    void before.exec({ argv: ['tool'], env: {}, unset: [], cwd: root }, {});
+    void before.exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {});
     await vi.waitFor(() => expect(fs.readFileSync(path.join(attemptDir(config(), RUN, FIRST), 'runtime.json'), 'utf8')).toContain('"exec"'));
   };
 
@@ -118,7 +118,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     const runtime = runtimeSeeing([running, unreachable]);
     await leftRunning(runtime);
 
-    const end = await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).exec({ argv: ['tool'], env: {}, unset: [], cwd: root }, {});
+    const end = await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {});
 
     expect(end).toMatchObject({ kind: 'lost' });
   });

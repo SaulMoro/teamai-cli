@@ -1317,7 +1317,7 @@ A runtime checks its own `options` at `init`, and a key it does not take fails `
 | Key | Meaning |
 | --- | --- |
 | `max_parallel` | At most this many attempts on this runtime at once. A step it has no room for goes to the next runtime. `workflows.max_parallel` still caps the run. |
-| `credentials` | `{ codex: login }`: the step's Codex uses the login teamai keeps, below. |
+| `credentials` | `codex: login`: the step's Codex uses the login teamai keeps, below. `NAME: env:VARIABLE`: the step's tool gets `NAME`, read from your `VARIABLE` when the run starts, below. |
 
 Change a definition's options on your machine without editing it, in `~/.teamai/config.yaml` or a workspace's own `config.yaml`. Keys merge one by one over the definition's, and the workspace's win:
 
@@ -1353,6 +1353,46 @@ The login is also kept when the runtime itself stops while Codex runs, or cannot
 ⚠ The codex login teamai keeps stays held by attempt a339da600 of run r9a395746ec65dbd7, whose tool may still run. Stop that tool on its step runtime, then delete /home/me/.teamai/logins/codex.lock.
 ```
 
+### Credentials from your environment
+
+A tool in a container cannot read a login kept in your keychain. Give it a token from your environment instead: `NAME: env:VARIABLE` sets `NAME` for the step's tool, with the value of your `VARIABLE`.
+
+```yaml
+# drivers/containers.yaml
+runtimes:
+  - use: sandbox
+    options:
+      provider: docker
+      image: ghcr.io/acme/agent:1
+      credentials:
+        CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN   # from `claude setup-token`
+        NPM_TOKEN: env:ACME_NPM_TOKEN                          # the private registry, under another name in your shell
+  - use: local
+```
+
+```sh
+export CLAUDE_CODE_OAUTH_TOKEN=$(cat ~/.config/acme/claude-token)
+export ACME_NPM_TOKEN=$(security find-generic-password -s acme-npm -w)
+teamai workflow start review --driver containers
+```
+
+teamai reads each variable once, when the run starts or resumes. One that is unset stops the start before any step runs:
+
+```text
+{"error":{"code":"credential_missing","message":"Runtime \"sandbox\" of driver definition drivers/containers.yaml declares credential CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN, and CLAUDE_CODE_OAUTH_TOKEN is not set in your environment. Set CLAUDE_CODE_OAUTH_TOKEN, then start again."}}
+```
+
+Where the values go:
+
+| Gets them | Never gets them |
+| --- | --- |
+| The tool of a prompt step on that runtime | A command step, or setup |
+| A prompt sent to a runtime that launches agents its own way | Another runtime of the definition |
+| | A name the step withholds, such as a forge token in a strict sandbox |
+| | Any file: the run's records, `runtime.json`, logs. A value the tool prints is masked in what teamai keeps |
+
+Only a runtime that offers `can.env` takes credentials, since it alone decides each process's environment. `local` takes none: your steps already run in your environment. Both are refused with `bad_option` at start.
+
 A team runtime is code a teammate pushed, so it runs only at a revision someone accepted on this machine. Any change to a file under its directory makes a new revision. An attended run asks before the first spawn:
 
 ```text
@@ -1368,6 +1408,7 @@ What each attempt gets on its runtime:
 - `attempts/<attempt>/out/`, read-write. The result file is `out/result.json`.
 - For a prompt, a tool home of its own: `attempts/<attempt>/tool-home/<tool>`, set through `CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `CODEBUDDY_CONFIG_DIR`. Prompt steps run on Claude Code, Codex or CodeBuddy only. They run headless, never interactive. Scoring, publishing and a later pass that resumes the session read it from that home. The later pass starts from a copy of it. A [runtime that launches agents its own way](#a-runtime-that-launches-agents-its-own-way) gets no tool home: its tool keeps sessions where `local` does.
 - The env keys its lease provides, the lease's `env`, and the attempt's marker. Keys the lease withholds are removed from the runtime's environment.
+- For a prompt, the [credentials](#credentials-from-your-environment) its runtime declares. A command step gets none.
 
 teamai writes each operation id to `attempts/<attempt>/runtime.json` before it sends the operation. When teamai is killed, `workflow resume` sends the same ids again:
 
@@ -1391,11 +1432,19 @@ A runtime reads one JSON request per line on stdin and answers with JSON lines o
 → {"type":"open","op":"op-5e0d11cb4777","run":"r…","attempt":"a…","view":{…},"credentials":{}}
 ← {"op":"op-5e0d11cb4777","event":"accepted","handle":"toy-r…-a…"}
 ← {"op":"op-5e0d11cb4777","event":"ready","display":{"label":"toy-r…-a…","url":"https://toy.example.test/places/r…-a…","fields":{"place":"toy-r…-a…"}}}
-→ {"type":"exec","op":"op-83bfffde9ce3","handle":"toy-r…-a…","argv":["/bin/sh","-c","npm test"],"env":{…},"unset":[],"cwd":"/repo"}
+→ {"type":"exec","op":"op-83bfffde9ce3","handle":"toy-r…-a…","argv":["/bin/sh","-c","npm test"],"env":{…},"unset":[],"credentials":{},"cwd":"/repo"}
 ← {"op":"op-83bfffde9ce3","event":"accepted"}
 ← {"op":"op-83bfffde9ce3","event":"output","stream":"stdout","data":"ok\n"}
 ← {"op":"op-83bfffde9ce3","event":"exited","code":0,"stdout":"ok\n"}
 ```
+
+teamai keeps `max_parallel` and `credentials` for itself: it strips them from the options before `init`, so your runtime never sees them and must not check them. The credential values come in the requests instead, on `open` and on each `exec` or `prompt` that gets them. A prompt's tool exec gets them, and a command step's exec gets `{}`:
+
+```text
+→ {"type":"exec","op":"op-2a7c90e14b3d","handle":"toy-r…-a…","argv":["claude","-p","…"],"env":{"CLAUDE_CONFIG_DIR":"/repo/.teamai/…/tool-home/claude",…},"unset":["GITHUB_TOKEN"],"credentials":{"CLAUDE_CODE_OAUTH_TOKEN":"sk-ant-oat01-…"},"cwd":"/repo"}
+```
+
+Set them over the process's environment only, and never write them to disk or to a log. A teamai that restarts sends them again with the operation it resends, so your runtime needs to keep none.
 
 The other requests are `cancel`, `collect`, `reattach` and `close`. A runtime answers a repeated `op` with the same result until `close`. It keeps what an exec printed and how it exited, so a restarted teamai can read them with `reattach`. An option it does not take fails `init` with `bad_option` and the key.
 
@@ -1461,6 +1510,7 @@ A prompt that cannot finish ends `failed`. Use `model_unavailable`, `tool_unavai
 | `driver_namespace_conflict`, `runtime_namespace_conflict` | Keep the name in one namespace, push it, and run `teamai pull` |
 | `runtime_not_found` | Install the runtime in one of the places above |
 | `runtime_not_accepted` | Run the command once attended to review and accept the revision |
+| `credential_missing` | Set the variable the message names, then start or resume again |
 | `bad_option` | Fix the option in the definition, or under `workflows.drivers` in your config |
 | `requirement_unmet` | Give one runtime of the definition everything the step requires, or change the step |
 | `login_missing` | Run `CODEX_HOME=~/.teamai/logins/codex codex login`, then retry the step |

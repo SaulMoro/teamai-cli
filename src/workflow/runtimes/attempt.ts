@@ -10,9 +10,11 @@ import { writeJsonAtomic } from '../../utils/fs.js';
 import { attemptDir, AttemptIdSchema, attemptsDir, RunIdSchema, type AttemptId, type RunId } from '../store.js';
 import type { WorkflowFailure } from '../types.js';
 import type { SessionRef } from '../workspace.js';
+import { redact } from '@teamai/shared/redact';
 import { loginFileOf } from './login.js';
+import { credentialSecrets } from './sources.js';
 import { OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type PlaceView, type RuntimeDisplay } from '@teamai/runtime-protocol';
-import { newOpId, type ExecEnd, type ExecEvents, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
+import { newOpId, type ExecEnd, type ExecEvents, type ExecRequest, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
 
 // ─── An attempt on a step runtime ────────────────────────
 //
@@ -154,9 +156,12 @@ export type AttemptExecEnd = ExecEnd | { kind: 'interrupted' };
  * reads the outcome of the exec it had sent instead of running it again.
  */
 export interface AttemptRun {
-  /** Opens the place; `toolHome` is the tool home a prompt's tool keeps its session in, recorded for every later lookup. */
-  open(view: PlaceView, toolHome?: { tool: string; dir: string }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
-  exec(request: { argv: string[]; env: Record<string, string>; unset: string[]; cwd: string }, events: ExecEvents): Promise<AttemptExecEnd>;
+  /**
+   * Opens the place. `toolHome` is the tool home a prompt's tool keeps its session in, recorded for every later lookup;
+   * `credentials` are the values its tool gets, sent and never recorded.
+   */
+  open(view: PlaceView, place?: { toolHome?: { tool: string; dir: string }; credentials?: Record<string, string> }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
+  exec(request: Omit<ExecRequest, 'op' | 'handle'>, events: ExecEvents): Promise<AttemptExecEnd>;
   /**
    * Sends the prompt step to a runtime that launches agents its own way. Built again after a restart, it reads the
    * outcome the runtime kept, or reconnects to the prompt still running by sending the same id again.
@@ -189,6 +194,8 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
   const file = recordPath(config, run, attempt);
   let record: AttemptRuntimeRecord | undefined;
   let running: { op: OpId } | undefined;
+  // The credentials the place was opened with, in memory only, so what the runtime says of the place is kept masked.
+  let openedWith: Record<string, string> = {};
 
   const save = async (next: AttemptRuntimeRecord): Promise<void> => {
     record = next;
@@ -224,7 +231,8 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
   };
 
   return {
-    async open(view, home) {
+    async open(view, { toolHome: home, credentials = {} } = {}) {
+      openedWith = credentials;
       const before = await current();
 
       // The record names another runtime when the run is resumed with another driver: the attempt is not moved.
@@ -249,7 +257,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       if (before?.closeFailed) opening.closeFailed = before.closeFailed;
       await save(opening);
 
-      const opened = await runtime.open({ op, run, attempt, view, credentials: {} }, async (handle) => {
+      const opened = await runtime.open({ op, run, attempt, view, credentials }, async (handle) => {
         const now = await current();
 
         if (now) await save({ ...now, open: { op, handle }, phase: now.phase === 'opening' ? 'ready' : now.phase });
@@ -376,9 +384,10 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       const closed = await runtime.close(handle);
 
       if (!closed.ok) {
-        await save({ ...before, closeFailed: closed.failure });
+        const failure = { ...closed.failure, message: redact(closed.failure.message, { envSecrets: credentialSecrets(runtime.name, openedWith), patterns: false }) };
+        await save({ ...before, closeFailed: failure });
 
-        return runtimeFailure(runtime.name, `could not close the place of attempt ${attempt}, so what ran there may still run: ${closed.failure.message}`);
+        return runtimeFailure(runtime.name, `could not close the place of attempt ${attempt}, so what ran there may still run: ${failure.message}`);
       }
 
       const { closeFailed: _earlier, ...kept } = before;
