@@ -487,13 +487,19 @@ export function toolAdapter(launcher: ToolLauncher, resolveTool: ToolResolve, re
 
       redactFailure(result, input);
 
+      // The tool's own reason, such as a provider's 401, says what the status cannot. It may echo a credential, so it is
+      // never written here: only the result the driver reports carries it, which the driver masks before keeping it.
+      let told: WorkflowFailure | undefined;
+
       if (completed.exitCode !== 0 && !result.failure) {
         result.failure = { code: 'tool_failed', message: `${tool} exited with status ${completed.exitCode}` };
+
+        if (printed?.error !== undefined) told = { ...result.failure, message: `${result.failure.message}: ${withoutPrompt(printed.error, input)}` };
       }
 
       if (!fileResult) await persistFallback(input, result);
 
-      return { started: true, exitCode: completed.exitCode, ...applied, ...ended, ...result };
+      return { started: true, exitCode: completed.exitCode, ...applied, ...ended, ...result, ...(told && { failure: told }) };
     };
 
   return {

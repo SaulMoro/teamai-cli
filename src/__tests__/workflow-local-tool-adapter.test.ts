@@ -352,6 +352,21 @@ describe('local tool adapter', () => {
     expect(result.started && result.tokens).toBeUndefined();
   });
 
+  it('keeps the error a failed tool printed out of the result file it falls back to, since it may echo a credential', async () => {
+    const resultPath = path.join(os.tmpdir(), `teamai-workflow-tool-error-${Date.now()}.json`);
+    files.push(resultPath);
+    const token = 'adapter-test-token-3c1d';
+    const refused = JSON.stringify({ type: 'result', subtype: 'success', is_error: true, result: `Failed to authenticate. API Error: 401 Invalid bearer token ${token}`, session_id: 'session-1' });
+    const adapter = createLocalToolAdapter(() => child(`${refused}\n`, 1) as unknown as ReturnType<ToolSpawn>, () => 'claude');
+
+    const result = await adapter.run('claude', { prompt: 'Fix it.', cwd: os.tmpdir(), resultPath, env: { TOY_TEAM: token }, secrets: {} });
+
+    // The driver masks the reason it reports; the file the adapter wrote holds only the status.
+    expect(result).toMatchObject({ exitCode: 1, failure: { code: 'tool_failed', message: `claude exited with status 1: Failed to authenticate. API Error: 401 Invalid bearer token ${token}` } });
+    expect(await fs.readFile(resultPath, 'utf8')).not.toContain(token);
+    expect(JSON.parse(await fs.readFile(resultPath, 'utf8'))).toEqual({ failure: { code: 'tool_failed', message: 'claude exited with status 1' } });
+  });
+
   it('fails a Claude that exits 0 after its init event with no final result, as one that wrote no result', async () => {
     const resultPath = path.join(os.tmpdir(), `teamai-workflow-init-only-${Date.now()}.json`);
     files.push(resultPath);
