@@ -1,6 +1,8 @@
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import readline from 'node:readline';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
@@ -439,5 +441,44 @@ describe('a runtime\'s display over stdio', () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe('the toy runtime once teamai stops reading it', () => {
+  let dir: string;
+  const started: StepRuntime[] = [];
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-step-epipe-'));
+    fs.mkdirSync(path.join(dir, 'worktree'));
+  });
+
+  afterEach(async () => {
+    await Promise.all(started.splice(0).map((runtime) => runtime.dispose()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('keeps running an exec whose output nobody reads, and a toy started again reads how it exited', async () => {
+    const state = path.join(dir, 'state');
+    const worktree = path.join(dir, 'worktree');
+    // teamai is gone: the toy's stdout has no reader, so each line it writes fails with EPIPE.
+    const toy = spawn(process.execPath, [TOY_RUNTIME], { stdio: ['pipe', 'pipe', 'ignore'] });
+    const lines = readline.createInterface({ input: toy.stdout });
+    const replies: string[] = [];
+    lines.on('line', (line) => replies.push(line));
+    const exec = newOpId();
+    toy.stdin.write(`${JSON.stringify({ type: 'init', protocol: 1, mode: 'unattended', options: { state } })}\n`);
+    toy.stdin.write(`${JSON.stringify({ type: 'open', op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), toolHome: {} } })}\n`);
+    toy.stdin.write(`${JSON.stringify({ type: 'exec', op: exec, handle: 'toy-r0123abcd-a0123abcd', argv: [process.execPath, '-e', 'setTimeout(() => { for (let i = 0; i < 50; i += 1) console.log(`line ${i}`); }, 300)'], env: {}, unset: [], cwd: worktree })}\n`);
+    expect(await until(() => replies.some((line) => line.includes(exec) && line.includes('accepted')))).toBe(true);
+    lines.close();
+    toy.stdout.destroy();
+    toy.stdin.end();
+    await new Promise((resolve) => toy.once('close', resolve));
+    const again = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    started.push(again);
+    expect(await again.init({ options: { state }, mode: 'unattended' })).toMatchObject({ ok: true });
+
+    expect(await again.reattach('toy-r0123abcd-a0123abcd')).toMatchObject({ kind: 'alive', ops: [{ op: exec, state: 'exited', code: 0 }] });
   });
 });
