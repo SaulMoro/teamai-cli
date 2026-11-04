@@ -862,6 +862,56 @@ describe('teamai-runtime-t3', () => {
         expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
       });
 
+      // T3 answers a call it could not complete with orchestration_error, which says nothing of what it launched.
+      it('keeps the place when T3 cannot complete the repeated launch, and finds the thread once it can', async () => {
+        t3.config({ agent: { hold: true, output: {} }, launchReplyLost: true });
+        const { runtime, handle } = await opened();
+        runtime.send(prompt(handle, 'op-0000004a'));
+        expect(await ended(runtime, 'op-0000004a')).toMatchObject({ event: 'failed', failure: { code: 't3_launch_failed' } });
+        await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+        t3.config({ launchReplyLost: false, launchUnavailable: true });
+
+        runtime.send({ type: 'close', handle });
+        expect(await runtime.next((line) => line['handle'] === handle)).toMatchObject({
+          event: 'close_failed', failure: { code: 't3_unavailable', message: expect.stringContaining('The operation could not be completed') },
+        });
+        expect(t3.threads()[0]).toMatchObject({ status: 'running', settled: false });
+
+        t3.config({ launchUnavailable: false });
+        runtime.send({ type: 'close', handle });
+
+        expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'closed', handle });
+        expect(t3.threads()).toHaveLength(1);
+        expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+      });
+
+      it('gives no cancelled after a restart while T3 cannot complete the repeated launch, and cancels once it can', async () => {
+        t3.config({ agent: { hold: true, output: {} }, launchMs: 3_000 });
+        const first = await opened();
+        first.runtime.send(prompt(first.handle, 'op-0000004b'));
+        await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+        await first.runtime.close();
+        t3.config({ launchMs: 0, launchUnavailable: true });
+
+        const second = start();
+        second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        await second.next((line) => line['type'] === 'init');
+        second.send({ type: 'cancel', op: 'op-0000004b' });
+        await expect.poll(() => t3.calls().filter((call) => call.tool === 't3_thread_launch')).toHaveLength(2);
+        second.send({ type: 'reattach', handle: first.handle });
+
+        expect(await second.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-0000004b', state: 'running' }] });
+        expect(second.lines.filter((line) => line['op'] === 'op-0000004b')).toEqual([]);
+        expect(t3.threads()[0]).toMatchObject({ status: 'running', settled: false });
+
+        t3.config({ launchUnavailable: false });
+        second.send({ type: 'cancel', op: 'op-0000004b' });
+
+        expect(await second.next((line) => line['op'] === 'op-0000004b')).toEqual({ op: 'op-0000004b', event: 'cancelled' });
+        expect(t3.threads()).toHaveLength(1);
+        expect(t3.threads()[0]?.status).toBe('interrupted');
+      });
+
       it('finds and stops the thread when teamai cancels the prompt after the runtime that launched it exited first', async () => {
         t3.config({ agent: { hold: true, output: {} }, launchMs: 3_000 });
         const first = await opened();
