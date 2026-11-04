@@ -7,6 +7,7 @@
 //                               agent: { output, fail, hold, release, waits, noSession, reply, result }; read again on every call;
 //                               result: the result file's JSON exactly, in place of { output, failure }
 //                               organizeFails: T3 refuses t3_thread_organize; stopLagMs: a stop ends the run this long after T3 acknowledged it
+//                               delegatesPending: the run's delegated work has not settled; resultRunStatus: the run that answered then
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
 //   FAKE_T3_STATE/threads/      one JSON file per thread
 //   T3CODE_HOME/userdata/server-runtime.json   written once listening: { origin }, as T3 writes it
@@ -185,21 +186,26 @@ const TOOLS = {
 
     return ok({ threadId, link: link(threadId), status: idle ? null : 'starting' });
   },
+  // As T3 answers a wait until delegated work settled: the run's own status, timed out until that work settled too,
+  // and then the run that answered. A thread with no run yet answers idle at once.
   t3_thread_wait: async (args) => {
     const deadline = Date.now() + Math.min(args.timeoutMs ?? 30_000, config().waitCapMs ?? Infinity);
     let thread = readThread(args.threadId);
 
     if (!thread) return fail(`No thread ${args.threadId}.`);
 
-    while (!TERMINAL.has(thread.status) && Date.now() < deadline) {
+    if (thread.status === 'idle') return ok({ threadId: args.threadId, runId: null, status: 'idle', timedOut: false });
+    const settledNow = () => TERMINAL.has(thread.status) && !config().delegatesPending;
+
+    while (!settledNow() && Date.now() < deadline) {
       await sleep(20);
       thread = readThread(args.threadId);
     }
 
     const runId = `run:${args.threadId}:1`;
-    const settled = TERMINAL.has(thread.status);
+    const settled = settledNow();
 
-    return ok({ threadId: args.threadId, runId, status: thread.status, timedOut: !settled, ...(settled && { resultRun: { runId, status: thread.status } }) });
+    return ok({ threadId: args.threadId, runId, status: thread.status, timedOut: !settled, ...(settled && { resultRun: { runId, status: config().resultRunStatus ?? thread.status } }) });
   },
   t3_thread_read: (args) => {
     const thread = readThread(args.threadId);

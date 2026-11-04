@@ -524,6 +524,81 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]).toMatchObject({ status: 'running', settled: false });
     });
 
+    // T3 answers a wait with the run's own status, and timedOut until the work it delegated settled too.
+    describe('when the step\'s run delegated work that has not settled', () => {
+      it('ends the step only once the delegated work settled, even though its own run completed', async () => {
+        t3.config({ delegatesPending: true, waitCapMs: 50 });
+        const { runtime, handle } = await opened();
+        runtime.send(prompt(handle, 'op-00000040'));
+        await expect.poll(() => t3.threads()[0]?.status).toBe('completed');
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        expect(runtime.lines.filter((line) => line['op'] === 'op-00000040').map((line) => line['event'])).toEqual(['accepted']);
+        t3.config({ delegatesPending: false });
+
+        expect(await ended(runtime, 'op-00000040')).toMatchObject({ event: 'finished', result: { output: { verdict: 'approve' } } });
+      });
+
+      it('ends the step as the run that answered once the work settled ended, rather than as its own run', async () => {
+        t3.config({ resultRunStatus: 'failed' });
+        const { runtime, handle } = await opened();
+
+        runtime.send(prompt(handle, 'op-00000041'));
+
+        expect(await ended(runtime, 'op-00000041')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining('ended failed before the step was done.') } });
+      });
+
+      // T3 answers the stop no_active_run, from the run's own events, while it stops the delegated work apart.
+      it('answers close_failed, keeping the place, until the delegated work of a run that already ended settles', async () => {
+        t3.config({ delegatesPending: true, waitCapMs: 50 });
+        const { runtime, handle } = await opened();
+        runtime.send(prompt(handle, 'op-00000042'));
+        await expect.poll(() => t3.threads()[0]?.status).toBe('completed');
+
+        runtime.send({ type: 'close', handle });
+
+        expect(await runtime.next((line) => line['handle'] === handle && line['event'] !== 'accepted')).toMatchObject({
+          event: 'close_failed', handle, failure: { code: 'thread_still_runs', message: expect.stringContaining('the work it delegated had not settled') },
+        });
+        expect(t3.calls().filter((call) => call.tool === 't3_thread_interrupt')).toHaveLength(1);
+        expect(t3.threads()[0]?.settled).toBe(false);
+        t3.config({ delegatesPending: false });
+        runtime.send({ type: 'close', handle });
+
+        expect(await runtime.next((line) => line['handle'] === handle && line['event'] === 'closed')).toEqual({ event: 'closed', handle });
+        expect(t3.threads()[0]?.settled).toBe(true);
+      });
+
+      it('gives no cancelled after a restart until the stopped run\'s delegated work settled', async () => {
+        t3.config({ agent: { hold: true, output: {} } });
+        const first = await opened();
+        first.runtime.send(prompt(first.handle, 'op-00000043'));
+        await first.runtime.next((line) => line['op'] === 'op-00000043' && line['event'] === 'accepted');
+        await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+        await first.runtime.close();
+        t3.config({ delegatesPending: true, waitCapMs: 300, stopLagMs: 100 });
+
+        const second = start();
+        second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        await second.next((line) => line['type'] === 'init');
+        second.send({ type: 'cancel', op: 'op-00000043' });
+        await expect.poll(() => t3.threads()[0]?.status).toBe('interrupted');
+        await new Promise((resolve) => setTimeout(resolve, 600));
+
+        expect(second.lines.filter((line) => line['op'] === 'op-00000043')).toEqual([]);
+        second.send({ type: 'reattach', handle: first.handle });
+        expect(await second.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-00000043', state: 'running' }] });
+
+        t3.config({ delegatesPending: false });
+        second.send({ type: 'cancel', op: 'op-00000043' });
+
+        expect(await second.next((line) => line['op'] === 'op-00000043')).toEqual({ op: 'op-00000043', event: 'cancelled' });
+        second.send({ type: 'collect', handle: first.handle });
+        await second.next((line) => line['event'] === 'collected');
+        expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+      });
+    });
+
     it('refuses a prompt that carries credentials, since the thread runs on T3 Code\'s own sign-in, and launches nothing', async () => {
       const { runtime, handle } = await opened();
 
