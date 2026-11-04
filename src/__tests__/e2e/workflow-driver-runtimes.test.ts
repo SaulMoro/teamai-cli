@@ -123,6 +123,11 @@ describe('a driver definition with several runtimes', () => {
     prompt: Review the repository without changing it.
     output:
       ok: boolean`);
+    writeFlow('scoredpass', `  - id: review
+    prompt: Review the repository without changing it.
+    scorers: [quality]
+    output:
+      ok: boolean`);
     fs.writeFileSync(path.join(repo, '.teamai', 'workflows', 'setupflow.yaml'), `schemaVersion: v1alpha1
 name: setupflow
 description: setupflow
@@ -265,6 +270,21 @@ Judge the review.
     expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
     const [build] = readRunState(runOf(ran)).steps;
     expect(build).toMatchObject({ id: 'build', status: 'failed', failure: { code: 'runtime_failed', message: expect.stringContaining('(bad_option): Option "image" names acme/agent:9') } });
+  });
+
+  it('publishes a scored pass\'s label from the checkout of teamai-reports in a single-repo team', async () => {
+    const ran = await runCLI(['workflow', 'start', 'scoredpass', '--driver', 'claude'], repo, env());
+    const runId = runOf(ran);
+
+    const scored = await runCLI(['score', '--run', runId, '--step', 'review', '--scorer', 'quality'], repo, env());
+
+    expect(envelope(scored), scored.stderr).toMatchObject({ data: { label: { scorer: 'quality', label: 'good' } } });
+    const scoreRun = String((envelope(scored) as { data: { run: string } }).data.run);
+    // The publish step runs in a checkout of teamai-reports, which holds no .teamai/: it reads the run's own config.
+    const publish = readRunState(scoreRun).steps.find((step) => step.id === 'score[0].publish');
+    expect(publish, JSON.stringify(publish)).toMatchObject({ status: 'succeeded' });
+    const published = execFileSync('git', ['ls-tree', '-r', '--name-only', 'teamai-reports'], { cwd: path.join(sandbox, 'origin.git'), encoding: 'utf8' });
+    expect(published).toMatch(/^scores\/[^/\n]+\/\d{4}-\d{2}\.jsonl$/m);
   });
 
   it('refuses an agent\'s start that invoke denies before it opens any runtime of the definition', async () => {

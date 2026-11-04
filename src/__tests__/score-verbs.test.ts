@@ -20,10 +20,10 @@ import { leaseNext, reportAttempt, startRun } from '../workflow/engine.js';
 import { cancelRun, retryStep } from '../workflow/run-controls.js';
 import type { DriverIdentity, StartedBy, WorkflowEnvelope } from '../workflow/types.js';
 import { ScoreAnswer } from '../scorers/score-answer.js';
-import { ScoreVerbs, type EvidenceOptions, type PlanOptions, type ScoreVerbAnswer, type ScoreVerbContext, type SubjectsOptions } from '../score-verbs.js';
+import { ScoreVerbs, scoreVerbCommand, type EvidenceOptions, type PlanOptions, type ScoreVerbAnswer, type ScoreVerbContext, type SubjectsOptions } from '../score-verbs.js';
 import { labelVersion } from '../scorers/label.js';
 import { LabelStore } from '../scorers/label-store.js';
-import { log } from '../utils/logger.js';
+import { log, setStderrOnly } from '../utils/logger.js';
 import { Marks, type MarkKey } from '../scorers/marks.js';
 import { markFacts } from '../scorers/score-plan.js';
 import { PassScoring } from '../scorers/pass-scoring.js';
@@ -1815,5 +1815,30 @@ describe('what teamai score answers for a run its local driver drove', () => {
     expect(await ScoreAnswer.of(config, runId, { error: { code: 'step_failed', message: 'The run failed.' } }, ['quality'])).toBeUndefined();
     expect(await ScoreAnswer.of(config, runId, { data: { run: runId } }, ['quality'])).toBeUndefined();
     expect(await ScoreAnswer.of(config, 'r0000000000000000', { data: { run: 'r0000000000000000', done: { outcome: 'succeeded' } } }, ['quality'])).toBeUndefined();
+  });
+});
+
+describe('a score verb where the team config does not load', () => {
+  it('refuses with why the team config is broken, before the verb runs, rather than going on without the team\'s policy', async () => {
+    const knowledge = path.join(root, 'knowledge');
+    fs.mkdirSync(knowledge, { recursive: true });
+    fs.writeFileSync(path.join(knowledge, 'teamai.yaml'), 'team: Review\nrepo: local\nusageReport: false\nbroken: [\n');
+    fs.mkdirSync(path.join(mocks.home, '.teamai'), { recursive: true });
+    fs.writeFileSync(path.join(mocks.home, '.teamai', 'config.yaml'), JSON.stringify({ repo: { localPath: knowledge, remote: 'local', kind: 'git' }, scope: 'user', username: 'tester', additionalRoles: [] }));
+    const elsewhere = path.join(root, 'elsewhere');
+    fs.mkdirSync(elsewhere);
+    vi.spyOn(process, 'cwd').mockReturnValue(elsewhere);
+    const written: string[] = [];
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => { written.push(String(chunk)); return true; });
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+
+    try {
+      await scoreVerbCommand(async () => ({ ok: true, output: { staged: 1 } }));
+    } finally {
+      setStderrOnly(false);
+      process.exitCode = undefined;
+    }
+
+    expect(JSON.parse(written.join(''))).toEqual({ error: { code: 'not_initialized', message: expect.stringContaining('teamai.yaml') } });
   });
 });
