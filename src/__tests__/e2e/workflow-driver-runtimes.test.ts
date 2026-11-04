@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import { parse, stringify } from 'yaml';
 import { resolveProjectDataHome } from '../../config.js';
 import type { RunState } from '../../workflow/types.js';
@@ -303,7 +303,7 @@ Judge the review.
   describe('a runtime that launches agents its own way', () => {
     const runIds = (): Set<string> => new Set((fs.existsSync(path.join(dataHome, 'workflows', 'runs')) ? fs.readdirSync(path.join(dataHome, 'workflows', 'runs')) : []).filter((name) => name.endsWith('.json')).map((name) => name.slice(0, -'.json'.length)));
 
-    type PromptLine = { op: string; sent?: { step: string; tool: string; prompt: string; result: string; permissions: string; model?: { name: string }; maxTurns?: number }; ended?: string };
+    type PromptLine = { op: string; sent?: { step: string; tool: string; prompt: string; result: string; permissions: string; model?: { name: string }; maxTurns?: number }; env?: string[]; provided?: string[]; ended?: string };
 
     /** What the toy logged of the prompts it was sent: each send, and how each ended. */
     const promptLog = (): PromptLine[] => (fs.existsSync(path.join(state, 'prompts.jsonl'))
@@ -351,6 +351,32 @@ Judge the review.
       expect(review).toMatchObject({ id: 'review', status: 'succeeded', tool: 'claude', session: `toy-session-${sent?.op.slice(3)}`, outputs: { ok: true }, tokens: { input: 40, output: 12 } });
       expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ runtime: 'toy', phase: 'closed', prompt: { op: sent?.op } });
       expect(fs.existsSync(launches)).toBe(false);
+    });
+
+    it('names which of a prompt\'s env the team provides, apart from the attempt\'s markers', async () => {
+      const secrets = path.join(repo, '.teamai', 'env', 'secrets.yaml');
+      fs.mkdirSync(path.dirname(secrets), { recursive: true });
+      fs.writeFileSync(secrets, 'secrets:\n  - key: WORKFLOW_TEAM_TOKEN\n');
+      // The other tests share this repository: they run without the team's secret.
+      onTestFinished(async () => {
+        fs.rmSync(secrets);
+        await runCLI(['pull'], repo);
+      });
+      writeFlow('teamenv', `  - id: review
+    prompt: Review the repository with the team's token.
+    requires: { env: [WORKFLOW_TEAM_TOKEN] }
+    output:
+      ok: boolean`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      writeDefinition('agentenv', [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'teamenv', '--driver', 'agentenv'], repo, env({ WORKFLOW_TEAM_TOKEN: 'team-test-token' }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const [sent] = sends();
+      // A runtime that keeps env in plain text can drop the team's value and keep the rest.
+      expect(sent?.env).toEqual(expect.arrayContaining(['TEAMAI_RUN_DIR', 'TEAMAI_WORKFLOW_ATTEMPT', 'WORKFLOW_TEAM_TOKEN']));
+      expect(sent?.provided).toEqual(['WORKFLOW_TEAM_TOKEN']);
     });
 
     it('runs a prompt step with setup on the next runtime, since setup is a command, even when the first claims setup', async () => {
