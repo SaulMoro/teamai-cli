@@ -382,6 +382,30 @@ Judge the review.
         .toEqual([{ type: 'open', names: ['ANTHROPIC_API_KEY'] }, { type: 'prompt', names: ['ANTHROPIC_API_KEY'] }]);
     });
 
+    it('sends the judge the proxy and gateway variables the definition declares, as a confined run here passes them', async () => {
+      const state = path.join(sandbox, 'toy-state-judgeproxy');
+      fs.mkdirSync(path.join(repo, '.teamai', 'drivers'), { recursive: true });
+      fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'toyjudgeproxy.yaml'), [
+        'schemaVersion: v1alpha1', 'name: toyjudgeproxy', 'tool: claude', 'runtimes:', '  - use: toy', '    options:',
+        `      state: ${JSON.stringify(state)}`, `      path: ${JSON.stringify(bin)}`,
+        '      credentials: { ANTHROPIC_API_KEY: "env:MEMBER_ANTHROPIC_KEY", ANTHROPIC_BASE_URL: "env:MEMBER_GATEWAY", HTTPS_PROXY: "env:MEMBER_PROXY", NO_PROXY: "env:MEMBER_NO_PROXY", OPENAI_API_KEY: "env:MEMBER_OPENAI_KEY" }',
+        '      judge: { reply: { answer: { label: good, reasoning: "read it" } } }', '',
+      ].join('\n'));
+
+      const ran = await runCLI(['workflow', 'start', 'scored', '--driver', 'toyjudgeproxy'], repo, {
+        PATH: hostPath, LAUNCHES: launches, MEMBER_ANTHROPIC_KEY: 'anthropic-test-key', MEMBER_GATEWAY: 'https://llm-gateway.acme.test', MEMBER_PROXY: 'http://proxy.acme.test:3128', MEMBER_NO_PROXY: 'localhost,.acme.test', MEMBER_OPENAI_KEY: 'openai-test-key',
+      });
+
+      succeededRun(ran);
+      const scoring = String(/teamai-score run (r[0-9a-f]+)/.exec(ran.stderr)?.[1]);
+      const judge = readRunState(scoring).steps.find((step) => step.id.endsWith('.judge'));
+      const noted = fs.readFileSync(path.join(state, 'credentials.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { type: string; handle: string; names: string[] });
+      // A claude judge here gets the proxies with claude's own variables, and still no OpenAI key.
+      const claudeNames = ['ANTHROPIC_API_KEY', 'ANTHROPIC_BASE_URL', 'HTTPS_PROXY', 'NO_PROXY'];
+      expect(noted.filter((line) => line.handle === `toy-${scoring}-${attemptOf(judge)}`).map(({ type, names }) => ({ type, names })))
+        .toEqual([{ type: 'open', names: claudeNames }, { type: 'prompt', names: claudeNames }]);
+    });
+
     it('never leases the judge to a toy that offers can.confined without saying it answers confined prompts', async () => {
       const state = path.join(sandbox, 'toy-state-nojudge');
       fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'toynojudge.yaml'), [
