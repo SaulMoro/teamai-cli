@@ -142,16 +142,25 @@ function heldForConfined(held: ReadonlyArray<{ missing: readonly string[] }> | u
   return held !== undefined && held.length > 0 && held.every(({ missing }) => missing.includes('confined') || missing.includes('model'));
 }
 
-async function askHitl(hitl: LocalHitl, signal: AbortSignal): Promise<string> {
-  process.stderr.write(`Step "${hitl.step}": ${hitl.message}\nOptions: ${hitl.options.join(', ')}\n${hitl.respond}\n`);
+/** Reads the line typed at the terminal after `prompt`. Aborting `signal` closes it unanswered. */
+async function readLine(prompt: string, signal?: AbortSignal): Promise<string> {
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
 
   try {
-    return await terminal.question('Choice, followed by an optional note: ', { signal });
+    return await terminal.question(prompt, { signal });
   } finally {
     terminal.close();
   }
 }
+
+async function askHitl(hitl: LocalHitl, signal: AbortSignal): Promise<string> {
+  process.stderr.write(`Step "${hitl.step}": ${hitl.message}\nOptions: ${hitl.options.join(', ')}\n${hitl.respond}\n`);
+
+  return readLine('Choice, followed by an optional note: ', signal);
+}
+
+/** Puts a prompt step's own question to the person at the terminal: their line, or none when it could not be read. */
+type AskPerson = (question: string) => Promise<string | undefined>;
 
 /** Local tool selection and terminal behavior for one driver invocation. */
 export interface LocalDriverOptions {
@@ -445,6 +454,7 @@ async function promptReport(
   mode: RunMode,
   staged: LaunchChoice | undefined,
   secrets: Record<string, string>,
+  askPerson: AskPerson | undefined,
 ): Promise<ReportBody> {
   const giveUp = async (failure: WorkflowFailure, tool?: string): Promise<ReportBody> => {
     const unrestored = await abandonPlace({ config, lock, attempt: lease.attempt });
@@ -470,7 +480,7 @@ async function promptReport(
 
   // A team instance's own command runs only once a person accepted it here.
   if (target.instance) {
-    const accepted = await acceptToolCommand(target.instance, { canAsk: personAnswers(mode) });
+    const accepted = await acceptToolCommand(target.instance, { ask: askPerson });
 
     if (!accepted.ok) return giveUp({ code: accepted.code, message: accepted.message }, launched);
   }
@@ -937,7 +947,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const placeOfLease = (lease: Lease): string => (lease.answer && !checked ? lease.attempt : placeOf(lease, root));
   // The prompts that run, by attempt. A prompt that was stopped before its tool started has nothing to report.
   const prompts = new Map<string, { lease: Lease; controller: AbortController; exit: Promise<ReportBody | undefined> }>();
-  let question: { hitl: LocalHitl; controller: AbortController; exit: Promise<{ kind: 'question'; line?: string }> } | undefined;
+  let question: { hitl: LocalHitl; controller: AbortController; exit: Promise<{ kind: 'question'; hitl: LocalHitl; line?: string }> } | undefined;
   // A headless prompt takes a slot as a command does, so a step in another checkout starts beside it. An interactive one has the terminal.
   const busy = (): number => inFlight.size + dying.size + prompts.size;
   const interactiveRuns = (): boolean => [...prompts.values()].some(({ lease }) => lease.interactive);
@@ -956,9 +966,43 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     void running.command.stop();
   };
 
+  let wake = (): void => {};
+
+  // A line typed at the terminal reaches every reader open on it, so one question is open at a time. A prompt step's
+  // question closes the HITL question, which stays closed until no step asks and is then asked again, and steps ask
+  // one after another.
+  let stepAsks = 0;
+  let stepTurns: Promise<unknown> = Promise.resolve();
+
+  const askPerson: AskPerson | undefined = personAnswers(mode) ? async (text) => {
+    stepAsks += 1;
+    const before = stepTurns;
+
+    const turn = (async () => {
+      await before;
+
+      if (question) {
+        const open = question;
+        question = undefined;
+        open.controller.abort();
+        await open.exit;
+      }
+
+      return readLine(text).catch(() => undefined);
+    })();
+
+    stepTurns = Promise.allSettled([before, turn]);
+
+    try {
+      return await turn;
+    } finally {
+      stepAsks -= 1;
+      wake();
+    }
+  } : undefined;
+
   let interactiveIgnores: readonly NodeJS.Signals[] = [];
   let signalled: NodeJS.Signals | undefined;
-  let wake = (): void => {};
   let handled: readonly NodeJS.Signals[] = [];
 
   const handle = (signals: readonly NodeJS.Signals[]): void => {
@@ -1214,14 +1258,14 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           if (failure) return unstaged(lease, failure);
           interactiveIgnores = ignored;
 
-          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, turn.secrets);
+          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, turn.secrets, askPerson);
         })() });
       }
 
-      if (canHitl && hitl && !question && !interactiveRuns()) {
+      if (canHitl && hitl && !question && !interactiveRuns() && stepAsks === 0) {
         const controller = new AbortController();
         question = { hitl, controller, exit: (options.question ?? askHitl)(hitl, controller.signal)
-          .then((line) => ({ kind: 'question' as const, line }), () => ({ kind: 'question' as const })) };
+          .then((line) => ({ kind: 'question' as const, hitl, line }), () => ({ kind: 'question' as const, hitl })) };
       }
 
       if ('lease' in next.data && room()) continue;
@@ -1283,10 +1327,17 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       if (!exited) continue;
 
       if (exited.kind === 'question') {
-        const questionHitl = question!.hitl;
+        // A step's question closed it, and took it from the driver: it is asked again once no step asks.
+        const closedByStep = question === undefined;
+        const questionHitl = exited.hitl;
         question = undefined;
 
-        if (exited.line === undefined) return { error: { code: 'interrupted', message: 'The HITL question closed without an answer. Continue with teamai workflow resume.' } };
+        if (exited.line === undefined) {
+          if (closedByStep) continue;
+
+          return { error: { code: 'interrupted', message: 'The HITL question closed without an answer. Continue with teamai workflow resume.' } };
+        }
+
         const [choice = '', ...words] = exited.line.trim().split(/\s+/);
         const provenance = respondProvenance({ kind: 'terminal', caller: callerProvenance(process.env, { isTTY: true }) });
         const response: ResponseInput = { step: questionHitl.step, pass: questionHitl.pass, choice, provenance, queued: { driver, attempts: held.map((lease) => lease.attempt) } };

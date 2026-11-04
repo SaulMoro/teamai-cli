@@ -279,6 +279,8 @@ Tool "acme-claude" comes from the team repo (…/tools/acme-claude.yaml, content
 Run it? [y/N]
 ```
 
+你输入的一行只回答这个问题。同一终端上正在等待的审批或选择，会在你回答后重新询问。
+
 无人值守的运行（`TEAMAI_MODE=unattended`、CI、没有终端）会以 `tool_not_accepted` 拒绝，直到有人在终端里接受一次。接受结果按文件内容记在 `~/.teamai/trust/tools.json`：不改这个文件的提交不会再问，改了文件会再问。只设 `home` 或 `paths` 的实例运行内置命令，不需要接受。
 
 **调整内置工具。** 与内置工具同名的实例用来调整它。它的 `paths` 整体替换该工具的路径，和 `toolPaths` 条目一样，并且优先于 `toolPaths`：

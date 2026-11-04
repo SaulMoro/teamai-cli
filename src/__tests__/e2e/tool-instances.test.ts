@@ -104,6 +104,38 @@ describe.skipIf(process.platform === 'win32')('tool instances through the CLI', 
   };
   const start = (tool: string, extra: NodeJS.ProcessEnv = {}): Promise<Ran> => runCLI(['workflow', 'start', 'review', '--driver', 'local', '--tools', `default=${tool}`], extra);
   const unattended = { TEAMAI_MODE: 'unattended' };
+  const forgetAcceptances = (): void => fs.rmSync(path.join(home, '.teamai', 'trust'), { recursive: true, force: true });
+
+  /** Runs the CLI with `args` in a terminal a person types into: what it printed so far, and a line typed into it. */
+  function inTerminal(args: string[]): { printed: () => string; type: (line: string) => void; ended: Promise<number | null>; stop: () => void } {
+    const dir = fs.mkdtempSync(path.join(root, 'terminal-'));
+    const output = path.join(dir, 'out');
+    const input = path.join(dir, 'in');
+    const wrapper = spawn('python3', ['-c', TYPED_TERMINAL, path.join(dir, 'pid'), output, input, process.execPath, CLI, ...args], { cwd: repo, env: env(), stdio: 'ignore' });
+    const ended = new Promise<number | null>((resolve) => { wrapper.on('close', (code) => resolve(code)); });
+
+    return {
+      printed: () => (fs.existsSync(output) ? fs.readFileSync(output, 'utf8') : ''),
+      type: (line) => fs.appendFileSync(input, `${line}\n`),
+      ended,
+      stop: () => {
+        const pid = path.join(dir, 'pid');
+        if (wrapper.exitCode === null && fs.existsSync(pid)) process.kill(Number(fs.readFileSync(pid, 'utf8')), 'SIGKILL');
+      },
+    };
+  }
+
+  /** How the terminal's command exited, or `still running` once `ms` passed. */
+  const endedWithin = (terminal: { ended: Promise<number | null> }, ms: number): Promise<number | null | 'still running'> =>
+    Promise.race([terminal.ended, new Promise<'still running'>((resolve) => { setTimeout(() => resolve('still running'), ms); })]);
+
+  /** Whether `text` is printed after the last `after` the terminal printed. */
+  const printedAfter = (terminal: { printed: () => string }, after: string, text: string): boolean => {
+    const printed = terminal.printed();
+    const at = printed.lastIndexOf(after);
+
+    return at !== -1 && printed.includes(text, at);
+  };
 
   beforeAll(async () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-tool-instances-e2e-')));
@@ -121,6 +153,7 @@ describe.skipIf(process.platform === 'win32')('tool instances through the CLI', 
     write('.teamai/tools/acme-claude.yaml', ACME_CLAUDE);
     write('.teamai/skills/review-checklist/SKILL.md', '---\nname: review-checklist\ndescription: What to check in a review.\n---\nCheck the tests first.\n');
     write('.teamai/workflows/review.yaml', 'schemaVersion: v1alpha1\nname: review\ndescription: One review prompt.\nsteps:\n  - id: review\n    prompt: Review the repository without changing it.\n    output:\n      ok: boolean\n');
+    write('.teamai/workflows/gated.yaml', 'schemaVersion: v1alpha1\nname: gated\ndescription: An approval beside a review.\nsteps:\n  - id: warmup\n    command: sleep 2\n  - id: ship\n    needs: []\n    approve: { message: Ship it?, required: true }\n  - id: review\n    needs: [warmup]\n    prompt: Review the repository without changing it.\n    output:\n      ok: boolean\n');
     write('.teamai/scorers/review-quality.md', '---\nlabels:\n  - { value: thorough, score: 1, description: Did the review }\n  - { value: shallow, score: 0, description: Did not }\npassingScore: 0.5\nsamplingRate: 0\n---\nJudge whether the session reviewed the repository.\n');
     commit('initial');
     execFileSync('git', ['remote', 'add', 'origin', 'http://127.0.0.1:9/team/app.git'], { cwd: repo });
@@ -152,19 +185,17 @@ describe.skipIf(process.platform === 'win32')('tool instances through the CLI', 
 
   it.skipIf(!hasPython)('asks in a terminal, runs the instance\'s command once accepted, and asks again only when its file changes', async () => {
     clearLaunches();
-    const terminalPid = path.join(root, 'terminal.pid');
-    const output = path.join(root, 'terminal.out');
-    const input = path.join(root, 'terminal.in');
-    fs.rmSync(output, { force: true });
-    fs.rmSync(input, { force: true });
-    const printed = (): string => (fs.existsSync(output) ? fs.readFileSync(output, 'utf8') : '');
-    const wrapper = spawn('python3', ['-c', TYPED_TERMINAL, terminalPid, output, input, process.execPath, CLI, 'workflow', 'start', 'review', '--driver', 'local', '--tools', 'default=acme-claude'], { cwd: repo, env: env(), stdio: 'ignore' });
-    const ended = new Promise<number | null>((resolve) => { wrapper.on('close', (code) => resolve(code)); });
+    forgetAcceptances();
+    const terminal = inTerminal(['workflow', 'start', 'review', '--driver', 'local', '--tools', 'default=acme-claude']);
 
-    expect(await waitFor(() => printed().includes('Run it? [y/N]'), 30_000), printed()).toBe(true);
-    expect(printed()).toContain('It runs acme-claude as you, with your files, in place of claude.');
-    fs.writeFileSync(input, 'y\n');
-    expect(await ended, printed()).toBe(0);
+    try {
+      expect(await waitFor(() => terminal.printed().includes('Run it? [y/N]'), 30_000), terminal.printed()).toBe(true);
+      expect(terminal.printed()).toContain('It runs acme-claude as you, with your files, in place of claude.');
+      terminal.type('y');
+      expect(await terminal.ended, terminal.printed()).toBe(0);
+    } finally {
+      terminal.stop();
+    }
     expect(launches()).toEqual(['acme-claude']);
 
     // A team-repo commit that leaves the file as it was asks nothing.
@@ -186,6 +217,27 @@ describe.skipIf(process.platform === 'win32')('tool instances through the CLI', 
     write('.teamai/tools/acme-claude.yaml', ACME_CLAUDE);
     commit('acme-claude back');
   });
+
+  it.skipIf(!hasPython)('asks to accept a command while an approval waits, and each line typed answers one question', async () => {
+    clearLaunches();
+    forgetAcceptances();
+    const terminal = inTerminal(['workflow', 'start', 'gated', '--driver', 'local', '--tools', 'default=acme-claude']);
+
+    try {
+      // The approval is asked while the warmup runs, then the review asks to accept its command. Both take yes: the
+      // first one accepts the command alone, and the approval is asked again.
+      expect(await waitFor(() => printedAfter(terminal, 'Ship it?', 'Run it? [y/N]'), 30_000), terminal.printed()).toBe(true);
+      terminal.type('yes');
+      expect(await waitFor(() => printedAfter(terminal, 'Run it? [y/N]', 'Choice, followed by an optional note'), 30_000), terminal.printed()).toBe(true);
+      terminal.type('yes');
+      expect(await endedWithin(terminal, 30_000), terminal.printed()).toBe(0);
+    } finally {
+      terminal.stop();
+    }
+    expect(terminal.printed()).not.toContain('accepts these choices');
+    expect(terminal.printed()).not.toContain('was not accepted');
+    expect(launches()).toEqual(['acme-claude']);
+  }, 120_000);
 
   it('finds the instance\'s session in its own home, credits it to the instance, and scores and migrates it as the instance\'s', async () => {
     // A member's own copy of the team file runs with no acceptance, which the terminal case covers.
