@@ -173,20 +173,21 @@ runtimes:
   - use: paseo
 ```
 
-Here a Codex judge labelled a Codex pass, scored on demand once its session was back in `~/.codex/sessions/` (see below):
+Here a Codex judge labelled a Codex pass in the run that made it:
 
 ```text
-$ teamai score --run ra429df3ad473c7b3 --scorer review-quality --driver paseo-codex
-ℹ review-quality: partial (score 0.5, did not pass). Reasoning: ~/.teamai/scores/reasoning/43ce17b3….md
-$ paseo logs 4c7942c --filter tools
+$ teamai workflow start fix-add --driver paseo-codex
+ℹ run:r0cec7811f0b8ad80:fix:1: review-quality good (teamai-score run r6f8bb28e533b1c3b).
+$ paseo logs 94f534b --filter tools
 [Shell] ls -la
-[Shell] rg --files -uu
-[Shell] cat diff.patch evidence.json transcripts/fix#1.md
-[Shell] cat repo/package.json repo/math.js repo/math.test.js answer.schema.json
+[Shell] ls -la transcripts
+[Shell] cat 'transcripts/fix#1.md'
+[Shell] cat 'diff.patch'
+[Shell] cat 'evidence.json'
 ```
 
 ```json
-{ "id": "score[0].judge", "outcome": "success", "outputs": { "answer": { "label": "partial", "reasoning": "math.js now returns a + b, but package.json sets \"type\": \"module\", so math.test.js cannot use require and will fail before its assertion runs…" } }, "confined": { "tool": "codex", "isolation": "best-effort", "access": "read" } }
+{ "id": "score[0].judge", "outcome": "success", "outputs": { "answer": { "label": "good", "reasoning": "The diff changes add to return a + b and adds a node:test assertion that add(2, 3) equals 5. The session shows no commands were run, as requested; the test was added but not executed." } }, "confined": { "tool": "codex", "isolation": "best-effort", "access": "read" } }
 ```
 
 Scoring reads the step's session where the daemon's agent wrote it: in the tool home of the user the daemon runs as. Run the daemon as the member who runs teamai, on the same machine. A daemon under another user, or another `HOME`, leaves the pass unlabelled, and the score run's `evidence` step says why:
@@ -195,18 +196,10 @@ Scoring reads the step's session where the daemon's agent wrote it: in the tool 
 evidence_missing: Pass 1 of step fix in run r080799f10648b1ed cannot be scored: no longer on this machine: claude-code session 346fd0be-1a5a-474b-aedf-24c305d5c1a6 of fix#1. Restore what is missing, or score another pass.
 ```
 
-A Codex step's pass is left unlabelled in the same way, whoever the daemon runs as. When teamai closes the attempt, Paseo archives the agent, and Codex moves its session to `~/.codex/archived_sessions/`. teamai reads Codex sessions from `~/.codex/sessions/` only, so the score run says:
+A Codex step's pass is scored the same way. teamai reads Codex sessions under the Codex root it recorded at `teamai init` (`$CODEX_HOME` as it was then, or `~/.codex`), archived ones included: when teamai closes the attempt, Paseo archives the agent, Codex moves its session to `archived_sessions/` under that root, and teamai still finds it there. So start the daemon with the `CODEX_HOME` you had at `teamai init`. A daemon whose Codex writes under another root leaves the pass unlabelled:
 
 ```text
 evidence_missing: Pass 1 of step fix in run ra429df3ad473c7b3 cannot be scored: no longer on this machine: codex session 01a1a731-9053-7cf2-9884-68058745044a of fix#1. Restore what is missing, or score another pass.
-```
-
-To score the pass, put the session back where teamai reads it, then judge it on demand:
-
-```sh
-mkdir -p ~/.codex/sessions/2026/11/04
-cp ~/.codex/archived_sessions/rollout-*-01a1a731-9053-7cf2-9884-68058745044a.jsonl ~/.codex/sessions/2026/11/04/
-teamai score --run ra429df3ad473c7b3 --scorer review-quality --driver paseo-codex
 ```
 
 ## Options
