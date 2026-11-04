@@ -7,14 +7,17 @@ import { buildSync } from 'esbuild';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const SOURCE = path.join(ROOT, 'src', '__tests__', 'fixtures', 'runtime-toy', 'runtime.mjs');
-const PROTOCOL = path.join(ROOT, 'packages', 'runtime-protocol', 'src', 'protocol.ts');
+const BUNDLED = [path.join(ROOT, 'packages', 'runtime-protocol', 'src', 'protocol.ts'), path.join(ROOT, 'packages', 'tool-core', 'src', 'home.ts')];
 
 /**
  * The toy built as one executable file, as a runtime ships: its source with @teamai/runtime-protocol bundled in. One
  * build per source revision is kept in the temp directory, so every test file and worker reuses it.
  */
 function bundledToy(): string {
-  const revision = createHash('sha256').update(fs.readFileSync(SOURCE)).update(fs.readFileSync(PROTOCOL)).digest('hex').slice(0, 16);
+  const hash = createHash('sha256').update(fs.readFileSync(SOURCE));
+
+  for (const file of BUNDLED) hash.update(fs.readFileSync(file));
+  const revision = hash.digest('hex').slice(0, 16);
   const file = path.join(os.tmpdir(), `teamai-toy-runtime-${revision}`, 'runtime.mjs');
 
   if (fs.existsSync(file)) return file;

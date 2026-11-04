@@ -1402,7 +1402,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         // Setup runs out of the terminal's reach, so the tool's signals are left to it only once it starts.
         interactiveIgnores = [];
         // An interactive step on a runtime that launches agents its own way is not in this terminal.
-        const ignored = lease.interactive && slotOf.get(lease.attempt)?.kind !== 'external' ? commandSignalPolicy(await terminalReachesCommand()).ignored : [];
+        const ignored = lease.interactive && slotOf.get(lease.attempt)?.launchesAgents !== true ? commandSignalPolicy(await terminalReachesCommand()).ignored : [];
         const controller = new AbortController();
 
         if (maxParallel === 1) handle(STOP_SIGNALS);

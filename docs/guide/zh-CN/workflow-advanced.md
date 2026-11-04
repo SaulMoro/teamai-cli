@@ -1376,7 +1376,7 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 
 ### 编写步骤运行时
 
-运行时从 stdin 每行读取一个 JSON 请求，在 stdout 上用 JSON 行回答，协议版本 `1`。`src/__tests__/fixtures/runtime-toy/runtime.mjs` 是一个完整的例子，它在主机上运行步骤。
+运行时从 stdin 每行读取一个 JSON 请求，在 stdout 上用 JSON 行回答，协议版本 `1`。`src/__tests__/fixtures/runtime-toy/runtime.mjs` 是一个完整的例子，它在主机上运行步骤。它导入 `@teamai/runtime-protocol`，所以测试在运行它之前先把它打包成一个文件（`src/__tests__/helpers/toy-runtime.ts`）。
 
 ```text
 → {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"}}

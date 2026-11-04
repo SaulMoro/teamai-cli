@@ -324,6 +324,24 @@ Judge the review.
       expect(fs.existsSync(launches)).toBe(false);
     });
 
+    it('refuses at start a runtime that runs no command and takes no prompt, since it can run no step', async () => {
+      writeDefinition('stepless', [{ use: 'toy', options: { state, can: { exec: false } } }, { use: 'local' }]);
+
+      const ran = await runCLI(['workflow', 'start', 'mixed', '--driver', 'stepless'], repo, env());
+
+      expect(envelope(ran)).toMatchObject({ error: { code: 'runtime_failed', message: expect.stringContaining('Runtime "toy" of driver "stepless" runs no command and takes no prompt') } });
+      expect(sends()).toEqual([]);
+    });
+
+    it('refuses at start a login on a runtime that launches agents its own way', async () => {
+      writeDefinition('agentlogin', [{ use: 'toy', options: { state, credentials: { codex: 'login' }, agent: { output: { ok: true } } } }], { tool: 'codex' });
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'agentlogin'], repo, env());
+
+      expect(envelope(ran)).toMatchObject({ error: { code: 'bad_option', message: expect.stringContaining('toy launches agents its own way, in each tool\'s own home, so it brings no login') } });
+      expect(sends()).toEqual([]);
+    });
+
     it('fails the step with the failure the agent wrote, without the prompt it quotes', async () => {
       const result = { failure: { code: 'tool_failed', message: 'Gave up on: Review the repository without changing it.' } };
       writeDefinition('agentfail', [{ use: 'toy', options: { state, agent: { result } } }]);

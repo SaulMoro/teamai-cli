@@ -11,7 +11,7 @@ import { attemptDir, AttemptIdSchema, attemptsDir, RunIdSchema, type AttemptId, 
 import type { WorkflowFailure } from '../types.js';
 import type { SessionRef } from '../workspace.js';
 import { loginFileOf } from './login.js';
-import { OpIdSchema, RuntimeDisplaySchema, type PlaceView, type RuntimeDisplay } from '@teamai/runtime-protocol';
+import { OpIdSchema, RuntimeDisplaySchema, type OpId, type PlaceView, type RuntimeDisplay } from '@teamai/runtime-protocol';
 import { newOpId, type ExecEnd, type ExecEvents, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
 
 // ─── An attempt on a step runtime ────────────────────────
@@ -183,7 +183,7 @@ function runtimeFailure(runtime: string, message: string): WorkflowFailure {
 export function attemptRun({ config, run, attempt, runtime, driver }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime; driver: string }): AttemptRun {
   const file = recordPath(config, run, attempt);
   let record: AttemptRuntimeRecord | undefined;
-  let running: { op: z.infer<typeof OpIdSchema> } | undefined;
+  let running: { op: OpId } | undefined;
 
   const save = async (next: AttemptRuntimeRecord): Promise<void> => {
     record = next;
@@ -313,8 +313,10 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
         const sent = before.prompt;
         const state = found.ops.find((retained) => retained.op === sent.op);
 
+        // The runtime accepted it before the restart; one still running is accepted again when it is resent.
+        if (state !== undefined && state.state !== 'running') events.onAccepted?.();
+
         if (state?.state === 'finished') {
-          events.onAccepted?.();
           const end: PromptEnd = { kind: 'finished', session: state.session, result: state.result };
 
           if (state.usage) end.usage = state.usage;
