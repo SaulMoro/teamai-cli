@@ -390,6 +390,12 @@ Paseo did not archive workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476
 Paseo archived workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476e (wks_6fb33a5b94531f79), but agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f still ran 10 s later. It may still change the worktree; stop it in the Paseo app.
 ```
 
+同一个 worktree 上的两次尝试共用它的 Paseo 工作区，只有最后关闭的那次尝试会归档它。先关闭的尝试改为取消它自己的智能体（包括失败步骤的智能体），另一次尝试的智能体继续运行。Paseo 不肯取消的智能体会让这次尝试保持打开，teamai 可以再次关闭它：
+
+```text
+Paseo did not cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f: Agent is busy. It may still run in the worktree; stop it in the Paseo app.
+```
+
 运行时在步骤中途被杀掉就无法归档；步骤以 `runtime_lost` 失败，它的工作区会留在 Paseo 里，直到你归档它（`paseo workspace archive <id>`）。
 
 ## 启动时的错误
