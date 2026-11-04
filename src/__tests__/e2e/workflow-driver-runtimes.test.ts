@@ -323,6 +323,8 @@ Judge the review.
       expect(sent?.sent).toMatchObject({ step: 'review', tool: 'claude', permissions: 'approval-required', result: path.join(attemptDir(runId, attemptOf(review)), 'out', 'result.json') });
       expect(sent?.sent?.prompt).toContain('Review the repository without changing it.');
       expect(sent?.sent?.prompt).toContain(`Write the workflow result as JSON to ${sent?.sent?.result}`);
+      // The step's declared output, as JSON Schema, once.
+      expect(sent?.sent?.prompt.split('JSON Schema: `{"type":"object","properties":{"ok":{"type":"boolean"}},"required":["ok"]}`')).toHaveLength(2);
       expect(review).toMatchObject({ id: 'review', status: 'succeeded', tool: 'claude', session: `toy-session-${sent?.op.slice(3)}`, outputs: { ok: true }, tokens: { input: 40, output: 12 } });
       expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ runtime: 'toy', phase: 'closed', prompt: { op: sent?.op } });
       expect(fs.existsSync(launches)).toBe(false);
