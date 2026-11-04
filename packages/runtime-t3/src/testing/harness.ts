@@ -84,6 +84,8 @@ export interface FakeT3Config {
   resultRunStatus?: string;
   /** T3 refuses every launch, a repeated one too. */
   launchFails?: boolean;
+  /** T3 answers every launch with its generic `orchestration_error` refusal, as when it could not complete the call. */
+  launchUnavailable?: boolean;
   /** How long after it launched the thread a launch answers, in ms. */
   launchMs?: number;
   /** A launch launches its thread, then its reply never comes: the call fails as a lost connection does, not as a refusal. */
