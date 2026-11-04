@@ -256,7 +256,7 @@ teamai webhook test --dry-run
 schemaVersion: v1alpha1
 name: acme-claude                  # 与文件名相同
 extends: claude                    # 它是哪个内置工具的实例
-command: acme-claude               # PATH 上的可执行文件
+command: acme-claude               # PATH 上可执行文件的名字，不能是路径
 home: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }
 # paths: { skills: .acme-claude/skills }   # 可选；不写时用 claude 的路径，放到 .acme-claude/ 下
 ```
@@ -297,10 +297,11 @@ paths: { skills: .claude/team-skills, rules: .claude/rules }
 
 **自己的版本。** `~/.teamai/tools/<name>.yaml` 放你自己的实例。teamai 只读这个目录，从不写入。这里的实例会替换团队同名实例（只对你生效），不需要接受；`workflow resume --next` 会忽略它，因为接手的是队友的运行，用团队的工具。
 
-**实例从哪里来。** `tools/<name>.yaml`，以及 `tools/<namespace>/<name>.yaml`（替换根目录的同名实例）。两个 namespace 定义同一个名字，或两个团队仓库对同一个名字定义不同，算冲突：两个都不用，并给出提示。文件里出现 `command`、`home`、`paths` 以外的键会被拒绝，并指出是哪个键：
+**实例从哪里来。** `tools/<name>.yaml`，以及 `tools/<namespace>/<name>.yaml`（替换根目录的同名实例）。两个 namespace 定义同一个名字，或两个团队仓库对同一个名字定义不同，算冲突：两个都不用，并给出提示。文件里出现 `command`、`home`、`paths` 以外的键，或 `command` 是 `./scripts/acme-claude` 这样的路径，都会被拒绝，并指出问题：路径上的程序可以在文件不变的情况下被改掉，接受就管不到它。
 
 ```text
 Tool instance …/tools/acme-claude.yaml is not valid: it sets sessions, and an instance sets only command, home and paths. …
+Tool instance …/tools/acme-claude.yaml is not valid: command: command is the name of one executable on PATH, with no path, spaces or arguments, such as acme-claude. …
 ```
 
 实例要有自己的会话，被扩展的工具的格式必须能带另一个平台 id：Claude Code、Qoder、Codex、JoyCode 和 Cursor。其他工具的实例可以启动、接收文件，但 teamai 不读取它的会话。teamai 目前还不为实例渲染 agents。实例不会出现在[工具支持](./tool-support.md)页面上。

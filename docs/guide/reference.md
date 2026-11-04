@@ -256,7 +256,7 @@ A team on an internal build or a fork of a supported tool adds it as an instance
 schemaVersion: v1alpha1
 name: acme-claude                  # the file's name
 extends: claude                    # the shipped tool it is an instance of
-command: acme-claude               # the executable on PATH
+command: acme-claude               # the name of an executable on PATH, never a path
 home: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }
 # paths: { skills: .acme-claude/skills }   # optional; without it, claude's paths under .acme-claude/
 ```
@@ -297,10 +297,11 @@ paths: { skills: .claude/team-skills, rules: .claude/rules }
 
 **Your own build.** `~/.teamai/tools/<name>.yaml` holds your own instances. teamai reads that directory and never writes it. One there replaces the team's of the same name for you, needs no acceptance, and is ignored by `workflow resume --next`, which runs a teammate's run on the team's tools.
 
-**Where instances come from.** `tools/<name>.yaml`, and `tools/<namespace>/<name>.yaml`, which replaces the root one. Two namespaces that define one name, or two team repos that define it differently, are a conflict: teamai uses neither and says so. A file is refused, naming the problem, when it sets anything but `command`, `home` and `paths`:
+**Where instances come from.** `tools/<name>.yaml`, and `tools/<namespace>/<name>.yaml`, which replaces the root one. Two namespaces that define one name, or two team repos that define it differently, are a conflict: teamai uses neither and says so. A file is refused, naming the problem, when it sets anything but `command`, `home` and `paths`, or when `command` is a path such as `./scripts/acme-claude`: the program at a path can change without the file changing, so acceptance would not cover it.
 
 ```text
 Tool instance …/tools/acme-claude.yaml is not valid: it sets sessions, and an instance sets only command, home and paths. …
+Tool instance …/tools/acme-claude.yaml is not valid: command: command is the name of one executable on PATH, with no path, spaces or arguments, such as acme-claude. …
 ```
 
 Its own sessions need a tool whose format carries another platform id: Claude Code, Qoder, Codex, JoyCode and Cursor. An instance of another tool launches and receives files, and teamai reads no sessions of it. teamai does not render agents for an instance yet. Instances never appear on the [tool support](./tool-support.md) page.
