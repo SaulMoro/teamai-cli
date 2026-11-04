@@ -16,7 +16,6 @@
     "./launch": "./src/launch.ts",
     "./log": "./src/log.ts",
     "./lookpath": "./src/lookpath.ts",
-    "./redact": "./src/redact.ts",
     "./registry": "./src/registry.ts",
     "./sessions/*": "./src/sessions/*.ts",
     "./stdout": "./src/stdout.ts",

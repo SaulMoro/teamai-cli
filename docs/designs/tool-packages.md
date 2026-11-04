@@ -31,6 +31,7 @@ Variants already show the shape of the fix. `tclaude` and `claude-internal` reus
 
 ```text
 packages/
+├── shared/                        # helpers no domain owns, such as redact (secret masking); imports no other package
 ├── tool-core/                     # the contract and what several families share
 │   ├── package.json               # "private": true, "exports": { "./definition", "./launch", "./sessions", … }
 │   └── src/
@@ -74,6 +75,7 @@ packages/
   - A family package depends on `tool-core` and on no other family.
   - `tool-definitions` is the only package that imports the families.
   - The app imports `tool-definitions` and `tool-core`, never a family directly.
+  - `shared` holds helpers that belong to no domain, such as `@teamai/shared/redact`. Any package and the app may import it, and it imports no other package.
 - **Files:** one file per concept, tests beside the file they test (`*.test.ts`), fixtures in the package.
 - **Enforcement:** a `teamai/*` lint rule enforces the import direction.
 
