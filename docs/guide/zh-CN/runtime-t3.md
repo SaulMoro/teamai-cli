@@ -225,6 +225,8 @@ T3 评审的[隔离级别](scorers.md#隔离)是 **best-effort**：
 
 线程的运行可能把工作交给子代理或后台任务。只有这些工作也结束后，步骤才结束；取消或关闭也要到那时才算线程已停止。
 
+如果 T3 Code 启动了步骤的线程，但它的回复没有到达 teamai，取消或关闭会再发送一次同样的启动请求，T3 会用那个线程回答，然后 teamai 停止它。如果 T3 当时什么也没启动，第二次启动会新增一个空闲线程，teamai 会把它标记为已处理。
+
 ```sh
 teamai workflow resume r928e2fc23ab9bd62 --driver t3
 teamai workflow cancel r70d31098c8884803
@@ -244,6 +246,7 @@ teamai workflow cancel r70d31098c8884803
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` 指向 T3 没有的实例，或一个已禁用的实例。 | 在 T3 Code 的 Settings → Providers 里添加或启用它，或者删掉 `instance`。 |
 | `… ended without writing the result file …` | agent 结束了，但没有写结果。 | 用消息里的链接打开线程，然后运行 `teamai workflow retry <run> <step>`。 |
 | 运行详情里的 `Not closed: thread_still_runs …` | teamai 关闭步骤的位置时，它的线程或它委派的工作仍在运行，而 T3 没有停止它。 | 用链接打开线程，用它的 Stop 按钮停止它。 |
+| `Not closed: t3_unavailable: teamai launched the T3 thread "review · teamai r70d…" and T3 Code never answered …` | 某个步骤的启动请求没有得到回复，而且无法连接 T3 Code 来查找那个线程。 | 打开 T3 Code，然后再次运行 `teamai workflow cancel <run>`。 |
 | `… kept no session for …` | 工具没有为这个 worktree 保存会话记录，所以步骤无法评分。 | 检查实例是否使用工具的默认目录（`~/.claude`、`~/.codex`）。 |
 
 ## 目前还不支持

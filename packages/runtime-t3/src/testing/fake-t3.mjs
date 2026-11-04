@@ -8,7 +8,8 @@
 //                               result: the result file's JSON exactly, in place of { output, failure }
 //                               organizeFails: T3 refuses t3_thread_organize; stopLagMs: a stop ends the run this long after T3 acknowledged it
 //                               delegatesPending: the run's delegated work has not settled; resultRunStatus: the run that answered then
-//                               launchFails: T3 refuses every launch, a repeated one too
+//                               launchFails: T3 refuses every launch, a repeated one too; launchMs: a launch answers this long after
+//                               it launched; launchReplyLost: a launch launches, then its reply never comes (an MCP error, not a refusal)
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
 //   FAKE_T3_STATE/threads/      one JSON file per thread
 //   T3CODE_HOME/userdata/server-runtime.json   written once listening: { origin }, as T3 writes it
@@ -191,8 +192,12 @@ const TOOLS = {
   t3_project_list: () => ok({ projects: config().projects, nextCursor: null }),
   t3_thread_launch: async (args) => {
     if (config().launchFails) return fail('T3 Code cannot launch threads now.');
+    const launched = launch(args);
+    await sleep(config().launchMs ?? 0);
 
-    return launch(args);
+    if (config().launchReplyLost) throw new Error('The connection closed before T3 answered.');
+
+    return launched;
   },
   // As T3 answers a wait until delegated work settled: the run's own status, timed out until that work settled too,
   // and then the run that answered. A thread with no run yet answers idle at once.

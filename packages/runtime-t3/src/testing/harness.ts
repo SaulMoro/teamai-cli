@@ -84,6 +84,10 @@ export interface FakeT3Config {
   resultRunStatus?: string;
   /** T3 refuses every launch, a repeated one too. */
   launchFails?: boolean;
+  /** How long after it launched the thread a launch answers, in ms. */
+  launchMs?: number;
+  /** A launch launches its thread, then its reply never comes: the call fails as a lost connection does, not as a refusal. */
+  launchReplyLost?: boolean;
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });
