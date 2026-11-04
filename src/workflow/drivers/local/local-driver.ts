@@ -35,7 +35,7 @@ import { placeView, runtimeCommand, runtimeLauncher, runtimePrompter, runtimeSte
 import { attemptRun, attemptToolHome, EXEC_RUNTIME_TOOLS, isExecRuntimeTool, readAttemptRuntime, seedToolHome, toolHomeVariable, type AttemptRun } from '../../runtimes/attempt.js';
 import { localStepRuntime } from '../../runtimes/local.js';
 import { writeHeldSteps, type HeldSteps } from '../../runtimes/held.js';
-import { holdLogin, loginWaitFile, releaseLogin, writeLoginBack } from '../../runtimes/login.js';
+import { holdLogin, loginHolder, loginLockFile, loginWaitFile, releaseLogin, writeLoginBack } from '../../runtimes/login.js';
 import type { EngineOptions, LoginTool, OpenedDriver } from '../../runtimes/sources.js';
 import { newOpId, type StepRuntime } from '../../runtimes/step-runtime.js';
 import type { SoleDriver } from '../../engine.js';
@@ -703,7 +703,9 @@ async function promptReport(
     end.failure = result.failure;
   }
 
-  if (login && toolHome) {
+  // A runtime lost while the tool ran may still run it, refreshing the login: the attempt keeps it, and closing its
+  // place says how to free it.
+  if (login && toolHome && result.failure?.code !== 'runtime_lost') {
     // A runtime that failed may not have brought the tool home back, so what is there says nothing of the login.
     const collected = !(result.failure?.code.startsWith('runtime_') === true && result.failure.code !== 'runtime_interrupted');
     const notBack = await writeLoginBack({ tool: login, run: lock.run, attempt: lease.attempt, toolHome: toolHome.dir, collected });
@@ -1043,16 +1045,30 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const closeRun = async (attempt: AttemptId): Promise<void> => {
     const closing = attemptRuns.get(attempt);
     const handle = localHandles.get(attempt);
-    // A closed attempt holds no login, whatever stopped it before its write-back.
     const logins = slotOf.get(attempt)?.engine.logins ?? [];
     attemptRuns.delete(attempt);
     localHandles.delete(attempt);
     slotOf.delete(attempt);
-    await closing?.close();
+    const notClosed = await closing?.close();
 
     if (handle !== undefined) await local.close(handle);
 
-    for (const tool of logins) await releaseLogin(tool, { run: runId, attempt });
+    // A closed attempt holds no login, whatever stopped it before its write-back. One whose place stays open may
+    // still run its tool, so it keeps the login until a person stops that tool.
+    if (notClosed) log.warn(notClosed.message);
+
+    for (const tool of logins) {
+      if (!notClosed) {
+        await releaseLogin(tool, { run: runId, attempt });
+        continue;
+      }
+
+      const holder = await loginHolder(tool);
+
+      if (holder?.run === runId && holder.attempt === attempt) {
+        log.warn(`The ${tool} login teamai keeps stays held by attempt ${attempt} of run ${runId}, whose tool may still run. Stop that tool on its step runtime, then delete ${loginLockFile(tool)}.`);
+      }
+    }
   };
 
   /** Whether `slot` may open another attempt under its own `max_parallel`. */

@@ -246,6 +246,19 @@ Judge the review.
     expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ runtime: 'toy', phase: 'closed', display });
   });
 
+  it('records a place its runtime could not close on the attempt, and says what may still run there', async () => {
+    writeDefinition('unclosed', [{ use: 'toy', options: { state, close_fails: true } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'unclosed'], repo, env());
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const runId = runOf(ran);
+    const attempt = attemptOf(readRunState(runId).steps[0]);
+    const handle = `toy-${runId}-${attempt}`;
+    expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'collected', closeFailed: { code: 'close_failed', message: `The toy keeps place ${handle}: close_fails is set.` } });
+    expect(ran.stderr).toContain(`Step runtime "toy" could not close the place of attempt ${attempt}, so what ran there may still run: The toy keeps place ${handle}: close_fails is set.`);
+  });
+
   it('records why each runtime holds a step back, which the run\'s details show once the driver stops', async () => {
     setMemberWorkflows({ allow: { network: false } });
     writeDefinition('both', [{ use: 'toy', options: { state } }, { use: 'local' }]);
@@ -853,6 +866,30 @@ span('end');
       expect(envelope(driven), driven.stderr).toMatchObject({ data: { done: { outcome: 'cancelled' } } });
       expect(pidAlive(pid)).toBe(false);
       expect(fs.existsSync(lockFile())).toBe(false);
+    });
+
+    it('keeps the login held, naming the lock, when the runtime stops while the tool runs, and records the place it could not close', async () => {
+      loginDefinition('codexlost', state, { exit_at: 'exec-accepted' });
+      const pidFile = path.join(sandbox, 'codexlost.pid');
+      fs.rmSync(pidFile, { force: true });
+
+      try {
+        const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'codexlost'], repo, env({ FAKE_TOOL_HOLD_MS: '120000', FAKE_CODEX_PID: pidFile }));
+
+        expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+        const run = runOf(ran);
+        const [review] = readRunState(run).steps;
+        const attempt = attemptOf(review);
+        expect(review).toMatchObject({ status: 'failed', failure: { code: 'runtime_lost' } });
+        // The tool outlived its runtime, so the login stays with its attempt.
+        expect(pidAlive(Number(fs.readFileSync(pidFile, 'utf8')))).toBe(true);
+        expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
+        expect(ran.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}, whose tool may still run. Stop that tool on its step runtime, then delete ${lockFile()}.`);
+        expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'running', closeFailed: { code: 'runtime_exited' } });
+      } finally {
+        if (fs.existsSync(pidFile)) process.kill(Number(fs.readFileSync(pidFile, 'utf8')), 'SIGKILL');
+        fs.rmSync(lockFile(), { force: true });
+      }
     });
 
     it('releases the login when teamai workflow cancel stops the run whose killed attempt held it', async () => {

@@ -79,9 +79,9 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId):
       if (notBack) log.warn(notBack.message);
     }
 
-    await placed.close();
+    const notClosed = await placed.close();
 
-    return true;
+    return notClosed ? cannot(notClosed.message) : true;
   } catch (error) {
     return cannot(error instanceof Error ? error.message : String(error));
   } finally {

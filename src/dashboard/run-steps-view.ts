@@ -38,12 +38,15 @@ function runtimeShown(d) {
 function runtimeLine(r) {
  return r?'<div class="runtime-line"><b>'+label('Runtime')+':</b> <span data-verbatim>'+e(r.name)+'</span> · <span title="'+e(r.handle||'')+'" data-verbatim>'+(r.handle?e(r.handle):label('no handle yet'))+'</span> · '+label(r.phase)+runtimeShown(r.display)+'</div>':'';
 }
+function notClosedLine(r) {
+ return r?.closeFailed?'<div class="runtime-line amber"><b>'+label('Not closed')+':</b> <span data-verbatim>'+e(r.closeFailed.code)+'</span> · <span data-verbatim>'+e(r.closeFailed.message)+'</span></div>':'';
+}
 function loginWaitLine(w) {
  return w?'<div class="runtime-line amber"><b>'+label('Waits for login')+':</b> <span data-verbatim>'+e(w.tool)+'</span> · '+label('held by attempt')+' <span data-verbatim>'+e(w.holder.attempt)+'</span> '+label('of run')+' <span data-verbatim>'+e(w.holder.run)+'</span></div>':'';
 }
 function runStepsTable(steps, run) {
  return '<div class="table-scroll card-table"><table class="run-steps"><thead><tr>'+RUN_STEP_HEADS.map(x=>'<th>'+label(x)+'</th>').join('')+'</tr></thead><tbody>'
-  +steps.map(s=>'<tr>'+['<span data-verbatim>'+e(s.step)+'</span>'+agentHarness(s.harness)+harnessChanged(s.harnessChanges)+runtimeLine(s.runtime)+loginWaitLine(s.loginWait),number(s.pass),runStatus(s.status)+(s.message?'<small data-verbatim>'+e(s.message)+'</small>':''),s.tokens?number((s.tokens.input||0)+(s.tokens.output||0)):'—',s.answer?'<span data-verbatim>'+e(s.answer.choice)+'</span><small data-verbatim>'+e(s.answer.channel)+'</small>':'—',passJudgingHtml(s,run),outcomesHtml(s.outcomes)].map((cell,i)=>'<td data-label="'+label(RUN_STEP_HEADS[i])+'">'+cell+'</td>').join('')+'</tr>').join('')
+  +steps.map(s=>'<tr>'+['<span data-verbatim>'+e(s.step)+'</span>'+agentHarness(s.harness)+harnessChanged(s.harnessChanges)+runtimeLine(s.runtime)+notClosedLine(s.runtime)+loginWaitLine(s.loginWait),number(s.pass),runStatus(s.status)+(s.message?'<small data-verbatim>'+e(s.message)+'</small>':''),s.tokens?number((s.tokens.input||0)+(s.tokens.output||0)):'—',s.answer?'<span data-verbatim>'+e(s.answer.choice)+'</span><small data-verbatim>'+e(s.answer.channel)+'</small>':'—',passJudgingHtml(s,run),outcomesHtml(s.outcomes)].map((cell,i)=>'<td data-label="'+label(RUN_STEP_HEADS[i])+'">'+cell+'</td>').join('')+'</tr>').join('')
   +'</tbody></table></div>';
 }
 `;

@@ -189,7 +189,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     if (opened.kind !== 'ready') throw new Error('not opened');
 
     expect(await runtime.reattach('never-opened')).toEqual({ kind: 'gone' });
-    await runtime.close(opened.handle);
+    expect(await runtime.close(opened.handle)).toEqual({ ok: true });
     expect(await runtime.reattach(opened.handle)).toEqual({ kind: 'gone' });
   });
 
@@ -441,6 +441,49 @@ describe('a runtime\'s display over stdio', () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe('a runtime that cannot close a place, over stdio', () => {
+  let dir: string;
+  const started: StepRuntime[] = [];
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-step-close-'));
+    fs.mkdirSync(path.join(dir, 'worktree'));
+  });
+
+  afterEach(async () => {
+    await Promise.all(started.splice(0).map((runtime) => runtime.dispose()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const opened = async (options: RuntimeOptions): Promise<{ runtime: StepRuntime; handle: string }> => {
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    started.push(runtime);
+    expect(await runtime.init({ options: { state: path.join(dir, 'state'), ...options }, mode: 'unattended' })).toMatchObject({ ok: true });
+    const place = await runtime.open({
+      op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
+      view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), toolHome: {} },
+    }, async () => {});
+    if (place.kind !== 'ready') throw new Error('not opened');
+
+    return { runtime, handle: place.handle };
+  };
+
+  it('answers close_failed with why, and keeps the place', async () => {
+    const { runtime, handle } = await opened({ close_fails: true });
+
+    expect(await runtime.close(handle)).toEqual({ ok: false, failure: { code: 'close_failed', message: `The toy keeps place ${handle}: close_fails is set.` } });
+    expect(await runtime.reattach(handle)).toMatchObject({ kind: 'alive' });
+  });
+
+  it('fails a close once the runtime has stopped, instead of answering it closed', async () => {
+    const { runtime, handle } = await opened({ exit_at: 'exec-accepted' });
+    expect(await runtime.exec({ op: newOpId(), handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 200)'], env: {}, unset: [], cwd: path.join(dir, 'worktree') }, {}))
+      .toMatchObject({ kind: 'lost', failure: { code: 'runtime_exited' } });
+
+    expect(await runtime.close(handle)).toMatchObject({ ok: false, failure: { code: 'runtime_exited' } });
   });
 });
 

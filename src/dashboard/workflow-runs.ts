@@ -165,7 +165,7 @@ interface StepRow {
   /** What changed in `harness` since the previous pass of the step that recorded one, when anything did. */
   harnessChanges?: HarnessChange[];
   /** The step runtime the pass's attempt ran on, on this machine: its name, the handle it gave, how far the attempt got, and what the runtime shows of the place. */
-  runtime?: { name: string; driver: string; handle?: string; phase: AttemptRuntimeRecord['phase']; display?: AttemptRuntimeRecord['display'] };
+  runtime?: { name: string; driver: string; handle?: string; phase: AttemptRuntimeRecord['phase']; display?: AttemptRuntimeRecord['display']; closeFailed?: AttemptRuntimeRecord['closeFailed'] };
   /** The attempt that holds a login the pass's attempt waits for, before its place opens. */
   loginWait?: LoginWait;
 }
@@ -495,6 +495,8 @@ async function withRuntimes(config: LocalConfig, run: RunState, steps: StepRow[]
     if (record.open.handle !== undefined) runtime.handle = record.open.handle;
 
     if (record.display) runtime.display = record.display;
+
+    if (record.closeFailed) runtime.closeFailed = record.closeFailed;
 
     return { ...waiting, runtime };
   }));

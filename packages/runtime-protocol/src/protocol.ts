@@ -23,7 +23,7 @@ import { z } from 'zod';
 //    < {"op":"op-91c4…","event":"finished","session":{"tool":"claude","id":"…"},"result":{"output":{…}},"usage":{…}}
 //    > {"type":"collect","handle":"…"}              < {"event":"collected","handle":"…"}
 //    > {"type":"reattach","handle":"…"}             < {"event":"alive","handle":"…","ops":[...]} or {"event":"gone",…}
-//    > {"type":"close","handle":"…"}                < {"event":"closed","handle":"…"}
+//    > {"type":"close","handle":"…"}                < {"event":"closed","handle":"…"} or {"event":"close_failed","handle":"…","failure":{…}}
 //    > {"type":"cancel","op":"op-8b10…"}            the operation then ends {"op":"op-8b10…","event":"cancelled"}
 //
 
@@ -226,6 +226,8 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType, TCan extends z
     z.object({ event: z.literal('alive'), handle: RuntimeHandleSchema, ops: z.array(OpStateSchema), display }),
     z.object({ event: z.literal('gone'), handle: RuntimeHandleSchema }),
     z.object({ event: z.literal('closed'), handle: RuntimeHandleSchema }),
+    /** The runtime could not end the place, so what it started there may still run. */
+    z.object({ event: z.literal('close_failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema }),
   ]);
 
   return { OpEvent, HandleEvent, Message: z.union([InitReply, OpEvent, HandleEvent, z.object({ event: z.literal('error'), message: z.string() })]) };
