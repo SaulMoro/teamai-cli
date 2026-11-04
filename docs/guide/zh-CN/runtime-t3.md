@@ -142,6 +142,58 @@ workflows:
 ✖ Step "review" failed with model_unavailable: T3 Code provider instance "claudeAgent" (Claude) has no model claude-opus-9. Its models: claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5.
 ```
 
+## 只用 T3 为一次 pass 评分
+
+T3 也能当评审。机器上只有 T3、没有任何 agent CLI 的成员，也能运行带[评分器](scorers.md#为步骤评分)的工作流并给每次 pass 打标签，只要驱动定义里只列出 `t3`：
+
+```yaml
+# .teamai/drivers/t3only.yaml
+schemaVersion: v1alpha1
+name: t3only
+tool: claude
+runtimes:
+  - use: t3
+    options: { environment: local }
+```
+
+```yaml
+# .teamai/workflows/readme-test-section.yaml
+schemaVersion: v1alpha1
+name: readme-test-section
+description: Add a Test section to the README.
+steps:
+  - id: write
+    workspace: new
+    model: claude-haiku-5-5
+    prompt: Add a "## Test" section to README.md that says to run `npm test` before opening a pull request. Change no other file.
+    scorers: { names: [review-quality], sampling: all }
+```
+
+`review-quality` 是[评分器](scorers.md)页面里的评分器。`sampling: all` 会评审每次 pass，不管它的 `samplingRate` 是多少。
+
+```text
+$ command -v claude codex codebuddy opencode
+[exit 1: none found]
+$ teamai workflow start readme-test-section --driver t3only
+ℹ run:r943880abc4705751:write:1: review-quality good (teamai-score run rdecc208adbba4b79).
+{"data":{"done":{"run":"r943880abc4705751","outcome":"succeeded","record":"published"},"cancelled":[]}}
+```
+
+`write` 和上文一样作为项目里的线程运行。teamai 自己的评分命令（evidence、label、write）在这台机器上运行，不需要 agent。评审作为第二个线程 `score[0].judge · teamai rdecc208adbba4b79` 运行，出现在 T3 的 **No project** 下：
+
+- 它是一个独立的新线程，在一个新的 scratch 文件夹（`~/.t3/scratch/…`）里。teamai 把评审要读的证据（会话记录、diff、`evidence.json`）复制进这个文件夹，并把副本设为只读。
+- 它的第一条消息要求它只读这个文件夹，给出回复的 JSON Schema，并把 teamai 提示词里的每个路径都指向副本。
+- 它的最后一条消息就是回复：`{"answer":{"label":"good","reasoning":"The step asked for a \"## Test\" section … diff.patch adds exactly that …"}}`。
+- 它和步骤线程一样以 Auto 运行，或者以你收紧的 `runtime_mode` 运行。读到回复后 teamai 会把线程标为已处理（settle），并在评审的位置关闭时删除副本。
+
+T3 评审的[隔离级别](scorers.md#隔离)是 **best-effort**：
+
+| 它能保证的 | 它不能保证的 |
+| --- | --- |
+| agent 在副本里工作，所以改不了 teamai 用来打标签的证据。 | agent 的工具仍然在你的机器上、用你的文件运行。只有第一条消息的要求让它不去读文件夹之外的内容，而 Auto 会批准常规的读取。 |
+| 副本是只读的，也不包含可能指向外部的符号链接。 | 它不切断网络。 |
+| teamai 会在标签的运行里记录 `best-effort` 和 `read` 访问权限。 | 带 `isolation: verified` 的评分器会等待能达到该级别的运行时（比如 sandbox 运行时），不会在这里被评审。 |
+
 ## 无人值守运行
 
 在 CI 中，或在 `TEAMAI_MODE=unattended` 的运行中，没人能批准登录或工具请求。无人值守运行复用有人值守运行保存的凭据，没有凭据时立即失败：
