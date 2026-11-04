@@ -2,7 +2,7 @@ import type { ContainerEngine } from '../options.js';
 import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protocol';
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
 import { sandboxName, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
-import { cliOf, mountsOf, unmountable, type Ran } from './cli.js';
+import { cliOf, LAUNCHABLE, mountsOf, unmountable, type Ran } from './cli.js';
 
 // ─── docker and podman ───────────────────────────────────
 //
@@ -28,10 +28,6 @@ import { cliOf, mountsOf, unmountable, type Ran } from './cli.js';
 //  exec at a time (teamai opens, execs, collects and closes each attempt in turn), so a stop restarts the container,
 //  which ends every process in it and keeps the container for the next exec.
 //
-
-/** The tools a step runtime can launch, as `can.tools` lists those an image holds. */
-// oxlint-disable-next-line teamai/tool-facts -- teamai's EXEC_RUNTIME_TOOLS, by their executables; a runtime package cannot read teamai's tool registry
-const LAUNCHABLE = ['claude', 'codex', 'codebuddy'];
 
 /** The private home of the step's processes inside the container. */
 const CONTAINER_HOME = '/tmp/teamai-home';

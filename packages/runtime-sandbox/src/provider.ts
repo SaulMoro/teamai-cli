@@ -6,7 +6,7 @@ import type { Can, PlaceView, RuntimeDisplay, RuntimeFailure } from '@teamai/run
 //  says what its technology isolates. Everything else is written once above it, in runtime.ts: the protocol, the
 //  journal of operations and their retained outcomes, credentials and options.
 //
-//  Bind-mount providers (docker and podman today) mount the place view at its host paths, so collect copies nothing.
+//  Bind-mount providers (sbx, docker and podman today) mount the place view at its host paths, so collect copies nothing.
 //  A copy provider (a hosted sandbox) will add copyIn and copyOut to this seam. On a provider that can confine one, a
 //  judge (a confined prompt) gets a sandbox of its own that sees only its directory.
 //

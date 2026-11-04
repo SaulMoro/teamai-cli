@@ -249,6 +249,7 @@ runtimes:
     options:
       provider: sbx
       agent: codex                       # no credentials: sbx's proxy signs Codex in
+  - use: local                           # a scored step's judge: sbx offers none
 ```
 
 For Codex, each member stores their login in sbx once. It stays in sbx's proxy on your machine, which adds it to Codex's requests, so no `auth.json` is written to the attempt's tool home:
@@ -284,7 +285,7 @@ What differs from a container:
 
 - The worktree is the sandbox's workspace. The git directories, the result directory, the run directory and the tool home are extra workspaces at their host paths, the git ones read-only (`/home/me/acme/app/.git:ro`). sbx does not follow a linked worktree's `.git` to the main checkout by itself, so teamai names those paths. `git status` works, and `git commit` fails.
 - The step runs as sbx's `agent` user. Files it writes on your disk are still yours.
-- Each `sbx exec` gets the step's names with `-e NAME`, never a value in the command line. A strict step's withheld names, such as `GH_TOKEN`, which sbx sets for its proxy, are unset in the step's process.
+- Each `sbx exec` gets the step's names with `-e NAME`, never a value in the command line. A strict step's withheld names, such as `GH_TOKEN`, which sbx sets for its proxy, are unset in the step's process. A step's own `HOME`, `XDG_*`, `SBX_*` or `DOCKER_*` is not passed: the sbx CLI reads those itself, and the sandbox keeps its own.
 - A cancel or a limit runs `sbx stop`; the next exec starts the sandbox again. When the attempt ends, teamai runs `sbx rm --force`. sbx also stops an idle sandbox on its own, and that is fine.
 
 **A gateway on your machine** is reached as `host.docker.internal`, which sbx's proxy sends to `localhost`. Allow its port once:

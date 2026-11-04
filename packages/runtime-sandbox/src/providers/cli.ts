@@ -9,6 +9,10 @@ import type { PlaceView, RuntimeFailure } from '@teamai/runtime-protocol';
 //  mounts the place view at its host paths with the access the view gives each path.
 //
 
+/** The tools a step runtime can launch, as `can.tools` lists those a sandbox holds. */
+// oxlint-disable-next-line teamai/tool-facts -- teamai's EXEC_RUNTIME_TOOLS, by their executables; a runtime package cannot read teamai's tool registry
+export const LAUNCHABLE = ['claude', 'codex', 'codebuddy'];
+
 export type Ran = { kind: 'ran'; code: number; stdout: string; stderr: string } | { kind: 'unstartable'; message: string };
 
 export interface Cli {
