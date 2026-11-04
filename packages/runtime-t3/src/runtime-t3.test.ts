@@ -628,6 +628,24 @@ describe('teamai-runtime-t3', () => {
       expect(thread?.message).toContain(JSON.stringify({ type: 'object', required: ['label'] }));
     });
 
+    // teamai sends the directory's real path, and the prompt names it as the step rendered it, here through a link.
+    it('points the prompt at the copy however it spells the directory, a path through a symlink included', async () => {
+      const linked = path.join(dir, 'linked-run');
+      fs.symlinkSync(path.join(dir, 'run'), linked);
+      const spelled = path.join(linked, 'score', 'evidence');
+      const { runtime, handle } = await opened();
+      const request = judge(handle, 'op-000000a6');
+
+      runtime.send({ ...request, lease: { ...request.lease, prompt: `Read only the files under ${spelled}:\nReply with JSON that matches the schema in ${path.join(spelled, 'schema.json')}, and nothing else.` } });
+
+      expect(await ended(runtime, 'op-000000a6')).toMatchObject({ event: 'finished' });
+      const [thread] = t3.threads();
+      const copy = z.string().parse(thread?.worktreePath);
+      expect(thread?.message).toContain(`Read only the files under ${copy}:`);
+      expect(thread?.message).toContain(`the schema in ${path.join(copy, 'schema.json')},`);
+      expect(thread?.message).not.toContain(linked);
+    });
+
     it('runs the judge\'s thread in the tighter `runtime_mode`', async () => {
       const { runtime, handle } = await opened({ runtime_mode: 'approval-required' });
 
