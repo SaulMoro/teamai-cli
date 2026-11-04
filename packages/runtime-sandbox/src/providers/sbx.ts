@@ -148,7 +148,11 @@ export function sbxProvider({ agent, env }: { agent: string; env: NodeJS.Process
     },
 
     async stop(id) {
-      await cli(['stop', id]);
+      const stopped = await cli(['stop', id]);
+
+      if (stopped.kind === 'ran' && stopped.code === 0) return { ok: true };
+
+      return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not stop sandbox ${id}: ${messageOf(stopped)}. What runs there may still run; remove it with \`sbx rm --force ${id}\`.` } };
     },
 
     destroy: remove,
