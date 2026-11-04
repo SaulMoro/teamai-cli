@@ -36,7 +36,7 @@ const ProjectPageSchema = z.object({ projects: z.array(ProjectSchema), nextCurso
 /** A thread's run as T3 reports it; `idle` when the thread has none. */
 export const THREAD_STATUSES = ['idle', 'preparing', 'queued', 'starting', 'running', 'waiting', 'completed', 'interrupted', 'failed', 'cancelled', 'rolled_back'] as const;
 
-const LaunchedSchema = z.object({ threadId: z.string().min(1), link: z.string().optional() });
+const LaunchedSchema = z.object({ threadId: z.string().min(1) });
 
 const WaitedSchema = z.object({ threadId: z.string(), status: z.enum(THREAD_STATUSES), timedOut: z.boolean() });
 

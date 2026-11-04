@@ -146,11 +146,9 @@ function modelSelection(provider: Provider, lease: PromptLease): { ok: true; sel
   return { ok: true, selection: { instanceId: provider.providerInstanceId, model: model.id, options: [{ id: option.id, value: effort }] } };
 }
 
-/** The link T3 gives a thread, without the angle brackets it wraps links in, or the one it would give. */
-function threadLink(environment: Environment, threadId: string, given: string | undefined): string {
-  const link = given?.replace(/^<|>$/g, '');
-
-  return link && /^[a-z][a-z0-9+.-]*:\/\/\S+$/i.test(link) ? link : `t3-thread://v2/${environment.environmentId}/${threadId}`;
+/** The t3-thread:// link that opens a thread in T3 Code. T3 answers a launch with its web UI's link instead. */
+function threadLink(environment: Environment, threadId: string): string {
+  return `t3-thread://v2/${environment.environmentId}/${threadId}`;
 }
 
 /** What the run's details show of a thread: its title, its link, its id and model. */
@@ -515,11 +513,11 @@ export function serve(options: ServeOptions): Promise<void> {
 
       // A repeated launch with the same clientRequestId is T3's lookup of the thread it launched for this op.
       const launched = await s.t3.launch({
-        title, message: firstMessage(opened, lease, options.startedFrom && threadLink(s.environment, options.startedFrom, undefined)), projectId: opened.projectId, worktreePath: request.cwd,
+        title, message: firstMessage(opened, lease, options.startedFrom && threadLink(s.environment, options.startedFrom)), projectId: opened.projectId, worktreePath: request.cwd,
         modelSelection: selection.selection, runtimeMode: s.stepMode, clientRequestId: request.op,
       });
 
-      thread = { threadId: launched.threadId, title, link: threadLink(s.environment, launched.threadId, launched.link), model: selection.selection.model, tool: lease.tool, launchedAt };
+      thread = { threadId: launched.threadId, title, link: threadLink(s.environment, launched.threadId), model: selection.selection.model, tool: lease.tool, launchedAt };
       state.thread = thread.threadId;
       const now = place(request.handle) ?? opened;
       journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, threads: { ...now.threads, [request.op]: thread } });
