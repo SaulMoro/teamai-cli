@@ -19,6 +19,10 @@
 // as the result's output, keeping the level it was asked for (or `reports`, to say less), and logs the files it could
 // read: those under the prompt's directory, which is all it reads. `path` names a directory of its own tools, first on
 // the PATH of each exec.
+//
+// `answer` makes it answer a `reattach`, `collect` or `close` otherwise, by request type: `failed`, the failure reply for
+// that handle; `error`, an error line that names no request; `silent`, nothing. A request it cannot answer, such as one
+// for a handle while its journal cannot be read, gets the failure reply for its handle or operation.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -26,7 +30,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 
-const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path']);
+const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path', 'answer']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -65,6 +69,16 @@ function writeJson(at, value) {
 }
 
 const opPath = (op) => file('ops', `${op}.json`);
+
+/** The toy's journal of handles. One it cannot read fails the request, never reads as no handle. */
+function readHandles() {
+  try {
+    return JSON.parse(fs.readFileSync(file('handles.json'), 'utf8'));
+  } catch (error) {
+    if (error.code === 'ENOENT') return {};
+    throw new Error(`The toy cannot read its journal ${file('handles.json')}: ${error.message}. Fix or remove that file, then run the same command again.`, { cause: error });
+  }
+}
 
 function dieAt(point) {
   if (options.die_at !== point) return false;
@@ -149,7 +163,7 @@ function noteCredentials(request, handle) {
 const openCredentials = new Map();
 
 function open(request) {
-  const handles = readJson(file('handles.json'), {});
+  const handles = readHandles();
   const key = `${request.run}/${request.attempt}`;
   const handle = handles[key] ?? `toy-${request.run}-${request.attempt}`;
   handles[key] = handle;
@@ -398,7 +412,7 @@ function opsOf(handle) {
 }
 
 function known(handle) {
-  return Object.values(readJson(file('handles.json'), {})).includes(handle);
+  return Object.values(readHandles()).includes(handle);
 }
 
 function reattach(request) {
@@ -436,7 +450,7 @@ function close(request) {
     return;
   }
 
-  const handles = readJson(file('handles.json'), {});
+  const handles = readHandles();
 
   for (const [key, handle] of Object.entries(handles)) if (handle === request.handle) delete handles[key];
   writeJson(file('handles.json'), handles);
@@ -453,6 +467,28 @@ function exitWhenIdle() {
 }
 
 const HANDLERS = { init, open, exec, prompt, cancel, collect: (request) => send({ event: 'collected', handle: request.handle }), reattach, close };
+
+/** Answers a handle request as `answer` says, and says whether it did. */
+function answeredOtherwise(request) {
+  const how = options?.answer?.[request.type];
+
+  if (how === undefined || request.handle === undefined) return false;
+
+  if (how === 'failed') send({ event: 'failed', handle: request.handle, failure: { code: 'toy_refused', message: `The toy refuses ${request.type} of ${request.handle}: answer.${request.type} is set.` } });
+
+  if (how === 'error') send({ event: 'error', message: `The toy cannot answer ${request.type} of ${request.handle}: answer.${request.type} is set.` });
+
+  return true;
+}
+
+/** The failure reply to a request the toy could not answer: for its handle, or for its operation. */
+function failedReply(request, error) {
+  const failure = { code: 'toy_failed', message: error instanceof Error ? error.message : String(error) };
+
+  if (request.handle !== undefined && request.op === undefined) return { event: 'failed', handle: request.handle, failure };
+
+  return request.op === undefined ? { event: 'error', message: failure.message } : { op: request.op, event: 'failed', failure };
+}
 
 readline.createInterface({ input: process.stdin }).on('line', (line) => {
   if (line.trim() === '') return;
@@ -473,7 +509,13 @@ readline.createInterface({ input: process.stdin }).on('line', (line) => {
     return;
   }
 
-  handler(request);
+  if (answeredOtherwise(request)) return;
+
+  try {
+    handler(request);
+  } catch (error) {
+    send(failedReply(request, error));
+  }
 }).on('close', () => {
   ended = true;
   exitWhenIdle();

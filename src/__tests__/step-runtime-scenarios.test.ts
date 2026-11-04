@@ -599,6 +599,49 @@ describe('a runtime that cannot close a place, over stdio', () => {
 
     expect(await runtime.close(handle)).toMatchObject({ ok: false, failure: { code: 'runtime_exited' } });
   });
+
+  it('reads the failure reply for a handle as that request\'s failure, for reattach, collect and close', async () => {
+    const { runtime, handle } = await opened({ answer: { reattach: 'failed', collect: 'failed', close: 'failed' } });
+    const failure = (type: string) => ({ code: 'toy_refused', message: `The toy refuses ${type} of ${handle}: answer.${type} is set.` });
+
+    expect(await runtime.reattach(handle)).toEqual({ kind: 'failed', failure: failure('reattach') });
+    expect(await runtime.collect(handle)).toEqual({ ok: false, failure: failure('collect') });
+    expect(await runtime.close(handle)).toEqual({ ok: false, failure: failure('close') });
+  });
+
+  it('answers failed, never gone, for a handle whose journal it cannot read', async () => {
+    const { runtime, handle } = await opened({});
+    fs.writeFileSync(path.join(dir, 'state', 'handles.json'), '{not json');
+
+    expect(await runtime.reattach(handle)).toMatchObject({ kind: 'failed', failure: { code: 'toy_failed', message: expect.stringContaining('The toy cannot read its journal') } });
+    expect(await runtime.close(handle)).toMatchObject({ ok: false, failure: { code: 'toy_failed' } });
+  });
+
+  it('fails a close it is waiting on as runtime_unanswered when the runtime writes an error that names no request, and the place stays', async () => {
+    const { runtime, handle } = await opened({ answer: { close: 'error' } });
+
+    expect(await runtime.close(handle)).toEqual({
+      ok: false,
+      failure: { code: 'runtime_unanswered', message: `Step runtime "toy" did not answer close of ${handle}: it wrote an error that names no request (The toy cannot answer close of ${handle}: answer.close is set.).` },
+    });
+    expect(await runtime.reattach(handle)).toMatchObject({ kind: 'alive' });
+  });
+
+  it('fails a reattach and a close the runtime does not answer within 15 s as runtime_unanswered', async () => {
+    const { runtime, handle } = await opened({ answer: { reattach: 'silent', close: 'silent' } });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    try {
+      const reattached = runtime.reattach(handle);
+      const closed = runtime.close(handle);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(await reattached).toEqual({ kind: 'failed', failure: { code: 'runtime_unanswered', message: `Step runtime "toy" did not answer reattach of ${handle} within 15 s.` } });
+      expect(await closed).toEqual({ ok: false, failure: { code: 'runtime_unanswered', message: `Step runtime "toy" did not answer close of ${handle} within 15 s.` } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('the toy runtime once teamai stops reading it', () => {
