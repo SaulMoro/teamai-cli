@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import {
-  PromptResultSchema, RuntimeRequestSchema, type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
+  PromptResultSchema, RUN_DIR_ENV, RuntimeRequestSchema, type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptResult, type RuntimeDisplay,
   type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
@@ -284,7 +284,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     live: Daemon,
     request: Extract<RuntimeRequest, { type: 'prompt' }>,
     tool: PaseoTool,
-    launch: { place: Place; modeId: string; prompt: string; options?: AgentCreate['config']['options'] },
+    launch: { place: Place; modeId: string; prompt: string; options?: AgentCreate['config']['options']; env?: AgentCreate['env'] },
   ): Promise<AgentCreate | RuntimeFailure> {
     const { place } = launch;
     const { lease } = request;
@@ -310,6 +310,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       title: `teamai ${lease.step} · ${place.run}`,
       prompt: launch.prompt,
       labels: { 'teamai-attempt': `${place.run}/${place.attempt}` },
+      ...(launch.env && { env: launch.env }),
       config: { provider: `${tool}/${model.id}`, modeId: launch.modeId, ...(effort && { thinkingOptionId: effort }), ...(launch.options && { options: launch.options }) },
     };
   }
@@ -331,8 +332,9 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       return;
     }
 
+    // The agent gets the run directory's name and no other: Paseo keeps a create's env in plain text.
     const create = await createFor(live, request, tool, {
-      place, modeId: DEFAULT_MODES[tool], prompt: lease.prompt,
+      place, modeId: DEFAULT_MODES[tool], prompt: lease.prompt, env: { [RUN_DIR_ENV]: place.runDir },
       // Claude's default mode asks before any write, so the result file, as teamai's own launch allows it on a POSIX
       // host, and the run's scratch directory, which the place gives read-write at its own path, are allowed, and only
       // they; the mode stays as it is.
