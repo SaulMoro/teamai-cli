@@ -89,8 +89,8 @@ function stopGroup(pgid) {
   setTimeout(() => { try { process.kill(-pgid, 'SIGKILL'); } catch { /* gone */ } }, 2000).unref();
 }
 
-// It appends the names, never the values, of the credentials each open, exec and prompt brings to `credentials.jsonl`
-// in its state, and sets an exec's over its process environment.
+// It appends the names, never the values, of the credentials and logins its init names, and of the credentials each
+// open, exec and prompt brings, to `credentials.jsonl` in its state, and sets an exec's over its process environment.
 // `exit_at: 'exec-accepted'` makes the toy itself exit right after it accepted an exec, which keeps running. With
 // `close_fails`, it answers every `close` with `close_failed`; set to a credential's name, its failure echoes the value
 // the place's open brought, so a test reads what teamai keeps of it.
@@ -116,6 +116,10 @@ function init(request) {
 
   options = request.options;
   fs.mkdirSync(options.state, { recursive: true });
+
+  if (request.credentials !== undefined) {
+    fs.appendFileSync(file('credentials.jsonl'), `${JSON.stringify({ type: 'init', names: request.credentials.env, logins: request.credentials.logins })}\n`);
+  }
 
   const judge = options.judge === undefined ? {} : {
     confinedPrompt: true,

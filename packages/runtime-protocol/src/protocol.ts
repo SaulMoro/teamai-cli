@@ -10,7 +10,7 @@ import { z } from 'zod';
 //  teamai persists before it sends the request, and a runtime answers a repeated id with the same acceptance and the
 //  same terminal outcome until `close`. Both sides parse with the schemas below.
 //
-//    > {"type":"init","protocol":1,"mode":"unattended","options":{...}}
+//    > {"type":"init","protocol":1,"mode":"unattended","options":{...},"credentials":{"env":["ANTHROPIC_API_KEY"],"logins":[]}}
 //    < {"type":"init","ok":true,"can":{...},"prompt":true}           prompt: it launches agents its own way
 //                                                                    confinedPrompt: it answers confined prompts, so it may offer can.confined
 //    > {"type":"open","op":"op-7f2a…","run":"r…","attempt":"a…","view":{...},"credentials":{}}
@@ -215,7 +215,20 @@ export type Can = z.infer<typeof CanSchema>;
 
 export type ConfinedOffer = z.infer<typeof ConfinedOfferSchema>;
 
-const InitRequestSchema = z.object({ type: z.literal('init'), protocol: z.literal(RUNTIME_PROTOCOL), mode: z.enum(RUNTIME_MODES), options: RuntimeOptionsSchema });
+/**
+ * The credentials a driver definition gives a runtime, by name only, never a value: `env`, the names its operations
+ * carry; `logins`, the tools whose login teamai copies into an attempt's tool home. A runtime offers by them, such as
+ * `can.confined` only for the tools it can sign in. An older teamai sends none, and the runtime offers as it would
+ * without them.
+ */
+export const InitCredentialsSchema = z.object({ env: z.array(z.string()), logins: z.array(z.string()) });
+
+export type InitCredentials = z.infer<typeof InitCredentialsSchema>;
+
+const InitRequestSchema = z.object({
+  type: z.literal('init'), protocol: z.literal(RUNTIME_PROTOCOL), mode: z.enum(RUNTIME_MODES), options: RuntimeOptionsSchema,
+  credentials: InitCredentialsSchema.optional(),
+});
 
 export const OpenRequestSchema = z.object({
   type: z.literal('open'),
