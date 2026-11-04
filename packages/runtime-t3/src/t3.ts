@@ -44,7 +44,8 @@ export type Waited = z.infer<typeof WaitedSchema>;
 
 /**
  * What the runtime reads of a thread: its latest run's status as T3 names it (none before its first run), its folder,
- * how many runs it had, and the requests it holds for a person.
+ * how many runs it had, and the requests it holds for a person. The status stays a string: one this runtime does not
+ * know reads as a run still going, rather than failing the read a judge's launch makes.
  */
 const ThreadShellSchema = z.object({
   status: z.string().nullable(),

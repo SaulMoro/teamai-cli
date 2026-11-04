@@ -20,7 +20,7 @@ const ThreadSchema = z.object({
   /** A judge's: the read-only copy of its directory, in the thread's own scratch folder, which close removes. */
   copy: z.string().optional(),
   /** How asking T3 to settle the thread went, once the runtime asked; it asks once. */
-  settle: z.enum(['settled', 'failed']).optional(),
+  settlement: z.enum(['settled', 'failed']).optional(),
 });
 
 export type ThreadRecord = z.infer<typeof ThreadSchema>;
