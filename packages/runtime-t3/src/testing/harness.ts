@@ -5,6 +5,7 @@ import readline from 'node:readline';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { z } from 'zod';
+import type { StepMode } from '../t3.js';
 
 // ─── Test support: the runtime over its stdio, on a fake T3 Code server ───
 //
@@ -59,7 +60,7 @@ export interface FakeT3Config {
   providers: FakeProvider[];
   agent: FakeAgent;
   /** The mode teamai's sign-in was approved with; T3 refuses a thread in a broader one. Unset: any mode. */
-  access?: 'auto' | 'auto-accept-edits' | 'approval-required';
+  access?: StepMode;
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });

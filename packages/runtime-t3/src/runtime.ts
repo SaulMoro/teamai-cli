@@ -4,7 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { promisify } from 'node:util';
 import {
-  PromptResultSchema, RUNTIME_PROTOCOL, RuntimeRequestSchema,
+  PromptResultSchema, RUNTIME_PROTOCOL, RuntimeRequestSchema, type RUNTIME_MODES,
   type OpId, type OpState, type PromptLease, type PromptResult, type RuntimeDisplay, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
@@ -28,6 +28,8 @@ import { STEP_MODE_LABELS, T3Error, type Environment, type Launch, type StepMode
 //
 
 /** The options a driver definition gives `t3`. teamai strips `max_parallel` and `credentials` before `init`. */
+type RuntimeMode = (typeof RUNTIME_MODES)[number];
+
 const OptionsSchema = z.object({
   /** The T3 environment the threads run in: `local`, the T3 Code server on this machine. */
   environment: z.literal('local'),
@@ -61,7 +63,7 @@ export interface ServeOptions {
   write(message: RuntimeMessage): void;
   journal: Journal;
   /** Connects to the environment for a run in `mode`; a failure names why and what the person does about it. */
-  connect(mode: 'attended' | 'unattended'): Promise<Connected | { ok: false; error: RuntimeFailure }>;
+  connect(mode: RuntimeMode): Promise<Connected | { ok: false; error: RuntimeFailure }>;
   /** The T3 thread the run was started from, when it was (T3 sets T3CODE_THREAD_ID in its sessions). */
   startedFrom?: string;
 }
@@ -74,7 +76,7 @@ interface Running {
 
 interface Session {
   t3: T3;
-  mode: 'attended' | 'unattended';
+  mode: RuntimeMode;
   environment: Environment;
   /** The provider instance each offered tool runs on. */
   instances: Map<ToolId, Provider>;
@@ -218,10 +220,36 @@ export function serve(options: ServeOptions): Promise<void> {
 
   /** The terminal event of an operation that ended; a running one has none yet. */
   const answerEnded = (op: OpId, state: OpState): void => {
-    if (state.state === 'finished') write({ op, event: 'finished', session: state.session, result: state.result, ...(state.usage && { usage: state.usage }) });
-    else if (state.state === 'cancelled') write({ op, event: 'cancelled' });
-    else if (state.state === 'failed') write({ op, event: 'failed', failure: state.failure });
-    else if (state.state === 'exited') write({ op, event: 'exited', code: state.code, stdout: state.stdout });
+    switch (state.state) {
+      case 'running':
+        return;
+      case 'finished':
+        return write({ op, event: 'finished', session: state.session, result: state.result, ...(state.usage && { usage: state.usage }) });
+      case 'cancelled':
+        return write({ op, event: 'cancelled' });
+      case 'failed':
+        return write({ op, event: 'failed', failure: state.failure });
+      case 'exited':
+        return write({ op, event: 'exited', code: state.code, stdout: state.stdout });
+      default: {
+        const unhandled: never = state;
+
+        return unhandled;
+      }
+    }
+  };
+
+  /** Stops a step's thread as its Stop button does; a failure is logged, and the thread may still run in T3. */
+  const stopped = async (t3: T3, threadId: string): Promise<boolean> => {
+    try {
+      await t3.stop(threadId);
+
+      return true;
+    } catch (error) {
+      process.stderr.write(`Could not stop ${threadId}: ${error instanceof Error ? error.message : String(error)}\n`);
+
+      return false;
+    }
   };
 
   // teamai quotes a keyed option failure (`key` set) inside a sentence of its own and ends it, so it brings no full stop.
@@ -324,7 +352,7 @@ export function serve(options: ServeOptions): Promise<void> {
   };
 
   /** Waits for the thread until the step is done, stopped or failed, and returns how it ended. */
-  const follow = async (s: Session, opened: PlaceRecord, request: Extract<RuntimeRequest, { type: 'prompt' }>, thread: ThreadRecord): Promise<OpState> => {
+  const follow = async (s: Session, request: Extract<RuntimeRequest, { type: 'prompt' }>, thread: ThreadRecord): Promise<OpState> => {
     const state = running.get(request.op);
     const where = `The T3 thread ${thread.link} ("${thread.title}")`;
     let errors = 0;
@@ -347,7 +375,7 @@ export function serve(options: ServeOptions): Promise<void> {
       if (!TERMINAL.has(waited.status)) {
         // T3 keeps a run that asks for an approval running, with the request pending; nobody answers it unattended.
         if (s.mode === 'unattended' && (waited.status === 'waiting' || await s.t3.pendingRequests(thread.threadId) > 0)) {
-          await s.t3.stop(thread.threadId).catch(() => {});
+          await stopped(s.t3, thread.threadId);
 
           return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} asked for an approval, and nobody is there to give it in an unattended run.` } };
         }
@@ -478,10 +506,10 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    if (state.cancelled) await s.t3.stop(thread.threadId).catch(() => {});
+    if (state.cancelled) await stopped(s.t3, thread.threadId);
 
     try {
-      end(await follow(s, opened, request, thread));
+      end(await follow(s, request, thread));
     } catch (error) {
       // The thread may still run in T3, where the person finds it by the link.
       end({ op: request.op, state: 'failed', failure: { code: 't3_unavailable', message: `Lost track of the T3 thread ${thread.link}: ${error instanceof Error ? error.message : String(error)}` } });
@@ -498,14 +526,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
       // A runtime before this one launched the thread and died; teamai cancels before it reattaches.
       if (known && left && known.ops[op]?.state === 'running' && session) {
-        try {
-          await session.t3.stop(left.threadId);
-        } catch (error) {
-          process.stderr.write(`Could not stop ${left.threadId}: ${error instanceof Error ? error.message : String(error)}\n`);
-
-          return;
-        }
-
+        if (!await stopped(session.t3, left.threadId)) return;
         record(known.handle, op, { op, state: 'cancelled' });
         answerEnded(op, { op, state: 'cancelled' });
 
@@ -522,13 +543,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
     state.cancelled = true;
 
-    if (!state.thread || !session) return;
-
-    try {
-      await session.t3.stop(state.thread);
-    } catch (error) {
-      process.stderr.write(`Could not stop ${state.thread}: ${error instanceof Error ? error.message : String(error)}\n`);
-    }
+    if (state.thread && session) await stopped(session.t3, state.thread);
   };
 
   const handleRequest = async (request: RuntimeRequest): Promise<void> => {
