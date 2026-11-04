@@ -9,7 +9,7 @@ import { PROMPT_FAILURE_CODES, type PlaceView, type PromptLease, type RuntimeFai
 import { launchEnv } from '../../../launch-context.js';
 import { writeJsonAtomic } from '../../../utils/fs.js';
 import { MAX_TIMER_DELAY } from '../../shell-command.js';
-import { attemptResultPath, type AttemptId, type RunId } from '../../store.js';
+import { attemptResultPath, runScratchDir, type AttemptId, type RunId } from '../../store.js';
 import type { WorkflowFailure } from '../../types.js';
 import { git } from '../../worktree.js';
 import type { LocalConfig } from '../../../types.js';
@@ -37,8 +37,9 @@ export async function placeView(config: LocalConfig, run: RunId, attempt: Attemp
   const pointer = path.join(cwd, '.git');
   const readonly = [...new Set([...gitDirs, ...(await fs.lstat(pointer).then(() => [pointer], () => []))])];
   const result = path.dirname(attemptResultPath(config, run, attempt));
-  await fs.mkdir(result, { recursive: true });
-  const view: PlaceView = { worktree: cwd, readonly, result, toolHome: {} };
+  const runDir = runScratchDir(config, run);
+  await Promise.all([fs.mkdir(result, { recursive: true }), fs.mkdir(runDir, { recursive: true })]);
+  const view: PlaceView = { worktree: cwd, readonly, result, runDir, toolHome: {} };
 
   if (toolHome) view.toolHome[toolHome.variable] = toolHome.dir;
 

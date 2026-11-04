@@ -55,7 +55,7 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  const view = { worktree: '/work', readonly: [], result: '/work/out', toolHome: {} };
+  const view = { worktree: '/work', readonly: [], result: '/work/out', runDir: '/work/scratch', toolHome: {} };
 
   it('is cancelled when the driver aborts while the place opens', async () => {
     const controller = new AbortController();

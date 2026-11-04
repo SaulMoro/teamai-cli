@@ -74,7 +74,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
 
   const openRequest = (op = newOpId()): OpenRequest => ({
     op, run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
-    view: { worktree, readonly: [], result: path.join(dir, 'out'), toolHome: {} },
+    view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
   });
 
   const execRequest = (handle: string, argv: string[], op = newOpId()): ExecRequest => ({ op, handle, argv, env: { STEP_VALUE: 'from-teamai' }, unset: [], credentials: {}, cwd: worktree });
@@ -282,7 +282,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
   const opened = async (runtime: StepRuntime): Promise<string> => {
     const place = await runtime.open({
       op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
-      view: { worktree, readonly: [], result: path.join(dir, 'out'), toolHome: {} },
+      view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
     }, async () => {});
 
     if (place.kind !== 'ready') throw new Error(`not opened: ${JSON.stringify(place)}`);
@@ -476,7 +476,7 @@ describe('a runtime\'s display over stdio', () => {
     expect(await runtime.init({ options: { state: path.join(dir, 'state'), display }, mode: 'unattended' })).toMatchObject({ ok: true });
     const opened = await runtime.open({
       op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
-      view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), toolHome: {} },
+      view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
     }, async () => {});
 
     return { runtime, opened };
@@ -511,7 +511,7 @@ describe('a runtime\'s display over stdio', () => {
     expect(await runtime.init({ options: { state: path.join(dir, 'state'), agent: { output: { ok: true }, display } }, mode: 'unattended' })).toMatchObject({ ok: true });
     const opened = await runtime.open({
       op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
-      view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), toolHome: {} },
+      view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
     }, async () => {});
     if (opened.kind !== 'ready') throw new Error('not opened');
     const lease = { step: 'review', tool: 'claude', prompt: 'Review.', result: path.join(dir, 'out', 'result.json'), permissions: 'approval-required', interactive: false } as const;
@@ -556,7 +556,7 @@ describe('a runtime that cannot close a place, over stdio', () => {
     expect(await runtime.init({ options: { state: path.join(dir, 'state'), ...options }, mode: 'unattended' })).toMatchObject({ ok: true });
     const place = await runtime.open({
       op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
-      view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), toolHome: {} },
+      view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
     }, async () => {});
     if (place.kind !== 'ready') throw new Error('not opened');
 
@@ -603,7 +603,7 @@ describe('the toy runtime once teamai stops reading it', () => {
     lines.on('line', (line) => replies.push(line));
     const exec = newOpId();
     toy.stdin.write(`${JSON.stringify({ type: 'init', protocol: 1, mode: 'unattended', options: { state } })}\n`);
-    toy.stdin.write(`${JSON.stringify({ type: 'open', op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), toolHome: {} } })}\n`);
+    toy.stdin.write(`${JSON.stringify({ type: 'open', op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} } })}\n`);
     toy.stdin.write(`${JSON.stringify({ type: 'exec', op: exec, handle: 'toy-r0123abcd-a0123abcd', argv: [process.execPath, '-e', 'setTimeout(() => { for (let i = 0; i < 50; i += 1) console.log(`line ${i}`); }, 300)'], env: {}, unset: [], cwd: worktree })}\n`);
     expect(await until(() => replies.some((line) => line.includes(exec) && line.includes('accepted')))).toBe(true);
     lines.close();

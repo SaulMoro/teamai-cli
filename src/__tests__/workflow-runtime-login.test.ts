@@ -99,7 +99,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
   /** Opens the attempt and sends its exec on `runtime`, as the teamai that was killed did. */
   const leftRunning = async (runtime: StepRuntime): Promise<void> => {
     const before = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
-    expect(await before.open({ worktree: root, readonly: [], result: path.join(root, 'out'), toolHome: {} })).toMatchObject({ ok: true });
+    expect(await before.open({ worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} })).toMatchObject({ ok: true });
     void before.exec({ argv: ['tool'], env: {}, unset: [], credentials: {}, cwd: root }, {});
     await vi.waitFor(() => expect(fs.readFileSync(path.join(attemptDir(config(), RUN, FIRST), 'runtime.json'), 'utf8')).toContain('"exec"'));
   };
