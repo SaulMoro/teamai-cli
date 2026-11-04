@@ -1031,7 +1031,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       env = turn;
       const next = await leaseNext(config, runId, driver, { running, canTakeLease, can, autoApprove: options.autoApprove, runMode: mode, handoff, base, env: turn, alone: true, prepare: true });
 
-      if (signalled) continue;
+      if (signalled || isStoppedByPerson) continue;
       // A clone whose steps all settled is not needed any more.
       await sweepClones(config, runId);
 
