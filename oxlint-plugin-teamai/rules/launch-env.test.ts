@@ -1,3 +1,4 @@
+import { expect } from 'vitest';
 import { ruleHarness } from '../test/harness.ts';
 const rule = ruleHarness('teamai/launch-env', { filename: 'src/workflow/engine.ts' });
 rule.invalid('rejects duplicated launch variable spellings', `const name = 'TEAMAI_MODE';`);
@@ -10,3 +11,6 @@ rule.valid('allows the canonical owner', `const name = 'TEAMAI_MODE';`, { filena
 rule.valid('allows tests and unrelated variables', `const name = 'TEAMAI_MODE';`, { filename: 'src/__tests__/launch-context.test.ts' });
 rule.valid('allows an imported spelling', `const env = { [RUN_MODE_ENV]: 'attended' };`);
 rule.valid('scopes to src/ of the checkout, not of a parent directory', `const name = 'TEAMAI_MODE';`, { filename: 'src/teamai-cli/oxlint-plugin-teamai/rules/launch-env.js', files: { 'src/teamai-cli/package.json': '{}' } });
+rule.invalid('rejects the run directory variable, which the runtime protocol owns', `const name = 'TEAMAI_RUN_DIR';`, (output) => expect(output).toContain('Import RUN_DIR_ENV from @teamai/runtime-protocol'));
+rule.invalid('rejects the run directory variable in launch-context, which no longer owns it', `const name = 'TEAMAI_RUN_DIR';`, undefined, { filename: 'src/launch-context.ts' });
+rule.valid('allows the run directory variable in the runtime protocol', `export const RUN_DIR_ENV = 'TEAMAI_RUN_DIR';`, { filename: 'packages/runtime-protocol/src/protocol.ts' });
