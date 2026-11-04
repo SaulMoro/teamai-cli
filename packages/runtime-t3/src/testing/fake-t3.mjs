@@ -4,10 +4,11 @@
 // result there and a Claude or Codex transcript in HOME, as the real tool would.
 //
 //   FAKE_T3_STATE/config.json   written by the test: { token, environment, projects, providers, agent }
-//                               agent: { output, fail, hold, release, waits, noSession }; read again on every call
+//                               agent: { output, fail, hold, release, waits, noSession, reply }; read again on every call
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
 //   FAKE_T3_STATE/threads/      one JSON file per thread
 //   T3CODE_HOME/userdata/server-runtime.json   written once listening: { origin }, as T3 writes it
+//   T3CODE_HOME/scratch/        a scratch thread's new folder, as T3 makes one for a launch with `scratch: true`
 //   FAKE_T3_HOME                the member's home, where the agent's tool keeps its transcripts
 
 import { createHash, randomUUID } from 'node:crypto';
@@ -62,6 +63,8 @@ async function play(threadId) {
 
   if (readThread(threadId).status !== 'running') return;
 
+  if (thread.worktreePath) update(threadId, () => ({ sees: filesUnder(thread.worktreePath), couldWrite: canWrite(thread.worktreePath) }));
+
   if (agent.waits) {
     // The agent asks for an approval nobody gives. T3 keeps such a run `running`, with the request pending.
     update(threadId, () => ({ pendingRequestCount: 1 }));
@@ -80,7 +83,34 @@ async function play(threadId) {
   if (result && (agent.output !== undefined || agent.failure)) fs.writeFileSync(result, JSON.stringify({ output: agent.output, failure: agent.failure }));
 
   if (!agent.noSession) writeTranscript(thread);
-  update(threadId, (now) => ({ status: 'completed', runs: now.runs }));
+  update(threadId, () => ({ status: 'completed', ...(agent.reply !== undefined && { reply: agent.reply }) }));
+}
+
+/** The files under `dir`, relative to it and sorted: what the agent finds in its thread's folder. */
+function filesUnder(dir, prefix = '') {
+  return fs.readdirSync(path.join(dir, prefix), { withFileTypes: true })
+    .flatMap((entry) => (entry.isDirectory() ? filesUnder(dir, path.join(prefix, entry.name)) : [path.join(prefix, entry.name)]))
+    .sort();
+}
+
+/** Whether the agent can change anything in `dir`: write a file of its own, or overwrite one it found there. */
+function canWrite(dir) {
+  const found = filesUnder(dir)[0];
+
+  try {
+    fs.writeFileSync(path.join(dir, '.agent-probe'), '');
+    fs.rmSync(path.join(dir, '.agent-probe'));
+
+    return true;
+  } catch {
+    try {
+      if (found) fs.appendFileSync(path.join(dir, found), '');
+
+      return found !== undefined;
+    } catch {
+      return false;
+    }
+  }
 }
 
 /** The transcript the thread's tool keeps, in its own layout under HOME. */
@@ -135,13 +165,20 @@ const TOOLS = {
       return fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'runtime_mode_escalation_denied', message: `Child runtime mode ${args.runtimeMode} is broader than parent mode ${access}.` }));
     }
 
-    writeThread({
-      threadId, title: args.title, message: args.message, worktreePath: args.workspaceStrategy?.worktreePath, projectId: args.projectId,
-      provider: provider.driverKind, model: args.modelSelection?.model, runtimeMode: args.runtimeMode, status: 'starting', settled: false,
-    });
-    void play(threadId);
+    // A scratch thread gets a new, empty folder of its own.
+    const scratch = args.scratch === true ? path.join(T3_HOME, 'scratch', threadId.slice(-8)) : undefined;
 
-    return ok({ threadId, link: link(threadId), status: 'starting' });
+    if (scratch) fs.mkdirSync(scratch, { recursive: true });
+    const idle = args.message === undefined;
+
+    writeThread({
+      threadId, title: args.title, message: args.message, worktreePath: scratch ?? args.workspaceStrategy?.worktreePath, projectId: scratch ? 'scratch-project' : args.projectId,
+      provider: provider.driverKind, model: args.modelSelection?.model, runtimeMode: args.runtimeMode, status: idle ? 'idle' : 'starting', settled: false, runCount: idle ? 0 : 1,
+    });
+
+    if (!idle) void play(threadId);
+
+    return ok({ threadId, link: link(threadId), status: idle ? null : 'starting' });
   },
   t3_thread_wait: async (args) => {
     const deadline = Date.now() + Math.min(args.timeoutMs ?? 30_000, config().waitCapMs ?? Infinity);
@@ -164,7 +201,23 @@ const TOOLS = {
 
     if (!thread) return fail(`No thread ${args.threadId}.`);
 
-    return ok({ thread: { threadId: thread.threadId, status: thread.status, pendingRequestCount: thread.pendingRequestCount ?? 0, settled: thread.settled }, items: [], hasMore: false });
+    const items = args.view !== 'activity' && thread.reply !== undefined ? [{ position: 1, itemId: 'item-reply', type: 'assistant_message', text: thread.reply, textTruncated: false, nextTextOffset: null }] : [];
+
+    return ok({
+      thread: { threadId: thread.threadId, status: thread.status, worktreePath: thread.worktreePath ?? null, runCount: thread.runCount ?? 1, pendingRequestCount: thread.pendingRequestCount ?? 0, settled: thread.settled },
+      items, nextPosition: items.at(-1)?.position ?? null, hasMore: false,
+    });
+  },
+  t3_thread_send: (args) => {
+    const thread = readThread(args.threadId);
+
+    if (!thread) return fail(`No thread ${args.threadId}.`);
+
+    if (thread.runCount > 0) return ok({ threadId: args.threadId, status: 'queued' });
+    update(args.threadId, () => ({ message: args.message, status: 'starting', runCount: 1 }));
+    void play(args.threadId);
+
+    return ok({ threadId: args.threadId, status: 'starting' });
   },
   t3_thread_interrupt: async (args) => {
     await sleep(config().interruptMs ?? 0);

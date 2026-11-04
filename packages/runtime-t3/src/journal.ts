@@ -18,21 +18,27 @@ const ThreadSchema = z.object({
   model: z.string(),
   tool: z.string(),
   launchedAt: z.number(),
+  /** A judge's: the read-only copy of its directory, in the thread's own scratch folder, which close removes. */
+  copy: z.string().optional(),
 });
 
 export type ThreadRecord = z.infer<typeof ThreadSchema>;
 
-const PlaceSchema = z.object({
+const placeFields = {
   handle: RuntimeHandleSchema,
   run: z.string(),
   attempt: z.string(),
-  projectId: z.string(),
-  projectTitle: z.string(),
   /** Each operation of the handle, as `reattach` reports it. */
   ops: z.record(z.string(), OpStateSchema),
   /** The thread of each prompt that launched one. */
   threads: z.record(z.string(), ThreadSchema),
-});
+};
+
+/** An attempt's worktree in a T3 project, or a confined prompt's place, which has no view of the host. */
+const PlaceSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('worktree'), ...placeFields, projectId: z.string(), projectTitle: z.string() }),
+  z.object({ kind: z.literal('confined'), ...placeFields }),
+]);
 
 export type PlaceRecord = z.infer<typeof PlaceSchema>;
 

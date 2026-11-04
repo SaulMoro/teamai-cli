@@ -45,6 +45,8 @@ export interface FakeAgent {
   waits?: boolean;
   /** The agent writes no transcript. */
   noSession?: boolean;
+  /** The agent's last message in the thread, which a judge's reply is. */
+  reply?: string;
 }
 
 export interface FakeProvider {
@@ -78,6 +80,8 @@ export type FakeCall = z.infer<typeof CallSchema>;
 const ThreadSchema = z.object({
   threadId: z.string(), title: z.string(), message: z.string().optional(), worktreePath: z.string().optional(), projectId: z.string().optional(),
   provider: z.string(), model: z.string().optional(), runtimeMode: z.string().optional(), status: z.string(), settled: z.boolean(),
+  /** The files the agent found under its thread's folder, and whether it could write there. */
+  sees: z.array(z.string()).optional(), couldWrite: z.boolean().optional(),
 });
 
 export type FakeThread = z.infer<typeof ThreadSchema>;

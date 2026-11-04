@@ -42,6 +42,16 @@ const WaitedSchema = z.object({ threadId: z.string(), status: z.enum(THREAD_STAT
 
 export type Waited = z.infer<typeof WaitedSchema>;
 
+/** What the runtime reads of a thread: its folder, how many runs it had, and the requests it holds for a person. */
+const ThreadShellSchema = z.object({ worktreePath: z.string().nullable(), runCount: z.number().int().nonnegative(), pendingRequestCount: z.number().int().nonnegative() });
+
+export type ThreadShell = z.infer<typeof ThreadShellSchema>;
+
+/** One timeline item of a thread's messages view, read in pages of text when it is long. */
+const ItemSchema = z.object({ itemId: z.string(), type: z.string(), text: z.string().nullable(), textTruncated: z.boolean(), nextTextOffset: z.number().int().nullable() });
+
+const ItemPageSchema = z.object({ items: z.array(ItemSchema), nextPosition: z.number().int().nullable(), hasMore: z.boolean() });
+
 /**
  * The T3 modes a step thread may run in, loosest first. `auto` is T3's Auto mode: the provider's own review approves
  * routine actions and asks the person about the rest (a provider without such a review asks about everything).
@@ -54,16 +64,21 @@ export type StepMode = (typeof STEP_MODES)[number];
 /** What T3's pages call each mode. */
 export const STEP_MODE_LABELS: Record<StepMode, string> = { auto: 'Auto', 'auto-accept-edits': 'Auto-accept edits', 'approval-required': 'Supervised' };
 
-export interface Launch {
+/** What every thread the runtime launches sets. */
+export interface NewThread {
   title: string;
-  message: string;
-  projectId: string;
-  worktreePath: string;
   modelSelection: { instanceId: string; model: string; options?: Array<{ id: string; value: string }> };
   /** Never inherited: set from the runtime's options, whatever the caller's mode or the member's grant would let T3 use. */
   runtimeMode: StepMode;
   /** T3 answers a repeated id with the thread it launched for it, and starts no second run. */
   clientRequestId: string;
+}
+
+/** A step's thread, on the attempt's worktree of a T3 project, started with its first message. */
+export interface Launch extends NewThread {
+  message: string;
+  projectId: string;
+  worktreePath: string;
 }
 
 /** The body T3 answers a refused call with, as its text. */
@@ -99,10 +114,15 @@ export interface T3 {
   providers(): Promise<Provider[]>;
   projects(): Promise<Project[]>;
   launch(launch: Launch): Promise<z.infer<typeof LaunchedSchema>>;
+  /** Launches an idle thread in a new, empty scratch folder of T3's own, which `thread` names. */
+  launchScratch(thread: NewThread): Promise<z.infer<typeof LaunchedSchema>>;
+  /** Starts a run of the thread with `message`; a repeated `clientRequestId` sends nothing more. */
+  send(threadId: string, message: string, clientRequestId: string): Promise<void>;
+  thread(threadId: string): Promise<ThreadShell>;
+  /** The thread's last assistant message, whole, or undefined when it wrote none. */
+  lastReply(threadId: string): Promise<string | undefined>;
   /** Waits up to `timeoutMs` for the thread's latest run, and the work it delegated, to settle. */
   wait(threadId: string, timeoutMs: number): Promise<Waited>;
-  /** How many requests the thread's run holds for a person: tool approvals and questions. */
-  pendingRequests(threadId: string): Promise<number>;
   /** Stops the thread as its Stop button does: its running turn and every task it delegated. */
   stop(threadId: string): Promise<void>;
   settle(threadId: string): Promise<void>;
@@ -165,8 +185,42 @@ function t3Over(client: Client): T3 {
       interactionMode: 'default',
       clientRequestId: launch.clientRequestId,
     }, LaunchedSchema),
+    launchScratch: (thread) => call('t3_thread_launch', {
+      title: thread.title,
+      scratch: true,
+      modelSelection: thread.modelSelection,
+      runtimeMode: thread.runtimeMode,
+      interactionMode: 'default',
+      clientRequestId: thread.clientRequestId,
+    }, LaunchedSchema),
+    send: async (threadId, message, clientRequestId) => { await call('t3_thread_send', { threadId, message, mode: 'auto', clientRequestId }, z.object({}).loose()); },
+    thread: async (threadId) => (await call('t3_thread_read', { threadId, limit: 1, maxCharsPerItem: 1 }, z.object({ thread: ThreadShellSchema }))).thread,
+    lastReply: async (threadId) => {
+      let reply: z.infer<typeof ItemSchema> | undefined;
+      let afterPosition: number | undefined;
+
+      for (;;) {
+        const page = await call('t3_thread_read', { threadId, view: 'messages', limit: 100, ...(afterPosition !== undefined && { afterPosition }) }, ItemPageSchema);
+        reply = page.items.findLast((item) => item.type === 'assistant_message') ?? reply;
+
+        if (!page.hasMore || page.nextPosition === null) break;
+        afterPosition = page.nextPosition;
+      }
+
+      if (!reply) return undefined;
+      let text = reply.text ?? '';
+
+      for (let offset = reply.textTruncated ? reply.nextTextOffset : null; offset !== null;) {
+        const [part] = (await call('t3_thread_read', { threadId, itemId: reply.itemId, textOffset: offset, maxCharsPerItem: 50_000 }, ItemPageSchema)).items;
+
+        if (!part) break;
+        text += part.text ?? '';
+        offset = part.textTruncated ? part.nextTextOffset : null;
+      }
+
+      return text;
+    },
     wait: (threadId, timeoutMs) => call('t3_thread_wait', { threadId, timeoutMs, untilDelegatedWorkSettled: true }, WaitedSchema, timeoutMs + 30_000),
-    pendingRequests: async (threadId) => (await call('t3_thread_read', { threadId, limit: 1, view: 'messages' }, z.object({ thread: z.object({ pendingRequestCount: z.number().int().nonnegative() }) }))).thread.pendingRequestCount,
     stop: async (threadId) => { await call('t3_thread_interrupt', { threadId, stop: true, reason: 'teamai cancelled the workflow step' }, z.object({ threadId: z.string() })); },
     settle: async (threadId) => { await call('t3_thread_organize', { threadId, action: 'settle' }, z.object({}).loose()); },
     close: () => client.close(),
