@@ -11,7 +11,8 @@ const DISPOSE_WAIT_MS = 2000;
 
 /**
  * How long teamai waits for a runtime's reply to an `init`, a `reattach` or a `close`, and for the first answer to an
- * `open`, an `exec` or a `prompt`, before it fails that request `runtime_unanswered`.
+ * `open`, an `exec` or a `prompt`, and for the outcome of an `exec` or `prompt` it cancelled, before it fails that
+ * request `runtime_unanswered`.
  */
 const ANSWER_WITHIN_MS = 15_000;
 
@@ -44,7 +45,8 @@ function offered(can: Can, answersConfined: boolean): Can {
  * request fails with `runtime_exited`. A `reattach`, `collect` or `close` ends with its own reply, or with the failure
  * reply for its handle. Every request still waiting fails `runtime_unanswered` when the runtime writes an error that
  * names no request (an exec or prompt ending `lost`), and so does an `init`, a `reattach` or a `close` with no reply
- * within 15 s, and an `open`, `exec` or `prompt` with no answer within 15 s. A `cancel` gets no answer of its own.
+ * within 15 s, and an `open`, `exec` or `prompt` with no answer within 15 s. A `cancel` gets no answer of its own: an
+ * `exec` or `prompt` this process waits on with no outcome within 15 s of its cancel ends `lost` the same way.
  */
 export function stdioStepRuntime({ name, command, args = [], cwd }: { name: string; command: string; args?: string[]; cwd?: string }): StepRuntime {
   let child: ChildProcess | undefined;
@@ -388,6 +390,16 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
     },
 
     async cancel(op) {
+      const waiter = ops.get(op);
+
+      // An exec or prompt this process waits on ends with the cancel's outcome; one the runtime never confirms would
+      // hold the driver, and the run's lock, forever. What it writes meanwhile does not count as that outcome.
+      if (waiter && waiter.type !== 'open') {
+        setTimeout(() => {
+          if (ops.get(op) === waiter) waiter.on({ code: 'runtime_unanswered', message: `Step runtime "${name}" did not confirm the cancel of ${waiter.type} ${op} within ${ANSWER_WITHIN_MS / 1000} s, so what it started may still run.` });
+        }, ANSWER_WITHIN_MS).unref();
+      }
+
       send({ type: 'cancel', op });
     },
 
