@@ -206,6 +206,16 @@ describe.skipIf(process.platform === 'win32')('tool instances through the CLI', 
 
     expect(started.code, `${started.stdout}\n${started.stderr}`).toBe(0);
     expect(launches()).toEqual(['claude']);
+
+    // A step that names the instance as its own tool runs on it too.
+    write('.teamai/workflows/named.yaml', 'schemaVersion: v1alpha1\nname: named\ndescription: A step on the instance.\nsteps:\n  - id: review\n    tool: review-claude\n    prompt: Review the repository.\n    output:\n      ok: boolean\n');
+    commit('named');
+    expect((await runCLI(['pull'])).code).toBe(0);
+    clearLaunches();
+    const named = await runCLI(['workflow', 'start', 'named', '--driver', 'local'], unattended);
+
+    expect(envelope(named.stdout), `${named.stdout}\n${named.stderr}`).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(launches()).toEqual(['claude']);
   });
 
   it('lets a member\'s own instance replace the team\'s, with no acceptance', async () => {
