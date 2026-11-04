@@ -529,6 +529,17 @@ describe('teamai-runtime-paseo', () => {
     });
   });
 
+  it('fails init on a client older than the Paseo it runs against', async () => {
+    const old = path.join(dir, 'old-client');
+    fs.mkdirSync(old);
+    fs.writeFileSync(path.join(old, 'package.json'), JSON.stringify({ name: '@getpaseo/client', version: '0.13.2' }));
+
+    expect(await ready(start({ PASEO_CLIENT_PATH: old }))).toEqual({
+      type: 'init', ok: false,
+      error: { code: 'client_version', message: `The Paseo client in ${old} is version 0.13.2; teamai-runtime-paseo needs Paseo 0.14.0 or later. Update Paseo, or set PASEO_CLIENT_PATH to a newer @getpaseo/client package.` },
+    });
+  });
+
   it('runs on the client of the paseo on PATH, found through the links an install makes', async () => {
     // As npm installs it: bin/paseo links into the CLI package, whose node_modules holds the client.
     const cli = path.join(dir, 'lib', 'node_modules', '@getpaseo', 'cli');
