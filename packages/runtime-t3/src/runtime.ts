@@ -55,7 +55,7 @@ const EFFORT_OPTIONS = new Set(['effort', 'reasoningEffort', 'reasoning_effort',
  */
 const WAIT_MS = { attended: 25_000, unattended: 5_000 } as const;
 
-/** How long a cancelled step's thread gets to end before it is settled: T3 acknowledges a stop before the run ends. */
+/** How long a stopped thread's run gets to end: T3 acknowledges a stop before the run ends. */
 const STOP_WAIT_MS = 10_000;
 
 /** How often an interactive step's thread is checked once it is idle without a result: the person may still be in it. */
@@ -344,18 +344,29 @@ export function serve(options: ServeOptions): Promise<void> {
     }
   };
 
-  /** Stops a step's thread as its Stop button does. Answers why it could not, logged, while the thread may still run. */
+  /**
+   * Stops a step's thread as its Stop button does, and waits up to STOP_WAIT_MS for its run to end. Answers why it did
+   * not stop, logged, while the thread may still run.
+   */
   const whyNotStopped = async (t3: T3, threadId: string): Promise<string | undefined> => {
+    let why: string;
+
     try {
-      await t3.stop(threadId);
+      const { hadRun } = await t3.stop(threadId);
 
-      return undefined;
+      if (!hadRun) return undefined;
+      // T3 answers the stop before the run ends, so the thread has stopped only once its run is over.
+      const { status } = await t3.wait(threadId, STOP_WAIT_MS);
+
+      if (TERMINAL.has(status)) return undefined;
+      why = `T3 Code acknowledged the stop, but its run was still ${status} ${STOP_WAIT_MS / 1_000} s later`;
     } catch (error) {
-      const why = error instanceof Error ? error.message : String(error);
-      process.stderr.write(`Could not stop ${threadId}: ${why}\n`);
-
-      return why;
+      why = error instanceof Error ? error.message : String(error);
     }
+
+    process.stderr.write(`Could not stop ${threadId}: ${why}\n`);
+
+    return why;
   };
 
   // teamai quotes a keyed option failure (`key` set) inside a sentence of its own and ends it, so it brings no full stop.
@@ -765,7 +776,7 @@ export function serve(options: ServeOptions): Promise<void> {
       let outcome: NonNullable<ThreadRecord['settlement']>;
 
       try {
-        const { status } = state?.state === 'cancelled' ? await s.t3.wait(thread.threadId, STOP_WAIT_MS) : await s.t3.thread(thread.threadId);
+        const { status } = await s.t3.thread(thread.threadId);
 
         if (status !== null && status !== 'idle' && !TERMINAL.has(status)) continue;
         await s.t3.settle(thread.threadId);
