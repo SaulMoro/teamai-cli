@@ -1019,11 +1019,12 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   const canHitl = options.hitl ?? personAnswers(mode);
   const members = await memberTools(config);
 
-  // The tool a prompt step that names none launches on, which a runtime must offer as it must a named one.
+  // The tool a prompt step that names none launches on, which a runtime must offer as it must a named one: an
+  // instance by its own name, since a runtime that offers the tool it extends does not run it.
   const toolFor: ToolFor = (step) => {
     const choice = launchToolFor(step, config, options.tools ?? {}, members);
 
-    return choice.ok ? choice.tool : undefined;
+    return choice.ok ? choice.target.name : undefined;
   };
 
   // It launches a step that names its tool on the tools this machine has: those the run's steps name, or every one when a
