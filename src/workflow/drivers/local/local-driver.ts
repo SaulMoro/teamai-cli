@@ -568,6 +568,14 @@ async function promptReport(
     return giveUp({ code: 'tool_unsupported', message: `Step "${lease.step}" is interactive, and a step runtime runs only headless prompts. Run the step with --driver local.` }, selected);
   }
 
+  // An instance's command is checked on this machine's PATH, which a runtime that execs its tool elsewhere never had.
+  if (execs && target.instance) {
+    return giveUp({
+      code: 'tool_unsupported',
+      message: `Step "${lease.step}" runs on ${launched}, a tool instance, and a step runtime that execs its tool runs only the tools teamai ships. Name ${selected} with the step's tool or --tools, or run the step with --driver local.`,
+    }, launched);
+  }
+
   const toolHome = execs && variable !== undefined ? { tool: selected, variable, dir: attemptToolHome(config, lock.run, lease.attempt, selected) } : undefined;
   const storeDir = toolHome ? storeDirOf(AgentSession.platformForTool(selected) ?? '', { kind: 'tool-home', dir: toolHome.dir }) : undefined;
   let resume: { id: string; resumed: SessionRef } | undefined;
