@@ -308,7 +308,9 @@ function badOption(driver: ResolvedDriver, use: string, key: string, message: st
 
 /**
  * Why a definition is opened: `run` runs steps, so the values of its `env:` credentials are read and fail it when unset;
- * `stop` only stops and closes attempts, which bring no credential, so a cancel works in a shell without them.
+ * `stop` only stops and closes attempts, which bring no credential, so a cancel works in a shell without them. A runtime
+ * opened to stop that cannot start for new work, such as one signed out of its provider, is opened again in `recover`
+ * mode, which answers only for the handles it recorded.
  */
 export type DriverPurpose = 'run' | 'stop';
 
@@ -341,10 +343,11 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
 
   if (!accepted.ok) return accepted;
 
-  const runtime = source.kind === 'shipped'
+  const spawned = (): StepRuntime => (source.kind === 'shipped'
     ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.file] })
-    : stdioStepRuntime({ name: source.name, command: source.executable });
+    : stdioStepRuntime({ name: source.name, command: source.executable }));
 
+  const runtime = spawned();
   const ready = await runtime.init({ options: split.runtime, mode, credentials: { env: split.credentials.map((credential) => credential.name), logins: split.engine.logins } });
 
   if (ready.ok && ready.launchesAgents && split.engine.logins.length > 0) {
@@ -373,12 +376,19 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
   await runtime.dispose();
   const { failure } = ready;
 
-  return {
-    ok: false,
-    failure: failure.code === 'bad_option'
-      ? badOption(driver, use, failure.key ?? '?', failure.message)
-      : { code: 'runtime_failed', message: `Runtime "${source.name}" of driver "${driver.name}" did not start (${failure.code}): ${failure.message}` },
-  };
+  const notStarted = failure.code === 'bad_option'
+    ? badOption(driver, use, failure.key ?? '?', failure.message)
+    : { code: 'runtime_failed', message: `Runtime "${source.name}" of driver "${driver.name}" did not start (${failure.code}): ${failure.message}` };
+
+  if (purpose !== 'stop') return { ok: false, failure: notStarted };
+  const recovering = spawned();
+  const recovered = await recovering.init({ options: split.runtime, mode: 'recover' });
+
+  // It offers nothing in this mode: it is asked only to stop, collect and close what it ran.
+  if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: recovering, can: recovered.can, launchesAgents: recovered.launchesAgents, engine: split.engine, credentials: {} } };
+  await recovering.dispose();
+
+  return { ok: false, failure: { code: notStarted.code, message: `${notStarted.message} It does not open in recover mode either, to stop what it ran (${recovered.failure.code}): ${recovered.failure.message}` } };
 }
 
 /**

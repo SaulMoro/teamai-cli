@@ -38,7 +38,7 @@ function promptOnlyRun({ duringOpen, beforeSend, result = { output: { ok: true }
     },
     collect: async () => undefined,
     close: async () => {},
-    stopLeftOperation: async () => true,
+    stopLeftOperation: async () => undefined,
   };
 
   return { run, cancels: () => cancels };

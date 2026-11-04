@@ -1355,6 +1355,112 @@ span('end');
       fs.rmSync(lockFile(), { force: true });
     });
 
+    const initModes = (toyState: string): string[] => fs.readFileSync(path.join(toyState, 'inits.jsonl'), 'utf8').trim().split('\n').map((line) => (JSON.parse(line) as { mode: string }).mode);
+    const signedOut = { code: 'signed_out', message: 'The toy is signed out of its provider. Sign in again, then start the run again.' };
+    const cannotStop = (run: string) => ({ code: 'cancel_failed', message: `The toy cannot stop that exec now: its provider is down. Start the provider, then run teamai workflow cancel ${run} again.` });
+
+    it('stops the attempt of a killed driver through its runtime in recover mode when that runtime cannot start for new work', async () => {
+      loginDefinition('codexrecover', state);
+      const { run, pid, watched } = await holdingRun('codexrecover');
+      watched.kill();
+      await watched.ended;
+      loginDefinition('codexrecover', state, { init_fails: signedOut });
+
+      try {
+        const cancelled = await runCLI(['workflow', 'cancel', run], repo, env());
+
+        expect(envelope(cancelled), cancelled.stderr).toMatchObject({ data: { run: { status: 'cancelled' } } });
+        expect(cancelled.stderr).not.toContain('Could not stop attempt');
+        expect(pidAlive(pid)).toBe(false);
+        expect(runtimeRecord(run, attemptOf(readRunState(run).steps[0]))).toMatchObject({ runtime: 'toy', phase: 'closed' });
+        expect(fs.existsSync(lockFile())).toBe(false);
+        // It was asked to start for new work first, which it refused, then opened only to stop what it ran.
+        expect(initModes(state).slice(-2)).toEqual([expect.not.stringMatching(/^recover$/), 'recover']);
+      } finally {
+        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        fs.rmSync(lockFile(), { force: true });
+      }
+    });
+
+    it('keeps the place and the login, with the runtime\'s advice, when its runtime cannot stop the attempt of a killed driver, and a second cancel stops it once it can', async () => {
+      loginDefinition('codexstuck', state);
+      const { run, pid, watched } = await holdingRun('codexstuck');
+      watched.kill();
+      await watched.ended;
+      loginDefinition('codexstuck', state, { init_fails: signedOut, cancel_fails: cannotStop(run) });
+
+      try {
+        const cancelled = await runCLI(['workflow', 'cancel', run], repo, env());
+
+        expect(envelope(cancelled), cancelled.stderr).toMatchObject({ data: { run: { status: 'cancelled' } } });
+        const attempt = attemptOf(readRunState(run).steps[0]);
+        expect(cancelled.stderr).toContain(`Could not stop attempt ${attempt} of run ${run} on step runtime "toy" of driver "codexstuck": its exec or prompt may still run, since the runtime did not confirm it stopped (cancel_failed): ${cannotStop(run).message}`);
+        expect(cancelled.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}`);
+        expect(pidAlive(pid)).toBe(true);
+        expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
+        // Nothing was brought back or closed while the tool may still write the place.
+        expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'running' });
+
+        loginDefinition('codexstuck', state, { init_fails: signedOut });
+        const again = await runCLI(['workflow', 'cancel', run], repo, env());
+
+        expect(again.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attempt} of run ${run} held.`);
+        expect(pidAlive(pid)).toBe(false);
+        expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed' });
+        expect(fs.existsSync(lockFile())).toBe(false);
+      } finally {
+        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        fs.rmSync(lockFile(), { force: true });
+      }
+    });
+
+    it('says so, and keeps the login, when a runtime that cannot start does not open in recover mode either', async () => {
+      loginDefinition('codexnorecover', state);
+      const { run, pid, watched } = await holdingRun('codexnorecover');
+      watched.kill();
+      await watched.ended;
+      loginDefinition('codexnorecover', state, { init_fails: signedOut, recover: false });
+
+      try {
+        const cancelled = await runCLI(['workflow', 'cancel', run], repo, env());
+
+        const attempt = attemptOf(readRunState(run).steps[0]);
+        expect(cancelled.stderr).toContain(`Could not stop attempt ${attempt} of run ${run} on step runtime "toy" of driver "codexnorecover": Runtime "toy" of driver "codexnorecover" did not start (signed_out): ${signedOut.message} It does not open in recover mode either, to stop what it ran (runtime_unanswered): Step runtime "toy" did not answer init: it wrote an error that names no request (The toy runtime does not know mode recover.).`);
+        expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
+        expect(pidAlive(pid)).toBe(true);
+      } finally {
+        process.kill(pid, 'SIGKILL');
+        fs.rmSync(lockFile(), { force: true });
+      }
+    });
+
+    it('fails the step with the runtime\'s advice, keeping the place and the login, when the restarted driver cannot stop the exec a killed one left running', async () => {
+      const stuck = { code: 'cancel_failed', message: 'The toy cannot stop that exec now: its provider is down. Start the provider, then run teamai workflow cancel again.' };
+      // Both written before any run, so no read-only step sees the repository change under it: the restart reaches the
+      // same toy state through a definition whose toy cannot stop.
+      loginDefinition('codexrestart', state);
+      loginDefinition('codexrestartstuck', state, { cancel_fails: stuck });
+      const { run, pid, watched } = await holdingRun('codexrestart');
+      watched.kill();
+      await watched.ended;
+
+      try {
+        const resumed = await runCLI(['workflow', 'resume', run, '--driver', 'codexrestartstuck'], repo, env());
+
+        expect(envelope(resumed), resumed.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+        const [review] = readRunState(run).steps;
+        const attempt = attemptOf(review);
+        expect(review).toMatchObject({ status: 'failed', failure: { code: 'runtime_lost', message: expect.stringContaining(stuck.message) } });
+        expect(pidAlive(pid)).toBe(true);
+        expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
+        expect(runtimeRecord(run, attempt)).toMatchObject({ closeFailed: { code: 'cancel_failed' } });
+        expect(resumed.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}`);
+      } finally {
+        process.kill(pid, 'SIGKILL');
+        fs.rmSync(lockFile(), { force: true });
+      }
+    });
+
     it('leaves the login to a driver that still runs when teamai workflow cancel stops its run, which releases it once its tool stopped', async () => {
       loginDefinition('codexlive', state);
       const { run, pid, watched } = await holdingRun('codexlive');
