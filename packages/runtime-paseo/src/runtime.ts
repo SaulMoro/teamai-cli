@@ -237,9 +237,9 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     mode = request.mode;
 
     const judges = tools.flatMap(({ tool, modes }) => {
-      const confinedMode = CONFINED_MODES[tool];
+      const { id, isListed } = CONFINED_MODES[tool];
 
-      return confinedMode !== undefined && modes.includes(confinedMode) ? [tool] : [];
+      return !isListed || modes.includes(id) ? [tool] : [];
     });
 
     write({
@@ -380,13 +380,14 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     }
 
     const { tool } = lease;
-    const modeId = isPaseoTool(tool) ? CONFINED_MODES[tool] : undefined;
 
-    if (!isPaseoTool(tool) || modeId === undefined) {
-      refuse(op, request.handle, { code: 'tool_unavailable', message: `teamai-runtime-paseo runs a confined prompt on ${Object.entries(CONFINED_MODES).flatMap(([judging, confinedMode]) => (confinedMode === undefined ? [] : [judging])).join(' and ')}, not ${tool}.` });
+    if (!isPaseoTool(tool)) {
+      refuse(op, request.handle, { code: 'tool_unavailable', message: `teamai-runtime-paseo runs a confined prompt on claude, codex or opencode, not ${tool}.` });
 
       return;
     }
+
+    const modeId = CONFINED_MODES[tool].id;
 
     let workspace = place.workspace && { ...place.workspace, directory: confined.dir };
 
