@@ -575,13 +575,44 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       write({ event: 'error', message });
       const failure = { code: 'runtime_failed', message };
 
-      // teamai waits for the answer to each of these: it gets this failure, never silence. An exec or a prompt this
-      // process claimed ends failed; a close keeps the journal's place, so a later close still finds the sandbox.
-      if (request.type === 'exec' || request.type === 'prompt') finish(request.op, request.handle, { state: 'failed', failure });
-      else if (request.type === 'open') write({ op: request.op, event: 'failed', failure });
-      else if (request.type === 'close') write({ event: 'close_failed', handle: request.handle, failure });
-      // A journal it cannot read is not a place it knows is gone.
-      else if (request.type === 'reattach') write({ event: 'alive', handle: request.handle, ops: [] });
+      // teamai waits for the answer to each request but a cancel: it gets this failure, never silence.
+      switch (request.type) {
+        case 'init':
+          write({ type: 'init', ok: false, error: failure });
+
+          return;
+        case 'exec':
+        case 'prompt':
+          // One this process claimed ends failed.
+          finish(request.op, request.handle, { state: 'failed', failure });
+
+          return;
+        case 'open':
+          write({ op: request.op, event: 'failed', failure });
+
+          return;
+        case 'collect':
+          write({ event: 'collect_failed', handle: request.handle, failure });
+
+          return;
+        case 'reattach':
+          // A journal it cannot read is not a place it knows is gone.
+          write({ event: 'alive', handle: request.handle, ops: [] });
+
+          return;
+        case 'close':
+          // The journal keeps the place, so a later close still finds the sandbox.
+          write({ event: 'close_failed', handle: request.handle, failure });
+
+          return;
+        case 'cancel':
+          return;
+        default: {
+          const unhandled: never = request;
+
+          return unhandled;
+        }
+      }
     }
   };
 
