@@ -493,7 +493,26 @@ export function serve(options: ServeOptions): Promise<void> {
 
     if (!state) {
       const handle = handleOf.get(op);
-      const ended = handle ? place(handle)?.ops[op] : undefined;
+      const known = handle ? place(handle) : journal.placeOf(op);
+      const left = known?.threads[op];
+
+      // A runtime before this one launched the thread and died; teamai cancels before it reattaches.
+      if (known && left && known.ops[op]?.state === 'running' && session) {
+        try {
+          await session.t3.stop(left.threadId);
+        } catch (error) {
+          process.stderr.write(`Could not stop ${left.threadId}: ${error instanceof Error ? error.message : String(error)}\n`);
+
+          return;
+        }
+
+        record(known.handle, op, { op, state: 'cancelled' });
+        answerEnded(op, { op, state: 'cancelled' });
+
+        return;
+      }
+
+      const ended = known?.ops[op];
 
       if (ended) answerEnded(op, ended);
       else cancelledEarly.add(op);
