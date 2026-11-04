@@ -117,12 +117,17 @@ async function readTrust(): Promise<z.infer<typeof TrustFileSchema>> {
   }
 }
 
-/** Asks the person at this terminal; anything but yes declines. */
-export async function askAtTerminal(question: string): Promise<boolean> {
+/**
+ * Asks the person at this terminal: true for yes, false for anything else, undefined when they closed the question
+ * unanswered with Ctrl-C or Ctrl-D, which stops the command as it stops a step's question.
+ */
+export async function askAtTerminal(question: string): Promise<boolean | undefined> {
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
 
   try {
     return /^y(es)?$/i.test((await terminal.question(question)).trim());
+  } catch {
+    return undefined;
   } finally {
     terminal.close();
   }
@@ -133,7 +138,7 @@ export async function askAtTerminal(question: string): Promise<boolean> {
  * accepted here. `mode` attended with a person at the terminal (`canAsk`) asks and records a yes; otherwise an
  * unaccepted revision is refused, naming what to run.
  */
-export async function acceptRuntime(source: RuntimeSource, { mode, canAsk, ask = askAtTerminal }: { mode: RunMode; canAsk: boolean; ask?: (question: string) => Promise<boolean> }): Promise<{ ok: true } | { ok: false; failure: WorkflowFailure }> {
+export async function acceptRuntime(source: RuntimeSource, { mode, canAsk, ask = askAtTerminal }: { mode: RunMode; canAsk: boolean; ask?: (question: string) => Promise<boolean | undefined> }): Promise<{ ok: true } | { ok: false; failure: WorkflowFailure }> {
   if (source.kind !== 'team') return { ok: true };
   const revision = await runtimeRevision(source.dir);
   const trust = await readTrust();
@@ -146,7 +151,13 @@ export async function acceptRuntime(source: RuntimeSource, { mode, canAsk, ask =
     const question = `Step runtime "${source.name}" comes from the team repo (${source.relative}) at revision ${short}, which you have not accepted on this machine. `
       + `It runs as you, with your files. Review ${source.dir} (${files.join(', ')}) before you accept it.\nRun it? [y/N] `;
 
-    if (await ask(question)) {
+    const accepted = await ask(question);
+
+    if (accepted === undefined) {
+      return { ok: false, failure: { code: 'interrupted', message: `The question to accept step runtime "${source.name}" closed without an answer, so it did not run and nothing was accepted. Run the same command again to answer it.` } };
+    }
+
+    if (accepted) {
       await writeJsonAtomic(trustFile(), { accepted: [...trust.accepted, { dir: source.dir, revision, acceptedAt: new Date().toISOString() }] });
 
       return { ok: true };

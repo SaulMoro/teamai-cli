@@ -540,6 +540,34 @@ Judge the review.
     expect(fs.readFileSync(spawns, 'utf8')).toBe('spawned\n');
   });
 
+  it.skipIf(!hasPython)('stops as interrupted at Ctrl-C to accept a team runtime, spawning nothing and accepting nothing, and asks again next time', async () => {
+    const spawns = path.join(sandbox, 'team-spawns-ctrlc');
+    writeTeamRuntime('teamtoyc', spawns);
+    writeDefinition('teamc', { state: path.join(sandbox, 'toy-state-team-ctrlc') }, { use: 'teamtoyc' });
+    const asked = async (typed: string): Promise<{ code: number | null; screen: string }> => {
+      const pidFile = path.join(sandbox, `pty-c-${typed.length}.pid`);
+      const screen = path.join(sandbox, `pty-c-${typed.length}.out`);
+      const input = path.join(sandbox, `pty-c-${typed.length}.in`);
+      const attended = spawn('python3', ['-c', TYPED_TERMINAL, pidFile, screen, input, process.execPath, CLI, 'workflow', 'start', 'onecommand', '--driver', 'teamc'], {
+        cwd: repo, env: { ...process.env, ...env(), RUNS_FILE: path.join(sandbox, 'runs-team-ctrlc'), TEAMAI_MODE: 'attended', FORCE_COLOR: '0' }, stdio: 'ignore',
+      });
+      const exited = new Promise<number | null>((resolve) => attended.on('close', resolve));
+      const deadline = Date.now() + 30_000;
+      while (!(fs.existsSync(screen) && fs.readFileSync(screen, 'utf8').includes('Run it? [y/N]')) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
+      fs.writeFileSync(input, typed);
+      return { code: await exited, screen: fs.readFileSync(screen, 'utf8') };
+    };
+
+    const stopped = await asked('\x03');
+
+    expect(stopped.screen).toContain('"code":"interrupted"');
+    expect(stopped.code, stopped.screen).toBe(1);
+    expect(fs.existsSync(spawns)).toBe(false);
+    expect(fs.existsSync(path.join(os.homedir(), '.teamai', 'trust', 'runtimes.json')) ? fs.readFileSync(path.join(os.homedir(), '.teamai', 'trust', 'runtimes.json'), 'utf8') : '').not.toContain('teamtoyc');
+    const again = await asked('n\r');
+    expect(again.screen).toContain('"code":"runtime_not_accepted"');
+  });
+
   it('runs the same definition for --driver x and --driver teamai-x', async () => {
     writeDefinition('teamai-toyx', { state: path.join(sandbox, 'toy-state-x') });
 
