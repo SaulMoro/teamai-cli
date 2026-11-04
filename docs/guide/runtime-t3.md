@@ -180,7 +180,7 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 ## What it does not do yet
 
 - A step's thread is a thread of its own, not a child of the thread that started the run. T3 keeps a parent link only for a thread launched on another, linked environment.
-- It takes no `credentials`. A thread's tool runs in T3 Code's environment, on T3 Code's own sign-in, so teamai refuses a `NAME: env:VAR` or a `<tool>: login` for this runtime before a step runs (`t3 does not offer can.env, so it cannot keep a credential to the processes it is for`).
+- It takes no `credentials`. A thread's tool runs in T3 Code's environment, on T3 Code's own sign-in, so teamai refuses them for this runtime before a step runs: `NAME: env:VAR` with `t3 does not offer can.env, so it cannot keep a credential to the processes it is for`, and `<tool>: login` with `t3 launches agents its own way, in each tool's own home, so it brings no login`.
 - A step with `session: continue` or `session.from` starts a new conversation, as OpenCode does: T3 has no way to launch a thread on an existing session.
 - It offers `workspace: new` and `continue`. A read-only prompt step, or one with `env` or `setup`, goes to `local`.
 - T3 reports no token usage, so a `budget` in tokens cannot be checked here, and it cannot cap `max_turns`.
