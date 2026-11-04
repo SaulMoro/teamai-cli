@@ -24,15 +24,14 @@ export const DEFAULT_MODES: Readonly<Record<PaseoTool, string>> = { claude: 'def
 
 /**
  * The Paseo mode a tool answers a confined prompt in: one that reads without asking and asks before it edits or runs
- * anything, which ends the prompt. Each of Codex's listed modes writes the workspace without asking, so it answers in
- * `read-only`, a preset Paseo 0.14.0 takes though it lists no such mode: Codex's read-only sandbox, asking before
- * anything more. A listed mode is looked up in what the daemon lists; an unlisted one cannot be.
+ * anything, which ends the prompt. Each mode Paseo lists for Codex writes the workspace without asking, and Paseo
+ * refuses any other, so Codex answers in `auto`, which asks before anything its sandbox does not allow, with its
+ * sandbox set read-only (`CONFINED_CODEX_OPTIONS`).
  */
-export const CONFINED_MODES: Readonly<Record<PaseoTool, { id: string; isListed: boolean }>> = {
-  claude: { id: 'default', isListed: true },
-  codex: { id: 'read-only', isListed: false },
-  opencode: { id: 'plan', isListed: true },
-};
+export const CONFINED_MODES: Readonly<Record<PaseoTool, string>> = { claude: 'default', codex: 'auto', opencode: 'plan' };
+
+/** The Codex launch option a confined prompt starts with: a sandbox that writes nothing, over its mode's own. */
+export const CONFINED_CODEX_OPTIONS = { sandbox_mode: 'read-only' } as const;
 
 /** The tools this runtime runs as Paseo agents: Paseo's providers that are teamai tools of the same name. */
 export type PaseoTool = 'claude' | 'codex' | 'opencode';
