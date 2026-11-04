@@ -8,6 +8,7 @@ import { resolveNamespacedItems, type NamespaceCandidate } from '../../namespace
 import { resolveResourceNamespaces } from '../../resource-namespaces.js';
 import { getKnowledgeDir, getTeamaiHomeDir, JsonValueSchema, type LocalConfig } from '../../types.js';
 import { parseYaml } from '../../utils/yaml.js';
+import { parseDriver, type DriverName } from '../driver-name.js';
 import type { WorkflowFailure } from '../types.js';
 
 // ─── Driver definitions ──────────────────────────────────
@@ -19,23 +20,42 @@ import type { WorkflowFailure } from '../types.js';
 //  `--driver x` and `--driver teamai-x` both run the shipped teamai-x when no definition is named x.
 //
 
-/** Driver names teamai keeps for its own drivers and runtimes; no definition takes one. */
-export const RESERVED_DRIVER_NAMES = ['local', 'skill', 'fleet'] as const;
-
 /** The prefix of every definition teamai ships, as of every default workflow. */
 const SHIPPED_PREFIX = 'teamai-';
 
-const NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+const RUNTIME_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * Name `name` as a definition takes it, or why it cannot: a name `parseDriver` reads as a driver outside teamai. Every
+ * other name is teamai's own driver, or none, so a driver teamai adds is refused here until a case below takes it.
+ */
+function definitionName(name: string): { ok: true; name: DriverName } | { ok: false; reason: string } {
+  const parsed = parseDriver(name);
+
+  if (!parsed.ok) return parsed;
+
+  switch (parsed.driver) {
+    case 'local':
+    case 'skill':
+    case 'none':
+      return { ok: false, reason: `"${name}" is a name teamai keeps for its own driver` };
+    default: {
+      const definition: { external: DriverName } = parsed.driver;
+
+      return { ok: true, name: definition.external };
+    }
+  }
+}
 
 /** One runtime of a definition: the runtime it uses and the options it passes at `init`. */
 const RuntimeEntrySchema = z.object({
-  use: z.string().regex(NAME, 'A runtime name starts with a letter or digit and holds only letters, digits, dots, dashes and underscores'),
+  use: z.string().regex(RUNTIME_NAME, 'A runtime name starts with a letter or digit and holds only letters, digits, dots, dashes and underscores'),
   options: z.record(z.string(), JsonValueSchema).optional(),
 }).strict();
 
 export const DriverDefinitionSchema = z.object({
   schemaVersion: z.literal('v1alpha1'),
-  name: z.string().regex(NAME),
+  name: z.string(),
   description: z.string().optional(),
   /** The tool a prompt step runs on when neither it nor `--tools` names one. */
   tool: z.string().min(1).optional(),
@@ -104,8 +124,9 @@ export function parseDriverDefinition(file: string, text: string): { ok: true; d
   const stem = path.basename(file, '.yaml');
 
   if (definition.name !== stem) return invalid(file, `its name is "${definition.name}", and a definition is named after its file, "${stem}"`);
+  const named = definitionName(definition.name);
 
-  if (RESERVED_DRIVER_NAMES.some((reserved) => reserved === definition.name)) return invalid(file, `"${definition.name}" is a name teamai keeps for its own driver`);
+  if (!named.ok) return invalid(file, named.reason);
 
   return { ok: true, definition };
 }
@@ -189,7 +210,9 @@ async function fromTeam(config: LocalConfig, name: string): Promise<Lookup> {
  * definitions, for a run handed over from another member.
  */
 export async function resolveDriver(config: LocalConfig, name: string, { personal }: { personal: boolean }): Promise<{ ok: true; driver: ResolvedDriver } | { ok: false; failure: WorkflowFailure }> {
-  if (!NAME.test(name)) return { ok: false, failure: { code: 'driver_not_found', message: `"${name}" is not a driver name. A name holds only letters, digits, dots, dashes and underscores.` } };
+  const named = definitionName(name);
+
+  if (!named.ok) return { ok: false, failure: { code: 'driver_not_found', message: `No driver definition can be named "${name}": ${named.reason}.` } };
   const user = config.scope === 'project' ? await loadLocalConfigForScope('user', undefined, { dryRun: true }) : null;
   const shipped = name.startsWith(SHIPPED_PREFIX) ? name : `${SHIPPED_PREFIX}${name}`;
 
