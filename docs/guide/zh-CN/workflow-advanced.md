@@ -1459,7 +1459,7 @@ exec 或提示运行期间退出的运行时，出于同样的原因会让它失
 
 每个请求和回复都在 teamai 仓库的 `packages/runtime-protocol` 中定义为 zod schema：teamai 发送的内容用 `RuntimeRequestSchema`，运行时写出的内容用 `RuntimeMessageSchema`。
 
-`ready` 以及 `reattach` 的 `alive` 回复可以带上 `display`，它是可选的：`label` 最多 80 个字符，`url`（`https:`、`http:` 或应用自己的协议，例如 `t3:`），以及最多 8 个字符串 `fields`。仪表盘的运行详情会把它显示在步骤下面。不要在里面放密钥或你主目录下的路径。teamai 无法显示的 display 会被丢弃并记录原因，步骤照常运行。
+`ready`、exec 或 prompt 的 `accepted`，以及 `reattach` 的 `alive` 回复可以带上 `display`，它是可选的：`label` 最多 80 个字符，`url`（`https:`、`http:` 或应用自己的协议，例如 `t3:`），以及最多 8 个字符串 `fields`。仪表盘的运行详情会把它显示在步骤下面。不要在里面放密钥或你主目录下的路径。teamai 无法显示的 display 会被丢弃并记录原因，步骤照常运行。显示的是最近给出的那个，所以只为 prompt 创建智能体的运行时，在 `ready` 时显示位置，再随 prompt 的 `accepted` 显示智能体。
 
 #### 自己启动智能体的运行时
 
@@ -1487,7 +1487,7 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
    "lease":{"step":"review","tool":"claude","model":{"name":"claude-opus-5-5"},"permissions":"approval-required","interactive":false,
             "prompt":"Review the change.\n\nWrite the workflow result as JSON to /repo/.teamai/…/attempts/a3f0…/out/result.json. …",
             "result":"/repo/.teamai/…/attempts/a3f0…/out/result.json"}}
-← {"op":"op-83bf2a9d01e4","event":"accepted"}
+← {"op":"op-83bf2a9d01e4","event":"accepted","display":{"label":"Review the change","url":"t3://thread/5e1c","fields":{"agent":"claude"}}}
 ← {"op":"op-83bf2a9d01e4","event":"finished","session":{"tool":"claude","id":"cef86f52-1d0b-4c55-9a40-7e3d3a8b1f02"},"result":{"output":{"verdict":"approve"}},"usage":{"input":18240,"output":2310}}
 ```
 

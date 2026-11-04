@@ -14,7 +14,7 @@ import { redact } from '@teamai/shared/redact';
 import { loginFileOf } from './login.js';
 import { credentialSecrets } from './sources.js';
 import { OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type PlaceView, type RuntimeDisplay } from '@teamai/runtime-protocol';
-import { newOpId, type ExecEnd, type ExecEvents, type ExecRequest, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
+import { newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecRequest, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
 
 // ─── An attempt on a step runtime ────────────────────────
 //
@@ -166,7 +166,7 @@ export interface AttemptRun {
    * Sends the prompt step to a runtime that launches agents its own way. Built again after a restart, it reads the
    * outcome the runtime kept, or reconnects to the prompt still running by sending the same id again.
    */
-  prompt(request: Omit<PromptRequest, 'op' | 'handle'>, events: { onAccepted?: () => void }): Promise<PromptEnd>;
+  prompt(request: Omit<PromptRequest, 'op' | 'handle'>, events: { onAccepted?: (accepted: Accepted) => void }): Promise<PromptEnd>;
   /** Stops the exec or prompt running now, with every process it started. */
   cancel(): Promise<void>;
   /** Brings the place's work back to the host, after success and after failure, before teamai reads the result or commits. */
@@ -209,6 +209,22 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
     const now = await current();
 
     if (now && display) await save({ ...now, display });
+  };
+
+  /**
+   * Tells `onAccepted` of an operation's acceptance and keeps the display it carries, for the run's details. `kept`
+   * settles once that is written, and the operation's end waits for it.
+   */
+  const accepting = (onAccepted: ((accepted: Accepted) => void) | undefined) => {
+    let kept: Promise<void> = Promise.resolve();
+
+    return {
+      onAccepted: (accepted: Accepted): void => {
+        if (accepted.display) kept = kept.then(() => shown(accepted.display));
+        onAccepted?.(accepted);
+      },
+      kept: () => kept,
+    };
   };
 
   /**
@@ -287,7 +303,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
         const state = found.ops.find((retained) => retained.op === sent.op);
 
         // The runtime accepted it before the restart.
-        if (state !== undefined) events.onAccepted?.();
+        if (state !== undefined) events.onAccepted?.({});
 
         if (state?.state === 'exited') return { kind: 'exited', code: state.code, stdout: state.stdout };
 
@@ -307,7 +323,9 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       const exec = before.exec ?? { op: newOpId() };
       await save({ ...before, exec, phase: 'running' });
       running = exec;
-      const end = await runtime.exec({ op: exec.op, handle, ...request }, events);
+      const acceptance = accepting(events.onAccepted);
+      const end = await runtime.exec({ op: exec.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted });
+      await acceptance.kept();
       running = undefined;
 
       return end;
@@ -331,7 +349,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
         const state = found.ops.find((retained) => retained.op === sent.op);
 
         // The runtime accepted it before the restart; one still running is accepted again when it is resent.
-        if (state !== undefined && state.state !== 'running') events.onAccepted?.();
+        if (state !== undefined && state.state !== 'running') events.onAccepted?.({});
 
         if (state?.state === 'finished') {
           const end: PromptEnd = { kind: 'finished', session: state.session, result: state.result };
@@ -353,7 +371,9 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       const sent = before.prompt ?? { op: newOpId() };
       await save({ ...before, prompt: sent, phase: 'running' });
       running = sent;
-      const end = await runtime.prompt({ op: sent.op, handle, ...request }, events);
+      const acceptance = accepting(events.onAccepted);
+      const end = await runtime.prompt({ op: sent.op, handle, ...request }, { onAccepted: acceptance.onAccepted });
+      await acceptance.kept();
       running = undefined;
 
       return end;

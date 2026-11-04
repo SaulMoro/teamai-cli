@@ -39,7 +39,7 @@ export function localStepRuntime(can: DriverCan = {}): StepRuntime {
     const retained = ended.get(request.op);
 
     if (retained) {
-      events.onAccepted?.();
+      events.onAccepted?.({});
 
       return retained.end;
     }
@@ -47,7 +47,7 @@ export function localStepRuntime(can: DriverCan = {}): StepRuntime {
     const live = running.get(request.op);
 
     if (live) {
-      events.onAccepted?.();
+      events.onAccepted?.({});
 
       return live.end;
     }
@@ -87,7 +87,7 @@ export function localStepRuntime(can: DriverCan = {}): StepRuntime {
     };
 
     running.set(request.op, entry);
-    events.onAccepted?.();
+    events.onAccepted?.({});
 
     return entry.end;
   };

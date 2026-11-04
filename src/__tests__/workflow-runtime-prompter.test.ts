@@ -27,7 +27,7 @@ function promptOnlyRun({ duringOpen, beforeSend }: { duringOpen?: () => void; be
 
       return new Promise<PromptEnd>((resolve) => {
         sent = resolve;
-        events.onAccepted?.();
+        events.onAccepted?.({});
         setImmediate(() => resolve({ kind: 'finished', session: { tool: 'claude', id: 's-1' }, result: { output: { ok: true } } }));
       });
     },

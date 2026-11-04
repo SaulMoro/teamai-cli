@@ -189,7 +189,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
 
           switch (event.event) {
             case 'accepted':
-              events.onAccepted?.();
+              events.onAccepted?.(displayOf(name, event.display));
 
               return;
             case 'output':
@@ -247,7 +247,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
 
           switch (event.event) {
             case 'accepted':
-              events.onAccepted?.();
+              events.onAccepted?.(displayOf(name, event.display));
 
               return;
             case 'finished': {
