@@ -415,7 +415,12 @@ console.log(JSON.stringify({ type: 'result', structured_output: given?.propertie
     for (const tool of ['git', 'teamai']) fs.symlinkSync(execFileSync('which', [tool], { encoding: 'utf8', env }).trim(), path.join(hostBin, tool));
     const inputs = { session: SESSION, source: 'claude-code', publish: false, scorers: ['review-quality'], demand: 'named' };
 
-    const shared = await runCLI(['workflow', 'start', 'teamai-share-session', '--inputs', JSON.stringify(inputs), '--driver', 'toyshare'], app, { ...env, PATH: [hostBin, '/usr/bin', '/bin'].join(path.delimiter) });
+    // The member's home is reached through a link, so its spelling is not its real path, as /tmp is not on macOS.
+    const linkedHome = path.join(root, 'home-link');
+    fs.rmSync(linkedHome, { force: true });
+    fs.symlinkSync(home, linkedHome);
+
+    const shared = await runCLI(['workflow', 'start', 'teamai-share-session', '--inputs', JSON.stringify(inputs), '--driver', 'toyshare'], app, { ...env, HOME: linkedHome, USERPROFILE: linkedHome, PATH: [hostBin, '/usr/bin', '/bin'].join(path.delimiter) });
 
     expect(envelope(shared.stdout), shared.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     const run = z.object({ done: z.object({ run: z.string() }) }).parse(envelope(shared.stdout).data).done.run;
@@ -432,7 +437,13 @@ console.log(JSON.stringify({ type: 'result', structured_output: given?.propertie
     expect(Object.entries(ranOn).filter(([, runtime]) => runtime !== 'host')).toEqual([[expect.stringMatching(/\.judge$/), 'toy']]);
     expect(ranOn).toMatchObject({ 'score.plan': 'host', 'score.score[0].evidence': 'host', 'score.score[0].label': 'host' });
     // The toy was sent one prompt, the judge's, confined to the evidence directory.
-    const sent = fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8').trim().split('\n').map((text) => JSON.parse(text) as { confined?: { level: string } });
+    const sent = fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8').trim().split('\n').map((text) => JSON.parse(text) as { sent?: { prompt: string }; confined?: { level: string; dir: string } });
     expect(sent).toEqual([expect.objectContaining({ confined: expect.objectContaining({ level: 'best-effort' }) })]);
+    // The prompt names the evidence directory exactly as confined.dir does, so a runtime that mounts it elsewhere can rewrite it.
+    const [judged] = sent;
+    const dir = String(judged?.confined?.dir);
+    expect(dir.startsWith(linkedHome)).toBe(true);
+    expect(judged?.sent?.prompt).toContain(dir);
+    expect(judged?.sent?.prompt).not.toContain(path.join(fs.realpathSync(home), path.relative(linkedHome, dir)));
   });
 });

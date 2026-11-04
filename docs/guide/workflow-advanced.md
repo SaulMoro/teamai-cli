@@ -1553,6 +1553,14 @@ A runtime that can run an agent with one directory as its only readable root say
 
 The agent reads `dir`, read-only, and nothing else of the host. `finished` says the level and access the runtime kept, never more than it enforced. A `finished` without `confined` fails the step `runtime_failed`, a level below the one `dir` asks for fails it `confined_failed`, and a reply that is no JSON value fails it `confined_reply_invalid`. The toy runtime's `judge` option answers this way.
 
+`lease.prompt` and `cwd` name the directory exactly as `dir` spells it. A container that mounts `dir` at the same path shows the agent its parents, empty, but with your home, user name and project in their names. To hide them, mount or copy `dir` at a neutral path and replace `dir` in `cwd` and in the prompt:
+
+```text
+dir     /home/al/.teamai/projects/acme-web-3f9c/workflows/runs/r7a1…/scratch/a9c4…
+mount   /evidence (read-only)
+prompt  "Read only the files under /home/al/…/scratch/a9c4…: …"  →  "Read only the files under /evidence: …"
+```
+
 | Error | Next step |
 | --- | --- |
 | `driver_not_found` | Add `drivers/<name>.yaml` and run `teamai pull`, or add `~/.teamai/drivers/<name>.yaml` |
