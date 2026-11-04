@@ -279,7 +279,7 @@ Tool "acme-claude" comes from the team repo (…/tools/acme-claude.yaml, content
 Run it? [y/N]
 ```
 
-The line you type answers this question alone. An approval or choice that waits at the same terminal is asked again once you answer.
+The line you type answers this question alone. An approval or choice that waits at the same terminal is asked again once you answer. `teamai workflow cancel` ends the question unanswered, and the command does not run.
 
 An unattended run (`TEAMAI_MODE=unattended`, CI, no terminal) refuses it with `tool_not_accepted` until someone accepts it once in a terminal. The answer is kept in `~/.teamai/trust/tools.json` for that file's content: a commit that leaves the file as it is asks nothing, and an edit asks again. An instance with only `home` or `paths` runs the shipped command and needs no acceptance.
 

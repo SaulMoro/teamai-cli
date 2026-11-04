@@ -141,7 +141,7 @@ function heldForConfined(held: ReadonlyArray<{ missing: readonly string[] }> | u
 }
 
 /** Reads the line typed at the terminal after `prompt`. Aborting `signal` closes it unanswered. */
-async function readLine(prompt: string, signal?: AbortSignal): Promise<string> {
+async function readLine(prompt: string, signal: AbortSignal): Promise<string> {
   const terminal = createInterface({ input: process.stdin, output: process.stderr });
 
   try {
@@ -157,8 +157,8 @@ async function askHitl(hitl: LocalHitl, signal: AbortSignal): Promise<string> {
   return readLine('Choice, followed by an optional note: ', signal);
 }
 
-/** Puts a prompt step's own question to the person at the terminal: their line, or none when it could not be read. */
-type AskPerson = (question: string) => Promise<string | undefined>;
+/** Puts a prompt step's own question to the person at the terminal: their line, or none once `signal` aborts it. */
+type AskPerson = (question: string, signal: AbortSignal) => Promise<string | undefined>;
 
 /** Local tool selection and terminal behavior for one driver invocation. */
 export interface LocalDriverOptions {
@@ -448,7 +448,7 @@ async function promptReport(
 
   // A team instance's own command runs only once a person accepted it here.
   if (target.instance) {
-    const accepted = await acceptToolCommand(target.instance, { ask: askPerson });
+    const accepted = await acceptToolCommand(target.instance, { ask: askPerson && ((question) => askPerson(question, signal)) });
 
     if (!accepted.ok) return giveUp({ code: accepted.code, message: accepted.message }, launched);
   }
@@ -912,16 +912,19 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
   // A line typed at the terminal reaches every reader open on it, so one question is open at a time. A prompt step's
   // question closes the HITL question, which stays closed until no step asks and is then asked again, and steps ask
-  // one after another.
+  // one after another. A step stopped while it waits for its turn asks nothing.
   let stepAsks = 0;
   let stepTurns: Promise<unknown> = Promise.resolve();
 
-  const askPerson: AskPerson | undefined = personAnswers(mode) ? async (text) => {
+  const askPerson: AskPerson | undefined = personAnswers(mode) ? async (text, signal) => {
     stepAsks += 1;
     const before = stepTurns;
+    const stopped = new Promise<void>((resolve) => { signal.addEventListener('abort', () => resolve(), { once: true }); });
 
     const turn = (async () => {
-      await before;
+      await Promise.race([before, stopped]);
+
+      if (signal.aborted) return undefined;
 
       if (question) {
         const open = question;
@@ -930,7 +933,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         await open.exit;
       }
 
-      return readLine(text).catch(() => undefined);
+      return readLine(text, signal).catch(() => undefined);
     })();
 
     stepTurns = Promise.allSettled([before, turn]);
