@@ -185,13 +185,29 @@ runtimes:
 
 ## Tools, models and modes
 
-The runtime offers `claude`, `codex` and `opencode` when the daemon has them. The agent starts in the tool's default Paseo mode, never a bypass mode. A judge starts in a mode that asks before it edits or runs anything:
+Paseo calls a tool available once its binary is on the daemon's `PATH`, signed in or not. The runtime offers a tool only when Paseo shows it can run there. Otherwise, a step on that tool runs on the next runtime. The agent starts in the tool's default Paseo mode, never a bypass mode. A judge starts in a mode that asks before it edits or runs anything:
 
-| Tool | Step mode | Judge mode |
-| --- | --- | --- |
-| `claude` | `default` (asks before what it does not allow) | `default` |
-| `codex` | `auto` | none: every Codex mode writes without asking |
-| `opencode` | `build` | `plan` |
+| Tool | Offered when | Step mode | Judge mode |
+| --- | --- | --- | --- |
+| `claude` | `claude auth status` on the daemon's host says `"loggedIn": true`: a login or an API key | `default` (asks before what it does not allow) | `default` |
+| `codex` | never: Paseo does not report whether Codex is signed in | `auto` | none: every Codex mode writes without asking |
+| `opencode` | Paseo lists a model for it: OpenCode reaches a model provider, its free models included | `build` | `plan` |
+
+When the daemon can run none of them, the run stops before any step, and the message says what to do on the daemon's host:
+
+```text
+$ teamai workflow start fix-add --driver paseo-only
+{"error":{"code":"runtime_failed","message":"Runtime \"paseo\" of driver \"paseo-only\" did not start: The Paseo daemon at ws://127.0.0.1:6767/ws runs no tool teamai-runtime-paseo can use. claude: signed out; run `claude auth login` on the daemon's host. codex: Paseo does not report whether it is signed in, so its steps run on the next runtime of the definition."}}
+```
+
+To check a tool yourself, ask the daemon. `Auth` is the line that matters:
+
+```text
+$ paseo provider diagnostic claude | grep -A2 Auth
+  Auth: {
+  "loggedIn": true,
+  "authMethod": "oauth_token",
+```
 
 The step's `model` must be one the daemon offers, and its `effort` one that model has. With no `model`, the agent uses the daemon's default. A model the daemon lacks fails before any agent starts:
 
@@ -270,5 +286,5 @@ A runtime killed mid-step cannot archive; the step fails `runtime_lost`, and its
 | `client_version` | The Paseo client found is older than 0.14.0. Update Paseo, or set `PASEO_CLIENT_PATH` to a newer `@getpaseo/client` package. |
 | `daemon_unreachable` | No daemon answers at `url`. Start it with `paseo start`. |
 | `daemon_version` | The daemon is older than 0.14.0. Update Paseo and restart it. |
-| `tool_unavailable` | The daemon has none of `claude`, `codex`, `opencode` in its default mode. A step whose tool the daemon lacks runs on the next runtime. |
+| `tool_unavailable` | The daemon can run none of `claude` and `opencode`: each is missing, signed out, or lacks its default mode. Codex is never used. The message names each installed tool and its fix, or, with none installed, says to install one. A step whose tool the daemon cannot run goes to the next runtime. |
 | `bad_option` | An option other than `url`. |
