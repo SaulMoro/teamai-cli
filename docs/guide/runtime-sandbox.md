@@ -120,12 +120,13 @@ A scored pass is judged by its `teamai-score` run, whose judge step reads only t
 
 ```text
 judge container teamai-<run>-<attempt>                  from the host
-~/.teamai/projects/…/runs/<score run>/scratch/<attempt>   the evidence, read-only: nothing else
+/evidence                                               the evidence, read-only: nothing else
 network <name>-net, internal                            no route out but the filter
 filter <name>-proxy                                     lets through only the model provider: api.anthropic.com:443
 ```
 
 - Claude runs with only `Read`, `Grep` and `Glob`, so it can read the evidence and nothing else (`access: read`). Codex runs with the container as its sandbox, so it can run commands inside it (`access: full`), but still reaches only `dir` and the provider.
+- The evidence is mounted at `/evidence`, and the judge's prompt and working directory name it there, so the judge's mounts and prompt carry no path of your home, user name or project. The evidence files themselves, such as a transcript, still hold what the session wrote.
 - The judge gets only the env credentials its own tool reads, never your environment, your SSH agent or the run's directory. It counts in the sandbox's `max_parallel`.
 - The run records the level the runtime kept, `verified`, and what the tool could do there.
 
@@ -162,7 +163,7 @@ teamai-rabebd844f8554e81-a6ee9e5b2         teamai-rabebd844f8554e81-a6ee9e5b2-ne
 teamai-rabebd844f8554e81-a6ee9e5b2-proxy   bridge,teamai-rabebd844f8554e81-a6ee9e5b2-net
 ```
 
-**A judge signs in with an API key.** A judge container has no tool home, so a `codex: login` or `claude: login` never reaches it. Give the sandbox an env credential its judge tool reads: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` for Claude, `OPENAI_API_KEY` or `CODEX_API_KEY` for Codex. The steps' token from the quick start judges too. Through a gateway, the filter lets through its base URL in place of the public API, over `https` or plain `http`:
+**A judge signs in with an API key.** A judge container has no tool home, so a `codex: login` never reaches it. Give the sandbox an env credential its judge tool reads: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` for Claude, `OPENAI_API_KEY` for Codex (not `CODEX_API_KEY`, which teamai does not pass a judge). The steps' token from the quick start judges too. Through a gateway, the filter lets through its base URL in place of the public API, over `https` or plain `http`:
 
 ```yaml
 runtimes:
@@ -174,6 +175,31 @@ runtimes:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN   # the steps
         OPENAI_API_KEY: env:OPENAI_API_KEY                     # a Codex judge
         OPENAI_BASE_URL: env:OPENAI_BASE_URL                   # https://llm.acme.internal:8443/v1 is let through
+```
+
+**The sandbox offers a judge only on the tools whose key the definition names.** With only a login, a later runtime of the definition judges instead. This definition scores sessions with `teamai-share-session`, which runs no step in the sandbox: its judge runs on your machine's Claude, through `local`:
+
+```yaml
+# drivers/containers.yaml
+schemaVersion: v1alpha1
+name: containers
+tool: claude
+runtimes:
+  - use: sandbox
+    options:
+      provider: docker
+      image: ghcr.io/acme/agent:1
+      credentials:
+        codex: login                                          # a login: no judge in a container
+  - use: local                                                # takes the judge
+```
+
+**A base URL must be one the container reaches.** `localhost`, `127.0.0.1` or `::1` in a credential is the container's own loopback, so the sandbox refuses it when the attempt opens, naming the variable. Point it at your machine as the container sees it:
+
+```sh
+# a gateway on this machine, on port 4000
+export ANTHROPIC_BASE_URL=http://host.docker.internal:4000       # Docker Desktop
+# export ANTHROPIC_BASE_URL=http://host.containers.internal:4000 # Podman
 ```
 
 **The image needs `node`** for the filter, and Docker needs to keep DNS inside an internal network: 26.0.0 or later, 25.0.5 or 23.0.11 (older versions forward a container's lookups out, CVE-2024-29018). Otherwise the sandbox offers no judge, and a definition with only the sandbox stops `confined_pending` at the judge. The quick start's image has `node`. Podman offers no judge in this version: its rootless network cannot connect the filter to the judge's network.
@@ -238,8 +264,8 @@ teamai workflow retry r7c41d09e2b6a5f13 review      # goes on from the work the 
 | --- | --- | --- |
 | `sandbox_unavailable` | `docker` or `podman` is not installed, its daemon or machine is not running, or the image cannot be pulled. Nothing runs on the host instead. | Install or start it: Docker Desktop, `sudo systemctl start docker`, or `podman machine start`. For an image, check its name and `docker login <registry>`. |
 | `credential_missing` | A credential's variable is not set where teamai runs, or a judge got no env credential its tool reads | `claude setup-token`, then export `CLAUDE_CODE_OAUTH_TOKEN`; for a judge, add the key the message names to `credentials` |
-| `confined_pending` | No runtime of the definition offers the judge's tool: the image lacks `node` or that tool, Docker is older than 26.0.0, or the provider is `podman` | Add `node` and the tool to the image, update Docker, or list `local` in the definition |
-| `bad_option` | A key or value in `options` is wrong | Fix the definition and push it |
+| `confined_pending` | No runtime of the definition offers the judge's tool: the image lacks `node` or that tool, the definition names no key for it, Docker is older than 26.0.0, or the provider is `podman` | Add `node` and the tool to the image, add the tool's key to `credentials`, update Docker, or list `local` in the definition |
+| `bad_option` | A key or value in `options` is wrong, or a credential such as `ANTHROPIC_BASE_URL` points at `localhost` or `127.0.0.1`, which no container reaches | Fix the definition and push it; for a base URL, use `host.docker.internal` on Docker Desktop |
 | `sandbox_failed` | The engine could not create the attempt's container | Read the engine's message in the step failure; `docker ps -a --filter label=teamai.run=<run>` lists what is left |
 | **Not closed** in run details | The engine could not remove the attempt's container, so what ran there may still run. The run ends as it would. | `docker rm --force <container>`, as the message says |
 | `runtime_interrupted` | teamai restarted while the step ran | `teamai workflow retry <run> <step>` |

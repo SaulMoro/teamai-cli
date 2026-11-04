@@ -120,12 +120,13 @@ docker exec -w /home/me/acme/app/.teamai/workflow-worktrees/… -e CLAUDE_CONFIG
 
 ```text
 评判容器 teamai-<run>-<attempt>                         来自主机
-~/.teamai/projects/…/runs/<score run>/scratch/<attempt>   证据，只读：别的都没有
+/evidence                                               证据，只读：别的都没有
 网络 <name>-net，internal                               除了过滤器没有出口
 过滤器 <name>-proxy                                     只放行模型提供方：api.anthropic.com:443
 ```
 
 - Claude 只带 `Read`、`Grep` 和 `Glob` 运行，所以只能读证据（`access: read`）。Codex 把容器当作它的沙箱运行，所以能在容器里执行命令（`access: full`），但仍然只能接触到 `dir` 和模型提供方。
+- 证据挂载在 `/evidence`，评判的提示词和工作目录也用这个路径指代它，所以评判的挂载和提示词里没有你的主目录、用户名或项目路径。证据文件本身（比如转录）仍然保留会话写下的内容。
 - 评判只拿到它自己的工具会读取的环境变量凭据，拿不到你的环境、SSH agent 或运行目录。它计入 sandbox 的 `max_parallel`。
 - 运行会记录运行时实际保持的级别 `verified`，以及工具在那里能做什么。
 
@@ -162,7 +163,7 @@ teamai-rabebd844f8554e81-a6ee9e5b2         teamai-rabebd844f8554e81-a6ee9e5b2-ne
 teamai-rabebd844f8554e81-a6ee9e5b2-proxy   bridge,teamai-rabebd844f8554e81-a6ee9e5b2-net
 ```
 
-**评判用 API 密钥登录。** 评判容器没有工具主目录，所以 `codex: login` 或 `claude: login` 永远到不了它那里。给 sandbox 一个评判工具会读取的环境变量凭据：Claude 用 `CLAUDE_CODE_OAUTH_TOKEN`、`ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`，Codex 用 `OPENAI_API_KEY` 或 `CODEX_API_KEY`。快速开始里步骤用的令牌也能用来评判。通过网关时，过滤器放行它的 base URL 而不是公共 API，`https` 和普通 `http` 都可以：
+**评判用 API 密钥登录。** 评判容器没有工具主目录，所以 `codex: login` 永远到不了它那里。给 sandbox 一个评判工具会读取的环境变量凭据：Claude 用 `CLAUDE_CODE_OAUTH_TOKEN`、`ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`，Codex 用 `OPENAI_API_KEY`（不是 `CODEX_API_KEY`，teamai 不会把它传给评判）。快速开始里步骤用的令牌也能用来评判。通过网关时，过滤器放行它的 base URL 而不是公共 API，`https` 和普通 `http` 都可以：
 
 ```yaml
 runtimes:
@@ -174,6 +175,31 @@ runtimes:
         CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN   # 步骤用
         OPENAI_API_KEY: env:OPENAI_API_KEY                     # Codex 评判用
         OPENAI_BASE_URL: env:OPENAI_BASE_URL                   # 放行 https://llm.acme.internal:8443/v1
+```
+
+**sandbox 只为驱动定义里给了密钥的工具提供评判。** 只有登录时，由驱动定义里后面的运行时来评判。这个驱动定义用 `teamai-share-session` 给会话打分，不在 sandbox 里运行步骤：评判经由 `local` 在你机器上的 Claude 上运行：
+
+```yaml
+# drivers/containers.yaml
+schemaVersion: v1alpha1
+name: containers
+tool: claude
+runtimes:
+  - use: sandbox
+    options:
+      provider: docker
+      image: ghcr.io/acme/agent:1
+      credentials:
+        codex: login                                          # 只是登录：容器里不评判
+  - use: local                                                # 接手评判
+```
+
+**base URL 必须是容器能到达的地址。** 凭据里的 `localhost`、`127.0.0.1` 或 `::1` 指的是容器自己的回环地址，所以 sandbox 会在打开 attempt 时拒绝它，并说出变量名。把它指向容器眼中的你的机器：
+
+```sh
+# 本机 4000 端口上的网关
+export ANTHROPIC_BASE_URL=http://host.docker.internal:4000       # Docker Desktop
+# export ANTHROPIC_BASE_URL=http://host.containers.internal:4000 # Podman
 ```
 
 **镜像里需要 `node`** 来运行过滤器，Docker 也要能把 DNS 限制在 internal 网络里：26.0.0 或更高、25.0.5 或 23.0.11（更旧的版本会把容器的查询转发出去，CVE-2024-29018）。否则 sandbox 不提供评判，只有这个 sandbox 的驱动定义运行到评判时会以 `confined_pending` 停下。快速开始里的镜像带有 `node`。这个版本的 Podman 不提供评判：它的 rootless 网络无法把过滤器接到评判的网络上。
@@ -238,8 +264,8 @@ teamai workflow retry r7c41d09e2b6a5f13 review      # 从被停止的那一轮�
 | --- | --- | --- |
 | `sandbox_unavailable` | 没有安装 `docker` 或 `podman`，它的守护进程或虚拟机没有运行，或者拉取不到镜像。不会改为在主机上运行。 | 安装或启动它：Docker Desktop、`sudo systemctl start docker`，或 `podman machine start`。镜像问题请检查名称，并执行 `docker login <registry>`。 |
 | `credential_missing` | 凭据对应的变量在 teamai 运行的地方没有设置，或者评判没有拿到它的工具会读取的环境变量凭据 | 执行 `claude setup-token`，再导出 `CLAUDE_CODE_OAUTH_TOKEN`；评判的情况，把信息里点名的密钥加到 `credentials` |
-| `confined_pending` | 驱动定义里没有运行时提供评判用的工具：镜像缺少 `node` 或那个工具，Docker 早于 26.0.0，或者 provider 是 `podman` | 把 `node` 和工具装进镜像、升级 Docker，或者在驱动定义里列上 `local` |
-| `bad_option` | `options` 里有键或值写错了 | 修正驱动定义并推送 |
+| `confined_pending` | 驱动定义里没有运行时提供评判用的工具：镜像缺少 `node` 或那个工具，驱动定义没给它密钥，Docker 早于 26.0.0，或者 provider 是 `podman` | 把 `node` 和工具装进镜像、在 `credentials` 里加上工具的密钥、升级 Docker，或者在驱动定义里列上 `local` |
+| `bad_option` | `options` 里有键或值写错了，或者 `ANTHROPIC_BASE_URL` 这类凭据指向容器到不了的 `localhost` 或 `127.0.0.1` | 修正驱动定义并推送；base URL 在 Docker Desktop 上改用 `host.docker.internal` |
 | `sandbox_failed` | 容器引擎无法创建这次尝试的容器 | 查看步骤失败里引擎给出的信息；`docker ps -a --filter label=teamai.run=<run>` 会列出剩下的容器 |
 | 运行详情里的 **未关闭**（Not closed） | 容器引擎无法删除这次尝试的容器，里面运行的东西可能还在运行。运行本身照常结束。 | 按信息里给出的命令执行 `docker rm --force <container>` |
 | `runtime_interrupted` | 步骤运行时 teamai 重启了 | `teamai workflow retry <run> <step>` |
