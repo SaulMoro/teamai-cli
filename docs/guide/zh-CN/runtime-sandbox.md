@@ -167,6 +167,10 @@ teamai-rabebd844f8554e81-a6ee9e5b2-proxy   bridge,teamai-rabebd844f8554e81-a6ee9
 **评判用 API 密钥登录。** 评判容器没有工具主目录，所以 `codex: login` 永远到不了它那里。给 sandbox 一个评判工具会读取的环境变量凭据：Claude 用 `CLAUDE_CODE_OAUTH_TOKEN`、`ANTHROPIC_API_KEY` 或 `ANTHROPIC_AUTH_TOKEN`，Codex 用 `OPENAI_API_KEY` 或 `CODEX_API_KEY`。快速开始里步骤用的令牌也能用来评判。条目里写了的话，评判也会拿到它的工具读取的模型变量，例如 `ANTHROPIC_MODEL`，但永远拿不到你的代理或 CA 文件：它唯一的出口是过滤器。通过网关时，过滤器放行它的 base URL 而不是公共 API，`https` 和普通 `http` 都可以：
 
 ```yaml
+# drivers/gateway.yaml：步骤用 Claude，评判用经过你的网关的 Codex
+schemaVersion: v1alpha1
+name: gateway
+tool: claude
 runtimes:
   - use: sandbox
     options:
@@ -298,6 +302,10 @@ export ANTHROPIC_BASE_URL=http://host.docker.internal:4000
 **sbx 不提供评判。** 受限的评判只能访问它的模型提供方，而 sbx 沙箱能访问你的 sbx 策略放行的所有主机：balanced 策略放行包仓库和代码托管站点，评判可以借它们把读到的内容发出去。单个沙箱的规则只能拒绝它点名的主机，策略 profile 来自你所在组织的 sbx 治理设置，所以 teamai 没有办法把一个沙箱收窄到只能访问一个主机。在 sbx 之后列上 `local` 或一个 `docker` sandbox 来负责评判：
 
 ```yaml
+# drivers/sbx-judged.yaml：步骤在 sbx 里，评判在 docker sandbox 里
+schemaVersion: v1alpha1
+name: sbx-judged
+tool: claude
 runtimes:
   - use: sandbox
     options: { provider: sbx, agent: claude, credentials: { CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN } }
