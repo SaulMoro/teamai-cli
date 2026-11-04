@@ -265,7 +265,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
 
               if (event.confined) end.confined = event.confined;
 
-              if (event.resumed) end.resumed = event.resumed;
+              if (event.resumed === true) end.resumed = true;
               settle(end);
 
               return;

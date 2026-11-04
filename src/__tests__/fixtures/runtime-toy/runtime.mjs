@@ -259,7 +259,8 @@ function agentOutcome(record) {
     fs.appendFileSync(path.join(project, `${session.id}.jsonl`), `${JSON.stringify(line)}\n`);
   }
 
-  return { state: 'finished', session, result, ...usage, ...(resumes && { resumed: true }) };
+  // A fresh session where the lease named one to continue says so, as `resumed: false`.
+  return { state: 'finished', session, result, ...usage, ...(record.lease.resume !== undefined && { resumed: resumes }) };
 }
 
 function promptEnded(op, outcome) {
