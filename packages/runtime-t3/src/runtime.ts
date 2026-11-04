@@ -10,7 +10,7 @@ import {
 import { z } from 'zod';
 import type { Journal, PlaceRecord, ThreadRecord } from './journal.js';
 import { DRIVER_NAMES, DRIVERS, driverOf, sessionSince, toolOf, type ToolId } from './sessions.js';
-import { type Environment, type Launch, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
+import { STEP_MODE_LABELS, T3Error, type Environment, type Launch, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
 
 // ─── teamai-runtime-t3 ───
 //
@@ -462,7 +462,17 @@ export function serve(options: ServeOptions): Promise<void> {
       const now = place(request.handle) ?? opened;
       journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, threads: { ...now.threads, [request.op]: thread } });
     } catch (error) {
-      end({ op: request.op, state: 'failed', failure: { code: 't3_launch_failed', message: `T3 Code did not launch the step's thread: ${error instanceof Error ? error.message : String(error)}` } });
+      // T3 caps a thread's mode at the access the member approved teamai with, and says so with this code.
+      const tooNarrow = error instanceof T3Error && error.refusal?.code === 'runtime_mode_escalation_denied' ? error.refusal.message : undefined;
+
+      end({
+        op: request.op, state: 'failed', failure: tooNarrow === undefined
+          ? { code: 't3_launch_failed', message: `T3 Code did not launch the step's thread: ${error instanceof Error ? error.message : String(error)}` }
+          : {
+            code: 'sign_in_too_narrow',
+            message: `T3 Code refused to start the step's thread in ${s.stepMode} mode, because teamai's sign-in does not allow it (${tooNarrow}). Remove ~/.teamai/runtime-state/t3/credentials.json, start the workflow again, and approve teamai with ${STEP_MODE_LABELS[s.stepMode]} access or broader. Or set runtime_mode to a mode the sign-in allows.`,
+          },
+      });
 
       return;
     }

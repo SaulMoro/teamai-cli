@@ -51,6 +51,9 @@ export const STEP_MODES = ['auto', 'auto-accept-edits', 'approval-required'] as 
 
 export type StepMode = (typeof STEP_MODES)[number];
 
+/** What T3's pages call each mode. */
+export const STEP_MODE_LABELS: Record<StepMode, string> = { auto: 'Auto', 'auto-accept-edits': 'Auto-accept edits', 'approval-required': 'Supervised' };
+
 export interface Launch {
   title: string;
   message: string;
@@ -63,13 +66,31 @@ export interface Launch {
   clientRequestId: string;
 }
 
+/** The body T3 answers a refused call with, as its text. */
+const RefusalSchema = z.object({ code: z.string(), message: z.string() });
+
+type Refusal = z.infer<typeof RefusalSchema>;
+
 /** A tool call T3 refused or could not answer, with T3's own message. */
 export class T3Error extends Error {
   readonly tool: string;
+  /** T3's code and message, when its refusal carried them. */
+  readonly refusal: Refusal | undefined;
 
-  constructor(tool: string, message: string) {
+  constructor(tool: string, message: string, refusal?: Refusal) {
     super(message);
     this.tool = tool;
+    this.refusal = refusal;
+  }
+}
+
+function refusalIn(text: string): Refusal | undefined {
+  try {
+    const refusal = RefusalSchema.safeParse(JSON.parse(text));
+
+    return refusal.success ? refusal.data : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -110,7 +131,7 @@ function t3Over(client: Client): T3 {
       return text.success ? [text.data.text] : [];
     });
 
-    if (result.isError) throw new T3Error(tool, texts.join(' ') || `T3 refused ${tool}.`);
+    if (result.isError) throw new T3Error(tool, texts.join(' ') || `T3 refused ${tool}.`, refusalIn(texts.join(' ')));
     const body: unknown = result.structuredContent ?? JSON.parse(texts.join(''));
     const parsed = schema.safeParse(body);
 
