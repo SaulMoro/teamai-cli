@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { redact, redactJson, collectEnvSecrets, redactWithEnv } from '../utils/redact.js';
+import { redact, redactJson, collectEnvSecrets, redactWithEnv } from './redact.js';
 
 describe('redact', () => {
   it('returns empty and non-secret text unchanged', () => {

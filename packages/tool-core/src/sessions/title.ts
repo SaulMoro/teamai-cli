@@ -7,7 +7,7 @@
  * becomes a wall of prompt text — the user cannot see what they asked, only a pile of XML.
  */
 
-import { MIN_ENV_VALUE_LENGTH, redact, redactWithEnv } from '../redact.js';
+import { MIN_ENV_VALUE_LENGTH, redact, redactWithEnv } from '@teamai/shared/redact';
 
 /** Title length cap: the first user message may be tens of KB of injected context. */
 const TITLE_MAX = 60;

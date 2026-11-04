@@ -16,7 +16,7 @@ import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { FinishedSessions } from '../session-flow/finished-sessions.js';
 import type { Session } from '@teamai/tool-core/sessions/ir';
 import { judgeSession } from '../session-flow/session-work.js';
-import { redact } from '../utils/redact.js';
+import { redact } from '@teamai/shared/redact';
 import { AGENT_SESSION_ENV } from '../utils/session-id.js';
 
 const scorer = (frontmatter: string) => `---

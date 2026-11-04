@@ -37,7 +37,7 @@ const SKILL_IMPORTS = {
   'src/workflow/step-model.ts': {},
   'src/env-resolution.ts': {},
   'src/env-exec.ts': { names: ['stepEnvironment', 'withRunningCli'] },
-  'src/utils/redact.ts': {},
+  '@teamai/shared/redact': {},
   'src/utils/session-id.ts': {},
   // Equal values as equal text, so a kept end is compared with the engine's latest one.
   'src/utils/canonical-json.ts': {},

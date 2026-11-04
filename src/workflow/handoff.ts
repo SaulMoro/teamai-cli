@@ -10,7 +10,7 @@ import { getRepoIdentity } from '../session-flow/sync.js';
 import { getReportsDir, usesBranchWorktree, type LocalConfig } from '../types.js';
 import { gitRoot } from '../utils/branch-worktree.js';
 import { canonicalJson } from '../utils/canonical-json.js';
-import { sanitizeGitUrl } from '../utils/redact.js';
+import { sanitizeGitUrl } from '@teamai/shared/redact';
 import { fetchReportsOriginFile, readReportsOriginFile, updateReports, type ReportsChange, type ReportsWriteContext } from '../utils/reports-branch.js';
 import { loadWorkflowBundle, loadWorkflowBundleAt, loadWorkflowTree, type WorkflowBundle } from './cache.js';
 import { stepLoops } from './loop.js';

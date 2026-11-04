@@ -21,7 +21,7 @@ import type { LocalConfig } from '../types.js';
 import { getDataHome, isJsonObject, isUsageReportEnabled, type JsonValue } from '../types.js';
 import { parseJson } from '../utils/json.js';
 import { log } from '../utils/logger.js';
-import { redactJson } from '../utils/redact.js';
+import { redactJson } from '@teamai/shared/redact';
 import { acquireLock, releaseLock } from '../update.js';
 import { launchTargetOf } from '../tool-launch/tools.js';
 import type { RunMode } from '../launch-context.js';
