@@ -1,9 +1,10 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { PromptLeaseSchema, PromptRequestSchema, RuntimeMessage, RuntimeOptions } from '@teamai/runtime-protocol';
+import { OpIdSchema, type PromptLeaseSchema, type PromptRequestSchema, type RuntimeMessage, type RuntimeOptions } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { agentIdOf } from './runtime.js';
 import { startFakeDaemon, type Behaviour } from './testing/fake-daemon.js';
 import { startRuntime, TEST_CLIENT, type Runtime } from './testing/harness.js';
 
@@ -54,9 +55,9 @@ async function ready(runtime: Runtime, { mode = 'unattended', options = { url: d
   return runtime.next(isInit);
 }
 
-async function opened(runtime: Runtime): Promise<string> {
-  runtime.send({ type: 'open', op: 'op-0000000a', run: RUN, attempt: ATTEMPT, credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'run'), toolHome: {} } });
-  const accepted = await runtime.next(isOp('op-0000000a', 'accepted'));
+async function opened(runtime: Runtime, { attempt = ATTEMPT, op = 'op-0000000a' } = {}): Promise<string> {
+  runtime.send({ type: 'open', op, run: RUN, attempt, credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'run'), toolHome: {} } });
+  const accepted = await runtime.next(isOp(op, 'accepted'));
 
   if (!('handle' in accepted) || !accepted.handle) throw new Error(`no handle in ${JSON.stringify(accepted)}`);
 
@@ -597,6 +598,61 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next((line) => 'event' in line && line.event === 'closed')).toEqual({ event: 'closed', handle: second });
     expect(archives()).toMatchObject([{ workspaceId: first.split('/')[0] }]);
   });
+
+  it('stops only its own agents when another attempt shares its workspace, and leaves that attempt running', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, stop_lag_ms: 1_500 });
+    const runtime = start();
+    await ready(runtime);
+    const first = await opened(runtime);
+    const second = await opened(runtime, { attempt: 'a4567cdef', op: 'op-0000000c' });
+    runtime.send(promptRequest(first, 'op-0000000b'));
+    runtime.send(promptRequest(second, 'op-0000000d'));
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+    await runtime.next(isOp('op-0000000d', 'accepted'));
+
+    runtime.send({ type: 'close', handle: first });
+
+    expect(await runtime.next((line) => 'event' in line && ['closed', 'close_failed'].includes(line.event))).toEqual({ event: 'closed', handle: first });
+    expect(stopped()).toEqual([{ agentId: agentIdOf(OpIdSchema.parse('op-0000000b')), status: 'idle' }]);
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toEqual([]);
+    runtime.send({ type: 'reattach', handle: second });
+    expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ handle: second, ops: [{ op: 'op-0000000d', state: 'running' }] });
+  });
+
+  it('keeps an attempt whose agent still runs when another attempt shares its workspace, so it can be closed again', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, refuse_cancel: 'Agent is busy', stop_lag_ms: 60_000 });
+    const runtime = start();
+    await ready(runtime);
+    const first = await opened(runtime);
+    const second = await opened(runtime, { attempt: 'a4567cdef', op: 'op-0000000c' });
+    const isClose = (handle: string) => (line: RuntimeMessage): boolean => 'event' in line && ['closed', 'close_failed'].includes(line.event) && 'handle' in line && line.handle === handle;
+    const archives = (): unknown[] => received().filter((request) => request.type === 'archive_workspace_request');
+    runtime.send(promptRequest(first, 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
+    const agent = agentIdOf(OpIdSchema.parse('op-0000000b'));
+
+    runtime.send({ type: 'close', handle: first });
+
+    expect(await runtime.next(isClose(first))).toEqual({
+      event: 'close_failed', handle: first,
+      failure: { code: 'close_failed', message: `Paseo did not cancel the claude agent ${agent}: Agent is busy. It may still run in the worktree; stop it in the Paseo app.` },
+    });
+    runtime.send({ type: 'close', handle: second });
+    expect(await runtime.next(isClose(second))).toEqual({ event: 'closed', handle: second });
+    expect(archives()).toEqual([]);
+    expect(stopped()).toEqual([]);
+    runtime.send({ type: 'reattach', handle: first });
+    expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ handle: first, ops: [{ op: 'op-0000000b', state: 'failed' }] });
+
+    // Paseo stops the agent once asked again: the attempt, now the workspace's last, archives it and closes.
+    behave({ hold_ms: 60_000, output: { ok: true } });
+    runtime.send({ type: 'close', handle: first });
+    expect(await runtime.next(isClose(first))).toEqual({ event: 'closed', handle: first });
+    expect(archives()).toMatchObject([{ workspaceId: first.split('/')[0] }]);
+    expect(stopped()).toEqual([{ agentId: agent, status: 'closed' }]);
+  }, 30_000);
 
   it.each([
     ['an option it does not take', { url: 'ws://127.0.0.1:1/ws', imgae: 'x' }, {}, { code: 'bad_option', key: 'imgae' }],

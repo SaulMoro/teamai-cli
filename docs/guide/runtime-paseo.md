@@ -390,6 +390,12 @@ The place counts as closed only once Paseo reports each of the attempt's agents 
 Paseo archived workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476e (wks_6fb33a5b94531f79), but agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f still ran 10 s later. It may still change the worktree; stop it in the Paseo app.
 ```
 
+Two attempts on one worktree share its Paseo workspace, which only the last of them to close archives. An attempt that closes first cancels its own agents instead, a failed step's included, and leaves the other attempt's running. An agent Paseo will not cancel keeps the attempt open, so teamai can close it again:
+
+```text
+Paseo did not cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f: Agent is busy. It may still run in the worktree; stop it in the Paseo app.
+```
+
 A runtime killed mid-step cannot archive; the step fails `runtime_lost`, and its workspace stays in Paseo until you archive it (`paseo workspace archive <id>`).
 
 ## Errors at start
