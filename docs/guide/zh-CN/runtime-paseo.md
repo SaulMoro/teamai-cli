@@ -160,12 +160,45 @@ teamai fix · rd573bcff8eef4e10             claude/claude-opus-5-5  closed  /rep
 | 不读目录之外的文件 | 否：没有什么能阻止智能体读取别处的文件 |
 | 不访问网络 | 否 |
 
-`confined.json` 要求 `verified` 的受限步骤从不交给 Paseo，因为 Paseo 提供的是 `best-effort`。Codex 从不在 Paseo 上评判，因为 Codex 的每种模式都会不经询问就写入。评判的位置在其智能体启动前，在运行详情里显示为 `Paseo confined prompt, best-effort`。
+`confined.json` 要求 `verified` 的受限步骤从不交给 Paseo，因为 Paseo 提供的是 `best-effort`。评判的位置在其智能体启动前，在运行详情里显示为 `Paseo confined prompt, best-effort`。
+
+Codex 评判以 `auto` 模式启动，并把 Codex 的沙箱设为 `read-only`，因为 Paseo 列出的每种 Codex 模式都会不经询问就写入。Codex 用 shell 命令读文件，所以它的说明要求只用只读命令；沙箱不经询问就运行这些命令，其他任何操作都会询问并结束评判。`tool` 为 `codex` 的定义会让步骤和它的评判都在 Codex 上运行：
+
+```yaml
+# drivers/paseo-codex.yaml
+schemaVersion: v1alpha1
+name: paseo-codex
+tool: codex
+runtimes:
+  - use: paseo
+```
+
+下面是 Codex 评判为一轮 Codex 步骤打标签：
+
+```text
+$ teamai score --run ra429df3ad473c7b3 --scorer review-quality --driver paseo-codex
+ℹ review-quality: partial (score 0.5, did not pass). Reasoning: ~/.teamai/scores/reasoning/43ce17b3….md
+$ paseo logs 4c7942c --filter tools
+[Shell] ls -la
+[Shell] rg --files -uu
+[Shell] cat diff.patch evidence.json transcripts/fix#1.md
+[Shell] cat repo/package.json repo/math.js repo/math.test.js answer.schema.json
+```
+
+```json
+{ "id": "score[0].judge", "outcome": "success", "outputs": { "answer": { "label": "partial", "reasoning": "math.js now returns a + b, but package.json sets \"type\": \"module\", so math.test.js cannot use require and will fail before its assertion runs…" } }, "confined": { "tool": "codex", "isolation": "best-effort", "access": "read" } }
+```
 
 评分从守护进程的智能体写入会话的地方读取步骤的会话：守护进程所属用户的工具主目录。请让守护进程以运行 teamai 的成员身份、在同一台机器上运行。守护进程以其他用户或其他 `HOME` 运行时，这一轮不会被打标签，评分运行的 `evidence` 步骤会说明原因：
 
 ```text
 evidence_missing: Pass 1 of step fix in run r080799f10648b1ed cannot be scored: no longer on this machine: claude-code session 346fd0be-1a5a-474b-aedf-24c305d5c1a6 of fix#1. Restore what is missing, or score another pass.
+```
+
+不论守护进程以谁的身份运行，Codex 步骤的一轮也会这样不被打标签。teamai 关闭尝试时，Paseo 归档该智能体，Codex 把它的会话移到 `~/.codex/archived_sessions/`。teamai 只从 `~/.codex/sessions/` 读取 Codex 会话，所以评分运行会说：
+
+```text
+evidence_missing: Pass 1 of step fix in run ra429df3ad473c7b3 cannot be scored: no longer on this machine: codex session 01a1a731-9053-7cf2-9884-68058745044a of fix#1. Restore what is missing, or score another pass.
 ```
 
 ## 选项
@@ -190,26 +223,83 @@ runtimes:
 | 工具 | 何时提供 | 步骤模式 | 评判模式 |
 | --- | --- | --- | --- |
 | `claude` | 守护进程主机上的 `claude auth status` 显示 `"loggedIn": true`：账号登录或 API key 均可 | `default`（执行未允许的操作前先询问） | `default` |
-| `codex` | 从不：Paseo 不报告 Codex 是否已登录 | `auto` | 无：Codex 的每种模式都不经询问就写入 |
+| `codex` | 守护进程在本机运行（`url` 是回环地址，如 `127.0.0.1` 或 `localhost`），且 `codex login status` 显示 `Logged in` | `auto` | `auto`，沙箱为 `read-only` |
 | `opencode` | Paseo 为它列出了模型：OpenCode 连上了模型提供方，包括它的免费模型 | `build` | `plan` |
+
+Paseo 不报告 Codex 是否已登录，所以运行时自己用你的环境（`CODEX_HOME` 或 `~/.codex`）运行 `codex login status`。它运行的是 Paseo 诊断中 `Resolved path` 所指的 `codex`，即守护进程在它自己的 `PATH` 上找到的那个，而不是 teamai 的 `PATH` 上的。守护进程在其他任何地址上时（例如在另一台机器上），从不提供 Codex。
 
 守护进程一个工具都运行不了时，运行在任何步骤之前停止，消息说明要在守护进程主机上做什么：
 
 ```text
-$ teamai workflow start fix-add --driver paseo-only
-{"error":{"code":"runtime_failed","message":"Runtime \"paseo\" of driver \"paseo-only\" did not start: The Paseo daemon at ws://127.0.0.1:6767/ws runs no tool teamai-runtime-paseo can use. claude: signed out; run `claude auth login` on the daemon's host. codex: Paseo does not report whether it is signed in, so its steps run on the next runtime of the definition."}}
+$ teamai workflow start fix-add --driver paseo-signed-out
+{"error":{"code":"runtime_failed","message":"Runtime \"paseo\" of driver \"paseo-signed-out\" did not start: The Paseo daemon at ws://127.0.0.1:6799/ws runs no tool teamai-runtime-paseo can use. claude: signed out; run `claude auth login` on the daemon's host. codex: signed out; run `codex login` on the daemon's host."}}
 ```
 
-想自己检查某个工具，就问守护进程，看 `Auth` 这一行：
+守护进程能运行另一个工具时，运行照常开始，使用它运行不了的工具的步骤不启动智能体就失败：
+
+```text
+$ teamai workflow start fix-add --driver paseo-codex
+✖ Step "fix" failed with tool_unavailable: teamai-runtime-paseo did not offer codex: signed out; run `codex login` on the daemon's host.
+```
+
+想自己检查某个工具，就问守护进程或 Codex，看 `Auth` 和 `Resolved path` 这两行：
 
 ```text
 $ paseo provider diagnostic claude | grep -A2 Auth
   Auth: {
   "loggedIn": true,
   "authMethod": "oauth_token",
+$ paseo provider diagnostic codex | grep 'Resolved path'
+  Resolved path: ~/.nvm/versions/node/v24.21.0/bin/codex
+$ ~/.nvm/versions/node/v24.21.0/bin/codex login status
+Logged in using ChatGPT
 ```
 
-步骤的 `model` 必须是守护进程提供的模型，`effort` 必须是该模型支持的。不写 `model` 时，智能体使用守护进程的默认模型。守护进程没有的模型会在任何智能体启动前失败：
+步骤的 `model` 必须是守护进程提供的模型，`effort` 必须是该模型支持的。不写 `model` 时，智能体使用守护进程的默认模型。
+
+对 OpenCode 来说，这个默认模型可能是 OpenCode 的免费模型之一，它们不需要登录。OpenCode 没有标出默认模型时，智能体使用守护进程列出的第一个模型：
+
+```text
+$ paseo provider models opencode
+ID                                    MODEL
+opencode/crouton-alpha-free           Crouton Alpha Free
+opencode/pulse-alpha-free             Pulse Alpha Free
+github-copilot/gpt-6.1-terra          GPT-6.1 Terra
+…
+github-copilot/claude-sonnet-5.5      Claude Sonnet 5.5
+```
+
+这样，不写 `model` 的步骤或评判会把它的提示词，或它要评判的证据，发给 OpenCode 的免费提供方。固定模型，让它们留在你选定的提供方：
+
+```yaml
+# workflows/review-opencode.yaml
+schemaVersion: v1alpha1
+name: review-opencode
+description: Review the branch on OpenCode, on a model the team chose.
+steps:
+  - id: review
+    tool: opencode
+    model: { name: github-copilot/claude-sonnet-5.5 }
+    prompt: Review the change on this branch, and list what it gets wrong.
+```
+
+```markdown
+<!-- scorers/review-quality.md -->
+---
+model: github-copilot/claude-sonnet-5.5
+labels:
+  - value: good
+    score: 1
+    description: The change does what the step asked, with tests.
+  - value: bad
+    score: 0
+    description: The change does not do what the step asked.
+passingScore: 1
+---
+Judge whether the change does what the step asked. Read the diff and the session.
+```
+
+守护进程没有的模型会在任何智能体启动前失败：
 
 ```text
 ✖ Step "classify" failed with model_unavailable: The Paseo daemon at ws://127.0.0.1:6767/ws has no claude model claude-opus-0-1. It offers: claude-opus-5-5, claude-opus-5, claude-fable-5-1, claude-fable-5, claude-opus-4-8[1m], claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-sonnet-5[1m], claude-opus-4-7[1m], claude-opus-4-7, claude-opus-4-6[1m], claude-opus-4-6, claude-sonnet-4-6[1m], claude-sonnet-4-6, claude-haiku-5-5, claude-haiku-4-5.
@@ -229,7 +319,13 @@ Paseo 以明文把智能体的环境变量存在它的 home 下，所以这个�
 
 ## 权限
 
-Claude 智能体可以不经询问写两样东西：teamai 的结果文件，以及运行的临时目录，即运行的命令中 `$TEAMAI_RUN_DIR` 所指的目录。运行时允许 `Edit(/<结果文件>)` 和 `Edit(/<运行目录>/**)`，模式仍是 `default`。Codex 和 OpenCode 没有这项授权。步骤的环境变量里，智能体只拿到 `TEAMAI_RUN_DIR`，所以提示词写明 `$TEAMAI_RUN_DIR` 所指目录中的某个文件时，它的效果与在本机相同。
+Claude 智能体可以不经询问写两样东西：teamai 的结果文件，以及运行的临时目录，即运行的命令中 `$TEAMAI_RUN_DIR` 所指的目录。运行时允许 `Edit(/<结果文件>)` 和 `Edit(/<运行目录>/**)`，模式仍是 `default`。Codex 智能体可以写同样两处：它在 `auto` 下的沙箱可写工作树，运行时再把结果文件所在目录和运行的临时目录加为可写根目录：
+
+```json
+{ "provider": "codex", "modeId": "auto", "providerOptions": { "sandbox_workspace_write": { "writable_roots": ["~/.teamai/workflows/runs/ra429df3ad473c7b3/attempts/a21ff251b/out", "~/.teamai/workflows/runs/ra429df3ad473c7b3/scratch"] } } }
+```
+
+OpenCode 没有这项授权。步骤的环境变量里，智能体只拿到 `TEAMAI_RUN_DIR`，所以提示词写明 `$TEAMAI_RUN_DIR` 所指目录中的某个文件时，它的效果与在本机相同。
 
 有人值守的运行里，其他权限请求在 Paseo 应用里等你回答，也可以在命令行回答：
 
@@ -286,5 +382,5 @@ Paseo did not archive workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476
 | `client_version` | 找到的 Paseo 客户端早于 0.14.0。升级 Paseo，或把 `PASEO_CLIENT_PATH` 指向更新的 `@getpaseo/client` 包。 |
 | `daemon_unreachable` | `url` 上没有守护进程应答。用 `paseo start` 启动它。 |
 | `daemon_version` | 守护进程早于 0.14.0。升级 Paseo 并重启它。 |
-| `tool_unavailable` | 守护进程 `claude` 和 `opencode` 都运行不了：要么没装、要么未登录、要么缺少默认模式。Codex 从不使用。消息逐个列出已安装的工具及其修复方法；一个都没装时，消息让你安装一个。守护进程运行不了步骤所需工具时，该步骤交给下一个运行时。 |
+| `tool_unavailable` | 守护进程 `claude`、`codex` 和 `opencode` 都运行不了：要么没装、要么未登录、要么缺少默认模式；守护进程不在回环地址上时，Codex 也算在内。消息逐个列出已安装的工具及其修复方法；一个都没装时，消息让你安装一个。步骤写明的工具守护进程运行不了时，该步骤交给下一个运行时；使用定义的 `tool` 的步骤则以 `tool_unavailable` 失败，原因相同。 |
 | `bad_option` | `url` 以外的选项。 |
