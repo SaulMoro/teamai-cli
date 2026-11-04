@@ -45,6 +45,8 @@ const BehaviourSchema = z.object({
    * resolved path names it. Absent, that path holds no codex.
    */
   codex_login: z.enum(['signed_in', 'signed_out', 'unknown']).optional(),
+  /** The path Codex's diagnostic resolves, as it is, instead of the host's `codex` above. */
+  codex_path: z.string().optional(),
   /** The output the agent writes to the result file; none written when absent. */
   output: z.unknown().optional(),
   /** The agent's last message, which a confined prompt's answer is. */
@@ -327,7 +329,7 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
 
       case 'provider_diagnostic_request': {
         const does = behaviour();
-        const resolved = message.provider === 'codex' ? hostCodex(state, does.codex_login) : `/usr/local/bin/${message.provider}`;
+        const resolved = message.provider === 'codex' ? does.codex_path ?? hostCodex(state, does.codex_login) : `/usr/local/bin/${message.provider}`;
         reply({ type: 'provider_diagnostic_response', payload: { requestId: message.requestId, provider: message.provider, diagnostic: diagnosticOf(message.provider, does.sign_in[message.provider], resolved) } });
 
         return;
