@@ -202,15 +202,34 @@ function firstMessage(place: PlaceRecord, lease: PromptLease, startedFrom: strin
 }
 
 /**
- * A judge's first message: what it judges, that its folder is all it may read, and the reply's shape, then teamai's
- * prompt with each mention of the directory pointed at the copy.
+ * `text` with each absolute path that is `dir` or lies under it pointed at the same place under `copy`, however it is
+ * spelled: teamai sends `dir` as a real path, and a prompt names it as the step rendered it, for example through
+ * macOS's /tmp link.
+ */
+function pointedAtCopy(text: string, dir: string, copy: string): string {
+  const real = realpath(dir);
+
+  return text.replace(/\/[^\s"'`<>]+/g, (token) => {
+    const trimmed = token.replace(/[.,:;)\]]+$/, '');
+
+    for (let at = trimmed.length; at > 0; at = trimmed.lastIndexOf('/', at - 1)) {
+      if (realpath(trimmed.slice(0, at)) === real) return `${copy}${token.slice(at)}`;
+    }
+
+    return token;
+  });
+}
+
+/**
+ * A judge's first message: which step it runs, that its folder is all it may read, and the reply's shape, then
+ * teamai's prompt with each mention of the directory pointed at the copy.
  */
 function judgeMessage(place: PlaceRecord, lease: PromptLease, confined: ConfinedPrompt, copy: string): string {
   const replySchema = confined.schema === undefined ? '' : ` It matches this JSON Schema: ${JSON.stringify(confined.schema)}`;
 
-  return `This thread judges step "${lease.step}" of teamai workflow run ${place.run} (attempt ${place.attempt}). Its folder, ${copy}, is a read-only copy of the evidence.`
+  return `This thread runs the confined step "${lease.step}" of teamai workflow run ${place.run} (attempt ${place.attempt}). Its folder, ${copy}, is a read-only copy of the directory the step reads.`
     + ' Read only the files in it: do not read, run or change anything outside it, and change nothing in it. Do not run teamai commands.'
-    + ` Reply with the JSON value the prompt asks for and no other text.${replySchema}\n\n${lease.prompt.replaceAll(confined.dir, copy)}`;
+    + ` Reply with the JSON value the prompt asks for and no other text.${replySchema}\n\n${pointedAtCopy(lease.prompt, confined.dir, copy)}`;
 }
 
 /** Sets the mode of every directory and file under `root`, `root` included; a symlink is left alone. */
