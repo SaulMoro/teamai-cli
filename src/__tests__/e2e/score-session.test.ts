@@ -446,4 +446,38 @@ console.log(JSON.stringify({ type: 'result', structured_output: given?.propertie
     expect(judged?.sent?.prompt).toContain(dir);
     expect(judged?.sent?.prompt).not.toContain(path.join(fs.realpathSync(home), path.relative(linkedHome, dir)));
   });
+
+  it('runs teamai-share-learnings\' command steps on the host, its own and those of the teamai-share-session it runs, beside a runtime that runs commands', async () => {
+    const home = env.HOME ?? '';
+    const state = path.join(root, 'toy-state-learnings');
+    const learning = path.join(root, 'learning-retries.md');
+    fs.writeFileSync(learning, '# Retry flaky fetches\n\nWrap network calls in the retry helper.\n');
+    fs.mkdirSync(path.join(home, '.teamai', 'runtimes', 'toy'), { recursive: true });
+    fs.copyFileSync(TOY_RUNTIME, path.join(home, '.teamai', 'runtimes', 'toy', 'runtime'));
+    fs.chmodSync(path.join(home, '.teamai', 'runtimes', 'toy', 'runtime'), 0o755);
+    fs.mkdirSync(path.join(home, '.teamai', 'drivers'), { recursive: true });
+    // A toy that runs commands, takes the interactive learning prompt, and answers the judge.
+    const agent = { output: { learnings: [{ title: 'Retry flaky fetches', file: learning, namespace: '' }] } };
+    fs.writeFileSync(path.join(home, '.teamai', 'drivers', 'toylearn.yaml'), [
+      'schemaVersion: v1alpha1', 'name: toylearn', 'tool: claude', 'runtimes:', '  - use: toy', '    options:',
+      `      state: ${JSON.stringify(state)}`, `      agent: ${JSON.stringify(agent)}`, '      can: { exec: true, hitl: true }',
+      '      judge: { reply: { answer: { label: thorough, reasoning: "Ran the tests." } } }', '',
+    ].join('\n'));
+    const inputs = { session: SESSION, source: 'claude-code', publish: false, scorers: ['review-quality'] };
+
+    const shared = await runCLI(['workflow', 'start', 'teamai-share-learnings', '--inputs', JSON.stringify(inputs), '--driver', 'toylearn', '--auto-approve'], app, env);
+
+    const run = z.object({ run: z.string() }).parse(z.object({ done: z.unknown() }).passthrough().parse(envelope(shared.stdout).data ?? {}).done).run;
+    const runFile = fs.readdirSync(home, { recursive: true, encoding: 'utf8' }).map((file) => path.join(home, file)).find((file) => file.endsWith(path.join('workflows', 'runs', `${run}.json`)));
+    const { steps } = z.object({ steps: z.array(z.object({ id: z.string(), status: z.string(), attempt: z.string().optional() })) })
+      .parse(JSON.parse(fs.readFileSync(String(runFile), 'utf8')));
+    const runtimeOf = (attempt: string | undefined): unknown => {
+      const file = path.join(path.dirname(String(runFile)), run, 'attempts', String(attempt), 'runtime.json');
+      return fs.existsSync(file) ? (JSON.parse(fs.readFileSync(file, 'utf8')) as { runtime: string }).runtime : 'host';
+    };
+    const ranOn = Object.fromEntries(steps.filter((step) => step.attempt !== undefined).map((step) => [step.id, runtimeOf(step.attempt)]));
+    // Only the prompts ran on the toy: the learning step, and the judge of the session teamai-share-session scores.
+    expect(Object.entries(ranOn).filter(([, runtime]) => runtime !== 'host').map(([id]) => id).sort(), shared.stderr).toEqual(['learning', expect.stringMatching(/^share-session\..*\.judge$/)]);
+    expect(ranOn, shared.stderr).toMatchObject({ 'contribute[0]': 'host' });
+  });
 });
