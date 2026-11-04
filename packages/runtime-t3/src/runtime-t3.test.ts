@@ -683,6 +683,19 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]?.settled).toBe(false);
     });
 
+    it('fails judge_copy_failed, naming the directory, when the directory cannot be copied, and briefs no thread', async () => {
+      fs.chmodSync(path.join(evidence, 'diff.patch'), 0o000);
+      const { runtime, handle } = await opened();
+
+      runtime.send(judge(handle, 'op-000000a7'));
+
+      expect(await ended(runtime, 'op-000000a7')).toEqual({
+        op: 'op-000000a7', event: 'failed',
+        failure: { code: 'judge_copy_failed', message: expect.stringMatching(new RegExp(`^teamai could not copy ${evidence} into the judge thread's folder \\S+, so the judge did not start: .*EACCES`)) },
+      });
+      expect(t3.threads()[0]?.message).toBeUndefined();
+    });
+
     it('reconnects to the same judge after its own restart, and copies and briefs it only once', async () => {
       const release = path.join(dir, 'release');
       t3.config({ agent: { release, reply: JSON.stringify(REPLY) } });
@@ -700,7 +713,8 @@ describe('teamai-runtime-t3', () => {
 
       expect(await ended(second, 'op-000000a5')).toMatchObject({ event: 'finished', result: { output: REPLY }, confined: { level: 'best-effort', access: 'read' } });
       expect(t3.threads()).toHaveLength(1);
-      expect(t3.calls().filter((call) => call.tool === 't3_thread_send')).toHaveLength(1);
+      const briefs = t3.calls().filter((call) => call.tool === 't3_thread_send').map((call) => call.args['message']);
+      expect(briefs).toEqual([t3.threads()[0]?.message]);
     });
   });
 });
