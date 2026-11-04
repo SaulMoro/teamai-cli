@@ -136,6 +136,12 @@ steps:
     output:
       ok: boolean
 `);
+    writeFlow('pairwork', `  - id: design
+    tool: claude
+    interactive: true
+    prompt: Design the change with me.
+    output:
+      ok: boolean`);
     fs.mkdirSync(path.join(repo, '.teamai', 'scorers'), { recursive: true });
     fs.writeFileSync(path.join(repo, '.teamai', 'scorers', 'quality.md'), `---
 labels:
@@ -306,6 +312,16 @@ Judge the review.
       // The toy was sent nothing; the fake Claude ran the prompt on local.
       expect(sends()).toEqual([]);
       expect(fs.readFileSync(launches, 'utf8').trim().split('\n')).toHaveLength(1);
+    });
+
+    it('sends an interactive step as a prompt a person works in, to a runtime that offers hitl', async () => {
+      writeDefinition('agentpair', [{ use: 'toy', options: { state, can: { hitl: true }, agent: { output: { ok: true } } } }, { use: 'local' }]);
+
+      const ran = await runCLI(['workflow', 'start', 'pairwork', '--driver', 'agentpair'], repo, env({ TEAMAI_MODE: 'attended' }));
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      expect(sends()).toEqual([expect.objectContaining({ sent: expect.objectContaining({ step: 'design', interactive: true }) })]);
+      expect(fs.existsSync(launches)).toBe(false);
     });
 
     it('fails a command step when the definition\'s only runtime runs no command, naming what it lacks', async () => {
