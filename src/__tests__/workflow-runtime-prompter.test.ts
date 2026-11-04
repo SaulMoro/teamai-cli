@@ -75,4 +75,13 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
     expect(ran).toMatchObject({ exitCode: 143, stoppedBy: 'timeout' });
     expect(cancels()).toBe(1);
   });
+
+  it('says it started fresh when the runtime resumed no session, even when its place could not be collected', async () => {
+    const { run } = promptOnlyRun();
+    const uncollectable: AttemptRun = { ...run, collect: async () => ({ code: 'runtime_failed', message: 'The place could not be collected.' }) };
+
+    const ran = await runtimePrompter(uncollectable, { view, step: 'review', provided: [], unset: [], credentials: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), resume: 'earlier-session', secrets: {} }, undefined);
+
+    expect(ran).toMatchObject({ exitCode: 1, session: 's-1', startedFresh: true });
+  });
 });

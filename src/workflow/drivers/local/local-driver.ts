@@ -741,7 +741,8 @@ async function promptReport(
 
   if (ran?.session) body.session = ran.session;
 
-  if (ran && resume) body.resumed = resume.resumed;
+  // A runtime that launches agents its own way says whether it continued the session; one that says nothing did not.
+  if (ran && resume && !ran.startedFresh) body.resumed = resume.resumed;
 
   if (ran) body.durationMs = durationMs;
 

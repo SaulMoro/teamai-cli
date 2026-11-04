@@ -282,8 +282,11 @@ export function runtimePrompter(run: AttemptRun, { view, step, provided, unset, 
 
         await writeJsonAtomic(input.resultPath, end.result);
 
-        if (uncollected) return { started: true, exitCode: 1, session: end.session.id, failure: uncollected };
-        const ran: LocalToolResult = { started: true, exitCode: 0, session: end.session.id };
+        // A session the step asked to resume that the runtime did not continue is a new one, whatever came after it.
+        const fresh = input.resume !== undefined && end.resumed !== true ? { startedFresh: true as const } : {};
+
+        if (uncollected) return { started: true, exitCode: 1, session: end.session.id, failure: uncollected, ...fresh };
+        const ran: LocalToolResult = { started: true, exitCode: 0, session: end.session.id, ...fresh };
 
         if ('output' in end.result) ran.output = end.result.output;
 
