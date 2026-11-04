@@ -255,9 +255,15 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
    */
   const stopLeftRunning = async (handle: string, op: OpId): Promise<RuntimeFailure | undefined> => {
     await runtime.cancel(op);
+    const deadline = Date.now() + STOP_WAIT_MS;
 
-    for (const deadline = Date.now() + STOP_WAIT_MS; Date.now() < deadline;) {
-      const seen = await runtime.reattach(handle);
+    for (let left = STOP_WAIT_MS; left > 0; left = deadline - Date.now()) {
+      // A reattach sent just before the deadline does not extend it.
+      let timer: NodeJS.Timeout | undefined;
+      const seen = await Promise.race([runtime.reattach(handle), new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), left); })]);
+      clearTimeout(timer);
+
+      if (seen === undefined) break;
 
       if (seen.kind === 'failed') return seen.failure;
 
@@ -267,7 +273,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       if (!isUnstopped(state)) return undefined;
 
       if (state?.state === 'failed') return state.failure;
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, Math.min(100, deadline - Date.now())));
     }
 
     return { code: 'runtime_unanswered', message: `Step runtime "${runtime.name}" still reported operation ${op} of attempt ${attempt} running ${STOP_WAIT_MS / 1000} s after teamai asked it to cancel it.` };
