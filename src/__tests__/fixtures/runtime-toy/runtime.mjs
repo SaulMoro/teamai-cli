@@ -26,7 +26,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 
-const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'can', 'display', 'agent', 'judge', 'path']);
+const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -161,6 +161,9 @@ function open(request) {
 
   if (dieAt('open-accepted')) return;
   send({ op: request.op, event: 'accepted', handle });
+
+  // `open_fails` is the failure every open ends with, as a runtime that refuses an option only once it opens a place.
+  if (options.open_fails !== undefined) return send({ op: request.op, event: 'failed', failure: options.open_fails });
   send({ op: request.op, event: 'ready', ...shown() });
 }
 

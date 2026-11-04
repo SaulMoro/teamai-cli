@@ -1371,7 +1371,7 @@ When the holder's driver was killed, `teamai workflow cancel` of its run first s
 The login is also kept when the runtime itself stops while Codex runs, or cannot close the place afterwards, because Codex may still be running there. The step fails `runtime_lost`, and teamai says what to do:
 
 ```text
-⚠ Step runtime "sandbox" could not close the place of attempt a339da600, so what ran there may still run: Step runtime "sandbox" stopped: it exited with status 70.
+⚠ Step runtime "sandbox" could not close the place of attempt a339da600, so what ran there may still run (runtime_exited): Step runtime "sandbox" stopped: it exited with status 70.
 ⚠ The codex login teamai keeps stays held by attempt a339da600 of run r9a395746ec65dbd7, whose tool may still run. Stop that tool on its step runtime, then delete /home/me/.teamai/logins/codex.lock.
 ```
 
