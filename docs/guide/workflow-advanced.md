@@ -1446,7 +1446,7 @@ teamai writes each operation id to `attempts/<attempt>/runtime.json` before it s
 | After a prompt finished | Its output, session and usage, read from what the runtime kept; no prompt is sent again |
 | While a prompt ran | The same prompt is sent again, which reconnects to the agent; the step goes on |
 
-`workflow cancel` stops the running exec or prompt and every process it started. When the driver was killed, the cancel asks the attempt's runtime to stop it. That works even when the runtime cannot start for new work, for example when its provider is down or its sign-in expired: teamai then opens it in `recover` mode, which only stops and closes what it ran.
+`workflow cancel` stops the running exec or prompt and every process it started. When the driver was killed, the cancel asks the attempt's runtime to stop it. That works even when the runtime cannot start for new work, for example when its provider is down or its sign-in expired: teamai opens it in `recover` mode, which only stops and closes what it ran.
 
 A runtime that cannot stop the work says why. teamai then keeps the place, its records and the login, and prints the runtime's advice:
 
@@ -1504,11 +1504,9 @@ A runtime that cannot end a place answers `close` with why. teamai then treats w
 
 A runtime that exits while an exec or prompt runs fails it `runtime_lost`, for the same reason.
 
-teamai opens your runtime in `recover` mode when it must stop an attempt and your runtime refused `init` for new work. In that mode run no sign-in or tool check, offer nothing, and answer `cancel`, `reattach`, `collect` and `close` from your own journal. A runtime that answers `recover` with an error is left alone, and the cancel names both failures:
+teamai opens your runtime in `recover` mode whenever it must stop an attempt, as `workflow cancel` does after the driver was killed. In that mode run no sign-in or tool check, offer nothing, and answer `cancel`, `reattach`, `collect` and `close` from your own journal, so a provider that is down or never answers cannot hold the stop. A runtime that answers `recover` with an error is opened again for new work, and when that fails too, the cancel names both failures:
 
 ```text
-→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"}}
-← {"type":"init","ok":false,"error":{"code":"signed_out","message":"Signed out of acme. Run acme login, then start again."}}
 → {"type":"init","protocol":1,"mode":"recover","options":{"state":"/var/tmp/toy-state"}}
 ← {"type":"init","ok":true,"can":{}}
 → {"type":"reattach","handle":"toy-r…-a…"}
@@ -1529,7 +1527,7 @@ Answer every request, even one you cannot carry out. A `reattach`, `collect` or 
 ← {"event":"failed","handle":"teamai-r7-a1","failure":{"code":"journal_unreadable","message":"/var/lib/acme-runtime/r7.json is not valid JSON. Fix or remove it, then run teamai workflow cancel r7 again."}}
 ```
 
-An `{"event":"error"}` line names no request, so teamai fails every `init`, `reattach`, `collect` and `close` still waiting on your runtime with `runtime_unanswered`. It does the same to a `reattach` or `close` that gets no reply within 15 s. The attempt keeps its place, its records and its login:
+An `{"event":"error"}` line names no request, so teamai fails every `init`, `reattach`, `collect` and `close` still waiting on your runtime with `runtime_unanswered`. It does the same to an `init`, a `reattach` or a `close` that gets no reply within 15 s. The attempt keeps its place, its records and its login:
 
 ```text
 Step runtime "acme" could not close the place of attempt a1, so what ran there may still run (runtime_unanswered): Step runtime "acme" did not answer close of teamai-r7-a1 within 15 s.

@@ -9,7 +9,7 @@ import type { ExecEnd, Initialized, Opened, PromptEnd, Reattached, StepRuntime }
 /** How long `dispose` waits for a runtime to exit once its stdin ends; one that runs on is left to finish its own work. */
 const DISPOSE_WAIT_MS = 2000;
 
-/** How long teamai waits for a runtime's reply to a `reattach` or a `close` before it fails that request `runtime_unanswered`. */
+/** How long teamai waits for a runtime's reply to an `init`, a `reattach` or a `close` before it fails that request `runtime_unanswered`. */
 const ANSWER_WITHIN_MS = 15_000;
 
 type HandleRequest = Extract<RuntimeRequest, { handle: string; type: 'collect' | 'reattach' | 'close' }>;
@@ -37,7 +37,7 @@ function offered(can: Can, answersConfined: boolean): Can {
  * again: an exec or prompt in flight ends `lost`, since what it started may outlive the runtime, and every other
  * request fails with `runtime_exited`. A `reattach`, `collect` or `close` ends with its own reply, or with the failure
  * reply for its handle; `init` and those requests fail `runtime_unanswered` when the runtime writes an error that names
- * no request, and a `reattach` or `close` does when it gets no reply within 15 s.
+ * no request, and an `init`, a `reattach` or a `close` does when it gets no reply within 15 s.
  */
 export function stdioStepRuntime({ name, command, args = [], cwd }: { name: string; command: string; args?: string[]; cwd?: string }): StepRuntime {
   let child: ChildProcess | undefined;
@@ -183,7 +183,20 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
       readline.createInterface({ input: stdout }).on('line', receive);
 
       return new Promise<Initialized>((resolve) => {
-        onInit = resolve;
+        const settle = (reply: Initialized): void => {
+          clearTimeout(timer);
+          resolve(reply);
+        };
+
+        // An init that checks a provider which never answers would hold the command, and a cancel the run's lock, forever.
+        const timer = setTimeout(() => {
+          if (onInit !== settle) return;
+          onInit = undefined;
+          resolve({ ok: false, failure: { code: 'runtime_unanswered', message: `Step runtime "${name}" did not answer init within ${ANSWER_WITHIN_MS / 1000} s.` } });
+        }, ANSWER_WITHIN_MS);
+
+        timer.unref();
+        onInit = settle;
         send({ type: 'init', protocol: RUNTIME_PROTOCOL, mode, options, ...(credentials && { credentials }) });
       });
     },

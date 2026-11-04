@@ -1365,6 +1365,7 @@ span('end');
       watched.kill();
       await watched.ended;
       loginDefinition('codexrecover', state, { init_fails: signedOut });
+      const before = initModes(state).length;
 
       try {
         const cancelled = await runCLI(['workflow', 'cancel', run], repo, env());
@@ -1374,8 +1375,55 @@ span('end');
         expect(pidAlive(pid)).toBe(false);
         expect(runtimeRecord(run, attemptOf(readRunState(run).steps[0]))).toMatchObject({ runtime: 'toy', phase: 'closed' });
         expect(fs.existsSync(lockFile())).toBe(false);
-        // It was asked to start for new work first, which it refused, then opened only to stop what it ran.
-        expect(initModes(state).slice(-2)).toEqual([expect.not.stringMatching(/^recover$/), 'recover']);
+        // It was opened only to stop what it ran, never asked to start for new work.
+        expect(initModes(state).slice(before)).toEqual(['recover']);
+      } finally {
+        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        fs.rmSync(lockFile(), { force: true });
+      }
+    });
+
+    it('stops the attempt of a killed driver through recover mode without waiting on a runtime whose init for new work never answers', async () => {
+      loginDefinition('codexstall', state);
+      const { run, pid, watched } = await holdingRun('codexstall');
+      watched.kill();
+      await watched.ended;
+      loginDefinition('codexstall', state, { answer: { init: 'silent' } });
+      const before = initModes(state).length;
+      const cancel = startWatching(['workflow', 'cancel', run], {});
+
+      try {
+        const cancelled = await Promise.race([cancel.ended, new Promise<undefined>((resolve) => setTimeout(resolve, 25_000))]);
+
+        if (cancelled === undefined) throw new Error('teamai workflow cancel still waited 25 s later');
+        expect(envelope(cancelled), cancelled.stderr).toMatchObject({ data: { run: { status: 'cancelled' } } });
+        expect(pidAlive(pid)).toBe(false);
+        expect(runtimeRecord(run, attemptOf(readRunState(run).steps[0]))).toMatchObject({ runtime: 'toy', phase: 'closed' });
+        expect(fs.existsSync(lockFile())).toBe(false);
+        expect(initModes(state).slice(before)).toEqual(['recover']);
+      } finally {
+        cancel.kill();
+        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        fs.rmSync(lockFile(), { force: true });
+      }
+    });
+
+    it('stops the attempt of a killed driver through a normal init when its runtime refuses recover mode', async () => {
+      loginDefinition('codexoldstop', state);
+      const { run, pid, watched } = await holdingRun('codexoldstop');
+      watched.kill();
+      await watched.ended;
+      loginDefinition('codexoldstop', state, { recover: false });
+      const before = initModes(state).length;
+
+      try {
+        const cancelled = await runCLI(['workflow', 'cancel', run], repo, env());
+
+        expect(envelope(cancelled), cancelled.stderr).toMatchObject({ data: { run: { status: 'cancelled' } } });
+        expect(cancelled.stderr).not.toContain('Could not stop attempt');
+        expect(pidAlive(pid)).toBe(false);
+        expect(runtimeRecord(run, attemptOf(readRunState(run).steps[0]))).toMatchObject({ runtime: 'toy', phase: 'closed' });
+        expect(initModes(state).slice(before)).toEqual(['recover', expect.not.stringMatching(/^recover$/)]);
       } finally {
         if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
         fs.rmSync(lockFile(), { force: true });

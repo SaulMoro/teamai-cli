@@ -627,6 +627,21 @@ describe('a runtime that cannot close a place, over stdio', () => {
     expect(await runtime.reattach(handle)).toMatchObject({ kind: 'alive' });
   });
 
+  it('fails an init the runtime does not answer within 15 s as runtime_unanswered', async () => {
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    started.push(runtime);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    try {
+      const ready = runtime.init({ options: { state: path.join(dir, 'state'), answer: { init: 'silent' } }, mode: 'unattended' });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(await Promise.race([ready, 'still waiting'])).toEqual({ ok: false, failure: { code: 'runtime_unanswered', message: 'Step runtime "toy" did not answer init within 15 s.' } });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('fails a reattach and a close the runtime does not answer within 15 s as runtime_unanswered', async () => {
     const { runtime, handle } = await opened({ answer: { reattach: 'silent', close: 'silent' } });
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });

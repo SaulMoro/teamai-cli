@@ -13,8 +13,8 @@ import { disposeDriver, LOGIN_TOOLS, openDriver } from './sources.js';
 //  `teamai workflow cancel`, holding the run's lock so no driver of it is live, stops each such attempt the way its
 //  driver would have: it cancels the exec, brings the place's work back, writes the login back, closes the place,
 //  and only then releases the login. An attempt it cannot stop keeps its place, its records and its login, so no
-//  second copy runs beside it, and the next `teamai workflow cancel` of the run tries again. A runtime that cannot
-//  start for new work is opened in `recover` mode for this (sources.ts).
+//  second copy runs beside it, and the next `teamai workflow cancel` of the run tries again. Each runtime is opened
+//  in `recover` mode for this, and for new work only when it refuses that mode (sources.ts).
 //
 
 /**

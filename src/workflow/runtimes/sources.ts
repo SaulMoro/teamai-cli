@@ -13,7 +13,7 @@ import { shippedRuntimeFile } from '../../default-drivers.js';
 import { personalDir, resolveDriver, teamItem, type ResolvedDriver } from './definitions.js';
 import { localStepRuntime } from './local.js';
 import { stdioStepRuntime } from './stdio.js';
-import type { RuntimeOptions } from '@teamai/runtime-protocol';
+import type { RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
 import type { StepRuntime } from './step-runtime.js';
 import type { LaunchTool } from '../../tool-launch/tools.js';
 
@@ -309,8 +309,9 @@ function badOption(driver: ResolvedDriver, use: string, key: string, message: st
 /**
  * Why a definition is opened: `run` runs steps, so the values of its `env:` credentials are read and fail it when unset;
  * `stop` only stops and closes attempts, which bring no credential, so a cancel works in a shell without them. A runtime
- * opened to stop that cannot start for new work, such as one signed out of its provider, is opened again in `recover`
- * mode, which answers only for the handles it recorded.
+ * opened to stop is opened in `recover` mode, which runs no sign-in or tool check and answers only for the handles it
+ * recorded, so a provider that is down or stalls cannot hold the stop; only one that refuses that mode is opened for new
+ * work instead.
  */
 export type DriverPurpose = 'run' | 'stop';
 
@@ -347,6 +348,18 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.file] })
     : stdioStepRuntime({ name: source.name, command: source.executable }));
 
+  let notRecovered: RuntimeFailure | undefined;
+
+  if (purpose === 'stop') {
+    const recovering = spawned();
+    const recovered = await recovering.init({ options: split.runtime, mode: 'recover' });
+
+    // It offers nothing in this mode: it is asked only to stop, collect and close what it ran.
+    if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: recovering, can: recovered.can, launchesAgents: recovered.launchesAgents, engine: split.engine, credentials: {} } };
+    await recovering.dispose();
+    notRecovered = recovered.failure;
+  }
+
   const runtime = spawned();
   const ready = await runtime.init({ options: split.runtime, mode, credentials: { env: split.credentials.map((credential) => credential.name), logins: split.engine.logins } });
 
@@ -380,15 +393,9 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     ? badOption(driver, use, failure.key ?? '?', failure.message)
     : { code: 'runtime_failed', message: `Runtime "${source.name}" of driver "${driver.name}" did not start (${failure.code}): ${failure.message}` };
 
-  if (purpose !== 'stop') return { ok: false, failure: notStarted };
-  const recovering = spawned();
-  const recovered = await recovering.init({ options: split.runtime, mode: 'recover' });
+  if (notRecovered === undefined) return { ok: false, failure: notStarted };
 
-  // It offers nothing in this mode: it is asked only to stop, collect and close what it ran.
-  if (recovered.ok) return { ok: true, opened: { kind: 'external', use, runtime: recovering, can: recovered.can, launchesAgents: recovered.launchesAgents, engine: split.engine, credentials: {} } };
-  await recovering.dispose();
-
-  return { ok: false, failure: { code: notStarted.code, message: `${notStarted.message} It does not open in recover mode either, to stop what it ran (${recovered.failure.code}): ${recovered.failure.message}` } };
+  return { ok: false, failure: { code: notStarted.code, message: `${notStarted.message} It does not open in recover mode either, to stop what it ran (${notRecovered.code}): ${notRecovered.message}` } };
 }
 
 /**
