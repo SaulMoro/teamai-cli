@@ -1,6 +1,6 @@
 schemaVersion: v1alpha1
 name: teamai-t3
-description: Run each prompt step as a child of the T3 Code thread that started the run, in a worktree teamai prepares, and every other step on this machine.
+description: Run each prompt step as a T3 Code thread of its own, in a worktree teamai prepares, and every other step on this machine.
 runtimes:
   - use: t3
     options:
