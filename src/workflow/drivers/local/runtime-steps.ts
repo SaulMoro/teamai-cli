@@ -54,6 +54,8 @@ export function shellArgv(command: string): string[] {
 /** The names a step's process gets over its runtime's environment, and those it goes without. */
 export interface StepEnv {
   env: Record<string, string>;
+  /** The names of `env` whose values the team provides, which a runtime that cannot keep env private drops. */
+  provided: string[];
   unset: string[];
 }
 
@@ -71,9 +73,11 @@ export function runtimeStepEnv(lease: Pick<LeaseWire, 'envScope' | 'env' | 'atte
     if (value !== undefined) env[key] = value;
   }
 
-  Object.assign(env, lease.env, attemptEnv(config, run, lease.attempt, mode));
+  const own = { ...lease.env, ...attemptEnv(config, run, lease.attempt, mode) };
+  const provided = Object.keys(env).filter((key) => !(key in own));
+  Object.assign(env, own);
 
-  return { env, unset: [...lease.envScope?.withhold ?? []] };
+  return { env, provided, unset: [...lease.envScope?.withhold ?? []] };
 }
 
 /** The credentials a prompt's tool gets: those its runtime declares, less any name the step withholds. */
@@ -221,7 +225,7 @@ function promptFailure(failure: RuntimeFailure): WorkflowFailure {
  * prompt's result is written to the result file, as a tool writes it, and its session and usage are the step's. teamai
  * keeps the step's timeout and a driver abort as a `cancel`; a budget is checked against the usage once it finishes.
  */
-export function runtimePrompter(run: AttemptRun, { view, step, unset, credentials }: { view: PlaceView; step: string; unset: string[]; credentials: Record<string, string> }): LocalToolAdapter {
+export function runtimePrompter(run: AttemptRun, { view, step, provided, unset, credentials }: { view: PlaceView; step: string; provided: string[]; unset: string[]; credentials: Record<string, string> }): LocalToolAdapter {
   const given = toolCredentials(credentials, unset);
 
   const launch = async (tool: string, input: LocalToolRun, signal: AbortSignal | undefined, interactive: boolean): Promise<LocalToolResult> => {
@@ -258,7 +262,7 @@ export function runtimePrompter(run: AttemptRun, { view, step, unset, credential
 
     if (signal?.aborted) stop();
 
-    const end = await run.prompt({ lease, env, unset, credentials: given, cwd: input.cwd }, {
+    const end = await run.prompt({ lease, env, provided, unset, credentials: given, cwd: input.cwd }, {
       onAccepted: () => {
         accepted = true;
 

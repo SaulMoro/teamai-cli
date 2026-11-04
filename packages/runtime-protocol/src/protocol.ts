@@ -20,7 +20,7 @@ import { z } from 'zod';
 //    < {"op":"op-8b10…","event":"accepted"}
 //    < {"op":"op-8b10…","event":"output","stream":"stdout","data":"…"}
 //    < {"op":"op-8b10…","event":"exited","code":0,"stdout":"…complete stdout…"}
-//    > {"type":"prompt","op":"op-91c4…","handle":"…","lease":{...},"env":{...},"unset":[...],"credentials":{...},"cwd":"…"}
+//    > {"type":"prompt","op":"op-91c4…","handle":"…","lease":{...},"env":{...},"provided":[...],"unset":[...],"credentials":{...},"cwd":"…"}
 //    < {"op":"op-91c4…","event":"accepted","display":{"label":"…","url":"…"}}      display optional: once the agent exists
 //    < {"op":"op-91c4…","event":"finished","session":{"tool":"claude","id":"…"},"result":{"output":{…}},"usage":{…}}
 //    > {"type":"open",…,"credentials":{}}                                      no view: the place of a confined prompt
@@ -283,6 +283,12 @@ export const PromptRequestSchema = z.object({
   handle: RuntimeHandleSchema,
   lease: PromptLeaseSchema,
   env: EnvSchema,
+  /**
+   * The names of `env` whose values the team provides (`requires.env`), apart from the attempt's markers: a runtime
+   * whose tool keeps env in plain text drops these and keeps the rest. An older teamai sends none: such a runtime then
+   * treats every name but the attempt's markers as the team's.
+   */
+  provided: z.array(z.string()).optional(),
   unset: z.array(z.string()),
   /** The credentials the agent gets over its environment. */
   credentials: CredentialsSchema,
