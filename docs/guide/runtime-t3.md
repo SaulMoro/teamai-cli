@@ -225,7 +225,7 @@ The step's thread lives in T3, not in teamai's process. If the driver dies, `tea
 
 A thread's run may hand work to subagents or background tasks. The step ends only once that work has settled too, and a cancel or close counts the thread as stopped only then.
 
-If T3 Code launched a step's thread but its answer never reached teamai, a cancel or close finds the thread by sending the same launch again, which T3 answers with that thread, and stops it. If T3 had launched nothing, that second launch adds an idle thread, which teamai settles.
+If T3 Code launched a step's thread but its answer never reached teamai, a cancel or close finds the thread by sending the same launch again, which T3 answers with that thread, and stops it. If T3 had launched nothing, that second launch adds an idle thread, which teamai settles. T3 answers it only under the sign-in that sent the first launch, so after you signed in to T3 again, teamai keeps the place and tells you which thread to stop.
 
 ```sh
 teamai workflow resume r928e2fc23ab9bd62 --driver t3
@@ -247,6 +247,7 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 | `… ended without writing the result file …` | The agent finished without writing its result. | Open the thread from the link in the message, then `teamai workflow retry <run> <step>`. |
 | `Not closed: thread_still_runs …` in the run's details | teamai closed the step's place while its thread, or work the thread delegated, still ran, and T3 did not stop it. | Open the thread from the link, and stop it with its Stop button. |
 | `Not closed: t3_unavailable: teamai launched the T3 thread "review · teamai r70d…" and T3 Code never answered …` | A step's launch got no answer, and T3 Code could not be reached to look the thread up. | Open T3 Code, then `teamai workflow cancel <run>` again. |
+| `… launch_unconfirmed: teamai launched the T3 thread "review · teamai r70d…" in the T3 project "acme-app" under an earlier T3 Code sign-in …` | A step's launch got no answer, and you have signed in to T3 again since, so teamai cannot look the thread up. | In T3 Code, stop the thread the message names if it runs, delete the file the message names, then `teamai workflow cancel <run>` again. |
 | `… journal_unreadable: Runtime t3 cannot read its record of t3-r70d…, ~/.teamai/runtime-state/t3/places/….json …` | The file where teamai keeps a step's threads is damaged, so it cannot tell which threads to stop, and it keeps the place. | Stop the run's threads in T3 Code, delete the file the message names, then `teamai workflow cancel <run>` again. |
 | `… kept no session for …` | The tool kept no transcript for the worktree, so the step could not be scored. | Check that the instance uses the tool's default home (`~/.claude`, `~/.codex`). |
 

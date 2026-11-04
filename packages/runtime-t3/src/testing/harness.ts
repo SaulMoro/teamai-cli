@@ -59,6 +59,8 @@ export interface FakeProvider {
 
 export interface FakeT3Config {
   token: string;
+  /** The sign-in session the token belongs to: T3 finds a repeated launch only under the session that sent it. Unset: `session-1`. */
+  namespace?: string;
   environment: { environmentId: string; label: string; serverVersion: string };
   projects: Array<{ id: string; title: string; workspaceRoot: string; deletedAt?: string | null }>;
   providers: FakeProvider[];

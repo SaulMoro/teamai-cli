@@ -3,7 +3,7 @@ import path from 'node:path';
 import type { RuntimeMessage } from '@teamai/runtime-protocol';
 import { getUserHome } from '@teamai/tool-core/home';
 import { z } from 'zod';
-import { attendedSignIn, unattendedAuth, validToken } from './auth.js';
+import { attendedSignIn, signInOf, unattendedAuth, validToken } from './auth.js';
 import { journal } from './journal.js';
 import { serve, type ServeOptions } from './runtime.js';
 import { connectT3 } from './t3.js';
@@ -49,8 +49,15 @@ const connect: ServeOptions['connect'] = async (mode) => {
 
   try {
     const t3 = await connectT3(resource, signIn?.provider ?? unattendedAuth(state, resource.href), () => signIn?.code() ?? Promise.reject(new Error('No sign-in.')));
+    const signedInAs = signInOf(state, resource.href);
 
-    return { ok: true, t3 };
+    if (signedInAs === undefined) {
+      await t3.close();
+
+      return { ok: false, error: { code: 't3_unavailable', message: `teamai connected to T3 Code at ${resource.origin} but kept no sign-in for it. Start the workflow again.` } };
+    }
+
+    return { ok: true, t3, signIn: signedInAs };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
 
