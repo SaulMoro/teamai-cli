@@ -30,7 +30,8 @@ import { z } from 'zod';
 //    > {"type":"reattach","handle":"…"}             < {"event":"alive","handle":"…","ops":[...]} or {"event":"gone",…}
 //    > {"type":"close","handle":"…"}                < {"event":"closed","handle":"…"} or {"event":"close_failed","handle":"…","failure":{…}}
 //    > {"type":"cancel","op":"op-8b10…"}            the operation then ends {"op":"op-8b10…","event":"cancelled"}
-//                                                   or {"op":"op-8b10…","event":"failed","failure":{…}}, which reattach keeps reporting
+//                                                   or, when the stop is not confirmed, {"op":"op-8b10…","event":"failed",
+//                                                   "failure":{"code":"cancel_failed",…}}, which reattach keeps reporting
 //
 //  A `reattach`, `collect` or `close` the runtime cannot answer gets the failure reply for its handle,
 //  {"event":"failed","handle":"…","failure":{…}}; one for an operation gets that operation's `failed`. An
@@ -81,6 +82,13 @@ const EnvSchema = z.record(z.string(), z.string());
  * teamai before protocol 1 carried them, which a runtime reads as none.
  */
 const CredentialsSchema = EnvSchema.default({});
+
+/**
+ * The one code of a stop a runtime could not confirm: a `cancel` it could not carry out ends the operation `failed` with
+ * it, and `reattach` keeps reporting that until a later `cancel` stops the operation. teamai takes an operation as still
+ * running while it reports `running`, or `failed` with this code; any other `failed` is the operation's end.
+ */
+export const CANCEL_FAILED = 'cancel_failed';
 
 /** A runtime's options, as a driver definition gives them; the runtime validates them at `init`. */
 export const RuntimeOptionsSchema = z.record(z.string(), z.json());

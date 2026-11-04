@@ -7,7 +7,7 @@ import type { LocalConfig } from '../types.js';
 import { attemptRun, attemptToolHome, seedToolHome } from '../workflow/runtimes/attempt.js';
 import { holdLogin, loginHolder, writeLoginBack } from '../workflow/runtimes/login.js';
 import { OpIdSchema } from '@teamai/runtime-protocol';
-import { newOpId, type ExecEnd, type Reattached, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
+import { newOpId, type ExecEnd, type PromptEnd, type Reattached, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import { attemptDir, AttemptIdSchema, RunIdSchema } from '../workflow/store.js';
 
 const RUN = RunIdSchema.parse('r0123abcd');
@@ -69,10 +69,14 @@ describe('the dedicated Codex login lock', () => {
 describe('an attempt a killed teamai left running on its step runtime', () => {
   const config = (): LocalConfig => ({ repo: { localPath: root, remote: 'local', kind: 'self' }, username: 'tester', scope: 'project', additionalRoles: [], projectRoot: root, dataHome: path.join(root, 'data') });
 
-  /** A runtime whose exec never ends, and whose reattach answers `seen` in turn, then the last of them. */
+  /** How many prompts the runtime of `runtimeSeeing` was sent. */
+  let prompts = 0;
+
+  /** A runtime whose exec and prompt never end, and whose reattach answers `seen` in turn, then the last of them. */
   const runtimeSeeing = (seen: Array<(op: string) => Reattached>): StepRuntime => {
     let asked = 0;
     let op = '';
+    prompts = 0;
 
     return {
       name: 'fake',
@@ -87,7 +91,12 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
 
         return new Promise<ExecEnd>(() => {});
       },
-      prompt: async () => ({ kind: 'failed', failure: { code: 'prompt_unsupported', message: 'execs only' } }),
+      prompt: (request) => {
+        op = request.op;
+        prompts += 1;
+
+        return new Promise<PromptEnd>(() => {});
+      },
       cancel: async () => {},
       collect: async () => ({ ok: true }),
       reattach: async () => (seen[Math.min(asked++, seen.length - 1)] ?? (() => ({ kind: 'gone' })))(op),
@@ -104,8 +113,45 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     await vi.waitFor(() => expect(fs.readFileSync(path.join(attemptDir(config(), RUN, FIRST), 'runtime.json'), 'utf8')).toContain('"exec"'));
   };
 
+  /** Opens the attempt and sends its prompt on `runtime`, as the teamai that was killed did. */
+  const promptLeftRunning = async (runtime: StepRuntime): Promise<void> => {
+    const before = attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' });
+    expect(await before.open({ worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} })).toMatchObject({ ok: true });
+    void resumePrompt(runtime);
+    await vi.waitFor(() => expect(fs.readFileSync(path.join(attemptDir(config(), RUN, FIRST), 'runtime.json'), 'utf8')).toContain('"prompt"'));
+  };
+
   const running = (op: string): Reattached => ({ kind: 'alive', ops: [{ op: OpIdSchema.parse(op), state: 'running' }] });
   const unreachable = (): Reattached => ({ kind: 'failed', failure: { code: 'runtime_exited', message: 'gone away' } });
+  const ended = (failure: { code: string; message: string }) => (op: string): Reattached => ({ kind: 'alive', ops: [{ op: OpIdSchema.parse(op), state: 'failed', failure }] });
+  const cancelled = (op: string): Reattached => ({ kind: 'alive', ops: [{ op: OpIdSchema.parse(op), state: 'cancelled' }] });
+  const cannotStop = { code: 'cancel_failed', message: 'The provider is down. Start it, then run teamai workflow cancel again.' };
+
+  it('takes an operation that failed with any code but cancel_failed after the cancel as ended, as the next cancel does', async () => {
+    const runtime = runtimeSeeing([running, ended({ code: 'tool_failed', message: 'codex exited with status 1' })]);
+    await leftRunning(runtime);
+
+    expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).stopLeftOperation()).toBeUndefined();
+  });
+
+  const resumePrompt = (runtime: StepRuntime) => attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).prompt({
+    lease: { step: 'review', tool: 'codex', prompt: 'p', result: path.join(root, 'out', 'result.json'), permissions: 'unattended', interactive: false }, env: {}, unset: [], credentials: {}, cwd: root,
+  }, {});
+
+  it('stops a prompt a killed teamai left failed cancel_failed, instead of taking it as failed or sending it again', async () => {
+    const runtime = runtimeSeeing([ended(cannotStop), cancelled]);
+    await promptLeftRunning(runtime);
+
+    expect(await resumePrompt(runtime)).toEqual({ kind: 'cancelled' });
+    expect(prompts).toBe(1);
+  });
+
+  it('ends a prompt a killed teamai left failed cancel_failed as lost while its runtime still cannot stop it', async () => {
+    const runtime = runtimeSeeing([ended(cannotStop)]);
+    await promptLeftRunning(runtime);
+
+    expect(await resumePrompt(runtime)).toMatchObject({ kind: 'lost', failure: { code: 'cancel_failed', message: expect.stringContaining(cannotStop.message) } });
+  });
 
   it('is not taken as stopped when its runtime cannot be asked after the cancel', async () => {
     const runtime = runtimeSeeing([unreachable]);
