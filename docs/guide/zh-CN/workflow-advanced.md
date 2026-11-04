@@ -1475,7 +1475,7 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 
 只把它们设置到进程的环境里，永远不要写到磁盘或日志里。重启后的 teamai 会随它重新发送的操作再次发送它们，所以你的运行时什么都不用保存。
 
-其他请求是 `cancel`、`collect`、`reattach` 和 `close`。在 `close` 之前，运行时对重复的 `op` 给出同样的结果。它保存 exec 打印的内容和退出方式，这样重启后的 teamai 可以用 `reattach` 读取。运行时不接受的选项会让 `init` 失败为 `bad_option`，并给出那个键。
+其他请求是 `cancel`、`collect`、`reattach` 和 `close`。在 `close` 之前，运行时对重复的 `op` 给出同样的结果。它保存 exec 打印的内容和退出方式，以及 prompt 的 `finished` 事件（包括 `resumed`），这样重启后的 teamai 可以用 `reattach` 读取。运行时不接受的选项会让 `init` 失败为 `bad_option`，并给出那个键。
 
 无法结束某个位置的运行时，用原因回答 `close`。teamai 随后把在那里运行的东西视为仍在运行：这次尝试继续持有登录，运行详情在步骤下以 *未关闭* 显示这个失败：
 
@@ -1527,7 +1527,7 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 | `step`、`tool` | 步骤，以及启动智能体用的工具，它是你的 `can.tools` 之一 |
 | `model` | 启动时使用的 `name` 和可选的 `effort`：步骤的，否则是它的智能体定义的；没有时用工具的默认值 |
 | `prompt`、`result` | 完整的提示，以及智能体写入结果的文件。像 teamai 自己的启动那样，让智能体无需询问就能写这一个文件：对 Claude 是 `--allowedTools=Edit(/<result>)`。不要为此改变任何模式 |
-| `resume` | 同一个工具中要继续的会话 id，用于之后的轮次 |
+| `resume` | 同一个工具中要继续的会话 id，用于之后的轮次。智能体继续了它时，在 `finished` 里写 `"resumed":true`。你开了新会话时不要写，teamai 就不会把新会话连到旧会话上 |
 | `permissions` | `approval-required`；你的 `can.unattended` 接下这类步骤时为 `unattended` |
 | `interactive` | 有人在步骤中工作时为 `true`；只有声明了 `can.hitl` 的运行时会收到 |
 | `maxTurns` | 智能体的轮数上限，在你的 `can.max_turns` 提供时才有 |

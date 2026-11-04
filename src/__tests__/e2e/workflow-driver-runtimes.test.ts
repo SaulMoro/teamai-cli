@@ -303,7 +303,7 @@ Judge the review.
   describe('a runtime that launches agents its own way', () => {
     const runIds = (): Set<string> => new Set((fs.existsSync(path.join(dataHome, 'workflows', 'runs')) ? fs.readdirSync(path.join(dataHome, 'workflows', 'runs')) : []).filter((name) => name.endsWith('.json')).map((name) => name.slice(0, -'.json'.length)));
 
-    type PromptLine = { op: string; sent?: { step: string; tool: string; prompt: string; result: string; permissions: string; model?: { name: string }; maxTurns?: number }; env?: string[]; provided?: string[]; ended?: string };
+    type PromptLine = { op: string; sent?: { step: string; tool: string; prompt: string; result: string; permissions: string; model?: { name: string }; maxTurns?: number; resume?: string }; env?: string[]; provided?: string[]; ended?: string };
 
     /** What the toy logged of the prompts it was sent: each send, and how each ended. */
     const promptLog = (): PromptLine[] => (fs.existsSync(path.join(state, 'prompts.jsonl'))
@@ -377,6 +377,32 @@ Judge the review.
       // A runtime that keeps env in plain text can drop the team's value and keep the rest.
       expect(sent?.env).toEqual(expect.arrayContaining(['TEAMAI_RUN_DIR', 'TEAMAI_WORKFLOW_ATTEMPT', 'WORKFLOW_TEAM_TOKEN']));
       expect(sent?.provided).toEqual(['WORKFLOW_TEAM_TOKEN']);
+    });
+
+    it('links no session a runtime started fresh to the one its step asked to resume', async () => {
+      writeFlow('followed', `  - id: review
+    prompt: Review the repository without changing it.
+    output:
+      ok: boolean
+  - id: followup
+    needs: [review]
+    session: { from: review }
+    prompt: Follow up on the review.
+    output:
+      ok: boolean`);
+      expect((await runCLI(['pull'], repo)).code).toBe(0);
+      writeDefinition('agentfresh', [{ use: 'toy', options: { state, agent: { output: { ok: true }, resumes: false, transcript: true } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'followed', '--driver', 'agentfresh'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const stored = readRunState(runOf(ran));
+      const [review, followup] = stored.steps.map((step) => ('session' in step ? step.session : undefined));
+      // The toy was asked to resume the review's session, said nothing of it, and ran a new one.
+      expect(sends()[1]?.sent).toMatchObject({ step: 'followup', resume: review });
+      expect(followup).toEqual(expect.any(String));
+      expect(followup).not.toBe(review);
+      expect(stored.sessionContinuations).toBeUndefined();
     });
 
     it('runs a prompt step with setup on the next runtime, since setup is a command, even when the first claims setup', async () => {

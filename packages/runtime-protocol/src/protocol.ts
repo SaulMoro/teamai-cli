@@ -22,7 +22,7 @@ import { z } from 'zod';
 //    < {"op":"op-8b10…","event":"exited","code":0,"stdout":"…complete stdout…"}
 //    > {"type":"prompt","op":"op-91c4…","handle":"…","lease":{...},"env":{...},"provided":[...],"unset":[...],"credentials":{...},"cwd":"…"}
 //    < {"op":"op-91c4…","event":"accepted","display":{"label":"…","url":"…"}}      display optional: once the agent exists
-//    < {"op":"op-91c4…","event":"finished","session":{"tool":"claude","id":"…"},"result":{"output":{…}},"usage":{…}}
+//    < {"op":"op-91c4…","event":"finished","session":{"tool":"claude","id":"…"},"result":{"output":{…}},"usage":{…},"resumed":true}   resumed: only when it continued lease.resume
 //    > {"type":"open",…,"credentials":{}}                                      no view: the place of a confined prompt
 //    > {"type":"prompt",…,"confined":{"dir":"…","level":"verified","access":"read","schema":{…}}}
 //    < {"op":"op-a3d5…","event":"finished",…,"result":{"output":{…}},"confined":{"level":"verified","access":"read"}}
@@ -326,6 +326,11 @@ const finishedPrompt = {
   usage: PromptUsageSchema.optional(),
   /** A confined prompt's: the level and access the runtime kept. */
   confined: ConfinedKeptSchema.optional(),
+  /**
+   * `true`: the agent continued the session the lease's `resume` names, as it is or in a copy. Absent: it started a
+   * new one, so teamai links no session to the one the step asked to resume.
+   */
+  resumed: z.literal(true).optional(),
 };
 
 /** What a runtime retains of one operation of a handle, which `reattach` reports. */
