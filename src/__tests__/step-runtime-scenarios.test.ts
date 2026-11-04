@@ -328,6 +328,15 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     expect(JSON.parse(fs.readFileSync(request.lease.result, 'utf8'))).toEqual({ output: { verdict: 'approve' } });
   });
 
+  it('ends finished with no failure when the agent writes "failure": null beside its output', async () => {
+    const runtime = await start({ result: { output: { verdict: 'approve' }, failure: null } });
+
+    const end = await runtime.prompt(promptRequest(await opened(runtime)), {});
+
+    expect(end).toMatchObject({ kind: 'finished', result: { output: { verdict: 'approve' } } });
+    expect(end.kind === 'finished' ? end.result.failure : 'not finished').toBeUndefined();
+  });
+
   it('answers a repeated prompt id with the same outcome', async () => {
     const runtime = await start({ output: { verdict: 'approve' } });
     const request = promptRequest(await opened(runtime));

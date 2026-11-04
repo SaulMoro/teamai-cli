@@ -123,8 +123,14 @@ export const PromptUsageSchema = z.object({
   cachedInput: z.number().nonnegative().optional(),
 }).strict() satisfies z.ZodType<TokenUsage>;
 
-/** The workflow result the agent wrote to the lease's `result` file: its output, or a failure with a code and a message. */
-export const PromptResultSchema = z.object({ output: z.unknown().optional(), failure: z.object({ code: z.string(), message: z.string() }).optional() });
+/**
+ * The workflow result the agent wrote to the lease's `result` file: its output, or a failure with a code and a message.
+ * An agent that writes `"failure": null` beside its output reports no failure, as the local driver reads it.
+ */
+export const PromptResultSchema = z.object({
+  output: z.unknown().optional(),
+  failure: z.object({ code: z.string(), message: z.string() }).nullish().transform((failure) => failure ?? undefined).optional(),
+});
 
 export type PromptResult = z.infer<typeof PromptResultSchema>;
 
