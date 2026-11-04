@@ -1,5 +1,6 @@
-import { spawn } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import path from 'node:path';
+import spawn from 'cross-spawn';
 import type { PaseoAgent, PaseoApi } from '@getpaseo/client';
 import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import type { WebSocketFactory } from '@getpaseo/client/internal/daemon-client-transport-types';
@@ -60,19 +61,21 @@ export type InstalledTool = { tool: PaseoTool; canRun: true; modes: string[] } |
 const SIGN_IN_CHECK_TIMEOUT_MS = 5_000;
 
 /**
- * `<codex> login status`, in a process group of its own, which is killed whole when it does not answer in time: an npm
- * `codex` is a shim that starts the native binary, and killing the shim alone leaves that running.
+ * `<codex> login status`, killed whole when it does not answer in time: an npm `codex` is a shim that starts the native
+ * binary, and killing the shim alone leaves that running. On POSIX it runs in a process group of its own; on Windows,
+ * where cross-spawn runs a `.cmd` through cmd.exe, taskkill ends the tree under the process it started.
  */
 function codexLoginStatus(codex: string): Promise<{ code: number; answer: string }> {
   return new Promise((resolve, reject) => {
-    const isGrouped = process.platform !== 'win32';
-    const child = spawn(codex, ['login', 'status'], { stdio: ['ignore', 'pipe', 'pipe'], detached: isGrouped, windowsHide: true });
+    const isWindows = process.platform === 'win32';
+    const child = spawn(codex, ['login', 'status'], { stdio: ['ignore', 'pipe', 'pipe'], detached: !isWindows, windowsHide: true });
     let answer = '';
 
     const timer = setTimeout(() => {
       try {
-        if (isGrouped && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
-        else child.kill('SIGKILL');
+        if (child.pid === undefined) child.kill('SIGKILL');
+        else if (isWindows) execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
+        else process.kill(-child.pid, 'SIGKILL');
       } catch {
         child.kill('SIGKILL');
       }
@@ -80,8 +83,8 @@ function codexLoginStatus(codex: string): Promise<{ code: number; answer: string
       reject(new Error(`no answer in ${SIGN_IN_CHECK_TIMEOUT_MS} ms`));
     }, SIGN_IN_CHECK_TIMEOUT_MS);
 
-    child.stdout.setEncoding('utf8').on('data', (text: string) => { answer += text; });
-    child.stderr.setEncoding('utf8').on('data', (text: string) => { answer += text; });
+    child.stdout?.setEncoding('utf8').on('data', (text: string) => { answer += text; });
+    child.stderr?.setEncoding('utf8').on('data', (text: string) => { answer += text; });
     child.once('error', (error) => {
       clearTimeout(timer);
       reject(error);
@@ -91,6 +94,17 @@ function codexLoginStatus(codex: string): Promise<{ code: number; answer: string
       resolve({ code: code ?? 1, answer });
     });
   });
+}
+
+/**
+ * Whether teamai may run the Codex the daemon resolves, as the member. It must be an absolute path, since a relative one
+ * would resolve on teamai's PATH rather than the daemon's, to a file named `codex`, or on Windows to the binary
+ * `codex.exe` or npm's `codex.cmd`, in any case.
+ */
+export function isCodexExecutable(resolved: string, platform: NodeJS.Platform = process.platform): boolean {
+  if (platform === 'win32') return path.win32.isAbsolute(resolved) && /^codex\.(?:exe|cmd)$/i.test(path.win32.basename(resolved));
+
+  return path.posix.isAbsolute(resolved) && path.posix.basename(resolved) === 'codex';
 }
 
 /** Whether `url` names a daemon on this machine: a loopback address, the only one whose host is surely this one. */
@@ -220,9 +234,7 @@ export async function connect(url: string, paseo: PaseoClient): Promise<Daemon |
 
         if (resolved === undefined || resolved === 'not found') return 'Paseo reports no path for it; run `paseo provider diagnostic codex` on the daemon\'s host to see why';
 
-        // The daemon names what teamai runs as the member, so it runs only an absolute path to a codex: a relative one would
-        // resolve on teamai's PATH, not the daemon's.
-        if (!path.isAbsolute(resolved) || path.basename(resolved) !== 'codex') {
+        if (!isCodexExecutable(resolved)) {
           return `Paseo resolves it to "${resolved}", which is not an absolute path to a codex; run \`paseo provider diagnostic codex\` on the daemon's host to see why`;
         }
 
