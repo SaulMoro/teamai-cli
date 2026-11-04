@@ -3,6 +3,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import readline from 'node:readline';
+import { fileURLToPath } from 'node:url';
+import { buildSync } from 'esbuild';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
@@ -816,5 +818,62 @@ describe('the toy runtime once teamai stops reading it', () => {
     expect(await again.init({ options: { state }, mode: 'unattended' })).toMatchObject({ ok: true });
 
     expect(await again.reattach('toy-r0123abcd-a0123abcd')).toMatchObject({ kind: 'alive', ops: [{ op: exec, state: 'exited', code: 0 }] });
+  });
+});
+
+describe('a driver whose runtime stopped on a line it could not read', () => {
+  let dir: string;
+  let driver: ReturnType<typeof spawn> | undefined;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-step-stray-'));
+    fs.mkdirSync(path.join(dir, 'worktree'));
+  });
+
+  afterEach(() => {
+    if (driver?.exitCode === null && driver.signalCode === null) driver.kill('SIGKILL');
+    const strayPid = path.join(dir, 'state', 'stray.pid');
+
+    if (fs.existsSync(strayPid)) {
+      try {
+        process.kill(Number(fs.readFileSync(strayPid, 'utf8')), 'SIGKILL');
+      } catch {
+        // It already ended.
+      }
+    }
+
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('exits once it disposes the runtime, though a tool the runtime started still holds the runtime\'s output open', async () => {
+    const runtimes = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'workflow', 'runtimes');
+    const entry = path.join(dir, 'driver.mjs');
+    // A driver of its own process, as teamai is: it runs one exec through the StepRuntime interface, then disposes it.
+    buildSync({
+      stdin: {
+        contents: `
+          import { stdioStepRuntime } from './stdio.js';
+          const [toy, dir] = process.argv.slice(2);
+          const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [toy] });
+          await runtime.init({ options: { state: dir + '/state', stray: true }, mode: 'unattended' });
+          const place = await runtime.open({ op: 'op-00000001', run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, view: { worktree: dir + '/worktree', readonly: [], result: dir + '/out', runDir: dir + '/scratch', toolHome: {} } }, async () => {});
+          const end = await runtime.exec({ op: 'op-00000002', handle: place.handle, argv: [process.execPath, '-e', ''], env: {}, unset: [], credentials: {}, cwd: dir + '/worktree' }, {});
+          console.log(JSON.stringify(end));
+          await runtime.dispose();
+        `,
+        resolveDir: runtimes, loader: 'ts', sourcefile: 'driver.ts',
+      },
+      outfile: entry, bundle: true, platform: 'node', format: 'esm', target: 'node20', logLevel: 'error',
+      banner: { js: "import { createRequire as driverCreateRequire } from 'node:module'; const require = driverCreateRequire(import.meta.url);" },
+    });
+    let printed = '';
+    driver = spawn(process.execPath, [entry, TOY_RUNTIME, dir], { stdio: ['ignore', 'pipe', 'inherit'] });
+    driver.stdout?.setEncoding('utf8').on('data', (data: string) => { printed += data; });
+    const exited = new Promise<number | null>((resolve) => driver?.once('exit', (code) => resolve(code)));
+
+    expect(await Promise.race([exited, new Promise((resolve) => setTimeout(() => resolve('still running'), 5000))])).toBe(0);
+    expect(printed).toContain('"kind":"lost"');
+    expect(printed).toContain('runtime_exited');
+    expect(pidAlive(Number(fs.readFileSync(path.join(dir, 'state', 'stray.pid'), 'utf8')))).toBe(true);
   });
 });
