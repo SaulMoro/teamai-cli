@@ -193,7 +193,7 @@ runtimes:
 ✖ Step "classify" failed with model_unavailable: The Paseo daemon at ws://127.0.0.1:6767/ws has no claude model claude-opus-0-1. It offers: claude-opus-5-5, claude-opus-5, claude-fable-5-1, claude-fable-5, claude-opus-4-8[1m], claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-sonnet-5[1m], claude-opus-4-7[1m], claude-opus-4-7, claude-opus-4-6[1m], claude-opus-4-6, claude-sonnet-4-6[1m], claude-sonnet-4-6, claude-haiku-5-5, claude-haiku-4-5.
 ```
 
-智能体拿到步骤的提示词。Paseo 不报告完整的 token 数，所以有 token 预算的步骤交给下一个运行时。
+智能体拿到步骤的提示词。步骤的后续轮次会启动一个新的智能体，不会延续前一轮的会话。Paseo 不报告完整的 token 数，所以有 token 预算的步骤交给下一个运行时。
 
 ## 凭据
 
