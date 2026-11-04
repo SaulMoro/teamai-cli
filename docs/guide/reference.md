@@ -279,7 +279,7 @@ Tool "acme-claude" comes from the team repo (…/tools/acme-claude.yaml, content
 Run it? [y/N]
 ```
 
-The line you type answers this question alone. An approval or choice that waits at the same terminal is asked again once you answer. `teamai workflow cancel` ends the question unanswered, and the command does not run.
+The line you type answers this question alone. An approval or choice that waits at the same terminal is asked again once you answer. `teamai workflow cancel` ends the question unanswered, and the command does not run. Ctrl-C stops the run without answering, and `teamai workflow resume` asks again.
 
 An unattended run (`TEAMAI_MODE=unattended`, CI, no terminal) refuses it with `tool_not_accepted` until someone accepts it once in a terminal. The answer is kept in `~/.teamai/trust/tools.json` for that file's content: a commit that leaves the file as it is asks nothing, and an edit asks again. An instance with only `home` or `paths` runs the shipped command and needs no acceptance.
 
@@ -297,7 +297,23 @@ paths: { skills: .claude/team-skills, rules: .claude/rules }
 
 **Your own build.** `~/.teamai/tools/<name>.yaml` holds your own instances. teamai reads that directory and never writes it. One there replaces the team's of the same name for you, needs no acceptance, and is ignored by `workflow resume --next`, which runs a teammate's run on the team's tools.
 
-**Where instances come from.** `tools/<name>.yaml`, and `tools/<namespace>/<name>.yaml`, which replaces the root one. Two namespaces that define one name, or two team repos that define it differently, are a conflict: teamai uses neither and says so. A file is refused, naming the problem, when it sets anything but `command`, `home` and `paths`, or when `command` is a path such as `./scripts/acme-claude`: the program at a path can change without the file changing, so acceptance would not cover it.
+Its `command` is a bare name on PATH too. To run a build you compiled, put its directory on PATH and name the executable:
+
+```yaml
+# ~/.teamai/tools/acme-claude.yaml
+schemaVersion: v1alpha1
+name: acme-claude
+extends: claude
+command: acme-claude-dev           # found in ~/src/acme-claude/bin; ~/src/acme-claude/bin/acme-claude-dev is refused
+home: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }
+```
+
+```bash
+export PATH="$HOME/src/acme-claude/bin:$PATH"     # in ~/.zshrc or ~/.bashrc
+teamai workflow start review --tools default=acme-claude
+```
+
+**Where instances come from.** `tools/<name>.yaml`, and `tools/<namespace>/<name>.yaml`, which replaces the root one. Two namespaces that define one name, or two team repos that define it differently, are a conflict: teamai uses neither and says so. A file is refused, naming the problem, when it sets anything but `command`, `home` and `paths`, or when `command` is a path such as `./scripts/acme-claude`, or holds `:`, `*` or `?`: the program at a path can change without the file changing, so acceptance would not cover it. teamai looks `command` up in the PATH directories alone, on Windows too, so a file of that name in the checkout never runs in its place.
 
 ```text
 Tool instance …/tools/acme-claude.yaml is not valid: it sets sessions, and an instance sets only command, home and paths. …
