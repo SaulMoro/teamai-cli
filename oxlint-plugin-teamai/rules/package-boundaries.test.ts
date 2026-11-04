@@ -5,7 +5,7 @@ import { ruleHarness } from '../test/harness.ts';
 const rule = ruleHarness('teamai/package-boundaries', { filename: 'packages/tool-core/src/sessions.ts' });
 
 const workspace = {
-  'package.json': JSON.stringify({ name: 'teamai-cli', workspaces: ['packages/*'] }),
+  'package.json': JSON.stringify({ name: 'teamai-cli', workspaces: ['packages/*'], dependencies: { zod: '^4.0.0' } }),
   'packages/tool-core/package.json': JSON.stringify({ name: '@teamai/tool-core', private: true }),
   'packages/tool-core/src/definition.ts': 'export const definition = 1;',
   'packages/runtime-sandbox/package.json': JSON.stringify({ name: '@teamai/runtime-sandbox', private: true }),
@@ -104,3 +104,22 @@ rule.valid('allows src/ importing a package that is not a runtime', `import { de
 rule.valid('allows src/ importing src/', `import { locate } from './locate.js';`, inWorkspace('src/tools.ts'));
 
 rule.valid('leaves a checkout without workspaces alone', `import { locate } from '../../../src/locate.js';`, { filename: 'packages/tool-core/src/sessions.ts' });
+
+rule.invalid('rejects src/ importing a value from a package teamai-cli does not depend on, which the bundle would carry', `import { DaemonClient } from '@getpaseo/server';`, (output) => {
+  expect(output).toContain('src/ imports values only from Node, the workspace packages and the dependencies in package.json');
+  expect(output).toContain('@getpaseo/server');
+}, inWorkspace('src/workflow/runtimes/sources.ts'));
+
+rule.invalid('rejects src/ loading a package teamai-cli does not depend on at run time', `const ws = await import('ws');`, undefined, inWorkspace('src/workflow/runtimes/sources.ts'));
+
+rule.invalid('rejects src/ importing a file of an npm package whose name is also a Node module', `import { StringDecoder } from 'string_decoder/lib/string_decoder.js';`, undefined, inWorkspace('src/workflow/runtimes/sources.ts'));
+
+rule.invalid('rejects src/ re-exporting a value of a package teamai-cli does not depend on', `export { WebSocket } from 'ws';`, undefined, inWorkspace('src/workflow/runtimes/sources.ts'));
+
+rule.valid('allows src/ to import only the types of a package teamai-cli does not depend on', `import type { DaemonClient } from '@getpaseo/server';`, inWorkspace('src/workflow/runtimes/sources.ts'));
+
+rule.valid('allows src/ a dependency, a subpath of one, Node and a workspace package', [
+  `import { z } from 'zod';`, `import { toJSONSchema } from 'zod/v4';`, `import fs from 'node:fs';`, `import path from 'path';`, `import { readFile } from 'fs/promises';`, `import { definition } from '@teamai/tool-core';`,
+].join('\n'), inWorkspace('src/workflow/runtimes/sources.ts'));
+
+rule.valid('allows a src/ test a package teamai-cli does not ship', `import { WebSocket } from 'ws';`, inWorkspace('src/__tests__/paseo.test.ts'));
