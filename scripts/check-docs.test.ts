@@ -104,6 +104,28 @@ it('check pulls an unnamed workflow fragment on a page that is not a workflow pa
   expect(checked.output).toContain(`docs/guide/dashboard.md:${before.split('\n').length + 2}`);
   expect(checked.output).toContain('retries_forever');
 });
+it('check rejects a driver definition example whose runtime options teamai refuses, naming its page and line', () => {
+  const root = checkout();
+  const page = path.join(root, 'docs/guide/workflow-advanced.md');
+  const before = fs.readFileSync(page, 'utf8');
+  const kept = '      max_parallel: 2\n';
+  expect(before).toContain(kept);
+  fs.writeFileSync(page, before.replace(kept, `${kept}      credentials: { claude: login }\n`));
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toMatch(/docs\/guide\/workflow-advanced\.md:\d+ \(# drivers\/sandboxed\.yaml\)/);
+  expect(checked.output).toContain('credentials.claude');
+});
+it('check reads a driver definition on any guide page, and rejects a key a definition does not take', () => {
+  const root = checkout();
+  const page = path.join(root, 'docs/guide/dashboard.md');
+  const before = fs.readFileSync(page, 'utf8');
+  fs.writeFileSync(page, `${before}\n\`\`\`yaml\n# drivers/boxed.yaml\nschemaVersion: v1alpha1\nname: boxed\nruntime:\n  - use: sandbox\n\`\`\`\n`);
+  const checked = run(root);
+  expect(checked.status).toBe(1);
+  expect(checked.output).toContain(`docs/guide/dashboard.md:${before.split('\n').length + 2}`);
+  expect(checked.output).toContain('runtime');
+});
 it.each([
   ['teamai codebase --no-such-flag', 'unknown flag "--no-such-flag"'],
   ['teamai skill gett core', 'unknown subcommand "gett"'],
