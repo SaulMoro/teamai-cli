@@ -1,12 +1,11 @@
 import { RUNTIME_PROTOCOL, RuntimeDisplaySchema, runtimeMessageSchemas, type RuntimeDisplay } from '@teamai/runtime-protocol';
 import { z } from 'zod';
-import { CanSchema } from '../requirements.js';
 
 // ─── Runtime protocol 1, as teamai reads it ──────────────
 //
-//  The protocol is @teamai/runtime-protocol's: the requests teamai writes and the lines a runtime writes back. This
-//  module reads those lines with teamai's own rules: a display is read apart from its event, and the offer is teamai's
-//  driver `can`. Any line that does not parse fails the runtime.
+//  The protocol is @teamai/runtime-protocol's: the requests teamai writes and the lines a runtime writes back, and the
+//  offer a runtime makes at `init`, which teamai reads as its driver `can`. This module reads those lines with teamai's
+//  own rules: a display is read apart from its event. Any line that does not parse fails the runtime.
 //
 
 /** What a runtime showed of a place: nothing, a display, or one the run's details do not show, and why. */
@@ -20,7 +19,7 @@ const ShownSchema = z.unknown().optional().transform((raw): Shown => {
   return parsed.success ? { kind: 'shown', display: parsed.data } : { kind: 'dropped', reason: parsed.error.issues[0]?.message ?? 'it does not parse' };
 });
 
-const { OpEvent, HandleEvent, Message } = runtimeMessageSchemas({ display: ShownSchema, can: CanSchema });
+const { OpEvent, HandleEvent, Message } = runtimeMessageSchemas({ display: ShownSchema });
 
 export type OpEvent = z.infer<typeof OpEvent>;
 

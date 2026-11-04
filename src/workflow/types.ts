@@ -1,5 +1,6 @@
 /** Workflow types for the v1alpha1 local-driver subset. */
 
+import type { WORKSPACE_MODES } from '@teamai/runtime-protocol';
 import type { ContractCode, RunOrigin } from '../default-workflows.js';
 import type { RunMode } from '../launch-context.js';
 import type { TeamPin } from './team-pin.js';
@@ -188,12 +189,6 @@ export interface StepLoop {
   while?: string;
   maxIterations: number;
 }
-
-/**
- * Where a step runs: in the checkout as it is, in a new copy, in the copy an enclosing step opened, in a fresh clone
- * teamai prepares, or in a fresh clone of the team repo. A driver lists the ones it provides in `can.workspace`.
- */
-export const WORKSPACE_MODES = ['read-only', 'new', 'continue', 'clone', 'team'] as const;
 
 /**
  * The team repo branch a step commits to, `{ team: { branch } }`: a template that reads only `inputs`, so every run
