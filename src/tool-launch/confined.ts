@@ -55,6 +55,14 @@ function profileOf(tool: ConfinedTool): ConfinedLaunch {
   return launchAdapterOf(tool).confined;
 }
 
+/**
+ * The variables `tool`'s confined profile reads beyond the common ones, such as its API key: what of a runtime's
+ * credentials a confined prompt on it gets. None for a tool with no confined profile.
+ */
+export function confinedEnvNames(tool: string): readonly string[] {
+  return isConfinedTool(tool) ? profileOf(tool).env : [];
+}
+
 /** What `tool`, run confined, can do beyond answering, by its adapter's profile. */
 export function confinedAccess(tool: ConfinedTool): ConfinedAccess {
   return profileOf(tool).access;
