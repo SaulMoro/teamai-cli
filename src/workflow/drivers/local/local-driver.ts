@@ -17,7 +17,7 @@ import { AgentSession, type AgentSessionRef } from '../../../session-flow/agent-
 import { openSessionArchive, type SessionArchive } from '../../../session-flow/archive.js';
 import { deliveredTeamSkills, usedSkills } from '../../../skill-use.js';
 import { attemptEnv } from '../../attempt-marker.js';
-import { leaseNext, type PersonHandoff, type ReportInput } from '../../engine.js';
+import { leaseNext, promptTool, type PersonHandoff, type ReportInput, type ToolFor } from '../../engine.js';
 import { offeredToPerson, offerToPerson, reconcileTakenCopies } from '../../handoff.js';
 import { LeaseWireSchema, type LeaseWire } from '../../lease-wire.js';
 import { setsLimit, type DecidedCan, type DriverCan, type Missing } from '../../requirements.js';
@@ -819,9 +819,9 @@ function rememberSecrets(seen: Record<string, string>, secrets: Record<string, s
 
 /**
  * What this driver declares on every `next`. Every key is set, so a new capability does not compile until it is decided.
- * It runs setup in each workspace it creates. `tools` are the tools it launches a step that names one on. It ends a
- * prompt's turn at the limits its lease carries. It runs an unattended prompt in its tool's unattended mode, and fails
- * one whose tool has none.
+ * It runs setup in each workspace it creates. `tools` are the tools it launches a prompt step on, named or picked. It
+ * ends a prompt's turn at the limits its lease carries. It runs an unattended prompt in its tool's unattended mode, and
+ * fails one whose tool has none.
  */
 function localCan({ strict, hitl, tools, confined }: { strict: StrictCan; hitl: boolean; tools: string[]; confined: ConfinedOffer[] }): DecidedCan {
   return { hitl, exec: true, workspace: [...WORKSPACE_MODES], ...strict, tokens: true, max_turns: true, setup: true, tools, end_turn: true, unattended: true, role: true, confined };
@@ -846,20 +846,36 @@ function onPath(name: string): boolean {
 }
 
 /**
- * The tools a step of `run` names, or undefined when a `from` step may bring a workflow that names any. Looking a tool
- * up can start login shells, so the driver looks up only these.
+ * The tools the run's steps launch on: `named`, those its steps name, undefined when a `from` step may bring a workflow
+ * that names any; and `picked`, those `toolFor` picks for its prompt steps that name none, with the pick for a step that
+ * names no agent when a `from` step may bring one. Looking a tool up can start login shells, so the driver looks up only
+ * the named ones.
  */
-function namedTools(run: Pick<RunState, 'definition' | 'workflows'>): Set<string> | undefined {
+function runTools(run: Pick<RunState, 'definition' | 'workflows'>, toolFor: ToolFor) {
   const named = new Set<string>();
+  const picked = new Set<string>();
+  let bringsSteps = false;
 
-  const known = (steps: readonly WorkflowStep[]): boolean => steps.every((step) => {
-    if (step.tool !== undefined) named.add(step.tool);
-    const child = stepWorkflow(step);
+  const visit = (steps: readonly WorkflowStep[]): void => {
+    for (const step of steps) {
+      const tool = promptTool(step, toolFor);
 
-    return child?.kind !== 'from' && (child?.kind !== 'inline' || known(child.workflow.steps));
-  });
+      if (step.tool !== undefined) named.add(step.tool);
+      else if (tool !== undefined) picked.add(tool);
+      const child = stepWorkflow(step);
 
-  return [run.definition, ...Object.values(run.workflows ?? {})].every((definition) => known(definition.steps)) ? named : undefined;
+      if (child?.kind === 'from') bringsSteps = true;
+
+      if (child?.kind === 'inline') visit(child.workflow.steps);
+    }
+  };
+
+  for (const definition of [run.definition, ...Object.values(run.workflows ?? {})]) visit(definition.steps);
+  const unnamed = bringsSteps ? toolFor({}) : undefined;
+
+  if (unnamed !== undefined) picked.add(unnamed);
+
+  return { named: bringsSteps ? undefined : named, picked };
 }
 
 /**
@@ -993,11 +1009,23 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // Resolved once per drive, so a resume where a person attends runs attended whatever mode the run started in.
   const mode = resolveRunMode(process.env);
   const canHitl = options.hitl ?? personAnswers(mode);
+  const members = await memberTools(config);
+
+  // The tool a prompt step that names none launches on, which a runtime must offer as it must a named one.
+  const toolFor: ToolFor = (step) => {
+    const choice = launchToolFor(step, config, options.tools ?? {}, members);
+
+    return choice.ok ? choice.tool : undefined;
+  };
+
   // It launches a step that names its tool on the tools this machine has: those the run's steps name, or every one when a
   // step's output may bring a workflow later. It is the run's only driver, so a step whose tool it cannot launch fails
-  // rather than waits.
-  const named = isStarted ? namedTools(started) : undefined;
-  const tools = [...LAUNCH_TOOLS, ...instanceNames().filter((name) => !isToolId(name))].filter((tool) => (named === undefined || named.has(tool)) && onPath(tool));
+  // rather than waits. A tool it picks for a step that names none, and that no step names, it offers without looking it
+  // up, as it always launched it: launching it says if it is missing.
+  const { named, picked } = isStarted ? runTools(started, toolFor) : { named: undefined, picked: new Set<string>() };
+  const found = [...LAUNCH_TOOLS, ...instanceNames().filter((name) => !isToolId(name))].filter((tool) => (named === undefined || named.has(tool)) && onPath(tool));
+  const pickedUnlooked = [...picked].filter((tool) => !found.some((launched) => launched === tool) && !(named?.has(tool) ?? false));
+  const tools = [...found, ...pickedUnlooked];
   const defined: DriverRuntimes = options.runtimes ?? { driver: 'local', runtimes: [{ kind: 'local', use: 'local', engine: { logins: [] } }] };
   const lookup = options.resolveTool ? { resolveTool: options.resolveTool } : {};
   const confined = isStarted && mayConfine(started) ? await confinedOffers(lookup) : [];
@@ -1294,7 +1322,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
       env = turn;
 
       const ask = (slot: RuntimeSlot, take: boolean, listed: string[]): Promise<WorkflowEnvelope> => leaseNext(config, runId, driver, {
-        running: listed, canTakeLease: take, can: slot.can, autoApprove: options.autoApprove, runMode: mode, handoff, base, env: turn, alone: sole, prepare: true,
+        running: listed, canTakeLease: take, can: slot.can, autoApprove: options.autoApprove, runMode: mode, handoff, base, env: turn, alone: sole, prepare: true, toolFor,
       });
 
       // Each runtime with room is offered in turn, in definition order, until one takes a lease: a wait is final only

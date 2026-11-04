@@ -16,7 +16,7 @@ import { CAN_KEYS, type DriverCan } from '../workflow/requirements.js';
 import { pendingRecords, type WorkflowRunRecord } from '../workflow/records.js';
 import { cancelRun, retryStep } from '../workflow/run-controls.js';
 import { getTeamSecretsPath, writeSecretStore } from '../secret-store.js';
-import { readRun, runFilePath, runLockPath, runsDir, updateRun } from '../workflow/store.js';
+import { readRun, runFilePath, runLockPath, runScratchDir, runsDir, updateRun } from '../workflow/store.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 import type { DriverIdentity, OutputSchema, RunState } from '../workflow/types.js';
 import { knownSecrets } from '../env-resolution.js';
@@ -4664,6 +4664,51 @@ describe('the tool a prompt step names', () => {
       { id: 'review', status: 'failed', failure: { code: 'tool_unavailable', message: 'Step "review" runs on codex, which the driver of this run cannot launch here. Install codex where the run is driven, or remove tool from the step.' } },
       { id: 'lint', status: 'leased' },
     ] });
+  });
+});
+
+describe('the tool a driver picks for a prompt step that names none', () => {
+  const REVIEW = graph(`  - id: review
+    prompt: Review it.
+`);
+  const toCodex = (): string => 'codex';
+
+  it('leases it only to a driver that lists that tool in can.tools, and leaves the tool off the lease', async () => {
+    const { config, runId } = await startBuild(REVIEW);
+
+    const held = await leaseNext(config, runId, driverA, { can: { tools: ['claude'] }, toolFor: toCodex });
+    const review = await leaseNext(config, runId, driverB, { can: { tools: ['codex'] }, toolFor: toCodex });
+
+    expect(held).toMatchObject({ data: { wait: { held: [{ step: 'review', missing: ['tools'] }] } } });
+    expect(review).toMatchObject({ data: { lease: { step: 'review' } } });
+    expect(review).not.toHaveProperty('data.lease.tool');
+  });
+
+  it('fails it tool_unavailable in a run its only driver drives, when no runtime offers that tool', async () => {
+    const { config, runId } = await startBuild(REVIEW);
+    const alone: SoleDriver = { driver: 'pair', offers: [{ runtime: 'toy', can: { tools: ['claude'] } }, { runtime: 'host', can: { tools: [], prompt: false } }] };
+
+    await leaseNext(config, runId, driverA, { can: { tools: ['claude'] }, alone, toolFor: toCodex });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [
+      { id: 'review', status: 'failed', failure: { code: 'tool_unavailable', message: 'Step "review" runs on codex, which the driver of this run cannot launch here. Install codex where the run is driven, or remove tool from the step.' } },
+    ] });
+  });
+
+  it('leaves a confined step to the tools of can.confined, which a judge runs on', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: judge
+    workspace: { confined: evidence }
+    prompt: Judge the evidence.
+    output:
+      verdict: pass | fail
+`));
+    const dir = path.join(runScratchDir(config, runId), 'evidence');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'confined.json'), '{"level":"verified"}');
+
+    const judge = await leaseNext(config, runId, driverA, { can: { tools: [], confined: [{ level: 'verified', access: 'read', tools: ['claude'] }] }, toolFor: toCodex });
+
+    expect(judge).toMatchObject({ data: { lease: { step: 'judge', confined: { tools: ['claude'] } } } });
   });
 });
 
