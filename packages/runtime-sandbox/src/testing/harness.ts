@@ -10,8 +10,9 @@ import { z } from 'zod';
 
 // ─── Test support: the runtime over its stdio, on a fake container engine ───
 //
-//  `bundleRuntime` builds the executable as the package ships it. `fakeEngine` lays out a `docker` and a `podman` on
-//  a PATH of their own, backed by fake-engine.mjs, with images whose tools are scripts in a directory. `connect` starts
+//  `bundleRuntime` builds the executable as the package ships it. `fakeEngine` lays out a `docker`, a `podman` and an
+//  `sbx` on a PATH of their own, backed by fake-engine.mjs, with images (and sbx agents) whose tools are scripts in a
+//  directory. `connect` starts
 //  the runtime and speaks protocol 1 to it as JSON lines.
 //
 
@@ -32,19 +33,23 @@ export async function bundleRuntime(dir: string): Promise<string> {
 }
 
 export interface FakeEngine {
-  /** The directory `docker` and `podman` are in. */
+  /** The directory `docker`, `podman` and `sbx` are in. */
   bin: string;
   state: string;
   log: string;
-  /** The image `name`, holding `tools` as scripts that run `body` in node. */
+  /** The image (or sbx agent) `name`, holding `tools` as scripts that run `body` in node. */
   image(name: string, tools: Record<string, string>): void;
   /** Stops or starts the fake daemon. */
   daemon(up: boolean): void;
   /** Makes `rm` fail, as a daemon that cannot remove a container, or work again. */
   failRemove(shouldFail: boolean): void;
+  /** Stores or removes an sbx secret for `service`, which sbx's proxy injects; a sandbox sees only its placeholder. */
+  secret(service: string, isSet: boolean): void;
+  /** Makes sbx answer as one whose global network policy was initialized, or never was. */
+  policy(isInitialized: boolean): void;
   /** Every argv the engine was run with, as `[engine, ...args]`. */
   calls(): string[][];
-  /** The containers that exist, by name. */
+  /** The containers (and sbx sandboxes) that exist, by name. */
   containers(): string[];
   /** The networks that exist, by name. */
   networks(): string[];
@@ -59,7 +64,7 @@ export function fakeEngine(dir: string): FakeEngine {
   fs.mkdirSync(bin, { recursive: true });
   fs.mkdirSync(state, { recursive: true });
 
-  for (const engine of ['docker', 'podman']) {
+  for (const engine of ['docker', 'podman', 'sbx']) {
     fs.writeFileSync(path.join(bin, engine), `#!/bin/sh\nFAKE_ENGINE_NAME=${engine} exec "${process.execPath}" "${FAKE_ENGINE}" "$@"\n`, { mode: 0o755 });
   }
 
@@ -79,6 +84,16 @@ export function fakeEngine(dir: string): FakeEngine {
     failRemove(shouldFail) {
       if (shouldFail) fs.writeFileSync(path.join(state, 'rm-fails'), '');
       else fs.rmSync(path.join(state, 'rm-fails'), { force: true });
+    },
+    secret(service, isSet) {
+      fs.mkdirSync(path.join(state, 'secrets'), { recursive: true });
+
+      if (isSet) fs.writeFileSync(path.join(state, 'secrets', service), '');
+      else fs.rmSync(path.join(state, 'secrets', service), { force: true });
+    },
+    policy(isInitialized) {
+      if (isInitialized) fs.rmSync(path.join(state, 'no-policy'), { force: true });
+      else fs.writeFileSync(path.join(state, 'no-policy'), '');
     },
     calls: () => (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter((line) => line !== '').map((line) => z.array(z.string()).parse(JSON.parse(line))) : []),
     containers: () => {
