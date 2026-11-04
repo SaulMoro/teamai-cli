@@ -85,7 +85,7 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
     expect(ran).toMatchObject({ exitCode: 1, session: 's-1', startedFresh: true });
   });
 
-  it('keeps a secret that the runtime result echoes out of the result file, from its first write', async () => {
+  it('masks a secret that the runtime result echoes in the result file teamai writes', async () => {
     const { run } = promptOnlyRun({ result: { output: { note: 'signed in with prompter-secret-7d2e' }, failure: { code: 'tool_failed', message: 'denied for prompter-secret-7d2e' } } });
     const resultPath = path.join(dir, 'result.json');
 
