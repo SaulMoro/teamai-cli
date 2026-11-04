@@ -65,6 +65,10 @@ export interface FakeT3Config {
   access?: StepMode;
   /** T3 refuses to interrupt a thread, as when it lost track of its run. */
   interruptFails?: boolean;
+  /** How long T3 takes to answer an interrupt, in ms. */
+  interruptMs?: number;
+  /** The longest a wait holds before it answers that the run still goes, in ms, whatever the caller asked. */
+  waitCapMs?: number;
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });

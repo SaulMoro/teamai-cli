@@ -144,7 +144,7 @@ const TOOLS = {
     return ok({ threadId, link: link(threadId), status: 'starting' });
   },
   t3_thread_wait: async (args) => {
-    const deadline = Date.now() + (args.timeoutMs ?? 30_000);
+    const deadline = Date.now() + Math.min(args.timeoutMs ?? 30_000, config().waitCapMs ?? Infinity);
     let thread = readThread(args.threadId);
 
     if (!thread) return fail(`No thread ${args.threadId}.`);
@@ -166,7 +166,8 @@ const TOOLS = {
 
     return ok({ thread: { threadId: thread.threadId, status: thread.status, pendingRequestCount: thread.pendingRequestCount ?? 0, settled: thread.settled }, items: [], hasMore: false });
   },
-  t3_thread_interrupt: (args) => {
+  t3_thread_interrupt: async (args) => {
+    await sleep(config().interruptMs ?? 0);
     const thread = readThread(args.threadId);
 
     if (!thread) return fail(`No thread ${args.threadId}.`);
