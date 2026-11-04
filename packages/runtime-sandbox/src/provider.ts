@@ -22,6 +22,25 @@ export function sandboxName({ run, attempt }: PlaceKey): string {
   return `teamai-${run}-${attempt}`;
 }
 
+/**
+ * The provider of a runtime that could not start one: `init` failed, or never came. teamai still sends a restarted
+ * runtime its cancel, reattach, collect and close, so each is answered: a lookup fails with `failure`, and a sandbox
+ * is never taken as absent, so a place stays its attempt's until a runtime that reaches the engine closes it.
+ */
+export function unreachable(failure: RuntimeFailure): Provider {
+  const kept = (sandbox: string) => ({ ok: false as const, failure: { ...failure, message: `${failure.message} Sandbox ${sandbox}, if it exists, stays this attempt's until the sandbox runtime can reach it.` } });
+
+  return {
+    offer: async () => ({ ok: false, failure }),
+    find: async (key) => kept(sandboxName(key)),
+    create: async (key) => kept(sandboxName(key)),
+    exec: async (id) => ({ kind: 'failed', failure: kept(id).failure }),
+    stop: async (id) => kept(id),
+    destroy: async (id) => kept(id),
+    display: (key) => ({ label: sandboxName(key) }),
+  };
+}
+
 export interface ExecSpec {
   argv: string[];
   /** Every name the process gets over the sandbox's own environment: the exec's names and the credentials. */

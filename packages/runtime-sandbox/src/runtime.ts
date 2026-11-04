@@ -6,7 +6,7 @@ import type { z } from 'zod';
 import type { ExecRecord, Journal, Outcome, PlaceRecord } from './journal.js';
 import { EVIDENCE_DIR, inEvidenceDir, judgeOf, offersSignedIn, NO_JUDGE_CREDENTIAL } from './judge.js';
 import { parseOptions, type SandboxOptions } from './options.js';
-import { sandboxName, type Provider } from './provider.js';
+import { sandboxName, unreachable, type Provider } from './provider.js';
 
 // ─── The sandbox runtime over runtime protocol 1 ─────────
 //
@@ -107,7 +107,8 @@ function terminal(op: OpId, outcome: Outcome): RuntimeMessage {
 }
 
 export function serve({ input, write, journal, provider: providerFor }: RuntimeDeps): void {
-  let ready: Ready | undefined;
+  // Until an init succeeds, requests are answered from the journal, over a provider that reaches nothing.
+  let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {} };
   /** The ops this process runs, each with what resolves once its end is written. */
   const running = new Map<OpId, { ended: Promise<void>; end: () => void }>();
 
@@ -508,6 +509,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     const parsed = parseOptions(options);
 
     if (!parsed.ok) {
+      ready = { provider: unreachable(parsed.failure), can: {} };
       write({ type: 'init', ok: false, error: parsed.failure });
 
       return;
@@ -517,6 +519,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     const offered = await provider.offer();
 
     if (!offered.ok) {
+      ready = { provider: unreachable(offered.failure), can: {} };
       write({ type: 'init', ok: false, error: offered.failure });
 
       return;
@@ -532,12 +535,6 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
   const dispatch = async (request: RuntimeRequest): Promise<void> => {
     if (request.type === 'init') {
       await init(request.options, request.credentials);
-
-      return;
-    }
-
-    if (!ready) {
-      write({ event: 'error', message: 'Send init first.' });
 
       return;
     }
@@ -583,6 +580,8 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       if (request.type === 'exec' || request.type === 'prompt') finish(request.op, request.handle, { state: 'failed', failure });
       else if (request.type === 'open') write({ op: request.op, event: 'failed', failure });
       else if (request.type === 'close') write({ event: 'close_failed', handle: request.handle, failure });
+      // A journal it cannot read is not a place it knows is gone.
+      else if (request.type === 'reattach') write({ event: 'alive', handle: request.handle, ops: [] });
     }
   };
 
