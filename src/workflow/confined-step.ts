@@ -216,9 +216,18 @@ export async function runConfinedStepOnRuntime(input: RuntimeConfinedInput): Pro
   const opened = await attemptRun.open(undefined, { credentials });
 
   if (!opened.ok) return { kind: 'ran', report: { outcome: 'failed', tool, message: opened.failure.message, failure: opened.failure } };
-  const stop = (): void => void attemptRun.cancel();
+  // A stop before the prompt is sent, or while the place opened, is kept and sent once the runtime accepts the prompt.
+  let stopped = false;
+
+  const stop = (): void => {
+    stopped = true;
+    void attemptRun.cancel();
+  };
+
   const timer = setTimeout(stop, timeoutOf(lease));
   signal?.addEventListener('abort', stop, { once: true });
+
+  if (signal?.aborted) stop();
 
   const end = await attemptRun.prompt({
     lease: {
@@ -227,7 +236,11 @@ export async function runConfinedStepOnRuntime(input: RuntimeConfinedInput): Pro
     },
     env: {}, unset: [], credentials, cwd: lease.confined.dir,
     confined: { dir: lease.confined.dir, level: lease.confined.level, access, ...(schema && { schema: schema.schema }) },
-  }, {});
+  }, {
+    onAccepted: () => {
+      if (stopped) void attemptRun.cancel();
+    },
+  });
 
   clearTimeout(timer);
   signal?.removeEventListener('abort', stop);
@@ -242,6 +255,7 @@ function runtimeConfinedReport(input: { runtime: string; tool: string; model: St
 
   switch (end.kind) {
     case 'finished': {
+      if (end.session.tool !== tool) return failed({ code: 'runtime_failed', message: `Step runtime "${runtime}" finished the confined ${tool} prompt with a session of ${end.session.tool}.` });
       const kept = end.confined;
 
       if (kept === undefined) return failed({ code: 'runtime_failed', message: `Step runtime "${runtime}" finished a confined prompt without saying what it kept.` });
