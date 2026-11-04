@@ -206,7 +206,7 @@ function firstMessage(place: PlaceRecord, lease: PromptLease, startedFrom: strin
  * spelled: teamai sends `dir` as a real path, and a prompt names it as the step rendered it, for example through
  * macOS's /tmp link.
  */
-function pointedAtCopy(text: string, dir: string, copy: string): string {
+function pointedAtCopy({ text, dir, copy }: { text: string; dir: string; copy: string }): string {
   const real = realpath(dir);
 
   return text.replace(/\/[^\s"'`<>]+/g, (token) => {
@@ -231,7 +231,7 @@ function judgeMessage(place: PlaceRecord, lease: PromptLease, confined: Confined
 
   return `This thread runs the confined step "${lease.step}" of teamai workflow run ${place.run} (attempt ${place.attempt}). Its folder, ${copy}, is a read-only copy of the directory the step reads.`
     + ' Read only the files in it: do not read, run or change anything outside it, and change nothing in it. Do not run teamai commands.'
-    + ` ${reply}\n\n${pointedAtCopy(lease.prompt, confined.dir, copy)}`;
+    + ` ${reply}\n\n${pointedAtCopy({ text: lease.prompt, dir: confined.dir, copy })}`;
 }
 
 /** Sets the mode of every directory and file under `root`, `root` included; a symlink is left alone. */
@@ -254,13 +254,16 @@ const WRITABLE = { dir: 0o755, file: 0o644 };
  * Fills `copy`, the judge thread's folder, with what `dir` holds, then makes it read-only. Whatever an earlier attempt
  * left there goes first. A symlink would reach outside `dir`, so none is copied.
  */
-function copyReadOnly(dir: string, copy: string): void {
+function copyReadOnly({ dir, copy }: { dir: string; copy: string }): void {
   chmodTree(copy, WRITABLE);
 
   for (const name of fs.readdirSync(copy)) fs.rmSync(path.join(copy, name), { recursive: true, force: true });
   fs.cpSync(dir, copy, { recursive: true, filter: (source) => !fs.lstatSync(source).isSymbolicLink() });
   chmodTree(copy, READ_ONLY);
 }
+
+/** teamai could not copy a judge's directory into its thread's folder: a fault on this machine, not in T3. */
+class JudgeCopyFailed extends Error {}
 
 /** The JSON value a judge replied with, in a fenced block or bare, or undefined when it is none. */
 function replyValue(text: string): JsonValue | undefined {
@@ -482,7 +485,12 @@ export function serve(options: ServeOptions): Promise<void> {
     const launched = journalThread(threadId, shell.worktreePath);
 
     if (shell.runCount === 0) {
-      copyReadOnly(confined.dir, shell.worktreePath);
+      try {
+        copyReadOnly({ dir: confined.dir, copy: shell.worktreePath });
+      } catch (error) {
+        throw new JudgeCopyFailed(`teamai could not copy ${confined.dir} into the judge thread's folder ${shell.worktreePath}, so the judge did not start: ${error instanceof Error ? error.message : String(error)}`);
+      }
+
       await s.t3.send(threadId, judgeMessage(opened, request.lease, confined, shell.worktreePath), `${request.op}:brief`);
     }
 
@@ -686,7 +694,9 @@ export function serve(options: ServeOptions): Promise<void> {
       const tooNarrow = error instanceof T3Error && error.refusal?.code === 'runtime_mode_escalation_denied' ? error.refusal.message : undefined;
 
       refuse({
-        op: request.op, state: 'failed', failure: tooNarrow === undefined
+        op: request.op, state: 'failed', failure: error instanceof JudgeCopyFailed
+          ? { code: 'judge_copy_failed', message: error.message }
+          : tooNarrow === undefined
           ? { code: 't3_launch_failed', message: `T3 Code did not launch the step's thread: ${error instanceof Error ? error.message : String(error)}` }
           : {
             code: 'sign_in_too_narrow',
