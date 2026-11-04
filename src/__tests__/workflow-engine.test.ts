@@ -6109,3 +6109,27 @@ steps:
     expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'ship', status: 'failed', failure: { code: 'hitl_required' } }] });
   });
 });
+
+describe('an interactive step in a run whose only driver has several runtimes, none of which can ask', () => {
+  const REVIEW = graph(`  - id: review
+    workspace: new
+    interactive: true
+    tool: claude
+    prompt: Review the repository with a person.
+`);
+  const base = { commit: 'b'.repeat(40) };
+  const local: DriverCan = { workspace: ['read-only', 'new', 'continue'], tools: ['claude'], hitl: false };
+  const toy: DriverCan = { workspace: [], tools: ['claude'], hitl: false };
+  const alone = { driver: 'mixed', offers: [{ runtime: 'local', can: local }, { runtime: 'toy', can: toy }] } satisfies SoleDriver;
+
+  it('holds it for a person on each runtime, also on the one that lacks its workspace, so the driver can hand it to one', async () => {
+    const { config, runId } = await startBuild(REVIEW);
+
+    const onLocal = await leaseNext(config, runId, driverA, { can: local, alone, base });
+    const onToy = await leaseNext(config, runId, driverA, { can: toy, alone, base });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'pending' }] });
+    expect(onLocal).toMatchObject({ data: { wait: { held: [{ step: 'review', missing: ['hitl'] }] } } });
+    expect(onToy).toMatchObject({ data: { wait: { held: [{ step: 'review', missing: ['workspace.new', 'hitl'] }] } } });
+  });
+});
