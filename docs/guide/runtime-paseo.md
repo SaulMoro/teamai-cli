@@ -267,6 +267,7 @@ A runtime killed mid-step cannot archive; the step fails `runtime_lost`, and its
 | Code | When |
 | --- | --- |
 | `client_missing` | No Paseo client was found: no `paseo` on `PATH`, or `PASEO_CLIENT_PATH` names no `@getpaseo/client` package. Install Paseo, or set `PASEO_CLIENT_PATH`. |
+| `client_version` | The Paseo client found is older than 0.14.0. Update Paseo, or set `PASEO_CLIENT_PATH` to a newer `@getpaseo/client` package. |
 | `daemon_unreachable` | No daemon answers at `url`. Start it with `paseo start`. |
 | `daemon_version` | The daemon is older than 0.14.0. Update Paseo and restart it. |
 | `tool_unavailable` | The daemon has none of `claude`, `codex`, `opencode` in its default mode. A step whose tool the daemon lacks runs on the next runtime. |
