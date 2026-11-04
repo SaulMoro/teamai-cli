@@ -11,7 +11,7 @@ import { z } from 'zod';
 
 import { ImportLearnings, type Candidate, type LearningsImport } from './import-local.js';
 import { buildDualContext } from './iwiki-dual.js';
-import { RUN_DIR_ENV } from './launch-context.js';
+import { RUN_DIR_ENV } from '@teamai/runtime-protocol';
 import { IWikiClient } from './utils/iwiki-client.js';
 import type { IWikiDocument, IWikiPage } from './utils/iwiki-client.js';
 import { log, spinner } from './utils/logger.js';

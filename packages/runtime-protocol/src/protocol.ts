@@ -38,6 +38,12 @@ import { z } from 'zod';
 
 export const RUNTIME_PROTOCOL = 1;
 
+/**
+ * The variable every process of a step gets, on the host and on a runtime's place: the run's scratch directory, which
+ * `PlaceView.runDir` names, which its steps share, sub-workflows included, and which teamai removes when the run ends.
+ */
+export const RUN_DIR_ENV = 'TEAMAI_RUN_DIR';
+
 /** Whether a person is there for the run: `attended` where one launched it, `unattended` in CI or a cloud agent. */
 export const RUNTIME_MODES = ['attended', 'unattended'] as const;
 
@@ -66,7 +72,7 @@ export type RuntimeOptions = z.infer<typeof RuntimeOptionsSchema>;
 
 /**
  * What a runtime may touch for one attempt: the worktree read-write at its host path, the git paths read-only, the
- * attempt's result directory read-write, the run's scratch directory read-write, which `TEAMAI_RUN_DIR` names in what
+ * attempt's result directory read-write, the run's scratch directory read-write, which `RUN_DIR_ENV` names in what
  * runs there, and the attempt's tool home under the variable its tool reads.
  */
 export const PlaceViewSchema = z.object({

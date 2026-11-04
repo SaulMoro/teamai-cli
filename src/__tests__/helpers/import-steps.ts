@@ -5,7 +5,7 @@ import fs from 'fs-extra';
 import { z } from 'zod';
 
 import { ImportFromRepo } from '../../import-from-repo.js';
-import { RUN_DIR_ENV } from '../../launch-context.js';
+import { RUN_DIR_ENV } from '@teamai/runtime-protocol';
 import { log } from '../../utils/logger.js';
 import type { ShortcutEnd, ShortcutRun } from '../../workflow-commands.js';
 

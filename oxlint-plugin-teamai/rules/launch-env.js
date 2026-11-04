@@ -1,22 +1,37 @@
 import { defineRule } from '@oxlint/plugins';
 import { inProductionSource, isOneOf, stringLiteralValue } from '../utils.js';
 
-const VARIABLES = new Set(['TEAMAI_MODE', 'TEAMAI_LAUNCHED_BY', 'TEAMAI_WORKFLOW_ATTEMPT']);
+const LAUNCH_CONTEXT = 'Import RUN_MODE_ENV, LAUNCHED_BY_ENV or ATTEMPT_ENV from launch-context.ts instead of repeating launch variable names.';
+const RUNTIME_PROTOCOL = 'Import RUN_DIR_ENV from @teamai/runtime-protocol instead of repeating launch variable names.';
+
+/** Each launch variable, with the one file that spells it and what the others import instead. */
+const OWNERS = new Map([
+  ['TEAMAI_MODE', { file: 'src/launch-context.ts', message: LAUNCH_CONTEXT }],
+  ['TEAMAI_LAUNCHED_BY', { file: 'src/launch-context.ts', message: LAUNCH_CONTEXT }],
+  ['TEAMAI_WORKFLOW_ATTEMPT', { file: 'src/launch-context.ts', message: LAUNCH_CONTEXT }],
+  ['TEAMAI_RUN_DIR', { file: 'packages/runtime-protocol/src/protocol.ts', message: RUNTIME_PROTOCOL }],
+]);
 
 export default defineRule({
-  meta: { type: 'problem', docs: { description: 'Keep launch environment variable spellings in launch-context.' } },
+  meta: { type: 'problem', docs: { description: 'Keep launch environment variable spellings in the module that owns each.' } },
   create(context) {
-    if (!inProductionSource(context) || isOneOf(context, ['src/launch-context.ts'])) return {};
-    const message = 'Import RUN_MODE_ENV, LAUNCHED_BY_ENV or ATTEMPT_ENV from launch-context.ts instead of repeating launch variable names.';
+    if (!inProductionSource(context)) return {};
+
+    /** @param {import('@oxlint/plugins').ESTree.Node} node @param {string} value */
+    const check = (node, value) => {
+      const owner = OWNERS.get(value);
+
+      if (owner && !isOneOf(context, [owner.file])) context.report({ node, message: owner.message });
+    };
 
     return {
       Literal(node) {
         const value = stringLiteralValue(node);
 
-        if (value !== undefined && VARIABLES.has(value)) context.report({ node, message });
+        if (value !== undefined) check(node, value);
       },
       TemplateLiteral(node) {
-        if (node.expressions.length === 0 && VARIABLES.has(node.quasis[0]?.value.raw ?? '')) context.report({ node, message });
+        if (node.expressions.length === 0) check(node, node.quasis[0]?.value.raw ?? '');
       },
       MemberExpression(node) {
         if (
@@ -27,9 +42,8 @@ export default defineRule({
           node.object.object.name === 'process' &&
           node.object.property.type === 'Identifier' &&
           node.object.property.name === 'env' &&
-          node.property.type === 'Identifier' &&
-          VARIABLES.has(node.property.name)
-        ) context.report({ node: node.property, message });
+          node.property.type === 'Identifier'
+        ) check(node.property, node.property.name);
       },
     };
   },
