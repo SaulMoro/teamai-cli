@@ -51,7 +51,8 @@ const ScoreRunOutputsSchema = z.object({
   labels: z.array(z.object({
     /** The group plan gave the item: its scorers joined by `,`. Read only for a group that failed; any other shape is none. */
     item: z.object({ scorers: z.string().optional() }).optional().catch(undefined),
-    outputs: z.object({ labels: z.array(ScoredLabelSchema).nullish(), written: z.array(z.string()).nullish() }).default({}),
+    /** `judged`: how the group's judge ended, which an older teamai-score does not give. */
+    outputs: z.object({ labels: z.array(ScoredLabelSchema).nullish(), written: z.array(z.string()).nullish(), judged: z.string().nullish().catch(undefined) }).default({}),
   })).default([]),
 }).default({ labels: [] });
 
@@ -81,10 +82,12 @@ function labelsOf(outputs: Record<string, JsonValue> | undefined): ScoredLabels 
       continue;
     }
 
-    // Its steps failed before it labelled, as an evidence step that found no session does: each scorer got no label.
+    // Its steps failed before it labelled, as an evidence step that found no session does, or its judge was cancelled:
+    // each scorer got no label.
     // A group that names no scorers would lose them silently, so the outputs are not ones this teamai reads.
     if (item?.scorers === undefined) return { ok: false, reason: `outputs.labels.${index}.item.scorers: a group that labelled nothing names no scorers` };
-    labels.push(...item.scorers.split(',').filter((scorer) => scorer !== '').map((scorer) => ({ scorer, ...UNWRITTEN })));
+    const none = group.judged === 'cancelled' ? { label: '', code: 'cancelled' } : UNWRITTEN;
+    labels.push(...item.scorers.split(',').filter((scorer) => scorer !== '').map((scorer) => ({ scorer, ...none })));
   }
 
   return { ok: true, labels };
