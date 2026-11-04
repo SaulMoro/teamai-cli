@@ -1308,8 +1308,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // A run goes to a person only when no runtime of the driver asks one.
   let handoff: PersonHandoff | undefined = slots.some((slot) => slot.can.hitl === true) ? undefined : { kind: 'offers' };
 
-  // A runtime's credential values are masked like the team's secrets, whatever their names look like.
-  const maskedCredentials = Object.fromEntries(slots.flatMap((slot) => Object.entries(credentialSecrets(slot.use, slot.credentials))));
+  // A runtime's credential values are masked like the team's secrets, whatever their names look like, each entry's own
+  // even when two entries of one runtime give a credential the same name.
+  const maskedCredentials: Record<string, string> = {};
+
+  for (const slot of slots) rememberSecrets(maskedCredentials, credentialSecrets(slot.use, slot.credentials));
   const maskedValues = async (): Promise<Record<string, string>> => ({ ...env?.secrets ?? await knownSecrets(config), ...maskedCredentials });
 
   const report = async (body: ReportBody, lease: Lease, changed?: readonly string[]): Promise<WorkflowEnvelope | undefined> => {
