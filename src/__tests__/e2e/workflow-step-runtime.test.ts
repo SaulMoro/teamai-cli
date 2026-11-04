@@ -120,6 +120,11 @@ steps:
     prompt: Review the repository without changing it.
     output:
       ok: boolean`,
+      tworundirs: `  - id: first
+    command: node -e "require('fs').appendFileSync(process.env.RUNS_FILE, process.env.TEAMAI_RUN_DIR + '\\n')"
+  - id: second
+    needs: [first]
+    command: node -e "require('fs').appendFileSync(process.env.RUNS_FILE, process.env.TEAMAI_RUN_DIR + '\\n')"`,
       buddyprompt: `  - id: review
     tool: codebuddy
     prompt: Review the repository without changing it.
@@ -266,6 +271,22 @@ Judge the review.
     const [attempt] = fs.readdirSync(attemptsOf(runId));
     expect(toyOpens(state)).toHaveLength(1);
     expect(JSON.parse(fs.readFileSync(path.join(attemptsOf(runId), String(attempt), 'runtime.json'), 'utf8'))).toMatchObject({ runtime: 'toy', driver: 'toyrecorded', phase: 'closed' });
+  });
+
+  it('spells the run directory one way in every process of a run, whatever spelling of HOME each one has', async () => {
+    const runs = path.join(sandbox, 'runs-rundirs');
+    writeDefinition('toyrundirs', { state: path.join(sandbox, 'toy-state-rundirs'), die_at: 'exec-exited' });
+    // The start sees the member's home through a link, as a shell that keeps /tmp does on macOS; the resume does not.
+    const linkedHome = path.join(sandbox, 'home-link');
+    fs.symlinkSync(os.homedir(), linkedHome);
+
+    const killed = await runCLI(['workflow', 'start', 'tworundirs', '--driver', 'toyrundirs'], repo, { ...env(), RUNS_FILE: runs, HOME: linkedHome });
+    expect(killed.signal, killed.stderr).toBe('SIGKILL');
+    const resumed = await runCLI(['workflow', 'resume', startedRun(killed)], repo, { ...env(), RUNS_FILE: runs });
+
+    expect(envelope(resumed), resumed.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const [started, again] = fs.readFileSync(runs, 'utf8').trim().split('\n');
+    expect(again).toBe(started);
   });
 
   it('refuses to resume a run whose recorded definition no longer resolves, naming it and how to go on', async () => {
