@@ -458,6 +458,9 @@ describe('a prompt attempt in a container', () => {
     expect(await init(second, { provider: 'docker', image: IMAGE })).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable' } });
     second.send({ type: 'cancel', op });
     expect(await second.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'sandbox_unavailable' } });
+    // teamai resends the exec after a restart: it is answered from the journal, and the place stays.
+    second.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'touch started; sleep 30'] });
+    expect(await second.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'sandbox_unavailable' } });
     second.send({ type: 'reattach', handle: HANDLE });
     expect(await second.next((message) => message.event === 'alive' || message.event === 'gone', 5_000)).toMatchObject({ event: 'alive', handle: HANDLE, ops: [{ op, state: 'failed' }] });
     second.send({ type: 'reattach', handle: 'teamai-r0123abcd-a99999999' });
@@ -912,6 +915,29 @@ console.log(JSON.stringify({ type: 'result', is_error: false, session_id: 'claud
     expect(await judge(connection, { credentials, ms: 10_000 })).toMatchObject({ event: 'finished', result: { output: { answer: { label: 'good', score: 1, passed: true } } } });
     connection.send({ type: 'close', handle: HANDLE });
     expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed')).toEqual({ event: 'closed', handle: HANDLE });
+  });
+
+  it("removes a judge's container at close after a restarted runtime that offers no judge refused its resent prompt", async () => {
+    const credentials = { ANTHROPIC_API_KEY: 'judge-key-1' };
+    const lease = { model: { name: '--hang' } };
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    await openJudge(first, credentials);
+    const op = newOp();
+    judge(first, { credentials, op, lease }).catch(() => {});
+    await first.next((message) => message.op === op && message.event === 'accepted');
+    await vi.waitFor(() => { expect(engine.calls().some(([, command]) => command === 'exec')).toBe(true); }, { timeout: 10_000 });
+    first.child.kill('SIGKILL');
+    await first.end();
+    // The definition now gives this runtime no judge key, so it offers no judge.
+    const second = start();
+    expect(await init(second, { provider: 'docker', image: IMAGE }, 'unattended', { env: [], logins: [] })).not.toHaveProperty('confinedPrompt');
+
+    expect(await judge(second, { credentials, op, lease })).toMatchObject({ op, event: 'failed' });
+    second.send({ type: 'close', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(engine.containers()).toEqual([]);
+    expect(engine.networks()).toEqual([]);
   });
 
   it("gives a judge only its own tool's credentials", async () => {
