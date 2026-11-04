@@ -335,7 +335,8 @@ export function serve(options: ServeOptions): Promise<void> {
       if (state?.cancelled) return { op: request.op, state: 'cancelled' };
 
       if (!TERMINAL.has(waited.status)) {
-        if (waited.status === 'waiting' && s.mode === 'unattended') {
+        // T3 keeps a run that asks for an approval running, with the request pending; nobody answers it unattended.
+        if (s.mode === 'unattended' && (waited.status === 'waiting' || await s.t3.pendingRequests(thread.threadId) > 0)) {
           await s.t3.stop(thread.threadId).catch(() => {});
 
           return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} asked for an approval, and nobody is there to give it in an unattended run.` } };
@@ -458,7 +459,13 @@ export function serve(options: ServeOptions): Promise<void> {
     }
 
     if (state.cancelled) await s.t3.stop(thread.threadId).catch(() => {});
-    end(await follow(s, opened, request, thread));
+
+    try {
+      end(await follow(s, opened, request, thread));
+    } catch (error) {
+      // The thread may still run in T3, where the person finds it by the link.
+      end({ op: request.op, state: 'failed', failure: { code: 't3_unavailable', message: `Lost track of the T3 thread ${thread.link}: ${error instanceof Error ? error.message : String(error)}` } });
+    }
   };
 
   const cancel = async (op: OpId): Promise<void> => {

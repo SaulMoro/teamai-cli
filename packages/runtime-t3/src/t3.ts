@@ -71,6 +71,8 @@ export interface T3 {
   launch(launch: Launch): Promise<z.infer<typeof LaunchedSchema>>;
   /** Waits up to `timeoutMs` for the thread's latest run, and the work it delegated, to settle. */
   wait(threadId: string, timeoutMs: number): Promise<Waited>;
+  /** How many requests the thread's run holds for a person: tool approvals and questions. */
+  pendingRequests(threadId: string): Promise<number>;
   /** Stops the thread as its Stop button does: its running turn and every task it delegated. */
   stop(threadId: string): Promise<void>;
   settle(threadId: string): Promise<void>;
@@ -134,6 +136,7 @@ function t3Over(client: Client): T3 {
       clientRequestId: launch.clientRequestId,
     }, LaunchedSchema),
     wait: (threadId, timeoutMs) => call('t3_thread_wait', { threadId, timeoutMs, untilDelegatedWorkSettled: true }, WaitedSchema, timeoutMs + 30_000),
+    pendingRequests: async (threadId) => (await call('t3_thread_read', { threadId, limit: 1, view: 'messages' }, z.object({ thread: z.object({ pendingRequestCount: z.number().int().nonnegative() }) }))).thread.pendingRequestCount,
     stop: async (threadId) => { await call('t3_thread_interrupt', { threadId, stop: true, reason: 'teamai cancelled the workflow step' }, z.object({ threadId: z.string() })); },
     settle: async (threadId) => { await call('t3_thread_organize', { threadId, action: 'settle' }, z.object({}).loose()); },
     close: () => client.close(),
