@@ -1,18 +1,18 @@
-import { createPaseoApi, type PaseoAgent, type PaseoApi } from '@getpaseo/client';
-import { DaemonClient } from '@getpaseo/client/internal/daemon-client';
+import type { PaseoAgent, PaseoApi } from '@getpaseo/client';
+import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import type { WebSocketFactory } from '@getpaseo/client/internal/daemon-client-transport-types';
-import { buildAgentDeepLink } from '@getpaseo/protocol/agent-deep-link';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
-import WebSocket from 'ws';
+import type { PaseoClient } from './client.js';
 import type { AgentCreate } from './journal.js';
 
 // ─── The Paseo daemon ────────────────────────────────────
 //
-//  One connection to a Paseo daemon over its WebSocket protocol, through @getpaseo/client. Cancel and wait live on the
-//  client's internal driver, which is why the client is pinned to the version this runtime was tested against.
+//  One connection to a Paseo daemon over its WebSocket protocol, through the @getpaseo/client the member's Paseo
+//  installed (client.ts). Cancel and wait live on the client's internal driver, which is why the daemon must run the
+//  version this runtime was tested against or later.
 //
 
-/** The client version this runtime is built and tested against; an older daemon lacks what it relies on. */
+/** The client version this runtime is tested against; an older daemon lacks what it relies on. */
 export const PINNED_CLIENT = '0.14.0';
 
 /** What this runtime needs of the daemon: agent creates with caller-chosen ids that a repeated key answers. */
@@ -75,8 +75,8 @@ export interface Daemon {
   close(): Promise<void>;
 }
 
-/** A WebSocket from `ws`, as the client binds one: Node 20 has no WebSocket of its own. */
-const nodeWebSocket: WebSocketFactory = (target, options) => {
+/** A WebSocket from the client's `ws`, as the client binds one: Node 20 has no WebSocket of its own. */
+const nodeWebSocket = (WebSocket: PaseoClient['WebSocket']): WebSocketFactory => (target, options) => {
   const socket = new WebSocket(target, options?.protocols, { headers: options?.headers });
   socket.binaryType = 'arraybuffer';
 
@@ -95,13 +95,13 @@ const nodeWebSocket: WebSocketFactory = (target, options) => {
   };
 };
 
-/** Connects to the daemon at `url` and checks it runs what this runtime needs, or says why it cannot be used. */
-export async function connect(url: string): Promise<Daemon | RuntimeFailure> {
-  const client = new DaemonClient({
+/** Connects to the daemon at `url` through the installed `paseo` client and checks it runs what this runtime needs, or says why it cannot be used. */
+export async function connect(url: string, paseo: PaseoClient): Promise<Daemon | RuntimeFailure> {
+  const client: DaemonClient = new paseo.DaemonClient({
     url,
     clientId: 'teamai-runtime-paseo',
     clientType: 'cli',
-    webSocketFactory: nodeWebSocket,
+    webSocketFactory: nodeWebSocket(paseo.WebSocket),
     // A daemon restart mid-step drops the connection; the client reconnects and a pending wait is asked again.
     reconnect: { enabled: true, baseDelayMs: 250, maxDelayMs: 2000 },
     suppressSendErrors: true,
@@ -136,7 +136,7 @@ export async function connect(url: string): Promise<Daemon | RuntimeFailure> {
     return { code: 'daemon_version', message: `The Paseo daemon at ${url} runs version ${version}${lacks}; teamai-runtime-paseo needs Paseo ${PINNED_CLIENT} or later. Update Paseo, then restart its daemon.` };
   }
 
-  const api: PaseoApi = createPaseoApi(client);
+  const api: PaseoApi = paseo.createPaseoApi(client);
   const serverId = info.serverId;
 
   return {
@@ -183,7 +183,7 @@ export async function connect(url: string): Promise<Daemon | RuntimeFailure> {
 
       if (error) throw new Error(error);
     },
-    link: (agentId) => buildAgentDeepLink({ serverId, agentId }),
+    link: (agentId) => paseo.buildAgentDeepLink({ serverId, agentId }),
     async close() {
       await api.dispose().catch(() => {});
       await client.close().catch(() => {});

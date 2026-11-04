@@ -63,7 +63,8 @@ export async function paseoOnFakeDaemon(): Promise<{ url: string; args: (state: 
 
   return {
     url,
-    args: (home) => [`HOME=${path.join(home, 'home')}`, process.execPath, runtime],
+    // The runtime loads the client the member's Paseo installed; here, the one installed for the tests.
+    args: (home) => [`HOME=${path.join(home, 'home')}`, `PASEO_CLIENT_PATH=${path.join(ROOT, 'node_modules', '@getpaseo', 'client')}`, process.execPath, runtime],
     behave: (behaviour) => fs.writeFileSync(path.join(state, 'behaviour.json'), JSON.stringify(behaviour)),
   };
 }
