@@ -1281,8 +1281,10 @@ schemaVersion: v1alpha1
 name: sandboxed
 tool: claude
 runtimes:
-  - use: sbx              # 接下它能接的每个步骤
+  - use: sandbox          # 接下它能接的每个步骤
     options:
+      provider: docker
+      image: ghcr.io/acme/agent:1
       max_parallel: 2
   - use: local            # 接下其余的，例如交互步骤或必须回答的审批
 ```
@@ -1290,7 +1292,7 @@ runtimes:
 没有任何单个运行时能接下的步骤会失败为 `requirement_unmet`，消息列出每个运行时缺什么：
 
 ```text
-Step "review" needs what no single runtime of driver "sandboxed" offers: runtime sbx lacks tools; runtime local lacks isolation. Give one runtime of the definition all of it, or change what the step requires.
+Step "review" needs what no single runtime of driver "sandboxed" offers: runtime sandbox lacks tools; runtime local lacks isolation. Give one runtime of the definition all of it, or change what the step requires.
 ```
 
 步骤要求严格隔离、而定义里没有运行时提供时，`workflow start` 会直接拒绝，不会创建运行。每个运行时都因为这台机器的原因暂缓的步骤（例如你的 `workflows.allow` 不允许的网络）保持待运行。这期间，等你回答的审批或选择仍会照常提问。没有其他步骤在运行、也没有等待回答的问题时，运行以 `busy` 停下并给出原因，仪表盘的运行详情会写明是哪个运行时暂缓了它、为什么。
