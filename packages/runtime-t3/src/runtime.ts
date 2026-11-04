@@ -9,7 +9,7 @@ import {
 } from '@teamai/runtime-protocol';
 import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import { z } from 'zod';
-import type { Journal, PlaceRecord, ThreadRecord } from './journal.js';
+import type { Journal, LaunchRecord, PlaceRecord, ThreadRecord } from './journal.js';
 import { DRIVER_NAMES, DRIVERS, driverOf, sessionSince, toolOf, type ToolId } from './sessions.js';
 import { STEP_MODE_LABELS, T3Error, type Environment, type Launch, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
 
@@ -465,7 +465,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
     // A confined prompt's place: its thread runs in a scratch folder of its own, in no project.
     if (!view) {
-      const confined: PlaceRecord = { kind: 'confined', handle, run: request.run, attempt: request.attempt, ops: {}, threads: {} };
+      const confined: PlaceRecord = { kind: 'confined', handle, run: request.run, attempt: request.attempt, ops: {}, threads: {}, launches: {} };
       journal.write(confined);
       write({ op: request.op, event: 'ready', display: placeDisplay(confined, session.environment) });
 
@@ -491,7 +491,7 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    const opened: PlaceRecord = { kind: 'worktree', handle, run: request.run, attempt: request.attempt, projectId: project.id, projectTitle: project.title, ops: {}, threads: {} };
+    const opened: PlaceRecord = { kind: 'worktree', handle, run: request.run, attempt: request.attempt, projectId: project.id, projectTitle: project.title, ops: {}, threads: {}, launches: {} };
     journal.write(opened);
     write({ op: request.op, event: 'ready', display: placeDisplay(opened, session.environment) });
   };
@@ -651,7 +651,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
     /**
      * Ends an op this process launched no thread for. A thread the journal holds for it, which another process may have
-     * launched, stays the runtime's to stop.
+     * launched, or a launch T3 never answered, stays the runtime's to stop.
      */
     const refuse = (state: OpState): void => {
       accept(undefined);
@@ -717,14 +717,22 @@ export function serve(options: ServeOptions): Promise<void> {
 
     try {
       const title = `${lease.step} · teamai ${opened.run}`;
-      const launchedAt = thread?.launchedAt ?? Date.now();
+      const launchedAt = thread?.launchedAt ?? opened.launches[request.op]?.launchedAt ?? Date.now();
       const newThread: NewThread = { title, modelSelection: selection.selection, runtimeMode: s.stepMode, clientRequestId: request.op };
 
-      /** Journals the op running on `threadId`, with the judge's copy once its folder is known. */
+      // T3 may launch the thread and still fail to answer, so the launch is journaled before it is sent.
+      if (!thread) {
+        const launch: LaunchRecord = { title, modelSelection: selection.selection, runtimeMode: s.stepMode, tool: lease.tool, launchedAt, ...(work.kind === 'step' && { worktreePath: request.cwd }) };
+        const now = place(request.handle) ?? opened;
+        journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, launches: { ...now.launches, [request.op]: launch } });
+      }
+
+      /** Journals the op running on `threadId`, with the judge's copy once its folder is known, in place of its launch. */
       const journalThread = (threadId: string, copy: string | undefined): ThreadRecord => {
         const launched: ThreadRecord = { threadId, title, model: selection.selection.model, tool: lease.tool, launchedAt, ...(copy && { copy }) };
         const now = place(request.handle) ?? opened;
-        journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, threads: { ...now.threads, [request.op]: launched } });
+        const { [request.op]: _answered, ...launches } = now.launches;
+        journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, threads: { ...now.threads, [request.op]: launched }, launches });
         state.thread = threadId;
 
         return launched;
@@ -764,17 +772,57 @@ export function serve(options: ServeOptions): Promise<void> {
     }
   };
 
+  /**
+   * Finds the thread of a launch T3 never answered by repeating it with the same clientRequestId and no message: T3
+   * answers a launch it accepted with that thread and starts nothing more, and launches an idle thread otherwise. A
+   * launch T3 refuses again launched nothing. Answers the place as journaled then; throws while T3 does not answer.
+   */
+  const resolveLaunch = async (s: Session, known: PlaceRecord, op: OpId, launch: LaunchRecord): Promise<PlaceRecord> => {
+    const newThread: NewThread = { title: launch.title, modelSelection: launch.modelSelection, runtimeMode: launch.runtimeMode, clientRequestId: op };
+    let threadId: string | undefined;
+
+    try {
+      threadId = (known.kind === 'worktree' && launch.worktreePath !== undefined
+        ? await s.t3.launch({ ...newThread, projectId: known.projectId, worktreePath: launch.worktreePath })
+        : await s.t3.launchScratch(newThread)).threadId;
+    } catch (error) {
+      // A refusal in T3's own words: T3 answers a launch it accepted before any check a new launch needs.
+      if (!(error instanceof T3Error && error.refusal !== undefined)) throw error;
+    }
+
+    const now = place(known.handle) ?? known;
+    const { [op]: _resolved, ...launches } = now.launches;
+    const thread: ThreadRecord | undefined = threadId === undefined ? undefined : { threadId, title: launch.title, model: launch.modelSelection.model, tool: launch.tool, launchedAt: launch.launchedAt };
+    const resolved: PlaceRecord = { ...now, launches, ...(thread && { threads: { ...now.threads, [op]: thread } }) };
+    journal.write(resolved);
+
+    return resolved;
+  };
+
   const cancel = async (op: OpId): Promise<void> => {
     const state = running.get(op);
 
     if (!state) {
       const handle = handleOf.get(op);
-      const known = handle ? place(handle) : journal.placeOf(op);
-      const left = known?.threads[op];
+      let known = handle ? place(handle) : journal.placeOf(op);
 
-      // A runtime before this one launched the thread and died; teamai cancels before it reattaches.
-      if (known && left && known.ops[op]?.state === 'running' && session) {
-        if (await whyNotStopped(session.t3, left.threadId) !== undefined) return;
+      // A runtime before this one launched the thread and died, maybe before T3 answered the launch; teamai cancels
+      // before it reattaches.
+      if (known && known.ops[op]?.state === 'running' && session) {
+        const s = session;
+        const launch = known.launches[op];
+
+        try {
+          if (launch) known = await resolveLaunch(s, known, op, launch);
+        } catch (error) {
+          process.stderr.write(`Could not look up the T3 thread launched for ${op}: ${error instanceof Error ? error.message : String(error)}\n`);
+
+          return;
+        }
+
+        const left = known.threads[op];
+
+        if (left && await whyNotStopped(s.t3, left.threadId) !== undefined) return;
         record(known.handle, { op, state: 'cancelled' }, { threadEnded: true });
         answerEnded(op, { op, state: 'cancelled' });
 
@@ -829,15 +877,32 @@ export function serve(options: ServeOptions): Promise<void> {
   };
 
   /**
-   * Ends the place. Each thread the runtime has not seen stop is stopped first; while one cannot be, the place stays,
-   * with a judge's copy, and close fails.
+   * Ends the place. Each launch T3 never answered is looked up, and each thread the runtime has not seen stop is stopped
+   * first; while one cannot be, the place stays, with a judge's copy, and close fails.
    */
   const close = async (handle: string): Promise<void> => {
-    const known = place(handle);
+    let known = place(handle);
     const s = session;
     const failClose = (failure: RuntimeFailure): void => write({ event: 'close_failed', handle, failure });
 
     if (known) {
+      // Every launch and thread is journaled with its op.
+      for (const { op } of Object.values(known.ops)) {
+        const launch = known.launches[op];
+
+        if (!launch) continue;
+        const lookUp = `teamai launched the T3 thread "${launch.title}" and T3 Code never answered, so it may run`;
+
+        // init could not reach T3 Code, so nothing here can find the thread.
+        if (!s) return failClose({ code: 't3_unavailable', message: `${lookUp}, and teamai could not reach T3 Code to look for it. Open T3 Code, then run teamai workflow cancel ${known.run} again.` });
+
+        try {
+          known = await resolveLaunch(s, known, op, launch);
+        } catch (error) {
+          return failClose({ code: 't3_unavailable', message: `${lookUp}, and T3 Code did not answer when teamai looked for it: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. Run teamai workflow cancel ${known.run} again once T3 Code answers.` });
+        }
+      }
+
       for (const { op } of Object.values(known.ops)) {
         const thread = known.threads[op];
 

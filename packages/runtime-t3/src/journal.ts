@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { OpStateSchema, RuntimeHandleSchema } from '@teamai/runtime-protocol';
 import { z } from 'zod';
+import { STEP_MODES } from './t3.js';
 
 // ─── What the runtime keeps of each opened place, across its own restarts ───
 //
@@ -32,6 +33,22 @@ const ThreadSchema = z.object({
 
 export type ThreadRecord = z.infer<typeof ThreadSchema>;
 
+/**
+ * A launch T3 has not answered yet, journaled before it is sent: the thread it may have launched is found again by
+ * repeating it, since T3 answers a repeated clientRequestId (the op) with the thread it launched for it.
+ */
+const LaunchSchema = z.object({
+  title: z.string(),
+  modelSelection: z.object({ instanceId: z.string(), model: z.string(), options: z.array(z.object({ id: z.string(), value: z.string() })).optional() }),
+  runtimeMode: z.enum(STEP_MODES),
+  tool: z.string(),
+  launchedAt: z.number(),
+  /** A step's: the worktree its thread runs on. A judge's thread runs in a scratch folder of T3's own. */
+  worktreePath: z.string().optional(),
+});
+
+export type LaunchRecord = z.infer<typeof LaunchSchema>;
+
 const placeFields = {
   handle: RuntimeHandleSchema,
   run: z.string(),
@@ -40,6 +57,8 @@ const placeFields = {
   ops: z.record(z.string(), OpStateSchema),
   /** The thread of each prompt that launched one. */
   threads: z.record(z.string(), ThreadSchema),
+  /** The launch of each prompt T3 has not answered yet. */
+  launches: z.record(z.string(), LaunchSchema),
 };
 
 /** An attempt's worktree in a T3 project, or a confined prompt's place, which has no view of the host. */
