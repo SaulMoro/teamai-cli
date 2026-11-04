@@ -102,7 +102,7 @@ export function localStepRuntime(can: DriverCan = {}): StepRuntime {
     exec,
 
     async prompt() {
-      return { kind: 'failed', failure: { code: 'prompt_unsupported', message: 'The local runtime launches a prompt\'s tool as an exec of its argv, never through prompt.' } };
+      return { kind: 'failed', failure: { code: 'runtime_protocol', message: 'The local runtime launches a prompt\'s tool as an exec of its argv, never through prompt.' } };
     },
 
     async cancel(op) {

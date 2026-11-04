@@ -181,13 +181,13 @@ export type RuntimeRequest = z.infer<typeof RuntimeRequestSchema>;
 export const PROMPT_FAILURE_CODES = ['model_unavailable', 'tool_unavailable', 'agent_unavailable', 'tool_failed'] as const;
 
 /** The fields of a finished prompt: the tool's session, the result the agent wrote, and the tokens it billed. */
-const FinishedShape = { session: PromptSessionSchema, result: PromptResultSchema, usage: PromptUsageSchema.optional() };
+const finishedPrompt = { session: PromptSessionSchema, result: PromptResultSchema, usage: PromptUsageSchema.optional() };
 
 /** What a runtime retains of one operation of a handle, which `reattach` reports. */
 export const OpStateSchema = z.discriminatedUnion('state', [
   z.object({ op: OpIdSchema, state: z.literal('running') }),
   z.object({ op: OpIdSchema, state: z.literal('exited'), code: z.number().int(), stdout: z.string() }),
-  z.object({ op: OpIdSchema, state: z.literal('finished'), ...FinishedShape }),
+  z.object({ op: OpIdSchema, state: z.literal('finished'), ...finishedPrompt }),
   z.object({ op: OpIdSchema, state: z.literal('cancelled') }),
   z.object({ op: OpIdSchema, state: z.literal('failed'), failure: RuntimeFailureSchema }),
 ]);
@@ -216,7 +216,7 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType, TCan extends z
     z.object({ op: OpIdSchema, event: z.literal('failed'), failure: RuntimeFailureSchema }),
     z.object({ op: OpIdSchema, event: z.literal('output'), stream: z.enum(['stdout', 'stderr']), data: z.string() }),
     z.object({ op: OpIdSchema, event: z.literal('exited'), code: z.number().int(), stdout: z.string() }),
-    z.object({ op: OpIdSchema, event: z.literal('finished'), ...FinishedShape }),
+    z.object({ op: OpIdSchema, event: z.literal('finished'), ...finishedPrompt }),
     z.object({ op: OpIdSchema, event: z.literal('cancelled') }),
   ]);
 
