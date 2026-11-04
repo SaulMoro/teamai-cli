@@ -69,6 +69,12 @@ const IDLE_POLL_MS = 2_000;
  */
 const JUDGE_KEPT: ConfinedKept = { level: 'best-effort', access: 'read' };
 
+/**
+ * The refusals of a repeated launch that prove T3 launched nothing for its clientRequestId: the checks a new launch runs
+ * (the project, the worktree, the provider instance, the mode the sign-in allows), which T3 skips for a launch it accepted.
+ */
+const LAUNCHED_NOTHING: ReadonlySet<string> = new Set(['invalid_request', 'runtime_mode_escalation_denied']);
+
 const TERMINAL: ReadonlySet<string> = new Set<Waited['status']>(['completed', 'interrupted', 'failed', 'cancelled', 'rolled_back']);
 
 /**
@@ -794,7 +800,7 @@ export function serve(options: ServeOptions): Promise<void> {
   /**
    * Finds the thread of a launch T3 never answered by repeating it with the same clientRequestId and no message: T3
    * answers a launch it accepted with that thread and starts nothing more, and launches an idle thread otherwise. A
-   * launch T3 refuses again launched nothing. Answers the place as journaled then; throws while T3 does not answer.
+   * launch a new launch's check refuses launched nothing. Answers the place as journaled then; throws otherwise.
    */
   const resolveLaunch = async (s: Session, known: PlaceRecord, op: OpId, launch: LaunchRecord): Promise<PlaceRecord> => {
     const newThread: NewThread = { title: launch.title, modelSelection: launch.modelSelection, runtimeMode: launch.runtimeMode, clientRequestId: op };
@@ -805,8 +811,9 @@ export function serve(options: ServeOptions): Promise<void> {
         ? await s.t3.launch({ ...newThread, projectId: known.projectId, worktreePath: launch.worktreePath })
         : await s.t3.launchScratch(newThread)).threadId;
     } catch (error) {
-      // A refusal in T3's own words: T3 answers a launch it accepted before any check a new launch needs.
-      if (!(error instanceof T3Error && error.refusal !== undefined)) throw error;
+      // T3 answers a launch it accepted before any check a new launch needs, so only such a check's refusal proves it
+      // launched nothing. Any other answer, such as orchestration_error, may come from the lookup itself.
+      if (!(error instanceof T3Error && error.refusal !== undefined && LAUNCHED_NOTHING.has(error.refusal.code))) throw error;
     }
 
     const now = place(known.handle) ?? known;
@@ -921,7 +928,7 @@ export function serve(options: ServeOptions): Promise<void> {
         try {
           known = await resolveLaunch(s, known, op, launch);
         } catch (error) {
-          return failClose({ code: 't3_unavailable', message: `${lookUp}, and T3 Code did not answer when teamai looked for it: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. Run teamai workflow cancel ${known.run} again once T3 Code answers.` });
+          return failClose({ code: 't3_unavailable', message: `${lookUp}, and T3 Code did not say whether it launched it when teamai looked: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. Run teamai workflow cancel ${known.run} again once T3 Code answers.` });
         }
       }
 
