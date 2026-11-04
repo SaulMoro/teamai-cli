@@ -1527,7 +1527,7 @@ Answer every request, even one you cannot carry out. A `reattach`, `collect` or 
 ← {"event":"failed","handle":"teamai-r7-a1","failure":{"code":"journal_unreadable","message":"/var/lib/acme-runtime/r7.json is not valid JSON. Fix or remove it, then run teamai workflow cancel r7 again."}}
 ```
 
-An `{"event":"error"}` line names no request, so teamai fails every `init`, `reattach`, `collect` and `close` still waiting on your runtime with `runtime_unanswered`. It does the same to an `init`, a `reattach` or a `close` that gets no reply within 15 s. The attempt keeps its place, its records and its login:
+An `{"event":"error"}` line names no request, so teamai fails every request still waiting on your runtime with `runtime_unanswered`: an `open` fails, and an `exec` or `prompt` in flight ends `runtime_lost`, since what it started may still run. It does the same to an `init`, a `reattach` or a `close` that gets no reply within 15 s, and to an `open`, `exec` or `prompt` you do not answer within 15 s, so send `accepted` before any slow work, such as pulling an image or starting an agent. A `cancel` needs no reply: teamai reads its outcome on `reattach`. The attempt keeps its place, its records and its login:
 
 ```text
 Step runtime "acme" could not close the place of attempt a1, so what ran there may still run (runtime_unanswered): Step runtime "acme" did not answer close of teamai-r7-a1 within 15 s.

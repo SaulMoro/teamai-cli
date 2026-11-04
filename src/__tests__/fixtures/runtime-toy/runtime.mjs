@@ -20,8 +20,8 @@
 // read: those under the prompt's directory, which is all it reads. `path` names a directory of its own tools, first on
 // the PATH of each exec.
 //
-// `answer` makes it answer a `reattach`, `collect` or `close` otherwise, by request type: `failed`, the failure reply for
-// that handle; `error`, an error line that names no request; `silent`, nothing. `answer.init: silent` leaves an init for
+// `answer` makes it answer a request otherwise, by request type: `failed`, the failure reply for that handle or
+// operation; `error`, an error line that names no request; `silent`, nothing. `answer.init: silent` leaves an init for
 // new work unanswered, as a sign-in check whose provider stalls, while recover mode still answers. A request it cannot
 // answer, such as one for a handle while its journal cannot be read, gets the failure reply for its handle or operation.
 //
@@ -538,15 +538,17 @@ function exitWhenIdle() {
 
 const HANDLERS = { init, open, exec, prompt, cancel, collect: (request) => send({ event: 'collected', handle: request.handle }), reattach, close };
 
-/** Answers a handle request as `answer` says, and says whether it did. */
+/** Answers a request for a handle or an operation as `answer` says, and says whether it did. */
 function answeredOtherwise(request) {
   const how = options?.answer?.[request.type];
+  const about = request.handle ?? request.op;
 
-  if (how === undefined || request.handle === undefined) return false;
+  if (how === undefined || about === undefined) return false;
+  const refused = { code: 'toy_refused', message: `The toy refuses ${request.type} of ${about}: answer.${request.type} is set.` };
 
-  if (how === 'failed') send({ event: 'failed', handle: request.handle, failure: { code: 'toy_refused', message: `The toy refuses ${request.type} of ${request.handle}: answer.${request.type} is set.` } });
+  if (how === 'failed') send(request.op === undefined ? { event: 'failed', handle: request.handle, failure: refused } : { op: request.op, event: 'failed', failure: refused });
 
-  if (how === 'error') send({ event: 'error', message: `The toy cannot answer ${request.type} of ${request.handle}: answer.${request.type} is set.` });
+  if (how === 'error') send({ event: 'error', message: `The toy cannot answer ${request.type} of ${about}: answer.${request.type} is set.` });
 
   return true;
 }
