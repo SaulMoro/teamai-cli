@@ -746,6 +746,39 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
     });
 
+    // As `teamai workflow cancel` goes for a run whose driver died (cancel, reattach, collect, close), with T3 Code down.
+    it('neither forgets nor drops a place whose thread still runs while T3 Code cannot be reached after a restart', async () => {
+      t3.config({ agent: { hold: true, output: {} } });
+      const first = await opened();
+      first.runtime.send(prompt(first.handle, 'op-00000044'));
+      await first.runtime.next((line) => line['op'] === 'op-00000044' && line['event'] === 'accepted');
+      await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+      await first.runtime.close();
+      await t3.stop();
+      fs.rmSync(path.join(t3.t3Home, 'userdata', 'server-runtime.json'));
+
+      const second = start();
+      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      expect(await second.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { code: 't3_unavailable' } });
+      second.send({ type: 'reattach', handle: first.handle });
+
+      expect(await second.next((line) => line['handle'] === first.handle)).toEqual({ event: 'alive', handle: first.handle, ops: [{ op: 'op-00000044', state: 'running' }] });
+      second.send({ type: 'close', handle: first.handle });
+      expect(await second.next((line) => line['handle'] === first.handle)).toMatchObject({ event: 'close_failed', failure: { code: 't3_unavailable' } });
+      second.send({ type: 'reattach', handle: first.handle });
+      expect(await second.next((line) => line['handle'] === first.handle)).toMatchObject({ event: 'alive' });
+
+      // T3 Code is back: the place closes as usual.
+      await t3.start();
+      const third = start();
+      third.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      await third.next((line) => line['type'] === 'init');
+      third.send({ type: 'close', handle: first.handle });
+
+      expect(await third.next((line) => line['handle'] === first.handle)).toEqual({ event: 'closed', handle: first.handle });
+      expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+    });
+
     it('answers a repeated prompt that ended with the same outcome, before and after its own restart', async () => {
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-00000018'));
