@@ -1718,7 +1718,7 @@ Fix the cause, then run the same `teamai workflow cancel r48201aa` again. The ru
 Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa held.
 ```
 
-A `workflow resume` that finds such an exec still running fails its step `runtime_lost` with the same advice, and keeps the place and the login the same way.
+A `workflow resume` that finds such an exec still running fails its step `runtime_lost` with the same advice, and keeps the place and the login the same way. `teamai workflow cancel` of that run stops it once the runtime can.
 
 ### Write a step runtime
 
