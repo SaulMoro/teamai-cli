@@ -81,7 +81,7 @@ In this run Claude read the README, ran `grep -c '^#' README.md`, made the resul
 {"data":{"done":{"run":"r928e2fc23ab9bd62","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```
 
-Once the step's result is collected, teamai settles the thread, so it leaves your list of active threads. A thread whose step failed stays active, so you see it.
+While the step runs, the run's details in `teamai dashboard` link its thread (`t3-thread://…`), with the thread id and the model. Once the step's result is collected, teamai settles the thread, so it leaves your list of active threads. A thread whose step failed stays active, so you see it.
 
 ## How much a step thread asks you
 
@@ -90,8 +90,10 @@ A step thread is a thread of its own, so nobody but you can answer its requests.
 | Mode | What you see in the thread |
 | --- | --- |
 | Auto (the default) | The provider's own review approves routine actions, such as reading files, editing in the worktree and ordinary commands. It asks you about the rest. A provider with no automatic review asks about everything, as in Supervised. |
-| Auto-accept edits | File edits go through. Every command waits for you. |
-| Supervised | Every command and every edit waits for you, including the write of the result file, which is outside the worktree. |
+| Auto-accept edits | Edits in the worktree go through. Every command waits for you, and so does the write of the result file. |
+| Supervised | Every command and every edit waits for you, including the write of the result file. |
+
+On your machine teamai lets Claude write a step's result file without asking. A T3 thread gets no such grant, because T3 has no way to pass one. The result file is outside the worktree, so in Auto-accept edits and Supervised the thread asks once to write it ("Path is outside allowed working directories"). Approve that write, and the step ends.
 
 The same README review asked for nothing in Auto. In Supervised it asked twice, once to make the result directory and once to write the result file, and the step took 9 minutes because the requests waited for someone to approve them.
 
@@ -172,12 +174,13 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 | `… is not a project in T3 Code <machine>.` | The checkout is not a T3 project. | Add it in T3 Code (Add project), or run `t3 project add <path>`. |
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` names an instance T3 does not have, or one that is disabled. | Add or enable it in T3 Code under Settings → Providers, or remove `instance`. |
 | `… ended without writing the result file …` | The agent finished without writing its result. | Open the thread from the link in the message, then `teamai workflow retry <run> <step>`. |
+| `Not closed: thread_still_runs …` in the run's details | teamai closed the step's place while its thread still ran, and T3 did not stop the thread. | Open the thread from the link, and stop it with its Stop button. |
 | `… kept no session for …` | The tool kept no transcript for the worktree, so the step could not be scored. | Check that the instance uses the tool's default home (`~/.claude`, `~/.codex`). |
 
 ## What it does not do yet
 
 - A step's thread is a thread of its own, not a child of the thread that started the run. T3 keeps a parent link only for a thread launched on another, linked environment.
-- The run's details show the project and the environment for a step on T3, and the thread's link only after a restart reconnects it.
+- It takes no `credentials`. A thread's tool runs in T3 Code's environment, on T3 Code's own sign-in, so teamai refuses a `NAME: env:VAR` or a `<tool>: login` for this runtime before a step runs (`t3 does not offer can.env, so it cannot keep a credential to the processes it is for`).
 - A step with `session: continue` or `session.from` starts a new conversation, as OpenCode does: T3 has no way to launch a thread on an existing session.
 - It offers `workspace: new` and `continue`. A read-only prompt step, or one with `env` or `setup`, goes to `local`.
 - T3 reports no token usage, so a `budget` in tokens cannot be checked here, and it cannot cap `max_turns`.
