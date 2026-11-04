@@ -142,6 +142,58 @@ A step's `model: { name, effort }` picks the model, and `effort` becomes the opt
 ✖ Step "review" failed with model_unavailable: T3 Code provider instance "claudeAgent" (Claude) has no model claude-opus-9. Its models: claude-opus-5-5, claude-sonnet-5-5, claude-haiku-5-5.
 ```
 
+## Score a pass with only T3
+
+T3 can also judge. A member who has T3 but no agent CLI on the machine can run a workflow with [scorers](scorers.md#score-a-step) and have each pass labelled, with a definition that lists only `t3`:
+
+```yaml
+# .teamai/drivers/t3only.yaml
+schemaVersion: v1alpha1
+name: t3only
+tool: claude
+runtimes:
+  - use: t3
+    options: { environment: local }
+```
+
+```yaml
+# .teamai/workflows/readme-test-section.yaml
+schemaVersion: v1alpha1
+name: readme-test-section
+description: Add a Test section to the README.
+steps:
+  - id: write
+    workspace: new
+    model: claude-haiku-5-5
+    prompt: Add a "## Test" section to README.md that says to run `npm test` before opening a pull request. Change no other file.
+    scorers: { names: [review-quality], sampling: all }
+```
+
+`review-quality` is the scorer from [Scorers](scorers.md). `sampling: all` judges every pass, whatever its `samplingRate`.
+
+```text
+$ command -v claude codex codebuddy opencode
+[exit 1: none found]
+$ teamai workflow start readme-test-section --driver t3only
+ℹ run:r943880abc4705751:write:1: review-quality good (teamai-score run rdecc208adbba4b79).
+{"data":{"done":{"run":"r943880abc4705751","outcome":"succeeded","record":"published"},"cancelled":[]}}
+```
+
+`write` runs as a thread in the project, as above. teamai's own scoring commands (evidence, label, write) run on this machine and need no agent. The judge runs as a second thread, `score[0].judge · teamai rdecc208adbba4b79`, under **No project** in T3:
+
+- It is a new thread of its own, in a new scratch folder (`~/.t3/scratch/…`). teamai fills that folder with a copy of the evidence the judge reads (the transcript, the diff, `evidence.json`), and makes the copy read-only.
+- Its first message tells it to read only that folder, gives the JSON Schema of the reply, and points every path in teamai's prompt at the copy.
+- Its last message is the reply: `{"answer":{"label":"good","reasoning":"The step asked for a \"## Test\" section … diff.patch adds exactly that …"}}`.
+- It runs in Auto, or your tighter `runtime_mode`, like a step thread. Once the reply is read teamai settles the thread, and removes the copy when the judge's place closes.
+
+A T3 judge runs at **best-effort** [isolation](scorers.md#isolation):
+
+| What it keeps | What it does not |
+| --- | --- |
+| The agent works in a copy, so it cannot change the evidence teamai labels with. | The agent's tool still runs on your machine with your files. Only the brief keeps it from reading outside the folder, and Auto approves routine reads. |
+| The copy is read-only, and holds no symlink that could reach outside it. | It does not cut the network. |
+| teamai records `best-effort` and `read` access on the label's run. | A scorer with `isolation: verified` waits for a runtime that reaches it, such as the sandbox runtime, and is never judged here. |
+
 ## Unattended runs
 
 In CI, or a run with `TEAMAI_MODE=unattended`, nobody can approve a sign-in or a tool request. An unattended run reuses the credential an attended run kept, and fails at once without one:
