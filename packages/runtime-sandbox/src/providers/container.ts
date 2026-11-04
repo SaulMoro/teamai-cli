@@ -92,7 +92,9 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
   const find: Provider['find'] = async (key) => {
     const listed = await cli(['ps', '-a', '-q', '--filter', `label=teamai.run=${key.run}`, '--filter', `label=teamai.attempt=${key.attempt}`]);
 
-    return listed.kind === 'ran' && listed.code === 0 ? listed.stdout.trim().split('\n').find((line) => line !== '') : undefined;
+    if (listed.kind === 'ran' && listed.code === 0) return { ok: true, id: listed.stdout.trim().split('\n').find((line) => line !== '') };
+
+    return sandboxFailed(`${engine} could not look for the container of attempt ${key.attempt}: ${why(listed)}. Its container, if it has one, stays this attempt's until ${engine} answers again; to remove it now, run \`${engine} rm --force ${sandboxName(key)}\`.`);
   };
 
   return {
@@ -159,7 +161,7 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
       // Another open of the same attempt created it first: that container is this attempt's.
       const existing = await find(key);
 
-      if (existing !== undefined) return { ok: true, id: existing };
+      if (existing.ok && existing.id !== undefined) return { ok: true, id: existing.id };
 
       return { ok: false, failure: { code: 'sandbox_failed', message: created.kind === 'unstartable' ? created.message : `${engine} could not create the container for attempt ${key.attempt} from ${image}: ${lastLine(created)}` } };
     },
@@ -168,7 +170,9 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
     async create(key, { dir, hosts }) {
       const existing = await find(key);
 
-      if (existing !== undefined) return { ok: true, id: existing };
+      if (!existing.ok) return existing;
+
+      if (existing.id !== undefined) return { ok: true, id: existing.id };
       const refused = unmountable(engine, dir);
 
       if (refused) return { ok: false, failure: refused };
@@ -196,7 +200,7 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
       if (created.kind === 'ran' && created.code === 0) return { ok: true, id: created.stdout.trim() };
       const raced = await find(key);
 
-      return raced === undefined ? sandboxFailed(`${engine} could not create the judge container for attempt ${key.attempt} from ${image}: ${why(created)}`) : { ok: true, id: raced };
+      return raced.ok && raced.id !== undefined ? { ok: true, id: raced.id } : sandboxFailed(`${engine} could not create the judge container for attempt ${key.attempt} from ${image}: ${why(created)}`);
     },
 
     async release(key) {
