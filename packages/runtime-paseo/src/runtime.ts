@@ -50,6 +50,9 @@ const STOP_SETTLE_MS = 10_000;
 /** How often a stopping agent is looked at. */
 const STOP_POLL_MS = 250;
 
+/** Whether an agent is stopped: gone, or no longer running. A lookup that failed (undefined) does not count as stopped. */
+const isStopped = (agent: Awaited<ReturnType<Daemon['agent']>> | undefined): boolean => agent === null || (agent !== undefined && agent.status !== 'running' && agent.status !== 'initializing');
+
 /**
  * Whether the agent still runs `STOP_SETTLE_MS` after Paseo answered what stops it. Paseo may answer before the agent's
  * turn ends, so the work counts as stopped only once Paseo reports the agent no longer running, or gone.
@@ -58,9 +61,7 @@ async function isStillRunning(live: Daemon, agentId: string): Promise<boolean> {
   const deadline = Date.now() + STOP_SETTLE_MS;
 
   for (;;) {
-    const agent = await live.agent(agentId).catch(() => undefined);
-
-    if (agent === null || (agent && agent.status !== 'running' && agent.status !== 'initializing')) return false;
+    if (isStopped(await live.agent(agentId).catch(() => undefined))) return false;
 
     if (Date.now() >= deadline) return true;
     await delay(STOP_POLL_MS);
@@ -731,11 +732,31 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     following?.stop();
   }
 
-  /** Ends an attempt's place: the last attempt on a Paseo workspace archives it, which stops what still runs there. */
+  /** Cancels a prompt's agent that is still running, or says why it may still run; one already stopped needs nothing. */
+  const stopAgent = async (live: Daemon, record: AgentPrompt): Promise<RuntimeFailure | undefined> => {
+    if (isStopped(await live.agent(record.create.agentId).catch(() => undefined))) return undefined;
+
+    return cancelAgent(live, record);
+  };
+
+  /**
+   * Ends an attempt's place once its agents stopped, a failed prompt's included, since a failed cancel leaves its agent
+   * running. The last attempt on a Paseo workspace archives it, which stops what still runs there; an attempt that shares
+   * it stops only its own agents. A place whose agent may still run is kept, so teamai can close it again.
+   */
   async function closePlace(live: Daemon, handle: string): Promise<void> {
     const place = journal.place(handle);
+    const agents = journal.promptsOf(handle).flatMap(({ record }) => (record.kind === 'agent' ? [record] : []));
 
-    if (place?.workspace && journal.handlesIn(place.workspace.id).every((other) => other === handle)) {
+    if (place?.workspace && !journal.handlesIn(place.workspace.id).every((other) => other === handle)) {
+      const refusals = (await Promise.all(agents.map((record) => stopAgent(live, record)))).flatMap((failure) => (failure ? [failure.message] : []));
+
+      if (refusals.length > 0) {
+        write({ event: 'close_failed', handle, failure: { code: 'close_failed', message: refusals.join(' ') } });
+
+        return;
+      }
+    } else if (place?.workspace) {
       try {
         await live.archive(place.workspace.id);
       } catch (error) {
@@ -747,8 +768,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
         return;
       }
 
-      const agents = journal.promptsOf(handle).flatMap(({ record }) => (record.kind === 'agent' ? [record.create.agentId] : []));
-      const running = (await Promise.all(agents.map(async (agentId) => ((await isStillRunning(live, agentId)) ? [agentId] : [])))).flat();
+      const running = (await Promise.all(agents.map(async ({ create: { agentId } }) => ((await isStillRunning(live, agentId)) ? [agentId] : [])))).flat();
 
       if (running.length > 0) {
         write({
