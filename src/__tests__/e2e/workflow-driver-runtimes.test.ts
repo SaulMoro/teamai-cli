@@ -142,6 +142,20 @@ steps:
     prompt: Design the change with me.
     output:
       ok: boolean`);
+    writeFlow('capped', `  - id: review
+    tool: codex
+    max_turns: 3
+    prompt: Review the repository in three turns.
+    output:
+      ok: boolean`);
+    writeFlow('agented', `  - id: review
+    tool: claude
+    agent: reviewer
+    prompt: Review the repository as the reviewer.
+    output:
+      ok: boolean`);
+    fs.mkdirSync(path.join(repo, '.teamai', 'agents'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.teamai', 'agents', 'reviewer.yaml'), stringify({ name: 'reviewer', description: 'Reviews changes', instructions: 'Follow the review checklist.', model: 'claude-sonnet-4-6' }));
     fs.mkdirSync(path.join(repo, '.teamai', 'scorers'), { recursive: true });
     fs.writeFileSync(path.join(repo, '.teamai', 'scorers', 'quality.md'), `---
 labels:
@@ -253,7 +267,7 @@ Judge the review.
   describe('a runtime that launches agents its own way', () => {
     const runIds = (): Set<string> => new Set((fs.existsSync(path.join(dataHome, 'workflows', 'runs')) ? fs.readdirSync(path.join(dataHome, 'workflows', 'runs')) : []).filter((name) => name.endsWith('.json')).map((name) => name.slice(0, -'.json'.length)));
 
-    type PromptLine = { op: string; sent?: { step: string; tool: string; prompt: string; result: string; permissions: string }; ended?: string };
+    type PromptLine = { op: string; sent?: { step: string; tool: string; prompt: string; result: string; permissions: string; model?: { name: string }; maxTurns?: number }; ended?: string };
 
     /** What the toy logged of the prompts it was sent: each send, and how each ended. */
     const promptLog = (): PromptLine[] => (fs.existsSync(path.join(state, 'prompts.jsonl'))
@@ -322,6 +336,27 @@ Judge the review.
       expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
       expect(sends()).toEqual([expect.objectContaining({ sent: expect.objectContaining({ step: 'design', interactive: true }) })]);
       expect(fs.existsSync(launches)).toBe(false);
+    });
+
+    it('sends the step\'s turn cap to a runtime that offers max_turns, on any tool', async () => {
+      writeDefinition('agentcap', [{ use: 'toy', options: { state, can: { max_turns: true }, agent: { output: { ok: true } } } }], { tool: 'codex' });
+
+      const ran = await runCLI(['workflow', 'start', 'capped', '--driver', 'agentcap'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      expect(sends()).toEqual([expect.objectContaining({ sent: expect.objectContaining({ tool: 'codex', maxTurns: 3 }) })]);
+      expect(readRunState(runOf(ran)).steps[0]).not.toHaveProperty('unenforced');
+    });
+
+    it('sends the model of the step\'s agent definition, since no --agent flag carries it', async () => {
+      writeDefinition('agentmodel', [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'agented', '--driver', 'agentmodel'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const [sent] = sends();
+      expect(sent?.sent).toMatchObject({ tool: 'claude', model: { name: 'claude-sonnet-4-6' } });
+      expect(sent?.sent?.prompt).toContain('Follow the review checklist.');
     });
 
     it('refuses at start a runtime that runs no command and takes no prompt, since it can run no step', async () => {
