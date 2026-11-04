@@ -625,7 +625,8 @@ describe('teamai-runtime-t3', () => {
       expect(thread?.message).toContain(`Read only the files under ${copy}:`);
       expect(thread?.message).toContain(`the schema in ${path.join(copy, 'schema.json')}`);
       expect(thread?.message).not.toContain(evidence);
-      expect(thread?.message).toContain(JSON.stringify({ type: 'object', required: ['label'] }));
+      // The prompt may describe a reply of another shape, as teamai-score's names the label's own schema file.
+      expect(thread?.message).toContain(`Reply with one JSON value and no other text. teamai checks it against this JSON Schema, so it decides the reply's shape: ${JSON.stringify({ type: 'object', required: ['label'] })}. Where the prompt below asks for a reply of another shape, give that value where this schema places it.`);
     });
 
     // teamai sends the directory's real path, and the prompt names it as the step rendered it, here through a link.
