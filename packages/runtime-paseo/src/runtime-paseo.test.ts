@@ -81,16 +81,52 @@ afterEach(async () => {
 });
 
 describe('teamai-runtime-paseo', () => {
-  it('offers prompt steps only, in a new or continued worktree, with no env, token count or unattended mode, for the tools the daemon has', async () => {
-    behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'] } });
+  it('offers prompt steps only, in a new or continued worktree, with no env, token count or unattended mode, for the tools the daemon can run', async () => {
+    behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'], opencode: ['opencode/beam-free'] } });
 
     expect(await ready(start())).toEqual({
       type: 'init', ok: true, prompt: true, confinedPrompt: true,
       can: {
-        exec: false, setup: false, hitl: false, unattended: false, env: false, tokens: false, max_turns: false, workspace: ['new', 'continue'], tools: ['claude', 'codex'],
-        // Codex's Paseo modes write the workspace without asking, so it judges nowhere here.
-        confined: [{ level: 'best-effort', access: 'read', tools: ['claude'] }],
+        // Codex is installed and signed in, but Paseo does not report its sign-in, so it is not offered.
+        exec: false, setup: false, hitl: false, unattended: false, env: false, tokens: false, max_turns: false, workspace: ['new', 'continue'], tools: ['claude', 'opencode'],
+        confined: [{ level: 'best-effort', access: 'read', tools: ['claude', 'opencode'] }],
       },
+    });
+  });
+
+  it('offers neither a step nor a judge on a tool installed but signed out, which Paseo still calls available', async () => {
+    behave({ models: { claude: ['claude-opus-5-5'], opencode: ['opencode/beam-free'] }, sign_in: { claude: 'signed_out' } });
+
+    expect(await ready(start())).toMatchObject({ ok: true, can: { tools: ['opencode'], confined: [{ tools: ['opencode'] }] } });
+  });
+
+  it('fails init, saying what each tool lacks and how to sign it in, when the daemon can run none of them', async () => {
+    // OpenCode reaches no model provider: Paseo lists no model for it, though its own free models need no sign-in.
+    behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'], opencode: [] }, sign_in: { claude: 'signed_out' } });
+
+    expect(await ready(start())).toEqual({
+      type: 'init', ok: false,
+      error: {
+        code: 'tool_unavailable',
+        message: `The Paseo daemon at ${daemon.url} runs no tool teamai-runtime-paseo can use. claude: signed out; run \`claude auth login\` on the daemon's host. codex: Paseo does not report whether it is signed in, so its steps run on the next runtime of the definition. opencode: reaches no model provider; run \`opencode auth login\` on the daemon's host, then \`paseo restart\`.`,
+      },
+    });
+  });
+
+  it('does not use a Claude whose sign-in Paseo does not report, and says so', async () => {
+    behave({ models: { claude: ['claude-opus-5-5'] }, sign_in: { claude: 'unreported' } });
+
+    expect(await ready(start())).toMatchObject({
+      ok: false, error: { code: 'tool_unavailable', message: expect.stringContaining('claude: Paseo does not report whether it is signed in, so its steps run on the next runtime of the definition.') },
+    });
+  });
+
+  it('fails init, saying to install one, when the daemon has none of the tools installed', async () => {
+    behave({ models: {} });
+
+    expect(await ready(start())).toEqual({
+      type: 'init', ok: false,
+      error: { code: 'tool_unavailable', message: `The Paseo daemon at ${daemon.url} has none of claude, codex or opencode installed. Install one on the daemon's host, and sign in to it there.` },
     });
   });
 

@@ -45,12 +45,18 @@ export interface Model {
 
 export type WaitEnd = Awaited<ReturnType<DaemonClient['waitForFinish']>>;
 
+/** A tool installed on the daemon's host: one it can run, with its modes, or why it cannot, for a person to read. */
+export type InstalledTool = { tool: PaseoTool; canRun: true; modes: string[] } | { tool: PaseoTool; canRun: false; reason: string };
+
+/** Why the daemon does not run a tool whose sign-in Paseo does not report, as Codex's. */
+const UNREPORTED_SIGN_IN = 'Paseo does not report whether it is signed in, so its steps run on the next runtime of the definition';
+
 export interface Daemon {
   url: string;
   serverId: string;
   version: string;
-  /** The tools whose provider the daemon has with the mode a step starts in, and the modes each has. */
-  tools(): Promise<Array<{ tool: PaseoTool; modes: string[] }>>;
+  /** The tools whose provider the daemon has installed, each one it can run when signed in with the mode a step starts in. */
+  installedTools(): Promise<InstalledTool[]>;
   models(tool: PaseoTool): Promise<Model[]>;
   /** Adopts a directory as a Paseo workspace; Paseo answers the same workspace for the same directory. */
   workspace(cwd: string): Promise<{ id: string; name: string; directory: string }>;
@@ -130,28 +136,62 @@ export async function connect(url: string, paseo: PaseoClient): Promise<Daemon |
   const api: PaseoApi = paseo.createPaseoApi(client);
   const serverId = info.serverId;
 
+  const models = async (tool: PaseoTool): Promise<Model[]> => {
+    const { models: listed = [] } = await api.providers.listModels(tool);
+
+    return listed.map((model) => ({ id: model.id, isDefault: model.isDefault === true, efforts: (model.thinkingOptions ?? []).map((option) => option.id) }));
+  };
+
+  /**
+   * Why the daemon cannot run `tool`, or undefined when it can. Paseo calls a tool available once its binary is on PATH,
+   * signed in or not, so each tool's sign-in is read from what Paseo reports of it.
+   */
+  const signInProblem = async (tool: PaseoTool): Promise<string | undefined> => {
+    switch (tool) {
+      case 'claude': {
+        // Claude's diagnostic quotes `claude auth status`, which reports a login and an API key alike as logged in.
+        const loggedIn = /"loggedIn":\s*(true|false)\b/.exec((await api.providers.diagnostic('claude')).diagnostic)?.[1];
+
+        if (loggedIn === 'true') return undefined;
+
+        return loggedIn === 'false' ? 'signed out; run `claude auth login` on the daemon\'s host' : UNREPORTED_SIGN_IN;
+      }
+
+      case 'opencode':
+        // Paseo lists OpenCode's models from the providers it reaches, its free ones included, and none when it reaches none.
+        return (await models(tool)).length > 0 ? undefined : 'reaches no model provider; run `opencode auth login` on the daemon\'s host, then `paseo restart`';
+
+      case 'codex':
+        return UNREPORTED_SIGN_IN;
+
+      default: {
+        const unhandled: never = tool;
+
+        return unhandled;
+      }
+    }
+  };
+
   return {
     url,
     serverId,
     version,
-    async tools() {
+    async installedTools() {
       const { providers } = await api.providers.listAvailable();
-      const available = providers.filter((entry) => entry.available).map((entry) => entry.provider).filter(isPaseoTool);
+      const installed = providers.filter((entry) => entry.available).map((entry) => entry.provider).filter(isPaseoTool);
 
-      // A provider whose default mode is gone would start in some other mode: it is not offered.
-      const offered = await Promise.all(available.map(async (tool) => {
+      return Promise.all(installed.map(async (tool): Promise<InstalledTool> => {
+        const reason = await signInProblem(tool);
+
+        if (reason !== undefined) return { tool, canRun: false, reason };
+
+        // A provider whose default mode is gone would start in some other mode: it is not offered.
         const modes = (await api.providers.listModes(tool)).modes?.map((mode) => mode.id) ?? [];
 
-        return modes.includes(DEFAULT_MODES[tool]) ? [{ tool, modes }] : [];
+        return modes.includes(DEFAULT_MODES[tool]) ? { tool, canRun: true, modes } : { tool, canRun: false, reason: `has no ${DEFAULT_MODES[tool]} mode, which teamai starts it in` };
       }));
-
-      return offered.flat();
     },
-    async models(tool) {
-      const { models = [] } = await api.providers.listModels(tool);
-
-      return models.map((model) => ({ id: model.id, isDefault: model.isDefault === true, efforts: (model.thinkingOptions ?? []).map((option) => option.id) }));
-    },
+    models,
     async workspace(cwd) {
       const opened = await api.workspaces.open({ cwd });
       const current = opened.current();

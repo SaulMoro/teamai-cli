@@ -10,7 +10,7 @@ import { z } from 'zod';
 // ─── A fake Paseo daemon ─────────────────────────────────
 //
 //  The part of Paseo 0.14.0's WebSocket protocol teamai-runtime-paseo speaks, as the real daemon answers it (recorded
-//  against 0.14.0): hello, provider discovery, workspace open, agent create with an idempotency key and a caller-chosen
+//  against 0.14.0): hello, provider discovery and diagnostics, workspace open, agent create with an idempotency key and a caller-chosen
 //  id, wait for finish, fetch and cancel. Every frame it sends and receives is checked against Paseo's own schemas.
 //
 //  It runs as its own process over a state directory, so a test restarts it as a person restarts Paseo:
@@ -29,8 +29,16 @@ const BehaviourSchema = z.object({
   version: z.string().default('0.14.0'),
   /** Features hello leaves out. */
   missing: z.array(z.string()).default([]),
-  /** The models each provider offers; a provider absent here is unavailable. */
+  /**
+   * The models each provider offers; a provider absent here is unavailable. An empty list is OpenCode connected to no
+   * model provider: installed, so available, with a catalog that fails.
+   */
   models: z.record(z.string(), z.array(z.string())).default({ claude: ['claude-opus-5-5', 'claude-sonnet-5-5'], codex: ['gpt-6.1-sol'], opencode: ['opencode/beam-free'] }),
+  /**
+   * How a provider's diagnostic reports its sign-in; signed in when absent. Paseo calls a signed-out provider available
+   * all the same. `unreported` leaves out the `Auth` row, as Codex's always does.
+   */
+  sign_in: z.record(z.string(), z.enum(['signed_out', 'unreported'])).default({}),
   /** The output the agent writes to the result file; none written when absent. */
   output: z.unknown().optional(),
   /** The agent's last message, which a confined prompt's answer is. */
@@ -290,6 +298,14 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
 
       case 'list_provider_models_request': {
         const models = behaviour().models[message.provider] ?? [];
+
+        if (models.length === 0) {
+          // As Paseo answers a provider whose catalog failed, such as OpenCode connected to no model provider.
+          reply({ type: 'list_provider_models_response', payload: { requestId: message.requestId, provider: message.provider, error: `${message.provider} has no connected providers.`, fetchedAt: now() } });
+
+          return;
+        }
+
         reply({
           type: 'list_provider_models_response',
           payload: {
@@ -300,6 +316,11 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
 
         return;
       }
+
+      case 'provider_diagnostic_request':
+        reply({ type: 'provider_diagnostic_response', payload: { requestId: message.requestId, provider: message.provider, diagnostic: diagnosticOf(message.provider, behaviour().sign_in[message.provider]) } });
+
+        return;
 
       case 'list_provider_modes_request':
         reply({ type: 'list_provider_modes_response', payload: { requestId: message.requestId, provider: message.provider, modes: modesOf(message.provider), error: null, fetchedAt: now() } });
@@ -458,6 +479,23 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
       await new Promise<void>((resolve) => wss.close(() => resolve()));
     },
   };
+}
+
+/**
+ * A provider's diagnostic, as Paseo 0.14.0 formats it (recorded): Claude's `Auth` row quotes `claude auth status`, which
+ * fails when signed out; OpenCode's quotes `opencode auth list`; Codex's has no `Auth` row.
+ */
+function diagnosticOf(provider: string, signIn: 'signed_out' | 'unreported' | undefined): string {
+  const rows = [`  Binary: ${provider}`, `  Resolved path: /usr/local/bin/${provider}`];
+  const isSignedOut = signIn === 'signed_out';
+
+  if (signIn !== 'unreported' && provider === 'claude') {
+    rows.push(`  Auth: {\n  "loggedIn": ${String(!isSignedOut)},\n  "authMethod": "${isSignedOut ? 'none' : 'oauth_token'}",\n  "apiProvider": "firstParty"\n}${isSignedOut ? '\nCommand failed: /usr/local/bin/claude auth status' : ''}`);
+  } else if (signIn !== 'unreported' && provider === 'opencode') {
+    rows.push(`  Auth: \n    ${isSignedOut ? 'No authenticated integrations' : '●  Anthropic oauth'}`);
+  }
+
+  return [provider, ...rows, '  Status: Ready'].join('\n');
 }
 
 function workspaceOf(id: string, cwd: string): WorkspaceDescriptorPayload {
