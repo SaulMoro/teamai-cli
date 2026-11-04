@@ -781,6 +781,19 @@ Judge the review.
       expect(`${ran.stdout}${ran.stderr}`).not.toContain(VALUE);
     });
 
+    it('fails a tool that ended with an error with the tool\'s own reason, the credential\'s value masked', async () => {
+      writeDefinition('tokenrefused', [{ use: 'toy', options: { state, credentials: { TOY_TEAM: 'env:MEMBER_TOY_TEAM' } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'tokenrefused'], repo, env({
+        MEMBER_TOY_TEAM: VALUE, FAKE_TOOL_ERROR: 'Failed to authenticate. API Error: 401 Invalid bearer token', FAKE_TOOL_ERROR_ECHO: 'TOY_TEAM',
+      }));
+
+      const [review] = readRunState(runOf(ran)).steps;
+      expect(review).toMatchObject({ status: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining('claude exited with status 1: Failed to authenticate. API Error: 401 Invalid bearer token <REDACTED:TOY_TEAM (credential of toy)>') } });
+      expect(holding(path.join(dataHome, 'workflows'), VALUE)).toEqual([]);
+      expect(`${ran.stdout}${ran.stderr}`).not.toContain(VALUE);
+    });
+
     it('masks an env credential in the failure of a place its runtime could not close', async () => {
       writeDefinition('tokenunclosed', [{ use: 'toy', options: { state, credentials: { TOY_TEAM: 'env:MEMBER_TOY_TEAM' }, close_fails: 'TOY_TEAM' } }]);
 
