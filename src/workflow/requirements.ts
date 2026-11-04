@@ -401,13 +401,13 @@ export type Negotiation =
   /** No driver can run the step on this machine as it is written or as its env stands. */
   | { kind: 'fail'; failure: WorkflowFailure };
 
-/** What an interactive step lacks on a driver that cannot ask a person, also where a plan defers before `negotiate`. */
-export function personGap(interactive: boolean, can: Pick<DriverCan, 'hitl'>): Missing[] {
+/** What an interactive step lacks on a driver that cannot ask a person. */
+function personGap(interactive: boolean, can: Pick<DriverCan, 'hitl'>): Missing[] {
   return interactive && !can.hitl ? ['hitl'] : [];
 }
 
-/** What a step that runs on `tool` lacks on a driver that cannot launch it, also where a plan defers before `negotiate`. */
-export function toolGap(tool: string | undefined, can: Pick<DriverCan, 'tools'>): Missing[] {
+/** What a step that runs on `tool` lacks on a driver that cannot launch it. */
+function toolGap(tool: string | undefined, can: Pick<DriverCan, 'tools'>): Missing[] {
   return tool !== undefined && lacksTool(tool, can) ? ['tools'] : [];
 }
 

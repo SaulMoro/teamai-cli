@@ -37,7 +37,7 @@ import { allowanceInUse, budgetSpent, countLateTokens, expire, itemsSpent, lease
 import { addItems, afterStanding, expandItems, isItem, itemsAfter, itemsOf, itemsSettled, startedItems } from './fan-out.js';
 import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, isUnder, loopSettled } from './loop.js';
 import { childScope, contextOf, finallyScope, insertChildren, localId, statesIn, stepDefinitions, topScope, type Scope } from './scope.js';
-import { confinedOf, contractClone, deliverableOf, deliveryTarget, isIsolated, isPublishContract, planWorkspace, plannedBranch, sessionOf, stepRoleOf, workLeftUndelivered, type LeaseSession, type SessionRef, type WorkspaceContract, type WorkspacePlan } from './workspace.js';
+import { confinedOf, contractClone, deliverableOf, deliveryTarget, isIsolated, isPublishContract, planWorkspace, plannedBranch, sessionOf, stepRoleOf, workLeftUndelivered, type LeaseSession, type SessionRef, type WorkspaceContract, type WorkspacePlan, type WorkspaceRequest } from './workspace.js';
 import {
   deliverPr, deliveryFailure, findDelivered, reportedPrMismatch, type DeliveryJob,
 } from './pr-delivery.js';
@@ -45,7 +45,7 @@ import { sanitizePrUrl, type PrUrl } from './pr-url.js';
 import { completeDelivery, deliveringStep, nextDelivery, resolveCreate, sameCreate, unresolvedCreate } from './delivery-ledger.js';
 import type { DeliveryKey, UnresolvedCreate } from './delivery-schema.js';
 import {
-  CAN_KEYS, HOST_PINNED_WORKFLOWS, LimitSchema, ReportedUnenforcedSchema, heldFor, setsLimit, mergeRequirements, negotiate, personGap, toolGap, reportedUnenforced, requiredEnvKeys, unionUnenforced,
+  CAN_KEYS, HOST_PINNED_WORKFLOWS, LimitSchema, ReportedUnenforcedSchema, heldFor, setsLimit, mergeRequirements, negotiate, reportedUnenforced, requiredEnvKeys, unionUnenforced,
   type Allow, type DriverCan, type EnvFacts, type Held, type InEffect, type Limit, type Missing, type Negotiation, type ReportedUnenforced, type Terms, type TurnLimits,
 } from './requirements.js';
 import { knownSecrets, resolveWorkflowEnv, secretKey, type WorkflowEnv } from '../env-resolution.js';
@@ -1605,6 +1605,26 @@ function offerTerms(
 }
 
 /**
+ * What a runtime offering `context.can` lacks for step `state`, whose plan for it defers (`defer`). Invariant: these are
+ * exactly `negotiate`'s gaps for the offer, judged as if the runtime had the workspace it lacks, plus that workspace's
+ * own gap. So the member's policy still comes first, and the tool, role, unattended and person gaps hold alike on a
+ * runtime that defers and on one that does not. A plan deferred for a copy another driver owns adds no workspace gap.
+ */
+function deferredGaps(
+  { run, located, state, definition, defer, request }: {
+    run: RunState; located: { scope: Scope; step: WorkflowStep }; state: StepState; definition: WorkflowStep;
+    defer: NonNullable<WorkspacePlan['defer']>; request: Omit<WorkspaceRequest, 'modes'>;
+  },
+  context: OfferContext,
+): Missing[] {
+  const { needs } = defer;
+  const met = needs === undefined ? undefined : planWorkspace(run, located.scope, state, definition, { ...request, modes: [...context.can.workspace ?? [], needs] });
+  const judged = offerTerms(run, state.id, located, met?.defer || met?.fail ? undefined : met, context);
+
+  return [...needs ? [`workspace.${needs}` as const] : [], ...judged.kind === 'hold' ? judged.missing : []];
+}
+
+/**
  * The turn limits granted in `terms`, and the deadline of a lease first issued at `since`. The step's own timeout counts
  * from `since`, so a hand-back never extends it. A driver that cannot end the turn gets the `on_limit: fail` lease,
  * whose own timeout is its deadline. One that can gets what is left of it at `now`; with none left, the lease takes the
@@ -2102,15 +2122,9 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
               break;
             }
 
-            // A driver that cannot launch the step's tool, give it its role, or ask the person it needs, is told so too, as it
-            // would be held for it once it had the place.
-            const roleGap = stepRole.kind === 'role' && !can.role ? ['role' as const] : [];
             held.push({
               step: state.id, reason: plan.defer.reason,
-              missing: [
-                ...plan.defer.needs ? [`workspace.${plan.defer.needs}` as const] : [],
-                ...toolGap(promptTool(definition, context.toolFor), context.can), ...roleGap, ...personGap(definition.interactive === true, context.can),
-              ],
+              missing: deferredGaps({ run, located, state, definition, defer: plan.defer, request: { driver, base: run.base ?? options.base } }, context),
             });
             continue;
           }
@@ -2154,11 +2168,10 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
 
               if (planned.fail) return undefined;
 
-              // A step held for its place on every runtime still fails on a tool none of them launches, and goes to a person
-              // when none of them can ask one.
+              // A runtime that lacks the step's place lacks what it would be held for once it had it, too.
               if (planned.defer) {
                 return planned.defer.needs
-                  ? [`workspace.${planned.defer.needs}`, ...toolGap(tool, offered), ...personGap(definition.interactive === true, offered)]
+                  ? deferredGaps({ run, located, state, definition, defer: planned.defer, request: { driver, base: run.base ?? options.base } }, { ...context, can: offered })
                   : undefined;
               }
 
