@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { OpIdSchema, type ExecRequestSchema, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type PromptResult, type PromptUsageSchema, type RuntimeDisplay, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { OpIdSchema, type ExecRequestSchema, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type PromptResult, type PromptSessionSchema, type PromptUsageSchema, type RuntimeDisplay, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import type { RunMode } from '../../launch-context.js';
 import type { DriverCan } from '../requirements.js';
@@ -36,7 +36,7 @@ export type ExecEnd = { kind: 'exited'; code: number; stdout: string } | { kind:
 
 /** How a prompt ended: finished with the tool's session, the result the agent wrote and its usage, cancelled, or failed. */
 export type PromptEnd =
-  | { kind: 'finished'; session: { tool: string; id: string }; result: PromptResult; usage?: z.infer<typeof PromptUsageSchema> }
+  | { kind: 'finished'; session: z.infer<typeof PromptSessionSchema>; result: PromptResult; usage?: z.infer<typeof PromptUsageSchema> }
   | { kind: 'cancelled' }
   | { kind: 'failed'; failure: RuntimeFailure };
 

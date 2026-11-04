@@ -265,6 +265,15 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     return { ok: false, failure: badOption(driver, use, 'credentials', `${use} launches agents its own way, in each tool's own home, so it brings no login`) };
   }
 
+  if (ready.ok && !ready.launchesAgents && ready.can.exec === false) {
+    await runtime.dispose();
+
+    return {
+      ok: false,
+      failure: { code: 'runtime_failed', message: `Runtime "${source.name}" of driver "${driver.name}" runs no command and takes no prompt (its init offers can.exec: false without prompt: true), so it can run no step. Fix the runtime's offer, or remove it from the definition.` },
+    };
+  }
+
   if (ready.ok) return { ok: true, opened: { kind: 'external', use, runtime, can: ready.can, launchesAgents: ready.launchesAgents, engine: split.engine } };
   await runtime.dispose();
   const { failure } = ready;

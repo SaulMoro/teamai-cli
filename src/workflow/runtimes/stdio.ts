@@ -211,7 +211,10 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
 
               return;
             case 'ready':
+              return;
             case 'finished':
+              die(`it answered exec ${request.op} with finished, which an exec does not have`);
+
               return;
             default: {
               const unhandled: never = event;
