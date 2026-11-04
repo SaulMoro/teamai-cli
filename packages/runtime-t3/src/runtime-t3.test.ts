@@ -410,6 +410,27 @@ describe('teamai-runtime-t3', () => {
       expect(await runtime.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-00000020', state: 'running' }] });
     });
 
+    it('keeps a prompt running, and a later close failing, while T3 will not stop its thread', async () => {
+      t3.config({ agent: { hold: true, output: {} }, waitCapMs: 50 });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-00000021'));
+      await runtime.next((line) => line['op'] === 'op-00000021' && line['event'] === 'accepted');
+      await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+      // Waits on the thread answer while each refused stop is still pending.
+      t3.config({ interruptFails: true, interruptMs: 400 });
+
+      runtime.send({ type: 'cancel', op: 'op-00000021' });
+      runtime.send({ type: 'close', handle });
+      expect(await runtime.next((line) => line['event'] === 'close_failed', 5_000)).toMatchObject({ handle });
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => line['event'] === 'close_failed' || line['event'] === 'closed', 5_000)).toMatchObject({ event: 'close_failed', failure: { code: 'thread_still_runs' } });
+      runtime.send({ type: 'reattach', handle });
+      expect(await runtime.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-00000021', state: 'running' }] });
+      expect(runtime.lines.filter((line) => line['op'] === 'op-00000021' && line['event'] === 'cancelled')).toEqual([]);
+      expect(t3.threads()[0]?.status).toBe('running');
+    });
+
     it('fails a step whose agent asks for an approval in an unattended run, and stops its thread', async () => {
       t3.config({ agent: { waits: true } });
       const { runtime, handle } = await opened('unattended');
