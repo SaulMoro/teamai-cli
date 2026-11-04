@@ -779,6 +779,11 @@ export class NotInitializedError extends Error {
   readonly name = 'NotInitializedError';
 }
 
+/** The local config names a team repo that has no teamai.yaml: the config loads, its team does not. */
+export class TeamConfigNotFoundError extends Error {
+  readonly name = 'TeamConfigNotFoundError';
+}
+
 /** The local config and the team config it points at, as the init checks return them. */
 export type TeamaiInit = { localConfig: LocalConfig; teamConfig: TeamaiConfig };
 
@@ -860,7 +865,7 @@ async function throwTeamConfigMissingOrInvalid(repoPath: string): Promise<never>
   const teamConfigPath = path.join(repoPath, 'teamai.yaml');
 
   if (!(await pathExists(teamConfigPath))) {
-    throw new Error('Team config (teamai.yaml) not found. Check your repo path.');
+    throw new TeamConfigNotFoundError('Team config (teamai.yaml) not found. Check your repo path.');
   }
 
   const content = await readFileSafe(teamConfigPath);
