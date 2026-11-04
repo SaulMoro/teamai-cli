@@ -4,15 +4,23 @@
 
 `teamai-runtime-paseo` runs each prompt step as an agent of a [Paseo](https://github.com/getpaseo/paseo) daemon, in a Paseo workspace on teamai's worktree for the step. You watch the agent and answer its permission prompts in the Paseo app. teamai still reads the result, commits, delivers, scores, and recovers the step.
 
-It runs prompt steps only. Commands, `setup`, and steps that need `permissions: unattended` or a `role` go to the next runtime in the definition.
+It runs prompt steps only. Commands, `setup`, and steps that need `permissions: unattended` or a `role` go to the next runtime in the definition, or to this machine. It also judges a scored pass, best-effort: see [Judge a scored pass](#judge-a-scored-pass).
 
 ## Quick start
 
-Start the Paseo daemon (0.14.0 or later) on the machine that runs the workflow:
+Paseo is a prerequisite: teamai ships none of its code. Install Paseo (0.14.0 or later) on the machine that runs the workflow, and start its daemon:
 
 ```sh
+npm install -g @getpaseo/cli
 paseo start
 paseo status    # listen: 127.0.0.1:6767
+```
+
+The runtime loads Paseo's client from that install when it starts: it follows the `paseo` on `PATH` to its package, so the client always matches your daemon. When teamai runs with a `PATH` that has no `paseo`, point at the client yourself. For an install under its own prefix:
+
+```sh
+npm install -g --prefix ~/.paseo-cli @getpaseo/cli
+export PASEO_CLIENT_PATH=~/.paseo-cli/lib/node_modules/@getpaseo/cli/node_modules/@getpaseo/client
 ```
 
 Add a definition that sends prompt steps to Paseo and everything else to this machine, in the team repo or in `~/.teamai/drivers/`:
@@ -86,6 +94,74 @@ The step's record has its output and Claude's session id:
 { "id": "classify", "outcome": "success", "outputs": { "has_title": true }, "tool": "claude", "session": "35ab4949-21d9-40df-9444-652e96607b7b" }
 ```
 
+## Judge a scored pass
+
+A step with `scorers` is judged by the `teamai-score` workflow: its bookkeeping commands run on this machine, and its judge is a confined prompt, which reads one evidence directory and nothing else. Paseo answers it, so a definition with only `paseo` runs and judges a scored step on a machine with no agent CLI:
+
+```yaml
+# drivers/paseo-only.yaml
+schemaVersion: v1alpha1
+name: paseo-only
+tool: claude
+runtimes:
+  - use: paseo
+```
+
+The step is judged by [`review-quality`](scorers.md), on every pass:
+
+```yaml
+# workflows/fix-add.yaml
+schemaVersion: v1alpha1
+name: fix-add
+description: Fix add in math.js, and judge the change.
+steps:
+  - id: fix
+    workspace: new
+    prompt: |
+      add in math.js returns a - b. Make it return a + b, and add math.test.js that checks add(2, 3) is 5 with node:test.
+      Edit the files only, and run no command.
+    scorers: { names: [review-quality], sampling: all }
+    output:
+      fixed: boolean
+```
+
+```text
+$ command -v claude codex opencode
+$ teamai workflow start fix-add --driver paseo-only
+ℹ Run rd573bcff8eef4e10 started. If it stops before it ends, continue it with: teamai workflow resume rd573bcff8eef4e10
+ℹ run:rd573bcff8eef4e10:fix:1: review-quality good (teamai-score run re02e01c9b0e36c69).
+{"data":{"done":{"run":"rd573bcff8eef4e10","outcome":"succeeded","record":"published"},"cancelled":[]}}
+```
+
+In this attended run, the fix agent asked before its two edits, answered with `paseo permit allow <agent> --all`. The judge asked for nothing: it only read the directory with `Read`.
+
+Both agents ran in Paseo. The judge's cwd is the evidence directory teamai wrote:
+
+```text
+$ paseo ls --all
+NAME                                       PROVIDER                STATUS  CWD
+teamai score[0].judge · re02e01c9b0e36c69  claude/claude-opus-5-5  closed  ~/.teamai/projects/…/runs/re02e01c9b0e36c69/scratch/a47d92bbe
+teamai fix · rd573bcff8eef4e10             claude/claude-opus-5-5  closed  /repo/.teamai/workflow-worktrees/teamai-rd573bcff8eef4e10-fix-p1-a04485788cc1
+```
+
+The judge step records what the runtime kept:
+
+```json
+{ "id": "score[0].judge", "outcome": "success", "outputs": { "answer": { "label": "good", "reasoning": "The step asked for two things: change add in math.js from a - b to a + b, and add math.test.js that uses node:test to check add(2, 3) is 5… The diff does both…" } }, "confined": { "tool": "claude", "isolation": "best-effort", "access": "read" } }
+```
+
+The judge runs at `best-effort`, never `verified`:
+
+| What | Enforced |
+| --- | --- |
+| A fresh agent whose cwd is the evidence directory, briefed to read only it | yes |
+| No edit and no command: the judge's mode asks first, and any request for permission ends the judge, attended or not | yes |
+| Its answer is its last message, parsed as JSON; it writes nothing | yes |
+| No read outside the directory | no: nothing stops the agent reading a file elsewhere |
+| No network | no |
+
+A confined step whose `confined.json` asks for `verified` never goes to Paseo, whose offer is `best-effort`. Codex never judges on Paseo, since every Codex mode writes without asking. The judge's place shows in the run's details as `Paseo confined prompt, best-effort` until its agent starts.
+
 ## Options
 
 | Key | Default | Meaning |
@@ -103,13 +179,13 @@ runtimes:
 
 ## Tools, models and modes
 
-The runtime offers `claude`, `codex` and `opencode` when the daemon has them. The agent starts in the tool's default Paseo mode, never a bypass mode:
+The runtime offers `claude`, `codex` and `opencode` when the daemon has them. The agent starts in the tool's default Paseo mode, never a bypass mode. A judge starts in a mode that asks before it edits or runs anything:
 
-| Tool | Mode |
-| --- | --- |
-| `claude` | `default` (asks before what it does not allow) |
-| `codex` | `auto` |
-| `opencode` | `build` |
+| Tool | Step mode | Judge mode |
+| --- | --- | --- |
+| `claude` | `default` (asks before what it does not allow) | `default` |
+| `codex` | `auto` | none: every Codex mode writes without asking |
+| `opencode` | `build` | `plan` |
 
 The step's `model` must be one the daemon offers, and its `effort` one that model has. With no `model`, the agent uses the daemon's default. A model the daemon lacks fails before any agent starts:
 
@@ -117,7 +193,7 @@ The step's `model` must be one the daemon offers, and its `effort` one that mode
 ✖ Step "classify" failed with model_unavailable: The Paseo daemon at ws://127.0.0.1:6767/ws has no claude model claude-opus-0-1. It offers: claude-opus-5-5, claude-opus-5, claude-fable-5-1, claude-fable-5, claude-opus-4-8[1m], claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-sonnet-5[1m], claude-opus-4-7[1m], claude-opus-4-7, claude-opus-4-6[1m], claude-opus-4-6, claude-sonnet-4-6[1m], claude-sonnet-4-6, claude-haiku-5-5, claude-haiku-4-5.
 ```
 
-The agent gets the step's prompt and no environment from the run. Paseo reports no full token counts, so a step under a token budget runs on the next runtime.
+The agent gets the step's prompt, and of the run's environment only `TEAMAI_RUN_DIR`. Paseo reports no full token counts, so a step under a token budget runs on the next runtime.
 
 ## Credentials
 
@@ -131,7 +207,7 @@ Remove the entry, and give the tool what it needs on the daemon's host instead: 
 
 ## Permissions
 
-A Claude agent may write teamai's result file, and only that file, without asking: the runtime allows `Edit(/<result file>)` for it, and the mode stays `default`. Codex and OpenCode get no such grant.
+A Claude agent may write two things without asking: teamai's result file, and the run's scratch directory, which `$TEAMAI_RUN_DIR` names for the run's commands. The runtime allows `Edit(/<result file>)` and `Edit(/<run directory>/**)`, and the mode stays `default`. Codex and OpenCode get no such grant. Of the step's environment, the agent gets only `TEAMAI_RUN_DIR`, so a prompt that names a file in the directory `$TEAMAI_RUN_DIR` names works as it does on this machine.
 
 In an attended run, any other permission prompt waits for you in the Paseo app, or on the command line:
 
@@ -184,6 +260,7 @@ A runtime killed mid-step cannot archive; the step fails `runtime_lost`, and its
 
 | Code | When |
 | --- | --- |
+| `client_missing` | No Paseo client was found: no `paseo` on `PATH`, or `PASEO_CLIENT_PATH` names no `@getpaseo/client` package. Install Paseo, or set `PASEO_CLIENT_PATH`. |
 | `daemon_unreachable` | No daemon answers at `url`. Start it with `paseo start`. |
 | `daemon_version` | The daemon is older than 0.14.0. Update Paseo and restart it. |
 | `tool_unavailable` | The daemon has none of `claude`, `codex`, `opencode` in its default mode. A step whose tool the daemon lacks runs on the next runtime. |
