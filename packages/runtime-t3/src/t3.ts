@@ -42,8 +42,16 @@ const WaitedSchema = z.object({ threadId: z.string(), status: z.enum(THREAD_STAT
 
 export type Waited = z.infer<typeof WaitedSchema>;
 
-/** What the runtime reads of a thread: its folder, how many runs it had, and the requests it holds for a person. */
-const ThreadShellSchema = z.object({ worktreePath: z.string().nullable(), runCount: z.number().int().nonnegative(), pendingRequestCount: z.number().int().nonnegative() });
+/**
+ * What the runtime reads of a thread: its latest run's status as T3 names it (none before its first run), its folder,
+ * how many runs it had, and the requests it holds for a person.
+ */
+const ThreadShellSchema = z.object({
+  status: z.string().nullable(),
+  worktreePath: z.string().nullable(),
+  runCount: z.number().int().nonnegative(),
+  pendingRequestCount: z.number().int().nonnegative(),
+});
 
 export type ThreadShell = z.infer<typeof ThreadShellSchema>;
 
@@ -125,6 +133,7 @@ export interface T3 {
   wait(threadId: string, timeoutMs: number): Promise<Waited>;
   /** Stops the thread as its Stop button does: its running turn and every task it delegated. */
   stop(threadId: string): Promise<void>;
+  /** Moves the thread out of the person's active threads, to T3's Settled group, where its link still opens it. */
   settle(threadId: string): Promise<void>;
   close(): Promise<void>;
 }

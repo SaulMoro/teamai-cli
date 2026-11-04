@@ -71,6 +71,8 @@ export interface FakeT3Config {
   interruptMs?: number;
   /** The longest a wait holds before it answers that the run still goes, in ms, whatever the caller asked. */
   waitCapMs?: number;
+  /** T3 refuses to settle a thread. */
+  organizeFails?: boolean;
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });
@@ -104,6 +106,8 @@ export interface FakeT3 {
   config(change: Partial<FakeT3Config>): void;
   calls(): FakeCall[];
   threads(): FakeThread[];
+  /** A thread someone else launched, such as the person, ended at `status`. */
+  addThread(thread: { threadId: string; title: string; status: string }): void;
   /** Starts the fake server, or starts it again on the same state. */
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -142,6 +146,10 @@ export function fakeT3(dir: string, workspaceRoot: string): FakeT3 {
       return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter((line) => line !== '').map((line) => CallSchema.parse(JSON.parse(line))) : [];
     },
     threads: () => fs.readdirSync(path.join(state, 'threads')).filter((file) => file.endsWith('.json')).map((file) => ThreadSchema.parse(JSON.parse(fs.readFileSync(path.join(state, 'threads', file), 'utf8')))),
+    addThread(thread) {
+      fs.mkdirSync(path.join(state, 'threads'), { recursive: true });
+      fs.writeFileSync(path.join(state, 'threads', `${encodeURIComponent(thread.threadId)}.json`), JSON.stringify({ ...thread, provider: 'claudeAgent', settled: false, runCount: 1 }));
+    },
     async start() {
       fs.rmSync(runtimeFile, { force: true });
       server = spawn(process.execPath, [FAKE_T3], { env: { ...process.env, FAKE_T3_STATE: state, T3CODE_HOME: t3Home, FAKE_T3_HOME: home }, stdio: ['ignore', 'ignore', 'inherit'] });

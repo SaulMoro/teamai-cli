@@ -10,16 +10,17 @@ import { z } from 'zod';
 //  thread each prompt launched, so the runtime reconnects to it instead of launching another.
 //
 
-/** The T3 thread a prompt launched: what reconnecting to it and showing it need. */
+/** The T3 thread a prompt launched: what reconnecting to it, showing it and settling it need. */
 const ThreadSchema = z.object({
   threadId: z.string().min(1),
   title: z.string(),
-  link: z.string(),
   model: z.string(),
   tool: z.string(),
   launchedAt: z.number(),
   /** A judge's: the read-only copy of its directory, in the thread's own scratch folder, which close removes. */
   copy: z.string().optional(),
+  /** How asking T3 to settle the thread went, once the runtime asked; it asks once. */
+  settle: z.enum(['settled', 'failed']).optional(),
 });
 
 export type ThreadRecord = z.infer<typeof ThreadSchema>;

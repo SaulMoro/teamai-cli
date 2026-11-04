@@ -67,7 +67,7 @@ teamai workflow start readme-review --driver t3
 
 ```text
 This thread runs step "review" of teamai workflow run r928e2fc23ab9bd62 (attempt a96c8bc03). It was started from
-the T3 thread t3-thread://v2/88e28b29-…/thread-… . Work only in this worktree. Do not run teamai workflow commands:
+the T3 thread <t3-thread://v2/88e28b29-…/thread-…>. Work only in this worktree. Do not run teamai workflow commands:
 teamai commits, pushes and reports the step itself.
 
 Read README.md. Count its markdown sections …
@@ -81,7 +81,22 @@ Write the workflow result as JSON to ~/.teamai/projects/…/attempts/a96c8bc03/o
 {"data":{"done":{"run":"r928e2fc23ab9bd62","outcome":"succeeded","record":"published"},"cancelled":[]}}
 ```
 
-步骤运行时，`teamai dashboard` 的运行详情会链接它的线程（`t3-thread://…`），并显示线程 id 和模型。步骤的结果收集完成后，teamai 会把线程标记为已处理（settle），它就离开你的活动线程列表。步骤失败的线程会留在活动列表里，让你看到它。
+步骤运行时，`teamai dashboard` 的运行详情会链接它的线程，并显示线程 id 和模型。这个链接会在 T3 Code 桌面应用里打开线程，从仪表盘或终端都可以：
+
+```sh
+open 't3code://threads/88e28b29-…/mcp%3Alaunch%3A3891149…'
+```
+
+步骤结束后，teamai 会把它的线程标记为已处理（settle）。线程离开你的活动线程列表，进入 T3 折叠起来的 **Settled** 分组，链接仍然能打开它：
+
+| 步骤 | 它的线程 |
+| --- | --- |
+| 成功、失败，或在结果里报告了失败 | teamai 收集步骤后标记为已处理 |
+| 被取消（`teamai workflow cancel`） | 先停止，再标记为已处理 |
+| 仍在运行，或是在等你的交互式步骤 | 留在活动列表里 |
+| 步骤已结束但 T3 仍在运行线程（T3 没有停止它） | 留在活动列表里，方便你停止它 |
+
+teamai 只处理它自己启动的线程。如果 T3 拒绝把某个线程标记为已处理，步骤照样有效，线程留在活动列表里。
 
 ## 步骤线程会问你多少
 
@@ -184,7 +199,7 @@ $ teamai workflow start readme-test-section --driver t3only
 - 它是一个独立的新线程，在一个新的 scratch 文件夹（`~/.t3/scratch/…`）里。teamai 把评审要读的证据（会话记录、diff、`evidence.json`）复制进这个文件夹，并把副本设为只读。
 - 它的第一条消息要求它只读这个文件夹，给出回复的 JSON Schema，并把 teamai 提示词里每处提到证据目录的地方都指向副本。
 - 它的最后一条消息就是回复：`{"answer":{"label":"good","reasoning":"The step asked for a \"## Test\" section … diff.patch adds exactly that …"}}`。
-- 它和步骤线程一样以 Auto 运行，或者以你收紧的 `runtime_mode` 运行。读到回复后 teamai 会把线程标为已处理（settle），并在评审的位置关闭时删除副本。
+- 它和步骤线程一样以 Auto 运行，或者以你收紧的 `runtime_mode` 运行。评审的位置关闭时，teamai 会把线程标为已处理（settle）并删除副本。
 
 T3 评审的[隔离级别](scorers.md#隔离)是 **best-effort**：
 
@@ -206,7 +221,7 @@ T3 评审的[隔离级别](scorers.md#隔离)是 **best-effort**：
 
 ## 重启、取消和重试
 
-步骤的线程在 T3 里，不在 teamai 的进程里。如果驱动进程退出，`teamai workflow resume <run> --driver t3` 会重新连接到同一个线程，而不是再启动一个。`teamai workflow cancel <run>` 像线程的 Stop 按钮一样停止线程。线程以 interrupted 结束，留在你的活动线程列表里，它正在等待的请求会被撤回。
+步骤的线程在 T3 里，不在 teamai 的进程里。如果驱动进程退出，`teamai workflow resume <run> --driver t3` 会重新连接到同一个线程，而不是再启动一个。`teamai workflow cancel <run>` 像线程的 Stop 按钮一样停止线程。线程以 interrupted 结束，它正在等待的请求会被撤回，teamai 会把它标记为已处理。
 
 ```sh
 teamai workflow resume r928e2fc23ab9bd62 --driver t3
