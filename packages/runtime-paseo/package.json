@@ -1,0 +1,14 @@
+{
+  "name": "@teamai/runtime-paseo",
+  "private": true,
+  "type": "module",
+  "description": "teamai-runtime-paseo: the step runtime that runs each workflow prompt step as an agent of a Paseo daemon, over runtime protocol 1 on stdio; bundled as its own executable in teamai-cli, never imported by it.",
+  "dependencies": {
+    "@getpaseo/client": "0.14.0",
+    "@getpaseo/protocol": "0.14.0",
+    "ws": "8.22.1"
+  },
+  "devDependencies": {
+    "@types/ws": "8.18.2"
+  }
+}
