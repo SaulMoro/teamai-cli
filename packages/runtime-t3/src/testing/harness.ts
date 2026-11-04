@@ -73,6 +73,8 @@ export interface FakeT3Config {
   waitCapMs?: number;
   /** T3 refuses to settle a thread. */
   organizeFails?: boolean;
+  /** How long after T3 acknowledged a stop the thread's run ends, in ms; at once otherwise. */
+  stopLagMs?: number;
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });

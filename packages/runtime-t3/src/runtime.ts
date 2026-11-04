@@ -55,6 +55,9 @@ const EFFORT_OPTIONS = new Set(['effort', 'reasoningEffort', 'reasoning_effort',
  */
 const WAIT_MS = { attended: 25_000, unattended: 5_000 } as const;
 
+/** How long a cancelled step's thread gets to end before it is settled: T3 acknowledges a stop before the run ends. */
+const STOP_WAIT_MS = 10_000;
+
 /** How often an interactive step's thread is checked once it is idle without a result: the person may still be in it. */
 const IDLE_POLL_MS = 2_000;
 
@@ -756,11 +759,13 @@ export function serve(options: ServeOptions): Promise<void> {
     const s = session;
 
     for (const [op, thread] of Object.entries(known.threads)) {
-      if (thread.settlement || !ended(known.ops[op])) continue;
+      const state = known.ops[op];
+
+      if (thread.settlement || !ended(state)) continue;
       let outcome: NonNullable<ThreadRecord['settlement']>;
 
       try {
-        const { status } = await s.t3.thread(thread.threadId);
+        const { status } = state?.state === 'cancelled' ? await s.t3.wait(thread.threadId, STOP_WAIT_MS) : await s.t3.thread(thread.threadId);
 
         if (status !== null && status !== 'idle' && !TERMINAL.has(status)) continue;
         await s.t3.settle(thread.threadId);
