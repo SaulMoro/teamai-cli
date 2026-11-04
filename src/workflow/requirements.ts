@@ -137,7 +137,7 @@ const ENFORCEMENT = {
   host: 'strict',
   /** A prompt step: the driver takes prompts (`can.prompt` is not false). */
   prompt: 'strict',
-  /** A command step, or setup, that is not pinned to the host: the driver takes them (`can.commands` is not `pinned`). */
+  /** A command step that is not pinned to the host: the driver takes it (`can.commands` is not `pinned`). */
   commands: 'strict',
 } as const satisfies Record<string, 'strict' | 'bestEffort'> & Record<keyof Floor | 'env', 'strict' | 'bestEffort'>;
 
@@ -160,8 +160,8 @@ export const HOST_PINNED_WORKFLOWS: ReadonlySet<string> = new Set(['teamai-score
  * driver definition, which no driver or runtime declares over the wire.
  * - `remote`: the runtime runs steps away from this host, so it takes no command step pinned to the host.
  * - `prompt: false`: it takes no prompt step, as the host command slot of a definition with no `local`.
- * - `commands: 'pinned'`: of command steps and setup, it takes only those pinned to the host, since another runtime of
- *   the definition runs commands.
+ * - `commands: 'pinned'`: of command steps, it takes only those pinned to the host, since another runtime of the
+ *   definition runs commands. A prompt it takes still brings its setup, which runs where the prompt runs.
  */
 export type DriverCan = Can & { remote?: true; prompt?: false; commands?: 'pinned' };
 
@@ -442,7 +442,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     ...(offer.executor === 'command' && can.exec === false ? ['exec' as const] : []),
     ...(offer.pinned && can.remote ? ['host' as const] : []),
     ...(offer.executor === 'prompt' && can.prompt === false ? ['prompt' as const] : []),
-    ...(can.commands === 'pinned' && ((offer.executor === 'command' && !offer.pinned) || offer.setup) ? ['commands' as const] : []),
+    ...(can.commands === 'pinned' && offer.executor === 'command' && !offer.pinned ? ['commands' as const] : []),
     // Setup runs as a command, so a driver that runs none runs no setup either, whatever it says of setup.
     ...(offer.setup && (!can.setup || can.exec === false) ? ['setup' as const] : []),
     // A strict sandbox keeps its strip list from every process of the step, which only a driver with `can.env: true` does.
