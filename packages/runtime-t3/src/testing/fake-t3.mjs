@@ -150,6 +150,10 @@ function writeTranscript(thread) {
 // Broadest first, as T3 ranks them.
 const MODES = ['full-access', 'auto', 'auto-accept-edits', 'approval-required'];
 const fail = (message) => ({ isError: true, content: [{ type: 'text', text: message }] });
+
+// As T3 answers a call on a thread it does not have, such as one the person deleted.
+const notFound = (threadId) => fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'thread_not_found', message: `Thread ${threadId} was not found.` }));
+
 const ok = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value });
 
 // As T3 answers a launch: its web UI's link to the thread, not the t3-thread:// form its thread lists carry.
@@ -214,7 +218,7 @@ const TOOLS = {
     const deadline = Date.now() + Math.min(args.timeoutMs ?? 30_000, config().waitCapMs ?? Infinity);
     let thread = readThread(args.threadId);
 
-    if (!thread) return fail(`No thread ${args.threadId}.`);
+    if (!thread) return notFound(args.threadId);
 
     if (thread.status === 'idle') return ok({ threadId: args.threadId, runId: null, status: 'idle', timedOut: false });
     const settledNow = () => TERMINAL.has(thread.status) && !config().delegatesPending;
@@ -232,7 +236,7 @@ const TOOLS = {
   t3_thread_read: (args) => {
     const thread = readThread(args.threadId);
 
-    if (!thread) return fail(`No thread ${args.threadId}.`);
+    if (!thread) return notFound(args.threadId);
 
     const items = args.view !== 'activity' && thread.reply !== undefined ? [{ position: 1, itemId: 'item-reply', type: 'assistant_message', text: thread.reply, textTruncated: false, nextTextOffset: null }] : [];
 
@@ -244,7 +248,7 @@ const TOOLS = {
   t3_thread_send: (args) => {
     const thread = readThread(args.threadId);
 
-    if (!thread) return fail(`No thread ${args.threadId}.`);
+    if (!thread) return notFound(args.threadId);
 
     if (thread.runCount > 0) return ok({ threadId: args.threadId, status: 'queued' });
     update(args.threadId, () => ({ message: args.message, status: 'starting', runCount: 1 }));
@@ -256,7 +260,7 @@ const TOOLS = {
     await sleep(config().interruptMs ?? 0);
     const thread = readThread(args.threadId);
 
-    if (!thread) return fail(`No thread ${args.threadId}.`);
+    if (!thread) return notFound(args.threadId);
 
     // An idle thread has no run to stop either.
     if (TERMINAL.has(thread.status) || thread.status === 'idle') return ok({ threadId: args.threadId, runId: null, status: 'no_active_run' });
@@ -272,7 +276,7 @@ const TOOLS = {
   },
   // As T3 answers it: the sequence number of the event it recorded.
   t3_thread_organize: (args) => {
-    if (!readThread(args.threadId)) return fail(`No thread ${args.threadId}.`);
+    if (!readThread(args.threadId)) return notFound(args.threadId);
 
     if (config().organizeFails) return fail(`Thread ${args.threadId} cannot be organized now.`);
     update(args.threadId, () => ({ settled: args.action === 'settle' }));
