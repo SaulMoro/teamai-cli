@@ -6,6 +6,7 @@ A workflow is a YAML file at `workflows/<name>.yaml` in the team repo. It runs c
 
 To run each step in a container from your team's image, see [Sandbox runtime](runtime-sandbox.md).
 To run each prompt step as a T3 Code thread you can watch, see [T3 runtime](runtime-t3.md).
+To run prompt steps as agents of a Paseo daemon, see [Paseo runtime](runtime-paseo.md).
 
 ```yaml
 schemaVersion: v1alpha1
