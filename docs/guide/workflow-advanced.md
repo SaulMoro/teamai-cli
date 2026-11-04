@@ -1489,6 +1489,19 @@ A runtime that cannot end a place answers `close` with why. teamai then treats w
 
 A runtime that exits while an exec or prompt runs fails it `runtime_lost`, for the same reason.
 
+Answer every request, even one you cannot carry out. A `reattach`, `collect` or `close` you cannot answer, for example because your journal cannot be read or your provider cannot be reached, gets the failure reply for its handle. Never answer `gone` then: the place may still be there.
+
+```text
+→ {"type":"reattach","handle":"teamai-r7-a1"}
+← {"event":"failed","handle":"teamai-r7-a1","failure":{"code":"journal_unreadable","message":"/var/lib/acme-runtime/r7.json is not valid JSON. Fix or remove it, then run teamai workflow cancel r7 again."}}
+```
+
+An `{"event":"error"}` line names no request, so teamai fails every `init`, `reattach`, `collect` and `close` still waiting on your runtime with `runtime_unanswered`. It does the same to a `reattach` or `close` that gets no reply within 15 s. The attempt keeps its place, its records and its login:
+
+```text
+Step runtime "acme" could not close the place of attempt a1, so what ran there may still run (runtime_unanswered): Step runtime "acme" did not answer close of teamai-r7-a1 within 15 s.
+```
+
 Every request and reply is defined as a zod schema in `packages/runtime-protocol` of the teamai repository: `RuntimeRequestSchema` for what teamai sends, `RuntimeMessageSchema` for what a runtime writes.
 
 `display`, on `ready`, on an exec's or prompt's `accepted`, and on the `alive` reply to `reattach`, is optional: a `label` of at most 80 characters, a `url` (`https:`, `http:` or an app's own scheme such as `t3:`), and at most 8 string `fields`. The run's details in the dashboard show it under the step. Put no secret and no path in your home in it. teamai drops a display it cannot show, logs why, and runs the step as usual. The latest one given is shown, so a runtime that creates an agent only for the prompt shows the place at `ready`, then the agent with the prompt's `accepted`.

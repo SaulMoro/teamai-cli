@@ -30,6 +30,12 @@ import { z } from 'zod';
 //    > {"type":"reattach","handle":"…"}             < {"event":"alive","handle":"…","ops":[...]} or {"event":"gone",…}
 //    > {"type":"close","handle":"…"}                < {"event":"closed","handle":"…"} or {"event":"close_failed","handle":"…","failure":{…}}
 //    > {"type":"cancel","op":"op-8b10…"}            the operation then ends {"op":"op-8b10…","event":"cancelled"}
+//                                                   or {"op":"op-8b10…","event":"failed","failure":{…}}, which reattach keeps reporting
+//
+//  A `reattach`, `collect` or `close` the runtime cannot answer gets the failure reply for its handle,
+//  {"event":"failed","handle":"…","failure":{…}}; one for an operation gets that operation's `failed`. An
+//  {"event":"error"} names no request, so teamai fails every `init`, `reattach`, `collect` and `close` still waiting with
+//  `runtime_unanswered`, as it does a `reattach` or `close` with no reply within 15 s.
 //
 //  `max_parallel` and `credentials` in a driver definition's options are teamai's: it strips them before `init`, so a
 //  runtime never sees or validates them. The credential values travel only in requests, in memory: on `open` for the
@@ -396,6 +402,11 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType>({ display }: {
     z.object({ event: z.literal('closed'), handle: RuntimeHandleSchema }),
     /** The runtime could not end the place, so what it started there may still run. */
     z.object({ event: z.literal('close_failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema }),
+    /**
+     * The runtime could not answer a `reattach`, `collect` or `close` of the handle, such as when its journal cannot be
+     * read or its provider cannot be reached: never `gone` for that, since the place may still be there.
+     */
+    z.object({ event: z.literal('failed'), handle: RuntimeHandleSchema, failure: RuntimeFailureSchema }),
   ]);
 
   return { OpEvent, HandleEvent, Message: z.union([InitReply, OpEvent, HandleEvent, z.object({ event: z.literal('error'), message: z.string() })]) };

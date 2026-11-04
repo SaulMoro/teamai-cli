@@ -1333,6 +1333,28 @@ span('end');
       }
     });
 
+    it('keeps the place and the login when the runtime answers the close of an attempt whose driver was killed with an error that names no request', async () => {
+      loginDefinition('codexerror', state);
+      const { run, pid, watched } = await holdingRun('codexerror');
+      watched.kill();
+      await watched.ended;
+      loginDefinition('codexerror', state, { answer: { close: 'error' } });
+
+      const cancelled = await runCLI(['workflow', 'cancel', run], repo, env());
+
+      expect(envelope(cancelled), cancelled.stderr).toMatchObject({ data: { run: { status: 'cancelled' } } });
+      const attempt = attemptOf(readRunState(run).steps[0]);
+      const handle = `toy-${run}-${attempt}`;
+      expect(pidAlive(pid)).toBe(false);
+      expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'collected', closeFailed: { code: 'runtime_unanswered' } });
+      expect(cancelled.stderr).toContain(`Could not stop attempt ${attempt} of run ${run} on step runtime "toy" of driver "codexerror": Step runtime "toy" could not close the place of attempt ${attempt}, so what ran there may still run (runtime_unanswered): Step runtime "toy" did not answer close of ${handle}: it wrote an error that names no request (The toy cannot answer close of ${handle}: answer.close is set.).`);
+      expect(cancelled.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}`);
+      expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
+      // The toy still knows the place.
+      expect(JSON.parse(fs.readFileSync(path.join(state, 'handles.json'), 'utf8'))).toMatchObject({ [`${run}/${attempt}`]: handle });
+      fs.rmSync(lockFile(), { force: true });
+    });
+
     it('leaves the login to a driver that still runs when teamai workflow cancel stops its run, which releases it once its tool stopped', async () => {
       loginDefinition('codexlive', state);
       const { run, pid, watched } = await holdingRun('codexlive');
