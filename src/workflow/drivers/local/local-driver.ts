@@ -143,6 +143,9 @@ const WaitReplySchema = z.object({
   held: z.array(z.object({ step: z.string(), reason: z.string(), missing: z.array(z.string()) })).optional().catch(undefined),
 }).catch({});
 
+/** A step a runtime held back, as a wait names it. */
+type WaitHeld = NonNullable<z.infer<typeof WaitReplySchema>['held']>[number];
+
 /** What the driver says once it handed run `runId` to a person at `steps`, and the command that person runs. */
 function handedToPerson(runId: string, steps: readonly string[]): WorkflowEnvelope {
   const resume = `teamai workflow resume ${runId} --claim`;
@@ -1336,7 +1339,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       // Each runtime with room is offered in turn, in definition order, until one takes a lease: a wait is final only
       // once every one was offered. An attempt left open by a loop before this one goes back to its own runtime first.
-      const offered = await (async (): Promise<{ next: WorkflowEnvelope; slot: RuntimeSlot; held?: true }> => {
+      // `heldByAll`: what every runtime offered held back, so a step one of them holds for a person is seen whichever answered last.
+      const offered = await (async (): Promise<{ next: WorkflowEnvelope; slot: RuntimeSlot; held?: true; heldByAll?: WaitHeld[] }> => {
         for (let reconnect = reconnecting.shift(); reconnect; reconnect = reconnecting.shift()) {
           const next = await ask(reconnect.slot, false, [...running, ...reconnecting.map((other) => other.attempt)]);
 
@@ -1346,12 +1350,15 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         const withRoom = canTakeLease ? slots.filter(slotHasRoom) : [];
         let last: { next: WorkflowEnvelope; slot: RuntimeSlot } | undefined;
         const holds: HeldSteps['runtimes'] = [];
+        const heldByAll: WaitHeld[] = [];
 
         for (const slot of withRoom) {
           last = { next: await ask(slot, true, running), slot };
 
           if (isWorkflowError(last.next) || !('wait' in last.next.data)) return last;
-          holds.push({ runtime: slot.use, held: (WaitReplySchema.parse(last.next.data.wait).held ?? []).map(({ step, reason }) => ({ step, reason })) });
+          const heldBySlot = WaitReplySchema.parse(last.next.data.wait).held ?? [];
+          heldByAll.push(...heldBySlot);
+          holds.push({ runtime: slot.use, held: heldBySlot.map(({ step, reason }) => ({ step, reason })) });
         }
 
         // Every runtime with room was offered and held its steps back: the run's details say why.
@@ -1367,7 +1374,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           }
         }
 
-        return last ?? { next: await ask(slots[0], false, running), slot: slots[0] };
+        return last ? { ...last, heldByAll } : { next: await ask(slots[0], false, running), slot: slots[0] };
       })();
 
       const { next } = offered;
@@ -1575,7 +1582,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         }
 
         // Nobody answers here, so the run goes to a person: offered on teamai-reports, its local state kept.
-        const people = handoff?.kind === 'offers' ? (wait.held ?? []).filter(({ missing }) => missing.includes(HITL)).map(({ step }) => step) : [];
+        // A step any runtime holds back only a person can take goes to one, when no runtime of the driver asks.
+        const people = handoff?.kind === 'offers' ? [...new Set((offered.heldByAll ?? wait.held ?? []).filter(({ missing }) => missing.includes(HITL)).map(({ step }) => step))] : [];
 
         if (people.length > 0) {
           const unoffered = await offerToPerson(config, runId, cwd);
