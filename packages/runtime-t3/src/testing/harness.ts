@@ -63,6 +63,8 @@ export interface FakeT3Config {
   agent: FakeAgent;
   /** The mode teamai's sign-in was approved with; T3 refuses a thread in a broader one. Unset: any mode. */
   access?: StepMode;
+  /** T3 refuses to interrupt a thread, as when it lost track of its run. */
+  interruptFails?: boolean;
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });

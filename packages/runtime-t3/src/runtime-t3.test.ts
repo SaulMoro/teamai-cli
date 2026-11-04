@@ -230,7 +230,13 @@ describe('teamai-runtime-t3', () => {
 
       runtime.send(prompt(handle, op));
 
-      expect(await runtime.next((line) => line['op'] === op)).toEqual({ op, event: 'accepted' });
+      // The thread exists once T3 launched it, so the acceptance shows it, and the run details link it during the run.
+      const accepted = await runtime.next((line) => line['op'] === op);
+      expect(RuntimeMessageSchema.safeParse(accepted).success).toBe(true);
+      expect(accepted).toEqual({
+        op, event: 'accepted',
+        display: { label: `review · teamai ${RUN}`, url: expect.stringMatching(/^t3-thread:\/\/v2\/env-fake-1\/mcp:launch:[0-9a-f]{64}$/), fields: { thread: expect.stringMatching(/^mcp:launch:/), model: 'claude-opus-5-5', environment: 'fake-laptop' } },
+      });
       const end = await ended(runtime, op);
       expect(RuntimeMessageSchema.safeParse(end).success).toBe(true);
       expect(end).toEqual({ op, event: 'finished', session: { tool: 'claude', id: expect.stringMatching(/^[0-9a-f-]{36}$/) }, result: { output: { verdict: 'approve' } } });
@@ -350,6 +356,58 @@ describe('teamai-runtime-t3', () => {
       expect(await ended(runtime, 'op-00000013')).toEqual({ op: 'op-00000013', event: 'cancelled' });
       expect(t3.calls().find((call) => call.tool === 't3_thread_interrupt')?.args).toMatchObject({ stop: true });
       expect(t3.threads()[0]?.status).toBe('interrupted');
+    });
+
+    it('refuses a prompt that carries credentials, since the thread runs on T3 Code\'s own sign-in, and launches nothing', async () => {
+      const { runtime, handle } = await opened();
+
+      runtime.send({ ...prompt(handle, 'op-0000001e'), credentials: { ACME_TOKEN: 'acme-secret-value' } });
+
+      const end = await ended(runtime, 'op-0000001e');
+      expect(end).toEqual({
+        op: 'op-0000001e', event: 'failed', failure: {
+          code: 'credentials_unsupported',
+          message: 'Runtime t3 got credentials ACME_TOKEN, but a T3 thread runs its tool in T3 Code\'s environment, on T3 Code\'s own sign-in, and this runtime cannot pass it a value (its init offers can.env: false). Remove the credentials from the runtime, or run the step on a runtime that offers can.env.',
+        },
+      });
+      expect(JSON.stringify(runtime.lines)).not.toContain('acme-secret-value');
+      expect(t3.threads()).toEqual([]);
+    });
+
+    it('stops a thread still running when teamai closes its place, then answers closed', async () => {
+      t3.config({ agent: { hold: true, output: {} } });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-0000001f'));
+      await runtime.next((line) => line['op'] === 'op-0000001f' && line['event'] === 'accepted');
+      await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => line['handle'] === handle && line['event'] !== 'accepted')).toEqual({ event: 'closed', handle });
+      expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: false });
+    });
+
+    it('answers close_failed, keeping the place, when T3 will not stop a thread still running there', async () => {
+      t3.config({ agent: { hold: true, output: {} } });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-00000020'));
+      await runtime.next((line) => line['op'] === 'op-00000020' && line['event'] === 'accepted');
+      await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+      t3.config({ interruptFails: true });
+      const [thread] = t3.threads();
+
+      runtime.send({ type: 'close', handle });
+
+      const answer = await runtime.next((line) => line['handle'] === handle && line['event'] !== 'accepted');
+      expect(RuntimeMessageSchema.safeParse(answer).success).toBe(true);
+      expect(answer).toEqual({
+        event: 'close_failed', handle, failure: {
+          code: 'thread_still_runs',
+          message: `The T3 thread t3-thread://v2/env-fake-1/${thread?.threadId} ("review · teamai ${RUN}") still runs, and T3 Code did not stop it: Thread ${thread?.threadId} has a run T3 cannot interrupt now. Stop it in T3 Code with its Stop button.`,
+        },
+      });
+      runtime.send({ type: 'reattach', handle });
+      expect(await runtime.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-00000020', state: 'running' }] });
     });
 
     it('fails a step whose agent asks for an approval in an unattended run, and stops its thread', async () => {

@@ -239,16 +239,17 @@ export function serve(options: ServeOptions): Promise<void> {
     }
   };
 
-  /** Stops a step's thread as its Stop button does; a failure is logged, and the thread may still run in T3. */
-  const stopped = async (t3: T3, threadId: string): Promise<boolean> => {
+  /** Stops a step's thread as its Stop button does. Answers why it could not, logged, while the thread may still run. */
+  const whyNotStopped = async (t3: T3, threadId: string): Promise<string | undefined> => {
     try {
       await t3.stop(threadId);
 
-      return true;
+      return undefined;
     } catch (error) {
-      process.stderr.write(`Could not stop ${threadId}: ${error instanceof Error ? error.message : String(error)}\n`);
+      const why = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`Could not stop ${threadId}: ${why}\n`);
 
-      return false;
+      return why;
     }
   };
 
@@ -375,7 +376,7 @@ export function serve(options: ServeOptions): Promise<void> {
       if (!TERMINAL.has(waited.status)) {
         // T3 keeps a run that asks for an approval running, with the request pending; nobody answers it unattended.
         if (s.mode === 'unattended' && (waited.status === 'waiting' || await s.t3.pendingRequests(thread.threadId) > 0)) {
-          await stopped(s.t3, thread.threadId);
+          await whyNotStopped(s.t3, thread.threadId);
 
           return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} asked for an approval, and nobody is there to give it in an unattended run.` } };
         }
@@ -417,19 +418,29 @@ export function serve(options: ServeOptions): Promise<void> {
 
   const prompt = async (request: Extract<RuntimeRequest, { type: 'prompt' }>): Promise<void> => {
     handleOf.set(request.op, request.handle);
-    write({ op: request.op, event: 'accepted' });
     const opened = place(request.handle);
     const ended = opened?.ops[request.op];
 
+    /** The acceptance shows the step's thread once T3 launched it, so the run details link it during the run. */
+    const accept = (thread: ThreadRecord | undefined): void => {
+      write({ op: request.op, event: 'accepted', ...(thread && session && { display: threadDisplay(thread, session.environment.label) }) });
+    };
+
     if (ended && ended.state !== 'running') {
+      accept(opened?.threads[request.op]);
       answerEnded(request.op, ended);
 
       return;
     }
 
-    if (running.has(request.op)) return;
+    if (running.has(request.op)) {
+      accept(opened?.threads[request.op]);
+
+      return;
+    }
 
     if (!session || !opened) {
+      accept(undefined);
       fail(request.op, { code: 'runtime_protocol', message: session ? `No open place ${request.handle}.` : 'prompt came before a successful init.' });
 
       return;
@@ -443,8 +454,14 @@ export function serve(options: ServeOptions): Promise<void> {
       answerEnded(request.op, state);
     };
 
+    /** Ends an op that launches no thread. */
+    const refuse = (state: OpState): void => {
+      accept(undefined);
+      end(state);
+    };
+
     if (cancelledEarly.delete(request.op)) {
-      end({ op: request.op, state: 'cancelled' });
+      refuse({ op: request.op, state: 'cancelled' });
 
       return;
     }
@@ -454,14 +471,28 @@ export function serve(options: ServeOptions): Promise<void> {
     const instance = driver && s.instances.get(DRIVERS[driver].tool);
 
     if (!instance) {
-      end({ op: request.op, state: 'failed', failure: { code: 'tool_unavailable', message: `T3 Code ${s.environment.label} runs ${[...s.instances.keys()].join(', ') || 'no tool this runtime runs'} here, not ${lease.tool}.` } });
+      refuse({ op: request.op, state: 'failed', failure: { code: 'tool_unavailable', message: `T3 Code ${s.environment.label} runs ${[...s.instances.keys()].join(', ') || 'no tool this runtime runs'} here, not ${lease.tool}.` } });
 
       return;
     }
 
     if (lease.permissions === 'unattended') {
       // The offer says unattended: false, so teamai never sends one; a thread on the host never runs in full access.
-      end({ op: request.op, state: 'failed', failure: { code: 'unattended_unsupported', message: 'Runtime t3 runs no step in unattended permissions on this machine.' } });
+      refuse({ op: request.op, state: 'failed', failure: { code: 'unattended_unsupported', message: 'Runtime t3 runs no step in unattended permissions on this machine.' } });
+
+      return;
+    }
+
+    const credentials = Object.keys(request.credentials);
+
+    // The offer says env: false, so teamai sends none: the thread's tool runs in T3 Code's environment, on its sign-in.
+    if (credentials.length > 0) {
+      refuse({
+        op: request.op, state: 'failed', failure: {
+          code: 'credentials_unsupported',
+          message: `Runtime t3 got credentials ${credentials.join(', ')}, but a T3 thread runs its tool in T3 Code's environment, on T3 Code's own sign-in, and this runtime cannot pass it a value (its init offers can.env: false). Remove the credentials from the runtime, or run the step on a runtime that offers can.env.`,
+        },
+      });
 
       return;
     }
@@ -469,7 +500,7 @@ export function serve(options: ServeOptions): Promise<void> {
     const selection = modelSelection(instance, lease);
 
     if (!selection.ok) {
-      end({ op: request.op, state: 'failed', failure: selection.failure });
+      refuse({ op: request.op, state: 'failed', failure: selection.failure });
 
       return;
     }
@@ -496,7 +527,7 @@ export function serve(options: ServeOptions): Promise<void> {
       // T3 caps a thread's mode at the access the member approved teamai with, and says so with this code.
       const tooNarrow = error instanceof T3Error && error.refusal?.code === 'runtime_mode_escalation_denied' ? error.refusal.message : undefined;
 
-      end({
+      refuse({
         op: request.op, state: 'failed', failure: tooNarrow === undefined
           ? { code: 't3_launch_failed', message: `T3 Code did not launch the step's thread: ${error instanceof Error ? error.message : String(error)}` }
           : {
@@ -508,7 +539,9 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    if (state.cancelled) await stopped(s.t3, thread.threadId);
+    accept(thread);
+
+    if (state.cancelled) await whyNotStopped(s.t3, thread.threadId);
 
     try {
       end(await follow(s, request, thread));
@@ -528,7 +561,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
       // A runtime before this one launched the thread and died; teamai cancels before it reattaches.
       if (known && left && known.ops[op]?.state === 'running' && session) {
-        if (!await stopped(session.t3, left.threadId)) return;
+        if (await whyNotStopped(session.t3, left.threadId) !== undefined) return;
         record(known.handle, op, { op, state: 'cancelled' });
         answerEnded(op, { op, state: 'cancelled' });
 
@@ -545,7 +578,40 @@ export function serve(options: ServeOptions): Promise<void> {
 
     state.cancelled = true;
 
-    if (state.thread && session) await stopped(session.t3, state.thread);
+    if (state.thread && session) await whyNotStopped(session.t3, state.thread);
+  };
+
+  /** Ends the place. A thread still running there is stopped first; one T3 will not stop keeps the place, and close fails. */
+  const close = async (handle: string): Promise<void> => {
+    const known = place(handle);
+
+    const left = known && session ? Object.values(known.ops).flatMap((state) => {
+      const thread = known.threads[state.op];
+
+      return state.state === 'running' && thread ? [{ op: state.op, thread }] : [];
+    }) : [];
+
+    for (const { op, thread } of left) {
+      const live = running.get(op);
+
+      if (live) live.cancelled = true;
+      const why = session && await whyNotStopped(session.t3, thread.threadId);
+
+      if (why !== undefined) {
+        if (live) live.cancelled = false;
+        write({
+          event: 'close_failed', handle, failure: {
+            code: 'thread_still_runs',
+            message: `The T3 thread ${thread.link} ("${thread.title}") still runs, and T3 Code did not stop it: ${why.replace(/\.$/, '')}. Stop it in T3 Code with its Stop button.`,
+          },
+        });
+
+        return;
+      }
+    }
+
+    journal.remove(handle);
+    write({ event: 'closed', handle });
   };
 
   const handleRequest = async (request: RuntimeRequest): Promise<void> => {
@@ -584,10 +650,7 @@ export function serve(options: ServeOptions): Promise<void> {
       }
 
       case 'close':
-        journal.remove(request.handle);
-        write({ event: 'closed', handle: request.handle });
-
-        return;
+        return close(request.handle);
       default: {
         const unhandled: never = request;
 
