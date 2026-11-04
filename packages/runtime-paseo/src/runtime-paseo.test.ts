@@ -159,6 +159,26 @@ describe('teamai-runtime-paseo', () => {
     expect(fs.existsSync(ran)).toBe(false);
   });
 
+  it('stops every process of a `codex login status` that does not answer in time, as an npm shim leaves its native codex', async () => {
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    const native = path.join(dir, 'native.pid');
+    fs.writeFileSync(path.join(bin, 'codex'), `#!/bin/sh\nsh -c 'echo $$ > ${native}; exec sleep 60' &\nwait\n`, { mode: 0o755 });
+    behave({ models: { codex: ['gpt-6.1-sol'] }, codex_path: path.join(bin, 'codex') });
+
+    expect(await ready(start())).toMatchObject({ ok: false, error: { code: 'tool_unavailable', message: expect.stringContaining('login status` did not answer') } });
+    const pid = Number(fs.readFileSync(native, 'utf8'));
+    await expect.poll(() => {
+      try {
+        process.kill(pid, 0);
+
+        return 'running';
+      } catch {
+        return 'gone';
+      }
+    }, { timeout: 3_000 }).toBe('gone');
+  }, 20_000);
+
   it('says it cannot tell, rather than signed out, when `codex login status` gives neither answer', async () => {
     behave({ models: { codex: ['gpt-6.1-sol'] }, codex_login: 'unknown' });
 
