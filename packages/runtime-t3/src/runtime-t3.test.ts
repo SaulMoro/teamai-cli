@@ -127,14 +127,15 @@ describe('teamai-runtime-t3', () => {
       missing.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', instance: 'claude-sandbox' } });
       expect(await missing.next((line) => line['type'] === 'init')).toEqual({
         type: 'init', ok: false,
-        error: { code: 'bad_option', key: 'instance', message: expect.stringContaining('T3 Code has no provider instance "claude-sandbox". Add it in T3 Code under Settings → Providers') },
+        error: { code: 'bad_option', key: 'instance', message: expect.stringMatching(/^T3 Code has no provider instance "claude-sandbox"\. Add it in T3 Code under Settings → Providers, .*Instances here: [^.]+$/) },
       });
 
       const disabled = start();
       disabled.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local', instance: 'claude-off' } });
-      expect(await disabled.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { key: 'instance', message: expect.stringContaining('Provider instance is disabled.') } });
+      expect(await disabled.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { key: 'instance', message: expect.stringMatching(/cannot run now: Provider instance is disabled\. Enable it in T3 Code under Settings → Providers$/) } });
     });
 
+    // teamai quotes a keyed option failure inside a sentence of its own and ends it, so these messages bring no full stop.
     it.each(['full-access', 'yolo'])('refuses `runtime_mode: %s`, which would not tighten a step thread\'s mode', async (runtimeMode) => {
       signIn(t3);
       const runtime = start();
@@ -145,7 +146,7 @@ describe('teamai-runtime-t3', () => {
         type: 'init', ok: false,
         error: {
           code: 'bad_option', key: 'runtime_mode',
-          message: `runtime_mode "${runtimeMode}" is not one runtime t3 takes. A step thread runs in auto, T3's Auto mode; runtime_mode only tightens it, to auto-accept-edits or approval-required. Remove it, or set one of those two.`,
+          message: `runtime_mode "${runtimeMode}" is not one runtime t3 takes. A step thread runs in auto, T3's Auto mode; runtime_mode only tightens it, to auto-accept-edits or approval-required. Remove it, or set one of those two`,
         },
       });
       expect(t3.calls()).toEqual([]);
