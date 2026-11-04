@@ -659,6 +659,51 @@ describe('a runtime that cannot close a place, over stdio', () => {
   });
 });
 
+describe('a cancel a runtime tries again, over stdio', () => {
+  let dir: string;
+  const started: StepRuntime[] = [];
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-step-retry-'));
+    fs.mkdirSync(path.join(dir, 'worktree'));
+  });
+
+  afterEach(async () => {
+    await Promise.all(started.splice(0).map((runtime) => runtime.dispose()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const toy = async (options: RuntimeOptions): Promise<StepRuntime> => {
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    started.push(runtime);
+    expect(await runtime.init({ options: { state: path.join(dir, 'state'), ...options }, mode: 'unattended' })).toMatchObject({ ok: true });
+
+    return runtime;
+  };
+
+  it('reports the operation running from when it reads the retried cancel until the stop is confirmed, never the stop that failed before', async () => {
+    const cannotStop = { code: 'cancel_failed', message: 'The provider is down. Start it, then run teamai workflow cancel again.' };
+    const first = await toy({ cancel_fails: cannotStop });
+    const place = await first.open({
+      op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
+      view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
+    }, async () => {});
+    if (place.kind !== 'ready') throw new Error('not opened');
+    const op = newOpId();
+    void first.exec({ op, handle: place.handle, argv: [process.execPath, '-e', 'setTimeout(() => {}, 60000)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {});
+    expect(await until(async () => JSON.stringify(await first.reattach(place.handle)).includes('"running"'))).toBe(true);
+    await first.cancel(op);
+    expect(await until(async () => JSON.stringify(await first.reattach(place.handle)).includes('cancel_failed'))).toBe(true);
+
+    // A later runtime process, once the provider is back, stops it a while after it reads the cancel.
+    const again = await toy({ stop_ms: 1000 });
+    await again.cancel(op);
+
+    expect(await again.reattach(place.handle)).toMatchObject({ kind: 'alive', ops: [{ op, state: 'running' }] });
+    expect(await until(async () => JSON.stringify(await again.reattach(place.handle)).includes('"cancelled"'), 10_000)).toBe(true);
+  });
+});
+
 describe('the toy runtime once teamai stops reading it', () => {
   let dir: string;
   const started: StepRuntime[] = [];

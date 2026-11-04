@@ -29,7 +29,8 @@
 // with, as a runtime signed out of its provider; in `recover` mode it still opens, offers nothing and answers from its
 // state, unless `recover: false` makes it answer that mode as a runtime before it did. With `cancel_fails`, a cancel of
 // an exec or prompt still running stops nothing and ends it failed with that failure, which reattach keeps reporting
-// until a later cancel stops it.
+// until a later cancel stops it. With `stop_ms`, a stop completes that long after the cancel, and the operation is
+// reported running until then.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -37,7 +38,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 
-const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover']);
+const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover', 'stop_ms']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -415,32 +416,56 @@ function cancel(request) {
     return;
   }
 
+  // From the moment it reads the cancel, the operation is reported running until this stop is confirmed: the stop that
+  // failed before is not this cancel's outcome.
   if (found.cancelFailed) writeJson(opPath(request.op), record);
 
+  const stop = () => {
+    stopping.delete(request.op);
+    stopOperation(request.op, record);
+    exitWhenIdle();
+  };
+
+  // `stop_ms`: the stop completes that long after the cancel, as a runtime that asks its provider to stop does.
+  if (options.stop_ms === undefined) {
+    stop();
+
+    return;
+  }
+
+  stopping.add(request.op);
+  setTimeout(stop, options.stop_ms);
+}
+
+/** The operations whose stop the toy started and has not confirmed yet. */
+const stopping = new Set();
+
+/** Stops operation `op` and every process it started. */
+function stopOperation(op, record) {
   if (record.kind === 'prompt') {
     fs.mkdirSync(file('cancel'), { recursive: true });
-    fs.writeFileSync(file('cancel', request.op), '');
-    clearTimeout(working.get(request.op));
+    fs.writeFileSync(file('cancel', op), '');
+    clearTimeout(working.get(op));
 
     // A prompt this toy waits on ends now; one a toy before it sent ends when teamai sends it again.
-    if (working.has(request.op)) settlePrompt(request.op);
+    if (working.has(op)) settlePrompt(op);
 
     return;
   }
 
   fs.mkdirSync(file('cancel'), { recursive: true });
-  fs.writeFileSync(file('cancel', request.op), '');
+  fs.writeFileSync(file('cancel', op), '');
 
   if (record.pgid === undefined) return;
   stopGroup(record.pgid);
 
   // An exec a toy before this one started ends here: no child of this process reports it.
-  if (!running.has(request.op)) {
+  if (!running.has(op)) {
     const wait = setInterval(() => {
       if (groupAlive(record.pgid)) return;
       clearInterval(wait);
-      writeJson(opPath(request.op), { kind: 'exec', handle: record.handle, outcome: { state: 'cancelled' } });
-      send({ op: request.op, event: 'cancelled' });
+      writeJson(opPath(op), { kind: 'exec', handle: record.handle, outcome: { state: 'cancelled' } });
+      send({ op, event: 'cancelled' });
     }, 25);
   }
 }
@@ -508,7 +533,7 @@ let ended = false;
 
 /** The toy outlives its stdin while an exec runs, so an exec that finishes while teamai is down is still recorded. */
 function exitWhenIdle() {
-  if (ended && running.size === 0 && working.size === 0) process.exit(0);
+  if (ended && running.size === 0 && working.size === 0 && stopping.size === 0) process.exit(0);
 }
 
 const HANDLERS = { init, open, exec, prompt, cancel, collect: (request) => send({ event: 'collected', handle: request.handle }), reattach, close };
