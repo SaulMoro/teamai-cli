@@ -11,7 +11,7 @@ import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
 import type { OpState, RuntimeDisplay, RuntimeFailure, RuntimeOptions } from '@teamai/runtime-protocol';
 import { newOpId, type ExecEnd, type ExecRequest, type OpenRequest, type PromptRequest, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import type { JsonValue } from '../types.js';
-import { sandboxOnFakeDocker } from './helpers/sandbox-runtime.js';
+import { sandboxOnFake } from './helpers/sandbox-runtime.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
 
 /**
@@ -28,7 +28,7 @@ interface Subject {
   display?: RuntimeDisplay;
 }
 
-const sandbox = await sandboxOnFakeDocker();
+const [sandbox, sbx] = await Promise.all([sandboxOnFake('docker'), sandboxOnFake('sbx')]);
 
 const SUBJECTS: Subject[] = [
   {
@@ -44,6 +44,13 @@ const SUBJECTS: Subject[] = [
     options: () => sandbox.options,
     retains: true,
     display: { label: 'teamai-r0123abcd-a0123abcd (docker)', fields: { container: 'teamai-r0123abcd-a0123abcd', image: 'scenario/agent:1' } },
+  },
+  {
+    name: 'sandbox on a fake sbx',
+    start: (state) => stdioStepRuntime({ name: 'sandbox', command: sbx.command, args: sbx.args(state) }),
+    options: () => sbx.options,
+    retains: true,
+    display: { label: 'teamai-r0123abcd-a0123abcd (sbx)', fields: { sandbox: 'teamai-r0123abcd-a0123abcd', agent: 'claude' } },
   },
 ];
 

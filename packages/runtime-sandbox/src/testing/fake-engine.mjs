@@ -1,15 +1,18 @@
 #!/usr/bin/env node
-// A stand-in `docker` / `podman` for tests: the subset of the CLI the container provider runs, against a state
-// directory instead of a daemon. A container's processes run on the host, in a process group of their own, with only
+// A stand-in `docker` / `podman` / `sbx` for tests: the subset of each CLI its provider runs, against a state
+// directory instead of a daemon. An sbx sandbox is kept as a container whose image is its agent, mounted at its
+// workspaces' host paths. A container's processes run on the host, in a process group of their own, with only
 // the environment a real container would give them: the image's PATH, the `--env` of `run`, and each `-e NAME` of
 // `exec` taken from this process's own environment. An `exec` whose working directory no mount covers fails as it
 // would in a container; one that a mount covers runs in that mount's host directory. Every argv is appended to
 // FAKE_ENGINE_LOG as one JSON line; no environment value is written.
 //
-//   FAKE_ENGINE_STATE   its state directory; a file `down` there makes it answer as a stopped daemon, and a file
-//                       `rm-fails` makes `rm` fail as a daemon that cannot remove the container
-//   FAKE_ENGINE_IMAGES  JSON: image name -> the directory its tools are in (the image's PATH)
-//   FAKE_ENGINE_NAME    docker or podman, which it answers as
+//   FAKE_ENGINE_STATE   its state directory; a file `down` there makes it answer as a stopped daemon, a file
+//                       `rm-fails` makes `rm` fail as a daemon that cannot remove the container, a file `no-policy`
+//                       makes sbx answer as one whose network policy was never initialized, and a file
+//                       `secrets/<service>` is an sbx secret its proxy holds
+//   FAKE_ENGINE_IMAGES  JSON: image (or sbx agent) name -> the directory its tools are in (the image's PATH)
+//   FAKE_ENGINE_NAME    docker, podman or sbx, which it answers as
 //   FAKE_ENGINE_LOG     optional: where argv lines go
 //   FAKE_ENGINE_VERSION optional: the server version `info` reports, 27.3.1 when unset
 import { spawn } from 'node:child_process';
@@ -126,160 +129,281 @@ if (command === '--version' || command === 'version') {
   process.exit(0);
 }
 
-if (fs.existsSync(path.join(state, 'down'))) fail(`Cannot connect to the ${engine === 'podman' ? 'Podman' : 'Docker'} daemon. Is the daemon running?`);
+if (engine === 'sbx') sbx();
+else docker();
 
-switch (command) {
-  case 'info': {
-    // Each engine's own template field for its version.
-    const format = rest[rest.indexOf('--format') + 1] ?? '';
+/** Answers as docker or podman. */
+function docker() {
+  if (fs.existsSync(path.join(state, 'down'))) fail(`Cannot connect to the ${engine === 'podman' ? 'Podman' : 'Docker'} daemon. Is the daemon running?`);
 
-    if (format.includes(engine === 'podman' ? 'ServerVersion' : 'Version.Version')) fail(`Error: template: info:1:2: executing "info" at <${format}>: can't evaluate field`, 125);
-    process.stdout.write(`${process.env.FAKE_ENGINE_VERSION ?? (engine === 'podman' ? '5.2.3' : '27.3.1')}\n`);
-    break;
-  }
+  switch (command) {
+    case 'info': {
+      // Each engine's own template field for its version.
+      const format = rest[rest.indexOf('--format') + 1] ?? '';
 
-  case 'image': {
-    const [, , , image] = rest;
-
-    if (rest[0] !== 'inspect' || !pulled(image)) fail(`Error: No such image: ${image}`);
-    process.stdout.write(`sha256:${crypto.createHash('sha256').update(image).digest('hex')}\n`);
-    break;
-  }
-
-  case 'pull': {
-    const [image] = rest;
-
-    if (images[image] === undefined) fail(`Error response from daemon: pull access denied for ${image}, repository does not exist`);
-    fs.mkdirSync(path.join(state, 'pulled'), { recursive: true });
-    fs.writeFileSync(path.join(state, 'pulled', encodeURIComponent(image)), '');
-    break;
-  }
-
-  case 'run': {
-    const { found, rest: positional } = options(rest, ['--name', '--label', '--user', '--userns', '--env', '-v', '--entrypoint', '--network', '--cap-drop', '--security-opt'], ['-d', '--rm']);
-    const [image, ...entry] = positional;
-
-    if (!pulled(image)) fail(`Unable to find image '${image}' locally`, 125);
-
-    if (one(found, '--rm')) {
-      // A probe: run the entrypoint once, on the image's PATH.
-      const probe = spawn(one(found, '--entrypoint'), entry, { env: { PATH: imagePath(image) }, stdio: ['ignore', 'inherit', 'inherit'] });
-      probe.on('close', (code) => process.exit(code ?? 1));
+      if (format.includes(engine === 'podman' ? 'ServerVersion' : 'Version.Version')) fail(`Error: template: info:1:2: executing "info" at <${format}>: can't evaluate field`, 125);
+      process.stdout.write(`${process.env.FAKE_ENGINE_VERSION ?? (engine === 'podman' ? '5.2.3' : '27.3.1')}\n`);
       break;
     }
 
-    const name = one(found, '--name');
+    case 'image': {
+      const [, , , image] = rest;
 
-    if (name && readContainer(name)) fail(`Conflict. The container name "/${name}" is already in use.`, 125);
-    const network = one(found, '--network');
-
-    if (network && !fs.existsSync(path.join(state, 'networks', network))) fail(`Error response from daemon: network ${network} not found`, 125);
-    const id = crypto.randomBytes(16).toString('hex');
-
-    writeContainer({
-      id, name, image, running: true,
-      labels: Object.fromEntries(all(found, '--label').map((label) => label.split(/=(.*)/s).slice(0, 2))),
-      env: Object.fromEntries(all(found, '--env').map((pair) => pair.split(/=(.*)/s).slice(0, 2))),
-      mounts: all(found, '-v').map((volume) => {
-        const [source, target, mode] = volume.split(':');
-
-        return { source, target, readonly: mode.split(',').includes('ro') };
-      }),
-    });
-
-    process.stdout.write(`${id}\n`);
-    break;
-  }
-
-  case 'ps': {
-    const { found } = options(rest, ['--filter', '--format'], ['-a', '-q']);
-    const wanted = all(found, '--filter').map((filter) => filter.replace(/^label=/, '').split(/=(.*)/s).slice(0, 2));
-
-    for (const id of fs.readdirSync(containers)) {
-      const container = readContainer(id);
-
-      if (container && wanted.every(([key, value]) => container.labels[key] === value)) process.stdout.write(`${container.id}\n`);
+      if (rest[0] !== 'inspect' || !pulled(image)) fail(`Error: No such image: ${image}`);
+      process.stdout.write(`sha256:${crypto.createHash('sha256').update(image).digest('hex')}\n`);
+      break;
     }
 
-    break;
-  }
+    case 'pull': {
+      const [image] = rest;
 
-  case 'exec': {
-    const { found, rest: positional } = options(rest, ['-w', '-e', '--user'], ['-i']);
-    const [ref, ...argv] = positional;
-    const container = readContainer(ref);
-
-    if (!container) fail(`Error response from daemon: No such container: ${ref}`);
-
-    if (!container.running) fail(`Error response from daemon: container ${container.id} is not running`);
-    const cwd = one(found, '-w') ?? '/';
-    // The process runs on the host, so it starts in the host directory mounted where the container's cwd is.
-    const mount = container.mounts.filter(({ target }) => cwd === target || cwd.startsWith(`${target}/`)).sort((a, b) => b.target.length - a.target.length)[0];
-
-    if (!mount) fail(`OCI runtime exec failed: chdir to cwd ("${cwd}") set in config.json failed: no such file or directory`, 126);
-    const home = path.join(containers, container.id, 'home');
-    fs.mkdirSync(home, { recursive: true });
-    const env = { PATH: imagePath(container.image), ...container.env, HOME: home };
-
-    for (const name of all(found, '-e')) if (process.env[name] !== undefined) env[name] = process.env[name];
-    runProcess(container, argv, mount.source + cwd.slice(mount.target.length), env, one(found, '-i'));
-    break;
-  }
-
-  case 'restart': {
-    const { rest: positional } = options(rest, ['--time', '-t']);
-    const container = readContainer(positional[0]);
-
-    if (!container) fail(`Error response from daemon: No such container: ${positional[0]}`);
-    killProcesses(container);
-    process.stdout.write(`${positional[0]}\n`);
-    break;
-  }
-
-  case 'rm': {
-    const { rest: positional } = options(rest, [], ['--force', '-f']);
-    const container = readContainer(positional[0]);
-
-    if (fs.existsSync(path.join(state, 'rm-fails'))) fail(`Error response from daemon: cannot remove container "${positional[0]}": could not kill: tried to kill container, but did not receive an exit event`);
-
-    if (!container) fail(`Error response from daemon: No such container: ${positional[0]}`);
-    killProcesses(container);
-    fs.rmSync(path.join(containers, container.id), { recursive: true, force: true });
-    process.stdout.write(`${positional[0]}\n`);
-    break;
-  }
-
-  case 'network': {
-    // Networks are names only: a container's processes run on the host either way.
-    const [action, ...more] = rest;
-    const networks = path.join(state, 'networks');
-    fs.mkdirSync(networks, { recursive: true });
-
-    if (action === 'create') {
-      const { rest: [name] } = options(more, ['--label', '-o'], ['--internal']);
-
-      if (fs.existsSync(path.join(networks, name))) fail(`Error response from daemon: network with name ${name} already exists`);
-      fs.writeFileSync(path.join(networks, name), '');
-      process.stdout.write(`${crypto.randomBytes(16).toString('hex')}\n`);
-    } else if (action === 'connect') {
-      const [name, ref] = more;
-
-      if (!fs.existsSync(path.join(networks, name))) fail(`Error response from daemon: network ${name} not found`);
-
-      if (!readContainer(ref)) fail(`Error response from daemon: No such container: ${ref}`);
-    } else if (action === 'rm') {
-      const [name] = more;
-
-      if (!fs.existsSync(path.join(networks, name))) fail(`Error response from daemon: network ${name} not found`);
-      fs.rmSync(path.join(networks, name));
-      process.stdout.write(`${name}\n`);
-    } else {
-      fail(`fake engine: unsupported network command ${action}`, 125);
+      if (images[image] === undefined) fail(`Error response from daemon: pull access denied for ${image}, repository does not exist`);
+      fs.mkdirSync(path.join(state, 'pulled'), { recursive: true });
+      fs.writeFileSync(path.join(state, 'pulled', encodeURIComponent(image)), '');
+      break;
     }
 
-    break;
+    case 'run': {
+      const { found, rest: positional } = options(rest, ['--name', '--label', '--user', '--userns', '--env', '-v', '--entrypoint', '--network', '--cap-drop', '--security-opt'], ['-d', '--rm']);
+      const [image, ...entry] = positional;
+
+      if (!pulled(image)) fail(`Unable to find image '${image}' locally`, 125);
+
+      if (one(found, '--rm')) {
+        // A probe: run the entrypoint once, on the image's PATH.
+        const probe = spawn(one(found, '--entrypoint'), entry, { env: { PATH: imagePath(image) }, stdio: ['ignore', 'inherit', 'inherit'] });
+        probe.on('close', (code) => process.exit(code ?? 1));
+        break;
+      }
+
+      const name = one(found, '--name');
+
+      if (name && readContainer(name)) fail(`Conflict. The container name "/${name}" is already in use.`, 125);
+      const network = one(found, '--network');
+
+      if (network && !fs.existsSync(path.join(state, 'networks', network))) fail(`Error response from daemon: network ${network} not found`, 125);
+      const id = crypto.randomBytes(16).toString('hex');
+
+      writeContainer({
+        id, name, image, running: true,
+        labels: Object.fromEntries(all(found, '--label').map((label) => label.split(/=(.*)/s).slice(0, 2))),
+        env: Object.fromEntries(all(found, '--env').map((pair) => pair.split(/=(.*)/s).slice(0, 2))),
+        mounts: all(found, '-v').map((volume) => {
+          const [source, target, mode] = volume.split(':');
+
+          return { source, target, readonly: mode.split(',').includes('ro') };
+        }),
+      });
+
+      process.stdout.write(`${id}\n`);
+      break;
+    }
+
+    case 'ps': {
+      const { found } = options(rest, ['--filter', '--format'], ['-a', '-q']);
+      const wanted = all(found, '--filter').map((filter) => filter.replace(/^label=/, '').split(/=(.*)/s).slice(0, 2));
+
+      for (const id of fs.readdirSync(containers)) {
+        const container = readContainer(id);
+
+        if (container && wanted.every(([key, value]) => container.labels[key] === value)) process.stdout.write(`${container.id}\n`);
+      }
+
+      break;
+    }
+
+    case 'exec': {
+      const { found, rest: positional } = options(rest, ['-w', '-e', '--user'], ['-i']);
+      const [ref, ...argv] = positional;
+      const container = readContainer(ref);
+
+      if (!container) fail(`Error response from daemon: No such container: ${ref}`);
+
+      if (!container.running) fail(`Error response from daemon: container ${container.id} is not running`);
+      const cwd = one(found, '-w') ?? '/';
+      // The process runs on the host, so it starts in the host directory mounted where the container's cwd is.
+      const mount = container.mounts.filter(({ target }) => cwd === target || cwd.startsWith(`${target}/`)).sort((a, b) => b.target.length - a.target.length)[0];
+
+      if (!mount) fail(`OCI runtime exec failed: chdir to cwd ("${cwd}") set in config.json failed: no such file or directory`, 126);
+      const home = path.join(containers, container.id, 'home');
+      fs.mkdirSync(home, { recursive: true });
+      const env = { PATH: imagePath(container.image), ...container.env, HOME: home };
+
+      for (const name of all(found, '-e')) if (process.env[name] !== undefined) env[name] = process.env[name];
+      runProcess(container, argv, mount.source + cwd.slice(mount.target.length), env, one(found, '-i'));
+      break;
+    }
+
+    case 'restart': {
+      const { rest: positional } = options(rest, ['--time', '-t']);
+      const container = readContainer(positional[0]);
+
+      if (!container) fail(`Error response from daemon: No such container: ${positional[0]}`);
+      killProcesses(container);
+      process.stdout.write(`${positional[0]}\n`);
+      break;
+    }
+
+    case 'rm': {
+      const { rest: positional } = options(rest, [], ['--force', '-f']);
+      const container = readContainer(positional[0]);
+
+      if (fs.existsSync(path.join(state, 'rm-fails'))) fail(`Error response from daemon: cannot remove container "${positional[0]}": could not kill: tried to kill container, but did not receive an exit event`);
+
+      if (!container) fail(`Error response from daemon: No such container: ${positional[0]}`);
+      killProcesses(container);
+      fs.rmSync(path.join(containers, container.id), { recursive: true, force: true });
+      process.stdout.write(`${positional[0]}\n`);
+      break;
+    }
+
+    case 'network': {
+      // Networks are names only: a container's processes run on the host either way.
+      const [action, ...more] = rest;
+      const networks = path.join(state, 'networks');
+      fs.mkdirSync(networks, { recursive: true });
+
+      if (action === 'create') {
+        const { rest: [name] } = options(more, ['--label', '-o'], ['--internal']);
+
+        if (fs.existsSync(path.join(networks, name))) fail(`Error response from daemon: network with name ${name} already exists`);
+        fs.writeFileSync(path.join(networks, name), '');
+        process.stdout.write(`${crypto.randomBytes(16).toString('hex')}\n`);
+      } else if (action === 'connect') {
+        const [name, ref] = more;
+
+        if (!fs.existsSync(path.join(networks, name))) fail(`Error response from daemon: network ${name} not found`);
+
+        if (!readContainer(ref)) fail(`Error response from daemon: No such container: ${ref}`);
+      } else if (action === 'rm') {
+        const [name] = more;
+
+        if (!fs.existsSync(path.join(networks, name))) fail(`Error response from daemon: network ${name} not found`);
+        fs.rmSync(path.join(networks, name));
+        process.stdout.write(`${name}\n`);
+      } else {
+        fail(`fake engine: unsupported network command ${action}`, 125);
+      }
+
+      break;
+    }
+
+    default:
+      fail(`fake engine: unsupported command ${command}`, 125);
+  }
+}
+
+/** The sbx placeholders a sandbox's env holds for the logins its proxy injects, never a value. */
+function proxyEnv() {
+  const env = { GH_TOKEN: 'proxy-managed' };
+
+  if (fs.existsSync(path.join(state, 'secrets', 'openai'))) env.OPENAI_API_KEY = 'proxy-managed';
+
+  if (fs.existsSync(path.join(state, 'secrets', 'anthropic'))) env.ANTHROPIC_API_KEY = 'proxy-managed';
+
+  return env;
+}
+
+/** Answers as sbx 0.50.1, with its messages: `error: …` then `  try: …`. */
+function sbx() {
+  const sbxFail = (message, hint, code = 1) => fail(`error: ${message}${hint ? `\n  try: ${hint}` : ''}`, code);
+
+  if (fs.existsSync(path.join(state, 'down'))) sbxFail('cannot connect to sandboxd: connection refused', 'sbx daemon start');
+
+  if (['create', 'policy'].includes(command) && fs.existsSync(path.join(state, 'no-policy'))) sbxFail('global network policy has not been initialized', 'sbx policy init <allow-all|balanced|deny-all>');
+
+  const sandboxes = () => fs.readdirSync(containers).map(readContainer).filter((container) => container !== undefined);
+
+  switch (command) {
+    case 'policy':
+      process.stdout.write('local-policy   local   all   network: 195 allow\n');
+      break;
+    case 'ls':
+      process.stdout.write(`${JSON.stringify(sandboxes().map(({ name, image, running, mounts }) => ({ name, agent: image, status: running ? 'running' : 'stopped', workspaces: mounts.map(({ source, readonly }) => `${source}${readonly ? ':ro' : ''}`) })))}\n`);
+      break;
+    case 'create': {
+      const { found, rest: positional } = options(rest, ['--name', '-e', '--env', '-t', '--template'], ['--no-progress']);
+      const [agent, ...paths] = positional;
+
+      if (images[agent] === undefined) sbxFail(`unknown agent "${agent}"`, 'sbx create --help');
+      const name = one(found, '--name') ?? `${agent}-${path.basename(paths[0] ?? 'none')}`;
+
+      if (readContainer(name)) sbxFail(`sandbox '${name}' already exists; connect to the existing sandbox`, `sbx run --name ${name}`);
+
+      const mounts = paths.map((entry) => {
+        const readonly = entry.endsWith(':ro');
+        const source = readonly ? entry.slice(0, -3) : entry;
+
+        if (!fs.existsSync(source)) sbxFail(`workspace ${source} does not exist`);
+
+        return { source, target: source, readonly };
+      });
+
+      writeContainer({ id: crypto.randomBytes(16).toString('hex'), name, image: agent, running: true, labels: {}, env: proxyEnv(), mounts });
+      process.stdout.write(`  ✓ Created sandbox ${name}\n`);
+      break;
+    }
+
+    case 'exec': {
+      const { found, rest: positional } = options(rest, ['-w', '--workdir', '-e', '--env', '-u', '--user'], ['-i', '-t']);
+      const [name, ...argv] = positional;
+      const sandbox = readContainer(name);
+
+      if (!sandbox) sbxFail(`sandbox '${name}' not found`, 'sbx ls', 125);
+
+      if (!sandbox.running) {
+        writeContainer({ ...sandbox, running: true });
+        process.stderr.write(`  ✓ sandbox ${name} — started\n`);
+      }
+
+      const home = path.join(containers, sandbox.id, 'home');
+      fs.mkdirSync(home, { recursive: true });
+      // Without -w, a process starts in the primary workspace, or in the agent's home when the sandbox has none.
+      const cwd = one(found, '-w') ?? sandbox.mounts[0]?.target;
+      const mount = cwd === undefined ? { source: home, target: '' } : sandbox.mounts.filter(({ target }) => cwd === target || cwd.startsWith(`${target}/`)).sort((a, b) => b.target.length - a.target.length)[0];
+
+      if (!mount) fail(`OCI runtime exec failed: chdir to cwd ("${cwd}") set in config.json failed: no such file or directory`, 126);
+      const env = { PATH: imagePath(sandbox.image), ...sandbox.env, HOME: home };
+
+      for (const variable of all(found, '-e')) if (process.env[variable] !== undefined) env[variable] = process.env[variable];
+      runProcess(sandbox, argv, mount.source + (cwd ?? '').slice(mount.target.length), env, one(found, '-i'));
+
+      return;
+    }
+
+    case 'stop': {
+      for (const name of rest) {
+        const sandbox = readContainer(name);
+
+        if (!sandbox) sbxFail(`sandbox '${name}' not found`, 'sbx ls');
+        killProcesses(sandbox);
+        writeContainer({ ...sandbox, running: false });
+        process.stdout.write(`Stopped sandbox ${name}\n`);
+      }
+
+      break;
+    }
+
+    case 'rm': {
+      const { rest: names } = options(rest, [], ['--force', '-f']);
+
+      if (fs.existsSync(path.join(state, 'rm-fails'))) sbxFail(`failed to remove sandbox '${names[0]}': sandboxd: context deadline exceeded`);
+
+      for (const name of names) {
+        const sandbox = readContainer(name);
+
+        if (!sandbox) sbxFail(`sandbox '${name}' not found`, 'sbx ls');
+        killProcesses(sandbox);
+        fs.rmSync(path.join(containers, sandbox.id), { recursive: true, force: true });
+        process.stdout.write(`Removed sandbox ${name}\n`);
+      }
+
+      break;
+    }
+
+    default:
+      fail(`fake sbx: unsupported command ${command}`, 125);
   }
 
-  default:
-    fail(`fake engine: unsupported command ${command}`, 125);
+  process.exit(0);
 }
