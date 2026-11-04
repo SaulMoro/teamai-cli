@@ -354,7 +354,7 @@ Judge the review.
       expect(killed.signal, killed.stderr).toBe('SIGKILL');
       const [sent] = sends();
       expect(endings()).toEqual([[sent?.op, 'finished']]);
-      const [runId] = [...runIds()].filter((id) => !before.has(id));
+      const runId = [...runIds()].find((id) => !before.has(id));
 
       const resumed = await runCLI(['workflow', 'resume', String(runId), '--driver', 'agentdie'], repo, env());
 
@@ -373,7 +373,7 @@ Judge the review.
       await until(() => sends().length === 1);
       first.child.kill('SIGKILL');
       expect((await first.ended).signal).toBe('SIGKILL');
-      const [runId] = [...runIds()].filter((id) => !before.has(id));
+      const runId = [...runIds()].find((id) => !before.has(id));
       const [sent] = sends();
 
       const resumed = await startKilled(['workflow', 'resume', String(runId), '--driver', 'agentwait']);
@@ -395,7 +395,7 @@ Judge the review.
       const before = runIds();
       const running = await startKilled(['workflow', 'start', 'oneprompt', '--driver', 'agentcancel']);
       await until(() => sends().length === 1);
-      const [runId] = [...runIds()].filter((id) => !before.has(id));
+      const runId = [...runIds()].find((id) => !before.has(id));
 
       const cancelled = await runCLI(['workflow', 'cancel', String(runId)], repo, env());
       expect(cancelled.code, cancelled.stderr).toBe(0);
