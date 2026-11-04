@@ -283,7 +283,7 @@ const RunProgressSchema = z.object({
   }).optional(),
   timeout: z.number().int().positive().optional(),
   driveOptions: (z.object({
-    tools: z.record(z.string(), z.string()).optional(), autoApprove: z.boolean().optional(), sandbox: z.literal(true).optional(),
+    tools: z.record(z.string(), z.string()).optional(), autoApprove: z.boolean().optional(), sandbox: z.literal(true).optional(), driver: z.string().min(1).optional(),
   }) satisfies z.ZodType<DriveOptions>).optional(),
 });
 

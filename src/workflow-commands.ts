@@ -675,9 +675,8 @@ async function startDriven(input: {
   const runId = startedRun.data;
   // A run with no teamai init is removed with its scope, so it cannot be continued.
   const isResumable = config.ephemeralConfig === undefined;
-  const again = opened ? ` --driver ${opened.driver.name}` : '';
 
-  if (isResumable && !shortcut.isResumeSaidWhenOpen) log.info(`Run ${runId} started. If it stops before it ends, continue it with: teamai workflow resume ${runId}${again}`);
+  if (isResumable && !shortcut.isResumeSaidWhenOpen) log.info(`Run ${runId} started. If it stops before it ends, continue it with: teamai workflow resume ${runId}`);
   const whileOpen = isResumable && shortcut.isResumeSaidWhenOpen ? resumeWhileOpen(config, runId) : undefined;
   const drive = { ...definedDrive(opened, tools), toolPaths, autoApprove: options.autoApprove, sandbox: options.sandbox, progress: shortcut.progress };
   const driveHere = (): Promise<WorkflowEnvelope> => withPassScoring({ config, env }, RunIdSchema.parse(runId), drive, (scored) => driveRun(config, runId, LOCAL_DRIVER, { cwd: process.cwd(), options: scored }));
@@ -902,6 +901,13 @@ async function openNamedDriver(config: LocalConfig, name: string | undefined, { 
   const canAsk = process.stdin.isTTY && process.stderr.isTTY;
 
   return openDriver(config, name, { personal, mode: resolveRunMode(process.env), canAsk, purpose: 'run' });
+}
+
+/** The driver definition run `runId` was last driven with on this install, which `workflow resume` reopens. */
+async function recordedDriver(config: LocalConfig, runId: RunId): Promise<string | undefined> {
+  const stored = await readRun(config, runId);
+
+  return stored === 'missing' || stored === 'corrupt' ? undefined : stored.driveOptions?.driver;
 }
 
 async function closeDriver(opened: OpenedDriver | undefined): Promise<void> {
@@ -1384,7 +1390,8 @@ export async function workflowResume(runId: string | undefined, options: ResumeO
     return;
   }
 
-  const defined = await openNamedDriver(loaded.config, options.driver, { personal: true });
+  // Without --driver, the run resumes on the definition it was last driven with here, which may no longer resolve.
+  const defined = await openNamedDriver(loaded.config, options.driver ?? await recordedDriver(loaded.config, run.data), { personal: true });
 
   if (!defined.ok) {
     writeEnvelope({ error: defined.failure }, secrets);

@@ -227,6 +227,37 @@ Judge the review.
     expect(fs.readFileSync(runs, 'utf8')).toBe('x');
   });
 
+  it('resumes on the definition the run was started with when the printed resume command names none', async () => {
+    const state = path.join(sandbox, 'toy-state-recorded');
+    const runs = path.join(sandbox, 'runs-recorded');
+    writeDefinition('toyrecorded', { state, die_at: 'open-accepted' });
+
+    const killed = await runCLI(['workflow', 'start', 'onecommand', '--driver', 'toyrecorded'], repo, { ...env(), RUNS_FILE: runs });
+    expect(killed.signal, killed.stderr).toBe('SIGKILL');
+    const runId = startedRun(killed);
+    expect(killed.stderr).toContain(`continue it with: teamai workflow resume ${runId}\n`);
+
+    const resumed = await runCLI(['workflow', 'resume', runId], repo, { ...env(), RUNS_FILE: runs });
+
+    expect(envelope(resumed), resumed.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(fs.readFileSync(runs, 'utf8')).toBe('x');
+    const [attempt] = fs.readdirSync(attemptsOf(runId));
+    expect(toyOpens(state)).toHaveLength(1);
+    expect(JSON.parse(fs.readFileSync(path.join(attemptsOf(runId), String(attempt), 'runtime.json'), 'utf8'))).toMatchObject({ runtime: 'toy', driver: 'toyrecorded', phase: 'closed' });
+  });
+
+  it('refuses to resume a run whose recorded definition no longer resolves, naming it and how to go on', async () => {
+    const state = path.join(sandbox, 'toy-state-gone');
+    writeDefinition('toygone', { state, die_at: 'open-accepted' });
+    const killed = await runCLI(['workflow', 'start', 'onecommand', '--driver', 'toygone'], repo, { ...env(), RUNS_FILE: path.join(sandbox, 'runs-gone') });
+    const runId = startedRun(killed);
+    fs.rmSync(path.join(repo, '.teamai', 'drivers', 'toygone.yaml'));
+
+    const resumed = await runCLI(['workflow', 'resume', runId], repo, env());
+
+    expect(envelope(resumed)).toMatchObject({ error: { code: 'driver_not_found', message: expect.stringContaining('toygone') } });
+  });
+
   it('reports the output, session and usage of an exec that finished while teamai was killed, without running it again', async () => {
     writeDefinition('toyexec', { state: path.join(sandbox, 'toy-state-exec'), die_at: 'exec-exited' });
     fs.rmSync(launches, { force: true });

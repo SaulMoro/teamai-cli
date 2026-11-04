@@ -1510,7 +1510,8 @@ runtimes:
 
 ```sh
 teamai workflow start review --driver toy
-teamai workflow resume r1a2b3c4d --driver toy
+teamai workflow resume r1a2b3c4d                 # 在 toy 上继续，即这台机器上次驱动这个运行时用的定义
+teamai workflow resume r1a2b3c4d --driver local  # back to plain local; the run remembers that too
 ```
 
 teamai 按下面的顺序查找 `<name>.yaml`，使用找到的第一个：

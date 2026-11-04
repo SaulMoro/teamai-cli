@@ -1516,7 +1516,8 @@ runtimes:
 
 ```sh
 teamai workflow start review --driver toy
-teamai workflow resume r1a2b3c4d --driver toy
+teamai workflow resume r1a2b3c4d                 # resumes on toy, the definition the run was last driven with here
+teamai workflow resume r1a2b3c4d --driver local  # back to plain local; the run remembers that too
 ```
 
 teamai looks for `<name>.yaml` in this order and uses the first it finds:
