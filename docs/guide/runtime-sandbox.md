@@ -164,7 +164,7 @@ teamai-rabebd844f8554e81-a6ee9e5b2         teamai-rabebd844f8554e81-a6ee9e5b2-ne
 teamai-rabebd844f8554e81-a6ee9e5b2-proxy   bridge,teamai-rabebd844f8554e81-a6ee9e5b2-net
 ```
 
-**A judge signs in with an API key.** A judge container has no tool home, so a `codex: login` never reaches it. Give the sandbox an env credential its judge tool reads: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` for Claude, `OPENAI_API_KEY` for Codex (not `CODEX_API_KEY`, which teamai does not pass a judge). The steps' token from the quick start judges too. Through a gateway, the filter lets through its base URL in place of the public API, over `https` or plain `http`:
+**A judge signs in with an API key.** A judge container has no tool home, so a `codex: login` never reaches it. Give the sandbox an env credential its judge tool reads: `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` for Claude, `OPENAI_API_KEY` or `CODEX_API_KEY` for Codex. The steps' token from the quick start judges too. A judge also gets the model variables its tool reads, such as `ANTHROPIC_MODEL`, when the entry names them, but never your proxy or CA file: its one way out is the filter. Through a gateway, the filter lets through its base URL in place of the public API, over `https` or plain `http`:
 
 ```yaml
 runtimes:

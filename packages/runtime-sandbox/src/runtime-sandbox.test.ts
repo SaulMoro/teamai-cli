@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InitCredentials } from '@teamai/runtime-protocol';
+import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import { bundleRuntime, connect, fakeEngine, tempDir, type Connection, type FakeEngine, type Message } from './testing/harness.js';
 
 // The runtime through its stdio entry point, as teamai spawns it, on a fake docker / podman (testing/fake-engine.mjs).
@@ -372,16 +373,16 @@ describe('a prompt attempt in a container', () => {
 // A judge's tools: each lists the files it can see from its working directory, says which credential names it got
 // (names only), and replies as the real tool does on stdout.
 const SEES = "const fs = require('node:fs'); const sees = fs.readdirSync('.', { recursive: true }).map(String).filter((file) => fs.statSync(file).isFile()).sort();";
-const NAMES = "const names = ['ANTHROPIC_API_KEY', 'CODEX_API_KEY', 'OPENAI_API_KEY', 'GITHUB_TOKEN', 'HTTPS_PROXY'].filter((name) => process.env[name] !== undefined);";
+const NAMES = "const names = ['ANTHROPIC_API_KEY', 'CODEX_API_KEY', 'OPENAI_API_KEY', 'GITHUB_TOKEN', 'HTTPS_PROXY'].filter((name) => process.env[name] !== undefined); const given = Object.keys(process.env).filter((name) => process.env[name].includes('given')).sort();";
 const JUDGE_CLAUDE = `if (process.argv.includes('--version')) { console.log('2.1.0 (Claude Code)'); process.exit(0); }
 ${SEES} ${NAMES}
 if (process.argv.includes('--hang')) setInterval(() => {}, 1000);
-else console.log(JSON.stringify({ type: 'result', is_error: false, session_id: 'claude-session-1', result: '', structured_output: { answer: { label: 'good', reasoning: JSON.stringify({ sees, names, argv: process.argv.slice(2) }) } }, usage: { input_tokens: 12, output_tokens: 5 } }));`;
+else console.log(JSON.stringify({ type: 'result', is_error: false, session_id: 'claude-session-1', result: '', structured_output: { answer: { label: 'good', reasoning: JSON.stringify({ sees, names, given, argv: process.argv.slice(2) }) } }, usage: { input_tokens: 12, output_tokens: 5 } }));`;
 const JUDGE_CODEX = `${SEES} ${NAMES}
 const schema = require('node:fs').readFileSync(process.argv[process.argv.indexOf('--output-schema') + 1], 'utf8');
 const argv = process.argv.slice(2);
 const retried = argv.at(-1).includes('flaky network') ? [{ type: 'error', message: 'Reconnecting... 1/5' }] : [];
-for (const line of [{ type: 'thread.started', thread_id: 'codex-thread-1' }, ...retried, { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: { label: 'bad', reasoning: JSON.stringify({ sees, names, schema, argv }) } }) } }, { type: 'turn.completed', usage: { input_tokens: 30, cached_input_tokens: 10, output_tokens: 7 } }]) console.log(JSON.stringify(line));`;
+for (const line of [{ type: 'thread.started', thread_id: 'codex-thread-1' }, ...retried, { type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify({ answer: { label: 'bad', reasoning: JSON.stringify({ sees, names, given, schema, argv }) } }) } }, { type: 'turn.completed', usage: { input_tokens: 30, cached_input_tokens: 10, output_tokens: 7 } }]) console.log(JSON.stringify(line));`;
 
 describe('a judge (a confined prompt) in a container of its own', () => {
   const SCHEMA = { type: 'object', properties: { answer: { type: 'object' } }, required: ['answer'] };
@@ -414,11 +415,27 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     return connection.next((message) => message.op === op && ['finished', 'failed', 'cancelled'].includes(String(message.event)), 30_000);
   }
 
-  const reasoning = (end: Message): { sees: string[]; names: string[]; argv?: string[]; schema?: string } => {
+  const reasoning = (end: Message): { sees: string[]; names: string[]; given: string[]; argv?: string[]; schema?: string } => {
     const parsed: unknown = JSON.parse(String((end as { result: { output: { answer: { reasoning: string } } } }).result.output.answer.reasoning));
 
-    return parsed as { sees: string[]; names: string[]; argv?: string[]; schema?: string };
+    return parsed as { sees: string[]; names: string[]; given: string[]; argv?: string[]; schema?: string };
   };
+
+  // teamai gives a judge on a runtime the definition's credentials that a confined run of its tool reads: the common
+  // names (proxies, CA files, PATH, HOME…) and its profile's own. The judge's tool gets every profile name but its home,
+  // and none of the host's own: its one way out is the filter, and a host path means nothing in the container.
+  it.each([
+    { tool: 'claude', profile: BUILT_IN_TOOLS.claude.launch.claude.confined },
+    { tool: 'codex', profile: BUILT_IN_TOOLS.codex.launch.codex.confined },
+  ])("gives a $tool judge each name its confined profile reads but its home, and none of this machine's own", async ({ tool, profile }) => {
+    const own = Object.fromEntries(profile.env.map((name) => [name, name.endsWith('_BASE_URL') ? 'https://given.llm.acme.internal/v1' : `given-${name.toLowerCase()}`]));
+    const credentials = { ...own, HTTPS_PROXY: 'http://given-proxy.acme.internal:3128', HTTP_PROXY: 'http://given-proxy.acme.internal:3128', NO_PROXY: 'given.acme.internal', SSL_CERT_FILE: '/Users/given/ca.pem', NODE_EXTRA_CA_CERTS: '/Users/given/ca.pem', PATH: '/Users/given/bin', HOME: '/Users/given' };
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE }, 'unattended', { env: Object.keys(credentials), logins: [] });
+    await openJudge(connection, credentials);
+
+    expect(reasoning(await judge(connection, { tool, credentials })).given).toEqual(profile.env.filter((name) => name !== profile.homeEnv).sort());
+  });
 
   it('offers no judge on podman, whose rootless network cannot hold the filter', async () => {
     const reply = await init(start(), { provider: 'podman', image: IMAGE });
@@ -439,6 +456,14 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     // The base URL reaches Codex from the container's env, never in teamai's argv.
     expect(JSON.stringify(engine.calls())).not.toContain('llm.acme.internal:8443/v1');
     expect(JSON.stringify(engine.calls())).not.toContain('judge-key-2');
+  });
+
+  it('signs a codex judge in with a CODEX_API_KEY as it is given', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE }, 'unattended', { env: ['CODEX_API_KEY'], logins: [] });
+    await openJudge(connection, { CODEX_API_KEY: 'judge-key-3' });
+
+    expect(reasoning(await judge(connection, { tool: 'codex', credentials: { CODEX_API_KEY: 'judge-key-3' } })).names).toEqual(['CODEX_API_KEY', 'HTTPS_PROXY']);
   });
 
   it('accepts a codex reply after Codex reconnected on its way there', async () => {
@@ -468,14 +493,14 @@ describe('a judge (a confined prompt) in a container of its own', () => {
   it.each<{ env: string[]; logins: string[]; offered: Message[] }>([
     { env: ['ANTHROPIC_API_KEY'], logins: [], offered: [{ level: 'verified', access: 'read', tools: ['claude'] }] },
     { env: ['OPENAI_API_KEY', 'GITHUB_TOKEN'], logins: ['claude'], offered: [{ level: 'verified', access: 'full', tools: ['codex'] }] },
+    { env: ['CODEX_API_KEY'], logins: [], offered: [{ level: 'verified', access: 'full', tools: ['codex'] }] },
   ])('offers a judge only on the tools whose credentials the definition names: $env', async ({ env, logins, offered }) => {
     expect(await init(start(), { provider: 'docker', image: IMAGE }, 'unattended', { env, logins })).toMatchObject({ ok: true, confinedPrompt: true, can: { confined: offered } });
   });
 
   it.each<{ env: string[]; logins: string[] }>([
     { env: [], logins: ['claude', 'codex'] },
-    // teamai sends a confined codex only the names its confined profile reads, and CODEX_API_KEY is not one of them.
-    { env: ['CODEX_API_KEY'], logins: [] },
+    { env: ['GITHUB_TOKEN'], logins: [] },
   ])('offers no judge when it could sign none in, so teamai judges on a later runtime: $env $logins', async ({ env, logins }) => {
     const reply = await init(start(), { provider: 'docker', image: IMAGE }, 'unattended', { env, logins });
 
