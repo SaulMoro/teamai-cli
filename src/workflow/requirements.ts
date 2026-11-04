@@ -1,12 +1,9 @@
 import { z } from 'zod';
 import { ENV_KEY_RE, sameEnvName } from '../resources/env-key.js';
-import { ACCESS_LEVELS } from '@teamai/tool-core/launch';
-import { CONFINED_LEVELS } from '../tool-launch/confined-level.js';
-import { stepWorkflow, WORKSPACE_MODES, type WorkflowDefaults, type WorkflowFailure, type WorkflowStep } from './types.js';
+import { CanSchema, ISOLATION_LEVELS, type Can } from '@teamai/runtime-protocol';
+import { stepWorkflow, type WorkflowDefaults, type WorkflowFailure, type WorkflowStep } from './types.js';
 import type { WorkspaceMode } from './workspace.js';
 
-/** How far a driver keeps a step from the member's machine, weakest first. A workspace contract is at least `worktree`. */
-export const ISOLATION_LEVELS = ['none', 'worktree', 'sandbox'] as const;
 const IsolationSchema = z.enum(ISOLATION_LEVELS);
 
 export type Isolation = z.infer<typeof IsolationSchema>;
@@ -146,59 +143,7 @@ export type StrictKey = KeysOf<'strict'>;
 
 type BestEffortKey = KeysOf<'bestEffort'>;
 
-/** The level a confined step runs at, which its `confined.json` sets: `verified` or `best-effort`. */
-export const ConfinedLevelSchema = z.enum(CONFINED_LEVELS);
-
-/** One offer of `can.confined`: tools a driver runs confined at `level`, which can do `access` there. */
-export const ConfinedOfferSchema = z.object({
-  level: ConfinedLevelSchema,
-  access: z.enum(ACCESS_LEVELS).optional(),
-  tools: z.array(z.string().min(1)).min(1),
-});
-
-/**
- * `driver.can`: what the driver declares it can do on this request. An omitted key means "not offered". The engine
- * never stores it. Parsed by `parseNextPayload`; the local driver builds every key.
- * - `network`: the driver can deny a step the network.
- * - `isolation`: the level the driver keeps every step it runs at.
- * - `env`: the driver resolves `envScope.provide` itself, removes `envScope.withhold`, and keeps the values from
- *   whatever runs the step. `true` covers every step; `'commands'` only command steps and setup, which run in the
- *   driver's own processes, so a prompt step that requires env is held. A driver whose executor is the agent leaves it out.
- * - `tokens`: every success report of a headless prompt step carries the tokens it spent.
- * - `max_turns`: the driver passes `maxTurns` to the tools it can cap, and reports `unenforced: ['max_turns']` for the others.
- * - `setup`: in each workspace it creates, the driver runs `lease.setup` before the step with only setup's keys, and
- *   fails the step without running it when setup exits non-zero (`setup_failed`), changes a tracked or non-ignored path
- *   (`setup_dirty`), or leaves a value of one of its keys in a file it created or changed (`setup_secret`).
- * - `tools`: the tools the driver launches a prompt step on that names its `tool`. Omitted: no such step.
- * - `end_turn`: the driver holds a prompt leased with `limits` to them from its tool's launch, stops the tool at the
- *   first it reaches and reports it as `limit`, with `durationMs`. Without it, such a prompt gets the `on_limit: fail`
- *   lease, and its pass records `on_limit` as not enforced.
- * - `unattended`: the driver launches a prompt leased with `permissions: 'unattended'` in its tool's own mode for
- *   editing and running commands without asking, and fails the step rather than launch a tool that has none.
- * - `role`: the driver runs a step leased with `role` with what teamai delivered into its prepared copy for that role,
- *   and starts nothing that delivers the member's own assets there instead.
- * - `confined`: the tools the driver runs a prompt on with one directory as its only readable root, each offer at the
- *   level it reaches, with what those tools can do there. An offer without `access` counts as `full`.
- */
-export const CanSchema = z.object({
-  hitl: z.boolean().optional(),
-  /** `false`: the driver runs no command, so command steps and steps with setup go to another driver. Absent: it does. */
-  exec: z.boolean().optional(),
-  workspace: z.array(z.enum(WORKSPACE_MODES)).optional(),
-  network: z.boolean().optional(),
-  isolation: IsolationSchema.optional(),
-  env: z.union([z.boolean(), z.literal('commands')], { error: "Expected true, false or 'commands'" }).optional(),
-  tokens: z.boolean().optional(),
-  max_turns: z.boolean().optional(),
-  setup: z.boolean().optional(),
-  tools: z.array(z.string().min(1)).optional(),
-  end_turn: z.boolean().optional(),
-  unattended: z.boolean().optional(),
-  role: z.boolean().optional(),
-  confined: z.array(z.lazy(() => ConfinedOfferSchema)).optional(),
-});
-
-export type DriverCan = z.infer<typeof CanSchema>;
+export type DriverCan = Can;
 
 /** The `can` keys this CLI reads; any other key is echoed in `ignored`. */
 export const CAN_KEYS: ReadonlySet<string> = new Set(Object.keys(CanSchema.shape));
