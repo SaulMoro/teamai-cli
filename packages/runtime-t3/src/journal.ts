@@ -69,8 +69,11 @@ const PlaceSchema = z.discriminatedUnion('kind', [
 
 export type PlaceRecord = z.infer<typeof PlaceSchema>;
 
+/** A place's record: none once it was removed, or one that is there but cannot be read, which is not the same. */
+export type PlaceRead = { kind: 'found'; place: PlaceRecord } | { kind: 'missing' } | { kind: 'unreadable'; file: string; why: string };
+
 export interface Journal {
-  read(handle: string): PlaceRecord | undefined;
+  read(handle: string): PlaceRead;
   /** The place whose operations include `op`: a restarted runtime is asked to cancel an op before it reattaches. */
   placeOf(op: string): PlaceRecord | undefined;
   write(place: PlaceRecord): void;
@@ -80,11 +83,24 @@ export interface Journal {
 export function journal(dir: string): Journal {
   const file = (handle: string) => path.join(dir, `${encodeURIComponent(handle)}.json`);
 
-  const read = (handle: string): PlaceRecord | undefined => {
+  const read = (handle: string): PlaceRead => {
+    const at = file(handle);
+    let text: string;
+
     try {
-      return PlaceSchema.parse(JSON.parse(fs.readFileSync(file(handle), 'utf8')));
-    } catch {
-      return undefined;
+      text = fs.readFileSync(at, 'utf8');
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { kind: 'missing' };
+
+      return { kind: 'unreadable', file: at, why: error instanceof Error ? error.message : String(error) };
+    }
+
+    try {
+      const parsed = PlaceSchema.safeParse(JSON.parse(text));
+
+      return parsed.success ? { kind: 'found', place: parsed.data } : { kind: 'unreadable', file: at, why: z.prettifyError(parsed.error) };
+    } catch (error) {
+      return { kind: 'unreadable', file: at, why: error instanceof Error ? error.message : String(error) };
     }
   };
 
@@ -93,7 +109,13 @@ export function journal(dir: string): Journal {
     placeOf(op) {
       const names = fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.endsWith('.json')) : [];
 
-      return names.map((name) => read(decodeURIComponent(name.slice(0, -'.json'.length)))).find((place) => place?.ops[op] !== undefined);
+      for (const name of names) {
+        const found = read(decodeURIComponent(name.slice(0, -'.json'.length)));
+
+        if (found.kind === 'found' && found.place.ops[op] !== undefined) return found.place;
+      }
+
+      return undefined;
     },
     write(place) {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
