@@ -1446,7 +1446,22 @@ teamai writes each operation id to `attempts/<attempt>/runtime.json` before it s
 | After a prompt finished | Its output, session and usage, read from what the runtime kept; no prompt is sent again |
 | While a prompt ran | The same prompt is sent again, which reconnects to the agent; the step goes on |
 
-`workflow cancel` stops the running exec or prompt and every process it started.
+`workflow cancel` stops the running exec or prompt and every process it started. When the driver was killed, the cancel asks the attempt's runtime to stop it. That works even when the runtime cannot start for new work, for example when its provider is down or its sign-in expired: teamai then opens it in `recover` mode, which only stops and closes what it ran.
+
+A runtime that cannot stop the work says why. teamai then keeps the place, its records and the login, and prints the runtime's advice:
+
+```text
+⚠ Could not stop attempt a3f0c2b1d of run r48201aa on step runtime "sandbox" of driver "containers": its exec or prompt may still run, since the runtime did not confirm it stopped (cancel_failed): docker could not stop container teamai-r48201aa-a3f0: the daemon is not running. Start Docker, then run teamai workflow cancel r48201aa again.
+⚠ The codex login teamai keeps stays held by attempt a3f0c2b1d of run r48201aa, whose tool may still run. Stop that tool on its step runtime, then delete ~/.teamai/logins/codex.lock.
+```
+
+Fix the cause, then run the same `teamai workflow cancel r48201aa` again. The run is already cancelled, so it answers `run_settled`, and it also stops the attempt, closes its place and releases the login:
+
+```text
+Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa held.
+```
+
+A `workflow resume` that finds such an exec still running fails its step `runtime_lost` with the same advice, and keeps the place and the login the same way.
 
 ### Write a step runtime
 
@@ -1488,6 +1503,24 @@ A runtime that cannot end a place answers `close` with why. teamai then treats w
 ```
 
 A runtime that exits while an exec or prompt runs fails it `runtime_lost`, for the same reason.
+
+teamai opens your runtime in `recover` mode when it must stop an attempt and your runtime refused `init` for new work. In that mode run no sign-in or tool check, offer nothing, and answer `cancel`, `reattach`, `collect` and `close` from your own journal. A runtime that answers `recover` with an error is left alone, and the cancel names both failures:
+
+```text
+→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"}}
+← {"type":"init","ok":false,"error":{"code":"signed_out","message":"Signed out of acme. Run acme login, then start again."}}
+→ {"type":"init","protocol":1,"mode":"recover","options":{"state":"/var/tmp/toy-state"}}
+← {"type":"init","ok":true,"can":{}}
+→ {"type":"reattach","handle":"toy-r…-a…"}
+← {"event":"alive","handle":"toy-r…-a…","ops":[{"op":"op-83bfffde9ce3","state":"running"}]}
+→ {"type":"cancel","op":"op-83bfffde9ce3"}
+```
+
+When you cannot stop an operation, end it `failed` with `cancel_failed` and a message that says what to do, and keep reporting that state on `reattach`. teamai then does not bring the place back or close it. A later `cancel` of the same operation tries the stop again:
+
+```text
+← {"op":"op-83bfffde9ce3","event":"failed","failure":{"code":"cancel_failed","message":"docker could not stop container teamai-r7-a1: the daemon is not running. Start Docker, then run teamai workflow cancel r7 again."}}
+```
 
 Answer every request, even one you cannot carry out. A `reattach`, `collect` or `close` you cannot answer, for example because your journal cannot be read or your provider cannot be reached, gets the failure reply for its handle. Never answer `gone` then: the place may still be there.
 

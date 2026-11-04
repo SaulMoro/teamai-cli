@@ -13,8 +13,8 @@ import type { SessionRef } from '../workspace.js';
 import { redact } from '@teamai/shared/redact';
 import { loginFileOf } from './login.js';
 import { credentialSecrets } from './sources.js';
-import { OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type PlaceView, type RuntimeDisplay } from '@teamai/runtime-protocol';
-import { newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecRequest, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
+import { OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type OpState, type PlaceView, type RuntimeDisplay, type RuntimeFailure } from '@teamai/runtime-protocol';
+import { newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
 
 // ─── An attempt on a step runtime ────────────────────────
 //
@@ -174,14 +174,16 @@ export interface AttemptRun {
   collect(): Promise<WorkflowFailure | undefined>;
   /**
    * Closes the handle once the attempt's report is recorded, so a teamai killed before that still reattaches. A runtime
-   * that cannot, or no longer answers, leaves the place open: its failure is recorded on the attempt and returned.
+   * that cannot, or no longer answers, leaves the place open: its failure is recorded on the attempt and returned. So
+   * does an exec or prompt that ended `lost`, whose work may still run there: the place is not closed under it.
    */
   close(): Promise<WorkflowFailure | undefined>;
   /**
    * Stops the exec or prompt a killed teamai left running, for a run cancelled without a live driver, and waits until
-   * the runtime no longer reports it running. Answers false when it still runs after the wait.
+   * the runtime no longer reports it running. Answers why the stop is not confirmed, in the runtime's own words when it
+   * gave them, or undefined once it is.
    */
-  stopLeftOperation(): Promise<boolean>;
+  stopLeftOperation(): Promise<RuntimeFailure | undefined>;
 }
 
 /** How long a restarted teamai waits for an exec it found running to stop. */
@@ -191,10 +193,20 @@ function runtimeFailure(runtime: string, message: string): WorkflowFailure {
   return { code: 'runtime_failed', message: `Step runtime "${runtime}" ${message}` };
 }
 
+/**
+ * Whether a cancel left `state` unstopped: `cancel_failed` is the one outcome a later cancel replaces, so the stop is
+ * tried again.
+ */
+function isUnstopped(state: OpState | undefined): boolean {
+  return state?.state === 'running' || (state?.state === 'failed' && state.failure.code === 'cancel_failed');
+}
+
 export function attemptRun({ config, run, attempt, runtime, driver }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime; driver: string }): AttemptRun {
   const file = recordPath(config, run, attempt);
   let record: AttemptRuntimeRecord | undefined;
   let running: { op: OpId } | undefined;
+  // Why an exec or prompt of this attempt may still run, once one ended `lost`: its place is not closed under it.
+  let mayRun: RuntimeFailure | undefined;
   // The credentials the place was opened with, in memory only, so what the runtime says of the place is kept masked.
   let openedWith: Record<string, string> = {};
 
@@ -229,22 +241,35 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
   };
 
   /**
-   * Stops an exec a teamai before this one left running, and waits until the runtime no longer reports it running.
-   * Answers false when it still runs after the wait, or the runtime can no longer be asked.
+   * Stops an operation a teamai before this one left running, and waits until the runtime no longer reports it running.
+   * Answers why the stop is not confirmed, or undefined once it is: the runtime could not be asked, it reports the
+   * operation failed after the cancel (its failure says what to do), or it still reports it running after the wait.
    */
-  const stopLeftRunning = async (handle: string, op: z.infer<typeof OpIdSchema>): Promise<boolean> => {
+  const stopLeftRunning = async (handle: string, op: OpId): Promise<RuntimeFailure | undefined> => {
     await runtime.cancel(op);
 
     for (const deadline = Date.now() + STOP_WAIT_MS; Date.now() < deadline;) {
       const seen = await runtime.reattach(handle);
 
-      if (seen.kind === 'failed') return false;
+      if (seen.kind === 'failed') return seen.failure;
 
-      if (seen.kind !== 'alive' || seen.ops.find((state) => state.op === op)?.state !== 'running') return true;
+      if (seen.kind === 'gone') return undefined;
+      const state = seen.ops.find((retained) => retained.op === op);
+
+      if (state?.state === 'failed') return state.failure;
+
+      if (state?.state !== 'running') return undefined;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
-    return false;
+    return { code: 'runtime_unanswered', message: `Step runtime "${runtime.name}" still reported operation ${op} of attempt ${attempt} running ${STOP_WAIT_MS / 1000} s after teamai asked it to cancel it.` };
+  };
+
+  /** Ends an exec or prompt as `lost`, which keeps its place open: what it started may still run there. */
+  const lostFor = (failure: RuntimeFailure): Lost => {
+    mayRun = failure;
+
+    return { kind: 'lost', failure };
   };
 
   return {
@@ -297,7 +322,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
         const found = await runtime.reattach(handle);
 
         // The exec may still run: the runtime that could tell is not answering.
-        if (found.kind === 'failed') return { kind: 'lost', failure: found.failure };
+        if (found.kind === 'failed') return lostFor(found.failure);
 
         if (found.kind === 'gone') return { kind: 'failed', failure: { code: 'runtime_gone', message: `The runtime no longer knows the place of attempt ${attempt}.` } };
         await shown(found.display);
@@ -306,17 +331,19 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
         // The runtime accepted it before the restart.
         if (state !== undefined) events.onAccepted?.({});
 
+        if (isUnstopped(state)) {
+          const notStopped = await stopLeftRunning(handle, sent.op);
+
+          if (!notStopped) return { kind: 'interrupted' };
+
+          return lostFor({ code: notStopped.code, message: `Step runtime "${runtime.name}" could not stop the exec of attempt ${attempt} that a teamai before this one left running, so it may still run there: ${notStopped.message}` });
+        }
+
         if (state?.state === 'exited') return { kind: 'exited', code: state.code, stdout: state.stdout };
 
         if (state?.state === 'cancelled') return { kind: 'cancelled' };
 
         if (state?.state === 'failed') return { kind: 'failed', failure: state.failure };
-
-        if (state?.state === 'running') {
-          if (await stopLeftRunning(handle, sent.op)) return { kind: 'interrupted' };
-
-          return { kind: 'lost', failure: { code: 'runtime_failed', message: `Step runtime "${runtime.name}" did not show the exec of attempt ${attempt} that a teamai before this one left running as stopped, after teamai asked it to cancel that exec. Stop it on the runtime, then retry the step.` } };
-        }
 
         // The request never reached the runtime: it is sent now, under the id that was persisted for it.
       }
@@ -329,7 +356,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       await acceptance.kept();
       running = undefined;
 
-      return end;
+      return end.kind === 'lost' ? lostFor(end.failure) : end;
     },
 
     async prompt(request, events) {
@@ -342,7 +369,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
         const found = await runtime.reattach(handle);
 
         // The prompt may still run: the runtime that could tell is not answering.
-        if (found.kind === 'failed') return { kind: 'lost', failure: found.failure };
+        if (found.kind === 'failed') return lostFor(found.failure);
 
         if (found.kind === 'gone') return { kind: 'failed', failure: { code: 'runtime_gone', message: `The runtime no longer knows the place of attempt ${attempt}.` } };
         await shown(found.display);
@@ -381,7 +408,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       await acceptance.kept();
       running = undefined;
 
-      return end;
+      return end.kind === 'lost' ? lostFor(end.failure) : end;
     },
 
     async cancel() {
@@ -406,10 +433,19 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       const handle = before?.open.handle;
 
       if (!before || handle === undefined || before.phase === 'closed') return undefined;
+      const masked = (failure: RuntimeFailure): RuntimeFailure => ({ ...failure, message: redact(failure.message, { envSecrets: credentialSecrets(runtime.name, openedWith), patterns: false }) });
+
+      if (mayRun) {
+        const failure = masked(mayRun);
+        await save({ ...before, closeFailed: failure });
+
+        return runtimeFailure(runtime.name, `kept the place of attempt ${attempt} open, since what ran there may still run (${failure.code}): ${failure.message}`);
+      }
+
       const closed = await runtime.close(handle);
 
       if (!closed.ok) {
-        const failure = { ...closed.failure, message: redact(closed.failure.message, { envSecrets: credentialSecrets(runtime.name, openedWith), patterns: false }) };
+        const failure = masked(closed.failure);
         await save({ ...before, closeFailed: failure });
 
         return runtimeFailure(runtime.name, `could not close the place of attempt ${attempt}, so what ran there may still run (${failure.code}): ${failure.message}`);
@@ -426,7 +462,15 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       const handle = before?.open.handle;
       const left = before?.exec ?? before?.prompt;
 
-      return !left || handle === undefined || await stopLeftRunning(handle, left.op);
+      if (!left || handle === undefined) return undefined;
+      const seen = await runtime.reattach(handle);
+
+      if (seen.kind === 'failed') return seen.failure;
+
+      // An operation that ended before this cancel needs no stop; closing its place confirms nothing of it still runs.
+      if (seen.kind === 'gone' || !isUnstopped(seen.ops.find((retained) => retained.op === left.op))) return undefined;
+
+      return stopLeftRunning(handle, left.op);
     },
   };
 }

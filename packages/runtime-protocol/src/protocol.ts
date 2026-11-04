@@ -37,6 +37,10 @@ import { z } from 'zod';
 //  {"event":"error"} names no request, so teamai fails every `init`, `reattach`, `collect` and `close` still waiting with
 //  `runtime_unanswered`, as it does a `reattach` or `close` with no reply within 15 s.
 //
+//  A runtime that cannot start for new work is opened again in `recover` mode to stop what it ran:
+//    > {"type":"init","protocol":1,"mode":"recover","options":{...}}
+//    < {"type":"init","ok":true,"can":{}}
+//
 //  `max_parallel` and `credentials` in a driver definition's options are teamai's: it strips them before `init`, so a
 //  runtime never sees or validates them. The credential values travel only in requests, in memory: on `open` for the
 //  attempt, and on each `exec` and `prompt` that gets them, so a runtime that restarted holds none and needs none.
@@ -50,8 +54,15 @@ export const RUNTIME_PROTOCOL = 1;
  */
 export const RUN_DIR_ENV = 'TEAMAI_RUN_DIR';
 
-/** Whether a person is there for the run: `attended` where one launched it, `unattended` in CI or a cloud agent. */
-export const RUNTIME_MODES = ['attended', 'unattended'] as const;
+/**
+ * Why a runtime process is started. `attended`: a person launched the run; `unattended`: in CI or a cloud agent.
+ * `recover`: only to cancel, reattach, collect and close the handles teamai recorded, when it could not start for new
+ * work, such as when its provider is down or its sign-in expired: it runs no sign-in or tool check, gets no credentials,
+ * offers nothing and answers from its own journal.
+ */
+export const RUNTIME_MODES = ['attended', 'unattended', 'recover'] as const;
+
+export type RuntimeMode = (typeof RUNTIME_MODES)[number];
 
 /** An operation id: what teamai persists before it sends an `open`, an `exec` or a `prompt`. */
 export const OpIdSchema = z.string().regex(/^op-[0-9a-f]{8,32}$/, 'An operation id looks like op- followed by hex digits').brand<'OpId'>();

@@ -148,9 +148,9 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
   } };
 }
 
-/** A step whose runtime stopped answering while it ran: what it started may still run there. */
+/** A step whose runtime stopped answering while it ran, or could not stop it: what it started may still run there. */
 function lost(what: string, failure: RuntimeFailure): WorkflowFailure {
-  return { code: 'runtime_lost', message: `The step runtime stopped answering while it ran ${what}, which may still run there (${failure.code}): ${failure.message}` };
+  return { code: 'runtime_lost', message: `The step runtime did not confirm that ${what} stopped, so it may still run there (${failure.code}): ${failure.message}` };
 }
 
 function interrupted(): WorkflowFailure {
