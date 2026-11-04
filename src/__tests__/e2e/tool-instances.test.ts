@@ -25,13 +25,15 @@ home: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }
 
 /**
  * A Claude build that keeps Claude Code transcripts in its own home: it writes one session there, the step's result,
- * and the command name it ran as to `<HOME>/launches.log`.
+ * the command name it ran as to `<HOME>/launches.log`, and the session it resumed (`-` for none) to `<HOME>/resumes.log`.
  */
 function fakeClaude(name: string): string {
   return `#!/usr/bin/env node
 const fs = require('node:fs'), path = require('node:path');
 if (process.argv.includes('--version')) { console.log('2.1.308 (Claude Code)'); process.exit(); }
 fs.appendFileSync(path.join(process.env.HOME, 'launches.log'), ${JSON.stringify(name)} + '\\n');
+const resumeAt = process.argv.indexOf('--resume');
+fs.appendFileSync(path.join(process.env.HOME, 'resumes.log'), (resumeAt >= 0 ? process.argv[resumeAt + 1] : '-') + '\\n');
 const judging = process.argv.includes('--json-schema');
 if (judging) {
   process.stdin.resume(); process.stdin.on('end', () => {
@@ -124,6 +126,8 @@ describe.skipIf(process.platform === 'win32')('tool instances through the CLI', 
     execFileSync('git', ['remote', 'add', 'origin', 'http://127.0.0.1:9/team/app.git'], { cwd: repo });
     const initialized = await runCLI(['init', '--self', '--agent', 'claude,acme-claude', '--force']);
     expect(initialized.code, `${initialized.stdout}\n${initialized.stderr}`).toBe(0);
+    const pulled = await runCLI(['pull']);
+    expect(pulled.code, `${pulled.stdout}\n${pulled.stderr}`).toBe(0);
   });
 
   afterAll(() => {
@@ -183,12 +187,24 @@ describe.skipIf(process.platform === 'win32')('tool instances through the CLI', 
     commit('acme-claude back');
   });
 
-  it('finds the instance\'s session in its own home, credits it to the instance, and scores it as the instance\'s', async () => {
-    const dataRuns = (): string[] => execFileSync('find', [home, '-path', '*workflows/runs/*.json', '-not', '-path', '*side-branches*'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
-    const stored = dataRuns().map((file) => JSON.parse(fs.readFileSync(file, 'utf8')) as { steps: Array<{ tool?: string; session?: string }> });
+  it('finds the instance\'s session in its own home, credits it to the instance, and scores and migrates it as the instance\'s', async () => {
+    // A member's own copy of the team file runs with no acceptance, which the terminal case covers.
+    const own = path.join(home, '.teamai', 'tools', 'acme-claude.yaml');
+    fs.mkdirSync(path.dirname(own), { recursive: true });
+    fs.writeFileSync(own, ACME_CLAUDE);
+    let started: Ran;
+    try {
+      started = await start('acme-claude', unattended);
+    } finally {
+      fs.rmSync(own);
+    }
+    const { run } = (envelope(started.stdout) as { data: { done: { run: string } } }).data.done;
+    const [record] = execFileSync('find', [home, '-path', `*workflows/runs/${run}.json`], { encoding: 'utf8' }).trim().split('\n');
+    const stored = JSON.parse(fs.readFileSync(record, 'utf8')) as { steps: Array<{ tool?: string; session?: string }> };
+    const sessionFiles = execFileSync('find', [home, '-name', `${SESSION}.jsonl`], { encoding: 'utf8' }).trim().split('\n');
 
-    expect(stored.flatMap((run) => run.steps)).toContainEqual(expect.objectContaining({ tool: 'acme-claude', session: SESSION }));
-    expect(fs.existsSync(path.join(home, '.claude', 'projects'))).toBe(false);
+    expect(stored.steps, `${started.stdout}\n${started.stderr}`).toContainEqual(expect.objectContaining({ tool: 'acme-claude', session: SESSION }));
+    expect(sessionFiles).toEqual([expect.stringContaining(path.join(home, '.acme-claude', 'projects'))]);
 
     const scored = await runCLI(['score', '--session', SESSION, '--source', 'acme-claude', '--scorer', 'review-quality']);
     expect(scored.code, `${scored.stdout}\n${scored.stderr}`).toBe(0);
@@ -196,6 +212,36 @@ describe.skipIf(process.platform === 'win32')('tool instances through the CLI', 
 
     const asClaude = await runCLI(['score', '--session', SESSION, '--source', 'claude-code', '--scorer', 'review-quality']);
     expect(asClaude.code).not.toBe(0);
+
+    // The session commands know the instance too.
+    const platforms = await runCLI(['session', 'platforms']);
+    expect(platforms.stdout, platforms.stderr).toContain('acme-claude: ✓ installed');
+    fs.mkdirSync(path.join(home, '.claude', 'projects'), { recursive: true });
+    const migrated = await runCLI(['session', 'migrate', SESSION, '--source', 'acme-claude', '--target', 'claude-code', '--json', '--yes']);
+    expect(envelope(migrated.stdout), `${migrated.stdout}\n${migrated.stderr}`).toHaveProperty('data');
+  });
+
+  it('continues an instance\'s session in the tool it extends through a copy in that tool\'s own home', async () => {
+    write('.teamai/workflows/handoff.yaml', 'schemaVersion: v1alpha1\nname: handoff\ndescription: Plan on the instance, build on Claude.\nsteps:\n  - id: plan\n    tool: acme-claude\n    prompt: Plan the change.\n    output:\n      ok: boolean\n  - id: build\n    needs: [plan]\n    tool: claude\n    prompt: Build it.\n    session: { from: plan }\n    output:\n      ok: boolean\n');
+    commit('handoff');
+    expect((await runCLI(['pull'])).code).toBe(0);
+    fs.mkdirSync(path.join(home, '.claude', 'projects'), { recursive: true });
+    const own = path.join(home, '.teamai', 'tools', 'acme-claude.yaml');
+    fs.mkdirSync(path.dirname(own), { recursive: true });
+    fs.writeFileSync(own, ACME_CLAUDE);
+    fs.rmSync(path.join(home, 'resumes.log'), { force: true });
+    try {
+      const ran = await runCLI(['workflow', 'start', 'handoff', '--driver', 'local'], unattended);
+      expect(envelope(ran.stdout), `${ran.stdout}\n${ran.stderr}`).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    } finally {
+      fs.rmSync(own);
+    }
+    const [, resumed = ''] = fs.readFileSync(path.join(home, 'resumes.log'), 'utf8').trim().split('\n');
+    const copies = execFileSync('find', [path.join(home, '.claude', 'projects'), '-name', `${resumed}.jsonl`], { encoding: 'utf8' }).trim();
+
+    expect(resumed).not.toBe(SESSION);
+    expect(copies).not.toBe('');
+    expect(fs.readFileSync(copies, 'utf8')).toContain('Review the repository.');
   });
 
   it('runs an instance that sets no command unattended with no acceptance, on the command of the tool it extends', async () => {
@@ -206,6 +252,11 @@ describe.skipIf(process.platform === 'win32')('tool instances through the CLI', 
 
     expect(started.code, `${started.stdout}\n${started.stderr}`).toBe(0);
     expect(launches()).toEqual(['claude']);
+
+    // It keeps Claude's home, so a session there is Claude's alone.
+    const claudeSession = '99999999-2222-4333-8444-555555555555';
+    const found = await runCLI(['score', '--session', claudeSession, '--scorer', 'review-quality']);
+    expect(envelope(found.stdout), found.stderr).toMatchObject({ error: { code: 'source_required', message: expect.stringContaining('Found in: claude-code.') } });
 
     // A step that names the instance as its own tool runs on it too.
     write('.teamai/workflows/named.yaml', 'schemaVersion: v1alpha1\nname: named\ndescription: A step on the instance.\nsteps:\n  - id: review\n    tool: review-claude\n    prompt: Review the repository.\n    output:\n      ok: boolean\n');

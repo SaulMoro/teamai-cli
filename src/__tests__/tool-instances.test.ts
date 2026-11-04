@@ -130,6 +130,25 @@ describe('team tool instances', () => {
   });
 });
 
+describe('the sessions of an instance', () => {
+  it('reads an instance that keeps the home of the tool it extends on that tool\'s platform, listed once', async () => {
+    await load(teamRepo({
+      'tools/review-claude.yaml': 'schemaVersion: v1alpha1\nname: review-claude\nextends: claude\npaths: { skills: .claude/review-skills }\n',
+      'tools/claude.yaml': 'schemaVersion: v1alpha1\nname: claude\nextends: claude\npaths: { skills: .claude/team-skills }\n',
+      'tools/acme-claude.yaml': ACME_CLAUDE,
+    }));
+    const { AgentSession } = await import('../session-flow/agent-session.js');
+    const { listAvailablePlatforms } = await import('../session-flow/adapters/index.js');
+    const platforms = listAvailablePlatforms();
+
+    expect(AgentSession.platformForTool('review-claude')).toBe('claude-code');
+    expect(AgentSession.platformForTool('acme-claude')).toBe('acme-claude');
+    expect(platforms.filter((platform) => platform === 'claude-code')).toHaveLength(1);
+    expect(platforms).toContain('acme-claude');
+    expect(platforms).not.toContain('review-claude');
+  });
+});
+
 describe('personal tool instances', () => {
   it('lets a member\'s own instance replace the team\'s of the same name', async () => {
     personal('acme-claude', ACME_CLAUDE.replace('command: acme-claude', 'command: my-acme-build'));
