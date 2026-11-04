@@ -767,6 +767,7 @@ export const dashboardMessages = {
   "no handle yet": "尚无句柄",
   "Place": "位置",
   "Waits for login": "等待登录",
+  "Not closed": "未关闭",
   "held by attempt": "持有者为尝试",
   "of run": "，所属运行",
   "Held back": "被暂缓的步骤",

@@ -2,7 +2,27 @@ import { spawn } from 'node:child_process';
 import { stopProcess } from '../../tool-launch/process-stop.js';
 import type { DriverCan } from '../requirements.js';
 import type { OpId, OpState } from '@teamai/runtime-protocol';
-import type { ExecEnd, StepRuntime } from './step-runtime.js';
+import type { ExecEnd, Lost, StepRuntime } from './step-runtime.js';
+
+/** How an exec of this runtime ended: never lost, since it runs in teamai's own process. */
+type LocalEnd = Exclude<ExecEnd, Lost>;
+
+/** What `reattach` says of an exec this runtime ended. */
+function endedState(op: OpId, end: LocalEnd): OpState {
+  switch (end.kind) {
+    case 'exited':
+      return { op, state: 'exited', code: end.code, stdout: end.stdout };
+    case 'cancelled':
+      return { op, state: 'cancelled' };
+    case 'failed':
+      return { op, state: 'failed', failure: end.failure };
+    default: {
+      const unhandled: never = end;
+
+      return unhandled;
+    }
+  }
+}
 
 /**
  * The `local` step runtime, in teamai's process: the place is the worktree as it is on the host, and each `exec` runs
@@ -11,7 +31,7 @@ import type { ExecEnd, StepRuntime } from './step-runtime.js';
  */
 export function localStepRuntime(can: DriverCan = {}): StepRuntime {
   const handles = new Map<string, string>();
-  const ended = new Map<OpId, { handle: string; end: ExecEnd }>();
+  const ended = new Map<OpId, { handle: string; end: LocalEnd }>();
   const running = new Map<OpId, { handle: string; end: Promise<ExecEnd>; stop: () => Promise<void>; cancelled: boolean }>();
   const detached = process.platform !== 'win32';
 
@@ -56,7 +76,7 @@ export function localStepRuntime(can: DriverCan = {}): StepRuntime {
       end: closed.then(({ code, error }): ExecEnd => {
         running.delete(request.op);
 
-        const end: ExecEnd = entry.cancelled ? { kind: 'cancelled' }
+        const end: LocalEnd = entry.cancelled ? { kind: 'cancelled' }
           : error ? { kind: 'failed', failure: { code: 'exec_failed', message: `${command} could not be started: ${error.message}` } }
             : { kind: 'exited', code, stdout };
 
@@ -74,11 +94,7 @@ export function localStepRuntime(can: DriverCan = {}): StepRuntime {
 
   const opsOf = (handle: string): OpState[] => [
     ...[...running].flatMap(([op, live]): OpState[] => (live.handle === handle ? [{ op, state: 'running' }] : [])),
-    ...[...ended].flatMap(([op, { handle: of, end }]): OpState[] => {
-      if (of !== handle) return [];
-
-      return [end.kind === 'exited' ? { op, state: 'exited', code: end.code, stdout: end.stdout } : end.kind === 'cancelled' ? { op, state: 'cancelled' } : { op, state: 'failed', failure: end.failure }];
-    }),
+    ...[...ended].flatMap(([op, { handle: of, end }]): OpState[] => (of === handle ? [endedState(op, end)] : [])),
   ];
 
   return {
@@ -125,6 +141,8 @@ export function localStepRuntime(can: DriverCan = {}): StepRuntime {
       for (const [key, open] of handles) if (open === handle) handles.delete(key);
 
       for (const [op, done] of ended) if (done.handle === handle) ended.delete(op);
+
+      return { ok: true };
     },
 
     async dispose() {},

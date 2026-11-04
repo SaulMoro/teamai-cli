@@ -31,14 +31,21 @@ export type PromptRequest = Omit<z.infer<typeof PromptRequestSchema>, 'type'>;
 
 export type Opened = { kind: 'ready'; handle: string; display?: RuntimeDisplay } | { kind: 'failed'; failure: RuntimeFailure };
 
+/**
+ * The runtime stopped answering after it was sent an operation: what that operation started may still run there, so
+ * nothing it holds, such as a login, is released.
+ */
+export type Lost = { kind: 'lost'; failure: RuntimeFailure };
+
 /** How an exec ended. `exited` carries the complete stdout, so a reattach rebuilds what a live run read. */
-export type ExecEnd = { kind: 'exited'; code: number; stdout: string } | { kind: 'cancelled' } | { kind: 'failed'; failure: RuntimeFailure };
+export type ExecEnd = { kind: 'exited'; code: number; stdout: string } | { kind: 'cancelled' } | { kind: 'failed'; failure: RuntimeFailure } | Lost;
 
 /** How a prompt ended: finished with the tool's session, the result the agent wrote and its usage, cancelled, or failed. */
 export type PromptEnd =
   | { kind: 'finished'; session: z.infer<typeof PromptSessionSchema>; result: PromptResult; usage?: z.infer<typeof PromptUsageSchema> }
   | { kind: 'cancelled' }
-  | { kind: 'failed'; failure: RuntimeFailure };
+  | { kind: 'failed'; failure: RuntimeFailure }
+  | Lost;
 
 /** A reattach: the handle is gone, alive with what the runtime retains, or the runtime could not be asked. */
 export type Reattached = { kind: 'gone' } | { kind: 'alive'; ops: OpState[]; display?: RuntimeDisplay } | { kind: 'failed'; failure: RuntimeFailure };
@@ -67,8 +74,8 @@ export interface StepRuntime {
   /** Brings the place's work back to the host, deletions included, never committed; after success and after failure. */
   collect(handle: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   reattach(handle: string): Promise<Reattached>;
-  /** Ends the handle: the runtime may drop its retained outcomes. */
-  close(handle: string): Promise<void>;
+  /** Ends the handle: the runtime may drop its retained outcomes. A failure says the place, and what runs in it, may remain. */
+  close(handle: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   /** Ends this connection to the runtime. Operations the runtime keeps running stay its own. */
   dispose(): Promise<void>;
 }

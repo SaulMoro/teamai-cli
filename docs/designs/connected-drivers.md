@@ -48,7 +48,7 @@ JSON lines over stdio, `protocol: 1`, validated with zod on both sides: `@teamai
 | `collect` | handle | the working tree written back into the place, deletions included, never committed, with the result directory and the attempt's tool home; after success and after failure |
 | `cancel` | operation id | `accepted`; the operation ends `cancelled` once no process of it still writes the place |
 | `reattach` | handle | `gone`, or `alive` with each operation's state, including a terminal outcome teamai has not yet recorded: an exec's exit and stdout, a prompt's `finished` session, result and usage |
-| `close` | handle | `closed`; the runtime may drop the handle's retained outcomes |
+| `close` | handle | `closed`; the runtime may drop the handle's retained outcomes. Or `close_failed` with a failure: the place, and what runs in it, may remain, so teamai records it on the attempt, shows it in run details, and keeps the attempt's login held. A runtime that exits while an exec or prompt runs fails it `runtime_lost`, and keeps its login the same way |
 
 Recovery rests on two rules. teamai persists the operation id before it sends a request, and a runtime returns the same acceptance and the same terminal outcome for a repeated id until `close`. So a teamai that dies between a runtime's reply and its own write loses nothing: it repeats the request or `reattach`es and reads the outcome. A finished `exec`'s retained outcome carries its complete stdout, so teamai rebuilds the same session, usage and stop reason it would have read live. An `exec` still running when teamai restarts is cancelled and its attempt reported failed with its work kept, because the budget teamai meters from live output cannot be enforced across the gap; a `prompt` reconnects.
 

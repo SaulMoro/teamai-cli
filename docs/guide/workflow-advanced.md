@@ -1603,6 +1603,13 @@ teamai copies that `auth.json` into the attempt's tool home, and once the step e
 
 When the holder's driver was killed, `teamai workflow cancel` of its run first stops the tool on the step runtime and writes the login back, then releases it. A runtime it cannot reach keeps the login held, and the command says which lock file to delete once the tool stopped.
 
+The login is also kept when the runtime itself stops while Codex runs, or cannot close the place afterwards, because Codex may still be running there. The step fails `runtime_lost`, and teamai says what to do:
+
+```text
+⚠ Step runtime "sandbox" could not close the place of attempt a339da600, so what ran there may still run: Step runtime "sandbox" stopped: it exited with status 70.
+⚠ The codex login teamai keeps stays held by attempt a339da600 of run r9a395746ec65dbd7, whose tool may still run. Stop that tool on its step runtime, then delete /home/me/.teamai/logins/codex.lock.
+```
+
 A team runtime is code a teammate pushed, so it runs only at a revision someone accepted on this machine. Any change to a file under its directory makes a new revision. An attended run asks before the first spawn:
 
 ```text
@@ -1648,6 +1655,15 @@ A runtime reads one JSON request per line on stdin and answers with JSON lines o
 ```
 
 The other requests are `cancel`, `collect`, `reattach` and `close`. A runtime answers a repeated `op` with the same result until `close`. It keeps what an exec printed and how it exited, so a restarted teamai can read them with `reattach`. An option it does not take fails `init` with `bad_option` and the key.
+
+A runtime that cannot end a place answers `close` with why. teamai then treats what ran there as still running: the attempt keeps its login, and the run's details show the failure under the step as *Not closed*:
+
+```text
+→ {"type":"close","handle":"teamai-r7-a1"}
+← {"event":"close_failed","handle":"teamai-r7-a1","failure":{"code":"rm_failed","message":"docker rm teamai-r7-a1 failed: the daemon is not running"}}
+```
+
+A runtime that exits while an exec or prompt runs fails it `runtime_lost`, for the same reason.
 
 Every request and reply is defined as a zod schema in `packages/runtime-protocol` of the teamai repository: `RuntimeRequestSchema` for what teamai sends, `RuntimeMessageSchema` for what a runtime writes.
 
@@ -1707,6 +1723,7 @@ A prompt that cannot finish ends `failed`. Use `model_unavailable`, `tool_unavai
 | `login_missing` | Run `CODEX_HOME=~/.teamai/logins/codex codex login`, then retry the step |
 | `login_not_written_back` | Log in again with that command if Codex refreshed its token, then retry the step |
 | `runtime_failed`, `runtime_interrupted` | Retry the step: `teamai workflow retry <run> <step>` |
+| `runtime_lost` | The runtime stopped while the step ran, so its tool may still run there. Stop it on the runtime, delete the login lock the warning names, if any, then retry the step |
 
 ## Workspaces in your own driver
 
