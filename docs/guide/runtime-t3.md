@@ -217,7 +217,7 @@ In CI, or a run with `TEAMAI_MODE=unattended`, nobody can approve a sign-in or a
 {"error":{"code":"runtime_failed","message":"Runtime \"t3\" of driver \"teamai-t3\" did not start (login_required): teamai has no valid T3 Code sign-in for http://127.0.0.1:3773, and an unattended run cannot ask for one. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again."}}
 ```
 
-An unattended run's threads still run in Auto, or your `runtime_mode`. A step whose agent asks for an approval anyway is stopped, and fails `tool_failed` naming the thread. Interactive steps run only in attended runs.
+An unattended run's threads still run in Auto, or your `runtime_mode`. A step whose agent asks for an approval anyway is stopped, and fails `tool_failed` naming the thread. If T3 does not stop the thread, the message says so, and teamai keeps the step's place until a later close can stop it. Interactive steps run only in attended runs.
 
 ## Restart, cancel and retry
 
