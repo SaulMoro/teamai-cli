@@ -254,6 +254,21 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]?.runtimeMode).toBe(runtimeMode);
     });
 
+    it('fails sign_in_too_narrow, naming the fix, when the sign-in does not allow the mode the thread runs in', async () => {
+      t3.config({ access: 'approval-required' });
+      const { runtime, handle } = await opened();
+
+      runtime.send(prompt(handle, 'op-0000001b'));
+
+      expect(await ended(runtime, 'op-0000001b')).toEqual({
+        op: 'op-0000001b', event: 'failed', failure: {
+          code: 'sign_in_too_narrow',
+          message: 'T3 Code refused to start the step\'s thread in auto mode, because teamai\'s sign-in does not allow it (Child runtime mode auto is broader than parent mode approval-required.). Remove ~/.teamai/runtime-state/t3/credentials.json, start the workflow again, and approve teamai with Auto access or broader. Or set runtime_mode to a mode the sign-in allows.',
+        },
+      });
+      expect(t3.threads()).toEqual([]);
+    });
+
     it('started outside a T3 thread, names no thread it was started from', async () => {
       const { runtime, handle } = await opened();
 

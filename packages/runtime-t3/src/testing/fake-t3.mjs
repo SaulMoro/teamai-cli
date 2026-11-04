@@ -109,6 +109,8 @@ function writeTranscript(thread) {
   ].join('\n') + '\n');
 }
 
+// Broadest first, as T3 ranks them.
+const MODES = ['full-access', 'auto', 'auto-accept-edits', 'approval-required'];
 const fail = (message) => ({ isError: true, content: [{ type: 'text', text: message }] });
 const ok = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value) }], structuredContent: value });
 const link = (threadId) => `t3-thread://v2/${config().environment.environmentId}/${threadId}`;
@@ -125,6 +127,12 @@ const TOOLS = {
     const provider = config().providers.find((one) => one.providerInstanceId === args.modelSelection?.instanceId);
 
     if (!provider) return fail(`No provider instance ${args.modelSelection?.instanceId}.`);
+    const access = config().access;
+
+    if (access && MODES.indexOf(args.runtimeMode) < MODES.indexOf(access)) {
+      return fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'runtime_mode_escalation_denied', message: `Child runtime mode ${args.runtimeMode} is broader than parent mode ${access}.` }));
+    }
+
     writeThread({
       threadId, title: args.title, message: args.message, worktreePath: args.workspaceStrategy?.worktreePath, projectId: args.projectId,
       provider: provider.driverKind, model: args.modelSelection?.model, runtimeMode: args.runtimeMode, status: 'starting', settled: false,
