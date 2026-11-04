@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { ContainerEngine } from '../options.js';
 import type { Can, ConfinedOffer, PlaceView, RuntimeFailure } from '@teamai/runtime-protocol';
-import { FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
+import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
 import { sandboxName, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 
 // ─── docker and podman ───────────────────────────────────
@@ -23,7 +23,7 @@ import { sandboxName, type ExecEnd, type PlaceKey, type Provider } from '../prov
 //    docker run -d --name <name>-proxy … --entrypoint node <image> -e <filter> 3128 api.anthropic.com:443
 //    docker network connect <name>-net <name>-proxy        the filter alone is on both networks
 //    docker run -d --name <name> … --network <name>-net --cap-drop ALL --security-opt no-new-privileges
-//      --env HTTPS_PROXY=http://<name>-proxy:3128 -v <dir>:<dir>:ro --entrypoint /bin/sh <image> -c <idle>
+//      --env HTTPS_PROXY=http://<name>-proxy:3128 -v <dir>:/evidence:ro --entrypoint /bin/sh <image> -c <idle>
 //
 //  Values never appear in an argv: `-e NAME` takes each from the engine CLI's own environment. Only the names an exec
 //  is given cross into the container, so nothing else of teamai's environment does. The container's processes run one
@@ -219,16 +219,13 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
       return { ok: false, failure: { code: 'sandbox_failed', message: created.kind === 'unstartable' ? created.message : `${engine} could not create the container for attempt ${key.attempt} from ${image}: ${lastLine(created)}` } };
     },
 
-    async createJudge(key, { dir, spellings, hosts }) {
+    async createJudge(key, { dir, hosts }) {
       const existing = await find(key);
 
       if (existing !== undefined) return { ok: true, id: existing };
+      const refused = unmountable(dir);
 
-      for (const mounted of [dir, ...spellings]) {
-        const refused = unmountable(mounted);
-
-        if (refused) return refused;
-      }
+      if (refused) return refused;
 
       const labels = ['--label', `teamai.run=${key.run}`, '--label', `teamai.attempt=${key.attempt}`];
       // No address of the host on the bridge either, so the host's own services are out of reach too.
@@ -247,7 +244,7 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
       const created = await cli([
         'run', '-d', '--name', sandboxName(key), ...labels, ...user(), '--network', networkOf(key), ...LOCKED,
         '--env', `HOME=${CONTAINER_HOME}`, '--env', `HTTPS_PROXY=${proxy}`, '--env', `HTTP_PROXY=${proxy}`, '--env', 'NO_PROXY=',
-        ...[dir, ...spellings].flatMap((at) => ['-v', `${dir}:${at}:ro${host.selinux ? ',z' : ''}`]), '--entrypoint', '/bin/sh', image, '-c', IDLE,
+        '-v', `${dir}:${EVIDENCE_DIR}:ro${host.selinux ? ',z' : ''}`, '--entrypoint', '/bin/sh', image, '-c', IDLE,
       ]);
 
       if (created.kind === 'ran' && created.code === 0) return { ok: true, id: created.stdout.trim() };

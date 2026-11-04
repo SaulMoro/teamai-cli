@@ -1,10 +1,10 @@
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import { redact } from '@teamai/shared/redact';
-import { PromptResultSchema, RuntimeRequestSchema, type Can, type ExecRequestSchema, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type RuntimeMessage, type RuntimeOptions, type RuntimeRequest } from '@teamai/runtime-protocol';
+import { PromptResultSchema, RuntimeRequestSchema, type Can, type ExecRequestSchema, type InitCredentials, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type RuntimeFailure, type RuntimeMessage, type RuntimeOptions, type RuntimeRequest } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import type { ExecRecord, Journal, Outcome, PlaceRecord } from './journal.js';
-import { judgeOf, NO_JUDGE_CREDENTIAL, spellingsOf } from './judge.js';
+import { EVIDENCE_DIR, inEvidenceDir, judgeOf, offersSignedIn, NO_JUDGE_CREDENTIAL } from './judge.js';
 import { parseOptions, type SandboxOptions } from './options.js';
 import { sandboxName, type Provider } from './provider.js';
 
@@ -60,6 +60,30 @@ function alive(pid: number): boolean {
   }
 }
 
+/**
+ * Whether `hostname`, as a URL spells it, is this machine itself: localhost, 127.0.0.0/8, ::1 (also IPv4-mapped), or
+ * the unspecified 0.0.0.0 and ::, which a client connects to as this machine.
+ */
+function isThisMachine(hostname: string): boolean {
+  const host = hostname.replace(/\.$/, '');
+
+  return host === 'localhost' || host.endsWith('.localhost') || /^127\.\d+\.\d+\.\d+$/.test(host) || host === '0.0.0.0'
+    || ['[::1]', '[::]'].includes(host) || /^\[::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}\]$/.test(host);
+}
+
+/**
+ * Why a credential that is a URL on this machine itself is refused: inside a container, that address is the
+ * container's own, so the tool would fail to connect. The message names the variable, never its value.
+ */
+function loopbackRefused(credentials: Record<string, string>): RuntimeFailure | undefined {
+  const name = Object.entries(credentials).find(([, value]) => URL.canParse(value) && isThisMachine(new URL(value).hostname))?.[0];
+
+  return name === undefined ? undefined : {
+    code: 'bad_option', key: `credentials.${name}`,
+    message: `${name} points at this machine itself, which no container reaches: inside one, that address is the container's own. On Docker Desktop, write its host as host.docker.internal (Podman: host.containers.internal); on Linux, use an address of this machine the container can reach. Then start again.`,
+  };
+}
+
 function terminal(op: OpId, outcome: Outcome): RuntimeMessage {
   switch (outcome.state) {
     case 'exited':
@@ -108,6 +132,14 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
   const open = async ({ op, run, attempt, view, credentials }: OpenRequest, provider: Provider): Promise<void> => {
     if (!RUN_ID.test(run) || !ATTEMPT_ID.test(attempt)) {
       write({ op, event: 'failed', failure: { code: 'bad_request', message: `Open ${op} names run "${run}" and attempt "${attempt}", which are not teamai ids.` } });
+
+      return;
+    }
+
+    const refused = loopbackRefused(credentials);
+
+    if (refused) {
+      write({ op, event: 'failed', failure: refused });
 
       return;
     }
@@ -286,7 +318,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       write(terminal(op, outcome));
     };
 
-    const created = await provider.createJudge(place, { dir: confined.dir, spellings: spellingsOf(lease.prompt, confined.dir), hosts: judge.hosts });
+    const created = await provider.createJudge(place, { dir: confined.dir, hosts: judge.hosts });
 
     if (!created.ok) {
       settle(journal.isCancelled(op) ? { state: 'cancelled' } : { state: 'failed', failure: created.failure });
@@ -302,13 +334,13 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       return;
     }
 
-    const launch = judge.tool.launch(lease, confined);
+    const launch = judge.tool.launch({ ...lease, prompt: inEvidenceDir(lease.prompt, confined.dir) }, confined);
     // Only the credentials the judge's own tool reads, less any the prompt withholds.
     const scoped = Object.fromEntries(Object.entries(judge.credentials).filter(([name]) => !request.unset.includes(name)));
     let stdout = '';
     let stderr = '';
 
-    const end = await provider.exec(created.id, { argv: launch.argv, env: { ...scoped, ...launch.env, ...request.env }, unset: request.unset, cwd: confined.dir }, (stream, data) => {
+    const end = await provider.exec(created.id, { argv: launch.argv, env: { ...scoped, ...launch.env, ...request.env }, unset: request.unset, cwd: EVIDENCE_DIR }, (stream, data) => {
       if (stream === 'stdout') stdout += data;
       else stderr = `${stderr}${data}`.slice(-4000);
     });
@@ -392,7 +424,8 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     write({ event: 'closed', handle });
   };
 
-  const init = async (options: RuntimeOptions): Promise<void> => {
+  /** `credentials`: the names the definition gives this runtime; an older teamai sends none, and every judge is offered. */
+  const init = async (options: RuntimeOptions, credentials: InitCredentials | undefined): Promise<void> => {
     const parsed = parseOptions(options);
 
     if (!parsed.ok) {
@@ -410,13 +443,16 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       return;
     }
 
-    ready = { provider, can: offered.can };
-    write({ type: 'init', ok: true, can: offered.can, ...(offered.can.confined && { confinedPrompt: true }) });
+    const { confined: offers = [], ...rest } = offered.can;
+    const judges = credentials === undefined ? offers : offersSignedIn(offers, credentials.env);
+    const can: Can = { ...rest, ...(judges.length > 0 && { confined: judges }) };
+    ready = { provider, can };
+    write({ type: 'init', ok: true, can, ...(can.confined && { confinedPrompt: true }) });
   };
 
   const dispatch = async (request: RuntimeRequest): Promise<void> => {
     if (request.type === 'init') {
-      await init(request.options);
+      await init(request.options, request.credentials);
 
       return;
     }

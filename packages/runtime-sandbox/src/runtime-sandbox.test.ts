@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import type { InitCredentials } from '@teamai/runtime-protocol';
 import { bundleRuntime, connect, fakeEngine, tempDir, type Connection, type FakeEngine, type Message } from './testing/harness.js';
 
 // The runtime through its stdio entry point, as teamai spawns it, on a fake docker / podman (testing/fake-engine.mjs).
@@ -40,8 +41,8 @@ function start(extra: NodeJS.ProcessEnv = {}): Connection {
   return connection;
 }
 
-async function init(connection: Connection, options: Message, mode = 'unattended'): Promise<Message> {
-  connection.send({ type: 'init', protocol: 1, mode, options });
+async function init(connection: Connection, options: Message, mode = 'unattended', credentials?: InitCredentials): Promise<Message> {
+  connection.send({ type: 'init', protocol: 1, mode, options, ...(credentials && { credentials }) });
 
   return connection.next((message) => message.type === 'init', 30_000);
 }
@@ -463,6 +464,84 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     });
   });
 
+  it.each<{ env: string[]; logins: string[]; offered: Message[] }>([
+    { env: ['ANTHROPIC_API_KEY'], logins: [], offered: [{ level: 'verified', access: 'read', tools: ['claude'] }] },
+    { env: ['OPENAI_API_KEY', 'GITHUB_TOKEN'], logins: ['claude'], offered: [{ level: 'verified', access: 'full', tools: ['codex'] }] },
+  ])('offers a judge only on the tools whose credentials the definition names: $env', async ({ env, logins, offered }) => {
+    expect(await init(start(), { provider: 'docker', image: IMAGE }, 'unattended', { env, logins })).toMatchObject({ ok: true, confinedPrompt: true, can: { confined: offered } });
+  });
+
+  it.each<{ env: string[]; logins: string[] }>([
+    { env: [], logins: ['claude', 'codex'] },
+    // teamai sends a confined codex only the names its confined profile reads, and CODEX_API_KEY is not one of them.
+    { env: ['CODEX_API_KEY'], logins: [] },
+  ])('offers no judge when it could sign none in, so teamai judges on a later runtime: $env $logins', async ({ env, logins }) => {
+    const reply = await init(start(), { provider: 'docker', image: IMAGE }, 'unattended', { env, logins });
+
+    expect(reply).toMatchObject({ ok: true, can: { tools: ['claude', 'codex'] } });
+    expect(reply).not.toHaveProperty('confinedPrompt');
+    expect(reply.can).not.toHaveProperty('confined');
+  });
+
+  it.each([
+    ['ANTHROPIC_BASE_URL', 'http://127.0.0.1:4000'],
+    ['ANTHROPIC_BASE_URL', 'http://localhost:4000/v1'],
+    ['OPENAI_BASE_URL', 'http://[::1]:8080/v1'],
+    ['OPENAI_BASE_URL', 'https://127.8.9.10/v1'],
+    ['ANTHROPIC_BASE_URL', 'http://localhost.:4000'],
+    ['OPENAI_BASE_URL', 'http://[::ffff:127.0.0.1]:8080/v1'],
+    ['ANTHROPIC_BASE_URL', 'http://0.0.0.0:4000'],
+  ])("refuses a judge whose %s points at this machine's loopback, naming the variable and never its value", async (name, value) => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const opened = await openJudge(connection, { ANTHROPIC_API_KEY: 'judge-key-1', OPENAI_API_KEY: 'judge-key-2', [name]: value });
+
+    expect(opened).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: `credentials.${name}` } });
+    const message = String((opened.failure as Message).message);
+
+    expect(message).toContain(name);
+    expect(message).toContain('host.docker.internal');
+    expect(message).not.toContain(new URL(value).hostname.replace(/\.$/, ''));
+    expect(engine.containers()).toEqual([]);
+    expect(engine.networks()).toEqual([]);
+  });
+
+  it("refuses a step whose base URL points at this machine's loopback, before it creates the container", async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, credentials: { ANTHROPIC_API_KEY: 'step-key', ANTHROPIC_BASE_URL: 'http://localhost:4000' }, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+
+    expect(await connection.next((message) => message.op === op && (message.event === 'failed' || message.event === 'ready'))).toMatchObject({ event: 'failed', failure: { code: 'bad_option', key: 'credentials.ANTHROPIC_BASE_URL' } });
+    expect(engine.containers()).toEqual([]);
+  });
+
+  it('mounts the evidence at /evidence alone, and names it there in the prompt, so the judge never sees where it lives on the host', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openJudge(connection, { ANTHROPIC_API_KEY: 'judge-key-1' });
+    const end = await judge(connection, { credentials: { ANTHROPIC_API_KEY: 'judge-key-1' }, lease: { prompt: `Read only the files under ${evidence}:\nthe diff in ${evidence}/nested/diff.patch, and the schema in ${evidence}/answer.schema.json.` } });
+    const seen = reasoning(end);
+    const judgeRun = engine.calls().find((call) => call.includes(HANDLE) && call.includes('-d')) ?? [];
+    const toolExec = engine.calls().find(([, command]) => command === 'exec') ?? [];
+
+    expect(seen.sees).toEqual(['nested/diff.patch', 'transcript.jsonl']);
+    expect(judgeRun.filter((arg, index) => judgeRun[index - 1] === '-v')).toEqual([`${evidence}:/evidence:ro`]);
+    expect(toolExec.slice(toolExec.indexOf('-w'), toolExec.indexOf('-w') + 2)).toEqual(['-w', '/evidence']);
+    expect(seen.argv).toEqual(expect.arrayContaining(['Read only the files under /evidence:\nthe diff in /evidence/nested/diff.patch, and the schema in /evidence/answer.schema.json.']));
+    expect(JSON.stringify(seen.argv)).not.toContain(dir);
+  });
+
+  it("leaves a sibling of the evidence directory as the prompt wrote it, since it is not what the judge sees at /evidence", async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openJudge(connection, { ANTHROPIC_API_KEY: 'judge-key-1' });
+    const { argv = [] } = reasoning(await judge(connection, { credentials: { ANTHROPIC_API_KEY: 'judge-key-1' }, lease: { prompt: `Read ${evidence}/diff.patch, not ${evidence}-old/diff.patch nor ${evidence}.bak, and end at ${evidence}.` } }));
+
+    expect(argv).toContain(`Read /evidence/diff.patch, not ${evidence}-old/diff.patch nor ${evidence}.bak, and end at /evidence.`);
+  });
+
   it('offers no confined prompt from an image without node, which runs the network filter', async () => {
     engine.image('ghcr.io/acme/native-claude:1', { claude: JUDGE_CLAUDE });
     const reply = await init(start(), { provider: 'docker', image: 'ghcr.io/acme/native-claude:1' });
@@ -497,7 +576,7 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     const proxyRun = runs.find((call) => call.includes(`${HANDLE}-proxy`)) ?? [];
 
     // Only the evidence directory, read-only.
-    expect(judgeRun.filter((arg, index) => judgeRun[index - 1] === '-v')).toEqual([`${evidence}:${evidence}:ro`]);
+    expect(judgeRun.filter((arg, index) => judgeRun[index - 1] === '-v')).toEqual([`${evidence}:/evidence:ro`]);
     expect(judgeRun.join(' ')).toContain(`--network ${HANDLE}-net`);
     expect(judgeRun.join(' ')).toContain('--cap-drop ALL');
     expect(engine.calls()).toContainEqual(['docker', 'network', 'create', '--internal', '-o', 'com.docker.network.bridge.inhibit_ipv4=true', '--label', `teamai.run=${RUN}`, '--label', `teamai.attempt=${ATTEMPT}`, `${HANDLE}-net`]);
@@ -601,34 +680,6 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     expect(await ended).toEqual({ op, event: 'cancelled' });
     // The judge's container is gone, so an exec still on its way to the engine has nothing to start in.
     expect(engine.containers()).toEqual([`${HANDLE}-proxy`]);
-  });
-
-  it('mounts the evidence also where the prompt names it, when that spelling resolves to the same directory', async () => {
-    // As on macOS, where a step's /var/folders/… is /private/var/folders/…: teamai confines to the real path, and the
-    // prompt keeps the step's spelling.
-    fs.symlinkSync(path.join(dir, 'runs'), path.join(dir, 'runs-as-spelled'));
-    const spelled = path.join(dir, 'runs-as-spelled', RUN, 'scratch', 'a0000beef');
-    const connection = start();
-    await init(connection, { provider: 'docker', image: IMAGE });
-    await openJudge(connection, { ANTHROPIC_API_KEY: 'judge-key-1' });
-
-    expect(await judge(connection, { credentials: { ANTHROPIC_API_KEY: 'judge-key-1' }, lease: { prompt: `Read only the files under ${spelled}:\nthe transcript and the diff. Reply by the schema in ${spelled}/answer.schema.json.` } })).toMatchObject({ event: 'finished' });
-    const judgeRun = engine.calls().find((call) => call.includes(HANDLE) && call.includes('-d')) ?? [];
-
-    expect(judgeRun.filter((arg, index) => judgeRun[index - 1] === '-v')).toEqual([`${evidence}:${evidence}:ro`, `${evidence}:${spelled}:ro`]);
-  });
-
-  it('mounts each spelling once, with a trailing slash or spaces in it', async () => {
-    fs.symlinkSync(path.join(dir, 'runs'), path.join(dir, 'Team Project'));
-    const spelled = path.join(dir, 'Team Project', RUN, 'scratch', 'a0000beef');
-    const connection = start();
-    await init(connection, { provider: 'docker', image: IMAGE });
-    await openJudge(connection, { ANTHROPIC_API_KEY: 'judge-key-1' });
-
-    expect(await judge(connection, { credentials: { ANTHROPIC_API_KEY: 'judge-key-1' }, lease: { prompt: `Read only the files under ${spelled}/:\nthe diff in ${evidence}/, and the schema in ${spelled}/answer.schema.json.` } })).toMatchObject({ event: 'finished' });
-    const judgeRun = engine.calls().find((call) => call.includes(HANDLE) && call.includes('-d')) ?? [];
-
-    expect(judgeRun.filter((arg, index) => judgeRun[index - 1] === '-v')).toEqual([`${evidence}:${evidence}:ro`, `${evidence}:${spelled}:ro`]);
   });
 
   it("gives a judge only its own tool's credentials", async () => {

@@ -41,11 +41,10 @@ export interface Provider {
   /** Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. */
   create(key: PlaceKey, view: PlaceView): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
   /**
-   * Creates a judge's sandbox: only `dir`, read-only, at its path and at each of its `spellings`, on a network whose
-   * one way out lets through only `hosts` (`host:port`), and no credential. Returns its id; an existing one of `key`
-   * is that judge's.
+   * Creates a judge's sandbox: only `dir`, read-only, at EVIDENCE_DIR (judge.ts), on a network whose one way out lets
+   * through only `hosts` (`host:port`), and no credential. Returns its id; an existing one of `key` is that judge's.
    */
-  createJudge(key: PlaceKey, { dir, spellings, hosts }: { dir: string; spellings: string[]; hosts: string[] }): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
+  createJudge(key: PlaceKey, { dir, hosts }: { dir: string; hosts: string[] }): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
   /** Removes what a judge's sandbox needed besides itself: its network and the filter in front of it. */
   releaseJudge(key: PlaceKey): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   /** Runs one process in the sandbox, streaming its output, until it ends. */
