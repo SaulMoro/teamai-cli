@@ -170,6 +170,8 @@ const TOOLS = {
     if (!thread) return fail(`No thread ${args.threadId}.`);
 
     if (TERMINAL.has(thread.status)) return ok({ threadId: args.threadId, runId: null, status: 'no_active_run' });
+
+    if (config().interruptFails) return fail(`Thread ${args.threadId} has a run T3 cannot interrupt now.`);
     update(args.threadId, () => ({ status: 'interrupted' }));
 
     return ok({ threadId: args.threadId, runId: `run:${args.threadId}:1`, status: 'interrupt_requested' });
