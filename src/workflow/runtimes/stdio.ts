@@ -428,9 +428,11 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
     },
 
     async dispose() {
-      if (!child || dead) return;
+      if (!child) return;
       child.stdin?.end();
-      await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, DISPOSE_WAIT_MS).unref())]);
+
+      // A runtime that already stopped is not waited for; what it started may still hold its stdout and stderr open.
+      if (!dead) await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, DISPOSE_WAIT_MS).unref())]);
       // One that runs on keeps what it started: teamai stops reading it, so this process does not wait for it to exit.
       child.stdout?.destroy();
       child.stderr?.destroy();
