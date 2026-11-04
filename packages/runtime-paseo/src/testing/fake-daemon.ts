@@ -77,7 +77,7 @@ type Provider = 'claude' | 'codex' | 'opencode';
 
 const MODES: Readonly<Record<Provider, Array<{ id: string; label: string }>>> = {
   claude: [{ id: 'plan', label: 'Plan Mode' }, { id: 'default', label: 'Always Ask' }, { id: 'acceptEdits', label: 'Accept File Edits' }, { id: 'bypassPermissions', label: 'Bypass' }],
-  codex: [{ id: 'auto', label: 'Default Permissions' }, { id: 'full-access', label: 'Full Access' }],
+  codex: [{ id: 'auto', label: 'Default Permissions' }, { id: 'auto-review', label: 'Auto-review' }, { id: 'full-access', label: 'Full Access' }],
   opencode: [{ id: 'build', label: 'Build' }, { id: 'plan', label: 'Plan' }],
 };
 
@@ -374,6 +374,16 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
           }
 
           reply({ type: 'agent.create.response', payload: { requestId: message.requestId, agent: snapshot(agent), creation: creation(agent), error: null } });
+
+          return;
+        }
+
+        const modes = modesOf(message.config.provider);
+        const { modeId } = message.config;
+
+        // Paseo refuses a mode its provider does not list, a preset the provider would take included (recorded, 0.14.0).
+        if (modeId && !modes.some((mode) => mode.id === modeId)) {
+          reply({ type: 'agent.create.response', payload: { requestId: message.requestId, agent: null, error: `Invalid mode '${modeId}' for provider '${message.config.provider}'. Available modes: ${modes.map((mode) => mode.id).join(', ')}` } });
 
           return;
         }

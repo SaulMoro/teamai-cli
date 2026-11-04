@@ -9,7 +9,7 @@ import {
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import { loadClient } from './client.js';
-import { CONFINED_MODES, connect, DEFAULT_MODES, isPaseoTool, type Daemon, type PaseoTool } from './daemon.js';
+import { CONFINED_CODEX_OPTIONS, CONFINED_MODES, connect, DEFAULT_MODES, isPaseoTool, type Daemon, type PaseoTool } from './daemon.js';
 import type { AgentCreate, AgentPrompt, Journal, Place } from './journal.js';
 
 type WorktreePlace = Extract<Place, { kind: 'worktree' }>;
@@ -55,12 +55,17 @@ export function agentIdOf(op: OpId): string {
 const CONFINED_KEPT: ConfinedKept = { level: 'best-effort', access: 'read' };
 
 /** The prompt a confined prompt's agent gets: the brief that confines it, the step's prompt, and the shape of its answer. */
-function confinedBrief(confined: ConfinedPrompt, prompt: string): string {
+function confinedBrief(tool: PaseoTool, confined: ConfinedPrompt, prompt: string): string {
   const reply = confined.schema === undefined
     ? 'Reply with only the JSON answer, and no other text.'
     : `Reply with only the JSON answer that matches this JSON Schema, and no other text: ${JSON.stringify(confined.schema)}. Where the prompt above names another schema, this one decides the shape of your reply.`;
 
-  return `Answer from the files in ${confined.dir} alone. List and read them with your file tools, such as Glob, Grep and Read. Change no file and run no shell command: asking for a permission ends this run.\n\n${prompt}\n\n${reply}`;
+  // Codex has no file tools: it reads through shell commands, which its read-only sandbox runs without asking.
+  const reading = tool === 'codex'
+    ? 'List and read them with read-only shell commands, such as ls, cat and rg, which your sandbox runs without asking. Change no file and use no other tool'
+    : 'List and read them with your file tools, such as Glob, Grep and Read. Change no file and run no shell command';
+
+  return `Answer from the files in ${confined.dir} alone. ${reading}: asking for a permission ends this run.\n\n${prompt}\n\n${reply}`;
 }
 
 /** The failure of an agent that ended with no session in Paseo: teamai records and scores a pass by its session. */
@@ -122,7 +127,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
   const notOffered = (tool: PaseoTool, isJudge: boolean): string | undefined => {
     if ((isJudge ? offer.judges : offer.steps).includes(tool)) return undefined;
 
-    return offer.reasons.get(tool) ?? (offer.steps.includes(tool) ? `has no ${CONFINED_MODES[tool].id} mode, which teamai judges it in` : 'the daemon has not installed it');
+    return offer.reasons.get(tool) ?? (offer.steps.includes(tool) ? `has no ${CONFINED_MODES[tool]} mode, which teamai judges it in` : 'the daemon has not installed it');
   };
 
   /** The prompts this process follows, each with what stops its wait when teamai cancels it, once its agent exists. */
@@ -257,9 +262,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     mode = request.mode;
 
     const judges = tools.flatMap(({ tool, modes }) => {
-      const { id, isListed } = CONFINED_MODES[tool];
-
-      return !isListed || modes.includes(id) ? [tool] : [];
+      return modes.includes(CONFINED_MODES[tool]) ? [tool] : [];
     });
 
     offer = { steps: tools.map(({ tool }) => tool), judges, reasons: new Map(installed.flatMap((entry) => (entry.canRun ? [] : [[entry.tool, entry.reason] as const]))) };
@@ -427,7 +430,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       return;
     }
 
-    const modeId = CONFINED_MODES[tool].id;
+    const modeId = CONFINED_MODES[tool];
 
     let workspace = place.workspace && { ...place.workspace, directory: confined.dir };
 
@@ -443,7 +446,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       journal.savePlace(request.handle, { ...place, workspace: { id: workspace.id, name: workspace.name } });
     }
 
-    const create = await createFor(live, request, tool, { place, modeId, prompt: confinedBrief(confined, lease.prompt) });
+    const create = await createFor(live, request, tool, { place, modeId, prompt: confinedBrief(tool, confined, lease.prompt), ...(tool === 'codex' && { options: CONFINED_CODEX_OPTIONS }) });
 
     if ('code' in create) {
       refuse(op, request.handle, create);
