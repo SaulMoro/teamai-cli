@@ -1,0 +1,160 @@
+import crypto from 'node:crypto';
+import path from 'node:path';
+import { z } from 'zod';
+import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
+import { sandboxName, type ExecEnd, type Provider } from '../provider.js';
+import { cliOf, mountsOf, type Ran } from './cli.js';
+
+// ─── sbx (Docker Sandboxes) ──────────────────────────────
+//
+//  One microVM per attempt, from the agent's template, each place path at its host path through virtiofs:
+//
+//    sbx create --name teamai-<run>-<attempt> --no-progress <agent> <worktree> <result> <run dir> <tool home> <git path>:ro …
+//    sbx exec -w <cwd> -e NAME … teamai-<run>-<attempt> env -u WITHHELD … -- <argv>
+//    sbx stop teamai-<run>-<attempt>          ends every process; the next exec starts the sandbox again
+//    sbx rm --force teamai-<run>-<attempt>
+//
+//  The worktree is the primary workspace. sbx does not follow a linked worktree's `.git` to its common directory, so
+//  the git paths the view names are mounted read-only at their own paths: `git status` works, `git commit` cannot
+//  write. No credential goes in at create: each exec brings its own, by name, from this process's environment. A
+//  login stored with `sbx secret set` stays in the host's proxy, which injects it into the requests; the sandbox holds
+//  only the placeholder variables its agent reads, which an exec keeps unless teamai withholds them. The name is the
+//  handle: `sbx ls` finds it again after a restart. sbx's network policy lets a sandbox reach every host it allows, so
+//  this provider offers no judge, which must reach its model provider only.
+//
+
+/** The tools a step runtime can launch, as `can.tools` lists those a template holds. */
+// oxlint-disable-next-line teamai/tool-facts -- teamai's EXEC_RUNTIME_TOOLS, by their executables; a runtime package cannot read teamai's tool registry
+const LAUNCHABLE = ['claude', 'codex', 'codebuddy'];
+
+const NOT_INSTALLED = 'sbx is not installed here, or not on PATH. Install Docker Sandboxes (https://docs.docker.com/ai/sandboxes/), sign in with `sbx login`, and start again.';
+
+/**
+ * sbx's own settings, which it reads from its environment: an exec's names never replace them, so a step cannot point
+ * the CLI at another home, daemon or proxy, and are never passed into the sandbox.
+ */
+const CLI_SETTING = /^(?:HOME|XDG_[A-Z_]+|SBX_[A-Z0-9_]*|DOCKER_[A-Z0-9_]*)$/;
+
+const ListedSchema = z.array(z.looseObject({ name: z.string() }));
+
+/** The notice sbx prints on stderr when an exec starts a sandbox it stopped while idle: sbx's line, not the step's. */
+const STARTED = /^[ \t]*✓ sandbox \S+ — started\r?\n/;
+
+/** The sandbox names `sbx ls --json` printed, or undefined when it printed something else. */
+function namesListed(stdout: string): string[] | undefined {
+  try {
+    const listed = ListedSchema.safeParse(JSON.parse(stdout));
+
+    return listed.success ? listed.data.map(({ name }) => name) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function sbxProvider({ agent, env }: { agent: string; env: NodeJS.ProcessEnv }): Provider {
+  const { run: cli } = cliOf({ name: 'sbx', env, notInstalled: NOT_INSTALLED });
+
+  /** What sbx said: its `error: …` line and the `try: …` hint it adds, on one line. */
+  const said = (ran: Ran): string => (ran.kind === 'unstartable' ? ran.message : ran.stderr.trim().split('\n').map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('✓')).slice(-2).join('; '));
+
+  const unavailable = (message: string) => ({ ok: false, failure: { code: 'sandbox_unavailable', message } }) satisfies { ok: false; failure: RuntimeFailure };
+
+  const find: Provider['find'] = async (key) => {
+    const ran = await cli(['ls', '--json']);
+    const name = sandboxName(key);
+
+    return ran.kind === 'ran' && ran.code === 0 && namesListed(ran.stdout)?.includes(name) ? name : undefined;
+  };
+
+  const remove = async (name: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+    const removed = await cli(['rm', '--force', name]);
+
+    if (removed.kind === 'ran' && (removed.code === 0 || /not found/i.test(removed.stderr))) return { ok: true };
+
+    return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not remove sandbox ${name}: ${said(removed)}. Remove it with \`sbx rm --force ${name}\`.` } };
+  };
+
+  /** The tools a kit (or an agent other than claude and codex) brings, from a scratch sandbox with no workspace. */
+  const probeTools = async (): Promise<{ ok: true; tools: string[] } | { ok: false; failure: RuntimeFailure }> => {
+    const scratch = `teamai-tools-${crypto.randomBytes(4).toString('hex')}`;
+    const created = await cli(['create', '--name', scratch, '--no-progress', agent]);
+
+    if (created.kind !== 'ran' || created.code !== 0) return unavailable(`sbx could not create a sandbox from agent ${agent} (${said(created)}). Check the agent name or kit reference, and start again.`);
+    const probe = await cli(['exec', scratch, '/bin/sh', '-c', `for t in ${LAUNCHABLE.join(' ')}; do command -v "$t" >/dev/null 2>&1 && echo "$t"; done; exit 0`]);
+    await remove(scratch);
+
+    if (probe.kind !== 'ran' || probe.code !== 0) return unavailable(`sbx could not run a command in a sandbox from agent ${agent} (${said(probe)}). Check that its template runs /bin/sh, and start again.`);
+    const found = new Set(probe.stdout.split('\n').map((line) => line.trim()));
+
+    return { ok: true, tools: LAUNCHABLE.filter((tool) => found.has(tool)) };
+  };
+
+  return {
+    async offer() {
+      const ls = await cli(['ls', '--json']);
+
+      if (ls.kind === 'unstartable') return unavailable(ls.message);
+
+      if (ls.code !== 0) return unavailable(`sbx cannot reach its daemon (${said(ls)}). Run \`sbx daemon start\`, or \`sbx login\` if you are signed out, and start again.`);
+      const policy = await cli(['policy', 'ls']);
+
+      if (policy.kind === 'ran' && /not been initialized/i.test(policy.stderr)) {
+        return unavailable('sbx creates no sandbox until its network policy is set. Run `sbx policy init balanced` once (or `sbx policy init deny-all` and allow your model provider with `sbx policy allow network <host>`), and start again.');
+      }
+
+      const tools = LAUNCHABLE.includes(agent) ? { ok: true as const, tools: [agent] } : await probeTools();
+
+      if (!tools.ok) return tools;
+      const can: Can = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', env: true, tokens: true, max_turns: true, setup: true, tools: tools.tools, end_turn: true, unattended: true, role: true };
+
+      return { ok: true, can };
+    },
+
+    find,
+
+    async create(key, view) {
+      const mounted = mountsOf('sbx', view);
+
+      if (!mounted.ok) return mounted;
+      const name = sandboxName(key);
+      // mountsOf lists the worktree first, which sbx takes as the primary workspace.
+      const paths = mounted.mounts.map(({ at, mode }) => (mode === 'ro' ? `${at}:ro` : at));
+      const created = await cli(['create', '--name', name, '--no-progress', agent, ...paths]);
+
+      if (created.kind === 'ran' && created.code === 0) return { ok: true, id: name };
+
+      // Another open of the same attempt created it first: that sandbox is this attempt's.
+      if ((await find(key)) !== undefined) return { ok: true, id: name };
+
+      return { ok: false, failure: { code: 'sandbox_failed', message: `sbx could not create the sandbox for attempt ${key.attempt} from agent ${agent}: ${said(created)}` } };
+    },
+
+    async exec(id, spec, onOutput): Promise<ExecEnd> {
+      const passed = Object.keys(spec.env).filter((variable) => !CLI_SETTING.test(variable));
+      const cliEnv: NodeJS.ProcessEnv = { ...env, ...Object.fromEntries(passed.map((variable) => [variable, spec.env[variable]])) };
+      const withheld = spec.unset.length > 0 ? ['env', ...spec.unset.flatMap((variable) => ['-u', variable]), '--'] : [];
+      let first = true;
+
+      // A sandbox sbx stopped while idle starts again first, with sbx's own notice before the step's stderr.
+      const ran = await cli(['exec', '-w', spec.cwd, ...passed.flatMap((variable) => ['-e', variable]), id, ...withheld, ...spec.argv], {
+        env: cliEnv,
+        onOutput: (stream, data) => {
+          const own = first && stream === 'stderr' ? data.replace(STARTED, '') : data;
+          first = false;
+
+          if (own !== '') onOutput(stream, own);
+        },
+      });
+
+      return ran.kind === 'ran' ? { kind: 'exited', code: ran.code } : { kind: 'failed', failure: { code: 'exec_failed', message: ran.message } };
+    },
+
+    async stop(id) {
+      await cli(['stop', id]);
+    },
+
+    destroy: remove,
+
+    display: (key) => ({ label: `${sandboxName(key)} (sbx)`, fields: { sandbox: sandboxName(key), agent: path.basename(agent) } }),
+  };
+}
