@@ -4,7 +4,8 @@
 // result there and a Claude or Codex transcript in HOME, as the real tool would.
 //
 //   FAKE_T3_STATE/config.json   written by the test: { token, environment, projects, providers, agent }
-//                               agent: { output, fail, hold, release, waits, noSession, reply }; read again on every call
+//                               agent: { output, fail, hold, release, waits, noSession, reply, result }; read again on every call;
+//                               result: the result file's JSON exactly, in place of { output, failure }
 //                               organizeFails: T3 refuses t3_thread_organize; stopLagMs: a stop ends the run this long after T3 acknowledged it
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
 //   FAKE_T3_STATE/threads/      one JSON file per thread
@@ -81,7 +82,8 @@ async function play(threadId) {
 
   const result = /Write the workflow result as JSON to (\S+?)\.(?:\s|$)/.exec(thread.message)?.[1];
 
-  if (result && (agent.output !== undefined || agent.failure)) fs.writeFileSync(result, JSON.stringify({ output: agent.output, failure: agent.failure }));
+  if (result && agent.result !== undefined) fs.writeFileSync(result, JSON.stringify(agent.result));
+  else if (result && (agent.output !== undefined || agent.failure)) fs.writeFileSync(result, JSON.stringify({ output: agent.output, failure: agent.failure }));
 
   if (!agent.noSession) writeTranscript(thread);
   update(threadId, () => ({ status: 'completed', ...(agent.reply !== undefined && { reply: agent.reply }) }));

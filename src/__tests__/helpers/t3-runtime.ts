@@ -17,6 +17,7 @@ const ToyAgentSchema = z.object({
   fail: z.object({ code: z.string(), message: z.string() }).optional(),
   hold_ms: z.number().optional(),
   release: z.string().optional(),
+  result: z.json().optional(),
 }).loose();
 
 /**
@@ -74,7 +75,7 @@ export async function t3OnFakeServer(): Promise<{
         environment: { environmentId: 'env-fake-1', label: 'fake-laptop', serverVersion: '0.1.7-fake' },
         projects: [{ id: 'project-1', title: 'scenario', workspaceRoot: fs.realpathSync(worktree) }],
         providers: [{ providerInstanceId: 'claudeAgent', driverKind: 'claudeAgent', displayName: 'Claude', constraints: [], models: [{ id: 'claude-opus-5-5' }] }],
-        agent: { output: toy.output, fail: toy.fail !== undefined, hold: toy.hold_ms !== undefined, release: toy.release },
+        agent: { output: toy.output, fail: toy.fail !== undefined, hold: toy.hold_ms !== undefined, release: toy.release, result: toy.result },
       }));
 
       return { environment: 'local' };
