@@ -428,6 +428,14 @@ describe('a runtime that answers confined prompts, over stdio', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it('tells the runtime at init the names of the credentials and logins it brings, never a value, so it offers only the judges it can sign in', async () => {
+    const ready = await start().init({ options: { state, judge: {} }, mode: 'unattended', credentials: { env: ['ANTHROPIC_API_KEY'], logins: ['codex'] } });
+
+    expect(ready).toMatchObject({ ok: true });
+    const noted = fs.readFileSync(path.join(state, 'credentials.jsonl'), 'utf8').trim().split('\n').map((line) => JSON.parse(line) as unknown);
+    expect(noted).toEqual([{ type: 'init', names: ['ANTHROPIC_API_KEY'], logins: ['codex'] }]);
+  });
+
   it('drops can.confined from an offer whose init does not say it answers confined prompts', async () => {
     const ready = await start().init({ options: { state, can: { confined: offer } }, mode: 'unattended' });
 

@@ -114,7 +114,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
   return {
     name,
 
-    async init({ options, mode }) {
+    async init({ options, mode, credentials }) {
       if (dead) return { ok: false, failure: dead };
 
       try {
@@ -136,7 +136,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
 
       return new Promise<Initialized>((resolve) => {
         onInit = resolve;
-        send({ type: 'init', protocol: RUNTIME_PROTOCOL, mode, options });
+        send({ type: 'init', protocol: RUNTIME_PROTOCOL, mode, options, ...(credentials && { credentials }) });
       });
     },
 

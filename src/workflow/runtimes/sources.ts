@@ -334,7 +334,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     ? stdioStepRuntime({ name: source.name, command: process.execPath, args: [source.file] })
     : stdioStepRuntime({ name: source.name, command: source.executable });
 
-  const ready = await runtime.init({ options: split.runtime, mode });
+  const ready = await runtime.init({ options: split.runtime, mode, credentials: { env: split.credentials.map((credential) => credential.name), logins: split.engine.logins } });
 
   if (ready.ok && ready.launchesAgents && split.engine.logins.length > 0) {
     await runtime.dispose();

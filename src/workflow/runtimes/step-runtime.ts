@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { OpIdSchema, type ConfinedKept, type ExecRequestSchema, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type PromptResult, type PromptSessionSchema, type PromptUsageSchema, type RuntimeDisplay, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
+import { OpIdSchema, type ConfinedKept, type ExecRequestSchema, type InitCredentials, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type PromptResult, type PromptSessionSchema, type PromptUsageSchema, type RuntimeDisplay, type RuntimeFailure, type RuntimeOptions } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import type { RunMode } from '../../launch-context.js';
 import type { DriverCan } from '../requirements.js';
@@ -70,8 +70,11 @@ export type Initialized = { ok: true; can: DriverCan; launchesAgents: boolean } 
 export interface StepRuntime {
   /** The runtime's name, as a driver definition's `use` names it. */
   readonly name: string;
-  /** Validates `options` (a bad key fails with `bad_option` naming it) and answers what the runtime offers. */
-  init(request: { options: RuntimeOptions; mode: RunMode }): Promise<Initialized>;
+  /**
+   * Validates `options` (a bad key fails with `bad_option` naming it) and answers what the runtime offers, knowing the
+   * names of the `credentials` its definition gives it.
+   */
+  init(request: { options: RuntimeOptions; mode: RunMode; credentials?: InitCredentials }): Promise<Initialized>;
   /** Opens the attempt's place. `onAccepted` runs with the handle before `open` settles, so teamai persists it. */
   open(request: OpenRequest, onAccepted: (handle: string) => Promise<void>): Promise<Opened>;
   exec(request: ExecRequest, events: ExecEvents): Promise<ExecEnd>;
