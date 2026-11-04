@@ -8,8 +8,8 @@
 //
 // With `agent`, it is a runtime that launches agents its own way, as T3 or Paseo: it offers `prompt` and no `exec`, and
 // its agent works `hold_ms` (from when the prompt was first sent, across a restart of the toy) and until the file
-// `release` names exists, then writes `output` to the lease's result file and finishes with a session and `usage`, or
-// ends with `fail`. It appends each prompt it is sent, and how each ended, to `prompts.jsonl` in its state, which
+// `release` names exists, then writes `output` (or the whole `result`) to the lease's result file and finishes with a
+// session and `usage`, or ends with `fail`. It appends each prompt it is sent, and how each ended, to `prompts.jsonl` in its state, which
 // `close` keeps.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -190,7 +190,7 @@ function agentOutcome(record) {
   if (options.agent.release !== undefined && !fs.existsSync(options.agent.release)) return undefined;
 
   if (options.agent.fail) return { state: 'failed', failure: options.agent.fail };
-  const result = { output: options.agent.output ?? {} };
+  const result = options.agent.result ?? { output: options.agent.output ?? {} };
   fs.mkdirSync(path.dirname(record.lease.result), { recursive: true });
   fs.writeFileSync(record.lease.result, JSON.stringify(result));
   const usage = options.agent.usage === undefined ? {} : { usage: options.agent.usage };

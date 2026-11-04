@@ -324,6 +324,17 @@ Judge the review.
       expect(fs.existsSync(launches)).toBe(false);
     });
 
+    it('fails the step with the failure the agent wrote, without the prompt it quotes', async () => {
+      const result = { failure: { code: 'tool_failed', message: 'Gave up on: Review the repository without changing it.' } };
+      writeDefinition('agentfail', [{ use: 'toy', options: { state, agent: { result } } }]);
+
+      const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'agentfail'], repo, env());
+
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+      const [review] = readRunState(runOf(ran)).steps;
+      expect(review).toMatchObject({ status: 'failed', failure: { code: 'tool_failed', message: 'Gave up on: [prompt omitted]' } });
+    });
+
     it('fails a command step when the definition\'s only runtime runs no command, naming what it lacks', async () => {
       writeDefinition('agentonly', [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }]);
 

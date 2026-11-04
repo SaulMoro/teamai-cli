@@ -193,12 +193,19 @@ async function readResultFile(resultPath: string): Promise<ResultFile | null> {
   }
 }
 
-function redactFailure(result: ResultFile, input: LocalToolRun): void {
-  if (!result.failure) return;
+/** A failure message a tool wrote, without the step's prompt or the agent's instructions it may quote. */
+export function withoutPrompt(message: string, input: LocalToolRun): string {
+  let kept = message;
 
   for (const secret of [input.prompt, input.agent?.instructions]) {
-    if (secret) result.failure.message = result.failure.message.replaceAll(secret, '[prompt omitted]');
+    if (secret) kept = kept.replaceAll(secret, '[prompt omitted]');
   }
+
+  return kept;
+}
+
+function redactFailure(result: ResultFile, input: LocalToolRun): void {
+  if (result.failure) result.failure.message = withoutPrompt(result.failure.message, input);
 }
 
 async function persistFallback(input: LocalToolRun, result: ResultFile): Promise<void> {
