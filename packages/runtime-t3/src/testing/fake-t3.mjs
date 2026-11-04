@@ -77,7 +77,7 @@ async function play(threadId) {
 
   const result = /Write the workflow result as JSON to (\S+?)\.(?:\s|$)/.exec(thread.message)?.[1];
 
-  if (result && agent.output !== undefined) fs.writeFileSync(result, JSON.stringify({ output: agent.output }));
+  if (result && (agent.output !== undefined || agent.failure)) fs.writeFileSync(result, JSON.stringify({ output: agent.output, failure: agent.failure }));
 
   if (!agent.noSession) writeTranscript(thread);
   update(threadId, (now) => ({ status: 'completed', runs: now.runs }));

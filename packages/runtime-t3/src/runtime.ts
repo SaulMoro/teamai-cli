@@ -401,12 +401,14 @@ export function serve(options: ServeOptions): Promise<void> {
       const id = driver && await sessionSince(driver, request.cwd, thread.launchedAt);
 
       if (!id) return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${request.cwd}, so the step cannot be scored or resumed.` } };
-      // A settled thread leaves the person's list of active threads; one that failed, waits or holds stays.
 
-      try {
-        await s.t3.settle(thread.threadId);
-      } catch (error) {
-        process.stderr.write(`Could not settle ${thread.link}: ${error instanceof Error ? error.message : String(error)}\n`);
+      // A settled thread leaves the person's list of active threads; one whose step failed, waits or holds stays.
+      if (!written.result.failure) {
+        try {
+          await s.t3.settle(thread.threadId);
+        } catch (error) {
+          process.stderr.write(`Could not settle ${thread.link}: ${error instanceof Error ? error.message : String(error)}\n`);
+        }
       }
 
       return { op: request.op, state: 'finished', session: { tool: thread.tool, id }, result: written.result };

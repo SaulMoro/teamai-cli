@@ -33,6 +33,8 @@ export async function bundleRuntime(dir: string): Promise<string> {
 export interface FakeAgent {
   /** The output the agent writes to the result file. */
   output?: unknown;
+  /** The failure the agent writes to the result file, saying the step failed. */
+  failure?: { code: string; message: string };
   /** The run ends failed. */
   fail?: boolean;
   /** The agent works until its thread is interrupted. */

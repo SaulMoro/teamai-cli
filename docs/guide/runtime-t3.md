@@ -178,6 +178,7 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 
 - A step's thread is a thread of its own, not a child of the thread that started the run. T3 keeps a parent link only for a thread launched on another, linked environment.
 - The run's details show the project and the environment for a step on T3, and the thread's link only after a restart reconnects it.
+- A step with `session: continue` or `session.from` starts a new conversation, as OpenCode does: T3 has no way to launch a thread on an existing session.
 - It offers `workspace: new` and `continue`. A read-only prompt step, or one with `env` or `setup`, goes to `local`.
 - T3 reports no token usage, so a `budget` in tokens cannot be checked here, and it cannot cap `max_turns`.
 - `permissions: unattended` steps are not offered. They need a thread whose tool runs in a sandbox, which a later version adds.
