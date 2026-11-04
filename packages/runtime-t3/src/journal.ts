@@ -38,6 +38,8 @@ export type PlaceRecord = z.infer<typeof PlaceSchema>;
 
 export interface Journal {
   read(handle: string): PlaceRecord | undefined;
+  /** The place whose operations include `op`: a restarted runtime is asked to cancel an op before it reattaches. */
+  placeOf(op: string): PlaceRecord | undefined;
   write(place: PlaceRecord): void;
   remove(handle: string): void;
 }
@@ -45,13 +47,20 @@ export interface Journal {
 export function journal(dir: string): Journal {
   const file = (handle: string) => path.join(dir, `${encodeURIComponent(handle)}.json`);
 
+  const read = (handle: string): PlaceRecord | undefined => {
+    try {
+      return PlaceSchema.parse(JSON.parse(fs.readFileSync(file(handle), 'utf8')));
+    } catch {
+      return undefined;
+    }
+  };
+
   return {
-    read(handle) {
-      try {
-        return PlaceSchema.parse(JSON.parse(fs.readFileSync(file(handle), 'utf8')));
-      } catch {
-        return undefined;
-      }
+    read,
+    placeOf(op) {
+      const names = fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.endsWith('.json')) : [];
+
+      return names.map((name) => read(decodeURIComponent(name.slice(0, -'.json'.length)))).find((place) => place?.ops[op] !== undefined);
     },
     write(place) {
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
