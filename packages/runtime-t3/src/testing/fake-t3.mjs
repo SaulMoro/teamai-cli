@@ -75,7 +75,7 @@ async function play(threadId) {
     return;
   }
 
-  const result = /Write the workflow result as JSON to (\S+?)\. /.exec(thread.message)?.[1];
+  const result = /Write the workflow result as JSON to (\S+?)\.(?:\s|$)/.exec(thread.message)?.[1];
 
   if (result && agent.output !== undefined) fs.writeFileSync(result, JSON.stringify({ output: agent.output }));
 
@@ -275,3 +275,6 @@ httpServer.listen(0, '127.0.0.1', () => {
 });
 
 process.on('SIGTERM', () => { httpServer.close(); process.exit(0); });
+
+// A test that removes its state is done with this server.
+setInterval(() => { if (!fs.existsSync(STATE)) process.exit(0); }, 500);
