@@ -115,8 +115,9 @@ describe('teamai-runtime-paseo', () => {
     // Claude's default mode asks before any write: the result file and the run's scratch directory, and only they, are
     // allowed, as teamai's own launch allows the result file.
     expect(create).toMatchObject({ config: { providerOptions: { allowedTools: [`Edit(/${path.join(dir, 'out', 'result.json')})`, `Edit(/${path.join(dir, 'run')}/**)`] } } });
-    // No env crosses: Paseo keeps a create's env in plain text.
-    expect(create).not.toHaveProperty('env');
+    // Only the run directory's name crosses, so $TEAMAI_RUN_DIR works in the agent's shell: Paseo keeps a create's env in
+    // plain text, so nothing of the step's env does.
+    expect(create).toHaveProperty('env', { TEAMAI_RUN_DIR: path.join(dir, 'run') });
   });
 
   it('fails a step whose model the daemon lacks as model_unavailable, naming what it offers, and creates no agent', async () => {

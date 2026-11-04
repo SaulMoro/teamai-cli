@@ -174,8 +174,8 @@ export async function connect(url: string, paseo: PaseoClient): Promise<Daemon |
       return { id: opened.id, name: current?.projectDisplayName ?? opened.name ?? opened.id, directory: opened.directory ?? cwd };
     },
     async create(cwd, create) {
-      // Paseo keeps a create's env in plain text and applies it again on resume, so it gets none: tools use the daemon
-      // host's own logins.
+      // Paseo keeps a create's env in plain text and applies it again on resume, so it carries no secret, only the run
+      // directory's name: tools use the daemon host's own logins.
       await (await api.workspaces.open({ cwd })).agents.create(create);
     },
     async agent(agentId) {
