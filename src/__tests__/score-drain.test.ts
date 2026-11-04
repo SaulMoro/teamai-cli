@@ -846,6 +846,20 @@ steps:
     expect(drained.lines.join('\n')).not.toContain('waits for driver');
   });
 
+  it('leaves its run awaiting a definition whose team runtime no one accepted here, and names that driver to resume it with', async () => {
+    const config = await finishedSessionsFor('acme-team', {
+      'drivers/acme-team.yaml': 'schemaVersion: v1alpha1\nname: acme-team\nruntimes:\n  - use: teamtoy\n',
+      'runtimes/teamtoy/runtime': '#!/bin/sh\nexit 1\n',
+    });
+
+    const drained = await drain();
+
+    const ran = (await readRuns(config)).find((one) => one.name === 'teamai-finished-sessions');
+    expect(ran).toMatchObject({ status: 'running', awaits: { driver: 'acme-team' }, steps: [{ id: 'mark', status: 'pending' }] });
+    expect(drained.code, drained.lines.join('\n')).toBe(0);
+    expect(drained.lines).toContain(`ℹ ${ran?.id} waits for driver acme-team, whose team runtime this machine has not accepted. To review it and drive the run here: teamai workflow resume ${ran?.id} --driver acme-team`);
+  });
+
   it('says again, on the next drain, which driver its open run awaits, not that it works here', async () => {
     const config = await finishedSessionsFor('acme-sandbox');
     await drain();

@@ -566,7 +566,7 @@ async function startDriven(input: {
     if (byDefault && 'data' in started) {
       const run = String(started.data.run);
 
-      if (byDefault.kind === 'awaits') log.info(awaitsLine(run, byDefault.driver));
+      if (byDefault.kind === 'awaits') log.info(await awaitsLine(config, run, byDefault.driver));
       else if (byDefault.kind === 'unassigned') log.info(leftOpenLine(run, name));
     }
 
