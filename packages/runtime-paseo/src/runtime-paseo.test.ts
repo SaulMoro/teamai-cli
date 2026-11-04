@@ -140,6 +140,25 @@ describe('teamai-runtime-paseo', () => {
     });
   });
 
+  it.each([
+    ['a binary not named codex', (bin: string) => path.join(bin, 'helper')],
+    ['a relative codex, which would resolve on the runtime\'s PATH', () => 'codex'],
+  ])('runs nothing when the daemon resolves Codex to %s, and says so', async (_, resolvedIn) => {
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    const ran = path.join(dir, 'ran');
+
+    for (const name of ['helper', 'codex']) fs.writeFileSync(path.join(bin, name), `#!/bin/sh\ntouch ${ran}\necho 'Logged in using ChatGPT' >&2\n`, { mode: 0o755 });
+    const resolved = resolvedIn(bin);
+    behave({ models: { codex: ['gpt-6.1-sol'] }, codex_path: resolved });
+
+    expect(await ready(start({ PATH: `${bin}${path.delimiter}${String(process.env.PATH)}` }))).toMatchObject({
+      ok: false,
+      error: { code: 'tool_unavailable', message: expect.stringContaining(` codex: Paseo resolves it to "${resolved}", which is not an absolute path to a codex; run \`paseo provider diagnostic codex\` on the daemon's host to see why.`) },
+    });
+    expect(fs.existsSync(ran)).toBe(false);
+  });
+
   it('says it cannot tell, rather than signed out, when `codex login status` gives neither answer', async () => {
     behave({ models: { codex: ['gpt-6.1-sol'] }, codex_login: 'unknown' });
 
