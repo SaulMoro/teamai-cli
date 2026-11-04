@@ -1446,7 +1446,7 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 | 一次 prompt 结束之后 | 从运行时保存的内容读取它的输出、会话和用量，不会再次发送 prompt |
 | prompt 运行期间 | 再次发送同一个 prompt，重新连上那个智能体，步骤继续 |
 
-`workflow cancel` 会停止正在运行的 exec 或 prompt，以及它启动的所有进程。驱动被杀掉时，cancel 会让这次尝试的运行时去停止它。即使运行时无法为新工作启动（例如它的提供方宕机，或登录过期），这也能工作：teamai 会以 `recover` 模式打开它，这种模式只停止并关闭它运行过的东西。
+`workflow cancel` 会停止正在运行的 exec 或 prompt，以及它启动的所有进程。驱动被杀掉时，cancel 会让这次尝试的运行时去停止它。即使运行时无法为新工作启动（例如它的提供方宕机，或登录过期），这也能工作：teamai 以 `recover` 模式打开它，这种模式只停止并关闭它运行过的东西。
 
 无法停止工作的运行时会说明原因。teamai 随后保留位置、记录和登录，并打印运行时给出的建议：
 
@@ -1504,11 +1504,9 @@ Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa h
 
 exec 或提示运行期间退出的运行时，出于同样的原因会让它失败为 `runtime_lost`。
 
-当 teamai 必须停止一次尝试，而你的运行时拒绝了为新工作的 `init` 时，teamai 会以 `recover` 模式打开你的运行时。在这种模式下，不做登录或工具检查，什么都不提供，只根据你自己的日志回答 `cancel`、`reattach`、`collect` 和 `close`。用错误回答 `recover` 的运行时会被放下不管，cancel 会同时给出两个失败：
+每当 teamai 必须停止一次尝试时（例如驱动被杀掉后的 `workflow cancel`），它都会以 `recover` 模式打开你的运行时。在这种模式下，不做登录或工具检查，什么都不提供，只根据你自己的日志回答 `cancel`、`reattach`、`collect` 和 `close`，这样宕机或一直不回答的提供方就不会卡住停止。用错误回答 `recover` 的运行时会再为新工作打开一次；如果这也失败，cancel 会同时给出两个失败：
 
 ```text
-→ {"type":"init","protocol":1,"mode":"unattended","options":{"state":"/var/tmp/toy-state"}}
-← {"type":"init","ok":false,"error":{"code":"signed_out","message":"Signed out of acme. Run acme login, then start again."}}
 → {"type":"init","protocol":1,"mode":"recover","options":{"state":"/var/tmp/toy-state"}}
 ← {"type":"init","ok":true,"can":{}}
 → {"type":"reattach","handle":"toy-r…-a…"}
@@ -1529,7 +1527,7 @@ exec 或提示运行期间退出的运行时，出于同样的原因会让它失
 ← {"event":"failed","handle":"teamai-r7-a1","failure":{"code":"journal_unreadable","message":"/var/lib/acme-runtime/r7.json is not valid JSON. Fix or remove it, then run teamai workflow cancel r7 again."}}
 ```
 
-`{"event":"error"}` 这一行不指向任何请求，所以 teamai 会让所有仍在等待你的运行时的 `init`、`reattach`、`collect` 和 `close` 失败为 `runtime_unanswered`。15 秒内没有收到回复的 `reattach` 或 `close` 也一样。这次尝试保留它的位置、记录和登录：
+`{"event":"error"}` 这一行不指向任何请求，所以 teamai 会让所有仍在等待你的运行时的 `init`、`reattach`、`collect` 和 `close` 失败为 `runtime_unanswered`。15 秒内没有收到回复的 `init`、`reattach` 或 `close` 也一样。这次尝试保留它的位置、记录和登录：
 
 ```text
 Step runtime "acme" could not close the place of attempt a1, so what ran there may still run (runtime_unanswered): Step runtime "acme" did not answer close of teamai-r7-a1 within 15 s.

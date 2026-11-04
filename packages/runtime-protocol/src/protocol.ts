@@ -36,9 +36,9 @@ import { z } from 'zod';
 //  A `reattach`, `collect` or `close` the runtime cannot answer gets the failure reply for its handle,
 //  {"event":"failed","handle":"…","failure":{…}}; one for an operation gets that operation's `failed`. An
 //  {"event":"error"} names no request, so teamai fails every `init`, `reattach`, `collect` and `close` still waiting with
-//  `runtime_unanswered`, as it does a `reattach` or `close` with no reply within 15 s.
+//  `runtime_unanswered`, as it does an `init`, a `reattach` or a `close` with no reply within 15 s.
 //
-//  A runtime that cannot start for new work is opened again in `recover` mode to stop what it ran:
+//  To stop what it ran, teamai opens a runtime in `recover` mode, and opens it for new work only when it refuses that mode:
 //    > {"type":"init","protocol":1,"mode":"recover","options":{...}}
 //    < {"type":"init","ok":true,"can":{}}
 //
@@ -57,9 +57,9 @@ export const RUN_DIR_ENV = 'TEAMAI_RUN_DIR';
 
 /**
  * Why a runtime process is started. `attended`: a person launched the run; `unattended`: in CI or a cloud agent.
- * `recover`: only to cancel, reattach, collect and close the handles teamai recorded, when it could not start for new
- * work, such as when its provider is down or its sign-in expired: it runs no sign-in or tool check, gets no credentials,
- * offers nothing and answers from its own journal.
+ * `recover`: only to cancel, reattach, collect and close the handles teamai recorded, which teamai opens it in to stop
+ * them, so that a provider that is down, stalls or signed it out cannot hold the stop: it runs no sign-in or tool check,
+ * gets no credentials, offers nothing and answers from its own journal.
  */
 export const RUNTIME_MODES = ['attended', 'unattended', 'recover'] as const;
 

@@ -21,8 +21,9 @@
 // the PATH of each exec.
 //
 // `answer` makes it answer a `reattach`, `collect` or `close` otherwise, by request type: `failed`, the failure reply for
-// that handle; `error`, an error line that names no request; `silent`, nothing. A request it cannot answer, such as one
-// for a handle while its journal cannot be read, gets the failure reply for its handle or operation.
+// that handle; `error`, an error line that names no request; `silent`, nothing. `answer.init: silent` leaves an init for
+// new work unanswered, as a sign-in check whose provider stalls, while recover mode still answers. A request it cannot
+// answer, such as one for a handle while its journal cannot be read, gets the failure reply for its handle or operation.
 //
 // Each init's mode is appended to `inits.jsonl` in its state. `init_fails` is the failure an init for new work ends
 // with, as a runtime signed out of its provider; in `recover` mode it still opens, offers nothing and answers from its
@@ -139,6 +140,9 @@ function init(request) {
 
   fs.mkdirSync(request.options.state, { recursive: true });
   fs.appendFileSync(path.join(request.options.state, 'inits.jsonl'), `${JSON.stringify({ mode: request.mode })}\n`);
+
+  // A sign-in check whose provider never answers: an init for new work stalls, and recover mode, which checks nothing, does not.
+  if (request.mode !== 'recover' && request.options.answer?.init === 'silent') return;
 
   if (request.mode === 'recover') {
     if (request.options.recover === false) {
