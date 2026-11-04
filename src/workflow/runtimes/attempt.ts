@@ -359,7 +359,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
 
           if (state.confined) end.confined = state.confined;
 
-          if (state.resumed) end.resumed = state.resumed;
+          if (state.resumed === true) end.resumed = true;
 
           return end;
         }
