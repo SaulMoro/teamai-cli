@@ -82,14 +82,14 @@ afterEach(async () => {
 
 describe('teamai-runtime-paseo', () => {
   it('offers prompt steps only, in a new or continued worktree, with no env, token count or unattended mode, for the tools the daemon can run', async () => {
-    behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'], opencode: ['opencode/beam-free'] } });
+    // The daemon runs on this machine, where `codex login status` says Codex is signed in.
+    behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'], opencode: ['opencode/beam-free'] }, codex_login: 'signed_in' });
 
     expect(await ready(start())).toEqual({
       type: 'init', ok: true, prompt: true, confinedPrompt: true,
       can: {
-        // Codex is installed and signed in, but Paseo does not report its sign-in, so it is not offered.
-        exec: false, setup: false, hitl: false, unattended: false, env: false, tokens: false, max_turns: false, workspace: ['new', 'continue'], tools: ['claude', 'opencode'],
-        confined: [{ level: 'best-effort', access: 'read', tools: ['claude', 'opencode'] }],
+        exec: false, setup: false, hitl: false, unattended: false, env: false, tokens: false, max_turns: false, workspace: ['new', 'continue'], tools: ['claude', 'codex', 'opencode'],
+        confined: [{ level: 'best-effort', access: 'read', tools: ['claude', 'codex', 'opencode'] }],
       },
     });
   });
@@ -102,13 +102,54 @@ describe('teamai-runtime-paseo', () => {
 
   it('fails init, saying what each tool lacks and how to sign it in, when the daemon can run none of them', async () => {
     // OpenCode reaches no model provider: Paseo lists no model for it, though its own free models need no sign-in.
-    behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'], opencode: [] }, sign_in: { claude: 'signed_out' } });
+    behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'], opencode: [] }, sign_in: { claude: 'signed_out' }, codex_login: 'signed_out' });
 
     expect(await ready(start())).toEqual({
       type: 'init', ok: false,
       error: {
         code: 'tool_unavailable',
-        message: `The Paseo daemon at ${daemon.url} runs no tool teamai-runtime-paseo can use. claude: signed out; run \`claude auth login\` on the daemon's host. codex: Paseo does not report whether it is signed in, so its steps run on the next runtime of the definition. opencode: reaches no model provider; run \`opencode auth login\` on the daemon's host, then \`paseo restart\`.`,
+        message: `The Paseo daemon at ${daemon.url} runs no tool teamai-runtime-paseo can use. claude: signed out; run \`claude auth login\` on the daemon's host. codex: signed out; run \`codex login\` on the daemon's host. opencode: reaches no model provider; run \`opencode auth login\` on the daemon's host, then \`paseo restart\`.`,
+      },
+    });
+  });
+
+  it('offers Codex on a daemon on this machine only when `codex login status` says it is signed in', async () => {
+    behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'] }, codex_login: 'signed_out' });
+
+    expect(await ready(start())).toMatchObject({ ok: true, can: { tools: ['claude'], confined: [{ tools: ['claude'] }] } });
+  });
+
+  it('does not offer a Codex the daemon has not installed, though this machine has a signed-in codex', async () => {
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\necho \'Logged in using ChatGPT\' >&2\n', { mode: 0o755 });
+    behave({ models: { claude: ['claude-opus-5-5'] } });
+
+    expect(await ready(start({ PATH: `${bin}${path.delimiter}${String(process.env.PATH)}` }))).toMatchObject({ ok: true, can: { tools: ['claude'], confined: [{ tools: ['claude'] }] } });
+  });
+
+  it('asks the codex the daemon resolves on its own PATH, not the one on the runtime\'s PATH', async () => {
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\necho \'Logged in using ChatGPT\' >&2\n', { mode: 0o755 });
+    // The daemon resolves a codex that holds no install, so the runtime's signed-in one is never asked.
+    behave({ models: { codex: ['gpt-6.1-sol'] } });
+
+    expect(await ready(start({ PATH: `${bin}${path.delimiter}${String(process.env.PATH)}` }))).toMatchObject({
+      ok: false, error: { code: 'tool_unavailable', message: expect.stringMatching(/ codex: `\/\S+\/host-bin\/codex login status` did not answer \(.+\)\.$/) },
+    });
+  });
+
+  it('does not offer Codex on a daemon at an address that is not loopback, whose host teamai cannot ask, and says so', async () => {
+    behave({ models: { codex: ['gpt-6.1-sol'] }, codex_login: 'signed_in' });
+    // 0.0.0.0 reaches the fake on this machine, but names no loopback address, as a daemon on another host is named.
+    const url = daemon.url.replace('127.0.0.1', '0.0.0.0');
+
+    expect(await ready(start(), { options: { url } })).toEqual({
+      type: 'init', ok: false,
+      error: {
+        code: 'tool_unavailable',
+        message: `The Paseo daemon at ${url} runs no tool teamai-runtime-paseo can use. codex: teamai checks Codex's sign-in only on a daemon at a loopback address, and ${url} is not one, so its steps run on the next runtime of the definition.`,
       },
     });
   });
@@ -511,9 +552,19 @@ describe('teamai-runtime-paseo', () => {
       expect(received()).toMatchObject([{ config: { provider: 'opencode', modeId: 'plan', cwd: evidence } }]);
     });
 
+    it('runs a Codex judge in Paseo\'s read-only preset, since each mode Paseo lists for Codex writes without asking', async () => {
+      behave({ reply: '{"label": "pass"}', codex_login: 'signed_in' });
+      const runtime = start();
+      await ready(runtime);
+      runtime.send(confinedRequest(await openedConfined(runtime), 'op-0000000b', {}, { tool: 'codex', model: undefined }));
+
+      expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'codex' }, result: { output: { label: 'pass' } }, confined: { level: 'best-effort', access: 'read' } });
+      expect(received()).toMatchObject([{ config: { provider: 'codex', modeId: 'read-only', cwd: evidence } }]);
+    });
+
     it.each([
       ['a verified level, which it does not reach', { level: 'verified' as const }, {}, 'confined_level', 'teamai-runtime-paseo keeps a confined prompt best-effort'],
-      ['codex, whose Paseo modes all write without asking', {}, { tool: 'codex', model: undefined }, 'tool_unavailable', 'teamai-runtime-paseo runs a confined prompt on claude and opencode, not codex'],
+      ['a tool Paseo does not run', {}, { tool: 'codebuddy', model: undefined }, 'tool_unavailable', 'teamai-runtime-paseo runs a confined prompt on claude, codex or opencode, not codebuddy'],
     ])('refuses %s, and creates no agent', async (_, confined, lease, code, message) => {
       const runtime = start();
       await ready(runtime);
