@@ -1,8 +1,8 @@
 # Sandbox runtime
 
-The `sandbox` [step runtime](workflow-advanced.md#driver-definitions-and-step-runtimes) runs each attempt of a workflow step in a container of its own, from an image your team builds. The agent works on the step's worktree and cannot touch the rest of your machine. teamai still builds the tool's command, reads the result, meters the budget, and commits and pushes on the host.
+The `sandbox` [step runtime](workflow-advanced.md#driver-definitions-and-step-runtimes) runs each attempt of a workflow step in a sandbox of its own: a Docker Sandboxes microVM, or a container from an image your team builds. The agent works on the step's worktree and cannot touch the rest of your machine. teamai still builds the tool's command, reads the result, meters the budget, and commits and pushes on the host.
 
-This version runs `docker` and `podman`. It ships with teamai as the executable `teamai-runtime-sandbox`.
+This version runs `sbx` ([Docker Sandboxes](#sbx-docker-sandboxes)), `docker` and `podman`. It ships with teamai as the executable `teamai-runtime-sandbox`.
 
 ## Quick start
 
@@ -80,8 +80,9 @@ When the attempt ends, teamai removes its container. A `teamai workflow cancel` 
 
 | Key | Example | Meaning |
 | --- | --- | --- |
-| `provider` | `docker` | `docker` or `podman` |
-| `image` | `ghcr.io/acme/agent:1` | The prebuilt image. It needs `/bin/sh` and the tools your steps run: `claude`, `codex` or `codebuddy`. Add `git` for steps that read history. |
+| `provider` | `docker` | `sbx`, `docker` or `podman` |
+| `agent` | `claude` | `sbx` only, and required: the agent template each sandbox starts from, `claude` or `codex`, or a kit reference that brings the tools. The bare `shell` template holds no agent, so it is refused. |
+| `image` | `ghcr.io/acme/agent:1` | `docker` and `podman` only: the prebuilt image. It needs `/bin/sh` and the tools your steps run: `claude`, `codex` or `codebuddy`. Add `git` for steps that read history. |
 | `credentials` | `CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN` | Read by teamai from your environment when the run starts, and given only to the step's tool, never to a command step. See [Credentials from your environment](workflow-advanced.md#credentials-from-your-environment). |
 
 A key it does not take fails before any step runs:
@@ -209,6 +210,102 @@ What the judge does not enforce:
 - The filter sees host names, not requests: a judge can reach any account or path on the provider's host, and on a gateway you let through.
 - The judge reads the evidence as the step that wrote it left it. teamai's own hash checks, not the container, catch a step that tampered with it.
 
+## sbx (Docker Sandboxes)
+
+With `provider: sbx`, each attempt runs in a microVM with its own kernel, from the template of the agent you name. No image to build.
+
+**1. Once per machine:** install Docker Sandboxes, sign in, and set a network policy. sbx creates no sandbox without one, and teamai never sets it for you.
+
+```sh
+sbx login
+sbx policy init balanced                 # or deny-all, then allow your model provider:
+# sbx policy allow network api.anthropic.com:443
+```
+
+**2. Add a driver definition.**
+
+```yaml
+# drivers/sbx.yaml: Claude on your subscription token
+schemaVersion: v1alpha1
+name: sbx
+tool: claude
+runtimes:
+  - use: sandbox
+    options:
+      provider: sbx
+      agent: claude
+      credentials:
+        CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
+  - use: local                           # takes the judge: sbx offers none
+```
+
+```yaml
+# drivers/sbx-codex.yaml: Codex on the login sbx keeps for you
+schemaVersion: v1alpha1
+name: sbx-codex
+tool: codex
+runtimes:
+  - use: sandbox
+    options:
+      provider: sbx
+      agent: codex                       # no credentials: sbx's proxy signs Codex in
+```
+
+For Codex, each member stores their login in sbx once. It stays in sbx's proxy on your machine, which adds it to Codex's requests, so no `auth.json` is written to the attempt's tool home:
+
+```sh
+sbx secret set openai --oauth            # your ChatGPT login; or pipe an API key to: sbx secret set openai
+sbx secret ls
+```
+
+```text
+SCOPE      TYPE      NAME     SECRET
+(global)   service   openai   (stored)
+```
+
+**3. Run a workflow on it.**
+
+```sh
+teamai workflow start review --driver sbx
+sbx ls                                   # while a step runs
+```
+
+```text
+SANDBOX                              AGENT    STATUS      PORTS   WORKSPACE
+teamai-rb2152f12cb75a939-aca6809de   claude   ● running           /home/me/acme/app/.teamai/workflow-worktrees/teamai-rb2152f12cb75a939-review-p1-4f8fc24e0d4e, …
+```
+
+```text
+ℹ run:rb2152f12cb75a939:review:1: review-quality good (teamai-score run refcf49f79792650e).
+{"data":{"done":{"run":"rb2152f12cb75a939","outcome":"succeeded","record":"published"},"cancelled":[]}}
+```
+
+What differs from a container:
+
+- The worktree is the sandbox's workspace. The git directories, the result directory, the run directory and the tool home are extra workspaces at their host paths, the git ones read-only (`/home/me/acme/app/.git:ro`). sbx does not follow a linked worktree's `.git` to the main checkout by itself, so teamai names those paths. `git status` works, and `git commit` fails.
+- The step runs as sbx's `agent` user. Files it writes on your disk are still yours.
+- Each `sbx exec` gets the step's names with `-e NAME`, never a value in the command line. A strict step's withheld names, such as `GH_TOKEN`, which sbx sets for its proxy, are unset in the step's process.
+- A cancel or a limit runs `sbx stop`; the next exec starts the sandbox again. When the attempt ends, teamai runs `sbx rm --force`. sbx also stops an idle sandbox on its own, and that is fine.
+
+**A gateway on your machine** is reached as `host.docker.internal`, which sbx's proxy sends to `localhost`. Allow its port once:
+
+```sh
+sbx policy allow network localhost:4000
+export ANTHROPIC_BASE_URL=http://host.docker.internal:4000
+```
+
+**sbx offers no judge.** A confined judge must reach its model provider only, and an sbx sandbox reaches every host your sbx policy allows: a balanced policy allows package registries and code hosts, through which a judge could send what it reads. A per-sandbox rule can only deny hosts it names, and policy profiles come from your organization's sbx governance, so teamai has no way to narrow one sandbox to one host. List `local`, or a `docker` sandbox, after the sbx one to take the judge:
+
+```yaml
+runtimes:
+  - use: sandbox
+    options: { provider: sbx, agent: claude, credentials: { CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN } }
+  - use: sandbox
+    options: { provider: docker, image: ghcr.io/acme/agent:1, credentials: { ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY } }
+```
+
+What sbx itself does not hide from a step: sbx forwards your SSH agent unless you turn it off in sbx, and its proxy adds a stored global forge secret (`sbx secret set github`) to every sandbox's requests to that forge. To keep them from steps, turn forwarding off and scope or remove that secret.
+
 ## Podman
 
 ```yaml
@@ -251,7 +348,7 @@ The step's record in the run then reads `"status": "succeeded"`, `"limit": "budg
 
 ## Killed and resumed
 
-When teamai is killed while a step runs, the runtime keeps running that step's process until it ends and records how it ended. `teamai workflow resume <run> --driver containers` then follows the [step runtime rules](workflow-advanced.md#driver-definitions-and-step-runtimes): an exec that already finished is read back, and one still running is stopped and its step fails `runtime_interrupted`, keeping its work. The container is removed when the attempt closes.
+When teamai is killed while a step runs, the runtime keeps running that step's process until it ends and records how it ended. On `sbx`, the resumed run finds the sandbox again by its name (`sbx ls`). `teamai workflow resume <run> --driver containers` then follows the [step runtime rules](workflow-advanced.md#driver-definitions-and-step-runtimes): an exec that already finished is read back, and one still running is stopped and its step fails `runtime_interrupted`, keeping its work. The container is removed when the attempt closes.
 
 ```sh
 teamai workflow resume r7c41d09e2b6a5f13 --driver containers
@@ -262,18 +359,18 @@ teamai workflow retry r7c41d09e2b6a5f13 review      # goes on from the work the 
 
 | Error | What happened | Next step |
 | --- | --- | --- |
-| `sandbox_unavailable` | `docker` or `podman` is not installed, its daemon or machine is not running, or the image cannot be pulled. Nothing runs on the host instead. | Install or start it: Docker Desktop, `sudo systemctl start docker`, or `podman machine start`. For an image, check its name and `docker login <registry>`. |
+| `sandbox_unavailable` | `sbx`, `docker` or `podman` is not installed, its daemon or machine is not running, sbx has no network policy yet, or the image cannot be pulled. Nothing runs on the host instead. | Install or start it: `sbx daemon start`, Docker Desktop, `sudo systemctl start docker`, or `podman machine start`. For sbx, `sbx policy init balanced`. For an image, check its name and `docker login <registry>`. |
 | `credential_missing` | A credential's variable is not set where teamai runs, or a judge got no env credential its tool reads | `claude setup-token`, then export `CLAUDE_CODE_OAUTH_TOKEN`; for a judge, add the key the message names to `credentials` |
-| `confined_pending` | No runtime of the definition offers the judge's tool: the image lacks `node` or that tool, the definition names no key for it, Docker is older than 26.0.0, or the provider is `podman` | Add `node` and the tool to the image, add the tool's key to `credentials`, update Docker, or list `local` in the definition |
-| `bad_option` | A key or value in `options` is wrong, or a credential such as `ANTHROPIC_BASE_URL` points at `localhost` or `127.0.0.1`, which no container reaches | Fix the definition and push it; for a base URL, use `host.docker.internal` on Docker Desktop |
-| `sandbox_failed` | The engine could not create the attempt's container | Read the engine's message in the step failure; `docker ps -a --filter label=teamai.run=<run>` lists what is left |
-| **Not closed** in run details | The engine could not remove the attempt's container, so what ran there may still run. The run ends as it would. | `docker rm --force <container>`, as the message says |
+| `confined_pending` | No runtime of the definition offers the judge's tool: the image lacks `node` or that tool, the definition names no key for it, Docker is older than 26.0.0, or the provider is `podman` or `sbx` | Add `node` and the tool to the image, add the tool's key to `credentials`, update Docker, or list `local` in the definition |
+| `bad_option` | A key or value in `options` is wrong (for `sbx`, a missing `agent`), or a credential such as `ANTHROPIC_BASE_URL` points at `localhost` or `127.0.0.1`, which no container reaches | Fix the definition and push it; for a base URL, use `host.docker.internal` on Docker Desktop |
+| `sandbox_failed` | The engine could not create the attempt's container or sandbox | Read the message in the step failure; `docker ps -a --filter label=teamai.run=<run>` or `sbx ls` lists what is left |
+| **Not closed** in run details | The engine could not remove the attempt's container or sandbox, so what ran there may still run. The run ends as it would. | `docker rm --force <container>` or `sbx rm --force <sandbox>`, as the message says |
 | `runtime_interrupted` | teamai restarted while the step ran | `teamai workflow retry <run> <step>` |
 
 ## Not in this version
 
-- `sbx` (Docker Sandboxes), `bwrap`, `seatbelt` and hosted sandboxes. The definition fails `bad_option` on `provider` until they ship.
-- A warm image with dependencies installed, and the workflow's `setup` inside the container. Setup still runs on the host.
-- Codex on a login dedicated to teamai.
+- `bwrap`, `seatbelt` and hosted sandboxes. The definition fails `bad_option` on `provider` until they ship.
+- A warm image or template with dependencies installed, and the workflow's `setup` inside the sandbox. Setup still runs on the host.
+- Codex on a login dedicated to teamai in a container. On `sbx`, Codex signs in with `sbx secret set openai --oauth`.
 - Network rules for steps. `requires.network: false` is listed in `unenforced`, and a strict one waits for a driver that declares it. Only a judge's network is filtered.
 - A judge on a tool login. A judge signs in with an env credential.

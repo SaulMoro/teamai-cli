@@ -1,8 +1,8 @@
 # Sandbox 运行时
 
-`sandbox` [步骤运行时](workflow-advanced.md#驱动定义和步骤运行时)把工作流步骤的每次尝试放进一个独立的容器里运行，容器来自团队构建的镜像。Agent 只能处理该步骤的工作树，碰不到你机器上的其他内容。工具命令的构建、结果的读取、预算的计量，以及提交和推送，仍然由 teamai 在主机上完成。
+`sandbox` [步骤运行时](workflow-advanced.md#驱动定义和步骤运行时)把工作流步骤的每次尝试放进一个独立的沙箱里运行：Docker Sandboxes 的微型虚拟机，或者来自团队构建的镜像的容器。Agent 只能处理该步骤的工作树，碰不到你机器上的其他内容。工具命令的构建、结果的读取、预算的计量，以及提交和推送，仍然由 teamai 在主机上完成。
 
-这个版本支持 `docker` 和 `podman`。它随 teamai 一起发布，可执行文件名为 `teamai-runtime-sandbox`。
+这个版本支持 `sbx`（[Docker Sandboxes](#sbxdocker-sandboxes)）、`docker` 和 `podman`。它随 teamai 一起发布，可执行文件名为 `teamai-runtime-sandbox`。
 
 ## 快速开始
 
@@ -80,8 +80,9 @@ teamai-r7c41d09e2b6a5f13-a3e9b0c51  ghcr.io/acme/agent:1  Up 41 seconds
 
 | 键 | 示例 | 含义 |
 | --- | --- | --- |
-| `provider` | `docker` | `docker` 或 `podman` |
-| `image` | `ghcr.io/acme/agent:1` | 预先构建的镜像。它需要 `/bin/sh` 以及步骤要运行的工具：`claude`、`codex` 或 `codebuddy`。需要读取历史的步骤还要装 `git`。 |
+| `provider` | `docker` | `sbx`、`docker` 或 `podman` |
+| `agent` | `claude` | 仅 `sbx`，且必填：每个沙箱从哪个 agent 模板启动，`claude` 或 `codex`，或者一个自带工具的 kit 引用。裸的 `shell` 模板里没有 agent，所以会被拒绝。 |
+| `image` | `ghcr.io/acme/agent:1` | 仅 `docker` 和 `podman`：预先构建的镜像。它需要 `/bin/sh` 以及步骤要运行的工具：`claude`、`codex` 或 `codebuddy`。需要读取历史的步骤还要装 `git`。 |
 | `credentials` | `CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN` | 由 teamai 在运行开始时从你的环境里读取，只交给步骤的工具，从不交给命令步骤。见[来自你环境的凭据](workflow-advanced.md#来自你环境的凭据)。 |
 
 不支持的键会在任何步骤运行之前失败：
@@ -209,6 +210,102 @@ export ANTHROPIC_BASE_URL=http://host.docker.internal:4000       # Docker Deskto
 - 过滤器只看主机名，看不到请求内容：评判能访问模型提供方主机上的任何账号或路径，以及你放行的网关。
 - 评判读到的证据就是写它的步骤留下的样子。发现步骤篡改证据靠的是 teamai 自己的哈希检查，不是容器。
 
+## sbx（Docker Sandboxes）
+
+使用 `provider: sbx` 时，每次尝试都在一个有自己内核的微型虚拟机里运行，来自你指定的 agent 的模板。不需要构建镜像。
+
+**1. 每台机器做一次：** 安装 Docker Sandboxes、登录，并设置网络策略。没有网络策略时 sbx 不会创建任何沙箱，teamai 也从不替你设置。
+
+```sh
+sbx login
+sbx policy init balanced                 # 或者 deny-all，再放行你的模型提供方：
+# sbx policy allow network api.anthropic.com:443
+```
+
+**2. 添加驱动定义。**
+
+```yaml
+# drivers/sbx.yaml：用你的订阅令牌运行 Claude
+schemaVersion: v1alpha1
+name: sbx
+tool: claude
+runtimes:
+  - use: sandbox
+    options:
+      provider: sbx
+      agent: claude
+      credentials:
+        CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN
+  - use: local                           # 负责评判：sbx 不提供评判
+```
+
+```yaml
+# drivers/sbx-codex.yaml：用 sbx 替你保存的登录运行 Codex
+schemaVersion: v1alpha1
+name: sbx-codex
+tool: codex
+runtimes:
+  - use: sandbox
+    options:
+      provider: sbx
+      agent: codex                       # 不需要 credentials：sbx 的代理替 Codex 登录
+```
+
+用 Codex 时，每个成员在 sbx 里保存一次自己的登录。它留在你机器上 sbx 的代理里，由代理加到 Codex 的请求上，所以不会有 `auth.json` 写进这次尝试的工具主目录：
+
+```sh
+sbx secret set openai --oauth            # 你的 ChatGPT 登录；也可以把 API key 通过管道传给：sbx secret set openai
+sbx secret ls
+```
+
+```text
+SCOPE      TYPE      NAME     SECRET
+(global)   service   openai   (stored)
+```
+
+**3. 在上面运行工作流。**
+
+```sh
+teamai workflow start review --driver sbx
+sbx ls                                   # 步骤运行时
+```
+
+```text
+SANDBOX                              AGENT    STATUS      PORTS   WORKSPACE
+teamai-rb2152f12cb75a939-aca6809de   claude   ● running           /home/me/acme/app/.teamai/workflow-worktrees/teamai-rb2152f12cb75a939-review-p1-4f8fc24e0d4e, …
+```
+
+```text
+ℹ run:rb2152f12cb75a939:review:1: review-quality good (teamai-score run refcf49f79792650e).
+{"data":{"done":{"run":"rb2152f12cb75a939","outcome":"succeeded","record":"published"},"cancelled":[]}}
+```
+
+和容器不同的地方：
+
+- 工作树是沙箱的工作区。git 目录、结果目录、运行目录和工具主目录是额外的工作区，都在主机上的路径，git 的那些是只读的（`/home/me/acme/app/.git:ro`）。sbx 自己不会顺着链接工作树的 `.git` 找到主检出，所以由 teamai 列出这些路径。`git status` 能用，`git commit` 会失败。
+- 步骤以 sbx 的 `agent` 用户运行。它写到你磁盘上的文件仍然归你所有。
+- 每次 `sbx exec` 都用 `-e NAME` 拿到步骤的变量名，命令行里从不出现值。严格步骤要扣下的变量，比如 sbx 为它的代理设置的 `GH_TOKEN`，会在步骤进程里被取消设置。
+- 取消或到达限制时执行 `sbx stop`，下一次 exec 会重新启动沙箱。尝试结束时 teamai 执行 `sbx rm --force`。sbx 也会自己停掉空闲的沙箱，这没有问题。
+
+**你机器上的网关**通过 `host.docker.internal` 访问，sbx 的代理会把它转到 `localhost`。放行一次它的端口：
+
+```sh
+sbx policy allow network localhost:4000
+export ANTHROPIC_BASE_URL=http://host.docker.internal:4000
+```
+
+**sbx 不提供评判。** 受限的评判只能访问它的模型提供方，而 sbx 沙箱能访问你的 sbx 策略放行的所有主机：balanced 策略放行包仓库和代码托管站点，评判可以借它们把读到的内容发出去。单个沙箱的规则只能拒绝它点名的主机，策略 profile 来自你所在组织的 sbx 治理设置，所以 teamai 没有办法把一个沙箱收窄到只能访问一个主机。在 sbx 之后列上 `local` 或一个 `docker` sandbox 来负责评判：
+
+```yaml
+runtimes:
+  - use: sandbox
+    options: { provider: sbx, agent: claude, credentials: { CLAUDE_CODE_OAUTH_TOKEN: env:CLAUDE_CODE_OAUTH_TOKEN } }
+  - use: sandbox
+    options: { provider: docker, image: ghcr.io/acme/agent:1, credentials: { ANTHROPIC_API_KEY: env:ANTHROPIC_API_KEY } }
+```
+
+sbx 本身不会对步骤隐藏的东西：除非你在 sbx 里关掉，sbx 会转发你的 SSH agent；它的代理会把保存的全局代码托管密钥（`sbx secret set github`）加到每个沙箱发往该站点的请求上。要让步骤拿不到它们，就关掉转发，并限定或删除那个密钥。
+
 ## Podman
 
 ```yaml
@@ -251,7 +348,7 @@ steps:
 
 ## 被终止后恢复
 
-如果 teamai 在步骤运行时被终止，运行时会让该步骤的进程继续运行到结束，并记录它是怎么结束的。之后 `teamai workflow resume <run> --driver containers` 按[步骤运行时的规则](workflow-advanced.md#驱动定义和步骤运行时)处理：已经结束的 exec 会被读回；仍在运行的会被停止，步骤以 `runtime_interrupted` 失败，但保留它的工作。尝试关闭时容器被删除。
+如果 teamai 在步骤运行时被终止，运行时会让该步骤的进程继续运行到结束，并记录它是怎么结束的。在 `sbx` 上，恢复的运行会按名字（`sbx ls`）重新找到沙箱。之后 `teamai workflow resume <run> --driver containers` 按[步骤运行时的规则](workflow-advanced.md#驱动定义和步骤运行时)处理：已经结束的 exec 会被读回；仍在运行的会被停止，步骤以 `runtime_interrupted` 失败，但保留它的工作。尝试关闭时容器被删除。
 
 ```sh
 teamai workflow resume r7c41d09e2b6a5f13 --driver containers
@@ -262,18 +359,18 @@ teamai workflow retry r7c41d09e2b6a5f13 review      # 从被停止的那一轮�
 
 | 错误 | 发生了什么 | 下一步 |
 | --- | --- | --- |
-| `sandbox_unavailable` | 没有安装 `docker` 或 `podman`，它的守护进程或虚拟机没有运行，或者拉取不到镜像。不会改为在主机上运行。 | 安装或启动它：Docker Desktop、`sudo systemctl start docker`，或 `podman machine start`。镜像问题请检查名称，并执行 `docker login <registry>`。 |
+| `sandbox_unavailable` | 没有安装 `sbx`、`docker` 或 `podman`，它的守护进程或虚拟机没有运行，sbx 还没有网络策略，或者拉取不到镜像。不会改为在主机上运行。 | 安装或启动它：`sbx daemon start`、Docker Desktop、`sudo systemctl start docker`，或 `podman machine start`。sbx 执行 `sbx policy init balanced`。镜像问题请检查名称，并执行 `docker login <registry>`。 |
 | `credential_missing` | 凭据对应的变量在 teamai 运行的地方没有设置，或者评判没有拿到它的工具会读取的环境变量凭据 | 执行 `claude setup-token`，再导出 `CLAUDE_CODE_OAUTH_TOKEN`；评判的情况，把信息里点名的密钥加到 `credentials` |
-| `confined_pending` | 驱动定义里没有运行时提供评判用的工具：镜像缺少 `node` 或那个工具，驱动定义没给它密钥，Docker 早于 26.0.0，或者 provider 是 `podman` | 把 `node` 和工具装进镜像、在 `credentials` 里加上工具的密钥、升级 Docker，或者在驱动定义里列上 `local` |
-| `bad_option` | `options` 里有键或值写错了，或者 `ANTHROPIC_BASE_URL` 这类凭据指向容器到不了的 `localhost` 或 `127.0.0.1` | 修正驱动定义并推送；base URL 在 Docker Desktop 上改用 `host.docker.internal` |
-| `sandbox_failed` | 容器引擎无法创建这次尝试的容器 | 查看步骤失败里引擎给出的信息；`docker ps -a --filter label=teamai.run=<run>` 会列出剩下的容器 |
-| 运行详情里的 **未关闭**（Not closed） | 容器引擎无法删除这次尝试的容器，里面运行的东西可能还在运行。运行本身照常结束。 | 按信息里给出的命令执行 `docker rm --force <container>` |
+| `confined_pending` | 驱动定义里没有运行时提供评判用的工具：镜像缺少 `node` 或那个工具，驱动定义没给它密钥，Docker 早于 26.0.0，或者 provider 是 `podman` 或 `sbx` | 把 `node` 和工具装进镜像、在 `credentials` 里加上工具的密钥、升级 Docker，或者在驱动定义里列上 `local` |
+| `bad_option` | `options` 里有键或值写错了（`sbx` 缺少 `agent`），或者 `ANTHROPIC_BASE_URL` 这类凭据指向容器到不了的 `localhost` 或 `127.0.0.1` | 修正驱动定义并推送；base URL 在 Docker Desktop 上改用 `host.docker.internal` |
+| `sandbox_failed` | 无法创建这次尝试的容器或沙箱 | 查看步骤失败里给出的信息；`docker ps -a --filter label=teamai.run=<run>` 或 `sbx ls` 会列出剩下的 |
+| 运行详情里的 **未关闭**（Not closed） | 无法删除这次尝试的容器或沙箱，里面运行的东西可能还在运行。运行本身照常结束。 | 按信息里给出的命令执行 `docker rm --force <container>` 或 `sbx rm --force <sandbox>` |
 | `runtime_interrupted` | 步骤运行时 teamai 重启了 | `teamai workflow retry <run> <step>` |
 
 ## 这个版本还不支持
 
-- `sbx`（Docker Sandboxes）、`bwrap`、`seatbelt` 和托管沙箱。在它们发布之前，驱动定义会在 `provider` 上以 `bad_option` 失败。
-- 预装依赖的预热镜像，以及在容器里运行工作流的 `setup`。setup 仍在主机上运行。
-- 使用 teamai 专用登录的 Codex。
+- `bwrap`、`seatbelt` 和托管沙箱。在它们发布之前，驱动定义会在 `provider` 上以 `bad_option` 失败。
+- 预装依赖的预热镜像或模板，以及在沙箱里运行工作流的 `setup`。setup 仍在主机上运行。
+- 在容器里使用 teamai 专用登录的 Codex。在 `sbx` 上，Codex 用 `sbx secret set openai --oauth` 登录。
 - 步骤的网络规则。`requires.network: false` 会列在 `unenforced` 里，严格要求它的步骤会等待一个声明了它的驱动。只有评判的网络会被过滤。
 - 用工具登录的评判。评判用环境变量凭据登录。
