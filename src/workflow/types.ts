@@ -589,6 +589,8 @@ export interface DriveOptions {
   /** `false` after `resume --no-auto-approve`, which overrides `workflows.auto_approve` as the flag does. */
   autoApprove?: boolean;
   sandbox?: true;
+  /** The driver definition the run was last driven with, by its canonical name; absent for plain `local`. */
+  driver?: string;
 }
 
 /**
