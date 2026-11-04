@@ -1582,7 +1582,8 @@ function offerTerms(
     unattended: step.permissions === 'unattended',
     clone: contractClone(plan?.contract) !== undefined,
     prepare: context.prepare,
-    pinned: step.command !== undefined && HOST_PINNED_WORKFLOWS.has(scope.workflow),
+    // teamai's bookkeeping, and the publish contract, which only this host keeps, never run on an external runtime.
+    pinned: (step.command !== undefined && HOST_PINNED_WORKFLOWS.has(scope.workflow)) || (plan?.contract !== undefined && isPublishContract(plan.contract)),
     ...role,
   }, context.can, context.allow, context.facts);
 
