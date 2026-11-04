@@ -240,6 +240,14 @@ describe('PassScoring.said', () => {
     });
   });
 
+  it('says it cannot read a group that failed before it labelled when it does not name its scorers, rather than that no scorer sampled it', () => {
+    const unnamed = [{ item: { subject: 'run:r1:review:1' }, outcome: 'failed', outputs: { labels: null, written: null } }];
+
+    expect(PassScoring.said('run:r1:review:1', run, done(unnamed))).toEqual({
+      kind: 'pending', line: `run:r1:review:1 is not labelled: teamai-score run ${run} answered outputs this teamai cannot read (outputs.labels.0.item.scorers: a group that labelled nothing names no scorers). Update teamai.`,
+    });
+  });
+
   it('says it cannot read a done whose labels are not the shape teamai-score gives, rather than that no scorer sampled it', () => {
     const renamed = [{ item: {}, outcome: 'success', outputs: { labels: [{ scorer: 'quality', verdict: 'good' }] } }];
 
