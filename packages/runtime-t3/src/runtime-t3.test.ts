@@ -173,7 +173,7 @@ describe('teamai-runtime-t3', () => {
       const runtime = start(env);
       runtime.send({ type: 'init', protocol: 1, mode, options: { environment: 'local', ...options } });
       expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
-      runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), toolHome: {} } });
+      runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
       const accepted = await runtime.next((line) => line['op'] === OPEN && line['event'] === 'accepted');
       expect(await runtime.next((line) => line['op'] === OPEN && line['event'] !== 'accepted')).toMatchObject({ event: 'ready' });
 
@@ -205,7 +205,7 @@ describe('teamai-runtime-t3', () => {
       runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
       await runtime.next((line) => line['type'] === 'init');
 
-      runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), toolHome: {} } });
+      runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
 
       expect(await runtime.next((line) => line['op'] === OPEN && line['event'] === 'failed')).toEqual({
         op: OPEN, event: 'failed',
@@ -219,7 +219,7 @@ describe('teamai-runtime-t3', () => {
       runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
       await runtime.next((line) => line['type'] === 'init');
 
-      runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), toolHome: {} } });
+      runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), runDir: path.join(dir, 'run'), toolHome: {} } });
 
       expect(await runtime.next((line) => line['op'] === OPEN && line['event'] === 'failed')).toMatchObject({ failure: { code: 'not_a_t3_project' } });
     });
