@@ -113,6 +113,24 @@ describe('team tool instances', () => {
     },
   );
 
+  it('names an instance it refuses once per pull, though a pull loads the team config many times', async () => {
+    const repo = teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE.replace('command: acme-claude', "command: './scripts/acme-claude'") });
+    const { loadTeamConfig } = await import('../config.js');
+    const { resetWarnOnce } = await import('../utils/warn-once.js');
+    const { log } = await import('@teamai/tool-core/log');
+    const errors = vi.spyOn(log, 'error').mockImplementation(() => undefined);
+
+    const shown = () => errors.mock.calls.map(([message]) => String(message));
+    const refusal = expect.stringContaining('command: command is the name of one executable on PATH');
+
+    for (let pass = 0; pass < 3; pass++) await loadTeamConfig(repo);
+    expect(shown()).toEqual([refusal]);
+
+    resetWarnOnce();
+    await loadTeamConfig(repo);
+    expect(shown()).toEqual([refusal, refusal]);
+  });
+
   it('accepts an instance whose command is a bare name, looked up on PATH where the tool runs', async () => {
     const { registry, errors } = await load(teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE.replace('command: acme-claude', 'command: acme-claude-2.4') }));
 
