@@ -1632,6 +1632,9 @@ Codex 运行期间运行时自己停止，或之后无法关闭位置时，登�
 
 ```yaml
 # drivers/containers.yaml
+schemaVersion: v1alpha1
+name: containers
+tool: claude
 runtimes:
   - use: sandbox
     options:

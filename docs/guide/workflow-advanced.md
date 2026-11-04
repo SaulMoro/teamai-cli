@@ -1638,6 +1638,9 @@ A tool in a container cannot read a login kept in your keychain. Give it a token
 
 ```yaml
 # drivers/containers.yaml
+schemaVersion: v1alpha1
+name: containers
+tool: claude
 runtimes:
   - use: sandbox
     options:
