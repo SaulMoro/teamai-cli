@@ -113,6 +113,16 @@ describe('team tool instances', () => {
     },
   );
 
+  it.each(['C:acme-claude', '.:acme-claude', '$PATH:acme-claude', 'acme*', 'acme-claude?'])(
+    'refuses an instance whose command is %s, which Windows reads as a place or a wildcard and may find in the checkout',
+    async (command) => {
+      const { registry, errors } = await load(teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE.replace('command: acme-claude', `command: '${command}'`) }));
+
+      expect(errors).toEqual([expect.stringContaining('command: command is the name of one executable on PATH, with no path, spaces or arguments, such as acme-claude')]);
+      expect(registry.toolOf('acme-claude')).toBeUndefined();
+    },
+  );
+
   it('names an instance it refuses once per pull, though a pull loads the team config many times', async () => {
     const repo = teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE.replace('command: acme-claude', "command: './scripts/acme-claude'") });
     const { loadTeamConfig } = await import('../config.js');
