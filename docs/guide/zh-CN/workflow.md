@@ -6,6 +6,7 @@
 
 要让每个步骤在团队镜像的容器里运行，见 [Sandbox 运行时](runtime-sandbox.md)。
 想让每个提示词步骤作为一个可以旁观的 T3 Code 线程运行，见 [T3 运行时](runtime-t3.md)。
+要把提示词步骤作为 Paseo 守护进程的智能体运行，见 [Paseo 运行时](runtime-paseo.md)。
 
 ```yaml
 schemaVersion: v1alpha1
