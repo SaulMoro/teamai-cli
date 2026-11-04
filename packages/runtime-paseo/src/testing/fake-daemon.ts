@@ -19,6 +19,7 @@ import { z } from 'zod';
 //                        running when it stopped comes back `closed`, as Paseo marks it
 //    behaviour.json      how its next agents behave (`Behaviour`), and which version and models it offers
 //    requests.jsonl      every agent create, cancel and workspace archive it received, for a test to read what crossed
+//    stopped.jsonl       each agent a cancel or an archive stopped, once it stopped running, which may be after the answer
 //    answers/<agent>     a person answered the agent's permission request in the app
 //
 //  An agent finds the result file the way a real one does, in teamai's prompt, and writes its output there.
@@ -71,6 +72,8 @@ const BehaviourSchema = z.object({
   refuse_cancel: z.string().optional(),
   /** How long the daemon takes to answer a refused cancel. */
   refuse_cancel_ms: z.number().int().nonnegative().default(0),
+  /** How long an agent goes on running after the daemon answered a cancel or an archive that stops it. */
+  stop_lag_ms: z.number().int().nonnegative().default(0),
   /** The daemon refuses to archive a workspace with this error. */
   refuse_archive: z.string().optional(),
 });
@@ -218,6 +221,33 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
     changed(agent);
   };
 
+  /** The agents a cancel or an archive is stopping, which no longer finish their turn. */
+  const stopping = new Set<string>();
+
+  /** Stops a running agent, once the stop lag has passed, and records when it stopped. */
+  const stop = (agent: AgentRecord, status: 'idle' | 'closed'): void => {
+    if (agent.status !== 'running' || stopping.has(agent.id)) return;
+    stopping.add(agent.id);
+
+    const end = (): void => {
+      stopping.delete(agent.id);
+      // Paseo reports a cancelled agent as idle, and an archived one as closed.
+      Object.assign(agent, { status, permission: false, sessionId: `fake-session-${agent.id}` });
+      fs.appendFileSync(path.join(state, 'stopped.jsonl'), `${JSON.stringify({ agentId: agent.id, status })}\n`);
+      changed(agent);
+    };
+
+    const lag = behaviour().stop_lag_ms;
+
+    if (lag === 0) {
+      end();
+
+      return;
+    }
+
+    timers.add(setTimeout(end, lag));
+  };
+
   /** Runs an agent's turn: its work, a permission it waits on, then its hold or release, then its end. */
   const work = (agent: AgentRecord): void => {
     const { behaviour: does } = agent;
@@ -232,6 +262,8 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
 
         return;
       }
+
+      if (stopping.has(agent.id)) return;
 
       if (agent.permission) {
         if (!fs.existsSync(path.join(state, 'answers', agent.id))) return;
@@ -460,11 +492,7 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
           return;
         }
 
-        // Paseo reports a cancelled agent as idle.
-        if (agent?.status === 'running') {
-          Object.assign(agent, { status: 'idle', permission: false, sessionId: `fake-session-${agent.id}` });
-          changed(agent);
-        }
+        if (agent) stop(agent, 'idle');
 
         reply({ type: 'cancel_agent_response', payload: { requestId: message.requestId ?? '', agentId: message.agentId, agent: agent ? snapshot(agent) : null, error: agent ? null : `Agent not found: ${message.agentId}` } });
 
@@ -479,6 +507,8 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
         if (!refused) {
           for (const [cwd, id] of Object.entries(kept.workspaces)) if (id === message.workspaceId) delete kept.workspaces[cwd];
           save();
+
+          for (const agent of Object.values(kept.agents)) if (agent.workspaceId === message.workspaceId) stop(agent, 'closed');
         }
 
         reply({ type: 'archive_workspace_response', payload: { requestId: message.requestId, workspaceId: message.workspaceId, archivedAt: refused ? null : now(), error: refused ?? null } });
