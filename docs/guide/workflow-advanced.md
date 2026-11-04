@@ -1752,7 +1752,7 @@ teamai then sends each prompt step as one `prompt`. `lease.prompt` is the whole 
 | --- | --- |
 | `step`, `tool` | The step and the tool to start the agent on, one of your `can.tools` |
 | `model` | `name` and optional `effort` to launch on: the step's, or else its agent definition's; absent means the tool's default |
-| `prompt`, `result` | The whole prompt, and the file the agent writes the result to |
+| `prompt`, `result` | The whole prompt, and the file the agent writes the result to. Let the agent write that one file without asking, as teamai's own launch does: for Claude, `--allowedTools=Edit(/<result>)`. Change no mode for it |
 | `resume` | A session id of the same tool to continue, for a later pass |
 | `permissions` | `approval-required`, or `unattended` when your `can.unattended` took such a step |
 | `interactive` | `true` when a person works in the step; only a runtime with `can.hitl` gets one |
