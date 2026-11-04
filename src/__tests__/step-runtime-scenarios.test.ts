@@ -661,6 +661,48 @@ describe('a runtime that cannot close a place, over stdio', () => {
     }
   });
 
+  it('ends an accepted exec and prompt as lost with runtime_unanswered when the runtime gives no outcome within 15 s of their cancel, whatever they write meanwhile', async () => {
+    const { runtime, handle } = await opened({ answer: { cancel: 'silent' } });
+    const release = path.join(dir, 'release');
+    const agentToy = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    started.push(agentToy);
+    expect(await agentToy.init({ options: { state: path.join(dir, 'agent-state'), agent: { release }, answer: { cancel: 'silent' } }, mode: 'unattended' })).toMatchObject({ ok: true });
+    let execAccepted: () => void = () => {};
+    let promptAccepted: () => void = () => {};
+    let wroteAfterCancel: () => void = () => {};
+    let cancelSent = false;
+    const execAcceptance = new Promise<void>((resolve) => { execAccepted = resolve; });
+    const promptAcceptance = new Promise<void>((resolve) => { promptAccepted = resolve; });
+    const outputAfterCancel = new Promise<void>((resolve) => { wroteAfterCancel = resolve; });
+    const execOp = newOpId();
+    const promptOp = newOpId();
+    // The exec writes for a few seconds and then ends, so the toy that ignores its cancel exits once disposed.
+    const execEnd = runtime.exec({ op: execOp, handle, argv: [process.execPath, '-e', 'const t = setInterval(() => console.log("tick"), 20); setTimeout(() => clearInterval(t), 3000)'], env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {
+      onAccepted: () => execAccepted(),
+      onOutput: () => { if (cancelSent) wroteAfterCancel(); },
+    });
+    const promptEnd = agentToy.prompt({
+      op: promptOp, handle: 'toy-r0123abcd-a0123abcd', env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree'),
+      lease: { step: 'review', tool: 'claude', prompt: 'p', result: path.join(dir, 'out', 'result.json'), permissions: 'unattended', interactive: false },
+    }, { onAccepted: () => promptAccepted() });
+    await Promise.all([execAcceptance, promptAcceptance]);
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    try {
+      await runtime.cancel(execOp);
+      await agentToy.cancel(promptOp);
+      cancelSent = true;
+      await outputAfterCancel;
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(await Promise.race([execEnd, 'still waiting'])).toEqual({ kind: 'lost', failure: { code: 'runtime_unanswered', message: `Step runtime "toy" did not confirm the cancel of exec ${execOp} within 15 s, so what it started may still run.` } });
+      expect(await Promise.race([promptEnd, 'still waiting'])).toEqual({ kind: 'lost', failure: { code: 'runtime_unanswered', message: `Step runtime "toy" did not confirm the cancel of prompt ${promptOp} within 15 s, so what it started may still run.` } });
+    } finally {
+      vi.useRealTimers();
+      fs.writeFileSync(release, '');
+    }
+  });
+
   it('fails an init the runtime does not answer within 15 s as runtime_unanswered', async () => {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     started.push(runtime);
