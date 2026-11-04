@@ -103,6 +103,23 @@ describe('team tool instances', () => {
     expect(config?.toolPaths['acme-claude']).toBeUndefined();
   });
 
+  it.each(['./scripts/acme-claude', 'bin/acme-claude', '/opt/acme/bin/acme-claude', String.raw`tools\acme-claude.exe`])(
+    'refuses an instance whose command is the path %s, since what runs at a path is not the file a person accepted',
+    async (command) => {
+      const { registry, errors } = await load(teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE.replace('command: acme-claude', `command: '${command}'`) }));
+
+      expect(errors).toEqual([expect.stringContaining('command: command is the name of one executable on PATH, with no path, spaces or arguments, such as acme-claude')]);
+      expect(registry.toolOf('acme-claude')).toBeUndefined();
+    },
+  );
+
+  it('accepts an instance whose command is a bare name, looked up on PATH where the tool runs', async () => {
+    const { registry, errors } = await load(teamRepo({ 'tools/acme-claude.yaml': ACME_CLAUDE.replace('command: acme-claude', 'command: acme-claude-2.4') }));
+
+    expect(errors).toEqual([]);
+    expect(registry.toolOf('acme-claude')?.instance?.command).toBe('acme-claude-2.4');
+  });
+
   it('refuses an instance not named after its file, or named like another shipped tool', async () => {
     const { errors, registry } = await load(teamRepo({
       'tools/acme.yaml': ACME_CLAUDE,

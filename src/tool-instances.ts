@@ -49,7 +49,8 @@ const InstanceFileSchema = z.object({
   schemaVersion: z.literal('v1alpha1'),
   name: z.string().regex(NAME, 'A tool name starts with a lowercase letter or digit and holds only lowercase letters, digits, dots, dashes and underscores'),
   extends: z.string().refine(isToolId, { error: (issue) => `${String(issue.input)} is not a tool teamai ships. Extend one of: ${TOOL_ORDER.join(', ')}` }),
-  command: z.string().min(1).regex(/^\S+$/, 'command is one executable, with no spaces and no arguments').optional(),
+  // A path is refused: what runs there, maybe in the step's own checkout, is not the file a person accepted.
+  command: z.string().regex(/^[^\s/\\]+$/, 'command is the name of one executable on PATH, with no path, spaces or arguments, such as acme-claude').optional(),
   home: z.object({ dir: HomeDir, env: z.string().regex(ENV_NAME, 'home.env is the name of an environment variable').optional() }).strict().optional(),
   paths: ToolPathsSchema.optional(),
 });
