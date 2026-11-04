@@ -107,7 +107,7 @@ describe.skipIf(process.platform === 'win32')('tool instances through the CLI', 
   const forgetAcceptances = (): void => fs.rmSync(path.join(home, '.teamai', 'trust'), { recursive: true, force: true });
 
   /** Runs the CLI with `args` in a terminal a person types into: what it printed so far, and a line typed into it. */
-  function inTerminal(args: string[]): { printed: () => string; type: (line: string) => void; ended: Promise<number | null>; stop: () => void } {
+  function inTerminal(args: string[]): { printed: () => string; type: (line: string) => void; press: (keys: string) => void; ended: Promise<number | null>; stop: () => void } {
     const dir = fs.mkdtempSync(path.join(root, 'terminal-'));
     const output = path.join(dir, 'out');
     const input = path.join(dir, 'in');
@@ -117,6 +117,7 @@ describe.skipIf(process.platform === 'win32')('tool instances through the CLI', 
     return {
       printed: () => (fs.existsSync(output) ? fs.readFileSync(output, 'utf8') : ''),
       type: (line) => fs.appendFileSync(input, `${line}\n`),
+      press: (keys) => fs.appendFileSync(input, keys),
       ended,
       stop: () => {
         const pid = path.join(dir, 'pid');
@@ -236,6 +237,37 @@ describe.skipIf(process.platform === 'win32')('tool instances through the CLI', 
     }
     expect(terminal.printed()).not.toContain('accepts these choices');
     expect(terminal.printed()).not.toContain('was not accepted');
+    expect(launches()).toEqual(['acme-claude']);
+  }, 120_000);
+
+  it.skipIf(!hasPython)('stops the run at Ctrl-C to accept a command, accepting nothing, and resume asks again', async () => {
+    clearLaunches();
+    forgetAcceptances();
+    const terminal = inTerminal(['workflow', 'start', 'review', '--driver', 'local', '--tools', 'default=acme-claude']);
+    let run: string | undefined;
+
+    try {
+      expect(await waitFor(() => terminal.printed().includes('Run it? [y/N]'), 30_000), terminal.printed()).toBe(true);
+      run = /Run (\S+) started/.exec(terminal.printed())?.[1];
+      terminal.press('\x03');
+      expect(await endedWithin(terminal, 15_000), terminal.printed()).not.toBe('still running');
+    } finally {
+      terminal.stop();
+    }
+    expect(terminal.printed()).toContain('Continue with teamai workflow resume');
+    expect(terminal.printed()).not.toContain('was not accepted');
+    expect(launches()).toEqual([]);
+
+    expect(run, terminal.printed()).toBeDefined();
+    const resumed = inTerminal(['workflow', 'resume', String(run)]);
+
+    try {
+      expect(await waitFor(() => resumed.printed().includes('Run it? [y/N]'), 30_000), resumed.printed()).toBe(true);
+      resumed.type('y');
+      expect(await endedWithin(resumed, 30_000), resumed.printed()).toBe(0);
+    } finally {
+      resumed.stop();
+    }
     expect(launches()).toEqual(['acme-claude']);
   }, 120_000);
 

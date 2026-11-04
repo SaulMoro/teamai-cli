@@ -914,6 +914,15 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   // one after another. A step stopped while it waits for its turn asks nothing.
   let stepAsks = 0;
   let stepTurns: Promise<unknown> = Promise.resolve();
+  // Ctrl-C or Ctrl-D closed a step's question: the person stops the run, as at the HITL question, and resume goes on.
+  let isStoppedByPerson = false;
+
+  const stopByPerson = (): void => {
+    isStoppedByPerson = true;
+
+    for (const { controller } of prompts.values()) controller.abort();
+    wake();
+  };
 
   const askPerson: AskPerson | undefined = personAnswers(mode) ? async (text, signal) => {
     stepAsks += 1;
@@ -932,7 +941,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         await open.exit;
       }
 
-      return readLine(text, signal).catch(() => undefined);
+      return readLine(text, signal).catch(() => {
+        if (!signal.aborted) stopByPerson();
+
+        return undefined;
+      });
     })();
 
     stepTurns = Promise.allSettled([before, turn]);
@@ -1004,6 +1017,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   try {
     for (;;) {
       if (signalled) return { error: { code: 'interrupted', message: `Stopped by ${signalled} after every command it started exited` } };
+
+      if (isStoppedByPerson) return { error: { code: 'interrupted', message: 'A step\'s question closed without an answer. Continue with teamai workflow resume.' } };
       const running = [...inFlight.keys(), ...held.map((lease) => lease.attempt), ...prompts.keys()];
       const canTakeLease = room() && handedBack === undefined;
       const resolved = await resolveWorkflowEnv(config);
@@ -1220,7 +1235,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       clearTimeout(timer);
 
-      if (!exited) continue;
+      // What ended after the person stopped the run is not reported: the cleanup below stops the rest, and resume reruns it.
+      if (!exited || isStoppedByPerson) continue;
 
       if (exited.kind === 'question') {
         // A step's question closed it, and took it from the driver: it is asked again once no step asks.
