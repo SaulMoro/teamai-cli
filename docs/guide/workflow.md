@@ -4,6 +4,8 @@
 
 A workflow is a YAML file at `workflows/<name>.yaml` in the team repo. It runs command and prompt steps, each after the steps it needs. A command with no workspace is read-only; [Workspaces](#workspaces) is how a step changes code on its own branch. [Advanced workflows](workflow-advanced.md) covers parallel steps, loops, `for_each`, what an end does to steps that still run, and the full expression language.
 
+To run each prompt step as a T3 Code thread you can watch, see [T3 runtime](runtime-t3.md).
+
 ```yaml
 schemaVersion: v1alpha1
 name: build
