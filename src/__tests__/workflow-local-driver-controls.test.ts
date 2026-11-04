@@ -1042,6 +1042,30 @@ steps:
 });
 
 
+it('asks a waiting approval while every other ready step is held back, then stops busy on the held step', async () => {
+  const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
+name: build
+description: Ship while the fetch is held back.
+steps:
+  - id: fetch
+    command: echo fetched
+    requires: { network: true }
+  - id: ship
+    needs: []
+    approve: { message: Ship it?, required: true }
+    command: echo shipped
+`);
+  config.workflows = { ...config.workflows, tools: {}, allow: { network: false } };
+  const asked: string[] = [];
+  const question = async (hitl: { step: string }): Promise<string> => { asked.push(hitl.step); return 'yes'; };
+
+  const ended = await runLocalDriver(config, runId, workspace, { hitl: true, question });
+
+  expect(asked).toEqual(['ship']);
+  expect(ended).toMatchObject({ error: { code: 'busy' } });
+  expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'fetch', status: 'pending' }, { id: 'ship', status: 'succeeded' }] });
+});
+
 it('asks HITL only after a held interactive tool has run', async () => {
   const { config, workspace, runId } = await workflowFixture(`schemaVersion: v1alpha1
 name: build
