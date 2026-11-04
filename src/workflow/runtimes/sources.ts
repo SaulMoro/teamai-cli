@@ -366,7 +366,7 @@ async function openRuntime(driver: ResolvedDriver, use: string, options: Runtime
     ok: false,
     failure: failure.code === 'bad_option'
       ? badOption(driver, use, failure.key ?? '?', failure.message)
-      : { code: 'runtime_failed', message: `Runtime "${source.name}" of driver "${driver.name}" did not start: ${failure.message}` },
+      : { code: 'runtime_failed', message: `Runtime "${source.name}" of driver "${driver.name}" did not start (${failure.code}): ${failure.message}` },
   };
 }
 

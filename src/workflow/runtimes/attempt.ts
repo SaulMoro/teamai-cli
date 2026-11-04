@@ -280,7 +280,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
         if (now) await save({ ...now, open: { op, handle }, phase: now.phase === 'opening' ? 'ready' : now.phase });
       });
 
-      if (opened.kind !== 'ready') return { ok: false, failure: runtimeFailure(runtime.name, `could not open attempt ${attempt}: ${opened.failure.message}`) };
+      if (opened.kind !== 'ready') return { ok: false, failure: runtimeFailure(runtime.name, `could not open attempt ${attempt} (${opened.failure.code}): ${opened.failure.message}`) };
       await shown(opened.display);
 
       return { ok: true, handle: opened.handle };
@@ -395,7 +395,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       if (!before || handle === undefined) return undefined;
       const collected = await runtime.collect(handle);
 
-      if (!collected.ok) return runtimeFailure(runtime.name, `could not bring the work of attempt ${attempt} back: ${collected.failure.message}. Nothing it changed in the place was committed.`);
+      if (!collected.ok) return runtimeFailure(runtime.name, `could not bring the work of attempt ${attempt} back (${collected.failure.code}): ${collected.failure.message}. Nothing it changed in the place was committed.`);
       await save({ ...before, phase: 'collected' });
 
       return undefined;
@@ -412,7 +412,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
         const failure = { ...closed.failure, message: redact(closed.failure.message, { envSecrets: credentialSecrets(runtime.name, openedWith), patterns: false }) };
         await save({ ...before, closeFailed: failure });
 
-        return runtimeFailure(runtime.name, `could not close the place of attempt ${attempt}, so what ran there may still run: ${failure.message}`);
+        return runtimeFailure(runtime.name, `could not close the place of attempt ${attempt}, so what ran there may still run (${failure.code}): ${failure.message}`);
       }
 
       const { closeFailed: _earlier, ...kept } = before;

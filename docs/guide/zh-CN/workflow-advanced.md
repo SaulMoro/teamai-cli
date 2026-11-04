@@ -1371,7 +1371,7 @@ teamai 把这个 `auth.json` 复制到这次尝试的工具主目录，步骤结
 Codex 运行期间运行时自己停止，或之后无法关闭位置时，登录同样继续被持有，因为 Codex 可能还在那里运行。步骤失败为 `runtime_lost`，teamai 会说明怎么处理：
 
 ```text
-⚠ Step runtime "sandbox" could not close the place of attempt a339da600, so what ran there may still run: Step runtime "sandbox" stopped: it exited with status 70.
+⚠ Step runtime "sandbox" could not close the place of attempt a339da600, so what ran there may still run (runtime_exited): Step runtime "sandbox" stopped: it exited with status 70.
 ⚠ The codex login teamai keeps stays held by attempt a339da600 of run r9a395746ec65dbd7, whose tool may still run. Stop that tool on its step runtime, then delete /home/me/.teamai/logins/codex.lock.
 ```
 
