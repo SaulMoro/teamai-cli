@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { localStepRuntime } from '../workflow/runtimes/local.js';
 import { stdioStepRuntime } from '../workflow/runtimes/stdio.js';
-import type { RuntimeOptions } from '@teamai/runtime-protocol';
+import type { OpState, RuntimeDisplay, RuntimeOptions } from '@teamai/runtime-protocol';
 import { newOpId, type ExecEnd, type ExecRequest, type OpenRequest, type PromptRequest, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import type { JsonValue } from '../types.js';
 import { TOY_RUNTIME } from './helpers/toy-runtime.js';
@@ -19,6 +19,8 @@ interface Subject {
   start(state: string): StepRuntime;
   options(state: string): RuntimeOptions;
   retains: boolean;
+  /** The display the runtime gives for the suite's attempt when it is reattached, if it gives one. */
+  display?: RuntimeDisplay;
 }
 
 const SUBJECTS: Subject[] = [
@@ -53,6 +55,7 @@ async function until(check: () => boolean | Promise<boolean>, ms = 5000): Promis
 }
 
 describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
+  const alive = (ops: OpState[]) => ({ kind: 'alive', ops, ...(subject.display && { display: subject.display }) });
   let dir: string;
   let worktree: string;
   let state: string;
@@ -197,7 +200,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     await first.dispose();
     const second = await start();
 
-    expect(await second.reattach(opened.handle)).toEqual({ kind: 'alive', ops: [{ op: request.op, state: 'exited', code: 0, stdout: 'retained' }] });
+    expect(await second.reattach(opened.handle)).toEqual(alive([{ op: request.op, state: 'exited', code: 0, stdout: 'retained' }]));
     expect(await second.exec(request, {})).toEqual({ kind: 'exited', code: 0, stdout: 'retained' });
   });
 
@@ -213,7 +216,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
     await first.dispose();
     const second = await start();
 
-    expect(await second.reattach(opened.handle)).toEqual({ kind: 'alive', ops: [{ op: request.op, state: 'running' }] });
+    expect(await second.reattach(opened.handle)).toEqual(alive([{ op: request.op, state: 'running' }]));
     await second.cancel(request.op);
     expect(await until(() => !pidAlive(shell))).toBe(true);
     // The operation ends cancelled once no process of it is left, which the runtime may record after the shell is gone.
@@ -223,7 +226,7 @@ describe.each(SUBJECTS)('StepRuntime scenarios: $name', (subject) => {
       settled = reattached;
       return reattached.kind !== 'alive' || reattached.ops.some((op) => op.state !== 'running');
     })).toBe(true);
-    expect(settled).toEqual({ kind: 'alive', ops: [{ op: request.op, state: 'cancelled' }] });
+    expect(settled).toEqual(alive([{ op: request.op, state: 'cancelled' }]));
   });
 });
 
@@ -236,6 +239,8 @@ interface PromptSubject {
   name: string;
   start(state: string): StepRuntime;
   options(state: string, agent: JsonValue): RuntimeOptions;
+  /** The display the runtime gives for the suite's attempt when it is reattached, if it gives one. */
+  display?: RuntimeDisplay;
 }
 
 const PROMPT_SUBJECTS: PromptSubject[] = [
@@ -247,6 +252,7 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
 ];
 
 describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) => {
+  const alive = (ops: OpState[]) => ({ kind: 'alive', ops, ...(subject.display && { display: subject.display }) });
   let dir: string;
   let worktree: string;
   let state: string;
@@ -332,7 +338,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     await runtime.cancel(request.op);
 
     expect(await ending).toEqual({ kind: 'cancelled' });
-    expect(await runtime.reattach(handle)).toEqual({ kind: 'alive', ops: [{ op: request.op, state: 'cancelled' }] });
+    expect(await runtime.reattach(handle)).toEqual(alive([{ op: request.op, state: 'cancelled' }]));
   });
 
   it('runs no command: an exec fails, naming the runtime\'s offer', async () => {
@@ -353,7 +359,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     await first.dispose();
     const second = await start({ output: { verdict: 'approve' }, usage: { input: 10 } });
 
-    expect(await second.reattach(handle)).toEqual({ kind: 'alive', ops: [{ op: request.op, state: 'finished', session: finished.session, result: finished.result, usage: finished.usage }] });
+    expect(await second.reattach(handle)).toEqual(alive([{ op: request.op, state: 'finished', session: finished.session, result: finished.result, usage: finished.usage }]));
     expect(await second.prompt(request, {})).toEqual(finished);
   });
 
@@ -370,7 +376,7 @@ describe.each(PROMPT_SUBJECTS)('StepRuntime prompt scenarios: $name', (subject) 
     await first.dispose();
     const second = await start(agent);
 
-    expect(await second.reattach(handle)).toEqual({ kind: 'alive', ops: [{ op: request.op, state: 'running' }] });
+    expect(await second.reattach(handle)).toEqual(alive([{ op: request.op, state: 'running' }]));
     const reconnected = second.prompt(request, {});
     fs.writeFileSync(release, '');
     expect(await reconnected).toMatchObject({ kind: 'finished', result: { output: { verdict: 'approve' } } });
