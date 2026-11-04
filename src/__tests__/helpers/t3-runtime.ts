@@ -72,7 +72,7 @@ export async function t3OnFakeServer(): Promise<{
       fs.writeFileSync(path.join(state, 't3-state', 'config.json'), JSON.stringify({
         token: TOKEN,
         environment: { environmentId: 'env-fake-1', label: 'fake-laptop', serverVersion: '0.1.7-fake' },
-        projects: [{ projectId: 'project-1', title: 'scenario', workspaceRoot: fs.realpathSync(worktree) }],
+        projects: [{ id: 'project-1', title: 'scenario', workspaceRoot: fs.realpathSync(worktree) }],
         providers: [{ providerInstanceId: 'claudeAgent', driverKind: 'claudeAgent', displayName: 'Claude', constraints: [], models: [{ id: 'claude-opus-5-5' }] }],
         agent: { output: toy.output, fail: toy.fail !== undefined, hold: toy.hold_ms !== undefined, release: toy.release },
       }));

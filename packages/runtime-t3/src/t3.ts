@@ -26,7 +26,8 @@ const ProviderSchema = z.object({
 
 export type Provider = z.infer<typeof ProviderSchema>;
 
-const ProjectSchema = z.object({ projectId: z.string().min(1), title: z.string(), workspaceRoot: z.string() });
+/** A project as `t3_project_list` lists it; one T3 deleted keeps its row with `deletedAt` set. */
+const ProjectSchema = z.object({ id: z.string().min(1), title: z.string(), workspaceRoot: z.string(), deletedAt: z.string().nullable().optional() });
 
 export type Project = z.infer<typeof ProjectSchema>;
 

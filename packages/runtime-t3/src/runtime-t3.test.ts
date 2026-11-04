@@ -196,6 +196,17 @@ describe('teamai-runtime-t3', () => {
       });
     });
 
+    it('does not count a project T3 deleted', async () => {
+      t3.config({ projects: [{ id: 'project-old', title: 'acme-app', workspaceRoot: checkout, deletedAt: '2026-10-01T09:00:00.000Z' }] });
+      const runtime = start();
+      runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      await runtime.next((line) => line['type'] === 'init');
+
+      runtime.send({ type: 'open', op: OPEN, run: RUN, attempt: 'a1b2c3d4', credentials: {}, view: { worktree, readonly: [], result: path.dirname(result), toolHome: {} } });
+
+      expect(await runtime.next((line) => line['op'] === OPEN && line['event'] === 'failed')).toMatchObject({ failure: { code: 'not_a_t3_project' } });
+    });
+
     it('runs as a T3 thread of its own on the attempt\'s worktree, then ends finished with the result and the session, and settles the thread', async () => {
       const { runtime, handle } = await opened('attended', { T3CODE_THREAD_ID: 'thread-parent-1' });
       const op = 'op-0000000b';
