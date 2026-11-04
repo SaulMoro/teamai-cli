@@ -234,7 +234,7 @@ Paseo calls a tool available once its binary is on the daemon's `PATH`, signed i
 | `codex` | the daemon runs on this machine (`url` is a loopback address, such as `127.0.0.1` or `localhost`), and `codex login status` says `Logged in` | `auto` | `auto`, with a `read-only` sandbox |
 | `opencode` | Paseo lists a model for it: OpenCode reaches a model provider, its free models included | `build` | `plan` |
 
-Paseo does not report whether Codex is signed in, so the runtime runs `codex login status` itself, with your environment (`CODEX_HOME` or `~/.codex`). It runs the `codex` that `Resolved path` names in Paseo's diagnostic, which the daemon found on its own `PATH`, not one on teamai's. A daemon at any other address, such as one on another machine, is never offered Codex.
+Paseo does not report whether Codex is signed in, so the runtime runs `codex login status` itself, with your environment (`CODEX_HOME` or `~/.codex`). It runs the `codex` that `Resolved path` names in Paseo's diagnostic, which the daemon found on its own `PATH`, not one on teamai's. A daemon at any other address, such as one on another machine, is never offered Codex. The check cannot see the daemon's own environment, and a loopback address counts as this machine: start the daemon with the `CODEX_HOME` you use, and do not point `url` at a tunnel (`ssh -L`) to another machine.
 
 When the daemon can run none of them, the run stops before any step, and the message says what to do on the daemon's host:
 
@@ -243,7 +243,7 @@ $ teamai workflow start fix-add --driver paseo-signed-out
 {"error":{"code":"runtime_failed","message":"Runtime \"paseo\" of driver \"paseo-signed-out\" did not start: The Paseo daemon at ws://127.0.0.1:6799/ws runs no tool teamai-runtime-paseo can use. claude: signed out; run `claude auth login` on the daemon's host. codex: signed out; run `codex login` on the daemon's host."}}
 ```
 
-When it can run another tool, the run starts, and a step on the tool it cannot run fails without starting an agent:
+When it can run another tool, the run starts, and a step that takes the definition's `tool` fails without starting an agent:
 
 ```text
 $ teamai workflow start fix-add --driver paseo-codex

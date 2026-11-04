@@ -234,7 +234,7 @@ runtimes:
 | `codex` | 守护进程在本机运行（`url` 是回环地址，如 `127.0.0.1` 或 `localhost`），且 `codex login status` 显示 `Logged in` | `auto` | `auto`，沙箱为 `read-only` |
 | `opencode` | Paseo 为它列出了模型：OpenCode 连上了模型提供方，包括它的免费模型 | `build` | `plan` |
 
-Paseo 不报告 Codex 是否已登录，所以运行时自己用你的环境（`CODEX_HOME` 或 `~/.codex`）运行 `codex login status`。它运行的是 Paseo 诊断中 `Resolved path` 所指的 `codex`，即守护进程在它自己的 `PATH` 上找到的那个，而不是 teamai 的 `PATH` 上的。守护进程在其他任何地址上时（例如在另一台机器上），从不提供 Codex。
+Paseo 不报告 Codex 是否已登录，所以运行时自己用你的环境（`CODEX_HOME` 或 `~/.codex`）运行 `codex login status`。它运行的是 Paseo 诊断中 `Resolved path` 所指的 `codex`，即守护进程在它自己的 `PATH` 上找到的那个，而不是 teamai 的 `PATH` 上的。守护进程在其他任何地址上时（例如在另一台机器上），从不提供 Codex。这项检查看不到守护进程自己的环境，回环地址一律算作本机：请用你平时的 `CODEX_HOME` 启动守护进程，也不要让 `url` 指向通往另一台机器的隧道（`ssh -L`）。
 
 守护进程一个工具都运行不了时，运行在任何步骤之前停止，消息说明要在守护进程主机上做什么：
 
@@ -243,7 +243,7 @@ $ teamai workflow start fix-add --driver paseo-signed-out
 {"error":{"code":"runtime_failed","message":"Runtime \"paseo\" of driver \"paseo-signed-out\" did not start: The Paseo daemon at ws://127.0.0.1:6799/ws runs no tool teamai-runtime-paseo can use. claude: signed out; run `claude auth login` on the daemon's host. codex: signed out; run `codex login` on the daemon's host."}}
 ```
 
-守护进程能运行另一个工具时，运行照常开始，使用它运行不了的工具的步骤不启动智能体就失败：
+守护进程能运行另一个工具时，运行照常开始，使用定义的 `tool` 的步骤不启动智能体就失败：
 
 ```text
 $ teamai workflow start fix-add --driver paseo-codex
