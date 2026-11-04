@@ -45,7 +45,7 @@ import { sanitizePrUrl, type PrUrl } from './pr-url.js';
 import { completeDelivery, deliveringStep, nextDelivery, resolveCreate, sameCreate, unresolvedCreate } from './delivery-ledger.js';
 import type { DeliveryKey, UnresolvedCreate } from './delivery-schema.js';
 import {
-  CAN_KEYS, HOST_PINNED_WORKFLOWS, LimitSchema, ReportedUnenforcedSchema, heldFor, setsLimit, mergeRequirements, negotiate, personGap, reportedUnenforced, requiredEnvKeys, unionUnenforced,
+  CAN_KEYS, HOST_PINNED_WORKFLOWS, LimitSchema, ReportedUnenforcedSchema, heldFor, setsLimit, mergeRequirements, negotiate, personGap, toolGap, reportedUnenforced, requiredEnvKeys, unionUnenforced,
   type Allow, type DriverCan, type EnvFacts, type Held, type InEffect, type Limit, type Missing, type Negotiation, type ReportedUnenforced, type Terms, type TurnLimits,
 } from './requirements.js';
 import { knownSecrets, resolveWorkflowEnv, secretKey, type WorkflowEnv } from '../env-resolution.js';
@@ -2102,12 +2102,15 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
               break;
             }
 
-            // A driver that cannot give the step its role, or ask the person it needs, is told so too, as it would be held
-            // for it once it had the place.
+            // A driver that cannot launch the step's tool, give it its role, or ask the person it needs, is told so too, as it
+            // would be held for it once it had the place.
             const roleGap = stepRole.kind === 'role' && !can.role ? ['role' as const] : [];
             held.push({
               step: state.id, reason: plan.defer.reason,
-              missing: [...plan.defer.needs ? [`workspace.${plan.defer.needs}` as const] : [], ...roleGap, ...personGap(definition.interactive === true, context.can)],
+              missing: [
+                ...plan.defer.needs ? [`workspace.${plan.defer.needs}` as const] : [],
+                ...toolGap(promptTool(definition, context.toolFor), context.can), ...roleGap, ...personGap(definition.interactive === true, context.can),
+              ],
             });
             continue;
           }
@@ -2143,20 +2146,28 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
           }
 
           if (terms.kind === 'hold' && options.alone) {
+            const tool = promptTool(definition, context.toolFor);
+
             // What another runtime of the driver lacks for the step, judged as this offer is: its plan, then its terms.
             const missingOn = (offered: DriverCan): readonly Missing[] | undefined => {
               const planned = planWorkspace(run, located.scope, state, definition, { driver, modes: offered.workspace, base: run.base ?? options.base });
 
               if (planned.fail) return undefined;
 
-              // A step held for its place on every runtime still goes to a person when none of them can ask one.
-              if (planned.defer) return planned.defer.needs ? [`workspace.${planned.defer.needs}`, ...personGap(definition.interactive === true, offered)] : undefined;
+              // A step held for its place on every runtime still fails on a tool none of them launches, and goes to a person
+              // when none of them can ask one.
+              if (planned.defer) {
+                return planned.defer.needs
+                  ? [`workspace.${planned.defer.needs}`, ...toolGap(tool, offered), ...personGap(definition.interactive === true, offered)]
+                  : undefined;
+              }
+
               const judged = offerTerms(run, state.id, located, planned, { ...context, can: offered });
 
               return judged.kind === 'hold' ? judged.missing : judged.kind === 'grant' ? [] : undefined;
             };
 
-            const beyond = beyondSoleDriver(options.alone, { step: state.id, tool: promptTool(definition, context.toolFor), isNamed: definition.tool !== undefined, missing: terms.missing, missingOn });
+            const beyond = beyondSoleDriver(options.alone, { step: state.id, tool, isNamed: definition.tool !== undefined, missing: terms.missing, missingOn });
 
             if (beyond) {
               failStep(state, beyond, run.revision);
