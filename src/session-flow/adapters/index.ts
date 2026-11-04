@@ -6,9 +6,13 @@
 
 import { BUILT_IN_TOOLS } from '@teamai/tool-definitions';
 import type { LocalConfig } from '../../types.js';
+import path from 'node:path';
 import type { AgentAdapter } from '@teamai/tool-core/sessions/base';
-import type { SessionPlatform } from './platform-facts.js';
+import type { StoredPlatformDefinition } from '@teamai/tool-core/sessions/platform';
+import { isStoredSessionPlatform, SESSION_PLATFORM_FACTS, type SessionPlatform } from './platform-facts.js';
 import { sessionStoreDir } from '../../locate.js';
+import { instanceHomeDir } from '../../tool-instances.js';
+import { instanceNames, instancePlatform, sessionPlatformsOf } from '../../tool-registry.js';
 
 /** Builds a platform's adapter on its store, which follows the member's recorded `toolRoots` (`sessionStoreDir`). */
 export type AdapterFactory = (toolRoots?: LocalConfig['toolRoots']) => AgentAdapter;
@@ -45,24 +49,56 @@ export const ADAPTER_REGISTRY: AdapterRegistry = {
   joycode: (toolRoots) => BUILT_IN_TOOLS.joycode.platforms.joycode.adapter(sessionStoreDir('joycode', toolRoots)),
 } satisfies Record<SessionPlatform, AdapterFactory>;
 
+/**
+ * The factory of an instance's own platform: the adapter of the shipped platform whose format its sessions keep, under
+ * the instance's id, on that platform's store in the instance's home, or in the shipped tool's when it sets none.
+ */
+function instanceFactory(platform: string): AdapterFactory | undefined {
+  const hosted = instancePlatform(platform);
+
+  if (!hosted || !isStoredSessionPlatform(hosted.platform)) return undefined;
+  const shipped = hosted.platform;
+  const definition: StoredPlatformDefinition = SESSION_PLATFORM_FACTS[shipped];
+
+  if (definition.store.in !== 'tool-home' || definition.adapterAs === undefined) return undefined;
+  const { store, adapterAs } = definition;
+  const { home } = hosted.instance;
+
+  return (toolRoots) => adapterAs(platform, home ? path.join(instanceHomeDir(home), store.dir) : sessionStoreDir(shipped, toolRoots));
+}
+
+/** The factory of `platform`: a shipped platform's, or an instance's own. */
+function factoryOf(platform: string): AdapterFactory | undefined {
+  return Object.hasOwn(ADAPTER_REGISTRY, platform) ? ADAPTER_REGISTRY[platform] : instanceFactory(platform);
+}
+
+/** The platforms of the instances this process knows, which keep sessions of their own. */
+function instancePlatforms(): string[] {
+  return instanceNames().flatMap((name) => sessionPlatformsOf(name));
+}
+
 export function getAdapter(platform: string, toolRoots?: LocalConfig['toolRoots']): AgentAdapter {
-  const factory = ADAPTER_REGISTRY[platform];
+  const factory = factoryOf(platform);
 
   if (!factory) {
-    throw new Error(`Unsupported platform: ${platform}. Registered: ${Object.keys(ADAPTER_REGISTRY).join(', ')}`);
+    throw new Error(`Unsupported platform: ${platform}. Registered: ${listAvailablePlatforms().join(', ')}`);
   }
 
   return factory(toolRoots);
 }
 
 export function listAvailablePlatforms(): string[] {
-  return Object.keys(ADAPTER_REGISTRY);
+  return [...Object.keys(ADAPTER_REGISTRY), ...instancePlatforms()];
 }
 
 export function listInstalledPlatforms(toolRoots?: LocalConfig['toolRoots'], projectPath = process.cwd()): string[] {
   const installed: string[] = [];
 
-  for (const [platform, factory] of Object.entries(ADAPTER_REGISTRY)) {
+  for (const platform of listAvailablePlatforms()) {
+    const factory = factoryOf(platform);
+
+    if (!factory) continue;
+
     try {
       const adapter = factory(toolRoots);
 

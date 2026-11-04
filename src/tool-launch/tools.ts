@@ -1,4 +1,5 @@
-import { descriptorOf, type DescriptorOf } from '../tool-registry.js';
+import type { ToolInstance } from '@teamai/tool-core/instance';
+import { descriptorOf, toolOf, type DescriptorOf } from '../tool-registry.js';
 import type { ToolId } from '../tools.js';
 import { LAUNCH_ADAPTERS } from './adapters.js';
 import type { ConfinedLaunch, LaunchAdapter, StepLaunch } from '@teamai/tool-core/launch';
@@ -52,6 +53,31 @@ export type LaunchTool = ToolWith<'step'>;
 
 export function isLaunchTool(value: string): value is LaunchTool {
   return LAUNCH_TOOLS.some((tool) => tool === value);
+}
+
+/**
+ * A tool a workflow step launches, by the name a step, `--tools` or a setting gives it: a shipped tool, or an instance
+ * of one. `tool` is the shipped tool whose flags and formats it runs with; `name` is what its report and its sessions
+ * are credited to.
+ */
+export interface LaunchTarget {
+  readonly name: string;
+  readonly tool: LaunchTool;
+  readonly instance?: ToolInstance<ToolId>;
+}
+
+/** The launch `name` names, or undefined when it names no tool, or one that runs no workflow step. */
+export function launchTargetOf(name: string): LaunchTarget | undefined {
+  const resolved = toolOf(name);
+
+  if (!resolved || !isLaunchTool(resolved.base)) return undefined;
+
+  return resolved.instance ? { name, tool: resolved.base, instance: resolved.instance } : { name, tool: resolved.base };
+}
+
+/** The command that starts `target`: its instance's own, or its tool's. */
+export function launchCommandOf(target: LaunchTarget): string {
+  return target.instance?.command ?? executableOf(target.tool);
 }
 
 /** The tools that run confined to one directory, in `LAUNCH_ORDER`. */

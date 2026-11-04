@@ -11,6 +11,7 @@
     "./family": "./src/family.ts",
     "./formats/*": "./src/formats/*.ts",
     "./home": "./src/home.ts",
+    "./instance": "./src/instance.ts",
     "./json": "./src/json.ts",
     "./launch": "./src/launch.ts",
     "./log": "./src/log.ts",

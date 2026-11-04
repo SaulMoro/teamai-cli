@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
+import type { InstancePlatform, ToolInstance } from './instance.js';
 import { makeToolRegistry, type RegisteredTool } from './registry.js';
 
 const TOOLS = {
@@ -48,12 +49,59 @@ describe('makeToolRegistry', () => {
 
   it('keeps tool ids and session platforms literal', () => {
     expectTypeOf(registry.ids).toEqualTypeOf<readonly ('claude' | 'tclaude' | 'codebuddy' | 'copilot' | 'kiro')[]>();
-    expectTypeOf(registry.sessionPlatformsOf('claude')).toEqualTypeOf<readonly ('claude-code' | 'tclaude' | 'codebuddy' | 'codebuddy-ide')[]>();
+    expectTypeOf(registry.sessionPlatformsOf('claude')).toEqualTypeOf<readonly ('claude-code' | 'tclaude' | 'codebuddy' | 'codebuddy-ide' | InstancePlatform)[]>();
     expectTypeOf(registry.definitionOf('kiro').command).toEqualTypeOf<'kiro-cli'>();
     // @ts-expect-error a tool the table does not declare has no definition
     registry.definitionOf('acme-claude');
     const tool: string = 'claude';
 
     if (registry.isToolId(tool)) expectTypeOf(tool).toEqualTypeOf<'claude' | 'tclaude' | 'codebuddy' | 'copilot' | 'kiro'>();
+  });
+});
+
+describe('makeToolRegistry with instances', () => {
+  const instances = new Map<string, ToolInstance<keyof typeof TOOLS>>([
+    ['acme-claude', { name: 'acme-claude', extends: 'claude', command: 'acme-claude', home: { dir: '.acme-claude', env: 'ACME_CLAUDE_CONFIG_DIR' } }],
+    ['acme-copilot', { name: 'acme-copilot', extends: 'copilot' }],
+    ['claude', { name: 'claude', extends: 'claude', command: 'claude-wrapper' }],
+    ['acme-buddy', { name: 'acme-buddy', extends: 'codebuddy', command: 'acme-buddy' }],
+  ]);
+  const withInstances = makeToolRegistry(TOOLS, () => instances, (platform) => platform !== 'codebuddy');
+
+  it('resolves a shipped tool, an instance, and an instance that adjusts a shipped tool, to the definition each runs as', () => {
+    expect(withInstances.toolOf('tclaude')).toEqual({ name: 'tclaude', base: 'tclaude' });
+    expect(withInstances.toolOf('acme-claude')).toEqual({ name: 'acme-claude', base: 'claude', instance: instances.get('acme-claude') });
+    expect(withInstances.toolOf('claude')).toEqual({ name: 'claude', base: 'claude', instance: instances.get('claude') });
+    expect(withInstances.toolOf('nobody')).toBeUndefined();
+    expect(withInstances.toolOf('toString')).toBeUndefined();
+  });
+
+  it('keeps the shipped ids only shipped', () => {
+    expect(withInstances.ids).toEqual(registry.ids);
+    expect(withInstances.isToolId('acme-claude')).toBe(false);
+  });
+
+  it('gives an instance its own session platform, credited to it, and none when the tool it extends keeps none', () => {
+    expect(withInstances.sessionPlatformsOf('acme-claude')).toEqual(['acme-claude']);
+    expect(withInstances.sessionPlatformOwner('acme-claude')).toBe('acme-claude');
+    expect(withInstances.sessionPlatformsOf('acme-copilot')).toEqual([]);
+    expect(withInstances.sessionPlatformOwner('acme-copilot')).toBeUndefined();
+  });
+
+  it('gives an instance no session platform when the format of the tool it extends cannot carry its id', () => {
+    expect(withInstances.sessionPlatformsOf('acme-buddy')).toEqual([]);
+    expect(withInstances.instancePlatform('acme-buddy')).toBeUndefined();
+    expect(withInstances.toolOf('acme-buddy')?.base).toBe('codebuddy');
+  });
+
+  it('keeps the shipped platform of a shipped tool an instance adjusts', () => {
+    expect(withInstances.sessionPlatformsOf('claude')).toEqual(['claude-code']);
+    expect(withInstances.sessionPlatformOwner('claude-code')).toBe('claude');
+  });
+
+  it('reads the platform an instance platform is a copy of', () => {
+    expect(withInstances.instancePlatform('acme-claude')).toEqual({ instance: instances.get('acme-claude'), platform: 'claude-code' });
+    expect(withInstances.instancePlatform('claude-code')).toBeUndefined();
+    expect(withInstances.instancePlatform('acme-copilot')).toBeUndefined();
   });
 });

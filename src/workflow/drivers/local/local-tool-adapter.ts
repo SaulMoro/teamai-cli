@@ -48,6 +48,8 @@ export interface LocalToolRun {
   timeoutMs?: number;
   /** Launch the tool in its own mode for editing and running commands without asking (`permissions: unattended`). */
   unattended?: true;
+  /** The command that starts the tool, when an instance of it has its own; the tool's own command otherwise. */
+  command?: string;
 }
 
 /**
@@ -225,13 +227,14 @@ export function createLocalToolAdapter(
   const launch =
     async (tool: LaunchTool, input: LocalToolRun, signal: AbortSignal | undefined, interactive: boolean): Promise<LocalToolResult> => {
       await fs.mkdir(path.dirname(input.resultPath), { recursive: true });
-      const executable = resolveTool(executableOf(tool));
+      const command = input.command ?? executableOf(tool);
+      const executable = resolveTool(command);
 
       if (!executable) {
         return {
           started: false,
           exitCode: 1,
-          failure: { code: 'tool_unavailable', message: `The ${tool} executable is not available on PATH` },
+          failure: { code: 'tool_unavailable', message: `The ${command === executableOf(tool) ? tool : command} executable is not available on PATH` },
         };
       }
 
