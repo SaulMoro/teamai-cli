@@ -888,6 +888,25 @@ describe('teamai-runtime-t3', () => {
       });
     });
 
+    it('keeps a place whose record it cannot read, failing what needs it with the file to look at, rather than answering gone', async () => {
+      const { runtime, handle } = await opened();
+      const record = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', `${encodeURIComponent(handle)}.json`);
+      fs.writeFileSync(record, '{broken');
+      const unreadable = { code: 'journal_unreadable', message: expect.stringContaining(record) };
+
+      runtime.send({ type: 'reattach', handle });
+      expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'alive', handle, ops: [] });
+      runtime.send(prompt(handle, 'op-00000049'));
+      expect(await ended(runtime, 'op-00000049')).toEqual({ op: 'op-00000049', event: 'failed', failure: unreadable });
+      runtime.send({ type: 'collect', handle });
+      expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'collect_failed', handle, failure: unreadable });
+      runtime.send({ type: 'close', handle });
+      expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'close_failed', handle, failure: unreadable });
+
+      expect(fs.readFileSync(record, 'utf8')).toBe('{broken');
+      expect(t3.threads()).toEqual([]);
+    });
+
     it('answers a repeated prompt that ended with the same outcome, before and after its own restart', async () => {
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-00000018'));

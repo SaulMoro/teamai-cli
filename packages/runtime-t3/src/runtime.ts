@@ -9,7 +9,7 @@ import {
 } from '@teamai/runtime-protocol';
 import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
 import { z } from 'zod';
-import type { Journal, LaunchRecord, PlaceRecord, ThreadRecord } from './journal.js';
+import type { Journal, LaunchRecord, PlaceRead, PlaceRecord, ThreadRecord } from './journal.js';
 import { DRIVER_NAMES, DRIVERS, driverOf, sessionSince, toolOf, type ToolId } from './sessions.js';
 import { STEP_MODE_LABELS, T3Error, type Environment, type Launch, type NewThread, type StepMode, type Project, type Provider, type T3, type Waited } from './t3.js';
 
@@ -325,7 +325,12 @@ export function serve(options: ServeOptions): Promise<void> {
   /** Ops teamai cancelled before this process saw their prompt. */
   const cancelledEarly = new Set<OpId>();
 
-  const place = (handle: string): PlaceRecord | undefined => journal.read(handle);
+  /** The place's record, to write to; a record that cannot be read is never written over. */
+  const place = (handle: string): PlaceRecord | undefined => {
+    const read = journal.read(handle);
+
+    return read.kind === 'found' ? read.place : undefined;
+  };
 
   /** `known` with the thread of `op` ended: the runtime saw it stop. */
   const endedIn = (known: PlaceRecord, op: OpId): PlaceRecord => {
@@ -342,6 +347,12 @@ export function serve(options: ServeOptions): Promise<void> {
     const withOp = { ...now, ops: { ...now.ops, [state.op]: state } };
     journal.write(threadEnded ? endedIn(withOp, state.op) : withOp);
   };
+
+  /** What a request that needs a place answers when its record is there but cannot be read: it may hold live threads. */
+  const unreadable = (handle: string, read: Extract<PlaceRead, { kind: 'unreadable' }>): RuntimeFailure => ({
+    code: 'journal_unreadable',
+    message: `Runtime t3 cannot read its record of ${handle}, ${read.file} (${read.why.replace(/\.$/, '')}), so it cannot tell which T3 threads it launched there, and it keeps the place. Stop that run's threads in T3 Code (their titles end with "teamai" and the run id), then delete the file and cancel the run again.`,
+  });
 
   const fail = (op: OpId, failure: RuntimeFailure): void => write({ op, event: 'failed', failure });
 
@@ -453,10 +464,17 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    const known = place(handle);
+    const known = journal.read(handle);
 
-    if (known) {
-      write({ op: request.op, event: 'ready', display: placeDisplay(known, session.environment) });
+    // Opening it afresh would forget the threads it holds.
+    if (known.kind === 'unreadable') {
+      fail(request.op, unreadable(handle, known));
+
+      return;
+    }
+
+    if (known.kind === 'found') {
+      write({ op: request.op, event: 'ready', display: placeDisplay(known.place, session.environment) });
 
       return;
     }
@@ -613,7 +631,8 @@ export function serve(options: ServeOptions): Promise<void> {
 
   const prompt = async (request: PromptRequest): Promise<void> => {
     handleOf.set(request.op, request.handle);
-    const opened = place(request.handle);
+    const read = journal.read(request.handle);
+    const opened = read.kind === 'found' ? read.place : undefined;
     const ended = opened?.ops[request.op];
 
     /** The acceptance shows the step's thread once T3 launched it, so the run details link it during the run. */
@@ -636,7 +655,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
     if (!session || !opened) {
       accept(undefined);
-      fail(request.op, { code: 'runtime_protocol', message: session ? `No open place ${request.handle}.` : 'prompt came before a successful init.' });
+      fail(request.op, read.kind === 'unreadable' ? unreadable(request.handle, read) : { code: 'runtime_protocol', message: session ? `No open place ${request.handle}.` : 'prompt came before a successful init.' });
 
       return;
     }
@@ -881,9 +900,12 @@ export function serve(options: ServeOptions): Promise<void> {
    * first; while one cannot be, the place stays, with a judge's copy, and close fails.
    */
   const close = async (handle: string): Promise<void> => {
-    let known = place(handle);
+    const read = journal.read(handle);
     const s = session;
     const failClose = (failure: RuntimeFailure): void => write({ event: 'close_failed', handle, failure });
+
+    if (read.kind === 'unreadable') return failClose(unreadable(handle, read));
+    let known = read.kind === 'found' ? read.place : undefined;
 
     if (known) {
       // Every launch and thread is journaled with its op.
@@ -959,21 +981,39 @@ export function serve(options: ServeOptions): Promise<void> {
         return prompt(request);
       case 'cancel':
         return cancel(request.op);
-      case 'collect':
+      case 'collect': {
+        const read = journal.read(request.handle);
+
+        if (read.kind === 'unreadable') {
+          write({ event: 'collect_failed', handle: request.handle, failure: unreadable(request.handle, read) });
+
+          return;
+        }
+
         await settleEnded(request.handle);
         write({ event: 'collected', handle: request.handle });
 
         return;
+      }
 
       case 'reattach': {
-        // The journal alone answers: only a place it no longer holds is gone, whether or not T3 Code can be reached.
-        const known = place(request.handle);
+        // The journal alone answers: only a place it no longer holds is gone, whether or not T3 Code can be reached. One
+        // whose record cannot be read is alive with no op it can name, so what needs the record fails, saying why.
+        const read = journal.read(request.handle);
 
-        if (!known) {
+        if (read.kind === 'missing') {
           write({ event: 'gone', handle: request.handle });
 
           return;
         }
+
+        if (read.kind === 'unreadable') {
+          write({ event: 'alive', handle: request.handle, ops: [] });
+
+          return;
+        }
+
+        const known = read.place;
 
         const latest = Object.values(known.threads).sort((a, b) => b.launchedAt - a.launchedAt)[0];
         const display = session && (latest ? threadDisplay(latest, session.environment) : placeDisplay(known, session.environment));
