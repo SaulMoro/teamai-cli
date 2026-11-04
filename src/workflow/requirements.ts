@@ -153,7 +153,7 @@ type BestEffortKey = KeysOf<'bestEffort'>;
  * teamai's own workflows whose command steps do its bookkeeping on this host: they run `teamai` against the run's
  * files, this machine's sessions and the team repo. Pinned by name, so a team copy under another name is not pinned.
  */
-export const HOST_PINNED_WORKFLOWS: ReadonlySet<string> = new Set(['teamai-score', 'teamai-share-session', 'teamai-finished-sessions', 'teamai-benchmark']);
+export const HOST_PINNED_WORKFLOWS: ReadonlySet<string> = new Set(['teamai-score', 'teamai-share-session', 'teamai-share-learnings', 'teamai-finished-sessions', 'teamai-benchmark']);
 
 /**
  * A driver's `can` as the engine reads it: the protocol's keys, and three the local loop sets on the runtimes of a

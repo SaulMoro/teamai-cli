@@ -1301,7 +1301,7 @@ Step "review" needs what no single runtime of driver "sandboxed" offers: runtime
 每个定义都在本机留一个位置，给留在这里的步骤：它的 `local` 条目；没有列出时，teamai 在最后加一个 `host` 条目，所以你的运行时不能叫 `host`。`host` 用 teamai、git 和 shell 运行命令，不需要智能体 CLI，也从不接提示步骤。这个位置接下：
 
 - 命令步骤和 setup，前提是定义里没有运行时运行命令（`"exec": false`）；
-- teamai 自己的工作流 `teamai-score`、`teamai-share-session`、`teamai-finished-sessions` 和 `teamai-benchmark` 的命令步骤，它们在本机规划、检查和写入标签；
+- teamai 自己的工作流 `teamai-score`、`teamai-share-session`、`teamai-share-learnings`、`teamai-finished-sessions` 和 `teamai-benchmark` 的命令步骤，它们在本机规划、检查和写入标签；
 - 带 `deliver: publish` 的步骤，它从这里推送到数据分支。
 
 其他运行时都不接这些步骤。定义里有运行时运行命令时，你自己的命令步骤交给它，而不是 `local`。所以只由外部运行时组成的定义，在没有智能体 CLI 的机器上也能运行并评判每个工作流：
