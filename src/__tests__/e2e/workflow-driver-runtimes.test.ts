@@ -342,6 +342,26 @@ Judge the review.
     expect(runtimeRecord(scoreRun, attemptOf(judge))).toMatchObject({ runtime: 'toy', driver: 'toylater' });
   });
 
+  /** The member's own instance `name` of claude, run by the fake claude, removed once the test ends. */
+  const ownInstance = (name: string): void => {
+    const file = path.join(os.homedir(), '.teamai', 'tools', `${name}.yaml`);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `schemaVersion: v1alpha1\nname: ${name}\nextends: claude\ncommand: claude\nhome: { dir: .${name}-home }\n`);
+    onTestFinished(() => fs.rmSync(file, { force: true }));
+  };
+
+  it('refuses a step on the member\'s own instance of claude on a runtime that execs claude, which would run the instance\'s command unchecked', async () => {
+    // An instance named like the tool it extends adjusts that tool: a step on claude then runs its command.
+    ownInstance('claude');
+    writeDefinition('toyexecs', [{ use: 'toy', options: { state, can: { tools: ['claude'] } } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyexecs'], repo, env());
+
+    const [review] = readRunState(runOf(ran)).steps;
+    expect(review, ran.stderr).toMatchObject({ status: 'failed', failure: { code: 'tool_unsupported', message: expect.stringContaining('runs on claude, a tool instance') } });
+    expect(fs.existsSync(launches)).toBe(false);
+  });
+
   it('refuses an agent\'s start that invoke denies before it opens any runtime of the definition', async () => {
     writeDefinition('toyonly', [{ use: 'toy', options: { state } }]);
 
