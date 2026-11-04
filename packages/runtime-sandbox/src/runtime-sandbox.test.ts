@@ -453,6 +453,8 @@ describe('a judge (a confined prompt) in a container of its own', () => {
 
     expect(reasoning(end).names).toEqual(['CODEX_API_KEY', 'OPENAI_API_KEY', 'HTTPS_PROXY']);
     expect(reasoning(end).argv).toEqual(expect.arrayContaining(['-c', 'openai_base_url="https://llm.acme.internal:8443/v1"']));
+    // Claude's tool names would send Codex looking for tools it does not have.
+    expect(JSON.stringify(reasoning(end).argv)).not.toMatch(/\b(Read|Grep|Glob)\b/);
     // The base URL reaches Codex from the container's env, never in teamai's argv.
     expect(JSON.stringify(engine.calls())).not.toContain('llm.acme.internal:8443/v1');
     expect(JSON.stringify(engine.calls())).not.toContain('judge-key-2');
