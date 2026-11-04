@@ -12,7 +12,7 @@ import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, rerootToolPaths, ToolPathsSchema,
 import { writeJsonAtomic } from './utils/fs.js';
 import { getUserHome } from './utils/home.js';
 import { log } from './utils/logger.js';
-import { warnOnce } from './utils/warn-once.js';
+import { errorOnce, warnOnce } from './utils/warn-once.js';
 import { parseYaml } from './utils/yaml.js';
 
 // ─── Tool instances ──────────────────────────────────────
@@ -146,7 +146,7 @@ async function readInstances(files: readonly string[], source: InstanceSource, l
     if (parsed === undefined) return [];
 
     if (!parsed.ok) {
-      log.error(parsed.problem);
+      errorOnce(parsed.problem);
 
       return [];
     }
