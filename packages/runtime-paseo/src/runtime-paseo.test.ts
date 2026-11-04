@@ -120,6 +120,30 @@ describe('teamai-runtime-paseo', () => {
     expect(create).toHaveProperty('env', { TEAMAI_RUN_DIR: path.join(dir, 'run') });
   });
 
+  it('starts a new agent for a step that asks to resume a session, and says it did not resume it', async () => {
+    behave({ output: { verdict: 'approve' } });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+
+    runtime.send(promptRequest(handle, 'op-0000000b', { resume: 'session-of-an-earlier-pass' }));
+
+    const end = await runtime.next(isEnd('op-0000000b'));
+    const [create] = received();
+    expect(end).toEqual({ op: 'op-0000000b', event: 'finished', session: { tool: 'claude', id: `fake-session-${String(create?.agentId)}` }, result: { output: { verdict: 'approve' } } });
+    expect(JSON.stringify(create)).not.toContain('session-of-an-earlier-pass');
+  });
+
+  it('offers a judge for the tools the daemon signs in, though teamai gives it no credential or login', async () => {
+    behave({ models: { claude: ['claude-opus-5-5'] } });
+    const runtime = start();
+
+    // teamai refuses a credential or a login for a runtime that launches agents its own way, so this is what it sends.
+    runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { url: daemon.url }, credentials: { env: [], logins: [] } });
+
+    expect(await runtime.next(isInit)).toMatchObject({ ok: true, confinedPrompt: true, can: { tools: ['claude'], confined: [{ level: 'best-effort', access: 'read', tools: ['claude'] }] } });
+  });
+
   it('fails a step whose model the daemon lacks as model_unavailable, naming what it offers, and creates no agent', async () => {
     behave({ models: { claude: ['claude-sonnet-5-5'] } });
     const runtime = start();
