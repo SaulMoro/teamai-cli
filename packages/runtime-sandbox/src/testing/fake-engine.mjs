@@ -10,6 +10,7 @@
 //   FAKE_ENGINE_IMAGES  JSON: image name -> the directory its tools are in (the image's PATH)
 //   FAKE_ENGINE_NAME    docker or podman, which it answers as
 //   FAKE_ENGINE_LOG     optional: where argv lines go
+//   FAKE_ENGINE_VERSION optional: the server version `info` reports, 27.3.1 when unset
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -127,9 +128,15 @@ if (command === '--version' || command === 'version') {
 if (fs.existsSync(path.join(state, 'down'))) fail(`Cannot connect to the ${engine === 'podman' ? 'Podman' : 'Docker'} daemon. Is the daemon running?`);
 
 switch (command) {
-  case 'info':
-    process.stdout.write('fake\n');
+  case 'info': {
+    // Each engine's own template field for its version.
+    const format = rest[rest.indexOf('--format') + 1] ?? '';
+
+    if (format.includes(engine === 'podman' ? 'ServerVersion' : 'Version.Version')) fail(`Error: template: info:1:2: executing "info" at <${format}>: can't evaluate field`, 125);
+    process.stdout.write(`${process.env.FAKE_ENGINE_VERSION ?? (engine === 'podman' ? '5.2.3' : '27.3.1')}\n`);
     break;
+  }
+
   case 'image': {
     const [, , , image] = rest;
 
@@ -148,7 +155,7 @@ switch (command) {
   }
 
   case 'run': {
-    const { found, rest: positional } = options(rest, ['--name', '--label', '--user', '--userns', '--env', '-v', '--entrypoint'], ['-d', '--rm']);
+    const { found, rest: positional } = options(rest, ['--name', '--label', '--user', '--userns', '--env', '-v', '--entrypoint', '--network', '--cap-drop', '--security-opt'], ['-d', '--rm']);
     const [image, ...entry] = positional;
 
     if (!pulled(image)) fail(`Unable to find image '${image}' locally`, 125);
@@ -163,6 +170,9 @@ switch (command) {
     const name = one(found, '--name');
 
     if (name && readContainer(name)) fail(`Conflict. The container name "/${name}" is already in use.`, 125);
+    const network = one(found, '--network');
+
+    if (network && !fs.existsSync(path.join(state, 'networks', network))) fail(`Error response from daemon: network ${network} not found`, 125);
     const id = crypto.randomBytes(16).toString('hex');
 
     writeContainer({
@@ -233,6 +243,37 @@ switch (command) {
     killProcesses(container);
     fs.rmSync(path.join(containers, container.id), { recursive: true, force: true });
     process.stdout.write(`${positional[0]}\n`);
+    break;
+  }
+
+  case 'network': {
+    // Networks are names only: a container's processes run on the host either way.
+    const [action, ...more] = rest;
+    const networks = path.join(state, 'networks');
+    fs.mkdirSync(networks, { recursive: true });
+
+    if (action === 'create') {
+      const { rest: [name] } = options(more, ['--label', '-o'], ['--internal']);
+
+      if (fs.existsSync(path.join(networks, name))) fail(`Error response from daemon: network with name ${name} already exists`);
+      fs.writeFileSync(path.join(networks, name), '');
+      process.stdout.write(`${crypto.randomBytes(16).toString('hex')}\n`);
+    } else if (action === 'connect') {
+      const [name, ref] = more;
+
+      if (!fs.existsSync(path.join(networks, name))) fail(`Error response from daemon: network ${name} not found`);
+
+      if (!readContainer(ref)) fail(`Error response from daemon: No such container: ${ref}`);
+    } else if (action === 'rm') {
+      const [name] = more;
+
+      if (!fs.existsSync(path.join(networks, name))) fail(`Error response from daemon: network ${name} not found`);
+      fs.rmSync(path.join(networks, name));
+      process.stdout.write(`${name}\n`);
+    } else {
+      fail(`fake engine: unsupported network command ${action}`, 125);
+    }
+
     break;
   }
 

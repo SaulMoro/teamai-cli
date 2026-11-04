@@ -2,8 +2,9 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ContainerEngine } from '../options.js';
-import type { Can, PlaceView, RuntimeFailure } from '@teamai/runtime-protocol';
-import { sandboxName, type ExecEnd, type Provider } from '../provider.js';
+import type { Can, ConfinedOffer, PlaceView, RuntimeFailure } from '@teamai/runtime-protocol';
+import { FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
+import { sandboxName, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 
 // ─── docker and podman ───────────────────────────────────
 //
@@ -15,6 +16,14 @@ import { sandboxName, type ExecEnd, type Provider } from '../provider.js';
 //      -v <worktree>:<worktree>:rw -v <run dir>:<run dir>:rw -v <git path>:<git path>:ro …   every view path at its host path (,z on SELinux)
 //      --entrypoint /bin/sh <image> -c <idle>
 //    docker exec -w <cwd> -e NAME … <container> env -u WITHHELD … -- <argv>
+//
+//  A judge gets a container of its own, with no route out but a filter that lets through only its model provider:
+//
+//    docker network create --internal -o com.docker.network.bridge.inhibit_ipv4=true <name>-net
+//    docker run -d --name <name>-proxy … --entrypoint node <image> -e <filter> 3128 api.anthropic.com:443
+//    docker network connect <name>-net <name>-proxy        the filter alone is on both networks
+//    docker run -d --name <name> … --network <name>-net --cap-drop ALL --security-opt no-new-privileges
+//      --env HTTPS_PROXY=http://<name>-proxy:3128 -v <dir>:<dir>:ro --entrypoint /bin/sh <image> -c <idle>
 //
 //  Values never appear in an argv: `-e NAME` takes each from the engine CLI's own environment. Only the names an exec
 //  is given cross into the container, so nothing else of teamai's environment does. The container's processes run one
@@ -34,6 +43,23 @@ const IDLE = `mkdir -p "$HOME"; trap 'exit 0' TERM INT; while :; do sleep 3600 &
 
 /** The engine CLI's own settings: an exec's names never replace them, so a step cannot point the CLI at another daemon. */
 const ENGINE_SETTINGS = ['DOCKER_HOST', 'DOCKER_CONTEXT', 'DOCKER_CONFIG', 'DOCKER_CERT_PATH', 'DOCKER_TLS_VERIFY', 'CONTAINER_HOST', 'CONTAINER_CONNECTION', 'CONTAINERS_CONF'];
+
+/** What a judge's container and its filter run with: no capability, and no way to gain one. */
+const LOCKED = ['--cap-drop', 'ALL', '--security-opt', 'no-new-privileges'];
+
+const networkOf = (key: PlaceKey): string => `${sandboxName(key)}-net`;
+
+const filterOf = (key: PlaceKey): string => `${sandboxName(key)}-proxy`;
+
+/**
+ * Whether a docker of `version` keeps DNS inside an internal network: before 26.0.0, 25.0.5 and 23.0.11 it forwarded a
+ * container's lookups out of it (CVE-2024-29018), which a judge could use to send what it read.
+ */
+function dnsStaysInside(version: string): boolean {
+  const [major = 0, minor = 0, patch = 0] = version.trim().split(/[.+-]/).slice(0, 3).map((part) => Number.parseInt(part, 10) || 0);
+
+  return major >= 26 || (major === 25 && (minor > 0 || patch >= 5)) || (major === 23 && (minor > 0 || patch >= 11));
+}
 
 /** Seconds a stop waits before the engine kills the container. */
 const STOP_GRACE = '10';
@@ -93,7 +119,9 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
     const label = host.selinux ? ',z' : '';
 
     for (const [mounted, mode] of [...writable.map((at) => [at, 'rw'] as const), ...view.readonly.map((at) => [at, 'ro'] as const)]) {
-      if (/[:,]/.test(mounted)) return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} cannot mount ${mounted}: a path with ":" or "," cannot be mounted with -v. Move the checkout to a path without them.` } };
+      const refused = unmountable(mounted);
+
+      if (refused) return refused;
 
       // A writable path the engine would create is created here first, so the member owns it, not root.
       if (mode === 'rw') fs.mkdirSync(mounted, { recursive: true });
@@ -103,6 +131,21 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
     return { ok: true, args };
   };
 
+  const user = (): string[] => (engine === 'podman' ? ['--userns', 'keep-id'] : host.user ? ['--user', `${host.user.uid}:${host.user.gid}`] : []);
+
+  /** Whether the engine said the thing to create exists already, or the thing to remove does not. */
+  const said = (ran: Ran, pattern: RegExp): boolean => ran.kind === 'ran' && pattern.test(ran.stderr);
+
+  const sandboxFailed = (message: string) => ({ ok: false as const, failure: { code: 'sandbox_failed', message } });
+
+  /** A path the engine's `-v` syntax cannot carry. */
+  const unmountable = (mounted: string) => (/[:,]/.test(mounted)
+    ? sandboxFailed(`${engine} cannot mount ${mounted}: a path with ":" or "," cannot be mounted with -v. Move the checkout to a path without them.`)
+    : undefined);
+
+  /** What the engine said when it could not do something: its last line, or why it could not start. */
+  const why = (ran: Ran): string => (ran.kind === 'unstartable' ? ran.message : lastLine(ran));
+
   const find: Provider['find'] = async (key) => {
     const listed = await cli(['ps', '-a', '-q', '--filter', `label=teamai.run=${key.run}`, '--filter', `label=teamai.attempt=${key.attempt}`]);
 
@@ -111,7 +154,7 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
 
   return {
     async offer() {
-      const info = await cli(['info', '--format', '{{.ServerVersion}}']);
+      const info = await cli(['info', '--format', engine === 'podman' ? '{{.Version.Version}}' : '{{.ServerVersion}}']);
 
       if (info.kind === 'unstartable') return unavailable(info.message);
 
@@ -126,13 +169,30 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
         }
       }
 
-      const probe = await cli(['run', '--rm', '--entrypoint', '/bin/sh', image, '-c', `for t in ${LAUNCHABLE.join(' ')}; do command -v "$t" >/dev/null 2>&1 && echo "$t"; done; exit 0`]);
+      const probe = await cli(['run', '--rm', '--entrypoint', '/bin/sh', image, '-c', `for t in ${[...LAUNCHABLE, 'node'].join(' ')}; do command -v "$t" >/dev/null 2>&1 && echo "$t"; done; exit 0`]);
 
       if (probe.kind !== 'ran' || probe.code !== 0) return unavailable(`${engine} could not start a container from ${image} (${lastLine(probe)}). Check that it runs /bin/sh, and start again.`);
-      const tools = LAUNCHABLE.filter((tool) => probe.stdout.split('\n').map((line) => line.trim()).includes(tool));
+      const found = new Set(probe.stdout.split('\n').map((line) => line.trim()));
+      const tools = LAUNCHABLE.filter((tool) => found.has(tool));
+      // A judge's network filter runs on the image's node, so an image without it judges nothing, nor a docker that lets
+      // DNS out of the judge's network. Podman judges nothing: its rootless network cannot connect the filter to it.
+      const confined: ConfinedOffer[] = [];
+
+      const judges = found.has('node') && engine === 'docker' && dnsStaysInside(info.stdout) ? tools : [];
+
+      for (const tool of judges) {
+        const access = judgeTool(tool)?.access;
+
+        if (access === undefined) continue;
+        const offer = confined.find((existing) => existing.access === access);
+
+        if (offer) offer.tools.push(tool);
+        else confined.push({ level: 'verified', access, tools: [tool] });
+      }
 
       const can: Can = {
         workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', env: true, tokens: true, max_turns: true, setup: true, tools, end_turn: true, unattended: true, role: true,
+        ...(confined.length > 0 && { confined }),
       };
 
       return { ok: true, can };
@@ -144,10 +204,9 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
       const mounted = mounts(view);
 
       if (!mounted.ok) return mounted;
-      const user = engine === 'podman' ? ['--userns', 'keep-id'] : host.user ? ['--user', `${host.user.uid}:${host.user.gid}`] : [];
 
       const created = await cli([
-        'run', '-d', '--name', sandboxName(key), '--label', `teamai.run=${key.run}`, '--label', `teamai.attempt=${key.attempt}`, ...user,
+        'run', '-d', '--name', sandboxName(key), '--label', `teamai.run=${key.run}`, '--label', `teamai.attempt=${key.attempt}`, ...user(),
         '--env', `HOME=${CONTAINER_HOME}`, ...mounted.args, '--entrypoint', '/bin/sh', image, '-c', IDLE,
       ]);
 
@@ -158,6 +217,59 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
       if (existing !== undefined) return { ok: true, id: existing };
 
       return { ok: false, failure: { code: 'sandbox_failed', message: created.kind === 'unstartable' ? created.message : `${engine} could not create the container for attempt ${key.attempt} from ${image}: ${lastLine(created)}` } };
+    },
+
+    async createJudge(key, { dir, spellings, hosts }) {
+      const existing = await find(key);
+
+      if (existing !== undefined) return { ok: true, id: existing };
+
+      for (const mounted of [dir, ...spellings]) {
+        const refused = unmountable(mounted);
+
+        if (refused) return refused;
+      }
+
+      const labels = ['--label', `teamai.run=${key.run}`, '--label', `teamai.attempt=${key.attempt}`];
+      // No address of the host on the bridge either, so the host's own services are out of reach too.
+      const network = await cli(['network', 'create', '--internal', '-o', 'com.docker.network.bridge.inhibit_ipv4=true', ...labels, networkOf(key)]);
+
+      if (!(network.kind === 'ran' && (network.code === 0 || said(network, /already exists/i)))) return sandboxFailed(`${engine} could not create the judge network ${networkOf(key)}: ${why(network)}`);
+      // The filter is labelled by the run only, so the attempt's labels find its judge alone.
+      const filter = await cli(['run', '-d', '--name', filterOf(key), '--label', `teamai.run=${key.run}`, '--label', `teamai.judge=${key.attempt}`, ...user(), ...LOCKED, '--entrypoint', 'node', image, '-e', FILTER_SCRIPT, String(FILTER_PORT), ...hosts]);
+
+      if (!(filter.kind === 'ran' && (filter.code === 0 || said(filter, /already in use/i)))) return sandboxFailed(`${engine} could not start the judge's network filter ${filterOf(key)}: ${why(filter)}`);
+      const joined = await cli(['network', 'connect', networkOf(key), filterOf(key)]);
+
+      if (!(joined.kind === 'ran' && (joined.code === 0 || said(joined, /already exists|already attached/i)))) return sandboxFailed(`${engine} could not connect the network filter to ${networkOf(key)}: ${why(joined)}`);
+      const proxy = `http://${filterOf(key)}:${FILTER_PORT}`;
+
+      const created = await cli([
+        'run', '-d', '--name', sandboxName(key), ...labels, ...user(), '--network', networkOf(key), ...LOCKED,
+        '--env', `HOME=${CONTAINER_HOME}`, '--env', `HTTPS_PROXY=${proxy}`, '--env', `HTTP_PROXY=${proxy}`, '--env', 'NO_PROXY=',
+        ...[dir, ...spellings].flatMap((at) => ['-v', `${dir}:${at}:ro${host.selinux ? ',z' : ''}`]), '--entrypoint', '/bin/sh', image, '-c', IDLE,
+      ]);
+
+      if (created.kind === 'ran' && created.code === 0) return { ok: true, id: created.stdout.trim() };
+      const raced = await find(key);
+
+      return raced === undefined ? sandboxFailed(`${engine} could not create the judge container for attempt ${key.attempt} from ${image}: ${why(created)}`) : { ok: true, id: raced };
+    },
+
+    async releaseJudge(key) {
+      const filter = await cli(['rm', '--force', filterOf(key)]);
+
+      if (!(filter.kind === 'ran' && (filter.code === 0 || said(filter, /no such container/i)))) {
+        return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove the judge's network filter ${filterOf(key)}: ${lastLine(filter)}. Remove it with \`${engine} rm --force ${filterOf(key)}\`.` } };
+      }
+
+      const network = await cli(['network', 'rm', networkOf(key)]);
+
+      if (!(network.kind === 'ran' && (network.code === 0 || said(network, /not found|no such network/i)))) {
+        return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not remove the judge network ${networkOf(key)}: ${lastLine(network)}. Remove it with \`${engine} network rm ${networkOf(key)}\`.` } };
+      }
+
+      return { ok: true };
     },
 
     async exec(id, spec, onOutput): Promise<ExecEnd> {
