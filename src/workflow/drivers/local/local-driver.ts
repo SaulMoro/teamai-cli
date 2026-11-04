@@ -34,6 +34,7 @@ import { abandonPlace, cloneDelivery, cloneHead, placeLeaseOf, placeOf, placeRoo
 import { commandEnd, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
 import { memberTools, type MemberTool } from '../../../tool-launch/call.js';
 import { startGroupedCommand, stopRecordedGroup, type CommandExit, type GroupedCommand } from '../../../tool-launch/process-stop.js';
+import { acceptToolCommand } from '../../../tool-instances.js';
 import { executableOf, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, launchTargetOf, type LaunchTarget, type LaunchTool } from '../../../tool-launch/tools.js';
 import { confinedOffers, type ConfinedOffer } from '../../../tool-launch/confined.js';
 import { AttemptResult } from '../../attempt-result.js';
@@ -434,6 +435,14 @@ async function promptReport(
   // The name the step runs its tool by, an instance's own: its report, delivery and sessions are credited to it.
   const { target } = choice;
   const launched = target.name;
+
+  // A team instance's own command runs only once a person accepted it here.
+  if (target.instance) {
+    const accepted = await acceptToolCommand(target.instance, { canAsk: personAnswers(mode) });
+
+    if (!accepted.ok) return giveUp({ code: accepted.code, message: accepted.message }, launched);
+  }
+
   // A worktree has its own pull record, so the tool launched there is observed and bound as that checkout. A clone has
   // its own install, never the member's config, and none when its place installs no team.
   const contract = lease.workspace;

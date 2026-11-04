@@ -1,4 +1,5 @@
-import type { InstancePlatform, ToolInstance } from '@teamai/tool-core/instance';
+import type { InstancePlatform } from '@teamai/tool-core/instance';
+import type { ResolvedToolInstance } from './tool-instances.js';
 import { makeToolRegistry, type ResolvedTool } from '@teamai/tool-core/registry';
 import type { McpFormat } from '@teamai/tool-core/definition';
 import type { RuleFormatId } from '@teamai/tool-core/definition';
@@ -22,13 +23,13 @@ function hostsInstances(platform: SessionPlatform): boolean {
 }
 
 /** The instances of every team repo and member's directory loaded in this process, by name. */
-let instanceTable: ReadonlyMap<string, ToolInstance<ToolId>> = new Map();
+let instanceTable: ReadonlyMap<string, ResolvedToolInstance> = new Map();
 
 /**
  * Makes `instances` the instances every lookup of a tool name sees: the ones this process resolved from the team
  * repos and the member's directory it loaded (`tool-instances.ts`, the one writer).
  */
-export function useToolInstances(instances: ReadonlyMap<string, ToolInstance<ToolId>>): void {
+export function useToolInstances(instances: ReadonlyMap<string, ResolvedToolInstance>): void {
   instanceTable = instances;
 }
 
@@ -38,10 +39,10 @@ export function instanceNames(): string[] {
 }
 
 /** The tool `name` names here: an instance, with the shipped tool it extends, or a shipped tool; undefined for neither. */
-export const toolOf: (name: string) => ResolvedTool<ToolId> | undefined = REGISTRY.toolOf;
+export const toolOf: (name: string) => ResolvedTool<ToolId, ResolvedToolInstance> | undefined = REGISTRY.toolOf;
 
 /** The instance whose own session platform `platform` is, and the shipped platform its sessions keep the format of. */
-export const instancePlatform: (platform: string) => { instance: ToolInstance<ToolId>; platform: SessionPlatform } | undefined = REGISTRY.instancePlatform;
+export const instancePlatform: (platform: string) => { instance: ResolvedToolInstance; platform: SessionPlatform } | undefined = REGISTRY.instancePlatform;
 
 /** Every built-in tool, in `TOOLS` order. */
 export const TOOL_ORDER: readonly ToolId[] = REGISTRY.ids;

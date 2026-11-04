@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { createInterface } from 'node:readline/promises';
 import { z } from 'zod';
 import { INSTANCE_KEYS, type ToolInstance, type ToolInstanceHome } from '@teamai/tool-core/instance';
 import { isSafeNamespaceSegment } from './manifest-schema.js';
@@ -9,6 +10,7 @@ import { isSessionPlatform } from './session-flow/adapters/platform-facts.js';
 import { isToolId, TOOL_ORDER, useToolInstances } from './tool-registry.js';
 import type { ToolId } from './tools.js';
 import { DEFAULT_TOOL_PATHS, getTeamaiHomeDir, rerootToolPaths, ToolPathsSchema, type TeamaiConfig } from './types.js';
+import { writeJsonAtomic } from './utils/fs.js';
 import { getUserHome } from './utils/home.js';
 import { log } from './utils/logger.js';
 import { warnOnce } from './utils/warn-once.js';
@@ -32,6 +34,8 @@ export interface ResolvedToolInstance extends ToolInstance<ToolId> {
   readonly source: InstanceSource;
   /** The file it was read from, for messages and acceptance. */
   readonly file: string;
+  /** Where a note names it: its path in the team repo, such as tools/acme-claude.yaml, or a member's file. */
+  readonly location: string;
   /** The sha256 of that file: a person accepts a team instance's command at this content. */
   readonly revision: string;
 }
@@ -67,7 +71,7 @@ function sha256(text: string): string {
 }
 
 /** Parses the instance `text` of `file`, which is named after it, or says why teamai does not use it. */
-export function parseToolInstance(file: string, text: string, source: InstanceSource): { ok: true; instance: ResolvedToolInstance } | RefusedInstance {
+export function parseToolInstance(file: string, text: string, source: InstanceSource, location = file): { ok: true; instance: ResolvedToolInstance } | RefusedInstance {
   let raw: unknown;
 
   try {
@@ -105,7 +109,7 @@ export function parseToolInstance(file: string, text: string, source: InstanceSo
 
   if (!isToolId(fields.name) && isSessionPlatform(fields.name)) return refused(file, `"${fields.name}" is the name of a session platform teamai ships`);
 
-  return { ok: true, instance: { ...fields, extends: base, source, file, revision: sha256(text) } };
+  return { ok: true, instance: { ...fields, extends: base, source, file, location, revision: sha256(text) } };
 }
 
 async function readText(file: string): Promise<string | undefined> {
@@ -131,11 +135,11 @@ async function namespaceDirs(dir: string): Promise<string[]> {
 }
 
 /** Each instance in `files`, parsed; one that does not parse is logged and left out. */
-async function readInstances(files: readonly string[], source: InstanceSource): Promise<ResolvedToolInstance[]> {
+async function readInstances(files: readonly string[], source: InstanceSource, locationOf: (file: string) => string = (file) => file): Promise<ResolvedToolInstance[]> {
   const read = await Promise.all(files.map(async (file) => {
     const text = await readText(file);
 
-    return text === undefined ? undefined : parseToolInstance(file, text, source);
+    return text === undefined ? undefined : parseToolInstance(file, text, source, locationOf(file));
   }));
 
   return read.flatMap((parsed) => {
@@ -161,7 +165,7 @@ export async function teamToolInstances(repoPath: string): Promise<ResolvedToolI
   const places: Array<{ namespace: string | null; dir: string }> = [{ namespace: null, dir: root }, ...namespaces.map((namespace) => ({ namespace, dir: path.join(root, namespace) }))];
 
   const candidates = (await Promise.all(places.map(async ({ namespace, dir }) => {
-    const instances = await readInstances((await yamlFiles(dir)).map((name) => path.join(dir, name)), 'team');
+    const instances = await readInstances((await yamlFiles(dir)).map((name) => path.join(dir, name)), 'team', (file) => path.relative(repoPath, file).split(path.sep).join('/'));
 
     return instances.map((instance): NamespaceCandidate<ResolvedToolInstance> => ({ name: instance.name, source: path.relative(repoPath, instance.file), namespace, value: instance }));
   }))).flat();
@@ -250,6 +254,13 @@ function instancePaths(instance: ResolvedToolInstance, toolPaths: TeamaiConfig['
   return instance.home ? rerootToolPaths(extended, instance.home.dir) : extended;
 }
 
+/** The paths `instance` replaces with its own: those of the tool it adjusts, or of the tool it extends, moved to its home. */
+export function defaultPathsOf(instance: ResolvedToolInstance): z.infer<typeof ToolPathsSchema> {
+  const shipped = DEFAULT_TOOL_PATHS[instance.extends];
+
+  return instance.home && instance.name !== instance.extends ? rerootToolPaths(shipped, instance.home.dir) : shipped;
+}
+
 /**
  * `config`, the team config of the repo at `repoPath`, with the instances of that repo and the member's own read,
  * every lookup of a tool name seeing them, and their tool paths in `toolPaths`. A member's instance replaces the team's.
@@ -274,4 +285,79 @@ export async function withToolInstances(repoPath: string, config: TeamaiConfig):
   }
 
   return { ...config, toolPaths };
+}
+
+// ─── Accepting a team instance's command ─────────────────
+//
+//  A team instance that sets `command` runs a program a teammate named on the member's machine. Before its first run
+//  with a given file content, a person accepts that content: an attended run asks, and an unattended one refuses.
+//  A member's own instance, and one that sets only home or paths, need no acceptance.
+//
+
+const TrustFileSchema = z.object({ accepted: z.array(z.object({ name: z.string(), revision: z.string(), acceptedAt: z.string() })) });
+
+function trustFile(): string {
+  return path.join(getTeamaiHomeDir(), 'trust', 'tools.json');
+}
+
+async function readTrust(): Promise<z.infer<typeof TrustFileSchema>> {
+  try {
+    return TrustFileSchema.parse(JSON.parse(await fs.readFile(trustFile(), 'utf8')));
+  } catch {
+    return { accepted: [] };
+  }
+}
+
+/** Asks the person at this terminal; anything but yes declines. */
+async function askAtTerminal(question: string): Promise<boolean> {
+  const terminal = createInterface({ input: process.stdin, output: process.stderr });
+
+  try {
+    return /^y(es)?$/i.test((await terminal.question(question)).trim());
+  } finally {
+    terminal.close();
+  }
+}
+
+/** Why a team instance's command did not run. */
+export interface UnacceptedCommand {
+  readonly ok: false;
+  readonly code: 'tool_not_accepted';
+  readonly message: string;
+}
+
+/**
+ * Whether `instance`'s command may run here. Only a team instance that sets one needs it: a person must have accepted
+ * its file's content on this machine. `canAsk`, a person at this terminal in an attended run, asks and records a yes;
+ * otherwise an unaccepted content is refused, naming what to run.
+ */
+export async function acceptToolCommand(
+  instance: ResolvedToolInstance,
+  { canAsk, ask = askAtTerminal }: { canAsk: boolean; ask?: (question: string) => Promise<boolean> },
+): Promise<{ ok: true } | UnacceptedCommand> {
+  if (instance.source !== 'team' || instance.command === undefined) return { ok: true };
+  const trust = await readTrust();
+
+  if (trust.accepted.some((entry) => entry.name === instance.name && entry.revision === instance.revision)) return { ok: true };
+  const short = instance.revision.slice(0, 12);
+
+  if (canAsk) {
+    const question = `Tool "${instance.name}" comes from the team repo (${instance.file}, content ${short}), which you have not accepted on this machine. `
+      + `It runs ${instance.command} as you, with your files, in place of ${instance.extends}. Review the file before you accept it.\nRun it? [y/N] `;
+
+    if (await ask(question)) {
+      await writeJsonAtomic(trustFile(), { accepted: [...trust.accepted.filter((entry) => entry.name !== instance.name), { name: instance.name, revision: instance.revision, acceptedAt: new Date().toISOString() }] });
+
+      return { ok: true };
+    }
+
+    return { ok: false, code: 'tool_not_accepted', message: `Tool "${instance.name}" (content ${short}) was not accepted, so ${instance.command} did not run.` };
+  }
+
+  return {
+    ok: false,
+    code: 'tool_not_accepted',
+    message: `Tool "${instance.name}" comes from the team repo (${instance.file}, content ${short}) and runs ${instance.command}, which no one has accepted on this machine, and an unattended run does not ask. `
+      + 'Run the same command once in a terminal, attended, to review and accept it, then run it unattended again.',
+  };
 }

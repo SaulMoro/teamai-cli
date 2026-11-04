@@ -1,5 +1,5 @@
-import type { ToolInstance } from '@teamai/tool-core/instance';
 import { descriptorOf, toolOf, type DescriptorOf } from '../tool-registry.js';
+import type { ResolvedToolInstance } from '../tool-instances.js';
 import type { ToolId } from '../tools.js';
 import { LAUNCH_ADAPTERS } from './adapters.js';
 import type { ConfinedLaunch, LaunchAdapter, StepLaunch } from '@teamai/tool-core/launch';
@@ -63,7 +63,7 @@ export function isLaunchTool(value: string): value is LaunchTool {
 export interface LaunchTarget {
   readonly name: string;
   readonly tool: LaunchTool;
-  readonly instance?: ToolInstance<ToolId>;
+  readonly instance?: ResolvedToolInstance;
 }
 
 /** The launch `name` names, or undefined when it names no tool, or one that runs no workflow step. */
