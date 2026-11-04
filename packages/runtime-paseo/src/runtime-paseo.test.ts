@@ -136,7 +136,16 @@ describe('teamai-runtime-paseo', () => {
     behave({ models: { codex: ['gpt-6.1-sol'] } });
 
     expect(await ready(start({ PATH: `${bin}${path.delimiter}${String(process.env.PATH)}` }))).toMatchObject({
-      ok: false, error: { code: 'tool_unavailable', message: expect.stringMatching(/ codex: `\/\S+\/host-bin\/codex login status` did not answer \(.+\)\.$/) },
+      ok: false, error: { code: 'tool_unavailable', message: expect.stringMatching(/ codex: `\/\S+\/host-bin\/codex login status` did not answer \(.+\); run it on the daemon's host to see why\.$/) },
+    });
+  });
+
+  it('says it cannot tell, rather than signed out, when `codex login status` gives neither answer', async () => {
+    behave({ models: { codex: ['gpt-6.1-sol'] }, codex_login: 'unknown' });
+
+    expect(await ready(start())).toMatchObject({
+      ok: false,
+      error: { code: 'tool_unavailable', message: expect.stringMatching(/ codex: `\/\S+\/host-bin\/codex login status` gave no sign-in answer \(exit 2: error: unrecognized subcommand: status\); run it on the daemon's host to see why\.$/) },
     });
   });
 
@@ -149,7 +158,7 @@ describe('teamai-runtime-paseo', () => {
       type: 'init', ok: false,
       error: {
         code: 'tool_unavailable',
-        message: `The Paseo daemon at ${url} runs no tool teamai-runtime-paseo can use. codex: teamai checks Codex's sign-in only on a daemon at a loopback address, and ${url} is not one, so its steps run on the next runtime of the definition.`,
+        message: `The Paseo daemon at ${url} runs no tool teamai-runtime-paseo can use. codex: teamai checks Codex's sign-in only on a daemon at a loopback address, and ${url} is not one.`,
       },
     });
   });
@@ -158,7 +167,7 @@ describe('teamai-runtime-paseo', () => {
     behave({ models: { claude: ['claude-opus-5-5'] }, sign_in: { claude: 'unreported' } });
 
     expect(await ready(start())).toMatchObject({
-      ok: false, error: { code: 'tool_unavailable', message: expect.stringContaining('claude: Paseo does not report whether it is signed in, so its steps run on the next runtime of the definition.') },
+      ok: false, error: { code: 'tool_unavailable', message: expect.stringContaining('claude: Paseo does not report whether it is signed in; run `paseo provider diagnostic claude` on the daemon\'s host to see its Auth line.') },
     });
   });
 
@@ -210,19 +219,11 @@ describe('teamai-runtime-paseo', () => {
     }]);
   });
 
-  it.each([
-    ['a step', false],
-    ['a judge', true],
-  ])('refuses %s on a tool it did not offer, saying why, and creates no agent', async (_, isJudge) => {
+  it('refuses a step on a tool it did not offer, saying why, and creates no agent', async () => {
     behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'] }, codex_login: 'signed_out' });
     const runtime = start();
     await ready(runtime);
-    runtime.send({ type: 'open', op: 'op-0000000a', run: RUN, attempt: ATTEMPT, credentials: {}, ...(!isJudge && { view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'run'), toolHome: {} } }) });
-    const accepted = await runtime.next(isOp('op-0000000a', 'accepted'));
-    const handle = 'handle' in accepted ? String(accepted.handle) : '';
-    const request = promptRequest(handle, 'op-0000000b', { tool: 'codex', model: undefined });
-
-    runtime.send(isJudge ? { ...request, env: {}, confined: { dir: worktree, level: 'best-effort', access: 'read', schema: { type: 'object' } } } : request);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b', { tool: 'codex', model: undefined }));
 
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({
       event: 'failed', failure: { code: 'tool_unavailable', message: 'teamai-runtime-paseo did not offer codex: signed out; run `codex login` on the daemon\'s host.' },
@@ -583,6 +584,18 @@ describe('teamai-runtime-paseo', () => {
 
       expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'opencode' }, result: { output: { label: 'fail' } }, confined: { level: 'best-effort', access: 'read' } });
       expect(received()).toMatchObject([{ config: { provider: 'opencode', modeId: 'plan', cwd: evidence } }]);
+    });
+
+    it('refuses a judge on a tool it did not offer, saying why, and creates no agent', async () => {
+      behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'] }, codex_login: 'signed_out' });
+      const runtime = start();
+      await ready(runtime);
+      runtime.send(confinedRequest(await openedConfined(runtime), 'op-0000000b', {}, { tool: 'codex', model: undefined }));
+
+      expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({
+        event: 'failed', failure: { code: 'tool_unavailable', message: 'teamai-runtime-paseo did not offer codex: signed out; run `codex login` on the daemon\'s host.' },
+      });
+      expect(received()).toEqual([]);
     });
 
     it('runs a Codex judge in its auto mode with a read-only sandbox, since each mode Paseo lists for Codex writes without asking', async () => {

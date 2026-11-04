@@ -41,9 +41,10 @@ const BehaviourSchema = z.object({
   sign_in: z.record(z.string(), z.enum(['signed_out', 'unreported'])).default({}),
   /**
    * How `codex login status` answers on the daemon's host, which is this machine: the fake writes there a `codex` that
-   * answers as Codex 0.166.0 does (recorded), and its diagnostic's resolved path names it. Absent, that path holds no codex.
+   * answers as Codex 0.166.0 does (recorded), or, `unknown`, as a codex that has no such command; its diagnostic's
+   * resolved path names it. Absent, that path holds no codex.
    */
-  codex_login: z.enum(['signed_in', 'signed_out']).optional(),
+  codex_login: z.enum(['signed_in', 'signed_out', 'unknown']).optional(),
   /** The output the agent writes to the result file; none written when absent. */
   output: z.unknown().optional(),
   /** The agent's last message, which a confined prompt's answer is. */
@@ -520,12 +521,13 @@ function diagnosticOf(provider: string, signIn: 'signed_out' | 'unreported' | un
  * The path of the daemon host's `codex`, which answers `codex login status` as `login` says, as Codex 0.166.0 does on
  * stderr (recorded); with no `login`, the path holds nothing.
  */
-function hostCodex(state: string, login: 'signed_in' | 'signed_out' | undefined): string {
+function hostCodex(state: string, login: 'signed_in' | 'signed_out' | 'unknown' | undefined): string {
   const file = path.join(state, 'host-bin', 'codex');
   fs.rmSync(file, { force: true });
 
   if (login) {
-    const [answer, code] = login === 'signed_in' ? ['Logged in using ChatGPT', 0] : ['Not logged in', 1];
+    const answers = { signed_in: ['Logged in using ChatGPT', 0], signed_out: ['Not logged in', 1], unknown: ['error: unrecognized subcommand: status', 2] } as const;
+    const [answer, code] = answers[login];
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, `#!/bin/sh\n[ "$*" = "login status" ] || exit 2\necho '${answer}' >&2\nexit ${code}\n`, { mode: 0o755 });
   }
