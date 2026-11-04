@@ -21,7 +21,7 @@ import { isIsolated, runCopyToMerge } from './workflow/workspace.js';
 import { localStrictCan, personAnswers, runLocalDriver, withDriverLock, type LocalDriverOptions } from './workflow/drivers/local/local-driver.js';
 import { definedDrive, driveRun, unsupportedDriver } from './workflow-drive.js';
 import { awaitsLine, awaitsOf, drivesHere, leftOpenLine, type DefaultDrive } from './default-driver.js';
-import { LOCAL_DRIVER, parseDriver, type Driver } from './workflow/driver-name.js';
+import { LOCAL_DRIVER, parseDriver, type Driver, type DriverName } from './workflow/driver-name.js';
 import { disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
 import { stopCancelledAttempts } from './workflow/runtimes/cancelled.js';
 import type { SoleDriver } from './workflow/engine.js';
@@ -744,10 +744,19 @@ function refusedDriver(asked: AskedDriver, takes: ReadonlyArray<'local' | 'skill
     case 'unknown':
       return unsupportedDriver(asked.name);
     case 'driver':
-      // A driver definition's name is not teamai's: its lookup decides.
-      if (asked.driver !== 'local' && asked.driver !== 'skill' && asked.driver !== 'none') return undefined;
+      switch (asked.driver) {
+        case 'local':
+        case 'skill':
+        case 'none':
+          return takes.some((driver) => asks(asked, driver)) ? undefined : unsupportedDriver(asked.name);
+        default: {
+          // Only a definition's name is left, which its lookup decides: a driver teamai adds fails to compile here until a case above takes it.
+          const definition: { external: DriverName } = asked.driver;
 
-      return takes.some((driver) => asks(asked, driver)) ? undefined : unsupportedDriver(asked.name);
+          return definition.external === asked.name ? undefined : unsupportedDriver(asked.name);
+        }
+      }
+
     default: {
       const unhandled: never = asked;
 
