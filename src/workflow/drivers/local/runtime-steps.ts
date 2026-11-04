@@ -221,7 +221,13 @@ export function runtimePrompter(run: AttemptRun, { view, step, unset }: { view: 
     env.TEAMAI_WORKFLOW_RESULT = input.resultPath;
     let accepted = false;
     let timedOut = false;
-    const stop = (): void => { void run.cancel(); };
+    // A stop before the prompt is sent, or while a restart reattaches, is kept and sent once the runtime accepts it.
+    let stopped = false;
+
+    const stop = (): void => {
+      stopped = true;
+      void run.cancel();
+    };
 
     const timer = input.timeoutMs === undefined || input.timeoutMs > MAX_TIMER_DELAY ? undefined : setTimeout(() => {
       timedOut = true;
@@ -231,7 +237,15 @@ export function runtimePrompter(run: AttemptRun, { view, step, unset }: { view: 
     signal?.addEventListener('abort', stop, { once: true });
 
     if (signal?.aborted) stop();
-    const end = await run.prompt({ lease, env, unset, cwd: input.cwd }, { onAccepted: () => { accepted = true; } });
+
+    const end = await run.prompt({ lease, env, unset, cwd: input.cwd }, {
+      onAccepted: () => {
+        accepted = true;
+
+        if (stopped) void run.cancel();
+      },
+    });
+
     clearTimeout(timer);
     signal?.removeEventListener('abort', stop);
     const uncollected = await run.collect();
@@ -257,11 +271,11 @@ export function runtimePrompter(run: AttemptRun, { view, step, unset }: { view: 
       }
 
       case 'cancelled': {
-        const stopped: LocalToolResult = { started: true, exitCode: 143, failure: { code: 'tool_failed', message: `${tool} was stopped before it wrote a workflow result` } };
+        const cancelled: LocalToolResult = { started: true, exitCode: 143, failure: { code: 'tool_failed', message: `${tool} was stopped before it wrote a workflow result` } };
 
-        if (timedOut) stopped.stoppedBy = 'timeout';
+        if (timedOut) cancelled.stoppedBy = 'timeout';
 
-        return stopped;
+        return cancelled;
       }
 
       case 'failed':
