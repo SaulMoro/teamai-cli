@@ -216,11 +216,19 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       return;
     }
 
-    const tools = await connected.tools();
+    const installed = await connected.installedTools();
+    const tools = installed.flatMap((entry) => (entry.canRun ? [entry] : []));
 
     if (tools.length === 0) {
       await connected.close();
-      write({ type: 'init', ok: false, error: { code: 'tool_unavailable', message: `The Paseo daemon at ${connected.url} has none of claude, codex or opencode available. Sign in to one of them on the daemon's host.` } });
+
+      const reasons = installed.flatMap((entry) => (entry.canRun ? [] : [`${entry.tool}: ${entry.reason}.`]));
+
+      const message = reasons.length === 0
+        ? `The Paseo daemon at ${connected.url} has none of claude, codex or opencode installed. Install one on the daemon's host, and sign in to it there.`
+        : `The Paseo daemon at ${connected.url} runs no tool teamai-runtime-paseo can use. ${reasons.join(' ')}`;
+
+      write({ type: 'init', ok: false, error: { code: 'tool_unavailable', message } });
 
       return;
     }
