@@ -1586,7 +1586,11 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           continue;
         }
 
-        const reason = wait.reason ?? 'the next step is not available';
+        // What the member can change comes first: a step the policy holds on one runtime is held on every runtime that
+        // has its workspace, so the policy is named whichever runtime was offered last. Only a negotiated policy hold
+        // puts policy first in `missing`; a runtime that defers the step on its workspace puts that first.
+        const policy = (offered.heldByAll ?? []).find(({ missing }) => missing[0]?.startsWith('policy.'));
+        const reason = policy?.reason ?? wait.reason ?? 'the next step is not available';
         // A run claimed from another machine does not bring its --sandbox along: say which flag declares it here.
         const needsSandbox = !isSandbox(config, options) && wait.held?.some(({ missing }) => missing.includes(ISOLATION)) === true;
 
