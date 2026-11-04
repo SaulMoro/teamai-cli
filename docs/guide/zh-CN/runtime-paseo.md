@@ -218,10 +218,15 @@ teamai score --run ra429df3ad473c7b3 --scorer review-quality --driver paseo-code
 `max_parallel` 是 teamai 自己的键，见 [运行时选项](workflow-advanced.md#运行时选项)。Paseo 本身没有并发上限。
 
 ```yaml
+# drivers/paseo-7070.yaml
+schemaVersion: v1alpha1
+name: paseo-7070
+description: Run prompt steps as agents of the Paseo daemon on port 7070, and the rest here.
 runtimes:
   - use: paseo
     options:
       url: ws://127.0.0.1:7070/ws
+  - use: local
 ```
 
 ## 工具、模型和模式

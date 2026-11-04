@@ -218,10 +218,15 @@ teamai score --run ra429df3ad473c7b3 --scorer review-quality --driver paseo-code
 `max_parallel` is teamai's own key; see [Runtime options](workflow-advanced.md#runtime-options). Paseo has no cap of its own.
 
 ```yaml
+# drivers/paseo-7070.yaml
+schemaVersion: v1alpha1
+name: paseo-7070
+description: Run prompt steps as agents of the Paseo daemon on port 7070, and the rest here.
 runtimes:
   - use: paseo
     options:
       url: ws://127.0.0.1:7070/ws
+  - use: local
 ```
 
 ## Tools, models and modes
