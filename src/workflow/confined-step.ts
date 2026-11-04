@@ -6,7 +6,7 @@
 import fs from 'node:fs/promises';
 import { CONFINED_LEVELS, type ConfinedLevel } from '@teamai/tool-core/launch';
 import type { ConfinedOffer } from '@teamai/runtime-protocol';
-import { isConfinedTool, runConfined, type ConfinedResult, type ConfinedRun } from '../tool-launch/confined.js';
+import { confinedEnvNames, isConfinedTool, runConfined, type ConfinedResult, type ConfinedRun } from '../tool-launch/confined.js';
 import type { ConfinedTool } from '../tool-launch/tools.js';
 import type { TokenUsage } from '../tool-launch/stdout.js';
 import { isAgentToolId } from '../tool-registry.js';
@@ -189,13 +189,14 @@ export interface RuntimeConfinedInput extends Omit<ConfinedStepInput, 'resolveTo
   attemptRun: AttemptRun;
   /** The runtime's `can.confined`, which the lease's tools come from. */
   offers: readonly ConfinedOffer[];
-  /** The credentials the definition gives the runtime's tools. */
+  /** The credentials the definition gives the runtime's tools, of which the prompt's tool gets those it reads. */
   credentials: Record<string, string>;
 }
 
 /**
  * Runs `lease` on a step runtime that answers confined prompts: in a place opened with no view of the host, as one
- * `prompt` confined to the lease's directory, with no team env. The reply is the step's outputs, and the level and
+ * `prompt` confined to the lease's directory, with no team env, and only the credentials its tool's confined profile
+ * reads: a credential no profile names goes to no judge. The reply is the step's outputs, and the level and
  * access the runtime says it kept are the run's; a runtime that kept less than the lease's level fails the step.
  */
 export async function runConfinedStepOnRuntime(input: RuntimeConfinedInput): Promise<ConfinedStepEnd> {
@@ -212,8 +213,10 @@ export async function runConfinedStepOnRuntime(input: RuntimeConfinedInput): Pro
 
   if (schema && !schema.ok) return { kind: 'ran', report: { outcome: 'failed', tool, message: schema.failure.message, failure: schema.failure } };
   const access = offered(tool)?.access ?? 'full';
+  const reads = confinedEnvNames(tool);
+  const given = Object.fromEntries(Object.entries(credentials).filter(([name]) => reads.includes(name)));
   const startedAt = Date.now();
-  const opened = await attemptRun.open(undefined, { credentials });
+  const opened = await attemptRun.open(undefined, { credentials: given });
 
   if (!opened.ok) return { kind: 'ran', report: { outcome: 'failed', tool, message: opened.failure.message, failure: opened.failure } };
   // A stop before the prompt is sent, or while the place opened, is kept and sent once the runtime accepts the prompt.
@@ -234,7 +237,7 @@ export async function runConfinedStepOnRuntime(input: RuntimeConfinedInput): Pro
       step: lease.step, tool, prompt: lease.prompt ?? '', result: attemptResultPath(config, run, lease.attempt), permissions: 'approval-required', interactive: false,
       ...(model && { model: model.effort ? { name: model.name, effort: model.effort } : { name: model.name } }),
     },
-    env: {}, unset: [], credentials, cwd: lease.confined.dir,
+    env: {}, unset: [], credentials: given, cwd: lease.confined.dir,
     confined: { dir: lease.confined.dir, level: lease.confined.level, access, ...(schema && { schema: schema.schema }) },
   }, {
     onAccepted: () => {
