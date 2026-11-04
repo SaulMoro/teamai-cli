@@ -225,11 +225,13 @@ function pointedAtCopy(text: string, dir: string, copy: string): string {
  * teamai's prompt with each mention of the directory pointed at the copy.
  */
 function judgeMessage(place: PlaceRecord, lease: PromptLease, confined: ConfinedPrompt, copy: string): string {
-  const replySchema = confined.schema === undefined ? '' : ` It matches this JSON Schema: ${JSON.stringify(confined.schema)}`;
+  const reply = confined.schema === undefined
+    ? 'Reply with the JSON value the prompt asks for and no other text.'
+    : `Reply with one JSON value and no other text. teamai checks it against this JSON Schema, so it decides the reply's shape: ${JSON.stringify(confined.schema)}. Where the prompt below asks for a reply of another shape, give that value where this schema places it.`;
 
   return `This thread runs the confined step "${lease.step}" of teamai workflow run ${place.run} (attempt ${place.attempt}). Its folder, ${copy}, is a read-only copy of the directory the step reads.`
     + ' Read only the files in it: do not read, run or change anything outside it, and change nothing in it. Do not run teamai commands.'
-    + ` Reply with the JSON value the prompt asks for and no other text.${replySchema}\n\n${pointedAtCopy(lease.prompt, confined.dir, copy)}`;
+    + ` ${reply}\n\n${pointedAtCopy(lease.prompt, confined.dir, copy)}`;
 }
 
 /** Sets the mode of every directory and file under `root`, `root` included; a symlink is left alone. */
