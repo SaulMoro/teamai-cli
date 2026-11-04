@@ -122,7 +122,7 @@ export const DRIVER_PROFILES = {
   skill: {
     kind: 'skill',
     can: {
-      hitl: true, workspace: ['read-only', 'new', 'continue', 'team'], network: false, isolation: 'none', env: 'commands', tokens: false, max_turns: false, setup: true, tools: [], end_turn: false, unattended: false, role: false,
+      hitl: true, exec: true, workspace: ['read-only', 'new', 'continue', 'team'], network: false, isolation: 'none', env: 'commands', tokens: false, max_turns: false, setup: true, tools: [], end_turn: false, unattended: false, role: false,
       confined: [{ level: 'verified', access: 'read', tools: ['claude'] }],
     },
   },
