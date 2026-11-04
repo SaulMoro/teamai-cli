@@ -252,7 +252,7 @@ describe('dashboard workflow runs', () => {
     const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
     try {
       expect(await runtime.init({ options: { state: path.join(root, 'toy-state'), display }, mode: 'unattended' })).toMatchObject({ ok: true });
-      const view = { worktree: root, readonly: [], result: path.join(root, 'out'), toolHome: {} };
+      const view = { worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} };
       expect(await attemptRun({ config, run: id, attempt, runtime, driver: 'toyd' }).open(view)).toMatchObject({ ok: true });
     } finally {
       await runtime.dispose();
@@ -287,7 +287,7 @@ describe('dashboard workflow runs', () => {
     try {
       expect(await runtime.init({ options: { state: path.join(root, 'toy-state'), close_fails: true }, mode: 'unattended' })).toMatchObject({ ok: true });
       const placed = attemptRun({ config, run: id, attempt, runtime, driver: 'toyd' });
-      expect(await placed.open({ worktree: root, readonly: [], result: path.join(root, 'out'), toolHome: {} })).toMatchObject({ ok: true });
+      expect(await placed.open({ worktree: root, readonly: [], result: path.join(root, 'out'), runDir: path.join(root, 'scratch'), toolHome: {} })).toMatchObject({ ok: true });
       expect(await placed.close()).toMatchObject({ code: 'runtime_failed' });
     } finally {
       await runtime.dispose();

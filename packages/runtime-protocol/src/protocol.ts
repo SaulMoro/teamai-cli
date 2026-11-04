@@ -66,12 +66,14 @@ export type RuntimeOptions = z.infer<typeof RuntimeOptionsSchema>;
 
 /**
  * What a runtime may touch for one attempt: the worktree read-write at its host path, the git paths read-only, the
- * attempt's result directory read-write, and the attempt's tool home under the variable its tool reads.
+ * attempt's result directory read-write, the run's scratch directory read-write, which `TEAMAI_RUN_DIR` names in what
+ * runs there, and the attempt's tool home under the variable its tool reads.
  */
 export const PlaceViewSchema = z.object({
   worktree: z.string(),
   readonly: z.array(z.string()),
   result: z.string(),
+  runDir: z.string(),
   toolHome: z.record(z.string(), z.string()),
 });
 

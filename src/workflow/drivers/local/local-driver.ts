@@ -40,7 +40,7 @@ import { credentialSecrets, type EngineOptions, type LoginTool, type OpenedDrive
 import { newOpId, type StepRuntime } from '../../runtimes/step-runtime.js';
 import type { SoleDriver } from '../../engine.js';
 import { storeDirOf } from '../../../session-flow/adapters/index.js';
-import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, readRun, RunIdSchema, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
+import { attemptDir, AttemptIdSchema, attemptResultPath, attemptsDir, readRun, RunIdSchema, runScratchDir, updateRun, withRunLock, type AttemptId, type RunId, type RunLock } from '../../store.js';
 import { abandonPlace, cloneDelivery, cloneHead, placeLeaseOf, placeOf, placeRoot, preparedClone, preparePlace, cloneRoleProblem, refuseDirtyAdoptedCommand, roleNotDeliveredFailure, runPlaceSetup, sweepClones, worktreeRoleProblem, type StepEnd } from '../../place/place.js';
 import { commandEnd, managedReport, StartedRunSchema, unreadablePlace, type StartedRun } from '../../protocol.js';
 import { memberTools, type MemberTool } from '../../../tool-launch/call.js';
@@ -1054,7 +1054,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     slotOf.set(lease.attempt, slot);
 
     if (slot.kind !== 'local') return;
-    const view = { worktree: lease.cwd ?? root, readonly: [], result: path.dirname(attemptResultPath(config, runId, lease.attempt)), toolHome: {} };
+    const view = { worktree: lease.cwd ?? root, readonly: [], result: path.dirname(attemptResultPath(config, runId, lease.attempt)), runDir: runScratchDir(config, runId), toolHome: {} };
     const opened = await slot.runtime.open({ op: newOpId(), run: runId, attempt: lease.attempt, view, credentials: {} }, async () => {});
 
     if (opened.kind === 'ready') localHandles.set(lease.attempt, opened.handle);
