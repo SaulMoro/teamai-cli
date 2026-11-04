@@ -60,9 +60,17 @@ export interface Runtime {
   kill(): Promise<void>;
 }
 
-/** Starts the runtime with its journal under `home`, as teamai spawns it. */
-export function startRuntime(home: string): Runtime {
-  const child = spawn(process.execPath, [bundledRuntime()], { env: { ...process.env, HOME: home }, stdio: ['pipe', 'pipe', 'inherit'] });
+/** The Paseo client the tests run against: the one installed for this repository's tests, as a member's paseo brings it. */
+export const TEST_CLIENT = path.join(ROOT, 'node_modules', '@getpaseo', 'client');
+
+/**
+ * Starts the runtime with its journal under `home`, as teamai spawns it, finding the test client through
+ * `PASEO_CLIENT_PATH`; `env` sets or, with undefined, removes names over that.
+ */
+export function startRuntime(home: string, env: Record<string, string | undefined> = {}): Runtime {
+  const merged = { ...process.env, HOME: home, PASEO_CLIENT_PATH: TEST_CLIENT, ...env };
+  const given = Object.fromEntries(Object.entries(merged).filter((entry): entry is [string, string] => entry[1] !== undefined));
+  const child = spawn(process.execPath, [bundledRuntime()], { env: given, stdio: ['pipe', 'pipe', 'inherit'] });
   const lines: RuntimeMessage[] = [];
   const waiters: Array<() => void> = [];
 

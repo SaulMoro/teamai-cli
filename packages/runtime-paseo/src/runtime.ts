@@ -7,6 +7,7 @@ import {
   type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
+import { loadClient } from './client.js';
 import { connect, DEFAULT_MODES, isPaseoTool, type Daemon, type PaseoTool } from './daemon.js';
 import type { AgentCreate, AgentPrompt, Journal, Place } from './journal.js';
 
@@ -157,7 +158,15 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       return;
     }
 
-    const connected = await connect(options.data.url);
+    const client = await loadClient(process.env);
+
+    if ('code' in client) {
+      write({ type: 'init', ok: false, error: client });
+
+      return;
+    }
+
+    const connected = await connect(options.data.url, client);
 
     if ('code' in connected) {
       write({ type: 'init', ok: false, error: connected });
