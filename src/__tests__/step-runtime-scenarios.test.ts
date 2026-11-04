@@ -297,7 +297,7 @@ const PROMPT_SUBJECTS: PromptSubject[] = [
     },
     options: (state, agent) => T3.options(state, agent),
     display: {
-      label: 'review · teamai r0123abcd', url: expect.stringMatching(/^t3-thread:\/\/v2\/env-fake-1\/mcp:launch:[0-9a-f]+$/),
+      label: 'review · teamai r0123abcd', url: expect.stringMatching(/^t3code:\/\/threads\/env-fake-1\/mcp%3Alaunch%3A[0-9a-f]+$/),
       fields: { thread: expect.stringMatching(/^mcp:launch:[0-9a-f]+$/), model: 'claude-opus-5-5', environment: 'fake-laptop' },
     },
     // T3 reports no usage, and a thread whose run fails names T3's status, not the agent's own failure.

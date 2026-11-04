@@ -24,13 +24,14 @@ import { STEP_MODE_LABELS, T3Error, type Environment, type Launch, type NewThrea
 //    open     the checkout must be a T3 project; the place is that project and the attempt's worktree. With no view,
 //             the place of a confined prompt, which needs no project
 //    prompt   t3_thread_launch (existing_worktree, auto or a tighter runtime_mode, clientRequestId = op), then t3_thread_wait
-//             until the run and the work it delegated settle; the result file and the tool's transcript end it,
-//             and the thread is settled
+//             until the run and the work it delegated settle; the result file and the tool's transcript end it
 //             confined: an idle scratch thread, its folder filled with a read-only copy of `dir`, then briefed to read
 //             only that; its last message is the reply
 //    cancel   stop the thread                     reattach  the ops and the thread, from the journal
-//    collect  nothing to copy: the worktree, the result and the transcript are already on this machine
-//    close    stop what still runs, and remove a judge's copy
+//    collect  nothing to copy: the worktree, the result and the transcript are already on this machine. Settle the
+//             thread of each op that ended, once T3 holds no run of it, so it leaves the person's active threads
+//    close    stop what still runs, settle what collect did not (a judge's place is never collected), and remove a
+//             judge's copy
 //
 
 /** The options a driver definition gives `t3`. teamai strips `max_parallel` and `credentials` before `init`. */
@@ -63,7 +64,7 @@ const IDLE_POLL_MS = 2_000;
  */
 const JUDGE_KEPT: ConfinedKept = { level: 'best-effort', access: 'read' };
 
-const TERMINAL: ReadonlySet<Waited['status']> = new Set(['completed', 'interrupted', 'failed', 'cancelled', 'rolled_back']);
+const TERMINAL: ReadonlySet<string> = new Set<Waited['status']>(['completed', 'interrupted', 'failed', 'cancelled', 'rolled_back']);
 
 export interface Connected {
   ok: true;
@@ -172,14 +173,22 @@ function modelSelection(provider: Provider, lease: PromptLease): { ok: true; sel
   return { ok: true, selection: { instanceId: provider.providerInstanceId, model: model.id, options: [{ id: option.id, value: effort }] } };
 }
 
-/** The t3-thread:// link that opens a thread in T3 Code. T3 answers a launch with its web UI's link instead. */
+/**
+ * The link that opens a thread in T3 Code's desktop app, from a browser, a terminal or `open`. T3 answers a launch
+ * with its web UI's link instead.
+ */
 function threadLink(environment: Environment, threadId: string): string {
-  return `t3-thread://v2/${environment.environmentId}/${threadId}`;
+  return `t3code://threads/${environment.environmentId}/${encodeURIComponent(threadId)}`;
+}
+
+/** A thread as T3's own chat links it: a message in a T3 thread shows this as a link to that thread. */
+function threadMention(environment: Environment, threadId: string): string {
+  return `<t3-thread://v2/${environment.environmentId}/${threadId}>`;
 }
 
 /** What the run's details show of a thread: its title, its link, its id and model. */
-function threadDisplay(thread: ThreadRecord, environment: string): RuntimeDisplay {
-  return { label: thread.title.slice(0, 80), url: thread.link, fields: { thread: thread.threadId.slice(0, 200), model: thread.model, environment } };
+function threadDisplay(thread: ThreadRecord, environment: Environment): RuntimeDisplay {
+  return { label: thread.title.slice(0, 80), url: threadLink(environment, thread.threadId), fields: { thread: thread.threadId.slice(0, 200), model: thread.model, environment: environment.label } };
 }
 
 /** What the run's details show of a place before a thread runs in it. */
@@ -459,7 +468,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
   /** Launches a step's thread on the attempt's worktree with its first message, and returns its id. */
   const launchStep = async (s: Session, request: PromptRequest, opened: PlaceRecord & { kind: 'worktree' }, thread: NewThread): Promise<string> => {
-    const message = firstMessage(opened, request.lease, options.startedFrom && threadLink(s.environment, options.startedFrom));
+    const message = firstMessage(opened, request.lease, options.startedFrom && threadMention(s.environment, options.startedFrom));
 
     return (await s.t3.launch({ ...thread, message, projectId: opened.projectId, worktreePath: request.cwd })).threadId;
   };
@@ -492,7 +501,7 @@ export function serve(options: ServeOptions): Promise<void> {
   /** Waits for the thread until the step is done, stopped or failed, and returns how it ended. */
   const follow = async (s: Session, request: PromptRequest, thread: ThreadRecord): Promise<OpState> => {
     const state = running.get(request.op);
-    const where = `The T3 thread ${thread.link} ("${thread.title}")`;
+    const where = `The T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}")`;
     let errors = 0;
 
     for (;;) {
@@ -548,15 +557,6 @@ export function serve(options: ServeOptions): Promise<void> {
 
       if (!id) return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} finished, but ${thread.tool} kept no session for ${cwd}, so the step cannot be scored or resumed.` } };
 
-      // A settled thread leaves the person's list of active threads; one whose step failed, waits or holds stays.
-      if (!written.result.failure) {
-        try {
-          await s.t3.settle(thread.threadId);
-        } catch (error) {
-          process.stderr.write(`Could not settle ${thread.link}: ${error instanceof Error ? error.message : String(error)}\n`);
-        }
-      }
-
       return { op: request.op, state: 'finished', session: { tool: thread.tool, id }, result: written.result, ...(request.confined && { confined: JUDGE_KEPT }) };
     }
   };
@@ -568,7 +568,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
     /** The acceptance shows the step's thread once T3 launched it, so the run details link it during the run. */
     const accept = (thread: ThreadRecord | undefined): void => {
-      write({ op: request.op, event: 'accepted', ...(thread && session && { display: threadDisplay(thread, session.environment.label) }) });
+      write({ op: request.op, event: 'accepted', ...(thread && session && { display: threadDisplay(thread, session.environment) }) });
     };
 
     if (ended && ended.state !== 'running') {
@@ -669,7 +669,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
       /** Journals the op running on `threadId`, with the judge's copy once its folder is known. */
       const journalThread = (threadId: string, copy: string | undefined): ThreadRecord => {
-        const launched: ThreadRecord = { threadId, title, link: threadLink(s.environment, threadId), model: selection.selection.model, tool: lease.tool, launchedAt, ...(copy && { copy }) };
+        const launched: ThreadRecord = { threadId, title, model: selection.selection.model, tool: lease.tool, launchedAt, ...(copy && { copy }) };
         const now = place(request.handle) ?? opened;
         journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, threads: { ...now.threads, [request.op]: launched } });
         state.thread = threadId;
@@ -707,7 +707,7 @@ export function serve(options: ServeOptions): Promise<void> {
       end(await follow(s, request, thread));
     } catch (error) {
       // The thread may still run in T3, where the person finds it by the link.
-      end({ op: request.op, state: 'failed', failure: { code: 't3_unavailable', message: `Lost track of the T3 thread ${thread.link}: ${error instanceof Error ? error.message : String(error)}` } });
+      end({ op: request.op, state: 'failed', failure: { code: 't3_unavailable', message: `Lost track of the T3 thread ${threadLink(s.environment, thread.threadId)}: ${error instanceof Error ? error.message : String(error)}` } });
     }
   };
 
@@ -744,33 +744,68 @@ export function serve(options: ServeOptions): Promise<void> {
     }
   };
 
+  /**
+   * Settles each thread of `handle` whose op state `ended` accepts and that T3 holds no run of, once: a thread still
+   * running, or still waiting for the person in an interactive step, stays. A settle T3 refuses is said once on stderr
+   * and fails nothing.
+   */
+  const settleEnded = async (handle: string, ended: (state: OpState | undefined) => boolean): Promise<void> => {
+    const known = place(handle);
+
+    if (!known || !session) return;
+    const s = session;
+
+    for (const [op, thread] of Object.entries(known.threads)) {
+      if (thread.settle || !ended(known.ops[op])) continue;
+      let outcome: NonNullable<ThreadRecord['settle']>;
+
+      try {
+        const { status } = await s.t3.thread(thread.threadId);
+
+        if (status !== null && status !== 'idle' && !TERMINAL.has(status)) continue;
+        await s.t3.settle(thread.threadId);
+        outcome = 'settled';
+      } catch (error) {
+        process.stderr.write(`teamai could not settle the T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}"), so it stays in T3 Code's active threads: ${error instanceof Error ? error.message : String(error)}\n`);
+        outcome = 'failed';
+      }
+
+      const now = place(handle);
+
+      if (now?.threads[op]) journal.write({ ...now, threads: { ...now.threads, [op]: { ...now.threads[op], settle: outcome } } });
+    }
+  };
+
   /** Ends the place. A thread still running there is stopped first; one T3 will not stop keeps the place, and close fails. */
   const close = async (handle: string): Promise<void> => {
     const known = place(handle);
+    const s = session;
 
-    const left = known && session ? Object.values(known.ops).flatMap((state) => {
-      const thread = known.threads[state.op];
+    if (known && s) {
+      for (const state of Object.values(known.ops)) {
+        const thread = known.threads[state.op];
 
-      return state.state === 'running' && thread ? [{ op: state.op, thread }] : [];
-    }) : [];
+        if (state.state !== 'running' || !thread) continue;
+        const stopping = whyNotStopped(s.t3, thread.threadId);
+        const live = running.get(state.op);
 
-    for (const { op, thread } of left) {
-      const live = running.get(op);
-      const stopping = session && whyNotStopped(session.t3, thread.threadId);
+        if (live) live.stopping = stopping;
+        const why = await stopping;
 
-      if (live && stopping) live.stopping = stopping;
-      const why = await stopping;
+        if (why !== undefined) {
+          write({
+            event: 'close_failed', handle, failure: {
+              code: 'thread_still_runs',
+              message: `The T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}") still runs, and T3 Code did not stop it: ${why.replace(/\.$/, '')}. Stop it in T3 Code with its Stop button.`,
+            },
+          });
 
-      if (why !== undefined) {
-        write({
-          event: 'close_failed', handle, failure: {
-            code: 'thread_still_runs',
-            message: `The T3 thread ${thread.link} ("${thread.title}") still runs, and T3 Code did not stop it: ${why.replace(/\.$/, '')}. Stop it in T3 Code with its Stop button.`,
-          },
-        });
-
-        return;
+          return;
+        }
       }
+
+      // Every thread of the place has ended now.
+      await settleEnded(handle, () => true);
     }
 
     // A judge's copy is the thread's scratch folder, so the thread loses its folder with it.
@@ -801,6 +836,7 @@ export function serve(options: ServeOptions): Promise<void> {
       case 'cancel':
         return cancel(request.op);
       case 'collect':
+        await settleEnded(request.handle, (state) => state !== undefined && state.state !== 'running');
         write({ event: 'collected', handle: request.handle });
 
         return;
@@ -815,7 +851,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
         const threads = Object.values(known.threads).sort((a, b) => b.launchedAt - a.launchedAt);
         const latest = threads[0];
-        write({ event: 'alive', handle: request.handle, ops: Object.values(known.ops), display: latest ? threadDisplay(latest, session.environment.label) : placeDisplay(known, session.environment) });
+        write({ event: 'alive', handle: request.handle, ops: Object.values(known.ops), display: latest ? threadDisplay(latest, session.environment) : placeDisplay(known, session.environment) });
 
         return;
       }
