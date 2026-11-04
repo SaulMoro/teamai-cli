@@ -223,6 +223,8 @@ An unattended run's threads still run in Auto, or your `runtime_mode`. A step wh
 
 The step's thread lives in T3, not in teamai's process. If the driver dies, `teamai workflow resume <run> --driver t3` reconnects to the same thread instead of starting another one. `teamai workflow cancel <run>` stops the thread as its Stop button does. The thread ends interrupted, any request it was waiting on is withdrawn, and teamai settles it.
 
+A thread's run may hand work to subagents or background tasks. The step ends only once that work has settled too, and a cancel or close counts the thread as stopped only then.
+
 ```sh
 teamai workflow resume r928e2fc23ab9bd62 --driver t3
 teamai workflow cancel r70d31098c8884803
@@ -241,7 +243,7 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 | `… is not a project in T3 Code <machine>.` | The checkout is not a T3 project. | Add it in T3 Code (Add project), or run `t3 project add <path>`. |
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` names an instance T3 does not have, or one that is disabled. | Add or enable it in T3 Code under Settings → Providers, or remove `instance`. |
 | `… ended without writing the result file …` | The agent finished without writing its result. | Open the thread from the link in the message, then `teamai workflow retry <run> <step>`. |
-| `Not closed: thread_still_runs …` in the run's details | teamai closed the step's place while its thread still ran, and T3 did not stop the thread. | Open the thread from the link, and stop it with its Stop button. |
+| `Not closed: thread_still_runs …` in the run's details | teamai closed the step's place while its thread, or work the thread delegated, still ran, and T3 did not stop it. | Open the thread from the link, and stop it with its Stop button. |
 | `… kept no session for …` | The tool kept no transcript for the worktree, so the step could not be scored. | Check that the instance uses the tool's default home (`~/.claude`, `~/.codex`). |
 
 ## What it does not do yet
