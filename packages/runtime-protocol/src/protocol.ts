@@ -19,7 +19,7 @@ import { z } from 'zod';
 //    < {"op":"op-8b10…","event":"output","stream":"stdout","data":"…"}
 //    < {"op":"op-8b10…","event":"exited","code":0,"stdout":"…complete stdout…"}
 //    > {"type":"prompt","op":"op-91c4…","handle":"…","lease":{...},"env":{...},"unset":[...],"credentials":{...},"cwd":"…"}
-//    < {"op":"op-91c4…","event":"accepted"}
+//    < {"op":"op-91c4…","event":"accepted","display":{"label":"…","url":"…"}}      display optional: once the agent exists
 //    < {"op":"op-91c4…","event":"finished","session":{"tool":"claude","id":"…"},"result":{"output":{…}},"usage":{…}}
 //    > {"type":"collect","handle":"…"}              < {"event":"collected","handle":"…"}
 //    > {"type":"reattach","handle":"…"}             < {"event":"alive","handle":"…","ops":[...]} or {"event":"gone",…}
@@ -214,7 +214,7 @@ export const OpStateSchema = z.discriminatedUnion('state', [
 export type OpState = z.infer<typeof OpStateSchema>;
 
 /**
- * The lines a runtime writes, with `display` (on `ready` and `alive`) and the init reply's `can` read by the schemas
+ * The lines a runtime writes, with `display` (on `ready`, on an exec's or prompt's `accepted`, and on `alive`) and the init reply's `can` read by the schemas
  * given. A runtime checks what it writes against `RuntimeMessageSchema`; teamai reads a display apart from its event,
  * so a runtime that gets it wrong loses only its display, and reads `can` as its own driver offer.
  */
@@ -230,7 +230,8 @@ export function runtimeMessageSchemas<TDisplay extends z.ZodType, TCan extends z
   ]);
 
   const OpEvent = z.discriminatedUnion('event', [
-    z.object({ op: OpIdSchema, event: z.literal('accepted'), handle: RuntimeHandleSchema.optional() }),
+    /** `display` on an exec's or prompt's acceptance: what the runtime shows once that operation exists, such as an agent's thread. */
+    z.object({ op: OpIdSchema, event: z.literal('accepted'), handle: RuntimeHandleSchema.optional(), display }),
     z.object({ op: OpIdSchema, event: z.literal('ready'), display }),
     z.object({ op: OpIdSchema, event: z.literal('failed'), failure: RuntimeFailureSchema }),
     z.object({ op: OpIdSchema, event: z.literal('output'), stream: z.enum(['stdout', 'stderr']), data: z.string() }),
