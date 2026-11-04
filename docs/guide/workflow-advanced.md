@@ -1558,7 +1558,7 @@ A step that requires strict isolation no runtime of the definition gives is refu
 Every definition keeps a slot on this machine for the steps that stay here: its `local` entry, or, when it lists none, a `host` entry teamai adds last, so no runtime of yours may be named `host`. `host` runs commands with teamai, git and the shell, needs no agent CLI, and never takes a prompt step. The slot takes:
 
 - command and setup steps, when no runtime of the definition runs commands (`"exec": false`);
-- the command steps of teamai's own workflows `teamai-score`, `teamai-share-session`, `teamai-finished-sessions` and `teamai-benchmark`, which plan, check and write labels on this machine;
+- the command steps of teamai's own workflows `teamai-score`, `teamai-share-session`, `teamai-share-learnings`, `teamai-finished-sessions` and `teamai-benchmark`, which plan, check and write labels on this machine;
 - a step with `deliver: publish`, which pushes to a data branch from here.
 
 No other runtime takes those. When a runtime of the definition runs commands, your own command steps go to it, not to `local`. So a definition of external runtimes alone runs and judges every workflow on a machine with no agent CLI:
