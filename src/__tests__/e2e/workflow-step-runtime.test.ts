@@ -134,6 +134,13 @@ steps:
     command: git config extensions.worktreeConfig true && git config --worktree core.hooksPath "$PLANTED_HOOKS" && echo change > planted.txt`,
       sleeper: `  - id: wait
     command: sleep 60 & echo $! > "$CHILD_PID"; wait`,
+      rundir: `  - id: note
+    command: echo kept > "$TEAMAI_RUN_DIR/from-the-place"
+  - id: check
+    needs: [note]
+    command: test "$(cat "$TEAMAI_RUN_DIR/from-the-place")" = kept && echo '{"kept":true}'
+    output:
+      kept: boolean`,
       scored: `  - id: review
     prompt: Review the repository without changing it.
     scorers: [always]
@@ -344,6 +351,22 @@ Judge the review.
       expect(toyPrompts(state).filter((line) => line.confined !== undefined)).toEqual([]);
       expect(toyOpenViews(state)).not.toContain(null);
     });
+  });
+
+  it('gives a place the run\'s scratch directory read-write, where $TEAMAI_RUN_DIR of its exec points', async () => {
+    const state = path.join(sandbox, 'toy-state-rundir');
+    writeDefinition('toyrundir', { state });
+
+    const ran = await runCLI(['workflow', 'start', 'rundir', '--driver', 'toyrundir'], repo, env());
+
+    const runId = succeededRun(ran);
+    const scratch = path.join(dataHome, 'workflows', 'runs', runId, 'scratch');
+    const views = fs.readdirSync(path.join(state, 'ops')).map((name) => JSON.parse(fs.readFileSync(path.join(state, 'ops', name), 'utf8')) as { kind: string; view?: { runDir?: string } })
+      .filter((op) => op.kind === 'open').map((op) => op.view);
+    expect(views).toEqual([expect.objectContaining({ runDir: scratch }), expect.objectContaining({ runDir: scratch })]);
+    // One exec wrote there, and the next read it back.
+    expect(readRunState(runId).steps.find((step) => step.id === 'check')).toMatchObject({ status: 'succeeded', outputs: { kept: true } });
+    expect(runtimeRecords(runId).map((record) => record.runtime)).toEqual(['toy', 'toy']);
   });
 
   it('reports the output, session and usage of an exec that finished while teamai was killed, without running it again', async () => {
