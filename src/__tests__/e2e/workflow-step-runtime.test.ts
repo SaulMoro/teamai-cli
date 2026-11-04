@@ -297,6 +297,39 @@ Judge the review.
       hostPath = [hostBin, '/usr/bin', '/bin'].join(path.delimiter);
     });
 
+    it('judges a scored pass on the toy, in a place with no view, reading only its evidence, and writes the label', async () => {
+      const state = path.join(sandbox, 'toy-state-judge');
+      writeDefinition('toyjudge', {});
+      // The toy runs the scored prompt's claude from its own tools, and answers the judge itself.
+      fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'toyjudge.yaml'), [
+        'schemaVersion: v1alpha1', 'name: toyjudge', 'tool: claude', 'runtimes:', '  - use: toy', '    options:',
+        `      state: ${JSON.stringify(state)}`, `      path: ${JSON.stringify(bin)}`,
+        '      judge: { reply: { answer: { label: good, reasoning: "read it" } } }', '',
+      ].join('\n'));
+
+      const ran = await runCLI(['workflow', 'start', 'scored', '--driver', 'toyjudge'], repo, { PATH: hostPath, LAUNCHES: launches });
+
+      succeededRun(ran);
+      expect(ran.stderr).toMatch(/teamai-score run r[0-9a-f]+/);
+      const scoring = String(/teamai-score run (r[0-9a-f]+)/.exec(ran.stderr)?.[1]);
+      const { steps } = readRunState(scoring);
+      expect(ran.stderr, JSON.stringify(steps.filter((step) => step.status !== 'succeeded').map((step) => [step.id, step.status, 'failure' in step ? step.failure : undefined]))).toContain(`: always good (teamai-score run ${scoring})`);
+      const judge = steps.find((step) => step.id.endsWith('.judge'));
+      expect(judge).toMatchObject({ status: 'succeeded', confined: { tool: 'claude', isolation: 'best-effort', access: 'read' } });
+      const judgeRecord = path.join(attemptsOf(scoring), attemptOf(judge), 'runtime.json');
+      expect(JSON.parse(fs.readFileSync(judgeRecord, 'utf8'))).toMatchObject({ runtime: 'toy', driver: 'toyjudge', phase: 'closed' });
+      // teamai's own steps ran on the host: none has a step runtime's record.
+      const onRuntime = steps.filter((step) => 'attempt' in step && fs.existsSync(path.join(attemptsOf(scoring), attemptOf(step), 'runtime.json'))).map((step) => step.id);
+      expect(onRuntime).toEqual([judge?.id]);
+      // The judge's place was opened with no view of the host, and its agent read only the evidence directory.
+      expect(toyOpenViews(state)).toContain(null);
+      const [judged, ...more] = toyPrompts(state).filter((line) => line.confined !== undefined);
+      expect(more).toEqual([]);
+      expect(judged).toMatchObject({ confined: { level: 'best-effort', access: 'read' } });
+      expect(judged?.sees).toEqual(expect.arrayContaining(['evidence.json']));
+      expect(judged?.sees?.every((name) => !name.startsWith('..'))).toBe(true);
+    });
+
     it('never leases the judge to a toy that offers can.confined without saying it answers confined prompts', async () => {
       const state = path.join(sandbox, 'toy-state-nojudge');
       fs.writeFileSync(path.join(repo, '.teamai', 'drivers', 'toynojudge.yaml'), [

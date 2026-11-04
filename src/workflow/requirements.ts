@@ -133,6 +133,12 @@ const ENFORCEMENT = {
   confined: 'strict',
   /** A confined step whose model a tool of those offers resolves. */
   model: 'strict',
+  /** A command step of a workflow `HOST_PINNED_WORKFLOWS` names: a driver on this host (`can.remote` is not set). */
+  host: 'strict',
+  /** A prompt step: the driver takes prompts (`can.prompt` is not false). */
+  prompt: 'strict',
+  /** A command step, or setup, that is not pinned to the host: the driver takes them (`can.commands` is not `pinned`). */
+  commands: 'strict',
 } as const satisfies Record<string, 'strict' | 'bestEffort'> & Record<keyof Floor | 'env', 'strict' | 'bestEffort'>;
 
 type Enforcement = typeof ENFORCEMENT;
@@ -143,7 +149,24 @@ export type StrictKey = KeysOf<'strict'>;
 
 type BestEffortKey = KeysOf<'bestEffort'>;
 
-export type DriverCan = Can;
+/**
+ * teamai's own workflows whose command steps do its bookkeeping on this host: they run `teamai` against the run's
+ * files, this machine's sessions and the team repo. Pinned by name, so a team copy under another name is not pinned.
+ */
+export const HOST_PINNED_WORKFLOWS: ReadonlySet<string> = new Set(['teamai-score', 'teamai-share-session', 'teamai-finished-sessions', 'teamai-benchmark']);
+
+/**
+ * A driver's `can` as the engine reads it: the protocol's keys, and three the local loop sets on the runtimes of a
+ * driver definition, which no driver or runtime declares over the wire.
+ * - `remote`: the runtime runs steps away from this host, so it takes no command step pinned to the host.
+ * - `prompt: false`: it takes no prompt step, as the host command slot of a definition with no `local`.
+ * - `commands: 'pinned'`: of command steps and setup, it takes only those pinned to the host, since another runtime of
+ *   the definition runs commands.
+ */
+export type DriverCan = Can & { remote?: true; prompt?: false; commands?: 'pinned' };
+
+/** A `can` that decides every key a driver or runtime declares over the wire, as the local driver and each skill host do. */
+export type DecidedCan = Required<Can>;
 
 /** The `can` keys this CLI reads; any other key is echoed in `ignored`. */
 export const CAN_KEYS: ReadonlySet<string> = new Set(Object.keys(CanSchema.shape));
@@ -349,6 +372,8 @@ export interface Offer {
   clone: boolean;
   /** The caller asked `next --prepare`. */
   prepare: boolean;
+  /** A command step of a workflow `HOST_PINNED_WORKFLOWS` names. Absent: not pinned. */
+  pinned?: boolean;
   /** The team role the step's copy runs with: its clone's, or the step's own in a worktree copy. */
   role?: string;
 }
@@ -412,6 +437,9 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
     ...(offer.role !== undefined && !can.role ? ['role' as const] : []),
     ...(offer.interactive && !can.hitl ? ['hitl' as const] : []),
     ...(offer.executor === 'command' && can.exec === false ? ['exec' as const] : []),
+    ...(offer.pinned && can.remote ? ['host' as const] : []),
+    ...(offer.executor === 'prompt' && can.prompt === false ? ['prompt' as const] : []),
+    ...(can.commands === 'pinned' && ((offer.executor === 'command' && !offer.pinned) || offer.setup) ? ['commands' as const] : []),
     // Setup runs as a command, so a driver that runs none runs no setup either, whatever it says of setup.
     ...(offer.setup && (!can.setup || can.exec === false) ? ['setup' as const] : []),
     // A strict sandbox keeps its strip list from every process of the step, which only a driver with `can.env: true` does.
