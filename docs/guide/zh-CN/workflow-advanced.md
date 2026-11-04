@@ -1461,7 +1461,7 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 Released the codex login teamai keeps, which attempt a3f0c2b1d of run r48201aa held.
 ```
 
-`workflow resume` 发现这样的 exec 仍在运行时，会让它的步骤失败为 `runtime_lost` 并给出同样的建议，同样保留位置和登录。运行时能够停止它之后，对这个运行执行 `teamai workflow cancel` 就会停止它。
+你取消时仍在运行的驱动，以及发现这样的 exec 仍在运行的 `workflow resume`，都会让步骤失败为 `runtime_lost` 并给出同样的建议，同样保留位置和登录。运行时能够停止它之后，对这个运行执行 `teamai workflow cancel` 就会停止它。
 
 ### 编写步骤运行时
 

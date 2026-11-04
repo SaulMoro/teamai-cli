@@ -390,6 +390,10 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
       if (!child || dead) return;
       child.stdin?.end();
       await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, DISPOSE_WAIT_MS).unref())]);
+      // One that runs on keeps what it started: teamai stops reading it, so this process does not wait for it to exit.
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      child.unref();
     },
   };
 }
