@@ -157,6 +157,12 @@ steps:
     interactive: true
     tool: codex
     prompt: Review the repository with a person.`);
+    writeFlow('policyperson', `  - id: review
+    workspace: new
+    interactive: true
+    tool: claude
+    requires: { network: true }
+    prompt: Review the repository with a person.`);
     writeFlow('capped', `  - id: review
     tool: codex
     max_turns: 3
@@ -307,6 +313,24 @@ Judge the review.
     expect(readRunState(runOf(ran)).steps).toMatchObject([{ id: 'review', status: 'failed', failure: {
       code: 'tool_unavailable', message: 'Step "review" runs on codex, which the driver of this run cannot launch here. Install codex where the run is driven, or remove tool from the step.',
     } }]);
+    expect(toyOpens()).toBe(0);
+    expect(fs.existsSync(launches)).toBe(false);
+  });
+
+  it.each([
+    ['local', []],
+    ['policymixed', ['local', 'toy']],
+    ['policytoyfirst', ['toy', 'local']],
+  ] as const)('stops busy on an interactive step the member\'s policy refuses, unattended, on driver %s, and hands it to no person', async (driver, order) => {
+    setMemberWorkflows({ allow: { network: false } });
+    // The toy offers no workspace, so its plan defers the step.
+    if (order.length > 0) writeDefinition(driver, order.map((use) => (use === 'toy' ? { use, options: { state, can: { workspace: [] } } } : { use })));
+
+    const ran = await runCLI(['workflow', 'start', 'policyperson', '--driver', driver], repo, env({ TEAMAI_MODE: 'unattended' }));
+
+    // Busy names the hold of the runtime offered last, which for the toy is the workspace it lacks.
+    expect(envelope(ran), ran.stderr).toEqual({ error: { code: 'busy', message: expect.stringMatching(/^step "review" needs (network|workspace new)/) } });
+    expect(ran.code).toBe(1);
     expect(toyOpens()).toBe(0);
     expect(fs.existsSync(launches)).toBe(false);
   });
