@@ -1455,8 +1455,20 @@ span('end');
         expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
         expect(runtimeRecord(run, attempt)).toMatchObject({ closeFailed: { code: 'cancel_failed' } });
         expect(resumed.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}`);
+
+        // A cancel of the settled run tries the stop again, and keeps the login while the runtime still cannot stop it.
+        const refused = await runCLI(['workflow', 'cancel', run], repo, env());
+        expect(refused.stderr).toContain(stuck.message);
+        expect(pidAlive(pid)).toBe(true);
+        expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
+
+        loginDefinition('codexrestartstuck', state);
+        const stopped = await runCLI(['workflow', 'cancel', run], repo, env());
+        expect(stopped.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attempt} of run ${run} held.`);
+        expect(pidAlive(pid)).toBe(false);
+        expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed' });
       } finally {
-        process.kill(pid, 'SIGKILL');
+        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
         fs.rmSync(lockFile(), { force: true });
       }
     });
