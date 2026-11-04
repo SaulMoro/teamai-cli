@@ -766,6 +766,24 @@ Judge the review.
       expect(envelope(ended), ended.stderr).toMatchObject({ data: { done: { outcome: 'cancelled' } } });
       expect(endings()).toEqual([[sends()[0]?.op, 'cancelled']]);
     });
+
+    it('keeps the place of a running prompt open when its runtime refuses the cancel of a driver that still runs', async () => {
+      const release = path.join(state, 'release');
+      const stuck = { code: 'cancel_failed', message: 'The toy cannot stop that agent now: its provider is down. Start the provider, then run teamai workflow cancel again.' };
+      writeDefinition('agentstuck', [{ use: 'toy', options: { state, agent: { release, output: { ok: true } }, cancel_fails: stuck } }]);
+      const before = runIds();
+      const running = await startKilled(['workflow', 'start', 'oneprompt', '--driver', 'agentstuck']);
+      await until(() => sends().length === 1);
+      const runId = String([...runIds()].find((id) => !before.has(id)));
+
+      await runCLI(['workflow', 'cancel', runId], repo, env());
+
+      const ended = await running.ended;
+      const attempt = attemptOf(readRunState(runId).steps[0]);
+      expect(ended.stderr).toContain(`kept the place of attempt ${attempt} open, since what ran there may still run (cancel_failed): ${stuck.message}`);
+      expect(runtimeRecord(runId, attempt)).toMatchObject({ phase: 'running', closeFailed: { code: 'cancel_failed', message: stuck.message } });
+      expect(JSON.parse(fs.readFileSync(path.join(state, 'handles.json'), 'utf8'))).toMatchObject({ [`${runId}/${attempt}`]: `toy-${runId}-${attempt}` });
+    });
   });
 
   it('refuses a runtime named host, the name of the command slot teamai adds to every definition, before a step runs', async () => {
@@ -1558,6 +1576,34 @@ span('end');
       expect(envelope(driven), driven.stderr).toMatchObject({ data: { done: { outcome: 'cancelled' } } });
       expect(pidAlive(pid)).toBe(false);
       expect(fs.existsSync(lockFile())).toBe(false);
+    });
+
+    it('keeps the place and the login when the runtime refuses the cancel of a driver that still runs, until a later cancel stops the tool', async () => {
+      const stuck = { code: 'cancel_failed', message: 'The toy cannot stop that exec now: its provider is down. Start the provider, then run teamai workflow cancel again.' };
+      loginDefinition('codexlivestuck', state, { cancel_fails: stuck });
+      const { run, pid, watched } = await holdingRun('codexlivestuck');
+
+      try {
+        await runCLI(['workflow', 'cancel', run], repo, env());
+
+        const driven = await watched.ended;
+        const attempt = attemptOf(readRunState(run).steps[0]);
+        expect(pidAlive(pid)).toBe(true);
+        expect(JSON.parse(fs.readFileSync(lockFile(), 'utf8'))).toMatchObject({ run, attempt });
+        expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'running', closeFailed: { code: 'cancel_failed', message: stuck.message } });
+        expect(driven.stderr).toContain(`The codex login teamai keeps stays held by attempt ${attempt} of run ${run}, whose tool may still run.`);
+
+        loginDefinition('codexlivestuck', state);
+        const stopped = await runCLI(['workflow', 'cancel', run], repo, env());
+
+        expect(stopped.stderr).toContain(`Released the codex login teamai keeps, which attempt ${attempt} of run ${run} held.`);
+        expect(pidAlive(pid)).toBe(false);
+        expect(runtimeRecord(run, attempt)).toMatchObject({ phase: 'closed' });
+        expect(fs.existsSync(lockFile())).toBe(false);
+      } finally {
+        if (pidAlive(pid)) process.kill(pid, 'SIGKILL');
+        fs.rmSync(lockFile(), { force: true });
+      }
     });
 
     it('keeps the login held, naming the lock, when the runtime stops while the tool runs, and records the place it could not close', async () => {

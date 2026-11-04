@@ -170,7 +170,10 @@ export interface AttemptRun {
   prompt(request: Omit<PromptRequest, 'op' | 'handle'>, events: { onAccepted?: (accepted: Accepted) => void }): Promise<PromptEnd>;
   /** Stops the exec or prompt running now, with every process it started. */
   cancel(): Promise<void>;
-  /** Brings the place's work back to the host, after success and after failure, before teamai reads the result or commits. */
+  /**
+   * Brings the place's work back to the host, after success and after failure, before teamai reads the result or commits.
+   * After an exec or prompt that ended `lost` it brings nothing back, since what ran there may still write the place.
+   */
   collect(): Promise<WorkflowFailure | undefined>;
   /**
    * Closes the handle once the attempt's report is recorded, so a teamai killed before that still reattaches. A runtime
@@ -198,7 +201,12 @@ function runtimeFailure(runtime: string, message: string): WorkflowFailure {
  * which a later cancel tries again. Any other `failed` is the operation's end, whatever cancel came before it.
  */
 function isUnstopped(state: OpState | undefined): boolean {
-  return state?.state === 'running' || (state?.state === 'failed' && state.failure.code === CANCEL_FAILED);
+  return state?.state === 'running' || (state?.state === 'failed' && isStopRefused(state.failure));
+}
+
+/** Whether an operation that ended `failed` with `failure` may still run: the runtime could not confirm its stop. */
+function isStopRefused(failure: RuntimeFailure): boolean {
+  return failure.code === CANCEL_FAILED;
 }
 
 export function attemptRun({ config, run, attempt, runtime, driver }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime; driver: string }): AttemptRun {
@@ -270,6 +278,16 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
     mayRun = failure;
 
     return { kind: 'lost', failure };
+  };
+
+  /** `failure` with the values of the credentials the place was opened with masked, for what teamai records or prints. */
+  const masked = (failure: RuntimeFailure): RuntimeFailure => ({ ...failure, message: redact(failure.message, { envSecrets: credentialSecrets(runtime.name, openedWith), patterns: false }) });
+
+  /** How an exec or prompt sent now ended, as the attempt takes it: one whose stop the runtime refused may still run. */
+  const ended = <TEnd extends ExecEnd | PromptEnd>(end: TEnd): TEnd | Lost => {
+    if (end.kind === 'lost' || (end.kind === 'failed' && isStopRefused(end.failure))) return lostFor(end.failure);
+
+    return end;
   };
 
   return {
@@ -356,7 +374,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       await acceptance.kept();
       running = undefined;
 
-      return end.kind === 'lost' ? lostFor(end.failure) : end;
+      return ended(end);
     },
 
     async prompt(request, events) {
@@ -417,7 +435,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       await acceptance.kept();
       running = undefined;
 
-      return end.kind === 'lost' ? lostFor(end.failure) : end;
+      return ended(end);
     },
 
     async cancel() {
@@ -429,6 +447,9 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       const handle = before?.open.handle;
 
       if (!before || handle === undefined) return undefined;
+
+      // Nothing is brought back while what ran there may still write the place.
+      if (mayRun) return runtimeFailure(runtime.name, `left the work of attempt ${attempt} in its place, since what ran there may still run (${mayRun.code}): ${masked(mayRun).message}`);
       const collected = await runtime.collect(handle);
 
       if (!collected.ok) return runtimeFailure(runtime.name, `could not bring the work of attempt ${attempt} back (${collected.failure.code}): ${collected.failure.message}. Nothing it changed in the place was committed.`);
@@ -442,7 +463,6 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       const handle = before?.open.handle;
 
       if (!before || handle === undefined || before.phase === 'closed') return undefined;
-      const masked = (failure: RuntimeFailure): RuntimeFailure => ({ ...failure, message: redact(failure.message, { envSecrets: credentialSecrets(runtime.name, openedWith), patterns: false }) });
 
       if (mayRun) {
         const failure = masked(mayRun);
