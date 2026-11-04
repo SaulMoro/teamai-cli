@@ -9,7 +9,7 @@ import {
 } from '@teamai/runtime-protocol';
 import { z } from 'zod';
 import { loadClient } from './client.js';
-import { CONFINED_CODEX_OPTIONS, CONFINED_MODES, connect, DEFAULT_MODES, isPaseoTool, type Daemon, type PaseoTool } from './daemon.js';
+import { CONFINED_MODES, CONFINED_OPTIONS, connect, DEFAULT_MODES, isPaseoTool, type Daemon, type PaseoTool } from './daemon.js';
 import type { AgentCreate, AgentPrompt, Journal, Place } from './journal.js';
 
 type WorktreePlace = Extract<Place, { kind: 'worktree' }>;
@@ -60,12 +60,39 @@ function confinedBrief(tool: PaseoTool, confined: ConfinedPrompt, prompt: string
     ? 'Reply with only the JSON answer, and no other text.'
     : `Reply with only the JSON answer that matches this JSON Schema, and no other text: ${JSON.stringify(confined.schema)}. Where the prompt above names another schema, this one decides the shape of your reply.`;
 
-  // Codex has no file tools: it reads through shell commands, which its read-only sandbox runs without asking.
-  const reading = tool === 'codex'
-    ? 'List and read them with read-only shell commands, such as ls, cat and rg, which your sandbox runs without asking. Change no file and use no other tool'
-    : 'List and read them with your file tools, such as Glob, Grep and Read. Change no file and run no shell command';
+  return `Answer from the files in ${confined.dir} alone. ${CONFINED_READING[tool]}: asking for a permission ends this run.\n\n${prompt}\n\n${reply}`;
+}
 
-  return `Answer from the files in ${confined.dir} alone. ${reading}: asking for a permission ends this run.\n\n${prompt}\n\n${reply}`;
+/** How a confined prompt's agent reads its directory. Codex has no file tools: it reads with shell commands, which its read-only sandbox runs without asking. */
+const CONFINED_READING: Readonly<Record<PaseoTool, string>> = {
+  claude: 'List and read them with your file tools, such as Glob, Grep and Read. Change no file and run no shell command',
+  codex: 'List and read them with read-only shell commands, such as ls, cat and rg, which your sandbox runs without asking. Change no file and use no other tool',
+  opencode: 'List and read them with your file tools, such as Glob, Grep and Read. Change no file and run no shell command',
+};
+
+/**
+ * What a step's agent may write without asking besides its worktree: teamai's result file, as teamai's own launch allows
+ * it on a POSIX host, and the run's scratch directory, which the place gives read-write at its own path. Claude's
+ * default mode asks before any write, so those two are allowed, and only they. Codex's `auto` sandbox writes the
+ * worktree, so the result file's directory and the run directory are added to it. OpenCode gets no grant.
+ */
+function stepGrant(tool: PaseoTool, result: string, runDir: string): AgentCreate['config']['options'] {
+  switch (tool) {
+    case 'claude':
+      return { allowedTools: [`Edit(/${result})`, `Edit(/${runDir}/**)`] };
+
+    case 'codex':
+      return { sandbox_workspace_write: { writable_roots: [path.dirname(result), runDir] } };
+
+    case 'opencode':
+      return undefined;
+
+    default: {
+      const unhandled: never = tool;
+
+      return unhandled;
+    }
+  }
 }
 
 /** The failure of an agent that ended with no session in Paseo: teamai records and scores a pass by its session. */
@@ -108,26 +135,24 @@ export interface Serving {
   journal: Journal;
 }
 
-/** What init offered: the tools a step and a judge run on, and why each other installed tool runs on neither. */
-interface Offer {
-  steps: PaseoTool[];
-  judges: PaseoTool[];
-  reasons: Map<PaseoTool, string>;
-}
+/** What init offered of an installed tool: its steps and judges, its steps only, or nothing, with why not. */
+type Offer = { runs: 'steps-and-judges' } | { runs: 'steps'; noJudge: string } | { runs: 'nothing'; reason: string };
 
 export function serve({ input, write, journal }: Serving): Promise<void> {
   let daemon: Daemon | undefined;
   let mode: 'attended' | 'unattended' = 'attended';
-  let offer: Offer = { steps: [], judges: [], reasons: new Map() };
+  /** What init offered of each tool the daemon has installed. */
+  let offers = new Map<PaseoTool, Offer>();
 
   /**
-   * Why a new prompt on `tool` is refused, or undefined when init offered it. teamai holds a step whose `tool` was not
-   * offered, but not one that takes its tool from the definition's default, so the runtime refuses it here too.
+   * Why a new step or judge on `tool` is refused, or undefined when init offered it. teamai holds a step whose `tool` was
+   * not offered, but not one that takes its tool from the definition's default, so the runtime refuses it here too.
    */
-  const notOffered = (tool: PaseoTool, isJudge: boolean): string | undefined => {
-    if ((isJudge ? offer.judges : offer.steps).includes(tool)) return undefined;
+  const notOffered = (tool: PaseoTool, isJudge: boolean): RuntimeFailure | undefined => {
+    const offer = offers.get(tool) ?? { runs: 'nothing', reason: 'the daemon has not installed it' };
+    const reason = offer.runs === 'nothing' ? offer.reason : offer.runs === 'steps' && isJudge ? offer.noJudge : undefined;
 
-    return offer.reasons.get(tool) ?? (offer.steps.includes(tool) ? `has no ${CONFINED_MODES[tool]} mode, which teamai judges it in` : 'the daemon has not installed it');
+    return reason === undefined ? undefined : { code: 'tool_unavailable', message: `teamai-runtime-paseo did not offer ${tool}: ${reason}.` };
   };
 
   /** The prompts this process follows, each with what stops its wait when teamai cancels it, once its agent exists. */
@@ -261,11 +286,13 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     daemon = connected;
     mode = request.mode;
 
-    const judges = tools.flatMap(({ tool, modes }) => {
-      return modes.includes(CONFINED_MODES[tool]) ? [tool] : [];
-    });
+    offers = new Map(installed.map((entry): [PaseoTool, Offer] => {
+      if (!entry.canRun) return [entry.tool, { runs: 'nothing', reason: entry.reason }];
+      const confinedMode = CONFINED_MODES[entry.tool];
 
-    offer = { steps: tools.map(({ tool }) => tool), judges, reasons: new Map(installed.flatMap((entry) => (entry.canRun ? [] : [[entry.tool, entry.reason] as const]))) };
+      return [entry.tool, entry.modes.includes(confinedMode) ? { runs: 'steps-and-judges' } : { runs: 'steps', noJudge: `has no ${confinedMode} mode, which teamai judges it in` }];
+    }));
+    const judges = tools.flatMap(({ tool }) => (offers.get(tool)?.runs === 'steps-and-judges' ? [tool] : []));
 
     write({
       type: 'init', ok: true, prompt: true,
@@ -374,20 +401,15 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
     const unoffered = notOffered(tool, false);
 
-    if (unoffered !== undefined) {
-      refuse(op, request.handle, { code: 'tool_unavailable', message: `teamai-runtime-paseo did not offer ${tool}: ${unoffered}.` });
+    if (unoffered) {
+      refuse(op, request.handle, unoffered);
 
       return;
     }
 
     const create = await createFor(live, request, tool, {
       place, modeId: DEFAULT_MODES[tool], prompt: lease.prompt, env: { [RUN_DIR_ENV]: place.runDir },
-      // Claude's default mode asks before any write, so the result file, as teamai's own launch allows it on a POSIX
-      // host, and the run's scratch directory, which the place gives read-write at its own path, are allowed, and only
-      // they; the mode stays as it is. Codex's `auto` mode writes its worktree and asks before writing elsewhere, so the
-      // result file's directory and the run's scratch directory are added to what its sandbox writes.
-      ...(tool === 'claude' && { options: { allowedTools: [`Edit(/${lease.result})`, `Edit(/${place.runDir}/**)`] } }),
-      ...(tool === 'codex' && { options: { sandbox_workspace_write: { writable_roots: [path.dirname(lease.result), place.runDir] } } }),
+      options: stepGrant(tool, lease.result, place.runDir),
     });
 
     if ('code' in create) {
@@ -424,8 +446,8 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
     const unoffered = notOffered(tool, true);
 
-    if (unoffered !== undefined) {
-      refuse(op, request.handle, { code: 'tool_unavailable', message: `teamai-runtime-paseo did not offer ${tool}: ${unoffered}.` });
+    if (unoffered) {
+      refuse(op, request.handle, unoffered);
 
       return;
     }
@@ -446,7 +468,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       journal.savePlace(request.handle, { ...place, workspace: { id: workspace.id, name: workspace.name } });
     }
 
-    const create = await createFor(live, request, tool, { place, modeId, prompt: confinedBrief(tool, confined, lease.prompt), ...(tool === 'codex' && { options: CONFINED_CODEX_OPTIONS }) });
+    const create = await createFor(live, request, tool, { place, modeId, prompt: confinedBrief(tool, confined, lease.prompt), options: CONFINED_OPTIONS[tool] });
 
     if ('code' in create) {
       refuse(op, request.handle, create);
