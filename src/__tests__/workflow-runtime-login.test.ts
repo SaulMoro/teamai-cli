@@ -91,7 +91,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
       cancel: async () => {},
       collect: async () => ({ ok: true }),
       reattach: async () => (seen[Math.min(asked++, seen.length - 1)] ?? (() => ({ kind: 'gone' })))(op),
-      close: async () => {},
+      close: async () => ({ ok: true }),
       dispose: async () => {},
     };
   };
@@ -114,13 +114,13 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).stopLeftOperation()).toBe(false);
   });
 
-  it('fails a restarted exec whose old run the runtime cannot show stopped, instead of reporting it interrupted', async () => {
+  it('ends a restarted exec whose old run the runtime cannot show stopped as lost, instead of reporting it interrupted', async () => {
     const runtime = runtimeSeeing([running, unreachable]);
     await leftRunning(runtime);
 
     const end = await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).exec({ argv: ['tool'], env: {}, unset: [], cwd: root }, {});
 
-    expect(end).toMatchObject({ kind: 'failed' });
+    expect(end).toMatchObject({ kind: 'lost' });
   });
 });
 

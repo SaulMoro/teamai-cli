@@ -17,7 +17,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 
-const OPTIONS = new Set(['state', 'die_at', 'can', 'display', 'agent']);
+const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'can', 'display', 'agent']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -83,6 +83,8 @@ function stopGroup(pgid) {
   setTimeout(() => { try { process.kill(-pgid, 'SIGKILL'); } catch { /* gone */ } }, 2000).unref();
 }
 
+// `exit_at: 'exec-accepted'` makes the toy itself exit right after it accepted an exec, which keeps running. With
+// `close_fails`, it answers every `close` with `close_failed`.
 // `display` is sent as given, valid or not, so a test reads what teamai keeps of it.
 function shown() {
   return options.display === undefined ? {} : { display: options.display };
@@ -165,6 +167,13 @@ function exec(request) {
   running.set(request.op, child);
   writeJson(opPath(request.op), { kind: 'exec', handle: request.handle, pgid: child.pid });
   send({ op: request.op, event: 'accepted' });
+
+  // The toy itself stops while the exec runs on, as a runtime that crashes leaves its processes behind.
+  if (options.exit_at === 'exec-accepted') {
+    process.stdout.write('', () => process.exit(70));
+
+    return;
+  }
   let stdout = '';
   child.stdout.setEncoding('utf8').on('data', (data) => { stdout += data; send({ op: request.op, event: 'output', stream: 'stdout', data }); });
   child.stderr.setEncoding('utf8').on('data', (data) => { send({ op: request.op, event: 'output', stream: 'stderr', data }); });
@@ -324,6 +333,12 @@ function reattach(request) {
 }
 
 function close(request) {
+  if (options.close_fails) {
+    send({ event: 'close_failed', handle: request.handle, failure: { code: 'close_failed', message: `The toy keeps place ${request.handle}: close_fails is set.` } });
+
+    return;
+  }
+
   const handles = readJson(file('handles.json'), {});
 
   for (const [key, handle] of Object.entries(handles)) if (handle === request.handle) delete handles[key];

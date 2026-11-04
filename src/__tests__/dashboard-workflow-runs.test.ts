@@ -271,6 +271,35 @@ describe('dashboard workflow runs', () => {
     expect(JSON.stringify(detail)).not.toContain(config.dataHome ?? 'data');
   });
 
+  it('shows why the runtime could not close a pass\'s place', async () => {
+    const config = scope('self');
+    fs.mkdirSync(path.join(config.repo.localPath, 'workflows'), { recursive: true });
+    fs.writeFileSync(path.join(config.repo.localPath, 'workflows/one.yaml'), ['schemaVersion: v1alpha1', 'name: one', 'description: One step.', 'steps:', '  - id: build', '    command: echo build'].join('\n'));
+    expect((await syncScorersThenWorkflows(config)).invalid).toEqual([]);
+    const started = await startRun(config, 'one', {}, { secrets: await knownSecrets(config) });
+    if ('error' in started) throw new Error(started.error.message);
+    const id = RunIdSchema.parse(started.data.run);
+    const lease = await leaseNext(config, id, driver, {});
+    if ('error' in lease) throw new Error(lease.error.message);
+    const attempt = AttemptIdSchema.parse((lease.data.lease as { attempt: string }).attempt);
+    const root = config.projectRoot ?? '';
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    try {
+      expect(await runtime.init({ options: { state: path.join(root, 'toy-state'), close_fails: true }, mode: 'unattended' })).toMatchObject({ ok: true });
+      const placed = attemptRun({ config, run: id, attempt, runtime, driver: 'toyd' });
+      expect(await placed.open({ worktree: root, readonly: [], result: path.join(root, 'out'), toolHome: {} })).toMatchObject({ ok: true });
+      expect(await placed.close()).toMatchObject({ code: 'runtime_failed' });
+    } finally {
+      await runtime.dispose();
+    }
+
+    const detail = await workflowRunDetail(config, 'local', id);
+
+    expect(detail?.steps.find((row) => row.step === 'build')).toMatchObject({
+      runtime: { name: 'toy', phase: 'ready', closeFailed: { code: 'close_failed', message: `The toy keeps place toy-${id}-${attempt}: close_fails is set.` } },
+    });
+  });
+
   it("shows a run's benchmark results, usage and task by arm matrix once its report wrote the record, and no table before", async () => {
     const run = await waitingRun();
     expect(await workflowRunDetail(run.config, 'local', run.id)).not.toHaveProperty('benchmark');

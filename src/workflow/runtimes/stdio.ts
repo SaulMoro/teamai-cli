@@ -20,8 +20,9 @@ type HandleWaiter = { events: ReadonlySet<HandleEvent['event']>; settle: (event:
 
 /**
  * The client of an external step runtime: `command` spawned with `args`, speaking runtime protocol 1 over its stdio.
- * The process starts at `init`. Once it exits, or writes a line the protocol does not have, everything in flight fails
- * with `runtime_exited` and no request reaches it again.
+ * The process starts at `init`. Once it exits, or writes a line the protocol does not have, no request reaches it
+ * again: an exec or prompt in flight ends `lost`, since what it started may outlive the runtime, and every other
+ * request fails with `runtime_exited`.
  */
 export function stdioStepRuntime({ name, command, args = [], cwd }: { name: string; command: string; args?: string[]; cwd?: string }): StepRuntime {
   let child: ChildProcess | undefined;
@@ -181,7 +182,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
         ops.set(request.op, (event) => {
           if (isFailure(event)) {
             ops.delete(request.op);
-            resolve({ kind: 'failed', failure: event });
+            resolve({ kind: 'lost', failure: event });
 
             return;
           }
@@ -239,7 +240,7 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
 
         ops.set(request.op, (event) => {
           if (isFailure(event)) {
-            settle({ kind: 'failed', failure: event });
+            settle({ kind: 'lost', failure: event });
 
             return;
           }
@@ -305,7 +306,11 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
     },
 
     async close(handle) {
-      await askHandle({ type: 'close', handle }, ['closed']);
+      const reply = await askHandle({ type: 'close', handle }, ['closed', 'close_failed']);
+
+      if (isFailure(reply)) return { ok: false, failure: reply };
+
+      return reply.event === 'close_failed' ? { ok: false, failure: reply.failure } : { ok: true };
     },
 
     async dispose() {

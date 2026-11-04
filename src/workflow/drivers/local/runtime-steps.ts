@@ -120,6 +120,8 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
         return interrupted();
       case 'failed':
         return { code: 'runtime_failed', message: `The step runtime could not run the command: ${end.failure.message}` };
+      case 'lost':
+        return lost('the command', end.failure);
       default: {
         const unhandled: never = end;
 
@@ -133,6 +135,11 @@ export function runtimeCommand(input: { run: AttemptRun; view: () => Promise<Pla
 
     return exit;
   } };
+}
+
+/** A step whose runtime stopped answering while it ran: what it started may still run there. */
+function lost(what: string, failure: RuntimeFailure): WorkflowFailure {
+  return { code: 'runtime_lost', message: `The step runtime stopped answering while it ran ${what}, which may still run there: ${failure.message}` };
 }
 
 function interrupted(): WorkflowFailure {
@@ -178,6 +185,8 @@ export function runtimeLauncher(run: AttemptRun, { view, toolHome, unset }: { vi
           return { failure: interrupted() };
         case 'failed':
           return { failure: { code: 'runtime_failed', message: `The step runtime could not run ${executable}: ${end.failure.message}` } };
+        case 'lost':
+          return { failure: lost(executable, end.failure) };
         default: {
           const unhandled: never = end;
 
@@ -280,6 +289,8 @@ export function runtimePrompter(run: AttemptRun, { view, step, unset }: { view: 
 
       case 'failed':
         return accepted ? { started: true, exitCode: 1, failure: promptFailure(end.failure) } : { started: false, exitCode: 1, failure: promptFailure(end.failure) };
+      case 'lost':
+        return { started: accepted, exitCode: 1, failure: lost(`the ${tool} prompt`, end.failure) };
       default: {
         const unhandled: never = end;
 

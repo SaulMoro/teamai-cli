@@ -107,6 +107,20 @@ describe("a run's Steps", () => {
     expect([...new Set(chinese.keys)].filter((key) => !Object.hasOwn(dashboardMessages, key))).toEqual([]);
   });
 
+  it('shows why the runtime could not close a pass\'s place, which may still hold what ran there', () => {
+    const step: Step = {
+      step: 'review', pass: 1, status: 'failed',
+      runtime: { name: 'sandbox', driver: 'sandboxed', handle: 'teamai-r7-a1', phase: 'collected', closeFailed: { code: 'close_failed', message: 'docker rm teamai-r7-a1 failed: the daemon is not running' } },
+    };
+    const { html } = render([step]);
+
+    expect(text(html)).toContain('Not closed: close_failed · docker rm teamai-r7-a1 failed: the daemon is not running');
+    expect(html).toContain('<div class="runtime-line amber">');
+
+    const chinese = render([step], 'zh-CN');
+    expect([...new Set(chinese.keys)].filter((key) => !Object.hasOwn(dashboardMessages, key))).toEqual([]);
+  });
+
   it('names each card part in Chinese', () => {
     const { html, keys } = render(STEPS, 'zh-CN');
 

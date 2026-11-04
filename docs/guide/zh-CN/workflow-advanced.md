@@ -1346,6 +1346,13 @@ teamai 把这个 `auth.json` 复制到这次尝试的工具主目录，步骤结
 
 如果持有者的驱动已被杀掉，对它的运行执行 `teamai workflow cancel` 会先在步骤运行时上停止工具并写回登录，再释放它。联系不上运行时，登录就继续被持有，命令会说明工具停止后要删除哪个锁文件。
 
+Codex 运行期间运行时自己停止，或之后无法关闭位置时，登录同样继续被持有，因为 Codex 可能还在那里运行。步骤失败为 `runtime_lost`，teamai 会说明怎么处理：
+
+```text
+⚠ Step runtime "sandbox" could not close the place of attempt a339da600, so what ran there may still run: Step runtime "sandbox" stopped: it exited with status 70.
+⚠ The codex login teamai keeps stays held by attempt a339da600 of run r9a395746ec65dbd7, whose tool may still run. Stop that tool on its step runtime, then delete /home/me/.teamai/logins/codex.lock.
+```
+
 团队运行时是队友推送的代码，所以只有在这台机器上有人接受过的修订才会运行。它目录下任何文件的改动都会产生新的修订。有人值守的运行在第一次启动前会询问：
 
 ```text
@@ -1391,6 +1398,15 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 ```
 
 其他请求是 `cancel`、`collect`、`reattach` 和 `close`。在 `close` 之前，运行时对重复的 `op` 给出同样的结果。它保存 exec 打印的内容和退出方式，这样重启后的 teamai 可以用 `reattach` 读取。运行时不接受的选项会让 `init` 失败为 `bad_option`，并给出那个键。
+
+无法结束某个位置的运行时，用原因回答 `close`。teamai 随后把在那里运行的东西视为仍在运行：这次尝试继续持有登录，运行详情在步骤下以 *未关闭* 显示这个失败：
+
+```text
+→ {"type":"close","handle":"teamai-r7-a1"}
+← {"event":"close_failed","handle":"teamai-r7-a1","failure":{"code":"rm_failed","message":"docker rm teamai-r7-a1 failed: the daemon is not running"}}
+```
+
+exec 或提示运行期间退出的运行时，出于同样的原因会让它失败为 `runtime_lost`。
 
 每个请求和回复都在 teamai 仓库的 `packages/runtime-protocol` 中定义为 zod schema：teamai 发送的内容用 `RuntimeRequestSchema`，运行时写出的内容用 `RuntimeMessageSchema`。
 
@@ -1450,6 +1466,7 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 | `login_missing` | 运行 `CODEX_HOME=~/.teamai/logins/codex codex login`，然后重试这个步骤 |
 | `login_not_written_back` | 如果 Codex 刷新过令牌，用同一条命令重新登录，然后重试这个步骤 |
 | `runtime_failed`、`runtime_interrupted` | 重试这个步骤：`teamai workflow retry <run> <step>` |
+| `runtime_lost` | 步骤运行期间运行时停止了，所以它的工具可能还在那里运行。在运行时上停止它，如果警告给出了登录锁就删除它，然后重试这个步骤 |
 
 ## 在自己的驱动里使用工作区
 
