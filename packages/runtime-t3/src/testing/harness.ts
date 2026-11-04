@@ -127,6 +127,8 @@ export interface FakeT3 {
   threads(): FakeThread[];
   /** A thread someone else launched, such as the person, ended at `status`. */
   addThread(thread: { threadId: string; title: string; status: string }): void;
+  /** The person deletes the thread in T3 Code: T3 answers every later call on it `thread_not_found`. */
+  deleteThread(threadId: string): void;
   /** Starts the fake server, or starts it again on the same state. */
   start(): Promise<void>;
   stop(): Promise<void>;
@@ -169,6 +171,7 @@ export function fakeT3(dir: string, workspaceRoot: string): FakeT3 {
       fs.mkdirSync(path.join(state, 'threads'), { recursive: true });
       fs.writeFileSync(path.join(state, 'threads', `${encodeURIComponent(thread.threadId)}.json`), JSON.stringify({ ...thread, provider: 'claudeAgent', settled: false, runCount: 1 }));
     },
+    deleteThread: (threadId) => fs.rmSync(path.join(state, 'threads', `${encodeURIComponent(threadId)}.json`)),
     async start() {
       fs.rmSync(runtimeFile, { force: true });
       server = spawn(process.execPath, [FAKE_T3], { env: { ...process.env, FAKE_T3_STATE: state, T3CODE_HOME: t3Home, FAKE_T3_HOME: home }, stdio: ['ignore', 'ignore', 'inherit'] });

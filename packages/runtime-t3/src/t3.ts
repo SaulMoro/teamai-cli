@@ -117,6 +117,11 @@ export class T3Error extends Error {
     this.tool = tool;
     this.refusal = refusal;
   }
+
+  /** T3 no longer has the thread, such as one the person deleted: nothing of it runs, and nothing is left to settle. */
+  get threadGone(): boolean {
+    return this.refusal?.code === 'thread_not_found';
+  }
 }
 
 function refusalIn(text: string): Refusal | undefined {
