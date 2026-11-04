@@ -436,6 +436,8 @@ describe('teamai-runtime-paseo', () => {
       expect(prompt).toContain('Change no file and run no shell command');
       expect(prompt).toContain('Label the pass from the evidence: pass or fail.');
       expect(prompt).toContain(JSON.stringify(SCHEMA));
+      // The step's prompt may name another schema file; the one the request carries decides the reply's shape.
+      expect(prompt).toContain('Where the prompt above names another schema, this one decides the shape of your reply.');
       expect(fs.readdirSync(evidence)).toEqual(['diff.patch']);
     });
 

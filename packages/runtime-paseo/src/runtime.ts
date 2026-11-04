@@ -55,9 +55,11 @@ const CONFINED_KEPT: ConfinedKept = { level: 'best-effort', access: 'read' };
 
 /** The prompt a confined prompt's agent gets: the brief that confines it, the step's prompt, and the shape of its answer. */
 function confinedBrief(confined: ConfinedPrompt, prompt: string): string {
-  const matching = confined.schema === undefined ? '' : ` that matches this JSON Schema: ${JSON.stringify(confined.schema)}`;
+  const reply = confined.schema === undefined
+    ? 'Reply with only the JSON answer, and no other text.'
+    : `Reply with only the JSON answer that matches this JSON Schema, and no other text: ${JSON.stringify(confined.schema)}. Where the prompt above names another schema, this one decides the shape of your reply.`;
 
-  return `Answer from the files in ${confined.dir} alone. List and read them with your file tools, such as Glob, Grep and Read. Change no file and run no shell command: asking for a permission ends this run.\n\n${prompt}\n\nReply with only the JSON answer${matching}, and no other text.`;
+  return `Answer from the files in ${confined.dir} alone. List and read them with your file tools, such as Glob, Grep and Read. Change no file and run no shell command: asking for a permission ends this run.\n\n${prompt}\n\n${reply}`;
 }
 
 /** A confined prompt's answer: the JSON value its agent replied with. */
