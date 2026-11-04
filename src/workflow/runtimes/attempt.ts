@@ -13,7 +13,7 @@ import type { SessionRef } from '../workspace.js';
 import { redact } from '@teamai/shared/redact';
 import { loginFileOf } from './login.js';
 import { credentialSecrets } from './sources.js';
-import { OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type OpState, type PlaceView, type RuntimeDisplay, type RuntimeFailure } from '@teamai/runtime-protocol';
+import { CANCEL_FAILED, OpIdSchema, RuntimeDisplaySchema, RuntimeFailureSchema, type OpId, type OpState, type PlaceView, type RuntimeDisplay, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { newOpId, type Accepted, type ExecEnd, type ExecEvents, type ExecRequest, type Lost, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
 
 // ─── An attempt on a step runtime ────────────────────────
@@ -194,11 +194,11 @@ function runtimeFailure(runtime: string, message: string): WorkflowFailure {
 }
 
 /**
- * Whether a cancel left `state` unstopped: `cancel_failed` is the one outcome a later cancel replaces, so the stop is
- * tried again.
+ * Whether `state` may still run: `running`, or `failed` with `cancel_failed`, a stop the runtime could not confirm,
+ * which a later cancel tries again. Any other `failed` is the operation's end, whatever cancel came before it.
  */
 function isUnstopped(state: OpState | undefined): boolean {
-  return state?.state === 'running' || (state?.state === 'failed' && state.failure.code === 'cancel_failed');
+  return state?.state === 'running' || (state?.state === 'failed' && state.failure.code === CANCEL_FAILED);
 }
 
 export function attemptRun({ config, run, attempt, runtime, driver }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime; driver: string }): AttemptRun {
@@ -243,7 +243,7 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
   /**
    * Stops an operation a teamai before this one left running, and waits until the runtime no longer reports it running.
    * Answers why the stop is not confirmed, or undefined once it is: the runtime could not be asked, it reports the
-   * operation failed after the cancel (its failure says what to do), or it still reports it running after the wait.
+   * operation `cancel_failed` (its failure says what to do), or it still reports it running after the wait.
    */
   const stopLeftRunning = async (handle: string, op: OpId): Promise<RuntimeFailure | undefined> => {
     await runtime.cancel(op);
@@ -256,9 +256,9 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       if (seen.kind === 'gone') return undefined;
       const state = seen.ops.find((retained) => retained.op === op);
 
-      if (state?.state === 'failed') return state.failure;
+      if (!isUnstopped(state)) return undefined;
 
-      if (state?.state !== 'running') return undefined;
+      if (state?.state === 'failed') return state.failure;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
@@ -378,6 +378,15 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
 
         // The runtime accepted it before the restart; one still running is accepted again when it is resent.
         if (state !== undefined && state.state !== 'running') events.onAccepted?.({});
+
+        // A stop that a cancel before the restart could not confirm is tried again: it is not how the prompt ended.
+        if (state?.state === 'failed' && isUnstopped(state)) {
+          const notStopped = await stopLeftRunning(handle, sent.op);
+
+          if (!notStopped) return { kind: 'cancelled' };
+
+          return lostFor({ code: notStopped.code, message: `Step runtime "${runtime.name}" could not stop the prompt of attempt ${attempt} that a teamai before this one asked it to cancel, so it may still run there: ${notStopped.message}` });
+        }
 
         if (state?.state === 'finished') {
           const end: PromptEnd = { kind: 'finished', session: state.session, result: state.result };
