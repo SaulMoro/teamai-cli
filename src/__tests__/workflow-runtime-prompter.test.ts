@@ -11,7 +11,7 @@ import type { PromptEnd } from '../workflow/runtimes/step-runtime.js';
  * An attempt on a runtime that launches agents its own way. Like the real one, `cancel` stops only the prompt it has
  * sent: `beforeSend` runs first, as an open or a reattach does, and a prompt not cancelled finishes on the next turn.
  */
-function promptOnlyRun({ duringOpen, beforeSend }: { duringOpen?: () => void; beforeSend?: () => Promise<void> } = {}): { run: AttemptRun; cancels: () => number } {
+function promptOnlyRun({ duringOpen, beforeSend, result = { output: { ok: true } } }: { duringOpen?: () => void; beforeSend?: () => Promise<void>; result?: Extract<PromptEnd, { kind: 'finished' }>['result'] } = {}): { run: AttemptRun; cancels: () => number } {
   let sent: ((end: PromptEnd) => void) | undefined;
   let cancels = 0;
 
@@ -28,7 +28,7 @@ function promptOnlyRun({ duringOpen, beforeSend }: { duringOpen?: () => void; be
       return new Promise<PromptEnd>((resolve) => {
         sent = resolve;
         events.onAccepted?.({});
-        setImmediate(() => resolve({ kind: 'finished', session: { tool: 'claude', id: 's-1' }, result: { output: { ok: true } } }));
+        setImmediate(() => resolve({ kind: 'finished', session: { tool: 'claude', id: 's-1' }, result }));
       });
     },
     cancel: async () => {
@@ -61,7 +61,7 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
     const controller = new AbortController();
     const { run, cancels } = promptOnlyRun({ duringOpen: () => controller.abort() });
 
-    const ran = await runtimePrompter(run, { view, step: 'review', provided: [], unset: [], credentials: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), secrets: {} }, controller.signal);
+    const ran = await runtimePrompter(run, { view, step: 'review', provided: [], unset: [], credentials: {}, secrets: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), secrets: {} }, controller.signal);
 
     expect(ran).toMatchObject({ exitCode: 143, failure: { code: 'tool_failed' } });
     expect(cancels()).toBe(1);
@@ -70,7 +70,7 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
   it('stops at its timeout when the timeout passes before the prompt is sent', async () => {
     const { run, cancels } = promptOnlyRun({ beforeSend: () => new Promise((resolve) => setTimeout(resolve, 50)) });
 
-    const ran = await runtimePrompter(run, { view, step: 'review', provided: [], unset: [], credentials: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), timeoutMs: 1, secrets: {} }, undefined);
+    const ran = await runtimePrompter(run, { view, step: 'review', provided: [], unset: [], credentials: {}, secrets: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), timeoutMs: 1, secrets: {} }, undefined);
 
     expect(ran).toMatchObject({ exitCode: 143, stoppedBy: 'timeout' });
     expect(cancels()).toBe(1);
@@ -80,8 +80,19 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
     const { run } = promptOnlyRun();
     const uncollectable: AttemptRun = { ...run, collect: async () => ({ code: 'runtime_failed', message: 'The place could not be collected.' }) };
 
-    const ran = await runtimePrompter(uncollectable, { view, step: 'review', provided: [], unset: [], credentials: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), resume: 'earlier-session', secrets: {} }, undefined);
+    const ran = await runtimePrompter(uncollectable, { view, step: 'review', provided: [], unset: [], credentials: {}, secrets: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), resume: 'earlier-session', secrets: {} }, undefined);
 
     expect(ran).toMatchObject({ exitCode: 1, session: 's-1', startedFresh: true });
+  });
+
+  it('keeps a secret that the runtime result echoes out of the result file, from its first write', async () => {
+    const { run } = promptOnlyRun({ result: { output: { note: 'signed in with prompter-secret-7d2e' }, failure: { code: 'tool_failed', message: 'denied for prompter-secret-7d2e' } } });
+    const resultPath = path.join(dir, 'result.json');
+
+    await runtimePrompter(run, { view, step: 'review', provided: [], unset: [], credentials: {}, secrets: { TOY_TEAM: 'prompter-secret-7d2e' } }).run('claude', { prompt: 'Review.', cwd: dir, resultPath, secrets: {} }, undefined);
+    const written = fs.readFileSync(resultPath, 'utf8');
+
+    expect(written).not.toContain('prompter-secret-7d2e');
+    expect(JSON.parse(written)).toMatchObject({ output: { note: expect.stringContaining('signed in with') } });
   });
 });

@@ -500,7 +500,7 @@ async function promptReport(
   staged: LaunchChoice | undefined,
   secrets: Record<string, string>,
   askPerson: AskPerson | undefined,
-  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string> } | undefined,
+  onRuntime: { run: AttemptRun; logins: readonly LoginTool[]; launchesAgents: boolean; credentials: Record<string, string>; secrets: Record<string, string> } | undefined,
 ): Promise<ReportBody> {
   const giveUp = async (failure: WorkflowFailure, tool?: string): Promise<ReportBody> => {
     const unrestored = await abandonPlace({ config, lock, attempt: lease.attempt });
@@ -696,7 +696,7 @@ async function promptReport(
   if (onRuntime?.launchesAgents) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = scoped.env;
-    launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd), step: lease.step, provided: scoped.provided, unset: scoped.unset, credentials: onRuntime.credentials });
+    launcher = runtimePrompter(onRuntime.run, { view: await placeView(config, lock.run, lease.attempt, cwd), step: lease.step, provided: scoped.provided, unset: scoped.unset, credentials: onRuntime.credentials, secrets: onRuntime.secrets });
   } else if (onRuntime && toolHome) {
     const scoped = runtimeStepEnv(lease, lease.processEnv ?? {}, { config, run: lock.run, mode });
     input.env = { ...scoped.env, [toolHome.variable]: toolHome.dir };
@@ -1602,7 +1602,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
           const stepRun = runOf(lease);
 
-          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, { ...turn.secrets, ...maskedCredentials }, askPerson, stepRun && { run: stepRun, logins: slotOf.get(lease.attempt)?.engine.logins ?? [], launchesAgents: slotOf.get(lease.attempt)?.launchesAgents === true, credentials: slotOf.get(lease.attempt)?.credentials ?? {} });
+          return promptReport(config, lock, driver, lease, adapter, options, archive, controller.signal, mode, launch, { ...turn.secrets, ...maskedCredentials }, askPerson, stepRun && { run: stepRun, logins: slotOf.get(lease.attempt)?.engine.logins ?? [], launchesAgents: slotOf.get(lease.attempt)?.launchesAgents === true, credentials: slotOf.get(lease.attempt)?.credentials ?? {}, secrets: await maskedValues() });
         })() });
       }
 
