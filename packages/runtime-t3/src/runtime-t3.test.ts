@@ -629,22 +629,25 @@ describe('teamai-runtime-t3', () => {
       expect(thread?.message).toContain(`Reply with one JSON value and no other text. teamai checks it against this JSON Schema, so it decides the reply's shape: ${JSON.stringify({ type: 'object', required: ['label'] })}. Where the prompt below asks for a reply of another shape, give that value where this schema places it.`);
     });
 
-    // teamai sends the directory's real path, and the prompt names it as the step rendered it, here through a link.
-    it('points the prompt at the copy however it spells the directory, a path through a symlink included', async () => {
-      const linked = path.join(dir, 'linked-run');
-      fs.symlinkSync(path.join(dir, 'run'), linked);
-      const spelled = path.join(linked, 'score', 'evidence');
+    // teamai names the directory in the prompt exactly as it sends confined.dir, a repository path with a space included.
+    it('points each mention of the directory at the copy, and leaves a sibling that shares its name', async () => {
+      const spaced = path.join(dir, 'my repo', 'score', 'evidence');
+      fs.cpSync(evidence, spaced, { recursive: true });
       const { runtime, handle } = await opened();
       const request = judge(handle, 'op-000000a6');
 
-      runtime.send({ ...request, lease: { ...request.lease, prompt: `Read only the files under ${spelled}:\nReply with JSON that matches the schema in ${path.join(spelled, 'schema.json')}, and nothing else.` } });
+      runtime.send({
+        ...request, cwd: spaced, confined: { ...request.confined, dir: spaced },
+        lease: { ...request.lease, prompt: `Read only the files under ${spaced}:\nReply with JSON that matches the schema in ${path.join(spaced, 'schema.json')}, and nothing else. Ignore ${spaced}-old and ${spaced}.bak.` },
+      });
 
       expect(await ended(runtime, 'op-000000a6')).toMatchObject({ event: 'finished' });
       const [thread] = t3.threads();
       const copy = z.string().parse(thread?.worktreePath);
       expect(thread?.message).toContain(`Read only the files under ${copy}:`);
       expect(thread?.message).toContain(`the schema in ${path.join(copy, 'schema.json')},`);
-      expect(thread?.message).not.toContain(linked);
+      expect(thread?.message).toContain(`Ignore ${spaced}-old and ${spaced}.bak.`);
+      expect(thread?.message).not.toContain(`under ${spaced}`);
     });
 
     it('runs the judge\'s thread in the tighter `runtime_mode`', async () => {

@@ -202,22 +202,14 @@ function firstMessage(place: PlaceRecord, lease: PromptLease, startedFrom: strin
 }
 
 /**
- * `text` with each absolute path that is `dir` or lies under it pointed at the same place under `copy`, however it is
- * spelled: teamai sends `dir` as a real path, and a prompt names it as the step rendered it, for example through
- * macOS's /tmp link.
+ * `text` with each mention of `dir`, and of a path under it, pointed at the same place under `copy`. teamai spells
+ * `dir` exactly as the prompt names it; a sibling whose name only starts with the directory's stays as it is.
  */
 function pointedAtCopy({ text, dir, copy }: { text: string; dir: string; copy: string }): string {
-  const real = realpath(dir);
+  const escaped = dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-  return text.replace(/\/[^\s"'`<>]+/g, (token) => {
-    const trimmed = token.replace(/[.,:;)\]]+$/, '');
-
-    for (let at = trimmed.length; at > 0; at = trimmed.lastIndexOf('/', at - 1)) {
-      if (realpath(trimmed.slice(0, at)) === real) return `${copy}${token.slice(at)}`;
-    }
-
-    return token;
-  });
+  // A name character, or a dot before one, continues another name; a dot that ends a sentence does not.
+  return text.replace(new RegExp(`${escaped}(?![\\w-]|\\.[\\w-])`, 'g'), () => copy);
 }
 
 /**
