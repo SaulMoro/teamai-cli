@@ -1279,7 +1279,7 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       // Each runtime with room is offered in turn, in definition order, until one takes a lease: a wait is final only
       // once every one was offered. An attempt left open by a loop before this one goes back to its own runtime first.
-      const offered = await (async (): Promise<{ next: WorkflowEnvelope; slot: RuntimeSlot }> => {
+      const offered = await (async (): Promise<{ next: WorkflowEnvelope; slot: RuntimeSlot; held?: true }> => {
         for (let reconnect = reconnecting.shift(); reconnect; reconnect = reconnecting.shift()) {
           const next = await ask(reconnect.slot, false, [...running, ...reconnecting.map((other) => other.attempt)]);
 
@@ -1298,7 +1298,17 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
         }
 
         // Every runtime with room was offered and held its steps back: the run's details say why.
-        if (last) await writeHeldSteps(config, runId, { driver: sole.driver, runtimes: holds });
+        if (last) {
+          await writeHeldSteps(config, runId, { driver: sole.driver, runtimes: holds });
+          // A wait that holds a step says nothing of a gate, which only a `next` that takes no lease answers.
+          const asker = holds.some((hold) => hold.held.length > 0) ? slots.find((slot) => slot.can.hitl === true) : undefined;
+
+          if (asker) {
+            const gate = await ask(asker, false, running);
+
+            if (isWorkflowError(gate) || 'hitl' in gate.data) return { next: gate, slot: asker, held: true };
+          }
+        }
 
         return last ?? { next: await ask(slots[0], false, running), slot: slots[0] };
       })();
@@ -1315,8 +1325,8 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
 
       for (const attempt of cancelled.success ? cancelled.data : []) cancel(attempt);
 
-      // A step taken, or the run ended: nothing is held back any more.
-      if (!('wait' in next.data)) await writeHeldSteps(config, runId, { driver: sole.driver, runtimes: [] });
+      // A step taken, or the run ended: nothing is held back any more. A gate asked beside a held step leaves it held.
+      if (!('wait' in next.data) && !offered.held) await writeHeldSteps(config, runId, { driver: sole.driver, runtimes: [] });
 
       if ('done' in next.data) {
         question?.controller.abort();
