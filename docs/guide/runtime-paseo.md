@@ -361,6 +361,12 @@ In an unattended run (`TEAMAI_MODE=unattended` or `CI`), nobody can answer, so t
 teamai workflow cancel r144a3913136e7b62
 ```
 
+Paseo may answer the cancel before the agent's turn ends, so the step ends `cancelled` only once Paseo reports the agent no longer running. An agent that still runs 10 s later fails the step `cancel_failed` instead:
+
+```text
+Paseo cancelled the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f, but it still ran 10 s later. It may still change the worktree; stop it in the Paseo app.
+```
+
 A teamai killed while an agent works leaves the agent running. `resume` reconnects to the same agent; it does not start a second one:
 
 ```sh
@@ -383,6 +389,12 @@ When teamai closes the attempt, the runtime archives its Paseo workspace, which 
 
 ```text
 Paseo did not archive workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476e (wks_6fb33a5b94531f79): <Paseo's error>. Its agents may still run; archive it in the Paseo app.
+```
+
+The place counts as closed only once Paseo reports each of the attempt's agents no longer running. One that still runs 10 s after the archive leaves it open:
+
+```text
+Paseo archived workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476e (wks_6fb33a5b94531f79), but agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f still ran 10 s later. It may still change the worktree; stop it in the Paseo app.
 ```
 
 A runtime killed mid-step cannot archive; the step fails `runtime_lost`, and its workspace stays in Paseo until you archive it (`paseo workspace archive <id>`).

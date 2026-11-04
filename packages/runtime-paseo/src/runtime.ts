@@ -44,6 +44,29 @@ const PERMISSION_POLL_MS = 1000;
 /** How long a wait the daemon dropped, as a restart does, waits before it asks again. */
 const RECONNECT_MS = 500;
 
+/** How long an agent may go on running once Paseo answered the cancel or archive that stops it: Paseo forces a stop after 2 s. */
+const STOP_SETTLE_MS = 10_000;
+
+/** How often a stopping agent is looked at. */
+const STOP_POLL_MS = 250;
+
+/**
+ * Whether the agent still runs `STOP_SETTLE_MS` after Paseo answered what stops it. Paseo may answer before the agent's
+ * turn ends, so the work counts as stopped only once Paseo reports the agent no longer running, or gone.
+ */
+async function isStillRunning(live: Daemon, agentId: string): Promise<boolean> {
+  const deadline = Date.now() + STOP_SETTLE_MS;
+
+  for (;;) {
+    const agent = await live.agent(agentId).catch(() => undefined);
+
+    if (agent === null || (agent && agent.status !== 'running' && agent.status !== 'initializing')) return false;
+
+    if (Date.now() >= deadline) return true;
+    await delay(STOP_POLL_MS);
+  }
+}
+
 /** The agent id a prompt's agent gets: a UUID derived from its op, so a restarted runtime finds the same agent. */
 export function agentIdOf(op: OpId): string {
   const hex = createHash('sha256').update(`teamai-runtime-paseo/${op}`).digest('hex');
@@ -202,14 +225,19 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
   const cancelAgent = async (live: Daemon, record: AgentPrompt): Promise<RuntimeFailure | undefined> => {
     try {
       await live.cancel(record.create.agentId);
-
-      return undefined;
     } catch (error) {
       return {
         code: 'cancel_failed',
         message: `Paseo did not cancel the ${record.tool} agent ${record.create.agentId}: ${error instanceof Error ? error.message : String(error)}. It may still run in the worktree; stop it in the Paseo app.`,
       };
     }
+
+    if (!(await isStillRunning(live, record.create.agentId))) return undefined;
+
+    return {
+      code: 'cancel_failed',
+      message: `Paseo cancelled the ${record.tool} agent ${record.create.agentId}, but it still ran ${STOP_SETTLE_MS / 1000} s later. It may still change the worktree; stop it in the Paseo app.`,
+    };
   };
 
   /** What the run's details show of a prompt's agent: its title, a link that opens it in Paseo, and where it runs. */
@@ -714,6 +742,18 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
         write({
           event: 'close_failed', handle,
           failure: { code: 'close_failed', message: `Paseo did not archive workspace ${place.workspace.name} (${place.workspace.id}): ${error instanceof Error ? error.message : String(error)}. Its agents may still run; archive it in the Paseo app.` },
+        });
+
+        return;
+      }
+
+      const agents = journal.promptsOf(handle).flatMap(({ record }) => (record.kind === 'agent' ? [record.create.agentId] : []));
+      const running = (await Promise.all(agents.map(async (agentId) => ((await isStillRunning(live, agentId)) ? [agentId] : [])))).flat();
+
+      if (running.length > 0) {
+        write({
+          event: 'close_failed', handle,
+          failure: { code: 'close_failed', message: `Paseo archived workspace ${place.workspace.name} (${place.workspace.id}), but agent ${running.join(', ')} still ran ${STOP_SETTLE_MS / 1000} s later. It may still change the worktree; stop it in the Paseo app.` },
         });
 
         return;
