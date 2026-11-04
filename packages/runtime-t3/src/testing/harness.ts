@@ -58,6 +58,8 @@ export interface FakeT3Config {
   projects: Array<{ id: string; title: string; workspaceRoot: string; deletedAt?: string | null }>;
   providers: FakeProvider[];
   agent: FakeAgent;
+  /** The mode teamai's sign-in was approved with; T3 refuses a thread in a broader one. Unset: any mode. */
+  access?: 'auto' | 'auto-accept-edits' | 'approval-required';
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });
