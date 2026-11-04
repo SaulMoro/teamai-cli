@@ -50,8 +50,13 @@ export type PromptEnd =
 /** A reattach: the handle is gone, alive with what the runtime retains, or the runtime could not be asked. */
 export type Reattached = { kind: 'gone' } | { kind: 'alive'; ops: OpState[]; display?: RuntimeDisplay } | { kind: 'failed'; failure: RuntimeFailure };
 
+/** What a runtime showed with an operation's acceptance: a display, or none. */
+export interface Accepted {
+  display?: RuntimeDisplay;
+}
+
 export interface ExecEvents {
-  onAccepted?: () => void;
+  onAccepted?: (accepted: Accepted) => void;
   onOutput?: (stream: 'stdout' | 'stderr', data: string) => void;
 }
 
@@ -68,7 +73,7 @@ export interface StepRuntime {
   open(request: OpenRequest, onAccepted: (handle: string) => Promise<void>): Promise<Opened>;
   exec(request: ExecRequest, events: ExecEvents): Promise<ExecEnd>;
   /** Runs a prompt step on a runtime that launches agents its own way; any other answers it failed. */
-  prompt(request: PromptRequest, events: { onAccepted?: () => void }): Promise<PromptEnd>;
+  prompt(request: PromptRequest, events: { onAccepted?: (accepted: Accepted) => void }): Promise<PromptEnd>;
   /** Stops operation `op` and every process it started. Its `exec` or `prompt` then ends `cancelled`. */
   cancel(op: OpId): Promise<void>;
   /** Brings the place's work back to the host, deletions included, never committed; after success and after failure. */

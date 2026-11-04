@@ -441,6 +441,27 @@ describe('a runtime\'s display over stdio', () => {
     expect(opened).toEqual({ kind: 'ready', handle: 'toy-r0123abcd-a0123abcd' });
   });
 
+  it.each([
+    ['carries the display', { label: 'Review the change', url: 'paseo://agent/9f2c', fields: { agent: 'claude', mode: 'default' } }, true],
+    ['drops a display it cannot show from', { label: 'x'.repeat(81) }, false],
+  ])('%s a prompt runtime gives once it accepted the prompt', async (_, display, kept) => {
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    started.push(runtime);
+    expect(await runtime.init({ options: { state: path.join(dir, 'state'), agent: { output: { ok: true }, display } }, mode: 'unattended' })).toMatchObject({ ok: true });
+    const opened = await runtime.open({
+      op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
+      view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), toolHome: {} },
+    }, async () => {});
+    if (opened.kind !== 'ready') throw new Error('not opened');
+    const lease = { step: 'review', tool: 'claude', prompt: 'Review.', result: path.join(dir, 'out', 'result.json'), permissions: 'approval-required', interactive: false } as const;
+    const shown: unknown[] = [];
+
+    await runtime.prompt({ op: newOpId(), handle: opened.handle, lease, env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, { onAccepted: (accepted) => { shown.push(accepted); } });
+
+    expect(opened).toEqual({ kind: 'ready', handle: 'toy-r0123abcd-a0123abcd' });
+    expect(shown).toEqual([kept ? { display } : {}]);
+  });
+
   it('opens without a display that names a path in a Windows home', async () => {
     vi.stubEnv('HOME', 'C:\\Users\\me');
 

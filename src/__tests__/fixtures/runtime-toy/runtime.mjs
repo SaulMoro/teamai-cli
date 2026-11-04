@@ -267,7 +267,8 @@ function prompt(request) {
     return;
   }
 
-  send({ op: request.op, event: 'accepted' });
+  // `agent.display` is what the agent shows once it exists: given with the prompt's acceptance, as Paseo and T3 do.
+  send({ op: request.op, event: 'accepted', ...(options.agent.display === undefined ? {} : { display: options.agent.display }) });
   noteCredentials(request, request.handle);
   promptCredentials.set(request.op, request.credentials);
 
