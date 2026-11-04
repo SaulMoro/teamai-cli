@@ -1655,7 +1655,7 @@ Every request and reply is defined as a zod schema in `packages/runtime-protocol
 
 #### A runtime that launches agents its own way
 
-A runtime such as a T3 Code or Paseo one starts an agent from a prompt and learns its session when it ends, instead of running the tool's command line. It says so at `init` with `"prompt": true`. With `"exec": false` in `can` it also takes no command, so command steps and steps with `setup` go to the next runtime of the definition:
+A runtime such as a T3 Code or Paseo one starts an agent from a prompt and learns its session when it ends, instead of running the tool's command line. It says so at `init` with `"prompt": true`. With `"exec": false` in `can` it also takes no command, so command steps and steps with `setup` go to the next runtime of the definition. A runtime with `"exec": false` and no `"prompt": true` can run no step, and teamai refuses it at start:
 
 ```yaml
 # drivers/threads.yaml
@@ -1686,7 +1686,7 @@ teamai then sends each prompt step as one `prompt`. `lease.prompt` is the whole 
 | `lease` field | Meaning |
 | --- | --- |
 | `step`, `tool` | The step and the tool to start the agent on, one of your `can.tools` |
-| `model` | `name` and optional `effort` to launch on; absent means the tool's default |
+| `model` | `name` and optional `effort` to launch on: the step's, or else its agent definition's; absent means the tool's default |
 | `prompt`, `result` | The whole prompt, and the file the agent writes the result to |
 | `resume` | A session id of the same tool to continue, for a later pass |
 | `permissions` | `approval-required`, or `unattended` when your `can.unattended` took such a step |

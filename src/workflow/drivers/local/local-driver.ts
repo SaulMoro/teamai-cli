@@ -566,6 +566,7 @@ async function promptReport(
 
   const chosen = await chooseStepModel({
     step: lease.step, tool: selected, model: lease.model, defaultModel: lease.defaultModel, agent: agent ?? undefined, config: stepConfig,
+    passesAgentFile: !onRuntime?.launchesAgents,
   });
 
   if (!chosen.ok) return giveUp(chosen.failure, launched);
@@ -661,9 +662,10 @@ async function promptReport(
     delivery?.record?.delivered ? deliveredTeamSkills(stepConfig, cwd, delivery.record.delivered, delivery.record.rev).then((found) => found.teamSkills, () => undefined) : undefined,
   ]);
 
-  // Only headless Claude and CodeBuddy have a turn limit; any other launch reports the cap as not enforced.
+  // Only headless Claude and CodeBuddy have a turn limit, and a runtime that launches agents its own way keeps the cap it
+  // offered; any other launch reports the cap as not enforced.
   const family = launchAdapterIdOf(selected);
-  const capsTurns = lease.maxTurns !== undefined && !lease.interactive && (family === 'claude' || family === 'codebuddy');
+  const capsTurns = lease.maxTurns !== undefined && !lease.interactive && (onRuntime?.launchesAgents === true || family === 'claude' || family === 'codebuddy');
   // A turn is ended only at the limits its tool is known to keep and report: Codex states its usage only as it ends, and
   // CodeBuddy's turn cap and per-message usage are untried, so the rest list as unenforced.
   const { limits } = lease;
