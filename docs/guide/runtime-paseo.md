@@ -160,12 +160,45 @@ The judge runs at `best-effort`, never `verified`:
 | No read outside the directory | no: nothing stops the agent reading a file elsewhere |
 | No network | no |
 
-A confined step whose `confined.json` asks for `verified` never goes to Paseo, whose offer is `best-effort`. Codex never judges on Paseo, since every Codex mode writes without asking. The judge's place shows in the run's details as `Paseo confined prompt, best-effort` until its agent starts.
+A confined step whose `confined.json` asks for `verified` never goes to Paseo, whose offer is `best-effort`. The judge's place shows in the run's details as `Paseo confined prompt, best-effort` until its agent starts.
+
+A Codex judge starts in `auto` with Codex's sandbox set to `read-only`, since every Codex mode Paseo lists writes without asking. Codex reads with shell commands, so its brief says to use read-only ones; its sandbox runs those without asking, and anything else asks and ends the judge. A definition whose `tool` is `codex` runs both the step and its judge on Codex:
+
+```yaml
+# drivers/paseo-codex.yaml
+schemaVersion: v1alpha1
+name: paseo-codex
+tool: codex
+runtimes:
+  - use: paseo
+```
+
+Here a Codex judge labelled a Codex pass:
+
+```text
+$ teamai score --run ra429df3ad473c7b3 --scorer review-quality --driver paseo-codex
+ℹ review-quality: partial (score 0.5, did not pass). Reasoning: ~/.teamai/scores/reasoning/43ce17b3….md
+$ paseo logs 4c7942c --filter tools
+[Shell] ls -la
+[Shell] rg --files -uu
+[Shell] cat diff.patch evidence.json transcripts/fix#1.md
+[Shell] cat repo/package.json repo/math.js repo/math.test.js answer.schema.json
+```
+
+```json
+{ "id": "score[0].judge", "outcome": "success", "outputs": { "answer": { "label": "partial", "reasoning": "math.js now returns a + b, but package.json sets \"type\": \"module\", so math.test.js cannot use require and will fail before its assertion runs…" } }, "confined": { "tool": "codex", "isolation": "best-effort", "access": "read" } }
+```
 
 Scoring reads the step's session where the daemon's agent wrote it: in the tool home of the user the daemon runs as. Run the daemon as the member who runs teamai, on the same machine. A daemon under another user, or another `HOME`, leaves the pass unlabelled, and the score run's `evidence` step says why:
 
 ```text
 evidence_missing: Pass 1 of step fix in run r080799f10648b1ed cannot be scored: no longer on this machine: claude-code session 346fd0be-1a5a-474b-aedf-24c305d5c1a6 of fix#1. Restore what is missing, or score another pass.
+```
+
+A Codex step's pass is left unlabelled in the same way, whoever the daemon runs as. When teamai closes the attempt, Paseo archives the agent, and Codex moves its session to `~/.codex/archived_sessions/`. teamai reads Codex sessions from `~/.codex/sessions/` only, so the score run says:
+
+```text
+evidence_missing: Pass 1 of step fix in run ra429df3ad473c7b3 cannot be scored: no longer on this machine: codex session 01a1a731-9053-7cf2-9884-68058745044a of fix#1. Restore what is missing, or score another pass.
 ```
 
 ## Options
@@ -190,26 +223,83 @@ Paseo calls a tool available once its binary is on the daemon's `PATH`, signed i
 | Tool | Offered when | Step mode | Judge mode |
 | --- | --- | --- | --- |
 | `claude` | `claude auth status` on the daemon's host says `"loggedIn": true`: a login or an API key | `default` (asks before what it does not allow) | `default` |
-| `codex` | never: Paseo does not report whether Codex is signed in | `auto` | none: every Codex mode writes without asking |
+| `codex` | the daemon runs on this machine (`url` is a loopback address, such as `127.0.0.1` or `localhost`), and `codex login status` says `Logged in` | `auto` | `auto`, with a `read-only` sandbox |
 | `opencode` | Paseo lists a model for it: OpenCode reaches a model provider, its free models included | `build` | `plan` |
+
+Paseo does not report whether Codex is signed in, so the runtime runs `codex login status` itself, with your environment (`CODEX_HOME` or `~/.codex`). It runs the `codex` that `Resolved path` names in Paseo's diagnostic, which the daemon found on its own `PATH`, not one on teamai's. A daemon at any other address, such as one on another machine, is never offered Codex.
 
 When the daemon can run none of them, the run stops before any step, and the message says what to do on the daemon's host:
 
 ```text
-$ teamai workflow start fix-add --driver paseo-only
-{"error":{"code":"runtime_failed","message":"Runtime \"paseo\" of driver \"paseo-only\" did not start: The Paseo daemon at ws://127.0.0.1:6767/ws runs no tool teamai-runtime-paseo can use. claude: signed out; run `claude auth login` on the daemon's host. codex: Paseo does not report whether it is signed in, so its steps run on the next runtime of the definition."}}
+$ teamai workflow start fix-add --driver paseo-signed-out
+{"error":{"code":"runtime_failed","message":"Runtime \"paseo\" of driver \"paseo-signed-out\" did not start: The Paseo daemon at ws://127.0.0.1:6799/ws runs no tool teamai-runtime-paseo can use. claude: signed out; run `claude auth login` on the daemon's host. codex: signed out; run `codex login` on the daemon's host."}}
 ```
 
-To check a tool yourself, ask the daemon. `Auth` is the line that matters:
+When it can run another tool, the run starts, and a step on the tool it cannot run fails without starting an agent:
+
+```text
+$ teamai workflow start fix-add --driver paseo-codex
+✖ Step "fix" failed with tool_unavailable: teamai-runtime-paseo did not offer codex: signed out; run `codex login` on the daemon's host.
+```
+
+To check a tool yourself, ask the daemon, or Codex. `Auth` and `Resolved path` are the lines that matter:
 
 ```text
 $ paseo provider diagnostic claude | grep -A2 Auth
   Auth: {
   "loggedIn": true,
   "authMethod": "oauth_token",
+$ paseo provider diagnostic codex | grep 'Resolved path'
+  Resolved path: ~/.nvm/versions/node/v24.21.0/bin/codex
+$ ~/.nvm/versions/node/v24.21.0/bin/codex login status
+Logged in using ChatGPT
 ```
 
-The step's `model` must be one the daemon offers, and its `effort` one that model has. With no `model`, the agent uses the daemon's default. A model the daemon lacks fails before any agent starts:
+The step's `model` must be one the daemon offers, and its `effort` one that model has. With no `model`, the agent uses the daemon's default.
+
+For OpenCode, that default can be one of OpenCode's free models, which need no sign-in. When OpenCode marks no default, the agent takes the first model the daemon lists:
+
+```text
+$ paseo provider models opencode
+ID                                    MODEL
+opencode/crouton-alpha-free           Crouton Alpha Free
+opencode/pulse-alpha-free             Pulse Alpha Free
+github-copilot/gpt-6.1-terra          GPT-6.1 Terra
+…
+github-copilot/claude-sonnet-5.5      Claude Sonnet 5.5
+```
+
+A step or judge with no `model` then sends its prompt, or the evidence it judges, to OpenCode's free provider. Pin the model to keep them with a provider you chose:
+
+```yaml
+# workflows/review-opencode.yaml
+schemaVersion: v1alpha1
+name: review-opencode
+description: Review the branch on OpenCode, on a model the team chose.
+steps:
+  - id: review
+    tool: opencode
+    model: { name: github-copilot/claude-sonnet-5.5 }
+    prompt: Review the change on this branch, and list what it gets wrong.
+```
+
+```markdown
+<!-- scorers/review-quality.md -->
+---
+model: github-copilot/claude-sonnet-5.5
+labels:
+  - value: good
+    score: 1
+    description: The change does what the step asked, with tests.
+  - value: bad
+    score: 0
+    description: The change does not do what the step asked.
+passingScore: 1
+---
+Judge whether the change does what the step asked. Read the diff and the session.
+```
+
+A model the daemon lacks fails before any agent starts:
 
 ```text
 ✖ Step "classify" failed with model_unavailable: The Paseo daemon at ws://127.0.0.1:6767/ws has no claude model claude-opus-0-1. It offers: claude-opus-5-5, claude-opus-5, claude-fable-5-1, claude-fable-5, claude-opus-4-8[1m], claude-opus-4-8, claude-sonnet-5-5, claude-sonnet-5, claude-sonnet-5[1m], claude-opus-4-7[1m], claude-opus-4-7, claude-opus-4-6[1m], claude-opus-4-6, claude-sonnet-4-6[1m], claude-sonnet-4-6, claude-haiku-5-5, claude-haiku-4-5.
@@ -229,7 +319,13 @@ Remove the entry, and give the tool what it needs on the daemon's host instead: 
 
 ## Permissions
 
-A Claude agent may write two things without asking: teamai's result file, and the run's scratch directory, which `$TEAMAI_RUN_DIR` names for the run's commands. The runtime allows `Edit(/<result file>)` and `Edit(/<run directory>/**)`, and the mode stays `default`. Codex and OpenCode get no such grant. Of the step's environment, the agent gets only `TEAMAI_RUN_DIR`, so a prompt that names a file in the directory `$TEAMAI_RUN_DIR` names works as it does on this machine.
+A Claude agent may write two things without asking: teamai's result file, and the run's scratch directory, which `$TEAMAI_RUN_DIR` names for the run's commands. The runtime allows `Edit(/<result file>)` and `Edit(/<run directory>/**)`, and the mode stays `default`. A Codex agent may write the same two places: its sandbox in `auto` writes the worktree, and the runtime adds the result file's directory and the run's scratch directory as writable roots:
+
+```json
+{ "provider": "codex", "modeId": "auto", "providerOptions": { "sandbox_workspace_write": { "writable_roots": ["~/.teamai/workflows/runs/ra429df3ad473c7b3/attempts/a21ff251b/out", "~/.teamai/workflows/runs/ra429df3ad473c7b3/scratch"] } } }
+```
+
+OpenCode gets no such grant. Of the step's environment, the agent gets only `TEAMAI_RUN_DIR`, so a prompt that names a file in the directory `$TEAMAI_RUN_DIR` names works as it does on this machine.
 
 In an attended run, any other permission prompt waits for you in the Paseo app, or on the command line:
 
@@ -286,5 +382,5 @@ A runtime killed mid-step cannot archive; the step fails `runtime_lost`, and its
 | `client_version` | The Paseo client found is older than 0.14.0. Update Paseo, or set `PASEO_CLIENT_PATH` to a newer `@getpaseo/client` package. |
 | `daemon_unreachable` | No daemon answers at `url`. Start it with `paseo start`. |
 | `daemon_version` | The daemon is older than 0.14.0. Update Paseo and restart it. |
-| `tool_unavailable` | The daemon can run none of `claude` and `opencode`: each is missing, signed out, or lacks its default mode. Codex is never used. The message names each installed tool and its fix, or, with none installed, says to install one. A step whose tool the daemon cannot run goes to the next runtime. |
+| `tool_unavailable` | The daemon can run none of `claude`, `codex` and `opencode`: each is missing, signed out, or lacks its default mode, and Codex also when the daemon is not at a loopback address. The message names each installed tool and its fix, or, with none installed, says to install one. A step that names a tool the daemon cannot run goes to the next runtime; one that takes the definition's `tool` fails `tool_unavailable` with the same reason. |
 | `bad_option` | An option other than `url`. |
