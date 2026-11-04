@@ -300,7 +300,7 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    const project = projects.find((candidate) => realpath(candidate.workspaceRoot) === realpath(root));
+    const project = projects.find((candidate) => !candidate.deletedAt && realpath(candidate.workspaceRoot) === realpath(root));
 
     if (!project) {
       fail(request.op, { code: 'not_a_t3_project', message: `${root} is not a project in T3 Code ${session.environment.label}. Add it in T3 Code (Add project, then pick that folder), then start the workflow again.` });
@@ -308,7 +308,7 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    const opened: PlaceRecord = { handle, run: request.run, attempt: request.attempt, projectId: project.projectId, projectTitle: project.title, ops: {}, threads: {} };
+    const opened: PlaceRecord = { handle, run: request.run, attempt: request.attempt, projectId: project.id, projectTitle: project.title, ops: {}, threads: {} };
     journal.write(opened);
     write({ op: request.op, event: 'ready', display: placeDisplay(opened, session.environment) });
   };

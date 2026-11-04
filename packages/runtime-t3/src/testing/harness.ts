@@ -55,7 +55,7 @@ export interface FakeProvider {
 export interface FakeT3Config {
   token: string;
   environment: { environmentId: string; label: string; serverVersion: string };
-  projects: Array<{ projectId: string; title: string; workspaceRoot: string }>;
+  projects: Array<{ id: string; title: string; workspaceRoot: string; deletedAt?: string | null }>;
   providers: FakeProvider[];
   agent: FakeAgent;
 }
@@ -106,7 +106,7 @@ export function fakeT3(dir: string, workspaceRoot: string): FakeT3 {
   let current: FakeT3Config = {
     token: 'fake-t3-token-0123456789',
     environment: { environmentId: 'env-fake-1', label: 'fake-laptop', serverVersion: '0.1.7-fake' },
-    projects: [{ projectId: 'project-1', title: 'acme-app', workspaceRoot }],
+    projects: [{ id: 'project-1', title: 'acme-app', workspaceRoot, deletedAt: null }],
     providers: [CLAUDE, CODEX],
     agent: { output: { verdict: 'approve' } },
   };
