@@ -197,6 +197,39 @@ describe('teamai-runtime-paseo', () => {
     expect(create).toHaveProperty('env', { TEAMAI_RUN_DIR: path.join(dir, 'run') });
   });
 
+  it('starts a Codex agent in its default mode auto, on the daemon\'s default model, writing the result file\'s directory and the run\'s scratch directory without asking', async () => {
+    behave({ output: { verdict: 'approve' }, codex_login: 'signed_in' });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b', { tool: 'codex', model: undefined }));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'codex' }, result: { output: { verdict: 'approve' } } });
+    // Codex's `auto` mode writes its worktree without asking, and asks before writing anywhere else.
+    expect(received()).toMatchObject([{
+      config: { provider: 'codex', model: 'gpt-6.1-sol', modeId: 'auto', cwd: worktree, providerOptions: { sandbox_workspace_write: { writable_roots: [path.join(dir, 'out'), path.join(dir, 'run')] } } },
+    }]);
+  });
+
+  it.each([
+    ['a step', false],
+    ['a judge', true],
+  ])('refuses %s on a tool it did not offer, saying why, and creates no agent', async (_, isJudge) => {
+    behave({ models: { claude: ['claude-opus-5-5'], codex: ['gpt-6.1-sol'] }, codex_login: 'signed_out' });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send({ type: 'open', op: 'op-0000000a', run: RUN, attempt: ATTEMPT, credentials: {}, ...(!isJudge && { view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'run'), toolHome: {} } }) });
+    const accepted = await runtime.next(isOp('op-0000000a', 'accepted'));
+    const handle = 'handle' in accepted ? String(accepted.handle) : '';
+    const request = promptRequest(handle, 'op-0000000b', { tool: 'codex', model: undefined });
+
+    runtime.send(isJudge ? { ...request, env: {}, confined: { dir: worktree, level: 'best-effort', access: 'read', schema: { type: 'object' } } } : request);
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({
+      event: 'failed', failure: { code: 'tool_unavailable', message: 'teamai-runtime-paseo did not offer codex: signed out; run `codex login` on the daemon\'s host.' },
+    });
+    expect(received()).toEqual([]);
+  });
+
   it('starts a new agent for a step that asks to resume a session, and says it did not resume it', async () => {
     behave({ output: { verdict: 'approve' } });
     const runtime = start();
@@ -248,15 +281,15 @@ describe('teamai-runtime-paseo', () => {
     expect(received()).toEqual([expect.objectContaining({ config: expect.objectContaining({ model: 'claude-opus-5-5', thinkingOptionId: 'high' }) })]);
   });
 
-  it.each([['codex', 'auto', 'gpt-6.1-sol'], ['opencode', 'build', 'opencode/beam-free']])('starts a %s agent in its default mode %s, on the daemon\'s default model %s when the step names none', async (tool, modeId, model) => {
+  it('starts an OpenCode agent in its default mode build, on the daemon\'s default model when the step names none, with no grant', async () => {
     behave({ output: { ok: true } });
     const runtime = start();
     await ready(runtime);
-    runtime.send(promptRequest(await opened(runtime), 'op-0000000b', { tool, model: undefined }));
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b', { tool: 'opencode', model: undefined }));
 
-    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool } });
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'opencode' } });
     const [create] = received();
-    expect(create).toMatchObject({ config: { provider: tool, model, modeId } });
+    expect(create).toMatchObject({ config: { provider: 'opencode', model: 'opencode/beam-free', modeId: 'build' } });
     expect(create).not.toHaveProperty('config.providerOptions');
   });
 
