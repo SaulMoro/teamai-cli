@@ -5,7 +5,7 @@ import type { PromptLeaseSchema, RuntimeMessage, RuntimeOptions, RuntimeRequestS
 import type { z } from 'zod';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startFakeDaemon, type Behaviour } from './testing/fake-daemon.js';
-import { startRuntime, type Runtime } from './testing/harness.js';
+import { startRuntime, TEST_CLIENT, type Runtime } from './testing/harness.js';
 
 /**
  * teamai-runtime-paseo through its stdio entry, as teamai spawns it, against a fake Paseo daemon that speaks Paseo
@@ -30,8 +30,8 @@ const received = (): Array<Record<string, unknown> & { type: string }> => {
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').map((line) => JSON.parse(line)) : [];
 };
 
-const start = (): Runtime => {
-  const runtime = startRuntime(path.join(dir, 'home'));
+const start = (env?: Record<string, string | undefined>): Runtime => {
+  const runtime = startRuntime(path.join(dir, 'home'), env);
   runtimes.push(runtime);
 
   return runtime;
@@ -378,6 +378,36 @@ describe('teamai-runtime-paseo', () => {
     behave(behaviour);
 
     expect(await ready(start(), { options: options ?? { url: daemon.url } })).toEqual({ type: 'init', ok: false, error: expect.objectContaining(error) });
+  });
+
+  it('fails init, saying how to install Paseo or point at its client, when no Paseo client can be found', async () => {
+    const empty = path.join(dir, 'no-client');
+    fs.mkdirSync(empty);
+
+    expect(await ready(start({ PASEO_CLIENT_PATH: empty }))).toEqual({
+      type: 'init', ok: false,
+      error: {
+        code: 'client_missing',
+        message: `teamai-runtime-paseo found no Paseo client in ${empty}, which PASEO_CLIENT_PATH names. Install Paseo (npm install -g @getpaseo/cli) so \`paseo\` is on PATH, or set PASEO_CLIENT_PATH to the directory of its @getpaseo/client package.`,
+      },
+    });
+    expect(await ready(start({ PASEO_CLIENT_PATH: undefined, PATH: path.dirname(process.execPath) }))).toMatchObject({
+      type: 'init', ok: false, error: { code: 'client_missing', message: expect.stringContaining('found no `paseo` on PATH') },
+    });
+  });
+
+  it('runs on the client of the paseo on PATH, found through the links an install makes', async () => {
+    // As npm installs it: bin/paseo links into the CLI package, whose node_modules holds the client.
+    const cli = path.join(dir, 'lib', 'node_modules', '@getpaseo', 'cli');
+    fs.mkdirSync(path.join(cli, 'bin'), { recursive: true });
+    fs.mkdirSync(path.join(cli, 'node_modules', '@getpaseo'), { recursive: true });
+    fs.writeFileSync(path.join(cli, 'package.json'), JSON.stringify({ name: '@getpaseo/cli', version: '0.14.0' }));
+    fs.writeFileSync(path.join(cli, 'bin', 'paseo'), '#!/bin/sh\n', { mode: 0o755 });
+    fs.symlinkSync(TEST_CLIENT, path.join(cli, 'node_modules', '@getpaseo', 'client'));
+    fs.mkdirSync(path.join(dir, 'bin'));
+    fs.symlinkSync(path.join(cli, 'bin', 'paseo'), path.join(dir, 'bin', 'paseo'));
+
+    expect(await ready(start({ PASEO_CLIENT_PATH: undefined, PATH: [path.join(dir, 'bin'), path.dirname(process.execPath)].join(path.delimiter) }))).toMatchObject({ type: 'init', ok: true });
   });
 
   it('fails a step whose agent errors, with Paseo\'s error, and one whose agent wrote no result', async () => {
