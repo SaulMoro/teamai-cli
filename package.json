@@ -6,7 +6,8 @@
   "bin": {
     "teamai": "dist/index.js",
     "teamai-runtime-sandbox": "dist/runtime-sandbox.js",
-    "teamai-runtime-t3": "dist/runtime-t3.js"
+    "teamai-runtime-t3": "dist/runtime-t3.js",
+    "teamai-runtime-paseo": "dist/runtime-paseo.js"
   },
   "files": [
     "dist/**/*.js",
