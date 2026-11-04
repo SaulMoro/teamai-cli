@@ -64,7 +64,8 @@ describe('makeToolRegistry with instances', () => {
     ['acme-claude', { name: 'acme-claude', extends: 'claude', command: 'acme-claude', home: { dir: '.acme-claude', env: 'ACME_CLAUDE_CONFIG_DIR' } }],
     ['acme-copilot', { name: 'acme-copilot', extends: 'copilot' }],
     ['claude', { name: 'claude', extends: 'claude', command: 'claude-wrapper' }],
-    ['acme-buddy', { name: 'acme-buddy', extends: 'codebuddy', command: 'acme-buddy' }],
+    ['acme-buddy', { name: 'acme-buddy', extends: 'codebuddy', command: 'acme-buddy', home: { dir: '.acme-buddy' } }],
+    ['review-claude', { name: 'review-claude', extends: 'claude' }],
   ]);
   const withInstances = makeToolRegistry(TOOLS, () => instances, (platform) => platform !== 'codebuddy');
 
@@ -92,6 +93,13 @@ describe('makeToolRegistry with instances', () => {
     expect(withInstances.sessionPlatformsOf('acme-buddy')).toEqual([]);
     expect(withInstances.instancePlatform('acme-buddy')).toBeUndefined();
     expect(withInstances.toolOf('acme-buddy')?.base).toBe('codebuddy');
+  });
+
+  it('gives an instance that keeps the home of the tool it extends that tool\'s session platforms, still credited to that tool', () => {
+    expect(withInstances.sessionPlatformsOf('review-claude')).toEqual(['claude-code']);
+    expect(withInstances.sessionPlatformOwner('claude-code')).toBe('claude');
+    expect(withInstances.sessionPlatformOwner('review-claude')).toBeUndefined();
+    expect(withInstances.instancePlatform('review-claude')).toBeUndefined();
   });
 
   it('keeps the shipped platform of a shipped tool an instance adjusts', () => {

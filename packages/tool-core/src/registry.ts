@@ -26,7 +26,8 @@ export interface ToolRegistry<TTools, TPlatform extends string, TInstance extend
   toolOf(name: string): ResolvedTool<keyof TTools & string, TInstance> | undefined;
   /**
    * The session platforms teamai reads for `tool`, first the one its launched sessions write; none for a tool it does
-   * not know. An instance has one, its own name, when the tool it extends keeps sessions teamai reads.
+   * not know. An instance has one, its own name, when it has a home of its own and the tool it extends keeps sessions
+   * teamai reads; one that keeps the home of the tool it extends has that tool's.
    */
   sessionPlatformsOf(tool: string): readonly (TPlatform | InstancePlatform)[];
   /** The first tool whose `sessions` lists `platform`, or the instance whose platform it is: its sessions are credited to it. */
@@ -60,21 +61,29 @@ export function makeToolRegistry<
     return sessions instanceof Object ? sessions : [];
   };
 
-  /** An instance other than a shipped tool's adjustment: one whose sessions are its own. */
+  /**
+   * An instance whose sessions are its own: not a shipped tool's adjustment, and with a home of its own. One that keeps
+   * the home of the tool it extends writes that tool's sessions, which stay credited to that tool.
+   */
   const ownInstance = (name: string): TInstance | undefined => {
     const instance = isToolId(name) ? undefined : instances().get(name);
-
-    const [platform] = instance ? shippedPlatforms(instance.extends) : [];
+    const [platform] = instance?.home ? shippedPlatforms(instance.extends) : [];
 
     return instance && platform !== undefined && hostsInstances(platform) ? instance : undefined;
   };
 
   const sessionPlatformsOf = (tool: string): readonly (TPlatform | InstancePlatform)[] => {
     if (isToolId(tool)) return shippedPlatforms(tool);
-    const instance = ownInstance(tool);
+    const own = ownInstance(tool);
 
-    // SAFETY: ownInstance answers only for a name the table does not declare, so the name is no shipped platform's.
-    return instance ? [instance.name as InstancePlatform] : [];
+    if (own) {
+      // SAFETY: ownInstance answers only for a name the table does not declare, so the name is no shipped platform's.
+      return [own.name as InstancePlatform];
+    }
+
+    const instance = instances().get(tool);
+
+    return instance && !instance.home ? shippedPlatforms(instance.extends) : [];
   };
 
   return {

@@ -41,7 +41,7 @@ import { pushSession } from './archive.js';
 import { SessionCaptures } from './captures.js';
 import { SessionPublish } from './session-publish.js';
 import { FinishedSessions, type FinishedSession } from './finished-sessions.js';
-import { autoDetectInit } from '../config.js';
+import { autoDetectInit, detectProjectConfig, loadLocalConfig, loadTeamConfig } from '../config.js';
 import type { LocalConfig } from '../types.js';
 import { registerMigrationCommand } from './session-migrate-cmd.js';
 import { dashboardWorkspaces } from '../dashboard/workspaces.js';
@@ -198,6 +198,14 @@ export function registerSessionFlowCommands(sessionCmd: Command): void {
   // actions in src/index.ts); keep the same pattern here.
   const root = sessionCmd.parent ?? sessionCmd;
   const isDryRun = (): boolean => Boolean(root.opts().dryRun);
+
+  // A tool instance's sessions are a platform of its own, which a command knows once it read the team repo's instances.
+  sessionCmd.hook('preAction', async (_, action) => {
+    const options = { dryRun: isDryRun() };
+    const config = (await detectProjectConfig(action.opts<{ cwd?: string }>().cwd, undefined, options)) ?? (await loadLocalConfig(options));
+
+    if (config) await loadTeamConfig(config.repo.localPath);
+  });
 
   // ── session platforms ──────────────────────────────────────
   sessionCmd

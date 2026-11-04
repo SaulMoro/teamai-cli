@@ -347,15 +347,13 @@ async function resumeSession(archive: SessionArchive, lease: Lease, target: Laun
   const misses: string[] = [];
 
   for (const session of [lease.session, ...(lease.session.earlier ?? [])]) {
-    const earlier = launchTargetOf(session.tool);
-
-    if (!earlier) continue;
     const from = AgentSession.platformForTool(session.tool);
 
     if (!from) continue;
     const resumed = { tool: session.tool, id: session.id };
 
-    if (launchAdapterIdOf(earlier.tool) === launchAdapterIdOf(target.tool) && resumes) {
+    // One platform is one store: a tool that shares the format but keeps its own home, as an instance does, gets a copy.
+    if (from === to && resumes) {
       const found = await AgentSession.find({ platform: from, sessionId: session.id }, { scrub: false });
 
       if (found.status === 'done') return { id: session.id, resumed };

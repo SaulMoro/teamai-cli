@@ -12,7 +12,7 @@ import type { StoredPlatformDefinition } from '@teamai/tool-core/sessions/platfo
 import { isStoredSessionPlatform, SESSION_PLATFORM_FACTS, type SessionPlatform } from './platform-facts.js';
 import { sessionStoreDir } from '../../locate.js';
 import { instanceHomeDir } from '../../tool-instances.js';
-import { instanceNames, instancePlatform, sessionPlatformsOf } from '../../tool-registry.js';
+import { instanceNames, instancePlatform } from '../../tool-registry.js';
 
 /** Builds a platform's adapter on its store, which follows the member's recorded `toolRoots` (`sessionStoreDir`). */
 export type AdapterFactory = (toolRoots?: LocalConfig['toolRoots']) => AgentAdapter;
@@ -51,7 +51,7 @@ export const ADAPTER_REGISTRY: AdapterRegistry = {
 
 /**
  * The factory of an instance's own platform: the adapter of the shipped platform whose format its sessions keep, under
- * the instance's id, on that platform's store in the instance's home, or in the shipped tool's when it sets none.
+ * the instance's id, on that platform's store in the instance's home.
  */
 function instanceFactory(platform: string): AdapterFactory | undefined {
   const hosted = instancePlatform(platform);
@@ -60,11 +60,12 @@ function instanceFactory(platform: string): AdapterFactory | undefined {
   const shipped = hosted.platform;
   const definition: StoredPlatformDefinition = SESSION_PLATFORM_FACTS[shipped];
 
-  if (definition.store.in !== 'tool-home' || definition.adapterAs === undefined) return undefined;
-  const { store, adapterAs } = definition;
   const { home } = hosted.instance;
 
-  return (toolRoots) => adapterAs(platform, home ? path.join(instanceHomeDir(home), store.dir) : sessionStoreDir(shipped, toolRoots));
+  if (definition.store.in !== 'tool-home' || definition.adapterAs === undefined || home === undefined) return undefined;
+  const { store, adapterAs } = definition;
+
+  return () => adapterAs(platform, path.join(instanceHomeDir(home), store.dir));
 }
 
 /** The factory of `platform`: a shipped platform's, or an instance's own. */
@@ -72,9 +73,9 @@ function factoryOf(platform: string): AdapterFactory | undefined {
   return Object.hasOwn(ADAPTER_REGISTRY, platform) ? ADAPTER_REGISTRY[platform] : instanceFactory(platform);
 }
 
-/** The platforms of the instances this process knows, which keep sessions of their own. */
+/** The platforms of the instances this process knows that keep sessions of their own: each one's name. */
 function instancePlatforms(): string[] {
-  return instanceNames().flatMap((name) => sessionPlatformsOf(name));
+  return instanceNames().filter((name) => instancePlatform(name) !== undefined);
 }
 
 export function getAdapter(platform: string, toolRoots?: LocalConfig['toolRoots']): AgentAdapter {
