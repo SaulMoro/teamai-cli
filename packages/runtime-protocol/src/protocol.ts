@@ -268,7 +268,9 @@ export const ExecRequestSchema = z.object({
  * A prompt confined to `dir`, for a runtime whose `init` says it answers confined prompts: its agent reads `dir`, read
  * only, and nothing else of the host, at `level` or above, with what its offer for the tool said it can do there
  * (`access`). `schema` is the JSON Schema the reply matches, when the step names one. The reply is the result's
- * `output`, and `finished` says the level and access the runtime kept, never more than it enforced.
+ * `output`, and `finished` says the level and access the runtime kept, never more than it enforced. The lease's prompt
+ * and `cwd` name the directory exactly as `dir` does, so a runtime may mount or copy it at a neutral path and replace
+ * `dir` there, which keeps the member's home and project names out of the agent's view.
  */
 export const ConfinedPromptSchema = z.object({
   dir: z.string().min(1),

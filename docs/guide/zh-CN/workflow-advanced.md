@@ -1804,6 +1804,14 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 
 智能体只读 `dir`，读不到宿主上的其他内容。`finished` 说明运行时实际保持的级别和权限，不能高于它真正执行的。没有 `confined` 的 `finished` 让步骤失败为 `runtime_failed`，级别低于 `dir` 要求的失败为 `confined_failed`，回复不是 JSON 值的失败为 `confined_reply_invalid`。toy 运行时的 `judge` 选项按这种方式回答。
 
+`lease.prompt` 和 `cwd` 对目录的写法与 `dir` 完全相同。容器如果把 `dir` 挂载在同一路径，智能体会看到它的上级目录：它们是空的，但名字里有你的主目录、用户名和项目。要隐藏它们，就把 `dir` 挂载或复制到一个中性路径，并在 `cwd` 和提示里把 `dir` 替换掉：
+
+```text
+dir     /home/al/.teamai/projects/acme-web-3f9c/workflows/runs/r7a1…/scratch/a9c4…
+mount   /evidence (read-only)
+prompt  "Read only the files under /home/al/…/scratch/a9c4…: …"  →  "Read only the files under /evidence: …"
+```
+
 | 错误 | 下一步 |
 | --- | --- |
 | `driver_not_found` | 添加 `drivers/<name>.yaml` 并运行 `teamai pull`，或者添加 `~/.teamai/drivers/<name>.yaml` |
