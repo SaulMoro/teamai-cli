@@ -47,8 +47,11 @@ export interface Judges {
 export interface Provider {
   /** Checks the technology is usable on this machine and says what it offers, or fails `sandbox_unavailable` with the fix. */
   offer(): Promise<{ ok: true; can: Can } | { ok: false; failure: RuntimeFailure }>;
-  /** The sandbox of this attempt, when one exists. */
-  find(key: PlaceKey): Promise<string | undefined>;
+  /**
+   * The sandbox of this attempt: its id, or undefined once the technology said there is none. A lookup it could not
+   * make fails with what to do, so a sandbox is never taken as absent while its technology does not answer.
+   */
+  find(key: PlaceKey): Promise<{ ok: true; id: string | undefined } | { ok: false; failure: RuntimeFailure }>;
   /** Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. */
   create(key: PlaceKey, view: PlaceView): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
   /** The sandboxes of judges, on a provider that can confine one; a provider without them offers no confined prompt. */
