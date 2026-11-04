@@ -406,6 +406,11 @@ export function personGap(interactive: boolean, can: Pick<DriverCan, 'hitl'>): M
   return interactive && !can.hitl ? ['hitl'] : [];
 }
 
+/** What a step that runs on `tool` lacks on a driver that cannot launch it, also where a plan defers before `negotiate`. */
+export function toolGap(tool: string | undefined, can: Pick<DriverCan, 'tools'>): Missing[] {
+  return tool !== undefined && lacksTool(tool, can) ? ['tools'] : [];
+}
+
 /**
  * Decides whether this driver may take the step, and on what terms. Pure: the engine calls it at both places it hands
  * out a lease. In order: an `env:` key that shadows a team secret or a required key fails; what the member's policy refuses
@@ -436,7 +441,7 @@ export function negotiate(offer: Offer, can: DriverCan, allow: Allow, env: EnvFa
   const provided = providedIsolation(can, offer.hasContract);
 
   const gaps: Missing[] = policy.length > 0 ? policy : [
-    ...(offer.tool !== undefined && lacksTool(offer.tool, can) ? ['tools' as const] : []),
+    ...toolGap(offer.tool, can),
     ...(offer.unattended && !can.unattended ? ['unattended' as const] : []),
     ...(floor.isolation !== undefined && rank(floor.isolation) > rank(provided) ? ['isolation' as const] : []),
     ...(floor.network === false && !can.network ? ['network' as const] : []),

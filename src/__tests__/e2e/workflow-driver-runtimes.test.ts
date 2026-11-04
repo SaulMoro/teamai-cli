@@ -152,6 +152,11 @@ steps:
     interactive: true
     tool: claude
     prompt: Review the repository with a person.`);
+    writeFlow('missingtool', `  - id: review
+    workspace: new
+    interactive: true
+    tool: codex
+    prompt: Review the repository with a person.`);
     writeFlow('capped', `  - id: review
     tool: codex
     max_turns: 3
@@ -281,6 +286,27 @@ Judge the review.
 
     expect(envelope(ran), ran.stderr).toMatchObject({ data: { handoff: { steps: ['review'] } } });
     expect(ran.code).toBe(0);
+    expect(toyOpens()).toBe(0);
+    expect(fs.existsSync(launches)).toBe(false);
+  });
+
+  it.each([
+    ['local', []],
+    ['toolgap', ['local', 'toy']],
+    ['gaptool', ['toy', 'local']],
+  ] as const)('fails an interactive step tool_unavailable, unattended, on driver %s, when no runtime launches its tool, before a person is asked', async (driver, order) => {
+    // The toy offers no tool and no workspace, so its plan defers the step.
+    if (order.length > 0) writeDefinition(driver, order.map((use) => (use === 'toy' ? { use, options: { state, can: { workspace: [], tools: [] } } } : { use })));
+    // Codex is on no runtime: local finds only the fake Claude and node on this PATH.
+    const nodeOnly = fs.mkdtempSync(path.join(sandbox, 'node-bin-'));
+    fs.symlinkSync(process.execPath, path.join(nodeOnly, 'node'));
+
+    const ran = await runCLI(['workflow', 'start', 'missingtool', '--driver', driver], repo, env({ PATH: [bin, nodeOnly, '/usr/bin', '/bin'].join(path.delimiter), TEAMAI_MODE: 'unattended' }));
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(readRunState(runOf(ran)).steps).toMatchObject([{ id: 'review', status: 'failed', failure: {
+      code: 'tool_unavailable', message: 'Step "review" runs on codex, which the driver of this run cannot launch here. Install codex where the run is driven, or remove tool from the step.',
+    } }]);
     expect(toyOpens()).toBe(0);
     expect(fs.existsSync(launches)).toBe(false);
   });
