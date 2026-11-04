@@ -1298,6 +1298,25 @@ Step "review" needs what no single runtime of driver "sandboxed" offers: runtime
 
 A step that requires strict isolation no runtime of the definition gives is refused at `workflow start`, before the run exists. A step every runtime holds back for a reason of this machine, such as a network your `workflows.allow` refuses, stays pending. An approval or choice waiting for you is still asked meanwhile. Once nothing else runs or waits for an answer, the run stops `busy` with that reason, and the dashboard's run details say which runtime held it back and why.
 
+Every definition keeps a slot on this machine for the steps that stay here: its `local` entry, or, when it lists none, a `host` entry teamai adds last. `host` runs commands with teamai, git and the shell, needs no agent CLI, and never takes a prompt step. The slot takes:
+
+- command and setup steps, when no runtime of the definition runs commands (`"exec": false`);
+- the command steps of teamai's own workflows `teamai-score`, `teamai-share-session`, `teamai-finished-sessions` and `teamai-benchmark`, which plan, check and write labels on this machine;
+- a step with `deliver: publish`, which pushes to a data branch from here.
+
+No other runtime takes those. When a runtime of the definition runs commands, your own command steps go to it, not to `local`. So a definition of external runtimes alone runs and judges every workflow on a machine with no agent CLI:
+
+```yaml
+# drivers/sandbox-only.yaml
+schemaVersion: v1alpha1
+name: sandbox-only
+tool: claude
+runtimes:
+  - use: sandbox          # prompts and your command steps; teamai's own steps run on the host entry
+```
+
+A scored pass's judge runs on a runtime that [answers confined prompts](#a-runtime-that-answers-confined-prompts), else on this machine's tools. A copy of teamai's own workflows under another name is not kept on this machine.
+
 `use: local` runs steps the way `--driver local` does. Any other name is an external program, found in this order:
 
 ```text
@@ -1464,6 +1483,8 @@ Every request and reply is defined as a zod schema in `packages/runtime-protocol
 
 `display`, on `ready`, on an exec's or prompt's `accepted`, and on the `alive` reply to `reattach`, is optional: a `label` of at most 80 characters, a `url` (`https:`, `http:` or an app's own scheme such as `t3:`), and at most 8 string `fields`. The run's details in the dashboard show it under the step. Put no secret and no path in your home in it. teamai drops a display it cannot show, logs why, and runs the step as usual. The latest one given is shown, so a runtime that creates an agent only for the prompt shows the place at `ready`, then the agent with the prompt's `accepted`.
 
+`open`'s `view` names the paths the place gets at the same absolute path as on this machine: the worktree read-write, its git paths read-only, the attempt's result directory and tool home, and `runDir`, the run's scratch directory, read-write, so `$TEAMAI_RUN_DIR` works there as it does here.
+
 #### A runtime that launches agents its own way
 
 A runtime such as a T3 Code or Paseo one starts an agent from a prompt and learns its session when it ends, instead of running the tool's command line. It says so at `init` with `"prompt": true`. With `"exec": false` in `can` it also takes no command, so command steps and steps with `setup` go to the next runtime of the definition. A runtime with `"exec": false` and no `"prompt": true` can run no step, and teamai refuses it at start:
@@ -1505,6 +1526,19 @@ teamai then sends each prompt step as one `prompt`. `lease.prompt` is the whole 
 | `maxTurns` | The agent's turn cap, when your `can.max_turns` offers one |
 
 A prompt that cannot finish ends `failed`. Use `model_unavailable`, `tool_unavailable`, `agent_unavailable` or `tool_failed` for what the step should record as is; teamai records any other code as `runtime_failed`, with your code and message in its message. After `cancel`, it ends `cancelled`. `reattach` reports a finished prompt as `{"op":"…","state":"finished","session":{…},"result":{…},"usage":{…}}`, and one still running as `running`; a repeated `prompt` with the same `op` reconnects to its agent and starts no other. teamai keeps the step's `timeout` itself, with `cancel`. It checks a `budget` against `usage` once the prompt ends. The toy runtime's `agent` option runs it this way.
+
+#### A runtime that answers confined prompts
+
+A runtime that can run an agent with one directory as its only readable root says so at `init` with `"confinedPrompt": true`, and lists in `can.confined` the tools it confines, at which level and with what access. Without `confinedPrompt`, teamai drops `can.confined` from its offer, so a [step confined to a directory](workflow.md#a-prompt-confined-to-a-directory), such as a scored pass's judge, never reaches it. The `open` for such a step has no `view`, and its `prompt` carries `confined`:
+
+```text
+← {"type":"init","ok":true,"prompt":true,"confinedPrompt":true,"can":{"exec":false,"tools":["claude"],"confined":[{"level":"best-effort","access":"read","tools":["claude"]}]}}
+→ {"type":"open","op":"op-6d2e0b91c4a7","run":"r7a1…","attempt":"a9c4…","credentials":{}}
+→ {"type":"prompt","op":"op-a3d5c18e02f9","handle":"…","cwd":"/…/runs/r7a1…/evidence","lease":{…},"confined":{"dir":"/…/runs/r7a1…/evidence","level":"best-effort","access":"read","schema":{…}},…}
+← {"op":"op-a3d5c18e02f9","event":"finished","session":{…},"result":{"output":{…}},"confined":{"level":"best-effort","access":"read"}}
+```
+
+The agent reads `dir`, read-only, and nothing else of the host. `finished` says the level and access the runtime kept, never more than it enforced. A `finished` without `confined` fails the step `runtime_failed`, a level below the one `dir` asks for fails it `confined_failed`, and a reply that is no JSON value fails it `confined_reply_invalid`. The toy runtime's `judge` option answers this way.
 
 | Error | Next step |
 | --- | --- |
