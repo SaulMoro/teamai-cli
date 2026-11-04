@@ -11,7 +11,9 @@ import { disposeDriver, LOGIN_TOOLS, openDriver } from './sources.js';
 //  A driver killed while its attempt ran leaves the tool running on the step runtime, and the attempt's login held.
 //  `teamai workflow cancel`, holding the run's lock so no driver of it is live, stops each such attempt the way its
 //  driver would have: it cancels the exec, brings the place's work back, writes the login back, closes the place,
-//  and only then releases the login. An attempt it cannot stop keeps its login, so no second copy runs beside it.
+//  and only then releases the login. An attempt it cannot stop keeps its place, its records and its login, so no
+//  second copy runs beside it, and the next `teamai workflow cancel` of the run tries again. A runtime that cannot
+//  start for new work is opened in `recover` mode for this (sources.ts).
 //
 
 /**
@@ -66,7 +68,10 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId):
     if (entry?.kind !== 'external') return cannot(`driver "${record.driver}" no longer uses that runtime.`);
     const placed = attemptRun({ config, run, attempt, runtime: entry.runtime, driver: record.driver });
 
-    if (!await placed.stopLeftOperation()) return cannot('its exec or prompt still runs after teamai asked the runtime to cancel it.');
+    const notStopped = await placed.stopLeftOperation();
+
+    // Nothing is brought back or closed while what ran may still write the place.
+    if (notStopped) return cannot(`its exec or prompt may still run, since the runtime did not confirm it stopped (${notStopped.code}): ${notStopped.message}`);
     const notCollected = await placed.collect();
 
     if (notCollected) log.warn(notCollected.message);

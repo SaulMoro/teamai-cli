@@ -23,6 +23,12 @@
 // `answer` makes it answer a `reattach`, `collect` or `close` otherwise, by request type: `failed`, the failure reply for
 // that handle; `error`, an error line that names no request; `silent`, nothing. A request it cannot answer, such as one
 // for a handle while its journal cannot be read, gets the failure reply for its handle or operation.
+//
+// Each init's mode is appended to `inits.jsonl` in its state. `init_fails` is the failure an init for new work ends
+// with, as a runtime signed out of its provider; in `recover` mode it still opens, offers nothing and answers from its
+// state, unless `recover: false` makes it answer that mode as a runtime before it did. With `cancel_fails`, a cancel of
+// an exec or prompt still running stops nothing and ends it failed with that failure, which reattach keeps reporting
+// until a later cancel stops it.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -30,7 +36,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 
-const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path', 'answer']);
+const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'open_fails', 'can', 'display', 'agent', 'judge', 'path', 'answer', 'init_fails', 'cancel_fails', 'recover']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -131,8 +137,29 @@ function init(request) {
     return;
   }
 
+  fs.mkdirSync(request.options.state, { recursive: true });
+  fs.appendFileSync(path.join(request.options.state, 'inits.jsonl'), `${JSON.stringify({ mode: request.mode })}\n`);
+
+  if (request.mode === 'recover') {
+    if (request.options.recover === false) {
+      send({ event: 'error', message: 'The toy runtime does not know mode recover.' });
+
+      return;
+    }
+
+    options = request.options;
+    send({ type: 'init', ok: true, can: {} });
+
+    return;
+  }
+
+  if (request.options.init_fails !== undefined) {
+    send({ type: 'init', ok: false, error: request.options.init_fails });
+
+    return;
+  }
+
   options = request.options;
-  fs.mkdirSync(options.state, { recursive: true });
 
   if (request.credentials !== undefined) {
     fs.appendFileSync(file('credentials.jsonl'), `${JSON.stringify({ type: 'init', names: request.credentials.env, logins: request.credentials.logins })}\n`);
@@ -185,6 +212,7 @@ function replay(op, record) {
   send({ op, event: 'accepted' });
 
   if (record.outcome.state === 'exited') send({ op, event: 'exited', code: record.outcome.code, stdout: record.outcome.stdout });
+  else if (record.outcome.state === 'failed') send({ op, event: 'failed', failure: record.outcome.failure });
   else send({ op, event: 'cancelled' });
 }
 
@@ -370,9 +398,20 @@ function prompt(request) {
 }
 
 function cancel(request) {
-  const record = readJson(opPath(request.op), undefined);
+  const found = readJson(opPath(request.op), undefined);
 
-  if (!record || record.outcome) return;
+  // A cancel that could not stop the operation is the one outcome a later cancel replaces.
+  if (!found || (found.outcome && !found.cancelFailed)) return;
+  const { outcome: _failed, cancelFailed: _retried, ...record } = found;
+
+  if (options.cancel_fails !== undefined) {
+    writeJson(opPath(request.op), { ...record, outcome: { state: 'failed', failure: options.cancel_fails }, cancelFailed: true });
+    send({ op: request.op, event: 'failed', failure: options.cancel_fails });
+
+    return;
+  }
+
+  if (found.cancelFailed) writeJson(opPath(request.op), record);
 
   if (record.kind === 'prompt') {
     fs.mkdirSync(file('cancel'), { recursive: true });
@@ -432,6 +471,8 @@ function reattach(request) {
     if (record.outcome?.state === 'exited') return { op, state: 'exited', code: record.outcome.code, stdout: record.outcome.stdout };
 
     if (record.outcome?.state === 'cancelled') return { op, state: 'cancelled' };
+
+    if (record.outcome?.state === 'failed') return { op, state: 'failed', failure: record.outcome.failure };
 
     if (running.has(op) || groupAlive(record.pgid)) return { op, state: 'running' };
 

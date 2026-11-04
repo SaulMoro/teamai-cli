@@ -111,7 +111,7 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
     const runtime = runtimeSeeing([unreachable]);
     await leftRunning(runtime);
 
-    expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).stopLeftOperation()).toBe(false);
+    expect(await attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).stopLeftOperation()).toEqual({ code: 'runtime_exited', message: 'gone away' });
   });
 
   it('ends a restarted exec whose old run the runtime cannot show stopped as lost, instead of reporting it interrupted', async () => {
