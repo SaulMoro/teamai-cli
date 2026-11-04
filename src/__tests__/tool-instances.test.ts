@@ -152,3 +152,24 @@ describe('personal tool instances', () => {
     expect(config?.toolPaths.mine).toBeUndefined();
   });
 });
+
+describe('resume --next', () => {
+  it('drives a run another member handed over without the member\'s own instances', async () => {
+    personal('mine', 'schemaVersion: v1alpha1\nname: mine\nextends: codex\n');
+    const { registry } = await load(teamRepo({}));
+    expect(registry.toolOf('mine')?.instance?.source).toBe('personal');
+    const { workflowResume } = await import('../workflow-commands.js');
+    const written = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const cwd = process.cwd();
+    process.chdir(root);
+
+    try {
+      await workflowResume(undefined, { next: true });
+    } finally {
+      process.chdir(cwd);
+      written.mockRestore();
+    }
+
+    expect(registry.toolOf('mine')).toBeUndefined();
+  });
+});

@@ -1,0 +1,225 @@
+import { execFileSync, spawn } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { hasPython, TYPED_TERMINAL } from '../helpers/in-terminal.js';
+
+/**
+ * A team adds its internal Claude build as a tool instance in the team repo: `pull` delivers to its paths, a workflow
+ * prompt step on `--tools default=acme-claude` launches its own command once a person accepted it, and its session is
+ * found and scored as acme-claude's, apart from Claude's.
+ */
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+const CLI = path.join(ROOT, 'dist', 'index.js');
+const SESSION = '11111111-2222-4333-8444-555555555555';
+
+const ACME_CLAUDE = `schemaVersion: v1alpha1
+name: acme-claude
+extends: claude
+command: acme-claude
+home: { dir: .acme-claude, env: ACME_CLAUDE_CONFIG_DIR }
+`;
+
+/**
+ * A Claude build that keeps Claude Code transcripts in its own home: it writes one session there, the step's result,
+ * and the command name it ran as to `<HOME>/launches.log`.
+ */
+function fakeClaude(name: string): string {
+  return `#!/usr/bin/env node
+const fs = require('node:fs'), path = require('node:path');
+if (process.argv.includes('--version')) { console.log('2.1.308 (Claude Code)'); process.exit(); }
+fs.appendFileSync(path.join(process.env.HOME, 'launches.log'), ${JSON.stringify(name)} + '\\n');
+const judging = process.argv.includes('--json-schema');
+if (judging) {
+  process.stdin.resume(); process.stdin.on('end', () => {
+    const schema = JSON.parse(process.argv[process.argv.indexOf('--json-schema') + 1]);
+    const answer = { label: 'thorough', reasoning: 'It reviewed the repository.' };
+    console.log(JSON.stringify({ type: 'system', subtype: 'init', model: 'judge-model' }));
+    console.log(JSON.stringify({ type: 'result', structured_output: schema.properties.answer ? { answer } : answer }));
+  });
+} else {
+  const home = ${name === 'claude' ? "process.env.CLAUDE_CONFIG_DIR || path.join(process.env.HOME, '.claude')" : "process.env.ACME_CLAUDE_CONFIG_DIR || path.join(process.env.HOME, '.acme-claude')"};
+  const id = ${JSON.stringify(name === 'claude' ? '99999999-2222-4333-8444-555555555555' : SESSION)};
+  const dir = path.join(home, 'projects', process.cwd().replace(/[^a-zA-Z0-9]/g, '-'));
+  const at = new Date().toISOString();
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, id + '.jsonl'), [
+    { type: 'user', sessionId: id, cwd: process.cwd(), uuid: 'u1', parentUuid: null, timestamp: at, message: { role: 'user', content: 'Review the repository.' } },
+    { type: 'assistant', sessionId: id, cwd: process.cwd(), uuid: 'a1', parentUuid: 'u1', timestamp: at, message: { role: 'assistant', model: 'acme-model', content: [{ type: 'text', text: 'Reviewed.' }] } },
+  ].map((line) => JSON.stringify(line)).join('\\n') + '\\n');
+  fs.mkdirSync(path.dirname(process.env.TEAMAI_WORKFLOW_RESULT), { recursive: true });
+  fs.writeFileSync(process.env.TEAMAI_WORKFLOW_RESULT, JSON.stringify({ output: { ok: true } }));
+  console.log(JSON.stringify({ type: 'system', subtype: 'init', model: 'acme-model', session_id: id }));
+  console.log(JSON.stringify({ type: 'result', session_id: id, usage: { input_tokens: 3, output_tokens: 2 } }));
+}
+`;
+}
+
+type Ran = { code: number | null; stdout: string; stderr: string };
+
+function envelope(stdout: string): Record<string, unknown> {
+  const line = stdout.trim().split('\n').findLast((item) => item.startsWith('{'));
+  if (!line) throw new Error(`no JSON envelope in stdout:\n${stdout}`);
+  return JSON.parse(line) as Record<string, unknown>;
+}
+
+async function waitFor(check: () => boolean, ms: number): Promise<boolean> {
+  for (let waited = 0; !check(); waited += 50) {
+    if (waited >= ms) return false;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return true;
+}
+
+describe.skipIf(process.platform === 'win32')('tool instances through the CLI', () => {
+  let root: string;
+  let repo: string;
+  let bin: string;
+  let home: string;
+
+  const env = (extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv => ({ ...process.env, HOME: home, USERPROFILE: home, FORCE_COLOR: '0', PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`, ...extra });
+
+  function runCLI(args: string[], extra: NodeJS.ProcessEnv = {}): Promise<Ran> {
+    return new Promise((resolve) => {
+      const child = spawn(process.execPath, [CLI, ...args], { cwd: repo, env: env(extra), stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+      child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+      child.on('close', (code) => resolve({ code, stdout, stderr }));
+    });
+  }
+
+  const launches = (): string[] => (fs.existsSync(path.join(home, 'launches.log')) ? fs.readFileSync(path.join(home, 'launches.log'), 'utf8').trim().split('\n').filter(Boolean) : []);
+  const clearLaunches = (): void => fs.rmSync(path.join(home, 'launches.log'), { force: true });
+  const write = (file: string, text: string): void => { fs.mkdirSync(path.dirname(path.join(repo, file)), { recursive: true }); fs.writeFileSync(path.join(repo, file), text); };
+  const commit = (message: string): void => {
+    execFileSync('git', ['add', '-A'], { cwd: repo });
+    execFileSync('git', ['commit', '-qm', message], { cwd: repo, env: env() });
+  };
+  const start = (tool: string, extra: NodeJS.ProcessEnv = {}): Promise<Ran> => runCLI(['workflow', 'start', 'review', '--driver', 'local', '--tools', `default=${tool}`], extra);
+  const unattended = { TEAMAI_MODE: 'unattended' };
+
+  beforeAll(async () => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'teamai-tool-instances-e2e-')));
+    repo = path.join(root, 'repo');
+    bin = path.join(root, 'bin');
+    home = path.join(root, 'home');
+    for (const dir of [repo, bin, home]) fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(home, '.gitconfig'), '[user]\n\tname = Test\n\temail = test@example.com\n[gc]\n\tauto = 0\n');
+    for (const name of ['acme-claude', 'claude', 'my-acme-build']) {
+      fs.writeFileSync(path.join(bin, name), fakeClaude(name));
+      fs.chmodSync(path.join(bin, name), 0o755);
+    }
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+    write('README.md', '# fixture\n');
+    write('.teamai/tools/acme-claude.yaml', ACME_CLAUDE);
+    write('.teamai/skills/review-checklist/SKILL.md', '---\nname: review-checklist\ndescription: What to check in a review.\n---\nCheck the tests first.\n');
+    write('.teamai/workflows/review.yaml', 'schemaVersion: v1alpha1\nname: review\ndescription: One review prompt.\nsteps:\n  - id: review\n    prompt: Review the repository without changing it.\n    output:\n      ok: boolean\n');
+    write('.teamai/scorers/review-quality.md', '---\nlabels:\n  - { value: thorough, score: 1, description: Did the review }\n  - { value: shallow, score: 0, description: Did not }\npassingScore: 0.5\nsamplingRate: 0\n---\nJudge whether the session reviewed the repository.\n');
+    commit('initial');
+    execFileSync('git', ['remote', 'add', 'origin', 'http://127.0.0.1:9/team/app.git'], { cwd: repo });
+    const initialized = await runCLI(['init', '--self', '--agent', 'claude,acme-claude', '--force']);
+    expect(initialized.code, `${initialized.stdout}\n${initialized.stderr}`).toBe(0);
+  });
+
+  afterAll(() => {
+    if (root) fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('delivers the team skills to the instance\'s own paths, beside Claude\'s', async () => {
+    const pulled = await runCLI(['pull']);
+
+    expect(pulled.code, `${pulled.stdout}\n${pulled.stderr}`).toBe(0);
+    expect(fs.existsSync(path.join(repo, '.acme-claude', 'skills', 'review-checklist', 'SKILL.md'))).toBe(true);
+    expect(fs.existsSync(path.join(repo, '.claude', 'skills', 'review-checklist', 'SKILL.md'))).toBe(true);
+  });
+
+  it('refuses to run a team instance\'s command no one accepted in an unattended run, and says how to accept it', async () => {
+    clearLaunches();
+    const started = await start('acme-claude', unattended);
+
+    expect(started.stdout + started.stderr).toMatch(/Tool "acme-claude" comes from the team repo \(.*acme-claude\.yaml, content [0-9a-f]{12}\) and runs acme-claude, which no one has accepted on this machine, and an unattended run does not ask\. Run the same command once in a terminal, attended/);
+    expect(launches()).toEqual([]);
+  });
+
+  it.skipIf(!hasPython)('asks in a terminal, runs the instance\'s command once accepted, and asks again only when its file changes', async () => {
+    clearLaunches();
+    const terminalPid = path.join(root, 'terminal.pid');
+    const output = path.join(root, 'terminal.out');
+    const input = path.join(root, 'terminal.in');
+    fs.rmSync(output, { force: true });
+    fs.rmSync(input, { force: true });
+    const printed = (): string => (fs.existsSync(output) ? fs.readFileSync(output, 'utf8') : '');
+    const wrapper = spawn('python3', ['-c', TYPED_TERMINAL, terminalPid, output, input, process.execPath, CLI, 'workflow', 'start', 'review', '--driver', 'local', '--tools', 'default=acme-claude'], { cwd: repo, env: env(), stdio: 'ignore' });
+    const ended = new Promise<number | null>((resolve) => { wrapper.on('close', (code) => resolve(code)); });
+
+    expect(await waitFor(() => printed().includes('Run it? [y/N]'), 30_000), printed()).toBe(true);
+    expect(printed()).toContain('It runs acme-claude as you, with your files, in place of claude.');
+    fs.writeFileSync(input, 'y\n');
+    expect(await ended, printed()).toBe(0);
+    expect(launches()).toEqual(['acme-claude']);
+
+    // A team-repo commit that leaves the file as it was asks nothing.
+    write('notes.md', 'Unrelated.\n');
+    commit('unrelated');
+    clearLaunches();
+    const again = await start('acme-claude', unattended);
+    expect(again.code, `${again.stdout}\n${again.stderr}`).toBe(0);
+    expect(envelope(again.stdout)).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(launches()).toEqual(['acme-claude']);
+
+    // A change to the file is a new content to accept.
+    write('.teamai/tools/acme-claude.yaml', ACME_CLAUDE.replace('command: acme-claude', 'command: acme-claude\n# Build 2.4.\n'));
+    commit('acme-claude 2.4');
+    clearLaunches();
+    const changed = await start('acme-claude', unattended);
+    expect(changed.stdout + changed.stderr).toContain('which no one has accepted on this machine');
+    expect(launches()).toEqual([]);
+    write('.teamai/tools/acme-claude.yaml', ACME_CLAUDE);
+    commit('acme-claude back');
+  });
+
+  it('finds the instance\'s session in its own home, credits it to the instance, and scores it as the instance\'s', async () => {
+    const dataRuns = (): string[] => execFileSync('find', [home, '-path', '*workflows/runs/*.json', '-not', '-path', '*side-branches*'], { encoding: 'utf8' }).trim().split('\n').filter(Boolean);
+    const stored = dataRuns().map((file) => JSON.parse(fs.readFileSync(file, 'utf8')) as { steps: Array<{ tool?: string; session?: string }> });
+
+    expect(stored.flatMap((run) => run.steps)).toContainEqual(expect.objectContaining({ tool: 'acme-claude', session: SESSION }));
+    expect(fs.existsSync(path.join(home, '.claude', 'projects'))).toBe(false);
+
+    const scored = await runCLI(['score', '--session', SESSION, '--source', 'acme-claude', '--scorer', 'review-quality']);
+    expect(scored.code, `${scored.stdout}\n${scored.stderr}`).toBe(0);
+    expect(envelope(scored.stdout)).toMatchObject({ data: { label: { subject: { platform: 'acme-claude', sessionId: SESSION }, label: 'thorough' } } });
+
+    const asClaude = await runCLI(['score', '--session', SESSION, '--source', 'claude-code', '--scorer', 'review-quality']);
+    expect(asClaude.code).not.toBe(0);
+  });
+
+  it('runs an instance that sets no command unattended with no acceptance, on the command of the tool it extends', async () => {
+    write('.teamai/tools/review-claude.yaml', 'schemaVersion: v1alpha1\nname: review-claude\nextends: claude\npaths: { skills: .claude/review-skills }\n');
+    commit('review-claude');
+    clearLaunches();
+    const started = await start('review-claude', unattended);
+
+    expect(started.code, `${started.stdout}\n${started.stderr}`).toBe(0);
+    expect(launches()).toEqual(['claude']);
+  });
+
+  it('lets a member\'s own instance replace the team\'s, with no acceptance', async () => {
+    const own = path.join(home, '.teamai', 'tools', 'acme-claude.yaml');
+    fs.mkdirSync(path.dirname(own), { recursive: true });
+    fs.writeFileSync(own, ACME_CLAUDE.replace('command: acme-claude', 'command: my-acme-build'));
+    clearLaunches();
+    try {
+      const started = await start('acme-claude', unattended);
+
+      expect(started.code, `${started.stdout}\n${started.stderr}`).toBe(0);
+      expect(launches()).toEqual(['my-acme-build']);
+    } finally {
+      fs.rmSync(own);
+    }
+  });
+});

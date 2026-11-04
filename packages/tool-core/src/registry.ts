@@ -9,21 +9,21 @@ export interface RegisteredTool<TPlatform extends string = string> {
 }
 
 /** A name a reader passes, resolved: the shipped definition it runs as, and the instance over it when one is defined. */
-export interface ResolvedTool<TId extends string> {
+export interface ResolvedTool<TId extends string, TInstance extends ToolInstance<TId> = ToolInstance<TId>> {
   readonly name: string;
   readonly base: TId;
-  readonly instance?: ToolInstance<TId>;
+  readonly instance?: TInstance;
 }
 
 /** The lookups every reader of a tool id goes through, over one table of tools keyed by id and the instances over them. */
-export interface ToolRegistry<TTools, TPlatform extends string> {
+export interface ToolRegistry<TTools, TPlatform extends string, TInstance extends ToolInstance<keyof TTools & string> = ToolInstance<keyof TTools & string>> {
   /** Every shipped tool, in the order the table declares them. Instances are never listed. */
   readonly ids: readonly (keyof TTools & string)[];
   /** Whether the table declares `value`; a name an object inherits, such as `toString`, is no tool. */
   isToolId(value: string): value is keyof TTools & string;
   definitionOf<K extends keyof TTools & string>(id: K): TTools[K];
   /** The tool `name` names: an instance first, then a shipped tool; undefined for neither. */
-  toolOf(name: string): ResolvedTool<keyof TTools & string> | undefined;
+  toolOf(name: string): ResolvedTool<keyof TTools & string, TInstance> | undefined;
   /**
    * The session platforms teamai reads for `tool`, first the one its launched sessions write; none for a tool it does
    * not know. An instance has one, its own name, when the tool it extends keeps sessions teamai reads.
@@ -32,7 +32,7 @@ export interface ToolRegistry<TTools, TPlatform extends string> {
   /** The first tool whose `sessions` lists `platform`, or the instance whose platform it is: its sessions are credited to it. */
   sessionPlatformOwner(platform: string): string | undefined;
   /** The instance whose own platform `platform` is, and the shipped platform whose format its sessions keep. */
-  instancePlatform(platform: string): { instance: ToolInstance<keyof TTools & string>; platform: TPlatform } | undefined;
+  instancePlatform(platform: string): { instance: TInstance; platform: TPlatform } | undefined;
 }
 
 /**
@@ -41,11 +41,15 @@ export interface ToolRegistry<TTools, TPlatform extends string> {
  * tool it extends can keep them under another id. Declare the table `as const satisfies`, so tool ids and session
  * platforms stay literal.
  */
-export function makeToolRegistry<const TTools extends Readonly<Record<string, RegisteredTool>>, const TPlatform extends string>(
+export function makeToolRegistry<
+  const TTools extends Readonly<Record<string, RegisteredTool>>,
+  const TPlatform extends string,
+  TInstance extends ToolInstance<keyof TTools & string> = ToolInstance<keyof TTools & string>,
+>(
   tools: TTools & Readonly<Record<string, RegisteredTool<TPlatform>>>,
-  instances: () => ReadonlyMap<string, ToolInstance<keyof TTools & string>> = () => new Map(),
+  instances: () => ReadonlyMap<string, TInstance> = () => new Map(),
   hostsInstances: (platform: TPlatform) => boolean = () => true,
-): ToolRegistry<TTools, TPlatform> {
+): ToolRegistry<TTools, TPlatform, TInstance> {
   const declared: Readonly<Record<string, RegisteredTool<TPlatform>>> = tools;
   const isToolId = (value: string): value is keyof TTools & string => Object.hasOwn(tools, value);
   const ids = Object.keys(tools).filter(isToolId);
@@ -57,7 +61,7 @@ export function makeToolRegistry<const TTools extends Readonly<Record<string, Re
   };
 
   /** An instance other than a shipped tool's adjustment: one whose sessions are its own. */
-  const ownInstance = (name: string): ToolInstance<keyof TTools & string> | undefined => {
+  const ownInstance = (name: string): TInstance | undefined => {
     const instance = isToolId(name) ? undefined : instances().get(name);
 
     const [platform] = instance ? shippedPlatforms(instance.extends) : [];

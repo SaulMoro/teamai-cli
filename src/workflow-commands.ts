@@ -1,3 +1,4 @@
+import { ignorePersonalToolInstances } from './tool-instances.js';
 import path from 'node:path';
 import { z } from 'zod';
 import { autoDetectInit, loadTeamConfig, machineWorkflowAllowProblem } from './config.js';
@@ -908,6 +909,8 @@ export async function workflowResume(runId: string | undefined, options: ResumeO
   if (refusedNested(nestedCall(process.env), asks(asked, 'skill'))) return;
 
   if (options.next || runId === undefined) {
+    // A run another member handed over runs on the team's tools, never on this member's own instances.
+    if (options.next) ignorePersonalToolInstances();
     await resumeOffered(runId, options, asked);
 
     return;
