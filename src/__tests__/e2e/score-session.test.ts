@@ -11,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { encodeCwdClaude } from '@teamai/tool-core/sessions/fs';
 import { executableOf, LAUNCH_ORDER } from '../../tool-launch/tools.js';
+import { TOY_RUNTIME } from '../helpers/toy-runtime.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const CLI = path.join(ROOT, 'dist', 'index.js');
@@ -392,5 +393,46 @@ console.log(JSON.stringify({ type: 'result', structured_output: given?.propertie
     const { steps } = z.object({ steps: z.array(z.object({ id: z.string(), status: z.string() })) })
       .parse(JSON.parse(fs.readFileSync(path.join(dataHome, 'workflows', 'runs', `${run}.json`), 'utf8')));
     expect(steps.filter((step) => step.id.endsWith('.judge'))).toEqual([{ id: 'score[0].judge', status: 'succeeded' }, { id: 'score[1].judge', status: 'pending' }]);
+  });
+
+  it('shares and labels a session under a definition whose only runtime is the toy, on a host with no agent CLI', async () => {
+    const home = env.HOME ?? '';
+    const state = path.join(root, 'toy-state-share');
+    // The member's own toy, which runs without acceptance, and answers the judge itself.
+    fs.mkdirSync(path.join(home, '.teamai', 'runtimes', 'toy'), { recursive: true });
+    fs.copyFileSync(TOY_RUNTIME, path.join(home, '.teamai', 'runtimes', 'toy', 'runtime'));
+    fs.chmodSync(path.join(home, '.teamai', 'runtimes', 'toy', 'runtime'), 0o755);
+    fs.mkdirSync(path.join(home, '.teamai', 'drivers'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.teamai', 'drivers', 'toyshare.yaml'), [
+      'schemaVersion: v1alpha1', 'name: toyshare', 'tool: claude', 'runtimes:', '  - use: toy', '    options:',
+      `      state: ${JSON.stringify(state)}`, '      judge: { reply: { answer: { label: thorough, reasoning: "Ran the tests." } } }', '',
+    ].join('\n'));
+    // teamai, node and git only: no agent CLI.
+    const hostBin = path.join(root, 'host-bin');
+    fs.rmSync(hostBin, { recursive: true, force: true });
+    fs.mkdirSync(hostBin);
+    fs.symlinkSync(process.execPath, path.join(hostBin, 'node'));
+    for (const tool of ['git', 'teamai']) fs.symlinkSync(execFileSync('which', [tool], { encoding: 'utf8', env }).trim(), path.join(hostBin, tool));
+    const inputs = { session: SESSION, source: 'claude-code', publish: false, scorers: ['review-quality'], demand: 'named' };
+
+    const shared = await runCLI(['workflow', 'start', 'teamai-share-session', '--inputs', JSON.stringify(inputs), '--driver', 'toyshare'], app, { ...env, PATH: [hostBin, '/usr/bin', '/bin'].join(path.delimiter) });
+
+    expect(envelope(shared.stdout), shared.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const run = z.object({ done: z.object({ run: z.string() }) }).parse(envelope(shared.stdout).data).done.run;
+    const runFile = fs.readdirSync(home, { recursive: true, encoding: 'utf8' }).map((file) => path.join(home, file)).find((file) => file.endsWith(path.join('workflows', 'runs', `${run}.json`)));
+    const { steps } = z.object({ steps: z.array(z.object({ id: z.string(), status: z.string(), attempt: z.string().optional(), outputs: z.unknown().optional() })) })
+      .parse(JSON.parse(fs.readFileSync(String(runFile), 'utf8')));
+    expect(steps.find((step) => step.id.endsWith('.label'))).toMatchObject({ status: 'succeeded', outputs: { labels: [{ scorer: 'review-quality', label: 'thorough' }] } });
+    // The judge ran on the toy; teamai's own steps ran on the host, so the toy ran no command.
+    const runtimeOf = (attempt: string | undefined): unknown => {
+      const file = path.join(path.dirname(String(runFile)), run, 'attempts', String(attempt), 'runtime.json');
+      return fs.existsSync(file) ? (JSON.parse(fs.readFileSync(file, 'utf8')) as { runtime: string }).runtime : 'host';
+    };
+    const ranOn = Object.fromEntries(steps.filter((step) => step.attempt !== undefined).map((step) => [step.id, runtimeOf(step.attempt)]));
+    expect(Object.entries(ranOn).filter(([, runtime]) => runtime !== 'host')).toEqual([[expect.stringMatching(/\.judge$/), 'toy']]);
+    expect(ranOn).toMatchObject({ 'score.plan': 'host', 'score.score[0].evidence': 'host', 'score.score[0].label': 'host' });
+    // The toy was sent one prompt, the judge's, confined to the evidence directory.
+    const sent = fs.readFileSync(path.join(state, 'prompts.jsonl'), 'utf8').trim().split('\n').map((text) => JSON.parse(text) as { confined?: { level: string } });
+    expect(sent).toEqual([expect.objectContaining({ confined: expect.objectContaining({ level: 'best-effort' }) })]);
   });
 });

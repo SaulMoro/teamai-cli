@@ -20,7 +20,7 @@ import { attemptEnv } from '../../attempt-marker.js';
 import { leaseNext, type PersonHandoff, type ReportInput } from '../../engine.js';
 import { offeredToPerson, offerToPerson, reconcileTakenCopies } from '../../handoff.js';
 import { LeaseWireSchema, type LeaseWire } from '../../lease-wire.js';
-import { setsLimit, type DriverCan, type Missing } from '../../requirements.js';
+import { setsLimit, type DecidedCan, type DriverCan, type Missing } from '../../requirements.js';
 import { callerProvenance, respondProvenance, respondToHitl, type ResponseInput } from '../../run-controls.js';
 import { isRecord } from '../../expression.js';
 import { budgeted } from '../../limits.js';
@@ -822,7 +822,7 @@ function rememberSecrets(seen: Record<string, string>, secrets: Record<string, s
  * prompt's turn at the limits its lease carries. It runs an unattended prompt in its tool's unattended mode, and fails
  * one whose tool has none.
  */
-function localCan({ strict, hitl, tools, confined }: { strict: StrictCan; hitl: boolean; tools: string[]; confined: ConfinedOffer[] }): Required<DriverCan> {
+function localCan({ strict, hitl, tools, confined }: { strict: StrictCan; hitl: boolean; tools: string[]; confined: ConfinedOffer[] }): DecidedCan {
   return { hitl, exec: true, workspace: [...WORKSPACE_MODES], ...strict, tokens: true, max_turns: true, setup: true, tools, end_turn: true, unattended: true, role: true, confined };
 }
 
@@ -1012,11 +1012,23 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
     ? { kind: 'local', use: 'local', runtime: local, can: localReady.can, launchesAgents: false, engine: entry.engine, credentials: {} }
     : {
       kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials,
-      can: { ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter(isExecRuntimeTool) },
+      can: { ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter(isExecRuntimeTool), remote: true },
     });
 
-  const [firstSlot, ...otherSlots] = defined.runtimes.map(toSlot);
-  const slots: [RuntimeSlot, ...RuntimeSlot[]] = [firstSlot ?? toSlot({ kind: 'local', use: 'local', engine: { logins: [] } }), ...otherSlots];
+  // Every definition has a host command slot: its `local`, or else one here that takes no prompt, last. While another
+  // runtime runs commands, it takes only the command steps of teamai's own workflows, so a team's command never runs
+  // here in place of that runtime.
+  const definedSlots = defined.runtimes.map(toSlot);
+  const listedHost = definedSlots.find((slot) => slot.kind === 'local');
+
+  const hostSlot: RuntimeSlot = listedHost ?? {
+    kind: 'local', use: 'host', runtime: local, can: { ...localReady.can, prompt: false, tools: [], confined: [] }, launchesAgents: false, engine: { logins: [] }, credentials: {},
+  };
+
+  const runsCommands = definedSlots.some((slot) => slot.kind === 'external' && slot.can.exec !== false);
+  const host: RuntimeSlot = runsCommands ? { ...hostSlot, can: { ...hostSlot.can, commands: 'pinned' } } : hostSlot;
+  const [firstSlot = host, ...otherSlots] = listedHost ? definedSlots.map((slot) => (slot === listedHost ? host : slot)) : [...definedSlots, host];
+  const slots: [RuntimeSlot, ...RuntimeSlot[]] = [firstSlot, ...otherSlots];
   const sole: SoleDriver = { driver: defined.driver, offers: [{ runtime: slots[0].use, can: slots[0].can }, ...otherSlots.map((slot) => ({ runtime: slot.use, can: slot.can }))] };
   const driver = driverIdentity('local', cwd);
   // The runtime each open attempt runs on, and the handle of its place, until its report is recorded or its place abandoned.

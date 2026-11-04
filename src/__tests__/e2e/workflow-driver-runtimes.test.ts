@@ -183,22 +183,34 @@ Judge the review.
     if (sandbox) fs.rmSync(sandbox, { recursive: true, force: true });
   });
 
-  it('runs a command step and a prompt step the first runtime cannot take on local, in the same run', async () => {
-    // The toy offers no tool and only read-only places: the command needs a new worktree, the prompt a tool.
-    writeDefinition('toyfirst', [{ use: 'toy', options: { state, can: { tools: [], workspace: ['read-only'] } } }, { use: 'local' }]);
+  it('runs the command step on the runtime that runs commands and the prompt step it cannot take on local, in the same run', async () => {
+    // The toy runs commands and offers no tool: the prompt needs one.
+    writeDefinition('toyfirst', [{ use: 'toy', options: { state, can: { tools: [] } } }, { use: 'local' }]);
 
     const ran = await runCLI(['workflow', 'start', 'mixed', '--driver', 'toyfirst'], repo, env());
 
     expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
     const runId = runOf(ran);
-    const stored = readRunState(runId);
-    expect(stored.steps.map((step) => [step.id, step.status])).toEqual([['build', 'succeeded'], ['review', 'succeeded']]);
-    // Neither ran on the toy: it opened no place, and no attempt has a step runtime's record.
-    expect(toyOpens()).toBe(0);
-    for (const step of stored.steps) expect(runtimeRecord(runId, attemptOf(step))).toBeUndefined();
+    const [build, review] = readRunState(runId).steps;
+    expect([build, review].map((step) => [step?.id, step?.status])).toEqual([['build', 'succeeded'], ['review', 'succeeded']]);
+    expect(runtimeRecord(runId, attemptOf(build))).toMatchObject({ runtime: 'toy', phase: 'closed' });
+    expect(runtimeRecord(runId, attemptOf(review))).toBeUndefined();
     // The prompt ran on the host, in the member's own Claude home.
     const launched = fs.readFileSync(launches, 'utf8').trim().split('\n').map((line) => JSON.parse(line) as { home: string });
     expect(launched).toEqual([expect.objectContaining({ home: path.join(os.homedir(), '.claude') })]);
+  });
+
+  it('never runs a command step on the host while a runtime of the definition runs commands, even one that cannot take it', async () => {
+    // The toy runs commands in read-only places only, and the command needs a new worktree, which local would make.
+    writeDefinition('toyreadonly', [{ use: 'toy', options: { state, can: { workspace: ['read-only'] } } }, { use: 'local' }]);
+
+    const ran = await runCLI(['workflow', 'start', 'mixed', '--driver', 'toyreadonly'], repo, env());
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    const [build] = readRunState(runOf(ran)).steps;
+    expect(build).toMatchObject({ id: 'build', status: 'failed', failure: { code: 'requirement_unmet', message: expect.stringContaining('runtime local lacks commands') } });
+    expect(toyOpens()).toBe(0);
+    expect(fs.existsSync(launches)).toBe(false);
   });
 
   it('fails a step whose requirements no single runtime meets, naming each runtime and what it lacks', async () => {
@@ -403,15 +415,21 @@ Judge the review.
       expect(review).toMatchObject({ status: 'failed', failure: { code: 'tool_failed', message: 'Gave up on: [prompt omitted]' } });
     });
 
-    it('fails a command step when the definition\'s only runtime runs no command, naming what it lacks', async () => {
+    it('runs a command step on the host and the prompt on the toy when the definition\'s only runtime runs no command', async () => {
       writeDefinition('agentonly', [{ use: 'toy', options: { state, agent: { output: { ok: true } } } }]);
 
       const ran = await runCLI(['workflow', 'start', 'mixed', '--driver', 'agentonly'], repo, env());
 
-      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
-      const [build] = readRunState(runOf(ran)).steps;
-      expect(build).toMatchObject({ id: 'build', status: 'failed', failure: { code: 'requirement_unmet', message: 'Step "build" runs a command, and no runtime of driver "agentonly" runs commands (toy). Add one that does, such as local, to the definition.' } });
-      expect(toyOpens()).toBe(0);
+      expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      const runId = runOf(ran);
+      const [build, review] = readRunState(runId).steps;
+      // The host command slot ran the command: no step runtime has a record of it, and no tool was launched here.
+      expect(build).toMatchObject({ id: 'build', status: 'succeeded', outputs: { built: true } });
+      expect(runtimeRecord(runId, attemptOf(build))).toBeUndefined();
+      expect(review).toMatchObject({ id: 'review', status: 'succeeded', outputs: { ok: true } });
+      expect(runtimeRecord(runId, attemptOf(review))).toMatchObject({ runtime: 'toy', phase: 'closed' });
+      expect(sends()).toEqual([expect.objectContaining({ sent: expect.objectContaining({ step: 'review' }) })]);
+      expect(fs.existsSync(launches)).toBe(false);
     });
 
     it('reports the session, output and usage of a prompt that finished while teamai was killed, without sending a new one', async () => {
