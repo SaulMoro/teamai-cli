@@ -1398,7 +1398,7 @@ teamai 在发送每个操作之前，把它的操作 id 写入 `attempts/<attemp
 
 #### 自己启动智能体的运行时
 
-T3 Code 或 Paseo 这类运行时从一个提示启动智能体，在它结束时得到会话，而不是运行工具的命令行。它在 `init` 时用 `"prompt": true` 说明这一点。如果 `can` 里还有 `"exec": false`，它就不接受命令，所以命令步骤和带 `setup` 的步骤会交给定义中的下一个运行时：
+T3 Code 或 Paseo 这类运行时从一个提示启动智能体，在它结束时得到会话，而不是运行工具的命令行。它在 `init` 时用 `"prompt": true` 说明这一点。如果 `can` 里还有 `"exec": false`，它就不接受命令，所以命令步骤和带 `setup` 的步骤会交给定义中的下一个运行时。带 `"exec": false` 却没有 `"prompt": true` 的运行时运行不了任何步骤，teamai 在启动时拒绝它：
 
 ```yaml
 # drivers/threads.yaml
@@ -1429,7 +1429,7 @@ teamai 随后把每个提示步骤作为一次 `prompt` 发送。`lease.prompt` 
 | `lease` 字段 | 含义 |
 | --- | --- |
 | `step`、`tool` | 步骤，以及启动智能体用的工具，它是你的 `can.tools` 之一 |
-| `model` | 启动时使用的 `name` 和可选的 `effort`；没有时用工具的默认值 |
+| `model` | 启动时使用的 `name` 和可选的 `effort`：步骤的，否则是它的智能体定义的；没有时用工具的默认值 |
 | `prompt`、`result` | 完整的提示，以及智能体写入结果的文件 |
 | `resume` | 同一个工具中要继续的会话 id，用于之后的轮次 |
 | `permissions` | `approval-required`；你的 `can.unattended` 接下这类步骤时为 `unattended` |
