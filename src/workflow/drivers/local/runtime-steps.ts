@@ -286,8 +286,9 @@ export function runtimePrompter(run: AttemptRun, { view, step, provided, unset, 
           return { started: true, exitCode: 1, failure: { code: 'runtime_failed', message: `The step runtime finished the ${tool} prompt with a session of ${end.session.tool}.` } };
         }
 
-        // A runtime's answer may echo a credential, so it is masked before its first write: `input.secrets` holds the
-        // run's team secrets and runtime credentials.
+        // A runtime's answer may echo a credential, so teamai's own write of it is masked: `input.secrets` holds the run's
+        // team secrets and runtime credentials. An agent that writes the result file itself, in a result directory on this
+        // machine, writes it unmasked before this, and `report` masks it again.
         await AttemptResult.write(input.resultPath, end.result, input.secrets);
 
         // A session the step asked to resume that the runtime did not continue is a new one, whatever came after it.
