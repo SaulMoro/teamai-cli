@@ -16,6 +16,7 @@ export const platforms = {
     sqliteRegistrationOnWindows: false,
     idFormat: 'uuid',
     adapter: (storeDir) => new ClaudeCodeAdapter('qoder', storeDir),
+    adapterAs: (platform, storeDir) => new ClaudeCodeAdapter(platform, storeDir),
   },
   'qoder-cn': {
     // Qoder CN stores transcripts under <QODERCN_CONFIG_DIR or QODERCN_CLI_HOME/.qoder-cn or ~/.qoder-cn>/projects.
@@ -30,5 +31,6 @@ export const platforms = {
     sqliteRegistrationOnWindows: false,
     idFormat: 'uuid',
     adapter: (storeDir) => new ClaudeCodeAdapter('qoder-cn', storeDir),
+    adapterAs: (platform, storeDir) => new ClaudeCodeAdapter(platform, storeDir),
   },
 } as const satisfies Record<string, SessionPlatformDefinition>;

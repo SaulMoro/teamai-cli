@@ -14,7 +14,7 @@ import { describeWorkflow, type WorkflowDescription } from './workflow/describe.
 import { canFor, ceilingOf, isLeft, listOf, localReason, personClauses } from './workflow/drivers/skill/skill-driver.js';
 import { launchToolFor } from './workflow/drivers/local/local-driver.js';
 import { memberTools, type MemberTool } from './tool-launch/member-tools.js';
-import { executableOf, type LaunchTool } from './tool-launch/tools.js';
+import { launchCommandOf, type LaunchTarget } from './tool-launch/tools.js';
 import { resolveCliPath } from './utils/cli-path.js';
 import { sameEnvName } from './resources/env-key.js';
 import { envAdvice, type EnvFacts } from './workflow/requirements.js';
@@ -194,15 +194,16 @@ type ToolLacks = (runs: readonly StepRun[]) => Lack[];
 
 /** How long a PATH lookup holds, so a dashboard that lists every few seconds does not spawn a shell each time. */
 const PATH_LOOKUP_MS = 60_000;
-const pathLookups = new Map<LaunchTool, { isFound: boolean; at: number }>();
+const pathLookups = new Map<string, { isFound: boolean; at: number }>();
 
-/** Whether `tool`'s executable is on PATH here, as the launcher would find it, looked up at most once a minute. */
-function isOnPath(tool: LaunchTool): boolean {
-  const known = pathLookups.get(tool);
+/** Whether the command that starts `target` is on PATH here, as the launcher would find it, looked up at most once a minute. */
+function isOnPath(target: LaunchTarget): boolean {
+  const command = launchCommandOf(target);
+  const known = pathLookups.get(command);
 
   if (known && Date.now() - known.at < PATH_LOOKUP_MS) return known.isFound;
-  const isFound = resolveCliPath(executableOf(tool)) !== null;
-  pathLookups.set(tool, { isFound, at: Date.now() });
+  const isFound = resolveCliPath(command) !== null;
+  pathLookups.set(command, { isFound, at: Date.now() });
 
   return isFound;
 }
@@ -233,9 +234,10 @@ function toolLacks(config: LocalConfig, flags: Record<string, string>, members: 
 
       if (choice.ok) {
         // A step's own tool wins over --tools, so only installing it helps.
-        const fix = tool === undefined ? `install ${choice.tool}, or pass --tools ${flag}=<tool> for one that is` : `install ${choice.tool}`;
+        const { name } = choice.target;
+        const fix = tool === undefined ? `install ${name}, or pass --tools ${flag}=<tool> for one that is` : `install ${name}`;
 
-        return isOnPath(choice.tool) ? [] : [{ reason: `${steps} ${prompts.length > 1 ? 'run' : 'runs'} on ${choice.tool}, which is not on PATH here`, fix }];
+        return isOnPath(choice.target) ? [] : [{ reason: `${steps} ${prompts.length > 1 ? 'run' : 'runs'} on ${name}, which is not on PATH here`, fix }];
       }
 
       if (choice.failure.code === 'tool_unconfigured') {

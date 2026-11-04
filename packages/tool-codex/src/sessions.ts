@@ -12,6 +12,7 @@ export const platforms = {
     sqliteRegistrationOnWindows: false,
     idFormat: 'uuid',
     adapter: (storeDir) => new CodexAdapter('codex', storeDir),
+    adapterAs: (platform, storeDir) => new CodexAdapter(platform, storeDir),
   },
   'codex-internal': {
     store: { in: 'tool-home', home: 'codex-internal', dir: 'sessions' },
@@ -22,6 +23,7 @@ export const platforms = {
     sqliteRegistrationOnWindows: false,
     idFormat: 'uuid',
     adapter: (storeDir) => new CodexAdapter('codex-internal', storeDir),
+    adapterAs: (platform, storeDir) => new CodexAdapter(platform, storeDir),
   },
   'tcodex': {
     store: { in: 'tool-home', home: 'tcodex', dir: 'sessions' },
@@ -32,5 +34,6 @@ export const platforms = {
     sqliteRegistrationOnWindows: false,
     idFormat: 'uuid',
     adapter: (storeDir) => new CodexAdapter('tcodex', storeDir),
+    adapterAs: (platform, storeDir) => new CodexAdapter(platform, storeDir),
   },
 } as const satisfies Record<string, SessionPlatformDefinition>;

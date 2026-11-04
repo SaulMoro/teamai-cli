@@ -15,6 +15,7 @@ export const platforms = {
     sqliteRegistrationOnWindows: false,
     idFormat: 'uuid',
     adapter: (storeDir) => new ClaudeCodeAdapter('claude-code', storeDir),
+    adapterAs: (platform, storeDir) => new ClaudeCodeAdapter(platform, storeDir),
   },
   'claude-internal': {
     store: { in: 'tool-home', home: 'claude-internal', dir: 'projects' },
@@ -28,6 +29,7 @@ export const platforms = {
     sqliteRegistrationOnWindows: false,
     idFormat: 'uuid',
     adapter: (storeDir) => new ClaudeCodeAdapter('claude-internal', storeDir),
+    adapterAs: (platform, storeDir) => new ClaudeCodeAdapter(platform, storeDir),
   },
   'tclaude': {
     store: { in: 'tool-home', home: 'tclaude', dir: 'projects' },
@@ -41,5 +43,6 @@ export const platforms = {
     sqliteRegistrationOnWindows: false,
     idFormat: 'uuid',
     adapter: (storeDir) => new ClaudeCodeAdapter('tclaude', storeDir),
+    adapterAs: (platform, storeDir) => new ClaudeCodeAdapter(platform, storeDir),
   },
 } as const satisfies Record<string, SessionPlatformDefinition>;

@@ -33,6 +33,11 @@ export type StoredSessionPlatform = {
   [P in SessionPlatform]: (typeof SESSION_PLATFORM_FACTS)[P]['store'] extends { readonly in: 'ide-history' } ? never : P
 }[SessionPlatform];
 
+/** Whether `platform`'s store is one `sessionStoreDir` resolves, not one its adapter finds itself. */
+export function isStoredSessionPlatform(platform: SessionPlatform): platform is StoredSessionPlatform {
+  return SESSION_PLATFORM_FACTS[platform].store.in !== 'ide-history';
+}
+
 export function isSessionPlatform(platform: string): platform is SessionPlatform {
   return Object.hasOwn(SESSION_PLATFORM_FACTS, platform);
 }

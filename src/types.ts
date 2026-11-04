@@ -3331,30 +3331,35 @@ export function applyToolRoots(
     const newRoot = toolRootSegment(tool, configured, at);
 
     if (!newRoot) continue;
-    // Every root the tool's paths hang off, not just the first one: a team that
-    // customized `toolPaths.claude` field by field may have spread them over
-    // several. A bare file name (`.claude.json`) is not under a root.
-    const oldRoots = new Set<string>();
-
-    for (const field of TOOL_ROOT_FIELDS) {
-      const value = paths[field];
-
-      if (value?.includes('/')) oldRoots.add(toolInstallRoot(value));
-    }
-
-    for (const field of USER_SCOPE_ROOT_FIELDS) {
-      const value = paths.userScope?.[field];
-
-      if (value?.includes('/')) oldRoots.add(toolInstallRoot(value));
-    }
-
     // Not skipped when the root is unchanged: a bare file name (the MCP
     // companion) still moves inside it (see relocateToolPaths).
     out ??= { ...toolPaths };
-    out[tool] = relocateToolPaths(paths, oldRoots, newRoot);
+    out[tool] = rerootToolPaths(paths, newRoot);
   }
 
   return out ?? toolPaths;
+}
+
+/** `paths` with every root they hang off moved to `newRoot`, and a bare file name moved inside it (`relocateToolPaths`). */
+export function rerootToolPaths(paths: z.infer<typeof ToolPathsSchema>, newRoot: string): z.infer<typeof ToolPathsSchema> {
+  // Every root the tool's paths hang off, not just the first one: a team that
+  // customized `toolPaths.claude` field by field may have spread them over
+  // several. A bare file name (`.claude.json`) is not under a root.
+  const oldRoots = new Set<string>();
+
+  for (const field of TOOL_ROOT_FIELDS) {
+    const value = paths[field];
+
+    if (value?.includes('/')) oldRoots.add(toolInstallRoot(value));
+  }
+
+  for (const field of USER_SCOPE_ROOT_FIELDS) {
+    const value = paths.userScope?.[field];
+
+    if (value?.includes('/')) oldRoots.add(toolInstallRoot(value));
+  }
+
+  return relocateToolPaths(paths, oldRoots, newRoot);
 }
 
 /**

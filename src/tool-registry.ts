@@ -1,7 +1,9 @@
-import { makeToolRegistry } from '@teamai/tool-core/registry';
+import type { InstancePlatform, ToolInstance } from '@teamai/tool-core/instance';
+import { makeToolRegistry, type ResolvedTool } from '@teamai/tool-core/registry';
 import type { McpFormat } from '@teamai/tool-core/definition';
 import type { RuleFormatId } from '@teamai/tool-core/definition';
-import type { SessionPlatform } from './session-flow/adapters/platform-facts.js';
+import { locatesOwnStore, type SessionPlatformDefinition } from '@teamai/tool-core/sessions/platform';
+import { SESSION_PLATFORM_FACTS, type SessionPlatform } from './session-flow/adapters/platform-facts.js';
 import type { JsonSyntax } from './utils/json.js';
 import { TOOLS, type AgentToolId, type ToolId, type ShippedDescriptor } from './tools.js';
 import { type HookFormat, type InstallGate, type RunTimeVia } from '@teamai/tool-core/definition';
@@ -10,7 +12,36 @@ import { type HookFormat, type InstallGate, type RunTimeVia } from '@teamai/tool
  * The one reader of the tool tables (`TOOLS`): every lookup of a tool id goes through here, so a new kind of
  * tool reaches every reader by changing what the registry is built from (teamai/tool-registry).
  */
-const REGISTRY = makeToolRegistry(TOOLS);
+const REGISTRY = makeToolRegistry(TOOLS, () => instanceTable, hostsInstances);
+
+/** Whether an instance of a tool whose sessions `platform` holds keeps its own there: its format carries another platform id, in a home it can move. */
+function hostsInstances(platform: SessionPlatform): boolean {
+  const definition: SessionPlatformDefinition = SESSION_PLATFORM_FACTS[platform];
+
+  return !locatesOwnStore(definition) && definition.store.in === 'tool-home' && definition.adapterAs !== undefined;
+}
+
+/** The instances of every team repo and member's directory loaded in this process, by name. */
+let instanceTable: ReadonlyMap<string, ToolInstance<ToolId>> = new Map();
+
+/**
+ * Makes `instances` the instances every lookup of a tool name sees: the ones this process resolved from the team
+ * repos and the member's directory it loaded (`tool-instances.ts`, the one writer).
+ */
+export function useToolInstances(instances: ReadonlyMap<string, ToolInstance<ToolId>>): void {
+  instanceTable = instances;
+}
+
+/** The names of the instances this process knows, a member's own included. */
+export function instanceNames(): string[] {
+  return [...instanceTable.keys()];
+}
+
+/** The tool `name` names here: an instance, with the shipped tool it extends, or a shipped tool; undefined for neither. */
+export const toolOf: (name: string) => ResolvedTool<ToolId> | undefined = REGISTRY.toolOf;
+
+/** The instance whose own session platform `platform` is, and the shipped platform its sessions keep the format of. */
+export const instancePlatform: (platform: string) => { instance: ToolInstance<ToolId>; platform: SessionPlatform } | undefined = REGISTRY.instancePlatform;
 
 /** Every built-in tool, in `TOOLS` order. */
 export const TOOL_ORDER: readonly ToolId[] = REGISTRY.ids;
@@ -73,11 +104,11 @@ export function installGateOf(tool: ToolId): InstallGate | undefined {
   return descriptor.installedBy;
 }
 
-/** The session platforms teamai reads for `tool`, first the one its launched sessions write; none for a custom tool id. */
-export const sessionPlatformsOf: (tool: string) => readonly SessionPlatform[] = REGISTRY.sessionPlatformsOf;
+/** The session platforms teamai reads for `tool`, first the one its launched sessions write; an instance's own; none for a custom tool id. */
+export const sessionPlatformsOf: (tool: string) => readonly (SessionPlatform | InstancePlatform)[] = REGISTRY.sessionPlatformsOf;
 
-/** The tool whose `sessions` lists `platform`, if one does. */
-export const sessionPlatformOwner: (platform: string) => ToolId | undefined = REGISTRY.sessionPlatformOwner;
+/** The tool whose `sessions` lists `platform`, or the instance whose own platform it is, if one does. */
+export const sessionPlatformOwner: (platform: string) => string | undefined = REGISTRY.sessionPlatformOwner;
 
 const CUSTOM_TOOL = {
   rules: { user: { channel: 'dir', format: 'verbatim', reads: 'unknown' }, project: { channel: 'dir', format: 'verbatim', reads: 'unknown' } },
@@ -95,9 +126,11 @@ const CUSTOM_TOOL = {
   },
 } as const satisfies Pick<ShippedDescriptor, 'rules' | 'blocks' | 'agents' | 'mcp' | 'hooks'>;
 
-/** The channels of `tool`: its descriptor's, or `CUSTOM_TOOL`'s for a custom tool id. */
+/** The channels of `tool`: its descriptor's, the descriptor of the tool an instance extends, or `CUSTOM_TOOL`'s for a custom tool id. */
 export function channelsOf(tool: string): Pick<ShippedDescriptor, 'rules' | 'blocks' | 'agents' | 'mcp' | 'hooks'> {
-  return isToolId(tool) ? descriptorOf(tool) : CUSTOM_TOOL;
+  const resolved = toolOf(tool);
+
+  return resolved ? descriptorOf(resolved.base) : CUSTOM_TOOL;
 }
 
 /**
