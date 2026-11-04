@@ -53,8 +53,14 @@ const AgentCreateSchema = z.object({
     provider: z.string(),
     modeId: z.string(),
     thinkingOptionId: z.string().optional(),
-    /** The provider's own launch options: for Claude, the tools it may use without asking. */
-    options: z.object({ allowedTools: z.array(z.string()) }).optional(),
+    /**
+     * The provider's own launch options: for Claude, the tools it may use without asking; for Codex, the directories its
+     * sandbox writes besides the worktree.
+     */
+    options: z.union([
+      z.strictObject({ allowedTools: z.array(z.string()) }),
+      z.strictObject({ sandbox_workspace_write: z.strictObject({ writable_roots: z.array(z.string()) }) }),
+    ]).optional(),
   }),
 });
 

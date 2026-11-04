@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import {
@@ -102,9 +103,28 @@ export interface Serving {
   journal: Journal;
 }
 
+/** What init offered: the tools a step and a judge run on, and why each other installed tool runs on neither. */
+interface Offer {
+  steps: PaseoTool[];
+  judges: PaseoTool[];
+  reasons: Map<PaseoTool, string>;
+}
+
 export function serve({ input, write, journal }: Serving): Promise<void> {
   let daemon: Daemon | undefined;
   let mode: 'attended' | 'unattended' = 'attended';
+  let offer: Offer = { steps: [], judges: [], reasons: new Map() };
+
+  /**
+   * Why a new prompt on `tool` is refused, or undefined when init offered it. teamai holds a step whose `tool` was not
+   * offered, but not one that takes its tool from the definition's default, so the runtime refuses it here too.
+   */
+  const notOffered = (tool: PaseoTool, isJudge: boolean): string | undefined => {
+    if ((isJudge ? offer.judges : offer.steps).includes(tool)) return undefined;
+
+    return offer.reasons.get(tool) ?? (offer.steps.includes(tool) ? `has no ${CONFINED_MODES[tool].id} mode, which teamai judges it in` : 'the daemon has not installed it');
+  };
+
   /** The prompts this process follows, each with what stops its wait when teamai cancels it, once its agent exists. */
   const waiting = new Map<OpId, { stop: () => void; created: boolean }>();
   /** The requests this process is answering. */
@@ -242,6 +262,8 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       return !isListed || modes.includes(id) ? [tool] : [];
     });
 
+    offer = { steps: tools.map(({ tool }) => tool), judges, reasons: new Map(installed.flatMap((entry) => (entry.canRun ? [] : [[entry.tool, entry.reason] as const]))) };
+
     write({
       type: 'init', ok: true, prompt: true,
       ...(judges.length > 0 && { confinedPrompt: true }),
@@ -347,12 +369,22 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       return;
     }
 
+    const unoffered = notOffered(tool, false);
+
+    if (unoffered !== undefined) {
+      refuse(op, request.handle, { code: 'tool_unavailable', message: `teamai-runtime-paseo did not offer ${tool}: ${unoffered}.` });
+
+      return;
+    }
+
     const create = await createFor(live, request, tool, {
       place, modeId: DEFAULT_MODES[tool], prompt: lease.prompt, env: { [RUN_DIR_ENV]: place.runDir },
       // Claude's default mode asks before any write, so the result file, as teamai's own launch allows it on a POSIX
       // host, and the run's scratch directory, which the place gives read-write at its own path, are allowed, and only
-      // they; the mode stays as it is.
+      // they; the mode stays as it is. Codex's `auto` mode writes its worktree and asks before writing elsewhere, so the
+      // result file's directory and the run's scratch directory are added to what its sandbox writes.
       ...(tool === 'claude' && { options: { allowedTools: [`Edit(/${lease.result})`, `Edit(/${place.runDir}/**)`] } }),
+      ...(tool === 'codex' && { options: { sandbox_workspace_write: { writable_roots: [path.dirname(lease.result), place.runDir] } } }),
     });
 
     if ('code' in create) {
@@ -383,6 +415,14 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
     if (!isPaseoTool(tool)) {
       refuse(op, request.handle, { code: 'tool_unavailable', message: `teamai-runtime-paseo runs a confined prompt on claude, codex or opencode, not ${tool}.` });
+
+      return;
+    }
+
+    const unoffered = notOffered(tool, true);
+
+    if (unoffered !== undefined) {
+      refuse(op, request.handle, { code: 'tool_unavailable', message: `teamai-runtime-paseo did not offer ${tool}: ${unoffered}.` });
 
       return;
     }
