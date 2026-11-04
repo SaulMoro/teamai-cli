@@ -6152,3 +6152,86 @@ describe('an interactive step in a run whose only driver has several runtimes, n
     ] });
   });
 });
+
+// A runtime whose plan defers a step on its workspace is judged as if it had that workspace, so adding one to a driver
+// leaves the outcome of every requirement other than the workspace as it was without it.
+describe('a step in a run whose only driver has a runtime that lacks its workspace', () => {
+  const base = { commit: 'b'.repeat(40) };
+  const placeless = (can: DriverCan): DriverCan => ({ ...can, workspace: [] });
+
+  it('holds an interactive step the member\'s policy refuses for that policy on each runtime, never for a person', async () => {
+    const { config, runId } = await startBuild(graph(`  - id: review
+    workspace: new
+    interactive: true
+    tool: claude
+    requires: { network: true }
+    prompt: Review the repository with a person.
+`));
+    const refusing: LocalConfig = { ...config, workflows: { tools: {}, allow: { network: false } } };
+    const local: DriverCan = { workspace: ['read-only', 'new', 'continue'], tools: ['claude'], hitl: false };
+    const alone = { driver: 'mixed', offers: [{ runtime: 'local', can: local }, { runtime: 'toy', can: placeless(local) }] } satisfies SoleDriver;
+
+    const onLocal = await leaseNext(refusing, runId, driverA, { can: local, alone, base });
+    const onToy = await leaseNext(refusing, runId, driverA, { can: placeless(local), alone, base });
+
+    expect(onLocal).toMatchObject({ data: { wait: { held: [{ step: 'review', missing: ['policy.network'] }] } } });
+    expect(onToy).toMatchObject({ data: { wait: { held: [{ step: 'review', missing: ['workspace.new', 'policy.network'] }] } } });
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'review', status: 'pending' }] });
+  });
+
+  it.each([
+    ['both runtimes give its workspace', false, false],
+    ['the second runtime lacks its workspace', false, true],
+    ['the first runtime lacks its workspace', true, false],
+  ])('leaves a step with a role pending, when no runtime gives a role, as when %s', async (_, firstPlaceless, secondPlaceless) => {
+    const fixture = testConfig();
+    fs.mkdirSync(path.join(fixture.config.repo.localPath, 'manifest'), { recursive: true });
+    fs.writeFileSync(path.join(fixture.config.repo.localPath, 'manifest', 'roles.yaml'), 'version: 1\nroles:\n  - id: review\n    resources: { knowledge: [], skills: [review] }\n');
+    fs.writeFileSync(path.join(fixture.config.repo.localPath, 'workflows', 'build.yaml'), graph(`  - id: check
+    workspace: new
+    tool: claude
+    role: review
+    prompt: Review.
+`));
+    await syncScorersThenWorkflows(fixture.config);
+    const started = await startRun(fixture.config, 'build', {}, { secrets: await knownSecrets(fixture.config) });
+    if ('error' in started) throw new Error(started.error.message);
+    const { config } = fixture;
+    const runId = String(started.data.run);
+    const roleless: DriverCan = { workspace: ['read-only', 'new', 'continue'], tools: ['claude'], role: false };
+    const first = firstPlaceless ? placeless(roleless) : roleless;
+    const second = secondPlaceless ? placeless(roleless) : roleless;
+    const alone = { driver: 'mixed', offers: [{ runtime: 'local', can: first }, { runtime: 'toy', can: second }] } satisfies SoleDriver;
+
+    await leaseNext(config, runId, driverA, { can: first, alone, base, prepare: true });
+    await leaseNext(config, runId, driverA, { can: second, alone, base, prepare: true });
+
+    expect(await readRun(config, runId)).toMatchObject({ status: 'running', steps: [{ id: 'check', status: 'pending' }] });
+  });
+
+  it.each([
+    ['both runtimes give its workspace', false, false],
+    ['the second runtime lacks its workspace', false, true],
+    ['the first runtime lacks its workspace', true, false],
+  ])('fails an unattended interactive step tool_unavailable, when no runtime runs it unattended, as when %s', async (_, firstPlaceless, secondPlaceless) => {
+    const { config, runId } = await startBuild(graph(`  - id: fix
+    workspace: new
+    interactive: true
+    tool: claude
+    permissions: unattended
+    requires: { isolation: sandbox, strict: true }
+    prompt: Fix it with a person.
+`));
+    const sandbox: DriverCan = { workspace: ['read-only', 'new', 'continue'], isolation: 'sandbox', env: true, tools: ['claude'], hitl: false, unattended: false };
+    const first = firstPlaceless ? placeless(sandbox) : sandbox;
+    const second = secondPlaceless ? placeless(sandbox) : sandbox;
+    const alone = { driver: 'sandboxes', offers: [{ runtime: 'one', can: first }, { runtime: 'two', can: second }] } satisfies SoleDriver;
+
+    await leaseNext(config, runId, driverA, { can: first, alone, base });
+    await leaseNext(config, runId, driverA, { can: second, alone, base });
+
+    expect(await readRun(config, runId)).toMatchObject({ steps: [{ id: 'fix', status: 'failed', failure: {
+      code: 'tool_unavailable', message: 'Step "fix" sets permissions: unattended on claude, which the driver of this run cannot run unattended. Run it with a driver that declares can.unattended, or remove permissions from the step.',
+    } }] });
+  });
+});
