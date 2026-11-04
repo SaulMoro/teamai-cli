@@ -7,7 +7,8 @@ import type { Can, PlaceView, RuntimeDisplay, RuntimeFailure } from '@teamai/run
 //  journal of operations and their retained outcomes, credentials and options.
 //
 //  Bind-mount providers (docker and podman today) mount the place view at its host paths, so collect copies nothing.
-//  A copy provider (a hosted sandbox) will add copyIn and copyOut to this seam.
+//  A copy provider (a hosted sandbox) will add copyIn and copyOut to this seam. A judge (a confined prompt) gets a
+//  sandbox of its own that sees only its directory.
 //
 
 /** The attempt a sandbox belongs to, which names it and finds it again. */
@@ -39,6 +40,14 @@ export interface Provider {
   find(key: PlaceKey): Promise<string | undefined>;
   /** Creates the attempt's sandbox with the view at its host paths and no credential, and returns its id. */
   create(key: PlaceKey, view: PlaceView): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
+  /**
+   * Creates a judge's sandbox: only `dir`, read-only, at its path and at each of its `spellings`, on a network whose
+   * one way out lets through only `hosts` (`host:port`), and no credential. Returns its id; an existing one of `key`
+   * is that judge's.
+   */
+  createJudge(key: PlaceKey, { dir, spellings, hosts }: { dir: string; spellings: string[]; hosts: string[] }): Promise<{ ok: true; id: string } | { ok: false; failure: RuntimeFailure }>;
+  /** Removes what a judge's sandbox needed besides itself: its network and the filter in front of it. */
+  releaseJudge(key: PlaceKey): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   /** Runs one process in the sandbox, streaming its output, until it ends. */
   exec(id: string, spec: ExecSpec, onOutput: (stream: 'stdout' | 'stderr', data: string) => void): Promise<ExecEnd>;
   /** Stops every process running in the sandbox; the sandbox stays, ready for the next exec. */

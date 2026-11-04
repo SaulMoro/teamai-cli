@@ -46,6 +46,8 @@ export interface FakeEngine {
   calls(): string[][];
   /** The containers that exist, by name. */
   containers(): string[];
+  /** The networks that exist, by name. */
+  networks(): string[];
   env(): NodeJS.ProcessEnv;
 }
 
@@ -88,6 +90,7 @@ export function fakeEngine(dir: string): FakeEngine {
         return fs.existsSync(file) ? [z.object({ name: z.string() }).parse(JSON.parse(fs.readFileSync(file, 'utf8'))).name] : [];
       });
     },
+    networks: () => (fs.existsSync(path.join(state, 'networks')) ? fs.readdirSync(path.join(state, 'networks')).sort() : []),
     env: () => ({ PATH: `${bin}${path.delimiter}/usr/bin${path.delimiter}/bin`, FAKE_ENGINE_STATE: state, FAKE_ENGINE_LOG: log, FAKE_ENGINE_IMAGES: JSON.stringify(images) }),
   };
 }

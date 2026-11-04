@@ -1,9 +1,10 @@
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import { redact } from '@teamai/shared/redact';
-import { RuntimeRequestSchema, type ExecRequestSchema, type OpenRequestSchema, type OpId, type OpState, type RuntimeMessage, type RuntimeOptions, type RuntimeRequest } from '@teamai/runtime-protocol';
+import { PromptResultSchema, RuntimeRequestSchema, type Can, type ExecRequestSchema, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type RuntimeMessage, type RuntimeOptions, type RuntimeRequest } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import type { ExecRecord, Journal, Outcome, PlaceRecord } from './journal.js';
+import { judgeOf, NO_JUDGE_CREDENTIAL, spellingsOf } from './judge.js';
 import { parseOptions, type SandboxOptions } from './options.js';
 import { sandboxName, type Provider } from './provider.js';
 
@@ -15,7 +16,8 @@ import { sandboxName, type Provider } from './provider.js';
 //  down, and a sandbox a dead runtime created is still found by its labels. Each exec brings the credentials teamai
 //  gives it (a prompt's tool the attempt's, a command none); they are set over that exec's process only, never when the
 //  sandbox is created, and never kept: not in the journal, and not in memory past the exec. A `prompt` is answered
-//  `failed`: this runtime runs the tool teamai builds, as an exec.
+//  `failed`: this runtime runs the tool teamai builds, as an exec. A confined `prompt` is a judge: its place opens with
+//  no view, and the prompt runs its tool in a sandbox that sees only the prompt's directory (judge.ts).
 //
 
 const RUN_ID = /^r[0-9a-f]{8}(?:[0-9a-f]{8})?$/;
@@ -24,6 +26,14 @@ const ATTEMPT_ID = /^a[0-9a-f]{8}$/;
 type OpenRequest = z.infer<typeof OpenRequestSchema>;
 
 type ExecRequest = z.infer<typeof ExecRequestSchema>;
+
+type PromptRequest = z.infer<typeof PromptRequestSchema>;
+
+/** What `init` settled: the provider, and what it offered. */
+interface Ready {
+  provider: Provider;
+  can: Can;
+}
 
 /** How often an exec another runtime process runs is looked at, to answer its outcome. */
 const FOLLOW_MS = 100;
@@ -54,6 +64,12 @@ function terminal(op: OpId, outcome: Outcome): RuntimeMessage {
   switch (outcome.state) {
     case 'exited':
       return { op, event: 'exited', code: outcome.code, stdout: outcome.stdout };
+    case 'finished': {
+      const { state: _state, ...finished } = outcome;
+
+      return { op, event: 'finished', ...finished };
+    }
+
     case 'cancelled':
       return { op, event: 'cancelled' };
     case 'failed':
@@ -67,7 +83,7 @@ function terminal(op: OpId, outcome: Outcome): RuntimeMessage {
 }
 
 export function serve({ input, write, journal, provider: providerFor }: RuntimeDeps): void {
-  let ready: { provider: Provider } | undefined;
+  let ready: Ready | undefined;
   const running = new Set<OpId>();
 
   /** The outcome of an exec no live runtime process will finish: cancelled when teamai cancelled it, otherwise lost. */
@@ -89,21 +105,31 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
   /** The place's sandbox: the id the journal kept, or the one its labels find when a runtime died before keeping it. */
   const sandboxOf = async (place: PlaceRecord, provider: Provider): Promise<string | undefined> => place.id ?? provider.find(place);
 
-  const open = async ({ op, run, attempt, view }: OpenRequest, provider: Provider): Promise<void> => {
+  const open = async ({ op, run, attempt, view, credentials }: OpenRequest, provider: Provider): Promise<void> => {
     if (!RUN_ID.test(run) || !ATTEMPT_ID.test(attempt)) {
       write({ op, event: 'failed', failure: { code: 'bad_request', message: `Open ${op} names run "${run}" and attempt "${attempt}", which are not teamai ids.` } });
 
       return;
     }
 
+    const key = { run, attempt };
+    const handle = sandboxName(key);
+
+    // A judge's place: nothing of the host, and no sandbox until its prompt names the directory.
     if (view === undefined) {
-      write({ op, event: 'failed', failure: { code: 'bad_request', message: `Open ${op} gives no view of the host, as a confined prompt's place does, and this runtime answers no confined prompt.` } });
+      if (Object.keys(credentials).length === 0) {
+        write({ op, event: 'failed', failure: NO_JUDGE_CREDENTIAL });
+
+        return;
+      }
+
+      journal.savePlace(handle, { ...key, confined: true });
+      write({ op, event: 'accepted', handle });
+      write({ op, event: 'ready', display: provider.display(key) });
 
       return;
     }
 
-    const key = { run, attempt };
-    const handle = sandboxName(key);
     journal.savePlace(handle, key);
     write({ op, event: 'accepted', handle });
     const found = await provider.find(key);
@@ -140,35 +166,53 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     }
   };
 
-  const exec = async (request: ExecRequest, provider: Provider): Promise<void> => {
-    const { op, handle } = request;
+  /**
+   * Answers an id this runtime has seen, with its outcome or once it has one, without running it again; undefined for
+   * a new id. It decides without awaiting, so the caller claims a new id before anything else is read.
+   */
+  const replay = (op: OpId): Promise<void> | undefined => {
     const record = journal.exec(op);
 
     if (record?.outcome) {
       write({ op, event: 'accepted' });
       write(terminal(op, record.outcome));
 
-      return;
+      return Promise.resolve();
     }
 
     if (running.has(op)) {
       // Its end is written when it ends, under the same id.
       write({ op, event: 'accepted' });
 
-      return;
+      return Promise.resolve();
     }
 
     if (record) {
       write({ op, event: 'accepted' });
-      await follow({ op, ...record });
 
-      return;
+      return follow({ op, ...record });
     }
+
+    return undefined;
+  };
+
+  const exec = async (request: ExecRequest, provider: Provider): Promise<void> => {
+    const { op, handle } = request;
+    const replayed = replay(op);
+
+    if (replayed) return replayed;
 
     // Claimed before the first await, so the same id sent again meanwhile is answered by this run.
     running.add(op);
     const place = journal.place(handle);
     const id = place && await sandboxOf(place, provider);
+
+    if (place?.confined) {
+      running.delete(op);
+      write({ op, event: 'failed', failure: { code: 'bad_request', message: `Handle ${handle} is a judge's place, which runs only its confined prompt, never an exec.` } });
+
+      return;
+    }
 
     if (!place || id === undefined) {
       running.delete(op);
@@ -197,6 +241,109 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     write(terminal(op, outcome));
   };
 
+  /** Runs a judge: its tool in a sandbox of its own that sees only the prompt's directory, read-only. */
+  const prompt = async (request: PromptRequest, { provider, can }: Ready): Promise<void> => {
+    const { op, handle, confined, lease } = request;
+
+    if (confined === undefined) {
+      write({ op, event: 'failed', failure: { code: 'prompt_unsupported', message: 'The sandbox runtime runs the tool teamai builds, as an exec, and launches no agent of its own.' } });
+
+      return;
+    }
+
+    const replayed = replay(op);
+
+    if (replayed) return replayed;
+    const place = journal.place(handle);
+
+    if (!place?.confined) {
+      write({ op, event: 'failed', failure: { code: 'bad_request', message: `Prompt ${op} is confined, and handle ${handle} is not a judge's place. Open one with no view first.` } });
+
+      return;
+    }
+
+    const chosen = can.confined?.some((offer) => offer.tools.includes(lease.tool))
+      ? judgeOf(lease.tool, request.credentials)
+      : { ok: false as const, failure: { code: 'tool_unavailable', message: `The sandbox's image offers no ${lease.tool} judge: it judges on ${can.confined?.flatMap((offer) => offer.tools).join(', ') || 'no tool'}.` } };
+
+    if (!chosen.ok) {
+      write({ op, event: 'failed', failure: chosen.failure });
+
+      return;
+    }
+
+    // Claimed before the first await, as an exec is.
+    running.add(op);
+    journal.saveExec(op, { handle, runner: process.pid });
+    write({ op, event: 'accepted' });
+    const { judge } = chosen;
+
+    const settle = (outcome: Outcome): void => {
+      // The journal never holds a credential the tool echoed into its reply.
+      const kept: Outcome = outcome.state === 'finished' ? { ...outcome, result: PromptResultSchema.parse(JSON.parse(redact(JSON.stringify(outcome.result), { envSecrets: request.credentials, patterns: false }))) } : outcome;
+      journal.saveExec(op, { handle, runner: process.pid, outcome: kept });
+      running.delete(op);
+      write(terminal(op, outcome));
+    };
+
+    const created = await provider.createJudge(place, { dir: confined.dir, spellings: spellingsOf(lease.prompt, confined.dir), hosts: judge.hosts });
+
+    if (!created.ok) {
+      settle(journal.isCancelled(op) ? { state: 'cancelled' } : { state: 'failed', failure: created.failure });
+
+      return;
+    }
+
+    journal.savePlace(handle, { ...place, id: created.id });
+
+    if (journal.isCancelled(op)) {
+      settle({ state: 'cancelled' });
+
+      return;
+    }
+
+    const launch = judge.tool.launch(lease, confined);
+    // Only the credentials the judge's own tool reads, less any the prompt withholds.
+    const scoped = Object.fromEntries(Object.entries(judge.credentials).filter(([name]) => !request.unset.includes(name)));
+    let stdout = '';
+    let stderr = '';
+
+    const end = await provider.exec(created.id, { argv: launch.argv, env: { ...scoped, ...launch.env, ...request.env }, unset: request.unset, cwd: confined.dir }, (stream, data) => {
+      if (stream === 'stdout') stdout += data;
+      else stderr = `${stderr}${data}`.slice(-4000);
+    });
+
+    if (journal.isCancelled(op)) {
+      settle({ state: 'cancelled' });
+
+      return;
+    }
+
+    if (end.kind === 'failed') {
+      settle({ state: 'failed', failure: end.failure });
+
+      return;
+    }
+
+    const reading = judge.tool.read(stdout);
+    const masked = (text: string): string => redact(text, { envSecrets: request.credentials, patterns: false });
+
+    if (end.code !== 0) {
+      const lastStderr = stderr.trim().split('\n').at(-1) || 'it printed nothing on stderr';
+      settle({ state: 'failed', failure: { code: 'tool_failed', message: masked(`${lease.tool} exited with code ${end.code} in the judge's container: ${reading.ok ? lastStderr : reading.message}`) } });
+
+      return;
+    }
+
+    if (!reading.ok) {
+      settle({ state: 'failed', failure: { code: 'tool_failed', message: masked(`${lease.tool} ended in the judge's container without a reply: ${reading.message}`) } });
+
+      return;
+    }
+
+    settle({ state: 'finished', session: { tool: lease.tool, id: reading.session }, result: reading.result, ...(reading.usage && { usage: reading.usage }), confined: { level: 'verified', access: judge.tool.access } });
+  };
+
   const cancel = async (op: OpId, provider: Provider): Promise<void> => {
     const record = journal.exec(op);
 
@@ -205,7 +352,10 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     const place = journal.place(record.handle);
     const id = place && await sandboxOf(place, provider);
 
-    if (id !== undefined) await provider.stop(id);
+    // A judge's container is removed, so an exec still on its way to the engine has nothing to start in; a step's
+    // restarts, ready for the step's next exec.
+    if (id !== undefined && place?.confined) await provider.destroy(id);
+    else if (id !== undefined) await provider.stop(id);
 
     // An exec whose runtime process is gone ends here: no process of this runtime reports it.
     if (!running.has(op) && !alive(record.runner)) write(terminal(op, settleOrphan({ op, ...record })));
@@ -214,7 +364,8 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
   const reattach = async (handle: string, provider: Provider): Promise<void> => {
     const place = journal.place(handle);
 
-    if (!place || (await provider.find(place)) === undefined) {
+    // A judge's place has no sandbox until its prompt, and keeps its prompt's outcome after.
+    if (!place || (!place.confined && (await provider.find(place)) === undefined)) {
       journal.forget(handle);
       write({ event: 'gone', handle });
 
@@ -227,7 +378,8 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
   const close = async (handle: string, provider: Provider): Promise<void> => {
     const place = journal.place(handle);
     const id = place && await sandboxOf(place, provider);
-    const removed = id === undefined ? { ok: true as const } : await provider.destroy(id);
+    const destroyed = id === undefined ? { ok: true as const } : await provider.destroy(id);
+    const removed = destroyed.ok && place?.confined ? await provider.releaseJudge(place) : destroyed;
 
     if (!removed.ok) {
       // The journal keeps the place, so a later close or reattach of this handle still finds the sandbox.
@@ -258,8 +410,8 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       return;
     }
 
-    ready = { provider };
-    write({ type: 'init', ok: true, can: offered.can });
+    ready = { provider, can: offered.can };
+    write({ type: 'init', ok: true, can: offered.can, ...(offered.can.confined && { confinedPrompt: true }) });
   };
 
   const dispatch = async (request: RuntimeRequest): Promise<void> => {
@@ -283,9 +435,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       case 'exec':
         return exec(request, provider);
       case 'prompt':
-        write({ op: request.op, event: 'failed', failure: { code: 'prompt_unsupported', message: 'The sandbox runtime runs the tool teamai builds, as an exec, and launches no agent of its own.' } });
-
-        return;
+        return prompt(request, ready);
       case 'cancel':
         return cancel(request.op, provider);
       case 'collect':

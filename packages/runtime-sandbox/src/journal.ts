@@ -8,7 +8,7 @@ import { OpIdSchema, OpStateSchema, type OpId } from '@teamai/runtime-protocol';
 //  What this runtime keeps across its own restarts, in a directory on the host:
 //
 //    places/<handle>.json   the attempt a handle opened and its sandbox id
-//    ops/<op>.json          an exec: its handle, the runtime process running it, and once it ended, its outcome
+//    ops/<op>.json          an exec or a judge's prompt: its handle, the runtime process running it, and once it ended, its outcome
 //    ops/<op>.cancel        teamai cancelled it, written before the sandbox is stopped
 //
 //  A runtime outlives its stdin while an exec runs, so an exec that ends while teamai is down still records its
@@ -16,10 +16,10 @@ import { OpIdSchema, OpStateSchema, type OpId } from '@teamai/runtime-protocol';
 //  temporary path and renamed into place. `close` removes a handle's files.
 //
 
-const [, exited, , cancelled, failed] = OpStateSchema.options;
+const [, exited, finished, cancelled, failed] = OpStateSchema.options;
 
-/** How an exec ended, as this runtime retains it until `close`: an exec's end state, without its op. */
-const OutcomeSchema = z.discriminatedUnion('state', [exited.omit({ op: true }), cancelled.omit({ op: true }), failed.omit({ op: true })]);
+/** How an exec or a judge's prompt ended, as this runtime retains it until `close`: its end state, without its op. */
+const OutcomeSchema = z.discriminatedUnion('state', [exited.omit({ op: true }), finished.omit({ op: true }), cancelled.omit({ op: true }), failed.omit({ op: true })]);
 
 export type Outcome = z.infer<typeof OutcomeSchema>;
 
@@ -33,6 +33,8 @@ const PlaceRecordSchema = z.object({
   attempt: z.string(),
   /** The sandbox id, once created. A place is recorded before its sandbox, so a runtime that dies between finds it by its labels. */
   id: z.string().optional(),
+  /** A judge's place, opened with no view: its sandbox is made when its prompt names the directory. */
+  confined: z.literal(true).optional(),
 });
 
 export type PlaceRecord = z.infer<typeof PlaceRecordSchema>;
