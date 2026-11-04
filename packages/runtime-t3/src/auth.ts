@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -63,6 +64,16 @@ export function validToken(stateDir: string, resource: string, now = Date.now())
   const entry = credentialStore(stateDir).entry(resource);
 
   return entry.tokens && (entry.expiresAt === undefined || entry.expiresAt - EXPIRY_MARGIN_MS > now) ? entry.tokens : undefined;
+}
+
+/**
+ * Which sign-in the token kept for `resource` belongs to, as a short hash of it that says nothing of the token: each
+ * sign-in gets a token of its own, and T3 finds a repeated launch only under the sign-in that sent it.
+ */
+export function signInOf(stateDir: string, resource: string): string | undefined {
+  const tokens = credentialStore(stateDir).entry(resource).tokens;
+
+  return tokens && createHash('sha256').update(tokens.access_token).digest('hex').slice(0, 16);
 }
 
 /** The command that opens a URL in the person's browser on this platform. */

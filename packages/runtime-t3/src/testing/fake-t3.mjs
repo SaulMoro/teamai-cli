@@ -3,7 +3,8 @@
 // them again, and an agent of its own plays each thread's run: it reads the result path from the prompt, writes the
 // result there and a Claude or Codex transcript in HOME, as the real tool would.
 //
-//   FAKE_T3_STATE/config.json   written by the test: { token, environment, projects, providers, agent }
+//   FAKE_T3_STATE/config.json   written by the test: { token, namespace, environment, projects, providers, agent }
+//                               namespace: the caller's sign-in session, which T3 hashes into a launch's thread id with its clientRequestId
 //                               agent: { output, fail, hold, release, waits, noSession, reply, result }; read again on every call;
 //                               result: the result file's JSON exactly, in place of { output, failure }
 //                               organizeFails: T3 refuses t3_thread_organize; stopLagMs: a stop ends the run this long after T3 acknowledged it
@@ -156,9 +157,13 @@ const link = (threadId) => `http://127.0.0.1:${httpServer.address().port}/${conf
 
 let sequence = 2_900_000;
 
-/** A launch as T3 answers it: the thread a repeated clientRequestId launched before, or a new one. */
+/**
+ * A launch as T3 answers it: the thread a repeated clientRequestId launched before under the same sign-in, or a new one.
+ * T3 derives the thread id from the caller's sign-in session and the clientRequestId together.
+ */
 function launch(args) {
-  const threadId = `mcp:launch:${createHash('sha256').update(args.clientRequestId ?? randomUUID()).digest('hex')}`;
+  const key = JSON.stringify([`client:${config().namespace ?? 'session-1'}`, args.clientRequestId ?? randomUUID()]);
+  const threadId = `mcp:launch:${createHash('sha256').update(key).digest('hex')}`;
   const existing = readThread(threadId);
 
   if (existing) return ok({ threadId, link: link(threadId), status: existing.status });

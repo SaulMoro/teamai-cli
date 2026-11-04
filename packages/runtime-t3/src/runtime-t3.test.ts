@@ -724,6 +724,28 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()).toHaveLength(1);
     });
 
+    it('reconnects to the same thread after the member signed in again, where a repeated launch would start another', async () => {
+      t3.config({ agent: { hold: true, output: {} } });
+      const first = await opened();
+      first.runtime.send(prompt(first.handle, 'op-0000004f'));
+      await first.runtime.next((line) => line['op'] === 'op-0000004f' && line['event'] === 'accepted');
+      await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+      await first.runtime.close();
+      t3.config({ token: 'fake-t3-token-second-0987654321', namespace: 'session-2' });
+      signIn(t3, 'fake-t3-token-second-0987654321');
+
+      const second = start();
+      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      expect(await second.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+      second.send(prompt(first.handle, 'op-0000004f'));
+      await second.next((line) => line['op'] === 'op-0000004f' && line['event'] === 'accepted');
+      second.send({ type: 'close', handle: first.handle });
+
+      expect(await second.next((line) => line['handle'] === first.handle)).toEqual({ event: 'closed', handle: first.handle });
+      expect(t3.threads()).toHaveLength(1);
+      expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+    });
+
     it('stops the thread a runtime before it left running when teamai cancels that prompt first thing after a restart, and settles it at collect', async () => {
       t3.config({ agent: { release: path.join(dir, 'release'), output: { verdict: 'approve' } } });
       const first = await opened();
@@ -827,13 +849,16 @@ describe('teamai-runtime-t3', () => {
         expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
       });
 
-      it('keeps the thread when T3 refuses the repeated launch that looks it up, and close stops it', async () => {
+      // T3 finds a repeated launch only under the sign-in that sent it, so a thread the journal names is reconnected to by its id.
+      it('sends no launch for a thread it holds, so T3 refusing launches cannot drop it, and close stops it', async () => {
         const { runtime, handle } = await resumed('op-00000046', () => t3.config({ launchFails: true }));
+        await runtime.next((line) => line['op'] === 'op-00000046' && line['event'] === 'accepted');
 
-        expect(await ended(runtime, 'op-00000046')).toMatchObject({ event: 'failed', failure: { code: 't3_launch_failed', message: expect.stringContaining('T3 Code cannot launch threads now.') } });
         runtime.send({ type: 'close', handle });
 
         expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'closed', handle });
+        expect(await ended(runtime, 'op-00000046')).toEqual({ op: 'op-00000046', event: 'cancelled' });
+        expect(t3.calls().filter((call) => call.tool === 't3_thread_launch')).toHaveLength(1);
         expect(t3.calls().filter((call) => call.tool === 't3_thread_interrupt')).toHaveLength(1);
         expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
       });
@@ -910,6 +935,66 @@ describe('teamai-runtime-t3', () => {
         expect(await second.next((line) => line['op'] === 'op-0000004b')).toEqual({ op: 'op-0000004b', event: 'cancelled' });
         expect(t3.threads()).toHaveLength(1);
         expect(t3.threads()[0]?.status).toBe('interrupted');
+      });
+
+      // T3 finds a repeated launch only under the sign-in that sent it, and a sign-in lasts a limited time.
+      describe('after the member signed in again', () => {
+        const SECOND = 'fake-t3-token-second-0987654321';
+
+        /** A launch T3 made under the first sign-in and never answered, its runtime gone, and a runtime on a new sign-in. */
+        const lostThenSignedInAgain = async (op: string): Promise<{ runtime: Connection; handle: string; record: string }> => {
+          t3.config({ agent: { hold: true, output: {} }, launchMs: 3_000 });
+          const first = await opened();
+          first.runtime.send(prompt(first.handle, op));
+          await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+          await first.runtime.close();
+          t3.config({ launchMs: 0, token: SECOND, namespace: 'session-2' });
+          signIn(t3, SECOND);
+
+          const runtime = start();
+          runtime.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+          expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+
+          return { runtime, handle: first.handle, record: path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', `${encodeURIComponent(first.handle)}.json`) };
+        };
+
+        const unconfirmed = (record: string) => ({
+          code: 'launch_unconfirmed',
+          message: `teamai launched the T3 thread "review · teamai ${RUN}" in the T3 project "acme-app" under an earlier T3 Code sign-in, and T3 Code never answered, so it may still run. T3 Code finds that launch only under the sign-in that sent it, so teamai cannot find or stop it. In T3 Code, stop "review · teamai ${RUN}" with its Stop button if it runs, then delete ${record} and run teamai workflow cancel ${RUN} again.`,
+        });
+
+        it('keeps the place at close, naming the thread to stop and the record to delete, and launches nothing', async () => {
+          const { runtime, handle, record } = await lostThenSignedInAgain('op-0000004c');
+
+          runtime.send({ type: 'close', handle });
+
+          expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'close_failed', handle, failure: unconfirmed(record) });
+          expect(t3.threads()).toHaveLength(1);
+          expect(t3.threads()[0]).toMatchObject({ status: 'running', settled: false });
+          // The record names the sign-in by a hash, never by its token.
+          expect(fs.readFileSync(record, 'utf8')).not.toContain('fake-t3-token');
+        });
+
+        it('fails the op on a cancel, saying the same, and launches nothing', async () => {
+          const { runtime, handle, record } = await lostThenSignedInAgain('op-0000004d');
+
+          runtime.send({ type: 'cancel', op: 'op-0000004d' });
+
+          expect(await runtime.next((line) => line['op'] === 'op-0000004d')).toEqual({ op: 'op-0000004d', event: 'failed', failure: unconfirmed(record) });
+          runtime.send({ type: 'close', handle });
+          expect(await runtime.next((line) => line['handle'] === handle)).toMatchObject({ event: 'close_failed', failure: { code: 'launch_unconfirmed' } });
+          expect(t3.threads()).toHaveLength(1);
+          expect(t3.threads()[0]?.status).toBe('running');
+        });
+
+        it('fails a resumed prompt, saying the same, rather than launching the step again', async () => {
+          const { runtime, handle, record } = await lostThenSignedInAgain('op-0000004e');
+
+          runtime.send(prompt(handle, 'op-0000004e'));
+
+          expect(await ended(runtime, 'op-0000004e')).toEqual({ op: 'op-0000004e', event: 'failed', failure: unconfirmed(record) });
+          expect(t3.threads()).toHaveLength(1);
+        });
       });
 
       it('finds and stops the thread when teamai cancels the prompt after the runtime that launched it exited first', async () => {
