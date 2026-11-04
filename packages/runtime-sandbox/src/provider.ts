@@ -55,8 +55,8 @@ export interface Provider {
   judges?: Judges;
   /** Runs one process in the sandbox, streaming its output, until it ends. */
   exec(id: string, spec: ExecSpec, onOutput: (stream: 'stdout' | 'stderr', data: string) => void): Promise<ExecEnd>;
-  /** Stops every process running in the sandbox; the sandbox stays, ready for the next exec. */
-  stop(id: string): Promise<void>;
+  /** Stops every process running in the sandbox; the sandbox stays, ready for the next exec. Ok only once they are gone. */
+  stop(id: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   destroy(id: string): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }>;
   display(key: PlaceKey): RuntimeDisplay;
 }

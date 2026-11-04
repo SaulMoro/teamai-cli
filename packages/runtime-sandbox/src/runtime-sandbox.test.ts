@@ -360,6 +360,32 @@ describe('a prompt attempt in a container', () => {
     expect(engine.containers()).toEqual([]);
   });
 
+  it('never counts an exec whose runtime died as cancelled when the engine could not stop it', async () => {
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(first, at);
+    const op = newOp();
+    first.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'touch started; sleep 30'] });
+    await first.next((message) => message.op === op && message.event === 'accepted');
+    await vi.waitFor(() => { expect(fs.existsSync(path.join(at.worktree, 'started'))).toBe(true); }, { timeout: 10_000 });
+    first.child.kill('SIGKILL');
+    await first.end();
+    const second = start();
+    await init(second, { provider: 'docker', image: IMAGE });
+    engine.daemon(false);
+
+    second.send({ type: 'cancel', op });
+
+    expect(await second.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 30_000)).toMatchObject({
+      op, event: 'failed', failure: { code: 'sandbox_failed', message: expect.stringContaining('docker rm --force') },
+    });
+    engine.daemon(true);
+    second.send({ type: 'close', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed')).toEqual({ event: 'closed', handle: HANDLE });
+    expect(engine.containers()).toEqual([]);
+  });
+
   it('collects with the work already at its host path, and close removes the container', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });
