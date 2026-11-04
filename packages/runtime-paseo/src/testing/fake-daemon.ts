@@ -39,6 +39,11 @@ const BehaviourSchema = z.object({
    * all the same. `unreported` leaves out the `Auth` row, as Codex's always does.
    */
   sign_in: z.record(z.string(), z.enum(['signed_out', 'unreported'])).default({}),
+  /**
+   * How `codex login status` answers on the daemon's host, which is this machine: the fake writes there a `codex` that
+   * answers as Codex 0.166.0 does (recorded), and its diagnostic's resolved path names it. Absent, that path holds no codex.
+   */
+  codex_login: z.enum(['signed_in', 'signed_out']).optional(),
   /** The output the agent writes to the result file; none written when absent. */
   output: z.unknown().optional(),
   /** The agent's last message, which a confined prompt's answer is. */
@@ -317,10 +322,13 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
         return;
       }
 
-      case 'provider_diagnostic_request':
-        reply({ type: 'provider_diagnostic_response', payload: { requestId: message.requestId, provider: message.provider, diagnostic: diagnosticOf(message.provider, behaviour().sign_in[message.provider]) } });
+      case 'provider_diagnostic_request': {
+        const does = behaviour();
+        const resolved = message.provider === 'codex' ? hostCodex(state, does.codex_login) : `/usr/local/bin/${message.provider}`;
+        reply({ type: 'provider_diagnostic_response', payload: { requestId: message.requestId, provider: message.provider, diagnostic: diagnosticOf(message.provider, does.sign_in[message.provider], resolved) } });
 
         return;
+      }
 
       case 'list_provider_modes_request':
         reply({ type: 'list_provider_modes_response', payload: { requestId: message.requestId, provider: message.provider, modes: modesOf(message.provider), error: null, fetchedAt: now() } });
@@ -485,8 +493,8 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
  * A provider's diagnostic, as Paseo 0.14.0 formats it (recorded): Claude's `Auth` row quotes `claude auth status`, which
  * fails when signed out; OpenCode's quotes `opencode auth list`; Codex's has no `Auth` row.
  */
-function diagnosticOf(provider: string, signIn: 'signed_out' | 'unreported' | undefined): string {
-  const rows = [`  Binary: ${provider}`, `  Resolved path: /usr/local/bin/${provider}`];
+function diagnosticOf(provider: string, signIn: 'signed_out' | 'unreported' | undefined, resolved: string): string {
+  const rows = [`  Binary: ${provider}`, `  Resolved path: ${resolved}`];
   const isSignedOut = signIn === 'signed_out';
 
   if (signIn !== 'unreported' && provider === 'claude') {
@@ -496,6 +504,23 @@ function diagnosticOf(provider: string, signIn: 'signed_out' | 'unreported' | un
   }
 
   return [provider, ...rows, '  Status: Ready'].join('\n');
+}
+
+/**
+ * The path of the daemon host's `codex`, which answers `codex login status` as `login` says, as Codex 0.166.0 does on
+ * stderr (recorded); with no `login`, the path holds nothing.
+ */
+function hostCodex(state: string, login: 'signed_in' | 'signed_out' | undefined): string {
+  const file = path.join(state, 'host-bin', 'codex');
+  fs.rmSync(file, { force: true });
+
+  if (login) {
+    const [answer, code] = login === 'signed_in' ? ['Logged in using ChatGPT', 0] : ['Not logged in', 1];
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `#!/bin/sh\n[ "$*" = "login status" ] || exit 2\necho '${answer}' >&2\nexit ${code}\n`, { mode: 0o755 });
+  }
+
+  return file;
 }
 
 function workspaceOf(id: string, cwd: string): WorkspaceDescriptorPayload {

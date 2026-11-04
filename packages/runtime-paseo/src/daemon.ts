@@ -1,6 +1,7 @@
 import type { PaseoAgent, PaseoApi } from '@getpaseo/client';
 import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import type { WebSocketFactory } from '@getpaseo/client/internal/daemon-client-transport-types';
+import { execCommand } from '@teamai/tool-core/exec';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import { atLeast, OLDEST_PASEO, type PaseoClient } from './client.js';
 import type { AgentCreate } from './journal.js';
@@ -23,9 +24,15 @@ export const DEFAULT_MODES: Readonly<Record<PaseoTool, string>> = { claude: 'def
 
 /**
  * The Paseo mode a tool answers a confined prompt in: one that reads without asking and asks before it edits or runs
- * anything, which ends the prompt. Codex has none: each of its Paseo modes writes the workspace without asking.
+ * anything, which ends the prompt. Each of Codex's listed modes writes the workspace without asking, so it answers in
+ * `read-only`, a preset Paseo 0.14.0 takes though it lists no such mode: Codex's read-only sandbox, asking before
+ * anything more. A listed mode is looked up in what the daemon lists; an unlisted one cannot be.
  */
-export const CONFINED_MODES: Readonly<Record<PaseoTool, string | undefined>> = { claude: 'default', codex: undefined, opencode: 'plan' };
+export const CONFINED_MODES: Readonly<Record<PaseoTool, { id: string; isListed: boolean }>> = {
+  claude: { id: 'default', isListed: true },
+  codex: { id: 'read-only', isListed: false },
+  opencode: { id: 'plan', isListed: true },
+};
 
 /** The tools this runtime runs as Paseo agents: Paseo's providers that are teamai tools of the same name. */
 export type PaseoTool = 'claude' | 'codex' | 'opencode';
@@ -48,8 +55,18 @@ export type WaitEnd = Awaited<ReturnType<DaemonClient['waitForFinish']>>;
 /** A tool installed on the daemon's host: one it can run, with its modes, or why it cannot, for a person to read. */
 export type InstalledTool = { tool: PaseoTool; canRun: true; modes: string[] } | { tool: PaseoTool; canRun: false; reason: string };
 
-/** Why the daemon does not run a tool whose sign-in Paseo does not report, as Codex's. */
+/** Why the daemon does not run a tool whose sign-in Paseo does not report. */
 const UNREPORTED_SIGN_IN = 'Paseo does not report whether it is signed in, so its steps run on the next runtime of the definition';
+
+/** How long `codex login status` may take, as Paseo gives `claude auth status` in Claude's diagnostic. */
+const SIGN_IN_CHECK_TIMEOUT_MS = 5_000;
+
+/** Whether `url` names a daemon on this machine: a loopback address, the only one whose host is surely this one. */
+function isOnThisMachine(url: string): boolean {
+  const host = new URL(url).hostname.replace(/^\[(.*)\]$/, '$1');
+
+  return host === 'localhost' || host === '::1' || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host);
+}
 
 export interface Daemon {
   url: string;
@@ -161,8 +178,25 @@ export async function connect(url: string, paseo: PaseoClient): Promise<Daemon |
         // Paseo lists OpenCode's models from the providers it reaches, its free ones included, and none when it reaches none.
         return (await models(tool)).length > 0 ? undefined : 'reaches no model provider; run `opencode auth login` on the daemon\'s host, then `paseo restart`';
 
-      case 'codex':
-        return UNREPORTED_SIGN_IN;
+      case 'codex': {
+        // Paseo reports no Codex sign-in, so teamai asks Codex itself, which it can only where the daemon runs. It asks the
+        // codex the daemon's diagnostic resolves on the daemon's PATH, which may not be the one on teamai's.
+        if (!isOnThisMachine(url)) return `teamai checks Codex's sign-in only on a daemon at a loopback address, and ${url} is not one, so its steps run on the next runtime of the definition`;
+        const resolved = /^\s*Resolved path: (.+)$/m.exec((await api.providers.diagnostic('codex')).diagnostic)?.[1]?.trim();
+
+        if (resolved === undefined || resolved === 'not found') return 'Paseo reports no path for it, so teamai cannot run `codex login status`';
+        let answer: string;
+
+        try {
+          const status = await execCommand(resolved, ['login', 'status'], { timeoutMs: SIGN_IN_CHECK_TIMEOUT_MS });
+          // `codex login status` prints "Logged in using …" when signed in, and "Not logged in" with exit 1 when not.
+          answer = status.code === 0 ? `${status.stdout}\n${status.stderr}` : '';
+        } catch (error) {
+          return `\`${resolved} login status\` did not answer (${error instanceof Error ? error.message : String(error)})`;
+        }
+
+        return /^Logged in\b/m.test(answer) ? undefined : 'signed out; run `codex login` on the daemon\'s host';
+      }
 
       default: {
         const unhandled: never = tool;
