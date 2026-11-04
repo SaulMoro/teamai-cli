@@ -1,8 +1,8 @@
+import { spawn } from 'node:child_process';
 import path from 'node:path';
 import type { PaseoAgent, PaseoApi } from '@getpaseo/client';
 import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import type { WebSocketFactory } from '@getpaseo/client/internal/daemon-client-transport-types';
-import { execCommand } from '@teamai/tool-core/exec';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
 import { atLeast, OLDEST_PASEO, type PaseoClient } from './client.js';
 import type { AgentCreate } from './journal.js';
@@ -58,6 +58,40 @@ export type InstalledTool = { tool: PaseoTool; canRun: true; modes: string[] } |
 
 /** How long `codex login status` may take, as Paseo gives `claude auth status` in Claude's diagnostic. */
 const SIGN_IN_CHECK_TIMEOUT_MS = 5_000;
+
+/**
+ * `<codex> login status`, in a process group of its own, which is killed whole when it does not answer in time: an npm
+ * `codex` is a shim that starts the native binary, and killing the shim alone leaves that running.
+ */
+function codexLoginStatus(codex: string): Promise<{ code: number; answer: string }> {
+  return new Promise((resolve, reject) => {
+    const isGrouped = process.platform !== 'win32';
+    const child = spawn(codex, ['login', 'status'], { stdio: ['ignore', 'pipe', 'pipe'], detached: isGrouped, windowsHide: true });
+    let answer = '';
+
+    const timer = setTimeout(() => {
+      try {
+        if (isGrouped && child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
+        else child.kill('SIGKILL');
+      } catch {
+        child.kill('SIGKILL');
+      }
+
+      reject(new Error(`no answer in ${SIGN_IN_CHECK_TIMEOUT_MS} ms`));
+    }, SIGN_IN_CHECK_TIMEOUT_MS);
+
+    child.stdout.setEncoding('utf8').on('data', (text: string) => { answer += text; });
+    child.stderr.setEncoding('utf8').on('data', (text: string) => { answer += text; });
+    child.once('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code: code ?? 1, answer });
+    });
+  });
+}
 
 /** Whether `url` names a daemon on this machine: a loopback address, the only one whose host is surely this one. */
 function isOnThisMachine(url: string): boolean {
@@ -192,16 +226,16 @@ export async function connect(url: string, paseo: PaseoClient): Promise<Daemon |
           return `Paseo resolves it to "${resolved}", which is not an absolute path to a codex; run \`paseo provider diagnostic codex\` on the daemon's host to see why`;
         }
 
-        let status: Awaited<ReturnType<typeof execCommand>>;
+        let status: Awaited<ReturnType<typeof codexLoginStatus>>;
 
         try {
-          status = await execCommand(resolved, ['login', 'status'], { timeoutMs: SIGN_IN_CHECK_TIMEOUT_MS });
+          status = await codexLoginStatus(resolved);
         } catch (error) {
           return `\`${resolved} login status\` did not answer (${error instanceof Error ? error.message : String(error)}); run it on the daemon's host to see why`;
         }
 
         // Codex 0.166.0 prints "Logged in using …" with exit 0 when signed in, and "Not logged in" with exit 1 when not.
-        const answer = `${status.stdout}\n${status.stderr}`;
+        const { answer } = status;
 
         if (status.code === 0 && /^Logged in\b/m.test(answer)) return undefined;
 
