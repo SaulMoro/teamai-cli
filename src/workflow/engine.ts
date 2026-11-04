@@ -1813,6 +1813,15 @@ function beyondSoleDriver(
 
   if (lackedByAll.includes('unattended')) return unattendedUnavailable(step, tool);
 
+  if (lackedByAll.includes('exec')) {
+    const runtimes = sole.offers.map((offer) => offer.runtime).join(', ');
+
+    return {
+      code: 'requirement_unmet',
+      message: `Step "${step}" runs a command, and no runtime of driver "${sole.driver}" runs commands (${runtimes}). Add one that does, such as local, to the definition.`,
+    };
+  }
+
   if (sole.offers.length === 1 || lackedByAll.length > 0) return undefined;
   const lacks = sole.offers.map((offer, index) => `runtime ${offer.runtime} lacks ${helds[index]?.join(', ') ?? 'nothing'}`).join('; ');
 

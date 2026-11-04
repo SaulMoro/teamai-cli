@@ -66,7 +66,7 @@ async function stopAttempt(config: LocalConfig, run: RunId, attempt: AttemptId):
     if (entry?.kind !== 'external') return cannot(`driver "${record.driver}" no longer uses that runtime.`);
     const placed = attemptRun({ config, run, attempt, runtime: entry.runtime, driver: record.driver });
 
-    if (!await placed.stopLeftExec()) return cannot('its exec still runs after teamai asked the runtime to cancel it.');
+    if (!await placed.stopLeftOperation()) return cannot('its exec or prompt still runs after teamai asked the runtime to cancel it.');
     const notCollected = await placed.collect();
 
     if (notCollected) log.warn(notCollected.message);

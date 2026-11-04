@@ -12,7 +12,7 @@ import type { WorkflowFailure } from '../types.js';
 import type { SessionRef } from '../workspace.js';
 import { loginFileOf } from './login.js';
 import { OpIdSchema, RuntimeDisplaySchema, type PlaceView, type RuntimeDisplay } from '@teamai/runtime-protocol';
-import { newOpId, type ExecEnd, type ExecEvents, type StepRuntime } from './step-runtime.js';
+import { newOpId, type ExecEnd, type ExecEvents, type PromptEnd, type PromptRequest, type StepRuntime } from './step-runtime.js';
 
 // ─── An attempt on a step runtime ────────────────────────
 //
@@ -43,6 +43,8 @@ export const AttemptRuntimeRecordSchema = z.object({
   phase: z.enum(PHASES),
   open: z.object({ op: OpIdSchema, handle: z.string().optional() }),
   exec: z.object({ op: OpIdSchema }).optional(),
+  /** The prompt sent to a runtime that launches agents its own way. */
+  prompt: z.object({ op: OpIdSchema }).optional(),
   /** The attempt's tool home, for a prompt: the tool and its directory. */
   toolHome: z.object({ tool: z.string(), dir: z.string() }).optional(),
   /** What the runtime last showed of the place, at `ready` or at a reattach, for the run's details. */
@@ -153,17 +155,22 @@ export interface AttemptRun {
   /** Opens the place; `toolHome` is the tool home a prompt's tool keeps its session in, recorded for every later lookup. */
   open(view: PlaceView, toolHome?: { tool: string; dir: string }): Promise<{ ok: true; handle: string } | { ok: false; failure: WorkflowFailure }>;
   exec(request: { argv: string[]; env: Record<string, string>; unset: string[]; cwd: string }, events: ExecEvents): Promise<AttemptExecEnd>;
-  /** Stops the exec running now, with every process it started. */
+  /**
+   * Sends the prompt step to a runtime that launches agents its own way. Built again after a restart, it reads the
+   * outcome the runtime kept, or reconnects to the prompt still running by sending the same id again.
+   */
+  prompt(request: Omit<PromptRequest, 'op' | 'handle'>, events: { onAccepted?: () => void }): Promise<PromptEnd>;
+  /** Stops the exec or prompt running now, with every process it started. */
   cancel(): Promise<void>;
   /** Brings the place's work back to the host, after success and after failure, before teamai reads the result or commits. */
   collect(): Promise<WorkflowFailure | undefined>;
   /** Closes the handle once the attempt's report is recorded, so a teamai killed before that still reattaches. */
   close(): Promise<void>;
   /**
-   * Stops the exec a killed teamai left running, for a run cancelled without a live driver, and waits until the runtime
-   * no longer reports it running. Answers false when it still runs after the wait.
+   * Stops the exec or prompt a killed teamai left running, for a run cancelled without a live driver, and waits until
+   * the runtime no longer reports it running. Answers false when it still runs after the wait.
    */
-  stopLeftExec(): Promise<boolean>;
+  stopLeftOperation(): Promise<boolean>;
 }
 
 /** How long a restarted teamai waits for an exec it found running to stop. */
@@ -176,7 +183,7 @@ function runtimeFailure(runtime: string, message: string): WorkflowFailure {
 export function attemptRun({ config, run, attempt, runtime, driver }: { config: LocalConfig; run: RunId; attempt: AttemptId; runtime: StepRuntime; driver: string }): AttemptRun {
   const file = recordPath(config, run, attempt);
   let record: AttemptRuntimeRecord | undefined;
-  let running: AttemptRuntimeRecord['exec'];
+  let running: { op: z.infer<typeof OpIdSchema> } | undefined;
 
   const save = async (next: AttemptRuntimeRecord): Promise<void> => {
     record = next;
@@ -227,6 +234,8 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       if (before?.open.handle) opening.open.handle = before.open.handle;
 
       if (before?.exec) opening.exec = before.exec;
+
+      if (before?.prompt) opening.prompt = before.prompt;
 
       if (toolHome) opening.toolHome = toolHome;
 
@@ -288,6 +297,49 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       return end;
     },
 
+    async prompt(request, events) {
+      const before = await current();
+      const handle = before?.open.handle;
+
+      if (!before || handle === undefined) return { kind: 'failed', failure: { code: 'runtime_protocol', message: `Attempt ${attempt} has no open place to prompt in.` } };
+
+      if (before.prompt) {
+        const found = await runtime.reattach(handle);
+
+        if (found.kind === 'failed') return { kind: 'failed', failure: found.failure };
+
+        if (found.kind === 'gone') return { kind: 'failed', failure: { code: 'runtime_gone', message: `The runtime no longer knows the place of attempt ${attempt}.` } };
+        await shown(found.display);
+        const sent = before.prompt;
+        const state = found.ops.find((retained) => retained.op === sent.op);
+
+        if (state?.state === 'finished') {
+          events.onAccepted?.();
+          const end: PromptEnd = { kind: 'finished', session: state.session, result: state.result };
+
+          if (state.usage) end.usage = state.usage;
+
+          return end;
+        }
+
+        if (state?.state === 'cancelled') return { kind: 'cancelled' };
+
+        if (state?.state === 'failed') return { kind: 'failed', failure: state.failure };
+
+        if (state?.state === 'exited') return { kind: 'failed', failure: { code: 'runtime_protocol', message: `Step runtime "${runtime.name}" reported the prompt of attempt ${attempt} as an exec that exited.` } };
+
+        // Still running, or never received: the same id reconnects to it, or sends it now.
+      }
+
+      const sent = before.prompt ?? { op: newOpId() };
+      await save({ ...before, prompt: sent, phase: 'running' });
+      running = sent;
+      const end = await runtime.prompt({ op: sent.op, handle, ...request }, events);
+      running = undefined;
+
+      return end;
+    },
+
     async cancel() {
       if (running) await runtime.cancel(running.op);
     },
@@ -314,11 +366,12 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       await save({ ...before, phase: 'closed' });
     },
 
-    async stopLeftExec() {
+    async stopLeftOperation() {
       const before = await current();
       const handle = before?.open.handle;
+      const left = before?.exec ?? before?.prompt;
 
-      return !before?.exec || handle === undefined || await stopLeftRunning(handle, before.exec.op);
+      return !left || handle === undefined || await stopLeftRunning(handle, left.op);
     },
   };
 }
