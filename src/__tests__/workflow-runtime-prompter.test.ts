@@ -61,7 +61,7 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
     const controller = new AbortController();
     const { run, cancels } = promptOnlyRun({ duringOpen: () => controller.abort() });
 
-    const ran = await runtimePrompter(run, { view, step: 'review', provided: [], unset: [], credentials: {}, secrets: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), secrets: {} }, controller.signal);
+    const ran = await runtimePrompter(run, { view, step: 'review', provided: [], unset: [], credentials: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), secrets: {} }, controller.signal);
 
     expect(ran).toMatchObject({ exitCode: 143, failure: { code: 'tool_failed' } });
     expect(cancels()).toBe(1);
@@ -70,7 +70,7 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
   it('stops at its timeout when the timeout passes before the prompt is sent', async () => {
     const { run, cancels } = promptOnlyRun({ beforeSend: () => new Promise((resolve) => setTimeout(resolve, 50)) });
 
-    const ran = await runtimePrompter(run, { view, step: 'review', provided: [], unset: [], credentials: {}, secrets: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), timeoutMs: 1, secrets: {} }, undefined);
+    const ran = await runtimePrompter(run, { view, step: 'review', provided: [], unset: [], credentials: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), timeoutMs: 1, secrets: {} }, undefined);
 
     expect(ran).toMatchObject({ exitCode: 143, stoppedBy: 'timeout' });
     expect(cancels()).toBe(1);
@@ -80,7 +80,7 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
     const { run } = promptOnlyRun();
     const uncollectable: AttemptRun = { ...run, collect: async () => ({ code: 'runtime_failed', message: 'The place could not be collected.' }) };
 
-    const ran = await runtimePrompter(uncollectable, { view, step: 'review', provided: [], unset: [], credentials: {}, secrets: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), resume: 'earlier-session', secrets: {} }, undefined);
+    const ran = await runtimePrompter(uncollectable, { view, step: 'review', provided: [], unset: [], credentials: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath: path.join(dir, 'result.json'), resume: 'earlier-session', secrets: {} }, undefined);
 
     expect(ran).toMatchObject({ exitCode: 1, session: 's-1', startedFresh: true });
   });
@@ -89,7 +89,7 @@ describe('a prompt step on a runtime that launches agents its own way', () => {
     const { run } = promptOnlyRun({ result: { output: { note: 'signed in with prompter-secret-7d2e' }, failure: { code: 'tool_failed', message: 'denied for prompter-secret-7d2e' } } });
     const resultPath = path.join(dir, 'result.json');
 
-    await runtimePrompter(run, { view, step: 'review', provided: [], unset: [], credentials: {}, secrets: { TOY_TEAM: 'prompter-secret-7d2e' } }).run('claude', { prompt: 'Review.', cwd: dir, resultPath, secrets: {} }, undefined);
+    await runtimePrompter(run, { view, step: 'review', provided: [], unset: [], credentials: {} }).run('claude', { prompt: 'Review.', cwd: dir, resultPath, secrets: { TOY_TEAM: 'prompter-secret-7d2e' } }, undefined);
     const written = fs.readFileSync(resultPath, 'utf8');
 
     expect(written).not.toContain('prompter-secret-7d2e');

@@ -7,9 +7,8 @@ import type { LeaseWire } from '../../lease-wire.js';
 import type { AttemptRun } from '../../runtimes/attempt.js';
 import { PROMPT_FAILURE_CODES, type PlaceView, type PromptLease, type RuntimeFailure } from '@teamai/runtime-protocol';
 import { launchEnv } from '../../../launch-context.js';
-import { writeJsonAtomic } from '../../../utils/fs.js';
-import { redactJson } from '@teamai/shared/redact';
 import { MAX_TIMER_DELAY } from '../../shell-command.js';
+import { AttemptResult } from '../../attempt-result.js';
 import { attemptResultPath, runScratchDir, type AttemptId, type RunId } from '../../store.js';
 import type { WorkflowFailure } from '../../types.js';
 import { git } from '../../worktree.js';
@@ -226,14 +225,12 @@ function promptFailure(failure: RuntimeFailure): WorkflowFailure {
  * prompt's result is written to the result file, as a tool writes it, and its session and usage are the step's. teamai
  * keeps the step's timeout and a driver abort as a `cancel`; a budget is checked against the usage once it finishes.
  */
-export function runtimePrompter(run: AttemptRun, { view, step, provided, unset, credentials, secrets }: {
+export function runtimePrompter(run: AttemptRun, { view, step, provided, unset, credentials }: {
   view: PlaceView;
   step: string;
   provided: string[];
   unset: string[];
   credentials: Record<string, string>;
-  /** Every value the run masks, its team secrets and runtime credentials, so the result file never holds one. */
-  secrets: Record<string, string>;
 }): LocalToolAdapter {
   const given = toolCredentials(credentials, unset);
 
@@ -289,8 +286,9 @@ export function runtimePrompter(run: AttemptRun, { view, step, provided, unset, 
           return { started: true, exitCode: 1, failure: { code: 'runtime_failed', message: `The step runtime finished the ${tool} prompt with a session of ${end.session.tool}.` } };
         }
 
-        // A runtime's answer may echo a credential, so it is masked before its first write.
-        await writeJsonAtomic(input.resultPath, redactJson(end.result, secrets));
+        // A runtime's answer may echo a credential, so it is masked before its first write: `input.secrets` holds the
+        // run's team secrets and runtime credentials.
+        await AttemptResult.write(input.resultPath, end.result, input.secrets);
 
         // A session the step asked to resume that the runtime did not continue is a new one, whatever came after it.
         const fresh = input.resume !== undefined && end.resumed !== true ? { startedFresh: true as const } : {};
