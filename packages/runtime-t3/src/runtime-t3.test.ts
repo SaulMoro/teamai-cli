@@ -294,6 +294,11 @@ describe('teamai-runtime-t3', () => {
         },
       });
       expect(t3.threads()).toEqual([]);
+
+      // T3 refuses the repeated launch close looks the thread up with as well: there was none, and none is left.
+      runtime.send({ type: 'close', handle });
+      expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'closed', handle });
+      expect(t3.threads()).toEqual([]);
     });
 
     // Once a step ended and T3 holds no run of its thread, teamai settles it: it leaves the active list and still opens from its link.
@@ -831,6 +836,55 @@ describe('teamai-runtime-t3', () => {
         expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'closed', handle });
         expect(t3.calls().filter((call) => call.tool === 't3_thread_interrupt')).toHaveLength(1);
         expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+      });
+    });
+
+    // A launch's clientRequestId is journaled before the launch, and T3 answers a repeated launch with the thread it
+    // launched for that id, so a launch whose reply never came is found again.
+    describe('when T3 launched a step\'s thread but its reply never came', () => {
+      it('finds the thread at close by repeating the launch, keeping the place while T3 cannot answer', async () => {
+        t3.config({ agent: { hold: true, output: {} }, launchReplyLost: true });
+        const { runtime, handle } = await opened();
+        runtime.send(prompt(handle, 'op-00000047'));
+
+        expect(await ended(runtime, 'op-00000047')).toMatchObject({ event: 'failed', failure: { code: 't3_launch_failed' } });
+        await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+        runtime.send({ type: 'close', handle });
+        expect(await runtime.next((line) => line['handle'] === handle)).toMatchObject({
+          event: 'close_failed', failure: { code: 't3_unavailable', message: expect.stringContaining(`"review · teamai ${RUN}"`) },
+        });
+
+        t3.config({ launchReplyLost: false });
+        runtime.send({ type: 'close', handle });
+
+        expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'closed', handle });
+        expect(t3.threads()).toHaveLength(1);
+        expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+      });
+
+      it('finds and stops the thread when teamai cancels the prompt after the runtime that launched it exited first', async () => {
+        t3.config({ agent: { hold: true, output: {} }, launchMs: 3_000 });
+        const first = await opened();
+        first.runtime.send(prompt(first.handle, 'op-00000048'));
+        await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+        await first.runtime.close();
+        t3.config({ launchMs: 0 });
+
+        const second = start();
+        second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        await second.next((line) => line['type'] === 'init');
+        second.send({ type: 'cancel', op: 'op-00000048' });
+
+        await expect.poll(async () => {
+          second.send({ type: 'reattach', handle: first.handle });
+
+          return (await second.next((line) => line['event'] === 'alive'))['ops'];
+        }).toEqual([{ op: 'op-00000048', state: 'cancelled' }]);
+        expect(t3.threads()).toHaveLength(1);
+        expect(t3.threads()[0]?.status).toBe('interrupted');
+        second.send({ type: 'close', handle: first.handle });
+        expect(await second.next((line) => line['handle'] === first.handle)).toEqual({ event: 'closed', handle: first.handle });
+        expect(t3.threads()[0]?.settled).toBe(true);
       });
     });
 

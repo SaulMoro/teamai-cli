@@ -95,7 +95,8 @@ export interface NewThread {
 
 /** A step's thread, on the attempt's worktree of a T3 project, started with its first message. */
 export interface Launch extends NewThread {
-  message: string;
+  /** None: an idle thread, which a repeated launch that only looks the thread up asks for. */
+  message?: string;
   projectId: string;
   worktreePath: string;
 }
@@ -201,7 +202,7 @@ function t3Over(client: Client): T3 {
     },
     launch: (launch) => call('t3_thread_launch', {
       title: launch.title,
-      message: launch.message,
+      ...(launch.message !== undefined && { message: launch.message }),
       projectId: launch.projectId,
       workspaceStrategy: { type: 'existing_worktree', worktreePath: launch.worktreePath },
       modelSelection: launch.modelSelection,

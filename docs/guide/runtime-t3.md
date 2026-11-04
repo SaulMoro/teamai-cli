@@ -225,6 +225,8 @@ The step's thread lives in T3, not in teamai's process. If the driver dies, `tea
 
 A thread's run may hand work to subagents or background tasks. The step ends only once that work has settled too, and a cancel or close counts the thread as stopped only then.
 
+If T3 Code launched a step's thread but its answer never reached teamai, a cancel or close finds the thread by sending the same launch again, which T3 answers with that thread, and stops it. If T3 had launched nothing, that second launch adds an idle thread, which teamai settles.
+
 ```sh
 teamai workflow resume r928e2fc23ab9bd62 --driver t3
 teamai workflow cancel r70d31098c8884803
@@ -244,6 +246,7 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` names an instance T3 does not have, or one that is disabled. | Add or enable it in T3 Code under Settings → Providers, or remove `instance`. |
 | `… ended without writing the result file …` | The agent finished without writing its result. | Open the thread from the link in the message, then `teamai workflow retry <run> <step>`. |
 | `Not closed: thread_still_runs …` in the run's details | teamai closed the step's place while its thread, or work the thread delegated, still ran, and T3 did not stop it. | Open the thread from the link, and stop it with its Stop button. |
+| `Not closed: t3_unavailable: teamai launched the T3 thread "review · teamai r70d…" and T3 Code never answered …` | A step's launch got no answer, and T3 Code could not be reached to look the thread up. | Open T3 Code, then `teamai workflow cancel <run>` again. |
 | `… kept no session for …` | The tool kept no transcript for the worktree, so the step could not be scored. | Check that the instance uses the tool's default home (`~/.claude`, `~/.codex`). |
 
 ## What it does not do yet
