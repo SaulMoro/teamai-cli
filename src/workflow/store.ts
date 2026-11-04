@@ -4,6 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { DriverSchema } from '../driver-identity.js';
 import { readFileSafe, writeFileAtomic, writeJsonAtomic } from '../utils/fs.js';
+import { resolveReal } from '../utils/path-safety.js';
 import { redactJson } from '@teamai/shared/redact';
 import { getDataHome, type JsonValue, type LocalConfig } from '../types.js';
 import { acquireLock, releaseLock } from '../update.js';
@@ -38,9 +39,12 @@ export function generateRunId(): string {
   return `r${randomBytes(8).toString('hex')}`;
 }
 
-/** The directory that holds this scope's run files, `<run id>.json` each. */
+/**
+ * The directory that holds this scope's run files, `<run id>.json` each. It is spelled by its real path, so every
+ * process of a run names the run's files alike, whatever spelling of HOME each one was given.
+ */
 export function runsDir(config: LocalConfig): string {
-  return path.join(getDataHome(config), 'workflows', 'runs');
+  return path.join(resolveReal(getDataHome(config)), 'workflows', 'runs');
 }
 
 export function runFilePath(config: LocalConfig, runId: string): string {
