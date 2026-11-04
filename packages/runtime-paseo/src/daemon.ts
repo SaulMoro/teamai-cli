@@ -2,7 +2,7 @@ import type { PaseoAgent, PaseoApi } from '@getpaseo/client';
 import type { DaemonClient } from '@getpaseo/client/internal/daemon-client';
 import type { WebSocketFactory } from '@getpaseo/client/internal/daemon-client-transport-types';
 import type { RuntimeFailure } from '@teamai/runtime-protocol';
-import type { PaseoClient } from './client.js';
+import { atLeast, OLDEST_PASEO, type PaseoClient } from './client.js';
 import type { AgentCreate } from './journal.js';
 
 // ─── The Paseo daemon ────────────────────────────────────
@@ -11,9 +11,6 @@ import type { AgentCreate } from './journal.js';
 //  installed (client.ts). Cancel and wait live on the client's internal driver, which is why the daemon must run the
 //  version this runtime was tested against or later.
 //
-
-/** The client version this runtime is tested against; an older daemon lacks what it relies on. */
-export const PINNED_CLIENT = '0.14.0';
 
 /** What this runtime needs of the daemon: agent creates with caller-chosen ids that a repeated key answers. */
 const NEEDED_FEATURES = ['creationLifecycle', 'agentRequestReceipts'] as const;
@@ -38,18 +35,6 @@ export function isPaseoTool(tool: string): tool is PaseoTool {
 }
 
 const CONNECT_TIMEOUT_MS = 10_000;
-
-/** Whether `version` is `floor` or later, comparing major, minor and patch. */
-function atLeast(version: string, floor: string): boolean {
-  const parts = (text: string): number[] => text.split(/[.-]/).slice(0, 3).map(Number);
-  const [have, need] = [parts(version), parts(floor)];
-
-  for (let index = 0; index < 3; index += 1) {
-    if ((have[index] ?? 0) !== (need[index] ?? 0)) return (have[index] ?? 0) > (need[index] ?? 0);
-  }
-
-  return true;
-}
 
 export interface Model {
   id: string;
@@ -135,11 +120,11 @@ export async function connect(url: string, paseo: PaseoClient): Promise<Daemon |
   const version = info?.version ?? 'unknown';
   const missing = NEEDED_FEATURES.filter((feature) => info?.features?.[feature] !== true);
 
-  if (!info || !atLeast(version, PINNED_CLIENT) || missing.length > 0) {
+  if (!info || !atLeast(version, OLDEST_PASEO) || missing.length > 0) {
     await client.close().catch(() => {});
     const lacks = missing.length > 0 ? `, and lacks ${missing.join(', ')}` : '';
 
-    return { code: 'daemon_version', message: `The Paseo daemon at ${url} runs version ${version}${lacks}; teamai-runtime-paseo needs Paseo ${PINNED_CLIENT} or later. Update Paseo, then restart its daemon.` };
+    return { code: 'daemon_version', message: `The Paseo daemon at ${url} runs version ${version}${lacks}; teamai-runtime-paseo needs Paseo ${OLDEST_PASEO} or later. Update Paseo, then restart its daemon.` };
   }
 
   const api: PaseoApi = paseo.createPaseoApi(client);
