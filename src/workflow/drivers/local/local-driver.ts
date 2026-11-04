@@ -50,7 +50,7 @@ import { instanceNames, isToolId } from '../../../tool-registry.js';
 import { launchExecutableOf, LAUNCH_ORDER, LAUNCH_TOOLS, launchAdapterIdOf, launchTargetOf, type LaunchTarget, type LaunchTool } from '../../../tool-launch/tools.js';
 import { confinedOffers, type ConfinedOffer } from '../../../tool-launch/confined.js';
 import { AttemptResult } from '../../attempt-result.js';
-import { runConfinedStep } from '../../confined-step.js';
+import { runConfinedStep, runConfinedStepOnRuntime } from '../../confined-step.js';
 import { runAnswerStep } from './answer-step.js';
 import { chooseStepModel, loadDeployedAgent, type StepModel } from '../../step-model.js';
 import type { DriveOptions, DriverIdentity, RunState, StepHitl, WorkflowEnvelope, WorkflowFailure, WorkflowStep } from '../../types.js';
@@ -1057,13 +1057,13 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
   if (!localReady.ok) return { error: { code: 'runtime_failed', message: localReady.failure.message } };
 
   // An external runtime is offered with what it said it can. One that execs the tool launches only the tools it can give
-  // a home; one that launches agents its own way gives each its own. It is offered no step confined to a directory:
-  // protocol 1 has no way to confine one.
+  // a home; one that launches agents its own way gives each its own. It keeps `can.confined` only when its init said it
+  // answers confined prompts (the stdio reader drops it otherwise).
   const toSlot = (entry: OpenedDriver['runtimes'][number]): RuntimeSlot => (entry.kind === 'local'
     ? { kind: 'local', use: 'local', runtime: local, can: localReady.can, launchesAgents: false, engine: entry.engine, credentials: {} }
     : {
       kind: 'external', use: entry.use, runtime: entry.runtime, launchesAgents: entry.launchesAgents, engine: entry.engine, credentials: entry.credentials,
-      can: { ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter(isExecRuntimeTool), confined: [] },
+      can: { ...entry.can, tools: entry.launchesAgents ? entry.can.tools : (entry.can.tools ?? []).filter(isExecRuntimeTool) },
     });
 
   const [firstSlot, ...otherSlots] = defined.runtimes.map(toSlot);
@@ -1554,11 +1554,18 @@ async function driveRun(config: LocalConfig, lock: RunLock, cwd: string, given: 
           }
 
           if (place) {
-            await stopRecordedGroup(attemptDir(config, runId, lease.attempt));
+            const slot = slotOf.get(lease.attempt);
+            const onRuntime = runOf(lease);
+
+            if (!onRuntime) await stopRecordedGroup(attemptDir(config, runId, lease.attempt));
 
             if (!startable(lease, controller.signal)) return undefined;
-            const secrets = env?.secrets ?? await knownSecrets(config);
-            const ended = await runConfinedStep({ config, run: runId, lease: { ...lease, confined: place }, signal: controller.signal, secrets, ...lookup });
+            const confinedLease = { ...lease, confined: place };
+
+            const ended = onRuntime && slot
+              ? await runConfinedStepOnRuntime({ config, run: runId, lease: confinedLease, signal: controller.signal, runtime: slot.use, attemptRun: onRuntime, offers: slot.can.confined ?? [], credentials: slot.credentials, secrets: await maskedValues() })
+              : await runConfinedStep({ config, run: runId, lease: confinedLease, signal: controller.signal, secrets: await maskedValues(), ...lookup });
+
             const id = { attempt: lease.attempt, revision: lease.revision, driver };
 
             if (ended.kind === 'ran') return { ...id, ...ended.report };

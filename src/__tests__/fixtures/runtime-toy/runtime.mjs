@@ -11,13 +11,19 @@
 // `release` names exists, then writes `output` (or the whole `result`) to the lease's result file and finishes with a
 // session and `usage`, or ends with `fail`. It appends each prompt it is sent, and how each ended, to `prompts.jsonl` in its state, which
 // `close` keeps.
+//
+// With `judge`, it also answers confined prompts, best effort: its init says so and offers `can.confined` at `level`
+// (`best-effort` unless given) with `access` (`read`) for `tools` (`claude`). It answers each one at once with `reply`
+// as the result's output, keeping the level it was asked for (or `reports`, to say less), and logs the files it could
+// read: those under the prompt's directory, which is all it reads. `path` names a directory of its own tools, first on
+// the PATH of each exec.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import readline from 'node:readline';
 import { RuntimeRequestSchema } from '@teamai/runtime-protocol';
 
-const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'can', 'display', 'agent']);
+const OPTIONS = new Set(['state', 'die_at', 'exit_at', 'close_fails', 'can', 'display', 'agent', 'judge', 'path']);
 
 const DEFAULT_CAN = {
   hitl: false, workspace: ['read-only', 'new', 'continue'], network: false, isolation: 'none', env: true,
@@ -111,14 +117,20 @@ function init(request) {
   options = request.options;
   fs.mkdirSync(options.state, { recursive: true });
 
+  const judge = options.judge === undefined ? {} : {
+    confinedPrompt: true,
+    confined: [{ level: options.judge.level ?? 'best-effort', access: options.judge.access ?? 'read', tools: options.judge.tools ?? ['claude'] }],
+  };
+  const judging = judge.confinedPrompt ? { confinedPrompt: true } : {};
+
   if (options.agent === undefined) {
-    send({ type: 'init', ok: true, can: { ...DEFAULT_CAN, ...options.can } });
+    send({ type: 'init', ok: true, ...judging, can: { ...DEFAULT_CAN, ...(judge.confined && { confined: judge.confined }), ...options.can } });
 
     return;
   }
 
   // An agent the toy launches works in the place on the host: it takes no command, so it runs no setup either.
-  send({ type: 'init', ok: true, prompt: true, can: { ...DEFAULT_CAN, exec: false, setup: false, tokens: false, end_turn: false, ...options.can } });
+  send({ type: 'init', ok: true, prompt: true, ...judging, can: { ...DEFAULT_CAN, exec: false, setup: false, tokens: false, end_turn: false, ...(judge.confined && { confined: judge.confined }), ...options.can } });
 }
 
 /** Notes which credentials a request brought, by name only: a value is never written. */
@@ -135,7 +147,8 @@ function open(request) {
   const handle = handles[key] ?? `toy-${request.run}-${request.attempt}`;
   handles[key] = handle;
   writeJson(file('handles.json'), handles);
-  writeJson(opPath(request.op), { kind: 'open', handle });
+  // A confined prompt's place is opened with no view of the host.
+  writeJson(opPath(request.op), { kind: 'open', handle, view: request.view ?? null });
   noteCredentials(request, handle);
   openCredentials.set(handle, request.credentials ?? {});
 
@@ -173,7 +186,8 @@ function exec(request) {
   }
 
   noteCredentials(request, request.handle);
-  const env = { ...process.env, ...request.env, ...request.credentials };
+  // `path` is a directory of the toy's own tools, first on the PATH of what it runs, as an image that ships its tools.
+  const env = { ...process.env, ...(options.path && { PATH: `${options.path}${path.delimiter}${process.env.PATH ?? ''}` }), ...request.env, ...request.credentials };
 
   for (const name of request.unset ?? []) delete env[name];
   const [command, ...args] = request.argv;
@@ -258,7 +272,44 @@ function settlePrompt(op) {
   exitWhenIdle();
 }
 
+/** The files under `dir`, relative to it and sorted: what a confined prompt's agent can read. */
+function filesUnder(dir, prefix = '') {
+  return fs.readdirSync(path.join(dir, prefix), { withFileTypes: true })
+    .flatMap((entry) => (entry.isDirectory() ? filesUnder(dir, path.join(prefix, entry.name)) : [path.join(prefix, entry.name)]))
+    .sort();
+}
+
+/** Answers a confined prompt at once with the judge's reply, keeping the level it was asked for, or the one `reports` gives. */
+function judgePrompt(request) {
+  if (options.judge === undefined) {
+    send({ op: request.op, event: 'failed', failure: { code: 'prompt_unsupported', message: 'The toy answers confined prompts only with the judge option.' } });
+
+    return;
+  }
+
+  let record = readJson(opPath(request.op), undefined);
+  send({ op: request.op, event: 'accepted' });
+
+  if (!record) {
+    fs.appendFileSync(file('prompts.jsonl'), `${JSON.stringify({ op: request.op, sent: request.lease, confined: request.confined, sees: filesUnder(request.confined.dir) })}\n`);
+    const outcome = {
+      state: 'finished', session: { tool: request.lease.tool, id: `toy-judge-${request.op.slice(3)}` }, result: { output: options.judge.reply ?? {} },
+      confined: { level: options.judge.reports ?? request.confined.level, access: request.confined.access },
+    };
+    record = { kind: 'prompt', op: request.op, handle: request.handle, lease: request.lease, startedAt: Date.now(), outcome };
+    writeJson(opPath(request.op), record);
+  }
+
+  send(promptEnded(request.op, record.outcome));
+}
+
 function prompt(request) {
+  if (request.confined) {
+    judgePrompt(request);
+
+    return;
+  }
+
   const record = readJson(opPath(request.op), undefined);
 
   if (options.agent === undefined) {
