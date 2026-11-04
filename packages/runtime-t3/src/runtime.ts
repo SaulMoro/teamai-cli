@@ -69,6 +69,16 @@ const JUDGE_KEPT: ConfinedKept = { level: 'best-effort', access: 'read' };
 
 const TERMINAL: ReadonlySet<string> = new Set<Waited['status']>(['completed', 'interrupted', 'failed', 'cancelled', 'rolled_back']);
 
+/**
+ * How the thread's work ended, once its run and the work the run delegated both settled: as the run that answered last,
+ * or idle for a thread with no run. Undefined while either still goes, even when the run itself ended.
+ */
+function settledStatus(waited: Waited): Waited['status'] | undefined {
+  if (waited.timedOut || (waited.status !== 'idle' && !TERMINAL.has(waited.status))) return undefined;
+
+  return waited.resultRun?.status ?? waited.status;
+}
+
 export interface Connected {
   ok: true;
   t3: T3;
@@ -353,21 +363,23 @@ export function serve(options: ServeOptions): Promise<void> {
   };
 
   /**
-   * Stops a step's thread as its Stop button does, and waits up to STOP_WAIT_MS for its run to end. Answers why it did
-   * not stop, logged, while the thread may still run.
+   * Stops a step's thread as its Stop button does, and waits up to STOP_WAIT_MS for its run, and the work it delegated,
+   * to settle. Answers why it did not stop, logged, while the thread may still run.
    */
   const whyNotStopped = async (t3: T3, threadId: string): Promise<string | undefined> => {
     let why: string;
 
     try {
-      const { hadRun } = await t3.stop(threadId);
+      await t3.stop(threadId);
+      // T3 answers the stop before the run ends, and stops the delegated work apart, so the thread has stopped only
+      // once both settled. T3 answers a thread with nothing left to settle at once.
+      const waited = await t3.wait(threadId, STOP_WAIT_MS);
 
-      if (!hadRun) return undefined;
-      // T3 answers the stop before the run ends, so the thread has stopped only once its run is over.
-      const { status } = await t3.wait(threadId, STOP_WAIT_MS);
+      if (settledStatus(waited) !== undefined) return undefined;
 
-      if (TERMINAL.has(status)) return undefined;
-      why = `T3 Code acknowledged the stop, but its run was still ${status} ${STOP_WAIT_MS / 1_000} s later`;
+      why = TERMINAL.has(waited.status)
+        ? `T3 Code stopped its run, but the work it delegated had not settled ${STOP_WAIT_MS / 1_000} s later`
+        : `T3 Code acknowledged the stop, but its run was still ${waited.status} ${STOP_WAIT_MS / 1_000} s later`;
     } catch (error) {
       why = error instanceof Error ? error.message : String(error);
     }
@@ -553,7 +565,10 @@ export function serve(options: ServeOptions): Promise<void> {
         if (state.stopping === stopping) delete state.stopping;
       }
 
-      if (!TERMINAL.has(waited.status)) {
+      // A run that ended while the work it delegated still goes has not ended the step.
+      const ended = settledStatus(waited);
+
+      if (ended === undefined || ended === 'idle') {
         // T3 keeps a run that asks for an approval running, with the request pending; nobody answers it unattended.
         if (s.mode === 'unattended' && (waited.status === 'waiting' || (await s.t3.thread(thread.threadId)).pendingRequestCount > 0)) {
           const why = await whyNotStopped(s.t3, thread.threadId);
@@ -570,7 +585,7 @@ export function serve(options: ServeOptions): Promise<void> {
         continue;
       }
 
-      if (waited.status !== 'completed') return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} ended ${waited.status} before the step was done.` } };
+      if (ended !== 'completed') return { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${where} ended ${ended} before the step was done.` } };
 
       // An interactive step ends once the person said it is done and the agent wrote the result; until then the
       // thread idles between their turns.

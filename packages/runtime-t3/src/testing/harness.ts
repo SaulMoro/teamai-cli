@@ -75,6 +75,13 @@ export interface FakeT3Config {
   organizeFails?: boolean;
   /** How long after T3 acknowledged a stop the thread's run ends, in ms; at once otherwise. */
   stopLagMs?: number;
+  /**
+   * Work the thread's run delegated is still going: a wait answers the run's own status with `timedOut: true` until
+   * this is cleared, as T3 does for a wait until delegated work settled.
+   */
+  delegatesPending?: boolean;
+  /** The status of the run that answered once delegated work settled, such as one a task's delivery started; the thread's own otherwise. */
+  resultRunStatus?: string;
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });
