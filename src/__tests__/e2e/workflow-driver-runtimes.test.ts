@@ -328,8 +328,8 @@ Judge the review.
 
     const ran = await runCLI(['workflow', 'start', 'policyperson', '--driver', driver], repo, env({ TEAMAI_MODE: 'unattended' }));
 
-    // Busy names the hold of the runtime offered last, which for the toy is the workspace it lacks.
-    expect(envelope(ran), ran.stderr).toEqual({ error: { code: 'busy', message: expect.stringMatching(/^step "review" needs (network|workspace new)/) } });
+    // Busy names what the member can change, the policy, whichever runtime was offered last.
+    expect(envelope(ran), ran.stderr).toEqual({ error: { code: 'busy', message: 'step "review" needs network, which workflows.allow in local config does not allow on this machine' } });
     expect(ran.code).toBe(1);
     expect(toyOpens()).toBe(0);
     expect(fs.existsSync(launches)).toBe(false);
