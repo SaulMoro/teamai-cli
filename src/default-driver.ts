@@ -4,12 +4,14 @@
  * warning, and the next level decides, as `workflows.retention` is. The order: `--driver`, this scope's config,
  * ~/.teamai/config.yaml, the team's teamai.yaml, then `local`. `workflow start` and `workflow resume` never read it:
  * without `--driver` they start a run unassigned, which a driver outside teamai relies on. `driveRun` in
- * workflow-drive.ts drives a run this machine drives; this module loads no driver, so the hooks can decide.
+ * workflow-drive.ts drives a run this machine drives; this module opens no driver, so the hooks can decide.
  */
 import { loadTeamConfig } from './config.js';
 import type { LocalConfig, TeamaiConfig } from './types.js';
 import { LOCAL_DRIVER, parseDriver, type Driver, type DriverName } from './workflow/driver-name.js';
 import { resolveKeptSetting, type KeptValue } from './workflow/kept-setting.js';
+import { resolveDriver } from './workflow/runtimes/definitions.js';
+import { acceptRuntime, locateRuntime } from './workflow/runtimes/sources.js';
 import type { RunState } from './workflow/types.js';
 
 /** What a start decides by default: drive the run here, leave it awaiting a driver this machine does not run, or leave it to any driver. */
@@ -35,9 +37,24 @@ export async function resolveDefaultDriver(config: LocalConfig, team: Pick<Teama
   return { driver, text: driver === 'local' || driver === 'none' ? driver : driver.external, file };
 }
 
-/** Whether this machine drives runs for driver `name`: only `local`, until driver definitions are resolved from `config`'s member and team. */
-export async function drivesHere(_config: LocalConfig, name: DriverName): Promise<boolean> {
-  return name === 'local';
+/**
+ * Whether this machine drives runs for driver `name`: `local`, or a driver definition `config`'s member, team or teamai
+ * gives, each of whose runtimes is installed here and, for a team runtime, accepted here. Nothing is asked: a run that
+ * a hook or a cron job starts has nobody to accept a runtime, so it waits for a person to resume it.
+ */
+export async function drivesHere(config: LocalConfig, name: DriverName): Promise<boolean> {
+  if (name === 'local') return true;
+  const resolved = await resolveDriver(config, name, { personal: true });
+
+  if (!resolved.ok) return false;
+
+  for (const { use } of resolved.driver.definition.runtimes) {
+    const located = await locateRuntime(resolved.driver, use);
+
+    if (!located.ok || !(await acceptRuntime(located.source, { mode: 'unattended', canAsk: false })).ok) return false;
+  }
+
+  return true;
 }
 
 /** What a start in `config`'s scope does without `--driver`, from `workflows.driver`. */

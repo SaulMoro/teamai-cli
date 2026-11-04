@@ -19,7 +19,7 @@ import { readableReportsWorktree } from './utils/reports-branch.js';
 import { callerProvenance, cancelRun, respondProvenance, respondToHitl, restartCommand, retriedRunsAgain, retryStep } from './workflow/run-controls.js';
 import { isIsolated, runCopyToMerge } from './workflow/workspace.js';
 import { localStrictCan, personAnswers, runLocalDriver, withDriverLock, type LocalDriverOptions } from './workflow/drivers/local/local-driver.js';
-import { driveRun, unsupportedDriver } from './workflow-drive.js';
+import { definedDrive, driveRun, unsupportedDriver } from './workflow-drive.js';
 import { awaitsLine, awaitsOf, leftOpenLine, type DefaultDrive } from './default-driver.js';
 import { LOCAL_DRIVER, parseDriver, type Driver } from './workflow/driver-name.js';
 import { disposeDriver, openDriver, type OpenedDriver } from './workflow/runtimes/sources.js';
@@ -586,7 +586,7 @@ async function startDriven(input: {
   const runId = startedRun.data;
   log.info(`Run ${runId} started. If it stops before it ends, continue it with: teamai workflow resume ${runId}`);
   const drive = { ...definedDrive(opened, tools), toolPaths, autoApprove: options.autoApprove, sandbox: options.sandbox };
-  const driven = await withPassScoring({ config, env }, RunIdSchema.parse(runId), drive, (scored) => driveRun(config, runId, LOCAL_DRIVER, { cwd: process.cwd(), options: scored }));
+  const driven = await withPassScoring({ config, env }, RunIdSchema.parse(runId), drive, (scored) => driveRun(config, runId, opened ? { kind: 'opened', opened } : { kind: 'named', name: LOCAL_DRIVER }, { cwd: process.cwd(), options: scored }));
   const answered = await shortcut.answer?.(config, runId, driven);
 
   if (answered) writeEnvelope(answered, secrets);
@@ -615,16 +615,6 @@ async function recordedDriver(config: LocalConfig, runId: RunId): Promise<string
 
 async function closeDriver(opened: OpenedDriver | undefined): Promise<void> {
   if (opened) await disposeDriver(opened);
-}
-
-/** What the local loop runs an opened definition with: its default tool under `--tools`, and its runtimes. */
-function definedDrive(opened: OpenedDriver | undefined, tools: Record<string, string>): Pick<LocalDriverOptions, 'tools' | 'runtimes'> {
-  const tool = opened?.driver.definition.tool;
-  const drive: Pick<LocalDriverOptions, 'tools' | 'runtimes'> = { tools: tool === undefined ? tools : { default: tool, ...tools } };
-
-  if (opened) drive.runtimes = { driver: opened.driver.name, runtimes: opened.runtimes };
-
-  return drive;
 }
 
 /**

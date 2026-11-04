@@ -311,6 +311,21 @@ Judge the review.
     expect(published).toMatch(/^scores\/[^/\n]+\/\d{4}-\d{2}\.jsonl$/m);
   });
 
+  it('judges the pass teamai score names on the definition workflows.driver names, when this machine runs it', async () => {
+    const ran = await runCLI(['workflow', 'start', 'scoredpass', '--driver', 'claude'], repo, env());
+    const runId = runOf(ran);
+    writeDefinition('toyscore', [{ use: 'toy', options: { state, judge: { reply: { answer: { label: 'missed', reasoning: 'read it' } } } } }]);
+    setMemberWorkflows({ driver: 'toyscore' });
+
+    const scored = await runCLI(['score', '--run', runId, '--step', 'review', '--scorer', 'quality'], repo, env());
+
+    expect(envelope(scored), scored.stderr).toMatchObject({ data: { label: { scorer: 'quality', label: 'missed' } } });
+    expect(scored.stderr).not.toContain('waits for driver');
+    const scoreRun = String((envelope(scored) as { data: { run: string } }).data.run);
+    const judge = readRunState(scoreRun).steps.find((step) => step.id.endsWith('.judge'));
+    expect(runtimeRecord(scoreRun, attemptOf(judge))).toMatchObject({ runtime: 'toy', driver: 'toyscore' });
+  });
+
   it('refuses an agent\'s start that invoke denies before it opens any runtime of the definition', async () => {
     writeDefinition('toyonly', [{ use: 'toy', options: { state } }]);
 

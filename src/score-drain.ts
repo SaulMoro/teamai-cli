@@ -273,7 +273,7 @@ async function finishSessions(config: LocalConfig, mode: RunMode): Promise<Finis
   }
 
   const team = await loadTeamConfig(config.repo.localPath);
-  const driven = await driveRun(config, started.run, decided.driver, { cwd: started.cwd, options: { toolPaths: team?.toolPaths } });
+  const driven = await driveRun(config, started.run, { kind: 'named', name: decided.driver }, { cwd: started.cwd, options: { toolPaths: team?.toolPaths } });
   const ran = await readRun(config, started.run);
 
   if (ran === 'missing' || ran === 'corrupt') finished.broke.push(`Run ${started.run} of ${FINISHED_WORKFLOW} could not be read after it was driven (${ran}).`);
