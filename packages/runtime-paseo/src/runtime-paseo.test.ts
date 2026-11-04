@@ -670,6 +670,58 @@ describe('teamai-runtime-paseo', () => {
     expect(stopped()).toEqual([{ agentId: agent, status: 'closed' }]);
   }, 30_000);
 
+  it('answers a place from its journal after a restart that cannot reach the daemon, and refuses to close it until it can', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true } });
+    const first = start();
+    await ready(first);
+    const handle = await opened(first);
+    first.send(promptRequest(handle, 'op-0000000b'));
+    await first.next(isOp('op-0000000b', 'accepted'));
+    await first.kill();
+    const { url } = daemon;
+    await daemon.close();
+    const isAnswer = (events: string[]) => (line: RuntimeMessage): boolean => 'event' in line && [...events, 'error'].includes(line.event);
+
+    const restarted = start();
+    expect(await ready(restarted, { options: { url } })).toMatchObject({ ok: false, error: { code: 'daemon_unreachable' } });
+    restarted.send({ type: 'reattach', handle });
+    expect(await restarted.next(isAnswer(['alive', 'gone']))).toEqual({ event: 'alive', handle, ops: [{ op: 'op-0000000b', state: 'running' }] });
+    restarted.send({ type: 'collect', handle });
+    expect(await restarted.next(isAnswer(['collected', 'collect_failed']))).toEqual({ event: 'collected', handle });
+    restarted.send({ type: 'close', handle });
+    expect(await restarted.next(isAnswer(['closed', 'close_failed']))).toEqual({
+      event: 'close_failed', handle,
+      failure: { code: 'daemon_unreachable', message: `teamai-runtime-paseo reaches no Paseo daemon, so it cannot stop the agents of ${handle} or archive its workspace. Start the daemon with \`paseo start\`, then close the attempt again.` },
+    });
+    restarted.send({ type: 'reattach', handle });
+    expect(await restarted.next(isAnswer(['alive', 'gone']))).toMatchObject({ event: 'alive', handle });
+
+    // The daemon is back, and has closed the agent it ran, as Paseo does on a restart: a runtime that reaches it archives
+    // the workspace and closes.
+    daemon = await startFakeDaemon({ state: daemonState, port: Number(new URL(url).port) });
+    const back = start();
+    await ready(back);
+    back.send({ type: 'close', handle });
+    expect(await back.next(isAnswer(['closed', 'close_failed']))).toEqual({ event: 'closed', handle });
+    expect(received().filter((request) => request.type === 'archive_workspace_request')).toMatchObject([{ workspaceId: handle.split('/')[0] }]);
+  }, 40_000);
+
+  it('refuses to close a place whose record it cannot read, and never calls it gone', async () => {
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    const record = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'places', `${encodeURIComponent(handle)}.json`);
+    fs.writeFileSync(record, '{"kind":');
+    const isAnswer = (events: string[]) => (line: RuntimeMessage): boolean => 'event' in line && [...events, 'error'].includes(line.event);
+
+    runtime.send({ type: 'close', handle });
+
+    expect(await runtime.next(isAnswer(['closed', 'close_failed']))).toMatchObject({ event: 'close_failed', handle, failure: { code: 'paseo_failed' } });
+    expect(fs.readFileSync(record, 'utf8')).toBe('{"kind":');
+    runtime.send({ type: 'reattach', handle });
+    expect(await runtime.next(isAnswer(['alive', 'gone']))).toMatchObject({ event: 'error' });
+  });
+
   it.each([
     ['an option it does not take', { url: 'ws://127.0.0.1:1/ws', imgae: 'x' }, {}, { code: 'bad_option', key: 'imgae' }],
     ['no daemon at the url', { url: 'ws://127.0.0.1:1/ws' }, {}, { code: 'daemon_unreachable' }],
