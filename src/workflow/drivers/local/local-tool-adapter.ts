@@ -123,6 +123,16 @@ function unattendedArgs(tool: LaunchTool): readonly string[] | 'none' {
   return unattended === 'none' ? 'none' : unattended.args;
 }
 
+/**
+ * An absolute path as a Claude permission rule matches it, after the `/` that marks a rule absolute: as it is, and on
+ * Windows in the POSIX form Claude matches, so `C:\a\b` is `/c/a/b`.
+ */
+function claudeRulePath(file: string): string {
+  if (process.platform !== 'win32') return file;
+
+  return file.replace(/^([A-Za-z]):/, (_, drive: string) => `/${drive.toLowerCase()}`).replaceAll('\\', '/');
+}
+
 /** The argv that launches `tool` for one step: the prompt with its result instruction, then the flags the step's lease sets. */
 export function invocation(tool: LaunchTool, input: LocalToolRun, opencodeMajor: number, interactive: boolean): string[] {
   const family = launchAdapterIdOf(tool);
@@ -138,11 +148,16 @@ export function invocation(tool: LaunchTool, input: LocalToolRun, opencodeMajor:
   const turns = input.maxTurns !== undefined ? ['--max-turns', String(input.maxTurns)] : [];
 
   switch (family) {
-    case 'claude':
-      if (interactive) return [...unattended, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume, prompt];
+    case 'claude': {
+      // Claude's default mode asks before any write, so the result file, and only it, is allowed: the mode stays as it is.
+      const result = `--allowedTools=Edit(/${claudeRulePath(input.resultPath)})`;
+
+      if (interactive) return [...unattended, result, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume, prompt];
 
       // Only partial messages state each message's final usage as it ends, which the budget meter counts.
-      return ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...(input.budget !== undefined ? ['--include-partial-messages'] : []), ...unattended, ...turns, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume];
+      return ['-p', prompt, '--output-format', 'stream-json', '--verbose', ...(input.budget !== undefined ? ['--include-partial-messages'] : []), ...unattended, result, ...turns, ...agent, ...model, ...(effort ? ['--effort', effort] : []), ...resume];
+    }
+
     case 'codebuddy':
       // Claude's flags, with no --effort.
       if (interactive) return [...unattended, ...agent, ...model, ...resume, prompt];
