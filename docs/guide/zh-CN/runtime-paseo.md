@@ -398,6 +398,12 @@ Paseo did not cancel the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f: Agen
 
 运行时在步骤中途被杀掉就无法归档；步骤以 `runtime_lost` 失败，它的工作区会留在 Paseo 里，直到你归档它（`paseo workspace archive <id>`）。
 
+守护进程停着时重新启动的运行时，仍会按它记录的内容回答这次尝试，但在连上守护进程之前拒绝关闭它：
+
+```text
+teamai-runtime-paseo reaches no Paseo daemon, so it cannot stop the agents of wks_6fb33a5b94531f79/a04485788 or archive its workspace. Start the daemon with `paseo start`, then close the attempt again.
+```
+
 ## 启动时的错误
 
 | 代码 | 何时出现 |

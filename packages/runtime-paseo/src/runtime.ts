@@ -740,44 +740,53 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
   };
 
   /**
-   * Ends an attempt's place once its agents stopped, a failed prompt's included, since a failed cancel leaves its agent
-   * running. The last attempt on a Paseo workspace archives it, which stops what still runs there; an attempt that shares
-   * it stops only its own agents. A place whose agent may still run is kept, so teamai can close it again.
+   * Stops what an attempt's place runs, its failed prompts' agents included, since a failed cancel leaves its agent
+   * running, or says why something may still run. The last attempt on a Paseo workspace archives it, which stops what
+   * still runs there; an attempt that shares it stops only its own agents.
    */
-  async function closePlace(live: Daemon, handle: string): Promise<void> {
-    const place = journal.place(handle);
+  async function stopPlace(live: Daemon, handle: string, place: Place): Promise<RuntimeFailure | undefined> {
+    // A confined prompt's place before its prompt came: no workspace, so no agent.
+    if (!place.workspace) return undefined;
     const agents = journal.promptsOf(handle).flatMap(({ record }) => (record.kind === 'agent' ? [record] : []));
 
-    if (place?.workspace && !journal.handlesIn(place.workspace.id).every((other) => other === handle)) {
+    if (!journal.handlesIn(place.workspace.id).every((other) => other === handle)) {
       const refusals = (await Promise.all(agents.map((record) => stopAgent(live, record)))).flatMap((failure) => (failure ? [failure.message] : []));
 
-      if (refusals.length > 0) {
-        write({ event: 'close_failed', handle, failure: { code: 'close_failed', message: refusals.join(' ') } });
+      return refusals.length > 0 ? { code: 'close_failed', message: refusals.join(' ') } : undefined;
+    }
 
-        return;
-      }
-    } else if (place?.workspace) {
-      try {
-        await live.archive(place.workspace.id);
-      } catch (error) {
-        write({
-          event: 'close_failed', handle,
-          failure: { code: 'close_failed', message: `Paseo did not archive workspace ${place.workspace.name} (${place.workspace.id}): ${error instanceof Error ? error.message : String(error)}. Its agents may still run; archive it in the Paseo app.` },
-        });
+    try {
+      await live.archive(place.workspace.id);
+    } catch (error) {
+      return { code: 'close_failed', message: `Paseo did not archive workspace ${place.workspace.name} (${place.workspace.id}): ${error instanceof Error ? error.message : String(error)}. Its agents may still run; archive it in the Paseo app.` };
+    }
 
-        return;
-      }
+    const running = (await Promise.all(agents.map(async ({ create: { agentId } }) => ((await isStillRunning(live, agentId)) ? [agentId] : [])))).flat();
 
-      const running = (await Promise.all(agents.map(async ({ create: { agentId } }) => ((await isStillRunning(live, agentId)) ? [agentId] : [])))).flat();
+    if (running.length === 0) return undefined;
 
-      if (running.length > 0) {
-        write({
-          event: 'close_failed', handle,
-          failure: { code: 'close_failed', message: `Paseo archived workspace ${place.workspace.name} (${place.workspace.id}), but agent ${running.join(', ')} still ran ${STOP_SETTLE_MS / 1000} s later. It may still change the worktree; stop it in the Paseo app.` },
-        });
+    return {
+      code: 'close_failed',
+      message: `Paseo archived workspace ${place.workspace.name} (${place.workspace.id}), but agent ${running.join(', ')} still ran ${STOP_SETTLE_MS / 1000} s later. It may still change the worktree; stop it in the Paseo app.`,
+    };
+  }
 
-        return;
-      }
+  /**
+   * Ends an attempt's place once nothing it started runs. A place whose agent may still run is kept, so teamai can close
+   * it again: one the runtime cannot stop, or any place while it reaches no daemon, as after a restart whose init failed.
+   */
+  async function closePlace(live: Daemon | undefined, handle: string): Promise<void> {
+    const place = journal.place(handle);
+
+    const failure = place && (live ? await stopPlace(live, handle, place) : {
+      code: 'daemon_unreachable',
+      message: `teamai-runtime-paseo reaches no Paseo daemon, so it cannot stop the agents of ${handle} or archive its workspace. Start the daemon with \`paseo start\`, then close the attempt again.`,
+    });
+
+    if (failure) {
+      write({ event: 'close_failed', handle, failure });
+
+      return;
     }
 
     journal.forget(handle);
@@ -792,6 +801,37 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     }
 
     const live = daemon;
+
+    // What teamai asks of a place is answered without the daemon too: a restarted runtime whose init could not reach it
+    // still gets the cancel sequence's reattach, collect and close.
+    switch (request.type) {
+      case 'collect':
+        // The worktree and the result directory already sit on this host, and the transcript stays in the tool's home.
+        write({ event: 'collected', handle: request.handle });
+
+        return;
+      case 'reattach': {
+        // From the journal alone: gone only when it records no place, and a record it cannot read throws, never gone.
+        if (!journal.place(request.handle)) {
+          write({ event: 'gone', handle: request.handle });
+
+          return;
+        }
+
+        const ops = journal.promptsOf(request.handle).map(({ op, record }): OpState => record.outcome ?? { op, state: 'running' });
+        const display = live && displayOf(request.handle, live);
+        write({ event: 'alive', handle: request.handle, ops, ...(display && { display }) });
+
+        return;
+      }
+
+      case 'close':
+        await closePlace(live, request.handle);
+
+        return;
+      default:
+        break;
+    }
 
     if (!live) {
       write({ event: 'error', message: `teamai-runtime-paseo got ${request.type} before a successful init` });
@@ -814,29 +854,6 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
         return;
       case 'cancel':
         await cancel(live, request.op);
-
-        return;
-      case 'collect':
-        // The worktree and the result directory already sit on this host, and the transcript stays in the tool's home.
-        write({ event: 'collected', handle: request.handle });
-
-        return;
-      case 'reattach': {
-        if (!journal.place(request.handle)) {
-          write({ event: 'gone', handle: request.handle });
-
-          return;
-        }
-
-        const ops = journal.promptsOf(request.handle).map(({ op, record }): OpState => record.outcome ?? { op, state: 'running' });
-        const display = displayOf(request.handle, live);
-        write({ event: 'alive', handle: request.handle, ops, ...(display && { display }) });
-
-        return;
-      }
-
-      case 'close':
-        await closePlace(live, request.handle);
 
         return;
       default: {
@@ -865,7 +882,9 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       } catch (error) {
         const message = `Paseo failed: ${error instanceof Error ? error.message : String(error)}`;
 
+        // A close that failed keeps its place. The protocol has no failed reattach, so that one gets an error line.
         if ('op' in request) fail(request.op, { code: 'paseo_failed', message });
+        else if (request.type === 'close') write({ event: 'close_failed', handle: request.handle, failure: { code: 'paseo_failed', message } });
         else write({ event: 'error', message });
       }
     })();
