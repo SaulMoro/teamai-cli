@@ -26,7 +26,7 @@ function bundled(entry: string, name: string): string {
 
   for (const file of [PACKAGE, ...BUNDLED].flatMap(sources).sort()) hash.update(fs.readFileSync(file));
   hash.update(fs.readFileSync(path.join(ROOT, 'package-lock.json')));
-  const file = path.join(os.tmpdir(), `teamai-paseo-runtime-${hash.digest('hex').slice(0, 16)}`, name);
+  const file = path.join(os.tmpdir(), `teamai-paseo-e2e-runtime-${hash.digest('hex').slice(0, 16)}`, name);
 
   if (fs.existsSync(file)) return file;
   fs.mkdirSync(path.dirname(file), { recursive: true });
