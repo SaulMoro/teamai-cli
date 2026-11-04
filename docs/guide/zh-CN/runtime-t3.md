@@ -247,6 +247,7 @@ teamai workflow cancel r70d31098c8884803
 | `… ended without writing the result file …` | agent 结束了，但没有写结果。 | 用消息里的链接打开线程，然后运行 `teamai workflow retry <run> <step>`。 |
 | 运行详情里的 `Not closed: thread_still_runs …` | teamai 关闭步骤的位置时，它的线程或它委派的工作仍在运行，而 T3 没有停止它。 | 用链接打开线程，用它的 Stop 按钮停止它。 |
 | `Not closed: t3_unavailable: teamai launched the T3 thread "review · teamai r70d…" and T3 Code never answered …` | 某个步骤的启动请求没有得到回复，而且无法连接 T3 Code 来查找那个线程。 | 打开 T3 Code，然后再次运行 `teamai workflow cancel <run>`。 |
+| `… journal_unreadable: Runtime t3 cannot read its record of t3-r70d…, ~/.teamai/runtime-state/t3/places/….json …` | teamai 记录步骤线程的文件已损坏，所以它不知道该停止哪些线程，并保留这个位置。 | 在 T3 Code 里停止这次运行的线程，删除消息里提到的文件，然后再次运行 `teamai workflow cancel <run>`。 |
 | `… kept no session for …` | 工具没有为这个 worktree 保存会话记录，所以步骤无法评分。 | 检查实例是否使用工具的默认目录（`~/.claude`、`~/.codex`）。 |
 
 ## 目前还不支持
