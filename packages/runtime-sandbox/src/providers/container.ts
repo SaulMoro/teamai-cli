@@ -227,7 +227,11 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
     },
 
     async stop(id) {
-      await cli(['restart', '--time', STOP_GRACE, id]);
+      const restarted = await cli(['restart', '--time', STOP_GRACE, id]);
+
+      if (restarted.kind === 'ran' && restarted.code === 0) return { ok: true };
+
+      return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not stop the processes in container ${id}: ${lastLine(restarted)}. They may still run; remove the container with \`${engine} rm --force ${id}\`.` } };
     },
 
     async destroy(id) {

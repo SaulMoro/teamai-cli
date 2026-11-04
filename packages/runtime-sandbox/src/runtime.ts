@@ -404,11 +404,21 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
 
     // A judge's container is removed, so an exec still on its way to the engine has nothing to start in; a step's
     // restarts, ready for the step's next exec.
-    if (id !== undefined && place?.confined) await provider.destroy(id);
-    else if (id !== undefined) await provider.stop(id);
+    const stopped = id === undefined ? { ok: true as const } : place?.confined ? await provider.destroy(id) : await provider.stop(id);
 
-    // An exec whose runtime process is gone ends here: no process of this runtime reports it.
-    if (!running.has(op) && !alive(record.runner)) write(terminal(op, settleOrphan({ op, ...record })));
+    // An exec whose runtime process is gone ends here: no process of this runtime reports it. It is cancelled only
+    // once the engine stopped it; one the engine could not stop may still run, and ends failed with why.
+    if (running.has(op) || alive(record.runner)) return;
+
+    if (!stopped.ok) {
+      const outcome: Outcome = { state: 'failed', failure: stopped.failure };
+      journal.saveExec(op, { handle: record.handle, runner: record.runner, outcome });
+      write(terminal(op, outcome));
+
+      return;
+    }
+
+    write(terminal(op, settleOrphan({ op, ...record })));
   };
 
   const reattach = async (handle: string, provider: Provider): Promise<void> => {
