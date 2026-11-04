@@ -213,6 +213,17 @@ Judge the review.
     expect(fs.existsSync(launches)).toBe(false);
   });
 
+  it('runs a prompt step with setup on local when the runtime that runs commands runs no setup', async () => {
+    writeDefinition('toynosetup', [{ use: 'toy', options: { state, can: { setup: false } } }, { use: 'local' }]);
+
+    const ran = await runCLI(['workflow', 'start', 'setupflow', '--driver', 'toynosetup'], repo, env());
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    expect(readRunState(runOf(ran)).steps).toMatchObject([{ id: 'review', status: 'succeeded' }]);
+    expect(toyOpens()).toBe(0);
+    expect(fs.readFileSync(launches, 'utf8').trim().split('\n')).toHaveLength(1);
+  });
+
   it('fails a step whose requirements no single runtime meets, naming each runtime and what it lacks', async () => {
     // The toy is a sandbox with no tool; local has the tool and no sandbox.
     writeDefinition('splitd', [{ use: 'toy', options: { state, can: { isolation: 'sandbox', tools: [] } } }, { use: 'local' }]);
