@@ -188,7 +188,9 @@ export const ConfinedOfferSchema = z.object({
  * - `setup`: in each workspace it creates, the driver runs `lease.setup` before the step with only setup's keys, and
  *   fails the step without running it when setup exits non-zero (`setup_failed`), changes a tracked or non-ignored path
  *   (`setup_dirty`), or leaves a value of one of its keys in a file it created or changed (`setup_secret`).
- * - `tools`: the tools the driver launches a prompt step on that names its `tool`. Omitted: no such step.
+ * - `tools`: the tools the driver launches a prompt step on that names its `tool`. A runtime of a driver definition is
+ *   also held from a step that names none when it leaves out the tool teamai picks for it, such as the definition's
+ *   `tool`. Omitted: no such step.
  * - `end_turn`: the driver holds a prompt leased with `limits` to them from its tool's launch, stops the tool at the
  *   first it reaches and reports it as `limit`, with `durationMs`. Without it, such a prompt gets the `on_limit: fail`
  *   lease, and its pass records `on_limit` as not enforced.

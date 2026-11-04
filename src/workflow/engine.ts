@@ -37,7 +37,7 @@ import { allowanceInUse, budgetSpent, countLateTokens, expire, itemsSpent, lease
 import { addItems, afterStanding, expandItems, isItem, itemsAfter, itemsOf, itemsSettled, startedItems } from './fan-out.js';
 import { decideRound, decideStepLoop, exhaustedAtStart, firstPass, isUnder, loopSettled } from './loop.js';
 import { childScope, contextOf, finallyScope, insertChildren, localId, statesIn, stepDefinitions, topScope, type Scope } from './scope.js';
-import { contractClone, deliverableOf, deliveryTarget, isIsolated, isPublishContract, planWorkspace, plannedBranch, sessionOf, stepRoleOf, workLeftUndelivered, type LeaseSession, type SessionRef, type WorkspaceContract, type WorkspacePlan } from './workspace.js';
+import { confinedOf, contractClone, deliverableOf, deliveryTarget, isIsolated, isPublishContract, planWorkspace, plannedBranch, sessionOf, stepRoleOf, workLeftUndelivered, type LeaseSession, type SessionRef, type WorkspaceContract, type WorkspacePlan } from './workspace.js';
 import {
   deliverPr, deliveryFailure, findDelivered, reportedPrMismatch, type DeliveryJob,
 } from './pr-delivery.js';
@@ -1528,6 +1528,20 @@ interface OfferContext {
   prepare: boolean;
   /** The env keys any step of the run requires, read once per request rather than once per offered step. */
   runEnvKeys: Set<string>;
+  toolFor?: ToolFor;
+}
+
+/** How a driver picks the tool of a prompt step that names none, as it would launch it. */
+export type ToolFor = (step: Pick<WorkflowStep, 'agent' | 'tool'>) => string | undefined;
+
+/**
+ * The tool `step` runs on, which a runtime's `can.tools` must list: the one it names, else the one `toolFor` picks for a
+ * prompt step. A confined step takes its tools from `can.confined` instead, and a command step runs none.
+ */
+export function promptTool(step: WorkflowStep, toolFor: ToolFor | undefined): string | undefined {
+  if (step.tool !== undefined || step.prompt === undefined || confinedOf(step) !== undefined) return step.tool;
+
+  return toolFor?.(step);
 }
 
 /** Terms a driver was granted, with the team role the lease carries: absent without one. */
@@ -1578,7 +1592,7 @@ function offerTerms(
     maxTurns: step.maxTurns,
     endTurn,
     setup: plan?.contract && plan.contract.mode !== 'team' ? scope.setup : undefined,
-    tool: step.tool,
+    tool: promptTool(step, context.toolFor),
     unattended: step.permissions === 'unattended',
     clone: contractClone(plan?.contract) !== undefined,
     prepare: context.prepare,
@@ -1734,7 +1748,7 @@ function lackedKey(key: Missing): string {
   return key === 'commands' ? 'commands (another runtime of the definition runs them)' : key;
 }
 
-/** Why a step that names `tool` fails in a run whose only driver cannot launch it. */
+/** Why a step that runs on `tool` fails in a run whose only driver cannot launch it. */
 function toolUnavailable(step: string, tool: string): WorkflowFailure {
   return { code: 'tool_unavailable', message: `Step "${step}" runs on ${tool}, which the driver of this run cannot launch here. Install ${tool} where the run is driven, or remove tool from the step.` };
 }
@@ -1789,6 +1803,11 @@ export interface NextOptions {
    * over runtimes). For any other driver it stays pending.
    */
   alone?: SoleDriver;
+  /**
+   * Process-only: the tool the driver launches a prompt step on that names none, so a runtime whose `can.tools` leaves it
+   * out is held from the step, as for a step that names its tool. Without it, only a named tool is checked.
+   */
+  toolFor?: ToolFor;
 }
 
 /**
@@ -1943,7 +1962,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
 
     const context: OfferContext = {
       // The HITL of a driver nobody attends is its agent's, which works in no interactive step: only a person does.
-      can: can.hitl === true && options.handoff !== undefined ? { ...can, hitl: false } : can, allow: config.workflows?.allow ?? {}, facts: env.facts, prepare: options.prepare === true,
+      can: can.hitl === true && options.handoff !== undefined ? { ...can, hitl: false } : can, allow: config.workflows?.allow ?? {}, facts: env.facts, prepare: options.prepare === true, toolFor: options.toolFor,
       // Admitted workflows too: their own steps' keys are withheld from the steps that do not require them.
       runEnvKeys: requiredEnvKeys([run.definition, ...Object.values(run.workflows ?? {}), ...Object.values(run.admitted ?? {}).map(({ definition }) => definition)]),
     };
@@ -2130,7 +2149,7 @@ export async function leaseNext(config: LocalConfig, runId: string, driver: Driv
               return judged.kind === 'hold' ? judged.missing : judged.kind === 'grant' ? [] : undefined;
             };
 
-            const beyond = beyondSoleDriver(options.alone, { step: state.id, tool: definition.tool, missing: terms.missing, missingOn });
+            const beyond = beyondSoleDriver(options.alone, { step: state.id, tool: promptTool(definition, context.toolFor), missing: terms.missing, missingOn });
 
             if (beyond) {
               failStep(state, beyond, run.revision);

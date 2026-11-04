@@ -205,6 +205,30 @@ Judge the review.
     expect(launched).toEqual([expect.objectContaining({ home: path.join(os.homedir(), '.claude') })]);
   });
 
+  it('runs a prompt step that takes the definition\'s tool on the next runtime when the first does not offer that tool', async () => {
+    writeDefinition('toynotool', [{ use: 'toy', options: { state, can: { tools: [] } } }, { use: 'local' }]);
+
+    const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toynotool'], repo, env());
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+    const [review] = readRunState(runOf(ran)).steps;
+    expect(review).toMatchObject({ id: 'review', status: 'succeeded' });
+    expect(runtimeRecord(runOf(ran), attemptOf(review))).toBeUndefined();
+    expect(toyOpens()).toBe(0);
+  });
+
+  it('fails a prompt step that takes the definition\'s tool when no runtime offers that tool', async () => {
+    writeDefinition('toyonlynotool', [{ use: 'toy', options: { state, can: { tools: [] } } }]);
+
+    const ran = await runCLI(['workflow', 'start', 'oneprompt', '--driver', 'toyonlynotool'], repo, env());
+
+    expect(envelope(ran), ran.stderr).toMatchObject({ data: { done: { outcome: 'failed' } } });
+    expect(readRunState(runOf(ran)).steps).toMatchObject([{ id: 'review', status: 'failed', failure: {
+      code: 'tool_unavailable', message: 'Step "review" runs on claude, which the driver of this run cannot launch here. Install claude where the run is driven, or remove tool from the step.',
+    } }]);
+    expect(toyOpens()).toBe(0);
+  });
+
   it('never runs a command step on the host while a runtime of the definition runs commands, even one that cannot take it', async () => {
     // The toy runs commands in read-only places only, and the command needs a new worktree, which local would make.
     writeDefinition('toyreadonly', [{ use: 'toy', options: { state, can: { workspace: ['read-only'] } } }, { use: 'local' }]);
