@@ -585,14 +585,20 @@ describe('teamai-runtime-paseo', () => {
       expect(received()).toMatchObject([{ config: { provider: 'opencode', modeId: 'plan', cwd: evidence } }]);
     });
 
-    it('runs a Codex judge in Paseo\'s read-only preset, since each mode Paseo lists for Codex writes without asking', async () => {
+    it('runs a Codex judge in its auto mode with a read-only sandbox, since each mode Paseo lists for Codex writes without asking', async () => {
       behave({ reply: '{"label": "pass"}', codex_login: 'signed_in' });
       const runtime = start();
       await ready(runtime);
       runtime.send(confinedRequest(await openedConfined(runtime), 'op-0000000b', {}, { tool: 'codex', model: undefined }));
 
       expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', session: { tool: 'codex' }, result: { output: { label: 'pass' } }, confined: { level: 'best-effort', access: 'read' } });
-      expect(received()).toMatchObject([{ config: { provider: 'codex', modeId: 'read-only', cwd: evidence } }]);
+      // `auto` asks before anything its sandbox does not allow, which ends the prompt; the sandbox reads and writes nothing.
+      expect(received()).toMatchObject([{ config: { provider: 'codex', modeId: 'auto', cwd: evidence, providerOptions: { sandbox_mode: 'read-only' } } }]);
+      // Codex has no file tools of its own: it reads with shell commands, which its sandbox runs without asking.
+      const prompt = String(received()[0]?.initialPrompt);
+      expect(prompt).toContain(`Answer from the files in ${evidence} alone. List and read them with read-only shell commands, such as ls, cat and rg, which your sandbox runs without asking.`);
+      expect(prompt).toContain('Change no file and use no other tool: asking for a permission ends this run.');
+      expect(prompt).not.toContain('Glob');
     });
 
     it.each([
