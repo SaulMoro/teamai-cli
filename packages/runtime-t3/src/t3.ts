@@ -132,8 +132,11 @@ export interface T3 {
   lastReply(threadId: string): Promise<string | undefined>;
   /** Waits up to `timeoutMs` for the thread's latest run, and the work it delegated, to settle. */
   wait(threadId: string, timeoutMs: number): Promise<Waited>;
-  /** Stops the thread as its Stop button does: its running turn and every task it delegated. */
-  stop(threadId: string): Promise<void>;
+  /**
+   * Asks T3 to stop the thread as its Stop button does: its running turn and every task it delegated. T3 answers once
+   * it has asked the provider, before the run ends; `hadRun` is false when the thread had no run to stop.
+   */
+  stop(threadId: string): Promise<{ hadRun: boolean }>;
   /** Moves the thread out of the person's active threads, to T3's Settled group, where its link still opens it. */
   settle(threadId: string): Promise<void>;
   close(): Promise<void>;
@@ -231,7 +234,11 @@ function t3Over(client: Client): T3 {
       return text;
     },
     wait: (threadId, timeoutMs) => call('t3_thread_wait', { threadId, timeoutMs, untilDelegatedWorkSettled: true }, WaitedSchema, timeoutMs + 30_000),
-    stop: async (threadId) => { await call('t3_thread_interrupt', { threadId, stop: true, reason: 'teamai cancelled the workflow step' }, z.object({ threadId: z.string() })); },
+    stop: async (threadId) => {
+      const { status } = await call('t3_thread_interrupt', { threadId, stop: true, reason: 'teamai cancelled the workflow step' }, z.object({ threadId: z.string(), status: z.string().optional() }));
+
+      return { hadRun: status !== 'no_active_run' };
+    },
     settle: async (threadId) => { await call('t3_thread_organize', { threadId, action: 'settle' }, z.object({}).loose()); },
     close: () => client.close(),
   };

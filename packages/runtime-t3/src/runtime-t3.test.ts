@@ -338,6 +338,7 @@ describe('teamai-runtime-t3', () => {
       await second.next((line) => line['type'] === 'init');
       second.send({ type: 'cancel', op: 'op-00000036' });
       expect(await second.next((line) => line['op'] === 'op-00000036')).toEqual({ op: 'op-00000036', event: 'cancelled' });
+      expect(t3.threads()[0]?.status).toBe('interrupted');
       second.send({ type: 'collect', handle: first.handle });
 
       expect(await second.next((line) => line['event'] === 'collected')).toEqual({ event: 'collected', handle: first.handle });
@@ -474,18 +475,35 @@ describe('teamai-runtime-t3', () => {
       expect(await ended(runtime, 'op-00000012')).toMatchObject({ event: 'failed', failure: { code: 'tool_failed', message: expect.stringContaining('claude kept no session for') } });
     });
 
-    it('stops the thread on cancel and ends cancelled', async () => {
+    it('stops the thread on cancel and ends cancelled once its run has ended', async () => {
       t3.config({ agent: { hold: true, output: {} } });
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-00000013'));
       await runtime.next((line) => line['op'] === 'op-00000013' && line['event'] === 'accepted');
       await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+      t3.config({ stopLagMs: 1_000 });
 
       runtime.send({ type: 'cancel', op: 'op-00000013' });
 
       expect(await ended(runtime, 'op-00000013')).toEqual({ op: 'op-00000013', event: 'cancelled' });
       expect(t3.calls().find((call) => call.tool === 't3_thread_interrupt')?.args).toMatchObject({ stop: true });
       expect(t3.threads()[0]?.status).toBe('interrupted');
+    });
+
+    it('answers close_failed, keeping the place, when T3 acknowledges the stop but the thread\'s run does not end', async () => {
+      t3.config({ agent: { hold: true, output: {} }, waitCapMs: 50 });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-00000038'));
+      await runtime.next((line) => line['op'] === 'op-00000038' && line['event'] === 'accepted');
+      await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+      t3.config({ stopLagMs: 60_000 });
+
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => line['handle'] === handle && line['event'] !== 'accepted')).toMatchObject({
+        event: 'close_failed', handle, failure: { code: 'thread_still_runs', message: expect.stringContaining('T3 Code acknowledged the stop, but its run was still running') },
+      });
+      expect(t3.threads()[0]).toMatchObject({ status: 'running', settled: false });
     });
 
     it('refuses a prompt that carries credentials, since the thread runs on T3 Code\'s own sign-in, and launches nothing', async () => {
@@ -504,12 +522,14 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()).toEqual([]);
     });
 
-    it('stops a thread still running when teamai closes its place, settles it, then answers closed', async () => {
+    // T3 acknowledges a stop before the run ends, so close waits for the run's end before it settles the thread.
+    it('stops a thread still running when teamai closes its place, settles it once its run ends, then answers closed', async () => {
       t3.config({ agent: { hold: true, output: {} } });
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-0000001f'));
       await runtime.next((line) => line['op'] === 'op-0000001f' && line['event'] === 'accepted');
       await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+      t3.config({ stopLagMs: 1_000 });
 
       runtime.send({ type: 'close', handle });
 
