@@ -875,6 +875,17 @@ Judge the review.
     for (const tool of ['codex', 'opencode']) fs.rmSync(path.join(bin, tool));
   });
 
+  it('resolves the shipped teamai-paseo by either name, and starts the Paseo runtime teamai ships', async () => {
+    // No Paseo client, so the shipped runtime stops at init before it looks for any daemon.
+    const missing = path.join(sandbox, 'no-paseo-client');
+
+    for (const name of ['paseo', 'teamai-paseo']) {
+      const ran = envelope(await runCLI(['workflow', 'start', 'oneprompt', '--driver', name], repo, env({ PASEO_CLIENT_PATH: missing })));
+
+      expect(ran).toMatchObject({ error: { code: 'runtime_failed', message: expect.stringMatching(/^Runtime "paseo" of driver "teamai-paseo" did not start \(client_missing\)/) } });
+    }
+  });
+
   it('gives two parallel attempts of one run their own tool homes, and finds both transcripts once both are collected', async () => {
     writeDefinition('toyonly', [{ use: 'toy', options: { state } }]);
     setMemberWorkflows({ max_parallel: 2 });
