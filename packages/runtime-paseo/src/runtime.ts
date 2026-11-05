@@ -848,8 +848,8 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
         creation = await live.create(record.cwd, create);
       }
 
-      // Only a create never sent proves no agent started.
-      if (creation.outcome === 'unsent') {
+      // Only a create never sent, by this process or an earlier one, proves no agent started.
+      if (creation.outcome === 'unsent' && record.dispatched === undefined) {
         dispatch(op, undefined);
         settle(op, { op, state: 'failed', failure: { code: 'agent_create_failed', message: `Paseo could not create the ${record.tool} agent: ${creation.cause}` } }, following);
 
