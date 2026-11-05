@@ -1,7 +1,7 @@
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import { redact, redactJson } from '@teamai/shared/redact';
-import { PromptResultSchema, RuntimeRequestSchema, type Can, type ExecRequestSchema, type InitCredentials, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type RuntimeFailure, type RuntimeMessage, type RuntimeOptions, type RuntimeRequest } from '@teamai/runtime-protocol';
+import { PromptResultSchema, RuntimeRequestSchema, type Can, type ExecRequestSchema, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import type { ExecRecord, Journal, Outcome, PlaceRecord } from './journal.js';
 import { EVIDENCE_DIR, inEvidenceDir, judgeOf, offersSignedIn, NO_JUDGE_CREDENTIAL } from './judge.js';
@@ -456,21 +456,18 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     write(terminal(op, settleOrphan({ op, ...record })));
   };
 
-  const reattach = async (handle: string, provider: Provider): Promise<void> => {
+  /**
+   * Answers from the journal alone, never the provider, so a stop is read while the engine is down: gone only when the
+   * journal holds no place of that handle. A sandbox removed meanwhile is found absent by the next exec or close.
+   */
+  const reattach = (handle: string, provider: Provider): void => {
     const place = journal.place(handle);
-    // A judge's place has no sandbox until its prompt, and keeps its prompt's outcome after.
-    const found = place === undefined || place.confined ? undefined : await provider.find(place);
 
-    // Gone only once the engine said the sandbox is: one it cannot look for stays this attempt's, for a close to
-    // remove once it answers again. reattach has no failure reply, so why goes to teamai's log.
-    if (place === undefined || (found?.ok === true && found.id === undefined)) {
-      journal.forget(handle);
+    if (place === undefined) {
       write({ event: 'gone', handle });
 
       return;
     }
-
-    if (found?.ok === false) write({ event: 'error', message: found.failure.message });
 
     write({ event: 'alive', handle, ops: journal.opsOf(handle).map(({ op, record }) => stateOf({ op, ...record })), display: provider.display(place) });
   };
@@ -504,8 +501,12 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     write({ event: 'closed', handle });
   };
 
-  /** `credentials`: the names the definition gives this runtime; an older teamai sends none, and every judge is offered. */
-  const init = async (options: RuntimeOptions, credentials: InitCredentials | undefined): Promise<void> => {
+  /**
+   * `credentials`: the names the definition gives this runtime; an older teamai sends none, and every judge is offered.
+   * In `recover` mode teamai only stops and closes what the journal holds: nothing is checked or offered, and the
+   * provider is reached only when a cancel or a close needs it.
+   */
+  const init = async ({ options, credentials, mode }: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> => {
     const parsed = parseOptions(options);
 
     if (!parsed.ok) {
@@ -516,6 +517,14 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     }
 
     const provider = providerFor(parsed.options);
+
+    if (mode === 'recover') {
+      ready = { provider, can: {} };
+      write({ type: 'init', ok: true, can: {} });
+
+      return;
+    }
+
     const offered = await provider.offer();
 
     if (!offered.ok) {
@@ -534,7 +543,7 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
 
   const dispatch = async (request: RuntimeRequest): Promise<void> => {
     if (request.type === 'init') {
-      await init(request.options, request.credentials);
+      await init(request);
 
       return;
     }
