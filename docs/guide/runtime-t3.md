@@ -217,11 +217,19 @@ In CI, or a run with `TEAMAI_MODE=unattended`, nobody can approve a sign-in or a
 {"error":{"code":"runtime_failed","message":"Runtime \"t3\" of driver \"teamai-t3\" did not start (login_required): teamai has no valid T3 Code sign-in for http://127.0.0.1:3773, and an unattended run cannot ask for one. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again."}}
 ```
 
-An unattended run's threads still run in Auto, or your `runtime_mode`. A step whose agent asks for an approval anyway is stopped, and fails `tool_failed` naming the thread. If T3 does not stop the thread, the message says so, and teamai keeps the step's place until a later close can stop it. Interactive steps run only in attended runs.
+An unattended run's threads still run in Auto, or your `runtime_mode`. A step whose agent asks for an approval anyway is stopped, and fails `tool_failed` naming the thread. If T3 does not stop the thread, the step fails `cancel_failed` instead, and teamai keeps the step's place until a later `teamai workflow cancel` stops it. Interactive steps run only in attended runs.
 
 ## Restart, cancel and retry
 
-The step's thread lives in T3, not in teamai's process. If the driver dies, `teamai workflow resume <run> --driver t3` reconnects to the same thread instead of starting another one. `teamai workflow cancel <run>` stops the thread as its Stop button does. The thread ends interrupted, any request it was waiting on is withdrawn, and teamai settles it.
+The step's thread lives in T3, not in teamai's process. If the driver dies, `teamai workflow resume <run> --driver t3` reconnects to the same thread instead of starting another one. `teamai workflow cancel <run>` stops the thread as its Stop button does. The thread ends interrupted, any request it was waiting on is withdrawn, and teamai settles it. A cancel needs no new sign-in: after the driver died, teamai opens the runtime only to stop what it recorded, with the sign-in it kept, and reaches T3 Code only for the stop.
+
+T3 gets 10 s to confirm a stop. If it does not, teamai keeps the step's place and nothing of it is committed, and the cancel says which thread still runs:
+
+```text
+⚠ Could not stop attempt a96c8bc03 of run r70d31098c8884803 on step runtime "t3" of driver "teamai-t3": its exec or prompt may still run, since the runtime did not confirm it stopped (cancel_failed): The T3 thread t3code://threads/88e28b29-…/mcp%3Alaunch%3A3891149… ("review · teamai r70d31098c8884803") still runs, and T3 Code did not stop it: T3 Code acknowledged the stop, but its run was still running 10 s later. Stop it in T3 Code with its Stop button, then run teamai workflow cancel r70d31098c8884803 again.
+```
+
+Stop the thread, then run the same cancel again.
 
 A thread's run may hand work to subagents or background tasks. The step ends only once that work has settled too, and a cancel or close counts the thread as stopped only then.
 
@@ -245,6 +253,7 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 | `… is not a project in T3 Code <machine>.` | The checkout is not a T3 project. | Add it in T3 Code (Add project), or run `t3 project add <path>`. |
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` names an instance T3 does not have, or one that is disabled. | Add or enable it in T3 Code under Settings → Providers, or remove `instance`. |
 | `… ended without writing the result file …` | The agent finished without writing its result. | Open the thread from the link in the message, then `teamai workflow retry <run> <step>`. |
+| `… (cancel_failed): The T3 thread t3code://threads/… ("review · teamai r70d…") still runs, and T3 Code did not stop it …` | teamai cancelled the step, and T3 did not confirm its thread stopped within 10 s. | Open the thread from the link, stop it with its Stop button, then `teamai workflow cancel <run>` again. |
 | `Not closed: thread_still_runs …` in the run's details | teamai closed the step's place while its thread, or work the thread delegated, still ran, and T3 did not stop it. | Open the thread from the link, and stop it with its Stop button. |
 | `Not closed: t3_unavailable: teamai launched the T3 thread "review · teamai r70d…" and T3 Code never answered …` | A step's launch got no answer, and T3 Code could not be reached to look the thread up. | Open T3 Code, then `teamai workflow cancel <run>` again. |
 | `… launch_unconfirmed: teamai launched the T3 thread "review · teamai r70d…" in the T3 project "acme-app" under an earlier T3 Code sign-in …` | A step's launch got no answer, and you have signed in to T3 again since, so teamai cannot look the thread up. | In T3 Code, stop the thread the message names if it runs, delete the file the message names, then `teamai workflow cancel <run>` again. |
