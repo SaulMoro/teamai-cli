@@ -1508,6 +1508,26 @@ describe('teamai-runtime-t3', () => {
       expect(runtime.lines.filter((line) => line['op'] === 'op-00000073').map((line) => line['event'])).toEqual(['accepted', 'display']);
     });
 
+    // A failure for an op the runtime already runs would be a second outcome, while its thread still runs.
+    it('drops a malformed request that names an op it already runs, which then ends once', async () => {
+      t3.config({ agent: { hold: true, output: {} } });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-00000075'));
+      await runtime.next((line) => line['op'] === 'op-00000075' && line['event'] === 'display');
+
+      runtime.send({ type: 'prompt', op: 'op-00000075', handle });
+      // Lines are read in order: the reattach answers after the malformed line was.
+      runtime.send({ type: 'reattach', handle });
+      await runtime.next((line) => line['event'] === 'alive');
+      expect(runtime.lines.filter((line) => line['op'] === 'op-00000075').map((line) => line['event'])).toEqual(['accepted', 'display']);
+      expect(runtime.stderr()).toContain('op-00000075');
+      runtime.send({ type: 'cancel', op: 'op-00000075' });
+
+      expect(await ended(runtime, 'op-00000075')).toEqual({ op: 'op-00000075', event: 'cancelled' });
+      expect(runtime.lines.filter((line) => line['op'] === 'op-00000075').map((line) => line['event'])).toEqual(['accepted', 'display', 'cancelled']);
+      expect(runtime.lines.filter((line) => line['event'] === 'error')).toEqual([]);
+    });
+
     it('answers a repeated prompt that ended with the same outcome, before and after its own restart', async () => {
       const { runtime, handle } = await opened();
       runtime.send(prompt(handle, 'op-00000018'));
