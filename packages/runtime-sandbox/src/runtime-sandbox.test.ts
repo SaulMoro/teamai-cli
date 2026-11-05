@@ -949,6 +949,24 @@ describe('a prompt attempt in a container', () => {
     expect(await connection.next((message) => message.event === 'gone' || message.event === 'alive')).toEqual({ event: 'gone', handle: HANDLE });
   });
 
+  it('removes the container an open was still creating when teamai closed its place, and keeps no record of it', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    engine.delay('run', 1_500);
+    const op = newOp();
+    connection.send({ type: 'open', op, run: RUN, attempt: ATTEMPT, credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+    await connection.next((message) => message.op === op && message.event === 'accepted');
+    await vi.waitFor(() => { expect(engine.calls().some(([, command, ...rest]) => command === 'run' && rest.includes(HANDLE))).toBe(true); }, { timeout: 10_000 });
+
+    connection.send({ type: 'close', handle: HANDLE });
+
+    expect(await connection.next((message) => message.handle === HANDLE && message.event !== 'accepted', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    await connection.next((message) => message.op === op && (message.event === 'ready' || message.event === 'failed'), 30_000);
+    expect(engine.containers()).toEqual([]);
+    expect(journalFiles()).toEqual([]);
+  }, 60_000);
+
   it('accepts an exec before it looks its sandbox up by its labels, after a runtime died before it kept the sandbox id', async () => {
     engine.delay('run', 1_500);
     const first = start();
