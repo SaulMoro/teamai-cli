@@ -325,6 +325,20 @@ describe('teamai-runtime-t3', () => {
       expect(runtime.lines.filter((line) => line['op'] === 'op-00000065').map((line) => line['event'])).toEqual(['accepted', 'failed']);
     });
 
+    // Only a check a new launch runs proves T3 launched nothing: the op keeps its own failure, and close, finding the same
+    // refusal when it repeats the launch, forgets it.
+    it('fails t3_launch_failed when a new launch\'s check refuses the thread, and closes once the repeated launch is refused the same way', async () => {
+      t3.config({ launchInvalid: true });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-00000078'));
+
+      expect(await ended(runtime, 'op-00000078')).toEqual({ op: 'op-00000078', event: 'failed', failure: { code: 't3_launch_failed', message: expect.stringContaining('is not a worktree of project project-1') } });
+      runtime.send({ type: 'close', handle });
+
+      expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'closed', handle });
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_launch').map((call) => call.args['clientRequestId'])).toEqual(['op-00000078', 'op-00000078']);
+    });
+
     it.each(['auto-accept-edits', 'approval-required'])('runs every thread in %s when `runtime_mode` tightens it', async (runtimeMode) => {
       const { runtime, handle } = await opened('attended', {}, { runtime_mode: runtimeMode });
 
