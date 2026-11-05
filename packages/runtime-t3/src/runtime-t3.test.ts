@@ -1074,6 +1074,29 @@ describe('teamai-runtime-t3', () => {
         expect(t3.threads()[0]?.status).toBe('interrupted');
       });
 
+      // T3 checks the mode a sign-in allows before it looks a repeated launch up, so a repeat in another mode finds nothing.
+      it('resends a prompt whose launch T3 never answered as it was journaled, so it reconnects even in a mode the sign-in would refuse', async () => {
+        const release = path.join(dir, 'release');
+        t3.config({ agent: { release, output: { verdict: 'approve' } }, access: 'approval-required', launchMs: 3_000 });
+        const first = await opened('attended', {}, { runtime_mode: 'approval-required' });
+        first.runtime.send(prompt(first.handle, 'op-00000066'));
+        await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+        await first.runtime.close();
+        t3.config({ launchMs: 0 });
+
+        // This runtime launches new threads in auto, which the sign-in does not allow.
+        const second = start();
+        second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        expect(await second.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+        second.send(prompt(first.handle, 'op-00000066'));
+        expect(await second.next((line) => line['op'] === 'op-00000066' && line['event'] === 'display')).toMatchObject({ display: { url: linkTo(t3.threads()[0]?.threadId) } });
+        fs.writeFileSync(release, '');
+
+        expect(await ended(second, 'op-00000066')).toMatchObject({ event: 'finished', result: { output: { verdict: 'approve' } } });
+        expect(t3.threads()).toHaveLength(1);
+        expect(t3.calls().filter((call) => call.tool === 't3_thread_launch').map((call) => call.args['runtimeMode'])).toEqual(['approval-required', 'approval-required']);
+      });
+
       // T3 finds a repeated launch only under the sign-in that sent it, and a sign-in lasts a limited time.
       describe('after the member signed in again', () => {
         const SECOND = 'fake-t3-token-second-0987654321';

@@ -890,13 +890,18 @@ export function serve(options: ServeOptions): Promise<void> {
     const finish = (outcome: OpState, threadEnded = false): void => endRunning(state, outcome, { threadEnded });
 
     try {
-      const title = `${lease.step} · teamai ${opened.run}`;
-      const launchedAt = thread?.launchedAt ?? pending?.launchedAt ?? Date.now();
-      const newThread: NewThread = { title, modelSelection: selection.selection, runtimeMode: s.stepMode, clientRequestId: request.op };
+      // A launch T3 never answered is sent again as it was journaled: T3 checks the mode before it looks the launch up,
+      // so a repeat in another mode would not find the thread it launched.
+      const launch: LaunchRecord = pending ?? {
+        title: `${lease.step} · teamai ${opened.run}`, modelSelection: selection.selection, runtimeMode: s.stepMode, tool: lease.tool,
+        launchedAt: thread?.launchedAt ?? Date.now(), signIn: s.signIn, ...(work.kind === 'step' && { worktreePath: request.cwd }),
+      };
+
+      const { title, launchedAt } = launch;
+      const newThread: NewThread = { title, modelSelection: launch.modelSelection, runtimeMode: launch.runtimeMode, clientRequestId: request.op };
 
       // T3 may launch the thread and still fail to answer, so the launch is journaled before it is sent.
       if (!thread) {
-        const launch: LaunchRecord = { title, modelSelection: selection.selection, runtimeMode: s.stepMode, tool: lease.tool, launchedAt, signIn: s.signIn, ...(work.kind === 'step' && { worktreePath: request.cwd }) };
         const now = place(request.handle) ?? opened;
         journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, launches: { ...now.launches, [request.op]: launch } });
       }
@@ -906,7 +911,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
       /** Journals the op running on `threadId`, with the judge's copy once its folder is known, in place of its launch. */
       const journalThread = (threadId: string, copy: string | undefined): ThreadRecord => {
-        const launched: ThreadRecord = { threadId, title, model: selection.selection.model, tool: lease.tool, launchedAt, ...(copy && { copy }) };
+        const launched: ThreadRecord = { threadId, title, model: launch.modelSelection.model, tool: launch.tool, launchedAt, ...(copy && { copy }) };
         const now = place(request.handle) ?? opened;
         const { [request.op]: _answered, ...launches } = now.launches;
         journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, threads: { ...now.threads, [request.op]: launched }, launches });
