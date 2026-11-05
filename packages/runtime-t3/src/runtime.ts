@@ -4,7 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { promisify } from 'node:util';
 import {
-  PromptResultSchema, RUNTIME_PROTOCOL, RuntimeRequestSchema, type RUNTIME_MODES,
+  CANCEL_FAILED, PromptResultSchema, RUNTIME_PROTOCOL, RuntimeRequestSchema, type RUNTIME_MODES,
   type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptLease, type PromptResult, type RuntimeDisplay, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
@@ -1127,7 +1127,7 @@ export function serve(options: ServeOptions): Promise<void> {
 
       case 'reattach': {
         // The journal alone answers: only a place it no longer holds is gone, whether or not T3 Code can be reached. One
-        // whose record cannot be read is alive with no op it can name, so what needs the record fails, saying why.
+        // whose record cannot be read may hold live threads, so the reattach fails, saying why.
         const read = journal.read(request.handle);
 
         if (read.kind === 'missing') {
@@ -1137,7 +1137,7 @@ export function serve(options: ServeOptions): Promise<void> {
         }
 
         if (read.kind === 'unreadable') {
-          write({ event: 'alive', handle: request.handle, ops: [] });
+          write({ event: 'failed', handle: request.handle, failure: unreadable(request.handle, read) });
 
           return;
         }
@@ -1153,6 +1153,32 @@ export function serve(options: ServeOptions): Promise<void> {
 
       case 'close':
         return close(request.handle);
+      default: {
+        const unhandled: never = request;
+
+        return unhandled;
+      }
+    }
+  };
+
+  /**
+   * Answers a request that threw with a failure of its own: teamai fails every request it waits on when a line names
+   * none. A cancel that threw did not confirm a stop.
+   */
+  const failRequest = (request: RuntimeRequest, why: string): void => {
+    switch (request.type) {
+      case 'init':
+        return write({ type: 'init', ok: false, error: { code: 'runtime_error', message: `Runtime t3 could not start: ${why}` } });
+      case 'open':
+      case 'exec':
+      case 'prompt':
+        return fail(request.op, { code: 'runtime_error', message: `Runtime t3 could not carry out ${request.type} of ${request.op}: ${why}` });
+      case 'cancel':
+        return fail(request.op, { code: CANCEL_FAILED, message: `Runtime t3 could not carry out the cancel of ${request.op}, so its T3 thread may still run: ${why.replace(/\.$/, '')}. Run teamai workflow cancel again.` });
+      case 'reattach':
+      case 'collect':
+      case 'close':
+        return write({ event: 'failed', handle: request.handle, failure: { code: 'runtime_error', message: `Runtime t3 could not carry out ${request.type} of ${request.handle}: ${why}` } });
       default: {
         const unhandled: never = request;
 
@@ -1179,7 +1205,7 @@ export function serve(options: ServeOptions): Promise<void> {
         try {
           await handleRequest(request);
         } catch (error) {
-          write({ event: 'error', message: `Runtime t3 failed on ${request.type}: ${error instanceof Error ? error.message : String(error)}` });
+          failRequest(request, error instanceof Error ? error.message : String(error));
         }
       })();
     });
