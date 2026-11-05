@@ -4,9 +4,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { LocalConfig } from '../types.js';
-import { attemptRun, attemptToolHome, seedToolHome } from '../workflow/runtimes/attempt.js';
+import { attemptRun, attemptToolHome, readAttemptRuntime, seedToolHome, type AttemptRuntimeRecord } from '../workflow/runtimes/attempt.js';
 import { holdLogin, loginHolder, writeLoginBack } from '../workflow/runtimes/login.js';
-import { OpIdSchema } from '@teamai/runtime-protocol';
+import { OpIdSchema, type RuntimeDisplay } from '@teamai/runtime-protocol';
 import { newOpId, type ExecEnd, type PromptEnd, type Reattached, type StepRuntime } from '../workflow/runtimes/step-runtime.js';
 import { attemptDir, AttemptIdSchema, RunIdSchema } from '../workflow/store.js';
 
@@ -137,6 +137,35 @@ describe('an attempt a killed teamai left running on its step runtime', () => {
   const resumePrompt = (runtime: StepRuntime) => attemptRun({ config: config(), run: RUN, attempt: FIRST, runtime, driver: 'd' }).prompt({
     lease: { step: 'review', tool: 'codex', prompt: 'p', result: path.join(root, 'out', 'result.json'), permissions: 'unattended', interactive: false }, env: {}, unset: [], credentials: {}, cwd: root,
   }, {});
+
+  it('keeps the recovered agent link while a prompt reconnects and after it finishes without another display', async () => {
+    const op = newOpId();
+    const workspace = { label: 'Workspace', url: 'https://example.com/workspace/1' };
+    const agent = { label: 'Review', url: 't3://thread/actual-agent' };
+    let atReconnect: RuntimeDisplay | undefined;
+    const runtime: StepRuntime = {
+      ...runtimeSeeing([]),
+      reattach: async () => ({ kind: 'alive', display: agent, ops: [{ op, state: 'running' }] }),
+      prompt: async (request, events) => {
+        expect(request.op).toBe(op);
+        events.onAccepted?.({});
+        atReconnect = (await readAttemptRuntime(config(), RUN, FIRST))?.display;
+
+        return { kind: 'finished', session: { tool: 'codex', id: 'actual-agent' }, result: { output: { ok: true } } };
+      },
+    };
+    const saved = {
+      runtime: runtime.name, driver: 'd', phase: 'running', open: { op: newOpId(), handle: 'h1' }, prompt: { op }, display: workspace,
+    } satisfies AttemptRuntimeRecord;
+    const dir = attemptDir(config(), RUN, FIRST);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'runtime.json'), JSON.stringify(saved));
+
+    const end = await resumePrompt(runtime);
+    const afterEnd = (await readAttemptRuntime(config(), RUN, FIRST))?.display;
+
+    expect({ atReconnect, afterEnd, end: end.kind }).toEqual({ atReconnect: agent, afterEnd: agent, end: 'finished' });
+  });
 
   it('stops a prompt a killed teamai left failed cancel_failed, instead of taking it as failed or sending it again', async () => {
     const runtime = runtimeSeeing([ended(cannotStop), cancelled]);

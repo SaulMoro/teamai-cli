@@ -439,7 +439,8 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       }
 
       const sent = before.prompt ?? { op: newOpId() };
-      await save({ ...before, prompt: sent, phase: 'running' });
+
+      if (before.prompt === undefined) await save({ ...before, prompt: sent, phase: 'running' });
       running = sent;
       const acceptance = accepting(events);
       const end = await runtime.prompt({ op: sent.op, handle, ...request }, { onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay });
