@@ -138,6 +138,10 @@ export interface FakeT3 {
   bin: string;
   /** The arguments of each run of the `t3` command. */
   commandRuns(): string[][];
+  /** The pairing codes the `t3` command created, which nothing may print. */
+  pairingCodes(): string[];
+  /** Where the running server listens, as T3 writes it in its runtime file. */
+  origin(): string;
   config(change: Partial<FakeT3Config>): void;
   calls(): FakeCall[];
   threads(): FakeThread[];
@@ -177,6 +181,12 @@ export function fakeT3(dir: string, workspaceRoot: string): FakeT3 {
 
   return {
     t3Home, home, bin,
+    pairingCodes: () => {
+      const file = path.join(state, 'pairings.jsonl');
+
+      return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter((line) => line !== '').map((line) => z.object({ credential: z.string() }).parse(JSON.parse(line)).credential) : [];
+    },
+    origin: () => z.object({ origin: z.string() }).parse(JSON.parse(fs.readFileSync(runtimeFile, 'utf8'))).origin,
     commandRuns: () => (fs.existsSync(runs) ? fs.readFileSync(runs, 'utf8').trim().split('\n').filter((line) => line !== '').map((line) => z.array(z.string()).parse(JSON.parse(line))) : []),
     config(change) {
       current = { ...current, ...change };
@@ -248,7 +258,7 @@ export function credentialsFile(home: string): string {
 
 /** Signs the member in to the fake server ahead of time, as an earlier attended run would have. */
 export function signIn(t3: FakeT3, token = 'fake-t3-token-0123456789', expiresInSeconds = 3600): void {
-  const origin = z.object({ origin: z.string() }).parse(JSON.parse(fs.readFileSync(path.join(t3.t3Home, 'userdata', 'server-runtime.json'), 'utf8'))).origin;
+  const origin = t3.origin();
   const file = credentialsFile(t3.home);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   fs.writeFileSync(file, JSON.stringify({
