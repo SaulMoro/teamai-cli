@@ -552,7 +552,7 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished', result: { output: { ok: true } } });
   });
 
-  it('shows the workspace when it opens, and the agent with a link to it in Paseo once the prompt is accepted', async () => {
+  it('shows the workspace when it opens, and the agent with a link to it in Paseo in a display event once the agent exists', async () => {
     behave({ output: { ok: true } });
     const runtime = start();
     await ready(runtime);
@@ -562,13 +562,29 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isOp('op-0000000a', 'ready'))).toEqual({ op: 'op-0000000a', event: 'ready', display: { label: 'Paseo workspace worktree', fields: { workspace, daemon: 'Paseo 0.14.0' } } });
     runtime.send(promptRequest(handle, 'op-0000000b'));
     const accepted = await runtime.next(isOp('op-0000000b', 'accepted'));
+    const shown = await runtime.next(isOp('op-0000000b', 'display'));
     await runtime.next(isEnd('op-0000000b'));
     const agentId = String(received()[0]?.agentId);
     const agent = { label: `teamai review · ${RUN}`, url: `paseo://h/srv_fake0001/agent/${agentId}`, fields: { agent: agentId, workspace, model: 'claude/claude-opus-5-5' } };
 
-    expect(accepted).toEqual({ op: 'op-0000000b', event: 'accepted', display: agent });
+    expect(accepted).toEqual({ op: 'op-0000000b', event: 'accepted' });
+    expect(shown).toEqual({ op: 'op-0000000b', event: 'display', display: agent });
     runtime.send({ type: 'reattach', handle });
     expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ display: agent });
+  });
+
+  it('accepts a prompt before Paseo has created its agent, and sends the agent\'s link once it exists', async () => {
+    behave({ output: { ok: true }, create_ms: 3_000 });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+    const agentsOf = (): string[] => Object.keys((JSON.parse(fs.readFileSync(path.join(daemonState, 'agents.json'), 'utf8')) as { agents: Record<string, unknown> }).agents);
+
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+    expect(agentsOf()).toEqual([]);
+    expect(await runtime.next(isOp('op-0000000b', 'display'))).toMatchObject({ display: { url: `paseo://h/srv_fake0001/agent/${agentIdOf(OpIdSchema.parse('op-0000000b'))}` } });
+    expect(agentsOf()).toEqual([agentIdOf(OpIdSchema.parse('op-0000000b'))]);
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished' });
   });
 
   it('ends a cancelled prompt only once its agent stopped running, though Paseo answers the cancel before', async () => {
