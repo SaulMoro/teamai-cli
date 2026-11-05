@@ -114,6 +114,11 @@ function pidAlive(pid) {
   }
 }
 
+/** The toy that started an exec outlives teamai and records the exec's outcome, so while it lives the exec may still end. */
+function ownerAlive(record) {
+  return record.owner !== undefined && record.owner !== process.pid && pidAlive(record.owner);
+}
+
 function groupAlive(pgid) {
   try {
     process.kill(-pgid, 0);
@@ -275,7 +280,7 @@ function exec(request) {
         return;
       }
 
-      if (groupAlive(record.pgid) || (record.owner !== undefined && pidAlive(record.owner))) return;
+      if (groupAlive(record.pgid) || ownerAlive(record)) return;
       clearInterval(wait);
 
       if (fs.existsSync(file('cancel', request.op))) return;
@@ -556,7 +561,7 @@ function reattach(request) {
 
     if (record.outcome?.state === 'failed') return { op, state: 'failed', failure: record.outcome.failure };
 
-    if (running.has(op) || groupAlive(record.pgid)) return { op, state: 'running' };
+    if (running.has(op) || groupAlive(record.pgid) || ownerAlive(record)) return { op, state: 'running' };
 
     // A cancelled exec whose processes are gone has ended cancelled, though its outcome may not be written yet.
     return fs.existsSync(file('cancel', op)) ? { op, state: 'cancelled' } : { op, state: 'failed', failure: { code: 'runtime_lost', message: `The toy lost exec ${op}.` } };

@@ -1064,6 +1064,44 @@ describe('the toy runtime once teamai stops reading it', () => {
     expect(await second.exec({ op, handle: 'toy-r0123abcd-a0123abcd', argv: rerun, env: {}, unset: [], credentials: {}, cwd: worktree }, {}))
       .toEqual<ExecEnd>({ kind: 'exited', code: 0, stdout: 'finished' });
   });
+
+  it('reads an exec its stopped owner has not recorded yet as running, then as the outcome the owner records', async () => {
+    const worktree = path.join(dir, 'worktree');
+    const state = path.join(dir, 'state');
+    const toy = spawn(process.execPath, [TOY_RUNTIME], { stdio: ['pipe', 'pipe', 'ignore'] });
+    const lines: string[] = [];
+    readline.createInterface({ input: toy.stdout }).on('line', (line) => { lines.push(line); });
+    const write = (request: object): void => { toy.stdin.write(`${JSON.stringify(request)}\n`); };
+    const op = newOpId();
+    write({ type: 'init', protocol: 1, mode: 'unattended', options: { state } });
+    write({ type: 'open', op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} } });
+    expect(await until(() => lines.some((line) => line.includes('"ready"')))).toBe(true);
+    write({ type: 'exec', op, handle: 'toy-r0123abcd-a0123abcd', argv: [process.execPath, '-e', 'setTimeout(() => { process.stdout.write("retained"); require("fs").writeFileSync("ended", ""); }, 300)'], env: {}, unset: [], credentials: {}, cwd: worktree });
+    expect(await until(() => lines.some((line) => line.includes(op) && line.includes('"accepted"')))).toBe(true);
+    // The owner cannot record the outcome while it is stopped, though its exec ends.
+    toy.kill('SIGSTOP');
+
+    try {
+      expect(await until(() => fs.existsSync(path.join(worktree, 'ended')))).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      const second = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+      started.push(second);
+      expect(await second.init({ options: { state }, mode: 'unattended' })).toMatchObject({ ok: true });
+
+      expect(await second.reattach('toy-r0123abcd-a0123abcd')).toEqual({ kind: 'alive', ops: [{ op, state: 'running' }] });
+      toy.kill('SIGCONT');
+      let read: unknown;
+      expect(await until(async () => {
+        read = await second.reattach('toy-r0123abcd-a0123abcd');
+
+        return JSON.stringify(read) !== JSON.stringify({ kind: 'alive', ops: [{ op, state: 'running' }] });
+      })).toBe(true);
+      expect(read).toEqual({ kind: 'alive', ops: [{ op, state: 'exited', code: 0, stdout: 'retained' }] });
+    } finally {
+      toy.kill('SIGCONT');
+      toy.stdin.end();
+    }
+  });
 });
 
 describe('a driver whose runtime stopped on a line it could not read', () => {
