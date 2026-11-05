@@ -375,6 +375,28 @@ export function serve(options: ServeOptions): Promise<void> {
   const running = new Map<OpId, Running>();
   /** Ops teamai cancelled before this process saw their prompt. */
   const cancelledEarly = new Set<OpId>();
+  /** The open and the launches under way in each place: a close waits for them before it reads what they made. */
+  const working = new Map<string, Set<Promise<unknown>>>();
+
+  /** `work`, counted as under way in `handle` until it settles. */
+  const track = <TValue>(handle: string, work: Promise<TValue>): Promise<TValue> => {
+    const under = working.get(handle) ?? new Set();
+    working.set(handle, under);
+    under.add(work);
+
+    const done = (): void => {
+      under.delete(work);
+
+      if (under.size === 0 && working.get(handle) === under) working.delete(handle);
+    };
+
+    work.then(done, done);
+
+    return work;
+  };
+
+  /** The handle of the place `open` makes for a run's attempt. */
+  const handleFor = ({ run, attempt }: { run: string; attempt: string }): string => `t3-${run}-${attempt}`;
 
   /** The place's record, to write to; a record that cannot be read is never written over. */
   const place = (handle: string): PlaceRecord | undefined => {
@@ -599,7 +621,7 @@ export function serve(options: ServeOptions): Promise<void> {
   };
 
   const open = async (request: Extract<RuntimeRequest, { type: 'open' }>): Promise<void> => {
-    const handle = `t3-${request.run}-${request.attempt}`;
+    const handle = handleFor(request);
     handleOf.set(request.op, handle);
     write({ op: request.op, event: 'accepted', handle });
 
@@ -945,9 +967,12 @@ export function serve(options: ServeOptions): Promise<void> {
       // A thread the journal holds is reconnected to by its id: T3 answers a repeated launch with it only under the
       // sign-in that sent the launch, and would start the step again under another.
       if (thread) state.thread = thread;
-      thread = work.kind === 'judge'
-        ? await launchJudge({ s, request, confined: work.confined, opened, journalThread, thread: newThread, known: thread })
-        : thread ?? journalThread(await launchStep(s, request, work.place, newThread), undefined);
+      const known = thread;
+
+      // A close that comes meanwhile waits for the launch, so it stops the thread the launch started.
+      thread = await track(request.handle, work.kind === 'judge'
+        ? launchJudge({ s, request, confined: work.confined, opened, journalThread, thread: newThread, known })
+        : known ? Promise.resolve(known) : launchStep(s, request, work.place, newThread).then((threadId) => journalThread(threadId, undefined)));
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);
       // Only a check a new launch runs proves T3 launched nothing; a judge's copy fails before its idle thread is briefed.
@@ -1140,14 +1165,21 @@ export function serve(options: ServeOptions): Promise<void> {
    * with a judge's copy, and close fails. A lookup or settle that answers late still journals what it found.
    */
   const close = async (handle: string): Promise<void> => {
-    const read = journal.read(handle);
     const failClose = (failure: RuntimeFailure): void => write({ event: 'close_failed', handle, failure });
-
-    if (read.kind === 'unreadable') return failClose(unreadable(handle, read));
-    let known = read.kind === 'found' ? read.place : undefined;
     const deadline = Date.now() + STOP_WAIT_MS;
     const left = (): number => Math.max(deadline - Date.now(), 0);
     const late = `T3 Code did not answer within ${STOP_WAIT_MS / 1_000} s`;
+    const under = [...(working.get(handle) ?? [])];
+
+    // An open or a launch still under way would make what close then never sees: a record, or a thread it starts.
+    if (under.length > 0 && !(await within(Promise.allSettled(under), left())).answered) {
+      return failClose({ code: 't3_unavailable', message: `teamai was still opening ${handle} or launching a T3 thread in it, and ${late} of the close, so teamai keeps the place. Run teamai workflow cancel again once T3 Code answers.` });
+    }
+
+    const read = journal.read(handle);
+
+    if (read.kind === 'unreadable') return failClose(unreadable(handle, read));
+    let known = read.kind === 'found' ? read.place : undefined;
 
     /** T3, or why not: a connection that does not come by the deadline counts as none. */
     const reachInTime = async (): Promise<Reach> => {
@@ -1254,7 +1286,7 @@ export function serve(options: ServeOptions): Promise<void> {
       case 'init':
         return init(request);
       case 'open':
-        return open(request);
+        return track(handleFor(request), open(request));
       case 'exec':
         write({ op: request.op, event: 'accepted' });
         fail(request.op, { code: 'exec_unsupported', message: 'Runtime t3 runs prompt steps as T3 Code threads and runs no command (can.exec: false).' });
