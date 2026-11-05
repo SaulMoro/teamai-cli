@@ -1508,6 +1508,23 @@ describe('teamai-runtime-t3', () => {
       expect(runtime.lines.filter((line) => line['event'] === 'error')).toEqual([]);
     });
 
+    // An op that owned its end without a journaled launch would make the resent prompt join it and never end.
+    it('launches nothing for a prompt whose launch it cannot journal, and runs the prompt teamai resends once it can', async () => {
+      const { runtime, handle } = await opened();
+      const places = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places');
+      fs.chmodSync(places, 0o500);
+
+      runtime.send(prompt(handle, 'op-00000077'));
+      expect(await ended(runtime, 'op-00000077')).toEqual({ op: 'op-00000077', event: 'failed', failure: { code: 'runtime_error', message: expect.stringMatching(/^Runtime t3 could not carry out prompt of op-00000077: .*EACCES/) } });
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_launch')).toEqual([]);
+
+      fs.chmodSync(places, 0o700);
+      runtime.send(prompt(handle, 'op-00000077'));
+
+      expect(await ended(runtime, 'op-00000077')).toMatchObject({ event: 'finished' });
+      expect(t3.threads()).toHaveLength(1);
+    });
+
     // teamai fails every request it waits on for an uncorrelated error, so only a line that names no request gets one.
     it('fails a malformed request that still names its op or handle on its own, and answers a line that names none with an error', async () => {
       t3.config({ agent: { hold: true, output: {} } });
