@@ -1118,8 +1118,9 @@ export function serve(options: ServeOptions): Promise<void> {
   };
 
   /**
-   * Ends the place. Each launch T3 never answered is looked up, and each thread the runtime has not seen stop is stopped
-   * first; while one cannot be, the place stays, with a judge's copy, and close fails.
+   * Ends the place within STOP_WAIT_MS. Each launch T3 never answered is looked up, and each thread the runtime has not
+   * seen stop is stopped first, all at once; while one cannot be, or T3 Code does not answer in time, the place stays,
+   * with a judge's copy, and close fails. A lookup or settle that answers late still journals what it found.
    */
   const close = async (handle: string): Promise<void> => {
     const read = journal.read(handle);
@@ -1127,59 +1128,96 @@ export function serve(options: ServeOptions): Promise<void> {
 
     if (read.kind === 'unreadable') return failClose(unreadable(handle, read));
     let known = read.kind === 'found' ? read.place : undefined;
+    const deadline = Date.now() + STOP_WAIT_MS;
+    const left = (): number => Math.max(deadline - Date.now(), 0);
+    const late = `T3 Code did not answer within ${STOP_WAIT_MS / 1_000} s`;
+
+    /** T3, or why not: a connection that does not come by the deadline counts as none. */
+    const reachInTime = async (): Promise<Reach> => {
+      const reaching = await within(reach(), left());
+
+      return reaching.answered ? reaching.value : { ok: false, failure: { code: 't3_unavailable', message: late } };
+    };
 
     if (known) {
+      const { run } = known;
+      const looked = known;
+
       // Every launch and thread is journaled with its op.
-      for (const { op } of Object.values(known.ops)) {
-        const launch = known.launches[op];
+      const launches = Object.values(looked.ops).flatMap(({ op }) => {
+        const launch = looked.launches[op];
 
-        if (!launch) continue;
-        const lookUp = `teamai launched the T3 thread "${launch.title}" and T3 Code never answered, so it may run`;
+        return launch ? [{ op, launch }] : [];
+      });
 
-        const reached = await reach();
+      if (launches.length > 0) {
+        const lookUp = (launch: LaunchRecord) => `teamai launched the T3 thread "${launch.title}" and T3 Code never answered, so it may run`;
+        const reached = await reachInTime();
 
         // Nothing here can find the thread without T3 Code.
-        if (!reached.ok) return failClose({ code: 't3_unavailable', message: `${lookUp}, and teamai could not reach T3 Code to look for it (${reached.failure.code}). Open T3 Code, then run teamai workflow cancel ${known.run} again.` });
+        if (!reached.ok) return failClose({ code: 't3_unavailable', message: `${lookUp(launches[0].launch)}, and teamai could not reach T3 Code to look for it (${reached.failure.code}). Open T3 Code, then run teamai workflow cancel ${run} again.` });
 
-        let resolved: Awaited<ReturnType<typeof resolveLaunch>>;
+        const lookups = await Promise.all(launches.map(async ({ op, launch }): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+          try {
+            const resolving = await within(resolveLaunch(reached.reached, looked, op, launch), left());
 
-        try {
-          resolved = await resolveLaunch(reached.reached, known, op, launch);
-        } catch (error) {
-          return failClose({ code: 't3_unavailable', message: `${lookUp}, and T3 Code did not say whether it launched it when teamai looked: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. Run teamai workflow cancel ${known.run} again once T3 Code answers.` });
-        }
+            if (!resolving.answered) return { ok: false, failure: { code: 't3_unavailable', message: `${lookUp(launch)}, and T3 Code did not say within ${STOP_WAIT_MS / 1_000} s whether it launched it when teamai looked. Run teamai workflow cancel ${run} again once T3 Code answers.` } };
 
-        if (!resolved.ok) return failClose(resolved.failure);
-        known = resolved.place;
+            return resolving.value.ok ? { ok: true } : resolving.value;
+          } catch (error) {
+            return { ok: false, failure: { code: 't3_unavailable', message: `${lookUp(launch)}, and T3 Code did not say whether it launched it when teamai looked: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. Run teamai workflow cancel ${run} again once T3 Code answers.` } };
+          }
+        }));
+
+        const refused = lookups.find((one) => !one.ok);
+
+        if (refused && !refused.ok) return failClose(refused.failure);
+        known = place(handle) ?? known;
       }
 
-      for (const { op } of Object.values(known.ops)) {
-        const thread = known.threads[op];
+      const resolved = known;
 
-        if (!thread || thread.ended) continue;
+      const owned = Object.values(resolved.ops).flatMap(({ op }) => {
+        const thread = resolved.threads[op];
 
-        const reached = await reach();
+        return thread && !thread.ended ? [{ op, thread }] : [];
+      });
 
-        // Nothing here can stop the thread, or tell that it ended, without T3 Code.
-        if (!reached.ok) return failClose({ code: 't3_unavailable', message: `The T3 thread "${thread.title}" (${thread.threadId}) may still run, and teamai could not reach T3 Code to stop it (${reached.failure.code}). Open T3 Code, then run teamai workflow cancel ${known.run} again.` });
+      if (owned.length > 0) {
+        const reached = await reachInTime();
+        const [{ thread: first }] = owned;
+
+        // Nothing here can stop a thread, or tell that it ended, without T3 Code.
+        if (!reached.ok) return failClose({ code: 't3_unavailable', message: `The T3 thread "${first.title}" (${first.threadId}) may still run, and teamai could not reach T3 Code to stop it (${reached.failure.code}). Open T3 Code, then run teamai workflow cancel ${run} again.` });
         const s = reached.reached;
-        const live = running.get(op);
-        // A prompt still running here ends cancelled once its thread stopped, and is followed on while it did not.
-        const stopBy = Date.now() + STOP_WAIT_MS;
-        const why = live ? await stopRunning({ s, state: live, op, thread, cancelling: false, deadline: stopBy }) : await whyNotStopped(s.t3, thread.threadId, stopBy);
 
-        if (why !== undefined) return failClose({ code: 'thread_still_runs', message: `${stillRuns(s, thread, why)}.` });
+        const stops = await Promise.all(owned.map(async ({ op, thread }) => {
+          const live = running.get(op);
+          // A prompt still running here ends cancelled once its thread stopped, and is followed on while it did not.
+          const why = live ? await stopRunning({ s, state: live, op, thread, cancelling: false, deadline }) : await whyNotStopped(s.t3, thread.threadId, deadline);
 
-        const now = place(handle);
+          if (why !== undefined) return { thread, why };
+          const now = place(handle);
 
-        if (now) journal.write(endedIn(now, op));
+          if (now) journal.write(endedIn(now, op));
+
+          return undefined;
+        }));
+
+        const still = stops.find((stop) => stop !== undefined);
+
+        if (still) return failClose({ code: 'thread_still_runs', message: `${stillRuns(s, still.thread, still.why)}.` });
       }
 
       // Every thread of the place has ended now. Without T3 Code, they stay unsettled.
-      const unsettled = Object.values(place(handle)?.threads ?? {}).some((thread) => thread.ended && !thread.ended.settlement);
-      const reached = unsettled ? await reach() : undefined;
+      if (Object.values(place(handle)?.threads ?? {}).some((thread) => thread.ended && !thread.ended.settlement)) {
+        const reaching = await within(reach(), left());
+        const settling = reaching.answered && reaching.value.ok ? await within(settleEnded(handle, reaching.value.reached), left()) : undefined;
 
-      if (reached?.ok) await settleEnded(handle, reached.reached);
+        if (!reaching.answered || settling?.answered === false) return failClose({ code: 't3_unavailable', message: `${late} while teamai settled the place's ended threads, so it keeps the place. Run teamai workflow cancel ${run} again once T3 Code answers.` });
+      }
+
+      known = place(handle) ?? known;
     }
 
     // A judge's copy is the thread's scratch folder, so the thread loses its folder with it.
