@@ -198,13 +198,29 @@ describe('teamai-runtime-t3', () => {
       expect(t3.commandRuns()).toEqual([]);
     });
 
-    it('fails an unattended run whose sign-in has expired, with no t3 command', async () => {
+    // T3 issues no refresh token, so a credential about to expire is replaced by signing in again.
+    it('signs in again with no page when its sign-in has expired, in an unattended run, and keeps the new credential', async () => {
+      signIn(t3, 'fake-t3-token-expired-0000000000', 60);
+      const runtime = start();
+
+      runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
+
+      expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: true });
+      expect(t3.commandRuns()).toHaveLength(1);
+      expect(t3.calls().filter((call) => call.tool === 'oauth_token')).toHaveLength(1);
+      expect(fs.readFileSync(credentialsFile(t3.home), 'utf8')).not.toContain('fake-t3-token-expired-0000000000');
+      expect(fs.statSync(credentialsFile(t3.home)).mode & 0o777).toBe(0o600);
+    });
+
+    it('fails an unattended run whose sign-in has expired login_required, saying why it could not sign in again', async () => {
       signIn(t3, undefined, 60);
       const runtime = start({ PATH: PATH_WITHOUT_T3 });
 
       runtime.send({ type: 'init', protocol: 1, mode: 'unattended', options: { environment: 'local' } });
 
-      expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({ ok: false, error: { code: 'login_required' } });
+      expect(await runtime.next((line) => line['type'] === 'init')).toMatchObject({
+        ok: false, error: { code: 'login_required', message: expect.stringContaining('could not sign in through the t3 command (there is no t3 command on PATH)') },
+      });
     });
 
     // teamai gives init 15 s, so a T3 Code that does not answer fails init well before, saying so.
