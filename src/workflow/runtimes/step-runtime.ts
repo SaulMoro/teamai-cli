@@ -59,6 +59,11 @@ export interface Accepted {
 
 export interface ExecEvents {
   onAccepted?: (accepted: Accepted) => void;
+  /**
+   * A display the runtime gave apart from the acceptance, such as the agent it launched after it accepted a prompt. It
+   * neither accepts nor ends the operation, and may come before the acceptance.
+   */
+  onDisplay?: (display: RuntimeDisplay) => void;
   onOutput?: (stream: 'stdout' | 'stderr', data: string) => void;
 }
 
@@ -78,7 +83,7 @@ export interface StepRuntime {
   open(request: OpenRequest, onAccepted: (handle: string) => Promise<void>): Promise<Opened>;
   exec(request: ExecRequest, events: ExecEvents): Promise<ExecEnd>;
   /** Runs a prompt step on a runtime that launches agents its own way; any other answers it failed. */
-  prompt(request: PromptRequest, events: { onAccepted?: (accepted: Accepted) => void }): Promise<PromptEnd>;
+  prompt(request: PromptRequest, events: Pick<ExecEvents, 'onAccepted' | 'onDisplay'>): Promise<PromptEnd>;
   /** Stops operation `op` and every process it started. Its `exec` or `prompt` then ends `cancelled`. */
   cancel(op: OpId): Promise<void>;
   /** Brings the place's work back to the host, deletions included, never committed; after success and after failure. */

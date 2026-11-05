@@ -233,16 +233,21 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
   };
 
   /**
-   * Tells `onAccepted` of an operation's acceptance and keeps the display it carries, for the run's details. `kept`
-   * settles once that is written, and the operation's end waits for it.
+   * Tells `events` of an operation's acceptance and of each display the runtime gives apart from it, and keeps each
+   * display, with the acceptance or apart from it, for the run's details. `kept` settles once those are written, and the
+   * operation's end waits for it.
    */
-  const accepting = (onAccepted: ((accepted: Accepted) => void) | undefined) => {
+  const accepting = ({ onAccepted, onDisplay }: Pick<ExecEvents, 'onAccepted' | 'onDisplay'>) => {
     let kept: Promise<void> = Promise.resolve();
 
     return {
       onAccepted: (accepted: Accepted): void => {
         if (accepted.display) kept = kept.then(() => shown(accepted.display));
         onAccepted?.(accepted);
+      },
+      onDisplay: (display: RuntimeDisplay): void => {
+        kept = kept.then(() => shown(display));
+        onDisplay?.(display);
       },
       kept: () => kept,
     };
@@ -375,8 +380,8 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       const exec = before.exec ?? { op: newOpId() };
       await save({ ...before, exec, phase: 'running' });
       running = exec;
-      const acceptance = accepting(events.onAccepted);
-      const end = await runtime.exec({ op: exec.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted });
+      const acceptance = accepting(events);
+      const end = await runtime.exec({ op: exec.op, handle, ...request }, { ...events, onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay });
       await acceptance.kept();
       running = undefined;
 
@@ -436,8 +441,8 @@ export function attemptRun({ config, run, attempt, runtime, driver }: { config: 
       const sent = before.prompt ?? { op: newOpId() };
       await save({ ...before, prompt: sent, phase: 'running' });
       running = sent;
-      const acceptance = accepting(events.onAccepted);
-      const end = await runtime.prompt({ op: sent.op, handle, ...request }, { onAccepted: acceptance.onAccepted });
+      const acceptance = accepting(events);
+      const end = await runtime.prompt({ op: sent.op, handle, ...request }, { onAccepted: acceptance.onAccepted, onDisplay: acceptance.onDisplay });
       await acceptance.kept();
       running = undefined;
 

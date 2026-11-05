@@ -13,6 +13,9 @@
 // `close` keeps. It continues the session a prompt's lease names and says so in `finished`, unless `resumes: false`; with
 // `transcript`, its agent keeps each session in the member's Claude store, as an agent T3 or Paseo starts on this
 // machine does.
+// `agent.display` is what its agent shows once it exists, given with the prompt's acceptance; with `display_after_ms`, it
+// accepts the prompt at once with no display and sends that one as a `display` event that long after, as a runtime that
+// accepts before its slow launch and shows the agent once it exists.
 //
 // With `judge`, it also answers confined prompts, best effort: its init says so and offers `can.confined` at `level`
 // (`best-effort` unless given) with `access` (`read`) for `tools` (`claude`). It answers each one at once with `reply`
@@ -21,7 +24,8 @@
 // the PATH of each exec.
 //
 // `answer` makes it answer a request otherwise, by request type: `failed`, the failure reply for that handle or
-// operation; `error`, an error line that names no request; `silent`, nothing. `answer.init: silent` leaves an init for
+// operation; `error`, an error line that names no request; `silent`, nothing; `display`, only a `display` event for the
+// operation, with `agent.display` or else `display`. `answer.init: silent` leaves an init for
 // new work unanswered, as a sign-in check whose provider stalls, while recover mode still answers. A request it cannot
 // answer, such as one for a handle while its journal cannot be read, gets the failure reply for its handle or operation.
 //
@@ -396,8 +400,10 @@ function prompt(request) {
     return;
   }
 
-  // `agent.display` is what the agent shows once it exists: given with the prompt's acceptance, as Paseo and T3 do.
-  send({ op: request.op, event: 'accepted', ...(options.agent.display === undefined ? {} : { display: options.agent.display }) });
+  const { display, display_after_ms: displayAfter } = options.agent;
+  send({ op: request.op, event: 'accepted', ...(display === undefined || displayAfter !== undefined ? {} : { display }) });
+
+  if (display !== undefined && displayAfter !== undefined) setTimeout(() => send({ op: request.op, event: 'display', display }), displayAfter);
   noteCredentials(request, request.handle);
   promptCredentials.set(request.op, request.credentials);
 
@@ -558,6 +564,8 @@ function answeredOtherwise(request) {
   if (how === 'failed') send(request.op === undefined ? { event: 'failed', handle: request.handle, failure: refused } : { op: request.op, event: 'failed', failure: refused });
 
   if (how === 'error') send({ event: 'error', message: `The toy cannot answer ${request.type} of ${about}: answer.${request.type} is set.` });
+
+  if (how === 'display' && request.op !== undefined) send({ op: request.op, event: 'display', display: options.agent?.display ?? options.display });
 
   return true;
 }

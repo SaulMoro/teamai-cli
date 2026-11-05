@@ -4,7 +4,7 @@ import crossSpawn from 'cross-spawn';
 import { log } from '../../utils/logger.js';
 import { RUNTIME_PROTOCOL, type Can, type RuntimeFailure, type RuntimeRequest } from '@teamai/runtime-protocol';
 import { parseRuntimeLine, type HandleEvent, type OpEvent, type Shown } from './protocol.js';
-import type { ExecEnd, Initialized, Opened, PromptEnd, Reattached, StepRuntime } from './step-runtime.js';
+import type { ExecEnd, ExecEvents, Initialized, Opened, PromptEnd, Reattached, StepRuntime } from './step-runtime.js';
 
 /** How long `dispose` waits for a runtime to exit once its stdin ends; one that runs on is left to finish its own work. */
 const DISPOSE_WAIT_MS = 2000;
@@ -87,11 +87,12 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
 
   /**
    * Waits on operation `op`, which a `type` request starts: `on` reads each of its events, or why it got none. One with
-   * no answer within 15 s gets `runtime_unanswered`, since a runtime that never accepts it may still have started it.
+   * no answer within 15 s gets `runtime_unanswered`, since a runtime that never accepts it may still have started it. A
+   * `display` is no answer.
    */
   const listen = (type: OpWaiter['type'], op: string, on: OpWaiter['on']): void => {
     const waiter: OpWaiter = { type, on: (event) => {
-      clearTimeout(timer);
+      if (!('event' in event) || event.event !== 'display') clearTimeout(timer);
       on(event);
     } };
 
@@ -186,6 +187,13 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
       handles.set(request.handle, waiters);
       send(request);
     });
+  };
+
+  /** Gives `onDisplay` a display the runtime sent apart from the acceptance, when the run's details show it. */
+  const showApart = (events: Pick<ExecEvents, 'onDisplay'>, shown: Shown): void => {
+    const { display } = displayOf(name, shown);
+
+    if (display) events.onDisplay?.(display);
   };
 
   const isFailure = (value: OpEvent | HandleEvent | RuntimeFailure): value is RuntimeFailure => 'code' in value && !('event' in value);
@@ -296,6 +304,10 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
               events.onOutput?.(event.stream, event.data);
 
               return;
+            case 'display':
+              showApart(events, event.display);
+
+              return;
             case 'exited':
               ops.delete(request.op);
               resolve({ kind: 'exited', code: event.code, stdout: event.stdout });
@@ -348,6 +360,10 @@ export function stdioStepRuntime({ name, command, args = [], cwd }: { name: stri
           switch (event.event) {
             case 'accepted':
               events.onAccepted?.(displayOf(name, event.display));
+
+              return;
+            case 'display':
+              showApart(events, event.display);
 
               return;
             case 'finished': {

@@ -547,6 +547,32 @@ describe('a runtime\'s display over stdio', () => {
     expect(shown).toEqual([kept ? { display } : {}]);
   });
 
+  it('carries a display a prompt runtime sends after it accepted the prompt, apart from the acceptance', async () => {
+    const display = { label: 'Review the change', url: 't3://thread/5e1c', fields: { agent: 'claude' } };
+    const release = path.join(dir, 'release');
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    started.push(runtime);
+    expect(await runtime.init({ options: { state: path.join(dir, 'state'), agent: { output: { ok: true }, display, display_after_ms: 0, release } }, mode: 'unattended' })).toMatchObject({ ok: true });
+    const opened = await runtime.open({
+      op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {},
+      view: { worktree: path.join(dir, 'worktree'), readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} },
+    }, async () => {});
+    if (opened.kind !== 'ready') throw new Error('not opened');
+    const lease = { step: 'review', tool: 'claude', prompt: 'Review.', result: path.join(dir, 'out', 'result.json'), permissions: 'approval-required', interactive: false } as const;
+    const accepted: unknown[] = [];
+    const shown: unknown[] = [];
+
+    // The agent finishes only once its display arrived, so the display comes while the prompt runs.
+    const end = await runtime.prompt({ op: newOpId(), handle: opened.handle, lease, env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree') }, {
+      onAccepted: (acceptance) => { accepted.push(acceptance); },
+      onDisplay: (sent) => { shown.push(sent); fs.writeFileSync(release, ''); },
+    });
+
+    expect(end).toMatchObject({ kind: 'finished', result: { output: { ok: true } } });
+    expect(accepted).toEqual([{}]);
+    expect(shown).toEqual([display]);
+  });
+
   it('opens without a display that names a path in a Windows home', async () => {
     vi.stubEnv('HOME', 'C:\\Users\\me');
 
@@ -703,6 +729,72 @@ describe('a runtime that cannot close a place, over stdio', () => {
       vi.useRealTimers();
       fs.writeFileSync(release, '');
     }
+  });
+
+  it('keeps a display the runtime sends before it accepts a prompt, and still ends the prompt runtime_unanswered when no acceptance comes within 15 s', async () => {
+    const display = { label: 'Review the change', url: 't3://thread/5e1c' };
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    started.push(runtime);
+    expect(await runtime.init({ options: { state: path.join(dir, 'state'), agent: { display }, answer: { prompt: 'display' } }, mode: 'unattended' })).toMatchObject({ ok: true });
+    const accepted: unknown[] = [];
+    let showed: (sent: RuntimeDisplay) => void = () => {};
+    const shown = new Promise<RuntimeDisplay>((resolve) => { showed = resolve; });
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    try {
+      const op = newOpId();
+      const prompted = runtime.prompt({
+        op, handle: 'toy-r0123abcd-a0123abcd', env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree'),
+        lease: { step: 'review', tool: 'claude', prompt: 'p', result: path.join(dir, 'out', 'result.json'), permissions: 'unattended', interactive: false },
+      }, { onAccepted: (acceptance) => { accepted.push(acceptance); }, onDisplay: showed });
+
+      expect(await Promise.race([shown, prompted])).toEqual(display);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(await Promise.race([prompted, 'still waiting'])).toEqual({ kind: 'lost', failure: { code: 'runtime_unanswered', message: `Step runtime "toy" did not accept prompt ${op} within 15 s.` } });
+      expect(accepted).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ends an accepted prompt lost with runtime_unanswered 15 s after its cancel when the runtime answers the cancel with only a display', async () => {
+    const display = { label: 'Review the change', url: 't3://thread/5e1c' };
+    const release = path.join(dir, 'release');
+    const runtime = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    started.push(runtime);
+    expect(await runtime.init({ options: { state: path.join(dir, 'state'), agent: { release, display }, answer: { cancel: 'display' } }, mode: 'unattended' })).toMatchObject({ ok: true });
+    let promptAccepted: () => void = () => {};
+    let showed: (sent: RuntimeDisplay) => void = () => {};
+    const acceptance = new Promise<void>((resolve) => { promptAccepted = resolve; });
+    const shown = new Promise<RuntimeDisplay>((resolve) => { showed = resolve; });
+    const op = newOpId();
+    const promptEnd = runtime.prompt({
+      op, handle: 'toy-r0123abcd-a0123abcd', env: {}, unset: [], credentials: {}, cwd: path.join(dir, 'worktree'),
+      lease: { step: 'review', tool: 'claude', prompt: 'p', result: path.join(dir, 'out', 'result.json'), permissions: 'unattended', interactive: false },
+    }, { onAccepted: () => promptAccepted(), onDisplay: showed });
+    await acceptance;
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+
+    try {
+      await runtime.cancel(op);
+
+      expect(await Promise.race([shown, promptEnd])).toEqual(display);
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(await Promise.race([promptEnd, 'still waiting'])).toEqual({ kind: 'lost', failure: { code: 'runtime_unanswered', message: `Step runtime "toy" did not confirm the cancel of prompt ${op} within 15 s, so what it started may still run.` } });
+    } finally {
+      vi.useRealTimers();
+      fs.writeFileSync(release, '');
+    }
+  });
+
+  it('ignores a display for an operation it does not wait on', async () => {
+    const { runtime, handle } = await opened({ display: { label: 'place' }, answer: { cancel: 'display' } });
+
+    await runtime.cancel(newOpId());
+
+    expect(await runtime.reattach(handle)).toMatchObject({ kind: 'alive' });
   });
 
   it('fails an init the runtime does not answer within 15 s as runtime_unanswered', async () => {
