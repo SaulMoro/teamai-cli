@@ -36,7 +36,7 @@ Each call to `next` does this, in order:
 1. It settles the run. If the run has ended, it answers `done`.
 2. It hands back an open lease of this driver that `running` leaves out. A restarted driver sends `"running":[]` and gets its open leases back, one per call.
 3. It leases the first ready step in file order. The steps of a sub-workflow take the place of the step that runs it. A step that needs a workspace mode `driver.can.workspace` does not list, something else `driver.can` does not declare (see [Requirements and limits](#requirements-and-limits)), or a workspace another driver opened, is held back, and the next ready step is leased.
-4. When every ready step is leased, it answers `wait`, and `reason` names the first open lease. When every ready step is held back, `reason` names each one, separated by `; `, and `held` lists them as `{ step, reason, missing }`. `missing` names what the driver lacks, such as `hitl` or `workspace.new`, and is empty when another driver holds the workspace.
+4. When every ready step is leased, it answers `wait`, and `reason` names the first open lease. When every ready step is held back, `reason` names each one, separated by `; `, and `held` lists them as `{ step, reason, missing }`. `missing` names what the driver lacks, such as `hitl` or `workspace.new`. A workspace hold also lists the gaps that would remain if that workspace were available; when only another driver holds the workspace, `missing` is empty.
 
 A driver that sends no `running` gets its open lease back on every call, so it runs one step at a time.
 
@@ -1656,7 +1656,7 @@ What TeamAI records to prepare an attempt stays on this machine: paths and file 
 teamai workflow next <run> --prepare --json '{"driver":{"kind":"script","machine":"runner","workspace":"/work","can":{"workspace":["read-only","new","continue","clone"],"isolation":"sandbox","env":true,"setup":true,"tools":["claude"],"end_turn":true}},"running":[]}'
 ```
 
-With `--prepare`, teamai makes a [clone step](#clone-workspaces)'s clone on this machine, installs its team assets and runs setup, then answers the lease with `cwd`, the clone. A call can take as long as setup takes. A clone step is held from a driver that does not list `clone` in `workspace` or does not ask with `--prepare`, and `wait.held[].missing` names `workspace.clone` or `prepare`. A clone that runs as a team role also needs `can.role`. A step [confined to a directory](#confined-steps-in-your-own-driver) needs no place: `--prepare` answers its lease with `cwd`, its `confined.dir`, and makes, sets up or snapshots nothing of the checkout for it.
+With `--prepare`, teamai makes a [clone step](#clone-workspaces)'s clone on this machine, installs its team assets and runs setup, then answers the lease with `cwd`, the clone. A call can take as long as setup takes. A clone step is held from a driver that does not list `clone` in `workspace` or does not ask with `--prepare`, and `wait.held[].missing` lists `workspace.clone` when clone support is missing, together with any gaps that providing the clone would not close, such as `prepare`, `isolation` or `env`. A clone that runs as a team role also needs `can.role`. A step [confined to a directory](#confined-steps-in-your-own-driver) needs no place: `--prepare` answers its lease with `cwd`, its `confined.dir`, and makes, sets up or snapshots nothing of the checkout for it.
 
 For each lease the driver:
 
