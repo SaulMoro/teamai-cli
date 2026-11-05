@@ -1,17 +1,19 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
+import { auth, type OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import { OAuthClientInformationFullSchema, OAuthTokensSchema, type OAuthClientInformationMixed, type OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { z } from 'zod';
+import type { StepMode } from './t3.js';
 
 // ─── The member's sign-in to a T3 environment ───
 //
-//  T3's MCP endpoint takes a credential its OAuth flow issues: the person approves this runtime once in T3's page,
-//  and T3 grants a token for a limited time, with no refresh. The runtime keeps the client registration and the
-//  token per endpoint in one file of its own, mode 0600, so a later run, attended or not, reuses them:
+//  T3's MCP endpoint takes a credential its OAuth flow issues, for a limited time, with no refresh. The runtime
+//  approves its own sign-in with a pairing code the local `t3` command creates; when it cannot, the person approves it
+//  in T3's page. It keeps the client registration and the token per endpoint in one file of its own, mode 0600, so a
+//  later run, attended or not, reuses them:
 //
 //    ~/.teamai/runtime-state/t3/credentials.json
 //    { "http://127.0.0.1:3773/mcp": { "client": {...}, "tokens": {...}, "expiresAt": 1793600000000 } }
@@ -22,6 +24,15 @@ const EXPIRY_MARGIN_MS = 10 * 60_000;
 
 /** How long an attended sign-in waits for the person to approve it in T3's page. */
 const APPROVAL_TIMEOUT_MS = 5 * 60_000;
+
+/** How long the `t3` command may take to create a pairing code, well inside the 10 s an unattended init has. */
+const PAIRING_TIMEOUT_MS = 5_000;
+
+/** What teamai asks T3 for: reading and operating threads, the scopes T3 grants a sign-in at any mode a step runs in. */
+const SCOPES = ['orchestration:read', 'orchestration:operate'] as const;
+
+/** The name teamai registers with, which T3 lists its sign-in session under. */
+const CLIENT_NAME = 'teamai workflow';
 
 const EntrySchema = z.object({
   client: OAuthClientInformationFullSchema.optional(),
@@ -85,6 +96,39 @@ function opener(url: string): [string, string[]] {
   return ['xdg-open', [url]];
 }
 
+/**
+ * The SDK's OAuth client for `resource` over the credentials file, short of sending anyone to sign in: it registers
+ * teamai with `redirectUrl` once and keeps the registration, the PKCE verifier and the token the flow gets.
+ */
+function keptClient(stateDir: string, resource: string, redirectUrl: string): Omit<OAuthClientProvider, 'redirectToAuthorization'> {
+  const store = credentialStore(stateDir);
+  let verifier = '';
+
+  return {
+    redirectUrl,
+    clientMetadata: {
+      client_name: CLIENT_NAME,
+      redirect_uris: [redirectUrl],
+      grant_types: ['authorization_code'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+      scope: SCOPES.join(' '),
+    },
+    clientInformation: (): OAuthClientInformationMixed | undefined => store.entry(resource).client,
+    saveClientInformation: (client) => {
+      const full = OAuthClientInformationFullSchema.safeParse(client);
+
+      if (full.success) store.update(resource, (entry) => ({ ...entry, client: full.data }));
+    },
+    tokens: () => validToken(stateDir, resource),
+    saveTokens: (tokens) => {
+      store.update(resource, (entry) => ({ ...entry, tokens, ...(tokens.expires_in === undefined ? { expiresAt: undefined } : { expiresAt: Date.now() + tokens.expires_in * 1000 }) }));
+    },
+    saveCodeVerifier: (codeVerifier) => { verifier = codeVerifier; },
+    codeVerifier: () => verifier,
+  };
+}
+
 export interface SignIn {
   provider: OAuthClientProvider;
   /** The authorization code T3's page sends back once the person approves, after the SDK sent them there. */
@@ -97,8 +141,6 @@ export interface SignIn {
  * credentials file. The page opens in the person's browser; its link also goes to stderr, for a browser that does not open.
  */
 export async function attendedSignIn(stateDir: string, resource: string): Promise<SignIn> {
-  const store = credentialStore(stateDir);
-  let verifier = '';
   let answer: { resolve: (code: string) => void; reject: (error: Error) => void } | undefined;
   const answered = new Promise<string>((resolve, reject) => { answer = { resolve, reject }; });
   // A rejection nobody awaits yet must not end the process.
@@ -130,25 +172,7 @@ export async function attendedSignIn(stateDir: string, resource: string): Promis
   const timer = setTimeout(() => answer?.reject(new Error('Nobody approved the T3 Code sign-in within 5 minutes.')), APPROVAL_TIMEOUT_MS);
 
   const provider: OAuthClientProvider = {
-    redirectUrl,
-    clientMetadata: {
-      client_name: 'teamai workflow',
-      redirect_uris: [redirectUrl],
-      grant_types: ['authorization_code'],
-      response_types: ['code'],
-      token_endpoint_auth_method: 'none',
-      scope: 'orchestration:read orchestration:operate',
-    },
-    clientInformation: (): OAuthClientInformationMixed | undefined => store.entry(resource).client,
-    saveClientInformation: (client) => {
-      const full = OAuthClientInformationFullSchema.safeParse(client);
-
-      if (full.success) store.update(resource, (entry) => ({ ...entry, client: full.data }));
-    },
-    tokens: () => validToken(stateDir, resource),
-    saveTokens: (tokens) => {
-      store.update(resource, (entry) => ({ ...entry, tokens, ...(tokens.expires_in === undefined ? { expiresAt: undefined } : { expiresAt: Date.now() + tokens.expires_in * 1000 }) }));
-    },
+    ...keptClient(stateDir, resource, redirectUrl),
     redirectToAuthorization: (authorizationUrl) => {
       process.stderr.write(`Approve teamai in T3 Code to run workflow steps as threads: ${authorizationUrl.toString()}\n`);
       const [command, args] = opener(authorizationUrl.toString());
@@ -156,8 +180,6 @@ export async function attendedSignIn(stateDir: string, resource: string): Promis
       child.on('error', () => {});
       child.unref();
     },
-    saveCodeVerifier: (codeVerifier) => { verifier = codeVerifier; },
-    codeVerifier: () => verifier,
   };
 
   return {
@@ -168,6 +190,109 @@ export async function attendedSignIn(stateDir: string, resource: string): Promis
       listener.close();
     },
   };
+}
+
+/** What the `t3` command prints for a pairing code it created; the code itself is `credential`. */
+const PairingSchema = z.object({ credential: z.string().min(1) });
+
+/** T3's answer to a sign-in decision: the redirect that carries the authorization code. */
+const DecisionSchema = z.object({ redirectTo: z.url() });
+
+/** The fields of an authorization request T3's decision endpoint reads, as the SDK put them in the sign-in page's address. */
+const AUTHORIZATION_FIELDS = ['response_type', 'client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'state', 'resource'] as const;
+
+/** Creates a pairing code with the local `t3` command for the T3 server whose data directory is `t3Home`; never says the code. */
+function createPairingCode(t3Home: string): Promise<string> {
+  const args = ['auth', 'pairing', 'create', '--json', '--base-dir', t3Home, ...SCOPES.flatMap((scope) => ['--scope', scope]), '--ttl', '2m', '--label', CLIENT_NAME];
+
+  return new Promise((resolve, reject) => {
+    execFile('t3', args, { timeout: PAIRING_TIMEOUT_MS, encoding: 'utf8' }, (error, stdout, stderr) => {
+      if (error) {
+        const said = stderr.trim().split('\n').at(-1)?.slice(0, 200);
+
+        const why = 'code' in error && error.code === 'ENOENT' ? 'there is no t3 command on PATH'
+          : error.killed ? `t3 auth pairing create did not answer within ${PAIRING_TIMEOUT_MS / 1_000} s`
+            : `t3 auth pairing create exited with status ${String(error.code)}${said ? `: ${said}` : ''}`;
+
+        reject(new Error(why));
+
+        return;
+      }
+
+      try {
+        resolve(PairingSchema.parse(JSON.parse(stdout)).credential);
+      } catch {
+        reject(new Error('t3 auth pairing create printed no pairing code'));
+      }
+    });
+  });
+}
+
+/**
+ * Approves the sign-in the SDK built `authorizationUrl` for with a pairing code, as T3's page posts it, and returns the
+ * authorization code T3 redirects with. `access` is the broadest mode T3 lets the sign-in's threads run in.
+ */
+async function approveWithPairingCode(authorizationUrl: URL, access: StepMode, t3Home: string): Promise<string> {
+  const code = await createPairingCode(t3Home);
+
+  const authorization = Object.fromEntries(AUTHORIZATION_FIELDS.flatMap((field) => {
+    const value = authorizationUrl.searchParams.get(field);
+
+    return value === null ? [] : [[field, value]];
+  }));
+
+  const reply = await fetch(new URL('decision', authorizationUrl), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ authorization, decision: { _tag: 'pairing-code', access, code } }),
+  });
+
+  const body: unknown = await reply.json().catch(() => undefined);
+
+  if (!reply.ok) {
+    const said = z.object({ message: z.string() }).safeParse(body);
+
+    throw new Error(`T3 Code refused the pairing code with HTTP ${reply.status}${said.success ? `: ${said.data.message}` : ''}`);
+  }
+
+  const decided = DecisionSchema.safeParse(body);
+
+  if (!decided.success) throw new Error('T3 Code answered the sign-in decision with no redirect');
+  const redirect = new URL(decided.data.redirectTo);
+  const authorizationCode = redirect.searchParams.get('code');
+
+  if (!authorizationCode) throw new Error(`T3 Code's sign-in redirect carried no code${redirect.searchParams.has('error') ? ` (${redirect.searchParams.get('error') ?? ''})` : ''}`);
+
+  return authorizationCode;
+}
+
+export type SilentSignIn = { ok: true } | { ok: false; reason: string };
+
+/**
+ * Signs teamai in to `resource` with no page and no question: the `t3` command on this machine creates a pairing code
+ * for the T3 server whose data directory is `t3Home`, and teamai approves its own authorization request with it, at
+ * `access`. The SDK's flow registers the client and holds the PKCE verifier, and keeps the token in the credentials
+ * file. A failure says why, in a few words, and names no code or token.
+ */
+export async function signInSilently({ stateDir, resource, access, t3Home }: { stateDir: string; resource: URL; access: StepMode; t3Home: string }): Promise<SilentSignIn> {
+  let authorizationCode: string | undefined;
+
+  // T3 accepts a loopback redirect on any port, and nobody follows this one: the decision hands the code back.
+  const provider: OAuthClientProvider = {
+    ...keptClient(stateDir, resource.href, 'http://127.0.0.1/callback'),
+    redirectToAuthorization: async (authorizationUrl) => { authorizationCode = await approveWithPairingCode(authorizationUrl, access, t3Home); },
+  };
+
+  try {
+    await auth(provider, { serverUrl: resource, scope: SCOPES.join(' ') });
+
+    if (authorizationCode === undefined) return { ok: false, reason: 'T3 Code started no sign-in' };
+    await auth(provider, { serverUrl: resource, scope: SCOPES.join(' '), authorizationCode });
+
+    return validToken(stateDir, resource.href) ? { ok: true } : { ok: false, reason: 'T3 Code issued no credential' };
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 /** An unattended client: the kept token or nothing, and no sign-in, since nobody is there to approve one. */
