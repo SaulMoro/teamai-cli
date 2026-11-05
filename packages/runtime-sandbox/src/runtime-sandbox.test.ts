@@ -478,11 +478,61 @@ describe('a prompt attempt in a container', () => {
     expect(engine.containers()).toEqual([]);
   });
 
+  it('opens in recover mode while the engine is down without running it, and offers nothing', async () => {
+    engine.daemon(false);
+    const connection = start();
+
+    expect(await init(connection, { provider: 'docker', image: IMAGE }, 'recover')).toEqual({ type: 'init', ok: true, can: {} });
+    expect(engine.calls()).toEqual([]);
+  });
+
+  it("stops and removes a dead runtime's exec in recover mode, running the engine only for the stop and the removal", async () => {
+    const first = start();
+    await init(first, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(first, at);
+    const op = newOp();
+    first.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'touch started; sleep 30'] });
+    await first.next((message) => message.op === op && message.event === 'accepted');
+    await vi.waitFor(() => { expect(fs.existsSync(path.join(at.worktree, 'started'))).toBe(true); }, { timeout: 10_000 });
+    first.child.kill('SIGKILL');
+    await first.end();
+    const before = engine.calls().length;
+    const second = start();
+
+    expect(await init(second, { provider: 'docker', image: IMAGE }, 'recover')).toEqual({ type: 'init', ok: true, can: {} });
+    second.send({ type: 'cancel', op });
+    expect(await second.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 30_000)).toEqual({ op, event: 'cancelled' });
+    second.send({ type: 'reattach', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'alive' || message.event === 'gone' || message.event === 'failed')).toMatchObject({ event: 'alive', handle: HANDLE, ops: [{ op, state: 'cancelled' }] });
+    second.send({ type: 'collect', handle: HANDLE });
+    expect(await second.next((message) => message.handle === HANDLE && message.event !== 'alive')).toEqual({ event: 'collected', handle: HANDLE });
+    second.send({ type: 'close', handle: HANDLE });
+    expect(await second.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+
+    expect(engine.calls().slice(before).map(([, command]) => command)).toEqual(['restart', 'rm']);
+    expect(engine.containers()).toEqual([]);
+  });
+
+  it('answers a reattach from its journal alone, without asking the engine, even while the engine is down', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openPlace(connection, place());
+    engine.daemon(false);
+    const before = engine.calls().length;
+    connection.send({ type: 'reattach', handle: HANDLE });
+
+    expect(await connection.next((message) => message.event === 'alive' || message.event === 'gone' || message.event === 'failed')).toEqual({ event: 'alive', handle: HANDLE, ops: [], display: { label: `${HANDLE} (docker)`, fields: { container: HANDLE, image: IMAGE } } });
+    expect(engine.calls().slice(before)).toEqual([]);
+    // An error line would fail every request teamai is waiting on.
+    expect(connection.messages.filter((message) => message.event === 'error')).toEqual([]);
+  });
+
   // teamai's order after a driver died: cancel the exec, reattach until it no longer runs, collect, close.
   it.each<{ options: Message; remove: string }>([
     { options: { provider: 'docker', image: IMAGE }, remove: 'docker rm --force' },
     { options: { provider: 'sbx', agent: 'claude' }, remove: 'sbx rm --force' },
-  ])("keeps a dead runtime's $options.provider sandbox through a reattach the engine cannot answer, and removes it at close", async ({ options, remove }) => {
+  ])("keeps a dead runtime's $options.provider sandbox through a reattach while the engine is down, and removes it at close", async ({ options, remove }) => {
     engine.image('claude', { claude: CLAUDE });
     const first = start();
     await init(first, options);
@@ -502,11 +552,11 @@ describe('a prompt attempt in a container', () => {
     await second.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 30_000);
     second.send({ type: 'reattach', handle: HANDLE });
 
-    // Not gone: the engine could not say whether the sandbox exists, so the place is still this attempt's.
+    // Not gone: the journal still holds the place, so it is still this attempt's, and the cleanup command is the op's.
     expect(await second.next((message) => message.event === 'alive' || message.event === 'gone', 30_000)).toMatchObject({
       event: 'alive', handle: HANDLE, ops: [{ op, state: 'failed', failure: { message: expect.stringContaining(remove) } }],
     });
-    expect(second.messages).toContainEqual({ event: 'error', message: expect.stringContaining(remove) });
+    expect(second.messages.filter((message) => message.event === 'error')).toEqual([]);
     second.send({ type: 'collect', handle: HANDLE });
     await second.next((message) => message.event === 'collected' || message.event === 'collect_failed');
     engine.daemon(true);
@@ -1178,13 +1228,17 @@ describe('an attempt in an sbx sandbox', () => {
     expect(engine.containers()).toEqual([]);
   });
 
-  it('reattach says gone when the sandbox of that name was removed meanwhile', async () => {
+  it('keeps a place whose sandbox was removed meanwhile until close finds it absent, and reattach then says gone', async () => {
     const connection = start();
     await init(connection, { provider: 'sbx', agent: 'claude' });
     await openPlace(connection, place());
     execFileSync(path.join(engine.bin, 'sbx'), ['rm', '--force', HANDLE], { env: engine.env() });
     connection.send({ type: 'reattach', handle: HANDLE });
 
+    expect(await connection.next((message) => message.event === 'gone' || message.event === 'alive')).toMatchObject({ event: 'alive', handle: HANDLE, ops: [] });
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed')).toEqual({ event: 'closed', handle: HANDLE });
+    connection.send({ type: 'reattach', handle: HANDLE });
     expect(await connection.next((message) => message.event === 'gone' || message.event === 'alive')).toEqual({ event: 'gone', handle: HANDLE });
   });
 
