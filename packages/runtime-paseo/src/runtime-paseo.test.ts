@@ -85,6 +85,9 @@ const agentsOf = (): string[] => {
   return fs.existsSync(file) ? Object.keys((JSON.parse(fs.readFileSync(file, 'utf8')) as { agents: Record<string, unknown> }).agents) : [];
 };
 
+/** How a close that keeps an attempt, while a create it sent may still start the agent, says so, and how to release it. */
+const mayStartMessage = (agentId: string, op: string): string => `Paseo does not show the claude agent ${agentId} yet, though its create was sent, so it may still start in the worktree. Once it appears, run teamai workflow cancel ${RUN} again, which stops it. If it never appears in Paseo, the create was refused: delete ${path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'ops', `${op}.json`)} and run teamai workflow cancel ${RUN} again.`;
+
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** The Paseo workspace the fake daemon opened on the worktree. */
@@ -651,7 +654,7 @@ describe('teamai-runtime-paseo', () => {
       event: 'close_failed', handle,
       failure: {
         code: 'close_failed',
-        message: `Paseo does not show the claude agent ${agentId}, though its create was sent, so that create may still start it in the worktree. Look for the agent in the Paseo app and stop it if it runs, then close the attempt again: teamai keeps the attempt until Paseo shows the agent.`,
+        message: mayStartMessage(agentId, 'op-0000000b'),
       },
     };
 
@@ -673,6 +676,26 @@ describe('teamai-runtime-paseo', () => {
     expect(Object.values(kept.agents).filter((agent) => agent.status === 'running')).toEqual([]);
     expect(journalFiles()).toEqual([]);
   }, 40_000);
+
+  it('closes an attempt whose refused create never starts its agent once the record the close names is deleted', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, create_ms: 60_000, refuse_create_early: 'Connection reset before the create was answered' });
+    const runtime = start();
+    await ready(runtime, { mode: 'attended' });
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
+    const isCloseAnswer = (line: RuntimeMessage): boolean => 'event' in line && !('op' in line) && ['closed', 'close_failed'].includes(line.event);
+    runtime.send({ type: 'close', handle });
+    expect(await runtime.next(isCloseAnswer)).toEqual({ event: 'close_failed', handle, failure: { code: 'close_failed', message: mayStartMessage(agentIdOf(OpIdSchema.parse('op-0000000b')), 'op-0000000b') } });
+
+    // The person sees no such agent in Paseo, and deletes the record the message names.
+    fs.rmSync(path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'ops', 'op-0000000b.json'));
+    runtime.send({ type: 'close', handle });
+
+    expect(await runtime.next(isCloseAnswer)).toEqual({ event: 'closed', handle });
+    expect(journalFiles()).toEqual([]);
+    expect(agentsOf()).toEqual([]);
+  });
 
   it('ends a prompt whose create never reached Paseo agent_create_failed, since no agent can have started', async () => {
     behave({ output: { ok: true } });
