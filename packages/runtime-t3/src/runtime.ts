@@ -4,7 +4,7 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { promisify } from 'node:util';
 import {
-  CANCEL_FAILED, PromptResultSchema, RUNTIME_PROTOCOL, RuntimeRequestSchema, type RUNTIME_MODES,
+  CANCEL_FAILED, OpIdSchema, PromptResultSchema, RUNTIME_PROTOCOL, RuntimeHandleSchema, RuntimeRequestSchema, type RUNTIME_MODES,
   type ConfinedKept, type ConfinedPrompt, type OpId, type OpState, type PromptLease, type PromptResult, type RuntimeDisplay, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest,
 } from '@teamai/runtime-protocol';
 import { JsonValueSchema, type JsonValue } from '@teamai/tool-core/json';
@@ -159,6 +159,9 @@ function workOf(request: PromptRequest, opened: PlaceRecord): Work | undefined {
 
   return request.confined ? { kind: 'judge', confined: request.confined } : undefined;
 }
+
+/** What a line that is no protocol request may still name: the request it fails, which then gets its own failure. */
+const NamedSchema = z.object({ type: z.string().optional(), op: OpIdSchema.optional(), handle: RuntimeHandleSchema.optional() });
 
 const execFileAsync = promisify(execFile);
 
@@ -1383,7 +1386,20 @@ export function serve(options: ServeOptions): Promise<void> {
       try {
         request = RuntimeRequestSchema.parse(JSON.parse(text));
       } catch (error) {
-        write({ event: 'error', message: `Not a protocol ${RUNTIME_PROTOCOL} request: ${error instanceof Error ? error.message : String(error)}` });
+        const message = `Not a protocol ${RUNTIME_PROTOCOL} request: ${error instanceof Error ? error.message : String(error)}`;
+        let named: z.infer<typeof NamedSchema> = {};
+
+        try {
+          named = NamedSchema.catch({}).parse(JSON.parse(text));
+        } catch {
+          // Not JSON: it names nothing.
+        }
+
+        // teamai fails every request it waits on for an error line, so one is written only for a line that names none.
+        if (named.op !== undefined) fail(named.op, { code: named.type === 'cancel' ? CANCEL_FAILED : 'runtime_protocol', message });
+        else if (named.handle !== undefined) write({ event: 'failed', handle: named.handle, failure: { code: 'runtime_protocol', message } });
+        else if (named.type === 'init') write({ type: 'init', ok: false, error: { code: 'runtime_protocol', message } });
+        else write({ event: 'error', message });
 
         return;
       }
