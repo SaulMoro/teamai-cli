@@ -12,6 +12,7 @@
 //                               launchFails: T3 refuses every launch, a repeated one too; launchUnavailable: T3 answers every launch
 //                               with its generic orchestration_error refusal, before it looks anything up; launchMs: a launch answers this long after
 //                               it launched; launchReplyLost: a launch launches, then its reply never comes (an MCP error, not a refusal)
+//                               launchInvalid: a new launch's check refuses every launch, a repeated one too, with invalid_request
 //                               projectsMs: the project list answers this long after it was asked; environmentMs: the same for the environment
 //   FAKE_T3_STATE/calls.jsonl   each tool call as { tool, args, bearer }; bearer is "valid" or "invalid", never the token
 //   FAKE_T3_STATE/threads/      one JSON file per thread
@@ -213,6 +214,9 @@ const TOOLS = {
   },
   t3_thread_launch: async (args) => {
     if (config().launchFails) return fail('T3 Code cannot launch threads now.');
+
+    // As T3 answers when a check a new launch runs fails, such as a worktree the project does not have.
+    if (config().launchInvalid) return fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'invalid_request', message: `Worktree ${args.workspaceStrategy?.worktreePath} is not a worktree of project ${args.projectId}.` }));
 
     // As T3 answers when it could not complete the call, such as the repeated launch's own lookup failing.
     if (config().launchUnavailable) return fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'orchestration_error', message: 'The operation could not be completed.' }));

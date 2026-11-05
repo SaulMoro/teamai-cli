@@ -86,6 +86,8 @@ export interface FakeT3Config {
   resultRunStatus?: string;
   /** T3 refuses every launch, a repeated one too. */
   launchFails?: boolean;
+  /** A check a new launch runs refuses every launch, a repeated one too, with `invalid_request`: T3 launched nothing. */
+  launchInvalid?: boolean;
   /** T3 answers every launch with its generic `orchestration_error` refusal, as when it could not complete the call. */
   launchUnavailable?: boolean;
   /** How long after it launched the thread a launch answers, in ms. */
