@@ -103,6 +103,18 @@ describe('teamai-runtime-t3', () => {
       expect(t3.calls()).toEqual([]);
     });
 
+    // teamai opens a runtime in recover mode only to stop and close what it recorded, so a stop works whatever the sign-in.
+    it('opens in recover mode with no sign-in, asking T3 nothing and offering nothing', async () => {
+      const browser = fakeBrowser(dir);
+      const runtime = start({ PATH: `${browser.bin}${path.delimiter}${process.env['PATH'] ?? ''}` });
+
+      runtime.send({ type: 'init', protocol: 1, mode: 'recover', options: { environment: 'local' } });
+
+      expect(await runtime.next((line) => line['type'] === 'init')).toEqual({ type: 'init', ok: true, can: {} });
+      expect(browser.visits()).toEqual([]);
+      expect(t3.calls()).toEqual([]);
+    });
+
     it('fails an unattended run whose sign-in has expired', async () => {
       signIn(t3, undefined, 60);
       const runtime = start();
@@ -786,6 +798,59 @@ describe('teamai-runtime-t3', () => {
 
       expect(await second.next((line) => line['event'] === 'collected')).toEqual({ event: 'collected', handle: first.handle });
       expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+    });
+
+    describe('in recover mode, after the runtime that launched a thread exited', () => {
+      /** A step thread left running by a runtime that exited, and a runtime opened in recover mode. */
+      const recovering = async (op: string): Promise<{ runtime: Connection; handle: string }> => {
+        t3.config({ agent: { hold: true, output: {} } });
+        const first = await opened();
+        first.runtime.send(prompt(first.handle, op));
+        await first.runtime.next((line) => line['op'] === op && line['event'] === 'accepted');
+        await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+        await first.runtime.close();
+
+        const runtime = start();
+        runtime.send({ type: 'init', protocol: 1, mode: 'recover', options: { environment: 'local' } });
+        expect(await runtime.next((line) => line['type'] === 'init')).toEqual({ type: 'init', ok: true, can: {} });
+
+        return { runtime, handle: first.handle };
+      };
+
+      it('answers reattach from its journal, and reaches T3 only to stop the thread on cancel and to settle it at close', async () => {
+        const { runtime, handle } = await recovering('op-00000060');
+        const before = t3.calls().length;
+
+        runtime.send({ type: 'reattach', handle });
+        expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'alive', handle, ops: [{ op: 'op-00000060', state: 'running' }] });
+        expect(t3.calls().slice(before)).toEqual([]);
+
+        runtime.send({ type: 'cancel', op: 'op-00000060' });
+        expect(await runtime.next((line) => line['op'] === 'op-00000060')).toEqual({ op: 'op-00000060', event: 'cancelled' });
+        runtime.send({ type: 'collect', handle });
+        expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'collected', handle });
+        runtime.send({ type: 'close', handle });
+
+        expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'closed', handle });
+        expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+      });
+
+      it('keeps the place while T3 Code cannot be reached, and closes it once T3 Code is back', async () => {
+        const { runtime, handle } = await recovering('op-00000061');
+        await t3.stop();
+        fs.rmSync(path.join(t3.t3Home, 'userdata', 'server-runtime.json'));
+
+        runtime.send({ type: 'close', handle });
+        expect(await runtime.next((line) => line['handle'] === handle)).toMatchObject({ event: 'close_failed', failure: { code: 't3_unavailable', message: expect.stringContaining('Open T3 Code') } });
+
+        // The fake comes back on another port, where the same sign-in is kept under its new address.
+        await t3.start();
+        signIn(t3);
+        runtime.send({ type: 'close', handle });
+
+        expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'closed', handle });
+        expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
+      });
     });
 
     // As `teamai workflow cancel` goes for a run whose driver died (cancel, reattach, collect, close), with T3 Code down.
