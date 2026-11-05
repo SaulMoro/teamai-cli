@@ -839,7 +839,14 @@ export function serve(options: ServeOptions): Promise<void> {
     };
 
     if (cancelledEarly.delete(request.op)) {
-      refuse({ op: request.op, state: 'cancelled' });
+      // The mark says only that teamai cancelled the op before this process saw it: a thread or launch the journal holds
+      // for it ends the op cancelled once the cancel confirmed its stop, never on the mark alone.
+      if ((thread && !thread.ended) || pending) {
+        accept(thread);
+        await cancel(request.op);
+      } else {
+        refuse({ op: request.op, state: 'cancelled' });
+      }
 
       return;
     }

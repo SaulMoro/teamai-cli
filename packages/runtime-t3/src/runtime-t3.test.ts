@@ -1433,6 +1433,32 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]?.status).toBe('running');
     });
 
+    // Only a confirmed stop ends an op cancelled, never a mark that teamai cancelled it before the runtime saw its prompt.
+    it('stops the thread a record names before it ends cancelled a prompt teamai cancelled while that record was missing', async () => {
+      t3.config({ agent: { hold: true, output: {} } });
+      const first = await opened();
+      first.runtime.send(prompt(first.handle, 'op-00000071'));
+      await first.runtime.next((line) => line['op'] === 'op-00000071' && line['event'] === 'display');
+      await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+      await first.runtime.close();
+      const record = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places', `${encodeURIComponent(first.handle)}.json`);
+      fs.renameSync(record, `${record}.aside`);
+
+      const second = start();
+      second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+      await second.next((line) => line['type'] === 'init');
+      second.send({ type: 'cancel', op: 'op-00000071' });
+      second.send({ type: 'reattach', handle: first.handle });
+      expect(await second.next((line) => line['handle'] === first.handle)).toEqual({ event: 'gone', handle: first.handle });
+
+      fs.renameSync(`${record}.aside`, record);
+      second.send(prompt(first.handle, 'op-00000071'));
+
+      expect(await ended(second, 'op-00000071')).toEqual({ op: 'op-00000071', event: 'cancelled' });
+      expect(t3.threads()[0]?.status).toBe('interrupted');
+      expect(t3.calls().filter((call) => call.tool === 't3_thread_interrupt')).toHaveLength(1);
+    });
+
     // teamai fails every request it waits on when a runtime writes a line that names none, so each failure names its own.
     it('fails only the request it cannot carry out, naming its handle or op, when its journal cannot be written', async () => {
       const { runtime, handle } = await opened();
