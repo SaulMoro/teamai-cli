@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { z } from 'zod';
 import type { Can, RuntimeFailure } from '@teamai/runtime-protocol';
-import { sandboxName, type ExecEnd, type Provider } from '../provider.js';
+import { sandboxName, STOP_MS, type ExecEnd, type Provider } from '../provider.js';
 import { cliOf, LAUNCHABLE, mountsOf, type Ran } from './cli.js';
 
 // ─── sbx (Docker Sandboxes) ──────────────────────────────
@@ -51,7 +51,7 @@ export function sbxProvider({ agent, env }: { agent: string; env: NodeJS.Process
   const { run: cli } = cliOf({ name: 'sbx', env, notInstalled: NOT_INSTALLED });
 
   /** What sbx said: its `error: …` line and the `try: …` hint it adds, on one line. */
-  const messageOf = (ran: Ran): string => (ran.kind === 'unstartable' ? ran.message : ran.stderr.trim().split('\n').map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('✓')).slice(-2).join('; '));
+  const messageOf = (ran: Ran): string => (ran.kind !== 'ran' ? ran.message : ran.stderr.trim().split('\n').map((line) => line.trim()).filter((line) => line !== '' && !line.startsWith('✓')).slice(-2).join('; '));
 
   const unavailable = (message: string) => ({ ok: false, failure: { code: 'sandbox_unavailable', message } }) satisfies { ok: false; failure: RuntimeFailure };
 
@@ -94,7 +94,7 @@ export function sbxProvider({ agent, env }: { agent: string; env: NodeJS.Process
     async offer() {
       const ls = await cli(['ls', '--json']);
 
-      if (ls.kind === 'unstartable') return unavailable(ls.message);
+      if (ls.kind !== 'ran') return unavailable(ls.message);
 
       if (ls.code !== 0) return unavailable(`sbx cannot reach its daemon (${messageOf(ls)}). Run \`sbx daemon start\`, or \`sbx login\` if you are signed out, and start again.`);
       const policy = await cli(['policy', 'ls']);
@@ -153,7 +153,7 @@ export function sbxProvider({ agent, env }: { agent: string; env: NodeJS.Process
     },
 
     async stop(id) {
-      const stopped = await cli(['stop', id]);
+      const stopped = await cli(['stop', id], { timeoutMs: STOP_MS });
 
       if (stopped.kind === 'ran' && stopped.code === 0) return { ok: true };
 

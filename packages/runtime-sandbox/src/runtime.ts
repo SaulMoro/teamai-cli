@@ -1,7 +1,7 @@
 import readline from 'node:readline';
 import type { Readable } from 'node:stream';
 import { redact, redactJson } from '@teamai/shared/redact';
-import { PromptResultSchema, RuntimeRequestSchema, type Can, type ExecRequestSchema, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest } from '@teamai/runtime-protocol';
+import { CANCEL_FAILED, PromptResultSchema, RuntimeRequestSchema, type Can, type ExecRequestSchema, type OpenRequestSchema, type OpId, type OpState, type PromptRequestSchema, type RuntimeFailure, type RuntimeMessage, type RuntimeRequest } from '@teamai/runtime-protocol';
 import type { z } from 'zod';
 import type { ExecRecord, Journal, Outcome, PlaceRecord } from './journal.js';
 import { EVIDENCE_DIR, inEvidenceDir, judgeOf, offersSignedIn, NO_JUDGE_CREDENTIAL } from './judge.js';
@@ -37,6 +37,9 @@ interface Ready {
 
 /** How often an exec another runtime process runs is looked at, to answer its outcome. */
 const FOLLOW_MS = 100;
+
+/** How long an exec this process runs gets to end once its sandbox was stopped, before its cancel is answered unconfirmed. */
+const CONFIRM_MS = 4_000;
 
 export interface RuntimeDeps {
   input: Readable;
@@ -111,6 +114,8 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
   let ready: Ready = { provider: unreachable({ code: 'runtime_failed', message: 'The sandbox runtime has not been initialized: teamai sends init first.' }), can: {} };
   /** The ops this process runs, each with what resolves once its end is written. */
   const running = new Map<OpId, { ended: Promise<void>; end: () => void }>();
+  /** The ops whose stop this process asked for and has not confirmed or failed yet: each still runs, as far as it knows. */
+  const pendingStops = new Set<OpId>();
 
   const claim = (op: OpId): void => {
     let end = (): void => {};
@@ -150,6 +155,8 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
   };
 
   const stateOf = (exec: Journaled): OpState => {
+    if (pendingStops.has(exec.op)) return { op: exec.op, state: 'running' };
+
     if (exec.outcome) return { op: exec.op, ...exec.outcome };
 
     if (running.has(exec.op) || alive(exec.runner)) return { op: exec.op, state: 'running' };
@@ -420,40 +427,77 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
     settle({ state: 'finished', session: { tool: lease.tool, id: reading.session }, result: reading.result, ...(reading.usage && { usage: reading.usage }), confined: { level: 'verified', access: judge.tool.access } });
   };
 
-  const cancel = async (op: OpId, provider: Provider): Promise<void> => {
-    const record = journal.exec(op);
-
-    if (!record || record.outcome) return;
-    journal.cancel(op);
-    const place = journal.place(record.handle);
+  /**
+   * Stops what `op` runs, and when this process runs it, waits for its process to end: why the stop is not confirmed,
+   * or undefined once it is. A step's stop answers within STOP_MS + CONFIRM_MS, inside teamai's 15 s; a judge's
+   * removal, and the lookup of a sandbox whose id the journal lacks, have no bound of their own.
+   */
+  const stopOf = async (op: OpId, { handle }: ExecRecord, provider: Provider): Promise<RuntimeFailure | undefined> => {
+    const place = journal.place(handle);
     const found = place ? await sandboxOf(place, provider) : { ok: true as const, id: undefined };
 
     // A judge's container is removed, so an exec still on its way to the engine has nothing to start in; a step's
     // restarts, ready for the step's next exec. One the engine cannot look up is not stopped.
     const stopped = !found.ok ? found : found.id === undefined ? { ok: true as const } : place?.confined ? await provider.destroy(found.id) : await provider.stop(found.id);
 
-    // One the engine could not stop may still run: it ends failed now, with why, wherever it runs, and its place stays
-    // this attempt's for close to remove. When it ends after all, that end is not a second outcome (finish).
-    if (!stopped.ok) {
-      const outcome: Outcome = { state: 'failed', failure: stopped.failure };
+    if (!stopped.ok) return stopped.failure;
+    const ended = running.get(op)?.ended;
 
-      if (running.has(op)) {
-        finish(op, record.handle, outcome);
+    if (ended === undefined) return undefined;
+    let timer: NodeJS.Timeout | undefined;
+    const isEnded = await Promise.race([ended.then(() => true), new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(false), CONFIRM_MS); })]);
+    clearTimeout(timer);
+
+    return isEnded ? undefined : { code: CANCEL_FAILED, message: `Sandbox ${handle} was stopped, but exec ${op} did not end within ${CONFIRM_MS / 1000} s after, so it may still run. Run \`teamai workflow cancel ${place?.run ?? '<run>'}\` again to stop it.` };
+  };
+
+  const cancel = async (op: OpId, provider: Provider): Promise<void> => {
+    const record = journal.exec(op);
+    // A stop this runtime could not confirm is the one outcome a later cancel replaces.
+    const isRetried = record?.outcome?.state === 'failed' && record.outcome.failure.code === CANCEL_FAILED;
+
+    if (!record || (record.outcome !== undefined && !isRetried) || pendingStops.has(op)) return;
+    journal.cancel(op);
+    // Until this stop is confirmed or fails, reattach reports the op running, never what a cancel before it left.
+    pendingStops.add(op);
+
+    try {
+      const unconfirmed = await stopOf(op, record, provider);
+
+      // One the engine could not stop may still run: it ends failed now, with why, wherever it runs, and its place stays
+      // this attempt's for close to remove. When it ends after all, that end is not a second outcome (finish).
+      if (unconfirmed !== undefined) {
+        const outcome: Outcome = { state: 'failed', failure: { code: CANCEL_FAILED, message: unconfirmed.message } };
+
+        if (running.has(op)) {
+          finish(op, record.handle, outcome);
+
+          return;
+        }
+
+        // A first cancel of an exec that ended on its own meanwhile leaves that end.
+        if (!isRetried && journal.exec(op)?.outcome !== undefined) return;
+        journal.saveExec(op, { handle: record.handle, runner: record.runner, outcome });
+        write(terminal(op, outcome));
 
         return;
       }
 
-      if (journal.exec(op)?.outcome !== undefined) return;
-      journal.saveExec(op, { handle: record.handle, runner: record.runner, outcome });
-      write(terminal(op, outcome));
+      // A retried stop replaces the failure the stop before it left; whatever ran is gone once the engine stopped it.
+      if (isRetried) {
+        journal.saveExec(op, { handle: record.handle, runner: record.runner, outcome: { state: 'cancelled' } });
+        write(terminal(op, { state: 'cancelled' }));
 
-      return;
+        return;
+      }
+
+      // A stopped exec a live runtime process runs ends cancelled there; one whose process is gone ends here.
+      if (running.has(op) || alive(record.runner)) return;
+
+      write(terminal(op, settleOrphan({ op, ...record })));
+    } finally {
+      pendingStops.delete(op);
     }
-
-    // A stopped exec a live runtime process runs ends cancelled there; one whose process is gone ends here.
-    if (running.has(op) || alive(record.runner)) return;
-
-    write(terminal(op, settleOrphan({ op, ...record })));
   };
 
   /**

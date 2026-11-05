@@ -378,7 +378,7 @@ describe('a prompt attempt in a container', () => {
     second.send({ type: 'cancel', op });
 
     expect(await second.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 30_000)).toMatchObject({
-      op, event: 'failed', failure: { code: 'sandbox_failed', message: expect.stringContaining('docker rm --force') },
+      op, event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('docker rm --force') },
     });
     engine.daemon(true);
     second.send({ type: 'close', handle: HANDLE });
@@ -400,7 +400,7 @@ describe('a prompt attempt in a container', () => {
     connection.send({ type: 'cancel', op });
 
     expect(await connection.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({
-      op, event: 'failed', failure: { code: 'sandbox_failed', message: expect.stringContaining(`docker rm --force`) },
+      op, event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining(`docker rm --force`) },
     });
     engine.daemon(true);
     connection.send({ type: 'close', handle: HANDLE });
@@ -411,6 +411,82 @@ describe('a prompt attempt in a container', () => {
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(connection.messages.filter((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)))).toHaveLength(1);
   });
+
+  /** Starts an exec that runs until something stops it, and waits until it runs. */
+  async function runForever(connection: Connection, at: Place): Promise<string> {
+    const op = newOp();
+    connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'touch started; while :; do sleep 1; done'] });
+    await connection.next((message) => message.op === op && message.event === 'accepted');
+    await vi.waitFor(() => { expect(fs.existsSync(path.join(at.worktree, 'started'))).toBe(true); }, { timeout: 10_000 });
+
+    return op;
+  }
+
+  const ended = (op: string) => (message: Message): boolean => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event));
+
+  // teamai ends a live exec whose cancel has no outcome 15 s after it sent the cancel.
+  it.each<{ options: Message; remove: string }>([
+    { options: { provider: 'docker', image: IMAGE }, remove: 'docker rm --force' },
+    { options: { provider: 'sbx', agent: 'claude' }, remove: 'sbx rm --force' },
+  ])('answers the cancel of a live exec within 15 s when the $options.provider stop stalls, with cancel_failed and how to remove it', async ({ options, remove }) => {
+    engine.image('claude', { claude: CLAUDE });
+    const connection = start();
+    await init(connection, options);
+    const at = place();
+    await openPlace(connection, at);
+    const op = await runForever(connection, at);
+    engine.stopDelay(60_000);
+    const sent = Date.now();
+
+    connection.send({ type: 'cancel', op });
+
+    expect(await connection.next(ended(op), 15_000)).toMatchObject({ op, event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining(remove) } });
+    expect(Date.now() - sent).toBeLessThan(15_000);
+    engine.stopDelay(0);
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(engine.containers()).toEqual([]);
+  }, 60_000);
+
+  it('answers the cancel of a live exec within 15 s with cancel_failed when its process does not end after the stop', async () => {
+    engine.stopLag(16_000);
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    const op = await runForever(connection, at);
+    const sent = Date.now();
+
+    connection.send({ type: 'cancel', op });
+
+    expect(await connection.next(ended(op), 15_000)).toMatchObject({ op, event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining(`teamai workflow cancel ${RUN}`) } });
+    expect(Date.now() - sent).toBeLessThan(15_000);
+  }, 60_000);
+
+  it('reports a retried cancel running until its stop is confirmed, never the failure the cancel before left, then cancelled', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    const op = await runForever(connection, at);
+    engine.daemon(false);
+    connection.send({ type: 'cancel', op });
+    expect(await connection.next(ended(op), 15_000)).toMatchObject({ op, event: 'failed', failure: { code: 'cancel_failed' } });
+    engine.daemon(true);
+    engine.stopDelay(1_500);
+
+    connection.send({ type: 'cancel', op });
+    connection.send({ type: 'reattach', handle: HANDLE });
+
+    expect(await connection.next((message) => message.event === 'alive', 5_000)).toMatchObject({ event: 'alive', ops: [{ op, state: 'running' }] });
+    await vi.waitFor(async () => {
+      connection.send({ type: 'reattach', handle: HANDLE });
+      expect(await connection.next((message) => message.event === 'alive', 5_000)).toMatchObject({ ops: [{ op, state: 'cancelled' }] });
+    }, { timeout: 15_000, interval: 200 });
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(engine.containers()).toEqual([]);
+  }, 60_000);
 
   it('fails a cancel the engine could not stop for an exec a runtime teamai left still runs, and that exec is not kept again after close', async () => {
     const first = start();
@@ -430,7 +506,7 @@ describe('a prompt attempt in a container', () => {
     second.send({ type: 'cancel', op });
 
     expect(await second.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({
-      op, event: 'failed', failure: { code: 'sandbox_failed', message: expect.stringContaining('docker rm --force') },
+      op, event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('docker rm --force') },
     });
     engine.daemon(true);
     second.send({ type: 'close', handle: HANDLE });
@@ -457,10 +533,10 @@ describe('a prompt attempt in a container', () => {
 
     expect(await init(second, { provider: 'docker', image: IMAGE })).toMatchObject({ ok: false, error: { code: 'sandbox_unavailable' } });
     second.send({ type: 'cancel', op });
-    expect(await second.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'sandbox_unavailable' } });
+    expect(await second.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining("stays this attempt's") } });
     // teamai resends the exec after a restart: it is answered from the journal, and the place stays.
     second.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'touch started; sleep 30'] });
-    expect(await second.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'sandbox_unavailable' } });
+    expect(await second.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'cancel_failed' } });
     second.send({ type: 'reattach', handle: HANDLE });
     expect(await second.next((message) => message.event === 'alive' || message.event === 'gone', 5_000)).toMatchObject({ event: 'alive', handle: HANDLE, ops: [{ op, state: 'failed' }] });
     second.send({ type: 'reattach', handle: 'teamai-r0123abcd-a99999999' });
