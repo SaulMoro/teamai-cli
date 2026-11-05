@@ -61,7 +61,27 @@ teamai pull
 teamai workflow start readme-review --driver t3
 ```
 
-The first run opens T3's sign-in page in your browser. Approve teamai there with **Auto** access. The access you pick is the broadest mode a step thread can run in, and a thread runs in Auto unless you [tighten it](#how-much-a-step-thread-asks-you). teamai keeps the credential in `~/.teamai/runtime-state/t3/credentials.json` (mode 0600), so later runs sign in without the page until T3's credential expires.
+The first run signs teamai in to T3 Code with no page and no question. teamai asks the `t3` command on this machine for a pairing code that lasts two minutes, and approves its own sign-in with it at the run's `runtime_mode`: Auto, unless you [tighten it](#how-much-a-step-thread-asks-you). The command it runs:
+
+```sh
+t3 auth pairing create --json --base-dir ~/.t3 --scope orchestration:read --scope orchestration:operate --ttl 2m --label "teamai workflow"
+```
+
+T3 lists the sign-in as a session of its own:
+
+```text
+$ t3 auth session list
+af508185-8908-4575-a1d0-f3c6f67cddec
+  scopes: orchestration:read orchestration:operate
+  method: bearer-access-token
+  subject: mcp-client
+  client: teamai workflow | bot | 127.0.0.1
+  expires: 2026-12-05T18:57:31.647Z
+```
+
+teamai keeps the credential in `~/.teamai/runtime-state/t3/credentials.json` (mode 0600). Later runs reuse it. When T3 expires it after 30 days, the next run signs in again the same way. To revoke it, run `t3 auth session revoke <id>`.
+
+If `t3` is not on your PATH, or T3 refuses the code, the run opens T3's sign-in page instead. Create a pairing code in T3 Code, pick **Auto** access, enter the code and approve. The access you pick is the broadest mode a step thread can run in.
 
 **4. Watch the step in T3.** `inventory` runs on your machine. `review` appears in the project's thread list as `review · teamai r928e2fc23ab9bd62`. Its first message says which run it belongs to:
 
@@ -130,10 +150,10 @@ workflows:
 {"error":{"code":"bad_option","message":"Runtime \"t3\" of driver definition …/drivers/teamai-t3.yaml refused option \"runtime_mode\": runtime_mode \"full-access\" is not one runtime t3 takes. A step thread runs in auto, T3's Auto mode; runtime_mode only tightens it, to auto-accept-edits or approval-required. Remove it, or set one of those two. Fix the option and start again."}}
 ```
 
-If you approved teamai with narrower access than the mode, for example Supervised, T3 refuses the thread and the step fails:
+teamai's sign-in caps the mode. If it allows less than the run's mode, T3 refuses the thread and the step fails. For example, an earlier run with `runtime_mode: approval-required` signed in as Supervised, and this run uses Auto:
 
 ```text
-✖ Step "review" failed with runtime_failed: The step runtime could not run the prompt (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode, because teamai's sign-in does not allow it (Child runtime mode auto is broader than parent mode approval-required.). Remove ~/.teamai/runtime-state/t3/credentials.json, start the workflow again, and approve teamai with Auto access or broader. Or set runtime_mode to a mode the sign-in allows.
+✖ Step "review" failed with runtime_failed: The step runtime could not run the prompt (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode, because teamai's sign-in does not allow it (Child runtime mode auto is broader than parent mode approval-required.). Remove ~/.teamai/runtime-state/t3/credentials.json and start the workflow again; teamai signs in again at the run's runtime_mode. Or set runtime_mode to a mode the sign-in allows.
 ```
 
 ## Pick the provider instance and the model
@@ -211,10 +231,10 @@ A T3 judge runs at **best-effort** [isolation](scorers.md#isolation):
 
 ## Unattended runs
 
-In CI, or a run with `TEAMAI_MODE=unattended`, nobody can approve a sign-in or a tool request. An unattended run reuses the credential an attended run kept, and fails at once without one:
+In CI, or a run with `TEAMAI_MODE=unattended`, nobody can approve a sign-in or a tool request. An unattended run signs in through the `t3` command as any run does, so a scheduled run keeps working after the credential expires. When the `t3` command cannot sign it in, it fails at once and says why:
 
 ```text
-{"error":{"code":"runtime_failed","message":"Runtime \"t3\" of driver \"teamai-t3\" did not start (login_required): teamai has no valid T3 Code sign-in for http://127.0.0.1:3773, and an unattended run cannot ask for one. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again."}}
+{"error":{"code":"runtime_failed","message":"Runtime \"t3\" of driver \"teamai-t3\" did not start (login_required): teamai has no valid T3 Code sign-in for http://127.0.0.1:3773 and could not sign in through the t3 command (there is no t3 command on PATH), and an unattended run cannot ask for one. Start any workflow with --driver t3 from a terminal on this machine once, approve teamai in the page T3 Code opens, then run this again."}}
 ```
 
 An unattended run's threads still run in Auto, or your `runtime_mode`. A step whose agent asks for an approval anyway is stopped, and fails `tool_failed` naming the thread. If T3 does not stop the thread, the step fails `cancel_failed` instead, and teamai keeps the step's place until a later `teamai workflow cancel` stops it. Interactive steps run only in attended runs.
@@ -249,7 +269,8 @@ An `interactive: true` prompt step opens a thread you work in. The thread is tol
 | What you see | Why | Do this |
 | --- | --- | --- |
 | `T3 Code is not running on this machine.` | No T3 server here. teamai reads `~/.t3/userdata/server-runtime.json`, or `$T3CODE_HOME/userdata/…` | Open T3 Code, then run again. |
-| `… (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode …` | You approved teamai with narrower access than the mode the thread runs in. | Remove `~/.teamai/runtime-state/t3/credentials.json`, run again, and approve with Auto access. Or set `runtime_mode`. |
+| `… (login_required): … could not sign in through the t3 command (there is no t3 command on PATH) …` | An unattended run has no valid sign-in, and the `t3` command could not create one. The text in brackets says why. | Check that `t3 auth session list` works in the shell teamai runs in, then run again. |
+| `… (sign_in_too_narrow): T3 Code refused to start the step's thread in auto mode …` | teamai's sign-in allows less than the mode the thread runs in. | Remove `~/.teamai/runtime-state/t3/credentials.json` and run again: teamai signs in again at the run's `runtime_mode`. Or set `runtime_mode`. |
 | `… is not a project in T3 Code <machine>.` | The checkout is not a T3 project. | Add it in T3 Code (Add project), or run `t3 project add <path>`. |
 | `T3 Code has no provider instance "claude-sandbox".` | `instance` names an instance T3 does not have, or one that is disabled. | Add or enable it in T3 Code under Settings → Providers, or remove `instance`. |
 | `… ended without writing the result file …` | The agent finished without writing its result. | Open the thread from the link in the message, then `teamai workflow retry <run> <step>`. |
