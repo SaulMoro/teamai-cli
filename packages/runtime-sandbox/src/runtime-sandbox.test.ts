@@ -884,6 +884,52 @@ describe('a prompt attempt in a container', () => {
     expect(connection.messages.filter(ended(op))).toHaveLength(1);
   });
 
+  it("reattaches and closes a healthy place whatever another attempt's damaged record holds, and still fails that attempt until it is mended", async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    const otherHandle = `teamai-${RUN}-a0000beef`;
+    const opened = newOp();
+    connection.send({ type: 'open', op: opened, run: RUN, attempt: 'a0000beef', credentials: {}, view: { worktree: at.worktree, readonly: [at.git], result: at.result, runDir: at.runDir, toolHome: { CLAUDE_CONFIG_DIR: at.toolHome } } });
+    await connection.next((message) => message.op === opened && message.event === 'ready', 30_000);
+    const op = newOp();
+    connection.send({ type: 'exec', op, handle: otherHandle, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'echo ran'] });
+    await connection.next(ended(op), 30_000);
+    const record = journalFiles().find((file) => file.endsWith(`${op}.json`)) ?? '';
+    const kept = fs.readFileSync(record, 'utf8');
+    fs.writeFileSync(record, '{"handle":');
+
+    connection.send({ type: 'reattach', handle: HANDLE });
+    expect(await connection.next((message) => message.handle === HANDLE && message.op === undefined)).toMatchObject({ event: 'alive', ops: [] });
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.handle === HANDLE && message.op === undefined, 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(engine.containers()).toEqual([otherHandle]);
+    // The damaged record is that attempt's own: never skipped as absent.
+    connection.send({ type: 'reattach', handle: otherHandle });
+    expect(await connection.next((message) => message.handle === otherHandle && message.op === undefined)).toMatchObject({ event: 'failed', failure: { message: expect.stringContaining(record) } });
+
+    fs.writeFileSync(record, kept);
+    connection.send({ type: 'close', handle: otherHandle });
+    expect(await connection.next((message) => message.handle === otherHandle && message.op === undefined, 30_000)).toEqual({ event: 'closed', handle: otherHandle });
+    expect(journalFiles()).toEqual([]);
+  });
+
+  it('leaves no journal file behind at close, a write a crash left before its rename included', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    await exec(connection, { argv: ['/bin/sh', '-c', 'echo ran'], cwd: at.worktree });
+
+    // Each record is written to `<record>.<pid>.tmp`, then renamed: a runtime killed between leaves the first.
+    for (const file of journalFiles()) fs.copyFileSync(file, `${file}.99999.tmp`);
+    connection.send({ type: 'close', handle: HANDLE });
+
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(journalFiles()).toEqual([]);
+  });
+
   it('collects with the work already at its host path, and close removes the container', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });
