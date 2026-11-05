@@ -1222,6 +1222,44 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     expect(connection.messages.filter((message) => message.event === 'error')).toEqual([]);
   });
 
+  it('leaves no container, filter, network or record when teamai closes a judge while its container is being created', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openJudge(connection, { ANTHROPIC_API_KEY: 'judge-key-1' });
+    engine.delay('run', 1_000);
+    const op = newOp();
+    const ended = judge(connection, { credentials: { ANTHROPIC_API_KEY: 'judge-key-1' }, op, lease: { model: { name: '--hang' } } });
+    await vi.waitFor(() => { expect(engine.calls().some(([, command, ...rest]) => command === 'run' && rest.includes(`${HANDLE}-proxy`))).toBe(true); }, { timeout: 10_000 });
+
+    connection.send({ type: 'close', handle: HANDLE });
+
+    expect(await ended).toEqual({ op, event: 'cancelled' });
+    expect(await connection.next((message) => message.handle === HANDLE && message.event !== 'ready', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(engine.containers()).toEqual([]);
+    expect(engine.networks()).toEqual([]);
+    expect(journalFiles()).toEqual([]);
+    expect(engine.calls().filter(([, command]) => command === 'exec')).toEqual([]);
+  }, 60_000);
+
+  it("removes the judge's container a cancel overtook while it was being created, and close removes the rest", async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openJudge(connection, { ANTHROPIC_API_KEY: 'judge-key-1' });
+    engine.delay('run', 1_000);
+    const op = newOp();
+    const ended = judge(connection, { credentials: { ANTHROPIC_API_KEY: 'judge-key-1' }, op, lease: { model: { name: '--hang' } } });
+    await vi.waitFor(() => { expect(engine.calls().some(([, command, ...rest]) => command === 'run' && rest[rest.indexOf('--name') + 1] === HANDLE)).toBe(true); }, { timeout: 10_000 });
+
+    connection.send({ type: 'cancel', op });
+
+    expect(await ended).toEqual({ op, event: 'cancelled' });
+    expect(engine.containers()).toEqual([`${HANDLE}-proxy`]);
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.handle === HANDLE && message.event !== 'ready', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(engine.containers()).toEqual([]);
+    expect(engine.networks()).toEqual([]);
+  }, 60_000);
+
   it('stops a judge on cancel', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });

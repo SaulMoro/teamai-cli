@@ -47,6 +47,8 @@ export interface FakeEngine {
   stopLag(ms: number): void;
   /** Makes a stop wait `ms` before it stops anything, as a daemon slow to answer. */
   stopDelay(ms: number): void;
+  /** Makes every later run of `command` (`run`, `rm`, …) wait `ms` before it does anything; 0 lets it run at once again. */
+  delay(command: string, ms: number): void;
   /** Stores or removes an sbx secret for `service`, which sbx's proxy injects; a sandbox sees only its placeholder. */
   secret(service: string, isSet: boolean): void;
   /** Makes sbx answer as one whose global network policy was initialized, or never was. */
@@ -90,6 +92,9 @@ export function fakeEngine(dir: string): FakeEngine {
     },
     stopDelay(ms) {
       fs.writeFileSync(path.join(state, 'stop-delay'), String(ms));
+    },
+    delay(command, ms) {
+      fs.writeFileSync(path.join(state, `delay-${command}`), String(ms));
     },
     failRemove(shouldFail) {
       if (shouldFail) fs.writeFileSync(path.join(state, 'rm-fails'), '');
