@@ -7,8 +7,8 @@ import { z } from 'zod';
 //
 //  What this runtime keeps across its own restarts, in a directory on the host:
 //
-//    places/<handle>.json   the attempt a handle opened, and the Paseo workspace that adopted its worktree, or, for a
-//                           confined prompt's place, the prompt's directory
+//    places/<handle>.json   the attempt a handle opened, and the Paseo workspace that adopted its worktree once Paseo
+//                           opened it, or, for a confined prompt's place, the prompt's directory
 //    ops/<op>.json          a prompt: its handle, the agent create it sends, and once it ended, its outcome
 //    ops/<op>.cancel        teamai cancelled it, written before the agent is cancelled: Paseo reports a cancelled
 //                           agent as idle, so only this file tells a cancel from a finish
@@ -29,8 +29,9 @@ const PlaceSchema = z.discriminatedUnion('kind', [
     kind: z.literal('worktree'),
     run: z.string(),
     attempt: z.string(),
-    workspace: WorkspaceSchema,
-    /** The worktree the workspace adopted. */
+    /** Absent until Paseo opened the worktree: the open is accepted, and its handle kept, before. */
+    workspace: WorkspaceSchema.optional(),
+    /** The worktree: as teamai gave it until Paseo opened it, then as the workspace adopted it. */
     cwd: z.string(),
     /** The run's scratch directory, which the place's agents write at its own path. */
     runDir: z.string(),
@@ -110,6 +111,15 @@ function read<T>(file: string, schema: z.ZodType<T>): T | undefined {
   return schema.parse(JSON.parse(text));
 }
 
+/** A directory with its links resolved, as Paseo names a workspace's, or as given when it is gone. */
+function resolved(directory: string): string {
+  try {
+    return fs.realpathSync(directory);
+  } catch {
+    return path.resolve(directory);
+  }
+}
+
 function write(file: string, value: Place | PromptRecord): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = `${file}.${process.pid}.tmp`;
@@ -142,8 +152,13 @@ export function journal(root: string) {
     savePlace: (handle: string, place: Place): void => write(placeFile(handle), place),
     /** The handle already opened for an attempt, so a repeated open opens no second place. */
     handleOf: ({ run, attempt }: { run: string; attempt: string }): string | undefined => places().find(({ place }) => place.run === run && place.attempt === attempt)?.handle,
-    /** The handles open on a Paseo workspace, which the last of them archives when it closes. */
-    handlesIn: (workspaceId: string): string[] => places().filter(({ place }) => place.workspace?.id === workspaceId).map(({ handle }) => handle),
+    /**
+     * The handles open on a Paseo workspace, which the last of them archives when it closes: those Paseo opened it for,
+     * and those still being opened on its `directory`, which Paseo will open it for.
+     */
+    handlesIn: ({ id, directory }: { id: string; directory?: string }): string[] => places().filter(({ place }) => (place.workspace
+      ? place.workspace.id === id
+      : place.kind === 'worktree' && directory !== undefined && resolved(place.cwd) === resolved(directory))).map(({ handle }) => handle),
     prompt: (op: OpId): PromptRecord | undefined => read(promptFile(op), PromptRecordSchema),
     savePrompt: (op: OpId, record: PromptRecord): void => write(promptFile(op), record),
     promptsOf,
