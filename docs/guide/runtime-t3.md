@@ -223,7 +223,7 @@ An unattended run's threads still run in Auto, or your `runtime_mode`. A step wh
 
 The step's thread lives in T3, not in teamai's process. If the driver dies, `teamai workflow resume <run> --driver t3` reconnects to the same thread instead of starting another one. `teamai workflow cancel <run>` stops the thread as its Stop button does. The thread ends interrupted, any request it was waiting on is withdrawn, and teamai settles it. A cancel needs no new sign-in: after the driver died, teamai opens the runtime only to stop what it recorded, with the sign-in it kept, and reaches T3 Code only for the stop.
 
-T3 gets 10 s to confirm a stop. If it does not, teamai keeps the step's place and nothing of it is committed, and the cancel says which thread still runs:
+T3 gets 10 s from the cancel to confirm a stop, a launch still under way included. If it does not, teamai keeps the step's place and nothing of it is committed, and the cancel says which thread still runs:
 
 ```text
 ⚠ Could not stop attempt a96c8bc03 of run r70d31098c8884803 on step runtime "t3" of driver "teamai-t3": its exec or prompt may still run, since the runtime did not confirm it stopped (cancel_failed): The T3 thread t3code://threads/88e28b29-…/mcp%3Alaunch%3A3891149… ("review · teamai r70d31098c8884803") still runs, and T3 Code did not stop it: T3 Code acknowledged the stop, but its run was still running 10 s later. Stop it in T3 Code with its Stop button, then run teamai workflow cancel r70d31098c8884803 again.

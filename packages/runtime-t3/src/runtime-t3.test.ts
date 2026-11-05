@@ -747,6 +747,48 @@ describe('teamai-runtime-t3', () => {
       expect(Date.now() - cancelledAt).toBeLessThan(12_000);
     }, 20_000);
 
+    // The 10 s run from the moment the cancel is read, a launch still pending included, so the answer beats teamai's 15 s.
+    it('answers a cancel that comes while T3 launches the thread within the stop bound, when T3 then does not answer the stop', async () => {
+      t3.config({ agent: { hold: true, output: {} }, launchMs: 7_000, interruptMs: 30_000 });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-00000069'));
+      await runtime.next((line) => line['op'] === 'op-00000069' && line['event'] === 'accepted');
+      const cancelledAt = Date.now();
+
+      runtime.send({ type: 'cancel', op: 'op-00000069' });
+
+      expect(await ended(runtime, 'op-00000069')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
+      expect(Date.now() - cancelledAt).toBeLessThan(12_000);
+    }, 30_000);
+
+    it('keeps the thread of a launch T3 answers after the cancel gave up on it, with no second outcome, and a later cancel stops it', async () => {
+      t3.config({ agent: { hold: true, output: {} }, launchMs: 12_000 });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-0000006a'));
+      await runtime.next((line) => line['op'] === 'op-0000006a' && line['event'] === 'accepted');
+      const cancelledAt = Date.now();
+
+      runtime.send({ type: 'cancel', op: 'op-0000006a' });
+
+      expect(await ended(runtime, 'op-0000006a')).toEqual({
+        op: 'op-0000006a', event: 'failed', failure: {
+          code: 'cancel_failed',
+          message: `teamai cancelled the step while T3 Code launched its thread "review · teamai ${RUN}", and the launch had not finished 10 s later, so the thread may run. Run teamai workflow cancel ${RUN} again.`,
+        },
+      });
+      expect(Date.now() - cancelledAt).toBeLessThan(12_000);
+      // The launch answers now: the thread is the runtime's to stop, and the op keeps its one outcome.
+      await runtime.next((line) => line['op'] === 'op-0000006a' && line['event'] === 'display', 10_000);
+      runtime.send({ type: 'reattach', handle });
+      expect(await runtime.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-0000006a', state: 'failed', failure: { code: 'cancel_failed' } }], display: { url: linkTo(t3.threads()[0]?.threadId) } });
+
+      runtime.send({ type: 'cancel', op: 'op-0000006a' });
+
+      expect(await runtime.next((line) => line['op'] === 'op-0000006a')).toEqual({ op: 'op-0000006a', event: 'cancelled' });
+      expect(t3.threads()[0]?.status).toBe('interrupted');
+      expect(runtime.lines.filter((line) => line['op'] === 'op-0000006a').map((line) => line['event'])).toEqual(['accepted', 'failed', 'display', 'cancelled']);
+    }, 40_000);
+
     // T3 answers a stop of a thread the person deleted thread_not_found: nothing of it runs any more.
     it('counts a thread the person deleted in T3 as stopped and settled, so close finishes', async () => {
       t3.config({ agent: { waits: true }, interruptFails: true });
@@ -1195,6 +1237,26 @@ describe('teamai-runtime-t3', () => {
           expect(t3.threads()).toHaveLength(1);
         });
       });
+
+      // Looking the launch up counts toward the cancel's 10 s.
+      it('answers a cancel after a restart cancel_failed within the stop bound while T3 is slow to answer the repeated launch', async () => {
+        t3.config({ agent: { hold: true, output: {} }, launchMs: 3_000 });
+        const first = await opened();
+        first.runtime.send(prompt(first.handle, 'op-0000006b'));
+        await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+        await first.runtime.close();
+        t3.config({ launchMs: 16_000 });
+
+        const second = start();
+        second.send({ type: 'init', protocol: 1, mode: 'attended', options: { environment: 'local' } });
+        await second.next((line) => line['type'] === 'init');
+        const cancelledAt = Date.now();
+        second.send({ type: 'cancel', op: 'op-0000006b' });
+
+        expect(await second.next((line) => line['op'] === 'op-0000006b', 20_000)).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('did not say within 10 s whether it launched it') } });
+        expect(Date.now() - cancelledAt).toBeLessThan(12_000);
+        expect(t3.threads()[0]?.status).toBe('running');
+      }, 40_000);
 
       it('finds and stops the thread when teamai cancels the prompt after the runtime that launched it exited first', async () => {
         t3.config({ agent: { hold: true, output: {} }, launchMs: 3_000 });
