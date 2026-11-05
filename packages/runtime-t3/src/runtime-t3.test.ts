@@ -220,7 +220,8 @@ describe('teamai-runtime-t3', () => {
       },
     });
 
-    const ended = (runtime: Connection, op: string): Promise<Line> => runtime.next((line) => line['op'] === op && line['event'] !== 'accepted', 20_000);
+    /** How the op ended: its first line that neither accepts it nor shows its thread. */
+    const ended = (runtime: Connection, op: string): Promise<Line> => runtime.next((line) => line['op'] === op && line['event'] !== 'accepted' && line['event'] !== 'display', 20_000);
 
     beforeEach(() => {
       signIn(t3);
@@ -261,11 +262,12 @@ describe('teamai-runtime-t3', () => {
 
       runtime.send(prompt(handle, op));
 
-      // The thread exists once T3 launched it, so the acceptance shows it, and the run details link it during the run.
-      const accepted = await runtime.next((line) => line['op'] === op);
-      expect(RuntimeMessageSchema.safeParse(accepted).success).toBe(true);
-      expect(accepted).toEqual({
-        op, event: 'accepted',
+      // The prompt is accepted before the launch, and its thread is shown once T3 launched it, so the run details link it during the run.
+      expect(await runtime.next((line) => line['op'] === op)).toEqual({ op, event: 'accepted' });
+      const shown = await runtime.next((line) => line['op'] === op);
+      expect(RuntimeMessageSchema.safeParse(shown).success).toBe(true);
+      expect(shown).toEqual({
+        op, event: 'display',
         display: { label: `review · teamai ${RUN}`, url: expect.stringMatching(/^t3code:\/\/threads\/env-fake-1\/mcp%3Alaunch%3A[0-9a-f]{64}$/), fields: { thread: expect.stringMatching(/^mcp:launch:/), model: 'claude-opus-5-5', environment: 'fake-laptop' } },
       });
       const end = await ended(runtime, op);
@@ -282,6 +284,31 @@ describe('teamai-runtime-t3', () => {
       expect(thread?.message).toContain(`Write the workflow result as JSON to ${result}.`);
       expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args).toMatchObject({ clientRequestId: op, workspaceStrategy: { type: 'existing_worktree', worktreePath: worktree } });
       expect(t3.calls().find((call) => call.tool === 't3_thread_launch')?.args).not.toHaveProperty('delegatedFrom');
+    });
+
+    // teamai ends a prompt lost that is not accepted within 15 s, and T3 may take a while to launch a thread.
+    it('accepts a prompt before T3 answers its launch, and shows the thread once it did', async () => {
+      t3.config({ launchMs: 3_000 });
+      const { runtime, handle } = await opened();
+      const sentAt = Date.now();
+
+      runtime.send(prompt(handle, 'op-00000064'));
+
+      expect(await runtime.next((line) => line['op'] === 'op-00000064')).toEqual({ op: 'op-00000064', event: 'accepted' });
+      expect(Date.now() - sentAt).toBeLessThan(2_000);
+      expect(await runtime.next((line) => line['op'] === 'op-00000064', 10_000)).toMatchObject({ event: 'display', display: { url: linkTo(t3.threads()[0]?.threadId) } });
+      expect(await ended(runtime, 'op-00000064')).toMatchObject({ event: 'finished' });
+    });
+
+    // A failure after the acceptance ends the op once, with no second acceptance.
+    it('accepts once a prompt whose launch T3 refuses after accepting it', async () => {
+      t3.config({ launchFails: true });
+      const { runtime, handle } = await opened();
+
+      runtime.send(prompt(handle, 'op-00000065'));
+
+      expect(await ended(runtime, 'op-00000065')).toMatchObject({ event: 'failed', failure: { code: 't3_launch_failed' } });
+      expect(runtime.lines.filter((line) => line['op'] === 'op-00000065').map((line) => line['event'])).toEqual(['accepted', 'failed']);
     });
 
     it.each(['auto-accept-edits', 'approval-required'])('runs every thread in %s when `runtime_mode` tightens it', async (runtimeMode) => {
@@ -551,7 +578,7 @@ describe('teamai-runtime-t3', () => {
         await expect.poll(() => t3.threads()[0]?.status).toBe('completed');
         await new Promise((resolve) => setTimeout(resolve, 300));
 
-        expect(runtime.lines.filter((line) => line['op'] === 'op-00000040').map((line) => line['event'])).toEqual(['accepted']);
+        expect(runtime.lines.filter((line) => line['op'] === 'op-00000040').map((line) => line['event'])).toEqual(['accepted', 'display']);
         t3.config({ delegatesPending: false });
 
         expect(await ended(runtime, 'op-00000040')).toMatchObject({ event: 'finished', result: { output: { verdict: 'approve' } } });
@@ -713,7 +740,7 @@ describe('teamai-runtime-t3', () => {
 
       runtime.send({ type: 'cancel', op: 'op-00000063' });
 
-      expect(await runtime.next((line) => line['op'] === 'op-00000063' && line['event'] !== 'accepted', 14_000)).toMatchObject({
+      expect(await ended(runtime, 'op-00000063')).toMatchObject({
         event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('T3 Code did not answer the stop within 10 s') },
       });
       expect(Date.now() - cancelledAt).toBeLessThan(12_000);
@@ -1209,7 +1236,7 @@ describe('teamai-runtime-t3', () => {
       await expect.poll(() => t3.threads()[0]?.status).toBe('completed');
       await new Promise((resolve) => setTimeout(resolve, 300));
 
-      expect(runtime.lines.filter((line) => line['op'] === 'op-00000019').map((line) => line['event'])).toEqual(['accepted']);
+      expect(runtime.lines.filter((line) => line['op'] === 'op-00000019').map((line) => line['event'])).toEqual(['accepted', 'display']);
       expect(t3.threads()[0]?.message).toContain('Write the result file only once they say the step is done.');
       // The person said it is done, and the agent wrote the result.
       fs.writeFileSync(result, JSON.stringify({ output: { notes: 'agreed' } }));
@@ -1255,7 +1282,8 @@ describe('teamai-runtime-t3', () => {
       confined: { dir: evidence, level: 'best-effort', access: 'read', schema: { type: 'object', required: ['label'] } },
     });
 
-    const ended = (runtime: Connection, op: string): Promise<Line> => runtime.next((line) => line['op'] === op && line['event'] !== 'accepted', 20_000);
+    /** How the op ended: its first line that neither accepts it nor shows its thread. */
+    const ended = (runtime: Connection, op: string): Promise<Line> => runtime.next((line) => line['op'] === op && line['event'] !== 'accepted' && line['event'] !== 'display', 20_000);
 
     beforeEach(() => {
       signIn(t3);
