@@ -74,7 +74,8 @@ function codexLoginStatus(codex: string): Promise<{ code: number; answer: string
     const timer = setTimeout(() => {
       try {
         if (child.pid === undefined) child.kill('SIGKILL');
-        else if (isWindows) execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
+        // A taskkill that cannot run leaves the process teamai started to be killed on its own, as on POSIX.
+        else if (isWindows) execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, (error) => { if (error) child.kill('SIGKILL'); });
         else process.kill(-child.pid, 'SIGKILL');
       } catch {
         child.kill('SIGKILL');
