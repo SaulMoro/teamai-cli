@@ -168,17 +168,19 @@ let sequence = 2_900_000;
 function launch(args) {
   const key = JSON.stringify([`client:${config().namespace ?? 'session-1'}`, args.clientRequestId ?? randomUUID()]);
   const threadId = `mcp:launch:${createHash('sha256').update(key).digest('hex')}`;
+  const access = config().access;
+
+  // As T3 does, the mode the sign-in allows is checked before a repeated launch is looked up.
+  if (access && MODES.indexOf(args.runtimeMode) < MODES.indexOf(access)) {
+    return fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'runtime_mode_escalation_denied', message: `Child runtime mode ${args.runtimeMode} is broader than parent mode ${access}.` }));
+  }
+
   const existing = readThread(threadId);
 
   if (existing) return ok({ threadId, link: link(threadId), status: existing.status });
   const provider = config().providers.find((one) => one.providerInstanceId === args.modelSelection?.instanceId);
 
   if (!provider) return fail(`No provider instance ${args.modelSelection?.instanceId}.`);
-  const access = config().access;
-
-  if (access && MODES.indexOf(args.runtimeMode) < MODES.indexOf(access)) {
-    return fail(JSON.stringify({ _tag: 'OrchestratorMcpFailure', code: 'runtime_mode_escalation_denied', message: `Child runtime mode ${args.runtimeMode} is broader than parent mode ${access}.` }));
-  }
 
   // A scratch thread gets a new, empty folder of its own.
   const scratch = args.scratch === true ? path.join(T3_HOME, 'scratch', threadId.slice(-8)) : undefined;
