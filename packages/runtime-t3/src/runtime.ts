@@ -61,7 +61,10 @@ const EFFORT_OPTIONS = new Set(['effort', 'reasoningEffort', 'reasoning_effort',
  */
 const WAIT_MS = { attended: 25_000, unattended: 5_000 } as const;
 
-/** How long a stopped thread's run gets to end: T3 acknowledges a stop before the run ends. */
+/**
+ * How long a stop gets, T3's answer to it included, before it counts as not confirmed: T3 acknowledges a stop before the
+ * run ends, and teamai ends a live prompt it cancelled lost when no outcome comes within 15 s.
+ */
 const STOP_WAIT_MS = 10_000;
 
 /** How often an interactive step's thread is checked once it is idle without a result: the person may still be in it. */
@@ -108,11 +111,14 @@ export interface ServeOptions {
   startedFrom?: string;
 }
 
-/** A prompt this process follows: the thread once launched, whether teamai cancelled it, and the stop under way. */
+/** A prompt this process follows: its place, its thread once launched, whether teamai cancelled it, and a stop under way. */
 interface Running {
+  /** The place's handle and run, where the op's end is journaled and what a failed stop names. */
+  handle: string;
+  run: string;
   cancelled: boolean;
-  thread?: string;
-  /** Answers why T3 did not stop the thread, or nothing once it stopped. The op ends cancelled only on a stop. */
+  thread?: ThreadRecord;
+  /** Answers why T3 did not stop the thread, or nothing once it stopped; the stop, not the follow, ends the op then. */
   stopping?: Promise<string | undefined>;
 }
 
@@ -313,6 +319,18 @@ function replyValue(text: string): JsonValue | undefined {
   }
 }
 
+/** What `promise` gave within `ms`, or that it had not by then; it may still settle later. */
+async function within<TValue>(promise: Promise<TValue>, ms: number): Promise<{ answered: true; value: TValue } | { answered: false }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<{ answered: false }>((resolve) => { timer = setTimeout(() => resolve({ answered: false }), ms); });
+
+  try {
+    return await Promise.race([promise.then((value) => ({ answered: true as const, value })), late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => { setTimeout(resolve, ms); });
 }
@@ -450,25 +468,69 @@ export function serve(options: ServeOptions): Promise<void> {
    * to settle. Answers why it did not stop, logged, while the thread may still run.
    */
   const whyNotStopped = async (t3: T3, threadId: string): Promise<string | undefined> => {
+    const deadline = Date.now() + STOP_WAIT_MS;
     let why: string;
 
     try {
-      await t3.stop(threadId);
-      // T3 answers the stop before the run ends, and stops the delegated work apart, so the thread has stopped only
-      // once both settled. T3 answers a thread with nothing left to settle at once.
-      const waited = await t3.wait(threadId, STOP_WAIT_MS);
+      const stopped = await within(t3.stop(threadId), STOP_WAIT_MS);
 
-      if (settledStatus(waited) !== undefined) return undefined;
+      if (stopped.answered) {
+        // T3 answers the stop before the run ends, and stops the delegated work apart, so the thread has stopped only
+        // once both settled. T3 answers a thread with nothing left to settle at once.
+        const left = Math.max(deadline - Date.now(), 0);
+        const waited = await within(t3.wait(threadId, left), left + 1_000);
 
-      why = TERMINAL.has(waited.status)
-        ? `T3 Code stopped its run, but the work it delegated had not settled ${STOP_WAIT_MS / 1_000} s later`
-        : `T3 Code acknowledged the stop, but its run was still ${waited.status} ${STOP_WAIT_MS / 1_000} s later`;
+        if (waited.answered && settledStatus(waited.value) !== undefined) return undefined;
+
+        why = !waited.answered
+          ? `T3 Code did not answer whether its run ended within ${STOP_WAIT_MS / 1_000} s`
+          : TERMINAL.has(waited.value.status)
+          ? `T3 Code stopped its run, but the work it delegated had not settled ${STOP_WAIT_MS / 1_000} s later`
+          : `T3 Code acknowledged the stop, but its run was still ${waited.value.status} ${STOP_WAIT_MS / 1_000} s later`;
+      } else {
+        why = `T3 Code did not answer the stop within ${STOP_WAIT_MS / 1_000} s`;
+      }
     } catch (error) {
       if (error instanceof T3Error && error.threadGone) return undefined;
       why = error instanceof Error ? error.message : String(error);
     }
 
     process.stderr.write(`Could not stop ${threadId}: ${why}\n`);
+
+    return why;
+  };
+
+  /** That a thread still runs after T3 Code did not stop it, and what the person does about it. */
+  const stillRuns = (s: Reached, thread: ThreadRecord, why: string): string =>
+    `The T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}") still runs, and T3 Code did not stop it: ${why.replace(/\.$/, '')}. Stop it in T3 Code with its Stop button`;
+
+  /** A stop the runtime could not confirm: the op's thread may still run, until a later cancel stops it. */
+  const unconfirmed = (op: OpId, message: string): OpState => ({ op, state: 'failed', failure: { code: CANCEL_FAILED, message } });
+
+  /**
+   * Ends a prompt this process runs, once: a later end, such as a follow that saw the run end after a stop ended the
+   * prompt, writes nothing.
+   */
+  const endRunning = (state: Running, ended: OpState, { threadEnded }: { threadEnded: boolean }): void => {
+    if (running.get(ended.op) !== state) return;
+    running.delete(ended.op);
+    record(state.handle, ended, { threadEnded });
+    answerEnded(ended.op, ended);
+  };
+
+  /**
+   * Stops the thread of a prompt this process runs, and answers why it did not stop. A stop ends the prompt cancelled. A
+   * cancel T3 did not carry out ends it cancel_failed, while its thread may still run; a close leaves it followed.
+   */
+  const stopRunning = async ({ s, state, op, thread, cancelling }: { s: Reached; state: Running; op: OpId; thread: ThreadRecord; cancelling: boolean }): Promise<string | undefined> => {
+    const stopping = whyNotStopped(s.t3, thread.threadId);
+    state.stopping = stopping;
+    const why = await stopping;
+
+    if (state.stopping === stopping) delete state.stopping;
+
+    if (why === undefined) endRunning(state, { op, state: 'cancelled' }, { threadEnded: true });
+    else if (cancelling) endRunning(state, unconfirmed(op, `${stillRuns(s, thread, why)}, then run teamai workflow cancel ${state.run} again.`), { threadEnded: false });
 
     return why;
   };
@@ -642,13 +704,14 @@ export function serve(options: ServeOptions): Promise<void> {
    * Waits for the thread until the step is done, stopped or failed, and returns how it ended, and whether the runtime
    * saw the thread stop on the way: only then does the thread end with the op.
    */
-  const follow = async (s: Session, request: PromptRequest, thread: ThreadRecord): Promise<{ state: OpState; threadEnded: boolean }> => {
-    const state = running.get(request.op);
+  const follow = async (s: Session, request: PromptRequest, thread: ThreadRecord, state: Running): Promise<{ state: OpState; threadEnded: boolean } | undefined> => {
     const where = `The T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}")`;
     const stopped = (ended: OpState) => ({ state: ended, threadEnded: true });
     let errors = 0;
 
     for (;;) {
+      // A stop teamai asked for ended the op.
+      if (running.get(request.op) !== state) return undefined;
       let waited: Waited;
 
       try {
@@ -662,13 +725,10 @@ export function serve(options: ServeOptions): Promise<void> {
         continue;
       }
 
-      const stopping = state?.stopping;
-
-      if (stopping) {
-        if (await stopping === undefined) return stopped({ op: request.op, state: 'cancelled' });
-
-        // T3 did not stop it, so the thread still runs: it is followed, and journaled running, as before.
-        if (state.stopping === stopping) delete state.stopping;
+      // A stop under way decides how the op ends; once it did not stop the thread, it is followed as before.
+      if (state.stopping) {
+        await state.stopping;
+        continue;
       }
 
       // A run that ended while the work it delegated still goes has not ended the step.
@@ -682,7 +742,8 @@ export function serve(options: ServeOptions): Promise<void> {
 
           if (why === undefined) return stopped({ op: request.op, state: 'failed', failure: { code: 'tool_failed', message: asked } });
 
-          return { state: { op: request.op, state: 'failed', failure: { code: 'tool_failed', message: `${asked} It still runs, and T3 Code did not stop it: ${why.replace(/\.$/, '')}. Stop it in T3 Code with its Stop button.` } }, threadEnded: false };
+          // The thread may still run, so the op ends as a stop the runtime could not confirm, which a later cancel retries.
+          return { state: unconfirmed(request.op, `${asked} It still runs, and T3 Code did not stop it: ${why.replace(/\.$/, '')}. Stop it in T3 Code with its Stop button.`), threadEnded: false };
         }
 
         // A wait that came back before its time on a run still going (waiting for the person, or idle) is asked again later.
@@ -824,8 +885,9 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    const state: Running = { cancelled: false };
+    const state: Running = { handle: request.handle, run: opened.run, cancelled: false };
     running.set(request.op, state);
+    const finish = (outcome: OpState, threadEnded = false): void => endRunning(state, outcome, { threadEnded });
 
     try {
       const title = `${lease.step} · teamai ${opened.run}`;
@@ -845,21 +907,22 @@ export function serve(options: ServeOptions): Promise<void> {
         const now = place(request.handle) ?? opened;
         const { [request.op]: _answered, ...launches } = now.launches;
         journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, threads: { ...now.threads, [request.op]: launched }, launches });
-        state.thread = threadId;
+        state.thread = launched;
 
         return launched;
       };
 
       // A thread the journal holds is reconnected to by its id: T3 answers a repeated launch with it only under the
       // sign-in that sent the launch, and would start the step again under another.
-      if (thread) state.thread = thread.threadId;
+      if (thread) state.thread = thread;
       thread = work.kind === 'judge'
         ? await launchJudge({ s, request, confined: work.confined, opened, journalThread, thread: newThread, known: thread })
         : thread ?? journalThread(await launchStep(s, request, work.place, newThread), undefined);
     } catch (error) {
       // T3 caps a thread's mode at the access the member approved teamai with, and says so with this code.
       const tooNarrow = error instanceof T3Error && error.refusal?.code === 'runtime_mode_escalation_denied' ? error.refusal.message : undefined;
-      refuse({
+      accept(undefined);
+      finish({
         op: request.op, state: 'failed', failure: error instanceof JudgeCopyFailed
           ? { code: 'judge_copy_failed', message: error.message }
           : tooNarrow === undefined
@@ -875,14 +938,20 @@ export function serve(options: ServeOptions): Promise<void> {
 
     accept(thread);
 
-    if (state.cancelled) state.stopping = whyNotStopped(s.t3, thread.threadId);
+    // teamai cancelled the prompt while T3 launched its thread.
+    if (state.cancelled) {
+      await stopRunning({ s, state, op: request.op, thread, cancelling: true });
+
+      return;
+    }
 
     try {
-      const followed = await follow(s, request, thread);
-      end(followed.state, followed.threadEnded);
+      const followed = await follow(s, request, thread, state);
+
+      if (followed) finish(followed.state, followed.threadEnded);
     } catch (error) {
       // The thread may still run in T3, where the person finds it by the link.
-      end({ op: request.op, state: 'failed', failure: { code: 't3_unavailable', message: `Lost track of the T3 thread ${threadLink(s.environment, thread.threadId)}: ${error instanceof Error ? error.message : String(error)}` } });
+      finish({ op: request.op, state: 'failed', failure: { code: 't3_unavailable', message: `Lost track of the T3 thread ${threadLink(s.environment, thread.threadId)}: ${error instanceof Error ? error.message : String(error)}` } });
     }
   };
 
@@ -919,64 +988,64 @@ export function serve(options: ServeOptions): Promise<void> {
   const cancel = async (op: OpId): Promise<void> => {
     const state = running.get(op);
 
-    if (!state) {
-      const handle = handleOf.get(op);
-      let known = handle ? place(handle) : journal.placeOf(op);
+    if (state) {
+      state.cancelled = true;
 
-      // A runtime before this one launched the thread and died, maybe before T3 answered the launch; teamai cancels
-      // before it reattaches.
-      const reached = known && known.ops[op]?.state === 'running' ? await reach() : undefined;
+      // Without a thread yet, the prompt stops it once T3 answers the launch.
+      if (state.thread && session) await stopRunning({ s: session, state, op, thread: state.thread, cancelling: true });
 
-      if (known && reached?.ok) {
-        const s = reached.reached;
-        const launch = known.launches[op];
+      return;
+    }
 
-        if (launch) {
-          let resolved: Awaited<ReturnType<typeof resolveLaunch>>;
+    const handle = handleOf.get(op);
+    let known = handle ? place(handle) : journal.placeOf(op);
+    const retained = known?.ops[op];
 
-          try {
-            resolved = await resolveLaunch(s, known, op, launch);
-          } catch (error) {
-            process.stderr.write(`Could not look up the T3 thread launched for ${op}: ${error instanceof Error ? error.message : String(error)}\n`);
-
-            return;
-          }
-
-          // The launch stays journaled, so close keeps the place and says the same.
-          if (!resolved.ok) {
-            const failed: OpState = { op, state: 'failed', failure: resolved.failure };
-            record(known.handle, failed, { threadEnded: false });
-            answerEnded(op, failed);
-
-            return;
-          }
-
-          known = resolved.place;
-        }
-
-        const left = known.threads[op];
-
-        if (left && await whyNotStopped(s.t3, left.threadId) !== undefined) return;
-        record(known.handle, { op, state: 'cancelled' }, { threadEnded: true });
-        answerEnded(op, { op, state: 'cancelled' });
-
-        return;
-      }
-
-      const ended = known?.ops[op];
-
-      if (ended) answerEnded(op, ended);
+    // A runtime before this one launched the thread and died, maybe before T3 answered the launch, or a stop failed
+    // before; teamai cancels before it reattaches.
+    if (!known || !(retained?.state === 'running' || (retained?.state === 'failed' && retained.failure.code === CANCEL_FAILED))) {
+      if (retained) answerEnded(op, retained);
       else cancelledEarly.add(op);
 
       return;
     }
 
-    state.cancelled = true;
+    const { handle: at, run } = known;
 
-    if (state.thread && session) {
-      state.stopping = whyNotStopped(session.t3, state.thread);
-      await state.stopping;
+    // From reading this cancel until its stop is confirmed or fails again, the op runs: a stop that failed before is not
+    // this cancel's outcome.
+    if (retained.state === 'failed') record(at, { op, state: 'running' }, { threadEnded: false });
+
+    const answer = (ended: OpState, threadEnded: boolean): void => {
+      record(at, ended, { threadEnded });
+      answerEnded(op, ended);
+    };
+
+    const reached = await reach();
+
+    if (!reached.ok) return answer(unconfirmed(op, `teamai could not reach T3 Code to stop the T3 thread of ${op}, so it may still run (${reached.failure.message.replace(/\.$/, '')}). Run teamai workflow cancel ${run} again once T3 Code answers.`), false);
+    const s = reached.reached;
+    const launch = known.launches[op];
+
+    if (launch) {
+      let resolved: Awaited<ReturnType<typeof resolveLaunch>>;
+
+      try {
+        resolved = await resolveLaunch(s, known, op, launch);
+      } catch (error) {
+        return answer(unconfirmed(op, `teamai launched the T3 thread "${launch.title}" and T3 Code never answered, so it may run, and T3 Code did not say whether it launched it when teamai looked: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. Run teamai workflow cancel ${run} again once T3 Code answers.`), false);
+      }
+
+      // The launch stays journaled, so close keeps the place and says the same.
+      if (!resolved.ok) return answer(unconfirmed(op, resolved.failure.message), false);
+      known = resolved.place;
     }
+
+    const left = known.threads[op];
+    const why = left && await whyNotStopped(s.t3, left.threadId);
+
+    if (left && why !== undefined) return answer(unconfirmed(op, `${stillRuns(s, left, why)}, then run teamai workflow cancel ${run} again.`), false);
+    answer({ op, state: 'cancelled' }, true);
   };
 
   /**
@@ -1057,18 +1126,11 @@ export function serve(options: ServeOptions): Promise<void> {
         // Nothing here can stop the thread, or tell that it ended, without T3 Code.
         if (!reached.ok) return failClose({ code: 't3_unavailable', message: `The T3 thread "${thread.title}" (${thread.threadId}) may still run, and teamai could not reach T3 Code to stop it (${reached.failure.code}). Open T3 Code, then run teamai workflow cancel ${known.run} again.` });
         const s = reached.reached;
-        const stopping = whyNotStopped(s.t3, thread.threadId);
         const live = running.get(op);
+        // A prompt still running here ends cancelled once its thread stopped, and is followed on while it did not.
+        const why = live ? await stopRunning({ s, state: live, op, thread, cancelling: false }) : await whyNotStopped(s.t3, thread.threadId);
 
-        if (live) live.stopping = stopping;
-        const why = await stopping;
-
-        if (why !== undefined) {
-          return failClose({
-            code: 'thread_still_runs',
-            message: `The T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}") still runs, and T3 Code did not stop it: ${why.replace(/\.$/, '')}. Stop it in T3 Code with its Stop button.`,
-          });
-        }
+        if (why !== undefined) return failClose({ code: 'thread_still_runs', message: `${stillRuns(s, thread, why)}.` });
 
         const now = place(handle);
 
