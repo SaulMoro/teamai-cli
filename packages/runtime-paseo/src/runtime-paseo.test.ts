@@ -471,6 +471,55 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000c'))).toMatchObject({ event: 'finished', result: { output: { ok: true } } });
   });
 
+  it('ends an unattended step whose agent asks for permission cancel_failed when Paseo will not stop that agent, since it may still run', async () => {
+    behave({ ask_permission: true, output: { ok: true }, refuse_cancel: 'Agent is busy' });
+    const runtime = start();
+    await ready(runtime, { mode: 'unattended' });
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({
+      event: 'failed', failure: { code: 'cancel_failed', message: expect.stringMatching(/asked for permission \(Run npm test\).* Paseo did not cancel the claude agent .*: Agent is busy\./) },
+    });
+  });
+
+  it('reports a prompt whose cancel failed running while a retried cancel stops it, then cancelled, never the old failure', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, refuse_cancel: 'Agent is busy' });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
+
+    // The member stops what held the agent, and cancels the run again: Paseo stops it a moment after it answers.
+    behave({ hold_ms: 60_000, output: { ok: true }, stop_lag_ms: 1_500 });
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+    runtime.send({ type: 'reattach', handle });
+
+    expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ ops: [{ op: 'op-0000000b', state: 'running' }] });
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+    runtime.send({ type: 'reattach', handle });
+    expect(await runtime.next((line) => 'event' in line && line.event === 'alive')).toMatchObject({ ops: [{ op: 'op-0000000b', state: 'cancelled' }] });
+  });
+
+  it('ends a cancel Paseo does not answer cancel_failed within 10 s, inside the 15 s teamai gives it', async () => {
+    behave({ hold_ms: 60_000, output: { ok: true }, refuse_cancel: 'Agent is busy', refuse_cancel_ms: 40_000 });
+    const runtime = start();
+    await ready(runtime);
+    runtime.send(promptRequest(await opened(runtime), 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'accepted'));
+    const asked = Date.now();
+
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual({
+      op: 'op-0000000b', event: 'failed',
+      failure: { code: 'cancel_failed', message: `Paseo did not answer the cancel of the claude agent ${String(received()[0]?.agentId)} within 10 s. It may still run in the worktree; stop it in the Paseo app.` },
+    });
+    expect(Date.now() - asked).toBeLessThan(15_000);
+  }, 30_000);
+
   it('fails an unattended step whose agent asks for permission, naming the mode, and stops the agent', async () => {
     behave({ ask_permission: true, output: { ok: true } });
     const runtime = start();
