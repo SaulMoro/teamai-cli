@@ -694,8 +694,8 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
     if (display) write({ op, event: 'display', display });
 
-    // A cancel that came before the agent existed, or to a runtime since killed, is sent now that it does.
-    if (journal.isCancelled(op)) {
+    // A cancel that came to a runtime since killed is sent now that the agent exists; one this process reads stops it itself.
+    if (journal.isCancelled(op) && !stopping.has(op)) {
       const refused = await cancelAgent(live, record);
       settle(op, refused ? { op, state: 'failed', failure: refused } : { op, state: 'cancelled' });
 
@@ -856,12 +856,22 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     if (outcome) journal.savePrompt(op, record);
     journal.cancel(op);
     const following = waiting.get(op);
-
-    // A prompt whose agent is still being created is cancelled once it exists.
-    if (following && !following.created) return;
     stopping.add(op);
 
     try {
+      // A prompt whose agent is still being created is stopped once it exists, within the same deadline: past it, the
+      // agent may still start.
+      if (following && !following.created && (await Promise.race([following.creating, late(deadline)])) === 'late') {
+        settle(op, {
+          op, state: 'failed',
+          failure: { code: CANCEL_FAILED, message: `Paseo did not finish creating the ${record.tool} agent ${record.create.agentId} within ${STOP_SETTLE_MS / 1000} s, so it may still start in the worktree; cancel the run again.` },
+        });
+
+        return;
+      }
+
+      // A create Paseo refused ended the prompt with no agent to stop.
+      if (journal.prompt(op)?.outcome) return;
       const live = await reach();
 
       const refused = live && !('code' in live)
@@ -912,10 +922,26 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       return refusals.length > 0 ? { code: 'close_failed', message: refusals.join(' ') } : undefined;
     }
 
-    try {
-      await live.archive(place.workspace.id);
-    } catch (error) {
-      return { code: 'close_failed', message: `Paseo did not archive workspace ${place.workspace.name} (${place.workspace.id}): ${error instanceof Error ? error.message : String(error)}. Its agents may still run; archive it in the Paseo app.` };
+    const { id: workspaceId, name } = place.workspace;
+
+    const archiving = (async (): Promise<{ refused?: string }> => {
+      try {
+        await live.archive(workspaceId);
+
+        return {};
+      } catch (error) {
+        return { refused: error instanceof Error ? error.message : String(error) };
+      }
+    })();
+
+    const archived = await Promise.race([archiving, late(deadline)]);
+
+    if (archived === 'late') {
+      return { code: 'close_failed', message: `Paseo did not answer the archive of workspace ${name} (${workspaceId}) within ${STOP_SETTLE_MS / 1000} s. Its agents may still run; archive it in the Paseo app.` };
+    }
+
+    if (archived.refused !== undefined) {
+      return { code: 'close_failed', message: `Paseo did not archive workspace ${name} (${workspaceId}): ${archived.refused}. Its agents may still run; archive it in the Paseo app.` };
     }
 
     const running = (await Promise.all(agents.map(async ({ create: { agentId } }) => ((await isStillRunning(live, agentId, deadline)) ? [agentId] : [])))).flat();
