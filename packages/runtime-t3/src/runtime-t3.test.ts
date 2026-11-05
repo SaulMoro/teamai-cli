@@ -745,6 +745,31 @@ describe('teamai-runtime-t3', () => {
       expect(t3.threads()[0]?.status).toBe('running');
     });
 
+    // A retried cancel owns the op's end, as the prompt that launched it did: a resent prompt joins it, and starts no follow.
+    it('keeps a retried cancel\'s cancelled when teamai resends the prompt while the stop is under way', async () => {
+      t3.config({ agent: { hold: true, output: {} } });
+      const { runtime, handle } = await opened();
+      runtime.send(prompt(handle, 'op-0000006f'));
+      await runtime.next((line) => line['op'] === 'op-0000006f' && line['event'] === 'display');
+      await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+      t3.config({ interruptFails: true });
+      runtime.send({ type: 'cancel', op: 'op-0000006f' });
+      expect(await ended(runtime, 'op-0000006f')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
+
+      t3.config({ interruptFails: false, interruptMs: 1_000 });
+      runtime.send({ type: 'cancel', op: 'op-0000006f' });
+      runtime.send(prompt(handle, 'op-0000006f'));
+      runtime.send({ type: 'reattach', handle });
+      expect(await runtime.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-0000006f', state: 'running' }] });
+
+      expect(await ended(runtime, 'op-0000006f')).toEqual({ op: 'op-0000006f', event: 'cancelled' });
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      expect(runtime.lines.filter((line) => line['op'] === 'op-0000006f').map((line) => line['event'])).toEqual(['accepted', 'display', 'failed', 'accepted', 'cancelled']);
+      runtime.send({ type: 'reattach', handle });
+      expect(await runtime.next((line) => line['event'] === 'alive')).toMatchObject({ ops: [{ op: 'op-0000006f', state: 'cancelled' }] });
+      expect(t3.threads()).toHaveLength(1);
+    });
+
     // teamai ends a live prompt it cancelled lost when no outcome comes within 15 s, so the runtime answers well before.
     it('answers a live cancel cancel_failed within the stop bound when T3 Code does not answer the stop', async () => {
       t3.config({ agent: { hold: true, output: {} } });
@@ -993,6 +1018,34 @@ describe('teamai-runtime-t3', () => {
         expect(t3.threads()).toHaveLength(1);
         expect(t3.threads()[0]).toMatchObject({ status: 'interrupted', settled: true });
       }, 60_000);
+
+      // A retried cancel that cannot journal its op running leaves nothing behind that would swallow the next one.
+      it('answers a retried cancel again once the record can be written, after it could not journal the retry', async () => {
+        t3.config({ agent: { hold: true, output: {} } });
+        const first = await opened();
+        first.runtime.send(prompt(first.handle, 'op-00000076'));
+        await first.runtime.next((line) => line['op'] === 'op-00000076' && line['event'] === 'display');
+        await expect.poll(() => t3.threads()[0]?.status).toBe('running');
+        t3.config({ interruptFails: true });
+        first.runtime.send({ type: 'cancel', op: 'op-00000076' });
+        expect(await ended(first.runtime, 'op-00000076')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
+        await first.runtime.close();
+        t3.config({ interruptFails: false });
+
+        const runtime = start();
+        runtime.send({ type: 'init', protocol: 1, mode: 'recover', options: { environment: 'local' } });
+        await runtime.next((line) => line['type'] === 'init');
+        const places = path.join(t3.home, '.teamai', 'runtime-state', 't3', 'places');
+        fs.chmodSync(places, 0o500);
+        runtime.send({ type: 'cancel', op: 'op-00000076' });
+        expect(await runtime.next((line) => line['op'] === 'op-00000076')).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed', message: expect.stringContaining('EACCES') } });
+        fs.chmodSync(places, 0o700);
+
+        runtime.send({ type: 'cancel', op: 'op-00000076' });
+
+        expect(await runtime.next((line) => line['op'] === 'op-00000076')).toEqual({ op: 'op-00000076', event: 'cancelled' });
+        expect(t3.threads()[0]?.status).toBe('interrupted');
+      });
 
       it('keeps the place while T3 Code cannot be reached, and closes it once T3 Code is back', async () => {
         const { runtime, handle } = await recovering('op-00000061');

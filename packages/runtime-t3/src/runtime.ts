@@ -112,7 +112,10 @@ export interface ServeOptions {
   startedFrom?: string;
 }
 
-/** A prompt this process follows: its place, its thread once launched, the cancel's deadline, and a stop under way. */
+/**
+ * An op whose end this process owns, a prompt it follows or a cancel it retries: its place, its thread once launched, the
+ * cancel's deadline, and a stop under way.
+ */
 interface Running {
   /** The place's handle and run, where the op's end is journaled and what a failed stop names. */
   handle: string;
@@ -368,7 +371,7 @@ export function serve(options: ServeOptions): Promise<void> {
   let recovering: { connecting?: Promise<Reach> } | undefined;
   /** The handle of each operation this process saw, so `cancel` (which names only the op) reaches its place. */
   const handleOf = new Map<OpId, string>();
-  /** The prompts this process is running, by op; a repeated prompt joins the running one. */
+  /** The ops whose end this process owns, by op: prompts it runs and cancels it retries. A repeated prompt joins one. */
   const running = new Map<OpId, Running>();
   /** Ops teamai cancelled before this process saw their prompt. */
   const cancelledEarly = new Set<OpId>();
@@ -1047,10 +1050,13 @@ export function serve(options: ServeOptions): Promise<void> {
     // this cancel's outcome.
     if (retained.state === 'failed') record(at, { op, state: 'running' }, { threadEnded: false });
 
-    const answer = (ended: OpState, threadEnded: boolean): void => {
-      record(at, ended, { threadEnded });
-      answerEnded(op, ended);
-    };
+    // This cancel owns the op's end as a prompt this process runs would, before anything is awaited: a prompt teamai
+    // resends meanwhile joins it rather than following the thread, and only one end is written. It is installed once
+    // the op is journaled running, so a record that cannot be written leaves no owner behind to swallow the next cancel.
+    const owner: Running = { handle: at, run, title: (known.threads[op] ?? known.launches[op])?.title ?? op, cancelBy: deadline, thread: known.threads[op] };
+    running.set(op, owner);
+
+    const answer = (ended: OpState, threadEnded: boolean): void => endRunning(owner, ended, { threadEnded });
 
     const reaching = await within(reach(), left());
     const reached: Reach = reaching.answered ? reaching.value : { ok: false, failure: { code: 't3_unavailable', message: `T3 Code did not answer within ${STOP_WAIT_MS / 1_000} s` } };
@@ -1079,10 +1085,10 @@ export function serve(options: ServeOptions): Promise<void> {
     }
 
     const owned = known.threads[op];
-    const why = owned && await whyNotStopped(s.t3, owned.threadId, deadline);
 
-    if (owned && why !== undefined) return answer(unconfirmed(op, `${stillRuns(s, owned, why)}, then run teamai workflow cancel ${run} again.`), false);
-    answer({ op, state: 'cancelled' }, true);
+    if (!owned) return answer({ op, state: 'cancelled' }, true);
+    owner.thread = owned;
+    await stopRunning({ s, state: owner, op, thread: owned, cancelling: true, deadline });
   };
 
   /**
