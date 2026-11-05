@@ -1312,6 +1312,20 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
     }
   };
 
+  /**
+   * Records the outcome a failed cancel sends, so a reattach before the retry reports it, when the prompt's record can
+   * still be read and written. One that cannot is only sent, once.
+   */
+  const keep = (op: OpId, outcome: OpState): void => {
+    try {
+      const record = journal.prompt(op);
+
+      if (record && record.kind !== 'refused' && !record.outcome) journal.savePrompt(op, { ...record, outcome });
+    } catch {
+      // The record cannot be kept: the outcome is sent all the same, and a reattach reports the prompt running.
+    }
+  };
+
   /** The ops of the requests this process is answering, each with how many. */
   const inFlight = new Map<OpId, number>();
 
@@ -1406,7 +1420,10 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
           waiting.delete(request.op);
           following?.stop();
           const agent = agentNamed(request.op);
-          fail(request.op, agent ? { code: CANCEL_FAILED, message: `${message.replace(/\.$/, '')}. ${agent} may still run in the worktree; stop it in the Paseo app.` } : { code: 'paseo_failed', message });
+          const failure = agent ? { code: CANCEL_FAILED, message: `${message.replace(/\.$/, '')}. ${agent} may still run in the worktree; stop it in the Paseo app.` } : { code: 'paseo_failed', message };
+
+          if (request.type === 'cancel') keep(request.op, { op: request.op, state: 'failed', failure });
+          fail(request.op, failure);
         } else if ('op' in request) fail(request.op, { code: 'paseo_failed', message });
         else if (request.type === 'close') write({ event: 'close_failed', handle: request.handle, failure: { code: 'paseo_failed', message } });
         else if (request.type === 'init') write({ type: 'init', ok: false, error: { code: 'paseo_failed', message } });

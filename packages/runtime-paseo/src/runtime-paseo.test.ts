@@ -905,6 +905,35 @@ describe('teamai-runtime-paseo', () => {
     expect(await runtime.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
   });
 
+  it('keeps the cancel_failed of a cancel that could not record itself, so a reattach before the retry reports it', async () => {
+    const release = path.join(dir, 'release');
+    behave({ release, output: { ok: true } });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'display'));
+    // The cancel marker cannot be written where a directory stands; the prompt's record still can.
+    const marker = path.join(dir, 'home', '.teamai', 'runtime-state', 'paseo', 'ops', 'op-0000000b.cancel');
+    fs.mkdirSync(marker);
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'cancel_failed' } });
+    // The agent ends on its own, and nothing follows it any more.
+    fs.writeFileSync(release, '');
+    const statusOf = (): string | undefined => (JSON.parse(fs.readFileSync(path.join(daemonState, 'agents.json'), 'utf8')) as { agents: Record<string, { status: string }> }).agents[agentIdOf(OpIdSchema.parse('op-0000000b'))]?.status;
+    await expect.poll(statusOf).toBe('idle');
+    fs.rmdirSync(marker);
+    const isAlive = (line: RuntimeMessage): boolean => 'event' in line && line.event === 'alive';
+
+    runtime.send({ type: 'reattach', handle });
+
+    expect(await runtime.next(isAlive)).toMatchObject({ ops: [{ op: 'op-0000000b', state: 'failed', failure: { code: 'cancel_failed' } }] });
+    runtime.send({ type: 'cancel', op: 'op-0000000b' });
+    expect(await runtime.next(isEnd('op-0000000b'))).toEqual({ op: 'op-0000000b', event: 'cancelled' });
+    runtime.send({ type: 'reattach', handle });
+    expect(await runtime.next(isAlive)).toMatchObject({ ops: [{ op: 'op-0000000b', state: 'cancelled' }] });
+  });
+
   it('answers every cancel in recover mode, though the first could not record itself', async () => {
     behave({ hold_ms: 60_000, output: { ok: true } });
     const first = start();
