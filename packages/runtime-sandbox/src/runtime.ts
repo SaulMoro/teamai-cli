@@ -128,8 +128,11 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
   const pendingStops = new Set<OpId>();
   /** The ops this process answers but does not run, each with its handle and what writes its end, once. */
   const followers = new Map<OpId, { handle: string; end: (outcome: Outcome) => void }>();
-  /** The judges' prompts whose container this process is creating, each with what settles once that creation did. */
-  const creating = new Map<OpId, Promise<unknown>>();
+  /**
+   * The sandboxes and judges' containers this process is creating, each with its place's handle and what settles once
+   * that creation did.
+   */
+  const creating = new Set<{ handle: string; settled: Promise<unknown> }>();
   /** How many ends of each op this process wrote, so a request that throws tells whether it was already answered. */
   const endsWritten = new Map<OpId, number>();
 
@@ -142,6 +145,18 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
     let end = (): void => {};
     const ended = new Promise<void>((resolve) => { end = resolve; });
     running.set(op, { handle, ended, end });
+  };
+
+  /** Awaits `work`, a creation in `handle`'s place, which a close of that place waits for, however it settles. */
+  const creation = async <T>(handle: string, work: Promise<T>): Promise<T> => {
+    const entry = { handle, settled: work.catch(() => undefined) };
+    creating.add(entry);
+
+    try {
+      return await work;
+    } finally {
+      creating.delete(entry);
+    }
   };
 
   const release = (op: OpId): void => {
@@ -234,23 +249,28 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
 
     journal.savePlace(handle, key);
     write({ op, event: 'accepted', handle });
-    const found = await provider.find(key);
 
-    if (!found.ok) {
-      write({ op, event: 'failed', failure: found.failure });
+    /** The attempt's sandbox, found or created, kept under its id. */
+    const make = async (): Promise<{ ok: true } | { ok: false; failure: RuntimeFailure }> => {
+      const found = await provider.find(key);
+
+      if (!found.ok) return found;
+      const created = found.id === undefined ? await provider.create(key, view) : { ok: true as const, id: found.id };
+
+      if (created.ok) journal.savePlace(handle, { ...key, id: created.id });
+
+      return created;
+    };
+
+    // A close meanwhile waits for this, so its removal finds whatever the engine made.
+    const made = await creation(handle, make());
+
+    if (!made.ok) {
+      write({ op, event: 'failed', failure: made.failure });
 
       return;
     }
 
-    const created = found.id === undefined ? await provider.create(key, view) : { ok: true as const, id: found.id };
-
-    if (!created.ok) {
-      write({ op, event: 'failed', failure: created.failure });
-
-      return;
-    }
-
-    journal.savePlace(handle, { ...key, id: created.id });
     write({ op, event: 'ready', display: provider.display(key) });
   };
 
@@ -450,9 +470,7 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
     };
 
     // A close waits for this to settle, however it does, so the removal after it finds whatever the creation made.
-    const creation = create();
-    creating.set(op, creation.catch(() => undefined));
-    const id = await creation.finally(() => creating.delete(op));
+    const id = await creation(handle, create());
 
     if (id === undefined) return;
 
@@ -605,9 +623,10 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
   };
 
   /**
-   * Removes the place, within BOUND_MS: an op still running there is marked cancelled, a judge's container still being
-   * created is waited for so the removal finds whatever it made, and each running op's own end is written before
-   * `closed`. Past the bound, or when the removal fails, the journal keeps the place for a later close.
+   * Removes the place, within BOUND_MS: an op still running there is marked cancelled, a sandbox or a judge's container
+   * this process is still creating there is waited for so the removal finds whatever it made, and each running op's own
+   * end is written before `closed`. Past the bound, or when the removal fails, the journal keeps the place for a later
+   * close.
    */
   const close = async (handle: string, provider: Provider): Promise<void> => {
     const deadline = Date.now() + BOUND_MS;
@@ -628,8 +647,8 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
       return [run.ended];
     });
 
-    if ((await by(deadline, Promise.all(ops.flatMap(({ op }) => creating.get(op) ?? [])))).kind === 'late') {
-      overdue("its judge's container was still being created");
+    if ((await by(deadline, Promise.all([...creating].flatMap((entry) => (entry.handle === handle ? [entry.settled] : []))))).kind === 'late') {
+      overdue('its sandbox was still being created');
 
       return;
     }
