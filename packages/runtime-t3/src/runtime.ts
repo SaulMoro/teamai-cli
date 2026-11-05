@@ -36,8 +36,12 @@ import { STEP_MODE_LABELS, T3Error, type Environment, type Launch, type NewThrea
 //  A thread the journal holds stays the runtime's to stop until it saw that thread stop: no failure path forgets it.
 //
 
-/** The options a driver definition gives `t3`. teamai strips `max_parallel` and `credentials` before `init`. */
 type RuntimeMode = (typeof RUNTIME_MODES)[number];
+
+/** A mode the runtime runs steps in. In `recover` it only stops and closes what its journal holds. */
+type WorkMode = Exclude<RuntimeMode, 'recover'>;
+
+/** The options a driver definition gives `t3`. teamai strips `max_parallel` and `credentials` before `init`. */
 
 const OptionsSchema = z.object({
   /** The T3 environment the threads run in: `local`, the T3 Code server on this machine. */
@@ -99,7 +103,7 @@ export interface ServeOptions {
   write(message: RuntimeMessage): void;
   journal: Journal;
   /** Connects to the environment for a run in `mode`; a failure names why and what the person does about it. */
-  connect(mode: RuntimeMode): Promise<Connected | { ok: false; error: RuntimeFailure }>;
+  connect(mode: WorkMode): Promise<Connected | { ok: false; error: RuntimeFailure }>;
   /** The T3 thread the run was started from, when it was (T3 sets T3CODE_THREAD_ID in its sessions). */
   startedFrom?: string;
 }
@@ -112,17 +116,24 @@ interface Running {
   stopping?: Promise<string | undefined>;
 }
 
-interface Session {
+/** What stopping, looking up and settling a thread need of T3: the connection, the environment links name, and the sign-in. */
+interface Reached {
   t3: T3;
-  mode: RuntimeMode;
   environment: Environment;
+  /** Which sign-in this runtime's calls go out under. */
+  signIn: string;
+}
+
+/** A connection that runs steps, opened by `init` in a mode for new work. */
+interface Session extends Reached {
+  mode: WorkMode;
   /** The provider instance each offered tool runs on. */
   instances: Map<ToolId, Provider>;
   /** The mode every step thread launches in. */
   stepMode: StepMode;
-  /** Which sign-in this runtime's calls go out under. */
-  signIn: string;
 }
+
+type Reach = { ok: true; reached: Reached } | { ok: false; failure: RuntimeFailure };
 
 type PromptRequest = Extract<RuntimeRequest, { type: 'prompt' }>;
 
@@ -328,6 +339,11 @@ function readResult(file: string): { ok: true; result: PromptResult } | { ok: fa
 export function serve(options: ServeOptions): Promise<void> {
   const { write, journal } = options;
   let session: Session | undefined;
+  /**
+   * Opened in recover mode: the connection a cancel or a close makes once it needs T3, which init never does, so a
+   * stop starts whatever the sign-in or T3 Code's state. A failed one is tried again by the next request.
+   */
+  let recovering: { connecting?: Promise<Reach> } | undefined;
   /** The handle of each operation this process saw, so `cancel` (which names only the op) reaches its place. */
   const handleOf = new Map<OpId, string>();
   /** The prompts this process is running, by op; a repeated prompt joins the running one. */
@@ -340,6 +356,35 @@ export function serve(options: ServeOptions): Promise<void> {
     const read = journal.read(handle);
 
     return read.kind === 'found' ? read.place : undefined;
+  };
+
+  /** Connects in recover mode as an unattended run does: with the sign-in teamai keeps, never asking for one. */
+  const connectToRecover = async (): Promise<Reach> => {
+    const connected = await options.connect('unattended');
+
+    if (!connected.ok) return { ok: false, failure: connected.error };
+
+    try {
+      return { ok: true, reached: { t3: connected.t3, environment: await connected.t3.environment(), signIn: connected.signIn } };
+    } catch (error) {
+      await connected.t3.close().catch(() => {});
+
+      return { ok: false, failure: { code: 't3_unavailable', message: `T3 Code did not say which environment it runs: ${error instanceof Error ? error.message : String(error)}` } };
+    }
+  };
+
+  /** T3, for a request that needs it: the session init opened, or in recover mode a connection made now. */
+  const reach = async (): Promise<Reach> => {
+    if (session) return { ok: true, reached: session };
+
+    if (!recovering) return { ok: false, failure: { code: 't3_unavailable', message: 'Runtime t3 did not start, so it has no connection to T3 Code.' } };
+    const connecting = recovering.connecting ?? connectToRecover();
+    recovering.connecting = connecting;
+    const reached = await connecting;
+
+    if (!reached.ok && recovering.connecting === connecting) delete recovering.connecting;
+
+    return reached;
   };
 
   /** `known` with the thread of `op` ended: the runtime saw it stop. */
@@ -430,6 +475,13 @@ export function serve(options: ServeOptions): Promise<void> {
 
   // teamai quotes a keyed option failure (`key` set) inside a sentence of its own and ends it, so it brings no full stop.
   const init = async (request: Extract<RuntimeRequest, { type: 'init' }>): Promise<void> => {
+    if (request.mode === 'recover') {
+      recovering = {};
+      write({ type: 'init', ok: true, can: {} });
+
+      return;
+    }
+
     const parsed = OptionsSchema.safeParse(request.options);
 
     if (!parsed.success) {
@@ -840,7 +892,7 @@ export function serve(options: ServeOptions): Promise<void> {
    * launch a new launch's check refuses launched nothing. Answers the place as journaled then, or why a launch another
    * sign-in sent cannot be looked up; throws while T3 does not say.
    */
-  const resolveLaunch = async (s: Session, known: PlaceRecord, op: OpId, launch: LaunchRecord): Promise<{ ok: true; place: PlaceRecord } | { ok: false; failure: RuntimeFailure }> => {
+  const resolveLaunch = async (s: Reached, known: PlaceRecord, op: OpId, launch: LaunchRecord): Promise<{ ok: true; place: PlaceRecord } | { ok: false; failure: RuntimeFailure }> => {
     if (launch.signIn !== s.signIn) return { ok: false, failure: launchUnconfirmed(known, launch) };
     const newThread: NewThread = { title: launch.title, modelSelection: launch.modelSelection, runtimeMode: launch.runtimeMode, clientRequestId: op };
     let threadId: string | undefined;
@@ -873,8 +925,10 @@ export function serve(options: ServeOptions): Promise<void> {
 
       // A runtime before this one launched the thread and died, maybe before T3 answered the launch; teamai cancels
       // before it reattaches.
-      if (known && known.ops[op]?.state === 'running' && session) {
-        const s = session;
+      const reached = known && known.ops[op]?.state === 'running' ? await reach() : undefined;
+
+      if (known && reached?.ok) {
+        const s = reached.reached;
         const launch = known.launches[op];
 
         if (launch) {
@@ -929,11 +983,10 @@ export function serve(options: ServeOptions): Promise<void> {
    * Settles each thread of `handle` that ended and that T3 holds no run of, once: a thread the runtime has not seen
    * stop, or one the person started again, stays. A settle T3 refuses is said once on stderr and fails nothing.
    */
-  const settleEnded = async (handle: string): Promise<void> => {
+  const settleEnded = async (handle: string, s: Reached): Promise<void> => {
     const known = place(handle);
 
-    if (!known || !session) return;
-    const s = session;
+    if (!known) return;
 
     for (const [op, thread] of Object.entries(known.threads)) {
       if (!thread.ended || thread.ended.settlement) continue;
@@ -964,7 +1017,6 @@ export function serve(options: ServeOptions): Promise<void> {
    */
   const close = async (handle: string): Promise<void> => {
     const read = journal.read(handle);
-    const s = session;
     const failClose = (failure: RuntimeFailure): void => write({ event: 'close_failed', handle, failure });
 
     if (read.kind === 'unreadable') return failClose(unreadable(handle, read));
@@ -978,13 +1030,15 @@ export function serve(options: ServeOptions): Promise<void> {
         if (!launch) continue;
         const lookUp = `teamai launched the T3 thread "${launch.title}" and T3 Code never answered, so it may run`;
 
-        // init could not reach T3 Code, so nothing here can find the thread.
-        if (!s) return failClose({ code: 't3_unavailable', message: `${lookUp}, and teamai could not reach T3 Code to look for it. Open T3 Code, then run teamai workflow cancel ${known.run} again.` });
+        const reached = await reach();
+
+        // Nothing here can find the thread without T3 Code.
+        if (!reached.ok) return failClose({ code: 't3_unavailable', message: `${lookUp}, and teamai could not reach T3 Code to look for it (${reached.failure.code}). Open T3 Code, then run teamai workflow cancel ${known.run} again.` });
 
         let resolved: Awaited<ReturnType<typeof resolveLaunch>>;
 
         try {
-          resolved = await resolveLaunch(s, known, op, launch);
+          resolved = await resolveLaunch(reached.reached, known, op, launch);
         } catch (error) {
           return failClose({ code: 't3_unavailable', message: `${lookUp}, and T3 Code did not say whether it launched it when teamai looked: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. Run teamai workflow cancel ${known.run} again once T3 Code answers.` });
         }
@@ -998,8 +1052,11 @@ export function serve(options: ServeOptions): Promise<void> {
 
         if (!thread || thread.ended) continue;
 
-        // init could not reach T3 Code, so nothing here can stop the thread or tell that it ended.
-        if (!s) return failClose({ code: 't3_unavailable', message: `The T3 thread "${thread.title}" (${thread.threadId}) may still run, and teamai could not reach T3 Code to stop it. Open T3 Code, then run teamai workflow cancel ${known.run} again.` });
+        const reached = await reach();
+
+        // Nothing here can stop the thread, or tell that it ended, without T3 Code.
+        if (!reached.ok) return failClose({ code: 't3_unavailable', message: `The T3 thread "${thread.title}" (${thread.threadId}) may still run, and teamai could not reach T3 Code to stop it (${reached.failure.code}). Open T3 Code, then run teamai workflow cancel ${known.run} again.` });
+        const s = reached.reached;
         const stopping = whyNotStopped(s.t3, thread.threadId);
         const live = running.get(op);
 
@@ -1018,8 +1075,11 @@ export function serve(options: ServeOptions): Promise<void> {
         if (now) journal.write(endedIn(now, op));
       }
 
-      // Every thread of the place has ended now. With no connection, they stay unsettled.
-      await settleEnded(handle);
+      // Every thread of the place has ended now. Without T3 Code, they stay unsettled.
+      const unsettled = Object.values(place(handle)?.threads ?? {}).some((thread) => thread.ended && !thread.ended.settlement);
+      const reached = unsettled ? await reach() : undefined;
+
+      if (reached?.ok) await settleEnded(handle, reached.reached);
     }
 
     // A judge's copy is the thread's scratch folder, so the thread loses its folder with it.
@@ -1058,7 +1118,8 @@ export function serve(options: ServeOptions): Promise<void> {
           return;
         }
 
-        await settleEnded(request.handle);
+        // In recover mode nothing is settled before close, which connects only when it needs T3.
+        if (session) await settleEnded(request.handle, session);
         write({ event: 'collected', handle: request.handle });
 
         return;
