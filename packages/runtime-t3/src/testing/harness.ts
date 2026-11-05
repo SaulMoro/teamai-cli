@@ -98,6 +98,12 @@ export interface FakeT3Config {
   projectsMs?: number;
   /** How long the environment read takes to answer, in ms. */
   environmentMs?: number;
+  /** T3 refuses every sign-in decision, as it does a pairing code it does not accept. */
+  decisionRefused?: boolean;
+  /** T3 answers a sign-in decision with a redirect that carries no code. */
+  decisionNoCode?: boolean;
+  /** The `t3` command fails with this exit status, saying why on stderr. */
+  commandFails?: number;
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });
@@ -128,6 +134,10 @@ export interface FakeT3 {
   t3Home: string;
   /** The member's home the runtime and the fake agent's tools share. */
   home: string;
+  /** A directory that holds the `t3` command of this machine, which mints pairing codes for this server. */
+  bin: string;
+  /** The arguments of each run of the `t3` command. */
+  commandRuns(): string[][];
   config(change: Partial<FakeT3Config>): void;
   calls(): FakeCall[];
   threads(): FakeThread[];
@@ -145,9 +155,13 @@ export function fakeT3(dir: string, workspaceRoot: string): FakeT3 {
   const state = path.join(dir, 't3-state');
   const t3Home = path.join(dir, 't3-home');
   const home = path.join(dir, 'home');
+  const bin = path.join(dir, 't3-bin');
   let server: ChildProcess | undefined;
   fs.mkdirSync(state, { recursive: true });
   fs.mkdirSync(home, { recursive: true });
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 't3'), t3Command(state), { mode: 0o755 });
+  const runs = path.join(state, 't3-command.jsonl');
 
   let current: FakeT3Config = {
     token: 'fake-t3-token-0123456789',
@@ -162,7 +176,8 @@ export function fakeT3(dir: string, workspaceRoot: string): FakeT3 {
   const runtimeFile = path.join(t3Home, 'userdata', 'server-runtime.json');
 
   return {
-    t3Home, home,
+    t3Home, home, bin,
+    commandRuns: () => (fs.existsSync(runs) ? fs.readFileSync(runs, 'utf8').trim().split('\n').filter((line) => line !== '').map((line) => z.array(z.string()).parse(JSON.parse(line))) : []),
     config(change) {
       current = { ...current, ...change };
       write();
@@ -200,6 +215,32 @@ export function fakeT3(dir: string, workspaceRoot: string): FakeT3 {
   };
 }
 
+/**
+ * The `t3` command, as T3 Code installs it: `t3 auth pairing create --json` mints a pairing code for the server whose
+ * data directory `--base-dir` names, or `T3CODE_HOME`, or `~/.t3`, as the real one does. It logs its arguments.
+ */
+function t3Command(state: string): string {
+  return `#!${process.execPath}
+const fs = require('node:fs');
+const path = require('node:path');
+const { randomUUID } = require('node:crypto');
+const state = ${JSON.stringify(state)};
+const args = process.argv.slice(2);
+fs.appendFileSync(path.join(state, 't3-command.jsonl'), JSON.stringify(args) + '\\n');
+const failure = JSON.parse(fs.readFileSync(path.join(state, 'config.json'), 'utf8')).commandFails;
+if (failure) { process.stderr.write('Could not reach the T3 Code server.\\n'); process.exit(failure); }
+if (args.slice(0, 3).join(' ') !== 'auth pairing create' || !args.includes('--json')) { process.stderr.write('Unknown command.\\n'); process.exit(2); }
+const values = (flag) => args.flatMap((arg, i) => (arg === flag ? [args[i + 1]] : []));
+const base = values('--base-dir')[0] ?? process.env.T3CODE_HOME ?? path.join(process.env.HOME, '.t3');
+const credential = randomUUID();
+fs.appendFileSync(path.join(state, 'pairings.jsonl'), JSON.stringify({ credential, scopes: values('--scope'), base }) + '\\n');
+process.stdout.write(JSON.stringify({ id: randomUUID(), credential, label: values('--label')[0] ?? null }) + '\\n');
+`;
+}
+
+/** PATH with no `t3` command on it: this machine's PATH less every directory that holds one. */
+export const PATH_WITHOUT_T3 = (process.env['PATH'] ?? '/usr/bin:/bin').split(path.delimiter).filter((entry) => entry !== '' && !fs.existsSync(path.join(entry, 't3'))).join(path.delimiter);
+
 /** Where the runtime keeps its sign-in for the fake server, as `main.ts` lays it out. */
 export function credentialsFile(home: string): string {
   return path.join(home, '.teamai', 'runtime-state', 't3', 'credentials.json');
@@ -228,10 +269,10 @@ export interface Connection {
   close(): Promise<number | null>;
 }
 
-/** Starts the runtime at `executable` against `t3`, with `env` over a plain environment. */
+/** Starts the runtime at `executable` against `t3`, with `env` over a plain environment whose `t3` command is the fake's. */
 export function connect(executable: string, t3: FakeT3, env: Record<string, string> = {}): Connection {
   const child: ChildProcessWithoutNullStreams = spawn(process.execPath, [executable], {
-    env: { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: t3.home, T3CODE_HOME: t3.t3Home, ...env },
+    env: { PATH: `${t3.bin}${path.delimiter}${PATH_WITHOUT_T3}`, HOME: t3.home, T3CODE_HOME: t3.t3Home, ...env },
   });
 
   const lines: Line[] = [];
