@@ -1021,6 +1021,23 @@ describe('a prompt attempt in a container', () => {
     expect(await second.next(ended(op), 30_000)).toEqual({ op, event: 'exited', code: 0, stdout: 'ran\n' });
   }, 60_000);
 
+  it('fails an exec the engine CLI cannot start with exec_failed, which nothing ran, and keeps that end', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    const cli = path.join(engine.bin, 'docker');
+    fs.chmodSync(cli, 0o644);
+
+    const { end } = await exec(connection, { argv: ['/bin/sh', '-c', 'touch ran'], cwd: at.worktree });
+
+    expect(end).toMatchObject({ event: 'failed', failure: { code: 'exec_failed' } });
+    expect(fs.existsSync(path.join(at.worktree, 'ran'))).toBe(false);
+    fs.chmodSync(cli, 0o755);
+    connection.send({ type: 'reattach', handle: HANDLE });
+    expect(await connection.next((message) => message.handle === HANDLE)).toMatchObject({ event: 'alive', ops: [{ op: end.op, state: 'failed', failure: { code: 'exec_failed' } }] });
+  });
+
   it('fails an open when the engine stopped since init, with what it said', async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });
@@ -1329,6 +1346,21 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     expect(String((opened.failure as Message).message)).toMatch(/OPENAI_API_KEY: env:OPENAI_API_KEY/);
     expect(String((opened.failure as Message).message)).toMatch(/codex: login/);
     expect(engine.containers()).toEqual([]);
+  });
+
+  it('fails a judge whose container the engine could not create with that failure, before its tool ran, and close leaves nothing', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openJudge(connection, { ANTHROPIC_API_KEY: 'judge-key-1' });
+    engine.daemon(false);
+
+    expect(await judge(connection, { credentials: { ANTHROPIC_API_KEY: 'judge-key-1' } })).toMatchObject({ event: 'failed', failure: { code: 'sandbox_failed' } });
+    expect(engine.calls().filter(([, command]) => command === 'exec')).toEqual([]);
+    engine.daemon(true);
+    connection.send({ type: 'close', handle: HANDLE });
+    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 30_000)).toEqual({ event: 'closed', handle: HANDLE });
+    expect(engine.containers()).toEqual([]);
+    expect(engine.networks()).toEqual([]);
   });
 
   it("refuses a judge whose credentials are not its tool's, before it starts anything", async () => {
