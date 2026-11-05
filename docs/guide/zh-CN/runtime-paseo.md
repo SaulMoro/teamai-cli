@@ -393,6 +393,12 @@ Paseo did not archive workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476
 Paseo archived workspace teamai-rd280488c2f3eba5f-classify-p1-c2404617476e (wks_6fb33a5b94531f79), but agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f still ran 10 s later. It may still change the worktree; stop it in the Paseo app.
 ```
 
+Paseo 以错误回答的创建请求（例如连接中断时）仍可能启动它的智能体。在 Paseo 显示这个智能体之前，这次尝试保持打开：
+
+```text
+Paseo does not show the claude agent 6f0d2c4e-8b1a-5c3f-9e7d-2a4b6c8d0e1f, though its create was sent, so that create may still start it in the worktree. Look for the agent in the Paseo app and stop it if it runs, then close the attempt again: teamai keeps the attempt until Paseo shows the agent.
+```
+
 同一个 worktree 上的两次尝试共用它的 Paseo 工作区，只有最后关闭的那次尝试会归档它。先关闭的尝试改为取消它自己的智能体（包括失败步骤的智能体），另一次尝试的智能体继续运行。Paseo 不肯取消的智能体会让这次尝试保持打开，teamai 可以再次关闭它：
 
 ```text
