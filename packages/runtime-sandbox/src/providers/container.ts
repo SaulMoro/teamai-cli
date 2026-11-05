@@ -1,7 +1,7 @@
 import type { ContainerEngine } from '../options.js';
 import type { Can, ConfinedOffer, RuntimeFailure } from '@teamai/runtime-protocol';
 import { EVIDENCE_DIR, FILTER_PORT, FILTER_SCRIPT, judgeTool } from '../judge.js';
-import { sandboxName, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
+import { sandboxName, STOP_MS, type ExecEnd, type PlaceKey, type Provider } from '../provider.js';
 import { cliOf, LAUNCHABLE, mountsOf, unmountable, type Ran } from './cli.js';
 
 // ─── docker and podman ───────────────────────────────────
@@ -55,8 +55,8 @@ function dnsStaysInside(version: string): boolean {
   return major >= 26 || (major === 25 && (minor > 0 || patch >= 5)) || (major === 23 && (minor > 0 || patch >= 11));
 }
 
-/** Seconds a stop waits before the engine kills the container. */
-const STOP_GRACE = '10';
+/** Seconds a stop waits before the engine kills the container, well inside STOP_MS. */
+const STOP_GRACE = '5';
 
 export interface Host {
   /** The member's uid and gid, which the step's processes run as on docker; undefined where the OS has none. */
@@ -101,7 +101,7 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
     async offer() {
       const info = await cli(['info', '--format', engine === 'podman' ? '{{.Version.Version}}' : '{{.ServerVersion}}']);
 
-      if (info.kind === 'unstartable') return unavailable(info.message);
+      if (info.kind !== 'ran') return unavailable(info.message);
 
       if (info.code !== 0) return unavailable(notRunning(info));
       const present = await cli(['image', 'inspect', '--format', '{{.Id}}', image]);
@@ -163,7 +163,7 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
 
       if (existing.ok && existing.id !== undefined) return { ok: true, id: existing.id };
 
-      return { ok: false, failure: { code: 'sandbox_failed', message: created.kind === 'unstartable' ? created.message : `${engine} could not create the container for attempt ${key.attempt} from ${image}: ${lastLine(created)}` } };
+      return { ok: false, failure: { code: 'sandbox_failed', message: created.kind !== 'ran' ? created.message : `${engine} could not create the container for attempt ${key.attempt} from ${image}: ${lastLine(created)}` } };
     },
 
     judges: {
@@ -231,11 +231,11 @@ export function containerProvider({ engine, image, host }: { engine: ContainerEn
     },
 
     async stop(id) {
-      const restarted = await cli(['restart', '--time', STOP_GRACE, id]);
+      const restarted = await cli(['restart', '--time', STOP_GRACE, id], { timeoutMs: STOP_MS });
 
       if (restarted.kind === 'ran' && restarted.code === 0) return { ok: true };
 
-      return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not stop the processes in container ${id}: ${lastLine(restarted)}. They may still run; remove the container with \`${engine} rm --force ${id}\`.` } };
+      return { ok: false, failure: { code: 'sandbox_failed', message: `${engine} could not stop the processes in container ${id}: ${why(restarted)}. They may still run; remove the container with \`${engine} rm --force ${id}\`.` } };
     },
 
     async destroy(id) {

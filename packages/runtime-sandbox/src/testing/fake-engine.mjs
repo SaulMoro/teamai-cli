@@ -12,7 +12,9 @@
 //                       makes sbx answer as one whose network policy was never initialized, and a file
 //                       `secrets/<service>` is an sbx secret its proxy holds; a file `stop-lag` holding a number of
 //                       milliseconds makes an `exec` whose process was stopped end that much later, as a real exec
-//                       client notices its container stopped only after the stop command returns
+//                       client notices its container stopped only after the stop command returns; a file
+//                       `stop-delay` holding a number of milliseconds makes `restart` (sbx: `stop`) wait that long
+//                       before it stops anything, as a daemon that is slow to answer
 //   FAKE_ENGINE_IMAGES  JSON: image (or sbx agent) name -> the directory its tools are in (the image's PATH)
 //   FAKE_ENGINE_NAME    docker, podman or sbx, which it answers as
 //   FAKE_ENGINE_LOG     optional: where argv lines go
@@ -123,6 +125,13 @@ function runProcess(container, argv, cwd, env, stdin) {
   });
 
   for (const signal of ['SIGTERM', 'SIGINT']) process.on(signal, () => {});
+}
+
+/** Waits as long as `stop-delay` says, before a stop does anything. */
+function delayStop() {
+  const file = path.join(state, 'stop-delay');
+
+  if (fs.existsSync(file)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, Number(fs.readFileSync(file, 'utf8')));
 }
 
 const [command, ...rest] = args;
@@ -238,6 +247,7 @@ function docker() {
     }
 
     case 'restart': {
+      delayStop();
       const { rest: positional } = options(rest, ['--time', '-t']);
       const container = readContainer(positional[0]);
 
@@ -375,6 +385,8 @@ function sbx() {
     }
 
     case 'stop': {
+      delayStop();
+
       for (const name of rest) {
         const sandbox = readContainer(name);
 

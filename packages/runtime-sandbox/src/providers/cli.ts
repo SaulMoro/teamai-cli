@@ -13,11 +13,15 @@ import type { PlaceView, RuntimeFailure } from '@teamai/runtime-protocol';
 // oxlint-disable-next-line teamai/tool-facts -- teamai's EXEC_RUNTIME_TOOLS, by their executables; a runtime package cannot read teamai's tool registry
 export const LAUNCHABLE = ['claude', 'codex', 'codebuddy'];
 
-export type Ran = { kind: 'ran'; code: number; stdout: string; stderr: string } | { kind: 'unstartable'; message: string };
+/** How the CLI ran: to its end, not at all, or past the time it was given, after which it was killed. */
+export type Ran = { kind: 'ran'; code: number; stdout: string; stderr: string } | { kind: 'unstartable' | 'timed_out'; message: string };
 
 export interface Cli {
-  /** Runs the CLI once with `args`, on `env` (teamai's own environment unless given), streaming its output. */
-  run(args: string[], options?: { env?: NodeJS.ProcessEnv; onOutput?: (stream: 'stdout' | 'stderr', data: string) => void }): Promise<Ran>;
+  /**
+   * Runs the CLI once with `args`, on `env` (teamai's own environment unless given), streaming its output. With
+   * `timeoutMs`, a CLI still running that long after it started is killed and answers `timed_out`.
+   */
+  run(args: string[], options?: { env?: NodeJS.ProcessEnv; onOutput?: (stream: 'stdout' | 'stderr', data: string) => void; timeoutMs?: number }): Promise<Ran>;
   /** What the CLI said when it could not do something: its last stderr line, or why it could not start. */
   why(ran: Ran): string;
 }
@@ -38,17 +42,26 @@ export function cliOf({ name, env, notInstalled }: { name: string; env: NodeJS.P
   }) ?? name;
 
   return {
-    run: (args, { env: runEnv = env, onOutput } = {}) => new Promise((resolve) => {
+    run: (args, { env: runEnv = env, onOutput, timeoutMs } = {}) => new Promise((resolve) => {
       const child = spawn(executable, args, { env: runEnv, stdio: ['ignore', 'pipe', 'pipe'] });
+
+      const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
+        child.kill('SIGKILL');
+        resolve({ kind: 'timed_out', message: `\`${name} ${args[0]}\` did not answer within ${timeoutMs / 1000} s` });
+      }, timeoutMs);
+
       let stdout = '';
       let stderr = '';
       child.stdout.setEncoding('utf8').on('data', (data: string) => { stdout += data; onOutput?.('stdout', data); });
       child.stderr.setEncoding('utf8').on('data', (data: string) => { stderr = `${stderr}${data}`.slice(-8000); onOutput?.('stderr', data); });
       // A CLI that cannot start never closes: ENOENT is a missing CLI, anything else (EACCES) is named as it is.
       child.on('error', (error) => resolve({ kind: 'unstartable', message: 'code' in error && error.code === 'ENOENT' ? notInstalled : `${name} could not be started: ${error.message}` }));
-      child.on('close', (code, signal) => resolve({ kind: 'ran', code: code ?? (signal === 'SIGKILL' ? 137 : 143), stdout, stderr }));
+      child.on('close', (code, signal) => {
+        clearTimeout(timer);
+        resolve({ kind: 'ran', code: code ?? (signal === 'SIGKILL' ? 137 : 143), stdout, stderr });
+      });
     }),
-    why: (ran) => (ran.kind === 'unstartable' ? ran.message : ran.stderr.trim().split('\n').at(-1) ?? ''),
+    why: (ran) => (ran.kind === 'ran' ? ran.stderr.trim().split('\n').at(-1) ?? '' : ran.message),
   };
 }
 
