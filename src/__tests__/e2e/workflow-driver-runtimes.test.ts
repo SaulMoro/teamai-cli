@@ -751,6 +751,25 @@ Judge the review.
       expect(runtimeRecord(runId, attempt())).toMatchObject({ phase: 'closed', display });
     });
 
+    it('keeps the display a runtime sends after it accepted the prompt, for the run\'s details', async () => {
+      const release = path.join(state, 'release');
+      const display = { label: 'Review the repository', url: 't3://thread/5e1c', fields: { agent: 'claude' } };
+      writeDefinition('agentlater', [{ use: 'toy', options: { state, display: { label: 'workspace' }, agent: { release, output: { ok: true }, display, display_after_ms: 200 } } }]);
+      const before = runIds();
+      const running = await startKilled(['workflow', 'start', 'oneprompt', '--driver', 'agentlater']);
+      await until(() => sends().length === 1);
+      const runId = [...runIds()].find((id) => !before.has(id)) ?? '';
+      const attempt = (): string => attemptOf(readRunState(runId).steps[0]);
+
+      await until(() => JSON.stringify(runtimeRecord(runId, attempt())?.display) === JSON.stringify(display));
+      expect(runtimeRecord(runId, attempt())).toMatchObject({ phase: 'running', display });
+      fs.writeFileSync(release, '');
+      const ended = await running.ended;
+
+      expect(envelope(ended), ended.stderr).toMatchObject({ data: { done: { outcome: 'succeeded' } } });
+      expect(runtimeRecord(runId, attempt())).toMatchObject({ phase: 'closed', display });
+    });
+
     it('cancels a running prompt when teamai workflow cancel stops its run', async () => {
       const release = path.join(state, 'release');
       writeDefinition('agentcancel', [{ use: 'toy', options: { state, agent: { release, output: { ok: true } } } }]);
