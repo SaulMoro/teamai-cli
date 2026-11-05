@@ -332,24 +332,40 @@ export function serve({ input, write: send, journal, provider: providerFor }: Ru
       return;
     }
 
-    const found = place && await sandboxOf(place, provider);
+    const noSandbox: Outcome = { state: 'failed', failure: { code: 'runtime_gone', message: `No sandbox is open under handle ${handle}.` } };
 
-    if (found?.ok === false) {
-      finish(op, handle, { state: 'failed', failure: found.failure });
-
-      return;
-    }
-
-    const id = found?.id;
-
-    if (id === undefined) {
-      finish(op, handle, { state: 'failed', failure: { code: 'runtime_gone', message: `No sandbox is open under handle ${handle}.` } });
+    if (place === undefined) {
+      finish(op, handle, noSandbox);
 
       return;
     }
 
     journal.saveExec(op, { handle, runner: process.pid });
     write({ op, event: 'accepted' });
+    // Journaled and accepted first: a runtime that died before it kept the sandbox id leaves it to its labels, a lookup
+    // that takes the engine's time, and a cancel or a close meanwhile finds this exec and keeps it from starting.
+    const found = await sandboxOf(place, provider);
+
+    if (!found.ok) {
+      finish(op, handle, { state: 'failed', failure: found.failure });
+
+      return;
+    }
+
+    const { id } = found;
+
+    if (id === undefined) {
+      finish(op, handle, noSandbox);
+
+      return;
+    }
+
+    if (journal.isCancelled(op)) {
+      finish(op, handle, { state: 'cancelled' });
+
+      return;
+    }
+
     // A credential the exec withholds is not set; a name the exec sets itself wins over a credential.
     const scoped = Object.fromEntries(Object.entries(request.credentials).filter(([name]) => !request.unset.includes(name)));
     let stdout = '';
