@@ -165,6 +165,35 @@ type Offer = { runs: 'steps-and-judges' } | { runs: 'steps'; noJudge: string } |
 export function serve({ input, write, journal }: Serving): Promise<void> {
   let daemon: Daemon | undefined;
   let mode: 'attended' | 'unattended' = 'attended';
+  /** In recover mode, the daemon's url: the runtime connects to it only once a cancel or close needs it. */
+  let recoverAt: string | undefined;
+  /** The connection a recover-mode cancel or close is making, which the next one shares. */
+  let reaching: Promise<Daemon | RuntimeFailure> | undefined;
+
+  /**
+   * The daemon a cancel or close needs: the one init connected to, or, in recover mode, one connected on first need, so
+   * a daemon that is down or a tool signed out since never keeps teamai from stopping what it ran. Undefined: init did
+   * not connect to one.
+   */
+  const reach = (): Promise<Daemon | RuntimeFailure | undefined> => {
+    if (daemon) return Promise.resolve(daemon);
+    const url = recoverAt;
+
+    if (url === undefined) return Promise.resolve(undefined);
+
+    reaching ??= (async () => {
+      const client = await loadClient(process.env);
+      const connected = 'code' in client ? client : await connect(url, client);
+
+      if ('code' in connected) reaching = undefined;
+      else daemon = connected;
+
+      return connected;
+    })();
+
+    return reaching;
+  };
+
   /** What init offered of each tool the daemon has installed. */
   let offers = new Map<PaseoTool, Offer>();
 
@@ -262,6 +291,11 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     return { label: `Paseo workspace ${place.workspace.name}`.slice(0, 80), fields: { workspace: place.workspace.id, daemon: `Paseo ${live.version}` } };
   };
 
+  /** Why a stop cannot be done with no daemon: its connection's own failure, or, with none, that no daemon is reached. */
+  const withoutDaemon = (failure: RuntimeFailure | undefined, cannot: string, then: string): RuntimeFailure => (failure
+    ? { code: failure.code, message: `${failure.message} Until then teamai-runtime-paseo cannot ${cannot}; ${then}.` }
+    : { code: 'daemon_unreachable', message: `teamai-runtime-paseo reaches no Paseo daemon, so it cannot ${cannot}. Start the daemon with \`paseo start\`, then ${then}.` });
+
   /** Accepts a prompt whose agent exists, showing that agent. */
   const accept = (op: OpId, record: AgentPrompt, live: Daemon): void => {
     const place = journal.place(record.handle);
@@ -275,6 +309,14 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       const issue = options.error.issues[0];
       const key = issue?.code === 'unrecognized_keys' ? issue.keys[0] : issue?.path[0];
       write({ type: 'init', ok: false, error: { code: 'bad_option', message: `teamai-runtime-paseo takes option url only: ${issue?.message ?? 'bad options'}`, ...(key !== undefined && { key: String(key) }) } });
+
+      return;
+    }
+
+    if (request.mode === 'recover') {
+      // Only to stop what it ran: no sign-in or tool check, and no connection until a cancel or close needs one.
+      recoverAt = options.data.url;
+      write({ type: 'init', ok: true, can: {} });
 
       return;
     }
@@ -717,7 +759,7 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
     }
   }
 
-  async function cancel(live: Daemon, op: OpId): Promise<void> {
+  async function cancel(op: OpId): Promise<void> {
     const record = journal.prompt(op);
 
     if (record?.kind !== 'agent' || record.outcome) return;
@@ -726,7 +768,11 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
     // A prompt whose agent is still being created is cancelled once it exists.
     if (following && !following.created) return;
-    const refused = await cancelAgent(live, record);
+    const live = await reach();
+
+    const refused = live && !('code' in live)
+      ? await cancelAgent(live, record)
+      : { ...withoutDaemon(live, `cancel the ${record.tool} agent ${record.create.agentId}, which may still run in the worktree`, 'cancel the run again'), code: 'cancel_failed' };
 
     settle(op, refused ? { op, state: 'failed', failure: refused } : { op, state: 'cancelled' });
     following?.stop();
@@ -775,13 +821,14 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
    * Ends an attempt's place once nothing it started runs. A place whose agent may still run is kept, so teamai can close
    * it again: one the runtime cannot stop, or any place while it reaches no daemon, as after a restart whose init failed.
    */
-  async function closePlace(live: Daemon | undefined, handle: string): Promise<void> {
+  async function closePlace(handle: string): Promise<void> {
     const place = journal.place(handle);
+    // A place with no Paseo workspace has no agent to stop: it closes without the daemon.
+    const live = place?.workspace && (await reach());
 
-    const failure = place && (live ? await stopPlace(live, handle, place) : {
-      code: 'daemon_unreachable',
-      message: `teamai-runtime-paseo reaches no Paseo daemon, so it cannot stop the agents of ${handle} or archive its workspace. Start the daemon with \`paseo start\`, then close the attempt again.`,
-    });
+    const failure = place?.workspace && (live && !('code' in live)
+      ? await stopPlace(live, handle, place)
+      : withoutDaemon(live, `stop the agents of ${handle} or archive its workspace`, 'close the attempt again'));
 
     if (failure) {
       write({ event: 'close_failed', handle, failure });
@@ -802,8 +849,8 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
 
     const live = daemon;
 
-    // What teamai asks of a place is answered without the daemon too: a restarted runtime whose init could not reach it
-    // still gets the cancel sequence's reattach, collect and close.
+    // What teamai asks to stop a place is answered without a daemon from init too, in recover mode or after an init that
+    // could not reach one: reattach and collect from the journal, and a cancel or close reaches the daemon only to stop.
     switch (request.type) {
       case 'collect':
         // The worktree and the result directory already sit on this host, and the transcript stays in the tool's home.
@@ -826,7 +873,11 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
       }
 
       case 'close':
-        await closePlace(live, request.handle);
+        await closePlace(request.handle);
+
+        return;
+      case 'cancel':
+        await cancel(request.op);
 
         return;
       default:
@@ -850,10 +901,6 @@ export function serve({ input, write, journal }: Serving): Promise<void> {
         return;
       case 'prompt':
         await prompt(live, request);
-
-        return;
-      case 'cancel':
-        await cancel(live, request.op);
 
         return;
       default: {
