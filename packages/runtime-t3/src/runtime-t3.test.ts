@@ -1405,8 +1405,9 @@ describe('teamai-runtime-t3', () => {
 
       runtime.send({ type: 'reattach', handle });
       expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'failed', handle, failure: unreadable });
+      // The record may hold the op's thread, launched by a runtime before this one, so the prompt may still run.
       runtime.send(prompt(handle, 'op-00000049'));
-      expect(await ended(runtime, 'op-00000049')).toEqual({ op: 'op-00000049', event: 'failed', failure: unreadable });
+      expect(await ended(runtime, 'op-00000049')).toEqual({ op: 'op-00000049', event: 'failed', failure: { ...unreadable, code: 'cancel_failed' } });
       runtime.send({ type: 'collect', handle });
       expect(await runtime.next((line) => line['handle'] === handle)).toEqual({ event: 'collect_failed', handle, failure: unreadable });
       runtime.send({ type: 'close', handle });

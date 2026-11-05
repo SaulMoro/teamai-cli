@@ -860,7 +860,8 @@ export function serve(options: ServeOptions): Promise<void> {
 
     if (!session || !opened) {
       accept(undefined);
-      fail(request.op, read.kind === 'unreadable' ? unreadable(request.handle, read) : { code: 'runtime_protocol', message: session ? `No open place ${request.handle}.` : 'prompt came before a successful init.' });
+      // A record that cannot be read may hold the op's thread, which may still run.
+      fail(request.op, read.kind === 'unreadable' ? { ...unreadable(request.handle, read), code: CANCEL_FAILED } : { code: 'runtime_protocol', message: session ? `No open place ${request.handle}.` : 'prompt came before a successful init.' });
 
       return;
     }
