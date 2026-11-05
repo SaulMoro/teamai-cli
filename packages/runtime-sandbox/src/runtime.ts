@@ -581,10 +581,10 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
       await dispatch(request);
     } catch (error) {
       const message = `The sandbox runtime failed on a ${request.type} request: ${error instanceof Error ? error.message : String(error)}`;
-      write({ event: 'error', message });
       const failure = { code: 'runtime_failed', message };
 
-      // teamai waits for the answer to each request but a cancel: it gets this failure, never silence.
+      // teamai waits for the answer to each request but a cancel: it gets this failure as that request's own reply,
+      // never silence, and never an error line, which would fail every other request it waits on.
       switch (request.type) {
         case 'init':
           write({ type: 'init', ok: false, error: failure });
@@ -592,8 +592,9 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
           return;
         case 'exec':
         case 'prompt':
-          // One this process claimed ends failed.
-          finish(request.op, request.handle, { state: 'failed', failure });
+          // One this process claimed ends failed; one that threw before it was claimed is answered here.
+          if (running.has(request.op)) finish(request.op, request.handle, { state: 'failed', failure });
+          else write({ op: request.op, event: 'failed', failure });
 
           return;
         case 'open':
@@ -601,20 +602,14 @@ export function serve({ input, write, journal, provider: providerFor }: RuntimeD
 
           return;
         case 'collect':
-          write({ event: 'collect_failed', handle: request.handle, failure });
-
-          return;
         case 'reattach':
-          // A journal it cannot read is not a place it knows is gone.
-          write({ event: 'alive', handle: request.handle, ops: [] });
-
-          return;
         case 'close':
-          // The journal keeps the place, so a later close still finds the sandbox.
-          write({ event: 'close_failed', handle: request.handle, failure });
+          // A journal it cannot read is not a place it knows is gone, and the place stays for a later close.
+          write({ event: 'failed', handle: request.handle, failure });
 
           return;
         case 'cancel':
+          // Its outcome is the operation's end, which teamai reads on reattach, and bounds on its own.
           return;
         default: {
           const unhandled: never = request;
