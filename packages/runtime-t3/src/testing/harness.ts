@@ -94,6 +94,8 @@ export interface FakeT3Config {
   launchReplyLost?: boolean;
   /** How long the project list takes to answer, in ms. */
   projectsMs?: number;
+  /** How long the environment read takes to answer, in ms. */
+  environmentMs?: number;
 }
 
 const CallSchema = z.object({ tool: z.string(), args: z.record(z.string(), z.unknown()), bearer: z.string() });

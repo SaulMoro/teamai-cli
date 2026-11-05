@@ -68,6 +68,12 @@ const WAIT_MS = { attended: 25_000, unattended: 5_000 } as const;
  */
 const STOP_WAIT_MS = 10_000;
 
+/**
+ * How long T3 gets to answer init's connection and what it runs: teamai gives init 15 s. An attended sign-in waits for
+ * the person instead, and this bound starts once they approved.
+ */
+const INIT_WAIT_MS = 10_000;
+
 /** How often an interactive step's thread is checked once it is idle without a result: the person may still be in it. */
 const IDLE_POLL_MS = 2_000;
 
@@ -591,7 +597,19 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    const connected = await options.connect(request.mode);
+    const unanswered = (): void => write({ type: 'init', ok: false, error: { code: 't3_unavailable', message: `T3 Code did not answer what it runs within ${INIT_WAIT_MS / 1_000} s. Check that T3 Code is open and responding, then start the workflow again.` } });
+    const answerBy = Date.now() + INIT_WAIT_MS;
+    const connecting = options.connect(request.mode);
+    const reaching = request.mode === 'attended' ? { answered: true as const, value: await connecting } : await within(connecting, INIT_WAIT_MS);
+
+    if (!reaching.answered) {
+      // A connection that comes after init failed is closed, not kept.
+      void connecting.then((late) => (late.ok ? late.t3.close() : undefined)).catch(() => {});
+
+      return unanswered();
+    }
+
+    const connected = reaching.value;
 
     if (!connected.ok) {
       write({ type: 'init', ok: false, error: connected.error });
@@ -600,7 +618,15 @@ export function serve(options: ServeOptions): Promise<void> {
     }
 
     try {
-      const [environment, providers] = await Promise.all([connected.t3.environment(), connected.t3.providers()]);
+      const asking = await within(Promise.all([connected.t3.environment(), connected.t3.providers()]), Math.max((request.mode === 'attended' ? Date.now() + INIT_WAIT_MS : answerBy) - Date.now(), 0));
+
+      if (!asking.answered) {
+        void connected.t3.close().catch(() => {});
+
+        return unanswered();
+      }
+
+      const [environment, providers] = asking.value;
       const instances = instancesOf(providers, parsed.data.instance);
 
       if (!instances.ok) {
