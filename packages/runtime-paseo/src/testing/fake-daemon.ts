@@ -80,6 +80,10 @@ const BehaviourSchema = z.object({
   open_ms: z.number().int().nonnegative().default(0),
   /** How long the daemon takes to create an agent, as a provider that is slow to start does. */
   create_ms: z.number().int().nonnegative().default(0),
+  /** How long the daemon takes to archive a workspace. */
+  archive_ms: z.number().int().nonnegative().default(0),
+  /** The daemon creates the agent and starts it, but its answer is lost: the create fails as a dropped connection does. */
+  lose_create_reply: z.boolean().default(false),
 });
 
 export type Behaviour = z.input<typeof BehaviourSchema>;
@@ -334,8 +338,9 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
   const held = new WeakSet<Inbound>();
 
   function handle(message: Inbound, reply: (message: Reply) => void): void {
-    const { open_ms: opening, create_ms: creating } = behaviour();
-    const hold = message.type === 'open_project_request' ? opening : message.type === 'agent.create.request' ? creating : 0;
+    const { open_ms: opening, create_ms: creating, archive_ms: archiving } = behaviour();
+    const holds: Partial<Record<Inbound['type'], number>> = { open_project_request: opening, 'agent.create.request': creating, archive_workspace_request: archiving };
+    const hold = holds[message.type] ?? 0;
 
     if (hold > 0 && !held.has(message)) {
       held.add(message);
@@ -457,7 +462,12 @@ export async function startFakeDaemon({ state, port }: { state: string; port: nu
         kept.receipts[key] = { agentId: id, fingerprint };
         save();
         reply({ type: 'agent.create.update', payload: creation(agent) });
-        reply({ type: 'agent.create.response', payload: { requestId: message.requestId, agent: snapshot(agent), creation: creation(agent), error: null } });
+        reply({
+          type: 'agent.create.response',
+          payload: agent.behaviour.lose_create_reply
+            ? { requestId: message.requestId, agent: null, error: 'Connection reset before the create was answered' }
+            : { requestId: message.requestId, agent: snapshot(agent), creation: creation(agent), error: null },
+        });
         work(agent);
 
         return;
