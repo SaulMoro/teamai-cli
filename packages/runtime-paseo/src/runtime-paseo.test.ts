@@ -1224,6 +1224,39 @@ describe('teamai-runtime-paseo', () => {
     expect(received().filter((request) => request.type === 'archive_workspace_request')).toEqual([]);
   });
 
+  it('fails a request it cannot read on its own when its op or handle is new, never with an error line', async () => {
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+
+    runtime.child.stdin?.write(`${JSON.stringify({ type: 'prompt', op: 'op-0000000b', handle })}\n`);
+    runtime.child.stdin?.write(`${JSON.stringify({ type: 'shut', handle: 'worktree/r4567cdef/a4567cdef' })}\n`);
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'failed', failure: { code: 'bad_request', message: expect.stringMatching(/^teamai-runtime-paseo could not read the prompt request for op-0000000b: /) } });
+    expect(await runtime.next((line) => 'handle' in line && line.handle === 'worktree/r4567cdef/a4567cdef')).toMatchObject({ event: 'failed', failure: { code: 'bad_request' } });
+    expect(runtime.lines.filter((line) => 'event' in line && line.event === 'error')).toEqual([]);
+  });
+
+  it('drops a request it cannot read for a prompt it already runs, so that prompt still ends once, and fails no other request', async () => {
+    const release = path.join(dir, 'release');
+    behave({ release, output: { ok: true } });
+    const runtime = start();
+    await ready(runtime);
+    const handle = await opened(runtime);
+    runtime.send(promptRequest(handle, 'op-0000000b'));
+    await runtime.next(isOp('op-0000000b', 'display'));
+
+    runtime.child.stdin?.write(`${JSON.stringify({ type: 'stop', op: 'op-0000000b' })}\n`);
+    runtime.child.stdin?.write(`${JSON.stringify({ type: 'shut', handle })}\n`);
+    await delay(1_000);
+    fs.writeFileSync(release, '');
+
+    expect(await runtime.next(isEnd('op-0000000b'))).toMatchObject({ event: 'finished' });
+    await delay(500);
+    expect(runtime.lines.filter(isEnd('op-0000000b'))).toHaveLength(1);
+    expect(runtime.lines.filter((line) => 'event' in line && (line.event === 'error' || ('handle' in line && !('op' in line) && line.event === 'failed')))).toEqual([]);
+  });
+
   it('answers an open or a prompt it cannot run, before a successful init or in recover mode, with its own failure, never an error line', async () => {
     const { url } = daemon;
     await daemon.close();
