@@ -18,14 +18,13 @@ type WorktreePlace = Extract<Place, { kind: 'worktree' }> & { workspace: NonNull
 type ConfinedPlace = Extract<Place, { kind: 'confined' }>;
 
 /**
- * A prompt this process follows: what wakes its waits when teamai stops it, whether its agent exists, and its create,
- * which `landed` settles once no create of it can still be sent.
+ * A prompt this process follows: what wakes its waits when teamai stops it, whether its agent exists, and what ends its
+ * entry in `creates` once no create of it can still be sent.
  */
 interface Following {
   stop: () => void;
   stopped: Promise<'stopped'>;
   created: boolean;
-  creating: Promise<void>;
   landed: () => void;
 }
 
@@ -290,6 +289,13 @@ export function serve({ input, write: emit, journal }: Serving): Promise<void> {
     }
   };
 
+  /**
+   * The creates of the prompts this process launched, each settled once no create of it can still be sent. Kept apart
+   * from `waiting`, which a prompt leaves once it ends: one a cancel ended because its create took too long still has
+   * that create pending, and a retried cancel and a close wait for it.
+   */
+  const creates = new Map<OpId, Promise<void>>();
+
   /** Follows a prompt from here on: a cancel and a close find it, and wait for its create. */
   const track = (op: OpId): Following => {
     let stop = (): void => {};
@@ -298,13 +304,21 @@ export function serve({ input, write: emit, journal }: Serving): Promise<void> {
       stop = () => resolve('stopped');
     });
 
-    let landed = (): void => {};
+    let resolve = (): void => {};
 
-    const creating = new Promise<void>((resolve) => {
-      landed = resolve;
+    const creating = new Promise<void>((settled) => {
+      resolve = settled;
     });
 
-    const following: Following = { stop, stopped, created: false, creating, landed };
+    creates.set(op, creating);
+
+    const landed = (): void => {
+      resolve();
+
+      if (creates.get(op) === creating) creates.delete(op);
+    };
+
+    const following: Following = { stop, stopped, created: false, landed };
     waiting.set(op, following);
 
     return following;
@@ -997,7 +1011,8 @@ export function serve({ input, write: emit, journal }: Serving): Promise<void> {
       // A prompt that has not sent its create sees the cancel, and sends none. One whose agent is still being created is
       // stopped once it exists, within the same deadline: past it, the agent may still start.
       following?.stop();
-      const joined = following && !following.created ? await Promise.race([following.creating, late(deadline)]) : undefined;
+      const creating = creates.get(op);
+      const joined = creating && (await Promise.race([creating, late(deadline)]));
       const record = journal.prompt(op);
 
       // It ended meanwhile: a create Paseo refused, or a prompt that saw the cancel before it sent a create.
@@ -1116,11 +1131,7 @@ export function serve({ input, write: emit, journal }: Serving): Promise<void> {
 
     // A prompt is accepted before Paseo creates its agent: the close waits until none can still send a create, so one
     // being created is stopped once it exists.
-    const creating = prompts.flatMap(({ op }) => {
-      const following = waiting.get(op);
-
-      return following && !following.created ? [following.creating] : [];
-    });
+    const creating = prompts.flatMap(({ op }) => creates.get(op) ?? []);
 
     if (creating.length > 0 && (await Promise.race([Promise.all(creating), late(deadline)])) === 'late') {
       write({ event: 'close_failed', handle, failure: { code: 'close_failed', message: `Paseo did not finish creating an agent of ${handle} within ${STOP_SETTLE_MS / 1000} s, so it may still start in the worktree; close the attempt again.` } });
