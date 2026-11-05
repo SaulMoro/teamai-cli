@@ -719,7 +719,7 @@ export function serve(options: ServeOptions): Promise<void> {
         errors = 0;
       } catch (error) {
         // T3 restarting, or a dropped connection: the thread keeps running, so ask again a few times.
-        if (++errors > 5) return { state: { op: request.op, state: 'failed', failure: { code: 't3_unavailable', message: `${where} could not be followed: ${error instanceof Error ? error.message : String(error)}` } }, threadEnded: false };
+        if (++errors > 5) return { state: unconfirmed(request.op, `${where} could not be followed, so it may still run: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. Run teamai workflow cancel ${state.run} to stop it.`), threadEnded: false };
 
         await sleep(1_000 * errors);
         continue;
@@ -813,13 +813,22 @@ export function serve(options: ServeOptions): Promise<void> {
       answerEnded(request.op, state);
     };
 
+    let thread = opened.threads[request.op];
+    const pending = opened.launches[request.op];
+
     /**
      * Ends an op this process launched no thread for. A thread the journal holds for it, which another process may have
-     * launched, or a launch T3 never answered, stays the runtime's to stop.
+     * launched, or a launch T3 never answered, stays the runtime's to stop: while it may still run, the op ends as a stop
+     * the runtime could not confirm, with the refusal as its cause, so a later cancel stops it.
      */
     const refuse = (state: OpState): void => {
       accept(undefined);
-      end(state);
+
+      if (state.state !== 'failed' || (thread ? thread.ended : !pending)) return end(state);
+      const { code, message } = state.failure;
+      const held = thread ? `The T3 thread ${threadLink(s.environment, thread.threadId)} ("${thread.title}")` : `The T3 thread "${pending?.title}", whose launch T3 Code never answered,`;
+
+      end(unconfirmed(request.op, code === 'launch_unconfirmed' ? message : `${message.replace(/\.$/, '')} (${code}). ${held} may still run: run teamai workflow cancel ${opened.run} to stop it.`));
     };
 
     if (cancelledEarly.delete(request.op)) {
@@ -875,9 +884,6 @@ export function serve(options: ServeOptions): Promise<void> {
       return;
     }
 
-    let thread = opened.threads[request.op];
-    const pending = opened.launches[request.op];
-
     // Launching again under this sign-in would start the step a second time, beside the thread T3 may run.
     if (!thread && pending && pending.signIn !== s.signIn) {
       refuse({ op: request.op, state: 'failed', failure: launchUnconfirmed(opened, pending) });
@@ -889,15 +895,16 @@ export function serve(options: ServeOptions): Promise<void> {
     running.set(request.op, state);
     const finish = (outcome: OpState, threadEnded = false): void => endRunning(state, outcome, { threadEnded });
 
-    try {
-      // A launch T3 never answered is sent again as it was journaled: T3 checks the mode before it looks the launch up,
-      // so a repeat in another mode would not find the thread it launched.
-      const launch: LaunchRecord = pending ?? {
-        title: `${lease.step} · teamai ${opened.run}`, modelSelection: selection.selection, runtimeMode: s.stepMode, tool: lease.tool,
-        launchedAt: thread?.launchedAt ?? Date.now(), signIn: s.signIn, ...(work.kind === 'step' && { worktreePath: request.cwd }),
-      };
+    // A launch T3 never answered is sent again as it was journaled: T3 checks the mode before it looks the launch up,
+    // so a repeat in another mode would not find the thread it launched.
+    const launch: LaunchRecord = pending ?? {
+      title: `${lease.step} · teamai ${opened.run}`, modelSelection: selection.selection, runtimeMode: s.stepMode, tool: lease.tool,
+      launchedAt: thread?.launchedAt ?? Date.now(), signIn: s.signIn, ...(work.kind === 'step' && { worktreePath: request.cwd }),
+    };
 
-      const { title, launchedAt } = launch;
+    const { title, launchedAt } = launch;
+
+    try {
       const newThread: NewThread = { title, modelSelection: launch.modelSelection, runtimeMode: launch.runtimeMode, clientRequestId: request.op };
 
       // T3 may launch the thread and still fail to answer, so the launch is journaled before it is sent.
@@ -928,18 +935,21 @@ export function serve(options: ServeOptions): Promise<void> {
         ? await launchJudge({ s, request, confined: work.confined, opened, journalThread, thread: newThread, known: thread })
         : thread ?? journalThread(await launchStep(s, request, work.place, newThread), undefined);
     } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      // Only a check a new launch runs proves T3 launched nothing; a judge's copy fails before its idle thread is briefed.
+      const refused = !state.thread && error instanceof T3Error && error.refusal !== undefined && LAUNCHED_NOTHING.has(error.refusal.code) ? error.refusal : undefined;
+
+      if (error instanceof JudgeCopyFailed) finish({ op: request.op, state: 'failed', failure: { code: 'judge_copy_failed', message: why } });
       // T3 caps a thread's mode at the access the member approved teamai with, and says so with this code.
-      const tooNarrow = error instanceof T3Error && error.refusal?.code === 'runtime_mode_escalation_denied' ? error.refusal.message : undefined;
-      finish({
-        op: request.op, state: 'failed', failure: error instanceof JudgeCopyFailed
-          ? { code: 'judge_copy_failed', message: error.message }
-          : tooNarrow === undefined
-          ? { code: 't3_launch_failed', message: `T3 Code did not launch the step's thread: ${error instanceof Error ? error.message : String(error)}` }
-          : {
+      else if (refused?.code === 'runtime_mode_escalation_denied') {
+        finish({
+          op: request.op, state: 'failed', failure: {
             code: 'sign_in_too_narrow',
-            message: `T3 Code refused to start the step's thread in ${s.stepMode} mode, because teamai's sign-in does not allow it (${tooNarrow}). Remove ~/.teamai/runtime-state/t3/credentials.json, start the workflow again, and approve teamai with ${STEP_MODE_LABELS[s.stepMode]} access or broader. Or set runtime_mode to a mode the sign-in allows.`,
+            message: `T3 Code refused to start the step's thread in ${s.stepMode} mode, because teamai's sign-in does not allow it (${refused.message}). Remove ~/.teamai/runtime-state/t3/credentials.json, start the workflow again, and approve teamai with ${STEP_MODE_LABELS[s.stepMode]} access or broader. Or set runtime_mode to a mode the sign-in allows.`,
           },
-      });
+        });
+      } else if (refused) finish({ op: request.op, state: 'failed', failure: { code: 't3_launch_failed', message: `T3 Code did not launch the step's thread: ${why}` } });
+      else finish(unconfirmed(request.op, `teamai launched the T3 thread "${title}", and T3 Code did not confirm the launch, so it may run: ${why.replace(/\.$/, '')}. Run teamai workflow cancel ${opened.run} to find and stop it.`));
 
       return;
     }
@@ -957,7 +967,7 @@ export function serve(options: ServeOptions): Promise<void> {
       if (followed) finish(followed.state, followed.threadEnded);
     } catch (error) {
       // The thread may still run in T3, where the person finds it by the link.
-      finish({ op: request.op, state: 'failed', failure: { code: 't3_unavailable', message: `Lost track of the T3 thread ${threadLink(s.environment, thread.threadId)}: ${error instanceof Error ? error.message : String(error)}` } });
+      finish(unconfirmed(request.op, `Lost track of the T3 thread ${threadLink(s.environment, thread.threadId)}, so it may still run: ${(error instanceof Error ? error.message : String(error)).replace(/\.$/, '')}. Run teamai workflow cancel ${opened.run} to stop it.`));
     }
   };
 
