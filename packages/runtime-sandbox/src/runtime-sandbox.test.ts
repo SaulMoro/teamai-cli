@@ -566,7 +566,7 @@ describe('a prompt attempt in a container', () => {
     expect(engine.containers()).toEqual([]);
   });
 
-  it("answers an exec and a close it cannot read the journal for with their own failure, so teamai never waits on them", async () => {
+  it("answers an exec, a close and a reattach it cannot read the journal for with their own failure, naming the record, so teamai never waits on them", async () => {
     const connection = start();
     await init(connection, { provider: 'docker', image: IMAGE });
     const at = place();
@@ -576,14 +576,32 @@ describe('a prompt attempt in a container', () => {
     const op = newOp();
     connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'echo ran'] });
 
-    expect(await connection.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'runtime_failed', message: expect.stringContaining('JSON') } });
+    expect(await connection.next((message) => message.op === op && ['exited', 'cancelled', 'failed'].includes(String(message.event)), 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'runtime_failed', message: expect.stringContaining(record) } });
     connection.send({ type: 'close', handle: HANDLE });
-    expect(await connection.next((message) => message.event === 'closed' || message.event === 'close_failed', 5_000)).toMatchObject({ event: 'close_failed', handle: HANDLE, failure: { code: 'runtime_failed' } });
+    expect(await connection.next((message) => message.handle === HANDLE && message.event !== 'ready', 5_000)).toMatchObject({ event: 'failed', handle: HANDLE, failure: { code: 'runtime_failed', message: expect.stringContaining(record) } });
     connection.send({ type: 'reattach', handle: HANDLE });
-    expect(await connection.next((message) => message.event === 'alive' || message.event === 'gone', 5_000)).toEqual({ event: 'alive', handle: HANDLE, ops: [] });
+    expect(await connection.next((message) => message.handle === HANDLE, 5_000)).toMatchObject({ event: 'failed', handle: HANDLE, failure: { code: 'runtime_failed', message: expect.stringContaining(record) } });
+    // An error line would fail every other request teamai is waiting on.
+    expect(connection.messages.filter((message) => message.event === 'error')).toEqual([]);
     // Nothing is taken as absent: the container and its record stay for a close once the journal is mended.
     expect(engine.containers()).toEqual([HANDLE]);
     expect(fs.existsSync(record)).toBe(true);
+  });
+
+  it('answers a resent exec whose own record it cannot read with that exec\'s failure, never silence', async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    const at = place();
+    await openPlace(connection, at);
+    const op = newOp();
+    await exec(connection, { argv: ['/bin/sh', '-c', 'echo ran'], cwd: at.worktree }, op);
+    const record = journalFiles().find((file) => file.endsWith(`${op}.json`)) ?? '';
+    fs.writeFileSync(record, '{"handle":');
+    const before = connection.messages.length;
+    connection.send({ type: 'exec', op, handle: HANDLE, env: {}, unset: [], credentials: {}, cwd: at.worktree, argv: ['/bin/sh', '-c', 'echo ran'] });
+
+    expect(await connection.next((message) => message.op === op && connection.messages.indexOf(message) >= before && message.event !== 'output', 5_000)).toMatchObject({ op, event: 'failed', failure: { code: 'runtime_failed', message: expect.stringContaining(record) } });
+    expect(connection.messages.filter((message) => message.event === 'error')).toEqual([]);
   });
 
   it('collects with the work already at its host path, and close removes the container', async () => {
@@ -937,6 +955,17 @@ describe('a judge (a confined prompt) in a container of its own', () => {
     expect(engine.calls().filter(([, command]) => command === 'exec')).toHaveLength(1);
     connection.send({ type: 'reattach', handle: HANDLE });
     expect(await connection.next((message) => message.event === 'alive' || message.event === 'gone')).toMatchObject({ event: 'alive', ops: [{ op, state: 'finished', session: { tool: 'claude' } }] });
+  });
+
+  it("answers a prompt whose judge's place record it cannot read with that prompt's failure, never silence", async () => {
+    const connection = start();
+    await init(connection, { provider: 'docker', image: IMAGE });
+    await openJudge(connection, { ANTHROPIC_API_KEY: 'judge-key-1' });
+    const record = journalFiles().find((file) => file.includes(`${path.sep}places${path.sep}`)) ?? '';
+    fs.writeFileSync(record, '{"run":');
+
+    expect(await judge(connection, { credentials: { ANTHROPIC_API_KEY: 'judge-key-1' }, ms: 5_000 })).toMatchObject({ event: 'failed', failure: { code: 'runtime_failed', message: expect.stringContaining(record) } });
+    expect(connection.messages.filter((message) => message.event === 'error')).toEqual([]);
   });
 
   it('stops a judge on cancel', async () => {
