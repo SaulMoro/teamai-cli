@@ -780,7 +780,7 @@ export function serve(options: ServeOptions): Promise<void> {
     const opened = read.kind === 'found' ? read.place : undefined;
     const ended = opened?.ops[request.op];
 
-    /** The acceptance shows the step's thread once T3 launched it, so the run details link it during the run. */
+    /** The acceptance shows the step's thread when the journal holds it already, so the run details link it during the run. */
     const accept = (thread: ThreadRecord | undefined): void => {
       write({ op: request.op, event: 'accepted', ...(thread && session && { display: threadDisplay(thread, session.environment) }) });
     };
@@ -901,6 +901,9 @@ export function serve(options: ServeOptions): Promise<void> {
         journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, launches: { ...now.launches, [request.op]: launch } });
       }
 
+      // Accepted before T3 launches anything, which may take longer than teamai waits for an acceptance.
+      accept(thread);
+
       /** Journals the op running on `threadId`, with the judge's copy once its folder is known, in place of its launch. */
       const journalThread = (threadId: string, copy: string | undefined): ThreadRecord => {
         const launched: ThreadRecord = { threadId, title, model: selection.selection.model, tool: lease.tool, launchedAt, ...(copy && { copy }) };
@@ -908,6 +911,7 @@ export function serve(options: ServeOptions): Promise<void> {
         const { [request.op]: _answered, ...launches } = now.launches;
         journal.write({ ...now, ops: { ...now.ops, [request.op]: { op: request.op, state: 'running' } }, threads: { ...now.threads, [request.op]: launched }, launches });
         state.thread = launched;
+        write({ op: request.op, event: 'display', display: threadDisplay(launched, s.environment) });
 
         return launched;
       };
@@ -921,7 +925,6 @@ export function serve(options: ServeOptions): Promise<void> {
     } catch (error) {
       // T3 caps a thread's mode at the access the member approved teamai with, and says so with this code.
       const tooNarrow = error instanceof T3Error && error.refusal?.code === 'runtime_mode_escalation_denied' ? error.refusal.message : undefined;
-      accept(undefined);
       finish({
         op: request.op, state: 'failed', failure: error instanceof JudgeCopyFailed
           ? { code: 'judge_copy_failed', message: error.message }
@@ -935,8 +938,6 @@ export function serve(options: ServeOptions): Promise<void> {
 
       return;
     }
-
-    accept(thread);
 
     // teamai cancelled the prompt while T3 launched its thread.
     if (state.cancelled) {
