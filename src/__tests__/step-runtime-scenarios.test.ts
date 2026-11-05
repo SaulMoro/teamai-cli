@@ -1036,6 +1036,34 @@ describe('the toy runtime once teamai stops reading it', () => {
 
     expect(await again.reattach('toy-r0123abcd-a0123abcd')).toMatchObject({ kind: 'alive', ops: [{ op: exec, state: 'exited', code: 0 }] });
   });
+
+  it('records the outcome of an exec whose output arrives after the teamai that started it is gone', async () => {
+    const worktree = path.join(dir, 'worktree');
+    const state = path.join(dir, 'state');
+    const toy = spawn(process.execPath, [TOY_RUNTIME], { stdio: ['pipe', 'pipe', 'ignore'] });
+    const lines: string[] = [];
+    readline.createInterface({ input: toy.stdout }).on('line', (line) => { lines.push(line); });
+    const write = (request: object): void => { toy.stdin.write(`${JSON.stringify(request)}\n`); };
+    const op = newOpId();
+    write({ type: 'init', protocol: 1, mode: 'unattended', options: { state } });
+    write({ type: 'open', op: newOpId(), run: 'r0123abcd', attempt: 'a0123abcd', credentials: {}, view: { worktree, readonly: [], result: path.join(dir, 'out'), runDir: path.join(dir, 'scratch'), toolHome: {} } });
+    expect(await until(() => lines.some((line) => line.includes('"ready"')))).toBe(true);
+    const argv = [process.execPath, '-e', 'setTimeout(() => process.stdout.write("finished"), 500)'];
+    write({ type: 'exec', op, handle: 'toy-r0123abcd-a0123abcd', argv, env: {}, unset: [], credentials: {}, cwd: worktree });
+    expect(await until(() => lines.some((line) => line.includes(op) && line.includes('"accepted"')))).toBe(true);
+    // As when teamai is killed: nobody reads the toy's stdout any more, and its stdin ends.
+    toy.stdout.destroy();
+    toy.stdin.end();
+
+    const second = stdioStepRuntime({ name: 'toy', command: process.execPath, args: [TOY_RUNTIME] });
+    started.push(second);
+    expect(await second.init({ options: { state }, mode: 'unattended' })).toMatchObject({ ok: true });
+
+    // Another command under the same id: an outcome of `finished` is the recorded one, not a second run.
+    const rerun = [process.execPath, '-e', 'process.stdout.write("ran again")'];
+    expect(await second.exec({ op, handle: 'toy-r0123abcd-a0123abcd', argv: rerun, env: {}, unset: [], credentials: {}, cwd: worktree }, {}))
+      .toEqual<ExecEnd>({ kind: 'exited', code: 0, stdout: 'finished' });
+  });
 });
 
 describe('a driver whose runtime stopped on a line it could not read', () => {
