@@ -529,8 +529,7 @@ export function serve({ input, write: emit, note, journal }: Serving): Promise<v
 
     // A handle per attempt, kept before Paseo opens anything, so the open is accepted at once: two attempts on one
     // worktree share its workspace, and keep their own prompts. A confined prompt's place comes without a view: its
-    // workspace adopts the prompt's directory once the prompt comes. A handle an earlier version kept, named after its
-    // workspace, is answered as it is.
+    // workspace adopts the prompt's directory once the prompt comes.
     if (!handle) {
       handle = `${view ? 'worktree' : 'confined'}/${run}/${attempt}`;
       journal.savePlace(handle, view ? { kind: 'worktree', run, attempt, cwd: view.worktree, runDir: view.runDir } : { kind: 'confined', run, attempt });
